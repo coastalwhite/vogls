@@ -1,4 +1,5 @@
 [workspace]
 members = [
-    "vogls-sim",
+    "vogls-sim", "vogls-verilog",
 ]
+resolver = "2"
