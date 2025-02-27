@@ -84,7 +84,7 @@ impl Arena {
         }
     }
 
-    pub fn add<T>(&mut self, item: T) -> ArenaId<T> {
+    pub fn add<T: Copy>(&mut self, item: T) -> ArenaId<T> {
         const { assert!(align_of::<T>() <= 8) }
 
         let ptr = self.items.len();
@@ -105,7 +105,7 @@ impl Arena {
         }
     }
 
-    pub fn extend<T>(&mut self, items: impl IntoIterator<Item = T>) -> ArenaIdRange<T> {
+    pub fn extend<T: Copy>(&mut self, items: impl IntoIterator<Item = T>) -> ArenaIdRange<T> {
         const { assert!(align_of::<T>() <= 8) }
 
         let start = self.items.len();

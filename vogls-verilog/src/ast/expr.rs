@@ -1,15 +1,12 @@
-use crate::ident::Ident;
-use crate::number::{Decimal, SizedNumber};
+use super::{AstId, AstIdRange, AstItem, DecimalRef, IdentRef, SizedNumberRef};
 
-use super::AstId;
-
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct BitPartSelect {
     pub(crate) subject: AstId<Expr>,
     pub(crate) braced: AstId<Expr>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct Replication {
     pub(crate) subject: AstId<Expr>,
     pub(crate) repeats: AstId<Expr>,
@@ -54,17 +51,17 @@ pub enum BinaryOperator {
     LogicalOr,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub enum Expr {
     BitPartSelect(BitPartSelect),
     Unary(UnaryOperator, AstId<Expr>),
     Binary(BinaryOperator, AstId<Expr>, AstId<Expr>),
-    Concatenation(Vec<AstId<Expr>>),
+    Concatenation(AstIdRange<Expr>),
     Replication(Replication),
     Ternary(AstId<Expr>, AstId<Expr>, AstId<Expr>),
-    Ident(Ident),
-    Decimal(Decimal),
-    Sized(SizedNumber),
+    Ident(AstItem<IdentRef>),
+    Decimal(AstItem<DecimalRef>),
+    Sized(AstItem<SizedNumberRef>),
 }
 
 impl UnaryOperator {

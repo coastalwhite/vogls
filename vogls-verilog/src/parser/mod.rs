@@ -1,15 +1,16 @@
 use std::path::PathBuf;
 
 use crate::arena::Arena;
-use crate::ast::{AstId, Module};
-use crate::ident::Ident;
+use crate::ast::module::Module;
+use crate::ast::{AstId, AstIdRange, AstItem, DecimalRef, IdentRef, SizedNumberRef};
 use crate::lexer::{FromLexerError, Lexer, Token, TokenContent, TokenKind};
+use crate::number::{Decimal, SizedNumber};
 use crate::span::Span;
 
 mod expr;
-// mod module;
+mod module;
+mod statement;
 // mod net;
-// mod stmt;
 
 pub struct Parser<'a> {
     lexer: Lexer<'a>,
@@ -21,9 +22,13 @@ pub struct Parser<'a> {
 pub struct AstArenas {
     pub nodes: Arena,
     pub spans: Vec<Span>,
+
+    pub idents: String,
+    pub decimals: Vec<Decimal>,
+    pub sized_numbers: Vec<SizedNumber>,
 }
 impl AstArenas {
-    fn add<T>(&mut self, item: T, span: Span) -> AstId<T> {
+    fn add<T: Copy>(&mut self, item: T, span: Span) -> AstId<T> {
         let loc = self.spans.len();
         self.spans.push(span);
         AstId {
@@ -32,15 +37,27 @@ impl AstArenas {
         }
     }
 
-    fn add_tuple<T>(&mut self, (item, span): (T, Span)) -> AstId<T> {
+    fn add_tuple<T: Copy>(&mut self, (item, span): (T, Span)) -> AstId<T> {
         self.add(item, span)
+    }
+
+    fn add_range<T: Copy>(
+        &mut self,
+        items: impl IntoIterator<Item = T>,
+        spans: impl IntoIterator<Item = Span>,
+    ) -> AstIdRange<T> {
+        let loc = self.spans.len();
+        self.spans.extend(spans);
+        AstIdRange {
+            node: self.nodes.extend(items),
+            loc,
+        }
     }
 }
 
 pub struct Ast {
     pub root: AstId<Module>,
-    pub nodes: Arena,
-    pub spans: Vec<Span>,
+    pub arenas: AstArenas,
     pub path: PathBuf,
 }
 
@@ -48,6 +65,7 @@ pub struct Ast {
 pub enum ParseError {
     MissingToken,
     UnexpectedToken(TokenKind),
+    Incomplete(&'static str),
 }
 
 impl<'a> FromLexerError<'a> for ParseError {
@@ -71,7 +89,11 @@ impl<'a> Parser<'a> {
         let mut arenas = AstArenas::default();
         let module = Module::parse(self, &mut arenas)?;
 
-        Ok((module, arenas))
+        Ok(Ast {
+            root: module,
+            arenas,
+            path: PathBuf::default(),
+        })
     }
 
     fn lexer(&mut self) -> &mut Lexer<'a> {
@@ -79,8 +101,8 @@ impl<'a> Parser<'a> {
     }
 }
 
-pub trait Consumable<'a>: Sized {
-    fn consume(p: &mut Parser<'a>, ast: &mut AstArenas) -> Result<(Self, Span), ParseError>;
+pub trait Consumable<'a>: Sized + Copy {
+    fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError>;
 
     fn try_consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Option<(Self, Span)> {
         let save = p.lexer().save();
@@ -98,7 +120,7 @@ pub trait Consumable<'a>: Sized {
     }
 }
 
-pub trait Parsable<'a>: Consumable<'a> + Sized {
+pub trait Parsable<'a>: Consumable<'a> {
     fn parse(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<AstId<Self>, ParseError> {
         Ok(Self::parse_with_span(p, arenas)?.0)
     }
@@ -112,15 +134,26 @@ pub trait Parsable<'a>: Consumable<'a> + Sized {
     }
 
     fn try_parse(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Option<AstId<Self>> {
-        let (item, span) = Self::try_consume(p, arenas)?;
-        Some(arenas.add(item, span))
+        Some(Self::try_parse_with_span(p, arenas)?.0)
     }
+
+    fn try_parse_with_span(
+        p: &mut Parser<'a>,
+        arenas: &mut AstArenas,
+    ) -> Option<(AstId<Self>, Span)> {
+        let (item, span) = Self::try_consume(p, arenas)?;
+        Some((arenas.add(item, span), span))
+    }
+
     fn parse_until_reaching(
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         end: TokenKind,
-    ) -> Result<(Vec<AstId<Self>>, Token<'a>), ParseError> {
+    ) -> Result<(AstIdRange<Self>, Token<'a>), ParseError> {
+        // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
+        // here.
         let mut items = Vec::new();
+        let mut spans = Vec::new();
 
         let end_token = loop {
             let Some(peek) = p.lexer.peek() else {
@@ -133,10 +166,12 @@ pub trait Parsable<'a>: Consumable<'a> + Sized {
             }
 
             peek.release();
-            items.push(Self::parse(p, arenas)?);
+            let (item, span) = Self::consume(p, arenas)?;
+            items.push(item);
+            spans.push(span);
         };
 
-        Ok((items, end_token))
+        Ok((arenas.add_range(items, spans), end_token))
     }
 
     fn parse_one_or_more_delimited(
@@ -197,18 +232,112 @@ pub trait Parsable<'a>: Consumable<'a> + Sized {
 //     OrList(Vec<AstId<'a, Expr<'a>>>),
 // }
 
-impl<'a> Consumable<'a> for Ident {
-    fn consume(p: &mut Parser<'a>, _arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
-        let token = p.lexer().next().ok_or(ParseError::MissingToken)?;
+impl<'a> Consumable<'a> for IdentRef {
+    fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
+        let token = p.lexer().next_expect()?;
         let (content, span) = token.take();
 
         let kind = content.kind();
 
         if let TokenContent::Ident(ident) = content {
-            return Ok((Ident::new(ident), span));
+            return Ok((Self::from_item(ident, arenas)?, span));
         }
 
         Err(ParseError::UnexpectedToken(kind))
+    }
+}
+impl<'a> ItemParsable<'a> for IdentRef {
+    type Item = &'a str;
+    fn from_item(item: Self::Item, arenas: &mut AstArenas) -> Result<Self, ParseError> {
+        let start = arenas.idents.len();
+        let end = start + item.len();
+        arenas.idents.push_str(item);
+        Ok(IdentRef { start, end })
+    }
+}
+
+impl<'a> Consumable<'a> for DecimalRef {
+    fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
+        let token = p.lexer().next_expect()?;
+        let (content, span) = token.take();
+
+        let kind = content.kind();
+
+        if let TokenContent::Decimal(d) = content {
+            return Ok((Self::from_item(d, arenas)?, span));
+        }
+
+        Err(ParseError::UnexpectedToken(kind))
+    }
+}
+impl<'a> ItemParsable<'a> for DecimalRef {
+    type Item = Decimal;
+    fn from_item(item: Self::Item, arenas: &mut AstArenas) -> Result<Self, ParseError> {
+        let at = arenas.decimals.len();
+        arenas.decimals.push(item);
+        Ok(Self { at })
+    }
+}
+
+impl<'a> Consumable<'a> for SizedNumberRef {
+    fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
+        let token = p.lexer().next_expect()?;
+        let (content, span) = token.take();
+
+        let kind = content.kind();
+
+        if let TokenContent::Number(n) = content {
+            return Ok((Self::from_item(n, arenas)?, span));
+        }
+
+        Err(ParseError::UnexpectedToken(kind))
+    }
+}
+impl<'a> ItemParsable<'a> for SizedNumberRef {
+    type Item = SizedNumber;
+    fn from_item(item: Self::Item, arenas: &mut AstArenas) -> Result<Self, ParseError> {
+        let at = arenas.sized_numbers.len();
+        arenas.sized_numbers.push(item);
+        Ok(Self { at })
+    }
+}
+
+pub trait ItemParsable<'a>: Consumable<'a> {
+    type Item;
+    fn from_item(item: Self::Item, arenas: &mut AstArenas) -> Result<Self, ParseError>;
+    fn ast_from_item(item: Self::Item, span: Span, arenas: &mut AstArenas) -> Result<AstItem<Self>, ParseError> {
+        let item = Self::from_item(item, arenas)?;
+        let loc = arenas.spans.len();
+        arenas.spans.push(span);
+        Ok(AstItem { item, loc })
+    }
+
+    fn parse(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<AstItem<Self>, ParseError> {
+        Ok(Self::parse_with_span(p, arenas)?.0)
+    }
+
+    fn parse_with_span(
+        p: &mut Parser<'a>,
+        arenas: &mut AstArenas,
+    ) -> Result<(AstItem<Self>, Span), ParseError> {
+        let (item, span) = Self::consume(p, arenas)?;
+        let loc = arenas.spans.len();
+        arenas.spans.push(span);
+        Ok((AstItem { item, loc }, span))
+    }
+
+    fn try_parse(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Option<AstItem<Self>> {
+        Some(Self::try_parse_with_span(p, arenas)?.0)
+    }
+
+    fn try_parse_with_span(
+        p: &mut Parser<'a>,
+        arenas: &mut AstArenas,
+    ) -> Option<(AstItem<Self>, Span)> {
+        let (item, span) = Self::try_consume(p, arenas)?;
+        let loc = arenas.spans.len();
+        arenas.spans.push(span);
+        Some((AstItem { item, loc }, span))
     }
 }
 //

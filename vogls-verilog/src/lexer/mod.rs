@@ -161,8 +161,11 @@ impl<'a> Lexer<'a> {
 
     pub fn peek<'b>(&'b mut self) -> Option<Peeked<'a, 'b>> {
         let token = self.next()?;
-
         Some(Peeked { lexer: self, token })
+    }
+    pub fn next_expect_peek<'b, E: FromLexerError<'a>>(&'b mut self) -> Result<Peeked<'a, 'b>, E> {
+        let token = self.next_expect()?;
+        Ok(Peeked { lexer: self, token })
     }
 
     pub fn save<'b>(&self) -> LexerSave<'a> {

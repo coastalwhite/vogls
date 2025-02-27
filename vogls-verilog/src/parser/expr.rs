@@ -1,10 +1,10 @@
 use crate::ast::expr::{BinaryOperator, BitPartSelect, Expr, UnaryOperator};
-use crate::ast::AstId;
-use crate::ident::Ident;
+use crate::ast::{AstId, DecimalRef, IdentRef, SizedNumberRef};
 use crate::lexer::{FromLexerError, Token, TokenContent, TokenKind};
+use crate::parser::ItemParsable;
 use crate::span::Span;
 
-use super::{AstArenas, Consumable, ParseError, Parser};
+use super::{AstArenas, Consumable, Parsable, ParseError, Parser};
 
 pub(crate) type BindingPower = u8;
 
@@ -85,9 +85,9 @@ impl<'a> Consumable<'a> for Expr {
             let (t, span) = p.lexer().next().ok_or(E::MissingToken)?.take();
             current = {
                 match t {
-                    T::Ident(i) => (Expr::Ident(Ident::new(i)), span),
-                    T::Decimal(d) => (Expr::Decimal(d), span),
-                    T::Number(n) => (Expr::Sized(n), span),
+                    T::Ident(i) => (Expr::Ident(IdentRef::ast_from_item(i, span, arenas)?), span),
+                    T::Decimal(d) => (Expr::Decimal(DecimalRef::ast_from_item(d, span, arenas)?), span),
+                    T::Number(n) => (Expr::Sized(SizedNumberRef::ast_from_item(n, span, arenas)?), span),
                     T::LeftParen => deepen!(StackItem::Paren, 0, span),
                     t => {
                         let (r_bp, op) = token_to_prefix_op(t.kind())
@@ -184,3 +184,4 @@ impl<'a> Consumable<'a> for Expr {
         Ok(result)
     }
 }
+impl<'a> Parsable<'a> for Expr {}
