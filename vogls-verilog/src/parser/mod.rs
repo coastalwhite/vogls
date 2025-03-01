@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::arena::Arena;
 use crate::ast::module::Module;
-use crate::ast::{AstId, AstIdRange, AstItem, DecimalRef, IdentRef, SizedNumberRef};
+use crate::ast::{AstId, AstIdRange, AstItem, DecimalRef, Identifier, SizedNumberRef, StringRef, TextRef};
 use crate::lexer::{FromLexerError, Lexer, Token, TokenContent, TokenKind};
 use crate::number::{Decimal, SizedNumber};
 use crate::span::Span;
@@ -182,88 +182,83 @@ pub trait Parsable<'a>: Consumable<'a> {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         delimiter: TokenKind,
-    ) -> Result<(Vec<AstId<Self>>, Span), ParseError> {
-        let (item, mut span) = Self::consume(p, arenas)?;
-        let item = arenas.add(item, span);
+    ) -> Result<AstIdRange<Self>, ParseError> {
+        let (item, span) = Self::consume(p, arenas)?;
 
+        // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
+        // here.
         let mut items = Vec::new();
+        let mut spans = Vec::new();
         items.push(item);
+        spans.push(span);
 
         loop {
             if p.lexer.next_if_equals(delimiter).is_none() {
                 break;
             }
 
-            let (item, end_loc) = Self::consume(p, arenas)?;
-            span |= end_loc;
-            let item = arenas.add(item, end_loc);
-
+            let (item, span) = Self::consume(p, arenas)?;
             items.push(item);
+            spans.push(span);
         }
 
-        Ok((items, span))
+        Ok(arenas.add_range(items, spans))
     }
 
     fn parse_zero_or_more_delimited(
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         delimiter: TokenKind,
-    ) -> Result<Vec<AstId<Self>>, ParseError> {
-        let Some(item) = Self::try_parse(p, arenas) else {
-            return Ok(Vec::new());
+    ) -> Result<AstIdRange<Self>, ParseError> {
+        let Some((item, span)) = Self::try_consume(p, arenas) else {
+            return Ok(AstIdRange::default());
         };
 
+        // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
+        // here.
         let mut items = Vec::new();
+        let mut spans = Vec::new();
         items.push(item);
+        spans.push(span);
 
         loop {
             if p.lexer.next_if_equals(delimiter).is_none() {
                 break;
             }
 
-            items.push(Self::parse(p, arenas)?);
+            let (item, span) = Self::consume(p, arenas)?;
+            items.push(item);
+            spans.push(span);
         }
 
-        Ok(items)
+        Ok(arenas.add_range(items, spans))
     }
 }
 
-impl<'a> Consumable<'a> for IdentRef {
+impl<'a> Consumable<'a> for Identifier {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
-        let token = p.lexer().next_expect()?;
-        let (content, span) = token.take();
-
-        let kind = content.kind();
-
-        if let TokenContent::Ident(ident) = content {
-            return Ok((Self::from_item(ident, arenas)?, span));
-        }
-
-        Err(ParseError::UnexpectedToken(kind))
+        p.lexer().expect_map(|content, _| match content {
+            TokenContent::Ident(ident) => Self::from_item(ident, arenas),
+            _ => Err(ParseError::UnexpectedToken(content.kind()))
+        })
     }
 }
-impl<'a> ItemParsable<'a> for IdentRef {
+impl<'a> ItemParsable<'a> for Identifier {
     type Item = &'a str;
     fn from_item(item: Self::Item, arenas: &mut AstArenas) -> Result<Self, ParseError> {
         let start = arenas.idents.len();
         let end = start + item.len();
         arenas.idents.push_str(item);
-        Ok(IdentRef { start, end })
+        Ok(Self(TextRef { start, end }))
     }
 }
 
 impl<'a> Consumable<'a> for DecimalRef {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
-        let token = p.lexer().next_expect()?;
-        let (content, span) = token.take();
-
-        let kind = content.kind();
-
-        if let TokenContent::Decimal(d) = content {
-            return Ok((Self::from_item(d, arenas)?, span));
-        }
-
-        Err(ParseError::UnexpectedToken(kind))
+        p.lexer().expect_map(|content, _| match content {
+            TokenContent::Decimal(decimal) => Self::from_item(decimal, arenas),
+            _ => Err(ParseError::UnexpectedToken(content.kind()))
+        })
     }
 }
 impl<'a> ItemParsable<'a> for DecimalRef {
@@ -277,16 +272,10 @@ impl<'a> ItemParsable<'a> for DecimalRef {
 
 impl<'a> Consumable<'a> for SizedNumberRef {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
-        let token = p.lexer().next_expect()?;
-        let (content, span) = token.take();
-
-        let kind = content.kind();
-
-        if let TokenContent::Number(n) = content {
-            return Ok((Self::from_item(n, arenas)?, span));
-        }
-
-        Err(ParseError::UnexpectedToken(kind))
+        p.lexer().expect_map(|content, _| match content {
+            TokenContent::Number(sized_number) => Self::from_item(sized_number, arenas),
+            _ => Err(ParseError::UnexpectedToken(content.kind()))
+        })
     }
 }
 impl<'a> ItemParsable<'a> for SizedNumberRef {
@@ -295,6 +284,24 @@ impl<'a> ItemParsable<'a> for SizedNumberRef {
         let at = arenas.sized_numbers.len();
         arenas.sized_numbers.push(item);
         Ok(Self { at })
+    }
+}
+
+impl<'a> Consumable<'a> for StringRef {
+    fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
+        p.lexer().expect_map(|content, _| match content {
+            TokenContent::String(string) => Self::from_item(string, arenas),
+            _ => Err(ParseError::UnexpectedToken(content.kind()))
+        })
+    }
+}
+impl<'a> ItemParsable<'a> for StringRef {
+    type Item = &'a str;
+    fn from_item(item: Self::Item, arenas: &mut AstArenas) -> Result<Self, ParseError> {
+        let start = arenas.idents.len();
+        let end = start + item.len();
+        arenas.idents.push_str(item);
+        Ok(Self(TextRef { start, end }))
     }
 }
 

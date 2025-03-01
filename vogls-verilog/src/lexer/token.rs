@@ -80,6 +80,8 @@ macro_rules! define_tokens {
 define_tokens! {
     <'a> {
         Ident(&'a str) = "abc",
+        DollarIdent(&'a str) = "$abc",
+        String(&'a str) = "\"this is a string\"",
         Number(SizedNumber) = "50'd50",
         Decimal(Decimal) = "50",
 

@@ -2,10 +2,10 @@ use crate::ast::expr::Expr;
 use crate::ast::statement::{
     BlockingAssignment, DelayControl, DelayOrEventControl, DelayValue, EventControl,
     EventExpression, NonBlockingAssignment, ProceduralTimingControl, SeqBlock, Statement,
-    VariableLValue,
+    SystemTaskEnable, SystemTaskIdentifier, VariableLValue,
 };
-use crate::ast::{DecimalRef, IdentRef};
-use crate::lexer::{FromLexerError, TokenKind};
+use crate::ast::{AstIdRange, DecimalRef, Identifier, TextRef};
+use crate::lexer::{FromLexerError, TokenContent, TokenKind};
 use crate::parser::ItemParsable;
 use crate::span::Span;
 
@@ -53,21 +53,28 @@ impl<'a> Consumable<'a> for Statement {
             }
             _ => {
                 peeked.release();
-                if let Ok((blocking_assignment, blocking_assignment_span)) =
-                    BlockingAssignment::parse_with_span(p, arenas)
+                if let Some((blocking_assignment, blocking_assignment_span)) =
+                    BlockingAssignment::try_parse_with_span(p, arenas)
                 {
                     let semicolon_span = p.lexer().expect(TK::Semicolon)?.span();
                     Ok((
                         Self::BlockingAssignment(blocking_assignment),
                         blocking_assignment_span | semicolon_span,
                     ))
-                } else if let Ok((non_blocking_assignment, non_blocking_assignment_span)) =
-                    NonBlockingAssignment::parse_with_span(p, arenas)
+                } else if let Some((non_blocking_assignment, non_blocking_assignment_span)) =
+                    NonBlockingAssignment::try_parse_with_span(p, arenas)
                 {
                     let semicolon_span = p.lexer().expect(TK::Semicolon)?.span();
                     Ok((
                         Self::NonBlockingAssignment(non_blocking_assignment),
                         non_blocking_assignment_span | semicolon_span,
+                    ))
+                } else if let Some((system_task_enable, system_task_enable_span)) =
+                    SystemTaskEnable::try_parse_with_span(p, arenas)
+                {
+                    Ok((
+                        Self::SystemTaskEnable(system_task_enable),
+                        system_task_enable_span,
                     ))
                 } else {
                     Err(ParseError::Incomplete("statement"))
@@ -87,7 +94,7 @@ impl<'a> Consumable<'a> for VariableLValue {
 
         // @Incomplete
 
-        let (ident, span) = IdentRef::parse_with_span(p, arenas)?;
+        let (ident, span) = Identifier::parse_with_span(p, arenas)?;
 
         Ok((Self { ident }, span))
     }
@@ -246,9 +253,9 @@ impl<'a> Consumable<'a> for EventControl {
         // | @ (*)
 
         let at_sign_span = p.lexer().expect(TK::AtSign)?.span();
-        // @Incomplete:   @ hierarchical_event_identifier
-        // @Incomplete: | @*
-        // @Incomplete: | @ (*)
+        // @Incomplete: @ hierarchical_event_identifier
+        // @Incomplete: @*
+        // @Incomplete: @ (*)
         p.lexer().expect(TK::LeftParen)?;
         let event_expression = EventExpression::parse(p, arenas)?;
         let right_paren_span = p.lexer().expect(TK::RightParen)?.span();
@@ -350,3 +357,44 @@ impl<'a> Consumable<'a> for ProceduralTimingControl {
     }
 }
 impl<'a> Parsable<'a> for ProceduralTimingControl {}
+
+impl<'a> Consumable<'a> for SystemTaskEnable {
+    fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
+        use TokenKind as TK;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 499
+        // system_task_enable ::= system_task_identifier [ ( [ expression ] { , [ expression ] } ) ] ;
+
+        let (system_task_identifier, system_task_identifier_span) =
+            SystemTaskIdentifier::parse_with_span(p, arenas)?;
+        let mut expressions = AstIdRange::default();
+        if p.lexer().next_if_equals(TK::LeftParen).is_some() {
+            expressions = Expr::parse_zero_or_more_delimited(p, arenas, TK::Comma)?;
+            p.lexer().expect(TK::RightParen)?;
+        }
+        let semicolon_span = p.lexer().expect(TK::Semicolon)?.span();
+
+        let span = system_task_identifier_span | semicolon_span;
+
+        Ok((Self { system_task_identifier, expressions }, span))
+    }
+}
+impl<'a> Parsable<'a> for SystemTaskEnable {}
+
+impl<'a> Consumable<'a> for SystemTaskIdentifier {
+    fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
+        p.lexer().expect_map(|content, _| match content {
+            TokenContent::DollarIdent(ident) => Self::from_item(ident, arenas),
+            _ => Err(ParseError::UnexpectedToken(content.kind())),
+        })
+    }
+}
+impl<'a> ItemParsable<'a> for SystemTaskIdentifier {
+    type Item = &'a str;
+    fn from_item(item: Self::Item, arenas: &mut AstArenas) -> Result<Self, ParseError> {
+        let start = arenas.idents.len();
+        let end = start + item.len();
+        arenas.idents.push_str(item);
+        Ok(Self(TextRef { start, end }))
+    }
+}

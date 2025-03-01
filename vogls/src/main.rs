@@ -14,7 +14,7 @@ fn statements_to_events<'a>(
 ) -> usize {
     let head = events.len();
     let mut event = Event { ir: Vec::new() };
-    for (i, statement) in stmts.iter().enumerate() {
+    for statement in stmts.iter() {
         match statement {
             Statement::BlockingAssignment(ast_id) => todo!(),
             Statement::CaseStatement => todo!(),
@@ -52,7 +52,28 @@ fn statements_to_events<'a>(
                     events,
                 );
             }
-            Statement::SystemTaskEnable => todo!(),
+            Statement::SystemTaskEnable(id) => {
+                let system_task_enable = arenas.get(*id);
+
+                let ident = system_task_enable.system_task_identifier.item;
+                let ident = &arenas.idents[ident.0.start..ident.0.end];
+                
+                match ident {
+                    "display" => {
+                        let expressions = system_task_enable.expressions;
+                        assert_eq!(expressions.len(), 1); // @Improve: Error message
+
+                        let expr = arenas.get(expressions.first().unwrap());
+                        let str_literal = expr.into_str_literal().unwrap();
+                        let str_literal = &arenas.idents[str_literal.0.start..str_literal.0.end];
+
+                        event.ir.push(IR::Display(str_literal.to_string()));
+                    },
+
+                    // @Incomplete: Many variants here.
+                    _ => todo!(),
+                }
+            },
             Statement::TaskEnable => todo!(),
             Statement::WaitStatement => todo!(),
         }
@@ -67,7 +88,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 module abc;
     initial begin
         #5
+        $display("abc");
         #10
+        $display("More text");
         #20
     end
 endmodule

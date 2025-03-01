@@ -1,4 +1,4 @@
-use super::{AstId, AstIdRange, AstItem, DecimalRef, IdentRef, SizedNumberRef};
+use super::{AstId, AstIdRange, AstItem, DecimalRef, Identifier, SizedNumberRef, StringRef, TextRef};
 
 #[derive(Clone, Copy)]
 pub struct BitPartSelect {
@@ -59,9 +59,19 @@ pub enum Expr {
     Concatenation(AstIdRange<Expr>),
     Replication(Replication),
     Ternary(AstId<Expr>, AstId<Expr>, AstId<Expr>),
-    Ident(AstItem<IdentRef>),
+    Ident(AstItem<Identifier>),
     Decimal(AstItem<DecimalRef>),
     Sized(AstItem<SizedNumberRef>),
+    String(StringRef),
+}
+
+impl Expr {
+    pub fn into_str_literal(&self) -> Option<StringRef> {
+        match self {
+            Expr::String(s) => Some(*s),
+            _ => None,
+        }
+    }
 }
 
 impl UnaryOperator {

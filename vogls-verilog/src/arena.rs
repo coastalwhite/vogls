@@ -38,6 +38,15 @@ impl<T> Clone for ArenaIdRange<T> {
     }
 }
 impl<T> Copy for ArenaIdRange<T> {}
+impl<T> Default for ArenaIdRange<T> {
+    fn default() -> Self {
+        Self {
+            start: 0,
+            length: 0,
+            _pd: PhantomData::default(),
+        }
+    }
+}
 
 impl<T> ArenaIdRange<T> {
     const fn num_cells() -> usize {
@@ -62,7 +71,7 @@ impl<T> ArenaIdRange<T> {
     pub fn is_empty(self) -> bool {
         self.len() == 0
     }
-    pub fn iter(self) -> impl Iterator<Item = ArenaId<T>> {
+    pub fn iter(self) -> impl ExactSizeIterator + DoubleEndedIterator<Item = ArenaId<T>> {
         let start = self.start;
         (0..self.length).map(move |i| ArenaId {
             ptr: start + i * Self::num_cells(),

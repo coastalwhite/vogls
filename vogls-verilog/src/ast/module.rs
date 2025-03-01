@@ -1,5 +1,5 @@
 use super::statement::Statement;
-use super::{AstId, AstIdRange, AstItem, IdentRef};
+use super::{AstId, AstIdRange, AstItem, Identifier, TextRef};
 
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 487
@@ -12,7 +12,7 @@ use super::{AstId, AstIdRange, AstItem, IdentRef};
 // endmodule
 #[derive(Clone, Copy)]
 pub struct Module {
-    pub module_identifier: AstItem<IdentRef>,
+    pub module_identifier: AstItem<Identifier>,
     pub module_items: AstIdRange<NonPortModuleItem>,
 }
 

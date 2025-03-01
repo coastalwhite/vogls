@@ -169,7 +169,11 @@ impl<'a> Lexer<'a> {
     }
 
     pub fn save<'b>(&self) -> LexerSave<'a> {
-        self.inner.save()
+        let mut save = self.inner.save();
+        if let Some(peeked) = &self.peeked {
+            save.offset = peeked.span().start();
+        }
+        save
     }
 
     pub fn restore<'b>(&mut self, save: LexerSave<'a>) {
@@ -325,6 +329,20 @@ impl<'a> TokenContent<'a> {
             ('=', _, _) => (T::Equals, 1),
             ('#', _, _) => (T::Hash, 1),
 
+            ('"', _, _) => {
+                match s[1..].find('"') {
+                    // @Optimize: Use single pass here.
+                    Some(end_position)
+                        if s[1..1 + end_position]
+                            .bytes()
+                            .all(|b| b < 128 && b != b'\n') =>
+                    {
+                        (T::String(&s[1..1 + end_position]), end_position + 2)
+                    }
+                    _ => (T::Unknown, 1),
+                }
+            }
+
             ('0'..='9', _, _) => {
                 let initial_length = s.len();
 
@@ -406,6 +424,13 @@ impl<'a> TokenContent<'a> {
                     }),
                     length,
                 )
+            }
+            ('$', Some('a'..='z' | 'A'..='Z' | '_'), _) => {
+                let (leftover, content) = Ident::take(&s[1..]);
+                let content = &s[1..1 + content.as_str().len()];
+                let length = s.len() - leftover.len();
+                let content = T::DollarIdent(content);
+                (content, length)
             }
             ('a'..='z' | 'A'..='Z' | '_', _, _) => {
                 let (leftover, content) = Ident::take(s);

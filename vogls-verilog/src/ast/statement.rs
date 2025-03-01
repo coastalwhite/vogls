@@ -1,5 +1,5 @@
 use super::expr::Expr;
-use super::{AstId, AstIdRange, AstItem, DecimalRef, IdentRef};
+use super::{AstId, AstIdRange, AstItem, DecimalRef, Identifier, TextRef};
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
 // statement ::=
@@ -30,7 +30,7 @@ pub enum Statement {
     ProceduralContinuousAssignments,
     ProceduralTimingControlStatement(AstId<ProceduralTimingControl>),
     SeqBlock(AstId<SeqBlock>),
-    SystemTaskEnable,
+    SystemTaskEnable(AstId<SystemTaskEnable>),
     TaskEnable,
     WaitStatement,
 }
@@ -42,7 +42,7 @@ pub enum Statement {
 #[derive(Clone, Copy)]
 pub struct VariableLValue {
     // @Incomplete
-    pub ident: AstItem<IdentRef>,
+    pub ident: AstItem<Identifier>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
@@ -135,3 +135,16 @@ pub enum ProceduralTimingControl {
 pub struct SeqBlock {
     pub statements: AstIdRange<Statement>,
 }
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 499
+// system_task_enable ::= system_task_identifier [ ( [ expression ] { , [ expression ] } ) ] ;
+#[derive(Clone, Copy)]
+pub struct SystemTaskEnable {
+    pub system_task_identifier: AstItem<SystemTaskIdentifier>,
+    pub expressions: AstIdRange<Expr>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 508
+// system_task_identifier ::= $[ a-zA-Z0-9_$ ]{ [ a-zA-Z0-9_$ ] }
+#[derive(Clone, Copy)]
+pub struct SystemTaskIdentifier(pub TextRef);
