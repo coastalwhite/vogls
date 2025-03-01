@@ -1,28 +1,16 @@
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 
+use self::ir::{WatchCondition, IR};
+
+pub mod ir;
+
 pub type Timestamp = usize;
 pub type Delay = usize;
 pub type RegId = usize;
 pub type EventId = usize;
 pub type Value = u32;
 
-#[derive(Debug)]
-pub enum WatchCondition {
-    None,
-    Posedge,
-    Negedge,
-}
-
-#[derive(Debug)]
-pub enum IR {
-    Load(Value),
-    Update(RegId),
-    Display(String),
-    Schedule(EventId, Delay),
-    Watch(EventId, Vec<(WatchCondition, RegId)>),
-    Finish,
-}
 
 #[derive(Debug)]
 pub struct Event {

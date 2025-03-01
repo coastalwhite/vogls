@@ -1,6 +1,7 @@
 use std::collections::BinaryHeap;
 
-use vogls_sim::{Event, IR, Listeners, ScheduledEvent, WatchCondition};
+use vogls_sim::{Event, Listeners, ScheduledEvent};
+use vogls_sim::ir::{IRDisplay, IR, WatchCondition};
 use vogls_verilog::ast::module::{Module, ModuleOrGenerateItem, NonPortModuleItem};
 use vogls_verilog::ast::statement::{
     DelayControl, EventControl, EventExpression, ProceduralTimingControl, Statement,
@@ -177,7 +178,6 @@ endmodule
     let mut registers = vec![0u32];
 
     for module_item in module_items.node.iter() {
-        dbg!("module item");
         match arenas.nodes.get(module_item) {
             NonPortModuleItem::ModuleOrGenerateItem(id) => match arenas.get(*id) {
                 ModuleOrGenerateItem::ModuleOrGenerateItemDeclaration => todo!(),
@@ -218,7 +218,14 @@ endmodule
         }
     }
 
-    dbg!(&events);
+    for (i, event) in events.iter().enumerate() {
+        println!("Event e{i}:");
+        for ir in &event.ir {
+            println!("{}", ir.display());
+        }
+
+        println!();
+    }
 
     vogls_sim::run(&mut schedule, &events, &mut listeners, &mut registers, 100);
 
