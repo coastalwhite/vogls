@@ -28,7 +28,7 @@ pub enum Statement {
     NonBlockingAssignment(AstId<NonBlockingAssignment>),
     ParBlock,
     ProceduralContinuousAssignments,
-    ProceduralTimingControlStatement(AstId<ProceduralTimingControl>),
+    ProceduralTimingControlStatement(AstId<ProceduralTimingControl>, Option<AstId<Statement>>),
     SeqBlock(AstId<SeqBlock>),
     SystemTaskEnable(AstId<SystemTaskEnable>),
     TaskEnable,

@@ -44,10 +44,16 @@ impl<'a> Consumable<'a> for Statement {
             }
             TK::Hash | TK::AtSign => {
                 peeked.release();
-                let (procedural_timing_control, span) =
+                let (procedural_timing_control, procedural_timing_control_span) =
                     ProceduralTimingControl::parse_with_span(p, arenas)?;
+                let mut span = procedural_timing_control_span;
+
+                let statement = Statement::try_parse_with_span(p, arenas).map(|(stmt, stmt_span)| {
+                    span |= stmt_span;
+                    stmt
+                });
                 Ok((
-                    Self::ProceduralTimingControlStatement(procedural_timing_control),
+                    Self::ProceduralTimingControlStatement(procedural_timing_control, statement),
                     span,
                 ))
             }

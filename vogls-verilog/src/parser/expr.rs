@@ -1,5 +1,5 @@
 use crate::ast::expr::{BinaryOperator, BitPartSelect, Expr, UnaryOperator};
-use crate::ast::{AstId, DecimalRef, Identifier, SizedNumberRef, StringRef, TextRef};
+use crate::ast::{AstId, DecimalRef, Identifier, SizedNumberRef, StringRef};
 use crate::lexer::{FromLexerError, Token, TokenContent, TokenKind};
 use crate::parser::ItemParsable;
 use crate::span::Span;
@@ -89,18 +89,12 @@ impl<'a> Consumable<'a> for Expr {
                         Expr::Ident(Identifier::ast_from_item(i, span, arenas)?),
                         span,
                     ),
-                    T::Decimal(d) => (
-                        Expr::Decimal(DecimalRef::ast_from_item(d, span, arenas)?),
-                        span,
-                    ),
+                    T::Decimal(d) => (Expr::Decimal(DecimalRef::from_item(d, arenas)?), span),
                     T::Number(n) => (
                         Expr::Sized(SizedNumberRef::ast_from_item(n, span, arenas)?),
                         span,
                     ),
-                    T::String(s) => (
-                        Expr::String(StringRef::from_item(s, arenas)?),
-                        span,
-                    ),
+                    T::String(s) => (Expr::String(StringRef::from_item(s, arenas)?), span),
                     T::LeftParen => deepen!(StackItem::Paren, 0, span),
                     t => {
                         let (r_bp, op) = token_to_prefix_op(t.kind())

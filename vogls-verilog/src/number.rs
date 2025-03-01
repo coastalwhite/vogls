@@ -45,7 +45,7 @@ impl fmt::Display for Decimal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Small(v) => v.fmt(f),
-            Self::Large(v) => todo!(),
+            Self::Large(_) => todo!(),
         }
     }
 }

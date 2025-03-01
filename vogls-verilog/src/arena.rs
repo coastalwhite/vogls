@@ -1,8 +1,6 @@
 use std::fmt;
 use std::marker::PhantomData;
 
-use crate::ast::AstIdRange;
-
 pub struct ArenaId<T> {
     ptr: usize,
     _pd: std::marker::PhantomData<T>,

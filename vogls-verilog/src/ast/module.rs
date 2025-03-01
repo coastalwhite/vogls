@@ -1,5 +1,5 @@
 use super::statement::Statement;
-use super::{AstId, AstIdRange, AstItem, Identifier, TextRef};
+use super::{AstId, AstIdRange, AstItem, Identifier};
 
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 487

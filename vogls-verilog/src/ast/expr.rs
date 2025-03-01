@@ -1,12 +1,14 @@
-use super::{AstId, AstIdRange, AstItem, DecimalRef, Identifier, SizedNumberRef, StringRef, TextRef};
+use super::{AstId, AstIdRange, AstItem, DecimalRef, Identifier, SizedNumberRef, StringRef};
 
 #[derive(Clone, Copy)]
+#[expect(unused)]
 pub struct BitPartSelect {
     pub(crate) subject: AstId<Expr>,
     pub(crate) braced: AstId<Expr>,
 }
 
 #[derive(Clone, Copy)]
+#[expect(unused)]
 pub struct Replication {
     pub(crate) subject: AstId<Expr>,
     pub(crate) repeats: AstId<Expr>,
@@ -60,7 +62,7 @@ pub enum Expr {
     Replication(Replication),
     Ternary(AstId<Expr>, AstId<Expr>, AstId<Expr>),
     Ident(AstItem<Identifier>),
-    Decimal(AstItem<DecimalRef>),
+    Decimal(DecimalRef),
     Sized(AstItem<SizedNumberRef>),
     String(StringRef),
 }
@@ -72,9 +74,17 @@ impl Expr {
             _ => None,
         }
     }
+
+    pub fn into_decimal_literal(&self) -> Option<DecimalRef> {
+        match self {
+            Expr::Decimal(d) => Some(*d),
+            _ => None,
+        }
+    }
 }
 
 impl UnaryOperator {
+    #[expect(unused)]
     fn into_str(self) -> &'static str {
         use UnaryOperator as U;
         match self {
@@ -93,6 +103,7 @@ impl UnaryOperator {
 }
 
 impl BinaryOperator {
+    #[expect(unused)]
     fn into_str(self) -> &'static str {
         use BinaryOperator as B;
         match self {

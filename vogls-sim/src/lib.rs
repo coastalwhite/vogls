@@ -7,14 +7,24 @@ pub type RegId = usize;
 pub type EventId = usize;
 pub type Value = u32;
 
+#[derive(Debug)]
+pub enum WatchCondition {
+    None,
+    Posedge,
+    Negedge,
+}
+
+#[derive(Debug)]
 pub enum IR {
     Load(Value),
     Update(RegId),
     Display(String),
     Schedule(EventId, Delay),
+    Watch(EventId, Vec<(WatchCondition, RegId)>),
     Finish,
 }
 
+#[derive(Debug)]
 pub struct Event {
     pub ir: Vec<IR>,
 }
@@ -45,8 +55,11 @@ impl Ord for ScheduledEvent {
     }
 }
 
+#[derive(Default)]
 pub struct Listeners {
-    watch_list: Vec<EventId>,
+    none: Vec<EventId>,
+    posedge: Vec<EventId>,
+    negedge: Vec<EventId>,
 }
 
 impl IR {
@@ -56,7 +69,7 @@ impl IR {
         schedule: &mut BinaryHeap<ScheduledEvent>,
         _events: &[Event],
         stack: &mut Vec<Value>,
-        listeners: &[Listeners],
+        listeners: &mut [Listeners],
         registers: &mut [Value],
     ) {
         match self {
@@ -64,19 +77,53 @@ impl IR {
                 stack.push(*value);
             }
             IR::Update(reg) => {
-                for event in &listeners[*reg].watch_list {
+                let before = registers[*reg];
+                let after = stack.pop().unwrap();
+
+                // @Incomplete: 4-state logic
+                let posedge = before == 0 && after == 1;
+                let negedge = before == 1 && after == 0;
+
+                for event in listeners[*reg].none.drain(..) {
                     schedule.push(ScheduledEvent {
                         at: ctx.time,
-                        id: *event,
+                        id: event,
                     });
                 }
-                registers[*reg] = stack.pop().unwrap();
+                if posedge {
+                    for event in listeners[*reg].posedge.drain(..) {
+                        schedule.push(ScheduledEvent {
+                            at: ctx.time,
+                            id: event,
+                        });
+                    }
+                }
+                if negedge {
+                    for event in listeners[*reg].negedge.drain(..) {
+                        schedule.push(ScheduledEvent {
+                            at: ctx.time,
+                            id: event,
+                        });
+                    }
+                }
+                registers[*reg] = after;
             }
             IR::Schedule(event, delay) => {
                 schedule.push(ScheduledEvent {
                     at: ctx.time + delay,
                     id: *event,
                 });
+            }
+            IR::Watch(event, conditions) => {
+                // @Incomplete: This should only schedule the watch once over the whole list of
+                // conditions.
+                for (condition, reg) in conditions.iter() {
+                    match condition {
+                        WatchCondition::None => listeners[*reg].none.push(*event),
+                        WatchCondition::Posedge => listeners[*reg].posedge.push(*event),
+                        WatchCondition::Negedge => listeners[*reg].negedge.push(*event),
+                    }
+                }
             }
             IR::Display(msg) => {
                 eprintln!("[DISPLAY]: time = {}: {msg}", ctx.time);
@@ -92,13 +139,18 @@ impl IR {
 pub fn run(
     schedule: &mut BinaryHeap<ScheduledEvent>,
     events: &[Event],
-    listeners: &[Listeners],
+    listeners: &mut [Listeners],
     registers: &mut [Value],
+    max_time: usize,
 ) {
     let mut ctx = Context { time: 0 };
     let mut stack = Vec::new();
     while let Some(scheduled_event) = schedule.pop() {
         ctx.time = scheduled_event.at;
+        if ctx.time > max_time {
+            break;
+        }
+
         eprintln!("Starting event {} at {}", scheduled_event.id, ctx.time);
 
         let event = &events[scheduled_event.id];
@@ -113,46 +165,5 @@ pub fn run(
                 registers,
             );
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let mut schedule = BinaryHeap::default();
-        schedule.push(ScheduledEvent { at: 7, id: 0 });
-        let events = vec![
-            Event {
-                ir: vec![
-                    IR::Display("Event 0".into()),
-                    IR::Load(5),
-                    IR::Update(0),
-                    IR::Schedule(2, 5),
-                ],
-            },
-            Event {
-                ir: vec![
-                    IR::Display("Event 1".into()),
-                    IR::Schedule(2, 3),
-                ],
-            },
-            Event {
-                ir: vec![
-                    IR::Display("Event 2".into()),
-                ],
-            }
-        ];
-        let listeners = vec![
-            Listeners {
-                watch_list: vec![1],
-            }
-        ];
-        let mut registers = vec![0];
-
-        run(&mut schedule, &events, &listeners, &mut registers);
-        assert!(false);
     }
 }
