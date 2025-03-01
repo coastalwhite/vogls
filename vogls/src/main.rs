@@ -1,7 +1,7 @@
 use std::collections::BinaryHeap;
 
 use vogls_sim::ir::{IR, IRDisplay, WatchCondition};
-use vogls_sim::{Event, Listeners, ScheduledEvent};
+use vogls_sim::{Event, Listeners, Process, ScheduledEvent};
 use vogls_verilog::ast::module::{Module, ModuleOrGenerateItem, NonPortModuleItem};
 use vogls_verilog::ast::statement::{
     DelayControl, EventControl, EventExpression, ProceduralTimingControl, Statement,
@@ -10,11 +10,10 @@ use vogls_verilog::lexer::Lexer;
 use vogls_verilog::number::Decimal;
 use vogls_verilog::parser::{Ast, AstArenas, Parser};
 
-fn statements_to_events_impl<'a>(
-    mut event: &mut Event,
+fn statements_to_process_impl<'a>(
+    mut process: &mut Process,
     stmts: &[Statement],
     arenas: &'a AstArenas,
-    events: &mut Vec<Event>,
 ) {
     for statement in stmts.iter() {
         match statement {
@@ -35,8 +34,8 @@ fn statements_to_events_impl<'a>(
                     _ => todo!(),
                 };
 
-                event.ir.push(IR::Load(decimal as u32));
-                event.ir.push(IR::Update(0)); // @TODO: Resolve ident
+                process.ir.push(IR::Load(decimal as u32));
+                process.ir.push(IR::Update(0)); // @TODO: Resolve ident
             }
             Statement::ParBlock => todo!(),
             Statement::ProceduralContinuousAssignments => todo!(),
@@ -64,9 +63,7 @@ fn statements_to_events_impl<'a>(
                                 // """
                                 assert_ne!(value, 0);
 
-                                event.ir.push(IR::Schedule(events.len() + 1, value));
-                                events
-                                    .push(std::mem::replace(&mut event, Event { ir: Vec::new() }));
+                                process.ir.push(IR::Yield(value));
                             }
                         }
                     }
@@ -89,23 +86,21 @@ fn statements_to_events_impl<'a>(
                             }
                         }
 
-                        event.ir.push(IR::Watch(events.len() + 1, conditions));
-                        events.push(std::mem::replace(&mut event, Event { ir: Vec::new() }));
+                        process.ir.push(IR::Watch(conditions));
                     }
                 }
 
                 if let Some(stmt) = statement {
                     let stmt = arenas.get(*stmt);
-                    statements_to_events_impl(event, std::slice::from_ref(stmt), arenas, events);
+                    statements_to_process_impl(process, std::slice::from_ref(stmt), arenas);
                 }
             }
             Statement::SeqBlock(id) => {
                 let seq_block = arenas.get(*id);
-                statements_to_events_impl(
-                    event,
+                statements_to_process_impl(
+                    process,
                     arenas.nodes.get_slice(seq_block.statements.node),
                     arenas,
-                    events,
                 );
             }
             Statement::SystemTaskEnable(id) => {
@@ -123,9 +118,9 @@ fn statements_to_events_impl<'a>(
                         let str_literal = expr.into_str_literal().unwrap();
                         let str_literal = &arenas.idents[str_literal.0.start..str_literal.0.end];
 
-                        event.ir.push(IR::Display(str_literal.to_string()));
+                        process.ir.push(IR::Display(str_literal.to_string()));
                     }
-                    "finish" => event.ir.push(IR::Finish),
+                    "finish" => process.ir.push(IR::Finish),
 
                     // @Incomplete: Many variants here.
                     _ => todo!(),
@@ -137,17 +132,10 @@ fn statements_to_events_impl<'a>(
     }
 }
 
-fn statements_to_events<'a>(
-    stmts: &[Statement],
-    arenas: &'a AstArenas,
-    events: &mut Vec<Event>,
-) -> (usize, usize) {
-    let head = events.len();
-    let mut event = Event { ir: Vec::new() };
-    statements_to_events_impl(&mut event, stmts, arenas, events);
-    let tail = events.len();
-    events.push(event);
-    (head, tail)
+fn statements_to_process<'a>(stmts: &[Statement], arenas: &'a AstArenas) -> Process {
+    let mut process = Process { ir: Vec::new() };
+    statements_to_process_impl(&mut process, stmts, arenas);
+    process
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -184,7 +172,7 @@ endmodule
     } = arenas.get(root);
 
     let mut schedule = BinaryHeap::default();
-    let mut events = vec![];
+    let mut processes = vec![];
     let mut listeners = vec![Listeners::default()];
     let mut registers = vec![0u32];
 
@@ -200,24 +188,28 @@ endmodule
                 ModuleOrGenerateItem::ModuleInstantiation => todo!(),
                 ModuleOrGenerateItem::InitialConstruct(id) => {
                     let statement = arenas.get(*id).0;
-                    let (head, _tail) = statements_to_events(
-                        std::slice::from_ref(arenas.get(statement)),
-                        &arenas,
-                        &mut events,
-                    );
+                    let process =
+                        statements_to_process(std::slice::from_ref(arenas.get(statement)), &arenas);
 
-                    schedule.push(ScheduledEvent { at: 0, id: head });
+                    let pid = processes.len();
+                    processes.push(process);
+                    schedule.push(ScheduledEvent {
+                        at: 0,
+                        event: Event::at_pid_start(pid),
+                    });
                 }
                 ModuleOrGenerateItem::AlwaysConstruct(id) => {
                     let statement = arenas.get(*id).0;
-                    let (head, tail) = statements_to_events(
-                        std::slice::from_ref(arenas.get(statement)),
-                        &arenas,
-                        &mut events,
-                    );
+                    let mut process =
+                        statements_to_process(std::slice::from_ref(arenas.get(statement)), &arenas);
 
-                    events[tail].ir.push(IR::Schedule(head, 0));
-                    schedule.push(ScheduledEvent { at: 0, id: head });
+                    let pid = processes.len();
+                    process.ir.push(IR::Schedule(processes.len(), 0));
+                    processes.push(process);
+                    schedule.push(ScheduledEvent {
+                        at: 0,
+                        event: Event::at_pid_start(pid),
+                    });
                 }
                 ModuleOrGenerateItem::LoopGenerateConstruct => todo!(),
                 ModuleOrGenerateItem::ConditionalGenerateConstruct => todo!(),
@@ -229,16 +221,22 @@ endmodule
         }
     }
 
-    for (i, event) in events.iter().enumerate() {
-        println!("Event e{i}:");
-        for ir in &event.ir {
-            println!("{}", ir.display());
+    for (i, process) in processes.iter().enumerate() {
+        println!("Process {i}:");
+        for ir in &process.ir {
+            println!("{}", ir.display().add_indent(1));
         }
 
         println!();
     }
 
-    vogls_sim::run(&mut schedule, &events, &mut listeners, &mut registers, 100);
+    vogls_sim::run(
+        &mut schedule,
+        &processes,
+        &mut listeners,
+        &mut registers,
+        100,
+    );
 
     Ok(())
 }

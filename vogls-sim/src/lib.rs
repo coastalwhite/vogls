@@ -8,22 +8,37 @@ pub mod ir;
 pub type Timestamp = usize;
 pub type Delay = usize;
 pub type RegId = usize;
-pub type EventId = usize;
+pub type ProcessId = usize;
 pub type Value = u32;
 
-
 #[derive(Debug)]
-pub struct Event {
+pub struct Process {
     pub ir: Vec<IR>,
 }
 
 pub struct Context {
     time: Timestamp,
+    pid: ProcessId,
+    ip: usize,
+}
+
+#[derive(Clone, Copy)]
+pub struct Event {
+    /// Process ID
+    pub pid: ProcessId,
+    /// Instruction Pointer
+    pub ip: usize,
+}
+
+impl Event {
+    pub fn at_pid_start(pid: ProcessId) -> Self {
+        Self { pid, ip: 0 }
+    }
 }
 
 pub struct ScheduledEvent {
     pub at: Timestamp,
-    pub id: EventId,
+    pub event: Event,
 }
 
 impl PartialEq for ScheduledEvent {
@@ -45,9 +60,15 @@ impl Ord for ScheduledEvent {
 
 #[derive(Default)]
 pub struct Listeners {
-    none: Vec<EventId>,
-    posedge: Vec<EventId>,
-    negedge: Vec<EventId>,
+    none: Vec<Event>,
+    posedge: Vec<Event>,
+    negedge: Vec<Event>,
+}
+
+enum EvalOutcome {
+    Continue,
+    Stop,
+    Exit,
 }
 
 impl IR {
@@ -55,11 +76,11 @@ impl IR {
         &self,
         ctx: &Context,
         schedule: &mut BinaryHeap<ScheduledEvent>,
-        _events: &[Event],
+        _processes: &[Process],
         stack: &mut Vec<Value>,
         listeners: &mut [Listeners],
         registers: &mut [Value],
-    ) {
+    ) -> EvalOutcome {
         match self {
             IR::Load(value) => {
                 stack.push(*value);
@@ -75,14 +96,14 @@ impl IR {
                 for event in listeners[*reg].none.drain(..) {
                     schedule.push(ScheduledEvent {
                         at: ctx.time,
-                        id: event,
+                        event,
                     });
                 }
                 if posedge {
                     for event in listeners[*reg].posedge.drain(..) {
                         schedule.push(ScheduledEvent {
                             at: ctx.time,
-                            id: event,
+                            event,
                         });
                     }
                 }
@@ -90,68 +111,104 @@ impl IR {
                     for event in listeners[*reg].negedge.drain(..) {
                         schedule.push(ScheduledEvent {
                             at: ctx.time,
-                            id: event,
+                            event,
                         });
                     }
                 }
                 registers[*reg] = after;
             }
-            IR::Schedule(event, delay) => {
+            IR::Schedule(pid, delay) => {
                 schedule.push(ScheduledEvent {
                     at: ctx.time + delay,
-                    id: *event,
+                    event: Event { pid: *pid, ip: 0 },
                 });
             }
-            IR::Watch(event, conditions) => {
+            IR::Yield(delay) => {
+                schedule.push(ScheduledEvent {
+                    at: ctx.time + *delay,
+                    event: Event {
+                        pid: ctx.pid,
+                        ip: ctx.ip + 1,
+                    },
+                });
+
+                return EvalOutcome::Stop;
+            }
+            IR::Watch(conditions) => {
+                let event = Event {
+                    pid: ctx.pid,
+                    ip: ctx.ip + 1,
+                };
+
                 // @Incomplete: This should only schedule the watch once over the whole list of
                 // conditions.
                 for (condition, reg) in conditions.iter() {
                     match condition {
-                        WatchCondition::None => listeners[*reg].none.push(*event),
-                        WatchCondition::Posedge => listeners[*reg].posedge.push(*event),
-                        WatchCondition::Negedge => listeners[*reg].negedge.push(*event),
+                        WatchCondition::None => listeners[*reg].none.push(event),
+                        WatchCondition::Posedge => listeners[*reg].posedge.push(event),
+                        WatchCondition::Negedge => listeners[*reg].negedge.push(event),
                     }
                 }
+
+                return EvalOutcome::Stop;
             }
             IR::Display(msg) => {
                 eprintln!("[DISPLAY]: time = {}: {msg}", ctx.time);
             }
             IR::Finish => {
                 eprintln!("[FINISH]");
-                std::process::exit(0);
+                return EvalOutcome::Exit;
             }
         }
+
+        EvalOutcome::Continue
     }
 }
 
 pub fn run(
-    schedule: &mut BinaryHeap<ScheduledEvent>,
-    events: &[Event],
+    event_queue: &mut BinaryHeap<ScheduledEvent>,
+    processes: &[Process],
     listeners: &mut [Listeners],
     registers: &mut [Value],
     max_time: usize,
 ) {
-    let mut ctx = Context { time: 0 };
+    let mut ctx = Context {
+        time: 0,
+        pid: 0,
+        ip: 0,
+    };
     let mut stack = Vec::new();
-    while let Some(scheduled_event) = schedule.pop() {
-        ctx.time = scheduled_event.at;
+    'event_loop: while let Some(se) = event_queue.pop() {
+        ctx.time = se.at;
+        ctx.pid = se.event.pid;
+        ctx.ip = se.event.ip;
+
         if ctx.time > max_time {
             break;
         }
 
-        eprintln!("Starting event {} at {}", scheduled_event.id, ctx.time);
+        eprintln!(
+            "[T={}] Starting process {} at {}",
+            ctx.time, ctx.pid, ctx.ip,
+        );
 
-        let event = &events[scheduled_event.id];
-
-        for ir in &event.ir {
-            ir.evaluate(
+        let process = &processes[ctx.pid];
+        for (ip, ir) in process.ir.iter().enumerate().skip(ctx.ip) {
+            ctx.ip = ip;
+            let outcome = ir.evaluate(
                 &ctx,
-                schedule,
-                events,
+                event_queue,
+                processes,
                 &mut stack,
                 listeners,
                 registers,
             );
+
+            match outcome {
+                EvalOutcome::Continue => {}
+                EvalOutcome::Stop => break,
+                EvalOutcome::Exit => break 'event_loop,
+            }
         }
     }
 }
