@@ -323,6 +323,7 @@ impl<'a> TokenContent<'a> {
 
             ('@', _, _) => (T::AtSign, 1),
             ('=', _, _) => (T::Equals, 1),
+            ('#', _, _) => (T::Hash, 1),
 
             ('0'..='9', _, _) => {
                 let initial_length = s.len();

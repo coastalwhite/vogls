@@ -16,7 +16,7 @@ pub enum IR {
 }
 
 pub struct Event {
-    ir: Vec<IR>,
+    pub ir: Vec<IR>,
 }
 
 pub struct Context {
@@ -24,8 +24,8 @@ pub struct Context {
 }
 
 pub struct ScheduledEvent {
-    at: Timestamp,
-    id: EventId,
+    pub at: Timestamp,
+    pub id: EventId,
 }
 
 impl PartialEq for ScheduledEvent {
@@ -99,6 +99,7 @@ pub fn run(
     let mut stack = Vec::new();
     while let Some(scheduled_event) = schedule.pop() {
         ctx.time = scheduled_event.at;
+        eprintln!("Starting event {} at {}", scheduled_event.id, ctx.time);
 
         let event = &events[scheduled_event.id];
 

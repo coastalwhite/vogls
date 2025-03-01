@@ -134,6 +134,7 @@ define_tokens! {
 
         Equals = "=",
         AtSign = "@",
+        Hash = "#",
 
         // Keywords
         KeywordAlways = "always",

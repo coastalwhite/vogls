@@ -1,0 +1,8 @@
+[package]
+name = "vogls"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+vogls-sim.workspace = true
+vogls-verilog.workspace = true

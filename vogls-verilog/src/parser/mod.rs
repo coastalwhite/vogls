@@ -53,6 +53,10 @@ impl AstArenas {
             loc,
         }
     }
+
+    pub fn get<T: Copy>(&self, id: AstId<T>) -> &T {
+        self.nodes.get(id.node)
+    }
 }
 
 pub struct Ast {
@@ -223,14 +227,6 @@ pub trait Parsable<'a>: Consumable<'a> {
         Ok(items)
     }
 }
-
-// #[derive(Debug, Clone)]
-// pub enum EventExpression<'a> {
-//     Plain(AstId<'a, Expr<'a>>),
-//     Posedge(AstId<'a, Expr<'a>>),
-//     Negedge(AstId<'a, Expr<'a>>),
-//     OrList(Vec<AstId<'a, Expr<'a>>>),
-// }
 
 impl<'a> Consumable<'a> for IdentRef {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {

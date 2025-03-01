@@ -1,5 +1,9 @@
 [workspace]
-members = [
+members = [ "vogls",
     "vogls-sim", "vogls-verilog",
 ]
 resolver = "2"
+
+[workspace.dependencies]
+vogls-sim.path = "vogls-sim"
+vogls-verilog.path = "vogls-verilog"

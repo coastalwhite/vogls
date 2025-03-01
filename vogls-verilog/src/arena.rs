@@ -1,6 +1,8 @@
 use std::fmt;
 use std::marker::PhantomData;
 
+use crate::ast::AstIdRange;
+
 pub struct ArenaId<T> {
     ptr: usize,
     _pd: std::marker::PhantomData<T>,
@@ -85,16 +87,16 @@ impl Arena {
     }
 
     pub fn add<T: Copy>(&mut self, item: T) -> ArenaId<T> {
-        const { assert!(align_of::<T>() <= 8) }
+        const { assert!(align_of::<T>() == align_of::<u64>()) }
 
         let ptr = self.items.len();
-        let size = size_of::<T>().div_ceil(8);
+        let size = size_of::<T>().div_ceil(size_of::<u64>());
         if size > 0 {
             self.items.reserve(size);
 
             // SAFETY: This space is reserved.
             unsafe {
-                self.items.as_mut_ptr().cast::<T>().write(item);
+                self.items.as_mut_ptr().add(ptr).cast::<T>().write(item);
                 self.items.set_len(ptr + size);
             }
         }
@@ -106,7 +108,7 @@ impl Arena {
     }
 
     pub fn extend<T: Copy>(&mut self, items: impl IntoIterator<Item = T>) -> ArenaIdRange<T> {
-        const { assert!(align_of::<T>() <= 8) }
+        const { assert!(align_of::<T>() == align_of::<u64>()) }
 
         let start = self.items.len();
         let mut length = 0;
@@ -123,7 +125,12 @@ impl Arena {
     }
 
     pub fn get<T>(&self, item: ArenaId<T>) -> &T {
-        assert!(item.ptr.checked_add(size_of::<T>()).unwrap() < self.items.len());
+        assert!(
+            item.ptr
+                .checked_add(size_of::<T>().div_ceil(size_of::<u64>()))
+                .unwrap()
+                <= self.items.len()
+        );
         unsafe {
             self.items
                 .as_ptr()
@@ -135,7 +142,12 @@ impl Arena {
     }
 
     pub fn get_mut<T>(&mut self, item: ArenaId<T>) -> &mut T {
-        assert!(item.ptr.checked_add(size_of::<T>()).unwrap() < self.items.len());
+        assert!(
+            item.ptr
+                .checked_add(size_of::<T>().div_ceil(size_of::<u64>()))
+                .unwrap()
+                <= self.items.len()
+        );
         unsafe {
             self.items
                 .as_mut_ptr()
@@ -148,6 +160,27 @@ impl Arena {
 
     pub fn replace<T>(&mut self, item: ArenaId<T>, value: T) -> T {
         std::mem::replace(self.get_mut(item), value)
+    }
+
+    pub fn get_slice<T>(&self, item_range: ArenaIdRange<T>) -> &[T] {
+        assert!(
+            item_range
+                .start
+                .checked_add(
+                    item_range
+                        .length
+                        .checked_mul(size_of::<T>().div_ceil(size_of::<u64>()))
+                        .unwrap()
+                )
+                .unwrap()
+                <= self.items.len()
+        );
+        unsafe {
+            std::slice::from_raw_parts(
+                self.items.as_ptr().add(item_range.start).cast::<T>(),
+                item_range.len(),
+            )
+        }
     }
 }
 

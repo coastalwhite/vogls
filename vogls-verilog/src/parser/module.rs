@@ -1,4 +1,6 @@
-use crate::ast::module::{AlwaysConstruct, InitialConstruct, Module, ModuleOrGenerateItem, NonPortModuleItem};
+use crate::ast::module::{
+    AlwaysConstruct, InitialConstruct, Module, ModuleOrGenerateItem, NonPortModuleItem,
+};
 use crate::ast::statement::Statement;
 use crate::ast::IdentRef;
 use crate::lexer::TokenKind;
@@ -52,13 +54,14 @@ impl<'a> Consumable<'a> for NonPortModuleItem {
         // | specify_block
         // | { attribute_instance } parameter_declaration ;
         // | { attribute_instance } specparam_declaration
-        
-        if let Some((module_or_generate_item, span)) = ModuleOrGenerateItem::try_parse_with_span(p, arenas) {
-            return Ok((Self::ModuleOrGenerateItem(module_or_generate_item), span));
-        }
 
-        // @Incomplete
-        Err(ParseError::Incomplete("non_port_module_item"))
+        let (module_or_generate_item, span) = ModuleOrGenerateItem::parse_with_span(p, arenas)?;
+        Ok((Self::ModuleOrGenerateItem(module_or_generate_item), span))
+
+        // @Incomplete: | generate_region
+        // @Incomplete: | specify_block
+        // @Incomplete: | { attribute_instance } parameter_declaration ;
+        // @Incomplete: | { attribute_instance } specparam_declaration
     }
 }
 impl<'a> Parsable<'a> for NonPortModuleItem {}
@@ -80,7 +83,7 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItem {
         // | { attribute_instance } always_construct
         // | { attribute_instance } loop_generate_construct
         // | { attribute_instance } conditional_generate_construct
-        
+
         // @Incomplete: { attribute_instance }
         // @Incomplete
 
@@ -96,9 +99,7 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItem {
                 let (always_construct, span) = AlwaysConstruct::parse_with_span(p, arenas)?;
                 Ok((Self::AlwaysConstruct(always_construct), span))
             }
-            _ => {
-                Err(ParseError::Incomplete("module_or_generate_item"))
-            }
+            _ => Err(ParseError::Incomplete("module_or_generate_item")),
         }
     }
 }
@@ -110,7 +111,7 @@ impl<'a> Consumable<'a> for InitialConstruct {
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
         // initial_construct ::= initial statement
-        
+
         let initial_kw_span = p.lexer().expect(TK::KeywordInitial)?.span();
         let (statement, span) = Statement::parse_with_span(p, arenas)?;
 
@@ -127,7 +128,7 @@ impl<'a> Consumable<'a> for AlwaysConstruct {
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
         // always_construct ::= always statement
-        
+
         let always_kw_span = p.lexer().expect(TK::KeywordAlways)?.span();
         let (statement, span) = Statement::parse_with_span(p, arenas)?;
 

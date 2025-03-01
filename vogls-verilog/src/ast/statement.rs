@@ -1,5 +1,5 @@
 use super::expr::Expr;
-use super::{AstId, AstIdRange, AstItem, IdentRef};
+use super::{AstId, AstIdRange, AstItem, DecimalRef, IdentRef};
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
 // statement ::=
@@ -28,7 +28,7 @@ pub enum Statement {
     NonBlockingAssignment(AstId<NonBlockingAssignment>),
     ParBlock,
     ProceduralContinuousAssignments,
-    ProceduralTimingControlStatement,
+    ProceduralTimingControlStatement(AstId<ProceduralTimingControl>),
     SeqBlock(AstId<SeqBlock>),
     SystemTaskEnable,
     TaskEnable,
@@ -45,11 +45,68 @@ pub struct VariableLValue {
     pub ident: AstItem<IdentRef>,
 }
 
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
+// delay_or_event_control ::=
+//   delay_control
+//   | event_control
+//   | repeat ( expression ) event_control
+#[derive(Clone, Copy)]
+pub enum DelayOrEventControl {
+    DelayControl(AstId<DelayControl>),
+    EventControl(AstId<EventControl>),
+    // @Incomplete
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
+// delay_control ::=
+//   # delay_value
+// | # ( mintypmax_expression )
+#[derive(Clone, Copy)]
+pub enum DelayControl {
+    DelayValue(AstId<DelayValue>), // @Incomplete: | # ( mintypmax_expression )
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
+// event_control ::=
+//   @ hierarchical_event_identifier
+// | @ ( event_expression )
+// | @*
+// | @ (*)
+#[derive(Clone, Copy)]
+pub enum EventControl {
+    // @Incomplete: @ hierarchical_event_identifier
+    EventExpression(AstId<EventExpression>), // @Incomplete: | @*
+                                             // @Incomplete: | @ (*)
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
+// event_expression ::=
+//   expression
+// | posedge expression
+// | negedge expression
+// | event_expression or event_expression
+#[derive(Clone, Copy)]
+pub enum EventExpression {
+    Expression(AstId<Expr>),
+    Posedge(AstId<Expr>),
+    Negedge(AstId<Expr>),
+    OrList(AstId<EventExpression>, AstId<EventExpression>),
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 491
+// delay_value ::=
+//   unsigned_number
+// | real_number
+// | identifier
+#[derive(Clone, Copy)]
+pub struct DelayValue(pub AstItem<DecimalRef>);
+
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
 // blocking_assignment ::= variable_lvalue = [ delay_or_event_control ] expression
 #[derive(Clone, Copy)]
 pub struct BlockingAssignment {
     pub variable_lvalue: AstId<VariableLValue>,
+    pub delay_or_event_control: Option<AstId<DelayOrEventControl>>,
     pub expression: AstId<Expr>,
 }
 
@@ -58,7 +115,18 @@ pub struct BlockingAssignment {
 #[derive(Clone, Copy)]
 pub struct NonBlockingAssignment {
     pub variable_lvalue: AstId<VariableLValue>,
+    pub delay_or_event_control: Option<AstId<DelayOrEventControl>>,
     pub expression: AstId<Expr>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 499
+// procedural_timing_control ::=
+//   delay_control
+// | event_control
+#[derive(Clone, Copy)]
+pub enum ProceduralTimingControl {
+    DelayControl(AstId<DelayControl>),
+    EventControl(AstId<EventControl>),
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
