@@ -1,7 +1,7 @@
 use std::collections::BinaryHeap;
 
+use vogls_sim::ir::{IR, IRDisplay, WatchCondition};
 use vogls_sim::{Event, Listeners, ScheduledEvent};
-use vogls_sim::ir::{IRDisplay, IR, WatchCondition};
 use vogls_verilog::ast::module::{Module, ModuleOrGenerateItem, NonPortModuleItem};
 use vogls_verilog::ast::statement::{
     DelayControl, EventControl, EventExpression, ProceduralTimingControl, Statement,
@@ -55,9 +55,13 @@ fn statements_to_events_impl<'a>(
 
                                 // @TODO:
                                 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 159
-                                // An explicit zero delay (#0) requires that the process be suspended
-                                // and added as an inactive event for the current time so that the
-                                // process is resumed in the next simulation cycle in the current time.
+                                //
+                                // """
+                                // An explicit zero delay (#0) requires that the process be
+                                // suspended and added as an inactive event for the current time so
+                                // that the process is resumed in the next simulation cycle in the
+                                // current time.
+                                // """
                                 assert_ne!(value, 0);
 
                                 event.ir.push(IR::Schedule(events.len() + 1, value));
@@ -121,6 +125,7 @@ fn statements_to_events_impl<'a>(
 
                         event.ir.push(IR::Display(str_literal.to_string()));
                     }
+                    "finish" => event.ir.push(IR::Finish),
 
                     // @Incomplete: Many variants here.
                     _ => todo!(),
@@ -159,13 +164,19 @@ module abc;
         clk <= 0;
         #7
         clk <= 1;
+        #1
+        $finish;
     end
 endmodule
     "#,
         None,
     ));
 
-    let Ast { root, arenas, path: _ } = parser.parse_file().unwrap();
+    let Ast {
+        root,
+        arenas,
+        path: _,
+    } = parser.parse_file().unwrap();
 
     let Module {
         module_identifier: _,
