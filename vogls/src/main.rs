@@ -1,6 +1,6 @@
 use std::collections::BinaryHeap;
 
-use vogls_sim::ir::{IR, IRDisplay, WatchCondition};
+use vogls_sim::instruction::{Instruction, WatchCondition};
 use vogls_sim::{Event, Listeners, Process, ScheduledEvent};
 use vogls_verilog::ast::module::{Module, ModuleOrGenerateItem, NonPortModuleItem};
 use vogls_verilog::ast::statement::{
@@ -11,7 +11,7 @@ use vogls_verilog::number::Decimal;
 use vogls_verilog::parser::{Ast, AstArenas, Parser};
 
 fn statements_to_process_impl<'a>(
-    mut process: &mut Process,
+    process: &mut Process,
     stmts: &[Statement],
     arenas: &'a AstArenas,
 ) {
@@ -34,8 +34,8 @@ fn statements_to_process_impl<'a>(
                     _ => todo!(),
                 };
 
-                process.ir.push(IR::Load(decimal as u32));
-                process.ir.push(IR::Update(0)); // @TODO: Resolve ident
+                process.instrs.push(Instruction::Load(decimal as u32));
+                process.instrs.push(Instruction::Update(0)); // @TODO: Resolve ident
             }
             Statement::ParBlock => todo!(),
             Statement::ProceduralContinuousAssignments => todo!(),
@@ -63,7 +63,7 @@ fn statements_to_process_impl<'a>(
                                 // """
                                 assert_ne!(value, 0);
 
-                                process.ir.push(IR::Yield(value));
+                                process.instrs.push(Instruction::Yield(value));
                             }
                         }
                     }
@@ -86,7 +86,7 @@ fn statements_to_process_impl<'a>(
                             }
                         }
 
-                        process.ir.push(IR::Watch(conditions));
+                        process.instrs.push(Instruction::Watch(conditions));
                     }
                 }
 
@@ -118,9 +118,11 @@ fn statements_to_process_impl<'a>(
                         let str_literal = expr.into_str_literal().unwrap();
                         let str_literal = &arenas.idents[str_literal.0.start..str_literal.0.end];
 
-                        process.ir.push(IR::Display(str_literal.to_string()));
+                        process
+                            .instrs
+                            .push(Instruction::Display(str_literal.to_string()));
                     }
-                    "finish" => process.ir.push(IR::Finish),
+                    "finish" => process.instrs.push(Instruction::Finish),
 
                     // @Incomplete: Many variants here.
                     _ => todo!(),
@@ -133,7 +135,7 @@ fn statements_to_process_impl<'a>(
 }
 
 fn statements_to_process<'a>(stmts: &[Statement], arenas: &'a AstArenas) -> Process {
-    let mut process = Process { ir: Vec::new() };
+    let mut process = Process { instrs: Vec::new() };
     statements_to_process_impl(&mut process, stmts, arenas);
     process
 }
@@ -204,7 +206,9 @@ endmodule
                         statements_to_process(std::slice::from_ref(arenas.get(statement)), &arenas);
 
                     let pid = processes.len();
-                    process.ir.push(IR::Schedule(processes.len(), 0));
+                    process
+                        .instrs
+                        .push(Instruction::Schedule(processes.len(), 0));
                     processes.push(process);
                     schedule.push(ScheduledEvent {
                         at: 0,
@@ -223,8 +227,8 @@ endmodule
 
     for (i, process) in processes.iter().enumerate() {
         println!("Process {i}:");
-        for ir in &process.ir {
-            println!("{}", ir.display().add_indent(1));
+        for instr in &process.instrs {
+            println!("{}", instr.display().add_indent(1));
         }
 
         println!();

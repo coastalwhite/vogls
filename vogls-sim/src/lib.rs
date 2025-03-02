@@ -1,9 +1,9 @@
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 
-use self::ir::{WatchCondition, IR};
+use self::instruction::{Instruction, WatchCondition};
 
-pub mod ir;
+pub mod instruction;
 
 pub type Timestamp = usize;
 pub type Delay = usize;
@@ -13,7 +13,7 @@ pub type Value = u32;
 
 #[derive(Debug)]
 pub struct Process {
-    pub ir: Vec<IR>,
+    pub instrs: Vec<Instruction>,
 }
 
 pub struct Context {
@@ -71,7 +71,7 @@ enum EvalOutcome {
     Exit,
 }
 
-impl IR {
+impl Instruction {
     fn evaluate(
         &self,
         ctx: &Context,
@@ -82,10 +82,10 @@ impl IR {
         registers: &mut [Value],
     ) -> EvalOutcome {
         match self {
-            IR::Load(value) => {
+            Instruction::Load(value) => {
                 stack.push(*value);
             }
-            IR::Update(reg) => {
+            Instruction::Update(reg) => {
                 let before = registers[*reg];
                 let after = stack.pop().unwrap();
 
@@ -117,13 +117,13 @@ impl IR {
                 }
                 registers[*reg] = after;
             }
-            IR::Schedule(pid, delay) => {
+            Instruction::Schedule(pid, delay) => {
                 schedule.push(ScheduledEvent {
                     at: ctx.time + delay,
                     event: Event { pid: *pid, ip: 0 },
                 });
             }
-            IR::Yield(delay) => {
+            Instruction::Yield(delay) => {
                 schedule.push(ScheduledEvent {
                     at: ctx.time + *delay,
                     event: Event {
@@ -134,7 +134,7 @@ impl IR {
 
                 return EvalOutcome::Stop;
             }
-            IR::Watch(conditions) => {
+            Instruction::Watch(conditions) => {
                 let event = Event {
                     pid: ctx.pid,
                     ip: ctx.ip + 1,
@@ -152,10 +152,10 @@ impl IR {
 
                 return EvalOutcome::Stop;
             }
-            IR::Display(msg) => {
+            Instruction::Display(msg) => {
                 eprintln!("[DISPLAY]: time = {}: {msg}", ctx.time);
             }
-            IR::Finish => {
+            Instruction::Finish => {
                 eprintln!("[FINISH]");
                 return EvalOutcome::Exit;
             }
@@ -193,7 +193,7 @@ pub fn run(
         );
 
         let process = &processes[ctx.pid];
-        for (ip, ir) in process.ir.iter().enumerate().skip(ctx.ip) {
+        for (ip, ir) in process.instrs.iter().enumerate().skip(ctx.ip) {
             ctx.ip = ip;
             let outcome = ir.evaluate(
                 &ctx,
