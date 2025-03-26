@@ -1,39 +1,25 @@
 use std::cmp::Ordering;
-use std::collections::BinaryHeap;
+use std::collections::{BinaryHeap, HashMap};
 
-use self::instruction::{Instruction, WatchCondition};
+use slotmap::{new_key_type, SlotMap};
+use vogls_ir::{
+    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryOp, GlobalContext, IntrinsicArg,
+    IntrinsicVariant, SignalKey, UnaryOp, Value, VariableKey,
+};
 
-pub mod instruction;
+new_key_type! { pub struct ListenerKey; }
 
-pub type Timestamp = usize;
+pub type Timestamp = u64;
 pub type Delay = usize;
-pub type RegId = usize;
-pub type ProcessId = usize;
-pub type Value = u32;
-
-#[derive(Debug)]
-pub struct Process {
-    pub instrs: Vec<Instruction>,
-}
 
 pub struct Context {
     time: Timestamp,
-    pid: ProcessId,
-    ip: usize,
 }
 
 #[derive(Clone, Copy)]
 pub struct Event {
     /// Process ID
-    pub pid: ProcessId,
-    /// Instruction Pointer
-    pub ip: usize,
-}
-
-impl Event {
-    pub fn at_pid_start(pid: ProcessId) -> Self {
-        Self { pid, ip: 0 }
-    }
+    pub bb: BasicBlockKey,
 }
 
 pub struct ScheduledEvent {
@@ -58,157 +44,153 @@ impl Ord for ScheduledEvent {
     }
 }
 
-#[derive(Default)]
-pub struct Listeners {
-    none: Vec<Event>,
-    posedge: Vec<Event>,
-    negedge: Vec<Event>,
-}
-
 enum EvalOutcome {
     Continue,
     Stop,
     Exit,
 }
 
-impl Instruction {
-    fn evaluate(
-        &self,
-        ctx: &Context,
-        schedule: &mut BinaryHeap<ScheduledEvent>,
-        _processes: &[Process],
-        stack: &mut Vec<Value>,
-        listeners: &mut [Listeners],
-        registers: &mut [Value],
-    ) -> EvalOutcome {
-        match self {
-            Instruction::Load(value) => {
-                stack.push(*value);
-            }
-            Instruction::Update(reg) => {
-                let before = registers[*reg];
-                let after = stack.pop().unwrap();
+fn bb_evaluate(
+    bb: &BasicBlock,
+    ctx: &mut Context,
+    gl: &GlobalContext,
+    schedule: &mut BinaryHeap<ScheduledEvent>,
+    variables: &mut HashMap<VariableKey, Value>,
+    signals: &mut HashMap<SignalKey, Value>,
+    listeners: &mut SlotMap<ListenerKey, Event>,
+    watches: &mut HashMap<SignalKey, Vec<ListenerKey>>,
+) -> EvalOutcome {
+    use vogls_ir::Instruction as I;
 
-                // @Incomplete: 4-state logic
-                let posedge = before == 0 && after == 1;
-                let negedge = before == 1 && after == 0;
+    for i in &bb.instrs {
+        match i {
+            I::Constant(var, val) => _ = variables.insert(*var, val.clone()),
+            I::Unary(dst, op, src) => {
+                use UnaryOp as O;
 
-                for event in listeners[*reg].none.drain(..) {
-                    schedule.push(ScheduledEvent {
-                        at: ctx.time,
-                        event,
-                    });
-                }
-                if posedge {
-                    for event in listeners[*reg].posedge.drain(..) {
-                        schedule.push(ScheduledEvent {
-                            at: ctx.time,
-                            event,
-                        });
-                    }
-                }
-                if negedge {
-                    for event in listeners[*reg].negedge.drain(..) {
-                        schedule.push(ScheduledEvent {
-                            at: ctx.time,
-                            event,
-                        });
-                    }
-                }
-                registers[*reg] = after;
-            }
-            Instruction::Schedule(pid, delay) => {
-                schedule.push(ScheduledEvent {
-                    at: ctx.time + delay,
-                    event: Event { pid: *pid, ip: 0 },
-                });
-            }
-            Instruction::Yield(delay) => {
-                schedule.push(ScheduledEvent {
-                    at: ctx.time + *delay,
-                    event: Event {
-                        pid: ctx.pid,
-                        ip: ctx.ip + 1,
+                let Value::Bit(src) = variables.get(&src).unwrap();
+
+                variables.insert(
+                    *dst,
+                    match op {
+                        O::Neg => Value::Bit(!src),
                     },
-                });
-
-                return EvalOutcome::Stop;
+                );
             }
-            Instruction::Watch(conditions) => {
-                let event = Event {
-                    pid: ctx.pid,
-                    ip: ctx.ip + 1,
-                };
+            I::Binary(dst, op, lhs, rhs) => {
+                use BinaryOp as O;
 
-                // @Incomplete: This should only schedule the watch once over the whole list of
-                // conditions.
-                for (condition, reg) in conditions.iter() {
-                    match condition {
-                        WatchCondition::None => listeners[*reg].none.push(event),
-                        WatchCondition::Posedge => listeners[*reg].posedge.push(event),
-                        WatchCondition::Negedge => listeners[*reg].negedge.push(event),
+                let Value::Bit(lhs) = variables.get(&lhs).unwrap();
+                let Value::Bit(rhs) = variables.get(&rhs).unwrap();
+
+                variables.insert(
+                    *dst,
+                    match op {
+                        O::And => Value::Bit(lhs & rhs),
+                        O::Or => Value::Bit(lhs | rhs),
+                        O::Xor => Value::Bit(lhs ^ rhs),
+                    },
+                );
+            }
+            I::Intrinsic(op, args) => {
+                use IntrinsicVariant as O;
+
+                match op {
+                    O::Display => {
+                        let Some(IntrinsicArg::StringLiteral(msg)) = args.first() else {
+                            panic!("Invalid display argument");
+                        };
+                        eprintln!("[DISPLAY]: time = {}: {msg}", ctx.time);
+                    }
+                    O::Finish => {
+                        eprintln!("[FINISH]");
+                        return EvalOutcome::Exit;
                     }
                 }
+            }
+            I::Probe(var, sig) => {
+                variables.insert(*var, signals.get(&sig).unwrap().clone());
+            }
+            I::Drive(sig, var) => {
+                signals.insert(*sig, variables.get(&var).unwrap().clone());
 
-                return EvalOutcome::Stop;
-            }
-            Instruction::Display(msg) => {
-                eprintln!("[DISPLAY]: time = {}: {msg}", ctx.time);
-            }
-            Instruction::Finish => {
-                eprintln!("[FINISH]");
-                return EvalOutcome::Exit;
+                if let Some(watchers) = watches.remove(sig) {
+                    for watcher in watchers {
+                        if let Some(event) = listeners.remove(watcher) {
+                            schedule.push(ScheduledEvent {
+                                at: ctx.time,
+                                event,
+                            });
+                        }
+                    }
+                }
             }
         }
-
-        EvalOutcome::Continue
     }
+
+    use BasicBlockTerminator as T;
+    let next_bb = match &bb.terminator {
+        T::Wait(bb, time) => {
+            schedule.push(ScheduledEvent {
+                at: ctx.time + time.0,
+                event: Event { bb: *bb },
+            });
+            return EvalOutcome::Stop;
+        }
+        T::Watch(bb, signals) => {
+            let listener_key = listeners.insert(Event { bb: *bb });
+            for signal in signals {
+                watches.entry(*signal).or_default().push(listener_key);
+            }
+            return EvalOutcome::Stop;
+        }
+        T::Jump(bb) => *bb,
+        T::Branch(var, true_bb, false_bb) => {
+            let is_true = match variables.get(&var).unwrap() {
+                Value::Bit(v) => *v,
+            };
+
+            if is_true {
+                *true_bb
+            } else {
+                *false_bb
+            }
+        }
+        T::Halt => return EvalOutcome::Stop,
+    };
+
+    let bb = gl.bbs.get(next_bb).unwrap();
+    bb_evaluate(
+        bb, ctx, gl, schedule, variables, signals, listeners, watches,
+    )
 }
 
 pub fn run(
-    event_queue: &mut BinaryHeap<ScheduledEvent>,
-    processes: &[Process],
-    listeners: &mut [Listeners],
-    registers: &mut [Value],
-    max_time: usize,
+    gl: &GlobalContext,
+    schedule: &mut BinaryHeap<ScheduledEvent>,
+    variables: &mut HashMap<VariableKey, Value>,
+    signals: &mut HashMap<SignalKey, Value>,
+    listeners: &mut SlotMap<ListenerKey, Event>,
+    watches: &mut HashMap<SignalKey, Vec<ListenerKey>>,
+    max_time: u64,
 ) {
-    let mut ctx = Context {
-        time: 0,
-        pid: 0,
-        ip: 0,
-    };
-    let mut stack = Vec::new();
-    'event_loop: while let Some(se) = event_queue.pop() {
+    let mut ctx = Context { time: 0 };
+    while let Some(se) = schedule.pop() {
         ctx.time = se.at;
-        ctx.pid = se.event.pid;
-        ctx.ip = se.event.ip;
 
         if ctx.time > max_time {
             break;
         }
 
-        eprintln!(
-            "[T={}] Starting process {} at {}",
-            ctx.time, ctx.pid, ctx.ip,
+        let bb = gl.bbs.get(se.event.bb).unwrap();
+        let outcome = bb_evaluate(
+            bb, &mut ctx, gl, schedule, variables, signals, listeners, watches,
         );
 
-        let process = &processes[ctx.pid];
-        for (ip, ir) in process.instrs.iter().enumerate().skip(ctx.ip) {
-            ctx.ip = ip;
-            let outcome = ir.evaluate(
-                &ctx,
-                event_queue,
-                processes,
-                &mut stack,
-                listeners,
-                registers,
-            );
-
-            match outcome {
-                EvalOutcome::Continue => {}
-                EvalOutcome::Stop => break,
-                EvalOutcome::Exit => break 'event_loop,
-            }
+        match outcome {
+            EvalOutcome::Continue => {}
+            EvalOutcome::Stop => continue,
+            EvalOutcome::Exit => break,
         }
     }
 }
