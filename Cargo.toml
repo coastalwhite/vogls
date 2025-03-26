@@ -1,11 +1,17 @@
 [workspace]
-members = [ "vogls", "vogls-ir",
-    "vogls-sim", "vogls-verilog",
+members = [
+    "vogls",
+    "vogls-ir",
+    "vogls-sim",
+    "vogls-verilog",
+    "vogls-elaborate",
 ]
 resolver = "2"
 
 [workspace.dependencies]
 slotmap = "1"
+indexmap = "1"
+
 vogls-sim.path = "vogls-sim"
 vogls-ir.path = "vogls-ir"
 vogls-verilog.path = "vogls-verilog"

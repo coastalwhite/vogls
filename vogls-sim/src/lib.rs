@@ -4,21 +4,29 @@ use std::collections::{BinaryHeap, HashMap};
 use slotmap::{new_key_type, SlotMap};
 use vogls_ir::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryOp, GlobalContext, IntrinsicArg,
-    IntrinsicVariant, SignalKey, UnaryOp, Value, VariableKey,
+    IntrinsicOp, SignalKey, UnaryOp, Value, VariableKey,
 };
+
+mod instruction;
 
 new_key_type! { pub struct ListenerKey; }
 
 pub type Timestamp = u64;
-pub type Delay = usize;
+pub type InstanceId = u64;
 
 pub struct Context {
     time: Timestamp,
 }
 
+impl Context {
+    pub fn new() -> Self {
+        Self { time: 0 }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct Event {
-    /// Process ID
+    /// Where to start execution.
     pub bb: BasicBlockKey,
 }
 
@@ -68,7 +76,9 @@ fn bb_evaluate(
             I::Unary(dst, op, src) => {
                 use UnaryOp as O;
 
-                let Value::Bit(src) = variables.get(&src).unwrap();
+                let Value::Bit(src) = variables.get(src).unwrap() else {
+                    panic!();
+                };
 
                 variables.insert(
                     *dst,
@@ -80,8 +90,12 @@ fn bb_evaluate(
             I::Binary(dst, op, lhs, rhs) => {
                 use BinaryOp as O;
 
-                let Value::Bit(lhs) = variables.get(&lhs).unwrap();
-                let Value::Bit(rhs) = variables.get(&rhs).unwrap();
+                let Value::Bit(lhs) = variables.get(lhs).unwrap() else {
+                    panic!()
+                };
+                let Value::Bit(rhs) = variables.get(rhs).unwrap() else {
+                    panic!()
+                };
 
                 variables.insert(
                     *dst,
@@ -93,7 +107,7 @@ fn bb_evaluate(
                 );
             }
             I::Intrinsic(op, args) => {
-                use IntrinsicVariant as O;
+                use IntrinsicOp as O;
 
                 match op {
                     O::Display => {
@@ -112,7 +126,7 @@ fn bb_evaluate(
                 variables.insert(*var, signals.get(&sig).unwrap().clone());
             }
             I::Drive(sig, var) => {
-                signals.insert(*sig, variables.get(&var).unwrap().clone());
+                signals.insert(*sig, variables.get(var).unwrap().clone());
 
                 if let Some(watchers) = watches.remove(sig) {
                     for watcher in watchers {
@@ -125,6 +139,15 @@ fn bb_evaluate(
                     }
                 }
             }
+
+            I::Instantiate(section) => {
+                let section = gl.sections.get(*section).unwrap();
+                schedule.push(ScheduledEvent {
+                    at: ctx.time,
+                    event: Event { bb: section.entry },
+                });
+            }
+            I::Signal(signal) => _ = signals.insert(*signal, Value::Bit(false)),
         }
     }
 
@@ -146,7 +169,7 @@ fn bb_evaluate(
         }
         T::Jump(bb) => *bb,
         T::Branch(var, true_bb, false_bb) => {
-            let is_true = match variables.get(&var).unwrap() {
+            let is_true = match variables.get(&*var).unwrap() {
                 Value::Bit(v) => *v,
             };
 
@@ -167,6 +190,7 @@ fn bb_evaluate(
 
 pub fn run(
     gl: &GlobalContext,
+    ctx: &mut Context,
     schedule: &mut BinaryHeap<ScheduledEvent>,
     variables: &mut HashMap<VariableKey, Value>,
     signals: &mut HashMap<SignalKey, Value>,
@@ -174,7 +198,6 @@ pub fn run(
     watches: &mut HashMap<SignalKey, Vec<ListenerKey>>,
     max_time: u64,
 ) {
-    let mut ctx = Context { time: 0 };
     while let Some(se) = schedule.pop() {
         ctx.time = se.at;
 
@@ -184,7 +207,7 @@ pub fn run(
 
         let bb = gl.bbs.get(se.event.bb).unwrap();
         let outcome = bb_evaluate(
-            bb, &mut ctx, gl, schedule, variables, signals, listeners, watches,
+            bb, ctx, gl, schedule, variables, signals, listeners, watches,
         );
 
         match outcome {

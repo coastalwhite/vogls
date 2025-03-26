@@ -57,6 +57,10 @@ impl AstArenas {
     pub fn get<T: Copy>(&self, id: AstId<T>) -> &T {
         self.nodes.get(id.node)
     }
+
+    pub fn get_ident(&self, ident_ref: TextRef) -> &str {
+        &self.idents[ident_ref.start..ident_ref.end]
+    }
 }
 
 pub struct Ast {

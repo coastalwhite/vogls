@@ -5,3 +5,4 @@ pub mod ast;
 mod ident;
 mod span;
 pub mod number;
+pub mod lower;

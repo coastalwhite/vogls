@@ -1,9 +1,10 @@
 use core::fmt;
 use std::collections::HashSet;
+use std::fmt::Write;
 
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryOp, GlobalContext, Instruction,
-    IntrinsicArg, IntrinsicVariant, Module, Section, SectionKey, SectionVariant, Signal, SignalKey,
+    IntrinsicArg, IntrinsicOp, Module, Section, SectionKey, SectionVariant, Signal, SignalKey,
     Time, Type, UnaryOp, Value, Variable, VariableKey,
 };
 
@@ -69,7 +70,31 @@ impl ContextFormat for Section {
             SectionVariant::Function => "function",
         };
 
-        writeln!(f, "{variant_mnemonic} {}() -> {{", self.name)?;
+        write!(f, "{variant_mnemonic} {}(", self.name)?;
+        if let Some(i) = self.ins.first() {
+            ctx.gl.signals.get(*i).unwrap().typed_ctx_fmt(f, ctx)?;
+            for i in self.ins.iter().skip(1) {
+                f.write_str(", ")?;
+                ctx.gl.signals.get(*i).unwrap().typed_ctx_fmt(f, ctx)?;
+            }
+        }
+        write!(f, ")")?;
+        if let Some(i) = self.outs.first() {
+            f.write_str(" -> ")?;
+            if self.outs.len() > 1 {
+                f.write_str("(")?;
+            }
+            ctx.gl.signals.get(*i).unwrap().typed_ctx_fmt(f, ctx)?;
+            for i in self.outs.iter().skip(1) {
+                f.write_str(", ")?;
+                ctx.gl.signals.get(*i).unwrap().typed_ctx_fmt(f, ctx)?;
+            }
+            if self.outs.len() > 1 {
+                f.write_str(")")?;
+            }
+        }
+
+        writeln!(f, " {{")?;
 
         let mut bb_stack = std::mem::take(&mut ctx.bb_stack_scratch);
         let mut bb_seen = std::mem::take(&mut ctx.bb_seen_scratch);
@@ -128,47 +153,6 @@ impl ContextFormat for BasicBlock {
     }
 }
 
-macro_rules! mnemonics {
-    ({$($pat:pat => $mnemonic:literal,)+} ($($terminator:literal,)+)) => {
-        const MAX_MNEMONIC_LENGTH: usize = {
-            let mut x = 0;
-            $(
-            if $mnemonic.len() > x {
-                x = $mnemonic.len();
-            }
-            )+
-            $(
-            if $terminator.len() > x {
-                x = $terminator.len();
-            }
-            )+
-            x
-        };
-        const fn mnemonic(&self) -> &'static str {
-            match self {
-                $($pat => $mnemonic,)+
-            }
-        }
-    };
-}
-
-impl Instruction {
-    mnemonics! {
-        {
-            Self::Constant(..) => "const",
-            Self::Unary(_, UnaryOp::Neg, _) => "neg",
-            Self::Binary(_, BinaryOp::And, _, _) => "and",
-            Self::Binary(_, BinaryOp::Or, _, _) => "or",
-            Self::Binary(_, BinaryOp::Xor, _, _) => "xor",
-            Self::Intrinsic(IntrinsicVariant::Display, _) => "vogls.display",
-            Self::Intrinsic(IntrinsicVariant::Finish, _) => "vogls.finish",
-            Self::Probe(_, _) => "probe",
-            Self::Drive(_, _) => "drive",
-        }
-        ("wait", "watch", "jump", "branch", "halt",)
-    }
-}
-
 impl BinaryOp {
     pub const fn into_mnemonic(&self) -> &'static str {
         match self {
@@ -187,7 +171,7 @@ impl UnaryOp {
     }
 }
 
-impl IntrinsicVariant {
+impl IntrinsicOp {
     pub const fn into_mnemonic(&self) -> &'static str {
         match self {
             Self::Display => "display",
@@ -242,6 +226,16 @@ impl ContextFormat for Instruction {
                 ctx.gl.signals.get(*sig).unwrap().ctx_fmt(f, ctx)?;
                 f.write_str(", ")?;
                 ctx.gl.vars.get(*var).unwrap().typed_ctx_fmt(f, ctx)?;
+            }
+
+            Self::Instantiate(process) => {
+                let section = ctx.gl.sections.get(*process).unwrap();
+                assert_eq!(section.variant, SectionVariant::Process);
+                write!(f, "instantiate @{}", section.name)?;
+            }
+            Self::Signal(signal) => {
+                let signal = ctx.gl.signals.get(*signal).unwrap();
+                write!(f, "signal {} {}", signal.ty.display(ctx.gl), signal.name)?;
             }
         }
 
@@ -317,6 +311,20 @@ impl ContextFormat for Signal {
     fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut DisplayContext<'_>) -> fmt::Result {
         f.write_str("$")?;
         f.write_str(&self.name)?;
+        Ok(())
+    }
+}
+
+impl Signal {
+    fn typed_ctx_fmt(
+        &self,
+
+        f: &mut fmt::Formatter<'_>,
+        ctx: &mut DisplayContext<'_>,
+    ) -> fmt::Result {
+        self.ty.ctx_fmt(f, ctx)?;
+        f.write_str(" ")?;
+        self.ctx_fmt(f, ctx)?;
         Ok(())
     }
 }

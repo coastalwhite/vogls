@@ -3,8 +3,10 @@ mod format;
 
 pub use format::{ContextFormat, DisplayContext};
 pub use builder::{BasicBlockBuilder, ModuleBuilder};
+use indexmap::IndexSet;
 use slotmap::{SlotMap, new_key_type};
 
+new_key_type! { pub struct ModuleKey; }
 new_key_type! { pub struct SectionKey; }
 new_key_type! { pub struct BasicBlockKey; }
 new_key_type! { pub struct SignalKey; }
@@ -61,7 +63,7 @@ pub enum IntrinsicArg {
     Value(Value),
 }
 
-pub enum IntrinsicVariant {
+pub enum IntrinsicOp {
     Display,
     Finish,
 }
@@ -80,9 +82,12 @@ pub enum Instruction {
     Constant(VariableKey, Value),
     Unary(VariableKey, UnaryOp, VariableKey),
     Binary(VariableKey, BinaryOp, VariableKey, VariableKey),
-    Intrinsic(IntrinsicVariant, Vec<IntrinsicArg>),
+    Intrinsic(IntrinsicOp, Vec<IntrinsicArg>),
     Probe(VariableKey, SignalKey),
     Drive(SignalKey, VariableKey),
+
+    Instantiate(SectionKey),
+    Signal(SignalKey),
 }
 
 pub struct Module {
@@ -92,6 +97,7 @@ pub struct Module {
 
 #[derive(Default)]
 pub struct GlobalContext {
+    pub modules: SlotMap<ModuleKey, Module>,
     pub sections: SlotMap<SectionKey, Section>,
     pub bbs: SlotMap<BasicBlockKey, BasicBlock>,
     pub vars: SlotMap<VariableKey, Variable>,
@@ -110,4 +116,7 @@ pub struct Section {
     pub variant: SectionVariant,
     pub name: String,
     pub entry: BasicBlockKey,
+
+    pub ins: IndexSet<SignalKey>, 
+    pub outs: IndexSet<SignalKey>, 
 }

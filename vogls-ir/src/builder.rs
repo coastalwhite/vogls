@@ -1,7 +1,9 @@
+use indexmap::IndexSet;
+
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryOp, GlobalContext, Instruction,
-    IntrinsicArg, IntrinsicVariant, Module, Section, SectionKey, SectionVariant, SignalKey, Time,
-    Type, UnaryOp, Value, Variable, VariableKey,
+    IntrinsicArg, IntrinsicOp, Module, Section, SectionKey, SectionVariant, SignalKey, Time, Type,
+    UnaryOp, Value, Variable, VariableKey,
 };
 
 #[must_use]
@@ -14,6 +16,10 @@ pub struct ModuleBuilder {
 pub struct BasicBlockBuilder<'a> {
     gl: &'a mut GlobalContext,
     key: BasicBlockKey,
+
+    section: SectionKey,
+    section_variant: SectionVariant,
+
     instrs: Vec<Instruction>,
     tmp_offset: usize,
     bbname_offset: usize,
@@ -54,6 +60,9 @@ impl ModuleBuilder {
             variant: SectionVariant::Process,
             name,
             entry: bb_key,
+
+            ins: IndexSet::new(),
+            outs: IndexSet::new(),
         });
         self.sections.push(section_key);
         (
@@ -62,6 +71,42 @@ impl ModuleBuilder {
                 gl,
                 key: bb_key,
                 instrs: Vec::new(),
+                section: section_key,
+                section_variant: SectionVariant::Process,
+                tmp_offset: 0,
+                bbname_offset: 0,
+            },
+        )
+    }
+
+    pub fn entity<'a>(
+        &mut self,
+        gl: &'a mut GlobalContext,
+        name: String,
+    ) -> (SectionKey, BasicBlockBuilder<'a>) {
+        let variant = SectionVariant::Entity;
+        let bb_key = gl.bbs.insert(BasicBlock {
+            name: String::from("entry"),
+            instrs: Vec::new(),
+            terminator: BasicBlockTerminator::Halt,
+        });
+        let section_key = gl.sections.insert(Section {
+            variant,
+            name,
+            entry: bb_key,
+
+            ins: IndexSet::new(),
+            outs: IndexSet::new(),
+        });
+        self.sections.push(section_key);
+        (
+            section_key,
+            BasicBlockBuilder {
+                gl,
+                key: bb_key,
+                instrs: Vec::new(),
+                section: section_key,
+                section_variant: variant,
                 tmp_offset: 0,
                 bbname_offset: 0,
             },
@@ -130,9 +175,17 @@ impl<'a> BasicBlockBuilder<'a> {
     }
 
     pub fn drive(&mut self, signal: SignalKey, variable: VariableKey) {
+        if self.section_variant == SectionVariant::Process {
+            self.gl.sections.get_mut(self.section).unwrap().outs.insert(signal);
+        }
+
         self.instrs.push(Instruction::Drive(signal, variable));
     }
     pub fn probe(&mut self, signal: SignalKey) -> VariableKey {
+        if self.section_variant == SectionVariant::Process {
+            self.gl.sections.get_mut(self.section).unwrap().ins.insert(signal);
+        }
+
         let ty = self.gl.signals.get(signal).unwrap().ty.clone();
         let variable = self.next_tmp_var(ty);
         self.instrs.push(Instruction::Probe(variable, signal));
@@ -148,6 +201,10 @@ impl<'a> BasicBlockBuilder<'a> {
             gl: self.gl,
             key: next_key,
             instrs: Vec::new(),
+
+            section: self.section,
+            section_variant: self.section_variant,
+
             tmp_offset: self.tmp_offset,
             bbname_offset: self.bbname_offset,
         }
@@ -171,6 +228,10 @@ impl<'a> BasicBlockBuilder<'a> {
             gl: self.gl,
             key: next_key,
             instrs: Vec::new(),
+
+            section: self.section,
+            section_variant: self.section_variant,
+
             tmp_offset: self.tmp_offset,
             bbname_offset: self.bbname_offset,
         }
@@ -188,6 +249,10 @@ impl<'a> BasicBlockBuilder<'a> {
             gl: self.gl,
             key: next_key,
             instrs: Vec::new(),
+
+            section: self.section,
+            section_variant: self.section_variant,
+
             tmp_offset: self.tmp_offset,
             bbname_offset: self.bbname_offset,
         }
@@ -208,6 +273,10 @@ impl<'a> BasicBlockBuilder<'a> {
             gl: self.gl,
             key: next_key,
             instrs: Vec::new(),
+
+            section: self.section,
+            section_variant: self.section_variant,
+
             tmp_offset: self.tmp_offset,
             bbname_offset: self.bbname_offset,
         }
@@ -227,6 +296,10 @@ impl<'a> BasicBlockBuilder<'a> {
             gl: self.gl,
             key: next_key,
             instrs: Vec::new(),
+
+            section: self.section,
+            section_variant: self.section_variant,
+
             tmp_offset: self.tmp_offset,
             bbname_offset: self.bbname_offset,
         }
@@ -237,7 +310,20 @@ impl<'a> BasicBlockBuilder<'a> {
         slf.terminator = BasicBlockTerminator::Watch(bb, signals);
     }
 
-    pub fn intrinsic(&mut self, op: IntrinsicVariant, args: Vec<IntrinsicArg>) {
+    pub fn intrinsic(&mut self, op: IntrinsicOp, args: Vec<IntrinsicArg>) {
         self.instrs.push(Instruction::Intrinsic(op, args));
+    }
+
+    pub fn instantiate(&mut self, process: SectionKey) {
+        assert_eq!(self.section_variant, SectionVariant::Entity);
+        assert_ne!(
+            self.gl.sections.get(process).unwrap().variant,
+            SectionVariant::Function
+        );
+        self.instrs.push(Instruction::Instantiate(process));
+    }
+    pub fn signal(&mut self, signal: SignalKey) {
+        assert_eq!(self.section_variant, SectionVariant::Entity);
+        self.instrs.push(Instruction::Signal(signal));
     }
 }
