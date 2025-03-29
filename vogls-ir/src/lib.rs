@@ -1,8 +1,10 @@
 mod builder;
 mod format;
 
-pub use format::{ContextFormat, DisplayContext};
+use std::collections::HashSet;
+
 pub use builder::{BasicBlockBuilder, ModuleBuilder};
+pub use format::{ContextFormat, DisplayContext};
 use indexmap::IndexSet;
 use slotmap::{SlotMap, new_key_type};
 
@@ -12,7 +14,7 @@ new_key_type! { pub struct BasicBlockKey; }
 new_key_type! { pub struct SignalKey; }
 new_key_type! { pub struct VariableKey; }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum Value {
     Bit(bool),
 }
@@ -25,7 +27,7 @@ impl Value {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct Time(pub u64);
 
 pub enum BasicBlockTerminator {
@@ -40,6 +42,31 @@ pub struct BasicBlock {
     pub name: String,
     pub instrs: Vec<Instruction>,
     pub terminator: BasicBlockTerminator,
+}
+
+impl BasicBlockTerminator {
+    pub fn extend_next_rev(
+        &self,
+        bb_stack: &mut Vec<BasicBlockKey>,
+        bb_seen: &mut HashSet<BasicBlockKey>,
+    ) {
+        match self {
+            Self::Wait(bb, _) | Self::Watch(bb, _) | Self::Jump(bb) => {
+                if bb_seen.insert(*bb) {
+                    bb_stack.push(*bb);
+                }
+            }
+            Self::Branch(_, true_bb, false_bb) => {
+                if bb_seen.insert(*true_bb) {
+                    bb_stack.push(*true_bb);
+                }
+                if bb_seen.insert(*false_bb) {
+                    bb_stack.push(*false_bb);
+                }
+            }
+            Self::Halt => {}
+        }
+    }
 }
 
 pub struct Variable {
@@ -60,18 +87,20 @@ pub enum Type {
 pub enum IntrinsicArg {
     StringLiteral(String),
     Variable(VariableKey),
-    Value(Value),
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum IntrinsicOp {
     Display,
     Finish,
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum UnaryOp {
     Neg,
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum BinaryOp {
     And,
     Or,
@@ -88,6 +117,19 @@ pub enum Instruction {
 
     Instantiate(SectionKey),
     Signal(SignalKey),
+}
+impl Instruction {
+    pub fn get_destination_variable(&self) -> Option<VariableKey> {
+        match self {
+            Self::Constant(dst, _)
+            | Self::Unary(dst, _, _)
+            | Self::Binary(dst, _, _, _)
+            | Self::Probe(dst, _) => Some(*dst),
+            Self::Intrinsic(_, _) | Self::Drive(_, _) | Self::Instantiate(_) | Self::Signal(_) => {
+                None
+            }
+        }
+    }
 }
 
 pub struct Module {
@@ -117,6 +159,6 @@ pub struct Section {
     pub name: String,
     pub entry: BasicBlockKey,
 
-    pub ins: IndexSet<SignalKey>, 
-    pub outs: IndexSet<SignalKey>, 
+    pub ins: IndexSet<SignalKey>,
+    pub outs: IndexSet<SignalKey>,
 }

@@ -2,14 +2,14 @@ use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
 
 use slotmap::{new_key_type, SlotMap};
-use vogls_ir::{
-    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryOp, GlobalContext, IntrinsicArg,
-    IntrinsicOp, SignalKey, UnaryOp, Value, VariableKey,
-};
+use vogls_ir::{BinaryOp, IntrinsicOp, SignalKey, UnaryOp, Value};
 
 mod instruction;
 
+pub use instruction::*;
+
 new_key_type! { pub struct ListenerKey; }
+new_key_type! { pub struct VmProcessKey; }
 
 pub type Timestamp = u64;
 pub type InstanceId = u64;
@@ -24,10 +24,14 @@ impl Context {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct Event {
+    /// Which process is scheduled.
+    pub process: VmProcessKey,
+    /// The stack with which to execute.
+    pub stack: Vec<u8>,
     /// Where to start execution.
-    pub bb: BasicBlockKey,
+    pub ip: usize,
 }
 
 pub struct ScheduledEvent {
@@ -53,146 +57,130 @@ impl Ord for ScheduledEvent {
 }
 
 enum EvalOutcome {
-    Continue,
-    Stop,
+    Next,
     Exit,
 }
 
-fn bb_evaluate(
-    bb: &BasicBlock,
-    ctx: &mut Context,
-    gl: &GlobalContext,
-    schedule: &mut BinaryHeap<ScheduledEvent>,
-    variables: &mut HashMap<VariableKey, Value>,
-    signals: &mut HashMap<SignalKey, Value>,
-    listeners: &mut SlotMap<ListenerKey, Event>,
-    watches: &mut HashMap<SignalKey, Vec<ListenerKey>>,
-) -> EvalOutcome {
-    use vogls_ir::Instruction as I;
+impl Event {
+    fn evaluate(
+        mut self,
+        ctx: &mut Context,
+        processes: &SlotMap<VmProcessKey, VmProcess>,
+        schedule: &mut BinaryHeap<ScheduledEvent>,
+        signals: &mut HashMap<SignalKey, Value>,
+        listeners: &mut SlotMap<ListenerKey, Event>,
+        watches: &mut HashMap<SignalKey, Vec<ListenerKey>>,
+    ) -> EvalOutcome {
+        let ip = &mut self.ip;
+        let stack = &mut self.stack;
+        let process = processes.get(self.process).unwrap();
 
-    for i in &bb.instrs {
-        match i {
-            I::Constant(var, val) => _ = variables.insert(*var, val.clone()),
-            I::Unary(dst, op, src) => {
-                use UnaryOp as O;
-
-                let Value::Bit(src) = variables.get(src).unwrap() else {
-                    panic!();
-                };
-
-                variables.insert(
-                    *dst,
-                    match op {
-                        O::Neg => Value::Bit(!src),
-                    },
-                );
-            }
-            I::Binary(dst, op, lhs, rhs) => {
-                use BinaryOp as O;
-
-                let Value::Bit(lhs) = variables.get(lhs).unwrap() else {
-                    panic!()
-                };
-                let Value::Bit(rhs) = variables.get(rhs).unwrap() else {
-                    panic!()
-                };
-
-                variables.insert(
-                    *dst,
-                    match op {
-                        O::And => Value::Bit(lhs & rhs),
-                        O::Or => Value::Bit(lhs | rhs),
-                        O::Xor => Value::Bit(lhs ^ rhs),
-                    },
-                );
-            }
-            I::Intrinsic(op, args) => {
-                use IntrinsicOp as O;
-
-                match op {
-                    O::Display => {
-                        let Some(IntrinsicArg::StringLiteral(msg)) = args.first() else {
-                            panic!("Invalid display argument");
-                        };
-                        eprintln!("[DISPLAY]: time = {}: {msg}", ctx.time);
-                    }
-                    O::Finish => {
-                        eprintln!("[FINISH]");
-                        return EvalOutcome::Exit;
-                    }
+        use VmInstruction as I;
+        loop {
+            let instr = &process.instructions[*ip];
+            *ip += 1;
+            match instr {
+                I::Constant(var, val) => {
+                    assert_eq!(var.size, 1);
+                    stack[var.offset] = match val {
+                        Value::Bit(v) => *v as u8,
+                    };
                 }
-            }
-            I::Probe(var, sig) => {
-                variables.insert(*var, signals.get(&sig).unwrap().clone());
-            }
-            I::Drive(sig, var) => {
-                signals.insert(*sig, variables.get(var).unwrap().clone());
+                I::Unary(dst, op, src) => {
+                    assert_eq!(dst.size, 1);
+                    assert_eq!(src.size, 1);
 
-                if let Some(watchers) = watches.remove(sig) {
-                    for watcher in watchers {
-                        if let Some(event) = listeners.remove(watcher) {
-                            schedule.push(ScheduledEvent {
-                                at: ctx.time,
-                                event,
-                            });
+                    use UnaryOp as O;
+                    stack[dst.offset] = match op {
+                        O::Neg => !stack[src.offset],
+                    };
+                }
+                I::Binary(dst, op, lhs, rhs) => {
+                    assert_eq!(dst.size, 1);
+                    assert_eq!(lhs.size, 1);
+                    assert_eq!(rhs.size, 1);
+
+                    let lhs = stack[lhs.offset];
+                    let rhs = stack[rhs.offset];
+
+                    use BinaryOp as O;
+                    stack[dst.offset] = match op {
+                        O::And => lhs & rhs,
+                        O::Or => lhs | rhs,
+                        O::Xor => lhs ^ rhs,
+                    };
+                }
+                I::Intrinsic(op, args) => {
+                    use IntrinsicOp as O;
+
+                    match op {
+                        O::Display => {
+                            let Some(VmIntrinsicArg::StringLiteral(msg)) = args.first() else {
+                                panic!("Invalid display argument");
+                            };
+                            eprintln!("[DISPLAY]: time = {}: {msg}", ctx.time);
+                        }
+                        O::Finish => {
+                            eprintln!("[FINISH]");
+                            return EvalOutcome::Exit;
                         }
                     }
                 }
-            }
+                I::Probe(var, sig) => {
+                    assert_eq!(var.size, 1);
+                    stack[var.offset] = match signals.get(&sig).unwrap() {
+                        Value::Bit(v) => *v as u8,
+                    };
+                }
+                I::Drive(sig, var) => {
+                    assert_eq!(var.size, 1);
+                    let var_value = stack[var.offset];
+                    signals.insert(*sig, Value::Bit(var_value & 1 != 0));
 
-            I::Instantiate(section) => {
-                let section = gl.sections.get(*section).unwrap();
-                schedule.push(ScheduledEvent {
-                    at: ctx.time,
-                    event: Event { bb: section.entry },
-                });
+                    if let Some(watchers) = watches.remove(sig) {
+                        for watcher in watchers {
+                            if let Some(event) = listeners.remove(watcher) {
+                                schedule.push(ScheduledEvent {
+                                    at: ctx.time,
+                                    event,
+                                });
+                            }
+                        }
+                    }
+                }
+                I::Wait(time) => {
+                    schedule.push(ScheduledEvent {
+                        at: ctx.time + time.0,
+                        event: self,
+                    });
+                    return EvalOutcome::Next;
+                }
+                I::Watch(signals) => {
+                    let listener_key = listeners.insert(self);
+                    for signal in signals {
+                        watches.entry(*signal).or_default().push(listener_key);
+                    }
+                    return EvalOutcome::Next;
+                }
+                I::Jump(offset) => *ip = *offset,
+                I::Branch(cond, true_offset, false_offset) => {
+                    let is_true = stack[cond.offset] & 1 != 0;
+                    if is_true {
+                        *ip = *true_offset;
+                    } else {
+                        *ip = *false_offset;
+                    }
+                }
+                I::Halt => return EvalOutcome::Next,
             }
-            I::Signal(signal) => _ = signals.insert(*signal, Value::Bit(false)),
         }
     }
-
-    use BasicBlockTerminator as T;
-    let next_bb = match &bb.terminator {
-        T::Wait(bb, time) => {
-            schedule.push(ScheduledEvent {
-                at: ctx.time + time.0,
-                event: Event { bb: *bb },
-            });
-            return EvalOutcome::Stop;
-        }
-        T::Watch(bb, signals) => {
-            let listener_key = listeners.insert(Event { bb: *bb });
-            for signal in signals {
-                watches.entry(*signal).or_default().push(listener_key);
-            }
-            return EvalOutcome::Stop;
-        }
-        T::Jump(bb) => *bb,
-        T::Branch(var, true_bb, false_bb) => {
-            let is_true = match variables.get(&*var).unwrap() {
-                Value::Bit(v) => *v,
-            };
-
-            if is_true {
-                *true_bb
-            } else {
-                *false_bb
-            }
-        }
-        T::Halt => return EvalOutcome::Stop,
-    };
-
-    let bb = gl.bbs.get(next_bb).unwrap();
-    bb_evaluate(
-        bb, ctx, gl, schedule, variables, signals, listeners, watches,
-    )
 }
 
 pub fn run(
-    gl: &GlobalContext,
     ctx: &mut Context,
+    processes: &SlotMap<VmProcessKey, VmProcess>,
     schedule: &mut BinaryHeap<ScheduledEvent>,
-    variables: &mut HashMap<VariableKey, Value>,
     signals: &mut HashMap<SignalKey, Value>,
     listeners: &mut SlotMap<ListenerKey, Event>,
     watches: &mut HashMap<SignalKey, Vec<ListenerKey>>,
@@ -205,14 +193,12 @@ pub fn run(
             break;
         }
 
-        let bb = gl.bbs.get(se.event.bb).unwrap();
-        let outcome = bb_evaluate(
-            bb, ctx, gl, schedule, variables, signals, listeners, watches,
-        );
+        let outcome = se
+            .event
+            .evaluate(ctx, processes, schedule, signals, listeners, watches);
 
         match outcome {
-            EvalOutcome::Continue => {}
-            EvalOutcome::Stop => continue,
+            EvalOutcome::Next => continue,
             EvalOutcome::Exit => break,
         }
     }

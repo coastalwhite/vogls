@@ -2,7 +2,7 @@ use std::collections::{BinaryHeap, HashMap};
 
 use slotmap::SlotMap;
 use vogls_ir::{ContextFormat, GlobalContext, SectionVariant, Value};
-use vogls_sim::{Context, Event, ScheduledEvent};
+use vogls_sim::{Context, Event, ScheduledEvent, VmProcess, VmProcessKey, lower_process_to_vm};
 use vogls_verilog::lexer::Lexer;
 use vogls_verilog::lower::lower_module_to_ir;
 use vogls_verilog::parser::Parser;
@@ -38,33 +38,44 @@ endmodule
     let tl_module = lower_module_to_ir(&ast, &mut gl);
 
     let mut ctx = Context::new();
+    let mut processes = SlotMap::<VmProcessKey, VmProcess>::default();
     let mut schedule = BinaryHeap::default();
-    let mut variables = HashMap::default();
     let mut signals = HashMap::default();
     let mut listeners = SlotMap::default();
     let mut watches = HashMap::default();
 
     let tl_module = gl.modules.get(tl_module).unwrap();
-    for section in &tl_module.sections {
-        let section = gl.sections.get(*section).unwrap();
+    for section_key in &tl_module.sections {
+        let section = gl.sections.get(*section_key).unwrap();
         if section.variant == SectionVariant::Entity {
-            schedule.push(ScheduledEvent {
-                at: 0,
-                event: Event { bb: section.entry },
-            });
             for i in &section.ins {
                 signals.insert(*i, Value::Bit(false));
             }
+        } else {
+            let vm_process = lower_process_to_vm(*section_key, &gl);
+
+            println!("{}", &vm_process);
+
+            let stack = vec![0u8; vm_process.stack_size];
+            let vm_process_key = processes.insert(vm_process);
+
+            schedule.push(ScheduledEvent {
+                at: 0,
+                event: Event {
+                    process: vm_process_key,
+                    stack,
+                    ip: 0,
+                },
+            });
         }
     }
 
     println!("{}", tl_module.display(&gl));
 
     vogls_sim::run(
-        &gl,
         &mut ctx,
+        &processes,
         &mut schedule,
-        &mut variables,
         &mut signals,
         &mut listeners,
         &mut watches,

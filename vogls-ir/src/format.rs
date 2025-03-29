@@ -353,7 +353,6 @@ impl ContextFormat for IntrinsicArg {
                 f.write_str("\"")?;
             }
             Self::Variable(var) => ctx.gl.vars.get(*var).unwrap().ctx_fmt(f, ctx)?,
-            Self::Value(val) => val.ctx_fmt(f, ctx)?,
         }
 
         Ok(())

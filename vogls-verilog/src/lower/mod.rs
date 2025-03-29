@@ -115,14 +115,19 @@ pub fn lower_module_to_ir(ast: &Ast, gl: &mut GlobalContext) -> ModuleKey {
         }
     }
 
-    let (_, mut bb_builder) = module_builder.entity(gl, format!("{module_identifier}_entity"));
-    for key in signals {
-        bb_builder.signal(key);
+    let (entity_key, mut bb_builder) =
+        module_builder.entity(gl, format!("{module_identifier}_entity"));
+    for key in &signals {
+        bb_builder.signal(*key);
     }
     for process in processes {
         bb_builder.instantiate(process);
     }
     bb_builder.halt();
+
+    for key in signals {
+        gl.sections.get_mut(entity_key).unwrap().ins.insert(key);
+    }
 
     let module = module_builder.finish();
     gl.modules.insert(module)
