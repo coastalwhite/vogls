@@ -1,7 +1,5 @@
 mod scope;
 
-use std::collections::HashSet;
-
 use scope::Scope;
 
 use vogls_ir::{
@@ -10,9 +8,9 @@ use vogls_ir::{
 };
 
 use crate::ast::expr::Expr;
-use crate::ast::module::{Module, ModuleOrGenerateItem, NonPortModuleItem};
+use crate::ast::module::{Module, ModuleOrGenerateItem, NonPortModuleItem, PortDeclaration};
 use crate::ast::statement::{
-    DelayControl, EventControl, EventExpression, ProceduralTimingControl, Statement, VariableLValue,
+    DelayControl, EventControl, EventExpression, ProceduralTimingControl, Statement,
 };
 use crate::number::Decimal;
 use crate::parser::{Ast, AstArenas};
@@ -37,19 +35,37 @@ pub fn lower_module_to_ir(ast: &Ast, gl: &mut GlobalContext) -> ModuleKey {
     let Module {
         module_identifier,
         module_items,
+        port_declarations,
     } = arenas.get(*root);
 
+    let mut signals = Vec::new();
     let mut scope = Scope::<&str, ScopeItem>::new();
     let mut processes = Vec::new();
 
-    let clk_key = gl.signals.insert(Signal {
-        name: "clk".into(),
-        ty: Type::Bit,
-    });
-    scope.push(
-        "clk",
-        ScopeItem::Signal(SignalScopeItem { ty: Type::Bit, key: clk_key }),
-    );
+    for port_declaration in port_declarations.iter() {
+        let port_declaration = arenas.get(port_declaration);
+
+        let idents = match port_declaration {
+            PortDeclaration::Inout(i) => arenas.get(*i).port_identifiers,
+            PortDeclaration::Input(i) => arenas.get(*i).port_identifiers,
+            PortDeclaration::Output(i) => arenas.get(*i).identifiers,
+        };
+
+        for ident in idents.iter() {
+            let ident = arenas.get_ident(arenas.get(ident).0);
+
+            let key = gl.signals.insert(Signal {
+                name: ident.into(),
+                ty: Type::Bit,
+            });
+            scope.push(
+                ident,
+                ScopeItem::Signal(SignalScopeItem { ty: Type::Bit, key }),
+            );
+
+            signals.push(key);
+        }
+    }
 
     let module_identifier = arenas.get_ident(module_identifier.item.0);
 
@@ -100,10 +116,12 @@ pub fn lower_module_to_ir(ast: &Ast, gl: &mut GlobalContext) -> ModuleKey {
     }
 
     let (_, mut bb_builder) = module_builder.entity(gl, format!("{module_identifier}_entity"));
+    for key in signals {
+        bb_builder.signal(key);
+    }
     for process in processes {
         bb_builder.instantiate(process);
     }
-    bb_builder.signal(clk_key);
     bb_builder.halt();
 
     let module = module_builder.finish();

@@ -10,7 +10,10 @@ use vogls_verilog::parser::Parser;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut parser = Parser::new(Lexer::new(
         r#"
-module abc;
+module abc(
+    input clk
+);
+
     always @ (posedge clk) $display("Hello!");
 
     initial begin
@@ -47,9 +50,7 @@ endmodule
         if section.variant == SectionVariant::Entity {
             schedule.push(ScheduledEvent {
                 at: 0,
-                event: Event {
-                    bb: section.entry,
-                },
+                event: Event { bb: section.entry },
             });
             for i in &section.ins {
                 signals.insert(*i, Value::Bit(false));

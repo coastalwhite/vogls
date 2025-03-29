@@ -50,14 +50,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "vogls-elaborate"
-version = "0.1.0"
-dependencies = [
- "slotmap",
- "vogls-ir",
-]
-
-[[package]]
 name = "vogls-ir"
 version = "0.1.0"
 dependencies = [

@@ -1,9 +1,11 @@
 use crate::ast::module::{
-    AlwaysConstruct, InitialConstruct, Module, ModuleOrGenerateItem, NonPortModuleItem,
+    AlwaysConstruct, InitialConstruct, InoutDeclaration, InputDeclaration, Module,
+    ModuleOrGenerateItem, NetType, NonPortModuleItem, OutputDeclaration, OutputNet,
+    PortDeclaration,
 };
 use crate::ast::statement::Statement;
-use crate::ast::Identifier;
-use crate::lexer::TokenKind;
+use crate::ast::{AstItem, Identifier};
+use crate::lexer::{FromLexerError, Token, TokenKind};
 use crate::parser::ItemParsable;
 use crate::span::Span;
 
@@ -26,7 +28,16 @@ impl<'a> Consumable<'a> for Module {
         let module_kw_span = p.lexer().expect(TK::KeywordModule)?.span();
         let module_identifier = Identifier::parse(p, arenas)?;
         // @Incomplete: [ module_parameter_port_list ]
-        // @Incomplete: list_of_ports | [ list_of_port_declarations ]
+        // @Incomplete:  | list_of_ports
+        let port_declarations = if p.lexer.next_if_equals(TK::LeftParen).is_some() {
+            let port_declarations =
+                PortDeclaration::parse_zero_or_more_delimited(p, arenas, TK::Comma)?;
+            p.lexer.expect(TK::RightParen)?;
+
+            port_declarations
+        } else {
+            Default::default()
+        };
         p.lexer().expect(TK::Semicolon)?;
         // @Incomplete: | module_item
         let (module_items, endmodule_kw_token) =
@@ -37,6 +48,7 @@ impl<'a> Consumable<'a> for Module {
         Ok((
             Module {
                 module_identifier,
+                port_declarations,
                 module_items,
             },
             span,
@@ -65,6 +77,193 @@ impl<'a> Consumable<'a> for NonPortModuleItem {
     }
 }
 impl<'a> Parsable<'a> for NonPortModuleItem {}
+
+impl<'a> Consumable<'a> for PortDeclaration {
+    fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
+        use TokenKind as TK;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
+        // port_declaration ::=
+        //   {attribute_instance} inout_declaration
+        // | {attribute_instance} input_declaration
+        // | {attribute_instance} output_declaration
+
+        let peeked = p.lexer().next_expect_peek()?;
+        match peeked.kind() {
+            TK::KeywordInout => {
+                peeked.release();
+                let (inout_declaration, span) = InoutDeclaration::parse_with_span(p, arenas)?;
+                Ok((Self::Inout(inout_declaration), span))
+            }
+            TK::KeywordInput => {
+                peeked.release();
+                let (input_declaration, span) = InputDeclaration::parse_with_span(p, arenas)?;
+                Ok((Self::Input(input_declaration), span))
+            }
+            TK::KeywordOutput => {
+                peeked.release();
+                let (output_declaration, span) = OutputDeclaration::parse_with_span(p, arenas)?;
+                Ok((Self::Output(output_declaration), span))
+            }
+            _ => Err(ParseError::unexpected_token(peeked.commit())),
+        }
+    }
+}
+impl<'a> Parsable<'a> for PortDeclaration {}
+
+impl<'a> Consumable<'a> for InoutDeclaration {
+    fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
+        use TokenKind as TK;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 489
+        // inout_declaration ::= inout [ net_type ] [ signed ] [ range ] list_of_port_identifiers
+
+        let inout_kw_span = p.lexer.expect(TK::KeywordInout)?.span();
+        let mut net_type = None;
+        let mut end_span = inout_kw_span;
+        if let Some((val, span)) = NetType::try_parse_with_span(p, arenas) {
+            net_type = Some(val);
+            end_span = span;
+        }
+        let signed_token = p.lexer.next_if_equals(TK::KeywordSigned);
+        let signed = signed_token.is_some();
+        if let Some(signed_token) = signed_token {
+            end_span = signed_token.span();
+        }
+        // @Incomplete: [ range ]
+        let port_identifiers = Identifier::parse_zero_or_more_delimited(p, arenas, TK::Comma)?;
+        if let Some(last) = port_identifiers.last() {
+            end_span = *arenas.spans.get(last.loc).unwrap();
+        }
+
+        let span = inout_kw_span | end_span;
+        Ok((
+            Self {
+                net_type,
+                signed,
+                range: None,
+                port_identifiers,
+            },
+            span,
+        ))
+    }
+}
+impl<'a> Parsable<'a> for InoutDeclaration {}
+
+impl<'a> Consumable<'a> for InputDeclaration {
+    fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
+        use TokenKind as TK;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 489
+        // input_declaration ::= input [ net_type ] [ signed ] [ range ] list_of_port_identifiers
+
+        let input_kw_span = p.lexer.expect(TK::KeywordInput)?.span();
+        let mut net_type = None;
+        let mut end_span = input_kw_span;
+        if let Some((val, span)) = NetType::try_parse_with_span(p, arenas) {
+            net_type = Some(val);
+            end_span = span;
+        }
+        let signed_token = p.lexer.next_if_equals(TK::KeywordSigned);
+        let signed = signed_token.is_some();
+        if let Some(signed_token) = signed_token {
+            end_span = signed_token.span();
+        }
+        // @Incomplete: [ range ]
+        let port_identifiers = Identifier::parse_zero_or_more_delimited(p, arenas, TK::Comma)?;
+        if let Some(last) = port_identifiers.last() {
+            end_span = *arenas.spans.get(last.loc).unwrap();
+        }
+
+        let span = input_kw_span | end_span;
+        Ok((
+            Self {
+                net_type,
+                signed,
+                range: None,
+                port_identifiers,
+            },
+            span,
+        ))
+    }
+}
+impl<'a> Parsable<'a> for InputDeclaration {}
+
+impl<'a> Consumable<'a> for OutputDeclaration {
+    fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
+        use TokenKind as TK;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 489
+        // output_declaration ::=
+        //   output [ net_type ] [ signed ] [ range ] list_of_port_identifiers
+        // | output reg [ signed ] [ range ] list_of_variable_port_identifiers
+        // | output output_variable_type list_of_variable_port_identifiers
+
+        let output_kw_span = p.lexer.expect(TK::KeywordOutput)?.span();
+        let mut net_type = None;
+        let mut end_span = output_kw_span;
+        if let Some((val, span)) = NetType::try_parse_with_span(p, arenas) {
+            net_type = Some(val);
+            end_span = span;
+        }
+        let signed_token = p.lexer.next_if_equals(TK::KeywordSigned);
+        let signed = signed_token.is_some();
+        if let Some(signed_token) = signed_token {
+            end_span = signed_token.span();
+        }
+        // @Incomplete: reg | output_variable_type
+        // @Incomplete: [ range ]
+        let identifiers = Identifier::parse_zero_or_more_delimited(p, arenas, TK::Comma)?;
+        if let Some(last) = identifiers.last() {
+            end_span = *arenas.spans.get(last.loc).unwrap();
+        }
+
+        let span = output_kw_span | end_span;
+        Ok((
+            Self {
+                net: net_type,
+                signed,
+                range: None,
+                identifiers,
+            },
+            span,
+        ))
+    }
+}
+impl<'a> Parsable<'a> for OutputDeclaration {}
+
+impl<'a> Consumable<'a> for NetType {
+    fn consume(p: &mut Parser<'a>, _arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
+        use TokenKind as TK;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 490
+        // net_type ::=
+        //   supply0 | supply1
+        // | tri
+        // | triand | trior | tri0 | tri1
+        // | uwire | wire | wand | wor
+
+        p.lexer.expect_map(|content, span| match content.kind() {
+            TK::KeywordSupply0 => Ok(Self::Supply0),
+            TK::KeywordSupply1 => Ok(Self::Supply1),
+            TK::KeywordTri => Ok(Self::Tri),
+            TK::KeywordTriand => Ok(Self::TriAnd),
+            TK::KeywordTrior => Ok(Self::TriOr),
+            TK::KeywordTri0 => Ok(Self::Tri0),
+            TK::KeywordUwire => Ok(Self::Uwire),
+            TK::KeywordWire => Ok(Self::Wire),
+            TK::KeywordWand => Ok(Self::WAnd),
+            TK::KeywordWor => Ok(Self::WOr),
+            _ => Err(ParseError::unexpected_token(Token::new(content, span))),
+        })
+    }
+}
+impl<'a> ItemParsable<'a> for NetType {
+    type Item = NetType;
+    fn from_item(item: Self::Item, _arenas: &mut AstArenas) -> Result<Self, ParseError> {
+        Ok(item)
+    }
+}
 
 impl<'a> Consumable<'a> for ModuleOrGenerateItem {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {

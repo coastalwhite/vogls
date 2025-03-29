@@ -4,9 +4,8 @@ members = [
     "vogls-ir",
     "vogls-sim",
     "vogls-verilog",
-    "vogls-elaborate",
 ]
-resolver = "2"
+resolver = "3"
 
 [workspace.dependencies]
 slotmap = "1"

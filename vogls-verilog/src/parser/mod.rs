@@ -2,7 +2,9 @@ use std::path::PathBuf;
 
 use crate::arena::Arena;
 use crate::ast::module::Module;
-use crate::ast::{AstId, AstIdRange, AstItem, DecimalRef, Identifier, SizedNumberRef, StringRef, TextRef};
+use crate::ast::{
+    AstId, AstIdRange, AstItem, DecimalRef, Identifier, SizedNumberRef, StringRef, TextRef,
+};
 use crate::lexer::{FromLexerError, Lexer, Token, TokenContent, TokenKind};
 use crate::number::{Decimal, SizedNumber};
 use crate::span::Span;
@@ -243,7 +245,7 @@ impl<'a> Consumable<'a> for Identifier {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
         p.lexer().expect_map(|content, _| match content {
             TokenContent::Ident(ident) => Self::from_item(ident, arenas),
-            _ => Err(ParseError::UnexpectedToken(content.kind()))
+            _ => Err(ParseError::UnexpectedToken(content.kind())),
         })
     }
 }
@@ -261,7 +263,7 @@ impl<'a> Consumable<'a> for DecimalRef {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
         p.lexer().expect_map(|content, _| match content {
             TokenContent::Decimal(decimal) => Self::from_item(decimal, arenas),
-            _ => Err(ParseError::UnexpectedToken(content.kind()))
+            _ => Err(ParseError::UnexpectedToken(content.kind())),
         })
     }
 }
@@ -278,7 +280,7 @@ impl<'a> Consumable<'a> for SizedNumberRef {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
         p.lexer().expect_map(|content, _| match content {
             TokenContent::Number(sized_number) => Self::from_item(sized_number, arenas),
-            _ => Err(ParseError::UnexpectedToken(content.kind()))
+            _ => Err(ParseError::UnexpectedToken(content.kind())),
         })
     }
 }
@@ -295,7 +297,7 @@ impl<'a> Consumable<'a> for StringRef {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
         p.lexer().expect_map(|content, _| match content {
             TokenContent::String(string) => Self::from_item(string, arenas),
-            _ => Err(ParseError::UnexpectedToken(content.kind()))
+            _ => Err(ParseError::UnexpectedToken(content.kind())),
         })
     }
 }
@@ -312,7 +314,11 @@ impl<'a> ItemParsable<'a> for StringRef {
 pub trait ItemParsable<'a>: Consumable<'a> {
     type Item;
     fn from_item(item: Self::Item, arenas: &mut AstArenas) -> Result<Self, ParseError>;
-    fn ast_from_item(item: Self::Item, span: Span, arenas: &mut AstArenas) -> Result<AstItem<Self>, ParseError> {
+    fn ast_from_item(
+        item: Self::Item,
+        span: Span,
+        arenas: &mut AstArenas,
+    ) -> Result<AstItem<Self>, ParseError> {
         let item = Self::from_item(item, arenas)?;
         let loc = arenas.spans.len();
         arenas.spans.push(span);
@@ -345,6 +351,91 @@ pub trait ItemParsable<'a>: Consumable<'a> {
         let loc = arenas.spans.len();
         arenas.spans.push(span);
         Some((AstItem { item, loc }, span))
+    }
+
+    fn parse_until_reaching(
+        p: &mut Parser<'a>,
+        arenas: &mut AstArenas,
+        end: TokenKind,
+    ) -> Result<(AstIdRange<Self>, Token<'a>), ParseError> {
+        // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
+        // here.
+        let mut items = Vec::new();
+        let mut spans = Vec::new();
+
+        let end_token = loop {
+            let Some(peek) = p.lexer.peek() else {
+                // @TODO: Better Error
+                return Err(ParseError::MissingToken);
+            };
+
+            if peek.kind() == end {
+                break peek.commit();
+            }
+
+            peek.release();
+            let (item, span) = Self::consume(p, arenas)?;
+            items.push(item);
+            spans.push(span);
+        };
+
+        Ok((arenas.add_range(items, spans), end_token))
+    }
+
+    fn parse_one_or_more_delimited(
+        p: &mut Parser<'a>,
+        arenas: &mut AstArenas,
+        delimiter: TokenKind,
+    ) -> Result<AstIdRange<Self>, ParseError> {
+        let (item, span) = Self::consume(p, arenas)?;
+
+        // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
+        // here.
+        let mut items = Vec::new();
+        let mut spans = Vec::new();
+        items.push(item);
+        spans.push(span);
+
+        loop {
+            if p.lexer.next_if_equals(delimiter).is_none() {
+                break;
+            }
+
+            let (item, span) = Self::consume(p, arenas)?;
+            items.push(item);
+            spans.push(span);
+        }
+
+        Ok(arenas.add_range(items, spans))
+    }
+
+    fn parse_zero_or_more_delimited(
+        p: &mut Parser<'a>,
+        arenas: &mut AstArenas,
+        delimiter: TokenKind,
+    ) -> Result<AstIdRange<Self>, ParseError> {
+        let Some((item, span)) = Self::try_consume(p, arenas) else {
+            return Ok(AstIdRange::default());
+        };
+
+        // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
+        // here.
+        let mut items = Vec::new();
+        let mut spans = Vec::new();
+        items.push(item);
+        spans.push(span);
+
+        loop {
+            if p.lexer.next_if_equals(delimiter).is_none() {
+                break;
+            }
+
+            let (item, span) = Self::consume(p, arenas)?;
+            items.push(item);
+            spans.push(span);
+        }
+
+        Ok(arenas.add_range(items, spans))
     }
 }
 //

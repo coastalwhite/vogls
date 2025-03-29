@@ -1,3 +1,4 @@
+use super::expr::Expr;
 use super::statement::Statement;
 use super::{AstId, AstIdRange, AstItem, Identifier};
 
@@ -13,7 +14,93 @@ use super::{AstId, AstIdRange, AstItem, Identifier};
 #[derive(Clone, Copy)]
 pub struct Module {
     pub module_identifier: AstItem<Identifier>,
+    pub port_declarations: AstIdRange<PortDeclaration>,
     pub module_items: AstIdRange<NonPortModuleItem>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
+// port_declaration ::=
+//   {attribute_instance} inout_declaration
+// | {attribute_instance} input_declaration
+// | {attribute_instance} output_declaration
+#[derive(Clone, Copy)]
+pub enum PortDeclaration {
+    Inout(AstId<InoutDeclaration>),
+    Input(AstId<InputDeclaration>),
+    Output(AstId<OutputDeclaration>),
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 489
+// inout_declaration ::= inout [ net_type ] [ signed ] [ range ] list_of_port_identifiers
+#[derive(Clone, Copy)]
+pub struct InoutDeclaration {
+    pub net_type: Option<AstItem<NetType>>,
+    pub signed: bool,
+    pub range: Option<AstId<Range>>,
+    pub port_identifiers: AstIdRange<Identifier>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 489
+// input_declaration ::= input [ net_type ] [ signed ] [ range ] list_of_port_identifiers
+#[derive(Clone, Copy)]
+pub struct InputDeclaration {
+    pub net_type: Option<AstItem<NetType>>,
+    pub signed: bool,
+    pub range: Option<AstId<Range>>,
+    pub port_identifiers: AstIdRange<Identifier>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 489
+// output_declaration ::=
+//   output [ net_type ] [ signed ] [ range ] list_of_port_identifiers
+// | output reg [ signed ] [ range ] list_of_variable_port_identifiers
+// | output output_variable_type list_of_variable_port_identifiers
+#[derive(Clone, Copy)]
+pub struct OutputDeclaration {
+    // @Incomplete: reg | output_variable_type
+    pub net: Option<AstItem<NetType>>,
+    pub signed: bool,
+    pub range: Option<AstId<Range>>,
+    pub identifiers: AstIdRange<Identifier>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 492
+// range ::= [ msb_constant_expression : lsb_constant_expression ]
+#[derive(Clone, Copy)]
+pub struct Range {
+    // @Incomplete: These are in fact constant expressions.
+    msb: AstId<Expr>,
+    lsb: AstId<Expr>,
+}
+
+#[derive(Clone, Copy)]
+pub enum OutputNet {
+    NetType(NetType),
+    Register,
+
+    // @Incomplete
+    Variable,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 490
+// net_type ::=
+//   supply0 | supply1
+// | tri
+// | triand | trior | tri0 | tri1
+// | uwire | wire | wand | wor
+#[derive(Clone, Copy)]
+pub enum NetType {
+    Supply0,
+    Supply1,
+    Tri,
+    TriAnd,
+    TriOr,
+    Tri0,
+    Tri1,
+    Uwire,
+    Wire,
+    WAnd,
+    WOr,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
