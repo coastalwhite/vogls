@@ -124,11 +124,40 @@ pub enum ModuleOrGenerateItem {
     ContinuousAssign,
     GateInstantiation,
     UdpInstantiation,
-    ModuleInstantiation,
+    ModuleInstantiation(AstId<ModuleInstantiation>),
     InitialConstruct(AstId<InitialConstruct>),
     AlwaysConstruct(AstId<AlwaysConstruct>),
     LoopGenerateConstruct,
     ConditionalGenerateConstruct,
+}
+
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 495
+// module_instantiation ::=
+//   module_identifier [ parameter_value_assignment ]
+//   module_instance { , module_instance } ;
+#[derive(Clone, Copy)]
+pub struct ModuleInstantiation {
+    pub module_identifier: AstItem<Identifier>,
+    pub module_instances: AstIdRange<ModuleInstance>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 495
+// module_instance ::= name_of_module_instance ( [ list_of_port_connections ] )
+#[derive(Clone, Copy)]
+pub struct ModuleInstance {
+    pub name_of_module_instance: AstItem<Identifier>,
+    pub list_of_port_connections: AstId<ListOfPortConnections>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 495
+// list_of_port_connections ::=
+//   ordered_port_connection { , ordered_port_connection }
+// | named_port_connection { , named_port_connection }
+#[derive(Clone, Copy)]
+pub enum ListOfPortConnections {
+    Ordered(u64),
+    Named,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497

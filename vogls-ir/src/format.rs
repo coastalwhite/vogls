@@ -4,8 +4,8 @@ use std::fmt::Write;
 
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryOp, GlobalContext, Instruction,
-    IntrinsicArg, IntrinsicOp, Module, Section, SectionKey, SectionVariant, Signal, SignalKey,
-    Time, Type, UnaryOp, Value, Variable, VariableKey,
+    IntrinsicArg, IntrinsicOp, Module, Section, SectionVariant, Signal, Time, Type, UnaryOp, Value,
+    Variable,
 };
 
 const INDENT: &str = "  ";
@@ -230,8 +230,21 @@ impl ContextFormat for Instruction {
 
             Self::Instantiate(process) => {
                 let section = ctx.gl.sections.get(*process).unwrap();
-                assert_eq!(section.variant, SectionVariant::Process);
-                write!(f, "instantiate @{}", section.name)?;
+                write!(f, "instantiate @{} (", section.name)?;
+                if let Some(sig) = section.ins.first() {
+                    write!(f, "{}", ctx.gl.signals.get(*sig).unwrap().name)?;
+                    for sig in section.ins.iter().skip(1) {
+                        write!(f, ", {}", ctx.gl.signals.get(*sig).unwrap().name)?;
+                    }
+                }
+                write!(f, ") -> (")?;
+                if let Some(sig) = section.outs.first() {
+                    write!(f, "{}", ctx.gl.signals.get(*sig).unwrap().name)?;
+                    for sig in section.outs.iter().skip(1) {
+                        write!(f, ", {}", ctx.gl.signals.get(*sig).unwrap().name)?;
+                    }
+                }
+                write!(f, ")")?;
             }
             Self::Signal(signal) => {
                 let signal = ctx.gl.signals.get(*signal).unwrap();

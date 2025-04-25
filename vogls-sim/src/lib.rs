@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
 
 use slotmap::{new_key_type, SlotMap};
-use vogls_ir::{BinaryOp, IntrinsicOp, SignalKey, UnaryOp, Value};
+use vogls_ir::{BinaryOp, IntrinsicOp, UnaryOp, Value};
 
 mod instruction;
 
@@ -67,9 +67,9 @@ impl Event {
         ctx: &mut Context,
         processes: &SlotMap<VmProcessKey, VmProcess>,
         schedule: &mut BinaryHeap<ScheduledEvent>,
-        signals: &mut HashMap<SignalKey, Value>,
+        signals: &mut HashMap<VmSignalKey, Value>,
         listeners: &mut SlotMap<ListenerKey, Event>,
-        watches: &mut HashMap<SignalKey, Vec<ListenerKey>>,
+        watches: &mut HashMap<VmSignalKey, Vec<ListenerKey>>,
     ) -> EvalOutcome {
         let ip = &mut self.ip;
         let stack = &mut self.stack;
@@ -181,9 +181,9 @@ pub fn run(
     ctx: &mut Context,
     processes: &SlotMap<VmProcessKey, VmProcess>,
     schedule: &mut BinaryHeap<ScheduledEvent>,
-    signals: &mut HashMap<SignalKey, Value>,
+    signals: &mut HashMap<VmSignalKey, Value>,
     listeners: &mut SlotMap<ListenerKey, Event>,
-    watches: &mut HashMap<SignalKey, Vec<ListenerKey>>,
+    watches: &mut HashMap<VmSignalKey, Vec<ListenerKey>>,
     max_time: u64,
 ) {
     while let Some(se) = schedule.pop() {

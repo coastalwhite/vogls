@@ -181,6 +181,10 @@ impl<'a> Lexer<'a> {
         self.peeked = None;
     }
 
+    pub fn span_at_cursor(&self) -> Span {
+        Span::new(self.inner.offset, self.inner.offset)
+    }
+
     pub fn next_expect<E: FromLexerError<'a>>(&mut self) -> Result<Token<'a>, E> {
         self.next()
             .ok_or_else(|| E::missing_token(self.inner.offset))

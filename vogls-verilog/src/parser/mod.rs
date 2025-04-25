@@ -66,7 +66,7 @@ impl AstArenas {
 }
 
 pub struct Ast {
-    pub root: AstId<Module>,
+    pub modules: AstIdRange<Module>,
     pub arenas: AstArenas,
     pub path: PathBuf,
 }
@@ -97,10 +97,10 @@ impl<'a> Parser<'a> {
 
     pub fn parse_file(&mut self) -> Result<Ast, ParseError> {
         let mut arenas = AstArenas::default();
-        let module = Module::parse(self, &mut arenas)?;
+        let modules = Module::parse_one_or_more(self, &mut arenas)?;
 
         Ok(Ast {
-            root: module,
+            modules,
             arenas,
             path: PathBuf::default(),
         })
@@ -235,6 +235,29 @@ pub trait Parsable<'a>: Consumable<'a> {
             let (item, span) = Self::consume(p, arenas)?;
             items.push(item);
             spans.push(span);
+        }
+
+        Ok(arenas.add_range(items, spans))
+    }
+
+    fn parse_one_or_more(
+        p: &mut Parser<'a>,
+        arenas: &mut AstArenas,
+    ) -> Result<AstIdRange<Self>, ParseError> {
+        // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
+        // here.
+        let mut items = Vec::new();
+        let mut spans = Vec::new();
+
+        loop {
+            let (item, span) = Self::consume(p, arenas)?;
+            items.push(item);
+            spans.push(span);
+
+            match p.lexer.peek() {
+                None => break,
+                Some(peek) => peek.release(),
+            };
         }
 
         Ok(arenas.add_range(items, spans))

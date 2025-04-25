@@ -1,7 +1,7 @@
 use crate::ast::module::{
-    AlwaysConstruct, InitialConstruct, InoutDeclaration, InputDeclaration, Module,
-    ModuleOrGenerateItem, NetType, NonPortModuleItem, OutputDeclaration, OutputNet,
-    PortDeclaration,
+    AlwaysConstruct, InitialConstruct, InoutDeclaration, InputDeclaration, ListOfPortConnections,
+    Module, ModuleInstance, ModuleInstantiation, ModuleOrGenerateItem, NetType, NonPortModuleItem,
+    OutputDeclaration, OutputNet, PortDeclaration,
 };
 use crate::ast::statement::Statement;
 use crate::ast::{AstItem, Identifier};
@@ -298,11 +298,83 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItem {
                 let (always_construct, span) = AlwaysConstruct::parse_with_span(p, arenas)?;
                 Ok((Self::AlwaysConstruct(always_construct), span))
             }
+            TK::Ident => {
+                peeked.release();
+                let (module_instance, span) = ModuleInstantiation::parse_with_span(p, arenas)?;
+                Ok((Self::ModuleInstantiation(module_instance), span))
+            }
             _ => Err(ParseError::Incomplete("module_or_generate_item")),
         }
     }
 }
 impl<'a> Parsable<'a> for ModuleOrGenerateItem {}
+
+impl<'a> Consumable<'a> for ModuleInstantiation {
+    fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
+        use TokenKind as TK;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 495
+        // module_instantiation ::=
+        //   module_identifier [ parameter_value_assignment ]
+        //   module_instance { , module_instance } ;
+
+        let (module_identifier, module_identifier_span) = Identifier::parse_with_span(p, arenas)?;
+        let module_instances = ModuleInstance::parse_one_or_more_delimited(p, arenas, TK::Comma)?;
+        let semicolon_span = p.lexer().expect(TK::Semicolon)?.span();
+
+        let span = module_identifier_span | semicolon_span;
+
+        Ok((
+            ModuleInstantiation {
+                module_identifier,
+                module_instances,
+            },
+            span,
+        ))
+    }
+}
+impl<'a> Parsable<'a> for ModuleInstantiation {}
+
+impl<'a> Consumable<'a> for ModuleInstance {
+    fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
+        use TokenKind as TK;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 495
+        // module_instance ::= name_of_module_instance ( [ list_of_port_connections ] )
+
+        let (name_of_module_instance, name_of_module_instance_span) =
+            Identifier::parse_with_span(p, arenas)?;
+        p.lexer().expect(TK::LeftParen)?;
+        let list_of_port_connections = ListOfPortConnections::parse(p, arenas)?;
+        let right_paren_span = p.lexer().expect(TK::RightParen)?.span();
+
+        let span = name_of_module_instance_span | right_paren_span;
+
+        Ok((
+            ModuleInstance {
+                name_of_module_instance,
+                list_of_port_connections,
+            },
+            span,
+        ))
+    }
+}
+impl<'a> Parsable<'a> for ModuleInstance {}
+
+impl<'a> Consumable<'a> for ListOfPortConnections {
+    fn consume(p: &mut Parser<'a>, _arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
+        // @TODO
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 495
+        // list_of_port_connections ::=
+        //   ordered_port_connection { , ordered_port_connection }
+        // | named_port_connection { , named_port_connection }
+
+        let span = p.lexer().span_at_cursor();
+        Ok((Self::Named, span))
+    }
+}
+impl<'a> Parsable<'a> for ListOfPortConnections {}
 
 impl<'a> Consumable<'a> for InitialConstruct {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {

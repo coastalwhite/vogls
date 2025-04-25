@@ -4,16 +4,24 @@ pub mod expr;
 pub mod module;
 pub mod statement;
 
-#[derive(Clone, Copy)]
 pub struct AstId<T> {
     pub node: ArenaId<T>,
     pub loc: usize,
 }
-#[derive(Clone, Copy)]
 pub struct AstIdRange<T> {
     pub node: ArenaIdRange<T>,
     pub loc: usize,
 }
+
+impl<T> Clone for AstId<T> {
+    fn clone(&self) -> Self {
+        Self {
+            node: self.node,
+            loc: self.loc,
+        }
+    }
+}
+impl<T> Copy for AstId<T> {}
 
 impl<T> Default for AstIdRange<T> {
     fn default() -> Self {
@@ -23,6 +31,15 @@ impl<T> Default for AstIdRange<T> {
         }
     }
 }
+impl<T> Clone for AstIdRange<T> {
+    fn clone(&self) -> Self {
+        Self {
+            node: self.node,
+            loc: self.loc,
+        }
+    }
+}
+impl<T> Copy for AstIdRange<T> {}
 
 impl<T> AstIdRange<T> {
     pub fn first(self) -> Option<AstId<T>> {
@@ -51,8 +68,11 @@ impl<T> AstIdRange<T> {
     pub fn is_empty(self) -> bool {
         self.len() == 0
     }
-}
 
+    pub fn get(&self, i: usize) -> AstId<T> {
+        (*self).iter().nth(i).unwrap()
+    }
+}
 
 #[derive(Clone, Copy)]
 pub struct AstItem<T: Copy> {

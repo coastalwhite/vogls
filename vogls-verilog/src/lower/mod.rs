@@ -1,10 +1,12 @@
 mod scope;
 
+use std::collections::HashMap;
+
 use scope::Scope;
 
 use vogls_ir::{
-    BasicBlockBuilder, GlobalContext, IntrinsicArg, IntrinsicOp, ModuleBuilder, ModuleKey, Signal,
-    SignalKey, Time, Type, Value,
+    BasicBlockBuilder, GlobalContext, IntrinsicArg, IntrinsicOp, ModuleBuilder, ModuleKey,
+    SectionVariant, Signal, SignalKey, Time, Type, Value,
 };
 
 use crate::ast::expr::Expr;
@@ -12,6 +14,7 @@ use crate::ast::module::{Module, ModuleOrGenerateItem, NonPortModuleItem, PortDe
 use crate::ast::statement::{
     DelayControl, EventControl, EventExpression, ProceduralTimingControl, Statement,
 };
+use crate::ast::{AstId, Identifier};
 use crate::number::Decimal;
 use crate::parser::{Ast, AstArenas};
 
@@ -25,9 +28,14 @@ pub enum ScopeItem {
     LocalVariable,
 }
 
-pub fn lower_module_to_ir(ast: &Ast, gl: &mut GlobalContext) -> ModuleKey {
+pub fn lower_module_to_ir(
+    ast: &Ast,
+    root: AstId<Module>,
+    gl: &mut GlobalContext,
+    instantiated_modules: &HashMap<&str, ModuleKey>,
+) -> ModuleKey {
     let Ast {
-        root,
+        modules: _,
         arenas,
         path: _,
     } = ast;
@@ -36,11 +44,12 @@ pub fn lower_module_to_ir(ast: &Ast, gl: &mut GlobalContext) -> ModuleKey {
         module_identifier,
         module_items,
         port_declarations,
-    } = arenas.get(*root);
+    } = arenas.get(root);
 
     let mut signals = Vec::new();
     let mut scope = Scope::<&str, ScopeItem>::new();
     let mut processes = Vec::new();
+    let mut entities = Vec::new();
 
     for port_declaration in port_declarations.iter() {
         let port_declaration = arenas.get(port_declaration);
@@ -79,7 +88,23 @@ pub fn lower_module_to_ir(ast: &Ast, gl: &mut GlobalContext) -> ModuleKey {
                 ModuleOrGenerateItem::ContinuousAssign => todo!(),
                 ModuleOrGenerateItem::GateInstantiation => todo!(),
                 ModuleOrGenerateItem::UdpInstantiation => todo!(),
-                ModuleOrGenerateItem::ModuleInstantiation => todo!(),
+                ModuleOrGenerateItem::ModuleInstantiation(id) => {
+                    let module_instantiation = arenas.get(*id);
+                    let instantiation_ident =
+                        arenas.get_ident(module_instantiation.module_identifier.item.0);
+                    let entity = instantiated_modules.get(instantiation_ident).unwrap();
+                    let entity = gl.modules.get(*entity).unwrap();
+
+                    let section_key = entity
+                        .sections
+                        .iter()
+                        .find(|k| gl.sections.get(**k).unwrap().variant == SectionVariant::Entity)
+                        .unwrap();
+
+                    for _ in module_instantiation.module_instances.iter() {
+                        entities.push(*section_key);
+                    }
+                }
                 ModuleOrGenerateItem::InitialConstruct(id) => {
                     let statement = arenas.get(*id).0;
                     let (section_key, bb_builder) = module_builder.process(gl, "initial".into());
@@ -122,6 +147,9 @@ pub fn lower_module_to_ir(ast: &Ast, gl: &mut GlobalContext) -> ModuleKey {
     }
     for process in processes {
         bb_builder.instantiate(process);
+    }
+    for entity in entities {
+        bb_builder.instantiate(entity);
     }
     bb_builder.halt();
 
