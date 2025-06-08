@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Scope<K, V> {
     look_up: HashMap<K, Vec<(usize, V)>>,
 

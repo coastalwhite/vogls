@@ -5,7 +5,7 @@ use std::collections::HashSet;
 
 pub use builder::{BasicBlockBuilder, ModuleBuilder};
 pub use format::{ContextFormat, DisplayContext};
-use indexmap::IndexSet;
+use indexmap::{IndexMap, IndexSet};
 use slotmap::{SlotMap, new_key_type};
 
 new_key_type! { pub struct ModuleKey; }
@@ -79,7 +79,7 @@ pub struct Signal {
     pub ty: Type,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum Type {
     Bit,
 }
@@ -115,7 +115,7 @@ pub enum Instruction {
     Probe(VariableKey, SignalKey),
     Drive(SignalKey, VariableKey),
 
-    Instantiate(SectionKey),
+    Instantiate(SectionKey, Vec<SignalKey>, Vec<SignalKey>),
     Signal(SignalKey),
 }
 impl Instruction {
@@ -125,16 +125,27 @@ impl Instruction {
             | Self::Unary(dst, _, _)
             | Self::Binary(dst, _, _, _)
             | Self::Probe(dst, _) => Some(*dst),
-            Self::Intrinsic(_, _) | Self::Drive(_, _) | Self::Instantiate(_) | Self::Signal(_) => {
+            Self::Intrinsic(_, _) | Self::Drive(_, _) | Self::Instantiate(_, _, _) | Self::Signal(_) => {
                 None
             }
         }
     }
 }
 
+pub enum ConnectionDirection {
+    In,
+    Out,
+    Both,
+}
+
+pub struct Connection {
+    direction: ConnectionDirection,
+}
+
 pub struct Module {
     pub name: String,
     pub sections: Vec<SectionKey>,
+    pub io: IndexMap<String, Connection>
 }
 
 #[derive(Default)]

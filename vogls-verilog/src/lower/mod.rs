@@ -12,9 +12,7 @@ use vogls_ir::{
 use crate::ast::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression, ConstantPrimary};
 use crate::ast::expr::Expr;
 use crate::ast::module::{
-    GateInstantiation, Module, ModuleItem, ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration,
-    ModulePorts, NInputGateInstance, NInputGateType, NonPortModuleItem, ParamAssignment,
-    ParameterDeclaration, Port, PortDeclaration,
+    GateInstantiation, ListOfPortConnections, Module, ModuleInstance, ModuleInstantiation, ModuleItem, ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration, ModulePorts, NInputGateInstance, NInputGateType, NonPortModuleItem, ParamAssignment, ParameterDeclaration, Port, PortDeclaration
 };
 use crate::ast::statement::{
     DelayControl, DelayValue, EventControl, EventExpression, ProceduralTimingControl, Statement,
@@ -23,11 +21,13 @@ use crate::ast::{AstId, Identifier};
 use crate::number::Decimal;
 use crate::parser::{Ast, AstArenas};
 
+#[derive(Debug)]
 pub struct SignalScopeItem {
     ty: Type,
     key: SignalKey,
 }
 
+#[derive(Debug)]
 pub enum ScopeItem {
     Signal(SignalScopeItem),
     LocalVariable,
@@ -52,10 +52,11 @@ pub fn lower_module_to_ir(
         module_items,
     } = arenas.get(root);
 
-    let mut signals = Vec::new();
+
+    let module_identifier = arenas.get_ident(module_identifier.item.0);
+    let mut module_builder = ModuleBuilder::new(module_identifier.to_string(), gl);
     let mut scope = Scope::<&str, ScopeItem>::new();
     let mut processes = Vec::new();
-    let mut entities = Vec::new();
 
     match ports {
         ModulePorts::PortDeclarations(m) => {
@@ -80,7 +81,7 @@ pub fn lower_module_to_ir(
                         ScopeItem::Signal(SignalScopeItem { ty: Type::Bit, key }),
                     );
 
-                    signals.push(key);
+                    module_builder.entity.signal(gl, key);
                 }
             }
         }
@@ -102,18 +103,36 @@ pub fn lower_module_to_ir(
                     ScopeItem::Signal(SignalScopeItem { ty: Type::Bit, key }),
                 );
 
-                signals.push(key);
+                module_builder.entity.signal(gl, key);
             }
         }
     }
 
-    let module_identifier = arenas.get_ident(module_identifier.item.0);
-
-    let mut module_builder = ModuleBuilder::new(module_identifier.to_string());
     for module_item in module_items.iter() {
         match arenas.get(module_item) {
-            ModuleItem::PortDeclaration(_) => {
-                // @Incomplete.
+            ModuleItem::PortDeclaration(port_declaration) => {
+                let port_declaration = arenas.get(*port_declaration);
+
+                let idents = match port_declaration {
+                    PortDeclaration::Inout(i) => arenas.get(*i).port_identifiers,
+                    PortDeclaration::Input(i) => arenas.get(*i).port_identifiers,
+                    PortDeclaration::Output(i) => arenas.get(*i).identifiers,
+                };
+
+                for ident in idents.iter() {
+                    let ident = arenas.get_ident(arenas.get(ident).0);
+
+                    let key = gl.signals.insert(Signal {
+                        name: ident.into(),
+                        ty: Type::Bit,
+                    });
+                    scope.push(
+                        ident,
+                        ScopeItem::Signal(SignalScopeItem { ty: Type::Bit, key }),
+                    );
+
+                    module_builder.entity.signal(gl, key);
+                }
             }
             ModuleItem::NonPortModuleItem(p) => match arenas.get(*p) {
                 NonPortModuleItem::ModuleOrGenerateItem(id) => match arenas.get(*id) {
@@ -133,7 +152,7 @@ pub fn lower_module_to_ir(
                                         ident,
                                         ScopeItem::Signal(SignalScopeItem { ty: Type::Bit, key }),
                                     );
-                                    signals.push(key);
+                                    module_builder.entity.signal(gl, key);
                                 }
                             }
                             ModuleOrGenerateItemDeclaration::Reg(id) => {
@@ -149,7 +168,7 @@ pub fn lower_module_to_ir(
                                         ident,
                                         ScopeItem::Signal(SignalScopeItem { ty: Type::Bit, key }),
                                     );
-                                    signals.push(key);
+                                    module_builder.entity.signal(gl, key);
                                 }
                             }
                         }
@@ -182,6 +201,7 @@ pub fn lower_module_to_ir(
                                     let value = input_terminals.first().unwrap();
                                     let mut value = lower_expr(
                                         &mut bb_builder,
+                                        gl,
                                         &mut scope,
                                         arenas.get(value),
                                         arenas,
@@ -191,33 +211,36 @@ pub fn lower_module_to_ir(
                                             for input in input_terminals.iter().skip(1) {
                                                 let input = lower_expr(
                                                     &mut bb_builder,
+                                        gl,
                                                     &mut scope,
                                                     arenas.get(input),
                                                     arenas,
                                                 );
-                                                value = bb_builder.and(value, input);
+                                                value = bb_builder.and(gl, value, input);
                                             }
                                         }
                                         NInputGateType::Or | NInputGateType::Nor => {
                                             for input in input_terminals.iter().skip(1) {
                                                 let input = lower_expr(
                                                     &mut bb_builder,
+                                        gl,
                                                     &mut scope,
                                                     arenas.get(input),
                                                     arenas,
                                                 );
-                                                value = bb_builder.or(value, input);
+                                                value = bb_builder.or(gl, value, input);
                                             }
                                         }
                                         NInputGateType::Xor | NInputGateType::Xnor => {
                                             for input in input_terminals.iter().skip(1) {
                                                 let input = lower_expr(
                                                     &mut bb_builder,
+                                        gl,
                                                     &mut scope,
                                                     arenas.get(input),
                                                     arenas,
                                                 );
-                                                value = bb_builder.xor(value, input);
+                                                value = bb_builder.xor(gl, value, input);
                                             }
                                         }
                                     };
@@ -228,15 +251,15 @@ pub fn lower_module_to_ir(
                                             | NInputGateType::Nor
                                             | NInputGateType::Xnor
                                     ) {
-                                        value = bb_builder.neg(value);
+                                        value = bb_builder.neg(gl, value);
                                     }
 
                                     let ScopeItem::Signal(scope_item) = scope.get(&ident).unwrap()
                                     else {
                                         panic!("not a signal");
                                     };
-                                    bb_builder.drive(scope_item.key, value);
-                                    bb_builder.wait_to(Time(0), bb_key);
+                                    bb_builder.drive(gl, scope_item.key, value);
+                                    bb_builder.watch_for_ins_to(gl, bb_key);
                                     processes.push(section_key);
                                 }
                             }
@@ -244,9 +267,11 @@ pub fn lower_module_to_ir(
                     }
                     ModuleOrGenerateItem::UdpInstantiation => todo!(),
                     ModuleOrGenerateItem::ModuleInstantiation(id) => {
-                        let module_instantiation = arenas.get(*id);
-                        let instantiation_ident =
-                            arenas.get_ident(module_instantiation.module_identifier.item.0);
+                        let ModuleInstantiation {
+                            module_identifier,
+                            module_instances,
+                        } = arenas.get(*id);
+                        let instantiation_ident = arenas.get_ident(module_identifier.item.0);
                         let entity = instantiated_modules.get(instantiation_ident).unwrap();
                         let entity = gl.modules.get(*entity).unwrap();
 
@@ -258,8 +283,18 @@ pub fn lower_module_to_ir(
                             })
                             .unwrap();
 
-                        for _ in module_instantiation.module_instances.iter() {
-                            entities.push(*section_key);
+                        for instance in module_instances.iter() {
+                            let ModuleInstance {
+                                name_of_module_instance: _,
+                                list_of_port_connections,
+                            } = arenas.get(instance);
+
+                            match arenas.get(*list_of_port_connections) {
+                                ListOfPortConnections::Ordered(ids) => {
+                                },
+                                ListOfPortConnections::Named => todo!(),
+                            }
+                            // module_builder.entity.
                         }
                     }
                     ModuleOrGenerateItem::InitialConstruct(id) => {
@@ -268,11 +303,12 @@ pub fn lower_module_to_ir(
                             module_builder.process(gl, "initial".into());
                         let bb_builder = statements_to_process(
                             bb_builder,
+                            gl,
                             &mut scope,
                             std::slice::from_ref(arenas.get(statement)),
                             &arenas,
                         );
-                        bb_builder.halt();
+                        bb_builder.halt(gl);
                         processes.push(section_key);
                     }
                     ModuleOrGenerateItem::AlwaysConstruct(id) => {
@@ -281,11 +317,12 @@ pub fn lower_module_to_ir(
                         let bb_key = bb_builder.key();
                         let bb_builder = statements_to_process(
                             bb_builder,
+                            gl,
                             &mut scope,
                             std::slice::from_ref(arenas.get(statement)),
                             &arenas,
                         );
-                        bb_builder.wait_to(Time(0), bb_key);
+                        bb_builder.watch_for_ins_to(gl, bb_key);
                         processes.push(section_key);
                     }
                     ModuleOrGenerateItem::LoopGenerateConstruct => todo!(),
@@ -316,22 +353,26 @@ pub fn lower_module_to_ir(
         }
     }
 
-    let (entity_key, mut bb_builder) =
-        module_builder.entity(gl, format!("{module_identifier}_entity"));
-    for key in &signals {
-        bb_builder.signal(*key);
-    }
     for process in processes {
-        bb_builder.instantiate(process);
+        let ins = gl
+            .sections
+            .get(process)
+            .unwrap()
+            .ins
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+        let outs = gl
+            .sections
+            .get(process)
+            .unwrap()
+            .outs
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+        module_builder.entity.instantiate(gl, process, ins, outs);
     }
-    for entity in entities {
-        bb_builder.instantiate(entity);
-    }
-    bb_builder.halt();
-
-    for key in signals {
-        gl.sections.get_mut(entity_key).unwrap().ins.insert(key);
-    }
+    module_builder.entity.halt(gl);
 
     let module = module_builder.finish();
     gl.modules.insert(module)
@@ -343,12 +384,13 @@ enum WatchCondition {
     Negedge,
 }
 
-fn statements_to_process<'a, 'b>(
-    mut builder: BasicBlockBuilder<'b>,
+fn statements_to_process<'a>(
+    mut builder: BasicBlockBuilder,
+    gl: &mut GlobalContext,
     scope: &mut Scope<&'a str, ScopeItem>,
     stmts: &[Statement],
     arenas: &'a AstArenas,
-) -> BasicBlockBuilder<'b> {
+) -> BasicBlockBuilder {
     for statement in stmts.iter() {
         match statement {
             Statement::BlockingAssignment(ba) => {
@@ -361,7 +403,8 @@ fn statements_to_process<'a, 'b>(
 
                 let ident = arenas.get_ident(lvalue.0);
 
-                let ScopeItem::Signal(scope_item) = scope.get(&ident).unwrap() else {
+                let ScopeItem::Signal(scope_item) = scope.get(&ident).expect("cannot find ident")
+                else {
                     panic!("not a signal");
                 };
 
@@ -372,9 +415,9 @@ fn statements_to_process<'a, 'b>(
                     _ => todo!(),
                 };
 
-                let value = builder.constant(Value::Bit(decimal != 0));
-                builder.drive(scope_item.key, value); // @TODO: Resolve ident
-            },
+                let value = builder.constant(gl, Value::Bit(decimal != 0));
+                builder.drive(gl, scope_item.key, value); // @TODO: Resolve ident
+            }
             Statement::CaseStatement => todo!(),
             Statement::ConditionalStatement => todo!(),
             Statement::DisableStatement => todo!(),
@@ -400,8 +443,8 @@ fn statements_to_process<'a, 'b>(
                     _ => todo!(),
                 };
 
-                let value = builder.constant(Value::Bit(decimal != 0));
-                builder.drive(scope_item.key, value); // @TODO: Resolve ident
+                let value = builder.constant(gl, Value::Bit(decimal != 0));
+                builder.drive(gl, scope_item.key, value); // @TODO: Resolve ident
             }
             Statement::ParBlock => todo!(),
             Statement::ProceduralContinuousAssignments => todo!(),
@@ -442,12 +485,12 @@ fn statements_to_process<'a, 'b>(
                                 // """
                                 assert_ne!(value, 0);
 
-                                builder = builder.wait(Time(value as u64));
+                                builder = builder.wait(gl, Time(value as u64));
                             }
                         }
                     }
                     ProceduralTimingControl::EventControl(event_control) => {
-                        builder = builder.jump();
+                        builder = builder.jump(gl);
                         let start_key = builder.key();
 
                         let mut conditions = Vec::new();
@@ -504,45 +547,46 @@ fn statements_to_process<'a, 'b>(
 
                         let mut before = Vec::new();
                         for (_, signal) in &conditions {
-                            before.push(builder.probe(*signal));
+                            before.push(builder.probe(gl, *signal));
                         }
 
-                        builder = builder.watch(signals);
+                        builder = builder.watch(gl, signals);
 
-                        let mut acc = builder.constant(Value::Bit(true));
+                        let mut acc = builder.constant(gl, Value::Bit(true));
                         for ((condition, signal), before) in conditions.into_iter().zip(before) {
                             use WatchCondition as C;
 
                             let cond = match condition {
                                 C::Posedge => {
-                                    let after = builder.probe(signal);
-                                    let t = builder.neg(before);
-                                    builder.and(t, after)
+                                    let after = builder.probe(gl, signal);
+                                    let t = builder.neg(gl, before);
+                                    builder.and(gl, t, after)
                                 }
                                 C::Negedge => {
-                                    let after = builder.probe(signal);
-                                    let t = builder.neg(after);
-                                    builder.and(before, t)
+                                    let after = builder.probe(gl, signal);
+                                    let t = builder.neg(gl, after);
+                                    builder.and(gl, before, t)
                                 }
-                                C::None => builder.constant(Value::Bit(true)),
+                                C::None => builder.constant(gl, Value::Bit(true)),
                             };
-                            acc = builder.and(acc, cond);
+                            acc = builder.and(gl, acc, cond);
                         }
 
-                        builder = builder.branch_false_to(acc, start_key);
+                        builder = builder.branch_false_to(gl, acc, start_key);
                     }
                 }
 
                 if let Some(stmt) = statement {
                     let stmt = arenas.get(*stmt);
                     builder =
-                        statements_to_process(builder, scope, std::slice::from_ref(stmt), arenas);
+                        statements_to_process(builder, gl, scope, std::slice::from_ref(stmt), arenas);
                 }
             }
             Statement::SeqBlock(id) => {
                 let seq_block = arenas.get(*id);
                 builder = statements_to_process(
                     builder,
+                    gl, 
                     scope,
                     arenas.nodes.get_slice(seq_block.statements.node),
                     arenas,
@@ -564,11 +608,12 @@ fn statements_to_process<'a, 'b>(
                         let str_literal = &arenas.idents[str_literal.0.start..str_literal.0.end];
 
                         builder.intrinsic(
+                            gl, 
                             IntrinsicOp::Display,
                             vec![IntrinsicArg::StringLiteral(str_literal.to_string())],
                         );
                     }
-                    "finish" => builder.intrinsic(IntrinsicOp::Finish, vec![]),
+                    "finish" => builder.intrinsic(gl, IntrinsicOp::Finish, vec![]),
 
                     // @Incomplete: Many variants here.
                     _ => todo!(),
@@ -582,8 +627,9 @@ fn statements_to_process<'a, 'b>(
     builder
 }
 
-fn lower_expr<'a, 'b>(
-    builder: &mut BasicBlockBuilder<'b>,
+fn lower_expr<'a>(
+    builder: &mut BasicBlockBuilder,
+    gl: &mut GlobalContext,
     scope: &mut Scope<&'a str, ScopeItem>,
     expr: &Expr,
     arenas: &'a AstArenas,
@@ -599,7 +645,7 @@ fn lower_expr<'a, 'b>(
             let ident = arenas.get_ident(ident.item.0);
             let scope_item = scope.get(&ident).expect("Variable not found");
             match scope_item {
-                ScopeItem::Signal(si) => builder.probe(si.key),
+                ScopeItem::Signal(si) => builder.probe(gl, si.key),
                 ScopeItem::LocalVariable => todo!(),
                 ScopeItem::Constant(_) => todo!(),
             }
@@ -611,7 +657,7 @@ fn lower_expr<'a, 'b>(
                 _ => todo!(),
             };
 
-            builder.constant(Value::Bit(decimal != 0))
+            builder.constant(gl, Value::Bit(decimal != 0))
         }
         Expr::Sized(ast_item) => todo!(),
         Expr::String(string_ref) => todo!(),

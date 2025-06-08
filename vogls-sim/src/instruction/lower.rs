@@ -91,7 +91,7 @@ pub fn lower_process_to_vm(
                 }
                 I::Probe(dst, signal) => VI::Probe(var(*dst), *io_signals.get(signal).unwrap()),
                 I::Drive(signal, src) => VI::Drive(*io_signals.get(signal).unwrap(), var(*src)),
-                I::Instantiate(_) | I::Signal(_) => unreachable!(),
+                I::Instantiate(_, _, _) | I::Signal(_) => unreachable!(),
             };
 
             instructions.push(instr);
