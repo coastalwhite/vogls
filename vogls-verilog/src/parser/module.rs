@@ -1,7 +1,8 @@
 use crate::ast::module::{
     AlwaysConstruct, InitialConstruct, InoutDeclaration, InputDeclaration, ListOfPortConnections,
-    Module, ModuleInstance, ModuleInstantiation, ModuleOrGenerateItem, NetType, NonPortModuleItem,
-    OutputDeclaration, OutputNet, PortDeclaration,
+    Module, ModuleInstance, ModuleInstantiation, ModuleItem, ModuleOrGenerateItem, ModulePorts,
+    NetType, NonPortModuleItem, OutputDeclaration, OutputNet, Port, PortDeclaration,
+    PortExpression, PortReference,
 };
 use crate::ast::statement::Statement;
 use crate::ast::{AstItem, Identifier};
@@ -28,27 +29,42 @@ impl<'a> Consumable<'a> for Module {
         let module_kw_span = p.lexer().expect(TK::KeywordModule)?.span();
         let module_identifier = Identifier::parse(p, arenas)?;
         // @Incomplete: [ module_parameter_port_list ]
-        // @Incomplete:  | list_of_ports
-        let port_declarations = if p.lexer.next_if_equals(TK::LeftParen).is_some() {
-            let port_declarations =
-                PortDeclaration::parse_zero_or_more_delimited(p, arenas, TK::Comma)?;
-            p.lexer.expect(TK::RightParen)?;
+        let ports = if p.lexer.next_if_equals(TK::LeftParen).is_some() {
+            let peeked = p.lexer().next_expect_peek()?;
+            match peeked.kind() {
+                TK::RightParen => {
+                    peeked.commit();
+                    ModulePorts::PortDeclarations(Default::default())
+                }
+                TK::KeywordInput | TK::KeywordOutput | TK::KeywordInout => {
+                    peeked.release();
+                    let port_declarations =
+                        PortDeclaration::parse_zero_or_more_delimited(p, arenas, TK::Comma)?;
+                    p.lexer.expect(TK::RightParen)?;
 
-            port_declarations
+                    ModulePorts::PortDeclarations(port_declarations)
+                }
+                _ => {
+                    peeked.release();
+                    let ports = Port::parse_one_or_more_delimited(p, arenas, TK::Comma)?;
+                    p.lexer.expect(TK::RightParen)?;
+
+                    ModulePorts::Ports(ports)
+                }
+            }
         } else {
-            Default::default()
+            ModulePorts::PortDeclarations(Default::default())
         };
         p.lexer().expect(TK::Semicolon)?;
-        // @Incomplete: | module_item
         let (module_items, endmodule_kw_token) =
-            NonPortModuleItem::parse_until_reaching(p, arenas, TK::KeywordEndModule)?;
+            ModuleItem::parse_until_reaching(p, arenas, TK::KeywordEndModule)?;
 
         let span = module_kw_span | endmodule_kw_token.span();
 
         Ok((
             Module {
                 module_identifier,
-                port_declarations,
+                ports,
                 module_items,
             },
             span,
@@ -56,6 +72,31 @@ impl<'a> Consumable<'a> for Module {
     }
 }
 impl<'a> Parsable<'a> for Module {}
+
+impl<'a> Consumable<'a> for ModuleItem {
+    fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
+        use TokenKind as TK;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
+        // module_item ::=
+        //   port_declaration ;
+        // | non_port_module_item
+        let peeked = p.lexer().next_expect_peek()?;
+        match peeked.kind() {
+            TK::KeywordInput | TK::KeywordOutput | TK::KeywordInout => {
+                peeked.release();
+                let (port_declaration, span) = PortDeclaration::parse_with_span(p, arenas)?;
+                Ok((Self::PortDeclaration(port_declaration), span))
+            }
+            _ => {
+                peeked.release();
+                let (non_port_module_item, span) = NonPortModuleItem::parse_with_span(p, arenas)?;
+                Ok((Self::NonPortModuleItem(non_port_module_item), span))
+            }
+        }
+    }
+}
+impl<'a> Parsable<'a> for ModuleItem {}
 
 impl<'a> Consumable<'a> for NonPortModuleItem {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
@@ -77,6 +118,55 @@ impl<'a> Consumable<'a> for NonPortModuleItem {
     }
 }
 impl<'a> Parsable<'a> for NonPortModuleItem {}
+
+impl<'a> Consumable<'a> for Port {
+    fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
+        // port ::=
+        //   [ port_expression ]
+        // | . port_identifier ( [ port_expression ] )
+
+        // @Incomplete: . port_identifier ( [ port_expression ] )
+
+        let (port_expression, span) = PortExpression::parse_with_span(p, arenas)?;
+        Ok((Self::PortExpression(port_expression), span))
+    }
+}
+impl<'a> Parsable<'a> for Port {}
+
+impl<'a> Consumable<'a> for PortExpression {
+    fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
+        // port_expression ::=
+        //   port_reference
+        // | { port_reference { , port_reference } }
+
+        // @Incomplete: { port_reference { , port_reference } }
+
+        let (port_reference, span) = PortReference::parse_with_span(p, arenas)?;
+        Ok((
+            Self {
+                references: port_reference,
+            },
+            span,
+        ))
+    }
+}
+impl<'a> Parsable<'a> for PortExpression {}
+
+impl<'a> Consumable<'a> for PortReference {
+    fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
+        // port_reference ::=
+        //   port_identifier [ [ constant_range_expression ] ]
+
+        // @Incomplete: [ [ constant_range_expression ] ]
+
+        let (identifier, span) = Identifier::parse_with_span(p, arenas)?;
+        Ok((Self { identifier }, span))
+    }
+}
+impl<'a> Parsable<'a> for PortReference {}
 
 impl<'a> Consumable<'a> for PortDeclaration {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {

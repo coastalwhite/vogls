@@ -10,7 +10,9 @@ use vogls_ir::{
 };
 
 use crate::ast::expr::Expr;
-use crate::ast::module::{Module, ModuleOrGenerateItem, NonPortModuleItem, PortDeclaration};
+use crate::ast::module::{
+    Module, ModuleItem, ModuleOrGenerateItem, ModulePorts, NonPortModuleItem, Port, PortDeclaration,
+};
 use crate::ast::statement::{
     DelayControl, EventControl, EventExpression, ProceduralTimingControl, Statement,
 };
@@ -42,8 +44,8 @@ pub fn lower_module_to_ir(
 
     let Module {
         module_identifier,
+        ports,
         module_items,
-        port_declarations,
     } = arenas.get(root);
 
     let mut signals = Vec::new();
@@ -51,92 +53,125 @@ pub fn lower_module_to_ir(
     let mut processes = Vec::new();
     let mut entities = Vec::new();
 
-    for port_declaration in port_declarations.iter() {
-        let port_declaration = arenas.get(port_declaration);
+    match ports {
+        ModulePorts::PortDeclarations(m) => {
+            for port_declaration in m.iter() {
+                let port_declaration = arenas.get(port_declaration);
 
-        let idents = match port_declaration {
-            PortDeclaration::Inout(i) => arenas.get(*i).port_identifiers,
-            PortDeclaration::Input(i) => arenas.get(*i).port_identifiers,
-            PortDeclaration::Output(i) => arenas.get(*i).identifiers,
-        };
+                let idents = match port_declaration {
+                    PortDeclaration::Inout(i) => arenas.get(*i).port_identifiers,
+                    PortDeclaration::Input(i) => arenas.get(*i).port_identifiers,
+                    PortDeclaration::Output(i) => arenas.get(*i).identifiers,
+                };
 
-        for ident in idents.iter() {
-            let ident = arenas.get_ident(arenas.get(ident).0);
+                for ident in idents.iter() {
+                    let ident = arenas.get_ident(arenas.get(ident).0);
 
-            let key = gl.signals.insert(Signal {
-                name: ident.into(),
-                ty: Type::Bit,
-            });
-            scope.push(
-                ident,
-                ScopeItem::Signal(SignalScopeItem { ty: Type::Bit, key }),
-            );
+                    let key = gl.signals.insert(Signal {
+                        name: ident.into(),
+                        ty: Type::Bit,
+                    });
+                    scope.push(
+                        ident,
+                        ScopeItem::Signal(SignalScopeItem { ty: Type::Bit, key }),
+                    );
 
-            signals.push(key);
+                    signals.push(key);
+                }
+            }
+        }
+        ModulePorts::Ports(m) => {
+            for port in m.iter() {
+                let port = arenas.get(port);
+                let port = match port {
+                    Port::PortExpression(p) => arenas.get(*p),
+                };
+                let port = arenas.get(port.references).identifier.item.0;
+                let ident = arenas.get_ident(port);
+
+                let key = gl.signals.insert(Signal {
+                    name: ident.into(),
+                    ty: Type::Bit,
+                });
+                scope.push(
+                    ident,
+                    ScopeItem::Signal(SignalScopeItem { ty: Type::Bit, key }),
+                );
+
+                signals.push(key);
+            }
         }
     }
 
     let module_identifier = arenas.get_ident(module_identifier.item.0);
 
     let mut module_builder = ModuleBuilder::new(module_identifier.to_string());
-    for module_item in module_items.node.iter() {
-        match arenas.nodes.get(module_item) {
-            NonPortModuleItem::ModuleOrGenerateItem(id) => match arenas.get(*id) {
-                ModuleOrGenerateItem::ModuleOrGenerateItemDeclaration => todo!(),
-                ModuleOrGenerateItem::LocalParameterDeclaration => todo!(),
-                ModuleOrGenerateItem::ParameterOverride => todo!(),
-                ModuleOrGenerateItem::ContinuousAssign => todo!(),
-                ModuleOrGenerateItem::GateInstantiation => todo!(),
-                ModuleOrGenerateItem::UdpInstantiation => todo!(),
-                ModuleOrGenerateItem::ModuleInstantiation(id) => {
-                    let module_instantiation = arenas.get(*id);
-                    let instantiation_ident =
-                        arenas.get_ident(module_instantiation.module_identifier.item.0);
-                    let entity = instantiated_modules.get(instantiation_ident).unwrap();
-                    let entity = gl.modules.get(*entity).unwrap();
-
-                    let section_key = entity
-                        .sections
-                        .iter()
-                        .find(|k| gl.sections.get(**k).unwrap().variant == SectionVariant::Entity)
-                        .unwrap();
-
-                    for _ in module_instantiation.module_instances.iter() {
-                        entities.push(*section_key);
-                    }
-                }
-                ModuleOrGenerateItem::InitialConstruct(id) => {
-                    let statement = arenas.get(*id).0;
-                    let (section_key, bb_builder) = module_builder.process(gl, "initial".into());
-                    let bb_builder = statements_to_process(
-                        bb_builder,
-                        &mut scope,
-                        std::slice::from_ref(arenas.get(statement)),
-                        &arenas,
-                    );
-                    bb_builder.halt();
-                    processes.push(section_key);
-                }
-                ModuleOrGenerateItem::AlwaysConstruct(id) => {
-                    let statement = arenas.get(*id).0;
-                    let (section_key, bb_builder) = module_builder.process(gl, "always".into());
-                    let bb_key = bb_builder.key();
-                    let bb_builder = statements_to_process(
-                        bb_builder,
-                        &mut scope,
-                        std::slice::from_ref(arenas.get(statement)),
-                        &arenas,
-                    );
-                    bb_builder.wait_to(Time(0), bb_key);
-                    processes.push(section_key);
-                }
-                ModuleOrGenerateItem::LoopGenerateConstruct => todo!(),
-                ModuleOrGenerateItem::ConditionalGenerateConstruct => todo!(),
+    for module_item in module_items.iter() {
+        match arenas.get(module_item) {
+            ModuleItem::PortDeclaration(p) => {
+                // @Incomplete.
             },
-            NonPortModuleItem::GenerateRegion => todo!(),
-            NonPortModuleItem::SpecifyBlock => todo!(),
-            NonPortModuleItem::ParameterDeclaration => todo!(),
-            NonPortModuleItem::SpecParamDeclaration => todo!(),
+            ModuleItem::NonPortModuleItem(p) => match arenas.get(*p) {
+                NonPortModuleItem::ModuleOrGenerateItem(id) => match arenas.get(*id) {
+                    ModuleOrGenerateItem::ModuleOrGenerateItemDeclaration => todo!(),
+                    ModuleOrGenerateItem::LocalParameterDeclaration => todo!(),
+                    ModuleOrGenerateItem::ParameterOverride => todo!(),
+                    ModuleOrGenerateItem::ContinuousAssign => todo!(),
+                    ModuleOrGenerateItem::GateInstantiation => todo!(),
+                    ModuleOrGenerateItem::UdpInstantiation => todo!(),
+                    ModuleOrGenerateItem::ModuleInstantiation(id) => {
+                        let module_instantiation = arenas.get(*id);
+                        let instantiation_ident =
+                            arenas.get_ident(module_instantiation.module_identifier.item.0);
+                        let entity = instantiated_modules.get(instantiation_ident).unwrap();
+                        let entity = gl.modules.get(*entity).unwrap();
+
+                        let section_key = entity
+                            .sections
+                            .iter()
+                            .find(|k| {
+                                gl.sections.get(**k).unwrap().variant == SectionVariant::Entity
+                            })
+                            .unwrap();
+
+                        for _ in module_instantiation.module_instances.iter() {
+                            entities.push(*section_key);
+                        }
+                    }
+                    ModuleOrGenerateItem::InitialConstruct(id) => {
+                        let statement = arenas.get(*id).0;
+                        let (section_key, bb_builder) =
+                            module_builder.process(gl, "initial".into());
+                        let bb_builder = statements_to_process(
+                            bb_builder,
+                            &mut scope,
+                            std::slice::from_ref(arenas.get(statement)),
+                            &arenas,
+                        );
+                        bb_builder.halt();
+                        processes.push(section_key);
+                    }
+                    ModuleOrGenerateItem::AlwaysConstruct(id) => {
+                        let statement = arenas.get(*id).0;
+                        let (section_key, bb_builder) = module_builder.process(gl, "always".into());
+                        let bb_key = bb_builder.key();
+                        let bb_builder = statements_to_process(
+                            bb_builder,
+                            &mut scope,
+                            std::slice::from_ref(arenas.get(statement)),
+                            &arenas,
+                        );
+                        bb_builder.wait_to(Time(0), bb_key);
+                        processes.push(section_key);
+                    }
+                    ModuleOrGenerateItem::LoopGenerateConstruct => todo!(),
+                    ModuleOrGenerateItem::ConditionalGenerateConstruct => todo!(),
+                },
+                NonPortModuleItem::GenerateRegion => todo!(),
+                NonPortModuleItem::SpecifyBlock => todo!(),
+                NonPortModuleItem::ParameterDeclaration => todo!(),
+                NonPortModuleItem::SpecParamDeclaration => todo!(),
+            },
         }
     }
 

@@ -8,7 +8,7 @@ use vogls_sim::{
     Context, Event, ScheduledEvent, VmProcess, VmProcessKey, VmSignalKey, lower_process_to_vm,
 };
 use vogls_verilog::ast::AstId;
-use vogls_verilog::ast::module::{Module, ModuleOrGenerateItem, NonPortModuleItem};
+use vogls_verilog::ast::module::{Module, ModuleItem, ModuleOrGenerateItem, NonPortModuleItem};
 use vogls_verilog::lexer::Lexer;
 use vogls_verilog::lower::lower_module_to_ir;
 use vogls_verilog::parser::Parser;
@@ -148,12 +148,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let Module {
                 module_identifier: _,
                 module_items,
-                port_declarations: _,
+                ports: _,
             } = ast.arenas.get(module_id);
-            for module_item in module_items.node.iter() {
-                if let NonPortModuleItem::ModuleOrGenerateItem(module_item) =
-                    ast.arenas.nodes.get(module_item)
-                {
+            for module_item in module_items.iter() {
+                let ModuleItem::NonPortModuleItem(p) = ast.arenas.get(module_item) else {
+                    continue;
+                };
+
+                if let NonPortModuleItem::ModuleOrGenerateItem(module_item) = ast.arenas.get(*p) {
                     if let ModuleOrGenerateItem::ModuleInstantiation(module_instantiation) =
                         ast.arenas.get(*module_item)
                     {

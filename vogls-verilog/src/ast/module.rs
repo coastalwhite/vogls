@@ -14,8 +14,44 @@ use super::{AstId, AstIdRange, AstItem, Identifier};
 #[derive(Clone, Copy)]
 pub struct Module {
     pub module_identifier: AstItem<Identifier>,
-    pub port_declarations: AstIdRange<PortDeclaration>,
-    pub module_items: AstIdRange<NonPortModuleItem>,
+    pub ports: ModulePorts,
+    pub module_items: AstIdRange<ModuleItem>,
+}
+
+#[derive(Clone, Copy)]
+pub enum ModulePorts {
+    Ports(AstIdRange<Port>),
+    PortDeclarations(AstIdRange<PortDeclaration>),
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
+// port ::=
+//   [ port_expression ]
+// | . port_identifier ( [ port_expression ] )
+#[derive(Clone, Copy)]
+pub enum Port {
+    PortExpression(AstId<PortExpression>),
+    // PortIdentifer(AstId<PortIdentifier>, AstId<PortExpression>),
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
+// port_expression ::=
+//   port_reference
+// | { port_reference { , port_reference } }
+#[derive(Clone, Copy)]
+pub struct PortExpression {
+    // @Incomplete: { port_reference { , port_reference } }
+    pub references: AstId<PortReference>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
+// port_reference ::=
+//   port_identifier [ [ constant_range_expression ] ]
+#[derive(Clone, Copy)]
+pub struct PortReference {
+    pub identifier: AstItem<Identifier>,
+    // @Incomplete
+    // range: Option<ConstantRangeExpression>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
@@ -169,6 +205,16 @@ pub struct InitialConstruct(pub AstId<Statement>);
 // always_construct ::= always statement
 #[derive(Clone, Copy)]
 pub struct AlwaysConstruct(pub AstId<Statement>);
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
+// module_item ::=
+//   port_declaration ;
+// | non_port_module_item
+#[derive(Clone, Copy)]
+pub enum ModuleItem {
+    PortDeclaration(AstId<PortDeclaration>),
+    NonPortModuleItem(AstId<NonPortModuleItem>),
+}
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
 // non_port_module_item ::=
