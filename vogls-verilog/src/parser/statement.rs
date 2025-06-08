@@ -5,7 +5,7 @@ use crate::ast::statement::{
     SystemTaskEnable, SystemTaskIdentifier, VariableLValue,
 };
 use crate::ast::{AstIdRange, DecimalRef, Identifier, TextRef};
-use crate::lexer::{FromLexerError, TokenContent, TokenKind};
+use crate::lexer::{FromLexerError, Token, TokenContent, TokenKind};
 use crate::parser::ItemParsable;
 use crate::span::Span;
 
@@ -48,10 +48,11 @@ impl<'a> Consumable<'a> for Statement {
                     ProceduralTimingControl::parse_with_span(p, arenas)?;
                 let mut span = procedural_timing_control_span;
 
-                let statement = Statement::try_parse_with_span(p, arenas).map(|(stmt, stmt_span)| {
-                    span |= stmt_span;
-                    stmt
-                });
+                let statement =
+                    Statement::try_parse_with_span(p, arenas).map(|(stmt, stmt_span)| {
+                        span |= stmt_span;
+                        stmt
+                    });
                 Ok((
                     Self::ProceduralTimingControlStatement(procedural_timing_control, statement),
                     span,
@@ -83,7 +84,10 @@ impl<'a> Consumable<'a> for Statement {
                         system_task_enable_span,
                     ))
                 } else {
-                    Err(ParseError::Incomplete("statement"))
+                    Err(ParseError::incomplete(
+                        Some(p.lexer().span_at_cursor()),
+                        "statement",
+                    ))
                 }
             }
         }
@@ -201,7 +205,10 @@ impl<'a> Consumable<'a> for DelayOrEventControl {
             }
             TK::KeywordRepeat => {
                 peeked.release();
-                Err(ParseError::Incomplete("delay_or_event_control repeat"))
+                Err(ParseError::incomplete(
+                    Some(p.lexer().span_at_cursor()),
+                    "delay_or_event_control repeat",
+                ))
             }
             _ => Err(ParseError::unexpected_token(peeked.commit())),
         }
@@ -382,16 +389,22 @@ impl<'a> Consumable<'a> for SystemTaskEnable {
 
         let span = system_task_identifier_span | semicolon_span;
 
-        Ok((Self { system_task_identifier, expressions }, span))
+        Ok((
+            Self {
+                system_task_identifier,
+                expressions,
+            },
+            span,
+        ))
     }
 }
 impl<'a> Parsable<'a> for SystemTaskEnable {}
 
 impl<'a> Consumable<'a> for SystemTaskIdentifier {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
-        p.lexer().expect_map(|content, _| match content {
+        p.lexer().expect_map(|content, span| match content {
             TokenContent::DollarIdent(ident) => Self::from_item(ident, arenas),
-            _ => Err(ParseError::UnexpectedToken(content.kind())),
+            _ => Err(ParseError::unexpected_token(Token::new(content, span))),
         })
     }
 }

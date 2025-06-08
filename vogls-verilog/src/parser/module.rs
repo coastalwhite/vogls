@@ -303,7 +303,10 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItem {
                 let (module_instance, span) = ModuleInstantiation::parse_with_span(p, arenas)?;
                 Ok((Self::ModuleInstantiation(module_instance), span))
             }
-            _ => Err(ParseError::Incomplete("module_or_generate_item")),
+            _ => Err(ParseError::incomplete(
+                Some(peeked.commit().span()),
+                "module_or_generate_item",
+            )),
         }
     }
 }

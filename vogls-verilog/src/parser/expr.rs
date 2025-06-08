@@ -82,7 +82,7 @@ impl<'a> Consumable<'a> for Expr {
                 }};
             }
 
-            let (t, span) = p.lexer().next().ok_or(E::MissingToken)?.take();
+            let (t, span) = p.lexer().next_expect()?.take();
             current = {
                 match t {
                     T::Ident(i) => (

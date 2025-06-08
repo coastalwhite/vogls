@@ -99,7 +99,7 @@ impl<'a> LexerInner<'a> {
             offset = self.offset;
             let content = &self.content[self.offset..];
             if content.starts_with("//") {
-                let Some(newline_pos) = self.content[2..].find('\n') else {
+                let Some(newline_pos) = self.content[self.offset + 2..].find('\n') else {
                     self.offset = self.content.len();
                     break;
                 };

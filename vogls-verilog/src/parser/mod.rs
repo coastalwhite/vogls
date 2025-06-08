@@ -72,18 +72,35 @@ pub struct Ast {
 }
 
 #[derive(Debug, Clone)]
-pub enum ParseError {
+pub struct ParseError {
+    pub location: Option<Span>,
+    pub reason: ParseErrorReason,
+}
+impl ParseError {
+    fn incomplete(location: Option<Span>, ident: &'static str) -> ParseError {
+        Self { location, reason: ParseErrorReason::Incomplete(ident) }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum ParseErrorReason {
     MissingToken,
     UnexpectedToken(TokenKind),
     Incomplete(&'static str),
 }
 
 impl<'a> FromLexerError<'a> for ParseError {
-    fn missing_token(_: usize) -> Self {
-        Self::MissingToken
+    fn missing_token(at: usize) -> Self {
+        Self {
+            location: Some(Span::new(at, at)),
+            reason: ParseErrorReason::MissingToken,
+        }
     }
     fn unexpected_token(token: Token<'a>) -> Self {
-        Self::UnexpectedToken(token.kind())
+        Self {
+            location: Some(token.span()),
+            reason: ParseErrorReason::UnexpectedToken(token.kind()),
+        }
     }
 }
 
@@ -166,11 +183,7 @@ pub trait Parsable<'a>: Consumable<'a> {
         let mut spans = Vec::new();
 
         let end_token = loop {
-            let Some(peek) = p.lexer.peek() else {
-                // @TODO: Better Error
-                return Err(ParseError::MissingToken);
-            };
-
+            let peek = p.lexer.next_expect_peek()?;
             if peek.kind() == end {
                 break peek.commit();
             }
@@ -266,9 +279,9 @@ pub trait Parsable<'a>: Consumable<'a> {
 
 impl<'a> Consumable<'a> for Identifier {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
-        p.lexer().expect_map(|content, _| match content {
+        p.lexer().expect_map(|content, span| match content {
             TokenContent::Ident(ident) => Self::from_item(ident, arenas),
-            _ => Err(ParseError::UnexpectedToken(content.kind())),
+            _ => Err(ParseError::unexpected_token(Token::new(content, span))),
         })
     }
 }
@@ -284,9 +297,9 @@ impl<'a> ItemParsable<'a> for Identifier {
 
 impl<'a> Consumable<'a> for DecimalRef {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
-        p.lexer().expect_map(|content, _| match content {
+        p.lexer().expect_map(|content, span| match content {
             TokenContent::Decimal(decimal) => Self::from_item(decimal, arenas),
-            _ => Err(ParseError::UnexpectedToken(content.kind())),
+            _ => Err(ParseError::unexpected_token(Token::new(content, span))),
         })
     }
 }
@@ -301,9 +314,9 @@ impl<'a> ItemParsable<'a> for DecimalRef {
 
 impl<'a> Consumable<'a> for SizedNumberRef {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
-        p.lexer().expect_map(|content, _| match content {
+        p.lexer().expect_map(|content, span| match content {
             TokenContent::Number(sized_number) => Self::from_item(sized_number, arenas),
-            _ => Err(ParseError::UnexpectedToken(content.kind())),
+            _ => Err(ParseError::unexpected_token(Token::new(content, span))),
         })
     }
 }
@@ -318,9 +331,9 @@ impl<'a> ItemParsable<'a> for SizedNumberRef {
 
 impl<'a> Consumable<'a> for StringRef {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
-        p.lexer().expect_map(|content, _| match content {
+        p.lexer().expect_map(|content, span| match content {
             TokenContent::String(string) => Self::from_item(string, arenas),
-            _ => Err(ParseError::UnexpectedToken(content.kind())),
+            _ => Err(ParseError::unexpected_token(Token::new(content, span))),
         })
     }
 }
@@ -387,11 +400,7 @@ pub trait ItemParsable<'a>: Consumable<'a> {
         let mut spans = Vec::new();
 
         let end_token = loop {
-            let Some(peek) = p.lexer.peek() else {
-                // @TODO: Better Error
-                return Err(ParseError::MissingToken);
-            };
-
+            let peek = p.lexer.next_expect_peek()?;
             if peek.kind() == end {
                 break peek.commit();
             }
