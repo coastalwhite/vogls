@@ -6,15 +6,18 @@ use scope::Scope;
 
 use vogls_ir::{
     BasicBlockBuilder, GlobalContext, IntrinsicArg, IntrinsicOp, ModuleBuilder, ModuleKey,
-    SectionVariant, Signal, SignalKey, Time, Type, Value,
+    SectionVariant, Signal, SignalKey, Time, Type, Value, VariableKey,
 };
 
+use crate::ast::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression, ConstantPrimary};
 use crate::ast::expr::Expr;
 use crate::ast::module::{
-    Module, ModuleItem, ModuleOrGenerateItem, ModulePorts, NonPortModuleItem, Port, PortDeclaration,
+    GateInstantiation, Module, ModuleItem, ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration,
+    ModulePorts, NInputGateInstance, NInputGateType, NonPortModuleItem, ParamAssignment,
+    ParameterDeclaration, Port, PortDeclaration,
 };
 use crate::ast::statement::{
-    DelayControl, DelayValue, EventControl, EventExpression, ProceduralTimingControl, Statement
+    DelayControl, DelayValue, EventControl, EventExpression, ProceduralTimingControl, Statement,
 };
 use crate::ast::{AstId, Identifier};
 use crate::number::Decimal;
@@ -28,6 +31,7 @@ pub struct SignalScopeItem {
 pub enum ScopeItem {
     Signal(SignalScopeItem),
     LocalVariable,
+    Constant(u64),
 }
 
 pub fn lower_module_to_ir(
@@ -110,14 +114,134 @@ pub fn lower_module_to_ir(
         match arenas.get(module_item) {
             ModuleItem::PortDeclaration(_) => {
                 // @Incomplete.
-            },
+            }
             ModuleItem::NonPortModuleItem(p) => match arenas.get(*p) {
                 NonPortModuleItem::ModuleOrGenerateItem(id) => match arenas.get(*id) {
-                    ModuleOrGenerateItem::ModuleOrGenerateItemDeclaration(_) => todo!(),
+                    ModuleOrGenerateItem::ModuleOrGenerateItemDeclaration(id) => {
+                        let module_or_generate_item_declaration = arenas.get(*id);
+                        match module_or_generate_item_declaration {
+                            ModuleOrGenerateItemDeclaration::Net(id) => {
+                                let net_declaration = arenas.get(*id);
+                                for ident in net_declaration.identifiers.iter() {
+                                    let ident = arenas.get(ident);
+                                    let ident = arenas.get_ident(ident.0);
+                                    let key = gl.signals.insert(Signal {
+                                        name: ident.into(),
+                                        ty: Type::Bit,
+                                    });
+                                    scope.push(
+                                        ident,
+                                        ScopeItem::Signal(SignalScopeItem { ty: Type::Bit, key }),
+                                    );
+                                    signals.push(key);
+                                }
+                            }
+                            ModuleOrGenerateItemDeclaration::Reg(id) => {
+                                let reg_declaration = arenas.get(*id);
+                                for ident in reg_declaration.identifiers.iter() {
+                                    let ident = arenas.get(ident);
+                                    let ident = arenas.get_ident(ident.0);
+                                    let key = gl.signals.insert(Signal {
+                                        name: ident.into(),
+                                        ty: Type::Bit,
+                                    });
+                                    scope.push(
+                                        ident,
+                                        ScopeItem::Signal(SignalScopeItem { ty: Type::Bit, key }),
+                                    );
+                                    signals.push(key);
+                                }
+                            }
+                        }
+                    }
                     ModuleOrGenerateItem::LocalParameterDeclaration => todo!(),
                     ModuleOrGenerateItem::ParameterOverride => todo!(),
                     ModuleOrGenerateItem::ContinuousAssign => todo!(),
-                    ModuleOrGenerateItem::GateInstantiation(_) => todo!(),
+                    ModuleOrGenerateItem::GateInstantiation(id) => {
+                        let gate_instantiation = arenas.get(*id);
+                        match gate_instantiation {
+                            GateInstantiation::NInput(id) => {
+                                let ninput_gate_instantiation = arenas.get(*id);
+                                for instance in ninput_gate_instantiation.instances.iter() {
+                                    let NInputGateInstance {
+                                        name: _,
+                                        output_terminal,
+                                        input_terminals,
+                                    } = arenas.get(instance);
+
+                                    let lvalue = arenas.get(*output_terminal);
+                                    let lvalue = lvalue.ident.item;
+
+                                    let ident = arenas.get_ident(lvalue.0);
+
+                                    let (section_key, mut bb_builder) =
+                                        module_builder.process(gl, "gate".into());
+                                    let bb_key = bb_builder.key();
+
+                                    assert!(!input_terminals.is_empty());
+                                    let value = input_terminals.first().unwrap();
+                                    let mut value = lower_expr(
+                                        &mut bb_builder,
+                                        &mut scope,
+                                        arenas.get(value),
+                                        arenas,
+                                    );
+                                    match ninput_gate_instantiation.gatetype.item {
+                                        NInputGateType::And | NInputGateType::Nand => {
+                                            for input in input_terminals.iter().skip(1) {
+                                                let input = lower_expr(
+                                                    &mut bb_builder,
+                                                    &mut scope,
+                                                    arenas.get(input),
+                                                    arenas,
+                                                );
+                                                value = bb_builder.and(value, input);
+                                            }
+                                        }
+                                        NInputGateType::Or | NInputGateType::Nor => {
+                                            for input in input_terminals.iter().skip(1) {
+                                                let input = lower_expr(
+                                                    &mut bb_builder,
+                                                    &mut scope,
+                                                    arenas.get(input),
+                                                    arenas,
+                                                );
+                                                value = bb_builder.or(value, input);
+                                            }
+                                        }
+                                        NInputGateType::Xor | NInputGateType::Xnor => {
+                                            for input in input_terminals.iter().skip(1) {
+                                                let input = lower_expr(
+                                                    &mut bb_builder,
+                                                    &mut scope,
+                                                    arenas.get(input),
+                                                    arenas,
+                                                );
+                                                value = bb_builder.xor(value, input);
+                                            }
+                                        }
+                                    };
+
+                                    if matches!(
+                                        ninput_gate_instantiation.gatetype.item,
+                                        NInputGateType::Nand
+                                            | NInputGateType::Nor
+                                            | NInputGateType::Xnor
+                                    ) {
+                                        value = bb_builder.neg(value);
+                                    }
+
+                                    let ScopeItem::Signal(scope_item) = scope.get(&ident).unwrap()
+                                    else {
+                                        panic!("not a signal");
+                                    };
+                                    bb_builder.drive(scope_item.key, value);
+                                    bb_builder.wait_to(Time(0), bb_key);
+                                    processes.push(section_key);
+                                }
+                            }
+                        }
+                    }
                     ModuleOrGenerateItem::UdpInstantiation => todo!(),
                     ModuleOrGenerateItem::ModuleInstantiation(id) => {
                         let module_instantiation = arenas.get(*id);
@@ -169,7 +293,24 @@ pub fn lower_module_to_ir(
                 },
                 NonPortModuleItem::GenerateRegion => todo!(),
                 NonPortModuleItem::SpecifyBlock => todo!(),
-                NonPortModuleItem::ParameterDeclaration(_) => todo!(),
+                NonPortModuleItem::ParameterDeclaration(id) => {
+                    let ParameterDeclaration { assignments } = arenas.get(*id);
+                    for assignment in assignments.iter() {
+                        let ParamAssignment { param, constant } = arenas.get(assignment);
+                        let ConstantMinTypMaxExpression::Single(constant) = arenas.get(*constant)
+                        else {
+                            todo!();
+                        };
+                        let ConstantExpr::Primary(primary) = arenas.get(*constant);
+                        let ConstantPrimary::Number(number) = primary else {
+                            todo!();
+                        };
+                        let Decimal::Small(v) = arenas.decimals[number.at] else {
+                            todo!()
+                        };
+                        scope.push(arenas.get_ident(param.item.0), ScopeItem::Constant(v));
+                    }
+                }
                 NonPortModuleItem::SpecParamDeclaration => todo!(),
             },
         }
@@ -210,7 +351,30 @@ fn statements_to_process<'a, 'b>(
 ) -> BasicBlockBuilder<'b> {
     for statement in stmts.iter() {
         match statement {
-            Statement::BlockingAssignment(_) => todo!(),
+            Statement::BlockingAssignment(ba) => {
+                // @Incorrect
+                let ba = arenas.get(*ba);
+                assert!(ba.delay_or_event_control.is_none());
+
+                let lvalue = arenas.get(ba.variable_lvalue);
+                let lvalue = lvalue.ident.item;
+
+                let ident = arenas.get_ident(lvalue.0);
+
+                let ScopeItem::Signal(scope_item) = scope.get(&ident).unwrap() else {
+                    panic!("not a signal");
+                };
+
+                let decimal = arenas.get(ba.expression).into_decimal_literal().unwrap();
+                let decimal = &arenas.decimals[decimal.at];
+                let decimal = match decimal {
+                    Decimal::Small(v) => *v as usize,
+                    _ => todo!(),
+                };
+
+                let value = builder.constant(Value::Bit(decimal != 0));
+                builder.drive(scope_item.key, value); // @TODO: Resolve ident
+            },
             Statement::CaseStatement => todo!(),
             Statement::ConditionalStatement => todo!(),
             Statement::DisableStatement => todo!(),
@@ -247,14 +411,24 @@ fn statements_to_process<'a, 'b>(
                         let delay_control = arenas.get(*delay_control);
                         match delay_control {
                             DelayControl::DelayValue(value) => {
-                                let DelayValue::UnsignedNumber(value) = arenas.get(*value) else {
-                                    todo!();
-                                };
-
-                                let value = &arenas.decimals[value.at];
-                                let value = match value {
-                                    Decimal::Small(v) => *v as usize,
-                                    _ => todo!(),
+                                let value = match arenas.get(*value) {
+                                    DelayValue::UnsignedNumber(value) => {
+                                        let value = &arenas.decimals[value.at];
+                                        let value = match value {
+                                            Decimal::Small(v) => *v as usize,
+                                            _ => todo!(),
+                                        };
+                                        value
+                                    }
+                                    DelayValue::Identifier(value) => {
+                                        let ScopeItem::Constant(v) = scope
+                                            .get(&arenas.get_ident(value.0))
+                                            .expect("unknown ident")
+                                        else {
+                                            todo!();
+                                        };
+                                        *v as usize
+                                    }
                                 };
 
                                 // @TODO:
@@ -406,4 +580,40 @@ fn statements_to_process<'a, 'b>(
     }
 
     builder
+}
+
+fn lower_expr<'a, 'b>(
+    builder: &mut BasicBlockBuilder<'b>,
+    scope: &mut Scope<&'a str, ScopeItem>,
+    expr: &Expr,
+    arenas: &'a AstArenas,
+) -> VariableKey {
+    match expr {
+        Expr::BitPartSelect(bit_part_select) => todo!(),
+        Expr::Unary(unary_operator, ast_id) => todo!(),
+        Expr::Binary(binary_operator, ast_id, ast_id1) => todo!(),
+        Expr::Concatenation(ast_id_range) => todo!(),
+        Expr::Replication(replication) => todo!(),
+        Expr::Ternary(ast_id, ast_id1, ast_id2) => todo!(),
+        Expr::Ident(ident) => {
+            let ident = arenas.get_ident(ident.item.0);
+            let scope_item = scope.get(&ident).expect("Variable not found");
+            match scope_item {
+                ScopeItem::Signal(si) => builder.probe(si.key),
+                ScopeItem::LocalVariable => todo!(),
+                ScopeItem::Constant(_) => todo!(),
+            }
+        }
+        Expr::Decimal(decimal) => {
+            let decimal = &arenas.decimals[decimal.at];
+            let decimal = match decimal {
+                Decimal::Small(v) => *v as usize,
+                _ => todo!(),
+            };
+
+            builder.constant(Value::Bit(decimal != 0))
+        }
+        Expr::Sized(ast_item) => todo!(),
+        Expr::String(string_ref) => todo!(),
+    }
 }
