@@ -36,6 +36,16 @@ pub enum Statement {
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 506
+// net_lvalue ::=
+//   hierarchical_net_identifier [ { [ constant_expression ] } [ constant_range_expression ] ]
+// | { net_lvalue { , net_lvalue } }
+#[derive(Clone, Copy)]
+pub struct NetLValue {
+    // @Incomplete
+    pub ident: AstItem<Identifier>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 506
 // variable_lvalue ::=
 //   hierarchical_variable_identifier [ { [ expression ] } [ range_expression ] ]
 //   | { variable_lvalue { , variable_lvalue } }
@@ -99,7 +109,10 @@ pub enum EventExpression {
 // | real_number
 // | identifier
 #[derive(Clone, Copy)]
-pub struct DelayValue(pub AstItem<DecimalRef>);
+pub enum DelayValue {
+    UnsignedNumber(DecimalRef),
+    Identifier(Identifier),
+}
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
 // blocking_assignment ::= variable_lvalue = [ delay_or_event_control ] expression

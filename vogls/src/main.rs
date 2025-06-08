@@ -70,6 +70,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Err(v) => v - 1,
                     };
 
+                // dbg!(&lines[..10]);
+                // dbg!(&location);
+
                 const CTX_LINES: usize = 2;
                 let ctx_start_line = start_line.saturating_sub(CTX_LINES);
                 let ctx_end_line = end_line.saturating_add(1 + CTX_LINES).min(lines.len());

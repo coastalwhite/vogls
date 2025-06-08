@@ -159,6 +159,15 @@ impl<'a> Lexer<'a> {
         self.inner.path.as_deref()
     }
 
+    pub fn inspect_content(&self) -> &str {
+        &self.inner.content[self.inner.offset
+            ..self
+                .inner
+                .offset
+                .saturating_add(10)
+                .min(self.inner.content.len())]
+    }
+
     pub fn peek<'b>(&'b mut self) -> Option<Peeked<'a, 'b>> {
         let token = self.next()?;
         Some(Peeked { lexer: self, token })

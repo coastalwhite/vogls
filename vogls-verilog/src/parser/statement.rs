@@ -1,8 +1,8 @@
 use crate::ast::expr::Expr;
 use crate::ast::statement::{
     BlockingAssignment, DelayControl, DelayOrEventControl, DelayValue, EventControl,
-    EventExpression, NonBlockingAssignment, ProceduralTimingControl, SeqBlock, Statement,
-    SystemTaskEnable, SystemTaskIdentifier, VariableLValue,
+    EventExpression, NetLValue, NonBlockingAssignment, ProceduralTimingControl, SeqBlock,
+    Statement, SystemTaskEnable, SystemTaskIdentifier, VariableLValue,
 };
 use crate::ast::{AstIdRange, DecimalRef, Identifier, TextRef};
 use crate::lexer::{FromLexerError, Token, TokenContent, TokenKind};
@@ -94,6 +94,22 @@ impl<'a> Consumable<'a> for Statement {
     }
 }
 impl<'a> Parsable<'a> for Statement {}
+
+impl<'a> Consumable<'a> for NetLValue {
+    fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 506
+        // net_lvalue ::=
+        //   hierarchical_net_identifier [ { [ constant_expression ] } [ constant_range_expression ] ]
+        // | { net_lvalue { , net_lvalue } }
+
+        // @Incomplete
+
+        let (ident, span) = Identifier::parse_with_span(p, arenas)?;
+
+        Ok((Self { ident }, span))
+    }
+}
+impl<'a> Parsable<'a> for NetLValue {}
 
 impl<'a> Consumable<'a> for VariableLValue {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
@@ -238,6 +254,8 @@ impl<'a> Parsable<'a> for DelayControl {}
 
 impl<'a> Consumable<'a> for DelayValue {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
+        use TokenKind as TK;
+
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 491
         // delay_value ::=
         //   unsigned_number
@@ -247,9 +265,23 @@ impl<'a> Consumable<'a> for DelayValue {
         // @Incomplete: | real_number
         // @Incomplete: | identifier
 
-        let (decimal, decimal_span) = DecimalRef::parse_with_span(p, arenas)?;
-
-        Ok((Self(decimal), decimal_span))
+        let peeked = p.lexer.next_expect_peek()?;
+        match peeked.kind() {
+            TK::Decimal => {
+                peeked.release();
+                let (decimal, span) = DecimalRef::consume(p, arenas)?;
+                Ok((Self::UnsignedNumber(decimal), span))
+            }
+            TK::Ident => {
+                peeked.release();
+                let (ident, span) = Identifier::consume(p, arenas)?;
+                Ok((Self::Identifier(ident), span))
+            }
+            _ => Err(ParseError::incomplete(
+                Some(p.lexer().span_at_cursor()),
+                "delay_value",
+            )),
+        }
     }
 }
 impl<'a> Parsable<'a> for DelayValue {}

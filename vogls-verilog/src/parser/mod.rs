@@ -12,6 +12,7 @@ use crate::span::Span;
 mod expr;
 mod module;
 mod statement;
+mod constant_expr;
 // mod net;
 
 pub struct Parser<'a> {
@@ -56,6 +57,10 @@ impl AstArenas {
         }
     }
 
+    pub fn get_span<T: Copy>(&self, id: AstId<T>) -> Span {
+        self.spans[id.loc]
+    }
+
     pub fn get<T: Copy>(&self, id: AstId<T>) -> &T {
         self.nodes.get(id.node)
     }
@@ -78,7 +83,10 @@ pub struct ParseError {
 }
 impl ParseError {
     fn incomplete(location: Option<Span>, ident: &'static str) -> ParseError {
-        Self { location, reason: ParseErrorReason::Incomplete(ident) }
+        Self {
+            location,
+            reason: ParseErrorReason::Incomplete(ident),
+        }
     }
 }
 
@@ -429,11 +437,15 @@ pub trait ItemParsable<'a>: Consumable<'a> {
         spans.push(span);
 
         loop {
+            dbg!(p.lexer.inspect_content());
             if p.lexer.next_if_equals(delimiter).is_none() {
+                dbg!(p.lexer.inspect_content());
                 break;
             }
+            dbg!(p.lexer.inspect_content());
 
             let (item, span) = Self::consume(p, arenas)?;
+            dbg!(p.lexer.inspect_content());
             items.push(item);
             spans.push(span);
         }

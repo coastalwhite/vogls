@@ -14,7 +14,7 @@ use crate::ast::module::{
     Module, ModuleItem, ModuleOrGenerateItem, ModulePorts, NonPortModuleItem, Port, PortDeclaration,
 };
 use crate::ast::statement::{
-    DelayControl, EventControl, EventExpression, ProceduralTimingControl, Statement,
+    DelayControl, DelayValue, EventControl, EventExpression, ProceduralTimingControl, Statement
 };
 use crate::ast::{AstId, Identifier};
 use crate::number::Decimal;
@@ -108,16 +108,16 @@ pub fn lower_module_to_ir(
     let mut module_builder = ModuleBuilder::new(module_identifier.to_string());
     for module_item in module_items.iter() {
         match arenas.get(module_item) {
-            ModuleItem::PortDeclaration(p) => {
+            ModuleItem::PortDeclaration(_) => {
                 // @Incomplete.
             },
             ModuleItem::NonPortModuleItem(p) => match arenas.get(*p) {
                 NonPortModuleItem::ModuleOrGenerateItem(id) => match arenas.get(*id) {
-                    ModuleOrGenerateItem::ModuleOrGenerateItemDeclaration => todo!(),
+                    ModuleOrGenerateItem::ModuleOrGenerateItemDeclaration(_) => todo!(),
                     ModuleOrGenerateItem::LocalParameterDeclaration => todo!(),
                     ModuleOrGenerateItem::ParameterOverride => todo!(),
                     ModuleOrGenerateItem::ContinuousAssign => todo!(),
-                    ModuleOrGenerateItem::GateInstantiation => todo!(),
+                    ModuleOrGenerateItem::GateInstantiation(_) => todo!(),
                     ModuleOrGenerateItem::UdpInstantiation => todo!(),
                     ModuleOrGenerateItem::ModuleInstantiation(id) => {
                         let module_instantiation = arenas.get(*id);
@@ -169,7 +169,7 @@ pub fn lower_module_to_ir(
                 },
                 NonPortModuleItem::GenerateRegion => todo!(),
                 NonPortModuleItem::SpecifyBlock => todo!(),
-                NonPortModuleItem::ParameterDeclaration => todo!(),
+                NonPortModuleItem::ParameterDeclaration(_) => todo!(),
                 NonPortModuleItem::SpecParamDeclaration => todo!(),
             },
         }
@@ -247,8 +247,11 @@ fn statements_to_process<'a, 'b>(
                         let delay_control = arenas.get(*delay_control);
                         match delay_control {
                             DelayControl::DelayValue(value) => {
-                                let value = arenas.get(*value);
-                                let value = &arenas.decimals[value.0.item.at];
+                                let DelayValue::UnsignedNumber(value) = arenas.get(*value) else {
+                                    todo!();
+                                };
+
+                                let value = &arenas.decimals[value.at];
                                 let value = match value {
                                     Decimal::Small(v) => *v as usize,
                                     _ => todo!(),

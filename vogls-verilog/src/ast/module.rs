@@ -1,7 +1,7 @@
+use super::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression};
 use super::expr::Expr;
-use super::statement::Statement;
+use super::statement::{NetLValue, Statement};
 use super::{AstId, AstIdRange, AstItem, Identifier};
-
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 487
 // module_declaration ::=
@@ -154,11 +154,11 @@ pub enum NetType {
 // | { attribute_instance } conditional_generate_construct
 #[derive(Clone, Copy)]
 pub enum ModuleOrGenerateItem {
-    ModuleOrGenerateItemDeclaration,
+    ModuleOrGenerateItemDeclaration(AstId<ModuleOrGenerateItemDeclaration>),
     LocalParameterDeclaration,
     ParameterOverride,
     ContinuousAssign,
-    GateInstantiation,
+    GateInstantiation(AstId<GateInstantiation>),
     UdpInstantiation,
     ModuleInstantiation(AstId<ModuleInstantiation>),
     InitialConstruct(AstId<InitialConstruct>),
@@ -167,6 +167,68 @@ pub enum ModuleOrGenerateItem {
     ConditionalGenerateConstruct,
 }
 
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 493
+// gate_instantiation ::=
+//   cmos_switchtype [delay3] cmos_switch_instance { , cmos_switch_instance } ;
+// | enable_gatetype [drive_strength] [delay3] enable_gate_instance { , enable_gate_instance } ;
+// | mos_switchtype [delay3] mos_switch_instance { , mos_switch_instance } ;
+// | n_input_gatetype [drive_strength] [delay2] n_input_gate_instance { , n_input_gate_instance } ;
+// | n_output_gatetype [drive_strength] [delay2] n_output_gate_instance { , n_output_gate_instance } ;
+// | pass_en_switchtype [delay2] pass_enable_switch_instance { , pass_enable_switch_instance } ;
+// | pass_switchtype pass_switch_instance { , pass_switch_instance } ;
+// | pulldown [pulldown_strength] pull_gate_instance { , pull_gate_instance } ;
+// | pullup [pullup_strength] pull_gate_instance { , pull_gate_instance } ;
+#[derive(Clone, Copy)]
+pub enum GateInstantiation {
+    // @Incomplete
+    // Cmos(CmosGateInstantiation),
+    // Enable(EnableGateInstantiation),
+    // Mos(MosGateInstantiation),
+    NInput(AstId<NInputGateInstantiation>),
+    // NOutput(NOutputGateInstantiation),
+    // PassEn(PassEnGateInstantiation),
+    // PassSwitch(PassSwitchGateInstantiation),
+    // Pulldown(PulldownGateInstantiation),
+    // Pullup(PullupGateInstantiation),
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 493
+// n_input_gatetype [drive_strength] [delay2] n_input_gate_instance { , n_input_gate_instance }
+#[derive(Clone, Copy)]
+pub struct NInputGateInstantiation {
+    pub gatetype: AstItem<NInputGateType>,
+    pub instances: AstIdRange<NInputGateInstance>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 494
+// n_input_gate_instance ::= [ name_of_gate_instance ] ( output_terminal , input_terminal { , input_terminal } )
+#[derive(Clone, Copy)]
+pub struct NInputGateInstance {
+    pub name: AstId<NameOfGateInstance>,
+    pub output_terminal: AstId<NetLValue>,
+    pub input_terminals: AstIdRange<Expr>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 494
+// name_of_gate_instance ::= gate_instance_identifier [ range ]
+#[derive(Clone, Copy)]
+pub struct NameOfGateInstance {
+    pub identifier: AstItem<Identifier>,
+    // @Incomplete
+    // range:
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 494
+// n_input_gatetype ::= and | nand | or | nor | xor | xnor
+#[derive(Clone, Copy)]
+pub enum NInputGateType {
+    And,
+    Nand,
+    Or,
+    Nor,
+    Xor,
+    Xnor,
+}
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 495
 // module_instantiation ::=
@@ -192,7 +254,7 @@ pub struct ModuleInstance {
 // | named_port_connection { , named_port_connection }
 #[derive(Clone, Copy)]
 pub enum ListOfPortConnections {
-    Ordered(u64),
+    Ordered(AstIdRange<Expr>),
     Named,
 }
 
@@ -217,6 +279,58 @@ pub enum ModuleItem {
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
+// module_or_generate_item_declaration ::=
+//   net_declaration
+// | reg_declaration
+// | integer_declaration
+// | real_declaration
+// | time_declaration
+// | realtime_declaration
+// | event_declaration
+// | genvar_declaration
+// | task_declaration
+// | function_declaration
+#[derive(Clone, Copy)]
+pub enum ModuleOrGenerateItemDeclaration {
+    // @Incomplete
+    Net(AstId<NetDeclaration>),
+    Reg(AstId<RegDeclaration>),
+    // Integer(AstId<IntegerDeclaration>),
+    // Real(AstId<RealDeclaration>),
+    // Time(AstId<TimeDeclaration>),
+    // Realtime(AstId<RealtimeDeclaration>),
+    // Event(AstId<EventDeclaration>),
+    // Genvar(AstId<GenvarDeclaration>),
+    // Task(AstId<TaskDeclaration>),
+    // Function(AstId<FunctionDeclaration>),
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 490
+// net_declaration ::=
+//   net_type [ signed ] [ delay3 ] list_of_net_identifiers ;
+// | net_type [ drive_strength ] [ signed ] [ delay3 ] list_of_net_decl_assignments ;
+// | net_type [ vectored | scalared ] [ signed ] range [ delay3 ] list_of_net_identifiers ;
+// | net_type [ drive_strength ] [ vectored | scalared ] [ signed ] range [ delay3 ] list_of_net_decl_assignments ;
+// | trireg [ charge_strength ] [ signed ] [ delay3 ] list_of_net_identifiers ;
+// | trireg [ drive_strength ] [ signed ] [ delay3 ] list_of_net_decl_assignments ;
+// | trireg [ charge_strength ] [ vectored | scalared ] [ signed ] range [ delay3 ] list_of_net_identifiers ;
+// | trireg [ drive_strength ] [ vectored | scalared ] [ signed ] range [ delay3 ] list_of_net_decl_assignments ;
+#[derive(Clone, Copy)]
+pub struct NetDeclaration {
+    // @Incomplete
+    pub net_type: AstItem<NetType>,
+    pub identifiers: AstIdRange<Identifier>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 490
+// reg_declaration ::= reg [ signed ] [ range ] list_of_variable_identifiers ;
+#[derive(Clone, Copy)]
+pub struct RegDeclaration {
+    // @Incomplete
+    pub identifiers: AstIdRange<Identifier>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
 // non_port_module_item ::=
 // module_or_generate_item
 // | generate_region
@@ -228,7 +342,25 @@ pub enum NonPortModuleItem {
     ModuleOrGenerateItem(AstId<ModuleOrGenerateItem>),
     GenerateRegion,
     SpecifyBlock,
-    ParameterDeclaration,
+    ParameterDeclaration(AstId<ParameterDeclaration>),
     SpecParamDeclaration,
 }
 
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 489
+// parameter_declaration ::=
+//   parameter [ signed ] [ range ] list_of_param_assignments
+// | parameter parameter_type list_of_param_assignments
+#[derive(Clone, Copy)]
+pub struct ParameterDeclaration {
+    // @Incomplete
+    // typing: AstItem<ParameterDeclarationTyping>,
+    pub assignments: AstIdRange<ParamAssignment>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 491
+// param_assignment ::= parameter_identifier = constant_mintypmax_expression
+#[derive(Clone, Copy)]
+pub struct ParamAssignment {
+    pub param: AstItem<Identifier>,
+    pub constant: AstId<ConstantMinTypMaxExpression>,
+}

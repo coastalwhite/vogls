@@ -1,6 +1,7 @@
 use crate::arena::{ArenaId, ArenaIdRange};
 
 pub mod expr;
+pub mod constant_expr;
 pub mod module;
 pub mod statement;
 
