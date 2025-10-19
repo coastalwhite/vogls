@@ -9,10 +9,10 @@ use crate::lexer::{FromLexerError, Lexer, Token, TokenContent, TokenKind};
 use crate::number::{Decimal, SizedNumber};
 use crate::span::Span;
 
+mod constant_expr;
 mod expr;
 mod module;
 mod statement;
-mod constant_expr;
 // mod net;
 
 pub struct Parser<'a> {
@@ -31,7 +31,7 @@ pub struct AstArenas {
     pub sized_numbers: Vec<SizedNumber>,
 }
 impl AstArenas {
-    fn add<T: Copy>(&mut self, item: T, span: Span) -> AstId<T> {
+    fn add<T: Copy + 'static>(&mut self, item: T, span: Span) -> AstId<T> {
         let loc = self.spans.len();
         self.spans.push(span);
         AstId {
@@ -40,11 +40,11 @@ impl AstArenas {
         }
     }
 
-    fn add_tuple<T: Copy>(&mut self, (item, span): (T, Span)) -> AstId<T> {
+    fn add_tuple<T: Copy + 'static>(&mut self, (item, span): (T, Span)) -> AstId<T> {
         self.add(item, span)
     }
 
-    fn add_range<T: Copy>(
+    fn add_range<T: Copy + 'static>(
         &mut self,
         items: impl IntoIterator<Item = T>,
         spans: impl IntoIterator<Item = Span>,
@@ -61,7 +61,7 @@ impl AstArenas {
         self.spans[id.loc]
     }
 
-    pub fn get<T: Copy>(&self, id: AstId<T>) -> &T {
+    pub fn get<T: Copy + 'static>(&self, id: AstId<T>) -> &T {
         self.nodes.get(id.node)
     }
 
@@ -136,7 +136,7 @@ impl<'a> Parser<'a> {
     }
 }
 
-pub trait Consumable<'a>: Sized + Copy {
+pub trait Consumable<'a>: Sized + Copy + 'static {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError>;
 
     fn try_consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Option<(Self, Span)> {
@@ -422,6 +422,37 @@ pub trait ItemParsable<'a>: Consumable<'a> {
         Ok((arenas.add_range(items, spans), end_token))
     }
 
+    fn parse_one_or_more_delimited_until_fail(
+        p: &mut Parser<'a>,
+        arenas: &mut AstArenas,
+        delimiter: TokenKind,
+    ) -> Result<AstIdRange<Self>, ParseError> {
+        let (item, span) = Self::consume(p, arenas)?;
+
+        // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
+        // here.
+        let mut items = Vec::new();
+        let mut spans = Vec::new();
+        items.push(item);
+        spans.push(span);
+
+        loop {
+            let save = p.lexer().save();
+            if p.lexer.next_if_equals(delimiter).is_none() {
+                break;
+            }
+
+            let Some((item, span)) = Self::try_consume(p, arenas) else {
+                p.lexer().restore(save);
+                break;
+            };
+            items.push(item);
+            spans.push(span);
+        }
+
+        Ok(arenas.add_range(items, spans))
+    }
+
     fn parse_one_or_more_delimited(
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
@@ -437,15 +468,11 @@ pub trait ItemParsable<'a>: Consumable<'a> {
         spans.push(span);
 
         loop {
-            dbg!(p.lexer.inspect_content());
             if p.lexer.next_if_equals(delimiter).is_none() {
-                dbg!(p.lexer.inspect_content());
                 break;
             }
-            dbg!(p.lexer.inspect_content());
 
             let (item, span) = Self::consume(p, arenas)?;
-            dbg!(p.lexer.inspect_content());
             items.push(item);
             spans.push(span);
         }

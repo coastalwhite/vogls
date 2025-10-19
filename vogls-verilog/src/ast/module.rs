@@ -157,7 +157,7 @@ pub enum ModuleOrGenerateItem {
     ModuleOrGenerateItemDeclaration(AstId<ModuleOrGenerateItemDeclaration>),
     LocalParameterDeclaration,
     ParameterOverride,
-    ContinuousAssign,
+    ContinuousAssign(AstId<ContinousAssign>),
     GateInstantiation(AstId<GateInstantiation>),
     UdpInstantiation,
     ModuleInstantiation(AstId<ModuleInstantiation>),
@@ -228,6 +228,22 @@ pub enum NInputGateType {
     Nor,
     Xor,
     Xnor,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
+// continuous_assign ::= assign [ drive_strength ] [ delay3 ] list_of_net_assignments ;
+// list_of_net_assignments ::= net_assignment { , net_assignment }
+#[derive(Clone, Copy)]
+pub struct ContinousAssign {
+    pub list_of_net_assignments: AstIdRange<NetAssignment>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
+// net_assignment ::= net_lvalue = expression
+#[derive(Clone, Copy)]
+pub struct NetAssignment {
+    pub net_lvalue: AstId<NetLValue>,
+    pub expression: AstId<Expr>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 495

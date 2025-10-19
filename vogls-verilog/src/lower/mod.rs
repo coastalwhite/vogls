@@ -10,9 +10,12 @@ use vogls_ir::{
 };
 
 use crate::ast::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression, ConstantPrimary};
-use crate::ast::expr::Expr;
+use crate::ast::expr::{Expr, UnaryOperator};
 use crate::ast::module::{
-    GateInstantiation, ListOfPortConnections, Module, ModuleInstance, ModuleInstantiation, ModuleItem, ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration, ModulePorts, NInputGateInstance, NInputGateType, NonPortModuleItem, ParamAssignment, ParameterDeclaration, Port, PortDeclaration
+    GateInstantiation, ListOfPortConnections, Module, ModuleInstance, ModuleInstantiation,
+    ModuleItem, ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration, ModulePorts,
+    NInputGateInstance, NInputGateType, NonPortModuleItem, ParamAssignment, ParameterDeclaration,
+    Port, PortDeclaration,
 };
 use crate::ast::statement::{
     DelayControl, DelayValue, EventControl, EventExpression, ProceduralTimingControl, Statement,
@@ -52,7 +55,6 @@ pub fn lower_module_to_ir(
         module_items,
     } = arenas.get(root);
 
-
     let module_identifier = arenas.get_ident(module_identifier.item.0);
     let mut module_builder = ModuleBuilder::new(module_identifier.to_string(), gl);
     let mut scope = Scope::<&str, ScopeItem>::new();
@@ -82,6 +84,11 @@ pub fn lower_module_to_ir(
                     );
 
                     module_builder.entity.signal(gl, key);
+                    match port_declaration {
+                        PortDeclaration::Inout(_) => todo!(),
+                        PortDeclaration::Input(_) => module_builder.entity.push_in_port(gl, key),
+                        PortDeclaration::Output(_) => module_builder.entity.push_out_port(gl, key),
+                    }
                 }
             }
         }
@@ -175,7 +182,36 @@ pub fn lower_module_to_ir(
                     }
                     ModuleOrGenerateItem::LocalParameterDeclaration => todo!(),
                     ModuleOrGenerateItem::ParameterOverride => todo!(),
-                    ModuleOrGenerateItem::ContinuousAssign => todo!(),
+                    ModuleOrGenerateItem::ContinuousAssign(assign) => {
+                        let assign = arenas.get(*assign);
+                        for net_assignment in assign.list_of_net_assignments {
+                            let net_assignment = arenas.get(net_assignment);
+
+                            let (section_key, mut bb_builder) =
+                                module_builder.process(gl, "assign".into());
+                            let bb_key = bb_builder.key();
+                            let variable = lower_expr(
+                                &mut bb_builder,
+                                gl,
+                                &mut scope,
+                                arenas.get(net_assignment.expression),
+                                arenas,
+                            );
+
+                            let lvalue = arenas.get(net_assignment.net_lvalue);
+                            let lvalue = lvalue.ident.item;
+
+                            let ident = arenas.get_ident(lvalue.0);
+
+                            let ScopeItem::Signal(scope_item) = scope.get(&ident).unwrap() else {
+                                panic!("not a signal");
+                            };
+                            bb_builder.drive(gl, scope_item.key, variable); // @TODO: Resolve ident
+
+                            bb_builder.watch_for_ins_to(gl, bb_key);
+                            processes.push(section_key);
+                        }
+                    }
                     ModuleOrGenerateItem::GateInstantiation(id) => {
                         let gate_instantiation = arenas.get(*id);
                         match gate_instantiation {
@@ -211,7 +247,7 @@ pub fn lower_module_to_ir(
                                             for input in input_terminals.iter().skip(1) {
                                                 let input = lower_expr(
                                                     &mut bb_builder,
-                                        gl,
+                                                    gl,
                                                     &mut scope,
                                                     arenas.get(input),
                                                     arenas,
@@ -223,7 +259,7 @@ pub fn lower_module_to_ir(
                                             for input in input_terminals.iter().skip(1) {
                                                 let input = lower_expr(
                                                     &mut bb_builder,
-                                        gl,
+                                                    gl,
                                                     &mut scope,
                                                     arenas.get(input),
                                                     arenas,
@@ -235,7 +271,7 @@ pub fn lower_module_to_ir(
                                             for input in input_terminals.iter().skip(1) {
                                                 let input = lower_expr(
                                                     &mut bb_builder,
-                                        gl,
+                                                    gl,
                                                     &mut scope,
                                                     arenas.get(input),
                                                     arenas,
@@ -251,7 +287,7 @@ pub fn lower_module_to_ir(
                                             | NInputGateType::Nor
                                             | NInputGateType::Xnor
                                     ) {
-                                        value = bb_builder.neg(gl, value);
+                                        value = bb_builder.binary_neg(gl, value);
                                     }
 
                                     let ScopeItem::Signal(scope_item) = scope.get(&ident).unwrap()
@@ -275,7 +311,7 @@ pub fn lower_module_to_ir(
                         let entity = instantiated_modules.get(instantiation_ident).unwrap();
                         let entity = gl.modules.get(*entity).unwrap();
 
-                        let section_key = entity
+                        let section_key = *entity
                             .sections
                             .iter()
                             .find(|k| {
@@ -289,12 +325,15 @@ pub fn lower_module_to_ir(
                                 list_of_port_connections,
                             } = arenas.get(instance);
 
-                            match arenas.get(*list_of_port_connections) {
-                                ListOfPortConnections::Ordered(ids) => {
-                                },
+                            let ports: Vec<SignalKey> = match arenas.get(*list_of_port_connections)
+                            {
+                                ListOfPortConnections::Ordered(ports) => ports
+                                    .iter()
+                                    .map(|p| lower_to_signal(gl, arenas.get(p), &mut scope, arenas))
+                                    .collect(),
                                 ListOfPortConnections::Named => todo!(),
-                            }
-                            // module_builder.entity.
+                            };
+                            module_builder.entity.instantiate(gl, section_key, ports);
                         }
                     }
                     ModuleOrGenerateItem::InitialConstruct(id) => {
@@ -354,27 +393,14 @@ pub fn lower_module_to_ir(
     }
 
     for process in processes {
-        let ins = gl
-            .sections
-            .get(process)
-            .unwrap()
-            .ins
-            .iter()
-            .copied()
-            .collect::<Vec<_>>();
-        let outs = gl
-            .sections
-            .get(process)
-            .unwrap()
-            .outs
-            .iter()
-            .copied()
-            .collect::<Vec<_>>();
-        module_builder.entity.instantiate(gl, process, ins, outs);
+        let section = gl.sections.get(process).unwrap();
+        let mut ports = Vec::with_capacity(section.ins.len() + section.outs.len());
+        ports.extend(section.ins.iter().copied());
+        ports.extend(section.outs.iter().copied());
+        module_builder.entity.instantiate(gl, process, ports);
     }
-    module_builder.entity.halt(gl);
 
-    let module = module_builder.finish();
+    let module = module_builder.finish(gl);
     gl.modules.insert(module)
 }
 
@@ -559,12 +585,12 @@ fn statements_to_process<'a>(
                             let cond = match condition {
                                 C::Posedge => {
                                     let after = builder.probe(gl, signal);
-                                    let t = builder.neg(gl, before);
+                                    let t = builder.binary_neg(gl, before);
                                     builder.and(gl, t, after)
                                 }
                                 C::Negedge => {
                                     let after = builder.probe(gl, signal);
-                                    let t = builder.neg(gl, after);
+                                    let t = builder.binary_neg(gl, after);
                                     builder.and(gl, before, t)
                                 }
                                 C::None => builder.constant(gl, Value::Bit(true)),
@@ -578,19 +604,23 @@ fn statements_to_process<'a>(
 
                 if let Some(stmt) = statement {
                     let stmt = arenas.get(*stmt);
-                    builder =
-                        statements_to_process(builder, gl, scope, std::slice::from_ref(stmt), arenas);
+                    builder = statements_to_process(
+                        builder,
+                        gl,
+                        scope,
+                        std::slice::from_ref(stmt),
+                        arenas,
+                    );
                 }
             }
             Statement::SeqBlock(id) => {
                 let seq_block = arenas.get(*id);
-                builder = statements_to_process(
-                    builder,
-                    gl, 
-                    scope,
-                    arenas.nodes.get_slice(seq_block.statements.node),
-                    arenas,
-                );
+                let statements = seq_block
+                    .statements
+                    .iter()
+                    .map(|v| arenas.get(v).clone())
+                    .collect::<Vec<_>>();
+                builder = statements_to_process(builder, gl, scope, &statements, arenas);
             }
             Statement::SystemTaskEnable(id) => {
                 let system_task_enable = arenas.get(*id);
@@ -608,10 +638,27 @@ fn statements_to_process<'a>(
                         let str_literal = &arenas.idents[str_literal.0.start..str_literal.0.end];
 
                         builder.intrinsic(
-                            gl, 
+                            gl,
                             IntrinsicOp::Display,
                             vec![IntrinsicArg::StringLiteral(str_literal.to_string())],
                         );
+                    }
+                    "vogls_assert_eq" => {
+                        let expressions = system_task_enable.expressions;
+                        assert_eq!(expressions.len(), 2); // @Improve: Error message
+
+                        let lhs = expressions.get(0);
+                        let rhs = expressions.get(1);
+
+                        let lhs = arenas.get(lhs);
+                        let rhs = arenas.get(rhs);
+
+                        let lhs = lower_expr(&mut builder, gl, scope, lhs, arenas);
+                        let rhs = lower_expr(&mut builder, gl, scope, rhs, arenas);
+
+                        let eq = builder.equals(gl, lhs, rhs);
+
+                        builder.intrinsic(gl, IntrinsicOp::Assert, vec![IntrinsicArg::Variable(eq)])
                     }
                     "finish" => builder.intrinsic(gl, IntrinsicOp::Finish, vec![]),
 
@@ -627,6 +674,22 @@ fn statements_to_process<'a>(
     builder
 }
 
+fn lower_to_signal<'a>(
+    gl: &mut GlobalContext,
+    expr: &Expr,
+    scope: &mut Scope<&'a str, ScopeItem>,
+    arenas: &'a AstArenas,
+) -> SignalKey {
+    let Expr::Ident(ident) = expr else { todo!() };
+
+    let ident = arenas.get_ident(ident.item.0);
+    match scope.get(&ident).unwrap() {
+        ScopeItem::Signal(i) => i.key,
+        ScopeItem::LocalVariable => todo!(),
+        ScopeItem::Constant(_) => todo!(),
+    }
+}
+
 fn lower_expr<'a>(
     builder: &mut BasicBlockBuilder,
     gl: &mut GlobalContext,
@@ -636,7 +699,22 @@ fn lower_expr<'a>(
 ) -> VariableKey {
     match expr {
         Expr::BitPartSelect(bit_part_select) => todo!(),
-        Expr::Unary(unary_operator, ast_id) => todo!(),
+        Expr::Unary(op, child) => {
+            let child = lower_expr(builder, gl, scope, arenas.get(*child), arenas);
+            use UnaryOperator as O;
+            match op {
+                O::LogicalNegation => builder.logical_neg(gl, child),
+                O::BitwiseNegation => builder.binary_neg(gl, child),
+                O::ReductionAnd => todo!(),
+                O::ReductionOr => todo!(),
+                O::ReductionNand => todo!(),
+                O::ReductionNor => todo!(),
+                O::ReductionXor => todo!(),
+                O::ReductionXnor => todo!(),
+                O::SignPlus => todo!(),
+                O::SignMinus => todo!(),
+            }
+        }
         Expr::Binary(binary_operator, ast_id, ast_id1) => todo!(),
         Expr::Concatenation(ast_id_range) => todo!(),
         Expr::Replication(replication) => todo!(),

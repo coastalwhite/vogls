@@ -64,10 +64,12 @@ impl ModuleBuilder {
         }
     }
 
-    pub fn finish(self) -> Module {
+    pub fn finish(self, gl: &mut GlobalContext) -> Module {
+        self.entity.halt(gl);
         Module {
             name: self.name,
             sections: self.sections,
+            io: Default::default(),
         }
     }
 
@@ -147,8 +149,12 @@ impl BasicBlockBuilder {
         variable
     }
 
-    pub fn neg(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
-        self.unary_op(gl, UnaryOp::Neg, src)
+    pub fn binary_neg(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
+        self.unary_op(gl, UnaryOp::BinaryNeg, src)
+    }
+
+    pub fn logical_neg(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
+        self.unary_op(gl, UnaryOp::LogicalNeg, src)
     }
 
     pub fn bin_op(
@@ -189,11 +195,47 @@ impl BasicBlockBuilder {
     ) -> VariableKey {
         self.bin_op(gl, BinaryOp::Xor, lhs, rhs)
     }
+    pub fn xnor(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+    ) -> VariableKey {
+        let xor = self.xor(gl, lhs, rhs);
+        let xnor = self.binary_neg(gl, xor);
+        xnor
+    }
+    pub fn equals(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+    ) -> VariableKey {
+        let xor = self.xor(gl, lhs, rhs);
+        let xnor = self.logical_neg(gl, xor);
+        xnor
+    }
+
+    pub fn push_in_port(&mut self, gl: &mut GlobalContext, signal: SignalKey) {
+        assert_eq!(self.section_variant, SectionVariant::Entity);
+        gl.sections
+            .get_mut(self.section)
+            .unwrap()
+            .ins
+            .insert(signal);
+    }
+    pub fn push_out_port(&mut self, gl: &mut GlobalContext, signal: SignalKey) {
+        assert_eq!(self.section_variant, SectionVariant::Entity);
+        gl.sections
+            .get_mut(self.section)
+            .unwrap()
+            .outs
+            .insert(signal);
+    }
 
     pub fn drive(&mut self, gl: &mut GlobalContext, signal: SignalKey, variable: VariableKey) {
         if self.section_variant == SectionVariant::Process {
-            gl
-                .sections
+            gl.sections
                 .get_mut(self.section)
                 .unwrap()
                 .outs
@@ -204,8 +246,7 @@ impl BasicBlockBuilder {
     }
     pub fn probe(&mut self, gl: &mut GlobalContext, signal: SignalKey) -> VariableKey {
         if self.section_variant == SectionVariant::Process {
-            gl
-                .sections
+            gl.sections
                 .get_mut(self.section)
                 .unwrap()
                 .ins
@@ -351,18 +392,16 @@ impl BasicBlockBuilder {
         &mut self,
         gl: &mut GlobalContext,
         process: SectionKey,
-        ins: Vec<SignalKey>,
-        outs: Vec<SignalKey>,
+        ports: Vec<SignalKey>,
     ) {
         assert_eq!(self.section_variant, SectionVariant::Entity);
         let section = gl.sections.get(process).unwrap();
         assert_ne!(section.variant, SectionVariant::Function);
-        assert_eq!(section.ins.len(), ins.len());
-        assert_eq!(section.outs.len(), outs.len());
+        assert_eq!(section.ins.len() + section.outs.len(), ports.len());
 
-        self.instrs
-            .push(Instruction::Instantiate(process, ins, outs));
+        self.instrs.push(Instruction::Instantiate(process, ports));
     }
+
     pub fn signal(&mut self, gl: &mut GlobalContext, signal: SignalKey) {
         assert_eq!(self.section_variant, SectionVariant::Entity);
         self.instrs.push(Instruction::Signal(signal));

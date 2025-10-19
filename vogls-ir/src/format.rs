@@ -166,7 +166,8 @@ impl BinaryOp {
 impl UnaryOp {
     pub const fn into_mnemonic(&self) -> &'static str {
         match self {
-            Self::Neg => "neg",
+            Self::BinaryNeg => "bneg",
+            Self::LogicalNeg => "lneg",
         }
     }
 }
@@ -176,6 +177,7 @@ impl IntrinsicOp {
         match self {
             Self::Display => "display",
             Self::Finish => "finish",
+            Self::Assert => "assert",
         }
     }
 }
@@ -228,19 +230,12 @@ impl ContextFormat for Instruction {
                 ctx.gl.vars.get(*var).unwrap().typed_ctx_fmt(f, ctx)?;
             }
 
-            Self::Instantiate(process, ins, outs) => {
+            Self::Instantiate(process, ports) => {
                 let section = ctx.gl.sections.get(*process).unwrap();
                 write!(f, "instantiate @{} (", section.name)?;
-                if let Some(sig) = ins.first() {
+                if let Some(sig) = ports.first() {
                     write!(f, "{}", ctx.gl.signals.get(*sig).unwrap().name)?;
                     for sig in section.ins.iter().skip(1) {
-                        write!(f, ", {}", ctx.gl.signals.get(*sig).unwrap().name)?;
-                    }
-                }
-                write!(f, ") -> (")?;
-                if let Some(sig) = outs.first() {
-                    write!(f, "{}", ctx.gl.signals.get(*sig).unwrap().name)?;
-                    for sig in section.outs.iter().skip(1) {
                         write!(f, ", {}", ctx.gl.signals.get(*sig).unwrap().name)?;
                     }
                 }

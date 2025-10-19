@@ -76,7 +76,6 @@ impl<'a> Consumable<'a> for ConstantPrimary {
             }
             _ => {
                 let token = peeked.commit();
-                dbg!(token.content());
                 Err(ParseError::incomplete(
                     Some(token.span()),
                     "constant_primary",

@@ -159,6 +159,19 @@ impl<'a> Lexer<'a> {
         self.inner.path.as_deref()
     }
 
+    pub fn inspect_unpeeked_content(&self) -> &str {
+        match &self.peeked {
+            Some(t) => {
+                &self.inner.content[t.span().start()
+                    ..t.span()
+                        .start()
+                        .saturating_add(10)
+                        .min(self.inner.content.len())]
+            }
+            None => self.inspect_content(),
+        }
+    }
+
     pub fn inspect_content(&self) -> &str {
         &self.inner.content[self.inner.offset
             ..self

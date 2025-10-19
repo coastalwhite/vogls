@@ -70,9 +70,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Err(v) => v - 1,
                     };
 
-                // dbg!(&lines[..10]);
-                // dbg!(&location);
-
                 const CTX_LINES: usize = 2;
                 let ctx_start_line = start_line.saturating_sub(CTX_LINES);
                 let ctx_end_line = end_line.saturating_add(1 + CTX_LINES).min(lines.len());
@@ -228,16 +225,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             todo!("evaluation with vogls-sim");
         }
 
-        io_signals.clear();
         for instr in &bb.instrs {
             match instr {
                 Instruction::Signal(signal_key) => {
-                    io_signals.insert(*signal_key, next_vm_signal_key);
-                    signals.insert(next_vm_signal_key, Value::Bit(false));
-                    next_vm_signal_key.0 += 1;
+                    io_signals.entry(*signal_key).or_insert_with(|| {
+                        let key = next_vm_signal_key;
+                        signals.insert(next_vm_signal_key, Value::Bit(false));
+                        next_vm_signal_key.0 += 1;
+                        key
+                    });
                 }
-                Instruction::Instantiate(section_key) => {
+                Instruction::Instantiate(section_key, ports) => {
                     let section = gl.sections.get(*section_key).unwrap();
+
+                    assert_eq!(section.ins.len() + section.outs.len(), ports.len());
+
+                    for (entity_port, inst_port) in (section.ins.iter().chain(section.outs.iter())).zip(ports) {
+                        io_signals.insert(*entity_port, io_signals.get(inst_port).unwrap().clone());
+                    }
 
                     match section.variant {
                         SectionVariant::Entity => entity_stack.push(*section_key),
@@ -245,10 +250,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         SectionVariant::Process => {
                             let vm_process = lower_process_to_vm(*section_key, &gl, &io_signals);
 
-                            println!("{}", &vm_process);
+                            print!("{}", &vm_process);
 
                             let stack = vec![0u8; vm_process.stack_size];
                             let vm_process_key = processes.insert(vm_process);
+
+                            println!(": {vm_process_key:?}");
 
                             schedule.push(ScheduledEvent {
                                 at: 0,
@@ -265,6 +272,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+
+    dbg!(&schedule);
 
     vogls_sim::run(
         &mut ctx,

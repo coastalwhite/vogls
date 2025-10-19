@@ -30,6 +30,7 @@ impl Value {
 #[derive(Debug, Clone, Copy)]
 pub struct Time(pub u64);
 
+#[derive(Debug)]
 pub enum BasicBlockTerminator {
     Wait(BasicBlockKey, Time),
     Watch(BasicBlockKey, Vec<SignalKey>),
@@ -38,6 +39,7 @@ pub enum BasicBlockTerminator {
     Halt,
 }
 
+#[derive(Debug)]
 pub struct BasicBlock {
     pub name: String,
     pub instrs: Vec<Instruction>,
@@ -84,6 +86,7 @@ pub enum Type {
     Bit,
 }
 
+#[derive(Debug)]
 pub enum IntrinsicArg {
     StringLiteral(String),
     Variable(VariableKey),
@@ -93,11 +96,13 @@ pub enum IntrinsicArg {
 pub enum IntrinsicOp {
     Display,
     Finish,
+    Assert,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub enum UnaryOp {
-    Neg,
+    BinaryNeg,
+    LogicalNeg,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -107,6 +112,7 @@ pub enum BinaryOp {
     Xor,
 }
 
+#[derive(Debug)]
 pub enum Instruction {
     Constant(VariableKey, Value),
     Unary(VariableKey, UnaryOp, VariableKey),
@@ -115,7 +121,7 @@ pub enum Instruction {
     Probe(VariableKey, SignalKey),
     Drive(SignalKey, VariableKey),
 
-    Instantiate(SectionKey, Vec<SignalKey>, Vec<SignalKey>),
+    Instantiate(SectionKey, Vec<SignalKey>),
     Signal(SignalKey),
 }
 impl Instruction {
@@ -125,7 +131,7 @@ impl Instruction {
             | Self::Unary(dst, _, _)
             | Self::Binary(dst, _, _, _)
             | Self::Probe(dst, _) => Some(*dst),
-            Self::Intrinsic(_, _) | Self::Drive(_, _) | Self::Instantiate(_, _, _) | Self::Signal(_) => {
+            Self::Intrinsic(_, _) | Self::Drive(_, _) | Self::Instantiate(_, _) | Self::Signal(_) => {
                 None
             }
         }

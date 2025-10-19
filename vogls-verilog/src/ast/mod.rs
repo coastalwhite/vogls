@@ -1,7 +1,9 @@
-use crate::arena::{ArenaId, ArenaIdRange};
+use std::ops::Index;
 
-pub mod expr;
+use crate::arena::{ArenaId, ArenaIdRange, ArenaIdRangeIter};
+
 pub mod constant_expr;
+pub mod expr;
 pub mod module;
 pub mod statement;
 
@@ -56,11 +58,11 @@ impl<T> AstIdRange<T> {
         })
     }
 
-    pub fn iter(self) -> impl ExactSizeIterator + DoubleEndedIterator<Item = AstId<T>> {
-        self.node.iter().enumerate().map(move |(i, node)| AstId {
-            node,
-            loc: self.loc + i,
-        })
+    pub fn iter(self) -> AstIdRangeIter<T> {
+        AstIdRangeIter {
+            inner: self.node.iter(),
+            loc: self.loc,
+        }
     }
 
     pub fn len(self) -> usize {
@@ -75,12 +77,52 @@ impl<T> AstIdRange<T> {
     }
 }
 
+pub struct AstIdRangeIter<T> {
+    inner: ArenaIdRangeIter<T>,
+    loc: usize,
+}
+
+impl<T> Iterator for AstIdRangeIter<T> {
+    type Item = AstId<T>;
+    fn next(&mut self) -> Option<Self::Item> {
+        let node = self.inner.next()?;
+        let id = AstId {
+            node,
+            loc: self.loc,
+        };
+        self.loc += 1;
+        Some(id)
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+impl<T> DoubleEndedIterator for AstIdRangeIter<T> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        let node = self.inner.next_back()?;
+        let id = AstId {
+            node,
+            loc: self.loc + self.inner.len(),
+        };
+        Some(id)
+    }
+}
+impl<T> ExactSizeIterator for AstIdRangeIter<T> {}
+impl<T> IntoIterator for AstIdRange<T> {
+    type Item = AstId<T>;
+    type IntoIter = AstIdRangeIter<T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct AstItem<T: Copy> {
     pub item: T,
     pub loc: usize,
 }
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct TextRef {
     pub start: usize,
     pub end: usize,

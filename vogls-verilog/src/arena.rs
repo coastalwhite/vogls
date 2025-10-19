@@ -69,12 +69,43 @@ impl<T> ArenaIdRange<T> {
     pub fn is_empty(self) -> bool {
         self.len() == 0
     }
-    pub fn iter(self) -> impl ExactSizeIterator + DoubleEndedIterator<Item = ArenaId<T>> {
-        let start = self.start;
-        (0..self.length).map(move |i| ArenaId {
-            ptr: start + i * Self::num_cells(),
-            _pd: PhantomData::default(),
-        })
+    pub fn iter(self) -> ArenaIdRangeIter<T> {
+        ArenaIdRangeIter { inner: self }
+    }
+}
+
+pub struct ArenaIdRangeIter<T> {
+    inner: ArenaIdRange<T>,
+}
+
+impl<T> Iterator for ArenaIdRangeIter<T> {
+    type Item = ArenaId<T>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let value = self.inner.first()?;
+        self.inner.start += size_of::<T>().div_ceil(size_of::<u64>());
+        self.inner.length -= 1;
+        Some(value)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.inner.len(), Some(self.inner.len()))
+    }
+}
+impl<T> DoubleEndedIterator for ArenaIdRangeIter<T> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        let value = self.inner.last()?;
+        self.inner.length -= 1;
+        Some(value)
+    }
+}
+impl<T> ExactSizeIterator for ArenaIdRangeIter<T> {}
+impl<T> IntoIterator for ArenaIdRange<T> {
+    type Item = ArenaId<T>;
+    type IntoIter = ArenaIdRangeIter<T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
     }
 }
 

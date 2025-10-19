@@ -1,15 +1,15 @@
 use crate::ast::constant_expr::ConstantMinTypMaxExpression;
 use crate::ast::expr::Expr;
 use crate::ast::module::{
-    AlwaysConstruct, GateInstantiation, InitialConstruct, InoutDeclaration, InputDeclaration,
-    ListOfPortConnections, Module, ModuleInstance, ModuleInstantiation, ModuleItem,
-    ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration, ModulePorts, NInputGateInstance,
-    NInputGateInstantiation, NInputGateType, NameOfGateInstance, NetDeclaration, NetType,
-    NonPortModuleItem, OutputDeclaration, OutputNet, ParamAssignment, ParameterDeclaration, Port,
-    PortDeclaration, PortExpression, PortReference, RegDeclaration,
+    AlwaysConstruct, ContinousAssign, GateInstantiation, InitialConstruct, InoutDeclaration,
+    InputDeclaration, ListOfPortConnections, Module, ModuleInstance, ModuleInstantiation,
+    ModuleItem, ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration, ModulePorts,
+    NInputGateInstance, NInputGateInstantiation, NInputGateType, NameOfGateInstance, NetAssignment,
+    NetDeclaration, NetType, NonPortModuleItem, OutputDeclaration, ParamAssignment,
+    ParameterDeclaration, Port, PortDeclaration, PortExpression, PortReference, RegDeclaration,
 };
 use crate::ast::statement::{NetLValue, Statement};
-use crate::ast::{AstItem, Identifier};
+use crate::ast::{AstIdRange, Identifier};
 use crate::lexer::{FromLexerError, Token, TokenKind};
 use crate::parser::ItemParsable;
 use crate::span::Span;
@@ -240,7 +240,7 @@ impl<'a> Consumable<'a> for InoutDeclaration {
             end_span = signed_token.span();
         }
         // @Incomplete: [ range ]
-        let port_identifiers = Identifier::parse_one_or_more_delimited(p, arenas, TK::Comma)?;
+        let port_identifiers = Identifier::parse_one_or_more_delimited_until_fail(p, arenas, TK::Comma)?;
         if let Some(last) = port_identifiers.last() {
             end_span = *arenas.spans.get(last.loc).unwrap();
         }
@@ -278,8 +278,9 @@ impl<'a> Consumable<'a> for InputDeclaration {
         if let Some(signed_token) = signed_token {
             end_span = signed_token.span();
         }
+        dbg!(p.lexer().inspect_unpeeked_content());
         // @Incomplete: [ range ]
-        let port_identifiers = Identifier::parse_one_or_more_delimited(p, arenas, TK::Comma)?;
+        let port_identifiers = Identifier::parse_one_or_more_delimited_until_fail(p, arenas, TK::Comma)?;
         if let Some(last) = port_identifiers.last() {
             end_span = *arenas.spans.get(last.loc).unwrap();
         }
@@ -322,7 +323,7 @@ impl<'a> Consumable<'a> for OutputDeclaration {
         }
         // @Incomplete: reg | output_variable_type
         // @Incomplete: [ range ]
-        let identifiers = Identifier::parse_one_or_more_delimited(p, arenas, TK::Comma)?;
+        let identifiers = Identifier::parse_one_or_more_delimited_until_fail(p, arenas, TK::Comma)?;
         if let Some(last) = identifiers.last() {
             end_span = *arenas.spans.get(last.loc).unwrap();
         }
@@ -407,6 +408,11 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItem {
                 let (always_construct, span) = AlwaysConstruct::parse_with_span(p, arenas)?;
                 Ok((Self::AlwaysConstruct(always_construct), span))
             }
+            TK::KeywordAssign => {
+                peeked.release();
+                let (continous_assign, span) = ContinousAssign::parse_with_span(p, arenas)?;
+                Ok((Self::ContinuousAssign(continous_assign), span))
+            }
             TK::Ident => {
                 peeked.release();
                 let (module_instance, span) = ModuleInstantiation::parse_with_span(p, arenas)?;
@@ -443,7 +449,6 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItem {
             }
             _ => {
                 let token = peeked.commit();
-                dbg!(token.content());
                 Err(ParseError::incomplete(
                     Some(token.span()),
                     "module_or_generate_item",
@@ -453,6 +458,56 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItem {
     }
 }
 impl<'a> Parsable<'a> for ModuleOrGenerateItem {}
+
+impl<'a> Consumable<'a> for ContinousAssign {
+    fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
+        use TokenKind as TK;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
+        // continuous_assign ::= assign [ drive_strength ] [ delay3 ] list_of_net_assignments ;
+        // list_of_net_assignments ::= net_assignment { , net_assignment }
+
+        let assign_span = p.lexer().expect(TK::KeywordAssign)?.span();
+
+        let list_of_net_assignments =
+            NetAssignment::parse_one_or_more_delimited(p, arenas, TK::Comma)?;
+        let semicolon_span = p.lexer().expect(TK::Semicolon)?.span();
+
+        let span = assign_span | semicolon_span;
+        Ok((
+            Self {
+                list_of_net_assignments,
+            },
+            span,
+        ))
+    }
+}
+impl<'a> Parsable<'a> for ContinousAssign {}
+
+impl<'a> Consumable<'a> for NetAssignment {
+    fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
+        use TokenKind as TK;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
+        // continuous_assign ::= assign [ drive_strength ] [ delay3 ] list_of_net_assignments ;
+        // list_of_net_assignments ::= net_assignment { , net_assignment }
+
+        let (net_lvalue, net_lvalue_span) = NetLValue::parse_with_span(p, arenas)?;
+        p.lexer().expect(TK::Equals)?;
+        let (expression, expression_span) = Expr::parse_with_span(p, arenas)?;
+
+        let span = net_lvalue_span | expression_span;
+
+        Ok((
+            Self {
+                net_lvalue,
+                expression,
+            },
+            span,
+        ))
+    }
+}
+impl<'a> Parsable<'a> for NetAssignment {}
 
 impl<'a> Consumable<'a> for ModuleInstantiation {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
@@ -514,8 +569,8 @@ impl<'a> Consumable<'a> for ListOfPortConnections {
         // list_of_port_connections ::=
         //   ordered_port_connection { , ordered_port_connection }
         // | named_port_connection { , named_port_connection }
-        
-        let ordered = Expr::parse_one_or_more_delimited(p, arenas, TK::Comma)?;
+
+        let ordered = Expr::parse_zero_or_more_delimited(p, arenas, TK::Comma)?;
         let span = arenas.spans[ordered.loc];
 
         Ok((Self::Ordered(ordered), span))
@@ -588,7 +643,6 @@ impl<'a> Consumable<'a> for GateInstantiation {
             }
             _ => {
                 let token = peeked.commit();
-                dbg!(token.content());
                 Err(ParseError::incomplete(
                     Some(token.span()),
                     "gate_instantiation",
@@ -735,7 +789,6 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItemDeclaration {
             }
             _ => {
                 let token = peeked.commit();
-                dbg!(token.content());
                 Err(ParseError::incomplete(
                     Some(token.span()),
                     "module_or_generate_item_declaration",

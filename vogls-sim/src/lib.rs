@@ -24,7 +24,7 @@ impl Context {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Event {
     /// Which process is scheduled.
     pub process: VmProcessKey,
@@ -34,6 +34,7 @@ pub struct Event {
     pub ip: usize,
 }
 
+#[derive(Debug)]
 pub struct ScheduledEvent {
     pub at: Timestamp,
     pub event: Event,
@@ -92,7 +93,8 @@ impl Event {
 
                     use UnaryOp as O;
                     stack[dst.offset] = match op {
-                        O::Neg => !stack[src.offset],
+                        O::BinaryNeg => !stack[src.offset],
+                        O::LogicalNeg => u8::from(stack[src.offset] == 0),
                     };
                 }
                 I::Binary(dst, op, lhs, rhs) => {
@@ -119,6 +121,12 @@ impl Event {
                                 panic!("Invalid display argument");
                             };
                             eprintln!("[DISPLAY]: time = {}: {msg}", ctx.time);
+                        }
+                        O::Assert => {
+                            let Some(VmIntrinsicArg::Variable(condition)) = args.first() else {
+                                panic!("Invalid assert argument");
+                            };
+                            assert!(stack[condition.offset] != 0, "failed assertion");
                         }
                         O::Finish => {
                             eprintln!("[FINISH]");
