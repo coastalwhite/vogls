@@ -10,7 +10,7 @@ use vogls_ir::{
 };
 
 use crate::ast::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression, ConstantPrimary};
-use crate::ast::expr::{Expr, UnaryOperator};
+use crate::ast::expr::{BinaryOperator, Expr, UnaryOperator};
 use crate::ast::module::{
     GateInstantiation, ListOfPortConnections, Module, ModuleInstance, ModuleInstantiation,
     ModuleItem, ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration, ModulePorts,
@@ -715,7 +715,34 @@ fn lower_expr<'a>(
                 O::SignMinus => todo!(),
             }
         }
-        Expr::Binary(binary_operator, ast_id, ast_id1) => todo!(),
+        Expr::Binary(op, l, r) => {
+            let l = lower_expr(builder, gl, scope, arenas.get(*l), arenas);
+            let r = lower_expr(builder, gl, scope, arenas.get(*r), arenas);
+            use BinaryOperator as O;
+            match op {
+                O::Multiply => todo!(),
+                O::Divide => todo!(),
+                O::Modulus => todo!(),
+                O::BinaryPlus => todo!(),
+                O::BinaryMinus => todo!(),
+                O::ShiftLeft => todo!(),
+                O::ShiftRight => todo!(),
+                O::GreaterThan => todo!(),
+                O::GreaterThanEqual => todo!(),
+                O::LessThan => todo!(),
+                O::LessThanEqual => todo!(),
+                O::LogicalEquality => todo!(),
+                O::LogicalInequality => todo!(),
+                O::CaseEquality => todo!(),
+                O::CaseInequality => todo!(),
+                O::BitwiseAnd => builder.and(gl, l, r),
+                O::BitwiseXor => builder.xor(gl, l, r),
+                O::BitwiseXnor => builder.xnor(gl, l, r),
+                O::BitwiseOr => builder.or(gl, l, r),
+                O::LogicalAnd => todo!(),
+                O::LogicalOr => todo!(),
+            }
+        }
         Expr::Concatenation(ast_id_range) => todo!(),
         Expr::Replication(replication) => todo!(),
         Expr::Ternary(ast_id, ast_id1, ast_id2) => todo!(),
