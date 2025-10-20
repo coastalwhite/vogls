@@ -1,7 +1,7 @@
 mod builder;
 mod format;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 pub use builder::{BasicBlockBuilder, ModuleBuilder};
 pub use format::{ContextFormat, DisplayContext};
@@ -30,7 +30,7 @@ impl Value {
 #[derive(Debug, Clone, Copy)]
 pub struct Time(pub u64);
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum BasicBlockTerminator {
     Wait(BasicBlockKey, Time),
     Watch(BasicBlockKey, Vec<SignalKey>),
@@ -86,7 +86,7 @@ pub enum Type {
     Bit,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum IntrinsicArg {
     StringLiteral(String),
     Variable(VariableKey),
@@ -112,7 +112,7 @@ pub enum BinaryOp {
     Xor,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Instruction {
     Constant(VariableKey, Value),
     Unary(VariableKey, UnaryOp, VariableKey),

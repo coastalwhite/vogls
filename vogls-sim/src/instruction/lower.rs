@@ -18,8 +18,7 @@ fn get_stack_size(ty: &Type) -> usize {
 pub fn lower_process_to_vm(
     section_key: SectionKey,
     gl: &GlobalContext,
-    entity_idx: u64,
-    io_signals: &HashMap<(u64, SignalKey), VmSignalKey>,
+    io_signals: &mut HashMap<SignalKey, VmSignalKey>,
 ) -> VmProcess {
     let section = gl.sections.get(section_key).unwrap();
     assert_eq!(section.variant, SectionVariant::Process);
@@ -62,6 +61,13 @@ pub fn lower_process_to_vm(
 
     let mut instructions = Vec::new();
 
+    macro_rules! signal {
+        ($signal:expr) => {{
+            let next = io_signals.len();
+            *io_signals.entry($signal).or_insert(VmSignalKey(next as _))
+        }};
+    }
+
     // Lower the IR instructions to VM instructions.
     let var = |var: VariableKey| *stack_map.get(&var).unwrap();
     bb_stack.push(section.entry);
@@ -90,12 +96,8 @@ pub fn lower_process_to_vm(
 
                     VI::Intrinsic(*op, args)
                 }
-                I::Probe(dst, signal) => {
-                    VI::Probe(var(*dst), *io_signals.get(&(entity_idx, *signal)).unwrap())
-                }
-                I::Drive(signal, src) => {
-                    VI::Drive(*io_signals.get(&(entity_idx, *signal)).unwrap(), var(*src))
-                }
+                I::Probe(dst, signal) => VI::Probe(var(*dst), signal!(*signal)),
+                I::Drive(signal, src) => VI::Drive(signal!(*signal), var(*src)),
                 I::Instantiate(_, _) | I::Signal(_) => unreachable!(),
             };
 
@@ -110,12 +112,7 @@ pub fn lower_process_to_vm(
                 VI::Jump(0)
             }
             T::Watch(_, signals) => {
-                instructions.push(VI::Watch(
-                    signals
-                        .iter()
-                        .map(|s| *io_signals.get(&(entity_idx, *s)).unwrap())
-                        .collect(),
-                ));
+                instructions.push(VI::Watch(signals.iter().map(|s| signal!(*s)).collect()));
                 VI::Jump(0)
             }
             T::Jump(_) => VI::Jump(0),

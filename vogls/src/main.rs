@@ -1,5 +1,7 @@
 use std::collections::{BinaryHeap, HashMap, HashSet};
 
+mod elaborate;
+
 use slotmap::SlotMap;
 use vogls_ir::{
     BasicBlockTerminator, ContextFormat, GlobalContext, Instruction, SectionVariant, Value,
@@ -12,6 +14,8 @@ use vogls_verilog::ast::module::{Module, ModuleItem, ModuleOrGenerateItem, NonPo
 use vogls_verilog::lexer::Lexer;
 use vogls_verilog::lower::lower_module_to_ir;
 use vogls_verilog::parser::Parser;
+
+use self::elaborate::elaborate;
 
 fn usage() {
     eprintln!(
@@ -205,91 +209,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Find the entity for the Top-Level Module.
-    let mut entity_stack = Vec::new();
+    let mut elab_processes = Vec::new();
+    let mut top_level_entity = None;
     for section_key in &tl_module.sections {
         let section = gl.sections.get(*section_key).unwrap();
         if section.variant != SectionVariant::Entity {
             continue;
         }
-        entity_stack.push((0, *section_key));
+        top_level_entity = Some(*section_key);
+        break;
+    }
+    elaborate(top_level_entity.unwrap(), &mut gl, &mut elab_processes);
+
+    let mut io_signals = HashMap::new();
+    for &process in elab_processes.iter() {
+        println!();
+        println!("{}", gl.sections[process].display(&gl));
+        let vm_process = lower_process_to_vm(process, &gl, &mut io_signals);
+
+        print!("{}", &vm_process);
+
+        let stack = vec![0u8; vm_process.stack_size];
+        let vm_process_key = processes.insert(vm_process);
+
+        println!(": {vm_process_key:?}");
+
+        schedule.push(ScheduledEvent {
+            at: 0,
+            event: Event {
+                process: vm_process_key,
+                stack,
+                ip: 0,
+            },
+        });
     }
 
-    // Recursively Instantiate the entities and processes in
-    let mut next_vm_signal_key = VmSignalKey(0);
-    let mut next_entity_idx = 1u64;
-    let mut io_signals = HashMap::new();
-    while let Some((entity_key, entity_section_key)) = entity_stack.pop() {
-        let entity = gl.sections.get(entity_section_key).unwrap();
-        assert_eq!(entity.variant, SectionVariant::Entity);
-        let bb = gl.bbs.get(entity.entry).unwrap();
-        if !matches!(bb.terminator, BasicBlockTerminator::Halt) {
-            todo!("evaluation with vogls-sim");
-        }
-
-        for instr in &bb.instrs {
-            match instr {
-                Instruction::Signal(signal_key) => {
-                    io_signals
-                        .entry((entity_key, *signal_key))
-                        .or_insert_with(|| {
-                            let key = next_vm_signal_key;
-                            signals.insert(next_vm_signal_key, Value::Bit(false));
-                            next_vm_signal_key.0 += 1;
-                            key
-                        });
-                }
-                Instruction::Instantiate(section_key, ports) => {
-                    let section = gl.sections.get(*section_key).unwrap();
-
-                    assert_eq!(section.ins.len() + section.outs.len(), ports.len());
-
-                    let target_entity_idx = match section.variant {
-                        SectionVariant::Entity => {
-                            let target = next_entity_idx;
-                            next_entity_idx += 1;
-                            target
-                        }
-                        _ => entity_key,
-                    };
-
-                    for (entity_port, inst_port) in
-                        (section.ins.iter().chain(section.outs.iter())).zip(ports)
-                    {
-                        io_signals.insert(
-                            (target_entity_idx, *entity_port),
-                            io_signals.get(&(entity_key, *inst_port)).unwrap().clone(),
-                        );
-                    }
-
-                    match section.variant {
-                        SectionVariant::Entity => {
-                            entity_stack.push((target_entity_idx, *section_key))
-                        }
-                        SectionVariant::Function => todo!(),
-                        SectionVariant::Process => {
-                            let vm_process = lower_process_to_vm(*section_key, &gl, target_entity_idx, &io_signals);
-
-                            print!("{}", &vm_process);
-
-                            let stack = vec![0u8; vm_process.stack_size];
-                            let vm_process_key = processes.insert(vm_process);
-
-                            println!(": {vm_process_key:?}");
-
-                            schedule.push(ScheduledEvent {
-                                at: 0,
-                                event: Event {
-                                    process: vm_process_key,
-                                    stack,
-                                    ip: 0,
-                                },
-                            });
-                        }
-                    }
-                }
-                _ => todo!("evaluation with vogls-sim"),
-            }
-        }
+    for (_, signal) in io_signals {
+        signals.insert(signal, Value::Bit(false));
     }
 
     dbg!(&schedule);
