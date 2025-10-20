@@ -18,7 +18,8 @@ fn get_stack_size(ty: &Type) -> usize {
 pub fn lower_process_to_vm(
     section_key: SectionKey,
     gl: &GlobalContext,
-    io_signals: &HashMap<SignalKey, VmSignalKey>,
+    entity_idx: u64,
+    io_signals: &HashMap<(u64, SignalKey), VmSignalKey>,
 ) -> VmProcess {
     let section = gl.sections.get(section_key).unwrap();
     assert_eq!(section.variant, SectionVariant::Process);
@@ -89,8 +90,12 @@ pub fn lower_process_to_vm(
 
                     VI::Intrinsic(*op, args)
                 }
-                I::Probe(dst, signal) => VI::Probe(var(*dst), *io_signals.get(signal).unwrap()),
-                I::Drive(signal, src) => VI::Drive(*io_signals.get(signal).unwrap(), var(*src)),
+                I::Probe(dst, signal) => {
+                    VI::Probe(var(*dst), *io_signals.get(&(entity_idx, *signal)).unwrap())
+                }
+                I::Drive(signal, src) => {
+                    VI::Drive(*io_signals.get(&(entity_idx, *signal)).unwrap(), var(*src))
+                }
                 I::Instantiate(_, _) | I::Signal(_) => unreachable!(),
             };
 
@@ -108,7 +113,7 @@ pub fn lower_process_to_vm(
                 instructions.push(VI::Watch(
                     signals
                         .iter()
-                        .map(|s| *io_signals.get(s).unwrap())
+                        .map(|s| *io_signals.get(&(entity_idx, *s)).unwrap())
                         .collect(),
                 ));
                 VI::Jump(0)

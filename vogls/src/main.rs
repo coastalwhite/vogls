@@ -211,13 +211,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if section.variant != SectionVariant::Entity {
             continue;
         }
-        entity_stack.push(*section_key);
+        entity_stack.push((0, *section_key));
     }
 
     // Recursively Instantiate the entities and processes in
     let mut next_vm_signal_key = VmSignalKey(0);
+    let mut next_entity_idx = 1u64;
     let mut io_signals = HashMap::new();
-    while let Some(entity_section_key) = entity_stack.pop() {
+    while let Some((entity_key, entity_section_key)) = entity_stack.pop() {
         let entity = gl.sections.get(entity_section_key).unwrap();
         assert_eq!(entity.variant, SectionVariant::Entity);
         let bb = gl.bbs.get(entity.entry).unwrap();
@@ -228,27 +229,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for instr in &bb.instrs {
             match instr {
                 Instruction::Signal(signal_key) => {
-                    io_signals.entry(*signal_key).or_insert_with(|| {
-                        let key = next_vm_signal_key;
-                        signals.insert(next_vm_signal_key, Value::Bit(false));
-                        next_vm_signal_key.0 += 1;
-                        key
-                    });
+                    io_signals
+                        .entry((entity_key, *signal_key))
+                        .or_insert_with(|| {
+                            let key = next_vm_signal_key;
+                            signals.insert(next_vm_signal_key, Value::Bit(false));
+                            next_vm_signal_key.0 += 1;
+                            key
+                        });
                 }
                 Instruction::Instantiate(section_key, ports) => {
                     let section = gl.sections.get(*section_key).unwrap();
 
                     assert_eq!(section.ins.len() + section.outs.len(), ports.len());
 
-                    for (entity_port, inst_port) in (section.ins.iter().chain(section.outs.iter())).zip(ports) {
-                        io_signals.insert(*entity_port, io_signals.get(inst_port).unwrap().clone());
+                    let target_entity_idx = match section.variant {
+                        SectionVariant::Entity => {
+                            let target = next_entity_idx;
+                            next_entity_idx += 1;
+                            target
+                        }
+                        _ => entity_key,
+                    };
+
+                    for (entity_port, inst_port) in
+                        (section.ins.iter().chain(section.outs.iter())).zip(ports)
+                    {
+                        io_signals.insert(
+                            (target_entity_idx, *entity_port),
+                            io_signals.get(&(entity_key, *inst_port)).unwrap().clone(),
+                        );
                     }
 
                     match section.variant {
-                        SectionVariant::Entity => entity_stack.push(*section_key),
+                        SectionVariant::Entity => {
+                            entity_stack.push((target_entity_idx, *section_key))
+                        }
                         SectionVariant::Function => todo!(),
                         SectionVariant::Process => {
-                            let vm_process = lower_process_to_vm(*section_key, &gl, &io_signals);
+                            let vm_process = lower_process_to_vm(*section_key, &gl, target_entity_idx, &io_signals);
 
                             print!("{}", &vm_process);
 
