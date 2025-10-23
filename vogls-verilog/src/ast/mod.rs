@@ -1,5 +1,3 @@
-use std::ops::Index;
-
 use crate::arena::{ArenaId, ArenaIdRange, ArenaIdRangeIter};
 
 pub mod constant_expr;

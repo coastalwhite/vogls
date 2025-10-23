@@ -1,6 +1,6 @@
-use std::fmt::{self};
+use std::fmt::{self, Write};
 
-use super::{StackRef, VmInstruction, VmIntrinsicArg, VmProcess};
+use super::{StackRef, VmInstruction, VmIntrinsicArg, VmProcess, VmSignalKey};
 
 impl fmt::Display for StackRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -36,16 +36,31 @@ impl fmt::Display for VmInstruction {
                 }
                 Ok(())
             }
-            Self::Probe(dst, signal) => write!(f, "{dst} = probe {signal:?}"),
-            Self::Drive(signal, src) => write!(f, "drive {signal:?}, {src}"),
+            Self::Probe(dst, signal) => write!(f, "{dst} = probe {signal}"),
+            Self::Drive(signal, src) => write!(f, "drive {signal}, {src}"),
             Self::Wait(time) => write!(f, "wait #{}", time.0),
-            Self::Watch(signals) => write!(f, "watch {:?}", signals.as_slice()),
+            Self::Watch(signals) => {
+                f.write_str("watch [")?;
+                if let Some(signal) = signals.first() {
+                    signal.fmt(f)?;
+                    for signal in &signals[1..] {
+                        write!(f, ", {}", signal)?;
+                    }
+                }
+                f.write_char(']')
+            },
             Self::Jump(offset) => write!(f, "jump <{offset}>"),
             Self::Branch(cond, true_offset, false_offset) => {
                 write!(f, "branch {cond}, <{true_offset}>, <{false_offset}>")
             }
             Self::Halt => f.write_str("halt"),
         }
+    }
+}
+
+impl fmt::Display for VmSignalKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "${}", self.0)
     }
 }
 

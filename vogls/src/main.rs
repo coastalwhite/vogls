@@ -3,12 +3,8 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 mod elaborate;
 
 use slotmap::SlotMap;
-use vogls_ir::{
-    BasicBlockTerminator, ContextFormat, GlobalContext, Instruction, SectionVariant, Value,
-};
-use vogls_sim::{
-    Context, Event, ScheduledEvent, VmProcess, VmProcessKey, VmSignalKey, lower_process_to_vm,
-};
+use vogls_ir::{ContextFormat, GlobalContext, SectionVariant, Value};
+use vogls_sim::{Context, Event, ScheduledEvent, VmProcess, VmProcessKey, lower_process_to_vm};
 use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{Module, ModuleItem, ModuleOrGenerateItem, NonPortModuleItem};
 use vogls_verilog::lexer::Lexer;

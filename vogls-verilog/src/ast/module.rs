@@ -1,4 +1,4 @@
-use super::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression};
+use super::constant_expr::ConstantMinTypMaxExpression;
 use super::expr::Expr;
 use super::statement::{NetLValue, Statement};
 use super::{AstId, AstIdRange, AstItem, Identifier};
@@ -105,8 +105,8 @@ pub struct OutputDeclaration {
 #[derive(Clone, Copy)]
 pub struct Range {
     // @Incomplete: These are in fact constant expressions.
-    msb: AstId<Expr>,
-    lsb: AstId<Expr>,
+    // msb: AstId<Expr>,
+    // lsb: AstId<Expr>,
 }
 
 #[derive(Clone, Copy)]
@@ -204,7 +204,7 @@ pub struct NInputGateInstantiation {
 // n_input_gate_instance ::= [ name_of_gate_instance ] ( output_terminal , input_terminal { , input_terminal } )
 #[derive(Clone, Copy)]
 pub struct NInputGateInstance {
-    pub name: AstId<NameOfGateInstance>,
+    pub name: Option<AstId<NameOfGateInstance>>,
     pub output_terminal: AstId<NetLValue>,
     pub input_terminals: AstIdRange<Expr>,
 }

@@ -103,6 +103,7 @@ pub fn elaborate_process(
     bb_stack.push(section.entry);
     while let Some(bb_key) = bb_stack.pop() {
         let bb = gl.bbs.get(bb_key).unwrap();
+        bb_map.insert(bb_key, bb_key);
 
         use Instruction as I;
         let instrs = bb
@@ -165,6 +166,7 @@ pub fn elaborate_process(
     bb_stack.push(bb_map[&section.entry]);
     while let Some(bb_key) = bb_stack.pop() {
         let bb = gl.bbs.get_mut(bb_key).unwrap();
+        bb_seen.insert(bb_key);
 
         use BasicBlockTerminator as T;
         match &mut bb.terminator {
@@ -186,8 +188,6 @@ pub fn elaborate_process(
             }
             T::Halt => {}
         }
-
-        bb_seen.insert(bb_key);
     }
 
     Section {

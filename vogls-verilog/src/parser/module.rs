@@ -9,7 +9,7 @@ use crate::ast::module::{
     ParameterDeclaration, Port, PortDeclaration, PortExpression, PortReference, RegDeclaration,
 };
 use crate::ast::statement::{NetLValue, Statement};
-use crate::ast::{AstIdRange, Identifier};
+use crate::ast::Identifier;
 use crate::lexer::{FromLexerError, Token, TokenKind};
 use crate::parser::ItemParsable;
 use crate::span::Span;
@@ -240,7 +240,8 @@ impl<'a> Consumable<'a> for InoutDeclaration {
             end_span = signed_token.span();
         }
         // @Incomplete: [ range ]
-        let port_identifiers = Identifier::parse_one_or_more_delimited_until_fail(p, arenas, TK::Comma)?;
+        let port_identifiers =
+            Identifier::parse_one_or_more_delimited_until_fail(p, arenas, TK::Comma)?;
         if let Some(last) = port_identifiers.last() {
             end_span = *arenas.spans.get(last.loc).unwrap();
         }
@@ -278,9 +279,9 @@ impl<'a> Consumable<'a> for InputDeclaration {
         if let Some(signed_token) = signed_token {
             end_span = signed_token.span();
         }
-        dbg!(p.lexer().inspect_unpeeked_content());
         // @Incomplete: [ range ]
-        let port_identifiers = Identifier::parse_one_or_more_delimited_until_fail(p, arenas, TK::Comma)?;
+        let port_identifiers =
+            Identifier::parse_one_or_more_delimited_until_fail(p, arenas, TK::Comma)?;
         if let Some(last) = port_identifiers.last() {
             end_span = *arenas.spans.get(last.loc).unwrap();
         }
@@ -715,14 +716,18 @@ impl<'a> Consumable<'a> for NInputGateInstance {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 494
         // n_input_gate_instance ::= [ name_of_gate_instance ] ( output_terminal , input_terminal { , input_terminal } )
 
-        let (name, name_span) = NameOfGateInstance::parse_with_span(p, arenas)?;
-        p.lexer.expect(TK::LeftParen)?;
+        let name = NameOfGateInstance::try_parse_with_span(p, arenas);
+        let mut start_span = p.lexer.expect(TK::LeftParen)?.span();
+        let name = name.map(|(name, name_span)| {
+            start_span = name_span;
+            name
+        });
         let output_terminal = NetLValue::parse(p, arenas)?;
         p.lexer.expect(TK::Comma)?;
         let input_terminals = Expr::parse_one_or_more_delimited(p, arenas, TK::Comma)?;
         let right_paren_span = p.lexer.expect(TK::RightParen)?.span();
 
-        let span = name_span | right_paren_span;
+        let span = start_span | right_paren_span;
 
         Ok((
             Self {

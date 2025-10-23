@@ -20,12 +20,13 @@ use crate::ast::module::{
 use crate::ast::statement::{
     DelayControl, DelayValue, EventControl, EventExpression, ProceduralTimingControl, Statement,
 };
-use crate::ast::{AstId, Identifier};
+use crate::ast::AstId;
 use crate::number::Decimal;
 use crate::parser::{Ast, AstArenas};
 
 #[derive(Debug)]
 pub struct SignalScopeItem {
+    #[expect(unused)]
     ty: Type,
     key: SignalKey,
 }
@@ -675,7 +676,7 @@ fn statements_to_process<'a>(
 }
 
 fn lower_to_signal<'a>(
-    gl: &mut GlobalContext,
+    _gl: &mut GlobalContext,
     expr: &Expr,
     scope: &mut Scope<&'a str, ScopeItem>,
     arenas: &'a AstArenas,
@@ -698,7 +699,7 @@ fn lower_expr<'a>(
     arenas: &'a AstArenas,
 ) -> VariableKey {
     match expr {
-        Expr::BitPartSelect(bit_part_select) => todo!(),
+        Expr::BitPartSelect(_) => todo!(),
         Expr::Unary(op, child) => {
             let child = lower_expr(builder, gl, scope, arenas.get(*child), arenas);
             use UnaryOperator as O;
@@ -743,11 +744,12 @@ fn lower_expr<'a>(
                 O::LogicalOr => todo!(),
             }
         }
-        Expr::Concatenation(ast_id_range) => todo!(),
-        Expr::Replication(replication) => todo!(),
-        Expr::Ternary(ast_id, ast_id1, ast_id2) => todo!(),
+        Expr::Concatenation(_) => todo!(),
+        Expr::Replication(_) => todo!(),
+        Expr::Ternary(_, _, _) => todo!(),
         Expr::Ident(ident) => {
             let ident = arenas.get_ident(ident.item.0);
+            dbg!(&ident);
             let scope_item = scope.get(&ident).expect("Variable not found");
             match scope_item {
                 ScopeItem::Signal(si) => builder.probe(gl, si.key),
@@ -764,7 +766,7 @@ fn lower_expr<'a>(
 
             builder.constant(gl, Value::Bit(decimal != 0))
         }
-        Expr::Sized(ast_item) => todo!(),
-        Expr::String(string_ref) => todo!(),
+        Expr::Sized(_) => todo!(),
+        Expr::String(_) => todo!(),
     }
 }

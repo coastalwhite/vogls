@@ -1,7 +1,6 @@
 use crate::ast::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression, ConstantPrimary};
 use crate::ast::{DecimalRef, StringRef};
 use crate::lexer::TokenKind;
-use crate::parser::ItemParsable;
 use crate::span::Span;
 
 use super::{AstArenas, Consumable, Parsable, ParseError, Parser};

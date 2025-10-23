@@ -384,7 +384,7 @@ impl BasicBlockBuilder {
         }
     }
 
-    pub fn intrinsic(&mut self, gl: &mut GlobalContext, op: IntrinsicOp, args: Vec<IntrinsicArg>) {
+    pub fn intrinsic(&mut self, _gl: &mut GlobalContext, op: IntrinsicOp, args: Vec<IntrinsicArg>) {
         self.instrs.push(Instruction::Intrinsic(op, args));
     }
 
@@ -402,7 +402,7 @@ impl BasicBlockBuilder {
         self.instrs.push(Instruction::Instantiate(process, ports));
     }
 
-    pub fn signal(&mut self, gl: &mut GlobalContext, signal: SignalKey) {
+    pub fn signal(&mut self, _gl: &mut GlobalContext, signal: SignalKey) {
         assert_eq!(self.section_variant, SectionVariant::Entity);
         self.instrs.push(Instruction::Signal(signal));
     }

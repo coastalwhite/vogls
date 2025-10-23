@@ -1,7 +1,7 @@
 mod builder;
 mod format;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 pub use builder::{BasicBlockBuilder, ModuleBuilder};
 pub use format::{ContextFormat, DisplayContext};
@@ -131,9 +131,10 @@ impl Instruction {
             | Self::Unary(dst, _, _)
             | Self::Binary(dst, _, _, _)
             | Self::Probe(dst, _) => Some(*dst),
-            Self::Intrinsic(_, _) | Self::Drive(_, _) | Self::Instantiate(_, _) | Self::Signal(_) => {
-                None
-            }
+            Self::Intrinsic(_, _)
+            | Self::Drive(_, _)
+            | Self::Instantiate(_, _)
+            | Self::Signal(_) => None,
         }
     }
 }
@@ -145,13 +146,13 @@ pub enum ConnectionDirection {
 }
 
 pub struct Connection {
-    direction: ConnectionDirection,
+    // direction: ConnectionDirection,
 }
 
 pub struct Module {
     pub name: String,
     pub sections: Vec<SectionKey>,
-    pub io: IndexMap<String, Connection>
+    pub io: IndexMap<String, Connection>,
 }
 
 #[derive(Default)]
@@ -171,6 +172,7 @@ pub enum SectionVariant {
 }
 
 /// An entity, process or function.
+#[derive(Debug)]
 pub struct Section {
     pub variant: SectionVariant,
     pub name: String,

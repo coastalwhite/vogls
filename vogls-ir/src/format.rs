@@ -1,6 +1,5 @@
 use core::fmt;
 use std::collections::HashSet;
-use std::fmt::Write;
 
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryOp, GlobalContext, Instruction,
@@ -9,7 +8,6 @@ use crate::{
 };
 
 const INDENT: &str = "  ";
-const INSTRUCTION_SPACING: usize = 2;
 
 pub struct ContextDisplay<'a, T: ?Sized + ContextFormat> {
     item: &'a T,
