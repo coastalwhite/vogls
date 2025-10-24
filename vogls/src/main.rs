@@ -3,7 +3,7 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 mod elaborate;
 
 use slotmap::SlotMap;
-use vogls_ir::{ContextFormat, GlobalContext, SectionVariant, Value};
+use vogls_ir::{ContextFormat, GlobalContext, Value};
 use vogls_sim::{Context, Event, ScheduledEvent, VmProcess, VmProcessKey, lower_process_to_vm};
 use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{Module, ModuleItem, ModuleOrGenerateItem, NonPortModuleItem};
@@ -189,7 +189,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         instantiated_modules.insert(module_identifier, module_key);
     }
 
-    let tl_module = *instantiated_modules.get(tl_module_name.as_str()).unwrap();
+    let tl_module_key = *instantiated_modules.get(tl_module_name.as_str()).unwrap();
 
     let mut ctx = Context::new();
     let mut processes = SlotMap::<VmProcessKey, VmProcess>::default();
@@ -198,29 +198,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut listeners = SlotMap::default();
     let mut watches = HashMap::default();
 
-    let tl_module = gl.modules.get(tl_module).unwrap();
-
     for module in gl.modules.values() {
         println!("{}", module.display(&gl));
     }
 
     // Find the entity for the Top-Level Module.
     let mut elab_processes = Vec::new();
-    let mut top_level_entity = None;
-    for section_key in &tl_module.sections {
-        let section = gl.sections.get(*section_key).unwrap();
-        if section.variant != SectionVariant::Entity {
-            continue;
-        }
-        top_level_entity = Some(*section_key);
-        break;
-    }
-    elaborate(top_level_entity.unwrap(), &mut gl, &mut elab_processes);
+    elaborate(tl_module_key, &mut gl, &mut elab_processes);
 
     let mut io_signals = HashMap::new();
     for &process in elab_processes.iter() {
         println!();
-        println!("{}", gl.sections[process].display(&gl));
+        println!("{}", gl.processes[process].display(&gl));
         let vm_process = lower_process_to_vm(process, &gl, &mut io_signals);
 
         print!("{}", &vm_process);

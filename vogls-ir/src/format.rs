@@ -3,8 +3,7 @@ use std::collections::HashSet;
 
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryOp, GlobalContext, Instruction,
-    IntrinsicArg, IntrinsicOp, Module, Section, SectionVariant, Signal, Time, Type, UnaryOp, Value,
-    Variable,
+    IntrinsicArg, IntrinsicOp, Module, Process, Signal, Time, Type, UnaryOp, Value, Variable,
 };
 
 const INDENT: &str = "  ";
@@ -47,28 +46,28 @@ pub trait ContextFormat {
 
 impl ContextFormat for Module {
     fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &mut DisplayContext<'_>) -> fmt::Result {
-        if let Some(s) = self.sections.first() {
-            ctx.gl.sections.get(*s).unwrap().ctx_fmt(f, ctx)?;
+        writeln!(f, "module {}:", self.name)?;
 
-            for s in &self.sections[1..] {
+        ctx.gl.processes[self.initialize].ctx_fmt(f, ctx)?;
+        writeln!(f)?;
+
+        if let Some(s) = self.processes.first() {
+            ctx.gl.processes.get(*s).unwrap().ctx_fmt(f, ctx)?;
+            for s in &self.processes[1..] {
                 writeln!(f)?;
-                ctx.gl.sections.get(*s).unwrap().ctx_fmt(f, ctx)?;
+                ctx.gl.processes.get(*s).unwrap().ctx_fmt(f, ctx)?;
             }
         }
+
+        writeln!(f, "endmodule {};", self.name)?;
 
         Ok(())
     }
 }
 
-impl ContextFormat for Section {
+impl ContextFormat for Process {
     fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &mut DisplayContext<'_>) -> fmt::Result {
-        let variant_mnemonic = match self.variant {
-            SectionVariant::Entity => "entity",
-            SectionVariant::Process => "process",
-            SectionVariant::Function => "function",
-        };
-
-        write!(f, "{variant_mnemonic} {}(", self.name)?;
+        write!(f, "process {}(", self.name)?;
         if let Some(i) = self.ins.first() {
             ctx.gl.signals.get(*i).unwrap().typed_ctx_fmt(f, ctx)?;
             for i in self.ins.iter().skip(1) {
@@ -228,12 +227,24 @@ impl ContextFormat for Instruction {
                 ctx.gl.vars.get(*var).unwrap().typed_ctx_fmt(f, ctx)?;
             }
 
-            Self::Instantiate(process, ports) => {
-                let section = ctx.gl.sections.get(*process).unwrap();
-                write!(f, "instantiate @{} (", section.name)?;
+            Self::Spawn(process, ports) => {
+                let process = &ctx.gl.processes[*process];
+                write!(f, "spawn @{} (", process.name)?;
                 if let Some(sig) = ports.first() {
                     write!(f, "{}", ctx.gl.signals.get(*sig).unwrap().name)?;
-                    for sig in section.ins.iter().skip(1) {
+                    for sig in ports.iter().skip(1) {
+                        write!(f, ", {}", ctx.gl.signals.get(*sig).unwrap().name)?;
+                    }
+                }
+                write!(f, ")")?;
+            }
+
+            Self::Instantiate(module, ports) => {
+                let module = &ctx.gl.modules[*module];
+                write!(f, "instantiate @{} (", module.name)?;
+                if let Some(sig) = ports.first() {
+                    write!(f, "{}", ctx.gl.signals.get(*sig).unwrap().name)?;
+                    for sig in ports.iter().skip(1) {
                         write!(f, ", {}", ctx.gl.signals.get(*sig).unwrap().name)?;
                     }
                 }

@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use scope::Scope;
 
 use vogls_ir::{
-    BasicBlockBuilder, GlobalContext, IntrinsicArg, IntrinsicOp, ModuleBuilder, ModuleKey,
-    SectionVariant, Signal, SignalKey, Time, Type, Value, VariableKey,
+    BasicBlockBuilder, GlobalContext, IntrinsicArg, IntrinsicOp, ModuleBuilder, ModuleKey, Signal,
+    SignalKey, Time, Type, Value, VariableKey,
 };
 
 use crate::ast::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression, ConstantPrimary};
@@ -87,8 +87,12 @@ pub fn lower_module_to_ir(
                     module_builder.entity.signal(gl, key);
                     match port_declaration {
                         PortDeclaration::Inout(_) => todo!(),
-                        PortDeclaration::Input(_) => module_builder.entity.push_in_port(gl, key),
-                        PortDeclaration::Output(_) => module_builder.entity.push_out_port(gl, key),
+                        PortDeclaration::Input(_) => {
+                            module_builder.entity.push_in_port(gl, ident.into(), key)
+                        }
+                        PortDeclaration::Output(_) => {
+                            module_builder.entity.push_out_port(gl, ident.into(), key)
+                        }
                     }
                 }
             }
@@ -309,16 +313,16 @@ pub fn lower_module_to_ir(
                             module_instances,
                         } = arenas.get(*id);
                         let instantiation_ident = arenas.get_ident(module_identifier.item.0);
-                        let entity = instantiated_modules.get(instantiation_ident).unwrap();
-                        let entity = gl.modules.get(*entity).unwrap();
+                        let instance_module_key = instantiated_modules.get(instantiation_ident).unwrap();
+                        // let entity = gl.modules.get(*entity).unwrap();
 
-                        let section_key = *entity
-                            .sections
-                            .iter()
-                            .find(|k| {
-                                gl.sections.get(**k).unwrap().variant == SectionVariant::Entity
-                            })
-                            .unwrap();
+                        // let section_key = *entity
+                        //     .sections
+                        //     .iter()
+                        //     .find(|k| {
+                        //         gl.sections.get(**k).unwrap().variant == SectionVariant::Entity
+                        //     })
+                        //     .unwrap();
 
                         for instance in module_instances.iter() {
                             let ModuleInstance {
@@ -332,9 +336,15 @@ pub fn lower_module_to_ir(
                                     .iter()
                                     .map(|p| lower_to_signal(gl, arenas.get(p), &mut scope, arenas))
                                     .collect(),
-                                ListOfPortConnections::Named => todo!(),
+                                ListOfPortConnections::Named(ports) => ports
+                                    .iter()
+                                    .map(|_| {
+                                        todo!()
+                                        // lower_to_signal(gl, arenas.get(p), &mut scope, arenas)
+                                    })
+                                    .collect(),
                             };
-                            module_builder.entity.instantiate(gl, section_key, ports);
+                            module_builder.entity.instantiate(gl, *instance_module_key, ports);
                         }
                     }
                     ModuleOrGenerateItem::InitialConstruct(id) => {
@@ -393,16 +403,15 @@ pub fn lower_module_to_ir(
         }
     }
 
-    for process in processes {
-        let section = gl.sections.get(process).unwrap();
-        let mut ports = Vec::with_capacity(section.ins.len() + section.outs.len());
-        ports.extend(section.ins.iter().copied());
-        ports.extend(section.outs.iter().copied());
-        module_builder.entity.instantiate(gl, process, ports);
+    for process_key in processes {
+        let process = &gl.processes[process_key];
+        let mut ports = Vec::with_capacity(process.ins.len() + process.outs.len());
+        ports.extend(process.ins.iter().copied());
+        ports.extend(process.outs.iter().copied());
+        module_builder.entity.spawn(gl, process_key, ports);
     }
 
-    let module = module_builder.finish(gl);
-    gl.modules.insert(module)
+    module_builder.finish(gl)
 }
 
 enum WatchCondition {
@@ -749,7 +758,6 @@ fn lower_expr<'a>(
         Expr::Ternary(_, _, _) => todo!(),
         Expr::Ident(ident) => {
             let ident = arenas.get_ident(ident.item.0);
-            dbg!(&ident);
             let scope_item = scope.get(&ident).expect("Variable not found");
             match scope_item {
                 ScopeItem::Signal(si) => builder.probe(gl, si.key),

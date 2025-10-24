@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use vogls_ir::{
-    BasicBlockKey, BasicBlockTerminator, GlobalContext, Instruction, IntrinsicArg, SectionKey,
-    SectionVariant, SignalKey, Type, VariableKey,
+    BasicBlockKey, BasicBlockTerminator, GlobalContext, Instruction, IntrinsicArg, ProcessKey,
+    SignalKey, Type, VariableKey,
 };
 
 use crate::instruction::{StackRef, VmInstruction, VmIntrinsicArg, VmProcess};
@@ -16,12 +16,11 @@ fn get_stack_size(ty: &Type) -> usize {
 }
 
 pub fn lower_process_to_vm(
-    section_key: SectionKey,
+    process: ProcessKey,
     gl: &GlobalContext,
     io_signals: &mut HashMap<SignalKey, VmSignalKey>,
 ) -> VmProcess {
-    let section = gl.sections.get(section_key).unwrap();
-    assert_eq!(section.variant, SectionVariant::Process);
+    let process = &gl.processes[process];
 
     let mut bb_stack = Vec::new();
     let mut bb_seen = HashSet::new();
@@ -30,7 +29,7 @@ pub fn lower_process_to_vm(
     let mut stack_top = 0;
 
     // Make a map of the stack.
-    bb_stack.push(section.entry);
+    bb_stack.push(process.entry);
     while let Some(bb_key) = bb_stack.pop() {
         let bb = gl.bbs.get(bb_key).unwrap();
 
@@ -70,7 +69,7 @@ pub fn lower_process_to_vm(
 
     // Lower the IR instructions to VM instructions.
     let var = |var: VariableKey| *stack_map.get(&var).unwrap();
-    bb_stack.push(section.entry);
+    bb_stack.push(process.entry);
     while let Some(bb_key) = bb_stack.pop() {
         let bb = gl.bbs.get(bb_key).unwrap();
 
@@ -98,7 +97,7 @@ pub fn lower_process_to_vm(
                 }
                 I::Probe(dst, signal) => VI::Probe(var(*dst), signal!(*signal)),
                 I::Drive(signal, src) => VI::Drive(signal!(*signal), var(*src)),
-                I::Instantiate(_, _) | I::Signal(_) => unreachable!(),
+                I::Instantiate(_, _) | I::Spawn(_, _) | I::Signal(_) => unreachable!(),
             };
 
             instructions.push(instr);

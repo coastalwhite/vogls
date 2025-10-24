@@ -1,24 +1,23 @@
-use indexmap::IndexSet;
+use indexmap::{IndexMap, IndexSet};
 
 use crate::{
-    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryOp, GlobalContext, Instruction,
-    IntrinsicArg, IntrinsicOp, Module, Section, SectionKey, SectionVariant, SignalKey, Time, Type,
-    UnaryOp, Value, Variable, VariableKey,
+    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryOp, Connection, ConnectionDirection,
+    GlobalContext, Instruction, IntrinsicArg, IntrinsicOp, Module, ModuleKey, Process, ProcessKey,
+    SignalKey, Time, Type, UnaryOp, Value, Variable, VariableKey,
 };
 
 #[must_use]
 pub struct ModuleBuilder {
-    name: String,
-    sections: Vec<SectionKey>,
+    key: ModuleKey,
     pub entity: BasicBlockBuilder,
 }
 
 #[must_use]
 pub struct BasicBlockBuilder {
     key: BasicBlockKey,
-
-    section: SectionKey,
-    section_variant: SectionVariant,
+    module: ModuleKey,
+    process: ProcessKey,
+    initializer: bool,
 
     instrs: Vec<Instruction>,
     tmp_offset: usize,
@@ -33,30 +32,31 @@ impl BasicBlockBuilder {
 
 impl ModuleBuilder {
     pub fn new(name: String, gl: &mut GlobalContext) -> Self {
-        let variant = SectionVariant::Entity;
         let bb_key = gl.bbs.insert(BasicBlock {
             name: String::from("entry"),
             instrs: Vec::new(),
             terminator: BasicBlockTerminator::Halt,
         });
-        let section_key = gl.sections.insert(Section {
-            variant,
-            name: name.clone(),
+        let initialize = gl.processes.insert(Process {
+            name: format!("{name}-init"),
             entry: bb_key,
-
-            ins: IndexSet::new(),
-            outs: IndexSet::new(),
+            ins: Default::default(),
+            outs: Default::default(),
         });
-        let mut sections = Vec::new();
-        sections.push(section_key);
+        let key = gl.modules.insert(Module {
+            name,
+            initialize,
+            processes: Vec::new(),
+            io: IndexMap::default(),
+        });
 
         Self {
-            name,
-            sections,
+            key,
             entity: BasicBlockBuilder {
                 key: bb_key,
-                section: section_key,
-                section_variant: SectionVariant::Entity,
+                module: key,
+                process: initialize,
+                initializer: true,
                 instrs: Vec::new(),
                 tmp_offset: 0,
                 bbname_offset: 0,
@@ -64,41 +64,37 @@ impl ModuleBuilder {
         }
     }
 
-    pub fn finish(self, gl: &mut GlobalContext) -> Module {
+    pub fn finish(self, gl: &mut GlobalContext) -> ModuleKey {
         self.entity.halt(gl);
-        Module {
-            name: self.name,
-            sections: self.sections,
-            io: Default::default(),
-        }
+        self.key
     }
 
     pub fn process(
         &mut self,
         gl: &'_ mut GlobalContext,
         name: String,
-    ) -> (SectionKey, BasicBlockBuilder) {
+    ) -> (ProcessKey, BasicBlockBuilder) {
         let bb_key = gl.bbs.insert(BasicBlock {
             name: String::from("entry"),
             instrs: Vec::new(),
             terminator: BasicBlockTerminator::Halt,
         });
-        let section_key = gl.sections.insert(Section {
-            variant: SectionVariant::Process,
+        let process_key = gl.processes.insert(Process {
             name,
             entry: bb_key,
 
             ins: IndexSet::new(),
             outs: IndexSet::new(),
         });
-        self.sections.push(section_key);
+        gl.modules[self.key].processes.push(process_key);
         (
-            section_key,
+            process_key,
             BasicBlockBuilder {
                 key: bb_key,
+                module: self.key,
+                process: process_key,
+                initializer: false,
                 instrs: Vec::new(),
-                section: section_key,
-                section_variant: SectionVariant::Process,
                 tmp_offset: 0,
                 bbname_offset: 0,
             },
@@ -216,43 +212,33 @@ impl BasicBlockBuilder {
         xnor
     }
 
-    pub fn push_in_port(&mut self, gl: &mut GlobalContext, signal: SignalKey) {
-        assert_eq!(self.section_variant, SectionVariant::Entity);
-        gl.sections
-            .get_mut(self.section)
-            .unwrap()
-            .ins
-            .insert(signal);
+    pub fn push_in_port(&mut self, gl: &mut GlobalContext, name: String, signal: SignalKey) {
+        assert!(self.initializer);
+        gl.modules[self.module].io.insert(
+            name,
+            Connection {
+                signal,
+                direction: ConnectionDirection::In,
+            },
+        );
     }
-    pub fn push_out_port(&mut self, gl: &mut GlobalContext, signal: SignalKey) {
-        assert_eq!(self.section_variant, SectionVariant::Entity);
-        gl.sections
-            .get_mut(self.section)
-            .unwrap()
-            .outs
-            .insert(signal);
+    pub fn push_out_port(&mut self, gl: &mut GlobalContext, name: String, signal: SignalKey) {
+        assert!(self.initializer);
+        gl.modules[self.module].io.insert(
+            name,
+            Connection {
+                signal,
+                direction: ConnectionDirection::Out,
+            },
+        );
     }
 
     pub fn drive(&mut self, gl: &mut GlobalContext, signal: SignalKey, variable: VariableKey) {
-        if self.section_variant == SectionVariant::Process {
-            gl.sections
-                .get_mut(self.section)
-                .unwrap()
-                .outs
-                .insert(signal);
-        }
-
+        gl.processes[self.process].outs.insert(signal);
         self.instrs.push(Instruction::Drive(signal, variable));
     }
     pub fn probe(&mut self, gl: &mut GlobalContext, signal: SignalKey) -> VariableKey {
-        if self.section_variant == SectionVariant::Process {
-            gl.sections
-                .get_mut(self.section)
-                .unwrap()
-                .ins
-                .insert(signal);
-        }
-
+        gl.processes[self.process].ins.insert(signal);
         let ty = gl.signals.get(signal).unwrap().ty.clone();
         let variable = self.next_tmp_var(gl, ty);
         self.instrs.push(Instruction::Probe(variable, signal));
@@ -266,10 +252,12 @@ impl BasicBlockBuilder {
         slf.terminator = BasicBlockTerminator::Jump(next_key);
         BasicBlockBuilder {
             key: next_key,
-            instrs: Vec::new(),
 
-            section: self.section,
-            section_variant: self.section_variant,
+            module: self.module,
+            process: self.process,
+            initializer: self.initializer,
+
+            instrs: Vec::new(),
 
             tmp_offset: self.tmp_offset,
             bbname_offset: self.bbname_offset,
@@ -293,10 +281,12 @@ impl BasicBlockBuilder {
         slf.terminator = BasicBlockTerminator::Branch(condition, bb, next_key);
         BasicBlockBuilder {
             key: next_key,
-            instrs: Vec::new(),
 
-            section: self.section,
-            section_variant: self.section_variant,
+            module: self.module,
+            process: self.process,
+            initializer: self.initializer,
+
+            instrs: Vec::new(),
 
             tmp_offset: self.tmp_offset,
             bbname_offset: self.bbname_offset,
@@ -314,10 +304,12 @@ impl BasicBlockBuilder {
         slf.terminator = BasicBlockTerminator::Branch(condition, next_key, bb);
         BasicBlockBuilder {
             key: next_key,
-            instrs: Vec::new(),
 
-            section: self.section,
-            section_variant: self.section_variant,
+            module: self.module,
+            process: self.process,
+            initializer: self.initializer,
+
+            instrs: Vec::new(),
 
             tmp_offset: self.tmp_offset,
             bbname_offset: self.bbname_offset,
@@ -337,10 +329,12 @@ impl BasicBlockBuilder {
         slf.terminator = BasicBlockTerminator::Wait(next_key, time);
         BasicBlockBuilder {
             key: next_key,
-            instrs: Vec::new(),
 
-            section: self.section,
-            section_variant: self.section_variant,
+            module: self.module,
+            process: self.process,
+            initializer: self.initializer,
+
+            instrs: Vec::new(),
 
             tmp_offset: self.tmp_offset,
             bbname_offset: self.bbname_offset,
@@ -359,10 +353,12 @@ impl BasicBlockBuilder {
         slf.terminator = BasicBlockTerminator::Watch(next_key, signals);
         BasicBlockBuilder {
             key: next_key,
-            instrs: Vec::new(),
 
-            section: self.section,
-            section_variant: self.section_variant,
+            module: self.module,
+            process: self.process,
+            initializer: self.initializer,
+
+            instrs: Vec::new(),
 
             tmp_offset: self.tmp_offset,
             bbname_offset: self.bbname_offset,
@@ -375,7 +371,7 @@ impl BasicBlockBuilder {
     }
 
     pub fn watch_for_ins_to(self, gl: &mut GlobalContext, bb: BasicBlockKey) {
-        let ins = &gl.sections.get(self.section).unwrap().ins;
+        let ins = &gl.processes[self.process].ins;
         if ins.is_empty() {
             self.halt(gl);
         } else {
@@ -388,22 +384,23 @@ impl BasicBlockBuilder {
         self.instrs.push(Instruction::Intrinsic(op, args));
     }
 
+    pub fn spawn(&mut self, _gl: &mut GlobalContext, process: ProcessKey, ports: Vec<SignalKey>) {
+        assert!(self.initializer);
+        self.instrs.push(Instruction::Spawn(process, ports));
+    }
+
     pub fn instantiate(
         &mut self,
-        gl: &mut GlobalContext,
-        process: SectionKey,
+        _gl: &mut GlobalContext,
+        module: ModuleKey,
         ports: Vec<SignalKey>,
     ) {
-        assert_eq!(self.section_variant, SectionVariant::Entity);
-        let section = gl.sections.get(process).unwrap();
-        assert_ne!(section.variant, SectionVariant::Function);
-        assert_eq!(section.ins.len() + section.outs.len(), ports.len());
-
-        self.instrs.push(Instruction::Instantiate(process, ports));
+        assert!(self.initializer);
+        self.instrs.push(Instruction::Instantiate(module, ports));
     }
 
     pub fn signal(&mut self, _gl: &mut GlobalContext, signal: SignalKey) {
-        assert_eq!(self.section_variant, SectionVariant::Entity);
+        assert!(self.initializer);
         self.instrs.push(Instruction::Signal(signal));
     }
 }

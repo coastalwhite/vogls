@@ -9,7 +9,7 @@ use indexmap::{IndexMap, IndexSet};
 use slotmap::{SlotMap, new_key_type};
 
 new_key_type! { pub struct ModuleKey; }
-new_key_type! { pub struct SectionKey; }
+new_key_type! { pub struct ProcessKey; }
 new_key_type! { pub struct BasicBlockKey; }
 new_key_type! { pub struct SignalKey; }
 new_key_type! { pub struct VariableKey; }
@@ -121,7 +121,8 @@ pub enum Instruction {
     Probe(VariableKey, SignalKey),
     Drive(SignalKey, VariableKey),
 
-    Instantiate(SectionKey, Vec<SignalKey>),
+    Instantiate(ModuleKey, Vec<SignalKey>),
+    Spawn(ProcessKey, Vec<SignalKey>),
     Signal(SignalKey),
 }
 impl Instruction {
@@ -133,51 +134,47 @@ impl Instruction {
             | Self::Probe(dst, _) => Some(*dst),
             Self::Intrinsic(_, _)
             | Self::Drive(_, _)
+            | Self::Spawn(_, _)
             | Self::Instantiate(_, _)
             | Self::Signal(_) => None,
         }
     }
 }
 
+#[derive(Debug)]
 pub enum ConnectionDirection {
     In,
     Out,
     Both,
 }
 
+#[derive(Debug)]
 pub struct Connection {
-    // direction: ConnectionDirection,
-}
-
-pub struct Module {
-    pub name: String,
-    pub sections: Vec<SectionKey>,
-    pub io: IndexMap<String, Connection>,
+    pub signal: SignalKey,
+    pub direction: ConnectionDirection,
 }
 
 #[derive(Default)]
 pub struct GlobalContext {
     pub modules: SlotMap<ModuleKey, Module>,
-    pub sections: SlotMap<SectionKey, Section>,
+    pub processes: SlotMap<ProcessKey, Process>,
     pub bbs: SlotMap<BasicBlockKey, BasicBlock>,
     pub vars: SlotMap<VariableKey, Variable>,
     pub signals: SlotMap<SignalKey, Signal>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum SectionVariant {
-    Entity,
-    Process,
-    Function,
+#[derive(Debug)]
+pub struct Module {
+    pub name: String,
+    pub initialize: ProcessKey,
+    pub processes: Vec<ProcessKey>,
+    pub io: IndexMap<String, Connection>,
 }
 
-/// An entity, process or function.
 #[derive(Debug)]
-pub struct Section {
-    pub variant: SectionVariant,
+pub struct Process {
     pub name: String,
     pub entry: BasicBlockKey,
-
     pub ins: IndexSet<SignalKey>,
     pub outs: IndexSet<SignalKey>,
 }

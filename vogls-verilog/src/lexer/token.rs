@@ -101,6 +101,7 @@ define_tokens! {
         Semicolon = ";",
         Colon = ":",
         Comma = ",",
+        Dot = ".",
 
         // Operators
         Plus = "+",

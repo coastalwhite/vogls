@@ -243,6 +243,13 @@ impl<'a> Lexer<'a> {
             None
         }
     }
+
+    pub fn peek_is_next(&mut self, kind: TokenKind) -> bool {
+        let Some(peeked) = self.peek() else {
+            return false;
+        };
+        peeked.release() == kind
+    }
 }
 
 impl<'a, 'b> Peeked<'a, 'b> {

@@ -4,9 +4,10 @@ use crate::ast::module::{
     AlwaysConstruct, ContinousAssign, GateInstantiation, InitialConstruct, InoutDeclaration,
     InputDeclaration, ListOfPortConnections, Module, ModuleInstance, ModuleInstantiation,
     ModuleItem, ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration, ModulePorts,
-    NInputGateInstance, NInputGateInstantiation, NInputGateType, NameOfGateInstance, NetAssignment,
-    NetDeclaration, NetType, NonPortModuleItem, OutputDeclaration, ParamAssignment,
-    ParameterDeclaration, Port, PortDeclaration, PortExpression, PortReference, RegDeclaration,
+    NInputGateInstance, NInputGateInstantiation, NInputGateType, NameOfGateInstance,
+    NamedPortConnection, NetAssignment, NetDeclaration, NetType, NonPortModuleItem,
+    OutputDeclaration, ParamAssignment, ParameterDeclaration, Port, PortDeclaration,
+    PortExpression, PortReference, RegDeclaration,
 };
 use crate::ast::statement::{NetLValue, Statement};
 use crate::ast::Identifier;
@@ -571,13 +572,47 @@ impl<'a> Consumable<'a> for ListOfPortConnections {
         //   ordered_port_connection { , ordered_port_connection }
         // | named_port_connection { , named_port_connection }
 
-        let ordered = Expr::parse_zero_or_more_delimited(p, arenas, TK::Comma)?;
-        let span = arenas.spans[ordered.loc];
-
-        Ok((Self::Ordered(ordered), span))
+        if p.lexer().peek_is_next(TK::Dot) {
+            let named = NamedPortConnection::parse_zero_or_more_delimited(p, arenas, TK::Comma)?;
+            let span = arenas.spans[named.loc];
+            Ok((Self::Named(named), span))
+        } else {
+            let ordered = Expr::parse_zero_or_more_delimited(p, arenas, TK::Comma)?;
+            let span = arenas.spans[ordered.loc];
+            Ok((Self::Ordered(ordered), span))
+        }
     }
 }
 impl<'a> Parsable<'a> for ListOfPortConnections {}
+
+impl<'a> Consumable<'a> for NamedPortConnection {
+    fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
+        use TokenKind as TK;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 495
+        // named_port_connection ::= { attribute_instance } . port_identifier ( [ expression ] )
+
+        let dot_span = p.lexer().expect(TK::Dot)?.span();
+        let port_identifier = Identifier::parse(p, arenas)?;
+        p.lexer().expect(TK::LeftParen)?;
+        let expression = if !p.lexer().peek_is_next(TK::RightParen) {
+            Some(Expr::parse(p, arenas)?)
+        } else {
+            None
+        };
+        let right_paren_span = p.lexer().expect(TK::RightParen)?.span();
+        let span = dot_span | right_paren_span;
+
+        Ok((
+            NamedPortConnection {
+                port_identifier,
+                expression,
+            },
+            span,
+        ))
+    }
+}
+impl<'a> Parsable<'a> for NamedPortConnection {}
 
 impl<'a> Consumable<'a> for InitialConstruct {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {

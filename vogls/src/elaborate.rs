@@ -1,14 +1,13 @@
 use std::collections::{HashMap, HashSet};
 
 use vogls_ir::{
-    BasicBlock, BasicBlockTerminator, GlobalContext, Instruction, Section, SectionKey,
-    SectionVariant, Signal, SignalKey,
+    BasicBlock, BasicBlockTerminator, GlobalContext, Instruction, ModuleKey, Process, ProcessKey, Signal, SignalKey
 };
 
 pub fn elaborate(
-    top_level_entity: SectionKey,
+    top_level_entity: ModuleKey,
     gl: &mut GlobalContext,
-    processes: &mut Vec<SectionKey>,
+    processes: &mut Vec<ProcessKey>,
 ) {
     let mut entity_stack = Vec::new();
     entity_stack.push((0, top_level_entity));
@@ -18,10 +17,10 @@ pub fn elaborate(
 
     // Recursively Instantiate the entities and processes in
     let mut signals_map = HashMap::<(u64, SignalKey), SignalKey>::new();
-    while let Some((entity_key, entity_section_key)) = entity_stack.pop() {
-        let entity = gl.sections.get(entity_section_key).unwrap();
-        assert_eq!(entity.variant, SectionVariant::Entity);
-        let bb = gl.bbs.get(entity.entry).unwrap();
+    while let Some((entity_key, entity_module_key)) = entity_stack.pop() {
+        let entity = &gl.modules[entity_module_key];
+        let initialize = &gl.processes[entity.initialize];
+        let bb = gl.bbs.get(initialize.entry).unwrap();
         if !matches!(bb.terminator, BasicBlockTerminator::Halt) {
             todo!("evaluation with vogls-sim");
         }
@@ -39,39 +38,39 @@ pub fn elaborate(
                             })
                         });
                 }
-                Instruction::Instantiate(section_key, ports) => {
-                    let section = gl.sections.get(*section_key).unwrap();
+                Instruction::Instantiate(module_key, ports) => {
+                    let module = gl.modules.get(*module_key).unwrap();
 
-                    assert_eq!(section.ins.len() + section.outs.len(), ports.len());
+                    assert_eq!(module.io.len(), ports.len());
 
-                    let target_entity_idx = match section.variant {
-                        SectionVariant::Entity => {
-                            let target = next_entity_idx;
-                            next_entity_idx += 1;
-                            target
-                        }
-                        _ => entity_key,
-                    };
+                    let target_entity_idx = next_entity_idx;
+                    next_entity_idx += 1;
 
-                    for (entity_port, inst_port) in
-                        (section.ins.iter().chain(section.outs.iter())).zip(ports)
-                    {
+                    for (entity_port, inst_port) in module.io.iter().zip(ports) {
                         signals_map.insert(
-                            (target_entity_idx, *entity_port),
+                            (target_entity_idx, entity_port.1.signal),
                             signals_map.get(&(entity_key, *inst_port)).unwrap().clone(),
                         );
                     }
 
-                    match section.variant {
-                        SectionVariant::Entity => {
-                            entity_stack.push((target_entity_idx, *section_key))
-                        }
-                        SectionVariant::Function => todo!(),
-                        SectionVariant::Process => {
-                            entity_ids.push(target_entity_idx);
-                            processes.push(*section_key);
-                        }
+                    entity_stack.push((target_entity_idx, *module_key))
+                }
+                Instruction::Spawn(process_key, ports) => {
+                    let process = &gl.processes[*process_key];
+
+                    assert_eq!(process.ins.len() + process.outs.len(), ports.len());
+
+                    for (entity_port, inst_port) in
+                        (process.ins.iter().chain(process.outs.iter())).zip(ports)
+                    {
+                        signals_map.insert(
+                            (entity_key, *entity_port),
+                            signals_map.get(&(entity_key, *inst_port)).unwrap().clone(),
+                        );
                     }
+
+                    entity_ids.push(entity_key);
+                    processes.push(*process_key);
                 }
                 _ => todo!("evaluation with vogls-sim"),
             }
@@ -80,18 +79,17 @@ pub fn elaborate(
 
     for (entity_id, process_key) in entity_ids.into_iter().zip(processes.iter_mut()) {
         let process = elaborate_process(*process_key, gl, entity_id, &signals_map);
-        *process_key = gl.sections.insert(process);
+        *process_key = gl.processes.insert(process);
     }
 }
 
 pub fn elaborate_process(
-    section_key: SectionKey,
+    process_key: ProcessKey,
     gl: &mut GlobalContext,
     entity_id: u64,
     signals_map: &HashMap<(u64, SignalKey), SignalKey>,
-) -> Section {
-    let section = gl.sections.get(section_key).unwrap();
-    assert_eq!(section.variant, SectionVariant::Process);
+) -> Process {
+    let process = &gl.processes[process_key];
 
     let mut bb_stack = Vec::new();
     let mut bb_map = HashMap::new();
@@ -100,7 +98,7 @@ pub fn elaborate_process(
     bb_map.clear();
 
     // Lower the IR instructions to VM instructions.
-    bb_stack.push(section.entry);
+    bb_stack.push(process.entry);
     while let Some(bb_key) = bb_stack.pop() {
         let bb = gl.bbs.get(bb_key).unwrap();
         bb_map.insert(bb_key, bb_key);
@@ -163,7 +161,7 @@ pub fn elaborate_process(
     }
 
     let mut bb_seen = HashSet::with_capacity(bb_map.len());
-    bb_stack.push(bb_map[&section.entry]);
+    bb_stack.push(bb_map[&process.entry]);
     while let Some(bb_key) = bb_stack.pop() {
         let bb = gl.bbs.get_mut(bb_key).unwrap();
         bb_seen.insert(bb_key);
@@ -190,16 +188,15 @@ pub fn elaborate_process(
         }
     }
 
-    Section {
-        variant: SectionVariant::Process,
-        name: format!("{}-{entity_id}", section.name),
-        entry: *bb_map.get(&section.entry).unwrap(),
-        ins: section
+    Process {
+        name: format!("{}-{entity_id}", process.name),
+        entry: *bb_map.get(&process.entry).unwrap(),
+        ins: process
             .ins
             .iter()
             .map(|v| signals_map[&(entity_id, *v)])
             .collect(),
-        outs: section
+        outs: process
             .outs
             .iter()
             .map(|v| signals_map[&(entity_id, *v)])

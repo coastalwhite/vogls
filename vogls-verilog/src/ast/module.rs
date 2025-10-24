@@ -271,7 +271,15 @@ pub struct ModuleInstance {
 #[derive(Clone, Copy)]
 pub enum ListOfPortConnections {
     Ordered(AstIdRange<Expr>),
-    Named,
+    Named(AstIdRange<NamedPortConnection>),
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 495
+// named_port_connection ::= { attribute_instance } . port_identifier ( [ expression ] )
+#[derive(Clone, Copy)]
+pub struct NamedPortConnection {
+    pub port_identifier: AstItem<Identifier>,
+    pub expression: Option<AstId<Expr>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
