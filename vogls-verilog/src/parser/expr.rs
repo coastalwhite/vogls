@@ -21,7 +21,7 @@ fn token_to_prefix_op(t: TokenKind) -> Option<(u8, UnaryOperator)> {
     use TokenKind as T;
     use UnaryOperator as U;
     match t {
-        T::Exclamation => Some((26, U::LogicalNegation)),
+        T::Bang => Some((26, U::LogicalNegation)),
         T::Tilde => Some((26, U::BitwiseNegation)),
         T::Ampersand => Some((26, U::ReductionAnd)),
         T::Bar => Some((26, U::ReductionOr)),
@@ -51,9 +51,9 @@ fn token_to_binary_op(t: TokenKind) -> Option<(u8, u8, BinaryOperator)> {
         T::LessThan => Some((17, 18, B::LessThan)),
         T::LessThanEquals => Some((17, 18, B::LessThanEqual)),
         T::DoubleEquals => Some((15, 16, B::LogicalEquality)),
-        T::ExclamationEquals => Some((15, 16, B::LogicalInequality)),
+        T::BangEquals => Some((15, 16, B::LogicalInequality)),
         T::TripleEquals => Some((13, 14, B::CaseEquality)),
-        T::ExclamationDoubleEquals => Some((13, 14, B::CaseInequality)),
+        T::BangDoubleEquals => Some((13, 14, B::CaseInequality)),
         T::Ampersand => Some((11, 12, B::BitwiseAnd)),
         T::Caret => Some((9, 10, B::BitwiseXor)),
         T::TildeCaret | T::CaretTilde => Some((9, 10, B::BitwiseXnor)),

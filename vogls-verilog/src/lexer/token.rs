@@ -74,6 +74,17 @@ macro_rules! define_tokens {
             assert_eq!(consumed.0, "", "Example \"{}\" of token {} had leftover text", $example, stringify!($ident));
             )+
         }
+
+        #[cfg(test)]
+        #[test]
+        fn tokenizer_examples() {
+            use super::tokenizer::TokenBuffer;
+            $(
+            let consumed = TokenBuffer::tokenize($example);
+            assert_eq!(consumed.tokens().len(), 1);
+            assert_eq!(consumed.tokens()[0], TokenKind::$ident, "Example \"{}\" of token {} had the invalid kind", $example, stringify!($ident));
+            )+
+        }
     };
 }
 
@@ -106,7 +117,7 @@ define_tokens! {
         // Operators
         Plus = "+",
         Minus = "-",
-        Exclamation = "!",
+        Bang = "!",
         Tilde = "~",
         Ampersand = "&",
         TildeAmpersand = "~&",
@@ -119,9 +130,9 @@ define_tokens! {
         Slash = "/",
         Procent = "%",
         DoubleEquals = "==",
-        ExclamationEquals = "!=",
+        BangEquals = "!=",
         TripleEquals = "===",
-        ExclamationDoubleEquals = "!==",
+        BangDoubleEquals = "!==",
         DoubleAmpersand = "&&",
         DoubleBar = "||",
         DoubleStar = "**",

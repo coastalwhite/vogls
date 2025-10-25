@@ -11,6 +11,7 @@ use crate::number::{
 };
 use crate::span::Span;
 
+mod tokenizer;
 mod token;
 
 pub struct Lexer<'a> {
@@ -329,9 +330,9 @@ impl<'a> TokenContent<'a> {
 
             ('+', _, _) => (T::Plus, 1),
             ('-', _, _) => (T::Minus, 1),
-            ('!', Some('='), Some('=')) => (T::ExclamationDoubleEquals, 3),
-            ('!', Some('='), _) => (T::ExclamationEquals, 2),
-            ('!', _, _) => (T::Exclamation, 1),
+            ('!', Some('='), Some('=')) => (T::BangDoubleEquals, 3),
+            ('!', Some('='), _) => (T::BangEquals, 2),
+            ('!', _, _) => (T::Bang, 1),
             ('~', Some('&'), _) => (T::TildeAmpersand, 2),
             ('~', Some('|'), _) => (T::TildeBar, 2),
             ('~', Some('^'), _) => (T::TildeCaret, 2),
