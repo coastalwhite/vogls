@@ -1,8 +1,8 @@
 use crate::ast::expr::{BinaryOperator, BitPartSelect, Expr, UnaryOperator};
 use crate::ast::{AstId, DecimalRef, Identifier, SizedNumberRef, StringRef};
-use crate::tokenizer::{FromLexerError, Token};
 use crate::parser::ItemParsable;
 use crate::span::Span;
+use crate::tokenizer::{FromLexerError, Token};
 
 use super::{AstArenas, Consumable, ParseError, Parser};
 

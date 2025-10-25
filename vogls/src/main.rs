@@ -7,9 +7,9 @@ use vogls_ir::{ContextFormat, GlobalContext, Value};
 use vogls_sim::{Context, Event, ScheduledEvent, VmProcess, VmProcessKey, lower_process_to_vm};
 use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{Module, ModuleItem, ModuleOrGenerateItem, NonPortModuleItem};
-use vogls_verilog::tokenizer::{TokenWalker, Tokenized};
 use vogls_verilog::lower::lower_module_to_ir;
 use vogls_verilog::parser::Parser;
+use vogls_verilog::tokenizer::{TokenWalker, Tokenized};
 
 use self::elaborate::elaborate;
 

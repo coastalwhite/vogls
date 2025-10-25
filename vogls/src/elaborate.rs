@@ -1,7 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use vogls_ir::{
-    BasicBlock, BasicBlockTerminator, GlobalContext, Instruction, ModuleKey, Process, ProcessKey, Signal, SignalKey
+    BasicBlock, BasicBlockTerminator, GlobalContext, Instruction, ModuleKey, Process, ProcessKey,
+    Signal, SignalKey,
 };
 
 pub fn elaborate(

@@ -313,7 +313,8 @@ pub fn lower_module_to_ir(
                             module_instances,
                         } = arenas.get(*id);
                         let instantiation_ident = arenas.get_ident(module_identifier.item.0);
-                        let instance_module_key = instantiated_modules.get(instantiation_ident).unwrap();
+                        let instance_module_key =
+                            instantiated_modules.get(instantiation_ident).unwrap();
                         // let entity = gl.modules.get(*entity).unwrap();
 
                         // let section_key = *entity
@@ -344,7 +345,9 @@ pub fn lower_module_to_ir(
                                     })
                                     .collect(),
                             };
-                            module_builder.entity.instantiate(gl, *instance_module_key, ports);
+                            module_builder
+                                .entity
+                                .instantiate(gl, *instance_module_key, ports);
                         }
                     }
                     ModuleOrGenerateItem::InitialConstruct(id) => {

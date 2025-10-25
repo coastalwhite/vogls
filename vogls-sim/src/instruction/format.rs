@@ -48,7 +48,7 @@ impl fmt::Display for VmInstruction {
                     }
                 }
                 f.write_char(']')
-            },
+            }
             Self::Jump(offset) => write!(f, "jump <{offset}>"),
             Self::Branch(cond, true_offset, false_offset) => {
                 write!(f, "branch {cond}, <{true_offset}>, <{false_offset}>")

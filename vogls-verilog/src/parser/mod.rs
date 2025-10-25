@@ -5,9 +5,9 @@ use crate::ast::module::Module;
 use crate::ast::{
     AstId, AstIdRange, AstItem, DecimalRef, Identifier, SizedNumberRef, StringRef, TextRef,
 };
-use crate::tokenizer::{FromLexerError, TokenWalker, Takeable, Token};
 use crate::number::{Decimal, SizedNumber};
 use crate::span::Span;
+use crate::tokenizer::{FromLexerError, Takeable, Token, TokenWalker};
 
 mod constant_expr;
 mod expr;
