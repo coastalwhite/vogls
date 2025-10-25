@@ -13,6 +13,7 @@ mod constant_expr;
 mod expr;
 mod module;
 mod statement;
+mod utils;
 // mod net;
 
 pub struct Parser<'a> {
@@ -213,7 +214,7 @@ impl<'a> Parser<'a> {
 
     pub fn parse_file(&mut self) -> Result<Ast, ParseError> {
         let mut arenas = AstArenas::default();
-        let modules = Module::parse_one_or_more(self, &mut arenas)?;
+        let modules = utils::parse_one_or_more::<Module>(self, &mut arenas)?;
 
         Ok(Ast {
             modules,
@@ -235,135 +236,6 @@ pub trait Consumable<'a>: Sized + Copy + 'static {
                 None
             }
         }
-    }
-}
-
-pub trait Parsable<'a>: Consumable<'a> {
-    fn parse(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<AstId<Self>, ParseError> {
-        Ok(Self::parse_with_span(p, arenas)?.0)
-    }
-
-    fn parse_with_span(
-        p: &mut Parser<'a>,
-        arenas: &mut AstArenas,
-    ) -> Result<(AstId<Self>, Span), ParseError> {
-        let (item, span) = Self::consume(p, arenas)?;
-        Ok((arenas.add(item, span), span))
-    }
-
-    fn try_parse(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Option<AstId<Self>> {
-        Some(Self::try_parse_with_span(p, arenas)?.0)
-    }
-
-    fn try_parse_with_span(
-        p: &mut Parser<'a>,
-        arenas: &mut AstArenas,
-    ) -> Option<(AstId<Self>, Span)> {
-        let (item, span) = Self::try_consume(p, arenas)?;
-        Some((arenas.add(item, span), span))
-    }
-
-    fn parse_until_reaching(
-        p: &mut Parser<'a>,
-        arenas: &mut AstArenas,
-        end: TokenKind,
-    ) -> Result<AstIdRange<Self>, ParseError> {
-        // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
-        // here.
-        let mut items = Vec::new();
-        let mut spans = Vec::new();
-
-        loop {
-            let token = p.lexer.try_next()?;
-            if *token.kind == end {
-                break;
-            }
-            p.lexer.offset -= 1;
-
-            let (item, span) = Self::consume(p, arenas)?;
-            items.push(item);
-            spans.push(span);
-        }
-
-        Ok(arenas.add_range(items, spans))
-    }
-
-    fn parse_one_or_more_delimited(
-        p: &mut Parser<'a>,
-        arenas: &mut AstArenas,
-        delimiter: TokenKind,
-    ) -> Result<AstIdRange<Self>, ParseError> {
-        let (item, span) = Self::consume(p, arenas)?;
-
-        // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
-        // here.
-        let mut items = Vec::new();
-        let mut spans = Vec::new();
-        items.push(item);
-        spans.push(span);
-
-        loop {
-            if !p.lexer.next_if_equals(delimiter) {
-                break;
-            }
-
-            let (item, span) = Self::consume(p, arenas)?;
-            items.push(item);
-            spans.push(span);
-        }
-
-        Ok(arenas.add_range(items, spans))
-    }
-
-    fn parse_zero_or_more_delimited(
-        p: &mut Parser<'a>,
-        arenas: &mut AstArenas,
-        delimiter: TokenKind,
-    ) -> Result<AstIdRange<Self>, ParseError> {
-        let Some((item, span)) = Self::try_consume(p, arenas) else {
-            return Ok(AstIdRange::default());
-        };
-
-        // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
-        // here.
-        let mut items = Vec::new();
-        let mut spans = Vec::new();
-        items.push(item);
-        spans.push(span);
-
-        loop {
-            if !p.lexer.next_if_equals(delimiter) {
-                break;
-            }
-
-            let (item, span) = Self::consume(p, arenas)?;
-            items.push(item);
-            spans.push(span);
-        }
-
-        Ok(arenas.add_range(items, spans))
-    }
-
-    fn parse_one_or_more(
-        p: &mut Parser<'a>,
-        arenas: &mut AstArenas,
-    ) -> Result<AstIdRange<Self>, ParseError> {
-        // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
-        // here.
-        let mut items = Vec::new();
-        let mut spans = Vec::new();
-
-        loop {
-            let (item, span) = Self::consume(p, arenas)?;
-            items.push(item);
-            spans.push(span);
-
-            if p.lexer.is_empty() {
-                break;
-            }
-        }
-
-        Ok(arenas.add_range(items, spans))
     }
 }
 
@@ -455,11 +327,11 @@ pub trait ItemParsable<'a>: Consumable<'a> {
         Ok(AstItem { item, loc })
     }
 
-    fn parse(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<AstItem<Self>, ParseError> {
-        Ok(Self::parse_with_span(p, arenas)?.0)
+    fn item_parse(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<AstItem<Self>, ParseError> {
+        Ok(Self::item_parse_with_span(p, arenas)?.0)
     }
 
-    fn parse_with_span(
+    fn item_parse_with_span(
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
     ) -> Result<(AstItem<Self>, Span), ParseError> {
@@ -469,11 +341,11 @@ pub trait ItemParsable<'a>: Consumable<'a> {
         Ok((AstItem { item, loc }, span))
     }
 
-    fn try_parse(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Option<AstItem<Self>> {
-        Some(Self::try_parse_with_span(p, arenas)?.0)
+    fn try_item_parse(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Option<AstItem<Self>> {
+        Some(Self::try_item_parse_with_span(p, arenas)?.0)
     }
 
-    fn try_parse_with_span(
+    fn try_item_parse_with_span(
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
     ) -> Option<(AstItem<Self>, Span)> {
@@ -481,117 +353,5 @@ pub trait ItemParsable<'a>: Consumable<'a> {
         let loc = arenas.spans.len();
         arenas.spans.push(span);
         Some((AstItem { item, loc }, span))
-    }
-
-    fn parse_until_reaching(
-        p: &mut Parser<'a>,
-        arenas: &mut AstArenas,
-        end: TokenKind,
-    ) -> Result<AstIdRange<Self>, ParseError> {
-        // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
-        // here.
-        let mut items = Vec::new();
-        let mut spans = Vec::new();
-
-        loop {
-            let peek = p.lexer.try_get(p.lexer.offset)?;
-            if *peek.kind == end {
-                break;
-            }
-            p.lexer.offset -= 1;
-
-            let (item, span) = Self::consume(p, arenas)?;
-            items.push(item);
-            spans.push(span);
-        }
-
-        Ok(arenas.add_range(items, spans))
-    }
-
-    fn parse_one_or_more_delimited_until_fail(
-        p: &mut Parser<'a>,
-        arenas: &mut AstArenas,
-        delimiter: TokenKind,
-    ) -> Result<AstIdRange<Self>, ParseError> {
-        let (item, span) = Self::consume(p, arenas)?;
-
-        // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
-        // here.
-        let mut items = Vec::new();
-        let mut spans = Vec::new();
-        items.push(item);
-        spans.push(span);
-
-        loop {
-            let save = p.lexer.offset;
-            if !p.lexer.next_if_equals(delimiter) {
-                break;
-            }
-
-            let Some((item, span)) = Self::try_consume(p, arenas) else {
-                p.lexer.offset = save;
-                break;
-            };
-            items.push(item);
-            spans.push(span);
-        }
-
-        Ok(arenas.add_range(items, spans))
-    }
-
-    fn parse_one_or_more_delimited(
-        p: &mut Parser<'a>,
-        arenas: &mut AstArenas,
-        delimiter: TokenKind,
-    ) -> Result<AstIdRange<Self>, ParseError> {
-        let (item, span) = Self::consume(p, arenas)?;
-
-        // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
-        // here.
-        let mut items = Vec::new();
-        let mut spans = Vec::new();
-        items.push(item);
-        spans.push(span);
-
-        loop {
-            if !p.lexer.next_if_equals(delimiter) {
-                break;
-            }
-
-            let (item, span) = Self::consume(p, arenas)?;
-            items.push(item);
-            spans.push(span);
-        }
-
-        Ok(arenas.add_range(items, spans))
-    }
-
-    fn parse_zero_or_more_delimited(
-        p: &mut Parser<'a>,
-        arenas: &mut AstArenas,
-        delimiter: TokenKind,
-    ) -> Result<AstIdRange<Self>, ParseError> {
-        let Some((item, span)) = Self::try_consume(p, arenas) else {
-            return Ok(AstIdRange::default());
-        };
-
-        // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
-        // here.
-        let mut items = Vec::new();
-        let mut spans = Vec::new();
-        items.push(item);
-        spans.push(span);
-
-        loop {
-            if !p.lexer.next_if_equals(delimiter) {
-                break;
-            }
-
-            let (item, span) = Self::consume(p, arenas)?;
-            items.push(item);
-            spans.push(span);
-        }
-
-        Ok(arenas.add_range(items, spans))
     }
 }

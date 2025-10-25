@@ -15,7 +15,8 @@ use crate::lexer::{FromLexerError, TokenKind};
 use crate::parser::ItemParsable;
 use crate::span::Span;
 
-use super::{AstArenas, Consumable, Parsable, ParseError, Parser};
+use super::utils::*;
+use super::{AstArenas, Consumable, ParseError, Parser};
 
 impl<'a> Consumable<'a> for Module {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
@@ -32,7 +33,7 @@ impl<'a> Consumable<'a> for Module {
 
         // @Incomplete: { attribute_instance }
         let module_kw_span = *p.lexer.next_expect(TK::KeywordModule)?;
-        let module_identifier = Identifier::parse(p, arenas)?;
+        let module_identifier = Identifier::item_parse(p, arenas)?;
         // @Incomplete: [ module_parameter_port_list ]
         let ports = if p.lexer.next_if_equals(TK::LeftParen) {
             let peeked = p.lexer.try_get(p.lexer.offset)?;
@@ -43,13 +44,13 @@ impl<'a> Consumable<'a> for Module {
                 }
                 TK::KeywordInput | TK::KeywordOutput | TK::KeywordInout => {
                     let port_declarations =
-                        PortDeclaration::parse_zero_or_more_delimited(p, arenas, TK::Comma)?;
+                        parse_zero_or_more_delimited::<PortDeclaration>(p, arenas, TK::Comma)?;
                     p.lexer.next_expect(TK::RightParen)?;
 
                     ModulePorts::PortDeclarations(port_declarations)
                 }
                 _ => {
-                    let ports = Port::parse_one_or_more_delimited(p, arenas, TK::Comma)?;
+                    let ports = parse_one_or_more_delimited::<Port>(p, arenas, TK::Comma)?;
                     p.lexer.next_expect(TK::RightParen)?;
 
                     ModulePorts::Ports(ports)
@@ -59,7 +60,7 @@ impl<'a> Consumable<'a> for Module {
             ModulePorts::PortDeclarations(Default::default())
         };
         p.lexer.next_expect(TK::Semicolon)?;
-        let module_items = ModuleItem::parse_until_reaching(p, arenas, TK::KeywordEndModule)?;
+        let module_items = parse_until_reaching::<ModuleItem>(p, arenas, TK::KeywordEndModule)?;
 
         let span = module_kw_span | (*p.lexer.get(p.lexer.offset - 1).unwrap().span);
 
@@ -73,7 +74,6 @@ impl<'a> Consumable<'a> for Module {
         ))
     }
 }
-impl<'a> Parsable<'a> for Module {}
 
 impl<'a> Consumable<'a> for ModuleItem {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
@@ -86,18 +86,17 @@ impl<'a> Consumable<'a> for ModuleItem {
         let peeked = p.lexer.try_get(p.lexer.offset)?;
         match peeked.kind {
             TK::KeywordInput | TK::KeywordOutput | TK::KeywordInout => {
-                let (port_declaration, span) = PortDeclaration::parse_with_span(p, arenas)?;
+                let (port_declaration, span) = parse_with_span::<PortDeclaration>(p, arenas)?;
                 p.lexer.next_expect(TK::Semicolon)?;
                 Ok((Self::PortDeclaration(port_declaration), span))
             }
             _ => {
-                let (non_port_module_item, span) = NonPortModuleItem::parse_with_span(p, arenas)?;
+                let (non_port_module_item, span) = parse_with_span::<NonPortModuleItem>(p, arenas)?;
                 Ok((Self::NonPortModuleItem(non_port_module_item), span))
             }
         }
     }
 }
-impl<'a> Parsable<'a> for ModuleItem {}
 
 impl<'a> Consumable<'a> for NonPortModuleItem {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
@@ -118,19 +117,18 @@ impl<'a> Consumable<'a> for NonPortModuleItem {
             // @Incomplete: | { attribute_instance } specparam_declaration
             TK::KeywordParameter => {
                 let (parameter_declaration, span) =
-                    ParameterDeclaration::parse_with_span(p, arenas)?;
+                    parse_with_span::<ParameterDeclaration>(p, arenas)?;
                 p.lexer.next_expect(TK::Semicolon)?;
                 Ok((Self::ParameterDeclaration(parameter_declaration), span))
             }
             _ => {
                 let (module_or_generate_item, span) =
-                    ModuleOrGenerateItem::parse_with_span(p, arenas)?;
+                    parse_with_span::<ModuleOrGenerateItem>(p, arenas)?;
                 Ok((Self::ModuleOrGenerateItem(module_or_generate_item), span))
             }
         }
     }
 }
-impl<'a> Parsable<'a> for NonPortModuleItem {}
 
 impl<'a> Consumable<'a> for Port {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
@@ -141,11 +139,10 @@ impl<'a> Consumable<'a> for Port {
 
         // @Incomplete: . port_identifier ( [ port_expression ] )
 
-        let (port_expression, span) = PortExpression::parse_with_span(p, arenas)?;
+        let (port_expression, span) = parse_with_span::<PortExpression>(p, arenas)?;
         Ok((Self::PortExpression(port_expression), span))
     }
 }
-impl<'a> Parsable<'a> for Port {}
 
 impl<'a> Consumable<'a> for PortExpression {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
@@ -156,7 +153,7 @@ impl<'a> Consumable<'a> for PortExpression {
 
         // @Incomplete: { port_reference { , port_reference } }
 
-        let (port_reference, span) = PortReference::parse_with_span(p, arenas)?;
+        let (port_reference, span) = parse_with_span::<PortReference>(p, arenas)?;
         Ok((
             Self {
                 references: port_reference,
@@ -165,7 +162,6 @@ impl<'a> Consumable<'a> for PortExpression {
         ))
     }
 }
-impl<'a> Parsable<'a> for PortExpression {}
 
 impl<'a> Consumable<'a> for PortReference {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
@@ -175,11 +171,10 @@ impl<'a> Consumable<'a> for PortReference {
 
         // @Incomplete: [ [ constant_range_expression ] ]
 
-        let (identifier, span) = Identifier::parse_with_span(p, arenas)?;
+        let (identifier, span) = Identifier::item_parse_with_span(p, arenas)?;
         Ok((Self { identifier }, span))
     }
 }
-impl<'a> Parsable<'a> for PortReference {}
 
 impl<'a> Consumable<'a> for PortDeclaration {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
@@ -194,22 +189,21 @@ impl<'a> Consumable<'a> for PortDeclaration {
         let peeked = p.lexer.try_get(p.lexer.offset)?;
         match *peeked.kind {
             TK::KeywordInout => {
-                let (inout_declaration, span) = InoutDeclaration::parse_with_span(p, arenas)?;
+                let (inout_declaration, span) = parse_with_span::<InoutDeclaration>(p, arenas)?;
                 Ok((Self::Inout(inout_declaration), span))
             }
             TK::KeywordInput => {
-                let (input_declaration, span) = InputDeclaration::parse_with_span(p, arenas)?;
+                let (input_declaration, span) = parse_with_span::<InputDeclaration>(p, arenas)?;
                 Ok((Self::Input(input_declaration), span))
             }
             TK::KeywordOutput => {
-                let (output_declaration, span) = OutputDeclaration::parse_with_span(p, arenas)?;
+                let (output_declaration, span) = parse_with_span::<OutputDeclaration>(p, arenas)?;
                 Ok((Self::Output(output_declaration), span))
             }
             _ => Err(ParseError::unexpected_token()),
         }
     }
 }
-impl<'a> Parsable<'a> for PortDeclaration {}
 
 impl<'a> Consumable<'a> for InoutDeclaration {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
@@ -220,13 +214,13 @@ impl<'a> Consumable<'a> for InoutDeclaration {
 
         let inout_kw_span = *p.lexer.next_expect(TK::KeywordInout)?;
         let mut net_type = None;
-        if let Some(val) = NetType::try_parse(p, arenas) {
+        if let Some(val) = NetType::try_item_parse(p, arenas) {
             net_type = Some(val);
         }
         let signed = p.lexer.next_if_equals(TK::KeywordSigned);
         // @Incomplete: [ range ]
         let port_identifiers =
-            Identifier::parse_one_or_more_delimited_until_fail(p, arenas, TK::Comma)?;
+            parse_one_or_more_delimited_until_fail::<Identifier>(p, arenas, TK::Comma)?;
         let last = port_identifiers.last().unwrap();
         let end_span = *arenas.spans.get(last.loc).unwrap();
 
@@ -242,7 +236,6 @@ impl<'a> Consumable<'a> for InoutDeclaration {
         ))
     }
 }
-impl<'a> Parsable<'a> for InoutDeclaration {}
 
 impl<'a> Consumable<'a> for InputDeclaration {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
@@ -253,13 +246,13 @@ impl<'a> Consumable<'a> for InputDeclaration {
 
         let input_kw_span = *p.lexer.next_expect(TK::KeywordInput)?;
         let mut net_type = None;
-        if let Some(val) = NetType::try_parse(p, arenas) {
+        if let Some(val) = NetType::try_item_parse(p, arenas) {
             net_type = Some(val);
         }
         let signed = p.lexer.next_if_equals(TK::KeywordSigned);
         // @Incomplete: [ range ]
         let port_identifiers =
-            Identifier::parse_one_or_more_delimited_until_fail(p, arenas, TK::Comma)?;
+            parse_one_or_more_delimited_until_fail::<Identifier>(p, arenas, TK::Comma)?;
         let last = port_identifiers.last().unwrap();
         let end_span = *arenas.spans.get(last.loc).unwrap();
 
@@ -275,7 +268,6 @@ impl<'a> Consumable<'a> for InputDeclaration {
         ))
     }
 }
-impl<'a> Parsable<'a> for InputDeclaration {}
 
 impl<'a> Consumable<'a> for OutputDeclaration {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
@@ -289,13 +281,14 @@ impl<'a> Consumable<'a> for OutputDeclaration {
 
         let output_kw_span = *p.lexer.next_expect(TK::KeywordOutput)?;
         let mut net_type = None;
-        if let Some(val) = NetType::try_parse(p, arenas) {
+        if let Some(val) = NetType::try_item_parse(p, arenas) {
             net_type = Some(val);
         }
         let signed = p.lexer.next_if_equals(TK::KeywordSigned);
         // @Incomplete: reg | output_variable_type
         // @Incomplete: [ range ]
-        let identifiers = Identifier::parse_one_or_more_delimited_until_fail(p, arenas, TK::Comma)?;
+        let identifiers =
+            parse_one_or_more_delimited_until_fail::<Identifier>(p, arenas, TK::Comma)?;
         let last = identifiers.last().unwrap();
         let end_span = *arenas.spans.get(last.loc).unwrap();
 
@@ -311,7 +304,6 @@ impl<'a> Consumable<'a> for OutputDeclaration {
         ))
     }
 }
-impl<'a> Parsable<'a> for OutputDeclaration {}
 
 impl<'a> Consumable<'a> for NetType {
     fn consume(p: &mut Parser<'a>, _arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
@@ -372,19 +364,19 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItem {
         let peeked = p.lexer.try_get(p.lexer.offset)?;
         match peeked.kind {
             TK::KeywordInitial => {
-                let (initial_construct, span) = InitialConstruct::parse_with_span(p, arenas)?;
+                let (initial_construct, span) = parse_with_span::<InitialConstruct>(p, arenas)?;
                 Ok((Self::InitialConstruct(initial_construct), span))
             }
             TK::KeywordAlways => {
-                let (always_construct, span) = AlwaysConstruct::parse_with_span(p, arenas)?;
+                let (always_construct, span) = parse_with_span::<AlwaysConstruct>(p, arenas)?;
                 Ok((Self::AlwaysConstruct(always_construct), span))
             }
             TK::KeywordAssign => {
-                let (continous_assign, span) = ContinousAssign::parse_with_span(p, arenas)?;
+                let (continous_assign, span) = parse_with_span::<ContinousAssign>(p, arenas)?;
                 Ok((Self::ContinuousAssign(continous_assign), span))
             }
             TK::Ident => {
-                let (module_instance, span) = ModuleInstantiation::parse_with_span(p, arenas)?;
+                let (module_instance, span) = parse_with_span::<ModuleInstantiation>(p, arenas)?;
                 Ok((Self::ModuleInstantiation(module_instance), span))
             }
             TK::KeywordAnd
@@ -393,7 +385,7 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItem {
             | TK::KeywordNor
             | TK::KeywordXor
             | TK::KeywordXnor => {
-                let (gate_instance, span) = GateInstantiation::parse_with_span(p, arenas)?;
+                let (gate_instance, span) = parse_with_span::<GateInstantiation>(p, arenas)?;
                 Ok((Self::GateInstantiation(gate_instance), span))
             }
             TK::KeywordSupply0
@@ -408,7 +400,7 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItem {
             | TK::KeywordWor
             | TK::KeywordReg => {
                 let (module_or_generate_item_declaration, span) =
-                    ModuleOrGenerateItemDeclaration::parse_with_span(p, arenas)?;
+                    parse_with_span::<ModuleOrGenerateItemDeclaration>(p, arenas)?;
                 Ok((
                     Self::ModuleOrGenerateItemDeclaration(module_or_generate_item_declaration),
                     span,
@@ -424,7 +416,6 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItem {
         }
     }
 }
-impl<'a> Parsable<'a> for ModuleOrGenerateItem {}
 
 impl<'a> Consumable<'a> for ContinousAssign {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
@@ -437,7 +428,7 @@ impl<'a> Consumable<'a> for ContinousAssign {
         let assign_span = *p.lexer.next_expect(TK::KeywordAssign)?;
 
         let list_of_net_assignments =
-            NetAssignment::parse_one_or_more_delimited(p, arenas, TK::Comma)?;
+            parse_one_or_more_delimited::<NetAssignment>(p, arenas, TK::Comma)?;
         let semicolon_span = *p.lexer.next_expect(TK::Semicolon)?;
 
         let span = assign_span | semicolon_span;
@@ -449,7 +440,6 @@ impl<'a> Consumable<'a> for ContinousAssign {
         ))
     }
 }
-impl<'a> Parsable<'a> for ContinousAssign {}
 
 impl<'a> Consumable<'a> for NetAssignment {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
@@ -459,9 +449,9 @@ impl<'a> Consumable<'a> for NetAssignment {
         // continuous_assign ::= assign [ drive_strength ] [ delay3 ] list_of_net_assignments ;
         // list_of_net_assignments ::= net_assignment { , net_assignment }
 
-        let (net_lvalue, net_lvalue_span) = NetLValue::parse_with_span(p, arenas)?;
+        let (net_lvalue, net_lvalue_span) = parse_with_span::<NetLValue>(p, arenas)?;
         p.lexer.next_expect(TK::Equals)?;
-        let (expression, expression_span) = Expr::parse_with_span(p, arenas)?;
+        let (expression, expression_span) = parse_with_span::<Expr>(p, arenas)?;
 
         let span = net_lvalue_span | expression_span;
 
@@ -474,7 +464,6 @@ impl<'a> Consumable<'a> for NetAssignment {
         ))
     }
 }
-impl<'a> Parsable<'a> for NetAssignment {}
 
 impl<'a> Consumable<'a> for ModuleInstantiation {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
@@ -485,8 +474,8 @@ impl<'a> Consumable<'a> for ModuleInstantiation {
         //   module_identifier [ parameter_value_assignment ]
         //   module_instance { , module_instance } ;
 
-        let (module_identifier, module_identifier_span) = Identifier::parse_with_span(p, arenas)?;
-        let module_instances = ModuleInstance::parse_one_or_more_delimited(p, arenas, TK::Comma)?;
+        let (module_identifier, module_identifier_span) = Identifier::item_parse_with_span(p, arenas)?;
+        let module_instances = parse_one_or_more_delimited::<ModuleInstance>(p, arenas, TK::Comma)?;
         let semicolon_span = *p.lexer.next_expect(TK::Semicolon)?;
 
         let span = module_identifier_span | semicolon_span;
@@ -500,7 +489,6 @@ impl<'a> Consumable<'a> for ModuleInstantiation {
         ))
     }
 }
-impl<'a> Parsable<'a> for ModuleInstantiation {}
 
 impl<'a> Consumable<'a> for ModuleInstance {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
@@ -510,9 +498,9 @@ impl<'a> Consumable<'a> for ModuleInstance {
         // module_instance ::= name_of_module_instance ( [ list_of_port_connections ] )
 
         let (name_of_module_instance, name_of_module_instance_span) =
-            Identifier::parse_with_span(p, arenas)?;
+            Identifier::item_parse_with_span(p, arenas)?;
         p.lexer.next_expect(TK::LeftParen)?;
-        let list_of_port_connections = ListOfPortConnections::parse(p, arenas)?;
+        let list_of_port_connections = parse::<ListOfPortConnections>(p, arenas)?;
         let right_paren_span = *p.lexer.next_expect(TK::RightParen)?;
 
         let span = name_of_module_instance_span | right_paren_span;
@@ -526,7 +514,6 @@ impl<'a> Consumable<'a> for ModuleInstance {
         ))
     }
 }
-impl<'a> Parsable<'a> for ModuleInstance {}
 
 impl<'a> Consumable<'a> for ListOfPortConnections {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
@@ -541,17 +528,16 @@ impl<'a> Consumable<'a> for ListOfPortConnections {
             .get(p.lexer.offset)
             .is_some_and(|t| *t.kind == TK::Dot)
         {
-            let named = NamedPortConnection::parse_zero_or_more_delimited(p, arenas, TK::Comma)?;
+            let named = parse_zero_or_more_delimited::<NamedPortConnection>(p, arenas, TK::Comma)?;
             let span = arenas.spans[named.loc];
             Ok((Self::Named(named), span))
         } else {
-            let ordered = Expr::parse_zero_or_more_delimited(p, arenas, TK::Comma)?;
+            let ordered = parse_zero_or_more_delimited::<Expr>(p, arenas, TK::Comma)?;
             let span = arenas.spans[ordered.loc];
             Ok((Self::Ordered(ordered), span))
         }
     }
 }
-impl<'a> Parsable<'a> for ListOfPortConnections {}
 
 impl<'a> Consumable<'a> for NamedPortConnection {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
@@ -561,14 +547,14 @@ impl<'a> Consumable<'a> for NamedPortConnection {
         // named_port_connection ::= { attribute_instance } . port_identifier ( [ expression ] )
 
         let dot_span = *p.lexer.next_expect(TK::Dot)?;
-        let port_identifier = Identifier::parse(p, arenas)?;
+        let port_identifier = Identifier::item_parse(p, arenas)?;
         p.lexer.next_expect(TK::LeftParen)?;
         let expression = if !p
             .lexer
             .get(p.lexer.offset)
             .is_some_and(|t| *t.kind == TK::RightParen)
         {
-            Some(Expr::parse(p, arenas)?)
+            Some(parse::<Expr>(p, arenas)?)
         } else {
             None
         };
@@ -584,7 +570,6 @@ impl<'a> Consumable<'a> for NamedPortConnection {
         ))
     }
 }
-impl<'a> Parsable<'a> for NamedPortConnection {}
 
 impl<'a> Consumable<'a> for InitialConstruct {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
@@ -594,14 +579,13 @@ impl<'a> Consumable<'a> for InitialConstruct {
         // initial_construct ::= initial statement
 
         let initial_kw_span = *p.lexer.next_expect(TK::KeywordInitial)?;
-        let (statement, span) = Statement::parse_with_span(p, arenas)?;
+        let (statement, span) = parse_with_span::<Statement>(p, arenas)?;
 
         let span = initial_kw_span | span;
 
         Ok((Self(statement), span))
     }
 }
-impl<'a> Parsable<'a> for InitialConstruct {}
 
 impl<'a> Consumable<'a> for AlwaysConstruct {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
@@ -611,14 +595,13 @@ impl<'a> Consumable<'a> for AlwaysConstruct {
         // always_construct ::= always statement
 
         let always_kw_span = *p.lexer.next_expect(TK::KeywordAlways)?;
-        let (statement, span) = Statement::parse_with_span(p, arenas)?;
+        let (statement, span) = parse_with_span::<Statement>(p, arenas)?;
 
         let span = always_kw_span | span;
 
         Ok((Self(statement), span))
     }
 }
-impl<'a> Parsable<'a> for AlwaysConstruct {}
 
 impl<'a> Consumable<'a> for GateInstantiation {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
@@ -645,7 +628,7 @@ impl<'a> Consumable<'a> for GateInstantiation {
             | TK::KeywordXor
             | TK::KeywordXnor => {
                 let (n_input_gate_instantiation, span) =
-                    NInputGateInstantiation::parse_with_span(p, arenas)?;
+                    parse_with_span::<NInputGateInstantiation>(p, arenas)?;
                 Ok((Self::NInput(n_input_gate_instantiation), span))
             }
             _ => Err(ParseError::incomplete(
@@ -655,7 +638,6 @@ impl<'a> Consumable<'a> for GateInstantiation {
         }
     }
 }
-impl<'a> Parsable<'a> for GateInstantiation {}
 
 impl<'a> Consumable<'a> for NInputGateInstantiation {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
@@ -664,10 +646,10 @@ impl<'a> Consumable<'a> for NInputGateInstantiation {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 493
         // n_input_gatetype [drive_strength] [delay2] n_input_gate_instance { , n_input_gate_instance } ;
 
-        let (gatetype, gatetype_span) = NInputGateType::parse_with_span(p, arenas)?;
+        let (gatetype, gatetype_span) = NInputGateType::item_parse_with_span(p, arenas)?;
         // @Incomplete: drive_strength
         // @Incomplete: delay2
-        let instances = NInputGateInstance::parse_one_or_more_delimited(p, arenas, TK::Comma)?;
+        let instances = parse_one_or_more_delimited::<NInputGateInstance>(p, arenas, TK::Comma)?;
         let semicolon_span = *p.lexer.next_expect(TK::Semicolon)?;
 
         let span = gatetype_span | semicolon_span;
@@ -681,7 +663,6 @@ impl<'a> Consumable<'a> for NInputGateInstantiation {
         ))
     }
 }
-impl<'a> Parsable<'a> for NInputGateInstantiation {}
 
 impl<'a> Consumable<'a> for NInputGateType {
     fn consume(p: &mut Parser<'a>, _arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
@@ -719,15 +700,15 @@ impl<'a> Consumable<'a> for NInputGateInstance {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 494
         // n_input_gate_instance ::= [ name_of_gate_instance ] ( output_terminal , input_terminal { , input_terminal } )
 
-        let name = NameOfGateInstance::try_parse_with_span(p, arenas);
+        let name = try_parse_with_span::<NameOfGateInstance>(p, arenas);
         let mut start_span = *p.lexer.next_expect(TK::LeftParen)?;
         let name = name.map(|(name, name_span)| {
             start_span = name_span;
             name
         });
-        let output_terminal = NetLValue::parse(p, arenas)?;
+        let output_terminal = parse::<NetLValue>(p, arenas)?;
         p.lexer.next_expect(TK::Comma)?;
-        let input_terminals = Expr::parse_one_or_more_delimited(p, arenas, TK::Comma)?;
+        let input_terminals = parse_one_or_more_delimited::<Expr>(p, arenas, TK::Comma)?;
         let right_paren_span = *p.lexer.next_expect(TK::RightParen)?;
 
         let span = start_span | right_paren_span;
@@ -742,7 +723,6 @@ impl<'a> Consumable<'a> for NInputGateInstance {
         ))
     }
 }
-impl<'a> Parsable<'a> for NInputGateInstance {}
 
 impl<'a> Consumable<'a> for NameOfGateInstance {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
@@ -750,12 +730,11 @@ impl<'a> Consumable<'a> for NameOfGateInstance {
         // name_of_gate_instance ::= gate_instance_identifier [ range ]
 
         // @Incomplete
-        let (identifier, span) = Identifier::parse_with_span(p, arenas)?;
+        let (identifier, span) = Identifier::item_parse_with_span(p, arenas)?;
 
         Ok((Self { identifier }, span))
     }
 }
-impl<'a> Parsable<'a> for NameOfGateInstance {}
 
 impl<'a> Consumable<'a> for ModuleOrGenerateItemDeclaration {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
@@ -786,11 +765,11 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItemDeclaration {
             | TK::KeywordWire
             | TK::KeywordWand
             | TK::KeywordWor => {
-                let (net_declaration, span) = NetDeclaration::parse_with_span(p, arenas)?;
+                let (net_declaration, span) = parse_with_span::<NetDeclaration>(p, arenas)?;
                 Ok((Self::Net(net_declaration), span))
             }
             TK::KeywordReg => {
-                let (reg_declaration, span) = RegDeclaration::parse_with_span(p, arenas)?;
+                let (reg_declaration, span) = parse_with_span::<RegDeclaration>(p, arenas)?;
                 Ok((Self::Reg(reg_declaration), span))
             }
             _ => {
@@ -803,7 +782,6 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItemDeclaration {
         }
     }
 }
-impl<'a> Parsable<'a> for ModuleOrGenerateItemDeclaration {}
 
 impl<'a> Consumable<'a> for NetDeclaration {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
@@ -821,8 +799,8 @@ impl<'a> Consumable<'a> for NetDeclaration {
         // | trireg [ drive_strength ] [ vectored | scalared ] [ signed ] range [ delay3 ] list_of_net_decl_assignments ;
 
         // @Incomplete
-        let (net_type, net_type_span) = NetType::parse_with_span(p, arenas)?;
-        let identifiers = Identifier::parse_one_or_more_delimited(p, arenas, TK::Comma)?;
+        let (net_type, net_type_span) = NetType::item_parse_with_span(p, arenas)?;
+        let identifiers = parse_one_or_more_delimited::<Identifier>(p, arenas, TK::Comma)?;
         let semicolon_span = *p.lexer.next_expect(TK::Semicolon)?;
 
         let span = net_type_span | semicolon_span;
@@ -836,7 +814,6 @@ impl<'a> Consumable<'a> for NetDeclaration {
         ))
     }
 }
-impl<'a> Parsable<'a> for NetDeclaration {}
 
 impl<'a> Consumable<'a> for RegDeclaration {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
@@ -847,7 +824,7 @@ impl<'a> Consumable<'a> for RegDeclaration {
 
         // @Incomplete
         let reg_kw_span = *p.lexer.next_expect(TK::KeywordReg)?;
-        let identifiers = Identifier::parse_one_or_more_delimited(p, arenas, TK::Comma)?;
+        let identifiers = parse_one_or_more_delimited::<Identifier>(p, arenas, TK::Comma)?;
         let semicolon_span = *p.lexer.next_expect(TK::Semicolon)?;
 
         let span = reg_kw_span | semicolon_span;
@@ -855,7 +832,6 @@ impl<'a> Consumable<'a> for RegDeclaration {
         Ok((Self { identifiers }, span))
     }
 }
-impl<'a> Parsable<'a> for RegDeclaration {}
 
 impl<'a> Consumable<'a> for ParameterDeclaration {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
@@ -868,7 +844,7 @@ impl<'a> Consumable<'a> for ParameterDeclaration {
 
         let parameter_kw_span = *p.lexer.next_expect(TK::KeywordParameter)?;
         // @Incomplete
-        let assignments = ParamAssignment::parse_one_or_more_delimited(p, arenas, TK::Comma)?;
+        let assignments = parse_one_or_more_delimited::<ParamAssignment>(p, arenas, TK::Comma)?;
         let last_span = arenas.get_span(assignments.last().unwrap());
 
         let span = parameter_kw_span | last_span;
@@ -876,7 +852,6 @@ impl<'a> Consumable<'a> for ParameterDeclaration {
         Ok((Self { assignments }, span))
     }
 }
-impl<'a> Parsable<'a> for ParameterDeclaration {}
 
 impl<'a> Consumable<'a> for ParamAssignment {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
@@ -885,13 +860,12 @@ impl<'a> Consumable<'a> for ParamAssignment {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 491
         // param_assignment ::= parameter_identifier = constant_mintypmax_expression
 
-        let (param, param_span) = Identifier::parse_with_span(p, arenas)?;
+        let (param, param_span) = Identifier::item_parse_with_span(p, arenas)?;
         p.lexer.next_expect(TK::Equals)?;
-        let (constant, constant_span) = ConstantMinTypMaxExpression::parse_with_span(p, arenas)?;
+        let (constant, constant_span) = parse_with_span::<ConstantMinTypMaxExpression>(p, arenas)?;
 
         let span = param_span | constant_span;
 
         Ok((Self { param, constant }, span))
     }
 }
-impl<'a> Parsable<'a> for ParamAssignment {}

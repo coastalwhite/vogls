@@ -4,7 +4,7 @@ use crate::lexer::{FromLexerError, TokenKind};
 use crate::parser::ItemParsable;
 use crate::span::Span;
 
-use super::{AstArenas, Consumable, Parsable, ParseError, Parser};
+use super::{AstArenas, Consumable, ParseError, Parser};
 
 pub(crate) type BindingPower = u8;
 
@@ -86,10 +86,10 @@ impl<'a> Consumable<'a> for Expr {
             let span = *token.span;
             current = {
                 match token.kind {
-                    TK::Ident => (Expr::Ident(Identifier::parse(p, arenas)?), span),
-                    TK::Decimal => (Expr::Decimal(DecimalRef::parse(p, arenas)?.item), span),
-                    TK::Number => (Expr::Sized(SizedNumberRef::parse(p, arenas)?), span),
-                    TK::String => (Expr::String(StringRef::parse(p, arenas)?.item), span),
+                    TK::Ident => (Expr::Ident(Identifier::item_parse(p, arenas)?), span),
+                    TK::Decimal => (Expr::Decimal(DecimalRef::item_parse(p, arenas)?.item), span),
+                    TK::Number => (Expr::Sized(SizedNumberRef::item_parse(p, arenas)?), span),
+                    TK::String => (Expr::String(StringRef::item_parse(p, arenas)?.item), span),
                     TK::LeftParen => deepen!(StackItem::Paren, 0, span),
                     t => {
                         let t = *t;
@@ -184,4 +184,3 @@ impl<'a> Consumable<'a> for Expr {
         Ok(result)
     }
 }
-impl<'a> Parsable<'a> for Expr {}

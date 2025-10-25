@@ -3,7 +3,8 @@ use crate::ast::{DecimalRef, StringRef};
 use crate::lexer::TokenKind;
 use crate::span::Span;
 
-use super::{AstArenas, Consumable, Parsable, ParseError, Parser};
+use super::utils::*;
+use super::{AstArenas, Consumable, ParseError, Parser};
 
 impl<'a> Consumable<'a> for ConstantMinTypMaxExpression {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
@@ -14,11 +15,11 @@ impl<'a> Consumable<'a> for ConstantMinTypMaxExpression {
         //   constant_expression
         // | constant_expression : constant_expression : constant_expression
 
-        let (min, min_span) = ConstantExpr::parse_with_span(p, arenas)?;
+        let (min, min_span) = parse_with_span::<ConstantExpr>(p, arenas)?;
         if p.lexer.next_if_equals(TK::Colon) {
-            let typ = ConstantExpr::parse(p, arenas)?;
+            let typ = parse::<ConstantExpr>(p, arenas)?;
             p.lexer.next_expect(TK::Colon)?;
-            let (max, max_span) = ConstantExpr::parse_with_span(p, arenas)?;
+            let (max, max_span) = parse_with_span::<ConstantExpr>(p, arenas)?;
             let span = min_span | max_span;
             Ok((Self::MinTypMax { min, typ, max }, span))
         } else {
@@ -26,7 +27,6 @@ impl<'a> Consumable<'a> for ConstantMinTypMaxExpression {
         }
     }
 }
-impl<'a> Parsable<'a> for ConstantMinTypMaxExpression {}
 
 impl<'a> Consumable<'a> for ConstantExpr {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
@@ -43,7 +43,6 @@ impl<'a> Consumable<'a> for ConstantExpr {
         Ok((Self::Primary(primary), span))
     }
 }
-impl<'a> Parsable<'a> for ConstantExpr {}
 
 impl<'a> Consumable<'a> for ConstantPrimary {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
@@ -61,7 +60,7 @@ impl<'a> Consumable<'a> for ConstantPrimary {
         // | ( constant_mintypmax_expression )
         // | string
 
-        let peeked = p.lexer.try_next()?;
+        let peeked = p.lexer.try_get(p.lexer.offset)?;
         match peeked.kind {
             TK::Decimal => {
                 let (decimal, span) = DecimalRef::consume(p, arenas)?;
@@ -78,4 +77,3 @@ impl<'a> Consumable<'a> for ConstantPrimary {
         }
     }
 }
-impl<'a> Parsable<'a> for ConstantPrimary {}
