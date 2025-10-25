@@ -1,6 +1,6 @@
 use crate::ast::expr::{BinaryOperator, BitPartSelect, Expr, UnaryOperator};
 use crate::ast::{AstId, DecimalRef, Identifier, SizedNumberRef, StringRef};
-use crate::lexer::{FromLexer2Error, TokenKind};
+use crate::lexer::{FromLexerError, TokenKind};
 use crate::parser::ItemParsable;
 use crate::span::Span;
 

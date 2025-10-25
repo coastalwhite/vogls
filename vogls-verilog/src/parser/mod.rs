@@ -5,7 +5,7 @@ use crate::ast::module::Module;
 use crate::ast::{
     AstId, AstIdRange, AstItem, DecimalRef, Identifier, SizedNumberRef, StringRef, TextRef,
 };
-use crate::lexer::{FromLexer2Error, Lexer2, Takeable, TokenKind};
+use crate::lexer::{FromLexerError, Lexer, Takeable, TokenKind};
 use crate::number::{Decimal, SizedNumber};
 use crate::span::Span;
 
@@ -16,7 +16,7 @@ mod statement;
 // mod net;
 
 pub struct Parser<'a> {
-    lexer: Lexer2<'a>,
+    lexer: Lexer<'a>,
     /// A `scratchpad` to parse expressions
     exprs_sp: Vec<(expr::StackItem, expr::BindingPower, Span)>,
 }
@@ -187,7 +187,7 @@ pub enum ParseErrorReason {
     Incomplete(&'static str),
 }
 
-impl FromLexer2Error for ParseError {
+impl FromLexerError for ParseError {
     fn missing_token(at: usize) -> Self {
         Self {
             location: Some(Span::new(at, at)),
@@ -204,7 +204,7 @@ impl FromLexer2Error for ParseError {
 }
 
 impl<'a> Parser<'a> {
-    pub fn new(lexer: Lexer2<'a>) -> Self {
+    pub fn new(lexer: Lexer<'a>) -> Self {
         Self {
             lexer,
             exprs_sp: Vec::with_capacity(16),

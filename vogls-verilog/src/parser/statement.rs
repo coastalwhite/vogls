@@ -5,7 +5,7 @@ use crate::ast::statement::{
     Statement, SystemTaskEnable, SystemTaskIdentifier, VariableLValue,
 };
 use crate::ast::{AstIdRange, DecimalRef, Identifier, TextRef};
-use crate::lexer::{FromLexer2Error, TokenKind};
+use crate::lexer::{FromLexerError, TokenKind};
 use crate::parser::ItemParsable;
 use crate::span::Span;
 

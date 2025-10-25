@@ -11,7 +11,7 @@ use crate::ast::module::{
 };
 use crate::ast::statement::{NetLValue, Statement};
 use crate::ast::Identifier;
-use crate::lexer::{FromLexer2Error, TokenKind};
+use crate::lexer::{FromLexerError, TokenKind};
 use crate::parser::ItemParsable;
 use crate::span::Span;
 
@@ -36,8 +36,6 @@ impl<'a> Consumable<'a> for Module {
         // @Incomplete: [ module_parameter_port_list ]
         let ports = if p.lexer.next_if_equals(TK::LeftParen) {
             let peeked = p.lexer.try_get(p.lexer.offset)?;
-            dbg!(peeked.kind);
-            dbg!(&p.lexer.content()[peeked.span.as_range()]);
             match peeked.kind {
                 TK::RightParen => {
                     p.lexer.next();
@@ -372,7 +370,6 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItem {
         // @Incomplete
 
         let peeked = p.lexer.try_get(p.lexer.offset)?;
-        dbg!(peeked.kind);
         match peeked.kind {
             TK::KeywordInitial => {
                 let (initial_construct, span) = InitialConstruct::parse_with_span(p, arenas)?;

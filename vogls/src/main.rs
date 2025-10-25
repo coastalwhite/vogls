@@ -7,7 +7,7 @@ use vogls_ir::{ContextFormat, GlobalContext, Value};
 use vogls_sim::{Context, Event, ScheduledEvent, VmProcess, VmProcessKey, lower_process_to_vm};
 use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{Module, ModuleItem, ModuleOrGenerateItem, NonPortModuleItem};
-use vogls_verilog::lexer::{Lexer2, TokenBuffer};
+use vogls_verilog::lexer::{Lexer, TokenBuffer};
 use vogls_verilog::lower::lower_module_to_ir;
 use vogls_verilog::parser::Parser;
 
@@ -31,9 +31,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let content = std::fs::read_to_string(&path)?;
     let token_buffer = TokenBuffer::tokenize(&content);
-    dbg!(token_buffer.tokens());
-    dbg!(&content);
-    let mut parser = Parser::new(Lexer2::new(&content, None, &token_buffer));
+    let mut parser = Parser::new(Lexer::new(&content, None, &token_buffer));
 
     let ast = match parser.parse_file() {
         Ok(ast) => ast,
@@ -157,7 +155,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         signals.insert(signal, Value::Bit(false));
     }
 
-    dbg!(&schedule);
+    println!("{schedule:?}");
 
     vogls_sim::run(
         &mut ctx,
