@@ -41,6 +41,35 @@ pub enum Decimal {
     Large(Arc<LargeBits>),
 }
 
+impl<'a> Takeable<'a> for SizedNumber {
+    fn take(s: &'a str) -> (&'a str, Self) {
+        let (s, size) = Size::take(s);
+        debug_assert!(s.starts_with('\''));
+        let s = &s[1..];
+        let (s, sign) = Sign::take(s);
+        let (s, base) = Base::take(s);
+
+        fn into_bits((s, bs): (&str, impl Into<Bits>)) -> (&str, Bits) {
+            (s, bs.into())
+        }
+
+        let (s, value) = match base {
+            Base::Decimal => into_bits(DecimalBits::take(s)),
+            Base::Binary => into_bits(BinaryBits::take(s)),
+            Base::Octal => into_bits(OctalBits::take(s)),
+            Base::Hexadecimal => into_bits(HexadecimalBits::take(s)),
+        };
+
+        let value = SizedNumber {
+            size: Some(size),
+            sign,
+            base,
+            value,
+        };
+        (s, value)
+    }
+}
+
 impl fmt::Display for Decimal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

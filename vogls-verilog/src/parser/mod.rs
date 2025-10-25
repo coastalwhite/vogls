@@ -5,7 +5,7 @@ use crate::ast::module::Module;
 use crate::ast::{
     AstId, AstIdRange, AstItem, DecimalRef, Identifier, SizedNumberRef, StringRef, TextRef,
 };
-use crate::lexer::{FromLexerError, Lexer, Token, TokenContent, TokenKind};
+use crate::lexer::{FromLexer2Error, Lexer2, Takeable, TokenKind};
 use crate::number::{Decimal, SizedNumber};
 use crate::span::Span;
 
@@ -16,7 +16,7 @@ mod statement;
 // mod net;
 
 pub struct Parser<'a> {
-    lexer: Lexer<'a>,
+    lexer: Lexer2<'a>,
     /// A `scratchpad` to parse expressions
     exprs_sp: Vec<(expr::StackItem, expr::BindingPower, Span)>,
 }
@@ -187,23 +187,24 @@ pub enum ParseErrorReason {
     Incomplete(&'static str),
 }
 
-impl<'a> FromLexerError<'a> for ParseError {
+impl FromLexer2Error for ParseError {
     fn missing_token(at: usize) -> Self {
         Self {
             location: Some(Span::new(at, at)),
             reason: ParseErrorReason::MissingToken,
         }
     }
-    fn unexpected_token(token: Token<'a>) -> Self {
+    fn unexpected_token() -> Self {
+        // println!("{}", std::backtrace::Backtrace::force_capture());
         Self {
-            location: Some(token.span()),
-            reason: ParseErrorReason::UnexpectedToken(token.kind()),
+            location: None,
+            reason: ParseErrorReason::UnexpectedToken(TokenKind::Dot),
         }
     }
 }
 
 impl<'a> Parser<'a> {
-    pub fn new(lexer: Lexer<'a>) -> Self {
+    pub fn new(lexer: Lexer2<'a>) -> Self {
         Self {
             lexer,
             exprs_sp: Vec::with_capacity(16),
@@ -220,25 +221,17 @@ impl<'a> Parser<'a> {
             path: PathBuf::default(),
         })
     }
-
-    fn lexer(&mut self) -> &mut Lexer<'a> {
-        &mut self.lexer
-    }
 }
 
 pub trait Consumable<'a>: Sized + Copy + 'static {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError>;
-
     fn try_consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Option<(Self, Span)> {
-        let save = p.lexer().save();
+        let save = p.lexer.offset;
 
         match Self::consume(p, arenas) {
-            Ok(v) => {
-                save.ignore();
-                Some(v)
-            }
+            Ok(v) => Some(v),
             Err(_) => {
-                p.lexer().restore(save);
+                p.lexer.offset = save;
                 None
             }
         }
@@ -274,25 +267,25 @@ pub trait Parsable<'a>: Consumable<'a> {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         end: TokenKind,
-    ) -> Result<(AstIdRange<Self>, Token<'a>), ParseError> {
+    ) -> Result<AstIdRange<Self>, ParseError> {
         // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
         // here.
         let mut items = Vec::new();
         let mut spans = Vec::new();
 
-        let end_token = loop {
-            let peek = p.lexer.next_expect_peek()?;
-            if peek.kind() == end {
-                break peek.commit();
+        loop {
+            let token = p.lexer.try_next()?;
+            if *token.kind == end {
+                break;
             }
+            p.lexer.offset -= 1;
 
-            peek.release();
             let (item, span) = Self::consume(p, arenas)?;
             items.push(item);
             spans.push(span);
-        };
+        }
 
-        Ok((arenas.add_range(items, spans), end_token))
+        Ok(arenas.add_range(items, spans))
     }
 
     fn parse_one_or_more_delimited(
@@ -310,7 +303,7 @@ pub trait Parsable<'a>: Consumable<'a> {
         spans.push(span);
 
         loop {
-            if p.lexer.next_if_equals(delimiter).is_none() {
+            if !p.lexer.next_if_equals(delimiter) {
                 break;
             }
 
@@ -339,7 +332,7 @@ pub trait Parsable<'a>: Consumable<'a> {
         spans.push(span);
 
         loop {
-            if p.lexer.next_if_equals(delimiter).is_none() {
+            if !p.lexer.next_if_equals(delimiter) {
                 break;
             }
 
@@ -365,10 +358,9 @@ pub trait Parsable<'a>: Consumable<'a> {
             items.push(item);
             spans.push(span);
 
-            match p.lexer.peek() {
-                None => break,
-                Some(peek) => peek.release(),
-            };
+            if p.lexer.is_empty() {
+                break;
+            }
         }
 
         Ok(arenas.add_range(items, spans))
@@ -377,10 +369,9 @@ pub trait Parsable<'a>: Consumable<'a> {
 
 impl<'a> Consumable<'a> for Identifier {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
-        p.lexer().expect_map(|content, span| match content {
-            TokenContent::Ident(ident) => Self::from_item(ident, arenas),
-            _ => Err(ParseError::unexpected_token(Token::new(content, span))),
-        })
+        let span = *p.lexer.next_expect(TokenKind::Ident)?;
+        let content = &p.lexer.content()[span.as_range()];
+        Ok((Self::from_item(content, arenas)?, span))
     }
 }
 impl<'a> ItemParsable<'a> for Identifier {
@@ -395,10 +386,10 @@ impl<'a> ItemParsable<'a> for Identifier {
 
 impl<'a> Consumable<'a> for DecimalRef {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
-        p.lexer().expect_map(|content, span| match content {
-            TokenContent::Decimal(decimal) => Self::from_item(decimal, arenas),
-            _ => Err(ParseError::unexpected_token(Token::new(content, span))),
-        })
+        let span = *p.lexer.next_expect(TokenKind::Decimal)?;
+        let content = &p.lexer.content()[span.as_range()];
+        let (_, decimal) = Decimal::take(content);
+        Ok((Self::from_item(decimal, arenas)?, span))
     }
 }
 impl<'a> ItemParsable<'a> for DecimalRef {
@@ -412,10 +403,10 @@ impl<'a> ItemParsable<'a> for DecimalRef {
 
 impl<'a> Consumable<'a> for SizedNumberRef {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
-        p.lexer().expect_map(|content, span| match content {
-            TokenContent::Number(sized_number) => Self::from_item(sized_number, arenas),
-            _ => Err(ParseError::unexpected_token(Token::new(content, span))),
-        })
+        let span = *p.lexer.next_expect(TokenKind::Number)?;
+        let content = &p.lexer.content()[span.as_range()];
+        let (_, number) = SizedNumber::take(content);
+        Ok((Self::from_item(number, arenas)?, span))
     }
 }
 impl<'a> ItemParsable<'a> for SizedNumberRef {
@@ -429,10 +420,15 @@ impl<'a> ItemParsable<'a> for SizedNumberRef {
 
 impl<'a> Consumable<'a> for StringRef {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
-        p.lexer().expect_map(|content, span| match content {
-            TokenContent::String(string) => Self::from_item(string, arenas),
-            _ => Err(ParseError::unexpected_token(Token::new(content, span))),
-        })
+        let span = *p.lexer.next_expect(TokenKind::String)?;
+        let content = &p.lexer.content()[span.as_range()];
+        let content = &content[1..content.len() - 1];
+
+        if content.contains("\\") {
+            todo!()
+        }
+
+        Ok((Self::from_item(content, arenas)?, span))
     }
 }
 impl<'a> ItemParsable<'a> for StringRef {
@@ -491,25 +487,25 @@ pub trait ItemParsable<'a>: Consumable<'a> {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         end: TokenKind,
-    ) -> Result<(AstIdRange<Self>, Token<'a>), ParseError> {
+    ) -> Result<AstIdRange<Self>, ParseError> {
         // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
         // here.
         let mut items = Vec::new();
         let mut spans = Vec::new();
 
-        let end_token = loop {
-            let peek = p.lexer.next_expect_peek()?;
-            if peek.kind() == end {
-                break peek.commit();
+        loop {
+            let peek = p.lexer.try_get(p.lexer.offset)?;
+            if *peek.kind == end {
+                break;
             }
+            p.lexer.offset -= 1;
 
-            peek.release();
             let (item, span) = Self::consume(p, arenas)?;
             items.push(item);
             spans.push(span);
-        };
+        }
 
-        Ok((arenas.add_range(items, spans), end_token))
+        Ok(arenas.add_range(items, spans))
     }
 
     fn parse_one_or_more_delimited_until_fail(
@@ -527,13 +523,13 @@ pub trait ItemParsable<'a>: Consumable<'a> {
         spans.push(span);
 
         loop {
-            let save = p.lexer().save();
-            if p.lexer.next_if_equals(delimiter).is_none() {
+            let save = p.lexer.offset;
+            if !p.lexer.next_if_equals(delimiter) {
                 break;
             }
 
             let Some((item, span)) = Self::try_consume(p, arenas) else {
-                p.lexer().restore(save);
+                p.lexer.offset = save;
                 break;
             };
             items.push(item);
@@ -558,7 +554,7 @@ pub trait ItemParsable<'a>: Consumable<'a> {
         spans.push(span);
 
         loop {
-            if p.lexer.next_if_equals(delimiter).is_none() {
+            if !p.lexer.next_if_equals(delimiter) {
                 break;
             }
 
@@ -587,7 +583,7 @@ pub trait ItemParsable<'a>: Consumable<'a> {
         spans.push(span);
 
         loop {
-            if p.lexer.next_if_equals(delimiter).is_none() {
+            if !p.lexer.next_if_equals(delimiter) {
                 break;
             }
 
@@ -599,36 +595,3 @@ pub trait ItemParsable<'a>: Consumable<'a> {
         Ok(arenas.add_range(items, spans))
     }
 }
-//
-// #[cfg(test)]
-// pub mod tests {
-//     use crate::ast::AstDisplayable;
-//
-//     use super::*;
-//
-//     pub fn parse<'a, T: AstDisplayable<'a> + Parsable<'a>>(s: &'a str) -> Result<T, ParseError> {
-//         let lexer = Lexer::new(s, None);
-//         let mut parser = Parser::new(lexer);
-//         let mut arenas = AstArenas::new();
-//
-//         let id = T::parse(&mut parser, &mut arenas)?;
-//
-//         println!("{}", id.display(&arenas));
-//
-//         let lexer = Lexer::new(s, None);
-//         let mut parser = Parser::new(lexer);
-//         let mut arenas = AstArenas::new();
-//
-//         let (item, _) = T::consume(&mut parser, &mut arenas)?;
-//
-//         Ok(item)
-//     }
-//
-//     #[test]
-//     fn expr() {
-//         // let expr = parse("5 + ( 7)[5] / (3[1] - 3 > 3 << !+2)");
-//         let expr = parse("a + (2 ? 1 : 4) * 3 - 4");
-//         assert!(matches!(dbg!(&expr), Ok(Expr::Binary(..))));
-//         assert!(false);
-//     }
-// }

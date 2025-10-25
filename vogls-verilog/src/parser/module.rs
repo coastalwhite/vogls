@@ -11,7 +11,7 @@ use crate::ast::module::{
 };
 use crate::ast::statement::{NetLValue, Statement};
 use crate::ast::Identifier;
-use crate::lexer::{FromLexerError, Token, TokenKind};
+use crate::lexer::{FromLexer2Error, TokenKind};
 use crate::parser::ItemParsable;
 use crate::span::Span;
 
@@ -31,28 +31,28 @@ impl<'a> Consumable<'a> for Module {
         // endmodule
 
         // @Incomplete: { attribute_instance }
-        let module_kw_span = p.lexer().expect(TK::KeywordModule)?.span();
+        let module_kw_span = *p.lexer.next_expect(TK::KeywordModule)?;
         let module_identifier = Identifier::parse(p, arenas)?;
         // @Incomplete: [ module_parameter_port_list ]
-        let ports = if p.lexer.next_if_equals(TK::LeftParen).is_some() {
-            let peeked = p.lexer().next_expect_peek()?;
-            match peeked.kind() {
+        let ports = if p.lexer.next_if_equals(TK::LeftParen) {
+            let peeked = p.lexer.try_get(p.lexer.offset)?;
+            dbg!(peeked.kind);
+            dbg!(&p.lexer.content()[peeked.span.as_range()]);
+            match peeked.kind {
                 TK::RightParen => {
-                    peeked.commit();
+                    p.lexer.next();
                     ModulePorts::PortDeclarations(Default::default())
                 }
                 TK::KeywordInput | TK::KeywordOutput | TK::KeywordInout => {
-                    peeked.release();
                     let port_declarations =
                         PortDeclaration::parse_zero_or_more_delimited(p, arenas, TK::Comma)?;
-                    p.lexer.expect(TK::RightParen)?;
+                    p.lexer.next_expect(TK::RightParen)?;
 
                     ModulePorts::PortDeclarations(port_declarations)
                 }
                 _ => {
-                    peeked.release();
                     let ports = Port::parse_one_or_more_delimited(p, arenas, TK::Comma)?;
-                    p.lexer.expect(TK::RightParen)?;
+                    p.lexer.next_expect(TK::RightParen)?;
 
                     ModulePorts::Ports(ports)
                 }
@@ -60,11 +60,10 @@ impl<'a> Consumable<'a> for Module {
         } else {
             ModulePorts::PortDeclarations(Default::default())
         };
-        p.lexer().expect(TK::Semicolon)?;
-        let (module_items, endmodule_kw_token) =
-            ModuleItem::parse_until_reaching(p, arenas, TK::KeywordEndModule)?;
+        p.lexer.next_expect(TK::Semicolon)?;
+        let module_items = ModuleItem::parse_until_reaching(p, arenas, TK::KeywordEndModule)?;
 
-        let span = module_kw_span | endmodule_kw_token.span();
+        let span = module_kw_span | (*p.lexer.get(p.lexer.offset - 1).unwrap().span);
 
         Ok((
             Module {
@@ -86,16 +85,14 @@ impl<'a> Consumable<'a> for ModuleItem {
         // module_item ::=
         //   port_declaration ;
         // | non_port_module_item
-        let peeked = p.lexer().next_expect_peek()?;
-        match peeked.kind() {
+        let peeked = p.lexer.try_get(p.lexer.offset)?;
+        match peeked.kind {
             TK::KeywordInput | TK::KeywordOutput | TK::KeywordInout => {
-                peeked.release();
                 let (port_declaration, span) = PortDeclaration::parse_with_span(p, arenas)?;
-                p.lexer.expect(TK::Semicolon)?;
+                p.lexer.next_expect(TK::Semicolon)?;
                 Ok((Self::PortDeclaration(port_declaration), span))
             }
             _ => {
-                peeked.release();
                 let (non_port_module_item, span) = NonPortModuleItem::parse_with_span(p, arenas)?;
                 Ok((Self::NonPortModuleItem(non_port_module_item), span))
             }
@@ -116,20 +113,18 @@ impl<'a> Consumable<'a> for NonPortModuleItem {
         // | { attribute_instance } parameter_declaration ;
         // | { attribute_instance } specparam_declaration
 
-        let peeked = p.lexer.next_expect_peek()?;
-        match peeked.kind() {
+        let peeked = p.lexer.try_get(p.lexer.offset)?;
+        match peeked.kind {
             // @Incomplete: | generate_region
             // @Incomplete: | specify_block
             // @Incomplete: | { attribute_instance } specparam_declaration
             TK::KeywordParameter => {
-                peeked.release();
                 let (parameter_declaration, span) =
                     ParameterDeclaration::parse_with_span(p, arenas)?;
-                p.lexer.expect(TK::Semicolon)?;
+                p.lexer.next_expect(TK::Semicolon)?;
                 Ok((Self::ParameterDeclaration(parameter_declaration), span))
             }
             _ => {
-                peeked.release();
                 let (module_or_generate_item, span) =
                     ModuleOrGenerateItem::parse_with_span(p, arenas)?;
                 Ok((Self::ModuleOrGenerateItem(module_or_generate_item), span))
@@ -198,24 +193,21 @@ impl<'a> Consumable<'a> for PortDeclaration {
         // | {attribute_instance} input_declaration
         // | {attribute_instance} output_declaration
 
-        let peeked = p.lexer().next_expect_peek()?;
-        match peeked.kind() {
+        let peeked = p.lexer.try_get(p.lexer.offset)?;
+        match *peeked.kind {
             TK::KeywordInout => {
-                peeked.release();
                 let (inout_declaration, span) = InoutDeclaration::parse_with_span(p, arenas)?;
                 Ok((Self::Inout(inout_declaration), span))
             }
             TK::KeywordInput => {
-                peeked.release();
                 let (input_declaration, span) = InputDeclaration::parse_with_span(p, arenas)?;
                 Ok((Self::Input(input_declaration), span))
             }
             TK::KeywordOutput => {
-                peeked.release();
                 let (output_declaration, span) = OutputDeclaration::parse_with_span(p, arenas)?;
                 Ok((Self::Output(output_declaration), span))
             }
-            _ => Err(ParseError::unexpected_token(peeked.commit())),
+            _ => Err(ParseError::unexpected_token()),
         }
     }
 }
@@ -228,24 +220,17 @@ impl<'a> Consumable<'a> for InoutDeclaration {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 489
         // inout_declaration ::= inout [ net_type ] [ signed ] [ range ] list_of_port_identifiers
 
-        let inout_kw_span = p.lexer.expect(TK::KeywordInout)?.span();
+        let inout_kw_span = *p.lexer.next_expect(TK::KeywordInout)?;
         let mut net_type = None;
-        let mut end_span = inout_kw_span;
-        if let Some((val, span)) = NetType::try_parse_with_span(p, arenas) {
+        if let Some(val) = NetType::try_parse(p, arenas) {
             net_type = Some(val);
-            end_span = span;
         }
-        let signed_token = p.lexer.next_if_equals(TK::KeywordSigned);
-        let signed = signed_token.is_some();
-        if let Some(signed_token) = signed_token {
-            end_span = signed_token.span();
-        }
+        let signed = p.lexer.next_if_equals(TK::KeywordSigned);
         // @Incomplete: [ range ]
         let port_identifiers =
             Identifier::parse_one_or_more_delimited_until_fail(p, arenas, TK::Comma)?;
-        if let Some(last) = port_identifiers.last() {
-            end_span = *arenas.spans.get(last.loc).unwrap();
-        }
+        let last = port_identifiers.last().unwrap();
+        let end_span = *arenas.spans.get(last.loc).unwrap();
 
         let span = inout_kw_span | end_span;
         Ok((
@@ -268,24 +253,17 @@ impl<'a> Consumable<'a> for InputDeclaration {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 489
         // input_declaration ::= input [ net_type ] [ signed ] [ range ] list_of_port_identifiers
 
-        let input_kw_span = p.lexer.expect(TK::KeywordInput)?.span();
+        let input_kw_span = *p.lexer.next_expect(TK::KeywordInput)?;
         let mut net_type = None;
-        let mut end_span = input_kw_span;
-        if let Some((val, span)) = NetType::try_parse_with_span(p, arenas) {
+        if let Some(val) = NetType::try_parse(p, arenas) {
             net_type = Some(val);
-            end_span = span;
         }
-        let signed_token = p.lexer.next_if_equals(TK::KeywordSigned);
-        let signed = signed_token.is_some();
-        if let Some(signed_token) = signed_token {
-            end_span = signed_token.span();
-        }
+        let signed = p.lexer.next_if_equals(TK::KeywordSigned);
         // @Incomplete: [ range ]
         let port_identifiers =
             Identifier::parse_one_or_more_delimited_until_fail(p, arenas, TK::Comma)?;
-        if let Some(last) = port_identifiers.last() {
-            end_span = *arenas.spans.get(last.loc).unwrap();
-        }
+        let last = port_identifiers.last().unwrap();
+        let end_span = *arenas.spans.get(last.loc).unwrap();
 
         let span = input_kw_span | end_span;
         Ok((
@@ -311,24 +289,17 @@ impl<'a> Consumable<'a> for OutputDeclaration {
         // | output reg [ signed ] [ range ] list_of_variable_port_identifiers
         // | output output_variable_type list_of_variable_port_identifiers
 
-        let output_kw_span = p.lexer.expect(TK::KeywordOutput)?.span();
+        let output_kw_span = *p.lexer.next_expect(TK::KeywordOutput)?;
         let mut net_type = None;
-        let mut end_span = output_kw_span;
-        if let Some((val, span)) = NetType::try_parse_with_span(p, arenas) {
+        if let Some(val) = NetType::try_parse(p, arenas) {
             net_type = Some(val);
-            end_span = span;
         }
-        let signed_token = p.lexer.next_if_equals(TK::KeywordSigned);
-        let signed = signed_token.is_some();
-        if let Some(signed_token) = signed_token {
-            end_span = signed_token.span();
-        }
+        let signed = p.lexer.next_if_equals(TK::KeywordSigned);
         // @Incomplete: reg | output_variable_type
         // @Incomplete: [ range ]
         let identifiers = Identifier::parse_one_or_more_delimited_until_fail(p, arenas, TK::Comma)?;
-        if let Some(last) = identifiers.last() {
-            end_span = *arenas.spans.get(last.loc).unwrap();
-        }
+        let last = identifiers.last().unwrap();
+        let end_span = *arenas.spans.get(last.loc).unwrap();
 
         let span = output_kw_span | end_span;
         Ok((
@@ -355,7 +326,8 @@ impl<'a> Consumable<'a> for NetType {
         // | triand | trior | tri0 | tri1
         // | uwire | wire | wand | wor
 
-        p.lexer.expect_map(|content, span| match content.kind() {
+        let token = p.lexer.try_next()?;
+        let result = match token.kind {
             TK::KeywordSupply0 => Ok(Self::Supply0),
             TK::KeywordSupply1 => Ok(Self::Supply1),
             TK::KeywordTri => Ok(Self::Tri),
@@ -366,8 +338,9 @@ impl<'a> Consumable<'a> for NetType {
             TK::KeywordWire => Ok(Self::Wire),
             TK::KeywordWand => Ok(Self::WAnd),
             TK::KeywordWor => Ok(Self::WOr),
-            _ => Err(ParseError::unexpected_token(Token::new(content, span))),
-        })
+            _ => Err(ParseError::unexpected_token()),
+        }?;
+        Ok((result, *token.span))
     }
 }
 impl<'a> ItemParsable<'a> for NetType {
@@ -398,25 +371,22 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItem {
         // @Incomplete: { attribute_instance }
         // @Incomplete
 
-        let peeked = p.lexer().next_expect_peek()?;
-        match peeked.kind() {
+        let peeked = p.lexer.try_get(p.lexer.offset)?;
+        dbg!(peeked.kind);
+        match peeked.kind {
             TK::KeywordInitial => {
-                peeked.release();
                 let (initial_construct, span) = InitialConstruct::parse_with_span(p, arenas)?;
                 Ok((Self::InitialConstruct(initial_construct), span))
             }
             TK::KeywordAlways => {
-                peeked.release();
                 let (always_construct, span) = AlwaysConstruct::parse_with_span(p, arenas)?;
                 Ok((Self::AlwaysConstruct(always_construct), span))
             }
             TK::KeywordAssign => {
-                peeked.release();
                 let (continous_assign, span) = ContinousAssign::parse_with_span(p, arenas)?;
                 Ok((Self::ContinuousAssign(continous_assign), span))
             }
             TK::Ident => {
-                peeked.release();
                 let (module_instance, span) = ModuleInstantiation::parse_with_span(p, arenas)?;
                 Ok((Self::ModuleInstantiation(module_instance), span))
             }
@@ -426,7 +396,6 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItem {
             | TK::KeywordNor
             | TK::KeywordXor
             | TK::KeywordXnor => {
-                peeked.release();
                 let (gate_instance, span) = GateInstantiation::parse_with_span(p, arenas)?;
                 Ok((Self::GateInstantiation(gate_instance), span))
             }
@@ -441,7 +410,6 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItem {
             | TK::KeywordWand
             | TK::KeywordWor
             | TK::KeywordReg => {
-                peeked.release();
                 let (module_or_generate_item_declaration, span) =
                     ModuleOrGenerateItemDeclaration::parse_with_span(p, arenas)?;
                 Ok((
@@ -450,9 +418,9 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItem {
                 ))
             }
             _ => {
-                let token = peeked.commit();
+                let token = p.lexer.try_next()?;
                 Err(ParseError::incomplete(
-                    Some(token.span()),
+                    Some(*token.span),
                     "module_or_generate_item",
                 ))
             }
@@ -469,11 +437,11 @@ impl<'a> Consumable<'a> for ContinousAssign {
         // continuous_assign ::= assign [ drive_strength ] [ delay3 ] list_of_net_assignments ;
         // list_of_net_assignments ::= net_assignment { , net_assignment }
 
-        let assign_span = p.lexer().expect(TK::KeywordAssign)?.span();
+        let assign_span = *p.lexer.next_expect(TK::KeywordAssign)?;
 
         let list_of_net_assignments =
             NetAssignment::parse_one_or_more_delimited(p, arenas, TK::Comma)?;
-        let semicolon_span = p.lexer().expect(TK::Semicolon)?.span();
+        let semicolon_span = *p.lexer.next_expect(TK::Semicolon)?;
 
         let span = assign_span | semicolon_span;
         Ok((
@@ -495,7 +463,7 @@ impl<'a> Consumable<'a> for NetAssignment {
         // list_of_net_assignments ::= net_assignment { , net_assignment }
 
         let (net_lvalue, net_lvalue_span) = NetLValue::parse_with_span(p, arenas)?;
-        p.lexer().expect(TK::Equals)?;
+        p.lexer.next_expect(TK::Equals)?;
         let (expression, expression_span) = Expr::parse_with_span(p, arenas)?;
 
         let span = net_lvalue_span | expression_span;
@@ -522,7 +490,7 @@ impl<'a> Consumable<'a> for ModuleInstantiation {
 
         let (module_identifier, module_identifier_span) = Identifier::parse_with_span(p, arenas)?;
         let module_instances = ModuleInstance::parse_one_or_more_delimited(p, arenas, TK::Comma)?;
-        let semicolon_span = p.lexer().expect(TK::Semicolon)?.span();
+        let semicolon_span = *p.lexer.next_expect(TK::Semicolon)?;
 
         let span = module_identifier_span | semicolon_span;
 
@@ -546,9 +514,9 @@ impl<'a> Consumable<'a> for ModuleInstance {
 
         let (name_of_module_instance, name_of_module_instance_span) =
             Identifier::parse_with_span(p, arenas)?;
-        p.lexer().expect(TK::LeftParen)?;
+        p.lexer.next_expect(TK::LeftParen)?;
         let list_of_port_connections = ListOfPortConnections::parse(p, arenas)?;
-        let right_paren_span = p.lexer().expect(TK::RightParen)?.span();
+        let right_paren_span = *p.lexer.next_expect(TK::RightParen)?;
 
         let span = name_of_module_instance_span | right_paren_span;
 
@@ -572,7 +540,10 @@ impl<'a> Consumable<'a> for ListOfPortConnections {
         //   ordered_port_connection { , ordered_port_connection }
         // | named_port_connection { , named_port_connection }
 
-        if p.lexer().peek_is_next(TK::Dot) {
+        if p.lexer
+            .get(p.lexer.offset)
+            .is_some_and(|t| *t.kind == TK::Dot)
+        {
             let named = NamedPortConnection::parse_zero_or_more_delimited(p, arenas, TK::Comma)?;
             let span = arenas.spans[named.loc];
             Ok((Self::Named(named), span))
@@ -592,15 +563,19 @@ impl<'a> Consumable<'a> for NamedPortConnection {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 495
         // named_port_connection ::= { attribute_instance } . port_identifier ( [ expression ] )
 
-        let dot_span = p.lexer().expect(TK::Dot)?.span();
+        let dot_span = *p.lexer.next_expect(TK::Dot)?;
         let port_identifier = Identifier::parse(p, arenas)?;
-        p.lexer().expect(TK::LeftParen)?;
-        let expression = if !p.lexer().peek_is_next(TK::RightParen) {
+        p.lexer.next_expect(TK::LeftParen)?;
+        let expression = if !p
+            .lexer
+            .get(p.lexer.offset)
+            .is_some_and(|t| *t.kind == TK::RightParen)
+        {
             Some(Expr::parse(p, arenas)?)
         } else {
             None
         };
-        let right_paren_span = p.lexer().expect(TK::RightParen)?.span();
+        let right_paren_span = *p.lexer.next_expect(TK::RightParen)?;
         let span = dot_span | right_paren_span;
 
         Ok((
@@ -621,7 +596,7 @@ impl<'a> Consumable<'a> for InitialConstruct {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
         // initial_construct ::= initial statement
 
-        let initial_kw_span = p.lexer().expect(TK::KeywordInitial)?.span();
+        let initial_kw_span = *p.lexer.next_expect(TK::KeywordInitial)?;
         let (statement, span) = Statement::parse_with_span(p, arenas)?;
 
         let span = initial_kw_span | span;
@@ -638,7 +613,7 @@ impl<'a> Consumable<'a> for AlwaysConstruct {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
         // always_construct ::= always statement
 
-        let always_kw_span = p.lexer().expect(TK::KeywordAlways)?.span();
+        let always_kw_span = *p.lexer.next_expect(TK::KeywordAlways)?;
         let (statement, span) = Statement::parse_with_span(p, arenas)?;
 
         let span = always_kw_span | span;
@@ -664,26 +639,22 @@ impl<'a> Consumable<'a> for GateInstantiation {
         // | pulldown [pulldown_strength] pull_gate_instance { , pull_gate_instance } ;
         // | pullup [pullup_strength] pull_gate_instance { , pull_gate_instance } ;
 
-        let peeked = p.lexer().next_expect_peek()?;
-        match peeked.kind() {
+        let peeked = p.lexer.try_get(p.lexer.offset)?;
+        match peeked.kind {
             TK::KeywordAnd
             | TK::KeywordNand
             | TK::KeywordOr
             | TK::KeywordNor
             | TK::KeywordXor
             | TK::KeywordXnor => {
-                peeked.release();
                 let (n_input_gate_instantiation, span) =
                     NInputGateInstantiation::parse_with_span(p, arenas)?;
                 Ok((Self::NInput(n_input_gate_instantiation), span))
             }
-            _ => {
-                let token = peeked.commit();
-                Err(ParseError::incomplete(
-                    Some(token.span()),
-                    "gate_instantiation",
-                ))
-            }
+            _ => Err(ParseError::incomplete(
+                Some(*peeked.span),
+                "gate_instantiation",
+            )),
         }
     }
 }
@@ -700,7 +671,7 @@ impl<'a> Consumable<'a> for NInputGateInstantiation {
         // @Incomplete: drive_strength
         // @Incomplete: delay2
         let instances = NInputGateInstance::parse_one_or_more_delimited(p, arenas, TK::Comma)?;
-        let semicolon_span = p.lexer.expect(TK::Semicolon)?.span();
+        let semicolon_span = *p.lexer.next_expect(TK::Semicolon)?;
 
         let span = gatetype_span | semicolon_span;
 
@@ -722,18 +693,18 @@ impl<'a> Consumable<'a> for NInputGateType {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 494
         // n_input_gatetype ::= and | nand | or | nor | xor | xnor
 
-        let t = p.lexer.next_expect()?;
-        let value = match t.kind() {
+        let t = p.lexer.try_next()?;
+        let value = match t.kind {
             TK::KeywordAnd => Self::And,
             TK::KeywordNand => Self::Nand,
             TK::KeywordOr => Self::Or,
             TK::KeywordNor => Self::Nor,
             TK::KeywordXor => Self::Xor,
             TK::KeywordXnor => Self::Xnor,
-            _ => return Err(ParseError::unexpected_token(t)),
+            _ => return Err(ParseError::unexpected_token()),
         };
 
-        Ok((value, t.span()))
+        Ok((value, *t.span))
     }
 }
 impl<'a> ItemParsable<'a> for NInputGateType {
@@ -752,15 +723,15 @@ impl<'a> Consumable<'a> for NInputGateInstance {
         // n_input_gate_instance ::= [ name_of_gate_instance ] ( output_terminal , input_terminal { , input_terminal } )
 
         let name = NameOfGateInstance::try_parse_with_span(p, arenas);
-        let mut start_span = p.lexer.expect(TK::LeftParen)?.span();
+        let mut start_span = *p.lexer.next_expect(TK::LeftParen)?;
         let name = name.map(|(name, name_span)| {
             start_span = name_span;
             name
         });
         let output_terminal = NetLValue::parse(p, arenas)?;
-        p.lexer.expect(TK::Comma)?;
+        p.lexer.next_expect(TK::Comma)?;
         let input_terminals = Expr::parse_one_or_more_delimited(p, arenas, TK::Comma)?;
-        let right_paren_span = p.lexer.expect(TK::RightParen)?.span();
+        let right_paren_span = *p.lexer.next_expect(TK::RightParen)?;
 
         let span = start_span | right_paren_span;
 
@@ -806,8 +777,8 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItemDeclaration {
         // | task_declaration
         // | function_declaration
 
-        let peeked = p.lexer().next_expect_peek()?;
-        match peeked.kind() {
+        let peeked = p.lexer.try_get(p.lexer.offset)?;
+        match peeked.kind {
             TK::KeywordSupply0
             | TK::KeywordSupply1
             | TK::KeywordTri
@@ -818,19 +789,17 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItemDeclaration {
             | TK::KeywordWire
             | TK::KeywordWand
             | TK::KeywordWor => {
-                peeked.release();
                 let (net_declaration, span) = NetDeclaration::parse_with_span(p, arenas)?;
                 Ok((Self::Net(net_declaration), span))
             }
             TK::KeywordReg => {
-                peeked.release();
                 let (reg_declaration, span) = RegDeclaration::parse_with_span(p, arenas)?;
                 Ok((Self::Reg(reg_declaration), span))
             }
             _ => {
-                let token = peeked.commit();
+                let token = p.lexer.try_next()?;
                 Err(ParseError::incomplete(
-                    Some(token.span()),
+                    Some(*token.span),
                     "module_or_generate_item_declaration",
                 ))
             }
@@ -857,7 +826,7 @@ impl<'a> Consumable<'a> for NetDeclaration {
         // @Incomplete
         let (net_type, net_type_span) = NetType::parse_with_span(p, arenas)?;
         let identifiers = Identifier::parse_one_or_more_delimited(p, arenas, TK::Comma)?;
-        let semicolon_span = p.lexer.expect(TK::Semicolon)?.span();
+        let semicolon_span = *p.lexer.next_expect(TK::Semicolon)?;
 
         let span = net_type_span | semicolon_span;
 
@@ -880,9 +849,9 @@ impl<'a> Consumable<'a> for RegDeclaration {
         // reg_declaration ::= reg [ signed ] [ range ] list_of_variable_identifiers ;
 
         // @Incomplete
-        let reg_kw_span = p.lexer.expect(TK::KeywordReg)?.span();
+        let reg_kw_span = *p.lexer.next_expect(TK::KeywordReg)?;
         let identifiers = Identifier::parse_one_or_more_delimited(p, arenas, TK::Comma)?;
-        let semicolon_span = p.lexer.expect(TK::Semicolon)?.span();
+        let semicolon_span = *p.lexer.next_expect(TK::Semicolon)?;
 
         let span = reg_kw_span | semicolon_span;
 
@@ -900,7 +869,7 @@ impl<'a> Consumable<'a> for ParameterDeclaration {
         //   parameter [ signed ] [ range ] list_of_param_assignments
         // | parameter parameter_type list_of_param_assignments
 
-        let parameter_kw_span = p.lexer.expect(TK::KeywordParameter)?.span();
+        let parameter_kw_span = *p.lexer.next_expect(TK::KeywordParameter)?;
         // @Incomplete
         let assignments = ParamAssignment::parse_one_or_more_delimited(p, arenas, TK::Comma)?;
         let last_span = arenas.get_span(assignments.last().unwrap());
@@ -920,7 +889,7 @@ impl<'a> Consumable<'a> for ParamAssignment {
         // param_assignment ::= parameter_identifier = constant_mintypmax_expression
 
         let (param, param_span) = Identifier::parse_with_span(p, arenas)?;
-        p.lexer.expect(TK::Equals)?;
+        p.lexer.next_expect(TK::Equals)?;
         let (constant, constant_span) = ConstantMinTypMaxExpression::parse_with_span(p, arenas)?;
 
         let span = param_span | constant_span;

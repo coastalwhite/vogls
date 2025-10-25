@@ -15,9 +15,9 @@ impl<'a> Consumable<'a> for ConstantMinTypMaxExpression {
         // | constant_expression : constant_expression : constant_expression
 
         let (min, min_span) = ConstantExpr::parse_with_span(p, arenas)?;
-        if p.lexer.next_if_equals(TK::Colon).is_some() {
+        if p.lexer.next_if_equals(TK::Colon) {
             let typ = ConstantExpr::parse(p, arenas)?;
-            p.lexer.expect(TK::Colon)?;
+            p.lexer.next_expect(TK::Colon)?;
             let (max, max_span) = ConstantExpr::parse_with_span(p, arenas)?;
             let span = min_span | max_span;
             Ok((Self::MinTypMax { min, typ, max }, span))
@@ -61,25 +61,20 @@ impl<'a> Consumable<'a> for ConstantPrimary {
         // | ( constant_mintypmax_expression )
         // | string
 
-        let peeked = p.lexer.next_expect_peek()?;
-        match peeked.kind() {
+        let peeked = p.lexer.try_next()?;
+        match peeked.kind {
             TK::Decimal => {
-                peeked.release();
                 let (decimal, span) = DecimalRef::consume(p, arenas)?;
                 Ok((Self::Number(decimal), span))
             }
             TK::String => {
-                peeked.release();
                 let (string, span) = StringRef::consume(p, arenas)?;
                 Ok((Self::String(string), span))
             }
-            _ => {
-                let token = peeked.commit();
-                Err(ParseError::incomplete(
-                    Some(token.span()),
-                    "constant_primary",
-                ))
-            }
+            _ => Err(ParseError::incomplete(
+                Some(p.lexer.span_at_cursor()),
+                "constant_primary",
+            )),
         }
     }
 }

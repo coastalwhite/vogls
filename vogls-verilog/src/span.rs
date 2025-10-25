@@ -16,7 +16,10 @@ impl Span {
 
     #[inline(always)]
     pub fn with_length(start: usize, length: usize) -> Self {
-        Self { start, end: start + length }
+        Self {
+            start,
+            end: start + length,
+        }
     }
 
     #[inline(always)]
@@ -32,6 +35,10 @@ impl Span {
     #[inline(always)]
     pub fn len(&self) -> usize {
         self.end - self.start
+    }
+
+    pub fn as_range(&self) -> std::ops::Range<usize> {
+        self.start..self.end
     }
 }
 

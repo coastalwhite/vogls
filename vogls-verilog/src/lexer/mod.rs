@@ -12,7 +12,12 @@ use crate::number::{
 use crate::span::Span;
 
 mod tokenizer;
+mod lexer2;
 mod token;
+
+pub use lexer2::*;
+pub use tokenizer::*;
+
 
 pub struct Lexer<'a> {
     inner: LexerInner<'a>,
@@ -146,6 +151,11 @@ impl<'a> LexerInner<'a> {
 pub trait FromLexerError<'a> {
     fn missing_token(at: usize) -> Self;
     fn unexpected_token(token: Token<'a>) -> Self;
+}
+
+pub trait FromLexer2Error {
+    fn missing_token(at: usize) -> Self;
+    fn unexpected_token() -> Self;
 }
 
 impl<'a> Lexer<'a> {

@@ -1,6 +1,6 @@
 use crate::ast::expr::{BinaryOperator, BitPartSelect, Expr, UnaryOperator};
 use crate::ast::{AstId, DecimalRef, Identifier, SizedNumberRef, StringRef};
-use crate::lexer::{FromLexerError, Token, TokenContent, TokenKind};
+use crate::lexer::{FromLexer2Error, TokenKind};
 use crate::parser::ItemParsable;
 use crate::span::Span;
 
@@ -66,7 +66,7 @@ fn token_to_binary_op(t: TokenKind) -> Option<(u8, u8, BinaryOperator)> {
 impl<'a> Consumable<'a> for Expr {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
         use ParseError as E;
-        use TokenContent as T;
+        use TokenKind as TK;
 
         p.exprs_sp.clear();
 
@@ -82,23 +82,19 @@ impl<'a> Consumable<'a> for Expr {
                 }};
             }
 
-            let (t, span) = p.lexer().next_expect()?.take();
+            let token = p.lexer.try_get(p.lexer.offset)?;
+            let span = *token.span;
             current = {
-                match t {
-                    T::Ident(i) => (
-                        Expr::Ident(Identifier::ast_from_item(i, span, arenas)?),
-                        span,
-                    ),
-                    T::Decimal(d) => (Expr::Decimal(DecimalRef::from_item(d, arenas)?), span),
-                    T::Number(n) => (
-                        Expr::Sized(SizedNumberRef::ast_from_item(n, span, arenas)?),
-                        span,
-                    ),
-                    T::String(s) => (Expr::String(StringRef::from_item(s, arenas)?), span),
-                    T::LeftParen => deepen!(StackItem::Paren, 0, span),
+                match token.kind {
+                    TK::Ident => (Expr::Ident(Identifier::parse(p, arenas)?), span),
+                    TK::Decimal => (Expr::Decimal(DecimalRef::parse(p, arenas)?.item), span),
+                    TK::Number => (Expr::Sized(SizedNumberRef::parse(p, arenas)?), span),
+                    TK::String => (Expr::String(StringRef::parse(p, arenas)?.item), span),
+                    TK::LeftParen => deepen!(StackItem::Paren, 0, span),
                     t => {
-                        let (r_bp, op) = token_to_prefix_op(t.kind())
-                            .ok_or(E::unexpected_token(Token::new(t, span)))?;
+                        let t = *t;
+                        p.lexer.next();
+                        let (r_bp, op) = token_to_prefix_op(t).ok_or(E::unexpected_token())?;
                         deepen!(StackItem::Unary(op), r_bp, span);
                     }
                 }
@@ -106,44 +102,41 @@ impl<'a> Consumable<'a> for Expr {
 
             loop {
                 loop {
-                    let Some(peeked) = p.lexer.peek() else {
+                    let Some(peeked) = p.lexer.get(p.lexer.offset) else {
                         break;
                     };
 
                     // Bit/Part Select ( ... [ ... ] )
-                    if matches!(peeked.kind(), TokenKind::LeftBrace) {
-                        peeked.commit();
+                    if *peeked.kind == TokenKind::LeftBrace {
+                        p.lexer.next();
                         let span = current.1;
                         let subject = arenas.add_tuple(current);
                         deepen!(StackItem::Brace(subject), 0, span);
                     }
 
                     // Ternary operator ( ... ? ... : ... )
-                    if matches!(peeked.kind(), TokenKind::QuestionMark) {
+                    if *peeked.kind == TokenKind::QuestionMark {
                         let (l_bp, r_bp) = (1, 2);
 
                         if l_bp < min_bp {
-                            peeked.release();
                             break;
                         }
 
-                        peeked.commit();
+                        p.lexer.next();
                         let span = current.1;
                         let condition = arenas.add_tuple(current);
                         deepen!(StackItem::TernaryS1(condition), r_bp, span);
                     }
 
-                    let Some((l_bp, r_bp, op)) = token_to_binary_op(peeked.kind()) else {
-                        peeked.release();
+                    let Some((l_bp, r_bp, op)) = token_to_binary_op(*peeked.kind) else {
                         break;
                     };
 
                     if l_bp < min_bp {
-                        peeked.release();
                         break;
                     }
 
-                    peeked.commit();
+                    p.lexer.next();
                     let span = current.1;
                     let lhs = arenas.add_tuple(current);
                     deepen!(StackItem::Binary(op, lhs), r_bp, span);
@@ -157,10 +150,10 @@ impl<'a> Consumable<'a> for Expr {
 
                 match item {
                     StackItem::Paren => {
-                        p.lexer.expect(TokenKind::RightParen)?;
+                        p.lexer.next_expect(TokenKind::RightParen)?;
                     }
                     StackItem::Brace(subject) => {
-                        p.lexer.expect(TokenKind::RightBrace)?;
+                        p.lexer.next_expect(TokenKind::RightBrace)?;
                         let braced = arenas.add_tuple(current);
                         let bitpartselect = BitPartSelect { subject, braced };
                         current = (Expr::BitPartSelect(bitpartselect), location)
@@ -174,7 +167,7 @@ impl<'a> Consumable<'a> for Expr {
                         current = (Expr::Binary(op, lhs, rhs), location)
                     }
                     StackItem::TernaryS1(condition) => {
-                        p.lexer.expect(TokenKind::Colon)?;
+                        p.lexer.next_expect(TokenKind::Colon)?;
                         let truthy = arenas.add_tuple(current);
                         deepen!(StackItem::TernaryS2(condition, truthy), bp, loc);
                     }
