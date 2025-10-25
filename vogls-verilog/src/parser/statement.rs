@@ -36,7 +36,7 @@ impl<'a> Consumable<'a> for Statement {
         // @Incomplete: { attribute_instance }
         // @Incomplete
 
-        let peeked = p.lexer.try_get(p.lexer.offset)?;
+        let peeked = p.tkw.try_get(p.tkw.offset)?;
         match peeked.kind {
             TK::KeywordBegin => {
                 let (seq_block, span) = parse_with_span::<SeqBlock>(p, arenas)?;
@@ -61,7 +61,7 @@ impl<'a> Consumable<'a> for Statement {
                 if let Some((blocking_assignment, blocking_assignment_span)) =
                     try_parse_with_span::<BlockingAssignment>(p, arenas)
                 {
-                    let semicolon_span = *p.lexer.next_expect(TK::Semicolon)?;
+                    let semicolon_span = *p.tkw.next_expect(TK::Semicolon)?;
                     Ok((
                         Self::BlockingAssignment(blocking_assignment),
                         blocking_assignment_span | semicolon_span,
@@ -69,7 +69,7 @@ impl<'a> Consumable<'a> for Statement {
                 } else if let Some((non_blocking_assignment, non_blocking_assignment_span)) =
                     try_parse_with_span::<NonBlockingAssignment>(p, arenas)
                 {
-                    let semicolon_span = *p.lexer.next_expect(TK::Semicolon)?;
+                    let semicolon_span = *p.tkw.next_expect(TK::Semicolon)?;
                     Ok((
                         Self::NonBlockingAssignment(non_blocking_assignment),
                         non_blocking_assignment_span | semicolon_span,
@@ -83,7 +83,7 @@ impl<'a> Consumable<'a> for Statement {
                     ))
                 } else {
                     Err(ParseError::incomplete(
-                        Some(p.lexer.span_at_cursor()),
+                        Some(p.tkw.span_at_cursor()),
                         "statement",
                     ))
                 }
@@ -130,7 +130,7 @@ impl<'a> Consumable<'a> for BlockingAssignment {
         // blocking_assignment ::= variable_lvalue = [ delay_or_event_control ] expression
 
         let (variable_lvalue, variable_lvalue_span) = parse_with_span::<VariableLValue>(p, arenas)?;
-        p.lexer.next_expect(TK::Equals)?;
+        p.tkw.next_expect(TK::Equals)?;
         let delay_or_event_control = try_parse::<DelayOrEventControl>(p, arenas);
         let (expression, expression_span) = parse_with_span::<Expr>(p, arenas)?;
 
@@ -155,7 +155,7 @@ impl<'a> Consumable<'a> for NonBlockingAssignment {
         // nonblocking_assignment ::= variable_lvalue <= [ delay_or_event_control ] expression
 
         let (variable_lvalue, variable_lvalue_span) = parse_with_span::<VariableLValue>(p, arenas)?;
-        p.lexer.next_expect(TK::LessThanEquals)?;
+        p.tkw.next_expect(TK::LessThanEquals)?;
         let delay_or_event_control = try_parse::<DelayOrEventControl>(p, arenas);
         let (expression, expression_span) = parse_with_span::<Expr>(p, arenas)?;
 
@@ -180,10 +180,10 @@ impl<'a> Consumable<'a> for SeqBlock {
         // seq_block ::= begin [ : block_identifier { block_item_declaration } ] { statement } end
 
         // @Incomplete: [ : block_identifier { block_item_declaration } ]
-        let begin_kw_span = *p.lexer.next_expect(TK::KeywordBegin)?;
+        let begin_kw_span = *p.tkw.next_expect(TK::KeywordBegin)?;
         let statements = parse_until_reaching::<Statement>(p, arenas, TK::KeywordEnd)?;
 
-        let span = begin_kw_span | *p.lexer.get(p.lexer.offset - 1).unwrap().span;
+        let span = begin_kw_span | *p.tkw.get(p.tkw.offset - 1).unwrap().span;
 
         Ok((Self { statements }, span))
     }
@@ -199,7 +199,7 @@ impl<'a> Consumable<'a> for DelayOrEventControl {
         //   | event_control
         //   | repeat ( expression ) event_control
 
-        let peeked = p.lexer.try_get(p.lexer.offset)?;
+        let peeked = p.tkw.try_get(p.tkw.offset)?;
         match peeked.kind {
             TK::Hash => {
                 let (delay_control, span) = parse_with_span::<DelayControl>(p, arenas)?;
@@ -210,7 +210,7 @@ impl<'a> Consumable<'a> for DelayOrEventControl {
                 Ok((Self::EventControl(event_control), span))
             }
             TK::KeywordRepeat => Err(ParseError::incomplete(
-                Some(p.lexer.span_at_cursor()),
+                Some(p.tkw.span_at_cursor()),
                 "delay_or_event_control repeat",
             )),
             _ => Err(ParseError::unexpected_token()),
@@ -227,7 +227,7 @@ impl<'a> Consumable<'a> for DelayControl {
         //   # delay_value
         // | # ( mintypmax_expression )
 
-        let hash_span = *p.lexer.next_expect(TK::Hash)?;
+        let hash_span = *p.tkw.next_expect(TK::Hash)?;
         // @Incomplete: | # ( mintypmax_expression )
         let (delay_value, delay_value_span) = parse_with_span::<DelayValue>(p, arenas)?;
 
@@ -250,7 +250,7 @@ impl<'a> Consumable<'a> for DelayValue {
         // @Incomplete: | real_number
         // @Incomplete: | identifier
 
-        let peeked = p.lexer.try_get(p.lexer.offset)?;
+        let peeked = p.tkw.try_get(p.tkw.offset)?;
         match peeked.kind {
             TK::Decimal => {
                 let (decimal, span) = DecimalRef::consume(p, arenas)?;
@@ -261,7 +261,7 @@ impl<'a> Consumable<'a> for DelayValue {
                 Ok((Self::Identifier(ident), span))
             }
             _ => Err(ParseError::incomplete(
-                Some(p.lexer.span_at_cursor()),
+                Some(p.tkw.span_at_cursor()),
                 "delay_value",
             )),
         }
@@ -279,13 +279,13 @@ impl<'a> Consumable<'a> for EventControl {
         // | @*
         // | @ (*)
 
-        let at_sign_span = *p.lexer.next_expect(TK::AtSign)?;
+        let at_sign_span = *p.tkw.next_expect(TK::AtSign)?;
         // @Incomplete: @ hierarchical_event_identifier
         // @Incomplete: @*
         // @Incomplete: @ (*)
-        p.lexer.next_expect(TK::LeftParen)?;
+        p.tkw.next_expect(TK::LeftParen)?;
         let event_expression = parse::<EventExpression>(p, arenas)?;
-        let right_paren_span = *p.lexer.next_expect(TK::RightParen)?;
+        let right_paren_span = *p.tkw.next_expect(TK::RightParen)?;
 
         let span = at_sign_span | right_paren_span;
 
@@ -308,18 +308,18 @@ impl<'a> Consumable<'a> for EventExpression {
 
         // @Incomplete: | event_expression or event_expression
         loop {
-            let peeked = p.lexer.try_get(p.lexer.offset)?;
+            let peeked = p.tkw.try_get(p.tkw.offset)?;
             let (current_event_expression, current_span) = match peeked.kind {
                 TK::KeywordPosedge => {
                     let posedge_kw_span = *peeked.span;
-                    p.lexer.next();
+                    p.tkw.next();
                     let (expr, expr_span) = parse_with_span::<Expr>(p, arenas)?;
                     let span = posedge_kw_span | expr_span;
                     (Self::Posedge(expr), span)
                 }
                 TK::KeywordNegedge => {
                     let negedge_kw_span = *peeked.span;
-                    p.lexer.next();
+                    p.tkw.next();
                     let (expr, expr_span) = parse_with_span::<Expr>(p, arenas)?;
                     let span = negedge_kw_span | expr_span;
                     (Self::Negedge(expr), span)
@@ -343,7 +343,7 @@ impl<'a> Consumable<'a> for EventExpression {
                 }
             };
 
-            let Some(peeked) = p.lexer.get(p.lexer.offset) else {
+            let Some(peeked) = p.tkw.get(p.tkw.offset) else {
                 break;
             };
 
@@ -365,7 +365,7 @@ impl<'a> Consumable<'a> for ProceduralTimingControl {
         //   delay_control
         // | event_control
 
-        let peeked = p.lexer.try_get(p.lexer.offset)?;
+        let peeked = p.tkw.try_get(p.tkw.offset)?;
         match peeked.kind {
             TK::Hash => {
                 let (delay_control, span) = parse_with_span::<DelayControl>(p, arenas)?;
@@ -390,11 +390,11 @@ impl<'a> Consumable<'a> for SystemTaskEnable {
         let (system_task_identifier, system_task_identifier_span) =
             SystemTaskIdentifier::item_parse_with_span(p, arenas)?;
         let mut expressions = AstIdRange::default();
-        if p.lexer.next_if_equals(TK::LeftParen) {
+        if p.tkw.next_if_equals(TK::LeftParen) {
             expressions = parse_zero_or_more_delimited::<Expr>(p, arenas, TK::Comma)?;
-            p.lexer.next_expect(TK::RightParen)?;
+            p.tkw.next_expect(TK::RightParen)?;
         }
-        let semicolon_span = *p.lexer.next_expect(TK::Semicolon)?;
+        let semicolon_span = *p.tkw.next_expect(TK::Semicolon)?;
 
         let span = system_task_identifier_span | semicolon_span;
 
@@ -411,8 +411,8 @@ impl<'a> Consumable<'a> for SystemTaskEnable {
 impl<'a> Consumable<'a> for SystemTaskIdentifier {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
         use TokenKind as TK;
-        let span = *p.lexer.next_expect(TK::DollarIdent)?;
-        let content = &p.lexer.content()[span.start() + 1..span.end()];
+        let span = *p.tkw.next_expect(TK::DollarIdent)?;
+        let content = &p.tkw.content()[span.start() + 1..span.end()];
         Ok((Self::from_item(content, arenas)?, span))
     }
 }

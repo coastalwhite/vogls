@@ -16,9 +16,9 @@ impl<'a> Consumable<'a> for ConstantMinTypMaxExpression {
         // | constant_expression : constant_expression : constant_expression
 
         let (min, min_span) = parse_with_span::<ConstantExpr>(p, arenas)?;
-        if p.lexer.next_if_equals(TK::Colon) {
+        if p.tkw.next_if_equals(TK::Colon) {
             let typ = parse::<ConstantExpr>(p, arenas)?;
-            p.lexer.next_expect(TK::Colon)?;
+            p.tkw.next_expect(TK::Colon)?;
             let (max, max_span) = parse_with_span::<ConstantExpr>(p, arenas)?;
             let span = min_span | max_span;
             Ok((Self::MinTypMax { min, typ, max }, span))
@@ -60,7 +60,7 @@ impl<'a> Consumable<'a> for ConstantPrimary {
         // | ( constant_mintypmax_expression )
         // | string
 
-        let peeked = p.lexer.try_get(p.lexer.offset)?;
+        let peeked = p.tkw.try_get(p.tkw.offset)?;
         match peeked.kind {
             TK::Decimal => {
                 let (decimal, span) = DecimalRef::consume(p, arenas)?;
@@ -71,7 +71,7 @@ impl<'a> Consumable<'a> for ConstantPrimary {
                 Ok((Self::String(string), span))
             }
             _ => Err(ParseError::incomplete(
-                Some(p.lexer.span_at_cursor()),
+                Some(p.tkw.span_at_cursor()),
                 "constant_primary",
             )),
         }

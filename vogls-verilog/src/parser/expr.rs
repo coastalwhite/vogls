@@ -82,7 +82,7 @@ impl<'a> Consumable<'a> for Expr {
                 }};
             }
 
-            let token = p.lexer.try_get(p.lexer.offset)?;
+            let token = p.tkw.try_get(p.tkw.offset)?;
             let span = *token.span;
             current = {
                 match token.kind {
@@ -93,7 +93,7 @@ impl<'a> Consumable<'a> for Expr {
                     TK::LeftParen => deepen!(StackItem::Paren, 0, span),
                     t => {
                         let t = *t;
-                        p.lexer.next();
+                        p.tkw.next();
                         let (r_bp, op) = token_to_prefix_op(t).ok_or(E::unexpected_token())?;
                         deepen!(StackItem::Unary(op), r_bp, span);
                     }
@@ -102,13 +102,13 @@ impl<'a> Consumable<'a> for Expr {
 
             loop {
                 loop {
-                    let Some(peeked) = p.lexer.get(p.lexer.offset) else {
+                    let Some(peeked) = p.tkw.get(p.tkw.offset) else {
                         break;
                     };
 
                     // Bit/Part Select ( ... [ ... ] )
                     if *peeked.kind == TokenKind::LeftBrace {
-                        p.lexer.next();
+                        p.tkw.next();
                         let span = current.1;
                         let subject = arenas.add_tuple(current);
                         deepen!(StackItem::Brace(subject), 0, span);
@@ -122,7 +122,7 @@ impl<'a> Consumable<'a> for Expr {
                             break;
                         }
 
-                        p.lexer.next();
+                        p.tkw.next();
                         let span = current.1;
                         let condition = arenas.add_tuple(current);
                         deepen!(StackItem::TernaryS1(condition), r_bp, span);
@@ -136,7 +136,7 @@ impl<'a> Consumable<'a> for Expr {
                         break;
                     }
 
-                    p.lexer.next();
+                    p.tkw.next();
                     let span = current.1;
                     let lhs = arenas.add_tuple(current);
                     deepen!(StackItem::Binary(op, lhs), r_bp, span);
@@ -150,10 +150,10 @@ impl<'a> Consumable<'a> for Expr {
 
                 match item {
                     StackItem::Paren => {
-                        p.lexer.next_expect(TokenKind::RightParen)?;
+                        p.tkw.next_expect(TokenKind::RightParen)?;
                     }
                     StackItem::Brace(subject) => {
-                        p.lexer.next_expect(TokenKind::RightBrace)?;
+                        p.tkw.next_expect(TokenKind::RightBrace)?;
                         let braced = arenas.add_tuple(current);
                         let bitpartselect = BitPartSelect { subject, braced };
                         current = (Expr::BitPartSelect(bitpartselect), location)
@@ -167,7 +167,7 @@ impl<'a> Consumable<'a> for Expr {
                         current = (Expr::Binary(op, lhs, rhs), location)
                     }
                     StackItem::TernaryS1(condition) => {
-                        p.lexer.next_expect(TokenKind::Colon)?;
+                        p.tkw.next_expect(TokenKind::Colon)?;
                         let truthy = arenas.add_tuple(current);
                         deepen!(StackItem::TernaryS2(condition, truthy), bp, loc);
                     }

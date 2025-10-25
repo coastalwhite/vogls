@@ -8,7 +8,7 @@ use crate::number::{
 use crate::ident::Ident;
 use crate::span::Span;
 
-pub struct Lexer<'a> {
+pub struct TokenWalker<'a> {
     tokens: &'a [TokenKind],
     spans: &'a [Span],
     content: &'a str,
@@ -22,7 +22,7 @@ pub struct Token<'a> {
     pub span: &'a Span,
 }
 
-impl<'a> Lexer<'a> {
+impl<'a> TokenWalker<'a> {
     pub fn new(content: &'a str, path: Option<Rc<Path>>, buffer: &'a TokenBuffer) -> Self {
         Self {
             tokens: buffer.tokens(),

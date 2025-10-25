@@ -45,11 +45,11 @@ pub fn parse_until_reaching<'a, T: Consumable<'a>>(
     let mut spans = Vec::new();
 
     loop {
-        let token = p.lexer.try_next()?;
+        let token = p.tkw.try_next()?;
         if *token.kind == end {
             break;
         }
-        p.lexer.offset -= 1;
+        p.tkw.offset -= 1;
 
         let (item, span) = T::consume(p, arenas)?;
         items.push(item);
@@ -74,7 +74,7 @@ pub fn parse_one_or_more_delimited<'a, T: Consumable<'a>>(
     spans.push(span);
 
     loop {
-        if !p.lexer.next_if_equals(delimiter) {
+        if !p.tkw.next_if_equals(delimiter) {
             break;
         }
 
@@ -103,7 +103,7 @@ pub fn parse_zero_or_more_delimited<'a, T: Consumable<'a>>(
     spans.push(span);
 
     loop {
-        if !p.lexer.next_if_equals(delimiter) {
+        if !p.tkw.next_if_equals(delimiter) {
             break;
         }
 
@@ -129,7 +129,7 @@ pub fn parse_one_or_more<'a, T: Consumable<'a>>(
         items.push(item);
         spans.push(span);
 
-        if p.lexer.is_empty() {
+        if p.tkw.is_empty() {
             break;
         }
     }
@@ -152,13 +152,13 @@ pub fn parse_one_or_more_delimited_until_fail<'a, T: Consumable<'a>>(
      spans.push(span);
                                                                                               
      loop {
-         let save = p.lexer.offset;
-         if !p.lexer.next_if_equals(delimiter) {
+         let save = p.tkw.offset;
+         if !p.tkw.next_if_equals(delimiter) {
              break;
          }
                                                                                               
          let Some((item, span)) = T::try_consume(p, arenas) else {
-             p.lexer.offset = save;
+             p.tkw.offset = save;
              break;
          };
          items.push(item);
