@@ -2,7 +2,7 @@ use std::fmt::{self, Write};
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
-use crate::lexer::Takeable;
+use crate::tokenizer::Takeable;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]

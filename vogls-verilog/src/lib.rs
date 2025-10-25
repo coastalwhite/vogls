@@ -1,4 +1,4 @@
-pub mod lexer;
+pub mod tokenizer;
 pub mod arena;
 pub mod parser;
 pub mod ast;

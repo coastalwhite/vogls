@@ -636,7 +636,7 @@ fn statements_to_process<'a>(
                 let system_task_enable = arenas.get(*id);
 
                 let ident = system_task_enable.system_task_identifier.item;
-                let ident = &arenas.idents[ident.0.start..ident.0.end];
+                let ident = &arenas.text[ident.0.start..ident.0.end];
 
                 match ident {
                     "display" => {
@@ -645,7 +645,7 @@ fn statements_to_process<'a>(
 
                         let expr = arenas.get(expressions.first().unwrap());
                         let str_literal = expr.into_str_literal().unwrap();
-                        let str_literal = &arenas.idents[str_literal.0.start..str_literal.0.end];
+                        let str_literal = &arenas.text[str_literal.0.start..str_literal.0.end];
 
                         builder.intrinsic(
                             gl,

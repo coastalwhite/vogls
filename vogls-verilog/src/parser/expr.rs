@@ -1,6 +1,6 @@
 use crate::ast::expr::{BinaryOperator, BitPartSelect, Expr, UnaryOperator};
 use crate::ast::{AstId, DecimalRef, Identifier, SizedNumberRef, StringRef};
-use crate::lexer::{FromLexerError, TokenKind};
+use crate::tokenizer::{FromLexerError, Token};
 use crate::parser::ItemParsable;
 use crate::span::Span;
 
@@ -17,8 +17,8 @@ pub(crate) enum StackItem {
     TernaryS2(AstId<Expr>, AstId<Expr>),
 }
 
-fn token_to_prefix_op(t: TokenKind) -> Option<(u8, UnaryOperator)> {
-    use TokenKind as T;
+fn token_to_prefix_op(t: Token) -> Option<(u8, UnaryOperator)> {
+    use Token as T;
     use UnaryOperator as U;
     match t {
         T::Bang => Some((26, U::LogicalNegation)),
@@ -35,9 +35,9 @@ fn token_to_prefix_op(t: TokenKind) -> Option<(u8, UnaryOperator)> {
     }
 }
 
-fn token_to_binary_op(t: TokenKind) -> Option<(u8, u8, BinaryOperator)> {
+fn token_to_binary_op(t: Token) -> Option<(u8, u8, BinaryOperator)> {
     use BinaryOperator as B;
-    use TokenKind as T;
+    use Token as T;
     match t {
         T::Star => Some((23, 24, B::Multiply)),
         T::Slash => Some((23, 24, B::Divide)),
@@ -66,7 +66,7 @@ fn token_to_binary_op(t: TokenKind) -> Option<(u8, u8, BinaryOperator)> {
 impl<'a> Consumable<'a> for Expr {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
         use ParseError as E;
-        use TokenKind as TK;
+        use Token as T;
 
         p.exprs_sp.clear();
 
@@ -86,11 +86,11 @@ impl<'a> Consumable<'a> for Expr {
             let span = *token.span;
             current = {
                 match token.kind {
-                    TK::Ident => (Expr::Ident(Identifier::item_parse(p, arenas)?), span),
-                    TK::Decimal => (Expr::Decimal(DecimalRef::item_parse(p, arenas)?.item), span),
-                    TK::Number => (Expr::Sized(SizedNumberRef::item_parse(p, arenas)?), span),
-                    TK::String => (Expr::String(StringRef::item_parse(p, arenas)?.item), span),
-                    TK::LeftParen => deepen!(StackItem::Paren, 0, span),
+                    T::Ident => (Expr::Ident(Identifier::item_parse(p, arenas)?), span),
+                    T::Decimal => (Expr::Decimal(DecimalRef::item_parse(p, arenas)?.item), span),
+                    T::Number => (Expr::Sized(SizedNumberRef::item_parse(p, arenas)?), span),
+                    T::String => (Expr::String(StringRef::item_parse(p, arenas)?.item), span),
+                    T::LeftParen => deepen!(StackItem::Paren, 0, span),
                     t => {
                         let t = *t;
                         p.tkw.next();
@@ -107,7 +107,7 @@ impl<'a> Consumable<'a> for Expr {
                     };
 
                     // Bit/Part Select ( ... [ ... ] )
-                    if *peeked.kind == TokenKind::LeftBrace {
+                    if *peeked.kind == T::LeftBrace {
                         p.tkw.next();
                         let span = current.1;
                         let subject = arenas.add_tuple(current);
@@ -115,7 +115,7 @@ impl<'a> Consumable<'a> for Expr {
                     }
 
                     // Ternary operator ( ... ? ... : ... )
-                    if *peeked.kind == TokenKind::QuestionMark {
+                    if *peeked.kind == T::QuestionMark {
                         let (l_bp, r_bp) = (1, 2);
 
                         if l_bp < min_bp {
@@ -150,10 +150,10 @@ impl<'a> Consumable<'a> for Expr {
 
                 match item {
                     StackItem::Paren => {
-                        p.tkw.next_expect(TokenKind::RightParen)?;
+                        p.tkw.next_expect(T::RightParen)?;
                     }
                     StackItem::Brace(subject) => {
-                        p.tkw.next_expect(TokenKind::RightBrace)?;
+                        p.tkw.next_expect(T::RightBrace)?;
                         let braced = arenas.add_tuple(current);
                         let bitpartselect = BitPartSelect { subject, braced };
                         current = (Expr::BitPartSelect(bitpartselect), location)
@@ -167,7 +167,7 @@ impl<'a> Consumable<'a> for Expr {
                         current = (Expr::Binary(op, lhs, rhs), location)
                     }
                     StackItem::TernaryS1(condition) => {
-                        p.tkw.next_expect(TokenKind::Colon)?;
+                        p.tkw.next_expect(T::Colon)?;
                         let truthy = arenas.add_tuple(current);
                         deepen!(StackItem::TernaryS2(condition, truthy), bp, loc);
                     }

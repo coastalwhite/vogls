@@ -8,22 +8,30 @@ use crate::number::{
 use crate::ident::Ident;
 use crate::span::Span;
 
+pub struct Tokenized {
+    tokens: Vec<Token>,
+    spans: Vec<Span>,
+}
+
 pub struct TokenWalker<'a> {
-    tokens: &'a [TokenKind],
+    tokens: &'a [Token],
     spans: &'a [Span],
+
     content: &'a str,
-    pub offset: usize,
     path: Option<Rc<Path>>,
+
+    /// Index of the next token.
+    pub offset: usize,
 }
 
 #[derive(Debug)]
-pub struct Token<'a> {
-    pub kind: &'a TokenKind,
+pub struct TokenLoc<'a> {
+    pub kind: &'a Token,
     pub span: &'a Span,
 }
 
 impl<'a> TokenWalker<'a> {
-    pub fn new(content: &'a str, path: Option<Rc<Path>>, buffer: &'a TokenBuffer) -> Self {
+    pub fn new(content: &'a str, path: Option<Rc<Path>>, buffer: &'a Tokenized) -> Self {
         Self {
             tokens: buffer.tokens(),
             spans: buffer.spans(),
@@ -58,23 +66,23 @@ impl<'a> TokenWalker<'a> {
         Span::new(cursor, cursor)
     }
 
-    pub fn get(&self, i: usize) -> Option<Token> {
+    pub fn get(&self, i: usize) -> Option<TokenLoc> {
         if i >= self.tokens.len() {
             return None;
         }
 
-        Some(Token {
+        Some(TokenLoc {
             kind: &self.tokens[i],
             span: &self.spans[i],
         })
     }
 
-    pub fn try_get<E: FromLexerError>(&self, i: usize) -> Result<Token, E> {
+    pub fn try_get<E: FromLexerError>(&self, i: usize) -> Result<TokenLoc, E> {
         self.get(i)
             .ok_or_else(|| E::missing_token(self.cursor_offset()))
     }
 
-    pub fn next_if_equals(&mut self, kind: TokenKind) -> bool {
+    pub fn next_if_equals(&mut self, kind: Token) -> bool {
         let Some(next) = self.next() else {
             return false;
         };
@@ -83,7 +91,7 @@ impl<'a> TokenWalker<'a> {
         next == kind
     }
 
-    pub fn next(&mut self) -> Option<Token> {
+    pub fn next(&mut self) -> Option<TokenLoc> {
         if self.is_empty() {
             return None;
         }
@@ -92,7 +100,7 @@ impl<'a> TokenWalker<'a> {
         self.get(self.offset - 1)
     }
 
-    pub fn try_next<E: FromLexerError>(&mut self) -> Result<Token, E> {
+    pub fn try_next<E: FromLexerError>(&mut self) -> Result<TokenLoc, E> {
         if self.is_empty() {
             return Err(E::missing_token(self.cursor_offset()));
         }
@@ -101,7 +109,7 @@ impl<'a> TokenWalker<'a> {
         Ok(self.get(self.offset - 1).unwrap())
     }
 
-    pub fn next_back(&mut self) -> Option<Token> {
+    pub fn next_back(&mut self) -> Option<TokenLoc> {
         if self.offset == 0 {
             return None;
         }
@@ -110,7 +118,7 @@ impl<'a> TokenWalker<'a> {
         self.get(self.offset)
     }
 
-    pub fn next_expect<E: FromLexerError>(&mut self, kind: TokenKind) -> Result<&Span, E> {
+    pub fn next_expect<E: FromLexerError>(&mut self, kind: Token) -> Result<&Span, E> {
         let next = self.try_next()?;
         if *next.kind != kind {
             return Err(E::unexpected_token());
@@ -119,13 +127,9 @@ impl<'a> TokenWalker<'a> {
     }
 }
 
-pub struct TokenBuffer {
-    tokens: Vec<TokenKind>,
-    spans: Vec<Span>,
-}
 
-impl TokenBuffer {
-    pub fn tokens(&self) -> &[TokenKind] {
+impl Tokenized {
+    pub fn tokens(&self) -> &[Token] {
         &self.tokens
     }
 
@@ -134,7 +138,7 @@ impl TokenBuffer {
     }
 
     pub fn tokenize(content: &str) -> Self {
-        use TokenKind as T;
+        use Token as T;
 
         let mut tokens = Vec::new();
         let mut offsets = Vec::new();
@@ -467,21 +471,9 @@ fn ident_length(s: &str) -> usize {
     start_length - leftover.len()
 }
 
-#[derive(Debug)]
-pub enum ConsumeError {
-    MissingCharacter,
-    UnexpectedCharacter(char),
-}
-
-pub trait Consumable<'a>: Sized {
-    fn consume(s: &'a str) -> Result<Consumed<'a, Self>, ConsumeError>;
-}
-
 pub trait Takeable<'a>: Sized {
     fn take(s: &'a str) -> (&'a str, Self);
 }
-
-pub struct Consumed<'a, T>(pub &'a str, pub T);
 
 pub trait FromLexerError {
     fn missing_token(at: usize) -> Self;
@@ -521,7 +513,7 @@ macro_rules! define_tokens {
 
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
         #[repr(u8)]
-        pub enum TokenKind {
+        pub enum Token {
             $(
             $(#[$attr])*
             $ident,
@@ -533,9 +525,9 @@ macro_rules! define_tokens {
         #[test]
         fn tokenizer_examples() {
             $(
-            let consumed = TokenBuffer::tokenize($example);
+            let consumed = Tokenized::tokenize($example);
             assert_eq!(consumed.tokens().len(), 1);
-            assert_eq!(consumed.tokens()[0], TokenKind::$ident, "Example \"{}\" of token {} had the invalid kind", $example, stringify!($ident));
+            assert_eq!(consumed.tokens()[0], Token::$ident, "Example \"{}\" of token {} had the invalid kind", $example, stringify!($ident));
             )+
         }
     };

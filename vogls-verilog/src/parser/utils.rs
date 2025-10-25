@@ -1,6 +1,6 @@
 use crate::ast::{AstId, AstIdRange};
-use crate::lexer::TokenKind;
 use crate::span::Span;
+use crate::tokenizer::Token;
 
 use super::{AstArenas, Consumable, ParseError, Parser};
 
@@ -37,7 +37,7 @@ pub fn try_parse_with_span<'a, T: Consumable<'a>>(
 pub fn parse_until_reaching<'a, T: Consumable<'a>>(
     p: &mut Parser<'a>,
     arenas: &mut AstArenas,
-    end: TokenKind,
+    end: Token,
 ) -> Result<AstIdRange<T>, ParseError> {
     // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
     // here.
@@ -62,7 +62,7 @@ pub fn parse_until_reaching<'a, T: Consumable<'a>>(
 pub fn parse_one_or_more_delimited<'a, T: Consumable<'a>>(
     p: &mut Parser<'a>,
     arenas: &mut AstArenas,
-    delimiter: TokenKind,
+    delimiter: Token,
 ) -> Result<AstIdRange<T>, ParseError> {
     let (item, span) = T::consume(p, arenas)?;
 
@@ -89,7 +89,7 @@ pub fn parse_one_or_more_delimited<'a, T: Consumable<'a>>(
 pub fn parse_zero_or_more_delimited<'a, T: Consumable<'a>>(
     p: &mut Parser<'a>,
     arenas: &mut AstArenas,
-    delimiter: TokenKind,
+    delimiter: Token,
 ) -> Result<AstIdRange<T>, ParseError> {
     let Some((item, span)) = T::try_consume(p, arenas) else {
         return Ok(AstIdRange::default());
@@ -138,32 +138,32 @@ pub fn parse_one_or_more<'a, T: Consumable<'a>>(
 }
 
 pub fn parse_one_or_more_delimited_until_fail<'a, T: Consumable<'a>>(
-     p: &mut Parser<'a>,
-     arenas: &mut AstArenas,
-     delimiter: TokenKind,
- ) -> Result<AstIdRange<T>, ParseError> {
-     let (item, span) = T::consume(p, arenas)?;
-                                                                                              
-     // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
-     // here.
-     let mut items = Vec::new();
-     let mut spans = Vec::new();
-     items.push(item);
-     spans.push(span);
-                                                                                              
-     loop {
-         let save = p.tkw.offset;
-         if !p.tkw.next_if_equals(delimiter) {
-             break;
-         }
-                                                                                              
-         let Some((item, span)) = T::try_consume(p, arenas) else {
-             p.tkw.offset = save;
-             break;
-         };
-         items.push(item);
-         spans.push(span);
-     }
-                                                                                              
-     Ok(arenas.add_range(items, spans))
- }
+    p: &mut Parser<'a>,
+    arenas: &mut AstArenas,
+    delimiter: Token,
+) -> Result<AstIdRange<T>, ParseError> {
+    let (item, span) = T::consume(p, arenas)?;
+
+    // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
+    // here.
+    let mut items = Vec::new();
+    let mut spans = Vec::new();
+    items.push(item);
+    spans.push(span);
+
+    loop {
+        let save = p.tkw.offset;
+        if !p.tkw.next_if_equals(delimiter) {
+            break;
+        }
+
+        let Some((item, span)) = T::try_consume(p, arenas) else {
+            p.tkw.offset = save;
+            break;
+        };
+        items.push(item);
+        spans.push(span);
+    }
+
+    Ok(arenas.add_range(items, spans))
+}

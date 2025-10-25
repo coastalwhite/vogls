@@ -5,7 +5,7 @@ use crate::ast::module::Module;
 use crate::ast::{
     AstId, AstIdRange, AstItem, DecimalRef, Identifier, SizedNumberRef, StringRef, TextRef,
 };
-use crate::lexer::{FromLexerError, TokenWalker, Takeable, TokenKind};
+use crate::tokenizer::{FromLexerError, TokenWalker, Takeable, Token};
 use crate::number::{Decimal, SizedNumber};
 use crate::span::Span;
 
@@ -27,7 +27,7 @@ pub struct AstArenas {
     pub nodes: Arena,
     pub spans: Vec<Span>,
 
-    pub idents: String,
+    pub text: String,
     pub decimals: Vec<Decimal>,
     pub sized_numbers: Vec<SizedNumber>,
 }
@@ -67,7 +67,7 @@ impl AstArenas {
     }
 
     pub fn get_ident(&self, ident_ref: TextRef) -> &str {
-        &self.idents[ident_ref.start..ident_ref.end]
+        &self.text[ident_ref.start..ident_ref.end]
     }
 }
 
@@ -184,7 +184,7 @@ fn lines_with_offset(mut s: &str) -> Vec<(usize, &str)> {
 #[derive(Debug, Clone)]
 pub enum ParseErrorReason {
     MissingToken,
-    UnexpectedToken(TokenKind),
+    UnexpectedToken(Token),
     Incomplete(&'static str),
 }
 
@@ -199,7 +199,7 @@ impl FromLexerError for ParseError {
         // println!("{}", std::backtrace::Backtrace::force_capture());
         Self {
             location: None,
-            reason: ParseErrorReason::UnexpectedToken(TokenKind::Dot),
+            reason: ParseErrorReason::UnexpectedToken(Token::Dot),
         }
     }
 }
@@ -241,7 +241,7 @@ pub trait Consumable<'a>: Sized + Copy + 'static {
 
 impl<'a> Consumable<'a> for Identifier {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
-        let span = *p.tkw.next_expect(TokenKind::Ident)?;
+        let span = *p.tkw.next_expect(Token::Ident)?;
         let content = &p.tkw.content()[span.as_range()];
         Ok((Self::from_item(content, arenas)?, span))
     }
@@ -249,16 +249,16 @@ impl<'a> Consumable<'a> for Identifier {
 impl<'a> ItemParsable<'a> for Identifier {
     type Item = &'a str;
     fn from_item(item: Self::Item, arenas: &mut AstArenas) -> Result<Self, ParseError> {
-        let start = arenas.idents.len();
+        let start = arenas.text.len();
         let end = start + item.len();
-        arenas.idents.push_str(item);
+        arenas.text.push_str(item);
         Ok(Self(TextRef { start, end }))
     }
 }
 
 impl<'a> Consumable<'a> for DecimalRef {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
-        let span = *p.tkw.next_expect(TokenKind::Decimal)?;
+        let span = *p.tkw.next_expect(Token::Decimal)?;
         let content = &p.tkw.content()[span.as_range()];
         let (_, decimal) = Decimal::take(content);
         Ok((Self::from_item(decimal, arenas)?, span))
@@ -275,7 +275,7 @@ impl<'a> ItemParsable<'a> for DecimalRef {
 
 impl<'a> Consumable<'a> for SizedNumberRef {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
-        let span = *p.tkw.next_expect(TokenKind::Number)?;
+        let span = *p.tkw.next_expect(Token::Number)?;
         let content = &p.tkw.content()[span.as_range()];
         let (_, number) = SizedNumber::take(content);
         Ok((Self::from_item(number, arenas)?, span))
@@ -292,7 +292,7 @@ impl<'a> ItemParsable<'a> for SizedNumberRef {
 
 impl<'a> Consumable<'a> for StringRef {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
-        let span = *p.tkw.next_expect(TokenKind::String)?;
+        let span = *p.tkw.next_expect(Token::String)?;
         let content = &p.tkw.content()[span.as_range()];
         let content = &content[1..content.len() - 1];
 
@@ -306,9 +306,9 @@ impl<'a> Consumable<'a> for StringRef {
 impl<'a> ItemParsable<'a> for StringRef {
     type Item = &'a str;
     fn from_item(item: Self::Item, arenas: &mut AstArenas) -> Result<Self, ParseError> {
-        let start = arenas.idents.len();
+        let start = arenas.text.len();
         let end = start + item.len();
-        arenas.idents.push_str(item);
+        arenas.text.push_str(item);
         Ok(Self(TextRef { start, end }))
     }
 }
