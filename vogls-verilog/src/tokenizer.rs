@@ -127,7 +127,6 @@ impl<'a> TokenWalker<'a> {
     }
 }
 
-
 impl Tokenized {
     pub fn tokens(&self) -> &[Token] {
         &self.tokens
@@ -168,9 +167,33 @@ impl Tokenized {
                 b'?' => (T::QuestionMark, 1),
                 b'@' => (T::AtSign, 1),
                 b'#' => (T::Hash, 1),
-                b'/' => (T::Slash, 1),
                 b'%' => (T::Procent, 1),
 
+                b'/' => match bytes.get(i + 1) {
+                    // Line comments
+                    Some(b'/') => {
+                        i = bytes[i + 2..]
+                            .iter()
+                            .position(|c: &u8| *c == b'\n')
+                            .map_or(bytes.len(), |j| i + 2 + j);
+                        continue;
+                    }
+
+                    // Block comments
+                    Some(b'*') => {
+                        let mut prev_was_star = false;
+                        i = bytes[i + 2..]
+                            .iter()
+                            .position(|c: &u8| {
+                                let done = prev_was_star && *c == b'/';
+                                prev_was_star = *c == b'*';
+                                done
+                            })
+                            .map_or(bytes.len(), |j| i + 2 + j + 1);
+                        continue;
+                    }
+                    _ => (T::Slash, 1),
+                },
                 b'!' => match (bytes.get(i + 1), bytes.get(i + 2)) {
                     (Some(b'='), Some(b'=')) => (T::BangDoubleEquals, 3),
                     (Some(b'='), _) => (T::BangEquals, 2),
