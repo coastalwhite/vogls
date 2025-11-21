@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "vogls",
+    "vogls-test",
     "vogls-ir",
     "vogls-sim",
     "vogls-verilog",
@@ -10,7 +11,9 @@ resolver = "3"
 [workspace.dependencies]
 slotmap = "1"
 indexmap = "1"
+clap = { version = "4.5", features = ["derive"] }
 
+vogls.path = "vogls"
 vogls-sim.path = "vogls-sim"
 vogls-ir.path = "vogls-ir"
 vogls-verilog.path = "vogls-verilog"

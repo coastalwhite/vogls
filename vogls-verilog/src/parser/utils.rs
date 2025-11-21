@@ -64,6 +64,7 @@ pub fn parse_one_or_more_delimited<'a, T: Consumable<'a>>(
     arenas: &mut AstArenas,
     delimiter: Token,
 ) -> Result<AstIdRange<T>, ParseError> {
+    dbg!("hi!");
     let (item, span) = T::consume(p, arenas)?;
 
     // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
@@ -74,6 +75,7 @@ pub fn parse_one_or_more_delimited<'a, T: Consumable<'a>>(
     spans.push(span);
 
     loop {
+        dbg!("hi!");
         if !p.tkw.next_if_equals(delimiter) {
             break;
         }

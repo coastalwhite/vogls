@@ -1,0 +1,12 @@
+[package]
+name = "vogls-test"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+slotmap.workspace = true
+clap.workspace = true
+vogls.workspace = true
+vogls-ir.workspace = true
+vogls-sim.workspace = true
+vogls-verilog.workspace = true
