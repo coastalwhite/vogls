@@ -16,11 +16,17 @@ pub type InstanceId = u64;
 
 pub struct Context {
     time: Timestamp,
+    pub stdout: Box<dyn std::io::Write>,
+    pub stderr: Box<dyn std::io::Write>,
 }
 
 impl Context {
-    pub fn new() -> Self {
-        Self { time: 0 }
+    pub fn new(stdout: Box<dyn std::io::Write>, stderr: Box<dyn std::io::Write>) -> Self {
+        Self {
+            time: 0,
+            stdout,
+            stderr,
+        }
     }
 }
 
@@ -120,7 +126,8 @@ impl Event {
                             let Some(VmIntrinsicArg::StringLiteral(msg)) = args.first() else {
                                 panic!("Invalid display argument");
                             };
-                            eprintln!("[DISPLAY]: time = {}: {msg}", ctx.time);
+                            writeln!(&mut ctx.stdout, "[DISPLAY]: time = {}: {msg}", ctx.time)
+                                .unwrap();
                         }
                         O::Assert => {
                             let Some(VmIntrinsicArg::Variable(condition)) = args.first() else {
@@ -129,7 +136,7 @@ impl Event {
                             assert!(stack[condition.offset] != 0, "failed assertion");
                         }
                         O::Finish => {
-                            eprintln!("[FINISH]");
+                            writeln!(&mut ctx.stdout, "[FINISH]").unwrap();
                             return EvalOutcome::Exit;
                         }
                     }

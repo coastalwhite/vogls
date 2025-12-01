@@ -26,8 +26,6 @@ pub fn run(
     let token_buffer = Tokenized::tokenize(&content);
     let mut parser = Parser::new(TokenWalker::new(&content, None, &token_buffer));
 
-    dbg!(&content);
-
     let ast = match parser.parse_file() {
         Ok(ast) => ast,
         Err(err) => {
@@ -79,7 +77,7 @@ pub fn run(
             for module_id in ast.modules {
                 let Module {
                     module_identifier,
-                    module_items,
+                    module_items: _,
                     ports: _,
                 } = ast.arenas.get(module_id);
                 let module_name = ast.arenas.get_ident(module_identifier.item.0);
@@ -107,7 +105,6 @@ pub fn run(
             "cannot find top-level module".to_string(),
         ));
     };
-
 
     // Create a list of all module in breadth- first order.
     // @TODO: Add a mechanism for detecting dependency loops.
@@ -154,8 +151,6 @@ pub fn run(
         start = end;
     }
 
-    dbg!(tl_module_name);
-
     // Walk the modules in depth-first order and lower to IR.
     let mut instantiated_modules = HashMap::with_capacity(module_stack.len());
     for module_id in module_stack.iter().rev() {
@@ -168,16 +163,15 @@ pub fn run(
 
     let tl_module_key = *instantiated_modules.get(tl_module_name).unwrap();
 
-    let mut ctx = Context::new();
+    for module in gl.modules.values() {
+        writeln!(ectx.stdout, "{}", module.display(&gl))?;
+    }
+
     let mut processes = SlotMap::<VmProcessKey, VmProcess>::default();
     let mut schedule = BinaryHeap::default();
     let mut signals = HashMap::default();
     let mut listeners = SlotMap::default();
     let mut watches = HashMap::default();
-
-    for module in gl.modules.values() {
-        writeln!(ectx.stdout, "{}", module.display(&gl))?;
-    }
 
     // Find the entity for the Top-Level Module.
     let mut elab_processes = Vec::new();
@@ -189,7 +183,7 @@ pub fn run(
         writeln!(ectx.stdout, "{}", gl.processes[process].display(&gl))?;
         let vm_process = lower_process_to_vm(process, &gl, &mut io_signals);
 
-        write!(ectx.stdout, "{}", &vm_process);
+        write!(ectx.stdout, "{}", &vm_process)?;
 
         let stack = vec![0u8; vm_process.stack_size];
         let vm_process_key = processes.insert(vm_process);
@@ -212,6 +206,10 @@ pub fn run(
 
     writeln!(ectx.stdout, "{schedule:?}")?;
 
+    let stdout = std::mem::replace(&mut ectx.stdout, Box::new(Vec::new()) as _);
+    let stderr = std::mem::replace(&mut ectx.stdout, Box::new(Vec::new()) as _);
+
+    let mut ctx = Context::new(stdout, stderr);
     vogls_sim::run(
         &mut ctx,
         &processes,
@@ -221,6 +219,9 @@ pub fn run(
         &mut watches,
         100,
     );
+
+    ectx.stdout = ctx.stdout;
+    ectx.stderr = ctx.stderr;
 
     Ok(())
 }

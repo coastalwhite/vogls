@@ -67,8 +67,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         std::io::stdout().flush()?;
 
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
+        let stdout = Vec::new();
+        let stderr = Vec::new();
 
         let mut ctx = ExecutionContext {
             stdout: Box::new(stdout) as Box<dyn std::io::Write>,
@@ -82,8 +82,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         println!();
     }
-
-    dbg!(&paths);
 
     Ok(())
 }
