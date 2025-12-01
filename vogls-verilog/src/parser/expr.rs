@@ -90,7 +90,10 @@ impl<'a> Consumable<'a> for Expr {
                     T::Decimal => (Expr::Decimal(DecimalRef::item_parse(p, arenas)?.item), span),
                     T::Number => (Expr::Sized(SizedNumberRef::item_parse(p, arenas)?), span),
                     T::String => (Expr::String(StringRef::item_parse(p, arenas)?.item), span),
-                    T::LeftParen => deepen!(StackItem::Paren, 0, span),
+                    T::LeftParen => {
+                        p.tkw.offset += 1;
+                        deepen!(StackItem::Paren, 0, span)
+                    },
                     t => {
                         let t = *t;
                         p.tkw.next();
