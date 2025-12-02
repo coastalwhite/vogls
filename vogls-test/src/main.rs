@@ -1,5 +1,6 @@
 use std::io::Write;
 use std::path::Path;
+use std::process::ExitCode;
 
 use clap::Parser;
 use vogls::ExecutionContext;
@@ -12,7 +13,7 @@ struct Args {
     filter: Option<String>,
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     let args = Args::try_parse()?;
 
     let manifest_path = env!("CARGO_MANIFEST_PATH");
@@ -57,6 +58,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .collect(),
     };
 
+    let mut num_failed = 0;
+    println!("Running {} tests...", paths.len());
     for path in paths.iter() {
         let path = path.as_path();
         print!(
@@ -76,12 +79,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         let result = vogls::run(&tests_dir.join(&path), None, &mut ctx);
 
+        num_failed += usize::from(result.is_err());
         match result {
-            Ok(_) => print!("OK"),
-            Err(_) => print!("ERR"),
+            Ok(_) => print!("\x1b[32mOK\x1b[0m"),
+            Err(_) => print!("\x1b[31mERR\x1b[0m"),
         }
         println!();
     }
-
-    Ok(())
+    if num_failed == 0 {
+        println!("All tests passed!");
+        Ok(ExitCode::SUCCESS)
+    } else {
+        print!(
+            "\x1b[31mFailed {}/{} tests.\x1b[0m",
+            num_failed,
+            paths.len()
+        );
+        Ok(ExitCode::FAILURE)
+    }
 }
