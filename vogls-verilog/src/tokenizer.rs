@@ -497,9 +497,12 @@ impl Tokenized {
                             "xor" => T::KeywordXor,
                             _ => {
                                 if let Some(preprocessor_macro) = preprocessor_macro
-                                    && let Some(arg_idx) = preprocessor_macro.arguments.get_mut(word)
+                                    && let Some(arg_idx) =
+                                        preprocessor_macro.arguments.get_mut(word)
                                 {
-                                    preprocessor_macro.argument_positions.push((*arg_idx, tokens.len() - start));
+                                    preprocessor_macro
+                                        .argument_positions
+                                        .push((*arg_idx, tokens.len() - start));
                                     continue;
                                 }
 
@@ -517,7 +520,10 @@ impl Tokenized {
 
                         match directive {
                             "define" => {
-                                assert!(preprocessor_macro.is_none(), "nested preprocessor definition");
+                                assert!(
+                                    preprocessor_macro.is_none(),
+                                    "nested preprocessor definition"
+                                );
 
                                 let mut j = i + 1 + directive_length;
                                 // @TODO: If contains line break, it should probably take that into
@@ -529,32 +535,63 @@ impl Tokenized {
                                 skip_whitespace(content, &mut j);
 
                                 let mut is_escaped = false;
-                                let end = bytes[j..].iter().position(|&b| {
-                                    let is_unescaped_nl = b == b'\n' && !is_escaped;
-                                    is_escaped = b == b'\\';
-                                    is_unescaped_nl
-                                }).map_or(bytes.len(), |e| e + j);
+                                let end = bytes[j..]
+                                    .iter()
+                                    .position(|&b| {
+                                        let is_unescaped_nl = b == b'\n' && !is_escaped;
+                                        is_escaped = b == b'\\';
+                                        is_unescaped_nl
+                                    })
+                                    .map_or(bytes.len(), |e| e + j);
 
-                                lex_stack.push(LexItem { content, start, i: end, preprocessor_macro: None });
-                                lex_stack.push(LexItem { content: &content[..end], start: tokens.len(), i: j, preprocessor_macro: Some(MacroItem { name: name.into(), arguments: HashMap::new(), argument_positions: Vec::new() }) });
+                                lex_stack.push(LexItem {
+                                    content,
+                                    start,
+                                    i: end,
+                                    preprocessor_macro: None,
+                                });
+                                lex_stack.push(LexItem {
+                                    content: &content[..end],
+                                    start: tokens.len(),
+                                    i: j,
+                                    preprocessor_macro: Some(MacroItem {
+                                        name: name.into(),
+                                        arguments: HashMap::new(),
+                                        argument_positions: Vec::new(),
+                                    }),
+                                });
                                 continue 'lex_stack;
                             }
                             "undef" => {
+                                i += 1 + directive_length;
+                                skip_whitespace(content, &mut i);
+                                let name_length = ident_length(&content[i..]);
+                                let name = &content[i..][..name_length];
+
                                 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 352
                                 // An attempt to undefine a text macro that was not previously defined using a `define compiler directive can result in a warning.
-                                _ = macros.remove(directive);
-                                i += 1 + directive_length;
+                                _ = macros.remove(name);
+                                i += name_length;
                                 continue;
-                            },
-                            _ => match macros.get(directive) {
-                                None => (T::Unknown, 1 + directive_length),
-                                Some(m) => {
+                            }
+                            "celldefine" | "endcelldefine" => todo!(),
+                            "default_nettype" => todo!(),
+                            "ifdef" | "else" | "elsif" | "endif" | "ifndef" => todo!(),
+                            "include" => todo!(),
+                            "resetall" => todo!(),
+                            "line" => todo!(),
+                            "timescale" => todo!(),
+                            "unconnected_drive" | "nounconnected_drive" => todo!(),
+                            "pragma" => todo!(),
+                            "begin_keywords" | "end_keywords" => todo!(),
+                            _ => {
+                                if let Some(m) = macros.get(directive) {
                                     tokens.extend_from_slice(&m.tokens);
                                     offsets.extend_from_slice(&m.spans);
                                     file_idxs.extend_from_slice(&m.file);
-                                    i += 1 + directive_length;
-                                    continue;
-                                },
+                                }
+                                i += 1 + directive_length;
+                                continue;
                             }
                         }
                     }
@@ -568,11 +605,14 @@ impl Tokenized {
             }
 
             if let Some(preprocessor_macro) = preprocessor_macro.take() {
-                macros.insert(preprocessor_macro.name, Macro {
-                    tokens: tokens.drain(start..).collect(),
-                    spans: offsets.drain(start..).collect(),
-                    file: file_idxs.drain(start..).collect(),
-                });
+                macros.insert(
+                    preprocessor_macro.name,
+                    Macro {
+                        tokens: tokens.drain(start..).collect(),
+                        spans: offsets.drain(start..).collect(),
+                        file: file_idxs.drain(start..).collect(),
+                    },
+                );
             }
         }
 
