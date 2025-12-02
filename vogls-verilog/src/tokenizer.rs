@@ -15,6 +15,8 @@ pub struct Tokenized {
     tokens: Vec<Token>,
     spans: Vec<Span>,
     file_idxs: Vec<FileIdx>,
+    contents: Vec<Rc<str>>,
+    paths: Vec<Option<Rc<Path>>>,
 }
 
 pub struct TokenWalker<'a> {
@@ -22,8 +24,8 @@ pub struct TokenWalker<'a> {
     spans: &'a [Span],
     file_idxs: &'a [FileIdx],
 
-    contents: Vec<Rc<str>>,
-    paths: Vec<Option<Rc<Path>>>,
+    contents: &'a [Rc<str>],
+    paths: &'a [Option<Rc<Path>>],
 
     /// Index of the next token.
     pub offset: usize,
@@ -37,13 +39,13 @@ pub struct TokenLoc<'a> {
 }
 
 impl<'a> TokenWalker<'a> {
-    pub fn new(content: Rc<str>, path: Option<Rc<Path>>, buffer: &'a Tokenized) -> Self {
+    pub fn new(buffer: &'a Tokenized) -> Self {
         Self {
             tokens: &buffer.tokens,
             spans: &buffer.spans,
             file_idxs: &buffer.file_idxs,
-            contents: vec![content],
-            paths: vec![path],
+            contents: &buffer.contents,
+            paths: &buffer.paths,
             offset: 0,
         }
     }
@@ -136,12 +138,14 @@ impl<'a> TokenWalker<'a> {
 }
 
 impl Tokenized {
-    pub fn tokenize(content: &str) -> Self {
+    pub fn tokenize(content: Rc<str>, path: Option<Rc<Path>>) -> Self {
         use Token as T;
 
         let mut tokens = Vec::new();
         let mut offsets = Vec::new();
         let mut file_idxs = Vec::new();
+        let mut paths = Vec::new();
+        let mut contents = Vec::new();
 
         let mut if_depth = 0;
         let mut if_untaken_depth = 0;
@@ -158,11 +162,12 @@ impl Tokenized {
             argument_positions: Vec<(usize, usize)>,
         }
 
-        struct LexItem<'a> {
-            content: &'a str,
+        struct LexItem {
+            file_idx: u32,
 
             start: usize,
             i: usize,
+            end_offset: usize,
 
             preprocessor_macro: Option<MacroItem>,
         }
@@ -171,20 +176,25 @@ impl Tokenized {
 
         let mut lex_stack = Vec::new();
         lex_stack.push(LexItem {
-            content,
+            file_idx: 0,
             start: 0,
             i: 0,
+            end_offset: content.len(),
             preprocessor_macro: None,
         });
+        contents.push(content);
+        paths.push(path);
 
         'lex_stack: while let Some(LexItem {
-            content,
+            file_idx,
             start,
             mut i,
+            end_offset,
             ref mut preprocessor_macro,
         }) = lex_stack.pop()
         {
-            let bytes = content.as_bytes();
+            let content = contents[file_idx as usize].clone();
+            let bytes = content[..end_offset].as_bytes();
             while let Some(&b) = bytes.get(i) {
                 let (token, length) = match b {
                     b' ' | b'\r' | b'\t' | b'\n' => {
@@ -278,24 +288,10 @@ impl Tokenized {
                         (Some(b'='), _) => (T::LessThanEquals, 2),
                         (_, _) => (T::LessThan, 1),
                     },
-                    b'"' => {
-                        let mut token = T::String;
-                        let mut j = i + 1;
-                        let end_offset = loop {
-                            let Some(b) = bytes.get(j) else {
-                                token = T::Unknown;
-                                break j;
-                            };
-
-                            match b {
-                                b'"' => break j + 1,
-                                // @TODO: Better escaping.
-                                b'\\' => j += 2,
-                                _ => j += 1,
-                            }
-                        };
-                        (token, end_offset - i)
-                    }
+                    b'"' => match str_length(&content[i..]) {
+                        None => (T::Unknown, 1),
+                        Some(l) => (T::String, l),
+                    },
                     b'0'..=b'9' => {
                         let s = &content[i..];
                         let initial_length = s.len();
@@ -531,7 +527,7 @@ impl Tokenized {
                                 let mut j = i + 1 + directive_length;
                                 // @TODO: If contains line break, it should probably take that into
                                 // account.
-                                skip_whitespace(content, &mut j);
+                                skip_whitespace(&content, &mut j);
                                 let name_length = ident_length(&content[j..]);
                                 let name = &content[j..][..name_length];
                                 // @TODO: Disallow overwriting compiler intrinsics.
@@ -553,15 +549,17 @@ impl Tokenized {
                                 }
 
                                 lex_stack.push(LexItem {
-                                    content,
+                                    file_idx,
                                     start,
                                     i: end,
+                                    end_offset,
                                     preprocessor_macro: None,
                                 });
                                 lex_stack.push(LexItem {
-                                    content: &content[..end],
+                                    file_idx,
                                     start: tokens.len(),
                                     i: j,
+                                    end_offset: end,
                                     preprocessor_macro: Some(MacroItem {
                                         name: name.into(),
                                         arguments: HashMap::new(),
@@ -572,7 +570,7 @@ impl Tokenized {
                             }
                             "undef" => {
                                 i += 1 + directive_length;
-                                skip_whitespace(content, &mut i);
+                                skip_whitespace(&content, &mut i);
                                 let name_length = ident_length(&content[i..]);
                                 let name = &content[i..][..name_length];
 
@@ -591,7 +589,7 @@ impl Tokenized {
                             "elsif" => todo!(),
                             "ifdef" | "ifndef" => {
                                 i += 1 + directive_length;
-                                skip_whitespace(content, &mut i);
+                                skip_whitespace(&content, &mut i);
                                 let name_length = ident_length(&content[i..]);
                                 let name = &content[i..][..name_length];
                                 if if_untaken_depth >= if_depth {
@@ -619,7 +617,49 @@ impl Tokenized {
                                 if_depth -= 1;
                                 continue;
                             }
-                            "include" => todo!(),
+                            "include" => {
+                                assert!(
+                                    preprocessor_macro.is_none(),
+                                    "nested preprocessor definition"
+                                );
+
+                                let mut j = i + 1 + directive_length;
+                                skip_whitespace(&content, &mut j);
+                                if content[j..].starts_with('"')
+                                    && let Some(l) = str_length(&content[j..])
+                                {
+                                    i = j + l;
+                                    // @TODO: escaping
+                                    let s = &content[j + 1..][..l - 2];
+                                    // @TODO: better error handling
+                                    let path = paths[file_idx as usize].as_deref().unwrap();
+                                    let path = path.parent().unwrap();
+                                    let path = path.join(Path::new(s));
+                                    // @TODO: better error handling
+                                    let content: Rc<str> =
+                                        std::fs::read_to_string(&path).unwrap().into();
+
+                                    lex_stack.push(LexItem {
+                                        file_idx,
+                                        start,
+                                        i,
+                                        end_offset,
+                                        preprocessor_macro: None,
+                                    });
+                                    lex_stack.push(LexItem {
+                                        file_idx: contents.len() as u32,
+                                        start: tokens.len(),
+                                        i: 0,
+                                        end_offset: content.len(),
+                                        preprocessor_macro: None,
+                                    });
+                                    contents.push(content);
+                                    paths.push(Some(path.into()));
+                                    continue;
+                                } else {
+                                    (T::Unknown, 1 + directive_length)
+                                }
+                            }
                             "resetall" => todo!(),
                             "line" => todo!(),
                             "timescale" => todo!(),
@@ -645,7 +685,7 @@ impl Tokenized {
                 if if_untaken_depth >= if_depth {
                     tokens.push(token);
                     offsets.push(Span::new(i, i + length));
-                    file_idxs.push(0);
+                    file_idxs.push(file_idx);
                 }
                 i += length;
             }
@@ -666,6 +706,8 @@ impl Tokenized {
             tokens,
             spans: offsets,
             file_idxs,
+            contents,
+            paths,
         }
     }
 }
@@ -692,6 +734,24 @@ fn skip_whitespace(s: &str, i: &mut usize) {
     let b = s.as_bytes();
     while b.get(*i).is_some_and(|b| b.is_ascii_whitespace()) {
         *i += 1;
+    }
+}
+
+fn str_length(s: &str) -> Option<usize> {
+    debug_assert!(s.starts_with('"'));
+    let bytes = s.as_bytes();
+    let mut i = 1;
+    loop {
+        let Some(b) = bytes.get(i) else {
+            return None;
+        };
+
+        match b {
+            b'"' => return Some(i + 1),
+            // @TODO: Better escaping.
+            b'\\' => i += 2,
+            _ => i += 1,
+        }
     }
 }
 
@@ -749,7 +809,7 @@ macro_rules! define_tokens {
         #[test]
         fn tokenizer_examples() {
             $(
-            let consumed = Tokenized::tokenize($example);
+            let consumed = Tokenized::tokenize($example.into(), None);
             assert_eq!(consumed.tokens.len(), 1);
             assert_eq!(consumed.tokens[0], Token::$ident, "Example \"{}\" of token {} had the invalid kind", $example, stringify!($ident));
             )+
