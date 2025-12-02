@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
 
@@ -72,7 +73,7 @@ impl<'a> TokenWalker<'a> {
         Span::new(cursor, cursor)
     }
 
-    pub fn get(&self, i: usize) -> Option<TokenLoc> {
+    pub fn get(&self, i: usize) -> Option<TokenLoc<'_>> {
         if i >= self.tokens.len() {
             return None;
         }
@@ -84,7 +85,7 @@ impl<'a> TokenWalker<'a> {
         })
     }
 
-    pub fn try_get<E: FromLexerError>(&self, i: usize) -> Result<TokenLoc, E> {
+    pub fn try_get<E: FromLexerError>(&self, i: usize) -> Result<TokenLoc<'_>, E> {
         self.get(i)
             .ok_or_else(|| E::missing_token(self.cursor_offset()))
     }
@@ -98,7 +99,7 @@ impl<'a> TokenWalker<'a> {
         next == kind
     }
 
-    pub fn next(&mut self) -> Option<TokenLoc> {
+    pub fn next(&mut self) -> Option<TokenLoc<'_>> {
         if self.is_empty() {
             return None;
         }
@@ -107,7 +108,7 @@ impl<'a> TokenWalker<'a> {
         self.get(self.offset - 1)
     }
 
-    pub fn try_next<E: FromLexerError>(&mut self) -> Result<TokenLoc, E> {
+    pub fn try_next<E: FromLexerError>(&mut self) -> Result<TokenLoc<'_>, E> {
         if self.is_empty() {
             return Err(E::missing_token(self.cursor_offset()));
         }
@@ -116,7 +117,7 @@ impl<'a> TokenWalker<'a> {
         Ok(self.get(self.offset - 1).unwrap())
     }
 
-    pub fn next_back(&mut self) -> Option<TokenLoc> {
+    pub fn next_back(&mut self) -> Option<TokenLoc<'_>> {
         if self.offset == 0 {
             return None;
         }
@@ -125,7 +126,7 @@ impl<'a> TokenWalker<'a> {
         self.get(self.offset)
     }
 
-    pub fn next_expect<E: FromLexerError>(&mut self, kind: Token) -> Result<TokenLoc, E> {
+    pub fn next_expect<E: FromLexerError>(&mut self, kind: Token) -> Result<TokenLoc<'_>, E> {
         let next = self.try_next()?;
         if *next.kind != kind {
             return Err(E::unexpected_token());
@@ -142,332 +143,437 @@ impl Tokenized {
         let mut offsets = Vec::new();
         let mut file_idxs = Vec::new();
 
-        let bytes = content.as_bytes();
-        let mut i = 0;
+        struct Macro {
+            tokens: Vec<Token>,
+            spans: Vec<Span>,
+            file: Vec<FileIdx>,
+        }
 
-        while let Some(&b) = bytes.get(i) {
-            let (token, length) = match b {
-                b' ' | b'\r' | b'\t' | b'\n' => {
-                    i += 1;
-                    continue;
-                }
+        struct MacroItem {
+            name: String,
+            arguments: HashMap<String, usize>,
+            argument_positions: Vec<(usize, usize)>,
+        }
 
-                b'(' => (T::LeftParen, 1),
-                b')' => (T::RightParen, 1),
-                b'[' => (T::LeftBrace, 1),
-                b']' => (T::RightBrace, 1),
-                b'{' => (T::LeftBracket, 1),
-                b'}' => (T::RightBracket, 1),
-                b':' => (T::Colon, 1),
-                b';' => (T::Semicolon, 1),
-                b',' => (T::Comma, 1),
-                b'.' => (T::Dot, 1),
-                b'+' => (T::Plus, 1),
-                b'-' => (T::Minus, 1),
-                b'?' => (T::QuestionMark, 1),
-                b'@' => (T::AtSign, 1),
-                b'#' => (T::Hash, 1),
-                b'%' => (T::Procent, 1),
+        struct LexItem<'a> {
+            content: &'a str,
 
-                b'/' => match bytes.get(i + 1) {
-                    // Line comments
-                    Some(b'/') => {
-                        i = bytes[i + 2..]
-                            .iter()
-                            .position(|c: &u8| *c == b'\n')
-                            .map_or(bytes.len(), |j| i + 2 + j);
+            start: usize,
+            i: usize,
+
+            preprocessor_macro: Option<MacroItem>,
+        }
+
+        let mut macros: HashMap<String, Macro> = HashMap::new();
+
+        let mut lex_stack = Vec::new();
+        lex_stack.push(LexItem {
+            content,
+            start: 0,
+            i: 0,
+            preprocessor_macro: None,
+        });
+
+        'lex_stack: while let Some(LexItem {
+            content,
+            start,
+            mut i,
+            ref mut preprocessor_macro,
+        }) = lex_stack.pop()
+        {
+            let bytes = content.as_bytes();
+            while let Some(&b) = bytes.get(i) {
+                let (token, length) = match b {
+                    b' ' | b'\r' | b'\t' | b'\n' => {
+                        i += 1;
                         continue;
                     }
 
-                    // Block comments
-                    Some(b'*') => {
-                        let mut prev_was_star = false;
-                        i = bytes[i + 2..]
-                            .iter()
-                            .position(|c: &u8| {
-                                let done = prev_was_star && *c == b'/';
-                                prev_was_star = *c == b'*';
-                                done
-                            })
-                            .map_or(bytes.len(), |j| i + 2 + j + 1);
-                        continue;
-                    }
-                    _ => (T::Slash, 1),
-                },
-                b'!' => match (bytes.get(i + 1), bytes.get(i + 2)) {
-                    (Some(b'='), Some(b'=')) => (T::BangDoubleEquals, 3),
-                    (Some(b'='), _) => (T::BangEquals, 2),
-                    (_, _) => (T::Bang, 1),
-                },
-                b'~' => match bytes.get(i + 1) {
-                    Some(b'&') => (T::TildeAmpersand, 2),
-                    Some(b'|') => (T::TildeBar, 2),
-                    Some(b'^') => (T::TildeCaret, 2),
-                    _ => (T::Tilde, 1),
-                },
-                b'^' => match bytes.get(i + 1) {
-                    Some(b'~') => (T::CaretTilde, 2),
-                    _ => (T::Caret, 1),
-                },
-                b'&' => match bytes.get(i + 1) {
-                    Some(b'&') => (T::DoubleAmpersand, 2),
-                    _ => (T::Ampersand, 1),
-                },
-                b'|' => match bytes.get(i + 1) {
-                    Some(b'|') => (T::DoubleBar, 2),
-                    _ => (T::Bar, 1),
-                },
-                b'*' => match bytes.get(i + 1) {
-                    Some(b'*') => (T::DoubleStar, 2),
-                    _ => (T::Star, 1),
-                },
-                b'=' => match (bytes.get(i + 1), bytes.get(i + 2)) {
-                    (Some(b'='), Some(b'=')) => (T::TripleEquals, 3),
-                    (Some(b'='), _) => (T::DoubleEquals, 2),
-                    (_, _) => (T::Equals, 1),
-                },
-                b'>' => match (bytes.get(i + 1), bytes.get(i + 2)) {
-                    (Some(b'>'), Some(b'>')) => (T::TripleGreaterThan, 3),
-                    (Some(b'>'), _) => (T::DoubleGreaterThan, 2),
-                    (Some(b'='), _) => (T::GreaterThanEquals, 2),
-                    (_, _) => (T::GreaterThan, 1),
-                },
-                b'<' => match (bytes.get(i + 1), bytes.get(i + 2)) {
-                    (Some(b'<'), Some(b'<')) => (T::TripleLessThan, 3),
-                    (Some(b'<'), _) => (T::DoubleLessThan, 2),
-                    (Some(b'='), _) => (T::LessThanEquals, 2),
-                    (_, _) => (T::LessThan, 1),
-                },
-                b'"' => {
-                    let mut token = T::String;
-                    let mut j = i + 1;
-                    let end_offset = loop {
-                        let Some(b) = bytes.get(j) else {
-                            token = T::Unknown;
-                            break j;
-                        };
+                    b'(' => (T::LeftParen, 1),
+                    b')' => (T::RightParen, 1),
+                    b'[' => (T::LeftBrace, 1),
+                    b']' => (T::RightBrace, 1),
+                    b'{' => (T::LeftBracket, 1),
+                    b'}' => (T::RightBracket, 1),
+                    b':' => (T::Colon, 1),
+                    b';' => (T::Semicolon, 1),
+                    b',' => (T::Comma, 1),
+                    b'.' => (T::Dot, 1),
+                    b'+' => (T::Plus, 1),
+                    b'-' => (T::Minus, 1),
+                    b'?' => (T::QuestionMark, 1),
+                    b'@' => (T::AtSign, 1),
+                    b'#' => (T::Hash, 1),
+                    b'%' => (T::Procent, 1),
 
-                        match b {
-                            b'"' => break j + 1,
-                            // @TODO: Better escaping.
-                            b'\\' => j += 2,
-                            _ => j += 1,
+                    b'/' => match bytes.get(i + 1) {
+                        // Line comments
+                        Some(b'/') => {
+                            i = bytes[i + 2..]
+                                .iter()
+                                .position(|c: &u8| *c == b'\n')
+                                .map_or(bytes.len(), |j| i + 2 + j);
+                            continue;
                         }
-                    };
-                    (token, end_offset - i)
-                }
-                b'0'..=b'9' => {
-                    let s = &content[i..];
-                    let initial_length = s.len();
 
-                    fn is_valid_prefix(s: &str) -> bool {
-                        let pattern = &['D', 'd', 'B', 'b', 'O', 'o', 'X', 'x'];
-                        s.starts_with('\'')
-                            && if s[1..].starts_with(&['S', 's']) {
-                                s[2..].starts_with(pattern)
-                            } else {
-                                s[1..].starts_with(pattern)
+                        // Block comments
+                        Some(b'*') => {
+                            let mut prev_was_star = false;
+                            i = bytes[i + 2..]
+                                .iter()
+                                .position(|c: &u8| {
+                                    let done = prev_was_star && *c == b'/';
+                                    prev_was_star = *c == b'*';
+                                    done
+                                })
+                                .map_or(bytes.len(), |j| i + 2 + j + 1);
+                            continue;
+                        }
+                        _ => (T::Slash, 1),
+                    },
+                    b'!' => match (bytes.get(i + 1), bytes.get(i + 2)) {
+                        (Some(b'='), Some(b'=')) => (T::BangDoubleEquals, 3),
+                        (Some(b'='), _) => (T::BangEquals, 2),
+                        (_, _) => (T::Bang, 1),
+                    },
+                    b'~' => match bytes.get(i + 1) {
+                        Some(b'&') => (T::TildeAmpersand, 2),
+                        Some(b'|') => (T::TildeBar, 2),
+                        Some(b'^') => (T::TildeCaret, 2),
+                        _ => (T::Tilde, 1),
+                    },
+                    b'^' => match bytes.get(i + 1) {
+                        Some(b'~') => (T::CaretTilde, 2),
+                        _ => (T::Caret, 1),
+                    },
+                    b'&' => match bytes.get(i + 1) {
+                        Some(b'&') => (T::DoubleAmpersand, 2),
+                        _ => (T::Ampersand, 1),
+                    },
+                    b'|' => match bytes.get(i + 1) {
+                        Some(b'|') => (T::DoubleBar, 2),
+                        _ => (T::Bar, 1),
+                    },
+                    b'*' => match bytes.get(i + 1) {
+                        Some(b'*') => (T::DoubleStar, 2),
+                        _ => (T::Star, 1),
+                    },
+                    b'=' => match (bytes.get(i + 1), bytes.get(i + 2)) {
+                        (Some(b'='), Some(b'=')) => (T::TripleEquals, 3),
+                        (Some(b'='), _) => (T::DoubleEquals, 2),
+                        (_, _) => (T::Equals, 1),
+                    },
+                    b'>' => match (bytes.get(i + 1), bytes.get(i + 2)) {
+                        (Some(b'>'), Some(b'>')) => (T::TripleGreaterThan, 3),
+                        (Some(b'>'), _) => (T::DoubleGreaterThan, 2),
+                        (Some(b'='), _) => (T::GreaterThanEquals, 2),
+                        (_, _) => (T::GreaterThan, 1),
+                    },
+                    b'<' => match (bytes.get(i + 1), bytes.get(i + 2)) {
+                        (Some(b'<'), Some(b'<')) => (T::TripleLessThan, 3),
+                        (Some(b'<'), _) => (T::DoubleLessThan, 2),
+                        (Some(b'='), _) => (T::LessThanEquals, 2),
+                        (_, _) => (T::LessThan, 1),
+                    },
+                    b'"' => {
+                        let mut token = T::String;
+                        let mut j = i + 1;
+                        let end_offset = loop {
+                            let Some(b) = bytes.get(j) else {
+                                token = T::Unknown;
+                                break j;
+                            };
+
+                            match b {
+                                b'"' => break j + 1,
+                                // @TODO: Better escaping.
+                                b'\\' => j += 2,
+                                _ => j += 1,
                             }
+                        };
+                        (token, end_offset - i)
                     }
+                    b'0'..=b'9' => {
+                        let s = &content[i..];
+                        let initial_length = s.len();
 
-                    // @TODO: Do without materializing
-                    if s.starts_with('0')
-                        || !is_valid_prefix(s.trim_start_matches(|c: char| matches!(c, '0'..='9')))
-                    {
-                        let (s, _) = Decimal::take(s);
-                        let length = initial_length - s.len();
-                        (T::Decimal, length)
-                    } else {
-                        let (s, _) = Size::take(s);
-                        debug_assert!(s.starts_with('\''));
-                        let s = &s[1..];
-                        let (s, _) = Sign::take(s);
-                        let (s, base) = Base::take(s);
-
-                        fn into_bits((s, bs): (&str, impl Into<Bits>)) -> (&str, Bits) {
-                            (s, bs.into())
+                        fn is_valid_prefix(s: &str) -> bool {
+                            let pattern = &['D', 'd', 'B', 'b', 'O', 'o', 'X', 'x'];
+                            s.starts_with('\'')
+                                && if s[1..].starts_with(&['S', 's']) {
+                                    s[2..].starts_with(pattern)
+                                } else {
+                                    s[1..].starts_with(pattern)
+                                }
                         }
 
-                        let (s, _) = match base {
-                            Base::Decimal => into_bits(DecimalBits::take(s)),
-                            Base::Binary => into_bits(BinaryBits::take(s)),
-                            Base::Octal => into_bits(OctalBits::take(s)),
-                            Base::Hexadecimal => into_bits(HexadecimalBits::take(s)),
+                        // @TODO: Do without materializing
+                        if s.starts_with('0')
+                            || !is_valid_prefix(
+                                s.trim_start_matches(|c: char| matches!(c, '0'..='9')),
+                            )
+                        {
+                            let (s, _) = Decimal::take(s);
+                            let length = initial_length - s.len();
+                            (T::Decimal, length)
+                        } else {
+                            let (s, _) = Size::take(s);
+                            debug_assert!(s.starts_with('\''));
+                            let s = &s[1..];
+                            let (s, _) = Sign::take(s);
+                            let (s, base) = Base::take(s);
+
+                            fn into_bits((s, bs): (&str, impl Into<Bits>)) -> (&str, Bits) {
+                                (s, bs.into())
+                            }
+
+                            let (s, _) = match base {
+                                Base::Decimal => into_bits(DecimalBits::take(s)),
+                                Base::Binary => into_bits(BinaryBits::take(s)),
+                                Base::Octal => into_bits(OctalBits::take(s)),
+                                Base::Hexadecimal => into_bits(HexadecimalBits::take(s)),
+                            };
+
+                            let length = initial_length - s.len();
+                            (T::Number, length)
+                        }
+                    }
+                    b'\'' => {
+                        let mut offset = i;
+                        if matches!(bytes.get(offset + 1), Some(b's' | b'S')) {
+                            offset += 1;
+                        }
+
+                        // @TODO: Do without materializing
+                        match bytes.get(offset + 1) {
+                            Some(b'D' | b'd') => (
+                                T::Number,
+                                content.len() - i - DecimalBits::take(&content[offset..]).0.len(),
+                            ),
+                            Some(b'B' | b'b') => (
+                                T::Number,
+                                content.len() - i - BinaryBits::take(&content[offset..]).0.len(),
+                            ),
+                            Some(b'O' | b'o') => (
+                                T::Number,
+                                content.len() - i - OctalBits::take(&content[offset..]).0.len(),
+                            ),
+                            Some(b'X' | b'x') => (
+                                T::Number,
+                                content.len()
+                                    - i
+                                    - HexadecimalBits::take(&content[offset..]).0.len(),
+                            ),
+                            _ => (T::Unknown, 1),
+                        }
+                    }
+                    b'a'..=b'z' | b'A'..=b'Z' | b'_' => {
+                        let length = ident_length(&content[i..]);
+                        let word = &content[i..i + length];
+                        let token = match word {
+                            "always" => T::KeywordAlways,
+                            "and" => T::KeywordAnd,
+                            "assign" => T::KeywordAssign,
+                            "automatic" => T::KeywordAutomatic,
+                            "begin" => T::KeywordBegin,
+                            "buf" => T::KeywordBuf,
+                            "bufif0" => T::KeywordBufif0,
+                            "bufif1" => T::KeywordBufif1,
+                            "case" => T::KeywordCase,
+                            "casex" => T::KeywordCaseX,
+                            "casez" => T::KeywordCaseZ,
+                            "cell" => T::KeywordCell,
+                            "cmos" => T::KeywordCmos,
+                            "config" => T::KeywordConfig,
+                            "deassign" => T::KeywordDeassign,
+                            "default" => T::KeywordDefault,
+                            "defparam" => T::KeywordDefParam,
+                            "design" => T::KeywordDesign,
+                            "disable" => T::KeywordDisable,
+                            "edge" => T::KeywordEdge,
+                            "else" => T::KeywordElse,
+                            "end" => T::KeywordEnd,
+                            "endcase" => T::KeywordEndCase,
+                            "endconfig" => T::KeywordEndConfig,
+                            "endfunction" => T::KeywordEndFunction,
+                            "endgenerate" => T::KeywordEndGenerate,
+                            "endmodule" => T::KeywordEndModule,
+                            "endprimitive" => T::KeywordEndPrimitive,
+                            "endspecify" => T::KeywordEndSpecify,
+                            "endtable" => T::KeywordEndTable,
+                            "endtask" => T::KeywordEndTask,
+                            "event" => T::KeywordEvent,
+                            "for" => T::KeywordFor,
+                            "force" => T::KeywordForce,
+                            "forever" => T::KeywordForever,
+                            "fork" => T::KeywordFork,
+                            "function" => T::KeywordFunction,
+                            "generate" => T::KeywordGenerate,
+                            "genvar" => T::KeywordGenvar,
+                            "highz0" => T::KeywordHighz0,
+                            "highz1" => T::KeywordHighz1,
+                            "if" => T::KeywordIf,
+                            "ifnone" => T::KeywordIfnone,
+                            "incdir" => T::KeywordIncdir,
+                            "include" => T::KeywordInclude,
+                            "initial" => T::KeywordInitial,
+                            "inout" => T::KeywordInout,
+                            "input" => T::KeywordInput,
+                            "instance" => T::KeywordInstance,
+                            "integer" => T::KeywordInteger,
+                            "join" => T::KeywordJoin,
+                            "large" => T::KeywordLarge,
+                            "liblist" => T::KeywordLiblist,
+                            "library" => T::KeywordLibrary,
+                            "localparam" => T::KeywordLocalParam,
+                            "macromodule" => T::KeywordMacroModule,
+                            "medium" => T::KeywordMedium,
+                            "module" => T::KeywordModule,
+                            "nand" => T::KeywordNand,
+                            "negedge" => T::KeywordNegedge,
+                            "nmos" => T::KeywordNmos,
+                            "nor" => T::KeywordNor,
+                            "noshowcancelled" => T::KeywordNoShowCancelled,
+                            "not" => T::KeywordNot,
+                            "notif0" => T::KeywordNotif0,
+                            "notif1" => T::KeywordNotif1,
+                            "or" => T::KeywordOr,
+                            "output" => T::KeywordOutput,
+                            "parameter" => T::KeywordParameter,
+                            "pmos" => T::KeywordPmos,
+                            "posedge" => T::KeywordPosedge,
+                            "primitive" => T::KeywordPrimitive,
+                            "pull0" => T::KeywordPull0,
+                            "pull1" => T::KeywordPull1,
+                            "pulldown" => T::KeywordPulldown,
+                            "pullup" => T::KeywordPullup,
+                            "pulsestyle_onevent" => T::KeywordPulseStyleOnEvent,
+                            "pulsestyle_ondetect" => T::KeywordPulseStyleOnDetect,
+                            "rcmos" => T::KeywordRcmos,
+                            "real" => T::KeywordReal,
+                            "realtime" => T::KeywordRealtime,
+                            "reg" => T::KeywordReg,
+                            "release" => T::KeywordRelease,
+                            "repeat" => T::KeywordRepeat,
+                            "rnmos" => T::KeywordRnmos,
+                            "rpmos" => T::KeywordRpmos,
+                            "rtran" => T::KeywordRtran,
+                            "rtranif0" => T::KeywordRtranif0,
+                            "rtranif1" => T::KeywordRtranif1,
+                            "scalared" => T::KeywordScalared,
+                            "showcancelled" => T::KeywordShowCancelled,
+                            "signed" => T::KeywordSigned,
+                            "small" => T::KeywordSmall,
+                            "specify" => T::KeywordSpecify,
+                            "specparam" => T::KeywordSpecParam,
+                            "strong0" => T::KeywordStrong0,
+                            "strong1" => T::KeywordStrong1,
+                            "supply0" => T::KeywordSupply0,
+                            "supply1" => T::KeywordSupply1,
+                            "table" => T::KeywordTable,
+                            "task" => T::KeywordTask,
+                            "time" => T::KeywordTime,
+                            "tran" => T::KeywordTran,
+                            "tranif0" => T::KeywordTranif0,
+                            "tranif1" => T::KeywordTranif1,
+                            "tri" => T::KeywordTri,
+                            "tri0" => T::KeywordTri0,
+                            "tri1" => T::KeywordTri1,
+                            "triand" => T::KeywordTriand,
+                            "trior" => T::KeywordTrior,
+                            "trireg" => T::KeywordTrireg,
+                            "unsigned1" => T::KeywordUnsigned1,
+                            "use" => T::KeywordUse,
+                            "uwire" => T::KeywordUwire,
+                            "vectored" => T::KeywordVectored,
+                            "wait" => T::KeywordWait,
+                            "wand" => T::KeywordWand,
+                            "weak0" => T::KeywordWeak0,
+                            "weak1" => T::KeywordWeak1,
+                            "while" => T::KeywordWhile,
+                            "wire" => T::KeywordWire,
+                            "wor" => T::KeywordWor,
+                            "xnor" => T::KeywordXnor,
+                            "xor" => T::KeywordXor,
+                            _ => {
+                                if let Some(preprocessor_macro) = preprocessor_macro
+                                    && let Some(arg_idx) = preprocessor_macro.arguments.get_mut(word)
+                                {
+                                    preprocessor_macro.argument_positions.push((*arg_idx, tokens.len() - start));
+                                    continue;
+                                }
+
+                                T::Ident
+                            }
                         };
-
-                        let length = initial_length - s.len();
-                        (T::Number, length)
+                        (token, length)
                     }
-                }
-                b'\'' => {
-                    let mut offset = i;
-                    if matches!(bytes.get(offset + 1), Some(b's' | b'S')) {
-                        offset += 1;
+                    b'$' if matches!(bytes.get(i + 1), Some(b'a'..=b'z' | b'A'..=b'Z' | b'_')) => {
+                        (T::DollarIdent, 1 + ident_length(&content[i + 1..]))
                     }
+                    b'`' if matches!(bytes.get(i + 1), Some(b'a'..=b'z' | b'A'..=b'Z' | b'_')) => {
+                        let directive_length = ident_length(&content[i + 1..]);
+                        let directive = &content[i + 1..][..directive_length];
 
-                    // @TODO: Do without materializing
-                    match bytes.get(offset + 1) {
-                        Some(b'D' | b'd') => (
-                            T::Number,
-                            content.len() - i - DecimalBits::take(&content[offset..]).0.len(),
-                        ),
-                        Some(b'B' | b'b') => (
-                            T::Number,
-                            content.len() - i - BinaryBits::take(&content[offset..]).0.len(),
-                        ),
-                        Some(b'O' | b'o') => (
-                            T::Number,
-                            content.len() - i - OctalBits::take(&content[offset..]).0.len(),
-                        ),
-                        Some(b'X' | b'x') => (
-                            T::Number,
-                            content.len() - i - HexadecimalBits::take(&content[offset..]).0.len(),
-                        ),
-                        _ => (T::Unknown, 1),
+                        match directive {
+                            "define" => {
+                                assert!(preprocessor_macro.is_none(), "nested preprocessor definition");
+
+                                let mut j = i + 1 + directive_length;
+                                // @TODO: If contains line break, it should probably take that into
+                                // account.
+                                skip_whitespace(content, &mut j);
+                                let name_length = ident_length(&content[j..]);
+                                let name = &content[j..][..name_length];
+                                j += name_length;
+                                skip_whitespace(content, &mut j);
+
+                                let mut is_escaped = false;
+                                let end = bytes[j..].iter().position(|&b| {
+                                    let is_unescaped_nl = b == b'\n' && !is_escaped;
+                                    is_escaped = b == b'\\';
+                                    is_unescaped_nl
+                                }).map_or(bytes.len(), |e| e + j);
+
+                                lex_stack.push(LexItem { content, start, i: end, preprocessor_macro: None });
+                                lex_stack.push(LexItem { content: &content[..end], start: tokens.len(), i: j, preprocessor_macro: Some(MacroItem { name: name.into(), arguments: HashMap::new(), argument_positions: Vec::new() }) });
+                                continue 'lex_stack;
+                            }
+                            "undef" => {
+                                // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 352
+                                // An attempt to undefine a text macro that was not previously defined using a `define compiler directive can result in a warning.
+                                _ = macros.remove(directive);
+                                i += 1 + directive_length;
+                                continue;
+                            },
+                            _ => match macros.get(directive) {
+                                None => (T::Unknown, 1 + directive_length),
+                                Some(m) => {
+                                    tokens.extend_from_slice(&m.tokens);
+                                    offsets.extend_from_slice(&m.spans);
+                                    file_idxs.extend_from_slice(&m.file);
+                                    i += 1 + directive_length;
+                                    continue;
+                                },
+                            }
+                        }
                     }
-                }
-                b'a'..=b'z' | b'A'..=b'Z' | b'_' => {
-                    let length = ident_length(&content[i..]);
-                    let word = &content[i..i + length];
-                    let token = match word {
-                        "always" => T::KeywordAlways,
-                        "and" => T::KeywordAnd,
-                        "assign" => T::KeywordAssign,
-                        "automatic" => T::KeywordAutomatic,
-                        "begin" => T::KeywordBegin,
-                        "buf" => T::KeywordBuf,
-                        "bufif0" => T::KeywordBufif0,
-                        "bufif1" => T::KeywordBufif1,
-                        "case" => T::KeywordCase,
-                        "casex" => T::KeywordCaseX,
-                        "casez" => T::KeywordCaseZ,
-                        "cell" => T::KeywordCell,
-                        "cmos" => T::KeywordCmos,
-                        "config" => T::KeywordConfig,
-                        "deassign" => T::KeywordDeassign,
-                        "default" => T::KeywordDefault,
-                        "defparam" => T::KeywordDefParam,
-                        "design" => T::KeywordDesign,
-                        "disable" => T::KeywordDisable,
-                        "edge" => T::KeywordEdge,
-                        "else" => T::KeywordElse,
-                        "end" => T::KeywordEnd,
-                        "endcase" => T::KeywordEndCase,
-                        "endconfig" => T::KeywordEndConfig,
-                        "endfunction" => T::KeywordEndFunction,
-                        "endgenerate" => T::KeywordEndGenerate,
-                        "endmodule" => T::KeywordEndModule,
-                        "endprimitive" => T::KeywordEndPrimitive,
-                        "endspecify" => T::KeywordEndSpecify,
-                        "endtable" => T::KeywordEndTable,
-                        "endtask" => T::KeywordEndTask,
-                        "event" => T::KeywordEvent,
-                        "for" => T::KeywordFor,
-                        "force" => T::KeywordForce,
-                        "forever" => T::KeywordForever,
-                        "fork" => T::KeywordFork,
-                        "function" => T::KeywordFunction,
-                        "generate" => T::KeywordGenerate,
-                        "genvar" => T::KeywordGenvar,
-                        "highz0" => T::KeywordHighz0,
-                        "highz1" => T::KeywordHighz1,
-                        "if" => T::KeywordIf,
-                        "ifnone" => T::KeywordIfnone,
-                        "incdir" => T::KeywordIncdir,
-                        "include" => T::KeywordInclude,
-                        "initial" => T::KeywordInitial,
-                        "inout" => T::KeywordInout,
-                        "input" => T::KeywordInput,
-                        "instance" => T::KeywordInstance,
-                        "integer" => T::KeywordInteger,
-                        "join" => T::KeywordJoin,
-                        "large" => T::KeywordLarge,
-                        "liblist" => T::KeywordLiblist,
-                        "library" => T::KeywordLibrary,
-                        "localparam" => T::KeywordLocalParam,
-                        "macromodule" => T::KeywordMacroModule,
-                        "medium" => T::KeywordMedium,
-                        "module" => T::KeywordModule,
-                        "nand" => T::KeywordNand,
-                        "negedge" => T::KeywordNegedge,
-                        "nmos" => T::KeywordNmos,
-                        "nor" => T::KeywordNor,
-                        "noshowcancelled" => T::KeywordNoShowCancelled,
-                        "not" => T::KeywordNot,
-                        "notif0" => T::KeywordNotif0,
-                        "notif1" => T::KeywordNotif1,
-                        "or" => T::KeywordOr,
-                        "output" => T::KeywordOutput,
-                        "parameter" => T::KeywordParameter,
-                        "pmos" => T::KeywordPmos,
-                        "posedge" => T::KeywordPosedge,
-                        "primitive" => T::KeywordPrimitive,
-                        "pull0" => T::KeywordPull0,
-                        "pull1" => T::KeywordPull1,
-                        "pulldown" => T::KeywordPulldown,
-                        "pullup" => T::KeywordPullup,
-                        "pulsestyle_onevent" => T::KeywordPulseStyleOnEvent,
-                        "pulsestyle_ondetect" => T::KeywordPulseStyleOnDetect,
-                        "rcmos" => T::KeywordRcmos,
-                        "real" => T::KeywordReal,
-                        "realtime" => T::KeywordRealtime,
-                        "reg" => T::KeywordReg,
-                        "release" => T::KeywordRelease,
-                        "repeat" => T::KeywordRepeat,
-                        "rnmos" => T::KeywordRnmos,
-                        "rpmos" => T::KeywordRpmos,
-                        "rtran" => T::KeywordRtran,
-                        "rtranif0" => T::KeywordRtranif0,
-                        "rtranif1" => T::KeywordRtranif1,
-                        "scalared" => T::KeywordScalared,
-                        "showcancelled" => T::KeywordShowCancelled,
-                        "signed" => T::KeywordSigned,
-                        "small" => T::KeywordSmall,
-                        "specify" => T::KeywordSpecify,
-                        "specparam" => T::KeywordSpecParam,
-                        "strong0" => T::KeywordStrong0,
-                        "strong1" => T::KeywordStrong1,
-                        "supply0" => T::KeywordSupply0,
-                        "supply1" => T::KeywordSupply1,
-                        "table" => T::KeywordTable,
-                        "task" => T::KeywordTask,
-                        "time" => T::KeywordTime,
-                        "tran" => T::KeywordTran,
-                        "tranif0" => T::KeywordTranif0,
-                        "tranif1" => T::KeywordTranif1,
-                        "tri" => T::KeywordTri,
-                        "tri0" => T::KeywordTri0,
-                        "tri1" => T::KeywordTri1,
-                        "triand" => T::KeywordTriand,
-                        "trior" => T::KeywordTrior,
-                        "trireg" => T::KeywordTrireg,
-                        "unsigned1" => T::KeywordUnsigned1,
-                        "use" => T::KeywordUse,
-                        "uwire" => T::KeywordUwire,
-                        "vectored" => T::KeywordVectored,
-                        "wait" => T::KeywordWait,
-                        "wand" => T::KeywordWand,
-                        "weak0" => T::KeywordWeak0,
-                        "weak1" => T::KeywordWeak1,
-                        "while" => T::KeywordWhile,
-                        "wire" => T::KeywordWire,
-                        "wor" => T::KeywordWor,
-                        "xnor" => T::KeywordXnor,
-                        "xor" => T::KeywordXor,
-                        _ => T::Ident,
-                    };
-                    (token, length)
-                }
-                b'$' if matches!(bytes.get(i + 1), Some(b'a'..=b'z' | b'A'..=b'Z' | b'_')) => {
-                    (T::DollarIdent, 1 + ident_length(&content[i + 1..]))
-                }
-                _ => (T::Unknown, 1),
-            };
+                    _ => (T::Unknown, 1),
+                };
 
-            tokens.push(token);
-            offsets.push(Span::new(i, i + length));
-            file_idxs.push(0);
-            i += length;
+                tokens.push(token);
+                offsets.push(Span::new(i, i + length));
+                file_idxs.push(0);
+                i += length;
+            }
+
+            if let Some(preprocessor_macro) = preprocessor_macro.take() {
+                macros.insert(preprocessor_macro.name, Macro {
+                    tokens: tokens.drain(start..).collect(),
+                    spans: offsets.drain(start..).collect(),
+                    file: file_idxs.drain(start..).collect(),
+                });
+            }
         }
 
         Self {
@@ -494,6 +600,13 @@ fn ident_length(s: &str) -> usize {
     let leftover = leftover.trim_start_matches(leftover_pattern);
 
     start_length - leftover.len()
+}
+
+fn skip_whitespace(s: &str, i: &mut usize) {
+    let b = s.as_bytes();
+    while b.get(*i).is_some_and(|b| b.is_ascii_whitespace()) {
+        *i += 1;
+    }
 }
 
 pub trait Takeable<'a>: Sized {

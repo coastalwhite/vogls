@@ -202,7 +202,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vogls"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "slotmap",
  "vogls-ir",
@@ -212,7 +212,7 @@ dependencies = [
 
 [[package]]
 name = "vogls-ir"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "indexmap",
  "slotmap",
@@ -220,7 +220,7 @@ dependencies = [
 
 [[package]]
 name = "vogls-sim"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "slotmap",
  "vogls-ir",
@@ -228,7 +228,7 @@ dependencies = [
 
 [[package]]
 name = "vogls-test"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "clap",
  "slotmap",
@@ -240,7 +240,7 @@ dependencies = [
 
 [[package]]
 name = "vogls-verilog"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "vogls-ir",
 ]
