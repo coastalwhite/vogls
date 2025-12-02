@@ -143,6 +143,9 @@ impl Tokenized {
         let mut offsets = Vec::new();
         let mut file_idxs = Vec::new();
 
+        let mut if_depth = 0;
+        let mut if_untaken_depth = 0;
+
         struct Macro {
             tokens: Vec<Token>,
             spans: Vec<Span>,
@@ -531,8 +534,8 @@ impl Tokenized {
                                 skip_whitespace(content, &mut j);
                                 let name_length = ident_length(&content[j..]);
                                 let name = &content[j..][..name_length];
+                                // @TODO: Disallow overwriting compiler intrinsics.
                                 j += name_length;
-                                skip_whitespace(content, &mut j);
 
                                 let mut is_escaped = false;
                                 let end = bytes[j..]
@@ -543,6 +546,11 @@ impl Tokenized {
                                         is_unescaped_nl
                                     })
                                     .map_or(bytes.len(), |e| e + j);
+
+                                if if_untaken_depth < if_depth {
+                                    i = end;
+                                    continue;
+                                }
 
                                 lex_stack.push(LexItem {
                                     content,
@@ -569,14 +577,48 @@ impl Tokenized {
                                 let name = &content[i..][..name_length];
 
                                 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 352
-                                // An attempt to undefine a text macro that was not previously defined using a `define compiler directive can result in a warning.
-                                _ = macros.remove(name);
+                                // An attempt to undefine a text macro that was not previously
+                                // defined using a `define compiler directive can result in a
+                                // warning.
+                                if if_untaken_depth >= if_depth {
+                                    _ = macros.remove(name);
+                                }
                                 i += name_length;
                                 continue;
                             }
                             "celldefine" | "endcelldefine" => todo!(),
                             "default_nettype" => todo!(),
-                            "ifdef" | "else" | "elsif" | "endif" | "ifndef" => todo!(),
+                            "elsif" => todo!(),
+                            "ifdef" | "ifndef" => {
+                                i += 1 + directive_length;
+                                skip_whitespace(content, &mut i);
+                                let name_length = ident_length(&content[i..]);
+                                let name = &content[i..][..name_length];
+                                if if_untaken_depth >= if_depth {
+                                    let is_taken =
+                                        macros.contains_key(name) ^ (directive == "ifndef");
+                                    if is_taken {
+                                        if_untaken_depth += 1;
+                                    } else {
+                                        if_untaken_depth = if_depth;
+                                    }
+                                }
+
+                                if_depth += 1;
+                                i += name_length;
+                                continue;
+                            }
+                            "else" => {
+                                i += 1 + directive_length;
+                                let if_was_untaken = if_untaken_depth == if_depth - 1;
+                                if_untaken_depth = if_depth - usize::from(if_was_untaken);
+                                continue;
+                            }
+                            "endif" => {
+                                i += 1 + directive_length;
+                                if_depth -= 1;
+                                continue;
+                            }
                             "include" => todo!(),
                             "resetall" => todo!(),
                             "line" => todo!(),
@@ -585,7 +627,9 @@ impl Tokenized {
                             "pragma" => todo!(),
                             "begin_keywords" | "end_keywords" => todo!(),
                             _ => {
-                                if let Some(m) = macros.get(directive) {
+                                if if_untaken_depth >= if_depth
+                                    && let Some(m) = macros.get(directive)
+                                {
                                     tokens.extend_from_slice(&m.tokens);
                                     offsets.extend_from_slice(&m.spans);
                                     file_idxs.extend_from_slice(&m.file);
@@ -598,9 +642,11 @@ impl Tokenized {
                     _ => (T::Unknown, 1),
                 };
 
-                tokens.push(token);
-                offsets.push(Span::new(i, i + length));
-                file_idxs.push(0);
+                if if_untaken_depth >= if_depth {
+                    tokens.push(token);
+                    offsets.push(Span::new(i, i + length));
+                    file_idxs.push(0);
+                }
                 i += length;
             }
 

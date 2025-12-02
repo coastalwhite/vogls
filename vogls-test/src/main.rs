@@ -1,6 +1,7 @@
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::Path;
 use std::process::ExitCode;
+use std::sync::{Arc, Mutex};
 
 use clap::Parser;
 use vogls::ExecutionContext;
@@ -70,27 +71,52 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         );
         std::io::stdout().flush()?;
 
-        let stdout = Vec::new();
-        let stderr = Vec::new();
+        #[derive(Default, Clone)]
+        struct Io(Arc<Mutex<Vec<u8>>>);
+
+        impl io::Write for Io {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                self.0.lock().unwrap().write(buf)
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                self.0.lock().unwrap().flush()
+            }
+        }
+
+        let stdout = Io::default();
+        let stderr = Io::default();
 
         let mut ctx = ExecutionContext {
-            stdout: Box::new(stdout) as Box<dyn std::io::Write>,
-            stderr: Box::new(stderr) as Box<dyn std::io::Write>,
+            stdout: Box::new(stdout.clone()) as Box<dyn std::io::Write>,
+            stderr: Box::new(stderr.clone()) as Box<dyn std::io::Write>,
         };
         let result = vogls::run(&tests_dir.join(&path), None, &mut ctx);
 
         num_failed += usize::from(result.is_err());
         match result {
-            Ok(_) => print!("\x1b[32mOK\x1b[0m"),
-            Err(_) => print!("\x1b[31mERR\x1b[0m"),
+            Ok(_) => println!("\x1b[32mOK\x1b[0m"),
+            Err(err) => {
+                println!("\x1b[31mERR\x1b[0m");
+                println!("ERROR: {err:?}");
+                println!("--- [START STDOUT] ---");
+                let stdout = stdout.0.lock().unwrap();
+                let stdout = std::str::from_utf8(&stdout).unwrap();
+                println!("{stdout}");
+                println!("---  [END STDOUT]  ---");
+                println!("--- [START STDERR] ---");
+                let stderr = stderr.0.lock().unwrap();
+                let stderr = std::str::from_utf8(&stderr).unwrap();
+                println!("{stderr}");
+                println!("---  [END STDERR]  ---");
+            }
         }
-        println!();
     }
     if num_failed == 0 {
         println!("All tests passed!");
         Ok(ExitCode::SUCCESS)
     } else {
-        print!(
+        println!(
             "\x1b[31mFailed {}/{} tests.\x1b[0m",
             num_failed,
             paths.len()
