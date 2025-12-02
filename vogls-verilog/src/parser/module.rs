@@ -32,7 +32,7 @@ impl<'a> Consumable<'a> for Module {
         // endmodule
 
         // @Incomplete: { attribute_instance }
-        let module_kw_span = *p.tkw.next_expect(T::KeywordModule)?;
+        let module_kw_span = *p.tkw.next_expect(T::KeywordModule)?.span;
         let module_identifier = Identifier::item_parse(p, arenas)?;
         // @Incomplete: [ module_parameter_port_list ]
         let ports = if p.tkw.next_if_equals(T::LeftParen) {
@@ -212,7 +212,7 @@ impl<'a> Consumable<'a> for InoutDeclaration {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 489
         // inout_declaration ::= inout [ net_type ] [ signed ] [ range ] list_of_port_identifiers
 
-        let inout_kw_span = *p.tkw.next_expect(T::KeywordInout)?;
+        let inout_kw_span = *p.tkw.next_expect(T::KeywordInout)?.span;
         let mut net_type = None;
         if let Some(val) = NetType::try_item_parse(p, arenas) {
             net_type = Some(val);
@@ -244,7 +244,7 @@ impl<'a> Consumable<'a> for InputDeclaration {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 489
         // input_declaration ::= input [ net_type ] [ signed ] [ range ] list_of_port_identifiers
 
-        let input_kw_span = *p.tkw.next_expect(T::KeywordInput)?;
+        let input_kw_span = *p.tkw.next_expect(T::KeywordInput)?.span;
         let mut net_type = None;
         if let Some(val) = NetType::try_item_parse(p, arenas) {
             net_type = Some(val);
@@ -279,7 +279,7 @@ impl<'a> Consumable<'a> for OutputDeclaration {
         // | output reg [ signed ] [ range ] list_of_variable_port_identifiers
         // | output output_variable_type list_of_variable_port_identifiers
 
-        let output_kw_span = *p.tkw.next_expect(T::KeywordOutput)?;
+        let output_kw_span = *p.tkw.next_expect(T::KeywordOutput)?.span;
         let mut net_type = None;
         if let Some(val) = NetType::try_item_parse(p, arenas) {
             net_type = Some(val);
@@ -425,11 +425,11 @@ impl<'a> Consumable<'a> for ContinousAssign {
         // continuous_assign ::= assign [ drive_strength ] [ delay3 ] list_of_net_assignments ;
         // list_of_net_assignments ::= net_assignment { , net_assignment }
 
-        let assign_span = *p.tkw.next_expect(T::KeywordAssign)?;
+        let assign_span = *p.tkw.next_expect(T::KeywordAssign)?.span;
 
         let list_of_net_assignments =
             parse_one_or_more_delimited::<NetAssignment>(p, arenas, T::Comma)?;
-        let semicolon_span = *p.tkw.next_expect(T::Semicolon)?;
+        let semicolon_span = *p.tkw.next_expect(T::Semicolon)?.span;
 
         let span = assign_span | semicolon_span;
         Ok((
@@ -477,7 +477,7 @@ impl<'a> Consumable<'a> for ModuleInstantiation {
         let (module_identifier, module_identifier_span) =
             Identifier::item_parse_with_span(p, arenas)?;
         let module_instances = parse_one_or_more_delimited::<ModuleInstance>(p, arenas, T::Comma)?;
-        let semicolon_span = *p.tkw.next_expect(T::Semicolon)?;
+        let semicolon_span = *p.tkw.next_expect(T::Semicolon)?.span;
 
         let span = module_identifier_span | semicolon_span;
 
@@ -502,7 +502,7 @@ impl<'a> Consumable<'a> for ModuleInstance {
             Identifier::item_parse_with_span(p, arenas)?;
         p.tkw.next_expect(T::LeftParen)?;
         let list_of_port_connections = parse::<ListOfPortConnections>(p, arenas)?;
-        let right_paren_span = *p.tkw.next_expect(T::RightParen)?;
+        let right_paren_span = *p.tkw.next_expect(T::RightParen)?.span;
 
         let span = name_of_module_instance_span | right_paren_span;
 
@@ -544,7 +544,7 @@ impl<'a> Consumable<'a> for NamedPortConnection {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 495
         // named_port_connection ::= { attribute_instance } . port_identifier ( [ expression ] )
 
-        let dot_span = *p.tkw.next_expect(T::Dot)?;
+        let dot_span = *p.tkw.next_expect(T::Dot)?.span;
         let port_identifier = Identifier::item_parse(p, arenas)?;
         p.tkw.next_expect(T::LeftParen)?;
         let expression = if !p
@@ -556,7 +556,7 @@ impl<'a> Consumable<'a> for NamedPortConnection {
         } else {
             None
         };
-        let right_paren_span = *p.tkw.next_expect(T::RightParen)?;
+        let right_paren_span = *p.tkw.next_expect(T::RightParen)?.span;
         let span = dot_span | right_paren_span;
 
         Ok((
@@ -576,7 +576,7 @@ impl<'a> Consumable<'a> for InitialConstruct {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
         // initial_construct ::= initial statement
 
-        let initial_kw_span = *p.tkw.next_expect(T::KeywordInitial)?;
+        let initial_kw_span = *p.tkw.next_expect(T::KeywordInitial)?.span;
         let (statement, span) = parse_with_span::<Statement>(p, arenas)?;
 
         let span = initial_kw_span | span;
@@ -592,7 +592,7 @@ impl<'a> Consumable<'a> for AlwaysConstruct {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
         // always_construct ::= always statement
 
-        let always_kw_span = *p.tkw.next_expect(T::KeywordAlways)?;
+        let always_kw_span = *p.tkw.next_expect(T::KeywordAlways)?.span;
         let (statement, span) = parse_with_span::<Statement>(p, arenas)?;
 
         let span = always_kw_span | span;
@@ -648,7 +648,7 @@ impl<'a> Consumable<'a> for NInputGateInstantiation {
         // @Incomplete: drive_strength
         // @Incomplete: delay2
         let instances = parse_one_or_more_delimited::<NInputGateInstance>(p, arenas, T::Comma)?;
-        let semicolon_span = *p.tkw.next_expect(T::Semicolon)?;
+        let semicolon_span = *p.tkw.next_expect(T::Semicolon)?.span;
 
         let span = gatetype_span | semicolon_span;
 
@@ -699,7 +699,7 @@ impl<'a> Consumable<'a> for NInputGateInstance {
         // n_input_gate_instance ::= [ name_of_gate_instance ] ( output_terminal , input_terminal { , input_terminal } )
 
         let name = try_parse_with_span::<NameOfGateInstance>(p, arenas);
-        let mut start_span = *p.tkw.next_expect(T::LeftParen)?;
+        let mut start_span = *p.tkw.next_expect(T::LeftParen)?.span;
         let name = name.map(|(name, name_span)| {
             start_span = name_span;
             name
@@ -707,7 +707,7 @@ impl<'a> Consumable<'a> for NInputGateInstance {
         let output_terminal = parse::<NetLValue>(p, arenas)?;
         p.tkw.next_expect(T::Comma)?;
         let input_terminals = parse_one_or_more_delimited::<Expr>(p, arenas, T::Comma)?;
-        let right_paren_span = *p.tkw.next_expect(T::RightParen)?;
+        let right_paren_span = *p.tkw.next_expect(T::RightParen)?.span;
 
         let span = start_span | right_paren_span;
 
@@ -799,7 +799,7 @@ impl<'a> Consumable<'a> for NetDeclaration {
         // @Incomplete
         let (net_type, net_type_span) = NetType::item_parse_with_span(p, arenas)?;
         let identifiers = parse_one_or_more_delimited::<Identifier>(p, arenas, T::Comma)?;
-        let semicolon_span = *p.tkw.next_expect(T::Semicolon)?;
+        let semicolon_span = *p.tkw.next_expect(T::Semicolon)?.span;
 
         let span = net_type_span | semicolon_span;
 
@@ -821,9 +821,9 @@ impl<'a> Consumable<'a> for RegDeclaration {
         // reg_declaration ::= reg [ signed ] [ range ] list_of_variable_identifiers ;
 
         // @Incomplete
-        let reg_kw_span = *p.tkw.next_expect(T::KeywordReg)?;
+        let reg_kw_span = *p.tkw.next_expect(T::KeywordReg)?.span;
         let identifiers = parse_one_or_more_delimited::<Identifier>(p, arenas, T::Comma)?;
-        let semicolon_span = *p.tkw.next_expect(T::Semicolon)?;
+        let semicolon_span = *p.tkw.next_expect(T::Semicolon)?.span;
 
         let span = reg_kw_span | semicolon_span;
 
@@ -840,7 +840,7 @@ impl<'a> Consumable<'a> for ParameterDeclaration {
         //   parameter [ signed ] [ range ] list_of_param_assignments
         // | parameter parameter_type list_of_param_assignments
 
-        let parameter_kw_span = *p.tkw.next_expect(T::KeywordParameter)?;
+        let parameter_kw_span = *p.tkw.next_expect(T::KeywordParameter)?.span;
         // @Incomplete
         let assignments = parse_one_or_more_delimited::<ParamAssignment>(p, arenas, T::Comma)?;
         let last_span = arenas.get_span(assignments.last().unwrap());

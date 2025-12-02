@@ -61,7 +61,7 @@ impl<'a> Consumable<'a> for Statement {
                 if let Some((blocking_assignment, blocking_assignment_span)) =
                     try_parse_with_span::<BlockingAssignment>(p, arenas)
                 {
-                    let semicolon_span = *p.tkw.next_expect(T::Semicolon)?;
+                    let semicolon_span = *p.tkw.next_expect(T::Semicolon)?.span;
                     Ok((
                         Self::BlockingAssignment(blocking_assignment),
                         blocking_assignment_span | semicolon_span,
@@ -69,7 +69,7 @@ impl<'a> Consumable<'a> for Statement {
                 } else if let Some((non_blocking_assignment, non_blocking_assignment_span)) =
                     try_parse_with_span::<NonBlockingAssignment>(p, arenas)
                 {
-                    let semicolon_span = *p.tkw.next_expect(T::Semicolon)?;
+                    let semicolon_span = *p.tkw.next_expect(T::Semicolon)?.span;
                     Ok((
                         Self::NonBlockingAssignment(non_blocking_assignment),
                         non_blocking_assignment_span | semicolon_span,
@@ -180,7 +180,7 @@ impl<'a> Consumable<'a> for SeqBlock {
         // seq_block ::= begin [ : block_identifier { block_item_declaration } ] { statement } end
 
         // @Incomplete: [ : block_identifier { block_item_declaration } ]
-        let begin_kw_span = *p.tkw.next_expect(T::KeywordBegin)?;
+        let begin_kw_span = *p.tkw.next_expect(T::KeywordBegin)?.span;
         let statements = parse_until_reaching::<Statement>(p, arenas, T::KeywordEnd)?;
 
         let span = begin_kw_span | *p.tkw.get(p.tkw.offset - 1).unwrap().span;
@@ -227,7 +227,7 @@ impl<'a> Consumable<'a> for DelayControl {
         //   # delay_value
         // | # ( mintypmax_expression )
 
-        let hash_span = *p.tkw.next_expect(T::Hash)?;
+        let hash_span = *p.tkw.next_expect(T::Hash)?.span;
         // @Incomplete: | # ( mintypmax_expression )
         let (delay_value, delay_value_span) = parse_with_span::<DelayValue>(p, arenas)?;
 
@@ -279,13 +279,13 @@ impl<'a> Consumable<'a> for EventControl {
         // | @*
         // | @ (*)
 
-        let at_sign_span = *p.tkw.next_expect(T::AtSign)?;
+        let at_sign_span = *p.tkw.next_expect(T::AtSign)?.span;
         // @Incomplete: @ hierarchical_event_identifier
         // @Incomplete: @*
         // @Incomplete: @ (*)
         p.tkw.next_expect(T::LeftParen)?;
         let event_expression = parse::<EventExpression>(p, arenas)?;
-        let right_paren_span = *p.tkw.next_expect(T::RightParen)?;
+        let right_paren_span = *p.tkw.next_expect(T::RightParen)?.span;
 
         let span = at_sign_span | right_paren_span;
 
@@ -394,7 +394,7 @@ impl<'a> Consumable<'a> for SystemTaskEnable {
             expressions = parse_zero_or_more_delimited::<Expr>(p, arenas, T::Comma)?;
             p.tkw.next_expect(T::RightParen)?;
         }
-        let semicolon_span = *p.tkw.next_expect(T::Semicolon)?;
+        let semicolon_span = *p.tkw.next_expect(T::Semicolon)?.span;
 
         let span = system_task_identifier_span | semicolon_span;
 
@@ -411,8 +411,9 @@ impl<'a> Consumable<'a> for SystemTaskEnable {
 impl<'a> Consumable<'a> for SystemTaskIdentifier {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
         use Token as T;
-        let span = *p.tkw.next_expect(T::DollarIdent)?;
-        let content = &p.tkw.content()[span.start() + 1..span.end()];
+        let t = p.tkw.next_expect(T::DollarIdent)?;
+        let (span, file) = (*t.span, *t.file);
+        let content = &p.tkw.content(file)[span.start() + 1..span.end()];
         Ok((Self::from_item(content, arenas)?, span))
     }
 }

@@ -1,5 +1,6 @@
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::path::Path;
+use std::rc::Rc;
 
 use slotmap::SlotMap;
 use vogls_ir::{ContextFormat, GlobalContext, Value};
@@ -22,9 +23,9 @@ pub fn run(
     top_level_module: Option<&str>,
     ectx: &mut ExecutionContext,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let content = std::fs::read_to_string(&path)?;
+    let content: Rc<str> = std::fs::read_to_string(&path)?.into();
     let token_buffer = Tokenized::tokenize(&content);
-    let mut parser = Parser::new(TokenWalker::new(&content, None, &token_buffer));
+    let mut parser = Parser::new(TokenWalker::new(content.clone(), None, &token_buffer));
 
     let ast = match parser.parse_file() {
         Ok(ast) => ast,

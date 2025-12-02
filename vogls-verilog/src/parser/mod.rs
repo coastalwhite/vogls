@@ -241,8 +241,9 @@ pub trait Consumable<'a>: Sized + Copy + 'static {
 
 impl<'a> Consumable<'a> for Identifier {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
-        let span = *p.tkw.next_expect(Token::Ident)?;
-        let content = &p.tkw.content()[span.as_range()];
+        let t = p.tkw.next_expect(Token::Ident)?;
+        let (span, file) = (*t.span, *t.file);
+        let content = &p.tkw.content(file)[span.as_range()];
         Ok((Self::from_item(content, arenas)?, span))
     }
 }
@@ -258,8 +259,9 @@ impl<'a> ItemParsable<'a> for Identifier {
 
 impl<'a> Consumable<'a> for DecimalRef {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
-        let span = *p.tkw.next_expect(Token::Decimal)?;
-        let content = &p.tkw.content()[span.as_range()];
+        let t = p.tkw.next_expect(Token::Decimal)?;
+        let (span, file) = (*t.span, *t.file);
+        let content = &p.tkw.content(file)[span.as_range()];
         let (_, decimal) = Decimal::take(content);
         Ok((Self::from_item(decimal, arenas)?, span))
     }
@@ -275,8 +277,9 @@ impl<'a> ItemParsable<'a> for DecimalRef {
 
 impl<'a> Consumable<'a> for SizedNumberRef {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
-        let span = *p.tkw.next_expect(Token::Number)?;
-        let content = &p.tkw.content()[span.as_range()];
+        let t = p.tkw.next_expect(Token::Number)?;
+        let (span, file) = (*t.span, *t.file);
+        let content = &p.tkw.content(file)[span.as_range()];
         let (_, number) = SizedNumber::take(content);
         Ok((Self::from_item(number, arenas)?, span))
     }
@@ -292,8 +295,9 @@ impl<'a> ItemParsable<'a> for SizedNumberRef {
 
 impl<'a> Consumable<'a> for StringRef {
     fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
-        let span = *p.tkw.next_expect(Token::String)?;
-        let content = &p.tkw.content()[span.as_range()];
+        let t = p.tkw.next_expect(Token::String)?;
+        let (span, file) = (*t.span, *t.file);
+        let content = &p.tkw.content(file)[span.as_range()];
         let content = &content[1..content.len() - 1];
 
         if content.contains("\\") {

@@ -8,17 +8,21 @@ use crate::number::{
 use crate::ident::Ident;
 use crate::span::Span;
 
+type FileIdx = u32;
+
 pub struct Tokenized {
     tokens: Vec<Token>,
     spans: Vec<Span>,
+    file_idxs: Vec<FileIdx>,
 }
 
 pub struct TokenWalker<'a> {
     tokens: &'a [Token],
     spans: &'a [Span],
+    file_idxs: &'a [FileIdx],
 
-    content: &'a str,
-    path: Option<Rc<Path>>,
+    contents: Vec<Rc<str>>,
+    paths: Vec<Option<Rc<Path>>>,
 
     /// Index of the next token.
     pub offset: usize,
@@ -28,25 +32,27 @@ pub struct TokenWalker<'a> {
 pub struct TokenLoc<'a> {
     pub kind: &'a Token,
     pub span: &'a Span,
+    pub file: &'a FileIdx,
 }
 
 impl<'a> TokenWalker<'a> {
-    pub fn new(content: &'a str, path: Option<Rc<Path>>, buffer: &'a Tokenized) -> Self {
+    pub fn new(content: Rc<str>, path: Option<Rc<Path>>, buffer: &'a Tokenized) -> Self {
         Self {
-            tokens: buffer.tokens(),
-            spans: buffer.spans(),
-            content,
+            tokens: &buffer.tokens,
+            spans: &buffer.spans,
+            file_idxs: &buffer.file_idxs,
+            contents: vec![content],
+            paths: vec![path],
             offset: 0,
-            path,
         }
     }
 
-    pub fn content(&self) -> &str {
-        self.content
+    pub fn content(&self, file: FileIdx) -> &str {
+        &self.contents[file as usize]
     }
 
-    pub fn path(&self) -> Option<&Path> {
-        self.path.as_deref()
+    pub fn path(&self, file: FileIdx) -> Option<&Path> {
+        self.paths[file as usize].as_deref()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -74,6 +80,7 @@ impl<'a> TokenWalker<'a> {
         Some(TokenLoc {
             kind: &self.tokens[i],
             span: &self.spans[i],
+            file: &self.file_idxs[i],
         })
     }
 
@@ -118,29 +125,22 @@ impl<'a> TokenWalker<'a> {
         self.get(self.offset)
     }
 
-    pub fn next_expect<E: FromLexerError>(&mut self, kind: Token) -> Result<&Span, E> {
+    pub fn next_expect<E: FromLexerError>(&mut self, kind: Token) -> Result<TokenLoc, E> {
         let next = self.try_next()?;
         if *next.kind != kind {
             return Err(E::unexpected_token());
         }
-        Ok(next.span)
+        Ok(next)
     }
 }
 
 impl Tokenized {
-    pub fn tokens(&self) -> &[Token] {
-        &self.tokens
-    }
-
-    pub fn spans(&self) -> &[Span] {
-        &self.spans
-    }
-
     pub fn tokenize(content: &str) -> Self {
         use Token as T;
 
         let mut tokens = Vec::new();
         let mut offsets = Vec::new();
+        let mut file_idxs = Vec::new();
 
         let bytes = content.as_bytes();
         let mut i = 0;
@@ -466,12 +466,14 @@ impl Tokenized {
 
             tokens.push(token);
             offsets.push(Span::new(i, i + length));
+            file_idxs.push(0);
             i += length;
         }
 
         Self {
             tokens,
             spans: offsets,
+            file_idxs,
         }
     }
 }
@@ -549,8 +551,8 @@ macro_rules! define_tokens {
         fn tokenizer_examples() {
             $(
             let consumed = Tokenized::tokenize($example);
-            assert_eq!(consumed.tokens().len(), 1);
-            assert_eq!(consumed.tokens()[0], Token::$ident, "Example \"{}\" of token {} had the invalid kind", $example, stringify!($ident));
+            assert_eq!(consumed.tokens.len(), 1);
+            assert_eq!(consumed.tokens[0], Token::$ident, "Example \"{}\" of token {} had the invalid kind", $example, stringify!($ident));
             )+
         }
     };

@@ -1,3 +1,7 @@
+use std::path::Path;
+
+use vogls::ExecutionContext;
+
 fn usage() {
     eprintln!(
         "usage: {} <path/to/file.v> <top-level module>",
@@ -15,10 +19,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(2);
     };
 
-    vogls::run(&path, &tl_module_name, &mut ExecutionContext {
-        stdout: Box::new(std::io::stdout()),
-        stderr: Box::new(std::io::stderr()),
-    })?;
+    let path = Path::new(&path);
+    vogls::run(
+        &path,
+        Some(&tl_module_name),
+        &mut ExecutionContext {
+            stdout: Box::new(std::io::stdout()),
+            stderr: Box::new(std::io::stderr()),
+        },
+    )?;
 
     Ok(())
 }
