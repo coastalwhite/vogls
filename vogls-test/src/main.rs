@@ -51,13 +51,14 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         .unwrap_or_default()
         + 2;
 
-    let paths = match args.filter {
+    let mut paths = match args.filter {
         None => paths,
         Some(f) => paths
             .into_iter()
             .filter(|p| p.to_str().unwrap().contains(&f))
             .collect(),
     };
+    paths.sort_unstable();
 
     let mut num_failed = 0;
     println!("Running {} tests...", paths.len());

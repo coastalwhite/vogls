@@ -147,7 +147,14 @@ impl Tokenized {
         let mut paths = Vec::new();
         let mut contents = Vec::new();
 
-        let mut if_depth = 0;
+        // @Performance: bit-field
+        #[derive(Clone, Copy)]
+        struct IfState {
+            has_been_taken_before: bool,
+            has_else: bool,
+        }
+
+        let mut if_stack = Vec::<IfState>::new();
         let mut if_untaken_depth = 0;
 
         struct Macro {
@@ -543,7 +550,7 @@ impl Tokenized {
                                     })
                                     .map_or(bytes.len(), |e| e + j);
 
-                                if if_untaken_depth < if_depth {
+                                if if_untaken_depth < if_stack.len() {
                                     i = end;
                                     continue;
                                 }
@@ -578,7 +585,7 @@ impl Tokenized {
                                 // An attempt to undefine a text macro that was not previously
                                 // defined using a `define compiler directive can result in a
                                 // warning.
-                                if if_untaken_depth >= if_depth {
+                                if if_untaken_depth >= if_stack.len() {
                                     _ = macros.remove(name);
                                 }
                                 i += name_length;
@@ -586,35 +593,70 @@ impl Tokenized {
                             }
                             "celldefine" | "endcelldefine" => todo!(),
                             "default_nettype" => todo!(),
-                            "elsif" => todo!(),
+                            "elsif" => {
+                                i += 1 + directive_length;
+                                skip_whitespace(&content, &mut i);
+                                let name_length = ident_length(&content[i..]);
+                                let name = &content[i..][..name_length];
+                                i += name_length;
+
+                                if if_untaken_depth >= if_stack.len() {
+                                    let mut if_item = if_stack.pop().unwrap();
+                                    let is_taken = !if_item.has_been_taken_before
+                                        && macros.contains_key(name) ^ (directive == "ifndef");
+                                    if_item.has_been_taken_before = is_taken;
+                                    if is_taken {
+                                        if_untaken_depth += 1;
+                                    } else {
+                                        if_untaken_depth = if_stack.len();
+                                    }
+                                    if_stack.push(if_item);
+                                }
+                                continue;
+                            }
                             "ifdef" | "ifndef" => {
                                 i += 1 + directive_length;
                                 skip_whitespace(&content, &mut i);
                                 let name_length = ident_length(&content[i..]);
                                 let name = &content[i..][..name_length];
-                                if if_untaken_depth >= if_depth {
+                                i += name_length;
+
+                                let mut if_item = IfState {
+                                    has_been_taken_before: false,
+                                    has_else: false,
+                                };
+                                if if_untaken_depth >= if_stack.len() {
                                     let is_taken =
                                         macros.contains_key(name) ^ (directive == "ifndef");
+                                    if_item.has_been_taken_before = is_taken;
                                     if is_taken {
                                         if_untaken_depth += 1;
                                     } else {
-                                        if_untaken_depth = if_depth;
+                                        if_untaken_depth = if_stack.len();
                                     }
                                 }
-
-                                if_depth += 1;
-                                i += name_length;
+                                if_stack.push(if_item);
                                 continue;
                             }
                             "else" => {
                                 i += 1 + directive_length;
-                                let if_was_untaken = if_untaken_depth == if_depth - 1;
-                                if_untaken_depth = if_depth - usize::from(if_was_untaken);
+
+                                let mut if_item = if_stack.pop().unwrap();
+                                if if_untaken_depth == if_stack.len()
+                                    && !if_item.has_been_taken_before
+                                {
+                                    if_untaken_depth = if_stack.len() + 1;
+                                }
+
+                                if_item.has_been_taken_before = true;
+                                if_item.has_else = true;
+
+                                if_stack.push(if_item);
                                 continue;
                             }
                             "endif" => {
                                 i += 1 + directive_length;
-                                if_depth -= 1;
+                                _ = if_stack.pop();
                                 continue;
                             }
                             "include" => {
@@ -631,8 +673,8 @@ impl Tokenized {
                                     i = j + l;
                                     // @TODO: escaping
                                     let s = &content[j + 1..][..l - 2];
-                                    // @TODO: better error handling
                                     let path = paths[file_idx as usize].as_deref().unwrap();
+                                    // @TODO: better error handling
                                     let path = path.parent().unwrap();
                                     let path = path.join(Path::new(s));
                                     // @TODO: better error handling
@@ -667,7 +709,7 @@ impl Tokenized {
                             "pragma" => todo!(),
                             "begin_keywords" | "end_keywords" => todo!(),
                             _ => {
-                                if if_untaken_depth >= if_depth
+                                if if_untaken_depth >= if_stack.len()
                                     && let Some(m) = macros.get(directive)
                                 {
                                     tokens.extend_from_slice(&m.tokens);
@@ -682,7 +724,7 @@ impl Tokenized {
                     _ => (T::Unknown, 1),
                 };
 
-                if if_untaken_depth >= if_depth {
+                if if_untaken_depth >= if_stack.len() {
                     tokens.push(token);
                     offsets.push(Span::new(i, i + length));
                     file_idxs.push(file_idx);
