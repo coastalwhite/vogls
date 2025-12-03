@@ -527,6 +527,7 @@ impl Tokenized {
                         let directive = &content[i + 1..][..directive_length];
 
                         match directive {
+                            // Preprocessor macro definition
                             "define" => {
                                 assert!(
                                     preprocessor_macro.is_none(),
@@ -597,31 +598,8 @@ impl Tokenized {
                                     continue;
                                 }
                             }
-                            "celldefine" | "endcelldefine" => todo!(),
-                            "default_nettype" => todo!(),
-                            "elsif" => {
-                                let mut j = i + 1 + directive_length;
-                                skip_sameline_whitespace(&content, &mut j);
-                                if is_fst_ident_byte(bytes[i]) {
-                                    let name_length = ident_length(&content[j..]);
-                                    let name = &content[j..][..name_length];
-                                    i = j + name_length;
 
-                                    if if_untaken_depth >= if_stack.len() {
-                                        let mut if_item = if_stack.pop().unwrap();
-                                        let is_taken = !if_item.has_been_taken_before
-                                            && macros.contains_key(name) ^ (directive == "ifndef");
-                                        if_item.has_been_taken_before = is_taken;
-                                        if is_taken {
-                                            if_untaken_depth += 1;
-                                        } else {
-                                            if_untaken_depth = if_stack.len();
-                                        }
-                                        if_stack.push(if_item);
-                                    }
-                                    continue;
-                                }
-                            }
+                            // Preprocessor control-flow
                             "ifdef" | "ifndef" => {
                                 let mut j = i + 1 + directive_length;
                                 skip_sameline_whitespace(&content, &mut j);
@@ -648,6 +626,29 @@ impl Tokenized {
                                     continue;
                                 }
                             }
+                            "elsif" => {
+                                let mut j = i + 1 + directive_length;
+                                skip_sameline_whitespace(&content, &mut j);
+                                if is_fst_ident_byte(bytes[i]) {
+                                    let name_length = ident_length(&content[j..]);
+                                    let name = &content[j..][..name_length];
+                                    i = j + name_length;
+
+                                    if if_untaken_depth >= if_stack.len() {
+                                        let mut if_item = if_stack.pop().unwrap();
+                                        let is_taken = !if_item.has_been_taken_before
+                                            && macros.contains_key(name) ^ (directive == "ifndef");
+                                        if_item.has_been_taken_before = is_taken;
+                                        if is_taken {
+                                            if_untaken_depth += 1;
+                                        } else {
+                                            if_untaken_depth = if_stack.len();
+                                        }
+                                        if_stack.push(if_item);
+                                    }
+                                    continue;
+                                }
+                            }
                             "else" => {
                                 i += 1 + directive_length;
 
@@ -669,6 +670,7 @@ impl Tokenized {
                                 _ = if_stack.pop();
                                 continue;
                             }
+
                             "include" => {
                                 assert!(
                                     preprocessor_macro.is_none(),
@@ -710,12 +712,18 @@ impl Tokenized {
                                     continue;
                                 }
                             }
+
+                            // Preprocessor directives that need to be passed to the parser.
+                            "celldefine" | "endcelldefine" => todo!(),
+                            "default_nettype" => {},
                             "resetall" => todo!(),
                             "line" => todo!(),
                             "timescale" => todo!(),
                             "unconnected_drive" | "nounconnected_drive" => todo!(),
                             "pragma" => todo!(),
                             "begin_keywords" | "end_keywords" => todo!(),
+
+                            // Macros
                             _ => {
                                 if if_untaken_depth >= if_stack.len()
                                     && let Some(m) = macros.get(directive)
@@ -729,7 +737,7 @@ impl Tokenized {
                             }
                         }
 
-                        (T::Unknown, 1 + directive_length)
+                        (T::Directive, 1 + directive_length)
                     }
                     _ => (T::Unknown, 1),
                 };
@@ -876,6 +884,7 @@ macro_rules! define_tokens {
 define_tokens! {
     Ident = "abc",
     DollarIdent = "$abc",
+    Directive = "`default_nettype",
     String = "\"this is a string\"",
     Number = "50'd50",
     Decimal = "50",
