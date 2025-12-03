@@ -9,12 +9,6 @@ use crate::instruction::{StackRef, VmInstruction, VmIntrinsicArg, VmProcess};
 
 use super::VmSignalKey;
 
-fn get_stack_size(ty: &Type) -> usize {
-    match ty {
-        Type::Bit => 1,
-    }
-}
-
 pub fn lower_process_to_vm(
     process: ProcessKey,
     gl: &GlobalContext,
@@ -26,7 +20,8 @@ pub fn lower_process_to_vm(
     let mut bb_seen = HashSet::new();
 
     let mut stack_map = HashMap::new();
-    let mut stack_top = 0;
+    let mut bit_stack_top = 0;
+    let mut decimal_stack_top = 0;
 
     // Make a map of the stack.
     bb_stack.push(process.entry);
@@ -35,15 +30,28 @@ pub fn lower_process_to_vm(
 
         for instr in &bb.instrs {
             if let Some(dst) = instr.get_destination_variable() {
-                let var_stack_size = get_stack_size(&gl.vars.get(dst).unwrap().ty);
-                stack_map.insert(
-                    dst,
-                    StackRef {
-                        offset: stack_top,
-                        size: var_stack_size,
-                    },
-                );
-                stack_top += var_stack_size;
+                match &gl.vars.get(dst).unwrap().ty {
+                    Type::Bit => {
+                        stack_map.insert(
+                            dst,
+                            StackRef {
+                                offset: bit_stack_top,
+                                size: 1,
+                            },
+                        );
+                        bit_stack_top += 1;
+                    }
+                    Type::Decimal => {
+                        stack_map.insert(
+                            dst,
+                            StackRef {
+                                offset: decimal_stack_top,
+                                size: 1,
+                            },
+                        );
+                        decimal_stack_top += 1;
+                    }
+                }
             }
         }
 
@@ -51,7 +59,8 @@ pub fn lower_process_to_vm(
         bb.terminator.extend_next_rev(&mut bb_stack, &mut bb_seen);
     }
 
-    let stack_size = stack_top;
+    let bit_stack_size = bit_stack_top;
+    let decimal_stack_size = decimal_stack_top;
 
     bb_stack.clear();
     bb_seen.clear();
@@ -79,9 +88,16 @@ pub fn lower_process_to_vm(
             use Instruction as I;
             use VmInstruction as VI;
             let instr = match instr {
-                I::Constant(d, value) => VI::Constant(var(*d), value.clone()),
-                I::Unary(d, op, s) => VI::Unary(var(*d), *op, var(*s)),
-                I::Binary(d, op, s1, s2) => VI::Binary(var(*d), *op, var(*s1), var(*s2)),
+                I::ConstantBit(d, value) => VI::ConstantBit(var(*d), value.clone()),
+                I::UnaryBit(d, op, s) => VI::UnaryBit(var(*d), *op, var(*s)),
+                I::BinaryBit(d, op, s1, s2) => VI::BinaryBit(var(*d), *op, var(*s1), var(*s2)),
+
+                I::ConstantDecimal(d, value) => VI::ConstantDecimal(var(*d), value.clone()),
+                I::UnaryDecimal(d, op, s) => VI::UnaryDecimal(var(*d), *op, var(*s)),
+                I::BinaryDecimal(d, op, s1, s2) => {
+                    VI::BinaryDecimal(var(*d), *op, var(*s1), var(*s2))
+                }
+
                 I::Intrinsic(op, args) => {
                     use IntrinsicArg as IA;
                     use VmIntrinsicArg as VIA;
@@ -89,7 +105,10 @@ pub fn lower_process_to_vm(
                         .iter()
                         .map(|arg| match arg {
                             IA::StringLiteral(s) => VIA::StringLiteral(s.clone()),
-                            IA::Variable(v) => VIA::Variable(var(*v)),
+                            IA::Variable(v) => match gl.vars[*v].ty {
+                                Type::Bit => VIA::VariableBit(var(*v)),
+                                Type::Decimal => VIA::VariableDecimal(var(*v)),
+                            },
                         })
                         .collect();
 
@@ -147,7 +166,8 @@ pub fn lower_process_to_vm(
     }
 
     VmProcess {
-        stack_size,
+        bit_stack_size,
+        decimal_stack_size,
         instructions,
     }
 }

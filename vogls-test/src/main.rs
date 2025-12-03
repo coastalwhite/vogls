@@ -71,7 +71,6 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             max_size - path.as_os_str().len()
         );
         std::io::stdout().flush()?;
-
         let path = tests_dir.join(&path);
 
         struct TestInfo {

@@ -6,7 +6,6 @@ use crate::number::{
     Base, BinaryBits, Bits, Decimal, DecimalBits, HexadecimalBits, OctalBits, Sign, Size,
 };
 
-use crate::ident::Ident;
 use crate::span::Span;
 
 type FileIdx = u32;
@@ -715,7 +714,7 @@ impl Tokenized {
 
                             // Preprocessor directives that need to be passed to the parser.
                             "celldefine" | "endcelldefine" => todo!(),
-                            "default_nettype" => {},
+                            "default_nettype" => {}
                             "resetall" => todo!(),
                             "line" => todo!(),
                             "timescale" => todo!(),
@@ -826,29 +825,6 @@ pub trait Takeable<'a>: Sized {
 pub trait FromLexerError {
     fn missing_token(at: usize) -> Self;
     fn unexpected_token() -> Self;
-}
-
-impl<'a> Takeable<'a> for Ident {
-    fn take(s: &'a str) -> (&'a str, Self) {
-        debug_assert!(s.starts_with(|c: char| matches!(c, 'a'..='z' | 'A'..='Z' | '_')));
-
-        fn leftover_pattern(x: char) -> bool {
-            x.is_ascii_alphanumeric() || matches!(x, '_' | '$')
-        }
-
-        let start_length = s.len();
-
-        let mut chars = s.chars();
-        chars.next().unwrap();
-
-        let leftover = chars.as_str();
-        let leftover = leftover.trim_start_matches(leftover_pattern);
-
-        let consumed_length = start_length - leftover.len();
-        let consumed = &s[..consumed_length];
-
-        (leftover, Ident::new(consumed))
-    }
 }
 
 macro_rules! define_tokens {

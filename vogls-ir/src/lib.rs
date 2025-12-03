@@ -17,12 +17,14 @@ new_key_type! { pub struct VariableKey; }
 #[derive(Debug, Clone)]
 pub enum Value {
     Bit(bool),
+    Decimal(i64),
 }
 
 impl Value {
     pub fn get_type(&self) -> Type {
         match self {
             Self::Bit(..) => Type::Bit,
+            Self::Decimal(..) => Type::Decimal,
         }
     }
 }
@@ -84,6 +86,7 @@ pub struct Signal {
 #[derive(Debug, Clone)]
 pub enum Type {
     Bit,
+    Decimal,
 }
 
 #[derive(Debug, Clone)]
@@ -114,9 +117,16 @@ pub enum BinaryOp {
 
 #[derive(Debug, Clone)]
 pub enum Instruction {
-    Constant(VariableKey, Value),
-    Unary(VariableKey, UnaryOp, VariableKey),
-    Binary(VariableKey, BinaryOp, VariableKey, VariableKey),
+    ConstantBit(VariableKey, bool),
+    UnaryBit(VariableKey, UnaryOp, VariableKey),
+    BinaryBit(VariableKey, BinaryOp, VariableKey, VariableKey),
+
+    ConstantDecimal(VariableKey, i64),
+    UnaryDecimal(VariableKey, UnaryOp, VariableKey),
+    BinaryDecimal(VariableKey, BinaryOp, VariableKey, VariableKey),
+
+    BitToDecimal(VariableKey, VariableKey),
+
     Intrinsic(IntrinsicOp, Vec<IntrinsicArg>),
     Probe(VariableKey, SignalKey),
     Drive(SignalKey, VariableKey),
@@ -125,12 +135,17 @@ pub enum Instruction {
     Spawn(ProcessKey, Vec<SignalKey>),
     Signal(SignalKey),
 }
+
 impl Instruction {
     pub fn get_destination_variable(&self) -> Option<VariableKey> {
         match self {
-            Self::Constant(dst, _)
-            | Self::Unary(dst, _, _)
-            | Self::Binary(dst, _, _, _)
+            Self::ConstantBit(dst, _)
+            | Self::UnaryBit(dst, _, _)
+            | Self::BinaryBit(dst, _, _, _)
+            | Self::ConstantDecimal(dst, _)
+            | Self::UnaryDecimal(dst, _, _)
+            | Self::BinaryDecimal(dst, _, _, _)
+            | Self::BitToDecimal(dst, _)
             | Self::Probe(dst, _) => Some(*dst),
             Self::Intrinsic(_, _)
             | Self::Drive(_, _)

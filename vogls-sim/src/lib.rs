@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
 
-use slotmap::{new_key_type, SlotMap};
+use slotmap::{SlotMap, new_key_type};
 use vogls_ir::{BinaryOp, IntrinsicOp, UnaryOp, Value};
 
 mod instruction;
@@ -35,7 +35,8 @@ pub struct Event {
     /// Which process is scheduled.
     pub process: VmProcessKey,
     /// The stack with which to execute.
-    pub stack: Vec<u8>,
+    pub bit_stack: Vec<u8>,
+    pub decimal_stack: Vec<i64>,
     /// Where to start execution.
     pub ip: usize,
 }
@@ -79,7 +80,8 @@ impl Event {
         watches: &mut HashMap<VmSignalKey, Vec<ListenerKey>>,
     ) -> EvalOutcome {
         let ip = &mut self.ip;
-        let stack = &mut self.stack;
+        let bit_stack = &mut self.bit_stack;
+        let decimal_stack = &mut self.decimal_stack;
         let process = processes.get(self.process).unwrap();
 
         use VmInstruction as I;
@@ -87,37 +89,52 @@ impl Event {
             let instr = &process.instructions[*ip];
             *ip += 1;
             match instr {
-                I::Constant(var, val) => {
-                    assert_eq!(var.size, 1);
-                    stack[var.offset] = match val {
-                        Value::Bit(v) => *v as u8,
-                    };
-                }
-                I::Unary(dst, op, src) => {
-                    assert_eq!(dst.size, 1);
-                    assert_eq!(src.size, 1);
-
+                I::ConstantBit(var, val) => bit_stack[var.offset] = *val as u8,
+                I::UnaryBit(dst, op, src) => {
                     use UnaryOp as O;
-                    stack[dst.offset] = match op {
-                        O::BinaryNeg => !stack[src.offset],
-                        O::LogicalNeg => u8::from(stack[src.offset] == 0),
+                    bit_stack[dst.offset] = match op {
+                        O::BinaryNeg => !bit_stack[src.offset],
+                        O::LogicalNeg => u8::from(bit_stack[src.offset] == 0),
                     };
                 }
-                I::Binary(dst, op, lhs, rhs) => {
+                I::BinaryBit(dst, op, lhs, rhs) => {
                     assert_eq!(dst.size, 1);
                     assert_eq!(lhs.size, 1);
                     assert_eq!(rhs.size, 1);
 
-                    let lhs = stack[lhs.offset];
-                    let rhs = stack[rhs.offset];
+                    let lhs = bit_stack[lhs.offset];
+                    let rhs = bit_stack[rhs.offset];
 
                     use BinaryOp as O;
-                    stack[dst.offset] = match op {
+                    bit_stack[dst.offset] = match op {
                         O::And => lhs & rhs,
                         O::Or => lhs | rhs,
                         O::Xor => lhs ^ rhs,
                     };
                 }
+
+                I::ConstantDecimal(var, val) => decimal_stack[var.offset] = *val,
+                I::UnaryDecimal(dst, op, src) => {
+                    use UnaryOp as O;
+                    match op {
+                        O::BinaryNeg => decimal_stack[src.offset] = !decimal_stack[src.offset],
+                        O::LogicalNeg => {
+                            bit_stack[dst.offset] = u8::from(decimal_stack[src.offset] == 0)
+                        }
+                    }
+                }
+                I::BinaryDecimal(dst, op, lhs, rhs) => {
+                    let lhs = decimal_stack[lhs.offset];
+                    let rhs = decimal_stack[rhs.offset];
+
+                    use BinaryOp as O;
+                    decimal_stack[dst.offset] = match op {
+                        O::And => lhs & rhs,
+                        O::Or => lhs | rhs,
+                        O::Xor => lhs ^ rhs,
+                    };
+                }
+
                 I::Intrinsic(op, args) => {
                     use IntrinsicOp as O;
 
@@ -130,10 +147,14 @@ impl Event {
                                 .unwrap();
                         }
                         O::Assert => {
-                            let Some(VmIntrinsicArg::Variable(condition)) = args.first() else {
-                                panic!("Invalid assert argument");
+                            let value = match args.first() {
+                                Some(VmIntrinsicArg::VariableBit(condition)) => bit_stack[condition.offset] != 0,
+                                Some(VmIntrinsicArg::VariableDecimal(condition)) => decimal_stack[condition.offset] != 0,
+                                _ => {
+                                    panic!("Invalid assert argument");
+                                },
                             };
-                            assert!(stack[condition.offset] != 0, "failed assertion");
+                            assert!(value, "failed assertion");
                         }
                         O::Finish => {
                             writeln!(&mut ctx.stdout, "[FINISH]").unwrap();
@@ -142,15 +163,17 @@ impl Event {
                     }
                 }
                 I::Probe(var, sig) => {
-                    assert_eq!(var.size, 1);
-                    stack[var.offset] = match signals.get(&sig).unwrap() {
-                        Value::Bit(v) => *v as u8,
+                    match signals.get(&sig).unwrap() {
+                        Value::Bit(v) => bit_stack[var.offset] = *v as u8,
+                        Value::Decimal(v) => decimal_stack[var.offset] = *v,
                     };
                 }
                 I::Drive(sig, var) => {
-                    assert_eq!(var.size, 1);
-                    let var_value = stack[var.offset];
-                    signals.insert(*sig, Value::Bit(var_value & 1 != 0));
+                    let signal = signals.get_mut(sig).unwrap();
+                    match signal {
+                        Value::Bit(_) => *signal = Value::Bit(bit_stack[var.offset] & 1 != 0),
+                        Value::Decimal(_) => *signal = Value::Decimal(decimal_stack[var.offset]),
+                    }
 
                     if let Some(watchers) = watches.remove(sig) {
                         for watcher in watchers {
@@ -179,7 +202,7 @@ impl Event {
                 }
                 I::Jump(offset) => *ip = *offset,
                 I::Branch(cond, true_offset, false_offset) => {
-                    let is_true = stack[cond.offset] & 1 != 0;
+                    let is_true = bit_stack[cond.offset] & 1 != 0;
                     if is_true {
                         *ip = *true_offset;
                     } else {

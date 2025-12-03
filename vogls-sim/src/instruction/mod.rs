@@ -1,4 +1,4 @@
-use vogls_ir::{BinaryOp, IntrinsicOp, Time, UnaryOp, Value};
+use vogls_ir::{BinaryOp, IntrinsicOp, Time, UnaryOp};
 
 mod format;
 mod lower;
@@ -17,15 +17,20 @@ pub struct StackRef {
 #[derive(Debug)]
 pub enum VmIntrinsicArg {
     StringLiteral(String),
-    Variable(StackRef),
+    VariableBit(StackRef),
+    VariableDecimal(StackRef),
 }
 
 #[derive(Debug)]
 pub enum VmInstruction {
-    Constant(StackRef, Value),
+    ConstantBit(StackRef, bool),
+    UnaryBit(StackRef, UnaryOp, StackRef),
+    BinaryBit(StackRef, BinaryOp, StackRef, StackRef),
 
-    Unary(StackRef, UnaryOp, StackRef),
-    Binary(StackRef, BinaryOp, StackRef, StackRef),
+    ConstantDecimal(StackRef, i64),
+    UnaryDecimal(StackRef, UnaryOp, StackRef),
+    BinaryDecimal(StackRef, BinaryOp, StackRef, StackRef),
+
     Intrinsic(IntrinsicOp, Vec<VmIntrinsicArg>),
 
     Probe(StackRef, VmSignalKey),
@@ -41,6 +46,7 @@ pub enum VmInstruction {
 
 #[derive(Debug)]
 pub struct VmProcess {
-    pub stack_size: usize,
+    pub bit_stack_size: usize,
+    pub decimal_stack_size: usize,
     pub instructions: Vec<VmInstruction>,
 }

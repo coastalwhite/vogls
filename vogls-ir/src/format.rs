@@ -182,21 +182,34 @@ impl IntrinsicOp {
 impl ContextFormat for Instruction {
     fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &mut DisplayContext<'_>) -> fmt::Result {
         match self {
-            Self::Constant(var, val) => {
+            Self::ConstantBit(var, val) => {
                 ctx.gl.vars.get(*var).unwrap().typed_ctx_fmt(f, ctx)?;
-                f.write_str(" = const ")?;
-                val.ctx_fmt(f, ctx)?;
+                write!(f, " = bconst {val}")?;
             }
-            Self::Unary(dst, op, src) => {
+            Self::ConstantDecimal(var, val) => {
+                ctx.gl.vars.get(*var).unwrap().typed_ctx_fmt(f, ctx)?;
+                write!(f, " = dconst {val}")?;
+            }
+            Self::UnaryBit(dst, op, src) | Self::UnaryDecimal(dst, op, src) => {
                 ctx.gl.vars.get(*dst).unwrap().typed_ctx_fmt(f, ctx)?;
                 f.write_str(" = ")?;
+                f.write_str(match self {
+                    Self::UnaryBit(..) => "b",
+                    Self::UnaryDecimal(..) => "d",
+                    _ => unreachable!(),
+                })?;
                 f.write_str(op.into_mnemonic())?;
                 f.write_str(" ")?;
                 ctx.gl.vars.get(*src).unwrap().ctx_fmt(f, ctx)?;
             }
-            Self::Binary(dst, op, src1, src2) => {
+            Self::BinaryBit(dst, op, src1, src2) | Self::BinaryDecimal(dst, op, src1, src2) => {
                 ctx.gl.vars.get(*dst).unwrap().typed_ctx_fmt(f, ctx)?;
                 f.write_str(" = ")?;
+                f.write_str(match self {
+                    Self::BinaryBit(..) => "b",
+                    Self::BinaryDecimal(..) => "d",
+                    _ => unreachable!(),
+                })?;
                 f.write_str(op.into_mnemonic())?;
                 f.write_str(" ")?;
                 ctx.gl.vars.get(*src1).unwrap().ctx_fmt(f, ctx)?;
@@ -356,6 +369,7 @@ impl ContextFormat for Type {
     fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut DisplayContext<'_>) -> fmt::Result {
         match self {
             Type::Bit => f.write_str("b1"),
+            Type::Decimal => f.write_str("d"),
         }
     }
 }
@@ -381,6 +395,7 @@ impl ContextFormat for Value {
         match self {
             Value::Bit(true) => f.write_str("1"),
             Value::Bit(false) => f.write_str("0"),
+            Value::Decimal(v) => write!(f, "{v}"),
         }
     }
 }

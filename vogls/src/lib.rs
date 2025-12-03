@@ -107,6 +107,7 @@ pub fn run(
         ));
     };
 
+
     // Create a list of all module in breadth- first order.
     // @TODO: Add a mechanism for detecting dependency loops.
     let mut module_stack: Vec<AstId<Module>> = Vec::new();
@@ -186,7 +187,8 @@ pub fn run(
 
         write!(ectx.stdout, "{}", &vm_process)?;
 
-        let stack = vec![0u8; vm_process.stack_size];
+        let bit_stack = vec![0u8; vm_process.bit_stack_size];
+        let decimal_stack = vec![0i64; vm_process.decimal_stack_size];
         let vm_process_key = processes.insert(vm_process);
 
         writeln!(ectx.stdout, ": {vm_process_key:?}")?;
@@ -195,7 +197,8 @@ pub fn run(
             at: 0,
             event: Event {
                 process: vm_process_key,
-                stack,
+                bit_stack,
+                decimal_stack,
                 ip: 0,
             },
         });

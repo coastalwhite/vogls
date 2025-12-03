@@ -778,11 +778,11 @@ fn lower_expr<'a>(
         Expr::Decimal(decimal) => {
             let decimal = &arenas.decimals[decimal.at];
             let decimal = match decimal {
-                Decimal::Small(v) => *v as usize,
+                Decimal::Small(v) => *v as i64,
                 _ => todo!(),
             };
 
-            builder.constant(gl, Value::Bit(decimal != 0))
+            builder.constant(gl, Value::Decimal(decimal))
         }
         Expr::Sized(_) => todo!(),
         Expr::String(_) => todo!(),
