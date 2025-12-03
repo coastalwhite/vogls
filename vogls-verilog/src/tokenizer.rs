@@ -520,6 +520,8 @@ impl Tokenized {
                     b'$' if matches!(bytes.get(i + 1), Some(b'a'..=b'z' | b'A'..=b'Z' | b'_')) => {
                         (T::DollarIdent, 1 + ident_length(&content[i + 1..]))
                     }
+
+                    // Compiler directives
                     b'`' if matches!(bytes.get(i + 1), Some(b'a'..=b'z' | b'A'..=b'Z' | b'_')) => {
                         let directive_length = ident_length(&content[i + 1..]);
                         let directive = &content[i + 1..][..directive_length];
@@ -534,109 +536,117 @@ impl Tokenized {
                                 let mut j = i + 1 + directive_length;
                                 // @TODO: If contains line break, it should probably take that into
                                 // account.
-                                skip_whitespace(&content, &mut j);
-                                let name_length = ident_length(&content[j..]);
-                                let name = &content[j..][..name_length];
-                                // @TODO: Disallow overwriting compiler intrinsics.
-                                j += name_length;
+                                skip_sameline_whitespace(&content, &mut j);
+                                if is_fst_ident_byte(bytes[j]) {
+                                    let name_length = ident_length(&content[j..]);
+                                    let name = &content[j..][..name_length];
+                                    // @TODO: Disallow overwriting compiler intrinsics.
+                                    j += name_length;
 
-                                let mut is_escaped = false;
-                                let end = bytes[j..]
-                                    .iter()
-                                    .position(|&b| {
-                                        let is_unescaped_nl = b == b'\n' && !is_escaped;
-                                        is_escaped = b == b'\\';
-                                        is_unescaped_nl
-                                    })
-                                    .map_or(bytes.len(), |e| e + j);
+                                    let mut is_escaped = false;
+                                    let end = bytes[j..]
+                                        .iter()
+                                        .position(|&b| {
+                                            let is_unescaped_nl = b == b'\n' && !is_escaped;
+                                            is_escaped = b == b'\\';
+                                            is_unescaped_nl
+                                        })
+                                        .map_or(bytes.len(), |e| e + j);
 
-                                if if_untaken_depth < if_stack.len() {
-                                    i = end;
-                                    continue;
+                                    if if_untaken_depth < if_stack.len() {
+                                        i = end;
+                                        continue;
+                                    }
+
+                                    lex_stack.push(LexItem {
+                                        file_idx,
+                                        start,
+                                        i: end,
+                                        end_offset,
+                                        preprocessor_macro: None,
+                                    });
+                                    lex_stack.push(LexItem {
+                                        file_idx,
+                                        start: tokens.len(),
+                                        i: j,
+                                        end_offset: end,
+                                        preprocessor_macro: Some(MacroItem {
+                                            name: name.into(),
+                                            arguments: HashMap::new(),
+                                            argument_positions: Vec::new(),
+                                        }),
+                                    });
+                                    continue 'lex_stack;
                                 }
-
-                                lex_stack.push(LexItem {
-                                    file_idx,
-                                    start,
-                                    i: end,
-                                    end_offset,
-                                    preprocessor_macro: None,
-                                });
-                                lex_stack.push(LexItem {
-                                    file_idx,
-                                    start: tokens.len(),
-                                    i: j,
-                                    end_offset: end,
-                                    preprocessor_macro: Some(MacroItem {
-                                        name: name.into(),
-                                        arguments: HashMap::new(),
-                                        argument_positions: Vec::new(),
-                                    }),
-                                });
-                                continue 'lex_stack;
                             }
                             "undef" => {
-                                i += 1 + directive_length;
-                                skip_whitespace(&content, &mut i);
-                                let name_length = ident_length(&content[i..]);
-                                let name = &content[i..][..name_length];
+                                let mut j = i + 1 + directive_length;
+                                skip_sameline_whitespace(&content, &mut j);
+                                if is_fst_ident_byte(bytes[j]) {
+                                    let name_length = ident_length(&content[j..]);
+                                    let name = &content[j..][..name_length];
+                                    i = j + name_length;
 
-                                // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 352
-                                // An attempt to undefine a text macro that was not previously
-                                // defined using a `define compiler directive can result in a
-                                // warning.
-                                if if_untaken_depth >= if_stack.len() {
-                                    _ = macros.remove(name);
+                                    // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 352
+                                    // An attempt to undefine a text macro that was not previously
+                                    // defined using a `define compiler directive can result in a
+                                    // warning.
+                                    if if_untaken_depth >= if_stack.len() {
+                                        _ = macros.remove(name);
+                                    }
+                                    continue;
                                 }
-                                i += name_length;
-                                continue;
                             }
                             "celldefine" | "endcelldefine" => todo!(),
                             "default_nettype" => todo!(),
                             "elsif" => {
-                                i += 1 + directive_length;
-                                skip_whitespace(&content, &mut i);
-                                let name_length = ident_length(&content[i..]);
-                                let name = &content[i..][..name_length];
-                                i += name_length;
+                                let mut j = i + 1 + directive_length;
+                                skip_sameline_whitespace(&content, &mut j);
+                                if is_fst_ident_byte(bytes[i]) {
+                                    let name_length = ident_length(&content[j..]);
+                                    let name = &content[j..][..name_length];
+                                    i = j + name_length;
 
-                                if if_untaken_depth >= if_stack.len() {
-                                    let mut if_item = if_stack.pop().unwrap();
-                                    let is_taken = !if_item.has_been_taken_before
-                                        && macros.contains_key(name) ^ (directive == "ifndef");
-                                    if_item.has_been_taken_before = is_taken;
-                                    if is_taken {
-                                        if_untaken_depth += 1;
-                                    } else {
-                                        if_untaken_depth = if_stack.len();
+                                    if if_untaken_depth >= if_stack.len() {
+                                        let mut if_item = if_stack.pop().unwrap();
+                                        let is_taken = !if_item.has_been_taken_before
+                                            && macros.contains_key(name) ^ (directive == "ifndef");
+                                        if_item.has_been_taken_before = is_taken;
+                                        if is_taken {
+                                            if_untaken_depth += 1;
+                                        } else {
+                                            if_untaken_depth = if_stack.len();
+                                        }
+                                        if_stack.push(if_item);
                                     }
-                                    if_stack.push(if_item);
+                                    continue;
                                 }
-                                continue;
                             }
                             "ifdef" | "ifndef" => {
-                                i += 1 + directive_length;
-                                skip_whitespace(&content, &mut i);
-                                let name_length = ident_length(&content[i..]);
-                                let name = &content[i..][..name_length];
-                                i += name_length;
+                                let mut j = i + 1 + directive_length;
+                                skip_sameline_whitespace(&content, &mut j);
+                                if is_fst_ident_byte(bytes[j]) {
+                                    let name_length = ident_length(&content[j..]);
+                                    let name = &content[j..][..name_length];
+                                    i = j + name_length;
 
-                                let mut if_item = IfState {
-                                    has_been_taken_before: false,
-                                    has_else: false,
-                                };
-                                if if_untaken_depth >= if_stack.len() {
-                                    let is_taken =
-                                        macros.contains_key(name) ^ (directive == "ifndef");
-                                    if_item.has_been_taken_before = is_taken;
-                                    if is_taken {
-                                        if_untaken_depth += 1;
-                                    } else {
-                                        if_untaken_depth = if_stack.len();
+                                    let mut if_item = IfState {
+                                        has_been_taken_before: false,
+                                        has_else: false,
+                                    };
+                                    if if_untaken_depth >= if_stack.len() {
+                                        let is_taken =
+                                            macros.contains_key(name) ^ (directive == "ifndef");
+                                        if_item.has_been_taken_before = is_taken;
+                                        if is_taken {
+                                            if_untaken_depth += 1;
+                                        } else {
+                                            if_untaken_depth = if_stack.len();
+                                        }
                                     }
+                                    if_stack.push(if_item);
+                                    continue;
                                 }
-                                if_stack.push(if_item);
-                                continue;
                             }
                             "else" => {
                                 i += 1 + directive_length;
@@ -666,7 +676,7 @@ impl Tokenized {
                                 );
 
                                 let mut j = i + 1 + directive_length;
-                                skip_whitespace(&content, &mut j);
+                                skip_sameline_whitespace(&content, &mut j);
                                 if content[j..].starts_with('"')
                                     && let Some(l) = str_length(&content[j..])
                                 {
@@ -698,8 +708,6 @@ impl Tokenized {
                                     contents.push(content);
                                     paths.push(Some(path.into()));
                                     continue;
-                                } else {
-                                    (T::Unknown, 1 + directive_length)
                                 }
                             }
                             "resetall" => todo!(),
@@ -720,6 +728,8 @@ impl Tokenized {
                                 continue;
                             }
                         }
+
+                        (T::Unknown, 1 + directive_length)
                     }
                     _ => (T::Unknown, 1),
                 };
@@ -754,8 +764,12 @@ impl Tokenized {
     }
 }
 
+fn is_fst_ident_byte(b: u8) -> bool {
+    matches!(b, b'a'..=b'z' | b'A'..=b'Z' | b'_')
+}
+
 fn ident_length(s: &str) -> usize {
-    debug_assert!(s.starts_with(|c: char| matches!(c, 'a'..='z' | 'A'..='Z' | '_')));
+    debug_assert!(s.starts_with(|c: char| is_fst_ident_byte((c as u32) as u8)));
 
     fn leftover_pattern(x: char) -> bool {
         x.is_ascii_alphanumeric() || matches!(x, '_' | '$')
@@ -772,9 +786,9 @@ fn ident_length(s: &str) -> usize {
     start_length - leftover.len()
 }
 
-fn skip_whitespace(s: &str, i: &mut usize) {
+fn skip_sameline_whitespace(s: &str, i: &mut usize) {
     let b = s.as_bytes();
-    while b.get(*i).is_some_and(|b| b.is_ascii_whitespace()) {
+    while b.get(*i).is_some_and(|b| matches!(b, b' ' | b'\r' | b'\t')) {
         *i += 1;
     }
 }

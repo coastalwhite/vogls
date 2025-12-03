@@ -72,6 +72,36 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         );
         std::io::stdout().flush()?;
 
+        let path = tests_dir.join(&path);
+
+        struct TestInfo {
+            fail: bool,
+        }
+        let mut test_information = TestInfo { fail: false };
+        {
+            let s = std::fs::read_to_string(&path)?;
+            let mut lines = s.lines();
+            loop {
+                let Some(line) = lines.next() else {
+                    break;
+                };
+                if !line.starts_with("// vogls:") {
+                    break;
+                }
+
+                let line = &line["// vogls:".len()..];
+                let line = line.trim();
+
+                match line {
+                    "fail" => test_information.fail = true,
+                    _ => {
+                        println!();
+                        panic!("Invalid vogls test command '{line}'");
+                    }
+                }
+            }
+        }
+
         #[derive(Default, Clone)]
         struct Io(Arc<Mutex<Vec<u8>>>);
 
@@ -92,11 +122,13 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             stdout: Box::new(stdout.clone()) as Box<dyn std::io::Write>,
             stderr: Box::new(stderr.clone()) as Box<dyn std::io::Write>,
         };
-        let result = vogls::run(&tests_dir.join(&path), None, &mut ctx);
+        let result = vogls::run(&path, None, &mut ctx);
 
-        num_failed += usize::from(result.is_err());
+        num_failed += usize::from(result.is_err() ^ test_information.fail);
         match result {
+            Ok(_) if test_information.fail => println!("\x1b[31mERR\x1b[0m"),
             Ok(_) => println!("\x1b[32mOK\x1b[0m"),
+            Err(_) if test_information.fail => println!("\x1b[32mOK\x1b[0m"),
             Err(err) => {
                 println!("\x1b[31mERR\x1b[0m");
                 println!("ERROR: {err:?}");
