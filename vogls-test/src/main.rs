@@ -124,25 +124,26 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         };
         let result = vogls::run(&path, None, &mut ctx);
 
-        num_failed += usize::from(result.is_err() ^ test_information.fail);
-        match result {
-            Ok(_) if test_information.fail => println!("\x1b[31mERR\x1b[0m"),
-            Ok(_) => println!("\x1b[32mOK\x1b[0m"),
-            Err(_) if test_information.fail => println!("\x1b[32mOK\x1b[0m"),
-            Err(err) => {
-                println!("\x1b[31mERR\x1b[0m");
+        let failed = result.is_err() ^ test_information.fail;
+
+        num_failed += usize::from(failed);
+        if failed {
+            println!("\x1b[31mERR\x1b[0m");
+            if let Err(err) = result {
                 println!("ERROR: {err:?}");
-                println!("--- [START STDOUT] ---");
-                let stdout = stdout.0.lock().unwrap();
-                let stdout = std::str::from_utf8(&stdout).unwrap();
-                println!("{stdout}");
-                println!("---  [END STDOUT]  ---");
-                println!("--- [START STDERR] ---");
-                let stderr = stderr.0.lock().unwrap();
-                let stderr = std::str::from_utf8(&stderr).unwrap();
-                println!("{stderr}");
-                println!("---  [END STDERR]  ---");
-            }
+            };
+            println!("--- [START STDOUT] ---");
+            let stdout = stdout.0.lock().unwrap();
+            let stdout = std::str::from_utf8(&stdout).unwrap();
+            println!("{stdout}");
+            println!("---  [END STDOUT]  ---");
+            println!("--- [START STDERR] ---");
+            let stderr = stderr.0.lock().unwrap();
+            let stderr = std::str::from_utf8(&stderr).unwrap();
+            println!("{stderr}");
+            println!("---  [END STDERR]  ---");
+        } else {
+            println!("\x1b[32mOK\x1b[0m");
         }
     }
     if num_failed == 0 {

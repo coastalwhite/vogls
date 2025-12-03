@@ -9,6 +9,7 @@ use vogls_ir::{
     SignalKey, Time, Type, Value, VariableKey,
 };
 
+use crate::ast::AstId;
 use crate::ast::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression, ConstantPrimary};
 use crate::ast::expr::{BinaryOperator, Expr, UnaryOperator};
 use crate::ast::module::{
@@ -20,7 +21,6 @@ use crate::ast::module::{
 use crate::ast::statement::{
     DelayControl, DelayValue, EventControl, EventExpression, ProceduralTimingControl, Statement,
 };
-use crate::ast::AstId;
 use crate::number::Decimal;
 use crate::parser::{Ast, AstArenas};
 
@@ -656,7 +656,7 @@ fn statements_to_process<'a>(
                             vec![IntrinsicArg::StringLiteral(str_literal.to_string())],
                         );
                     }
-                    "vogls_assert_eq" => {
+                    "vogls_assert_eq" | "vogls_assert_ne" => {
                         let expressions = system_task_enable.expressions;
                         assert_eq!(expressions.len(), 2); // @Improve: Error message
 
@@ -669,9 +669,16 @@ fn statements_to_process<'a>(
                         let lhs = lower_expr(&mut builder, gl, scope, lhs, arenas);
                         let rhs = lower_expr(&mut builder, gl, scope, rhs, arenas);
 
-                        let eq = builder.equals(gl, lhs, rhs);
+                        let mut predicate = builder.equals(gl, lhs, rhs);
+                        if ident == "vogls_assert_ne" {
+                            predicate = builder.logical_neg(gl, predicate);
+                        }
 
-                        builder.intrinsic(gl, IntrinsicOp::Assert, vec![IntrinsicArg::Variable(eq)])
+                        builder.intrinsic(
+                            gl,
+                            IntrinsicOp::Assert,
+                            vec![IntrinsicArg::Variable(predicate)],
+                        )
                     }
                     "finish" => builder.intrinsic(gl, IntrinsicOp::Finish, vec![]),
 
