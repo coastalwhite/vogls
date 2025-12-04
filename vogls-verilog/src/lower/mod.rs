@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use scope::Scope;
 
 use vogls_ir::{
-    BasicBlockBuilder, GlobalContext, IntrinsicArg, IntrinsicOp, ModuleBuilder, ModuleKey, Signal,
-    SignalKey, Time, Type, Value, VariableKey,
+    BasicBlockBuilder, Bits, GlobalContext, IntrinsicArg, IntrinsicOp, ModuleBuilder, ModuleKey,
+    Signal, SignalKey, Time, Type, Value, VariableKey,
 };
 
 use crate::ast::AstId;
@@ -77,11 +77,14 @@ pub fn lower_module_to_ir(
 
                     let key = gl.signals.insert(Signal {
                         name: ident.into(),
-                        ty: Type::Bit,
+                        ty: Type::Bits(1),
                     });
                     scope.push(
                         ident,
-                        ScopeItem::Signal(SignalScopeItem { ty: Type::Bit, key }),
+                        ScopeItem::Signal(SignalScopeItem {
+                            ty: Type::Bits(1),
+                            key,
+                        }),
                     );
 
                     module_builder.entity.signal(gl, key);
@@ -108,11 +111,14 @@ pub fn lower_module_to_ir(
 
                 let key = gl.signals.insert(Signal {
                     name: ident.into(),
-                    ty: Type::Bit,
+                    ty: Type::Bits(1),
                 });
                 scope.push(
                     ident,
-                    ScopeItem::Signal(SignalScopeItem { ty: Type::Bit, key }),
+                    ScopeItem::Signal(SignalScopeItem {
+                        ty: Type::Bits(1),
+                        key,
+                    }),
                 );
 
                 module_builder.entity.signal(gl, key);
@@ -136,11 +142,14 @@ pub fn lower_module_to_ir(
 
                     let key = gl.signals.insert(Signal {
                         name: ident.into(),
-                        ty: Type::Bit,
+                        ty: Type::Bits(1),
                     });
                     scope.push(
                         ident,
-                        ScopeItem::Signal(SignalScopeItem { ty: Type::Bit, key }),
+                        ScopeItem::Signal(SignalScopeItem {
+                            ty: Type::Bits(1),
+                            key,
+                        }),
                     );
 
                     module_builder.entity.signal(gl, key);
@@ -158,11 +167,14 @@ pub fn lower_module_to_ir(
                                     let ident = arenas.get_ident(ident.0);
                                     let key = gl.signals.insert(Signal {
                                         name: ident.into(),
-                                        ty: Type::Bit,
+                                        ty: Type::Bits(1),
                                     });
                                     scope.push(
                                         ident,
-                                        ScopeItem::Signal(SignalScopeItem { ty: Type::Bit, key }),
+                                        ScopeItem::Signal(SignalScopeItem {
+                                            ty: Type::Bits(1),
+                                            key,
+                                        }),
                                     );
                                     module_builder.entity.signal(gl, key);
                                 }
@@ -174,11 +186,14 @@ pub fn lower_module_to_ir(
                                     let ident = arenas.get_ident(ident.0);
                                     let key = gl.signals.insert(Signal {
                                         name: ident.into(),
-                                        ty: Type::Bit,
+                                        ty: Type::Bits(1),
                                     });
                                     scope.push(
                                         ident,
-                                        ScopeItem::Signal(SignalScopeItem { ty: Type::Bit, key }),
+                                        ScopeItem::Signal(SignalScopeItem {
+                                            ty: Type::Bits(1),
+                                            key,
+                                        }),
                                     );
                                     module_builder.entity.signal(gl, key);
                                 }
@@ -454,7 +469,8 @@ fn statements_to_process<'a>(
                     _ => todo!(),
                 };
 
-                let value = builder.constant(gl, Value::Bit(decimal != 0));
+                let value =
+                    builder.constant(gl, Value::Bits(Bits::Small(u64::from(decimal != 0), 1)));
                 builder.drive(gl, scope_item.key, value); // @TODO: Resolve ident
             }
             Statement::CaseStatement => todo!(),
@@ -482,7 +498,8 @@ fn statements_to_process<'a>(
                     _ => todo!(),
                 };
 
-                let value = builder.constant(gl, Value::Bit(decimal != 0));
+                let value =
+                    builder.constant(gl, Value::Bits(Bits::Small(u64::from(decimal != 0), 1)));
                 builder.drive(gl, scope_item.key, value); // @TODO: Resolve ident
             }
             Statement::ParBlock => todo!(),
@@ -591,7 +608,7 @@ fn statements_to_process<'a>(
 
                         builder = builder.watch(gl, signals);
 
-                        let mut acc = builder.constant(gl, Value::Bit(true));
+                        let mut acc = builder.constant(gl, Value::Bits(Bits::Small(1, 1)));
                         for ((condition, signal), before) in conditions.into_iter().zip(before) {
                             use WatchCondition as C;
 
@@ -606,7 +623,7 @@ fn statements_to_process<'a>(
                                     let t = builder.binary_neg(gl, after);
                                     builder.and(gl, before, t)
                                 }
-                                C::None => builder.constant(gl, Value::Bit(true)),
+                                C::None => builder.constant(gl, Value::Bits(Bits::Small(1, 1))),
                             };
                             acc = builder.and(gl, acc, cond);
                         }

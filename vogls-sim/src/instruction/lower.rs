@@ -31,12 +31,12 @@ pub fn lower_process_to_vm(
         for instr in &bb.instrs {
             if let Some(dst) = instr.get_destination_variable() {
                 match &gl.vars.get(dst).unwrap().ty {
-                    Type::Bit => {
+                    Type::Bits(size) => {
                         stack_map.insert(
                             dst,
                             StackRef {
                                 offset: bit_stack_top,
-                                size: 1,
+                                size: (*size as usize).div_ceil(8),
                             },
                         );
                         bit_stack_top += 1;
@@ -89,14 +89,10 @@ pub fn lower_process_to_vm(
             use VmInstruction as VI;
             let instr = match instr {
                 I::ConstantBit(d, value) => VI::ConstantBit(var(*d), value.clone()),
-                I::UnaryBit(d, op, s) => VI::UnaryBit(var(*d), *op, var(*s)),
-                I::BinaryBit(d, op, s1, s2) => VI::BinaryBit(var(*d), *op, var(*s1), var(*s2)),
-
                 I::ConstantDecimal(d, value) => VI::ConstantDecimal(var(*d), value.clone()),
-                I::UnaryDecimal(d, op, s) => VI::UnaryDecimal(var(*d), *op, var(*s)),
-                I::BinaryDecimal(d, op, s1, s2) => {
-                    VI::BinaryDecimal(var(*d), *op, var(*s1), var(*s2))
-                }
+
+                I::Unary(d, op, s) => VI::Unary(var(*d), *op, var(*s)),
+                I::Binary(d, op, s1, s2) => VI::Binary(var(*d), *op, var(*s1), var(*s2)),
 
                 I::Cast(d, s) => VI::Cast(
                     var(*d),
@@ -113,7 +109,7 @@ pub fn lower_process_to_vm(
                         .map(|arg| match arg {
                             IA::StringLiteral(s) => VIA::StringLiteral(s.clone()),
                             IA::Variable(v) => match gl.vars[*v].ty {
-                                Type::Bit => VIA::VariableBit(var(*v)),
+                                Type::Bits(size) => VIA::VariableBits(var(*v), size),
                                 Type::Decimal => VIA::VariableDecimal(var(*v)),
                             },
                         })

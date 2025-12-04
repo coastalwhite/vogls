@@ -13,7 +13,7 @@ impl fmt::Display for VmIntrinsicArg {
         match self {
             // @TODO: Quote escaping
             VmIntrinsicArg::StringLiteral(s) => write!(f, "\"{s}\""),
-            VmIntrinsicArg::VariableBit(stack_ref) => stack_ref.fmt(f),
+            VmIntrinsicArg::VariableBits(stack_ref, _size) => stack_ref.fmt(f),
             VmIntrinsicArg::VariableDecimal(stack_ref) => stack_ref.fmt(f),
         }
     }
@@ -23,14 +23,10 @@ impl fmt::Display for VmInstruction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ConstantBit(dst, value) => write!(f, "{dst} = bconst {value}"),
-            Self::UnaryBit(dst, op, src) => write!(f, "{dst} = b{} {src}", op.into_mnemonic()),
-            Self::BinaryBit(dst, op, src1, src2) => {
-                write!(f, "{dst} = b{} {src1}, {src2}", op.into_mnemonic())
-            }
             Self::ConstantDecimal(dst, value) => write!(f, "{dst} = dconst {value}"),
-            Self::UnaryDecimal(dst, op, src) => write!(f, "{dst} = d{} {src}", op.into_mnemonic()),
-            Self::BinaryDecimal(dst, op, src1, src2) => {
-                write!(f, "{dst} = d{} {src1}, {src2}", op.into_mnemonic())
+            Self::Unary(dst, op, src) => write!(f, "{dst} = {} {src}", op.into_mnemonic()),
+            Self::Binary(dst, op, src1, src2) => {
+                write!(f, "{dst} = {} {src1}, {src2}", op.into_mnemonic())
             }
             Self::Cast(dst, _, src, _) => {
                 write!(f, "{dst} = cast({src})")
@@ -85,11 +81,9 @@ impl fmt::Display for VmProcess {
             use VmInstruction as I;
             match i {
                 I::ConstantBit(_, _)
-                | I::UnaryBit(_, _, _)
-                | I::BinaryBit(_, _, _, _)
                 | I::ConstantDecimal(_, _)
-                | I::UnaryDecimal(_, _, _)
-                | I::BinaryDecimal(_, _, _, _)
+                | I::Unary(_, _, _)
+                | I::Binary(_, _, _, _)
                 | I::Cast(_, _, _, _)
                 | I::Intrinsic(_, _)
                 | I::Probe(_, _)

@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
 
 use slotmap::{SlotMap, new_key_type};
-use vogls_ir::{BinaryOp, IntrinsicOp, UnaryOp, Value};
+use vogls_ir::{BinaryOp, Bits, IntrinsicOp, UnaryOp, Value};
 
 mod instruction;
 
@@ -89,64 +89,73 @@ impl Event {
             let instr = &process.instructions[*ip];
             *ip += 1;
             match instr {
-                I::ConstantBit(var, val) => bit_stack[var.offset] = *val as u8,
-                I::UnaryBit(dst, op, src) => {
+                I::ConstantBit(var, Bits::Small(val, size)) => {
+                    if *size != 1 {
+                        todo!()
+                    }
+                    bit_stack[var.offset] = *val as u8
+                }
+                I::Unary(dst, op, src) => {
                     use UnaryOp as O;
-                    bit_stack[dst.offset] = match op {
-                        O::BinaryNeg => !bit_stack[src.offset],
-                        O::LogicalNeg => u8::from(bit_stack[src.offset] == 0),
+                    match op {
+                        O::DecimalNeg => decimal_stack[src.offset] = !decimal_stack[src.offset],
+                        O::BitNeg(size) => {
+                            if *size != 1 {
+                                todo!()
+                            }
+                            bit_stack[dst.offset] = u8::from(bit_stack[src.offset] == 0)
+                        }
                     };
                 }
-                I::BinaryBit(dst, op, lhs, rhs) => {
+                I::Binary(dst, op, lhs, rhs) => {
                     assert_eq!(dst.size, 1);
                     assert_eq!(lhs.size, 1);
                     assert_eq!(rhs.size, 1);
 
-                    let lhs = bit_stack[lhs.offset];
-                    let rhs = bit_stack[rhs.offset];
-
                     use BinaryOp as O;
-                    bit_stack[dst.offset] = match op {
-                        O::And => lhs & rhs,
-                        O::Or => lhs | rhs,
-                        O::Xor => lhs ^ rhs,
+                    match op {
+                        O::BitAnd(1) => {
+                            bit_stack[dst.offset] = bit_stack[lhs.offset] & bit_stack[rhs.offset]
+                        }
+                        O::BitOr(1) => {
+                            bit_stack[dst.offset] = bit_stack[lhs.offset] | bit_stack[rhs.offset]
+                        }
+                        O::BitXor(1) => {
+                            bit_stack[dst.offset] = bit_stack[lhs.offset] ^ bit_stack[rhs.offset]
+                        }
+                        O::BitAnd(_) | O::BitOr(_) | O::BitXor(_) => todo!(),
+                        O::DecimalAnd => {
+                            decimal_stack[dst.offset] =
+                                decimal_stack[lhs.offset] & decimal_stack[rhs.offset]
+                        }
+                        O::DecimalOr => {
+                            decimal_stack[dst.offset] =
+                                decimal_stack[lhs.offset] | decimal_stack[rhs.offset]
+                        }
+                        O::DecimalXor => {
+                            decimal_stack[dst.offset] =
+                                decimal_stack[lhs.offset] ^ decimal_stack[rhs.offset]
+                        }
                     };
                 }
 
                 I::ConstantDecimal(var, val) => decimal_stack[var.offset] = *val,
-                I::UnaryDecimal(dst, op, src) => {
-                    use UnaryOp as O;
-                    match op {
-                        O::BinaryNeg => decimal_stack[src.offset] = !decimal_stack[src.offset],
-                        O::LogicalNeg => {
-                            bit_stack[dst.offset] = u8::from(decimal_stack[src.offset] == 0)
-                        }
-                    }
-                }
-                I::BinaryDecimal(dst, op, lhs, rhs) => {
-                    let lhs = decimal_stack[lhs.offset];
-                    let rhs = decimal_stack[rhs.offset];
-
-                    use BinaryOp as O;
-                    decimal_stack[dst.offset] = match op {
-                        O::And => lhs & rhs,
-                        O::Or => lhs | rhs,
-                        O::Xor => lhs ^ rhs,
-                    };
-                }
 
                 I::Cast(dst, dst_ty, src, src_ty) => {
                     use vogls_ir::Type as T;
                     match (dst_ty, src_ty) {
-                        (T::Bit, T::Bit) | (T::Decimal, T::Decimal) => {}
-                        (T::Bit, T::Decimal) => {
+                        (T::Bits(x), T::Bits(y)) if x == y => {}
+                        (T::Decimal, T::Decimal) => {}
+
+                        (T::Bits(1), T::Decimal) => {
                             let src = decimal_stack[src.offset];
                             bit_stack[dst.offset] = (src != 0) as u8;
                         }
-                        (T::Decimal, T::Bit) => {
+                        (T::Decimal, T::Bits(1)) => {
                             let src = bit_stack[src.offset];
                             decimal_stack[dst.offset] = src as i64;
                         }
+                        _ => todo!(),
                     }
                 }
 
@@ -163,7 +172,10 @@ impl Event {
                         }
                         O::Assert => {
                             let value = match args.first() {
-                                Some(VmIntrinsicArg::VariableBit(condition)) => {
+                                Some(VmIntrinsicArg::VariableBits(condition, size)) => {
+                                    if *size != 1 {
+                                        todo!()
+                                    }
                                     bit_stack[condition.offset] != 0
                                 }
                                 Some(VmIntrinsicArg::VariableDecimal(condition)) => {
@@ -183,14 +195,27 @@ impl Event {
                 }
                 I::Probe(var, sig) => {
                     match signals.get(&sig).unwrap() {
-                        Value::Bit(v) => bit_stack[var.offset] = *v as u8,
+                        Value::Bits(Bits::Small(val, size)) => {
+                            if *size != 1 {
+                                todo!()
+                            }
+                            bit_stack[var.offset] = *val as u8
+                        }
                         Value::Decimal(v) => decimal_stack[var.offset] = *v,
                     };
                 }
                 I::Drive(sig, var) => {
                     let signal = signals.get_mut(sig).unwrap();
                     match signal {
-                        Value::Bit(_) => *signal = Value::Bit(bit_stack[var.offset] & 1 != 0),
+                        Value::Bits(Bits::Small(_, size)) => {
+                            if *size != 1 {
+                                todo!()
+                            }
+                            *signal = Value::Bits(Bits::Small(
+                                u64::from(bit_stack[var.offset] & 1 != 0),
+                                *size,
+                            ))
+                        }
                         Value::Decimal(_) => *signal = Value::Decimal(decimal_stack[var.offset]),
                     }
 

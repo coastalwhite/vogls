@@ -130,24 +130,8 @@ impl BasicBlockBuilder {
     pub fn constant(&mut self, gl: &mut GlobalContext, value: Value) -> VariableKey {
         let variable = self.next_tmp_var(gl, value.get_type());
         let i = match value {
-            Value::Bit(value) => Instruction::ConstantBit(variable, value),
+            Value::Bits(value) => Instruction::ConstantBit(variable, value),
             Value::Decimal(value) => Instruction::ConstantDecimal(variable, value),
-        };
-        self.instrs.push(i);
-        variable
-    }
-
-    pub fn unary_op(
-        &mut self,
-        gl: &mut GlobalContext,
-        op: UnaryOp,
-        src: VariableKey,
-    ) -> VariableKey {
-        let ty = gl.vars.get(src).unwrap().ty.clone();
-        let variable = self.next_tmp_var(gl, ty);
-        let i = match gl.vars[src].ty {
-            Type::Bit => Instruction::UnaryBit(variable, op, src),
-            Type::Decimal => Instruction::UnaryDecimal(variable, op, src),
         };
         self.instrs.push(i);
         variable
@@ -156,55 +140,56 @@ impl BasicBlockBuilder {
     pub fn binary_neg(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
         let ty = gl.vars[src].ty.clone();
         let dst = self.next_tmp_var(gl, ty);
-        let op = UnaryOp::BinaryNeg;
         let i = match &gl.vars[src].ty {
-            Type::Bit => Instruction::UnaryBit(dst, op, src),
-            Type::Decimal => Instruction::UnaryDecimal(dst, op, src),
+            Type::Bits(size) => Instruction::Unary(dst, UnaryOp::BitNeg(*size), src),
+            Type::Decimal => Instruction::Unary(dst, UnaryOp::DecimalNeg, src),
         };
         self.instrs.push(i);
         dst
     }
 
     pub fn logical_neg(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
-        let dst = self.next_tmp_var(gl, Type::Bit);
-        let op = UnaryOp::LogicalNeg;
-        let src = match &gl.vars[src].ty {
-            Type::Bit => src,
-            Type::Decimal => self.cast(gl, src, Type::Bit),
-        };
-        self.instrs.push(Instruction::UnaryBit(dst, op, src));
+        let dst = self.next_tmp_var(gl, Type::Bits(1));
+        let src = self.cast(gl, src, Type::Bits(1));
+        self.instrs
+            .push(Instruction::Unary(dst, UnaryOp::BitNeg(1), src));
         dst
     }
 
-    pub fn bin_op(
+    pub fn coerce_binary_bitwise(
         &mut self,
         gl: &mut GlobalContext,
-        op: BinaryOp,
         lhs: VariableKey,
         rhs: VariableKey,
-    ) -> VariableKey {
-        use BinaryOp as O;
-        use Type as T;
-
+    ) -> (VariableKey, VariableKey, VariableKey) {
         let lhs_ty = &gl.vars[lhs].ty;
         let rhs_ty = &gl.vars[rhs].ty;
 
-        let (dst, i) = match op {
-            O::And | O::Or | O::Xor => match (lhs_ty, rhs_ty) {
-                (T::Bit, _) | (_, T::Bit) => {
-                    let lhs = self.cast(gl, lhs, T::Bit);
-                    let rhs = self.cast(gl, rhs, T::Bit);
-                    let dst = self.next_tmp_var(gl, T::Bit);
-                    (dst, Instruction::BinaryBit(dst, op, lhs, rhs))
+        use Type as T;
+        match (lhs_ty, rhs_ty) {
+                (T::Bits(x), T::Bits(y)) if x == y => {
+                    let dst = self.next_tmp_var(gl, T::Bits(*x));
+                    (dst, lhs, rhs)
+                },
+                (T::Bits(x), T::Bits(y)) => {
+                    let out_size = (*x).max(*y);
+                    let lhs = self.cast(gl, lhs, T::Bits(out_size));
+                    let rhs = self.cast(gl, rhs, T::Bits(out_size));
+                    let dst = self.next_tmp_var(gl, T::Bits(out_size));
+                    (dst, lhs, rhs)
+                },
+                (T::Bits(x), _) | (_, T::Bits(x)) => {
+                    let x = *x;
+                    let lhs = self.cast(gl, lhs, T::Bits(x));
+                    let rhs = self.cast(gl, rhs, T::Bits(x));
+                    let dst = self.next_tmp_var(gl, T::Bits(x));
+                    (dst, lhs, rhs)
                 }
                 (T::Decimal, T::Decimal) => {
                     let dst = self.next_tmp_var(gl, T::Decimal);
-                    (dst, Instruction::BinaryDecimal(dst, op, lhs, rhs))
+                    (dst, lhs, rhs)
                 }
-            },
-        };
-        self.instrs.push(i);
-        dst
+        }
     }
 
     pub fn and(
@@ -213,7 +198,13 @@ impl BasicBlockBuilder {
         lhs: VariableKey,
         rhs: VariableKey,
     ) -> VariableKey {
-        self.bin_op(gl, BinaryOp::And, lhs, rhs)
+        let (dst, lhs, rhs) = self.coerce_binary_bitwise(gl, lhs, rhs);
+        let op = match &gl.vars[dst].ty {
+            Type::Bits(size) => BinaryOp::BitAnd(*size),
+            Type::Decimal => BinaryOp::DecimalAnd,
+        };
+        self.instrs.push(Instruction::Binary(dst, op, lhs, rhs));
+        dst
     }
     pub fn or(
         &mut self,
@@ -221,7 +212,13 @@ impl BasicBlockBuilder {
         lhs: VariableKey,
         rhs: VariableKey,
     ) -> VariableKey {
-        self.bin_op(gl, BinaryOp::Or, lhs, rhs)
+        let (dst, lhs, rhs) = self.coerce_binary_bitwise(gl, lhs, rhs);
+        let op = match &gl.vars[dst].ty {
+            Type::Bits(size) => BinaryOp::BitOr(*size),
+            Type::Decimal => BinaryOp::DecimalOr,
+        };
+        self.instrs.push(Instruction::Binary(dst, op, lhs, rhs));
+        dst
     }
     pub fn xor(
         &mut self,
@@ -229,7 +226,13 @@ impl BasicBlockBuilder {
         lhs: VariableKey,
         rhs: VariableKey,
     ) -> VariableKey {
-        self.bin_op(gl, BinaryOp::Xor, lhs, rhs)
+        let (dst, lhs, rhs) = self.coerce_binary_bitwise(gl, lhs, rhs);
+        let op = match &gl.vars[dst].ty {
+            Type::Bits(size) => BinaryOp::BitXor(*size),
+            Type::Decimal => BinaryOp::DecimalXor,
+        };
+        self.instrs.push(Instruction::Binary(dst, op, lhs, rhs));
+        dst
     }
     pub fn xnor(
         &mut self,

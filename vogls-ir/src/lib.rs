@@ -2,6 +2,7 @@ mod builder;
 mod format;
 
 use std::collections::HashSet;
+use std::fmt;
 
 pub use builder::{BasicBlockBuilder, ModuleBuilder};
 pub use format::{ContextFormat, DisplayContext};
@@ -14,16 +15,32 @@ new_key_type! { pub struct BasicBlockKey; }
 new_key_type! { pub struct SignalKey; }
 new_key_type! { pub struct VariableKey; }
 
+// @TODO: Do some smarter stuff here. Probably we can use the lsb to say small big and they put a
+// pointer in the u64.
+
+#[derive(Debug, Clone)]
+pub enum Bits {
+    Small(u64, VectorSize),
+}
+
+impl fmt::Display for Bits {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Bits::Small(value, size) => write!(f, "{size}'b{value:b}"),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Value {
-    Bit(bool),
+    Bits(Bits),
     Decimal(i64),
 }
 
 impl Value {
     pub fn get_type(&self) -> Type {
         match self {
-            Self::Bit(..) => Type::Bit,
+            Self::Bits(Bits::Small(_, size)) => Type::Bits(*size),
             Self::Decimal(..) => Type::Decimal,
         }
     }
@@ -83,9 +100,11 @@ pub struct Signal {
     pub ty: Type,
 }
 
+pub type VectorSize = u32;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
-    Bit,
+    Bits(VectorSize),
     Decimal,
 }
 
@@ -104,26 +123,28 @@ pub enum IntrinsicOp {
 
 #[derive(Debug, Clone, Copy)]
 pub enum UnaryOp {
-    BinaryNeg,
-    LogicalNeg,
+    BitNeg(VectorSize),
+    DecimalNeg,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub enum BinaryOp {
-    And,
-    Or,
-    Xor,
+    BitAnd(VectorSize),
+    BitOr(VectorSize),
+    BitXor(VectorSize),
+
+    DecimalAnd,
+    DecimalOr,
+    DecimalXor,
 }
 
 #[derive(Debug, Clone)]
 pub enum Instruction {
-    ConstantBit(VariableKey, bool),
-    UnaryBit(VariableKey, UnaryOp, VariableKey),
-    BinaryBit(VariableKey, BinaryOp, VariableKey, VariableKey),
-
+    ConstantBit(VariableKey, Bits),
     ConstantDecimal(VariableKey, i64),
-    UnaryDecimal(VariableKey, UnaryOp, VariableKey),
-    BinaryDecimal(VariableKey, BinaryOp, VariableKey, VariableKey),
+
+    Unary(VariableKey, UnaryOp, VariableKey),
+    Binary(VariableKey, BinaryOp, VariableKey, VariableKey),
 
     Cast(VariableKey, VariableKey),
 
@@ -140,11 +161,9 @@ impl Instruction {
     pub fn get_destination_variable(&self) -> Option<VariableKey> {
         match self {
             Self::ConstantBit(dst, _)
-            | Self::UnaryBit(dst, _, _)
-            | Self::BinaryBit(dst, _, _, _)
             | Self::ConstantDecimal(dst, _)
-            | Self::UnaryDecimal(dst, _, _)
-            | Self::BinaryDecimal(dst, _, _, _)
+            | Self::Unary(dst, _, _)
+            | Self::Binary(dst, _, _, _)
             | Self::Cast(dst, _)
             | Self::Probe(dst, _) => Some(*dst),
             Self::Intrinsic(_, _)

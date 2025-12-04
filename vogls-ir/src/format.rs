@@ -153,9 +153,12 @@ impl ContextFormat for BasicBlock {
 impl BinaryOp {
     pub const fn into_mnemonic(&self) -> &'static str {
         match self {
-            Self::And => "and",
-            Self::Or => "or",
-            Self::Xor => "xor",
+            Self::BitAnd(_) => "band",
+            Self::BitOr(_) => "bor",
+            Self::BitXor(_) => "bxor",
+            Self::DecimalAnd => "i64and",
+            Self::DecimalOr => "i64or",
+            Self::DecimalXor => "i64xor",
         }
     }
 }
@@ -163,8 +166,8 @@ impl BinaryOp {
 impl UnaryOp {
     pub const fn into_mnemonic(&self) -> &'static str {
         match self {
-            Self::BinaryNeg => "bneg",
-            Self::LogicalNeg => "lneg",
+            Self::BitNeg(_) => "bneg",
+            Self::DecimalNeg => "i64neg",
         }
     }
 }
@@ -190,26 +193,16 @@ impl ContextFormat for Instruction {
                 ctx.gl.vars.get(*var).unwrap().typed_ctx_fmt(f, ctx)?;
                 write!(f, " = dconst {val}")?;
             }
-            Self::UnaryBit(dst, op, src) | Self::UnaryDecimal(dst, op, src) => {
+            Self::Unary(dst, op, src) => {
                 ctx.gl.vars.get(*dst).unwrap().typed_ctx_fmt(f, ctx)?;
                 f.write_str(" = ")?;
-                f.write_str(match self {
-                    Self::UnaryBit(..) => "b",
-                    Self::UnaryDecimal(..) => "d",
-                    _ => unreachable!(),
-                })?;
                 f.write_str(op.into_mnemonic())?;
                 f.write_str(" ")?;
                 ctx.gl.vars.get(*src).unwrap().ctx_fmt(f, ctx)?;
             }
-            Self::BinaryBit(dst, op, src1, src2) | Self::BinaryDecimal(dst, op, src1, src2) => {
+            Self::Binary(dst, op, src1, src2) => {
                 ctx.gl.vars.get(*dst).unwrap().typed_ctx_fmt(f, ctx)?;
                 f.write_str(" = ")?;
-                f.write_str(match self {
-                    Self::BinaryBit(..) => "b",
-                    Self::BinaryDecimal(..) => "d",
-                    _ => unreachable!(),
-                })?;
                 f.write_str(op.into_mnemonic())?;
                 f.write_str(" ")?;
                 ctx.gl.vars.get(*src1).unwrap().ctx_fmt(f, ctx)?;
@@ -375,7 +368,7 @@ impl ContextFormat for Time {
 impl ContextFormat for Type {
     fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut DisplayContext<'_>) -> fmt::Result {
         match self {
-            Type::Bit => f.write_str("b1"),
+            Type::Bits(size) => write!(f, "b{size}"),
             Type::Decimal => f.write_str("d"),
         }
     }
@@ -400,8 +393,7 @@ impl ContextFormat for IntrinsicArg {
 impl ContextFormat for Value {
     fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut DisplayContext<'_>) -> fmt::Result {
         match self {
-            Value::Bit(true) => f.write_str("1"),
-            Value::Bit(false) => f.write_str("0"),
+            Value::Bits(bits) => std::fmt::Display::fmt(&bits, f),
             Value::Decimal(v) => write!(f, "{v}"),
         }
     }

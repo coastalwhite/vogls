@@ -3,7 +3,7 @@ use std::path::Path;
 use std::rc::Rc;
 
 use slotmap::SlotMap;
-use vogls_ir::{ContextFormat, GlobalContext, Value};
+use vogls_ir::{Bits, ContextFormat, GlobalContext, Value};
 use vogls_sim::{Context, Event, ScheduledEvent, VmProcess, VmProcessKey, lower_process_to_vm};
 use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{Module, ModuleItem, ModuleOrGenerateItem, NonPortModuleItem};
@@ -107,7 +107,6 @@ pub fn run(
         ));
     };
 
-
     // Create a list of all module in breadth- first order.
     // @TODO: Add a mechanism for detecting dependency loops.
     let mut module_stack: Vec<AstId<Module>> = Vec::new();
@@ -205,7 +204,7 @@ pub fn run(
     }
 
     for (_, signal) in io_signals {
-        signals.insert(signal, Value::Bit(false));
+        signals.insert(signal, Value::Bits(Bits::Small(0, 1)));
     }
 
     writeln!(ectx.stdout, "{schedule:?}")?;
