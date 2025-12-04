@@ -157,16 +157,23 @@ impl BasicBlockBuilder {
         let ty = gl.vars[src].ty.clone();
         let dst = self.next_tmp_var(gl, ty);
         let op = UnaryOp::BinaryNeg;
+        let i = match &gl.vars[src].ty {
+            Type::Bit => Instruction::UnaryBit(dst, op, src),
+            Type::Decimal => Instruction::UnaryDecimal(dst, op, src),
+        };
+        self.instrs.push(i);
+        dst
+    }
+
+    pub fn logical_neg(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
+        let dst = self.next_tmp_var(gl, Type::Bit);
+        let op = UnaryOp::LogicalNeg;
         let src = match &gl.vars[src].ty {
             Type::Bit => src,
             Type::Decimal => self.cast(gl, src, Type::Bit),
         };
         self.instrs.push(Instruction::UnaryBit(dst, op, src));
         dst
-    }
-
-    pub fn logical_neg(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
-        self.unary_op(gl, UnaryOp::LogicalNeg, src)
     }
 
     pub fn bin_op(
@@ -266,9 +273,11 @@ impl BasicBlockBuilder {
         );
     }
 
-    pub fn drive(&mut self, gl: &mut GlobalContext, signal: SignalKey, variable: VariableKey) {
+    pub fn drive(&mut self, gl: &mut GlobalContext, signal: SignalKey, src: VariableKey) {
+        let ty = gl.signals[signal].ty.clone();
+        let src = self.cast(gl, src, ty);
         gl.processes[self.process].outs.insert(signal);
-        self.instrs.push(Instruction::Drive(signal, variable));
+        self.instrs.push(Instruction::Drive(signal, src));
     }
     pub fn probe(&mut self, gl: &mut GlobalContext, signal: SignalKey) -> VariableKey {
         gl.processes[self.process].ins.insert(signal);
