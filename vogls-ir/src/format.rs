@@ -216,6 +216,13 @@ impl ContextFormat for Instruction {
                 f.write_str(", ")?;
                 ctx.gl.vars.get(*src2).unwrap().ctx_fmt(f, ctx)?;
             }
+            Self::Cast(dst, src) => {
+                ctx.gl.vars.get(*dst).unwrap().ctx_fmt(f, ctx)?;
+                f.write_str(" = cast(")?;
+                ctx.gl.vars.get(*src).unwrap().ctx_fmt(f, ctx)?;
+                f.write_str(", ")?;
+                ctx.gl.vars[*dst].ty.ctx_fmt(f, ctx)?;
+            }
             Self::Intrinsic(op, args) => {
                 f.write_str("vogls.")?;
                 f.write_str(op.into_mnemonic())?;

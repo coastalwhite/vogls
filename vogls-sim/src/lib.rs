@@ -135,6 +135,21 @@ impl Event {
                     };
                 }
 
+                I::Cast(dst, dst_ty, src, src_ty) => {
+                    use vogls_ir::Type as T;
+                    match (dst_ty, src_ty) {
+                        (T::Bit, T::Bit) | (T::Decimal, T::Decimal) => {}
+                        (T::Bit, T::Decimal) => {
+                            let src = decimal_stack[src.offset];
+                            bit_stack[dst.offset] = (src != 0) as u8;
+                        }
+                        (T::Decimal, T::Bit) => {
+                            let src = bit_stack[src.offset];
+                            decimal_stack[dst.offset] = src as i64;
+                        }
+                    }
+                }
+
                 I::Intrinsic(op, args) => {
                     use IntrinsicOp as O;
 
@@ -148,11 +163,15 @@ impl Event {
                         }
                         O::Assert => {
                             let value = match args.first() {
-                                Some(VmIntrinsicArg::VariableBit(condition)) => bit_stack[condition.offset] != 0,
-                                Some(VmIntrinsicArg::VariableDecimal(condition)) => decimal_stack[condition.offset] != 0,
+                                Some(VmIntrinsicArg::VariableBit(condition)) => {
+                                    bit_stack[condition.offset] != 0
+                                }
+                                Some(VmIntrinsicArg::VariableDecimal(condition)) => {
+                                    decimal_stack[condition.offset] != 0
+                                }
                                 _ => {
                                     panic!("Invalid assert argument");
-                                },
+                                }
                             };
                             assert!(value, "failed assertion");
                         }

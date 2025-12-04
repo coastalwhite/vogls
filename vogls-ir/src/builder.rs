@@ -154,7 +154,15 @@ impl BasicBlockBuilder {
     }
 
     pub fn binary_neg(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
-        self.unary_op(gl, UnaryOp::BinaryNeg, src)
+        let ty = gl.vars[src].ty.clone();
+        let dst = self.next_tmp_var(gl, ty);
+        let op = UnaryOp::BinaryNeg;
+        let src = match &gl.vars[src].ty {
+            Type::Bit => src,
+            Type::Decimal => self.cast(gl, src, Type::Bit),
+        };
+        self.instrs.push(Instruction::UnaryBit(dst, op, src));
+        dst
     }
 
     pub fn logical_neg(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
@@ -174,22 +182,22 @@ impl BasicBlockBuilder {
         let lhs_ty = &gl.vars[lhs].ty;
         let rhs_ty = &gl.vars[rhs].ty;
 
-        let i = match op {
+        let (dst, i) = match op {
             O::And | O::Or | O::Xor => match (lhs_ty, rhs_ty) {
-                (T::Decimal, _) | (_, T::Decimal) => {
-                    let lhs = self.bit_to_decimal(gl, lhs);
-                    let rhs = self.bit_to_decimal(gl, rhs);
+                (T::Bit, _) | (_, T::Bit) => {
+                    let lhs = self.cast(gl, lhs, T::Bit);
+                    let rhs = self.cast(gl, rhs, T::Bit);
+                    let dst = self.next_tmp_var(gl, T::Bit);
+                    (dst, Instruction::BinaryBit(dst, op, lhs, rhs))
+                }
+                (T::Decimal, T::Decimal) => {
                     let dst = self.next_tmp_var(gl, T::Decimal);
-                    Instruction::BinaryBit(dst, op, lhs, rhs)
+                    (dst, Instruction::BinaryDecimal(dst, op, lhs, rhs))
                 }
             },
         };
-        let i = match output_ty {
-            Type::Bit => Instruction::BinaryBit(variable, op, lhs, rhs),
-            Type::Decimal => Instruction::BinaryDecimal(variable, op, lhs, rhs),
-        };
         self.instrs.push(i);
-        variable
+        dst
     }
 
     pub fn and(
@@ -429,14 +437,13 @@ impl BasicBlockBuilder {
         self.instrs.push(Instruction::Signal(signal));
     }
 
-    fn bit_to_decimal(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
-        match gl.vars[src].ty {
-            Type::Bit => {
-                let dst = self.next_tmp_var(gl, Type::Decimal);
-                self.instrs.push(Instruction::BitToDecimal(dst, src));
-                dst
-            }
-            Type::Decimal => src,
+    fn cast(&mut self, gl: &mut GlobalContext, src: VariableKey, ty: Type) -> VariableKey {
+        if &gl.vars[src].ty == &ty {
+            return src;
         }
+
+        let dst = self.next_tmp_var(gl, ty);
+        self.instrs.push(Instruction::Cast(dst, src));
+        dst
     }
 }

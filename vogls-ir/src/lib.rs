@@ -83,7 +83,7 @@ pub struct Signal {
     pub ty: Type,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
     Bit,
     Decimal,
@@ -125,7 +125,7 @@ pub enum Instruction {
     UnaryDecimal(VariableKey, UnaryOp, VariableKey),
     BinaryDecimal(VariableKey, BinaryOp, VariableKey, VariableKey),
 
-    BitToDecimal(VariableKey, VariableKey),
+    Cast(VariableKey, VariableKey),
 
     Intrinsic(IntrinsicOp, Vec<IntrinsicArg>),
     Probe(VariableKey, SignalKey),
@@ -145,7 +145,7 @@ impl Instruction {
             | Self::ConstantDecimal(dst, _)
             | Self::UnaryDecimal(dst, _, _)
             | Self::BinaryDecimal(dst, _, _, _)
-            | Self::BitToDecimal(dst, _)
+            | Self::Cast(dst, _)
             | Self::Probe(dst, _) => Some(*dst),
             Self::Intrinsic(_, _)
             | Self::Drive(_, _)

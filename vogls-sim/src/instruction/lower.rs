@@ -98,6 +98,13 @@ pub fn lower_process_to_vm(
                     VI::BinaryDecimal(var(*d), *op, var(*s1), var(*s2))
                 }
 
+                I::Cast(d, s) => VI::Cast(
+                    var(*d),
+                    gl.vars[*d].ty.clone(),
+                    var(*s),
+                    gl.vars[*s].ty.clone(),
+                ),
+
                 I::Intrinsic(op, args) => {
                     use IntrinsicArg as IA;
                     use VmIntrinsicArg as VIA;

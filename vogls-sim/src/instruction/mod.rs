@@ -1,4 +1,4 @@
-use vogls_ir::{BinaryOp, IntrinsicOp, Time, UnaryOp};
+use vogls_ir::{BinaryOp, IntrinsicOp, Time, Type, UnaryOp};
 
 mod format;
 mod lower;
@@ -30,6 +30,8 @@ pub enum VmInstruction {
     ConstantDecimal(StackRef, i64),
     UnaryDecimal(StackRef, UnaryOp, StackRef),
     BinaryDecimal(StackRef, BinaryOp, StackRef, StackRef),
+
+    Cast(StackRef, Type, StackRef, Type),
 
     Intrinsic(IntrinsicOp, Vec<VmIntrinsicArg>),
 
