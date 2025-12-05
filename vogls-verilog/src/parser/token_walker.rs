@@ -168,4 +168,9 @@ impl<'a> TokenWalker<'a> {
         }
         Ok(next)
     }
+
+    pub fn peek_content(&self) -> &str {
+        let t = self.get(self.offset).unwrap();
+        &self.content(*t.file)[t.span.start()..]
+    }
 }
