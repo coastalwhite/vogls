@@ -168,6 +168,8 @@ impl UnaryOp {
         match self {
             Self::BitNeg(_) => "bneg",
             Self::DecimalNeg => "i64neg",
+            Self::BitReduceAnd(_) => "bredand",
+            Self::BitReduceOr(_) => "bredor",
         }
     }
 }
@@ -215,6 +217,7 @@ impl ContextFormat for Instruction {
                 ctx.gl.vars.get(*src).unwrap().ctx_fmt(f, ctx)?;
                 f.write_str(", ")?;
                 ctx.gl.vars[*dst].ty.ctx_fmt(f, ctx)?;
+                f.write_str(")")?;
             }
             Self::Intrinsic(op, args) => {
                 f.write_str("vogls.")?;

@@ -179,7 +179,7 @@ impl<'a> Takeable<'a> for Base {
             Some(b'D' | b'd') => (&s[1..], Self::Decimal),
             Some(b'B' | b'b') => (&s[1..], Self::Binary),
             Some(b'O' | b'o') => (&s[1..], Self::Octal),
-            Some(b'X' | b'x') => (&s[1..], Self::Hexadecimal),
+            Some(b'H' | b'h') => (&s[1..], Self::Hexadecimal),
             Some(c) => unreachable!("found: {}", char::from(c)),
             None => unreachable!(),
         }
@@ -224,6 +224,12 @@ impl<'a> Takeable<'a> for Decimal {
         }
 
         todo!("Big Decimal Numbers");
+    }
+}
+
+impl Size {
+    pub fn as_u32(self) -> u32 {
+        self.0.into()
     }
 }
 
@@ -293,7 +299,7 @@ impl<'a> Takeable<'a> for BinaryBits {
         let mut offset = 0;
         let mut num_bits = 0;
         loop {
-            let Some(b) = bytes.next().filter(|b| matches!(b, b'0'..=b'1')) else {
+            let Some(b) = bytes.next().filter(|b| matches!(b, b'0'..=b'1' | b'_')) else {
                 return (&s[offset..], BinaryBits(Bits::Small(value)));
             };
 
@@ -329,7 +335,7 @@ impl<'a> Takeable<'a> for OctalBits {
         let mut offset = 0;
         let mut num_bits = 0;
         loop {
-            let Some(b) = bytes.next().filter(|b| matches!(b, b'0'..=b'7')) else {
+            let Some(b) = bytes.next().filter(|b| matches!(b, b'0'..=b'7' | b'_')) else {
                 return (&s[offset..], OctalBits(Bits::Small(value)));
             };
 
@@ -369,7 +375,10 @@ impl<'a> Takeable<'a> for HexadecimalBits {
         let mut offset = 0;
         let mut num_bits = 0;
         loop {
-            let Some(b) = bytes.next().filter(|b| is_hexadecimal_digit(*b)) else {
+            let Some(b) = bytes
+                .next()
+                .filter(|b| is_hexadecimal_digit(*b) | (*b == b'_'))
+            else {
                 return (&s[offset..], HexadecimalBits(Bits::Small(value)));
             };
 

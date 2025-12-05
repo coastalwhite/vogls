@@ -4,7 +4,7 @@ use super::{StackRef, VmInstruction, VmIntrinsicArg, VmProcess, VmSignalKey};
 
 impl fmt::Display for StackRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "b{}@{}", self.size, self.offset)
+        write!(f, "b{}", self.offset)
     }
 }
 

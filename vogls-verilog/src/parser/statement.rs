@@ -5,7 +5,6 @@ use crate::ast::statement::{
     Statement, SystemTaskEnable, SystemTaskIdentifier, VariableLValue,
 };
 use crate::ast::{AstIdRange, DecimalRef, Identifier, TextRef};
-use crate::parser::ItemParsable;
 use crate::parser::token_walker::TokenRange;
 use crate::tokenizer::Token;
 
@@ -91,7 +90,7 @@ impl<'a> Consumable<'a> for NetLValue {
 
         // @Incomplete
 
-        let ident = Identifier::item_parse(p, arenas, diagnostics.as_deref_mut())?;
+        let ident = item_parse::<Identifier>(p, arenas, diagnostics.as_deref_mut())?;
 
         Ok(Self { ident })
     }
@@ -110,7 +109,7 @@ impl<'a> Consumable<'a> for VariableLValue {
 
         // @Incomplete
 
-        let ident = Identifier::item_parse(p, arenas, diagnostics.as_deref_mut())?;
+        let ident = item_parse::<Identifier>(p, arenas, diagnostics.as_deref_mut())?;
 
         Ok(Self { ident })
     }
@@ -426,7 +425,7 @@ impl<'a> Consumable<'a> for SystemTaskEnable {
         // system_task_enable ::= system_task_identifier [ ( [ expression ] { , [ expression ] } ) ] ;
 
         let system_task_identifier =
-            SystemTaskIdentifier::item_parse(p, arenas, diagnostics.as_deref_mut())?;
+            item_parse::<SystemTaskIdentifier>(p, arenas, diagnostics.as_deref_mut())?;
         let mut expressions = AstIdRange::default();
         if p.tkw.next_if_equals(T::LeftParen) {
             expressions = parse_zero_or_more_delimited::<Expr>(
@@ -460,19 +459,9 @@ impl<'a> Consumable<'a> for SystemTaskIdentifier {
             .next_expect(T::DollarIdent, diagnostics.as_deref_mut())?;
         let (span, file) = (*t.span, *t.file);
         let content = &p.tkw.content(file)[span.start() + 1..span.end()];
-        Self::from_item(content, arenas, diagnostics.as_deref_mut())
-    }
-}
-impl<'a> ItemParsable<'a> for SystemTaskIdentifier {
-    type Item = &'a str;
-    fn from_item(
-        item: Self::Item,
-        arenas: &mut AstArenas,
-        _diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
         let start = arenas.text.len();
-        let end = start + item.len();
-        arenas.text.push_str(item);
+        let end = start + content.len();
+        arenas.text.push_str(content);
         Ok(Self(TextRef { start, end }))
     }
 }

@@ -184,7 +184,7 @@ impl Tokenized {
                         let initial_length = s.len();
 
                         fn is_valid_prefix(s: &str) -> bool {
-                            let pattern = &['D', 'd', 'B', 'b', 'O', 'o', 'X', 'x'];
+                            let pattern = &['D', 'd', 'B', 'b', 'O', 'o', 'H', 'h'];
                             s.starts_with('\'')
                                 && if s[1..].starts_with(&['S', 's']) {
                                     s[2..].starts_with(pattern)
@@ -219,7 +219,7 @@ impl Tokenized {
                                 Base::Octal => into_bits(OctalBits::take(s)),
                                 Base::Hexadecimal => into_bits(HexadecimalBits::take(s)),
                             };
-
+                            
                             let length = initial_length - s.len();
                             (T::Number, length)
                         }

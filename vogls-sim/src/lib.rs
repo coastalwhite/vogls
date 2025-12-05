@@ -90,10 +90,10 @@ impl Event {
             *ip += 1;
             match instr {
                 I::ConstantBit(var, Bits::Small(val, size)) => {
-                    if *size != 1 {
-                        todo!()
+                    for i in 0..size.div_ceil(8) {
+                        let i = i as usize;
+                        bit_stack[var.offset + i] = val.to_le_bytes()[i];
                     }
-                    bit_stack[var.offset] = *val as u8
                 }
                 I::Unary(dst, op, src) => {
                     use UnaryOp as O;
@@ -105,25 +105,44 @@ impl Event {
                             }
                             bit_stack[dst.offset] = u8::from(bit_stack[src.offset] == 0)
                         }
+                        O::BitReduceOr(size) => {
+                            let result = bit_stack[src.offset..][..size.div_ceil(8) as usize]
+                                .iter()
+                                .any(|b| *b != 0);
+                            bit_stack[dst.offset] = u8::from(result);
+                        }
+                        O::BitReduceAnd(size) => {
+                            let num_bytes = size.div_ceil(8) as usize;
+                            let result = bit_stack[src.offset..][..num_bytes - 1]
+                                .iter()
+                                .all(|b| *b == 0xFF);
+                            let mask = (1u8 << size % 8).wrapping_sub(1);
+                            let result = result & (bit_stack[num_bytes - 1] & mask == mask);
+                            bit_stack[dst.offset] = u8::from(result);
+                        }
                     };
                 }
                 I::Binary(dst, op, lhs, rhs) => {
-                    assert_eq!(dst.size, 1);
-                    assert_eq!(lhs.size, 1);
-                    assert_eq!(rhs.size, 1);
-
                     use BinaryOp as O;
                     match op {
-                        O::BitAnd(1) => {
-                            bit_stack[dst.offset] = bit_stack[lhs.offset] & bit_stack[rhs.offset]
+                        O::BitAnd(n) => {
+                            for i in 0..n.div_ceil(8) as usize {
+                                bit_stack[dst.offset + i] =
+                                    bit_stack[lhs.offset + i] & bit_stack[rhs.offset + i]
+                            }
                         }
-                        O::BitOr(1) => {
-                            bit_stack[dst.offset] = bit_stack[lhs.offset] | bit_stack[rhs.offset]
+                        O::BitOr(n) => {
+                            for i in 0..n.div_ceil(8) as usize {
+                                bit_stack[dst.offset + i] =
+                                    bit_stack[lhs.offset + i] | bit_stack[rhs.offset + i];
+                            }
                         }
-                        O::BitXor(1) => {
-                            bit_stack[dst.offset] = bit_stack[lhs.offset] ^ bit_stack[rhs.offset]
+                        O::BitXor(n) => {
+                            for i in 0..n.div_ceil(8) as usize {
+                                bit_stack[dst.offset + i] =
+                                    bit_stack[lhs.offset + i] ^ bit_stack[rhs.offset + i];
+                            }
                         }
-                        O::BitAnd(_) | O::BitOr(_) | O::BitXor(_) => todo!(),
                         O::DecimalAnd => {
                             decimal_stack[dst.offset] =
                                 decimal_stack[lhs.offset] & decimal_stack[rhs.offset]
@@ -155,7 +174,7 @@ impl Event {
                             let src = bit_stack[src.offset];
                             decimal_stack[dst.offset] = src as i64;
                         }
-                        _ => todo!(),
+                        _ => todo!("cast: {src_ty:?} -> {dst_ty:?}"),
                     }
                 }
 
@@ -196,10 +215,9 @@ impl Event {
                 I::Probe(var, sig) => {
                     match signals.get(&sig).unwrap() {
                         Value::Bits(Bits::Small(val, size)) => {
-                            if *size != 1 {
-                                todo!()
+                            for i in 0..size.div_ceil(8) as usize {
+                                bit_stack[var.offset + i] = val.to_le_bytes()[i];
                             }
-                            bit_stack[var.offset] = *val as u8
                         }
                         Value::Decimal(v) => decimal_stack[var.offset] = *v,
                     };
@@ -208,13 +226,11 @@ impl Event {
                     let signal = signals.get_mut(sig).unwrap();
                     match signal {
                         Value::Bits(Bits::Small(_, size)) => {
-                            if *size != 1 {
-                                todo!()
-                            }
-                            *signal = Value::Bits(Bits::Small(
-                                u64::from(bit_stack[var.offset] & 1 != 0),
-                                *size,
-                            ))
+                            let mut value = [0u8; 8];
+                            let nbytes = size.div_ceil(8) as usize;
+                            value[..nbytes].copy_from_slice(&bit_stack[var.offset..][..nbytes]);
+                            let value = u64::from_le_bytes(value);
+                            *signal = Value::Bits(Bits::Small(value, *size))
                         }
                         Value::Decimal(_) => *signal = Value::Decimal(decimal_stack[var.offset]),
                     }

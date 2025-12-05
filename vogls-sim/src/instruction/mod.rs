@@ -11,7 +11,6 @@ pub struct VmSignalKey(pub u64);
 #[derive(Debug, Clone, Copy)]
 pub struct StackRef {
     pub offset: usize,
-    pub size: usize,
 }
 
 #[derive(Debug)]

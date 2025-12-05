@@ -1,4 +1,4 @@
-use super::constant_expr::ConstantMinTypMaxExpression;
+use super::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression};
 use super::expr::Expr;
 use super::statement::{NetLValue, Statement};
 use super::{AstId, AstIdRange, AstItem, Identifier};
@@ -104,9 +104,8 @@ pub struct OutputDeclaration {
 // range ::= [ msb_constant_expression : lsb_constant_expression ]
 #[derive(Clone, Copy)]
 pub struct Range {
-    // @Incomplete: These are in fact constant expressions.
-    // msb: AstId<Expr>,
-    // lsb: AstId<Expr>,
+    pub msb: AstId<ConstantExpr>,
+    pub lsb: AstId<ConstantExpr>,
 }
 
 #[derive(Clone, Copy)]
@@ -343,6 +342,8 @@ pub enum ModuleOrGenerateItemDeclaration {
 pub struct NetDeclaration {
     // @Incomplete
     pub net_type: AstItem<NetType>,
+    pub signed: bool,
+    pub range: Option<AstId<Range>>,
     pub identifiers: AstIdRange<Identifier>,
 }
 

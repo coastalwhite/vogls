@@ -36,17 +36,15 @@ pub fn lower_process_to_vm(
                             dst,
                             StackRef {
                                 offset: bit_stack_top,
-                                size: (*size as usize).div_ceil(8),
                             },
                         );
-                        bit_stack_top += 1;
+                        bit_stack_top += (*size as usize).div_ceil(8);
                     }
                     Type::Decimal => {
                         stack_map.insert(
                             dst,
                             StackRef {
                                 offset: decimal_stack_top,
-                                size: 1,
                             },
                         );
                         decimal_stack_top += 1;

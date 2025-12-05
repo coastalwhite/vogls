@@ -150,7 +150,11 @@ impl BasicBlockBuilder {
 
     pub fn logical_neg(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
         let dst = self.next_tmp_var(gl, Type::Bits(1));
-        let src = self.cast(gl, src, Type::Bits(1));
+        let src = match &gl.vars[src].ty {
+            Type::Bits(1) => src,
+            Type::Bits(_) => self.reduce_or(gl, src),
+            Type::Decimal => self.reduce_or(gl, src),
+        };
         self.instrs
             .push(Instruction::Unary(dst, UnaryOp::BitNeg(1), src));
         dst
@@ -167,28 +171,28 @@ impl BasicBlockBuilder {
 
         use Type as T;
         match (lhs_ty, rhs_ty) {
-                (T::Bits(x), T::Bits(y)) if x == y => {
-                    let dst = self.next_tmp_var(gl, T::Bits(*x));
-                    (dst, lhs, rhs)
-                },
-                (T::Bits(x), T::Bits(y)) => {
-                    let out_size = (*x).max(*y);
-                    let lhs = self.cast(gl, lhs, T::Bits(out_size));
-                    let rhs = self.cast(gl, rhs, T::Bits(out_size));
-                    let dst = self.next_tmp_var(gl, T::Bits(out_size));
-                    (dst, lhs, rhs)
-                },
-                (T::Bits(x), _) | (_, T::Bits(x)) => {
-                    let x = *x;
-                    let lhs = self.cast(gl, lhs, T::Bits(x));
-                    let rhs = self.cast(gl, rhs, T::Bits(x));
-                    let dst = self.next_tmp_var(gl, T::Bits(x));
-                    (dst, lhs, rhs)
-                }
-                (T::Decimal, T::Decimal) => {
-                    let dst = self.next_tmp_var(gl, T::Decimal);
-                    (dst, lhs, rhs)
-                }
+            (T::Bits(x), T::Bits(y)) if x == y => {
+                let dst = self.next_tmp_var(gl, T::Bits(*x));
+                (dst, lhs, rhs)
+            }
+            (T::Bits(x), T::Bits(y)) => {
+                let out_size = (*x).max(*y);
+                let lhs = self.cast(gl, lhs, T::Bits(out_size));
+                let rhs = self.cast(gl, rhs, T::Bits(out_size));
+                let dst = self.next_tmp_var(gl, T::Bits(out_size));
+                (dst, lhs, rhs)
+            }
+            (T::Bits(x), _) | (_, T::Bits(x)) => {
+                let x = *x;
+                let lhs = self.cast(gl, lhs, T::Bits(x));
+                let rhs = self.cast(gl, rhs, T::Bits(x));
+                let dst = self.next_tmp_var(gl, T::Bits(x));
+                (dst, lhs, rhs)
+            }
+            (T::Decimal, T::Decimal) => {
+                let dst = self.next_tmp_var(gl, T::Decimal);
+                (dst, lhs, rhs)
+            }
         }
     }
 
@@ -251,7 +255,8 @@ impl BasicBlockBuilder {
         rhs: VariableKey,
     ) -> VariableKey {
         let xor = self.xor(gl, lhs, rhs);
-        let xnor = self.logical_neg(gl, xor);
+        let no_equals = self.reduce_or(gl, xor);
+        let xnor = self.binary_neg(gl, no_equals);
         xnor
     }
 
@@ -274,6 +279,33 @@ impl BasicBlockBuilder {
                 direction: ConnectionDirection::Out,
             },
         );
+    }
+
+    pub fn reduce_or(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
+        match &gl.vars[src].ty {
+            Type::Decimal => todo!(),
+            Type::Bits(1) => src,
+            Type::Bits(n) => {
+                let n = *n;
+                let dst = self.next_tmp_var(gl, Type::Bits(1));
+                self.instrs
+                    .push(Instruction::Unary(dst, UnaryOp::BitReduceOr(n), src));
+                dst
+            }
+        }
+    }
+    pub fn reduce_and(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
+        match &gl.vars[src].ty {
+            Type::Decimal => todo!(),
+            Type::Bits(1) => src,
+            Type::Bits(n) => {
+                let n = *n;
+                let dst = self.next_tmp_var(gl, Type::Bits(1));
+                self.instrs
+                    .push(Instruction::Unary(dst, UnaryOp::BitReduceAnd(n), src));
+                dst
+            }
+        }
     }
 
     pub fn drive(&mut self, gl: &mut GlobalContext, signal: SignalKey, src: VariableKey) {

@@ -3,7 +3,7 @@ use std::path::Path;
 use std::rc::Rc;
 
 use slotmap::SlotMap;
-use vogls_ir::{Bits, ContextFormat, GlobalContext, Value};
+use vogls_ir::{Bits, ContextFormat, GlobalContext, Type, Value};
 use vogls_sim::{Context, Event, ScheduledEvent, VmProcess, VmProcessKey, lower_process_to_vm};
 use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{Module, ModuleItem, ModuleOrGenerateItem, NonPortModuleItem};
@@ -206,8 +206,12 @@ pub fn run(
         });
     }
 
-    for (_, signal) in io_signals {
-        signals.insert(signal, Value::Bits(Bits::Small(0, 1)));
+    for (ir_signal, signal) in io_signals {
+        let value = match &gl.signals[ir_signal].ty {
+            Type::Bits(n) => Value::Bits(Bits::Small(0, *n)),
+            Type::Decimal => Value::Decimal(0),
+        };
+        signals.insert(signal, value);
     }
 
     writeln!(ectx.stdout, "{schedule:?}")?;

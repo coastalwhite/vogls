@@ -1,7 +1,8 @@
 use crate::ast::expr::{BinaryOperator, BitPartSelect, Expr, UnaryOperator};
 use crate::ast::{AstId, DecimalRef, Identifier, SizedNumberRef, StringRef};
+use crate::parser::ParseErrorReason;
 use crate::parser::token_walker::TokenRange;
-use crate::parser::{ItemParsable, ParseErrorReason};
+use crate::parser::utils::item_parse;
 use crate::tokenizer::Token;
 
 use super::{AstArenas, Consumable, Diagnostics, ParseErrorKind, Parser};
@@ -93,7 +94,7 @@ impl<'a> Consumable<'a> for Expr {
             current = {
                 match token.kind {
                     T::Ident => (
-                        Expr::Ident(Identifier::item_parse(
+                        Expr::Ident(item_parse::<Identifier>(
                             p,
                             arenas,
                             diagnostics.as_deref_mut(),
@@ -102,12 +103,12 @@ impl<'a> Consumable<'a> for Expr {
                     ),
                     T::Decimal => (
                         Expr::Decimal(
-                            DecimalRef::item_parse(p, arenas, diagnostics.as_deref_mut())?.item,
+                            item_parse::<DecimalRef>(p, arenas, diagnostics.as_deref_mut())?.item,
                         ),
                         span,
                     ),
                     T::Number => (
-                        Expr::Sized(SizedNumberRef::item_parse(
+                        Expr::Sized(item_parse::<SizedNumberRef>(
                             p,
                             arenas,
                             diagnostics.as_deref_mut(),
@@ -116,7 +117,7 @@ impl<'a> Consumable<'a> for Expr {
                     ),
                     T::String => (
                         Expr::String(
-                            StringRef::item_parse(p, arenas, diagnostics.as_deref_mut())?.item,
+                            item_parse::<StringRef>(p, arenas, diagnostics.as_deref_mut())?.item,
                         ),
                         span,
                     ),

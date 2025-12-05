@@ -162,17 +162,26 @@ pub fn lower_module_to_ir(
                         match module_or_generate_item_declaration {
                             ModuleOrGenerateItemDeclaration::Net(id) => {
                                 let net_declaration = arenas.get(*id);
+                                let width = match net_declaration.range {
+                                    None => 1,
+                                    Some(range) => {
+                                        let range = arenas.get(range);
+                                        let msb = eval_constant_expr(gl, &mut scope, arenas.get(range.msb), arenas);
+                                        let lsb = eval_constant_expr(gl, &mut scope, arenas.get(range.lsb), arenas);
+                                        msb - lsb + 1
+                                    }
+                                } as u32;
                                 for ident in net_declaration.identifiers.iter() {
                                     let ident = arenas.get(ident);
                                     let ident = arenas.get_ident(ident.0);
                                     let key = gl.signals.insert(Signal {
                                         name: ident.into(),
-                                        ty: Type::Bits(1),
+                                        ty: Type::Bits(width),
                                     });
                                     scope.push(
                                         ident,
                                         ScopeItem::Signal(SignalScopeItem {
-                                            ty: Type::Bits(1),
+                                            ty: Type::Bits(width),
                                             key,
                                         }),
                                     );
@@ -801,7 +810,30 @@ fn lower_expr<'a>(
 
             builder.constant(gl, Value::Decimal(decimal))
         }
-        Expr::Sized(_) => todo!(),
+        Expr::Sized(sized) => {
+            let sized = &arenas.sized_numbers[sized.item.at];
+            let Some(size) = sized.size else { todo!() };
+            let crate::number::Bits::Small(v) = sized.value else {
+                todo!()
+            };
+            builder.constant(gl, Value::Bits(Bits::Small(v, size.as_u32())))
+        }
         Expr::String(_) => todo!(),
     }
+}
+
+fn eval_constant_expr<'a>(
+    _gl: &mut GlobalContext,
+    _scope: &mut Scope<&'a str, ScopeItem>,
+    expr: &ConstantExpr,
+    arenas: &'a AstArenas,
+) -> u64 {
+    let ConstantExpr::Primary(primary) = expr;
+    let ConstantPrimary::Number(number) = primary else {
+        todo!();
+    };
+    let Decimal::Small(v) = arenas.decimals[number.at] else {
+        todo!()
+    };
+    v
 }

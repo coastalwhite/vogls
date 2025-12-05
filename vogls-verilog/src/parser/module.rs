@@ -1,5 +1,5 @@
 use crate::ast::Identifier;
-use crate::ast::constant_expr::ConstantMinTypMaxExpression;
+use crate::ast::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression};
 use crate::ast::expr::Expr;
 use crate::ast::module::{
     AlwaysConstruct, ContinousAssign, GateInstantiation, InitialConstruct, InoutDeclaration,
@@ -8,10 +8,9 @@ use crate::ast::module::{
     NInputGateInstance, NInputGateInstantiation, NInputGateType, NameOfGateInstance,
     NamedPortConnection, NetAssignment, NetDeclaration, NetType, NonPortModuleItem,
     OutputDeclaration, ParamAssignment, ParameterDeclaration, Port, PortDeclaration,
-    PortExpression, PortReference, RegDeclaration,
+    PortExpression, PortReference, Range, RegDeclaration,
 };
 use crate::ast::statement::{NetLValue, Statement};
-use crate::parser::ItemParsable;
 use crate::tokenizer::Token;
 
 use super::{AstArenas, Consumable, ParseErrorKind, Parser};
@@ -37,7 +36,7 @@ impl<'a> Consumable<'a> for Module {
         // @Incomplete: { attribute_instance }
         p.tkw
             .next_expect(T::KeywordModule, diagnostics.as_deref_mut())?;
-        let module_identifier = Identifier::item_parse(p, arenas, diagnostics.as_deref_mut())?;
+        let module_identifier = item_parse::<Identifier>(p, arenas, diagnostics.as_deref_mut())?;
         // @Incomplete: [ module_parameter_port_list ]
         let ports = if p.tkw.next_if_equals(T::LeftParen) {
             let peeked = p.tkw.try_get(p.tkw.offset, diagnostics.as_deref_mut())?;
@@ -221,7 +220,7 @@ impl<'a> Consumable<'a> for PortReference {
 
         // @Incomplete: [ [ constant_range_expression ] ]
 
-        let identifier = Identifier::item_parse(p, arenas, diagnostics.as_deref_mut())?;
+        let identifier = item_parse::<Identifier>(p, arenas, diagnostics.as_deref_mut())?;
         Ok(Self { identifier })
     }
 }
@@ -279,7 +278,7 @@ impl<'a> Consumable<'a> for InoutDeclaration {
         p.tkw
             .next_expect(T::KeywordInout, diagnostics.as_deref_mut())?;
         let mut net_type = None;
-        if let Some(val) = NetType::try_item_parse(p, arenas) {
+        if let Some(val) = try_item_parse::<NetType>(p, arenas) {
             net_type = Some(val);
         }
         let signed = p.tkw.next_if_equals(T::KeywordSigned);
@@ -314,7 +313,7 @@ impl<'a> Consumable<'a> for InputDeclaration {
         p.tkw
             .next_expect(T::KeywordInput, diagnostics.as_deref_mut())?;
         let mut net_type = None;
-        if let Some(val) = NetType::try_item_parse(p, arenas) {
+        if let Some(val) = try_item_parse::<NetType>(p, arenas) {
             net_type = Some(val);
         }
         let signed = p.tkw.next_if_equals(T::KeywordSigned);
@@ -352,7 +351,7 @@ impl<'a> Consumable<'a> for OutputDeclaration {
         p.tkw
             .next_expect(T::KeywordOutput, diagnostics.as_deref_mut())?;
         let mut net_type = None;
-        if let Some(val) = NetType::try_item_parse(p, arenas) {
+        if let Some(val) = try_item_parse::<NetType>(p, arenas) {
             net_type = Some(val);
         }
         let signed = p.tkw.next_if_equals(T::KeywordSigned);
@@ -407,16 +406,6 @@ impl<'a> Consumable<'a> for NetType {
             }
         }?;
         Ok(result)
-    }
-}
-impl<'a> ItemParsable<'a> for NetType {
-    type Item = NetType;
-    fn from_item(
-        item: Self::Item,
-        _arenas: &mut AstArenas,
-        _diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
-        Ok(item)
     }
 }
 
@@ -570,7 +559,7 @@ impl<'a> Consumable<'a> for ModuleInstantiation {
         //   module_identifier [ parameter_value_assignment ]
         //   module_instance { , module_instance } ;
 
-        let module_identifier = Identifier::item_parse(p, arenas, diagnostics.as_deref_mut())?;
+        let module_identifier = item_parse::<Identifier>(p, arenas, diagnostics.as_deref_mut())?;
         let module_instances = parse_one_or_more_delimited::<ModuleInstance>(
             p,
             arenas,
@@ -599,7 +588,7 @@ impl<'a> Consumable<'a> for ModuleInstance {
         // module_instance ::= name_of_module_instance ( [ list_of_port_connections ] )
 
         let name_of_module_instance =
-            Identifier::item_parse(p, arenas, diagnostics.as_deref_mut())?;
+            item_parse::<Identifier>(p, arenas, diagnostics.as_deref_mut())?;
         p.tkw
             .next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
         let list_of_port_connections =
@@ -659,7 +648,7 @@ impl<'a> Consumable<'a> for NamedPortConnection {
         // named_port_connection ::= { attribute_instance } . port_identifier ( [ expression ] )
 
         p.tkw.next_expect(T::Dot, diagnostics.as_deref_mut())?;
-        let port_identifier = Identifier::item_parse(p, arenas, diagnostics.as_deref_mut())?;
+        let port_identifier = item_parse::<Identifier>(p, arenas, diagnostics.as_deref_mut())?;
         p.tkw
             .next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
         let expression = if !p
@@ -770,7 +759,7 @@ impl<'a> Consumable<'a> for NInputGateInstantiation {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 493
         // n_input_gatetype [drive_strength] [delay2] n_input_gate_instance { , n_input_gate_instance } ;
 
-        let gatetype = NInputGateType::item_parse(p, arenas, diagnostics.as_deref_mut())?;
+        let gatetype = item_parse::<NInputGateType>(p, arenas, diagnostics.as_deref_mut())?;
         // @Incomplete: drive_strength
         // @Incomplete: delay2
         let instances = parse_one_or_more_delimited::<NInputGateInstance>(
@@ -817,17 +806,6 @@ impl<'a> Consumable<'a> for NInputGateType {
         Ok(value)
     }
 }
-impl<'a> ItemParsable<'a> for NInputGateType {
-    type Item = NInputGateType;
-
-    fn from_item(
-        item: Self::Item,
-        _arenas: &mut AstArenas,
-        _diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
-        Ok(item)
-    }
-}
 
 impl<'a> Consumable<'a> for NInputGateInstance {
     fn consume(
@@ -868,7 +846,7 @@ impl<'a> Consumable<'a> for NameOfGateInstance {
         // name_of_gate_instance ::= gate_instance_identifier [ range ]
 
         // @Incomplete
-        let identifier = Identifier::item_parse(p, arenas, diagnostics.as_deref_mut())?;
+        let identifier = item_parse::<Identifier>(p, arenas, diagnostics.as_deref_mut())?;
 
         Ok(Self { identifier })
     }
@@ -945,7 +923,9 @@ impl<'a> Consumable<'a> for NetDeclaration {
         // | trireg [ drive_strength ] [ vectored | scalared ] [ signed ] range [ delay3 ] list_of_net_decl_assignments ;
 
         // @Incomplete
-        let net_type = NetType::item_parse(p, arenas, diagnostics.as_deref_mut())?;
+        let net_type = item_parse::<NetType>(p, arenas, diagnostics.as_deref_mut())?;
+        let signed = p.tkw.next_if_equals(T::KeywordSigned);
+        let range = try_parse::<Range>(p, arenas);
         let identifiers = parse_one_or_more_delimited::<Identifier>(
             p,
             arenas,
@@ -957,6 +937,8 @@ impl<'a> Consumable<'a> for NetDeclaration {
 
         Ok(Self {
             net_type,
+            signed,
+            range,
             identifiers,
         })
     }
@@ -1027,9 +1009,32 @@ impl<'a> Consumable<'a> for ParamAssignment {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 491
         // param_assignment ::= parameter_identifier = constant_mintypmax_expression
 
-        let param = Identifier::item_parse(p, arenas, diagnostics.as_deref_mut())?;
+        let param = item_parse::<Identifier>(p, arenas, diagnostics.as_deref_mut())?;
         p.tkw.next_expect(T::Equals, diagnostics.as_deref_mut())?;
         let constant = parse::<ConstantMinTypMaxExpression>(p, arenas, diagnostics.as_deref_mut())?;
         Ok(Self { param, constant })
+    }
+}
+
+impl<'a> Consumable<'a> for Range {
+    fn consume(
+        p: &mut Parser<'a>,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ParseErrorKind> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 492
+        // range ::= [ msb_constant_expression : lsb_constant_expression ]
+
+        p.tkw
+            .next_expect(T::LeftBrace, diagnostics.as_deref_mut())?;
+        let msb = parse::<ConstantExpr>(p, arenas, diagnostics.as_deref_mut())?;
+        p.tkw.next_expect(T::Colon, diagnostics.as_deref_mut())?;
+        let lsb = parse::<ConstantExpr>(p, arenas, diagnostics.as_deref_mut())?;
+        p.tkw
+            .next_expect(T::RightBrace, diagnostics.as_deref_mut())?;
+
+        Ok(Self { msb, lsb })
     }
 }

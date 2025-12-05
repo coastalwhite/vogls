@@ -26,6 +26,7 @@ pub enum Bits {
 impl fmt::Display for Bits {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Bits::Small(value, size) if size % 4 == 0 => write!(f, "{size}'h{value:X}"),
             Bits::Small(value, size) => write!(f, "{size}'b{value:b}"),
         }
     }
@@ -125,6 +126,9 @@ pub enum IntrinsicOp {
 pub enum UnaryOp {
     BitNeg(VectorSize),
     DecimalNeg,
+
+    BitReduceOr(VectorSize),
+    BitReduceAnd(VectorSize),
 }
 
 #[derive(Debug, Clone, Copy)]
