@@ -1,10 +1,10 @@
 use crate::ast::expr::{BinaryOperator, BitPartSelect, Expr, UnaryOperator};
 use crate::ast::{AstId, DecimalRef, Identifier, SizedNumberRef, StringRef};
-use crate::parser::ItemParsable;
+use crate::parser::{ItemParsable, ParseErrorReason};
 use crate::span::Span;
 use crate::tokenizer::{FromLexerError, Token};
 
-use super::{AstArenas, Consumable, ParseError, Parser};
+use super::{AstArenas, Consumable, Diagnostics, ParseError, ParseErrorKind, Parser};
 
 pub(crate) type BindingPower = u8;
 
@@ -64,8 +64,11 @@ fn token_to_binary_op(t: Token) -> Option<(u8, u8, BinaryOperator)> {
     }
 }
 impl<'a> Consumable<'a> for Expr {
-    fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
-        use ParseError as E;
+    fn consume(
+        p: &mut Parser<'a>,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<(Self, Span), ParseErrorKind> {
         use Token as T;
 
         p.exprs_sp.clear();
@@ -82,22 +85,53 @@ impl<'a> Consumable<'a> for Expr {
                 }};
             }
 
-            let token = p.tkw.try_get(p.tkw.offset)?;
+            let token = p.tkw.try_get(p.tkw.offset, diagnostics.as_deref_mut())?;
             let span = *token.span;
             current = {
                 match token.kind {
-                    T::Ident => (Expr::Ident(Identifier::item_parse(p, arenas)?), span),
-                    T::Decimal => (Expr::Decimal(DecimalRef::item_parse(p, arenas)?.item), span),
-                    T::Number => (Expr::Sized(SizedNumberRef::item_parse(p, arenas)?), span),
-                    T::String => (Expr::String(StringRef::item_parse(p, arenas)?.item), span),
+                    T::Ident => (
+                        Expr::Ident(Identifier::item_parse(
+                            p,
+                            arenas,
+                            diagnostics.as_deref_mut(),
+                        )?),
+                        span,
+                    ),
+                    T::Decimal => (
+                        Expr::Decimal(
+                            DecimalRef::item_parse(p, arenas, diagnostics.as_deref_mut())?.item,
+                        ),
+                        span,
+                    ),
+                    T::Number => (
+                        Expr::Sized(SizedNumberRef::item_parse(
+                            p,
+                            arenas,
+                            diagnostics.as_deref_mut(),
+                        )?),
+                        span,
+                    ),
+                    T::String => (
+                        Expr::String(
+                            StringRef::item_parse(p, arenas, diagnostics.as_deref_mut())?.item,
+                        ),
+                        span,
+                    ),
                     T::LeftParen => {
                         p.tkw.offset += 1;
                         deepen!(StackItem::Paren, 0, span)
-                    },
+                    }
                     t => {
                         let t = *t;
                         p.tkw.next();
-                        let (r_bp, op) = token_to_prefix_op(t).ok_or(E::unexpected_token())?;
+                        let (r_bp, op) = token_to_prefix_op(t).ok_or_else(|| {
+                            if let Some(diagnostics) = diagnostics.as_deref_mut() {
+                                diagnostics
+                                    .errors
+                                    .push((span, ParseErrorReason::UnexpectedToken(t)));
+                            }
+                            ParseErrorKind::UnexpectedToken
+                        })?;
                         deepen!(StackItem::Unary(op), r_bp, span);
                     }
                 }
@@ -153,10 +187,12 @@ impl<'a> Consumable<'a> for Expr {
 
                 match item {
                     StackItem::Paren => {
-                        p.tkw.next_expect(T::RightParen)?;
+                        p.tkw
+                            .next_expect(T::RightParen, diagnostics.as_deref_mut())?;
                     }
                     StackItem::Brace(subject) => {
-                        p.tkw.next_expect(T::RightBrace)?;
+                        p.tkw
+                            .next_expect(T::RightBrace, diagnostics.as_deref_mut())?;
                         let braced = arenas.add_tuple(current);
                         let bitpartselect = BitPartSelect { subject, braced };
                         current = (Expr::BitPartSelect(bitpartselect), location)
@@ -170,7 +206,7 @@ impl<'a> Consumable<'a> for Expr {
                         current = (Expr::Binary(op, lhs, rhs), location)
                     }
                     StackItem::TernaryS1(condition) => {
-                        p.tkw.next_expect(T::Colon)?;
+                        p.tkw.next_expect(T::Colon, diagnostics.as_deref_mut())?;
                         let truthy = arenas.add_tuple(current);
                         deepen!(StackItem::TernaryS2(condition, truthy), bp, loc);
                     }

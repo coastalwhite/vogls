@@ -7,13 +7,17 @@ use crate::ast::{
 };
 use crate::number::{Decimal, SizedNumber};
 use crate::span::Span;
-use crate::tokenizer::{FromLexerError, Takeable, Token, TokenWalker};
+use crate::tokenizer::{FromLexerError, Takeable, Token};
+pub use token_walker::TokenWalker;
+pub use diagnostics::{Diagnostics, report_error};
 
 mod constant_expr;
 mod expr;
 mod module;
 mod statement;
+mod token_walker;
 mod utils;
+mod diagnostics;
 // mod net;
 
 pub struct Parser<'a> {
@@ -91,94 +95,13 @@ impl ParseError {
         }
     }
 
-    pub fn report(&self, path: &str, content: &str, out: &mut String) -> std::fmt::Result {
-        use std::fmt::Write;
-        writeln!(out, "Failed to read file. Reason: {:?}", self.reason)?;
-        if let Some(location) = self.location {
-            let lines = lines_with_offset(&content);
-            let start_line =
-                match lines.binary_search_by_key(&location.start(), |(offset, _)| *offset) {
-                    Ok(v) => v,
-                    Err(v) => v - 1,
-                };
-            let end_line = match lines.binary_search_by_key(&location.end(), |(offset, _)| *offset)
-            {
-                Ok(v) => v,
-                Err(v) => v - 1,
-            };
-
-            const CTX_LINES: usize = 2;
-            let ctx_start_line = start_line.saturating_sub(CTX_LINES);
-            let ctx_end_line = end_line.saturating_add(1 + CTX_LINES).min(lines.len());
-
-            writeln!(out, "[{path}:{}]:", ctx_start_line + 1)?;
-            for line in ctx_start_line..start_line {
-                let (_, line) = lines[line];
-                writeln!(out, "| {line}")?;
-            }
-
-            if start_line == end_line {
-                let (offset, line) = lines[start_line];
-                writeln!(out, "> {line}")?;
-                writeln!(
-                    out,
-                    "  {:start_pad$}{:len$}",
-                    "",
-                    "^",
-                    start_pad = location.start() - offset,
-                    len = location.len()
-                )?;
-            } else {
-                let (offset, line) = lines[start_line];
-                writeln!(out, "> {line}")?;
-                writeln!(
-                    out,
-                    "  {:start_pad$}{:len$}",
-                    "",
-                    "^",
-                    start_pad = location.start() - offset,
-                    len = line.len() - location.start() - offset,
-                )?;
-
-                for line in start_line + 1..end_line {
-                    let (_, line) = lines[line];
-                    writeln!(out, "> {line}")?;
-                    writeln!(out, "  {:len$}", "^", len = line.len(),)?;
-                }
-
-                let (offset, line) = lines[end_line];
-                writeln!(out, "> {line}")?;
-                writeln!(out, "  {:len$}", "^", len = location.end() - offset,)?;
-            }
-
-            for line in end_line.saturating_add(1).min(ctx_end_line)..ctx_end_line {
-                let (_, line) = lines[line];
-                writeln!(out, "| {line}")?;
-            }
-        }
-        Ok(())
-    }
 }
 
-fn lines_with_offset(mut s: &str) -> Vec<(usize, &str)> {
-    let original_length = s.len();
-    let mut vs = Vec::new();
-    while let Some(p) = s.find(['\n', '\r']) {
-        if s.as_bytes()[p] == b'\r' {
-            todo!();
-        }
-
-        let offset = original_length - s.len();
-        vs.push((offset, &s[..p]));
-        s = &s[p + 1..];
-    }
-
-    if !s.is_empty() {
-        let offset = original_length - s.len();
-        vs.push((offset, s));
-    }
-
-    vs
+#[derive(Debug, Clone, Copy)]
+pub enum ParseErrorKind {
+    MissingToken,
+    UnexpectedToken,
+    Incomplete,
 }
 
 #[derive(Debug, Clone)]
@@ -212,24 +135,29 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub fn parse_file(&mut self) -> Result<Ast, ParseError> {
+    pub fn parse_file(&mut self, diagnostics: Option<&mut Diagnostics>) -> Result<Ast, ()> {
         let mut arenas = AstArenas::default();
-        let modules = utils::parse_one_or_more::<Module>(self, &mut arenas)?;
-
-        Ok(Ast {
-            modules,
-            arenas,
-            path: PathBuf::default(),
-        })
+        match utils::parse_one_or_more::<Module>(self, &mut arenas, diagnostics) {
+            Ok(modules) => Ok(Ast {
+                modules,
+                arenas,
+                path: PathBuf::default(),
+            }),
+            Err(_) => Err(()),
+        }
     }
 }
 
 pub trait Consumable<'a>: Sized + Copy + 'static {
-    fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError>;
+    fn consume(
+        p: &mut Parser<'a>,
+        arenas: &mut AstArenas,
+        diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<(Self, Span), ParseErrorKind>;
     fn try_consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Option<(Self, Span)> {
         let save = p.tkw.offset;
 
-        match Self::consume(p, arenas) {
+        match Self::consume(p, arenas, None) {
             Ok(v) => Some(v),
             Err(_) => {
                 p.tkw.offset = save;
@@ -240,16 +168,26 @@ pub trait Consumable<'a>: Sized + Copy + 'static {
 }
 
 impl<'a> Consumable<'a> for Identifier {
-    fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
-        let t = p.tkw.next_expect(Token::Ident)?;
+    fn consume(
+        p: &mut Parser<'a>,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<(Self, Span), ParseErrorKind> {
+        let t = p
+            .tkw
+            .next_expect(Token::Ident, diagnostics.as_deref_mut())?;
         let (span, file) = (*t.span, *t.file);
         let content = &p.tkw.content(file)[span.as_range()];
-        Ok((Self::from_item(content, arenas)?, span))
+        Ok((Self::from_item(content, arenas, diagnostics)?, span))
     }
 }
 impl<'a> ItemParsable<'a> for Identifier {
     type Item = &'a str;
-    fn from_item(item: Self::Item, arenas: &mut AstArenas) -> Result<Self, ParseError> {
+    fn from_item(
+        item: Self::Item,
+        arenas: &mut AstArenas,
+        _diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ParseErrorKind> {
         let start = arenas.text.len();
         let end = start + item.len();
         arenas.text.push_str(item);
@@ -258,17 +196,27 @@ impl<'a> ItemParsable<'a> for Identifier {
 }
 
 impl<'a> Consumable<'a> for DecimalRef {
-    fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
-        let t = p.tkw.next_expect(Token::Decimal)?;
+    fn consume(
+        p: &mut Parser<'a>,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<(Self, Span), ParseErrorKind> {
+        let t = p
+            .tkw
+            .next_expect(Token::Decimal, diagnostics.as_deref_mut())?;
         let (span, file) = (*t.span, *t.file);
         let content = &p.tkw.content(file)[span.as_range()];
         let (_, decimal) = Decimal::take(content);
-        Ok((Self::from_item(decimal, arenas)?, span))
+        Ok((Self::from_item(decimal, arenas, diagnostics)?, span))
     }
 }
 impl<'a> ItemParsable<'a> for DecimalRef {
     type Item = Decimal;
-    fn from_item(item: Self::Item, arenas: &mut AstArenas) -> Result<Self, ParseError> {
+    fn from_item(
+        item: Self::Item,
+        arenas: &mut AstArenas,
+        _diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ParseErrorKind> {
         let at = arenas.decimals.len();
         arenas.decimals.push(item);
         Ok(Self { at })
@@ -276,17 +224,27 @@ impl<'a> ItemParsable<'a> for DecimalRef {
 }
 
 impl<'a> Consumable<'a> for SizedNumberRef {
-    fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
-        let t = p.tkw.next_expect(Token::Number)?;
+    fn consume(
+        p: &mut Parser<'a>,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<(Self, Span), ParseErrorKind> {
+        let t = p
+            .tkw
+            .next_expect(Token::Number, diagnostics.as_deref_mut())?;
         let (span, file) = (*t.span, *t.file);
         let content = &p.tkw.content(file)[span.as_range()];
         let (_, number) = SizedNumber::take(content);
-        Ok((Self::from_item(number, arenas)?, span))
+        Ok((Self::from_item(number, arenas, diagnostics)?, span))
     }
 }
 impl<'a> ItemParsable<'a> for SizedNumberRef {
     type Item = SizedNumber;
-    fn from_item(item: Self::Item, arenas: &mut AstArenas) -> Result<Self, ParseError> {
+    fn from_item(
+        item: Self::Item,
+        arenas: &mut AstArenas,
+        _diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ParseErrorKind> {
         let at = arenas.sized_numbers.len();
         arenas.sized_numbers.push(item);
         Ok(Self { at })
@@ -294,8 +252,14 @@ impl<'a> ItemParsable<'a> for SizedNumberRef {
 }
 
 impl<'a> Consumable<'a> for StringRef {
-    fn consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<(Self, Span), ParseError> {
-        let t = p.tkw.next_expect(Token::String)?;
+    fn consume(
+        p: &mut Parser<'a>,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<(Self, Span), ParseErrorKind> {
+        let t = p
+            .tkw
+            .next_expect(Token::String, diagnostics.as_deref_mut())?;
         let (span, file) = (*t.span, *t.file);
         let content = &p.tkw.content(file)[span.as_range()];
         let content = &content[1..content.len() - 1];
@@ -304,12 +268,16 @@ impl<'a> Consumable<'a> for StringRef {
             todo!()
         }
 
-        Ok((Self::from_item(content, arenas)?, span))
+        Ok((Self::from_item(content, arenas, diagnostics)?, span))
     }
 }
 impl<'a> ItemParsable<'a> for StringRef {
     type Item = &'a str;
-    fn from_item(item: Self::Item, arenas: &mut AstArenas) -> Result<Self, ParseError> {
+    fn from_item(
+        item: Self::Item,
+        arenas: &mut AstArenas,
+        _diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ParseErrorKind> {
         let start = arenas.text.len();
         let end = start + item.len();
         arenas.text.push_str(item);
@@ -319,27 +287,37 @@ impl<'a> ItemParsable<'a> for StringRef {
 
 pub trait ItemParsable<'a>: Consumable<'a> {
     type Item;
-    fn from_item(item: Self::Item, arenas: &mut AstArenas) -> Result<Self, ParseError>;
+    fn from_item(
+        item: Self::Item,
+        arenas: &mut AstArenas,
+        diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ParseErrorKind>;
     fn ast_from_item(
         item: Self::Item,
         span: Span,
         arenas: &mut AstArenas,
-    ) -> Result<AstItem<Self>, ParseError> {
-        let item = Self::from_item(item, arenas)?;
+        diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<AstItem<Self>, ParseErrorKind> {
+        let item = Self::from_item(item, arenas, diagnostics)?;
         let loc = arenas.spans.len();
         arenas.spans.push(span);
         Ok(AstItem { item, loc })
     }
 
-    fn item_parse(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Result<AstItem<Self>, ParseError> {
-        Ok(Self::item_parse_with_span(p, arenas)?.0)
+    fn item_parse(
+        p: &mut Parser<'a>,
+        arenas: &mut AstArenas,
+        diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<AstItem<Self>, ParseErrorKind> {
+        Ok(Self::item_parse_with_span(p, arenas, diagnostics)?.0)
     }
 
     fn item_parse_with_span(
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
-    ) -> Result<(AstItem<Self>, Span), ParseError> {
-        let (item, span) = Self::consume(p, arenas)?;
+        diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<(AstItem<Self>, Span), ParseErrorKind> {
+        let (item, span) = Self::consume(p, arenas, diagnostics)?;
         let loc = arenas.spans.len();
         arenas.spans.push(span);
         Ok((AstItem { item, loc }, span))

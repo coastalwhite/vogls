@@ -8,8 +8,8 @@ use vogls_sim::{Context, Event, ScheduledEvent, VmProcess, VmProcessKey, lower_p
 use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{Module, ModuleItem, ModuleOrGenerateItem, NonPortModuleItem};
 use vogls_verilog::lower::lower_module_to_ir;
-use vogls_verilog::parser::Parser;
-use vogls_verilog::tokenizer::{TokenWalker, Tokenized};
+use vogls_verilog::parser::{Diagnostics, Parser, TokenWalker, report_error};
+use vogls_verilog::tokenizer::Tokenized;
 
 mod elaborate;
 
@@ -26,13 +26,22 @@ pub fn run(
     let content: Rc<str> = std::fs::read_to_string(&path)?.into();
     let token_buffer = Tokenized::tokenize(content.clone(), Some(path.into()));
     let mut parser = Parser::new(TokenWalker::new(&token_buffer));
+    let mut diagnostics = Diagnostics::default();
 
-    let ast = match parser.parse_file() {
+    let ast = match parser.parse_file(Some(&mut diagnostics)) {
         Ok(ast) => ast,
-        Err(err) => {
-            let mut out = String::new();
-            err.report(&path.display().to_string(), &content, &mut out)?;
-            write!(ectx.stdout, "{out}")?;
+        Err(_) => {
+            for (location, err) in &diagnostics.errors {
+                let mut out = String::new();
+                report_error(
+                    err.clone(),
+                    *location,
+                    &path.display().to_string(),
+                    &content,
+                    &mut out,
+                )?;
+                write!(ectx.stdout, "{out}")?;
+            }
             return Err("failed to parse".into());
         }
     };
