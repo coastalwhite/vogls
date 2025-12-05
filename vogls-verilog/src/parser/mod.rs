@@ -6,53 +6,54 @@ use crate::ast::{
     AstId, AstIdRange, AstItem, DecimalRef, Identifier, SizedNumberRef, StringRef, TextRef,
 };
 use crate::number::{Decimal, SizedNumber};
-use crate::span::Span;
-use crate::tokenizer::{FromLexerError, Takeable, Token};
-pub use token_walker::TokenWalker;
+use crate::tokenizer::{Takeable, Token};
 pub use diagnostics::{Diagnostics, report_error};
+pub use token_walker::TokenWalker;
+
+use self::token_walker::TokenRange;
 
 mod constant_expr;
+mod diagnostics;
 mod expr;
 mod module;
 mod statement;
 mod token_walker;
 mod utils;
-mod diagnostics;
 // mod net;
 
 pub struct Parser<'a> {
     tkw: TokenWalker<'a>,
     /// A `scratchpad` to parse expressions
-    exprs_sp: Vec<(expr::StackItem, expr::BindingPower, Span)>,
+    exprs_sp: Vec<(expr::StackItem, expr::BindingPower, TokenRange)>,
 }
 
 #[derive(Default)]
 pub struct AstArenas {
     pub nodes: Arena,
-    pub spans: Vec<Span>,
+    pub spans: Vec<TokenRange>,
 
     pub text: String,
     pub decimals: Vec<Decimal>,
     pub sized_numbers: Vec<SizedNumber>,
 }
 impl AstArenas {
-    fn add<T: Copy + 'static>(&mut self, item: T, span: Span) -> AstId<T> {
+    fn add<T: Copy + 'static>(&mut self, item: T, range: TokenRange) -> AstId<T> {
         let loc = self.spans.len();
-        self.spans.push(span);
+        self.spans.push(range);
         AstId {
             node: self.nodes.add(item),
             loc,
         }
     }
 
-    fn add_tuple<T: Copy + 'static>(&mut self, (item, span): (T, Span)) -> AstId<T> {
+    fn add_tuple<T: Copy + 'static>(&mut self, (item, span): (T, TokenRange)) -> AstId<T> {
         self.add(item, span)
     }
 
     fn add_range<T: Copy + 'static>(
         &mut self,
         items: impl IntoIterator<Item = T>,
-        spans: impl IntoIterator<Item = Span>,
+        spans: impl IntoIterator<Item = TokenRange>,
     ) -> AstIdRange<T> {
         let loc = self.spans.len();
         self.spans.extend(spans);
@@ -62,7 +63,7 @@ impl AstArenas {
         }
     }
 
-    pub fn get_span<T: Copy>(&self, id: AstId<T>) -> Span {
+    pub fn get_span<T: Copy>(&self, id: AstId<T>) -> TokenRange {
         self.spans[id.loc]
     }
 
@@ -81,22 +82,6 @@ pub struct Ast {
     pub path: PathBuf,
 }
 
-#[derive(Debug, Clone)]
-pub struct ParseError {
-    pub location: Option<Span>,
-    pub reason: ParseErrorReason,
-}
-
-impl ParseError {
-    fn incomplete(location: Option<Span>, ident: &'static str) -> ParseError {
-        Self {
-            location,
-            reason: ParseErrorReason::Incomplete(ident),
-        }
-    }
-
-}
-
 #[derive(Debug, Clone, Copy)]
 pub enum ParseErrorKind {
     MissingToken,
@@ -109,22 +94,6 @@ pub enum ParseErrorReason {
     MissingToken,
     UnexpectedToken(Token),
     Incomplete(&'static str),
-}
-
-impl FromLexerError for ParseError {
-    fn missing_token(at: usize) -> Self {
-        Self {
-            location: Some(Span::new(at, at)),
-            reason: ParseErrorReason::MissingToken,
-        }
-    }
-    fn unexpected_token() -> Self {
-        // println!("{}", std::backtrace::Backtrace::force_capture());
-        Self {
-            location: None,
-            reason: ParseErrorReason::UnexpectedToken(Token::Dot),
-        }
-    }
 }
 
 impl<'a> Parser<'a> {
@@ -153,8 +122,8 @@ pub trait Consumable<'a>: Sized + Copy + 'static {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind>;
-    fn try_consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Option<(Self, Span)> {
+    ) -> Result<Self, ParseErrorKind>;
+    fn try_consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Option<Self> {
         let save = p.tkw.offset;
 
         match Self::consume(p, arenas, None) {
@@ -172,13 +141,13 @@ impl<'a> Consumable<'a> for Identifier {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         let t = p
             .tkw
             .next_expect(Token::Ident, diagnostics.as_deref_mut())?;
         let (span, file) = (*t.span, *t.file);
         let content = &p.tkw.content(file)[span.as_range()];
-        Ok((Self::from_item(content, arenas, diagnostics)?, span))
+        Ok(Self::from_item(content, arenas, diagnostics)?)
     }
 }
 impl<'a> ItemParsable<'a> for Identifier {
@@ -200,14 +169,14 @@ impl<'a> Consumable<'a> for DecimalRef {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         let t = p
             .tkw
             .next_expect(Token::Decimal, diagnostics.as_deref_mut())?;
         let (span, file) = (*t.span, *t.file);
         let content = &p.tkw.content(file)[span.as_range()];
         let (_, decimal) = Decimal::take(content);
-        Ok((Self::from_item(decimal, arenas, diagnostics)?, span))
+        Ok(Self::from_item(decimal, arenas, diagnostics)?)
     }
 }
 impl<'a> ItemParsable<'a> for DecimalRef {
@@ -228,14 +197,14 @@ impl<'a> Consumable<'a> for SizedNumberRef {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         let t = p
             .tkw
             .next_expect(Token::Number, diagnostics.as_deref_mut())?;
         let (span, file) = (*t.span, *t.file);
         let content = &p.tkw.content(file)[span.as_range()];
         let (_, number) = SizedNumber::take(content);
-        Ok((Self::from_item(number, arenas, diagnostics)?, span))
+        Ok(Self::from_item(number, arenas, diagnostics)?)
     }
 }
 impl<'a> ItemParsable<'a> for SizedNumberRef {
@@ -256,7 +225,7 @@ impl<'a> Consumable<'a> for StringRef {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         let t = p
             .tkw
             .next_expect(Token::String, diagnostics.as_deref_mut())?;
@@ -268,7 +237,7 @@ impl<'a> Consumable<'a> for StringRef {
             todo!()
         }
 
-        Ok((Self::from_item(content, arenas, diagnostics)?, span))
+        Ok(Self::from_item(content, arenas, diagnostics)?)
     }
 }
 impl<'a> ItemParsable<'a> for StringRef {
@@ -294,13 +263,13 @@ pub trait ItemParsable<'a>: Consumable<'a> {
     ) -> Result<Self, ParseErrorKind>;
     fn ast_from_item(
         item: Self::Item,
-        span: Span,
+        token_range: TokenRange,
         arenas: &mut AstArenas,
         diagnostics: Option<&mut Diagnostics>,
     ) -> Result<AstItem<Self>, ParseErrorKind> {
         let item = Self::from_item(item, arenas, diagnostics)?;
         let loc = arenas.spans.len();
-        arenas.spans.push(span);
+        arenas.spans.push(token_range);
         Ok(AstItem { item, loc })
     }
 
@@ -309,31 +278,10 @@ pub trait ItemParsable<'a>: Consumable<'a> {
         arenas: &mut AstArenas,
         diagnostics: Option<&mut Diagnostics>,
     ) -> Result<AstItem<Self>, ParseErrorKind> {
-        Ok(Self::item_parse_with_span(p, arenas, diagnostics)?.0)
-    }
-
-    fn item_parse_with_span(
-        p: &mut Parser<'a>,
-        arenas: &mut AstArenas,
-        diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(AstItem<Self>, Span), ParseErrorKind> {
-        let (item, span) = Self::consume(p, arenas, diagnostics)?;
-        let loc = arenas.spans.len();
-        arenas.spans.push(span);
-        Ok((AstItem { item, loc }, span))
+        utils::item_parse(p, arenas, diagnostics)
     }
 
     fn try_item_parse(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Option<AstItem<Self>> {
-        Some(Self::try_item_parse_with_span(p, arenas)?.0)
-    }
-
-    fn try_item_parse_with_span(
-        p: &mut Parser<'a>,
-        arenas: &mut AstArenas,
-    ) -> Option<(AstItem<Self>, Span)> {
-        let (item, span) = Self::try_consume(p, arenas)?;
-        let loc = arenas.spans.len();
-        arenas.spans.push(span);
-        Some((AstItem { item, loc }, span))
+        utils::try_item_parse(p, arenas)
     }
 }

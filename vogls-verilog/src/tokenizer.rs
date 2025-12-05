@@ -703,11 +703,6 @@ pub trait Takeable<'a>: Sized {
     fn take(s: &'a str) -> (&'a str, Self);
 }
 
-pub trait FromLexerError {
-    fn missing_token(at: usize) -> Self;
-    fn unexpected_token() -> Self;
-}
-
 macro_rules! define_tokens {
     (
         $(

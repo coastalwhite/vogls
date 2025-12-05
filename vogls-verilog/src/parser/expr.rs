@@ -1,10 +1,10 @@
 use crate::ast::expr::{BinaryOperator, BitPartSelect, Expr, UnaryOperator};
 use crate::ast::{AstId, DecimalRef, Identifier, SizedNumberRef, StringRef};
+use crate::parser::token_walker::TokenRange;
 use crate::parser::{ItemParsable, ParseErrorReason};
-use crate::span::Span;
-use crate::tokenizer::{FromLexerError, Token};
+use crate::tokenizer::Token;
 
-use super::{AstArenas, Consumable, Diagnostics, ParseError, ParseErrorKind, Parser};
+use super::{AstArenas, Consumable, Diagnostics, ParseErrorKind, Parser};
 
 pub(crate) type BindingPower = u8;
 
@@ -68,13 +68,13 @@ impl<'a> Consumable<'a> for Expr {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         use Token as T;
 
         p.exprs_sp.clear();
 
         let mut min_bp: BindingPower = 0;
-        let mut current: (Expr, Span);
+        let mut current: (Expr, TokenRange);
 
         let result = 'outer: loop {
             macro_rules! deepen {
@@ -86,7 +86,10 @@ impl<'a> Consumable<'a> for Expr {
             }
 
             let token = p.tkw.try_get(p.tkw.offset, diagnostics.as_deref_mut())?;
-            let span = *token.span;
+            let span = TokenRange {
+                start: p.tkw.offset,
+                end: p.tkw.offset + 1,
+            };
             current = {
                 match token.kind {
                     T::Ident => (
@@ -183,7 +186,10 @@ impl<'a> Consumable<'a> for Expr {
                     break 'outer current;
                 };
 
-                let location = loc | current.1;
+                let location = TokenRange {
+                    start: loc.start,
+                    end: current.1.end,
+                };
 
                 match item {
                     StackItem::Paren => {
@@ -220,6 +226,6 @@ impl<'a> Consumable<'a> for Expr {
             }
         };
 
-        Ok(result)
+        Ok(result.0)
     }
 }

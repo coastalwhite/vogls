@@ -6,7 +6,7 @@ use crate::ast::statement::{
 };
 use crate::ast::{AstIdRange, DecimalRef, Identifier, TextRef};
 use crate::parser::ItemParsable;
-use crate::span::Span;
+use crate::parser::token_walker::TokenRange;
 use crate::tokenizer::Token;
 
 use super::{AstArenas, Consumable, Parser};
@@ -17,7 +17,7 @@ impl<'a> Consumable<'a> for Statement {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
@@ -43,61 +43,34 @@ impl<'a> Consumable<'a> for Statement {
         let peeked = p.tkw.try_get(p.tkw.offset, diagnostics.as_deref_mut())?;
         match peeked.kind {
             T::KeywordBegin => {
-                let (seq_block, span) =
-                    parse_with_span::<SeqBlock>(p, arenas, diagnostics.as_deref_mut())?;
-                Ok((Self::SeqBlock(seq_block), span))
+                let seq_block = parse::<SeqBlock>(p, arenas, diagnostics.as_deref_mut())?;
+                Ok(Self::SeqBlock(seq_block))
             }
             T::Hash | T::AtSign => {
-                let (procedural_timing_control, procedural_timing_control_span) =
-                    parse_with_span::<ProceduralTimingControl>(
-                        p,
-                        arenas,
-                        diagnostics.as_deref_mut(),
-                    )?;
-                let mut span = procedural_timing_control_span;
+                let procedural_timing_control =
+                    parse::<ProceduralTimingControl>(p, arenas, diagnostics.as_deref_mut())?;
 
-                let statement =
-                    try_parse_with_span::<Statement>(p, arenas).map(|(stmt, stmt_span)| {
-                        span |= stmt_span;
-                        stmt
-                    });
-                Ok((
-                    Self::ProceduralTimingControlStatement(procedural_timing_control, statement),
-                    span,
+                let statement = try_parse::<Statement>(p, arenas);
+                Ok(Self::ProceduralTimingControlStatement(
+                    procedural_timing_control,
+                    statement,
                 ))
             }
             _ => {
-                if let Some((blocking_assignment, blocking_assignment_span)) =
-                    try_parse_with_span::<BlockingAssignment>(p, arenas)
+                if let Some(blocking_assignment) = try_parse::<BlockingAssignment>(p, arenas) {
+                    p.tkw
+                        .next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+                    Ok(Self::BlockingAssignment(blocking_assignment))
+                } else if let Some(non_blocking_assignment) =
+                    try_parse::<NonBlockingAssignment>(p, arenas)
                 {
-                    let semicolon_span = *p
-                        .tkw
-                        .next_expect(T::Semicolon, diagnostics.as_deref_mut())?
-                        .span;
-                    Ok((
-                        Self::BlockingAssignment(blocking_assignment),
-                        blocking_assignment_span | semicolon_span,
-                    ))
-                } else if let Some((non_blocking_assignment, non_blocking_assignment_span)) =
-                    try_parse_with_span::<NonBlockingAssignment>(p, arenas)
-                {
-                    let semicolon_span = *p
-                        .tkw
-                        .next_expect(T::Semicolon, diagnostics.as_deref_mut())?
-                        .span;
-                    Ok((
-                        Self::NonBlockingAssignment(non_blocking_assignment),
-                        non_blocking_assignment_span | semicolon_span,
-                    ))
-                } else if let Some((system_task_enable, system_task_enable_span)) =
-                    try_parse_with_span::<SystemTaskEnable>(p, arenas)
-                {
-                    Ok((
-                        Self::SystemTaskEnable(system_task_enable),
-                        system_task_enable_span,
-                    ))
+                    p.tkw
+                        .next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+                    Ok(Self::NonBlockingAssignment(non_blocking_assignment))
+                } else if let Some(system_task_enable) = try_parse::<SystemTaskEnable>(p, arenas) {
+                    Ok(Self::SystemTaskEnable(system_task_enable))
                 } else {
-                    diagnostics.map(|d| d.incomplete(p.tkw.span_at_cursor(), "statement"));
+                    diagnostics.map(|d| d.incomplete(p.tkw.offset, "statement"));
                     Err(ParseErrorKind::Incomplete)
                 }
             }
@@ -110,7 +83,7 @@ impl<'a> Consumable<'a> for NetLValue {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 506
         // net_lvalue ::=
         //   hierarchical_net_identifier [ { [ constant_expression ] } [ constant_range_expression ] ]
@@ -118,10 +91,9 @@ impl<'a> Consumable<'a> for NetLValue {
 
         // @Incomplete
 
-        let (ident, span) =
-            Identifier::item_parse_with_span(p, arenas, diagnostics.as_deref_mut())?;
+        let ident = Identifier::item_parse(p, arenas, diagnostics.as_deref_mut())?;
 
-        Ok((Self { ident }, span))
+        Ok(Self { ident })
     }
 }
 
@@ -130,7 +102,7 @@ impl<'a> Consumable<'a> for VariableLValue {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 506
         // variable_lvalue ::=
         //   hierarchical_variable_identifier [ { [ expression ] } [ range_expression ] ]
@@ -138,10 +110,9 @@ impl<'a> Consumable<'a> for VariableLValue {
 
         // @Incomplete
 
-        let (ident, span) =
-            Identifier::item_parse_with_span(p, arenas, diagnostics.as_deref_mut())?;
+        let ident = Identifier::item_parse(p, arenas, diagnostics.as_deref_mut())?;
 
-        Ok((Self { ident }, span))
+        Ok(Self { ident })
     }
 }
 
@@ -150,29 +121,22 @@ impl<'a> Consumable<'a> for BlockingAssignment {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
         // blocking_assignment ::= variable_lvalue = [ delay_or_event_control ] expression
 
-        let (variable_lvalue, variable_lvalue_span) =
-            parse_with_span::<VariableLValue>(p, arenas, diagnostics.as_deref_mut())?;
+        let variable_lvalue = parse::<VariableLValue>(p, arenas, diagnostics.as_deref_mut())?;
         p.tkw.next_expect(T::Equals, diagnostics.as_deref_mut())?;
         let delay_or_event_control = try_parse::<DelayOrEventControl>(p, arenas);
-        let (expression, expression_span) =
-            parse_with_span::<Expr>(p, arenas, diagnostics.as_deref_mut())?;
+        let expression = parse::<Expr>(p, arenas, diagnostics.as_deref_mut())?;
 
-        let span = variable_lvalue_span | expression_span;
-
-        Ok((
-            Self {
-                variable_lvalue,
-                delay_or_event_control,
-                expression,
-            },
-            span,
-        ))
+        Ok(Self {
+            variable_lvalue,
+            delay_or_event_control,
+            expression,
+        })
     }
 }
 
@@ -181,30 +145,23 @@ impl<'a> Consumable<'a> for NonBlockingAssignment {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
         // nonblocking_assignment ::= variable_lvalue <= [ delay_or_event_control ] expression
 
-        let (variable_lvalue, variable_lvalue_span) =
-            parse_with_span::<VariableLValue>(p, arenas, diagnostics.as_deref_mut())?;
+        let variable_lvalue = parse::<VariableLValue>(p, arenas, diagnostics.as_deref_mut())?;
         p.tkw
             .next_expect(T::LessThanEquals, diagnostics.as_deref_mut())?;
         let delay_or_event_control = try_parse::<DelayOrEventControl>(p, arenas);
-        let (expression, expression_span) =
-            parse_with_span::<Expr>(p, arenas, diagnostics.as_deref_mut())?;
+        let expression = parse::<Expr>(p, arenas, diagnostics.as_deref_mut())?;
 
-        let span = variable_lvalue_span | expression_span;
-
-        Ok((
-            Self {
-                variable_lvalue,
-                delay_or_event_control,
-                expression,
-            },
-            span,
-        ))
+        Ok(Self {
+            variable_lvalue,
+            delay_or_event_control,
+            expression,
+        })
     }
 }
 
@@ -213,17 +170,15 @@ impl<'a> Consumable<'a> for SeqBlock {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
         // seq_block ::= begin [ : block_identifier { block_item_declaration } ] { statement } end
 
         // @Incomplete: [ : block_identifier { block_item_declaration } ]
-        let begin_kw_span = *p
-            .tkw
-            .next_expect(T::KeywordBegin, diagnostics.as_deref_mut())?
-            .span;
+        p.tkw
+            .next_expect(T::KeywordBegin, diagnostics.as_deref_mut())?;
         let statements = parse_until_reaching::<Statement>(
             p,
             arenas,
@@ -231,9 +186,7 @@ impl<'a> Consumable<'a> for SeqBlock {
             diagnostics.as_deref_mut(),
         )?;
 
-        let span = begin_kw_span | *p.tkw.get(p.tkw.offset - 1).unwrap().span;
-
-        Ok((Self { statements }, span))
+        Ok(Self { statements })
     }
 }
 
@@ -242,7 +195,7 @@ impl<'a> Consumable<'a> for DelayOrEventControl {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
@@ -252,23 +205,21 @@ impl<'a> Consumable<'a> for DelayOrEventControl {
         //   | repeat ( expression ) event_control
 
         let peeked = p.tkw.try_get(p.tkw.offset, diagnostics.as_deref_mut())?;
-        match peeked.kind {
+        match *peeked.kind {
             T::Hash => {
-                let (delay_control, span) =
-                    parse_with_span::<DelayControl>(p, arenas, diagnostics.as_deref_mut())?;
-                Ok((Self::DelayControl(delay_control), span))
+                let delay_control = parse::<DelayControl>(p, arenas, diagnostics.as_deref_mut())?;
+                Ok(Self::DelayControl(delay_control))
             }
             T::AtSign => {
-                let (event_control, span) =
-                    parse_with_span::<EventControl>(p, arenas, diagnostics.as_deref_mut())?;
-                Ok((Self::EventControl(event_control), span))
+                let event_control = parse::<EventControl>(p, arenas, diagnostics.as_deref_mut())?;
+                Ok(Self::EventControl(event_control))
             }
             T::KeywordRepeat => {
-                diagnostics.map(|d| d.incomplete(*peeked.span, "delay_or_event_control repeat"));
+                diagnostics.map(|d| d.incomplete(p.tkw.offset, "delay_or_event_control repeat"));
                 Err(ParseErrorKind::Incomplete)
             }
-            _ => {
-                diagnostics.map(|d| d.unexpected_token(*peeked.span, *peeked.kind));
+            t => {
+                diagnostics.map(|d| d.unexpected_token(p.tkw.offset, t));
                 Err(ParseErrorKind::UnexpectedToken)
             }
         }
@@ -280,7 +231,7 @@ impl<'a> Consumable<'a> for DelayControl {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
@@ -288,14 +239,11 @@ impl<'a> Consumable<'a> for DelayControl {
         //   # delay_value
         // | # ( mintypmax_expression )
 
-        let hash_span = *p.tkw.next_expect(T::Hash, diagnostics.as_deref_mut())?.span;
+        p.tkw.next_expect(T::Hash, diagnostics.as_deref_mut())?;
         // @Incomplete: | # ( mintypmax_expression )
-        let (delay_value, delay_value_span) =
-            parse_with_span::<DelayValue>(p, arenas, diagnostics.as_deref_mut())?;
+        let delay_value = parse::<DelayValue>(p, arenas, diagnostics.as_deref_mut())?;
 
-        let span = hash_span | delay_value_span;
-
-        Ok((Self::DelayValue(delay_value), span))
+        Ok(Self::DelayValue(delay_value))
     }
 }
 
@@ -304,7 +252,7 @@ impl<'a> Consumable<'a> for DelayValue {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 491
@@ -319,15 +267,15 @@ impl<'a> Consumable<'a> for DelayValue {
         let peeked = p.tkw.try_get(p.tkw.offset, diagnostics.as_deref_mut())?;
         match peeked.kind {
             T::Decimal => {
-                let (decimal, span) = DecimalRef::consume(p, arenas, diagnostics.as_deref_mut())?;
-                Ok((Self::UnsignedNumber(decimal), span))
+                let decimal = DecimalRef::consume(p, arenas, diagnostics.as_deref_mut())?;
+                Ok(Self::UnsignedNumber(decimal))
             }
             T::Ident => {
-                let (ident, span) = Identifier::consume(p, arenas, diagnostics.as_deref_mut())?;
-                Ok((Self::Identifier(ident), span))
+                let ident = Identifier::consume(p, arenas, diagnostics.as_deref_mut())?;
+                Ok(Self::Identifier(ident))
             }
             _ => {
-                diagnostics.map(|d| d.incomplete(*peeked.span, "delay_value"));
+                diagnostics.map(|d| d.incomplete(p.tkw.offset, "delay_value"));
                 Err(ParseErrorKind::Incomplete)
             }
         }
@@ -339,7 +287,7 @@ impl<'a> Consumable<'a> for EventControl {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
@@ -349,24 +297,17 @@ impl<'a> Consumable<'a> for EventControl {
         // | @*
         // | @ (*)
 
-        let at_sign_span = *p
-            .tkw
-            .next_expect(T::AtSign, diagnostics.as_deref_mut())?
-            .span;
+        p.tkw.next_expect(T::AtSign, diagnostics.as_deref_mut())?;
         // @Incomplete: @ hierarchical_event_identifier
         // @Incomplete: @*
         // @Incomplete: @ (*)
         p.tkw
             .next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
         let event_expression = parse::<EventExpression>(p, arenas, diagnostics.as_deref_mut())?;
-        let right_paren_span = *p
-            .tkw
-            .next_expect(T::RightParen, diagnostics.as_deref_mut())?
-            .span;
+        p.tkw
+            .next_expect(T::RightParen, diagnostics.as_deref_mut())?;
 
-        let span = at_sign_span | right_paren_span;
-
-        Ok((Self::EventExpression(event_expression), span))
+        Ok(Self::EventExpression(event_expression))
     }
 }
 
@@ -375,7 +316,7 @@ impl<'a> Consumable<'a> for EventExpression {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
@@ -385,45 +326,47 @@ impl<'a> Consumable<'a> for EventExpression {
         // | negedge expression
         // | event_expression or event_expression
 
+        let start = p.tkw.offset;
         let mut event_expression = None;
 
         // @Incomplete: | event_expression or event_expression
         loop {
+            let start_current = p.tkw.offset;
             let peeked = p.tkw.try_get(p.tkw.offset, diagnostics.as_deref_mut())?;
-            let (current_event_expression, current_span) = match peeked.kind {
+            let current_event_expression = match peeked.kind {
                 T::KeywordPosedge => {
-                    let posedge_kw_span = *peeked.span;
                     p.tkw.next();
-                    let (expr, expr_span) =
-                        parse_with_span::<Expr>(p, arenas, diagnostics.as_deref_mut())?;
-                    let span = posedge_kw_span | expr_span;
-                    (Self::Posedge(expr), span)
+                    let expr = parse::<Expr>(p, arenas, diagnostics.as_deref_mut())?;
+                    Self::Posedge(expr)
                 }
                 T::KeywordNegedge => {
-                    let negedge_kw_span = *peeked.span;
                     p.tkw.next();
-                    let (expr, expr_span) =
-                        parse_with_span::<Expr>(p, arenas, diagnostics.as_deref_mut())?;
-                    let span = negedge_kw_span | expr_span;
-                    (Self::Negedge(expr), span)
+                    let expr = parse::<Expr>(p, arenas, diagnostics.as_deref_mut())?;
+                    Self::Negedge(expr)
                 }
                 _ => {
-                    let (expr, expr_span) =
-                        parse_with_span::<Expr>(p, arenas, diagnostics.as_deref_mut())?;
-                    (Self::Expression(expr), expr_span)
+                    let expr = parse::<Expr>(p, arenas, diagnostics.as_deref_mut())?;
+                    Self::Expression(expr)
                 }
             };
 
             event_expression = match event_expression {
-                None => Some((current_event_expression, current_span)),
-                Some((expr, span)) => {
-                    let expr = arenas.add(expr, span);
+                None => Some(current_event_expression),
+                Some(expr) => {
+                    let token_range = TokenRange {
+                        start,
+                        end: p.tkw.offset,
+                    };
+                    let expr = arenas.add(expr, token_range);
+
+                    let token_range = TokenRange {
+                        start: start_current,
+                        end: p.tkw.offset,
+                    };
                     let current_event_expression =
-                        arenas.add(current_event_expression, current_span);
-                    Some((
-                        Self::OrList(expr, current_event_expression),
-                        span | current_span,
-                    ))
+                        arenas.add(current_event_expression, token_range);
+
+                    Some(Self::OrList(expr, current_event_expression))
                 }
             };
 
@@ -445,7 +388,7 @@ impl<'a> Consumable<'a> for ProceduralTimingControl {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 499
@@ -454,19 +397,17 @@ impl<'a> Consumable<'a> for ProceduralTimingControl {
         // | event_control
 
         let peeked = p.tkw.try_get(p.tkw.offset, diagnostics.as_deref_mut())?;
-        match peeked.kind {
+        match *peeked.kind {
             T::Hash => {
-                let (delay_control, span) =
-                    parse_with_span::<DelayControl>(p, arenas, diagnostics.as_deref_mut())?;
-                Ok((Self::DelayControl(delay_control), span))
+                let delay_control = parse::<DelayControl>(p, arenas, diagnostics.as_deref_mut())?;
+                Ok(Self::DelayControl(delay_control))
             }
             T::AtSign => {
-                let (event_control, span) =
-                    parse_with_span::<EventControl>(p, arenas, diagnostics.as_deref_mut())?;
-                Ok((Self::EventControl(event_control), span))
+                let event_control = parse::<EventControl>(p, arenas, diagnostics.as_deref_mut())?;
+                Ok(Self::EventControl(event_control))
             }
-            _ => {
-                diagnostics.map(|d| d.unexpected_token(*peeked.span, *peeked.kind));
+            t => {
+                diagnostics.map(|d| d.unexpected_token(p.tkw.offset, t));
                 Err(ParseErrorKind::UnexpectedToken)
             }
         }
@@ -478,14 +419,14 @@ impl<'a> Consumable<'a> for SystemTaskEnable {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 499
         // system_task_enable ::= system_task_identifier [ ( [ expression ] { , [ expression ] } ) ] ;
 
-        let (system_task_identifier, system_task_identifier_span) =
-            SystemTaskIdentifier::item_parse_with_span(p, arenas, diagnostics.as_deref_mut())?;
+        let system_task_identifier =
+            SystemTaskIdentifier::item_parse(p, arenas, diagnostics.as_deref_mut())?;
         let mut expressions = AstIdRange::default();
         if p.tkw.next_if_equals(T::LeftParen) {
             expressions = parse_zero_or_more_delimited::<Expr>(
@@ -497,20 +438,13 @@ impl<'a> Consumable<'a> for SystemTaskEnable {
             p.tkw
                 .next_expect(T::RightParen, diagnostics.as_deref_mut())?;
         }
-        let semicolon_span = *p
-            .tkw
-            .next_expect(T::Semicolon, diagnostics.as_deref_mut())?
-            .span;
+        p.tkw
+            .next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
 
-        let span = system_task_identifier_span | semicolon_span;
-
-        Ok((
-            Self {
-                system_task_identifier,
-                expressions,
-            },
-            span,
-        ))
+        Ok(Self {
+            system_task_identifier,
+            expressions,
+        })
     }
 }
 
@@ -519,17 +453,14 @@ impl<'a> Consumable<'a> for SystemTaskIdentifier {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         use Token as T;
         let t = p
             .tkw
             .next_expect(T::DollarIdent, diagnostics.as_deref_mut())?;
         let (span, file) = (*t.span, *t.file);
         let content = &p.tkw.content(file)[span.start() + 1..span.end()];
-        Ok((
-            Self::from_item(content, arenas, diagnostics.as_deref_mut())?,
-            span,
-        ))
+        Self::from_item(content, arenas, diagnostics.as_deref_mut())
     }
 }
 impl<'a> ItemParsable<'a> for SystemTaskIdentifier {

@@ -12,7 +12,6 @@ use crate::ast::module::{
 };
 use crate::ast::statement::{NetLValue, Statement};
 use crate::parser::ItemParsable;
-use crate::span::Span;
 use crate::tokenizer::Token;
 
 use super::{AstArenas, Consumable, ParseErrorKind, Parser};
@@ -23,7 +22,7 @@ impl<'a> Consumable<'a> for Module {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 487
@@ -36,10 +35,8 @@ impl<'a> Consumable<'a> for Module {
         // endmodule
 
         // @Incomplete: { attribute_instance }
-        let module_kw_span = *p
-            .tkw
-            .next_expect(T::KeywordModule, diagnostics.as_deref_mut())?
-            .span;
+        p.tkw
+            .next_expect(T::KeywordModule, diagnostics.as_deref_mut())?;
         let module_identifier = Identifier::item_parse(p, arenas, diagnostics.as_deref_mut())?;
         // @Incomplete: [ module_parameter_port_list ]
         let ports = if p.tkw.next_if_equals(T::LeftParen) {
@@ -86,16 +83,11 @@ impl<'a> Consumable<'a> for Module {
             diagnostics.as_deref_mut(),
         )?;
 
-        let span = module_kw_span | (*p.tkw.get(p.tkw.offset - 1).unwrap().span);
-
-        Ok((
-            Module {
-                module_identifier,
-                ports,
-                module_items,
-            },
-            span,
-        ))
+        Ok(Module {
+            module_identifier,
+            ports,
+            module_items,
+        })
     }
 }
 
@@ -104,7 +96,7 @@ impl<'a> Consumable<'a> for ModuleItem {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
@@ -114,16 +106,16 @@ impl<'a> Consumable<'a> for ModuleItem {
         let peeked = p.tkw.try_get(p.tkw.offset, diagnostics.as_deref_mut())?;
         match peeked.kind {
             T::KeywordInput | T::KeywordOutput | T::KeywordInout => {
-                let (port_declaration, span) =
-                    parse_with_span::<PortDeclaration>(p, arenas, diagnostics.as_deref_mut())?;
+                let port_declaration =
+                    parse::<PortDeclaration>(p, arenas, diagnostics.as_deref_mut())?;
                 p.tkw
                     .next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
-                Ok((Self::PortDeclaration(port_declaration), span))
+                Ok(Self::PortDeclaration(port_declaration))
             }
             _ => {
-                let (non_port_module_item, span) =
-                    parse_with_span::<NonPortModuleItem>(p, arenas, diagnostics.as_deref_mut())?;
-                Ok((Self::NonPortModuleItem(non_port_module_item), span))
+                let non_port_module_item =
+                    parse::<NonPortModuleItem>(p, arenas, diagnostics.as_deref_mut())?;
+                Ok(Self::NonPortModuleItem(non_port_module_item))
             }
         }
     }
@@ -134,7 +126,7 @@ impl<'a> Consumable<'a> for NonPortModuleItem {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
@@ -148,43 +140,32 @@ impl<'a> Consumable<'a> for NonPortModuleItem {
         let peeked = p.tkw.try_get(p.tkw.offset, diagnostics.as_deref_mut())?;
         match peeked.kind {
             T::KeywordParameter => {
-                let (parameter_declaration, span) =
-                    parse_with_span::<ParameterDeclaration>(p, arenas, diagnostics.as_deref_mut())?;
+                let parameter_declaration =
+                    parse::<ParameterDeclaration>(p, arenas, diagnostics.as_deref_mut())?;
                 p.tkw
                     .next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
-                Ok((Self::ParameterDeclaration(parameter_declaration), span))
+                Ok(Self::ParameterDeclaration(parameter_declaration))
             }
             T::KeywordGenerate => {
-                diagnostics.map(|d| {
-                    d.incomplete(
-                        p.tkw.span_at_cursor(),
-                        "non_port_module_item::generate_region",
-                    )
-                });
+                diagnostics
+                    .map(|d| d.incomplete(p.tkw.offset, "non_port_module_item::generate_region"));
                 Err(ParseErrorKind::Incomplete)
             }
             T::KeywordSpecify => {
-                diagnostics.map(|d| {
-                    d.incomplete(
-                        p.tkw.span_at_cursor(),
-                        "non_port_module_item::specify_block",
-                    )
-                });
+                diagnostics
+                    .map(|d| d.incomplete(p.tkw.offset, "non_port_module_item::specify_block"));
                 Err(ParseErrorKind::Incomplete)
             }
             T::KeywordSpecParam => {
                 diagnostics.map(|d| {
-                    d.incomplete(
-                        p.tkw.span_at_cursor(),
-                        "non_port_module_item::specparam_declaration",
-                    )
+                    d.incomplete(p.tkw.offset, "non_port_module_item::specparam_declaration")
                 });
                 Err(ParseErrorKind::Incomplete)
             }
             _ => {
-                let (module_or_generate_item, span) =
-                    parse_with_span::<ModuleOrGenerateItem>(p, arenas, diagnostics.as_deref_mut())?;
-                Ok((Self::ModuleOrGenerateItem(module_or_generate_item), span))
+                let module_or_generate_item =
+                    parse::<ModuleOrGenerateItem>(p, arenas, diagnostics.as_deref_mut())?;
+                Ok(Self::ModuleOrGenerateItem(module_or_generate_item))
             }
         }
     }
@@ -195,7 +176,7 @@ impl<'a> Consumable<'a> for Port {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
         // port ::=
         //   [ port_expression ]
@@ -203,9 +184,8 @@ impl<'a> Consumable<'a> for Port {
 
         // @Incomplete: . port_identifier ( [ port_expression ] )
 
-        let (port_expression, span) =
-            parse_with_span::<PortExpression>(p, arenas, diagnostics.as_deref_mut())?;
-        Ok((Self::PortExpression(port_expression), span))
+        let port_expression = parse::<PortExpression>(p, arenas, diagnostics.as_deref_mut())?;
+        Ok(Self::PortExpression(port_expression))
     }
 }
 
@@ -214,7 +194,7 @@ impl<'a> Consumable<'a> for PortExpression {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
         // port_expression ::=
         //   port_reference
@@ -222,14 +202,10 @@ impl<'a> Consumable<'a> for PortExpression {
 
         // @Incomplete: { port_reference { , port_reference } }
 
-        let (port_reference, span) =
-            parse_with_span::<PortReference>(p, arenas, diagnostics.as_deref_mut())?;
-        Ok((
-            Self {
-                references: port_reference,
-            },
-            span,
-        ))
+        let port_reference = parse::<PortReference>(p, arenas, diagnostics.as_deref_mut())?;
+        Ok(Self {
+            references: port_reference,
+        })
     }
 }
 
@@ -238,16 +214,15 @@ impl<'a> Consumable<'a> for PortReference {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
         // port_reference ::=
         //   port_identifier [ [ constant_range_expression ] ]
 
         // @Incomplete: [ [ constant_range_expression ] ]
 
-        let (identifier, span) =
-            Identifier::item_parse_with_span(p, arenas, diagnostics.as_deref_mut())?;
-        Ok((Self { identifier }, span))
+        let identifier = Identifier::item_parse(p, arenas, diagnostics.as_deref_mut())?;
+        Ok(Self { identifier })
     }
 }
 
@@ -256,7 +231,7 @@ impl<'a> Consumable<'a> for PortDeclaration {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
@@ -268,22 +243,22 @@ impl<'a> Consumable<'a> for PortDeclaration {
         let peeked = p.tkw.try_get(p.tkw.offset, diagnostics.as_deref_mut())?;
         match *peeked.kind {
             T::KeywordInout => {
-                let (inout_declaration, span) =
-                    parse_with_span::<InoutDeclaration>(p, arenas, diagnostics.as_deref_mut())?;
-                Ok((Self::Inout(inout_declaration), span))
+                let inout_declaration =
+                    parse::<InoutDeclaration>(p, arenas, diagnostics.as_deref_mut())?;
+                Ok(Self::Inout(inout_declaration))
             }
             T::KeywordInput => {
-                let (input_declaration, span) =
-                    parse_with_span::<InputDeclaration>(p, arenas, diagnostics.as_deref_mut())?;
-                Ok((Self::Input(input_declaration), span))
+                let input_declaration =
+                    parse::<InputDeclaration>(p, arenas, diagnostics.as_deref_mut())?;
+                Ok(Self::Input(input_declaration))
             }
             T::KeywordOutput => {
-                let (output_declaration, span) =
-                    parse_with_span::<OutputDeclaration>(p, arenas, diagnostics.as_deref_mut())?;
-                Ok((Self::Output(output_declaration), span))
+                let output_declaration =
+                    parse::<OutputDeclaration>(p, arenas, diagnostics.as_deref_mut())?;
+                Ok(Self::Output(output_declaration))
             }
             _ => {
-                diagnostics.map(|d| d.unexpected_token(*peeked.span, *peeked.kind));
+                diagnostics.map(|d| d.unexpected_token(p.tkw.offset, *peeked.kind));
                 Err(ParseErrorKind::UnexpectedToken)
             }
         }
@@ -295,16 +270,14 @@ impl<'a> Consumable<'a> for InoutDeclaration {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 489
         // inout_declaration ::= inout [ net_type ] [ signed ] [ range ] list_of_port_identifiers
 
-        let inout_kw_span = *p
-            .tkw
-            .next_expect(T::KeywordInout, diagnostics.as_deref_mut())?
-            .span;
+        p.tkw
+            .next_expect(T::KeywordInout, diagnostics.as_deref_mut())?;
         let mut net_type = None;
         if let Some(val) = NetType::try_item_parse(p, arenas) {
             net_type = Some(val);
@@ -317,19 +290,13 @@ impl<'a> Consumable<'a> for InoutDeclaration {
             T::Comma,
             diagnostics.as_deref_mut(),
         )?;
-        let last = port_identifiers.last().unwrap();
-        let end_span = *arenas.spans.get(last.loc).unwrap();
 
-        let span = inout_kw_span | end_span;
-        Ok((
-            Self {
-                net_type,
-                signed,
-                range: None,
-                port_identifiers,
-            },
-            span,
-        ))
+        Ok(Self {
+            net_type,
+            signed,
+            range: None,
+            port_identifiers,
+        })
     }
 }
 
@@ -338,16 +305,14 @@ impl<'a> Consumable<'a> for InputDeclaration {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 489
         // input_declaration ::= input [ net_type ] [ signed ] [ range ] list_of_port_identifiers
 
-        let input_kw_span = *p
-            .tkw
-            .next_expect(T::KeywordInput, diagnostics.as_deref_mut())?
-            .span;
+        p.tkw
+            .next_expect(T::KeywordInput, diagnostics.as_deref_mut())?;
         let mut net_type = None;
         if let Some(val) = NetType::try_item_parse(p, arenas) {
             net_type = Some(val);
@@ -360,19 +325,13 @@ impl<'a> Consumable<'a> for InputDeclaration {
             T::Comma,
             diagnostics.as_deref_mut(),
         )?;
-        let last = port_identifiers.last().unwrap();
-        let end_span = *arenas.spans.get(last.loc).unwrap();
 
-        let span = input_kw_span | end_span;
-        Ok((
-            Self {
-                net_type,
-                signed,
-                range: None,
-                port_identifiers,
-            },
-            span,
-        ))
+        Ok(Self {
+            net_type,
+            signed,
+            range: None,
+            port_identifiers,
+        })
     }
 }
 
@@ -381,7 +340,7 @@ impl<'a> Consumable<'a> for OutputDeclaration {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 489
@@ -390,10 +349,8 @@ impl<'a> Consumable<'a> for OutputDeclaration {
         // | output reg [ signed ] [ range ] list_of_variable_port_identifiers
         // | output output_variable_type list_of_variable_port_identifiers
 
-        let output_kw_span = *p
-            .tkw
-            .next_expect(T::KeywordOutput, diagnostics.as_deref_mut())?
-            .span;
+        p.tkw
+            .next_expect(T::KeywordOutput, diagnostics.as_deref_mut())?;
         let mut net_type = None;
         if let Some(val) = NetType::try_item_parse(p, arenas) {
             net_type = Some(val);
@@ -407,19 +364,13 @@ impl<'a> Consumable<'a> for OutputDeclaration {
             T::Comma,
             diagnostics.as_deref_mut(),
         )?;
-        let last = identifiers.last().unwrap();
-        let end_span = *arenas.spans.get(last.loc).unwrap();
 
-        let span = output_kw_span | end_span;
-        Ok((
-            Self {
-                net: net_type,
-                signed,
-                range: None,
-                identifiers,
-            },
-            span,
-        ))
+        Ok(Self {
+            net: net_type,
+            signed,
+            range: None,
+            identifiers,
+        })
     }
 }
 
@@ -428,7 +379,7 @@ impl<'a> Consumable<'a> for NetType {
         p: &mut Parser<'a>,
         _arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 490
@@ -439,7 +390,7 @@ impl<'a> Consumable<'a> for NetType {
         // | uwire | wire | wand | wor
 
         let token = p.tkw.try_next(diagnostics.as_deref_mut())?;
-        let result = match token.kind {
+        let result = match *token.kind {
             T::KeywordSupply0 => Ok(Self::Supply0),
             T::KeywordSupply1 => Ok(Self::Supply1),
             T::KeywordTri => Ok(Self::Tri),
@@ -450,12 +401,12 @@ impl<'a> Consumable<'a> for NetType {
             T::KeywordWire => Ok(Self::Wire),
             T::KeywordWand => Ok(Self::WAnd),
             T::KeywordWor => Ok(Self::WOr),
-            _ => {
-                diagnostics.map(|d| d.unexpected_token(*token.span, *token.kind));
+            t => {
+                diagnostics.map(|d| d.unexpected_token(p.tkw.offset, t));
                 Err(ParseErrorKind::UnexpectedToken)
             }
         }?;
-        Ok((result, *token.span))
+        Ok(result)
     }
 }
 impl<'a> ItemParsable<'a> for NetType {
@@ -474,7 +425,7 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItem {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
@@ -497,24 +448,24 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItem {
         let peeked = p.tkw.try_get(p.tkw.offset, diagnostics.as_deref_mut())?;
         match peeked.kind {
             T::KeywordInitial => {
-                let (initial_construct, span) =
-                    parse_with_span::<InitialConstruct>(p, arenas, diagnostics.as_deref_mut())?;
-                Ok((Self::InitialConstruct(initial_construct), span))
+                let initial_construct =
+                    parse::<InitialConstruct>(p, arenas, diagnostics.as_deref_mut())?;
+                Ok(Self::InitialConstruct(initial_construct))
             }
             T::KeywordAlways => {
-                let (always_construct, span) =
-                    parse_with_span::<AlwaysConstruct>(p, arenas, diagnostics.as_deref_mut())?;
-                Ok((Self::AlwaysConstruct(always_construct), span))
+                let always_construct =
+                    parse::<AlwaysConstruct>(p, arenas, diagnostics.as_deref_mut())?;
+                Ok(Self::AlwaysConstruct(always_construct))
             }
             T::KeywordAssign => {
-                let (continous_assign, span) =
-                    parse_with_span::<ContinousAssign>(p, arenas, diagnostics.as_deref_mut())?;
-                Ok((Self::ContinuousAssign(continous_assign), span))
+                let continous_assign =
+                    parse::<ContinousAssign>(p, arenas, diagnostics.as_deref_mut())?;
+                Ok(Self::ContinuousAssign(continous_assign))
             }
             T::Ident => {
-                let (module_instance, span) =
-                    parse_with_span::<ModuleInstantiation>(p, arenas, diagnostics.as_deref_mut())?;
-                Ok((Self::ModuleInstantiation(module_instance), span))
+                let module_instance =
+                    parse::<ModuleInstantiation>(p, arenas, diagnostics.as_deref_mut())?;
+                Ok(Self::ModuleInstantiation(module_instance))
             }
             T::KeywordAnd
             | T::KeywordNand
@@ -522,9 +473,9 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItem {
             | T::KeywordNor
             | T::KeywordXor
             | T::KeywordXnor => {
-                let (gate_instance, span) =
-                    parse_with_span::<GateInstantiation>(p, arenas, diagnostics.as_deref_mut())?;
-                Ok((Self::GateInstantiation(gate_instance), span))
+                let gate_instance =
+                    parse::<GateInstantiation>(p, arenas, diagnostics.as_deref_mut())?;
+                Ok(Self::GateInstantiation(gate_instance))
             }
             T::KeywordSupply0
             | T::KeywordSupply1
@@ -537,19 +488,17 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItem {
             | T::KeywordWand
             | T::KeywordWor
             | T::KeywordReg => {
-                let (module_or_generate_item_declaration, span) =
-                    parse_with_span::<ModuleOrGenerateItemDeclaration>(
-                        p,
-                        arenas,
-                        diagnostics.as_deref_mut(),
-                    )?;
-                Ok((
-                    Self::ModuleOrGenerateItemDeclaration(module_or_generate_item_declaration),
-                    span,
+                let module_or_generate_item_declaration = parse::<ModuleOrGenerateItemDeclaration>(
+                    p,
+                    arenas,
+                    diagnostics.as_deref_mut(),
+                )?;
+                Ok(Self::ModuleOrGenerateItemDeclaration(
+                    module_or_generate_item_declaration,
                 ))
             }
             _ => {
-                diagnostics.map(|d| d.incomplete(*peeked.span, "module_or_generate_item"));
+                diagnostics.map(|d| d.incomplete(p.tkw.offset, "module_or_generate_item"));
                 Err(ParseErrorKind::Incomplete)
             }
         }
@@ -561,36 +510,27 @@ impl<'a> Consumable<'a> for ContinousAssign {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
         // continuous_assign ::= assign [ drive_strength ] [ delay3 ] list_of_net_assignments ;
         // list_of_net_assignments ::= net_assignment { , net_assignment }
 
-        let assign_span = *p
-            .tkw
-            .next_expect(T::KeywordAssign, diagnostics.as_deref_mut())?
-            .span;
-
+        p.tkw
+            .next_expect(T::KeywordAssign, diagnostics.as_deref_mut())?;
         let list_of_net_assignments = parse_one_or_more_delimited::<NetAssignment>(
             p,
             arenas,
             T::Comma,
             diagnostics.as_deref_mut(),
         )?;
-        let semicolon_span = *p
-            .tkw
-            .next_expect(T::Semicolon, diagnostics.as_deref_mut())?
-            .span;
+        p.tkw
+            .next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
 
-        let span = assign_span | semicolon_span;
-        Ok((
-            Self {
-                list_of_net_assignments,
-            },
-            span,
-        ))
+        Ok(Self {
+            list_of_net_assignments,
+        })
     }
 }
 
@@ -599,28 +539,21 @@ impl<'a> Consumable<'a> for NetAssignment {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
         // continuous_assign ::= assign [ drive_strength ] [ delay3 ] list_of_net_assignments ;
         // list_of_net_assignments ::= net_assignment { , net_assignment }
 
-        let (net_lvalue, net_lvalue_span) =
-            parse_with_span::<NetLValue>(p, arenas, diagnostics.as_deref_mut())?;
+        let net_lvalue = parse::<NetLValue>(p, arenas, diagnostics.as_deref_mut())?;
         p.tkw.next_expect(T::Equals, diagnostics.as_deref_mut())?;
-        let (expression, expression_span) =
-            parse_with_span::<Expr>(p, arenas, diagnostics.as_deref_mut())?;
+        let expression = parse::<Expr>(p, arenas, diagnostics.as_deref_mut())?;
 
-        let span = net_lvalue_span | expression_span;
-
-        Ok((
-            Self {
-                net_lvalue,
-                expression,
-            },
-            span,
-        ))
+        Ok(Self {
+            net_lvalue,
+            expression,
+        })
     }
 }
 
@@ -629,7 +562,7 @@ impl<'a> Consumable<'a> for ModuleInstantiation {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 495
@@ -637,28 +570,20 @@ impl<'a> Consumable<'a> for ModuleInstantiation {
         //   module_identifier [ parameter_value_assignment ]
         //   module_instance { , module_instance } ;
 
-        let (module_identifier, module_identifier_span) =
-            Identifier::item_parse_with_span(p, arenas, diagnostics.as_deref_mut())?;
+        let module_identifier = Identifier::item_parse(p, arenas, diagnostics.as_deref_mut())?;
         let module_instances = parse_one_or_more_delimited::<ModuleInstance>(
             p,
             arenas,
             T::Comma,
             diagnostics.as_deref_mut(),
         )?;
-        let semicolon_span = *p
-            .tkw
-            .next_expect(T::Semicolon, diagnostics.as_deref_mut())?
-            .span;
+        p.tkw
+            .next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
 
-        let span = module_identifier_span | semicolon_span;
-
-        Ok((
-            ModuleInstantiation {
-                module_identifier,
-                module_instances,
-            },
-            span,
-        ))
+        Ok(ModuleInstantiation {
+            module_identifier,
+            module_instances,
+        })
     }
 }
 
@@ -667,32 +592,25 @@ impl<'a> Consumable<'a> for ModuleInstance {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 495
         // module_instance ::= name_of_module_instance ( [ list_of_port_connections ] )
 
-        let (name_of_module_instance, name_of_module_instance_span) =
-            Identifier::item_parse_with_span(p, arenas, diagnostics.as_deref_mut())?;
+        let name_of_module_instance =
+            Identifier::item_parse(p, arenas, diagnostics.as_deref_mut())?;
         p.tkw
             .next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
         let list_of_port_connections =
             parse::<ListOfPortConnections>(p, arenas, diagnostics.as_deref_mut())?;
-        let right_paren_span = *p
-            .tkw
-            .next_expect(T::RightParen, diagnostics.as_deref_mut())?
-            .span;
+        p.tkw
+            .next_expect(T::RightParen, diagnostics.as_deref_mut())?;
 
-        let span = name_of_module_instance_span | right_paren_span;
-
-        Ok((
-            ModuleInstance {
-                name_of_module_instance,
-                list_of_port_connections,
-            },
-            span,
-        ))
+        Ok(ModuleInstance {
+            name_of_module_instance,
+            list_of_port_connections,
+        })
     }
 }
 
@@ -701,7 +619,7 @@ impl<'a> Consumable<'a> for ListOfPortConnections {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 495
@@ -716,8 +634,7 @@ impl<'a> Consumable<'a> for ListOfPortConnections {
                 T::Comma,
                 diagnostics.as_deref_mut(),
             )?;
-            let span = arenas.spans[named.loc];
-            Ok((Self::Named(named), span))
+            Ok(Self::Named(named))
         } else {
             let ordered = parse_zero_or_more_delimited::<Expr>(
                 p,
@@ -725,8 +642,7 @@ impl<'a> Consumable<'a> for ListOfPortConnections {
                 T::Comma,
                 diagnostics.as_deref_mut(),
             )?;
-            let span = arenas.spans[ordered.loc];
-            Ok((Self::Ordered(ordered), span))
+            Ok(Self::Ordered(ordered))
         }
     }
 }
@@ -736,13 +652,13 @@ impl<'a> Consumable<'a> for NamedPortConnection {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 495
         // named_port_connection ::= { attribute_instance } . port_identifier ( [ expression ] )
 
-        let dot_span = *p.tkw.next_expect(T::Dot, diagnostics.as_deref_mut())?.span;
+        p.tkw.next_expect(T::Dot, diagnostics.as_deref_mut())?;
         let port_identifier = Identifier::item_parse(p, arenas, diagnostics.as_deref_mut())?;
         p.tkw
             .next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
@@ -755,19 +671,13 @@ impl<'a> Consumable<'a> for NamedPortConnection {
         } else {
             None
         };
-        let right_paren_span = *p
-            .tkw
-            .next_expect(T::RightParen, diagnostics.as_deref_mut())?
-            .span;
-        let span = dot_span | right_paren_span;
+        p.tkw
+            .next_expect(T::RightParen, diagnostics.as_deref_mut())?;
 
-        Ok((
-            NamedPortConnection {
-                port_identifier,
-                expression,
-            },
-            span,
-        ))
+        Ok(NamedPortConnection {
+            port_identifier,
+            expression,
+        })
     }
 }
 
@@ -776,22 +686,17 @@ impl<'a> Consumable<'a> for InitialConstruct {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
         // initial_construct ::= initial statement
 
-        let initial_kw_span = *p
-            .tkw
-            .next_expect(T::KeywordInitial, diagnostics.as_deref_mut())?
-            .span;
-        let (statement, span) =
-            parse_with_span::<Statement>(p, arenas, diagnostics.as_deref_mut())?;
+        p.tkw
+            .next_expect(T::KeywordInitial, diagnostics.as_deref_mut())?;
+        let statement = parse::<Statement>(p, arenas, diagnostics.as_deref_mut())?;
 
-        let span = initial_kw_span | span;
-
-        Ok((Self(statement), span))
+        Ok(Self(statement))
     }
 }
 
@@ -800,22 +705,17 @@ impl<'a> Consumable<'a> for AlwaysConstruct {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
         // always_construct ::= always statement
 
-        let always_kw_span = *p
-            .tkw
-            .next_expect(T::KeywordAlways, diagnostics.as_deref_mut())?
-            .span;
-        let (statement, span) =
-            parse_with_span::<Statement>(p, arenas, diagnostics.as_deref_mut())?;
+        p.tkw
+            .next_expect(T::KeywordAlways, diagnostics.as_deref_mut())?;
+        let statement = parse::<Statement>(p, arenas, diagnostics.as_deref_mut())?;
 
-        let span = always_kw_span | span;
-
-        Ok((Self(statement), span))
+        Ok(Self(statement))
     }
 }
 
@@ -824,7 +724,7 @@ impl<'a> Consumable<'a> for GateInstantiation {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 493
@@ -847,15 +747,12 @@ impl<'a> Consumable<'a> for GateInstantiation {
             | T::KeywordNor
             | T::KeywordXor
             | T::KeywordXnor => {
-                let (n_input_gate_instantiation, span) = parse_with_span::<NInputGateInstantiation>(
-                    p,
-                    arenas,
-                    diagnostics.as_deref_mut(),
-                )?;
-                Ok((Self::NInput(n_input_gate_instantiation), span))
+                let n_input_gate_instantiation =
+                    parse::<NInputGateInstantiation>(p, arenas, diagnostics.as_deref_mut())?;
+                Ok(Self::NInput(n_input_gate_instantiation))
             }
             _ => {
-                diagnostics.map(|d| d.incomplete(p.tkw.span_at_cursor(), "gate_instantiation"));
+                diagnostics.map(|d| d.incomplete(p.tkw.offset, "gate_instantiation"));
                 Err(ParseErrorKind::Incomplete)
             }
         }
@@ -867,14 +764,13 @@ impl<'a> Consumable<'a> for NInputGateInstantiation {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 493
         // n_input_gatetype [drive_strength] [delay2] n_input_gate_instance { , n_input_gate_instance } ;
 
-        let (gatetype, gatetype_span) =
-            NInputGateType::item_parse_with_span(p, arenas, diagnostics.as_deref_mut())?;
+        let gatetype = NInputGateType::item_parse(p, arenas, diagnostics.as_deref_mut())?;
         // @Incomplete: drive_strength
         // @Incomplete: delay2
         let instances = parse_one_or_more_delimited::<NInputGateInstance>(
@@ -883,20 +779,13 @@ impl<'a> Consumable<'a> for NInputGateInstantiation {
             T::Comma,
             diagnostics.as_deref_mut(),
         )?;
-        let semicolon_span = *p
-            .tkw
-            .next_expect(T::Semicolon, diagnostics.as_deref_mut())?
-            .span;
+        p.tkw
+            .next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
 
-        let span = gatetype_span | semicolon_span;
-
-        Ok((
-            Self {
-                gatetype,
-                instances,
-            },
-            span,
-        ))
+        Ok(Self {
+            gatetype,
+            instances,
+        })
     }
 }
 
@@ -905,27 +794,27 @@ impl<'a> Consumable<'a> for NInputGateType {
         p: &mut Parser<'a>,
         _arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 494
         // n_input_gatetype ::= and | nand | or | nor | xor | xnor
 
         let t = p.tkw.try_next(diagnostics.as_deref_mut())?;
-        let value = match t.kind {
+        let value = match *t.kind {
             T::KeywordAnd => Self::And,
             T::KeywordNand => Self::Nand,
             T::KeywordOr => Self::Or,
             T::KeywordNor => Self::Nor,
             T::KeywordXor => Self::Xor,
             T::KeywordXnor => Self::Xnor,
-            _ => {
-                diagnostics.map(|d| d.unexpected_token(*t.span, *t.kind));
+            t => {
+                diagnostics.map(|d| d.unexpected_token(p.tkw.offset, t));
                 return Err(ParseErrorKind::UnexpectedToken);
             }
         };
 
-        Ok((value, *t.span))
+        Ok(value)
     }
 }
 impl<'a> ItemParsable<'a> for NInputGateType {
@@ -945,40 +834,27 @@ impl<'a> Consumable<'a> for NInputGateInstance {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 494
         // n_input_gate_instance ::= [ name_of_gate_instance ] ( output_terminal , input_terminal { , input_terminal } )
 
-        let name = try_parse_with_span::<NameOfGateInstance>(p, arenas);
-        let mut start_span = *p
-            .tkw
-            .next_expect(T::LeftParen, diagnostics.as_deref_mut())?
-            .span;
-        let name = name.map(|(name, name_span)| {
-            start_span = name_span;
-            name
-        });
+        let name = try_parse::<NameOfGateInstance>(p, arenas);
+        p.tkw
+            .next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
         let output_terminal = parse::<NetLValue>(p, arenas, diagnostics.as_deref_mut())?;
         p.tkw.next_expect(T::Comma, diagnostics.as_deref_mut())?;
         let input_terminals =
             parse_one_or_more_delimited::<Expr>(p, arenas, T::Comma, diagnostics.as_deref_mut())?;
-        let right_paren_span = *p
-            .tkw
-            .next_expect(T::RightParen, diagnostics.as_deref_mut())?
-            .span;
+        p.tkw
+            .next_expect(T::RightParen, diagnostics.as_deref_mut())?;
 
-        let span = start_span | right_paren_span;
-
-        Ok((
-            Self {
-                name,
-                output_terminal,
-                input_terminals,
-            },
-            span,
-        ))
+        Ok(Self {
+            name,
+            output_terminal,
+            input_terminals,
+        })
     }
 }
 
@@ -987,15 +863,14 @@ impl<'a> Consumable<'a> for NameOfGateInstance {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 494
         // name_of_gate_instance ::= gate_instance_identifier [ range ]
 
         // @Incomplete
-        let (identifier, span) =
-            Identifier::item_parse_with_span(p, arenas, diagnostics.as_deref_mut())?;
+        let identifier = Identifier::item_parse(p, arenas, diagnostics.as_deref_mut())?;
 
-        Ok((Self { identifier }, span))
+        Ok(Self { identifier })
     }
 }
 
@@ -1004,7 +879,7 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItemDeclaration {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
@@ -1032,18 +907,18 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItemDeclaration {
             | T::KeywordWire
             | T::KeywordWand
             | T::KeywordWor => {
-                let (net_declaration, span) =
-                    parse_with_span::<NetDeclaration>(p, arenas, diagnostics.as_deref_mut())?;
-                Ok((Self::Net(net_declaration), span))
+                let net_declaration =
+                    parse::<NetDeclaration>(p, arenas, diagnostics.as_deref_mut())?;
+                Ok(Self::Net(net_declaration))
             }
             T::KeywordReg => {
-                let (reg_declaration, span) =
-                    parse_with_span::<RegDeclaration>(p, arenas, diagnostics.as_deref_mut())?;
-                Ok((Self::Reg(reg_declaration), span))
+                let reg_declaration =
+                    parse::<RegDeclaration>(p, arenas, diagnostics.as_deref_mut())?;
+                Ok(Self::Reg(reg_declaration))
             }
             _ => {
                 diagnostics
-                    .map(|d| d.incomplete(*peeked.span, "module_or_generate_item_declaration"));
+                    .map(|d| d.incomplete(p.tkw.offset, "module_or_generate_item_declaration"));
                 Err(ParseErrorKind::Incomplete)
             }
         }
@@ -1055,7 +930,7 @@ impl<'a> Consumable<'a> for NetDeclaration {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 490
@@ -1070,28 +945,20 @@ impl<'a> Consumable<'a> for NetDeclaration {
         // | trireg [ drive_strength ] [ vectored | scalared ] [ signed ] range [ delay3 ] list_of_net_decl_assignments ;
 
         // @Incomplete
-        let (net_type, net_type_span) =
-            NetType::item_parse_with_span(p, arenas, diagnostics.as_deref_mut())?;
+        let net_type = NetType::item_parse(p, arenas, diagnostics.as_deref_mut())?;
         let identifiers = parse_one_or_more_delimited::<Identifier>(
             p,
             arenas,
             T::Comma,
             diagnostics.as_deref_mut(),
         )?;
-        let semicolon_span = *p
-            .tkw
-            .next_expect(T::Semicolon, diagnostics.as_deref_mut())?
-            .span;
+        p.tkw
+            .next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
 
-        let span = net_type_span | semicolon_span;
-
-        Ok((
-            Self {
-                net_type,
-                identifiers,
-            },
-            span,
-        ))
+        Ok(Self {
+            net_type,
+            identifiers,
+        })
     }
 }
 
@@ -1100,31 +967,25 @@ impl<'a> Consumable<'a> for RegDeclaration {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 490
         // reg_declaration ::= reg [ signed ] [ range ] list_of_variable_identifiers ;
 
         // @Incomplete
-        let reg_kw_span = *p
-            .tkw
-            .next_expect(T::KeywordReg, diagnostics.as_deref_mut())?
-            .span;
+        p.tkw
+            .next_expect(T::KeywordReg, diagnostics.as_deref_mut())?;
         let identifiers = parse_one_or_more_delimited::<Identifier>(
             p,
             arenas,
             T::Comma,
             diagnostics.as_deref_mut(),
         )?;
-        let semicolon_span = *p
-            .tkw
-            .next_expect(T::Semicolon, diagnostics.as_deref_mut())?
-            .span;
+        p.tkw
+            .next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
 
-        let span = reg_kw_span | semicolon_span;
-
-        Ok((Self { identifiers }, span))
+        Ok(Self { identifiers })
     }
 }
 
@@ -1133,7 +994,7 @@ impl<'a> Consumable<'a> for ParameterDeclaration {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 489
@@ -1141,10 +1002,8 @@ impl<'a> Consumable<'a> for ParameterDeclaration {
         //   parameter [ signed ] [ range ] list_of_param_assignments
         // | parameter parameter_type list_of_param_assignments
 
-        let parameter_kw_span = *p
-            .tkw
-            .next_expect(T::KeywordParameter, diagnostics.as_deref_mut())?
-            .span;
+        p.tkw
+            .next_expect(T::KeywordParameter, diagnostics.as_deref_mut())?;
         // @Incomplete
         let assignments = parse_one_or_more_delimited::<ParamAssignment>(
             p,
@@ -1152,11 +1011,8 @@ impl<'a> Consumable<'a> for ParameterDeclaration {
             T::Comma,
             diagnostics.as_deref_mut(),
         )?;
-        let last_span = arenas.get_span(assignments.last().unwrap());
 
-        let span = parameter_kw_span | last_span;
-
-        Ok((Self { assignments }, span))
+        Ok(Self { assignments })
     }
 }
 
@@ -1165,20 +1021,15 @@ impl<'a> Consumable<'a> for ParamAssignment {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 491
         // param_assignment ::= parameter_identifier = constant_mintypmax_expression
 
-        let (param, param_span) =
-            Identifier::item_parse_with_span(p, arenas, diagnostics.as_deref_mut())?;
+        let param = Identifier::item_parse(p, arenas, diagnostics.as_deref_mut())?;
         p.tkw.next_expect(T::Equals, diagnostics.as_deref_mut())?;
-        let (constant, constant_span) =
-            parse_with_span::<ConstantMinTypMaxExpression>(p, arenas, diagnostics.as_deref_mut())?;
-
-        let span = param_span | constant_span;
-
-        Ok((Self { param, constant }, span))
+        let constant = parse::<ConstantMinTypMaxExpression>(p, arenas, diagnostics.as_deref_mut())?;
+        Ok(Self { param, constant })
     }
 }

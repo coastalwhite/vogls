@@ -25,6 +25,20 @@ pub struct TokenLoc<'a> {
     pub file: &'a FileIdx,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TokenRange {
+    pub start: usize,
+    pub end: usize,
+}
+impl TokenRange {
+    pub fn at(tr: usize) -> TokenRange {
+        TokenRange {
+            start: tr,
+            end: tr + 1,
+        }
+    }
+}
+
 impl<'a> TokenWalker<'a> {
     pub fn new(buffer: &'a Tokenized) -> Self {
         Self {
@@ -85,7 +99,7 @@ impl<'a> TokenWalker<'a> {
                 if let Some(diagnostics) = diagnostics {
                     diagnostics
                         .errors
-                        .push((self.span_at_cursor(), ParseErrorReason::MissingToken));
+                        .push((TokenRange::at(i), ParseErrorReason::MissingToken));
                 }
                 Err(ParseErrorKind::MissingToken)
             }
@@ -118,7 +132,7 @@ impl<'a> TokenWalker<'a> {
             if let Some(diagnostics) = diagnostics {
                 diagnostics
                     .errors
-                    .push((self.span_at_cursor(), ParseErrorReason::MissingToken));
+                    .push((TokenRange::at(self.offset), ParseErrorReason::MissingToken));
             }
             return Err(ParseErrorKind::MissingToken);
         }
@@ -141,20 +155,17 @@ impl<'a> TokenWalker<'a> {
         kind: Token,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<TokenLoc<'_>, ParseErrorKind> {
+        let offset = self.offset;
         let next = self.try_next(diagnostics.as_deref_mut())?;
         if *next.kind != kind {
             if let Some(diagnostics) = diagnostics {
-                diagnostics
-                    .errors
-                    .push((*next.span, ParseErrorReason::UnexpectedToken(*next.kind)));
+                diagnostics.errors.push((
+                    TokenRange::at(offset),
+                    ParseErrorReason::UnexpectedToken(*next.kind),
+                ));
             }
             return Err(ParseErrorKind::UnexpectedToken);
         }
         Ok(next)
-    }
-
-    pub(crate) fn peek_content(&self) -> &str {
-        let t = self.get(self.offset).unwrap();
-        &self.content(*t.file)[t.span.start()..]
     }
 }

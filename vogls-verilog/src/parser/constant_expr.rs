@@ -1,9 +1,8 @@
 use crate::ast::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression, ConstantPrimary};
 use crate::ast::{DecimalRef, StringRef};
-use crate::span::Span;
 use crate::tokenizer::Token;
 
-use super::{AstArenas, Consumable, ParseError, Parser};
+use super::{AstArenas, Consumable, Parser};
 use super::{Diagnostics, ParseErrorKind, utils::*};
 
 impl<'a> Consumable<'a> for ConstantMinTypMaxExpression {
@@ -11,7 +10,7 @@ impl<'a> Consumable<'a> for ConstantMinTypMaxExpression {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 504
@@ -19,17 +18,14 @@ impl<'a> Consumable<'a> for ConstantMinTypMaxExpression {
         //   constant_expression
         // | constant_expression : constant_expression : constant_expression
 
-        let (min, min_span) =
-            parse_with_span::<ConstantExpr>(p, arenas, diagnostics.as_deref_mut())?;
+        let min = parse::<ConstantExpr>(p, arenas, diagnostics.as_deref_mut())?;
         if p.tkw.next_if_equals(T::Colon) {
             let typ = parse::<ConstantExpr>(p, arenas, diagnostics.as_deref_mut())?;
             p.tkw.next_expect(T::Colon, diagnostics.as_deref_mut())?;
-            let (max, max_span) =
-                parse_with_span::<ConstantExpr>(p, arenas, diagnostics.as_deref_mut())?;
-            let span = min_span | max_span;
-            Ok((Self::MinTypMax { min, typ, max }, span))
+            let max = parse::<ConstantExpr>(p, arenas, diagnostics.as_deref_mut())?;
+            Ok(Self::MinTypMax { min, typ, max })
         } else {
-            Ok((Self::Single(min), min_span))
+            Ok(Self::Single(min))
         }
     }
 }
@@ -39,7 +35,7 @@ impl<'a> Consumable<'a> for ConstantExpr {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 504
         // constant_expression ::=
         //   constant_primary
@@ -48,9 +44,8 @@ impl<'a> Consumable<'a> for ConstantExpr {
         // | constant_expression ? { attribute_instance } constant_expression : constant_expression
 
         // @Incomplete
-        let (primary, span) = ConstantPrimary::consume(p, arenas, diagnostics.as_deref_mut())?;
-
-        Ok((Self::Primary(primary), span))
+        let primary = ConstantPrimary::consume(p, arenas, diagnostics.as_deref_mut())?;
+        Ok(Self::Primary(primary))
     }
 }
 
@@ -59,7 +54,7 @@ impl<'a> Consumable<'a> for ConstantPrimary {
         p: &mut Parser<'a>,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<(Self, Span), ParseErrorKind> {
+    ) -> Result<Self, ParseErrorKind> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 505
@@ -77,15 +72,15 @@ impl<'a> Consumable<'a> for ConstantPrimary {
         let peeked = p.tkw.try_get(p.tkw.offset, diagnostics.as_deref_mut())?;
         match peeked.kind {
             T::Decimal => {
-                let (decimal, span) = DecimalRef::consume(p, arenas, diagnostics.as_deref_mut())?;
-                Ok((Self::Number(decimal), span))
+                let decimal = DecimalRef::consume(p, arenas, diagnostics.as_deref_mut())?;
+                Ok(Self::Number(decimal))
             }
             T::String => {
-                let (string, span) = StringRef::consume(p, arenas, diagnostics.as_deref_mut())?;
-                Ok((Self::String(string), span))
+                let string = StringRef::consume(p, arenas, diagnostics.as_deref_mut())?;
+                Ok(Self::String(string))
             }
             _ => {
-                diagnostics.map(|d| d.incomplete(*peeked.span, "constant_primary"));
+                diagnostics.map(|d| d.incomplete(p.tkw.offset, "constant_primary"));
                 Err(ParseErrorKind::Incomplete)
             }
         }

@@ -33,13 +33,7 @@ pub fn run(
         Err(_) => {
             for (location, err) in &diagnostics.errors {
                 let mut out = String::new();
-                report_error(
-                    err.clone(),
-                    *location,
-                    &path.display().to_string(),
-                    &content,
-                    &mut out,
-                )?;
+                report_error(&token_buffer, err.clone(), *location, &mut out)?;
                 write!(ectx.stdout, "{out}")?;
             }
             return Err("failed to parse".into());

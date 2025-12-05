@@ -1,9 +1,9 @@
-use crate::ast::{AstId, AstIdRange};
+use crate::ast::{AstId, AstIdRange, AstItem};
 use crate::parser::ParseErrorReason;
-use crate::span::Span;
 use crate::tokenizer::Token;
 
-use super::{AstArenas, Consumable, Diagnostics, ParseError, ParseErrorKind, Parser};
+use super::token_walker::TokenRange;
+use super::{AstArenas, Consumable, Diagnostics, ParseErrorKind, Parser};
 
 pub fn report_err<'a>(
     p: &mut Parser<'a>,
@@ -12,18 +12,15 @@ pub fn report_err<'a>(
 ) {
     if let Some(diagnostics) = diagnostics {
         use ParseErrorKind as K;
-        let (span, err) = match err {
-            K::MissingToken => (p.tkw.span_at_cursor(), ParseErrorReason::MissingToken),
+        let err = match err {
+            K::MissingToken => ParseErrorReason::MissingToken,
             K::UnexpectedToken => {
                 let t = p.tkw.get(p.tkw.offset).unwrap();
-                (*t.span, ParseErrorReason::UnexpectedToken(*t.kind))
+                ParseErrorReason::UnexpectedToken(*t.kind)
             }
-            K::Incomplete => (
-                p.tkw.span_at_cursor(),
-                ParseErrorReason::Incomplete("incomplete"),
-            ),
+            K::Incomplete => ParseErrorReason::Incomplete("incomplete"),
         };
-        diagnostics.errors.push((span, err));
+        diagnostics.errors.push((TokenRange::at(p.tkw.offset), err));
     }
 }
 
@@ -32,31 +29,45 @@ pub fn parse<'a, T: Consumable<'a>>(
     arenas: &mut AstArenas,
     diagnostics: Option<&mut Diagnostics>,
 ) -> Result<AstId<T>, ParseErrorKind> {
-    Ok(parse_with_span::<T>(p, arenas, diagnostics)?.0)
-}
-
-pub fn parse_with_span<'a, T: Consumable<'a>>(
-    p: &mut Parser<'a>,
-    arenas: &mut AstArenas,
-    diagnostics: Option<&mut Diagnostics>,
-) -> Result<(AstId<T>, Span), ParseErrorKind> {
-    let (item, span) = T::consume(p, arenas, diagnostics)?;
-    Ok((arenas.add(item, span), span))
+    let start = p.tkw.offset;
+    let item = T::consume(p, arenas, diagnostics)?;
+    let end = p.tkw.offset;
+    Ok(arenas.add(item, TokenRange { start, end }))
 }
 
 pub fn try_parse<'a, T: Consumable<'a>>(
     p: &mut Parser<'a>,
     arenas: &mut AstArenas,
 ) -> Option<AstId<T>> {
-    Some(try_parse_with_span::<T>(p, arenas)?.0)
+    let start = p.tkw.offset;
+    let item = T::try_consume(p, arenas)?;
+    let end = p.tkw.offset - 1;
+    Some(arenas.add(item, TokenRange { start, end }))
 }
 
-pub fn try_parse_with_span<'a, T: Consumable<'a>>(
+pub fn item_parse<'a, T: Consumable<'a>>(
     p: &mut Parser<'a>,
     arenas: &mut AstArenas,
-) -> Option<(AstId<T>, Span)> {
-    let (item, span) = T::try_consume(p, arenas)?;
-    Some((arenas.add(item, span), span))
+    diagnostics: Option<&mut Diagnostics>,
+) -> Result<AstItem<T>, ParseErrorKind> {
+    let start = p.tkw.offset;
+    let item = T::consume(p, arenas, diagnostics)?;
+    let end = p.tkw.offset;
+    let loc = arenas.spans.len();
+    arenas.spans.push(TokenRange { start, end });
+    Ok(AstItem { item, loc })
+}
+
+pub fn try_item_parse<'a, T: Consumable<'a>>(
+    p: &mut Parser<'a>,
+    arenas: &mut AstArenas,
+) -> Option<AstItem<T>> {
+    let start = p.tkw.offset;
+    let item = T::try_consume(p, arenas)?;
+    let end = p.tkw.offset;
+    let loc = arenas.spans.len();
+    arenas.spans.push(TokenRange { start, end });
+    Some(AstItem { item, loc })
 }
 
 pub fn parse_until_reaching<'a, T: Consumable<'a>>(
@@ -83,9 +94,14 @@ pub fn parse_until_reaching<'a, T: Consumable<'a>>(
         }
         p.tkw.offset -= 1;
 
-        let (item, span) = T::consume(p, arenas, diagnostics.as_deref_mut())?;
+        let start = p.tkw.offset;
+        let item = T::consume(p, arenas, diagnostics.as_deref_mut())?;
+        let token_range = TokenRange {
+            start,
+            end: p.tkw.offset,
+        };
         items.push(item);
-        spans.push(span);
+        spans.push(token_range);
     }
 
     Ok(arenas.add_range(items, spans))
@@ -97,23 +113,33 @@ pub fn parse_one_or_more_delimited<'a, T: Consumable<'a>>(
     delimiter: Token,
     mut diagnostics: Option<&mut Diagnostics>,
 ) -> Result<AstIdRange<T>, ParseErrorKind> {
-    let (item, span) = T::consume(p, arenas, diagnostics.as_deref_mut())?;
+    let start = p.tkw.offset;
+    let item = T::consume(p, arenas, diagnostics.as_deref_mut())?;
+    let token_range = TokenRange {
+        start,
+        end: p.tkw.offset,
+    };
 
     // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
     // here.
     let mut items = Vec::new();
     let mut spans = Vec::new();
     items.push(item);
-    spans.push(span);
+    spans.push(token_range);
 
     loop {
         if !p.tkw.next_if_equals(delimiter) {
             break;
         }
 
-        let (item, span) = T::consume(p, arenas, diagnostics.as_deref_mut())?;
+        let start = p.tkw.offset;
+        let item = T::consume(p, arenas, diagnostics.as_deref_mut())?;
+        let token_range = TokenRange {
+            start,
+            end: p.tkw.offset,
+        };
         items.push(item);
-        spans.push(span);
+        spans.push(token_range);
     }
 
     Ok(arenas.add_range(items, spans))
@@ -125,8 +151,13 @@ pub fn parse_zero_or_more_delimited<'a, T: Consumable<'a>>(
     delimiter: Token,
     mut diagnostics: Option<&mut Diagnostics>,
 ) -> Result<AstIdRange<T>, ParseErrorKind> {
-    let Some((item, span)) = T::try_consume(p, arenas) else {
+    let start = p.tkw.offset;
+    let Some(item) = T::try_consume(p, arenas) else {
         return Ok(AstIdRange::default());
+    };
+    let token_range = TokenRange {
+        start,
+        end: p.tkw.offset,
     };
 
     // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
@@ -134,16 +165,21 @@ pub fn parse_zero_or_more_delimited<'a, T: Consumable<'a>>(
     let mut items = Vec::new();
     let mut spans = Vec::new();
     items.push(item);
-    spans.push(span);
+    spans.push(token_range);
 
     loop {
         if !p.tkw.next_if_equals(delimiter) {
             break;
         }
 
-        let (item, span) = T::consume(p, arenas, diagnostics.as_deref_mut())?;
+        let start = p.tkw.offset;
+        let item = T::consume(p, arenas, diagnostics.as_deref_mut())?;
+        let token_range = TokenRange {
+            start,
+            end: p.tkw.offset,
+        };
         items.push(item);
-        spans.push(span);
+        spans.push(token_range);
     }
 
     Ok(arenas.add_range(items, spans))
@@ -160,9 +196,14 @@ pub fn parse_one_or_more<'a, T: Consumable<'a>>(
     let mut spans = Vec::new();
 
     loop {
-        let (item, span) = T::consume(p, arenas, diagnostics.as_deref_mut())?;
+        let start = p.tkw.offset;
+        let item = T::consume(p, arenas, diagnostics.as_deref_mut())?;
+        let token_range = TokenRange {
+            start,
+            end: p.tkw.offset,
+        };
         items.push(item);
-        spans.push(span);
+        spans.push(token_range);
 
         if p.tkw.is_empty() {
             break;
@@ -178,14 +219,19 @@ pub fn parse_one_or_more_delimited_until_fail<'a, T: Consumable<'a>>(
     delimiter: Token,
     diagnostics: Option<&mut Diagnostics>,
 ) -> Result<AstIdRange<T>, ParseErrorKind> {
-    let (item, span) = T::consume(p, arenas, diagnostics)?;
+    let start = p.tkw.offset;
+    let item = T::consume(p, arenas, diagnostics)?;
+    let token_range = TokenRange {
+        start,
+        end: p.tkw.offset,
+    };
 
     // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
     // here.
     let mut items = Vec::new();
     let mut spans = Vec::new();
     items.push(item);
-    spans.push(span);
+    spans.push(token_range);
 
     loop {
         let save = p.tkw.offset;
@@ -193,12 +239,17 @@ pub fn parse_one_or_more_delimited_until_fail<'a, T: Consumable<'a>>(
             break;
         }
 
-        let Some((item, span)) = T::try_consume(p, arenas) else {
+        let start = p.tkw.offset;
+        let Some(item) = T::try_consume(p, arenas) else {
             p.tkw.offset = save;
             break;
         };
+        let token_range = TokenRange {
+            start,
+            end: p.tkw.offset,
+        };
         items.push(item);
-        spans.push(span);
+        spans.push(token_range);
     }
 
     Ok(arenas.add_range(items, spans))
