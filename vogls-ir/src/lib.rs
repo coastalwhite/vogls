@@ -125,10 +125,12 @@ pub enum IntrinsicOp {
 #[derive(Debug, Clone, Copy)]
 pub enum UnaryOp {
     BitNeg(VectorSize),
-    DecimalNeg,
-
     BitReduceOr(VectorSize),
     BitReduceAnd(VectorSize),
+
+    DecimalNeg,
+    DecimalReduceOr,
+    DecimalReduceAnd,
 }
 
 #[derive(Debug, Clone, Copy)]

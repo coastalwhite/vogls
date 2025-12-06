@@ -3,10 +3,10 @@ use crate::parser::ParseErrorReason;
 use crate::tokenizer::Token;
 
 use super::token_walker::TokenRange;
-use super::{AstArenas, Consumable, Diagnostics, ParseErrorKind, Parser};
+use super::{AstArenas, Consumable, Diagnostics, ParseErrorKind, ParserScratches, TokenWalker};
 
 pub fn report_err<'a>(
-    p: &mut Parser<'a>,
+    tkw: &mut TokenWalker<'a>,
     diagnostics: Option<&mut Diagnostics>,
     err: ParseErrorKind,
 ) {
@@ -15,63 +15,68 @@ pub fn report_err<'a>(
         let err = match err {
             K::MissingToken => ParseErrorReason::MissingToken,
             K::UnexpectedToken => {
-                let t = p.tkw.get(p.tkw.offset).unwrap();
+                let t = tkw.get(tkw.offset).unwrap();
                 ParseErrorReason::UnexpectedToken(*t.kind)
             }
             K::Incomplete => ParseErrorReason::Incomplete("incomplete"),
         };
-        diagnostics.errors.push((TokenRange::at(p.tkw.offset), err));
+        diagnostics.errors.push((TokenRange::at(tkw.offset), err));
     }
 }
 
 pub fn parse<'a, T: Consumable<'a>>(
-    p: &mut Parser<'a>,
+    tkw: &mut TokenWalker<'a>,
+    sc: &mut ParserScratches,
     arenas: &mut AstArenas,
     diagnostics: Option<&mut Diagnostics>,
 ) -> Result<AstId<T>, ParseErrorKind> {
-    let start = p.tkw.offset;
-    let item = T::consume(p, arenas, diagnostics)?;
-    let end = p.tkw.offset;
+    let start = tkw.offset;
+    let item = T::consume(tkw, sc, arenas, diagnostics)?;
+    let end = tkw.offset;
     Ok(arenas.add(item, TokenRange { start, end }))
 }
 
 pub fn try_parse<'a, T: Consumable<'a>>(
-    p: &mut Parser<'a>,
+    tkw: &mut TokenWalker<'a>,
+    sc: &mut ParserScratches,
     arenas: &mut AstArenas,
 ) -> Option<AstId<T>> {
-    let start = p.tkw.offset;
-    let item = T::try_consume(p, arenas)?;
-    let end = p.tkw.offset - 1;
+    let start = tkw.offset;
+    let item = T::try_consume(tkw, sc, arenas)?;
+    let end = tkw.offset - 1;
     Some(arenas.add(item, TokenRange { start, end }))
 }
 
 pub fn item_parse<'a, T: Consumable<'a>>(
-    p: &mut Parser<'a>,
+    tkw: &mut TokenWalker<'a>,
+    sc: &mut ParserScratches,
     arenas: &mut AstArenas,
     diagnostics: Option<&mut Diagnostics>,
 ) -> Result<AstItem<T>, ParseErrorKind> {
-    let start = p.tkw.offset;
-    let item = T::consume(p, arenas, diagnostics)?;
-    let end = p.tkw.offset;
+    let start = tkw.offset;
+    let item = T::consume(tkw, sc, arenas, diagnostics)?;
+    let end = tkw.offset;
     let loc = arenas.spans.len();
     arenas.spans.push(TokenRange { start, end });
     Ok(AstItem { item, loc })
 }
 
 pub fn try_item_parse<'a, T: Consumable<'a>>(
-    p: &mut Parser<'a>,
+    tkw: &mut TokenWalker<'a>,
+    sc: &mut ParserScratches,
     arenas: &mut AstArenas,
 ) -> Option<AstItem<T>> {
-    let start = p.tkw.offset;
-    let item = T::try_consume(p, arenas)?;
-    let end = p.tkw.offset;
+    let start = tkw.offset;
+    let item = T::try_consume(tkw, sc, arenas)?;
+    let end = tkw.offset;
     let loc = arenas.spans.len();
     arenas.spans.push(TokenRange { start, end });
     Some(AstItem { item, loc })
 }
 
 pub fn parse_until_reaching<'a, T: Consumable<'a>>(
-    p: &mut Parser<'a>,
+    tkw: &mut TokenWalker<'a>,
+    sc: &mut ParserScratches,
     arenas: &mut AstArenas,
     end: Token,
     mut diagnostics: Option<&mut Diagnostics>,
@@ -82,23 +87,23 @@ pub fn parse_until_reaching<'a, T: Consumable<'a>>(
     let mut spans = Vec::new();
 
     loop {
-        let token = match p.tkw.try_next(diagnostics.as_deref_mut()) {
+        let token = match tkw.try_next(diagnostics.as_deref_mut()) {
             Ok(t) => t,
             Err(err) => {
-                report_err(p, diagnostics, err);
+                report_err(tkw, diagnostics, err);
                 return Err(err);
             }
         };
         if *token.kind == end {
             break;
         }
-        p.tkw.offset -= 1;
+        tkw.offset -= 1;
 
-        let start = p.tkw.offset;
-        let item = T::consume(p, arenas, diagnostics.as_deref_mut())?;
+        let start = tkw.offset;
+        let item = T::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
         let token_range = TokenRange {
             start,
-            end: p.tkw.offset,
+            end: tkw.offset,
         };
         items.push(item);
         spans.push(token_range);
@@ -108,16 +113,17 @@ pub fn parse_until_reaching<'a, T: Consumable<'a>>(
 }
 
 pub fn parse_one_or_more_delimited<'a, T: Consumable<'a>>(
-    p: &mut Parser<'a>,
+    tkw: &mut TokenWalker<'a>,
+    sc: &mut ParserScratches,
     arenas: &mut AstArenas,
     delimiter: Token,
     mut diagnostics: Option<&mut Diagnostics>,
 ) -> Result<AstIdRange<T>, ParseErrorKind> {
-    let start = p.tkw.offset;
-    let item = T::consume(p, arenas, diagnostics.as_deref_mut())?;
+    let start = tkw.offset;
+    let item = T::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
     let token_range = TokenRange {
         start,
-        end: p.tkw.offset,
+        end: tkw.offset,
     };
 
     // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
@@ -128,15 +134,15 @@ pub fn parse_one_or_more_delimited<'a, T: Consumable<'a>>(
     spans.push(token_range);
 
     loop {
-        if !p.tkw.next_if_equals(delimiter) {
+        if !tkw.next_if_equals(delimiter) {
             break;
         }
 
-        let start = p.tkw.offset;
-        let item = T::consume(p, arenas, diagnostics.as_deref_mut())?;
+        let start = tkw.offset;
+        let item = T::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
         let token_range = TokenRange {
             start,
-            end: p.tkw.offset,
+            end: tkw.offset,
         };
         items.push(item);
         spans.push(token_range);
@@ -146,18 +152,19 @@ pub fn parse_one_or_more_delimited<'a, T: Consumable<'a>>(
 }
 
 pub fn parse_zero_or_more_delimited<'a, T: Consumable<'a>>(
-    p: &mut Parser<'a>,
+    tkw: &mut TokenWalker<'a>,
+    sc: &mut ParserScratches,
     arenas: &mut AstArenas,
     delimiter: Token,
     mut diagnostics: Option<&mut Diagnostics>,
 ) -> Result<AstIdRange<T>, ParseErrorKind> {
-    let start = p.tkw.offset;
-    let Some(item) = T::try_consume(p, arenas) else {
+    let start = tkw.offset;
+    let Some(item) = T::try_consume(tkw, sc, arenas) else {
         return Ok(AstIdRange::default());
     };
     let token_range = TokenRange {
         start,
-        end: p.tkw.offset,
+        end: tkw.offset,
     };
 
     // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
@@ -168,15 +175,15 @@ pub fn parse_zero_or_more_delimited<'a, T: Consumable<'a>>(
     spans.push(token_range);
 
     loop {
-        if !p.tkw.next_if_equals(delimiter) {
+        if !tkw.next_if_equals(delimiter) {
             break;
         }
 
-        let start = p.tkw.offset;
-        let item = T::consume(p, arenas, diagnostics.as_deref_mut())?;
+        let start = tkw.offset;
+        let item = T::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
         let token_range = TokenRange {
             start,
-            end: p.tkw.offset,
+            end: tkw.offset,
         };
         items.push(item);
         spans.push(token_range);
@@ -186,7 +193,8 @@ pub fn parse_zero_or_more_delimited<'a, T: Consumable<'a>>(
 }
 
 pub fn parse_one_or_more<'a, T: Consumable<'a>>(
-    p: &mut Parser<'a>,
+    tkw: &mut TokenWalker<'a>,
+    sc: &mut ParserScratches,
     arenas: &mut AstArenas,
     mut diagnostics: Option<&mut Diagnostics>,
 ) -> Result<AstIdRange<T>, ParseErrorKind> {
@@ -196,16 +204,16 @@ pub fn parse_one_or_more<'a, T: Consumable<'a>>(
     let mut spans = Vec::new();
 
     loop {
-        let start = p.tkw.offset;
-        let item = T::consume(p, arenas, diagnostics.as_deref_mut())?;
+        let start = tkw.offset;
+        let item = T::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
         let token_range = TokenRange {
             start,
-            end: p.tkw.offset,
+            end: tkw.offset,
         };
         items.push(item);
         spans.push(token_range);
 
-        if p.tkw.is_empty() {
+        if tkw.is_empty() {
             break;
         }
     }
@@ -214,16 +222,17 @@ pub fn parse_one_or_more<'a, T: Consumable<'a>>(
 }
 
 pub fn parse_one_or_more_delimited_until_fail<'a, T: Consumable<'a>>(
-    p: &mut Parser<'a>,
+    tkw: &mut TokenWalker<'a>,
+    sc: &mut ParserScratches,
     arenas: &mut AstArenas,
     delimiter: Token,
     diagnostics: Option<&mut Diagnostics>,
 ) -> Result<AstIdRange<T>, ParseErrorKind> {
-    let start = p.tkw.offset;
-    let item = T::consume(p, arenas, diagnostics)?;
+    let start = tkw.offset;
+    let item = T::consume(tkw, sc, arenas, diagnostics)?;
     let token_range = TokenRange {
         start,
-        end: p.tkw.offset,
+        end: tkw.offset,
     };
 
     // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
@@ -234,19 +243,19 @@ pub fn parse_one_or_more_delimited_until_fail<'a, T: Consumable<'a>>(
     spans.push(token_range);
 
     loop {
-        let save = p.tkw.offset;
-        if !p.tkw.next_if_equals(delimiter) {
+        let save = tkw.offset;
+        if !tkw.next_if_equals(delimiter) {
             break;
         }
 
-        let start = p.tkw.offset;
-        let Some(item) = T::try_consume(p, arenas) else {
-            p.tkw.offset = save;
+        let start = tkw.offset;
+        let Some(item) = T::try_consume(tkw, sc, arenas) else {
+            tkw.offset = save;
             break;
         };
         let token_range = TokenRange {
             start,
-            end: p.tkw.offset,
+            end: tkw.offset,
         };
         items.push(item);
         spans.push(token_range);

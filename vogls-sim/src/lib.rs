@@ -98,7 +98,6 @@ impl Event {
                 I::Unary(dst, op, src) => {
                     use UnaryOp as O;
                     match op {
-                        O::DecimalNeg => decimal_stack[src.offset] = !decimal_stack[src.offset],
                         O::BitNeg(size) => {
                             if *size != 1 {
                                 todo!()
@@ -119,6 +118,14 @@ impl Event {
                             let mask = (1u8 << size % 8).wrapping_sub(1);
                             let result = result & (bit_stack[num_bytes - 1] & mask == mask);
                             bit_stack[dst.offset] = u8::from(result);
+                        }
+
+                        O::DecimalNeg => decimal_stack[dst.offset] = !decimal_stack[src.offset],
+                        O::DecimalReduceAnd => {
+                            bit_stack[dst.offset] = u8::from(!decimal_stack[src.offset] == 0)
+                        }
+                        O::DecimalReduceOr => {
+                            bit_stack[dst.offset] = u8::from(decimal_stack[src.offset] != 0)
                         }
                     };
                 }

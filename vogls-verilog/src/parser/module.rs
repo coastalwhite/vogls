@@ -13,12 +13,13 @@ use crate::ast::module::{
 use crate::ast::statement::{NetLValue, Statement};
 use crate::tokenizer::Token;
 
-use super::{AstArenas, Consumable, ParseErrorKind, Parser};
+use super::{AstArenas, Consumable, ParseErrorKind, ParserScratches, TokenWalker};
 use super::{Diagnostics, utils::*};
 
 impl<'a> Consumable<'a> for Module {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -34,38 +35,38 @@ impl<'a> Consumable<'a> for Module {
         // endmodule
 
         // @Incomplete: { attribute_instance }
-        p.tkw
-            .next_expect(T::KeywordModule, diagnostics.as_deref_mut())?;
-        let module_identifier = item_parse::<Identifier>(p, arenas, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::KeywordModule, diagnostics.as_deref_mut())?;
+        let module_identifier =
+            item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
         // @Incomplete: [ module_parameter_port_list ]
-        let ports = if p.tkw.next_if_equals(T::LeftParen) {
-            let peeked = p.tkw.try_get(p.tkw.offset, diagnostics.as_deref_mut())?;
+        let ports = if tkw.next_if_equals(T::LeftParen) {
+            let peeked = tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?;
             match peeked.kind {
                 T::RightParen => {
-                    p.tkw.next();
+                    tkw.next();
                     ModulePorts::PortDeclarations(Default::default())
                 }
                 T::KeywordInput | T::KeywordOutput | T::KeywordInout => {
                     let port_declarations = parse_zero_or_more_delimited::<PortDeclaration>(
-                        p,
+                        tkw,
+                        sc,
                         arenas,
                         T::Comma,
                         diagnostics.as_deref_mut(),
                     )?;
-                    p.tkw
-                        .next_expect(T::RightParen, diagnostics.as_deref_mut())?;
+                    tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
 
                     ModulePorts::PortDeclarations(port_declarations)
                 }
                 _ => {
                     let ports = parse_one_or_more_delimited::<Port>(
-                        p,
+                        tkw,
+                        sc,
                         arenas,
                         T::Comma,
                         diagnostics.as_deref_mut(),
                     )?;
-                    p.tkw
-                        .next_expect(T::RightParen, diagnostics.as_deref_mut())?;
+                    tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
 
                     ModulePorts::Ports(ports)
                 }
@@ -73,10 +74,10 @@ impl<'a> Consumable<'a> for Module {
         } else {
             ModulePorts::PortDeclarations(Default::default())
         };
-        p.tkw
-            .next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
         let module_items = parse_until_reaching::<ModuleItem>(
-            p,
+            tkw,
+            sc,
             arenas,
             T::KeywordEndModule,
             diagnostics.as_deref_mut(),
@@ -92,7 +93,8 @@ impl<'a> Consumable<'a> for Module {
 
 impl<'a> Consumable<'a> for ModuleItem {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -102,18 +104,17 @@ impl<'a> Consumable<'a> for ModuleItem {
         // module_item ::=
         //   port_declaration ;
         // | non_port_module_item
-        let peeked = p.tkw.try_get(p.tkw.offset, diagnostics.as_deref_mut())?;
+        let peeked = tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?;
         match peeked.kind {
             T::KeywordInput | T::KeywordOutput | T::KeywordInout => {
                 let port_declaration =
-                    parse::<PortDeclaration>(p, arenas, diagnostics.as_deref_mut())?;
-                p.tkw
-                    .next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+                    parse::<PortDeclaration>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
                 Ok(Self::PortDeclaration(port_declaration))
             }
             _ => {
                 let non_port_module_item =
-                    parse::<NonPortModuleItem>(p, arenas, diagnostics.as_deref_mut())?;
+                    parse::<NonPortModuleItem>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
                 Ok(Self::NonPortModuleItem(non_port_module_item))
             }
         }
@@ -122,7 +123,8 @@ impl<'a> Consumable<'a> for ModuleItem {
 
 impl<'a> Consumable<'a> for NonPortModuleItem {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -136,34 +138,33 @@ impl<'a> Consumable<'a> for NonPortModuleItem {
         // | { attribute_instance } parameter_declaration ;
         // | { attribute_instance } specparam_declaration
 
-        let peeked = p.tkw.try_get(p.tkw.offset, diagnostics.as_deref_mut())?;
+        let peeked = tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?;
         match peeked.kind {
             T::KeywordParameter => {
                 let parameter_declaration =
-                    parse::<ParameterDeclaration>(p, arenas, diagnostics.as_deref_mut())?;
-                p.tkw
-                    .next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+                    parse::<ParameterDeclaration>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
                 Ok(Self::ParameterDeclaration(parameter_declaration))
             }
             T::KeywordGenerate => {
                 diagnostics
-                    .map(|d| d.incomplete(p.tkw.offset, "non_port_module_item::generate_region"));
+                    .map(|d| d.incomplete(tkw.offset, "non_port_module_item::generate_region"));
                 Err(ParseErrorKind::Incomplete)
             }
             T::KeywordSpecify => {
                 diagnostics
-                    .map(|d| d.incomplete(p.tkw.offset, "non_port_module_item::specify_block"));
+                    .map(|d| d.incomplete(tkw.offset, "non_port_module_item::specify_block"));
                 Err(ParseErrorKind::Incomplete)
             }
             T::KeywordSpecParam => {
                 diagnostics.map(|d| {
-                    d.incomplete(p.tkw.offset, "non_port_module_item::specparam_declaration")
+                    d.incomplete(tkw.offset, "non_port_module_item::specparam_declaration")
                 });
                 Err(ParseErrorKind::Incomplete)
             }
             _ => {
                 let module_or_generate_item =
-                    parse::<ModuleOrGenerateItem>(p, arenas, diagnostics.as_deref_mut())?;
+                    parse::<ModuleOrGenerateItem>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
                 Ok(Self::ModuleOrGenerateItem(module_or_generate_item))
             }
         }
@@ -172,7 +173,8 @@ impl<'a> Consumable<'a> for NonPortModuleItem {
 
 impl<'a> Consumable<'a> for Port {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -183,14 +185,15 @@ impl<'a> Consumable<'a> for Port {
 
         // @Incomplete: . port_identifier ( [ port_expression ] )
 
-        let port_expression = parse::<PortExpression>(p, arenas, diagnostics.as_deref_mut())?;
+        let port_expression = parse::<PortExpression>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
         Ok(Self::PortExpression(port_expression))
     }
 }
 
 impl<'a> Consumable<'a> for PortExpression {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -201,7 +204,7 @@ impl<'a> Consumable<'a> for PortExpression {
 
         // @Incomplete: { port_reference { , port_reference } }
 
-        let port_reference = parse::<PortReference>(p, arenas, diagnostics.as_deref_mut())?;
+        let port_reference = parse::<PortReference>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
         Ok(Self {
             references: port_reference,
         })
@@ -210,7 +213,8 @@ impl<'a> Consumable<'a> for PortExpression {
 
 impl<'a> Consumable<'a> for PortReference {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -220,14 +224,15 @@ impl<'a> Consumable<'a> for PortReference {
 
         // @Incomplete: [ [ constant_range_expression ] ]
 
-        let identifier = item_parse::<Identifier>(p, arenas, diagnostics.as_deref_mut())?;
+        let identifier = item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
         Ok(Self { identifier })
     }
 }
 
 impl<'a> Consumable<'a> for PortDeclaration {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -239,25 +244,25 @@ impl<'a> Consumable<'a> for PortDeclaration {
         // | {attribute_instance} input_declaration
         // | {attribute_instance} output_declaration
 
-        let peeked = p.tkw.try_get(p.tkw.offset, diagnostics.as_deref_mut())?;
+        let peeked = tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?;
         match *peeked.kind {
             T::KeywordInout => {
                 let inout_declaration =
-                    parse::<InoutDeclaration>(p, arenas, diagnostics.as_deref_mut())?;
+                    parse::<InoutDeclaration>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
                 Ok(Self::Inout(inout_declaration))
             }
             T::KeywordInput => {
                 let input_declaration =
-                    parse::<InputDeclaration>(p, arenas, diagnostics.as_deref_mut())?;
+                    parse::<InputDeclaration>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
                 Ok(Self::Input(input_declaration))
             }
             T::KeywordOutput => {
                 let output_declaration =
-                    parse::<OutputDeclaration>(p, arenas, diagnostics.as_deref_mut())?;
+                    parse::<OutputDeclaration>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
                 Ok(Self::Output(output_declaration))
             }
             _ => {
-                diagnostics.map(|d| d.unexpected_token(p.tkw.offset, *peeked.kind));
+                diagnostics.map(|d| d.unexpected_token(tkw.offset, *peeked.kind));
                 Err(ParseErrorKind::UnexpectedToken)
             }
         }
@@ -266,7 +271,8 @@ impl<'a> Consumable<'a> for PortDeclaration {
 
 impl<'a> Consumable<'a> for InoutDeclaration {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -275,16 +281,16 @@ impl<'a> Consumable<'a> for InoutDeclaration {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 489
         // inout_declaration ::= inout [ net_type ] [ signed ] [ range ] list_of_port_identifiers
 
-        p.tkw
-            .next_expect(T::KeywordInout, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::KeywordInout, diagnostics.as_deref_mut())?;
         let mut net_type = None;
-        if let Some(val) = try_item_parse::<NetType>(p, arenas) {
+        if let Some(val) = try_item_parse::<NetType>(tkw, sc, arenas) {
             net_type = Some(val);
         }
-        let signed = p.tkw.next_if_equals(T::KeywordSigned);
+        let signed = tkw.next_if_equals(T::KeywordSigned);
         // @Incomplete: [ range ]
         let port_identifiers = parse_one_or_more_delimited_until_fail::<Identifier>(
-            p,
+            tkw,
+            sc,
             arenas,
             T::Comma,
             diagnostics.as_deref_mut(),
@@ -301,7 +307,8 @@ impl<'a> Consumable<'a> for InoutDeclaration {
 
 impl<'a> Consumable<'a> for InputDeclaration {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -310,16 +317,16 @@ impl<'a> Consumable<'a> for InputDeclaration {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 489
         // input_declaration ::= input [ net_type ] [ signed ] [ range ] list_of_port_identifiers
 
-        p.tkw
-            .next_expect(T::KeywordInput, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::KeywordInput, diagnostics.as_deref_mut())?;
         let mut net_type = None;
-        if let Some(val) = try_item_parse::<NetType>(p, arenas) {
+        if let Some(val) = try_item_parse::<NetType>(tkw, sc, arenas) {
             net_type = Some(val);
         }
-        let signed = p.tkw.next_if_equals(T::KeywordSigned);
+        let signed = tkw.next_if_equals(T::KeywordSigned);
         // @Incomplete: [ range ]
         let port_identifiers = parse_one_or_more_delimited_until_fail::<Identifier>(
-            p,
+            tkw,
+            sc,
             arenas,
             T::Comma,
             diagnostics.as_deref_mut(),
@@ -336,7 +343,8 @@ impl<'a> Consumable<'a> for InputDeclaration {
 
 impl<'a> Consumable<'a> for OutputDeclaration {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -348,17 +356,17 @@ impl<'a> Consumable<'a> for OutputDeclaration {
         // | output reg [ signed ] [ range ] list_of_variable_port_identifiers
         // | output output_variable_type list_of_variable_port_identifiers
 
-        p.tkw
-            .next_expect(T::KeywordOutput, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::KeywordOutput, diagnostics.as_deref_mut())?;
         let mut net_type = None;
-        if let Some(val) = try_item_parse::<NetType>(p, arenas) {
+        if let Some(val) = try_item_parse::<NetType>(tkw, sc, arenas) {
             net_type = Some(val);
         }
-        let signed = p.tkw.next_if_equals(T::KeywordSigned);
+        let signed = tkw.next_if_equals(T::KeywordSigned);
         // @Incomplete: reg | output_variable_type
         // @Incomplete: [ range ]
         let identifiers = parse_one_or_more_delimited_until_fail::<Identifier>(
-            p,
+            tkw,
+            sc,
             arenas,
             T::Comma,
             diagnostics.as_deref_mut(),
@@ -375,7 +383,8 @@ impl<'a> Consumable<'a> for OutputDeclaration {
 
 impl<'a> Consumable<'a> for NetType {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        _sc: &mut ParserScratches,
         _arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -388,7 +397,7 @@ impl<'a> Consumable<'a> for NetType {
         // | triand | trior | tri0 | tri1
         // | uwire | wire | wand | wor
 
-        let token = p.tkw.try_next(diagnostics.as_deref_mut())?;
+        let token = tkw.try_next(diagnostics.as_deref_mut())?;
         let result = match *token.kind {
             T::KeywordSupply0 => Ok(Self::Supply0),
             T::KeywordSupply1 => Ok(Self::Supply1),
@@ -401,7 +410,7 @@ impl<'a> Consumable<'a> for NetType {
             T::KeywordWand => Ok(Self::WAnd),
             T::KeywordWor => Ok(Self::WOr),
             t => {
-                diagnostics.map(|d| d.unexpected_token(p.tkw.offset, t));
+                diagnostics.map(|d| d.unexpected_token(tkw.offset, t));
                 Err(ParseErrorKind::UnexpectedToken)
             }
         }?;
@@ -411,7 +420,8 @@ impl<'a> Consumable<'a> for NetType {
 
 impl<'a> Consumable<'a> for ModuleOrGenerateItem {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -434,26 +444,26 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItem {
         // @Incomplete: { attribute_instance }
         // @Incomplete
 
-        let peeked = p.tkw.try_get(p.tkw.offset, diagnostics.as_deref_mut())?;
+        let peeked = tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?;
         match peeked.kind {
             T::KeywordInitial => {
                 let initial_construct =
-                    parse::<InitialConstruct>(p, arenas, diagnostics.as_deref_mut())?;
+                    parse::<InitialConstruct>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
                 Ok(Self::InitialConstruct(initial_construct))
             }
             T::KeywordAlways => {
                 let always_construct =
-                    parse::<AlwaysConstruct>(p, arenas, diagnostics.as_deref_mut())?;
+                    parse::<AlwaysConstruct>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
                 Ok(Self::AlwaysConstruct(always_construct))
             }
             T::KeywordAssign => {
                 let continous_assign =
-                    parse::<ContinousAssign>(p, arenas, diagnostics.as_deref_mut())?;
+                    parse::<ContinousAssign>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
                 Ok(Self::ContinuousAssign(continous_assign))
             }
             T::Ident => {
                 let module_instance =
-                    parse::<ModuleInstantiation>(p, arenas, diagnostics.as_deref_mut())?;
+                    parse::<ModuleInstantiation>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
                 Ok(Self::ModuleInstantiation(module_instance))
             }
             T::KeywordAnd
@@ -463,7 +473,7 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItem {
             | T::KeywordXor
             | T::KeywordXnor => {
                 let gate_instance =
-                    parse::<GateInstantiation>(p, arenas, diagnostics.as_deref_mut())?;
+                    parse::<GateInstantiation>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
                 Ok(Self::GateInstantiation(gate_instance))
             }
             T::KeywordSupply0
@@ -478,7 +488,8 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItem {
             | T::KeywordWor
             | T::KeywordReg => {
                 let module_or_generate_item_declaration = parse::<ModuleOrGenerateItemDeclaration>(
-                    p,
+                    tkw,
+                    sc,
                     arenas,
                     diagnostics.as_deref_mut(),
                 )?;
@@ -487,7 +498,7 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItem {
                 ))
             }
             _ => {
-                diagnostics.map(|d| d.incomplete(p.tkw.offset, "module_or_generate_item"));
+                diagnostics.map(|d| d.incomplete(tkw.offset, "module_or_generate_item"));
                 Err(ParseErrorKind::Incomplete)
             }
         }
@@ -496,7 +507,8 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItem {
 
 impl<'a> Consumable<'a> for ContinousAssign {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -506,16 +518,15 @@ impl<'a> Consumable<'a> for ContinousAssign {
         // continuous_assign ::= assign [ drive_strength ] [ delay3 ] list_of_net_assignments ;
         // list_of_net_assignments ::= net_assignment { , net_assignment }
 
-        p.tkw
-            .next_expect(T::KeywordAssign, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::KeywordAssign, diagnostics.as_deref_mut())?;
         let list_of_net_assignments = parse_one_or_more_delimited::<NetAssignment>(
-            p,
+            tkw,
+            sc,
             arenas,
             T::Comma,
             diagnostics.as_deref_mut(),
         )?;
-        p.tkw
-            .next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
 
         Ok(Self {
             list_of_net_assignments,
@@ -525,7 +536,8 @@ impl<'a> Consumable<'a> for ContinousAssign {
 
 impl<'a> Consumable<'a> for NetAssignment {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -535,9 +547,9 @@ impl<'a> Consumable<'a> for NetAssignment {
         // continuous_assign ::= assign [ drive_strength ] [ delay3 ] list_of_net_assignments ;
         // list_of_net_assignments ::= net_assignment { , net_assignment }
 
-        let net_lvalue = parse::<NetLValue>(p, arenas, diagnostics.as_deref_mut())?;
-        p.tkw.next_expect(T::Equals, diagnostics.as_deref_mut())?;
-        let expression = parse::<Expr>(p, arenas, diagnostics.as_deref_mut())?;
+        let net_lvalue = parse::<NetLValue>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::Equals, diagnostics.as_deref_mut())?;
+        let expression = parse::<Expr>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
 
         Ok(Self {
             net_lvalue,
@@ -548,7 +560,8 @@ impl<'a> Consumable<'a> for NetAssignment {
 
 impl<'a> Consumable<'a> for ModuleInstantiation {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -559,15 +572,16 @@ impl<'a> Consumable<'a> for ModuleInstantiation {
         //   module_identifier [ parameter_value_assignment ]
         //   module_instance { , module_instance } ;
 
-        let module_identifier = item_parse::<Identifier>(p, arenas, diagnostics.as_deref_mut())?;
+        let module_identifier =
+            item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
         let module_instances = parse_one_or_more_delimited::<ModuleInstance>(
-            p,
+            tkw,
+            sc,
             arenas,
             T::Comma,
             diagnostics.as_deref_mut(),
         )?;
-        p.tkw
-            .next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
 
         Ok(ModuleInstantiation {
             module_identifier,
@@ -578,7 +592,8 @@ impl<'a> Consumable<'a> for ModuleInstantiation {
 
 impl<'a> Consumable<'a> for ModuleInstance {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -588,13 +603,11 @@ impl<'a> Consumable<'a> for ModuleInstance {
         // module_instance ::= name_of_module_instance ( [ list_of_port_connections ] )
 
         let name_of_module_instance =
-            item_parse::<Identifier>(p, arenas, diagnostics.as_deref_mut())?;
-        p.tkw
-            .next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
+            item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
         let list_of_port_connections =
-            parse::<ListOfPortConnections>(p, arenas, diagnostics.as_deref_mut())?;
-        p.tkw
-            .next_expect(T::RightParen, diagnostics.as_deref_mut())?;
+            parse::<ListOfPortConnections>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
 
         Ok(ModuleInstance {
             name_of_module_instance,
@@ -605,7 +618,8 @@ impl<'a> Consumable<'a> for ModuleInstance {
 
 impl<'a> Consumable<'a> for ListOfPortConnections {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -616,9 +630,10 @@ impl<'a> Consumable<'a> for ListOfPortConnections {
         //   ordered_port_connection { , ordered_port_connection }
         // | named_port_connection { , named_port_connection }
 
-        if p.tkw.get(p.tkw.offset).is_some_and(|t| *t.kind == T::Dot) {
+        if tkw.get(tkw.offset).is_some_and(|t| *t.kind == T::Dot) {
             let named = parse_zero_or_more_delimited::<NamedPortConnection>(
-                p,
+                tkw,
+                sc,
                 arenas,
                 T::Comma,
                 diagnostics.as_deref_mut(),
@@ -626,7 +641,8 @@ impl<'a> Consumable<'a> for ListOfPortConnections {
             Ok(Self::Named(named))
         } else {
             let ordered = parse_zero_or_more_delimited::<Expr>(
-                p,
+                tkw,
+                sc,
                 arenas,
                 T::Comma,
                 diagnostics.as_deref_mut(),
@@ -638,7 +654,8 @@ impl<'a> Consumable<'a> for ListOfPortConnections {
 
 impl<'a> Consumable<'a> for NamedPortConnection {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -647,21 +664,19 @@ impl<'a> Consumable<'a> for NamedPortConnection {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 495
         // named_port_connection ::= { attribute_instance } . port_identifier ( [ expression ] )
 
-        p.tkw.next_expect(T::Dot, diagnostics.as_deref_mut())?;
-        let port_identifier = item_parse::<Identifier>(p, arenas, diagnostics.as_deref_mut())?;
-        p.tkw
-            .next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
-        let expression = if !p
-            .tkw
-            .get(p.tkw.offset)
+        tkw.next_expect(T::Dot, diagnostics.as_deref_mut())?;
+        let port_identifier =
+            item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
+        let expression = if !tkw
+            .get(tkw.offset)
             .is_some_and(|t| *t.kind == T::RightParen)
         {
-            Some(parse::<Expr>(p, arenas, diagnostics.as_deref_mut())?)
+            Some(parse::<Expr>(tkw, sc, arenas, diagnostics.as_deref_mut())?)
         } else {
             None
         };
-        p.tkw
-            .next_expect(T::RightParen, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
 
         Ok(NamedPortConnection {
             port_identifier,
@@ -672,7 +687,8 @@ impl<'a> Consumable<'a> for NamedPortConnection {
 
 impl<'a> Consumable<'a> for InitialConstruct {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -681,9 +697,8 @@ impl<'a> Consumable<'a> for InitialConstruct {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
         // initial_construct ::= initial statement
 
-        p.tkw
-            .next_expect(T::KeywordInitial, diagnostics.as_deref_mut())?;
-        let statement = parse::<Statement>(p, arenas, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::KeywordInitial, diagnostics.as_deref_mut())?;
+        let statement = parse::<Statement>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
 
         Ok(Self(statement))
     }
@@ -691,7 +706,8 @@ impl<'a> Consumable<'a> for InitialConstruct {
 
 impl<'a> Consumable<'a> for AlwaysConstruct {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -700,9 +716,8 @@ impl<'a> Consumable<'a> for AlwaysConstruct {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
         // always_construct ::= always statement
 
-        p.tkw
-            .next_expect(T::KeywordAlways, diagnostics.as_deref_mut())?;
-        let statement = parse::<Statement>(p, arenas, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::KeywordAlways, diagnostics.as_deref_mut())?;
+        let statement = parse::<Statement>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
 
         Ok(Self(statement))
     }
@@ -710,7 +725,8 @@ impl<'a> Consumable<'a> for AlwaysConstruct {
 
 impl<'a> Consumable<'a> for GateInstantiation {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -728,7 +744,7 @@ impl<'a> Consumable<'a> for GateInstantiation {
         // | pulldown [pulldown_strength] pull_gate_instance { , pull_gate_instance } ;
         // | pullup [pullup_strength] pull_gate_instance { , pull_gate_instance } ;
 
-        let peeked = p.tkw.try_get(p.tkw.offset, diagnostics.as_deref_mut())?;
+        let peeked = tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?;
         match peeked.kind {
             T::KeywordAnd
             | T::KeywordNand
@@ -737,11 +753,11 @@ impl<'a> Consumable<'a> for GateInstantiation {
             | T::KeywordXor
             | T::KeywordXnor => {
                 let n_input_gate_instantiation =
-                    parse::<NInputGateInstantiation>(p, arenas, diagnostics.as_deref_mut())?;
+                    parse::<NInputGateInstantiation>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
                 Ok(Self::NInput(n_input_gate_instantiation))
             }
             _ => {
-                diagnostics.map(|d| d.incomplete(p.tkw.offset, "gate_instantiation"));
+                diagnostics.map(|d| d.incomplete(tkw.offset, "gate_instantiation"));
                 Err(ParseErrorKind::Incomplete)
             }
         }
@@ -750,7 +766,8 @@ impl<'a> Consumable<'a> for GateInstantiation {
 
 impl<'a> Consumable<'a> for NInputGateInstantiation {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -759,17 +776,17 @@ impl<'a> Consumable<'a> for NInputGateInstantiation {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 493
         // n_input_gatetype [drive_strength] [delay2] n_input_gate_instance { , n_input_gate_instance } ;
 
-        let gatetype = item_parse::<NInputGateType>(p, arenas, diagnostics.as_deref_mut())?;
+        let gatetype = item_parse::<NInputGateType>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
         // @Incomplete: drive_strength
         // @Incomplete: delay2
         let instances = parse_one_or_more_delimited::<NInputGateInstance>(
-            p,
+            tkw,
+            sc,
             arenas,
             T::Comma,
             diagnostics.as_deref_mut(),
         )?;
-        p.tkw
-            .next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
 
         Ok(Self {
             gatetype,
@@ -780,7 +797,8 @@ impl<'a> Consumable<'a> for NInputGateInstantiation {
 
 impl<'a> Consumable<'a> for NInputGateType {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        _sc: &mut ParserScratches,
         _arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -789,7 +807,7 @@ impl<'a> Consumable<'a> for NInputGateType {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 494
         // n_input_gatetype ::= and | nand | or | nor | xor | xnor
 
-        let t = p.tkw.try_next(diagnostics.as_deref_mut())?;
+        let t = tkw.try_next(diagnostics.as_deref_mut())?;
         let value = match *t.kind {
             T::KeywordAnd => Self::And,
             T::KeywordNand => Self::Nand,
@@ -798,7 +816,7 @@ impl<'a> Consumable<'a> for NInputGateType {
             T::KeywordXor => Self::Xor,
             T::KeywordXnor => Self::Xnor,
             t => {
-                diagnostics.map(|d| d.unexpected_token(p.tkw.offset, t));
+                diagnostics.map(|d| d.unexpected_token(tkw.offset, t));
                 return Err(ParseErrorKind::UnexpectedToken);
             }
         };
@@ -809,7 +827,8 @@ impl<'a> Consumable<'a> for NInputGateType {
 
 impl<'a> Consumable<'a> for NInputGateInstance {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -818,15 +837,18 @@ impl<'a> Consumable<'a> for NInputGateInstance {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 494
         // n_input_gate_instance ::= [ name_of_gate_instance ] ( output_terminal , input_terminal { , input_terminal } )
 
-        let name = try_parse::<NameOfGateInstance>(p, arenas);
-        p.tkw
-            .next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
-        let output_terminal = parse::<NetLValue>(p, arenas, diagnostics.as_deref_mut())?;
-        p.tkw.next_expect(T::Comma, diagnostics.as_deref_mut())?;
-        let input_terminals =
-            parse_one_or_more_delimited::<Expr>(p, arenas, T::Comma, diagnostics.as_deref_mut())?;
-        p.tkw
-            .next_expect(T::RightParen, diagnostics.as_deref_mut())?;
+        let name = try_parse::<NameOfGateInstance>(tkw, sc, arenas);
+        tkw.next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
+        let output_terminal = parse::<NetLValue>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::Comma, diagnostics.as_deref_mut())?;
+        let input_terminals = parse_one_or_more_delimited::<Expr>(
+            tkw,
+            sc,
+            arenas,
+            T::Comma,
+            diagnostics.as_deref_mut(),
+        )?;
+        tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
 
         Ok(Self {
             name,
@@ -838,7 +860,8 @@ impl<'a> Consumable<'a> for NInputGateInstance {
 
 impl<'a> Consumable<'a> for NameOfGateInstance {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -846,7 +869,7 @@ impl<'a> Consumable<'a> for NameOfGateInstance {
         // name_of_gate_instance ::= gate_instance_identifier [ range ]
 
         // @Incomplete
-        let identifier = item_parse::<Identifier>(p, arenas, diagnostics.as_deref_mut())?;
+        let identifier = item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
 
         Ok(Self { identifier })
     }
@@ -854,7 +877,8 @@ impl<'a> Consumable<'a> for NameOfGateInstance {
 
 impl<'a> Consumable<'a> for ModuleOrGenerateItemDeclaration {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -873,7 +897,7 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItemDeclaration {
         // | task_declaration
         // | function_declaration
 
-        let peeked = p.tkw.try_get(p.tkw.offset, diagnostics.as_deref_mut())?;
+        let peeked = tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?;
         match peeked.kind {
             T::KeywordSupply0
             | T::KeywordSupply1
@@ -886,17 +910,17 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItemDeclaration {
             | T::KeywordWand
             | T::KeywordWor => {
                 let net_declaration =
-                    parse::<NetDeclaration>(p, arenas, diagnostics.as_deref_mut())?;
+                    parse::<NetDeclaration>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
                 Ok(Self::Net(net_declaration))
             }
             T::KeywordReg => {
                 let reg_declaration =
-                    parse::<RegDeclaration>(p, arenas, diagnostics.as_deref_mut())?;
+                    parse::<RegDeclaration>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
                 Ok(Self::Reg(reg_declaration))
             }
             _ => {
                 diagnostics
-                    .map(|d| d.incomplete(p.tkw.offset, "module_or_generate_item_declaration"));
+                    .map(|d| d.incomplete(tkw.offset, "module_or_generate_item_declaration"));
                 Err(ParseErrorKind::Incomplete)
             }
         }
@@ -905,7 +929,8 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItemDeclaration {
 
 impl<'a> Consumable<'a> for NetDeclaration {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -923,17 +948,17 @@ impl<'a> Consumable<'a> for NetDeclaration {
         // | trireg [ drive_strength ] [ vectored | scalared ] [ signed ] range [ delay3 ] list_of_net_decl_assignments ;
 
         // @Incomplete
-        let net_type = item_parse::<NetType>(p, arenas, diagnostics.as_deref_mut())?;
-        let signed = p.tkw.next_if_equals(T::KeywordSigned);
-        let range = try_parse::<Range>(p, arenas);
+        let net_type = item_parse::<NetType>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        let signed = tkw.next_if_equals(T::KeywordSigned);
+        let range = try_parse::<Range>(tkw, sc, arenas);
         let identifiers = parse_one_or_more_delimited::<Identifier>(
-            p,
+            tkw,
+            sc,
             arenas,
             T::Comma,
             diagnostics.as_deref_mut(),
         )?;
-        p.tkw
-            .next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
 
         Ok(Self {
             net_type,
@@ -946,7 +971,8 @@ impl<'a> Consumable<'a> for NetDeclaration {
 
 impl<'a> Consumable<'a> for RegDeclaration {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -956,16 +982,15 @@ impl<'a> Consumable<'a> for RegDeclaration {
         // reg_declaration ::= reg [ signed ] [ range ] list_of_variable_identifiers ;
 
         // @Incomplete
-        p.tkw
-            .next_expect(T::KeywordReg, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::KeywordReg, diagnostics.as_deref_mut())?;
         let identifiers = parse_one_or_more_delimited::<Identifier>(
-            p,
+            tkw,
+            sc,
             arenas,
             T::Comma,
             diagnostics.as_deref_mut(),
         )?;
-        p.tkw
-            .next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
 
         Ok(Self { identifiers })
     }
@@ -973,7 +998,8 @@ impl<'a> Consumable<'a> for RegDeclaration {
 
 impl<'a> Consumable<'a> for ParameterDeclaration {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -984,11 +1010,11 @@ impl<'a> Consumable<'a> for ParameterDeclaration {
         //   parameter [ signed ] [ range ] list_of_param_assignments
         // | parameter parameter_type list_of_param_assignments
 
-        p.tkw
-            .next_expect(T::KeywordParameter, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::KeywordParameter, diagnostics.as_deref_mut())?;
         // @Incomplete
         let assignments = parse_one_or_more_delimited::<ParamAssignment>(
-            p,
+            tkw,
+            sc,
             arenas,
             T::Comma,
             diagnostics.as_deref_mut(),
@@ -1000,7 +1026,8 @@ impl<'a> Consumable<'a> for ParameterDeclaration {
 
 impl<'a> Consumable<'a> for ParamAssignment {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -1009,16 +1036,18 @@ impl<'a> Consumable<'a> for ParamAssignment {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 491
         // param_assignment ::= parameter_identifier = constant_mintypmax_expression
 
-        let param = item_parse::<Identifier>(p, arenas, diagnostics.as_deref_mut())?;
-        p.tkw.next_expect(T::Equals, diagnostics.as_deref_mut())?;
-        let constant = parse::<ConstantMinTypMaxExpression>(p, arenas, diagnostics.as_deref_mut())?;
+        let param = item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::Equals, diagnostics.as_deref_mut())?;
+        let constant =
+            parse::<ConstantMinTypMaxExpression>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
         Ok(Self { param, constant })
     }
 }
 
 impl<'a> Consumable<'a> for Range {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -1027,13 +1056,11 @@ impl<'a> Consumable<'a> for Range {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 492
         // range ::= [ msb_constant_expression : lsb_constant_expression ]
 
-        p.tkw
-            .next_expect(T::LeftBrace, diagnostics.as_deref_mut())?;
-        let msb = parse::<ConstantExpr>(p, arenas, diagnostics.as_deref_mut())?;
-        p.tkw.next_expect(T::Colon, diagnostics.as_deref_mut())?;
-        let lsb = parse::<ConstantExpr>(p, arenas, diagnostics.as_deref_mut())?;
-        p.tkw
-            .next_expect(T::RightBrace, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::LeftBrace, diagnostics.as_deref_mut())?;
+        let msb = parse::<ConstantExpr>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::Colon, diagnostics.as_deref_mut())?;
+        let lsb = parse::<ConstantExpr>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::RightBrace, diagnostics.as_deref_mut())?;
 
         Ok(Self { msb, lsb })
     }

@@ -19,8 +19,8 @@ mod token_walker;
 mod utils;
 // mod net;
 
-pub struct Parser<'a> {
-    tkw: TokenWalker<'a>,
+#[derive(Default)]
+pub struct ParserScratches {
     /// A `scratchpad` to parse expressions
     exprs_sp: Vec<(expr::StackItem, expr::BindingPower, TokenRange)>,
 }
@@ -94,40 +94,39 @@ pub enum ParseErrorReason {
     Incomplete(&'static str),
 }
 
-impl<'a> Parser<'a> {
-    pub fn new(lexer: TokenWalker<'a>) -> Self {
-        Self {
-            tkw: lexer,
-            exprs_sp: Vec::with_capacity(16),
-        }
-    }
-
-    pub fn parse_file(&mut self, diagnostics: Option<&mut Diagnostics>) -> Result<Ast, ()> {
-        let mut arenas = AstArenas::default();
-        match utils::parse_one_or_more::<Module>(self, &mut arenas, diagnostics) {
-            Ok(modules) => Ok(Ast {
-                modules,
-                arenas,
-                path: PathBuf::default(),
-            }),
-            Err(_) => Err(()),
-        }
+pub fn parse_file(
+    tkw: &mut TokenWalker<'_>,
+    scratches: &mut ParserScratches,
+    diagnostics: Option<&mut Diagnostics>,
+) -> Result<Ast, ()> {
+    let mut arenas = AstArenas::default();
+    match utils::parse_one_or_more::<Module>(tkw, scratches, &mut arenas, diagnostics) {
+        Ok(modules) => Ok(Ast {
+            modules,
+            arenas,
+            path: PathBuf::default(),
+        }),
+        Err(_) => Err(()),
     }
 }
 
 pub trait Consumable<'a>: Sized + Copy + 'static {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind>;
-    fn try_consume(p: &mut Parser<'a>, arenas: &mut AstArenas) -> Option<Self> {
-        let save = p.tkw.offset;
-
-        match Self::consume(p, arenas, None) {
+    fn try_consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+    ) -> Option<Self> {
+        let save = tkw.offset;
+        match Self::consume(tkw, sc, arenas, None) {
             Ok(v) => Some(v),
             Err(_) => {
-                p.tkw.offset = save;
+                tkw.offset = save;
                 None
             }
         }
@@ -136,15 +135,14 @@ pub trait Consumable<'a>: Sized + Copy + 'static {
 
 impl<'a> Consumable<'a> for Identifier {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        _sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
-        let t = p
-            .tkw
-            .next_expect(Token::Ident, diagnostics.as_deref_mut())?;
+        let t = tkw.next_expect(Token::Ident, diagnostics.as_deref_mut())?;
         let (span, file) = (*t.span, *t.file);
-        let content = &p.tkw.content(file)[span.as_range()];
+        let content = &tkw.content(file)[span.as_range()];
         let start = arenas.text.len();
         let end = start + content.len();
         arenas.text.push_str(content);
@@ -154,15 +152,14 @@ impl<'a> Consumable<'a> for Identifier {
 
 impl<'a> Consumable<'a> for DecimalRef {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        _sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
-        let t = p
-            .tkw
-            .next_expect(Token::Decimal, diagnostics.as_deref_mut())?;
+        let t = tkw.next_expect(Token::Decimal, diagnostics.as_deref_mut())?;
         let (span, file) = (*t.span, *t.file);
-        let content = &p.tkw.content(file)[span.as_range()];
+        let content = &tkw.content(file)[span.as_range()];
         let (_, decimal) = Decimal::take(content);
         let at = arenas.decimals.len();
         arenas.decimals.push(decimal);
@@ -172,15 +169,14 @@ impl<'a> Consumable<'a> for DecimalRef {
 
 impl<'a> Consumable<'a> for SizedNumberRef {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        _sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
-        let t = p
-            .tkw
-            .next_expect(Token::Number, diagnostics.as_deref_mut())?;
+        let t = tkw.next_expect(Token::Number, diagnostics.as_deref_mut())?;
         let (span, file) = (*t.span, *t.file);
-        let content = &p.tkw.content(file)[span.as_range()];
+        let content = &tkw.content(file)[span.as_range()];
         let (_, number) = SizedNumber::take(content);
         let at = arenas.sized_numbers.len();
         arenas.sized_numbers.push(number);
@@ -190,15 +186,14 @@ impl<'a> Consumable<'a> for SizedNumberRef {
 
 impl<'a> Consumable<'a> for StringRef {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        _sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
-        let t = p
-            .tkw
-            .next_expect(Token::String, diagnostics.as_deref_mut())?;
+        let t = tkw.next_expect(Token::String, diagnostics.as_deref_mut())?;
         let (span, file) = (*t.span, *t.file);
-        let content = &p.tkw.content(file)[span.as_range()];
+        let content = &tkw.content(file)[span.as_range()];
         let content = &content[1..content.len() - 1];
 
         if content.contains("\\") {

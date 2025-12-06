@@ -283,7 +283,12 @@ impl BasicBlockBuilder {
 
     pub fn reduce_or(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
         match &gl.vars[src].ty {
-            Type::Decimal => todo!(),
+            Type::Decimal => {
+                let dst = self.next_tmp_var(gl, Type::Bits(1));
+                self.instrs
+                    .push(Instruction::Unary(dst, UnaryOp::DecimalReduceOr, src));
+                dst
+            }
             Type::Bits(1) => src,
             Type::Bits(n) => {
                 let n = *n;
@@ -296,7 +301,12 @@ impl BasicBlockBuilder {
     }
     pub fn reduce_and(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
         match &gl.vars[src].ty {
-            Type::Decimal => todo!(),
+            Type::Decimal => {
+                let dst = self.next_tmp_var(gl, Type::Bits(1));
+                self.instrs
+                    .push(Instruction::Unary(dst, UnaryOp::DecimalReduceAnd, src));
+                dst
+            }
             Type::Bits(1) => src,
             Type::Bits(n) => {
                 let n = *n;

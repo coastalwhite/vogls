@@ -167,9 +167,12 @@ impl UnaryOp {
     pub const fn into_mnemonic(&self) -> &'static str {
         match self {
             Self::BitNeg(_) => "bneg",
-            Self::DecimalNeg => "i64neg",
             Self::BitReduceAnd(_) => "bredand",
             Self::BitReduceOr(_) => "bredor",
+
+            Self::DecimalNeg => "i64neg",
+            Self::DecimalReduceAnd => "i64redand",
+            Self::DecimalReduceOr => "i64redor",
         }
     }
 }

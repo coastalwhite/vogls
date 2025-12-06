@@ -8,12 +8,13 @@ use crate::ast::{AstIdRange, DecimalRef, Identifier, TextRef};
 use crate::parser::token_walker::TokenRange;
 use crate::tokenizer::Token;
 
-use super::{AstArenas, Consumable, Parser};
+use super::{AstArenas, Consumable, ParserScratches, TokenWalker};
 use super::{Diagnostics, ParseErrorKind, utils::*};
 
 impl<'a> Consumable<'a> for Statement {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -39,37 +40,38 @@ impl<'a> Consumable<'a> for Statement {
         // @Incomplete: { attribute_instance }
         // @Incomplete
 
-        let peeked = p.tkw.try_get(p.tkw.offset, diagnostics.as_deref_mut())?;
+        let peeked = tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?;
         match peeked.kind {
             T::KeywordBegin => {
-                let seq_block = parse::<SeqBlock>(p, arenas, diagnostics.as_deref_mut())?;
+                let seq_block = parse::<SeqBlock>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
                 Ok(Self::SeqBlock(seq_block))
             }
             T::Hash | T::AtSign => {
                 let procedural_timing_control =
-                    parse::<ProceduralTimingControl>(p, arenas, diagnostics.as_deref_mut())?;
+                    parse::<ProceduralTimingControl>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
 
-                let statement = try_parse::<Statement>(p, arenas);
+                let statement = try_parse::<Statement>(tkw, sc, arenas);
                 Ok(Self::ProceduralTimingControlStatement(
                     procedural_timing_control,
                     statement,
                 ))
             }
             _ => {
-                if let Some(blocking_assignment) = try_parse::<BlockingAssignment>(p, arenas) {
-                    p.tkw
-                        .next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+                if let Some(blocking_assignment) = try_parse::<BlockingAssignment>(tkw, sc, arenas)
+                {
+                    tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
                     Ok(Self::BlockingAssignment(blocking_assignment))
                 } else if let Some(non_blocking_assignment) =
-                    try_parse::<NonBlockingAssignment>(p, arenas)
+                    try_parse::<NonBlockingAssignment>(tkw, sc, arenas)
                 {
-                    p.tkw
-                        .next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+                    tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
                     Ok(Self::NonBlockingAssignment(non_blocking_assignment))
-                } else if let Some(system_task_enable) = try_parse::<SystemTaskEnable>(p, arenas) {
+                } else if let Some(system_task_enable) =
+                    try_parse::<SystemTaskEnable>(tkw, sc, arenas)
+                {
                     Ok(Self::SystemTaskEnable(system_task_enable))
                 } else {
-                    diagnostics.map(|d| d.incomplete(p.tkw.offset, "statement"));
+                    diagnostics.map(|d| d.incomplete(tkw.offset, "statement"));
                     Err(ParseErrorKind::Incomplete)
                 }
             }
@@ -79,7 +81,8 @@ impl<'a> Consumable<'a> for Statement {
 
 impl<'a> Consumable<'a> for NetLValue {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -90,7 +93,7 @@ impl<'a> Consumable<'a> for NetLValue {
 
         // @Incomplete
 
-        let ident = item_parse::<Identifier>(p, arenas, diagnostics.as_deref_mut())?;
+        let ident = item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
 
         Ok(Self { ident })
     }
@@ -98,7 +101,8 @@ impl<'a> Consumable<'a> for NetLValue {
 
 impl<'a> Consumable<'a> for VariableLValue {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -109,7 +113,7 @@ impl<'a> Consumable<'a> for VariableLValue {
 
         // @Incomplete
 
-        let ident = item_parse::<Identifier>(p, arenas, diagnostics.as_deref_mut())?;
+        let ident = item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
 
         Ok(Self { ident })
     }
@@ -117,7 +121,8 @@ impl<'a> Consumable<'a> for VariableLValue {
 
 impl<'a> Consumable<'a> for BlockingAssignment {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -126,10 +131,10 @@ impl<'a> Consumable<'a> for BlockingAssignment {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
         // blocking_assignment ::= variable_lvalue = [ delay_or_event_control ] expression
 
-        let variable_lvalue = parse::<VariableLValue>(p, arenas, diagnostics.as_deref_mut())?;
-        p.tkw.next_expect(T::Equals, diagnostics.as_deref_mut())?;
-        let delay_or_event_control = try_parse::<DelayOrEventControl>(p, arenas);
-        let expression = parse::<Expr>(p, arenas, diagnostics.as_deref_mut())?;
+        let variable_lvalue = parse::<VariableLValue>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::Equals, diagnostics.as_deref_mut())?;
+        let delay_or_event_control = try_parse::<DelayOrEventControl>(tkw, sc, arenas);
+        let expression = parse::<Expr>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
 
         Ok(Self {
             variable_lvalue,
@@ -141,7 +146,8 @@ impl<'a> Consumable<'a> for BlockingAssignment {
 
 impl<'a> Consumable<'a> for NonBlockingAssignment {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -150,11 +156,10 @@ impl<'a> Consumable<'a> for NonBlockingAssignment {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
         // nonblocking_assignment ::= variable_lvalue <= [ delay_or_event_control ] expression
 
-        let variable_lvalue = parse::<VariableLValue>(p, arenas, diagnostics.as_deref_mut())?;
-        p.tkw
-            .next_expect(T::LessThanEquals, diagnostics.as_deref_mut())?;
-        let delay_or_event_control = try_parse::<DelayOrEventControl>(p, arenas);
-        let expression = parse::<Expr>(p, arenas, diagnostics.as_deref_mut())?;
+        let variable_lvalue = parse::<VariableLValue>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::LessThanEquals, diagnostics.as_deref_mut())?;
+        let delay_or_event_control = try_parse::<DelayOrEventControl>(tkw, sc, arenas);
+        let expression = parse::<Expr>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
 
         Ok(Self {
             variable_lvalue,
@@ -166,7 +171,8 @@ impl<'a> Consumable<'a> for NonBlockingAssignment {
 
 impl<'a> Consumable<'a> for SeqBlock {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -176,10 +182,10 @@ impl<'a> Consumable<'a> for SeqBlock {
         // seq_block ::= begin [ : block_identifier { block_item_declaration } ] { statement } end
 
         // @Incomplete: [ : block_identifier { block_item_declaration } ]
-        p.tkw
-            .next_expect(T::KeywordBegin, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::KeywordBegin, diagnostics.as_deref_mut())?;
         let statements = parse_until_reaching::<Statement>(
-            p,
+            tkw,
+            sc,
             arenas,
             T::KeywordEnd,
             diagnostics.as_deref_mut(),
@@ -191,7 +197,8 @@ impl<'a> Consumable<'a> for SeqBlock {
 
 impl<'a> Consumable<'a> for DelayOrEventControl {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -203,22 +210,24 @@ impl<'a> Consumable<'a> for DelayOrEventControl {
         //   | event_control
         //   | repeat ( expression ) event_control
 
-        let peeked = p.tkw.try_get(p.tkw.offset, diagnostics.as_deref_mut())?;
+        let peeked = tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?;
         match *peeked.kind {
             T::Hash => {
-                let delay_control = parse::<DelayControl>(p, arenas, diagnostics.as_deref_mut())?;
+                let delay_control =
+                    parse::<DelayControl>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
                 Ok(Self::DelayControl(delay_control))
             }
             T::AtSign => {
-                let event_control = parse::<EventControl>(p, arenas, diagnostics.as_deref_mut())?;
+                let event_control =
+                    parse::<EventControl>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
                 Ok(Self::EventControl(event_control))
             }
             T::KeywordRepeat => {
-                diagnostics.map(|d| d.incomplete(p.tkw.offset, "delay_or_event_control repeat"));
+                diagnostics.map(|d| d.incomplete(tkw.offset, "delay_or_event_control repeat"));
                 Err(ParseErrorKind::Incomplete)
             }
             t => {
-                diagnostics.map(|d| d.unexpected_token(p.tkw.offset, t));
+                diagnostics.map(|d| d.unexpected_token(tkw.offset, t));
                 Err(ParseErrorKind::UnexpectedToken)
             }
         }
@@ -227,7 +236,8 @@ impl<'a> Consumable<'a> for DelayOrEventControl {
 
 impl<'a> Consumable<'a> for DelayControl {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -238,9 +248,9 @@ impl<'a> Consumable<'a> for DelayControl {
         //   # delay_value
         // | # ( mintypmax_expression )
 
-        p.tkw.next_expect(T::Hash, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::Hash, diagnostics.as_deref_mut())?;
         // @Incomplete: | # ( mintypmax_expression )
-        let delay_value = parse::<DelayValue>(p, arenas, diagnostics.as_deref_mut())?;
+        let delay_value = parse::<DelayValue>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
 
         Ok(Self::DelayValue(delay_value))
     }
@@ -248,7 +258,8 @@ impl<'a> Consumable<'a> for DelayControl {
 
 impl<'a> Consumable<'a> for DelayValue {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -263,18 +274,18 @@ impl<'a> Consumable<'a> for DelayValue {
         // @Incomplete: | real_number
         // @Incomplete: | identifier
 
-        let peeked = p.tkw.try_get(p.tkw.offset, diagnostics.as_deref_mut())?;
+        let peeked = tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?;
         match peeked.kind {
             T::Decimal => {
-                let decimal = DecimalRef::consume(p, arenas, diagnostics.as_deref_mut())?;
+                let decimal = DecimalRef::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
                 Ok(Self::UnsignedNumber(decimal))
             }
             T::Ident => {
-                let ident = Identifier::consume(p, arenas, diagnostics.as_deref_mut())?;
+                let ident = Identifier::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
                 Ok(Self::Identifier(ident))
             }
             _ => {
-                diagnostics.map(|d| d.incomplete(p.tkw.offset, "delay_value"));
+                diagnostics.map(|d| d.incomplete(tkw.offset, "delay_value"));
                 Err(ParseErrorKind::Incomplete)
             }
         }
@@ -283,7 +294,8 @@ impl<'a> Consumable<'a> for DelayValue {
 
 impl<'a> Consumable<'a> for EventControl {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -296,15 +308,14 @@ impl<'a> Consumable<'a> for EventControl {
         // | @*
         // | @ (*)
 
-        p.tkw.next_expect(T::AtSign, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::AtSign, diagnostics.as_deref_mut())?;
         // @Incomplete: @ hierarchical_event_identifier
         // @Incomplete: @*
         // @Incomplete: @ (*)
-        p.tkw
-            .next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
-        let event_expression = parse::<EventExpression>(p, arenas, diagnostics.as_deref_mut())?;
-        p.tkw
-            .next_expect(T::RightParen, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
+        let event_expression =
+            parse::<EventExpression>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
 
         Ok(Self::EventExpression(event_expression))
     }
@@ -312,7 +323,8 @@ impl<'a> Consumable<'a> for EventControl {
 
 impl<'a> Consumable<'a> for EventExpression {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -325,26 +337,26 @@ impl<'a> Consumable<'a> for EventExpression {
         // | negedge expression
         // | event_expression or event_expression
 
-        let start = p.tkw.offset;
+        let start = tkw.offset;
         let mut event_expression = None;
 
         // @Incomplete: | event_expression or event_expression
         loop {
-            let start_current = p.tkw.offset;
-            let peeked = p.tkw.try_get(p.tkw.offset, diagnostics.as_deref_mut())?;
+            let start_current = tkw.offset;
+            let peeked = tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?;
             let current_event_expression = match peeked.kind {
                 T::KeywordPosedge => {
-                    p.tkw.next();
-                    let expr = parse::<Expr>(p, arenas, diagnostics.as_deref_mut())?;
+                    tkw.next();
+                    let expr = parse::<Expr>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
                     Self::Posedge(expr)
                 }
                 T::KeywordNegedge => {
-                    p.tkw.next();
-                    let expr = parse::<Expr>(p, arenas, diagnostics.as_deref_mut())?;
+                    tkw.next();
+                    let expr = parse::<Expr>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
                     Self::Negedge(expr)
                 }
                 _ => {
-                    let expr = parse::<Expr>(p, arenas, diagnostics.as_deref_mut())?;
+                    let expr = parse::<Expr>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
                     Self::Expression(expr)
                 }
             };
@@ -354,13 +366,13 @@ impl<'a> Consumable<'a> for EventExpression {
                 Some(expr) => {
                     let token_range = TokenRange {
                         start,
-                        end: p.tkw.offset,
+                        end: tkw.offset,
                     };
                     let expr = arenas.add(expr, token_range);
 
                     let token_range = TokenRange {
                         start: start_current,
-                        end: p.tkw.offset,
+                        end: tkw.offset,
                     };
                     let current_event_expression =
                         arenas.add(current_event_expression, token_range);
@@ -369,7 +381,7 @@ impl<'a> Consumable<'a> for EventExpression {
                 }
             };
 
-            let Some(peeked) = p.tkw.get(p.tkw.offset) else {
+            let Some(peeked) = tkw.get(tkw.offset) else {
                 break;
             };
 
@@ -384,7 +396,8 @@ impl<'a> Consumable<'a> for EventExpression {
 
 impl<'a> Consumable<'a> for ProceduralTimingControl {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -395,18 +408,20 @@ impl<'a> Consumable<'a> for ProceduralTimingControl {
         //   delay_control
         // | event_control
 
-        let peeked = p.tkw.try_get(p.tkw.offset, diagnostics.as_deref_mut())?;
+        let peeked = tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?;
         match *peeked.kind {
             T::Hash => {
-                let delay_control = parse::<DelayControl>(p, arenas, diagnostics.as_deref_mut())?;
+                let delay_control =
+                    parse::<DelayControl>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
                 Ok(Self::DelayControl(delay_control))
             }
             T::AtSign => {
-                let event_control = parse::<EventControl>(p, arenas, diagnostics.as_deref_mut())?;
+                let event_control =
+                    parse::<EventControl>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
                 Ok(Self::EventControl(event_control))
             }
             t => {
-                diagnostics.map(|d| d.unexpected_token(p.tkw.offset, t));
+                diagnostics.map(|d| d.unexpected_token(tkw.offset, t));
                 Err(ParseErrorKind::UnexpectedToken)
             }
         }
@@ -415,7 +430,8 @@ impl<'a> Consumable<'a> for ProceduralTimingControl {
 
 impl<'a> Consumable<'a> for SystemTaskEnable {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -425,20 +441,19 @@ impl<'a> Consumable<'a> for SystemTaskEnable {
         // system_task_enable ::= system_task_identifier [ ( [ expression ] { , [ expression ] } ) ] ;
 
         let system_task_identifier =
-            item_parse::<SystemTaskIdentifier>(p, arenas, diagnostics.as_deref_mut())?;
+            item_parse::<SystemTaskIdentifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
         let mut expressions = AstIdRange::default();
-        if p.tkw.next_if_equals(T::LeftParen) {
+        if tkw.next_if_equals(T::LeftParen) {
             expressions = parse_zero_or_more_delimited::<Expr>(
-                p,
+                tkw,
+                sc,
                 arenas,
                 T::Comma,
                 diagnostics.as_deref_mut(),
             )?;
-            p.tkw
-                .next_expect(T::RightParen, diagnostics.as_deref_mut())?;
+            tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
         }
-        p.tkw
-            .next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
 
         Ok(Self {
             system_task_identifier,
@@ -449,16 +464,15 @@ impl<'a> Consumable<'a> for SystemTaskEnable {
 
 impl<'a> Consumable<'a> for SystemTaskIdentifier {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        _sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
         use Token as T;
-        let t = p
-            .tkw
-            .next_expect(T::DollarIdent, diagnostics.as_deref_mut())?;
+        let t = tkw.next_expect(T::DollarIdent, diagnostics.as_deref_mut())?;
         let (span, file) = (*t.span, *t.file);
-        let content = &p.tkw.content(file)[span.start() + 1..span.end()];
+        let content = &tkw.content(file)[span.start() + 1..span.end()];
         let start = arenas.text.len();
         let end = start + content.len();
         arenas.text.push_str(content);

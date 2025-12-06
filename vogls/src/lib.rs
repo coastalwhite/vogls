@@ -8,7 +8,7 @@ use vogls_sim::{Context, Event, ScheduledEvent, VmProcess, VmProcessKey, lower_p
 use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{Module, ModuleItem, ModuleOrGenerateItem, NonPortModuleItem};
 use vogls_verilog::lower::lower_module_to_ir;
-use vogls_verilog::parser::{Diagnostics, Parser, TokenWalker, report_error};
+use vogls_verilog::parser::{parse_file, report_error, Diagnostics, ParserScratches, TokenWalker};
 use vogls_verilog::tokenizer::Tokenized;
 
 mod elaborate;
@@ -25,10 +25,10 @@ pub fn run(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let content: Rc<str> = std::fs::read_to_string(&path)?.into();
     let token_buffer = Tokenized::tokenize(content.clone(), Some(path.into()));
-    let mut parser = Parser::new(TokenWalker::new(&token_buffer));
+    let mut tkw = TokenWalker::new(&token_buffer);
     let mut diagnostics = Diagnostics::default();
 
-    let ast = match parser.parse_file(Some(&mut diagnostics)) {
+    let ast = match parse_file(&mut tkw, &mut ParserScratches::default(), Some(&mut diagnostics)) {
         Ok(ast) => ast,
         Err(_) => {
             for (location, err) in &diagnostics.errors {

@@ -2,12 +2,13 @@ use crate::ast::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression, Const
 use crate::ast::{DecimalRef, StringRef};
 use crate::tokenizer::Token;
 
-use super::{AstArenas, Consumable, Parser};
+use super::{AstArenas, Consumable, ParserScratches, TokenWalker};
 use super::{Diagnostics, ParseErrorKind, utils::*};
 
 impl<'a> Consumable<'a> for ConstantMinTypMaxExpression {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -18,11 +19,11 @@ impl<'a> Consumable<'a> for ConstantMinTypMaxExpression {
         //   constant_expression
         // | constant_expression : constant_expression : constant_expression
 
-        let min = parse::<ConstantExpr>(p, arenas, diagnostics.as_deref_mut())?;
-        if p.tkw.next_if_equals(T::Colon) {
-            let typ = parse::<ConstantExpr>(p, arenas, diagnostics.as_deref_mut())?;
-            p.tkw.next_expect(T::Colon, diagnostics.as_deref_mut())?;
-            let max = parse::<ConstantExpr>(p, arenas, diagnostics.as_deref_mut())?;
+        let min = parse::<ConstantExpr>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        if tkw.next_if_equals(T::Colon) {
+            let typ = parse::<ConstantExpr>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+            tkw.next_expect(T::Colon, diagnostics.as_deref_mut())?;
+            let max = parse::<ConstantExpr>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
             Ok(Self::MinTypMax { min, typ, max })
         } else {
             Ok(Self::Single(min))
@@ -32,7 +33,8 @@ impl<'a> Consumable<'a> for ConstantMinTypMaxExpression {
 
 impl<'a> Consumable<'a> for ConstantExpr {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -44,14 +46,15 @@ impl<'a> Consumable<'a> for ConstantExpr {
         // | constant_expression ? { attribute_instance } constant_expression : constant_expression
 
         // @Incomplete
-        let primary = ConstantPrimary::consume(p, arenas, diagnostics.as_deref_mut())?;
+        let primary = ConstantPrimary::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
         Ok(Self::Primary(primary))
     }
 }
 
 impl<'a> Consumable<'a> for ConstantPrimary {
     fn consume(
-        p: &mut Parser<'a>,
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ParseErrorKind> {
@@ -69,18 +72,18 @@ impl<'a> Consumable<'a> for ConstantPrimary {
         // | ( constant_mintypmax_expression )
         // | string
 
-        let peeked = p.tkw.try_get(p.tkw.offset, diagnostics.as_deref_mut())?;
+        let peeked = tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?;
         match peeked.kind {
             T::Decimal => {
-                let decimal = DecimalRef::consume(p, arenas, diagnostics.as_deref_mut())?;
+                let decimal = DecimalRef::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
                 Ok(Self::Number(decimal))
             }
             T::String => {
-                let string = StringRef::consume(p, arenas, diagnostics.as_deref_mut())?;
+                let string = StringRef::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
                 Ok(Self::String(string))
             }
             _ => {
-                diagnostics.map(|d| d.incomplete(p.tkw.offset, "constant_primary"));
+                diagnostics.map(|d| d.incomplete(tkw.offset, "constant_primary"));
                 Err(ParseErrorKind::Incomplete)
             }
         }
