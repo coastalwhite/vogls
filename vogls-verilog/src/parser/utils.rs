@@ -1,35 +1,15 @@
 use crate::ast::{AstId, AstIdRange, AstItem};
-use crate::parser::ParseErrorReason;
 use crate::tokenizer::Token;
 
 use super::token_walker::TokenRange;
-use super::{AstArenas, Consumable, Diagnostics, ParseErrorKind, ParserScratches, TokenWalker};
-
-pub fn report_err<'a>(
-    tkw: &mut TokenWalker<'a>,
-    diagnostics: Option<&mut Diagnostics>,
-    err: ParseErrorKind,
-) {
-    if let Some(diagnostics) = diagnostics {
-        use ParseErrorKind as K;
-        let err = match err {
-            K::MissingToken => ParseErrorReason::MissingToken,
-            K::UnexpectedToken => {
-                let t = tkw.get(tkw.offset).unwrap();
-                ParseErrorReason::UnexpectedToken(*t.kind)
-            }
-            K::Incomplete => ParseErrorReason::Incomplete("incomplete"),
-        };
-        diagnostics.errors.push((TokenRange::at(tkw.offset), err));
-    }
-}
+use super::{AstArenas, Consumable, Diagnostics, ParserScratches, TokenWalker};
 
 pub fn parse<'a, T: Consumable<'a>>(
     tkw: &mut TokenWalker<'a>,
     sc: &mut ParserScratches,
     arenas: &mut AstArenas,
     diagnostics: Option<&mut Diagnostics>,
-) -> Result<AstId<T>, ParseErrorKind> {
+) -> Result<AstId<T>, ()> {
     let start = tkw.offset;
     let item = T::consume(tkw, sc, arenas, diagnostics)?;
     let end = tkw.offset;
@@ -52,7 +32,7 @@ pub fn item_parse<'a, T: Consumable<'a>>(
     sc: &mut ParserScratches,
     arenas: &mut AstArenas,
     diagnostics: Option<&mut Diagnostics>,
-) -> Result<AstItem<T>, ParseErrorKind> {
+) -> Result<AstItem<T>, ()> {
     let start = tkw.offset;
     let item = T::consume(tkw, sc, arenas, diagnostics)?;
     let end = tkw.offset;
@@ -80,20 +60,14 @@ pub fn parse_until_reaching<'a, T: Consumable<'a>>(
     arenas: &mut AstArenas,
     end: Token,
     mut diagnostics: Option<&mut Diagnostics>,
-) -> Result<AstIdRange<T>, ParseErrorKind> {
+) -> Result<AstIdRange<T>, ()> {
     // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
     // here.
     let mut items = Vec::new();
     let mut spans = Vec::new();
 
     loop {
-        let token = match tkw.try_next(diagnostics.as_deref_mut()) {
-            Ok(t) => t,
-            Err(err) => {
-                report_err(tkw, diagnostics, err);
-                return Err(err);
-            }
-        };
+        let token = tkw.try_next(diagnostics.as_deref_mut())?;
         if *token.kind == end {
             break;
         }
@@ -118,7 +92,7 @@ pub fn parse_one_or_more_delimited<'a, T: Consumable<'a>>(
     arenas: &mut AstArenas,
     delimiter: Token,
     mut diagnostics: Option<&mut Diagnostics>,
-) -> Result<AstIdRange<T>, ParseErrorKind> {
+) -> Result<AstIdRange<T>, ()> {
     let start = tkw.offset;
     let item = T::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
     let token_range = TokenRange {
@@ -157,7 +131,7 @@ pub fn parse_zero_or_more_delimited<'a, T: Consumable<'a>>(
     arenas: &mut AstArenas,
     delimiter: Token,
     mut diagnostics: Option<&mut Diagnostics>,
-) -> Result<AstIdRange<T>, ParseErrorKind> {
+) -> Result<AstIdRange<T>, ()> {
     let start = tkw.offset;
     let Some(item) = T::try_consume(tkw, sc, arenas) else {
         return Ok(AstIdRange::default());
@@ -192,30 +166,79 @@ pub fn parse_zero_or_more_delimited<'a, T: Consumable<'a>>(
     Ok(arenas.add_range(items, spans))
 }
 
-pub fn parse_one_or_more<'a, T: Consumable<'a>>(
+pub fn parse_zero_or_more<'a, T: Consumable<'a>>(
     tkw: &mut TokenWalker<'a>,
     sc: &mut ParserScratches,
     arenas: &mut AstArenas,
     mut diagnostics: Option<&mut Diagnostics>,
-) -> Result<AstIdRange<T>, ParseErrorKind> {
+) -> Result<AstIdRange<T>, ()> {
     // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
     // here.
     let mut items = Vec::new();
     let mut spans = Vec::new();
 
+    let mut has_error = false;
+    while !tkw.is_empty() {
+        let start = tkw.offset;
+        match T::consume(tkw, sc, arenas, diagnostics.as_deref_mut()) {
+            Ok(item) => {
+                let token_range = TokenRange {
+                    start,
+                    end: tkw.offset,
+                };
+                items.push(item);
+                spans.push(token_range);
+            }
+            Err(err) => {
+                if tkw.offset == start {
+                    return Err(err);
+                }
+                has_error = true;
+            }
+        }
+    }
+
+    if has_error {
+        return Err(());
+    }
+
+    Ok(arenas.add_range(items, spans))
+}
+
+pub fn parse_one_or_more<'a, T: Consumable<'a>>(
+    tkw: &mut TokenWalker<'a>,
+    sc: &mut ParserScratches,
+    arenas: &mut AstArenas,
+    mut diagnostics: Option<&mut Diagnostics>,
+) -> Result<AstIdRange<T>, ()> {
+    // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
+    // here.
+    let mut items = Vec::new();
+    let mut spans = Vec::new();
+
+    let mut has_error = false;
     loop {
         let start = tkw.offset;
-        let item = T::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
-        let token_range = TokenRange {
-            start,
-            end: tkw.offset,
-        };
-        items.push(item);
-        spans.push(token_range);
+        match T::consume(tkw, sc, arenas, diagnostics.as_deref_mut()) {
+            Err(_) if start == tkw.offset => return Err(()),
+            Err(_) => has_error = true,
+            Ok(item) => {
+                let token_range = TokenRange {
+                    start,
+                    end: tkw.offset,
+                };
+                items.push(item);
+                spans.push(token_range);
+            }
+        }
 
         if tkw.is_empty() {
             break;
         }
+    }
+
+    if has_error {
+        return Err(());
     }
 
     Ok(arenas.add_range(items, spans))
@@ -227,7 +250,7 @@ pub fn parse_one_or_more_delimited_until_fail<'a, T: Consumable<'a>>(
     arenas: &mut AstArenas,
     delimiter: Token,
     diagnostics: Option<&mut Diagnostics>,
-) -> Result<AstIdRange<T>, ParseErrorKind> {
+) -> Result<AstIdRange<T>, ()> {
     let start = tkw.offset;
     let item = T::consume(tkw, sc, arenas, diagnostics)?;
     let token_range = TokenRange {

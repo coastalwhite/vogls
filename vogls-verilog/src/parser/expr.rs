@@ -5,7 +5,7 @@ use crate::parser::token_walker::TokenRange;
 use crate::parser::utils::item_parse;
 use crate::tokenizer::Token;
 
-use super::{AstArenas, Consumable, Diagnostics, ParseErrorKind, ParserScratches, TokenWalker};
+use super::{AstArenas, Consumable, Diagnostics, ParserScratches, TokenWalker};
 
 pub(crate) type BindingPower = u8;
 
@@ -70,7 +70,7 @@ impl<'a> Consumable<'a> for Expr {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
 
         sc.exprs_sp.clear();
@@ -139,7 +139,7 @@ impl<'a> Consumable<'a> for Expr {
                                     .errors
                                     .push((span, ParseErrorReason::UnexpectedToken(t)));
                             }
-                            ParseErrorKind::UnexpectedToken
+                            ()
                         })?;
                         deepen!(StackItem::Unary(op), r_bp, span);
                     }
@@ -199,12 +199,10 @@ impl<'a> Consumable<'a> for Expr {
 
                 match item {
                     StackItem::Paren => {
-                        tkw
-                            .next_expect(T::RightParen, diagnostics.as_deref_mut())?;
+                        tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
                     }
                     StackItem::Brace(subject) => {
-                        tkw
-                            .next_expect(T::RightBrace, diagnostics.as_deref_mut())?;
+                        tkw.next_expect(T::RightBrace, diagnostics.as_deref_mut())?;
                         let braced = arenas.add_tuple(current);
                         let bitpartselect = BitPartSelect { subject, braced };
                         current = (Expr::BitPartSelect(bitpartselect), location)

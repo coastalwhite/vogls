@@ -4,7 +4,7 @@ use std::rc::Rc;
 use crate::span::Span;
 use crate::tokenizer::{FileIdx, Token, Tokenized};
 
-use super::{Diagnostics, ParseErrorKind, ParseErrorReason};
+use super::{Diagnostics, ParseErrorReason};
 
 pub struct TokenWalker<'a> {
     tokens: &'a [Token],
@@ -92,7 +92,7 @@ impl<'a> TokenWalker<'a> {
         &self,
         i: usize,
         diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<TokenLoc<'_>, ParseErrorKind> {
+    ) -> Result<TokenLoc<'_>, ()> {
         match self.get(i) {
             Some(t) => Ok(t),
             None => {
@@ -101,7 +101,7 @@ impl<'a> TokenWalker<'a> {
                         .errors
                         .push((TokenRange::at(i), ParseErrorReason::MissingToken));
                 }
-                Err(ParseErrorKind::MissingToken)
+                Err(())
             }
         }
     }
@@ -124,17 +124,14 @@ impl<'a> TokenWalker<'a> {
         self.get(self.offset - 1)
     }
 
-    pub fn try_next(
-        &mut self,
-        diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<TokenLoc<'_>, ParseErrorKind> {
+    pub fn try_next(&mut self, diagnostics: Option<&mut Diagnostics>) -> Result<TokenLoc<'_>, ()> {
         if self.is_empty() {
             if let Some(diagnostics) = diagnostics {
                 diagnostics
                     .errors
                     .push((TokenRange::at(self.offset), ParseErrorReason::MissingToken));
             }
-            return Err(ParseErrorKind::MissingToken);
+            return Err(());
         }
 
         self.offset += 1;
@@ -154,7 +151,7 @@ impl<'a> TokenWalker<'a> {
         &mut self,
         kind: Token,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<TokenLoc<'_>, ParseErrorKind> {
+    ) -> Result<TokenLoc<'_>, ()> {
         let offset = self.offset;
         let next = self.try_next(diagnostics.as_deref_mut())?;
         if *next.kind != kind {
@@ -164,7 +161,7 @@ impl<'a> TokenWalker<'a> {
                     ParseErrorReason::UnexpectedToken(*next.kind),
                 ));
             }
-            return Err(ParseErrorKind::UnexpectedToken);
+            return Err(());
         }
         Ok(next)
     }
@@ -172,5 +169,45 @@ impl<'a> TokenWalker<'a> {
     pub fn peek_content(&self) -> &str {
         let t = self.get(self.offset).unwrap();
         &self.content(*t.file)[t.span.start()..]
+    }
+
+    pub fn try_find_corresponding(
+        &self,
+        token: Token,
+        corresponding: usize,
+        diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<usize, ()> {
+        match self.find(token) {
+            None => {
+                if let Some(diagnostics) = diagnostics {
+                    diagnostics.errors.push((
+                        TokenRange::at(corresponding),
+                        ParseErrorReason::NoCorresponding(token),
+                    ));
+                }
+                return Err(());
+            }
+            Some(i) => Ok(i),
+        }
+    }
+
+    pub fn find(&self, token: Token) -> Option<usize> {
+        Some(
+            self.offset
+                + self.tokens[self.offset..]
+                    .iter()
+                    .position(|t| *t == token)?,
+        )
+    }
+
+    pub fn end_at(&self, at: usize) -> TokenWalker<'a> {
+        Self {
+            tokens: &self.tokens[..at],
+            spans: &self.spans[..at],
+            file_idxs: &self.file_idxs[..at],
+            contents: &self.contents,
+            paths: &self.paths,
+            offset: self.offset,
+        }
     }
 }

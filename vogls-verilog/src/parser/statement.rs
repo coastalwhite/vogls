@@ -9,7 +9,7 @@ use crate::parser::token_walker::TokenRange;
 use crate::tokenizer::Token;
 
 use super::{AstArenas, Consumable, ParserScratches, TokenWalker};
-use super::{Diagnostics, ParseErrorKind, utils::*};
+use super::{Diagnostics, utils::*};
 
 impl<'a> Consumable<'a> for Statement {
     fn consume(
@@ -17,7 +17,7 @@ impl<'a> Consumable<'a> for Statement {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
@@ -72,7 +72,7 @@ impl<'a> Consumable<'a> for Statement {
                     Ok(Self::SystemTaskEnable(system_task_enable))
                 } else {
                     diagnostics.map(|d| d.incomplete(tkw.offset, "statement"));
-                    Err(ParseErrorKind::Incomplete)
+                    Err(())
                 }
             }
         }
@@ -85,7 +85,7 @@ impl<'a> Consumable<'a> for NetLValue {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 506
         // net_lvalue ::=
         //   hierarchical_net_identifier [ { [ constant_expression ] } [ constant_range_expression ] ]
@@ -105,7 +105,7 @@ impl<'a> Consumable<'a> for VariableLValue {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 506
         // variable_lvalue ::=
         //   hierarchical_variable_identifier [ { [ expression ] } [ range_expression ] ]
@@ -125,7 +125,7 @@ impl<'a> Consumable<'a> for BlockingAssignment {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
@@ -150,7 +150,7 @@ impl<'a> Consumable<'a> for NonBlockingAssignment {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
@@ -175,7 +175,7 @@ impl<'a> Consumable<'a> for SeqBlock {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
@@ -201,7 +201,7 @@ impl<'a> Consumable<'a> for DelayOrEventControl {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
@@ -224,11 +224,11 @@ impl<'a> Consumable<'a> for DelayOrEventControl {
             }
             T::KeywordRepeat => {
                 diagnostics.map(|d| d.incomplete(tkw.offset, "delay_or_event_control repeat"));
-                Err(ParseErrorKind::Incomplete)
+                Err(())
             }
             t => {
                 diagnostics.map(|d| d.unexpected_token(tkw.offset, t));
-                Err(ParseErrorKind::UnexpectedToken)
+                Err(())
             }
         }
     }
@@ -240,7 +240,7 @@ impl<'a> Consumable<'a> for DelayControl {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
@@ -262,7 +262,7 @@ impl<'a> Consumable<'a> for DelayValue {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 491
@@ -286,7 +286,7 @@ impl<'a> Consumable<'a> for DelayValue {
             }
             _ => {
                 diagnostics.map(|d| d.incomplete(tkw.offset, "delay_value"));
-                Err(ParseErrorKind::Incomplete)
+                Err(())
             }
         }
     }
@@ -298,7 +298,7 @@ impl<'a> Consumable<'a> for EventControl {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
@@ -327,7 +327,7 @@ impl<'a> Consumable<'a> for EventExpression {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
@@ -400,7 +400,7 @@ impl<'a> Consumable<'a> for ProceduralTimingControl {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 499
@@ -422,7 +422,7 @@ impl<'a> Consumable<'a> for ProceduralTimingControl {
             }
             t => {
                 diagnostics.map(|d| d.unexpected_token(tkw.offset, t));
-                Err(ParseErrorKind::UnexpectedToken)
+                Err(())
             }
         }
     }
@@ -434,7 +434,7 @@ impl<'a> Consumable<'a> for SystemTaskEnable {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 499
@@ -468,7 +468,7 @@ impl<'a> Consumable<'a> for SystemTaskIdentifier {
         _sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
         let t = tkw.next_expect(T::DollarIdent, diagnostics.as_deref_mut())?;
         let (span, file) = (*t.span, *t.file);

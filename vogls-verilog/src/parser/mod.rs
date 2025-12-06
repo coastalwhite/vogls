@@ -85,6 +85,7 @@ pub enum ParseErrorKind {
     MissingToken,
     UnexpectedToken,
     Incomplete,
+    NoCorresponding,
 }
 
 #[derive(Debug, Clone)]
@@ -92,6 +93,7 @@ pub enum ParseErrorReason {
     MissingToken,
     UnexpectedToken(Token),
     Incomplete(&'static str),
+    NoCorresponding(Token),
 }
 
 pub fn parse_file(
@@ -116,7 +118,7 @@ pub trait Consumable<'a>: Sized + Copy + 'static {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind>;
+    ) -> Result<Self, ()>;
     fn try_consume(
         tkw: &mut TokenWalker<'a>,
         sc: &mut ParserScratches,
@@ -139,7 +141,7 @@ impl<'a> Consumable<'a> for Identifier {
         _sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         let t = tkw.next_expect(Token::Ident, diagnostics.as_deref_mut())?;
         let (span, file) = (*t.span, *t.file);
         let content = &tkw.content(file)[span.as_range()];
@@ -156,7 +158,7 @@ impl<'a> Consumable<'a> for DecimalRef {
         _sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         let t = tkw.next_expect(Token::Decimal, diagnostics.as_deref_mut())?;
         let (span, file) = (*t.span, *t.file);
         let content = &tkw.content(file)[span.as_range()];
@@ -173,7 +175,7 @@ impl<'a> Consumable<'a> for SizedNumberRef {
         _sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         let t = tkw.next_expect(Token::Number, diagnostics.as_deref_mut())?;
         let (span, file) = (*t.span, *t.file);
         let content = &tkw.content(file)[span.as_range()];
@@ -190,7 +192,7 @@ impl<'a> Consumable<'a> for StringRef {
         _sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         let t = tkw.next_expect(Token::String, diagnostics.as_deref_mut())?;
         let (span, file) = (*t.span, *t.file);
         let content = &tkw.content(file)[span.as_range()];

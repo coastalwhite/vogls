@@ -3,7 +3,7 @@ use crate::ast::{DecimalRef, StringRef};
 use crate::tokenizer::Token;
 
 use super::{AstArenas, Consumable, ParserScratches, TokenWalker};
-use super::{Diagnostics, ParseErrorKind, utils::*};
+use super::{Diagnostics, utils::*};
 
 impl<'a> Consumable<'a> for ConstantMinTypMaxExpression {
     fn consume(
@@ -11,7 +11,7 @@ impl<'a> Consumable<'a> for ConstantMinTypMaxExpression {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 504
@@ -37,7 +37,7 @@ impl<'a> Consumable<'a> for ConstantExpr {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 504
         // constant_expression ::=
         //   constant_primary
@@ -57,7 +57,7 @@ impl<'a> Consumable<'a> for ConstantPrimary {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 505
@@ -84,7 +84,7 @@ impl<'a> Consumable<'a> for ConstantPrimary {
             }
             _ => {
                 diagnostics.map(|d| d.incomplete(tkw.offset, "constant_primary"));
-                Err(ParseErrorKind::Incomplete)
+                Err(())
             }
         }
     }

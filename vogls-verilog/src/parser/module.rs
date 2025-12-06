@@ -13,7 +13,7 @@ use crate::ast::module::{
 use crate::ast::statement::{NetLValue, Statement};
 use crate::tokenizer::Token;
 
-use super::{AstArenas, Consumable, ParseErrorKind, ParserScratches, TokenWalker};
+use super::{AstArenas, Consumable, ParserScratches, TokenWalker};
 use super::{Diagnostics, utils::*};
 
 impl<'a> Consumable<'a> for Module {
@@ -22,7 +22,7 @@ impl<'a> Consumable<'a> for Module {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 487
@@ -36,6 +36,12 @@ impl<'a> Consumable<'a> for Module {
 
         // @Incomplete: { attribute_instance }
         tkw.next_expect(T::KeywordModule, diagnostics.as_deref_mut())?;
+        let end_at = tkw.try_find_corresponding(
+            T::KeywordEndModule,
+            tkw.offset - 1,
+            diagnostics.as_deref_mut(),
+        )?;
+
         let module_identifier =
             item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
         // @Incomplete: [ module_parameter_port_list ]
@@ -75,11 +81,12 @@ impl<'a> Consumable<'a> for Module {
             ModulePorts::PortDeclarations(Default::default())
         };
         tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
-        let module_items = parse_until_reaching::<ModuleItem>(
-            tkw,
+        let mut items_tkw = tkw.end_at(end_at);
+        tkw.offset = end_at + 1;
+        let module_items = parse_zero_or_more::<ModuleItem>(
+            &mut items_tkw,
             sc,
             arenas,
-            T::KeywordEndModule,
             diagnostics.as_deref_mut(),
         )?;
 
@@ -97,7 +104,7 @@ impl<'a> Consumable<'a> for ModuleItem {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
@@ -127,7 +134,7 @@ impl<'a> Consumable<'a> for NonPortModuleItem {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
@@ -149,18 +156,18 @@ impl<'a> Consumable<'a> for NonPortModuleItem {
             T::KeywordGenerate => {
                 diagnostics
                     .map(|d| d.incomplete(tkw.offset, "non_port_module_item::generate_region"));
-                Err(ParseErrorKind::Incomplete)
+                Err(())
             }
             T::KeywordSpecify => {
                 diagnostics
                     .map(|d| d.incomplete(tkw.offset, "non_port_module_item::specify_block"));
-                Err(ParseErrorKind::Incomplete)
+                Err(())
             }
             T::KeywordSpecParam => {
                 diagnostics.map(|d| {
                     d.incomplete(tkw.offset, "non_port_module_item::specparam_declaration")
                 });
-                Err(ParseErrorKind::Incomplete)
+                Err(())
             }
             _ => {
                 let module_or_generate_item =
@@ -177,7 +184,7 @@ impl<'a> Consumable<'a> for Port {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
         // port ::=
         //   [ port_expression ]
@@ -196,7 +203,7 @@ impl<'a> Consumable<'a> for PortExpression {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
         // port_expression ::=
         //   port_reference
@@ -217,7 +224,7 @@ impl<'a> Consumable<'a> for PortReference {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
         // port_reference ::=
         //   port_identifier [ [ constant_range_expression ] ]
@@ -235,7 +242,7 @@ impl<'a> Consumable<'a> for PortDeclaration {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
@@ -263,7 +270,7 @@ impl<'a> Consumable<'a> for PortDeclaration {
             }
             _ => {
                 diagnostics.map(|d| d.unexpected_token(tkw.offset, *peeked.kind));
-                Err(ParseErrorKind::UnexpectedToken)
+                Err(())
             }
         }
     }
@@ -275,7 +282,7 @@ impl<'a> Consumable<'a> for InoutDeclaration {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 489
@@ -311,7 +318,7 @@ impl<'a> Consumable<'a> for InputDeclaration {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 489
@@ -347,7 +354,7 @@ impl<'a> Consumable<'a> for OutputDeclaration {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 489
@@ -387,7 +394,7 @@ impl<'a> Consumable<'a> for NetType {
         _sc: &mut ParserScratches,
         _arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 490
@@ -411,7 +418,7 @@ impl<'a> Consumable<'a> for NetType {
             T::KeywordWor => Ok(Self::WOr),
             t => {
                 diagnostics.map(|d| d.unexpected_token(tkw.offset, t));
-                Err(ParseErrorKind::UnexpectedToken)
+                Err(())
             }
         }?;
         Ok(result)
@@ -424,7 +431,7 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItem {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
@@ -499,7 +506,7 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItem {
             }
             _ => {
                 diagnostics.map(|d| d.incomplete(tkw.offset, "module_or_generate_item"));
-                Err(ParseErrorKind::Incomplete)
+                Err(())
             }
         }
     }
@@ -511,7 +518,7 @@ impl<'a> Consumable<'a> for ContinousAssign {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
@@ -540,7 +547,7 @@ impl<'a> Consumable<'a> for NetAssignment {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
@@ -564,7 +571,7 @@ impl<'a> Consumable<'a> for ModuleInstantiation {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 495
@@ -596,7 +603,7 @@ impl<'a> Consumable<'a> for ModuleInstance {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 495
@@ -622,7 +629,7 @@ impl<'a> Consumable<'a> for ListOfPortConnections {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 495
@@ -658,7 +665,7 @@ impl<'a> Consumable<'a> for NamedPortConnection {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 495
@@ -691,7 +698,7 @@ impl<'a> Consumable<'a> for InitialConstruct {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
@@ -710,7 +717,7 @@ impl<'a> Consumable<'a> for AlwaysConstruct {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
@@ -729,7 +736,7 @@ impl<'a> Consumable<'a> for GateInstantiation {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 493
@@ -758,7 +765,7 @@ impl<'a> Consumable<'a> for GateInstantiation {
             }
             _ => {
                 diagnostics.map(|d| d.incomplete(tkw.offset, "gate_instantiation"));
-                Err(ParseErrorKind::Incomplete)
+                Err(())
             }
         }
     }
@@ -770,7 +777,7 @@ impl<'a> Consumable<'a> for NInputGateInstantiation {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 493
@@ -801,7 +808,7 @@ impl<'a> Consumable<'a> for NInputGateType {
         _sc: &mut ParserScratches,
         _arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 494
@@ -817,7 +824,7 @@ impl<'a> Consumable<'a> for NInputGateType {
             T::KeywordXnor => Self::Xnor,
             t => {
                 diagnostics.map(|d| d.unexpected_token(tkw.offset, t));
-                return Err(ParseErrorKind::UnexpectedToken);
+                return Err(());
             }
         };
 
@@ -831,7 +838,7 @@ impl<'a> Consumable<'a> for NInputGateInstance {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 494
@@ -864,7 +871,7 @@ impl<'a> Consumable<'a> for NameOfGateInstance {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 494
         // name_of_gate_instance ::= gate_instance_identifier [ range ]
 
@@ -881,7 +888,7 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItemDeclaration {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
@@ -921,7 +928,7 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItemDeclaration {
             _ => {
                 diagnostics
                     .map(|d| d.incomplete(tkw.offset, "module_or_generate_item_declaration"));
-                Err(ParseErrorKind::Incomplete)
+                Err(())
             }
         }
     }
@@ -933,7 +940,7 @@ impl<'a> Consumable<'a> for NetDeclaration {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 490
@@ -975,7 +982,7 @@ impl<'a> Consumable<'a> for RegDeclaration {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 490
@@ -1002,7 +1009,7 @@ impl<'a> Consumable<'a> for ParameterDeclaration {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 489
@@ -1030,7 +1037,7 @@ impl<'a> Consumable<'a> for ParamAssignment {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 491
@@ -1050,7 +1057,7 @@ impl<'a> Consumable<'a> for Range {
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
-    ) -> Result<Self, ParseErrorKind> {
+    ) -> Result<Self, ()> {
         use Token as T;
 
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 492
