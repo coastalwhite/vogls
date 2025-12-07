@@ -36,7 +36,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             walkers.push(w);
             walkers.push(walker);
             continue;
-        } else if file_type.is_file() {
+        } else if file_type.is_file() && entry.file_name().as_encoded_bytes().ends_with(b".v") {
             let path = entry.path();
             let path = path.strip_prefix(&tests_dir)?;
             paths.push(path.to_path_buf());
@@ -75,8 +75,13 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
 
         struct TestInfo {
             fail: bool,
+            verify_stdout: bool,
         }
-        let mut test_information = TestInfo { fail: false };
+
+        let mut test_information = TestInfo {
+            fail: false,
+            verify_stdout: false,
+        };
         {
             let s = std::fs::read_to_string(&path)?;
             let mut lines = s.lines();
@@ -93,6 +98,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
 
                 match line {
                     "fail" => test_information.fail = true,
+                    "verify-stdout" => test_information.verify_stdout = true,
                     _ => {
                         println!();
                         panic!("Invalid vogls test command '{line}'");
@@ -120,10 +126,22 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         let mut ctx = ExecutionContext {
             stdout: Box::new(stdout.clone()) as Box<dyn std::io::Write>,
             stderr: Box::new(stderr.clone()) as Box<dyn std::io::Write>,
+            output_ir: false,
+            output_sim_ir: false,
+            output_schedule: false,
         };
         let result = vogls::run(&path, None, &mut ctx);
 
-        let failed = result.is_err() ^ test_information.fail;
+        let stdout = stdout.0.lock().unwrap();
+        let stdout = std::str::from_utf8(&stdout).unwrap();
+        let stderr = stderr.0.lock().unwrap();
+        let stderr = std::str::from_utf8(&stderr).unwrap();
+
+        let mut failed = result.is_err() ^ test_information.fail;
+        if test_information.verify_stdout {
+            let s = std::fs::read_to_string(&path.with_extension("v.stdout"))?;
+            failed |= stdout != s;
+        }
 
         num_failed += usize::from(failed);
         if failed {
@@ -132,13 +150,9 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                 println!("ERROR: {err:?}");
             };
             println!("--- [START STDOUT] ---");
-            let stdout = stdout.0.lock().unwrap();
-            let stdout = std::str::from_utf8(&stdout).unwrap();
             println!("{stdout}");
             println!("---  [END STDOUT]  ---");
             println!("--- [START STDERR] ---");
-            let stderr = stderr.0.lock().unwrap();
-            let stderr = std::str::from_utf8(&stderr).unwrap();
             println!("{stderr}");
             println!("---  [END STDERR]  ---");
         } else {

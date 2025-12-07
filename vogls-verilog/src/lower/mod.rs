@@ -19,8 +19,9 @@ use crate::ast::module::{
     ParamAssignment, ParameterDeclaration, Port, PortDeclaration,
 };
 use crate::ast::statement::{
-    DelayControl, DelayValue, EventControl, EventExpression, LoopStatementVariant,
-    NonBlockingAssignment, ProceduralTimingControl, Statement, VariableLValue,
+    BlockingAssignment, DelayControl, DelayValue, EventControl, EventExpression,
+    LoopStatementVariant, NonBlockingAssignment, ProceduralTimingControl, Statement,
+    VariableLValue,
 };
 use crate::number::Decimal;
 use crate::parser::{Ast, AstArenas};
@@ -516,28 +517,22 @@ fn statements_to_process<'a>(
             Statement::BlockingAssignment(ba) => {
                 // @Incorrect
                 let ba = arenas.get(*ba);
-                assert!(ba.delay_or_event_control.is_none());
+                let BlockingAssignment {
+                    variable_lvalue,
+                    delay_or_event_control,
+                    expression,
+                } = ba;
+                assert!(delay_or_event_control.is_none());
 
-                let lvalue = arenas.get(ba.variable_lvalue);
-                let lvalue = lvalue.ident.item;
-
-                let ident = arenas.get_ident(lvalue.0);
-
-                let ScopeItem::Signal(scope_item) = scope.get(&ident).expect("cannot find ident")
-                else {
-                    panic!("not a signal");
-                };
-
-                let decimal = arenas.get(ba.expression).into_decimal_literal().unwrap();
-                let decimal = &arenas.decimals[decimal.at];
-                let decimal = match decimal {
-                    Decimal::Small(v) => *v as usize,
-                    _ => todo!(),
-                };
-
-                let value =
-                    builder.constant(gl, Value::Bits(Bits::Small(u64::from(decimal != 0), 1)));
-                builder.drive(gl, scope_item.key, value); // @TODO: Resolve ident
+                let value = lower_expr(&mut builder, gl, scope, arenas.get(*expression), arenas);
+                assign_variable_lvalue(
+                    gl,
+                    &mut builder,
+                    scope,
+                    arenas.get(*variable_lvalue),
+                    value,
+                    arenas,
+                );
             }
             Statement::CaseStatement => todo!(),
             Statement::ConditionalStatement => todo!(),
@@ -560,7 +555,32 @@ fn statements_to_process<'a>(
                         builder = builder.jump_to_with_dummy(gl, key);
                     }
                     LoopStatementVariant::Repeat(_expr) => todo!(),
-                    LoopStatementVariant::While(_expr) => todo!(),
+                    LoopStatementVariant::While(condition) => {
+                        builder = builder.jump(gl);
+                        let loop_start = builder.key();
+                        let condition = lower_expr(
+                            &mut builder,
+                            gl,
+                            scope,
+                            arenas.get(condition),
+                            arenas,
+                        );
+
+                        let branch_ref;
+                        (branch_ref, builder) = builder.branch(gl, condition);
+                        builder = statements_to_process(
+                            builder,
+                            gl,
+                            scope,
+                            std::slice::from_ref(statement),
+                            arenas,
+                        );
+
+                        let next_builder = builder.next_builder(gl);
+                        branch_ref.update(gl, next_builder.key());
+                        builder.jump_to(gl, loop_start);
+                        builder = next_builder;
+                    },
                     LoopStatementVariant::For(initialization, condition, step) => {
                         let initialization = arenas.get(initialization);
                         let condition = arenas.get(condition);

@@ -8,7 +8,7 @@ use vogls_sim::{Context, Event, ScheduledEvent, VmProcess, VmProcessKey, lower_p
 use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{Module, ModuleItem, ModuleOrGenerateItem, NonPortModuleItem};
 use vogls_verilog::lower::lower_module_to_ir;
-use vogls_verilog::parser::{parse_file, report_error, Diagnostics, ParserScratches, TokenWalker};
+use vogls_verilog::parser::{Diagnostics, ParserScratches, TokenWalker, parse_file, report_error};
 use vogls_verilog::tokenizer::Tokenized;
 
 mod elaborate;
@@ -16,6 +16,9 @@ mod elaborate;
 pub struct ExecutionContext {
     pub stdout: Box<dyn std::io::Write>,
     pub stderr: Box<dyn std::io::Write>,
+    pub output_ir: bool,
+    pub output_sim_ir: bool,
+    pub output_schedule: bool,
 }
 
 pub fn run(
@@ -28,13 +31,17 @@ pub fn run(
     let mut tkw = TokenWalker::new(&token_buffer);
     let mut diagnostics = Diagnostics::default();
 
-    let ast = match parse_file(&mut tkw, &mut ParserScratches::default(), Some(&mut diagnostics)) {
+    let ast = match parse_file(
+        &mut tkw,
+        &mut ParserScratches::default(),
+        Some(&mut diagnostics),
+    ) {
         Ok(ast) => ast,
         Err(_) => {
             for (location, err) in &diagnostics.errors {
                 let mut out = String::new();
                 report_error(&token_buffer, err.clone(), *location, &mut out)?;
-                write!(ectx.stdout, "{out}")?;
+                write!(ectx.stderr, "{out}")?;
             }
             return Err("failed to parse".into());
         }
@@ -167,8 +174,10 @@ pub fn run(
 
     let tl_module_key = *instantiated_modules.get(tl_module_name).unwrap();
 
-    for module in gl.modules.values() {
-        writeln!(ectx.stdout, "{}", module.display(&gl))?;
+    if ectx.output_ir {
+        for module in gl.modules.values() {
+            writeln!(ectx.stdout, "{}", module.display(&gl))?;
+        }
     }
 
     let mut processes = SlotMap::<VmProcessKey, VmProcess>::default();
@@ -183,17 +192,23 @@ pub fn run(
 
     let mut io_signals = HashMap::new();
     for &process in elab_processes.iter() {
-        writeln!(ectx.stdout)?;
-        writeln!(ectx.stdout, "{}", gl.processes[process].display(&gl))?;
+        if ectx.output_sim_ir {
+            println!();
+            println!("{}", gl.processes[process].display(&gl));
+        }
         let vm_process = lower_process_to_vm(process, &gl, &mut io_signals);
 
-        write!(ectx.stdout, "{}", &vm_process)?;
+        if ectx.output_sim_ir {
+            print!("{}", &vm_process);
+        }
 
         let bit_stack = vec![0u8; vm_process.bit_stack_size];
         let decimal_stack = vec![0i64; vm_process.decimal_stack_size];
         let vm_process_key = processes.insert(vm_process);
 
-        writeln!(ectx.stdout, ": {vm_process_key:?}")?;
+        if ectx.output_sim_ir {
+            println!(": {vm_process_key:?}");
+        }
 
         schedule.push(ScheduledEvent {
             at: 0,
@@ -214,7 +229,9 @@ pub fn run(
         signals.insert(signal, value);
     }
 
-    writeln!(ectx.stdout, "{schedule:?}")?;
+    if ectx.output_schedule {
+        println!("{schedule:?}");
+    }
 
     let stdout = std::mem::replace(&mut ectx.stdout, Box::new(Vec::new()) as _);
     let stderr = std::mem::replace(&mut ectx.stdout, Box::new(Vec::new()) as _);

@@ -54,7 +54,7 @@ pub fn report_error(
 ) -> std::fmt::Result {
     use std::fmt::Write;
     writeln!(out, "Failed to read file. Reason: {:?}", reason)?;
-    if tokenized.file_idxs[location.start] != tokenized.file_idxs[location.end] {
+    if tokenized.file_idxs[location.start] != tokenized.file_idxs[location.end - 1] {
         // @TODO
         return Ok(());
     }
@@ -63,7 +63,7 @@ pub fn report_error(
     let content = tokenized.contents[tokenized.file_idxs[location.start] as usize].as_ref();
     let location = Span::new(
         tokenized.spans[location.start].start(),
-        tokenized.spans[location.end].end(),
+        tokenized.spans[location.end - 1].end(),
     );
 
     // @Performance: Cache lines per file.
