@@ -1,4 +1,6 @@
-use crate::ast::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression, ConstantPrimary};
+use crate::ast::constant_expr::{
+    ConstantExpr, ConstantMinTypMaxExpression, ConstantPrimary, ConstantRangeExpression,
+};
 use crate::ast::{DecimalRef, StringRef};
 use crate::tokenizer::Token;
 
@@ -27,6 +29,30 @@ impl<'a> Consumable<'a> for ConstantMinTypMaxExpression {
             Ok(Self::MinTypMax { min, typ, max })
         } else {
             Ok(Self::Single(min))
+        }
+    }
+}
+
+impl<'a> Consumable<'a> for ConstantRangeExpression {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 504
+        // constant_range_expression ::=
+        //   constant_expression
+        // | msb_constant_expression : lsb_constant_expression
+
+        let msb = parse::<ConstantExpr>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        if tkw.next_if_equals(T::Colon) {
+            let lsb = parse::<ConstantExpr>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+            Ok(Self::MsbLsb { msb, lsb })
+        } else {
+            Ok(Self::Single(msb))
         }
     }
 }

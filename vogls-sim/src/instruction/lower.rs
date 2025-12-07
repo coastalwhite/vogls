@@ -14,10 +14,14 @@ pub fn lower_process_to_vm(
     gl: &GlobalContext,
     io_signals: &mut HashMap<SignalKey, VmSignalKey>,
 ) -> VmProcess {
+    use Instruction as I;
+    use VmInstruction as VI;
+
     let process = &gl.processes[process];
 
     let mut bb_stack = Vec::new();
     let mut bb_seen = HashSet::new();
+    let mut bb_phis = HashMap::<BasicBlockKey, Vec<(VariableKey, VariableKey)>>::new();
 
     let mut stack_map = HashMap::new();
     let mut bit_stack_top = 0;
@@ -29,6 +33,17 @@ pub fn lower_process_to_vm(
         let bb = gl.bbs.get(bb_key).unwrap();
 
         for instr in &bb.instrs {
+            if let Instruction::Phi(dst, bb1, var1, bb2, var2) = instr {
+                bb_phis
+                    .entry(*bb1)
+                    .or_insert(Vec::new())
+                    .push((*dst, *var1));
+                bb_phis
+                    .entry(*bb2)
+                    .or_insert(Vec::new())
+                    .push((*dst, *var2));
+            }
+
             if let Some(dst) = instr.get_destination_variable() {
                 match &gl.vars.get(dst).unwrap().ty {
                     Type::Bits(size) => {
@@ -83,8 +98,6 @@ pub fn lower_process_to_vm(
         bb_offsets.insert(bb_key, instructions.len());
 
         for instr in &bb.instrs {
-            use Instruction as I;
-            use VmInstruction as VI;
             let instr = match instr {
                 I::ConstantBit(d, value) => VI::ConstantBit(var(*d), value.clone()),
                 I::ConstantDecimal(d, value) => VI::ConstantDecimal(var(*d), value.clone()),
@@ -117,14 +130,20 @@ pub fn lower_process_to_vm(
                 }
                 I::Probe(dst, signal) => VI::Probe(var(*dst), signal!(*signal)),
                 I::Drive(signal, src) => VI::Drive(signal!(*signal), var(*src)),
+                I::Phi(..) => continue,
                 I::Instantiate(_, _) | I::Spawn(_, _) | I::Signal(_) => unreachable!(),
             };
 
             instructions.push(instr);
         }
 
+        if let Some(phis) = bb_phis.get(&bb_key) {
+            for (dst, src) in phis {
+                instructions.push(VI::Move(var(*dst), var(*src), gl.vars[*src].ty.clone()));
+            }
+        }
+
         use BasicBlockTerminator as T;
-        use VmInstruction as VI;
         let terminator_instr = match &bb.terminator {
             T::Wait(_, time) => {
                 instructions.push(VI::Wait(*time));

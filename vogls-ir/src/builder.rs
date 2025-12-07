@@ -102,6 +102,28 @@ impl ModuleBuilder {
     }
 }
 
+pub struct PhiRef(BasicBlockKey, usize);
+pub struct BranchRef(BasicBlockKey);
+
+impl PhiRef {
+    pub fn update(&self, gl: &mut GlobalContext, bb: BasicBlockKey, var: VariableKey) {
+        let instr = &mut gl.bbs[self.0].instrs[self.1];
+        let Instruction::Phi(_, _, _, phi_bb, phi_var) = instr else {
+            panic!("not a phi");
+        };
+        *phi_bb = bb;
+        *phi_var = var;
+    }
+}
+impl BranchRef {
+    pub fn update(&self, gl: &mut GlobalContext, bb: BasicBlockKey) {
+        let BasicBlockTerminator::Branch(_, _, snd) = &mut gl.bbs[self.0].terminator else {
+            panic!("not a branch");
+        };
+        *snd = bb;
+    }
+}
+
 impl BasicBlockBuilder {
     pub fn claim_tmp(&mut self) -> usize {
         let t = self.tmp_offset;
@@ -125,6 +147,35 @@ impl BasicBlockBuilder {
             instrs: Vec::new(),
             terminator: BasicBlockTerminator::Halt,
         })
+    }
+
+    pub fn next_builder(&mut self, gl: &mut GlobalContext) -> BasicBlockBuilder {
+        let next_key = self.next_bb(gl);
+        BasicBlockBuilder {
+            key: next_key,
+
+            module: self.module,
+            process: self.process,
+            initializer: self.initializer,
+
+            instrs: Vec::new(),
+
+            tmp_offset: self.tmp_offset,
+            bbname_offset: self.bbname_offset,
+        }
+    }
+
+    pub fn phi(
+        &mut self,
+        gl: &mut GlobalContext,
+        bb: BasicBlockKey,
+        var: VariableKey,
+    ) -> (VariableKey, PhiRef) {
+        let ty = gl.vars[var].ty.clone();
+        let dst = self.next_tmp_var(gl, ty);
+        let offset = self.instrs.len();
+        self.instrs.push(Instruction::Phi(dst, bb, var, bb, var));
+        (dst, PhiRef(self.key(), offset))
     }
 
     pub fn constant(&mut self, gl: &mut GlobalContext, value: Value) -> VariableKey {
@@ -248,6 +299,103 @@ impl BasicBlockBuilder {
         let xnor = self.binary_neg(gl, xor);
         xnor
     }
+
+    pub fn plus(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+    ) -> VariableKey {
+        let dst = self.next_tmp_var(gl, Type::Decimal);
+
+        let lhs_ty = &gl.vars[lhs].ty;
+        let rhs_ty = &gl.vars[rhs].ty;
+
+        assert_eq!(lhs_ty, &Type::Decimal);
+        assert_eq!(rhs_ty, &Type::Decimal);
+
+        self.instrs
+            .push(Instruction::Binary(dst, BinaryOp::DecimalAdd, lhs, rhs));
+        dst
+    }
+
+    pub fn select_bit(
+        &mut self,
+        gl: &mut GlobalContext,
+        src: VariableKey,
+        idx: VariableKey,
+    ) -> VariableKey {
+        let dst = self.next_tmp_var(gl, Type::Bits(1));
+
+        let Type::Bits(n) = &gl.vars[src].ty else {
+            panic!();
+        };
+        let n = *n;
+        let idx = self.cast(gl, idx, Type::Decimal);
+
+        self.instrs
+            .push(Instruction::Binary(dst, BinaryOp::SelectBit(n), src, idx));
+        dst
+    }
+
+    pub fn unsigned_lt(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+    ) -> VariableKey {
+        let ge = self.unsigned_le(gl, rhs, lhs);
+        self.logical_neg(gl, ge)
+    }
+    pub fn unsigned_gt(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+    ) -> VariableKey {
+        let le = self.unsigned_le(gl, lhs, rhs);
+        self.logical_neg(gl, le)
+    }
+    pub fn unsigned_le(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+    ) -> VariableKey {
+        let dst = self.next_tmp_var(gl, T::Bits(1));
+
+        let lhs_ty = &gl.vars[lhs].ty;
+        let rhs_ty = &gl.vars[rhs].ty;
+
+        use Type as T;
+        let (lhs, rhs, op) = match (lhs_ty, rhs_ty) {
+            (T::Bits(x), T::Bits(y)) if x == y => (lhs, rhs, BinaryOp::UnsignedLessEqual(*x)),
+            (T::Decimal, T::Decimal) => (lhs, rhs, BinaryOp::DecimalLessEqual),
+            (T::Bits(x), T::Bits(y)) => {
+                let out_size = (*x).max(*y);
+                let lhs = self.cast(gl, lhs, T::Bits(out_size));
+                let rhs = self.cast(gl, rhs, T::Bits(out_size));
+                (lhs, rhs, BinaryOp::UnsignedLessEqual(out_size))
+            }
+            (T::Bits(x), _) | (_, T::Bits(x)) => {
+                let x = *x;
+                let lhs = self.cast(gl, lhs, T::Bits(x));
+                let rhs = self.cast(gl, rhs, T::Bits(x));
+                (lhs, rhs, BinaryOp::UnsignedLessEqual(x))
+            }
+        };
+        self.instrs.push(Instruction::Binary(dst, op, lhs, rhs));
+        dst
+    }
+    pub fn unsigned_ge(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+    ) -> VariableKey {
+        self.unsigned_le(gl, rhs, lhs)
+    }
+
     pub fn equals(
         &mut self,
         gl: &mut GlobalContext,
@@ -354,6 +502,54 @@ impl BasicBlockBuilder {
         let slf = gl.bbs.get_mut(self.key).unwrap();
         slf.instrs = std::mem::take(&mut self.instrs);
         slf.terminator = BasicBlockTerminator::Jump(bb);
+    }
+
+    pub fn jump_to_with_dummy(
+        mut self,
+        gl: &mut GlobalContext,
+        bb: BasicBlockKey,
+    ) -> BasicBlockBuilder {
+        let next_key = self.next_bb(gl);
+        let slf = gl.bbs.get_mut(self.key).unwrap();
+        slf.instrs = std::mem::take(&mut self.instrs);
+        slf.terminator = BasicBlockTerminator::Jump(bb);
+        BasicBlockBuilder {
+            key: next_key,
+
+            module: self.module,
+            process: self.process,
+            initializer: self.initializer,
+
+            instrs: Vec::new(),
+
+            tmp_offset: self.tmp_offset,
+            bbname_offset: self.bbname_offset,
+        }
+    }
+
+    pub fn branch(
+        mut self,
+        gl: &mut GlobalContext,
+        condition: VariableKey,
+    ) -> (BranchRef, BasicBlockBuilder) {
+        let branch_bb = self.key();
+        let next_key = self.next_bb(gl);
+        let slf = gl.bbs.get_mut(self.key).unwrap();
+        slf.instrs = std::mem::take(&mut self.instrs);
+        slf.terminator = BasicBlockTerminator::Branch(condition, next_key, next_key);
+        let builder = BasicBlockBuilder {
+            key: next_key,
+
+            module: self.module,
+            process: self.process,
+            initializer: self.initializer,
+
+            instrs: Vec::new(),
+
+            tmp_offset: self.tmp_offset,
+            bbname_offset: self.bbname_offset,
+        };
+        (BranchRef(branch_bb), builder)
     }
 
     pub fn branch_true_to(

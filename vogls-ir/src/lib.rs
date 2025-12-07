@@ -142,6 +142,13 @@ pub enum BinaryOp {
     DecimalAnd,
     DecimalOr,
     DecimalXor,
+
+    DecimalAdd,
+
+    UnsignedLessEqual(VectorSize),
+    DecimalLessEqual,
+
+    SelectBit(VectorSize),
 }
 
 #[derive(Debug, Clone)]
@@ -161,6 +168,14 @@ pub enum Instruction {
     Instantiate(ModuleKey, Vec<SignalKey>),
     Spawn(ProcessKey, Vec<SignalKey>),
     Signal(SignalKey),
+
+    Phi(
+        VariableKey,
+        BasicBlockKey,
+        VariableKey,
+        BasicBlockKey,
+        VariableKey,
+    ),
 }
 
 impl Instruction {
@@ -171,6 +186,7 @@ impl Instruction {
             | Self::Unary(dst, _, _)
             | Self::Binary(dst, _, _, _)
             | Self::Cast(dst, _)
+            | Self::Phi(dst, _, _, _, _)
             | Self::Probe(dst, _) => Some(*dst),
             Self::Intrinsic(_, _)
             | Self::Drive(_, _)

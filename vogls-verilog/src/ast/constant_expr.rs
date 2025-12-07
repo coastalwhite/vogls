@@ -31,6 +31,19 @@ pub enum ConstantPrimary {
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 504
+// constant_range_expression ::=
+//   constant_expression
+// | msb_constant_expression : lsb_constant_expression
+#[derive(Clone, Copy)]
+pub enum ConstantRangeExpression {
+    Single(AstId<ConstantExpr>),
+    MsbLsb {
+        msb: AstId<ConstantExpr>,
+        lsb: AstId<ConstantExpr>,
+    },
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 504
 // constant_mintypmax_expression ::=
 //   constant_expression
 // | constant_expression : constant_expression : constant_expression

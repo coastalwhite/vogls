@@ -3,12 +3,12 @@ use crate::ast::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression};
 use crate::ast::expr::Expr;
 use crate::ast::module::{
     AlwaysConstruct, ContinousAssign, GateInstantiation, InitialConstruct, InoutDeclaration,
-    InputDeclaration, ListOfPortConnections, Module, ModuleInstance, ModuleInstantiation,
-    ModuleItem, ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration, ModulePorts,
-    NInputGateInstance, NInputGateInstantiation, NInputGateType, NameOfGateInstance,
-    NamedPortConnection, NetAssignment, NetDeclaration, NetType, NonPortModuleItem,
-    OutputDeclaration, ParamAssignment, ParameterDeclaration, Port, PortDeclaration,
-    PortExpression, PortReference, Range, RegDeclaration,
+    InputDeclaration, IntegerDeclaration, ListOfPortConnections, Module, ModuleInstance,
+    ModuleInstantiation, ModuleItem, ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration,
+    ModulePorts, NInputGateInstance, NInputGateInstantiation, NInputGateType, NameOfGateInstance,
+    NamedPortConnection, NetAssignment, NetDeclAssignment, NetDeclaration, NetDeclarationNets,
+    NetType, NonPortModuleItem, OutputDeclaration, ParamAssignment, ParameterDeclaration, Port,
+    PortDeclaration, PortExpression, PortReference, Range, RegDeclaration,
 };
 use crate::ast::statement::{NetLValue, Statement};
 use crate::tokenizer::Token;
@@ -330,7 +330,10 @@ impl<'a> Consumable<'a> for InputDeclaration {
             net_type = Some(val);
         }
         let signed = tkw.next_if_equals(T::KeywordSigned);
-        // @Incomplete: [ range ]
+        let mut range = None;
+        if tkw.get(tkw.offset).is_some_and(|t| *t.kind == T::LeftBrace) {
+            range = Some(parse::<Range>(tkw, sc, arenas, diagnostics.as_deref_mut())?);
+        }
         let port_identifiers = parse_one_or_more_delimited_until_fail::<Identifier>(
             tkw,
             sc,
@@ -342,7 +345,7 @@ impl<'a> Consumable<'a> for InputDeclaration {
         Ok(Self {
             net_type,
             signed,
-            range: None,
+            range,
             port_identifiers,
         })
     }
@@ -370,7 +373,10 @@ impl<'a> Consumable<'a> for OutputDeclaration {
         }
         let signed = tkw.next_if_equals(T::KeywordSigned);
         // @Incomplete: reg | output_variable_type
-        // @Incomplete: [ range ]
+        let mut range = None;
+        if tkw.get(tkw.offset).is_some_and(|t| *t.kind == T::LeftBrace) {
+            range = Some(parse::<Range>(tkw, sc, arenas, diagnostics.as_deref_mut())?);
+        }
         let identifiers = parse_one_or_more_delimited_until_fail::<Identifier>(
             tkw,
             sc,
@@ -382,7 +388,7 @@ impl<'a> Consumable<'a> for OutputDeclaration {
         Ok(Self {
             net: net_type,
             signed,
-            range: None,
+            range,
             identifiers,
         })
     }
@@ -493,7 +499,8 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItem {
             | T::KeywordWire
             | T::KeywordWand
             | T::KeywordWor
-            | T::KeywordReg => {
+            | T::KeywordReg
+            | T::KeywordInteger => {
                 let module_or_generate_item_declaration = parse::<ModuleOrGenerateItemDeclaration>(
                     tkw,
                     sc,
@@ -925,6 +932,11 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItemDeclaration {
                     parse::<RegDeclaration>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
                 Ok(Self::Reg(reg_declaration))
             }
+            T::KeywordInteger => {
+                let integer_declaration =
+                    parse::<IntegerDeclaration>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                Ok(Self::Integer(integer_declaration))
+            }
             _ => {
                 diagnostics
                     .map(|d| d.incomplete(tkw.offset, "module_or_generate_item_declaration"));
@@ -958,21 +970,61 @@ impl<'a> Consumable<'a> for NetDeclaration {
         let net_type = item_parse::<NetType>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
         let signed = tkw.next_if_equals(T::KeywordSigned);
         let range = try_parse::<Range>(tkw, sc, arenas);
-        let identifiers = parse_one_or_more_delimited::<Identifier>(
-            tkw,
-            sc,
-            arenas,
-            T::Comma,
-            diagnostics.as_deref_mut(),
-        )?;
+
+        tkw.next_expect(T::Ident, diagnostics.as_deref_mut())?;
+        let is_assignments = tkw.is_next_equal_to(T::Equals);
+        tkw.offset -= 1;
+
+        let nets = if is_assignments {
+            //   net_type [ drive_strength ] [ signed ] [ delay3 ] list_of_net_decl_assignments ;
+            // | net_type [ drive_strength ] [ vectored | scalared ] [ signed ] range [ delay3 ] list_of_net_decl_assignments ;
+            NetDeclarationNets::Assignments(parse_one_or_more_delimited::<NetDeclAssignment>(
+                tkw,
+                sc,
+                arenas,
+                T::Comma,
+                diagnostics.as_deref_mut(),
+            )?)
+        } else {
+            //   net_type [ signed ] [ delay3 ] list_of_net_identifiers ;
+            // | net_type [ vectored | scalared ] [ signed ] range [ delay3 ] list_of_net_identifiers ;
+            NetDeclarationNets::Idents(parse_one_or_more_delimited::<Identifier>(
+                tkw,
+                sc,
+                arenas,
+                T::Comma,
+                diagnostics.as_deref_mut(),
+            )?)
+        };
+
         tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
 
         Ok(Self {
             net_type,
             signed,
             range,
-            identifiers,
+            nets,
         })
+    }
+}
+
+impl<'a> Consumable<'a> for NetDeclAssignment {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 491
+        // net_decl_assignment ::= net_identifier = expression
+
+        let ident = item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::Equals, diagnostics.as_deref_mut())?;
+        let expr = parse::<Expr>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+
+        Ok(Self { ident, expr })
     }
 }
 
@@ -990,6 +1042,32 @@ impl<'a> Consumable<'a> for RegDeclaration {
 
         // @Incomplete
         tkw.next_expect(T::KeywordReg, diagnostics.as_deref_mut())?;
+        let identifiers = parse_one_or_more_delimited::<Identifier>(
+            tkw,
+            sc,
+            arenas,
+            T::Comma,
+            diagnostics.as_deref_mut(),
+        )?;
+        tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+
+        Ok(Self { identifiers })
+    }
+}
+
+impl<'a> Consumable<'a> for IntegerDeclaration {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 490
+        // integer_declaration ::= integer list_of_variable_identifiers ;
+
+        tkw.next_expect(T::KeywordInteger, diagnostics.as_deref_mut())?;
         let identifiers = parse_one_or_more_delimited::<Identifier>(
             tkw,
             sc,

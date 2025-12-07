@@ -156,9 +156,13 @@ impl BinaryOp {
             Self::BitAnd(_) => "band",
             Self::BitOr(_) => "bor",
             Self::BitXor(_) => "bxor",
+            Self::UnsignedLessEqual(_) => "ule",
             Self::DecimalAnd => "i64and",
             Self::DecimalOr => "i64or",
             Self::DecimalXor => "i64xor",
+            Self::DecimalAdd => "i64+",
+            Self::DecimalLessEqual => "i64le",
+            Self::SelectBit(_) => "bselect",
         }
     }
 }
@@ -244,6 +248,18 @@ impl ContextFormat for Instruction {
                 ctx.gl.signals.get(*sig).unwrap().ctx_fmt(f, ctx)?;
                 f.write_str(", ")?;
                 ctx.gl.vars.get(*var).unwrap().typed_ctx_fmt(f, ctx)?;
+            }
+
+            Self::Phi(dst, bb1, var1, bb2, var2) => {
+                ctx.gl.vars.get(*dst).unwrap().typed_ctx_fmt(f, ctx)?;
+                f.write_str(" = phi ")?;
+                f.write_str(&ctx.gl.bbs.get(*bb1).unwrap().name)?;
+                f.write_str(" ")?;
+                ctx.gl.vars.get(*var1).unwrap().typed_ctx_fmt(f, ctx)?;
+                f.write_str(", ")?;
+                f.write_str(&ctx.gl.bbs.get(*bb2).unwrap().name)?;
+                f.write_str(" ")?;
+                ctx.gl.vars.get(*var2).unwrap().typed_ctx_fmt(f, ctx)?;
             }
 
             Self::Spawn(process, ports) => {
@@ -336,8 +352,6 @@ impl Variable {
         f: &mut fmt::Formatter<'_>,
         ctx: &mut DisplayContext<'_>,
     ) -> fmt::Result {
-        self.ty.ctx_fmt(f, ctx)?;
-        f.write_str(" ")?;
         self.ctx_fmt(f, ctx)?;
         Ok(())
     }

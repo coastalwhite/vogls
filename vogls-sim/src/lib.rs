@@ -150,6 +150,23 @@ impl Event {
                                     bit_stack[lhs.offset + i] ^ bit_stack[rhs.offset + i];
                             }
                         }
+                        O::UnsignedLessEqual(n) => {
+                            let mut set = false;
+                            for i in 0..n.div_ceil(8) as usize {
+                                let value = match bit_stack[lhs.offset + i]
+                                    .cmp(&bit_stack[rhs.offset + i])
+                                {
+                                    Ordering::Less => true,
+                                    Ordering::Greater => false,
+                                    Ordering::Equal => continue,
+                                };
+                                set = true;
+                                bit_stack[dst.offset] = u8::from(value);
+                            }
+                            if !set {
+                                bit_stack[dst.offset] = u8::from(true);
+                            }
+                        }
                         O::DecimalAnd => {
                             decimal_stack[dst.offset] =
                                 decimal_stack[lhs.offset] & decimal_stack[rhs.offset]
@@ -161,6 +178,21 @@ impl Event {
                         O::DecimalXor => {
                             decimal_stack[dst.offset] =
                                 decimal_stack[lhs.offset] ^ decimal_stack[rhs.offset]
+                        }
+                        O::DecimalAdd => {
+                            decimal_stack[dst.offset] =
+                                decimal_stack[lhs.offset] + decimal_stack[rhs.offset]
+                        }
+                        O::DecimalLessEqual => {
+                            bit_stack[dst.offset] =
+                                u8::from(decimal_stack[lhs.offset] <= decimal_stack[rhs.offset])
+                        }
+                        O::SelectBit(n) => {
+                            let idx = decimal_stack[rhs.offset];
+                            assert!(idx >= 0 && idx < *n as i64);
+
+                            bit_stack[dst.offset] =
+                                (bit_stack[lhs.offset + (idx as usize) / 8] >> (idx % 8)) & 1;
                         }
                     };
                 }
@@ -182,6 +214,19 @@ impl Event {
                             decimal_stack[dst.offset] = src as i64;
                         }
                         _ => todo!("cast: {src_ty:?} -> {dst_ty:?}"),
+                    }
+                }
+                I::Move(dst, src, ty) => {
+                    use vogls_ir::Type as T;
+                    match ty {
+                        T::Bits(n) => {
+                            for i in 0..n.div_ceil(8) as usize {
+                                bit_stack[dst.offset + i] = bit_stack[src.offset + i];
+                            }
+                        }
+                        T::Decimal => {
+                            decimal_stack[dst.offset] = decimal_stack[src.offset];
+                        }
                     }
                 }
 

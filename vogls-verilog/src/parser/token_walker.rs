@@ -115,6 +115,14 @@ impl<'a> TokenWalker<'a> {
         next == kind
     }
 
+    pub fn is_next_equal_to(&self, kind: Token) -> bool {
+        let Some(next) = self.get(self.offset) else {
+            return false;
+        };
+        let next = *next.kind;
+        next == kind
+    }
+
     pub fn next(&mut self) -> Option<TokenLoc<'_>> {
         if self.is_empty() {
             return None;
@@ -209,5 +217,56 @@ impl<'a> TokenWalker<'a> {
             paths: &self.paths,
             offset: self.offset,
         }
+    }
+
+    pub fn try_find_corresponding_balanced(&self, offset: usize) -> usize {
+        use Token as T;
+
+        let corresponding = match self.get(offset).unwrap().kind {
+            T::LeftParen => T::RightParen,
+            T::LeftBrace => T::RightBrace,
+            T::LeftBracket => T::RightBracket,
+            _ => unreachable!(),
+        };
+
+        let mut lparens = 0;
+        let mut lbraces = 0;
+        let mut lbrackets = 0;
+
+        for (i, t) in self.tokens.iter().enumerate().skip(offset) {
+            match *t {
+                T::LeftParen => lparens += 1,
+                T::RightParen => {
+                    lparens -= 1;
+                    if corresponding == T::RightParen && lparens == 0 {
+                        // @TODO: better error message
+                        assert!(lparens == 0 && lbraces == 0 && lbrackets == 0);
+                        return i;
+                    }
+                },
+                T::LeftBrace => lbraces += 1,
+                T::RightBrace => {
+                    lbraces -= 1;
+                    if corresponding == T::RightBrace && lbraces == 0 {
+                        // @TODO: better error message
+                        assert!(lparens == 0 && lbraces == 0 && lbrackets == 0);
+                        return i;
+                    }
+                },
+                T::LeftBracket => lbrackets += 1,
+                T::RightBracket => {
+                    lbrackets -= 1;
+                    if corresponding == T::RightBracket && lbrackets == 0 {
+                        // @TODO: better error message
+                        assert!(lparens == 0 && lbraces == 0 && lbrackets == 0);
+                        return i;
+                    }
+                },
+                _ => {},
+            }
+        }
+
+        // @TODO: better error message
+        panic!("no matching enclosure");
     }
 }

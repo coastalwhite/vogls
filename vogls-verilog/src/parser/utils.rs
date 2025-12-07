@@ -177,7 +177,6 @@ pub fn parse_zero_or_more<'a, T: Consumable<'a>>(
     let mut items = Vec::new();
     let mut spans = Vec::new();
 
-    let mut has_error = false;
     while !tkw.is_empty() {
         let start = tkw.offset;
         match T::consume(tkw, sc, arenas, diagnostics.as_deref_mut()) {
@@ -190,16 +189,9 @@ pub fn parse_zero_or_more<'a, T: Consumable<'a>>(
                 spans.push(token_range);
             }
             Err(err) => {
-                if tkw.offset == start {
-                    return Err(err);
-                }
-                has_error = true;
+                return Err(err);
             }
         }
-    }
-
-    if has_error {
-        return Err(());
     }
 
     Ok(arenas.add_range(items, spans))
@@ -216,12 +208,10 @@ pub fn parse_one_or_more<'a, T: Consumable<'a>>(
     let mut items = Vec::new();
     let mut spans = Vec::new();
 
-    let mut has_error = false;
     loop {
         let start = tkw.offset;
         match T::consume(tkw, sc, arenas, diagnostics.as_deref_mut()) {
-            Err(_) if start == tkw.offset => return Err(()),
-            Err(_) => has_error = true,
+            Err(_) => return Err(()),
             Ok(item) => {
                 let token_range = TokenRange {
                     start,
@@ -235,10 +225,6 @@ pub fn parse_one_or_more<'a, T: Consumable<'a>>(
         if tkw.is_empty() {
             break;
         }
-    }
-
-    if has_error {
-        return Err(());
     }
 
     Ok(arenas.add_range(items, spans))

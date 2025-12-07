@@ -1,8 +1,10 @@
+use crate::ast::constant_expr::{ConstantExpr, ConstantRangeExpression};
 use crate::ast::expr::Expr;
 use crate::ast::statement::{
     BlockingAssignment, DelayControl, DelayOrEventControl, DelayValue, EventControl,
-    EventExpression, NetLValue, NonBlockingAssignment, ProceduralTimingControl, SeqBlock,
-    Statement, SystemTaskEnable, SystemTaskIdentifier, VariableLValue,
+    EventExpression, LoopStatement, LoopStatementVariant, NetLValue, NonBlockingAssignment,
+    ProceduralTimingControl, SeqBlock, Statement, SystemTaskEnable, SystemTaskIdentifier,
+    VariableAssignment, VariableLValue,
 };
 use crate::ast::{AstIdRange, DecimalRef, Identifier, TextRef};
 use crate::parser::token_walker::TokenRange;
@@ -56,6 +58,14 @@ impl<'a> Consumable<'a> for Statement {
                     statement,
                 ))
             }
+            T::KeywordForever | T::KeywordRepeat | T::KeywordWhile | T::KeywordFor => {
+                Ok(Self::LoopStatement(parse::<LoopStatement>(
+                    tkw,
+                    sc,
+                    arenas,
+                    diagnostics.as_deref_mut(),
+                )?))
+            }
             _ => {
                 if let Some(blocking_assignment) = try_parse::<BlockingAssignment>(tkw, sc, arenas)
                 {
@@ -86,16 +96,67 @@ impl<'a> Consumable<'a> for NetLValue {
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ()> {
+        use Token as T;
+
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 506
         // net_lvalue ::=
         //   hierarchical_net_identifier [ { [ constant_expression ] } [ constant_range_expression ] ]
         // | { net_lvalue { , net_lvalue } }
 
-        // @Incomplete
+        let peeked = tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?;
+        match *peeked.kind {
+            T::Ident => {
+                let ident = item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                let mut constant_exprs = AstIdRange::default();
+                let mut constant_range_expression = None;
+                if tkw.get(tkw.offset).is_some_and(|t| *t.kind == T::LeftBrace) {
+                    let mut items = Vec::new();
+                    let mut spans = Vec::new();
 
-        let ident = item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                    let mut end = tkw.try_find_corresponding_balanced(tkw.offset);
+                    tkw.offset += 1;
+                    while tkw.get(end + 1).is_some_and(|t| *t.kind == T::LeftBrace) {
+                        let mut item_tkw = tkw.end_at(end);
+                        let start = item_tkw.offset;
+                        let item = ConstantExpr::consume(
+                            &mut item_tkw,
+                            sc,
+                            arenas,
+                            diagnostics.as_deref_mut(),
+                        )?;
+                        let token_range = TokenRange { start, end };
+                        items.push(item);
+                        spans.push(token_range);
 
-        Ok(Self { ident })
+                        tkw.offset = end + 2;
+                        end = tkw.try_find_corresponding_balanced(end + 1);
+                    }
+
+                    let mut item_tkw = tkw.end_at(end);
+                    tkw.offset = end + 1;
+                    constant_exprs = arenas.add_range(items, spans);
+                    constant_range_expression = Some(parse::<ConstantRangeExpression>(
+                        &mut item_tkw,
+                        sc,
+                        arenas,
+                        diagnostics.as_deref_mut(),
+                    )?);
+                }
+                Ok(Self {
+                    ident,
+                    constant_exprs,
+                    constant_range_expression,
+                })
+            }
+            T::LeftBracket => {
+                diagnostics.map(|d| d.incomplete(tkw.offset, "netlvalue::left_brace"));
+                Err(())
+            }
+            t => {
+                diagnostics.map(|d| d.unexpected_token(tkw.offset, t));
+                Err(())
+            }
+        }
     }
 }
 
@@ -477,5 +538,82 @@ impl<'a> Consumable<'a> for SystemTaskIdentifier {
         let end = start + content.len();
         arenas.text.push_str(content);
         Ok(Self(TextRef { start, end }))
+    }
+}
+
+impl<'a> Consumable<'a> for VariableAssignment {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
+        // variable_assignment ::= variable_lvalue = expression
+
+        let lvalue = parse::<VariableLValue>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::Equals, diagnostics.as_deref_mut())?;
+        let expr = parse::<Expr>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+
+        Ok(Self { lvalue, expr })
+    }
+}
+
+impl<'a> Consumable<'a> for LoopStatement {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
+        // variable_assignment ::= variable_lvalue = expression
+
+        let peeked = tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?;
+        let variant = match *peeked.kind {
+            T::KeywordForever => {
+                tkw.offset += 1;
+                LoopStatementVariant::Forever
+            }
+            T::KeywordRepeat => {
+                tkw.offset += 1;
+                tkw.next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
+                let expr = parse::<Expr>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
+                LoopStatementVariant::Repeat(expr)
+            }
+            T::KeywordWhile => {
+                tkw.offset += 1;
+                tkw.next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
+                let expr = parse::<Expr>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
+                LoopStatementVariant::While(expr)
+            }
+            T::KeywordFor => {
+                tkw.offset += 1;
+                tkw.next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
+                let initialization =
+                    parse::<VariableAssignment>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+                let condition = parse::<Expr>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+                let step =
+                    parse::<VariableAssignment>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
+                LoopStatementVariant::For(initialization, condition, step)
+            }
+
+            t => {
+                diagnostics.map(|d| d.unexpected_token(tkw.offset, t));
+                return Err(());
+            }
+        };
+
+        let statement = parse::<Statement>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        Ok(Self { variant, statement })
     }
 }

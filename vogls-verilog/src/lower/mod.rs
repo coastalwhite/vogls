@@ -11,15 +11,16 @@ use vogls_ir::{
 
 use crate::ast::AstId;
 use crate::ast::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression, ConstantPrimary};
-use crate::ast::expr::{BinaryOperator, Expr, UnaryOperator};
+use crate::ast::expr::{BinaryOperator, BitPartSelect, Expr, UnaryOperator};
 use crate::ast::module::{
     GateInstantiation, ListOfPortConnections, Module, ModuleInstance, ModuleInstantiation,
     ModuleItem, ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration, ModulePorts,
-    NInputGateInstance, NInputGateType, NonPortModuleItem, ParamAssignment, ParameterDeclaration,
-    Port, PortDeclaration,
+    NInputGateInstance, NInputGateType, NetDeclAssignment, NetDeclarationNets, NonPortModuleItem,
+    ParamAssignment, ParameterDeclaration, Port, PortDeclaration,
 };
 use crate::ast::statement::{
-    DelayControl, DelayValue, EventControl, EventExpression, ProceduralTimingControl, Statement,
+    DelayControl, DelayValue, EventControl, EventExpression, LoopStatementVariant,
+    NonBlockingAssignment, ProceduralTimingControl, Statement, VariableLValue,
 };
 use crate::number::Decimal;
 use crate::parser::{Ast, AstArenas};
@@ -34,7 +35,7 @@ pub struct SignalScopeItem {
 #[derive(Debug)]
 pub enum ScopeItem {
     Signal(SignalScopeItem),
-    LocalVariable,
+    LocalVariable(Result<VariableKey, Type>),
     Constant(u64),
 }
 
@@ -166,26 +167,74 @@ pub fn lower_module_to_ir(
                                     None => 1,
                                     Some(range) => {
                                         let range = arenas.get(range);
-                                        let msb = eval_constant_expr(gl, &mut scope, arenas.get(range.msb), arenas);
-                                        let lsb = eval_constant_expr(gl, &mut scope, arenas.get(range.lsb), arenas);
+                                        let msb = eval_constant_expr(
+                                            gl,
+                                            &mut scope,
+                                            arenas.get(range.msb),
+                                            arenas,
+                                        );
+                                        let lsb = eval_constant_expr(
+                                            gl,
+                                            &mut scope,
+                                            arenas.get(range.lsb),
+                                            arenas,
+                                        );
                                         msb - lsb + 1
                                     }
                                 } as u32;
-                                for ident in net_declaration.identifiers.iter() {
-                                    let ident = arenas.get(ident);
-                                    let ident = arenas.get_ident(ident.0);
-                                    let key = gl.signals.insert(Signal {
-                                        name: ident.into(),
-                                        ty: Type::Bits(width),
-                                    });
-                                    scope.push(
-                                        ident,
-                                        ScopeItem::Signal(SignalScopeItem {
-                                            ty: Type::Bits(width),
-                                            key,
-                                        }),
-                                    );
-                                    module_builder.entity.signal(gl, key);
+                                match net_declaration.nets {
+                                    NetDeclarationNets::Idents(identifiers) => {
+                                        for ident in identifiers.iter() {
+                                            let ident = arenas.get(ident);
+                                            let ident = arenas.get_ident(ident.0);
+                                            let key = gl.signals.insert(Signal {
+                                                name: ident.into(),
+                                                ty: Type::Bits(width),
+                                            });
+                                            scope.push(
+                                                ident,
+                                                ScopeItem::Signal(SignalScopeItem {
+                                                    ty: Type::Bits(width),
+                                                    key,
+                                                }),
+                                            );
+                                            module_builder.entity.signal(gl, key);
+                                        }
+                                    }
+                                    NetDeclarationNets::Assignments(assignments) => {
+                                        for assignment in assignments.iter() {
+                                            let NetDeclAssignment { ident, expr } =
+                                                arenas.get(assignment);
+                                            let ident = arenas.get_ident(ident.item.0);
+                                            let key = gl.signals.insert(Signal {
+                                                name: ident.into(),
+                                                ty: Type::Bits(width),
+                                            });
+                                            scope.push(
+                                                ident,
+                                                ScopeItem::Signal(SignalScopeItem {
+                                                    ty: Type::Bits(width),
+                                                    key,
+                                                }),
+                                            );
+                                            module_builder.entity.signal(gl, key);
+
+                                            let (section_key, mut bb_builder) =
+                                                module_builder.process(gl, "decl_assign".into());
+                                            let bb_key = bb_builder.key();
+                                            let variable = lower_expr(
+                                                &mut bb_builder,
+                                                gl,
+                                                &mut scope,
+                                                arenas.get(*expr),
+                                                arenas,
+                                            );
+
+                                            bb_builder.drive(gl, key, variable);
+                                            bb_builder.watch_for_ins_to(gl, bb_key);
+                                            processes.push(section_key);
+                                        }
+                                    }
                                 }
                             }
                             ModuleOrGenerateItemDeclaration::Reg(id) => {
@@ -205,6 +254,14 @@ pub fn lower_module_to_ir(
                                         }),
                                     );
                                     module_builder.entity.signal(gl, key);
+                                }
+                            }
+                            ModuleOrGenerateItemDeclaration::Integer(id) => {
+                                let integer_declaration = arenas.get(*id);
+                                for ident in integer_declaration.identifiers.iter() {
+                                    let ident = arenas.get(ident);
+                                    let ident = arenas.get_ident(ident.0);
+                                    scope.push(ident, ScopeItem::LocalVariable(Err(Type::Decimal)));
                                 }
                             }
                         }
@@ -486,30 +543,116 @@ fn statements_to_process<'a>(
             Statement::ConditionalStatement => todo!(),
             Statement::DisableStatement => todo!(),
             Statement::EventTrigger => todo!(),
-            Statement::LoopStatement => todo!(),
+            Statement::LoopStatement(ls) => {
+                let ls = arenas.get(*ls);
+                let statement = arenas.get(ls.statement);
+                match ls.variant {
+                    LoopStatementVariant::Forever => {
+                        builder = builder.jump(gl);
+                        let key = builder.key();
+                        builder = statements_to_process(
+                            builder,
+                            gl,
+                            scope,
+                            std::slice::from_ref(statement),
+                            arenas,
+                        );
+                        builder = builder.jump_to_with_dummy(gl, key);
+                    }
+                    LoopStatementVariant::Repeat(_expr) => todo!(),
+                    LoopStatementVariant::While(_expr) => todo!(),
+                    LoopStatementVariant::For(initialization, condition, step) => {
+                        let initialization = arenas.get(initialization);
+                        let condition = arenas.get(condition);
+                        let step = arenas.get(step);
+
+                        if arenas.get_ident(arenas.get(initialization.lvalue).ident.item.0)
+                            != arenas.get_ident(arenas.get(step.lvalue).ident.item.0)
+                        {
+                            todo!()
+                        }
+
+                        let initialization_var = lower_expr(
+                            &mut builder,
+                            gl,
+                            scope,
+                            arenas.get(initialization.expr),
+                            arenas,
+                        );
+
+                        let key = builder.key();
+
+                        // start:
+                        //   %i = LOWER(initialization)
+                        // loop_start:
+                        //   %t0 = phi <start> %i, <loop_body>, %step
+                        //   ASSIGN(ident, t0)
+                        //   %condition = LOWER(condition)
+                        //   bez <end>, <loop_body>
+                        // loop_body:
+                        //   LOWER(statement)
+                        //   %step = LOWER(step)
+                        //   jump <loop_start>
+                        // end:
+                        //   # ..
+
+                        builder = builder.jump(gl);
+                        let loop_start = builder.key();
+                        let (initialization_var, phi_ref) =
+                            builder.phi(gl, key, initialization_var);
+
+                        scope.push_scope();
+                        assign_variable_lvalue(
+                            gl,
+                            &mut builder,
+                            scope,
+                            arenas.get(initialization.lvalue),
+                            initialization_var,
+                            arenas,
+                        );
+                        let condition = lower_expr(&mut builder, gl, scope, condition, arenas);
+                        let condition = builder.reduce_or(gl, condition);
+
+                        let branch_ref;
+                        (branch_ref, builder) = builder.branch(gl, condition);
+                        builder = statements_to_process(
+                            builder,
+                            gl,
+                            scope,
+                            std::slice::from_ref(statement),
+                            arenas,
+                        );
+
+                        let step =
+                            lower_expr(&mut builder, gl, scope, arenas.get(step.expr), arenas);
+                        phi_ref.update(gl, builder.key(), step);
+
+                        let next_builder = builder.next_builder(gl);
+                        branch_ref.update(gl, next_builder.key());
+                        builder.jump_to(gl, loop_start);
+                        builder = next_builder;
+
+                        scope.pop_scope();
+                    }
+                }
+            }
             Statement::NonBlockingAssignment(nba) => {
-                let nba = arenas.get(*nba);
-                assert!(nba.delay_or_event_control.is_none());
+                let NonBlockingAssignment {
+                    variable_lvalue,
+                    delay_or_event_control,
+                    expression,
+                } = arenas.get(*nba);
+                assert!(delay_or_event_control.is_none());
 
-                let lvalue = arenas.get(nba.variable_lvalue);
-                let lvalue = lvalue.ident.item;
-
-                let ident = arenas.get_ident(lvalue.0);
-
-                let ScopeItem::Signal(scope_item) = scope.get(&ident).unwrap() else {
-                    panic!("not a signal");
-                };
-
-                let decimal = arenas.get(nba.expression).into_decimal_literal().unwrap();
-                let decimal = &arenas.decimals[decimal.at];
-                let decimal = match decimal {
-                    Decimal::Small(v) => *v as usize,
-                    _ => todo!(),
-                };
-
-                let value =
-                    builder.constant(gl, Value::Bits(Bits::Small(u64::from(decimal != 0), 1)));
-                builder.drive(gl, scope_item.key, value); // @TODO: Resolve ident
+                let value = lower_expr(&mut builder, gl, scope, arenas.get(*expression), arenas);
+                assign_variable_lvalue(
+                    gl,
+                    &mut builder,
+                    scope,
+                    arenas.get(*variable_lvalue),
+                    value,
+                    arenas,
+                );
             }
             Statement::ParBlock => todo!(),
             Statement::ProceduralContinuousAssignments => todo!(),
@@ -731,7 +874,7 @@ fn lower_to_signal<'a>(
     let ident = arenas.get_ident(ident.item.0);
     match scope.get(&ident).unwrap() {
         ScopeItem::Signal(i) => i.key,
-        ScopeItem::LocalVariable => todo!(),
+        ScopeItem::LocalVariable(_) => todo!(),
         ScopeItem::Constant(_) => todo!(),
     }
 }
@@ -744,7 +887,16 @@ fn lower_expr<'a>(
     arenas: &'a AstArenas,
 ) -> VariableKey {
     match expr {
-        Expr::BitPartSelect(_) => todo!(),
+        Expr::BitPartSelect(select) => {
+            let BitPartSelect { subject, braced } = select;
+            let subject = arenas.get(*subject);
+            let braced = arenas.get(*braced);
+
+            let subject_v = lower_expr(builder, gl, scope, subject, arenas);
+            let braced_v = lower_expr(builder, gl, scope, braced, arenas);
+
+            builder.select_bit(gl, subject_v, braced_v)
+        }
         Expr::Unary(op, child) => {
             let child = lower_expr(builder, gl, scope, arenas.get(*child), arenas);
             use UnaryOperator as O;
@@ -769,14 +921,14 @@ fn lower_expr<'a>(
                 O::Multiply => todo!(),
                 O::Divide => todo!(),
                 O::Modulus => todo!(),
-                O::BinaryPlus => todo!(),
+                O::BinaryPlus => builder.plus(gl, l, r),
                 O::BinaryMinus => todo!(),
                 O::ShiftLeft => todo!(),
                 O::ShiftRight => todo!(),
-                O::GreaterThan => todo!(),
-                O::GreaterThanEqual => todo!(),
-                O::LessThan => todo!(),
-                O::LessThanEqual => todo!(),
+                O::GreaterThan => builder.unsigned_gt(gl, l, r),
+                O::GreaterThanEqual => builder.unsigned_ge(gl, l, r),
+                O::LessThan => builder.unsigned_lt(gl, l, r),
+                O::LessThanEqual => builder.unsigned_le(gl, l, r),
                 O::LogicalEquality => todo!(),
                 O::LogicalInequality => todo!(),
                 O::CaseEquality => todo!(),
@@ -797,7 +949,8 @@ fn lower_expr<'a>(
             let scope_item = scope.get(&ident).expect("Variable not found");
             match scope_item {
                 ScopeItem::Signal(si) => builder.probe(gl, si.key),
-                ScopeItem::LocalVariable => todo!(),
+                ScopeItem::LocalVariable(Ok(v)) => *v,
+                ScopeItem::LocalVariable(Err(_)) => todo!(),
                 ScopeItem::Constant(_) => todo!(),
             }
         }
@@ -819,6 +972,28 @@ fn lower_expr<'a>(
             builder.constant(gl, Value::Bits(Bits::Small(v, size.as_u32())))
         }
         Expr::String(_) => todo!(),
+    }
+}
+
+fn assign_variable_lvalue<'a>(
+    gl: &mut GlobalContext,
+    builder: &mut BasicBlockBuilder,
+    scope: &mut Scope<&'a str, ScopeItem>,
+    lvalue: &VariableLValue,
+    variable: VariableKey,
+    arenas: &'a AstArenas,
+) {
+    let ident = arenas.get_ident(lvalue.ident.item.0);
+    match scope.get_mut(&ident) {
+        Some(ScopeItem::Signal(scope_item)) => {
+            builder.drive(gl, scope_item.key, variable); // @TODO: Resolve ident
+        }
+        Some(ScopeItem::LocalVariable(Ok(_))) => todo!(),
+        Some(ScopeItem::LocalVariable(v @ Err(_))) => {
+            *v = Ok(variable);
+        }
+        Some(ScopeItem::Constant(_)) => todo!(),
+        None => scope.push(ident, ScopeItem::LocalVariable(Ok(variable))),
     }
 }
 

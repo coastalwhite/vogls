@@ -318,7 +318,7 @@ pub enum ModuleOrGenerateItemDeclaration {
     // @Incomplete
     Net(AstId<NetDeclaration>),
     Reg(AstId<RegDeclaration>),
-    // Integer(AstId<IntegerDeclaration>),
+    Integer(AstId<IntegerDeclaration>),
     // Real(AstId<RealDeclaration>),
     // Time(AstId<TimeDeclaration>),
     // Realtime(AstId<RealtimeDeclaration>),
@@ -344,7 +344,21 @@ pub struct NetDeclaration {
     pub net_type: AstItem<NetType>,
     pub signed: bool,
     pub range: Option<AstId<Range>>,
-    pub identifiers: AstIdRange<Identifier>,
+    pub nets: NetDeclarationNets,
+}
+
+#[derive(Clone, Copy)]
+pub enum NetDeclarationNets {
+    Idents(AstIdRange<Identifier>),
+    Assignments(AstIdRange<NetDeclAssignment>),
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 491
+// net_decl_assignment ::= net_identifier = expression
+#[derive(Clone, Copy)]
+pub struct NetDeclAssignment {
+    pub ident: AstItem<Identifier>,
+    pub expr: AstId<Expr>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 490
@@ -352,6 +366,13 @@ pub struct NetDeclaration {
 #[derive(Clone, Copy)]
 pub struct RegDeclaration {
     // @Incomplete
+    pub identifiers: AstIdRange<Identifier>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 490
+// integer_declaration ::= integer list_of_variable_identifiers ;
+#[derive(Clone, Copy)]
+pub struct IntegerDeclaration {
     pub identifiers: AstIdRange<Identifier>,
 }
 

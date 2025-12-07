@@ -31,6 +31,9 @@ impl fmt::Display for VmInstruction {
             Self::Cast(dst, _, src, _) => {
                 write!(f, "{dst} = cast({src})")
             }
+            Self::Move(dst, src, _) => {
+                write!(f, "{dst} = {src}")
+            }
             Self::Intrinsic(op, args) => {
                 f.write_str(op.into_mnemonic())?;
                 if let Some(arg) = args.first() {
@@ -85,6 +88,7 @@ impl fmt::Display for VmProcess {
                 | I::Unary(_, _, _)
                 | I::Binary(_, _, _, _)
                 | I::Cast(_, _, _, _)
+                | I::Move(_, _, _)
                 | I::Intrinsic(_, _)
                 | I::Probe(_, _)
                 | I::Drive(_, _)

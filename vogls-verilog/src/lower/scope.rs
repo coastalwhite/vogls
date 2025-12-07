@@ -25,12 +25,10 @@ impl<K, V> Scope<K, V> {
 }
 
 impl<K: std::hash::Hash + Eq + Clone, V> Scope<K, V> {
-    #[expect(unused)]
     pub fn push_scope(&mut self) {
         self.scope_stack_offsets.push(self.scope_stack.len());
     }
 
-    #[expect(unused)]
     pub fn pop_scope(&mut self) {
         let offset = self.scope_stack_offsets.pop().unwrap_or(0);
         for k in self.scope_stack.drain(offset..) {
@@ -55,5 +53,10 @@ impl<K: std::hash::Hash + Eq + Clone, V> Scope<K, V> {
     pub fn get(&mut self, key: &K) -> Option<&V> {
         let values = self.look_up.get(key)?;
         Some(&values.last()?.1)
+    }
+
+    pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
+        let values = self.look_up.get_mut(key)?;
+        Some(&mut values.last_mut()?.1)
     }
 }

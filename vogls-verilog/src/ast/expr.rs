@@ -1,7 +1,6 @@
 use super::{AstId, AstIdRange, AstItem, DecimalRef, Identifier, SizedNumberRef, StringRef};
 
 #[derive(Clone, Copy)]
-#[expect(unused)]
 pub struct BitPartSelect {
     pub(crate) subject: AstId<Expr>,
     pub(crate) braced: AstId<Expr>,

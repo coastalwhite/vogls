@@ -1,3 +1,4 @@
+use super::constant_expr::{ConstantExpr, ConstantRangeExpression};
 use super::expr::Expr;
 use super::{AstId, AstIdRange, AstItem, DecimalRef, Identifier, TextRef};
 
@@ -24,7 +25,7 @@ pub enum Statement {
     ConditionalStatement,
     DisableStatement,
     EventTrigger,
-    LoopStatement,
+    LoopStatement(AstId<LoopStatement>),
     NonBlockingAssignment(AstId<NonBlockingAssignment>),
     ParBlock,
     ProceduralContinuousAssignments,
@@ -43,6 +44,8 @@ pub enum Statement {
 pub struct NetLValue {
     // @Incomplete
     pub ident: AstItem<Identifier>,
+    pub constant_exprs: AstIdRange<ConstantExpr>,
+    pub constant_range_expression: Option<AstId<ConstantRangeExpression>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 506
@@ -161,3 +164,35 @@ pub struct SystemTaskEnable {
 // system_task_identifier ::= $[ a-zA-Z0-9_$ ]{ [ a-zA-Z0-9_$ ] }
 #[derive(Clone, Copy)]
 pub struct SystemTaskIdentifier(pub TextRef);
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
+// variable_assignment ::= variable_lvalue = expression
+#[derive(Clone, Copy)]
+pub struct VariableAssignment {
+    pub lvalue: AstId<VariableLValue>,
+    pub expr: AstId<Expr>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 499
+// loop_statement ::=
+//   forever statement
+// | repeat ( expression ) statement
+// | while ( expression ) statement
+// | for ( variable_assignment ; expression ; variable_assignment ) statement
+#[derive(Clone, Copy)]
+pub struct LoopStatement {
+    pub variant: LoopStatementVariant,
+    pub statement: AstId<Statement>,
+}
+
+#[derive(Clone, Copy)]
+pub enum LoopStatementVariant {
+    Forever,
+    Repeat(AstId<Expr>),
+    While(AstId<Expr>),
+    For(
+        AstId<VariableAssignment>,
+        AstId<Expr>,
+        AstId<VariableAssignment>,
+    ),
+}
