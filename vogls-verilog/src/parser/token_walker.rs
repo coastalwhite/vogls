@@ -25,7 +25,7 @@ pub struct TokenLoc<'a> {
     pub file: &'a FileIdx,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TokenRange {
     pub start: usize,
     pub end: usize,

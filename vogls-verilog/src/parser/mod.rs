@@ -2,13 +2,11 @@ use std::path::PathBuf;
 
 use crate::arena::Arena;
 use crate::ast::module::Module;
-use crate::ast::{AstId, AstIdRange, DecimalRef, Identifier, SizedNumberRef, StringRef, TextRef};
+use crate::ast::{AstId, AstIdRange, AstItem, DecimalRef, Identifier, SizedNumberRef, StringRef, TextRef};
 use crate::number::{Decimal, SizedNumber};
 use crate::tokenizer::{Takeable, Token};
 pub use diagnostics::{Diagnostics, report_error};
-pub use token_walker::TokenWalker;
-
-use self::token_walker::TokenRange;
+pub use token_walker::{TokenWalker, TokenRange};
 
 mod constant_expr;
 mod diagnostics;
@@ -67,6 +65,10 @@ impl AstArenas {
 
     pub fn get<T: Copy + 'static>(&self, id: AstId<T>) -> &T {
         self.nodes.get(id.node)
+    }
+
+    pub fn get_item_span<T: Copy>(&self, id: AstItem<T>) -> TokenRange {
+        self.spans[id.loc]
     }
 
     pub fn get_ident(&self, ident_ref: TextRef) -> &str {

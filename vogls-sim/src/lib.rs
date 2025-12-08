@@ -235,8 +235,13 @@ impl Event {
 
                     match op {
                         O::Display => {
-                            let Some(VmIntrinsicArg::StringLiteral(msg)) = args.first() else {
-                                panic!("Invalid display argument");
+                            assert_eq!(args.len(), 1);
+                            let msg = match args.first().unwrap() {
+                                VmIntrinsicArg::StringLiteral(s) => s.clone(),
+                                VmIntrinsicArg::VariableBits(_, _) => todo!(),
+                                VmIntrinsicArg::VariableDecimal(s) => {
+                                    decimal_stack[s.offset].to_string()
+                                }
                             };
                             writeln!(&mut ctx.stdout, "[DISPLAY]: time = {}: {msg}", ctx.time)
                                 .unwrap();

@@ -73,6 +73,31 @@ impl<T> AstIdRange<T> {
     pub fn get(&self, i: usize) -> AstId<T> {
         (*self).iter().nth(i).unwrap()
     }
+
+    pub fn pop_front(&mut self) -> Option<AstId<T>> {
+        let fst = self.node.pop_front()?;
+        let fst = AstId {
+            node: fst,
+            loc: self.loc,
+        };
+        self.loc += 1;
+        Some(fst)
+    }
+    pub fn pop_back(&mut self) -> Option<AstId<T>> {
+        let lst = self.node.pop_back()?;
+        let lst = AstId {
+            node: lst,
+            loc: self.loc + self.len() - 1,
+        };
+        Some(lst)
+    }
+
+    pub fn single(id: AstId<T>) -> AstIdRange<T> {
+        Self {
+            node: ArenaIdRange::single(id.node),
+            loc: id.loc,
+        }
+    }
 }
 
 pub struct AstIdRangeIter<T> {

@@ -4,7 +4,7 @@ mod format;
 use std::collections::HashSet;
 use std::fmt;
 
-pub use builder::{BasicBlockBuilder, ModuleBuilder};
+pub use builder::{BasicBlockBuilder, ModuleBuilder, PhiRef, BranchRef};
 pub use format::{ContextFormat, DisplayContext};
 use indexmap::{IndexMap, IndexSet};
 use slotmap::{SlotMap, new_key_type};
@@ -103,7 +103,7 @@ pub struct Signal {
 
 pub type VectorSize = u32;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
     Bits(VectorSize),
     Decimal,

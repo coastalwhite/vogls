@@ -105,16 +105,6 @@ impl ModuleBuilder {
 pub struct PhiRef(BasicBlockKey, usize);
 pub struct BranchRef(BasicBlockKey);
 
-impl PhiRef {
-    pub fn update(&self, gl: &mut GlobalContext, bb: BasicBlockKey, var: VariableKey) {
-        let instr = &mut gl.bbs[self.0].instrs[self.1];
-        let Instruction::Phi(_, _, _, phi_bb, phi_var) = instr else {
-            panic!("not a phi");
-        };
-        *phi_bb = bb;
-        *phi_var = var;
-    }
-}
 impl BranchRef {
     pub fn update(&self, gl: &mut GlobalContext, bb: BasicBlockKey) {
         let BasicBlockTerminator::Branch(_, _, snd) = &mut gl.bbs[self.0].terminator else {
@@ -134,6 +124,10 @@ impl BasicBlockBuilder {
         let t = self.bbname_offset;
         self.bbname_offset += 1;
         t
+    }
+
+    pub fn instrs_len(&self) -> usize {
+        self.instrs.len()
     }
 
     pub fn next_tmp_var(&mut self, gl: &mut GlobalContext, ty: Type) -> VariableKey {
@@ -176,6 +170,19 @@ impl BasicBlockBuilder {
         let offset = self.instrs.len();
         self.instrs.push(Instruction::Phi(dst, bb, var, bb, var));
         (dst, PhiRef(self.key(), offset))
+    }
+
+    pub fn update_phi_ref(&mut self, gl: &mut GlobalContext, phi_ref: PhiRef, bb: BasicBlockKey, var: VariableKey) {
+        let instr = if self.key() == phi_ref.0 {
+            &mut self.instrs[phi_ref.1]
+        } else {
+            &mut gl.bbs[phi_ref.0].instrs[phi_ref.1]
+        };
+        let Instruction::Phi(_, _, _, phi_bb, phi_var) = instr else {
+            panic!("not a phi");
+        };
+        *phi_bb = bb;
+        *phi_var = var;
     }
 
     pub fn constant(&mut self, gl: &mut GlobalContext, value: Value) -> VariableKey {

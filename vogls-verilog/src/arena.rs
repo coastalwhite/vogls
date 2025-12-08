@@ -23,7 +23,7 @@ impl<T> Copy for ArenaId<T> {}
 
 impl<T> fmt::Debug for ArenaId<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "ArenaItem<{}>({})", std::any::type_name::<T>(), self.ptr)
+        write!(f, "ArenaId<{}>({})", std::any::type_name::<T>(), self.ptr)
     }
 }
 impl<T> Clone for ArenaIdRange<T> {
@@ -43,6 +43,17 @@ impl<T> Default for ArenaIdRange<T> {
             length: 0,
             _pd: PhantomData::default(),
         }
+    }
+}
+impl<T> fmt::Debug for ArenaIdRange<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "ArenaIdRange<{}> {{ ptr: {}, len: {} }}",
+            std::any::type_name::<T>(),
+            self.start,
+            self.length
+        )
     }
 }
 
@@ -71,6 +82,26 @@ impl<T> ArenaIdRange<T> {
     }
     pub fn iter(self) -> ArenaIdRangeIter<T> {
         ArenaIdRangeIter { inner: self }
+    }
+
+    pub fn pop_front(&mut self) -> Option<ArenaId<T>> {
+        let fst = self.first()?;
+        self.start += size_of::<T>().div_ceil(size_of::<u64>());
+        self.length -= 1;
+        Some(fst)
+    }
+    pub fn pop_back(&mut self) -> Option<ArenaId<T>> {
+        let lst = self.last()?;
+        self.length -= 1;
+        Some(lst)
+    }
+
+    pub fn single(id: ArenaId<T>) -> ArenaIdRange<T> {
+        Self {
+            start: id.ptr,
+            length: 1,
+            _pd: PhantomData,
+        }
     }
 }
 
