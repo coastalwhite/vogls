@@ -65,8 +65,8 @@ pub fn lower_loop_statement<'a>(
     let mut phi_refs = HashMap::<SymbolKey, PhiRef>::new();
     for symkey in &intersect_vars_generated {
         match &mut scope.symbols[*symkey].variant {
-            SymbolVariant::Signal(_) => todo!(),
-            SymbolVariant::Variable(None) => todo!(),
+            SymbolVariant::Signal(_) => {},
+            SymbolVariant::Variable(None) => {},
             SymbolVariant::Variable(Some(current_var)) => {
                 // @TODO: predecessor might be wrong here.
                 let (phi_value, phi) = builder.phi(gl, predecessor, *current_var);

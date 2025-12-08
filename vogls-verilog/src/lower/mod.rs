@@ -16,11 +16,12 @@ use crate::ast::module::{
     GateInstantiation, ListOfPortConnections, Module, ModuleInstance, ModuleInstantiation,
     ModuleItem, ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration, ModulePorts,
     NInputGateInstance, NInputGateType, NetDeclAssignment, NetDeclarationNets, NonPortModuleItem,
-    ParamAssignment, ParameterDeclaration, Port, PortDeclaration,
+    ParamAssignment, ParameterDeclaration, Port, PortDeclaration, Range,
 };
 use crate::ast::statement::{
     BlockingAssignment, DelayControl, DelayValue, EventControl, EventExpression,
-    NonBlockingAssignment, ProceduralTimingControl, Statement, VariableLValue,
+    LoopStatementVariant, NonBlockingAssignment, ProceduralTimingControl, Statement,
+    VariableAssignment, VariableLValue,
 };
 use crate::ast::{AstId, AstIdRange};
 use crate::number::Decimal;
@@ -56,10 +57,26 @@ pub fn lower_module_to_ir(
             for port_declaration in m.iter() {
                 let port_declaration = arenas.get(port_declaration);
 
-                let idents = match port_declaration {
-                    PortDeclaration::Inout(i) => arenas.get(*i).port_identifiers,
-                    PortDeclaration::Input(i) => arenas.get(*i).port_identifiers,
-                    PortDeclaration::Output(i) => arenas.get(*i).identifiers,
+                let (idents, range) = match port_declaration {
+                    PortDeclaration::Inout(i) => {
+                        let i = arenas.get(*i);
+                        (i.port_identifiers, i.range)
+                    },
+                    PortDeclaration::Input(i) => {
+                        let i = arenas.get(*i);
+                        (i.port_identifiers, i.range)
+                    },
+                    PortDeclaration::Output(i) => {
+                        let i = arenas.get(*i);
+                        (i.identifiers, i.range)
+                    },
+                };
+
+                dbg!(range.is_some());
+
+                let width = match range {
+                    None => 1,
+                    Some(range) => range_to_width(gl, &mut scope, range, arenas),
                 };
 
                 for ast_ident in idents.iter() {
@@ -67,12 +84,12 @@ pub fn lower_module_to_ir(
 
                     let key = gl.signals.insert(Signal {
                         name: ident.into(),
-                        ty: Type::Bits(1),
+                        ty: Type::Bits(width),
                     });
                     let symbol_key = scope.symbols.insert(Symbol {
                         name: ident.to_string(),
                         definition_site: arenas.get_span(ast_ident),
-                        ty: Type::Bits(1),
+                        ty: Type::Bits(width),
                         variant: SymbolVariant::Signal(key),
                     });
                     scope.push(ident, symbol_key);
@@ -96,7 +113,8 @@ pub fn lower_module_to_ir(
                 let port = match port {
                     Port::PortExpression(p) => arenas.get(*p),
                 };
-                let port_identifier = arenas.get(port.references).identifier;
+                let port_references = arenas.get(port.references);
+                let port_identifier = port_references.identifier;
                 let port = port_identifier.item.0;
                 let ident = arenas.get_ident(port);
 
@@ -120,12 +138,27 @@ pub fn lower_module_to_ir(
     for module_item in module_items.iter() {
         match arenas.get(module_item) {
             ModuleItem::PortDeclaration(port_declaration) => {
+                dbg!("Hi!");
                 let port_declaration = arenas.get(*port_declaration);
 
-                let idents = match port_declaration {
-                    PortDeclaration::Inout(i) => arenas.get(*i).port_identifiers,
-                    PortDeclaration::Input(i) => arenas.get(*i).port_identifiers,
-                    PortDeclaration::Output(i) => arenas.get(*i).identifiers,
+                let (idents, range) = match port_declaration {
+                    PortDeclaration::Inout(i) => {
+                        let i = arenas.get(*i);
+                        (i.port_identifiers, i.range)
+                    },
+                    PortDeclaration::Input(i) => {
+                        let i = arenas.get(*i);
+                        (i.port_identifiers, i.range)
+                    },
+                    PortDeclaration::Output(i) => {
+                        let i = arenas.get(*i);
+                        (i.identifiers, i.range)
+                    },
+                };
+
+                let width = match range {
+                    None => 1,
+                    Some(range) => range_to_width(gl, &mut scope, range, arenas),
                 };
 
                 for ast_ident in idents.iter() {
@@ -133,12 +166,12 @@ pub fn lower_module_to_ir(
 
                     let key = gl.signals.insert(Signal {
                         name: ident.into(),
-                        ty: Type::Bits(1),
+                        ty: Type::Bits(width),
                     });
                     let symbol_key = scope.symbols.insert(Symbol {
                         name: ident.to_string(),
                         definition_site: arenas.get_span(ast_ident),
-                        ty: Type::Bits(1),
+                        ty: Type::Bits(width),
                         variant: SymbolVariant::Signal(key),
                     });
                     scope.push(ident, symbol_key);
@@ -155,23 +188,8 @@ pub fn lower_module_to_ir(
                                 let net_declaration = arenas.get(*id);
                                 let width = match net_declaration.range {
                                     None => 1,
-                                    Some(range) => {
-                                        let range = arenas.get(range);
-                                        let msb = eval_constant_expr(
-                                            gl,
-                                            &mut scope,
-                                            arenas.get(range.msb),
-                                            arenas,
-                                        );
-                                        let lsb = eval_constant_expr(
-                                            gl,
-                                            &mut scope,
-                                            arenas.get(range.lsb),
-                                            arenas,
-                                        );
-                                        msb - lsb + 1
-                                    }
-                                } as u32;
+                                    Some(range) => range_to_width(gl, &mut scope, range, arenas),
+                                };
                                 match net_declaration.nets {
                                     NetDeclarationNets::Idents(identifiers) => {
                                         for ast_ident in identifiers.iter() {
@@ -766,8 +784,24 @@ fn statements_to_process<'a>(
     builder
 }
 
-fn get_intersect_symbols_generated<'a>(
+fn add_var_assign_intersect_symbols_generated<'a>(
     _gl: &mut GlobalContext,
+    scope: &Scope<'a>,
+    var_assign: AstId<VariableAssignment>,
+    arenas: &'a AstArenas,
+    black_list: &mut HashSet<&'a str>,
+    symbol_keys: &mut Vec<SymbolKey>,
+) {
+    let va = arenas.get(var_assign);
+    let lvalue = arenas.get(va.lvalue);
+    let ident = arenas.get_ident(lvalue.ident.item.0);
+    if black_list.insert(ident) {
+        symbol_keys.push(scope.get(ident).unwrap());
+    }
+}
+
+fn get_intersect_symbols_generated<'a>(
+    gl: &mut GlobalContext,
     scope: &Scope<'a>,
     stmts: AstIdRange<Statement>,
     arenas: &'a AstArenas,
@@ -792,8 +826,38 @@ fn get_intersect_symbols_generated<'a>(
                 Statement::ConditionalStatement => todo!(),
                 Statement::DisableStatement => todo!(),
                 Statement::EventTrigger => todo!(),
-                Statement::LoopStatement(_) => todo!(),
-                Statement::NonBlockingAssignment(_) => todo!(),
+                Statement::LoopStatement(id) => {
+                    let ls = arenas.get(*id);
+                    if let LoopStatementVariant::For(init, _, step) = &ls.variant {
+                        add_var_assign_intersect_symbols_generated(
+                            gl,
+                            scope,
+                            *init,
+                            arenas,
+                            &mut black_list,
+                            &mut symbols,
+                        );
+                        add_var_assign_intersect_symbols_generated(
+                            gl,
+                            scope,
+                            *step,
+                            arenas,
+                            &mut black_list,
+                            &mut symbols,
+                        );
+                    }
+                    stack.push(stmts);
+                    stack.push(AstIdRange::single(ls.statement));
+                    break;
+                }
+                Statement::NonBlockingAssignment(id) => {
+                    let nba = arenas.get(*id);
+                    let lvalue = arenas.get(nba.variable_lvalue);
+                    let ident = arenas.get_ident(lvalue.ident.item.0);
+                    if black_list.insert(ident) {
+                        symbols.push(scope.get(ident).unwrap());
+                    }
+                }
                 Statement::ParBlock => todo!(),
                 Statement::ProceduralContinuousAssignments => todo!(),
                 Statement::ProceduralTimingControlStatement(_, statement) => {
@@ -903,6 +967,7 @@ fn lower_expr<'a>(
         Expr::Ident(ident) => {
             let ident = arenas.get_ident(ident.item.0);
             let symbol_key = scope.get(&ident).expect("Variable not found");
+            dbg!(&scope.symbols[symbol_key].ty);
             match &scope.symbols[symbol_key].variant {
                 SymbolVariant::Signal(key) => builder.probe(gl, *key),
                 SymbolVariant::Variable(None) => todo!(),
@@ -960,4 +1025,21 @@ fn eval_constant_expr<'a>(
         todo!()
     };
     v
+}
+
+fn range_to_width<'a>(gl: &mut GlobalContext, scope: &mut Scope<'a>, range: AstId<Range>, arenas: &'a AstArenas) -> u32 {
+                                        let range = arenas.get(range);
+                                        let msb = eval_constant_expr(
+                                            gl,
+                                            scope,
+                                            arenas.get(range.msb),
+                                            arenas,
+                                        );
+                                        let lsb = eval_constant_expr(
+                                            gl,
+                                            scope,
+                                            arenas.get(range.lsb),
+                                            arenas,
+                                        );
+                                        (msb - lsb + 1) as u32
 }
