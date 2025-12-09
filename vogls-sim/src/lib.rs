@@ -4,6 +4,7 @@ use std::collections::{BinaryHeap, HashMap};
 use slotmap::{SlotMap, new_key_type};
 use vogls_ir::{BinaryOp, Bits, IntrinsicOp, UnaryOp, Value};
 
+mod bits;
 mod instruction;
 
 pub use instruction::*;
@@ -89,11 +90,8 @@ impl Event {
             let instr = &process.instructions[*ip];
             *ip += 1;
             match instr {
-                I::ConstantBit(var, Bits::Small(val, size)) => {
-                    for i in 0..size.div_ceil(8) {
-                        let i = i as usize;
-                        bit_stack[var.offset + i] = val.to_le_bytes()[i];
-                    }
+                I::ConstantBit(var, Bits::Small(value, size)) => {
+                    bits::load_from_u64(bit_stack, var.offset, *size, *value);
                 }
                 I::Unary(dst, op, src) => {
                     use UnaryOp as O;
@@ -194,6 +192,9 @@ impl Event {
                             bit_stack[dst.offset] =
                                 (bit_stack[lhs.offset + (idx as usize) / 8] >> (idx % 8)) & 1;
                         }
+                        O::Concat(lhs_size, rhs_size) => bits::concat(
+                            bit_stack, dst.offset, lhs.offset, rhs.offset, *lhs_size, *rhs_size,
+                        ),
                     };
                 }
 
@@ -271,10 +272,8 @@ impl Event {
                 }
                 I::Probe(var, sig) => {
                     match signals.get(&sig).unwrap() {
-                        Value::Bits(Bits::Small(val, size)) => {
-                            for i in 0..size.div_ceil(8) as usize {
-                                bit_stack[var.offset + i] = val.to_le_bytes()[i];
-                            }
+                        Value::Bits(Bits::Small(value, size)) => {
+                            bits::load_from_u64(bit_stack, var.offset, *size, *value);
                         }
                         Value::Decimal(v) => decimal_stack[var.offset] = *v,
                     };
@@ -283,10 +282,7 @@ impl Event {
                     let signal = signals.get_mut(sig).unwrap();
                     match signal {
                         Value::Bits(Bits::Small(_, size)) => {
-                            let mut value = [0u8; 8];
-                            let nbytes = size.div_ceil(8) as usize;
-                            value[..nbytes].copy_from_slice(&bit_stack[var.offset..][..nbytes]);
-                            let value = u64::from_le_bytes(value);
+                            let value = bits::store_to_u64(bit_stack, var.offset, *size);
                             *signal = Value::Bits(Bits::Small(value, *size))
                         }
                         Value::Decimal(_) => *signal = Value::Decimal(decimal_stack[var.offset]),

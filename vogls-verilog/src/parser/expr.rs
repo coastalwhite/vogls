@@ -11,6 +11,7 @@ pub(crate) type BindingPower = u8;
 
 pub(crate) enum StackItem {
     Paren,
+    Bracket(Vec<Expr>, Vec<TokenRange>),
     Brace(AstId<Expr>),
     Unary(UnaryOperator),
     Binary(BinaryOperator, AstId<Expr>),
@@ -126,6 +127,10 @@ impl<'a> Consumable<'a> for Expr {
                         ),
                         span,
                     ),
+                    T::LeftBracket => {
+                        tkw.offset += 1;
+                        deepen!(StackItem::Bracket(Vec::new(), Vec::new()), 0, span)
+                    }
                     T::LeftParen => {
                         tkw.offset += 1;
                         deepen!(StackItem::Paren, 0, span)
@@ -200,6 +205,25 @@ impl<'a> Consumable<'a> for Expr {
                 match item {
                     StackItem::Paren => {
                         tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
+                    }
+                    StackItem::Bracket(mut exprs, mut ranges) => {
+                        exprs.push(current.0);
+                        ranges.push(current.1);
+                        match *tkw.try_next(diagnostics.as_deref_mut())?.kind {
+                            T::RightBracket => {
+                                current = (
+                                    Expr::Concatenation(arenas.add_range(exprs, ranges)),
+                                    location,
+                                );
+                            }
+                            T::Comma => {
+                                deepen!(StackItem::Bracket(exprs, ranges), 0, loc);
+                            }
+                            t => {
+                                diagnostics.map(|d| d.unexpected_token(tkw.offset, t));
+                                return Err(());
+                            }
+                        }
                     }
                     StackItem::Brace(subject) => {
                         tkw.next_expect(T::RightBrace, diagnostics.as_deref_mut())?;

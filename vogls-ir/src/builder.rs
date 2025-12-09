@@ -24,12 +24,6 @@ pub struct BasicBlockBuilder {
     bbname_offset: usize,
 }
 
-impl BasicBlockBuilder {
-    pub fn key(&self) -> BasicBlockKey {
-        self.key
-    }
-}
-
 impl ModuleBuilder {
     pub fn new(name: String, gl: &mut GlobalContext) -> Self {
         let bb_key = gl.bbs.insert(BasicBlock {
@@ -115,6 +109,10 @@ impl BranchRef {
 }
 
 impl BasicBlockBuilder {
+    pub fn key(&self) -> BasicBlockKey {
+        self.key
+    }
+
     pub fn claim_tmp(&mut self) -> usize {
         let t = self.tmp_offset;
         self.tmp_offset += 1;
@@ -172,7 +170,13 @@ impl BasicBlockBuilder {
         (dst, PhiRef(self.key(), offset))
     }
 
-    pub fn update_phi_ref(&mut self, gl: &mut GlobalContext, phi_ref: PhiRef, bb: BasicBlockKey, var: VariableKey) {
+    pub fn update_phi_ref(
+        &mut self,
+        gl: &mut GlobalContext,
+        phi_ref: PhiRef,
+        bb: BasicBlockKey,
+        var: VariableKey,
+    ) {
         let instr = if self.key() == phi_ref.0 {
             &mut self.instrs[phi_ref.1]
         } else {
@@ -193,6 +197,31 @@ impl BasicBlockBuilder {
         };
         self.instrs.push(i);
         variable
+    }
+
+    pub fn concat(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+    ) -> VariableKey {
+        let lhs_ty = &gl.vars[lhs].ty;
+        let rhs_ty = &gl.vars[rhs].ty;
+
+        let (Type::Bits(lhs_size), Type::Bits(rhs_size)) = (lhs_ty, rhs_ty) else {
+            todo!();
+        };
+
+        let (lhs_size, rhs_size) = (*lhs_size, *rhs_size);
+        let width = lhs_size + rhs_size;
+        let dst = self.next_tmp_var(gl, Type::Bits(width));
+        self.instrs.push(Instruction::Binary(
+            dst,
+            BinaryOp::Concat(lhs_size, rhs_size),
+            lhs,
+            rhs,
+        ));
+        dst
     }
 
     pub fn binary_neg(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {

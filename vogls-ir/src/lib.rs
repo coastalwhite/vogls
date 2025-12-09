@@ -4,7 +4,7 @@ mod format;
 use std::collections::HashSet;
 use std::fmt;
 
-pub use builder::{BasicBlockBuilder, ModuleBuilder, PhiRef, BranchRef};
+pub use builder::{BasicBlockBuilder, BranchRef, ModuleBuilder, PhiRef};
 pub use format::{ContextFormat, DisplayContext};
 use indexmap::{IndexMap, IndexSet};
 use slotmap::{SlotMap, new_key_type};
@@ -149,6 +149,7 @@ pub enum BinaryOp {
     DecimalLessEqual,
 
     SelectBit(VectorSize),
+    Concat(VectorSize, VectorSize),
 }
 
 #[derive(Debug, Clone)]

@@ -72,8 +72,6 @@ pub fn lower_module_to_ir(
                     },
                 };
 
-                dbg!(range.is_some());
-
                 let width = match range {
                     None => 1,
                     Some(range) => range_to_width(gl, &mut scope, range, arenas),
@@ -138,7 +136,6 @@ pub fn lower_module_to_ir(
     for module_item in module_items.iter() {
         match arenas.get(module_item) {
             ModuleItem::PortDeclaration(port_declaration) => {
-                dbg!("Hi!");
                 let port_declaration = arenas.get(*port_declaration);
 
                 let (idents, range) = match port_declaration {
@@ -961,13 +958,23 @@ fn lower_expr<'a>(
                 O::LogicalOr => todo!(),
             }
         }
-        Expr::Concatenation(_) => todo!(),
+        Expr::Concatenation(exprs) => {
+            let Some(fst) = exprs.first() else {
+                return builder.constant(gl, Value::Bits(Bits::Small(0, 0)));
+            };
+                
+            let mut output = lower_expr(builder, gl, scope, arenas.get(fst), arenas);
+            for expr in exprs.iter().skip(1) {
+                let lexpr = lower_expr(builder, gl, scope, arenas.get(expr), arenas);
+                output = builder.concat(gl, output, lexpr);
+            }
+            output
+        },
         Expr::Replication(_) => todo!(),
         Expr::Ternary(_, _, _) => todo!(),
         Expr::Ident(ident) => {
             let ident = arenas.get_ident(ident.item.0);
             let symbol_key = scope.get(&ident).expect("Variable not found");
-            dbg!(&scope.symbols[symbol_key].ty);
             match &scope.symbols[symbol_key].variant {
                 SymbolVariant::Signal(key) => builder.probe(gl, *key),
                 SymbolVariant::Variable(None) => todo!(),
