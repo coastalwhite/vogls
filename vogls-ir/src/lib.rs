@@ -144,11 +144,13 @@ pub enum BinaryOp {
     DecimalXor,
 
     DecimalAdd,
+    DecimalSub,
 
     UnsignedLessEqual(VectorSize),
     DecimalLessEqual,
 
     SelectBit(VectorSize),
+    BitSlice(VectorSize, VectorSize),
     Concat(VectorSize, VectorSize),
 }
 

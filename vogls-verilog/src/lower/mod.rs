@@ -7,11 +7,11 @@ use scope::Scope;
 
 use vogls_ir::{
     BasicBlockBuilder, Bits, GlobalContext, IntrinsicArg, IntrinsicOp, ModuleBuilder, ModuleKey,
-    Signal, SignalKey, Time, Type, Value, VariableKey,
+    Signal, SignalKey, Time, Type, Value, VariableKey, VectorSize,
 };
 
 use crate::ast::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression, ConstantPrimary};
-use crate::ast::expr::{BinaryOperator, BitPartSelect, Expr, UnaryOperator};
+use crate::ast::expr::{BinaryOperator, BitPartSelect, BitSlice, Expr, UnaryOperator};
 use crate::ast::module::{
     GateInstantiation, ListOfPortConnections, Module, ModuleInstance, ModuleInstantiation,
     ModuleItem, ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration, ModulePorts,
@@ -913,6 +913,34 @@ fn lower_expr<'a>(
             let braced_v = lower_expr(builder, gl, scope, braced, arenas);
 
             builder.select_bit(gl, subject_v, braced_v)
+        }
+        Expr::BitSlice(subject, slice) => {
+            let subject = arenas.get(*subject);
+            let subject_v = lower_expr(builder, gl, scope, subject, arenas);
+
+            let (lsb, width) = match slice {
+                BitSlice::MsbLsb(msb, lsb) => {
+                    let msb = eval_constant_expr(gl, scope, arenas.get(*msb), arenas);
+                    let lsb = eval_constant_expr(gl, scope, arenas.get(*lsb), arenas);
+                    let lsb_v = builder.constant(gl, Value::Decimal(lsb as i64));
+                    let width = msb - lsb + 1;
+                    (lsb_v, width)
+                },
+                BitSlice::PlusWidth(base, width) => {
+                    let lsb = lower_expr(builder, gl, scope, arenas.get(*base), arenas);
+                    let width = eval_constant_expr(gl, scope, arenas.get(*width), arenas);
+                    (lsb, width)
+                },
+                BitSlice::MinusWidth(base, width) => {
+                    let width = eval_constant_expr(gl, scope, arenas.get(*width), arenas);
+                    let width_v = builder.constant(gl, Value::Decimal(width as i64));
+                    let lsb = lower_expr(builder, gl, scope, arenas.get(*base), arenas);
+                    let lsb = builder.minus(gl, lsb, width_v);
+                    (lsb, width)
+                },
+            };
+
+            builder.slice(gl, subject_v, lsb, width as VectorSize)
         }
         Expr::Unary(op, child) => {
             let child = lower_expr(builder, gl, scope, arenas.get(*child), arenas);

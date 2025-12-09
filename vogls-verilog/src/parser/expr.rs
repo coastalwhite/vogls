@@ -1,8 +1,9 @@
-use crate::ast::expr::{BinaryOperator, BitPartSelect, Expr, UnaryOperator};
+use crate::ast::constant_expr::ConstantExpr;
+use crate::ast::expr::{BinaryOperator, BitPartSelect, BitSlice, Expr, UnaryOperator};
 use crate::ast::{AstId, DecimalRef, Identifier, SizedNumberRef, StringRef};
 use crate::parser::ParseErrorReason;
 use crate::parser::token_walker::TokenRange;
-use crate::parser::utils::item_parse;
+use crate::parser::utils::{item_parse, parse};
 use crate::tokenizer::Token;
 
 use super::{AstArenas, Consumable, Diagnostics, ParserScratches, TokenWalker};
@@ -12,7 +13,7 @@ pub(crate) type BindingPower = u8;
 pub(crate) enum StackItem {
     Paren,
     Bracket(Vec<Expr>, Vec<TokenRange>),
-    Brace(AstId<Expr>),
+    Brace(AstId<Expr>, usize),
     Unary(UnaryOperator),
     Binary(BinaryOperator, AstId<Expr>),
     TernaryS1(AstId<Expr>),
@@ -65,6 +66,7 @@ fn token_to_binary_op(t: Token) -> Option<(u8, u8, BinaryOperator)> {
         _ => None,
     }
 }
+
 impl<'a> Consumable<'a> for Expr {
     fn consume(
         tkw: &mut TokenWalker<'a>,
@@ -162,7 +164,7 @@ impl<'a> Consumable<'a> for Expr {
                         tkw.next();
                         let span = current.1;
                         let subject = arenas.add_tuple(current);
-                        deepen!(StackItem::Brace(subject), 0, span);
+                        deepen!(StackItem::Brace(subject, tkw.offset), 0, span);
                     }
 
                     // Ternary operator ( ... ? ... : ... )
@@ -225,11 +227,66 @@ impl<'a> Consumable<'a> for Expr {
                             }
                         }
                     }
-                    StackItem::Brace(subject) => {
-                        tkw.next_expect(T::RightBrace, diagnostics.as_deref_mut())?;
-                        let braced = arenas.add_tuple(current);
-                        let bitpartselect = BitPartSelect { subject, braced };
-                        current = (Expr::BitPartSelect(bitpartselect), location)
+                    StackItem::Brace(subject, offset) => {
+                        match *tkw.try_next(diagnostics.as_deref_mut())?.kind {
+                            T::RightBrace => {
+                                let braced = arenas.add_tuple(current);
+                                let bitpartselect = BitPartSelect { subject, braced };
+                                current = (Expr::BitPartSelect(bitpartselect), location)
+                            }
+                            T::Colon => {
+                                let mut braced_tkw = tkw.clone();
+                                braced_tkw.offset = offset;
+
+
+                                let msb = parse::<ConstantExpr>(
+                                    &mut braced_tkw,
+                                    sc,
+                                    arenas,
+                                    diagnostics.as_deref_mut(),
+                                )?;
+                                let lsb = parse::<ConstantExpr>(
+                                    tkw,
+                                    sc,
+                                    arenas,
+                                    diagnostics.as_deref_mut(),
+                                )?;
+                                tkw.next_expect(T::RightBrace, diagnostics.as_deref_mut())?;
+
+                                let bitpartselect = BitSlice::MsbLsb(msb, lsb);
+                                current = (Expr::BitSlice(subject, bitpartselect), location)
+                            }
+                            T::PlusColon => {
+                                let width = parse::<ConstantExpr>(
+                                    tkw,
+                                    sc,
+                                    arenas,
+                                    diagnostics.as_deref_mut(),
+                                )?;
+                                tkw.next_expect(T::RightBrace, diagnostics.as_deref_mut())?;
+
+                                let braced = arenas.add_tuple(current);
+                                let bitpartselect = BitSlice::PlusWidth(braced, width);
+                                current = (Expr::BitSlice(subject, bitpartselect), location)
+                            }
+                            T::MinusColon => {
+                                let width = parse::<ConstantExpr>(
+                                    tkw,
+                                    sc,
+                                    arenas,
+                                    diagnostics.as_deref_mut(),
+                                )?;
+                                tkw.next_expect(T::RightBrace, diagnostics.as_deref_mut())?;
+
+                                let braced = arenas.add_tuple(current);
+                                let bitpartselect = BitSlice::MinusWidth(braced, width);
+                                current = (Expr::BitSlice(subject, bitpartselect), location)
+                            }
+                            t => {
+                                diagnostics.map(|d| d.unexpected_token(tkw.offset, t));
+                                return Err(());
+                            }
+                        }
                     }
                     StackItem::Unary(op) => {
                         let subexpr = arenas.add_tuple(current);

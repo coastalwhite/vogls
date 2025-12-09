@@ -1,9 +1,17 @@
+use super::constant_expr::ConstantExpr;
 use super::{AstId, AstIdRange, AstItem, DecimalRef, Identifier, SizedNumberRef, StringRef};
 
 #[derive(Clone, Copy)]
 pub struct BitPartSelect {
     pub(crate) subject: AstId<Expr>,
     pub(crate) braced: AstId<Expr>,
+}
+
+#[derive(Clone, Copy)]
+pub enum BitSlice {
+    MsbLsb(AstId<ConstantExpr>, AstId<ConstantExpr>),
+    PlusWidth(AstId<Expr>, AstId<ConstantExpr>),
+    MinusWidth(AstId<Expr>, AstId<ConstantExpr>),
 }
 
 #[derive(Clone, Copy)]
@@ -55,6 +63,7 @@ pub enum BinaryOperator {
 #[derive(Clone, Copy)]
 pub enum Expr {
     BitPartSelect(BitPartSelect),
+    BitSlice(AstId<Expr>, BitSlice),
     Unary(UnaryOperator, AstId<Expr>),
     Binary(BinaryOperator, AstId<Expr>, AstId<Expr>),
     Concatenation(AstIdRange<Expr>),

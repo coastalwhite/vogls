@@ -161,8 +161,10 @@ impl BinaryOp {
             Self::DecimalOr => "i64or",
             Self::DecimalXor => "i64xor",
             Self::DecimalAdd => "i64+",
+            Self::DecimalSub => "i64-",
             Self::DecimalLessEqual => "i64le",
             Self::SelectBit(_) => "bselect",
+            Self::BitSlice(_, _) => "bslice",
             Self::Concat(_, _) => "concat",
         }
     }

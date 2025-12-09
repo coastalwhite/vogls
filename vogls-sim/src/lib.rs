@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
 
 use slotmap::{SlotMap, new_key_type};
-use vogls_ir::{BinaryOp, Bits, IntrinsicOp, UnaryOp, Value};
+use vogls_ir::{BinaryOp, Bits, IntrinsicOp, UnaryOp, Value, VectorSize};
 
 mod bits;
 mod instruction;
@@ -181,6 +181,10 @@ impl Event {
                             decimal_stack[dst.offset] =
                                 decimal_stack[lhs.offset] + decimal_stack[rhs.offset]
                         }
+                        O::DecimalSub => {
+                            decimal_stack[dst.offset] =
+                                decimal_stack[lhs.offset] - decimal_stack[rhs.offset]
+                        }
                         O::DecimalLessEqual => {
                             bit_stack[dst.offset] =
                                 u8::from(decimal_stack[lhs.offset] <= decimal_stack[rhs.offset])
@@ -191,6 +195,18 @@ impl Event {
 
                             bit_stack[dst.offset] =
                                 (bit_stack[lhs.offset + (idx as usize) / 8] >> (idx % 8)) & 1;
+                        }
+                        O::BitSlice(n, width) => {
+                            let shift = decimal_stack[rhs.offset];
+                            assert!(shift >= 0 && shift < *n as i64);
+                            bits::slice(
+                                bit_stack,
+                                dst.offset,
+                                lhs.offset,
+                                shift as VectorSize,
+                                *width,
+                                *n,
+                            );
                         }
                         O::Concat(lhs_size, rhs_size) => bits::concat(
                             bit_stack, dst.offset, lhs.offset, rhs.offset, *lhs_size, *rhs_size,

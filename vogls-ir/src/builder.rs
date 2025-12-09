@@ -3,7 +3,7 @@ use indexmap::{IndexMap, IndexSet};
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryOp, Connection, ConnectionDirection,
     GlobalContext, Instruction, IntrinsicArg, IntrinsicOp, Module, ModuleKey, Process, ProcessKey,
-    SignalKey, Time, Type, UnaryOp, Value, Variable, VariableKey,
+    SignalKey, Time, Type, UnaryOp, Value, Variable, VariableKey, VectorSize,
 };
 
 #[must_use]
@@ -354,6 +354,24 @@ impl BasicBlockBuilder {
             .push(Instruction::Binary(dst, BinaryOp::DecimalAdd, lhs, rhs));
         dst
     }
+    pub fn minus(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+    ) -> VariableKey {
+        let dst = self.next_tmp_var(gl, Type::Decimal);
+
+        let lhs_ty = &gl.vars[lhs].ty;
+        let rhs_ty = &gl.vars[rhs].ty;
+
+        assert_eq!(lhs_ty, &Type::Decimal);
+        assert_eq!(rhs_ty, &Type::Decimal);
+
+        self.instrs
+            .push(Instruction::Binary(dst, BinaryOp::DecimalSub, lhs, rhs));
+        dst
+    }
 
     pub fn select_bit(
         &mut self,
@@ -371,6 +389,29 @@ impl BasicBlockBuilder {
 
         self.instrs
             .push(Instruction::Binary(dst, BinaryOp::SelectBit(n), src, idx));
+        dst
+    }
+    pub fn slice(
+        &mut self,
+        gl: &mut GlobalContext,
+        subject: VariableKey,
+        lsb: VariableKey,
+        width: VectorSize,
+    ) -> VariableKey {
+        let dst = self.next_tmp_var(gl, Type::Bits(width));
+
+        let Type::Bits(n) = &gl.vars[subject].ty else {
+            panic!();
+        };
+        let n = *n;
+        let lsb = self.cast(gl, lsb, Type::Decimal);
+
+        self.instrs.push(Instruction::Binary(
+            dst,
+            BinaryOp::BitSlice(n, width),
+            subject,
+            lsb,
+        ));
         dst
     }
 

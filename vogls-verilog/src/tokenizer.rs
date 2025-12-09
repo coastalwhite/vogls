@@ -99,13 +99,19 @@ impl Tokenized {
                     b';' => (T::Semicolon, 1),
                     b',' => (T::Comma, 1),
                     b'.' => (T::Dot, 1),
-                    b'+' => (T::Plus, 1),
-                    b'-' => (T::Minus, 1),
                     b'?' => (T::QuestionMark, 1),
                     b'@' => (T::AtSign, 1),
                     b'#' => (T::Hash, 1),
                     b'%' => (T::Procent, 1),
 
+                    b'+' => match bytes.get(i + 1) {
+                        Some(b':') => (T::PlusColon, 2),
+                        _ => (T::Plus, 1),
+                    },
+                    b'-' => match bytes.get(i + 1) {
+                        Some(b':') => (T::MinusColon, 2),
+                        _ => (T::Minus, 1),
+                    },
                     b'/' => match bytes.get(i + 1) {
                         // Line comments
                         Some(b'/') => {
@@ -219,7 +225,7 @@ impl Tokenized {
                                 Base::Octal => into_bits(OctalBits::take(s)),
                                 Base::Hexadecimal => into_bits(HexadecimalBits::take(s)),
                             };
-                            
+
                             let length = initial_length - s.len();
                             (T::Number, length)
                         }
@@ -790,6 +796,8 @@ define_tokens! {
     TripleGreaterThan = ">>>",
     TripleLessThan = "<<<",
     QuestionMark = "?",
+    PlusColon = "+:",
+    MinusColon = "-:",
 
     Equals = "=",
     AtSign = "@",

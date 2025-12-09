@@ -58,7 +58,6 @@ pub fn concat(
 
     // Fast path: left side is empty or right side is aligned.
     if lhs_size == 0 || roff == 0 {
-        // dbg!(stack[lhs], stack[rhs], lhs_size, rhs_size);
         for i in 0..lbytes {
             stack[dst + i] = stack[lhs + i];
         }
@@ -83,6 +82,45 @@ pub fn concat(
     for i in 1..rbytes {
         stack[dst + dbytes - rbytes + i] = stack[rhs + i];
     }
+}
+
+pub fn slice(
+    stack: &mut [u8],
+    dst: usize,
+    lhs: usize,
+    shift: VectorSize,
+    width: VectorSize,
+    n: VectorSize,
+) {
+    let (shift, width, n) = (shift as usize, width as usize, n as usize);
+
+    if width == 0 {
+        return;
+    }
+
+    // Fast path: input is output width.
+    if width == n {
+        for i in 0..n.div_ceil(8) {
+            stack[dst + i] = stack[lhs + i];
+        }
+        return;
+    }
+
+    let soff = shift % 8;
+
+    // Fast path: shift is aligned.
+    if soff == 0 {
+        let lhs_start = lhs + n.div_ceil(8) - (shift / 8) - width.div_ceil(8);
+        for i in 0..width.div_ceil(8) {
+            stack[dst + i] = stack[lhs_start + i];
+        }
+        if width % 8 > 0 {
+            stack[dst] &= (1u8 << (width % 8)).wrapping_sub(1);
+        }
+        return;
+    }
+
+    todo!()
 }
 
 #[cfg(test)]

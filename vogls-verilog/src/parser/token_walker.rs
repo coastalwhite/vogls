@@ -6,6 +6,7 @@ use crate::tokenizer::{FileIdx, Token, Tokenized};
 
 use super::{Diagnostics, ParseErrorReason};
 
+#[derive(Clone)]
 pub struct TokenWalker<'a> {
     tokens: &'a [Token],
     spans: &'a [Span],
