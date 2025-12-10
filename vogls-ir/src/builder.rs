@@ -391,11 +391,33 @@ impl BasicBlockBuilder {
             .push(Instruction::Binary(dst, BinaryOp::SelectBit(n), src, idx));
         dst
     }
+    pub fn lsr(
+        &mut self,
+        gl: &mut GlobalContext,
+        src: VariableKey,
+        shift: VariableKey,
+    ) -> VariableKey {
+        let Type::Bits(n) = &gl.vars[src].ty else {
+            panic!();
+        };
+
+        let n = *n;
+        let dst = self.next_tmp_var(gl, Type::Bits(n));
+
+        let shift = self.cast(gl, shift, Type::Decimal);
+
+        self.instrs.push(Instruction::Binary(
+            dst,
+            BinaryOp::LogicalShiftRight(n),
+            src,
+            shift,
+        ));
+        dst
+    }
     pub fn slice(
         &mut self,
         gl: &mut GlobalContext,
         subject: VariableKey,
-        lsb: VariableKey,
         width: VectorSize,
     ) -> VariableKey {
         let dst = self.next_tmp_var(gl, Type::Bits(width));
@@ -404,13 +426,11 @@ impl BasicBlockBuilder {
             panic!();
         };
         let n = *n;
-        let lsb = self.cast(gl, lsb, Type::Decimal);
 
-        self.instrs.push(Instruction::Binary(
+        self.instrs.push(Instruction::Unary(
             dst,
-            BinaryOp::BitSlice(n, width),
+            UnaryOp::BitSlice(n, width),
             subject,
-            lsb,
         ));
         dst
     }

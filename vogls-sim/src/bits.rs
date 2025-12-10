@@ -84,15 +84,8 @@ pub fn concat(
     }
 }
 
-pub fn slice(
-    stack: &mut [u8],
-    dst: usize,
-    lhs: usize,
-    shift: VectorSize,
-    width: VectorSize,
-    n: VectorSize,
-) {
-    let (shift, width, n) = (shift as usize, width as usize, n as usize);
+pub fn slice(stack: &mut [u8], dst: usize, src: usize, width: VectorSize, n: VectorSize) {
+    let (width, n) = (width as usize, n as usize);
 
     if width == 0 {
         return;
@@ -101,26 +94,45 @@ pub fn slice(
     // Fast path: input is output width.
     if width == n {
         for i in 0..n.div_ceil(8) {
-            stack[dst + i] = stack[lhs + i];
+            stack[dst + i] = stack[src + i];
         }
         return;
+    }
+
+    let lhs_start = src + n.div_ceil(8) - width.div_ceil(8);
+    for i in 0..width.div_ceil(8) {
+        stack[dst + i] = stack[lhs_start + i];
+    }
+    if width % 8 > 0 {
+        stack[dst] &= (1u8 << (width % 8)).wrapping_sub(1);
+    }
+}
+
+pub fn logical_shift_right(
+    stack: &mut [u8],
+    dst: usize,
+    src: usize,
+    shift: VectorSize,
+    width: VectorSize,
+) {
+    let (shift, width) = (shift as usize, width as usize);
+    assert!(shift <= width);
+    for i in 0..shift / 8 {
+        stack[dst + i] = 0;
     }
 
     let soff = shift % 8;
-
-    // Fast path: shift is aligned.
     if soff == 0 {
-        let lhs_start = lhs + n.div_ceil(8) - (shift / 8) - width.div_ceil(8);
-        for i in 0..width.div_ceil(8) {
-            stack[dst + i] = stack[lhs_start + i];
+        for i in shift / 8..width.div_ceil(8) {
+            stack[dst + i] = stack[src + i - shift / 8];
         }
-        if width % 8 > 0 {
-            stack[dst] &= (1u8 << (width % 8)).wrapping_sub(1);
+    } else {
+        stack[dst + shift / 8] = stack[src] >> soff;
+        for i in 1..width.div_ceil(8) {
+            stack[dst + shift / 8 + i] =
+                (stack[src + i - 1] << (8 - soff)) | (stack[src + i] >> soff);
         }
-        return;
     }
-
-    todo!()
 }
 
 #[cfg(test)]
@@ -128,11 +140,12 @@ mod tests {
     use super::*;
 
     #[test]
-    #[ignore = "slow"]
     fn test_roundtrip_u16() {
         let mut stack = [0u8; 8];
         for size in 0..=16 {
-            for value in 0..=(1u64 << size).wrapping_sub(1) {
+            let mask = (1u64 << size).wrapping_sub(1);
+            for value in [0x0000, 0xFFFF, 0xABCD, 0x8181] {
+                let value = value & mask;
                 load_from_u64(&mut stack, 2, size, value);
                 let result = store_to_u64(&stack, 2, size);
                 if result != value {
@@ -146,13 +159,66 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "slow"]
-    fn test_all_u16() {
+    fn test_slice_u16() {
+        let mut stack = [0u8; 16];
+        for size in 0..=32 {
+            let mask = (1u64 << size).wrapping_sub(1);
+            for value in [0x0000, 0xFFFF, 0xABCD, 0x8181] {
+                let value = value & mask;
+                for width in 0..=size {
+                    load_from_u64(&mut stack, 0, size, value);
+                    slice(&mut stack, 8, 0, width, size);
+                    let result = store_to_u64(&stack, 8, width);
+                    let expected = value & (1u64 << width).wrapping_sub(1);
+                    if result != expected {
+                        eprintln!("value    = {value:08X}");
+                        eprintln!("result   = {result:08X}");
+                        eprintln!("expected = {expected:08X}");
+                        eprintln!("size  = {size}");
+                        eprintln!("width = {width}");
+
+                        assert_eq!(result, expected);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_lsr_u16() {
+        let mut stack = [0u8; 16];
+        for size in 0..=16 {
+            for value in 0..=(1u64 << size).wrapping_sub(1) {
+                for shift in 0..=size {
+                    load_from_u64(&mut stack, 0, size, value);
+                    logical_shift_right(&mut stack, 8, 0, shift, size);
+                    let result = store_to_u64(&stack, 8, size);
+                    let expected = value >> shift;
+                    if result != expected {
+                        eprintln!("value    = {value:04X}");
+                        eprintln!("result   = {result:04X}");
+                        eprintln!("expected = {expected:04X}");
+                        eprintln!("size  = {size}");
+                        eprintln!("shift = {shift}");
+
+                        assert_eq!(result, expected);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_concat_u16() {
         let mut stack = [0u8; 8 * 3];
         for lhs_size in 0..=16 {
+            let lhs_mask = (1u64 << lhs_size).wrapping_sub(1);
             for rhs_size in 0..=16 {
-                for lhs in 0..=(1u64 << lhs_size).wrapping_sub(1) {
-                    for rhs in 0..=(1u64 << rhs_size).wrapping_sub(1) {
+                let rhs_mask = (1u64 << rhs_size).wrapping_sub(1);
+                for lhs in [0x0000, 0xFFFF, 0xABCD, 0x8181] {
+                    let lhs = lhs & lhs_mask;
+                    for rhs in [0x0000, 0xFFFF, 0xABCD, 0x8181] {
+                        let rhs = rhs & rhs_mask;
                         load_from_u64(&mut stack, 0, lhs_size, lhs);
                         load_from_u64(&mut stack, 8, rhs_size, rhs);
 

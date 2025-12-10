@@ -117,6 +117,15 @@ impl Event {
                             let result = result & (bit_stack[num_bytes - 1] & mask == mask);
                             bit_stack[dst.offset] = u8::from(result);
                         }
+                        O::BitSlice(n, width) => {
+                            bits::slice(
+                                bit_stack,
+                                dst.offset,
+                                src.offset,
+                                *width,
+                                *n,
+                            );
+                        }
 
                         O::DecimalNeg => decimal_stack[dst.offset] = !decimal_stack[src.offset],
                         O::DecimalReduceAnd => {
@@ -196,15 +205,14 @@ impl Event {
                             bit_stack[dst.offset] =
                                 (bit_stack[lhs.offset + (idx as usize) / 8] >> (idx % 8)) & 1;
                         }
-                        O::BitSlice(n, width) => {
+                        O::LogicalShiftRight(n) => {
                             let shift = decimal_stack[rhs.offset];
                             assert!(shift >= 0 && shift < *n as i64);
-                            bits::slice(
+                            bits::logical_shift_right(
                                 bit_stack,
                                 dst.offset,
                                 lhs.offset,
                                 shift as VectorSize,
-                                *width,
                                 *n,
                             );
                         }

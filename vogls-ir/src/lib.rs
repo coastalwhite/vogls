@@ -127,6 +127,7 @@ pub enum UnaryOp {
     BitNeg(VectorSize),
     BitReduceOr(VectorSize),
     BitReduceAnd(VectorSize),
+    BitSlice(VectorSize, VectorSize),
 
     DecimalNeg,
     DecimalReduceOr,
@@ -150,7 +151,7 @@ pub enum BinaryOp {
     DecimalLessEqual,
 
     SelectBit(VectorSize),
-    BitSlice(VectorSize, VectorSize),
+    LogicalShiftRight(VectorSize),
     Concat(VectorSize, VectorSize),
 }
 

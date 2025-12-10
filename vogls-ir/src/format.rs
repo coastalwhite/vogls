@@ -164,7 +164,7 @@ impl BinaryOp {
             Self::DecimalSub => "i64-",
             Self::DecimalLessEqual => "i64le",
             Self::SelectBit(_) => "bselect",
-            Self::BitSlice(_, _) => "bslice",
+            Self::LogicalShiftRight(_) => "blsr",
             Self::Concat(_, _) => "concat",
         }
     }
@@ -176,6 +176,7 @@ impl UnaryOp {
             Self::BitNeg(_) => "bneg",
             Self::BitReduceAnd(_) => "bredand",
             Self::BitReduceOr(_) => "bredor",
+            Self::BitSlice(_, _) => "bslice",
 
             Self::DecimalNeg => "i64neg",
             Self::DecimalReduceAnd => "i64redand",

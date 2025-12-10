@@ -940,7 +940,8 @@ fn lower_expr<'a>(
                 },
             };
 
-            builder.slice(gl, subject_v, lsb, width as VectorSize)
+            let shifted = builder.lsr(gl, subject_v, lsb);
+            builder.slice(gl, shifted, width as VectorSize)
         }
         Expr::Unary(op, child) => {
             let child = lower_expr(builder, gl, scope, arenas.get(*child), arenas);
