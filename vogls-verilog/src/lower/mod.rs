@@ -61,15 +61,15 @@ pub fn lower_module_to_ir(
                     PortDeclaration::Inout(i) => {
                         let i = arenas.get(*i);
                         (i.port_identifiers, i.range)
-                    },
+                    }
                     PortDeclaration::Input(i) => {
                         let i = arenas.get(*i);
                         (i.port_identifiers, i.range)
-                    },
+                    }
                     PortDeclaration::Output(i) => {
                         let i = arenas.get(*i);
                         (i.identifiers, i.range)
-                    },
+                    }
                 };
 
                 let width = match range {
@@ -142,15 +142,15 @@ pub fn lower_module_to_ir(
                     PortDeclaration::Inout(i) => {
                         let i = arenas.get(*i);
                         (i.port_identifiers, i.range)
-                    },
+                    }
                     PortDeclaration::Input(i) => {
                         let i = arenas.get(*i);
                         (i.port_identifiers, i.range)
-                    },
+                    }
                     PortDeclaration::Output(i) => {
                         let i = arenas.get(*i);
                         (i.identifiers, i.range)
-                    },
+                    }
                 };
 
                 let width = match range {
@@ -925,19 +925,19 @@ fn lower_expr<'a>(
                     let lsb_v = builder.constant(gl, Value::Decimal(lsb as i64));
                     let width = msb - lsb + 1;
                     (lsb_v, width)
-                },
+                }
                 BitSlice::PlusWidth(base, width) => {
                     let lsb = lower_expr(builder, gl, scope, arenas.get(*base), arenas);
                     let width = eval_constant_expr(gl, scope, arenas.get(*width), arenas);
                     (lsb, width)
-                },
+                }
                 BitSlice::MinusWidth(base, width) => {
                     let width = eval_constant_expr(gl, scope, arenas.get(*width), arenas);
                     let width_v = builder.constant(gl, Value::Decimal(width as i64));
                     let lsb = lower_expr(builder, gl, scope, arenas.get(*base), arenas);
                     let lsb = builder.minus(gl, lsb, width_v);
                     (lsb, width)
-                },
+                }
             };
 
             let shifted = builder.lsr(gl, subject_v, lsb);
@@ -991,14 +991,14 @@ fn lower_expr<'a>(
             let Some(fst) = exprs.first() else {
                 return builder.constant(gl, Value::Bits(Bits::Small(0, 0)));
             };
-                
+
             let mut output = lower_expr(builder, gl, scope, arenas.get(fst), arenas);
             for expr in exprs.iter().skip(1) {
                 let lexpr = lower_expr(builder, gl, scope, arenas.get(expr), arenas);
                 output = builder.concat(gl, output, lexpr);
             }
             output
-        },
+        }
         Expr::Replication(_) => todo!(),
         Expr::Ternary(_, _, _) => todo!(),
         Expr::Ident(ident) => {
@@ -1063,19 +1063,14 @@ fn eval_constant_expr<'a>(
     v
 }
 
-fn range_to_width<'a>(gl: &mut GlobalContext, scope: &mut Scope<'a>, range: AstId<Range>, arenas: &'a AstArenas) -> u32 {
-                                        let range = arenas.get(range);
-                                        let msb = eval_constant_expr(
-                                            gl,
-                                            scope,
-                                            arenas.get(range.msb),
-                                            arenas,
-                                        );
-                                        let lsb = eval_constant_expr(
-                                            gl,
-                                            scope,
-                                            arenas.get(range.lsb),
-                                            arenas,
-                                        );
-                                        (msb - lsb + 1) as u32
+fn range_to_width<'a>(
+    gl: &mut GlobalContext,
+    scope: &mut Scope<'a>,
+    range: AstId<Range>,
+    arenas: &'a AstArenas,
+) -> u32 {
+    let range = arenas.get(range);
+    let msb = eval_constant_expr(gl, scope, arenas.get(range.msb), arenas);
+    let lsb = eval_constant_expr(gl, scope, arenas.get(range.lsb), arenas);
+    (msb - lsb + 1) as u32
 }
