@@ -1,5 +1,7 @@
 use crate::arena::{ArenaId, ArenaIdRange, ArenaIdRangeIter};
 
+use self::constant_expr::ConstantExpr;
+
 pub mod constant_expr;
 pub mod expr;
 pub mod module;
@@ -163,3 +165,17 @@ pub struct StringRef(pub TextRef);
 
 #[derive(Clone, Copy)]
 pub struct Identifier(pub TextRef);
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 507
+// attribute_instance ::= (* attr_spec { , attr_spec } *)
+#[derive(Clone, Copy)]
+pub struct AttributeInstance(pub AstIdRange<AttrSpec>);
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 507
+// attr_spec ::= attr_name [ = constant_expression ]
+// attr_name ::= identifier
+#[derive(Clone, Copy)]
+pub struct AttrSpec {
+    pub attr_name: AstItem<Identifier>,
+    pub constant_expression: Option<AstId<ConstantExpr>>,
+}

@@ -19,9 +19,7 @@ use crate::ast::module::{
     ParamAssignment, ParameterDeclaration, Port, PortDeclaration, Range,
 };
 use crate::ast::statement::{
-    BlockingAssignment, DelayControl, DelayValue, EventControl, EventExpression,
-    LoopStatementVariant, NonBlockingAssignment, ProceduralTimingControl, Statement,
-    VariableAssignment, VariableLValue,
+    BlockingAssignment, ConditionalStatement, DelayControl, DelayValue, EventControl, EventExpression, LoopStatementVariant, NonBlockingAssignment, ProceduralTimingControl, Statement, StatementOrNull, VariableAssignment, VariableLValue
 };
 use crate::ast::{AstId, AstIdRange};
 use crate::number::Decimal;
@@ -555,8 +553,34 @@ fn statements_to_process<'a>(
                     arenas,
                 );
             }
-            Statement::CaseStatement => todo!(),
-            Statement::ConditionalStatement => todo!(),
+            Statement::CaseStatement(_) => todo!(),
+            Statement::ConditionalStatement(conditional) => {
+                let ConditionalStatement {
+                    if_branch,
+                    else_ifs,
+                    else_branch,
+                } = arenas.get(*conditional);
+
+                let if_branch_condition = lower_expr(
+                    &mut builder,
+                    gl,
+                    scope,
+                    arenas.get(if_branch.condition),
+                    arenas,
+                );
+                let (if_branch_ref, mut if_true_builder) = builder.branch(gl, if_branch_condition);
+                if let StatementOrNull::Statement(statement) = arenas.get(if_branch.statement) {
+                    if_true_builder = statements_to_process(
+                        if_true_builder,
+                        gl,
+                        scope,
+                        std::slice::from_ref(arenas.get(*statement)),
+                        arenas,
+                    );
+                }
+
+                builder = if_true_builder.jump(gl);
+            }
             Statement::DisableStatement => todo!(),
             Statement::EventTrigger => todo!(),
             Statement::LoopStatement(ls) => {
@@ -819,8 +843,8 @@ fn get_intersect_symbols_generated<'a>(
                         symbols.push(scope.get(ident).unwrap());
                     }
                 }
-                Statement::CaseStatement => todo!(),
-                Statement::ConditionalStatement => todo!(),
+                Statement::CaseStatement(_) => todo!(),
+                Statement::ConditionalStatement(_) => todo!(),
                 Statement::DisableStatement => todo!(),
                 Statement::EventTrigger => todo!(),
                 Statement::LoopStatement(id) => {
@@ -1043,7 +1067,10 @@ fn assign_variable_lvalue<'a>(
     let symbol_key = scope.get(&ident).unwrap();
     match &mut scope.symbols[symbol_key].variant {
         SymbolVariant::Signal(key) => builder.drive(gl, *key, variable),
-        SymbolVariant::Variable(v) => *v = Some(variable),
+        SymbolVariant::Variable(v) => {
+            *v = Some(variable);
+            scope.assign(symbol_key, variable);
+        }
     }
 }
 

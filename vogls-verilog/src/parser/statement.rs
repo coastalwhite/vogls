@@ -1,12 +1,13 @@
 use crate::ast::constant_expr::{ConstantExpr, ConstantRangeExpression};
 use crate::ast::expr::Expr;
 use crate::ast::statement::{
-    BlockingAssignment, DelayControl, DelayOrEventControl, DelayValue, EventControl,
-    EventExpression, LoopStatement, LoopStatementVariant, NetLValue, NonBlockingAssignment,
-    ProceduralTimingControl, SeqBlock, Statement, SystemTaskEnable, SystemTaskIdentifier,
-    VariableAssignment, VariableLValue,
+    BlockingAssignment, CaseItem, CaseItemPattern, CaseStatement, CaseStatementVariant,
+    ConditionalStatement, DelayControl, DelayOrEventControl, DelayValue, EventControl,
+    EventExpression, IfBranch, LoopStatement, LoopStatementVariant, NetLValue,
+    NonBlockingAssignment, ProceduralTimingControl, SeqBlock, Statement, StatementOrNull,
+    SystemTaskEnable, SystemTaskIdentifier, VariableAssignment, VariableLValue,
 };
-use crate::ast::{AstIdRange, DecimalRef, Identifier, TextRef};
+use crate::ast::{AstIdRange, AstItem, DecimalRef, Identifier, TextRef};
 use crate::parser::token_walker::TokenRange;
 use crate::tokenizer::Token;
 
@@ -60,6 +61,14 @@ impl<'a> Consumable<'a> for Statement {
             }
             T::KeywordForever | T::KeywordRepeat | T::KeywordWhile | T::KeywordFor => {
                 Ok(Self::LoopStatement(parse::<LoopStatement>(
+                    tkw,
+                    sc,
+                    arenas,
+                    diagnostics.as_deref_mut(),
+                )?))
+            }
+            T::KeywordCase | T::KeywordCaseX | T::KeywordCaseZ => {
+                Ok(Self::CaseStatement(parse::<CaseStatement>(
                     tkw,
                     sc,
                     arenas,
@@ -615,5 +624,202 @@ impl<'a> Consumable<'a> for LoopStatement {
 
         let statement = parse::<Statement>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
         Ok(Self { variant, statement })
+    }
+}
+
+impl<'a> Consumable<'a> for CaseStatement {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 499
+        // case_statement ::=
+        //   case ( expression )  case_item { case_item } endcase
+        // | casez ( expression ) case_item { case_item } endcase
+        // | casex ( expression ) case_item { case_item } endcase
+
+        let peeked = tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?;
+        let variant = match *peeked.kind {
+            T::KeywordCase => CaseStatementVariant::Case,
+            T::KeywordCaseX => CaseStatementVariant::CaseX,
+            T::KeywordCaseZ => CaseStatementVariant::CaseZ,
+            t => {
+                diagnostics.map(|d| d.unexpected_token(tkw.offset, t));
+                return Err(());
+            }
+        };
+
+        tkw.next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
+        let expr = parse::<Expr>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
+
+        let items =
+            parse_one_or_more_until_fail::<CaseItem>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::KeywordEndCase, diagnostics.as_deref_mut())?;
+
+        Ok(Self {
+            variant,
+            expr,
+            items,
+        })
+    }
+}
+
+impl<'a> Consumable<'a> for CaseItem {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 499
+        // case_item ::=
+        //   expression { , expression } : statement_or_null
+        // | default [ : ] statement_or_null
+
+        let start = tkw.offset;
+        let (token_range, pattern) = if tkw.next_if_equals(T::KeywordDefault) {
+            let token_range = TokenRange {
+                start,
+                end: tkw.offset,
+            };
+            tkw.next_if_equals(T::Colon);
+            (token_range, CaseItemPattern::Default)
+        } else {
+            let expressions = parse_one_or_more_delimited::<Expr>(
+                tkw,
+                sc,
+                arenas,
+                T::Comma,
+                diagnostics.as_deref_mut(),
+            )?;
+            let token_range = TokenRange {
+                start,
+                end: tkw.offset,
+            };
+            (token_range, CaseItemPattern::Expressions(expressions))
+        };
+        let loc = arenas.spans.len();
+        arenas.spans.push(token_range);
+        let pattern = AstItem { item: pattern, loc };
+        let statement_or_null =
+            parse::<StatementOrNull>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+
+        Ok(Self {
+            pattern,
+            statement_or_null,
+        })
+    }
+}
+
+impl<'a> Consumable<'a> for StatementOrNull {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
+        // statement_or_null ::= statement | { attribute_instance } ;
+
+        let result = match try_parse::<Statement>(tkw, sc, arenas) {
+            None => {
+                let attr_instances =
+                    parse_one_or_more_until_fail(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                Self::Attribute(attr_instances)
+            }
+            Some(statement) => Self::Statement(statement),
+        };
+        tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+
+        Ok(result)
+    }
+}
+
+impl<'a> Consumable<'a> for ConditionalStatement {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 499
+        // conditional_statement ::
+        //   if ( expression ) statement_or_null
+        //   [ else statement_or_null ]
+        // | if_else_if_statement
+        // if_else_if_statement ::=
+        //   if ( expression ) statement_or_null
+        //   { else if ( expression ) statement_or_null }
+        //   [ else statement_or_null ]
+
+        let if_branch = IfBranch::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+
+        let mut items = Vec::new();
+        let mut spans = Vec::new();
+        while tkw.next_if_equals(T::KeywordElse) {
+            if tkw.is_next_equal_to(T::KeywordIf) {
+                let start = tkw.offset;
+                let item = IfBranch::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                let token_range = TokenRange {
+                    start,
+                    end: tkw.offset,
+                };
+                items.push(item);
+                spans.push(token_range);
+            } else {
+                let else_branch = Some(parse::<StatementOrNull>(
+                    tkw,
+                    sc,
+                    arenas,
+                    diagnostics.as_deref_mut(),
+                )?);
+                let else_ifs = arenas.add_range(items, spans);
+                return Ok(Self {
+                    if_branch,
+                    else_ifs,
+                    else_branch,
+                });
+            }
+        }
+
+        let else_ifs = arenas.add_range(items, spans);
+        Ok(Self {
+            if_branch,
+            else_ifs,
+            else_branch: None,
+        })
+    }
+}
+
+impl<'a> Consumable<'a> for IfBranch {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        tkw.next_expect(T::KeywordIf, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
+        let condition = parse::<Expr>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
+        let statement = parse::<StatementOrNull>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+
+        Ok(Self {
+            condition,
+            statement,
+        })
     }
 }

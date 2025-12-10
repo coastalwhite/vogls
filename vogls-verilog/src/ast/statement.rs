@@ -1,6 +1,6 @@
 use super::constant_expr::{ConstantExpr, ConstantRangeExpression};
 use super::expr::Expr;
-use super::{AstId, AstIdRange, AstItem, DecimalRef, Identifier, TextRef};
+use super::{AstId, AstIdRange, AstItem, AttributeInstance, DecimalRef, Identifier, TextRef};
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
 // statement ::=
@@ -21,8 +21,8 @@ use super::{AstId, AstIdRange, AstItem, DecimalRef, Identifier, TextRef};
 #[derive(Clone, Copy)]
 pub enum Statement {
     BlockingAssignment(AstId<BlockingAssignment>),
-    CaseStatement,
-    ConditionalStatement,
+    CaseStatement(AstId<CaseStatement>),
+    ConditionalStatement(AstId<ConditionalStatement>),
     DisableStatement,
     EventTrigger,
     LoopStatement(AstId<LoopStatement>),
@@ -195,4 +195,69 @@ pub enum LoopStatementVariant {
         AstId<Expr>,
         AstId<VariableAssignment>,
     ),
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 499
+// case_statement ::=
+//   case ( expression )  case_item { case_item } endcase
+// | casez ( expression ) case_item { case_item } endcase
+// | casex ( expression ) case_item { case_item } endcase
+#[derive(Clone, Copy)]
+pub struct CaseStatement {
+    pub variant: CaseStatementVariant,
+    pub expr: AstId<Expr>,
+    pub items: AstIdRange<CaseItem>,
+}
+
+#[derive(Clone, Copy)]
+pub enum CaseStatementVariant {
+    Case,
+    CaseZ,
+    CaseX,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 499
+// case_item ::=
+//   expression { , expression } : statement_or_null
+// | default [ : ] statement_or_null
+#[derive(Clone, Copy)]
+pub struct CaseItem {
+    pub pattern: AstItem<CaseItemPattern>,
+    pub statement_or_null: AstId<StatementOrNull>,
+}
+
+#[derive(Clone, Copy)]
+pub enum CaseItemPattern {
+    Default,
+    Expressions(AstIdRange<Expr>),
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
+// statement_or_null ::= statement | { attribute_instance } ;
+#[derive(Clone, Copy)]
+pub enum StatementOrNull {
+    Attribute(AstIdRange<AttributeInstance>),
+    Statement(AstId<Statement>),
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 499
+// conditional_statement ::
+//   if ( expression ) statement_or_null
+//   [ else statement_or_null ]
+// | if_else_if_statement
+// if_else_if_statement ::=
+//   if ( expression ) statement_or_null
+//   { else if ( expression ) statement_or_null }
+//   [ else statement_or_null ]
+#[derive(Clone, Copy)]
+pub struct ConditionalStatement {
+    pub if_branch: IfBranch,
+    pub else_ifs: AstIdRange<IfBranch>,
+    pub else_branch: Option<AstId<StatementOrNull>>,
+}
+
+#[derive(Clone, Copy)]
+pub struct IfBranch {
+    pub condition: AstId<Expr>,
+    pub statement: AstId<StatementOrNull>,
 }

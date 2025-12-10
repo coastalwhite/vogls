@@ -230,6 +230,41 @@ pub fn parse_one_or_more<'a, T: Consumable<'a>>(
     Ok(arenas.add_range(items, spans))
 }
 
+pub fn parse_one_or_more_until_fail<'a, T: Consumable<'a>>(
+    tkw: &mut TokenWalker<'a>,
+    sc: &mut ParserScratches,
+    arenas: &mut AstArenas,
+    diagnostics: Option<&mut Diagnostics>,
+) -> Result<AstIdRange<T>, ()> {
+    let start = tkw.offset;
+    let item = T::consume(tkw, sc, arenas, diagnostics)?;
+    let token_range = TokenRange {
+        start,
+        end: tkw.offset,
+    };
+
+    // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
+    // here.
+    let mut items = Vec::new();
+    let mut spans = Vec::new();
+    items.push(item);
+    spans.push(token_range);
+
+    loop {
+        let Some(item) = T::try_consume(tkw, sc, arenas) else {
+            break;
+        };
+        let token_range = TokenRange {
+            start,
+            end: tkw.offset,
+        };
+        items.push(item);
+        spans.push(token_range);
+    }
+
+    Ok(arenas.add_range(items, spans))
+}
+
 pub fn parse_one_or_more_delimited_until_fail<'a, T: Consumable<'a>>(
     tkw: &mut TokenWalker<'a>,
     sc: &mut ParserScratches,

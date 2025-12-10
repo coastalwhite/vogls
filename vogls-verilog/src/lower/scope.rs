@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::ops::{Index, IndexMut};
+use std::vec::Drain;
 
 use vogls_ir::{SignalKey, Type, VariableKey};
 
@@ -52,6 +53,9 @@ pub struct Scope<'a> {
 
     scope_stack: Vec<&'a str>,
     scope_stack_offsets: Vec<usize>,
+
+    scope_assigns: Vec<SymbolKey>,
+    scope_assigns_offsets: Vec<usize>,
 }
 
 impl<'a> Default for Scope<'a> {
@@ -61,6 +65,8 @@ impl<'a> Default for Scope<'a> {
             symbols: SymbolTable::default(),
             scope_stack: Default::default(),
             scope_stack_offsets: Default::default(),
+            scope_assigns: Default::default(),
+            scope_assigns_offsets: Default::default(),
         }
     }
 }
@@ -74,13 +80,17 @@ impl Scope<'_> {
 impl<'a> Scope<'a> {
     pub fn push_scope(&mut self) {
         self.scope_stack_offsets.push(self.scope_stack.len());
+        self.scope_assigns_offsets.push(self.scope_assigns.len());
     }
 
-    pub fn pop_scope(&mut self) {
+    pub fn pop_scope<'b>(&'b mut self) -> Drain<'b, SymbolKey> {
         let offset = self.scope_stack_offsets.pop().unwrap_or(0);
         for k in self.scope_stack.drain(offset..) {
             self.look_up.get_mut(k).unwrap().pop().unwrap();
         }
+
+        let offset = self.scope_assigns_offsets.pop().unwrap_or(0);
+        self.scope_assigns.drain(offset..)
     }
 
     pub fn push(&mut self, key: &'a str, value: SymbolKey) {
@@ -100,5 +110,12 @@ impl<'a> Scope<'a> {
     pub fn get(&self, key: &str) -> Option<SymbolKey> {
         let values = self.look_up.get(key)?;
         Some(values.last()?.1)
+    }
+
+    pub fn assign(&mut self, key: SymbolKey, value: VariableKey) {
+        let SymbolVariant::Variable(v) = &mut self.symbols[key].variant else {
+            panic!();
+        };
+        *v = Some(value);
     }
 }

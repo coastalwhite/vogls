@@ -89,7 +89,10 @@ impl Tokenized {
                         continue;
                     }
 
-                    b'(' => (T::LeftParen, 1),
+                    b'(' => match bytes.get(i + 1) {
+                        Some(b'*') => (T::LeftParenStar, 2),
+                        _ => (T::LeftParen, 1),
+                    },
                     b')' => (T::RightParen, 1),
                     b'[' => (T::LeftBrace, 1),
                     b']' => (T::RightBrace, 1),
@@ -162,6 +165,7 @@ impl Tokenized {
                     },
                     b'*' => match bytes.get(i + 1) {
                         Some(b'*') => (T::DoubleStar, 2),
+                        Some(b')') => (T::StarRightParen, 2),
                         _ => (T::Star, 1),
                     },
                     b'=' => match (bytes.get(i + 1), bytes.get(i + 2)) {
@@ -802,6 +806,9 @@ define_tokens! {
     Equals = "=",
     AtSign = "@",
     Hash = "#",
+
+    LeftParenStar = "(*",
+    StarRightParen = "*)",
 
     // Keywords
     KeywordAlways = "always",

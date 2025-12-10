@@ -1,12 +1,18 @@
 use std::path::PathBuf;
 
 use crate::arena::Arena;
+use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::module::Module;
-use crate::ast::{AstId, AstIdRange, AstItem, DecimalRef, Identifier, SizedNumberRef, StringRef, TextRef};
+use crate::ast::{
+    AstId, AstIdRange, AstItem, AttrSpec, AttributeInstance, DecimalRef, Identifier,
+    SizedNumberRef, StringRef, TextRef,
+};
 use crate::number::{Decimal, SizedNumber};
 use crate::tokenizer::{Takeable, Token};
 pub use diagnostics::{Diagnostics, report_error};
-pub use token_walker::{TokenWalker, TokenRange};
+pub use token_walker::{TokenRange, TokenWalker};
+
+use self::utils::{item_parse, parse, parse_one_or_more_delimited};
 
 mod constant_expr;
 mod diagnostics;
@@ -208,5 +214,62 @@ impl<'a> Consumable<'a> for StringRef {
         let end = start + content.len();
         arenas.text.push_str(content);
         Ok(Self(TextRef { start, end }))
+    }
+}
+
+impl<'a> Consumable<'a> for AttributeInstance {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 507
+        // attribute_instance ::= (* attr_spec { , attr_spec } *)
+
+        tkw.next_expect(T::LeftParenStar, diagnostics.as_deref_mut())?;
+        let attr_specs = parse_one_or_more_delimited::<AttrSpec>(
+            tkw,
+            sc,
+            arenas,
+            T::Comma,
+            diagnostics.as_deref_mut(),
+        )?;
+        tkw.next_expect(T::StarRightParen, diagnostics.as_deref_mut())?;
+
+        Ok(Self(attr_specs))
+    }
+}
+
+impl<'a> Consumable<'a> for AttrSpec {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 507
+        // attr_spec ::= attr_name [ = constant_expression ]
+        // attr_name ::= identifier
+
+        let attr_name = item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        let mut constant_expression = None;
+        if tkw.next_if_equals(T::Equals) {
+            constant_expression = Some(parse::<ConstantExpr>(
+                tkw,
+                sc,
+                arenas,
+                diagnostics.as_deref_mut(),
+            )?);
+        }
+
+        Ok(Self {
+            attr_name,
+            constant_expression,
+        })
     }
 }

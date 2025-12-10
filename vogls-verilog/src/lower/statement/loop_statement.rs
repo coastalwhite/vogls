@@ -72,6 +72,7 @@ pub fn lower_loop_statement<'a>(
                 let (phi_value, phi) = builder.phi(gl, predecessor, *current_var);
                 phi_refs.insert(*symkey, phi);
                 *current_var = phi_value;
+                scope.assign(*symkey, phi_value);
             }
         }
     }
