@@ -75,6 +75,12 @@ impl<'a> Consumable<'a> for Statement {
                     diagnostics.as_deref_mut(),
                 )?))
             }
+            T::KeywordIf => Ok(Self::ConditionalStatement(parse::<ConditionalStatement>(
+                tkw,
+                sc,
+                arenas,
+                diagnostics.as_deref_mut(),
+            )?)),
             _ => {
                 if let Some(blocking_assignment) = try_parse::<BlockingAssignment>(tkw, sc, arenas)
                 {
@@ -734,12 +740,11 @@ impl<'a> Consumable<'a> for StatementOrNull {
             None => {
                 let attr_instances =
                     parse_one_or_more_until_fail(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
                 Self::Attribute(attr_instances)
             }
             Some(statement) => Self::Statement(statement),
         };
-        tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
-
         Ok(result)
     }
 }

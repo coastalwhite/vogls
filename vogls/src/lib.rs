@@ -17,6 +17,7 @@ pub struct ExecutionContext {
     pub stdout: Box<dyn std::io::Write>,
     pub stderr: Box<dyn std::io::Write>,
     pub output_ir: bool,
+    pub output_elaborated: bool,
     pub output_sim_ir: bool,
     pub output_schedule: bool,
 }
@@ -192,7 +193,7 @@ pub fn run(
 
     let mut io_signals = HashMap::new();
     for &process in elab_processes.iter() {
-        if ectx.output_sim_ir {
+        if ectx.output_elaborated {
             println!();
             println!("{}", gl.processes[process].display(&gl));
         }

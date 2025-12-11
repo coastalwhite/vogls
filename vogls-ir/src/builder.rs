@@ -169,6 +169,20 @@ impl BasicBlockBuilder {
         self.instrs.push(Instruction::Phi(dst, bb, var, bb, var));
         (dst, PhiRef(self.key(), offset))
     }
+    pub fn phi_full(
+        &mut self,
+        gl: &mut GlobalContext,
+        bb1: BasicBlockKey,
+        var1: VariableKey,
+        bb2: BasicBlockKey,
+        var2: VariableKey,
+    ) -> VariableKey {
+        assert_eq!(gl.vars[var1].ty, gl.vars[var2].ty);
+        let ty = gl.vars[var1].ty.clone();
+        let dst = self.next_tmp_var(gl, ty);
+        self.instrs.push(Instruction::Phi(dst, bb1, var1, bb2, var2));
+        dst
+    }
 
     pub fn update_phi_ref(
         &mut self,

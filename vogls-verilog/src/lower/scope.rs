@@ -10,6 +10,8 @@ use crate::parser::TokenRange;
 pub struct SymbolKey(usize);
 #[derive(Debug, Clone, Default)]
 pub struct SymbolTable(Vec<Symbol>);
+#[derive(Debug, Clone, Default)]
+pub struct ScopeVariables(Vec<Vec<(usize, VariableKey)>>);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Symbol {
@@ -27,6 +29,19 @@ impl Index<SymbolKey> for SymbolTable {
 }
 
 impl IndexMut<SymbolKey> for SymbolTable {
+    fn index_mut(&mut self, index: SymbolKey) -> &mut Self::Output {
+        &mut self.0[index.0]
+    }
+}
+
+impl Index<SymbolKey> for ScopeVariables {
+    type Output = Vec<(usize, VariableKey)>;
+    fn index(&self, index: SymbolKey) -> &Self::Output {
+        &self.0[index.0]
+    }
+}
+
+impl IndexMut<SymbolKey> for ScopeVariables {
     fn index_mut(&mut self, index: SymbolKey) -> &mut Self::Output {
         &mut self.0[index.0]
     }
@@ -50,6 +65,7 @@ pub enum SymbolVariant {
 pub struct Scope<'a> {
     look_up: HashMap<&'a str, Vec<(usize, SymbolKey)>>,
     pub symbols: SymbolTable,
+    pub scope_variables: ScopeVariables,
 
     scope_stack: Vec<&'a str>,
     scope_stack_offsets: Vec<usize>,
@@ -63,6 +79,7 @@ impl<'a> Default for Scope<'a> {
         Self {
             look_up: Default::default(),
             symbols: SymbolTable::default(),
+            scope_variables: Default::default(),
             scope_stack: Default::default(),
             scope_stack_offsets: Default::default(),
             scope_assigns: Default::default(),
@@ -83,14 +100,23 @@ impl<'a> Scope<'a> {
         self.scope_assigns_offsets.push(self.scope_assigns.len());
     }
 
-    pub fn pop_scope<'b>(&'b mut self) -> Drain<'b, SymbolKey> {
+    pub fn scope_assigned_symbols(&self) -> impl Iterator<Item = (SymbolKey, VariableKey)> {
+        let offset = self.scope_assigns_offsets.last().copied().unwrap_or(0);
+        self.scope_assigns[offset..]
+            .iter()
+            .map(|s| (*s, self.scope_variables[*s].last().unwrap().1))
+    }
+
+    pub fn pop_scope<'b>(&'b mut self) {
         let offset = self.scope_stack_offsets.pop().unwrap_or(0);
         for k in self.scope_stack.drain(offset..) {
             self.look_up.get_mut(k).unwrap().pop().unwrap();
         }
 
         let offset = self.scope_assigns_offsets.pop().unwrap_or(0);
-        self.scope_assigns.drain(offset..)
+        for s in self.scope_assigns.drain(offset..) {
+            self.scope_variables[s].pop();
+        }
     }
 
     pub fn push(&mut self, key: &'a str, value: SymbolKey) {
@@ -117,5 +143,20 @@ impl<'a> Scope<'a> {
             panic!();
         };
         *v = Some(value);
+        self.scope_assigns.push(key);
+
+        let scope_offset = self.scope_assigns_offsets.len();
+
+        if self.scope_variables.0.len() <= key.0 {
+            self.scope_variables.0.extend(std::iter::repeat_n(
+                Vec::new(),
+                key.0 - self.scope_variables.0.len() + 1,
+            ));
+        }
+        let variables = &mut self.scope_variables[key];
+        match variables.last_mut() {
+            Some((o, v)) if *o == scope_offset => *v = value,
+            _ => variables.push((scope_offset, value)),
+        }
     }
 }
