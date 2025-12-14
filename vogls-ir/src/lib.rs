@@ -55,6 +55,7 @@ pub enum BasicBlockTerminator {
     Wait(BasicBlockKey, Time),
     Watch(BasicBlockKey, Vec<SignalKey>),
     Jump(BasicBlockKey),
+    /// (condition, if_true, if_false)
     Branch(VariableKey, BasicBlockKey, BasicBlockKey),
     Halt,
 }
@@ -79,11 +80,11 @@ impl BasicBlockTerminator {
                 }
             }
             Self::Branch(_, true_bb, false_bb) => {
-                if bb_seen.insert(*true_bb) {
-                    bb_stack.push(*true_bb);
-                }
                 if bb_seen.insert(*false_bb) {
                     bb_stack.push(*false_bb);
+                }
+                if bb_seen.insert(*true_bb) {
+                    bb_stack.push(*true_bb);
                 }
             }
             Self::Halt => {}
@@ -173,13 +174,7 @@ pub enum Instruction {
     Spawn(ProcessKey, Vec<SignalKey>),
     Signal(SignalKey),
 
-    Phi(
-        VariableKey,
-        BasicBlockKey,
-        VariableKey,
-        BasicBlockKey,
-        VariableKey,
-    ),
+    Phi(VariableKey, Box<[(BasicBlockKey, VariableKey)]>),
 }
 
 impl Instruction {
@@ -190,7 +185,7 @@ impl Instruction {
             | Self::Unary(dst, _, _)
             | Self::Binary(dst, _, _, _)
             | Self::Cast(dst, _)
-            | Self::Phi(dst, _, _, _, _)
+            | Self::Phi(dst, _)
             | Self::Probe(dst, _) => Some(*dst),
             Self::Intrinsic(_, _)
             | Self::Drive(_, _)

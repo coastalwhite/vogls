@@ -33,15 +33,10 @@ pub fn lower_process_to_vm(
         let bb = gl.bbs.get(bb_key).unwrap();
 
         for instr in &bb.instrs {
-            if let Instruction::Phi(dst, bb1, var1, bb2, var2) = instr {
-                bb_phis
-                    .entry(*bb1)
-                    .or_insert(Vec::new())
-                    .push((*dst, *var1));
-                bb_phis
-                    .entry(*bb2)
-                    .or_insert(Vec::new())
-                    .push((*dst, *var2));
+            if let Instruction::Phi(dst, srcs) = instr {
+                for (bb, var) in srcs {
+                    bb_phis.entry(*bb).or_insert(Vec::new()).push((*dst, *var));
+                }
             }
 
             if let Some(dst) = instr.get_destination_variable() {

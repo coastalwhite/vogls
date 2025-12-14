@@ -127,6 +127,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             stdout: Box::new(stdout.clone()) as Box<dyn std::io::Write>,
             stderr: Box::new(stderr.clone()) as Box<dyn std::io::Write>,
             output_ir: false,
+            output_elaborated: false,
             output_sim_ir: false,
             output_schedule: false,
         };

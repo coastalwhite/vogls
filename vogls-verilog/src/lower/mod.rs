@@ -19,9 +19,9 @@ use crate::ast::module::{
     ParamAssignment, ParameterDeclaration, Port, PortDeclaration, Range,
 };
 use crate::ast::statement::{
-    BlockingAssignment, ConditionalStatement, DelayControl, DelayValue, EventControl,
-    EventExpression, LoopStatementVariant, NonBlockingAssignment, ProceduralTimingControl,
-    Statement, StatementOrNull, VariableAssignment, VariableLValue,
+    BlockingAssignment, DelayControl, DelayValue, EventControl, EventExpression,
+    LoopStatementVariant, NonBlockingAssignment, ProceduralTimingControl, Statement,
+    StatementOrNull, VariableAssignment, VariableLValue,
 };
 use crate::ast::{AstId, AstIdRange};
 use crate::number::Decimal;
@@ -822,7 +822,28 @@ fn get_intersect_symbols_generated<'a>(
                     }
                 }
                 Statement::CaseStatement(_) => todo!(),
-                Statement::ConditionalStatement(_) => todo!(),
+                Statement::ConditionalStatement(id) => {
+                    let c = arenas.get(*id);
+                    stack.push(stmts);
+                    match arenas.get(c.if_branch.statement) {
+                        StatementOrNull::Attribute(_) => {}
+                        StatementOrNull::Statement(stmt) => stack.push(AstIdRange::single(*stmt)),
+                    }
+                    stack.extend(c.else_ifs.iter().filter_map(|c| {
+                        match arenas.get(arenas.get(c).statement) {
+                            StatementOrNull::Attribute(_) => None,
+                            StatementOrNull::Statement(stmt) => Some(AstIdRange::single(*stmt)),
+                        }
+                    }));
+                    if let Some(else_branch) = c.else_branch {
+                        match arenas.get(else_branch) {
+                            StatementOrNull::Attribute(_) => {}
+                            StatementOrNull::Statement(stmt) => {
+                                stack.push(AstIdRange::single(*stmt))
+                            }
+                        }
+                    }
+                }
                 Statement::DisableStatement => todo!(),
                 Statement::EventTrigger => todo!(),
                 Statement::LoopStatement(id) => {
@@ -977,7 +998,7 @@ fn lower_expr<'a>(
                 O::GreaterThanEqual => builder.unsigned_ge(gl, l, r),
                 O::LessThan => builder.unsigned_lt(gl, l, r),
                 O::LessThanEqual => builder.unsigned_le(gl, l, r),
-                O::LogicalEquality => todo!(),
+                O::LogicalEquality => builder.equals(gl, l, r),
                 O::LogicalInequality => todo!(),
                 O::CaseEquality => todo!(),
                 O::CaseInequality => todo!(),

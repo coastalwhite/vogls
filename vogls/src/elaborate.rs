@@ -168,9 +168,10 @@ pub fn elaborate_process(
         bb_seen.insert(bb_key);
 
         for i in bb.instrs.iter_mut() {
-            if let Instruction::Phi(_, bb1, _, bb2, _) = i {
-                *bb1 = bb_map[bb1];
-                *bb2 = bb_map[bb2];
+            if let Instruction::Phi(_, srcs) = i {
+                for (bb, _) in srcs.iter_mut() {
+                    *bb = bb_map[bb];
+                }
             }
         }
 

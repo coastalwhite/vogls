@@ -2,10 +2,12 @@ use std::collections::HashMap;
 
 use vogls_ir::{BasicBlockBuilder, GlobalContext, PhiRef, Value};
 
-use crate::ast::{AstId, AstIdRange};
 use crate::ast::statement::{LoopStatement, LoopStatementVariant};
-use crate::lower::{assign_variable_lvalue, get_intersect_symbols_generated, lower_expr, statements_to_process};
+use crate::ast::{AstId, AstIdRange};
 use crate::lower::scope::{Scope, SymbolKey, SymbolVariant};
+use crate::lower::{
+    assign_variable_lvalue, get_intersect_symbols_generated, lower_expr, statements_to_process,
+};
 use crate::parser::AstArenas;
 
 pub fn lower_loop_statement<'a>(
@@ -65,11 +67,14 @@ pub fn lower_loop_statement<'a>(
     let mut phi_refs = HashMap::<SymbolKey, PhiRef>::new();
     for symkey in &intersect_vars_generated {
         match &mut scope.symbols[*symkey].variant {
-            SymbolVariant::Signal(_) => {},
-            SymbolVariant::Variable(None) => {},
+            SymbolVariant::Signal(_) => {}
+            SymbolVariant::Variable(None) => {}
             SymbolVariant::Variable(Some(current_var)) => {
                 // @TODO: predecessor might be wrong here.
-                let (phi_value, phi) = builder.phi(gl, predecessor, *current_var);
+                let (phi_value, phi) = builder.phi(
+                    gl,
+                    [(predecessor, *current_var), (predecessor, *current_var)].into(),
+                );
                 phi_refs.insert(*symkey, phi);
                 *current_var = phi_value;
                 scope.assign(*symkey, phi_value);
@@ -84,7 +89,7 @@ pub fn lower_loop_statement<'a>(
         V::Repeat(_) => {
             let (i, size) = repeat_vars.as_mut().unwrap();
             let phi_ref;
-            (*i, phi_ref) = builder.phi(gl, predecessor, *i);
+            (*i, phi_ref) = builder.phi(gl, [(predecessor, *i), (predecessor, *i)].into());
             repeat_i_phi = Some(phi_ref);
             Some(builder.unsigned_lt(gl, *i, *size))
         }
@@ -139,7 +144,7 @@ pub fn lower_loop_statement<'a>(
 
             let one = builder.constant(gl, Value::Decimal(1));
             let i_plus_1 = builder.plus(gl, i, one);
-            builder.update_phi_ref(gl, phi_ref, builder.key(), i_plus_1);
+            builder.update_phi_ref(gl, phi_ref, 1, builder.key(), i_plus_1);
         }
         V::Forever | V::While(_) => {}
     }
@@ -149,7 +154,7 @@ pub fn lower_loop_statement<'a>(
         let SymbolVariant::Variable(Some(var)) = &scope.symbols[symbol_key].variant else {
             todo!();
         };
-        builder.update_phi_ref(gl, phi_ref, bb_key, *var);
+        builder.update_phi_ref(gl, phi_ref, 1, bb_key, *var);
     }
 
     let next_builder = builder.next_builder(gl);

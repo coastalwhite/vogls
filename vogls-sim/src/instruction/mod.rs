@@ -40,6 +40,7 @@ pub enum VmInstruction {
     Watch(Vec<VmSignalKey>),
 
     Jump(usize),
+    /// (condition, true_offset, false_offset)
     Branch(StackRef, usize, usize),
     Halt,
 }

@@ -106,6 +106,10 @@ impl BranchRef {
         };
         *snd = bb;
     }
+
+    pub fn origin_key(&self) -> BasicBlockKey {
+        self.0
+    }
 }
 
 impl BasicBlockBuilder {
@@ -160,34 +164,22 @@ impl BasicBlockBuilder {
     pub fn phi(
         &mut self,
         gl: &mut GlobalContext,
-        bb: BasicBlockKey,
-        var: VariableKey,
+        srcs: Box<[(BasicBlockKey, VariableKey)]>,
     ) -> (VariableKey, PhiRef) {
-        let ty = gl.vars[var].ty.clone();
+        assert!(!srcs.is_empty());
+        let (_, var) = srcs.first().unwrap();
+        let ty = gl.vars[*var].ty.clone();
         let dst = self.next_tmp_var(gl, ty);
         let offset = self.instrs.len();
-        self.instrs.push(Instruction::Phi(dst, bb, var, bb, var));
+        self.instrs.push(Instruction::Phi(dst, srcs));
         (dst, PhiRef(self.key(), offset))
-    }
-    pub fn phi_full(
-        &mut self,
-        gl: &mut GlobalContext,
-        bb1: BasicBlockKey,
-        var1: VariableKey,
-        bb2: BasicBlockKey,
-        var2: VariableKey,
-    ) -> VariableKey {
-        assert_eq!(gl.vars[var1].ty, gl.vars[var2].ty);
-        let ty = gl.vars[var1].ty.clone();
-        let dst = self.next_tmp_var(gl, ty);
-        self.instrs.push(Instruction::Phi(dst, bb1, var1, bb2, var2));
-        dst
     }
 
     pub fn update_phi_ref(
         &mut self,
         gl: &mut GlobalContext,
         phi_ref: PhiRef,
+        idx: usize,
         bb: BasicBlockKey,
         var: VariableKey,
     ) {
@@ -196,11 +188,10 @@ impl BasicBlockBuilder {
         } else {
             &mut gl.bbs[phi_ref.0].instrs[phi_ref.1]
         };
-        let Instruction::Phi(_, _, _, phi_bb, phi_var) = instr else {
+        let Instruction::Phi(_, srcs) = instr else {
             panic!("not a phi");
         };
-        *phi_bb = bb;
-        *phi_var = var;
+        srcs[idx] = (bb, var);
     }
 
     pub fn constant(&mut self, gl: &mut GlobalContext, value: Value) -> VariableKey {
@@ -613,6 +604,25 @@ impl BasicBlockBuilder {
         let slf = gl.bbs.get_mut(self.key).unwrap();
         slf.instrs = std::mem::take(&mut self.instrs);
         slf.terminator = BasicBlockTerminator::Jump(bb);
+    }
+
+    pub fn next_terminate_later(&mut self, gl: &mut GlobalContext) -> BasicBlockBuilder {
+        let next_key = self.next_bb(gl);
+        let slf = gl.bbs.get_mut(self.key).unwrap();
+        slf.instrs = std::mem::take(&mut self.instrs);
+        slf.terminator = BasicBlockTerminator::Halt;
+        BasicBlockBuilder {
+            key: next_key,
+
+            module: self.module,
+            process: self.process,
+            initializer: self.initializer,
+
+            instrs: Vec::new(),
+
+            tmp_offset: self.tmp_offset,
+            bbname_offset: self.bbname_offset,
+        }
     }
 
     pub fn jump_to_with_dummy(

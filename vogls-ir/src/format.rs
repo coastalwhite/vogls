@@ -105,24 +105,7 @@ impl ContextFormat for Process {
         while let Some(bb) = bb_stack.pop() {
             let bb = ctx.gl.bbs.get(bb).unwrap();
             bb.ctx_fmt(f, ctx)?;
-
-            use BasicBlockTerminator as T;
-            match bb.terminator {
-                T::Wait(bb, _) | T::Watch(bb, _) | T::Jump(bb) => {
-                    if bb_seen.insert(bb) {
-                        bb_stack.push(bb);
-                    }
-                }
-                T::Branch(_, true_bb, false_bb) => {
-                    if bb_seen.insert(false_bb) {
-                        bb_stack.push(false_bb);
-                    }
-                    if bb_seen.insert(true_bb) {
-                        bb_stack.push(true_bb);
-                    }
-                }
-                T::Halt => {}
-            }
+            bb.terminator.extend_next_rev(&mut bb_stack, &mut bb_seen);
         }
 
         ctx.bb_stack_scratch = bb_stack;
@@ -254,16 +237,17 @@ impl ContextFormat for Instruction {
                 ctx.gl.vars.get(*var).unwrap().typed_ctx_fmt(f, ctx)?;
             }
 
-            Self::Phi(dst, bb1, var1, bb2, var2) => {
+            Self::Phi(dst, srcs) => {
                 ctx.gl.vars.get(*dst).unwrap().typed_ctx_fmt(f, ctx)?;
                 f.write_str(" = phi ")?;
-                f.write_str(&ctx.gl.bbs.get(*bb1).unwrap().name)?;
-                f.write_str(" ")?;
-                ctx.gl.vars.get(*var1).unwrap().typed_ctx_fmt(f, ctx)?;
-                f.write_str(", ")?;
-                f.write_str(&ctx.gl.bbs.get(*bb2).unwrap().name)?;
-                f.write_str(" ")?;
-                ctx.gl.vars.get(*var2).unwrap().typed_ctx_fmt(f, ctx)?;
+                for (i, (bb, var)) in srcs.iter().enumerate() {
+                    if i != 0 {
+                        f.write_str(", ")?;
+                    }
+                    f.write_str(&ctx.gl.bbs.get(*bb).unwrap().name)?;
+                    f.write_str(" ")?;
+                    ctx.gl.vars.get(*var).unwrap().typed_ctx_fmt(f, ctx)?;
+                }
             }
 
             Self::Spawn(process, ports) => {

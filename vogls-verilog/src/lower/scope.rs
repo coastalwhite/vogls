@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::ops::{Index, IndexMut};
-use std::vec::Drain;
 
 use vogls_ir::{SignalKey, Type, VariableKey};
 
