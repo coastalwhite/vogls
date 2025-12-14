@@ -21,6 +21,11 @@ impl Diagnostics {
         self.errors
             .push((TokenRange::at(tr), ParseErrorReason::UnexpectedToken(kind)));
     }
+
+    pub fn no_corresponding(&mut self, tr: usize, kind: Token) {
+        self.errors
+            .push((TokenRange::at(tr), ParseErrorReason::NoCorresponding(kind)));
+    }
 }
 
 pub fn display_width(mut s: &str, tab_width: usize) -> usize {

@@ -555,7 +555,10 @@ fn statements_to_process<'a>(
                     arenas,
                 );
             }
-            Statement::CaseStatement(_) => todo!(),
+            Statement::CaseStatement(case_statement) => {
+                builder =
+                    statement::conditional::lower_case_statement(builder, gl, scope, *case_statement, arenas)
+            }
             Statement::ConditionalStatement(conditional) => {
                 builder = statement::conditional::lower(builder, gl, scope, *conditional, arenas)
             }
@@ -821,7 +824,17 @@ fn get_intersect_symbols_generated<'a>(
                         symbols.push(scope.get(ident).unwrap());
                     }
                 }
-                Statement::CaseStatement(_) => todo!(),
+                Statement::CaseStatement(id) => {
+                    let c = arenas.get(*id);
+                    stack.push(stmts);
+                    stack.extend(c.items.iter().filter_map(|c| {
+                        match arenas.get(arenas.get(c).statement_or_null) {
+                            StatementOrNull::Attribute(_) => None,
+                            StatementOrNull::Statement(stmt) => Some(AstIdRange::single(*stmt)),
+                        }
+                    }));
+                    break;
+                }
                 Statement::ConditionalStatement(id) => {
                     let c = arenas.get(*id);
                     stack.push(stmts);
@@ -843,6 +856,7 @@ fn get_intersect_symbols_generated<'a>(
                             }
                         }
                     }
+                    break;
                 }
                 Statement::DisableStatement => todo!(),
                 Statement::EventTrigger => todo!(),

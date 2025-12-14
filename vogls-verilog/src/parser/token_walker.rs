@@ -244,7 +244,7 @@ impl<'a> TokenWalker<'a> {
                         assert!(lparens == 0 && lbraces == 0 && lbrackets == 0);
                         return i;
                     }
-                },
+                }
                 T::LeftBrace => lbraces += 1,
                 T::RightBrace => {
                     lbraces -= 1;
@@ -253,7 +253,7 @@ impl<'a> TokenWalker<'a> {
                         assert!(lparens == 0 && lbraces == 0 && lbrackets == 0);
                         return i;
                     }
-                },
+                }
                 T::LeftBracket => lbrackets += 1,
                 T::RightBracket => {
                     lbrackets -= 1;
@@ -262,12 +262,38 @@ impl<'a> TokenWalker<'a> {
                         assert!(lparens == 0 && lbraces == 0 && lbrackets == 0);
                         return i;
                     }
-                },
-                _ => {},
+                }
+                _ => {}
             }
         }
 
         // @TODO: better error message
         panic!("no matching enclosure");
+    }
+
+    pub fn find_next_same_depth(&self, token: Token) -> Option<usize> {
+        use Token as T;
+
+        let mut lparens = 0;
+        let mut lbraces = 0;
+        let mut lbrackets = 0;
+
+        for (i, &t) in self.tokens.iter().enumerate().skip(self.offset) {
+            if t == token && lparens == 0 && lbraces == 0 && lbrackets == 0 {
+                return Some(i);
+            }
+
+            #[rustfmt::skip]
+            {
+                if t == T::LeftParen    { lparens   += 1; }
+                if t == T::RightParen   { lparens   -= 1; }
+                if t == T::LeftBrace    { lbraces   += 1; }
+                if t == T::RightBrace   { lbraces   -= 1; }
+                if t == T::LeftBracket  { lbrackets += 1; }
+                if t == T::RightBracket { lbrackets -= 1; }
+            };
+        }
+
+        None
     }
 }

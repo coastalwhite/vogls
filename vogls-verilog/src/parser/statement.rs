@@ -648,13 +648,13 @@ impl<'a> Consumable<'a> for CaseStatement {
         // | casez ( expression ) case_item { case_item } endcase
         // | casex ( expression ) case_item { case_item } endcase
 
-        let peeked = tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?;
-        let variant = match *peeked.kind {
+        let t = tkw.try_next(diagnostics.as_deref_mut())?;
+        let variant = match *t.kind {
             T::KeywordCase => CaseStatementVariant::Case,
             T::KeywordCaseX => CaseStatementVariant::CaseX,
             T::KeywordCaseZ => CaseStatementVariant::CaseZ,
             t => {
-                diagnostics.map(|d| d.unexpected_token(tkw.offset, t));
+                diagnostics.map(|d| d.unexpected_token(tkw.offset - 1, t));
                 return Err(());
             }
         };
@@ -688,7 +688,7 @@ impl<'a> Consumable<'a> for CaseItem {
         // case_item ::=
         //   expression { , expression } : statement_or_null
         // | default [ : ] statement_or_null
-
+        
         let start = tkw.offset;
         let (token_range, pattern) = if tkw.next_if_equals(T::KeywordDefault) {
             let token_range = TokenRange {
@@ -698,8 +698,13 @@ impl<'a> Consumable<'a> for CaseItem {
             tkw.next_if_equals(T::Colon);
             (token_range, CaseItemPattern::Default)
         } else {
+            let Some(colon_offset) = tkw.find_next_same_depth(T::Colon) else {
+                diagnostics.map(|d| d.no_corresponding(tkw.offset, T::Colon));
+                return Err(());
+            };
+            let mut expressions_tkw = tkw.end_at(colon_offset);
             let expressions = parse_one_or_more_delimited::<Expr>(
-                tkw,
+                &mut expressions_tkw,
                 sc,
                 arenas,
                 T::Comma,
@@ -707,8 +712,9 @@ impl<'a> Consumable<'a> for CaseItem {
             )?;
             let token_range = TokenRange {
                 start,
-                end: tkw.offset,
+                end: expressions_tkw.offset,
             };
+            tkw.offset = colon_offset + 1;
             (token_range, CaseItemPattern::Expressions(expressions))
         };
         let loc = arenas.spans.len();

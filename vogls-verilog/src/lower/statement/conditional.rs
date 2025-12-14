@@ -5,10 +5,42 @@ use vogls_ir::{
 };
 
 use crate::ast::AstId;
-use crate::ast::statement::{ConditionalStatement, StatementOrNull};
+use crate::ast::statement::{
+    CaseItemPattern, CaseStatement, CaseStatementVariant, ConditionalStatement, StatementOrNull
+};
 use crate::lower::scope::{Scope, SymbolKey};
 use crate::lower::{lower_expr, statements_to_process};
 use crate::parser::AstArenas;
+
+struct State {
+    origins: Vec<BasicBlockKey>,
+    symbols: Vec<SymbolKey>,
+    symbol_lookup: HashMap<SymbolKey, usize>,
+    assigned: HashMap<(SymbolKey, BasicBlockKey), VariableKey>,
+}
+
+impl State {
+    fn new() -> Self {
+        State {
+            origins: Vec::new(),
+            symbols: Vec::new(),
+            symbol_lookup: HashMap::new(),
+            assigned: HashMap::new(),
+        }
+    }
+
+    fn insert(&mut self, bb: BasicBlockKey, i: impl Iterator<Item = (SymbolKey, VariableKey)>) {
+        self.origins.push(bb);
+        for (symbol, variable) in i {
+            self.symbol_lookup.entry(symbol).or_insert_with(|| {
+                let idx = self.symbols.len();
+                self.symbols.push(symbol);
+                idx
+            });
+            self.assigned.insert((symbol, bb), variable);
+        }
+    }
+}
 
 pub fn lower<'a>(
     mut builder: BasicBlockBuilder,
@@ -31,33 +63,7 @@ pub fn lower<'a>(
         arenas,
     );
 
-    struct State {
-        origins: Vec<BasicBlockKey>,
-        symbols: Vec<SymbolKey>,
-        symbol_lookup: HashMap<SymbolKey, usize>,
-        assigned: HashMap<(SymbolKey, BasicBlockKey), VariableKey>,
-    }
-
-    impl State {
-        fn insert(&mut self, bb: BasicBlockKey, i: impl Iterator<Item = (SymbolKey, VariableKey)>) {
-            self.origins.push(bb);
-            for (symbol, variable) in i {
-                self.symbol_lookup.entry(symbol).or_insert_with(|| {
-                    let idx = self.symbols.len();
-                    self.symbols.push(symbol);
-                    idx
-                });
-                self.assigned.insert((symbol, bb), variable);
-            }
-        }
-    }
-
-    let mut state = State {
-        origins: Vec::new(),
-        symbols: Vec::new(),
-        symbol_lookup: HashMap::new(),
-        assigned: HashMap::new(),
-    };
+    let mut state = State::new();
 
     let (mut branch_ref, mut if_true_builder) = builder.branch(gl, condition);
     scope.push_scope();
@@ -129,64 +135,105 @@ pub fn lower<'a>(
         scope.assign(symbol, v);
     }
 
-    return builder;
+    builder
+}
 
-    // match else_branch {
-    //     None => {
-    //         builder = if_true_builder.jump(gl);
-    //         branch_ref.update(gl, builder.key());
-    //
-    //         for (s, v) in assigned {
-    //             let before = scope.scope_variables[s].last().unwrap().1;
-    //             let (v, _) = builder.phi(gl, [(if_true_bb, v), (start_bb, before)].into());
-    //             scope.assign(s, v);
-    //         }
-    //     }
-    //     Some(statement) => {
-    //         let else_builder = if_true_builder.next_builder(gl);
-    //         branch_ref.update(gl, else_builder.key());
-    //
-    //         scope.push_scope();
-    //         let else_builder = lower_statement_or_null(else_builder, gl, scope, *statement, arenas);
-    //         let else_assigned = scope.scope_assigned_symbols().collect::<Vec<_>>();
-    //         scope.pop_scope();
-    //
-    //         let else_bb = else_builder.key();
-    //
-    //         builder = else_builder.jump(gl);
-    //         if_true_builder.jump_to(gl, builder.key());
-    //
-    //         let mut unassigned_symbols = HashSet::new();
-    //         let mut phis = HashMap::<SymbolKey, (VariableKey, VariableKey)>::new();
-    //         phis.extend(assigned.into_iter().map(|(s, v)| {
-    //             let else_v = match &scope.scope_variables[s].last() {
-    //                 None => {
-    //                     unassigned_symbols.insert(s);
-    //                     v
-    //                 }
-    //                 Some((_, v)) => *v,
-    //             };
-    //             (s, (v, else_v))
-    //         }));
-    //         for (s, v) in else_assigned {
-    //             unassigned_symbols.remove(&s);
-    //             // @TODO: This unwrap_or needs to be checked somehow.
-    //             let start_v = scope.scope_variables[s].last().copied().unwrap().1;
-    //             phis.entry(s)
-    //                 .and_modify(|(_, else_v)| *else_v = v)
-    //                 .or_insert((start_v, v));
-    //         }
-    //         // @TODO: better error handling.
-    //         assert!(unassigned_symbols.is_empty());
-    //
-    //         for (s, (if_true, if_false)) in phis {
-    //             let (v, _) = builder.phi(gl, [(if_true_bb, if_true), (else_bb, if_false)].into());
-    //             scope.assign(s, v);
-    //         }
-    //     }
-    // }
-    //
-    // builder
+pub fn lower_case_statement<'a>(
+    mut builder: BasicBlockBuilder,
+    gl: &mut GlobalContext,
+    scope: &mut Scope<'a>,
+    case_statement: AstId<CaseStatement>,
+    arenas: &'a AstArenas,
+) -> BasicBlockBuilder {
+    let CaseStatement {
+        variant,
+        expr,
+        items,
+    } = arenas.get(case_statement);
+
+    match variant {
+        CaseStatementVariant::Case => {},
+        CaseStatementVariant::CaseZ => todo!(),
+        CaseStatementVariant::CaseX => todo!(),
+    }
+
+    let expr_var = lower_expr(&mut builder, gl, scope, arenas.get(*expr), arenas);
+
+    let mut state = State::new();
+    let mut default = None;
+
+    for item in items.iter() {
+        let case_item = arenas.get(item);
+        let condition = match case_item.pattern.item {
+            CaseItemPattern::Default => {
+                default = Some(case_item.statement_or_null);
+                continue;
+            }
+            CaseItemPattern::Expressions(exprs) => {
+                let fst = exprs.first().expect("spec: 1+ pattern expr in case_item");
+                let v = lower_expr(&mut builder, gl, scope, arenas.get(fst), arenas);
+                let mut acc = builder.equals(gl, expr_var, v);
+                for e in exprs.iter().skip(1) {
+                    let v = lower_expr(&mut builder, gl, scope, arenas.get(e), arenas);
+                    let v = builder.equals(gl, expr_var, v);
+                    acc = builder.or(gl, acc, v);
+                }
+                acc
+            }
+        };
+
+        let (branch_ref, mut if_true_builder) = builder.branch(gl, condition);
+        scope.push_scope();
+        if_true_builder = lower_statement_or_null(
+            if_true_builder,
+            gl,
+            scope,
+            case_item.statement_or_null,
+            arenas,
+        );
+        state.insert(if_true_builder.key(), scope.scope_assigned_symbols());
+        scope.pop_scope();
+
+        builder = if_true_builder.next_terminate_later(gl);
+        branch_ref.update(gl, builder.key());
+    }
+
+    if let Some(statement) = default {
+        scope.push_scope();
+        builder = lower_statement_or_null(builder, gl, scope, statement, arenas);
+        state.insert(builder.key(), scope.scope_assigned_symbols());
+        scope.pop_scope();
+        builder = builder.jump(gl);
+    } else {
+        state.origins.push(builder.key());
+        builder = builder.jump(gl);
+    }
+
+    for bb in &state.origins {
+        gl.bbs[*bb].terminator = BasicBlockTerminator::Jump(builder.key());
+    }
+
+    for symbol in state.symbols {
+        let unassigned_var = scope.scope_variables[symbol]
+            .last()
+            .copied()
+            .map(|(_, v)| v);
+        let srcs = state
+            .origins
+            .iter()
+            .map(|bb| {
+                let var = match state.assigned.get(&(symbol, *bb)) {
+                    None => unassigned_var.unwrap(), // @TODO: better error message.
+                    Some(v) => *v,
+                };
+                (*bb, var)
+            })
+            .collect();
+        let (v, _) = builder.phi(gl, srcs);
+        scope.assign(symbol, v);
+    }
+
+    builder
 }
 
 pub fn lower_statement_or_null<'a>(
