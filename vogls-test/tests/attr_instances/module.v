@@ -1,0 +1,3 @@
+(* lalala *)
+module x();
+endmodule

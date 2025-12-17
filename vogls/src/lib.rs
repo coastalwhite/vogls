@@ -61,6 +61,7 @@ pub fn run(
             let mut referenced = HashSet::new();
             for module_id in ast.modules {
                 let Module {
+                    attribute_instances: _,
                     module_identifier: _,
                     module_items,
                     ports: _,
@@ -88,6 +89,7 @@ pub fn run(
             let mut top_level_modules = Vec::new();
             for module_id in ast.modules {
                 let Module {
+                    attribute_instances: _,
                     module_identifier,
                     module_items: _,
                     ports: _,
@@ -130,6 +132,7 @@ pub fn run(
         for j in start..end {
             let module_id = module_stack[j];
             let Module {
+                attribute_instances: _,
                 module_identifier: _,
                 module_items,
                 ports: _,

@@ -42,6 +42,7 @@ pub fn lower_module_to_ir(
     } = ast;
 
     let Module {
+        attribute_instances: _,
         module_identifier,
         ports,
         module_items,

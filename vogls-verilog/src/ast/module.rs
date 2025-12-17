@@ -1,7 +1,7 @@
 use super::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression};
 use super::expr::Expr;
 use super::statement::{NetLValue, Statement};
-use super::{AstId, AstIdRange, AstItem, Identifier};
+use super::{AstId, AstIdRange, AstItem, AttributeInstance, Identifier};
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 487
 // module_declaration ::=
@@ -13,6 +13,7 @@ use super::{AstId, AstIdRange, AstItem, Identifier};
 // endmodule
 #[derive(Clone, Copy)]
 pub struct Module {
+    pub attribute_instances: AstIdRange<AttributeInstance>,
     pub module_identifier: AstItem<Identifier>,
     pub ports: ModulePorts,
     pub module_items: AstIdRange<ModuleItem>,

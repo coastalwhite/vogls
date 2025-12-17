@@ -34,7 +34,13 @@ impl<'a> Consumable<'a> for Module {
         // [ list_of_port_declarations ] ; { non_port_module_item }
         // endmodule
 
-        // @Incomplete: { attribute_instance }
+        let attribute_instances = parse_zero_or_more_while_next(
+            tkw,
+            sc,
+            arenas,
+            diagnostics.as_deref_mut(),
+            T::LeftParenStar,
+        )?;
         tkw.next_expect(T::KeywordModule, diagnostics.as_deref_mut())?;
         let end_at = tkw.try_find_corresponding(
             T::KeywordEndModule,
@@ -91,6 +97,7 @@ impl<'a> Consumable<'a> for Module {
         )?;
 
         Ok(Module {
+            attribute_instances,
             module_identifier,
             ports,
             module_items,

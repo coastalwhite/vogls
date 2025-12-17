@@ -166,6 +166,38 @@ pub fn parse_zero_or_more_delimited<'a, T: Consumable<'a>>(
     Ok(arenas.add_range(items, spans))
 }
 
+pub fn parse_zero_or_more_while_next<'a, T: Consumable<'a>>(
+    tkw: &mut TokenWalker<'a>,
+    sc: &mut ParserScratches,
+    arenas: &mut AstArenas,
+    mut diagnostics: Option<&mut Diagnostics>,
+    next: Token,
+) -> Result<AstIdRange<T>, ()> {
+    // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
+    // here.
+    let mut items = Vec::new();
+    let mut spans = Vec::new();
+
+    while tkw.get(tkw.offset).is_some_and(|t| *t.kind == next) {
+        let start = tkw.offset;
+        match T::consume(tkw, sc, arenas, diagnostics.as_deref_mut()) {
+            Ok(item) => {
+                let token_range = TokenRange {
+                    start,
+                    end: tkw.offset,
+                };
+                items.push(item);
+                spans.push(token_range);
+            }
+            Err(err) => {
+                return Err(err);
+            }
+        }
+    }
+
+    Ok(arenas.add_range(items, spans))
+}
+
 pub fn parse_zero_or_more<'a, T: Consumable<'a>>(
     tkw: &mut TokenWalker<'a>,
     sc: &mut ParserScratches,
