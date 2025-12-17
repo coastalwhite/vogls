@@ -2,15 +2,17 @@ use crate::ast::Identifier;
 use crate::ast::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression};
 use crate::ast::expr::Expr;
 use crate::ast::module::{
-    AlwaysConstruct, ContinousAssign, GateInstantiation, InitialConstruct, InoutDeclaration,
-    InputDeclaration, IntegerDeclaration, ListOfPortConnections, Module, ModuleInstance,
-    ModuleInstantiation, ModuleItem, ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration,
-    ModulePorts, NInputGateInstance, NInputGateInstantiation, NInputGateType, NameOfGateInstance,
-    NamedPortConnection, NetAssignment, NetDeclAssignment, NetDeclaration, NetDeclarationNets,
-    NetType, NonPortModuleItem, OutputDeclaration, ParamAssignment, ParameterDeclaration, Port,
-    PortDeclaration, PortExpression, PortReference, Range, RegDeclaration,
+    AlwaysConstruct, ContinousAssign, Dimension, GateInstantiation, InitialConstruct,
+    InoutDeclaration, InputDeclaration, IntegerDeclaration, ListOfPortConnections, Module,
+    ModuleInstance, ModuleInstantiation, ModuleItem, ModuleOrGenerateItem,
+    ModuleOrGenerateItemDeclaration, ModulePorts, NInputGateInstance, NInputGateInstantiation,
+    NInputGateType, NameOfGateInstance, NamedPortConnection, NetAssignment, NetDeclAssignment,
+    NetDeclaration, NetDeclarationNets, NetIdent, NetType, NonPortModuleItem, OutputDeclaration,
+    ParamAssignment, ParameterDeclaration, Port, PortDeclaration, PortExpression, PortReference,
+    Range, RegDeclaration,
 };
 use crate::ast::statement::{NetLValue, Statement};
+use crate::parser::TokenRange;
 use crate::tokenizer::Token;
 
 use super::{AstArenas, Consumable, ParserScratches, TokenWalker};
@@ -995,7 +997,7 @@ impl<'a> Consumable<'a> for NetDeclaration {
         } else {
             //   net_type [ signed ] [ delay3 ] list_of_net_identifiers ;
             // | net_type [ vectored | scalared ] [ signed ] range [ delay3 ] list_of_net_identifiers ;
-            NetDeclarationNets::Idents(parse_one_or_more_delimited::<Identifier>(
+            NetDeclarationNets::Idents(parse_one_or_more_delimited::<NetIdent>(
                 tkw,
                 sc,
                 arenas,
@@ -1032,6 +1034,85 @@ impl<'a> Consumable<'a> for NetDeclAssignment {
         let expr = parse::<Expr>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
 
         Ok(Self { ident, expr })
+    }
+}
+
+impl<'a> Consumable<'a> for NetIdent {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 491
+        // net_identifier { dimension }
+
+        let ident = item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        let dimension = parse_zero_or_more_while_next::<Dimension>(
+            tkw,
+            sc,
+            arenas,
+            diagnostics.as_deref_mut(),
+            T::LeftBrace,
+        )?;
+
+        Ok(Self { ident, dimension })
+    }
+}
+
+impl<'a> Consumable<'a> for Dimension {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 492
+        // dimension ::= [ dimension_constant_expression : dimension_constant_expression ]
+
+        tkw.next_expect(T::LeftBrace, diagnostics.as_deref_mut())?;
+        let Some(end_brace) = tkw.find_next_same_depth(T::RightBrace) else {
+            if let Some(diagnostics) = diagnostics.as_deref_mut() {
+                diagnostics.no_corresponding(tkw.offset - 1, T::RightBrace);
+            }
+            return Err(());
+        };
+        let Some(colon) = tkw.end_at(end_brace).find_next_same_depth(T::Colon) else {
+            if let Some(diagnostics) = diagnostics.as_deref_mut() {
+                diagnostics.not_found(
+                    TokenRange {
+                        start: tkw.offset,
+                        end: end_brace,
+                    },
+                    T::Colon,
+                );
+            }
+            return Err(());
+        };
+
+        let lhs = parse::<ConstantExpr>(tkw, sc, arenas, diagnostics.as_deref_mut());
+        if lhs.is_err() {
+            tkw.offset = colon;
+        }
+
+        tkw.next_expect(T::Colon, diagnostics.as_deref_mut())?;
+
+        let rhs = parse::<ConstantExpr>(tkw, sc, arenas, diagnostics.as_deref_mut());
+        if rhs.is_err() {
+            tkw.offset = end_brace;
+        }
+
+        tkw.next_expect(T::RightBrace, diagnostics.as_deref_mut())?;
+
+        // Reporting errors from both left- and right-hand side.
+        let (Ok(lhs), Ok(rhs)) = (lhs, rhs) else {
+            return Err(());
+        };
+        Ok(Dimension { lhs, rhs })
     }
 }
 

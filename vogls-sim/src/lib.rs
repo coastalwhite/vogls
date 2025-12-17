@@ -117,14 +117,15 @@ impl Event {
                             let result = result & (bit_stack[num_bytes - 1] & mask == mask);
                             bit_stack[dst.offset] = u8::from(result);
                         }
+                        O::BitReduceXor(size) => {
+                            let result = bit_stack[src.offset..][..size.div_ceil(8) as usize]
+                                .iter()
+                                .map(|b| VectorSize::from(*b))
+                                .sum::<VectorSize>();
+                            bit_stack[dst.offset] = u8::from(result % 2 == 1);
+                        }
                         O::BitSlice(n, width) => {
-                            bits::slice(
-                                bit_stack,
-                                dst.offset,
-                                src.offset,
-                                *width,
-                                *n,
-                            );
+                            bits::slice(bit_stack, dst.offset, src.offset, *width, *n);
                         }
 
                         O::DecimalNeg => decimal_stack[dst.offset] = !decimal_stack[src.offset],
@@ -133,6 +134,10 @@ impl Event {
                         }
                         O::DecimalReduceOr => {
                             bit_stack[dst.offset] = u8::from(decimal_stack[src.offset] != 0)
+                        }
+                        O::DecimalReduceXor => {
+                            bit_stack[dst.offset] =
+                                u8::from(decimal_stack[src.offset].count_ones() % 2 != 0)
                         }
                     };
                 }

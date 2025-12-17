@@ -274,12 +274,38 @@ impl<'a> TokenWalker<'a> {
     pub fn find_next_same_depth(&self, token: Token) -> Option<usize> {
         use Token as T;
 
-        let mut lparens = 0;
-        let mut lbraces = 0;
-        let mut lbrackets = 0;
+        let mut lparens = 0i32;
+        let mut lbraces = 0i32;
+        let mut lbrackets = 0i32;
 
         for (i, &t) in self.tokens.iter().enumerate().skip(self.offset) {
             if t == token && lparens == 0 && lbraces == 0 && lbrackets == 0 {
+                return Some(i);
+            }
+
+            #[rustfmt::skip]
+            {
+                if t == T::LeftParen    { lparens   += 1; }
+                if t == T::RightParen   { lparens   -= 1; }
+                if t == T::LeftBrace    { lbraces   += 1; }
+                if t == T::RightBrace   { lbraces   -= 1; }
+                if t == T::LeftBracket  { lbrackets += 1; }
+                if t == T::RightBracket { lbrackets -= 1; }
+            };
+        }
+
+        None
+    }
+
+    pub fn find_next_one_of_same_depth(&self, tokens: &[Token]) -> Option<usize> {
+        use Token as T;
+
+        let mut lparens = 0i32;
+        let mut lbraces = 0i32;
+        let mut lbrackets = 0i32;
+
+        for (i, &t) in self.tokens.iter().enumerate().skip(self.offset) {
+            if tokens.contains(&t) && lparens == 0 && lbraces == 0 && lbrackets == 0 {
                 return Some(i);
             }
 

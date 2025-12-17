@@ -1,6 +1,6 @@
 use super::constant_expr::{ConstantExpr, ConstantRangeExpression};
 use super::expr::Expr;
-use super::{AstId, AstIdRange, AstItem, AttributeInstance, DecimalRef, Identifier, TextRef};
+use super::{AstId, AstIdRange, AstItem, AttributeInstance, DecimalRef, Identifier, RangeExpression, TextRef};
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
 // statement ::=
@@ -56,6 +56,8 @@ pub struct NetLValue {
 pub struct VariableLValue {
     // @Incomplete
     pub ident: AstItem<Identifier>,
+    pub exprs: AstIdRange<Expr>,
+    pub range_expression: Option<AstId<RangeExpression>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498

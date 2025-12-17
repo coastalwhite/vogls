@@ -128,11 +128,13 @@ pub enum UnaryOp {
     BitNeg(VectorSize),
     BitReduceOr(VectorSize),
     BitReduceAnd(VectorSize),
+    BitReduceXor(VectorSize),
     BitSlice(VectorSize, VectorSize),
 
     DecimalNeg,
     DecimalReduceOr,
     DecimalReduceAnd,
+    DecimalReduceXor,
 }
 
 #[derive(Debug, Clone, Copy)]

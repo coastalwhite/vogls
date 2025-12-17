@@ -6,9 +6,10 @@ use crate::ast::statement::{LoopStatement, LoopStatementVariant};
 use crate::ast::{AstId, AstIdRange};
 use crate::lower::scope::{Scope, SymbolKey, SymbolVariant};
 use crate::lower::{
-    assign_variable_lvalue, get_intersect_symbols_generated, lower_expr, statements_to_process,
+    LowerErrorReason, assign_variable_lvalue, get_intersect_symbols_generated, lower_expr,
+    statements_to_process,
 };
-use crate::parser::AstArenas;
+use crate::parser::{AstArenas, TokenRange};
 
 pub fn lower_loop_statement<'a>(
     mut builder: BasicBlockBuilder,
@@ -16,7 +17,8 @@ pub fn lower_loop_statement<'a>(
     scope: &mut Scope<'a>,
     ls: AstId<LoopStatement>,
     arenas: &'a AstArenas,
-) -> BasicBlockBuilder {
+    diagnostics: &mut Vec<(TokenRange, LowerErrorReason)>,
+) -> Result<BasicBlockBuilder, ()> {
     use LoopStatementVariant as V;
 
     let ls = arenas.get(ls);
@@ -26,7 +28,14 @@ pub fn lower_loop_statement<'a>(
     let mut repeat_vars = None;
     match ls.variant {
         V::Repeat(size) => {
-            let size = lower_expr(&mut builder, gl, scope, arenas.get(size), arenas);
+            let size = lower_expr(
+                &mut builder,
+                gl,
+                scope,
+                arenas.get(size),
+                arenas,
+                diagnostics,
+            )?;
             let i = builder.constant(gl, Value::Decimal(0));
             repeat_vars = Some((i, size));
         }
@@ -38,7 +47,8 @@ pub fn lower_loop_statement<'a>(
                 scope,
                 arenas.get(initialization.expr),
                 arenas,
-            );
+                diagnostics,
+            )?;
             assign_variable_lvalue(
                 gl,
                 &mut builder,
@@ -99,14 +109,16 @@ pub fn lower_loop_statement<'a>(
             scope,
             arenas.get(condition),
             arenas,
-        )),
+            diagnostics,
+        )?),
         V::For(_, condition, _) => Some(lower_expr(
             &mut builder,
             gl,
             scope,
             arenas.get(condition),
             arenas,
-        )),
+            diagnostics,
+        )?),
     };
 
     let branch_ref = match condition {
@@ -120,15 +132,28 @@ pub fn lower_loop_statement<'a>(
 
     {
         scope.push_scope();
-        builder =
-            statements_to_process(builder, gl, scope, std::slice::from_ref(statement), arenas);
+        builder = statements_to_process(
+            builder,
+            gl,
+            scope,
+            std::slice::from_ref(statement),
+            arenas,
+            diagnostics,
+        )?;
         scope.pop_scope();
     }
 
     match ls.variant {
         V::For(_, _, step) => {
             let step = arenas.get(step);
-            let step_var = lower_expr(&mut builder, gl, scope, arenas.get(step.expr), arenas);
+            let step_var = lower_expr(
+                &mut builder,
+                gl,
+                scope,
+                arenas.get(step.expr),
+                arenas,
+                diagnostics,
+            )?;
             assign_variable_lvalue(
                 gl,
                 &mut builder,
@@ -163,5 +188,5 @@ pub fn lower_loop_statement<'a>(
     }
     builder.jump_to(gl, loop_start);
     builder = next_builder;
-    builder
+    Ok(builder)
 }

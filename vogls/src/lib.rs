@@ -168,15 +168,33 @@ pub fn run(
 
     // Walk the modules in depth-first order and lower to IR.
     let mut instantiated_modules = HashMap::with_capacity(module_stack.len());
+    let mut error = false;
+    let mut diagnostics = Vec::new();
     for module_id in module_stack.iter().rev() {
         let module_identifier = ast.arenas.get(*module_id).module_identifier;
         let module_identifier = ast.arenas.get_ident(module_identifier.item.0);
 
-        let module_key = lower_module_to_ir(&ast, *module_id, &mut gl, &instantiated_modules);
+        let module_key = lower_module_to_ir(
+            &ast,
+            *module_id,
+            &mut gl,
+            &instantiated_modules,
+            &mut diagnostics,
+        );
+        error |= module_key.is_err();
         instantiated_modules.insert(module_identifier, module_key);
     }
 
-    let tl_module_key = *instantiated_modules.get(tl_module_name).unwrap();
+    if error {
+        for (location, err) in &diagnostics {
+            let mut out = String::new();
+            report_error(&token_buffer, err.clone(), *location, &mut out)?;
+            writeln!(ectx.stderr, "{out}")?;
+        }
+        return Err("failed to lower".into());
+    }
+
+    let tl_module_key = instantiated_modules.get(tl_module_name).unwrap().unwrap();
 
     if ectx.output_ir {
         for module in gl.modules.values() {

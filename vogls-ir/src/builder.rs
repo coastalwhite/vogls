@@ -531,6 +531,25 @@ impl BasicBlockBuilder {
         );
     }
 
+    pub fn reduce_xor(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
+        match &gl.vars[src].ty {
+            Type::Decimal => {
+                let dst = self.next_tmp_var(gl, Type::Bits(1));
+                self.instrs
+                    .push(Instruction::Unary(dst, UnaryOp::DecimalReduceXor, src));
+                dst
+            }
+            Type::Bits(1) => src,
+            Type::Bits(n) => {
+                let n = *n;
+                let dst = self.next_tmp_var(gl, Type::Bits(1));
+                self.instrs
+                    .push(Instruction::Unary(dst, UnaryOp::BitReduceXor(n), src));
+                dst
+            }
+        }
+    }
+
     pub fn reduce_or(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
         match &gl.vars[src].ty {
             Type::Decimal => {

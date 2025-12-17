@@ -1,6 +1,7 @@
 use crate::arena::{ArenaId, ArenaIdRange, ArenaIdRangeIter};
 
 use self::constant_expr::ConstantExpr;
+use self::expr::Expr;
 
 pub mod constant_expr;
 pub mod expr;
@@ -178,4 +179,22 @@ pub struct AttributeInstance(pub AstIdRange<AttrSpec>);
 pub struct AttrSpec {
     pub attr_name: AstItem<Identifier>,
     pub constant_expression: Option<AstId<ConstantExpr>>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 505
+// range_expression ::=
+//   expression
+// | msb_constant_expression : lsb_constant_expression
+// | base_expression +: width_constant_expression
+// | base_expression -: width_constant_expression
+// base_expression ::= expression
+// width_constant_expression ::= constant_expression
+// msb_constant_expression ::= constant_expression
+// lsb_constant_expression ::= constant_expression
+#[derive(Clone, Copy)]
+pub enum RangeExpression {
+    Expr(Expr),
+    MsbLsb(AstId<ConstantExpr>, AstId<ConstantExpr>),
+    BasePlus(AstId<Expr>, AstId<ConstantExpr>),
+    BaseMinus(AstId<Expr>, AstId<ConstantExpr>),
 }

@@ -7,7 +7,7 @@ use crate::ast::statement::{
     NonBlockingAssignment, ProceduralTimingControl, SeqBlock, Statement, StatementOrNull,
     SystemTaskEnable, SystemTaskIdentifier, VariableAssignment, VariableLValue,
 };
-use crate::ast::{AstIdRange, AstItem, DecimalRef, Identifier, TextRef};
+use crate::ast::{AstIdRange, AstItem, DecimalRef, Identifier, RangeExpression, TextRef};
 use crate::parser::token_walker::TokenRange;
 use crate::tokenizer::Token;
 
@@ -182,6 +182,8 @@ impl<'a> Consumable<'a> for VariableLValue {
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ()> {
+        use Token as T;
+
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 506
         // variable_lvalue ::=
         //   hierarchical_variable_identifier [ { [ expression ] } [ range_expression ] ]
@@ -189,9 +191,116 @@ impl<'a> Consumable<'a> for VariableLValue {
 
         // @Incomplete
 
-        let ident = item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        let peeked = tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?;
+        match *peeked.kind {
+            T::Ident => {
+                let ident = item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                let mut exprs = AstIdRange::default();
+                let mut range_expression = None;
+                if tkw.get(tkw.offset).is_some_and(|t| *t.kind == T::LeftBrace) {
+                    let mut items = Vec::new();
+                    let mut spans = Vec::new();
 
-        Ok(Self { ident })
+                    let mut end = tkw.try_find_corresponding_balanced(tkw.offset);
+                    tkw.offset += 1;
+                    while tkw.get(end + 1).is_some_and(|t| *t.kind == T::LeftBrace) {
+                        let mut item_tkw = tkw.end_at(end);
+                        let start = item_tkw.offset;
+                        let item =
+                            Expr::consume(&mut item_tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                        let token_range = TokenRange { start, end };
+                        items.push(item);
+                        spans.push(token_range);
+
+                        tkw.offset = end + 2;
+                        end = tkw.try_find_corresponding_balanced(end + 1);
+                    }
+
+                    let mut item_tkw = tkw.end_at(end);
+                    tkw.offset = end + 1;
+                    exprs = arenas.add_range(items, spans);
+                    range_expression = Some(parse::<RangeExpression>(
+                        &mut item_tkw,
+                        sc,
+                        arenas,
+                        diagnostics.as_deref_mut(),
+                    )?);
+                }
+                Ok(Self {
+                    ident,
+                    exprs,
+                    range_expression,
+                })
+            }
+            T::LeftBracket => {
+                diagnostics.map(|d| d.incomplete(tkw.offset, "varlvalue::left_brace"));
+                Err(())
+            }
+            t => {
+                diagnostics.map(|d| d.unexpected_token(tkw.offset, t));
+                Err(())
+            }
+        }
+    }
+}
+
+impl<'a> Consumable<'a> for RangeExpression {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 505
+        // range_expression ::=
+        //   expression
+        // | msb_constant_expression : lsb_constant_expression
+        // | base_expression +: width_constant_expression
+        // | base_expression -: width_constant_expression
+        // base_expression ::= expression
+        // width_constant_expression ::= constant_expression
+        // msb_constant_expression ::= constant_expression
+        // lsb_constant_expression ::= constant_expression
+
+        let Some(separator) =
+            tkw.find_next_one_of_same_depth(&[T::Colon, T::PlusColon, T::MinusColon])
+        else {
+            return Ok(Self::Expr(Expr::consume(tkw, sc, arenas, diagnostics)?));
+        };
+        let separator_kind = *tkw.get(separator).unwrap().kind;
+
+        match separator_kind {
+            T::Colon => {
+                let lhs = parse::<ConstantExpr>(tkw, sc, arenas, diagnostics.as_deref_mut());
+                if lhs.is_err() {
+                    tkw.offset = separator;
+                }
+                tkw.next_expect(separator_kind, diagnostics.as_deref_mut())?;
+                let rhs = parse::<ConstantExpr>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                Ok(Self::MsbLsb(lhs?, rhs))
+            }
+            T::PlusColon => {
+                let lhs = parse::<Expr>(tkw, sc, arenas, diagnostics.as_deref_mut());
+                if lhs.is_err() {
+                    tkw.offset = separator;
+                }
+                tkw.next_expect(separator_kind, diagnostics.as_deref_mut())?;
+                let rhs = parse::<ConstantExpr>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                Ok(Self::BasePlus(lhs?, rhs))
+            }
+            T::MinusColon => {
+                let lhs = parse::<Expr>(tkw, sc, arenas, diagnostics.as_deref_mut());
+                if lhs.is_err() {
+                    tkw.offset = separator;
+                }
+                tkw.next_expect(separator_kind, diagnostics.as_deref_mut())?;
+                let rhs = parse::<ConstantExpr>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                Ok(Self::BaseMinus(lhs?, rhs))
+            }
+            _ => unreachable!(),
+        }
     }
 }
 
@@ -688,7 +797,7 @@ impl<'a> Consumable<'a> for CaseItem {
         // case_item ::=
         //   expression { , expression } : statement_or_null
         // | default [ : ] statement_or_null
-        
+
         let start = tkw.offset;
         let (token_range, pattern) = if tkw.next_if_equals(T::KeywordDefault) {
             let token_range = TokenRange {

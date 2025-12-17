@@ -350,7 +350,7 @@ pub struct NetDeclaration {
 
 #[derive(Clone, Copy)]
 pub enum NetDeclarationNets {
-    Idents(AstIdRange<Identifier>),
+    Idents(AstIdRange<NetIdent>),
     Assignments(AstIdRange<NetDeclAssignment>),
 }
 
@@ -360,6 +360,14 @@ pub enum NetDeclarationNets {
 pub struct NetDeclAssignment {
     pub ident: AstItem<Identifier>,
     pub expr: AstId<Expr>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 491
+// net_identifier { dimension }
+#[derive(Clone, Copy)]
+pub struct NetIdent {
+    pub ident: AstItem<Identifier>,
+    pub dimension: AstIdRange<Dimension>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 490
@@ -410,4 +418,12 @@ pub struct ParameterDeclaration {
 pub struct ParamAssignment {
     pub param: AstItem<Identifier>,
     pub constant: AstId<ConstantMinTypMaxExpression>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 492
+// dimension ::= [ dimension_constant_expression : dimension_constant_expression ]
+#[derive(Clone, Copy)]
+pub struct Dimension {
+    pub lhs: AstId<ConstantExpr>,
+    pub rhs: AstId<ConstantExpr>,
 }

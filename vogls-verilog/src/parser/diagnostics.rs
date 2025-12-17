@@ -26,6 +26,10 @@ impl Diagnostics {
         self.errors
             .push((TokenRange::at(tr), ParseErrorReason::NoCorresponding(kind)));
     }
+
+    pub fn not_found(&mut self, tr: TokenRange, kind: Token) {
+        self.errors.push((tr, ParseErrorReason::NotFound(kind)));
+    }
 }
 
 pub fn display_width(mut s: &str, tab_width: usize) -> usize {
@@ -53,7 +57,7 @@ pub fn display_with_tab_width(mut s: &str, f: &mut String, tab_width: usize) -> 
 
 pub fn report_error(
     tokenized: &Tokenized,
-    reason: ParseErrorReason,
+    reason: impl fmt::Debug,
     location: TokenRange,
     out: &mut String,
 ) -> std::fmt::Result {
@@ -103,15 +107,11 @@ pub fn report_error(
         let (offset, line) = lines[start_line];
         out.write_str("> ")?;
         display_with_tab_width(line, out, TAB_WIDTH)?;
+
+        let start_pad = display_width(&line[..location.start() - offset], TAB_WIDTH);
+        let len = display_width(&content[location.as_range()], TAB_WIDTH);
         writeln!(out)?;
-        writeln!(
-            out,
-            "  {:start_pad$}{:len$}",
-            "",
-            "^",
-            start_pad = display_width(&line[..location.start() - offset], TAB_WIDTH),
-            len = location.len()
-        )?;
+        writeln!(out, "  {:start_pad$}{:^>len$}", "", "",)?;
     } else {
         let (offset, line) = lines[start_line];
         out.write_str("> ")?;

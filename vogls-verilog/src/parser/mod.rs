@@ -102,6 +102,7 @@ pub enum ParseErrorReason {
     UnexpectedToken(Token),
     Incomplete(&'static str),
     NoCorresponding(Token),
+    NotFound(Token),
 }
 
 pub fn parse_file(

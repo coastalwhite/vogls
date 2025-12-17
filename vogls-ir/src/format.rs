@@ -159,11 +159,13 @@ impl UnaryOp {
             Self::BitNeg(_) => "bneg",
             Self::BitReduceAnd(_) => "bredand",
             Self::BitReduceOr(_) => "bredor",
+            Self::BitReduceXor(_) => "bredxor",
             Self::BitSlice(_, _) => "bslice",
 
             Self::DecimalNeg => "i64neg",
             Self::DecimalReduceAnd => "i64redand",
             Self::DecimalReduceOr => "i64redor",
+            Self::DecimalReduceXor => "i64redxor",
         }
     }
 }
