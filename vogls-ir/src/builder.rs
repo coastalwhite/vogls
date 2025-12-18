@@ -341,6 +341,28 @@ impl BasicBlockBuilder {
         xnor
     }
 
+    pub fn multiply(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+    ) -> VariableKey {
+        let dst = self.next_tmp_var(gl, Type::Decimal);
+
+        let lhs_ty = &gl.vars[lhs].ty;
+        let rhs_ty = &gl.vars[rhs].ty;
+
+        assert_eq!(lhs_ty, &Type::Decimal);
+        assert_eq!(rhs_ty, &Type::Decimal);
+
+        self.instrs.push(Instruction::Binary(
+            dst,
+            BinaryOp::DecimalMultiply,
+            lhs,
+            rhs,
+        ));
+        dst
+    }
     pub fn plus(
         &mut self,
         gl: &mut GlobalContext,
@@ -425,13 +447,16 @@ impl BasicBlockBuilder {
         subject: VariableKey,
         width: VectorSize,
     ) -> VariableKey {
-        let dst = self.next_tmp_var(gl, Type::Bits(width));
-
         let Type::Bits(n) = &gl.vars[subject].ty else {
             panic!();
         };
         let n = *n;
 
+        if n == width {
+            return subject;
+        }
+
+        let dst = self.next_tmp_var(gl, Type::Bits(width));
         self.instrs.push(Instruction::Unary(
             dst,
             UnaryOp::BitSlice(n, width),
@@ -591,7 +616,20 @@ impl BasicBlockBuilder {
         let ty = gl.signals[signal].ty.clone();
         let src = self.cast(gl, src, ty);
         gl.processes[self.process].outs.insert(signal);
-        self.instrs.push(Instruction::Drive(signal, src));
+        self.instrs.push(Instruction::Drive(signal, src, None));
+    }
+    pub fn drive_partial(
+        &mut self,
+        gl: &mut GlobalContext,
+        signal: SignalKey,
+        src: VariableKey,
+        offset: VariableKey,
+        length: VectorSize,
+    ) {
+        let src = self.cast(gl, src, Type::Bits(length));
+        gl.processes[self.process].outs.insert(signal);
+        self.instrs
+            .push(Instruction::Drive(signal, src, Some((offset, length))));
     }
     pub fn probe(&mut self, gl: &mut GlobalContext, signal: SignalKey) -> VariableKey {
         gl.processes[self.process].ins.insert(signal);

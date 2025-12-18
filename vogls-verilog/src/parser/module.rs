@@ -1130,6 +1130,11 @@ impl<'a> Consumable<'a> for RegDeclaration {
 
         // @Incomplete
         tkw.next_expect(T::KeywordReg, diagnostics.as_deref_mut())?;
+        let signed = tkw.next_if_equals(T::KeywordSigned);
+        let mut range = None;
+        if tkw.is_next_equal_to(T::LeftBrace) {
+            range = Some(parse::<Range>(tkw, sc, arenas, diagnostics.as_deref_mut())?);
+        }
         let identifiers = parse_one_or_more_delimited::<Identifier>(
             tkw,
             sc,
@@ -1139,7 +1144,7 @@ impl<'a> Consumable<'a> for RegDeclaration {
         )?;
         tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
 
-        Ok(Self { identifiers })
+        Ok(Self { signed, range, identifiers })
     }
 }
 

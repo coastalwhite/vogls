@@ -21,6 +21,7 @@ new_key_type! { pub struct VariableKey; }
 #[derive(Debug, Clone)]
 pub enum Bits {
     Small(u64, VectorSize),
+    Big(VectorSize, Box<[u8]>),
 }
 
 impl fmt::Display for Bits {
@@ -28,6 +29,7 @@ impl fmt::Display for Bits {
         match self {
             Bits::Small(value, size) if size % 4 == 0 => write!(f, "{size}'h{value:X}"),
             Bits::Small(value, size) => write!(f, "{size}'b{value:b}"),
+            Bits::Big(size, _) => write!(f, "{size}'b.."),
         }
     }
 }
@@ -42,6 +44,7 @@ impl Value {
     pub fn get_type(&self) -> Type {
         match self {
             Self::Bits(Bits::Small(_, size)) => Type::Bits(*size),
+            Self::Bits(Bits::Big(size, _)) => Type::Bits(*size),
             Self::Decimal(..) => Type::Decimal,
         }
     }
@@ -109,6 +112,18 @@ pub enum Type {
     Bits(VectorSize),
     Decimal,
 }
+impl Type {
+    pub fn to_net_width(&self) -> Option<VectorSize> {
+        match self {
+            Type::Bits(n) => Some(*n),
+            Type::Decimal => None,
+        }
+    }
+
+    pub fn try_net_width(&self) -> Result<VectorSize, ()> {
+        self.to_net_width().ok_or(())
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum IntrinsicArg {
@@ -121,6 +136,7 @@ pub enum IntrinsicOp {
     Display,
     Finish,
     Assert,
+    AssertEq(bool),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -149,6 +165,7 @@ pub enum BinaryOp {
 
     DecimalAdd,
     DecimalSub,
+    DecimalMultiply,
 
     UnsignedLessEqual(VectorSize),
     DecimalLessEqual,
@@ -170,7 +187,7 @@ pub enum Instruction {
 
     Intrinsic(IntrinsicOp, Vec<IntrinsicArg>),
     Probe(VariableKey, SignalKey),
-    Drive(SignalKey, VariableKey),
+    Drive(SignalKey, VariableKey, Option<(VariableKey, VectorSize)>),
 
     Instantiate(ModuleKey, Vec<SignalKey>),
     Spawn(ProcessKey, Vec<SignalKey>),
@@ -190,7 +207,7 @@ impl Instruction {
             | Self::Phi(dst, _)
             | Self::Probe(dst, _) => Some(*dst),
             Self::Intrinsic(_, _)
-            | Self::Drive(_, _)
+            | Self::Drive(_, _, _)
             | Self::Spawn(_, _)
             | Self::Instantiate(_, _)
             | Self::Signal(_) => None,

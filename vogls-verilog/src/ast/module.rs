@@ -374,7 +374,8 @@ pub struct NetIdent {
 // reg_declaration ::= reg [ signed ] [ range ] list_of_variable_identifiers ;
 #[derive(Clone, Copy)]
 pub struct RegDeclaration {
-    // @Incomplete
+    pub signed: bool,
+    pub range: Option<AstId<Range>>,
     pub identifiers: AstIdRange<Identifier>,
 }
 

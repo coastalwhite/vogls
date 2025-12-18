@@ -124,7 +124,11 @@ pub fn lower_process_to_vm(
                     VI::Intrinsic(*op, args)
                 }
                 I::Probe(dst, signal) => VI::Probe(var(*dst), signal!(*signal)),
-                I::Drive(signal, src) => VI::Drive(signal!(*signal), var(*src)),
+                I::Drive(signal, src, partial) => VI::Drive(
+                    signal!(*signal),
+                    var(*src),
+                    partial.map(|(o, l)| (var(o), l)),
+                ),
                 I::Phi(..) => continue,
                 I::Instantiate(_, _) | I::Spawn(_, _) | I::Signal(_) => unreachable!(),
             };

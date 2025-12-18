@@ -8,9 +8,10 @@ use crate::ast::AstId;
 use crate::ast::statement::{
     CaseItemPattern, CaseStatement, CaseStatementVariant, ConditionalStatement, StatementOrNull,
 };
+use crate::lower::diagnostics::Diagnostics;
 use crate::lower::scope::{Scope, SymbolKey};
-use crate::lower::{LowerErrorReason, lower_expr, statements_to_process};
-use crate::parser::{AstArenas, TokenRange};
+use crate::lower::{lower_expr, statements_to_process};
+use crate::parser::AstArenas;
 
 struct State {
     origins: Vec<BasicBlockKey>,
@@ -48,7 +49,7 @@ pub fn lower<'a>(
     scope: &mut Scope<'a>,
     conditional: AstId<ConditionalStatement>,
     arenas: &'a AstArenas,
-    diagnostics: &mut Vec<(TokenRange, LowerErrorReason)>,
+    diagnostics: &mut Diagnostics,
 ) -> Result<BasicBlockBuilder, ()> {
     let ConditionalStatement {
         if_branch,
@@ -159,7 +160,7 @@ pub fn lower_case_statement<'a>(
     scope: &mut Scope<'a>,
     case_statement: AstId<CaseStatement>,
     arenas: &'a AstArenas,
-    diagnostics: &mut Vec<(TokenRange, LowerErrorReason)>,
+    diagnostics: &mut Diagnostics,
 ) -> Result<BasicBlockBuilder, ()> {
     let CaseStatement {
         variant,
@@ -274,7 +275,7 @@ pub fn lower_statement_or_null<'a>(
     scope: &mut Scope<'a>,
     statement: AstId<StatementOrNull>,
     arenas: &'a AstArenas,
-    diagnostics: &mut Vec<(TokenRange, LowerErrorReason)>,
+    diagnostics: &mut Diagnostics,
 ) -> Result<BasicBlockBuilder, ()> {
     match arenas.get(statement) {
         StatementOrNull::Attribute(_) => Ok(builder),

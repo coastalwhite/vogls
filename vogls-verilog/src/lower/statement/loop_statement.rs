@@ -4,12 +4,12 @@ use vogls_ir::{BasicBlockBuilder, GlobalContext, PhiRef, Value};
 
 use crate::ast::statement::{LoopStatement, LoopStatementVariant};
 use crate::ast::{AstId, AstIdRange};
+use crate::lower::diagnostics::Diagnostics;
 use crate::lower::scope::{Scope, SymbolKey, SymbolVariant};
 use crate::lower::{
-    LowerErrorReason, assign_variable_lvalue, get_intersect_symbols_generated, lower_expr,
-    statements_to_process,
+    assign_variable_lvalue, get_intersect_symbols_generated, lower_expr, statements_to_process,
 };
-use crate::parser::{AstArenas, TokenRange};
+use crate::parser::AstArenas;
 
 pub fn lower_loop_statement<'a>(
     mut builder: BasicBlockBuilder,
@@ -17,7 +17,7 @@ pub fn lower_loop_statement<'a>(
     scope: &mut Scope<'a>,
     ls: AstId<LoopStatement>,
     arenas: &'a AstArenas,
-    diagnostics: &mut Vec<(TokenRange, LowerErrorReason)>,
+    diagnostics: &mut Diagnostics,
 ) -> Result<BasicBlockBuilder, ()> {
     use LoopStatementVariant as V;
 
@@ -53,10 +53,11 @@ pub fn lower_loop_statement<'a>(
                 gl,
                 &mut builder,
                 scope,
-                arenas.get(initialization.lvalue),
+                initialization.lvalue,
                 initialization_var,
                 arenas,
-            );
+                diagnostics,
+            )?;
         }
         V::Forever | V::While(_) => {}
     }
@@ -158,10 +159,11 @@ pub fn lower_loop_statement<'a>(
                 gl,
                 &mut builder,
                 scope,
-                arenas.get(step.lvalue),
+                step.lvalue,
                 step_var,
                 arenas,
-            );
+                diagnostics,
+            )?;
         }
         V::Repeat(_) => {
             let (i, _) = repeat_vars.unwrap();

@@ -61,8 +61,16 @@ pub fn report_error(
     location: TokenRange,
     out: &mut String,
 ) -> std::fmt::Result {
-    use std::fmt::Write;
     writeln!(out, "Failed to read file. Reason: {:?}", reason)?;
+    report(tokenized, location, out)
+}
+
+pub fn report(
+    tokenized: &Tokenized,
+    location: TokenRange,
+    out: &mut String,
+) -> std::fmt::Result {
+    use std::fmt::Write;
     if tokenized.file_idxs[location.start] != tokenized.file_idxs[location.end - 1] {
         // @TODO
         return Ok(());

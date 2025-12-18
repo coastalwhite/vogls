@@ -9,7 +9,7 @@ use crate::ast::{
 };
 use crate::number::{Decimal, SizedNumber};
 use crate::tokenizer::{Takeable, Token};
-pub use diagnostics::{Diagnostics, report_error};
+pub use diagnostics::{Diagnostics, report_error, report};
 pub use token_walker::{TokenRange, TokenWalker};
 
 use self::utils::{item_parse, parse, parse_one_or_more_delimited};
@@ -62,6 +62,13 @@ impl AstArenas {
         AstIdRange {
             node: self.nodes.extend(items),
             loc,
+        }
+    }
+
+    pub fn get_range_span<T: Copy>(&self, id: AstIdRange<T>) -> TokenRange {
+        TokenRange {
+            start: self.spans[id.loc].start,
+            end: self.spans[id.loc + id.len()].end,
         }
     }
 

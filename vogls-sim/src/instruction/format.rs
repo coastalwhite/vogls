@@ -45,7 +45,10 @@ impl fmt::Display for VmInstruction {
                 Ok(())
             }
             Self::Probe(dst, signal) => write!(f, "{dst} = probe {signal}"),
-            Self::Drive(signal, src) => write!(f, "drive {signal}, {src}"),
+            Self::Drive(signal, src, partial) => match partial {
+                None => write!(f, "drive {signal}, {src}"),
+                Some((offset, length)) => write!(f, "drive[{offset}, {length}] {signal}, {src}"),
+            },
             Self::Wait(time) => write!(f, "wait #{}", time.0),
             Self::Watch(signals) => {
                 f.write_str("watch [")?;
@@ -91,7 +94,7 @@ impl fmt::Display for VmProcess {
                 | I::Move(_, _, _)
                 | I::Intrinsic(_, _)
                 | I::Probe(_, _)
-                | I::Drive(_, _)
+                | I::Drive(_, _, _)
                 | I::Wait(_)
                 | I::Watch(_)
                 | I::Halt => {}

@@ -7,8 +7,11 @@ use vogls_ir::{Bits, ContextFormat, GlobalContext, Type, Value};
 use vogls_sim::{Context, Event, ScheduledEvent, VmProcess, VmProcessKey, lower_process_to_vm};
 use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{Module, ModuleItem, ModuleOrGenerateItem, NonPortModuleItem};
-use vogls_verilog::lower::lower_module_to_ir;
-use vogls_verilog::parser::{Diagnostics, ParserScratches, TokenWalker, parse_file, report_error};
+use vogls_verilog::lower::{Diagnostics as LowerDiagnostics, lower_module_to_ir};
+use vogls_verilog::parser::{
+    Diagnostics as ParserDiagnostics, ParserScratches, TokenWalker, parse_file, report,
+    report_error,
+};
 use vogls_verilog::tokenizer::Tokenized;
 
 mod elaborate;
@@ -30,7 +33,7 @@ pub fn run(
     let content: Rc<str> = std::fs::read_to_string(&path)?.into();
     let token_buffer = Tokenized::tokenize(content.clone(), Some(path.into()));
     let mut tkw = TokenWalker::new(&token_buffer);
-    let mut diagnostics = Diagnostics::default();
+    let mut diagnostics = ParserDiagnostics::default();
 
     let ast = match parse_file(
         &mut tkw,
@@ -169,7 +172,7 @@ pub fn run(
     // Walk the modules in depth-first order and lower to IR.
     let mut instantiated_modules = HashMap::with_capacity(module_stack.len());
     let mut error = false;
-    let mut diagnostics = Vec::new();
+    let mut diagnostics = LowerDiagnostics::default();
     for module_id in module_stack.iter().rev() {
         let module_identifier = ast.arenas.get(*module_id).module_identifier;
         let module_identifier = ast.arenas.get_ident(module_identifier.item.0);
@@ -185,11 +188,27 @@ pub fn run(
         instantiated_modules.insert(module_identifier, module_key);
     }
 
+    if !diagnostics.warnings.is_empty() {
+        for (location, warning) in &diagnostics.warnings {
+            writeln!(ectx.stderr, "[WARN]: {warning}")?;
+            let mut out = String::new();
+            report(&token_buffer, *location, &mut out)?;
+            writeln!(ectx.stderr, "{out}")?;
+        }
+    }
+
     if error {
-        for (location, err) in &diagnostics {
+        for (location, err, context) in &diagnostics.errors {
             let mut out = String::new();
             report_error(&token_buffer, err.clone(), *location, &mut out)?;
-            writeln!(ectx.stderr, "{out}")?;
+            write!(ectx.stderr, "{out}")?;
+            if !context.is_empty() {
+                writeln!(ectx.stderr, "context:")?;
+                for c in context {
+                    writeln!(ectx.stderr, "- {c}")?;
+                }
+            }
+            writeln!(ectx.stderr)?;
         }
         return Err("failed to lower".into());
     }
@@ -245,7 +264,11 @@ pub fn run(
 
     for (ir_signal, signal) in io_signals {
         let value = match &gl.signals[ir_signal].ty {
-            Type::Bits(n) => Value::Bits(Bits::Small(0, *n)),
+            Type::Bits(n) if *n < 64 => Value::Bits(Bits::Small(0, *n)),
+            Type::Bits(n) => Value::Bits(Bits::Big(
+                *n,
+                std::iter::repeat_n(0, n.div_ceil(8) as usize).collect(),
+            )),
             Type::Decimal => Value::Decimal(0),
         };
         signals.insert(signal, value);

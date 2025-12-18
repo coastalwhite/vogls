@@ -145,6 +145,7 @@ impl BinaryOp {
             Self::DecimalXor => "i64xor",
             Self::DecimalAdd => "i64+",
             Self::DecimalSub => "i64-",
+            Self::DecimalMultiply => "i64*",
             Self::DecimalLessEqual => "i64le",
             Self::SelectBit(_) => "bselect",
             Self::LogicalShiftRight(_) => "blsr",
@@ -176,6 +177,8 @@ impl IntrinsicOp {
             Self::Display => "display",
             Self::Finish => "finish",
             Self::Assert => "assert",
+            Self::AssertEq(true) => "assert_eq",
+            Self::AssertEq(false) => "assert_ne",
         }
     }
 }
@@ -232,8 +235,14 @@ impl ContextFormat for Instruction {
                 f.write_str(" = probe ")?;
                 ctx.gl.signals.get(*sig).unwrap().ctx_fmt(f, ctx)?;
             }
-            Self::Drive(sig, var) => {
-                f.write_str("drive ")?;
+            Self::Drive(sig, var, partial) => {
+                f.write_str("drive")?;
+                if let Some((offset, length)) = partial {
+                    f.write_str("[")?;
+                    ctx.gl.vars.get(*offset).unwrap().typed_ctx_fmt(f, ctx)?;
+                    write!(f, ", {length}]")?;
+                }
+                f.write_str(" ")?;
                 ctx.gl.signals.get(*sig).unwrap().ctx_fmt(f, ctx)?;
                 f.write_str(", ")?;
                 ctx.gl.vars.get(*var).unwrap().typed_ctx_fmt(f, ctx)?;

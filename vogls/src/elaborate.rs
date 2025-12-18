@@ -113,9 +113,9 @@ pub fn elaborate_process(
                     let src = signals_map.get(&(entity_id, *signal)).unwrap();
                     I::Probe(*dst, *src)
                 }
-                I::Drive(signal, src) => {
+                I::Drive(signal, src, partial) => {
                     let dst = signals_map.get(&(entity_id, *signal)).unwrap();
-                    I::Drive(*dst, *src)
+                    I::Drive(*dst, *src, *partial)
                 }
                 I::Instantiate(_, _) | I::Signal(_) => unreachable!(),
                 instr => instr.clone(),

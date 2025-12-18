@@ -1,3 +1,4 @@
+mod diagnostics;
 mod scope;
 mod statement;
 
@@ -6,11 +7,14 @@ use std::collections::{HashMap, HashSet};
 use scope::Scope;
 
 use vogls_ir::{
-    BasicBlockBuilder, Bits, GlobalContext, IntrinsicArg, IntrinsicOp, ModuleBuilder, ModuleKey,
-    Signal, SignalKey, Time, Type, Value, VariableKey, VectorSize,
+    BasicBlockBuilder, Bits, ConnectionDirection, GlobalContext, IntrinsicArg, IntrinsicOp,
+    ModuleBuilder, ModuleKey, ProcessKey, Signal, SignalKey, Time, Type, Value, VariableKey,
+    VectorSize,
 };
 
-use crate::ast::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression, ConstantPrimary};
+use crate::ast::constant_expr::{
+    ConstantExpr, ConstantMinTypMaxExpression, ConstantPrimary, ConstantRangeExpression,
+};
 use crate::ast::expr::{BinaryOperator, BitPartSelect, BitSlice, Expr, UnaryOperator};
 use crate::ast::module::{
     GateInstantiation, ListOfPortConnections, Module, ModuleInstance, ModuleInstantiation,
@@ -20,28 +24,22 @@ use crate::ast::module::{
 };
 use crate::ast::statement::{
     BlockingAssignment, DelayControl, DelayValue, EventControl, EventExpression,
-    LoopStatementVariant, NonBlockingAssignment, ProceduralTimingControl, Statement,
+    LoopStatementVariant, NetLValue, NonBlockingAssignment, ProceduralTimingControl, Statement,
     StatementOrNull, VariableAssignment, VariableLValue,
 };
-use crate::ast::{AstId, AstIdRange, TextRef};
+use crate::ast::{AstId, AstIdRange, RangeExpression};
 use crate::number::Decimal;
-use crate::parser::{Ast, AstArenas, TokenRange};
+use crate::parser::{Ast, AstArenas};
 
 use self::scope::{Symbol, SymbolKey, SymbolVariant};
-
-#[derive(Clone, Debug)]
-pub enum LowerErrorReason {
-    VariableNotFound(TextRef),
-    PortNotFound(TextRef),
-    NotYetImplemented(&'static str),
-}
+pub use diagnostics::Diagnostics;
 
 pub fn lower_module_to_ir(
     ast: &Ast,
     root: AstId<Module>,
     gl: &mut GlobalContext,
     instantiated_modules: &HashMap<&str, Result<ModuleKey, ()>>,
-    diagnostics: &mut Vec<(TokenRange, LowerErrorReason)>,
+    diagnostics: &mut Diagnostics,
 ) -> Result<ModuleKey, ()> {
     let Ast {
         modules: _,
@@ -60,6 +58,8 @@ pub fn lower_module_to_ir(
     let mut module_builder = ModuleBuilder::new(module_identifier.to_string(), gl);
     let mut scope = Scope::new();
     let mut processes = Vec::new();
+
+    let mut defined_ports = HashMap::new();
 
     match ports {
         ModulePorts::PortDeclarations(m) => {
@@ -83,7 +83,7 @@ pub fn lower_module_to_ir(
 
                 let width = match range {
                     None => 1,
-                    Some(range) => range_to_width(gl, &mut scope, range, arenas),
+                    Some(range) => range_to_width(gl, &mut scope, range, arenas, diagnostics)?,
                 };
 
                 for ast_ident in idents.iter() {
@@ -125,19 +125,7 @@ pub fn lower_module_to_ir(
                 let port = port_identifier.item.0;
                 let ident = arenas.get_ident(port);
 
-                let key = gl.signals.insert(Signal {
-                    name: ident.into(),
-                    ty: Type::Bits(1),
-                });
-                let symbol_key = scope.symbols.insert(Symbol {
-                    name: ident.to_string(),
-                    definition_site: arenas.get_item_span(port_identifier),
-                    ty: Type::Bits(1),
-                    variant: SymbolVariant::Signal(key),
-                });
-                scope.push(ident, symbol_key);
-
-                module_builder.entity.signal(gl, key);
+                defined_ports.insert(ident, defined_ports.len());
             }
         }
     }
@@ -164,7 +152,7 @@ pub fn lower_module_to_ir(
 
                 let width = match range {
                     None => 1,
-                    Some(range) => range_to_width(gl, &mut scope, range, arenas),
+                    Some(range) => range_to_width(gl, &mut scope, range, arenas, diagnostics)?,
                 };
 
                 for ast_ident in idents.iter() {
@@ -183,6 +171,15 @@ pub fn lower_module_to_ir(
                     scope.push(ident, symbol_key);
 
                     module_builder.entity.signal(gl, key);
+                    match port_declaration {
+                        PortDeclaration::Inout(_) => todo!(),
+                        PortDeclaration::Input(_) => {
+                            module_builder.entity.push_in_port(gl, ident.into(), key)
+                        }
+                        PortDeclaration::Output(_) => {
+                            module_builder.entity.push_out_port(gl, ident.into(), key)
+                        }
+                    };
                 }
             }
             ModuleItem::NonPortModuleItem(p) => match arenas.get(*p) {
@@ -194,19 +191,19 @@ pub fn lower_module_to_ir(
                                 let net_declaration = arenas.get(*id);
                                 let width = match net_declaration.range {
                                     None => 1,
-                                    Some(range) => range_to_width(gl, &mut scope, range, arenas),
+                                    Some(range) => {
+                                        range_to_width(gl, &mut scope, range, arenas, diagnostics)?
+                                    }
                                 };
                                 match net_declaration.nets {
                                     NetDeclarationNets::Idents(net_idents) => {
                                         for ast_net_ident in net_idents.iter() {
                                             let net_ident = arenas.get(ast_net_ident);
                                             if !net_ident.dimension.is_empty() {
-                                                diagnostics.push((
+                                                diagnostics.not_yet_implemented(
                                                     arenas.get_span(ast_net_ident),
-                                                    LowerErrorReason::NotYetImplemented(
-                                                        "net_identifier::dimension",
-                                                    ),
-                                                ));
+                                                    "net_identifier::dimension",
+                                                );
                                                 return Err(());
                                             }
                                             let ast_ident = net_ident.ident;
@@ -269,17 +266,23 @@ pub fn lower_module_to_ir(
                             }
                             ModuleOrGenerateItemDeclaration::Reg(id) => {
                                 let reg_declaration = arenas.get(*id);
+                                let width = match reg_declaration.range {
+                                    None => 1,
+                                    Some(range) => {
+                                        range_to_width(gl, &mut scope, range, arenas, diagnostics)?
+                                    }
+                                };
                                 for ast_ident in reg_declaration.identifiers.iter() {
                                     let ident = arenas.get(ast_ident);
                                     let ident = arenas.get_ident(ident.0);
                                     let key = gl.signals.insert(Signal {
                                         name: ident.into(),
-                                        ty: Type::Bits(1),
+                                        ty: Type::Bits(width),
                                     });
                                     let symbol_key = scope.symbols.insert(Symbol {
                                         name: ident.to_string(),
                                         definition_site: arenas.get_span(ast_ident),
-                                        ty: Type::Bits(1),
+                                        ty: Type::Bits(width),
                                         variant: SymbolVariant::Signal(key),
                                     });
                                     scope.push(ident, symbol_key);
@@ -321,43 +324,15 @@ pub fn lower_module_to_ir(
                                 diagnostics,
                             )?;
 
-                            let lvalue = arenas.get(net_assignment.net_lvalue);
-                            let lvalue_ident = lvalue.ident.item;
-
-                            if !lvalue.constant_exprs.is_empty() {
-                                diagnostics.push((
-                                    arenas.get_span(ast_net_assignment),
-                                    LowerErrorReason::NotYetImplemented(
-                                        "net_lvalue::constant_exprs",
-                                    ),
-                                ));
-                                return Err(());
-                            }
-                            if lvalue.constant_range_expression.is_some() {
-                                diagnostics.push((
-                                    arenas.get_span(ast_net_assignment),
-                                    LowerErrorReason::NotYetImplemented(
-                                        "net_lvalue::constant_range_expression",
-                                    ),
-                                ));
-                                return Err(());
-                            }
-
-                            let ident = arenas.get_ident(lvalue_ident.0);
-                            let Some(symbol_key) = scope.get(ident) else {
-                                diagnostics.push((
-                                    arenas.get_item_span(lvalue.ident),
-                                    LowerErrorReason::VariableNotFound(lvalue_ident.0),
-                                ));
-                                return Err(());
-                            };
-
-                            let SymbolVariant::Signal(signal_key) =
-                                &scope.symbols[symbol_key].variant
-                            else {
-                                panic!("not a signal");
-                            };
-                            bb_builder.drive(gl, *signal_key, variable);
+                            assign_net_lvalue(
+                                &mut bb_builder,
+                                gl,
+                                &mut scope,
+                                net_assignment.net_lvalue,
+                                variable,
+                                arenas,
+                                diagnostics,
+                            )?;
 
                             bb_builder.watch_for_ins_to(gl, bb_key);
                             processes.push(section_key);
@@ -469,8 +444,13 @@ pub fn lower_module_to_ir(
                         let Ok(instance_module_key) =
                             instantiated_modules.get(instantiation_ident).unwrap()
                         else {
+                            diagnostics.not_yet_implemented(
+                                arenas.get_item_span(*module_identifier),
+                                "module error",
+                            );
                             return Err(());
                         };
+                        let instance_module_key = *instance_module_key;
 
                         // let entity = gl.modules.get(*entity).unwrap();
 
@@ -492,42 +472,142 @@ pub fn lower_module_to_ir(
                             {
                                 ListOfPortConnections::Ordered(ports) => ports
                                     .iter()
-                                    .map(|p| lower_to_signal(gl, arenas.get(p), &mut scope, arenas))
-                                    .collect(),
+                                    .enumerate()
+                                    .map(|(i, p)| {
+                                        let connection = gl.modules[instance_module_key]
+                                            .io
+                                            .get_index(i)
+                                            .unwrap()
+                                            .1;
+                                        let signal = connection.signal;
+                                        let is_input = matches!(
+                                            connection.direction,
+                                            ConnectionDirection::In | ConnectionDirection::Both
+                                        );
+                                        let ty = gl.signals[signal].ty.clone();
+                                        if is_input {
+                                            lower_to_signal(
+                                                &mut module_builder,
+                                                &mut processes,
+                                                gl,
+                                                p,
+                                                &mut scope,
+                                                ty,
+                                                arenas,
+                                                diagnostics,
+                                            )
+                                        } else {
+                                            let Type::Bits(width) = ty else { todo!() };
+                                            assign_port_output(
+                                                &mut module_builder,
+                                                &mut processes,
+                                                gl,
+                                                p,
+                                                &mut scope,
+                                                width,
+                                                arenas,
+                                                diagnostics,
+                                            )
+                                        }
+                                    })
+                                    .collect::<Result<Vec<SignalKey>, ()>>()?,
                                 ListOfPortConnections::Named(ports) => {
-                                    let target_module = &gl.modules[*instance_module_key];
+                                    let target_module = &gl.modules[instance_module_key];
+                                    if ports.iter().enumerate().all(|(i, p)| {
+                                        let named_port_connection = arenas.get(p);
+                                        let NamedPortConnection {
+                                            port_identifier,
+                                            expression: _,
+                                        } = *named_port_connection;
+
+                                        let port_ident = arenas.get_ident(port_identifier.item.0);
+                                        let Some((j, _, _)) = target_module.io.get_full(port_ident)
+                                        else {
+                                            diagnostics.port_not_found(
+                                                gl,
+                                                arenas,
+                                                instance_module_key,
+                                                port_identifier,
+                                            );
+                                            return true;
+                                        };
+
+                                        if i != j {
+                                            diagnostics.not_yet_implemented(
+                                                arenas.get_span(p),
+                                                "out-of-order named ports",
+                                            );
+                                            return true;
+                                        }
+
+                                        false
+                                    }) {
+                                        return Err(());
+                                    }
                                     ports
                                         .iter()
-                                        .map(|p| {
+                                        .enumerate()
+                                        .map(|(i, p)| {
+                                            let connection = gl.modules[instance_module_key]
+                                                .io
+                                                .get_index(i)
+                                                .unwrap()
+                                                .1;
+                                            let signal = connection.signal;
+                                            let is_input = matches!(
+                                                connection.direction,
+                                                ConnectionDirection::In | ConnectionDirection::Both
+                                            );
+                                            let ty = gl.signals[signal].ty.clone();
                                             let named_port_connection = arenas.get(p);
                                             let NamedPortConnection {
-                                                port_identifier,
-                                                expression: _,
+                                                port_identifier: _,
+                                                expression,
                                             } = *named_port_connection;
 
-                                            let port_ident =
-                                                arenas.get_ident(port_identifier.item.0);
-                                            let Some((_, _, _)) =
-                                                target_module.io.get_full(port_ident)
-                                            else {
-                                                diagnostics.push((
-                                                    arenas.get_item_span(port_identifier),
-                                                    LowerErrorReason::PortNotFound(
-                                                        port_identifier.item.0,
-                                                    ),
-                                                ));
-                                                return Err(());
-                                            };
+                                            match expression {
+                                                None => {
+                                                    diagnostics.not_yet_implemented(
+                                                        arenas.get_span(p),
+                                                        "anonymous ports",
+                                                    );
+                                                    return Err(());
+                                                }
 
-                                            todo!()
-                                            // lower_to_signal(gl, arenas.get(p), &mut scope, arenas)
+                                                Some(e) => {
+                                                    if is_input {
+                                                        lower_to_signal(
+                                                            &mut module_builder,
+                                                            &mut processes,
+                                                            gl,
+                                                            e,
+                                                            &mut scope,
+                                                            ty,
+                                                            arenas,
+                                                            diagnostics,
+                                                        )
+                                                    } else {
+                                                        let Type::Bits(width) = ty else { todo!() };
+                                                        assign_port_output(
+                                                            &mut module_builder,
+                                                            &mut processes,
+                                                            gl,
+                                                            e,
+                                                            &mut scope,
+                                                            width,
+                                                            arenas,
+                                                            diagnostics,
+                                                        )
+                                                    }
+                                                }
+                                            }
                                         })
                                         .collect::<Result<Vec<SignalKey>, ()>>()?
                                 }
                             };
                             module_builder
                                 .entity
-                                .instantiate(gl, *instance_module_key, ports);
+                                .instantiate(gl, instance_module_key, ports);
                         }
                     }
                     ModuleOrGenerateItem::InitialConstruct(id) => {
@@ -612,7 +692,7 @@ fn statements_to_process<'a>(
     scope: &mut Scope<'a>,
     stmts: &[Statement],
     arenas: &'a AstArenas,
-    diagnostics: &mut Vec<(TokenRange, LowerErrorReason)>,
+    diagnostics: &mut Diagnostics,
 ) -> Result<BasicBlockBuilder, ()> {
     for statement in stmts.iter() {
         match statement {
@@ -638,10 +718,11 @@ fn statements_to_process<'a>(
                     gl,
                     &mut builder,
                     scope,
-                    arenas.get(*variable_lvalue),
+                    *variable_lvalue,
                     value,
                     arenas,
-                );
+                    diagnostics,
+                )?;
             }
             Statement::CaseStatement(case_statement) => {
                 builder = statement::conditional::lower_case_statement(
@@ -695,10 +776,11 @@ fn statements_to_process<'a>(
                     gl,
                     &mut builder,
                     scope,
-                    arenas.get(*variable_lvalue),
+                    *variable_lvalue,
                     value,
                     arenas,
-                );
+                    diagnostics,
+                )?;
             }
             Statement::ParBlock => todo!(),
             Statement::ProceduralContinuousAssignments => todo!(),
@@ -849,16 +931,8 @@ fn statements_to_process<'a>(
                             let str_literal = &arenas.text[str_literal.0.start..str_literal.0.end];
                             IntrinsicArg::StringLiteral(str_literal.to_string())
                         } else {
-                            let Expr::Ident(ident) = expr else {
-                                panic!("Invalid display argument");
-                            };
-                            let ident = arenas.get_ident(ident.item.0);
-                            let symbol_key = scope.get(ident).unwrap();
-                            let var = match &scope.symbols[symbol_key].variant {
-                                SymbolVariant::Signal(key) => builder.probe(gl, *key),
-                                SymbolVariant::Variable(None) => todo!(),
-                                SymbolVariant::Variable(Some(v)) => *v,
-                            };
+                            let var =
+                                lower_expr(&mut builder, gl, scope, expr, arenas, diagnostics)?;
                             IntrinsicArg::Variable(var)
                         };
 
@@ -877,15 +951,10 @@ fn statements_to_process<'a>(
                         let lhs = lower_expr(&mut builder, gl, scope, lhs, arenas, diagnostics)?;
                         let rhs = lower_expr(&mut builder, gl, scope, rhs, arenas, diagnostics)?;
 
-                        let mut predicate = builder.equals(gl, lhs, rhs);
-                        if ident == "vogls_assert_ne" {
-                            predicate = builder.logical_neg(gl, predicate);
-                        }
-
                         builder.intrinsic(
                             gl,
-                            IntrinsicOp::Assert,
-                            vec![IntrinsicArg::Variable(predicate)],
+                            IntrinsicOp::AssertEq(ident == "vogls_assert_eq"),
+                            vec![IntrinsicArg::Variable(lhs), IntrinsicArg::Variable(rhs)],
                         )
                     }
                     "finish" => builder.intrinsic(gl, IntrinsicOp::Finish, vec![]),
@@ -1033,20 +1102,337 @@ fn get_intersect_symbols_generated<'a>(
 }
 
 fn lower_to_signal<'a>(
-    _gl: &mut GlobalContext,
-    expr: &Expr,
+    module_builder: &mut ModuleBuilder,
+    processes: &mut Vec<ProcessKey>,
+    gl: &mut GlobalContext,
+    expr: AstId<Expr>,
     scope: &mut Scope<'a>,
+    ty: Type,
     arenas: &'a AstArenas,
-) -> SignalKey {
-    let Expr::Ident(ident) = expr else { todo!() };
-
-    let ident = arenas.get_ident(ident.item.0);
-    let symbol_key = scope.get(&ident).unwrap();
-    match &scope.symbols[symbol_key].variant {
-        SymbolVariant::Signal(key) => *key,
-        SymbolVariant::Variable(_) => todo!(),
-        // SymbolVariant::Constant(_) => todo!(),
+    diagnostics: &mut Diagnostics,
+) -> Result<SignalKey, ()> {
+    if let Expr::Ident(ast_ident) = arenas.get(expr) {
+        let ident = arenas.get_ident(ast_ident.item.0);
+        let Some(symbol_key) = scope.get(&ident) else {
+            diagnostics.var_not_found(arenas, *ast_ident);
+            return Err(());
+        };
+        if let SymbolVariant::Signal(key) = &scope.symbols[symbol_key].variant {
+            return Ok(*key);
+        }
     }
+
+    let signal = gl.signals.insert(Signal {
+        name: "anon_port_assignment".to_string(),
+        ty: ty.clone(),
+    });
+    module_builder.entity.signal(gl, signal);
+
+    let (section_key, mut bb_builder) = module_builder.process(gl, "port_assignment".into());
+    let bb_key = bb_builder.key();
+    let variable = lower_expr(
+        &mut bb_builder,
+        gl,
+        scope,
+        arenas.get(expr),
+        arenas,
+        diagnostics,
+    )?;
+
+    bb_builder.drive(gl, signal, variable);
+
+    bb_builder.watch_for_ins_to(gl, bb_key);
+    processes.push(section_key);
+    Ok(signal)
+}
+
+fn assign_port_output<'a>(
+    module_builder: &mut ModuleBuilder,
+    processes: &mut Vec<ProcessKey>,
+    gl: &mut GlobalContext,
+    expr: AstId<Expr>,
+    scope: &mut Scope<'a>,
+    width: VectorSize,
+    arenas: &'a AstArenas,
+    diagnostics: &mut Diagnostics,
+) -> Result<SignalKey, ()> {
+    if let Expr::Ident(ast_ident) = arenas.get(expr) {
+        let ident = arenas.get_ident(ast_ident.item.0);
+        let Some(symbol_key) = scope.get(&ident) else {
+            diagnostics.var_not_found(arenas, *ast_ident);
+            return Err(());
+        };
+        if let SymbolVariant::Signal(key) = &scope.symbols[symbol_key].variant {
+            return Ok(*key);
+        }
+    }
+
+    let mut driving: Vec<(
+        AstId<Expr>,
+        Option<VariableKey>,
+        VectorSize,
+        Option<VariableKey>,
+        VectorSize,
+    )> = Vec::new();
+    driving.push((expr, None, width, None, width));
+
+    let signal = gl.signals.insert(Signal {
+        name: "anon_port_assignment".to_string(),
+        ty: Type::Bits(width),
+    });
+    module_builder.entity.signal(gl, signal);
+
+    let (section_key, mut bb_builder) = module_builder.process(gl, "port_assignment".into());
+    let bb_key = bb_builder.key();
+
+    let probed = bb_builder.probe(gl, signal);
+
+    let mut error = false;
+    while let Some((expr, offset_src, length_src, offset_dst, length_dst)) = driving.pop() {
+        match arenas.get(expr) {
+            Expr::BitPartSelect(bit_part_select) => {
+                let BitPartSelect { subject, braced } = bit_part_select;
+                let offset = lower_expr(
+                    &mut bb_builder,
+                    gl,
+                    scope,
+                    arenas.get(*braced),
+                    arenas,
+                    diagnostics,
+                )?;
+
+                let offset_dst = match offset_dst {
+                    None => offset,
+                    Some(offset_dst) => bb_builder.plus(gl, offset_dst, offset),
+                };
+                let length_dst = 1;
+
+                driving.push((
+                    *subject,
+                    offset_src,
+                    length_src,
+                    Some(offset_dst),
+                    length_dst,
+                ));
+            }
+            Expr::BitSlice(subject, slice) => {
+                let (offset, length) = match slice {
+                    BitSlice::MsbLsb(msb, lsb) => {
+                        let (_, lsb, width) =
+                            msb_lsb_to_width(gl, scope, *msb, *lsb, arenas, diagnostics)?;
+                        let offset = bb_builder.constant(gl, Value::Decimal(lsb as i64));
+                        (offset, width as VectorSize)
+                    }
+                    BitSlice::PlusWidth(base, width) => {
+                        let offset = lower_expr(
+                            &mut bb_builder,
+                            gl,
+                            scope,
+                            arenas.get(*base),
+                            arenas,
+                            diagnostics,
+                        );
+                        let width = eval_constant_expr(gl, scope, *width, arenas, diagnostics);
+                        (offset?, width? as VectorSize)
+                    }
+                    BitSlice::MinusWidth(base, width) => {
+                        let offset = lower_expr(
+                            &mut bb_builder,
+                            gl,
+                            scope,
+                            arenas.get(*base),
+                            arenas,
+                            diagnostics,
+                        );
+                        let width = eval_constant_expr(gl, scope, *width, arenas, diagnostics)?
+                            as VectorSize;
+                        let width_v = bb_builder.constant(gl, Value::Decimal((width + 1) as i64));
+                        let offset = bb_builder.minus(gl, offset?, width_v);
+                        (offset, width)
+                    }
+                };
+
+                let offset_dst = match offset_dst {
+                    None => offset,
+                    Some(offset_dst) => bb_builder.plus(gl, offset_dst, offset),
+                };
+                let length_dst = length;
+
+                driving.push((
+                    *subject,
+                    offset_src,
+                    length_src,
+                    Some(offset_dst),
+                    length_dst,
+                ));
+            }
+            Expr::Concatenation(_) => {
+                todo!()
+            }
+            Expr::Ident(ast_ident) => {
+                let ident = arenas.get_ident(ast_ident.item.0);
+                let Some(symbol_key) = scope.get(&ident) else {
+                    diagnostics.var_not_found(arenas, *ast_ident);
+                    error = true;
+                    continue;
+                };
+                let SymbolVariant::Signal(key) = &scope.symbols[symbol_key].variant else {
+                    diagnostics.output_expr_not_allowed(arenas.get_span(expr));
+                    error = true;
+                    continue;
+                };
+
+                let offset_dst = match offset_dst {
+                    None => bb_builder.constant(gl, Value::Decimal(0)),
+                    Some(v) => v,
+                };
+
+                let mut src = probed;
+                if let Some(offset_src) = offset_src {
+                    src = bb_builder.lsr(gl, src, offset_src);
+                }
+                let src = bb_builder.slice(gl, src, length_src);
+                bb_builder.drive_partial(gl, *key, src, offset_dst, length_dst);
+            }
+
+            Expr::Replication(_) => {
+                diagnostics.not_yet_implemented(arenas.get_span(expr), "repetition in net assign");
+                error = true;
+            }
+
+            Expr::Decimal(..)
+            | Expr::Sized(..)
+            | Expr::Ternary(..)
+            | Expr::String(..)
+            | Expr::Unary(..)
+            | Expr::Binary(..) => {
+                diagnostics.output_expr_not_allowed(arenas.get_span(expr));
+                error = true;
+            }
+        }
+    }
+
+    bb_builder.watch_for_ins_to(gl, bb_key);
+    processes.push(section_key);
+
+    if error {
+        return Err(());
+    }
+
+    Ok(signal)
+}
+
+fn expr_to_type<'a>(
+    gl: &mut GlobalContext,
+    scope: &Scope<'a>,
+    expr: AstId<Expr>,
+    arenas: &'a AstArenas,
+    diagnostics: &mut Diagnostics,
+) -> Result<Type, ()> {
+    Ok(match arenas.get(expr) {
+        Expr::BitPartSelect(select) => {
+            let BitPartSelect { subject, braced } = select;
+            let subject_v = expr_to_type(gl, scope, *subject, arenas, diagnostics)?;
+            let braced_v = expr_to_type(gl, scope, *braced, arenas, diagnostics)?;
+            Type::Bits(1)
+        }
+        Expr::BitSlice(subject, slice) => {
+            let subject_v = expr_to_type(gl, scope, *subject, arenas, diagnostics)?;
+
+            match slice {
+                BitSlice::MsbLsb(msb, lsb) => {
+                    let (_, _, width) =
+                        msb_lsb_to_width(gl, scope, *msb, *lsb, arenas, diagnostics)?;
+                    Type::Bits(width)
+                }
+                BitSlice::PlusWidth(_base, width) => {
+                    let width = eval_constant_expr(gl, scope, *width, arenas, diagnostics)?;
+                    Type::Bits(width as VectorSize)
+                }
+                BitSlice::MinusWidth(_base, width) => {
+                    let width = eval_constant_expr(gl, scope, *width, arenas, diagnostics)?;
+                    Type::Bits(width as VectorSize)
+                }
+            }
+        }
+        Expr::Unary(op, child) => {
+            let child = expr_to_type(gl, scope, *child, arenas, diagnostics)?;
+            use UnaryOperator as O;
+            match op {
+                O::LogicalNegation | O::BitwiseNegation => child,
+                O::ReductionAnd
+                | O::ReductionOr
+                | O::ReductionNand
+                | O::ReductionNor
+                | O::ReductionXor
+                | O::ReductionXnor => Type::Bits(1),
+                O::SignPlus => todo!(),
+                O::SignMinus => todo!(),
+            }
+        }
+        Expr::Binary(op, l, r) => {
+            let l = expr_to_type(gl, scope, *l, arenas, diagnostics)?;
+            let r = expr_to_type(gl, scope, *r, arenas, diagnostics)?;
+            _ = (l, r);
+            use BinaryOperator as O;
+            match op {
+                O::Multiply => todo!(),
+                O::Divide => todo!(),
+                O::Modulus => todo!(),
+                O::BinaryPlus => todo!(),
+                O::BinaryMinus => todo!(),
+                O::ShiftLeft => todo!(),
+                O::ShiftRight => todo!(),
+                O::GreaterThan => todo!(),
+                O::GreaterThanEqual => todo!(),
+                O::LessThan => todo!(),
+                O::LessThanEqual => todo!(),
+                O::LogicalEquality => todo!(),
+                O::LogicalInequality => todo!(),
+                O::CaseEquality => todo!(),
+                O::CaseInequality => todo!(),
+                O::BitwiseAnd => todo!(),
+                O::BitwiseXor => todo!(),
+                O::BitwiseXnor => todo!(),
+                O::BitwiseOr => todo!(),
+                O::LogicalAnd => todo!(),
+                O::LogicalOr => todo!(),
+            }
+        }
+        Expr::Concatenation(exprs) => {
+            let mut width = 0;
+            let mut error = false;
+            for expr in exprs.iter() {
+                match expr_to_type(gl, scope, expr, arenas, diagnostics)
+                    .and_then(|t| t.try_net_width())
+                {
+                    Ok(ew) => width += ew,
+                    Err(_) => error = true,
+                }
+            }
+            if error {
+                return Err(());
+            }
+            Type::Bits(width)
+        }
+        Expr::Replication(_) => todo!(),
+        Expr::Ternary(_, _, _) => todo!(),
+        Expr::Ident(ast_ident) => {
+            let ident = arenas.get_ident(ast_ident.item.0);
+            let Some(symbol_key) = scope.get(&ident) else {
+                diagnostics.var_not_found(arenas, *ast_ident);
+                return Err(());
+            };
+            scope.symbols[symbol_key].ty.clone()
+        }
+        Expr::Decimal(_) => Type::Decimal,
+        Expr::Sized(sized) => {
+            let sized = &arenas.sized_numbers[sized.item.at];
+            let Some(size) = sized.size else { todo!() };
+            Type::Bits(size.as_u32())
+        }
+        Expr::String(_) => todo!(),
+    })
 }
 
 fn lower_expr<'a>(
@@ -1055,7 +1441,7 @@ fn lower_expr<'a>(
     scope: &mut Scope<'a>,
     expr: &Expr,
     arenas: &'a AstArenas,
-    diagnostics: &mut Vec<(TokenRange, LowerErrorReason)>,
+    diagnostics: &mut Diagnostics,
 ) -> Result<VariableKey, ()> {
     Ok(match expr {
         Expr::BitPartSelect(select) => {
@@ -1074,25 +1460,25 @@ fn lower_expr<'a>(
 
             let (lsb, width) = match slice {
                 BitSlice::MsbLsb(msb, lsb) => {
-                    let msb = eval_constant_expr(gl, scope, arenas.get(*msb), arenas);
-                    let lsb = eval_constant_expr(gl, scope, arenas.get(*lsb), arenas);
+                    let (_msb, lsb, width) =
+                        msb_lsb_to_width(gl, scope, *msb, *lsb, arenas, diagnostics)?;
                     let lsb_v = builder.constant(gl, Value::Decimal(lsb as i64));
-                    let width = msb - lsb + 1;
                     (lsb_v, width)
                 }
                 BitSlice::PlusWidth(base, width) => {
                     let lsb =
                         lower_expr(builder, gl, scope, arenas.get(*base), arenas, diagnostics)?;
-                    let width = eval_constant_expr(gl, scope, arenas.get(*width), arenas);
+                    let width =
+                        eval_constant_expr(gl, scope, *width, arenas, diagnostics)? as VectorSize;
                     (lsb, width)
                 }
                 BitSlice::MinusWidth(base, width) => {
-                    let width = eval_constant_expr(gl, scope, arenas.get(*width), arenas);
-                    let width_v = builder.constant(gl, Value::Decimal(width as i64));
+                    let width = eval_constant_expr(gl, scope, *width, arenas, diagnostics)?;
+                    let width_v = builder.constant(gl, Value::Decimal(width as i64 - 1));
                     let lsb =
                         lower_expr(builder, gl, scope, arenas.get(*base), arenas, diagnostics)?;
                     let lsb = builder.minus(gl, lsb, width_v);
-                    (lsb, width)
+                    (lsb, width as VectorSize)
                 }
             };
 
@@ -1120,11 +1506,11 @@ fn lower_expr<'a>(
             let r = lower_expr(builder, gl, scope, arenas.get(*r), arenas, diagnostics)?;
             use BinaryOperator as O;
             match op {
-                O::Multiply => todo!(),
+                O::Multiply => builder.multiply(gl, l, r),
                 O::Divide => todo!(),
                 O::Modulus => todo!(),
                 O::BinaryPlus => builder.plus(gl, l, r),
-                O::BinaryMinus => todo!(),
+                O::BinaryMinus => builder.minus(gl, l, r),
                 O::ShiftLeft => todo!(),
                 O::ShiftRight => todo!(),
                 O::GreaterThan => builder.unsigned_gt(gl, l, r),
@@ -1160,10 +1546,7 @@ fn lower_expr<'a>(
         Expr::Ident(ast_ident) => {
             let ident = arenas.get_ident(ast_ident.item.0);
             let Some(symbol_key) = scope.get(&ident) else {
-                diagnostics.push((
-                    arenas.get_item_span(*ast_ident),
-                    LowerErrorReason::VariableNotFound(ast_ident.item.0),
-                ));
+                diagnostics.var_not_found(arenas, *ast_ident);
                 return Err(());
             };
             match &scope.symbols[symbol_key].variant {
@@ -1197,27 +1580,142 @@ fn assign_variable_lvalue<'a>(
     gl: &mut GlobalContext,
     builder: &mut BasicBlockBuilder,
     scope: &mut Scope<'a>,
-    lvalue: &VariableLValue,
+    lvalue: AstId<VariableLValue>,
     variable: VariableKey,
     arenas: &'a AstArenas,
-) {
-    let ident = arenas.get_ident(lvalue.ident.item.0);
-    let symbol_key = scope.get(&ident).unwrap();
+    diagnostics: &mut Diagnostics,
+) -> Result<(), ()> {
+    let VariableLValue {
+        ident,
+        exprs,
+        range_expression,
+    } = arenas.get(lvalue);
+
+    let lvalue_ident = arenas.get_ident(ident.item.0);
+    let Some(symbol_key) = scope.get(&lvalue_ident) else {
+        diagnostics.var_not_found(arenas, *ident);
+        return Err(());
+    };
+
+    if !exprs.is_empty() {
+        diagnostics.not_yet_implemented(arenas.get_range_span(*exprs), "variable_lvalue::exprs");
+        return Err(());
+    }
+
     match &mut scope.symbols[symbol_key].variant {
-        SymbolVariant::Signal(key) => builder.drive(gl, *key, variable),
+        SymbolVariant::Signal(key) => {
+            let key = *key;
+            match range_expression {
+                None => {
+                    if &gl.signals[key].ty != &gl.vars[variable].ty {
+                        diagnostics.warn_assign_type_mismatch(
+                            arenas.get_span(lvalue),
+                            gl.signals[key].ty.clone(),
+                            gl.vars[variable].ty.clone(),
+                        );
+                    }
+                    builder.drive(gl, key, variable)
+                }
+                Some(range_expression) => {
+                    let (offset, length) = match arenas.get(*range_expression) {
+                        RangeExpression::Expr(expr) => (
+                            lower_expr(builder, gl, scope, expr, arenas, diagnostics)?,
+                            1,
+                        ),
+                        RangeExpression::MsbLsb(_, _) => todo!("MsbLsb"),
+                        RangeExpression::BasePlus(_, _) => todo!("BasePlus"),
+                        RangeExpression::BaseMinus(_, _) => todo!("BaseMinus"),
+                    };
+
+                    if Type::Bits(length) != gl.vars[variable].ty {
+                        diagnostics.warn_assign_type_mismatch(
+                            arenas.get_span(lvalue),
+                            Type::Bits(length),
+                            gl.vars[variable].ty.clone(),
+                        );
+                    }
+
+                    builder.drive_partial(gl, key, variable, offset, length);
+                }
+            }
+        }
         SymbolVariant::Variable(v) => {
+            if let Some(range_expression) = range_expression {
+                diagnostics.not_yet_implemented(
+                    arenas.get_span(*range_expression),
+                    "variable_lvalue::range_expression[variable]",
+                );
+                return Err(());
+            }
+
             *v = Some(variable);
             scope.assign(symbol_key, variable);
         }
     }
+    Ok(())
+}
+
+fn assign_net_lvalue<'a>(
+    builder: &mut BasicBlockBuilder,
+    gl: &mut GlobalContext,
+    scope: &mut Scope<'a>,
+    lvalue: AstId<NetLValue>,
+    variable: VariableKey,
+    arenas: &'a AstArenas,
+    diagnostics: &mut Diagnostics,
+) -> Result<(), ()> {
+    let lvalue = arenas.get(lvalue);
+    let lvalue_ident = lvalue.ident.item;
+
+    let ident = arenas.get_ident(lvalue_ident.0);
+    let Some(symbol_key) = scope.get(ident) else {
+        diagnostics.var_not_found(arenas, lvalue.ident);
+        return Err(());
+    };
+
+    let SymbolVariant::Signal(signal_key) = &scope.symbols[symbol_key].variant else {
+        panic!("not a signal");
+    };
+    let signal_key = *signal_key;
+
+    if !lvalue.constant_exprs.is_empty() {
+        diagnostics.not_yet_implemented(
+            arenas.get_range_span(lvalue.constant_exprs),
+            "net_lvalue::constant_exprs",
+        );
+        return Err(());
+    }
+    match lvalue.constant_range_expression {
+        None => builder.drive(gl, signal_key, variable),
+        Some(range_expression) => {
+            let (offset, length) = match arenas.get(range_expression) {
+                ConstantRangeExpression::Single(expr) => (
+                    eval_constant_expr(gl, scope, *expr, arenas, diagnostics)?,
+                    1,
+                ),
+                ConstantRangeExpression::MsbLsb { msb, lsb } => {
+                    let (_, offset, length) =
+                        msb_lsb_to_width(gl, scope, *msb, *lsb, arenas, diagnostics)?;
+                    (offset, length)
+                }
+            };
+
+            let offset = builder.constant(gl, Value::Decimal(offset as i64));
+            builder.drive_partial(gl, signal_key, variable, offset, length);
+        }
+    }
+
+    Ok(())
 }
 
 fn eval_constant_expr<'a>(
     _gl: &mut GlobalContext,
-    _scope: &mut Scope<'a>,
-    expr: &ConstantExpr,
+    _scope: &Scope<'a>,
+    expr: AstId<ConstantExpr>,
     arenas: &'a AstArenas,
-) -> u64 {
+    _diagnostics: &mut Diagnostics,
+) -> Result<u64, ()> {
+    let expr = arenas.get(expr);
     let ConstantExpr::Primary(primary) = expr;
     let ConstantPrimary::Number(number) = primary else {
         todo!();
@@ -1225,7 +1723,24 @@ fn eval_constant_expr<'a>(
     let Decimal::Small(v) = arenas.decimals[number.at] else {
         todo!()
     };
-    v
+    Ok(v)
+}
+
+fn msb_lsb_to_width<'a>(
+    gl: &mut GlobalContext,
+    scope: &Scope<'a>,
+    msb: AstId<ConstantExpr>,
+    lsb: AstId<ConstantExpr>,
+    arenas: &'a AstArenas,
+    diagnostics: &mut Diagnostics,
+) -> Result<(u64, u64, VectorSize), ()> {
+    let msb = eval_constant_expr(gl, scope, msb, arenas, diagnostics);
+    let lsb = eval_constant_expr(gl, scope, lsb, arenas, diagnostics);
+
+    let (Ok(msb), Ok(lsb)) = (msb, lsb) else {
+        return Err(());
+    };
+    Ok((msb, lsb, (msb - lsb + 1) as VectorSize))
 }
 
 fn range_to_width<'a>(
@@ -1233,9 +1748,8 @@ fn range_to_width<'a>(
     scope: &mut Scope<'a>,
     range: AstId<Range>,
     arenas: &'a AstArenas,
-) -> u32 {
+    diagnostics: &mut Diagnostics,
+) -> Result<u32, ()> {
     let range = arenas.get(range);
-    let msb = eval_constant_expr(gl, scope, arenas.get(range.msb), arenas);
-    let lsb = eval_constant_expr(gl, scope, arenas.get(range.lsb), arenas);
-    (msb - lsb + 1) as u32
+    msb_lsb_to_width(gl, scope, range.msb, range.lsb, arenas, diagnostics).map(|(_, _, w)| w)
 }
