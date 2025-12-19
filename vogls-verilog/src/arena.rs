@@ -1,10 +1,18 @@
 use std::fmt;
 use std::marker::PhantomData;
 
+#[repr(transparent)]
 pub struct ArenaId<T> {
     ptr: usize,
     _pd: std::marker::PhantomData<T>,
 }
+
+impl<T> ArenaId<T> {
+    pub unsafe fn transmute<U>(self) -> ArenaId<U> {
+        ArenaId { ptr: self.ptr, _pd: std::marker::PhantomData }
+    }
+}
+
 pub struct ArenaIdRange<T> {
     start: usize,
     length: usize,

@@ -19,7 +19,7 @@ pub struct BasicBlockBuilder {
     process: ProcessKey,
     initializer: bool,
 
-    instrs: Vec<Instruction>,
+    pub instrs: Vec<Instruction>,
     tmp_offset: usize,
     bbname_offset: usize,
 }

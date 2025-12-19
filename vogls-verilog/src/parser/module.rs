@@ -978,7 +978,10 @@ impl<'a> Consumable<'a> for NetDeclaration {
         // @Incomplete
         let net_type = item_parse::<NetType>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
         let signed = tkw.next_if_equals(T::KeywordSigned);
-        let range = try_parse::<Range>(tkw, sc, arenas);
+        let mut range = None;
+        if tkw.is_next_equal_to(T::LeftBrace) {
+            range = Some(parse::<Range>(tkw, sc, arenas, diagnostics.as_deref_mut())?);
+        }
 
         tkw.next_expect(T::Ident, diagnostics.as_deref_mut())?;
         let is_assignments = tkw.is_next_equal_to(T::Equals);
@@ -1144,7 +1147,11 @@ impl<'a> Consumable<'a> for RegDeclaration {
         )?;
         tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
 
-        Ok(Self { signed, range, identifiers })
+        Ok(Self {
+            signed,
+            range,
+            identifiers,
+        })
     }
 }
 

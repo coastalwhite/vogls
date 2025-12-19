@@ -177,7 +177,8 @@ impl<'a> TokenWalker<'a> {
 
     pub fn peek_content(&self) -> &str {
         let t = self.get(self.offset).unwrap();
-        &self.content(*t.file)[t.span.start()..]
+        &self.content(*t.file)
+            [t.span.start()..(t.span.start() + 10).min(self.content(*t.file).len())]
     }
 
     pub fn try_find_corresponding(

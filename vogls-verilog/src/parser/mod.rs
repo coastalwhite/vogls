@@ -9,7 +9,7 @@ use crate::ast::{
 };
 use crate::number::{Decimal, SizedNumber};
 use crate::tokenizer::{Takeable, Token};
-pub use diagnostics::{Diagnostics, report_error, report};
+pub use diagnostics::{Diagnostics, report, report_error};
 pub use token_walker::{TokenRange, TokenWalker};
 
 use self::utils::{item_parse, parse, parse_one_or_more_delimited};

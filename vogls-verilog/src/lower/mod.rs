@@ -13,7 +13,7 @@ use vogls_ir::{
 };
 
 use crate::ast::constant_expr::{
-    ConstantExpr, ConstantMinTypMaxExpression, ConstantPrimary, ConstantRangeExpression,
+    ConstantExpr, ConstantMinTypMaxExpression, ConstantRangeExpression,
 };
 use crate::ast::expr::{BinaryOperator, BitPartSelect, BitSlice, Expr, UnaryOperator};
 use crate::ast::module::{
@@ -653,13 +653,9 @@ pub fn lower_module_to_ir(
                         else {
                             todo!();
                         };
-                        let ConstantExpr::Primary(primary) = arenas.get(*constant);
-                        let ConstantPrimary::Number(number) = primary else {
-                            todo!();
-                        };
-                        let Decimal::Small(_) = arenas.decimals[number.at] else {
-                            todo!()
-                        };
+
+                        let _value =
+                            eval_constant_expr(gl, &scope, *constant, arenas, diagnostics)?;
                         todo!()
                         // scope.push(arenas.get_ident(param.item.0), ScopeItem::Constant(v));
                     }
@@ -1715,17 +1711,121 @@ fn eval_constant_expr<'a>(
     _scope: &Scope<'a>,
     expr: AstId<ConstantExpr>,
     arenas: &'a AstArenas,
-    _diagnostics: &mut Diagnostics,
+    diagnostics: &mut Diagnostics,
 ) -> Result<u64, ()> {
-    let expr = arenas.get(expr);
-    let ConstantExpr::Primary(primary) = expr;
-    let ConstantPrimary::Number(number) = primary else {
-        todo!();
+    let expr = expr.into_expr();
+    struct StackItem {
+        expr: AstId<Expr>,
+        dispatched: bool,
+    }
+
+    let mut error = false;
+    let mut dispatch_stack: Vec<StackItem> = Vec::new();
+    let mut result_stack: Vec<Option<u64>> = Vec::new();
+
+    dispatch_stack.push(StackItem {
+        expr,
+        dispatched: false,
+    });
+
+    while let Some(mut item) = dispatch_stack.pop() {
+        match arenas.get(item.expr) {
+            Expr::Decimal(decimal) => {
+                let decimal = &arenas.decimals[decimal.at];
+                let Decimal::Small(v) = decimal else {
+                    result_stack.push(None);
+                    diagnostics.not_yet_implemented(
+                        arenas.get_span(item.expr),
+                        "constant expression of this kind not yet implemented",
+                    );
+                    error = true;
+                    continue;
+                };
+
+                result_stack.push(Some(*v));
+            }
+            Expr::Binary(op, lhs, rhs) => {
+                if !item.dispatched {
+                    item.dispatched = true;
+                    dispatch_stack.push(item);
+                    dispatch_stack.extend([*rhs, *lhs].into_iter().map(|expr| StackItem {
+                        expr,
+                        dispatched: false,
+                    }));
+                    continue;
+                }
+
+                let rhs = result_stack.pop().unwrap();
+                let lhs = result_stack.pop().unwrap();
+
+                let (Some(lhs), Some(rhs)) = (lhs, rhs) else {
+                    result_stack.push(None);
+                    continue;
+                };
+
+                use BinaryOperator as O;
+                let result = match op {
+                    O::Multiply => lhs * rhs,
+                    O::Divide => lhs / rhs,
+                    O::Modulus => lhs % rhs,
+                    O::BinaryPlus => lhs + rhs,
+                    O::BinaryMinus => lhs - rhs,
+                    O::ShiftLeft => lhs << rhs,
+                    O::ShiftRight => lhs >> rhs,
+                    O::BitwiseAnd => lhs & rhs,
+                    O::BitwiseXor => lhs ^ rhs,
+                    O::BitwiseXnor => !(lhs ^ rhs),
+                    O::BitwiseOr => lhs | rhs,
+                    O::GreaterThan
+                    | O::GreaterThanEqual
+                    | O::LessThan
+                    | O::LessThanEqual
+                    | O::LogicalEquality
+                    | O::LogicalInequality
+                    | O::CaseEquality
+                    | O::CaseInequality
+                    | O::LogicalAnd
+                    | O::LogicalOr => {
+                        result_stack.push(None);
+                        diagnostics.not_yet_implemented(
+                            arenas.get_span(item.expr),
+                            "constant expression of this kind not yet implemented",
+                        );
+                        error = true;
+                        continue;
+                    }
+                };
+                result_stack.push(Some(result));
+            }
+            Expr::Ident(..)
+            | Expr::Sized(..)
+            | Expr::String(..)
+            | Expr::BitPartSelect(_)
+            | Expr::BitSlice(..)
+            | Expr::Unary(..)
+            | Expr::Concatenation(..)
+            | Expr::Replication(..)
+            | Expr::Ternary(..) => {
+                result_stack.push(None);
+                diagnostics.not_yet_implemented(
+                    arenas.get_span(item.expr),
+                    "constant expression of this kind not yet implemented",
+                );
+                error = true;
+            }
+        }
+    }
+
+    if error {
+        return Err(());
+    }
+
+    assert_eq!(result_stack.len(), 1);
+    let Some(value) = result_stack.pop().unwrap() else {
+        panic!();
     };
-    let Decimal::Small(v) = arenas.decimals[number.at] else {
-        todo!()
-    };
-    Ok(v)
+
+    Ok(value)
 }
 
 fn msb_lsb_to_width<'a>(

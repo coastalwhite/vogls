@@ -1,3 +1,7 @@
+use std::fmt;
+
+use crate::parser::AstArenas;
+
 use super::constant_expr::ConstantExpr;
 use super::{AstId, AstIdRange, AstItem, DecimalRef, Identifier, SizedNumberRef, StringRef};
 
@@ -92,7 +96,6 @@ impl Expr {
 }
 
 impl UnaryOperator {
-    #[expect(unused)]
     fn into_str(self) -> &'static str {
         use UnaryOperator as U;
         match self {
@@ -111,7 +114,6 @@ impl UnaryOperator {
 }
 
 impl BinaryOperator {
-    #[expect(unused)]
     fn into_str(self) -> &'static str {
         use BinaryOperator as B;
         match self {
@@ -137,5 +139,77 @@ impl BinaryOperator {
             B::LogicalAnd => "&&",
             B::LogicalOr => "||",
         }
+    }
+}
+
+impl AstId<Expr> {
+    pub fn into_constant(self) -> AstId<ConstantExpr> {
+        AstId {
+            node: unsafe { self.node.transmute() },
+            loc: self.loc,
+        }
+    }
+}
+impl AstId<ConstantExpr> {
+    pub fn into_expr(self) -> AstId<Expr> {
+        AstId {
+            node: unsafe { self.node.transmute() },
+            loc: self.loc,
+        }
+    }
+}
+
+impl Expr {
+    pub fn tree_fmt(&self, arenas: &AstArenas, mut f: impl fmt::Write) -> fmt::Result {
+        self.tree_fmt_impl(arenas, &mut f, 0)
+    }
+
+    fn tree_fmt_impl(
+        &self,
+        arenas: &AstArenas,
+        f: &mut impl fmt::Write,
+        depth: usize,
+    ) -> fmt::Result {
+        write!(f, "{:>0$}", depth * 2)?;
+        match self {
+            Expr::BitPartSelect(bps) => {
+                writeln!(f, "bps")?;
+                arenas
+                    .get(bps.subject)
+                    .tree_fmt_impl(arenas, f, depth + 1)?;
+                arenas.get(bps.braced).tree_fmt_impl(arenas, f, depth + 1)?;
+            }
+            Expr::BitSlice(subject, _) => {
+                writeln!(f, "bit_slice")?;
+                arenas.get(*subject).tree_fmt_impl(arenas, f, depth + 1)?;
+            }
+            Expr::Unary(op, child) => {
+                writeln!(f, "unary [{}]", op.into_str())?;
+                arenas.get(*child).tree_fmt_impl(arenas, f, depth + 1)?;
+            }
+            Expr::Binary(op, lhs, rhs) => {
+                writeln!(f, "binary [{}]", op.into_str())?;
+                arenas.get(*lhs).tree_fmt_impl(arenas, f, depth + 1)?;
+                arenas.get(*rhs).tree_fmt_impl(arenas, f, depth + 1)?;
+            }
+            Expr::Concatenation(..) => todo!(),
+            Expr::Replication(..) => todo!(),
+            Expr::Ternary(condition, truthy, falsy) => {
+                writeln!(f, "ternary")?;
+                arenas.get(*condition).tree_fmt_impl(arenas, f, depth + 1)?;
+                arenas.get(*truthy).tree_fmt_impl(arenas, f, depth + 1)?;
+                arenas.get(*falsy).tree_fmt_impl(arenas, f, depth + 1)?;
+            }
+            Expr::Ident(ident) => {
+                writeln!(f, "ident: {}", arenas.get_ident(ident.item.0))?;
+            }
+            Expr::Decimal(decimal) => {
+                writeln!(f, "decimal: {}", arenas.decimals[decimal.at])?;
+            }
+            Expr::Sized(..) => todo!(),
+            Expr::String(..) => todo!(),
+        }
+
+        Ok(())
     }
 }

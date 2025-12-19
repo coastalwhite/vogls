@@ -3,7 +3,7 @@ module tb();
     reg  [3:0] i;
     wire [3:0] o;
 
-    wire [63:0] LUT;
+    wire [4*16-1:0] LUT;
     assign LUT = {
         4'h0, 4'hC, 4'h8, 4'h4,
         4'h3, 4'hA, 4'h7, 4'h6,
