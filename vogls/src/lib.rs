@@ -101,7 +101,7 @@ pub fn run(
                 if referenced.contains(module_name) {
                     continue;
                 }
-                top_level_modules.push(module_name);
+                top_level_modules.push((module_id, module_name));
             }
 
             if top_level_modules.len() == 0 {
@@ -109,11 +109,26 @@ pub fn run(
                     "no top-level module found".to_string(),
                 ));
             } else if top_level_modules.len() > 1 {
-                return Err(<Box<dyn std::error::Error>>::from(format!(
-                    "multiple top-level modules: {top_level_modules:?}"
-                )));
+                let names = top_level_modules
+                    .iter()
+                    .map(|(_, n)| *n)
+                    .collect::<Vec<&str>>();
+                writeln!(
+                    ectx.stderr,
+                    "[ERR]: Found {} possible top-level modules: {names:?}",
+                    top_level_modules.len()
+                )?;
+                let mut out = String::new();
+                for (m, _) in top_level_modules {
+                    out.clear();
+                    let m = ast.arenas.get(m);
+                    let span = ast.arenas.get_item_span(m.module_identifier);
+                    report(&token_buffer, span, &mut out)?;
+                    writeln!(ectx.stderr, "{out}").unwrap();
+                }
+                return Err("ambiguous top-level module".into());
             } else {
-                top_level_modules[0]
+                top_level_modules[0].1
             }
         }
     };
@@ -279,10 +294,10 @@ pub fn run(
     }
 
     let stdout = std::mem::replace(&mut ectx.stdout, Box::new(Vec::new()) as _);
-    let stderr = std::mem::replace(&mut ectx.stdout, Box::new(Vec::new()) as _);
+    let stderr = std::mem::replace(&mut ectx.stderr, Box::new(Vec::new()) as _);
 
     let mut ctx = Context::new(stdout, stderr);
-    vogls_sim::run(
+    let fail = vogls_sim::run(
         &mut ctx,
         &processes,
         &mut schedule,
@@ -290,10 +305,15 @@ pub fn run(
         &mut listeners,
         &mut watches,
         100,
-    );
+    )
+    .is_err();
 
     ectx.stdout = ctx.stdout;
     ectx.stderr = ctx.stderr;
+
+    if fail {
+        return Err("execution failed.".into());
+    }
 
     Ok(())
 }

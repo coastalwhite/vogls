@@ -573,6 +573,11 @@ impl Tokenized {
                                     && let Some(l) = str_length(&content[j..])
                                 {
                                     i = j + l;
+
+                                    if if_untaken_depth < if_stack.len() {
+                                        continue;
+                                    }
+
                                     // @TODO: escaping
                                     let s = &content[j + 1..][..l - 2];
                                     let path = paths[file_idx as usize].as_deref().unwrap();
@@ -599,7 +604,7 @@ impl Tokenized {
                                     });
                                     contents.push(content);
                                     paths.push(Some(path.into()));
-                                    continue;
+                                    continue 'lex_stack;
                                 }
                             }
 

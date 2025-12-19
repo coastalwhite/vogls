@@ -252,6 +252,34 @@ impl BasicBlockBuilder {
         dst
     }
 
+    pub fn coerce_binary_bitwise_srcs(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+    ) -> (VariableKey, VariableKey) {
+        let lhs_ty = &gl.vars[lhs].ty;
+        let rhs_ty = &gl.vars[rhs].ty;
+
+        use Type as T;
+        match (lhs_ty, rhs_ty) {
+            (T::Bits(x), T::Bits(y)) if x == y => (lhs, rhs),
+            (T::Bits(x), T::Bits(y)) => {
+                let out_size = (*x).max(*y);
+                let lhs = self.cast(gl, lhs, T::Bits(out_size));
+                let rhs = self.cast(gl, rhs, T::Bits(out_size));
+                (lhs, rhs)
+            }
+            (T::Bits(x), _) | (_, T::Bits(x)) => {
+                let x = *x;
+                let lhs = self.cast(gl, lhs, T::Bits(x));
+                let rhs = self.cast(gl, rhs, T::Bits(x));
+                (lhs, rhs)
+            }
+            (T::Decimal, T::Decimal) => (lhs, rhs),
+        }
+    }
+
     pub fn coerce_binary_bitwise(
         &mut self,
         gl: &mut GlobalContext,

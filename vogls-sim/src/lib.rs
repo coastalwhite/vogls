@@ -67,6 +67,7 @@ impl Ord for ScheduledEvent {
 
 enum EvalOutcome {
     Next,
+    Error,
     Exit,
 }
 
@@ -216,9 +217,11 @@ impl Event {
                         O::SelectBit(n) => {
                             let idx = decimal_stack[rhs.offset];
                             assert!(idx >= 0 && idx < *n as i64);
+                            let idx = idx as VectorSize;
 
+                            let byte_offset = n.div_ceil(8) - 1 - (idx / 8);
                             bit_stack[dst.offset] =
-                                (bit_stack[lhs.offset + (idx as usize) / 8] >> (idx % 8)) & 1;
+                                (bit_stack[lhs.offset + byte_offset as usize] >> (idx % 8)) & 1;
                         }
                         O::LogicalShiftRight(n) => {
                             let shift = decimal_stack[rhs.offset];
@@ -309,44 +312,55 @@ impl Event {
                                     panic!("Invalid assert argument");
                                 }
                             };
-                            assert!(value, "failed assertion");
+                            if !value {
+                                writeln!(&mut ctx.stderr, "Assert failed.").unwrap();
+                                return EvalOutcome::Error;
+                            }
                         }
                         O::AssertEq(eq) => {
                             use VmIntrinsicArg as A;
                             match (&args[0], &args[1]) {
                                 (A::VariableBits(l, ls), A::VariableBits(r, rs)) => {
                                     if ls != rs {
-                                        assert!(
-                                            false,
+                                        writeln!(
+                                            &mut ctx.stderr,
                                             "assert_eq failed. sizes different {ls} != {rs}"
-                                        );
+                                        )
+                                        .unwrap();
+                                        return EvalOutcome::Error;
                                     }
                                     let lhs = &bit_stack[l.offset..][..ls.div_ceil(8) as usize];
                                     let rhs = &bit_stack[r.offset..][..rs.div_ceil(8) as usize];
-                                    if *eq && lhs != rhs {
-                                        assert!(false, "assert_eq failed. {:?} != {:?}", lhs, rhs);
-                                    } else if !eq && lhs == rhs {
-                                        assert!(false, "assert_ne failed. {:?} == {:?}", lhs, rhs);
+                                    if *eq != (lhs == rhs) {
+                                        writeln!(
+                                            &mut ctx.stderr,
+                                            "assert_{{eq, ne}} failed. {lhs:?} != {rhs:?}"
+                                        )
+                                        .unwrap();
+                                        return EvalOutcome::Error;
                                     }
                                 }
                                 (A::VariableDecimal(l), A::VariableDecimal(r)) => {
-                                    if *eq {
-                                        assert_eq!(
-                                            decimal_stack[l.offset],
-                                            decimal_stack[r.offset]
-                                        );
-                                    } else {
-                                        assert_ne!(
-                                            decimal_stack[l.offset],
-                                            decimal_stack[r.offset]
-                                        );
+                                    let l = decimal_stack[l.offset];
+                                    let r = decimal_stack[r.offset];
+                                    if (l == r) != *eq {
+                                        writeln!(
+                                            &mut ctx.stderr,
+                                            "assert_{{eq,ne}} failed. {l} == {r}"
+                                        )
+                                        .unwrap();
+                                        return EvalOutcome::Error;
                                     }
                                 }
-                                _ => assert!(
-                                    false,
-                                    "assert_eq({eq}) failed. {:?} != {:?}",
-                                    args[0], args[1]
-                                ),
+                                _ => {
+                                    writeln!(
+                                        &mut ctx.stderr,
+                                        "assert_eq({eq}) failed. {:?} != {:?}",
+                                        args[0], args[1]
+                                    )
+                                    .unwrap();
+                                    return EvalOutcome::Error;
+                                }
                             }
                         }
                         O::Finish => {
@@ -445,7 +459,7 @@ pub fn run(
     listeners: &mut SlotMap<ListenerKey, Event>,
     watches: &mut HashMap<VmSignalKey, Vec<ListenerKey>>,
     max_time: u64,
-) {
+) -> Result<(), ()> {
     while let Some(se) = schedule.pop() {
         ctx.time = se.at;
 
@@ -459,7 +473,10 @@ pub fn run(
 
         match outcome {
             EvalOutcome::Next => continue,
-            EvalOutcome::Exit => break,
+            EvalOutcome::Error => return Err(()),
+            EvalOutcome::Exit => return Ok(()),
         }
     }
+
+    Ok(())
 }

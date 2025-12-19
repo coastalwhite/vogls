@@ -951,6 +951,8 @@ fn statements_to_process<'a>(
                         let lhs = lower_expr(&mut builder, gl, scope, lhs, arenas, diagnostics)?;
                         let rhs = lower_expr(&mut builder, gl, scope, rhs, arenas, diagnostics)?;
 
+                        let (lhs, rhs) = builder.coerce_binary_bitwise_srcs(gl, lhs, rhs);
+
                         builder.intrinsic(
                             gl,
                             IntrinsicOp::AssertEq(ident == "vogls_assert_eq"),

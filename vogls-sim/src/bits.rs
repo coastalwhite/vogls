@@ -128,9 +128,9 @@ pub fn logical_shift_right(
         }
     } else {
         stack[dst + shift / 8] = stack[src] >> soff;
-        for i in 1..width.div_ceil(8) {
-            stack[dst + shift / 8 + i] =
-                (stack[src + i - 1] << (8 - soff)) | (stack[src + i] >> soff);
+        for i in shift / 8 + 1..width.div_ceil(8) {
+            stack[dst + i] = (stack[src + i - shift / 8 - 1] << (8 - soff))
+                | (stack[src + i - shift / 8] >> soff);
         }
     }
 }

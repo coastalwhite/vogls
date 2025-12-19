@@ -1,10 +1,4 @@
-module aes_square_gf2p2(data_i, data_o);
-    input [1:0] data_i;
-    input [1:0] data_o;
-
-    assign data_o = { data_i[0], data_i[1] };
-endmodule
-
+`ifndef NO_TB
 module tb();
     reg [1:0] i;
     wire [1:0] o;
@@ -12,23 +6,24 @@ module tb();
     aes_square_gf2p2 s(i, o);
 
     initial begin
-        i = 2'b00;
-        #1
-        $vogls_assert_eq(o, 2'b00);
-        #1
+        #1 i = 2'b00;
+        #1 $vogls_assert_eq(o, 2'b00);
 
-        i = 2'b01;
-        #1
-        $vogls_assert_eq(o, 2'b10);
-        #1
+        #1 i = 2'b01;
+        #1 $vogls_assert_eq(o, 2'b10);
 
-        i = 2'b10;
-        #1
-        $vogls_assert_eq(o, 2'b01);
-        #1
+        #1 i = 2'b10;
+        #1 $vogls_assert_eq(o, 2'b01);
 
-        i = 2'b11;
-        #1
-        $vogls_assert_eq(o, 2'b11);
+        #1 i = 2'b11;
+        #1 $vogls_assert_eq(o, 2'b11);
     end
+endmodule
+`endif
+
+module aes_square_gf2p2(data_i, data_o);
+    input  [1:0] data_i;
+    output [1:0] data_o;
+
+    assign data_o = { data_i[0], data_i[1] };
 endmodule

@@ -151,11 +151,13 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                 println!("ERROR: {err:?}");
             };
             println!("--- [START STDOUT] ---");
-            println!("{stdout}");
+            print!("{stdout}");
             println!("---  [END STDOUT]  ---");
+            println!();
             println!("--- [START STDERR] ---");
-            println!("{stderr}");
+            print!("{stderr}");
             println!("---  [END STDERR]  ---");
+            println!();
         } else {
             println!("\x1b[32mOK\x1b[0m");
         }

@@ -1,17 +1,4 @@
-module aes_mul_gf2p2(a_i, b_i, z_o);
-    input [1:0]  a_i;
-    input [1:0]  b_i;
-    output [1:0] z_o;
-
-    wire a, b, c;
-
-    assign a = a_i[1] & b_i[1];
-    assign b = ^a_i & ^b_i;
-    assign c = a_i[0] & b_i[0];
-
-    assign z_o = { a ^ b, c ^ b };
-endmodule
-
+`ifndef NO_TB
 module tb();
     reg [1:0] a_i;
     reg [1:0] b_i;
@@ -117,4 +104,19 @@ module tb();
         #1
     end
 
+endmodule
+`endif
+
+module aes_mul_gf2p2(a_i, b_i, z_o);
+    input [1:0]  a_i;
+    input [1:0]  b_i;
+    output [1:0] z_o;
+
+    wire a, b, c;
+
+    assign a = a_i[1] & b_i[1];
+    assign b = ^a_i & ^b_i;
+    assign c = a_i[0] & b_i[0];
+
+    assign z_o = { a ^ b, c ^ b };
 endmodule
