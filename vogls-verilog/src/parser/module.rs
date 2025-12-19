@@ -2,14 +2,15 @@ use crate::ast::Identifier;
 use crate::ast::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression};
 use crate::ast::expr::Expr;
 use crate::ast::module::{
-    AlwaysConstruct, ContinousAssign, Dimension, GateInstantiation, InitialConstruct,
-    InoutDeclaration, InputDeclaration, IntegerDeclaration, ListOfPortConnections, Module,
-    ModuleInstance, ModuleInstantiation, ModuleItem, ModuleOrGenerateItem,
-    ModuleOrGenerateItemDeclaration, ModulePorts, NInputGateInstance, NInputGateInstantiation,
-    NInputGateType, NameOfGateInstance, NamedPortConnection, NetAssignment, NetDeclAssignment,
-    NetDeclaration, NetDeclarationNets, NetIdent, NetType, NonPortModuleItem, OutputDeclaration,
-    ParamAssignment, ParameterDeclaration, Port, PortDeclaration, PortExpression, PortReference,
-    Range, RegDeclaration,
+    AlwaysConstruct, CaseGenerateConstruct, CaseGenerateItem, CaseGeneratePattern, ContinousAssign,
+    Dimension, GateInstantiation, GenerateBlock, GenerateRegion, GenvarAssignment,
+    GenvarDeclaration, IfGenerateConstruct, InitialConstruct, InoutDeclaration, InputDeclaration,
+    IntegerDeclaration, ListOfPortConnections, LoopGenerateConstruct, Module, ModuleInstance,
+    ModuleInstantiation, ModuleItem, ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration,
+    ModulePorts, NInputGateInstance, NInputGateInstantiation, NInputGateType, NameOfGateInstance,
+    NamedPortConnection, NetAssignment, NetDeclAssignment, NetDeclaration, NetDeclarationNets,
+    NetIdent, NetType, NonPortModuleItem, OutputDeclaration, ParamAssignment, ParameterDeclaration,
+    Port, PortDeclaration, PortExpression, PortReference, Range, RegDeclaration,
 };
 use crate::ast::statement::{NetLValue, Statement};
 use crate::parser::TokenRange;
@@ -52,7 +53,23 @@ impl<'a> Consumable<'a> for Module {
 
         let module_identifier =
             item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
-        // @Incomplete: [ module_parameter_port_list ]
+        let mut module_parameter_port_list = None;
+        if tkw.next_if_equals(T::Hash) {
+            tkw.next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
+            let Some(end) = tkw.find_next_same_depth(T::RightParen) else {
+                if let Some(diagnostics) = diagnostics.as_deref_mut() {
+                    diagnostics.no_corresponding(tkw.offset - 1, T::RightParen);
+                }
+                return Err(());
+            };
+            module_parameter_port_list = Some(parse_one_or_more(
+                &mut tkw.end_at(end),
+                sc,
+                arenas,
+                diagnostics.as_deref_mut(),
+            )?);
+            tkw.offset = end + 1;
+        }
         let ports = if tkw.next_if_equals(T::LeftParen) {
             let peeked = tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?;
             match peeked.kind {
@@ -101,6 +118,7 @@ impl<'a> Consumable<'a> for Module {
         Ok(Module {
             attribute_instances,
             module_identifier,
+            module_parameter_port_list,
             ports,
             module_items,
         })
@@ -163,9 +181,9 @@ impl<'a> Consumable<'a> for NonPortModuleItem {
                 Ok(Self::ParameterDeclaration(parameter_declaration))
             }
             T::KeywordGenerate => {
-                diagnostics
-                    .map(|d| d.incomplete(tkw.offset, "non_port_module_item::generate_region"));
-                Err(())
+                let generate_region =
+                    GenerateRegion::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                Ok(Self::GenerateRegion(generate_region))
             }
             T::KeywordSpecify => {
                 diagnostics
@@ -440,6 +458,37 @@ impl<'a> Consumable<'a> for NetType {
     }
 }
 
+impl<'a> Consumable<'a> for GenerateRegion {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 495
+        // generate_region ::= generate { module_or_generate_item } endgenerate
+
+        tkw.next_expect(T::KeywordGenerate, diagnostics.as_deref_mut())?;
+        let Some(end_generate) = tkw.find_next_same_depth(T::KeywordEndGenerate) else {
+            diagnostics.map(|d| d.no_corresponding(tkw.offset - 1, T::KeywordEndGenerate));
+            return Err(());
+        };
+        let module_or_generate_item = parse_zero_or_more::<ModuleOrGenerateItem>(
+            &mut tkw.end_at(end_generate),
+            sc,
+            arenas,
+            diagnostics.as_deref_mut(),
+        )?;
+        tkw.offset = end_generate + 1;
+
+        Ok(Self {
+            module_or_generate_item,
+        })
+    }
+}
+
 impl<'a> Consumable<'a> for ModuleOrGenerateItem {
     fn consume(
         tkw: &mut TokenWalker<'a>,
@@ -509,7 +558,8 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItem {
             | T::KeywordWand
             | T::KeywordWor
             | T::KeywordReg
-            | T::KeywordInteger => {
+            | T::KeywordInteger
+            | T::KeywordGenvar => {
                 let module_or_generate_item_declaration = parse::<ModuleOrGenerateItemDeclaration>(
                     tkw,
                     sc,
@@ -519,6 +569,21 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItem {
                 Ok(Self::ModuleOrGenerateItemDeclaration(
                     module_or_generate_item_declaration,
                 ))
+            }
+            T::KeywordFor => {
+                let loop_generate_construct =
+                    parse::<LoopGenerateConstruct>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                Ok(Self::LoopGenerateConstruct(loop_generate_construct))
+            }
+            T::KeywordIf => {
+                let if_generate_construct =
+                    parse::<IfGenerateConstruct>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                Ok(Self::IfGenerateConstruct(if_generate_construct))
+            }
+            T::KeywordCase => {
+                let case_generate_construct =
+                    parse::<CaseGenerateConstruct>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                Ok(Self::CaseGenerateConstruct(case_generate_construct))
             }
             _ => {
                 diagnostics.map(|d| d.incomplete(tkw.offset, "module_or_generate_item"));
@@ -946,6 +1011,11 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItemDeclaration {
                     parse::<IntegerDeclaration>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
                 Ok(Self::Integer(integer_declaration))
             }
+            T::KeywordGenvar => {
+                let genvar_declaration =
+                    parse::<GenvarDeclaration>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                Ok(Self::Genvar(genvar_declaration))
+            }
             _ => {
                 diagnostics
                     .map(|d| d.incomplete(tkw.offset, "module_or_generate_item_declaration"));
@@ -1119,6 +1189,32 @@ impl<'a> Consumable<'a> for Dimension {
     }
 }
 
+impl<'a> Consumable<'a> for GenvarDeclaration {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
+        // genvar_declaration ::= genvar list_of_genvar_identifiers ;
+
+        tkw.next_expect(T::KeywordGenvar, diagnostics.as_deref_mut())?;
+        let identifiers = parse_one_or_more_delimited_until_fail(
+            tkw,
+            sc,
+            arenas,
+            T::Comma,
+            diagnostics.as_deref_mut(),
+        )?;
+        tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+
+        Ok(Self { identifiers })
+    }
+}
+
 impl<'a> Consumable<'a> for RegDeclaration {
     fn consume(
         tkw: &mut TokenWalker<'a>,
@@ -1248,5 +1344,243 @@ impl<'a> Consumable<'a> for Range {
         tkw.next_expect(T::RightBrace, diagnostics.as_deref_mut())?;
 
         Ok(Self { msb, lsb })
+    }
+}
+
+impl<'a> Consumable<'a> for LoopGenerateConstruct {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 495
+        // loop_generate_construct ::= for ( genvar_initialization ; genvar_expression ; genvar_iteration ) generate_block
+
+        tkw.next_expect(T::KeywordFor, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
+
+        let initialization =
+            parse::<GenvarAssignment>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+        let condition = parse::<ConstantExpr>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+        let iteration = parse::<GenvarAssignment>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+
+        tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
+
+        let block = parse::<GenerateBlock>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+
+        Ok(Self {
+            initialization,
+            condition,
+            iteration,
+            block,
+        })
+    }
+}
+
+impl<'a> Consumable<'a> for IfGenerateConstruct {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 495
+        // if_generate_construct ::= if ( constant_expression ) generate_block_or_null
+        //   [ else generate_block_or_null ]
+
+        tkw.next_expect(T::KeywordIf, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
+
+        let condition = parse::<ConstantExpr>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+
+        tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
+
+        let truthy = parse::<Option<GenerateBlock>>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+
+        let mut falsy = None;
+        if tkw.next_if_equals(T::KeywordElse) {
+            falsy = Some(parse::<Option<GenerateBlock>>(
+                tkw,
+                sc,
+                arenas,
+                diagnostics.as_deref_mut(),
+            )?);
+        }
+
+        Ok(Self {
+            condition,
+            truthy,
+            falsy,
+        })
+    }
+}
+
+impl<'a> Consumable<'a> for CaseGenerateConstruct {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 496
+        // case_generate_construct ::= case ( constant_expression ) case_generate_item { case_generate_item } endcase
+
+        let case_offset = tkw.offset;
+        tkw.next_expect(T::KeywordCase, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
+
+        let value = parse::<ConstantExpr>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+
+        tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
+
+        let Some(end) = tkw.find_next_same_depth(T::KeywordEndCase) else {
+            diagnostics.map(|d| d.no_corresponding(case_offset, T::KeywordEndCase));
+            return Err(());
+        };
+
+        let items = parse_one_or_more::<CaseGenerateItem>(
+            &mut tkw.end_at(end),
+            sc,
+            arenas,
+            diagnostics.as_deref_mut(),
+        )?;
+        tkw.offset = end + 1;
+
+        Ok(Self { value, items })
+    }
+}
+
+impl<'a> Consumable<'a> for CaseGenerateItem {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 496
+        // case_generate_item ::= constant_expression { , constant_expression } : generate_block_or_null | default [ : ] generate_block_or_null
+
+        let pattern = if tkw.next_if_equals(T::KeywordDefault) {
+            tkw.next_if_equals(T::Colon);
+            CaseGeneratePattern::Default
+        } else {
+            let Some(end) = tkw.find_next_same_depth(T::Colon) else {
+                diagnostics.map(|d| d.no_corresponding(tkw.offset, T::Colon));
+                return Err(());
+            };
+
+            let values = parse_one_or_more_delimited::<ConstantExpr>(
+                &mut tkw.end_at(end),
+                sc,
+                arenas,
+                T::Comma,
+                diagnostics.as_deref_mut(),
+            )?;
+            tkw.offset = end + 1;
+            CaseGeneratePattern::Exprs(values)
+        };
+
+        let block = parse::<Option<GenerateBlock>>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        Ok(Self { pattern, block })
+    }
+}
+
+impl<'a> Consumable<'a> for GenvarAssignment {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
+        // genvar_initialization ::= genvar_identifier = constant_expression
+        // genvar_iteration      ::= genvar_identifier = genvar_expression
+
+        let ident = item_parse(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::Equals, diagnostics.as_deref_mut())?;
+        let expr = parse::<ConstantExpr>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+
+        Ok(Self { ident, expr })
+    }
+}
+
+impl<'a> Consumable<'a> for GenerateBlock {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 496
+        // generate_block ::=
+        //   module_or_generate_item
+        // | begin [ : generate_block_identifier ] { module_or_generate_item } end
+
+        if tkw.next_if_equals(T::KeywordBegin) {
+            let Some(end) = tkw.find_next_same_depth(T::KeywordEnd) else {
+                diagnostics.map(|d| d.no_corresponding(tkw.offset - 1, T::KeywordEnd));
+                return Err(());
+            };
+
+            let mut identifier = None;
+            if tkw.next_if_equals(T::Colon) {
+                identifier = Some(item_parse::<Identifier>(
+                    tkw,
+                    sc,
+                    arenas,
+                    diagnostics.as_deref_mut(),
+                )?);
+            }
+            let module_or_generate_item = parse_zero_or_more::<ModuleOrGenerateItem>(
+                &mut tkw.end_at(end),
+                sc,
+                arenas,
+                diagnostics.as_deref_mut(),
+            )?;
+            tkw.offset = end + 1;
+            Ok(Self::BeginEnd(identifier, module_or_generate_item))
+        } else {
+            Ok(Self::ModuleOrGenerateItem(parse::<ModuleOrGenerateItem>(
+                tkw,
+                sc,
+                arenas,
+                diagnostics,
+            )?))
+        }
+    }
+}
+
+impl<'a> Consumable<'a> for Option<GenerateBlock> {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 496
+        // generate_block_or_null ::= generate_block |;
+
+        if tkw.next_if_equals(T::Semicolon) {
+            Ok(None)
+        } else {
+            GenerateBlock::consume(tkw, sc, arenas, diagnostics).map(Some)
+        }
     }
 }

@@ -56,6 +56,8 @@ impl SymbolTable {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SymbolVariant {
+    Genvar(Option<i64>),
+    Constant(Option<i64>),
     Variable(Option<VariableKey>),
     Signal(SignalKey),
 }

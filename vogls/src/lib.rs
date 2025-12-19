@@ -66,6 +66,7 @@ pub fn run(
                 let Module {
                     attribute_instances: _,
                     module_identifier: _,
+                    module_parameter_port_list: _,
                     module_items,
                     ports: _,
                 } = ast.arenas.get(module_id);
@@ -94,6 +95,7 @@ pub fn run(
                 let Module {
                     attribute_instances: _,
                     module_identifier,
+                    module_parameter_port_list: _,
                     module_items: _,
                     ports: _,
                 } = ast.arenas.get(module_id);
@@ -152,6 +154,7 @@ pub fn run(
             let Module {
                 attribute_instances: _,
                 module_identifier: _,
+                module_parameter_port_list: _,
                 module_items,
                 ports: _,
             } = ast.arenas.get(module_id);

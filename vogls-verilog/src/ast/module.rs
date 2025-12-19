@@ -5,16 +5,15 @@ use super::{AstId, AstIdRange, AstItem, AttributeInstance, Identifier};
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 487
 // module_declaration ::=
-// { attribute_instance } module_keyword module_identifier [ module_parameter_port_list ]
-// list_of_ports ; { module_item }
-// endmodule
-// | { attribute_instance } module_keyword module_identifier [ module_parameter_port_list ]
-// [ list_of_port_declarations ] ; { non_port_module_item }
-// endmodule
+//   { attribute_instance } module_keyword module_identifier [ module_parameter_port_list ] list_of_ports ; { module_item }
+//   endmodule
+// | { attribute_instance } module_keyword module_identifier [ module_parameter_port_list ] [ list_of_port_declarations ] ; { non_port_module_item }
+//   endmodule
 #[derive(Clone, Copy)]
 pub struct Module {
     pub attribute_instances: AstIdRange<AttributeInstance>,
     pub module_identifier: AstItem<Identifier>,
+    pub module_parameter_port_list: Option<AstIdRange<ParameterDeclaration>>,
     pub ports: ModulePorts,
     pub module_items: AstIdRange<ModuleItem>,
 }
@@ -163,8 +162,9 @@ pub enum ModuleOrGenerateItem {
     ModuleInstantiation(AstId<ModuleInstantiation>),
     InitialConstruct(AstId<InitialConstruct>),
     AlwaysConstruct(AstId<AlwaysConstruct>),
-    LoopGenerateConstruct,
-    ConditionalGenerateConstruct,
+    LoopGenerateConstruct(AstId<LoopGenerateConstruct>),
+    IfGenerateConstruct(AstId<IfGenerateConstruct>),
+    CaseGenerateConstruct(AstId<CaseGenerateConstruct>),
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 493
@@ -292,6 +292,70 @@ pub struct InitialConstruct(pub AstId<Statement>);
 #[derive(Clone, Copy)]
 pub struct AlwaysConstruct(pub AstId<Statement>);
 
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 495
+// loop_generate_construct ::= for ( genvar_initialization ; genvar_expression ; genvar_iteration ) generate_block
+#[derive(Clone, Copy)]
+pub struct LoopGenerateConstruct {
+    pub initialization: AstId<GenvarAssignment>,
+    pub condition: AstId<ConstantExpr>,
+    pub iteration: AstId<GenvarAssignment>,
+    pub block: AstId<GenerateBlock>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 495
+// if_generate_construct ::= if ( constant_expression ) generate_block_or_null
+//   [ else generate_block_or_null ]
+#[derive(Clone, Copy)]
+pub struct IfGenerateConstruct {
+    pub condition: AstId<ConstantExpr>,
+    pub truthy: AstId<Option<GenerateBlock>>,
+    pub falsy: Option<AstId<Option<GenerateBlock>>>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 496
+// case_generate_construct ::= case ( constant_expression ) case_generate_item { case_generate_item } endcase
+#[derive(Clone, Copy)]
+pub struct CaseGenerateConstruct {
+    pub value: AstId<ConstantExpr>,
+    pub items: AstIdRange<CaseGenerateItem>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 496
+// case_generate_item ::= constant_expression { , constant_expression } : generate_block_or_null | default [ : ] generate_block_or_null
+#[derive(Clone, Copy)]
+pub struct CaseGenerateItem {
+    pub pattern: CaseGeneratePattern,
+    pub block: AstId<Option<GenerateBlock>>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 496
+// case_generate_item ::= constant_expression { , constant_expression } : generate_block_or_null | default [ : ] generate_block_or_null
+#[derive(Clone, Copy)]
+pub enum CaseGeneratePattern {
+    Default,
+    Exprs(AstIdRange<ConstantExpr>),
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 496
+// generate_block ::= module_or_generate_item | begin [ : generate_block_identifier ] { module_or_generate_item } end
+#[derive(Clone, Copy)]
+pub enum GenerateBlock {
+    ModuleOrGenerateItem(AstId<ModuleOrGenerateItem>),
+    BeginEnd(
+        Option<AstItem<Identifier>>,
+        AstIdRange<ModuleOrGenerateItem>,
+    ),
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
+// genvar_initialization ::= genvar_identifier = constant_expression
+// genvar_iteration      ::= genvar_identifier = genvar_expression
+#[derive(Clone, Copy)]
+pub struct GenvarAssignment {
+    pub ident: AstItem<Identifier>,
+    pub expr: AstId<ConstantExpr>,
+}
+
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
 // module_item ::=
 //   port_declaration ;
@@ -324,7 +388,7 @@ pub enum ModuleOrGenerateItemDeclaration {
     // Time(AstId<TimeDeclaration>),
     // Realtime(AstId<RealtimeDeclaration>),
     // Event(AstId<EventDeclaration>),
-    // Genvar(AstId<GenvarDeclaration>),
+    Genvar(AstId<GenvarDeclaration>),
     // Task(AstId<TaskDeclaration>),
     // Function(AstId<FunctionDeclaration>),
 }
@@ -387,8 +451,15 @@ pub struct IntegerDeclaration {
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
+// genvar_declaration ::= genvar list_of_genvar_identifiers ;
+#[derive(Clone, Copy)]
+pub struct GenvarDeclaration {
+    pub identifiers: AstIdRange<Identifier>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
 // non_port_module_item ::=
-// module_or_generate_item
+//   module_or_generate_item
 // | generate_region
 // | specify_block
 // | { attribute_instance } parameter_declaration ;
@@ -396,10 +467,17 @@ pub struct IntegerDeclaration {
 #[derive(Clone, Copy)]
 pub enum NonPortModuleItem {
     ModuleOrGenerateItem(AstId<ModuleOrGenerateItem>),
-    GenerateRegion,
+    GenerateRegion(GenerateRegion),
     SpecifyBlock,
     ParameterDeclaration(AstId<ParameterDeclaration>),
     SpecParamDeclaration,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 495
+// generate_region ::= generate { module_or_generate_item } endgenerate
+#[derive(Clone, Copy)]
+pub struct GenerateRegion {
+    pub module_or_generate_item: AstIdRange<ModuleOrGenerateItem>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 489

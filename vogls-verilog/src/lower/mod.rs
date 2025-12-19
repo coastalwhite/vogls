@@ -1,4 +1,5 @@
 mod diagnostics;
+mod module_or_generate_item;
 mod scope;
 mod statement;
 
@@ -17,10 +18,11 @@ use crate::ast::constant_expr::{
 };
 use crate::ast::expr::{BinaryOperator, BitPartSelect, BitSlice, Expr, UnaryOperator};
 use crate::ast::module::{
-    GateInstantiation, ListOfPortConnections, Module, ModuleInstance, ModuleInstantiation,
-    ModuleItem, ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration, ModulePorts,
-    NInputGateInstance, NInputGateType, NamedPortConnection, NetDeclAssignment, NetDeclarationNets,
-    NonPortModuleItem, ParamAssignment, ParameterDeclaration, Port, PortDeclaration, Range,
+    GateInstantiation, GenerateRegion, GenvarAssignment, GenvarDeclaration, ListOfPortConnections,
+    LoopGenerateConstruct, Module, ModuleInstance, ModuleInstantiation, ModuleItem,
+    ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration, ModulePorts, NInputGateInstance,
+    NInputGateType, NamedPortConnection, NetDeclAssignment, NetDeclarationNets, NonPortModuleItem,
+    ParamAssignment, ParameterDeclaration, Port, PortDeclaration, Range,
 };
 use crate::ast::statement::{
     BlockingAssignment, DelayControl, DelayValue, EventControl, EventExpression,
@@ -50,6 +52,7 @@ pub fn lower_module_to_ir(
     let Module {
         attribute_instances: _,
         module_identifier,
+        module_parameter_port_list: _,
         ports,
         module_items,
     } = arenas.get(root);
@@ -183,467 +186,33 @@ pub fn lower_module_to_ir(
                 }
             }
             ModuleItem::NonPortModuleItem(p) => match arenas.get(*p) {
-                NonPortModuleItem::ModuleOrGenerateItem(id) => match arenas.get(*id) {
-                    ModuleOrGenerateItem::ModuleOrGenerateItemDeclaration(id) => {
-                        let module_or_generate_item_declaration = arenas.get(*id);
-                        match module_or_generate_item_declaration {
-                            ModuleOrGenerateItemDeclaration::Net(id) => {
-                                let net_declaration = arenas.get(*id);
-                                let width = match net_declaration.range {
-                                    None => 1,
-                                    Some(range) => {
-                                        range_to_width(gl, &mut scope, range, arenas, diagnostics)?
-                                    }
-                                };
-                                match net_declaration.nets {
-                                    NetDeclarationNets::Idents(net_idents) => {
-                                        for ast_net_ident in net_idents.iter() {
-                                            let net_ident = arenas.get(ast_net_ident);
-                                            if !net_ident.dimension.is_empty() {
-                                                diagnostics.not_yet_implemented(
-                                                    arenas.get_span(ast_net_ident),
-                                                    "net_identifier::dimension",
-                                                );
-                                                return Err(());
-                                            }
-                                            let ast_ident = net_ident.ident;
-                                            let ident = ast_ident.item;
-                                            let ident = arenas.get_ident(ident.0);
-                                            let ty = Type::Bits(width);
-                                            let key = gl.signals.insert(Signal {
-                                                name: ident.into(),
-                                                ty: ty.clone(),
-                                            });
-                                            let symbol_key = scope.symbols.insert(Symbol {
-                                                name: ident.to_string(),
-                                                definition_site: arenas.get_item_span(ast_ident),
-                                                ty,
-                                                variant: SymbolVariant::Signal(key),
-                                            });
-                                            scope.push(ident, symbol_key);
-                                            module_builder.entity.signal(gl, key);
-                                        }
-                                    }
-                                    NetDeclarationNets::Assignments(assignments) => {
-                                        for assignment in assignments.iter() {
-                                            let NetDeclAssignment {
-                                                ident: ast_ident,
-                                                expr,
-                                            } = arenas.get(assignment);
-                                            let ident = arenas.get_ident(ast_ident.item.0);
-                                            let ty = Type::Bits(width);
-                                            let key = gl.signals.insert(Signal {
-                                                name: ident.into(),
-                                                ty: ty.clone(),
-                                            });
-                                            let symbol_key = scope.symbols.insert(Symbol {
-                                                name: ident.to_string(),
-                                                definition_site: arenas.get_item_span(*ast_ident),
-                                                ty,
-                                                variant: SymbolVariant::Signal(key),
-                                            });
-                                            scope.push(ident, symbol_key);
-                                            module_builder.entity.signal(gl, key);
-
-                                            let (section_key, mut bb_builder) =
-                                                module_builder.process(gl, "decl_assign".into());
-                                            let bb_key = bb_builder.key();
-                                            let variable = lower_expr(
-                                                &mut bb_builder,
-                                                gl,
-                                                &mut scope,
-                                                arenas.get(*expr),
-                                                arenas,
-                                                diagnostics,
-                                            )?;
-
-                                            bb_builder.drive(gl, key, variable);
-                                            bb_builder.watch_for_ins_to(gl, bb_key);
-                                            processes.push(section_key);
-                                        }
-                                    }
-                                }
-                            }
-                            ModuleOrGenerateItemDeclaration::Reg(id) => {
-                                let reg_declaration = arenas.get(*id);
-                                let width = match reg_declaration.range {
-                                    None => 1,
-                                    Some(range) => {
-                                        range_to_width(gl, &mut scope, range, arenas, diagnostics)?
-                                    }
-                                };
-                                for ast_ident in reg_declaration.identifiers.iter() {
-                                    let ident = arenas.get(ast_ident);
-                                    let ident = arenas.get_ident(ident.0);
-                                    let key = gl.signals.insert(Signal {
-                                        name: ident.into(),
-                                        ty: Type::Bits(width),
-                                    });
-                                    let symbol_key = scope.symbols.insert(Symbol {
-                                        name: ident.to_string(),
-                                        definition_site: arenas.get_span(ast_ident),
-                                        ty: Type::Bits(width),
-                                        variant: SymbolVariant::Signal(key),
-                                    });
-                                    scope.push(ident, symbol_key);
-                                    module_builder.entity.signal(gl, key);
-                                }
-                            }
-                            ModuleOrGenerateItemDeclaration::Integer(id) => {
-                                let integer_declaration = arenas.get(*id);
-                                for ast_ident in integer_declaration.identifiers.iter() {
-                                    let ident = arenas.get(ast_ident);
-                                    let ident = arenas.get_ident(ident.0);
-                                    let symbol_key = scope.symbols.insert(Symbol {
-                                        name: ident.to_string(),
-                                        definition_site: arenas.get_span(ast_ident),
-                                        ty: Type::Decimal,
-                                        variant: SymbolVariant::Variable(None),
-                                    });
-                                    scope.push(ident, symbol_key);
-                                }
-                            }
-                        }
-                    }
-                    ModuleOrGenerateItem::LocalParameterDeclaration => todo!(),
-                    ModuleOrGenerateItem::ParameterOverride => todo!(),
-                    ModuleOrGenerateItem::ContinuousAssign(assign) => {
-                        let assign = arenas.get(*assign);
-                        for ast_net_assignment in assign.list_of_net_assignments {
-                            let net_assignment = arenas.get(ast_net_assignment);
-
-                            let (section_key, mut bb_builder) =
-                                module_builder.process(gl, "assign".into());
-                            let bb_key = bb_builder.key();
-                            let variable = lower_expr(
-                                &mut bb_builder,
-                                gl,
-                                &mut scope,
-                                arenas.get(net_assignment.expression),
-                                arenas,
-                                diagnostics,
-                            )?;
-
-                            assign_net_lvalue(
-                                &mut bb_builder,
-                                gl,
-                                &mut scope,
-                                net_assignment.net_lvalue,
-                                variable,
-                                arenas,
-                                diagnostics,
-                            )?;
-
-                            bb_builder.watch_for_ins_to(gl, bb_key);
-                            processes.push(section_key);
-                        }
-                    }
-                    ModuleOrGenerateItem::GateInstantiation(id) => {
-                        let gate_instantiation = arenas.get(*id);
-                        match gate_instantiation {
-                            GateInstantiation::NInput(id) => {
-                                let ninput_gate_instantiation = arenas.get(*id);
-                                for instance in ninput_gate_instantiation.instances.iter() {
-                                    let NInputGateInstance {
-                                        name: _,
-                                        output_terminal,
-                                        input_terminals,
-                                    } = arenas.get(instance);
-
-                                    let lvalue = arenas.get(*output_terminal);
-                                    let lvalue = lvalue.ident.item;
-
-                                    let ident = arenas.get_ident(lvalue.0);
-
-                                    let (section_key, mut bb_builder) =
-                                        module_builder.process(gl, "gate".into());
-                                    let bb_key = bb_builder.key();
-
-                                    assert!(!input_terminals.is_empty());
-                                    let value = input_terminals.first().unwrap();
-                                    let mut value = lower_expr(
-                                        &mut bb_builder,
-                                        gl,
-                                        &mut scope,
-                                        arenas.get(value),
-                                        arenas,
-                                        diagnostics,
-                                    )?;
-                                    match ninput_gate_instantiation.gatetype.item {
-                                        NInputGateType::And | NInputGateType::Nand => {
-                                            for input in input_terminals.iter().skip(1) {
-                                                let input = lower_expr(
-                                                    &mut bb_builder,
-                                                    gl,
-                                                    &mut scope,
-                                                    arenas.get(input),
-                                                    arenas,
-                                                    diagnostics,
-                                                )?;
-                                                value = bb_builder.and(gl, value, input);
-                                            }
-                                        }
-                                        NInputGateType::Or | NInputGateType::Nor => {
-                                            for input in input_terminals.iter().skip(1) {
-                                                let input = lower_expr(
-                                                    &mut bb_builder,
-                                                    gl,
-                                                    &mut scope,
-                                                    arenas.get(input),
-                                                    arenas,
-                                                    diagnostics,
-                                                )?;
-                                                value = bb_builder.or(gl, value, input);
-                                            }
-                                        }
-                                        NInputGateType::Xor | NInputGateType::Xnor => {
-                                            for input in input_terminals.iter().skip(1) {
-                                                let input = lower_expr(
-                                                    &mut bb_builder,
-                                                    gl,
-                                                    &mut scope,
-                                                    arenas.get(input),
-                                                    arenas,
-                                                    diagnostics,
-                                                )?;
-                                                value = bb_builder.xor(gl, value, input);
-                                            }
-                                        }
-                                    };
-
-                                    if matches!(
-                                        ninput_gate_instantiation.gatetype.item,
-                                        NInputGateType::Nand
-                                            | NInputGateType::Nor
-                                            | NInputGateType::Xnor
-                                    ) {
-                                        value = bb_builder.binary_neg(gl, value);
-                                    }
-
-                                    let symbol_key = scope.get(ident).unwrap();
-                                    let SymbolVariant::Signal(signal_key) =
-                                        &scope.symbols[symbol_key].variant
-                                    else {
-                                        panic!("not a signal");
-                                    };
-
-                                    bb_builder.drive(gl, *signal_key, value);
-                                    bb_builder.watch_for_ins_to(gl, bb_key);
-                                    processes.push(section_key);
-                                }
-                            }
-                        }
-                    }
-                    ModuleOrGenerateItem::UdpInstantiation => todo!(),
-                    ModuleOrGenerateItem::ModuleInstantiation(id) => {
-                        let ModuleInstantiation {
-                            module_identifier,
-                            module_instances,
-                        } = arenas.get(*id);
-                        let instantiation_ident = arenas.get_ident(module_identifier.item.0);
-                        let Ok(instance_module_key) =
-                            instantiated_modules.get(instantiation_ident).unwrap()
-                        else {
-                            diagnostics.not_yet_implemented(
-                                arenas.get_item_span(*module_identifier),
-                                "module error",
-                            );
-                            return Err(());
-                        };
-                        let instance_module_key = *instance_module_key;
-
-                        // let entity = gl.modules.get(*entity).unwrap();
-
-                        // let section_key = *entity
-                        //     .sections
-                        //     .iter()
-                        //     .find(|k| {
-                        //         gl.sections.get(**k).unwrap().variant == SectionVariant::Entity
-                        //     })
-                        //     .unwrap();
-
-                        for instance in module_instances.iter() {
-                            let ModuleInstance {
-                                name_of_module_instance: _,
-                                list_of_port_connections,
-                            } = arenas.get(instance);
-
-                            let ports: Vec<SignalKey> = match arenas.get(*list_of_port_connections)
-                            {
-                                ListOfPortConnections::Ordered(ports) => ports
-                                    .iter()
-                                    .enumerate()
-                                    .map(|(i, p)| {
-                                        let connection = gl.modules[instance_module_key]
-                                            .io
-                                            .get_index(i)
-                                            .unwrap()
-                                            .1;
-                                        let signal = connection.signal;
-                                        let is_input = matches!(
-                                            connection.direction,
-                                            ConnectionDirection::In | ConnectionDirection::Both
-                                        );
-                                        let ty = gl.signals[signal].ty.clone();
-                                        if is_input {
-                                            lower_to_signal(
-                                                &mut module_builder,
-                                                &mut processes,
-                                                gl,
-                                                p,
-                                                &mut scope,
-                                                ty,
-                                                arenas,
-                                                diagnostics,
-                                            )
-                                        } else {
-                                            let Type::Bits(width) = ty else { todo!() };
-                                            assign_port_output(
-                                                &mut module_builder,
-                                                &mut processes,
-                                                gl,
-                                                p,
-                                                &mut scope,
-                                                width,
-                                                arenas,
-                                                diagnostics,
-                                            )
-                                        }
-                                    })
-                                    .collect::<Result<Vec<SignalKey>, ()>>()?,
-                                ListOfPortConnections::Named(ports) => {
-                                    let target_module = &gl.modules[instance_module_key];
-                                    if ports.iter().enumerate().all(|(i, p)| {
-                                        let named_port_connection = arenas.get(p);
-                                        let NamedPortConnection {
-                                            port_identifier,
-                                            expression: _,
-                                        } = *named_port_connection;
-
-                                        let port_ident = arenas.get_ident(port_identifier.item.0);
-                                        let Some((j, _, _)) = target_module.io.get_full(port_ident)
-                                        else {
-                                            diagnostics.port_not_found(
-                                                gl,
-                                                arenas,
-                                                instance_module_key,
-                                                port_identifier,
-                                            );
-                                            return true;
-                                        };
-
-                                        if i != j {
-                                            diagnostics.not_yet_implemented(
-                                                arenas.get_span(p),
-                                                "out-of-order named ports",
-                                            );
-                                            return true;
-                                        }
-
-                                        false
-                                    }) {
-                                        return Err(());
-                                    }
-                                    ports
-                                        .iter()
-                                        .enumerate()
-                                        .map(|(i, p)| {
-                                            let connection = gl.modules[instance_module_key]
-                                                .io
-                                                .get_index(i)
-                                                .unwrap()
-                                                .1;
-                                            let signal = connection.signal;
-                                            let is_input = matches!(
-                                                connection.direction,
-                                                ConnectionDirection::In | ConnectionDirection::Both
-                                            );
-                                            let ty = gl.signals[signal].ty.clone();
-                                            let named_port_connection = arenas.get(p);
-                                            let NamedPortConnection {
-                                                port_identifier: _,
-                                                expression,
-                                            } = *named_port_connection;
-
-                                            match expression {
-                                                None => {
-                                                    diagnostics.not_yet_implemented(
-                                                        arenas.get_span(p),
-                                                        "anonymous ports",
-                                                    );
-                                                    return Err(());
-                                                }
-
-                                                Some(e) => {
-                                                    if is_input {
-                                                        lower_to_signal(
-                                                            &mut module_builder,
-                                                            &mut processes,
-                                                            gl,
-                                                            e,
-                                                            &mut scope,
-                                                            ty,
-                                                            arenas,
-                                                            diagnostics,
-                                                        )
-                                                    } else {
-                                                        let Type::Bits(width) = ty else { todo!() };
-                                                        assign_port_output(
-                                                            &mut module_builder,
-                                                            &mut processes,
-                                                            gl,
-                                                            e,
-                                                            &mut scope,
-                                                            width,
-                                                            arenas,
-                                                            diagnostics,
-                                                        )
-                                                    }
-                                                }
-                                            }
-                                        })
-                                        .collect::<Result<Vec<SignalKey>, ()>>()?
-                                }
-                            };
-                            module_builder
-                                .entity
-                                .instantiate(gl, instance_module_key, ports);
-                        }
-                    }
-                    ModuleOrGenerateItem::InitialConstruct(id) => {
-                        let statement = arenas.get(*id).0;
-                        let (section_key, bb_builder) =
-                            module_builder.process(gl, "initial".into());
-                        let bb_builder = statements_to_process(
-                            bb_builder,
+                NonPortModuleItem::ModuleOrGenerateItem(id) => module_or_generate_item::lower(
+                    gl,
+                    arenas,
+                    &mut module_builder,
+                    instantiated_modules,
+                    &mut scope,
+                    &mut processes,
+                    *id,
+                    diagnostics,
+                )?,
+                NonPortModuleItem::GenerateRegion(region) => {
+                    let GenerateRegion {
+                        module_or_generate_item,
+                    } = region;
+                    for id in module_or_generate_item.iter() {
+                        module_or_generate_item::lower(
                             gl,
+                            arenas,
+                            &mut module_builder,
+                            instantiated_modules,
                             &mut scope,
-                            std::slice::from_ref(arenas.get(statement)),
-                            &arenas,
+                            &mut processes,
+                            id,
                             diagnostics,
                         )?;
-                        bb_builder.halt(gl);
-                        processes.push(section_key);
                     }
-                    ModuleOrGenerateItem::AlwaysConstruct(id) => {
-                        let statement = arenas.get(*id).0;
-                        let (section_key, bb_builder) = module_builder.process(gl, "always".into());
-                        let bb_key = bb_builder.key();
-                        let bb_builder = statements_to_process(
-                            bb_builder,
-                            gl,
-                            &mut scope,
-                            std::slice::from_ref(arenas.get(statement)),
-                            &arenas,
-                            diagnostics,
-                        )?;
-                        bb_builder.watch_for_ins_to(gl, bb_key);
-                        processes.push(section_key);
-                    }
-                    ModuleOrGenerateItem::LoopGenerateConstruct => todo!(),
-                    ModuleOrGenerateItem::ConditionalGenerateConstruct => todo!(),
-                },
-                NonPortModuleItem::GenerateRegion => todo!(),
+                }
                 NonPortModuleItem::SpecifyBlock => todo!(),
                 NonPortModuleItem::ParameterDeclaration(id) => {
                     let ParameterDeclaration { assignments } = arenas.get(*id);
@@ -1548,6 +1117,12 @@ fn lower_expr<'a>(
                 return Err(());
             };
             match &scope.symbols[symbol_key].variant {
+                SymbolVariant::Constant(value) => {
+                    builder.constant(gl, Value::Decimal(value.unwrap()))
+                }
+                SymbolVariant::Genvar(value) => {
+                    builder.constant(gl, Value::Decimal(value.unwrap()))
+                }
                 SymbolVariant::Signal(key) => builder.probe(gl, *key),
                 SymbolVariant::Variable(None) => todo!(),
                 SymbolVariant::Variable(Some(key)) => *key,
@@ -1601,6 +1176,8 @@ fn assign_variable_lvalue<'a>(
     }
 
     match &mut scope.symbols[symbol_key].variant {
+        SymbolVariant::Constant(_) => todo!(),
+        SymbolVariant::Genvar(_) => todo!(),
         SymbolVariant::Signal(key) => {
             let key = *key;
             match range_expression {
@@ -1708,7 +1285,7 @@ fn assign_net_lvalue<'a>(
 
 fn eval_constant_expr<'a>(
     _gl: &mut GlobalContext,
-    _scope: &Scope<'a>,
+    scope: &Scope<'a>,
     expr: AstId<ConstantExpr>,
     arenas: &'a AstArenas,
     diagnostics: &mut Diagnostics,
@@ -1776,9 +1353,9 @@ fn eval_constant_expr<'a>(
                     O::BitwiseXor => lhs ^ rhs,
                     O::BitwiseXnor => !(lhs ^ rhs),
                     O::BitwiseOr => lhs | rhs,
+                    O::LessThan => u64::from(lhs < rhs),
                     O::GreaterThan
                     | O::GreaterThanEqual
-                    | O::LessThan
                     | O::LessThanEqual
                     | O::LogicalEquality
                     | O::LogicalInequality
@@ -1797,8 +1374,18 @@ fn eval_constant_expr<'a>(
                 };
                 result_stack.push(Some(result));
             }
-            Expr::Ident(..)
-            | Expr::Sized(..)
+            Expr::Ident(ast_ident) => {
+                let ident = arenas.get_ident(ast_ident.item.0);
+                let Some(symbol_key) = scope.get(ident) else {
+                    diagnostics.var_not_found(arenas, *ast_ident);
+                    return Err(());
+                };
+                let SymbolVariant::Genvar(n) = scope.symbols[symbol_key].variant else {
+                    todo!();
+                };
+                result_stack.push(Some(n.unwrap() as _));
+            }
+            Expr::Sized(..)
             | Expr::String(..)
             | Expr::BitPartSelect(_)
             | Expr::BitSlice(..)
