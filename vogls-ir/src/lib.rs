@@ -122,6 +122,10 @@ impl Type {
     pub fn try_net_width(&self) -> Result<VectorSize, ()> {
         self.to_net_width().ok_or(())
     }
+
+    pub fn net(width: Option<VectorSize>) -> Self {
+        Self::Bits(width.unwrap_or(1))
+    }
 }
 
 #[derive(Debug, Clone)]

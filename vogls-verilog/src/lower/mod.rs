@@ -3,6 +3,7 @@ mod module_or_generate_item;
 mod scope;
 mod statement;
 mod vtype;
+mod vvalue;
 
 use std::collections::{HashMap, HashSet};
 
@@ -32,6 +33,7 @@ use crate::parser::{AstArenas, TokenRange};
 
 use self::scope::{Symbol, SymbolKey, SymbolVariant};
 pub use self::vtype::{VType, VTypeKey, VTypeTable};
+use self::vvalue::VValue;
 pub use diagnostics::Diagnostics;
 
 pub struct ModuleInitialization<'a> {
@@ -44,7 +46,7 @@ pub struct ModuleInitialization<'a> {
 #[derive(Clone)]
 pub struct ModuleIo<'a> {
     pub lut: HashMap<&'a str, usize>,
-    pub ports: Vec<(&'a str, ConnectionDirection, VectorSize)>,
+    pub ports: Vec<(&'a str, ConnectionDirection, Option<VectorSize>)>,
 }
 #[derive(Clone)]
 pub struct ModuleParameters<'a> {
@@ -90,10 +92,11 @@ pub fn fetch_module_interface<'a>(
                     ConstantMinTypMaxExpression::Single(id) => {
                         let value =
                             eval_constant_expr(gl, arenas, types, &scope, diagnostics, *id)?;
+                        let value = value.as_integer().unwrap();
                         let symbol_key = scope.symbols.insert(Symbol {
                             name: key.to_string(),
                             definition_site: arenas.get_item_span(*param),
-                            ty: Type::Decimal,
+                            ty: types.insert(VType::Integer),
                             variant: SymbolVariant::Constant(Some(value as i64)),
                         });
                         scope.push(key, symbol_key);
@@ -143,7 +146,7 @@ pub fn fetch_module_interface<'a>(
                             error = true;
                             continue;
                         }
-                        io.push((name, ConnectionDirection::Both, 0));
+                        io.push((name, ConnectionDirection::Both, None));
                     }
                 }
             }
@@ -178,8 +181,15 @@ pub fn fetch_module_interface<'a>(
                     }
                 };
                 let width = match range {
-                    None => 1,
-                    Some(range) => range_to_width(gl, arenas, types, &scope, diagnostics, range)?,
+                    None => None,
+                    Some(range) => Some(range_to_width(
+                        gl,
+                        arenas,
+                        types,
+                        &scope,
+                        diagnostics,
+                        range,
+                    )?),
                 };
 
                 for ast_ident in identifiers {
@@ -234,8 +244,15 @@ pub fn fetch_module_interface<'a>(
                     }
                 };
                 let width = match range {
-                    None => 1,
-                    Some(range) => range_to_width(gl, arenas, types, &scope, diagnostics, range)?,
+                    None => None,
+                    Some(range) => Some(range_to_width(
+                        gl,
+                        arenas,
+                        types,
+                        &scope,
+                        diagnostics,
+                        range,
+                    )?),
                 };
 
                 io.extend(identifiers.iter().map(|ident| {
@@ -283,7 +300,7 @@ pub fn lower_module_to_ir<'a>(
             name: key.to_string(),
             // @TODO: better definition site
             definition_site: arenas.get_span(root),
-            ty: Type::Decimal,
+            ty: types.insert(VType::Integer),
             variant: SymbolVariant::Constant(Some(*param)),
         });
         scope.push(key, symbol_key);
@@ -294,7 +311,7 @@ pub fn lower_module_to_ir<'a>(
             name: name.to_string(),
             // @TODO: better definition site
             definition_site: arenas.get_span(root),
-            ty: Type::Bits(*width),
+            ty: types.insert(VType::net(*width)),
             variant: SymbolVariant::Signal(*signal),
         });
         scope.push(name, symbol_key);
@@ -815,7 +832,7 @@ fn lower_to_signal<'a>(
     diagnostics: &mut Diagnostics,
     processes: &mut Vec<ProcessKey>,
     expr: AstId<Expr>,
-    ty: Type,
+    width: Option<VectorSize>,
 ) -> Result<SignalKey, ()> {
     if let Expr::Ident(ast_ident) = arenas.get(expr) {
         let ident = arenas.get_ident(ast_ident.item.0);
@@ -828,9 +845,10 @@ fn lower_to_signal<'a>(
         }
     }
 
+    let ty = Type::net(width);
     let signal = gl.signals.insert(Signal {
         name: "anon_port_assignment".to_string(),
-        ty: ty.clone(),
+        ty,
     });
 
     let (section_key, mut bb_builder) = new_process(gl, "port_assignment".into());
@@ -860,7 +878,7 @@ fn assign_port_output<'a>(
     diagnostics: &mut Diagnostics,
     processes: &mut Vec<ProcessKey>,
     expr: AstId<Expr>,
-    width: VectorSize,
+    width: Option<VectorSize>,
 ) -> Result<SignalKey, ()> {
     if let Expr::Ident(ast_ident) = arenas.get(expr) {
         let ident = arenas.get_ident(ast_ident.item.0);
@@ -876,15 +894,15 @@ fn assign_port_output<'a>(
     let mut driving: Vec<(
         AstId<Expr>,
         Option<VariableKey>,
-        VectorSize,
+        Option<VectorSize>,
         Option<VariableKey>,
-        VectorSize,
+        Option<VectorSize>,
     )> = Vec::new();
     driving.push((expr, None, width, None, width));
 
     let signal = gl.signals.insert(Signal {
         name: "anon_port_assignment".to_string(),
-        ty: Type::Bits(width),
+        ty: Type::net(width),
     });
 
     let (section_key, mut bb_builder) = new_process(gl, "port_assignment".into());
@@ -911,15 +929,8 @@ fn assign_port_output<'a>(
                     None => offset,
                     Some(offset_dst) => bb_builder.plus(gl, offset_dst, offset),
                 };
-                let length_dst = 1;
 
-                driving.push((
-                    *subject,
-                    offset_src,
-                    length_src,
-                    Some(offset_dst),
-                    length_dst,
-                ));
+                driving.push((*subject, offset_src, length_src, Some(offset_dst), None));
             }
             Expr::BitSlice(subject, slice) => {
                 let (offset, length) = match slice {
@@ -941,7 +952,8 @@ fn assign_port_output<'a>(
                         );
                         let width =
                             eval_constant_expr(gl, arenas, types, scope, diagnostics, *width);
-                        (offset?, width? as VectorSize)
+                        let width = width?.as_integer().unwrap();
+                        (offset?, width as VectorSize)
                     }
                     BitSlice::MinusWidth(base, width) => {
                         let offset = lower_expr(
@@ -954,8 +966,8 @@ fn assign_port_output<'a>(
                             arenas.get(*base),
                         );
                         let width =
-                            eval_constant_expr(gl, arenas, types, scope, diagnostics, *width)?
-                                as VectorSize;
+                            eval_constant_expr(gl, arenas, types, scope, diagnostics, *width)?;
+                        let width = width.as_integer().unwrap() as VectorSize;
                         let width_v = bb_builder.constant(gl, Value::Decimal((width + 1) as i64));
                         let offset = bb_builder.minus(gl, offset?, width_v);
                         (offset, width)
@@ -966,7 +978,7 @@ fn assign_port_output<'a>(
                     None => offset,
                     Some(offset_dst) => bb_builder.plus(gl, offset_dst, offset),
                 };
-                let length_dst = length;
+                let length_dst = Some(length);
 
                 driving.push((
                     *subject,
@@ -1001,8 +1013,8 @@ fn assign_port_output<'a>(
                 if let Some(offset_src) = offset_src {
                     src = bb_builder.lsr(gl, src, offset_src);
                 }
-                let src = bb_builder.slice(gl, src, length_src);
-                bb_builder.drive_partial(gl, *key, src, offset_dst, length_dst);
+                let src = bb_builder.slice(gl, src, length_src.unwrap_or(1));
+                bb_builder.drive_partial(gl, *key, src, offset_dst, length_dst.unwrap_or(1));
             }
 
             Expr::Replication(_) => {
@@ -1186,13 +1198,14 @@ fn lower_expr<'a>(
                         builder,
                         arenas.get(*base),
                     )?;
-                    let width = eval_constant_expr(gl, arenas, types, scope, diagnostics, *width)?
-                        as VectorSize;
+                    let width = eval_constant_expr(gl, arenas, types, scope, diagnostics, *width)?;
+                    let width = width.as_integer().unwrap() as VectorSize;
                     (lsb, width)
                 }
                 BitSlice::MinusWidth(base, width) => {
                     let width = eval_constant_expr(gl, arenas, types, scope, diagnostics, *width)?;
-                    let width_v = builder.constant(gl, Value::Decimal(width as i64 - 1));
+                    let width = width.as_integer().unwrap();
+                    let width_v = builder.constant(gl, Value::Decimal(width - 1));
                     let lsb = lower_expr(
                         gl,
                         arenas,
@@ -1465,17 +1478,19 @@ fn assign_net_lvalue<'a>(
         Some(range_expression) => {
             let (offset, length) = match arenas.get(range_expression) {
                 ConstantRangeExpression::Single(expr) => (
-                    eval_constant_expr(gl, arenas, types, scope, diagnostics, *expr)?,
+                    eval_constant_expr(gl, arenas, types, scope, diagnostics, *expr)?
+                        .as_integer()
+                        .unwrap(),
                     1,
                 ),
                 ConstantRangeExpression::MsbLsb { msb, lsb } => {
                     let (_, offset, length) =
                         msb_lsb_to_width(gl, arenas, types, scope, diagnostics, *msb, *lsb)?;
-                    (offset, length)
+                    (offset as i64, length)
                 }
             };
 
-            let offset = builder.constant(gl, Value::Decimal(offset as i64));
+            let offset = builder.constant(gl, Value::Decimal(offset));
             builder.drive_partial(gl, signal_key, variable, offset, length);
         }
     }
@@ -1490,7 +1505,7 @@ fn eval_constant_expr<'a>(
     scope: &Scope<'a>,
     diagnostics: &mut Diagnostics,
     expr: AstId<ConstantExpr>,
-) -> Result<u64, ()> {
+) -> Result<VValue, ()> {
     let expr = expr.into_expr();
     struct StackItem {
         expr: AstId<Expr>,
@@ -1499,7 +1514,7 @@ fn eval_constant_expr<'a>(
 
     let mut error = false;
     let mut dispatch_stack: Vec<StackItem> = Vec::new();
-    let mut result_stack: Vec<Option<u64>> = Vec::new();
+    let mut result_stack: Vec<Option<VValue>> = Vec::new();
 
     dispatch_stack.push(StackItem {
         expr,
@@ -1520,7 +1535,7 @@ fn eval_constant_expr<'a>(
                     continue;
                 };
 
-                result_stack.push(Some(*v));
+                result_stack.push(Some(VValue::Integer(*v as i64)));
             }
             Expr::Binary(op, lhs, rhs) => {
                 if !item.dispatched {
@@ -1536,7 +1551,7 @@ fn eval_constant_expr<'a>(
                 let rhs = result_stack.pop().unwrap();
                 let lhs = result_stack.pop().unwrap();
 
-                let (Some(lhs), Some(rhs)) = (lhs, rhs) else {
+                let (Some(VValue::Integer(lhs)), Some(VValue::Integer(rhs))) = (lhs, rhs) else {
                     result_stack.push(None);
                     continue;
                 };
@@ -1554,7 +1569,7 @@ fn eval_constant_expr<'a>(
                     O::BitwiseXor => lhs ^ rhs,
                     O::BitwiseXnor => !(lhs ^ rhs),
                     O::BitwiseOr => lhs | rhs,
-                    O::LessThan => u64::from(lhs < rhs),
+                    O::LessThan => i64::from(lhs < rhs),
                     O::GreaterThan
                     | O::GreaterThanEqual
                     | O::LessThanEqual
@@ -1573,7 +1588,7 @@ fn eval_constant_expr<'a>(
                         continue;
                     }
                 };
-                result_stack.push(Some(result));
+                result_stack.push(Some(VValue::Integer(result)));
             }
             Expr::Ident(ast_ident) => {
                 let ident = arenas.get_ident(ast_ident.item.0);
@@ -1596,7 +1611,7 @@ fn eval_constant_expr<'a>(
                         continue;
                     }
                 };
-                result_stack.push(Some(n as u64));
+                result_stack.push(Some(VValue::Integer(n)));
             }
             Expr::Sized(..)
             | Expr::String(..)
@@ -1640,10 +1655,10 @@ fn msb_lsb_to_width<'a>(
     let msb = eval_constant_expr(gl, arenas, types, scope, diagnostics, msb);
     let lsb = eval_constant_expr(gl, arenas, types, scope, diagnostics, lsb);
 
-    let (Ok(msb), Ok(lsb)) = (msb, lsb) else {
+    let (Ok(VValue::Integer(msb)), Ok(VValue::Integer(lsb))) = (msb, lsb) else {
         return Err(());
     };
-    Ok((msb, lsb, (msb - lsb + 1) as VectorSize))
+    Ok((msb as u64, lsb as u64, (msb - lsb + 1) as VectorSize))
 }
 
 fn range_to_width<'a>(

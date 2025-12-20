@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 
-use vogls_ir::{
-    ConnectionDirection, GlobalContext, ProcessKey, Signal, SignalKey, Type, new_process,
-};
+use vogls_ir::{ConnectionDirection, GlobalContext, ProcessKey, Signal, SignalKey, new_process};
 
 use crate::ast::AstId;
 use crate::ast::constant_expr::ConstantMinTypMaxExpression;
@@ -14,8 +12,8 @@ use crate::ast::module::{
 };
 use crate::lower::scope::{Symbol, SymbolVariant};
 use crate::lower::{
-    ModuleArgs, assign_net_lvalue, assign_port_output, eval_constant_expr, fetch_module_interface,
-    lower_expr, lower_to_signal, range_to_width, statements_to_process,
+    ModuleArgs, VType, assign_net_lvalue, assign_port_output, eval_constant_expr,
+    fetch_module_interface, lower_expr, lower_to_signal, range_to_width, statements_to_process,
 };
 use crate::parser::AstArenas;
 
@@ -40,12 +38,18 @@ pub fn lower<'a>(
             match module_or_generate_item_declaration {
                 ModuleOrGenerateItemDeclaration::Net(id) => {
                     let net_declaration = arenas.get(*id);
-                    let width = match net_declaration.range {
-                        None => 1,
-                        Some(range) => {
-                            range_to_width(gl, arenas, types, scope, diagnostics, range)?
-                        }
+                    let ty = match net_declaration.range {
+                        None => VType::ScalarNet,
+                        Some(range) => VType::VectorNet(range_to_width(
+                            gl,
+                            arenas,
+                            types,
+                            scope,
+                            diagnostics,
+                            range,
+                        )?),
                     };
+                    let ty = types.insert(ty);
                     match net_declaration.nets {
                         NetDeclarationNets::Idents(net_idents) => {
                             for ast_net_ident in net_idents.iter() {
@@ -60,10 +64,9 @@ pub fn lower<'a>(
                                 let ast_ident = net_ident.ident;
                                 let ident = ast_ident.item;
                                 let ident = arenas.get_ident(ident.0);
-                                let ty = Type::Bits(width);
                                 let key = gl.signals.insert(Signal {
                                     name: ident.into(),
-                                    ty: ty.clone(),
+                                    ty: types[ty].to_ir(),
                                 });
                                 let symbol_key = scope.symbols.insert(Symbol {
                                     name: ident.to_string(),
@@ -81,10 +84,9 @@ pub fn lower<'a>(
                                     expr,
                                 } = arenas.get(assignment);
                                 let ident = arenas.get_ident(ast_ident.item.0);
-                                let ty = Type::Bits(width);
                                 let key = gl.signals.insert(Signal {
                                     name: ident.into(),
-                                    ty: ty.clone(),
+                                    ty: types[ty].to_ir(),
                                 });
                                 let symbol_key = scope.symbols.insert(Symbol {
                                     name: ident.to_string(),
@@ -116,21 +118,29 @@ pub fn lower<'a>(
                 }
                 ModuleOrGenerateItemDeclaration::Reg(id) => {
                     let reg_declaration = arenas.get(*id);
-                    let width = match reg_declaration.range {
-                        None => 1,
-                        Some(range) => range_to_width(gl, arenas, types, scope, diagnostics, range)?,
+                    let ty = match reg_declaration.range {
+                        None => VType::ScalarNet,
+                        Some(range) => VType::VectorNet(range_to_width(
+                            gl,
+                            arenas,
+                            types,
+                            scope,
+                            diagnostics,
+                            range,
+                        )?),
                     };
+                    let ty = types.insert(ty);
                     for ast_variable_type in reg_declaration.variable_types.iter() {
                         let variable_type = arenas.get(ast_variable_type);
                         let ident = arenas.get_ident(variable_type.identifier.item.0);
                         let key = gl.signals.insert(Signal {
                             name: ident.into(),
-                            ty: Type::Bits(width),
+                            ty: types[ty].to_ir(),
                         });
                         let symbol_key = scope.symbols.insert(Symbol {
                             name: ident.to_string(),
                             definition_site: arenas.get_item_span(variable_type.identifier),
-                            ty: Type::Bits(width),
+                            ty,
                             variant: SymbolVariant::Signal(key),
                         });
                         scope.push(ident, symbol_key);
@@ -144,7 +154,7 @@ pub fn lower<'a>(
                         let symbol_key = scope.symbols.insert(Symbol {
                             name: ident.to_string(),
                             definition_site: arenas.get_span(ast_ident),
-                            ty: Type::Decimal,
+                            ty: types.insert(VType::Integer),
                             variant: SymbolVariant::Variable(None),
                         });
                         scope.push(ident, symbol_key);
@@ -159,7 +169,7 @@ pub fn lower<'a>(
                         let symbol_key = scope.symbols.insert(Symbol {
                             name: ident.to_string(),
                             definition_site: arenas.get_span(ast_ident),
-                            ty: Type::Decimal,
+                            ty: types.insert(VType::Integer),
                             variant: SymbolVariant::Genvar(None),
                         });
                         scope.push(ident, symbol_key);
@@ -351,7 +361,8 @@ pub fn lower<'a>(
                                 diagnostics,
                                 *expression,
                             )?;
-                            params.push((key, value as i64, arenas.get_span(*expression)));
+                            let value = value.as_integer().unwrap();
+                            params.push((key, value, arenas.get_span(*expression)));
                         }
                     }
                 }
@@ -386,7 +397,6 @@ pub fn lower<'a>(
                                     ConnectionDirection::In | ConnectionDirection::Both
                                 );
                                 if is_input {
-                                    let ty = Type::Bits(*width);
                                     lower_to_signal(
                                         gl,
                                         arenas,
@@ -395,7 +405,7 @@ pub fn lower<'a>(
                                         diagnostics,
                                         processes,
                                         l_p,
-                                        ty,
+                                        *width,
                                     )
                                 } else {
                                     assign_port_output(
@@ -456,7 +466,7 @@ pub fn lower<'a>(
                                     diagnostics,
                                     processes,
                                     e,
-                                    Type::Bits(width),
+                                    width,
                                 )?
                             } else {
                                 assign_port_output(
@@ -576,12 +586,14 @@ pub fn lower<'a>(
                 return Err(());
             };
 
-            let mut v = eval_constant_expr(gl, arenas, types, &scope, diagnostics, *init_expr)?;
-            scope.symbols[symbol_key].variant = SymbolVariant::Genvar(Some(v as i64));
+            let v = eval_constant_expr(gl, arenas, types, &scope, diagnostics, *init_expr)?;
+            let mut v = v.as_integer().unwrap();
+            scope.symbols[symbol_key].variant = SymbolVariant::Genvar(Some(v));
 
             loop {
                 let condition =
                     eval_constant_expr(gl, arenas, types, &scope, diagnostics, *condition)?;
+                let condition = condition.as_integer().unwrap();
                 if condition == 0 {
                     break;
                 }
@@ -615,7 +627,9 @@ pub fn lower<'a>(
                     }
                 }
 
-                v = eval_constant_expr(gl, arenas, types, &scope, diagnostics, *iter_expr)?;
+                v = eval_constant_expr(gl, arenas, types, &scope, diagnostics, *iter_expr)?
+                    .as_integer()
+                    .unwrap();
                 scope.symbols[symbol_key].variant = SymbolVariant::Genvar(Some(v as i64));
             }
         }

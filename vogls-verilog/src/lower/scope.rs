@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 use std::ops::{Index, IndexMut};
 
-use vogls_ir::{SignalKey, Type, VariableKey};
+use vogls_ir::{SignalKey, VariableKey};
 
 use crate::parser::TokenRange;
+
+use super::VTypeKey;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SymbolKey(usize);
@@ -16,7 +18,7 @@ pub struct ScopeVariables(Vec<Vec<(usize, VariableKey)>>);
 pub struct Symbol {
     pub name: String,
     pub definition_site: TokenRange,
-    pub ty: Type,
+    pub ty: VTypeKey,
     pub variant: SymbolVariant,
 }
 
