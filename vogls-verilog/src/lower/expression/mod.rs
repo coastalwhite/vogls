@@ -159,7 +159,7 @@ pub fn lower_expr<'a>(
 
                 let r = result_stack.pop().unwrap();
                 let l = result_stack.pop().unwrap();
-                
+
                 let (Some((l, l_ty)), Some((r, r_ty))) = (l, r) else {
                     result_stack.push(None);
                     continue;
@@ -168,8 +168,8 @@ pub fn lower_expr<'a>(
                 use BinaryOperator as O;
                 let op = match op {
                     O::Multiply => bin_multiply,
-                    O::Divide => todo!(),
-                    O::Modulus => todo!(),
+                    O::Divide => bin_divide,
+                    O::Modulus => bin_modulus,
                     O::BinaryPlus => bin_plus,
                     O::BinaryMinus => bin_minus,
                     O::ShiftLeft => todo!(),
@@ -202,6 +202,7 @@ pub fn lower_expr<'a>(
                     r_ty,
                 );
 
+                error |= result.is_err();
                 result_stack.push(result.ok());
             }
             Expr::Concatenation(exprs) => {
@@ -448,4 +449,44 @@ impl_bin_eq_ineq! {
     bin_less_than_equal => unsigned_le,
     bin_logical_equality => equals,
     bin_logical_inequality => not_equals,
+}
+
+fn bin_divide<'a>(
+    gl: &mut GlobalContext,
+    arenas: &'a AstArenas,
+    types: &mut VTypeTable,
+    diagnostics: &mut Diagnostics,
+    expr: AstId<Expr>,
+    builder: &mut BasicBlockBuilder,
+    l: VariableKey,
+    l_ty: VTypeKey,
+    r: VariableKey,
+    r_ty: VTypeKey,
+) -> Result<(VariableKey, VTypeKey), ()> {
+    if l_ty != types.integer() || r_ty != types.integer() {
+        diagnostics.not_yet_implemented(arenas.get_span(expr), "divide with non-integer arguments");
+        return Err(());
+    }
+
+    Ok((builder.i64_divide(gl, l, r), types.integer()))
+}
+
+fn bin_modulus<'a>(
+    gl: &mut GlobalContext,
+    arenas: &'a AstArenas,
+    types: &mut VTypeTable,
+    diagnostics: &mut Diagnostics,
+    expr: AstId<Expr>,
+    builder: &mut BasicBlockBuilder,
+    l: VariableKey,
+    l_ty: VTypeKey,
+    r: VariableKey,
+    r_ty: VTypeKey,
+) -> Result<(VariableKey, VTypeKey), ()> {
+    if l_ty != types.integer() || r_ty != types.integer() {
+        diagnostics.not_yet_implemented(arenas.get_span(expr), "modulus with non-integer arguments");
+        return Err(());
+    }
+
+    Ok((builder.i64_modulus(gl, l, r), types.integer()))
 }

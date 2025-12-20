@@ -125,6 +125,8 @@ impl BinaryOp {
             Self::DecimalAdd => "i64+",
             Self::DecimalSub => "i64-",
             Self::DecimalMultiply => "i64*",
+            Self::DecimalDivide => "i64/",
+            Self::DecimalModulus => "i64%",
             Self::DecimalLessEqual => "i64le",
             Self::SelectBit(_) => "bselect",
             Self::LogicalShiftRight(_) => "blsr",

@@ -373,6 +373,42 @@ impl BasicBlockBuilder {
             .push(Instruction::Binary(dst, BinaryOp::DecimalSub, lhs, rhs));
         dst
     }
+    pub fn i64_divide(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+    ) -> VariableKey {
+        let dst = self.next_tmp_var(gl, Type::Decimal);
+
+        let lhs_ty = &gl.vars[lhs].ty;
+        let rhs_ty = &gl.vars[rhs].ty;
+
+        assert_eq!(lhs_ty, &Type::Decimal);
+        assert_eq!(rhs_ty, &Type::Decimal);
+
+        self.instrs
+            .push(Instruction::Binary(dst, BinaryOp::DecimalDivide, lhs, rhs));
+        dst
+    }
+    pub fn i64_modulus(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+    ) -> VariableKey {
+        let dst = self.next_tmp_var(gl, Type::Decimal);
+
+        let lhs_ty = &gl.vars[lhs].ty;
+        let rhs_ty = &gl.vars[rhs].ty;
+
+        assert_eq!(lhs_ty, &Type::Decimal);
+        assert_eq!(rhs_ty, &Type::Decimal);
+
+        self.instrs
+            .push(Instruction::Binary(dst, BinaryOp::DecimalModulus, lhs, rhs));
+        dst
+    }
 
     pub fn select_bit(
         &mut self,

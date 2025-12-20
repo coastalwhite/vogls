@@ -206,6 +206,14 @@ impl Event {
                             decimal_stack[dst.offset] =
                                 decimal_stack[lhs.offset] * decimal_stack[rhs.offset]
                         }
+                        O::DecimalDivide => {
+                            decimal_stack[dst.offset] =
+                                decimal_stack[lhs.offset] / decimal_stack[rhs.offset]
+                        }
+                        O::DecimalModulus => {
+                            decimal_stack[dst.offset] =
+                                decimal_stack[lhs.offset] % decimal_stack[rhs.offset]
+                        }
                         O::DecimalSub => {
                             decimal_stack[dst.offset] =
                                 decimal_stack[lhs.offset] - decimal_stack[rhs.offset]

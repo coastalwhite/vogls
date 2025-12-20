@@ -169,6 +169,8 @@ pub enum BinaryOp {
     DecimalAdd,
     DecimalSub,
     DecimalMultiply,
+    DecimalDivide,
+    DecimalModulus,
 
     UnsignedLessEqual(VectorSize),
     DecimalLessEqual,
