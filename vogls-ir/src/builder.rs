@@ -185,6 +185,7 @@ impl BasicBlockBuilder {
         let i = match gl.types[gl.vars[src].ty] {
             Type::Bits(size) => Instruction::Unary(dst, UnaryOp::BitNeg(size), src),
             Type::Decimal => Instruction::Unary(dst, UnaryOp::DecimalNeg, src),
+            Type::Array(..) => panic!(),
         };
         self.instrs.push(i);
         dst
@@ -196,6 +197,7 @@ impl BasicBlockBuilder {
             Type::Bits(1) => src,
             Type::Bits(_) => self.reduce_or(gl, src),
             Type::Decimal => self.reduce_or(gl, src),
+            Type::Array(..) => panic!(),
         };
         self.instrs
             .push(Instruction::Unary(dst, UnaryOp::BitNeg(1), src));
@@ -228,6 +230,7 @@ impl BasicBlockBuilder {
                 (lhs, rhs)
             }
             (T::Decimal, T::Decimal) => (lhs, rhs),
+            (T::Array(..), _) | (_, T::Array(..)) => panic!(),
         }
     }
 
@@ -265,6 +268,7 @@ impl BasicBlockBuilder {
                 let dst = self.next_tmp_var(gl, TypeTable::INT64);
                 (dst, lhs, rhs)
             }
+            (T::Array(..), _) | (_, T::Array(..)) => panic!(),
         }
     }
 
@@ -278,6 +282,7 @@ impl BasicBlockBuilder {
         let op = match gl.types[gl.vars[dst].ty] {
             Type::Bits(size) => BinaryOp::BitAnd(size),
             Type::Decimal => BinaryOp::DecimalAnd,
+            Type::Array(..) => panic!(),
         };
         self.instrs.push(Instruction::Binary(dst, op, lhs, rhs));
         dst
@@ -292,6 +297,7 @@ impl BasicBlockBuilder {
         let op = match gl.types[gl.vars[dst].ty] {
             Type::Bits(size) => BinaryOp::BitOr(size),
             Type::Decimal => BinaryOp::DecimalOr,
+            Type::Array(..) => panic!(),
         };
         self.instrs.push(Instruction::Binary(dst, op, lhs, rhs));
         dst
@@ -306,6 +312,7 @@ impl BasicBlockBuilder {
         let op = match gl.types[gl.vars[dst].ty] {
             Type::Bits(size) => BinaryOp::BitXor(size),
             Type::Decimal => BinaryOp::DecimalXor,
+            Type::Array(..) => panic!(),
         };
         self.instrs.push(Instruction::Binary(dst, op, lhs, rhs));
         dst
@@ -524,6 +531,7 @@ impl BasicBlockBuilder {
                 let rhs = self.cast(gl, rhs, ty);
                 (lhs, rhs, BinaryOp::UnsignedLessEqual(x))
             }
+            (T::Array(..), _) | (_, T::Array(..)) => panic!(),
         };
         self.instrs.push(Instruction::Binary(dst, op, lhs, rhs));
         dst
@@ -568,6 +576,7 @@ impl BasicBlockBuilder {
         let op = match gl.types[gl.vars[src].ty] {
             Type::Decimal => UnaryOp::DecimalReduceXor,
             Type::Bits(n) => UnaryOp::BitReduceXor(n),
+            Type::Array(..) => panic!(),
         };
         self.instrs.push(Instruction::Unary(dst, op, src));
         dst
@@ -582,6 +591,7 @@ impl BasicBlockBuilder {
         let op = match gl.types[gl.vars[src].ty] {
             Type::Decimal => UnaryOp::DecimalReduceOr,
             Type::Bits(n) => UnaryOp::BitReduceOr(n),
+            Type::Array(..) => panic!(),
         };
         self.instrs.push(Instruction::Unary(dst, op, src));
         dst
@@ -595,6 +605,7 @@ impl BasicBlockBuilder {
         let op = match gl.types[gl.vars[src].ty] {
             Type::Decimal => UnaryOp::DecimalReduceAnd,
             Type::Bits(n) => UnaryOp::BitReduceAnd(n),
+            Type::Array(..) => panic!(),
         };
         self.instrs.push(Instruction::Unary(dst, op, src));
         dst

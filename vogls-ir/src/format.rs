@@ -353,10 +353,15 @@ impl ContextFormat for Time {
 }
 
 impl ContextFormat for Type {
-    fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut DisplayContext<'_>) -> fmt::Result {
+    fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &mut DisplayContext<'_>) -> fmt::Result {
         match self {
             Type::Bits(size) => write!(f, "b{size}"),
             Type::Decimal => f.write_str("d"),
+            Type::Array(ty, size) => {
+                f.write_str("arr[")?;
+                ctx.gl.types[*ty].ctx_fmt(f, ctx)?;
+                write!(f, "; {size}]")
+            }
         }
     }
 }

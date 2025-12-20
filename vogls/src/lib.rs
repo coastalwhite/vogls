@@ -350,6 +350,7 @@ pub fn run(
 
     for (ir_signal, signal) in io_signals {
         let value = match gl.types[gl.signals[ir_signal].ty] {
+            Type::Array(..) => panic!(),
             Type::Bits(n) if n < 64 => Value::Bits(Bits::Small(0, n)),
             Type::Bits(n) => Value::Bits(Bits::Big(
                 n,

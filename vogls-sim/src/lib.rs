@@ -281,6 +281,7 @@ impl Event {
                                 bit_stack[dst.offset + i] = bit_stack[src.offset + i];
                             }
                         }
+                        T::Array(..) => panic!(),
                         T::Decimal => {
                             decimal_stack[dst.offset] = decimal_stack[src.offset];
                         }

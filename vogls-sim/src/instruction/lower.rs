@@ -59,6 +59,37 @@ pub fn lower_process_to_vm(
                         );
                         decimal_stack_top += 1;
                     }
+                    Type::Array(mut ty, size) => {
+                        let mut total_size = size as usize;
+                        loop {
+                            match gl.types[ty] {
+                                Type::Bits(nbits) => {
+                                    stack_map.insert(
+                                        dst,
+                                        StackRef {
+                                            offset: bit_stack_top,
+                                        },
+                                    );
+                                    bit_stack_top += (nbits as usize).div_ceil(8) * total_size;
+                                    break;
+                                }
+                                Type::Decimal => {
+                                    stack_map.insert(
+                                        dst,
+                                        StackRef {
+                                            offset: decimal_stack_top,
+                                        },
+                                    );
+                                    decimal_stack_top += total_size;
+                                    break;
+                                }
+                                Type::Array(next_ty, size) => {
+                                    total_size *= size as usize;
+                                    ty = next_ty;
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -117,6 +148,7 @@ pub fn lower_process_to_vm(
                             IA::Variable(v) => match gl.types[gl.vars[*v].ty] {
                                 Type::Bits(size) => VIA::VariableBits(var(*v), size),
                                 Type::Decimal => VIA::VariableDecimal(var(*v)),
+                                Type::Array(..) => panic!(),
                             },
                         })
                         .collect();

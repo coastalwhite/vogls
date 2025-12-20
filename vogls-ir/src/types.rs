@@ -22,6 +22,7 @@ pub struct TypeKey(NonZeroU32);
 pub enum Type {
     Bits(VectorSize),
     Decimal,
+    Array(TypeKey, u32),
 }
 
 impl Index<TypeKey> for TypeTable {
@@ -59,6 +60,7 @@ impl Type {
         match self {
             Type::Bits(n) => Some(n),
             Type::Decimal => None,
+            Type::Array(_, _) => None,
         }
     }
 
