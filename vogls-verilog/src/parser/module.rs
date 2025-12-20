@@ -8,9 +8,10 @@ use crate::ast::module::{
     IntegerDeclaration, ListOfPortConnections, LoopGenerateConstruct, Module, ModuleInstance,
     ModuleInstantiation, ModuleItem, ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration,
     ModulePorts, NInputGateInstance, NInputGateInstantiation, NInputGateType, NameOfGateInstance,
-    NamedPortConnection, NetAssignment, NetDeclAssignment, NetDeclaration, NetDeclarationNets,
-    NetIdent, NetType, NonPortModuleItem, OutputDeclaration, ParamAssignment, ParameterDeclaration,
-    Port, PortDeclaration, PortExpression, PortReference, Range, RegDeclaration,
+    NamedParameterAssignment, NamedPortConnection, NetAssignment, NetDeclAssignment,
+    NetDeclaration, NetDeclarationNets, NetIdent, NetType, NonPortModuleItem, OutputDeclaration,
+    ParamAssignment, ParameterDeclaration, ParameterValueAssignment, Port, PortDeclaration,
+    PortExpression, PortReference, Range, RegDeclaration,
 };
 use crate::ast::statement::{NetLValue, Statement};
 use crate::parser::TokenRange;
@@ -662,6 +663,15 @@ impl<'a> Consumable<'a> for ModuleInstantiation {
 
         let module_identifier =
             item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        let mut parameter_value_assignment = None;
+        if tkw.is_next_equal_to(T::Hash) {
+            parameter_value_assignment = Some(parse::<ParameterValueAssignment>(
+                tkw,
+                sc,
+                arenas,
+                diagnostics.as_deref_mut(),
+            )?);
+        }
         let module_instances = parse_one_or_more_delimited::<ModuleInstance>(
             tkw,
             sc,
@@ -673,7 +683,86 @@ impl<'a> Consumable<'a> for ModuleInstantiation {
 
         Ok(ModuleInstantiation {
             module_identifier,
+            parameter_value_assignment,
             module_instances,
+        })
+    }
+}
+
+impl<'a> Consumable<'a> for ParameterValueAssignment {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 495
+        // parameter_value_assignment ::= # ( list_of_parameter_assignments )
+        // list_of_parameter_assignments ::=
+        //   ordered_parameter_assignment { , ordered_parameter_assignment }
+        // | named_parameter_assignment { , named_parameter_assignment }
+
+        tkw.next_expect(T::Hash, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
+        let Some(end) = tkw.find_next_same_depth(T::RightParen) else {
+            if let Some(diagnostics) = diagnostics.as_deref_mut() {
+                diagnostics.no_corresponding(tkw.offset - 1, T::RightParen);
+            }
+            return Err(());
+        };
+        let result = if tkw.is_next_equal_to(T::Dot) {
+            Self::Named(parse_one_or_more_delimited::<NamedParameterAssignment>(
+                &mut tkw.end_at(end),
+                sc,
+                arenas,
+                T::Comma,
+                diagnostics.as_deref_mut(),
+            )?)
+        } else {
+            Self::Ordered(parse_one_or_more_delimited::<ConstantExpr>(
+                &mut tkw.end_at(end),
+                sc,
+                arenas,
+                T::Comma,
+                diagnostics.as_deref_mut(),
+            )?)
+        };
+        tkw.offset = end + 1;
+        Ok(result)
+    }
+}
+
+impl<'a> Consumable<'a> for NamedParameterAssignment {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 495
+        // named_parameter_assignment ::= . parameter_identifier ( [ mintypmax_expression ] )
+
+        tkw.next_expect(T::Dot, diagnostics.as_deref_mut())?;
+        let identifier = item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
+        let mut expression = None;
+        if !tkw.next_if_equals(T::RightParen) {
+            expression = Some(parse::<ConstantMinTypMaxExpression>(
+                tkw,
+                sc,
+                arenas,
+                diagnostics.as_deref_mut(),
+            )?);
+            tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
+        }
+
+        Ok(Self {
+            identifier,
+            expression,
         })
     }
 }

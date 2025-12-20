@@ -27,15 +27,16 @@ use crate::ast::statement::{
 };
 use crate::ast::{AstId, AstIdRange, RangeExpression};
 use crate::number::Decimal;
-use crate::parser::AstArenas;
+use crate::parser::{AstArenas, TokenRange};
 
 use self::scope::{Symbol, SymbolKey, SymbolVariant};
 pub use diagnostics::Diagnostics;
 
 pub struct ModuleInitialization<'a> {
     pub name: &'a str,
+    pub parameters: ModuleParameters<'a>,
     pub io: ModuleIo<'a>,
-    pub signals: Vec<SignalKey>,
+    pub args: ModuleArgs,
 }
 
 #[derive(Clone)]
@@ -43,23 +44,84 @@ pub struct ModuleIo<'a> {
     pub lut: HashMap<&'a str, usize>,
     pub ports: Vec<(&'a str, ConnectionDirection, VectorSize)>,
 }
+#[derive(Clone)]
+pub struct ModuleParameters<'a> {
+    pub lut: HashMap<&'a str, usize>,
+    pub params: Vec<&'a str>,
+}
+
+#[derive(Clone)]
+pub struct ModuleArgs {
+    pub parameters: Vec<i64>,
+    pub signals: Vec<SignalKey>,
+}
 
 pub fn fetch_module_interface<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
     module: AstId<Module>,
+    parameters: &[(&'a str, i64, TokenRange)],
     diagnostics: &mut Diagnostics,
-) -> Result<ModuleIo<'a>, ()> {
+) -> Result<(ModuleParameters<'a>, ModuleIo<'a>, Vec<i64>), ()> {
     let Module {
         attribute_instances: _,
         module_identifier: _,
-        module_parameter_port_list: _,
+        module_parameter_port_list,
         ports,
         module_items,
     } = arenas.get(module);
 
-    // @TODO: Include parameters
-    let scope = Scope::new();
+    let mut param_lut = HashMap::new();
+    let mut params = Vec::new();
+    let mut param_values = Vec::new();
+    let mut scope = Scope::new();
+    let mut error = false;
+    if let Some(parameters) = module_parameter_port_list {
+        for p in parameters.iter() {
+            let ParameterDeclaration { assignments } = arenas.get(p);
+            for assignment in assignments.iter() {
+                let ParamAssignment { param, constant } = arenas.get(assignment);
+                let key = arenas.get_ident(param.item.0);
+                let value = arenas.get(*constant);
+                match value {
+                    ConstantMinTypMaxExpression::Single(id) => {
+                        let value = eval_constant_expr(gl, &scope, *id, arenas, diagnostics)?;
+                        let symbol_key = scope.symbols.insert(Symbol {
+                            name: key.to_string(),
+                            definition_site: arenas.get_item_span(*param),
+                            ty: Type::Decimal,
+                            variant: SymbolVariant::Constant(Some(value as i64)),
+                        });
+                        scope.push(key, symbol_key);
+                        param_values.push(value as i64);
+                    }
+                    ConstantMinTypMaxExpression::MinTypMax { .. } => todo!(),
+                }
+
+                if param_lut.insert(key, params.len()).is_some() {
+                    diagnostics.duplicate_definition(arenas, *param);
+                    error = true;
+                    continue;
+                }
+                params.push(key);
+            }
+        }
+    }
+
+    for (key, value, tr) in parameters {
+        let Some(param_idx) = param_lut.get(key) else {
+            diagnostics.not_yet_implemented(*tr, "missing parameter");
+            error = true;
+            continue;
+        };
+        let symbol_key = scope.get(key).unwrap();
+        scope.symbols[symbol_key].variant = SymbolVariant::Constant(Some(*value));
+        param_values[*param_idx] = *value;
+    }
+    if error {
+        return Err(());
+    }
+
     let mut lut = HashMap::new();
     let mut io = Vec::new();
     match ports {
@@ -179,15 +241,23 @@ pub fn fetch_module_interface<'a>(
             }
         }
     }
-    Ok(ModuleIo { lut, ports: io })
+    Ok((
+        ModuleParameters {
+            lut: param_lut,
+            params,
+        },
+        ModuleIo { lut, ports: io },
+        param_values,
+    ))
 }
 
 pub fn lower_module_to_ir<'a>(
     arenas: &'a AstArenas,
     root: AstId<Module>,
     gl: &mut GlobalContext,
+    parameters: &ModuleParameters<'a>,
     io: &ModuleIo<'a>,
-    args: &[SignalKey],
+    args: &ModuleArgs,
     module_lut: &HashMap<&'a str, AstId<Module>>,
     next_modules: &mut Vec<ModuleInitialization<'a>>,
     diagnostics: &mut Diagnostics,
@@ -203,7 +273,18 @@ pub fn lower_module_to_ir<'a>(
     let mut scope = Scope::new();
     let mut processes = Vec::new();
 
-    for ((name, _con, width), signal) in io.ports.iter().zip(args.iter()) {
+    for (key, param) in parameters.params.iter().zip(&args.parameters) {
+        let symbol_key = scope.symbols.insert(Symbol {
+            name: key.to_string(),
+            // @TODO: better definition site
+            definition_site: arenas.get_span(root),
+            ty: Type::Decimal,
+            variant: SymbolVariant::Constant(Some(*param)),
+        });
+        scope.push(key, symbol_key);
+    }
+
+    for ((name, _con, width), signal) in io.ports.iter().zip(&args.signals) {
         let symbol_key = scope.symbols.insert(Symbol {
             name: name.to_string(),
             // @TODO: better definition site
@@ -1399,13 +1480,25 @@ fn eval_constant_expr<'a>(
             Expr::Ident(ast_ident) => {
                 let ident = arenas.get_ident(ast_ident.item.0);
                 let Some(symbol_key) = scope.get(ident) else {
+                    result_stack.push(None);
                     diagnostics.var_not_found(arenas, *ast_ident);
-                    return Err(());
+                    error = true;
+                    continue;
                 };
-                let SymbolVariant::Genvar(n) = scope.symbols[symbol_key].variant else {
-                    todo!();
+                let n = match scope.symbols[symbol_key].variant {
+                    SymbolVariant::Genvar(n) => n.unwrap(),
+                    SymbolVariant::Constant(n) => n.unwrap(),
+                    SymbolVariant::Variable(_) | SymbolVariant::Signal(_) => {
+                        result_stack.push(None);
+                        diagnostics.not_yet_implemented(
+                            arenas.get_item_span(*ast_ident),
+                            "non-constant symbol in constant-expr",
+                        );
+                        error = true;
+                        continue;
+                    }
                 };
-                result_stack.push(Some(n.unwrap() as _));
+                result_stack.push(Some(n as u64));
             }
             Expr::Sized(..)
             | Expr::String(..)

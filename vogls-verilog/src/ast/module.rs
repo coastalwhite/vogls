@@ -253,7 +253,27 @@ pub struct NetAssignment {
 #[derive(Clone, Copy)]
 pub struct ModuleInstantiation {
     pub module_identifier: AstItem<Identifier>,
+    pub parameter_value_assignment: Option<AstId<ParameterValueAssignment>>,
     pub module_instances: AstIdRange<ModuleInstance>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 495
+// parameter_value_assignment ::= # ( list_of_parameter_assignments )
+// list_of_parameter_assignments ::=
+//   ordered_parameter_assignment { , ordered_parameter_assignment }
+// | named_parameter_assignment { , named_parameter_assignment }
+#[derive(Clone, Copy)]
+pub enum ParameterValueAssignment {
+    Ordered(AstIdRange<ConstantExpr>),
+    Named(AstIdRange<NamedParameterAssignment>),
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 495
+// named_parameter_assignment ::= . parameter_identifier ( [ mintypmax_expression ] )
+#[derive(Clone, Copy)]
+pub struct NamedParameterAssignment {
+    pub identifier: AstItem<Identifier>,
+    pub expression: Option<AstId<ConstantMinTypMaxExpression>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 495

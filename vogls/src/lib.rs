@@ -11,8 +11,7 @@ use vogls_verilog::ast::module::{
     LoopGenerateConstruct, Module, ModuleItem, ModuleOrGenerateItem, NonPortModuleItem,
 };
 use vogls_verilog::lower::{
-    Diagnostics as LowerDiagnostics, ModuleInitialization, fetch_module_interface,
-    lower_module_to_ir,
+    fetch_module_interface, lower_module_to_ir, Diagnostics as LowerDiagnostics, ModuleArgs, ModuleInitialization
 };
 use vogls_verilog::parser::{
     AstArenas, Diagnostics as ParserDiagnostics, ParserScratches, TokenWalker, parse_file, report,
@@ -232,10 +231,11 @@ pub fn run(
     let mut error = false;
     let mut diagnostics = LowerDiagnostics::default();
     let mut next_modules = Vec::<ModuleInitialization>::new();
-    let Ok(top_level_io) = fetch_module_interface(
+    let Ok((top_level_params, top_level_io, parameters)) = fetch_module_interface(
         &mut gl,
         &ast.arenas,
         ast.modules.get(*tl_module),
+        &[],
         &mut diagnostics,
     ) else {
         return Err("top_level fetch_module error".into());
@@ -243,18 +243,23 @@ pub fn run(
     assert!(top_level_io.ports.is_empty());
     next_modules.push(ModuleInitialization {
         name: tl_module_name,
+        parameters: top_level_params,
         io: top_level_io,
-        signals: Vec::new(),
+        args: ModuleArgs {
+            parameters,
+            signals: Vec::new(),
+        },
     });
     while let Some(init) = next_modules.pop() {
-        let ModuleInitialization { name, io, signals } = &init;
+        let ModuleInitialization { name, parameters, io, args } = &init;
         let module_id = ast.modules.get(module_lut[name]);
         let module_key = lower_module_to_ir(
             &ast.arenas,
             module_id,
             &mut gl,
+            &parameters,
             &io,
-            &signals,
+            &args,
             &module_to_ast_lut,
             &mut next_modules,
             &mut diagnostics,

@@ -5,16 +5,17 @@ use vogls_ir::{
 };
 
 use crate::ast::AstId;
+use crate::ast::constant_expr::ConstantMinTypMaxExpression;
 use crate::ast::module::{
     GateInstantiation, GenerateBlock, GenvarAssignment, GenvarDeclaration, ListOfPortConnections,
     LoopGenerateConstruct, Module, ModuleInstance, ModuleInstantiation, ModuleOrGenerateItem,
-    ModuleOrGenerateItemDeclaration, NInputGateInstance, NInputGateType, NamedPortConnection,
-    NetDeclAssignment, NetDeclarationNets,
+    ModuleOrGenerateItemDeclaration, NInputGateInstance, NInputGateType, NamedParameterAssignment,
+    NamedPortConnection, NetDeclAssignment, NetDeclarationNets, ParameterValueAssignment,
 };
 use crate::lower::scope::{Symbol, SymbolVariant};
 use crate::lower::{
-    assign_net_lvalue, assign_port_output, eval_constant_expr, fetch_module_interface, lower_expr,
-    lower_to_signal, range_to_width, statements_to_process,
+    ModuleArgs, assign_net_lvalue, assign_port_output, eval_constant_expr, fetch_module_interface,
+    lower_expr, lower_to_signal, range_to_width, statements_to_process,
 };
 use crate::parser::AstArenas;
 
@@ -289,6 +290,7 @@ pub fn lower<'a>(
         ModuleOrGenerateItem::ModuleInstantiation(id) => {
             let ModuleInstantiation {
                 module_identifier,
+                parameter_value_assignment,
                 module_instances,
             } = arenas.get(*id);
             let instantiation_ident = arenas.get_ident(module_identifier.item.0);
@@ -297,7 +299,49 @@ pub fn lower<'a>(
                 return Err(());
             };
 
-            let instant_io = fetch_module_interface(gl, arenas, *instant_module, diagnostics)?;
+            let mut params = Vec::new();
+            if let Some(parameter_value_assignment) = parameter_value_assignment {
+                match arenas.get(*parameter_value_assignment) {
+                    ParameterValueAssignment::Ordered(_) => {
+                        diagnostics.not_yet_implemented(
+                            arenas.get_span(*parameter_value_assignment),
+                            "ordered parameter assignment",
+                        );
+                        return Err(());
+                    }
+                    ParameterValueAssignment::Named(named) => {
+                        for n in named.iter() {
+                            let NamedParameterAssignment {
+                                identifier,
+                                expression,
+                            } = arenas.get(n);
+                            let key = arenas.get_ident(identifier.item.0);
+                            let Some(expression) = expression else {
+                                diagnostics.not_yet_implemented(
+                                    arenas.get_span(n),
+                                    "null parameter assignment",
+                                );
+                                return Err(());
+                            };
+                            let ConstantMinTypMaxExpression::Single(expression) =
+                                arenas.get(*expression)
+                            else {
+                                diagnostics.not_yet_implemented(
+                                    arenas.get_span(n),
+                                    "mintypmax parameter assignment",
+                                );
+                                return Err(());
+                            };
+                            let value =
+                                eval_constant_expr(gl, scope, *expression, arenas, diagnostics)?;
+                            params.push((key, value as i64, arenas.get_span(*expression)));
+                        }
+                    }
+                }
+            }
+
+            let (instant_params, instant_io, parameters) =
+                fetch_module_interface(gl, arenas, *instant_module, &params, diagnostics)?;
 
             for instance in module_instances.iter() {
                 let ModuleInstance {
@@ -432,8 +476,12 @@ pub fn lower<'a>(
                 };
                 next_modules.push(ModuleInitialization {
                     name: instantiation_ident,
+                    parameters: instant_params.clone(),
                     io: instant_io.clone(),
-                    signals,
+                    args: ModuleArgs {
+                        parameters: parameters.clone(),
+                        signals,
+                    },
                 });
             }
         }
