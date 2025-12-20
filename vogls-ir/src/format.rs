@@ -3,7 +3,7 @@ use std::collections::HashSet;
 
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryOp, GlobalContext, Instruction,
-    IntrinsicArg, IntrinsicOp, Module, Process, Signal, Time, Type, UnaryOp, Value, Variable,
+    IntrinsicArg, IntrinsicOp, Process, Signal, Time, Type, UnaryOp, Value, Variable,
 };
 
 const INDENT: &str = "  ";
@@ -42,27 +42,6 @@ pub trait ContextFormat {
         ContextDisplay { item: self, gl }
     }
     fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &mut DisplayContext<'_>) -> fmt::Result;
-}
-
-impl ContextFormat for Module {
-    fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &mut DisplayContext<'_>) -> fmt::Result {
-        writeln!(f, "module {}:", self.name)?;
-
-        ctx.gl.processes[self.initialize].ctx_fmt(f, ctx)?;
-        writeln!(f)?;
-
-        if let Some(s) = self.processes.first() {
-            ctx.gl.processes.get(*s).unwrap().ctx_fmt(f, ctx)?;
-            for s in &self.processes[1..] {
-                writeln!(f)?;
-                ctx.gl.processes.get(*s).unwrap().ctx_fmt(f, ctx)?;
-            }
-        }
-
-        writeln!(f, "endmodule {};", self.name)?;
-
-        Ok(())
-    }
 }
 
 impl ContextFormat for Process {
@@ -259,34 +238,6 @@ impl ContextFormat for Instruction {
                     f.write_str(" ")?;
                     ctx.gl.vars.get(*var).unwrap().typed_ctx_fmt(f, ctx)?;
                 }
-            }
-
-            Self::Spawn(process, ports) => {
-                let process = &ctx.gl.processes[*process];
-                write!(f, "spawn @{} (", process.name)?;
-                if let Some(sig) = ports.first() {
-                    write!(f, "{}", ctx.gl.signals.get(*sig).unwrap().name)?;
-                    for sig in ports.iter().skip(1) {
-                        write!(f, ", {}", ctx.gl.signals.get(*sig).unwrap().name)?;
-                    }
-                }
-                write!(f, ")")?;
-            }
-
-            Self::Instantiate(module, ports) => {
-                let module = &ctx.gl.modules[*module];
-                write!(f, "instantiate @{} (", module.name)?;
-                if let Some(sig) = ports.first() {
-                    write!(f, "{}", ctx.gl.signals.get(*sig).unwrap().name)?;
-                    for sig in ports.iter().skip(1) {
-                        write!(f, ", {}", ctx.gl.signals.get(*sig).unwrap().name)?;
-                    }
-                }
-                write!(f, ")")?;
-            }
-            Self::Signal(signal) => {
-                let signal = ctx.gl.signals.get(*signal).unwrap();
-                write!(f, "signal {} {}", signal.ty.display(ctx.gl), signal.name)?;
             }
         }
 

@@ -36,7 +36,7 @@ module aes_inverse_gf2p4(data_i, data_o);
 
     assign a = data_i[3:2] ^ data_i[1:0];
 
-    aes_mul_gf2p2            m1( .a_i(data_i[3:2]), .b_i(data_i[1:0]), .z_i(b)     );
+    aes_mul_gf2p2            m1( .a_i(data_i[3:2]), .b_i(data_i[1:0]), .z_o(b)     );
     aes_square_gf2p2       sqc1( .data_i(a),                           .data_o(c1) );
     aes_scale_omega2_gf2p2   sc( .data_i(c1),                          .data_o(c)  );
     aes_square_gf2p2        inv( .data_i(c ^ b),                       .data_o(d)  );

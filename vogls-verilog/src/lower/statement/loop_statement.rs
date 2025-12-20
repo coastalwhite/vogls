@@ -80,7 +80,7 @@ pub fn lower_loop_statement<'a>(
         match &mut scope.symbols[*symkey].variant {
             SymbolVariant::Constant(_) => todo!(),
             SymbolVariant::Genvar(_) => todo!(),
-            SymbolVariant::Signal(_) => todo!(),
+            SymbolVariant::Signal(_) => {},
             SymbolVariant::Variable(None) => todo!(),
             SymbolVariant::Variable(Some(current_var)) => {
                 // @TODO: predecessor might be wrong here.

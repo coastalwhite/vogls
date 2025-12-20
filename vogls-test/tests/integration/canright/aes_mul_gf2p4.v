@@ -41,25 +41,10 @@ module aes_mul_gf2p4(gamma, delta, theta);
 
     wire [1:0] a, b, c, t;
 
-    aes_mul_gf2p2 m1(
-        .a_i(gamma[3:2]),
-        .b_i(delta[3:2]),
-        .z_i(a)
-    );
-    aes_mul_gf2p2 m2(
-        .a_i(gamma[3:2] ^ gamma[1:0]),
-        .b_i(delta[3:2] ^ delta[1:0]),
-        .z_i(b)
-    );
-    aes_mul_gf2p2 m3(
-        .a_i(gamma[1:0]),
-        .b_i(delta[1:0]),
-        .z_i(c)
-    );
-    aes_scale_omega2_gf2p2 sc1(
-        .data_i(b),
-        .data_o(t)
-    );
+    aes_mul_gf2p2           m1( .a_i(gamma[3:2]), .b_i(delta[3:2]), .z_o(a) );
+    aes_mul_gf2p2           m2( .a_i(gamma[3:2] ^ gamma[1:0]), .b_i(delta[3:2] ^ delta[1:0]), .z_o(b) );
+    aes_mul_gf2p2           m3( .a_i(gamma[1:0]), .b_i(delta[1:0]), .z_o(c) );
+    aes_scale_omega2_gf2p2 sc1( .data_i(b), .data_o(t)                      );
     
     assign theta = { a ^ t, c ^ t };
 endmodule

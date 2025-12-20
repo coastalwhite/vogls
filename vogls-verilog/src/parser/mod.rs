@@ -87,6 +87,13 @@ impl AstArenas {
     pub fn get_ident(&self, ident_ref: TextRef) -> &str {
         &self.text[ident_ref.start..ident_ref.end]
     }
+
+    pub fn to_item<T: Copy + 'static>(&self, id: AstId<T>) -> AstItem<T> {
+        AstItem {
+            item: *self.get(id),
+            loc: id.loc,
+        }
+    }
 }
 
 pub struct Ast {

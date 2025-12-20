@@ -130,7 +130,6 @@ pub fn lower_process_to_vm(
                     partial.map(|(o, l)| (var(o), l)),
                 ),
                 I::Phi(..) => continue,
-                I::Instantiate(_, _) | I::Spawn(_, _) | I::Signal(_) => unreachable!(),
             };
 
             instructions.push(instr);

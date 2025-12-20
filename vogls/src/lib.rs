@@ -6,15 +6,19 @@ use slotmap::SlotMap;
 use vogls_ir::{Bits, ContextFormat, GlobalContext, Type, Value};
 use vogls_sim::{Context, Event, ScheduledEvent, VmProcess, VmProcessKey, lower_process_to_vm};
 use vogls_verilog::ast::AstId;
-use vogls_verilog::ast::module::{Module, ModuleItem, ModuleOrGenerateItem, NonPortModuleItem};
-use vogls_verilog::lower::{Diagnostics as LowerDiagnostics, lower_module_to_ir};
+use vogls_verilog::ast::module::{
+    CaseGenerateConstruct, CaseGenerateItem, GenerateBlock, IfGenerateConstruct,
+    LoopGenerateConstruct, Module, ModuleItem, ModuleOrGenerateItem, NonPortModuleItem,
+};
+use vogls_verilog::lower::{
+    Diagnostics as LowerDiagnostics, ModuleInitialization, fetch_module_interface,
+    lower_module_to_ir,
+};
 use vogls_verilog::parser::{
-    Diagnostics as ParserDiagnostics, ParserScratches, TokenWalker, parse_file, report,
+    AstArenas, Diagnostics as ParserDiagnostics, ParserScratches, TokenWalker, parse_file, report,
     report_error,
 };
 use vogls_verilog::tokenizer::Tokenized;
-
-mod elaborate;
 
 pub struct ExecutionContext {
     pub stdout: Box<dyn std::io::Write>,
@@ -23,6 +27,90 @@ pub struct ExecutionContext {
     pub output_elaborated: bool,
     pub output_sim_ir: bool,
     pub output_schedule: bool,
+}
+
+fn append_referenced_modules_generate_block<'a>(
+    arenas: &'a AstArenas,
+    generate_block: AstId<GenerateBlock>,
+    referenced: &mut HashSet<&'a str>,
+) {
+    match arenas.get(generate_block) {
+        GenerateBlock::ModuleOrGenerateItem(id) => {
+            append_referenced_modules(arenas, *id, referenced)
+        }
+        GenerateBlock::BeginEnd(_, ids) => {
+            for id in ids.iter() {
+                append_referenced_modules(arenas, id, referenced);
+            }
+        }
+    }
+}
+
+fn append_referenced_modules_opt_generate_block<'a>(
+    arenas: &'a AstArenas,
+    generate_block: AstId<Option<GenerateBlock>>,
+    referenced: &mut HashSet<&'a str>,
+) {
+    match arenas.get(generate_block) {
+        None => {}
+        Some(GenerateBlock::ModuleOrGenerateItem(id)) => {
+            append_referenced_modules(arenas, *id, referenced)
+        }
+        Some(GenerateBlock::BeginEnd(_, ids)) => {
+            for id in ids.iter() {
+                append_referenced_modules(arenas, id, referenced);
+            }
+        }
+    }
+}
+
+fn append_referenced_modules<'a>(
+    arenas: &'a AstArenas,
+    module_or_generate_item: AstId<ModuleOrGenerateItem>,
+    referenced: &mut HashSet<&'a str>,
+) {
+    match arenas.get(module_or_generate_item) {
+        ModuleOrGenerateItem::ModuleInstantiation(module_instantiation) => {
+            let module_instantiation = arenas.get(*module_instantiation);
+            let module_name = arenas.get_ident(module_instantiation.module_identifier.item.0);
+            referenced.insert(module_name);
+        }
+        ModuleOrGenerateItem::ModuleOrGenerateItemDeclaration(_) => {}
+        ModuleOrGenerateItem::LocalParameterDeclaration => {}
+        ModuleOrGenerateItem::ParameterOverride => {}
+        ModuleOrGenerateItem::ContinuousAssign(_) => {}
+        ModuleOrGenerateItem::GateInstantiation(_) => {}
+        ModuleOrGenerateItem::UdpInstantiation => {}
+        ModuleOrGenerateItem::InitialConstruct(_) => {}
+        ModuleOrGenerateItem::AlwaysConstruct(_) => {}
+        ModuleOrGenerateItem::LoopGenerateConstruct(loop_generate_construct) => {
+            let LoopGenerateConstruct {
+                initialization: _,
+                condition: _,
+                iteration: _,
+                block,
+            } = arenas.get(*loop_generate_construct);
+            append_referenced_modules_generate_block(arenas, *block, referenced);
+        }
+        ModuleOrGenerateItem::IfGenerateConstruct(if_generate_construct) => {
+            let IfGenerateConstruct {
+                condition: _,
+                truthy,
+                falsy,
+            } = arenas.get(*if_generate_construct);
+            append_referenced_modules_opt_generate_block(arenas, *truthy, referenced);
+            if let Some(falsy) = falsy {
+                append_referenced_modules_opt_generate_block(arenas, *falsy, referenced);
+            }
+        }
+        ModuleOrGenerateItem::CaseGenerateConstruct(case_generate_construct) => {
+            let CaseGenerateConstruct { value: _, items } = arenas.get(*case_generate_construct);
+            for item in items.iter() {
+                let CaseGenerateItem { pattern: _, block } = arenas.get(item);
+                append_referenced_modules_opt_generate_block(arenas, *block, referenced);
+            }
+        }
+    }
 }
 
 pub fn run(
@@ -57,6 +145,14 @@ pub fn run(
             let module = ast.arenas.get(module_id);
             (ast.arenas.get_ident(module.module_identifier.item.0), i)
         }));
+    let module_to_ast_lut =
+        HashMap::<&str, AstId<Module>>::from_iter(ast.modules.iter().map(|module_id| {
+            let module = ast.arenas.get(module_id);
+            (
+                ast.arenas.get_ident(module.module_identifier.item.0),
+                module_id,
+            )
+        }));
 
     let tl_module_name = match top_level_module {
         Some(v) => v,
@@ -77,15 +173,7 @@ pub fn run(
 
                     if let NonPortModuleItem::ModuleOrGenerateItem(module_item) = ast.arenas.get(*p)
                     {
-                        if let ModuleOrGenerateItem::ModuleInstantiation(module_instantiation) =
-                            ast.arenas.get(*module_item)
-                        {
-                            let module_instantiation = ast.arenas.get(*module_instantiation);
-                            let module_name = ast
-                                .arenas
-                                .get_ident(module_instantiation.module_identifier.item.0);
-                            referenced.insert(module_name);
-                        }
+                        append_referenced_modules(&ast.arenas, *module_item, &mut referenced);
                     }
                 }
             }
@@ -140,70 +228,38 @@ pub fn run(
         ));
     };
 
-    // Create a list of all module in breadth- first order.
-    // @TODO: Add a mechanism for detecting dependency loops.
-    let mut module_stack: Vec<AstId<Module>> = Vec::new();
-    let mut module_seen: HashSet<&str> = HashSet::new();
-    module_stack.push(ast.modules.get(*tl_module));
-    module_seen.insert(tl_module_name);
-    let mut start = 0;
-    while start != module_stack.len() {
-        let end = module_stack.len();
-        for j in start..end {
-            let module_id = module_stack[j];
-            let Module {
-                attribute_instances: _,
-                module_identifier: _,
-                module_parameter_port_list: _,
-                module_items,
-                ports: _,
-            } = ast.arenas.get(module_id);
-            for module_item in module_items.iter() {
-                let ModuleItem::NonPortModuleItem(p) = ast.arenas.get(module_item) else {
-                    continue;
-                };
-
-                if let NonPortModuleItem::ModuleOrGenerateItem(module_item) = ast.arenas.get(*p) {
-                    if let ModuleOrGenerateItem::ModuleInstantiation(module_instantiation) =
-                        ast.arenas.get(*module_item)
-                    {
-                        let module_instantiation = ast.arenas.get(*module_instantiation);
-                        let module_name = ast
-                            .arenas
-                            .get_ident(module_instantiation.module_identifier.item.0);
-
-                        if !module_seen.insert(module_name) {
-                            continue;
-                        }
-
-                        let i = module_lut
-                            .get(module_name)
-                            .ok_or(format!("module '{module_name}' does not exist"))?;
-                        module_stack.push(ast.modules.get(*i));
-                    }
-                }
-            }
-        }
-        start = end;
-    }
-
     // Walk the modules in depth-first order and lower to IR.
-    let mut instantiated_modules = HashMap::with_capacity(module_stack.len());
     let mut error = false;
     let mut diagnostics = LowerDiagnostics::default();
-    for module_id in module_stack.iter().rev() {
-        let module_identifier = ast.arenas.get(*module_id).module_identifier;
-        let module_identifier = ast.arenas.get_ident(module_identifier.item.0);
-
+    let mut next_modules = Vec::<ModuleInitialization>::new();
+    let Ok(top_level_io) = fetch_module_interface(
+        &mut gl,
+        &ast.arenas,
+        ast.modules.get(*tl_module),
+        &mut diagnostics,
+    ) else {
+        return Err("top_level fetch_module error".into());
+    };
+    assert!(top_level_io.ports.is_empty());
+    next_modules.push(ModuleInitialization {
+        name: tl_module_name,
+        io: top_level_io,
+        signals: Vec::new(),
+    });
+    while let Some(init) = next_modules.pop() {
+        let ModuleInitialization { name, io, signals } = &init;
+        let module_id = ast.modules.get(module_lut[name]);
         let module_key = lower_module_to_ir(
-            &ast,
-            *module_id,
+            &ast.arenas,
+            module_id,
             &mut gl,
-            &instantiated_modules,
+            &io,
+            &signals,
+            &module_to_ast_lut,
+            &mut next_modules,
             &mut diagnostics,
         );
         error |= module_key.is_err();
-        instantiated_modules.insert(module_identifier, module_key);
     }
 
     if !diagnostics.warnings.is_empty() {
@@ -231,11 +287,9 @@ pub fn run(
         return Err("failed to lower".into());
     }
 
-    let tl_module_key = instantiated_modules.get(tl_module_name).unwrap().unwrap();
-
     if ectx.output_ir {
-        for module in gl.modules.values() {
-            writeln!(ectx.stdout, "{}", module.display(&gl))?;
+        for process in gl.processes.values() {
+            writeln!(ectx.stdout, "{}", process.display(&gl))?;
         }
     }
 
@@ -245,12 +299,12 @@ pub fn run(
     let mut listeners = SlotMap::default();
     let mut watches = HashMap::default();
 
-    // Find the entity for the Top-Level Module.
-    let mut elab_processes = Vec::new();
-    elaborate::elaborate(tl_module_key, &mut gl, &mut elab_processes);
+    // // Find the entity for the Top-Level Module.
+    // let mut elab_processes = Vec::new();
+    // elaborate::elaborate(tl_module_key, &mut gl, &mut elab_processes);
 
     let mut io_signals = HashMap::new();
-    for &process in elab_processes.iter() {
+    for process in gl.processes.keys() {
         if ectx.output_elaborated {
             println!();
             println!("{}", gl.processes[process].display(&gl));

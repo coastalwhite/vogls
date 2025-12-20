@@ -1,21 +1,14 @@
-use indexmap::{IndexMap, IndexSet};
+use indexmap::IndexSet;
 
 use crate::{
-    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryOp, Connection, ConnectionDirection,
-    GlobalContext, Instruction, IntrinsicArg, IntrinsicOp, Module, ModuleKey, Process, ProcessKey,
-    SignalKey, Time, Type, UnaryOp, Value, Variable, VariableKey, VectorSize,
+    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryOp, GlobalContext, Instruction,
+    IntrinsicArg, IntrinsicOp, Process, ProcessKey, SignalKey, Time, Type, UnaryOp, Value,
+    Variable, VariableKey, VectorSize,
 };
-
-#[must_use]
-pub struct ModuleBuilder {
-    key: ModuleKey,
-    pub entity: BasicBlockBuilder,
-}
 
 #[must_use]
 pub struct BasicBlockBuilder {
     key: BasicBlockKey,
-    module: ModuleKey,
     process: ProcessKey,
     initializer: bool,
 
@@ -24,76 +17,30 @@ pub struct BasicBlockBuilder {
     bbname_offset: usize,
 }
 
-impl ModuleBuilder {
-    pub fn new(name: String, gl: &mut GlobalContext) -> Self {
-        let bb_key = gl.bbs.insert(BasicBlock {
-            name: String::from("entry"),
+pub fn new_process(gl: &'_ mut GlobalContext, name: String) -> (ProcessKey, BasicBlockBuilder) {
+    let bb_key = gl.bbs.insert(BasicBlock {
+        name: String::from("entry"),
+        instrs: Vec::new(),
+        terminator: BasicBlockTerminator::Halt,
+    });
+    let process_key = gl.processes.insert(Process {
+        name,
+        entry: bb_key,
+
+        ins: IndexSet::new(),
+        outs: IndexSet::new(),
+    });
+    (
+        process_key,
+        BasicBlockBuilder {
+            key: bb_key,
+            process: process_key,
+            initializer: false,
             instrs: Vec::new(),
-            terminator: BasicBlockTerminator::Halt,
-        });
-        let initialize = gl.processes.insert(Process {
-            name: format!("{name}-init"),
-            entry: bb_key,
-            ins: Default::default(),
-            outs: Default::default(),
-        });
-        let key = gl.modules.insert(Module {
-            name,
-            initialize,
-            processes: Vec::new(),
-            io: IndexMap::default(),
-        });
-
-        Self {
-            key,
-            entity: BasicBlockBuilder {
-                key: bb_key,
-                module: key,
-                process: initialize,
-                initializer: true,
-                instrs: Vec::new(),
-                tmp_offset: 0,
-                bbname_offset: 0,
-            },
-        }
-    }
-
-    pub fn finish(self, gl: &mut GlobalContext) -> ModuleKey {
-        self.entity.halt(gl);
-        self.key
-    }
-
-    pub fn process(
-        &mut self,
-        gl: &'_ mut GlobalContext,
-        name: String,
-    ) -> (ProcessKey, BasicBlockBuilder) {
-        let bb_key = gl.bbs.insert(BasicBlock {
-            name: String::from("entry"),
-            instrs: Vec::new(),
-            terminator: BasicBlockTerminator::Halt,
-        });
-        let process_key = gl.processes.insert(Process {
-            name,
-            entry: bb_key,
-
-            ins: IndexSet::new(),
-            outs: IndexSet::new(),
-        });
-        gl.modules[self.key].processes.push(process_key);
-        (
-            process_key,
-            BasicBlockBuilder {
-                key: bb_key,
-                module: self.key,
-                process: process_key,
-                initializer: false,
-                instrs: Vec::new(),
-                tmp_offset: 0,
-                bbname_offset: 0,
-            },
-        )
-    }
+            tmp_offset: 0,
+            bbname_offset: 0,
+        },
+    )
 }
 
 pub struct PhiRef(BasicBlockKey, usize);
@@ -150,7 +97,6 @@ impl BasicBlockBuilder {
         BasicBlockBuilder {
             key: next_key,
 
-            module: self.module,
             process: self.process,
             initializer: self.initializer,
 
@@ -563,27 +509,6 @@ impl BasicBlockBuilder {
         xnor
     }
 
-    pub fn push_in_port(&mut self, gl: &mut GlobalContext, name: String, signal: SignalKey) {
-        assert!(self.initializer);
-        gl.modules[self.module].io.insert(
-            name,
-            Connection {
-                signal,
-                direction: ConnectionDirection::In,
-            },
-        );
-    }
-    pub fn push_out_port(&mut self, gl: &mut GlobalContext, name: String, signal: SignalKey) {
-        assert!(self.initializer);
-        gl.modules[self.module].io.insert(
-            name,
-            Connection {
-                signal,
-                direction: ConnectionDirection::Out,
-            },
-        );
-    }
-
     pub fn reduce_xor(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
         match &gl.vars[src].ty {
             Type::Decimal => {
@@ -675,7 +600,6 @@ impl BasicBlockBuilder {
         BasicBlockBuilder {
             key: next_key,
 
-            module: self.module,
             process: self.process,
             initializer: self.initializer,
 
@@ -699,7 +623,6 @@ impl BasicBlockBuilder {
         BasicBlockBuilder {
             key: next_key,
 
-            module: self.module,
             process: self.process,
             initializer: self.initializer,
 
@@ -722,7 +645,6 @@ impl BasicBlockBuilder {
         BasicBlockBuilder {
             key: next_key,
 
-            module: self.module,
             process: self.process,
             initializer: self.initializer,
 
@@ -746,7 +668,6 @@ impl BasicBlockBuilder {
         let builder = BasicBlockBuilder {
             key: next_key,
 
-            module: self.module,
             process: self.process,
             initializer: self.initializer,
 
@@ -771,7 +692,6 @@ impl BasicBlockBuilder {
         BasicBlockBuilder {
             key: next_key,
 
-            module: self.module,
             process: self.process,
             initializer: self.initializer,
 
@@ -794,7 +714,6 @@ impl BasicBlockBuilder {
         BasicBlockBuilder {
             key: next_key,
 
-            module: self.module,
             process: self.process,
             initializer: self.initializer,
 
@@ -819,7 +738,6 @@ impl BasicBlockBuilder {
         BasicBlockBuilder {
             key: next_key,
 
-            module: self.module,
             process: self.process,
             initializer: self.initializer,
 
@@ -843,7 +761,6 @@ impl BasicBlockBuilder {
         BasicBlockBuilder {
             key: next_key,
 
-            module: self.module,
             process: self.process,
             initializer: self.initializer,
 
@@ -871,26 +788,6 @@ impl BasicBlockBuilder {
 
     pub fn intrinsic(&mut self, _gl: &mut GlobalContext, op: IntrinsicOp, args: Vec<IntrinsicArg>) {
         self.instrs.push(Instruction::Intrinsic(op, args));
-    }
-
-    pub fn spawn(&mut self, _gl: &mut GlobalContext, process: ProcessKey, ports: Vec<SignalKey>) {
-        assert!(self.initializer);
-        self.instrs.push(Instruction::Spawn(process, ports));
-    }
-
-    pub fn instantiate(
-        &mut self,
-        _gl: &mut GlobalContext,
-        module: ModuleKey,
-        ports: Vec<SignalKey>,
-    ) {
-        assert!(self.initializer);
-        self.instrs.push(Instruction::Instantiate(module, ports));
-    }
-
-    pub fn signal(&mut self, _gl: &mut GlobalContext, signal: SignalKey) {
-        assert!(self.initializer);
-        self.instrs.push(Instruction::Signal(signal));
     }
 
     fn cast(&mut self, gl: &mut GlobalContext, src: VariableKey, ty: Type) -> VariableKey {

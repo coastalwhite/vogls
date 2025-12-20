@@ -17,9 +17,9 @@ module sbox_fwd(data_i, data_o);
 
     assign data_o = data_basis_s ^ 8'h63;
 
-    aes_mvn           a2x( .vec(data_i),          .matrix(`A2X), .data_o(data_basis_x) );
-    aes_inverse_gf2p8 inv( .data_i(data_basis_x),                .data_o(data_inverse) );
-    aes_mvn           x2s( .vec(data_inverse),    .matrix(`X2S), .data_o(data_basis_s) );
+    aes_mvn           a2x( .vec(data_i),          .mat(`A2X), .data_o(data_basis_x) );
+    aes_inverse_gf2p8 inv( .data_i(data_basis_x),             .data_o(data_inverse) );
+    aes_mvn           x2s( .vec(data_inverse),    .mat(`X2S), .data_o(data_basis_s) );
 endmodule
 
 module sbox_inv(data_i, data_o);
@@ -29,9 +29,9 @@ module sbox_inv(data_i, data_o);
     wire [7:0] data_basis_x;
     wire [7:0] data_inverse;
 
-    aes_mvn           s2x( .vec   (data_i ^ 8'h63), .matrix(`S2X), .data_o(data_basis_x) );
-    aes_inverse_gf2p8 inv( .data_i(data_basis_x),                  .data_o(data_inverse) );
-    aes_mvn           x2a( .vec   (data_inverse),   .matrix(`X2A), .data_o(data_o)       );
+    aes_mvn           s2x( .vec   (data_i ^ 8'h63), .mat(`S2X), .data_o(data_basis_x) );
+    aes_inverse_gf2p8 inv( .data_i(data_basis_x),               .data_o(data_inverse) );
+    aes_mvn           x2a( .vec   (data_inverse),   .mat(`X2A), .data_o(data_o)       );
 endmodule
 
 module tb();

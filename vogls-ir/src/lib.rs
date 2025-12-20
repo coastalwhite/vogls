@@ -4,12 +4,11 @@ mod format;
 use std::collections::HashSet;
 use std::fmt;
 
-pub use builder::{BasicBlockBuilder, BranchRef, ModuleBuilder, PhiRef};
+pub use builder::{BasicBlockBuilder, BranchRef, PhiRef, new_process};
 pub use format::{ContextFormat, DisplayContext};
-use indexmap::{IndexMap, IndexSet};
+use indexmap::IndexSet;
 use slotmap::{SlotMap, new_key_type};
 
-new_key_type! { pub struct ModuleKey; }
 new_key_type! { pub struct ProcessKey; }
 new_key_type! { pub struct BasicBlockKey; }
 new_key_type! { pub struct SignalKey; }
@@ -189,10 +188,6 @@ pub enum Instruction {
     Probe(VariableKey, SignalKey),
     Drive(SignalKey, VariableKey, Option<(VariableKey, VectorSize)>),
 
-    Instantiate(ModuleKey, Vec<SignalKey>),
-    Spawn(ProcessKey, Vec<SignalKey>),
-    Signal(SignalKey),
-
     Phi(VariableKey, Box<[(BasicBlockKey, VariableKey)]>),
 }
 
@@ -206,16 +201,12 @@ impl Instruction {
             | Self::Cast(dst, _)
             | Self::Phi(dst, _)
             | Self::Probe(dst, _) => Some(*dst),
-            Self::Intrinsic(_, _)
-            | Self::Drive(_, _, _)
-            | Self::Spawn(_, _)
-            | Self::Instantiate(_, _)
-            | Self::Signal(_) => None,
+            Self::Intrinsic(_, _) | Self::Drive(_, _, _) => None,
         }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum ConnectionDirection {
     In,
     Out,
@@ -230,19 +221,10 @@ pub struct Connection {
 
 #[derive(Default)]
 pub struct GlobalContext {
-    pub modules: SlotMap<ModuleKey, Module>,
     pub processes: SlotMap<ProcessKey, Process>,
     pub bbs: SlotMap<BasicBlockKey, BasicBlock>,
     pub vars: SlotMap<VariableKey, Variable>,
     pub signals: SlotMap<SignalKey, Signal>,
-}
-
-#[derive(Debug)]
-pub struct Module {
-    pub name: String,
-    pub initialize: ProcessKey,
-    pub processes: Vec<ProcessKey>,
-    pub io: IndexMap<String, Connection>,
 }
 
 #[derive(Debug)]
