@@ -37,7 +37,7 @@ pub fn lower_loop_statement<'a>(
                 scope,
                 diagnostics,
                 &mut builder,
-                arenas.get(size),
+                size,
             )?;
             let i = builder.constant(gl, Value::Decimal(0));
             repeat_vars = Some((i, size));
@@ -51,7 +51,7 @@ pub fn lower_loop_statement<'a>(
                 scope,
                 diagnostics,
                 &mut builder,
-                arenas.get(initialization.expr),
+                initialization.expr,
             )?;
             assign_variable_lvalue(
                 gl,
@@ -118,7 +118,7 @@ pub fn lower_loop_statement<'a>(
             scope,
             diagnostics,
             &mut builder,
-            arenas.get(condition),
+            condition,
         )?),
         V::For(_, condition, _) => Some(lower_expr(
             gl,
@@ -127,7 +127,7 @@ pub fn lower_loop_statement<'a>(
             scope,
             diagnostics,
             &mut builder,
-            arenas.get(condition),
+            condition,
         )?),
     };
 
@@ -164,7 +164,7 @@ pub fn lower_loop_statement<'a>(
                 scope,
                 diagnostics,
                 &mut builder,
-                arenas.get(step.expr),
+                step.expr,
             )?;
             assign_variable_lvalue(
                 gl,

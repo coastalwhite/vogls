@@ -508,6 +508,16 @@ impl BasicBlockBuilder {
         let xnor = self.binary_neg(gl, no_equals);
         xnor
     }
+    pub fn not_equals(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+    ) -> VariableKey {
+        let xor = self.xor(gl, lhs, rhs);
+        let no_equals = self.reduce_or(gl, xor);
+        no_equals
+    }
 
     pub fn reduce_xor(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
         match &gl.vars[src].ty {
@@ -790,7 +800,7 @@ impl BasicBlockBuilder {
         self.instrs.push(Instruction::Intrinsic(op, args));
     }
 
-    fn cast(&mut self, gl: &mut GlobalContext, src: VariableKey, ty: Type) -> VariableKey {
+    pub fn cast(&mut self, gl: &mut GlobalContext, src: VariableKey, ty: Type) -> VariableKey {
         if &gl.vars[src].ty == &ty {
             return src;
         }

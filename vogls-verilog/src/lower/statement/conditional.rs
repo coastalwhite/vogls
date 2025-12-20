@@ -65,7 +65,7 @@ pub fn lower<'a>(
         scope,
         diagnostics,
         &mut builder,
-        arenas.get(if_branch.condition),
+        if_branch.condition,
     )?;
 
     let mut state = State::new();
@@ -96,7 +96,7 @@ pub fn lower<'a>(
             scope,
             diagnostics,
             &mut builder,
-            arenas.get(else_if_branch.condition),
+            else_if_branch.condition,
         )?;
 
         (branch_ref, if_true_builder) = builder.branch(gl, condition);
@@ -188,7 +188,7 @@ pub fn lower_case_statement<'a>(
         scope,
         diagnostics,
         &mut builder,
-        arenas.get(*expr),
+        *expr,
     )?;
 
     let mut state = State::new();
@@ -210,7 +210,7 @@ pub fn lower_case_statement<'a>(
                     scope,
                     diagnostics,
                     &mut builder,
-                    arenas.get(fst),
+                    fst,
                 )?;
                 let mut acc = builder.equals(gl, expr_var, v);
                 for e in exprs.iter().skip(1) {
@@ -221,7 +221,7 @@ pub fn lower_case_statement<'a>(
                         scope,
                         diagnostics,
                         &mut builder,
-                        arenas.get(e),
+                        e,
                     )?;
                     let v = builder.equals(gl, expr_var, v);
                     acc = builder.or(gl, acc, v);

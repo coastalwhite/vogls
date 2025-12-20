@@ -1,4 +1,6 @@
+mod constant_expr;
 mod diagnostics;
+mod expression;
 mod module_or_generate_item;
 mod scope;
 mod statement;
@@ -9,6 +11,7 @@ use std::collections::{HashMap, HashSet};
 
 use scope::Scope;
 
+use constant_expr::eval_constant_expr;
 use vogls_ir::{
     BasicBlockBuilder, Bits, ConnectionDirection, GlobalContext, IntrinsicArg, IntrinsicOp,
     ProcessKey, Signal, SignalKey, Time, Type, Value, VariableKey, VectorSize, new_process,
@@ -17,7 +20,7 @@ use vogls_ir::{
 use crate::ast::constant_expr::{
     ConstantExpr, ConstantMinTypMaxExpression, ConstantRangeExpression,
 };
-use crate::ast::expr::{BinaryOperator, BitPartSelect, BitSlice, Expr, UnaryOperator};
+use crate::ast::expr::{BitPartSelect, BitSlice, Expr};
 use crate::ast::module::{
     GenerateRegion, Module, ModuleItem, ModulePorts, NonPortModuleItem, ParamAssignment,
     ParameterDeclaration, Port, PortDeclaration, PortExpression, PortReference, Range,
@@ -31,6 +34,7 @@ use crate::ast::{AstId, AstIdRange, RangeExpression};
 use crate::number::Decimal;
 use crate::parser::{AstArenas, TokenRange};
 
+use self::expression::lower_expr;
 use self::scope::{Symbol, SymbolKey, SymbolVariant};
 pub use self::vtype::{VType, VTypeKey, VTypeTable};
 use self::vvalue::VValue;
@@ -407,7 +411,7 @@ fn statements_to_process<'a>(
                     scope,
                     diagnostics,
                     &mut builder,
-                    arenas.get(*expression),
+                    *expression,
                 )?;
                 assign_variable_lvalue(
                     gl,
@@ -470,7 +474,7 @@ fn statements_to_process<'a>(
                     scope,
                     diagnostics,
                     &mut builder,
-                    arenas.get(*expression),
+                    *expression,
                 )?;
                 assign_variable_lvalue(
                     gl,
@@ -643,6 +647,7 @@ fn statements_to_process<'a>(
                             let str_literal = &arenas.text[str_literal.0.start..str_literal.0.end];
                             IntrinsicArg::StringLiteral(str_literal.to_string())
                         } else {
+                            let expr = expressions.first().unwrap();
                             let var = lower_expr(
                                 gl,
                                 arenas,
@@ -663,9 +668,6 @@ fn statements_to_process<'a>(
 
                         let lhs = expressions.get(0);
                         let rhs = expressions.get(1);
-
-                        let lhs = arenas.get(lhs);
-                        let rhs = arenas.get(rhs);
 
                         let lhs =
                             lower_expr(gl, arenas, types, scope, diagnostics, &mut builder, lhs)?;
@@ -853,15 +855,7 @@ fn lower_to_signal<'a>(
 
     let (section_key, mut bb_builder) = new_process(gl, "port_assignment".into());
     let bb_key = bb_builder.key();
-    let variable = lower_expr(
-        gl,
-        arenas,
-        types,
-        scope,
-        diagnostics,
-        &mut bb_builder,
-        arenas.get(expr),
-    )?;
+    let variable = lower_expr(gl, arenas, types, scope, diagnostics, &mut bb_builder, expr)?;
 
     bb_builder.drive(gl, signal, variable);
 
@@ -922,7 +916,7 @@ fn assign_port_output<'a>(
                     scope,
                     diagnostics,
                     &mut bb_builder,
-                    arenas.get(*braced),
+                    *braced,
                 )?;
 
                 let offset_dst = match offset_dst {
@@ -948,7 +942,7 @@ fn assign_port_output<'a>(
                             scope,
                             diagnostics,
                             &mut bb_builder,
-                            arenas.get(*base),
+                            *base,
                         );
                         let width =
                             eval_constant_expr(gl, arenas, types, scope, diagnostics, *width);
@@ -963,7 +957,7 @@ fn assign_port_output<'a>(
                             scope,
                             diagnostics,
                             &mut bb_builder,
-                            arenas.get(*base),
+                            *base,
                         );
                         let width =
                             eval_constant_expr(gl, arenas, types, scope, diagnostics, *width)?;
@@ -1157,209 +1151,6 @@ fn assign_port_output<'a>(
 //     })
 // }
 
-fn lower_expr<'a>(
-    gl: &mut GlobalContext,
-    arenas: &'a AstArenas,
-    types: &mut VTypeTable,
-    scope: &mut Scope<'a>,
-    diagnostics: &mut Diagnostics,
-    builder: &mut BasicBlockBuilder,
-    expr: &Expr,
-) -> Result<VariableKey, ()> {
-    Ok(match expr {
-        Expr::BitPartSelect(select) => {
-            let BitPartSelect { subject, braced } = select;
-            let subject = arenas.get(*subject);
-            let braced = arenas.get(*braced);
-
-            let subject_v = lower_expr(gl, arenas, types, scope, diagnostics, builder, subject)?;
-            let braced_v = lower_expr(gl, arenas, types, scope, diagnostics, builder, braced)?;
-
-            builder.select_bit(gl, subject_v, braced_v)
-        }
-        Expr::BitSlice(subject, slice) => {
-            let subject = arenas.get(*subject);
-            let subject_v = lower_expr(gl, arenas, types, scope, diagnostics, builder, subject)?;
-
-            let (lsb, width) = match slice {
-                BitSlice::MsbLsb(msb, lsb) => {
-                    let (_msb, lsb, width) =
-                        msb_lsb_to_width(gl, arenas, types, scope, diagnostics, *msb, *lsb)?;
-                    let lsb_v = builder.constant(gl, Value::Decimal(lsb as i64));
-                    (lsb_v, width)
-                }
-                BitSlice::PlusWidth(base, width) => {
-                    let lsb = lower_expr(
-                        gl,
-                        arenas,
-                        types,
-                        scope,
-                        diagnostics,
-                        builder,
-                        arenas.get(*base),
-                    )?;
-                    let width = eval_constant_expr(gl, arenas, types, scope, diagnostics, *width)?;
-                    let width = width.as_integer().unwrap() as VectorSize;
-                    (lsb, width)
-                }
-                BitSlice::MinusWidth(base, width) => {
-                    let width = eval_constant_expr(gl, arenas, types, scope, diagnostics, *width)?;
-                    let width = width.as_integer().unwrap();
-                    let width_v = builder.constant(gl, Value::Decimal(width - 1));
-                    let lsb = lower_expr(
-                        gl,
-                        arenas,
-                        types,
-                        scope,
-                        diagnostics,
-                        builder,
-                        arenas.get(*base),
-                    )?;
-                    let lsb = builder.minus(gl, lsb, width_v);
-                    (lsb, width as VectorSize)
-                }
-            };
-
-            let shifted = builder.lsr(gl, subject_v, lsb);
-            builder.slice(gl, shifted, width as VectorSize)
-        }
-        Expr::Unary(op, child) => {
-            let child = lower_expr(
-                gl,
-                arenas,
-                types,
-                scope,
-                diagnostics,
-                builder,
-                arenas.get(*child),
-            )?;
-            use UnaryOperator as O;
-            match op {
-                O::LogicalNegation => builder.logical_neg(gl, child),
-                O::BitwiseNegation => builder.binary_neg(gl, child),
-                O::ReductionAnd => todo!(),
-                O::ReductionOr => todo!(),
-                O::ReductionNand => todo!(),
-                O::ReductionNor => todo!(),
-                O::ReductionXor => builder.reduce_xor(gl, child),
-                O::ReductionXnor => todo!(),
-                O::SignPlus => todo!(),
-                O::SignMinus => todo!(),
-            }
-        }
-        Expr::Binary(op, l, r) => {
-            let l = lower_expr(
-                gl,
-                arenas,
-                types,
-                scope,
-                diagnostics,
-                builder,
-                arenas.get(*l),
-            )?;
-            let r = lower_expr(
-                gl,
-                arenas,
-                types,
-                scope,
-                diagnostics,
-                builder,
-                arenas.get(*r),
-            )?;
-            use BinaryOperator as O;
-            match op {
-                O::Multiply => builder.multiply(gl, l, r),
-                O::Divide => todo!(),
-                O::Modulus => todo!(),
-                O::BinaryPlus => builder.plus(gl, l, r),
-                O::BinaryMinus => builder.minus(gl, l, r),
-                O::ShiftLeft => todo!(),
-                O::ShiftRight => todo!(),
-                O::GreaterThan => builder.unsigned_gt(gl, l, r),
-                O::GreaterThanEqual => builder.unsigned_ge(gl, l, r),
-                O::LessThan => builder.unsigned_lt(gl, l, r),
-                O::LessThanEqual => builder.unsigned_le(gl, l, r),
-                O::LogicalEquality => builder.equals(gl, l, r),
-                O::LogicalInequality => todo!(),
-                O::CaseEquality => todo!(),
-                O::CaseInequality => todo!(),
-                O::BitwiseAnd => builder.and(gl, l, r),
-                O::BitwiseXor => builder.xor(gl, l, r),
-                O::BitwiseXnor => builder.xnor(gl, l, r),
-                O::BitwiseOr => builder.or(gl, l, r),
-                O::LogicalAnd => todo!(),
-                O::LogicalOr => todo!(),
-            }
-        }
-        Expr::Concatenation(exprs) => {
-            let Some(fst) = exprs.first() else {
-                return Ok(builder.constant(gl, Value::Bits(Bits::Small(0, 0))));
-            };
-
-            let mut output = lower_expr(
-                gl,
-                arenas,
-                types,
-                scope,
-                diagnostics,
-                builder,
-                arenas.get(fst),
-            )?;
-            for expr in exprs.iter().skip(1) {
-                let lexpr = lower_expr(
-                    gl,
-                    arenas,
-                    types,
-                    scope,
-                    diagnostics,
-                    builder,
-                    arenas.get(expr),
-                )?;
-                output = builder.concat(gl, output, lexpr);
-            }
-            output
-        }
-        Expr::Replication(_) => todo!(),
-        Expr::Ternary(_, _, _) => todo!(),
-        Expr::Ident(ast_ident) => {
-            let ident = arenas.get_ident(ast_ident.item.0);
-            let Some(symbol_key) = scope.get(&ident) else {
-                diagnostics.var_not_found(arenas, *ast_ident);
-                return Err(());
-            };
-            match &scope.symbols[symbol_key].variant {
-                SymbolVariant::Constant(value) => {
-                    builder.constant(gl, Value::Decimal(value.unwrap()))
-                }
-                SymbolVariant::Genvar(value) => {
-                    builder.constant(gl, Value::Decimal(value.unwrap()))
-                }
-                SymbolVariant::Signal(key) => builder.probe(gl, *key),
-                SymbolVariant::Variable(None) => todo!(),
-                SymbolVariant::Variable(Some(key)) => *key,
-            }
-        }
-        Expr::Decimal(decimal) => {
-            let decimal = &arenas.decimals[decimal.at];
-            let decimal = match decimal {
-                Decimal::Small(v) => *v as i64,
-                _ => todo!(),
-            };
-
-            builder.constant(gl, Value::Decimal(decimal))
-        }
-        Expr::Sized(sized) => {
-            let sized = &arenas.sized_numbers[sized.item.at];
-            let Some(size) = sized.size else { todo!() };
-            let crate::number::Bits::Small(v) = sized.value else {
-                todo!()
-            };
-            builder.constant(gl, Value::Bits(Bits::Small(v, size.as_u32())))
-        }
-        Expr::String(_) => todo!(),
-    })
-}
-
 fn assign_variable_lvalue<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
@@ -1406,7 +1197,7 @@ fn assign_variable_lvalue<'a>(
                 Some(range_expression) => {
                     let (offset, length) = match arenas.get(*range_expression) {
                         RangeExpression::Expr(expr) => (
-                            lower_expr(gl, arenas, types, scope, diagnostics, builder, expr)?,
+                            lower_expr(gl, arenas, types, scope, diagnostics, builder, *expr)?,
                             1,
                         ),
                         RangeExpression::MsbLsb(_, _) => todo!("MsbLsb"),
@@ -1496,151 +1287,6 @@ fn assign_net_lvalue<'a>(
     }
 
     Ok(())
-}
-
-fn eval_constant_expr<'a>(
-    _gl: &mut GlobalContext,
-    arenas: &'a AstArenas,
-    types: &mut VTypeTable,
-    scope: &Scope<'a>,
-    diagnostics: &mut Diagnostics,
-    expr: AstId<ConstantExpr>,
-) -> Result<VValue, ()> {
-    let expr = expr.into_expr();
-    struct StackItem {
-        expr: AstId<Expr>,
-        dispatched: bool,
-    }
-
-    let mut error = false;
-    let mut dispatch_stack: Vec<StackItem> = Vec::new();
-    let mut result_stack: Vec<Option<VValue>> = Vec::new();
-
-    dispatch_stack.push(StackItem {
-        expr,
-        dispatched: false,
-    });
-
-    while let Some(mut item) = dispatch_stack.pop() {
-        match arenas.get(item.expr) {
-            Expr::Decimal(decimal) => {
-                let decimal = &arenas.decimals[decimal.at];
-                let Decimal::Small(v) = decimal else {
-                    result_stack.push(None);
-                    diagnostics.not_yet_implemented(
-                        arenas.get_span(item.expr),
-                        "constant expression of this kind not yet implemented",
-                    );
-                    error = true;
-                    continue;
-                };
-
-                result_stack.push(Some(VValue::Integer(*v as i64)));
-            }
-            Expr::Binary(op, lhs, rhs) => {
-                if !item.dispatched {
-                    item.dispatched = true;
-                    dispatch_stack.push(item);
-                    dispatch_stack.extend([*rhs, *lhs].into_iter().map(|expr| StackItem {
-                        expr,
-                        dispatched: false,
-                    }));
-                    continue;
-                }
-
-                let rhs = result_stack.pop().unwrap();
-                let lhs = result_stack.pop().unwrap();
-
-                let (Some(VValue::Integer(lhs)), Some(VValue::Integer(rhs))) = (lhs, rhs) else {
-                    result_stack.push(None);
-                    continue;
-                };
-
-                use BinaryOperator as O;
-                let result = match op {
-                    O::Multiply => lhs * rhs,
-                    O::Divide => lhs / rhs,
-                    O::Modulus => lhs % rhs,
-                    O::BinaryPlus => lhs + rhs,
-                    O::BinaryMinus => lhs - rhs,
-                    O::ShiftLeft => lhs << rhs,
-                    O::ShiftRight => lhs >> rhs,
-                    O::BitwiseAnd => lhs & rhs,
-                    O::BitwiseXor => lhs ^ rhs,
-                    O::BitwiseXnor => !(lhs ^ rhs),
-                    O::BitwiseOr => lhs | rhs,
-                    O::LessThan => i64::from(lhs < rhs),
-                    O::GreaterThan
-                    | O::GreaterThanEqual
-                    | O::LessThanEqual
-                    | O::LogicalEquality
-                    | O::LogicalInequality
-                    | O::CaseEquality
-                    | O::CaseInequality
-                    | O::LogicalAnd
-                    | O::LogicalOr => {
-                        result_stack.push(None);
-                        diagnostics.not_yet_implemented(
-                            arenas.get_span(item.expr),
-                            "constant expression of this kind not yet implemented",
-                        );
-                        error = true;
-                        continue;
-                    }
-                };
-                result_stack.push(Some(VValue::Integer(result)));
-            }
-            Expr::Ident(ast_ident) => {
-                let ident = arenas.get_ident(ast_ident.item.0);
-                let Some(symbol_key) = scope.get(ident) else {
-                    result_stack.push(None);
-                    diagnostics.var_not_found(arenas, *ast_ident);
-                    error = true;
-                    continue;
-                };
-                let n = match scope.symbols[symbol_key].variant {
-                    SymbolVariant::Genvar(n) => n.unwrap(),
-                    SymbolVariant::Constant(n) => n.unwrap(),
-                    SymbolVariant::Variable(_) | SymbolVariant::Signal(_) => {
-                        result_stack.push(None);
-                        diagnostics.not_yet_implemented(
-                            arenas.get_item_span(*ast_ident),
-                            "non-constant symbol in constant-expr",
-                        );
-                        error = true;
-                        continue;
-                    }
-                };
-                result_stack.push(Some(VValue::Integer(n)));
-            }
-            Expr::Sized(..)
-            | Expr::String(..)
-            | Expr::BitPartSelect(_)
-            | Expr::BitSlice(..)
-            | Expr::Unary(..)
-            | Expr::Concatenation(..)
-            | Expr::Replication(..)
-            | Expr::Ternary(..) => {
-                result_stack.push(None);
-                diagnostics.not_yet_implemented(
-                    arenas.get_span(item.expr),
-                    "constant expression of this kind not yet implemented",
-                );
-                error = true;
-            }
-        }
-    }
-
-    if error {
-        return Err(());
-    }
-
-    assert_eq!(result_stack.len(), 1);
-    let Some(value) = result_stack.pop().unwrap() else {
-        panic!();
-    };
-
-    Ok(value)
 }
 
 fn msb_lsb_to_width<'a>(

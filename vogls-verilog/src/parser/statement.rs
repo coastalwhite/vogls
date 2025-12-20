@@ -267,7 +267,7 @@ impl<'a> Consumable<'a> for RangeExpression {
         let Some(separator) =
             tkw.find_next_one_of_same_depth(&[T::Colon, T::PlusColon, T::MinusColon])
         else {
-            return Ok(Self::Expr(Expr::consume(tkw, sc, arenas, diagnostics)?));
+            return Ok(Self::Expr(parse::<Expr>(tkw, sc, arenas, diagnostics)?));
         };
         let separator_kind = *tkw.get(separator).unwrap().kind;
 

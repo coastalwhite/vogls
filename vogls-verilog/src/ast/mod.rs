@@ -193,7 +193,7 @@ pub struct AttrSpec {
 // lsb_constant_expression ::= constant_expression
 #[derive(Clone, Copy)]
 pub enum RangeExpression {
-    Expr(Expr),
+    Expr(AstId<Expr>),
     MsbLsb(AstId<ConstantExpr>, AstId<ConstantExpr>),
     BasePlus(AstId<Expr>, AstId<ConstantExpr>),
     BaseMinus(AstId<Expr>, AstId<ConstantExpr>),

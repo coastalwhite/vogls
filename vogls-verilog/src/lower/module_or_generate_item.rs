@@ -10,10 +10,11 @@ use crate::ast::module::{
     ModuleOrGenerateItemDeclaration, NInputGateInstance, NInputGateType, NamedParameterAssignment,
     NamedPortConnection, NetDeclAssignment, NetDeclarationNets, ParameterValueAssignment,
 };
+use crate::lower::expression::lower_expr;
 use crate::lower::scope::{Symbol, SymbolVariant};
 use crate::lower::{
     ModuleArgs, VType, assign_net_lvalue, assign_port_output, eval_constant_expr,
-    fetch_module_interface, lower_expr, lower_to_signal, range_to_width, statements_to_process,
+    fetch_module_interface, lower_to_signal, range_to_width, statements_to_process,
 };
 use crate::parser::AstArenas;
 
@@ -106,7 +107,7 @@ pub fn lower<'a>(
                                     scope,
                                     diagnostics,
                                     &mut bb_builder,
-                                    arenas.get(*expr),
+                                    *expr,
                                 )?;
 
                                 bb_builder.drive(gl, key, variable);
@@ -193,7 +194,7 @@ pub fn lower<'a>(
                     scope,
                     diagnostics,
                     &mut bb_builder,
-                    arenas.get(net_assignment.expression),
+                    net_assignment.expression,
                 )?;
 
                 assign_net_lvalue(
@@ -240,7 +241,7 @@ pub fn lower<'a>(
                             scope,
                             diagnostics,
                             &mut bb_builder,
-                            arenas.get(value),
+                            value,
                         )?;
                         match ninput_gate_instantiation.gatetype.item {
                             NInputGateType::And | NInputGateType::Nand => {
@@ -252,7 +253,7 @@ pub fn lower<'a>(
                                         scope,
                                         diagnostics,
                                         &mut bb_builder,
-                                        arenas.get(input),
+                                        input,
                                     )?;
                                     value = bb_builder.and(gl, value, input);
                                 }
@@ -266,7 +267,7 @@ pub fn lower<'a>(
                                         scope,
                                         diagnostics,
                                         &mut bb_builder,
-                                        arenas.get(input),
+                                        input,
                                     )?;
                                     value = bb_builder.or(gl, value, input);
                                 }
@@ -280,7 +281,7 @@ pub fn lower<'a>(
                                         scope,
                                         diagnostics,
                                         &mut bb_builder,
-                                        arenas.get(input),
+                                        input,
                                     )?;
                                     value = bb_builder.xor(gl, value, input);
                                 }

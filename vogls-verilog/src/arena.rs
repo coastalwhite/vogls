@@ -77,7 +77,7 @@ impl<T> ArenaIdRange<T> {
         })
     }
     pub fn last(self) -> Option<ArenaId<T>> {
-        (!self.is_empty()).then_some(ArenaId {
+        (!self.is_empty()).then(|| ArenaId {
             ptr: self.start + (self.length - 1) * Self::num_cells(),
             _pd: PhantomData::default(),
         })
