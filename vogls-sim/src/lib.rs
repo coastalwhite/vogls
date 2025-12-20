@@ -1,8 +1,8 @@
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
 
-use slotmap::{SlotMap, new_key_type};
-use vogls_ir::{BinaryOp, Bits, IntrinsicOp, UnaryOp, Value, VectorSize};
+use slotmap::{new_key_type, SlotMap};
+use vogls_ir::{BinaryOp, Bits, IntrinsicOp, TypeTable, UnaryOp, Value, VectorSize};
 
 mod bits;
 mod instruction;
@@ -80,6 +80,7 @@ impl Event {
         signals: &mut HashMap<VmSignalKey, Value>,
         listeners: &mut SlotMap<ListenerKey, Event>,
         watches: &mut HashMap<VmSignalKey, Vec<ListenerKey>>,
+        types: &TypeTable,
     ) -> EvalOutcome {
         let ip = &mut self.ip;
         let bit_stack = &mut self.bit_stack;
@@ -252,7 +253,7 @@ impl Event {
 
                 I::Cast(dst, dst_ty, src, src_ty) => {
                     use vogls_ir::Type as T;
-                    match (dst_ty, src_ty) {
+                    match (types[*dst_ty], types[*src_ty]) {
                         (T::Bits(x), T::Bits(y)) if x == y => {}
                         (T::Decimal, T::Decimal) => {}
 
@@ -260,10 +261,10 @@ impl Event {
                             let src = decimal_stack[src.offset];
                             bit_stack[dst.offset] = (src != 0) as u8;
                         }
-                        (T::Bits(n), T::Decimal) if *n < 64 => {
+                        (T::Bits(n), T::Decimal) if n < 64 => {
                             let src = decimal_stack[src.offset];
                             assert!(src >= 0);
-                            bits::load_from_u64(bit_stack, dst.offset, *n, src as u64);
+                            bits::load_from_u64(bit_stack, dst.offset, n, src as u64);
                         }
                         (T::Decimal, T::Bits(1)) => {
                             let src = bit_stack[src.offset];
@@ -274,7 +275,7 @@ impl Event {
                 }
                 I::Move(dst, src, ty) => {
                     use vogls_ir::Type as T;
-                    match ty {
+                    match types[*ty] {
                         T::Bits(n) => {
                             for i in 0..n.div_ceil(8) as usize {
                                 bit_stack[dst.offset + i] = bit_stack[src.offset + i];
@@ -430,6 +431,8 @@ impl Event {
                         }
                     }
                 }
+                I::ArrayGet(..) => todo!(),
+                I::ArraySet(..) => todo!(),
                 I::Wait(time) => {
                     schedule.push(ScheduledEvent {
                         at: ctx.time + time.0,
@@ -466,6 +469,7 @@ pub fn run(
     signals: &mut HashMap<VmSignalKey, Value>,
     listeners: &mut SlotMap<ListenerKey, Event>,
     watches: &mut HashMap<VmSignalKey, Vec<ListenerKey>>,
+    types: &TypeTable,
     max_time: u64,
 ) -> Result<(), ()> {
     while let Some(se) = schedule.pop() {
@@ -477,7 +481,7 @@ pub fn run(
 
         let outcome = se
             .event
-            .evaluate(ctx, processes, schedule, signals, listeners, watches);
+            .evaluate(ctx, processes, schedule, signals, listeners, watches, types,);
 
         match outcome {
             EvalOutcome::Next => continue,

@@ -1,5 +1,6 @@
 mod builder;
 mod format;
+mod types;
 
 use std::collections::HashSet;
 use std::fmt;
@@ -7,7 +8,8 @@ use std::fmt;
 pub use builder::{BasicBlockBuilder, BranchRef, PhiRef, new_process};
 pub use format::{ContextFormat, DisplayContext};
 use indexmap::IndexSet;
-use slotmap::{SlotMap, new_key_type};
+use slotmap::{new_key_type, SlotMap};
+pub use types::{Type, TypeTable, TypeKey};
 
 new_key_type! { pub struct ProcessKey; }
 new_key_type! { pub struct BasicBlockKey; }
@@ -96,37 +98,15 @@ impl BasicBlockTerminator {
 
 pub struct Variable {
     pub name: String,
-    pub ty: Type,
+    pub ty: TypeKey,
 }
 
 pub struct Signal {
     pub name: String,
-    pub ty: Type,
+    pub ty: TypeKey,
 }
 
 pub type VectorSize = u32;
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Type {
-    Bits(VectorSize),
-    Decimal,
-}
-impl Type {
-    pub fn to_net_width(&self) -> Option<VectorSize> {
-        match self {
-            Type::Bits(n) => Some(*n),
-            Type::Decimal => None,
-        }
-    }
-
-    pub fn try_net_width(&self) -> Result<VectorSize, ()> {
-        self.to_net_width().ok_or(())
-    }
-
-    pub fn net(width: Option<VectorSize>) -> Self {
-        Self::Bits(width.unwrap_or(1))
-    }
-}
 
 #[derive(Debug, Clone)]
 pub enum IntrinsicArg {
@@ -194,6 +174,9 @@ pub enum Instruction {
     Probe(VariableKey, SignalKey),
     Drive(SignalKey, VariableKey, Option<(VariableKey, VectorSize)>),
 
+    ArrayGet(VariableKey, VariableKey, VariableKey),
+    ArraySet(VariableKey, VariableKey, VariableKey, VariableKey),
+
     Phi(VariableKey, Box<[(BasicBlockKey, VariableKey)]>),
 }
 
@@ -206,7 +189,9 @@ impl Instruction {
             | Self::Binary(dst, _, _, _)
             | Self::Cast(dst, _)
             | Self::Phi(dst, _)
-            | Self::Probe(dst, _) => Some(*dst),
+            | Self::Probe(dst, _)
+            | Self::ArrayGet(dst, _, _)
+            | Self::ArraySet(dst, _, _, _) => Some(*dst),
             Self::Intrinsic(_, _) | Self::Drive(_, _, _) => None,
         }
     }
@@ -231,6 +216,7 @@ pub struct GlobalContext {
     pub bbs: SlotMap<BasicBlockKey, BasicBlock>,
     pub vars: SlotMap<VariableKey, Variable>,
     pub signals: SlotMap<SignalKey, Signal>,
+    pub types: TypeTable,
 }
 
 #[derive(Debug)]

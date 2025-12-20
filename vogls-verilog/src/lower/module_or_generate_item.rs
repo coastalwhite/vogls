@@ -67,7 +67,7 @@ pub fn lower<'a>(
                                 let ident = arenas.get_ident(ident.0);
                                 let key = gl.signals.insert(Signal {
                                     name: ident.into(),
-                                    ty: types[ty].to_ir(),
+                                    ty: types[ty].to_ir_key(&mut gl.types),
                                 });
                                 let symbol_key = scope.symbols.insert(Symbol {
                                     name: ident.to_string(),
@@ -87,7 +87,7 @@ pub fn lower<'a>(
                                 let ident = arenas.get_ident(ast_ident.item.0);
                                 let key = gl.signals.insert(Signal {
                                     name: ident.into(),
-                                    ty: types[ty].to_ir(),
+                                    ty: types[ty].to_ir_key(&mut gl.types),
                                 });
                                 let symbol_key = scope.symbols.insert(Symbol {
                                     name: ident.to_string(),
@@ -136,7 +136,7 @@ pub fn lower<'a>(
                         let ident = arenas.get_ident(variable_type.identifier.item.0);
                         let key = gl.signals.insert(Signal {
                             name: ident.into(),
-                            ty: types[ty].to_ir(),
+                            ty: types[ty].to_ir_key(&mut gl.types),
                         });
                         let symbol_key = scope.symbols.insert(Symbol {
                             name: ident.to_string(),

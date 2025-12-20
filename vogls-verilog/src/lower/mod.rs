@@ -847,10 +847,9 @@ fn lower_to_signal<'a>(
         }
     }
 
-    let ty = Type::net(width);
     let signal = gl.signals.insert(Signal {
         name: "anon_port_assignment".to_string(),
-        ty,
+        ty: gl.types.insert(Type::net(width)),
     });
 
     let (section_key, mut bb_builder) = new_process(gl, "port_assignment".into());
@@ -896,7 +895,7 @@ fn assign_port_output<'a>(
 
     let signal = gl.signals.insert(Signal {
         name: "anon_port_assignment".to_string(),
-        ty: Type::net(width),
+        ty: gl.types.insert(Type::net(width)),
     });
 
     let (section_key, mut bb_builder) = new_process(gl, "port_assignment".into());
@@ -1184,16 +1183,7 @@ fn assign_variable_lvalue<'a>(
         SymbolVariant::Signal(key) => {
             let key = *key;
             match range_expression {
-                None => {
-                    if &gl.signals[key].ty != &gl.vars[variable].ty {
-                        diagnostics.warn_assign_type_mismatch(
-                            arenas.get_span(lvalue),
-                            gl.signals[key].ty.clone(),
-                            gl.vars[variable].ty.clone(),
-                        );
-                    }
-                    builder.drive(gl, key, variable)
-                }
+                None => builder.drive(gl, key, variable),
                 Some(range_expression) => {
                     let (offset, length) = match arenas.get(*range_expression) {
                         RangeExpression::Expr(expr) => (
@@ -1204,14 +1194,6 @@ fn assign_variable_lvalue<'a>(
                         RangeExpression::BasePlus(_, _) => todo!("BasePlus"),
                         RangeExpression::BaseMinus(_, _) => todo!("BaseMinus"),
                     };
-
-                    if Type::Bits(length) != gl.vars[variable].ty {
-                        diagnostics.warn_assign_type_mismatch(
-                            arenas.get_span(lvalue),
-                            Type::Bits(length),
-                            gl.vars[variable].ty.clone(),
-                        );
-                    }
 
                     builder.drive_partial(gl, key, variable, offset, length);
                 }

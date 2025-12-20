@@ -359,8 +359,9 @@ pub fn coerce_bin_arithmetic<'a>(
         (None, None) => unreachable!(),
     };
 
-    let l = builder.cast(gl, l, vogls_ir::Type::Bits(width));
-    let r = builder.cast(gl, r, vogls_ir::Type::Bits(width));
+    let ty = gl.types.insert(vogls_ir::Type::Bits(width));
+    let l = builder.cast(gl, l, ty);
+    let r = builder.cast(gl, r, ty);
 
     let ty = types.insert(VType::VectorNet(width));
     Ok((l, ty, r, ty))

@@ -40,7 +40,7 @@ pub fn lower_process_to_vm(
             }
 
             if let Some(dst) = instr.get_destination_variable() {
-                match &gl.vars.get(dst).unwrap().ty {
+                match gl.types[gl.vars.get(dst).unwrap().ty] {
                     Type::Bits(size) => {
                         stack_map.insert(
                             dst,
@@ -48,7 +48,7 @@ pub fn lower_process_to_vm(
                                 offset: bit_stack_top,
                             },
                         );
-                        bit_stack_top += (*size as usize).div_ceil(8);
+                        bit_stack_top += (size as usize).div_ceil(8);
                     }
                     Type::Decimal => {
                         stack_map.insert(
@@ -114,7 +114,7 @@ pub fn lower_process_to_vm(
                         .iter()
                         .map(|arg| match arg {
                             IA::StringLiteral(s) => VIA::StringLiteral(s.clone()),
-                            IA::Variable(v) => match gl.vars[*v].ty {
+                            IA::Variable(v) => match gl.types[gl.vars[*v].ty] {
                                 Type::Bits(size) => VIA::VariableBits(var(*v), size),
                                 Type::Decimal => VIA::VariableDecimal(var(*v)),
                             },
@@ -128,6 +128,16 @@ pub fn lower_process_to_vm(
                     signal!(*signal),
                     var(*src),
                     partial.map(|(o, l)| (var(o), l)),
+                ),
+                I::ArrayGet(dst, src, idx) => {
+                    VI::ArrayGet(var(*dst), var(*src), var(*idx), gl.vars[*dst].ty.clone())
+                }
+                I::ArraySet(dst, src, idx, val) => VI::ArraySet(
+                    var(*dst),
+                    var(*src),
+                    var(*idx),
+                    var(*val),
+                    gl.vars[*dst].ty.clone(),
                 ),
                 I::Phi(..) => continue,
             };

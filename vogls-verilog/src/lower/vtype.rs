@@ -39,6 +39,10 @@ impl VType {
         }
     }
 
+    pub fn to_ir_key(self, types: &mut vogls_ir::TypeTable) -> vogls_ir::TypeKey {
+        types.insert(self.to_ir())
+    }
+
     pub const fn net(width: Option<VectorSize>) -> VType {
         match width {
             None => Self::ScalarNet,

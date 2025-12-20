@@ -196,7 +196,7 @@ impl ContextFormat for Instruction {
                 f.write_str(" = cast(")?;
                 ctx.gl.vars.get(*src).unwrap().ctx_fmt(f, ctx)?;
                 f.write_str(", ")?;
-                ctx.gl.vars[*dst].ty.ctx_fmt(f, ctx)?;
+                ctx.gl.types[ctx.gl.vars[*dst].ty].ctx_fmt(f, ctx)?;
                 f.write_str(")")?;
             }
             Self::Intrinsic(op, args) => {
@@ -240,6 +240,22 @@ impl ContextFormat for Instruction {
                     f.write_str(" ")?;
                     ctx.gl.vars.get(*var).unwrap().typed_ctx_fmt(f, ctx)?;
                 }
+            }
+            Self::ArrayGet(dst, src, idx) => {
+                ctx.gl.vars.get(*dst).unwrap().typed_ctx_fmt(f, ctx)?;
+                f.write_str(" = arr.get ")?;
+                ctx.gl.vars.get(*src).unwrap().typed_ctx_fmt(f, ctx)?;
+                f.write_str(", ")?;
+                ctx.gl.vars.get(*idx).unwrap().typed_ctx_fmt(f, ctx)?;
+            }
+            Self::ArraySet(dst, src, idx, val) => {
+                ctx.gl.vars.get(*dst).unwrap().typed_ctx_fmt(f, ctx)?;
+                f.write_str(" = arr.set ")?;
+                ctx.gl.vars.get(*src).unwrap().typed_ctx_fmt(f, ctx)?;
+                f.write_str(", ")?;
+                ctx.gl.vars.get(*idx).unwrap().typed_ctx_fmt(f, ctx)?;
+                f.write_str(", ")?;
+                ctx.gl.vars.get(*val).unwrap().typed_ctx_fmt(f, ctx)?;
             }
         }
 
@@ -320,11 +336,10 @@ impl ContextFormat for Signal {
 impl Signal {
     fn typed_ctx_fmt(
         &self,
-
         f: &mut fmt::Formatter<'_>,
         ctx: &mut DisplayContext<'_>,
     ) -> fmt::Result {
-        self.ty.ctx_fmt(f, ctx)?;
+        ctx.gl.types[self.ty].ctx_fmt(f, ctx)?;
         f.write_str(" ")?;
         self.ctx_fmt(f, ctx)?;
         Ok(())

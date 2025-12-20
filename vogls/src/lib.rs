@@ -11,7 +11,8 @@ use vogls_verilog::ast::module::{
     LoopGenerateConstruct, Module, ModuleItem, ModuleOrGenerateItem, NonPortModuleItem,
 };
 use vogls_verilog::lower::{
-    fetch_module_interface, lower_module_to_ir, Diagnostics as LowerDiagnostics, ModuleArgs, ModuleInitialization, VTypeTable
+    Diagnostics as LowerDiagnostics, ModuleArgs, ModuleInitialization, VTypeTable,
+    fetch_module_interface, lower_module_to_ir,
 };
 use vogls_verilog::parser::{
     AstArenas, Diagnostics as ParserDiagnostics, ParserScratches, TokenWalker, parse_file, report,
@@ -253,7 +254,12 @@ pub fn run(
         },
     });
     while let Some(init) = next_modules.pop() {
-        let ModuleInitialization { name, parameters, io, args } = &init;
+        let ModuleInitialization {
+            name,
+            parameters,
+            io,
+            args,
+        } = &init;
         let module_id = ast.modules.get(module_lut[name]);
         let module_key = lower_module_to_ir(
             &mut gl,
@@ -343,10 +349,10 @@ pub fn run(
     }
 
     for (ir_signal, signal) in io_signals {
-        let value = match &gl.signals[ir_signal].ty {
-            Type::Bits(n) if *n < 64 => Value::Bits(Bits::Small(0, *n)),
+        let value = match gl.types[gl.signals[ir_signal].ty] {
+            Type::Bits(n) if n < 64 => Value::Bits(Bits::Small(0, n)),
             Type::Bits(n) => Value::Bits(Bits::Big(
-                *n,
+                n,
                 std::iter::repeat_n(0, n.div_ceil(8) as usize).collect(),
             )),
             Type::Decimal => Value::Decimal(0),
@@ -369,6 +375,7 @@ pub fn run(
         &mut signals,
         &mut listeners,
         &mut watches,
+        &gl.types,
         100,
     )
     .is_err();
