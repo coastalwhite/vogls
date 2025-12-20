@@ -11,7 +11,7 @@ use vogls_verilog::ast::module::{
     LoopGenerateConstruct, Module, ModuleItem, ModuleOrGenerateItem, NonPortModuleItem,
 };
 use vogls_verilog::lower::{
-    fetch_module_interface, lower_module_to_ir, Diagnostics as LowerDiagnostics, ModuleArgs, ModuleInitialization
+    fetch_module_interface, lower_module_to_ir, Diagnostics as LowerDiagnostics, ModuleArgs, ModuleInitialization, VTypeTable
 };
 use vogls_verilog::parser::{
     AstArenas, Diagnostics as ParserDiagnostics, ParserScratches, TokenWalker, parse_file, report,
@@ -230,10 +230,12 @@ pub fn run(
     // Walk the modules in depth-first order and lower to IR.
     let mut error = false;
     let mut diagnostics = LowerDiagnostics::default();
+    let mut types = VTypeTable::new();
     let mut next_modules = Vec::<ModuleInitialization>::new();
     let Ok((top_level_params, top_level_io, parameters)) = fetch_module_interface(
         &mut gl,
         &ast.arenas,
+        &mut types,
         ast.modules.get(*tl_module),
         &[],
         &mut diagnostics,
@@ -254,9 +256,10 @@ pub fn run(
         let ModuleInitialization { name, parameters, io, args } = &init;
         let module_id = ast.modules.get(module_lut[name]);
         let module_key = lower_module_to_ir(
-            &ast.arenas,
-            module_id,
             &mut gl,
+            &ast.arenas,
+            &mut types,
+            module_id,
             &parameters,
             &io,
             &args,

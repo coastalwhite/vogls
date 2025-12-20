@@ -460,7 +460,18 @@ pub struct NetIdent {
 pub struct RegDeclaration {
     pub signed: bool,
     pub range: Option<AstId<Range>>,
-    pub identifiers: AstIdRange<Identifier>,
+    pub variable_types: AstIdRange<VariableType>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 490
+// variable_type ::=
+//   variable_identifier { dimension } |
+//   variable_identifier = constant_expression
+// @Incomplete
+#[derive(Clone, Copy)]
+pub struct VariableType {
+    pub identifier: AstItem<Identifier>,
+    pub dimensions: AstIdRange<Dimension>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 490

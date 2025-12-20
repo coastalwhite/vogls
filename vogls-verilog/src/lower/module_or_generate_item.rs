@@ -20,11 +20,13 @@ use crate::lower::{
 use crate::parser::AstArenas;
 
 use super::scope::Scope;
+use super::vtype::VTypeTable;
 use super::{Diagnostics, ModuleInitialization};
 
 pub fn lower<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
+    types: &mut VTypeTable,
     module_lut: &HashMap<&'a str, AstId<Module>>,
     next_modules: &mut Vec<ModuleInitialization<'a>>,
     scope: &mut Scope<'a>,
@@ -40,7 +42,9 @@ pub fn lower<'a>(
                     let net_declaration = arenas.get(*id);
                     let width = match net_declaration.range {
                         None => 1,
-                        Some(range) => range_to_width(gl, scope, range, arenas, diagnostics)?,
+                        Some(range) => {
+                            range_to_width(gl, arenas, types, scope, diagnostics, range)?
+                        }
                     };
                     match net_declaration.nets {
                         NetDeclarationNets::Idents(net_idents) => {
@@ -94,12 +98,13 @@ pub fn lower<'a>(
                                     new_process(gl, "decl_assign".into());
                                 let bb_key = bb_builder.key();
                                 let variable = lower_expr(
-                                    &mut bb_builder,
                                     gl,
-                                    scope,
-                                    arenas.get(*expr),
                                     arenas,
+                                    types,
+                                    scope,
                                     diagnostics,
+                                    &mut bb_builder,
+                                    arenas.get(*expr),
                                 )?;
 
                                 bb_builder.drive(gl, key, variable);
@@ -113,18 +118,18 @@ pub fn lower<'a>(
                     let reg_declaration = arenas.get(*id);
                     let width = match reg_declaration.range {
                         None => 1,
-                        Some(range) => range_to_width(gl, scope, range, arenas, diagnostics)?,
+                        Some(range) => range_to_width(gl, arenas, types, scope, diagnostics, range)?,
                     };
-                    for ast_ident in reg_declaration.identifiers.iter() {
-                        let ident = arenas.get(ast_ident);
-                        let ident = arenas.get_ident(ident.0);
+                    for ast_variable_type in reg_declaration.variable_types.iter() {
+                        let variable_type = arenas.get(ast_variable_type);
+                        let ident = arenas.get_ident(variable_type.identifier.item.0);
                         let key = gl.signals.insert(Signal {
                             name: ident.into(),
                             ty: Type::Bits(width),
                         });
                         let symbol_key = scope.symbols.insert(Symbol {
                             name: ident.to_string(),
-                            definition_site: arenas.get_span(ast_ident),
+                            definition_site: arenas.get_item_span(variable_type.identifier),
                             ty: Type::Bits(width),
                             variant: SymbolVariant::Signal(key),
                         });
@@ -172,22 +177,24 @@ pub fn lower<'a>(
                 let (section_key, mut bb_builder) = new_process(gl, "assign".into());
                 let bb_key = bb_builder.key();
                 let variable = lower_expr(
-                    &mut bb_builder,
                     gl,
-                    scope,
-                    arenas.get(net_assignment.expression),
                     arenas,
+                    types,
+                    scope,
                     diagnostics,
+                    &mut bb_builder,
+                    arenas.get(net_assignment.expression),
                 )?;
 
                 assign_net_lvalue(
-                    &mut bb_builder,
                     gl,
+                    arenas,
+                    types,
                     scope,
+                    diagnostics,
+                    &mut bb_builder,
                     net_assignment.net_lvalue,
                     variable,
-                    arenas,
-                    diagnostics,
                 )?;
 
                 bb_builder.watch_for_ins_to(gl, bb_key);
@@ -217,23 +224,25 @@ pub fn lower<'a>(
                         assert!(!input_terminals.is_empty());
                         let value = input_terminals.first().unwrap();
                         let mut value = lower_expr(
-                            &mut bb_builder,
                             gl,
-                            scope,
-                            arenas.get(value),
                             arenas,
+                            types,
+                            scope,
                             diagnostics,
+                            &mut bb_builder,
+                            arenas.get(value),
                         )?;
                         match ninput_gate_instantiation.gatetype.item {
                             NInputGateType::And | NInputGateType::Nand => {
                                 for input in input_terminals.iter().skip(1) {
                                     let input = lower_expr(
-                                        &mut bb_builder,
                                         gl,
-                                        scope,
-                                        arenas.get(input),
                                         arenas,
+                                        types,
+                                        scope,
                                         diagnostics,
+                                        &mut bb_builder,
+                                        arenas.get(input),
                                     )?;
                                     value = bb_builder.and(gl, value, input);
                                 }
@@ -241,12 +250,13 @@ pub fn lower<'a>(
                             NInputGateType::Or | NInputGateType::Nor => {
                                 for input in input_terminals.iter().skip(1) {
                                     let input = lower_expr(
-                                        &mut bb_builder,
                                         gl,
-                                        scope,
-                                        arenas.get(input),
                                         arenas,
+                                        types,
+                                        scope,
                                         diagnostics,
+                                        &mut bb_builder,
+                                        arenas.get(input),
                                     )?;
                                     value = bb_builder.or(gl, value, input);
                                 }
@@ -254,12 +264,13 @@ pub fn lower<'a>(
                             NInputGateType::Xor | NInputGateType::Xnor => {
                                 for input in input_terminals.iter().skip(1) {
                                     let input = lower_expr(
-                                        &mut bb_builder,
                                         gl,
-                                        scope,
-                                        arenas.get(input),
                                         arenas,
+                                        types,
+                                        scope,
                                         diagnostics,
+                                        &mut bb_builder,
+                                        arenas.get(input),
                                     )?;
                                     value = bb_builder.xor(gl, value, input);
                                 }
@@ -332,8 +343,14 @@ pub fn lower<'a>(
                                 );
                                 return Err(());
                             };
-                            let value =
-                                eval_constant_expr(gl, scope, *expression, arenas, diagnostics)?;
+                            let value = eval_constant_expr(
+                                gl,
+                                arenas,
+                                types,
+                                scope,
+                                diagnostics,
+                                *expression,
+                            )?;
                             params.push((key, value as i64, arenas.get_span(*expression)));
                         }
                     }
@@ -341,7 +358,7 @@ pub fn lower<'a>(
             }
 
             let (instant_params, instant_io, parameters) =
-                fetch_module_interface(gl, arenas, *instant_module, &params, diagnostics)?;
+                fetch_module_interface(gl, arenas, types, *instant_module, &params, diagnostics)?;
 
             for instance in module_instances.iter() {
                 let ModuleInstance {
@@ -371,23 +388,25 @@ pub fn lower<'a>(
                                 if is_input {
                                     let ty = Type::Bits(*width);
                                     lower_to_signal(
-                                        processes,
                                         gl,
-                                        l_p,
-                                        scope,
-                                        ty,
                                         arenas,
+                                        types,
+                                        scope,
                                         diagnostics,
+                                        processes,
+                                        l_p,
+                                        ty,
                                     )
                                 } else {
                                     assign_port_output(
-                                        processes,
                                         gl,
-                                        l_p,
-                                        scope,
-                                        *width,
                                         arenas,
+                                        types,
+                                        scope,
                                         diagnostics,
+                                        processes,
+                                        l_p,
+                                        *width,
                                     )
                                 }
                             })
@@ -430,23 +449,25 @@ pub fn lower<'a>(
 
                             let signal = if is_input {
                                 lower_to_signal(
-                                    processes,
                                     gl,
-                                    e,
-                                    scope,
-                                    Type::Bits(width),
                                     arenas,
+                                    types,
+                                    scope,
                                     diagnostics,
+                                    processes,
+                                    e,
+                                    Type::Bits(width),
                                 )?
                             } else {
                                 assign_port_output(
-                                    processes,
                                     gl,
-                                    e,
-                                    scope,
-                                    width,
                                     arenas,
+                                    types,
+                                    scope,
                                     diagnostics,
+                                    processes,
+                                    e,
+                                    width,
                                 )?
                             };
 
@@ -489,12 +510,13 @@ pub fn lower<'a>(
             let statement = arenas.get(*id).0;
             let (section_key, bb_builder) = new_process(gl, "initial".into());
             let bb_builder = statements_to_process(
-                bb_builder,
                 gl,
-                scope,
-                std::slice::from_ref(arenas.get(statement)),
                 arenas,
+                types,
+                scope,
                 diagnostics,
+                bb_builder,
+                std::slice::from_ref(arenas.get(statement)),
             )?;
             bb_builder.halt(gl);
             processes.push(section_key);
@@ -504,12 +526,13 @@ pub fn lower<'a>(
             let (section_key, bb_builder) = new_process(gl, "always".into());
             let bb_key = bb_builder.key();
             let bb_builder = statements_to_process(
-                bb_builder,
                 gl,
-                scope,
-                std::slice::from_ref(arenas.get(statement)),
                 arenas,
+                types,
+                scope,
                 diagnostics,
+                bb_builder,
+                std::slice::from_ref(arenas.get(statement)),
             )?;
             bb_builder.watch_for_ins_to(gl, bb_key);
             processes.push(section_key);
@@ -553,11 +576,12 @@ pub fn lower<'a>(
                 return Err(());
             };
 
-            let mut v = eval_constant_expr(gl, &scope, *init_expr, arenas, diagnostics)?;
+            let mut v = eval_constant_expr(gl, arenas, types, &scope, diagnostics, *init_expr)?;
             scope.symbols[symbol_key].variant = SymbolVariant::Genvar(Some(v as i64));
 
             loop {
-                let condition = eval_constant_expr(gl, &scope, *condition, arenas, diagnostics)?;
+                let condition =
+                    eval_constant_expr(gl, arenas, types, &scope, diagnostics, *condition)?;
                 if condition == 0 {
                     break;
                 }
@@ -566,6 +590,7 @@ pub fn lower<'a>(
                     GenerateBlock::ModuleOrGenerateItem(id) => lower(
                         gl,
                         arenas,
+                        types,
                         module_lut,
                         next_modules,
                         scope,
@@ -578,6 +603,7 @@ pub fn lower<'a>(
                             lower(
                                 gl,
                                 arenas,
+                                types,
                                 module_lut,
                                 next_modules,
                                 scope,
@@ -589,7 +615,7 @@ pub fn lower<'a>(
                     }
                 }
 
-                v = eval_constant_expr(gl, &scope, *iter_expr, arenas, diagnostics)?;
+                v = eval_constant_expr(gl, arenas, types, &scope, diagnostics, *iter_expr)?;
                 scope.symbols[symbol_key].variant = SymbolVariant::Genvar(Some(v as i64));
             }
         }

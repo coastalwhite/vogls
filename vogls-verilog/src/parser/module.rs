@@ -11,7 +11,7 @@ use crate::ast::module::{
     NamedParameterAssignment, NamedPortConnection, NetAssignment, NetDeclAssignment,
     NetDeclaration, NetDeclarationNets, NetIdent, NetType, NonPortModuleItem, OutputDeclaration,
     ParamAssignment, ParameterDeclaration, ParameterValueAssignment, Port, PortDeclaration,
-    PortExpression, PortReference, Range, RegDeclaration,
+    PortExpression, PortReference, Range, RegDeclaration, VariableType,
 };
 use crate::ast::statement::{NetLValue, Statement};
 use crate::parser::TokenRange;
@@ -1316,14 +1316,13 @@ impl<'a> Consumable<'a> for RegDeclaration {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 490
         // reg_declaration ::= reg [ signed ] [ range ] list_of_variable_identifiers ;
 
-        // @Incomplete
         tkw.next_expect(T::KeywordReg, diagnostics.as_deref_mut())?;
         let signed = tkw.next_if_equals(T::KeywordSigned);
         let mut range = None;
         if tkw.is_next_equal_to(T::LeftBrace) {
             range = Some(parse::<Range>(tkw, sc, arenas, diagnostics.as_deref_mut())?);
         }
-        let identifiers = parse_one_or_more_delimited::<Identifier>(
+        let variable_types = parse_one_or_more_delimited::<VariableType>(
             tkw,
             sc,
             arenas,
@@ -1335,7 +1334,37 @@ impl<'a> Consumable<'a> for RegDeclaration {
         Ok(Self {
             signed,
             range,
-            identifiers,
+            variable_types,
+        })
+    }
+}
+
+impl<'a> Consumable<'a> for VariableType {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 490
+        // variable_type ::=
+        //   variable_identifier { dimension } |
+        //   variable_identifier = constant_expression
+        // @Incomplete
+
+        let identifier = item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        let dimensions = parse_zero_or_more_while_next(
+            tkw,
+            sc,
+            arenas,
+            diagnostics.as_deref_mut(),
+            T::LeftBrace,
+        )?;
+        Ok(Self {
+            identifier,
+            dimensions,
         })
     }
 }

@@ -7,17 +7,19 @@ use crate::ast::{AstId, AstIdRange};
 use crate::lower::diagnostics::Diagnostics;
 use crate::lower::scope::{Scope, SymbolKey, SymbolVariant};
 use crate::lower::{
-    assign_variable_lvalue, get_intersect_symbols_generated, lower_expr, statements_to_process,
+    VTypeTable, assign_variable_lvalue, get_intersect_symbols_generated, lower_expr,
+    statements_to_process,
 };
 use crate::parser::AstArenas;
 
 pub fn lower_loop_statement<'a>(
-    mut builder: BasicBlockBuilder,
     gl: &mut GlobalContext,
-    scope: &mut Scope<'a>,
-    ls: AstId<LoopStatement>,
     arenas: &'a AstArenas,
+    types: &mut VTypeTable,
+    scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
+    mut builder: BasicBlockBuilder,
+    ls: AstId<LoopStatement>,
 ) -> Result<BasicBlockBuilder, ()> {
     use LoopStatementVariant as V;
 
@@ -29,12 +31,13 @@ pub fn lower_loop_statement<'a>(
     match ls.variant {
         V::Repeat(size) => {
             let size = lower_expr(
-                &mut builder,
                 gl,
-                scope,
-                arenas.get(size),
                 arenas,
+                types,
+                scope,
                 diagnostics,
+                &mut builder,
+                arenas.get(size),
             )?;
             let i = builder.constant(gl, Value::Decimal(0));
             repeat_vars = Some((i, size));
@@ -42,21 +45,23 @@ pub fn lower_loop_statement<'a>(
         V::For(initialization, _, _) => {
             let initialization = arenas.get(initialization);
             let initialization_var = lower_expr(
-                &mut builder,
                 gl,
-                scope,
-                arenas.get(initialization.expr),
                 arenas,
+                types,
+                scope,
                 diagnostics,
+                &mut builder,
+                arenas.get(initialization.expr),
             )?;
             assign_variable_lvalue(
                 gl,
-                &mut builder,
+                arenas,
+                types,
                 scope,
+                diagnostics,
+                &mut builder,
                 initialization.lvalue,
                 initialization_var,
-                arenas,
-                diagnostics,
             )?;
         }
         V::Forever | V::While(_) => {}
@@ -80,7 +85,7 @@ pub fn lower_loop_statement<'a>(
         match &mut scope.symbols[*symkey].variant {
             SymbolVariant::Constant(_) => todo!(),
             SymbolVariant::Genvar(_) => todo!(),
-            SymbolVariant::Signal(_) => {},
+            SymbolVariant::Signal(_) => {}
             SymbolVariant::Variable(None) => todo!(),
             SymbolVariant::Variable(Some(current_var)) => {
                 // @TODO: predecessor might be wrong here.
@@ -107,20 +112,22 @@ pub fn lower_loop_statement<'a>(
             Some(builder.unsigned_lt(gl, *i, *size))
         }
         V::While(condition) => Some(lower_expr(
-            &mut builder,
             gl,
-            scope,
-            arenas.get(condition),
             arenas,
+            types,
+            scope,
             diagnostics,
+            &mut builder,
+            arenas.get(condition),
         )?),
         V::For(_, condition, _) => Some(lower_expr(
-            &mut builder,
             gl,
-            scope,
-            arenas.get(condition),
             arenas,
+            types,
+            scope,
             diagnostics,
+            &mut builder,
+            arenas.get(condition),
         )?),
     };
 
@@ -136,12 +143,13 @@ pub fn lower_loop_statement<'a>(
     {
         scope.push_scope();
         builder = statements_to_process(
-            builder,
             gl,
-            scope,
-            std::slice::from_ref(statement),
             arenas,
+            types,
+            scope,
             diagnostics,
+            builder,
+            std::slice::from_ref(statement),
         )?;
         scope.pop_scope();
     }
@@ -150,21 +158,23 @@ pub fn lower_loop_statement<'a>(
         V::For(_, _, step) => {
             let step = arenas.get(step);
             let step_var = lower_expr(
-                &mut builder,
                 gl,
-                scope,
-                arenas.get(step.expr),
                 arenas,
+                types,
+                scope,
                 diagnostics,
+                &mut builder,
+                arenas.get(step.expr),
             )?;
             assign_variable_lvalue(
                 gl,
-                &mut builder,
+                arenas,
+                types,
                 scope,
+                diagnostics,
+                &mut builder,
                 step.lvalue,
                 step_var,
-                arenas,
-                diagnostics,
             )?;
         }
         V::Repeat(_) => {

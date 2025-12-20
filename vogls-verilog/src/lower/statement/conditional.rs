@@ -10,7 +10,7 @@ use crate::ast::statement::{
 };
 use crate::lower::diagnostics::Diagnostics;
 use crate::lower::scope::{Scope, SymbolKey};
-use crate::lower::{lower_expr, statements_to_process};
+use crate::lower::{VTypeTable, lower_expr, statements_to_process};
 use crate::parser::AstArenas;
 
 struct State {
@@ -44,12 +44,13 @@ impl State {
 }
 
 pub fn lower<'a>(
-    mut builder: BasicBlockBuilder,
     gl: &mut GlobalContext,
-    scope: &mut Scope<'a>,
-    conditional: AstId<ConditionalStatement>,
     arenas: &'a AstArenas,
+    types: &mut VTypeTable,
+    scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
+    mut builder: BasicBlockBuilder,
+    conditional: AstId<ConditionalStatement>,
 ) -> Result<BasicBlockBuilder, ()> {
     let ConditionalStatement {
         if_branch,
@@ -58,12 +59,13 @@ pub fn lower<'a>(
     } = arenas.get(conditional);
 
     let condition = lower_expr(
-        &mut builder,
         gl,
-        scope,
-        arenas.get(if_branch.condition),
         arenas,
+        types,
+        scope,
         diagnostics,
+        &mut builder,
+        arenas.get(if_branch.condition),
     )?;
 
     let mut state = State::new();
@@ -71,12 +73,13 @@ pub fn lower<'a>(
     let (mut branch_ref, mut if_true_builder) = builder.branch(gl, condition);
     scope.push_scope();
     if_true_builder = lower_statement_or_null(
-        if_true_builder,
         gl,
-        scope,
-        if_branch.statement,
         arenas,
+        types,
+        scope,
         diagnostics,
+        if_true_builder,
+        if_branch.statement,
     )?;
     state.insert(if_true_builder.key(), scope.scope_assigned_symbols());
     scope.pop_scope();
@@ -87,23 +90,25 @@ pub fn lower<'a>(
 
         let else_if_branch = arenas.get(else_if_branch);
         let condition = lower_expr(
-            &mut builder,
             gl,
-            scope,
-            arenas.get(else_if_branch.condition),
             arenas,
+            types,
+            scope,
             diagnostics,
+            &mut builder,
+            arenas.get(else_if_branch.condition),
         )?;
 
         (branch_ref, if_true_builder) = builder.branch(gl, condition);
         scope.push_scope();
         if_true_builder = lower_statement_or_null(
-            if_true_builder,
             gl,
-            scope,
-            else_if_branch.statement,
             arenas,
+            types,
+            scope,
             diagnostics,
+            if_true_builder,
+            else_if_branch.statement,
         )?;
         state.insert(if_true_builder.key(), scope.scope_assigned_symbols());
         scope.pop_scope();
@@ -116,7 +121,8 @@ pub fn lower<'a>(
         branch_ref.take().unwrap().update(gl, builder.key());
 
         scope.push_scope();
-        builder = lower_statement_or_null(builder, gl, scope, *statement, arenas, diagnostics)?;
+        builder =
+            lower_statement_or_null(gl, arenas, types, scope, diagnostics, builder, *statement)?;
         state.insert(builder.key(), scope.scope_assigned_symbols());
         scope.pop_scope();
 
@@ -155,12 +161,13 @@ pub fn lower<'a>(
 }
 
 pub fn lower_case_statement<'a>(
-    mut builder: BasicBlockBuilder,
     gl: &mut GlobalContext,
-    scope: &mut Scope<'a>,
-    case_statement: AstId<CaseStatement>,
     arenas: &'a AstArenas,
+    types: &mut VTypeTable,
+    scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
+    mut builder: BasicBlockBuilder,
+    case_statement: AstId<CaseStatement>,
 ) -> Result<BasicBlockBuilder, ()> {
     let CaseStatement {
         variant,
@@ -175,12 +182,13 @@ pub fn lower_case_statement<'a>(
     }
 
     let expr_var = lower_expr(
-        &mut builder,
         gl,
-        scope,
-        arenas.get(*expr),
         arenas,
+        types,
+        scope,
         diagnostics,
+        &mut builder,
+        arenas.get(*expr),
     )?;
 
     let mut state = State::new();
@@ -196,17 +204,25 @@ pub fn lower_case_statement<'a>(
             CaseItemPattern::Expressions(exprs) => {
                 let fst = exprs.first().expect("spec: 1+ pattern expr in case_item");
                 let v = lower_expr(
-                    &mut builder,
                     gl,
-                    scope,
-                    arenas.get(fst),
                     arenas,
+                    types,
+                    scope,
                     diagnostics,
+                    &mut builder,
+                    arenas.get(fst),
                 )?;
                 let mut acc = builder.equals(gl, expr_var, v);
                 for e in exprs.iter().skip(1) {
-                    let v =
-                        lower_expr(&mut builder, gl, scope, arenas.get(e), arenas, diagnostics)?;
+                    let v = lower_expr(
+                        gl,
+                        arenas,
+                        types,
+                        scope,
+                        diagnostics,
+                        &mut builder,
+                        arenas.get(e),
+                    )?;
                     let v = builder.equals(gl, expr_var, v);
                     acc = builder.or(gl, acc, v);
                 }
@@ -217,12 +233,13 @@ pub fn lower_case_statement<'a>(
         let (branch_ref, mut if_true_builder) = builder.branch(gl, condition);
         scope.push_scope();
         if_true_builder = lower_statement_or_null(
-            if_true_builder,
             gl,
-            scope,
-            case_item.statement_or_null,
             arenas,
+            types,
+            scope,
             diagnostics,
+            if_true_builder,
+            case_item.statement_or_null,
         )?;
         state.insert(if_true_builder.key(), scope.scope_assigned_symbols());
         scope.pop_scope();
@@ -233,7 +250,8 @@ pub fn lower_case_statement<'a>(
 
     if let Some(statement) = default {
         scope.push_scope();
-        builder = lower_statement_or_null(builder, gl, scope, statement, arenas, diagnostics)?;
+        builder =
+            lower_statement_or_null(gl, arenas, types, scope, diagnostics, builder, statement)?;
         state.insert(builder.key(), scope.scope_assigned_symbols());
         scope.pop_scope();
         builder = builder.jump(gl);
@@ -270,22 +288,24 @@ pub fn lower_case_statement<'a>(
 }
 
 pub fn lower_statement_or_null<'a>(
-    builder: BasicBlockBuilder,
     gl: &mut GlobalContext,
-    scope: &mut Scope<'a>,
-    statement: AstId<StatementOrNull>,
     arenas: &'a AstArenas,
+    types: &mut VTypeTable,
+    scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
+    builder: BasicBlockBuilder,
+    statement: AstId<StatementOrNull>,
 ) -> Result<BasicBlockBuilder, ()> {
     match arenas.get(statement) {
         StatementOrNull::Attribute(_) => Ok(builder),
         StatementOrNull::Statement(statement) => statements_to_process(
-            builder,
             gl,
-            scope,
-            std::slice::from_ref(arenas.get(*statement)),
             arenas,
+            types,
+            scope,
             diagnostics,
+            builder,
+            std::slice::from_ref(arenas.get(*statement)),
         ),
     }
 }

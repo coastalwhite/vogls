@@ -2,6 +2,7 @@ mod diagnostics;
 mod module_or_generate_item;
 mod scope;
 mod statement;
+mod vtype;
 
 use std::collections::{HashMap, HashSet};
 
@@ -30,6 +31,7 @@ use crate::number::Decimal;
 use crate::parser::{AstArenas, TokenRange};
 
 use self::scope::{Symbol, SymbolKey, SymbolVariant};
+pub use self::vtype::{VType, VTypeKey, VTypeTable};
 pub use diagnostics::Diagnostics;
 
 pub struct ModuleInitialization<'a> {
@@ -59,6 +61,7 @@ pub struct ModuleArgs {
 pub fn fetch_module_interface<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
+    types: &mut VTypeTable,
     module: AstId<Module>,
     parameters: &[(&'a str, i64, TokenRange)],
     diagnostics: &mut Diagnostics,
@@ -85,7 +88,8 @@ pub fn fetch_module_interface<'a>(
                 let value = arenas.get(*constant);
                 match value {
                     ConstantMinTypMaxExpression::Single(id) => {
-                        let value = eval_constant_expr(gl, &scope, *id, arenas, diagnostics)?;
+                        let value =
+                            eval_constant_expr(gl, arenas, types, &scope, diagnostics, *id)?;
                         let symbol_key = scope.symbols.insert(Symbol {
                             name: key.to_string(),
                             definition_site: arenas.get_item_span(*param),
@@ -175,7 +179,7 @@ pub fn fetch_module_interface<'a>(
                 };
                 let width = match range {
                     None => 1,
-                    Some(range) => range_to_width(gl, &scope, range, arenas, diagnostics)?,
+                    Some(range) => range_to_width(gl, arenas, types, &scope, diagnostics, range)?,
                 };
 
                 for ast_ident in identifiers {
@@ -231,7 +235,7 @@ pub fn fetch_module_interface<'a>(
                 };
                 let width = match range {
                     None => 1,
-                    Some(range) => range_to_width(gl, &scope, range, arenas, diagnostics)?,
+                    Some(range) => range_to_width(gl, arenas, types, &scope, diagnostics, range)?,
                 };
 
                 io.extend(identifiers.iter().map(|ident| {
@@ -252,9 +256,10 @@ pub fn fetch_module_interface<'a>(
 }
 
 pub fn lower_module_to_ir<'a>(
-    arenas: &'a AstArenas,
-    root: AstId<Module>,
     gl: &mut GlobalContext,
+    arenas: &'a AstArenas,
+    types: &mut VTypeTable,
+    root: AstId<Module>,
     parameters: &ModuleParameters<'a>,
     io: &ModuleIo<'a>,
     args: &ModuleArgs,
@@ -302,6 +307,7 @@ pub fn lower_module_to_ir<'a>(
                 NonPortModuleItem::ModuleOrGenerateItem(id) => module_or_generate_item::lower(
                     gl,
                     arenas,
+                    types,
                     module_lut,
                     next_modules,
                     &mut scope,
@@ -317,6 +323,7 @@ pub fn lower_module_to_ir<'a>(
                         module_or_generate_item::lower(
                             gl,
                             arenas,
+                            types,
                             module_lut,
                             next_modules,
                             &mut scope,
@@ -337,7 +344,7 @@ pub fn lower_module_to_ir<'a>(
                         };
 
                         let _value =
-                            eval_constant_expr(gl, &scope, *constant, arenas, diagnostics)?;
+                            eval_constant_expr(gl, arenas, types, &scope, diagnostics, *constant)?;
                         todo!()
                         // scope.push(arenas.get_ident(param.item.0), ScopeItem::Constant(v));
                     }
@@ -356,12 +363,13 @@ enum WatchCondition {
 }
 
 fn statements_to_process<'a>(
-    mut builder: BasicBlockBuilder,
     gl: &mut GlobalContext,
-    scope: &mut Scope<'a>,
-    stmts: &[Statement],
     arenas: &'a AstArenas,
+    types: &mut VTypeTable,
+    scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
+    mut builder: BasicBlockBuilder,
+    stmts: &[Statement],
 ) -> Result<BasicBlockBuilder, ()> {
     for statement in stmts.iter() {
         match statement {
@@ -376,53 +384,58 @@ fn statements_to_process<'a>(
                 assert!(delay_or_event_control.is_none());
 
                 let value = lower_expr(
-                    &mut builder,
                     gl,
-                    scope,
-                    arenas.get(*expression),
                     arenas,
+                    types,
+                    scope,
                     diagnostics,
+                    &mut builder,
+                    arenas.get(*expression),
                 )?;
                 assign_variable_lvalue(
                     gl,
-                    &mut builder,
+                    arenas,
+                    types,
                     scope,
+                    diagnostics,
+                    &mut builder,
                     *variable_lvalue,
                     value,
-                    arenas,
-                    diagnostics,
                 )?;
             }
             Statement::CaseStatement(case_statement) => {
                 builder = statement::conditional::lower_case_statement(
-                    builder,
                     gl,
-                    scope,
-                    *case_statement,
                     arenas,
+                    types,
+                    scope,
                     diagnostics,
+                    builder,
+                    *case_statement,
                 )?
             }
             Statement::ConditionalStatement(conditional) => {
                 builder = statement::conditional::lower(
-                    builder,
                     gl,
-                    scope,
-                    *conditional,
                     arenas,
+                    types,
+                    scope,
                     diagnostics,
+                    builder,
+                    *conditional,
                 )?
             }
             Statement::DisableStatement => todo!(),
             Statement::EventTrigger => todo!(),
             Statement::LoopStatement(ls) => {
                 builder = statement::loop_statement::lower_loop_statement(
-                    builder,
                     gl,
-                    scope,
-                    *ls,
                     arenas,
+                    types,
+                    scope,
                     diagnostics,
+                    builder,
+                    *ls,
                 )?
             }
             Statement::NonBlockingAssignment(nba) => {
@@ -434,21 +447,23 @@ fn statements_to_process<'a>(
                 assert!(delay_or_event_control.is_none());
 
                 let value = lower_expr(
-                    &mut builder,
                     gl,
-                    scope,
-                    arenas.get(*expression),
                     arenas,
+                    types,
+                    scope,
                     diagnostics,
+                    &mut builder,
+                    arenas.get(*expression),
                 )?;
                 assign_variable_lvalue(
                     gl,
-                    &mut builder,
+                    arenas,
+                    types,
                     scope,
+                    diagnostics,
+                    &mut builder,
                     *variable_lvalue,
                     value,
-                    arenas,
-                    diagnostics,
                 )?;
             }
             Statement::ParBlock => todo!(),
@@ -568,12 +583,13 @@ fn statements_to_process<'a>(
                 if let Some(stmt) = statement {
                     let stmt = arenas.get(*stmt);
                     builder = statements_to_process(
-                        builder,
                         gl,
-                        scope,
-                        std::slice::from_ref(stmt),
                         arenas,
+                        types,
+                        scope,
                         diagnostics,
+                        builder,
+                        std::slice::from_ref(stmt),
                     )?;
                 }
             }
@@ -584,8 +600,15 @@ fn statements_to_process<'a>(
                     .iter()
                     .map(|v| arenas.get(v).clone())
                     .collect::<Vec<_>>();
-                builder =
-                    statements_to_process(builder, gl, scope, &statements, arenas, diagnostics)?;
+                builder = statements_to_process(
+                    gl,
+                    arenas,
+                    types,
+                    scope,
+                    diagnostics,
+                    builder,
+                    &statements,
+                )?;
             }
             Statement::SystemTaskEnable(id) => {
                 let system_task_enable = arenas.get(*id);
@@ -603,8 +626,15 @@ fn statements_to_process<'a>(
                             let str_literal = &arenas.text[str_literal.0.start..str_literal.0.end];
                             IntrinsicArg::StringLiteral(str_literal.to_string())
                         } else {
-                            let var =
-                                lower_expr(&mut builder, gl, scope, expr, arenas, diagnostics)?;
+                            let var = lower_expr(
+                                gl,
+                                arenas,
+                                types,
+                                scope,
+                                diagnostics,
+                                &mut builder,
+                                expr,
+                            )?;
                             IntrinsicArg::Variable(var)
                         };
 
@@ -620,8 +650,10 @@ fn statements_to_process<'a>(
                         let lhs = arenas.get(lhs);
                         let rhs = arenas.get(rhs);
 
-                        let lhs = lower_expr(&mut builder, gl, scope, lhs, arenas, diagnostics)?;
-                        let rhs = lower_expr(&mut builder, gl, scope, rhs, arenas, diagnostics)?;
+                        let lhs =
+                            lower_expr(gl, arenas, types, scope, diagnostics, &mut builder, lhs)?;
+                        let rhs =
+                            lower_expr(gl, arenas, types, scope, diagnostics, &mut builder, rhs)?;
 
                         let (lhs, rhs) = builder.coerce_binary_bitwise_srcs(gl, lhs, rhs);
 
@@ -776,13 +808,14 @@ fn get_intersect_symbols_generated<'a>(
 }
 
 fn lower_to_signal<'a>(
-    processes: &mut Vec<ProcessKey>,
     gl: &mut GlobalContext,
-    expr: AstId<Expr>,
-    scope: &mut Scope<'a>,
-    ty: Type,
     arenas: &'a AstArenas,
+    types: &mut VTypeTable,
+    scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
+    processes: &mut Vec<ProcessKey>,
+    expr: AstId<Expr>,
+    ty: Type,
 ) -> Result<SignalKey, ()> {
     if let Expr::Ident(ast_ident) = arenas.get(expr) {
         let ident = arenas.get_ident(ast_ident.item.0);
@@ -803,12 +836,13 @@ fn lower_to_signal<'a>(
     let (section_key, mut bb_builder) = new_process(gl, "port_assignment".into());
     let bb_key = bb_builder.key();
     let variable = lower_expr(
-        &mut bb_builder,
         gl,
-        scope,
-        arenas.get(expr),
         arenas,
+        types,
+        scope,
         diagnostics,
+        &mut bb_builder,
+        arenas.get(expr),
     )?;
 
     bb_builder.drive(gl, signal, variable);
@@ -819,13 +853,14 @@ fn lower_to_signal<'a>(
 }
 
 fn assign_port_output<'a>(
-    processes: &mut Vec<ProcessKey>,
     gl: &mut GlobalContext,
-    expr: AstId<Expr>,
-    scope: &mut Scope<'a>,
-    width: VectorSize,
     arenas: &'a AstArenas,
+    types: &mut VTypeTable,
+    scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
+    processes: &mut Vec<ProcessKey>,
+    expr: AstId<Expr>,
+    width: VectorSize,
 ) -> Result<SignalKey, ()> {
     if let Expr::Ident(ast_ident) = arenas.get(expr) {
         let ident = arenas.get_ident(ast_ident.item.0);
@@ -863,12 +898,13 @@ fn assign_port_output<'a>(
             Expr::BitPartSelect(bit_part_select) => {
                 let BitPartSelect { subject, braced } = bit_part_select;
                 let offset = lower_expr(
-                    &mut bb_builder,
                     gl,
-                    scope,
-                    arenas.get(*braced),
                     arenas,
+                    types,
+                    scope,
                     diagnostics,
+                    &mut bb_builder,
+                    arenas.get(*braced),
                 )?;
 
                 let offset_dst = match offset_dst {
@@ -889,33 +925,37 @@ fn assign_port_output<'a>(
                 let (offset, length) = match slice {
                     BitSlice::MsbLsb(msb, lsb) => {
                         let (_, lsb, width) =
-                            msb_lsb_to_width(gl, scope, *msb, *lsb, arenas, diagnostics)?;
+                            msb_lsb_to_width(gl, arenas, types, scope, diagnostics, *msb, *lsb)?;
                         let offset = bb_builder.constant(gl, Value::Decimal(lsb as i64));
                         (offset, width as VectorSize)
                     }
                     BitSlice::PlusWidth(base, width) => {
                         let offset = lower_expr(
-                            &mut bb_builder,
                             gl,
-                            scope,
-                            arenas.get(*base),
                             arenas,
+                            types,
+                            scope,
                             diagnostics,
+                            &mut bb_builder,
+                            arenas.get(*base),
                         );
-                        let width = eval_constant_expr(gl, scope, *width, arenas, diagnostics);
+                        let width =
+                            eval_constant_expr(gl, arenas, types, scope, diagnostics, *width);
                         (offset?, width? as VectorSize)
                     }
                     BitSlice::MinusWidth(base, width) => {
                         let offset = lower_expr(
-                            &mut bb_builder,
                             gl,
-                            scope,
-                            arenas.get(*base),
                             arenas,
+                            types,
+                            scope,
                             diagnostics,
+                            &mut bb_builder,
+                            arenas.get(*base),
                         );
-                        let width = eval_constant_expr(gl, scope, *width, arenas, diagnostics)?
-                            as VectorSize;
+                        let width =
+                            eval_constant_expr(gl, arenas, types, scope, diagnostics, *width)?
+                                as VectorSize;
                         let width_v = bb_builder.constant(gl, Value::Decimal((width + 1) as i64));
                         let offset = bb_builder.minus(gl, offset?, width_v);
                         (offset, width)
@@ -1106,12 +1146,13 @@ fn assign_port_output<'a>(
 // }
 
 fn lower_expr<'a>(
-    builder: &mut BasicBlockBuilder,
     gl: &mut GlobalContext,
-    scope: &mut Scope<'a>,
-    expr: &Expr,
     arenas: &'a AstArenas,
+    types: &mut VTypeTable,
+    scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
+    builder: &mut BasicBlockBuilder,
+    expr: &Expr,
 ) -> Result<VariableKey, ()> {
     Ok(match expr {
         Expr::BitPartSelect(select) => {
@@ -1119,34 +1160,48 @@ fn lower_expr<'a>(
             let subject = arenas.get(*subject);
             let braced = arenas.get(*braced);
 
-            let subject_v = lower_expr(builder, gl, scope, subject, arenas, diagnostics)?;
-            let braced_v = lower_expr(builder, gl, scope, braced, arenas, diagnostics)?;
+            let subject_v = lower_expr(gl, arenas, types, scope, diagnostics, builder, subject)?;
+            let braced_v = lower_expr(gl, arenas, types, scope, diagnostics, builder, braced)?;
 
             builder.select_bit(gl, subject_v, braced_v)
         }
         Expr::BitSlice(subject, slice) => {
             let subject = arenas.get(*subject);
-            let subject_v = lower_expr(builder, gl, scope, subject, arenas, diagnostics)?;
+            let subject_v = lower_expr(gl, arenas, types, scope, diagnostics, builder, subject)?;
 
             let (lsb, width) = match slice {
                 BitSlice::MsbLsb(msb, lsb) => {
                     let (_msb, lsb, width) =
-                        msb_lsb_to_width(gl, scope, *msb, *lsb, arenas, diagnostics)?;
+                        msb_lsb_to_width(gl, arenas, types, scope, diagnostics, *msb, *lsb)?;
                     let lsb_v = builder.constant(gl, Value::Decimal(lsb as i64));
                     (lsb_v, width)
                 }
                 BitSlice::PlusWidth(base, width) => {
-                    let lsb =
-                        lower_expr(builder, gl, scope, arenas.get(*base), arenas, diagnostics)?;
-                    let width =
-                        eval_constant_expr(gl, scope, *width, arenas, diagnostics)? as VectorSize;
+                    let lsb = lower_expr(
+                        gl,
+                        arenas,
+                        types,
+                        scope,
+                        diagnostics,
+                        builder,
+                        arenas.get(*base),
+                    )?;
+                    let width = eval_constant_expr(gl, arenas, types, scope, diagnostics, *width)?
+                        as VectorSize;
                     (lsb, width)
                 }
                 BitSlice::MinusWidth(base, width) => {
-                    let width = eval_constant_expr(gl, scope, *width, arenas, diagnostics)?;
+                    let width = eval_constant_expr(gl, arenas, types, scope, diagnostics, *width)?;
                     let width_v = builder.constant(gl, Value::Decimal(width as i64 - 1));
-                    let lsb =
-                        lower_expr(builder, gl, scope, arenas.get(*base), arenas, diagnostics)?;
+                    let lsb = lower_expr(
+                        gl,
+                        arenas,
+                        types,
+                        scope,
+                        diagnostics,
+                        builder,
+                        arenas.get(*base),
+                    )?;
                     let lsb = builder.minus(gl, lsb, width_v);
                     (lsb, width as VectorSize)
                 }
@@ -1156,7 +1211,15 @@ fn lower_expr<'a>(
             builder.slice(gl, shifted, width as VectorSize)
         }
         Expr::Unary(op, child) => {
-            let child = lower_expr(builder, gl, scope, arenas.get(*child), arenas, diagnostics)?;
+            let child = lower_expr(
+                gl,
+                arenas,
+                types,
+                scope,
+                diagnostics,
+                builder,
+                arenas.get(*child),
+            )?;
             use UnaryOperator as O;
             match op {
                 O::LogicalNegation => builder.logical_neg(gl, child),
@@ -1172,8 +1235,24 @@ fn lower_expr<'a>(
             }
         }
         Expr::Binary(op, l, r) => {
-            let l = lower_expr(builder, gl, scope, arenas.get(*l), arenas, diagnostics)?;
-            let r = lower_expr(builder, gl, scope, arenas.get(*r), arenas, diagnostics)?;
+            let l = lower_expr(
+                gl,
+                arenas,
+                types,
+                scope,
+                diagnostics,
+                builder,
+                arenas.get(*l),
+            )?;
+            let r = lower_expr(
+                gl,
+                arenas,
+                types,
+                scope,
+                diagnostics,
+                builder,
+                arenas.get(*r),
+            )?;
             use BinaryOperator as O;
             match op {
                 O::Multiply => builder.multiply(gl, l, r),
@@ -1204,9 +1283,25 @@ fn lower_expr<'a>(
                 return Ok(builder.constant(gl, Value::Bits(Bits::Small(0, 0))));
             };
 
-            let mut output = lower_expr(builder, gl, scope, arenas.get(fst), arenas, diagnostics)?;
+            let mut output = lower_expr(
+                gl,
+                arenas,
+                types,
+                scope,
+                diagnostics,
+                builder,
+                arenas.get(fst),
+            )?;
             for expr in exprs.iter().skip(1) {
-                let lexpr = lower_expr(builder, gl, scope, arenas.get(expr), arenas, diagnostics)?;
+                let lexpr = lower_expr(
+                    gl,
+                    arenas,
+                    types,
+                    scope,
+                    diagnostics,
+                    builder,
+                    arenas.get(expr),
+                )?;
                 output = builder.concat(gl, output, lexpr);
             }
             output
@@ -1254,12 +1349,13 @@ fn lower_expr<'a>(
 
 fn assign_variable_lvalue<'a>(
     gl: &mut GlobalContext,
-    builder: &mut BasicBlockBuilder,
+    arenas: &'a AstArenas,
+    types: &mut VTypeTable,
     scope: &mut Scope<'a>,
+    diagnostics: &mut Diagnostics,
+    builder: &mut BasicBlockBuilder,
     lvalue: AstId<VariableLValue>,
     variable: VariableKey,
-    arenas: &'a AstArenas,
-    diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
     let VariableLValue {
         ident,
@@ -1297,7 +1393,7 @@ fn assign_variable_lvalue<'a>(
                 Some(range_expression) => {
                     let (offset, length) = match arenas.get(*range_expression) {
                         RangeExpression::Expr(expr) => (
-                            lower_expr(builder, gl, scope, expr, arenas, diagnostics)?,
+                            lower_expr(gl, arenas, types, scope, diagnostics, builder, expr)?,
                             1,
                         ),
                         RangeExpression::MsbLsb(_, _) => todo!("MsbLsb"),
@@ -1334,13 +1430,14 @@ fn assign_variable_lvalue<'a>(
 }
 
 fn assign_net_lvalue<'a>(
-    builder: &mut BasicBlockBuilder,
     gl: &mut GlobalContext,
+    arenas: &'a AstArenas,
+    types: &mut VTypeTable,
     scope: &mut Scope<'a>,
+    diagnostics: &mut Diagnostics,
+    builder: &mut BasicBlockBuilder,
     lvalue: AstId<NetLValue>,
     variable: VariableKey,
-    arenas: &'a AstArenas,
-    diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
     let lvalue = arenas.get(lvalue);
     let lvalue_ident = lvalue.ident.item;
@@ -1368,12 +1465,12 @@ fn assign_net_lvalue<'a>(
         Some(range_expression) => {
             let (offset, length) = match arenas.get(range_expression) {
                 ConstantRangeExpression::Single(expr) => (
-                    eval_constant_expr(gl, scope, *expr, arenas, diagnostics)?,
+                    eval_constant_expr(gl, arenas, types, scope, diagnostics, *expr)?,
                     1,
                 ),
                 ConstantRangeExpression::MsbLsb { msb, lsb } => {
                     let (_, offset, length) =
-                        msb_lsb_to_width(gl, scope, *msb, *lsb, arenas, diagnostics)?;
+                        msb_lsb_to_width(gl, arenas, types, scope, diagnostics, *msb, *lsb)?;
                     (offset, length)
                 }
             };
@@ -1388,10 +1485,11 @@ fn assign_net_lvalue<'a>(
 
 fn eval_constant_expr<'a>(
     _gl: &mut GlobalContext,
-    scope: &Scope<'a>,
-    expr: AstId<ConstantExpr>,
     arenas: &'a AstArenas,
+    types: &mut VTypeTable,
+    scope: &Scope<'a>,
     diagnostics: &mut Diagnostics,
+    expr: AstId<ConstantExpr>,
 ) -> Result<u64, ()> {
     let expr = expr.into_expr();
     struct StackItem {
@@ -1532,14 +1630,15 @@ fn eval_constant_expr<'a>(
 
 fn msb_lsb_to_width<'a>(
     gl: &mut GlobalContext,
+    arenas: &'a AstArenas,
+    types: &mut VTypeTable,
     scope: &Scope<'a>,
+    diagnostics: &mut Diagnostics,
     msb: AstId<ConstantExpr>,
     lsb: AstId<ConstantExpr>,
-    arenas: &'a AstArenas,
-    diagnostics: &mut Diagnostics,
 ) -> Result<(u64, u64, VectorSize), ()> {
-    let msb = eval_constant_expr(gl, scope, msb, arenas, diagnostics);
-    let lsb = eval_constant_expr(gl, scope, lsb, arenas, diagnostics);
+    let msb = eval_constant_expr(gl, arenas, types, scope, diagnostics, msb);
+    let lsb = eval_constant_expr(gl, arenas, types, scope, diagnostics, lsb);
 
     let (Ok(msb), Ok(lsb)) = (msb, lsb) else {
         return Err(());
@@ -1549,11 +1648,12 @@ fn msb_lsb_to_width<'a>(
 
 fn range_to_width<'a>(
     gl: &mut GlobalContext,
-    scope: &Scope<'a>,
-    range: AstId<Range>,
     arenas: &'a AstArenas,
+    types: &mut VTypeTable,
+    scope: &Scope<'a>,
     diagnostics: &mut Diagnostics,
+    range: AstId<Range>,
 ) -> Result<u32, ()> {
     let range = arenas.get(range);
-    msb_lsb_to_width(gl, scope, range.msb, range.lsb, arenas, diagnostics).map(|(_, _, w)| w)
+    msb_lsb_to_width(gl, arenas, types, scope, diagnostics, range.msb, range.lsb).map(|(_, _, w)| w)
 }
