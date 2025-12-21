@@ -6,12 +6,6 @@ use super::constant_expr::ConstantExpr;
 use super::{AstId, AstIdRange, AstItem, DecimalRef, Identifier, SizedNumberRef, StringRef};
 
 #[derive(Clone, Copy)]
-pub struct BitPartSelect {
-    pub(crate) subject: AstId<Expr>,
-    pub(crate) braced: AstId<Expr>,
-}
-
-#[derive(Clone, Copy)]
 pub enum BitSlice {
     MsbLsb(AstId<ConstantExpr>, AstId<ConstantExpr>),
     PlusWidth(AstId<Expr>, AstId<ConstantExpr>),
@@ -66,14 +60,12 @@ pub enum BinaryOperator {
 
 #[derive(Clone, Copy)]
 pub enum Expr {
-    BitPartSelect(BitPartSelect),
-    BitSlice(AstId<Expr>, BitSlice),
     Unary(UnaryOperator, AstId<Expr>),
     Binary(BinaryOperator, AstId<Expr>, AstId<Expr>),
     Concatenation(AstIdRange<Expr>),
     Replication(Replication),
     Ternary(AstId<Expr>, AstId<Expr>, AstId<Expr>),
-    Ident(AstItem<Identifier>),
+    Ident(AstItem<Identifier>, AstIdRange<Expr>, Option<BitSlice>),
     Decimal(DecimalRef),
     Sized(AstItem<SizedNumberRef>),
     String(StringRef),
@@ -172,17 +164,6 @@ impl Expr {
     ) -> fmt::Result {
         write!(f, "{:>0$}", depth * 2)?;
         match self {
-            Expr::BitPartSelect(bps) => {
-                writeln!(f, "bps")?;
-                arenas
-                    .get(bps.subject)
-                    .tree_fmt_impl(arenas, f, depth + 1)?;
-                arenas.get(bps.braced).tree_fmt_impl(arenas, f, depth + 1)?;
-            }
-            Expr::BitSlice(subject, _) => {
-                writeln!(f, "bit_slice")?;
-                arenas.get(*subject).tree_fmt_impl(arenas, f, depth + 1)?;
-            }
             Expr::Unary(op, child) => {
                 writeln!(f, "unary [{}]", op.into_str())?;
                 arenas.get(*child).tree_fmt_impl(arenas, f, depth + 1)?;
@@ -200,8 +181,11 @@ impl Expr {
                 arenas.get(*truthy).tree_fmt_impl(arenas, f, depth + 1)?;
                 arenas.get(*falsy).tree_fmt_impl(arenas, f, depth + 1)?;
             }
-            Expr::Ident(ident) => {
+            Expr::Ident(ident, expr, _range_expr) => {
                 writeln!(f, "ident: {}", arenas.get_ident(ident.item.0))?;
+                for e in expr.iter() {
+                    arenas.get(e).tree_fmt_impl(arenas, f, depth + 1)?;
+                }
             }
             Expr::Decimal(decimal) => {
                 writeln!(f, "decimal: {}", arenas.decimals[decimal.at])?;

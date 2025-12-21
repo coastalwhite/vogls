@@ -1,5 +1,5 @@
-use crate::ast::expr::{BinaryOperator, BitPartSelect, BitSlice, Expr, UnaryOperator};
-use crate::ast::{AstId, DecimalRef, Identifier, SizedNumberRef, StringRef};
+use crate::ast::expr::{BinaryOperator, BitSlice, Expr, UnaryOperator};
+use crate::ast::{AstId, AstIdRange, AstItem, DecimalRef, Identifier, SizedNumberRef, StringRef};
 use crate::parser::ParseErrorReason;
 use crate::parser::token_walker::TokenRange;
 use crate::parser::utils::item_parse;
@@ -12,8 +12,13 @@ pub(crate) type BindingPower = u8;
 pub(crate) enum StackItem {
     Paren,
     Bracket(Vec<Expr>, Vec<TokenRange>),
-    Brace(AstId<Expr>),
-    BraceS2(AstId<Expr>, AstId<Expr>, BraceVariant),
+    Brace(AstItem<Identifier>, Vec<Expr>, Vec<TokenRange>),
+    BraceS2(
+        AstItem<Identifier>,
+        AstIdRange<Expr>,
+        AstId<Expr>,
+        BraceVariant,
+    ),
     Unary(UnaryOperator),
     Binary(BinaryOperator, AstId<Expr>),
     TernaryS1(AstId<Expr>),
@@ -103,15 +108,16 @@ impl<'a> Consumable<'a> for Expr {
             };
             current = {
                 match token.kind {
-                    T::Ident => (
-                        Expr::Ident(item_parse::<Identifier>(
-                            tkw,
-                            sc,
-                            arenas,
-                            diagnostics.as_deref_mut(),
-                        )?),
-                        span,
-                    ),
+                    T::Ident => {
+                        let ident =
+                            item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+
+                        if tkw.next_if_equals(T::LeftBrace) {
+                            deepen!(StackItem::Brace(ident, Vec::new(), Vec::new()), 0, span)
+                        } else {
+                            (Expr::Ident(ident, AstIdRange::default(), None), span)
+                        }
+                    }
                     T::Decimal => (
                         Expr::Decimal(
                             item_parse::<DecimalRef>(tkw, sc, arenas, diagnostics.as_deref_mut())?
@@ -164,14 +170,6 @@ impl<'a> Consumable<'a> for Expr {
                     let Some(peeked) = tkw.get(tkw.offset) else {
                         break;
                     };
-
-                    // Bit/Part Select ( ... [ ... ] )
-                    if *peeked.kind == T::LeftBrace {
-                        tkw.next();
-                        let span = current.1;
-                        let subject = arenas.add_tuple(current);
-                        deepen!(StackItem::Brace(subject), 0, span);
-                    }
 
                     // Ternary operator ( ... ? ... : ... )
                     if *peeked.kind == T::QuestionMark {
@@ -233,30 +231,55 @@ impl<'a> Consumable<'a> for Expr {
                             }
                         }
                     }
-                    StackItem::Brace(subject) => {
-                        let braced = arenas.add_tuple(current);
+                    StackItem::Brace(ident, mut current_braced, mut current_trs) => {
                         match *tkw.try_next(diagnostics.as_deref_mut())?.kind {
                             T::RightBrace => {
-                                let bitpartselect = BitPartSelect { subject, braced };
-                                current = (Expr::BitPartSelect(bitpartselect), location)
+                                current_braced.push(current.0);
+                                current_trs.push(current.1);
+                                if tkw.next_if_equals(T::LeftBrace) {
+                                    deepen!(
+                                        StackItem::Brace(ident, current_braced, current_trs),
+                                        0,
+                                        loc
+                                    );
+                                } else {
+                                    let braced = arenas.add_range(current_braced, current_trs);
+                                    current = (Expr::Ident(ident, braced, None), location)
+                                }
                             }
                             T::Colon => {
+                                let exprs = arenas.add_range(current_braced, current_trs);
+                                let braced = arenas.add_tuple(current);
                                 deepen!(
-                                    StackItem::BraceS2(subject, braced, BraceVariant::MsbLsb),
+                                    StackItem::BraceS2(ident, exprs, braced, BraceVariant::MsbLsb),
                                     0,
                                     loc
                                 );
                             }
                             T::PlusColon => {
+                                let exprs = arenas.add_range(current_braced, current_trs);
+                                let braced = arenas.add_tuple(current);
                                 deepen!(
-                                    StackItem::BraceS2(subject, braced, BraceVariant::BasePlus),
+                                    StackItem::BraceS2(
+                                        ident,
+                                        exprs,
+                                        braced,
+                                        BraceVariant::BasePlus
+                                    ),
                                     0,
                                     loc
                                 );
                             }
                             T::MinusColon => {
+                                let exprs = arenas.add_range(current_braced, current_trs);
+                                let braced = arenas.add_tuple(current);
                                 deepen!(
-                                    StackItem::BraceS2(subject, braced, BraceVariant::BaseMinus),
+                                    StackItem::BraceS2(
+                                        ident,
+                                        exprs,
+                                        braced,
+                                        BraceVariant::BaseMinus
+                                    ),
                                     0,
                                     loc
                                 );
@@ -267,7 +290,7 @@ impl<'a> Consumable<'a> for Expr {
                             }
                         }
                     }
-                    StackItem::BraceS2(subject, lhs, variant) => {
+                    StackItem::BraceS2(subject, exprs, lhs, variant) => {
                         let rhs = arenas.add_tuple(current);
                         let bit_slice = match variant {
                             BraceVariant::MsbLsb => {
@@ -279,7 +302,7 @@ impl<'a> Consumable<'a> for Expr {
                             }
                         };
                         tkw.next_expect(T::RightBrace, diagnostics.as_deref_mut())?;
-                        current = (Expr::BitSlice(subject, bit_slice), location);
+                        current = (Expr::Ident(subject, exprs, Some(bit_slice)), location);
                     }
                     StackItem::Unary(op) => {
                         let subexpr = arenas.add_tuple(current);

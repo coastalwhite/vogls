@@ -1,7 +1,7 @@
 use vogls_ir::{BasicBlockBuilder, Bits, GlobalContext, Value, VariableKey, VectorSize};
 
 use crate::ast::AstId;
-use crate::ast::expr::{BinaryOperator, BitPartSelect, BitSlice, Expr, UnaryOperator};
+use crate::ast::expr::{BinaryOperator, BitSlice, Expr, UnaryOperator};
 use crate::lower::constant_expr::eval_constant_expr;
 use crate::lower::scope::SymbolVariant;
 use crate::lower::{VType, VTypeKey, msb_lsb_to_width};
@@ -39,86 +39,8 @@ pub fn lower_expr<'a>(
 
     dispatch_stack.push(StackItem::new(expr));
 
-    while let Some(mut item) = dispatch_stack.pop() {
+    'dispatch_loop: while let Some(mut item) = dispatch_stack.pop() {
         match arenas.get(item.expr) {
-            Expr::BitPartSelect(select) => {
-                let BitPartSelect { subject, braced } = select;
-                if !item.dispatched {
-                    item.dispatched = true;
-                    dispatch_stack.push(item);
-                    dispatch_stack.extend([*braced, *subject].into_iter().map(StackItem::new));
-                    continue;
-                }
-
-                let braced = result_stack.pop().unwrap();
-                let subject = result_stack.pop().unwrap();
-
-                let (Some((subject, _)), Some((braced, _))) = (subject, braced) else {
-                    result_stack.push(None);
-                    continue;
-                };
-
-                result_stack.push(Some((
-                    builder.select_bit(gl, subject, braced),
-                    types.scalar_net(),
-                )));
-            }
-            Expr::BitSlice(subject, slice) => {
-                if !item.dispatched {
-                    item.dispatched = true;
-                    dispatch_stack.push(item);
-                    dispatch_stack.push(StackItem::new(*subject));
-                    match slice {
-                        BitSlice::MsbLsb(..) => {}
-                        BitSlice::PlusWidth(base, _) | BitSlice::MinusWidth(base, _) => {
-                            dispatch_stack.push(StackItem::new(*base))
-                        }
-                    }
-                    continue;
-                }
-
-                let Some((subject, _)) = result_stack.pop().unwrap() else {
-                    result_stack.push(None);
-                    continue;
-                };
-
-                let (lsb, width) = match slice {
-                    BitSlice::MsbLsb(msb, lsb) => {
-                        let (_msb, lsb, width) =
-                            msb_lsb_to_width(gl, arenas, types, scope, diagnostics, *msb, *lsb)?;
-                        let lsb_v = builder.constant(gl, Value::Decimal(lsb as i64));
-                        (lsb_v, width)
-                    }
-                    BitSlice::PlusWidth(_, width) => {
-                        let Some((lsb, _)) = result_stack.pop().unwrap() else {
-                            result_stack.push(None);
-                            continue;
-                        };
-                        let width =
-                            eval_constant_expr(gl, arenas, types, scope, diagnostics, *width)?;
-                        let width = width.as_integer().unwrap() as VectorSize;
-                        (lsb, width)
-                    }
-                    BitSlice::MinusWidth(_, width) => {
-                        let Some((lsb, _)) = result_stack.pop().unwrap() else {
-                            result_stack.push(None);
-                            continue;
-                        };
-
-                        let width =
-                            eval_constant_expr(gl, arenas, types, scope, diagnostics, *width)?;
-                        let width = width.as_integer().unwrap();
-                        let width_v = builder.constant(gl, Value::Decimal(width - 1));
-                        let lsb = builder.minus(gl, lsb, width_v);
-                        (lsb, width as VectorSize)
-                    }
-                };
-
-                let ty = types.insert(VType::VectorNet(width));
-                let shifted = builder.lsr(gl, subject, lsb);
-                let result = builder.slice(gl, shifted, width as VectorSize);
-                result_stack.push(Some((result, ty)));
-            }
             Expr::Unary(op, child) => {
                 if !item.dispatched {
                     item.dispatched = true;
@@ -255,7 +177,21 @@ pub fn lower_expr<'a>(
             }
             Expr::Replication(_) => todo!(),
             Expr::Ternary(_, _, _) => todo!(),
-            Expr::Ident(ast_ident) => {
+            Expr::Ident(ast_ident, exprs, range_expression) => {
+                if (!exprs.is_empty() || range_expression.is_some()) && !item.dispatched {
+                    item.dispatched = true;
+                    dispatch_stack.push(item);
+                    match range_expression {
+                        None => {}
+                        Some(BitSlice::MsbLsb(..)) => {}
+                        Some(BitSlice::PlusWidth(base, _) | BitSlice::MinusWidth(base, _)) => {
+                            dispatch_stack.push(StackItem::new(*base))
+                        }
+                    }
+                    dispatch_stack.extend(exprs.iter().rev().map(StackItem::new));
+                    continue;
+                }
+
                 let ident = arenas.get_ident(ast_ident.item.0);
                 let Some(symbol_key) = scope.get(&ident) else {
                     diagnostics.var_not_found(arenas, *ast_ident);
@@ -264,7 +200,7 @@ pub fn lower_expr<'a>(
                     continue;
                 };
                 let symbol = &scope.symbols[symbol_key];
-                let var = match symbol.variant {
+                let mut var = match symbol.variant {
                     SymbolVariant::Constant(value) => {
                         builder.constant(gl, Value::Decimal(value.unwrap()))
                     }
@@ -275,7 +211,84 @@ pub fn lower_expr<'a>(
                     SymbolVariant::Variable(None) => todo!(),
                     SymbolVariant::Variable(Some(key)) => key,
                 };
-                result_stack.push(Some((var, symbol.ty)));
+
+                let mut ty = symbol.ty;
+                if types[symbol.ty].is_array() {
+                    diagnostics.not_yet_implemented(arenas.get_span(expr), "select on array");
+                    error = true;
+                    continue;
+                }
+
+                let mut results = result_stack
+                    .drain(
+                        result_stack.len()
+                            - exprs.len()
+                            - usize::from(matches!(
+                                range_expression,
+                                Some(BitSlice::PlusWidth(..) | BitSlice::MinusWidth(..))
+                            ))..,
+                    )
+                    .rev();
+
+                for result in results.by_ref().take(exprs.len()) {
+                    let Some((expr, _)) = result else {
+                        drop(results);
+                        result_stack.push(None);
+                        continue 'dispatch_loop;
+                    };
+                    var = builder.select_bit(gl, var, expr);
+                    ty = types.scalar_net();
+                }
+
+                if let Some(slice) = range_expression {
+                    let (lsb, width) = match slice {
+                        BitSlice::MsbLsb(msb, lsb) => {
+                            let (_msb, lsb, width) = msb_lsb_to_width(
+                                gl,
+                                arenas,
+                                types,
+                                scope,
+                                diagnostics,
+                                *msb,
+                                *lsb,
+                            )?;
+                            let lsb_v = builder.constant(gl, Value::Decimal(lsb as i64));
+                            (lsb_v, width)
+                        }
+                        BitSlice::PlusWidth(_, width) => {
+                            let Some((lsb, _)) = results.next().unwrap() else {
+                                drop(results);
+                                result_stack.push(None);
+                                continue;
+                            };
+                            let width =
+                                eval_constant_expr(gl, arenas, types, scope, diagnostics, *width)?;
+                            let width = width.as_integer().unwrap() as VectorSize;
+                            (lsb, width)
+                        }
+                        BitSlice::MinusWidth(_, width) => {
+                            let Some((lsb, _)) = results.next().unwrap() else {
+                                drop(results);
+                                result_stack.push(None);
+                                continue;
+                            };
+
+                            let width =
+                                eval_constant_expr(gl, arenas, types, scope, diagnostics, *width)?;
+                            let width = width.as_integer().unwrap();
+                            let width_v = builder.constant(gl, Value::Decimal(width - 1));
+                            let lsb = builder.minus(gl, lsb, width_v);
+                            (lsb, width as VectorSize)
+                        }
+                    };
+
+                    ty = types.insert(VType::VectorNet(width));
+                    let shifted = builder.lsr(gl, var, lsb);
+                    var = builder.slice(gl, shifted, width as VectorSize);
+                }
+
+                drop(results);
+                result_stack.push(Some((var, ty)));
             }
             Expr::Decimal(decimal) => {
                 let decimal = &arenas.decimals[decimal.at];
@@ -485,7 +498,8 @@ fn bin_modulus<'a>(
     r_ty: VTypeKey,
 ) -> Result<(VariableKey, VTypeKey), ()> {
     if l_ty != types.integer() || r_ty != types.integer() {
-        diagnostics.not_yet_implemented(arenas.get_span(expr), "modulus with non-integer arguments");
+        diagnostics
+            .not_yet_implemented(arenas.get_span(expr), "modulus with non-integer arguments");
         return Err(());
     }
 

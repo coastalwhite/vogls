@@ -9,7 +9,7 @@ pub enum VType {
     ScalarNet,
     VectorNet(VectorSize),
     Integer,
-    Array(VTypeKey),
+    Array(VTypeKey, u32),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -30,17 +30,20 @@ impl Index<VTypeKey> for VTypeTable {
 }
 
 impl VType {
-    pub const fn to_ir(self) -> vogls_ir::Type {
-        match self {
+    pub fn to_ir_key(
+        self,
+        vtypes: &VTypeTable,
+        types: &mut vogls_ir::TypeTable,
+    ) -> vogls_ir::TypeKey {
+        let ty = match self {
             VType::ScalarNet => vogls_ir::Type::Bits(1),
             VType::VectorNet(n) => vogls_ir::Type::Bits(n),
             VType::Integer => vogls_ir::Type::Decimal,
-            VType::Array(_) => todo!(),
-        }
-    }
-
-    pub fn to_ir_key(self, types: &mut vogls_ir::TypeTable) -> vogls_ir::TypeKey {
-        types.insert(self.to_ir())
+            VType::Array(ty, width) => {
+                vogls_ir::Type::Array(vtypes[ty].to_ir_key(vtypes, types), width)
+            }
+        };
+        types.insert(ty)
     }
 
     pub const fn net(width: Option<VectorSize>) -> VType {
@@ -55,12 +58,12 @@ impl VType {
             Self::ScalarNet => Some(1),
             Self::VectorNet(n) => Some(n),
             Self::Integer => None,
-            Self::Array(_) => None,
+            Self::Array(..) => None,
         }
     }
 
     pub const fn is_array(&self) -> bool {
-        matches!(self, Self::Array(_))
+        matches!(self, Self::Array(..))
     }
 }
 

@@ -432,8 +432,8 @@ impl Event {
                         }
                     }
                 }
-                I::ArrayGet(..) => todo!(),
-                I::ArraySet(..) => todo!(),
+                I::ArrProbe(..) => todo!(),
+                I::ArrDrive(..) => todo!(),
                 I::Wait(time) => {
                     schedule.push(ScheduledEvent {
                         at: ctx.time + time.0,

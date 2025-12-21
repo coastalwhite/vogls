@@ -1,8 +1,8 @@
 use vogls_ir::GlobalContext;
 
+use crate::ast::AstId;
 use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::expr::{BinaryOperator, Expr};
-use crate::ast::AstId;
 use crate::lower::scope::SymbolVariant;
 use crate::number::Decimal;
 use crate::parser::AstArenas;
@@ -103,7 +103,17 @@ pub fn eval_constant_expr<'a>(
                 };
                 result_stack.push(Some(VValue::Integer(result)));
             }
-            Expr::Ident(ast_ident) => {
+            Expr::Ident(ast_ident, exprs, range_expression) => {
+                if !exprs.is_empty() || range_expression.is_some() {
+                    result_stack.push(None);
+                    diagnostics.not_yet_implemented(
+                        arenas.get_span(item.expr),
+                        "constant expression of this kind not yet implemented",
+                    );
+                    error = true;
+                    continue;
+                }
+
                 let ident = arenas.get_ident(ast_ident.item.0);
                 let Some(symbol_key) = scope.get(ident) else {
                     result_stack.push(None);
@@ -128,8 +138,6 @@ pub fn eval_constant_expr<'a>(
             }
             Expr::Sized(..)
             | Expr::String(..)
-            | Expr::BitPartSelect(_)
-            | Expr::BitSlice(..)
             | Expr::Unary(..)
             | Expr::Concatenation(..)
             | Expr::Replication(..)

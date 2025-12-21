@@ -846,4 +846,18 @@ impl BasicBlockBuilder {
         self.instrs.push(Instruction::Cast(dst, src));
         dst
     }
+
+    pub fn arr_probe(
+        &mut self,
+        gl: &mut GlobalContext,
+        signal: SignalKey,
+        idx: VariableKey,
+    ) -> VariableKey {
+        let Type::Array(ty, _) = gl.types[gl.signals[signal].ty] else {
+            panic!()
+        };
+        let dst = self.next_tmp_var(gl, ty);
+        self.instrs.push(Instruction::ArrProbe(dst, signal, idx));
+        dst
+    }
 }

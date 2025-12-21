@@ -8,8 +8,8 @@ use std::fmt;
 pub use builder::{BasicBlockBuilder, BranchRef, PhiRef, new_process};
 pub use format::{ContextFormat, DisplayContext};
 use indexmap::IndexSet;
-use slotmap::{new_key_type, SlotMap};
-pub use types::{Type, TypeTable, TypeKey};
+use slotmap::{SlotMap, new_key_type};
+pub use types::{Type, TypeKey, TypeTable};
 
 new_key_type! { pub struct ProcessKey; }
 new_key_type! { pub struct BasicBlockKey; }
@@ -171,11 +171,15 @@ pub enum Instruction {
     Cast(VariableKey, VariableKey),
 
     Intrinsic(IntrinsicOp, Vec<IntrinsicArg>),
+    ArrProbe(VariableKey, SignalKey, VariableKey),
+    ArrDrive(
+        SignalKey,
+        VariableKey,
+        VariableKey,
+        Option<(VariableKey, VectorSize)>,
+    ),
     Probe(VariableKey, SignalKey),
     Drive(SignalKey, VariableKey, Option<(VariableKey, VectorSize)>),
-
-    ArrayGet(VariableKey, VariableKey, VariableKey),
-    ArraySet(VariableKey, VariableKey, VariableKey, VariableKey),
 
     Phi(VariableKey, Box<[(BasicBlockKey, VariableKey)]>),
 }
@@ -190,9 +194,8 @@ impl Instruction {
             | Self::Cast(dst, _)
             | Self::Phi(dst, _)
             | Self::Probe(dst, _)
-            | Self::ArrayGet(dst, _, _)
-            | Self::ArraySet(dst, _, _, _) => Some(*dst),
-            Self::Intrinsic(_, _) | Self::Drive(_, _, _) => None,
+            | Self::ArrProbe(dst, _, _) => Some(*dst),
+            Self::Intrinsic(..) | Self::ArrDrive(..) | Self::Drive(..) => None,
         }
     }
 }

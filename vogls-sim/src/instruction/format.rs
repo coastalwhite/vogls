@@ -49,8 +49,13 @@ impl fmt::Display for VmInstruction {
                 None => write!(f, "drive {signal}, {src}"),
                 Some((offset, length)) => write!(f, "drive[{offset}, {length}] {signal}, {src}"),
             },
-            Self::ArrayGet(dst, src, idx, _) => write!(f, "{dst} = arr.get {src}, {idx}"),
-            Self::ArraySet(dst, src, idx, val, _) => write!(f, "{dst} = arr.set {src}, {idx}, {val}"),
+            Self::ArrProbe(dst, src, idx) => write!(f, "{dst} = arr.probe {src}, {idx}"),
+            Self::ArrDrive(signal, src, idx, partial) => match partial {
+                None => write!(f, "arr.drive {signal}, {src}, {idx}"),
+                Some((offset, length)) => {
+                    write!(f, "drive[{offset}, {length}] {signal}, {src}, {idx}")
+                }
+            },
             Self::Wait(time) => write!(f, "wait #{}", time.0),
             Self::Watch(signals) => {
                 f.write_str("watch [")?;
@@ -100,8 +105,8 @@ impl fmt::Display for VmProcess {
                 | I::Wait(_)
                 | I::Watch(_)
                 | I::Halt
-                | I::ArrayGet(..)
-                | I::ArraySet(..) => {}
+                | I::ArrProbe(..)
+                | I::ArrDrive(..) => {}
                 I::Jump(offset) => labels.push(*offset),
                 I::Branch(_, true_offset, false_offset) => {
                     labels.extend([*true_offset, *false_offset]);

@@ -5,16 +5,18 @@ use vogls_ir::{ConnectionDirection, GlobalContext, ProcessKey, Signal, SignalKey
 use crate::ast::AstId;
 use crate::ast::constant_expr::ConstantMinTypMaxExpression;
 use crate::ast::module::{
-    GateInstantiation, GenerateBlock, GenvarAssignment, GenvarDeclaration, ListOfPortConnections,
-    LoopGenerateConstruct, Module, ModuleInstance, ModuleInstantiation, ModuleOrGenerateItem,
-    ModuleOrGenerateItemDeclaration, NInputGateInstance, NInputGateType, NamedParameterAssignment,
-    NamedPortConnection, NetDeclAssignment, NetDeclarationNets, ParameterValueAssignment,
+    Dimension, GateInstantiation, GenerateBlock, GenvarAssignment, GenvarDeclaration,
+    ListOfPortConnections, LoopGenerateConstruct, Module, ModuleInstance, ModuleInstantiation,
+    ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration, NInputGateInstance, NInputGateType,
+    NamedParameterAssignment, NamedPortConnection, NetDeclAssignment, NetDeclarationNets,
+    ParameterValueAssignment, VariableType,
 };
 use crate::lower::expression::lower_expr;
 use crate::lower::scope::{Symbol, SymbolVariant};
 use crate::lower::{
     ModuleArgs, VType, assign_net_lvalue, assign_port_output, eval_constant_expr,
-    fetch_module_interface, lower_to_signal, range_to_width, statements_to_process,
+    fetch_module_interface, lower_to_signal, msb_lsb_to_width, range_to_width,
+    statements_to_process,
 };
 use crate::parser::AstArenas;
 
@@ -67,7 +69,7 @@ pub fn lower<'a>(
                                 let ident = arenas.get_ident(ident.0);
                                 let key = gl.signals.insert(Signal {
                                     name: ident.into(),
-                                    ty: types[ty].to_ir_key(&mut gl.types),
+                                    ty: types[ty].to_ir_key(types, &mut gl.types),
                                 });
                                 let symbol_key = scope.symbols.insert(Symbol {
                                     name: ident.to_string(),
@@ -87,7 +89,7 @@ pub fn lower<'a>(
                                 let ident = arenas.get_ident(ast_ident.item.0);
                                 let key = gl.signals.insert(Signal {
                                     name: ident.into(),
-                                    ty: types[ty].to_ir_key(&mut gl.types),
+                                    ty: types[ty].to_ir_key(types, &mut gl.types),
                                 });
                                 let symbol_key = scope.symbols.insert(Symbol {
                                     name: ident.to_string(),
@@ -132,15 +134,34 @@ pub fn lower<'a>(
                     };
                     let ty = types.insert(ty);
                     for ast_variable_type in reg_declaration.variable_types.iter() {
-                        let variable_type = arenas.get(ast_variable_type);
-                        let ident = arenas.get_ident(variable_type.identifier.item.0);
+                        let VariableType {
+                            identifier,
+                            dimensions,
+                        } = arenas.get(ast_variable_type);
+                        let ident = arenas.get_ident(identifier.item.0);
+
+                        let mut ty = ty;
+                        for dim in dimensions.iter() {
+                            let Dimension { lhs, rhs } = arenas.get(dim);
+                            let (_, _, width) = msb_lsb_to_width(
+                                gl,
+                                arenas,
+                                types,
+                                scope,
+                                diagnostics,
+                                *lhs,
+                                *rhs,
+                            )?;
+                            ty = types.insert(VType::Array(ty, width));
+                        }
+
                         let key = gl.signals.insert(Signal {
                             name: ident.into(),
-                            ty: types[ty].to_ir_key(&mut gl.types),
+                            ty: types[ty].to_ir_key(types, &mut gl.types),
                         });
                         let symbol_key = scope.symbols.insert(Symbol {
                             name: ident.to_string(),
-                            definition_site: arenas.get_item_span(variable_type.identifier),
+                            definition_site: arenas.get_item_span(*identifier),
                             ty,
                             variant: SymbolVariant::Signal(key),
                         });

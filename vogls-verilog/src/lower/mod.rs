@@ -20,7 +20,7 @@ use vogls_ir::{
 use crate::ast::constant_expr::{
     ConstantExpr, ConstantMinTypMaxExpression, ConstantRangeExpression,
 };
-use crate::ast::expr::{BitPartSelect, BitSlice, Expr};
+use crate::ast::expr::{BitSlice, Expr};
 use crate::ast::module::{
     GenerateRegion, Module, ModuleItem, ModulePorts, NonPortModuleItem, ParamAssignment,
     ParameterDeclaration, Port, PortDeclaration, PortExpression, PortReference, Range,
@@ -552,9 +552,19 @@ fn statements_to_process<'a>(
                                     EventExpression::OrList(_, _) => todo!(),
                                 };
 
-                                let Expr::Ident(ast_ident) = arenas.get(*expr) else {
+                                let Expr::Ident(ast_ident, exprs, range_expression) =
+                                    arenas.get(*expr)
+                                else {
                                     panic!("not an ident");
                                 };
+                                if !exprs.is_empty() || range_expression.is_some() {
+                                    diagnostics.not_yet_implemented(
+                                        arenas.get_span(*expr),
+                                        "event expression of this kind",
+                                    );
+                                    return Err(());
+                                }
+
                                 let ident = arenas.get_ident(ast_ident.item.0);
                                 let Some(symbol_key) = scope.get(ident) else {
                                     diagnostics.var_not_found(arenas, *ast_ident);
@@ -640,27 +650,34 @@ fn statements_to_process<'a>(
                 match ident {
                     "display" => {
                         let expressions = system_task_enable.expressions;
-                        assert_eq!(expressions.len(), 1); // @Improve: Error message
+                        if expressions.len() != 1 {
+                            diagnostics.warnings.push((
+                                arenas.get_span(*id),
+                                "display with multiple arguments or format strings".to_string(),
+                            ));
+                        }
 
-                        let expr = arenas.get(expressions.first().unwrap());
-                        let arg = if let Some(str_literal) = expr.into_str_literal() {
-                            let str_literal = &arenas.text[str_literal.0.start..str_literal.0.end];
-                            IntrinsicArg::StringLiteral(str_literal.to_string())
-                        } else {
-                            let expr = expressions.first().unwrap();
-                            let var = lower_expr(
-                                gl,
-                                arenas,
-                                types,
-                                scope,
-                                diagnostics,
-                                &mut builder,
-                                expr,
-                            )?;
-                            IntrinsicArg::Variable(var)
-                        };
+                        for expr in expressions {
+                            let arg = if let Some(str_literal) = arenas.get(expr).into_str_literal()
+                            {
+                                let str_literal =
+                                    &arenas.text[str_literal.0.start..str_literal.0.end];
+                                IntrinsicArg::StringLiteral(str_literal.to_string())
+                            } else {
+                                let var = lower_expr(
+                                    gl,
+                                    arenas,
+                                    types,
+                                    scope,
+                                    diagnostics,
+                                    &mut builder,
+                                    expr,
+                                )?;
+                                IntrinsicArg::Variable(var)
+                            };
 
-                        builder.intrinsic(gl, IntrinsicOp::Display, vec![arg]);
+                            builder.intrinsic(gl, IntrinsicOp::Display, vec![arg]);
+                        }
                     }
                     "vogls_assert_eq" | "vogls_assert_ne" => {
                         let expressions = system_task_enable.expressions;
@@ -836,7 +853,10 @@ fn lower_to_signal<'a>(
     expr: AstId<Expr>,
     width: Option<VectorSize>,
 ) -> Result<SignalKey, ()> {
-    if let Expr::Ident(ast_ident) = arenas.get(expr) {
+    if let Expr::Ident(ast_ident, exprs, range_expression) = arenas.get(expr)
+        && exprs.is_empty()
+        && range_expression.is_none()
+    {
         let ident = arenas.get_ident(ast_ident.item.0);
         let Some(symbol_key) = scope.get(&ident) else {
             diagnostics.var_not_found(arenas, *ast_ident);
@@ -873,7 +893,10 @@ fn assign_port_output<'a>(
     expr: AstId<Expr>,
     width: Option<VectorSize>,
 ) -> Result<SignalKey, ()> {
-    if let Expr::Ident(ast_ident) = arenas.get(expr) {
+    if let Expr::Ident(ast_ident, exprs, range_expression) = arenas.get(expr)
+        && exprs.is_empty()
+        && range_expression.is_none()
+    {
         let ident = arenas.get_ident(ast_ident.item.0);
         let Some(symbol_key) = scope.get(&ident) else {
             diagnostics.var_not_found(arenas, *ast_ident);
@@ -906,85 +929,163 @@ fn assign_port_output<'a>(
     let mut error = false;
     while let Some((expr, offset_src, length_src, offset_dst, length_dst)) = driving.pop() {
         match arenas.get(expr) {
-            Expr::BitPartSelect(bit_part_select) => {
-                let BitPartSelect { subject, braced } = bit_part_select;
-                let offset = lower_expr(
-                    gl,
-                    arenas,
-                    types,
-                    scope,
-                    diagnostics,
-                    &mut bb_builder,
-                    *braced,
-                )?;
-
-                let offset_dst = match offset_dst {
-                    None => offset,
-                    Some(offset_dst) => bb_builder.plus(gl, offset_dst, offset),
-                };
-
-                driving.push((*subject, offset_src, length_src, Some(offset_dst), None));
-            }
-            Expr::BitSlice(subject, slice) => {
-                let (offset, length) = match slice {
-                    BitSlice::MsbLsb(msb, lsb) => {
-                        let (_, lsb, width) =
-                            msb_lsb_to_width(gl, arenas, types, scope, diagnostics, *msb, *lsb)?;
-                        let offset = bb_builder.constant(gl, Value::Decimal(lsb as i64));
-                        (offset, width as VectorSize)
-                    }
-                    BitSlice::PlusWidth(base, width) => {
-                        let offset = lower_expr(
-                            gl,
-                            arenas,
-                            types,
-                            scope,
-                            diagnostics,
-                            &mut bb_builder,
-                            *base,
-                        );
-                        let width =
-                            eval_constant_expr(gl, arenas, types, scope, diagnostics, *width);
-                        let width = width?.as_integer().unwrap();
-                        (offset?, width as VectorSize)
-                    }
-                    BitSlice::MinusWidth(base, width) => {
-                        let offset = lower_expr(
-                            gl,
-                            arenas,
-                            types,
-                            scope,
-                            diagnostics,
-                            &mut bb_builder,
-                            *base,
-                        );
-                        let width =
-                            eval_constant_expr(gl, arenas, types, scope, diagnostics, *width)?;
-                        let width = width.as_integer().unwrap() as VectorSize;
-                        let width_v = bb_builder.constant(gl, Value::Decimal((width + 1) as i64));
-                        let offset = bb_builder.minus(gl, offset?, width_v);
-                        (offset, width)
-                    }
-                };
-
-                let offset_dst = match offset_dst {
-                    None => offset,
-                    Some(offset_dst) => bb_builder.plus(gl, offset_dst, offset),
-                };
-                let length_dst = Some(length);
-
-                driving.push((
-                    *subject,
-                    offset_src,
-                    length_src,
-                    Some(offset_dst),
-                    length_dst,
-                ));
-            }
+            // Expr::BitPartSelect(bit_part_select) => {
+            //     if bit_part_select.braced.len() != 1 {
+            //         diagnostics
+            //             .not_yet_implemented(arenas.get_span(expr), "multiple bit-part-select");
+            //         error = true;
+            //         continue;
+            //     }
+            //     let BitPartSelect { subject, braced } = bit_part_select;
+            //     let offset = lower_expr(
+            //         gl,
+            //         arenas,
+            //         types,
+            //         scope,
+            //         diagnostics,
+            //         &mut bb_builder,
+            //         braced.first().unwrap(),
+            //     )?;
+            //
+            //     let offset_dst = match offset_dst {
+            //         None => offset,
+            //         Some(offset_dst) => bb_builder.plus(gl, offset_dst, offset),
+            //     };
+            //
+            //     driving.push((*subject, offset_src, length_src, Some(offset_dst), None));
+            // }
+            // Expr::BitSlice(subject, slice) => {
+            //     let (offset, length) = match slice {
+            //         BitSlice::MsbLsb(msb, lsb) => {
+            //             let (_, lsb, width) =
+            //                 msb_lsb_to_width(gl, arenas, types, scope, diagnostics, *msb, *lsb)?;
+            //             let offset = bb_builder.constant(gl, Value::Decimal(lsb as i64));
+            //             (offset, width as VectorSize)
+            //         }
+            //         BitSlice::PlusWidth(base, width) => {
+            //             let offset = lower_expr(
+            //                 gl,
+            //                 arenas,
+            //                 types,
+            //                 scope,
+            //                 diagnostics,
+            //                 &mut bb_builder,
+            //                 *base,
+            //             );
+            //             let width =
+            //                 eval_constant_expr(gl, arenas, types, scope, diagnostics, *width);
+            //             let width = width?.as_integer().unwrap();
+            //             (offset?, width as VectorSize)
+            //         }
+            //         BitSlice::MinusWidth(base, width) => {
+            //             let offset = lower_expr(
+            //                 gl,
+            //                 arenas,
+            //                 types,
+            //                 scope,
+            //                 diagnostics,
+            //                 &mut bb_builder,
+            //                 *base,
+            //             );
+            //             let width =
+            //                 eval_constant_expr(gl, arenas, types, scope, diagnostics, *width)?;
+            //             let width = width.as_integer().unwrap() as VectorSize;
+            //             let width_v = bb_builder.constant(gl, Value::Decimal((width + 1) as i64));
+            //             let offset = bb_builder.minus(gl, offset?, width_v);
+            //             (offset, width)
+            //         }
+            //     };
+            //
+            //     let offset_dst = match offset_dst {
+            //         None => offset,
+            //         Some(offset_dst) => bb_builder.plus(gl, offset_dst, offset),
+            //     };
+            //     let length_dst = Some(length);
+            //
+            //     driving.push((
+            //         *subject,
+            //         offset_src,
+            //         length_src,
+            //         Some(offset_dst),
+            //         length_dst,
+            //     ));
+            // }
             Expr::Concatenation(_) => {
                 todo!()
             }
-            Expr::Ident(ast_ident) => {
+            Expr::Ident(ast_ident, exprs, range_expression) => {
+                let (offset_dst, length_dst) = if range_expression.is_none() && exprs.is_empty() {
+                    (bb_builder.constant(gl, Value::Decimal(0)), None)
+                } else if range_expression.is_none() && exprs.len() == 1 {
+                    (
+                        lower_expr(
+                            gl,
+                            arenas,
+                            types,
+                            scope,
+                            diagnostics,
+                            &mut bb_builder,
+                            exprs.first().unwrap(),
+                        )?,
+                        None,
+                    )
+                } else if let Some(slice) = range_expression
+                    && exprs.is_empty()
+                {
+                    match slice {
+                        BitSlice::MsbLsb(msb, lsb) => {
+                            let (_, lsb, width) = msb_lsb_to_width(
+                                gl,
+                                arenas,
+                                types,
+                                scope,
+                                diagnostics,
+                                *msb,
+                                *lsb,
+                            )?;
+                            let offset = bb_builder.constant(gl, Value::Decimal(lsb as i64));
+                            (offset, Some(width as VectorSize))
+                        }
+                        BitSlice::PlusWidth(base, width) => {
+                            let offset = lower_expr(
+                                gl,
+                                arenas,
+                                types,
+                                scope,
+                                diagnostics,
+                                &mut bb_builder,
+                                *base,
+                            );
+                            let width =
+                                eval_constant_expr(gl, arenas, types, scope, diagnostics, *width);
+                            let width = width?.as_integer().unwrap();
+                            (offset?, Some(width as VectorSize))
+                        }
+                        BitSlice::MinusWidth(base, width) => {
+                            let offset = lower_expr(
+                                gl,
+                                arenas,
+                                types,
+                                scope,
+                                diagnostics,
+                                &mut bb_builder,
+                                *base,
+                            );
+                            let width =
+                                eval_constant_expr(gl, arenas, types, scope, diagnostics, *width)?;
+                            let width = width.as_integer().unwrap() as VectorSize;
+                            let width_v =
+                                bb_builder.constant(gl, Value::Decimal((width + 1) as i64));
+                            let offset = bb_builder.minus(gl, offset?, width_v);
+                            (offset, Some(width))
+                        }
+                    }
+                } else {
+                    diagnostics.not_yet_implemented(arenas.get_span(expr), "multiple braced");
+                    error = true;
+                    continue;
+                };
+
                 let ident = arenas.get_ident(ast_ident.item.0);
                 let Some(symbol_key) = scope.get(&ident) else {
                     diagnostics.var_not_found(arenas, *ast_ident);
@@ -995,11 +1096,6 @@ fn assign_port_output<'a>(
                     diagnostics.output_expr_not_allowed(arenas.get_span(expr));
                     error = true;
                     continue;
-                };
-
-                let offset_dst = match offset_dst {
-                    None => bb_builder.constant(gl, Value::Decimal(0)),
-                    Some(v) => v,
                 };
 
                 let mut src = probed;

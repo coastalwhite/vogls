@@ -241,21 +241,24 @@ impl ContextFormat for Instruction {
                     ctx.gl.vars.get(*var).unwrap().typed_ctx_fmt(f, ctx)?;
                 }
             }
-            Self::ArrayGet(dst, src, idx) => {
+            Self::ArrProbe(dst, src, idx) => {
                 ctx.gl.vars.get(*dst).unwrap().typed_ctx_fmt(f, ctx)?;
-                f.write_str(" = arr.get ")?;
-                ctx.gl.vars.get(*src).unwrap().typed_ctx_fmt(f, ctx)?;
+                f.write_str(" = arr.probe ")?;
+                ctx.gl.signals.get(*src).unwrap().typed_ctx_fmt(f, ctx)?;
                 f.write_str(", ")?;
                 ctx.gl.vars.get(*idx).unwrap().typed_ctx_fmt(f, ctx)?;
             }
-            Self::ArraySet(dst, src, idx, val) => {
-                ctx.gl.vars.get(*dst).unwrap().typed_ctx_fmt(f, ctx)?;
-                f.write_str(" = arr.set ")?;
+            Self::ArrDrive(dst, src, idx, partial) => {
+                ctx.gl.signals.get(*dst).unwrap().typed_ctx_fmt(f, ctx)?;
+                f.write_str(" = arr.drive ")?;
+                if let Some((offset, length)) = partial {
+                    f.write_str("[")?;
+                    ctx.gl.vars.get(*offset).unwrap().typed_ctx_fmt(f, ctx)?;
+                    write!(f, ", {length}]")?;
+                }
                 ctx.gl.vars.get(*src).unwrap().typed_ctx_fmt(f, ctx)?;
                 f.write_str(", ")?;
                 ctx.gl.vars.get(*idx).unwrap().typed_ctx_fmt(f, ctx)?;
-                f.write_str(", ")?;
-                ctx.gl.vars.get(*val).unwrap().typed_ctx_fmt(f, ctx)?;
             }
         }
 

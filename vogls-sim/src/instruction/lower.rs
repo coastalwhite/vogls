@@ -161,15 +161,12 @@ pub fn lower_process_to_vm(
                     var(*src),
                     partial.map(|(o, l)| (var(o), l)),
                 ),
-                I::ArrayGet(dst, src, idx) => {
-                    VI::ArrayGet(var(*dst), var(*src), var(*idx), gl.vars[*dst].ty.clone())
-                }
-                I::ArraySet(dst, src, idx, val) => VI::ArraySet(
-                    var(*dst),
+                I::ArrProbe(dst, src, idx) => VI::ArrProbe(var(*dst), signal!(*src), var(*idx)),
+                I::ArrDrive(dst, src, idx, partial) => VI::ArrDrive(
+                    signal!(*dst),
                     var(*src),
                     var(*idx),
-                    var(*val),
-                    gl.vars[*dst].ty.clone(),
+                    partial.map(|(o, l)| (var(o), l)),
                 ),
                 I::Phi(..) => continue,
             };

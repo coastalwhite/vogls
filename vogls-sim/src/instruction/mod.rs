@@ -36,9 +36,14 @@ pub enum VmInstruction {
     Probe(StackRef, VmSignalKey),
     Drive(VmSignalKey, StackRef, Option<(StackRef, VectorSize)>),
 
-    ArrayGet(StackRef, StackRef, StackRef, TypeKey),
-    ArraySet(StackRef, StackRef, StackRef, StackRef, TypeKey),
-        
+    ArrProbe(StackRef, VmSignalKey, StackRef),
+    ArrDrive(
+        VmSignalKey,
+        StackRef,
+        StackRef,
+        Option<(StackRef, VectorSize)>,
+    ),
+
     Wait(Time),
     Watch(Vec<VmSignalKey>),
 
