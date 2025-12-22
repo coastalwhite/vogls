@@ -136,7 +136,9 @@ pub fn eval_constant_expr<'a>(
                 };
                 result_stack.push(Some(VValue::Integer(n)));
             }
-            Expr::Sized(..)
+            Expr::FunctionCall(..)
+            | Expr::SystemFunctionCall(..)
+            | Expr::Sized(..)
             | Expr::String(..)
             | Expr::Unary(..)
             | Expr::Concatenation(..)

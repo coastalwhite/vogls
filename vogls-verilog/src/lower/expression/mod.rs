@@ -1,4 +1,7 @@
-use vogls_ir::{BasicBlockBuilder, Bits, GlobalContext, Value, VariableKey, VectorSize};
+use vogls_ir::{
+    BasicBlockBuilder, Bits, GlobalContext, IntrinsicArg, IntrinsicOp, Value, VariableKey,
+    VectorSize,
+};
 
 use crate::ast::AstId;
 use crate::ast::expr::{BinaryOperator, BitSlice, Expr, UnaryOperator};
@@ -335,6 +338,48 @@ pub fn lower_expr<'a>(
                 }
 
                 result_stack.push(Some((var, ty)));
+            }
+            Expr::FunctionCall(..) => {
+                diagnostics.not_yet_implemented(arenas.get_span(expr), "function calls");
+                result_stack.push(None);
+                error = true;
+                continue;
+            }
+            Expr::SystemFunctionCall(ident, exprs) => {
+                if !item.dispatched {
+                    item.dispatched = true;
+                    dispatch_stack.push(item);
+                    dispatch_stack.extend(exprs.iter().map(StackItem::new));
+                    continue;
+                }
+
+                match arenas.get_ident(ident.item.0) {
+                    "vogls_dbg" => {
+                        if exprs.len() != 1 {
+                            diagnostics
+                                .not_yet_implemented(arenas.get_span(expr), "vogls_dbg #args != 1");
+                            result_stack.push(None);
+                            error = true;
+                            continue;
+                        }
+
+                        let Some((e, _)) = result_stack.last().unwrap() else {
+                            result_stack.push(None);
+                            continue;
+                        };
+                        builder.intrinsic(
+                            gl,
+                            IntrinsicOp::Display,
+                            vec![IntrinsicArg::Variable(*e)],
+                        );
+                    }
+                    _ => {
+                        diagnostics.not_yet_implemented(arenas.get_span(expr), "function calls");
+                        result_stack.push(None);
+                        error = true;
+                        continue;
+                    }
+                }
             }
             Expr::Decimal(decimal) => {
                 let decimal = &arenas.decimals[decimal.at];

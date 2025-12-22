@@ -1,4 +1,5 @@
 use crate::ast::expr::{BinaryOperator, BitSlice, Expr, UnaryOperator};
+use crate::ast::statement::SystemTaskIdentifier;
 use crate::ast::{AstId, AstIdRange, AstItem, DecimalRef, Identifier, SizedNumberRef, StringRef};
 use crate::parser::ParseErrorReason;
 use crate::parser::token_walker::TokenRange;
@@ -19,6 +20,7 @@ pub(crate) enum StackItem {
         AstId<Expr>,
         BraceVariant,
     ),
+    SystemFnCall(AstItem<SystemTaskIdentifier>, Vec<Expr>, Vec<TokenRange>),
     Unary(UnaryOperator),
     Binary(BinaryOperator, AstId<Expr>),
     TernaryS1(AstId<Expr>),
@@ -116,6 +118,25 @@ impl<'a> Consumable<'a> for Expr {
                             deepen!(StackItem::Brace(ident, Vec::new(), Vec::new()), 0, span)
                         } else {
                             (Expr::Ident(ident, AstIdRange::default(), None), span)
+                        }
+                    }
+                    T::DollarIdent => {
+                        let ident = item_parse::<SystemTaskIdentifier>(
+                            tkw,
+                            sc,
+                            arenas,
+                            diagnostics.as_deref_mut(),
+                        )?;
+
+                        tkw.next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
+                        if tkw.next_if_equals(T::RightParen) {
+                            (Expr::SystemFunctionCall(ident, AstIdRange::default()), span)
+                        } else {
+                            deepen!(
+                                StackItem::SystemFnCall(ident, Vec::new(), Vec::new()),
+                                0,
+                                span
+                            )
                         }
                     }
                     T::Decimal => (
@@ -303,6 +324,23 @@ impl<'a> Consumable<'a> for Expr {
                         };
                         tkw.next_expect(T::RightBrace, diagnostics.as_deref_mut())?;
                         current = (Expr::Ident(subject, exprs, Some(bit_slice)), location);
+                    }
+                    StackItem::SystemFnCall(ident, mut params, mut trs) => {
+                        params.push(current.0);
+                        trs.push(current.1);
+                        match *tkw.try_next(diagnostics.as_deref_mut())?.kind {
+                            T::RightParen => {
+                                let params = arenas.add_range(params, trs);
+                                current = (Expr::SystemFunctionCall(ident, params), location);
+                            }
+                            T::Comma => {
+                                deepen!(StackItem::SystemFnCall(ident, params, trs), 0, location)
+                            }
+                            t => {
+                                diagnostics.map(|d| d.unexpected_token(tkw.offset - 1, t));
+                                return Err(());
+                            }
+                        }
                     }
                     StackItem::Unary(op) => {
                         let subexpr = arenas.add_tuple(current);

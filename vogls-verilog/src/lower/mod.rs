@@ -1035,7 +1035,9 @@ fn assign_port_output<'a>(
                 error = true;
             }
 
-            Expr::Decimal(..)
+            Expr::FunctionCall(..)
+            | Expr::SystemFunctionCall(..)
+            | Expr::Decimal(..)
             | Expr::Sized(..)
             | Expr::Ternary(..)
             | Expr::String(..)
