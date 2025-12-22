@@ -277,7 +277,7 @@ impl Event {
                             let src = bit_stack[src.offset];
                             decimal_stack[dst.offset] = src as i64;
                         }
-                        _ => todo!("cast: {src_ty:?} -> {dst_ty:?}"),
+                        _ => todo!("cast: {:?} -> {:?}", types[*src_ty], types[*dst_ty]),
                     }
                 }
                 I::Move(dst, src, ty) => {

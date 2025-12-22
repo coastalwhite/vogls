@@ -2,7 +2,6 @@ use std::collections::HashMap;
 
 use vogls_ir::{ConnectionDirection, GlobalContext, ProcessKey, Signal, SignalKey, new_process};
 
-use crate::ast::AstId;
 use crate::ast::constant_expr::ConstantMinTypMaxExpression;
 use crate::ast::module::{
     Dimension, GateInstantiation, GenerateBlock, GenvarAssignment, GenvarDeclaration,
@@ -11,6 +10,7 @@ use crate::ast::module::{
     NamedParameterAssignment, NamedPortConnection, NetDeclAssignment, NetDeclarationNets,
     ParameterValueAssignment, VariableType,
 };
+use crate::ast::{AstId, AstIdRange};
 use crate::lower::expression::lower_expr;
 use crate::lower::scope::{Symbol, SymbolVariant};
 use crate::lower::vvalue::VValue;
@@ -22,7 +22,7 @@ use crate::parser::AstArenas;
 
 use super::scope::Scope;
 use super::vtype::VTypeTable;
-use super::{Diagnostics, ModuleInitialization};
+use super::{Diagnostics, ModuleInitialization, VTypeKey};
 
 pub fn lower<'a>(
     gl: &mut GlobalContext,
@@ -57,13 +57,15 @@ pub fn lower<'a>(
                         NetDeclarationNets::Idents(net_idents) => {
                             for ast_net_ident in net_idents.iter() {
                                 let net_ident = arenas.get(ast_net_ident);
-                                if !net_ident.dimension.is_empty() {
-                                    diagnostics.not_yet_implemented(
-                                        arenas.get_span(ast_net_ident),
-                                        "net_identifier::dimension",
-                                    );
-                                    return Err(());
-                                }
+                                let ty = dims_to_array(
+                                    gl,
+                                    arenas,
+                                    types,
+                                    scope,
+                                    diagnostics,
+                                    ty,
+                                    net_ident.dimension,
+                                )?;
                                 let ast_ident = net_ident.ident;
                                 let ident = ast_ident.item;
                                 let ident = arenas.get_ident(ident.0);
@@ -140,22 +142,8 @@ pub fn lower<'a>(
                         } = arenas.get(ast_variable_type);
                         let ident = arenas.get_ident(identifier.item.0);
 
-                        let mut ty = ty;
-                        for dim in dimensions.iter().rev() {
-                            let Dimension { lhs, rhs } = arenas.get(dim);
-                            let lhs =
-                                eval_constant_expr(gl, arenas, types, scope, diagnostics, *lhs);
-                            let rhs =
-                                eval_constant_expr(gl, arenas, types, scope, diagnostics, *rhs);
-
-                            let (Ok(VValue::Integer(lhs)), Ok(VValue::Integer(rhs))) = (lhs, rhs)
-                            else {
-                                return Err(());
-                            };
-
-                            let width = lhs.abs_diff(rhs) + 1;
-                            ty = types.insert(VType::Array(ty, width as u32));
-                        }
+                        let ty =
+                            dims_to_array(gl, arenas, types, scope, diagnostics, ty, *dimensions)?;
 
                         let key = gl.signals.insert(Signal {
                             name: ident.into(),
@@ -210,7 +198,7 @@ pub fn lower<'a>(
 
                 let (section_key, mut bb_builder) = new_process(gl, "assign".into());
                 let bb_key = bb_builder.key();
-                let (variable, _) = lower_expr(
+                let (variable, variable_ty) = lower_expr(
                     gl,
                     arenas,
                     types,
@@ -229,6 +217,7 @@ pub fn lower<'a>(
                     &mut bb_builder,
                     net_assignment.net_lvalue,
                     variable,
+                    variable_ty,
                 )?;
 
                 bb_builder.watch_for_ins_to(gl, bb_key);
@@ -662,4 +651,28 @@ pub fn lower<'a>(
     }
 
     Ok(())
+}
+
+pub fn dims_to_array<'a>(
+    gl: &mut GlobalContext,
+    arenas: &'a AstArenas,
+    types: &mut VTypeTable,
+    scope: &mut Scope<'a>,
+    diagnostics: &mut Diagnostics,
+    mut ty: VTypeKey,
+    dimensions: AstIdRange<Dimension>,
+) -> Result<VTypeKey, ()> {
+    for dim in dimensions.iter().rev() {
+        let Dimension { lhs, rhs } = arenas.get(dim);
+        let lhs = eval_constant_expr(gl, arenas, types, scope, diagnostics, *lhs);
+        let rhs = eval_constant_expr(gl, arenas, types, scope, diagnostics, *rhs);
+
+        let (Ok(VValue::Integer(lhs)), Ok(VValue::Integer(rhs))) = (lhs, rhs) else {
+            return Err(());
+        };
+
+        let width = lhs.abs_diff(rhs) + 1;
+        ty = types.insert(VType::Array(ty, width as u32));
+    }
+    Ok(ty)
 }

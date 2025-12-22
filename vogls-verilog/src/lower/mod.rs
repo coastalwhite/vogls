@@ -1312,6 +1312,7 @@ fn assign_net_lvalue<'a>(
     builder: &mut BasicBlockBuilder,
     lvalue: AstId<NetLValue>,
     variable: VariableKey,
+    variable_ty: VTypeKey,
 ) -> Result<(), ()> {
     let lvalue = arenas.get(lvalue);
     let lvalue_ident = lvalue.ident.item;
@@ -1327,35 +1328,131 @@ fn assign_net_lvalue<'a>(
     };
     let signal_key = *signal_key;
 
-    if !lvalue.constant_exprs.is_empty() {
+    let NetLValue {
+        ident,
+        constant_exprs,
+        constant_range_expression,
+    } = lvalue;
+
+    let lvalue_ident = arenas.get_ident(ident.item.0);
+    let Some(symbol_key) = scope.get(&lvalue_ident) else {
+        diagnostics.var_not_found(arenas, *ident);
+        return Err(());
+    };
+
+    let mut exprs = *constant_exprs;
+    let symbol = &scope.symbols[symbol_key];
+    let mut ty = symbol.ty;
+    let mut arr_idx = if let VType::Array(child_ty, _) = types[ty]
+        && let Some(fst) = exprs.pop_front()
+    {
+        if !matches!(symbol.variant, SymbolVariant::Signal(_)) {
+            diagnostics.not_yet_implemented(arenas.get_range_span(exprs), "array for non-signal");
+            return Err(());
+        }
+
+        let mut leaf_arr_items = types[child_ty].leaf_arr_items(types);
+        let fst = eval_constant_expr(gl, arenas, types, scope, diagnostics, fst)?;
+        let fst = fst.as_integer().unwrap();
+        let mut offset = fst as u32 * leaf_arr_items;
+        ty = child_ty;
+
+        while let VType::Array(child_ty, width) = types[ty]
+            && let Some(expr) = exprs.pop_front()
+        {
+            leaf_arr_items /= width;
+            let expr = eval_constant_expr(gl, arenas, types, scope, diagnostics, expr)?;
+            let expr = expr.as_integer().unwrap();
+            let expr = expr as u32 * leaf_arr_items;
+            offset += expr;
+            ty = child_ty;
+        }
+
+        Some(offset)
+    } else {
+        None
+    };
+    if !exprs.is_empty() {
+        diagnostics.not_yet_implemented(arenas.get_range_span(exprs), "variable_lvalue::exprs");
+        return Err(());
+    }
+
+    let mut range_expression = *constant_range_expression;
+    if let VType::Array(child_ty, _) = types[ty]
+        && let Some(ConstantRangeExpression::Single(expr)) = range_expression.map(|e| arenas.get(e))
+    {
+        _ = range_expression.take();
+
+        let leaf_arr_items = types[child_ty].leaf_arr_items(types);
+        let fst = eval_constant_expr(gl, arenas, types, scope, diagnostics, *expr)?;
+        let fst = fst.as_integer().unwrap();
+        let offset = fst as u32 * leaf_arr_items;
+        ty = child_ty;
+
+        arr_idx = Some(match arr_idx {
+            None => offset,
+            Some(arr_idx) => arr_idx + offset,
+        });
+    }
+
+    if types[ty].is_array() {
         diagnostics.not_yet_implemented(
-            arenas.get_range_span(lvalue.constant_exprs),
-            "net_lvalue::constant_exprs",
+            arenas.get_range_span(exprs),
+            "driving array without indices",
         );
         return Err(());
     }
-    match lvalue.constant_range_expression {
-        None => builder.drive(gl, signal_key, variable),
-        Some(range_expression) => {
-            let (offset, length) = match arenas.get(range_expression) {
-                ConstantRangeExpression::Single(expr) => (
-                    eval_constant_expr(gl, arenas, types, scope, diagnostics, *expr)?
-                        .as_integer()
-                        .unwrap(),
-                    1,
-                ),
-                ConstantRangeExpression::MsbLsb { msb, lsb } => {
-                    let (_, offset, length) =
-                        msb_lsb_to_width(gl, arenas, types, scope, diagnostics, *msb, *lsb)?;
-                    (offset as i64, length)
-                }
-            };
 
-            let offset = builder.constant(gl, Value::Decimal(offset));
-            builder.drive_partial(gl, signal_key, variable, offset, length);
+    match &mut scope.symbols[symbol_key].variant {
+        SymbolVariant::Constant(_) => todo!(),
+        SymbolVariant::Genvar(_) => todo!(),
+        SymbolVariant::Signal(key) => {
+            let key = *key;
+            match range_expression {
+                None => {
+                    let variable =
+                        expression::coerce(gl, types, builder, variable, variable_ty, ty);
+                    match arr_idx {
+                        None => builder.drive(gl, key, variable),
+                        Some(idx) => {
+                            let idx = builder.constant(gl, Value::Decimal(idx as i64));
+                            builder.arr_drive(gl, key, variable, idx)
+                        },
+                    }
+                }
+                Some(range_expression) => {
+                    let (offset, length) = match arenas.get(range_expression) {
+                        ConstantRangeExpression::Single(expr) => (
+                            eval_constant_expr(gl, arenas, types, scope, diagnostics, *expr)?.as_integer().unwrap(),
+                            1,
+                        ),
+                        _ => todo!("MsbLsb"),
+                    };
+
+                    let offset = builder.constant(gl, Value::Decimal(offset));
+                    match arr_idx {
+                        None => builder.drive_partial(gl, key, variable, offset, length),
+                        Some(idx) => {
+                            let idx = builder.constant(gl, Value::Decimal(idx as i64));
+                            builder.arr_drive_partial(gl, key, variable, idx, offset, length)
+                        }
+                    }
+                }
+            }
+        }
+        SymbolVariant::Variable(v) => {
+            if let Some(range_expression) = range_expression {
+                diagnostics.not_yet_implemented(
+                    arenas.get_span(range_expression),
+                    "variable_lvalue::range_expression[variable]",
+                );
+                return Err(());
+            }
+
+            *v = Some(variable);
+            scope.assign(symbol_key, variable);
         }
     }
-
     Ok(())
 }
 
