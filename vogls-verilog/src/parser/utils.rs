@@ -125,6 +125,47 @@ pub fn parse_one_or_more_delimited<'a, T: Consumable<'a>>(
     Ok(arenas.add_range(items, spans))
 }
 
+pub fn parse_one_or_more_delimited_and_after<'a, T: Consumable<'a>>(
+    tkw: &mut TokenWalker<'a>,
+    sc: &mut ParserScratches,
+    arenas: &mut AstArenas,
+    delimiter: Token,
+    after: Token,
+    mut diagnostics: Option<&mut Diagnostics>,
+) -> Result<AstIdRange<T>, ()> {
+    let start = tkw.offset;
+    let item = T::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+    let token_range = TokenRange {
+        start,
+        end: tkw.offset,
+    };
+
+    // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
+    // here.
+    let mut items = Vec::new();
+    let mut spans = Vec::new();
+    items.push(item);
+    spans.push(token_range);
+
+    loop {
+        if !tkw.is_next_equal_to(delimiter) || !tkw.is_next_nth_equal_to(1, after) {
+            break;
+        }
+        tkw.offset += 1;
+
+        let start = tkw.offset;
+        let item = T::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        let token_range = TokenRange {
+            start,
+            end: tkw.offset,
+        };
+        items.push(item);
+        spans.push(token_range);
+    }
+
+    Ok(arenas.add_range(items, spans))
+}
+
 pub fn parse_one_or_more_delimited_one_of<'a, T: Consumable<'a>>(
     tkw: &mut TokenWalker<'a>,
     sc: &mut ParserScratches,

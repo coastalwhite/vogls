@@ -187,9 +187,10 @@ pub fn lower<'a>(
                         scope.push(ident, symbol_key);
                     }
                 }
+                ModuleOrGenerateItemDeclaration::Task(_) => todo!(),
             }
         }
-        ModuleOrGenerateItem::LocalParameterDeclaration => todo!(),
+        ModuleOrGenerateItem::LocalParameterDeclaration(_) => todo!(),
         ModuleOrGenerateItem::ParameterOverride => todo!(),
         ModuleOrGenerateItem::ContinuousAssign(assign) => {
             let assign = arenas.get(*assign);

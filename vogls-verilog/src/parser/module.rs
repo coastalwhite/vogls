@@ -5,15 +5,16 @@ use crate::ast::module::{
     AlwaysConstruct, CaseGenerateConstruct, CaseGenerateItem, CaseGeneratePattern, ContinousAssign,
     Dimension, GateInstantiation, GenerateBlock, GenerateRegion, GenvarAssignment,
     GenvarDeclaration, IfGenerateConstruct, InitialConstruct, InoutDeclaration, InputDeclaration,
-    IntegerDeclaration, ListOfPortConnections, LoopGenerateConstruct, Module, ModuleInstance,
-    ModuleInstantiation, ModuleItem, ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration,
-    ModulePorts, NInputGateInstance, NInputGateInstantiation, NInputGateType, NameOfGateInstance,
-    NamedParameterAssignment, NamedPortConnection, NetAssignment, NetDeclAssignment,
-    NetDeclaration, NetDeclarationNets, NetIdent, NetType, NonPortModuleItem, OutputDeclaration,
-    ParamAssignment, ParameterDeclaration, ParameterValueAssignment, Port, PortDeclaration,
-    PortExpression, PortReference, Range, RegDeclaration, VariableType,
+    IntegerDeclaration, ListOfPortConnections, LocalParameterDeclaration, LoopGenerateConstruct,
+    Module, ModuleInstance, ModuleInstantiation, ModuleItem, ModuleOrGenerateItem,
+    ModuleOrGenerateItemDeclaration, ModulePorts, NInputGateInstance, NInputGateInstantiation,
+    NInputGateType, NameOfGateInstance, NamedParameterAssignment, NamedPortConnection,
+    NetAssignment, NetDeclAssignment, NetDeclaration, NetDeclarationNets, NetIdent, NetType,
+    NonPortModuleItem, OutputDeclaration, OutputNet, ParamAssignment, ParameterDeclaration,
+    ParameterDeclarationTyping, ParameterValueAssignment, Port, PortDeclaration, PortExpression,
+    PortReference, Range, RegDeclaration, TaskDeclaration, VariableType,
 };
-use crate::ast::statement::{NetLValue, Statement};
+use crate::ast::statement::{NetLValue, Statement, StatementOrNull};
 use crate::parser::TokenRange;
 use crate::tokenizer::Token;
 
@@ -63,10 +64,11 @@ impl<'a> Consumable<'a> for Module {
                 }
                 return Err(());
             };
-            module_parameter_port_list = Some(parse_one_or_more(
+            module_parameter_port_list = Some(parse_one_or_more_delimited::<ParameterDeclaration>(
                 &mut tkw.end_at(end),
                 sc,
                 arenas,
+                T::Comma,
                 diagnostics.as_deref_mut(),
             )?);
             tkw.offset = end + 1;
@@ -395,12 +397,29 @@ impl<'a> Consumable<'a> for OutputDeclaration {
         // | output output_variable_type list_of_variable_port_identifiers
 
         tkw.next_expect(T::KeywordOutput, diagnostics.as_deref_mut())?;
-        let mut net_type = None;
-        if let Some(val) = try_item_parse::<NetType>(tkw, sc, arenas) {
-            net_type = Some(val);
-        }
+        let net = match *tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?.kind {
+            T::KeywordSupply0
+            | T::KeywordSupply1
+            | T::KeywordTri
+            | T::KeywordTriand
+            | T::KeywordTrior
+            | T::KeywordTri0
+            | T::KeywordTri1
+            | T::KeywordUwire
+            | T::KeywordWire
+            | T::KeywordWand
+            | T::KeywordWor
+            | T::KeywordReg
+            | T::KeywordInteger
+            | T::KeywordTime => Some(item_parse::<OutputNet>(
+                tkw,
+                sc,
+                arenas,
+                diagnostics.as_deref_mut(),
+            )?),
+            _ => None,
+        };
         let signed = tkw.next_if_equals(T::KeywordSigned);
-        // @Incomplete: reg | output_variable_type
         let mut range = None;
         if tkw.get(tkw.offset).is_some_and(|t| *t.kind == T::LeftBrace) {
             range = Some(parse::<Range>(tkw, sc, arenas, diagnostics.as_deref_mut())?);
@@ -414,10 +433,33 @@ impl<'a> Consumable<'a> for OutputDeclaration {
         )?;
 
         Ok(Self {
-            net: net_type,
+            net,
             signed,
             range,
             identifiers,
+        })
+    }
+}
+
+impl<'a> Consumable<'a> for OutputNet {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        Ok(match *tkw.try_next(diagnostics.as_deref_mut())?.kind {
+            T::KeywordReg => Self::Register,
+            T::KeywordInteger => Self::Integer,
+            T::KeywordTime => Self::Time,
+            _ => Self::NetType(NetType::consume(
+                tkw,
+                sc,
+                arenas,
+                diagnostics.as_deref_mut(),
+            )?),
         })
     }
 }
@@ -560,7 +602,8 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItem {
             | T::KeywordWor
             | T::KeywordReg
             | T::KeywordInteger
-            | T::KeywordGenvar => {
+            | T::KeywordGenvar
+            | T::KeywordTask => {
                 let module_or_generate_item_declaration = parse::<ModuleOrGenerateItemDeclaration>(
                     tkw,
                     sc,
@@ -585,6 +628,16 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItem {
                 let case_generate_construct =
                     parse::<CaseGenerateConstruct>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
                 Ok(Self::CaseGenerateConstruct(case_generate_construct))
+            }
+            T::KeywordLocalParam => {
+                let local_parameter_declaration = parse::<LocalParameterDeclaration>(
+                    tkw,
+                    sc,
+                    arenas,
+                    diagnostics.as_deref_mut(),
+                )?;
+                tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+                Ok(Self::LocalParameterDeclaration(local_parameter_declaration))
             }
             _ => {
                 diagnostics.map(|d| d.incomplete(tkw.offset, "module_or_generate_item"));
@@ -1105,6 +1158,11 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItemDeclaration {
                     parse::<GenvarDeclaration>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
                 Ok(Self::Genvar(genvar_declaration))
             }
+            T::KeywordTask => {
+                let task_declaration =
+                    parse::<TaskDeclaration>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                Ok(Self::Task(task_declaration))
+            }
             _ => {
                 diagnostics
                     .map(|d| d.incomplete(tkw.offset, "module_or_generate_item_declaration"));
@@ -1304,6 +1362,41 @@ impl<'a> Consumable<'a> for GenvarDeclaration {
     }
 }
 
+impl<'a> Consumable<'a> for TaskDeclaration {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 492
+        // task_declaration ::= task [ automatic ] task_identifier ;
+        //   { task_item_declaration }
+        //   statement_or_null
+        //   endtask
+        // | task [ automatic ] task_identifier ( [ task_port_list ] ) ;
+        //   { block_item_declaration }
+        //   statement_or_null
+        //   endtask
+
+        tkw.next_expect(T::KeywordTask, diagnostics.as_deref_mut())?;
+        let automatic = tkw.next_if_equals(T::KeywordAutomatic);
+        let ident = item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+        let statement_or_null =
+            parse::<StatementOrNull>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::KeywordEndTask, diagnostics.as_deref_mut())?;
+
+        Ok(Self {
+            ident,
+            automatic,
+            statement_or_null,
+        })
+    }
+}
+
 impl<'a> Consumable<'a> for RegDeclaration {
     fn consume(
         tkw: &mut TokenWalker<'a>,
@@ -1395,6 +1488,39 @@ impl<'a> Consumable<'a> for IntegerDeclaration {
     }
 }
 
+impl<'a> Consumable<'a> for LocalParameterDeclaration {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 489
+        // local_parameter_declaration ::=
+        //   localparam [ signed ] [ range ] list_of_param_assignments
+        // | localparam parameter_type list_of_param_assignments
+
+        tkw.next_expect(T::KeywordLocalParam, diagnostics.as_deref_mut())?;
+        let typing =
+            parse::<ParameterDeclarationTyping>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        let assignments = parse_one_or_more_delimited_and_after::<ParamAssignment>(
+            tkw,
+            sc,
+            arenas,
+            T::Comma,
+            T::Ident,
+            diagnostics.as_deref_mut(),
+        )?;
+
+        Ok(Self {
+            typing,
+            assignments,
+        })
+    }
+}
+
 impl<'a> Consumable<'a> for ParameterDeclaration {
     fn consume(
         tkw: &mut TokenWalker<'a>,
@@ -1410,16 +1536,58 @@ impl<'a> Consumable<'a> for ParameterDeclaration {
         // | parameter parameter_type list_of_param_assignments
 
         tkw.next_expect(T::KeywordParameter, diagnostics.as_deref_mut())?;
-        // @Incomplete
-        let assignments = parse_one_or_more_delimited::<ParamAssignment>(
+        let typing =
+            parse::<ParameterDeclarationTyping>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        let assignments = parse_one_or_more_delimited_and_after::<ParamAssignment>(
             tkw,
             sc,
             arenas,
             T::Comma,
+            T::Ident,
             diagnostics.as_deref_mut(),
         )?;
 
-        Ok(Self { assignments })
+        Ok(Self {
+            typing,
+            assignments,
+        })
+    }
+}
+
+impl<'a> Consumable<'a> for ParameterDeclarationTyping {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+        Ok(match tkw.get(tkw.offset).map(|t| *t.kind) {
+            Some(T::KeywordInteger) => {
+                tkw.offset += 1;
+                Self::Integer
+            }
+            Some(T::KeywordReal) => {
+                tkw.offset += 1;
+                Self::Real
+            }
+            Some(T::KeywordRealtime) => {
+                tkw.offset += 1;
+                Self::Realtime
+            }
+            Some(T::KeywordTime) => {
+                tkw.offset += 1;
+                Self::Time
+            }
+            _ => {
+                let signed = tkw.next_if_equals(T::KeywordSigned);
+                let mut range = None;
+                if tkw.is_next_equal_to(T::LeftBrace) {
+                    range = Some(parse::<Range>(tkw, sc, arenas, diagnostics.as_deref_mut())?);
+                }
+                Self::None(signed, range)
+            }
+        })
     }
 }
 

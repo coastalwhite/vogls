@@ -52,8 +52,8 @@ impl<'a> Consumable<'a> for Statement {
             T::Hash | T::AtSign => {
                 let procedural_timing_control =
                     parse::<ProceduralTimingControl>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
-
-                let statement = try_parse::<Statement>(tkw, sc, arenas);
+                let statement =
+                    parse::<StatementOrNull>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
                 Ok(Self::ProceduralTimingControlStatement(
                     procedural_timing_control,
                     statement,
@@ -494,10 +494,21 @@ impl<'a> Consumable<'a> for EventControl {
         // | @ (*)
 
         tkw.next_expect(T::AtSign, diagnostics.as_deref_mut())?;
-        // @Incomplete: @ hierarchical_event_identifier
-        // @Incomplete: @*
-        // @Incomplete: @ (*)
+        if tkw.next_if_equals(T::Star) {
+            return Ok(Self::Star);
+        }
+        if tkw.next_if_equals(T::Ident) {
+            let event_expression =
+                parse::<EventExpressionPrimary>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+            return Ok(Self::EventExpression(EventExpression(AstIdRange::single(
+                event_expression,
+            ))));
+        }
         tkw.next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
+        if tkw.next_if_equals(T::Star) {
+            tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
+            return Ok(Self::Star);
+        }
         let event_expression =
             EventExpression::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
         tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;

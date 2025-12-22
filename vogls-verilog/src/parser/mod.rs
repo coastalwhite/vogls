@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use crate::arena::Arena;
 use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::module::Module;
@@ -99,7 +97,6 @@ impl AstArenas {
 pub struct Ast {
     pub modules: AstIdRange<Module>,
     pub arenas: AstArenas,
-    pub path: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -119,20 +116,73 @@ pub enum ParseErrorReason {
     NotFound(Token),
 }
 
+pub enum TimeUnit {
+    Seconds,
+    Milliseconds,
+    Microseconds,
+    Nanoseconds,
+    Picoseconds,
+    Femtoseconds,
+}
+pub enum TimeSize {
+    N1,
+    N10,
+    N100,
+}
+
+#[derive(Default)]
+pub struct ParseContext {
+    timescale: Option<(TimeSize, TimeUnit, TimeSize, TimeUnit)>,
+}
+
 pub fn parse_file(
     tkw: &mut TokenWalker<'_>,
     scratches: &mut ParserScratches,
-    diagnostics: Option<&mut Diagnostics>,
+    mut diagnostics: Option<&mut Diagnostics>,
+    ctx: &mut ParseContext,
 ) -> Result<Ast, ()> {
+    use Token as T;
+
     let mut arenas = AstArenas::default();
-    match utils::parse_one_or_more::<Module>(tkw, scratches, &mut arenas, diagnostics) {
-        Ok(modules) => Ok(Ast {
-            modules,
-            arenas,
-            path: PathBuf::default(),
-        }),
-        Err(_) => Err(()),
+
+    let mut modules = Vec::new();
+    let mut trs = Vec::new();
+
+    while let Some(t) = tkw.get(tkw.offset) {
+        match *t.kind {
+            T::KeywordModule => {
+                let start = tkw.offset;
+                let module =
+                    Module::consume(tkw, scratches, &mut arenas, diagnostics.as_deref_mut())?;
+                let token_range = TokenRange {
+                    start,
+                    end: tkw.offset,
+                };
+                modules.push(module);
+                trs.push(token_range);
+            }
+            T::Directive => {
+                let (span, file) = (*t.span, *t.file);
+                let content = &tkw.content(file)[span.as_range()];
+                let directive = &content[1..content.len()];
+
+                match directive {
+                    "timescale" => tkw.offset += 6,
+                    _ => todo!("{}", directive),
+                }
+            }
+            t => {
+                if let Some(diagnostics) = diagnostics {
+                    diagnostics.unexpected_token(tkw.offset, t);
+                }
+                return Err(());
+            }
+        }
     }
+
+    let modules = arenas.add_range(modules, trs);
+
+    Ok(Ast { modules, arenas })
 }
 
 pub trait Consumable<'a>: Sized + Copy + 'static {

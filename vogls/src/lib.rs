@@ -18,8 +18,7 @@ use vogls_verilog::lower::{
     fetch_module_interface, lower_module_to_ir,
 };
 use vogls_verilog::parser::{
-    AstArenas, Diagnostics as ParserDiagnostics, ParserScratches, TokenWalker, parse_file, report,
-    report_error,
+    parse_file, report, report_error, AstArenas, Diagnostics as ParserDiagnostics, ParseContext, ParserScratches, TokenWalker
 };
 use vogls_verilog::tokenizer::Tokenized;
 
@@ -79,7 +78,7 @@ fn append_referenced_modules<'a>(
             referenced.insert(module_name);
         }
         ModuleOrGenerateItem::ModuleOrGenerateItemDeclaration(_) => {}
-        ModuleOrGenerateItem::LocalParameterDeclaration => {}
+        ModuleOrGenerateItem::LocalParameterDeclaration(_) => {}
         ModuleOrGenerateItem::ParameterOverride => {}
         ModuleOrGenerateItem::ContinuousAssign(_) => {}
         ModuleOrGenerateItem::GateInstantiation(_) => {}
@@ -130,6 +129,7 @@ pub fn run(
         &mut tkw,
         &mut ParserScratches::default(),
         Some(&mut diagnostics),
+        &mut ParseContext::default(),
     ) {
         Ok(ast) => ast,
         Err(_) => {

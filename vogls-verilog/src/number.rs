@@ -53,6 +53,7 @@ impl<'a> Takeable<'a> for SizedNumber {
         let s = &s[1..];
         let (s, sign) = Sign::take(s);
         let (s, base) = Base::take(s);
+        let s = s.trim_start();
 
         fn into_bits((s, bs): (&str, impl Into<Bits>)) -> (&str, Bits) {
             (s, bs.into())
@@ -296,7 +297,7 @@ impl<'a> Takeable<'a> for DecimalBits {
 
 impl<'a> Takeable<'a> for BinaryBits {
     fn take(s: &'a str) -> (&'a str, Self) {
-        debug_assert!(s.starts_with(&['0', '1', '_']));
+        debug_assert!(s.starts_with(&['0', '1', 'x', 'z', '_']));
 
         let mut value = 0u64;
         let mut bytes = s.bytes();
@@ -304,7 +305,10 @@ impl<'a> Takeable<'a> for BinaryBits {
         let mut offset = 0;
         let mut num_bits = 0;
         loop {
-            let Some(b) = bytes.next().filter(|b| matches!(b, b'0'..=b'1' | b'_')) else {
+            let Some(b) = bytes
+                .next()
+                .filter(|b| matches!(b, b'0'..=b'1' | b'x' | b'z' | b'_'))
+            else {
                 return (&s[offset..], BinaryBits(Bits::Small(value)));
             };
 
@@ -318,7 +322,13 @@ impl<'a> Takeable<'a> for BinaryBits {
                 break;
             }
 
-            let digit = b - b'0';
+            let digit = if b == b'x' {
+                0
+            } else if b == b'z' {
+                0
+            } else {
+                b - b'0'
+            };
 
             value <<= 1;
             value |= u64::from(digit);

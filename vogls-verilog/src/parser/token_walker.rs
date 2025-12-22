@@ -123,6 +123,13 @@ impl<'a> TokenWalker<'a> {
         let next = *next.kind;
         next == kind
     }
+    pub fn is_next_nth_equal_to(&self, nth: usize, kind: Token) -> bool {
+        let Some(next) = self.get(self.offset + nth) else {
+            return false;
+        };
+        let next = *next.kind;
+        next == kind
+    }
 
     pub fn next(&mut self) -> Option<TokenLoc<'_>> {
         if self.is_empty() {

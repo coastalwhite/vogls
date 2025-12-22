@@ -218,6 +218,7 @@ impl Tokenized {
                             let s = &s[1..];
                             let (s, _) = Sign::take(s);
                             let (s, base) = Base::take(s);
+                            let s = s.trim_start();
 
                             fn into_bits((s, bs): (&str, impl Into<Bits>)) -> (&str, Bits) {
                                 (s, bs.into())
@@ -617,7 +618,7 @@ impl Tokenized {
                             "default_nettype" => {}
                             "resetall" => todo!(),
                             "line" => todo!(),
-                            "timescale" => todo!(),
+                            "timescale" => {}
                             "unconnected_drive" | "nounconnected_drive" => todo!(),
                             "pragma" => todo!(),
                             "begin_keywords" | "end_keywords" => todo!(),

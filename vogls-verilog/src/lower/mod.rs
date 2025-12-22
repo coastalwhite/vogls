@@ -32,7 +32,8 @@ use crate::ast::constant_expr::{
 use crate::ast::expr::{BitSlice, Expr};
 use crate::ast::module::{
     GenerateRegion, Module, ModuleItem, ModulePorts, NonPortModuleItem, ParamAssignment,
-    ParameterDeclaration, Port, PortDeclaration, PortExpression, PortReference, Range,
+    ParameterDeclaration, ParameterDeclarationTyping, Port, PortDeclaration, PortExpression,
+    PortReference, Range,
 };
 use crate::ast::statement::{
     BlockingAssignment, DelayControl, DelayValue, EventControl, EventExpressionPrimary,
@@ -96,7 +97,30 @@ pub fn fetch_module_interface<'a>(
     let mut error = false;
     if let Some(parameters) = module_parameter_port_list {
         for p in parameters.iter() {
-            let ParameterDeclaration { assignments } = arenas.get(p);
+            let ParameterDeclaration {
+                typing,
+                assignments,
+            } = arenas.get(p);
+            let ty = match arenas.get(*typing) {
+                ParameterDeclarationTyping::None(_, range) => match range {
+                    Some(range) => {
+                        let width =
+                            range_to_width(gl, arenas, types, &mut scope, diagnostics, *range)?;
+                        types.insert(VType::VectorNet(width))
+                    }
+                    None => types.scalar_net(),
+                },
+                ParameterDeclarationTyping::Integer => types.integer(),
+                ParameterDeclarationTyping::Real
+                | ParameterDeclarationTyping::Realtime
+                | ParameterDeclarationTyping::Time => {
+                    diagnostics.not_yet_implemented(
+                        arenas.get_span(*typing),
+                        "real / realtime / time parameter",
+                    );
+                    return Err(());
+                }
+            };
             for assignment in assignments.iter() {
                 let ParamAssignment { param, constant } = arenas.get(assignment);
                 let key = arenas.get_ident(param.item.0);
@@ -109,7 +133,7 @@ pub fn fetch_module_interface<'a>(
                         let symbol_key = scope.symbols.insert(Symbol {
                             name: key.to_string(),
                             definition_site: arenas.get_item_span(*param),
-                            ty: types.insert(VType::Integer),
+                            ty,
                             variant: SymbolVariant::Constant(Some(value as i64)),
                         });
                         scope.push(key, symbol_key);
@@ -375,7 +399,10 @@ pub fn lower_module_to_ir<'a>(
                 }
                 NonPortModuleItem::SpecifyBlock => todo!(),
                 NonPortModuleItem::ParameterDeclaration(id) => {
-                    let ParameterDeclaration { assignments } = arenas.get(*id);
+                    let ParameterDeclaration {
+                        typing,
+                        assignments,
+                    } = arenas.get(*id);
                     for assignment in assignments.iter() {
                         let ParamAssignment { param: _, constant } = arenas.get(assignment);
                         let ConstantMinTypMaxExpression::Single(constant) = arenas.get(*constant)
@@ -563,6 +590,7 @@ fn statements_to_process<'a>(
                             Vec::new();
                         let mut signals = Vec::new();
                         match arenas.get(*event_control) {
+                            EventControl::Star => todo!(),
                             EventControl::EventExpression(event_expression) => {
                                 for event_expression in event_expression.0.iter() {
                                     let (expr, condition) = match arenas.get(event_expression) {
@@ -650,18 +678,15 @@ fn statements_to_process<'a>(
                     }
                 }
 
-                if let Some(stmt) = statement {
-                    let stmt = arenas.get(*stmt);
-                    builder = statements_to_process(
-                        gl,
-                        arenas,
-                        types,
-                        scope,
-                        diagnostics,
-                        builder,
-                        std::slice::from_ref(stmt),
-                    )?;
-                }
+                builder = statement::lower_statement_or_null(
+                    gl,
+                    arenas,
+                    types,
+                    scope,
+                    diagnostics,
+                    builder,
+                    *statement,
+                )?;
             }
             Statement::SeqBlock(id) => {
                 let seq_block = arenas.get(*id);
@@ -868,11 +893,12 @@ fn get_intersect_symbols_generated<'a>(
                 Statement::ParBlock => todo!(),
                 Statement::ProceduralContinuousAssignments => todo!(),
                 Statement::ProceduralTimingControlStatement(_, statement) => {
-                    if let Some(statement) = statement {
-                        stack.push(stmts);
-                        stack.push(AstIdRange::single(*statement));
-                        break;
-                    }
+                    stack.push(stmts);
+                    match arenas.get(*statement) {
+                        StatementOrNull::Attribute(_) => {}
+                        StatementOrNull::Statement(stmt) => stack.push(AstIdRange::single(*stmt)),
+                    };
+                    break;
                 }
                 Statement::SeqBlock(id) => {
                     let seq_block = arenas.get(*id);

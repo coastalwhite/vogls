@@ -1,6 +1,6 @@
 use super::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression};
 use super::expr::Expr;
-use super::statement::{NetLValue, Statement};
+use super::statement::{NetLValue, Statement, StatementOrNull};
 use super::{AstId, AstIdRange, AstItem, AttributeInstance, Identifier};
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 487
@@ -93,8 +93,7 @@ pub struct InputDeclaration {
 // | output output_variable_type list_of_variable_port_identifiers
 #[derive(Clone, Copy)]
 pub struct OutputDeclaration {
-    // @Incomplete: reg | output_variable_type
-    pub net: Option<AstItem<NetType>>,
+    pub net: Option<AstItem<OutputNet>>,
     pub signed: bool,
     pub range: Option<AstId<Range>>,
     pub identifiers: AstIdRange<Identifier>,
@@ -108,13 +107,18 @@ pub struct Range {
     pub lsb: AstId<ConstantExpr>,
 }
 
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 489-490
+// output_declaration ::=
+//   output [ net_type ] [ signed ] [ range ] list_of_port_identifiers
+// | output reg [ signed ] [ range ] list_of_variable_port_identifiers
+// | output output_variable_type list_of_variable_port_identifiers
+// output_variable_type ::= integer | time
 #[derive(Clone, Copy)]
 pub enum OutputNet {
     NetType(NetType),
     Register,
-
-    // @Incomplete
-    Variable,
+    Integer,
+    Time,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 490
@@ -154,7 +158,7 @@ pub enum NetType {
 #[derive(Clone, Copy)]
 pub enum ModuleOrGenerateItem {
     ModuleOrGenerateItemDeclaration(AstId<ModuleOrGenerateItemDeclaration>),
-    LocalParameterDeclaration,
+    LocalParameterDeclaration(AstId<LocalParameterDeclaration>),
     ParameterOverride,
     ContinuousAssign(AstId<ContinousAssign>),
     GateInstantiation(AstId<GateInstantiation>),
@@ -409,7 +413,7 @@ pub enum ModuleOrGenerateItemDeclaration {
     // Realtime(AstId<RealtimeDeclaration>),
     // Event(AstId<EventDeclaration>),
     Genvar(AstId<GenvarDeclaration>),
-    // Task(AstId<TaskDeclaration>),
+    Task(AstId<TaskDeclaration>),
     // Function(AstId<FunctionDeclaration>),
 }
 
@@ -488,6 +492,22 @@ pub struct GenvarDeclaration {
     pub identifiers: AstIdRange<Identifier>,
 }
 
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 492
+// task_declaration ::= task [ automatic ] task_identifier ;
+//   { task_item_declaration }
+//   statement_or_null
+//   endtask
+// | task [ automatic ] task_identifier ( [ task_port_list ] ) ;
+//   { block_item_declaration }
+//   statement_or_null
+//   endtask
+#[derive(Clone, Copy)]
+pub struct TaskDeclaration {
+    pub ident: AstItem<Identifier>,
+    pub automatic: bool,
+    pub statement_or_null: AstId<StatementOrNull>,
+}
+
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
 // non_port_module_item ::=
 //   module_or_generate_item
@@ -512,14 +532,37 @@ pub struct GenerateRegion {
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 489
+// local_parameter_declaration ::=
+//   localparam [ signed ] [ range ] list_of_param_assignments
+// | localparam parameter_type list_of_param_assignments
+#[derive(Clone, Copy)]
+pub struct LocalParameterDeclaration {
+    pub typing: AstId<ParameterDeclarationTyping>,
+    pub assignments: AstIdRange<ParamAssignment>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 489
 // parameter_declaration ::=
 //   parameter [ signed ] [ range ] list_of_param_assignments
 // | parameter parameter_type list_of_param_assignments
 #[derive(Clone, Copy)]
 pub struct ParameterDeclaration {
-    // @Incomplete
-    // typing: AstItem<ParameterDeclarationTyping>,
+    pub typing: AstId<ParameterDeclarationTyping>,
     pub assignments: AstIdRange<ParamAssignment>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 489
+// parameter_declaration ::=
+//   parameter [ signed ] [ range ] list_of_param_assignments
+// | parameter parameter_type list_of_param_assignments
+// parameter_type ::= integer | real | realtime | time
+#[derive(Clone, Copy)]
+pub enum ParameterDeclarationTyping {
+    None(bool, Option<AstId<Range>>),
+    Integer,
+    Real,
+    Realtime,
+    Time,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 491

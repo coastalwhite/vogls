@@ -31,7 +31,7 @@ pub enum Statement {
     NonBlockingAssignment(AstId<NonBlockingAssignment>),
     ParBlock,
     ProceduralContinuousAssignments,
-    ProceduralTimingControlStatement(AstId<ProceduralTimingControl>, Option<AstId<Statement>>),
+    ProceduralTimingControlStatement(AstId<ProceduralTimingControl>, AstId<StatementOrNull>),
     SeqBlock(AstId<SeqBlock>),
     SystemTaskEnable(AstId<SystemTaskEnable>),
     TaskEnable,
@@ -92,8 +92,9 @@ pub enum DelayControl {
 #[derive(Clone, Copy)]
 pub enum EventControl {
     // @Incomplete: @ hierarchical_event_identifier
+    Star,
     EventExpression(EventExpression), // @Incomplete: | @*
-                                             // @Incomplete: | @ (*)
+                                      // @Incomplete: | @ (*)
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
