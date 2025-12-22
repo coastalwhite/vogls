@@ -27,7 +27,7 @@ use crate::ast::module::{
     ParameterDeclaration, Port, PortDeclaration, PortExpression, PortReference, Range,
 };
 use crate::ast::statement::{
-    BlockingAssignment, DelayControl, DelayValue, EventControl, EventExpression,
+    BlockingAssignment, DelayControl, DelayValue, EventControl, EventExpressionPrimary,
     LoopStatementVariant, NetLValue, NonBlockingAssignment, ProceduralTimingControl, Statement,
     StatementOrNull, VariableAssignment, VariableLValue,
 };
@@ -548,76 +548,91 @@ fn statements_to_process<'a>(
                         builder = builder.jump(gl);
                         let start_key = builder.key();
 
-                        let mut conditions = Vec::new();
+                        let mut conditions: Vec<(WatchCondition, VariableKey, AstId<Expr>)> =
+                            Vec::new();
                         let mut signals = Vec::new();
                         match arenas.get(*event_control) {
                             EventControl::EventExpression(event_expression) => {
-                                let (expr, condition) = match arenas.get(*event_expression) {
-                                    EventExpression::Expression(expr) => {
-                                        (expr, WatchCondition::None)
-                                    }
-                                    EventExpression::Posedge(expr) => {
-                                        (expr, WatchCondition::Posedge)
-                                    }
-                                    EventExpression::Negedge(expr) => {
-                                        (expr, WatchCondition::Negedge)
-                                    }
-                                    EventExpression::OrList(_, _) => todo!(),
-                                };
+                                for event_expression in event_expression.0.iter() {
+                                    let (expr, condition) = match arenas.get(event_expression) {
+                                        EventExpressionPrimary::Expression(expr) => {
+                                            (expr, WatchCondition::None)
+                                        }
+                                        EventExpressionPrimary::Posedge(expr) => {
+                                            (expr, WatchCondition::Posedge)
+                                        }
+                                        EventExpressionPrimary::Negedge(expr) => {
+                                            (expr, WatchCondition::Negedge)
+                                        }
+                                    };
 
-                                let Expr::Ident(ast_ident, exprs, range_expression) =
-                                    arenas.get(*expr)
-                                else {
-                                    panic!("not an ident");
-                                };
-                                if !exprs.is_empty() || range_expression.is_some() {
-                                    diagnostics.not_yet_implemented(
-                                        arenas.get_span(*expr),
-                                        "event expression of this kind",
-                                    );
-                                    return Err(());
+                                    let Expr::Ident(ast_ident, exprs, range_expression) =
+                                        arenas.get(*expr)
+                                    else {
+                                        panic!("not an ident");
+                                    };
+                                    if !exprs.is_empty() || range_expression.is_some() {
+                                        diagnostics.not_yet_implemented(
+                                            arenas.get_span(*expr),
+                                            "event expression of this kind",
+                                        );
+                                        return Err(());
+                                    }
+
+                                    let ident = arenas.get_ident(ast_ident.item.0);
+                                    let Some(symbol_key) = scope.get(ident) else {
+                                        diagnostics.var_not_found(arenas, *ast_ident);
+                                        return Err(());
+                                    };
+                                    let SymbolVariant::Signal(key) =
+                                        &scope.symbols[symbol_key].variant
+                                    else {
+                                        panic!("not a signal");
+                                    };
+                                    let key = *key;
+
+                                    let (variable, _) = lower_expr(
+                                        gl,
+                                        arenas,
+                                        types,
+                                        scope,
+                                        diagnostics,
+                                        &mut builder,
+                                        *expr,
+                                    )?;
+                                    conditions.push((condition, variable, *expr));
+                                    signals.push(key);
                                 }
-
-                                let ident = arenas.get_ident(ast_ident.item.0);
-                                let Some(symbol_key) = scope.get(ident) else {
-                                    diagnostics.var_not_found(arenas, *ast_ident);
-                                    return Err(());
-                                };
-                                let SymbolVariant::Signal(key) = &scope.symbols[symbol_key].variant
-                                else {
-                                    panic!("not a signal");
-                                };
-
-                                conditions.push((condition, *key));
-                                signals.push(*key);
                             }
-                        }
-
-                        let mut before = Vec::new();
-                        for (_, signal) in &conditions {
-                            before.push(builder.probe(gl, *signal));
                         }
 
                         builder = builder.watch(gl, signals);
 
-                        let mut acc = builder.constant(gl, Value::Bits(Bits::Small(1, 1)));
-                        for ((condition, signal), before) in conditions.into_iter().zip(before) {
+                        let mut acc = builder.constant(gl, Value::Bits(Bits::Small(0, 1)));
+                        for (condition, before, expr) in conditions.into_iter() {
                             use WatchCondition as C;
 
+                            let (after, _) = lower_expr(
+                                gl,
+                                arenas,
+                                types,
+                                scope,
+                                diagnostics,
+                                &mut builder,
+                                expr,
+                            )?;
                             let cond = match condition {
                                 C::Posedge => {
-                                    let after = builder.probe(gl, signal);
                                     let t = builder.binary_neg(gl, before);
                                     builder.and(gl, t, after)
                                 }
                                 C::Negedge => {
-                                    let after = builder.probe(gl, signal);
                                     let t = builder.binary_neg(gl, after);
                                     builder.and(gl, before, t)
                                 }
-                                C::None => builder.constant(gl, Value::Bits(Bits::Small(1, 1))),
+                                C::None => builder.not_equals(gl, before, after),
                             };
-                            acc = builder.and(gl, acc, cond);
+                            acc = builder.or(gl, acc, cond);
                         }
 
                         builder = builder.branch_false_to(gl, acc, start_key);
@@ -1278,8 +1293,14 @@ fn assign_variable_lvalue<'a>(
             let key = *key;
             match range_expression {
                 None => {
-                    let variable =
-                        expression::coerce(gl, types, builder, variable, variable_ty, ty);
+                    let variable = expression::sign_extend_or_truncate(
+                        gl,
+                        types,
+                        builder,
+                        variable,
+                        variable_ty,
+                        ty,
+                    );
                     match arr_idx {
                         None => builder.drive(gl, key, variable),
                         Some(idx) => builder.arr_drive(gl, key, variable, idx),
@@ -1291,10 +1312,30 @@ fn assign_variable_lvalue<'a>(
                             lower_expr(gl, arenas, types, scope, diagnostics, builder, *expr)?.0,
                             1,
                         ),
-                        RangeExpression::MsbLsb(_, _) => todo!("MsbLsb"),
+                        RangeExpression::MsbLsb(msb, lsb) => {
+                            let (_, lsb, width) = msb_lsb_to_width(
+                                gl,
+                                arenas,
+                                types,
+                                scope,
+                                diagnostics,
+                                *msb,
+                                *lsb,
+                            )?;
+                            (builder.constant(gl, Value::Decimal(lsb as i64)), width)
+                        }
                         RangeExpression::BasePlus(_, _) => todo!("BasePlus"),
                         RangeExpression::BaseMinus(_, _) => todo!("BaseMinus"),
                     };
+                    let drive_ty = types.insert(VType::VectorNet(length));
+                    let variable = expression::sign_extend_or_truncate(
+                        gl,
+                        types,
+                        builder,
+                        variable,
+                        variable_ty,
+                        drive_ty,
+                    );
 
                     match arr_idx {
                         None => builder.drive_partial(gl, key, variable, offset, length),
@@ -1428,8 +1469,14 @@ fn assign_net_lvalue<'a>(
             let key = *key;
             match range_expression {
                 None => {
-                    let variable =
-                        expression::coerce(gl, types, builder, variable, variable_ty, ty);
+                    let variable = expression::sign_extend_or_truncate(
+                        gl,
+                        types,
+                        builder,
+                        variable,
+                        variable_ty,
+                        ty,
+                    );
                     match arr_idx {
                         None => builder.drive(gl, key, variable),
                         Some(idx) => {
@@ -1450,6 +1497,15 @@ fn assign_net_lvalue<'a>(
                     };
 
                     let offset = builder.constant(gl, Value::Decimal(offset));
+                    let drive_ty = types.insert(VType::VectorNet(length));
+                    let variable = expression::sign_extend_or_truncate(
+                        gl,
+                        types,
+                        builder,
+                        variable,
+                        variable_ty,
+                        drive_ty,
+                    );
                     match arr_idx {
                         None => builder.drive_partial(gl, key, variable, offset, length),
                         Some(idx) => {

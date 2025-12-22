@@ -1,6 +1,6 @@
 use vogls_ir::{
-    BasicBlockBuilder, Bits, GlobalContext, IntrinsicArg, IntrinsicOp, Value, VariableKey,
-    VectorSize,
+    BasicBlockBuilder, Bits, GlobalContext, IntrinsicArg, IntrinsicOp, TypeTable, Value,
+    VariableKey, VectorSize,
 };
 
 use crate::ast::AstId;
@@ -395,11 +395,13 @@ pub fn lower_expr<'a>(
             }
             Expr::Sized(sized) => {
                 let sized = &arenas.sized_numbers[sized.item.at];
-                let Some(size) = sized.size else { todo!() };
                 let crate::number::Bits::Small(v) = sized.value else {
                     todo!()
                 };
-                let width = size.as_u32();
+                let width = match sized.size {
+                    None => (64 - v.leading_zeros()).max(1),
+                    Some(size) => size.as_u32(),
+                };
                 let var = builder.constant(gl, Value::Bits(Bits::Small(v, width)));
 
                 result_stack.push(Some((var, types.insert(VType::VectorNet(width)))));
@@ -595,6 +597,39 @@ fn bin_modulus<'a>(
     }
 
     Ok((builder.i64_modulus(gl, l, r), types.integer()))
+}
+
+pub fn sign_extend_or_truncate(
+    gl: &mut GlobalContext,
+    vtypes: &VTypeTable,
+    builder: &mut BasicBlockBuilder,
+    src: VariableKey,
+    from: VTypeKey,
+    to: VTypeKey,
+) -> VariableKey {
+    if from == to {
+        return src;
+    }
+
+    let to_type = vtypes[to].to_ir_info(vtypes, &mut gl.types).key;
+    match (vtypes[from], vtypes[to]) {
+        (VType::Integer, VType::ScalarNet | VType::VectorNet(_))
+        | (VType::ScalarNet, VType::VectorNet(_)) => builder.cast(gl, src, to_type),
+        (VType::ScalarNet | VType::VectorNet(_), VType::Integer) => {
+            builder.cast(gl, src, TypeTable::INT64)
+        }
+        (VType::VectorNet(_), VType::ScalarNet) => builder.slice(gl, src, 1),
+        (VType::VectorNet(n), VType::VectorNet(m)) => {
+            if n > m {
+                builder.slice(gl, src, m)
+            } else {
+                builder.cast(gl, src, to_type)
+            }
+        }
+
+        (VType::Integer, VType::Integer) | (VType::ScalarNet, VType::ScalarNet) => unreachable!(),
+        (VType::Array(..), _) | (_, VType::Array(..)) => panic!(),
+    }
 }
 
 pub fn coerce(

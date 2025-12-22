@@ -264,6 +264,12 @@ impl Event {
                         (T::Bits(x), T::Bits(y)) if x == y => {}
                         (T::Decimal, T::Decimal) => {}
 
+                        (T::Bits(m), T::Bits(n)) if n < m => {
+                            for i in 0..n.div_ceil(8) as usize {
+                                bit_stack[dst.offset + i] = bit_stack[src.offset + i];
+                            }
+                        }
+
                         (T::Bits(1), T::Decimal) => {
                             let src = decimal_stack[src.offset];
                             bit_stack[dst.offset] = (src != 0) as u8;

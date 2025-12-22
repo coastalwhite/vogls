@@ -3,9 +3,9 @@ use crate::ast::expr::Expr;
 use crate::ast::statement::{
     BlockingAssignment, CaseItem, CaseItemPattern, CaseStatement, CaseStatementVariant,
     ConditionalStatement, DelayControl, DelayOrEventControl, DelayValue, EventControl,
-    EventExpression, IfBranch, LoopStatement, LoopStatementVariant, NetLValue,
-    NonBlockingAssignment, ProceduralTimingControl, SeqBlock, Statement, StatementOrNull,
-    SystemTaskEnable, SystemTaskIdentifier, VariableAssignment, VariableLValue,
+    EventExpression, EventExpressionPrimary, IfBranch, LoopStatement, LoopStatementVariant,
+    NetLValue, NonBlockingAssignment, ProceduralTimingControl, SeqBlock, Statement,
+    StatementOrNull, SystemTaskEnable, SystemTaskIdentifier, VariableAssignment, VariableLValue,
 };
 use crate::ast::{AstIdRange, AstItem, DecimalRef, Identifier, RangeExpression, TextRef};
 use crate::parser::token_walker::TokenRange;
@@ -499,10 +499,47 @@ impl<'a> Consumable<'a> for EventControl {
         // @Incomplete: @ (*)
         tkw.next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
         let event_expression =
-            parse::<EventExpression>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+            EventExpression::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
         tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
 
         Ok(Self::EventExpression(event_expression))
+    }
+}
+
+impl<'a> Consumable<'a> for EventExpressionPrimary {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<EventExpressionPrimary, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
+        // event_expression ::=
+        //   expression
+        // | posedge expression
+        // | negedge expression
+        // | event_expression or event_expression
+        // | event_expression, event_expression
+
+        let peeked = tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?;
+        Ok(match peeked.kind {
+            T::KeywordPosedge => {
+                tkw.offset += 1;
+                let expr = parse::<Expr>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                Self::Posedge(expr)
+            }
+            T::KeywordNegedge => {
+                tkw.offset += 1;
+                let expr = parse::<Expr>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                Self::Negedge(expr)
+            }
+            _ => {
+                let expr = parse::<Expr>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                Self::Expression(expr)
+            }
+        })
     }
 }
 
@@ -511,7 +548,7 @@ impl<'a> Consumable<'a> for EventExpression {
         tkw: &mut TokenWalker<'a>,
         sc: &mut ParserScratches,
         arenas: &mut AstArenas,
-        mut diagnostics: Option<&mut Diagnostics>,
+        diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ()> {
         use Token as T;
 
@@ -521,61 +558,16 @@ impl<'a> Consumable<'a> for EventExpression {
         // | posedge expression
         // | negedge expression
         // | event_expression or event_expression
+        // | event_expression, event_expression
 
-        let start = tkw.offset;
-        let mut event_expression = None;
-
-        // @Incomplete: | event_expression or event_expression
-        loop {
-            let start_current = tkw.offset;
-            let peeked = tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?;
-            let current_event_expression = match peeked.kind {
-                T::KeywordPosedge => {
-                    tkw.next();
-                    let expr = parse::<Expr>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
-                    Self::Posedge(expr)
-                }
-                T::KeywordNegedge => {
-                    tkw.next();
-                    let expr = parse::<Expr>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
-                    Self::Negedge(expr)
-                }
-                _ => {
-                    let expr = parse::<Expr>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
-                    Self::Expression(expr)
-                }
-            };
-
-            event_expression = match event_expression {
-                None => Some(current_event_expression),
-                Some(expr) => {
-                    let token_range = TokenRange {
-                        start,
-                        end: tkw.offset,
-                    };
-                    let expr = arenas.add(expr, token_range);
-
-                    let token_range = TokenRange {
-                        start: start_current,
-                        end: tkw.offset,
-                    };
-                    let current_event_expression =
-                        arenas.add(current_event_expression, token_range);
-
-                    Some(Self::OrList(expr, current_event_expression))
-                }
-            };
-
-            let Some(peeked) = tkw.get(tkw.offset) else {
-                break;
-            };
-
-            if *peeked.kind != T::KeywordOr {
-                break;
-            }
-        }
-
-        Ok(event_expression.unwrap())
+        parse_one_or_more_delimited_one_of::<EventExpressionPrimary>(
+            tkw,
+            sc,
+            arenas,
+            &[T::KeywordOr, T::Comma],
+            diagnostics,
+        )
+        .map(Self)
     }
 }
 

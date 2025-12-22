@@ -235,30 +235,34 @@ impl Tokenized {
                         }
                     }
                     b'\'' => {
-                        let mut offset = i;
-                        if matches!(bytes.get(offset + 1), Some(b's' | b'S')) {
+                        let mut offset = i + 1;
+                        if matches!(bytes.get(offset), Some(b's' | b'S')) {
                             offset += 1;
                         }
 
                         // @TODO: Do without materializing
-                        match bytes.get(offset + 1) {
+                        match bytes.get(offset) {
                             Some(b'D' | b'd') => (
                                 T::Number,
-                                content.len() - i - DecimalBits::take(&content[offset..]).0.len(),
+                                content.len()
+                                    - i
+                                    - DecimalBits::take(&content[offset + 1..]).0.len(),
                             ),
                             Some(b'B' | b'b') => (
                                 T::Number,
-                                content.len() - i - BinaryBits::take(&content[offset..]).0.len(),
+                                content.len()
+                                    - i
+                                    - BinaryBits::take(&content[offset + 1..]).0.len(),
                             ),
                             Some(b'O' | b'o') => (
                                 T::Number,
-                                content.len() - i - OctalBits::take(&content[offset..]).0.len(),
+                                content.len() - i - OctalBits::take(&content[offset + 1..]).0.len(),
                             ),
                             Some(b'X' | b'x') => (
                                 T::Number,
                                 content.len()
                                     - i
-                                    - HexadecimalBits::take(&content[offset..]).0.len(),
+                                    - HexadecimalBits::take(&content[offset + 1..]).0.len(),
                             ),
                             _ => (T::Unknown, 1),
                         }

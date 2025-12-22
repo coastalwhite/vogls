@@ -43,8 +43,13 @@ pub enum Decimal {
 
 impl<'a> Takeable<'a> for SizedNumber {
     fn take(s: &'a str) -> (&'a str, Self) {
-        let (s, size) = Size::take(s);
-        debug_assert!(s.starts_with('\''));
+        let (s, size) = if s.starts_with("'") {
+            (s, None)
+        } else {
+            let (s, size) = Size::take(s);
+            debug_assert!(s.starts_with('\''));
+            (s, Some(size))
+        };
         let s = &s[1..];
         let (s, sign) = Sign::take(s);
         let (s, base) = Base::take(s);
@@ -61,7 +66,7 @@ impl<'a> Takeable<'a> for SizedNumber {
         };
 
         let value = SizedNumber {
-            size: Some(size),
+            size,
             sign,
             base,
             value,

@@ -1,6 +1,8 @@
 use super::constant_expr::{ConstantExpr, ConstantRangeExpression};
 use super::expr::Expr;
-use super::{AstId, AstIdRange, AstItem, AttributeInstance, DecimalRef, Identifier, RangeExpression, TextRef};
+use super::{
+    AstId, AstIdRange, AstItem, AttributeInstance, DecimalRef, Identifier, RangeExpression, TextRef,
+};
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
 // statement ::=
@@ -90,7 +92,7 @@ pub enum DelayControl {
 #[derive(Clone, Copy)]
 pub enum EventControl {
     // @Incomplete: @ hierarchical_event_identifier
-    EventExpression(AstId<EventExpression>), // @Incomplete: | @*
+    EventExpression(EventExpression), // @Incomplete: | @*
                                              // @Incomplete: | @ (*)
 }
 
@@ -100,13 +102,23 @@ pub enum EventControl {
 // | posedge expression
 // | negedge expression
 // | event_expression or event_expression
+// | event_expression, event_expression
 #[derive(Clone, Copy)]
-pub enum EventExpression {
+pub enum EventExpressionPrimary {
     Expression(AstId<Expr>),
     Posedge(AstId<Expr>),
     Negedge(AstId<Expr>),
-    OrList(AstId<EventExpression>, AstId<EventExpression>),
 }
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
+// event_expression ::=
+//   expression
+// | posedge expression
+// | negedge expression
+// | event_expression or event_expression
+// | event_expression, event_expression
+#[derive(Clone, Copy)]
+pub struct EventExpression(pub AstIdRange<EventExpressionPrimary>);
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 491
 // delay_value ::=
