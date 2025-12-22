@@ -860,6 +860,7 @@ impl BasicBlockBuilder {
         signal: SignalKey,
         idx: VariableKey,
     ) -> VariableKey {
+        gl.processes[self.process].ins.insert(signal);
         assert!(gl.signals[signal].ty.width.is_some());
         let dst = self.next_tmp_var(gl, gl.signals[signal].ty.key);
         self.instrs.push(Instruction::ArrProbe(dst, signal, idx));
@@ -872,6 +873,7 @@ impl BasicBlockBuilder {
         src: VariableKey,
         idx: VariableKey,
     ) {
+        gl.processes[self.process].outs.insert(signal);
         assert!(gl.signals[signal].ty.width.is_some());
         self.instrs
             .push(Instruction::ArrDrive(signal, src, idx, None));
@@ -885,6 +887,7 @@ impl BasicBlockBuilder {
         offset: VariableKey,
         width: VectorSize,
     ) {
+        gl.processes[self.process].outs.insert(signal);
         assert!(gl.signals[signal].ty.width.is_some());
         self.instrs.push(Instruction::ArrDrive(
             signal,

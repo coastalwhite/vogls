@@ -31,8 +31,8 @@ module tb();
             t = PRD[k*10+6 +: 4];
 
             for (j = 0; j < 16; j = j + 1) begin
-                #1 i = j;
-                #1 $vogls_assert_eq(o, LUT[63 - j*4 -: 4]);
+                #1 i = j ^ q;
+                #1 $vogls_assert_eq(o ^ t, LUT[63 - j*4 -: 4]);
             end
         end
     end

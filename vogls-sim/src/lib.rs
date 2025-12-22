@@ -304,7 +304,7 @@ impl Event {
                                 VmIntrinsicArg::StringLiteral(s) => s.clone(),
                                 VmIntrinsicArg::VariableBits(_, n) if *n >= 64 => todo!(),
                                 VmIntrinsicArg::VariableBits(s, n) => {
-                                    bits::store_to_u64(bit_stack, s.offset, *n).to_string()
+                                    format!("{n}'d{}", bits::store_to_u64(bit_stack, s.offset, *n))
                                 }
                                 VmIntrinsicArg::VariableDecimal(s) => {
                                     decimal_stack[s.offset].to_string()
@@ -401,37 +401,53 @@ impl Event {
                 }
                 I::Drive(sig, var, partial) => {
                     let signal = signals.get_mut(sig).unwrap();
-                    match signal {
-                        SignalValue::Bits(Bits::Big(size, signal_value)) => match partial {
-                            None => {
-                                *signal_value = bit_stack[var.offset..]
-                                    [..size.div_ceil(8) as usize]
-                                    .iter()
-                                    .copied()
-                                    .collect();
+                    let updated = match signal {
+                        SignalValue::Bits(Bits::Big(size, signal_value)) => {
+                            if &bit_stack[var.offset..][..size.div_ceil(8) as usize]
+                                == signal_value.as_ref()
+                            {
+                                false
+                            } else {
+                                match partial {
+                                    None => {
+                                        *signal_value = bit_stack[var.offset..]
+                                            [..size.div_ceil(8) as usize]
+                                            .iter()
+                                            .copied()
+                                            .collect();
+                                    }
+                                    Some(_) => todo!(),
+                                }
+                                true
                             }
-                            Some(_) => todo!(),
-                        },
-                        SignalValue::Bits(Bits::Small(signal_value, size)) => match partial {
-                            None => {
-                                *signal_value = bits::store_to_u64(bit_stack, var.offset, *size);
+                        }
+                        SignalValue::Bits(Bits::Small(signal_value, size)) => {
+                            let before = *signal_value;
+                            match partial {
+                                None => {
+                                    *signal_value =
+                                        bits::store_to_u64(bit_stack, var.offset, *size);
+                                }
+                                Some((offset, length)) => {
+                                    let offset = decimal_stack[offset.offset];
+                                    let value = bits::store_to_u64(bit_stack, var.offset, *length);
+                                    *signal_value &= !(((1u64 << *length) - 1) << offset);
+                                    *signal_value |= value << offset;
+                                }
                             }
-                            Some((offset, length)) => {
-                                let offset = decimal_stack[offset.offset];
-                                let value = bits::store_to_u64(bit_stack, var.offset, *length);
-                                *signal_value &= !(((1u64 << *length) - 1) << offset);
-                                *signal_value |= value << offset;
-                            }
-                        },
-                        SignalValue::Decimal(_) => {
+                            before != *signal_value
+                        }
+                        SignalValue::Decimal(signal_value) => {
                             assert!(partial.is_none());
-                            *signal = SignalValue::Decimal(decimal_stack[var.offset])
+                            let before = *signal_value;
+                            *signal_value = decimal_stack[var.offset];
+                            before != *signal_value
                         }
                         SignalValue::BitsArray(_) => unreachable!(),
                         SignalValue::DecimalArray(_) => unreachable!(),
-                    }
+                    };
 
-                    if let Some(watchers) = watches.remove(sig) {
+                    if updated && let Some(watchers) = watches.remove(sig) {
                         for watcher in watchers {
                             if let Some(event) = listeners.remove(watcher) {
                                 schedule.push(ScheduledEvent {
@@ -465,40 +481,56 @@ impl Event {
                     let signal = signals.get_mut(sig).unwrap();
                     let idx = decimal_stack[idx.offset];
 
-                    match signal {
+                    let updated = match signal {
                         SignalValue::BitsArray(arr) => match &mut arr[idx as usize] {
-                            Bits::Big(size, signal_value) => match partial {
-                                None => {
-                                    *signal_value = bit_stack[src.offset..]
-                                        [..size.div_ceil(8) as usize]
-                                        .iter()
-                                        .copied()
-                                        .collect();
+                            Bits::Big(size, signal_value) => {
+                                if &bit_stack[src.offset..][..size.div_ceil(8) as usize]
+                                    == signal_value.as_ref()
+                                {
+                                    false
+                                } else {
+                                    match partial {
+                                        None => {
+                                            *signal_value = bit_stack[src.offset..]
+                                                [..size.div_ceil(8) as usize]
+                                                .iter()
+                                                .copied()
+                                                .collect();
+                                        }
+                                        Some(_) => todo!(),
+                                    }
+                                    true
                                 }
-                                Some(_) => todo!(),
-                            },
-                            Bits::Small(signal_value, size) => match partial {
-                                None => {
-                                    *signal_value =
-                                        bits::store_to_u64(bit_stack, src.offset, *size);
+                            }
+                            Bits::Small(signal_value, size) => {
+                                let before = *signal_value;
+                                match partial {
+                                    None => {
+                                        *signal_value =
+                                            bits::store_to_u64(bit_stack, src.offset, *size);
+                                    }
+                                    Some((offset, length)) => {
+                                        let offset = decimal_stack[offset.offset];
+                                        let value =
+                                            bits::store_to_u64(bit_stack, src.offset, *length);
+                                        *signal_value &= !(((1u64 << *length) - 1) << offset);
+                                        *signal_value |= value << offset;
+                                    }
                                 }
-                                Some((offset, length)) => {
-                                    let offset = decimal_stack[offset.offset];
-                                    let value = bits::store_to_u64(bit_stack, src.offset, *length);
-                                    *signal_value &= !(((1u64 << *length) - 1) << offset);
-                                    *signal_value |= value << offset;
-                                }
-                            },
+                                before != *signal_value
+                            }
                         },
                         SignalValue::DecimalArray(arr) => {
                             assert!(partial.is_none());
+                            let before = arr[idx as usize];
                             arr[idx as usize] = decimal_stack[src.offset];
+                            before != arr[idx as usize]
                         }
                         SignalValue::Bits(_) => unreachable!(),
                         SignalValue::Decimal(_) => unreachable!(),
-                    }
+                    };
 
-                    if let Some(watchers) = watches.remove(sig) {
+                    if updated && let Some(watchers) = watches.remove(sig) {
                         for watcher in watchers {
                             if let Some(event) = listeners.remove(watcher) {
                                 schedule.push(ScheduledEvent {

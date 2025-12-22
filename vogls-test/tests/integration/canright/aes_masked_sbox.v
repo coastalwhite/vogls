@@ -5,33 +5,65 @@
 
 `define NO_TB
 `include "./aes_mvn.v"
-`include "./aes_inverse_gf2p8.v"
+`include "./aes_masked_inverse_gf2p8_noreuse.v"
 
-module sbox_fwd(data_i, data_o);
-    input [7:0]  data_i;
-    output [7:0] data_o;
+module sbox_fwd(
+    input [7:0]  data_i,
+    input [7:0]  mask_i,
+    input [17:0] prd_i,
 
-    wire [7:0] data_basis_x;
-    wire [7:0] data_inverse;
-    wire [7:0] data_basis_s;
+    output [7:0] mask_o,
+    output [7:0] data_o
+);
+    wire [7:0] in_data_basis_x, out_data_basis_x,
+               in_mask_basis_x, out_mask_basis_x;
+    wire [7:0] data_o_x2s;
 
-    assign data_o = data_basis_s ^ 8'h63;
+    assign data_o = data_o_x2s ^ 8'h63;
+    assign mask_o = prd_i[7:0];
 
-    aes_mvn           a2x( .vec(data_i),          .mat(`A2X), .data_o(data_basis_x) );
-    aes_inverse_gf2p8 inv( .data_i(data_basis_x),             .data_o(data_inverse) );
-    aes_mvn           x2s( .vec(data_inverse),    .mat(`X2S), .data_o(data_basis_s) );
+    aes_mvn data_a2x( .vec(data_i), .mat(`A2X), .data_o(in_data_basis_x)  );
+    aes_mvn mask_a2x( .vec(mask_i), .mat(`A2X), .data_o(in_mask_basis_x)  );
+    aes_mvn mask_s2x( .vec(mask_o), .mat(`S2X), .data_o(out_mask_basis_x) );
+
+    aes_masked_inverse_gf2p8_noreuse inv(
+        .a(in_data_basis_x),
+        .m(in_mask_basis_x),
+        .n(out_mask_basis_x),
+        .prd(prd_i[17:8]),
+        .a_inv(out_data_basis_x)
+    );
+
+    aes_mvn x2s( .vec(out_data_basis_x), .mat(`X2S), .data_o(data_o_x2s) );
 endmodule
 
-module sbox_inv(data_i, data_o);
-    input [7:0]  data_i;
-    output [7:0] data_o;
+module sbox_inv(
+    input [7:0]  data_i,
+    input [7:0]  mask_i,
+    input [17:0] prd_i,
 
-    wire [7:0] data_basis_x;
-    wire [7:0] data_inverse;
+    output [7:0] mask_o,
+    output [7:0] data_o
+);
+    wire [7:0] in_data_basis_x, out_data_basis_x,
+               in_mask_basis_x, out_mask_basis_x;
+    wire [7:0] data_o_x2s;
 
-    aes_mvn           s2x( .vec   (data_i ^ 8'h63), .mat(`S2X), .data_o(data_basis_x) );
-    aes_inverse_gf2p8 inv( .data_i(data_basis_x),               .data_o(data_inverse) );
-    aes_mvn           x2a( .vec   (data_inverse),   .mat(`X2A), .data_o(data_o)       );
+    assign mask_o = prd_i[7:0];
+
+    aes_mvn data_a2x( .vec(data_i ^ 8'h63), .mat(`S2X), .data_o(in_data_basis_x)  );
+    aes_mvn mask_a2x( .vec(mask_i),         .mat(`S2X), .data_o(in_mask_basis_x)  );
+    aes_mvn mask_s2x( .vec(mask_o),         .mat(`A2X), .data_o(out_mask_basis_x) );
+
+    aes_masked_inverse_gf2p8_noreuse inv(
+        .a(in_data_basis_x),
+        .m(in_mask_basis_x),
+        .n(out_mask_basis_x),
+        .prd(prd_i[17:8]),
+        .a_inv(out_data_basis_x)
+    );
+
+    aes_mvn x2s( .vec(out_data_basis_x), .mat(`X2A), .data_o(data_o) );
 endmodule
 
 module tb();
@@ -76,27 +108,42 @@ module tb();
         8'h17,8'h2b,8'h04,8'h7e,8'hba,8'h77,8'hd6,8'h26,8'he1,8'h69,8'h14,8'h63,8'h55,8'h21,8'h0c,8'h7d  // f	
     };
 
-	wire[7:0] data_i;
-	wire[7:0] sbox_fwd_o;
-	wire[7:0] sbox_inv_o;
+	reg[7:0] data_i, mask_i;
+    reg[17:0] prd;
+	wire[7:0] sbox_fwd_mask_o, sbox_fwd_o, sbox_inv_mask_o, sbox_inv_o;
 
 	sbox_fwd a(
-		.data_i(data_i    ),
-		.data_o(sbox_fwd_o)
+		.data_i(data_i         ),
+		.mask_i(mask_i         ),
+        .prd_i(prd             ),
+		.mask_o(sbox_fwd_mask_o),
+		.data_o(sbox_fwd_o     )
 	);
 	sbox_inv b(
-		.data_i(data_i    ),
-		.data_o(sbox_inv_o)
+		.data_i(data_i         ),
+		.mask_i(mask_i         ),
+        .prd_i(prd             ),
+		.mask_o(sbox_inv_mask_o),
+		.data_o(sbox_inv_o     )
 	);
 
-	integer i;
+    wire [18*3-1:0] PRD;
+    wire [8*3-1:0] MASK;
+    assign PRD  = { 18'h00000, 18'h3FFFF, 18'h2CDAB };
+    assign MASK = { 8'h00, 8'hAB, 8'h63 };
+
+	integer i, j;
 	initial begin
-	    for (i = 0; i < 256; i = i + 1) begin
-			#2
-			data_i = i;
-			#2
-		    $vogls_assert_eq(sbox_fwd_o, SBOX_LUT    [2047 - 8*i-:8]);
-		    $vogls_assert_eq(sbox_inv_o, SBOX_INV_LUT[2047 - 8*i-:8]);
-		end
+        for (j = 0; j < 3; j = j + 1) begin
+            mask_i = MASK[8*j +: 8];
+            prd    = PRD[18*j +: 18];
+
+            for (i = 0; i < 256; i = i + 1) begin
+                #2 data_i = i ^ mask_i;
+                #2
+                $vogls_assert_eq(sbox_fwd_o ^ sbox_fwd_mask_o, SBOX_LUT    [2047 - 8*i-:8]);
+                $vogls_assert_eq(sbox_inv_o ^ sbox_inv_mask_o, SBOX_INV_LUT[2047 - 8*i-:8]);
+            end
+        end
 	end
 endmodule

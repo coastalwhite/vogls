@@ -260,10 +260,20 @@ pub fn fetch_module_interface<'a>(
                     )?),
                 };
 
-                io.extend(identifiers.iter().map(|ident| {
-                    let ident = arenas.get_ident(arenas.get(ident).0);
-                    (ident, direction, width)
-                }));
+                let mut error = false;
+                for ident in identifiers.iter() {
+                    let name = arenas.get_ident(arenas.get(ident).0);
+                    if lut.insert(name, io.len()).is_some() {
+                        diagnostics.duplicate_definition(arenas, arenas.to_item(ident));
+                        error = true;
+                        continue;
+                    }
+                    io.push((name, direction, width));
+                }
+
+                if error {
+                    return Err(());
+                }
             }
         }
     }
@@ -706,7 +716,13 @@ fn statements_to_process<'a>(
                     "finish" => builder.intrinsic(gl, IntrinsicOp::Finish, vec![]),
 
                     // @Incomplete: Many variants here.
-                    _ => todo!(),
+                    _ => {
+                        diagnostics.not_yet_implemented(
+                            arenas.get_item_span(system_task_enable.system_task_identifier),
+                            "system task not yet implemented",
+                        );
+                        return Err(());
+                    }
                 }
             }
             Statement::TaskEnable => todo!(),
@@ -1419,13 +1435,15 @@ fn assign_net_lvalue<'a>(
                         Some(idx) => {
                             let idx = builder.constant(gl, Value::Decimal(idx as i64));
                             builder.arr_drive(gl, key, variable, idx)
-                        },
+                        }
                     }
                 }
                 Some(range_expression) => {
                     let (offset, length) = match arenas.get(range_expression) {
                         ConstantRangeExpression::Single(expr) => (
-                            eval_constant_expr(gl, arenas, types, scope, diagnostics, *expr)?.as_integer().unwrap(),
+                            eval_constant_expr(gl, arenas, types, scope, diagnostics, *expr)?
+                                .as_integer()
+                                .unwrap(),
                             1,
                         ),
                         _ => todo!("MsbLsb"),
