@@ -216,8 +216,11 @@ impl ContextFormat for Instruction {
                 f.write_str(" = probe ")?;
                 ctx.gl.signals.get(*sig).unwrap().ctx_fmt(f, ctx)?;
             }
-            Self::Drive(sig, var, partial) => {
+            Self::Drive(sig, var, region, partial) => {
                 f.write_str("drive")?;
+                if *region != 0 {
+                    write!(f, "[r={region}] ")?;
+                }
                 if let Some((offset, length)) = partial {
                     f.write_str("[")?;
                     ctx.gl.vars.get(*offset).unwrap().typed_ctx_fmt(f, ctx)?;
@@ -248,9 +251,12 @@ impl ContextFormat for Instruction {
                 f.write_str(", ")?;
                 ctx.gl.vars.get(*idx).unwrap().typed_ctx_fmt(f, ctx)?;
             }
-            Self::ArrDrive(dst, src, idx, partial) => {
+            Self::ArrDrive(dst, src, idx, region, partial) => {
                 ctx.gl.signals.get(*dst).unwrap().typed_ctx_fmt(f, ctx)?;
                 f.write_str(" = arr.drive ")?;
+                if *region != 0 {
+                    write!(f, "[r={region}] ")?;
+                }
                 if let Some((offset, length)) = partial {
                     f.write_str("[")?;
                     ctx.gl.vars.get(*offset).unwrap().typed_ctx_fmt(f, ctx)?;
@@ -270,6 +276,7 @@ impl ContextFormat for BasicBlockTerminator {
     fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &mut DisplayContext<'_>) -> fmt::Result {
         let mnemonic = match self {
             Self::Wait(..) => "wait",
+            Self::WaitRegion(..) => "wait.region",
             Self::Watch(..) => "watch",
             Self::Jump(..) => "jump",
             Self::Branch(..) => "branch",
@@ -283,6 +290,10 @@ impl ContextFormat for BasicBlockTerminator {
                 f.write_str(&ctx.gl.bbs.get(*bb).unwrap().name)?;
                 f.write_str(", ")?;
                 time.ctx_fmt(f, ctx)?
+            }
+            Self::WaitRegion(bb, region) => {
+                f.write_str(&ctx.gl.bbs.get(*bb).unwrap().name)?;
+                write!(f, ", {region}")?;
             }
             Self::Watch(bb, signals) => {
                 f.write_str(&ctx.gl.bbs.get(*bb).unwrap().name)?;

@@ -9,7 +9,7 @@ pub use builder::{BasicBlockBuilder, BranchRef, PhiRef, new_process};
 pub use format::{ContextFormat, DisplayContext};
 use indexmap::IndexSet;
 use slotmap::{SlotMap, new_key_type};
-pub use types::{Type, TypeKey, TypeTable, TypeInfo, ArrayWidth};
+pub use types::{ArrayWidth, Type, TypeInfo, TypeKey, TypeTable};
 
 new_key_type! { pub struct ProcessKey; }
 new_key_type! { pub struct BasicBlockKey; }
@@ -19,10 +19,40 @@ new_key_type! { pub struct VariableKey; }
 // @TODO: Do some smarter stuff here. Probably we can use the lsb to say small big and they put a
 // pointer in the u64.
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Bits {
     Small(u64, VectorSize),
     Big(VectorSize, Box<[u8]>),
+}
+
+impl Bits {
+    pub fn as_slice(&self) -> &[u8] {
+        const { assert!(cfg!(target_endian = "little")) }
+        match self {
+            Bits::Small(value, size) => &bytemuck::bytes_of(value)[..size.div_ceil(8) as usize],
+            Bits::Big(_, value) => value.as_ref(),
+        }
+    }
+
+    pub fn load_from_slice(slice: &[u8], size: VectorSize) -> Self {
+        if size < 64 {
+            let mut value = 0u64;
+            for &b in &slice[..size.div_ceil(8) as usize] {
+                value <<= 8;
+                value |= b as u64;
+            }
+            Self::Small(value, size)
+        } else {
+            Self::Big(size, slice.into())
+        }
+    }
+
+    pub fn size(&self) -> VectorSize {
+        match self {
+            Bits::Small(_, s) => *s,
+            Bits::Big(s, _) => *s,
+        }
+    }
 }
 
 impl fmt::Display for Bits {
@@ -57,6 +87,7 @@ pub struct Time(pub u64);
 #[derive(Debug, Clone)]
 pub enum BasicBlockTerminator {
     Wait(BasicBlockKey, Time),
+    WaitRegion(BasicBlockKey, u8),
     Watch(BasicBlockKey, Vec<SignalKey>),
     Jump(BasicBlockKey),
     /// (condition, if_true, if_false)
@@ -78,7 +109,7 @@ impl BasicBlockTerminator {
         bb_seen: &mut HashSet<BasicBlockKey>,
     ) {
         match self {
-            Self::Wait(bb, _) | Self::Watch(bb, _) | Self::Jump(bb) => {
+            Self::Wait(bb, _) | Self::WaitRegion(bb, _) | Self::Watch(bb, _) | Self::Jump(bb) => {
                 if bb_seen.insert(*bb) {
                     bb_stack.push(*bb);
                 }
@@ -176,10 +207,16 @@ pub enum Instruction {
         SignalKey,
         VariableKey,
         VariableKey,
+        u8,
         Option<(VariableKey, VectorSize)>,
     ),
     Probe(VariableKey, SignalKey),
-    Drive(SignalKey, VariableKey, Option<(VariableKey, VectorSize)>),
+    Drive(
+        SignalKey,
+        VariableKey,
+        u8,
+        Option<(VariableKey, VectorSize)>,
+    ),
 
     Phi(VariableKey, Box<[(BasicBlockKey, VariableKey)]>),
 }

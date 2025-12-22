@@ -619,10 +619,7 @@ impl BasicBlockBuilder {
     }
 
     pub fn drive(&mut self, gl: &mut GlobalContext, signal: SignalKey, src: VariableKey) {
-        let ty = gl.signals[signal].ty;
-        let src = self.cast(gl, src, ty.key);
-        gl.processes[self.process].outs.insert(signal);
-        self.instrs.push(Instruction::Drive(signal, src, None));
+        self.regioned_drive(gl, signal, src, 0);
     }
     pub fn drive_partial(
         &mut self,
@@ -632,11 +629,40 @@ impl BasicBlockBuilder {
         offset: VariableKey,
         length: VectorSize,
     ) {
+        self.regioned_drive_partial(gl, signal, src, 0, offset, length);
+    }
+
+    pub fn regioned_drive(
+        &mut self,
+        gl: &mut GlobalContext,
+        signal: SignalKey,
+        src: VariableKey,
+        region: u8,
+    ) {
+        let ty = gl.signals[signal].ty;
+        let src = self.cast(gl, src, ty.key);
+        gl.processes[self.process].outs.insert(signal);
+        self.instrs
+            .push(Instruction::Drive(signal, src, region, None));
+    }
+    pub fn regioned_drive_partial(
+        &mut self,
+        gl: &mut GlobalContext,
+        signal: SignalKey,
+        src: VariableKey,
+        region: u8,
+        offset: VariableKey,
+        length: VectorSize,
+    ) {
         let ty = gl.types.insert(Type::Bits(length));
         let src = self.cast(gl, src, ty);
         gl.processes[self.process].outs.insert(signal);
-        self.instrs
-            .push(Instruction::Drive(signal, src, Some((offset, length))));
+        self.instrs.push(Instruction::Drive(
+            signal,
+            src,
+            region,
+            Some((offset, length)),
+        ));
     }
     pub fn probe(&mut self, gl: &mut GlobalContext, signal: SignalKey) -> VariableKey {
         gl.processes[self.process].ins.insert(signal);
@@ -807,6 +833,24 @@ impl BasicBlockBuilder {
         slf.terminator = BasicBlockTerminator::Wait(bb, time);
     }
 
+    pub fn wait_region(mut self, gl: &mut GlobalContext, region: u8) -> BasicBlockBuilder {
+        let next_key = self.next_bb(gl);
+        let slf = gl.bbs.get_mut(self.key).unwrap();
+        slf.instrs = std::mem::take(&mut self.instrs);
+        slf.terminator = BasicBlockTerminator::WaitRegion(next_key, region);
+        BasicBlockBuilder {
+            key: next_key,
+
+            process: self.process,
+            initializer: self.initializer,
+
+            instrs: Vec::new(),
+
+            tmp_offset: self.tmp_offset,
+            bbname_offset: self.bbname_offset,
+        }
+    }
+
     pub fn watch(mut self, gl: &mut GlobalContext, signals: Vec<SignalKey>) -> BasicBlockBuilder {
         let next_key = self.next_bb(gl);
         let slf = gl.bbs.get_mut(self.key).unwrap();
@@ -873,10 +917,7 @@ impl BasicBlockBuilder {
         src: VariableKey,
         idx: VariableKey,
     ) {
-        gl.processes[self.process].outs.insert(signal);
-        assert!(gl.signals[signal].ty.width.is_some());
-        self.instrs
-            .push(Instruction::ArrDrive(signal, src, idx, None));
+        self.regioned_arr_drive(gl, signal, src, idx, 0);
     }
     pub fn arr_drive_partial(
         &mut self,
@@ -887,12 +928,38 @@ impl BasicBlockBuilder {
         offset: VariableKey,
         width: VectorSize,
     ) {
+        self.regioned_arr_drive_partial(gl, signal, src, idx, 0, offset, width);
+    }
+    pub fn regioned_arr_drive(
+        &mut self,
+        gl: &mut GlobalContext,
+        signal: SignalKey,
+        src: VariableKey,
+        idx: VariableKey,
+        region: u8,
+    ) {
+        gl.processes[self.process].outs.insert(signal);
+        assert!(gl.signals[signal].ty.width.is_some());
+        self.instrs
+            .push(Instruction::ArrDrive(signal, src, idx, region, None));
+    }
+    pub fn regioned_arr_drive_partial(
+        &mut self,
+        gl: &mut GlobalContext,
+        signal: SignalKey,
+        src: VariableKey,
+        idx: VariableKey,
+        region: u8,
+        offset: VariableKey,
+        width: VectorSize,
+    ) {
         gl.processes[self.process].outs.insert(signal);
         assert!(gl.signals[signal].ty.width.is_some());
         self.instrs.push(Instruction::ArrDrive(
             signal,
             src,
             idx,
+            region,
             Some((offset, width)),
         ));
     }

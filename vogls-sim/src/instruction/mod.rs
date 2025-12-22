@@ -34,17 +34,19 @@ pub enum VmInstruction {
     Intrinsic(IntrinsicOp, Vec<VmIntrinsicArg>),
 
     Probe(StackRef, VmSignalKey),
-    Drive(VmSignalKey, StackRef, Option<(StackRef, VectorSize)>),
+    Drive(VmSignalKey, StackRef, u8, Option<(StackRef, VectorSize)>),
 
     ArrProbe(StackRef, VmSignalKey, StackRef),
     ArrDrive(
         VmSignalKey,
         StackRef,
         StackRef,
+        u8,
         Option<(StackRef, VectorSize)>,
     ),
 
     Wait(Time),
+    WaitRegion(u8),
     Watch(Vec<VmSignalKey>),
 
     Jump(usize),

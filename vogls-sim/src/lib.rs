@@ -1,9 +1,12 @@
 use std::cmp::Ordering;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::{BTreeMap, HashMap};
 
 use slotmap::{SlotMap, new_key_type};
-use vogls_ir::{BinaryOp, Bits, IntrinsicOp, TypeTable, UnaryOp, VectorSize};
+use vogls_ir::{
+    BinaryOp, Bits, IntrinsicOp, Type, TypeInfo, TypeTable, UnaryOp, Value, VectorSize,
+};
 
+#[derive(PartialEq, Eq)]
 pub enum SignalValue {
     Bits(Bits),
     BitsArray(Box<[Bits]>),
@@ -18,6 +21,20 @@ pub use instruction::*;
 
 new_key_type! { pub struct ListenerKey; }
 new_key_type! { pub struct VmProcessKey; }
+
+pub struct Regions {
+    pub active: Vec<Event>,
+    pub other: Vec<Vec<Event>>,
+}
+
+impl Regions {
+    pub fn new(num_additional_regions: usize) -> Self {
+        Self {
+            active: Vec::new(),
+            other: vec![Vec::new(); num_additional_regions],
+        }
+    }
+}
 
 pub type Timestamp = u64;
 pub type InstanceId = u64;
@@ -39,7 +56,18 @@ impl Context {
 }
 
 #[derive(Clone, Debug)]
-pub struct Event {
+pub enum Event {
+    Drive(
+        VmSignalKey,
+        Value,
+        Option<u32>,
+        Option<(VectorSize, VectorSize)>,
+    ),
+    Evaluation(EvaluationEvent),
+}
+
+#[derive(Clone, Debug)]
+pub struct EvaluationEvent {
     /// Which process is scheduled.
     pub process: VmProcessKey,
     /// The stack with which to execute.
@@ -78,21 +106,123 @@ enum EvalOutcome {
     Exit,
 }
 
+fn update_watchers(
+    sig: VmSignalKey,
+    watches: &mut HashMap<VmSignalKey, Vec<ListenerKey>>,
+    listeners: &mut SlotMap<ListenerKey, Event>,
+    regions: &mut Regions,
+) {
+    if let Some(watchers) = watches.remove(&sig) {
+        for watcher in watchers {
+            if let Some(event) = listeners.remove(watcher) {
+                regions.active.push(event);
+            }
+        }
+    }
+}
+
+pub fn drive_bits(
+    bits: &mut Bits,
+    slice: &[u8],
+    partial: Option<(VectorSize, VectorSize)>,
+) -> bool {
+    match bits {
+        Bits::Big(_, signal_value) => {
+            if slice == signal_value.as_ref() {
+                return false;
+            }
+
+            match partial {
+                None => signal_value.copy_from_slice(slice),
+                Some(_) => todo!(),
+            }
+
+            true
+        }
+        Bits::Small(signal_value, size) => {
+            let before = *signal_value;
+            match partial {
+                None => {
+                    *signal_value = bits::store_to_u64(slice, 0, *size);
+                }
+                Some((offset, length)) => {
+                    let value = bits::store_to_u64(slice, 0, length);
+                    *signal_value &= !(((1u64 << length) - 1) << offset);
+                    *signal_value |= value << offset;
+                }
+            }
+            before != *signal_value
+        }
+    }
+}
+
 impl Event {
     fn evaluate(
         mut self,
         ctx: &mut Context,
         processes: &SlotMap<VmProcessKey, VmProcess>,
-        schedule: &mut BinaryHeap<ScheduledEvent>,
+        schedule: &mut BTreeMap<Timestamp, Vec<Event>>,
+        regions: &mut Regions,
         signals: &mut HashMap<VmSignalKey, SignalValue>,
+        signal_ty: &HashMap<VmSignalKey, TypeInfo>,
         listeners: &mut SlotMap<ListenerKey, Event>,
         watches: &mut HashMap<VmSignalKey, Vec<ListenerKey>>,
         types: &TypeTable,
     ) -> EvalOutcome {
-        let ip = &mut self.ip;
-        let bit_stack = &mut self.bit_stack;
-        let decimal_stack = &mut self.decimal_stack;
-        let process = processes.get(self.process).unwrap();
+        let EvaluationEvent {
+            process,
+            bit_stack,
+            decimal_stack,
+            ip,
+        } = match &mut self {
+            Event::Drive(sig, value, idx, partial) => {
+                let updated = match signals.get_mut(sig).unwrap() {
+                    SignalValue::Bits(signal_bits) => {
+                        assert!(idx.is_none());
+                        let Value::Bits(bits) = value else {
+                            unreachable!()
+                        };
+                        drive_bits(signal_bits, bits.as_slice(), *partial)
+                    }
+                    SignalValue::Decimal(signal_value) => {
+                        assert!(idx.is_none());
+                        assert!(partial.is_none());
+                        let Value::Decimal(value) = value else {
+                            unreachable!()
+                        };
+                        let before = *signal_value;
+                        *signal_value = *value;
+                        before != *signal_value
+                    }
+                    SignalValue::BitsArray(signal_bits) => {
+                        let Some(idx) = idx else { unreachable!() };
+                        let Value::Bits(bits) = value else {
+                            unreachable!()
+                        };
+                        drive_bits(&mut signal_bits[*idx as usize], bits.as_slice(), *partial)
+                    }
+                    SignalValue::DecimalArray(signal_value) => {
+                        assert!(partial.is_none());
+                        let Some(idx) = idx else { unreachable!() };
+                        let Value::Decimal(value) = value else {
+                            unreachable!()
+                        };
+                        let before = signal_value[*idx as usize];
+                        signal_value[*idx as usize] = *value;
+                        before != signal_value[*idx as usize]
+                    }
+                };
+
+                if updated {
+                    update_watchers(*sig, watches, listeners, regions);
+                }
+
+                return EvalOutcome::Next;
+            }
+            Event::Evaluation(e) => e,
+        };
+
+        let process = processes.get(*process).unwrap();
 
         use VmInstruction as I;
         loop {
@@ -405,7 +535,23 @@ impl Event {
                         SignalValue::DecimalArray(_) => unreachable!(),
                     };
                 }
-                I::Drive(sig, var, partial) => {
+                I::Drive(sig, var, region, partial) => {
+                    if *region != 0 {
+                        let partial = partial.map(|(offset, width)| {
+                            (decimal_stack[offset.offset] as VectorSize, width)
+                        });
+                        let value = match types[signal_ty[sig].key] {
+                            Type::Decimal => Value::Decimal(decimal_stack[var.offset]),
+                            Type::Bits(width) => {
+                                let width = partial.map_or(width, |(_, s)| s);
+                                Value::Bits(Bits::load_from_slice(&bit_stack[var.offset..], width))
+                            }
+                        };
+                        regions.other[(region - 1) as usize]
+                            .push(Event::Drive(*sig, value, None, partial));
+                        continue;
+                    }
+
                     let signal = signals.get_mut(sig).unwrap();
                     let updated = match signal {
                         SignalValue::Bits(Bits::Big(size, signal_value)) => {
@@ -453,15 +599,8 @@ impl Event {
                         SignalValue::DecimalArray(_) => unreachable!(),
                     };
 
-                    if updated && let Some(watchers) = watches.remove(sig) {
-                        for watcher in watchers {
-                            if let Some(event) = listeners.remove(watcher) {
-                                schedule.push(ScheduledEvent {
-                                    at: ctx.time,
-                                    event,
-                                });
-                            }
-                        }
+                    if updated {
+                        update_watchers(*sig, watches, listeners, regions);
                     }
                 }
                 I::ArrProbe(dst, signal, idx) => {
@@ -483,7 +622,28 @@ impl Event {
                         SignalValue::Decimal(_) => unreachable!(),
                     };
                 }
-                I::ArrDrive(sig, src, idx, partial) => {
+                I::ArrDrive(sig, src, idx, region, partial) => {
+                    if *region != 0 {
+                        let idx = decimal_stack[idx.offset] as u32;
+                        let partial = partial.map(|(offset, width)| {
+                            (decimal_stack[offset.offset] as VectorSize, width)
+                        });
+                        let value = match types[signal_ty[sig].key] {
+                            Type::Decimal => Value::Decimal(decimal_stack[src.offset]),
+                            Type::Bits(width) => {
+                                let width = partial.map_or(width, |(_, s)| s);
+                                Value::Bits(Bits::load_from_slice(&bit_stack[src.offset..], width))
+                            }
+                        };
+                        regions.other[(region - 1) as usize].push(Event::Drive(
+                            *sig,
+                            value,
+                            Some(idx),
+                            partial,
+                        ));
+                        continue;
+                    }
+
                     let signal = signals.get_mut(sig).unwrap();
                     let idx = decimal_stack[idx.offset];
 
@@ -536,22 +696,20 @@ impl Event {
                         SignalValue::Decimal(_) => unreachable!(),
                     };
 
-                    if updated && let Some(watchers) = watches.remove(sig) {
-                        for watcher in watchers {
-                            if let Some(event) = listeners.remove(watcher) {
-                                schedule.push(ScheduledEvent {
-                                    at: ctx.time,
-                                    event,
-                                });
-                            }
-                        }
+                    if updated {
+                        update_watchers(*sig, watches, listeners, regions);
                     }
                 }
                 I::Wait(time) => {
-                    schedule.push(ScheduledEvent {
-                        at: ctx.time + time.0,
-                        event: self,
-                    });
+                    schedule.entry(ctx.time + time.0).or_default().push(self);
+                    return EvalOutcome::Next;
+                }
+                I::WaitRegion(region) => {
+                    if *region == 0 {
+                        regions.active.push(self);
+                    } else {
+                        regions.other[*region as usize].push(self);
+                    }
                     return EvalOutcome::Next;
                 }
                 I::Watch(signals) => {
@@ -579,29 +737,52 @@ impl Event {
 pub fn run(
     ctx: &mut Context,
     processes: &SlotMap<VmProcessKey, VmProcess>,
-    schedule: &mut BinaryHeap<ScheduledEvent>,
+    regions: &mut Regions,
     signals: &mut HashMap<VmSignalKey, SignalValue>,
+    signal_ty: &HashMap<VmSignalKey, TypeInfo>,
     listeners: &mut SlotMap<ListenerKey, Event>,
     watches: &mut HashMap<VmSignalKey, Vec<ListenerKey>>,
     types: &TypeTable,
     max_time: u64,
 ) -> Result<(), ()> {
-    while let Some(se) = schedule.pop() {
-        ctx.time = se.at;
+    let mut schedule = BTreeMap::<Timestamp, Vec<Event>>::new();
+    'region_loop: loop {
+        while let Some(event) = regions.active.pop() {
+            let outcome = event.evaluate(
+                ctx,
+                processes,
+                &mut schedule,
+                regions,
+                signals,
+                signal_ty,
+                listeners,
+                watches,
+                types,
+            );
 
+            match outcome {
+                EvalOutcome::Next => continue,
+                EvalOutcome::Error => return Err(()),
+                EvalOutcome::Exit => return Ok(()),
+            }
+        }
+
+        for region in &mut regions.other {
+            if !region.is_empty() {
+                std::mem::swap(&mut regions.active, region);
+                continue 'region_loop;
+            }
+        }
+
+        let Some((at, events)) = schedule.pop_first() else {
+            break;
+        };
+
+        ctx.time = at;
         if ctx.time > max_time {
             break;
         }
-
-        let outcome = se
-            .event
-            .evaluate(ctx, processes, schedule, signals, listeners, watches, types);
-
-        match outcome {
-            EvalOutcome::Next => continue,
-            EvalOutcome::Error => return Err(()),
-            EvalOutcome::Exit => return Ok(()),
-        }
+        regions.active = events;
     }
 
     Ok(())

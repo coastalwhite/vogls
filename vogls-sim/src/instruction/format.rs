@@ -45,18 +45,24 @@ impl fmt::Display for VmInstruction {
                 Ok(())
             }
             Self::Probe(dst, signal) => write!(f, "{dst} = probe {signal}"),
-            Self::Drive(signal, src, partial) => match partial {
-                None => write!(f, "drive {signal}, {src}"),
-                Some((offset, length)) => write!(f, "drive[{offset}, {length}] {signal}, {src}"),
+            Self::Drive(signal, src, region, partial) => match partial {
+                None => write!(f, "drive[r={region}] {signal}, {src}"),
+                Some((offset, length)) => {
+                    write!(f, "drive[r={region}][{offset}, {length}] {signal}, {src}")
+                }
             },
             Self::ArrProbe(dst, src, idx) => write!(f, "{dst} = arr.probe {src}, {idx}"),
-            Self::ArrDrive(signal, src, idx, partial) => match partial {
-                None => write!(f, "arr.drive {signal}, {src}, {idx}"),
+            Self::ArrDrive(signal, src, idx, region, partial) => match partial {
+                None => write!(f, "arr.drive[r={region}] {signal}, {src}, {idx}"),
                 Some((offset, length)) => {
-                    write!(f, "drive[{offset}, {length}] {signal}, {src}, {idx}")
+                    write!(
+                        f,
+                        "drive[r={region}][{offset}, {length}] {signal}, {src}, {idx}"
+                    )
                 }
             },
             Self::Wait(time) => write!(f, "wait #{}", time.0),
+            Self::WaitRegion(region) => write!(f, "wait.region {region}"),
             Self::Watch(signals) => {
                 f.write_str("watch [")?;
                 if let Some(signal) = signals.first() {
@@ -93,17 +99,18 @@ impl fmt::Display for VmProcess {
         for i in &self.instructions {
             use VmInstruction as I;
             match i {
-                I::ConstantBit(_, _)
-                | I::ConstantDecimal(_, _)
-                | I::Unary(_, _, _)
-                | I::Binary(_, _, _, _)
-                | I::Cast(_, _, _, _)
-                | I::Move(_, _, _)
-                | I::Intrinsic(_, _)
-                | I::Probe(_, _)
-                | I::Drive(_, _, _)
-                | I::Wait(_)
-                | I::Watch(_)
+                I::ConstantBit(..)
+                | I::ConstantDecimal(..)
+                | I::Unary(..)
+                | I::Binary(..)
+                | I::Cast(..)
+                | I::Move(..)
+                | I::Intrinsic(..)
+                | I::Probe(..)
+                | I::Drive(..)
+                | I::Wait(..)
+                | I::WaitRegion(..)
+                | I::Watch(..)
                 | I::Halt
                 | I::ArrProbe(..)
                 | I::ArrDrive(..) => {}

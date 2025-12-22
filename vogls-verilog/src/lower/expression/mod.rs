@@ -631,23 +631,3 @@ pub fn sign_extend_or_truncate(
         (VType::Array(..), _) | (_, VType::Array(..)) => panic!(),
     }
 }
-
-pub fn coerce(
-    gl: &mut GlobalContext,
-    vtypes: &VTypeTable,
-    builder: &mut BasicBlockBuilder,
-    var: VariableKey,
-    from: VTypeKey,
-    to: VTypeKey,
-) -> VariableKey {
-    if from == to {
-        return var;
-    }
-
-    if vtypes[from].is_array() || vtypes[to].is_array() {
-        panic!()
-    }
-
-    let ty = vtypes[to].to_ir_info(vtypes, &mut gl.types).key;
-    builder.cast(gl, var, ty)
-}

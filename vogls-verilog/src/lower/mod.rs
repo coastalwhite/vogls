@@ -7,6 +7,14 @@ mod statement;
 mod vtype;
 mod vvalue;
 
+#[repr(u8)]
+pub enum Region {
+    Active = 0,
+    Inactive = 1,
+    NonBlocking = 2,
+    Monitor = 3,
+}
+
 use std::collections::{HashMap, HashSet};
 
 use scope::Scope;
@@ -434,6 +442,7 @@ fn statements_to_process<'a>(
                     *variable_lvalue,
                     value,
                     value_ty,
+                    Region::Active,
                 )?;
             }
             Statement::CaseStatement(case_statement) => {
@@ -498,6 +507,7 @@ fn statements_to_process<'a>(
                     *variable_lvalue,
                     value,
                     value_ty,
+                    Region::NonBlocking,
                 )?;
             }
             Statement::ParBlock => todo!(),
@@ -529,18 +539,19 @@ fn statements_to_process<'a>(
                                     }
                                 };
 
-                                // @TODO:
-                                // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 159
-                                //
-                                // """
-                                // An explicit zero delay (#0) requires that the process be
-                                // suspended and added as an inactive event for the current time so
-                                // that the process is resumed in the next simulation cycle in the
-                                // current time.
-                                // """
-                                assert_ne!(value, 0);
-
-                                builder = builder.wait(gl, Time(value as u64));
+                                builder = if value == 0 {
+                                    // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 159
+                                    //
+                                    // """
+                                    // An explicit zero delay (#0) requires that the process be
+                                    // suspended and added as an inactive event for the current time so
+                                    // that the process is resumed in the next simulation cycle in the
+                                    // current time.
+                                    // """
+                                    builder.wait_region(gl, Region::Inactive as u8)
+                                } else {
+                                    builder.wait(gl, Time(value as u64))
+                                };
                             }
                         }
                     }
@@ -1213,6 +1224,7 @@ fn assign_variable_lvalue<'a>(
     lvalue: AstId<VariableLValue>,
     variable: VariableKey,
     variable_ty: VTypeKey,
+    region: Region,
 ) -> Result<(), ()> {
     let VariableLValue {
         ident,
@@ -1302,8 +1314,10 @@ fn assign_variable_lvalue<'a>(
                         ty,
                     );
                     match arr_idx {
-                        None => builder.drive(gl, key, variable),
-                        Some(idx) => builder.arr_drive(gl, key, variable, idx),
+                        None => builder.regioned_drive(gl, key, variable, region as u8),
+                        Some(idx) => {
+                            builder.regioned_arr_drive(gl, key, variable, idx, region as u8)
+                        }
                     }
                 }
                 Some(range_expression) => {
@@ -1338,10 +1352,23 @@ fn assign_variable_lvalue<'a>(
                     );
 
                     match arr_idx {
-                        None => builder.drive_partial(gl, key, variable, offset, length),
-                        Some(idx) => {
-                            builder.arr_drive_partial(gl, key, variable, idx, offset, length)
-                        }
+                        None => builder.regioned_drive_partial(
+                            gl,
+                            key,
+                            variable,
+                            region as u8,
+                            offset,
+                            length,
+                        ),
+                        Some(idx) => builder.regioned_arr_drive_partial(
+                            gl,
+                            key,
+                            variable,
+                            idx,
+                            region as u8,
+                            offset,
+                            length,
+                        ),
                     }
                 }
             }
@@ -1382,10 +1409,9 @@ fn assign_net_lvalue<'a>(
         return Err(());
     };
 
-    let SymbolVariant::Signal(signal_key) = &scope.symbols[symbol_key].variant else {
+    let SymbolVariant::Signal(_) = &scope.symbols[symbol_key].variant else {
         panic!("not a signal");
     };
-    let signal_key = *signal_key;
 
     let NetLValue {
         ident,

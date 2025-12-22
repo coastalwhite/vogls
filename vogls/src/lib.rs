@@ -1,11 +1,12 @@
-use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::rc::Rc;
 
 use slotmap::SlotMap;
 use vogls_ir::{Bits, ContextFormat, GlobalContext, Type};
 use vogls_sim::{
-    Context, Event, ScheduledEvent, SignalValue, VmProcess, VmProcessKey, lower_process_to_vm,
+    Context, EvaluationEvent, Event, Regions, SignalValue, VmProcess, VmProcessKey,
+    lower_process_to_vm,
 };
 use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{
@@ -310,8 +311,9 @@ pub fn run(
     }
 
     let mut processes = SlotMap::<VmProcessKey, VmProcess>::default();
-    let mut schedule = BinaryHeap::default();
+    let mut regions = Regions::new(3); // inactive, non-blocking, monitor
     let mut signals = HashMap::default();
+    let mut signal_ty = HashMap::default();
     let mut listeners = SlotMap::default();
     let mut watches = HashMap::default();
 
@@ -339,15 +341,12 @@ pub fn run(
             println!(": {vm_process_key:?}");
         }
 
-        schedule.push(ScheduledEvent {
-            at: 0,
-            event: Event {
-                process: vm_process_key,
-                bit_stack,
-                decimal_stack,
-                ip: 0,
-            },
-        });
+        regions.active.push(Event::Evaluation(EvaluationEvent {
+            process: vm_process_key,
+            bit_stack,
+            decimal_stack,
+            ip: 0,
+        }));
     }
 
     for (ir_signal, signal) in io_signals {
@@ -376,10 +375,11 @@ pub fn run(
             }
         };
         signals.insert(signal, value);
+        signal_ty.insert(signal, gl.signals[ir_signal].ty);
     }
 
     if ectx.output_schedule {
-        println!("{schedule:?}");
+        println!("{:?}", &regions.active);
     }
 
     let stdout = std::mem::replace(&mut ectx.stdout, Box::new(Vec::new()) as _);
@@ -389,8 +389,9 @@ pub fn run(
     let fail = vogls_sim::run(
         &mut ctx,
         &processes,
-        &mut schedule,
+        &mut regions,
         &mut signals,
+        &signal_ty,
         &mut listeners,
         &mut watches,
         &gl.types,

@@ -124,16 +124,18 @@ pub fn lower_process_to_vm(
                     VI::Intrinsic(*op, args)
                 }
                 I::Probe(dst, signal) => VI::Probe(var(*dst), signal!(*signal)),
-                I::Drive(signal, src, partial) => VI::Drive(
+                I::Drive(signal, src, region, partial) => VI::Drive(
                     signal!(*signal),
                     var(*src),
+                    *region,
                     partial.map(|(o, l)| (var(o), l)),
                 ),
                 I::ArrProbe(dst, src, idx) => VI::ArrProbe(var(*dst), signal!(*src), var(*idx)),
-                I::ArrDrive(dst, src, idx, partial) => VI::ArrDrive(
+                I::ArrDrive(dst, src, idx, region, partial) => VI::ArrDrive(
                     signal!(*dst),
                     var(*src),
                     var(*idx),
+                    *region,
                     partial.map(|(o, l)| (var(o), l)),
                 ),
                 I::Phi(..) => continue,
@@ -152,6 +154,10 @@ pub fn lower_process_to_vm(
         let terminator_instr = match &bb.terminator {
             T::Wait(_, time) => {
                 instructions.push(VI::Wait(*time));
+                VI::Jump(0)
+            }
+            T::WaitRegion(_, region) => {
+                instructions.push(VI::WaitRegion(*region));
                 VI::Jump(0)
             }
             T::Watch(_, signals) => {
@@ -179,6 +185,7 @@ pub fn lower_process_to_vm(
         use VmInstruction as VI;
         match (&bb.terminator, &mut instructions[offset]) {
             (T::Wait(bb, _), VI::Jump(offset)) => *offset = bb_to_offset(*bb),
+            (T::WaitRegion(bb, _), VI::Jump(offset)) => *offset = bb_to_offset(*bb),
             (T::Watch(bb, _), VI::Jump(offset)) => *offset = bb_to_offset(*bb),
             (T::Jump(bb), VI::Jump(offset)) => *offset = bb_to_offset(*bb),
             (T::Branch(_, true_bb, false_bb), VI::Branch(_, true_offset, false_offset)) => {

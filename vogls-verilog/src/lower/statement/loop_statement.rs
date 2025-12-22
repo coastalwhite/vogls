@@ -7,7 +7,7 @@ use crate::ast::{AstId, AstIdRange};
 use crate::lower::diagnostics::Diagnostics;
 use crate::lower::scope::{Scope, SymbolKey, SymbolVariant};
 use crate::lower::{
-    VTypeTable, assign_variable_lvalue, get_intersect_symbols_generated, lower_expr,
+    Region, VTypeTable, assign_variable_lvalue, get_intersect_symbols_generated, lower_expr,
     statements_to_process,
 };
 use crate::parser::AstArenas;
@@ -55,6 +55,7 @@ pub fn lower_loop_statement<'a>(
                 initialization.lvalue,
                 initialization_var,
                 initialization_var_ty,
+                Region::Active,
             )?;
         }
         V::Forever | V::While(_) => {}
@@ -175,6 +176,7 @@ pub fn lower_loop_statement<'a>(
                 step.lvalue,
                 step_var,
                 step_var_ty,
+                Region::Active,
             )?;
         }
         V::Repeat(_) => {

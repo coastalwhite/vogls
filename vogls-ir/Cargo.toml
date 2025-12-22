@@ -6,3 +6,4 @@ edition.workspace = true
 [dependencies]
 slotmap.workspace = true
 indexmap.workspace = true
+bytemuck.workspace = true
