@@ -9,7 +9,7 @@ pub use builder::{BasicBlockBuilder, BranchRef, PhiRef, new_process};
 pub use format::{ContextFormat, DisplayContext};
 use indexmap::IndexSet;
 use slotmap::{SlotMap, new_key_type};
-pub use types::{Type, TypeKey, TypeTable};
+pub use types::{Type, TypeKey, TypeTable, TypeInfo, ArrayWidth};
 
 new_key_type! { pub struct ProcessKey; }
 new_key_type! { pub struct BasicBlockKey; }
@@ -103,7 +103,7 @@ pub struct Variable {
 
 pub struct Signal {
     pub name: String,
-    pub ty: TypeKey,
+    pub ty: TypeInfo,
 }
 
 pub type VectorSize = u32;

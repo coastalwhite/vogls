@@ -28,7 +28,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             stderr: Box::new(std::io::stderr()),
             output_ir: true,
             output_elaborated: false,
-            output_sim_ir: false,
+            output_sim_ir: true,
             output_schedule: false,
         },
     )?;

@@ -58,7 +58,7 @@ pub fn lower<'a>(
         else_branch,
     } = arenas.get(conditional);
 
-    let condition = lower_expr(
+    let (condition, _) = lower_expr(
         gl,
         arenas,
         types,
@@ -89,7 +89,7 @@ pub fn lower<'a>(
         branch_ref.update(gl, builder.key());
 
         let else_if_branch = arenas.get(else_if_branch);
-        let condition = lower_expr(
+        let (condition, _) = lower_expr(
             gl,
             arenas,
             types,
@@ -181,7 +181,7 @@ pub fn lower_case_statement<'a>(
         CaseStatementVariant::CaseX => todo!(),
     }
 
-    let expr_var = lower_expr(
+    let (expr_var, _) = lower_expr(
         gl,
         arenas,
         types,
@@ -203,7 +203,7 @@ pub fn lower_case_statement<'a>(
             }
             CaseItemPattern::Expressions(exprs) => {
                 let fst = exprs.first().expect("spec: 1+ pattern expr in case_item");
-                let v = lower_expr(
+                let (v, _) = lower_expr(
                     gl,
                     arenas,
                     types,
@@ -214,7 +214,7 @@ pub fn lower_case_statement<'a>(
                 )?;
                 let mut acc = builder.equals(gl, expr_var, v);
                 for e in exprs.iter().skip(1) {
-                    let v = lower_expr(
+                    let (v, _) = lower_expr(
                         gl,
                         arenas,
                         types,

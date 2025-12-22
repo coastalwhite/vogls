@@ -30,13 +30,13 @@ pub fn lower_loop_statement<'a>(
     let mut repeat_vars = None;
     match ls.variant {
         V::Repeat(size) => {
-            let size = lower_expr(gl, arenas, types, scope, diagnostics, &mut builder, size)?;
+            let (size, _) = lower_expr(gl, arenas, types, scope, diagnostics, &mut builder, size)?;
             let i = builder.constant(gl, Value::Decimal(0));
             repeat_vars = Some((i, size));
         }
         V::For(initialization, _, _) => {
             let initialization = arenas.get(initialization);
-            let initialization_var = lower_expr(
+            let (initialization_var, initialization_var_ty) = lower_expr(
                 gl,
                 arenas,
                 types,
@@ -54,6 +54,7 @@ pub fn lower_loop_statement<'a>(
                 &mut builder,
                 initialization.lvalue,
                 initialization_var,
+                initialization_var_ty,
             )?;
         }
         V::Forever | V::While(_) => {}
@@ -103,24 +104,30 @@ pub fn lower_loop_statement<'a>(
             repeat_i_phi = Some(phi_ref);
             Some(builder.unsigned_lt(gl, *i, *size))
         }
-        V::While(condition) => Some(lower_expr(
-            gl,
-            arenas,
-            types,
-            scope,
-            diagnostics,
-            &mut builder,
-            condition,
-        )?),
-        V::For(_, condition, _) => Some(lower_expr(
-            gl,
-            arenas,
-            types,
-            scope,
-            diagnostics,
-            &mut builder,
-            condition,
-        )?),
+        V::While(condition) => Some(
+            lower_expr(
+                gl,
+                arenas,
+                types,
+                scope,
+                diagnostics,
+                &mut builder,
+                condition,
+            )?
+            .0,
+        ),
+        V::For(_, condition, _) => Some(
+            lower_expr(
+                gl,
+                arenas,
+                types,
+                scope,
+                diagnostics,
+                &mut builder,
+                condition,
+            )?
+            .0,
+        ),
     };
 
     let branch_ref = match condition {
@@ -149,7 +156,7 @@ pub fn lower_loop_statement<'a>(
     match ls.variant {
         V::For(_, _, step) => {
             let step = arenas.get(step);
-            let step_var = lower_expr(
+            let (step_var, step_var_ty) = lower_expr(
                 gl,
                 arenas,
                 types,
@@ -167,6 +174,7 @@ pub fn lower_loop_statement<'a>(
                 &mut builder,
                 step.lvalue,
                 step_var,
+                step_var_ty,
             )?;
         }
         V::Repeat(_) => {

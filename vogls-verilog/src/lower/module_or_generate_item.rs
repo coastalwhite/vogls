@@ -13,10 +13,10 @@ use crate::ast::module::{
 };
 use crate::lower::expression::lower_expr;
 use crate::lower::scope::{Symbol, SymbolVariant};
+use crate::lower::vvalue::VValue;
 use crate::lower::{
     ModuleArgs, VType, assign_net_lvalue, assign_port_output, eval_constant_expr,
-    fetch_module_interface, lower_to_signal, msb_lsb_to_width, range_to_width,
-    statements_to_process,
+    fetch_module_interface, lower_to_signal, range_to_width, statements_to_process,
 };
 use crate::parser::AstArenas;
 
@@ -69,7 +69,7 @@ pub fn lower<'a>(
                                 let ident = arenas.get_ident(ident.0);
                                 let key = gl.signals.insert(Signal {
                                     name: ident.into(),
-                                    ty: types[ty].to_ir_key(types, &mut gl.types),
+                                    ty: types[ty].to_ir_info(types, &mut gl.types),
                                 });
                                 let symbol_key = scope.symbols.insert(Symbol {
                                     name: ident.to_string(),
@@ -89,7 +89,7 @@ pub fn lower<'a>(
                                 let ident = arenas.get_ident(ast_ident.item.0);
                                 let key = gl.signals.insert(Signal {
                                     name: ident.into(),
-                                    ty: types[ty].to_ir_key(types, &mut gl.types),
+                                    ty: types[ty].to_ir_info(types, &mut gl.types),
                                 });
                                 let symbol_key = scope.symbols.insert(Symbol {
                                     name: ident.to_string(),
@@ -102,7 +102,7 @@ pub fn lower<'a>(
                                 let (section_key, mut bb_builder) =
                                     new_process(gl, "decl_assign".into());
                                 let bb_key = bb_builder.key();
-                                let variable = lower_expr(
+                                let (variable, _) = lower_expr(
                                     gl,
                                     arenas,
                                     types,
@@ -141,23 +141,25 @@ pub fn lower<'a>(
                         let ident = arenas.get_ident(identifier.item.0);
 
                         let mut ty = ty;
-                        for dim in dimensions.iter() {
+                        for dim in dimensions.iter().rev() {
                             let Dimension { lhs, rhs } = arenas.get(dim);
-                            let (_, _, width) = msb_lsb_to_width(
-                                gl,
-                                arenas,
-                                types,
-                                scope,
-                                diagnostics,
-                                *lhs,
-                                *rhs,
-                            )?;
-                            ty = types.insert(VType::Array(ty, width));
+                            let lhs =
+                                eval_constant_expr(gl, arenas, types, scope, diagnostics, *lhs);
+                            let rhs =
+                                eval_constant_expr(gl, arenas, types, scope, diagnostics, *rhs);
+
+                            let (Ok(VValue::Integer(lhs)), Ok(VValue::Integer(rhs))) = (lhs, rhs)
+                            else {
+                                return Err(());
+                            };
+
+                            let width = lhs.abs_diff(rhs) + 1;
+                            ty = types.insert(VType::Array(ty, width as u32));
                         }
 
                         let key = gl.signals.insert(Signal {
                             name: ident.into(),
-                            ty: types[ty].to_ir_key(types, &mut gl.types),
+                            ty: types[ty].to_ir_info(types, &mut gl.types),
                         });
                         let symbol_key = scope.symbols.insert(Symbol {
                             name: ident.to_string(),
@@ -208,7 +210,7 @@ pub fn lower<'a>(
 
                 let (section_key, mut bb_builder) = new_process(gl, "assign".into());
                 let bb_key = bb_builder.key();
-                let variable = lower_expr(
+                let (variable, _) = lower_expr(
                     gl,
                     arenas,
                     types,
@@ -255,7 +257,7 @@ pub fn lower<'a>(
 
                         assert!(!input_terminals.is_empty());
                         let value = input_terminals.first().unwrap();
-                        let mut value = lower_expr(
+                        let (mut value, _) = lower_expr(
                             gl,
                             arenas,
                             types,
@@ -267,7 +269,7 @@ pub fn lower<'a>(
                         match ninput_gate_instantiation.gatetype.item {
                             NInputGateType::And | NInputGateType::Nand => {
                                 for input in input_terminals.iter().skip(1) {
-                                    let input = lower_expr(
+                                    let (input, _) = lower_expr(
                                         gl,
                                         arenas,
                                         types,
@@ -281,7 +283,7 @@ pub fn lower<'a>(
                             }
                             NInputGateType::Or | NInputGateType::Nor => {
                                 for input in input_terminals.iter().skip(1) {
-                                    let input = lower_expr(
+                                    let (input, _) = lower_expr(
                                         gl,
                                         arenas,
                                         types,
@@ -295,7 +297,7 @@ pub fn lower<'a>(
                             }
                             NInputGateType::Xor | NInputGateType::Xnor => {
                                 for input in input_terminals.iter().skip(1) {
-                                    let input = lower_expr(
+                                    let (input, _) = lower_expr(
                                         gl,
                                         arenas,
                                         types,

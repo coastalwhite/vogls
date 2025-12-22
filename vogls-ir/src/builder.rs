@@ -185,7 +185,6 @@ impl BasicBlockBuilder {
         let i = match gl.types[gl.vars[src].ty] {
             Type::Bits(size) => Instruction::Unary(dst, UnaryOp::BitNeg(size), src),
             Type::Decimal => Instruction::Unary(dst, UnaryOp::DecimalNeg, src),
-            Type::Array(..) => panic!(),
         };
         self.instrs.push(i);
         dst
@@ -197,7 +196,6 @@ impl BasicBlockBuilder {
             Type::Bits(1) => src,
             Type::Bits(_) => self.reduce_or(gl, src),
             Type::Decimal => self.reduce_or(gl, src),
-            Type::Array(..) => panic!(),
         };
         self.instrs
             .push(Instruction::Unary(dst, UnaryOp::BitNeg(1), src));
@@ -230,7 +228,6 @@ impl BasicBlockBuilder {
                 (lhs, rhs)
             }
             (T::Decimal, T::Decimal) => (lhs, rhs),
-            (T::Array(..), _) | (_, T::Array(..)) => panic!(),
         }
     }
 
@@ -268,7 +265,6 @@ impl BasicBlockBuilder {
                 let dst = self.next_tmp_var(gl, TypeTable::INT64);
                 (dst, lhs, rhs)
             }
-            (T::Array(..), _) | (_, T::Array(..)) => panic!(),
         }
     }
 
@@ -282,7 +278,6 @@ impl BasicBlockBuilder {
         let op = match gl.types[gl.vars[dst].ty] {
             Type::Bits(size) => BinaryOp::BitAnd(size),
             Type::Decimal => BinaryOp::DecimalAnd,
-            Type::Array(..) => panic!(),
         };
         self.instrs.push(Instruction::Binary(dst, op, lhs, rhs));
         dst
@@ -297,7 +292,6 @@ impl BasicBlockBuilder {
         let op = match gl.types[gl.vars[dst].ty] {
             Type::Bits(size) => BinaryOp::BitOr(size),
             Type::Decimal => BinaryOp::DecimalOr,
-            Type::Array(..) => panic!(),
         };
         self.instrs.push(Instruction::Binary(dst, op, lhs, rhs));
         dst
@@ -312,7 +306,6 @@ impl BasicBlockBuilder {
         let op = match gl.types[gl.vars[dst].ty] {
             Type::Bits(size) => BinaryOp::BitXor(size),
             Type::Decimal => BinaryOp::DecimalXor,
-            Type::Array(..) => panic!(),
         };
         self.instrs.push(Instruction::Binary(dst, op, lhs, rhs));
         dst
@@ -421,6 +414,24 @@ impl BasicBlockBuilder {
         self.instrs
             .push(Instruction::Binary(dst, BinaryOp::DecimalModulus, lhs, rhs));
         dst
+    }
+    pub fn i64_multiply_constant(
+        &mut self,
+        gl: &mut GlobalContext,
+        src: VariableKey,
+        constant: impl Into<i64>,
+    ) -> VariableKey {
+        assert_eq!(gl.vars[src].ty, TypeTable::INT64);
+        let constant = constant.into();
+
+        if constant == 0 {
+            self.constant(gl, Value::Decimal(0))
+        } else if constant == 1 {
+            src
+        } else {
+            let constant = self.constant(gl, Value::Decimal(constant));
+            self.multiply(gl, src, constant)
+        }
     }
 
     pub fn select_bit(
@@ -531,7 +542,6 @@ impl BasicBlockBuilder {
                 let rhs = self.cast(gl, rhs, ty);
                 (lhs, rhs, BinaryOp::UnsignedLessEqual(x))
             }
-            (T::Array(..), _) | (_, T::Array(..)) => panic!(),
         };
         self.instrs.push(Instruction::Binary(dst, op, lhs, rhs));
         dst
@@ -576,7 +586,6 @@ impl BasicBlockBuilder {
         let op = match gl.types[gl.vars[src].ty] {
             Type::Decimal => UnaryOp::DecimalReduceXor,
             Type::Bits(n) => UnaryOp::BitReduceXor(n),
-            Type::Array(..) => panic!(),
         };
         self.instrs.push(Instruction::Unary(dst, op, src));
         dst
@@ -591,7 +600,6 @@ impl BasicBlockBuilder {
         let op = match gl.types[gl.vars[src].ty] {
             Type::Decimal => UnaryOp::DecimalReduceOr,
             Type::Bits(n) => UnaryOp::BitReduceOr(n),
-            Type::Array(..) => panic!(),
         };
         self.instrs.push(Instruction::Unary(dst, op, src));
         dst
@@ -605,15 +613,14 @@ impl BasicBlockBuilder {
         let op = match gl.types[gl.vars[src].ty] {
             Type::Decimal => UnaryOp::DecimalReduceAnd,
             Type::Bits(n) => UnaryOp::BitReduceAnd(n),
-            Type::Array(..) => panic!(),
         };
         self.instrs.push(Instruction::Unary(dst, op, src));
         dst
     }
 
     pub fn drive(&mut self, gl: &mut GlobalContext, signal: SignalKey, src: VariableKey) {
-        let ty = gl.signals[signal].ty.clone();
-        let src = self.cast(gl, src, ty);
+        let ty = gl.signals[signal].ty;
+        let src = self.cast(gl, src, ty.key);
         gl.processes[self.process].outs.insert(signal);
         self.instrs.push(Instruction::Drive(signal, src, None));
     }
@@ -633,8 +640,8 @@ impl BasicBlockBuilder {
     }
     pub fn probe(&mut self, gl: &mut GlobalContext, signal: SignalKey) -> VariableKey {
         gl.processes[self.process].ins.insert(signal);
-        let ty = gl.signals.get(signal).unwrap().ty.clone();
-        let variable = self.next_tmp_var(gl, ty);
+        let ty = gl.signals.get(signal).unwrap().ty;
+        let variable = self.next_tmp_var(gl, ty.key);
         self.instrs.push(Instruction::Probe(variable, signal));
         variable
     }
@@ -853,11 +860,37 @@ impl BasicBlockBuilder {
         signal: SignalKey,
         idx: VariableKey,
     ) -> VariableKey {
-        let Type::Array(ty, _) = gl.types[gl.signals[signal].ty] else {
-            panic!()
-        };
-        let dst = self.next_tmp_var(gl, ty);
+        assert!(gl.signals[signal].ty.width.is_some());
+        let dst = self.next_tmp_var(gl, gl.signals[signal].ty.key);
         self.instrs.push(Instruction::ArrProbe(dst, signal, idx));
         dst
+    }
+    pub fn arr_drive(
+        &mut self,
+        gl: &mut GlobalContext,
+        signal: SignalKey,
+        src: VariableKey,
+        idx: VariableKey,
+    ) {
+        assert!(gl.signals[signal].ty.width.is_some());
+        self.instrs
+            .push(Instruction::ArrDrive(signal, src, idx, None));
+    }
+    pub fn arr_drive_partial(
+        &mut self,
+        gl: &mut GlobalContext,
+        signal: SignalKey,
+        src: VariableKey,
+        idx: VariableKey,
+        offset: VariableKey,
+        width: VectorSize,
+    ) {
+        assert!(gl.signals[signal].ty.width.is_some());
+        self.instrs.push(Instruction::ArrDrive(
+            signal,
+            src,
+            idx,
+            Some((offset, width)),
+        ));
     }
 }

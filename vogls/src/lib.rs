@@ -3,8 +3,10 @@ use std::path::Path;
 use std::rc::Rc;
 
 use slotmap::SlotMap;
-use vogls_ir::{Bits, ContextFormat, GlobalContext, Type, Value};
-use vogls_sim::{Context, Event, ScheduledEvent, VmProcess, VmProcessKey, lower_process_to_vm};
+use vogls_ir::{Bits, ContextFormat, GlobalContext, Type};
+use vogls_sim::{
+    Context, Event, ScheduledEvent, SignalValue, VmProcess, VmProcessKey, lower_process_to_vm,
+};
 use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{
     CaseGenerateConstruct, CaseGenerateItem, GenerateBlock, IfGenerateConstruct,
@@ -349,14 +351,29 @@ pub fn run(
     }
 
     for (ir_signal, signal) in io_signals {
-        let value = match gl.types[gl.signals[ir_signal].ty] {
-            Type::Array(..) => panic!(),
-            Type::Bits(n) if n < 64 => Value::Bits(Bits::Small(0, n)),
-            Type::Bits(n) => Value::Bits(Bits::Big(
+        let value = match (
+            gl.types[gl.signals[ir_signal].ty.key],
+            gl.signals[ir_signal].ty.width,
+        ) {
+            (Type::Bits(n), None) if n < 64 => SignalValue::Bits(Bits::Small(0, n)),
+            (Type::Bits(n), Some(width)) if n < 64 => SignalValue::BitsArray(
+                std::iter::repeat_n(Bits::Small(0, n), width.get() as usize).collect(),
+            ),
+            (Type::Bits(n), None) => SignalValue::Bits(Bits::Big(
                 n,
                 std::iter::repeat_n(0, n.div_ceil(8) as usize).collect(),
             )),
-            Type::Decimal => Value::Decimal(0),
+            (Type::Bits(n), Some(width)) => SignalValue::BitsArray(
+                std::iter::repeat_n(
+                    Bits::Big(n, std::iter::repeat_n(0, n.div_ceil(8) as usize).collect()),
+                    width.get() as usize,
+                )
+                .collect(),
+            ),
+            (Type::Decimal, None) => SignalValue::Decimal(0),
+            (Type::Decimal, Some(width)) => {
+                SignalValue::DecimalArray(std::iter::repeat_n(0, width.get() as usize).collect())
+            }
         };
         signals.insert(signal, value);
     }

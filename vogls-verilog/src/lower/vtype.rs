@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::ops::Index;
 
-use vogls_ir::VectorSize;
+use vogls_ir::{TypeInfo, VectorSize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum VType {
@@ -30,20 +30,33 @@ impl Index<VTypeKey> for VTypeTable {
 }
 
 impl VType {
-    pub fn to_ir_key(
+    pub fn to_ir_info(
         self,
         vtypes: &VTypeTable,
         types: &mut vogls_ir::TypeTable,
-    ) -> vogls_ir::TypeKey {
-        let ty = match self {
-            VType::ScalarNet => vogls_ir::Type::Bits(1),
-            VType::VectorNet(n) => vogls_ir::Type::Bits(n),
-            VType::Integer => vogls_ir::Type::Decimal,
-            VType::Array(ty, width) => {
-                vogls_ir::Type::Array(vtypes[ty].to_ir_key(vtypes, types), width)
-            }
-        };
-        types.insert(ty)
+    ) -> vogls_ir::TypeInfo {
+        let mut width = None;
+        let mut slf = self;
+        loop {
+            let ty = match slf {
+                VType::ScalarNet => vogls_ir::Type::Bits(1),
+                VType::VectorNet(n) => vogls_ir::Type::Bits(n),
+                VType::Integer => vogls_ir::Type::Decimal,
+                VType::Array(child, w) => {
+                    width = Some(match width {
+                        None => w,
+                        Some(width) => width * w,
+                    });
+                    slf = vtypes[child];
+                    continue;
+                }
+            };
+            let key = types.insert(ty);
+            return TypeInfo {
+                width: width.map(vogls_ir::ArrayWidth::new),
+                key,
+            };
+        }
     }
 
     pub const fn net(width: Option<VectorSize>) -> VType {
@@ -64,6 +77,16 @@ impl VType {
 
     pub const fn is_array(&self) -> bool {
         matches!(self, Self::Array(..))
+    }
+
+    pub fn leaf_arr_items(self, types: &VTypeTable) -> u32 {
+        let mut slf = self;
+        let mut arr_items = 1;
+        while let VType::Array(ty, width) = slf {
+            arr_items *= width;
+            slf = types[ty];
+        }
+        arr_items
     }
 }
 

@@ -19,7 +19,7 @@ pub fn lower_expr<'a>(
     diagnostics: &mut Diagnostics,
     builder: &mut BasicBlockBuilder,
     expr: AstId<Expr>,
-) -> Result<VariableKey, ()> {
+) -> Result<(VariableKey, VTypeKey), ()> {
     struct StackItem {
         expr: AstId<Expr>,
         dispatched: bool,
@@ -188,10 +188,17 @@ pub fn lower_expr<'a>(
                             dispatch_stack.push(StackItem::new(*base))
                         }
                     }
-                    dispatch_stack.extend(exprs.iter().rev().map(StackItem::new));
+                    dispatch_stack.extend(exprs.iter().map(StackItem::new));
                     continue;
                 }
 
+                let end_result_stack_len = result_stack.len()
+                    - exprs.len()
+                    - usize::from(matches!(
+                        range_expression,
+                        Some(BitSlice::PlusWidth(..) | BitSlice::MinusWidth(..))
+                    ));
+                let mut exprs = *exprs;
                 let ident = arenas.get_ident(ast_ident.item.0);
                 let Some(symbol_key) = scope.get(&ident) else {
                     diagnostics.var_not_found(arenas, *ast_ident);
@@ -200,6 +207,7 @@ pub fn lower_expr<'a>(
                     continue;
                 };
                 let symbol = &scope.symbols[symbol_key];
+                let mut ty = symbol.ty;
                 let mut var = match symbol.variant {
                     SymbolVariant::Constant(value) => {
                         builder.constant(gl, Value::Decimal(value.unwrap()))
@@ -207,32 +215,71 @@ pub fn lower_expr<'a>(
                     SymbolVariant::Genvar(value) => {
                         builder.constant(gl, Value::Decimal(value.unwrap()))
                     }
-                    SymbolVariant::Signal(key) => builder.probe(gl, key),
+                    SymbolVariant::Signal(key) => {
+                        if let VType::Array(child_ty, _) = types[ty] {
+                            if exprs.pop_front().is_none() {
+                                diagnostics
+                                    .not_yet_implemented(arenas.get_span(expr), "variable array");
+                                error = true;
+                                result_stack.truncate(end_result_stack_len);
+                                result_stack.push(None);
+                                continue 'dispatch_loop;
+                            }
+
+                            let Some((idx, _)) = result_stack.pop().unwrap() else {
+                                result_stack.truncate(end_result_stack_len);
+                                result_stack.push(None);
+                                continue 'dispatch_loop;
+                            };
+
+                            let mut leaf_arr_items = types[child_ty].leaf_arr_items(types);
+                            let mut offset = builder.i64_multiply_constant(gl, idx, leaf_arr_items);
+                            ty = child_ty;
+
+                            while let VType::Array(child_ty, width) = types[ty]
+                                && exprs.pop_front().is_some()
+                            {
+                                let Some((expr, _)) = result_stack.pop().unwrap() else {
+                                    result_stack.truncate(end_result_stack_len);
+                                    result_stack.push(None);
+                                    continue 'dispatch_loop;
+                                };
+
+                                leaf_arr_items /= width;
+                                let expr = builder.i64_multiply_constant(gl, expr, leaf_arr_items);
+                                offset = builder.plus(gl, offset, expr);
+                                ty = child_ty;
+                            }
+
+                            if types[ty].is_array() {
+                                diagnostics
+                                    .not_yet_implemented(arenas.get_span(expr), "variable array");
+                                error = true;
+                                result_stack.truncate(end_result_stack_len);
+                                result_stack.push(None);
+                                continue 'dispatch_loop;
+                            }
+
+                            builder.arr_probe(gl, key, offset)
+                        } else {
+                            builder.probe(gl, key)
+                        }
+                    }
                     SymbolVariant::Variable(None) => todo!(),
                     SymbolVariant::Variable(Some(key)) => key,
                 };
 
-                let mut ty = symbol.ty;
-                if types[symbol.ty].is_array() {
+                if types[ty].is_array() {
                     diagnostics.not_yet_implemented(arenas.get_span(expr), "select on array");
                     error = true;
+                    result_stack.truncate(end_result_stack_len);
+                    result_stack.push(None);
                     continue;
                 }
 
-                let mut results = result_stack
-                    .drain(
-                        result_stack.len()
-                            - exprs.len()
-                            - usize::from(matches!(
-                                range_expression,
-                                Some(BitSlice::PlusWidth(..) | BitSlice::MinusWidth(..))
-                            ))..,
-                    )
-                    .rev();
-
-                for result in results.by_ref().take(exprs.len()) {
-                    let Some((expr, _)) = result else {
-                        drop(results);
+                for _ in 0..exprs.len() {
+                    let Some((expr, _)) = result_stack.pop().unwrap() else {
+                        result_stack.truncate(end_result_stack_len);
                         result_stack.push(None);
                         continue 'dispatch_loop;
                     };
@@ -256,8 +303,8 @@ pub fn lower_expr<'a>(
                             (lsb_v, width)
                         }
                         BitSlice::PlusWidth(_, width) => {
-                            let Some((lsb, _)) = results.next().unwrap() else {
-                                drop(results);
+                            let Some((lsb, _)) = result_stack.pop().unwrap() else {
+                                result_stack.truncate(end_result_stack_len);
                                 result_stack.push(None);
                                 continue;
                             };
@@ -267,8 +314,8 @@ pub fn lower_expr<'a>(
                             (lsb, width)
                         }
                         BitSlice::MinusWidth(_, width) => {
-                            let Some((lsb, _)) = results.next().unwrap() else {
-                                drop(results);
+                            let Some((lsb, _)) = result_stack.pop().unwrap() else {
+                                result_stack.truncate(end_result_stack_len);
                                 result_stack.push(None);
                                 continue;
                             };
@@ -287,7 +334,6 @@ pub fn lower_expr<'a>(
                     var = builder.slice(gl, shifted, width as VectorSize);
                 }
 
-                drop(results);
                 result_stack.push(Some((var, ty)));
             }
             Expr::Decimal(decimal) => {
@@ -322,10 +368,10 @@ pub fn lower_expr<'a>(
     }
 
     assert_eq!(result_stack.len(), 1);
-    let Some((value, _)) = result_stack.pop().unwrap() else {
+    let Some((value, ty)) = result_stack.pop().unwrap() else {
         panic!();
     };
-    Ok(value)
+    Ok((value, ty))
 }
 
 // i op j, where op is: + - * / % & | ^ ^~ ~^
@@ -504,4 +550,24 @@ fn bin_modulus<'a>(
     }
 
     Ok((builder.i64_modulus(gl, l, r), types.integer()))
+}
+
+pub fn coerce(
+    gl: &mut GlobalContext,
+    vtypes: &VTypeTable,
+    builder: &mut BasicBlockBuilder,
+    var: VariableKey,
+    from: VTypeKey,
+    to: VTypeKey,
+) -> VariableKey {
+    if from == to {
+        return var;
+    }
+
+    if vtypes[from].is_array() || vtypes[to].is_array() {
+        panic!()
+    }
+
+    let ty = vtypes[to].to_ir_info(vtypes, &mut gl.types).key;
+    builder.cast(gl, var, ty)
 }

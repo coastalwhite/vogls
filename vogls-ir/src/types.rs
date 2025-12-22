@@ -19,10 +19,18 @@ impl Default for TypeTable {
 pub struct TypeKey(NonZeroU32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ArrayWidth(NonZeroU32);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TypeInfo {
+    pub width: Option<ArrayWidth>,
+    pub key: TypeKey,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Type {
     Bits(VectorSize),
     Decimal,
-    Array(TypeKey, u32),
 }
 
 impl Index<TypeKey> for TypeTable {
@@ -55,12 +63,21 @@ impl TypeTable {
     }
 }
 
+impl ArrayWidth {
+    pub fn new(v: u32) -> Self {
+        Self(NonZeroU32::new(v + 1).unwrap())
+    }
+
+    pub fn get(self) -> u32 {
+        self.0.get() - 1
+    }
+}
+
 impl Type {
     pub fn to_net_width(self) -> Option<VectorSize> {
         match self {
             Type::Bits(n) => Some(n),
             Type::Decimal => None,
-            Type::Array(_, _) => None,
         }
     }
 

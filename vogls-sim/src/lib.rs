@@ -1,8 +1,15 @@
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
 
-use slotmap::{new_key_type, SlotMap};
-use vogls_ir::{BinaryOp, Bits, IntrinsicOp, TypeTable, UnaryOp, Value, VectorSize};
+use slotmap::{SlotMap, new_key_type};
+use vogls_ir::{BinaryOp, Bits, IntrinsicOp, TypeTable, UnaryOp, VectorSize};
+
+pub enum SignalValue {
+    Bits(Bits),
+    BitsArray(Box<[Bits]>),
+    Decimal(i64),
+    DecimalArray(Box<[i64]>),
+}
 
 mod bits;
 mod instruction;
@@ -77,7 +84,7 @@ impl Event {
         ctx: &mut Context,
         processes: &SlotMap<VmProcessKey, VmProcess>,
         schedule: &mut BinaryHeap<ScheduledEvent>,
-        signals: &mut HashMap<VmSignalKey, Value>,
+        signals: &mut HashMap<VmSignalKey, SignalValue>,
         listeners: &mut SlotMap<ListenerKey, Event>,
         watches: &mut HashMap<VmSignalKey, Vec<ListenerKey>>,
         types: &TypeTable,
@@ -281,7 +288,6 @@ impl Event {
                                 bit_stack[dst.offset + i] = bit_stack[src.offset + i];
                             }
                         }
-                        T::Array(..) => panic!(),
                         T::Decimal => {
                             decimal_stack[dst.offset] = decimal_stack[src.offset];
                         }
@@ -381,20 +387,22 @@ impl Event {
                 }
                 I::Probe(var, sig) => {
                     match signals.get(&sig).unwrap() {
-                        Value::Bits(Bits::Small(value, size)) => {
+                        SignalValue::Bits(Bits::Small(value, size)) => {
                             bits::load_from_u64(bit_stack, var.offset, *size, *value);
                         }
-                        Value::Bits(Bits::Big(size, value)) => {
+                        SignalValue::Bits(Bits::Big(size, value)) => {
                             bit_stack[var.offset..][..size.div_ceil(8) as usize]
                                 .copy_from_slice(value);
                         }
-                        Value::Decimal(v) => decimal_stack[var.offset] = *v,
+                        SignalValue::Decimal(v) => decimal_stack[var.offset] = *v,
+                        SignalValue::BitsArray(_) => unreachable!(),
+                        SignalValue::DecimalArray(_) => unreachable!(),
                     };
                 }
                 I::Drive(sig, var, partial) => {
                     let signal = signals.get_mut(sig).unwrap();
                     match signal {
-                        Value::Bits(Bits::Big(size, signal_value)) => match partial {
+                        SignalValue::Bits(Bits::Big(size, signal_value)) => match partial {
                             None => {
                                 *signal_value = bit_stack[var.offset..]
                                     [..size.div_ceil(8) as usize]
@@ -404,7 +412,7 @@ impl Event {
                             }
                             Some(_) => todo!(),
                         },
-                        Value::Bits(Bits::Small(signal_value, size)) => match partial {
+                        SignalValue::Bits(Bits::Small(signal_value, size)) => match partial {
                             None => {
                                 *signal_value = bits::store_to_u64(bit_stack, var.offset, *size);
                             }
@@ -415,10 +423,12 @@ impl Event {
                                 *signal_value |= value << offset;
                             }
                         },
-                        Value::Decimal(_) => {
+                        SignalValue::Decimal(_) => {
                             assert!(partial.is_none());
-                            *signal = Value::Decimal(decimal_stack[var.offset])
+                            *signal = SignalValue::Decimal(decimal_stack[var.offset])
                         }
+                        SignalValue::BitsArray(_) => unreachable!(),
+                        SignalValue::DecimalArray(_) => unreachable!(),
                     }
 
                     if let Some(watchers) = watches.remove(sig) {
@@ -432,8 +442,73 @@ impl Event {
                         }
                     }
                 }
-                I::ArrProbe(..) => todo!(),
-                I::ArrDrive(..) => todo!(),
+                I::ArrProbe(dst, signal, idx) => {
+                    let signal = signals.get(signal).unwrap();
+                    let idx = decimal_stack[idx.offset];
+                    match signal {
+                        SignalValue::BitsArray(arr) => match &arr[idx as usize] {
+                            Bits::Small(value, size) => {
+                                bits::load_from_u64(bit_stack, dst.offset, *size, *value);
+                            }
+                            Bits::Big(size, value) => bit_stack[dst.offset..]
+                                [..size.div_ceil(8) as usize]
+                                .copy_from_slice(&value),
+                        },
+                        SignalValue::DecimalArray(arr) => {
+                            decimal_stack[dst.offset] = arr[idx as usize];
+                        }
+                        SignalValue::Bits(_) => unreachable!(),
+                        SignalValue::Decimal(_) => unreachable!(),
+                    };
+                }
+                I::ArrDrive(sig, src, idx, partial) => {
+                    let signal = signals.get_mut(sig).unwrap();
+                    let idx = decimal_stack[idx.offset];
+
+                    match signal {
+                        SignalValue::BitsArray(arr) => match &mut arr[idx as usize] {
+                            Bits::Big(size, signal_value) => match partial {
+                                None => {
+                                    *signal_value = bit_stack[src.offset..]
+                                        [..size.div_ceil(8) as usize]
+                                        .iter()
+                                        .copied()
+                                        .collect();
+                                }
+                                Some(_) => todo!(),
+                            },
+                            Bits::Small(signal_value, size) => match partial {
+                                None => {
+                                    *signal_value =
+                                        bits::store_to_u64(bit_stack, src.offset, *size);
+                                }
+                                Some((offset, length)) => {
+                                    let offset = decimal_stack[offset.offset];
+                                    let value = bits::store_to_u64(bit_stack, src.offset, *length);
+                                    *signal_value &= !(((1u64 << *length) - 1) << offset);
+                                    *signal_value |= value << offset;
+                                }
+                            },
+                        },
+                        SignalValue::DecimalArray(arr) => {
+                            assert!(partial.is_none());
+                            arr[idx as usize] = decimal_stack[src.offset];
+                        }
+                        SignalValue::Bits(_) => unreachable!(),
+                        SignalValue::Decimal(_) => unreachable!(),
+                    }
+
+                    if let Some(watchers) = watches.remove(sig) {
+                        for watcher in watchers {
+                            if let Some(event) = listeners.remove(watcher) {
+                                schedule.push(ScheduledEvent {
+                                    at: ctx.time,
+                                    event,
+                                });
+                            }
+                        }
+                    }
+                }
                 I::Wait(time) => {
                     schedule.push(ScheduledEvent {
                         at: ctx.time + time.0,
@@ -467,7 +542,7 @@ pub fn run(
     ctx: &mut Context,
     processes: &SlotMap<VmProcessKey, VmProcess>,
     schedule: &mut BinaryHeap<ScheduledEvent>,
-    signals: &mut HashMap<VmSignalKey, Value>,
+    signals: &mut HashMap<VmSignalKey, SignalValue>,
     listeners: &mut SlotMap<ListenerKey, Event>,
     watches: &mut HashMap<VmSignalKey, Vec<ListenerKey>>,
     types: &TypeTable,
@@ -482,7 +557,7 @@ pub fn run(
 
         let outcome = se
             .event
-            .evaluate(ctx, processes, schedule, signals, listeners, watches, types,);
+            .evaluate(ctx, processes, schedule, signals, listeners, watches, types);
 
         match outcome {
             EvalOutcome::Next => continue,

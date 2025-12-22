@@ -342,7 +342,15 @@ impl Signal {
         f: &mut fmt::Formatter<'_>,
         ctx: &mut DisplayContext<'_>,
     ) -> fmt::Result {
-        ctx.gl.types[self.ty].ctx_fmt(f, ctx)?;
+        match self.ty.width {
+            None => ctx.gl.types[self.ty.key].ctx_fmt(f, ctx)?,
+            Some(width) => {
+                f.write_str("arr[")?;
+                ctx.gl.types[self.ty.key].ctx_fmt(f, ctx)?;
+                write!(f, "; {}]", width.get())?;
+            },
+        }
+        
         f.write_str(" ")?;
         self.ctx_fmt(f, ctx)?;
         Ok(())
@@ -356,15 +364,10 @@ impl ContextFormat for Time {
 }
 
 impl ContextFormat for Type {
-    fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &mut DisplayContext<'_>) -> fmt::Result {
+    fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut DisplayContext<'_>) -> fmt::Result {
         match self {
             Type::Bits(size) => write!(f, "b{size}"),
             Type::Decimal => f.write_str("d"),
-            Type::Array(ty, size) => {
-                f.write_str("arr[")?;
-                ctx.gl.types[*ty].ctx_fmt(f, ctx)?;
-                write!(f, "; {size}]")
-            }
         }
     }
 }
