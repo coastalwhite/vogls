@@ -45,7 +45,7 @@ module aes_mvn(vec, mat, data_o);
     wire  [7:0] c0, c1, c2, c3, c4, c5, c6, c7;
 
     integer j;
-    always begin
+    always @* begin
 		for (j = 0; j < 8; j = j + 1) begin
 			c0[j] = mat[j*8+0] & vec[7 - j];
 			c1[j] = mat[j*8+1] & vec[7 - j];
