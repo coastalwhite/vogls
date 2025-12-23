@@ -213,9 +213,10 @@ pub fn lower_expr<'a>(
                 };
                 let symbol = &scope.symbols[symbol_key];
                 let mut ty = symbol.ty;
-                let mut var = match symbol.variant {
+                let mut var = match &symbol.variant {
                     SymbolVariant::Constant(value) => {
-                        builder.constant(gl, Value::Decimal(value.unwrap()))
+                        let value = value.clone();
+                        builder.constant(gl, value.into_ir())
                     }
                     SymbolVariant::Genvar(value) => {
                         builder.constant(gl, Value::Decimal(value.unwrap()))
@@ -265,13 +266,11 @@ pub fn lower_expr<'a>(
                                 continue 'dispatch_loop;
                             }
 
-                            builder.arr_probe(gl, key, offset)
+                            builder.arr_probe(gl, *key, offset)
                         } else {
-                            builder.probe(gl, key)
+                            builder.probe(gl, *key)
                         }
                     }
-                    SymbolVariant::Variable(None) => todo!(),
-                    SymbolVariant::Variable(Some(key)) => key,
                 };
 
                 if types[ty].is_array() {

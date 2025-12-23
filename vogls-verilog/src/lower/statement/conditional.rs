@@ -1,47 +1,13 @@
-use std::collections::HashMap;
-
-use vogls_ir::{
-    BasicBlockBuilder, BasicBlockKey, BasicBlockTerminator, GlobalContext, VariableKey,
-};
+use vogls_ir::{BasicBlockBuilder, BasicBlockTerminator, GlobalContext};
 
 use crate::ast::AstId;
 use crate::ast::statement::{
     CaseItemPattern, CaseStatement, CaseStatementVariant, ConditionalStatement, StatementOrNull,
 };
 use crate::lower::diagnostics::Diagnostics;
-use crate::lower::scope::{Scope, SymbolKey};
+use crate::lower::scope::Scope;
 use crate::lower::{VTypeTable, lower_expr, statements_to_process};
 use crate::parser::AstArenas;
-
-struct State {
-    origins: Vec<BasicBlockKey>,
-    symbols: Vec<SymbolKey>,
-    symbol_lookup: HashMap<SymbolKey, usize>,
-    assigned: HashMap<(SymbolKey, BasicBlockKey), VariableKey>,
-}
-
-impl State {
-    fn new() -> Self {
-        State {
-            origins: Vec::new(),
-            symbols: Vec::new(),
-            symbol_lookup: HashMap::new(),
-            assigned: HashMap::new(),
-        }
-    }
-
-    fn insert(&mut self, bb: BasicBlockKey, i: impl Iterator<Item = (SymbolKey, VariableKey)>) {
-        self.origins.push(bb);
-        for (symbol, variable) in i {
-            self.symbol_lookup.entry(symbol).or_insert_with(|| {
-                let idx = self.symbols.len();
-                self.symbols.push(symbol);
-                idx
-            });
-            self.assigned.insert((symbol, bb), variable);
-        }
-    }
-}
 
 pub fn lower<'a>(
     gl: &mut GlobalContext,
@@ -68,7 +34,7 @@ pub fn lower<'a>(
         if_branch.condition,
     )?;
 
-    let mut state = State::new();
+    let mut origins = Vec::new();
 
     let (mut branch_ref, mut if_true_builder) = builder.branch(gl, condition);
     scope.push_scope();
@@ -81,7 +47,7 @@ pub fn lower<'a>(
         if_true_builder,
         if_branch.statement,
     )?;
-    state.insert(if_true_builder.key(), scope.scope_assigned_symbols());
+    origins.push(if_true_builder.key());
     scope.pop_scope();
 
     let mut builder = if_true_builder.next_terminate_later(gl);
@@ -110,7 +76,7 @@ pub fn lower<'a>(
             if_true_builder,
             else_if_branch.statement,
         )?;
-        state.insert(if_true_builder.key(), scope.scope_assigned_symbols());
+        origins.push(if_true_builder.key());
         scope.pop_scope();
 
         builder = if_true_builder.next_terminate_later(gl);
@@ -123,38 +89,17 @@ pub fn lower<'a>(
         scope.push_scope();
         builder =
             lower_statement_or_null(gl, arenas, types, scope, diagnostics, builder, *statement)?;
-        state.insert(builder.key(), scope.scope_assigned_symbols());
+        origins.push(builder.key());
         scope.pop_scope();
 
         builder = builder.jump(gl);
     }
 
-    for bb in &state.origins {
+    for bb in &origins {
         gl.bbs[*bb].terminator = BasicBlockTerminator::Jump(builder.key());
     }
     if let Some(branch_ref) = branch_ref {
-        state.origins.push(branch_ref.origin_key());
         branch_ref.update(gl, builder.key());
-    }
-
-    for symbol in state.symbols {
-        let unassigned_var = scope.scope_variables[symbol]
-            .last()
-            .copied()
-            .map(|(_, v)| v);
-        let srcs = state
-            .origins
-            .iter()
-            .map(|bb| {
-                let var = match state.assigned.get(&(symbol, *bb)) {
-                    None => unassigned_var.unwrap(), // @TODO: better error message.
-                    Some(v) => *v,
-                };
-                (*bb, var)
-            })
-            .collect();
-        let (v, _) = builder.phi(gl, srcs);
-        scope.assign(symbol, v);
     }
 
     Ok(builder)
@@ -181,17 +126,9 @@ pub fn lower_case_statement<'a>(
         CaseStatementVariant::CaseX => todo!(),
     }
 
-    let (expr_var, _) = lower_expr(
-        gl,
-        arenas,
-        types,
-        scope,
-        diagnostics,
-        &mut builder,
-        *expr,
-    )?;
+    let (expr_var, _) = lower_expr(gl, arenas, types, scope, diagnostics, &mut builder, *expr)?;
 
-    let mut state = State::new();
+    let mut origins = Vec::new();
     let mut default = None;
 
     for item in items.iter() {
@@ -203,26 +140,11 @@ pub fn lower_case_statement<'a>(
             }
             CaseItemPattern::Expressions(exprs) => {
                 let fst = exprs.first().expect("spec: 1+ pattern expr in case_item");
-                let (v, _) = lower_expr(
-                    gl,
-                    arenas,
-                    types,
-                    scope,
-                    diagnostics,
-                    &mut builder,
-                    fst,
-                )?;
+                let (v, _) = lower_expr(gl, arenas, types, scope, diagnostics, &mut builder, fst)?;
                 let mut acc = builder.equals(gl, expr_var, v);
                 for e in exprs.iter().skip(1) {
-                    let (v, _) = lower_expr(
-                        gl,
-                        arenas,
-                        types,
-                        scope,
-                        diagnostics,
-                        &mut builder,
-                        e,
-                    )?;
+                    let (v, _) =
+                        lower_expr(gl, arenas, types, scope, diagnostics, &mut builder, e)?;
                     let v = builder.equals(gl, expr_var, v);
                     acc = builder.or(gl, acc, v);
                 }
@@ -241,7 +163,7 @@ pub fn lower_case_statement<'a>(
             if_true_builder,
             case_item.statement_or_null,
         )?;
-        state.insert(if_true_builder.key(), scope.scope_assigned_symbols());
+        origins.push(if_true_builder.key());
         scope.pop_scope();
 
         builder = if_true_builder.next_terminate_later(gl);
@@ -252,36 +174,16 @@ pub fn lower_case_statement<'a>(
         scope.push_scope();
         builder =
             lower_statement_or_null(gl, arenas, types, scope, diagnostics, builder, statement)?;
-        state.insert(builder.key(), scope.scope_assigned_symbols());
+        origins.push(builder.key());
         scope.pop_scope();
         builder = builder.jump(gl);
     } else {
-        state.origins.push(builder.key());
+        origins.push(builder.key());
         builder = builder.jump(gl);
     }
 
-    for bb in &state.origins {
+    for bb in &origins {
         gl.bbs[*bb].terminator = BasicBlockTerminator::Jump(builder.key());
-    }
-
-    for symbol in state.symbols {
-        let unassigned_var = scope.scope_variables[symbol]
-            .last()
-            .copied()
-            .map(|(_, v)| v);
-        let srcs = state
-            .origins
-            .iter()
-            .map(|bb| {
-                let var = match state.assigned.get(&(symbol, *bb)) {
-                    None => unassigned_var.unwrap(), // @TODO: better error message.
-                    Some(v) => *v,
-                };
-                (*bb, var)
-            })
-            .collect();
-        let (v, _) = builder.phi(gl, srcs);
-        scope.assign(symbol, v);
     }
 
     Ok(builder)

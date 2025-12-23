@@ -14,15 +14,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         usage();
         std::process::exit(2);
     };
-    let Some(tl_module_name) = std::env::args().nth(2) else {
-        usage();
-        std::process::exit(2);
-    };
+    let tl_module_name = std::env::args().nth(2);
 
     let path = Path::new(&path);
     vogls::run(
         &path,
-        Some(&tl_module_name),
+        tl_module_name.as_deref(),
         &mut ExecutionContext {
             stdout: Box::new(std::io::stdout()),
             stderr: Box::new(std::io::stderr()),

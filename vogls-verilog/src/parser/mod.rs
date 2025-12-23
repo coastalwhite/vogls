@@ -150,7 +150,7 @@ pub fn parse_file(
 
     while let Some(t) = tkw.get(tkw.offset) {
         match *t.kind {
-            T::KeywordModule => {
+            T::KeywordModule | T::LeftParenStar => {
                 let start = tkw.offset;
                 let module =
                     Module::consume(tkw, scratches, &mut arenas, diagnostics.as_deref_mut())?;

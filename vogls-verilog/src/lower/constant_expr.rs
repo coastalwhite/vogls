@@ -1,4 +1,4 @@
-use vogls_ir::GlobalContext;
+use vogls_ir::{Bits, GlobalContext};
 
 use crate::ast::AstId;
 use crate::ast::constant_expr::ConstantExpr;
@@ -64,36 +64,38 @@ pub fn eval_constant_expr<'a>(
                 let rhs = result_stack.pop().unwrap();
                 let lhs = result_stack.pop().unwrap();
 
-                let (Some(VValue::Integer(lhs)), Some(VValue::Integer(rhs))) = (lhs, rhs) else {
+                let (Some(lhs), Some(rhs)) = (lhs, rhs) else {
                     result_stack.push(None);
                     continue;
                 };
 
                 use BinaryOperator as O;
                 let result = match op {
-                    O::Multiply => lhs * rhs,
-                    O::Divide => lhs / rhs,
-                    O::Modulus => lhs % rhs,
-                    O::BinaryPlus => lhs + rhs,
-                    O::BinaryMinus => lhs - rhs,
-                    O::ShiftLeft => lhs << rhs,
-                    O::ShiftRight => lhs >> rhs,
-                    O::BitwiseAnd => lhs & rhs,
-                    O::BitwiseXor => lhs ^ rhs,
-                    O::BitwiseXnor => !(lhs ^ rhs),
-                    O::BitwiseOr => lhs | rhs,
-                    O::LessThan => i64::from(lhs < rhs),
-                    O::GreaterThan
-                    | O::GreaterThanEqual
-                    | O::LessThanEqual
-                    | O::ArithmeticLeftShift
+                    O::Multiply => VValue::multiply(lhs, rhs),
+                    O::Divide => VValue::divide(lhs, rhs),
+                    O::Modulus => VValue::remainder(lhs, rhs),
+                    O::BinaryPlus => VValue::add(lhs, rhs),
+                    O::BinaryMinus => VValue::sub(lhs, rhs),
+                    O::ShiftLeft => VValue::logical_shift_left(lhs, rhs),
+                    O::ShiftRight => VValue::logical_shift_right(lhs, rhs),
+                    O::BitwiseAnd => VValue::bitwise_and(lhs, rhs),
+                    O::BitwiseXor => VValue::bitwise_xor(lhs, rhs),
+                    O::BitwiseXnor => VValue::bitwise_xnor(lhs, rhs),
+                    O::BitwiseOr => VValue::bitwise_or(lhs, rhs),
+                    O::LessThan => VValue::scalar_from_bool(VValue::less_than(lhs, rhs)),
+                    O::LessThanEqual => VValue::scalar_from_bool(VValue::less_than_equal(lhs, rhs)),
+                    O::GreaterThan => VValue::scalar_from_bool(VValue::greater_than(lhs, rhs)),
+                    O::GreaterThanEqual => {
+                        VValue::scalar_from_bool(VValue::greater_than_equal(lhs, rhs))
+                    }
+                    O::LogicalAnd => VValue::scalar_from_bool(VValue::logical_and(lhs, rhs)),
+                    O::LogicalOr => VValue::scalar_from_bool(VValue::logical_or(lhs, rhs)),
+                    O::ArithmeticLeftShift
                     | O::ArithmeticRightShift
                     | O::LogicalEquality
                     | O::LogicalInequality
                     | O::CaseEquality
-                    | O::CaseInequality
-                    | O::LogicalAnd
-                    | O::LogicalOr => {
+                    | O::CaseInequality => {
                         result_stack.push(None);
                         diagnostics.not_yet_implemented(
                             arenas.get_span(item.expr),
@@ -103,7 +105,7 @@ pub fn eval_constant_expr<'a>(
                         continue;
                     }
                 };
-                result_stack.push(Some(VValue::Integer(result)));
+                result_stack.push(Some(result));
             }
             Expr::Ident(ast_ident, exprs, range_expression) => {
                 if !exprs.is_empty() || range_expression.is_some() {
@@ -123,10 +125,10 @@ pub fn eval_constant_expr<'a>(
                     error = true;
                     continue;
                 };
-                let n = match scope.symbols[symbol_key].variant {
-                    SymbolVariant::Genvar(n) => n.unwrap(),
-                    SymbolVariant::Constant(n) => n.unwrap(),
-                    SymbolVariant::Variable(_) | SymbolVariant::Signal(_) => {
+                let value = match &scope.symbols[symbol_key].variant {
+                    SymbolVariant::Genvar(n) => VValue::Integer(n.unwrap()),
+                    SymbolVariant::Constant(n) => n.clone(),
+                    SymbolVariant::Signal(_) => {
                         result_stack.push(None);
                         diagnostics.not_yet_implemented(
                             arenas.get_item_span(*ast_ident),
@@ -136,16 +138,83 @@ pub fn eval_constant_expr<'a>(
                         continue;
                     }
                 };
-                result_stack.push(Some(VValue::Integer(n)));
+                result_stack.push(Some(value));
+            }
+            Expr::Sized(sized) => {
+                let sized = &arenas.sized_numbers[sized.item.at];
+                let crate::number::Bits::Small(v) = sized.value else {
+                    todo!()
+                };
+                let width = match sized.size {
+                    None => (64 - v.leading_zeros()).max(1),
+                    Some(size) => size.as_u32(),
+                };
+                result_stack.push(Some(VValue::Net(Bits::Small(v, width))));
+            }
+            Expr::Ternary(condition, truthy, falsy) => {
+                if !item.dispatched {
+                    item.dispatched = true;
+                    dispatch_stack.push(item);
+                    dispatch_stack.extend([*condition, *truthy, *falsy].into_iter().map(|expr| {
+                        StackItem {
+                            expr,
+                            dispatched: false,
+                        }
+                    }));
+                    continue;
+                }
+
+                let condition = result_stack.pop().unwrap();
+                let truthy = result_stack.pop().unwrap();
+                let falsy = result_stack.pop().unwrap();
+
+                let (Some(condition), Some(truthy), Some(falsy)) = (condition, truthy, falsy)
+                else {
+                    result_stack.push(None);
+                    continue;
+                };
+
+                let (truthy, falsy) = VValue::coerce_max_size(truthy, falsy);
+
+                if condition.logical_equal(VValue::Net(Bits::Small(0, 1))) {
+                    result_stack.push(Some(truthy));
+                } else {
+                    result_stack.push(Some(falsy));
+                }
+            }
+            Expr::Concatenation(exprs) => {
+                if !item.dispatched {
+                    item.dispatched = true;
+                    dispatch_stack.push(item);
+                    dispatch_stack.extend(exprs.iter().map(|expr| StackItem {
+                        expr,
+                        dispatched: false,
+                    }));
+                    continue;
+                }
+
+                let end_length = result_stack.len() - exprs.len();
+                let Some(mut value) = result_stack.pop().unwrap() else {
+                    result_stack.truncate(end_length);
+                    result_stack.push(None);
+                    continue;
+                };
+
+                for _ in 1..exprs.len() {
+                    let Some(next) = result_stack.pop().unwrap() else {
+                        result_stack.truncate(end_length);
+                        result_stack.push(None);
+                        continue;
+                    };
+                    value = VValue::concatenate(value, next);
+                }
+                result_stack.push(Some(value));
             }
             Expr::FunctionCall(..)
             | Expr::SystemFunctionCall(..)
-            | Expr::Sized(..)
             | Expr::String(..)
             | Expr::Unary(..)
-            | Expr::Concatenation(..)
-            | Expr::Replication(..)
-            | Expr::Ternary(..) => {
+            | Expr::Replication(..) => {
                 result_stack.push(None);
                 diagnostics.not_yet_implemented(
                     arenas.get_span(item.expr),

@@ -1,11 +1,9 @@
-use std::collections::HashMap;
-
-use vogls_ir::{BasicBlockBuilder, GlobalContext, PhiRef, Value};
+use vogls_ir::{BasicBlockBuilder, GlobalContext, Value};
 
 use crate::ast::statement::{LoopStatement, LoopStatementVariant};
 use crate::ast::{AstId, AstIdRange};
 use crate::lower::diagnostics::Diagnostics;
-use crate::lower::scope::{Scope, SymbolKey, SymbolVariant};
+use crate::lower::scope::{Scope, SymbolVariant};
 use crate::lower::{
     Region, VTypeTable, assign_variable_lvalue, get_intersect_symbols_generated, lower_expr,
     statements_to_process,
@@ -87,23 +85,11 @@ pub fn lower_loop_statement<'a>(
         intersect_vars_generated.push(step_symbol_key);
     }
 
-    let mut phi_refs = HashMap::<SymbolKey, PhiRef>::new();
     for symkey in &intersect_vars_generated {
         match &mut scope.symbols[*symkey].variant {
             SymbolVariant::Constant(_) => todo!(),
             SymbolVariant::Genvar(_) => todo!(),
             SymbolVariant::Signal(_) => {}
-            SymbolVariant::Variable(None) => {}
-            SymbolVariant::Variable(Some(current_var)) => {
-                // @TODO: predecessor might be wrong here.
-                let (phi_value, phi) = builder.phi(
-                    gl,
-                    [(predecessor, *current_var), (predecessor, *current_var)].into(),
-                );
-                phi_refs.insert(*symkey, phi);
-                *current_var = phi_value;
-                scope.assign(*symkey, phi_value);
-            }
         }
     }
 
@@ -201,14 +187,6 @@ pub fn lower_loop_statement<'a>(
             builder.update_phi_ref(gl, phi_ref, 1, builder.key(), i_plus_1);
         }
         V::Forever | V::While(_) => {}
-    }
-
-    let bb_key = builder.key();
-    for (symbol_key, phi_ref) in phi_refs {
-        let SymbolVariant::Variable(Some(var)) = &scope.symbols[symbol_key].variant else {
-            todo!();
-        };
-        builder.update_phi_ref(gl, phi_ref, 1, bb_key, *var);
     }
 
     let next_builder = builder.next_builder(gl);

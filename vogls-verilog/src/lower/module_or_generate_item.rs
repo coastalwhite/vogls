@@ -1,13 +1,17 @@
 use std::collections::HashMap;
 
-use vogls_ir::{ConnectionDirection, GlobalContext, ProcessKey, Signal, SignalKey, new_process};
+use vogls_ir::{
+    ConnectionDirection, GlobalContext, ProcessKey, Signal, SignalKey, TypeInfo, TypeTable,
+    new_process,
+};
 
 use crate::ast::constant_expr::ConstantMinTypMaxExpression;
 use crate::ast::module::{
     Dimension, GateInstantiation, GenerateBlock, GenvarAssignment, GenvarDeclaration,
-    ListOfPortConnections, LoopGenerateConstruct, Module, ModuleInstance, ModuleInstantiation,
-    ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration, NInputGateInstance, NInputGateType,
-    NamedParameterAssignment, NamedPortConnection, NetDeclAssignment, NetDeclarationNets,
+    ListOfPortConnections, LocalParameterDeclaration, LoopGenerateConstruct, Module,
+    ModuleInstance, ModuleInstantiation, ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration,
+    NInputGateInstance, NInputGateType, NamedParameterAssignment, NamedPortConnection,
+    NetDeclAssignment, NetDeclarationNets, ParamAssignment, ParameterDeclarationTyping,
     ParameterValueAssignment, VariableType,
 };
 use crate::ast::{AstId, AstIdRange};
@@ -163,11 +167,19 @@ pub fn lower<'a>(
                     for ast_ident in integer_declaration.identifiers.iter() {
                         let ident = arenas.get(ast_ident);
                         let ident = arenas.get_ident(ident.0);
+
+                        let key = gl.signals.insert(Signal {
+                            name: ident.into(),
+                            ty: TypeInfo {
+                                width: None,
+                                key: TypeTable::INT64,
+                            },
+                        });
                         let symbol_key = scope.symbols.insert(Symbol {
                             name: ident.to_string(),
                             definition_site: arenas.get_span(ast_ident),
                             ty: types.insert(VType::Integer),
-                            variant: SymbolVariant::Variable(None),
+                            variant: SymbolVariant::Signal(key),
                         });
                         scope.push(ident, symbol_key);
                     }
@@ -190,7 +202,40 @@ pub fn lower<'a>(
                 ModuleOrGenerateItemDeclaration::Task(_) => todo!(),
             }
         }
-        ModuleOrGenerateItem::LocalParameterDeclaration(_) => todo!(),
+        ModuleOrGenerateItem::LocalParameterDeclaration(id) => {
+            let LocalParameterDeclaration {
+                typing,
+                assignments,
+            } = arenas.get(*id);
+
+            let ty = super::parameter::parameter_typing_to_type(
+                gl,
+                arenas,
+                types,
+                scope,
+                diagnostics,
+                *typing,
+            )?;
+            for assignment in assignments.iter() {
+                let ParamAssignment { param, constant } = arenas.get(assignment);
+                let key = arenas.get_ident(param.item.0);
+                let value = arenas.get(*constant);
+                match value {
+                    ConstantMinTypMaxExpression::Single(id) => {
+                        let value =
+                            eval_constant_expr(gl, arenas, types, &scope, diagnostics, *id)?;
+                        let symbol_key = scope.symbols.insert(Symbol {
+                            name: key.to_string(),
+                            definition_site: arenas.get_item_span(*param),
+                            ty,
+                            variant: SymbolVariant::Constant(value.clone()),
+                        });
+                        scope.push(key, symbol_key);
+                    }
+                    ConstantMinTypMaxExpression::MinTypMax { .. } => todo!(),
+                }
+            }
+        }
         ModuleOrGenerateItem::ParameterOverride => todo!(),
         ModuleOrGenerateItem::ContinuousAssign(assign) => {
             let assign = arenas.get(*assign);
@@ -375,7 +420,6 @@ pub fn lower<'a>(
                                 diagnostics,
                                 *expression,
                             )?;
-                            let value = value.as_integer().unwrap();
                             params.push((key, value, arenas.get_span(*expression)));
                         }
                     }

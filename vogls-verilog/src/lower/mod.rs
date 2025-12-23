@@ -2,6 +2,7 @@ mod constant_expr;
 mod diagnostics;
 mod expression;
 mod module_or_generate_item;
+mod parameter;
 mod procedural_timing_control;
 mod scope;
 mod statement;
@@ -68,7 +69,7 @@ pub struct ModuleParameters<'a> {
 
 #[derive(Clone)]
 pub struct ModuleArgs {
-    pub parameters: Vec<i64>,
+    pub parameters: Vec<VValue>,
     pub signals: Vec<SignalKey>,
 }
 
@@ -77,9 +78,9 @@ pub fn fetch_module_interface<'a>(
     arenas: &'a AstArenas,
     types: &mut VTypeTable,
     module: AstId<Module>,
-    parameters: &[(&'a str, i64, TokenRange)],
+    parameters: &[(&'a str, VValue, TokenRange)],
     diagnostics: &mut Diagnostics,
-) -> Result<(ModuleParameters<'a>, ModuleIo<'a>, Vec<i64>), ()> {
+) -> Result<(ModuleParameters<'a>, ModuleIo<'a>, Vec<VValue>), ()> {
     let Module {
         attribute_instances: _,
         module_identifier: _,
@@ -99,26 +100,14 @@ pub fn fetch_module_interface<'a>(
                 typing,
                 assignments,
             } = arenas.get(p);
-            let ty = match arenas.get(*typing) {
-                ParameterDeclarationTyping::None(_, range) => match range {
-                    Some(range) => {
-                        let width =
-                            range_to_width(gl, arenas, types, &mut scope, diagnostics, *range)?;
-                        types.insert(VType::VectorNet(width))
-                    }
-                    None => types.scalar_net(),
-                },
-                ParameterDeclarationTyping::Integer => types.integer(),
-                ParameterDeclarationTyping::Real
-                | ParameterDeclarationTyping::Realtime
-                | ParameterDeclarationTyping::Time => {
-                    diagnostics.not_yet_implemented(
-                        arenas.get_span(*typing),
-                        "real / realtime / time parameter",
-                    );
-                    return Err(());
-                }
-            };
+            let ty = parameter::parameter_typing_to_type(
+                gl,
+                arenas,
+                types,
+                &mut scope,
+                diagnostics,
+                *typing,
+            )?;
             for assignment in assignments.iter() {
                 let ParamAssignment { param, constant } = arenas.get(assignment);
                 let key = arenas.get_ident(param.item.0);
@@ -127,15 +116,14 @@ pub fn fetch_module_interface<'a>(
                     ConstantMinTypMaxExpression::Single(id) => {
                         let value =
                             eval_constant_expr(gl, arenas, types, &scope, diagnostics, *id)?;
-                        let value = value.as_integer().unwrap();
                         let symbol_key = scope.symbols.insert(Symbol {
                             name: key.to_string(),
                             definition_site: arenas.get_item_span(*param),
                             ty,
-                            variant: SymbolVariant::Constant(Some(value as i64)),
+                            variant: SymbolVariant::Constant(value.clone()),
                         });
                         scope.push(key, symbol_key);
-                        param_values.push(value as i64);
+                        param_values.push(value);
                     }
                     ConstantMinTypMaxExpression::MinTypMax { .. } => todo!(),
                 }
@@ -157,8 +145,8 @@ pub fn fetch_module_interface<'a>(
             continue;
         };
         let symbol_key = scope.get(key).unwrap();
-        scope.symbols[symbol_key].variant = SymbolVariant::Constant(Some(*value));
-        param_values[*param_idx] = *value;
+        scope.symbols[symbol_key].variant = SymbolVariant::Constant(value.clone());
+        param_values[*param_idx] = value.clone();
     }
     if error {
         return Err(());
@@ -346,7 +334,7 @@ pub fn lower_module_to_ir<'a>(
             // @TODO: better definition site
             definition_site: arenas.get_span(root),
             ty: types.insert(VType::Integer),
-            variant: SymbolVariant::Constant(Some(*param)),
+            variant: SymbolVariant::Constant(param.clone()),
         });
         scope.push(key, symbol_key);
     }
@@ -1278,18 +1266,6 @@ fn assign_variable_lvalue<'a>(
                 }
             }
         }
-        SymbolVariant::Variable(v) => {
-            if let Some(range_expression) = range_expression {
-                diagnostics.not_yet_implemented(
-                    arenas.get_span(range_expression),
-                    "variable_lvalue::range_expression[variable]",
-                );
-                return Err(());
-            }
-
-            *v = Some(variable);
-            scope.assign(symbol_key, variable);
-        }
     }
     Ok(())
 }
@@ -1446,18 +1422,6 @@ fn assign_net_lvalue<'a>(
                     }
                 }
             }
-        }
-        SymbolVariant::Variable(v) => {
-            if let Some(range_expression) = range_expression {
-                diagnostics.not_yet_implemented(
-                    arenas.get_span(range_expression),
-                    "variable_lvalue::range_expression[variable]",
-                );
-                return Err(());
-            }
-
-            *v = Some(variable);
-            scope.assign(symbol_key, variable);
         }
     }
     Ok(())

@@ -14,8 +14,8 @@ pub enum SignalValue {
     DecimalArray(Box<[i64]>),
 }
 
-mod bits;
 mod instruction;
+mod bits;
 
 pub use instruction::*;
 

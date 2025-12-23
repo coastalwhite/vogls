@@ -117,7 +117,6 @@ impl<'a> Consumable<'a> for Module {
             arenas,
             diagnostics.as_deref_mut(),
         )?;
-
         Ok(Module {
             attribute_instances,
             module_identifier,

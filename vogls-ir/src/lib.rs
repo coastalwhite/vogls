@@ -19,7 +19,7 @@ new_key_type! { pub struct VariableKey; }
 // @TODO: Do some smarter stuff here. Probably we can use the lsb to say small big and they put a
 // pointer in the u64.
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Bits {
     Small(u64, VectorSize),
     Big(VectorSize, Box<[u8]>),
@@ -53,6 +53,76 @@ impl Bits {
             Bits::Big(s, _) => *s,
         }
     }
+
+    pub fn sign_extend(self, new_size: VectorSize) -> Bits {
+        if self.size() == new_size {
+            return self;
+        }
+
+        assert!(self.size() < new_size);
+        match self {
+            Bits::Small(v, _) if new_size <= 64 => Bits::Small(v, new_size),
+            _ => {
+                let old_size = self.size();
+                let mut bytes =
+                    std::iter::repeat_n(0, new_size.div_ceil(8) as usize).collect::<Box<[u8]>>();
+                bytes[..old_size.div_ceil(8) as usize].copy_from_slice(self.as_slice());
+                Bits::Big(new_size, bytes)
+            }
+        }
+    }
+
+    pub fn from_i64_truncated(value: i64, size: VectorSize) -> Bits {
+        if size == 64 {
+            Bits::Small(value as u64, size)
+        } else if size < 64 {
+            Bits::Small((value as u64) & ((1u64 << size) - 1), size)
+        } else {
+            let mut bytes =
+                std::iter::repeat_n(0, size.div_ceil(8) as usize).collect::<Box<[u8]>>();
+            bytes[..8].copy_from_slice(&bytemuck::bytes_of(&value));
+            Bits::Big(size, bytes)
+        }
+    }
+
+    pub fn not_eq_zero(&self) -> bool {
+        match self {
+            Bits::Small(v, _) => *v != 0,
+            Bits::Big(_, v) => v.iter().any(|b| *b != 0),
+        }
+    }
+
+    pub fn concatenate(lhs: Bits, rhs: Bits) -> Bits {
+        match (lhs, rhs) {
+            (Bits::Small(lv, ls), Bits::Small(rv, rs)) if lv + rv <= 64 => {
+                Bits::Small((lv << rs) | rv, ls + rs)
+            }
+            _ => todo!(),
+        }
+    }
+}
+
+macro_rules! impl_arithmetic {
+    ($(($f:ident, $op:ident)),+ $(,)?) => {
+        impl Bits {
+        $(
+        pub fn $f(lhs: Self, rhs: Self) -> Self {
+            assert_eq!(lhs.size(), rhs.size());
+            match (lhs, rhs) {
+                (Self::Small(l, s), Self::Small(r, _)) => Self::Small(l.$op(r) & ((1u64 << s) - 1), s),
+                (Self::Big(_s, _l), Self::Big(_, _r)) => todo!(),
+                _ => unreachable!(),
+            }
+        }
+        )+
+        }
+    }
+}
+
+impl_arithmetic! {
+    (multiply, wrapping_mul),
+    (add, wrapping_add),
+    (subtract, wrapping_sub),
 }
 
 impl fmt::Display for Bits {
