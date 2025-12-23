@@ -1,4 +1,5 @@
-use crate::ast::expr::{BinaryOperator, BitSlice, Expr, UnaryOperator};
+use crate::ast::constant_expr::ConstantExpr;
+use crate::ast::expr::{BinaryOperator, BitSlice, Expr, Replication, UnaryOperator};
 use crate::ast::statement::SystemTaskIdentifier;
 use crate::ast::{AstId, AstIdRange, AstItem, DecimalRef, Identifier, SizedNumberRef, StringRef};
 use crate::parser::ParseErrorReason;
@@ -12,7 +13,9 @@ pub(crate) type BindingPower = u8;
 
 pub(crate) enum StackItem {
     Paren,
-    Bracket(Vec<Expr>, Vec<TokenRange>),
+    Bracket,
+    Concatenation(Vec<Expr>, Vec<TokenRange>),
+    Replication(AstId<ConstantExpr>, Vec<Expr>, Vec<TokenRange>),
     Brace(AstItem<Identifier>, Vec<Expr>, Vec<TokenRange>),
     BraceS2(
         AstItem<Identifier>,
@@ -66,6 +69,8 @@ fn token_to_binary_op(t: Token) -> Option<(u8, u8, BinaryOperator)> {
         T::GreaterThanEquals => Some((17, 18, B::GreaterThanEqual)),
         T::LessThan => Some((17, 18, B::LessThan)),
         T::LessThanEquals => Some((17, 18, B::LessThanEqual)),
+        T::TripleLessThan => Some((17, 18, B::ArithmeticLeftShift)),
+        T::TripleGreaterThan => Some((17, 18, B::ArithmeticRightShift)),
         T::DoubleEquals => Some((15, 16, B::LogicalEquality)),
         T::BangEquals => Some((15, 16, B::LogicalInequality)),
         T::TripleEquals => Some((13, 14, B::CaseEquality)),
@@ -128,15 +133,21 @@ impl<'a> Consumable<'a> for Expr {
                             diagnostics.as_deref_mut(),
                         )?;
 
-                        tkw.next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
-                        if tkw.next_if_equals(T::RightParen) {
-                            (Expr::SystemFunctionCall(ident, AstIdRange::default()), span)
+                        if tkw.next_if_equals(T::LeftParen) {
+                            if tkw.next_if_equals(T::RightParen) {
+                                (
+                                    Expr::SystemFunctionCall(ident, Some(AstIdRange::default())),
+                                    span,
+                                )
+                            } else {
+                                deepen!(
+                                    StackItem::SystemFnCall(ident, Vec::new(), Vec::new()),
+                                    0,
+                                    span
+                                )
+                            }
                         } else {
-                            deepen!(
-                                StackItem::SystemFnCall(ident, Vec::new(), Vec::new()),
-                                0,
-                                span
-                            )
+                            (Expr::SystemFunctionCall(ident, None), span)
                         }
                     }
                     T::Decimal => (
@@ -164,7 +175,7 @@ impl<'a> Consumable<'a> for Expr {
                     ),
                     T::LeftBracket => {
                         tkw.offset += 1;
-                        deepen!(StackItem::Bracket(Vec::new(), Vec::new()), 0, span)
+                        deepen!(StackItem::Bracket, 0, span)
                     }
                     T::LeftParen => {
                         tkw.offset += 1;
@@ -233,18 +244,63 @@ impl<'a> Consumable<'a> for Expr {
                     StackItem::Paren => {
                         tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
                     }
-                    StackItem::Bracket(mut exprs, mut ranges) => {
+                    StackItem::Bracket => match *tkw.try_next(diagnostics.as_deref_mut())?.kind {
+                        T::RightBracket => {
+                            let expr = arenas.add(current.0, current.1);
+                            let expr = AstIdRange::single(expr);
+                            current = (Expr::Concatenation(expr), location);
+                        }
+                        T::Comma => {
+                            deepen!(
+                                StackItem::Concatenation(vec![current.0], vec![current.1]),
+                                0,
+                                loc
+                            );
+                        }
+                        T::LeftBracket => {
+                            let expr = arenas.add(current.0, current.1);
+                            let expr = expr.into_constant();
+                            deepen!(StackItem::Replication(expr, Vec::new(), Vec::new()), 0, loc);
+                        }
+                        t => {
+                            diagnostics.map(|d| d.unexpected_token(tkw.offset, t));
+                            return Err(());
+                        }
+                    },
+                    StackItem::Concatenation(mut exprs, mut trs) => {
                         exprs.push(current.0);
-                        ranges.push(current.1);
+                        trs.push(current.1);
                         match *tkw.try_next(diagnostics.as_deref_mut())?.kind {
                             T::RightBracket => {
+                                let exprs = arenas.add_range(exprs, trs);
+                                current = (Expr::Concatenation(exprs), location);
+                            }
+                            T::Comma => {
+                                deepen!(StackItem::Concatenation(exprs, trs), 0, loc);
+                            }
+                            t => {
+                                diagnostics.map(|d| d.unexpected_token(tkw.offset, t));
+                                return Err(());
+                            }
+                        }
+                    }
+                    StackItem::Replication(constant_expr, mut exprs, mut trs) => {
+                        exprs.push(current.0);
+                        trs.push(current.1);
+                        match *tkw.try_next(diagnostics.as_deref_mut())?.kind {
+                            T::RightBracket => {
+                                tkw.next_expect(T::RightBracket, diagnostics.as_deref_mut())?;
+                                let exprs = arenas.add_range(exprs, trs);
                                 current = (
-                                    Expr::Concatenation(arenas.add_range(exprs, ranges)),
+                                    Expr::Replication(Replication {
+                                        constant_expr,
+                                        exprs,
+                                    }),
                                     location,
                                 );
                             }
                             T::Comma => {
-                                deepen!(StackItem::Bracket(exprs, ranges), 0, loc);
+                                deepen!(StackItem::Replication(constant_expr, exprs, trs), 0, loc);
                             }
                             t => {
                                 diagnostics.map(|d| d.unexpected_token(tkw.offset, t));
@@ -331,7 +387,7 @@ impl<'a> Consumable<'a> for Expr {
                         match *tkw.try_next(diagnostics.as_deref_mut())?.kind {
                             T::RightParen => {
                                 let params = arenas.add_range(params, trs);
-                                current = (Expr::SystemFunctionCall(ident, params), location);
+                                current = (Expr::SystemFunctionCall(ident, Some(params)), location);
                             }
                             T::Comma => {
                                 deepen!(StackItem::SystemFnCall(ident, params, trs), 0, location)

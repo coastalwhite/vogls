@@ -103,6 +103,8 @@ pub fn lower_expr<'a>(
                     O::GreaterThanEqual => bin_greater_than_equal,
                     O::LessThan => bin_less_than,
                     O::LessThanEqual => bin_less_than_equal,
+                    O::ArithmeticLeftShift => todo!(),
+                    O::ArithmeticRightShift => todo!(),
                     O::LogicalEquality => bin_logical_equality,
                     O::LogicalInequality => bin_logical_inequality,
                     O::CaseEquality => todo!(),
@@ -349,13 +351,15 @@ pub fn lower_expr<'a>(
                 if !item.dispatched {
                     item.dispatched = true;
                     dispatch_stack.push(item);
-                    dispatch_stack.extend(exprs.iter().map(StackItem::new));
+                    if let Some(exprs) = exprs {
+                        dispatch_stack.extend(exprs.iter().map(StackItem::new));
+                    }
                     continue;
                 }
 
                 match arenas.get_ident(ident.item.0) {
                     "vogls_dbg" => {
-                        if exprs.len() != 1 {
+                        if exprs.is_none_or(|e| e.len() != 1) {
                             diagnostics
                                 .not_yet_implemented(arenas.get_span(expr), "vogls_dbg #args != 1");
                             result_stack.push(None);

@@ -86,6 +86,8 @@ pub fn eval_constant_expr<'a>(
                     O::GreaterThan
                     | O::GreaterThanEqual
                     | O::LessThanEqual
+                    | O::ArithmeticLeftShift
+                    | O::ArithmeticRightShift
                     | O::LogicalEquality
                     | O::LogicalInequality
                     | O::CaseEquality

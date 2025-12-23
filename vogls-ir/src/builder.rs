@@ -963,4 +963,8 @@ impl BasicBlockBuilder {
             Some((offset, width)),
         ));
     }
+
+    pub fn process(&self) -> ProcessKey {
+        self.process
+    }
 }

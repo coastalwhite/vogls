@@ -18,7 +18,8 @@ use vogls_verilog::lower::{
     fetch_module_interface, lower_module_to_ir,
 };
 use vogls_verilog::parser::{
-    parse_file, report, report_error, AstArenas, Diagnostics as ParserDiagnostics, ParseContext, ParserScratches, TokenWalker
+    AstArenas, Diagnostics as ParserDiagnostics, ParseContext, ParserScratches, TokenWalker,
+    parse_file, report, report_error,
 };
 use vogls_verilog::tokenizer::Tokenized;
 
@@ -244,6 +245,25 @@ pub fn run(
         &[],
         &mut diagnostics,
     ) else {
+        for (location, warning) in &diagnostics.warnings {
+            writeln!(ectx.stderr, "[WARN]: {warning}")?;
+            let mut out = String::new();
+            report(&token_buffer, *location, &mut out)?;
+            writeln!(ectx.stderr, "{out}")?;
+        }
+
+        for (location, err, context) in &diagnostics.errors {
+            let mut out = String::new();
+            report_error(&token_buffer, err.clone(), *location, &mut out)?;
+            write!(ectx.stderr, "{out}")?;
+            if !context.is_empty() {
+                writeln!(ectx.stderr, "context:")?;
+                for c in context {
+                    writeln!(ectx.stderr, "- {c}")?;
+                }
+            }
+            writeln!(ectx.stderr)?;
+        }
         return Err("top_level fetch_module error".into());
     };
     assert!(top_level_io.ports.is_empty());

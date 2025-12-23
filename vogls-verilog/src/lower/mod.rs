@@ -2,6 +2,7 @@ mod constant_expr;
 mod diagnostics;
 mod expression;
 mod module_or_generate_item;
+mod procedural_timing_control;
 mod scope;
 mod statement;
 mod vtype;
@@ -21,9 +22,8 @@ use scope::Scope;
 
 use constant_expr::eval_constant_expr;
 use vogls_ir::{
-    BasicBlockBuilder, Bits, ConnectionDirection, GlobalContext, IntrinsicArg, IntrinsicOp,
-    ProcessKey, Signal, SignalKey, Time, Type, TypeInfo, Value, VariableKey, VectorSize,
-    new_process,
+    BasicBlockBuilder, ConnectionDirection, GlobalContext, IntrinsicArg, IntrinsicOp, ProcessKey,
+    Signal, SignalKey, Type, TypeInfo, Value, VariableKey, VectorSize, new_process,
 };
 
 use crate::ast::constant_expr::{
@@ -36,12 +36,10 @@ use crate::ast::module::{
     PortReference, Range,
 };
 use crate::ast::statement::{
-    BlockingAssignment, DelayControl, DelayValue, EventControl, EventExpressionPrimary,
-    LoopStatementVariant, NetLValue, NonBlockingAssignment, ProceduralTimingControl, Statement,
-    StatementOrNull, VariableAssignment, VariableLValue,
+    BlockingAssignment, LoopStatementVariant, NetLValue, NonBlockingAssignment, Statement,
+    StatementContent, StatementOrNull, VariableAssignment, VariableLValue, VariableLValueFlat,
 };
 use crate::ast::{AstId, AstIdRange, RangeExpression};
-use crate::number::Decimal;
 use crate::parser::{AstArenas, TokenRange};
 
 use self::expression::lower_expr;
@@ -438,11 +436,12 @@ fn statements_to_process<'a>(
     mut builder: BasicBlockBuilder,
     stmts: &[Statement],
 ) -> Result<BasicBlockBuilder, ()> {
+    use StatementContent as S;
     for statement in stmts.iter() {
-        match statement {
-            Statement::BlockingAssignment(ba) => {
+        match statement.content {
+            S::BlockingAssignment(ba) => {
                 // @Incorrect
-                let ba = arenas.get(*ba);
+                let ba = arenas.get(ba);
                 let BlockingAssignment {
                     variable_lvalue,
                     delay_or_event_control,
@@ -472,7 +471,7 @@ fn statements_to_process<'a>(
                     Region::Active,
                 )?;
             }
-            Statement::CaseStatement(case_statement) => {
+            S::CaseStatement(case_statement) => {
                 builder = statement::conditional::lower_case_statement(
                     gl,
                     arenas,
@@ -480,10 +479,10 @@ fn statements_to_process<'a>(
                     scope,
                     diagnostics,
                     builder,
-                    *case_statement,
+                    case_statement,
                 )?
             }
-            Statement::ConditionalStatement(conditional) => {
+            S::ConditionalStatement(conditional) => {
                 builder = statement::conditional::lower(
                     gl,
                     arenas,
@@ -491,12 +490,12 @@ fn statements_to_process<'a>(
                     scope,
                     diagnostics,
                     builder,
-                    *conditional,
+                    conditional,
                 )?
             }
-            Statement::DisableStatement => todo!(),
-            Statement::EventTrigger => todo!(),
-            Statement::LoopStatement(ls) => {
+            S::DisableStatement => todo!(),
+            S::EventTrigger => todo!(),
+            S::LoopStatement(ls) => {
                 builder = statement::loop_statement::lower_loop_statement(
                     gl,
                     arenas,
@@ -504,15 +503,15 @@ fn statements_to_process<'a>(
                     scope,
                     diagnostics,
                     builder,
-                    *ls,
+                    ls,
                 )?
             }
-            Statement::NonBlockingAssignment(nba) => {
+            S::NonBlockingAssignment(nba) => {
                 let NonBlockingAssignment {
                     variable_lvalue,
                     delay_or_event_control,
                     expression,
-                } = arenas.get(*nba);
+                } = arenas.get(nba);
                 assert!(delay_or_event_control.is_none());
 
                 let (value, value_ty) = lower_expr(
@@ -537,159 +536,22 @@ fn statements_to_process<'a>(
                     Region::NonBlocking,
                 )?;
             }
-            Statement::ParBlock => todo!(),
-            Statement::ProceduralContinuousAssignments => todo!(),
-            Statement::ProceduralTimingControlStatement(ptc, statement) => {
-                match arenas.get(*ptc) {
-                    ProceduralTimingControl::DelayControl(delay_control) => {
-                        let delay_control = arenas.get(*delay_control);
-                        match delay_control {
-                            DelayControl::DelayValue(value) => {
-                                let value = match arenas.get(*value) {
-                                    DelayValue::UnsignedNumber(value) => {
-                                        let value = &arenas.decimals[value.at];
-                                        let value = match value {
-                                            Decimal::Small(v) => *v as usize,
-                                            _ => todo!(),
-                                        };
-                                        value
-                                    }
-                                    DelayValue::Identifier(_) => {
-                                        todo!()
-                                        // let ScopeItem::Constant(v) = scope
-                                        //     .get(&arenas.get_ident(value.0))
-                                        //     .expect("unknown ident")
-                                        // else {
-                                        //     todo!();
-                                        // };
-                                        // *v as usize
-                                    }
-                                };
-
-                                builder = if value == 0 {
-                                    // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 159
-                                    //
-                                    // """
-                                    // An explicit zero delay (#0) requires that the process be
-                                    // suspended and added as an inactive event for the current time so
-                                    // that the process is resumed in the next simulation cycle in the
-                                    // current time.
-                                    // """
-                                    builder.wait_region(gl, Region::Inactive as u8)
-                                } else {
-                                    builder.wait(gl, Time(value as u64))
-                                };
-                            }
-                        }
-                    }
-                    ProceduralTimingControl::EventControl(event_control) => {
-                        builder = builder.jump(gl);
-                        let start_key = builder.key();
-
-                        let mut conditions: Vec<(WatchCondition, VariableKey, AstId<Expr>)> =
-                            Vec::new();
-                        let mut signals = Vec::new();
-                        match arenas.get(*event_control) {
-                            EventControl::Star => todo!(),
-                            EventControl::EventExpression(event_expression) => {
-                                for event_expression in event_expression.0.iter() {
-                                    let (expr, condition) = match arenas.get(event_expression) {
-                                        EventExpressionPrimary::Expression(expr) => {
-                                            (expr, WatchCondition::None)
-                                        }
-                                        EventExpressionPrimary::Posedge(expr) => {
-                                            (expr, WatchCondition::Posedge)
-                                        }
-                                        EventExpressionPrimary::Negedge(expr) => {
-                                            (expr, WatchCondition::Negedge)
-                                        }
-                                    };
-
-                                    let Expr::Ident(ast_ident, exprs, range_expression) =
-                                        arenas.get(*expr)
-                                    else {
-                                        panic!("not an ident");
-                                    };
-                                    if !exprs.is_empty() || range_expression.is_some() {
-                                        diagnostics.not_yet_implemented(
-                                            arenas.get_span(*expr),
-                                            "event expression of this kind",
-                                        );
-                                        return Err(());
-                                    }
-
-                                    let ident = arenas.get_ident(ast_ident.item.0);
-                                    let Some(symbol_key) = scope.get(ident) else {
-                                        diagnostics.var_not_found(arenas, *ast_ident);
-                                        return Err(());
-                                    };
-                                    let SymbolVariant::Signal(key) =
-                                        &scope.symbols[symbol_key].variant
-                                    else {
-                                        panic!("not a signal");
-                                    };
-                                    let key = *key;
-
-                                    let (variable, _) = lower_expr(
-                                        gl,
-                                        arenas,
-                                        types,
-                                        scope,
-                                        diagnostics,
-                                        &mut builder,
-                                        *expr,
-                                    )?;
-                                    conditions.push((condition, variable, *expr));
-                                    signals.push(key);
-                                }
-                            }
-                        }
-
-                        builder = builder.watch(gl, signals);
-
-                        let mut acc = builder.constant(gl, Value::Bits(Bits::Small(0, 1)));
-                        for (condition, before, expr) in conditions.into_iter() {
-                            use WatchCondition as C;
-
-                            let (after, _) = lower_expr(
-                                gl,
-                                arenas,
-                                types,
-                                scope,
-                                diagnostics,
-                                &mut builder,
-                                expr,
-                            )?;
-                            let cond = match condition {
-                                C::Posedge => {
-                                    let t = builder.binary_neg(gl, before);
-                                    builder.and(gl, t, after)
-                                }
-                                C::Negedge => {
-                                    let t = builder.binary_neg(gl, after);
-                                    builder.and(gl, before, t)
-                                }
-                                C::None => builder.not_equals(gl, before, after),
-                            };
-                            acc = builder.or(gl, acc, cond);
-                        }
-
-                        builder = builder.branch_false_to(gl, acc, start_key);
-                    }
-                }
-
-                builder = statement::lower_statement_or_null(
+            S::ParBlock => todo!(),
+            S::ProceduralContinuousAssignments => todo!(),
+            S::ProceduralTimingControlStatement(ptc, statement) => {
+                builder = procedural_timing_control::lower(
                     gl,
                     arenas,
                     types,
                     scope,
                     diagnostics,
                     builder,
-                    *statement,
-                )?;
+                    ptc,
+                    statement,
+                )?
             }
-            Statement::SeqBlock(id) => {
-                let seq_block = arenas.get(*id);
+            S::SeqBlock(id) => {
+                let seq_block = arenas.get(id);
                 let statements = seq_block
                     .statements
                     .iter()
@@ -705,8 +567,8 @@ fn statements_to_process<'a>(
                     &statements,
                 )?;
             }
-            Statement::SystemTaskEnable(id) => {
-                let system_task_enable = arenas.get(*id);
+            S::SystemTaskEnable(id) => {
+                let system_task_enable = arenas.get(id);
 
                 let ident = system_task_enable.system_task_identifier.item;
                 let ident = &arenas.text[ident.0.start..ident.0.end];
@@ -716,7 +578,7 @@ fn statements_to_process<'a>(
                         let expressions = system_task_enable.expressions;
                         if expressions.len() != 1 {
                             diagnostics.warnings.push((
-                                arenas.get_span(*id),
+                                arenas.get_span(id),
                                 "display with multiple arguments or format strings".to_string(),
                             ));
                         }
@@ -776,8 +638,8 @@ fn statements_to_process<'a>(
                     }
                 }
             }
-            Statement::TaskEnable => todo!(),
-            Statement::WaitStatement => todo!(),
+            S::TaskEnable => todo!(),
+            S::WaitStatement => todo!(),
         }
     }
 
@@ -794,6 +656,10 @@ fn add_var_assign_intersect_symbols_generated<'a>(
 ) {
     let va = arenas.get(var_assign);
     let lvalue = arenas.get(va.lvalue);
+    if lvalue.0.len() != 1 {
+        panic!("not supported");
+    }
+    let lvalue = arenas.get(lvalue.0.get(0));
     let ident = arenas.get_ident(lvalue.ident.item.0);
     if black_list.insert(ident) {
         symbol_keys.push(scope.get(ident).unwrap());
@@ -806,6 +672,8 @@ fn get_intersect_symbols_generated<'a>(
     stmts: AstIdRange<Statement>,
     arenas: &'a AstArenas,
 ) -> Vec<SymbolKey> {
+    use StatementContent as S;
+
     let mut symbols = Vec::new();
     let mut black_list = HashSet::<&str>::new();
     let mut stack = Vec::new();
@@ -813,17 +681,31 @@ fn get_intersect_symbols_generated<'a>(
     while let Some(mut stmts) = stack.pop() {
         while let Some(stmt) = stmts.pop_front() {
             let stmt = arenas.get(stmt);
-            match stmt {
-                Statement::BlockingAssignment(id) => {
-                    let ba = arenas.get(*id);
+            match stmt.content {
+                S::BlockingAssignment(id) => {
+                    let ba = arenas.get(id);
                     let lvalue = arenas.get(ba.variable_lvalue);
-                    let ident = arenas.get_ident(lvalue.ident.item.0);
-                    if black_list.insert(ident) {
-                        symbols.push(scope.get(ident).unwrap());
+                    for lvalue in lvalue.0.iter() {
+                        let lvalue = arenas.get(lvalue);
+                        let ident = arenas.get_ident(lvalue.ident.item.0);
+                        if black_list.insert(ident) {
+                            symbols.push(scope.get(ident).unwrap());
+                        }
                     }
                 }
-                Statement::CaseStatement(id) => {
-                    let c = arenas.get(*id);
+                S::NonBlockingAssignment(id) => {
+                    let nba = arenas.get(id);
+                    let lvalue = arenas.get(nba.variable_lvalue);
+                    for lvalue in lvalue.0.iter() {
+                        let lvalue = arenas.get(lvalue);
+                        let ident = arenas.get_ident(lvalue.ident.item.0);
+                        if black_list.insert(ident) {
+                            symbols.push(scope.get(ident).unwrap());
+                        }
+                    }
+                }
+                S::CaseStatement(id) => {
+                    let c = arenas.get(id);
                     stack.push(stmts);
                     stack.extend(c.items.iter().filter_map(|c| {
                         match arenas.get(arenas.get(c).statement_or_null) {
@@ -833,8 +715,8 @@ fn get_intersect_symbols_generated<'a>(
                     }));
                     break;
                 }
-                Statement::ConditionalStatement(id) => {
-                    let c = arenas.get(*id);
+                S::ConditionalStatement(id) => {
+                    let c = arenas.get(id);
                     stack.push(stmts);
                     match arenas.get(c.if_branch.statement) {
                         StatementOrNull::Attribute(_) => {}
@@ -856,10 +738,10 @@ fn get_intersect_symbols_generated<'a>(
                     }
                     break;
                 }
-                Statement::DisableStatement => todo!(),
-                Statement::EventTrigger => todo!(),
-                Statement::LoopStatement(id) => {
-                    let ls = arenas.get(*id);
+                S::DisableStatement => todo!(),
+                S::EventTrigger => todo!(),
+                S::LoopStatement(id) => {
+                    let ls = arenas.get(id);
                     if let LoopStatementVariant::For(init, _, step) = &ls.variant {
                         add_var_assign_intersect_symbols_generated(
                             gl,
@@ -882,33 +764,25 @@ fn get_intersect_symbols_generated<'a>(
                     stack.push(AstIdRange::single(ls.statement));
                     break;
                 }
-                Statement::NonBlockingAssignment(id) => {
-                    let nba = arenas.get(*id);
-                    let lvalue = arenas.get(nba.variable_lvalue);
-                    let ident = arenas.get_ident(lvalue.ident.item.0);
-                    if black_list.insert(ident) {
-                        symbols.push(scope.get(ident).unwrap());
-                    }
-                }
-                Statement::ParBlock => todo!(),
-                Statement::ProceduralContinuousAssignments => todo!(),
-                Statement::ProceduralTimingControlStatement(_, statement) => {
+                S::ParBlock => todo!(),
+                S::ProceduralContinuousAssignments => todo!(),
+                S::ProceduralTimingControlStatement(_, statement) => {
                     stack.push(stmts);
-                    match arenas.get(*statement) {
+                    match arenas.get(statement) {
                         StatementOrNull::Attribute(_) => {}
                         StatementOrNull::Statement(stmt) => stack.push(AstIdRange::single(*stmt)),
                     };
                     break;
                 }
-                Statement::SeqBlock(id) => {
-                    let seq_block = arenas.get(*id);
+                S::SeqBlock(id) => {
+                    let seq_block = arenas.get(id);
                     stack.push(stmts);
                     stack.push(seq_block.statements);
                     break;
                 }
-                Statement::SystemTaskEnable(_) => continue,
-                Statement::TaskEnable => todo!(),
-                Statement::WaitStatement => todo!(),
+                S::SystemTaskEnable(_) => continue,
+                S::TaskEnable => todo!(),
+                S::WaitStatement => todo!(),
             }
         }
     }
@@ -1247,16 +1121,21 @@ fn assign_variable_lvalue<'a>(
     scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
     builder: &mut BasicBlockBuilder,
-    lvalue: AstId<VariableLValue>,
+    ast_lvalue: AstId<VariableLValue>,
     variable: VariableKey,
     variable_ty: VTypeKey,
     region: Region,
 ) -> Result<(), ()> {
-    let VariableLValue {
+    let lvalue = arenas.get(ast_lvalue);
+    if lvalue.0.len() != 1 {
+        diagnostics.not_yet_implemented(arenas.get_span(ast_lvalue), "concat lvalue");
+        return Err(());
+    }
+    let VariableLValueFlat {
         ident,
         exprs,
         range_expression,
-    } = arenas.get(lvalue);
+    } = arenas.get(lvalue.0.get(0));
 
     let lvalue_ident = arenas.get_ident(ident.item.0);
     let Some(symbol_key) = scope.get(&lvalue_ident) else {

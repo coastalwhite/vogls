@@ -14,10 +14,9 @@ pub enum BitSlice {
 }
 
 #[derive(Clone, Copy)]
-#[expect(unused)]
 pub struct Replication {
-    pub(crate) subject: AstId<Expr>,
-    pub(crate) repeats: AstId<Expr>,
+    pub constant_expr: AstId<ConstantExpr>,
+    pub exprs: AstIdRange<Expr>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -47,6 +46,8 @@ pub enum BinaryOperator {
     GreaterThanEqual,
     LessThan,
     LessThanEqual,
+    ArithmeticLeftShift,
+    ArithmeticRightShift,
     LogicalEquality,
     LogicalInequality,
     CaseEquality,
@@ -68,7 +69,7 @@ pub enum Expr {
     Ternary(AstId<Expr>, AstId<Expr>, AstId<Expr>),
     Ident(AstItem<Identifier>, AstIdRange<Expr>, Option<BitSlice>),
     FunctionCall(AstItem<Identifier>, AstIdRange<Expr>),
-    SystemFunctionCall(AstItem<SystemTaskIdentifier>, AstIdRange<Expr>),
+    SystemFunctionCall(AstItem<SystemTaskIdentifier>, Option<AstIdRange<Expr>>),
     Decimal(DecimalRef),
     Sized(AstItem<SizedNumberRef>),
     String(StringRef),
@@ -123,6 +124,8 @@ impl BinaryOperator {
             B::GreaterThanEqual => ">=",
             B::LessThan => "<",
             B::LessThanEqual => "<=",
+            B::ArithmeticLeftShift => "<<<",
+            B::ArithmeticRightShift => ">>>",
             B::LogicalEquality => "==",
             B::LogicalInequality => "!=",
             B::CaseEquality => "===",
@@ -198,8 +201,10 @@ impl Expr {
             }
             Expr::SystemFunctionCall(ident, exprs) => {
                 writeln!(f, "system fn call: {}", arenas.get_ident(ident.item.0))?;
-                for e in exprs.iter() {
-                    arenas.get(e).tree_fmt_impl(arenas, f, depth + 1)?;
+                if let Some(exprs) = exprs {
+                    for e in exprs.iter() {
+                        arenas.get(e).tree_fmt_impl(arenas, f, depth + 1)?;
+                    }
                 }
             }
             Expr::Decimal(decimal) => {

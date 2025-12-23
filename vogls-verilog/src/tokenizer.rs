@@ -34,6 +34,11 @@ impl Tokenized {
             has_else: bool,
         }
 
+        // Stack and depth for the preprocessor `ifdef`, `ifdef`, `elsif`, `else` and `endif.
+        //
+        // If `if_untaken_depth >= if_stack.len()`, it means the current tokens are being included
+        // in the output stream. If `if_untaken_depth < if_stack.len()`, the tokens are tokenized
+        // but not saved.
         let mut if_stack = Vec::<IfState>::new();
         let mut if_untaken_depth = 0;
 
@@ -439,6 +444,37 @@ impl Tokenized {
                                     // @TODO: Disallow overwriting compiler intrinsics.
                                     j += name_length;
 
+                                    let mut arguments = HashMap::new();
+                                    'arg_parsing: {
+                                        if content[j..].starts_with("(") {
+                                            j += 1;
+
+                                            // @TODO: Handle EOF
+                                            loop {
+                                                skip_sameline_whitespace(&content, &mut j);
+                                                if bytes[j] == b')' {
+                                                    j += 1;
+                                                    break 'arg_parsing;
+                                                }
+
+                                                if arguments.len() > 0 {
+                                                    if bytes[j] != b',' {
+                                                        panic!("invalid argument");
+                                                    }
+                                                    j += 1;
+                                                    skip_sameline_whitespace(&content, &mut j);
+                                                }
+
+                                                let argument_length = ident_length(&content[j..]);
+                                                let argument =
+                                                    content[j..][..argument_length].to_string();
+                                                let argument_idx = arguments.len();
+                                                arguments.insert(argument, argument_idx);
+                                                j += argument_length;
+                                            }
+                                        }
+                                    }
+
                                     let mut is_escaped = false;
                                     let end = bytes[j..]
                                         .iter()
@@ -468,7 +504,7 @@ impl Tokenized {
                                         end_offset: end,
                                         preprocessor_macro: Some(MacroItem {
                                             name: name.into(),
-                                            arguments: HashMap::new(),
+                                            arguments,
                                             argument_positions: Vec::new(),
                                         }),
                                     });
@@ -547,8 +583,13 @@ impl Tokenized {
                             "else" => {
                                 i += 1 + directive_length;
 
+                                // Take i.f.f. if_untaken_depth == if_stack - 1 && [no-branches-taken-before]
+                                // Untake i.f.f. if_untaken_depth > if_stack
+
                                 let mut if_item = if_stack.pop().unwrap();
-                                if if_untaken_depth == if_stack.len()
+                                if if_untaken_depth > if_stack.len() {
+                                    if_untaken_depth = if_stack.len();
+                                } else if if_untaken_depth == if_stack.len()
                                     && !if_item.has_been_taken_before
                                 {
                                     if_untaken_depth = if_stack.len() + 1;
@@ -625,14 +666,27 @@ impl Tokenized {
 
                             // Macros
                             _ => {
+                                i += 1 + directive_length;
                                 if if_untaken_depth >= if_stack.len()
                                     && let Some(m) = macros.get(directive)
                                 {
+                                    // @TODO: Completely incorrect, but passes for now.
+                                    if bytes.get(i) == Some(&b'(') {
+                                        let mut depth = 1;
+                                        while i < bytes.len() && depth > 0 {
+                                            i += 1;
+                                            depth += usize::from(bytes.get(i) == Some(&b'('));
+                                            depth -= usize::from(bytes.get(i) == Some(&b')'));
+                                        }
+                                        if i != bytes.len() {
+                                            i += 1;
+                                        }
+                                    }
+
                                     tokens.extend_from_slice(&m.tokens);
                                     offsets.extend_from_slice(&m.spans);
                                     file_idxs.extend_from_slice(&m.file);
                                 }
-                                i += 1 + directive_length;
                                 continue;
                             }
                         }

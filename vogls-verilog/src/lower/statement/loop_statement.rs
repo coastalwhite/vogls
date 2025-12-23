@@ -68,6 +68,19 @@ pub fn lower_loop_statement<'a>(
     if let V::For(_, _, step) = ls.variant {
         let step = arenas.get(step);
         let step_lvalue = arenas.get(step.lvalue);
+        if step_lvalue.0.len() != 1 {
+            diagnostics.not_yet_implemented(arenas.get_span(step.lvalue), "step concat lvalue");
+            return Err(());
+        }
+        let step_lvalue = arenas.get(step_lvalue.0.get(0));
+        if !step_lvalue.exprs.is_empty() || step_lvalue.range_expression.is_some() {
+            diagnostics.not_yet_implemented(
+                arenas.get_span(step.lvalue),
+                "step with exprs or range expressions",
+            );
+            return Err(());
+        }
+
         let step_symbol_key = scope
             .get(arenas.get_ident(step_lvalue.ident.item.0))
             .unwrap();

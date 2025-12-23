@@ -168,7 +168,12 @@ pub fn parse_file(
 
                 match directive {
                     "timescale" => tkw.offset += 6,
-                    _ => todo!("{}", directive),
+                    _ => {
+                        if let Some(diagnostics) = diagnostics.as_deref_mut() {
+                            diagnostics.incomplete(tkw.offset, "directive not-yet supported");
+                        }
+                        return Err(());
+                    }
                 }
             }
             t => {

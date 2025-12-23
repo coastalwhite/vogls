@@ -558,7 +558,7 @@ pub fn lower<'a>(
                 bb_builder,
                 std::slice::from_ref(arenas.get(statement)),
             )?;
-            bb_builder.watch_for_ins_to(gl, bb_key);
+            bb_builder.jump_to(gl, bb_key);
             processes.push(section_key);
         }
         ModuleOrGenerateItem::LoopGenerateConstruct(id) => {

@@ -285,9 +285,10 @@ impl<'a> TokenWalker<'a> {
         let mut lparens = 0i32;
         let mut lbraces = 0i32;
         let mut lbrackets = 0i32;
+        let mut lbegin = 0i32;
 
         for (i, &t) in self.tokens.iter().enumerate().skip(self.offset) {
-            if t == token && lparens == 0 && lbraces == 0 && lbrackets == 0 {
+            if t == token && lparens == 0 && lbraces == 0 && lbrackets == 0 && lbegin == 0 {
                 return Some(i);
             }
 
@@ -299,6 +300,8 @@ impl<'a> TokenWalker<'a> {
                 if t == T::RightBrace   { lbraces   -= 1; }
                 if t == T::LeftBracket  { lbrackets += 1; }
                 if t == T::RightBracket { lbrackets -= 1; }
+                if t == T::KeywordBegin { lbegin    += 1; }
+                if t == T::KeywordEnd   { lbegin    -= 1; }
             };
         }
 

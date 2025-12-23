@@ -21,7 +21,13 @@ use super::{
 //   | { attribute_instance } task_enable
 //   | { attribute_instance } wait_statement
 #[derive(Clone, Copy)]
-pub enum Statement {
+pub struct Statement {
+    pub attr_instances: AstIdRange<AttributeInstance>,
+    pub content: StatementContent,
+}
+
+#[derive(Clone, Copy)]
+pub enum StatementContent {
     BlockingAssignment(AstId<BlockingAssignment>),
     CaseStatement(AstId<CaseStatement>),
     ConditionalStatement(AstId<ConditionalStatement>),
@@ -55,8 +61,14 @@ pub struct NetLValue {
 //   hierarchical_variable_identifier [ { [ expression ] } [ range_expression ] ]
 //   | { variable_lvalue { , variable_lvalue } }
 #[derive(Clone, Copy)]
-pub struct VariableLValue {
-    // @Incomplete
+pub struct VariableLValue(pub AstIdRange<VariableLValueFlat>);
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 506
+// variable_lvalue ::=
+//   hierarchical_variable_identifier [ { [ expression ] } [ range_expression ] ]
+//   | { variable_lvalue { , variable_lvalue } }
+#[derive(Clone, Copy)]
+pub struct VariableLValueFlat {
     pub ident: AstItem<Identifier>,
     pub exprs: AstIdRange<Expr>,
     pub range_expression: Option<AstId<RangeExpression>>,
