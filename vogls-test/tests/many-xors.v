@@ -3,7 +3,7 @@ module aes_mvn(vec, mat, data_o);
     input [63:0] mat;
     output data_o;
 
-    always begin
+    always @* begin
 		data_o =
             (mat[0*8+2] & vec[7])
           ^ (mat[1*8+2] & vec[6])

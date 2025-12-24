@@ -54,25 +54,28 @@ pub fn try_item_parse<'a, T: Consumable<'a>>(
     Some(AstItem { item, loc })
 }
 
-pub fn parse_until_reaching<'a, T: Consumable<'a>>(
+pub fn parse_one_or_more_while<'a, T: Consumable<'a>>(
     tkw: &mut TokenWalker<'a>,
     sc: &mut ParserScratches,
     arenas: &mut AstArenas,
-    end: Token,
     mut diagnostics: Option<&mut Diagnostics>,
+    condition: impl Fn(&mut TokenWalker<'a>) -> bool,
 ) -> Result<AstIdRange<T>, ()> {
+    let start = tkw.offset;
+    let item = T::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+    let token_range = TokenRange {
+        start,
+        end: tkw.offset,
+    };
+
     // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
     // here.
     let mut items = Vec::new();
     let mut spans = Vec::new();
+    items.push(item);
+    spans.push(token_range);
 
-    loop {
-        let token = tkw.try_next(diagnostics.as_deref_mut())?;
-        if *token.kind == end {
-            break;
-        }
-        tkw.offset -= 1;
-
+    while condition(tkw) {
         let start = tkw.offset;
         let item = T::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
         let token_range = TokenRange {
@@ -91,38 +94,11 @@ pub fn parse_one_or_more_delimited<'a, T: Consumable<'a>>(
     sc: &mut ParserScratches,
     arenas: &mut AstArenas,
     delimiter: Token,
-    mut diagnostics: Option<&mut Diagnostics>,
+    diagnostics: Option<&mut Diagnostics>,
 ) -> Result<AstIdRange<T>, ()> {
-    let start = tkw.offset;
-    let item = T::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
-    let token_range = TokenRange {
-        start,
-        end: tkw.offset,
-    };
-
-    // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
-    // here.
-    let mut items = Vec::new();
-    let mut spans = Vec::new();
-    items.push(item);
-    spans.push(token_range);
-
-    loop {
-        if !tkw.next_if_equals(delimiter) {
-            break;
-        }
-
-        let start = tkw.offset;
-        let item = T::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
-        let token_range = TokenRange {
-            start,
-            end: tkw.offset,
-        };
-        items.push(item);
-        spans.push(token_range);
-    }
-
-    Ok(arenas.add_range(items, spans))
+    parse_one_or_more_while(tkw, sc, arenas, diagnostics, |tkw| {
+        tkw.next_if_equals(delimiter)
+    })
 }
 
 pub fn parse_one_or_more_delimited_and_after<'a, T: Consumable<'a>>(
@@ -209,6 +185,38 @@ pub fn parse_one_or_more_delimited_one_of<'a, T: Consumable<'a>>(
     Ok(arenas.add_range(items, spans))
 }
 
+pub fn parse_until_reaching<'a, T: Consumable<'a>>(
+    tkw: &mut TokenWalker<'a>,
+    sc: &mut ParserScratches,
+    arenas: &mut AstArenas,
+    end: Token,
+    mut diagnostics: Option<&mut Diagnostics>,
+) -> Result<AstIdRange<T>, ()> {
+    // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
+    // here.
+    let mut items = Vec::new();
+    let mut spans = Vec::new();
+
+    loop {
+        let token = tkw.try_next(diagnostics.as_deref_mut())?;
+        if *token.kind == end {
+            break;
+        }
+        tkw.offset -= 1;
+
+        let start = tkw.offset;
+        let item = T::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        let token_range = TokenRange {
+            start,
+            end: tkw.offset,
+        };
+        items.push(item);
+        spans.push(token_range);
+    }
+
+    Ok(arenas.add_range(items, spans))
+}
+
 pub fn parse_zero_or_more_delimited<'a, T: Consumable<'a>>(
     tkw: &mut TokenWalker<'a>,
     sc: &mut ParserScratches,
@@ -255,28 +263,24 @@ pub fn parse_zero_or_more_while_next<'a, T: Consumable<'a>>(
     sc: &mut ParserScratches,
     arenas: &mut AstArenas,
     mut diagnostics: Option<&mut Diagnostics>,
-    next: Token,
+    condition: impl Fn(Token) -> bool,
 ) -> Result<AstIdRange<T>, ()> {
     // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
     // here.
     let mut items = Vec::new();
     let mut spans = Vec::new();
 
-    while tkw.get(tkw.offset).is_some_and(|t| *t.kind == next) {
+    while tkw.get(tkw.offset).is_some_and(|t| condition(*t.kind)) {
         let start = tkw.offset;
-        match T::consume(tkw, sc, arenas, diagnostics.as_deref_mut()) {
-            Ok(item) => {
-                let token_range = TokenRange {
-                    start,
-                    end: tkw.offset,
-                };
-                items.push(item);
-                spans.push(token_range);
-            }
-            Err(err) => {
-                return Err(err);
-            }
-        }
+        let Ok(item) = T::consume(tkw, sc, arenas, diagnostics.as_deref_mut()) else {
+            return Err(());
+        };
+        let token_range = TokenRange {
+            start,
+            end: tkw.offset,
+        };
+        items.push(item);
+        spans.push(token_range);
     }
 
     Ok(arenas.add_range(items, spans))
@@ -380,84 +384,6 @@ pub fn parse_one_or_more<'a, T: Consumable<'a>>(
         if tkw.is_empty() {
             break;
         }
-    }
-
-    Ok(arenas.add_range(items, spans))
-}
-
-pub fn parse_one_or_more_until_fail<'a, T: Consumable<'a>>(
-    tkw: &mut TokenWalker<'a>,
-    sc: &mut ParserScratches,
-    arenas: &mut AstArenas,
-    diagnostics: Option<&mut Diagnostics>,
-) -> Result<AstIdRange<T>, ()> {
-    let start = tkw.offset;
-    let item = T::consume(tkw, sc, arenas, diagnostics)?;
-    let token_range = TokenRange {
-        start,
-        end: tkw.offset,
-    };
-
-    // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
-    // here.
-    let mut items = Vec::new();
-    let mut spans = Vec::new();
-    items.push(item);
-    spans.push(token_range);
-
-    loop {
-        let Some(item) = T::try_consume(tkw, sc, arenas) else {
-            break;
-        };
-        let token_range = TokenRange {
-            start,
-            end: tkw.offset,
-        };
-        items.push(item);
-        spans.push(token_range);
-    }
-
-    Ok(arenas.add_range(items, spans))
-}
-
-pub fn parse_one_or_more_delimited_until_fail<'a, T: Consumable<'a>>(
-    tkw: &mut TokenWalker<'a>,
-    sc: &mut ParserScratches,
-    arenas: &mut AstArenas,
-    delimiter: Token,
-    diagnostics: Option<&mut Diagnostics>,
-) -> Result<AstIdRange<T>, ()> {
-    let start = tkw.offset;
-    let item = T::consume(tkw, sc, arenas, diagnostics)?;
-    let token_range = TokenRange {
-        start,
-        end: tkw.offset,
-    };
-
-    // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
-    // here.
-    let mut items = Vec::new();
-    let mut spans = Vec::new();
-    items.push(item);
-    spans.push(token_range);
-
-    loop {
-        let save = tkw.offset;
-        if !tkw.next_if_equals(delimiter) {
-            break;
-        }
-
-        let start = tkw.offset;
-        let Some(item) = T::try_consume(tkw, sc, arenas) else {
-            tkw.offset = save;
-            break;
-        };
-        let token_range = TokenRange {
-            start,
-            end: tkw.offset,
-        };
-        items.push(item);
-        spans.push(token_range);
     }
 
     Ok(arenas.add_range(items, spans))

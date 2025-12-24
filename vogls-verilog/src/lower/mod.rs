@@ -37,8 +37,9 @@ use crate::ast::module::{
     PortReference, Range,
 };
 use crate::ast::statement::{
-    BlockingAssignment, LoopStatementVariant, NetLValue, NonBlockingAssignment, Statement,
-    StatementContent, StatementOrNull, VariableAssignment, VariableLValue, VariableLValueFlat,
+    BlockingAssignment, LoopStatementVariant, NetLValue, NonBlockingAssignment,
+    ProceduralTimingControlStatement, Statement, StatementContent, StatementOrNull,
+    VariableAssignment, VariableLValue, VariableLValueFlat,
 };
 use crate::ast::{AstId, AstIdRange, RangeExpression};
 use crate::parser::{AstArenas, TokenRange};
@@ -526,7 +527,11 @@ fn statements_to_process<'a>(
             }
             S::ParBlock => todo!(),
             S::ProceduralContinuousAssignments => todo!(),
-            S::ProceduralTimingControlStatement(ptc, statement) => {
+            S::ProceduralTimingControlStatement(id) => {
+                let ProceduralTimingControlStatement {
+                    procedural_timing_control,
+                    statement_or_null,
+                } = arenas.get(id);
                 builder = procedural_timing_control::lower(
                     gl,
                     arenas,
@@ -534,8 +539,8 @@ fn statements_to_process<'a>(
                     scope,
                     diagnostics,
                     builder,
-                    ptc,
-                    statement,
+                    *procedural_timing_control,
+                    *statement_or_null,
                 )?
             }
             S::SeqBlock(id) => {
@@ -754,9 +759,13 @@ fn get_intersect_symbols_generated<'a>(
                 }
                 S::ParBlock => todo!(),
                 S::ProceduralContinuousAssignments => todo!(),
-                S::ProceduralTimingControlStatement(_, statement) => {
+                S::ProceduralTimingControlStatement(ptc) => {
+                    let ProceduralTimingControlStatement {
+                        procedural_timing_control: _,
+                        statement_or_null,
+                    } = arenas.get(ptc);
                     stack.push(stmts);
-                    match arenas.get(statement) {
+                    match arenas.get(*statement_or_null) {
                         StatementOrNull::Attribute(_) => {}
                         StatementOrNull::Statement(stmt) => stack.push(AstIdRange::single(*stmt)),
                     };

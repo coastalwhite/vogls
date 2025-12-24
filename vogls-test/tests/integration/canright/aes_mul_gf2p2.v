@@ -101,7 +101,7 @@ module tb();
         b_i = 2'b11;
         #1
         $vogls_assert_eq(z_i, 2'b11);
-        #1
+        #1 ;
     end
 
 endmodule

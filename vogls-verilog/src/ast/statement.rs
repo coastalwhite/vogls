@@ -37,11 +37,19 @@ pub enum StatementContent {
     NonBlockingAssignment(AstId<NonBlockingAssignment>),
     ParBlock,
     ProceduralContinuousAssignments,
-    ProceduralTimingControlStatement(AstId<ProceduralTimingControl>, AstId<StatementOrNull>),
+    ProceduralTimingControlStatement(AstId<ProceduralTimingControlStatement>),
     SeqBlock(AstId<SeqBlock>),
     SystemTaskEnable(AstId<SystemTaskEnable>),
     TaskEnable,
     WaitStatement,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 499
+// procedural_timing_control_statement ::= procedural_timing_control statement_or_null
+#[derive(Clone, Copy)]
+pub struct ProceduralTimingControlStatement {
+    pub procedural_timing_control: AstId<ProceduralTimingControl>,
+    pub statement_or_null: AstId<StatementOrNull>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 506

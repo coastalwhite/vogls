@@ -39,13 +39,10 @@ impl<'a> Consumable<'a> for Module {
         // [ list_of_port_declarations ] ; { non_port_module_item }
         // endmodule
 
-        let attribute_instances = parse_zero_or_more_while_next(
-            tkw,
-            sc,
-            arenas,
-            diagnostics.as_deref_mut(),
-            T::LeftParenStar,
-        )?;
+        let attribute_instances =
+            parse_zero_or_more_while_next(tkw, sc, arenas, diagnostics.as_deref_mut(), |t| {
+                t == T::LeftParenStar
+            })?;
         tkw.next_expect(T::KeywordModule, diagnostics.as_deref_mut())?;
         let end_at = tkw.try_find_corresponding(
             T::KeywordEndModule,
@@ -324,12 +321,15 @@ impl<'a> Consumable<'a> for InoutDeclaration {
         }
         let signed = tkw.next_if_equals(T::KeywordSigned);
         // @Incomplete: [ range ]
-        let port_identifiers = parse_one_or_more_delimited_until_fail::<Identifier>(
+        let port_identifiers = parse_one_or_more_while::<Identifier>(
             tkw,
             sc,
             arenas,
-            T::Comma,
             diagnostics.as_deref_mut(),
+            |tkw| {
+                tkw.get(tkw.offset + 1).is_some_and(|t| *t.kind == T::Ident)
+                    && tkw.next_if_equals(T::Comma)
+            },
         )?;
 
         Ok(Self {
@@ -363,12 +363,15 @@ impl<'a> Consumable<'a> for InputDeclaration {
         if tkw.get(tkw.offset).is_some_and(|t| *t.kind == T::LeftBrace) {
             range = Some(parse::<Range>(tkw, sc, arenas, diagnostics.as_deref_mut())?);
         }
-        let port_identifiers = parse_one_or_more_delimited_until_fail::<Identifier>(
+        let port_identifiers = parse_one_or_more_while::<Identifier>(
             tkw,
             sc,
             arenas,
-            T::Comma,
             diagnostics.as_deref_mut(),
+            |tkw| {
+                tkw.get(tkw.offset + 1).is_some_and(|t| *t.kind == T::Ident)
+                    && tkw.next_if_equals(T::Comma)
+            },
         )?;
 
         Ok(Self {
@@ -423,12 +426,15 @@ impl<'a> Consumable<'a> for OutputDeclaration {
         if tkw.get(tkw.offset).is_some_and(|t| *t.kind == T::LeftBrace) {
             range = Some(parse::<Range>(tkw, sc, arenas, diagnostics.as_deref_mut())?);
         }
-        let identifiers = parse_one_or_more_delimited_until_fail::<Identifier>(
+        let identifiers = parse_one_or_more_while::<Identifier>(
             tkw,
             sc,
             arenas,
-            T::Comma,
             diagnostics.as_deref_mut(),
+            |tkw| {
+                tkw.get(tkw.offset + 1).is_some_and(|t| *t.kind == T::Ident)
+                    && tkw.next_if_equals(T::Comma)
+            },
         )?;
 
         Ok(Self {
@@ -453,12 +459,15 @@ impl<'a> Consumable<'a> for OutputNet {
             T::KeywordReg => Self::Register,
             T::KeywordInteger => Self::Integer,
             T::KeywordTime => Self::Time,
-            _ => Self::NetType(NetType::consume(
-                tkw,
-                sc,
-                arenas,
-                diagnostics.as_deref_mut(),
-            )?),
+            _ => {
+                tkw.offset -= 1;
+                Self::NetType(NetType::consume(
+                    tkw,
+                    sc,
+                    arenas,
+                    diagnostics.as_deref_mut(),
+                )?)
+            }
         })
     }
 }
@@ -1274,7 +1283,7 @@ impl<'a> Consumable<'a> for NetIdent {
             sc,
             arenas,
             diagnostics.as_deref_mut(),
-            T::LeftBrace,
+            |t| t == T::LeftBrace,
         )?;
 
         Ok(Self { ident, dimension })
@@ -1348,12 +1357,15 @@ impl<'a> Consumable<'a> for GenvarDeclaration {
         // genvar_declaration ::= genvar list_of_genvar_identifiers ;
 
         tkw.next_expect(T::KeywordGenvar, diagnostics.as_deref_mut())?;
-        let identifiers = parse_one_or_more_delimited_until_fail(
+        let identifiers = parse_one_or_more_while::<Identifier>(
             tkw,
             sc,
             arenas,
-            T::Comma,
             diagnostics.as_deref_mut(),
+            |tkw| {
+                tkw.get(tkw.offset + 1).is_some_and(|t| *t.kind == T::Ident)
+                    && tkw.next_if_equals(T::Comma)
+            },
         )?;
         tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
 
@@ -1447,13 +1459,10 @@ impl<'a> Consumable<'a> for VariableType {
         // @Incomplete
 
         let identifier = item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
-        let dimensions = parse_zero_or_more_while_next(
-            tkw,
-            sc,
-            arenas,
-            diagnostics.as_deref_mut(),
-            T::LeftBrace,
-        )?;
+        let dimensions =
+            parse_zero_or_more_while_next(tkw, sc, arenas, diagnostics.as_deref_mut(), |t| {
+                t == T::LeftBrace
+            })?;
         Ok(Self {
             identifier,
             dimensions,

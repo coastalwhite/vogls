@@ -127,7 +127,7 @@ pub enum OutputNet {
 // | tri
 // | triand | trior | tri0 | tri1
 // | uwire | wire | wand | wor
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub enum NetType {
     Supply0,
     Supply1,

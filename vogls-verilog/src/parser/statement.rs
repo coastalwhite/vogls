@@ -4,9 +4,9 @@ use crate::ast::statement::{
     BlockingAssignment, CaseItem, CaseItemPattern, CaseStatement, CaseStatementVariant,
     ConditionalStatement, DelayControl, DelayOrEventControl, DelayValue, EventControl,
     EventExpression, EventExpressionPrimary, IfBranch, LoopStatement, LoopStatementVariant,
-    NetLValue, NonBlockingAssignment, ProceduralTimingControl, SeqBlock, Statement,
-    StatementContent, StatementOrNull, SystemTaskEnable, SystemTaskIdentifier, VariableAssignment,
-    VariableLValue, VariableLValueFlat,
+    NetLValue, NonBlockingAssignment, ProceduralTimingControl, ProceduralTimingControlStatement,
+    SeqBlock, Statement, StatementContent, StatementOrNull, SystemTaskEnable, SystemTaskIdentifier,
+    VariableAssignment, VariableLValue, VariableLValueFlat,
 };
 use crate::ast::{
     AstIdRange, AstItem, AttributeInstance, DecimalRef, Identifier, RangeExpression, TextRef,
@@ -48,7 +48,7 @@ impl<'a> Consumable<'a> for Statement {
             sc,
             arenas,
             diagnostics.as_deref_mut(),
-            T::LeftParenStar,
+            |t| t == T::LeftParenStar,
         )?;
         let content = StatementContent::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
 
@@ -92,13 +92,14 @@ impl<'a> Consumable<'a> for StatementContent {
                 Ok(Self::SeqBlock(seq_block))
             }
             T::Hash | T::AtSign => {
-                let procedural_timing_control =
-                    parse::<ProceduralTimingControl>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
-                let statement =
-                    parse::<StatementOrNull>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                let procedural_timing_control_statement = parse::<ProceduralTimingControlStatement>(
+                    tkw,
+                    sc,
+                    arenas,
+                    diagnostics.as_deref_mut(),
+                )?;
                 Ok(Self::ProceduralTimingControlStatement(
-                    procedural_timing_control,
-                    statement,
+                    procedural_timing_control_statement,
                 ))
             }
             T::KeywordForever | T::KeywordRepeat | T::KeywordWhile | T::KeywordFor => {
@@ -130,13 +131,16 @@ impl<'a> Consumable<'a> for StatementContent {
                 diagnostics.as_deref_mut(),
             )?)),
             T::Ident => {
-                match tkw.get(tkw.offset + 1).map(|t| *t.kind) {
-                    Some(T::Semicolon) => {
+                match *tkw
+                    .try_get(tkw.offset + 1, diagnostics.as_deref_mut())?
+                    .kind
+                {
+                    T::Semicolon => {
                         // @Incomplete: This also supports arguments
                         tkw.offset += 2;
                         Ok(Self::TaskEnable)
                     }
-                    Some(T::Equals) => {
+                    T::Equals => {
                         let ba = parse::<BlockingAssignment>(
                             tkw,
                             sc,
@@ -146,7 +150,7 @@ impl<'a> Consumable<'a> for StatementContent {
                         tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
                         return Ok(Self::BlockingAssignment(ba));
                     }
-                    Some(T::LessThanEquals) => {
+                    T::LessThanEquals => {
                         let nba = parse::<NonBlockingAssignment>(
                             tkw,
                             sc,
@@ -156,71 +160,100 @@ impl<'a> Consumable<'a> for StatementContent {
                         tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
                         return Ok(Self::NonBlockingAssignment(nba));
                     }
-                    _ => {
+                    T::LeftBrace => {
                         let start = tkw.offset;
-                        if try_parse::<VariableLValue>(tkw, sc, arenas).is_some() {
-                            match *tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?.kind {
-                                T::LessThanEquals => {
-                                    tkw.offset = start;
-                                    let nba = parse::<NonBlockingAssignment>(
-                                        tkw,
-                                        sc,
-                                        arenas,
-                                        diagnostics.as_deref_mut(),
-                                    )?;
-                                    tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
-                                    return Ok(Self::NonBlockingAssignment(nba));
-                                }
-                                T::Equals => {
-                                    tkw.offset = start;
-                                    let ba = parse::<BlockingAssignment>(
-                                        tkw,
-                                        sc,
-                                        arenas,
-                                        diagnostics.as_deref_mut(),
-                                    )?;
-                                    tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
-                                    return Ok(Self::BlockingAssignment(ba));
-                                }
-                                _ => {}
+                        let end = loop {
+                            tkw.offset += 2;
+                            let Some(corresponding_brace) = tkw.find_next_same_depth(T::RightBrace)
+                            else {
+                                diagnostics
+                                    .map(|d| d.no_corresponding(tkw.offset - 1, T::RightBrace));
+                                return Err(());
+                            };
+
+                            tkw.offset = corresponding_brace;
+                            if tkw
+                                .get(corresponding_brace + 1)
+                                .is_none_or(|t| *t.kind != T::LeftBrace)
+                            {
+                                break corresponding_brace + 1;
+                            }
+                        };
+                        tkw.offset = start;
+
+                        match *tkw.try_get(end, diagnostics.as_deref_mut())?.kind {
+                            T::LessThanEquals => {
+                                let nba = parse::<NonBlockingAssignment>(
+                                    tkw,
+                                    sc,
+                                    arenas,
+                                    diagnostics.as_deref_mut(),
+                                )?;
+                                tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+                                Ok(Self::NonBlockingAssignment(nba))
+                            }
+                            T::Equals => {
+                                let ba = parse::<BlockingAssignment>(
+                                    tkw,
+                                    sc,
+                                    arenas,
+                                    diagnostics.as_deref_mut(),
+                                )?;
+                                tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+                                Ok(Self::BlockingAssignment(ba))
+                            }
+                            _ => {
+                                diagnostics.map(|d| d.incomplete(tkw.offset, "statement"));
+                                Err(())
                             }
                         }
-
+                    }
+                    _ => {
                         diagnostics.map(|d| d.incomplete(tkw.offset, "statement"));
                         Err(())
                     }
                 }
             }
-            _ => {
-                let start = tkw.offset;
-                if try_parse::<VariableLValue>(tkw, sc, arenas).is_some() {
-                    match *tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?.kind {
-                        T::LessThanEquals => {
-                            tkw.offset = start;
-                            let nba = parse::<NonBlockingAssignment>(
-                                tkw,
-                                sc,
-                                arenas,
-                                diagnostics.as_deref_mut(),
-                            )?;
-                            tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
-                            return Ok(Self::NonBlockingAssignment(nba));
-                        }
-                        T::Equals => {
-                            tkw.offset = start;
-                            let ba = parse::<BlockingAssignment>(
-                                tkw,
-                                sc,
-                                arenas,
-                                diagnostics.as_deref_mut(),
-                            )?;
-                            tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
-                            return Ok(Self::BlockingAssignment(ba));
-                        }
-                        _ => {}
+            T::LeftBracket => {
+                tkw.offset += 1;
+                let Some(end) = tkw.find_next_same_depth(T::RightBracket) else {
+                    diagnostics.map(|d| d.no_corresponding(tkw.offset - 1, T::RightBracket));
+                    return Err(());
+                };
+                tkw.offset -= 1;
+
+                match *tkw.try_get(end + 1, diagnostics.as_deref_mut())?.kind {
+                    T::LessThanEquals => {
+                        let nba = parse::<NonBlockingAssignment>(
+                            tkw,
+                            sc,
+                            arenas,
+                            diagnostics.as_deref_mut(),
+                        )?;
+                        tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+                        Ok(Self::NonBlockingAssignment(nba))
+                    }
+                    T::Equals => {
+                        let ba = parse::<BlockingAssignment>(
+                            tkw,
+                            sc,
+                            arenas,
+                            diagnostics.as_deref_mut(),
+                        )?;
+                        tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+                        Ok(Self::BlockingAssignment(ba))
+                    }
+                    _ => {
+                        diagnostics.map(|d| d.incomplete(tkw.offset, "statement"));
+                        Err(())
                     }
                 }
-
+            }
+            T::KeywordEnd => {
+                diagnostics.map(|d| d.unexpected_token(tkw.offset, T::KeywordEnd));
+                Err(())
+            }
+            _ => {
                 diagnostics.map(|d| d.incomplete(tkw.offset, "statement"));
                 Err(())
             }
@@ -519,13 +552,14 @@ impl<'a> Consumable<'a> for SeqBlock {
 
         // @Incomplete: [ : block_identifier { block_item_declaration } ]
         tkw.next_expect(T::KeywordBegin, diagnostics.as_deref_mut())?;
-        let statements = parse_until_reaching::<Statement>(
+        let statements = parse_zero_or_more_while_next::<Statement>(
             tkw,
             sc,
             arenas,
-            T::KeywordEnd,
             diagnostics.as_deref_mut(),
+            |t| t != T::KeywordEnd,
         )?;
+        tkw.next_expect(T::KeywordEnd, diagnostics.as_deref_mut())?;
 
         Ok(Self { statements })
     }
@@ -1111,6 +1145,28 @@ impl<'a> Consumable<'a> for IfBranch {
         Ok(Self {
             condition,
             statement,
+        })
+    }
+}
+
+impl<'a> Consumable<'a> for ProceduralTimingControlStatement {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 499
+        // procedural_timing_control_statement ::= procedural_timing_control statement_or_null
+
+        let procedural_timing_control =
+            parse::<ProceduralTimingControl>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        let statement_or_null =
+            parse::<StatementOrNull>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+
+        Ok(Self {
+            procedural_timing_control,
+            statement_or_null,
         })
     }
 }
