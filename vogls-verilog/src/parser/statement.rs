@@ -6,7 +6,7 @@ use crate::ast::statement::{
     EventExpression, EventExpressionPrimary, IfBranch, LoopStatement, LoopStatementVariant,
     NetLValue, NonBlockingAssignment, ProceduralTimingControl, ProceduralTimingControlStatement,
     SeqBlock, Statement, StatementContent, StatementOrNull, SystemTaskEnable, SystemTaskIdentifier,
-    VariableAssignment, VariableLValue, VariableLValueFlat,
+    TaskEnable, VariableAssignment, VariableLValue, VariableLValueFlat,
 };
 use crate::ast::{
     AstIdRange, AstItem, AttributeInstance, DecimalRef, Identifier, RangeExpression, TextRef,
@@ -137,8 +137,10 @@ impl<'a> Consumable<'a> for StatementContent {
                 {
                     T::Semicolon => {
                         // @Incomplete: This also supports arguments
-                        tkw.offset += 2;
-                        Ok(Self::TaskEnable)
+                        let task_enable =
+                            parse::<TaskEnable>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                        tkw.offset += 1;
+                        Ok(Self::TaskEnable(task_enable))
                     }
                     T::Equals => {
                         let ba = parse::<BlockingAssignment>(
@@ -1168,5 +1170,18 @@ impl<'a> Consumable<'a> for ProceduralTimingControlStatement {
             procedural_timing_control,
             statement_or_null,
         })
+    }
+}
+
+impl<'a> Consumable<'a> for TaskEnable {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        // @Incomplete
+        let ident = item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        Ok(Self { ident })
     }
 }

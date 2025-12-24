@@ -187,14 +187,16 @@ pub fn lower<'a>(
                         statement_or_null,
                     } = arenas.get(*id);
 
-                    todo!()
-                    // let name = arenas.get_ident(ident.item.0);
-                    // scope.symbols.insert(Symbol {
-                    //     name: name.to_string(),
-                    //     definition_site: arenas.get_item_span(*ident),
-                    //     ty: (),
-                    //     variant: (),
-                    // });
+                    // @FIXME: Currently the tasks just get lowered with the Scope of the caller,
+                    // but this should be the scope of the definer. I think there is probably some
+                    // stuff that can be done here by only lowering once and then reusing.
+                    let name = arenas.get_ident(ident.item.0);
+                    let symbol_key = scope.symbols.insert(Symbol {
+                        name: name.to_string(),
+                        definition_site: arenas.get_item_span(*ident),
+                        variant: SymbolVariant::Task(*statement_or_null),
+                    });
+                    scope.push(name, symbol_key);
                 }
             }
         }
@@ -204,7 +206,8 @@ pub fn lower<'a>(
                 assignments,
             } = arenas.get(*id);
 
-            let ty = super::parameter::parameter_typing_to_type(
+            // @FIXME: Coerce value to ty.
+            let _ty = super::parameter::parameter_typing_to_type(
                 gl,
                 arenas,
                 scope,

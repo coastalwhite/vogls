@@ -40,7 +40,7 @@ pub enum StatementContent {
     ProceduralTimingControlStatement(AstId<ProceduralTimingControlStatement>),
     SeqBlock(AstId<SeqBlock>),
     SystemTaskEnable(AstId<SystemTaskEnable>),
-    TaskEnable,
+    TaskEnable(AstId<TaskEnable>),
     WaitStatement,
 }
 
@@ -295,4 +295,10 @@ pub struct ConditionalStatement {
 pub struct IfBranch {
     pub condition: AstId<Expr>,
     pub statement: AstId<StatementOrNull>,
+}
+
+#[derive(Clone, Copy)]
+pub struct TaskEnable {
+    // @Incomplete
+    pub ident: AstItem<Identifier>,
 }

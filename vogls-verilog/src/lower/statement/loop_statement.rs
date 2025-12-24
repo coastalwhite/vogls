@@ -86,6 +86,7 @@ pub fn lower_loop_statement<'a>(
         match &mut scope.symbols[*symkey].variant {
             SymbolVariant::Constant(_) => todo!(),
             SymbolVariant::Genvar(_) => todo!(),
+            SymbolVariant::Task(_) => todo!(),
             SymbolVariant::Signal(_dims, _) => {}
         }
     }

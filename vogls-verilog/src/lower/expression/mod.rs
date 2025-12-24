@@ -208,6 +208,7 @@ pub fn lower_expr<'a>(
                         VType::Integer,
                         builder.constant(gl, Value::Decimal(value.unwrap())),
                     ),
+                    SymbolVariant::Task(_) => todo!(),
                     SymbolVariant::Signal(dims, key) => {
                         let ty = VType::from_ir(gl.signals[*key].ty);
                         let mut dims = &dims[..];

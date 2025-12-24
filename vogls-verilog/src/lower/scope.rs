@@ -3,16 +3,18 @@ use std::ops::{Index, IndexMut};
 
 use vogls_ir::SignalKey;
 
+use crate::ast::statement::StatementOrNull;
+use crate::ast::AstId;
 use crate::parser::TokenRange;
 
 use super::vvalue::VValue;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SymbolKey(usize);
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct SymbolTable(Vec<Symbol>);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone)]
 pub struct Symbol {
     pub name: String,
     pub definition_site: TokenRange,
@@ -40,14 +42,15 @@ impl SymbolTable {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone)]
 pub enum SymbolVariant {
     Genvar(Option<i64>),
     Constant(VValue),
     Signal(Vec<u32>, SignalKey),
+    Task(AstId<StatementOrNull>),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Scope<'a> {
     look_up: HashMap<&'a str, Vec<(usize, SymbolKey)>>,
     pub symbols: SymbolTable,

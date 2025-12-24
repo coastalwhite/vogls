@@ -37,7 +37,7 @@ use crate::ast::module::{
 };
 use crate::ast::statement::{
     BlockingAssignment, LoopStatementVariant, NetLValue, NonBlockingAssignment,
-    ProceduralTimingControlStatement, Statement, StatementContent, StatementOrNull,
+    ProceduralTimingControlStatement, Statement, StatementContent, StatementOrNull, TaskEnable,
     VariableAssignment, VariableLValue, VariableLValueFlat,
 };
 use crate::ast::{AstId, AstIdRange, RangeExpression};
@@ -99,7 +99,8 @@ pub fn fetch_module_interface<'a>(
                 typing,
                 assignments,
             } = arenas.get(p);
-            let ty =
+            // @FIXME: Coerce value to ty.
+            let _ty =
                 parameter::parameter_typing_to_type(gl, arenas, &mut scope, diagnostics, *typing)?;
             for assignment in assignments.iter() {
                 let ParamAssignment { param, constant } = arenas.get(assignment);
@@ -567,7 +568,29 @@ fn statements_to_process<'a>(
                     }
                 }
             }
-            S::TaskEnable => todo!(),
+            S::TaskEnable(id) => {
+                let TaskEnable { ident } = arenas.get(id);
+                let name = arenas.get_ident(ident.item.0);
+                let Some(symbol_key) = scope.get(name) else {
+                    diagnostics.var_not_found(arenas, *ident);
+                    return Err(());
+                };
+                let SymbolVariant::Task(statement_or_null) = &scope.symbols[symbol_key].variant
+                else {
+                    diagnostics
+                        .not_yet_implemented(arenas.get_item_span(*ident), "non-task enabled");
+                    return Err(());
+                };
+
+                builder = statement::lower_statement_or_null(
+                    gl,
+                    arenas,
+                    scope,
+                    diagnostics,
+                    builder,
+                    *statement_or_null,
+                )?;
+            }
             S::WaitStatement => todo!(),
         }
     }
@@ -714,7 +737,7 @@ fn get_intersect_symbols_generated<'a>(
                     break;
                 }
                 S::SystemTaskEnable(_) => continue,
-                S::TaskEnable => todo!(),
+                S::TaskEnable(_) => continue,
                 S::WaitStatement => todo!(),
             }
         }
@@ -1049,6 +1072,7 @@ fn assign_variable_lvalue<'a>(
     let (ty, dims) = match &scope.symbols[symbol_key].variant {
         SymbolVariant::Genvar(_) => (VType::Integer, Vec::new()),
         SymbolVariant::Constant(v) => (v.ty(), Vec::new()),
+        SymbolVariant::Task(_) => todo!(),
         SymbolVariant::Signal(dims, key) => (VType::from_ir(gl.signals[*key].ty), dims.clone()),
     };
     let mut dims = &dims[..];
@@ -1107,6 +1131,7 @@ fn assign_variable_lvalue<'a>(
     match &mut scope.symbols[symbol_key].variant {
         SymbolVariant::Constant(_) => todo!(),
         SymbolVariant::Genvar(_) => todo!(),
+        SymbolVariant::Task(_) => todo!(),
         SymbolVariant::Signal(_dims, key) => {
             let key = *key;
             match range_expression {

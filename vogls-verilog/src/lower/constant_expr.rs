@@ -127,6 +127,7 @@ pub fn eval_constant_expr<'a>(
                 let value = match &scope.symbols[symbol_key].variant {
                     SymbolVariant::Genvar(n) => VValue::Integer(n.unwrap()),
                     SymbolVariant::Constant(n) => n.clone(),
+                    SymbolVariant::Task(_) => todo!(),
                     SymbolVariant::Signal(_dims, _) => {
                         result_stack.push(None);
                         diagnostics.not_yet_implemented(
