@@ -15,12 +15,11 @@ use crate::number::Decimal;
 use crate::parser::AstArenas;
 
 use super::scope::Scope;
-use super::{Diagnostics, Region, VTypeTable};
+use super::{Diagnostics, Region};
 
 pub fn lower<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
-    types: &mut VTypeTable,
     scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
     mut builder: BasicBlockBuilder,
@@ -69,7 +68,6 @@ pub fn lower<'a>(
                     builder = super::statement::lower_statement_or_null(
                         gl,
                         arenas,
-                        types,
                         scope,
                         diagnostics,
                         builder,
@@ -90,7 +88,6 @@ pub fn lower<'a>(
                 builder = super::statement::lower_statement_or_null(
                     gl,
                     arenas,
-                    types,
                     scope,
                     diagnostics,
                     builder,
@@ -159,13 +156,14 @@ pub fn lower<'a>(
                         diagnostics.var_not_found(arenas, *ast_ident);
                         return Err(());
                     };
-                    let SymbolVariant::Signal(key) = &scope.symbols[symbol_key].variant else {
+                    let SymbolVariant::Signal(_dims, key) = &scope.symbols[symbol_key].variant
+                    else {
                         panic!("not a signal");
                     };
                     let key = *key;
 
                     let (variable, _) =
-                        lower_expr(gl, arenas, types, scope, diagnostics, &mut builder, *expr)?;
+                        lower_expr(gl, arenas, scope, diagnostics, &mut builder, *expr)?;
                     conditions.push((condition, variable, *expr));
                     signals.push(key);
                 }
@@ -176,7 +174,7 @@ pub fn lower<'a>(
                     use WatchCondition as C;
 
                     let (after, _) =
-                        lower_expr(gl, arenas, types, scope, diagnostics, &mut builder, expr)?;
+                        lower_expr(gl, arenas, scope, diagnostics, &mut builder, expr)?;
                     let cond = match condition {
                         C::Posedge => {
                             let t = builder.binary_neg(gl, before);
@@ -195,7 +193,6 @@ pub fn lower<'a>(
                 builder = super::statement::lower_statement_or_null(
                     gl,
                     arenas,
-                    types,
                     scope,
                     diagnostics,
                     builder,

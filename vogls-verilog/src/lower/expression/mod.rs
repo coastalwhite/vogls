@@ -1,28 +1,27 @@
 use vogls_ir::{
-    BasicBlockBuilder, Bits, GlobalContext, IntrinsicArg, IntrinsicOp, TypeTable, Value,
-    VariableKey, VectorSize,
+    BasicBlockBuilder, Bits, GlobalContext, IntrinsicArg, IntrinsicOp, Type, Value, VariableKey,
+    VectorSize,
 };
 
 use crate::ast::AstId;
 use crate::ast::expr::{BinaryOperator, BitSlice, Expr, UnaryOperator};
 use crate::lower::constant_expr::eval_constant_expr;
 use crate::lower::scope::SymbolVariant;
-use crate::lower::{VType, VTypeKey, msb_lsb_to_width};
+use crate::lower::{VType, msb_lsb_to_width};
 use crate::number::Decimal;
 use crate::parser::AstArenas;
 
+use super::Diagnostics;
 use super::scope::Scope;
-use super::{Diagnostics, VTypeTable};
 
 pub fn lower_expr<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
-    types: &mut VTypeTable,
     scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
     builder: &mut BasicBlockBuilder,
     expr: AstId<Expr>,
-) -> Result<(VariableKey, VTypeKey), ()> {
+) -> Result<(VariableKey, VType), ()> {
     struct StackItem {
         expr: AstId<Expr>,
         dispatched: bool,
@@ -38,7 +37,7 @@ pub fn lower_expr<'a>(
 
     let mut error = false;
     let mut dispatch_stack: Vec<StackItem> = Vec::new();
-    let mut result_stack: Vec<Option<(VariableKey, VTypeKey)>> = Vec::new();
+    let mut result_stack: Vec<Option<(VariableKey, VType)>> = Vec::new();
 
     dispatch_stack.push(StackItem::new(expr));
 
@@ -61,13 +60,13 @@ pub fn lower_expr<'a>(
 
                 use UnaryOperator as O;
                 let (variable, ty) = match op {
-                    O::LogicalNegation => (builder.logical_neg(gl, child), types.scalar_net()),
+                    O::LogicalNegation => (builder.logical_neg(gl, child), VType::SCALAR_NET),
                     O::BitwiseNegation => (builder.binary_neg(gl, child), ty),
                     O::ReductionAnd => todo!(),
                     O::ReductionOr => todo!(),
                     O::ReductionNand => todo!(),
                     O::ReductionNor => todo!(),
-                    O::ReductionXor => (builder.reduce_xor(gl, child), types.scalar_net()),
+                    O::ReductionXor => (builder.reduce_xor(gl, child), VType::SCALAR_NET),
                     O::ReductionXnor => todo!(),
                     O::SignPlus => todo!(),
                     O::SignMinus => todo!(),
@@ -116,28 +115,17 @@ pub fn lower_expr<'a>(
                     O::LogicalAnd => todo!(),
                     O::LogicalOr => todo!(),
                 };
-                let result = (op)(
-                    gl,
-                    arenas,
-                    types,
-                    diagnostics,
-                    expr,
-                    builder,
-                    l,
-                    l_ty,
-                    r,
-                    r_ty,
-                );
+                let result = (op)(gl, arenas, diagnostics, expr, builder, l, l_ty, r, r_ty);
 
                 error |= result.is_err();
                 result_stack.push(result.ok());
             }
             Expr::Concatenation(exprs) => {
                 if exprs.is_empty() {
-                    let var = builder.constant(gl, Value::Bits(Bits::Small(0, 0)));
-                    let ty = types.insert(VType::VectorNet(0));
-                    result_stack.push(Some((var, ty)));
-                    continue;
+                    panic!("empty concat");
+                    // let var = builder.constant(gl, Value::Bits(Bits::Small(0, 0)));
+                    // result_stack.push(Some((var, VType::VectorNet(0))));
+                    // continue;
                 }
 
                 if !item.dispatched {
@@ -151,7 +139,7 @@ pub fn lower_expr<'a>(
                     result_stack.push(None);
                     continue;
                 };
-                let Some(mut width) = types[ty].net_width() else {
+                let Some(mut width) = ty.net_width() else {
                     diagnostics.not_yet_implemented(
                         arenas.get_span(exprs.last().unwrap()),
                         "non-net concatenation",
@@ -165,7 +153,7 @@ pub fn lower_expr<'a>(
                         result_stack.push(None);
                         continue;
                     };
-                    let Some(next_width) = types[next_ty].net_width() else {
+                    let Some(next_width) = next_ty.net_width() else {
                         diagnostics.not_yet_implemented(
                             arenas.get_span(exprs.get(exprs.len() - i - 1)),
                             "non-net concatenation",
@@ -177,8 +165,7 @@ pub fn lower_expr<'a>(
                     output = builder.concat(gl, next, output);
                     width += next_width;
                 }
-                let ty = types.insert(VType::VectorNet(width));
-                result_stack.push(Some((output, ty)));
+                result_stack.push(Some((output, VType::Net(width))));
             }
             Expr::Replication(_) => todo!(),
             Expr::Ternary(_, _, _) => todo!(),
@@ -212,17 +199,19 @@ pub fn lower_expr<'a>(
                     continue;
                 };
                 let symbol = &scope.symbols[symbol_key];
-                let mut ty = symbol.ty;
-                let mut var = match &symbol.variant {
+                let (mut ty, mut var) = match &symbol.variant {
                     SymbolVariant::Constant(value) => {
                         let value = value.clone();
-                        builder.constant(gl, value.into_ir())
+                        (value.ty(), builder.constant(gl, value.into_ir()))
                     }
-                    SymbolVariant::Genvar(value) => {
-                        builder.constant(gl, Value::Decimal(value.unwrap()))
-                    }
-                    SymbolVariant::Signal(key) => {
-                        if let VType::Array(child_ty, _) = types[ty] {
+                    SymbolVariant::Genvar(value) => (
+                        VType::Integer,
+                        builder.constant(gl, Value::Decimal(value.unwrap())),
+                    ),
+                    SymbolVariant::Signal(dims, key) => {
+                        let ty = VType::from_ir(gl.signals[*key].ty);
+                        let mut dims = &dims[..];
+                        if !dims.is_empty() {
                             if exprs.pop_front().is_none() {
                                 diagnostics
                                     .not_yet_implemented(arenas.get_span(expr), "variable array");
@@ -238,11 +227,11 @@ pub fn lower_expr<'a>(
                                 continue 'dispatch_loop;
                             };
 
-                            let mut leaf_arr_items = types[child_ty].leaf_arr_items(types);
+                            dims = &dims[..dims.len() - 1];
+                            let mut leaf_arr_items = dims.iter().product::<u32>();
                             let mut offset = builder.i64_multiply_constant(gl, idx, leaf_arr_items);
-                            ty = child_ty;
 
-                            while let VType::Array(child_ty, width) = types[ty]
+                            while let Some(dim) = dims.last()
                                 && exprs.pop_front().is_some()
                             {
                                 let Some((expr, _)) = result_stack.pop().unwrap() else {
@@ -251,13 +240,13 @@ pub fn lower_expr<'a>(
                                     continue 'dispatch_loop;
                                 };
 
-                                leaf_arr_items /= width;
+                                leaf_arr_items /= *dim;
                                 let expr = builder.i64_multiply_constant(gl, expr, leaf_arr_items);
                                 offset = builder.plus(gl, offset, expr);
-                                ty = child_ty;
+                                dims = &dims[..dims.len() - 1];
                             }
 
-                            if types[ty].is_array() {
+                            if !dims.is_empty() {
                                 diagnostics
                                     .not_yet_implemented(arenas.get_span(expr), "variable array");
                                 error = true;
@@ -266,20 +255,12 @@ pub fn lower_expr<'a>(
                                 continue 'dispatch_loop;
                             }
 
-                            builder.arr_probe(gl, *key, offset)
+                            (ty, builder.arr_probe(gl, *key, offset))
                         } else {
-                            builder.probe(gl, *key)
+                            (ty, builder.probe(gl, *key))
                         }
                     }
                 };
-
-                if types[ty].is_array() {
-                    diagnostics.not_yet_implemented(arenas.get_span(expr), "select on array");
-                    error = true;
-                    result_stack.truncate(end_result_stack_len);
-                    result_stack.push(None);
-                    continue;
-                }
 
                 for _ in 0..exprs.len() {
                     let Some((expr, _)) = result_stack.pop().unwrap() else {
@@ -287,22 +268,15 @@ pub fn lower_expr<'a>(
                         result_stack.push(None);
                         continue 'dispatch_loop;
                     };
+                    ty = VType::SCALAR_NET;
                     var = builder.select_bit(gl, var, expr);
-                    ty = types.scalar_net();
                 }
 
                 if let Some(slice) = range_expression {
                     let (lsb, width) = match slice {
                         BitSlice::MsbLsb(msb, lsb) => {
-                            let (_msb, lsb, width) = msb_lsb_to_width(
-                                gl,
-                                arenas,
-                                types,
-                                scope,
-                                diagnostics,
-                                *msb,
-                                *lsb,
-                            )?;
+                            let (_msb, lsb, width) =
+                                msb_lsb_to_width(gl, arenas, scope, diagnostics, *msb, *lsb)?;
                             let lsb_v = builder.constant(gl, Value::Decimal(lsb as i64));
                             (lsb_v, width)
                         }
@@ -312,8 +286,7 @@ pub fn lower_expr<'a>(
                                 result_stack.push(None);
                                 continue;
                             };
-                            let width =
-                                eval_constant_expr(gl, arenas, types, scope, diagnostics, *width)?;
+                            let width = eval_constant_expr(gl, arenas, scope, diagnostics, *width)?;
                             let width = width.as_integer().unwrap() as VectorSize;
                             (lsb, width)
                         }
@@ -324,8 +297,7 @@ pub fn lower_expr<'a>(
                                 continue;
                             };
 
-                            let width =
-                                eval_constant_expr(gl, arenas, types, scope, diagnostics, *width)?;
+                            let width = eval_constant_expr(gl, arenas, scope, diagnostics, *width)?;
                             let width = width.as_integer().unwrap();
                             let width_v = builder.constant(gl, Value::Decimal(width - 1));
                             let lsb = builder.minus(gl, lsb, width_v);
@@ -333,7 +305,7 @@ pub fn lower_expr<'a>(
                         }
                     };
 
-                    ty = types.insert(VType::VectorNet(width));
+                    ty = VType::Net(width);
                     let shifted = builder.lsr(gl, var, lsb);
                     var = builder.slice(gl, shifted, width as VectorSize);
                 }
@@ -393,7 +365,7 @@ pub fn lower_expr<'a>(
 
                 result_stack.push(Some((
                     builder.constant(gl, Value::Decimal(decimal)),
-                    types.integer(),
+                    VType::Integer,
                 )));
             }
             Expr::Sized(sized) => {
@@ -407,7 +379,7 @@ pub fn lower_expr<'a>(
                 };
                 let var = builder.constant(gl, Value::Bits(Bits::Small(v, width)));
 
-                result_stack.push(Some((var, types.insert(VType::VectorNet(width)))));
+                result_stack.push(Some((var, VType::Net(width))));
             }
             Expr::String(_) => todo!(),
         }
@@ -428,39 +400,22 @@ pub fn lower_expr<'a>(
 pub fn coerce_bin_arithmetic<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
-    types: &mut VTypeTable,
     diagnostics: &mut Diagnostics,
     expr: AstId<Expr>,
     builder: &mut BasicBlockBuilder,
     l: VariableKey,
-    l_ty: VTypeKey,
+    l_ty: VType,
     r: VariableKey,
-    r_ty: VTypeKey,
-) -> Result<(VariableKey, VTypeKey, VariableKey, VTypeKey), ()> {
+    r_ty: VType,
+) -> Result<(VariableKey, VType, VariableKey, VType), ()> {
     // max(L(i),L(j))
 
-    macro_rules! array_err {
-        () => {{
-            diagnostics
-                .not_yet_implemented(arenas.get_span(expr), "arithmetic operator with array type");
-            return Err(());
-        }};
-    }
-
     if l_ty == r_ty {
-        if types[l_ty].is_array() {
-            array_err!();
-        }
-
         return Ok((l, l_ty, r, r_ty));
     }
 
-    if types[l_ty].is_array() || types[r_ty].is_array() {
-        array_err!();
-    }
-
-    let l_width = types[l_ty].net_width();
-    let r_width = types[r_ty].net_width();
+    let l_width = l_ty.net_width();
+    let r_width = r_ty.net_width();
 
     let width = match (l_width, r_width) {
         (Some(l), Some(r)) => l.max(r),
@@ -468,11 +423,11 @@ pub fn coerce_bin_arithmetic<'a>(
         (None, None) => unreachable!(),
     };
 
-    let ty = gl.types.insert(vogls_ir::Type::Bits(width));
+    let ty = vogls_ir::Type::Bits(width);
     let l = builder.cast(gl, l, ty);
     let r = builder.cast(gl, r, ty);
 
-    let ty = types.insert(VType::VectorNet(width));
+    let ty = VType::Net(width);
     Ok((l, ty, r, ty))
 }
 
@@ -482,19 +437,17 @@ macro_rules! impl_bin_arithmetic {
         fn $f<'a>(
             gl: &mut GlobalContext,
             arenas: &'a AstArenas,
-            types: &mut VTypeTable,
             diagnostics: &mut Diagnostics,
             expr: AstId<Expr>,
             builder: &mut BasicBlockBuilder,
             l: VariableKey,
-            l_ty: VTypeKey,
+            l_ty: VType,
             r: VariableKey,
-            r_ty: VTypeKey,
-        ) -> Result<(VariableKey, VTypeKey), ()> {
+            r_ty: VType,
+        ) -> Result<(VariableKey, VType), ()> {
             let (l, l_ty, r, _) = coerce_bin_arithmetic(
                 gl,
                 arenas,
-                types,
                 diagnostics,
                 expr,
                 builder,
@@ -515,19 +468,17 @@ macro_rules! impl_bin_eq_ineq {
         fn $f<'a>(
             gl: &mut GlobalContext,
             arenas: &'a AstArenas,
-            types: &mut VTypeTable,
             diagnostics: &mut Diagnostics,
             expr: AstId<Expr>,
             builder: &mut BasicBlockBuilder,
             l: VariableKey,
-            l_ty: VTypeKey,
+            l_ty: VType,
             r: VariableKey,
-            r_ty: VTypeKey,
-        ) -> Result<(VariableKey, VTypeKey), ()> {
+            r_ty: VType,
+        ) -> Result<(VariableKey, VType), ()> {
             let (l, _, r, _) = coerce_bin_arithmetic(
                 gl,
                 arenas,
-                types,
                 diagnostics,
                 expr,
                 builder,
@@ -536,7 +487,7 @@ macro_rules! impl_bin_eq_ineq {
                 r,
                 r_ty,
             )?;
-            Ok((builder.$builder_f(gl, l, r), types.scalar_net()))
+            Ok((builder.$builder_f(gl, l, r), VType::SCALAR_NET))
         }
         )+
     };
@@ -564,65 +515,58 @@ impl_bin_eq_ineq! {
 fn bin_divide<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
-    types: &mut VTypeTable,
     diagnostics: &mut Diagnostics,
     expr: AstId<Expr>,
     builder: &mut BasicBlockBuilder,
     l: VariableKey,
-    l_ty: VTypeKey,
+    l_ty: VType,
     r: VariableKey,
-    r_ty: VTypeKey,
-) -> Result<(VariableKey, VTypeKey), ()> {
-    if l_ty != types.integer() || r_ty != types.integer() {
+    r_ty: VType,
+) -> Result<(VariableKey, VType), ()> {
+    if l_ty != VType::Integer || r_ty != VType::Integer {
         diagnostics.not_yet_implemented(arenas.get_span(expr), "divide with non-integer arguments");
         return Err(());
     }
 
-    Ok((builder.i64_divide(gl, l, r), types.integer()))
+    Ok((builder.i64_divide(gl, l, r), VType::Integer))
 }
 
 fn bin_modulus<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
-    types: &mut VTypeTable,
     diagnostics: &mut Diagnostics,
     expr: AstId<Expr>,
     builder: &mut BasicBlockBuilder,
     l: VariableKey,
-    l_ty: VTypeKey,
+    l_ty: VType,
     r: VariableKey,
-    r_ty: VTypeKey,
-) -> Result<(VariableKey, VTypeKey), ()> {
-    if l_ty != types.integer() || r_ty != types.integer() {
+    r_ty: VType,
+) -> Result<(VariableKey, VType), ()> {
+    if l_ty != VType::Integer || r_ty != VType::Integer {
         diagnostics
             .not_yet_implemented(arenas.get_span(expr), "modulus with non-integer arguments");
         return Err(());
     }
 
-    Ok((builder.i64_modulus(gl, l, r), types.integer()))
+    Ok((builder.i64_modulus(gl, l, r), VType::Integer))
 }
 
 pub fn sign_extend_or_truncate(
     gl: &mut GlobalContext,
-    vtypes: &VTypeTable,
     builder: &mut BasicBlockBuilder,
     src: VariableKey,
-    from: VTypeKey,
-    to: VTypeKey,
+    from: VType,
+    to: VType,
 ) -> VariableKey {
     if from == to {
         return src;
     }
 
-    let to_type = vtypes[to].to_ir_info(vtypes, &mut gl.types).key;
-    match (vtypes[from], vtypes[to]) {
-        (VType::Integer, VType::ScalarNet | VType::VectorNet(_))
-        | (VType::ScalarNet, VType::VectorNet(_)) => builder.cast(gl, src, to_type),
-        (VType::ScalarNet | VType::VectorNet(_), VType::Integer) => {
-            builder.cast(gl, src, TypeTable::INT64)
-        }
-        (VType::VectorNet(_), VType::ScalarNet) => builder.slice(gl, src, 1),
-        (VType::VectorNet(n), VType::VectorNet(m)) => {
+    let to_type = to.to_ir_info();
+    match (from, to) {
+        (VType::Integer, VType::Net(_)) => builder.cast(gl, src, to_type),
+        (VType::Net(_), VType::Integer) => builder.cast(gl, src, Type::Decimal),
+        (VType::Net(n), VType::Net(m)) => {
             if n > m {
                 builder.slice(gl, src, m)
             } else {
@@ -630,7 +574,6 @@ pub fn sign_extend_or_truncate(
             }
         }
 
-        (VType::Integer, VType::Integer) | (VType::ScalarNet, VType::ScalarNet) => unreachable!(),
-        (VType::Array(..), _) | (_, VType::Array(..)) => panic!(),
+        (VType::Integer, VType::Integer) => unreachable!(),
     }
 }

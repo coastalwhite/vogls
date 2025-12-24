@@ -2,9 +2,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
 
 use slotmap::{SlotMap, new_key_type};
-use vogls_ir::{
-    BinaryOp, Bits, IntrinsicOp, Type, TypeInfo, TypeTable, UnaryOp, Value, VectorSize,
-};
+use vogls_ir::{ArrayWidth, BinaryOp, Bits, IntrinsicOp, Type, UnaryOp, Value, VectorSize};
 
 #[derive(PartialEq, Eq)]
 pub enum SignalValue {
@@ -14,8 +12,8 @@ pub enum SignalValue {
     DecimalArray(Box<[i64]>),
 }
 
-mod instruction;
 mod bits;
+mod instruction;
 
 pub use instruction::*;
 
@@ -164,10 +162,9 @@ impl Event {
         schedule: &mut BTreeMap<Timestamp, Vec<Event>>,
         regions: &mut Regions,
         signals: &mut HashMap<VmSignalKey, SignalValue>,
-        signal_ty: &HashMap<VmSignalKey, TypeInfo>,
+        signal_ty: &HashMap<VmSignalKey, (Option<ArrayWidth>, Type)>,
         listeners: &mut SlotMap<ListenerKey, Event>,
         watches: &mut HashMap<VmSignalKey, Vec<ListenerKey>>,
-        types: &TypeTable,
     ) -> EvalOutcome {
         let EvaluationEvent {
             process,
@@ -390,7 +387,7 @@ impl Event {
 
                 I::Cast(dst, dst_ty, src, src_ty) => {
                     use vogls_ir::Type as T;
-                    match (types[*dst_ty], types[*src_ty]) {
+                    match (*dst_ty, *src_ty) {
                         (T::Bits(x), T::Bits(y)) if x == y => {}
                         (T::Decimal, T::Decimal) => {}
 
@@ -413,12 +410,12 @@ impl Event {
                             let src = bit_stack[src.offset];
                             decimal_stack[dst.offset] = src as i64;
                         }
-                        _ => todo!("cast: {:?} -> {:?}", types[*src_ty], types[*dst_ty]),
+                        _ => todo!("cast: {:?} -> {:?}", *src_ty, *dst_ty),
                     }
                 }
                 I::Move(dst, src, ty) => {
                     use vogls_ir::Type as T;
-                    match types[*ty] {
+                    match *ty {
                         T::Bits(n) => {
                             for i in 0..n.div_ceil(8) as usize {
                                 bit_stack[dst.offset + i] = bit_stack[src.offset + i];
@@ -540,7 +537,7 @@ impl Event {
                         let partial = partial.map(|(offset, width)| {
                             (decimal_stack[offset.offset] as VectorSize, width)
                         });
-                        let value = match types[signal_ty[sig].key] {
+                        let value = match signal_ty[sig].1 {
                             Type::Decimal => Value::Decimal(decimal_stack[var.offset]),
                             Type::Bits(width) => {
                                 let width = partial.map_or(width, |(_, s)| s);
@@ -628,7 +625,7 @@ impl Event {
                         let partial = partial.map(|(offset, width)| {
                             (decimal_stack[offset.offset] as VectorSize, width)
                         });
-                        let value = match types[signal_ty[sig].key] {
+                        let value = match signal_ty[sig].1 {
                             Type::Decimal => Value::Decimal(decimal_stack[src.offset]),
                             Type::Bits(width) => {
                                 let width = partial.map_or(width, |(_, s)| s);
@@ -739,10 +736,9 @@ pub fn run(
     processes: &SlotMap<VmProcessKey, VmProcess>,
     regions: &mut Regions,
     signals: &mut HashMap<VmSignalKey, SignalValue>,
-    signal_ty: &HashMap<VmSignalKey, TypeInfo>,
+    signal_ty: &HashMap<VmSignalKey, (Option<ArrayWidth>, Type)>,
     listeners: &mut SlotMap<ListenerKey, Event>,
     watches: &mut HashMap<VmSignalKey, Vec<ListenerKey>>,
-    types: &TypeTable,
     max_time: u64,
 ) -> Result<(), ()> {
     let mut schedule = BTreeMap::<Timestamp, Vec<Event>>::new();
@@ -757,7 +753,6 @@ pub fn run(
                 signal_ty,
                 listeners,
                 watches,
-                types,
             );
 
             match outcome {

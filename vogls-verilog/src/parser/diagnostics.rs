@@ -65,11 +65,7 @@ pub fn report_error(
     report(tokenized, location, out)
 }
 
-pub fn report(
-    tokenized: &Tokenized,
-    location: TokenRange,
-    out: &mut String,
-) -> std::fmt::Result {
+pub fn report(tokenized: &Tokenized, location: TokenRange, out: &mut String) -> std::fmt::Result {
     use std::fmt::Write;
     if tokenized.file_idxs[location.start] != tokenized.file_idxs[location.end - 1] {
         // @TODO
@@ -119,39 +115,33 @@ pub fn report(
         let start_pad = display_width(&line[..location.start() - offset], TAB_WIDTH);
         let len = display_width(&content[location.as_range()], TAB_WIDTH);
         writeln!(out)?;
-        writeln!(out, "  {:start_pad$}{:^>len$}", "", "",)?;
+        writeln!(out, "  {:start_pad$}{:^>len$}", " ", " ",)?;
     } else {
         let (offset, line) = lines[start_line];
         out.write_str("> ")?;
         display_with_tab_width(line, out, TAB_WIDTH)?;
+        let start_pad = display_width(&line[..location.start() - offset], TAB_WIDTH);
+        let len = line.len() - (location.start() - offset);
         writeln!(out)?;
-        writeln!(
-            out,
-            "  {:start_pad$}{:len$}",
-            "",
-            "^",
-            start_pad = display_width(&line[..location.start() - offset], TAB_WIDTH),
-            len = line.len() - (location.start() - offset),
-        )?;
+        writeln!(out, "  {:start_pad$}{:^>len$}", "", "^",)?;
 
         for line in start_line + 1..end_line {
             let (_, line) = lines[line];
             out.write_str("> ")?;
             display_with_tab_width(line, out, TAB_WIDTH)?;
+            let start_pad = display_width(&line[..line.len() - line.trim_start().len()], TAB_WIDTH);
+            let len = display_width(line, TAB_WIDTH) - start_pad;
             writeln!(out)?;
-            writeln!(out, "  {:len$}", "^", len = display_width(line, TAB_WIDTH))?;
+            writeln!(out, "  {:start_pad$}{:^>len$}", "", "")?;
         }
 
         let (offset, line) = lines[end_line];
         out.write_str("> ")?;
         display_with_tab_width(line, out, TAB_WIDTH)?;
+            let start_pad = display_width(&line[..line.len() - line.trim_start().len()], TAB_WIDTH);
+        let len = display_width(&line[..location.end() - offset], TAB_WIDTH) - start_pad;
         writeln!(out)?;
-        writeln!(
-            out,
-            "  {:len$}",
-            "^",
-            len = display_width(&line[..location.end() - offset], TAB_WIDTH)
-        )?;
+        writeln!(out, "  {:start_pad$}{:^>len$}", " ", " ")?;
     }
 
     for line in end_line.saturating_add(1).min(ctx_end_line)..ctx_end_line {

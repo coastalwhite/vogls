@@ -28,10 +28,10 @@ module x();
 	$vogls_assert_eq(mem3[0][0], 16'h0000);
 	$vogls_assert_eq(mem3[0][1], 16'h0001);
 	$vogls_assert_eq(mem3[1][0], 16'h0001);
-	// $vogls_assert_eq(mem3[1][1], 16'h0002);
-	// $vogls_assert_eq(mem3[2][0], 16'h0002);
-	// $vogls_assert_eq(mem3[2][1], 16'h0003);
-	// $vogls_assert_eq(mem3[3][0], 16'h0003);
-	// $vogls_assert_eq(mem3[3][1], 16'h0004);
+	$vogls_assert_eq(mem3[1][1], 16'h0002);
+	$vogls_assert_eq(mem3[2][0], 16'h0002);
+	$vogls_assert_eq(mem3[2][1], 16'h0003);
+	$vogls_assert_eq(mem3[3][0], 16'h0003);
+	$vogls_assert_eq(mem3[3][1], 16'h0004);
   end
 endmodule

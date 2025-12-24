@@ -1,4 +1,4 @@
-use vogls_ir::{BinaryOp, Bits, IntrinsicOp, Time, TypeKey, UnaryOp, VectorSize};
+use vogls_ir::{BinaryOp, Bits, IntrinsicOp, Time, Type, UnaryOp, VectorSize};
 
 mod format;
 mod lower;
@@ -28,8 +28,8 @@ pub enum VmInstruction {
     Unary(StackRef, UnaryOp, StackRef),
     Binary(StackRef, BinaryOp, StackRef, StackRef),
 
-    Cast(StackRef, TypeKey, StackRef, TypeKey),
-    Move(StackRef, StackRef, TypeKey),
+    Cast(StackRef, Type, StackRef, Type),
+    Move(StackRef, StackRef, Type),
 
     Intrinsic(IntrinsicOp, Vec<VmIntrinsicArg>),
 

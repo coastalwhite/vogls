@@ -14,8 +14,8 @@ use vogls_verilog::ast::module::{
     LoopGenerateConstruct, Module, ModuleItem, ModuleOrGenerateItem, NonPortModuleItem,
 };
 use vogls_verilog::lower::{
-    Diagnostics as LowerDiagnostics, ModuleArgs, ModuleInitialization, VTypeTable,
-    fetch_module_interface, lower_module_to_ir,
+    Diagnostics as LowerDiagnostics, ModuleArgs, ModuleInitialization, fetch_module_interface,
+    lower_module_to_ir,
 };
 use vogls_verilog::parser::{
     AstArenas, Diagnostics as ParserDiagnostics, ParseContext, ParserScratches, TokenWalker,
@@ -235,12 +235,10 @@ pub fn run(
     // Walk the modules in depth-first order and lower to IR.
     let mut error = false;
     let mut diagnostics = LowerDiagnostics::default();
-    let mut types = VTypeTable::new();
     let mut next_modules = Vec::<ModuleInitialization>::new();
     let Ok((top_level_params, top_level_io, parameters)) = fetch_module_interface(
         &mut gl,
         &ast.arenas,
-        &mut types,
         ast.modules.get(*tl_module),
         &[],
         &mut diagnostics,
@@ -287,7 +285,6 @@ pub fn run(
         let module_key = lower_module_to_ir(
             &mut gl,
             &ast.arenas,
-            &mut types,
             module_id,
             &parameters,
             &io,
@@ -370,10 +367,7 @@ pub fn run(
     }
 
     for (ir_signal, signal) in io_signals {
-        let value = match (
-            gl.types[gl.signals[ir_signal].ty.key],
-            gl.signals[ir_signal].ty.width,
-        ) {
+        let value = match (gl.signals[ir_signal].ty, gl.signals[ir_signal].width) {
             (Type::Bits(n), None) if n < 64 => SignalValue::Bits(Bits::Small(0, n)),
             (Type::Bits(n), Some(width)) if n < 64 => SignalValue::BitsArray(
                 std::iter::repeat_n(Bits::Small(0, n), width.get() as usize).collect(),
@@ -395,7 +389,10 @@ pub fn run(
             }
         };
         signals.insert(signal, value);
-        signal_ty.insert(signal, gl.signals[ir_signal].ty);
+        signal_ty.insert(
+            signal,
+            (gl.signals[ir_signal].width, gl.signals[ir_signal].ty),
+        );
     }
 
     if ectx.output_schedule {
@@ -414,7 +411,6 @@ pub fn run(
         &signal_ty,
         &mut listeners,
         &mut watches,
-        &gl.types,
         100,
     )
     .is_err();

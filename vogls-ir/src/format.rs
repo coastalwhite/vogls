@@ -196,7 +196,7 @@ impl ContextFormat for Instruction {
                 f.write_str(" = cast(")?;
                 ctx.gl.vars.get(*src).unwrap().ctx_fmt(f, ctx)?;
                 f.write_str(", ")?;
-                ctx.gl.types[ctx.gl.vars[*dst].ty].ctx_fmt(f, ctx)?;
+                ctx.gl.vars[*dst].ty.ctx_fmt(f, ctx)?;
                 f.write_str(")")?;
             }
             Self::Intrinsic(op, args) => {
@@ -353,11 +353,11 @@ impl Signal {
         f: &mut fmt::Formatter<'_>,
         ctx: &mut DisplayContext<'_>,
     ) -> fmt::Result {
-        match self.ty.width {
-            None => ctx.gl.types[self.ty.key].ctx_fmt(f, ctx)?,
+        match self.width {
+            None => self.ty.ctx_fmt(f, ctx)?,
             Some(width) => {
                 f.write_str("arr[")?;
-                ctx.gl.types[self.ty.key].ctx_fmt(f, ctx)?;
+                self.ty.ctx_fmt(f, ctx)?;
                 write!(f, "; {}]", width.get())?;
             },
         }

@@ -40,7 +40,7 @@ pub fn lower_process_to_vm(
             }
 
             if let Some(dst) = instr.get_destination_variable() {
-                match gl.types[gl.vars.get(dst).unwrap().ty] {
+                match gl.vars.get(dst).unwrap().ty {
                     Type::Bits(size) => {
                         stack_map.insert(
                             dst,
@@ -114,7 +114,7 @@ pub fn lower_process_to_vm(
                         .iter()
                         .map(|arg| match arg {
                             IA::StringLiteral(s) => VIA::StringLiteral(s.clone()),
-                            IA::Variable(v) => match gl.types[gl.vars[*v].ty] {
+                            IA::Variable(v) => match gl.vars[*v].ty {
                                 Type::Bits(size) => VIA::VariableBits(var(*v), size),
                                 Type::Decimal => VIA::VariableDecimal(var(*v)),
                             },

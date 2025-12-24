@@ -1,19 +1,18 @@
 use vogls_ir::{BasicBlockBuilder, GlobalContext};
 
-use crate::ast::statement::StatementOrNull;
 use crate::ast::AstId;
+use crate::ast::statement::StatementOrNull;
 use crate::parser::AstArenas;
 
 use super::scope::Scope;
-use super::{statements_to_process, Diagnostics, VTypeTable};
+use super::{Diagnostics, statements_to_process};
 
-pub mod loop_statement;
 pub mod conditional;
+pub mod loop_statement;
 
 pub fn lower_statement_or_null<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
-    types: &mut VTypeTable,
     scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
     builder: BasicBlockBuilder,
@@ -24,7 +23,6 @@ pub fn lower_statement_or_null<'a>(
         StatementOrNull::Statement(statement) => statements_to_process(
             gl,
             arenas,
-            types,
             scope,
             diagnostics,
             builder,

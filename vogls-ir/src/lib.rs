@@ -9,7 +9,7 @@ pub use builder::{BasicBlockBuilder, BranchRef, PhiRef, new_process};
 pub use format::{ContextFormat, DisplayContext};
 use indexmap::IndexSet;
 use slotmap::{SlotMap, new_key_type};
-pub use types::{ArrayWidth, Type, TypeInfo, TypeKey, TypeTable};
+pub use types::{ArrayWidth, Type};
 
 new_key_type! { pub struct ProcessKey; }
 new_key_type! { pub struct BasicBlockKey; }
@@ -31,6 +31,17 @@ impl Bits {
         match self {
             Bits::Small(value, size) => &bytemuck::bytes_of(value)[..size.div_ceil(8) as usize],
             Bits::Big(_, value) => value.as_ref(),
+        }
+    }
+
+    pub fn new_zeroed(size: VectorSize) -> Self {
+        if size > 64 {
+            Self::Big(
+                size,
+                std::iter::repeat_n(0, size.div_ceil(8) as usize).collect(),
+            )
+        } else {
+            Self::Small(0, size)
         }
     }
 
@@ -199,12 +210,13 @@ impl BasicBlockTerminator {
 
 pub struct Variable {
     pub name: String,
-    pub ty: TypeKey,
+    pub ty: Type,
 }
 
 pub struct Signal {
     pub name: String,
-    pub ty: TypeInfo,
+    pub width: Option<ArrayWidth>,
+    pub ty: Type,
 }
 
 pub type VectorSize = u32;
@@ -326,7 +338,6 @@ pub struct GlobalContext {
     pub bbs: SlotMap<BasicBlockKey, BasicBlock>,
     pub vars: SlotMap<VariableKey, Variable>,
     pub signals: SlotMap<SignalKey, Signal>,
-    pub types: TypeTable,
 }
 
 #[derive(Debug)]

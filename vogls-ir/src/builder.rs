@@ -1,10 +1,9 @@
 use indexmap::IndexSet;
 
-use crate::types::TypeKey;
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryOp, GlobalContext, Instruction,
-    IntrinsicArg, IntrinsicOp, Process, ProcessKey, SignalKey, Time, Type, TypeTable, UnaryOp,
-    Value, Variable, VariableKey, VectorSize,
+    IntrinsicArg, IntrinsicOp, Process, ProcessKey, SignalKey, Time, Type, UnaryOp, Value,
+    Variable, VariableKey, VectorSize,
 };
 
 #[must_use]
@@ -80,7 +79,7 @@ impl BasicBlockBuilder {
         self.instrs.len()
     }
 
-    pub fn next_tmp_var(&mut self, gl: &mut GlobalContext, ty: TypeKey) -> VariableKey {
+    pub fn next_tmp_var(&mut self, gl: &mut GlobalContext, ty: Type) -> VariableKey {
         let name = format!("t{}", self.claim_tmp());
         gl.vars.insert(Variable { name, ty })
     }
@@ -142,7 +141,7 @@ impl BasicBlockBuilder {
     }
 
     pub fn constant(&mut self, gl: &mut GlobalContext, value: Value) -> VariableKey {
-        let ty = gl.types.insert(value.get_type());
+        let ty = value.get_type();
         let variable = self.next_tmp_var(gl, ty);
         let i = match value {
             Value::Bits(value) => Instruction::ConstantBit(variable, value),
@@ -161,14 +160,13 @@ impl BasicBlockBuilder {
         let lhs_ty = &gl.vars[lhs].ty;
         let rhs_ty = &gl.vars[rhs].ty;
 
-        let (Type::Bits(lhs_size), Type::Bits(rhs_size)) = (gl.types[*lhs_ty], gl.types[*rhs_ty])
-        else {
+        let (Type::Bits(lhs_size), Type::Bits(rhs_size)) = (*lhs_ty, *rhs_ty) else {
             todo!();
         };
 
         let (lhs_size, rhs_size) = (lhs_size, rhs_size);
         let width = lhs_size + rhs_size;
-        let ty = gl.types.insert(Type::Bits(width));
+        let ty = Type::Bits(width);
         let dst = self.next_tmp_var(gl, ty);
         self.instrs.push(Instruction::Binary(
             dst,
@@ -182,7 +180,7 @@ impl BasicBlockBuilder {
     pub fn binary_neg(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
         let ty = gl.vars[src].ty;
         let dst = self.next_tmp_var(gl, ty);
-        let i = match gl.types[gl.vars[src].ty] {
+        let i = match gl.vars[src].ty {
             Type::Bits(size) => Instruction::Unary(dst, UnaryOp::BitNeg(size), src),
             Type::Decimal => Instruction::Unary(dst, UnaryOp::DecimalNeg, src),
         };
@@ -191,8 +189,8 @@ impl BasicBlockBuilder {
     }
 
     pub fn logical_neg(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
-        let dst = self.next_tmp_var(gl, TypeTable::SCALAR_BIT);
-        let src = match gl.types[gl.vars[src].ty] {
+        let dst = self.next_tmp_var(gl, Type::SCALAR_NET);
+        let src = match gl.vars[src].ty {
             Type::Bits(1) => src,
             Type::Bits(_) => self.reduce_or(gl, src),
             Type::Decimal => self.reduce_or(gl, src),
@@ -212,17 +210,17 @@ impl BasicBlockBuilder {
         let rhs_ty = gl.vars[rhs].ty;
 
         use Type as T;
-        match (gl.types[lhs_ty], gl.types[rhs_ty]) {
+        match (lhs_ty, rhs_ty) {
             (T::Bits(x), T::Bits(y)) if x == y => (lhs, rhs),
             (T::Bits(x), T::Bits(y)) => {
                 let out_size = x.max(y);
-                let ty = gl.types.insert(T::Bits(out_size));
+                let ty = T::Bits(out_size);
                 let lhs = self.cast(gl, lhs, ty);
                 let rhs = self.cast(gl, rhs, ty);
                 (lhs, rhs)
             }
             (T::Bits(x), _) | (_, T::Bits(x)) => {
-                let ty = gl.types.insert(T::Bits(x));
+                let ty = T::Bits(x);
                 let lhs = self.cast(gl, lhs, ty);
                 let rhs = self.cast(gl, rhs, ty);
                 (lhs, rhs)
@@ -241,28 +239,28 @@ impl BasicBlockBuilder {
         let rhs_ty = gl.vars[rhs].ty;
 
         use Type as T;
-        match (gl.types[lhs_ty], gl.types[rhs_ty]) {
+        match (lhs_ty, rhs_ty) {
             (T::Bits(x), T::Bits(y)) if x == y => {
                 let dst = self.next_tmp_var(gl, lhs_ty);
                 (dst, lhs, rhs)
             }
             (T::Bits(x), T::Bits(y)) => {
                 let out_size = x.max(y);
-                let ty = gl.types.insert(T::Bits(out_size));
+                let ty = T::Bits(out_size);
                 let lhs = self.cast(gl, lhs, ty);
                 let rhs = self.cast(gl, rhs, ty);
                 let dst = self.next_tmp_var(gl, ty);
                 (dst, lhs, rhs)
             }
             (T::Bits(x), _) | (_, T::Bits(x)) => {
-                let ty = gl.types.insert(T::Bits(x));
+                let ty = T::Bits(x);
                 let lhs = self.cast(gl, lhs, ty);
                 let rhs = self.cast(gl, rhs, ty);
                 let dst = self.next_tmp_var(gl, ty);
                 (dst, lhs, rhs)
             }
             (T::Decimal, T::Decimal) => {
-                let dst = self.next_tmp_var(gl, TypeTable::INT64);
+                let dst = self.next_tmp_var(gl, Type::Decimal);
                 (dst, lhs, rhs)
             }
         }
@@ -275,7 +273,7 @@ impl BasicBlockBuilder {
         rhs: VariableKey,
     ) -> VariableKey {
         let (dst, lhs, rhs) = self.coerce_binary_bitwise(gl, lhs, rhs);
-        let op = match gl.types[gl.vars[dst].ty] {
+        let op = match gl.vars[dst].ty {
             Type::Bits(size) => BinaryOp::BitAnd(size),
             Type::Decimal => BinaryOp::DecimalAnd,
         };
@@ -289,7 +287,7 @@ impl BasicBlockBuilder {
         rhs: VariableKey,
     ) -> VariableKey {
         let (dst, lhs, rhs) = self.coerce_binary_bitwise(gl, lhs, rhs);
-        let op = match gl.types[gl.vars[dst].ty] {
+        let op = match gl.vars[dst].ty {
             Type::Bits(size) => BinaryOp::BitOr(size),
             Type::Decimal => BinaryOp::DecimalOr,
         };
@@ -303,7 +301,7 @@ impl BasicBlockBuilder {
         rhs: VariableKey,
     ) -> VariableKey {
         let (dst, lhs, rhs) = self.coerce_binary_bitwise(gl, lhs, rhs);
-        let op = match gl.types[gl.vars[dst].ty] {
+        let op = match gl.vars[dst].ty {
             Type::Bits(size) => BinaryOp::BitXor(size),
             Type::Decimal => BinaryOp::DecimalXor,
         };
@@ -327,13 +325,13 @@ impl BasicBlockBuilder {
         lhs: VariableKey,
         rhs: VariableKey,
     ) -> VariableKey {
-        let dst = self.next_tmp_var(gl, TypeTable::INT64);
+        let dst = self.next_tmp_var(gl, Type::Decimal);
 
         let lhs_ty = gl.vars[lhs].ty;
         let rhs_ty = gl.vars[rhs].ty;
 
-        assert_eq!(lhs_ty, TypeTable::INT64);
-        assert_eq!(rhs_ty, TypeTable::INT64);
+        assert_eq!(lhs_ty, Type::Decimal);
+        assert_eq!(rhs_ty, Type::Decimal);
 
         self.instrs.push(Instruction::Binary(
             dst,
@@ -349,13 +347,13 @@ impl BasicBlockBuilder {
         lhs: VariableKey,
         rhs: VariableKey,
     ) -> VariableKey {
-        let dst = self.next_tmp_var(gl, TypeTable::INT64);
+        let dst = self.next_tmp_var(gl, Type::Decimal);
 
         let lhs_ty = gl.vars[lhs].ty;
         let rhs_ty = gl.vars[rhs].ty;
 
-        assert_eq!(lhs_ty, TypeTable::INT64);
-        assert_eq!(rhs_ty, TypeTable::INT64);
+        assert_eq!(lhs_ty, Type::Decimal);
+        assert_eq!(rhs_ty, Type::Decimal);
 
         self.instrs
             .push(Instruction::Binary(dst, BinaryOp::DecimalAdd, lhs, rhs));
@@ -367,13 +365,13 @@ impl BasicBlockBuilder {
         lhs: VariableKey,
         rhs: VariableKey,
     ) -> VariableKey {
-        let dst = self.next_tmp_var(gl, TypeTable::INT64);
+        let dst = self.next_tmp_var(gl, Type::Decimal);
 
         let lhs_ty = gl.vars[lhs].ty;
         let rhs_ty = gl.vars[rhs].ty;
 
-        assert_eq!(lhs_ty, TypeTable::INT64);
-        assert_eq!(rhs_ty, TypeTable::INT64);
+        assert_eq!(lhs_ty, Type::Decimal);
+        assert_eq!(rhs_ty, Type::Decimal);
 
         self.instrs
             .push(Instruction::Binary(dst, BinaryOp::DecimalSub, lhs, rhs));
@@ -385,13 +383,13 @@ impl BasicBlockBuilder {
         lhs: VariableKey,
         rhs: VariableKey,
     ) -> VariableKey {
-        let dst = self.next_tmp_var(gl, TypeTable::INT64);
+        let dst = self.next_tmp_var(gl, Type::Decimal);
 
         let lhs_ty = gl.vars[lhs].ty;
         let rhs_ty = gl.vars[rhs].ty;
 
-        assert_eq!(lhs_ty, TypeTable::INT64);
-        assert_eq!(rhs_ty, TypeTable::INT64);
+        assert_eq!(lhs_ty, Type::Decimal);
+        assert_eq!(rhs_ty, Type::Decimal);
 
         self.instrs
             .push(Instruction::Binary(dst, BinaryOp::DecimalDivide, lhs, rhs));
@@ -403,13 +401,13 @@ impl BasicBlockBuilder {
         lhs: VariableKey,
         rhs: VariableKey,
     ) -> VariableKey {
-        let dst = self.next_tmp_var(gl, TypeTable::INT64);
+        let dst = self.next_tmp_var(gl, Type::Decimal);
 
         let lhs_ty = gl.vars[lhs].ty;
         let rhs_ty = gl.vars[rhs].ty;
 
-        assert_eq!(lhs_ty, TypeTable::INT64);
-        assert_eq!(rhs_ty, TypeTable::INT64);
+        assert_eq!(lhs_ty, Type::Decimal);
+        assert_eq!(rhs_ty, Type::Decimal);
 
         self.instrs
             .push(Instruction::Binary(dst, BinaryOp::DecimalModulus, lhs, rhs));
@@ -421,7 +419,7 @@ impl BasicBlockBuilder {
         src: VariableKey,
         constant: impl Into<i64>,
     ) -> VariableKey {
-        assert_eq!(gl.vars[src].ty, TypeTable::INT64);
+        assert_eq!(gl.vars[src].ty, Type::Decimal);
         let constant = constant.into();
 
         if constant == 0 {
@@ -440,12 +438,12 @@ impl BasicBlockBuilder {
         src: VariableKey,
         idx: VariableKey,
     ) -> VariableKey {
-        let dst = self.next_tmp_var(gl, TypeTable::SCALAR_BIT);
+        let dst = self.next_tmp_var(gl, Type::SCALAR_NET);
 
-        let Type::Bits(n) = gl.types[gl.vars[src].ty] else {
+        let Type::Bits(n) = gl.vars[src].ty else {
             panic!();
         };
-        let idx = self.cast(gl, idx, TypeTable::INT64);
+        let idx = self.cast(gl, idx, Type::Decimal);
 
         self.instrs
             .push(Instruction::Binary(dst, BinaryOp::SelectBit(n), src, idx));
@@ -457,12 +455,12 @@ impl BasicBlockBuilder {
         src: VariableKey,
         shift: VariableKey,
     ) -> VariableKey {
-        let Type::Bits(n) = gl.types[gl.vars[src].ty] else {
+        let Type::Bits(n) = gl.vars[src].ty else {
             panic!();
         };
 
         let dst = self.next_tmp_var(gl, gl.vars[src].ty);
-        let shift = self.cast(gl, shift, TypeTable::INT64);
+        let shift = self.cast(gl, shift, Type::Decimal);
 
         self.instrs.push(Instruction::Binary(
             dst,
@@ -478,7 +476,7 @@ impl BasicBlockBuilder {
         subject: VariableKey,
         width: VectorSize,
     ) -> VariableKey {
-        let Type::Bits(n) = gl.types[gl.vars[subject].ty] else {
+        let Type::Bits(n) = gl.vars[subject].ty else {
             panic!();
         };
 
@@ -486,7 +484,7 @@ impl BasicBlockBuilder {
             return subject;
         }
 
-        let ty = gl.types.insert(Type::Bits(width));
+        let ty = Type::Bits(width);
         let dst = self.next_tmp_var(gl, ty);
         self.instrs.push(Instruction::Unary(
             dst,
@@ -520,24 +518,24 @@ impl BasicBlockBuilder {
         lhs: VariableKey,
         rhs: VariableKey,
     ) -> VariableKey {
-        let dst = self.next_tmp_var(gl, TypeTable::SCALAR_BIT);
+        let dst = self.next_tmp_var(gl, Type::SCALAR_NET);
 
         let lhs_ty = gl.vars[lhs].ty;
         let rhs_ty = gl.vars[rhs].ty;
 
         use Type as T;
-        let (lhs, rhs, op) = match (gl.types[lhs_ty], gl.types[rhs_ty]) {
+        let (lhs, rhs, op) = match (lhs_ty, rhs_ty) {
             (T::Bits(x), T::Bits(y)) if x == y => (lhs, rhs, BinaryOp::UnsignedLessEqual(x)),
             (T::Decimal, T::Decimal) => (lhs, rhs, BinaryOp::DecimalLessEqual),
             (T::Bits(x), T::Bits(y)) => {
                 let out_size = (x).max(y);
-                let ty = gl.types.insert(T::Bits(out_size));
+                let ty = T::Bits(out_size);
                 let lhs = self.cast(gl, lhs, ty);
                 let rhs = self.cast(gl, rhs, ty);
                 (lhs, rhs, BinaryOp::UnsignedLessEqual(out_size))
             }
             (T::Bits(x), _) | (_, T::Bits(x)) => {
-                let ty = gl.types.insert(T::Bits(x));
+                let ty = T::Bits(x);
                 let lhs = self.cast(gl, lhs, ty);
                 let rhs = self.cast(gl, rhs, ty);
                 (lhs, rhs, BinaryOp::UnsignedLessEqual(x))
@@ -578,12 +576,12 @@ impl BasicBlockBuilder {
     }
 
     pub fn reduce_xor(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
-        if gl.vars[src].ty == TypeTable::SCALAR_BIT {
+        if gl.vars[src].ty == Type::SCALAR_NET {
             return src;
         }
 
-        let dst = self.next_tmp_var(gl, TypeTable::SCALAR_BIT);
-        let op = match gl.types[gl.vars[src].ty] {
+        let dst = self.next_tmp_var(gl, Type::SCALAR_NET);
+        let op = match gl.vars[src].ty {
             Type::Decimal => UnaryOp::DecimalReduceXor,
             Type::Bits(n) => UnaryOp::BitReduceXor(n),
         };
@@ -592,12 +590,12 @@ impl BasicBlockBuilder {
     }
 
     pub fn reduce_or(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
-        if gl.vars[src].ty == TypeTable::SCALAR_BIT {
+        if gl.vars[src].ty == Type::SCALAR_NET {
             return src;
         }
 
-        let dst = self.next_tmp_var(gl, TypeTable::SCALAR_BIT);
-        let op = match gl.types[gl.vars[src].ty] {
+        let dst = self.next_tmp_var(gl, Type::SCALAR_NET);
+        let op = match gl.vars[src].ty {
             Type::Decimal => UnaryOp::DecimalReduceOr,
             Type::Bits(n) => UnaryOp::BitReduceOr(n),
         };
@@ -605,12 +603,12 @@ impl BasicBlockBuilder {
         dst
     }
     pub fn reduce_and(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
-        if gl.vars[src].ty == TypeTable::SCALAR_BIT {
+        if gl.vars[src].ty == Type::SCALAR_NET {
             return src;
         }
 
-        let dst = self.next_tmp_var(gl, TypeTable::SCALAR_BIT);
-        let op = match gl.types[gl.vars[src].ty] {
+        let dst = self.next_tmp_var(gl, Type::SCALAR_NET);
+        let op = match gl.vars[src].ty {
             Type::Decimal => UnaryOp::DecimalReduceAnd,
             Type::Bits(n) => UnaryOp::BitReduceAnd(n),
         };
@@ -640,7 +638,7 @@ impl BasicBlockBuilder {
         region: u8,
     ) {
         let ty = gl.signals[signal].ty;
-        let src = self.cast(gl, src, ty.key);
+        let src = self.cast(gl, src, ty);
         gl.processes[self.process].outs.insert(signal);
         self.instrs
             .push(Instruction::Drive(signal, src, region, None));
@@ -654,7 +652,7 @@ impl BasicBlockBuilder {
         offset: VariableKey,
         length: VectorSize,
     ) {
-        let ty = gl.types.insert(Type::Bits(length));
+        let ty = Type::Bits(length);
         let src = self.cast(gl, src, ty);
         gl.processes[self.process].outs.insert(signal);
         self.instrs.push(Instruction::Drive(
@@ -667,7 +665,7 @@ impl BasicBlockBuilder {
     pub fn probe(&mut self, gl: &mut GlobalContext, signal: SignalKey) -> VariableKey {
         gl.processes[self.process].ins.insert(signal);
         let ty = gl.signals.get(signal).unwrap().ty;
-        let variable = self.next_tmp_var(gl, ty.key);
+        let variable = self.next_tmp_var(gl, ty);
         self.instrs.push(Instruction::Probe(variable, signal));
         variable
     }
@@ -888,7 +886,7 @@ impl BasicBlockBuilder {
         self.instrs.push(Instruction::Intrinsic(op, args));
     }
 
-    pub fn cast(&mut self, gl: &mut GlobalContext, src: VariableKey, ty: TypeKey) -> VariableKey {
+    pub fn cast(&mut self, gl: &mut GlobalContext, src: VariableKey, ty: Type) -> VariableKey {
         if gl.vars[src].ty == ty {
             return src;
         }
@@ -905,8 +903,8 @@ impl BasicBlockBuilder {
         idx: VariableKey,
     ) -> VariableKey {
         gl.processes[self.process].ins.insert(signal);
-        assert!(gl.signals[signal].ty.width.is_some());
-        let dst = self.next_tmp_var(gl, gl.signals[signal].ty.key);
+        assert!(gl.signals[signal].width.is_some());
+        let dst = self.next_tmp_var(gl, gl.signals[signal].ty);
         self.instrs.push(Instruction::ArrProbe(dst, signal, idx));
         dst
     }
@@ -939,7 +937,7 @@ impl BasicBlockBuilder {
         region: u8,
     ) {
         gl.processes[self.process].outs.insert(signal);
-        assert!(gl.signals[signal].ty.width.is_some());
+        assert!(gl.signals[signal].width.is_some());
         self.instrs
             .push(Instruction::ArrDrive(signal, src, idx, region, None));
     }
@@ -954,7 +952,7 @@ impl BasicBlockBuilder {
         width: VectorSize,
     ) {
         gl.processes[self.process].outs.insert(signal);
-        assert!(gl.signals[signal].ty.width.is_some());
+        assert!(gl.signals[signal].width.is_some());
         self.instrs.push(Instruction::ArrDrive(
             signal,
             src,

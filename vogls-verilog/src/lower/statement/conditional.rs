@@ -6,13 +6,12 @@ use crate::ast::statement::{
 };
 use crate::lower::diagnostics::Diagnostics;
 use crate::lower::scope::Scope;
-use crate::lower::{VTypeTable, lower_expr, statements_to_process};
+use crate::lower::{lower_expr, statements_to_process};
 use crate::parser::AstArenas;
 
 pub fn lower<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
-    types: &mut VTypeTable,
     scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
     mut builder: BasicBlockBuilder,
@@ -27,7 +26,6 @@ pub fn lower<'a>(
     let (condition, _) = lower_expr(
         gl,
         arenas,
-        types,
         scope,
         diagnostics,
         &mut builder,
@@ -41,7 +39,6 @@ pub fn lower<'a>(
     if_true_builder = lower_statement_or_null(
         gl,
         arenas,
-        types,
         scope,
         diagnostics,
         if_true_builder,
@@ -58,7 +55,6 @@ pub fn lower<'a>(
         let (condition, _) = lower_expr(
             gl,
             arenas,
-            types,
             scope,
             diagnostics,
             &mut builder,
@@ -70,7 +66,6 @@ pub fn lower<'a>(
         if_true_builder = lower_statement_or_null(
             gl,
             arenas,
-            types,
             scope,
             diagnostics,
             if_true_builder,
@@ -88,7 +83,7 @@ pub fn lower<'a>(
 
         scope.push_scope();
         builder =
-            lower_statement_or_null(gl, arenas, types, scope, diagnostics, builder, *statement)?;
+            lower_statement_or_null(gl, arenas, scope, diagnostics, builder, *statement)?;
         origins.push(builder.key());
         scope.pop_scope();
 
@@ -108,7 +103,6 @@ pub fn lower<'a>(
 pub fn lower_case_statement<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
-    types: &mut VTypeTable,
     scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
     mut builder: BasicBlockBuilder,
@@ -126,7 +120,7 @@ pub fn lower_case_statement<'a>(
         CaseStatementVariant::CaseX => todo!(),
     }
 
-    let (expr_var, _) = lower_expr(gl, arenas, types, scope, diagnostics, &mut builder, *expr)?;
+    let (expr_var, _) = lower_expr(gl, arenas, scope, diagnostics, &mut builder, *expr)?;
 
     let mut origins = Vec::new();
     let mut default = None;
@@ -140,11 +134,11 @@ pub fn lower_case_statement<'a>(
             }
             CaseItemPattern::Expressions(exprs) => {
                 let fst = exprs.first().expect("spec: 1+ pattern expr in case_item");
-                let (v, _) = lower_expr(gl, arenas, types, scope, diagnostics, &mut builder, fst)?;
+                let (v, _) = lower_expr(gl, arenas, scope, diagnostics, &mut builder, fst)?;
                 let mut acc = builder.equals(gl, expr_var, v);
                 for e in exprs.iter().skip(1) {
                     let (v, _) =
-                        lower_expr(gl, arenas, types, scope, diagnostics, &mut builder, e)?;
+                        lower_expr(gl, arenas, scope, diagnostics, &mut builder, e)?;
                     let v = builder.equals(gl, expr_var, v);
                     acc = builder.or(gl, acc, v);
                 }
@@ -157,7 +151,6 @@ pub fn lower_case_statement<'a>(
         if_true_builder = lower_statement_or_null(
             gl,
             arenas,
-            types,
             scope,
             diagnostics,
             if_true_builder,
@@ -173,7 +166,7 @@ pub fn lower_case_statement<'a>(
     if let Some(statement) = default {
         scope.push_scope();
         builder =
-            lower_statement_or_null(gl, arenas, types, scope, diagnostics, builder, statement)?;
+            lower_statement_or_null(gl, arenas, scope, diagnostics, builder, statement)?;
         origins.push(builder.key());
         scope.pop_scope();
         builder = builder.jump(gl);
@@ -192,7 +185,6 @@ pub fn lower_case_statement<'a>(
 pub fn lower_statement_or_null<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
-    types: &mut VTypeTable,
     scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
     builder: BasicBlockBuilder,
@@ -203,7 +195,6 @@ pub fn lower_statement_or_null<'a>(
         StatementOrNull::Statement(statement) => statements_to_process(
             gl,
             arenas,
-            types,
             scope,
             diagnostics,
             builder,

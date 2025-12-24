@@ -7,14 +7,13 @@ use crate::lower::scope::SymbolVariant;
 use crate::number::Decimal;
 use crate::parser::AstArenas;
 
+use super::Diagnostics;
 use super::scope::Scope;
 use super::vvalue::VValue;
-use super::{Diagnostics, VTypeTable};
 
 pub fn eval_constant_expr<'a>(
     _gl: &mut GlobalContext,
     arenas: &'a AstArenas,
-    types: &mut VTypeTable,
     scope: &Scope<'a>,
     diagnostics: &mut Diagnostics,
     expr: AstId<ConstantExpr>,
@@ -128,7 +127,7 @@ pub fn eval_constant_expr<'a>(
                 let value = match &scope.symbols[symbol_key].variant {
                     SymbolVariant::Genvar(n) => VValue::Integer(n.unwrap()),
                     SymbolVariant::Constant(n) => n.clone(),
-                    SymbolVariant::Signal(_) => {
+                    SymbolVariant::Signal(_dims, _) => {
                         result_stack.push(None);
                         diagnostics.not_yet_implemented(
                             arenas.get_item_span(*ast_ident),

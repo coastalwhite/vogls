@@ -5,7 +5,6 @@ use vogls_ir::SignalKey;
 
 use crate::parser::TokenRange;
 
-use super::VTypeKey;
 use super::vvalue::VValue;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -17,7 +16,6 @@ pub struct SymbolTable(Vec<Symbol>);
 pub struct Symbol {
     pub name: String,
     pub definition_site: TokenRange,
-    pub ty: VTypeKey,
     pub variant: SymbolVariant,
 }
 
@@ -46,7 +44,7 @@ impl SymbolTable {
 pub enum SymbolVariant {
     Genvar(Option<i64>),
     Constant(VValue),
-    Signal(SignalKey),
+    Signal(Vec<u32>, SignalKey),
 }
 
 #[derive(Debug, Clone)]

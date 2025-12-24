@@ -5,7 +5,7 @@ use crate::ast::{AstId, AstIdRange};
 use crate::lower::diagnostics::Diagnostics;
 use crate::lower::scope::{Scope, SymbolVariant};
 use crate::lower::{
-    Region, VTypeTable, assign_variable_lvalue, get_intersect_symbols_generated, lower_expr,
+    Region, assign_variable_lvalue, get_intersect_symbols_generated, lower_expr,
     statements_to_process,
 };
 use crate::parser::AstArenas;
@@ -13,7 +13,6 @@ use crate::parser::AstArenas;
 pub fn lower_loop_statement<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
-    types: &mut VTypeTable,
     scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
     mut builder: BasicBlockBuilder,
@@ -28,7 +27,7 @@ pub fn lower_loop_statement<'a>(
     let mut repeat_vars = None;
     match ls.variant {
         V::Repeat(size) => {
-            let (size, _) = lower_expr(gl, arenas, types, scope, diagnostics, &mut builder, size)?;
+            let (size, _) = lower_expr(gl, arenas, scope, diagnostics, &mut builder, size)?;
             let i = builder.constant(gl, Value::Decimal(0));
             repeat_vars = Some((i, size));
         }
@@ -37,7 +36,6 @@ pub fn lower_loop_statement<'a>(
             let (initialization_var, initialization_var_ty) = lower_expr(
                 gl,
                 arenas,
-                types,
                 scope,
                 diagnostics,
                 &mut builder,
@@ -46,7 +44,6 @@ pub fn lower_loop_statement<'a>(
             assign_variable_lvalue(
                 gl,
                 arenas,
-                types,
                 scope,
                 diagnostics,
                 &mut builder,
@@ -89,7 +86,7 @@ pub fn lower_loop_statement<'a>(
         match &mut scope.symbols[*symkey].variant {
             SymbolVariant::Constant(_) => todo!(),
             SymbolVariant::Genvar(_) => todo!(),
-            SymbolVariant::Signal(_) => {}
+            SymbolVariant::Signal(_dims, _) => {}
         }
     }
 
@@ -104,30 +101,12 @@ pub fn lower_loop_statement<'a>(
             repeat_i_phi = Some(phi_ref);
             Some(builder.unsigned_lt(gl, *i, *size))
         }
-        V::While(condition) => Some(
-            lower_expr(
-                gl,
-                arenas,
-                types,
-                scope,
-                diagnostics,
-                &mut builder,
-                condition,
-            )?
-            .0,
-        ),
-        V::For(_, condition, _) => Some(
-            lower_expr(
-                gl,
-                arenas,
-                types,
-                scope,
-                diagnostics,
-                &mut builder,
-                condition,
-            )?
-            .0,
-        ),
+        V::While(condition) => {
+            Some(lower_expr(gl, arenas, scope, diagnostics, &mut builder, condition)?.0)
+        }
+        V::For(_, condition, _) => {
+            Some(lower_expr(gl, arenas, scope, diagnostics, &mut builder, condition)?.0)
+        }
     };
 
     let branch_ref = match condition {
@@ -144,7 +123,6 @@ pub fn lower_loop_statement<'a>(
         builder = statements_to_process(
             gl,
             arenas,
-            types,
             scope,
             diagnostics,
             builder,
@@ -156,19 +134,11 @@ pub fn lower_loop_statement<'a>(
     match ls.variant {
         V::For(_, _, step) => {
             let step = arenas.get(step);
-            let (step_var, step_var_ty) = lower_expr(
-                gl,
-                arenas,
-                types,
-                scope,
-                diagnostics,
-                &mut builder,
-                step.expr,
-            )?;
+            let (step_var, step_var_ty) =
+                lower_expr(gl, arenas, scope, diagnostics, &mut builder, step.expr)?;
             assign_variable_lvalue(
                 gl,
                 arenas,
-                types,
                 scope,
                 diagnostics,
                 &mut builder,

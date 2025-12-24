@@ -5,25 +5,24 @@ use crate::ast::module::ParameterDeclarationTyping;
 use crate::parser::AstArenas;
 
 use super::scope::Scope;
-use super::{Diagnostics, VType, VTypeKey, VTypeTable, range_to_width};
+use super::{Diagnostics, VType, range_to_width};
 
 pub fn parameter_typing_to_type<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
-    types: &mut VTypeTable,
     scope: &mut Scope,
     diagnostics: &mut Diagnostics,
     typing: AstId<ParameterDeclarationTyping>,
-) -> Result<VTypeKey, ()> {
+) -> Result<VType, ()> {
     Ok(match arenas.get(typing) {
         ParameterDeclarationTyping::None(_, range) => match range {
             Some(range) => {
-                let width = range_to_width(gl, arenas, types, scope, diagnostics, *range)?;
-                types.insert(VType::VectorNet(width))
+                let width = range_to_width(gl, arenas, scope, diagnostics, *range)?;
+                VType::Net(width)
             }
-            None => types.scalar_net(),
+            None => VType::SCALAR_NET,
         },
-        ParameterDeclarationTyping::Integer => types.integer(),
+        ParameterDeclarationTyping::Integer => VType::Integer,
         ParameterDeclarationTyping::Real
         | ParameterDeclarationTyping::Realtime
         | ParameterDeclarationTyping::Time => {
