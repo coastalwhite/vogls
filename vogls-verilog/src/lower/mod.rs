@@ -903,7 +903,7 @@ fn assign_port_output<'a>(
 
                 let mut src = probed;
                 if let Some(offset_src) = offset_src {
-                    src = bb_builder.lsr(gl, src, offset_src);
+                    src = bb_builder.logical_shift_right(gl, src, offset_src);
                 }
                 let src = bb_builder.slice(gl, src, length_src);
                 bb_builder.drive_partial(gl, *key, src, offset_dst, length_dst.unwrap_or(1));

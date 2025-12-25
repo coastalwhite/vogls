@@ -330,16 +330,17 @@ impl Event {
                         }
                         O::SelectBit(n) => {
                             let idx = bits::store_to_u64(&bit_stack, rhs.offset, 32);
-                            assert!(idx >= 0 && idx < *n as u64);
+                            assert!(idx < *n as u64);
                             let idx = idx as VectorSize;
 
                             let byte_offset = n.div_ceil(8) - 1 - (idx / 8);
                             bit_stack[dst.offset] =
                                 (bit_stack[lhs.offset + byte_offset as usize] >> (idx % 8)) & 1;
                         }
-                        O::LogicalShiftRight(n) => {
-                            let shift = bits::store_to_u64(&bit_stack, rhs.offset, 32);
-                            assert!(shift >= 0 && shift < *n as u64);
+                        O::LogicalShiftLeft(..) => todo!(),
+                        O::LogicalShiftRight(n, shift_n) => {
+                            let shift = bits::store_to_u64(&bit_stack, rhs.offset, *shift_n);
+                            assert!(shift < *n as u64);
                             bits::logical_shift_right(
                                 bit_stack,
                                 dst.offset,
@@ -348,6 +349,8 @@ impl Event {
                                 *n,
                             );
                         }
+                        O::ArithmeticShiftLeft(..) => todo!(),
+                        O::ArithmeticShiftRight(..) => todo!(),
                         O::Concat(lhs_size, rhs_size) => bits::concat(
                             bit_stack, dst.offset, lhs.offset, rhs.offset, *lhs_size, *rhs_size,
                         ),

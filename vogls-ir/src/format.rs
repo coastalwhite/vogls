@@ -125,7 +125,10 @@ impl BinaryOp {
             Self::Modulus(_) => "rem",
             Self::UnsignedLessEqual(_) => "ule",
             Self::SelectBit(_) => "bselect",
-            Self::LogicalShiftRight(_) => "lsr",
+            Self::LogicalShiftLeft(_, _) => "lsl",
+            Self::LogicalShiftRight(_, _) => "lsr",
+            Self::ArithmeticShiftLeft(_, _) => "asl",
+            Self::ArithmeticShiftRight(_, _) => "asr",
             Self::Concat(_, _) => "concat",
         }
     }

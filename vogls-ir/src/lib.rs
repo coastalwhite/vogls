@@ -245,7 +245,10 @@ pub enum BinaryOp {
     Modulus(VectorSize),
     UnsignedLessEqual(VectorSize),
     SelectBit(VectorSize),
-    LogicalShiftRight(VectorSize),
+    LogicalShiftLeft(VectorSize, VectorSize),
+    LogicalShiftRight(VectorSize, VectorSize),
+    ArithmeticShiftLeft(VectorSize, VectorSize),
+    ArithmeticShiftRight(VectorSize, VectorSize),
     Concat(VectorSize, VectorSize),
 }
 

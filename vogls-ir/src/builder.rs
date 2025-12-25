@@ -10,7 +10,6 @@ use crate::{
 pub struct BasicBlockBuilder {
     key: BasicBlockKey,
     process: ProcessKey,
-    initializer: bool,
 
     pub instrs: Vec<Instruction>,
     tmp_offset: usize,
@@ -35,7 +34,6 @@ pub fn new_process(gl: &'_ mut GlobalContext, name: String) -> (ProcessKey, Basi
         BasicBlockBuilder {
             key: bb_key,
             process: process_key,
-            initializer: false,
             instrs: Vec::new(),
             tmp_offset: 0,
             bbname_offset: 0,
@@ -98,7 +96,6 @@ impl BasicBlockBuilder {
             key: next_key,
 
             process: self.process,
-            initializer: self.initializer,
 
             instrs: Vec::new(),
 
@@ -316,22 +313,6 @@ impl BasicBlockBuilder {
         ));
         dst
     }
-    pub fn lsr(
-        &mut self,
-        gl: &mut GlobalContext,
-        src: VariableKey,
-        shift: VariableKey,
-    ) -> VariableKey {
-        let size = gl.vars[src].size;
-        let dst = self.next_tmp_var(gl, size);
-        self.instrs.push(Instruction::Binary(
-            dst,
-            BinaryOp::LogicalShiftRight(size),
-            src,
-            shift,
-        ));
-        dst
-    }
     pub fn slice(
         &mut self,
         gl: &mut GlobalContext,
@@ -535,7 +516,7 @@ impl BasicBlockBuilder {
         variable
     }
 
-    pub fn jump(mut self, gl: &mut GlobalContext) -> BasicBlockBuilder {
+    pub fn jump(&mut self, gl: &mut GlobalContext) -> BasicBlockBuilder {
         let next_key = self.next_bb(gl);
         let slf = gl.bbs.get_mut(self.key).unwrap();
         slf.instrs = std::mem::take(&mut self.instrs);
@@ -544,7 +525,6 @@ impl BasicBlockBuilder {
             key: next_key,
 
             process: self.process,
-            initializer: self.initializer,
 
             instrs: Vec::new(),
 
@@ -567,9 +547,30 @@ impl BasicBlockBuilder {
             key: next_key,
 
             process: self.process,
-            initializer: self.initializer,
 
             instrs: Vec::new(),
+
+            tmp_offset: self.tmp_offset,
+            bbname_offset: self.bbname_offset,
+        }
+    }
+
+    pub fn continue_with(
+        &mut self,
+        gl: &mut GlobalContext,
+        bb: BasicBlockKey,
+    ) -> BasicBlockBuilder {
+        let slf = gl.bbs.get_mut(self.key).unwrap();
+        slf.instrs = std::mem::take(&mut self.instrs);
+        slf.terminator = BasicBlockTerminator::Halt;
+
+        let next_bb = gl.bbs.get_mut(bb).unwrap();
+        BasicBlockBuilder {
+            key: bb,
+
+            process: self.process,
+
+            instrs: std::mem::take(&mut next_bb.instrs),
 
             tmp_offset: self.tmp_offset,
             bbname_offset: self.bbname_offset,
@@ -589,7 +590,6 @@ impl BasicBlockBuilder {
             key: next_key,
 
             process: self.process,
-            initializer: self.initializer,
 
             instrs: Vec::new(),
 
@@ -599,7 +599,7 @@ impl BasicBlockBuilder {
     }
 
     pub fn branch(
-        mut self,
+        &mut self,
         gl: &mut GlobalContext,
         condition: VariableKey,
     ) -> (BranchRef, BasicBlockBuilder) {
@@ -612,7 +612,6 @@ impl BasicBlockBuilder {
             key: next_key,
 
             process: self.process,
-            initializer: self.initializer,
 
             instrs: Vec::new(),
 
@@ -636,7 +635,6 @@ impl BasicBlockBuilder {
             key: next_key,
 
             process: self.process,
-            initializer: self.initializer,
 
             instrs: Vec::new(),
 
@@ -658,7 +656,6 @@ impl BasicBlockBuilder {
             key: next_key,
 
             process: self.process,
-            initializer: self.initializer,
 
             instrs: Vec::new(),
 
@@ -682,7 +679,6 @@ impl BasicBlockBuilder {
             key: next_key,
 
             process: self.process,
-            initializer: self.initializer,
 
             instrs: Vec::new(),
 
@@ -705,7 +701,6 @@ impl BasicBlockBuilder {
             key: next_key,
 
             process: self.process,
-            initializer: self.initializer,
 
             instrs: Vec::new(),
 
@@ -723,7 +718,6 @@ impl BasicBlockBuilder {
             key: next_key,
 
             process: self.process,
-            initializer: self.initializer,
 
             instrs: Vec::new(),
 
@@ -834,5 +828,56 @@ impl BasicBlockBuilder {
 
     pub fn process(&self) -> ProcessKey {
         self.process
+    }
+
+    pub fn shift(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+        op: impl Fn(VectorSize, VectorSize) -> BinaryOp,
+    ) -> VariableKey {
+        let lhs_size = gl.vars[lhs].size;
+        let rhs_size = gl.vars[rhs].size;
+        let dst = self.next_tmp_var(gl, lhs_size);
+        self.instrs
+            .push(Instruction::Binary(dst, op(lhs_size, rhs_size), lhs, rhs));
+        dst
+    }
+    pub fn logical_shift_left(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+    ) -> VariableKey {
+        self.shift(gl, lhs, rhs, BinaryOp::LogicalShiftLeft)
+    }
+    pub fn logical_shift_right(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+    ) -> VariableKey {
+        self.shift(gl, lhs, rhs, BinaryOp::LogicalShiftRight)
+    }
+    pub fn arithmetic_shift_left(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+    ) -> VariableKey {
+        self.shift(gl, lhs, rhs, BinaryOp::ArithmeticShiftLeft)
+    }
+    pub fn arithmetic_shift_right(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+    ) -> VariableKey {
+        self.shift(gl, lhs, rhs, BinaryOp::ArithmeticShiftRight)
+    }
+
+    pub fn equals_zero(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
+        self.reduce_or(gl, src)
     }
 }

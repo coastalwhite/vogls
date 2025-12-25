@@ -4,7 +4,7 @@ use vogls_ir::{
 };
 
 use crate::ast::AstId;
-use crate::ast::expr::{BinaryOperator, BitSlice, Expr, UnaryOperator};
+use crate::ast::expr::{BinaryOperator, BitSlice, Expr, Replication, UnaryOperator};
 use crate::lower::constant_expr::eval_constant_expr;
 use crate::lower::scope::SymbolVariant;
 use crate::lower::{VType, msb_lsb_to_width};
@@ -108,14 +108,14 @@ pub fn lower_expr<'a>(
                     O::Modulus => bin_modulus,
                     O::BinaryPlus => bin_plus,
                     O::BinaryMinus => bin_minus,
-                    O::ShiftLeft => nyi!("shift left"),
-                    O::ShiftRight => nyi!("shift right"),
+                    O::ShiftLeft => bin_logical_shift_left,
+                    O::ShiftRight => bin_logical_shift_right,
                     O::GreaterThan => bin_greater_than,
                     O::GreaterThanEqual => bin_greater_than_equal,
                     O::LessThan => bin_less_than,
                     O::LessThanEqual => bin_less_than_equal,
-                    O::ArithmeticLeftShift => nyi!("arithmetic shift left"),
-                    O::ArithmeticRightShift => nyi!("arithmetic shift right"),
+                    O::ArithmeticLeftShift => bin_arithmetic_shift_left,
+                    O::ArithmeticRightShift => bin_arithmetic_shift_right,
                     O::LogicalEquality => bin_logical_equality,
                     O::LogicalInequality => bin_logical_inequality,
                     O::CaseEquality => nyi!("case equality"),
@@ -132,10 +132,13 @@ pub fn lower_expr<'a>(
             }
             Expr::Concatenation(exprs) => {
                 if exprs.is_empty() {
-                    panic!("empty concat");
-                    // let var = builder.constant(gl, Value::Bits(Bits::Small(0, 0)));
-                    // result_stack.push(Some((var, VType::VectorNet(0))));
-                    // continue;
+                    diagnostics.not_yet_implemented(
+                        arenas.get_span(item.expr),
+                        "concatenation without expressions",
+                    );
+                    error = true;
+                    result_stack.push(None);
+                    continue;
                 }
 
                 if !item.dispatched {
@@ -145,39 +148,125 @@ pub fn lower_expr<'a>(
                     continue;
                 }
 
+                let end_stack_size = result_stack.len() - exprs.len();
                 let Some((mut output, ty)) = result_stack.pop().unwrap() else {
+                    result_stack.truncate(end_stack_size);
                     result_stack.push(None);
                     continue;
                 };
-                let Some(mut width) = ty.net_size() else {
-                    diagnostics.not_yet_implemented(
-                        arenas.get_span(exprs.last().unwrap()),
-                        "non-net concatenation",
-                    );
-                    error = true;
-                    result_stack.push(None);
-                    continue;
-                };
-                for i in 1..exprs.len() {
+                let mut width = ty.force_net_width();
+                for _ in 1..exprs.len() {
                     let Some((next, next_ty)) = result_stack.pop().unwrap() else {
+                        result_stack.truncate(end_stack_size);
                         result_stack.push(None);
                         continue;
                     };
-                    let Some(next_width) = next_ty.net_size() else {
-                        diagnostics.not_yet_implemented(
-                            arenas.get_span(exprs.get(exprs.len() - i - 1)),
-                            "non-net concatenation",
-                        );
-                        error = true;
-                        result_stack.push(None);
-                        continue;
-                    };
+                    let next_width = next_ty.force_net_width();
                     output = builder.concat(gl, next, output);
                     width += next_width;
                 }
                 result_stack.push(Some((output, VType::Net(width))));
             }
-            Expr::Replication(_) => todo!(),
+            Expr::Replication(replication) => {
+                let Replication {
+                    constant_expr,
+                    exprs,
+                } = *replication;
+
+                if exprs.is_empty() {
+                    diagnostics.not_yet_implemented(
+                        arenas.get_span(item.expr),
+                        "concatenation without expressions",
+                    );
+                    error = true;
+                    result_stack.push(None);
+                    continue;
+                }
+
+                if !item.dispatched {
+                    item.dispatched = true;
+                    dispatch_stack.push(item);
+                    dispatch_stack.extend(exprs.iter().rev().map(StackItem::new));
+                    continue;
+                }
+
+                let end_stack_size = result_stack.len() - exprs.len();
+                let Ok(repeat_n) =
+                    eval_constant_expr(gl, arenas, scope, diagnostics, constant_expr)
+                else {
+                    result_stack.truncate(end_stack_size);
+                    result_stack.push(None);
+                    continue;
+                };
+                let Some(repeat_n) = repeat_n.to_vector_size() else {
+                    diagnostics.not_yet_implemented(
+                        arenas.get_span(constant_expr),
+                        "replication overflow",
+                    );
+                    result_stack.truncate(end_stack_size);
+                    result_stack.push(None);
+                    continue;
+                };
+                if repeat_n == 0 {
+                    diagnostics
+                        .not_yet_implemented(arenas.get_span(constant_expr), "replication is 0");
+                    result_stack.truncate(end_stack_size);
+                    result_stack.push(None);
+                    continue;
+                }
+                let Some((mut output, ty)) = result_stack.pop().unwrap() else {
+                    result_stack.truncate(end_stack_size);
+                    result_stack.push(None);
+                    continue;
+                };
+                let mut width = ty.force_net_width();
+                for _ in 1..exprs.len() {
+                    let Some((next, next_ty)) = result_stack.pop().unwrap() else {
+                        result_stack.truncate(end_stack_size);
+                        result_stack.push(None);
+                        continue;
+                    };
+                    let next_width = next_ty.force_net_width();
+                    output = builder.concat(gl, next, output);
+                    width += next_width;
+                }
+
+                let Some(output_width) = width.checked_mul(repeat_n) else {
+                    diagnostics
+                        .not_yet_implemented(arenas.get_span(item.expr), "replication overflow");
+                    result_stack.push(None);
+                    continue;
+                };
+                let num_repeats = builder.constant_u32(gl, repeat_n);
+                let start_bb = builder.key();
+                *builder = builder.jump(gl);
+
+                // @Performance: Use log2 concatenation here.
+                let loop_start_bb = builder.key();
+                let (num_repeats, num_repeats_phi) = builder.phi(
+                    gl,
+                    [(start_bb, num_repeats), (start_bb, num_repeats)].into(),
+                );
+                let single_output = output;
+                let (output, output_phi) =
+                    builder.phi(gl, [(start_bb, output), (start_bb, output)].into());
+                let one = builder.constant_u32(gl, 1);
+                let num_repeats = builder.minus(gl, num_repeats, one);
+                let condition = builder.equals_zero(gl, num_repeats);
+                let branch_ref;
+                (branch_ref, *builder) = builder.branch(gl, condition);
+                let concatted_output = builder.concat(gl, output, single_output);
+
+                let inner_loop_bb = builder.key();
+                builder.update_phi_ref(gl, num_repeats_phi, 1, inner_loop_bb, num_repeats);
+                builder.update_phi_ref(gl, output_phi, 1, inner_loop_bb, concatted_output);
+                *builder = builder.next_terminate_later(gl);
+
+                branch_ref.update(gl, builder.key());
+                gl.bbs[inner_loop_bb].terminator = BasicBlockTerminator::Jump(loop_start_bb);
+
+                result_stack.push(Some((output, VType::Net(output_width))));
+            }
             Expr::Ternary(condition, truthy, falsy) => {
                 if !item.dispatched {
                     item.dispatched = true;
@@ -197,34 +286,33 @@ pub fn lower_expr<'a>(
 
                 let c = builder.reduce_or(gl, c);
 
-                let (Ok(t_ty), Ok(f_ty)) = (
-                    expr_to_type(gl, arenas, scope, diagnostics, *truthy),
-                    expr_to_type(gl, arenas, scope, diagnostics, *falsy),
-                ) else {
-                    result_stack.push(None);
-                    continue;
-                };
-
                 let condition_bb = builder.key();
                 *builder = builder.next_terminate_later(gl);
 
                 let truthy_bb = builder.key();
-                let Ok((t, _)) = lower_expr(gl, arenas, scope, diagnostics, builder, *truthy)
+                let Ok((t, t_ty)) = lower_expr(gl, arenas, scope, diagnostics, builder, *truthy)
                 else {
                     result_stack.push(None);
                     error |= true;
                     continue;
                 };
-                let (t, _) = coerce_to_max_size(gl, builder, t, t_ty, f_ty);
 
                 *builder = builder.next_terminate_later(gl);
                 let falsy_bb = builder.key();
-                let Ok((f, _)) = lower_expr(gl, arenas, scope, diagnostics, builder, *falsy) else {
+                let Ok((f, f_ty)) = lower_expr(gl, arenas, scope, diagnostics, builder, *falsy)
+                else {
                     result_stack.push(None);
                     error |= true;
                     continue;
                 };
-                let (f, _) = coerce_to_max_size(gl, builder, f, t_ty, f_ty);
+
+                *builder = builder.continue_with(gl, truthy_bb);
+
+                let ty = coerce_to_max_size_ty(t_ty, f_ty).force_net_width();
+                let t = sign_extend_or_truncate(gl, builder, t, t_ty, ty);
+
+                *builder = builder.continue_with(gl, falsy_bb);
+                let f = sign_extend_or_truncate(gl, builder, f, f_ty, ty);
 
                 *builder = builder.next_terminate_later(gl);
                 let (outcome, _) = builder.phi(gl, [(truthy_bb, t), (falsy_bb, f)].into());
@@ -373,7 +461,7 @@ pub fn lower_expr<'a>(
                     };
 
                     ty = VType::Net(width);
-                    let shifted = builder.lsr(gl, var, lsb);
+                    let shifted = builder.logical_shift_right(gl, var, lsb);
                     var = builder.slice(gl, shifted, width as VectorSize);
                 }
 
@@ -591,6 +679,23 @@ macro_rules! impl_bin_eq_ineq {
     };
 }
 
+macro_rules! impl_shift {
+    ($($f:ident => $builder_f:ident),+ $(,)?) => {
+        $(
+        fn $f<'a>(
+            gl: &mut GlobalContext,
+            builder: &mut BasicBlockBuilder,
+            l: VariableKey,
+            l_ty: VType,
+            r: VariableKey,
+            _: VType,
+        ) -> (VariableKey, VType) {
+            (builder.$builder_f(gl, l, r), l_ty)
+        }
+        )+
+    };
+}
+
 impl_bin_arithmetic! {
     bin_multiply => multiply,
     bin_divide => divide,
@@ -614,6 +719,13 @@ impl_bin_eq_ineq! {
     bin_logical_or => logical_or,
 }
 
+impl_shift! {
+    bin_logical_shift_left => logical_shift_left,
+    bin_logical_shift_right => logical_shift_right,
+    bin_arithmetic_shift_left => arithmetic_shift_left,
+    bin_arithmetic_shift_right => arithmetic_shift_right,
+}
+
 pub fn sign_extend_or_truncate(
     gl: &mut GlobalContext,
     builder: &mut BasicBlockBuilder,
@@ -629,126 +741,4 @@ pub fn sign_extend_or_truncate(
     } else {
         builder.cast(gl, src, to)
     }
-}
-
-fn expr_to_type<'a>(
-    gl: &mut GlobalContext,
-    arenas: &'a AstArenas,
-    scope: &Scope<'a>,
-    diagnostics: &mut Diagnostics,
-    expr: AstId<Expr>,
-) -> Result<VType, ()> {
-    Ok(match arenas.get(expr) {
-        Expr::Unary(op, child) => {
-            let child = expr_to_type(gl, arenas, scope, diagnostics, *child)?;
-            use UnaryOperator as O;
-            match op {
-                O::LogicalNegation | O::BitwiseNegation => child,
-                O::ReductionAnd
-                | O::ReductionOr
-                | O::ReductionNand
-                | O::ReductionNor
-                | O::ReductionXor
-                | O::ReductionXnor => VType::SCALAR_NET,
-                O::SignPlus => todo!(),
-                O::SignMinus => todo!(),
-            }
-        }
-        Expr::Binary(op, l, r) => {
-            let l = expr_to_type(gl, arenas, scope, diagnostics, *l)?;
-            let r = expr_to_type(gl, arenas, scope, diagnostics, *r)?;
-            _ = (l, r);
-            use BinaryOperator as O;
-            match op {
-                O::Multiply => todo!(),
-                O::Divide => todo!(),
-                O::Modulus => todo!(),
-                O::BinaryPlus => coerce_to_max_size_ty(l, r),
-                O::BinaryMinus => todo!(),
-                O::ShiftLeft => todo!(),
-                O::ShiftRight => todo!(),
-                O::ArithmeticLeftShift => todo!(),
-                O::ArithmeticRightShift => todo!(),
-                O::GreaterThan => todo!(),
-                O::GreaterThanEqual => todo!(),
-                O::LessThan => todo!(),
-                O::LessThanEqual => todo!(),
-                O::LogicalEquality => todo!(),
-                O::LogicalInequality => todo!(),
-                O::CaseEquality => todo!(),
-                O::CaseInequality => todo!(),
-                O::BitwiseAnd => todo!(),
-                O::BitwiseXor => todo!(),
-                O::BitwiseXnor => todo!(),
-                O::BitwiseOr => todo!(),
-                O::LogicalAnd => todo!(),
-                O::LogicalOr => todo!(),
-            }
-        }
-        Expr::Concatenation(exprs) => {
-            let mut width = 0;
-            let mut error = false;
-            for expr in exprs.iter() {
-                match expr_to_type(gl, arenas, scope, diagnostics, expr)
-                    .and_then(|t| t.net_size().ok_or(()))
-                {
-                    Ok(ew) => width += ew,
-                    Err(_) => error = true,
-                }
-            }
-            if error {
-                return Err(());
-            }
-            VType::Net(width)
-        }
-        Expr::Replication(_) => todo!(),
-        Expr::Ternary(_, _, _) => todo!(),
-        Expr::Ident(ast_ident, exprs, range_expression) => {
-            let ident = arenas.get_ident(ast_ident.item.0);
-            let Some(symbol_key) = scope.get(&ident) else {
-                diagnostics.var_not_found(arenas, *ast_ident);
-                return Err(());
-            };
-            let (n_dims, ty) = match &scope.symbols[symbol_key].variant {
-                SymbolVariant::Genvar(_) => (0 as _, VType::Integer),
-                SymbolVariant::Constant(vvalue) => (0, vvalue.ty()),
-                SymbolVariant::Signal(dims, ty, _signal_key) => (dims.len(), *ty),
-                SymbolVariant::Task(_) => todo!(),
-            };
-
-            if n_dims > exprs.len() {
-                diagnostics.not_yet_implemented(arenas.get_span(expr), "more dims than exprs");
-                return Err(());
-            }
-
-            match range_expression {
-                None if exprs.len() > n_dims => VType::SCALAR_NET,
-                None => ty,
-                Some(bit_slice) => {
-                    let width = match bit_slice {
-                        BitSlice::MsbLsb(msb, lsb) => {
-                            let (_, _, width) =
-                                msb_lsb_to_width(gl, arenas, scope, diagnostics, *msb, *lsb)?;
-                            width
-                        }
-                        BitSlice::PlusWidth(_, width) | BitSlice::MinusWidth(_, width) => {
-                            let width = eval_constant_expr(gl, arenas, scope, diagnostics, *width)?;
-                            let width = width.as_integer().unwrap() as VectorSize;
-                            width
-                        }
-                    };
-                    VType::Net(width)
-                }
-            }
-        }
-        Expr::Decimal(_) => VType::Integer,
-        Expr::Sized(sized) => {
-            let sized = &arenas.sized_numbers[sized.item.at];
-            let Some(size) = sized.size else { todo!() };
-            VType::Net(size.as_u32())
-        }
-        Expr::String(_) => todo!(),
-        Expr::FunctionCall(ast_item, ast_id_range) => todo!(),
-        Expr::SystemFunctionCall(ast_item, ast_id_range) => todo!(),
-    })
 }

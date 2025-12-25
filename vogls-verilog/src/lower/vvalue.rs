@@ -1,6 +1,6 @@
 use std::ops::{BitAnd as _, BitOr as _, BitXor as _};
 
-use vogls_ir::Bits;
+use vogls_ir::{Bits, VectorSize};
 
 use super::VType;
 
@@ -161,6 +161,13 @@ impl VValue {
         let rhs = rhs.into_bits();
 
         VValue::Net(Bits::concatenate(lhs, rhs))
+    }
+
+    pub fn to_vector_size(self) -> Option<VectorSize> {
+        match self {
+            VValue::Integer(v) => v.try_into().ok(),
+            VValue::Net(_) => todo!(),
+        }
     }
 }
 

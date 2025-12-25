@@ -5,6 +5,7 @@ use crate::ast::statement::{
     CaseItemPattern, CaseStatement, CaseStatementVariant, ConditionalStatement, StatementOrNull,
 };
 use crate::lower::diagnostics::Diagnostics;
+use crate::lower::expression::coerce_bin_arithmetic;
 use crate::lower::scope::Scope;
 use crate::lower::{lower_expr, statements_to_process};
 use crate::parser::AstArenas;
@@ -120,7 +121,7 @@ pub fn lower_case_statement<'a>(
         CaseStatementVariant::CaseX => todo!(),
     }
 
-    let (expr_var, _) = lower_expr(gl, arenas, scope, diagnostics, &mut builder, *expr)?;
+    let (expr_var, expr_var_ty) = lower_expr(gl, arenas, scope, diagnostics, &mut builder, *expr)?;
 
     let mut origins = Vec::new();
     let mut default = None;
@@ -134,7 +135,8 @@ pub fn lower_case_statement<'a>(
             }
             CaseItemPattern::Expressions(exprs) => {
                 let fst = exprs.first().expect("spec: 1+ pattern expr in case_item");
-                let (v, _) = lower_expr(gl, arenas, scope, diagnostics, &mut builder, fst)?;
+                let (v, v_ty) = lower_expr(gl, arenas, scope, diagnostics, &mut builder, fst)?;
+                let (expr_var, _, v, _) = coerce_bin_arithmetic(gl, &mut builder, expr_var, expr_var_ty, v, v_ty);
                 let mut acc = builder.equals(gl, expr_var, v);
                 for e in exprs.iter().skip(1) {
                     let (v, _) =
