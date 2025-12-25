@@ -8,6 +8,7 @@ use super::VType;
 pub enum VValue {
     Integer(i64),
     Net(Bits),
+    String(Box<str>),
 }
 
 impl VValue {
@@ -16,6 +17,7 @@ impl VValue {
         match ty {
             VType::Net(n) => Self::Net(Bits::new_zeroed(n)),
             VType::Integer => Self::Integer(-1337),
+            VType::String(n) => Self::String(std::iter::repeat_n('\0', n as usize).collect()),
         }
     }
 
@@ -23,6 +25,7 @@ impl VValue {
         match self {
             Self::Integer(v) => Some(*v),
             Self::Net(_) => None,
+            Self::String(_) => None,
         }
     }
 
@@ -30,6 +33,7 @@ impl VValue {
         match self {
             VValue::Integer(_) => VType::Integer,
             VValue::Net(bits) => VType::Net(bits.size()),
+            VValue::String(s) => VType::String(s.len() as u32),
         }
     }
 
@@ -53,6 +57,7 @@ impl VValue {
                     V::Net(r.sign_extend(max_size)),
                 )
             }
+            (V::String(_), _) | (_, V::String(_)) => todo!(),
         }
     }
 
@@ -63,6 +68,7 @@ impl VValue {
             (V::Integer(l), V::Integer(r)) => l == r,
             (V::Integer(_), V::Net(_)) | (V::Net(_), V::Integer(_)) => unreachable!(),
             (V::Net(l), V::Net(r)) => l.as_slice() == r.as_slice(),
+            (V::String(_), _) | (_, V::String(_)) => todo!(),
         }
     }
 
@@ -73,6 +79,7 @@ impl VValue {
             (V::Integer(l), V::Integer(r)) => VValue::Integer(l.wrapping_shl(r as u32)),
             (V::Integer(_), V::Net(_)) | (V::Net(_), V::Integer(_)) => todo!(),
             (V::Net(_), V::Net(_)) => todo!(),
+            (V::String(_), _) | (_, V::String(_)) => todo!(),
         }
     }
     pub fn logical_shift_right(lhs: VValue, rhs: VValue) -> VValue {
@@ -82,6 +89,7 @@ impl VValue {
             (V::Integer(l), V::Integer(r)) => VValue::Integer(l.wrapping_shr(r as u32)),
             (V::Integer(_), V::Net(_)) | (V::Net(_), V::Integer(_)) => todo!(),
             (V::Net(_), V::Net(_)) => todo!(),
+            (V::String(_), _) | (_, V::String(_)) => todo!(),
         }
     }
     pub fn bitwise_xnor(lhs: VValue, rhs: VValue) -> VValue {
@@ -91,6 +99,7 @@ impl VValue {
             (V::Integer(l), V::Integer(r)) => VValue::Integer(!(l ^ r)),
             (V::Integer(_), V::Net(_)) | (V::Net(_), V::Integer(_)) => todo!(),
             (V::Net(_), V::Net(_)) => todo!(),
+            (V::String(_), _) | (_, V::String(_)) => todo!(),
         }
     }
     pub fn less_than(lhs: VValue, rhs: VValue) -> bool {
@@ -100,6 +109,7 @@ impl VValue {
             (V::Integer(l), V::Integer(r)) => l < r,
             (V::Integer(_), V::Net(_)) | (V::Net(_), V::Integer(_)) => todo!(),
             (V::Net(_), V::Net(_)) => todo!(),
+            (V::String(_), _) | (_, V::String(_)) => todo!(),
         }
     }
     pub fn less_than_equal(lhs: VValue, rhs: VValue) -> bool {
@@ -109,6 +119,7 @@ impl VValue {
             (V::Integer(l), V::Integer(r)) => l <= r,
             (V::Integer(_), V::Net(_)) | (V::Net(_), V::Integer(_)) => todo!(),
             (V::Net(_), V::Net(_)) => todo!(),
+            (V::String(_), _) | (_, V::String(_)) => todo!(),
         }
     }
     pub fn greater_than(lhs: VValue, rhs: VValue) -> bool {
@@ -118,6 +129,7 @@ impl VValue {
             (V::Integer(l), V::Integer(r)) => l > r,
             (V::Integer(_), V::Net(_)) | (V::Net(_), V::Integer(_)) => todo!(),
             (V::Net(_), V::Net(_)) => todo!(),
+            (V::String(_), _) | (_, V::String(_)) => todo!(),
         }
     }
     pub fn greater_than_equal(lhs: VValue, rhs: VValue) -> bool {
@@ -127,6 +139,7 @@ impl VValue {
             (V::Integer(l), V::Integer(r)) => l >= r,
             (V::Integer(_), V::Net(_)) | (V::Net(_), V::Integer(_)) => todo!(),
             (V::Net(_), V::Net(_)) => todo!(),
+            (V::String(_), _) | (_, V::String(_)) => todo!(),
         }
     }
 
@@ -139,6 +152,7 @@ impl VValue {
         match self {
             V::Integer(v) => *v != 0,
             V::Net(v) => v.not_eq_zero(),
+            V::String(v) => v.as_bytes().iter().any(|b| *b != 0),
         }
     }
 
@@ -153,6 +167,7 @@ impl VValue {
         match self {
             VValue::Integer(v) => Bits::from_i64_truncated(v, 32),
             VValue::Net(bits) => bits,
+            VValue::String(v) => Bits::load_from_slice(v.as_bytes(), (v.len() * 8) as u32),
         }
     }
 
@@ -167,6 +182,7 @@ impl VValue {
         match self {
             VValue::Integer(v) => v.try_into().ok(),
             VValue::Net(_) => todo!(),
+            VValue::String(_) => todo!(),
         }
     }
 }
@@ -182,6 +198,7 @@ macro_rules! impl_arithmetic {
                 (V::Integer(l), V::Integer(r)) => VValue::Integer(l.$op(r)),
                 (V::Integer(_), V::Net(_)) | (V::Net(_), V::Integer(_)) => todo!(),
                 (V::Net(l), V::Net(r)) => VValue::Net(Bits::$f(l, r)),
+                (V::String(_), _) | (_, V::String(_)) => todo!(),
             }
         }
         )+
@@ -193,6 +210,7 @@ macro_rules! impl_arithmetic {
                 (V::Integer(l), V::Integer(r)) => VValue::Integer(l.$opt(r)),
                 (V::Integer(_), V::Net(_)) | (V::Net(_), V::Integer(_)) => todo!(),
                 (V::Net(_), V::Net(_)) => todo!(),
+                (V::String(_), _) | (_, V::String(_)) => todo!(),
             }
         }
         )+

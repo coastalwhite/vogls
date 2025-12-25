@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use vogls_ir::{
-    ArrayWidth, Bits, ConnectionDirection, GlobalContext, ProcessKey, Signal, SignalKey,
+    Bits, ConnectionDirection, GlobalContext, ProcessKey, Signal, SignalKey,
     new_process,
 };
 
@@ -60,14 +60,11 @@ pub fn lower<'a>(
                                     diagnostics,
                                     net_ident.dimension,
                                 )?;
-                                let width = (!dims.is_empty())
-                                    .then(|| ArrayWidth::new(dims.iter().product::<u32>()));
                                 let ast_ident = net_ident.ident;
                                 let ident = ast_ident.item;
                                 let ident = arenas.get_ident(ident.0);
                                 let key = gl.signals.insert(Signal {
                                     name: ident.into(),
-                                    width,
                                     size: ty.force_net_width(),
                                 });
                                 let symbol_key = scope.symbols.insert(Symbol {
@@ -87,7 +84,6 @@ pub fn lower<'a>(
                                 let ident = arenas.get_ident(ast_ident.item.0);
                                 let key = gl.signals.insert(Signal {
                                     name: ident.into(),
-                                    width: None,
                                     size: ty.force_net_width(),
                                 });
                                 let symbol_key = scope.symbols.insert(Symbol {
@@ -139,11 +135,8 @@ pub fn lower<'a>(
                         let ident = arenas.get_ident(identifier.item.0);
 
                         let dims = dims_to_array(gl, arenas, scope, diagnostics, *dimensions)?;
-                        let width =
-                            (!dims.is_empty()).then(|| ArrayWidth::new(dims.iter().product()));
                         let key = gl.signals.insert(Signal {
                             name: ident.into(),
-                            width,
                             size: ty.force_net_width(),
                         });
                         let symbol_key = scope.symbols.insert(Symbol {
@@ -162,7 +155,6 @@ pub fn lower<'a>(
 
                         let key = gl.signals.insert(Signal {
                             name: ident.into(),
-                            width: None,
                             size: VType::Integer.force_net_width(),
                         });
                         let symbol_key = scope.symbols.insert(Symbol {

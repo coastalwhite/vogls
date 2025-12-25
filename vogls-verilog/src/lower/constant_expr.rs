@@ -12,7 +12,7 @@ use super::scope::Scope;
 use super::vvalue::VValue;
 
 pub fn eval_constant_expr<'a>(
-    _gl: &mut GlobalContext,
+    _gl: &GlobalContext,
     arenas: &'a AstArenas,
     scope: &Scope<'a>,
     diagnostics: &mut Diagnostics,

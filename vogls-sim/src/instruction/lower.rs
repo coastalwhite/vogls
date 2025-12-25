@@ -112,14 +112,6 @@ pub fn lower_process_to_vm(
                     *region,
                     partial.map(|(o, l)| (var(o), l)),
                 ),
-                I::ArrProbe(dst, src, idx) => VI::ArrProbe(var(*dst), signal!(*src), var(*idx)),
-                I::ArrDrive(dst, src, idx, region, partial) => VI::ArrDrive(
-                    signal!(*dst),
-                    var(*src),
-                    var(*idx),
-                    *region,
-                    partial.map(|(o, l)| (var(o), l)),
-                ),
                 I::Phi(..) => continue,
             };
 

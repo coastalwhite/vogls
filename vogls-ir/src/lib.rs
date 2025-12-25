@@ -1,6 +1,5 @@
 mod builder;
 mod format;
-mod types;
 
 use std::collections::HashSet;
 use std::fmt;
@@ -9,7 +8,6 @@ pub use builder::{BasicBlockBuilder, BranchRef, PhiRef, new_process};
 pub use format::{ContextFormat, DisplayContext};
 use indexmap::IndexSet;
 use slotmap::{SlotMap, new_key_type};
-pub use types::ArrayWidth;
 
 new_key_type! { pub struct ProcessKey; }
 new_key_type! { pub struct BasicBlockKey; }
@@ -82,7 +80,7 @@ impl Bits {
             }
         }
     }
-    
+
     pub fn from_i64_minimal(value: i64) -> Bits {
         let size = (64 - value.leading_zeros()).max(1);
         Self::from_i64_truncated(value, size)
@@ -204,7 +202,6 @@ pub struct Variable {
 
 pub struct Signal {
     pub name: String,
-    pub width: Option<ArrayWidth>,
     pub size: VectorSize,
 }
 
@@ -262,14 +259,6 @@ pub enum Instruction {
     Cast(VariableKey, VariableKey),
 
     Intrinsic(IntrinsicOp, Vec<IntrinsicArg>),
-    ArrProbe(VariableKey, SignalKey, VariableKey),
-    ArrDrive(
-        SignalKey,
-        VariableKey,
-        VariableKey,
-        u8,
-        Option<(VariableKey, VectorSize)>,
-    ),
     Probe(VariableKey, SignalKey),
     Drive(
         SignalKey,
@@ -289,9 +278,8 @@ impl Instruction {
             | Self::Binary(dst, _, _, _)
             | Self::Cast(dst, _)
             | Self::Phi(dst, _)
-            | Self::Probe(dst, _)
-            | Self::ArrProbe(dst, _, _) => Some(*dst),
-            Self::Intrinsic(..) | Self::ArrDrive(..) | Self::Drive(..) => None,
+            | Self::Probe(dst, _) => Some(*dst),
+            Self::Intrinsic(..) | Self::Drive(..) => None,
         }
     }
 }

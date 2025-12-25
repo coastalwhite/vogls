@@ -5,8 +5,7 @@ use crate::ast::{AstId, AstIdRange};
 use crate::lower::diagnostics::Diagnostics;
 use crate::lower::scope::{Scope, SymbolVariant};
 use crate::lower::{
-    Region, assign_variable_lvalue, get_intersect_symbols_generated, lower_expr,
-    statements_to_process,
+    Region, assign, get_intersect_symbols_generated, lower_expr, statements_to_process,
 };
 use crate::parser::AstArenas;
 
@@ -41,7 +40,7 @@ pub fn lower_loop_statement<'a>(
                 &mut builder,
                 initialization.expr,
             )?;
-            assign_variable_lvalue(
+            assign::assign_variable_lvalue(
                 gl,
                 arenas,
                 scope,
@@ -137,7 +136,7 @@ pub fn lower_loop_statement<'a>(
             let step = arenas.get(step);
             let (step_var, step_var_ty) =
                 lower_expr(gl, arenas, scope, diagnostics, &mut builder, step.expr)?;
-            assign_variable_lvalue(
+            assign::assign_variable_lvalue(
                 gl,
                 arenas,
                 scope,

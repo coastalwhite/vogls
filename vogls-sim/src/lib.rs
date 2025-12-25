@@ -2,13 +2,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
 
 use slotmap::{SlotMap, new_key_type};
-use vogls_ir::{ArrayWidth, BinaryOp, Bits, IntrinsicOp, UnaryOp, VectorSize};
-
-#[derive(PartialEq, Eq)]
-pub enum SignalValue {
-    Single(Bits),
-    Array(Box<[Bits]>),
-}
+use vogls_ir::{BinaryOp, Bits, IntrinsicOp, UnaryOp, VectorSize};
 
 mod bits;
 mod instruction;
@@ -53,12 +47,7 @@ impl Context {
 
 #[derive(Clone, Debug)]
 pub enum Event {
-    Drive(
-        VmSignalKey,
-        Bits,
-        Option<u32>,
-        Option<(VectorSize, VectorSize)>,
-    ),
+    Drive(VmSignalKey, Bits, Option<(VectorSize, VectorSize)>),
     Evaluation(EvaluationEvent),
 }
 
@@ -158,8 +147,7 @@ impl Event {
         processes: &SlotMap<VmProcessKey, VmProcess>,
         schedule: &mut BTreeMap<Timestamp, Vec<Event>>,
         regions: &mut Regions,
-        signals: &mut HashMap<VmSignalKey, SignalValue>,
-        signal_ty: &HashMap<VmSignalKey, (Option<ArrayWidth>, VectorSize)>,
+        signals: &mut HashMap<VmSignalKey, Bits>,
         listeners: &mut SlotMap<ListenerKey, Event>,
         watches: &mut HashMap<VmSignalKey, Vec<ListenerKey>>,
     ) -> EvalOutcome {
@@ -168,17 +156,9 @@ impl Event {
             bit_stack,
             ip,
         } = match &mut self {
-            Event::Drive(sig, bits, idx, partial) => {
-                let updated = match signals.get_mut(sig).unwrap() {
-                    SignalValue::Single(signal_bits) => {
-                        assert!(idx.is_none());
-                        drive_bits(signal_bits, bits.as_slice(), *partial)
-                    }
-                    SignalValue::Array(signal_bits) => {
-                        let Some(idx) = idx else { unreachable!() };
-                        drive_bits(&mut signal_bits[*idx as usize], bits.as_slice(), *partial)
-                    }
-                };
+            Event::Drive(sig, bits, partial) => {
+                let signal_bits = signals.get_mut(sig).unwrap();
+                let updated = drive_bits(signal_bits, bits.as_slice(), *partial);
 
                 if updated {
                     update_watchers(*sig, watches, listeners, regions);
@@ -206,10 +186,11 @@ impl Event {
                     use UnaryOp as O;
                     match op {
                         O::Neg(size) => {
-                            if *size != 1 {
-                                todo!()
+                            bit_stack[dst.offset] =
+                                bit_stack[src.offset] ^ 1u8.wrapping_shl(size % 8).wrapping_sub(1);
+                            for i in 1..size.div_ceil(8) as usize {
+                                bit_stack[dst.offset + i] = !bit_stack[src.offset + i];
                             }
-                            bit_stack[dst.offset] = u8::from(bit_stack[src.offset] == 0)
                         }
                         O::ReduceOr(size) => {
                             let result = bit_stack[src.offset..][..size.div_ceil(8) as usize]
@@ -340,7 +321,12 @@ impl Event {
                         O::LogicalShiftLeft(..) => todo!(),
                         O::LogicalShiftRight(n, shift_n) => {
                             let shift = bits::store_to_u64(&bit_stack, rhs.offset, *shift_n);
-                            assert!(shift < *n as u64);
+                            if shift as VectorSize >= *n {
+                                for i in 0..n.div_ceil(8) as usize {
+                                    bit_stack[dst.offset + i] = 0;
+                                }
+                                continue;
+                            }
                             bits::logical_shift_right(
                                 bit_stack,
                                 dst.offset,
@@ -444,18 +430,14 @@ impl Event {
                         }
                     }
                 }
-                I::Probe(var, sig) => {
-                    match signals.get(&sig).unwrap() {
-                        SignalValue::Single(Bits::Small(value, size)) => {
-                            bits::load_from_u64(bit_stack, var.offset, *size, *value);
-                        }
-                        SignalValue::Single(Bits::Big(size, value)) => {
-                            bit_stack[var.offset..][..size.div_ceil(8) as usize]
-                                .copy_from_slice(value);
-                        }
-                        SignalValue::Array(_) => unreachable!(),
-                    };
-                }
+                I::Probe(var, sig) => match signals.get(&sig).unwrap() {
+                    Bits::Small(value, size) => {
+                        bits::load_from_u64(bit_stack, var.offset, *size, *value);
+                    }
+                    Bits::Big(size, value) => {
+                        bit_stack[var.offset..][..size.div_ceil(8) as usize].copy_from_slice(value);
+                    }
+                },
                 I::Drive(sig, var, region, partial) => {
                     if *region != 0 {
                         let partial = partial.map(|(offset, width)| {
@@ -464,16 +446,16 @@ impl Event {
                                 width,
                             )
                         });
-                        let width = partial.map_or(signal_ty[sig].1, |(_, s)| s);
-                        let value = Bits::load_from_slice(&bit_stack[var.offset..], width);
+                        let size = signals[sig].size();
+                        let value = Bits::load_from_slice(&bit_stack[var.offset..], size);
                         regions.other[(region - 1) as usize]
-                            .push(Event::Drive(*sig, value, None, partial));
+                            .push(Event::Drive(*sig, value, partial));
                         continue;
                     }
 
                     let signal = signals.get_mut(sig).unwrap();
                     let updated = match signal {
-                        SignalValue::Single(Bits::Big(size, signal_value)) => {
+                        Bits::Big(size, signal_value) => {
                             if &bit_stack[var.offset..][..size.div_ceil(8) as usize]
                                 == signal_value.as_ref()
                             {
@@ -492,7 +474,7 @@ impl Event {
                                 true
                             }
                         }
-                        SignalValue::Single(Bits::Small(signal_value, size)) => {
+                        Bits::Small(signal_value, size) => {
                             let before = *signal_value;
                             match partial {
                                 None => {
@@ -508,93 +490,6 @@ impl Event {
                             }
                             before != *signal_value
                         }
-                        SignalValue::Array(_) => unreachable!(),
-                    };
-
-                    if updated {
-                        update_watchers(*sig, watches, listeners, regions);
-                    }
-                }
-                I::ArrProbe(dst, signal, idx) => {
-                    let signal = signals.get(signal).unwrap();
-                    let idx = bits::store_to_u64(&bit_stack, idx.offset, 32);
-                    match signal {
-                        SignalValue::Array(arr) => match &arr[idx as usize] {
-                            Bits::Small(value, size) => {
-                                bits::load_from_u64(bit_stack, dst.offset, *size, *value);
-                            }
-                            Bits::Big(size, value) => bit_stack[dst.offset..]
-                                [..size.div_ceil(8) as usize]
-                                .copy_from_slice(&value),
-                        },
-                        SignalValue::Single(_) => unreachable!(),
-                    };
-                }
-                I::ArrDrive(sig, src, idx, region, partial) => {
-                    if *region != 0 {
-                        let idx = bits::store_to_u64(&bit_stack, idx.offset, 32) as VectorSize;
-                        let partial = partial.map(|(offset, width)| {
-                            (
-                                bits::store_to_u64(&bit_stack, offset.offset, 32) as VectorSize,
-                                width,
-                            )
-                        });
-                        let value =
-                            Bits::load_from_slice(&bit_stack[src.offset..], signal_ty[sig].1);
-                        regions.other[(region - 1) as usize].push(Event::Drive(
-                            *sig,
-                            value,
-                            Some(idx),
-                            partial,
-                        ));
-                        continue;
-                    }
-
-                    let signal = signals.get_mut(sig).unwrap();
-                    let idx = bits::store_to_u64(&bit_stack, idx.offset, 32);
-
-                    let updated = match signal {
-                        SignalValue::Array(arr) => match &mut arr[idx as usize] {
-                            Bits::Big(size, signal_value) => {
-                                if &bit_stack[src.offset..][..size.div_ceil(8) as usize]
-                                    == signal_value.as_ref()
-                                {
-                                    false
-                                } else {
-                                    match partial {
-                                        None => {
-                                            *signal_value = bit_stack[src.offset..]
-                                                [..size.div_ceil(8) as usize]
-                                                .iter()
-                                                .copied()
-                                                .collect();
-                                        }
-                                        Some(_) => todo!(),
-                                    }
-                                    true
-                                }
-                            }
-                            Bits::Small(signal_value, size) => {
-                                let before = *signal_value;
-                                match partial {
-                                    None => {
-                                        *signal_value =
-                                            bits::store_to_u64(bit_stack, src.offset, *size);
-                                    }
-                                    Some((offset, length)) => {
-                                        let offset =
-                                            bits::store_to_u64(&bit_stack, offset.offset, 32)
-                                                as VectorSize;
-                                        let value =
-                                            bits::store_to_u64(bit_stack, src.offset, *length);
-                                        *signal_value &= !(((1u64 << *length) - 1) << offset);
-                                        *signal_value |= value << offset;
-                                    }
-                                }
-                                before != *signal_value
-                            }
-                        },
-                        SignalValue::Single(_) => unreachable!(),
                     };
 
                     if updated {
@@ -639,8 +534,7 @@ pub fn run(
     ctx: &mut Context,
     processes: &SlotMap<VmProcessKey, VmProcess>,
     regions: &mut Regions,
-    signals: &mut HashMap<VmSignalKey, SignalValue>,
-    signal_ty: &HashMap<VmSignalKey, (Option<ArrayWidth>, VectorSize)>,
+    signals: &mut HashMap<VmSignalKey, Bits>,
     listeners: &mut SlotMap<ListenerKey, Event>,
     watches: &mut HashMap<VmSignalKey, Vec<ListenerKey>>,
     max_time: u64,
@@ -654,7 +548,6 @@ pub fn run(
                 &mut schedule,
                 regions,
                 signals,
-                signal_ty,
                 listeners,
                 watches,
             );

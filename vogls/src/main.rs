@@ -23,8 +23,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &mut ExecutionContext {
             stdout: Box::new(std::io::stdout()),
             stderr: Box::new(std::io::stderr()),
-            output_ir: true,
-            output_elaborated: false,
+            output_ir: false,
+            output_elaborated: true,
             output_sim_ir: true,
             output_schedule: false,
         },

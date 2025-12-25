@@ -464,7 +464,7 @@ impl BasicBlockBuilder {
     }
 
     pub fn drive(&mut self, gl: &mut GlobalContext, signal: SignalKey, src: VariableKey) {
-        self.regioned_drive(gl, signal, src, 0);
+        self.regioned_drive_opt_partial(gl, signal, src, 0, None);
     }
     pub fn drive_partial(
         &mut self,
@@ -474,7 +474,16 @@ impl BasicBlockBuilder {
         offset: VariableKey,
         length: VectorSize,
     ) {
-        self.regioned_drive_partial(gl, signal, src, 0, offset, length);
+        self.regioned_drive_opt_partial(gl, signal, src, 0, Some((offset, length)));
+    }
+    pub fn drive_opt_partial(
+        &mut self,
+        gl: &mut GlobalContext,
+        signal: SignalKey,
+        src: VariableKey,
+        partial: Option<(VariableKey, VectorSize)>,
+    ) {
+        self.regioned_drive_opt_partial(gl, signal, src, 0, partial);
     }
 
     pub fn regioned_drive(
@@ -484,11 +493,7 @@ impl BasicBlockBuilder {
         src: VariableKey,
         region: u8,
     ) {
-        let ty = gl.signals[signal].size;
-        let src = self.cast(gl, src, ty);
-        gl.processes[self.process].outs.insert(signal);
-        self.instrs
-            .push(Instruction::Drive(signal, src, region, None));
+        self.regioned_drive_opt_partial(gl, signal, src, region, None);
     }
     pub fn regioned_drive_partial(
         &mut self,
@@ -499,14 +504,23 @@ impl BasicBlockBuilder {
         offset: VariableKey,
         length: VectorSize,
     ) {
-        let src = self.cast(gl, src, length);
+        self.regioned_drive_opt_partial(gl, signal, src, region, Some((offset, length)));
+    }
+    pub fn regioned_drive_opt_partial(
+        &mut self,
+        gl: &mut GlobalContext,
+        signal: SignalKey,
+        src: VariableKey,
+        region: u8,
+        partial: Option<(VariableKey, VectorSize)>,
+    ) {
+        assert_eq!(
+            gl.vars[src].size,
+            partial.map_or(gl.signals[signal].size, |(_, w)| w)
+        );
         gl.processes[self.process].outs.insert(signal);
-        self.instrs.push(Instruction::Drive(
-            signal,
-            src,
-            region,
-            Some((offset, length)),
-        ));
+        self.instrs
+            .push(Instruction::Drive(signal, src, region, partial));
     }
     pub fn probe(&mut self, gl: &mut GlobalContext, signal: SignalKey) -> VariableKey {
         gl.processes[self.process].ins.insert(signal);
@@ -758,72 +772,6 @@ impl BasicBlockBuilder {
         let dst = self.next_tmp_var(gl, size);
         self.instrs.push(Instruction::Cast(dst, src));
         dst
-    }
-
-    pub fn arr_probe(
-        &mut self,
-        gl: &mut GlobalContext,
-        signal: SignalKey,
-        idx: VariableKey,
-    ) -> VariableKey {
-        gl.processes[self.process].ins.insert(signal);
-        assert!(gl.signals[signal].width.is_some());
-        let dst = self.next_tmp_var(gl, gl.signals[signal].size);
-        self.instrs.push(Instruction::ArrProbe(dst, signal, idx));
-        dst
-    }
-    pub fn arr_drive(
-        &mut self,
-        gl: &mut GlobalContext,
-        signal: SignalKey,
-        src: VariableKey,
-        idx: VariableKey,
-    ) {
-        self.regioned_arr_drive(gl, signal, src, idx, 0);
-    }
-    pub fn arr_drive_partial(
-        &mut self,
-        gl: &mut GlobalContext,
-        signal: SignalKey,
-        src: VariableKey,
-        idx: VariableKey,
-        offset: VariableKey,
-        width: VectorSize,
-    ) {
-        self.regioned_arr_drive_partial(gl, signal, src, idx, 0, offset, width);
-    }
-    pub fn regioned_arr_drive(
-        &mut self,
-        gl: &mut GlobalContext,
-        signal: SignalKey,
-        src: VariableKey,
-        idx: VariableKey,
-        region: u8,
-    ) {
-        gl.processes[self.process].outs.insert(signal);
-        assert!(gl.signals[signal].width.is_some());
-        self.instrs
-            .push(Instruction::ArrDrive(signal, src, idx, region, None));
-    }
-    pub fn regioned_arr_drive_partial(
-        &mut self,
-        gl: &mut GlobalContext,
-        signal: SignalKey,
-        src: VariableKey,
-        idx: VariableKey,
-        region: u8,
-        offset: VariableKey,
-        width: VectorSize,
-    ) {
-        gl.processes[self.process].outs.insert(signal);
-        assert!(gl.signals[signal].width.is_some());
-        self.instrs.push(Instruction::ArrDrive(
-            signal,
-            src,
-            idx,
-            region,
-            Some((offset, width)),
-        ));
     }
 
     pub fn process(&self) -> ProcessKey {

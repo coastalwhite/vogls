@@ -232,28 +232,6 @@ impl ContextFormat for Instruction {
                     ctx.gl.vars.get(*var).unwrap().typed_ctx_fmt(f, ctx)?;
                 }
             }
-            Self::ArrProbe(dst, src, idx) => {
-                ctx.gl.vars.get(*dst).unwrap().typed_ctx_fmt(f, ctx)?;
-                f.write_str(" = arr.probe ")?;
-                ctx.gl.signals.get(*src).unwrap().typed_ctx_fmt(f, ctx)?;
-                f.write_str(", ")?;
-                ctx.gl.vars.get(*idx).unwrap().typed_ctx_fmt(f, ctx)?;
-            }
-            Self::ArrDrive(dst, src, idx, region, partial) => {
-                ctx.gl.signals.get(*dst).unwrap().typed_ctx_fmt(f, ctx)?;
-                f.write_str(" = arr.drive ")?;
-                if *region != 0 {
-                    write!(f, "[r={region}] ")?;
-                }
-                if let Some((offset, length)) = partial {
-                    f.write_str("[")?;
-                    ctx.gl.vars.get(*offset).unwrap().typed_ctx_fmt(f, ctx)?;
-                    write!(f, ", {length}]")?;
-                }
-                ctx.gl.vars.get(*src).unwrap().typed_ctx_fmt(f, ctx)?;
-                f.write_str(", ")?;
-                ctx.gl.vars.get(*idx).unwrap().typed_ctx_fmt(f, ctx)?;
-            }
         }
 
         Ok(())
@@ -341,13 +319,7 @@ impl Signal {
         f: &mut fmt::Formatter<'_>,
         ctx: &mut DisplayContext<'_>,
     ) -> fmt::Result {
-        match self.width {
-            None => write!(f, "{}", self.size)?,
-            Some(width) => {
-                write!(f, "arr[{}; {}]", self.size, width.get())?;
-            }
-        }
-
+        write!(f, "{}", self.size)?;
         f.write_str(" ")?;
         self.ctx_fmt(f, ctx)?;
         Ok(())

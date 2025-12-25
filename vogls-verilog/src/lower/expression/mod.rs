@@ -237,34 +237,11 @@ pub fn lower_expr<'a>(
                     result_stack.push(None);
                     continue;
                 };
-                let num_repeats = builder.constant_u32(gl, repeat_n);
-                let start_bb = builder.key();
-                *builder = builder.jump(gl);
 
-                // @Performance: Use log2 concatenation here.
-                let loop_start_bb = builder.key();
-                let (num_repeats, num_repeats_phi) = builder.phi(
-                    gl,
-                    [(start_bb, num_repeats), (start_bb, num_repeats)].into(),
-                );
-                let single_output = output;
-                let (output, output_phi) =
-                    builder.phi(gl, [(start_bb, output), (start_bb, output)].into());
-                let one = builder.constant_u32(gl, 1);
-                let num_repeats = builder.minus(gl, num_repeats, one);
-                let condition = builder.equals_zero(gl, num_repeats);
-                let branch_ref;
-                (branch_ref, *builder) = builder.branch(gl, condition);
-                let concatted_output = builder.concat(gl, output, single_output);
-
-                let inner_loop_bb = builder.key();
-                builder.update_phi_ref(gl, num_repeats_phi, 1, inner_loop_bb, num_repeats);
-                builder.update_phi_ref(gl, output_phi, 1, inner_loop_bb, concatted_output);
-                *builder = builder.next_terminate_later(gl);
-
-                branch_ref.update(gl, builder.key());
-                gl.bbs[inner_loop_bb].terminator = BasicBlockTerminator::Jump(loop_start_bb);
-
+                let output_single = output;
+                for _ in 1..repeat_n {
+                    output = builder.concat(gl, output_single, output);
+                }
                 result_stack.push(Some((output, VType::Net(output_width))));
             }
             Expr::Ternary(condition, truthy, falsy) => {
@@ -285,30 +262,29 @@ pub fn lower_expr<'a>(
                 };
 
                 let c = builder.reduce_or(gl, c);
-
                 let condition_bb = builder.key();
-                *builder = builder.next_terminate_later(gl);
 
-                let truthy_bb = builder.key();
+                *builder = builder.next_terminate_later(gl);
                 let Ok((t, t_ty)) = lower_expr(gl, arenas, scope, diagnostics, builder, *truthy)
                 else {
                     result_stack.push(None);
-                    error |= true;
+                    error = true;
                     continue;
                 };
+                let truthy_bb = builder.key();
 
                 *builder = builder.next_terminate_later(gl);
-                let falsy_bb = builder.key();
                 let Ok((f, f_ty)) = lower_expr(gl, arenas, scope, diagnostics, builder, *falsy)
                 else {
                     result_stack.push(None);
-                    error |= true;
+                    error = true;
                     continue;
                 };
-
-                *builder = builder.continue_with(gl, truthy_bb);
+                let falsy_bb = builder.key();
 
                 let ty = coerce_to_max_size_ty(t_ty, f_ty).force_net_width();
+
+                *builder = builder.continue_with(gl, truthy_bb);
                 let t = sign_extend_or_truncate(gl, builder, t, t_ty, ty);
 
                 *builder = builder.continue_with(gl, falsy_bb);
@@ -410,7 +386,13 @@ pub fn lower_expr<'a>(
                                 continue 'dispatch_loop;
                             }
 
-                            (*ty, builder.arr_probe(gl, *key, offset))
+                            let size = ty.force_net_width();
+                            let variable = builder.probe(gl, *key);
+                            let offset = builder.multiply_constant(gl, offset, size);
+                            let variable = builder.logical_shift_right(gl, variable, offset);
+                            let variable = builder.slice(gl, variable, size);
+
+                            (*ty, variable)
                         } else {
                             (*ty, builder.probe(gl, *key))
                         }
@@ -503,6 +485,11 @@ pub fn lower_expr<'a>(
                             vec![IntrinsicArg::Variable(*e)],
                         );
                     }
+                    "signed" => {
+                        diagnostics
+                            .warnings
+                            .push((arenas.get_span(expr), "ignored signed call".to_string()));
+                    }
                     _ => {
                         diagnostics.not_yet_implemented(arenas.get_span(expr), "function calls");
                         result_stack.push(None);
@@ -536,7 +523,12 @@ pub fn lower_expr<'a>(
 
                 result_stack.push(Some((var, VType::Net(width))));
             }
-            Expr::String(_) => todo!(),
+            Expr::String(string_ref) => {
+                let s = arenas.get_ident(string_ref.0);
+                let value = Bits::load_from_slice(s.as_bytes(), (s.len() * 8) as u32);
+                let var = builder.constant(gl, value);
+                result_stack.push(Some((var, VType::String(s.len() as u32))));
+            }
         }
     }
 
@@ -566,19 +558,11 @@ pub fn coerce_bin_arithmetic<'a>(
         return (l, l_ty, r, r_ty);
     }
 
-    let l_size = l_ty.net_size();
-    let r_size = r_ty.net_size();
+    let ty = coerce_to_max_size_ty(l_ty, r_ty);
 
-    let size = match (l_size, r_size) {
-        (Some(l), Some(r)) => l.max(r),
-        (Some(s), _) | (_, Some(s)) => s,
-        (None, None) => unreachable!(),
-    };
+    let l = sign_extend_or_truncate(gl, builder, l, l_ty, ty.force_net_width());
+    let r = sign_extend_or_truncate(gl, builder, r, r_ty, ty.force_net_width());
 
-    let l = sign_extend_or_truncate(gl, builder, l, l_ty, size);
-    let r = sign_extend_or_truncate(gl, builder, r, r_ty, size);
-
-    let ty = VType::Net(size);
     (l, ty, r, ty)
 }
 
@@ -599,34 +583,6 @@ pub fn coerce_to_max_size_ty<'a>(l_ty: VType, r_ty: VType) -> VType {
     };
 
     VType::Net(size)
-}
-
-pub fn coerce_to_max_size<'a>(
-    gl: &mut GlobalContext,
-    builder: &mut BasicBlockBuilder,
-    e: VariableKey,
-    l_ty: VType,
-    r_ty: VType,
-) -> (VariableKey, VType) {
-    // max(L(i),L(j))
-
-    if l_ty == r_ty {
-        return (e, l_ty);
-    }
-
-    let l_size = l_ty.net_size();
-    let r_size = r_ty.net_size();
-
-    let size = match (l_size, r_size) {
-        (Some(l), Some(r)) => l.max(r),
-        (Some(s), _) | (_, Some(s)) => s,
-        (None, None) => unreachable!(),
-    };
-
-    let e = builder.cast(gl, e, size);
-
-    let ty = VType::Net(size);
-    (e, ty)
 }
 
 macro_rules! impl_bin_arithmetic {

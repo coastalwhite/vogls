@@ -4,6 +4,7 @@ use vogls_ir::VectorSize;
 pub enum VType {
     Net(VectorSize),
     Integer,
+    String(u32),
 }
 
 impl VType {
@@ -13,6 +14,7 @@ impl VType {
         match self {
             Self::Net(n) => Some(n),
             Self::Integer => None,
+            Self::String(_) => None,
         }
     }
 
@@ -20,6 +22,7 @@ impl VType {
         match self {
             VType::Net(size) => *size,
             VType::Integer => 32,
+            VType::String(n) => *n * 8,
         }
     }
 }

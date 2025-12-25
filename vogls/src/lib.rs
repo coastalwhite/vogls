@@ -5,8 +5,7 @@ use std::rc::Rc;
 use slotmap::SlotMap;
 use vogls_ir::{Bits, ContextFormat, GlobalContext};
 use vogls_sim::{
-    Context, EvaluationEvent, Event, Regions, SignalValue, VmProcess, VmProcessKey,
-    lower_process_to_vm,
+    Context, EvaluationEvent, Event, Regions, VmProcess, VmProcessKey, lower_process_to_vm,
 };
 use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{
@@ -330,7 +329,6 @@ pub fn run(
     let mut processes = SlotMap::<VmProcessKey, VmProcess>::default();
     let mut regions = Regions::new(3); // inactive, non-blocking, monitor
     let mut signals = HashMap::default();
-    let mut signal_ty = HashMap::default();
     let mut listeners = SlotMap::default();
     let mut watches = HashMap::default();
 
@@ -365,28 +363,8 @@ pub fn run(
     }
 
     for (ir_signal, signal) in io_signals {
-        let value = match (gl.signals[ir_signal].size, gl.signals[ir_signal].width) {
-            (n, None) if n < 64 => SignalValue::Single(Bits::Small(0, n)),
-            (n, Some(width)) if n < 64 => SignalValue::Array(
-                std::iter::repeat_n(Bits::Small(0, n), width.get() as usize).collect(),
-            ),
-            (n, None) => SignalValue::Single(Bits::Big(
-                n,
-                std::iter::repeat_n(0, n.div_ceil(8) as usize).collect(),
-            )),
-            (n, Some(width)) => SignalValue::Array(
-                std::iter::repeat_n(
-                    Bits::Big(n, std::iter::repeat_n(0, n.div_ceil(8) as usize).collect()),
-                    width.get() as usize,
-                )
-                .collect(),
-            ),
-        };
+        let value = Bits::new_zeroed(gl.signals[ir_signal].size);
         signals.insert(signal, value);
-        signal_ty.insert(
-            signal,
-            (gl.signals[ir_signal].width, gl.signals[ir_signal].size),
-        );
     }
 
     if ectx.output_schedule {
@@ -402,7 +380,6 @@ pub fn run(
         &processes,
         &mut regions,
         &mut signals,
-        &signal_ty,
         &mut listeners,
         &mut watches,
         100,

@@ -1,3 +1,4 @@
+mod assign;
 mod constant_expr;
 mod diagnostics;
 mod expression;
@@ -10,6 +11,7 @@ mod vtype;
 mod vvalue;
 
 #[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Region {
     Active = 0,
     Inactive = 1,
@@ -411,7 +413,7 @@ fn statements_to_process<'a>(
 
                 let (value, value_ty) =
                     lower_expr(gl, arenas, scope, diagnostics, &mut builder, *expression)?;
-                assign_variable_lvalue(
+                assign::assign_variable_lvalue(
                     gl,
                     arenas,
                     scope,
@@ -465,7 +467,7 @@ fn statements_to_process<'a>(
 
                 let (value, value_ty) =
                     lower_expr(gl, arenas, scope, diagnostics, &mut builder, *expression)?;
-                assign_variable_lvalue(
+                assign::assign_variable_lvalue(
                     gl,
                     arenas,
                     scope,
@@ -548,7 +550,7 @@ fn statements_to_process<'a>(
                         let (rhs, rhs_ty) =
                             lower_expr(gl, arenas, scope, diagnostics, &mut builder, rhs)?;
 
-                        let (lhs, lhs_ty, rhs, rhs_ty) = expression::coerce_bin_arithmetic(
+                        let (lhs, _, rhs, _) = expression::coerce_bin_arithmetic(
                             gl,
                             &mut builder,
                             lhs,
@@ -779,7 +781,6 @@ fn lower_to_signal<'a>(
 
     let signal = gl.signals.insert(Signal {
         name: "anon_port_assignment".to_string(),
-        width: None,
         size: ty.force_net_width(),
     });
 
@@ -813,7 +814,9 @@ fn assign_port_output<'a>(
             diagnostics.var_not_found(arenas, *ast_ident);
             return Err(());
         };
-        if let SymbolVariant::Signal(_dims, signal_ty, key) = &scope.symbols[symbol_key].variant && *signal_ty == ty {
+        if let SymbolVariant::Signal(_dims, signal_ty, key) = &scope.symbols[symbol_key].variant
+            && *signal_ty == ty
+        {
             return Ok(*key);
         }
     }
@@ -824,7 +827,6 @@ fn assign_port_output<'a>(
 
     let signal = gl.signals.insert(Signal {
         name: "anon_port_assignment".to_string(),
-        width: None,
         size,
     });
 
@@ -938,167 +940,6 @@ fn assign_port_output<'a>(
     Ok(signal)
 }
 
-fn assign_variable_lvalue<'a>(
-    gl: &mut GlobalContext,
-    arenas: &'a AstArenas,
-    scope: &mut Scope<'a>,
-    diagnostics: &mut Diagnostics,
-    builder: &mut BasicBlockBuilder,
-    ast_lvalue: AstId<VariableLValue>,
-    variable: VariableKey,
-    variable_ty: VType,
-    region: Region,
-) -> Result<(), ()> {
-    let lvalue = arenas.get(ast_lvalue);
-    if lvalue.0.len() != 1 {
-        diagnostics.not_yet_implemented(arenas.get_span(ast_lvalue), "concat lvalue");
-        return Err(());
-    }
-    let VariableLValueFlat {
-        ident,
-        exprs,
-        range_expression,
-    } = arenas.get(lvalue.0.get(0));
-
-    let lvalue_ident = arenas.get_ident(ident.item.0);
-    let Some(symbol_key) = scope.get(&lvalue_ident) else {
-        diagnostics.var_not_found(arenas, *ident);
-        return Err(());
-    };
-
-    let mut exprs = *exprs;
-    let (ty, dims) = match &scope.symbols[symbol_key].variant {
-        SymbolVariant::Genvar(_) => (VType::Integer, Vec::new()),
-        SymbolVariant::Constant(v) => (v.ty(), Vec::new()),
-        SymbolVariant::Task(_) => todo!(),
-        SymbolVariant::Signal(dims, ty, key) => (*ty, dims.clone()),
-    };
-    let mut dims = &dims[..];
-    let mut arr_idx = if !dims.is_empty()
-        && let Some(fst) = exprs.pop_front()
-    {
-        dims = &dims[..dims.len() - 1];
-        let mut leaf_arr_items = dims.iter().product::<u32>();
-        let (fst, _) = lower_expr(gl, arenas, scope, diagnostics, builder, fst)?;
-        let mut offset = builder.multiply_constant(gl, fst, leaf_arr_items);
-
-        while let Some(dim) = dims.last()
-            && let Some(expr) = exprs.pop_front()
-        {
-            leaf_arr_items /= *dim;
-            let (expr, _) = lower_expr(gl, arenas, scope, diagnostics, builder, expr)?;
-            let expr = builder.multiply_constant(gl, expr, leaf_arr_items);
-            offset = builder.plus(gl, offset, expr);
-            dims = &dims[1..];
-        }
-
-        Some(offset)
-    } else {
-        None
-    };
-    if !exprs.is_empty() {
-        diagnostics.not_yet_implemented(arenas.get_range_span(exprs), "variable_lvalue::exprs");
-        return Err(());
-    }
-
-    let mut range_expression = *range_expression;
-    if !dims.is_empty()
-        && let Some(RangeExpression::Expr(expr)) = range_expression.map(|e| arenas.get(e))
-    {
-        _ = range_expression.take();
-
-        dims = &dims[..dims.len() - 1];
-        let leaf_arr_items = dims.iter().product::<u32>();
-        let (fst, _) = lower_expr(gl, arenas, scope, diagnostics, builder, *expr)?;
-        let offset = builder.multiply_constant(gl, fst, leaf_arr_items);
-
-        arr_idx = Some(match arr_idx {
-            None => offset,
-            Some(arr_idx) => builder.plus(gl, arr_idx, offset),
-        });
-    }
-
-    if !dims.is_empty() {
-        diagnostics.not_yet_implemented(
-            arenas.get_range_span(exprs),
-            "driving array without indices",
-        );
-        return Err(());
-    }
-
-    match &mut scope.symbols[symbol_key].variant {
-        SymbolVariant::Constant(_) => todo!(),
-        SymbolVariant::Genvar(_) => todo!(),
-        SymbolVariant::Task(_) => todo!(),
-        SymbolVariant::Signal(_dims, _ty, key) => {
-            let key = *key;
-            match range_expression {
-                None => {
-                    let variable = expression::sign_extend_or_truncate(
-                        gl,
-                        builder,
-                        variable,
-                        variable_ty,
-                        ty.force_net_width(),
-                    );
-                    match arr_idx {
-                        None => builder.regioned_drive(gl, key, variable, region as u8),
-                        Some(idx) => {
-                            builder.regioned_arr_drive(gl, key, variable, idx, region as u8)
-                        }
-                    }
-                }
-                Some(range_expression) => {
-                    let (offset, length) = match arenas.get(range_expression) {
-                        RangeExpression::Expr(expr) => (
-                            lower_expr(gl, arenas, scope, diagnostics, builder, *expr)?.0,
-                            1,
-                        ),
-                        RangeExpression::MsbLsb(msb, lsb) => {
-                            let (_, lsb, width) =
-                                msb_lsb_to_width(gl, arenas, scope, diagnostics, *msb, *lsb)?;
-                            (
-                                builder.constant(gl, Bits::from_i64_truncated(lsb as i64, 32)),
-                                width,
-                            )
-                        }
-                        RangeExpression::BasePlus(_, _) => todo!("BasePlus"),
-                        RangeExpression::BaseMinus(_, _) => todo!("BaseMinus"),
-                    };
-                    let variable = expression::sign_extend_or_truncate(
-                        gl,
-                        builder,
-                        variable,
-                        variable_ty,
-                        length,
-                    );
-
-                    match arr_idx {
-                        None => builder.regioned_drive_partial(
-                            gl,
-                            key,
-                            variable,
-                            region as u8,
-                            offset,
-                            length,
-                        ),
-                        Some(idx) => builder.regioned_arr_drive_partial(
-                            gl,
-                            key,
-                            variable,
-                            idx,
-                            region as u8,
-                            offset,
-                            length,
-                        ),
-                    }
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
 fn assign_net_lvalue<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
@@ -1120,7 +961,7 @@ fn assign_net_lvalue<'a>(
         return Err(());
     };
 
-    let SymbolVariant::Signal(dims, _ty, key) = &scope.symbols[symbol_key].variant else {
+    let SymbolVariant::Signal(dims, ty, key) = &scope.symbols[symbol_key].variant else {
         panic!("not a signal");
     };
     let key = *key;
@@ -1182,23 +1023,12 @@ fn assign_net_lvalue<'a>(
         return Err(());
     }
 
-    match range_expression {
-        None => {
-            let variable = expression::sign_extend_or_truncate(
-                gl,
-                builder,
-                variable,
-                variable_ty,
-                gl.signals[key].size,
-            );
-            match arr_idx {
-                None => builder.drive(gl, key, variable),
-                Some(idx) => {
-                    let idx = builder.constant_u32(gl, idx);
-                    builder.arr_drive(gl, key, variable, idx)
-                }
-            }
-        }
+    let size = ty.force_net_width();
+    let partial = match range_expression {
+        None => match arr_idx {
+            None => None,
+            Some(idx) => Some((builder.constant_u32(gl, idx * size), size)),
+        },
         Some(range_expression) => {
             let (offset, length) = match arenas.get(range_expression) {
                 ConstantRangeExpression::Single(expr) => (
@@ -1210,23 +1040,23 @@ fn assign_net_lvalue<'a>(
                 _ => todo!("MsbLsb"),
             };
 
-            let offset = builder.constant_u32(gl, offset as u32);
-            let variable =
-                expression::sign_extend_or_truncate(gl, builder, variable, variable_ty, length);
-            match arr_idx {
-                None => builder.drive_partial(gl, key, variable, offset, length),
-                Some(idx) => {
-                    let idx = builder.constant_u32(gl, idx);
-                    builder.arr_drive_partial(gl, key, variable, idx, offset, length)
-                }
-            }
+            Some(match arr_idx {
+                None => (builder.constant_u32(gl, offset as u32), length),
+                Some(idx) => (
+                    builder.constant_u32(gl, idx * size + offset as u32),
+                    length,
+                ),
+            })
         }
-    }
+    };
+    let size = partial.map_or(ty.force_net_width(), |(_, s)| s);
+    let variable = expression::sign_extend_or_truncate(gl, builder, variable, variable_ty, size);
+    builder.drive_opt_partial(gl, key, variable, partial);
     Ok(())
 }
 
 fn msb_lsb_to_width<'a>(
-    gl: &mut GlobalContext,
+    gl: &GlobalContext,
     arenas: &'a AstArenas,
     scope: &Scope<'a>,
     diagnostics: &mut Diagnostics,
