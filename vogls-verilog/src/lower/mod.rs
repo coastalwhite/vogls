@@ -23,8 +23,8 @@ use scope::Scope;
 
 use constant_expr::eval_constant_expr;
 use vogls_ir::{
-    BasicBlockBuilder, ConnectionDirection, GlobalContext, IntrinsicArg, IntrinsicOp, ProcessKey,
-    Signal, SignalKey, Type, Value, VariableKey, VectorSize, new_process,
+    BasicBlockBuilder, Bits, ConnectionDirection, GlobalContext, IntrinsicArg, IntrinsicOp,
+    ProcessKey, Signal, SignalKey, VariableKey, VectorSize, new_process,
 };
 
 use crate::ast::constant_expr::{
@@ -59,7 +59,7 @@ pub struct ModuleInitialization<'a> {
 #[derive(Clone)]
 pub struct ModuleIo<'a> {
     pub lut: HashMap<&'a str, usize>,
-    pub ports: Vec<(&'a str, ConnectionDirection, Option<VectorSize>)>,
+    pub ports: Vec<(&'a str, ConnectionDirection, VType)>,
 }
 #[derive(Clone)]
 pub struct ModuleParameters<'a> {
@@ -161,7 +161,7 @@ pub fn fetch_module_interface<'a>(
                             error = true;
                             continue;
                         }
-                        io.push((name, ConnectionDirection::Both, None));
+                        io.push((name, ConnectionDirection::Both, VType::Integer));
                     }
                 }
             }
@@ -195,9 +195,9 @@ pub fn fetch_module_interface<'a>(
                         (ConnectionDirection::Out, output.range, output.identifiers)
                     }
                 };
-                let width = match range {
-                    None => None,
-                    Some(range) => Some(range_to_width(gl, arenas, &scope, diagnostics, range)?),
+                let size = match range {
+                    None => 1,
+                    Some(range) => range_to_width(gl, arenas, &scope, diagnostics, range)?,
                 };
 
                 for ast_ident in identifiers {
@@ -216,7 +216,7 @@ pub fn fetch_module_interface<'a>(
                     }
 
                     io[*idx].1 = direction;
-                    io[*idx].2 = width;
+                    io[*idx].2 = VType::Net(size);
                 }
             }
 
@@ -251,9 +251,9 @@ pub fn fetch_module_interface<'a>(
                         (ConnectionDirection::Out, output.range, output.identifiers)
                     }
                 };
-                let width = match range {
-                    None => None,
-                    Some(range) => Some(range_to_width(gl, arenas, &scope, diagnostics, range)?),
+                let size = match range {
+                    None => 1,
+                    Some(range) => range_to_width(gl, arenas, &scope, diagnostics, range)?,
                 };
 
                 let mut error = false;
@@ -264,7 +264,7 @@ pub fn fetch_module_interface<'a>(
                         error = true;
                         continue;
                     }
-                    io.push((name, direction, width));
+                    io.push((name, direction, VType::Net(size)));
                 }
 
                 if error {
@@ -315,12 +315,12 @@ pub fn lower_module_to_ir<'a>(
         scope.push(key, symbol_key);
     }
 
-    for ((name, _con, width), signal) in io.ports.iter().zip(&args.signals) {
+    for ((name, _con, ty), signal) in io.ports.iter().zip(&args.signals) {
         let symbol_key = scope.symbols.insert(Symbol {
             name: name.to_string(),
             // @TODO: better definition site
             definition_site: arenas.get_span(root),
-            variant: SymbolVariant::Signal(Vec::new(), *signal),
+            variant: SymbolVariant::Signal(Vec::new(), *ty, *signal),
         });
         scope.push(name, symbol_key);
     }
@@ -543,12 +543,19 @@ fn statements_to_process<'a>(
                         let lhs = expressions.get(0);
                         let rhs = expressions.get(1);
 
-                        let (lhs, _) =
+                        let (lhs, lhs_ty) =
                             lower_expr(gl, arenas, scope, diagnostics, &mut builder, lhs)?;
-                        let (rhs, _) =
+                        let (rhs, rhs_ty) =
                             lower_expr(gl, arenas, scope, diagnostics, &mut builder, rhs)?;
 
-                        let (lhs, rhs) = builder.coerce_binary_bitwise_srcs(gl, lhs, rhs);
+                        let (lhs, lhs_ty, rhs, rhs_ty) = expression::coerce_bin_arithmetic(
+                            gl,
+                            &mut builder,
+                            lhs,
+                            lhs_ty,
+                            rhs,
+                            rhs_ty,
+                        );
 
                         builder.intrinsic(
                             gl,
@@ -752,7 +759,7 @@ fn lower_to_signal<'a>(
     diagnostics: &mut Diagnostics,
     processes: &mut Vec<ProcessKey>,
     expr: AstId<Expr>,
-    width: Option<VectorSize>,
+    ty: VType,
 ) -> Result<SignalKey, ()> {
     if let Expr::Ident(ast_ident, exprs, range_expression) = arenas.get(expr)
         && exprs.is_empty()
@@ -763,7 +770,9 @@ fn lower_to_signal<'a>(
             diagnostics.var_not_found(arenas, *ast_ident);
             return Err(());
         };
-        if let SymbolVariant::Signal(_dims, key) = &scope.symbols[symbol_key].variant {
+        if let SymbolVariant::Signal(_dims, signal_ty, key) = &scope.symbols[symbol_key].variant
+            && *signal_ty == ty
+        {
             return Ok(*key);
         }
     }
@@ -771,14 +780,15 @@ fn lower_to_signal<'a>(
     let signal = gl.signals.insert(Signal {
         name: "anon_port_assignment".to_string(),
         width: None,
-        ty: Type::net(width),
+        size: ty.force_net_width(),
     });
 
     let (section_key, mut bb_builder) = new_process(gl, "port_assignment".into());
     let bb_key = bb_builder.key();
-    let (variable, _) = lower_expr(gl, arenas, scope, diagnostics, &mut bb_builder, expr)?;
+    let (v, v_ty) = lower_expr(gl, arenas, scope, diagnostics, &mut bb_builder, expr)?;
+    let v = expression::sign_extend_or_truncate(gl, &mut bb_builder, v, v_ty, ty.force_net_width());
 
-    bb_builder.drive(gl, signal, variable);
+    bb_builder.drive(gl, signal, v);
 
     bb_builder.watch_for_ins_to(gl, bb_key);
     processes.push(section_key);
@@ -792,7 +802,7 @@ fn assign_port_output<'a>(
     diagnostics: &mut Diagnostics,
     processes: &mut Vec<ProcessKey>,
     expr: AstId<Expr>,
-    width: Option<VectorSize>,
+    ty: VType,
 ) -> Result<SignalKey, ()> {
     if let Expr::Ident(ast_ident, exprs, range_expression) = arenas.get(expr)
         && exprs.is_empty()
@@ -803,18 +813,19 @@ fn assign_port_output<'a>(
             diagnostics.var_not_found(arenas, *ast_ident);
             return Err(());
         };
-        if let SymbolVariant::Signal(_dims, key) = &scope.symbols[symbol_key].variant {
+        if let SymbolVariant::Signal(_dims, signal_ty, key) = &scope.symbols[symbol_key].variant && *signal_ty == ty {
             return Ok(*key);
         }
     }
 
-    let mut driving: Vec<(AstId<Expr>, Option<VariableKey>, Option<VectorSize>)> = Vec::new();
-    driving.push((expr, None, width));
+    let size = ty.force_net_width();
+    let mut driving: Vec<(AstId<Expr>, Option<VariableKey>, VectorSize)> = Vec::new();
+    driving.push((expr, None, size));
 
     let signal = gl.signals.insert(Signal {
         name: "anon_port_assignment".to_string(),
         width: None,
-        ty: Type::net(width),
+        size,
     });
 
     let (section_key, mut bb_builder) = new_process(gl, "port_assignment".into());
@@ -830,7 +841,7 @@ fn assign_port_output<'a>(
             }
             Expr::Ident(ast_ident, exprs, range_expression) => {
                 let (offset_dst, length_dst) = if range_expression.is_none() && exprs.is_empty() {
-                    (bb_builder.constant(gl, Value::Decimal(0)), None)
+                    (bb_builder.constant_u32(gl, 0), None)
                 } else if range_expression.is_none() && exprs.len() == 1 {
                     (
                         lower_expr(
@@ -851,7 +862,7 @@ fn assign_port_output<'a>(
                         BitSlice::MsbLsb(msb, lsb) => {
                             let (_, lsb, width) =
                                 msb_lsb_to_width(gl, arenas, scope, diagnostics, *msb, *lsb)?;
-                            let offset = bb_builder.constant(gl, Value::Decimal(lsb as i64));
+                            let offset = bb_builder.constant_u32(gl, lsb as u32);
                             (offset, Some(width as VectorSize))
                         }
                         BitSlice::PlusWidth(base, width) => {
@@ -866,8 +877,7 @@ fn assign_port_output<'a>(
                                 lower_expr(gl, arenas, scope, diagnostics, &mut bb_builder, *base);
                             let width = eval_constant_expr(gl, arenas, scope, diagnostics, *width)?;
                             let width = width.as_integer().unwrap() as VectorSize;
-                            let width_v =
-                                bb_builder.constant(gl, Value::Decimal((width + 1) as i64));
+                            let width_v = bb_builder.constant_u32(gl, width + 1);
                             let offset = bb_builder.minus(gl, offset?.0, width_v);
                             (offset, Some(width))
                         }
@@ -884,7 +894,8 @@ fn assign_port_output<'a>(
                     error = true;
                     continue;
                 };
-                let SymbolVariant::Signal(_dims, key) = &scope.symbols[symbol_key].variant else {
+                let SymbolVariant::Signal(_dims, _ty, key) = &scope.symbols[symbol_key].variant
+                else {
                     diagnostics.output_expr_not_allowed(arenas.get_span(expr));
                     error = true;
                     continue;
@@ -894,7 +905,7 @@ fn assign_port_output<'a>(
                 if let Some(offset_src) = offset_src {
                     src = bb_builder.lsr(gl, src, offset_src);
                 }
-                let src = bb_builder.slice(gl, src, length_src.unwrap_or(1));
+                let src = bb_builder.slice(gl, src, length_src);
                 bb_builder.drive_partial(gl, *key, src, offset_dst, length_dst.unwrap_or(1));
             }
 
@@ -926,119 +937,6 @@ fn assign_port_output<'a>(
 
     Ok(signal)
 }
-
-// fn expr_to_type<'a>(
-//     gl: &mut GlobalContext,
-//     scope: &Scope<'a>,
-//     expr: AstId<Expr>,
-//     arenas: &'a AstArenas,
-//     diagnostics: &mut Diagnostics,
-// ) -> Result<Type, ()> {
-//     Ok(match arenas.get(expr) {
-//         Expr::BitPartSelect(select) => {
-//             let BitPartSelect { subject, braced } = select;
-//             let subject_v = expr_to_type(gl, scope, *subject, arenas, diagnostics)?;
-//             let braced_v = expr_to_type(gl, scope, *braced, arenas, diagnostics)?;
-//             Type::Bits(1)
-//         }
-//         Expr::BitSlice(subject, slice) => {
-//             let subject_v = expr_to_type(gl, scope, *subject, arenas, diagnostics)?;
-//
-//             match slice {
-//                 BitSlice::MsbLsb(msb, lsb) => {
-//                     let (_, _, width) =
-//                         msb_lsb_to_width(gl, scope, *msb, *lsb, arenas, diagnostics)?;
-//                     Type::Bits(width)
-//                 }
-//                 BitSlice::PlusWidth(_base, width) => {
-//                     let width = eval_constant_expr(gl, scope, *width, arenas, diagnostics)?;
-//                     Type::Bits(width as VectorSize)
-//                 }
-//                 BitSlice::MinusWidth(_base, width) => {
-//                     let width = eval_constant_expr(gl, scope, *width, arenas, diagnostics)?;
-//                     Type::Bits(width as VectorSize)
-//                 }
-//             }
-//         }
-//         Expr::Unary(op, child) => {
-//             let child = expr_to_type(gl, scope, *child, arenas, diagnostics)?;
-//             use UnaryOperator as O;
-//             match op {
-//                 O::LogicalNegation | O::BitwiseNegation => child,
-//                 O::ReductionAnd
-//                 | O::ReductionOr
-//                 | O::ReductionNand
-//                 | O::ReductionNor
-//                 | O::ReductionXor
-//                 | O::ReductionXnor => Type::Bits(1),
-//                 O::SignPlus => todo!(),
-//                 O::SignMinus => todo!(),
-//             }
-//         }
-//         Expr::Binary(op, l, r) => {
-//             let l = expr_to_type(gl, scope, *l, arenas, diagnostics)?;
-//             let r = expr_to_type(gl, scope, *r, arenas, diagnostics)?;
-//             _ = (l, r);
-//             use BinaryOperator as O;
-//             match op {
-//                 O::Multiply => todo!(),
-//                 O::Divide => todo!(),
-//                 O::Modulus => todo!(),
-//                 O::BinaryPlus => todo!(),
-//                 O::BinaryMinus => todo!(),
-//                 O::ShiftLeft => todo!(),
-//                 O::ShiftRight => todo!(),
-//                 O::GreaterThan => todo!(),
-//                 O::GreaterThanEqual => todo!(),
-//                 O::LessThan => todo!(),
-//                 O::LessThanEqual => todo!(),
-//                 O::LogicalEquality => todo!(),
-//                 O::LogicalInequality => todo!(),
-//                 O::CaseEquality => todo!(),
-//                 O::CaseInequality => todo!(),
-//                 O::BitwiseAnd => todo!(),
-//                 O::BitwiseXor => todo!(),
-//                 O::BitwiseXnor => todo!(),
-//                 O::BitwiseOr => todo!(),
-//                 O::LogicalAnd => todo!(),
-//                 O::LogicalOr => todo!(),
-//             }
-//         }
-//         Expr::Concatenation(exprs) => {
-//             let mut width = 0;
-//             let mut error = false;
-//             for expr in exprs.iter() {
-//                 match expr_to_type(gl, scope, expr, arenas, diagnostics)
-//                     .and_then(|t| t.try_net_width())
-//                 {
-//                     Ok(ew) => width += ew,
-//                     Err(_) => error = true,
-//                 }
-//             }
-//             if error {
-//                 return Err(());
-//             }
-//             Type::Bits(width)
-//         }
-//         Expr::Replication(_) => todo!(),
-//         Expr::Ternary(_, _, _) => todo!(),
-//         Expr::Ident(ast_ident) => {
-//             let ident = arenas.get_ident(ast_ident.item.0);
-//             let Some(symbol_key) = scope.get(&ident) else {
-//                 diagnostics.var_not_found(arenas, *ast_ident);
-//                 return Err(());
-//             };
-//             scope.symbols[symbol_key].ty.clone()
-//         }
-//         Expr::Decimal(_) => Type::Decimal,
-//         Expr::Sized(sized) => {
-//             let sized = &arenas.sized_numbers[sized.item.at];
-//             let Some(size) = sized.size else { todo!() };
-//             Type::Bits(size.as_u32())
-//         }
-//         Expr::String(_) => todo!(),
-//     })
-// }
 
 fn assign_variable_lvalue<'a>(
     gl: &mut GlobalContext,
@@ -1073,7 +971,7 @@ fn assign_variable_lvalue<'a>(
         SymbolVariant::Genvar(_) => (VType::Integer, Vec::new()),
         SymbolVariant::Constant(v) => (v.ty(), Vec::new()),
         SymbolVariant::Task(_) => todo!(),
-        SymbolVariant::Signal(dims, key) => (VType::from_ir(gl.signals[*key].ty), dims.clone()),
+        SymbolVariant::Signal(dims, ty, key) => (*ty, dims.clone()),
     };
     let mut dims = &dims[..];
     let mut arr_idx = if !dims.is_empty()
@@ -1082,14 +980,14 @@ fn assign_variable_lvalue<'a>(
         dims = &dims[..dims.len() - 1];
         let mut leaf_arr_items = dims.iter().product::<u32>();
         let (fst, _) = lower_expr(gl, arenas, scope, diagnostics, builder, fst)?;
-        let mut offset = builder.i64_multiply_constant(gl, fst, leaf_arr_items);
+        let mut offset = builder.multiply_constant(gl, fst, leaf_arr_items);
 
         while let Some(dim) = dims.last()
             && let Some(expr) = exprs.pop_front()
         {
             leaf_arr_items /= *dim;
             let (expr, _) = lower_expr(gl, arenas, scope, diagnostics, builder, expr)?;
-            let expr = builder.i64_multiply_constant(gl, expr, leaf_arr_items);
+            let expr = builder.multiply_constant(gl, expr, leaf_arr_items);
             offset = builder.plus(gl, offset, expr);
             dims = &dims[1..];
         }
@@ -1112,7 +1010,7 @@ fn assign_variable_lvalue<'a>(
         dims = &dims[..dims.len() - 1];
         let leaf_arr_items = dims.iter().product::<u32>();
         let (fst, _) = lower_expr(gl, arenas, scope, diagnostics, builder, *expr)?;
-        let offset = builder.i64_multiply_constant(gl, fst, leaf_arr_items);
+        let offset = builder.multiply_constant(gl, fst, leaf_arr_items);
 
         arr_idx = Some(match arr_idx {
             None => offset,
@@ -1132,12 +1030,17 @@ fn assign_variable_lvalue<'a>(
         SymbolVariant::Constant(_) => todo!(),
         SymbolVariant::Genvar(_) => todo!(),
         SymbolVariant::Task(_) => todo!(),
-        SymbolVariant::Signal(_dims, key) => {
+        SymbolVariant::Signal(_dims, _ty, key) => {
             let key = *key;
             match range_expression {
                 None => {
-                    let variable =
-                        expression::sign_extend_or_truncate(gl, builder, variable, variable_ty, ty);
+                    let variable = expression::sign_extend_or_truncate(
+                        gl,
+                        builder,
+                        variable,
+                        variable_ty,
+                        ty.force_net_width(),
+                    );
                     match arr_idx {
                         None => builder.regioned_drive(gl, key, variable, region as u8),
                         Some(idx) => {
@@ -1154,18 +1057,20 @@ fn assign_variable_lvalue<'a>(
                         RangeExpression::MsbLsb(msb, lsb) => {
                             let (_, lsb, width) =
                                 msb_lsb_to_width(gl, arenas, scope, diagnostics, *msb, *lsb)?;
-                            (builder.constant(gl, Value::Decimal(lsb as i64)), width)
+                            (
+                                builder.constant(gl, Bits::from_i64_truncated(lsb as i64, 32)),
+                                width,
+                            )
                         }
                         RangeExpression::BasePlus(_, _) => todo!("BasePlus"),
                         RangeExpression::BaseMinus(_, _) => todo!("BaseMinus"),
                     };
-                    let drive_ty = VType::Net(length);
                     let variable = expression::sign_extend_or_truncate(
                         gl,
                         builder,
                         variable,
                         variable_ty,
-                        drive_ty,
+                        length,
                     );
 
                     match arr_idx {
@@ -1215,7 +1120,7 @@ fn assign_net_lvalue<'a>(
         return Err(());
     };
 
-    let SymbolVariant::Signal(dims, key) = &scope.symbols[symbol_key].variant else {
+    let SymbolVariant::Signal(dims, _ty, key) = &scope.symbols[symbol_key].variant else {
         panic!("not a signal");
     };
     let key = *key;
@@ -1284,12 +1189,12 @@ fn assign_net_lvalue<'a>(
                 builder,
                 variable,
                 variable_ty,
-                VType::from_ir(gl.signals[key].ty),
+                gl.signals[key].size,
             );
             match arr_idx {
                 None => builder.drive(gl, key, variable),
                 Some(idx) => {
-                    let idx = builder.constant(gl, Value::Decimal(idx as i64));
+                    let idx = builder.constant_u32(gl, idx);
                     builder.arr_drive(gl, key, variable, idx)
                 }
             }
@@ -1305,14 +1210,13 @@ fn assign_net_lvalue<'a>(
                 _ => todo!("MsbLsb"),
             };
 
-            let offset = builder.constant(gl, Value::Decimal(offset));
-            let drive_ty = VType::Net(length);
+            let offset = builder.constant_u32(gl, offset as u32);
             let variable =
-                expression::sign_extend_or_truncate(gl, builder, variable, variable_ty, drive_ty);
+                expression::sign_extend_or_truncate(gl, builder, variable, variable_ty, length);
             match arr_idx {
                 None => builder.drive_partial(gl, key, variable, offset, length),
                 Some(idx) => {
-                    let idx = builder.constant(gl, Value::Decimal(idx as i64));
+                    let idx = builder.constant_u32(gl, idx);
                     builder.arr_drive_partial(gl, key, variable, idx, offset, length)
                 }
             }

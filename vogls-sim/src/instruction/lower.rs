@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, GlobalContext, Instruction, IntrinsicArg, ProcessKey,
-    SignalKey, Type, VariableKey,
+    SignalKey, VariableKey,
 };
 
 use crate::instruction::{StackRef, VmInstruction, VmIntrinsicArg, VmProcess};
@@ -25,7 +25,6 @@ pub fn lower_process_to_vm(
 
     let mut stack_map = HashMap::new();
     let mut bit_stack_top = 0;
-    let mut decimal_stack_top = 0;
 
     // Make a map of the stack.
     bb_stack.push(process.entry);
@@ -40,26 +39,14 @@ pub fn lower_process_to_vm(
             }
 
             if let Some(dst) = instr.get_destination_variable() {
-                match gl.vars.get(dst).unwrap().ty {
-                    Type::Bits(size) => {
-                        stack_map.insert(
-                            dst,
-                            StackRef {
-                                offset: bit_stack_top,
-                            },
-                        );
-                        bit_stack_top += (size as usize).div_ceil(8);
-                    }
-                    Type::Decimal => {
-                        stack_map.insert(
-                            dst,
-                            StackRef {
-                                offset: decimal_stack_top,
-                            },
-                        );
-                        decimal_stack_top += 1;
-                    }
-                }
+                let size = gl.vars.get(dst).unwrap().size;
+                stack_map.insert(
+                    dst,
+                    StackRef {
+                        offset: bit_stack_top,
+                    },
+                );
+                bit_stack_top += (size as usize).div_ceil(8);
             }
         }
 
@@ -68,7 +55,6 @@ pub fn lower_process_to_vm(
     }
 
     let bit_stack_size = bit_stack_top;
-    let decimal_stack_size = decimal_stack_top;
 
     bb_stack.clear();
     bb_seen.clear();
@@ -94,17 +80,16 @@ pub fn lower_process_to_vm(
 
         for instr in &bb.instrs {
             let instr = match instr {
-                I::ConstantBit(d, value) => VI::ConstantBit(var(*d), value.clone()),
-                I::ConstantDecimal(d, value) => VI::ConstantDecimal(var(*d), value.clone()),
+                I::Constant(d, value) => VI::Constant(var(*d), value.clone()),
 
                 I::Unary(d, op, s) => VI::Unary(var(*d), *op, var(*s)),
                 I::Binary(d, op, s1, s2) => VI::Binary(var(*d), *op, var(*s1), var(*s2)),
 
                 I::Cast(d, s) => VI::Cast(
                     var(*d),
-                    gl.vars[*d].ty.clone(),
+                    gl.vars[*d].size.clone(),
                     var(*s),
-                    gl.vars[*s].ty.clone(),
+                    gl.vars[*s].size.clone(),
                 ),
 
                 I::Intrinsic(op, args) => {
@@ -114,10 +99,7 @@ pub fn lower_process_to_vm(
                         .iter()
                         .map(|arg| match arg {
                             IA::StringLiteral(s) => VIA::StringLiteral(s.clone()),
-                            IA::Variable(v) => match gl.vars[*v].ty {
-                                Type::Bits(size) => VIA::VariableBits(var(*v), size),
-                                Type::Decimal => VIA::VariableDecimal(var(*v)),
-                            },
+                            IA::Variable(v) => VIA::Variable(var(*v), gl.vars[*v].size),
                         })
                         .collect();
 
@@ -146,7 +128,7 @@ pub fn lower_process_to_vm(
 
         if let Some(phis) = bb_phis.get(&bb_key) {
             for (dst, src) in phis {
-                instructions.push(VI::Move(var(*dst), var(*src), gl.vars[*src].ty.clone()));
+                instructions.push(VI::Move(var(*dst), var(*src), gl.vars[*src].size));
             }
         }
 
@@ -199,7 +181,6 @@ pub fn lower_process_to_vm(
 
     VmProcess {
         bit_stack_size,
-        decimal_stack_size,
         instructions,
     }
 }

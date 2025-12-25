@@ -3,7 +3,7 @@ use std::collections::HashSet;
 
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryOp, GlobalContext, Instruction,
-    IntrinsicArg, IntrinsicOp, Process, Signal, Time, Type, UnaryOp, Value, Variable,
+    IntrinsicArg, IntrinsicOp, Process, Signal, Time, UnaryOp, Variable,
 };
 
 const INDENT: &str = "  ";
@@ -115,21 +115,17 @@ impl ContextFormat for BasicBlock {
 impl BinaryOp {
     pub const fn into_mnemonic(&self) -> &'static str {
         match self {
-            Self::BitAnd(_) => "band",
-            Self::BitOr(_) => "bor",
-            Self::BitXor(_) => "bxor",
+            Self::And(_) => "and",
+            Self::Or(_) => "or",
+            Self::Xor(_) => "xor",
+            Self::Add(_) => "add",
+            Self::Sub(_) => "sub",
+            Self::Multiply(_) => "mul",
+            Self::Divide(_) => "div",
+            Self::Modulus(_) => "rem",
             Self::UnsignedLessEqual(_) => "ule",
-            Self::DecimalAnd => "i64and",
-            Self::DecimalOr => "i64or",
-            Self::DecimalXor => "i64xor",
-            Self::DecimalAdd => "i64+",
-            Self::DecimalSub => "i64-",
-            Self::DecimalMultiply => "i64*",
-            Self::DecimalDivide => "i64/",
-            Self::DecimalModulus => "i64%",
-            Self::DecimalLessEqual => "i64le",
             Self::SelectBit(_) => "bselect",
-            Self::LogicalShiftRight(_) => "blsr",
+            Self::LogicalShiftRight(_) => "lsr",
             Self::Concat(_, _) => "concat",
         }
     }
@@ -138,16 +134,11 @@ impl BinaryOp {
 impl UnaryOp {
     pub const fn into_mnemonic(&self) -> &'static str {
         match self {
-            Self::BitNeg(_) => "bneg",
-            Self::BitReduceAnd(_) => "bredand",
-            Self::BitReduceOr(_) => "bredor",
-            Self::BitReduceXor(_) => "bredxor",
-            Self::BitSlice(_, _) => "bslice",
-
-            Self::DecimalNeg => "i64neg",
-            Self::DecimalReduceAnd => "i64redand",
-            Self::DecimalReduceOr => "i64redor",
-            Self::DecimalReduceXor => "i64redxor",
+            Self::Neg(_) => "bneg",
+            Self::ReduceAnd(_) => "bredand",
+            Self::ReduceOr(_) => "bredor",
+            Self::ReduceXor(_) => "bredxor",
+            Self::Slice(_, _) => "bslice",
         }
     }
 }
@@ -167,13 +158,9 @@ impl IntrinsicOp {
 impl ContextFormat for Instruction {
     fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &mut DisplayContext<'_>) -> fmt::Result {
         match self {
-            Self::ConstantBit(var, val) => {
+            Self::Constant(var, val) => {
                 ctx.gl.vars.get(*var).unwrap().typed_ctx_fmt(f, ctx)?;
-                write!(f, " = bconst {val}")?;
-            }
-            Self::ConstantDecimal(var, val) => {
-                ctx.gl.vars.get(*var).unwrap().typed_ctx_fmt(f, ctx)?;
-                write!(f, " = dconst {val}")?;
+                write!(f, " = const {val}")?;
             }
             Self::Unary(dst, op, src) => {
                 ctx.gl.vars.get(*dst).unwrap().typed_ctx_fmt(f, ctx)?;
@@ -195,9 +182,7 @@ impl ContextFormat for Instruction {
                 ctx.gl.vars.get(*dst).unwrap().ctx_fmt(f, ctx)?;
                 f.write_str(" = cast(")?;
                 ctx.gl.vars.get(*src).unwrap().ctx_fmt(f, ctx)?;
-                f.write_str(", ")?;
-                ctx.gl.vars[*dst].ty.ctx_fmt(f, ctx)?;
-                f.write_str(")")?;
+                write!(f, ", {})", ctx.gl.vars[*dst].size)?;
             }
             Self::Intrinsic(op, args) => {
                 f.write_str("vogls.")?;
@@ -354,14 +339,12 @@ impl Signal {
         ctx: &mut DisplayContext<'_>,
     ) -> fmt::Result {
         match self.width {
-            None => self.ty.ctx_fmt(f, ctx)?,
+            None => write!(f, "{}", self.size)?,
             Some(width) => {
-                f.write_str("arr[")?;
-                self.ty.ctx_fmt(f, ctx)?;
-                write!(f, "; {}]", width.get())?;
-            },
+                write!(f, "arr[{}; {}]", self.size, width.get())?;
+            }
         }
-        
+
         f.write_str(" ")?;
         self.ctx_fmt(f, ctx)?;
         Ok(())
@@ -371,15 +354,6 @@ impl Signal {
 impl ContextFormat for Time {
     fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut DisplayContext<'_>) -> fmt::Result {
         write!(f, "#{}", self.0)
-    }
-}
-
-impl ContextFormat for Type {
-    fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut DisplayContext<'_>) -> fmt::Result {
-        match self {
-            Type::Bits(size) => write!(f, "b{size}"),
-            Type::Decimal => f.write_str("d"),
-        }
     }
 }
 
@@ -396,14 +370,5 @@ impl ContextFormat for IntrinsicArg {
         }
 
         Ok(())
-    }
-}
-
-impl ContextFormat for Value {
-    fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut DisplayContext<'_>) -> fmt::Result {
-        match self {
-            Value::Bits(bits) => std::fmt::Display::fmt(&bits, f),
-            Value::Decimal(v) => write!(f, "{v}"),
-        }
     }
 }

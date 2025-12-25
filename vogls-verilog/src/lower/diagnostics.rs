@@ -1,9 +1,7 @@
-use vogls_ir::Type;
-
 use crate::ast::{AstItem, Identifier, TextRef};
 use crate::parser::{AstArenas, TokenRange};
 
-use super::ModuleIo;
+use super::{ModuleIo, VType};
 
 #[derive(Clone, Debug)]
 pub enum LowerErrorReason {
@@ -53,7 +51,7 @@ impl Diagnostics {
             .push((tr, LowerErrorReason::NotYetImplemented(reason), Vec::new()));
     }
 
-    pub fn warn_assign_type_mismatch(&mut self, tr: TokenRange, dst: Type, src: Type) {
+    pub fn warn_assign_type_mismatch(&mut self, tr: TokenRange, dst: VType, src: VType) {
         self.warnings
             .push((tr, format!("assign type mismatch: {dst:?} <- {src:?}")));
     }

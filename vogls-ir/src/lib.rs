@@ -9,7 +9,7 @@ pub use builder::{BasicBlockBuilder, BranchRef, PhiRef, new_process};
 pub use format::{ContextFormat, DisplayContext};
 use indexmap::IndexSet;
 use slotmap::{SlotMap, new_key_type};
-pub use types::{ArrayWidth, Type};
+pub use types::ArrayWidth;
 
 new_key_type! { pub struct ProcessKey; }
 new_key_type! { pub struct BasicBlockKey; }
@@ -82,6 +82,11 @@ impl Bits {
             }
         }
     }
+    
+    pub fn from_i64_minimal(value: i64) -> Bits {
+        let size = (64 - value.leading_zeros()).max(1);
+        Self::from_i64_truncated(value, size)
+    }
 
     pub fn from_i64_truncated(value: i64, size: VectorSize) -> Bits {
         if size == 64 {
@@ -146,22 +151,6 @@ impl fmt::Display for Bits {
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum Value {
-    Bits(Bits),
-    Decimal(i64),
-}
-
-impl Value {
-    pub fn get_type(&self) -> Type {
-        match self {
-            Self::Bits(Bits::Small(_, size)) => Type::Bits(*size),
-            Self::Bits(Bits::Big(size, _)) => Type::Bits(*size),
-            Self::Decimal(..) => Type::Decimal,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct Time(pub u64);
 
@@ -210,13 +199,13 @@ impl BasicBlockTerminator {
 
 pub struct Variable {
     pub name: String,
-    pub ty: Type,
+    pub size: VectorSize,
 }
 
 pub struct Signal {
     pub name: String,
     pub width: Option<ArrayWidth>,
-    pub ty: Type,
+    pub size: VectorSize,
 }
 
 pub type VectorSize = u32;
@@ -237,37 +226,24 @@ pub enum IntrinsicOp {
 
 #[derive(Debug, Clone, Copy)]
 pub enum UnaryOp {
-    BitNeg(VectorSize),
-    BitReduceOr(VectorSize),
-    BitReduceAnd(VectorSize),
-    BitReduceXor(VectorSize),
-    BitSlice(VectorSize, VectorSize),
-
-    DecimalNeg,
-    DecimalReduceOr,
-    DecimalReduceAnd,
-    DecimalReduceXor,
+    Neg(VectorSize),
+    ReduceOr(VectorSize),
+    ReduceAnd(VectorSize),
+    ReduceXor(VectorSize),
+    Slice(VectorSize, VectorSize),
 }
 
 #[derive(Debug, Clone, Copy)]
 pub enum BinaryOp {
-    BitAnd(VectorSize),
-    BitOr(VectorSize),
-    BitXor(VectorSize),
-
-    DecimalAnd,
-    DecimalOr,
-    DecimalXor,
-
-    DecimalAdd,
-    DecimalSub,
-    DecimalMultiply,
-    DecimalDivide,
-    DecimalModulus,
-
+    And(VectorSize),
+    Or(VectorSize),
+    Xor(VectorSize),
+    Add(VectorSize),
+    Sub(VectorSize),
+    Multiply(VectorSize),
+    Divide(VectorSize),
+    Modulus(VectorSize),
     UnsignedLessEqual(VectorSize),
-    DecimalLessEqual,
-
     SelectBit(VectorSize),
     LogicalShiftRight(VectorSize),
     Concat(VectorSize, VectorSize),
@@ -275,8 +251,7 @@ pub enum BinaryOp {
 
 #[derive(Debug, Clone)]
 pub enum Instruction {
-    ConstantBit(VariableKey, Bits),
-    ConstantDecimal(VariableKey, i64),
+    Constant(VariableKey, Bits),
 
     Unary(VariableKey, UnaryOp, VariableKey),
     Binary(VariableKey, BinaryOp, VariableKey, VariableKey),
@@ -306,8 +281,7 @@ pub enum Instruction {
 impl Instruction {
     pub fn get_destination_variable(&self) -> Option<VariableKey> {
         match self {
-            Self::ConstantBit(dst, _)
-            | Self::ConstantDecimal(dst, _)
+            Self::Constant(dst, _)
             | Self::Unary(dst, _, _)
             | Self::Binary(dst, _, _, _)
             | Self::Cast(dst, _)

@@ -13,8 +13,7 @@ impl fmt::Display for VmIntrinsicArg {
         match self {
             // @TODO: Quote escaping
             VmIntrinsicArg::StringLiteral(s) => write!(f, "\"{s}\""),
-            VmIntrinsicArg::VariableBits(stack_ref, _size) => stack_ref.fmt(f),
-            VmIntrinsicArg::VariableDecimal(stack_ref) => stack_ref.fmt(f),
+            VmIntrinsicArg::Variable(stack_ref, _size) => stack_ref.fmt(f),
         }
     }
 }
@@ -22,8 +21,7 @@ impl fmt::Display for VmIntrinsicArg {
 impl fmt::Display for VmInstruction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ConstantBit(dst, value) => write!(f, "{dst} = bconst {value}"),
-            Self::ConstantDecimal(dst, value) => write!(f, "{dst} = dconst {value}"),
+            Self::Constant(dst, value) => write!(f, "{dst} = const {value}"),
             Self::Unary(dst, op, src) => write!(f, "{dst} = {} {src}", op.into_mnemonic()),
             Self::Binary(dst, op, src1, src2) => {
                 write!(f, "{dst} = {} {src1}, {src2}", op.into_mnemonic())
@@ -90,17 +88,12 @@ impl fmt::Display for VmSignalKey {
 
 impl fmt::Display for VmProcess {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(
-            f,
-            "vm_process() : {}+{} {{",
-            self.bit_stack_size, self.decimal_stack_size
-        )?;
+        writeln!(f, "vm_process() : {} {{", self.bit_stack_size)?;
         let mut labels = Vec::new();
         for i in &self.instructions {
             use VmInstruction as I;
             match i {
-                I::ConstantBit(..)
-                | I::ConstantDecimal(..)
+                I::Constant(..)
                 | I::Unary(..)
                 | I::Binary(..)
                 | I::Cast(..)

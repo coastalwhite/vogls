@@ -1,4 +1,4 @@
-use vogls_ir::{BasicBlockBuilder, GlobalContext, Value};
+use vogls_ir::{BasicBlockBuilder, GlobalContext};
 
 use crate::ast::statement::{LoopStatement, LoopStatementVariant};
 use crate::ast::{AstId, AstIdRange};
@@ -28,7 +28,7 @@ pub fn lower_loop_statement<'a>(
     match ls.variant {
         V::Repeat(size) => {
             let (size, _) = lower_expr(gl, arenas, scope, diagnostics, &mut builder, size)?;
-            let i = builder.constant(gl, Value::Decimal(0));
+            let i = builder.constant_u32(gl, 0);
             repeat_vars = Some((i, size));
         }
         V::For(initialization, _, _) => {
@@ -87,7 +87,7 @@ pub fn lower_loop_statement<'a>(
             SymbolVariant::Constant(_) => todo!(),
             SymbolVariant::Genvar(_) => todo!(),
             SymbolVariant::Task(_) => todo!(),
-            SymbolVariant::Signal(_dims, _) => {}
+            SymbolVariant::Signal(_dims, _ty, _) => {}
         }
     }
 
@@ -153,7 +153,7 @@ pub fn lower_loop_statement<'a>(
             let (i, _) = repeat_vars.unwrap();
             let phi_ref = repeat_i_phi.unwrap();
 
-            let one = builder.constant(gl, Value::Decimal(1));
+            let one = builder.constant_u32(gl, 1);
             let i_plus_1 = builder.plus(gl, i, one);
             builder.update_phi_ref(gl, phi_ref, 1, builder.key(), i_plus_1);
         }

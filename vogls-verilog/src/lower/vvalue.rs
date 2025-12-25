@@ -26,13 +26,6 @@ impl VValue {
         }
     }
 
-    pub fn into_ir(self) -> vogls_ir::Value {
-        match self {
-            Self::Integer(v) => vogls_ir::Value::Decimal(v),
-            Self::Net(v) => vogls_ir::Value::Bits(v),
-        }
-    }
-
     pub fn ty(&self) -> VType {
         match self {
             VValue::Integer(_) => VType::Integer,
@@ -158,7 +151,7 @@ impl VValue {
 
     pub fn into_bits(self) -> Bits {
         match self {
-            VValue::Integer(v) => Bits::from_i64_truncated(v, (64 - v.leading_zeros()).max(1)),
+            VValue::Integer(v) => Bits::from_i64_truncated(v, 32),
             VValue::Net(bits) => bits,
         }
     }

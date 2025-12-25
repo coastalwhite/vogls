@@ -1,6 +1,4 @@
-use vogls_ir::{
-    BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, Time, Value, VariableKey,
-};
+use vogls_ir::{BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, Time, VariableKey};
 
 use crate::ast::AstId;
 use crate::ast::expr::Expr;
@@ -114,7 +112,7 @@ pub fn lower<'a>(
                     .collect::<Vec<_>>();
                 builder = builder.watch(gl, signals.clone());
 
-                let mut acc = builder.constant(gl, Value::Bits(Bits::Small(0, 1)));
+                let mut acc = builder.constant(gl, Bits::Small(0, 1));
                 for (before, signal) in before.into_iter().zip(signals) {
                     let after = builder.probe(gl, signal);
                     let cond = builder.not_equals(gl, before, after);
@@ -156,7 +154,7 @@ pub fn lower<'a>(
                         diagnostics.var_not_found(arenas, *ast_ident);
                         return Err(());
                     };
-                    let SymbolVariant::Signal(_dims, key) = &scope.symbols[symbol_key].variant
+                    let SymbolVariant::Signal(_dims, _ty, key) = &scope.symbols[symbol_key].variant
                     else {
                         panic!("not a signal");
                     };
@@ -169,7 +167,7 @@ pub fn lower<'a>(
                 }
                 builder = builder.watch(gl, signals);
 
-                let mut acc = builder.constant(gl, Value::Bits(Bits::Small(0, 1)));
+                let mut acc = builder.constant(gl, Bits::Small(0, 1));
                 for (condition, before, expr) in conditions.into_iter() {
                     use WatchCondition as C;
 
@@ -186,6 +184,7 @@ pub fn lower<'a>(
                         }
                         C::None => builder.not_equals(gl, before, after),
                     };
+                    let cond = builder.reduce_or(gl, cond);
                     acc = builder.or(gl, acc, cond);
                 }
 

@@ -1,21 +1,21 @@
 use std::collections::HashMap;
 
 use vogls_ir::{
-    ArrayWidth, ConnectionDirection, GlobalContext, ProcessKey, Signal, SignalKey, Type,
+    ArrayWidth, Bits, ConnectionDirection, GlobalContext, ProcessKey, Signal, SignalKey,
     new_process,
 };
 
 use crate::ast::constant_expr::ConstantMinTypMaxExpression;
 use crate::ast::module::{
     Dimension, GateInstantiation, GenerateBlock, GenvarAssignment, GenvarDeclaration,
-    ListOfPortConnections, LocalParameterDeclaration, LoopGenerateConstruct, Module,
-    ModuleInstance, ModuleInstantiation, ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration,
-    NInputGateInstance, NInputGateType, NamedParameterAssignment, NamedPortConnection,
-    NetDeclAssignment, NetDeclarationNets, ParamAssignment, ParameterValueAssignment,
-    TaskDeclaration, VariableType,
+    IfGenerateConstruct, ListOfPortConnections, LocalParameterDeclaration, LoopGenerateConstruct,
+    Module, ModuleInstance, ModuleInstantiation, ModuleOrGenerateItem,
+    ModuleOrGenerateItemDeclaration, NInputGateInstance, NInputGateType, NamedParameterAssignment,
+    NamedPortConnection, NetDeclAssignment, NetDeclarationNets, ParamAssignment,
+    ParameterValueAssignment, TaskDeclaration, VariableType,
 };
 use crate::ast::{AstId, AstIdRange};
-use crate::lower::expression::lower_expr;
+use crate::lower::expression::{self, lower_expr};
 use crate::lower::scope::{Symbol, SymbolVariant};
 use crate::lower::vvalue::VValue;
 use crate::lower::{
@@ -68,12 +68,12 @@ pub fn lower<'a>(
                                 let key = gl.signals.insert(Signal {
                                     name: ident.into(),
                                     width,
-                                    ty: ty.to_ir_info(),
+                                    size: ty.force_net_width(),
                                 });
                                 let symbol_key = scope.symbols.insert(Symbol {
                                     name: ident.to_string(),
                                     definition_site: arenas.get_item_span(ast_ident),
-                                    variant: SymbolVariant::Signal(dims, key),
+                                    variant: SymbolVariant::Signal(dims, ty, key),
                                 });
                                 scope.push(ident, symbol_key);
                             }
@@ -88,19 +88,19 @@ pub fn lower<'a>(
                                 let key = gl.signals.insert(Signal {
                                     name: ident.into(),
                                     width: None,
-                                    ty: ty.to_ir_info(),
+                                    size: ty.force_net_width(),
                                 });
                                 let symbol_key = scope.symbols.insert(Symbol {
                                     name: ident.to_string(),
                                     definition_site: arenas.get_item_span(*ast_ident),
-                                    variant: SymbolVariant::Signal(Vec::new(), key),
+                                    variant: SymbolVariant::Signal(Vec::new(), ty, key),
                                 });
                                 scope.push(ident, symbol_key);
 
                                 let (section_key, mut bb_builder) =
                                     new_process(gl, "decl_assign".into());
                                 let bb_key = bb_builder.key();
-                                let (variable, _) = lower_expr(
+                                let (v, v_ty) = lower_expr(
                                     gl,
                                     arenas,
                                     scope,
@@ -108,8 +108,15 @@ pub fn lower<'a>(
                                     &mut bb_builder,
                                     *expr,
                                 )?;
+                                let v = expression::sign_extend_or_truncate(
+                                    gl,
+                                    &mut bb_builder,
+                                    v,
+                                    v_ty,
+                                    ty.force_net_width(),
+                                );
 
-                                bb_builder.drive(gl, key, variable);
+                                bb_builder.drive(gl, key, v);
                                 bb_builder.watch_for_ins_to(gl, bb_key);
                                 processes.push(section_key);
                             }
@@ -137,12 +144,12 @@ pub fn lower<'a>(
                         let key = gl.signals.insert(Signal {
                             name: ident.into(),
                             width,
-                            ty: ty.to_ir_info(),
+                            size: ty.force_net_width(),
                         });
                         let symbol_key = scope.symbols.insert(Symbol {
                             name: ident.to_string(),
                             definition_site: arenas.get_item_span(*identifier),
-                            variant: SymbolVariant::Signal(dims, key),
+                            variant: SymbolVariant::Signal(dims, ty, key),
                         });
                         scope.push(ident, symbol_key);
                     }
@@ -156,12 +163,12 @@ pub fn lower<'a>(
                         let key = gl.signals.insert(Signal {
                             name: ident.into(),
                             width: None,
-                            ty: Type::Decimal,
+                            size: VType::Integer.force_net_width(),
                         });
                         let symbol_key = scope.symbols.insert(Symbol {
                             name: ident.to_string(),
                             definition_site: arenas.get_span(ast_ident),
-                            variant: SymbolVariant::Signal(Vec::new(), key),
+                            variant: SymbolVariant::Signal(Vec::new(), VType::Integer, key),
                         });
                         scope.push(ident, symbol_key);
                     }
@@ -338,11 +345,12 @@ pub fn lower<'a>(
                         }
 
                         let symbol_key = scope.get(ident).unwrap();
-                        let SymbolVariant::Signal(_dims, signal_key) =
+                        let SymbolVariant::Signal(_dims, _ty, signal_key) =
                             &scope.symbols[symbol_key].variant
                         else {
                             panic!("not a signal");
                         };
+                        // @TODO: Coerce inputs and output
 
                         bb_builder.drive(gl, *signal_key, value);
                         bb_builder.watch_for_ins_to(gl, bb_key);
@@ -428,7 +436,7 @@ pub fn lower<'a>(
                             .ports
                             .iter()
                             .zip(ports.iter())
-                            .map(|((_name, connection, width), l_p)| {
+                            .map(|((_name, connection, ty), l_p)| {
                                 let is_input = matches!(
                                     connection,
                                     ConnectionDirection::In | ConnectionDirection::Both
@@ -441,7 +449,7 @@ pub fn lower<'a>(
                                         diagnostics,
                                         processes,
                                         l_p,
-                                        *width,
+                                        *ty,
                                     )
                                 } else {
                                     assign_port_output(
@@ -451,7 +459,7 @@ pub fn lower<'a>(
                                         diagnostics,
                                         processes,
                                         l_p,
-                                        *width,
+                                        *ty,
                                     )
                                 }
                             })
@@ -661,7 +669,40 @@ pub fn lower<'a>(
                 scope.symbols[symbol_key].variant = SymbolVariant::Genvar(Some(v as i64));
             }
         }
-        ModuleOrGenerateItem::IfGenerateConstruct(_id) => todo!(),
+        ModuleOrGenerateItem::IfGenerateConstruct(id) => {
+            let IfGenerateConstruct {
+                condition,
+                truthy,
+                falsy,
+            } = arenas.get(*id);
+
+            let v = eval_constant_expr(gl, arenas, &scope, diagnostics, *condition)?;
+            if v.logical_equal(VValue::Net(Bits::new_zeroed(1))) {
+                if let Some(falsy) = falsy {
+                    lower_opt_generate_block(
+                        gl,
+                        arenas,
+                        scope,
+                        diagnostics,
+                        module_lut,
+                        next_modules,
+                        processes,
+                        *falsy,
+                    )?;
+                }
+            } else {
+                lower_opt_generate_block(
+                    gl,
+                    arenas,
+                    scope,
+                    diagnostics,
+                    module_lut,
+                    next_modules,
+                    processes,
+                    *truthy,
+                )?;
+            }
+        }
         ModuleOrGenerateItem::CaseGenerateConstruct(_id) => todo!(),
     }
 
@@ -688,4 +729,44 @@ pub fn dims_to_array<'a>(
         dims.push((lhs.abs_diff(rhs) + 1) as u32);
     }
     Ok(dims)
+}
+
+pub fn lower_opt_generate_block<'a>(
+    gl: &mut GlobalContext,
+    arenas: &'a AstArenas,
+    scope: &mut Scope<'a>,
+    diagnostics: &mut Diagnostics,
+    module_lut: &HashMap<&'a str, AstId<Module>>,
+    next_modules: &mut Vec<ModuleInitialization<'a>>,
+    processes: &mut Vec<ProcessKey>,
+    opt_generate_block: AstId<Option<GenerateBlock>>,
+) -> Result<(), ()> {
+    match arenas.get(opt_generate_block) {
+        None => Ok(()),
+        Some(GenerateBlock::BeginEnd(_, module_or_generate_items)) => {
+            for m in module_or_generate_items.iter() {
+                lower(
+                    gl,
+                    arenas,
+                    module_lut,
+                    next_modules,
+                    scope,
+                    processes,
+                    m,
+                    diagnostics,
+                )?;
+            }
+            Ok(())
+        }
+        Some(GenerateBlock::ModuleOrGenerateItem(module_or_generate_item)) => lower(
+            gl,
+            arenas,
+            module_lut,
+            next_modules,
+            scope,
+            processes,
+            *module_or_generate_item,
+            diagnostics,
+        ),
+    }
 }

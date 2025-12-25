@@ -2,14 +2,12 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
 
 use slotmap::{SlotMap, new_key_type};
-use vogls_ir::{ArrayWidth, BinaryOp, Bits, IntrinsicOp, Type, UnaryOp, Value, VectorSize};
+use vogls_ir::{ArrayWidth, BinaryOp, Bits, IntrinsicOp, UnaryOp, VectorSize};
 
 #[derive(PartialEq, Eq)]
 pub enum SignalValue {
-    Bits(Bits),
-    BitsArray(Box<[Bits]>),
-    Decimal(i64),
-    DecimalArray(Box<[i64]>),
+    Single(Bits),
+    Array(Box<[Bits]>),
 }
 
 mod bits;
@@ -57,7 +55,7 @@ impl Context {
 pub enum Event {
     Drive(
         VmSignalKey,
-        Value,
+        Bits,
         Option<u32>,
         Option<(VectorSize, VectorSize)>,
     ),
@@ -70,7 +68,6 @@ pub struct EvaluationEvent {
     pub process: VmProcessKey,
     /// The stack with which to execute.
     pub bit_stack: Vec<u8>,
-    pub decimal_stack: Vec<i64>,
     /// Where to start execution.
     pub ip: usize,
 }
@@ -162,51 +159,24 @@ impl Event {
         schedule: &mut BTreeMap<Timestamp, Vec<Event>>,
         regions: &mut Regions,
         signals: &mut HashMap<VmSignalKey, SignalValue>,
-        signal_ty: &HashMap<VmSignalKey, (Option<ArrayWidth>, Type)>,
+        signal_ty: &HashMap<VmSignalKey, (Option<ArrayWidth>, VectorSize)>,
         listeners: &mut SlotMap<ListenerKey, Event>,
         watches: &mut HashMap<VmSignalKey, Vec<ListenerKey>>,
     ) -> EvalOutcome {
         let EvaluationEvent {
             process,
             bit_stack,
-            decimal_stack,
             ip,
         } = match &mut self {
-            Event::Drive(sig, value, idx, partial) => {
+            Event::Drive(sig, bits, idx, partial) => {
                 let updated = match signals.get_mut(sig).unwrap() {
-                    SignalValue::Bits(signal_bits) => {
+                    SignalValue::Single(signal_bits) => {
                         assert!(idx.is_none());
-                        let Value::Bits(bits) = value else {
-                            unreachable!()
-                        };
                         drive_bits(signal_bits, bits.as_slice(), *partial)
                     }
-                    SignalValue::Decimal(signal_value) => {
-                        assert!(idx.is_none());
-                        assert!(partial.is_none());
-                        let Value::Decimal(value) = value else {
-                            unreachable!()
-                        };
-                        let before = *signal_value;
-                        *signal_value = *value;
-                        before != *signal_value
-                    }
-                    SignalValue::BitsArray(signal_bits) => {
+                    SignalValue::Array(signal_bits) => {
                         let Some(idx) = idx else { unreachable!() };
-                        let Value::Bits(bits) = value else {
-                            unreachable!()
-                        };
                         drive_bits(&mut signal_bits[*idx as usize], bits.as_slice(), *partial)
-                    }
-                    SignalValue::DecimalArray(signal_value) => {
-                        assert!(partial.is_none());
-                        let Some(idx) = idx else { unreachable!() };
-                        let Value::Decimal(value) = value else {
-                            unreachable!()
-                        };
-                        let before = signal_value[*idx as usize];
-                        signal_value[*idx as usize] = *value;
-                        before != signal_value[*idx as usize]
                     }
                 };
 
@@ -226,37 +196,36 @@ impl Event {
             let instr = &process.instructions[*ip];
             *ip += 1;
             match instr {
-                I::ConstantBit(var, Bits::Small(value, size)) => {
+                I::Constant(var, Bits::Small(value, size)) => {
                     bits::load_from_u64(bit_stack, var.offset, *size, *value);
                 }
-                I::ConstantBit(var, Bits::Big(size, value)) => {
+                I::Constant(var, Bits::Big(size, value)) => {
                     bit_stack[var.offset..][..size.div_ceil(8) as usize].copy_from_slice(value);
                 }
                 I::Unary(dst, op, src) => {
                     use UnaryOp as O;
                     match op {
-                        O::BitNeg(size) => {
+                        O::Neg(size) => {
                             if *size != 1 {
                                 todo!()
                             }
                             bit_stack[dst.offset] = u8::from(bit_stack[src.offset] == 0)
                         }
-                        O::BitReduceOr(size) => {
+                        O::ReduceOr(size) => {
                             let result = bit_stack[src.offset..][..size.div_ceil(8) as usize]
                                 .iter()
                                 .any(|b| *b != 0);
                             bit_stack[dst.offset] = u8::from(result);
                         }
-                        O::BitReduceAnd(size) => {
-                            let num_bytes = size.div_ceil(8) as usize;
-                            let result = bit_stack[src.offset..][..num_bytes - 1]
+                        O::ReduceAnd(size) => {
+                            let result = bit_stack[src.offset + 1..][..size.div_ceil(8) as usize]
                                 .iter()
                                 .all(|b| *b == 0xFF);
-                            let mask = (1u8 << size % 8).wrapping_sub(1);
-                            let result = result & (bit_stack[num_bytes - 1] & mask == mask);
+                            let mask = 1u8.wrapping_shl(size % 8).wrapping_sub(1);
+                            let result = result & (bit_stack[src.offset] & mask == mask);
                             bit_stack[dst.offset] = u8::from(result);
                         }
-                        O::BitReduceXor(size) => {
+                        O::ReduceXor(size) => {
                             let mut result = 0;
                             if *size > 0 {
                                 result = bit_stack[src.offset..][..size.div_ceil(8) as usize]
@@ -266,43 +235,81 @@ impl Event {
                             }
                             bit_stack[dst.offset] = u8::from(result % 2 == 1);
                         }
-                        O::BitSlice(n, width) => {
+                        O::Slice(n, width) => {
                             bits::slice(bit_stack, dst.offset, src.offset, *width, *n);
-                        }
-
-                        O::DecimalNeg => decimal_stack[dst.offset] = !decimal_stack[src.offset],
-                        O::DecimalReduceAnd => {
-                            bit_stack[dst.offset] = u8::from(!decimal_stack[src.offset] == 0)
-                        }
-                        O::DecimalReduceOr => {
-                            bit_stack[dst.offset] = u8::from(decimal_stack[src.offset] != 0)
-                        }
-                        O::DecimalReduceXor => {
-                            bit_stack[dst.offset] =
-                                u8::from(decimal_stack[src.offset].count_ones() % 2 != 0)
                         }
                     };
                 }
                 I::Binary(dst, op, lhs, rhs) => {
                     use BinaryOp as O;
                     match op {
-                        O::BitAnd(n) => {
+                        O::And(n) => {
                             for i in 0..n.div_ceil(8) as usize {
                                 bit_stack[dst.offset + i] =
                                     bit_stack[lhs.offset + i] & bit_stack[rhs.offset + i]
                             }
                         }
-                        O::BitOr(n) => {
+                        O::Or(n) => {
                             for i in 0..n.div_ceil(8) as usize {
                                 bit_stack[dst.offset + i] =
                                     bit_stack[lhs.offset + i] | bit_stack[rhs.offset + i];
                             }
                         }
-                        O::BitXor(n) => {
+                        O::Xor(n) => {
                             for i in 0..n.div_ceil(8) as usize {
                                 bit_stack[dst.offset + i] =
                                     bit_stack[lhs.offset + i] ^ bit_stack[rhs.offset + i];
                             }
+                        }
+                        O::Add(n) => {
+                            let n = *n;
+                            if n > 64 {
+                                todo!()
+                            }
+                            let l = bits::store_to_u64(&bit_stack, lhs.offset, n);
+                            let r = bits::store_to_u64(&bit_stack, rhs.offset, n);
+                            let out = l.wrapping_add(r) & (1u64.wrapping_shl(n)).wrapping_sub(1);
+                            bits::load_from_u64(bit_stack, dst.offset, n, out);
+                        }
+                        O::Sub(n) => {
+                            let n = *n;
+                            if n > 64 {
+                                todo!()
+                            }
+                            let l = bits::store_to_u64(&bit_stack, lhs.offset, n);
+                            let r = bits::store_to_u64(&bit_stack, rhs.offset, n);
+                            let out = l.wrapping_sub(r) & (1u64.wrapping_shl(n)).wrapping_sub(1);
+                            bits::load_from_u64(bit_stack, dst.offset, n, out);
+                        }
+                        O::Multiply(n) => {
+                            let n = *n;
+                            if n > 64 {
+                                todo!()
+                            }
+                            let l = bits::store_to_u64(&bit_stack, lhs.offset, n);
+                            let r = bits::store_to_u64(&bit_stack, rhs.offset, n);
+                            let out = l.wrapping_mul(r) & (1u64.wrapping_shl(n)).wrapping_sub(1);
+                            bits::load_from_u64(bit_stack, dst.offset, n, out);
+                        }
+                        O::Divide(n) => {
+                            let n = *n;
+                            if n > 64 {
+                                todo!()
+                            }
+                            let l = bits::store_to_u64(&bit_stack, lhs.offset, n);
+                            let r = bits::store_to_u64(&bit_stack, rhs.offset, n);
+                            let out = l.wrapping_div(r) & (1u64.wrapping_shl(n)).wrapping_sub(1);
+                            bits::load_from_u64(bit_stack, dst.offset, n, out);
+                        }
+                        O::Modulus(n) => {
+                            let n = *n;
+                            if n > 64 {
+                                todo!()
+                            }
+                            let l = bits::store_to_u64(&bit_stack, lhs.offset, n);
+                            let r = bits::store_to_u64(&bit_stack, rhs.offset, n);
+                            let out = l.wrapping_rem(r) & 1u64.wrapping_shl(n).wrapping_sub(1);
+                            bits::load_from_u64(bit_stack, dst.offset, n, out);
                         }
                         O::UnsignedLessEqual(n) => {
                             let mut set = false;
@@ -321,45 +328,9 @@ impl Event {
                                 bit_stack[dst.offset] = u8::from(true);
                             }
                         }
-                        O::DecimalAnd => {
-                            decimal_stack[dst.offset] =
-                                decimal_stack[lhs.offset] & decimal_stack[rhs.offset]
-                        }
-                        O::DecimalOr => {
-                            decimal_stack[dst.offset] =
-                                decimal_stack[lhs.offset] | decimal_stack[rhs.offset]
-                        }
-                        O::DecimalXor => {
-                            decimal_stack[dst.offset] =
-                                decimal_stack[lhs.offset] ^ decimal_stack[rhs.offset]
-                        }
-                        O::DecimalAdd => {
-                            decimal_stack[dst.offset] =
-                                decimal_stack[lhs.offset] + decimal_stack[rhs.offset]
-                        }
-                        O::DecimalMultiply => {
-                            decimal_stack[dst.offset] =
-                                decimal_stack[lhs.offset] * decimal_stack[rhs.offset]
-                        }
-                        O::DecimalDivide => {
-                            decimal_stack[dst.offset] =
-                                decimal_stack[lhs.offset] / decimal_stack[rhs.offset]
-                        }
-                        O::DecimalModulus => {
-                            decimal_stack[dst.offset] =
-                                decimal_stack[lhs.offset] % decimal_stack[rhs.offset]
-                        }
-                        O::DecimalSub => {
-                            decimal_stack[dst.offset] =
-                                decimal_stack[lhs.offset] - decimal_stack[rhs.offset]
-                        }
-                        O::DecimalLessEqual => {
-                            bit_stack[dst.offset] =
-                                u8::from(decimal_stack[lhs.offset] <= decimal_stack[rhs.offset])
-                        }
                         O::SelectBit(n) => {
-                            let idx = decimal_stack[rhs.offset];
-                            assert!(idx >= 0 && idx < *n as i64);
+                            let idx = bits::store_to_u64(&bit_stack, rhs.offset, 32);
+                            assert!(idx >= 0 && idx < *n as u64);
                             let idx = idx as VectorSize;
 
                             let byte_offset = n.div_ceil(8) - 1 - (idx / 8);
@@ -367,8 +338,8 @@ impl Event {
                                 (bit_stack[lhs.offset + byte_offset as usize] >> (idx % 8)) & 1;
                         }
                         O::LogicalShiftRight(n) => {
-                            let shift = decimal_stack[rhs.offset];
-                            assert!(shift >= 0 && shift < *n as i64);
+                            let shift = bits::store_to_u64(&bit_stack, rhs.offset, 32);
+                            assert!(shift >= 0 && shift < *n as u64);
                             bits::logical_shift_right(
                                 bit_stack,
                                 dst.offset,
@@ -383,47 +354,18 @@ impl Event {
                     };
                 }
 
-                I::ConstantDecimal(var, val) => decimal_stack[var.offset] = *val,
-
-                I::Cast(dst, dst_ty, src, src_ty) => {
-                    use vogls_ir::Type as T;
-                    match (*dst_ty, *src_ty) {
-                        (T::Bits(x), T::Bits(y)) if x == y => {}
-                        (T::Decimal, T::Decimal) => {}
-
-                        (T::Bits(m), T::Bits(n)) if n < m => {
-                            for i in 0..n.div_ceil(8) as usize {
-                                bit_stack[dst.offset + i] = bit_stack[src.offset + i];
-                            }
-                        }
-
-                        (T::Bits(1), T::Decimal) => {
-                            let src = decimal_stack[src.offset];
-                            bit_stack[dst.offset] = (src != 0) as u8;
-                        }
-                        (T::Bits(n), T::Decimal) if n < 64 => {
-                            let src = decimal_stack[src.offset];
-                            assert!(src >= 0);
-                            bits::load_from_u64(bit_stack, dst.offset, n, src as u64);
-                        }
-                        (T::Decimal, T::Bits(1)) => {
-                            let src = bit_stack[src.offset];
-                            decimal_stack[dst.offset] = src as i64;
-                        }
-                        _ => todo!("cast: {:?} -> {:?}", *src_ty, *dst_ty),
+                I::Cast(dst, dst_size, src, src_size) => {
+                    assert!(dst_size >= src_size);
+                    for i in 0..src_size.div_ceil(8) as usize {
+                        bit_stack[dst.offset + i] = bit_stack[src.offset + i];
+                    }
+                    for i in src_size.div_ceil(8) as usize..dst_size.div_ceil(8) as usize {
+                        bit_stack[dst.offset + i] = 0;
                     }
                 }
-                I::Move(dst, src, ty) => {
-                    use vogls_ir::Type as T;
-                    match *ty {
-                        T::Bits(n) => {
-                            for i in 0..n.div_ceil(8) as usize {
-                                bit_stack[dst.offset + i] = bit_stack[src.offset + i];
-                            }
-                        }
-                        T::Decimal => {
-                            decimal_stack[dst.offset] = decimal_stack[src.offset];
-                        }
+                I::Move(dst, src, size) => {
+                    for i in 0..size.div_ceil(8) as usize {
+                        bit_stack[dst.offset + i] = bit_stack[src.offset + i];
                     }
                 }
 
@@ -435,12 +377,9 @@ impl Event {
                             assert_eq!(args.len(), 1);
                             let msg = match args.first().unwrap() {
                                 VmIntrinsicArg::StringLiteral(s) => s.clone(),
-                                VmIntrinsicArg::VariableBits(_, n) if *n >= 64 => todo!(),
-                                VmIntrinsicArg::VariableBits(s, n) => {
+                                VmIntrinsicArg::Variable(_, n) if *n >= 64 => todo!(),
+                                VmIntrinsicArg::Variable(s, n) => {
                                     format!("{n}'d{}", bits::store_to_u64(bit_stack, s.offset, *n))
-                                }
-                                VmIntrinsicArg::VariableDecimal(s) => {
-                                    decimal_stack[s.offset].to_string()
                                 }
                             };
                             writeln!(&mut ctx.stdout, "[DISPLAY]: time = {}: {msg}", ctx.time)
@@ -448,14 +387,10 @@ impl Event {
                         }
                         O::Assert => {
                             let value = match args.first() {
-                                Some(VmIntrinsicArg::VariableBits(condition, size)) => {
-                                    if *size != 1 {
-                                        todo!()
-                                    }
-                                    bit_stack[condition.offset] != 0
-                                }
-                                Some(VmIntrinsicArg::VariableDecimal(condition)) => {
-                                    decimal_stack[condition.offset] != 0
+                                Some(VmIntrinsicArg::Variable(condition, size)) => {
+                                    bit_stack[condition.offset..][..size.div_ceil(8) as usize]
+                                        .iter()
+                                        .any(|b| *b != 0)
                                 }
                                 _ => {
                                     panic!("Invalid assert argument");
@@ -469,7 +404,7 @@ impl Event {
                         O::AssertEq(eq) => {
                             use VmIntrinsicArg as A;
                             match (&args[0], &args[1]) {
-                                (A::VariableBits(l, ls), A::VariableBits(r, rs)) => {
+                                (A::Variable(l, ls), A::Variable(r, rs)) => {
                                     if ls != rs {
                                         writeln!(
                                             &mut ctx.stderr,
@@ -484,18 +419,6 @@ impl Event {
                                         writeln!(
                                             &mut ctx.stderr,
                                             "assert_{{eq, ne}} failed. {lhs:?} != {rhs:?}"
-                                        )
-                                        .unwrap();
-                                        return EvalOutcome::Error;
-                                    }
-                                }
-                                (A::VariableDecimal(l), A::VariableDecimal(r)) => {
-                                    let l = decimal_stack[l.offset];
-                                    let r = decimal_stack[r.offset];
-                                    if (l == r) != *eq {
-                                        writeln!(
-                                            &mut ctx.stderr,
-                                            "assert_{{eq,ne}} failed. {l} == {r}"
                                         )
                                         .unwrap();
                                         return EvalOutcome::Error;
@@ -520,30 +443,26 @@ impl Event {
                 }
                 I::Probe(var, sig) => {
                     match signals.get(&sig).unwrap() {
-                        SignalValue::Bits(Bits::Small(value, size)) => {
+                        SignalValue::Single(Bits::Small(value, size)) => {
                             bits::load_from_u64(bit_stack, var.offset, *size, *value);
                         }
-                        SignalValue::Bits(Bits::Big(size, value)) => {
+                        SignalValue::Single(Bits::Big(size, value)) => {
                             bit_stack[var.offset..][..size.div_ceil(8) as usize]
                                 .copy_from_slice(value);
                         }
-                        SignalValue::Decimal(v) => decimal_stack[var.offset] = *v,
-                        SignalValue::BitsArray(_) => unreachable!(),
-                        SignalValue::DecimalArray(_) => unreachable!(),
+                        SignalValue::Array(_) => unreachable!(),
                     };
                 }
                 I::Drive(sig, var, region, partial) => {
                     if *region != 0 {
                         let partial = partial.map(|(offset, width)| {
-                            (decimal_stack[offset.offset] as VectorSize, width)
+                            (
+                                bits::store_to_u64(&bit_stack, offset.offset, 32) as VectorSize,
+                                width,
+                            )
                         });
-                        let value = match signal_ty[sig].1 {
-                            Type::Decimal => Value::Decimal(decimal_stack[var.offset]),
-                            Type::Bits(width) => {
-                                let width = partial.map_or(width, |(_, s)| s);
-                                Value::Bits(Bits::load_from_slice(&bit_stack[var.offset..], width))
-                            }
-                        };
+                        let width = partial.map_or(signal_ty[sig].1, |(_, s)| s);
+                        let value = Bits::load_from_slice(&bit_stack[var.offset..], width);
                         regions.other[(region - 1) as usize]
                             .push(Event::Drive(*sig, value, None, partial));
                         continue;
@@ -551,7 +470,7 @@ impl Event {
 
                     let signal = signals.get_mut(sig).unwrap();
                     let updated = match signal {
-                        SignalValue::Bits(Bits::Big(size, signal_value)) => {
+                        SignalValue::Single(Bits::Big(size, signal_value)) => {
                             if &bit_stack[var.offset..][..size.div_ceil(8) as usize]
                                 == signal_value.as_ref()
                             {
@@ -570,7 +489,7 @@ impl Event {
                                 true
                             }
                         }
-                        SignalValue::Bits(Bits::Small(signal_value, size)) => {
+                        SignalValue::Single(Bits::Small(signal_value, size)) => {
                             let before = *signal_value;
                             match partial {
                                 None => {
@@ -578,7 +497,7 @@ impl Event {
                                         bits::store_to_u64(bit_stack, var.offset, *size);
                                 }
                                 Some((offset, length)) => {
-                                    let offset = decimal_stack[offset.offset];
+                                    let offset = bits::store_to_u64(&bit_stack, offset.offset, 32);
                                     let value = bits::store_to_u64(bit_stack, var.offset, *length);
                                     *signal_value &= !(((1u64 << *length) - 1) << offset);
                                     *signal_value |= value << offset;
@@ -586,14 +505,7 @@ impl Event {
                             }
                             before != *signal_value
                         }
-                        SignalValue::Decimal(signal_value) => {
-                            assert!(partial.is_none());
-                            let before = *signal_value;
-                            *signal_value = decimal_stack[var.offset];
-                            before != *signal_value
-                        }
-                        SignalValue::BitsArray(_) => unreachable!(),
-                        SignalValue::DecimalArray(_) => unreachable!(),
+                        SignalValue::Array(_) => unreachable!(),
                     };
 
                     if updated {
@@ -602,9 +514,9 @@ impl Event {
                 }
                 I::ArrProbe(dst, signal, idx) => {
                     let signal = signals.get(signal).unwrap();
-                    let idx = decimal_stack[idx.offset];
+                    let idx = bits::store_to_u64(&bit_stack, idx.offset, 32);
                     match signal {
-                        SignalValue::BitsArray(arr) => match &arr[idx as usize] {
+                        SignalValue::Array(arr) => match &arr[idx as usize] {
                             Bits::Small(value, size) => {
                                 bits::load_from_u64(bit_stack, dst.offset, *size, *value);
                             }
@@ -612,26 +524,20 @@ impl Event {
                                 [..size.div_ceil(8) as usize]
                                 .copy_from_slice(&value),
                         },
-                        SignalValue::DecimalArray(arr) => {
-                            decimal_stack[dst.offset] = arr[idx as usize];
-                        }
-                        SignalValue::Bits(_) => unreachable!(),
-                        SignalValue::Decimal(_) => unreachable!(),
+                        SignalValue::Single(_) => unreachable!(),
                     };
                 }
                 I::ArrDrive(sig, src, idx, region, partial) => {
                     if *region != 0 {
-                        let idx = decimal_stack[idx.offset] as u32;
+                        let idx = bits::store_to_u64(&bit_stack, idx.offset, 32) as VectorSize;
                         let partial = partial.map(|(offset, width)| {
-                            (decimal_stack[offset.offset] as VectorSize, width)
+                            (
+                                bits::store_to_u64(&bit_stack, offset.offset, 32) as VectorSize,
+                                width,
+                            )
                         });
-                        let value = match signal_ty[sig].1 {
-                            Type::Decimal => Value::Decimal(decimal_stack[src.offset]),
-                            Type::Bits(width) => {
-                                let width = partial.map_or(width, |(_, s)| s);
-                                Value::Bits(Bits::load_from_slice(&bit_stack[src.offset..], width))
-                            }
-                        };
+                        let value =
+                            Bits::load_from_slice(&bit_stack[src.offset..], signal_ty[sig].1);
                         regions.other[(region - 1) as usize].push(Event::Drive(
                             *sig,
                             value,
@@ -642,10 +548,10 @@ impl Event {
                     }
 
                     let signal = signals.get_mut(sig).unwrap();
-                    let idx = decimal_stack[idx.offset];
+                    let idx = bits::store_to_u64(&bit_stack, idx.offset, 32);
 
                     let updated = match signal {
-                        SignalValue::BitsArray(arr) => match &mut arr[idx as usize] {
+                        SignalValue::Array(arr) => match &mut arr[idx as usize] {
                             Bits::Big(size, signal_value) => {
                                 if &bit_stack[src.offset..][..size.div_ceil(8) as usize]
                                     == signal_value.as_ref()
@@ -673,7 +579,9 @@ impl Event {
                                             bits::store_to_u64(bit_stack, src.offset, *size);
                                     }
                                     Some((offset, length)) => {
-                                        let offset = decimal_stack[offset.offset];
+                                        let offset =
+                                            bits::store_to_u64(&bit_stack, offset.offset, 32)
+                                                as VectorSize;
                                         let value =
                                             bits::store_to_u64(bit_stack, src.offset, *length);
                                         *signal_value &= !(((1u64 << *length) - 1) << offset);
@@ -683,14 +591,7 @@ impl Event {
                                 before != *signal_value
                             }
                         },
-                        SignalValue::DecimalArray(arr) => {
-                            assert!(partial.is_none());
-                            let before = arr[idx as usize];
-                            arr[idx as usize] = decimal_stack[src.offset];
-                            before != arr[idx as usize]
-                        }
-                        SignalValue::Bits(_) => unreachable!(),
-                        SignalValue::Decimal(_) => unreachable!(),
+                        SignalValue::Single(_) => unreachable!(),
                     };
 
                     if updated {
@@ -736,7 +637,7 @@ pub fn run(
     processes: &SlotMap<VmProcessKey, VmProcess>,
     regions: &mut Regions,
     signals: &mut HashMap<VmSignalKey, SignalValue>,
-    signal_ty: &HashMap<VmSignalKey, (Option<ArrayWidth>, Type)>,
+    signal_ty: &HashMap<VmSignalKey, (Option<ArrayWidth>, VectorSize)>,
     listeners: &mut SlotMap<ListenerKey, Event>,
     watches: &mut HashMap<VmSignalKey, Vec<ListenerKey>>,
     max_time: u64,

@@ -8,6 +8,7 @@ use crate::ast::AstId;
 use crate::parser::TokenRange;
 
 use super::vvalue::VValue;
+use super::VType;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SymbolKey(usize);
@@ -46,7 +47,7 @@ impl SymbolTable {
 pub enum SymbolVariant {
     Genvar(Option<i64>),
     Constant(VValue),
-    Signal(Vec<u32>, SignalKey),
+    Signal(Vec<u32>, VType, SignalKey),
     Task(AstId<StatementOrNull>),
 }
 

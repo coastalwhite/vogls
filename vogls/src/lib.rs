@@ -3,7 +3,7 @@ use std::path::Path;
 use std::rc::Rc;
 
 use slotmap::SlotMap;
-use vogls_ir::{Bits, ContextFormat, GlobalContext, Type};
+use vogls_ir::{Bits, ContextFormat, GlobalContext};
 use vogls_sim::{
     Context, EvaluationEvent, Event, Regions, SignalValue, VmProcess, VmProcessKey,
     lower_process_to_vm,
@@ -351,7 +351,6 @@ pub fn run(
         }
 
         let bit_stack = vec![0u8; vm_process.bit_stack_size];
-        let decimal_stack = vec![0i64; vm_process.decimal_stack_size];
         let vm_process_key = processes.insert(vm_process);
 
         if ectx.output_sim_ir {
@@ -361,37 +360,32 @@ pub fn run(
         regions.active.push(Event::Evaluation(EvaluationEvent {
             process: vm_process_key,
             bit_stack,
-            decimal_stack,
             ip: 0,
         }));
     }
 
     for (ir_signal, signal) in io_signals {
-        let value = match (gl.signals[ir_signal].ty, gl.signals[ir_signal].width) {
-            (Type::Bits(n), None) if n < 64 => SignalValue::Bits(Bits::Small(0, n)),
-            (Type::Bits(n), Some(width)) if n < 64 => SignalValue::BitsArray(
+        let value = match (gl.signals[ir_signal].size, gl.signals[ir_signal].width) {
+            (n, None) if n < 64 => SignalValue::Single(Bits::Small(0, n)),
+            (n, Some(width)) if n < 64 => SignalValue::Array(
                 std::iter::repeat_n(Bits::Small(0, n), width.get() as usize).collect(),
             ),
-            (Type::Bits(n), None) => SignalValue::Bits(Bits::Big(
+            (n, None) => SignalValue::Single(Bits::Big(
                 n,
                 std::iter::repeat_n(0, n.div_ceil(8) as usize).collect(),
             )),
-            (Type::Bits(n), Some(width)) => SignalValue::BitsArray(
+            (n, Some(width)) => SignalValue::Array(
                 std::iter::repeat_n(
                     Bits::Big(n, std::iter::repeat_n(0, n.div_ceil(8) as usize).collect()),
                     width.get() as usize,
                 )
                 .collect(),
             ),
-            (Type::Decimal, None) => SignalValue::Decimal(0),
-            (Type::Decimal, Some(width)) => {
-                SignalValue::DecimalArray(std::iter::repeat_n(0, width.get() as usize).collect())
-            }
         };
         signals.insert(signal, value);
         signal_ty.insert(
             signal,
-            (gl.signals[ir_signal].width, gl.signals[ir_signal].ty),
+            (gl.signals[ir_signal].width, gl.signals[ir_signal].size),
         );
     }
 
