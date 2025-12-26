@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+clap.workspace = true
 slotmap.workspace = true
 vogls-ir.workspace = true
 vogls-sim.workspace = true

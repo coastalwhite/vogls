@@ -149,6 +149,7 @@ pub fn eval_constant_expr<'a>(
                     None => (64 - v.leading_zeros()).max(1),
                     Some(size) => size.as_u32(),
                 };
+                assert!(width <= 64);
                 result_stack.push(Some(VValue::Net(Bits::Small(v, width))));
             }
             Expr::Ternary(condition, truthy, falsy) => {

@@ -5,7 +5,7 @@ use std::rc::Rc;
 use slotmap::SlotMap;
 use vogls_ir::{Bits, ContextFormat, GlobalContext};
 use vogls_sim::{
-    Context, EvaluationEvent, Event, Regions, VmProcess, VmProcessKey, lower_process_to_vm,
+    lower_process_to_vm, Context, EvaluationEvent, Event, Regions, TracingLevel, VmProcess, VmProcessKey
 };
 use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{
@@ -25,10 +25,9 @@ use vogls_verilog::tokenizer::Tokenized;
 pub struct ExecutionContext {
     pub stdout: Box<dyn std::io::Write>,
     pub stderr: Box<dyn std::io::Write>,
-    pub output_ir: bool,
-    pub output_elaborated: bool,
-    pub output_sim_ir: bool,
-    pub output_schedule: bool,
+    pub emit_ir: bool,
+    pub emit_vm: bool,
+    pub trace: TracingLevel,
 }
 
 fn append_referenced_modules_generate_block<'a>(
@@ -320,7 +319,7 @@ pub fn run(
         return Err("failed to lower".into());
     }
 
-    if ectx.output_ir {
+    if ectx.emit_ir && !ectx.emit_vm {
         for process in gl.processes.values() {
             writeln!(ectx.stdout, "{}", process.display(&gl))?;
         }
@@ -338,20 +337,20 @@ pub fn run(
 
     let mut io_signals = HashMap::new();
     for process in gl.processes.keys() {
-        if ectx.output_elaborated {
+        if ectx.emit_vm && ectx.emit_ir {
             println!();
             println!("{}", gl.processes[process].display(&gl));
         }
         let vm_process = lower_process_to_vm(process, &gl, &mut io_signals);
 
-        if ectx.output_sim_ir {
+        if ectx.emit_vm {
             print!("{}", &vm_process);
         }
 
         let bit_stack = vec![0u8; vm_process.bit_stack_size];
         let vm_process_key = processes.insert(vm_process);
 
-        if ectx.output_sim_ir {
+        if ectx.emit_vm {
             println!(": {vm_process_key:?}");
         }
 
@@ -367,14 +366,11 @@ pub fn run(
         signals.insert(signal, value);
     }
 
-    if ectx.output_schedule {
-        println!("{:?}", &regions.active);
-    }
-
     let stdout = std::mem::replace(&mut ectx.stdout, Box::new(Vec::new()) as _);
     let stderr = std::mem::replace(&mut ectx.stderr, Box::new(Vec::new()) as _);
 
     let mut ctx = Context::new(stdout, stderr);
+    ctx.tracing_level = ectx.trace;
     let fail = vogls_sim::run(
         &mut ctx,
         &processes,

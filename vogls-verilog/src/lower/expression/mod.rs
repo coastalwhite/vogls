@@ -519,7 +519,7 @@ pub fn lower_expr<'a>(
                     None => (64 - v.leading_zeros()).max(1),
                     Some(size) => size.as_u32(),
                 };
-                let var = builder.constant(gl, Bits::Small(v, width));
+                let var = builder.constant(gl, Bits::from_i64_truncated(v as i64, width));
 
                 result_stack.push(Some((var, VType::Net(width))));
             }

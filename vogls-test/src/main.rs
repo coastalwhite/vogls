@@ -6,7 +6,6 @@ use std::sync::{Arc, Mutex};
 use clap::Parser;
 use vogls::ExecutionContext;
 
-/// Simple program to greet a person
 #[derive(clap::Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
@@ -126,10 +125,9 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         let mut ctx = ExecutionContext {
             stdout: Box::new(stdout.clone()) as Box<dyn std::io::Write>,
             stderr: Box::new(stderr.clone()) as Box<dyn std::io::Write>,
-            output_ir: false,
-            output_elaborated: false,
-            output_sim_ir: false,
-            output_schedule: false,
+            emit_ir: false,
+            emit_vm: false,
+            trace: vogls_sim::TracingLevel::None,
         };
         let result = vogls::run(&path, None, &mut ctx);
 

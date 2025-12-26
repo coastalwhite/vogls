@@ -169,6 +169,13 @@ impl ContextFormat for Instruction {
                 ctx.gl.vars.get(*dst).unwrap().typed_ctx_fmt(f, ctx)?;
                 f.write_str(" = ")?;
                 f.write_str(op.into_mnemonic())?;
+                match op {
+                    UnaryOp::Neg(_)
+                    | UnaryOp::ReduceOr(_)
+                    | UnaryOp::ReduceAnd(_)
+                    | UnaryOp::ReduceXor(_) => {}
+                    UnaryOp::Slice(_, out) => write!(f, "[{out}]")?,
+                }
                 f.write_str(" ")?;
                 ctx.gl.vars.get(*src).unwrap().ctx_fmt(f, ctx)?;
             }

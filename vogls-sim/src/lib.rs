@@ -29,10 +29,17 @@ impl Regions {
 pub type Timestamp = u64;
 pub type InstanceId = u64;
 
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TracingLevel {
+    None,
+    Events,
+}
+
 pub struct Context {
     time: Timestamp,
     pub stdout: Box<dyn std::io::Write>,
     pub stderr: Box<dyn std::io::Write>,
+    pub tracing_level: TracingLevel,
 }
 
 impl Context {
@@ -41,6 +48,7 @@ impl Context {
             time: 0,
             stdout,
             stderr,
+            tracing_level: TracingLevel::Events,
         }
     }
 }
@@ -91,17 +99,28 @@ enum EvalOutcome {
 }
 
 fn update_watchers(
+    ctx: &mut Context,
     sig: VmSignalKey,
     watches: &mut HashMap<VmSignalKey, Vec<ListenerKey>>,
     listeners: &mut SlotMap<ListenerKey, Event>,
     regions: &mut Regions,
 ) {
+    let start = regions.active.len();
     if let Some(watchers) = watches.remove(&sig) {
         for watcher in watchers {
             if let Some(event) = listeners.remove(watcher) {
                 regions.active.push(event);
             }
         }
+    }
+
+    if ctx.tracing_level >= TracingLevel::Events {
+        writeln!(
+            ctx.stdout,
+            "drive woke up {} watchers",
+            regions.active.len() - start
+        )
+        .unwrap();
     }
 }
 
@@ -111,18 +130,18 @@ pub fn drive_bits(
     partial: Option<(VectorSize, VectorSize)>,
 ) -> bool {
     match bits {
-        Bits::Big(_, signal_value) => {
-            if slice == signal_value.as_ref() {
-                return false;
+        Bits::Big(size, signal_value) => match partial {
+            None => {
+                if slice == signal_value.as_ref() {
+                    return false;
+                }
+                signal_value.copy_from_slice(slice);
+                true
             }
-
-            match partial {
-                None => signal_value.copy_from_slice(slice),
-                Some(_) => todo!(),
+            Some((offset, length)) => {
+                bits::set_subslice(signal_value, slice, *size, offset, length)
             }
-
-            true
-        }
+        },
         Bits::Small(signal_value, size) => {
             let before = *signal_value;
             match partial {
@@ -161,7 +180,7 @@ impl Event {
                 let updated = drive_bits(signal_bits, bits.as_slice(), *partial);
 
                 if updated {
-                    update_watchers(*sig, watches, listeners, regions);
+                    update_watchers(ctx, *sig, watches, listeners, regions);
                 }
 
                 return EvalOutcome::Next;
@@ -187,7 +206,7 @@ impl Event {
                     match op {
                         O::Neg(size) => {
                             bit_stack[dst.offset] =
-                                bit_stack[src.offset] ^ 1u8.wrapping_shl(size % 8).wrapping_sub(1);
+                                bit_stack[src.offset] ^ 1u8.unbounded_shl(size % 8).wrapping_sub(1);
                             for i in 1..size.div_ceil(8) as usize {
                                 bit_stack[dst.offset + i] = !bit_stack[src.offset + i];
                             }
@@ -202,7 +221,7 @@ impl Event {
                             let result = bit_stack[src.offset + 1..][..size.div_ceil(8) as usize]
                                 .iter()
                                 .all(|b| *b == 0xFF);
-                            let mask = 1u8.wrapping_shl(size % 8).wrapping_sub(1);
+                            let mask = 1u8.unbounded_shl(size % 8).wrapping_sub(1);
                             let result = result & (bit_stack[src.offset] & mask == mask);
                             bit_stack[dst.offset] = u8::from(result);
                         }
@@ -249,7 +268,7 @@ impl Event {
                             }
                             let l = bits::store_to_u64(&bit_stack, lhs.offset, n);
                             let r = bits::store_to_u64(&bit_stack, rhs.offset, n);
-                            let out = l.wrapping_add(r) & (1u64.wrapping_shl(n)).wrapping_sub(1);
+                            let out = l.wrapping_add(r) & (1u64.unbounded_shl(n)).wrapping_sub(1);
                             bits::load_from_u64(bit_stack, dst.offset, n, out);
                         }
                         O::Sub(n) => {
@@ -259,7 +278,7 @@ impl Event {
                             }
                             let l = bits::store_to_u64(&bit_stack, lhs.offset, n);
                             let r = bits::store_to_u64(&bit_stack, rhs.offset, n);
-                            let out = l.wrapping_sub(r) & (1u64.wrapping_shl(n)).wrapping_sub(1);
+                            let out = l.wrapping_sub(r) & (1u64.unbounded_shl(n)).wrapping_sub(1);
                             bits::load_from_u64(bit_stack, dst.offset, n, out);
                         }
                         O::Multiply(n) => {
@@ -269,7 +288,7 @@ impl Event {
                             }
                             let l = bits::store_to_u64(&bit_stack, lhs.offset, n);
                             let r = bits::store_to_u64(&bit_stack, rhs.offset, n);
-                            let out = l.wrapping_mul(r) & (1u64.wrapping_shl(n)).wrapping_sub(1);
+                            let out = l.wrapping_mul(r) & (1u64.unbounded_shl(n)).wrapping_sub(1);
                             bits::load_from_u64(bit_stack, dst.offset, n, out);
                         }
                         O::Divide(n) => {
@@ -279,7 +298,7 @@ impl Event {
                             }
                             let l = bits::store_to_u64(&bit_stack, lhs.offset, n);
                             let r = bits::store_to_u64(&bit_stack, rhs.offset, n);
-                            let out = l.wrapping_div(r) & (1u64.wrapping_shl(n)).wrapping_sub(1);
+                            let out = l.wrapping_div(r) & (1u64.unbounded_shl(n)).wrapping_sub(1);
                             bits::load_from_u64(bit_stack, dst.offset, n, out);
                         }
                         O::Modulus(n) => {
@@ -289,7 +308,7 @@ impl Event {
                             }
                             let l = bits::store_to_u64(&bit_stack, lhs.offset, n);
                             let r = bits::store_to_u64(&bit_stack, rhs.offset, n);
-                            let out = l.wrapping_rem(r) & 1u64.wrapping_shl(n).wrapping_sub(1);
+                            let out = l.wrapping_rem(r) & 1u64.unbounded_shl(n).wrapping_sub(1);
                             bits::load_from_u64(bit_stack, dst.offset, n, out);
                         }
                         O::UnsignedLessEqual(n) => {
@@ -314,9 +333,8 @@ impl Event {
                             assert!(idx < *n as u64);
                             let idx = idx as VectorSize;
 
-                            let byte_offset = n.div_ceil(8) - 1 - (idx / 8);
                             bit_stack[dst.offset] =
-                                (bit_stack[lhs.offset + byte_offset as usize] >> (idx % 8)) & 1;
+                                (bit_stack[lhs.offset + (idx / 8) as usize] >> (idx % 8)) & 1;
                         }
                         O::LogicalShiftLeft(..) => todo!(),
                         O::LogicalShiftRight(n, shift_n) => {
@@ -439,14 +457,14 @@ impl Event {
                     }
                 },
                 I::Drive(sig, var, region, partial) => {
+                    let size = signals[sig].size();
+                    let partial = partial.map(|(offset, width)| {
+                        (
+                            bits::store_to_u64(&bit_stack, offset.offset, 32) as VectorSize,
+                            width,
+                        )
+                    });
                     if *region != 0 {
-                        let partial = partial.map(|(offset, width)| {
-                            (
-                                bits::store_to_u64(&bit_stack, offset.offset, 32) as VectorSize,
-                                width,
-                            )
-                        });
-                        let size = signals[sig].size();
                         let value = Bits::load_from_slice(&bit_stack[var.offset..], size);
                         regions.other[(region - 1) as usize]
                             .push(Event::Drive(*sig, value, partial));
@@ -454,57 +472,33 @@ impl Event {
                     }
 
                     let signal = signals.get_mut(sig).unwrap();
-                    let updated = match signal {
-                        Bits::Big(size, signal_value) => {
-                            if &bit_stack[var.offset..][..size.div_ceil(8) as usize]
-                                == signal_value.as_ref()
-                            {
-                                false
-                            } else {
-                                match partial {
-                                    None => {
-                                        *signal_value = bit_stack[var.offset..]
-                                            [..size.div_ceil(8) as usize]
-                                            .iter()
-                                            .copied()
-                                            .collect();
-                                    }
-                                    Some(_) => todo!(),
-                                }
-                                true
-                            }
-                        }
-                        Bits::Small(signal_value, size) => {
-                            let before = *signal_value;
-                            match partial {
-                                None => {
-                                    *signal_value =
-                                        bits::store_to_u64(bit_stack, var.offset, *size);
-                                }
-                                Some((offset, length)) => {
-                                    let offset = bits::store_to_u64(&bit_stack, offset.offset, 32);
-                                    let value = bits::store_to_u64(bit_stack, var.offset, *length);
-                                    *signal_value &= !(((1u64 << *length) - 1) << offset);
-                                    *signal_value |= value << offset;
-                                }
-                            }
-                            before != *signal_value
-                        }
-                    };
+                    let size = partial.map_or(size, |(_, s)| s);
+                    let updated = drive_bits(
+                        signal,
+                        &bit_stack[var.offset..][..size.div_ceil(8) as usize],
+                        partial,
+                    );
 
                     if updated {
-                        update_watchers(*sig, watches, listeners, regions);
+                        update_watchers(ctx, *sig, watches, listeners, regions);
                     }
                 }
                 I::Wait(time) => {
                     schedule.entry(ctx.time + time.0).or_default().push(self);
+                    if ctx.tracing_level >= TracingLevel::Events {
+                        writeln!(ctx.stdout, "event waiting for time {}.", ctx.time + time.0)
+                            .unwrap();
+                    }
                     return EvalOutcome::Next;
                 }
                 I::WaitRegion(region) => {
                     if *region == 0 {
                         regions.active.push(self);
                     } else {
-                        regions.other[*region as usize].push(self);
+                        regions.other[*region as usize - 1].push(self);
+                    }
+                    if ctx.tracing_level >= TracingLevel::Events {
+                        writeln!(ctx.stdout, "event waiting for region {region}.").unwrap();
                     }
                     return EvalOutcome::Next;
                 }
@@ -512,6 +506,9 @@ impl Event {
                     let listener_key = listeners.insert(self);
                     for signal in signals {
                         watches.entry(*signal).or_default().push(listener_key);
+                    }
+                    if ctx.tracing_level >= TracingLevel::Events {
+                        writeln!(ctx.stdout, "event watching for {signals:?}.").unwrap();
                     }
                     return EvalOutcome::Next;
                 }
@@ -524,7 +521,12 @@ impl Event {
                         *ip = *false_offset;
                     }
                 }
-                I::Halt => return EvalOutcome::Next,
+                I::Halt => {
+                    if ctx.tracing_level >= TracingLevel::Events {
+                        writeln!(ctx.stdout, "event halted.").unwrap();
+                    }
+                    return EvalOutcome::Next;
+                }
             }
         }
     }
@@ -542,6 +544,17 @@ pub fn run(
     let mut schedule = BTreeMap::<Timestamp, Vec<Event>>::new();
     'region_loop: loop {
         while let Some(event) = regions.active.pop() {
+            if ctx.tracing_level >= TracingLevel::Events {
+                match &event {
+                    Event::Drive(signal, _, _) => {
+                        writeln!(&mut ctx.stdout, "drive {signal:?}").unwrap()
+                    }
+                    Event::Evaluation(eval) => {
+                        writeln!(&mut ctx.stdout, "eval {:?}", eval.process).unwrap()
+                    }
+                }
+            }
+
             let outcome = event.evaluate(
                 ctx,
                 processes,

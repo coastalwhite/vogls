@@ -305,6 +305,7 @@ impl BasicBlockBuilder {
         idx: VariableKey,
     ) -> VariableKey {
         let dst = self.next_tmp_var(gl, 1);
+        assert_eq!(gl.vars[idx].size, 32);
         self.instrs.push(Instruction::Binary(
             dst,
             BinaryOp::SelectBit(gl.vars[src].size),
@@ -519,6 +520,7 @@ impl BasicBlockBuilder {
             partial.map_or(gl.signals[signal].size, |(_, w)| w)
         );
         gl.processes[self.process].outs.insert(signal);
+        let partial = partial.map(|(o, w)| (self.cast(gl, o, 32), w));
         self.instrs
             .push(Instruction::Drive(signal, src, region, partial));
     }

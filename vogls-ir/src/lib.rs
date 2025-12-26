@@ -2,7 +2,7 @@ mod builder;
 mod format;
 
 use std::collections::HashSet;
-use std::fmt;
+use std::fmt::{self, Write};
 
 pub use builder::{BasicBlockBuilder, BranchRef, PhiRef, new_process};
 pub use format::{ContextFormat, DisplayContext};
@@ -87,10 +87,11 @@ impl Bits {
     }
 
     pub fn from_i64_truncated(value: i64, size: VectorSize) -> Bits {
-        if size == 64 {
-            Bits::Small(value as u64, size)
-        } else if size < 64 {
-            Bits::Small((value as u64) & ((1u64 << size) - 1), size)
+        if size <= 64 {
+            Bits::Small(
+                (value as u64) & 1u64.unbounded_shl(size).wrapping_sub(1),
+                size,
+            )
         } else {
             let mut bytes =
                 std::iter::repeat_n(0, size.div_ceil(8) as usize).collect::<Box<[u8]>>();
@@ -144,7 +145,17 @@ impl fmt::Display for Bits {
         match self {
             Bits::Small(value, size) if size % 4 == 0 => write!(f, "{size}'h{value:X}"),
             Bits::Small(value, size) => write!(f, "{size}'b{value:b}"),
-            Bits::Big(size, _) => write!(f, "{size}'b.."),
+            Bits::Big(size, v) => {
+                write!(f, "{size}'h")?;
+                write!(f, "{:X}", v.last().unwrap())?;
+                for (i, &b) in v.iter().enumerate().rev().skip(1) {
+                    if i % 2 == 1 {
+                        f.write_char('_')?;
+                    }
+                    write!(f, "{:02X}", b)?;
+                }
+                Ok(())
+            }
         }
     }
 }

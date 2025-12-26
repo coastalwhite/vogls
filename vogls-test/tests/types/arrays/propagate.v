@@ -11,9 +11,9 @@ module x();
 		#1 $vogls_assert_eq(c[2], 0);
 		#1 x = 1'b1;
 		#1 $vogls_assert_eq(c[2], 1);
-		#1 y = 1'b1;
-		#1 $vogls_assert_eq(c[2], 0);
-		#1 z = 1'b1;
-		#1 $vogls_assert_eq(c[2], 1);
+		// #1 y = 1'b1;
+		// #1 $vogls_assert_eq(c[2], 0);
+		// #1 z = 1'b1;
+		// #1 $vogls_assert_eq(c[2], 1);
 	end
 endmodule

@@ -1,8 +1,7 @@
 use std::collections::HashMap;
 
 use vogls_ir::{
-    Bits, ConnectionDirection, GlobalContext, ProcessKey, Signal, SignalKey,
-    new_process,
+    Bits, ConnectionDirection, GlobalContext, ProcessKey, Signal, SignalKey, new_process,
 };
 
 use crate::ast::constant_expr::ConstantMinTypMaxExpression;
@@ -60,12 +59,21 @@ pub fn lower<'a>(
                                     diagnostics,
                                     net_ident.dimension,
                                 )?;
+                                let Some(size) =
+                                    ty.force_net_width().checked_mul(dims.iter().product())
+                                else {
+                                    diagnostics.not_yet_implemented(
+                                        arenas.get_span(ast_net_ident),
+                                        "overflow in net width",
+                                    );
+                                    return Err(());
+                                };
                                 let ast_ident = net_ident.ident;
                                 let ident = ast_ident.item;
                                 let ident = arenas.get_ident(ident.0);
                                 let key = gl.signals.insert(Signal {
                                     name: ident.into(),
-                                    size: ty.force_net_width(),
+                                    size,
                                 });
                                 let symbol_key = scope.symbols.insert(Symbol {
                                     name: ident.to_string(),
@@ -135,9 +143,17 @@ pub fn lower<'a>(
                         let ident = arenas.get_ident(identifier.item.0);
 
                         let dims = dims_to_array(gl, arenas, scope, diagnostics, *dimensions)?;
+                        let Some(size) = ty.force_net_width().checked_mul(dims.iter().product())
+                        else {
+                            diagnostics.not_yet_implemented(
+                                arenas.get_span(ast_variable_type),
+                                "overflow in net width",
+                            );
+                            return Err(());
+                        };
                         let key = gl.signals.insert(Signal {
                             name: ident.into(),
-                            size: ty.force_net_width(),
+                            size,
                         });
                         let symbol_key = scope.symbols.insert(Symbol {
                             name: ident.to_string(),
