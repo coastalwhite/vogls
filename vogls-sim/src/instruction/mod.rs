@@ -26,7 +26,6 @@ pub enum VmInstruction {
     Unary(StackRef, UnaryOp, StackRef),
     Binary(StackRef, BinaryOp, StackRef, StackRef),
 
-    Cast(StackRef, VectorSize, StackRef, VectorSize),
     Move(StackRef, StackRef, VectorSize),
 
     Intrinsic(IntrinsicOp, Vec<VmIntrinsicArg>),

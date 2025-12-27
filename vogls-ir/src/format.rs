@@ -142,6 +142,8 @@ impl UnaryOp {
             Self::ReduceOr(_) => "bredor",
             Self::ReduceXor(_) => "bredxor",
             Self::Slice(_, _) => "bslice",
+            Self::ZeroExtend(_, _) => "zero_extend",
+            Self::SignExtend(_, _) => "sign_extend",
         }
     }
 }
@@ -174,7 +176,9 @@ impl ContextFormat for Instruction {
                     | UnaryOp::ReduceOr(_)
                     | UnaryOp::ReduceAnd(_)
                     | UnaryOp::ReduceXor(_) => {}
-                    UnaryOp::Slice(_, out) => write!(f, "[{out}]")?,
+                    UnaryOp::ZeroExtend(out, _)
+                    | UnaryOp::SignExtend(out, _)
+                    | UnaryOp::Slice(_, out) => write!(f, "[{out}]")?,
                 }
                 f.write_str(" ")?;
                 ctx.gl.vars.get(*src).unwrap().ctx_fmt(f, ctx)?;
@@ -187,12 +191,6 @@ impl ContextFormat for Instruction {
                 ctx.gl.vars.get(*src1).unwrap().ctx_fmt(f, ctx)?;
                 f.write_str(", ")?;
                 ctx.gl.vars.get(*src2).unwrap().ctx_fmt(f, ctx)?;
-            }
-            Self::Cast(dst, src) => {
-                ctx.gl.vars.get(*dst).unwrap().ctx_fmt(f, ctx)?;
-                f.write_str(" = cast(")?;
-                ctx.gl.vars.get(*src).unwrap().ctx_fmt(f, ctx)?;
-                write!(f, ", {})", ctx.gl.vars[*dst].size)?;
             }
             Self::Intrinsic(op, args) => {
                 f.write_str("vogls.")?;

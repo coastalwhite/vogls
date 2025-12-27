@@ -1,23 +1,21 @@
 use vogls_ir::VectorSize;
 
 pub fn load_from_u64(stack: &mut [u8], offset: usize, size: VectorSize, value: u64) {
-    assert!(size > 0);
-    assert!(size <= 64);
-    let nbytes = size.div_ceil(8) as usize;
+    assert!(size.get() <= 64);
+    let nbytes = size.get().div_ceil(8) as usize;
     stack[offset..][..nbytes].copy_from_slice(&value.to_le_bytes()[..nbytes]);
-    stack[offset + nbytes - 1] &= 1u8.unbounded_shl(size).wrapping_sub(1);
+    stack[offset + nbytes - 1] &= 1u8.unbounded_shl(size.get()).wrapping_sub(1);
 }
 
 pub fn store_to_u64(stack: &[u8], offset: usize, size: VectorSize) -> u64 {
-    assert!(size > 0);
-    assert!(size <= 64);
+    assert!(size.get() <= 64);
     if let Ok(bs) = stack[offset..][..(stack.len() - offset).min(8)].try_into() {
         let value = u64::from_le_bytes(bs);
-        let value = value & 1u64.unbounded_shl(size).wrapping_sub(1);
+        let value = value & 1u64.unbounded_shl(size.get()).wrapping_sub(1);
         value
     } else {
         let mut value = 0u64;
-        for (i, &b) in stack[offset..][..size.div_ceil(8) as usize]
+        for (i, &b) in stack[offset..][..size.get().div_ceil(8) as usize]
             .iter()
             .enumerate()
         {
@@ -35,9 +33,7 @@ pub fn concat(
     lhs_size: VectorSize,
     rhs_size: VectorSize,
 ) {
-    assert!(lhs_size > 0 && rhs_size > 0);
-
-    let (lhs_size, rhs_size) = (lhs_size as usize, rhs_size as usize);
+    let (lhs_size, rhs_size) = (lhs_size.get() as usize, rhs_size.get() as usize);
 
     let lbytes = lhs_size.div_ceil(8);
     let rbytes = rhs_size.div_ceil(8);
@@ -72,8 +68,8 @@ pub fn concat(
 }
 
 pub fn slice(stack: &mut [u8], dst: usize, src: usize, width: VectorSize, n: VectorSize) {
-    assert!(width > 0 && n > 0 && width <= n, "width = {width}, n = {n}");
-    let width = width as usize;
+    assert!(width <= n, "width = {width}, n = {n}");
+    let width = width.get() as usize;
 
     for i in 0..width.div_ceil(8) {
         stack[dst + i] = stack[src + i];
@@ -91,8 +87,8 @@ pub fn logical_shift_right(
     shift: VectorSize,
     width: VectorSize,
 ) {
-    let (shift, width) = (shift as usize, width as usize);
     assert!(shift <= width);
+    let (shift, width) = (shift.get() as usize, width.get() as usize);
 
     let nbytes = width.div_ceil(8);
     let soff = shift % 8;
@@ -146,10 +142,10 @@ pub fn set_subslice(
     mut dst: &mut [u8],
     src: &[u8],
     dst_size: VectorSize,
-    offset: VectorSize,
+    offset: u32,
     src_size: VectorSize,
 ) -> bool {
-    assert!(offset + src_size <= dst_size);
+    assert!(offset + src_size.get() <= dst_size.get());
 
     let mut offset = offset;
     dst = &mut dst[(offset / 8) as usize..];
@@ -157,7 +153,7 @@ pub fn set_subslice(
 
     // @Performance: Please do something better.
     let mut updated = false;
-    for i in 0..src_size {
+    for i in 0..src_size.get() {
         let dst_idx = offset + i;
         let src_idx = i;
 
@@ -180,7 +176,8 @@ mod tests {
     fn test_roundtrip_u16() {
         let mut stack = [0u8; 8];
         for size in 1..=16 {
-            let mask = (1u64 << size).wrapping_sub(1);
+            let size = VectorSize::new(size).unwrap();
+            let mask = (1u64 << size.get()).wrapping_sub(1);
             for value in [0x0000, 0xFFFF, 0xABCD, 0x8181] {
                 let value = value & mask;
                 load_from_u64(&mut stack, 2, size, value);
@@ -199,14 +196,16 @@ mod tests {
     fn test_slice_u16() {
         let mut stack = [0u8; 16];
         for size in 1..=32 {
-            let mask = (1u64 << size).wrapping_sub(1);
+            let size = VectorSize::new(size).unwrap();
+            let mask = (1u64 << size.get()).wrapping_sub(1);
             for value in [0x0000, 0xFFFF, 0xABCD, 0x8181] {
                 let value = value & mask;
-                for width in 1..=size {
+                for width in 1..=size.get() {
+                    let width = VectorSize::new(width).unwrap();
                     load_from_u64(&mut stack, 0, size, value);
                     slice(&mut stack, 8, 0, width, size);
                     let result = store_to_u64(&stack, 8, width);
-                    let expected = value & (1u64 << width).wrapping_sub(1);
+                    let expected = value & (1u64 << width.get()).wrapping_sub(1);
                     if result != expected {
                         eprintln!("value    = {value:08X}");
                         eprintln!("result   = {result:08X}");
@@ -225,12 +224,14 @@ mod tests {
     fn test_lsr_u16() {
         let mut stack = [0u8; 16];
         for size in 1..=16 {
-            for value in 0..=(1u64 << size).wrapping_sub(1) {
-                for shift in 1..=size {
+            let size = VectorSize::new(size).unwrap();
+            for value in 0..=(1u64 << size.get()).wrapping_sub(1) {
+                for shift in 1..=size.get() {
+                    let shift = VectorSize::new(shift).unwrap();
                     load_from_u64(&mut stack, 0, size, value);
                     logical_shift_right(&mut stack, 8, 0, shift, size);
                     let result = store_to_u64(&stack, 8, size);
-                    let expected = value >> shift;
+                    let expected = value >> shift.get();
                     if result != expected {
                         eprintln!("value    = {value:04X}");
                         eprintln!("result   = {result:04X}");
@@ -249,9 +250,11 @@ mod tests {
     fn test_concat_u16() {
         let mut stack = [0u8; 8 * 3];
         for lhs_size in 1..=16 {
-            let lhs_mask = (1u64 << lhs_size).wrapping_sub(1);
+            let lhs_size = VectorSize::new(lhs_size).unwrap();
+            let lhs_mask = (1u64 << lhs_size.get()).wrapping_sub(1);
             for rhs_size in 1..=16 {
-                let rhs_mask = (1u64 << rhs_size).wrapping_sub(1);
+                let rhs_size = VectorSize::new(rhs_size).unwrap();
+                let rhs_mask = (1u64 << rhs_size.get()).wrapping_sub(1);
                 for lhs in [0x0000, 0xFFFF, 0xABCD, 0x8181] {
                     let lhs = lhs & lhs_mask;
                     for rhs in [0x0000, 0xFFFF, 0xABCD, 0x8181] {
@@ -261,8 +264,12 @@ mod tests {
 
                         concat(&mut stack, 16, 0, 8, lhs_size, rhs_size);
 
-                        let expected = (lhs << rhs_size) | rhs;
-                        let result = store_to_u64(&stack, 16, lhs_size + rhs_size);
+                        let expected = (lhs << rhs_size.get()) | rhs;
+                        let result = store_to_u64(
+                            &stack,
+                            16,
+                            VectorSize::new(lhs_size.get() + rhs_size.get()).unwrap(),
+                        );
 
                         if result != expected {
                             eprintln!("lhs    = {lhs:04X} ({lhs_size})");

@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
 
 use slotmap::{SlotMap, new_key_type};
-use vogls_ir::{BinaryOp, Bits, IntrinsicOp, UnaryOp, VectorSize};
+use vogls_ir::{BinaryOp, Bits, INTEGER_VSIZE, IntrinsicOp, UnaryOp, VectorSize};
 
 mod bits;
 mod instruction;
@@ -55,7 +55,7 @@ impl Context {
 
 #[derive(Clone, Debug)]
 pub enum Event {
-    Drive(VmSignalKey, Bits, Option<(VectorSize, VectorSize)>),
+    Drive(VmSignalKey, Bits, Option<(u32, VectorSize)>),
     Evaluation(EvaluationEvent),
 }
 
@@ -124,11 +124,7 @@ fn update_watchers(
     }
 }
 
-pub fn drive_bits(
-    bits: &mut Bits,
-    slice: &[u8],
-    partial: Option<(VectorSize, VectorSize)>,
-) -> bool {
+pub fn drive_bits(bits: &mut Bits, slice: &[u8], partial: Option<(u32, VectorSize)>) -> bool {
     match bits {
         Bits::Big(size, signal_value) => match partial {
             None => {
@@ -150,7 +146,7 @@ pub fn drive_bits(
                 }
                 Some((offset, length)) => {
                     let value = bits::store_to_u64(slice, 0, length);
-                    *signal_value &= !(((1u64 << length) - 1) << offset);
+                    *signal_value &= !(((1u64 << length.get()) - 1) << offset);
                     *signal_value |= value << offset;
                 }
             }
@@ -199,41 +195,83 @@ impl Event {
                     bits::load_from_u64(bit_stack, var.offset, *size, *value);
                 }
                 I::Constant(var, Bits::Big(size, value)) => {
-                    bit_stack[var.offset..][..size.div_ceil(8) as usize].copy_from_slice(value);
+                    bit_stack[var.offset..][..size.get().div_ceil(8) as usize]
+                        .copy_from_slice(value);
                 }
                 I::Unary(dst, op, src) => {
                     use UnaryOp as O;
                     match op {
                         O::Neg(size) => {
-                            bit_stack[dst.offset] =
-                                bit_stack[src.offset] ^ 1u8.unbounded_shl(size % 8).wrapping_sub(1);
-                            for i in 1..size.div_ceil(8) as usize {
+                            bit_stack[dst.offset] = bit_stack[src.offset]
+                                ^ 1u8.unbounded_shl(size.get() % 8).wrapping_sub(1);
+                            for i in 1..size.get().div_ceil(8) as usize {
                                 bit_stack[dst.offset + i] = !bit_stack[src.offset + i];
                             }
                         }
                         O::ReduceOr(size) => {
-                            let result = bit_stack[src.offset..][..size.div_ceil(8) as usize]
+                            let result = bit_stack[src.offset..][..size.get().div_ceil(8) as usize]
                                 .iter()
                                 .any(|b| *b != 0);
                             bit_stack[dst.offset] = u8::from(result);
                         }
                         O::ReduceAnd(size) => {
-                            let result = bit_stack[src.offset + 1..][..size.div_ceil(8) as usize]
+                            let result = bit_stack[src.offset + 1..]
+                                [..size.get().div_ceil(8) as usize]
                                 .iter()
                                 .all(|b| *b == 0xFF);
-                            let mask = 1u8.unbounded_shl(size % 8).wrapping_sub(1);
+                            let mask = 1u8.unbounded_shl(size.get() % 8).wrapping_sub(1);
                             let result = result & (bit_stack[src.offset] & mask == mask);
                             bit_stack[dst.offset] = u8::from(result);
                         }
                         O::ReduceXor(size) => {
                             let mut result = 0;
-                            if *size > 0 {
-                                result = bit_stack[src.offset..][..size.div_ceil(8) as usize]
+                            if size.get() > 0 {
+                                result = bit_stack[src.offset..][..size.get().div_ceil(8) as usize]
                                     .iter()
-                                    .map(|b| VectorSize::from(b.count_ones()))
-                                    .sum::<VectorSize>();
+                                    .map(|b| b.count_ones())
+                                    .sum::<u32>();
                             }
                             bit_stack[dst.offset] = u8::from(result % 2 == 1);
+                        }
+                        O::ZeroExtend(dst_size, src_size) => {
+                            assert!(dst_size >= src_size);
+                            for i in 0..src_size.get().div_ceil(8) as usize {
+                                bit_stack[dst.offset + i] = bit_stack[src.offset + i];
+                            }
+                            for i in src_size.get().div_ceil(8) as usize
+                                ..dst_size.get().div_ceil(8) as usize
+                            {
+                                bit_stack[dst.offset + i] = 0;
+                            }
+                        }
+                        O::SignExtend(dst_size, src_size) => {
+                            assert!(dst_size >= src_size);
+                            let sign_offset = src_size.get() - 1;
+                            let sign = (bit_stack[src.offset + (sign_offset / 8) as usize]
+                                >> (sign_offset % 8))
+                                & 1;
+                            let mask = u8::from(sign == 0).wrapping_sub(1);
+                            if src_size.get() % 8 == 0 {
+                                for i in 0..(src_size.get() / 8) as usize {
+                                    bit_stack[dst.offset + i] = bit_stack[src.offset + i];
+                                }
+                                for i in (src_size.get() / 8) as usize
+                                    ..dst_size.get().div_ceil(8) as usize
+                                {
+                                    bit_stack[dst.offset + i] = mask;
+                                }
+                            } else {
+                                let sbytes = src_size.get().div_ceil(8) as usize;
+                                for i in 0..sbytes - 1 {
+                                    bit_stack[dst.offset + i] = bit_stack[src.offset + i];
+                                }
+                                bit_stack[dst.offset + sbytes - 1] = bit_stack
+                                    [src.offset + sbytes - 1]
+                                    | (mask << (src_size.get() % 8));
+                                for i in sbytes..dst_size.get().div_ceil(8) as usize {
+                                    bit_stack[dst.offset + i] = mask;
+                                }
+                            }
                         }
                         O::Slice(n, width) => {
                             bits::slice(bit_stack, dst.offset, src.offset, *width, *n);
@@ -244,76 +282,81 @@ impl Event {
                     use BinaryOp as O;
                     match op {
                         O::And(n) => {
-                            for i in 0..n.div_ceil(8) as usize {
+                            for i in 0..n.get().div_ceil(8) as usize {
                                 bit_stack[dst.offset + i] =
                                     bit_stack[lhs.offset + i] & bit_stack[rhs.offset + i]
                             }
                         }
                         O::Or(n) => {
-                            for i in 0..n.div_ceil(8) as usize {
+                            for i in 0..n.get().div_ceil(8) as usize {
                                 bit_stack[dst.offset + i] =
                                     bit_stack[lhs.offset + i] | bit_stack[rhs.offset + i];
                             }
                         }
                         O::Xor(n) => {
-                            for i in 0..n.div_ceil(8) as usize {
+                            for i in 0..n.get().div_ceil(8) as usize {
                                 bit_stack[dst.offset + i] =
                                     bit_stack[lhs.offset + i] ^ bit_stack[rhs.offset + i];
                             }
                         }
                         O::Add(n) => {
                             let n = *n;
-                            if n > 64 {
+                            if n.get() > 64 {
                                 todo!()
                             }
                             let l = bits::store_to_u64(&bit_stack, lhs.offset, n);
                             let r = bits::store_to_u64(&bit_stack, rhs.offset, n);
-                            let out = l.wrapping_add(r) & (1u64.unbounded_shl(n)).wrapping_sub(1);
+                            let out =
+                                l.wrapping_add(r) & (1u64.unbounded_shl(n.get())).wrapping_sub(1);
                             bits::load_from_u64(bit_stack, dst.offset, n, out);
                         }
                         O::Sub(n) => {
                             let n = *n;
-                            if n > 64 {
+                            if n.get() > 64 {
                                 todo!()
                             }
                             let l = bits::store_to_u64(&bit_stack, lhs.offset, n);
                             let r = bits::store_to_u64(&bit_stack, rhs.offset, n);
-                            let out = l.wrapping_sub(r) & (1u64.unbounded_shl(n)).wrapping_sub(1);
+                            let out =
+                                l.wrapping_sub(r) & (1u64.unbounded_shl(n.get())).wrapping_sub(1);
                             bits::load_from_u64(bit_stack, dst.offset, n, out);
                         }
                         O::Multiply(n) => {
                             let n = *n;
-                            if n > 64 {
+                            if n.get() > 64 {
                                 todo!()
                             }
                             let l = bits::store_to_u64(&bit_stack, lhs.offset, n);
                             let r = bits::store_to_u64(&bit_stack, rhs.offset, n);
-                            let out = l.wrapping_mul(r) & (1u64.unbounded_shl(n)).wrapping_sub(1);
+                            let out =
+                                l.wrapping_mul(r) & (1u64.unbounded_shl(n.get())).wrapping_sub(1);
                             bits::load_from_u64(bit_stack, dst.offset, n, out);
                         }
                         O::Divide(n) => {
                             let n = *n;
-                            if n > 64 {
+                            if n.get() > 64 {
                                 todo!()
                             }
                             let l = bits::store_to_u64(&bit_stack, lhs.offset, n);
                             let r = bits::store_to_u64(&bit_stack, rhs.offset, n);
-                            let out = l.wrapping_div(r) & (1u64.unbounded_shl(n)).wrapping_sub(1);
+                            let out =
+                                l.wrapping_div(r) & (1u64.unbounded_shl(n.get())).wrapping_sub(1);
                             bits::load_from_u64(bit_stack, dst.offset, n, out);
                         }
                         O::Modulus(n) => {
                             let n = *n;
-                            if n > 64 {
+                            if n.get() > 64 {
                                 todo!()
                             }
                             let l = bits::store_to_u64(&bit_stack, lhs.offset, n);
                             let r = bits::store_to_u64(&bit_stack, rhs.offset, n);
-                            let out = l.wrapping_rem(r) & 1u64.unbounded_shl(n).wrapping_sub(1);
+                            let out =
+                                l.wrapping_rem(r) & 1u64.unbounded_shl(n.get()).wrapping_sub(1);
                             bits::load_from_u64(bit_stack, dst.offset, n, out);
                         }
                         O::UnsignedLessEqual(n) => {
                             let mut set = false;
-                            for i in 0..n.div_ceil(8) as usize {
+                            for i in 0..n.get().div_ceil(8) as usize {
                                 let value = match bit_stack[lhs.offset + i]
                                     .cmp(&bit_stack[rhs.offset + i])
                                 {
@@ -329,9 +372,9 @@ impl Event {
                             }
                         }
                         O::SelectBit(n) => {
-                            let idx = bits::store_to_u64(&bit_stack, rhs.offset, 32);
-                            assert!(idx < *n as u64);
-                            let idx = idx as VectorSize;
+                            let idx = bits::store_to_u64(&bit_stack, rhs.offset, INTEGER_VSIZE);
+                            assert!(idx < n.get() as u64);
+                            let idx = idx as u32;
 
                             bit_stack[dst.offset] =
                                 (bit_stack[lhs.offset + (idx / 8) as usize] >> (idx % 8)) & 1;
@@ -339,8 +382,16 @@ impl Event {
                         O::LogicalShiftLeft(..) => todo!(),
                         O::LogicalShiftRight(n, shift_n) => {
                             let shift = bits::store_to_u64(&bit_stack, rhs.offset, *shift_n);
-                            if shift as VectorSize >= *n {
-                                for i in 0..n.div_ceil(8) as usize {
+                            if shift == 0 {
+                                for i in 0..n.get().div_ceil(8) as usize {
+                                    bit_stack[dst.offset + i] = bit_stack[lhs.offset + i];
+                                }
+                                continue;
+                            }
+
+                            let shift = VectorSize::new(shift as u32).unwrap();
+                            if shift >= *n {
+                                for i in 0..n.get().div_ceil(8) as usize {
                                     bit_stack[dst.offset + i] = 0;
                                 }
                                 continue;
@@ -361,17 +412,8 @@ impl Event {
                     };
                 }
 
-                I::Cast(dst, dst_size, src, src_size) => {
-                    assert!(dst_size >= src_size);
-                    for i in 0..src_size.div_ceil(8) as usize {
-                        bit_stack[dst.offset + i] = bit_stack[src.offset + i];
-                    }
-                    for i in src_size.div_ceil(8) as usize..dst_size.div_ceil(8) as usize {
-                        bit_stack[dst.offset + i] = 0;
-                    }
-                }
                 I::Move(dst, src, size) => {
-                    for i in 0..size.div_ceil(8) as usize {
+                    for i in 0..size.get().div_ceil(8) as usize {
                         bit_stack[dst.offset + i] = bit_stack[src.offset + i];
                     }
                 }
@@ -384,7 +426,7 @@ impl Event {
                             assert_eq!(args.len(), 1);
                             let msg = match args.first().unwrap() {
                                 VmIntrinsicArg::StringLiteral(s) => s.clone(),
-                                VmIntrinsicArg::Variable(_, n) if *n >= 64 => todo!(),
+                                VmIntrinsicArg::Variable(_, n) if n.get() >= 64 => todo!(),
                                 VmIntrinsicArg::Variable(s, n) => {
                                     format!("{n}'d{}", bits::store_to_u64(bit_stack, s.offset, *n))
                                 }
@@ -395,7 +437,7 @@ impl Event {
                         O::Assert => {
                             let value = match args.first() {
                                 Some(VmIntrinsicArg::Variable(condition, size)) => {
-                                    bit_stack[condition.offset..][..size.div_ceil(8) as usize]
+                                    bit_stack[condition.offset..][..size.get().div_ceil(8) as usize]
                                         .iter()
                                         .any(|b| *b != 0)
                                 }
@@ -420,8 +462,10 @@ impl Event {
                                         .unwrap();
                                         return EvalOutcome::Error;
                                     }
-                                    let lhs = &bit_stack[l.offset..][..ls.div_ceil(8) as usize];
-                                    let rhs = &bit_stack[r.offset..][..rs.div_ceil(8) as usize];
+                                    let lhs =
+                                        &bit_stack[l.offset..][..ls.get().div_ceil(8) as usize];
+                                    let rhs =
+                                        &bit_stack[r.offset..][..rs.get().div_ceil(8) as usize];
                                     if *eq != (lhs == rhs) {
                                         writeln!(
                                             &mut ctx.stderr,
@@ -453,14 +497,15 @@ impl Event {
                         bits::load_from_u64(bit_stack, var.offset, *size, *value);
                     }
                     Bits::Big(size, value) => {
-                        bit_stack[var.offset..][..size.div_ceil(8) as usize].copy_from_slice(value);
+                        bit_stack[var.offset..][..size.get().div_ceil(8) as usize]
+                            .copy_from_slice(value);
                     }
                 },
                 I::Drive(sig, var, region, partial) => {
                     let size = signals[sig].size();
                     let partial = partial.map(|(offset, width)| {
                         (
-                            bits::store_to_u64(&bit_stack, offset.offset, 32) as VectorSize,
+                            bits::store_to_u64(&bit_stack, offset.offset, INTEGER_VSIZE) as u32,
                             width,
                         )
                     });
@@ -475,7 +520,7 @@ impl Event {
                     let size = partial.map_or(size, |(_, s)| s);
                     let updated = drive_bits(
                         signal,
-                        &bit_stack[var.offset..][..size.div_ceil(8) as usize],
+                        &bit_stack[var.offset..][..size.get().div_ceil(8) as usize],
                         partial,
                     );
 

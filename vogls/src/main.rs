@@ -4,13 +4,6 @@ use clap::Parser;
 use vogls::ExecutionContext;
 use vogls_sim::TracingLevel;
 
-fn usage() {
-    eprintln!(
-        "usage: {} <path/to/file.v> <top-level module>",
-        std::env::args().next().unwrap()
-    );
-}
-
 #[derive(clap::Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
@@ -28,6 +21,9 @@ struct Args {
     emit_ir: bool,
     #[arg(long = "emit-vm")]
     emit_vm: bool,
+
+    #[arg(short, long)]
+    time: u64,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -43,6 +39,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             emit_ir: args.emit_ir,
             emit_vm: args.emit_vm,
             trace: args.trace.then_some(TracingLevel::Events).unwrap_or(TracingLevel::None),
+            time: args.time,
         },
     )?;
 

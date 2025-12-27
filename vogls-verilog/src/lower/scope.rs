@@ -16,6 +16,7 @@ pub struct SymbolKey(usize);
 pub struct SymbolTable(Vec<Symbol>);
 
 #[derive(Clone)]
+#[expect(unused)]
 pub struct Symbol {
     pub name: String,
     pub definition_site: TokenRange,

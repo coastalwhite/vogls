@@ -46,7 +46,7 @@ pub fn lower_process_to_vm(
                         offset: bit_stack_top,
                     },
                 );
-                bit_stack_top += (size as usize).div_ceil(8);
+                bit_stack_top += (size.get() as usize).div_ceil(8);
             }
         }
 
@@ -84,13 +84,6 @@ pub fn lower_process_to_vm(
 
                 I::Unary(d, op, s) => VI::Unary(var(*d), *op, var(*s)),
                 I::Binary(d, op, s1, s2) => VI::Binary(var(*d), *op, var(*s1), var(*s2)),
-
-                I::Cast(d, s) => VI::Cast(
-                    var(*d),
-                    gl.vars[*d].size.clone(),
-                    var(*s),
-                    gl.vars[*s].size.clone(),
-                ),
 
                 I::Intrinsic(op, args) => {
                     use IntrinsicArg as IA;

@@ -1,10 +1,10 @@
-use vogls_ir::{Bits, GlobalContext};
+use vogls_ir::{Bits, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE, VectorSize};
 
 use crate::ast::AstId;
 use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::expr::{BinaryOperator, Expr};
 use crate::lower::scope::SymbolVariant;
-use crate::number::Decimal;
+use crate::number::{Decimal, Sign};
 use crate::parser::AstArenas;
 
 use super::Diagnostics;
@@ -47,7 +47,10 @@ pub fn eval_constant_expr<'a>(
                     continue;
                 };
 
-                result_stack.push(Some(VValue::Integer(*v as i64)));
+                result_stack.push(Some(VValue::SignedNet(Bits::from_i64_truncated(
+                    *v as i64,
+                    INTEGER_VSIZE,
+                ))));
             }
             Expr::Binary(op, lhs, rhs) => {
                 if !item.dispatched {
@@ -125,7 +128,9 @@ pub fn eval_constant_expr<'a>(
                     continue;
                 };
                 let value = match &scope.symbols[symbol_key].variant {
-                    SymbolVariant::Genvar(n) => VValue::Integer(n.unwrap()),
+                    SymbolVariant::Genvar(n) => {
+                        VValue::SignedNet(Bits::from_i64_truncated(n.unwrap(), INTEGER_VSIZE))
+                    }
                     SymbolVariant::Constant(n) => n.clone(),
                     SymbolVariant::Task(_) => todo!(),
                     SymbolVariant::Signal(_dims, _ty, _) => {
@@ -142,6 +147,7 @@ pub fn eval_constant_expr<'a>(
             }
             Expr::Sized(sized) => {
                 let sized = &arenas.sized_numbers[sized.item.at];
+                let signed = matches!(sized.sign, Sign::Signed);
                 let crate::number::Bits::Small(v) = sized.value else {
                     todo!()
                 };
@@ -150,7 +156,8 @@ pub fn eval_constant_expr<'a>(
                     Some(size) => size.as_u32(),
                 };
                 assert!(width <= 64);
-                result_stack.push(Some(VValue::Net(Bits::Small(v, width))));
+                let width = VectorSize::new(width).unwrap();
+                result_stack.push(Some(VValue::net(Bits::Small(v, width), signed)));
             }
             Expr::Ternary(condition, truthy, falsy) => {
                 if !item.dispatched {
@@ -177,7 +184,7 @@ pub fn eval_constant_expr<'a>(
 
                 let (truthy, falsy) = VValue::coerce_max_size(truthy, falsy);
 
-                if condition.logical_equal(VValue::Net(Bits::Small(0, 1))) {
+                if condition.logical_equal(VValue::UnsignedNet(Bits::Small(0, SCALAR_VSIZE))) {
                     result_stack.push(Some(truthy));
                 } else {
                     result_stack.push(Some(falsy));

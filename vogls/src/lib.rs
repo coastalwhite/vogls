@@ -3,9 +3,10 @@ use std::path::Path;
 use std::rc::Rc;
 
 use slotmap::SlotMap;
-use vogls_ir::{Bits, ContextFormat, GlobalContext};
+use vogls_ir::{Bits, ContextFormat, GlobalContext, Signal};
 use vogls_sim::{
-    lower_process_to_vm, Context, EvaluationEvent, Event, Regions, TracingLevel, VmProcess, VmProcessKey
+    Context, EvaluationEvent, Event, Regions, TracingLevel, VmProcess, VmProcessKey,
+    lower_process_to_vm,
 };
 use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{
@@ -28,6 +29,7 @@ pub struct ExecutionContext {
     pub emit_ir: bool,
     pub emit_vm: bool,
     pub trace: TracingLevel,
+    pub time: u64,
 }
 
 fn append_referenced_modules_generate_block<'a>(
@@ -362,7 +364,18 @@ pub fn run(
     }
 
     for (ir_signal, signal) in io_signals {
-        let value = Bits::new_zeroed(gl.signals[ir_signal].size);
+        let Signal {
+            name: _,
+            size,
+            initialize,
+        } = &gl.signals[ir_signal];
+        let value = match initialize {
+            None => Bits::new_zeroed(*size),
+            Some(initialize) => {
+                assert_eq!(initialize.size(), *size);
+                initialize.clone()
+            }
+        };
         signals.insert(signal, value);
     }
 
@@ -378,7 +391,7 @@ pub fn run(
         &mut signals,
         &mut listeners,
         &mut watches,
-        100,
+        ectx.time,
     )
     .is_err();
 

@@ -1,9 +1,9 @@
-use vogls_ir::{BasicBlockBuilder, Bits, GlobalContext, VariableKey};
+use vogls_ir::{BasicBlockBuilder, Bits, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE, VariableKey};
 
 use crate::ast::statement::{VariableLValue, VariableLValueFlat};
 use crate::ast::{AstId, RangeExpression};
 use crate::lower::constant_expr::eval_constant_expr;
-use crate::lower::expression::{self, lower_expr, sign_extend_or_truncate};
+use crate::lower::expression::{self, lower_expr, sign_or_zero_extend};
 use crate::lower::msb_lsb_to_width;
 use crate::lower::scope::SymbolVariant;
 use crate::parser::AstArenas;
@@ -44,7 +44,7 @@ pub fn assign_variable_lvalue<'a>(
         let width = ty.force_net_width();
         let voffset = builder.constant_u32(gl, offset);
         let variable = builder.logical_shift_right(gl, variable, voffset);
-        let variable = sign_extend_or_truncate(gl, builder, variable, variable_ty, width);
+        let variable = sign_or_zero_extend(gl, builder, variable, variable_ty, width);
         assign_variable_lvalue_flat(
             gl,
             arenas,
@@ -56,7 +56,7 @@ pub fn assign_variable_lvalue<'a>(
             ty,
             region,
         )?;
-        offset += width;
+        offset += width.get();
     }
     Ok(())
 }
@@ -82,7 +82,7 @@ pub fn variable_lvalue_flat_ty<'a>(
 
     let exprs = *exprs;
     let (mut ty, mut n_dims) = match &scope.symbols[symbol_key].variant {
-        SymbolVariant::Genvar(_) => (VType::Integer, 0),
+        SymbolVariant::Genvar(_) => (VType::SignedNet(INTEGER_VSIZE), 0),
         SymbolVariant::Constant(v) => (v.ty(), 0),
         SymbolVariant::Task(_) => todo!(),
         SymbolVariant::Signal(dims, ty, _key) => (*ty, dims.len()),
@@ -125,11 +125,11 @@ pub fn variable_lvalue_flat_ty<'a>(
             }
             RangeExpression::MsbLsb(msb, lsb) => {
                 let (_, _, width) = msb_lsb_to_width(gl, arenas, scope, diagnostics, *msb, *lsb)?;
-                Ok(VType::Net(width))
+                Ok(VType::UnsignedNet(width))
             }
             RangeExpression::BasePlus(_, width) | RangeExpression::BaseMinus(_, width) => {
                 let width = eval_constant_expr(gl, arenas, scope, diagnostics, *width)?;
-                Ok(VType::Net(width.to_vector_size().unwrap()))
+                Ok(VType::UnsignedNet(width.to_vector_size().unwrap()))
             }
         },
     }
@@ -160,10 +160,10 @@ pub fn assign_variable_lvalue_flat<'a>(
 
     let mut exprs = *exprs;
     let (ty, dims) = match &scope.symbols[symbol_key].variant {
-        SymbolVariant::Genvar(_) => (VType::Integer, Vec::new()),
+        SymbolVariant::Genvar(_) => (VType::SignedNet(INTEGER_VSIZE), Vec::new()),
         SymbolVariant::Constant(v) => (v.ty(), Vec::new()),
         SymbolVariant::Task(_) => todo!(),
-        SymbolVariant::Signal(dims, ty, key) => (*ty, dims.clone()),
+        SymbolVariant::Signal(dims, ty, _key) => (*ty, dims.clone()),
     };
     let mut dims = &dims[..];
     let mut arr_idx = if !dims.is_empty()
@@ -171,14 +171,16 @@ pub fn assign_variable_lvalue_flat<'a>(
     {
         dims = &dims[..dims.len() - 1];
         let mut leaf_arr_items = dims.iter().product::<u32>();
-        let (fst, _) = lower_expr(gl, arenas, scope, diagnostics, builder, fst)?;
+        let (fst, fst_ty) = lower_expr(gl, arenas, scope, diagnostics, builder, fst)?;
+        let fst = sign_or_zero_extend(gl, builder, fst, fst_ty, INTEGER_VSIZE);
         let mut offset = builder.multiply_constant(gl, fst, leaf_arr_items);
 
         while let Some(dim) = dims.last()
             && let Some(expr) = exprs.pop_front()
         {
             leaf_arr_items /= *dim;
-            let (expr, _) = lower_expr(gl, arenas, scope, diagnostics, builder, expr)?;
+            let (expr, expr_ty) = lower_expr(gl, arenas, scope, diagnostics, builder, expr)?;
+            let expr = sign_or_zero_extend(gl, builder, expr, expr_ty, INTEGER_VSIZE);
             let expr = builder.multiply_constant(gl, expr, leaf_arr_items);
             offset = builder.plus(gl, offset, expr);
             dims = &dims[1..];
@@ -201,7 +203,8 @@ pub fn assign_variable_lvalue_flat<'a>(
 
         dims = &dims[..dims.len() - 1];
         let leaf_arr_items = dims.iter().product::<u32>();
-        let (fst, _) = lower_expr(gl, arenas, scope, diagnostics, builder, *expr)?;
+        let (fst, fst_ty) = lower_expr(gl, arenas, scope, diagnostics, builder, *expr)?;
+        let fst = sign_or_zero_extend(gl, builder, fst, fst_ty, INTEGER_VSIZE);
         let offset = builder.multiply_constant(gl, fst, leaf_arr_items);
 
         arr_idx = Some(match arr_idx {
@@ -230,22 +233,27 @@ pub fn assign_variable_lvalue_flat<'a>(
                     None => None,
                     Some(idx) => {
                         // @TODO: Verify size.
-                        let idx = builder.cast(gl, idx, 32);
-                        let idx = builder.multiply_constant(gl, idx, size);
+                        let idx = builder.multiply_constant(gl, idx, size.get());
                         Some((idx, size))
                     }
                 },
                 Some(range_expression) => {
                     let (offset, length) = match arenas.get(range_expression) {
-                        RangeExpression::Expr(expr) => (
-                            lower_expr(gl, arenas, scope, diagnostics, builder, *expr)?.0,
-                            1,
-                        ),
+                        RangeExpression::Expr(expr) => {
+                            let (expr, expr_ty) =
+                                lower_expr(gl, arenas, scope, diagnostics, builder, *expr)?;
+                            let expr =
+                                sign_or_zero_extend(gl, builder, expr, expr_ty, INTEGER_VSIZE);
+                            (expr, SCALAR_VSIZE)
+                        }
                         RangeExpression::MsbLsb(msb, lsb) => {
                             let (_, lsb, width) =
                                 msb_lsb_to_width(gl, arenas, scope, diagnostics, *msb, *lsb)?;
                             (
-                                builder.constant(gl, Bits::from_i64_truncated(lsb as i64, 32)),
+                                builder.constant(
+                                    gl,
+                                    Bits::from_i64_truncated(lsb as i64, INTEGER_VSIZE),
+                                ),
                                 width,
                             )
                         }
@@ -257,9 +265,7 @@ pub fn assign_variable_lvalue_flat<'a>(
                         None => Some((offset, length)),
                         Some(idx) => {
                             // @TODO: Verify size.
-                            let idx = builder.cast(gl, idx, 32);
-                            let idx = builder.multiply_constant(gl, idx, size);
-                            let offset = builder.cast(gl, offset, 32);
+                            let idx = builder.multiply_constant(gl, idx, size.get());
                             let offset = builder.plus(gl, offset, idx);
                             Some((offset, length))
                         }
@@ -268,7 +274,7 @@ pub fn assign_variable_lvalue_flat<'a>(
             };
             let size = partial.map_or(size, |(_, s)| s);
             let variable =
-                expression::sign_extend_or_truncate(gl, builder, variable, variable_ty, size);
+                expression::truncate_or_extend(gl, builder, variable, variable_ty, size);
             builder.regioned_drive_opt_partial(gl, key, variable, region as u8, partial);
         }
     }

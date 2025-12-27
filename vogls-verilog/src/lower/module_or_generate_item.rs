@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use vogls_ir::{
-    Bits, ConnectionDirection, GlobalContext, ProcessKey, Signal, SignalKey, new_process,
+    Bits, ConnectionDirection, GlobalContext, INTEGER_VSIZE, ProcessKey, SCALAR_VSIZE, Signal,
+    SignalKey, VectorSize, new_process,
 };
 
 use crate::ast::constant_expr::ConstantMinTypMaxExpression;
@@ -11,7 +12,7 @@ use crate::ast::module::{
     Module, ModuleInstance, ModuleInstantiation, ModuleOrGenerateItem,
     ModuleOrGenerateItemDeclaration, NInputGateInstance, NInputGateType, NamedParameterAssignment,
     NamedPortConnection, NetDeclAssignment, NetDeclarationNets, ParamAssignment,
-    ParameterValueAssignment, TaskDeclaration, VariableType,
+    ParameterValueAssignment, TaskDeclaration, VariableType, VariableTypeVariant,
 };
 use crate::ast::{AstId, AstIdRange};
 use crate::lower::expression::{self, lower_expr};
@@ -42,12 +43,11 @@ pub fn lower<'a>(
             match module_or_generate_item_declaration {
                 ModuleOrGenerateItemDeclaration::Net(id) => {
                     let net_declaration = arenas.get(*id);
-                    let ty = match net_declaration.range {
-                        None => VType::SCALAR_NET,
-                        Some(range) => {
-                            VType::Net(range_to_width(gl, arenas, scope, diagnostics, range)?)
-                        }
+                    let width = match net_declaration.range {
+                        None => SCALAR_VSIZE,
+                        Some(range) => range_to_width(gl, arenas, scope, diagnostics, range)?,
                     };
+                    let ty = VType::net(width, net_declaration.signed);
                     match net_declaration.nets {
                         NetDeclarationNets::Idents(net_idents) => {
                             for ast_net_ident in net_idents.iter() {
@@ -59,8 +59,9 @@ pub fn lower<'a>(
                                     diagnostics,
                                     net_ident.dimension,
                                 )?;
-                                let Some(size) =
-                                    ty.force_net_width().checked_mul(dims.iter().product())
+                                let Some(size) = ty
+                                    .force_net_width()
+                                    .checked_mul(VectorSize::new(dims.iter().product()).unwrap())
                                 else {
                                     diagnostics.not_yet_implemented(
                                         arenas.get_span(ast_net_ident),
@@ -74,6 +75,7 @@ pub fn lower<'a>(
                                 let key = gl.signals.insert(Signal {
                                     name: ident.into(),
                                     size,
+                                    initialize: None,
                                 });
                                 let symbol_key = scope.symbols.insert(Symbol {
                                     name: ident.to_string(),
@@ -93,6 +95,7 @@ pub fn lower<'a>(
                                 let key = gl.signals.insert(Signal {
                                     name: ident.into(),
                                     size: ty.force_net_width(),
+                                    initialize: None,
                                 });
                                 let symbol_key = scope.symbols.insert(Symbol {
                                     name: ident.to_string(),
@@ -112,14 +115,13 @@ pub fn lower<'a>(
                                     &mut bb_builder,
                                     *expr,
                                 )?;
-                                let v = expression::sign_extend_or_truncate(
+                                let v = expression::sign_or_zero_extend(
                                     gl,
                                     &mut bb_builder,
                                     v,
                                     v_ty,
                                     ty.force_net_width(),
                                 );
-
                                 bb_builder.drive(gl, key, v);
                                 bb_builder.watch_for_ins_to(gl, bb_key);
                                 processes.push(section_key);
@@ -129,35 +131,25 @@ pub fn lower<'a>(
                 }
                 ModuleOrGenerateItemDeclaration::Reg(id) => {
                     let reg_declaration = arenas.get(*id);
-                    let ty = match reg_declaration.range {
-                        None => VType::SCALAR_NET,
-                        Some(range) => {
-                            VType::Net(range_to_width(gl, arenas, scope, diagnostics, range)?)
-                        }
+                    let size = match reg_declaration.range {
+                        None => SCALAR_VSIZE,
+                        Some(range) => range_to_width(gl, arenas, scope, diagnostics, range)?,
                     };
-                    for ast_variable_type in reg_declaration.variable_types.iter() {
-                        let VariableType {
-                            identifier,
-                            dimensions,
-                        } = arenas.get(ast_variable_type);
-                        let ident = arenas.get_ident(identifier.item.0);
 
-                        let dims = dims_to_array(gl, arenas, scope, diagnostics, *dimensions)?;
-                        let Some(size) = ty.force_net_width().checked_mul(dims.iter().product())
-                        else {
-                            diagnostics.not_yet_implemented(
-                                arenas.get_span(ast_variable_type),
-                                "overflow in net width",
-                            );
-                            return Err(());
-                        };
+                    let ty = VType::net(size, reg_declaration.signed);
+                    for variable_type in reg_declaration.variable_types.iter() {
+                        let (dims, size, initialize) =
+                            lower_variable_type(gl, arenas, scope, diagnostics, variable_type, ty)?;
+                        let ident = arenas.get_ident(arenas.get(variable_type).identifier.item.0);
+
                         let key = gl.signals.insert(Signal {
                             name: ident.into(),
                             size,
+                            initialize,
                         });
                         let symbol_key = scope.symbols.insert(Symbol {
                             name: ident.to_string(),
-                            definition_site: arenas.get_item_span(*identifier),
+                            definition_site: arenas.get_span(variable_type),
                             variant: SymbolVariant::Signal(dims, ty, key),
                         });
                         scope.push(ident, symbol_key);
@@ -165,18 +157,21 @@ pub fn lower<'a>(
                 }
                 ModuleOrGenerateItemDeclaration::Integer(id) => {
                     let integer_declaration = arenas.get(*id);
-                    for ast_ident in integer_declaration.identifiers.iter() {
-                        let ident = arenas.get(ast_ident);
-                        let ident = arenas.get_ident(ident.0);
+                    let ty = VType::SignedNet(INTEGER_VSIZE);
+                    for variable_type in integer_declaration.variable_types.iter() {
+                        let (dims, size, initialize) =
+                            lower_variable_type(gl, arenas, scope, diagnostics, variable_type, ty)?;
+                        let ident = arenas.get_ident(arenas.get(variable_type).identifier.item.0);
 
                         let key = gl.signals.insert(Signal {
                             name: ident.into(),
-                            size: VType::Integer.force_net_width(),
+                            size,
+                            initialize,
                         });
                         let symbol_key = scope.symbols.insert(Symbol {
                             name: ident.to_string(),
-                            definition_site: arenas.get_span(ast_ident),
-                            variant: SymbolVariant::Signal(Vec::new(), VType::Integer, key),
+                            definition_site: arenas.get_span(variable_type),
+                            variant: SymbolVariant::Signal(dims, ty, key),
                         });
                         scope.push(ident, symbol_key);
                     }
@@ -685,7 +680,7 @@ pub fn lower<'a>(
             } = arenas.get(*id);
 
             let v = eval_constant_expr(gl, arenas, &scope, diagnostics, *condition)?;
-            if v.logical_equal(VValue::Net(Bits::new_zeroed(1))) {
+            if v.logical_equal(VValue::UnsignedNet(Bits::new_zeroed(SCALAR_VSIZE))) {
                 if let Some(falsy) = falsy {
                     lower_opt_generate_block(
                         gl,
@@ -718,9 +713,9 @@ pub fn lower<'a>(
 }
 
 pub fn dims_to_array<'a>(
-    gl: &mut GlobalContext,
+    gl: &GlobalContext,
     arenas: &'a AstArenas,
-    scope: &mut Scope<'a>,
+    scope: &Scope<'a>,
     diagnostics: &mut Diagnostics,
     dimensions: AstIdRange<Dimension>,
 ) -> Result<Vec<u32>, ()> {
@@ -730,9 +725,8 @@ pub fn dims_to_array<'a>(
         let lhs = eval_constant_expr(gl, arenas, scope, diagnostics, *lhs);
         let rhs = eval_constant_expr(gl, arenas, scope, diagnostics, *rhs);
 
-        let (Ok(VValue::Integer(lhs)), Ok(VValue::Integer(rhs))) = (lhs, rhs) else {
-            return Err(());
-        };
+        let lhs = lhs?.into_bits().as_i64().unwrap();
+        let rhs = rhs?.into_bits().as_i64().unwrap();
 
         dims.push((lhs.abs_diff(rhs) + 1) as u32);
     }
@@ -776,5 +770,34 @@ pub fn lower_opt_generate_block<'a>(
             *module_or_generate_item,
             diagnostics,
         ),
+    }
+}
+
+pub fn lower_variable_type<'a>(
+    gl: &GlobalContext,
+    arenas: &'a AstArenas,
+    scope: &Scope<'a>,
+    diagnostics: &mut Diagnostics,
+    variable_type: AstId<VariableType>,
+    ty: VType,
+) -> Result<(Vec<u32>, VectorSize, Option<Bits>), ()> {
+    match arenas.get(variable_type).variant {
+        VariableTypeVariant::Dimensions(dimensions) => {
+            let dims = dims_to_array(gl, arenas, scope, diagnostics, dimensions)?;
+            let Some(size) = ty
+                .force_net_width()
+                .checked_mul(VectorSize::new(dims.iter().product()).unwrap())
+            else {
+                diagnostics
+                    .not_yet_implemented(arenas.get_span(variable_type), "overflow in net width");
+                return Err(());
+            };
+            Ok((dims, size, None))
+        }
+        VariableTypeVariant::ConstantExpr(expr) => {
+            let value = eval_constant_expr(gl, arenas, scope, diagnostics, expr)?;
+            let value = value.truncate_or_extend(ty.force_net_width());
+            Ok((Vec::new(), ty.force_net_width(), Some(value.into_bits())))
+        }
     }
 }

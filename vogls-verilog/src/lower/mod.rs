@@ -19,14 +19,16 @@ pub enum Region {
     Monitor = 3,
 }
 
+use core::fmt;
 use std::collections::{HashMap, HashSet};
 
 use scope::Scope;
 
 use constant_expr::eval_constant_expr;
 use vogls_ir::{
-    BasicBlockBuilder, Bits, ConnectionDirection, GlobalContext, IntrinsicArg, IntrinsicOp,
-    ProcessKey, Signal, SignalKey, VariableKey, VectorSize, new_process,
+    BasicBlockBuilder, ConnectionDirection, ContextFormat, DisplayContext, GlobalContext,
+    IntrinsicArg, IntrinsicOp, Process, ProcessKey, SCALAR_VSIZE, Signal, SignalKey, VariableKey,
+    VectorSize, new_process,
 };
 
 use crate::ast::constant_expr::{
@@ -40,9 +42,9 @@ use crate::ast::module::{
 use crate::ast::statement::{
     BlockingAssignment, LoopStatementVariant, NetLValue, NonBlockingAssignment,
     ProceduralTimingControlStatement, Statement, StatementContent, StatementOrNull, TaskEnable,
-    VariableAssignment, VariableLValue, VariableLValueFlat,
+    VariableAssignment,
 };
-use crate::ast::{AstId, AstIdRange, RangeExpression};
+use crate::ast::{AstId, AstIdRange};
 use crate::parser::{AstArenas, TokenRange};
 
 use self::expression::lower_expr;
@@ -163,7 +165,11 @@ pub fn fetch_module_interface<'a>(
                             error = true;
                             continue;
                         }
-                        io.push((name, ConnectionDirection::Both, VType::Integer));
+                        io.push((
+                            name,
+                            ConnectionDirection::Both,
+                            VType::UnsignedNet(SCALAR_VSIZE),
+                        ));
                     }
                 }
             }
@@ -179,26 +185,37 @@ pub fn fetch_module_interface<'a>(
                 };
 
                 let port_declaration = arenas.get(*ast_port_declaration);
-                let (direction, range, identifiers) = match port_declaration {
+                let (direction, range, signed, identifiers) = match port_declaration {
                     PortDeclaration::Inout(id) => {
                         let inout = arenas.get(*id);
                         (
                             ConnectionDirection::Both,
                             inout.range,
+                            inout.signed,
                             inout.port_identifiers,
                         )
                     }
                     PortDeclaration::Input(id) => {
                         let input = arenas.get(*id);
-                        (ConnectionDirection::In, input.range, input.port_identifiers)
+                        (
+                            ConnectionDirection::In,
+                            input.range,
+                            input.signed,
+                            input.port_identifiers,
+                        )
                     }
                     PortDeclaration::Output(id) => {
                         let output = arenas.get(*id);
-                        (ConnectionDirection::Out, output.range, output.identifiers)
+                        (
+                            ConnectionDirection::Out,
+                            output.range,
+                            output.signed,
+                            output.identifiers,
+                        )
                     }
                 };
                 let size = match range {
-                    None => 1,
+                    None => SCALAR_VSIZE,
                     Some(range) => range_to_width(gl, arenas, &scope, diagnostics, range)?,
                 };
 
@@ -218,7 +235,7 @@ pub fn fetch_module_interface<'a>(
                     }
 
                     io[*idx].1 = direction;
-                    io[*idx].2 = VType::Net(size);
+                    io[*idx].2 = VType::net(size, signed);
                 }
             }
 
@@ -235,26 +252,37 @@ pub fn fetch_module_interface<'a>(
         ModulePorts::PortDeclarations(port_declarations) => {
             for ast_port_declaration in port_declarations.iter() {
                 let port_declaration = arenas.get(ast_port_declaration);
-                let (direction, range, identifiers) = match port_declaration {
+                let (direction, range, signed, identifiers) = match port_declaration {
                     PortDeclaration::Inout(id) => {
                         let inout = arenas.get(*id);
                         (
                             ConnectionDirection::Both,
                             inout.range,
+                            inout.signed,
                             inout.port_identifiers,
                         )
                     }
                     PortDeclaration::Input(id) => {
                         let input = arenas.get(*id);
-                        (ConnectionDirection::In, input.range, input.port_identifiers)
+                        (
+                            ConnectionDirection::In,
+                            input.range,
+                            input.signed,
+                            input.port_identifiers,
+                        )
                     }
                     PortDeclaration::Output(id) => {
                         let output = arenas.get(*id);
-                        (ConnectionDirection::Out, output.range, output.identifiers)
+                        (
+                            ConnectionDirection::Out,
+                            output.range,
+                            output.signed,
+                            output.identifiers,
+                        )
                     }
                 };
                 let size = match range {
-                    None => 1,
+                    None => SCALAR_VSIZE,
                     Some(range) => range_to_width(gl, arenas, &scope, diagnostics, range)?,
                 };
 
@@ -266,7 +294,7 @@ pub fn fetch_module_interface<'a>(
                         error = true;
                         continue;
                     }
-                    io.push((name, direction, VType::Net(size)));
+                    io.push((name, direction, VType::net(size, signed)));
                 }
 
                 if error {
@@ -361,7 +389,7 @@ pub fn lower_module_to_ir<'a>(
                 NonPortModuleItem::SpecifyBlock => todo!(),
                 NonPortModuleItem::ParameterDeclaration(id) => {
                     let ParameterDeclaration {
-                        typing,
+                        typing: _,
                         assignments,
                     } = arenas.get(*id);
                     for assignment in assignments.iter() {
@@ -782,12 +810,13 @@ fn lower_to_signal<'a>(
     let signal = gl.signals.insert(Signal {
         name: "anon_port_assignment".to_string(),
         size: ty.force_net_width(),
+        initialize: None,
     });
 
     let (section_key, mut bb_builder) = new_process(gl, "port_assignment".into());
     let bb_key = bb_builder.key();
     let (v, v_ty) = lower_expr(gl, arenas, scope, diagnostics, &mut bb_builder, expr)?;
-    let v = expression::sign_extend_or_truncate(gl, &mut bb_builder, v, v_ty, ty.force_net_width());
+    let v = expression::sign_or_zero_extend(gl, &mut bb_builder, v, v_ty, ty.force_net_width());
 
     bb_builder.drive(gl, signal, v);
 
@@ -828,6 +857,7 @@ fn assign_port_output<'a>(
     let signal = gl.signals.insert(Signal {
         name: "anon_port_assignment".to_string(),
         size,
+        initialize: None,
     });
 
     let (section_key, mut bb_builder) = new_process(gl, "port_assignment".into());
@@ -872,14 +902,16 @@ fn assign_port_output<'a>(
                                 lower_expr(gl, arenas, scope, diagnostics, &mut bb_builder, *base);
                             let width = eval_constant_expr(gl, arenas, scope, diagnostics, *width);
                             let width = width?.as_integer().unwrap();
-                            (offset?.0, Some(width as VectorSize))
+                            (offset?.0, Some(VectorSize::new(width as u32).unwrap()))
                         }
                         BitSlice::MinusWidth(base, width) => {
                             let offset =
                                 lower_expr(gl, arenas, scope, diagnostics, &mut bb_builder, *base);
                             let width = eval_constant_expr(gl, arenas, scope, diagnostics, *width)?;
-                            let width = width.as_integer().unwrap() as VectorSize;
-                            let width_v = bb_builder.constant_u32(gl, width + 1);
+                            let width =
+                                VectorSize::new(width.as_integer().unwrap() as u32).unwrap();
+                            let width_v =
+                                bb_builder.constant_u32(gl, width.checked_add(1).unwrap().get());
                             let offset = bb_builder.minus(gl, offset?.0, width_v);
                             (offset, Some(width))
                         }
@@ -908,7 +940,13 @@ fn assign_port_output<'a>(
                     src = bb_builder.logical_shift_right(gl, src, offset_src);
                 }
                 let src = bb_builder.slice(gl, src, length_src);
-                bb_builder.drive_partial(gl, *key, src, offset_dst, length_dst.unwrap_or(1));
+                bb_builder.drive_partial(
+                    gl,
+                    *key,
+                    src,
+                    offset_dst,
+                    length_dst.unwrap_or(SCALAR_VSIZE),
+                );
             }
 
             Expr::Replication(_) => {
@@ -1027,7 +1065,7 @@ fn assign_net_lvalue<'a>(
     let partial = match range_expression {
         None => match arr_idx {
             None => None,
-            Some(idx) => Some((builder.constant_u32(gl, idx * size), size)),
+            Some(idx) => Some((builder.constant_u32(gl, idx * size.get()), size)),
         },
         Some(range_expression) => {
             let (offset, length) = match arenas.get(range_expression) {
@@ -1040,17 +1078,18 @@ fn assign_net_lvalue<'a>(
                 _ => todo!("MsbLsb"),
             };
 
+            let length = VectorSize::new(length).unwrap();
             Some(match arr_idx {
                 None => (builder.constant_u32(gl, offset as u32), length),
                 Some(idx) => (
-                    builder.constant_u32(gl, idx * size + offset as u32),
+                    builder.constant_u32(gl, idx * size.get() + offset as u32),
                     length,
                 ),
             })
         }
     };
     let size = partial.map_or(ty.force_net_width(), |(_, s)| s);
-    let variable = expression::sign_extend_or_truncate(gl, builder, variable, variable_ty, size);
+    let variable = expression::sign_or_zero_extend(gl, builder, variable, variable_ty, size);
     builder.drive_opt_partial(gl, key, variable, partial);
     Ok(())
 }
@@ -1066,10 +1105,16 @@ fn msb_lsb_to_width<'a>(
     let msb = eval_constant_expr(gl, arenas, scope, diagnostics, msb);
     let lsb = eval_constant_expr(gl, arenas, scope, diagnostics, lsb);
 
-    let (Ok(VValue::Integer(msb)), Ok(VValue::Integer(lsb))) = (msb, lsb) else {
+    let (Ok(VValue::SignedNet(msb)), Ok(VValue::SignedNet(lsb))) = (msb, lsb) else {
         return Err(());
     };
-    Ok((msb as u64, lsb as u64, (msb - lsb + 1) as VectorSize))
+    let msb = msb.as_i64().unwrap();
+    let lsb = lsb.as_i64().unwrap();
+    Ok((
+        msb as u64,
+        lsb as u64,
+        VectorSize::new((msb - lsb + 1) as u32).unwrap(),
+    ))
 }
 
 fn range_to_width<'a>(
@@ -1078,7 +1123,7 @@ fn range_to_width<'a>(
     scope: &Scope<'a>,
     diagnostics: &mut Diagnostics,
     range: AstId<Range>,
-) -> Result<u32, ()> {
+) -> Result<VectorSize, ()> {
     let range = arenas.get(range);
     msb_lsb_to_width(gl, arenas, scope, diagnostics, range.msb, range.lsb).map(|(_, _, w)| w)
 }

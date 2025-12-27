@@ -1,4 +1,4 @@
-use vogls_ir::GlobalContext;
+use vogls_ir::{GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE};
 
 use crate::ast::AstId;
 use crate::ast::module::ParameterDeclarationTyping;
@@ -15,14 +15,14 @@ pub fn parameter_typing_to_type<'a>(
     typing: AstId<ParameterDeclarationTyping>,
 ) -> Result<VType, ()> {
     Ok(match arenas.get(typing) {
-        ParameterDeclarationTyping::None(_, range) => match range {
-            Some(range) => {
-                let width = range_to_width(gl, arenas, scope, diagnostics, *range)?;
-                VType::Net(width)
-            }
-            None => VType::SCALAR_NET,
-        },
-        ParameterDeclarationTyping::Integer => VType::Integer,
+        ParameterDeclarationTyping::None(signed, range) => {
+            let width = match range {
+                Some(range) => range_to_width(gl, arenas, scope, diagnostics, *range)?,
+                None => SCALAR_VSIZE,
+            };
+            VType::net(width, *signed)
+        }
+        ParameterDeclarationTyping::Integer => VType::SignedNet(INTEGER_VSIZE),
         ParameterDeclarationTyping::Real
         | ParameterDeclarationTyping::Realtime
         | ParameterDeclarationTyping::Time => {

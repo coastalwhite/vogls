@@ -26,9 +26,6 @@ impl fmt::Display for VmInstruction {
             Self::Binary(dst, op, src1, src2) => {
                 write!(f, "{dst} = {} {src1}, {src2}", op.into_mnemonic())
             }
-            Self::Cast(dst, _, src, _) => {
-                write!(f, "{dst} = cast({src})")
-            }
             Self::Move(dst, src, _) => {
                 write!(f, "{dst} = {src}")
             }
@@ -86,7 +83,6 @@ impl fmt::Display for VmProcess {
                 I::Constant(..)
                 | I::Unary(..)
                 | I::Binary(..)
-                | I::Cast(..)
                 | I::Move(..)
                 | I::Intrinsic(..)
                 | I::Probe(..)

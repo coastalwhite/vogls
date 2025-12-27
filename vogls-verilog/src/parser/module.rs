@@ -12,7 +12,7 @@ use crate::ast::module::{
     NetAssignment, NetDeclAssignment, NetDeclaration, NetDeclarationNets, NetIdent, NetType,
     NonPortModuleItem, OutputDeclaration, OutputNet, ParamAssignment, ParameterDeclaration,
     ParameterDeclarationTyping, ParameterValueAssignment, Port, PortDeclaration, PortExpression,
-    PortReference, Range, RegDeclaration, TaskDeclaration, VariableType,
+    PortReference, Range, RegDeclaration, TaskDeclaration, VariableType, VariableTypeVariant,
 };
 use crate::ast::statement::{NetLValue, Statement, StatementOrNull};
 use crate::parser::TokenRange;
@@ -1459,13 +1459,19 @@ impl<'a> Consumable<'a> for VariableType {
         // @Incomplete
 
         let identifier = item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
-        let dimensions =
-            parse_zero_or_more_while_next(tkw, sc, arenas, diagnostics.as_deref_mut(), |t| {
-                t == T::LeftBrace
-            })?;
+        let variant = if tkw.next_if_equals(T::Equals) {
+            let expr = parse::<ConstantExpr>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+            VariableTypeVariant::ConstantExpr(expr)
+        } else {
+            let dimensions =
+                parse_zero_or_more_while_next(tkw, sc, arenas, diagnostics.as_deref_mut(), |t| {
+                    t == T::LeftBrace
+                })?;
+            VariableTypeVariant::Dimensions(dimensions)
+        };
         Ok(Self {
             identifier,
-            dimensions,
+            variant,
         })
     }
 }
@@ -1483,7 +1489,7 @@ impl<'a> Consumable<'a> for IntegerDeclaration {
         // integer_declaration ::= integer list_of_variable_identifiers ;
 
         tkw.next_expect(T::KeywordInteger, diagnostics.as_deref_mut())?;
-        let identifiers = parse_one_or_more_delimited::<Identifier>(
+        let variable_types = parse_one_or_more_delimited::<VariableType>(
             tkw,
             sc,
             arenas,
@@ -1492,7 +1498,7 @@ impl<'a> Consumable<'a> for IntegerDeclaration {
         )?;
         tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
 
-        Ok(Self { identifiers })
+        Ok(Self { variable_types })
     }
 }
 

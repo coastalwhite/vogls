@@ -1,6 +1,6 @@
 use vogls_ir::{
-    BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, IntrinsicArg, IntrinsicOp,
-    VariableKey, VectorSize,
+    BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, INTEGER_VSIZE, IntrinsicArg,
+    IntrinsicOp, VariableKey, VectorSize,
 };
 
 use crate::ast::AstId;
@@ -8,12 +8,13 @@ use crate::ast::expr::{BinaryOperator, BitSlice, Expr, Replication, UnaryOperato
 use crate::lower::constant_expr::eval_constant_expr;
 use crate::lower::scope::SymbolVariant;
 use crate::lower::{VType, msb_lsb_to_width};
-use crate::number::Decimal;
+use crate::number::{Decimal, Sign};
 use crate::parser::AstArenas;
 
 use super::Diagnostics;
 use super::scope::Scope;
 
+#[deny(clippy::question_mark_used)] // Needs to be handled explicitly in the recursion.
 pub fn lower_expr<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
@@ -41,7 +42,13 @@ pub fn lower_expr<'a>(
 
     dispatch_stack.push(StackItem::new(expr));
 
+    dbg!("start");
     'dispatch_loop: while let Some(mut item) = dispatch_stack.pop() {
+        dbg!(result_stack.len());
+        dbg!(dispatch_stack.len());
+        let mut s = String::new();
+        arenas.get(item.expr).tree_fmt(arenas, &mut s).unwrap();
+        eprintln!("{s}");
         match arenas.get(item.expr) {
             Expr::Unary(op, child) => {
                 if !item.dispatched {
@@ -154,7 +161,7 @@ pub fn lower_expr<'a>(
                     result_stack.push(None);
                     continue;
                 };
-                let mut width = ty.force_net_width();
+                let mut width = ty.force_net_width().get();
                 for _ in 1..exprs.len() {
                     let Some((next, next_ty)) = result_stack.pop().unwrap() else {
                         result_stack.truncate(end_stack_size);
@@ -163,9 +170,12 @@ pub fn lower_expr<'a>(
                     };
                     let next_width = next_ty.force_net_width();
                     output = builder.concat(gl, next, output);
-                    width += next_width;
+                    width += next_width.get();
                 }
-                result_stack.push(Some((output, VType::Net(width))));
+                result_stack.push(Some((
+                    output,
+                    VType::UnsignedNet(VectorSize::new(width).unwrap()),
+                )));
             }
             Expr::Replication(replication) => {
                 let Replication {
@@ -189,7 +199,7 @@ pub fn lower_expr<'a>(
                     dispatch_stack.extend(exprs.iter().rev().map(StackItem::new));
                     continue;
                 }
-
+                
                 let end_stack_size = result_stack.len() - exprs.len();
                 let Ok(repeat_n) =
                     eval_constant_expr(gl, arenas, scope, diagnostics, constant_expr)
@@ -198,11 +208,13 @@ pub fn lower_expr<'a>(
                     result_stack.push(None);
                     continue;
                 };
-                let Some(repeat_n) = repeat_n.to_vector_size() else {
+
+                let Some(repeat_n) = repeat_n.as_integer() else {
                     diagnostics.not_yet_implemented(
                         arenas.get_span(constant_expr),
                         "replication overflow",
                     );
+                    error = true;
                     result_stack.truncate(end_stack_size);
                     result_stack.push(None);
                     continue;
@@ -210,6 +222,7 @@ pub fn lower_expr<'a>(
                 if repeat_n == 0 {
                     diagnostics
                         .not_yet_implemented(arenas.get_span(constant_expr), "replication is 0");
+                    error = true;
                     result_stack.truncate(end_stack_size);
                     result_stack.push(None);
                     continue;
@@ -219,7 +232,7 @@ pub fn lower_expr<'a>(
                     result_stack.push(None);
                     continue;
                 };
-                let mut width = ty.force_net_width();
+                let mut width = ty.force_net_width().get();
                 for _ in 1..exprs.len() {
                     let Some((next, next_ty)) = result_stack.pop().unwrap() else {
                         result_stack.truncate(end_stack_size);
@@ -228,12 +241,14 @@ pub fn lower_expr<'a>(
                     };
                     let next_width = next_ty.force_net_width();
                     output = builder.concat(gl, next, output);
-                    width += next_width;
+                    width += next_width.get();
                 }
 
-                let Some(output_width) = width.checked_mul(repeat_n) else {
+                dbg!("replication 6");
+                let Some(output_width) = width.checked_mul(repeat_n as u32) else {
                     diagnostics
                         .not_yet_implemented(arenas.get_span(item.expr), "replication overflow");
+                    error = true;
                     result_stack.push(None);
                     continue;
                 };
@@ -242,7 +257,11 @@ pub fn lower_expr<'a>(
                 for _ in 1..repeat_n {
                     output = builder.concat(gl, output_single, output);
                 }
-                result_stack.push(Some((output, VType::Net(output_width))));
+                dbg!("replication final");
+                result_stack.push(Some((
+                    output,
+                    VType::UnsignedNet(VectorSize::new(output_width).unwrap()),
+                )));
             }
             Expr::Ternary(condition, truthy, falsy) => {
                 if !item.dispatched {
@@ -282,13 +301,14 @@ pub fn lower_expr<'a>(
                 };
                 let falsy_bb = builder.key();
 
-                let ty = coerce_to_max_size_ty(t_ty, f_ty).force_net_width();
+                let ty = coerce_to_max_size_ty(t_ty, f_ty);
+                let ty_size = ty.force_net_width();
 
                 *builder = builder.continue_with(gl, truthy_bb);
-                let t = sign_extend_or_truncate(gl, builder, t, t_ty, ty);
+                let t = sign_or_zero_extend(gl, builder, t, t_ty, ty_size);
 
                 *builder = builder.continue_with(gl, falsy_bb);
-                let f = sign_extend_or_truncate(gl, builder, f, f_ty, ty);
+                let f = sign_or_zero_extend(gl, builder, f, f_ty, ty_size);
 
                 *builder = builder.next_terminate_later(gl);
                 let (outcome, _) = builder.phi(gl, [(truthy_bb, t), (falsy_bb, f)].into());
@@ -298,10 +318,15 @@ pub fn lower_expr<'a>(
                 gl.bbs[truthy_bb].terminator = BasicBlockTerminator::Jump(builder.key());
                 gl.bbs[falsy_bb].terminator = BasicBlockTerminator::Jump(builder.key());
 
-                result_stack.push(Some((outcome, t_ty)));
+                result_stack.push(Some((outcome, ty)));
             }
             Expr::Ident(ast_ident, exprs, range_expression) => {
-                if (!exprs.is_empty() || range_expression.is_some()) && !item.dispatched {
+                if (!exprs.is_empty()
+                    || range_expression.is_some_and(|r| {
+                        matches!(r, BitSlice::PlusWidth(..) | BitSlice::MinusWidth(..))
+                    }))
+                    && !item.dispatched
+                {
                     item.dispatched = true;
                     dispatch_stack.push(item);
                     match range_expression {
@@ -336,8 +361,9 @@ pub fn lower_expr<'a>(
                         (value.ty(), builder.constant(gl, value.into_bits()))
                     }
                     SymbolVariant::Genvar(value) => (
-                        VType::Integer,
-                        builder.constant(gl, Bits::from_i64_minimal(value.unwrap())),
+                        VType::SignedNet(INTEGER_VSIZE),
+                        builder
+                            .constant(gl, Bits::from_i64_truncated(value.unwrap(), INTEGER_VSIZE)),
                     ),
                     SymbolVariant::Task(_) => todo!(),
                     SymbolVariant::Signal(dims, ty, key) => {
@@ -388,7 +414,7 @@ pub fn lower_expr<'a>(
 
                             let size = ty.force_net_width();
                             let variable = builder.probe(gl, *key);
-                            let offset = builder.multiply_constant(gl, offset, size);
+                            let offset = builder.multiply_constant(gl, offset, size.get());
                             let variable = builder.logical_shift_right(gl, variable, offset);
                             let variable = builder.slice(gl, variable, size);
 
@@ -412,8 +438,12 @@ pub fn lower_expr<'a>(
                 if let Some(slice) = range_expression {
                     let (lsb, width) = match slice {
                         BitSlice::MsbLsb(msb, lsb) => {
-                            let (_msb, lsb, width) =
-                                msb_lsb_to_width(gl, arenas, scope, diagnostics, *msb, *lsb)?;
+                            let Ok((_msb, lsb, width)) =
+                                msb_lsb_to_width(gl, arenas, scope, diagnostics, *msb, *lsb)
+                            else {
+                                result_stack.push(None);
+                                continue;
+                            };
                             let lsb_v = builder.constant_u32(gl, lsb as u32);
                             (lsb_v, width)
                         }
@@ -423,8 +453,14 @@ pub fn lower_expr<'a>(
                                 result_stack.push(None);
                                 continue;
                             };
-                            let width = eval_constant_expr(gl, arenas, scope, diagnostics, *width)?;
-                            let width = width.as_integer().unwrap() as VectorSize;
+                            let Ok(width) =
+                                eval_constant_expr(gl, arenas, scope, diagnostics, *width)
+                            else {
+                                result_stack.push(None);
+                                continue;
+                            };
+                            let width =
+                                VectorSize::new(width.as_integer().unwrap() as u32).unwrap();
                             (lsb, width)
                         }
                         BitSlice::MinusWidth(_, width) => {
@@ -434,15 +470,20 @@ pub fn lower_expr<'a>(
                                 continue;
                             };
 
-                            let width = eval_constant_expr(gl, arenas, scope, diagnostics, *width)?;
+                            let Ok(width) =
+                                eval_constant_expr(gl, arenas, scope, diagnostics, *width)
+                            else {
+                                result_stack.push(None);
+                                continue;
+                            };
                             let width = width.as_integer().unwrap() as u32;
                             let width_v = builder.constant_u32(gl, width - 1);
                             let lsb = builder.minus(gl, lsb, width_v);
-                            (lsb, width as VectorSize)
+                            (lsb, VectorSize::new(width).unwrap())
                         }
                     };
 
-                    ty = VType::Net(width);
+                    ty = VType::UnsignedNet(width);
                     let shifted = builder.logical_shift_right(gl, var, lsb);
                     var = builder.slice(gl, shifted, width as VectorSize);
                 }
@@ -486,9 +527,18 @@ pub fn lower_expr<'a>(
                         );
                     }
                     "signed" => {
-                        diagnostics
-                            .warnings
-                            .push((arenas.get_span(expr), "ignored signed call".to_string()));
+                        let Some((_, e_ty)) = result_stack.last_mut().unwrap() else {
+                            result_stack.push(None);
+                            continue;
+                        };
+                        *e_ty = e_ty.to_signed();
+                    }
+                    "unsigned" => {
+                        let Some((_, e_ty)) = result_stack.last_mut().unwrap() else {
+                            result_stack.push(None);
+                            continue;
+                        };
+                        *e_ty = e_ty.to_unsigned();
                     }
                     _ => {
                         diagnostics.not_yet_implemented(arenas.get_span(expr), "function calls");
@@ -506,12 +556,13 @@ pub fn lower_expr<'a>(
                 };
 
                 result_stack.push(Some((
-                    builder.constant(gl, Bits::from_i64_truncated(decimal, 32)),
-                    VType::Integer,
+                    builder.constant(gl, Bits::from_i64_truncated(decimal, INTEGER_VSIZE)),
+                    VType::SignedNet(INTEGER_VSIZE),
                 )));
             }
             Expr::Sized(sized) => {
                 let sized = &arenas.sized_numbers[sized.item.at];
+                let signed = matches!(sized.sign, Sign::Signed);
                 let crate::number::Bits::Small(v) = sized.value else {
                     todo!()
                 };
@@ -519,13 +570,21 @@ pub fn lower_expr<'a>(
                     None => (64 - v.leading_zeros()).max(1),
                     Some(size) => size.as_u32(),
                 };
+                let width = VectorSize::new(width).unwrap();
                 let var = builder.constant(gl, Bits::from_i64_truncated(v as i64, width));
 
-                result_stack.push(Some((var, VType::Net(width))));
+                result_stack.push(Some((var, VType::net(width, signed))));
             }
             Expr::String(string_ref) => {
                 let s = arenas.get_ident(string_ref.0);
-                let value = Bits::load_from_slice(s.as_bytes(), (s.len() * 8) as u32);
+                let s = s
+                    .as_bytes()
+                    .iter()
+                    .copied()
+                    .chain(std::iter::once(b'\0'))
+                    .collect::<Box<[u8]>>();
+                let value =
+                    Bits::load_from_slice(&s, VectorSize::new((s.len() * 8) as u32).unwrap());
                 let var = builder.constant(gl, value);
                 result_stack.push(Some((var, VType::String(s.len() as u32))));
             }
@@ -560,8 +619,8 @@ pub fn coerce_bin_arithmetic<'a>(
 
     let ty = coerce_to_max_size_ty(l_ty, r_ty);
 
-    let l = sign_extend_or_truncate(gl, builder, l, l_ty, ty.force_net_width());
-    let r = sign_extend_or_truncate(gl, builder, r, r_ty, ty.force_net_width());
+    let l = sign_or_zero_extend(gl, builder, l, l_ty, ty.force_net_width());
+    let r = sign_or_zero_extend(gl, builder, r, r_ty, ty.force_net_width());
 
     (l, ty, r, ty)
 }
@@ -582,7 +641,7 @@ pub fn coerce_to_max_size_ty<'a>(l_ty: VType, r_ty: VType) -> VType {
         (None, None) => unreachable!(),
     };
 
-    VType::Net(size)
+    VType::net(size, l_ty.is_signed() & r_ty.is_signed())
 }
 
 macro_rules! impl_bin_arithmetic {
@@ -682,19 +741,44 @@ impl_shift! {
     bin_arithmetic_shift_right => arithmetic_shift_right,
 }
 
-pub fn sign_extend_or_truncate(
+pub fn sign_or_zero_extend(
     gl: &mut GlobalContext,
     builder: &mut BasicBlockBuilder,
     src: VariableKey,
     from: VType,
     to: VectorSize,
 ) -> VariableKey {
-    let from = from.force_net_width();
-    if from == to {
+    let from_width = from.force_net_width();
+    if from_width == to {
         src
-    } else if from > to {
+    } else if from_width > to {
         builder.slice(gl, src, to)
     } else {
-        builder.cast(gl, src, to)
+        if from.is_signed() {
+            builder.sign_extend(gl, src, to)
+        } else {
+            builder.zero_extend(gl, src, to)
+        }
+    }
+}
+
+pub fn truncate_or_extend(
+    gl: &mut GlobalContext,
+    builder: &mut BasicBlockBuilder,
+    src: VariableKey,
+    from: VType,
+    to: VectorSize,
+) -> VariableKey {
+    let from_width = from.force_net_width();
+    if from_width == to {
+        src
+    } else if from_width > to {
+        builder.slice(gl, src, to)
+    } else {
+        if from.is_signed() {
+            builder.sign_extend(gl, src, to)
+        } else {
+            builder.zero_extend(gl, src, to)
+        }
     }
 }

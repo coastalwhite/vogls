@@ -3,6 +3,7 @@ mod format;
 
 use std::collections::HashSet;
 use std::fmt::{self, Write};
+use std::num::NonZeroU32;
 
 pub use builder::{BasicBlockBuilder, BranchRef, PhiRef, new_process};
 pub use format::{ContextFormat, DisplayContext};
@@ -27,16 +28,18 @@ impl Bits {
     pub fn as_slice(&self) -> &[u8] {
         const { assert!(cfg!(target_endian = "little")) }
         match self {
-            Bits::Small(value, size) => &bytemuck::bytes_of(value)[..size.div_ceil(8) as usize],
+            Bits::Small(value, size) => {
+                &bytemuck::bytes_of(value)[..size.get().div_ceil(8) as usize]
+            }
             Bits::Big(_, value) => value.as_ref(),
         }
     }
 
     pub fn new_zeroed(size: VectorSize) -> Self {
-        if size > 64 {
+        if size.get() > 64 {
             Self::Big(
                 size,
-                std::iter::repeat_n(0, size.div_ceil(8) as usize).collect(),
+                std::iter::repeat_n(0, size.get().div_ceil(8) as usize).collect(),
             )
         } else {
             Self::Small(0, size)
@@ -44,9 +47,9 @@ impl Bits {
     }
 
     pub fn load_from_slice(slice: &[u8], size: VectorSize) -> Self {
-        if size < 64 {
+        if size.get() < 64 {
             let mut value = 0u64;
-            for &b in &slice[..size.div_ceil(8) as usize] {
+            for &b in &slice[..size.get().div_ceil(8) as usize] {
                 value <<= 8;
                 value |= b as u64;
             }
@@ -63,6 +66,47 @@ impl Bits {
         }
     }
 
+    pub fn truncate_or_sign_extend(self, new_size: VectorSize) -> Bits {
+        if self.size() == new_size {
+            return self;
+        } else if self.size() < new_size {
+            return self.sign_extend(new_size);
+        } else {
+            return self.truncate(new_size);
+        }
+    }
+
+    pub fn truncate_or_zero_extend(self, new_size: VectorSize) -> Bits {
+        if self.size() == new_size {
+            return self;
+        } else if self.size() < new_size {
+            return self.zero_extend(new_size);
+        } else {
+            return self.truncate(new_size);
+        }
+    }
+
+    pub fn truncate(self, new_size: VectorSize) -> Bits {
+        if self.size() == new_size {
+            return self;
+        }
+
+        assert!(self.size() > new_size);
+        match self {
+            Bits::Small(v, _) => Bits::Small(
+                v & 1u64.unbounded_shl(new_size.get()).wrapping_sub(1),
+                new_size,
+            ),
+            _ => {
+                let old_size = self.size();
+                let mut bytes = std::iter::repeat_n(0, new_size.get().div_ceil(8) as usize)
+                    .collect::<Box<[u8]>>();
+                bytes[..old_size.get().div_ceil(8) as usize].copy_from_slice(self.as_slice());
+                Bits::Big(new_size, bytes)
+            }
+        }
+    }
+
     pub fn sign_extend(self, new_size: VectorSize) -> Bits {
         if self.size() == new_size {
             return self;
@@ -70,31 +114,56 @@ impl Bits {
 
         assert!(self.size() < new_size);
         match self {
-            Bits::Small(v, _) if new_size <= 64 => Bits::Small(v, new_size),
+            Bits::Small(v, size) => {
+                let sign_bit = v >> (size.get() - 1);
+                if new_size.get() <= 64 {
+                    let mask = !u64::from(sign_bit == 0);
+                    let v = (v | (mask << size.get()))
+                        & 1u64.unbounded_shl(new_size.get()).wrapping_sub(1);
+                    Bits::Small(v, new_size)
+                } else {
+                    todo!()
+                }
+            }
+            _ => {
+                todo!()
+                // let mask = !u64::from((v >> (size.get() - 1)) == 0);
+                // let old_size = self.size();
+                // let mut bytes = std::iter::repeat_n(0, new_size.get().div_ceil(8) as usize)
+                //     .collect::<Box<[u8]>>();
+                // bytes[..old_size.get().div_ceil(8) as usize].copy_from_slice(self.as_slice());
+                // Bits::Big(new_size, bytes)
+            }
+        }
+    }
+
+    pub fn zero_extend(self, new_size: VectorSize) -> Bits {
+        if self.size() == new_size {
+            return self;
+        }
+
+        assert!(self.size() < new_size);
+        match self {
+            Bits::Small(v, _) if new_size.get() <= 64 => Bits::Small(v, new_size),
             _ => {
                 let old_size = self.size();
-                let mut bytes =
-                    std::iter::repeat_n(0, new_size.div_ceil(8) as usize).collect::<Box<[u8]>>();
-                bytes[..old_size.div_ceil(8) as usize].copy_from_slice(self.as_slice());
+                let mut bytes = std::iter::repeat_n(0, new_size.get().div_ceil(8) as usize)
+                    .collect::<Box<[u8]>>();
+                bytes[..old_size.get().div_ceil(8) as usize].copy_from_slice(self.as_slice());
                 Bits::Big(new_size, bytes)
             }
         }
     }
 
-    pub fn from_i64_minimal(value: i64) -> Bits {
-        let size = (64 - value.leading_zeros()).max(1);
-        Self::from_i64_truncated(value, size)
-    }
-
     pub fn from_i64_truncated(value: i64, size: VectorSize) -> Bits {
-        if size <= 64 {
+        if size.get() <= 64 {
             Bits::Small(
-                (value as u64) & 1u64.unbounded_shl(size).wrapping_sub(1),
+                (value as u64) & 1u64.unbounded_shl(size.get()).wrapping_sub(1),
                 size,
             )
         } else {
             let mut bytes =
-                std::iter::repeat_n(0, size.div_ceil(8) as usize).collect::<Box<[u8]>>();
+                std::iter::repeat_n(0, size.get().div_ceil(8) as usize).collect::<Box<[u8]>>();
             bytes[..8].copy_from_slice(&bytemuck::bytes_of(&value));
             Bits::Big(size, bytes)
         }
@@ -109,10 +178,18 @@ impl Bits {
 
     pub fn concatenate(lhs: Bits, rhs: Bits) -> Bits {
         match (lhs, rhs) {
-            (Bits::Small(lv, ls), Bits::Small(rv, rs)) if lv + rv <= 64 => {
-                Bits::Small((lv << rs) | rv, ls + rs)
-            }
+            (Bits::Small(lv, ls), Bits::Small(rv, rs)) if lv + rv <= 64 => Bits::Small(
+                (lv << rs.get()) | rv,
+                NonZeroU32::new(ls.get() + rs.get()).unwrap(),
+            ),
             _ => todo!(),
+        }
+    }
+
+    pub fn as_i64(&self) -> Option<i64> {
+        match self {
+            Bits::Small(v, _) => Some(*v as i64),
+            Bits::Big(_, _) => None,
         }
     }
 }
@@ -124,7 +201,7 @@ macro_rules! impl_arithmetic {
         pub fn $f(lhs: Self, rhs: Self) -> Self {
             assert_eq!(lhs.size(), rhs.size());
             match (lhs, rhs) {
-                (Self::Small(l, s), Self::Small(r, _)) => Self::Small(l.$op(r) & ((1u64 << s) - 1), s),
+                (Self::Small(l, s), Self::Small(r, _)) => Self::Small(l.$op(r) & ((1u64 << s.get()) - 1), s),
                 (Self::Big(_s, _l), Self::Big(_, _r)) => todo!(),
                 _ => unreachable!(),
             }
@@ -143,7 +220,7 @@ impl_arithmetic! {
 impl fmt::Display for Bits {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Bits::Small(value, size) if size % 4 == 0 => write!(f, "{size}'h{value:X}"),
+            Bits::Small(value, size) if size.get() % 4 == 0 => write!(f, "{size}'h{value:X}"),
             Bits::Small(value, size) => write!(f, "{size}'b{value:b}"),
             Bits::Big(size, v) => {
                 write!(f, "{size}'h")?;
@@ -214,9 +291,12 @@ pub struct Variable {
 pub struct Signal {
     pub name: String,
     pub size: VectorSize,
+    pub initialize: Option<Bits>,
 }
 
-pub type VectorSize = u32;
+pub type VectorSize = NonZeroU32;
+pub const INTEGER_VSIZE: VectorSize = NonZeroU32::new(32).unwrap();
+pub const SCALAR_VSIZE: VectorSize = NonZeroU32::new(1).unwrap();
 
 #[derive(Debug, Clone)]
 pub enum IntrinsicArg {
@@ -239,6 +319,8 @@ pub enum UnaryOp {
     ReduceAnd(VectorSize),
     ReduceXor(VectorSize),
     Slice(VectorSize, VectorSize),
+    ZeroExtend(VectorSize, VectorSize),
+    SignExtend(VectorSize, VectorSize),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -267,8 +349,6 @@ pub enum Instruction {
     Unary(VariableKey, UnaryOp, VariableKey),
     Binary(VariableKey, BinaryOp, VariableKey, VariableKey),
 
-    Cast(VariableKey, VariableKey),
-
     Intrinsic(IntrinsicOp, Vec<IntrinsicArg>),
     Probe(VariableKey, SignalKey),
     Drive(
@@ -287,7 +367,6 @@ impl Instruction {
             Self::Constant(dst, _)
             | Self::Unary(dst, _, _)
             | Self::Binary(dst, _, _, _)
-            | Self::Cast(dst, _)
             | Self::Phi(dst, _)
             | Self::Probe(dst, _) => Some(*dst),
             Self::Intrinsic(..) | Self::Drive(..) => None,

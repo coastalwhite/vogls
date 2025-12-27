@@ -168,7 +168,8 @@ impl Expr {
         f: &mut impl fmt::Write,
         depth: usize,
     ) -> fmt::Result {
-        write!(f, "{:>0$}", depth * 2)?;
+        let indent = depth * 2;
+        write!(f, "{:indent$}", " ")?;
         match self {
             Expr::Unary(op, child) => {
                 writeln!(f, "unary [{}]", op.into_str())?;
@@ -179,18 +180,53 @@ impl Expr {
                 arenas.get(*lhs).tree_fmt_impl(arenas, f, depth + 1)?;
                 arenas.get(*rhs).tree_fmt_impl(arenas, f, depth + 1)?;
             }
-            Expr::Concatenation(..) => todo!(),
-            Expr::Replication(..) => todo!(),
+            Expr::Concatenation(..) => f.write_str("concatenation")?,
+            Expr::Replication(Replication {
+                constant_expr,
+                exprs,
+            }) => {
+                writeln!(f, "replication")?;
+                arenas
+                    .get(constant_expr.into_expr())
+                    .tree_fmt_impl(arenas, f, depth + 1)?;
+                for e in exprs.iter() {
+                    arenas.get(e).tree_fmt_impl(arenas, f, depth + 1)?;
+                }
+            }
             Expr::Ternary(condition, truthy, falsy) => {
                 writeln!(f, "ternary")?;
                 arenas.get(*condition).tree_fmt_impl(arenas, f, depth + 1)?;
                 arenas.get(*truthy).tree_fmt_impl(arenas, f, depth + 1)?;
                 arenas.get(*falsy).tree_fmt_impl(arenas, f, depth + 1)?;
             }
-            Expr::Ident(ident, expr, _range_expr) => {
+            Expr::Ident(ident, expr, range_expr) => {
                 writeln!(f, "ident: {}", arenas.get_ident(ident.item.0))?;
                 for e in expr.iter() {
                     arenas.get(e).tree_fmt_impl(arenas, f, depth + 1)?;
+                }
+                if let Some(range_expr) = range_expr {
+                    match range_expr {
+                        BitSlice::MsbLsb(msb, lsb) => {
+                            arenas
+                                .get(msb.into_expr())
+                                .tree_fmt_impl(arenas, f, depth + 1)?;
+                            arenas
+                                .get(lsb.into_expr())
+                                .tree_fmt_impl(arenas, f, depth + 1)?;
+                        }
+                        BitSlice::PlusWidth(base, width) => {
+                            arenas.get(*base).tree_fmt_impl(arenas, f, depth + 1)?;
+                            arenas
+                                .get(width.into_expr())
+                                .tree_fmt_impl(arenas, f, depth + 1)?;
+                        }
+                        BitSlice::MinusWidth(base, width) => {
+                            arenas.get(*base).tree_fmt_impl(arenas, f, depth + 1)?;
+                            arenas
+                                .get(width.into_expr())
+                                .tree_fmt_impl(arenas, f, depth + 1)?;
+                        }
+                    }
                 }
             }
             Expr::FunctionCall(ident, exprs) => {
@@ -210,8 +246,8 @@ impl Expr {
             Expr::Decimal(decimal) => {
                 writeln!(f, "decimal: {}", arenas.decimals[decimal.at])?;
             }
-            Expr::Sized(..) => todo!(),
-            Expr::String(..) => todo!(),
+            Expr::Sized(..) => f.write_str("sized")?,
+            Expr::String(..) => f.write_str("string")?,
         }
 
         Ok(())

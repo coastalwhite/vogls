@@ -132,14 +132,14 @@ pub enum TimeSize {
 
 #[derive(Default)]
 pub struct ParseContext {
-    timescale: Option<(TimeSize, TimeUnit, TimeSize, TimeUnit)>,
+    _timescale: Option<(TimeSize, TimeUnit, TimeSize, TimeUnit)>,
 }
 
 pub fn parse_file(
     tkw: &mut TokenWalker<'_>,
     scratches: &mut ParserScratches,
     mut diagnostics: Option<&mut Diagnostics>,
-    ctx: &mut ParseContext,
+    _ctx: &mut ParseContext,
 ) -> Result<Ast, ()> {
     use Token as T;
 
