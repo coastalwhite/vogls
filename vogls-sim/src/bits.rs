@@ -58,11 +58,14 @@ pub fn concat(
     }
 
     stack[dst + rbytes - 1] |= stack[lhs] << roff;
-    let s = lhs_size.saturating_sub(8 - roff);
-    for i in 0..s / 8 {
-        stack[dst + rbytes + i] = (stack[lhs + i] << roff) | (stack[lhs + i] >> (8 - roff));
+    let mut s = lhs_size.saturating_sub(8 - roff);
+    let mut i = 0;
+    while s > roff {
+        stack[dst + rbytes + i] = (stack[lhs + i] >> (8 - roff)) | (stack[lhs + i + 1] << roff);
+        s = s.saturating_sub(8);
+        i += 1;
     }
-    if s % 8 > 0 {
+    if s > 0 {
         stack[dst + dbytes - 1] = stack[lhs + lbytes - 1] >> (8 - roff);
     }
 }
@@ -249,37 +252,93 @@ mod tests {
     #[test]
     fn test_concat_u16() {
         let mut stack = [0u8; 8 * 3];
-        for lhs_size in 1..=16 {
+        for lhs_size in 1..=32 {
             let lhs_size = VectorSize::new(lhs_size).unwrap();
             let lhs_mask = (1u64 << lhs_size.get()).wrapping_sub(1);
-            for rhs_size in 1..=16 {
+            for rhs_size in 1..=32 {
                 let rhs_size = VectorSize::new(rhs_size).unwrap();
                 let rhs_mask = (1u64 << rhs_size.get()).wrapping_sub(1);
-                for lhs in [0x0000, 0xFFFF, 0xABCD, 0x8181] {
+                for lhs in [0x00000000, 0xFFFFFFFF, 0xABCDEF01, 0x81818181] {
                     let lhs = lhs & lhs_mask;
-                    for rhs in [0x0000, 0xFFFF, 0xABCD, 0x8181] {
-                        let rhs = rhs & rhs_mask;
-                        load_from_u64(&mut stack, 0, lhs_size, lhs);
-                        load_from_u64(&mut stack, 8, rhs_size, rhs);
+                    for rhs in [0x00000000, 0xFFFFFFFF, 0xABCDEF01, 0x81818181] {
+                        let lhs_offset = 0;
+                        let rhs_offset = lhs_size.get().div_ceil(8) as usize;
+                        let dst_offset =
+                            (lhs_size.get().div_ceil(8) + rhs_size.get().div_ceil(8)) as usize;
 
-                        concat(&mut stack, 16, 0, 8, lhs_size, rhs_size);
+                        let rhs = rhs & rhs_mask;
+                        load_from_u64(&mut stack, lhs_offset, lhs_size, lhs);
+                        load_from_u64(&mut stack, rhs_offset, rhs_size, rhs);
+
+                        concat(
+                            &mut stack, dst_offset, lhs_offset, rhs_offset, lhs_size, rhs_size,
+                        );
 
                         let expected = (lhs << rhs_size.get()) | rhs;
                         let result = store_to_u64(
                             &stack,
-                            16,
+                            dst_offset,
                             VectorSize::new(lhs_size.get() + rhs_size.get()).unwrap(),
                         );
 
                         if result != expected {
-                            eprintln!("lhs    = {lhs:04X} ({lhs_size})");
-                            eprintln!("rhs    = {rhs:04X} ({rhs_size})");
-                            eprintln!("result = {result:04X}");
+                            eprintln!("lhs    = {lhs:08X} ({lhs_size})");
+                            eprintln!("rhs    = {rhs:08X} ({rhs_size})");
+                            eprintln!("result = {result:08X}");
                             assert_eq!(result, expected);
                         }
                     }
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_concat_known_failures() {
+        let mut stack = [0u8; 4 * 3];
+        let lhs_size = VectorSize::new(30).unwrap();
+        let rhs_size = VectorSize::new(2).unwrap();
+        let result_size = VectorSize::new(32).unwrap();
+        load_from_u64(&mut stack, 0, lhs_size, 1);
+        load_from_u64(&mut stack, 4, rhs_size, 0);
+
+        concat(&mut stack, 8, 0, 4, lhs_size, rhs_size);
+        let result = store_to_u64(&stack, 8, result_size);
+        eprintln!("result = 0x{result:08X}");
+
+        assert_eq!(result, 0x4);
+
+        let mut stack = [0xFF, 0xFF, 0xFF, 0x0F, 0x00, 0x00, 0x00, 0x00];
+        let lhs_size = VectorSize::new(16).unwrap();
+        let rhs_size = VectorSize::new(12).unwrap();
+        let result_size = VectorSize::new(28).unwrap();
+
+        concat(&mut stack, 4, 0, 2, lhs_size, rhs_size);
+        let result = store_to_u64(&stack, 4, result_size);
+        eprintln!("result = 0x{result:08X}");
+
+        assert_eq!(result, 0xFFFF_FFF);
+
+        let mut stack = [0xFF, 0xFF, 0xFF, 0x1F, 0x00, 0x00, 0x00, 0x00];
+        let lhs_size = VectorSize::new(16).unwrap();
+        let rhs_size = VectorSize::new(13).unwrap();
+        let result_size = VectorSize::new(28).unwrap();
+
+        concat(&mut stack, 4, 0, 2, lhs_size, rhs_size);
+        let result = store_to_u64(&stack, 4, result_size);
+        eprintln!("result = 0x{result:08X}");
+
+        assert_eq!(result, 0x1FFFF_FFF);
+
+        let mut stack = [0xFF, 0x01, 0x00, 0x00, 0x00];
+        let lhs_size = VectorSize::new(9).unwrap();
+        let rhs_size = VectorSize::new(1).unwrap();
+        let result_size = VectorSize::new(10).unwrap();
+
+        concat(&mut stack, 3, 0, 2, lhs_size, rhs_size);
+        let result = store_to_u64(&stack, 3, result_size);
+        eprintln!("result = 0x{result:08X}");
+
+        assert_eq!(result, 0x3FE);
     }
 }

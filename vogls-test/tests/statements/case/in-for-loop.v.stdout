@@ -1,10 +1,10 @@
-[DISPLAY]: time = 0: 32'd13
-[DISPLAY]: time = 0: 32'd37
-[DISPLAY]: time = 0: 32'd420
-[DISPLAY]: time = 0: 32'd360
-[DISPLAY]: time = 0: 32'd42
-[DISPLAY]: time = 0: 32'd15
-[DISPLAY]: time = 0: 32'd9
-[DISPLAY]: time = 0: 32'd2000
-[DISPLAY]: time = 0: 32'd1996
-[DISPLAY]: time = 0: 32'd1996
+32'hD
+32'h25
+32'h1A4
+32'h168
+32'h2A
+32'hF
+32'h9
+32'h7D0
+32'h7CC
+32'h7CC

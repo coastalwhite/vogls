@@ -42,13 +42,7 @@ pub fn lower_expr<'a>(
 
     dispatch_stack.push(StackItem::new(expr));
 
-    dbg!("start");
     'dispatch_loop: while let Some(mut item) = dispatch_stack.pop() {
-        dbg!(result_stack.len());
-        dbg!(dispatch_stack.len());
-        let mut s = String::new();
-        arenas.get(item.expr).tree_fmt(arenas, &mut s).unwrap();
-        eprintln!("{s}");
         match arenas.get(item.expr) {
             Expr::Unary(op, child) => {
                 if !item.dispatched {
@@ -244,7 +238,6 @@ pub fn lower_expr<'a>(
                     width += next_width.get();
                 }
 
-                dbg!("replication 6");
                 let Some(output_width) = width.checked_mul(repeat_n as u32) else {
                     diagnostics
                         .not_yet_implemented(arenas.get_span(item.expr), "replication overflow");
@@ -257,7 +250,6 @@ pub fn lower_expr<'a>(
                 for _ in 1..repeat_n {
                     output = builder.concat(gl, output_single, output);
                 }
-                dbg!("replication final");
                 result_stack.push(Some((
                     output,
                     VType::UnsignedNet(VectorSize::new(output_width).unwrap()),

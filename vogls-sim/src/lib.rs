@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap};
 
 use slotmap::{SlotMap, new_key_type};
@@ -12,8 +13,15 @@ pub use instruction::*;
 new_key_type! { pub struct ListenerKey; }
 new_key_type! { pub struct VmProcessKey; }
 
+#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+pub enum DispatchKey {
+    Signal(VmSignalKey),
+    Process(VmProcessKey),
+}
+
 pub struct Regions {
     pub active: Vec<Event>,
+    pub other_dispatched: Vec<HashMap<DispatchKey, usize>>,
     pub other: Vec<Vec<Event>>,
 }
 
@@ -21,6 +29,7 @@ impl Regions {
     pub fn new(num_additional_regions: usize) -> Self {
         Self {
             active: Vec::new(),
+            other_dispatched: vec![HashMap::new(); num_additional_regions],
             other: vec![Vec::new(); num_additional_regions],
         }
     }
@@ -423,16 +432,57 @@ impl Event {
 
                     match op {
                         O::Display => {
-                            assert_eq!(args.len(), 1);
-                            let msg = match args.first().unwrap() {
-                                VmIntrinsicArg::StringLiteral(s) => s.clone(),
-                                VmIntrinsicArg::Variable(_, n) if n.get() >= 64 => todo!(),
-                                VmIntrinsicArg::Variable(s, n) => {
-                                    format!("{n}'d{}", bits::store_to_u64(bit_stack, s.offset, *n))
+                            match args.first().unwrap() {
+                                VmIntrinsicArg::StringLiteral(f) => {
+                                    let mut args = args.iter().skip(1);
+                                    let mut at = 0;
+                                    while let Some(arg) = f[at..].find('%') {
+                                        ctx.stdout.write_all(f[at..][..arg].as_bytes()).unwrap();
+                                        match args.next().unwrap() {
+                                            VmIntrinsicArg::StringLiteral(s) => {
+                                                ctx.stdout.write_all(s.as_bytes()).unwrap()
+                                            }
+                                            VmIntrinsicArg::Variable(s, n) => write!(
+                                                &mut ctx.stdout,
+                                                "{}",
+                                                Bits::load_from_slice(
+                                                    &bit_stack[s.offset..]
+                                                        [..n.get().div_ceil(8) as usize],
+                                                    *n
+                                                )
+                                            )
+                                            .unwrap(),
+                                        }
+                                        at += arg + 2;
+                                    }
+                                    ctx.stdout.write_all(f[at..].as_bytes()).unwrap();
+                                }
+                                _ => {
+                                    let mut first = true;
+                                    for arg in args {
+                                        if !first {
+                                            write!(ctx.stdout, ", ").unwrap();
+                                        }
+                                        first = false;
+                                        match arg {
+                                            VmIntrinsicArg::StringLiteral(s) => {
+                                                ctx.stdout.write_all(s.as_bytes()).unwrap()
+                                            }
+                                            VmIntrinsicArg::Variable(s, n) => write!(
+                                                &mut ctx.stdout,
+                                                "{}",
+                                                Bits::load_from_slice(
+                                                    &bit_stack[s.offset..]
+                                                        [..n.get().div_ceil(8) as usize],
+                                                    *n
+                                                )
+                                            )
+                                            .unwrap(),
+                                        }
+                                    }
                                 }
                             };
-                            writeln!(&mut ctx.stdout, "[DISPLAY]: time = {}: {msg}", ctx.time)
-                                .unwrap();
+                            writeln!(ctx.stdout).unwrap();
                         }
                         O::Assert => {
                             let value = match args.first() {
@@ -510,9 +560,18 @@ impl Event {
                         )
                     });
                     if *region != 0 {
+                        let region = (*region - 1) as usize;
                         let value = Bits::load_from_slice(&bit_stack[var.offset..], size);
-                        regions.other[(region - 1) as usize]
-                            .push(Event::Drive(*sig, value, partial));
+                        let event = Event::Drive(*sig, value, partial);
+                        match regions.other_dispatched[region].entry(DispatchKey::Signal(*sig)) {
+                            Entry::Occupied(entry) => regions.other[region][*entry.get()] = event,
+                            Entry::Vacant(entry) => {
+                                let i = regions.other[region].len();
+                                regions.other[region].push(event);
+                                entry.insert(i);
+                            }
+                        }
+
                         continue;
                     }
 
@@ -617,8 +676,9 @@ pub fn run(
             }
         }
 
-        for region in &mut regions.other {
+        for (i, region) in regions.other.iter_mut().enumerate() {
             if !region.is_empty() {
+                regions.other_dispatched[i].clear();
                 std::mem::swap(&mut regions.active, region);
                 continue 'region_loop;
             }

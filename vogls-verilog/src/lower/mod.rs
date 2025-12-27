@@ -19,16 +19,14 @@ pub enum Region {
     Monitor = 3,
 }
 
-use core::fmt;
 use std::collections::{HashMap, HashSet};
 
 use scope::Scope;
 
 use constant_expr::eval_constant_expr;
 use vogls_ir::{
-    BasicBlockBuilder, ConnectionDirection, ContextFormat, DisplayContext, GlobalContext,
-    IntrinsicArg, IntrinsicOp, Process, ProcessKey, SCALAR_VSIZE, Signal, SignalKey, VariableKey,
-    VectorSize, new_process,
+    BasicBlockBuilder, ConnectionDirection, GlobalContext, IntrinsicArg, IntrinsicOp, ProcessKey,
+    SCALAR_VSIZE, Signal, SignalKey, VariableKey, VectorSize, new_process,
 };
 
 use crate::ast::constant_expr::{
@@ -543,28 +541,21 @@ fn statements_to_process<'a>(
                 match ident {
                     "display" => {
                         let expressions = system_task_enable.expressions;
-                        if expressions.len() != 1 {
-                            diagnostics.warnings.push((
-                                arenas.get_span(id),
-                                "display with multiple arguments or format strings".to_string(),
-                            ));
-                        }
 
+                        let mut args = Vec::with_capacity(expressions.len());
                         for expr in expressions {
-                            let arg = if let Some(str_literal) = arenas.get(expr).into_str_literal()
-                            {
+                            if let Some(str_literal) = arenas.get(expr).into_str_literal() {
                                 let str_literal =
                                     &arenas.text[str_literal.0.start..str_literal.0.end];
-                                IntrinsicArg::StringLiteral(str_literal.to_string())
+                                args.push(IntrinsicArg::StringLiteral(str_literal.to_string()));
                             } else {
                                 let var =
                                     lower_expr(gl, arenas, scope, diagnostics, &mut builder, expr)?
                                         .0;
-                                IntrinsicArg::Variable(var)
-                            };
-
-                            builder.intrinsic(gl, IntrinsicOp::Display, vec![arg]);
+                                args.push(IntrinsicArg::Variable(var));
+                            }
                         }
+                        builder.intrinsic(gl, IntrinsicOp::Display, args);
                     }
                     "vogls_assert_eq" | "vogls_assert_ne" => {
                         let expressions = system_task_enable.expressions;
