@@ -22,7 +22,7 @@ struct Args {
     #[arg(long = "emit-vm")]
     emit_vm: bool,
 
-    #[arg(short, long)]
+    #[arg(short, long, default_value_t = u64::MAX)]
     time: u64,
 }
 

@@ -276,39 +276,41 @@ pub fn lower_expr<'a>(
                 let condition_bb = builder.key();
 
                 *builder = builder.next_terminate_later(gl);
+                let truthy_start_bb = builder.key();
                 let Ok((t, t_ty)) = lower_expr(gl, arenas, scope, diagnostics, builder, *truthy)
                 else {
                     result_stack.push(None);
                     error = true;
                     continue;
                 };
-                let truthy_bb = builder.key();
+                let truthy_end_bb = builder.key();
 
                 *builder = builder.next_terminate_later(gl);
+                let falsy_start_bb = builder.key();
                 let Ok((f, f_ty)) = lower_expr(gl, arenas, scope, diagnostics, builder, *falsy)
                 else {
                     result_stack.push(None);
                     error = true;
                     continue;
                 };
-                let falsy_bb = builder.key();
+                let falsy_end_bb = builder.key();
 
                 let ty = coerce_to_max_size_ty(t_ty, f_ty);
                 let ty_size = ty.force_net_width();
 
-                *builder = builder.continue_with(gl, truthy_bb);
+                *builder = builder.continue_with(gl, truthy_end_bb);
                 let t = sign_or_zero_extend(gl, builder, t, t_ty, ty_size);
 
-                *builder = builder.continue_with(gl, falsy_bb);
+                *builder = builder.continue_with(gl, falsy_end_bb);
                 let f = sign_or_zero_extend(gl, builder, f, f_ty, ty_size);
 
                 *builder = builder.next_terminate_later(gl);
-                let (outcome, _) = builder.phi(gl, [(truthy_bb, t), (falsy_bb, f)].into());
+                let (outcome, _) = builder.phi(gl, [(truthy_end_bb, t), (falsy_end_bb, f)].into());
 
                 gl.bbs[condition_bb].terminator =
-                    BasicBlockTerminator::Branch(c, truthy_bb, falsy_bb);
-                gl.bbs[truthy_bb].terminator = BasicBlockTerminator::Jump(builder.key());
-                gl.bbs[falsy_bb].terminator = BasicBlockTerminator::Jump(builder.key());
+                    BasicBlockTerminator::Branch(c, truthy_start_bb, falsy_start_bb);
+                gl.bbs[truthy_end_bb].terminator = BasicBlockTerminator::Jump(builder.key());
+                gl.bbs[falsy_end_bb].terminator = BasicBlockTerminator::Jump(builder.key());
 
                 result_stack.push(Some((outcome, ty)));
             }
