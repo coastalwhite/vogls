@@ -329,22 +329,36 @@ pub fn run(
     }
 
     let mut scratch_stack = Vec::new();
-    let mut scratch_map = HashMap::new();
+    let mut scratch_mfr = Vec::new();
+    let mut scratch_bb_to_bb_map = HashMap::new();
+    let mut scratch_bb_to_u32_map = HashMap::new();
+    let mut scratch_bb_to_bits_map = HashMap::new();
     let mut scratch_seen = HashSet::new();
     for process in gl.processes.values_mut() {
-        process.entry = vogls_ir::optimize::remove_needless_jumps(
-            &mut gl.bbs,
-            process.entry,
-            &mut scratch_stack,
-            &mut scratch_map,
-            &mut scratch_seen,
-        );
-        vogls_ir::optimize::remove_needles_branches(
-            &mut gl.bbs,
-            process.entry,
-            &mut scratch_stack,
-            &mut scratch_seen,
-        );
+        for _ in 0..3 {
+            process.entry = vogls_ir::optimize::remove_needless_jumps(
+                &mut gl.bbs,
+                process.entry,
+                &mut scratch_stack,
+                &mut scratch_bb_to_bb_map,
+                &mut scratch_bb_to_u32_map,
+                &mut scratch_seen,
+            );
+            vogls_ir::optimize::remove_needles_branches(
+                &mut gl.bbs,
+                process.entry,
+                &mut scratch_stack,
+                &mut scratch_seen,
+            );
+            vogls_ir::optimize::propagate_constants(
+                &mut gl.bbs,
+                process.entry,
+                &mut scratch_stack,
+                &mut scratch_mfr,
+                &mut scratch_seen,
+                &mut scratch_bb_to_bits_map,
+            );
+        }
     }
 
     if ectx.emit_ir && !ectx.emit_vm {

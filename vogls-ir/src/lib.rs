@@ -28,6 +28,12 @@ pub enum Bits {
     Big(VectorSize, Box<[u8]>),
 }
 
+impl From<bool> for Bits {
+    fn from(value: bool) -> Self {
+        Self::Small(u64::from(value), SCALAR_VSIZE)
+    }
+}
+
 impl Bits {
     pub fn as_slice(&self) -> &[u8] {
         const { assert!(cfg!(target_endian = "little")) }
@@ -110,9 +116,9 @@ impl Bits {
         }
     }
 
-    pub fn sign_extend(self, new_size: VectorSize) -> Bits {
+    pub fn sign_extend(&self, new_size: VectorSize) -> Bits {
         if self.size() == new_size {
-            return self;
+            return self.clone();
         }
 
         assert!(self.size() < new_size);
@@ -140,14 +146,14 @@ impl Bits {
         }
     }
 
-    pub fn zero_extend(self, new_size: VectorSize) -> Bits {
+    pub fn zero_extend(&self, new_size: VectorSize) -> Bits {
         if self.size() == new_size {
-            return self;
+            return self.clone();
         }
 
         assert!(self.size() < new_size);
         match self {
-            Bits::Small(v, _) if new_size.get() <= 64 => Bits::Small(v, new_size),
+            Bits::Small(v, _) if new_size.get() <= 64 => Bits::Small(*v, new_size),
             _ => {
                 let old_size = self.size();
                 let mut bytes = std::iter::repeat_n(0, new_size.get().div_ceil(8) as usize)
@@ -169,6 +175,13 @@ impl Bits {
                 std::iter::repeat_n(0, size.get().div_ceil(8) as usize).collect::<Box<[u8]>>();
             bytes[..8].copy_from_slice(&bytemuck::bytes_of(&value));
             Bits::Big(size, bytes)
+        }
+    }
+
+    pub fn count_ones(&self) -> u32 {
+        match self {
+            Bits::Small(v, _) => v.count_ones(),
+            Bits::Big(_, v) => v.iter().map(|b| b.count_ones()).sum(),
         }
     }
 
@@ -311,6 +324,19 @@ impl BasicBlockTerminator {
                 if bb_seen.insert(*true_bb) {
                     bb_stack.push(*true_bb);
                 }
+            }
+            Self::Halt => {}
+        }
+    }
+
+    fn for_each_bb(&mut self, mut f: impl FnMut(BasicBlockKey)) {
+        match self {
+            Self::Wait(bb, _) | Self::WaitRegion(bb, _) | Self::Watch(bb, _) | Self::Jump(bb) => {
+                f(*bb);
+            }
+            Self::Branch(_, true_bb, false_bb) => {
+                f(*true_bb);
+                f(*false_bb);
             }
             Self::Halt => {}
         }
