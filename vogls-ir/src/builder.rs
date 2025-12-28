@@ -799,9 +799,10 @@ impl BasicBlockBuilder {
         }
     }
 
-    pub fn intrinsic(&mut self, gl: &mut GlobalContext, op: IntrinsicOp, args: Vec<IntrinsicArg>) {
+    pub fn intrinsic(&mut self, gl: &mut GlobalContext, op: IntrinsicOp, args: Vec<IntrinsicArg>) -> VariableKey {
         let dst = self.next_tmp_var(gl, SCALAR_VSIZE);
         self.instrs.push(Instruction::Intrinsic(dst, op, args));
+        dst
     }
 
     pub fn time(&mut self, gl: &mut GlobalContext) -> VariableKey {

@@ -582,9 +582,9 @@ fn statements_to_process<'a>(
                             gl,
                             IntrinsicOp::AssertEq(ident == "vogls_assert_eq"),
                             vec![IntrinsicArg::Variable(lhs), IntrinsicArg::Variable(rhs)],
-                        )
+                        );
                     }
-                    "finish" => builder.intrinsic(gl, IntrinsicOp::Finish, vec![]),
+                    "finish" => _ = builder.intrinsic(gl, IntrinsicOp::Finish, vec![]),
 
                     // @Incomplete: Many variants here.
                     _ => {

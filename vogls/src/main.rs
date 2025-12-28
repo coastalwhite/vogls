@@ -17,6 +17,8 @@ struct Args {
 
     #[arg(long = "trace")]
     trace: bool,
+    #[arg(long = "emit-unoptimized-ir")]
+    emit_unoptimized_ir: bool,
     #[arg(long = "emit-ir")]
     emit_ir: bool,
     #[arg(long = "emit-vm")]
@@ -36,6 +38,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &mut ExecutionContext {
             stdout: Box::new(std::io::stdout()),
             stderr: Box::new(std::io::stderr()),
+            emit_unoptimized_ir: args.emit_unoptimized_ir,
             emit_ir: args.emit_ir,
             emit_vm: args.emit_vm,
             trace: args.trace.then_some(TracingLevel::Events).unwrap_or(TracingLevel::None),

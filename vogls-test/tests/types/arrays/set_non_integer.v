@@ -1,4 +1,4 @@
-module x()
+module x();
     wire [31:0] regs [0:32];
     initial begin
         regs[1] = 32'h3FC;

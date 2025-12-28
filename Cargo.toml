@@ -22,3 +22,7 @@ vogls.path = "vogls"
 vogls-sim.path = "vogls-sim"
 vogls-ir.path = "vogls-ir"
 vogls-verilog.path = "vogls-verilog"
+
+[profile.debug-release]
+inherits = "release"
+debug = true

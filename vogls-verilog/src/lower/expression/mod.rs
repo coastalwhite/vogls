@@ -1,5 +1,6 @@
 use vogls_ir::{
-    BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, IntrinsicArg, IntrinsicOp, VariableKey, VectorSize, INTEGER_VSIZE, TIME_VSIZE
+    BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, INTEGER_VSIZE, VariableKey,
+    VectorSize,
 };
 
 use crate::ast::AstId;
@@ -12,6 +13,8 @@ use crate::parser::AstArenas;
 
 use super::Diagnostics;
 use super::scope::Scope;
+
+mod system_function_call;
 
 #[deny(clippy::question_mark_used)] // Needs to be handled explicitly in the recursion.
 pub fn lower_expr<'a>(
@@ -502,60 +505,23 @@ pub fn lower_expr<'a>(
                     continue;
                 }
 
-                macro_rules! ensure_num_args_equal {
-                    ($expected:literal) => {
-                        let num_args = exprs.unwrap_or_default().len();
-                        if num_args != $expected {
-                            diagnostics.not_yet_implemented(
-                                arenas.get_span(expr),
-                                "intrinsic not expected amount",
-                            );
-                            result_stack.push(None);
-                            error = true;
-                            continue;
-                        }
-                    };
-                }
+                let num_args = exprs.map_or(0, |e| e.len());
+                let result = system_function_call::lower_system_function_call(
+                    gl,
+                    arenas,
+                    diagnostics,
+                    builder,
+                    expr,
+                    *ident,
+                    &result_stack[result_stack.len() - num_args..],
+                );
 
-                match arenas.get_ident(ident.item.0) {
-                    "vogls_dbg" => {
-                        ensure_num_args_equal!(1);
-                        let Some((e, _)) = result_stack.last().unwrap() else {
-                            result_stack.push(None);
-                            continue;
-                        };
-                        builder.intrinsic(
-                            gl,
-                            IntrinsicOp::Display,
-                            vec![IntrinsicArg::Variable(*e)],
-                        );
-                    }
-                    "signed" => {
-                        ensure_num_args_equal!(1);
-                        let Some((_, e_ty)) = result_stack.last_mut().unwrap() else {
-                            result_stack.push(None);
-                            continue;
-                        };
-                        *e_ty = e_ty.to_signed();
-                    }
-                    "unsigned" => {
-                        ensure_num_args_equal!(1);
-                        let Some((_, e_ty)) = result_stack.last_mut().unwrap() else {
-                            result_stack.push(None);
-                            continue;
-                        };
-                        *e_ty = e_ty.to_unsigned();
-                    }
-                    "time" => {
-                        ensure_num_args_equal!(0);
-                        let time = builder.time(gl);
-                        result_stack.push(Some((time, VType::UnsignedNet(TIME_VSIZE))));
-                    }
-                    _ => {
-                        diagnostics.not_yet_implemented(arenas.get_span(expr), "function calls");
+                result_stack.truncate(result_stack.len() - num_args);
+                match result {
+                    Ok((v, t)) => result_stack.push(Some((v, t))),
+                    Err(_) => {
                         result_stack.push(None);
                         error = true;
-                        continue;
                     }
                 }
             }

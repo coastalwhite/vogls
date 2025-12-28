@@ -26,6 +26,7 @@ use vogls_verilog::tokenizer::Tokenized;
 pub struct ExecutionContext {
     pub stdout: Box<dyn std::io::Write>,
     pub stderr: Box<dyn std::io::Write>,
+    pub emit_unoptimized_ir: bool,
     pub emit_ir: bool,
     pub emit_vm: bool,
     pub trace: TracingLevel,
@@ -319,6 +320,31 @@ pub fn run(
             writeln!(ectx.stderr)?;
         }
         return Err("failed to lower".into());
+    }
+
+    if ectx.emit_unoptimized_ir {
+        for process in gl.processes.values() {
+            writeln!(ectx.stdout, "{}", process.display(&gl))?;
+        }
+    }
+
+    let mut scratch_stack = Vec::new();
+    let mut scratch_map = HashMap::new();
+    let mut scratch_seen = HashSet::new();
+    for process in gl.processes.values_mut() {
+        process.entry = vogls_ir::optimize::remove_needless_jumps(
+            &mut gl.bbs,
+            process.entry,
+            &mut scratch_stack,
+            &mut scratch_map,
+            &mut scratch_seen,
+        );
+        vogls_ir::optimize::remove_needles_branches(
+            &mut gl.bbs,
+            process.entry,
+            &mut scratch_stack,
+            &mut scratch_seen,
+        );
     }
 
     if ectx.emit_ir && !ectx.emit_vm {

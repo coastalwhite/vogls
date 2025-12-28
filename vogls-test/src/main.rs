@@ -125,6 +125,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         let mut ctx = ExecutionContext {
             stdout: Box::new(stdout.clone()) as Box<dyn std::io::Write>,
             stderr: Box::new(stderr.clone()) as Box<dyn std::io::Write>,
+            emit_unoptimized_ir: false,
             emit_ir: false,
             emit_vm: false,
             trace: vogls_sim::TracingLevel::None,

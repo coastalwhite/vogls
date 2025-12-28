@@ -1,7 +1,8 @@
 mod builder;
 mod format;
+pub mod optimize;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Write};
 use std::num::NonZeroU32;
 
@@ -255,6 +256,37 @@ pub struct BasicBlock {
     pub name: String,
     pub instrs: Vec<Instruction>,
     pub terminator: BasicBlockTerminator,
+}
+impl BasicBlock {
+    fn map_bbs(&mut self, map: &HashMap<BasicBlockKey, BasicBlockKey>) {
+        for i in self.instrs.iter_mut() {
+            match i {
+                Instruction::Constant(..)
+                | Instruction::Unary(..)
+                | Instruction::Binary(..)
+                | Instruction::Intrinsic(..)
+                | Instruction::Probe(..)
+                | Instruction::Drive(..) => {}
+                Instruction::Phi(_, items) => items.iter_mut().for_each(|(bb, _)| {
+                    *bb = map.get(bb).copied().unwrap_or(*bb);
+                }),
+            }
+        }
+
+        match &mut self.terminator {
+            BasicBlockTerminator::Wait(bb, _)
+            | BasicBlockTerminator::WaitRegion(bb, _)
+            | BasicBlockTerminator::Watch(bb, _)
+            | BasicBlockTerminator::Jump(bb) => {
+                *bb = map.get(bb).copied().unwrap_or(*bb);
+            }
+            BasicBlockTerminator::Branch(_, bb1, bb2) => {
+                *bb1 = map.get(bb1).copied().unwrap_or(*bb1);
+                *bb2 = map.get(bb2).copied().unwrap_or(*bb2);
+            }
+            BasicBlockTerminator::Halt => {}
+        }
+    }
 }
 
 impl BasicBlockTerminator {
