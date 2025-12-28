@@ -1,20 +1,10 @@
 use std::fmt::{self, Write};
 
-use super::{StackRef, VmInstruction, VmIntrinsicArg, VmProcess, VmSignalKey};
+use super::{StackRef, VmInstruction, VmProcess, VmSignalKey};
 
 impl fmt::Display for StackRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "t{}", self.offset)
-    }
-}
-
-impl fmt::Display for VmIntrinsicArg {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            // @TODO: Quote escaping
-            VmIntrinsicArg::StringLiteral(s) => write!(f, "\"{s}\""),
-            VmIntrinsicArg::Variable(stack_ref, _size) => stack_ref.fmt(f),
-        }
     }
 }
 
@@ -31,9 +21,9 @@ impl fmt::Display for VmInstruction {
             }
             Self::Intrinsic(dst, op, args) => {
                 write!(f, "{dst} = {}", op.into_mnemonic())?;
-                if let Some(arg) = args.first() {
+                if let Some((arg, _)) = args.first() {
                     write!(f, " {arg}")?;
-                    for arg in &args[1..] {
+                    for (arg, _) in &args[1..] {
                         write!(f, ", {arg}")?;
                     }
                 }

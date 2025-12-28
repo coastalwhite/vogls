@@ -1,11 +1,11 @@
 use std::collections::{HashMap, HashSet};
 
 use vogls_ir::{
-    BasicBlockKey, BasicBlockTerminator, GlobalContext, Instruction, IntrinsicArg, ProcessKey,
-    SignalKey, VariableKey,
+    BasicBlockKey, BasicBlockTerminator, GlobalContext, Instruction, ProcessKey, SignalKey,
+    VariableKey,
 };
 
-use crate::instruction::{StackRef, VmInstruction, VmIntrinsicArg, VmProcess};
+use crate::instruction::{StackRef, VmInstruction, VmProcess};
 
 use super::VmSignalKey;
 
@@ -86,17 +86,8 @@ pub fn lower_process_to_vm(
                 I::Binary(d, op, s1, s2) => VI::Binary(var(*d), *op, var(*s1), var(*s2)),
 
                 I::Intrinsic(dst, op, args) => {
-                    use IntrinsicArg as IA;
-                    use VmIntrinsicArg as VIA;
-                    let args = args
-                        .iter()
-                        .map(|arg| match arg {
-                            IA::StringLiteral(s) => VIA::StringLiteral(s.clone()),
-                            IA::Variable(v) => VIA::Variable(var(*v), gl.vars[*v].size),
-                        })
-                        .collect();
-
-                    VI::Intrinsic(var(*dst), *op, args)
+                    let args = args.iter().map(|v| (var(*v), gl.vars[*v].size)).collect();
+                    VI::Intrinsic(var(*dst), op.clone(), args)
                 }
                 I::Probe(dst, signal) => VI::Probe(var(*dst), signal!(*signal)),
                 I::Drive(signal, src, region, partial) => VI::Drive(

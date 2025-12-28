@@ -457,110 +457,31 @@ impl Event {
                 I::Intrinsic(dst, op, args) => {
                     use IntrinsicOp as O;
 
-                    match op {
-                        O::Display => {
-                            match args.first().unwrap() {
-                                VmIntrinsicArg::StringLiteral(f) => {
-                                    let mut args = args.iter().skip(1);
-                                    let mut at = 0;
-                                    while let Some(arg) = f[at..].find('%') {
-                                        ctx.stdout.write_all(f[at..][..arg].as_bytes()).unwrap();
-                                        match args.next().unwrap() {
-                                            VmIntrinsicArg::StringLiteral(s) => {
-                                                ctx.stdout.write_all(s.as_bytes()).unwrap()
-                                            }
-                                            VmIntrinsicArg::Variable(s, n) => write!(
-                                                &mut ctx.stdout,
-                                                "{}",
-                                                Bits::load_from_slice(
-                                                    &bit_stack[s.offset..]
-                                                        [..n.get().div_ceil(8) as usize],
-                                                    *n
-                                                )
-                                            )
-                                            .unwrap(),
-                                        }
-                                        at += arg + 2;
-                                    }
-                                    ctx.stdout.write_all(f[at..].as_bytes()).unwrap();
-                                }
-                                _ => {
-                                    let mut first = true;
-                                    for arg in args {
-                                        if !first {
-                                            write!(ctx.stdout, ", ").unwrap();
-                                        }
-                                        first = false;
-                                        match arg {
-                                            VmIntrinsicArg::StringLiteral(s) => {
-                                                ctx.stdout.write_all(s.as_bytes()).unwrap()
-                                            }
-                                            VmIntrinsicArg::Variable(s, n) => write!(
-                                                &mut ctx.stdout,
-                                                "{}",
-                                                Bits::load_from_slice(
-                                                    &bit_stack[s.offset..]
-                                                        [..n.get().div_ceil(8) as usize],
-                                                    *n
-                                                )
-                                            )
-                                            .unwrap(),
-                                        }
-                                    }
-                                }
-                            };
-                            writeln!(ctx.stdout).unwrap();
-                        }
-                        O::Assert => {
-                            let value = match args.first() {
-                                Some(VmIntrinsicArg::Variable(condition, size)) => {
-                                    bit_stack[condition.offset..][..size.get().div_ceil(8) as usize]
-                                        .iter()
-                                        .any(|b| *b != 0)
-                                }
-                                _ => {
-                                    panic!("Invalid assert argument");
-                                }
-                            };
-                            if !value {
-                                writeln!(&mut ctx.stderr, "Assert failed.").unwrap();
-                                return EvalOutcome::Error;
-                            }
-                        }
-                        O::AssertEq(eq) => {
-                            use VmIntrinsicArg as A;
-                            match (&args[0], &args[1]) {
-                                (A::Variable(l, ls), A::Variable(r, rs)) => {
-                                    if ls != rs {
-                                        writeln!(
-                                            &mut ctx.stderr,
-                                            "assert_eq failed. sizes different {ls} != {rs}"
-                                        )
-                                        .unwrap();
-                                        return EvalOutcome::Error;
-                                    }
-                                    let lhs =
-                                        &bit_stack[l.offset..][..ls.get().div_ceil(8) as usize];
-                                    let rhs =
-                                        &bit_stack[r.offset..][..rs.get().div_ceil(8) as usize];
-                                    if *eq != (lhs == rhs) {
-                                        writeln!(
-                                            &mut ctx.stderr,
-                                            "assert_{{eq, ne}} failed. {lhs:?} != {rhs:?}"
-                                        )
-                                        .unwrap();
-                                        return EvalOutcome::Error;
-                                    }
-                                }
-                                _ => {
-                                    writeln!(
-                                        &mut ctx.stderr,
-                                        "assert_eq({eq}) failed. {:?} != {:?}",
-                                        args[0], args[1]
+                    match op.as_ref() {
+                        O::Display(f) => {
+                            f.write_to(
+                                &mut ctx.stdout,
+                                args.iter().map(|(o, s)| {
+                                    Bits::load_from_slice(
+                                        &bit_stack[o.offset..][..s.get().div_ceil(8) as usize],
+                                        *s,
                                     )
-                                    .unwrap();
-                                    return EvalOutcome::Error;
-                                }
+                                }),
+                            ).unwrap();
+                        }
+                        O::Assert(f) => {
+                            let condition = bit_stack[args[0].0.offset] != 0;
+                            if !condition {
+                                f.write_to(
+                                    &mut ctx.stdout,
+                                    args[1..].iter().map(|(o, s)| {
+                                        Bits::load_from_slice(
+                                            &bit_stack[o.offset..][..s.get().div_ceil(8) as usize],
+                                            *s,
+                                        )
+                                    }),
+                                ).unwrap();
+                                return EvalOutcome::Error;
                             }
                         }
                         O::Time => {

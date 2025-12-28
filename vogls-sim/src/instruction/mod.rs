@@ -14,12 +14,6 @@ pub struct StackRef {
 }
 
 #[derive(Debug)]
-pub enum VmIntrinsicArg {
-    StringLiteral(String),
-    Variable(StackRef, VectorSize),
-}
-
-#[derive(Debug)]
 pub enum VmInstruction {
     Constant(StackRef, Bits),
 
@@ -28,7 +22,7 @@ pub enum VmInstruction {
 
     Move(StackRef, StackRef, VectorSize),
 
-    Intrinsic(StackRef, IntrinsicOp, Vec<VmIntrinsicArg>),
+    Intrinsic(StackRef, Box<IntrinsicOp>, Box<[(StackRef, VectorSize)]>),
 
     Probe(StackRef, VmSignalKey),
     Drive(VmSignalKey, StackRef, u8, Option<(StackRef, VectorSize)>),

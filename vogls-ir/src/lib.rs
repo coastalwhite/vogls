@@ -1,4 +1,5 @@
 mod builder;
+pub mod dyn_format_string;
 mod format;
 pub mod optimize;
 
@@ -10,6 +11,8 @@ pub use builder::{BasicBlockBuilder, BranchRef, PhiRef, new_process};
 pub use format::{ContextFormat, DisplayContext};
 use indexmap::IndexSet;
 use slotmap::{SlotMap, new_key_type};
+
+use self::dyn_format_string::DynFormatString;
 
 new_key_type! { pub struct ProcessKey; }
 new_key_type! { pub struct BasicBlockKey; }
@@ -331,18 +334,11 @@ pub const TIME_VSIZE: VectorSize = NonZeroU32::new(64).unwrap();
 pub const SCALAR_VSIZE: VectorSize = NonZeroU32::new(1).unwrap();
 
 #[derive(Debug, Clone)]
-pub enum IntrinsicArg {
-    StringLiteral(String),
-    Variable(VariableKey),
-}
-
-#[derive(Debug, Clone, Copy)]
 pub enum IntrinsicOp {
     Time,
-    Display,
     Finish,
-    Assert,
-    AssertEq(bool),
+    Display(Box<DynFormatString>),
+    Assert(Box<DynFormatString>),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -382,7 +378,7 @@ pub enum Instruction {
     Unary(VariableKey, UnaryOp, VariableKey),
     Binary(VariableKey, BinaryOp, VariableKey, VariableKey),
 
-    Intrinsic(VariableKey, IntrinsicOp, Vec<IntrinsicArg>),
+    Intrinsic(VariableKey, Box<IntrinsicOp>, Box<[VariableKey]>),
     Probe(VariableKey, SignalKey),
     Drive(
         SignalKey,

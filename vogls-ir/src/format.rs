@@ -3,7 +3,7 @@ use std::collections::HashSet;
 
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryOp, GlobalContext, Instruction,
-    IntrinsicArg, IntrinsicOp, Process, Signal, Time, UnaryOp, Variable,
+    IntrinsicOp, Process, Signal, Time, UnaryOp, Variable,
 };
 
 const INDENT: &str = "  ";
@@ -151,12 +151,10 @@ impl UnaryOp {
 impl IntrinsicOp {
     pub const fn into_mnemonic(&self) -> &'static str {
         match self {
-            Self::Display => "display",
             Self::Finish => "finish",
             Self::Time => "time",
-            Self::Assert => "vogls.assert",
-            Self::AssertEq(true) => "vogls.assert_eq",
-            Self::AssertEq(false) => "vogls.assert_ne",
+            Self::Display(_) => "display",
+            Self::Assert(_) => "vogls.assert",
         }
     }
 }
@@ -199,10 +197,10 @@ impl ContextFormat for Instruction {
                 f.write_str(op.into_mnemonic())?;
                 f.write_str(" ")?;
                 if let Some(arg) = args.first() {
-                    arg.ctx_fmt(f, ctx)?;
+                    ctx.gl.vars.get(*arg).unwrap().ctx_fmt(f, ctx)?;
                     for arg in &args[1..] {
                         f.write_str(", ")?;
-                        arg.ctx_fmt(f, ctx)?;
+                        ctx.gl.vars.get(*arg).unwrap().ctx_fmt(f, ctx)?;
                     }
                 }
             }
@@ -336,21 +334,5 @@ impl Signal {
 impl ContextFormat for Time {
     fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut DisplayContext<'_>) -> fmt::Result {
         write!(f, "#{}", self.0)
-    }
-}
-
-impl ContextFormat for IntrinsicArg {
-    fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &mut DisplayContext<'_>) -> fmt::Result {
-        match self {
-            Self::StringLiteral(l) => {
-                // @TODO: Escape quotes
-                f.write_str("\"")?;
-                f.write_str(&l)?;
-                f.write_str("\"")?;
-            }
-            Self::Variable(var) => ctx.gl.vars.get(*var).unwrap().ctx_fmt(f, ctx)?,
-        }
-
-        Ok(())
     }
 }

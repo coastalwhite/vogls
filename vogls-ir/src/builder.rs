@@ -2,8 +2,8 @@ use indexmap::IndexSet;
 
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryOp, Bits, GlobalContext, INTEGER_VSIZE,
-    Instruction, IntrinsicArg, IntrinsicOp, Process, ProcessKey, SCALAR_VSIZE, SignalKey,
-    TIME_VSIZE, Time, UnaryOp, Variable, VariableKey, VectorSize,
+    Instruction, IntrinsicOp, Process, ProcessKey, SCALAR_VSIZE, SignalKey, TIME_VSIZE, Time,
+    UnaryOp, Variable, VariableKey, VectorSize,
 };
 
 #[must_use]
@@ -799,9 +799,15 @@ impl BasicBlockBuilder {
         }
     }
 
-    pub fn intrinsic(&mut self, gl: &mut GlobalContext, op: IntrinsicOp, args: Vec<IntrinsicArg>) -> VariableKey {
+    pub fn intrinsic(
+        &mut self,
+        gl: &mut GlobalContext,
+        op: IntrinsicOp,
+        args: Box<[VariableKey]>,
+    ) -> VariableKey {
         let dst = self.next_tmp_var(gl, SCALAR_VSIZE);
-        self.instrs.push(Instruction::Intrinsic(dst, op, args));
+        self.instrs
+            .push(Instruction::Intrinsic(dst, Box::new(op), args));
         dst
     }
 
@@ -809,7 +815,7 @@ impl BasicBlockBuilder {
         let dst = self.next_tmp_var(gl, TIME_VSIZE);
         self.instrs.push(Instruction::Intrinsic(
             dst,
-            IntrinsicOp::Time,
+            Box::new(IntrinsicOp::Time),
             Default::default(),
         ));
         dst

@@ -1,6 +1,5 @@
-use vogls_ir::{
-    BasicBlockBuilder, GlobalContext, IntrinsicArg, IntrinsicOp, TIME_VSIZE, VariableKey,
-};
+use vogls_ir::dyn_format_string::{DynFormatArgument, DynFormatString};
+use vogls_ir::{BasicBlockBuilder, GlobalContext, IntrinsicOp, TIME_VSIZE, VariableKey};
 
 use crate::ast::expr::Expr;
 use crate::ast::statement::SystemTaskIdentifier;
@@ -55,7 +54,8 @@ pub fn lower_system_function_call<'a>(
         "vogls_dbg" => {
             ensure_num_args_equal!(1);
             let (e, e_ty) = arguments[0].ok_or(())?;
-            builder.intrinsic(gl, IntrinsicOp::Display, vec![IntrinsicArg::Variable(e)]);
+            let format_str = DynFormatString::new("\n".into(), [(0, DynFormatArgument {})].into());
+            builder.intrinsic(gl, IntrinsicOp::Display(Box::new(format_str)), [e].into());
             Ok((e, e_ty))
         }
 
