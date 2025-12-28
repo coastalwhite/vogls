@@ -6,7 +6,7 @@ use crate::ast::statement::{
     EventExpression, EventExpressionPrimary, IfBranch, LoopStatement, LoopStatementVariant,
     NetLValue, NonBlockingAssignment, ProceduralTimingControl, ProceduralTimingControlStatement,
     SeqBlock, Statement, StatementContent, StatementOrNull, SystemTaskEnable, SystemTaskIdentifier,
-    TaskEnable, VariableAssignment, VariableLValue, VariableLValueFlat,
+    TaskEnable, VariableAssignment, VariableLValue, VariableLValueFlat, WaitStatement,
 };
 use crate::ast::{
     AstIdRange, AstItem, AttributeInstance, DecimalRef, Identifier, RangeExpression, TextRef,
@@ -125,6 +125,12 @@ impl<'a> Consumable<'a> for StatementContent {
                 diagnostics.as_deref_mut(),
             )?)),
             T::DollarIdent => Ok(Self::SystemTaskEnable(parse::<SystemTaskEnable>(
+                tkw,
+                sc,
+                arenas,
+                diagnostics.as_deref_mut(),
+            )?)),
+            T::KeywordWait => Ok(Self::WaitStatement(parse::<WaitStatement>(
                 tkw,
                 sc,
                 arenas,
@@ -1183,5 +1189,49 @@ impl<'a> Consumable<'a> for TaskEnable {
         // @Incomplete
         let ident = item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
         Ok(Self { ident })
+    }
+}
+
+impl<'a> Consumable<'a> for WaitStatement {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 499
+        // wait_statement ::= wait ( expression ) statement_or_null
+
+        tkw.next_expect(T::KeywordWait, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
+        let Some(end) = tkw.find_next_same_depth(T::RightParen) else {
+            diagnostics.map(|d| d.no_corresponding(tkw.offset - 1, T::RightParen));
+            return Err(());
+        };
+
+        let expression = parse::<Expr>(tkw, sc, arenas, diagnostics.as_deref_mut());
+        let expression_end = tkw.offset;
+        tkw.offset = end + 1;
+        let statement_or_null =
+            parse::<StatementOrNull>(tkw, sc, arenas, diagnostics.as_deref_mut());
+
+        if end != expression_end {
+            diagnostics.map(|d| {
+                d.leftover_tokens(TokenRange {
+                    start: expression_end,
+                    end,
+                })
+            });
+            return Err(());
+        }
+
+        let (expression, statement_or_null) = (expression?, statement_or_null?);
+
+        Ok(Self {
+            expression,
+            statement_or_null,
+        })
     }
 }

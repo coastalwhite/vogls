@@ -41,7 +41,7 @@ pub enum StatementContent {
     SeqBlock(AstId<SeqBlock>),
     SystemTaskEnable(AstId<SystemTaskEnable>),
     TaskEnable(AstId<TaskEnable>),
-    WaitStatement,
+    WaitStatement(AstId<WaitStatement>),
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 499
@@ -301,4 +301,12 @@ pub struct IfBranch {
 pub struct TaskEnable {
     // @Incomplete
     pub ident: AstItem<Identifier>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 499
+// wait_statement ::= wait ( expression ) statement_or_null
+#[derive(Clone, Copy)]
+pub struct WaitStatement {
+    pub expression: AstId<Expr>,
+    pub statement_or_null: AstId<StatementOrNull>,
 }

@@ -1,11 +1,11 @@
-use vogls_ir::{BasicBlockBuilder, GlobalContext};
+use vogls_ir::{BasicBlockBuilder, BasicBlockTerminator, GlobalContext};
 
 use crate::ast::statement::{
     BlockingAssignment, NonBlockingAssignment, ProceduralTimingControlStatement, Statement,
-    StatementContent, StatementOrNull, TaskEnable,
+    StatementContent, StatementOrNull, TaskEnable, WaitStatement,
 };
 use crate::ast::{AstId, AstIdRange};
-use crate::lower::expression::lower_expr;
+use crate::lower::expression::{self, lower_expr};
 use crate::lower::scope::SymbolVariant;
 use crate::lower::{Region, assign};
 use crate::parser::AstArenas;
@@ -186,7 +186,43 @@ pub fn statements_to_process<'a>(
                     *statement_or_null,
                 )?;
             }
-            S::WaitStatement => todo!(),
+            S::WaitStatement(id) => {
+                let WaitStatement {
+                    expression,
+                    statement_or_null,
+                } = arenas.get(id);
+
+                builder = builder.jump(gl);
+                let (condition, _) = expression::lower_expr(
+                    gl,
+                    arenas,
+                    scope,
+                    diagnostics,
+                    &mut builder,
+                    *expression,
+                )?;
+                let condition = builder.reduce_or(gl, condition);
+                let ins = expression::get_used_signals(arenas, scope, diagnostics, *expression)?;
+
+                let start_bb = builder.key();
+                builder = builder.next_terminate_later(gl);
+                let ret_with_watch_bb = builder.key();
+                builder = builder.next_terminate_later(gl);
+                let statement_bb = builder.key();
+
+                gl.bbs[start_bb].terminator =
+                    BasicBlockTerminator::Branch(condition, statement_bb, ret_with_watch_bb);
+                gl.bbs[ret_with_watch_bb].terminator = BasicBlockTerminator::Watch(start_bb, ins);
+
+                builder = lower_statement_or_null(
+                    gl,
+                    arenas,
+                    scope,
+                    diagnostics,
+                    builder,
+                    *statement_or_null,
+                )?;
+            }
         }
     }
 

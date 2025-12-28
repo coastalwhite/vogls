@@ -551,7 +551,7 @@ fn get_intersect_symbols_generated<'a>(
                 }
                 S::SystemTaskEnable(_) => continue,
                 S::TaskEnable(_) => continue,
-                S::WaitStatement => todo!(),
+                S::WaitStatement(_) => continue,
             }
         }
     }

@@ -1,6 +1,8 @@
+use std::collections::HashSet;
+
 use vogls_ir::{
-    BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, INTEGER_VSIZE, VariableKey,
-    VectorSize,
+    BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, INTEGER_VSIZE, SignalKey,
+    VariableKey, VectorSize,
 };
 
 use crate::ast::AstId;
@@ -758,4 +760,92 @@ pub fn truncate_or_extend(
             builder.zero_extend(gl, src, to)
         }
     }
+}
+
+pub fn get_used_signals<'a>(
+    arenas: &'a AstArenas,
+    scope: &mut Scope<'a>,
+    diagnostics: &mut Diagnostics,
+    expr: AstId<Expr>,
+) -> Result<Vec<SignalKey>, ()> {
+    struct StackItem {
+        expr: AstId<Expr>,
+        _dispatched: bool,
+    }
+    impl StackItem {
+        pub fn new(expr: AstId<Expr>) -> Self {
+            Self {
+                expr,
+                _dispatched: false,
+            }
+        }
+    }
+
+    let mut error = false;
+    let mut dispatch_stack: Vec<StackItem> = Vec::new();
+    let mut signals_seen: HashSet<SignalKey> = HashSet::new();
+    let mut signals: Vec<SignalKey> = Vec::new();
+
+    dispatch_stack.push(StackItem::new(expr));
+
+    while let Some(item) = dispatch_stack.pop() {
+        match arenas.get(item.expr) {
+            Expr::Unary(_, c) => dispatch_stack.push(StackItem::new(*c)),
+            Expr::Binary(_, l, r) => {
+                dispatch_stack.extend([*l, *r].into_iter().map(StackItem::new))
+            }
+            Expr::Concatenation(exprs)
+            | Expr::Replication(Replication {
+                constant_expr: _,
+                exprs,
+            })
+            | Expr::FunctionCall(_, exprs) => {
+                dispatch_stack.extend(exprs.iter().map(StackItem::new))
+            }
+            Expr::SystemFunctionCall(_, exprs) => {
+                if let Some(exprs) = exprs {
+                    dispatch_stack.extend(exprs.iter().map(StackItem::new))
+                }
+            }
+            Expr::Ternary(c, t, f) => {
+                dispatch_stack.extend([*c, *t, *f].into_iter().map(StackItem::new))
+            }
+            Expr::Ident(ident, exprs, range_expression) => {
+                let name = arenas.get_ident(ident.item.0);
+                let Some(symbol_key) = scope.get(name) else {
+                    diagnostics.var_not_found(arenas, *ident);
+                    error = true;
+                    continue;
+                };
+                let symbol = &scope.symbols[symbol_key];
+                match &symbol.variant {
+                    SymbolVariant::Signal(_, _, signal_key) => {
+                        if signals_seen.insert(*signal_key) {
+                            signals.push(*signal_key);
+                        }
+                    }
+                    SymbolVariant::Genvar(_)
+                    | SymbolVariant::Constant(_)
+                    | SymbolVariant::Task(_) => {}
+                }
+
+                dispatch_stack.extend(exprs.iter().map(StackItem::new));
+                if let Some(range_expression) = range_expression {
+                    match range_expression {
+                        BitSlice::MsbLsb(_, _) => {}
+                        BitSlice::PlusWidth(base, _) | BitSlice::MinusWidth(base, _) => {
+                            dispatch_stack.push(StackItem::new(*base))
+                        }
+                    }
+                }
+            }
+            Expr::Decimal(_) | Expr::Sized(_) | Expr::String(_) => {}
+        }
+    }
+
+    if error {
+        return Err(());
+    }
+
+    Ok(signals)
 }

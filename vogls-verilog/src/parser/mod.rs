@@ -114,6 +114,7 @@ pub enum ParseErrorReason {
     Incomplete(&'static str),
     NoCorresponding(Token),
     NotFound(Token),
+    LeftoverTokens,
 }
 
 pub enum TimeUnit {

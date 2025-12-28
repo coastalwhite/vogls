@@ -30,6 +30,10 @@ impl Diagnostics {
     pub fn not_found(&mut self, tr: TokenRange, kind: Token) {
         self.errors.push((tr, ParseErrorReason::NotFound(kind)));
     }
+
+    pub fn leftover_tokens(&mut self, tr: TokenRange) {
+        self.errors.push((tr, ParseErrorReason::LeftoverTokens));
+    }
 }
 
 pub fn display_width(mut s: &str, tab_width: usize) -> usize {
