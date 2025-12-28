@@ -10,11 +10,10 @@ use crate::ast::statement::{
 };
 use crate::lower::WatchCondition;
 use crate::lower::expression::lower_expr;
-use crate::lower::scope::SymbolVariant;
+use crate::lower::scope::{Scope, SymbolVariant};
 use crate::number::Decimal;
 use crate::parser::AstArenas;
 
-use super::scope::Scope;
 use super::{Diagnostics, Region};
 
 pub fn lower<'a>(
@@ -65,7 +64,7 @@ pub fn lower<'a>(
                     } else {
                         builder.wait(gl, Time(value as u64))
                     };
-                    builder = super::statement::lower_statement_or_null(
+                    builder = super::lower_statement_or_null(
                         gl,
                         arenas,
                         scope,
@@ -85,7 +84,7 @@ pub fn lower<'a>(
                 let start_ins = gl.processes[process].ins.len();
 
                 let statement_start_bb = builder.key();
-                builder = super::statement::lower_statement_or_null(
+                builder = super::lower_statement_or_null(
                     gl,
                     arenas,
                     scope,
@@ -191,7 +190,7 @@ pub fn lower<'a>(
                 }
 
                 builder = builder.branch_false_to(gl, acc, start_key);
-                builder = super::statement::lower_statement_or_null(
+                builder = super::lower_statement_or_null(
                     gl,
                     arenas,
                     scope,

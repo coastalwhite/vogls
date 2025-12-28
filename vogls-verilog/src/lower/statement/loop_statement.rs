@@ -4,9 +4,7 @@ use crate::ast::statement::{LoopStatement, LoopStatementVariant};
 use crate::ast::{AstId, AstIdRange};
 use crate::lower::diagnostics::Diagnostics;
 use crate::lower::scope::{Scope, SymbolVariant};
-use crate::lower::{
-    Region, assign, get_intersect_symbols_generated, lower_expr, statements_to_process,
-};
+use crate::lower::{Region, assign, get_intersect_symbols_generated, lower_expr};
 use crate::parser::AstArenas;
 
 pub fn lower_loop_statement<'a>(
@@ -120,7 +118,7 @@ pub fn lower_loop_statement<'a>(
 
     {
         scope.push_scope();
-        builder = statements_to_process(
+        builder = super::statements_to_process(
             gl,
             arenas,
             scope,

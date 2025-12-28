@@ -6,8 +6,8 @@ use crate::ast::statement::{
 };
 use crate::lower::diagnostics::Diagnostics;
 use crate::lower::expression::coerce_bin_arithmetic;
+use crate::lower::lower_expr;
 use crate::lower::scope::Scope;
-use crate::lower::{lower_expr, statements_to_process};
 use crate::parser::AstArenas;
 
 pub fn lower<'a>(
@@ -83,8 +83,7 @@ pub fn lower<'a>(
         branch_ref.take().unwrap().update(gl, builder.key());
 
         scope.push_scope();
-        builder =
-            lower_statement_or_null(gl, arenas, scope, diagnostics, builder, *statement)?;
+        builder = lower_statement_or_null(gl, arenas, scope, diagnostics, builder, *statement)?;
         origins.push(builder.key());
         scope.pop_scope();
 
@@ -136,11 +135,11 @@ pub fn lower_case_statement<'a>(
             CaseItemPattern::Expressions(exprs) => {
                 let fst = exprs.first().expect("spec: 1+ pattern expr in case_item");
                 let (v, v_ty) = lower_expr(gl, arenas, scope, diagnostics, &mut builder, fst)?;
-                let (expr_var, _, v, _) = coerce_bin_arithmetic(gl, &mut builder, expr_var, expr_var_ty, v, v_ty);
+                let (expr_var, _, v, _) =
+                    coerce_bin_arithmetic(gl, &mut builder, expr_var, expr_var_ty, v, v_ty);
                 let mut acc = builder.equals(gl, expr_var, v);
                 for e in exprs.iter().skip(1) {
-                    let (v, _) =
-                        lower_expr(gl, arenas, scope, diagnostics, &mut builder, e)?;
+                    let (v, _) = lower_expr(gl, arenas, scope, diagnostics, &mut builder, e)?;
                     let v = builder.equals(gl, expr_var, v);
                     acc = builder.or(gl, acc, v);
                 }
@@ -167,8 +166,7 @@ pub fn lower_case_statement<'a>(
 
     if let Some(statement) = default {
         scope.push_scope();
-        builder =
-            lower_statement_or_null(gl, arenas, scope, diagnostics, builder, statement)?;
+        builder = lower_statement_or_null(gl, arenas, scope, diagnostics, builder, statement)?;
         origins.push(builder.key());
         scope.pop_scope();
         builder = builder.jump(gl);
@@ -194,7 +192,7 @@ pub fn lower_statement_or_null<'a>(
 ) -> Result<BasicBlockBuilder, ()> {
     match arenas.get(statement) {
         StatementOrNull::Attribute(_) => Ok(builder),
-        StatementOrNull::Statement(statement) => statements_to_process(
+        StatementOrNull::Statement(statement) => super::statements_to_process(
             gl,
             arenas,
             scope,

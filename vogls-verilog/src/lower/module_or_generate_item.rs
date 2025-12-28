@@ -17,10 +17,11 @@ use crate::ast::module::{
 use crate::ast::{AstId, AstIdRange};
 use crate::lower::expression::{self, lower_expr};
 use crate::lower::scope::{Symbol, SymbolVariant};
+use crate::lower::statement::statements_to_process;
 use crate::lower::vvalue::VValue;
 use crate::lower::{
     ModuleArgs, VType, assign_net_lvalue, assign_port_output, eval_constant_expr,
-    fetch_module_interface, lower_to_signal, range_to_width, statements_to_process,
+    fetch_module_interface, lower_to_signal, range_to_width,
 };
 use crate::parser::AstArenas;
 
