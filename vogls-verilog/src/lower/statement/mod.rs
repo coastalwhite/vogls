@@ -1,10 +1,10 @@
 use vogls_ir::{BasicBlockBuilder, GlobalContext};
 
-use crate::ast::AstId;
 use crate::ast::statement::{
     BlockingAssignment, NonBlockingAssignment, ProceduralTimingControlStatement, Statement,
     StatementContent, StatementOrNull, TaskEnable,
 };
+use crate::ast::{AstId, AstIdRange};
 use crate::lower::expression::lower_expr;
 use crate::lower::scope::SymbolVariant;
 use crate::lower::{Region, assign};
@@ -34,7 +34,7 @@ pub fn lower_statement_or_null<'a>(
             scope,
             diagnostics,
             builder,
-            std::slice::from_ref(arenas.get(*statement)),
+            AstIdRange::single(*statement),
         ),
     }
 }
@@ -45,11 +45,11 @@ pub fn statements_to_process<'a>(
     scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
     mut builder: BasicBlockBuilder,
-    stmts: &[Statement],
+    stmts: AstIdRange<Statement>,
 ) -> Result<BasicBlockBuilder, ()> {
     use StatementContent as S;
     for statement in stmts.iter() {
-        match statement.content {
+        match arenas.get(statement).content {
             S::BlockingAssignment(ba) => {
                 let ba = arenas.get(ba);
                 let BlockingAssignment {
@@ -121,7 +121,12 @@ pub fn statements_to_process<'a>(
                 )?;
             }
             S::ParBlock => todo!(),
-            S::ProceduralContinuousAssignments => todo!(),
+            S::ProceduralContinuousAssignments => {
+                diagnostics.not_yet_implemented(
+                    arenas.get_span(statement),
+                    "procedural continous assignments are not yet supported",
+                );
+            }
             S::ProceduralTimingControlStatement(id) => {
                 let ProceduralTimingControlStatement {
                     procedural_timing_control,
@@ -139,13 +144,14 @@ pub fn statements_to_process<'a>(
             }
             S::SeqBlock(id) => {
                 let seq_block = arenas.get(id);
-                let statements = seq_block
-                    .statements
-                    .iter()
-                    .map(|v| arenas.get(v).clone())
-                    .collect::<Vec<_>>();
-                builder =
-                    statements_to_process(gl, arenas, scope, diagnostics, builder, &statements)?;
+                builder = statements_to_process(
+                    gl,
+                    arenas,
+                    scope,
+                    diagnostics,
+                    builder,
+                    seq_block.statements,
+                )?;
             }
             S::SystemTaskEnable(id) => {
                 builder = system_task_enable::lower_system_task_enable(

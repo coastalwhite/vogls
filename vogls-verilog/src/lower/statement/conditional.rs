@@ -1,6 +1,6 @@
 use vogls_ir::{BasicBlockBuilder, BasicBlockTerminator, GlobalContext};
 
-use crate::ast::AstId;
+use crate::ast::{AstId, AstIdRange};
 use crate::ast::statement::{
     CaseItemPattern, CaseStatement, CaseStatementVariant, ConditionalStatement, StatementOrNull,
 };
@@ -198,7 +198,7 @@ pub fn lower_statement_or_null<'a>(
             scope,
             diagnostics,
             builder,
-            std::slice::from_ref(arenas.get(*statement)),
+            AstIdRange::single(*statement),
         ),
     }
 }

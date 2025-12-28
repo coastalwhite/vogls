@@ -24,7 +24,7 @@ use scope::Scope;
 
 use constant_expr::eval_constant_expr;
 use vogls_ir::{
-    BasicBlockBuilder, ConnectionDirection, GlobalContext, ProcessKey, SCALAR_VSIZE, Signal,
+    BasicBlockBuilder, ConnectionDirection, GlobalContext, SCALAR_VSIZE, Signal,
     SignalKey, VariableKey, VectorSize, new_process,
 };
 
@@ -329,7 +329,6 @@ pub fn lower_module_to_ir<'a>(
     } = arenas.get(root);
 
     let mut scope = Scope::new();
-    let mut processes = Vec::new();
 
     for (key, param) in parameters.params.iter().zip(&args.parameters) {
         let symbol_key = scope.symbols.insert(Symbol {
@@ -361,7 +360,6 @@ pub fn lower_module_to_ir<'a>(
                     module_lut,
                     next_modules,
                     &mut scope,
-                    &mut processes,
                     *id,
                     diagnostics,
                 )?,
@@ -376,7 +374,6 @@ pub fn lower_module_to_ir<'a>(
                             module_lut,
                             next_modules,
                             &mut scope,
-                            &mut processes,
                             id,
                             diagnostics,
                         )?;
@@ -566,7 +563,6 @@ fn lower_to_signal<'a>(
     arenas: &'a AstArenas,
     scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
-    processes: &mut Vec<ProcessKey>,
     expr: AstId<Expr>,
     ty: VType,
 ) -> Result<SignalKey, ()> {
@@ -592,7 +588,7 @@ fn lower_to_signal<'a>(
         initialize: None,
     });
 
-    let (section_key, mut bb_builder) = new_process(gl, "port_assignment".into());
+    let mut bb_builder = new_process(gl, "port_assignment".into());
     let bb_key = bb_builder.key();
     let (v, v_ty) = lower_expr(gl, arenas, scope, diagnostics, &mut bb_builder, expr)?;
     let v = expression::sign_or_zero_extend(gl, &mut bb_builder, v, v_ty, ty.force_net_width());
@@ -600,7 +596,6 @@ fn lower_to_signal<'a>(
     bb_builder.drive(gl, signal, v);
 
     bb_builder.watch_for_ins_to(gl, bb_key);
-    processes.push(section_key);
     Ok(signal)
 }
 
@@ -609,7 +604,6 @@ fn assign_port_output<'a>(
     arenas: &'a AstArenas,
     scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
-    processes: &mut Vec<ProcessKey>,
     expr: AstId<Expr>,
     ty: VType,
 ) -> Result<SignalKey, ()> {
@@ -639,7 +633,7 @@ fn assign_port_output<'a>(
         initialize: None,
     });
 
-    let (section_key, mut bb_builder) = new_process(gl, "port_assignment".into());
+    let mut bb_builder = new_process(gl, "port_assignment".into());
     let bb_key = bb_builder.key();
 
     let probed = bb_builder.probe(gl, signal);
@@ -748,7 +742,6 @@ fn assign_port_output<'a>(
     }
 
     bb_builder.watch_for_ins_to(gl, bb_key);
-    processes.push(section_key);
 
     if error {
         return Err(());

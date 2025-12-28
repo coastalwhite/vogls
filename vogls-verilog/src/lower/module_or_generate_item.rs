@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use vogls_ir::{
-    Bits, ConnectionDirection, GlobalContext, INTEGER_VSIZE, ProcessKey, SCALAR_VSIZE, Signal,
+    Bits, ConnectionDirection, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE, Signal,
     SignalKey, VectorSize, new_process,
 };
 
@@ -34,7 +34,6 @@ pub fn lower<'a>(
     module_lut: &HashMap<&'a str, AstId<Module>>,
     next_modules: &mut Vec<ModuleInitialization<'a>>,
     scope: &mut Scope<'a>,
-    processes: &mut Vec<ProcessKey>,
     id: AstId<ModuleOrGenerateItem>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
@@ -105,8 +104,7 @@ pub fn lower<'a>(
                                 });
                                 scope.push(ident, symbol_key);
 
-                                let (section_key, mut bb_builder) =
-                                    new_process(gl, "decl_assign".into());
+                                let mut bb_builder = new_process(gl, "decl_assign".into());
                                 let bb_key = bb_builder.key();
                                 let (v, v_ty) = lower_expr(
                                     gl,
@@ -125,7 +123,6 @@ pub fn lower<'a>(
                                 );
                                 bb_builder.drive(gl, key, v);
                                 bb_builder.watch_for_ins_to(gl, bb_key);
-                                processes.push(section_key);
                             }
                         }
                     }
@@ -249,7 +246,7 @@ pub fn lower<'a>(
             for ast_net_assignment in assign.list_of_net_assignments {
                 let net_assignment = arenas.get(ast_net_assignment);
 
-                let (section_key, mut bb_builder) = new_process(gl, "assign".into());
+                let mut bb_builder = new_process(gl, "assign".into());
                 let bb_key = bb_builder.key();
                 let (variable, variable_ty) = lower_expr(
                     gl,
@@ -272,7 +269,6 @@ pub fn lower<'a>(
                 )?;
 
                 bb_builder.watch_for_ins_to(gl, bb_key);
-                processes.push(section_key);
             }
         }
         ModuleOrGenerateItem::GateInstantiation(id) => {
@@ -292,7 +288,7 @@ pub fn lower<'a>(
 
                         let ident = arenas.get_ident(lvalue.0);
 
-                        let (section_key, mut bb_builder) = new_process(gl, "gate".into());
+                        let mut bb_builder = new_process(gl, "gate".into());
                         let bb_key = bb_builder.key();
 
                         assert!(!input_terminals.is_empty());
@@ -358,7 +354,6 @@ pub fn lower<'a>(
 
                         bb_builder.drive(gl, *signal_key, value);
                         bb_builder.watch_for_ins_to(gl, bb_key);
-                        processes.push(section_key);
                     }
                 }
             }
@@ -446,25 +441,9 @@ pub fn lower<'a>(
                                     ConnectionDirection::In | ConnectionDirection::Both
                                 );
                                 if is_input {
-                                    lower_to_signal(
-                                        gl,
-                                        arenas,
-                                        scope,
-                                        diagnostics,
-                                        processes,
-                                        l_p,
-                                        *ty,
-                                    )
+                                    lower_to_signal(gl, arenas, scope, diagnostics, l_p, *ty)
                                 } else {
-                                    assign_port_output(
-                                        gl,
-                                        arenas,
-                                        scope,
-                                        diagnostics,
-                                        processes,
-                                        l_p,
-                                        *ty,
-                                    )
+                                    assign_port_output(gl, arenas, scope, diagnostics, l_p, *ty)
                                 }
                             })
                             .collect::<Result<Vec<SignalKey>, ()>>()?
@@ -505,22 +484,13 @@ pub fn lower<'a>(
                             };
 
                             let signal = if is_input {
-                                lower_to_signal(
-                                    gl,
-                                    arenas,
-                                    scope,
-                                    diagnostics,
-                                    processes,
-                                    e,
-                                    width,
-                                )?
+                                lower_to_signal(gl, arenas, scope, diagnostics, e, width)?
                             } else {
                                 assign_port_output(
                                     gl,
                                     arenas,
                                     scope,
                                     diagnostics,
-                                    processes,
                                     e,
                                     width,
                                 )?
@@ -563,21 +533,20 @@ pub fn lower<'a>(
         }
         ModuleOrGenerateItem::InitialConstruct(id) => {
             let statement = arenas.get(*id).0;
-            let (section_key, bb_builder) = new_process(gl, "initial".into());
+            let bb_builder = new_process(gl, "initial".into());
             let bb_builder = statements_to_process(
                 gl,
                 arenas,
                 scope,
                 diagnostics,
                 bb_builder,
-                std::slice::from_ref(arenas.get(statement)),
+                AstIdRange::single(statement),
             )?;
             bb_builder.halt(gl);
-            processes.push(section_key);
         }
         ModuleOrGenerateItem::AlwaysConstruct(id) => {
             let statement = arenas.get(*id).0;
-            let (section_key, bb_builder) = new_process(gl, "always".into());
+            let bb_builder = new_process(gl, "always".into());
             let bb_key = bb_builder.key();
             let bb_builder = statements_to_process(
                 gl,
@@ -585,10 +554,9 @@ pub fn lower<'a>(
                 scope,
                 diagnostics,
                 bb_builder,
-                std::slice::from_ref(arenas.get(statement)),
+                AstIdRange::single(statement),
             )?;
             bb_builder.jump_to(gl, bb_key);
-            processes.push(section_key);
         }
         ModuleOrGenerateItem::LoopGenerateConstruct(id) => {
             let LoopGenerateConstruct {
@@ -647,22 +615,12 @@ pub fn lower<'a>(
                         module_lut,
                         next_modules,
                         scope,
-                        processes,
                         *id,
                         diagnostics,
                     )?,
                     GenerateBlock::BeginEnd(_, ids) => {
                         for id in ids.iter() {
-                            lower(
-                                gl,
-                                arenas,
-                                module_lut,
-                                next_modules,
-                                scope,
-                                processes,
-                                id,
-                                diagnostics,
-                            )?;
+                            lower(gl, arenas, module_lut, next_modules, scope, id, diagnostics)?;
                         }
                     }
                 }
@@ -690,7 +648,6 @@ pub fn lower<'a>(
                         diagnostics,
                         module_lut,
                         next_modules,
-                        processes,
                         *falsy,
                     )?;
                 }
@@ -702,7 +659,6 @@ pub fn lower<'a>(
                     diagnostics,
                     module_lut,
                     next_modules,
-                    processes,
                     *truthy,
                 )?;
             }
@@ -741,23 +697,13 @@ pub fn lower_opt_generate_block<'a>(
     diagnostics: &mut Diagnostics,
     module_lut: &HashMap<&'a str, AstId<Module>>,
     next_modules: &mut Vec<ModuleInitialization<'a>>,
-    processes: &mut Vec<ProcessKey>,
     opt_generate_block: AstId<Option<GenerateBlock>>,
 ) -> Result<(), ()> {
     match arenas.get(opt_generate_block) {
         None => Ok(()),
         Some(GenerateBlock::BeginEnd(_, module_or_generate_items)) => {
             for m in module_or_generate_items.iter() {
-                lower(
-                    gl,
-                    arenas,
-                    module_lut,
-                    next_modules,
-                    scope,
-                    processes,
-                    m,
-                    diagnostics,
-                )?;
+                lower(gl, arenas, module_lut, next_modules, scope, m, diagnostics)?;
             }
             Ok(())
         }
@@ -767,7 +713,6 @@ pub fn lower_opt_generate_block<'a>(
             module_lut,
             next_modules,
             scope,
-            processes,
             *module_or_generate_item,
             diagnostics,
         ),

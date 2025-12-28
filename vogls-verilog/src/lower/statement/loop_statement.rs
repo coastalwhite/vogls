@@ -18,7 +18,6 @@ pub fn lower_loop_statement<'a>(
     use LoopStatementVariant as V;
 
     let ls = arenas.get(ls);
-    let statement = arenas.get(ls.statement);
 
     let predecessor = builder.key();
     let mut repeat_vars = None;
@@ -124,7 +123,7 @@ pub fn lower_loop_statement<'a>(
             scope,
             diagnostics,
             builder,
-            std::slice::from_ref(statement),
+            AstIdRange::single(ls.statement),
         )?;
         scope.pop_scope();
     }

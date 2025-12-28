@@ -16,7 +16,7 @@ pub struct BasicBlockBuilder {
     bbname_offset: usize,
 }
 
-pub fn new_process(gl: &'_ mut GlobalContext, name: String) -> (ProcessKey, BasicBlockBuilder) {
+pub fn new_process(gl: &'_ mut GlobalContext, name: String) -> BasicBlockBuilder {
     let bb_key = gl.bbs.insert(BasicBlock {
         name: String::from("entry"),
         instrs: Vec::new(),
@@ -29,16 +29,13 @@ pub fn new_process(gl: &'_ mut GlobalContext, name: String) -> (ProcessKey, Basi
         ins: IndexSet::new(),
         outs: IndexSet::new(),
     });
-    (
-        process_key,
-        BasicBlockBuilder {
-            key: bb_key,
-            process: process_key,
-            instrs: Vec::new(),
-            tmp_offset: 0,
-            bbname_offset: 0,
-        },
-    )
+    BasicBlockBuilder {
+        key: bb_key,
+        process: process_key,
+        instrs: Vec::new(),
+        tmp_offset: 0,
+        bbname_offset: 0,
+    }
 }
 
 pub struct PhiRef(BasicBlockKey, usize);
