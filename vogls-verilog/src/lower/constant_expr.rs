@@ -185,9 +185,9 @@ pub fn eval_constant_expr<'a>(
                 let (truthy, falsy) = VValue::coerce_max_size(truthy, falsy);
 
                 if condition.logical_equal(VValue::UnsignedNet(Bits::Small(0, SCALAR_VSIZE))) {
-                    result_stack.push(Some(truthy));
-                } else {
                     result_stack.push(Some(falsy));
+                } else {
+                    result_stack.push(Some(truthy));
                 }
             }
             Expr::Concatenation(exprs) => {

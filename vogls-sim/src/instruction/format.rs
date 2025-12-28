@@ -29,8 +29,8 @@ impl fmt::Display for VmInstruction {
             Self::Move(dst, src, _) => {
                 write!(f, "{dst} = {src}")
             }
-            Self::Intrinsic(op, args) => {
-                f.write_str(op.into_mnemonic())?;
+            Self::Intrinsic(dst, op, args) => {
+                write!(f, "{dst} = {}", op.into_mnemonic())?;
                 if let Some(arg) = args.first() {
                     write!(f, " {arg}")?;
                     for arg in &args[1..] {

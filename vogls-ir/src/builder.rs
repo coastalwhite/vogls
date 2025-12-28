@@ -2,8 +2,8 @@ use indexmap::IndexSet;
 
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryOp, Bits, GlobalContext, INTEGER_VSIZE,
-    Instruction, IntrinsicArg, IntrinsicOp, Process, ProcessKey, SCALAR_VSIZE, SignalKey, Time,
-    UnaryOp, Variable, VariableKey, VectorSize,
+    Instruction, IntrinsicArg, IntrinsicOp, Process, ProcessKey, SCALAR_VSIZE, SignalKey,
+    TIME_VSIZE, Time, UnaryOp, Variable, VariableKey, VectorSize,
 };
 
 #[must_use]
@@ -339,6 +339,36 @@ impl BasicBlockBuilder {
         self.instrs
             .push(Instruction::Unary(dst, UnaryOp::Slice(size, width), src));
         dst
+    }
+    pub fn extract_constant(
+        &mut self,
+        gl: &mut GlobalContext,
+        src: VariableKey,
+        offset: u32,
+        width: VectorSize,
+    ) -> VariableKey {
+        let size = gl.vars[src].size;
+        if offset == 0 && size == width {
+            return src;
+        }
+
+        let offset = self.constant_u32(gl, offset);
+        self.extract(gl, src, offset, width)
+    }
+    pub fn extract(
+        &mut self,
+        gl: &mut GlobalContext,
+        src: VariableKey,
+        offset: VariableKey,
+        width: VectorSize,
+    ) -> VariableKey {
+        let size = gl.vars[src].size;
+        if size == width {
+            return src;
+        }
+
+        let dst = self.logical_shift_right(gl, src, offset);
+        self.slice(gl, dst, width)
     }
 
     pub fn unsigned_lt(
@@ -769,8 +799,19 @@ impl BasicBlockBuilder {
         }
     }
 
-    pub fn intrinsic(&mut self, _gl: &mut GlobalContext, op: IntrinsicOp, args: Vec<IntrinsicArg>) {
-        self.instrs.push(Instruction::Intrinsic(op, args));
+    pub fn intrinsic(&mut self, gl: &mut GlobalContext, op: IntrinsicOp, args: Vec<IntrinsicArg>) {
+        let dst = self.next_tmp_var(gl, SCALAR_VSIZE);
+        self.instrs.push(Instruction::Intrinsic(dst, op, args));
+    }
+
+    pub fn time(&mut self, gl: &mut GlobalContext) -> VariableKey {
+        let dst = self.next_tmp_var(gl, TIME_VSIZE);
+        self.instrs.push(Instruction::Intrinsic(
+            dst,
+            IntrinsicOp::Time,
+            Default::default(),
+        ));
+        dst
     }
 
     pub fn zero_extend(

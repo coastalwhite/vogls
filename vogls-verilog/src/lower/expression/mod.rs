@@ -1,6 +1,5 @@
 use vogls_ir::{
-    BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, INTEGER_VSIZE, IntrinsicArg,
-    IntrinsicOp, VariableKey, VectorSize,
+    BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, IntrinsicArg, IntrinsicOp, VariableKey, VectorSize, INTEGER_VSIZE, TIME_VSIZE
 };
 
 use crate::ast::AstId;
@@ -193,7 +192,7 @@ pub fn lower_expr<'a>(
                     dispatch_stack.extend(exprs.iter().rev().map(StackItem::new));
                     continue;
                 }
-                
+
                 let end_stack_size = result_stack.len() - exprs.len();
                 let Ok(repeat_n) =
                     eval_constant_expr(gl, arenas, scope, diagnostics, constant_expr)
@@ -372,7 +371,7 @@ pub fn lower_expr<'a>(
                                 continue 'dispatch_loop;
                             }
 
-                            let Some((idx, _)) = result_stack.pop().unwrap() else {
+                            let Some((idx, idx_ty)) = result_stack.pop().unwrap() else {
                                 result_stack.truncate(end_result_stack_len);
                                 result_stack.push(None);
                                 continue 'dispatch_loop;
@@ -380,18 +379,21 @@ pub fn lower_expr<'a>(
 
                             dims = &dims[..dims.len() - 1];
                             let mut leaf_arr_items = dims.iter().product::<u32>();
+                            let idx = truncate_or_extend(gl, builder, idx, idx_ty, INTEGER_VSIZE);
                             let mut offset = builder.multiply_constant(gl, idx, leaf_arr_items);
 
                             while let Some(dim) = dims.last()
                                 && exprs.pop_front().is_some()
                             {
-                                let Some((expr, _)) = result_stack.pop().unwrap() else {
+                                let Some((expr, expr_ty)) = result_stack.pop().unwrap() else {
                                     result_stack.truncate(end_result_stack_len);
                                     result_stack.push(None);
                                     continue 'dispatch_loop;
                                 };
 
                                 leaf_arr_items /= *dim;
+                                let expr =
+                                    truncate_or_extend(gl, builder, expr, expr_ty, INTEGER_VSIZE);
                                 let expr = builder.multiply_constant(gl, expr, leaf_arr_items);
                                 offset = builder.plus(gl, offset, expr);
                                 dims = &dims[..dims.len() - 1];
@@ -500,16 +502,24 @@ pub fn lower_expr<'a>(
                     continue;
                 }
 
-                match arenas.get_ident(ident.item.0) {
-                    "vogls_dbg" => {
-                        if exprs.is_none_or(|e| e.len() != 1) {
-                            diagnostics
-                                .not_yet_implemented(arenas.get_span(expr), "vogls_dbg #args != 1");
+                macro_rules! ensure_num_args_equal {
+                    ($expected:literal) => {
+                        let num_args = exprs.unwrap_or_default().len();
+                        if num_args != $expected {
+                            diagnostics.not_yet_implemented(
+                                arenas.get_span(expr),
+                                "intrinsic not expected amount",
+                            );
                             result_stack.push(None);
                             error = true;
                             continue;
                         }
+                    };
+                }
 
+                match arenas.get_ident(ident.item.0) {
+                    "vogls_dbg" => {
+                        ensure_num_args_equal!(1);
                         let Some((e, _)) = result_stack.last().unwrap() else {
                             result_stack.push(None);
                             continue;
@@ -521,6 +531,7 @@ pub fn lower_expr<'a>(
                         );
                     }
                     "signed" => {
+                        ensure_num_args_equal!(1);
                         let Some((_, e_ty)) = result_stack.last_mut().unwrap() else {
                             result_stack.push(None);
                             continue;
@@ -528,11 +539,17 @@ pub fn lower_expr<'a>(
                         *e_ty = e_ty.to_signed();
                     }
                     "unsigned" => {
+                        ensure_num_args_equal!(1);
                         let Some((_, e_ty)) = result_stack.last_mut().unwrap() else {
                             result_stack.push(None);
                             continue;
                         };
                         *e_ty = e_ty.to_unsigned();
+                    }
+                    "time" => {
+                        ensure_num_args_equal!(0);
+                        let time = builder.time(gl);
+                        result_stack.push(Some((time, VType::UnsignedNet(TIME_VSIZE))));
                     }
                     _ => {
                         diagnostics.not_yet_implemented(arenas.get_span(expr), "function calls");

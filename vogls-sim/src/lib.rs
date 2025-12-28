@@ -3,7 +3,7 @@ use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap};
 
 use slotmap::{SlotMap, new_key_type};
-use vogls_ir::{BinaryOp, Bits, INTEGER_VSIZE, IntrinsicOp, UnaryOp, VectorSize};
+use vogls_ir::{BinaryOp, Bits, INTEGER_VSIZE, IntrinsicOp, TIME_VSIZE, UnaryOp, VectorSize};
 
 mod bits;
 mod instruction;
@@ -64,7 +64,7 @@ impl Context {
 
 #[derive(Clone, Debug)]
 pub enum Event {
-    Drive(VmSignalKey, Bits, Option<(u32, VectorSize)>),
+    Drive(VmSignalKey, Vec<(Bits, Option<(u32, VectorSize)>)>),
     Evaluation(EvaluationEvent),
 }
 
@@ -180,9 +180,12 @@ impl Event {
             bit_stack,
             ip,
         } = match &mut self {
-            Event::Drive(sig, bits, partial) => {
+            Event::Drive(sig, assignments) => {
                 let signal_bits = signals.get_mut(sig).unwrap();
-                let updated = drive_bits(signal_bits, bits.as_slice(), *partial);
+                let mut updated = false;
+                for (bits, partial) in assignments {
+                    updated |= drive_bits(signal_bits, bits.as_slice(), *partial);
+                }
 
                 if updated {
                     update_watchers(ctx, *sig, watches, listeners, regions);
@@ -388,7 +391,17 @@ impl Event {
                             bit_stack[dst.offset] =
                                 (bit_stack[lhs.offset + (idx / 8) as usize] >> (idx % 8)) & 1;
                         }
-                        O::LogicalShiftLeft(..) => todo!(),
+                        O::LogicalShiftLeft(n, shift_n) => {
+                            let n = *n;
+                            if n.get() > 64 {
+                                todo!()
+                            }
+                            let l = bits::store_to_u64(&bit_stack, lhs.offset, n);
+                            let r = bits::store_to_u64(&bit_stack, rhs.offset, *shift_n);
+                            let out = l.wrapping_shl(r as u32)
+                                & (1u64.unbounded_shl(n.get())).wrapping_sub(1);
+                            bits::load_from_u64(bit_stack, dst.offset, n, out);
+                        }
                         O::LogicalShiftRight(n, shift_n) => {
                             let shift = bits::store_to_u64(&bit_stack, rhs.offset, *shift_n);
                             if shift == 0 {
@@ -414,7 +427,21 @@ impl Event {
                             );
                         }
                         O::ArithmeticShiftLeft(..) => todo!(),
-                        O::ArithmeticShiftRight(..) => todo!(),
+                        O::ArithmeticShiftRight(n, shift_n) => {
+                            let n = *n;
+                            if n.get() > 64 {
+                                todo!()
+                            }
+                            let l = bits::store_to_u64(&bit_stack, lhs.offset, n);
+                            let r = bits::store_to_u64(&bit_stack, rhs.offset, *shift_n);
+
+                            let offset = 64 - n.get();
+
+                            let out = (((l << offset) as i64).unbounded_shr(offset + r as u32)
+                                as u64)
+                                & (1u64.unbounded_shl(n.get())).wrapping_sub(1);
+                            bits::load_from_u64(bit_stack, dst.offset, n, out);
+                        }
                         O::Concat(lhs_size, rhs_size) => bits::concat(
                             bit_stack, dst.offset, lhs.offset, rhs.offset, *lhs_size, *rhs_size,
                         ),
@@ -427,7 +454,7 @@ impl Event {
                     }
                 }
 
-                I::Intrinsic(op, args) => {
+                I::Intrinsic(dst, op, args) => {
                     use IntrinsicOp as O;
 
                     match op {
@@ -536,6 +563,9 @@ impl Event {
                                 }
                             }
                         }
+                        O::Time => {
+                            bits::load_from_u64(bit_stack, dst.offset, TIME_VSIZE, ctx.time);
+                        }
                         O::Finish => {
                             writeln!(&mut ctx.stdout, "[FINISH]").unwrap();
                             return EvalOutcome::Exit;
@@ -562,10 +592,17 @@ impl Event {
                     if *region != 0 {
                         let region = (*region - 1) as usize;
                         let value = Bits::load_from_slice(&bit_stack[var.offset..], size);
-                        let event = Event::Drive(*sig, value, partial);
                         match regions.other_dispatched[region].entry(DispatchKey::Signal(*sig)) {
-                            Entry::Occupied(entry) => regions.other[region][*entry.get()] = event,
+                            Entry::Occupied(entry) => {
+                                let Event::Drive(_, assignments) =
+                                    &mut regions.other[region][*entry.get()]
+                                else {
+                                    unreachable!();
+                                };
+                                assignments.push((value, partial));
+                            }
                             Entry::Vacant(entry) => {
+                                let event = Event::Drive(*sig, vec![(value, partial)]);
                                 let i = regions.other[region].len();
                                 regions.other[region].push(event);
                                 entry.insert(i);
@@ -650,7 +687,7 @@ pub fn run(
         while let Some(event) = regions.active.pop() {
             if ctx.tracing_level >= TracingLevel::Events {
                 match &event {
-                    Event::Drive(signal, _, _) => {
+                    Event::Drive(signal, _) => {
                         writeln!(&mut ctx.stdout, "drive {signal:?}").unwrap()
                     }
                     Event::Evaluation(eval) => {

@@ -1,9 +1,11 @@
-use vogls_ir::{BasicBlockBuilder, Bits, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE, VariableKey};
+use vogls_ir::{
+    BasicBlockBuilder, Bits, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE, VariableKey, VectorSize,
+};
 
 use crate::ast::statement::{VariableLValue, VariableLValueFlat};
 use crate::ast::{AstId, RangeExpression};
 use crate::lower::constant_expr::eval_constant_expr;
-use crate::lower::expression::{self, lower_expr, sign_or_zero_extend};
+use crate::lower::expression::{self, lower_expr, sign_or_zero_extend, truncate_or_extend};
 use crate::lower::msb_lsb_to_width;
 use crate::lower::scope::SymbolVariant;
 use crate::parser::AstArenas;
@@ -38,13 +40,24 @@ pub fn assign_variable_lvalue<'a>(
     }
 
     assert!(!lvalue.0.is_empty());
+    let mut total_width = 0u32;
+    for lvf in lvalue.0.iter() {
+        let ty = variable_lvalue_flat_ty(gl, arenas, scope, diagnostics, lvf)?;
+        total_width += ty.force_net_width().get();
+    }
+    let variable = truncate_or_extend(
+        gl,
+        builder,
+        variable,
+        variable_ty,
+        VectorSize::new(total_width).unwrap(),
+    );
+
     let mut offset = 0u32;
     for lvf in lvalue.0.iter().rev() {
         let ty = variable_lvalue_flat_ty(gl, arenas, scope, diagnostics, lvf)?;
         let width = ty.force_net_width();
-        let voffset = builder.constant_u32(gl, offset);
-        let variable = builder.logical_shift_right(gl, variable, voffset);
-        let variable = sign_or_zero_extend(gl, builder, variable, variable_ty, width);
+        let variable = builder.extract_constant(gl, variable, offset, width);
         assign_variable_lvalue_flat(
             gl,
             arenas,
@@ -273,8 +286,7 @@ pub fn assign_variable_lvalue_flat<'a>(
                 }
             };
             let size = partial.map_or(size, |(_, s)| s);
-            let variable =
-                expression::truncate_or_extend(gl, builder, variable, variable_ty, size);
+            let variable = expression::truncate_or_extend(gl, builder, variable, variable_ty, size);
             builder.regioned_drive_opt_partial(gl, key, variable, region as u8, partial);
         }
     }

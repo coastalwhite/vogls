@@ -28,7 +28,7 @@ pub enum VmInstruction {
 
     Move(StackRef, StackRef, VectorSize),
 
-    Intrinsic(IntrinsicOp, Vec<VmIntrinsicArg>),
+    Intrinsic(StackRef, IntrinsicOp, Vec<VmIntrinsicArg>),
 
     Probe(StackRef, VmSignalKey),
     Drive(VmSignalKey, StackRef, u8, Option<(StackRef, VectorSize)>),

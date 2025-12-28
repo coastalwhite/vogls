@@ -85,7 +85,7 @@ pub fn lower_process_to_vm(
                 I::Unary(d, op, s) => VI::Unary(var(*d), *op, var(*s)),
                 I::Binary(d, op, s1, s2) => VI::Binary(var(*d), *op, var(*s1), var(*s2)),
 
-                I::Intrinsic(op, args) => {
+                I::Intrinsic(dst, op, args) => {
                     use IntrinsicArg as IA;
                     use VmIntrinsicArg as VIA;
                     let args = args
@@ -96,7 +96,7 @@ pub fn lower_process_to_vm(
                         })
                         .collect();
 
-                    VI::Intrinsic(*op, args)
+                    VI::Intrinsic(var(*dst), *op, args)
                 }
                 I::Probe(dst, signal) => VI::Probe(var(*dst), signal!(*signal)),
                 I::Drive(signal, src, region, partial) => VI::Drive(

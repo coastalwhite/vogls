@@ -153,9 +153,10 @@ impl IntrinsicOp {
         match self {
             Self::Display => "display",
             Self::Finish => "finish",
-            Self::Assert => "assert",
-            Self::AssertEq(true) => "assert_eq",
-            Self::AssertEq(false) => "assert_ne",
+            Self::Time => "time",
+            Self::Assert => "vogls.assert",
+            Self::AssertEq(true) => "vogls.assert_eq",
+            Self::AssertEq(false) => "vogls.assert_ne",
         }
     }
 }
@@ -192,8 +193,9 @@ impl ContextFormat for Instruction {
                 f.write_str(", ")?;
                 ctx.gl.vars.get(*src2).unwrap().ctx_fmt(f, ctx)?;
             }
-            Self::Intrinsic(op, args) => {
-                f.write_str("vogls.")?;
+            Self::Intrinsic(dst, op, args) => {
+                ctx.gl.vars.get(*dst).unwrap().typed_ctx_fmt(f, ctx)?;
+                f.write_str(" = ")?;
                 f.write_str(op.into_mnemonic())?;
                 f.write_str(" ")?;
                 if let Some(arg) = args.first() {

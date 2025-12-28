@@ -295,6 +295,7 @@ pub struct Signal {
 
 pub type VectorSize = NonZeroU32;
 pub const INTEGER_VSIZE: VectorSize = NonZeroU32::new(32).unwrap();
+pub const TIME_VSIZE: VectorSize = NonZeroU32::new(64).unwrap();
 pub const SCALAR_VSIZE: VectorSize = NonZeroU32::new(1).unwrap();
 
 #[derive(Debug, Clone)]
@@ -305,6 +306,7 @@ pub enum IntrinsicArg {
 
 #[derive(Debug, Clone, Copy)]
 pub enum IntrinsicOp {
+    Time,
     Display,
     Finish,
     Assert,
@@ -348,7 +350,7 @@ pub enum Instruction {
     Unary(VariableKey, UnaryOp, VariableKey),
     Binary(VariableKey, BinaryOp, VariableKey, VariableKey),
 
-    Intrinsic(IntrinsicOp, Vec<IntrinsicArg>),
+    Intrinsic(VariableKey, IntrinsicOp, Vec<IntrinsicArg>),
     Probe(VariableKey, SignalKey),
     Drive(
         SignalKey,
@@ -367,8 +369,9 @@ impl Instruction {
             | Self::Unary(dst, _, _)
             | Self::Binary(dst, _, _, _)
             | Self::Phi(dst, _)
-            | Self::Probe(dst, _) => Some(*dst),
-            Self::Intrinsic(..) | Self::Drive(..) => None,
+            | Self::Probe(dst, _)
+            | Self::Intrinsic(dst, _, _) => Some(*dst),
+            Self::Drive(..) => None,
         }
     }
 }
