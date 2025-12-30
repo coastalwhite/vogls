@@ -166,7 +166,7 @@ impl BasicBlockBuilder {
         );
         self.instrs.push(Instruction::Binary(
             dst,
-            BinaryOp::Concat(lhs_size, rhs_size),
+            BinaryOp::Concat,
             lhs,
             rhs,
         ));
@@ -196,13 +196,13 @@ impl BasicBlockBuilder {
         gl: &mut GlobalContext,
         lhs: VariableKey,
         rhs: VariableKey,
-        op: impl Fn(VectorSize) -> BinaryOp,
+        op: BinaryOp,
     ) -> VariableKey {
         let size = gl.vars[lhs].size;
         assert_eq!(size, gl.vars[rhs].size);
         let dst = self.next_tmp_var(gl, size);
         self.instrs
-            .push(Instruction::Binary(dst, op(size), lhs, rhs));
+            .push(Instruction::Binary(dst, op, lhs, rhs));
         dst
     }
 
@@ -310,7 +310,7 @@ impl BasicBlockBuilder {
         assert_eq!(gl.vars[idx].size, INTEGER_VSIZE);
         self.instrs.push(Instruction::Binary(
             dst,
-            BinaryOp::SelectBit(gl.vars[src].size),
+            BinaryOp::SelectBit,
             src,
             idx,
         ));
@@ -392,7 +392,7 @@ impl BasicBlockBuilder {
         let dst = self.next_tmp_var(gl, SCALAR_VSIZE);
         self.instrs.push(Instruction::Binary(
             dst,
-            BinaryOp::UnsignedLessEqual(gl.vars[lhs].size),
+            BinaryOp::UnsignedLessEqual,
             lhs,
             rhs,
         ));
@@ -853,13 +853,12 @@ impl BasicBlockBuilder {
         gl: &mut GlobalContext,
         lhs: VariableKey,
         rhs: VariableKey,
-        op: impl Fn(VectorSize, VectorSize) -> BinaryOp,
+        op: BinaryOp,
     ) -> VariableKey {
         let lhs_size = gl.vars[lhs].size;
-        let rhs_size = gl.vars[rhs].size;
         let dst = self.next_tmp_var(gl, lhs_size);
         self.instrs
-            .push(Instruction::Binary(dst, op(lhs_size, rhs_size), lhs, rhs));
+            .push(Instruction::Binary(dst, op, lhs, rhs));
         dst
     }
     pub fn logical_shift_left(
@@ -877,14 +876,6 @@ impl BasicBlockBuilder {
         rhs: VariableKey,
     ) -> VariableKey {
         self.shift(gl, lhs, rhs, BinaryOp::LogicalShiftRight)
-    }
-    pub fn arithmetic_shift_left(
-        &mut self,
-        gl: &mut GlobalContext,
-        lhs: VariableKey,
-        rhs: VariableKey,
-    ) -> VariableKey {
-        self.shift(gl, lhs, rhs, BinaryOp::ArithmeticShiftLeft)
     }
     pub fn arithmetic_shift_right(
         &mut self,

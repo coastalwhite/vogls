@@ -50,6 +50,7 @@ pub struct Context {
     pub stdout: Box<dyn std::io::Write>,
     pub stderr: Box<dyn std::io::Write>,
     pub tracing_level: TracingLevel,
+    pub instruction_count: u64,
 }
 
 impl Context {
@@ -59,6 +60,7 @@ impl Context {
             stdout,
             stderr,
             tracing_level: TracingLevel::Events,
+            instruction_count: 0,
         }
     }
 }
@@ -203,6 +205,7 @@ impl Event {
         loop {
             let instr = &process.instructions[*ip];
             *ip += 1;
+            ctx.instruction_count += 1;
             match instr {
                 I::Constant(var, Bits::Small(value, size)) => {
                     bits::load_from_u64(bit_stack, var.offset, *size, *value);
@@ -578,6 +581,11 @@ pub fn run(
         }
         regions.active = events;
     }
+
+    if cfg!(vm_profile) {
+        writeln!(ctx.stdout, "Finished after {} instructions", ctx.instruction_count).unwrap();
+    }
+
 
     Ok(())
 }

@@ -28,3 +28,6 @@ vogls-verilog.path = "vogls-verilog"
 [profile.debug-release]
 inherits = "release"
 debug = true
+
+[workspace.lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(vm_profile)'] }

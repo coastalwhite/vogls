@@ -119,7 +119,7 @@ pub fn lower_expr<'a>(
                     O::GreaterThanEqual => bin_greater_than_equal,
                     O::LessThan => bin_less_than,
                     O::LessThanEqual => bin_less_than_equal,
-                    O::ArithmeticLeftShift => bin_arithmetic_shift_left,
+                    O::ArithmeticLeftShift => bin_logical_shift_left,
                     O::ArithmeticRightShift => bin_arithmetic_shift_right,
                     O::LogicalEquality => bin_logical_equality,
                     O::LogicalInequality => bin_logical_inequality,
@@ -716,7 +716,6 @@ impl_bin_eq_ineq! {
 impl_shift! {
     bin_logical_shift_left => logical_shift_left,
     bin_logical_shift_right => logical_shift_right,
-    bin_arithmetic_shift_left => arithmetic_shift_left,
     bin_arithmetic_shift_right => arithmetic_shift_right,
 }
 

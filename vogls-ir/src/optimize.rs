@@ -216,23 +216,22 @@ pub fn propagate_constants<'a>(
                         *dst,
                         match (csrc1, csrc2) {
                             (Some(src1), Some(src2)) => match op {
-                                O::And(_) => Bits::bitwise_and(src1, src2),
-                                O::Or(_) => Bits::bitwise_or(src1, src2),
-                                O::Xor(_) => Bits::bitwise_xor(src1, src2),
-                                O::Add(_) => Bits::add(src1, src2),
-                                O::Sub(_) => Bits::subtract(src1, src2),
-                                O::Multiply(_) => Bits::multiply(src1, src2),
-                                O::Divide(_) => Bits::divide(src1, src2),
-                                O::Modulus(_) => Bits::modulus(src1, src2),
-                                O::UnsignedLessEqual(_) => {
+                                O::And => Bits::bitwise_and(src1, src2),
+                                O::Or => Bits::bitwise_or(src1, src2),
+                                O::Xor => Bits::bitwise_xor(src1, src2),
+                                O::Add => Bits::add(src1, src2),
+                                O::Sub => Bits::subtract(src1, src2),
+                                O::Multiply => Bits::multiply(src1, src2),
+                                O::Divide => Bits::divide(src1, src2),
+                                O::Modulus => Bits::modulus(src1, src2),
+                                O::UnsignedLessEqual => {
                                     Bits::from(Bits::is_unsigned_leq(src1, src2))
                                 }
-                                O::SelectBit(_)
-                                | O::LogicalShiftLeft(..)
-                                | O::LogicalShiftRight(..)
-                                | O::ArithmeticShiftLeft(..)
-                                | O::ArithmeticShiftRight(..) => continue,
-                                O::Concat(_, _) => Bits::concatenate(src1, src2),
+                                O::SelectBit
+                                | O::LogicalShiftLeft
+                                | O::LogicalShiftRight
+                                | O::ArithmeticShiftRight => continue,
+                                O::Concat => Bits::concatenate(src1, src2),
                             },
                             (Some(src), _) | (_, Some(src)) => {
                                 let non_constant_src = if csrc1.is_none() { *src1 } else { *src2 };
@@ -246,26 +245,26 @@ pub fn propagate_constants<'a>(
                                 let num_ones = src.count_ones();
                                 let size = src.size();
                                 match op {
-                                    O::And(_) if num_ones == 0 => Bits::new_zeroed(size),
-                                    O::And(_) | O::Add(_) | O::Sub(_) if num_ones == size.get() => {
+                                    O::And if num_ones == 0 => Bits::new_zeroed(size),
+                                    O::And | O::Add | O::Sub if num_ones == size.get() => {
                                         set_eq_to_non_constant_src!()
                                     }
-                                    O::And(_) => continue,
-                                    O::Or(_) | O::Xor(_) if num_ones == 0 => {
+                                    O::And => continue,
+                                    O::Or | O::Xor if num_ones == 0 => {
                                         set_eq_to_non_constant_src!()
                                     }
-                                    O::Or(_) if num_ones == size.get() => Bits::new_ones(size),
-                                    O::Or(_) => continue,
-                                    O::Xor(_) if num_ones == size.get() => src.bitwise_negate(),
-                                    O::Xor(_) => continue,
+                                    O::Or if num_ones == size.get() => Bits::new_ones(size),
+                                    O::Or => continue,
+                                    O::Xor if num_ones == size.get() => src.bitwise_negate(),
+                                    O::Xor => continue,
 
-                                    O::Add(_) | O::Sub(_) => continue,
-                                    O::Multiply(_) if num_ones == 0 => Bits::new_zeroed(size),
-                                    O::Multiply(_) | O::Divide(_) if src.is_one() => {
+                                    O::Add | O::Sub => continue,
+                                    O::Multiply if num_ones == 0 => Bits::new_zeroed(size),
+                                    O::Multiply | O::Divide if src.is_one() => {
                                         set_eq_to_non_constant_src!()
                                     }
-                                    O::Multiply(_) | O::Divide(_) => continue,
-                                    O::UnsignedLessEqual(_) if num_ones == 0 && csrc1.is_none() => {
+                                    O::Multiply | O::Divide => continue,
+                                    O::UnsignedLessEqual if num_ones == 0 && csrc1.is_none() => {
                                         *i = Instruction::Unary(
                                             *dst,
                                             UnaryOp::ReduceOr,
@@ -273,15 +272,15 @@ pub fn propagate_constants<'a>(
                                         );
                                         continue;
                                     }
-                                    O::UnsignedLessEqual(_) if num_ones == 0 && csrc2.is_none() => {
+                                    O::UnsignedLessEqual if num_ones == 0 && csrc2.is_none() => {
                                         Bits::new_ones(SCALAR_VSIZE)
                                     }
-                                    O::UnsignedLessEqual(_)
+                                    O::UnsignedLessEqual
                                         if num_ones == size.get() && csrc1.is_none() =>
                                     {
                                         Bits::new_ones(SCALAR_VSIZE)
                                     }
-                                    O::UnsignedLessEqual(_)
+                                    O::UnsignedLessEqual
                                         if num_ones == size.get() && csrc2.is_none() =>
                                     {
                                         *i = Instruction::Unary(
@@ -291,30 +290,27 @@ pub fn propagate_constants<'a>(
                                         );
                                         continue;
                                     }
-                                    O::LogicalShiftLeft(..)
-                                    | O::LogicalShiftRight(..)
-                                    | O::ArithmeticShiftLeft(..)
-                                    | O::ArithmeticShiftRight(..)
+                                    O::LogicalShiftLeft
+                                    | O::LogicalShiftRight
+                                    | O::ArithmeticShiftRight
                                         if csrc1.is_none() && num_ones == 0 =>
                                     {
                                         set_eq_to_non_constant_src!();
                                     }
-                                    O::LogicalShiftLeft(..)
-                                    | O::LogicalShiftRight(..)
-                                    | O::ArithmeticShiftLeft(..)
-                                    | O::ArithmeticShiftRight(..)
+                                    O::LogicalShiftLeft
+                                    | O::LogicalShiftRight
+                                    | O::ArithmeticShiftRight
                                         if csrc2.is_none() && num_ones == 0 =>
                                     {
                                         Bits::new_zeroed(size)
                                     }
-                                    O::UnsignedLessEqual(_)
-                                    | O::Modulus(_)
-                                    | O::SelectBit(_)
-                                    | O::LogicalShiftLeft(..)
-                                    | O::LogicalShiftRight(..)
-                                    | O::ArithmeticShiftLeft(..)
-                                    | O::ArithmeticShiftRight(..)
-                                    | O::Concat(..) => continue,
+                                    O::UnsignedLessEqual
+                                    | O::Modulus
+                                    | O::SelectBit
+                                    | O::LogicalShiftLeft
+                                    | O::LogicalShiftRight
+                                    | O::ArithmeticShiftRight
+                                    | O::Concat => continue,
                                 }
                             }
                             (None, None) => continue,

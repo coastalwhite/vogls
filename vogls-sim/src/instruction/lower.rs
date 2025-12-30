@@ -88,6 +88,9 @@ pub fn lower_process_to_vm(
                     VI::Resize(var(*d), *op, gl.vars[*d].size, gl.vars[*s].size, var(*s))
                 }
                 I::Binary(d, op, s1, s2) => {
+                    let d_size = gl.vars[*d].size;
+                    let s1_size = gl.vars[*s1].size;
+                    let s2_size = gl.vars[*s2].size;
                     let d = var(*d);
                     let s1 = var(*s1);
                     let s2 = var(*s2);
@@ -96,25 +99,22 @@ pub fn lower_process_to_vm(
                     use BinaryOp as O;
                     use ShiftOp as S;
                     match *op {
-                        O::And(n) => VI::BinaryArithmetic(d, BA::And, n, s1, s2),
-                        O::Or(n) => VI::BinaryArithmetic(d, BA::Or, n, s1, s2),
-                        O::Xor(n) => VI::BinaryArithmetic(d, BA::Xor, n, s1, s2),
-                        O::Add(n) => VI::BinaryArithmetic(d, BA::Add, n, s1, s2),
-                        O::Sub(n) => VI::BinaryArithmetic(d, BA::Sub, n, s1, s2),
-                        O::Multiply(n) => VI::BinaryArithmetic(d, BA::Multiply, n, s1, s2),
-                        O::Divide(n) => VI::BinaryArithmetic(d, BA::Divide, n, s1, s2),
-                        O::Modulus(n) => VI::BinaryArithmetic(d, BA::Modulus, n, s1, s2),
-                        O::UnsignedLessEqual(n) => {
-                            VI::BinaryComparison(d, BC::UnsignedLessEqual, n, s1, s2)
+                        O::And => VI::BinaryArithmetic(d, BA::And, d_size, s1, s2),
+                        O::Or => VI::BinaryArithmetic(d, BA::Or, d_size, s1, s2),
+                        O::Xor => VI::BinaryArithmetic(d, BA::Xor, d_size, s1, s2),
+                        O::Add => VI::BinaryArithmetic(d, BA::Add, d_size, s1, s2),
+                        O::Sub => VI::BinaryArithmetic(d, BA::Sub, d_size, s1, s2),
+                        O::Multiply => VI::BinaryArithmetic(d, BA::Multiply, d_size, s1, s2),
+                        O::Divide => VI::BinaryArithmetic(d, BA::Divide, d_size, s1, s2),
+                        O::Modulus => VI::BinaryArithmetic(d, BA::Modulus, d_size, s1, s2),
+                        O::UnsignedLessEqual => {
+                            VI::BinaryComparison(d, BC::UnsignedLessEqual, s1_size, s1, s2)
                         }
-                        O::SelectBit(n) => VI::SelectBit(d, n, s1, s2),
-                        O::LogicalShiftLeft(n, _) => VI::Shift(d, S::LogicalLeft, n, s1, s2),
-                        O::LogicalShiftRight(n, _) => VI::Shift(d, S::LogicalRight, n, s1, s2),
-                        O::ArithmeticShiftLeft(n, _) => VI::Shift(d, S::LogicalLeft, n, s1, s2),
-                        O::ArithmeticShiftRight(n, _) => {
-                            VI::Shift(d, S::ArithmeticRight, n, s1, s2)
-                        }
-                        O::Concat(l, r) => VI::Concat(d, l, s1, r, s2),
+                        O::SelectBit => VI::SelectBit(d, s1_size, s1, s2),
+                        O::LogicalShiftLeft => VI::Shift(d, S::LogicalLeft, d_size, s1, s2),
+                        O::LogicalShiftRight => VI::Shift(d, S::LogicalRight, d_size, s1, s2),
+                        O::ArithmeticShiftRight => VI::Shift(d, S::ArithmeticRight, d_size, s1, s2),
+                        O::Concat => VI::Concat(d, s1_size, s1, s2_size, s2),
                     }
                 }
 

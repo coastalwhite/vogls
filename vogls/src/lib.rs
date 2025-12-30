@@ -338,7 +338,7 @@ pub fn run(
     let mut scratch_seen = HashSet::new();
     let mut scratch_removed = HashSet::new();
     for process in gl.processes.values_mut() {
-        for _ in 0..2 {
+        for _ in 0..0 {
             process.entry = vogls_ir::optimize::remove_needless_jumps(
                 &mut gl.bbs,
                 process.entry,

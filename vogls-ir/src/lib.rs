@@ -173,21 +173,20 @@ pub enum ResizeOp {
 
 #[derive(Debug, Clone, Copy)]
 pub enum BinaryOp {
-    And(VectorSize),
-    Or(VectorSize),
-    Xor(VectorSize),
-    Add(VectorSize),
-    Sub(VectorSize),
-    Multiply(VectorSize),
-    Divide(VectorSize),
-    Modulus(VectorSize),
-    UnsignedLessEqual(VectorSize),
-    SelectBit(VectorSize),
-    LogicalShiftLeft(VectorSize, VectorSize),
-    LogicalShiftRight(VectorSize, VectorSize),
-    ArithmeticShiftLeft(VectorSize, VectorSize),
-    ArithmeticShiftRight(VectorSize, VectorSize),
-    Concat(VectorSize, VectorSize),
+    And,
+    Or,
+    Xor,
+    Add,
+    Sub,
+    Multiply,
+    Divide,
+    Modulus,
+    UnsignedLessEqual,
+    SelectBit,
+    LogicalShiftLeft,
+    LogicalShiftRight,
+    ArithmeticShiftRight,
+    Concat,
 }
 
 #[derive(Debug, Clone)]
