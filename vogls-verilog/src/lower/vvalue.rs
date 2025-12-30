@@ -180,7 +180,7 @@ impl VValue {
         let lhs = lhs.into_bits();
         let rhs = rhs.into_bits();
 
-        VValue::UnsignedNet(Bits::concatenate(lhs, rhs))
+        VValue::UnsignedNet(Bits::concatenate(&lhs, &rhs))
     }
 
     pub fn to_vector_size(self) -> Option<VectorSize> {

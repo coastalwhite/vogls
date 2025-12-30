@@ -33,7 +33,7 @@ pub enum BasicBlockTerminator {
     Halt,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BasicBlock {
     pub name: String,
     pub instrs: Vec<Instruction>,
@@ -119,8 +119,20 @@ impl BasicBlockTerminator {
             | Self::Halt => {}
         }
     }
+
+    fn map_vars(&mut self, mut f: impl FnMut(VariableKey) -> VariableKey) {
+        match self {
+            Self::Branch(v, _, _) => *v = f(*v),
+            Self::Wait(..)
+            | Self::WaitRegion(..)
+            | Self::Watch(..)
+            | Self::Jump(_)
+            | Self::Halt => {}
+        }
+    }
 }
 
+#[derive(Clone)]
 pub struct Variable {
     pub name: String,
     pub size: VectorSize,
@@ -248,6 +260,41 @@ impl Instruction {
             | Self::Phi(..)
             | Self::Probe(..) => false,
             Self::Drive(..) | Self::Intrinsic(..) => true,
+        }
+    }
+
+    fn map_vars(&mut self, mut f: impl FnMut(VariableKey) -> VariableKey) {
+        match self {
+            Self::Unary(dst, _, src) | Self::Resize(dst, _, src) => {
+                *dst = f(*dst);
+                *src = f(*src)
+            }
+            Self::Binary(dst, _, src1, src2) => {
+                *dst = f(*dst);
+                *src1 = f(*src1);
+                *src2 = f(*src2);
+            }
+            Self::Phi(dst, srcs) => {
+                *dst = f(*dst);
+                for (_, s) in srcs {
+                    *s = f(*s);
+                }
+            }
+            Self::Intrinsic(dst, _, srcs) => {
+                *dst = f(*dst);
+                for s in srcs {
+                    *s = f(*s);
+                }
+            }
+            Self::Drive(_, src, _, partial) => {
+                *src = f(*src);
+                if let Some((off, _)) = partial {
+                    *off = f(*off);
+                }
+            }
+            Self::Constant(dst, _) | Self::Probe(dst, _) => {
+                *dst = f(*dst);
+            }
         }
     }
 }

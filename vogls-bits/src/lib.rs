@@ -85,6 +85,17 @@ impl Bits {
         }
     }
 
+    pub fn new_ones(size: VectorSize) -> Self {
+        if size.get() > 64 {
+            Self::Big(
+                size,
+                std::iter::repeat_n(0, size.get().div_ceil(8) as usize).collect(),
+            )
+        } else {
+            Self::Small(1u64.unbounded_shl(size.get()).wrapping_sub(1), size)
+        }
+    }
+
     pub fn load_from_slice(slice: &[u8], size: VectorSize) -> Self {
         if size.get() < 64 {
             let mut value = 0u64;
@@ -270,13 +281,25 @@ impl Bits {
         }
     }
 
-    pub fn concatenate(lhs: Bits, rhs: Bits) -> Bits {
+    pub fn concatenate(lhs: &Bits, rhs: &Bits) -> Bits {
         match (lhs, rhs) {
-            (Bits::Small(lv, ls), Bits::Small(rv, rs)) if lv + rv <= 64 => Bits::Small(
+            (Bits::Small(lv, ls), Bits::Small(rv, rs)) if ls.get() + rs.get() <= 64 => Bits::Small(
                 (lv << rs.get()) | rv,
                 NonZeroU32::new(ls.get() + rs.get()).unwrap(),
             ),
-            _ => todo!(),
+            _ => {
+                let dst_size = VectorSize::new(lhs.size().get() + rhs.size().get()).unwrap();
+                let mut dst = std::iter::repeat_n(0, dst_size.get().div_ceil(8) as usize)
+                    .collect::<Box<[u8]>>();
+                concat::tv_concat(
+                    &mut dst,
+                    lhs.as_slice(),
+                    rhs.as_slice(),
+                    lhs.size(),
+                    rhs.size(),
+                );
+                Self::Big(dst_size, dst)
+            }
         }
     }
 
@@ -286,16 +309,54 @@ impl Bits {
             Bits::Big(_, _) => None,
         }
     }
+
+    pub fn is_one(&self) -> bool {
+        self.as_slice()[0] == 1u8 && self.count_ones() == 1
+    }
+
+    pub fn bitwise_and(lhs: &Self, rhs: &Self) -> Self {
+        assert_eq!(lhs.size(), rhs.size());
+        match (lhs, rhs) {
+            (Self::Small(l, s), Self::Small(r, _)) => Self::Small(l & r, *s),
+            (Self::Big(_s, _l), Self::Big(_, _r)) => todo!(),
+            _ => unreachable!(),
+        }
+    }
+    pub fn bitwise_or(lhs: &Self, rhs: &Self) -> Self {
+        assert_eq!(lhs.size(), rhs.size());
+        match (lhs, rhs) {
+            (Self::Small(l, s), Self::Small(r, _)) => Self::Small(l | r, *s),
+            (Self::Big(_s, _l), Self::Big(_, _r)) => todo!(),
+            _ => unreachable!(),
+        }
+    }
+    pub fn bitwise_xor(lhs: &Self, rhs: &Self) -> Self {
+        assert_eq!(lhs.size(), rhs.size());
+        match (lhs, rhs) {
+            (Self::Small(l, s), Self::Small(r, _)) => Self::Small(l ^ r, *s),
+            (Self::Big(_s, _l), Self::Big(_, _r)) => todo!(),
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn is_unsigned_leq(lhs: &Self, rhs: &Self) -> bool {
+        assert_eq!(lhs.size(), rhs.size());
+        match (lhs, rhs) {
+            (Self::Small(l, _), Self::Small(r, _)) => l <= r,
+            (Self::Big(_s, _l), Self::Big(_, _r)) => todo!(),
+            _ => unreachable!(),
+        }
+    }
 }
 
 macro_rules! impl_arithmetic {
     ($(($f:ident, $op:ident)),+ $(,)?) => {
         impl Bits {
         $(
-        pub fn $f(lhs: Self, rhs: Self) -> Self {
+        pub fn $f(lhs: &Self, rhs: &Self) -> Self {
             assert_eq!(lhs.size(), rhs.size());
             match (lhs, rhs) {
-                (Self::Small(l, s), Self::Small(r, _)) => Self::Small(l.$op(r) & ((1u64 << s.get()) - 1), s),
+                (Self::Small(l, s), Self::Small(r, _)) => Self::Small(l.$op(*r) & 1u64.unbounded_shl(s.get()).wrapping_sub(1), *s),
                 (Self::Big(_s, _l), Self::Big(_, _r)) => todo!(),
                 _ => unreachable!(),
             }
@@ -309,6 +370,8 @@ impl_arithmetic! {
     (multiply, wrapping_mul),
     (add, wrapping_add),
     (subtract, wrapping_sub),
+    (divide, wrapping_div),
+    (modulus, wrapping_rem),
 }
 
 impl fmt::Display for Bits {

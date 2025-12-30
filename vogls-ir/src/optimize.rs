@@ -3,8 +3,8 @@ use std::collections::{HashMap, HashSet};
 use slotmap::SlotMap;
 
 use crate::{
-    BasicBlock, BasicBlockKey, BasicBlockTerminator, Bits, Instruction, ResizeOp, UnaryOp,
-    Variable, VariableKey,
+    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryOp, Bits, Instruction, ResizeOp,
+    SCALAR_VSIZE, UnaryOp, Variable, VariableKey,
 };
 
 pub fn remove_needless_jumps(
@@ -75,6 +75,7 @@ pub fn remove_needless_jumps(
     scratch_seen.clear();
     scratch_seen.insert(new_entry);
 
+    let mut remapped_jump = false;
     while let Some(bb_key) = scratch_stack.pop() {
         while let BasicBlockTerminator::Jump(target_bb) = &mut bbs[bb_key].terminator
             && scratch_bb_to_u32_map[target_bb] == 1
@@ -93,9 +94,25 @@ pub fn remove_needless_jumps(
                 },
             ] = &mut bbs.get_disjoint_mut([bb_key, target_bb]).unwrap();
 
+            scratch_map.insert(target_bb, bb_key);
             bb_instrs.extend_from_slice(tgt_instrs);
             std::mem::swap(bb_terminator, tgt_terminator);
+
+            remapped_jump = true;
             bbs.remove(target_bb);
+        }
+    }
+
+    if remapped_jump {
+        scratch_stack.push(new_entry);
+        scratch_seen.clear();
+        scratch_seen.insert(new_entry);
+
+        while let Some(bb_key) = scratch_stack.pop() {
+            bbs[bb_key].map_bbs(&scratch_map);
+            bbs[bb_key]
+                .terminator
+                .extend_next_rev(scratch_stack, scratch_seen);
         }
     }
 
@@ -132,12 +149,16 @@ pub fn propagate_constants<'a>(
     scratch_stack: &mut Vec<BasicBlockKey>,
     scratch_mfr: &mut Vec<BasicBlockKey>,
     scratch_seen: &mut HashSet<BasicBlockKey>,
+    scratch_removed: &mut HashSet<BasicBlockKey>,
     scratch_map: &mut HashMap<VariableKey, Bits>,
+    scratch_var_to_var_map: &mut HashMap<VariableKey, VariableKey>,
 ) {
     scratch_stack.clear();
     scratch_mfr.clear();
     scratch_seen.clear();
+    scratch_removed.clear();
     scratch_map.clear();
+    scratch_var_to_var_map.clear();
 
     scratch_stack.push(entry);
     scratch_seen.insert(entry);
@@ -186,7 +207,120 @@ pub fn propagate_constants<'a>(
                         },
                     )
                 }
-                I::Binary(_, _, _, _) => continue,
+                I::Binary(dst, op, src1, src2) => {
+                    let csrc1 = scratch_map.get(src1);
+                    let csrc2 = scratch_map.get(src2);
+
+                    use BinaryOp as O;
+                    (
+                        *dst,
+                        match (csrc1, csrc2) {
+                            (Some(src1), Some(src2)) => match op {
+                                O::And(_) => Bits::bitwise_and(src1, src2),
+                                O::Or(_) => Bits::bitwise_or(src1, src2),
+                                O::Xor(_) => Bits::bitwise_xor(src1, src2),
+                                O::Add(_) => Bits::add(src1, src2),
+                                O::Sub(_) => Bits::subtract(src1, src2),
+                                O::Multiply(_) => Bits::multiply(src1, src2),
+                                O::Divide(_) => Bits::divide(src1, src2),
+                                O::Modulus(_) => Bits::modulus(src1, src2),
+                                O::UnsignedLessEqual(_) => {
+                                    Bits::from(Bits::is_unsigned_leq(src1, src2))
+                                }
+                                O::SelectBit(_)
+                                | O::LogicalShiftLeft(..)
+                                | O::LogicalShiftRight(..)
+                                | O::ArithmeticShiftLeft(..)
+                                | O::ArithmeticShiftRight(..) => continue,
+                                O::Concat(_, _) => Bits::concatenate(src1, src2),
+                            },
+                            (Some(src), _) | (_, Some(src)) => {
+                                let non_constant_src = if csrc1.is_none() { *src1 } else { *src2 };
+                                macro_rules! set_eq_to_non_constant_src {
+                                    () => {{
+                                        _ = scratch_var_to_var_map.insert(*dst, non_constant_src);
+                                        continue;
+                                    }};
+                                }
+
+                                let num_ones = src.count_ones();
+                                let size = src.size();
+                                match op {
+                                    O::And(_) if num_ones == 0 => Bits::new_zeroed(size),
+                                    O::And(_) | O::Add(_) | O::Sub(_) if num_ones == size.get() => {
+                                        set_eq_to_non_constant_src!()
+                                    }
+                                    O::And(_) => continue,
+                                    O::Or(_) | O::Xor(_) if num_ones == 0 => {
+                                        set_eq_to_non_constant_src!()
+                                    }
+                                    O::Or(_) if num_ones == size.get() => Bits::new_ones(size),
+                                    O::Or(_) => continue,
+                                    O::Xor(_) if num_ones == size.get() => src.bitwise_negate(),
+                                    O::Xor(_) => continue,
+
+                                    O::Add(_) | O::Sub(_) => continue,
+                                    O::Multiply(_) if num_ones == 0 => Bits::new_zeroed(size),
+                                    O::Multiply(_) | O::Divide(_) if src.is_one() => {
+                                        set_eq_to_non_constant_src!()
+                                    }
+                                    O::Multiply(_) | O::Divide(_) => continue,
+                                    O::UnsignedLessEqual(_) if num_ones == 0 && csrc1.is_none() => {
+                                        *i = Instruction::Unary(
+                                            *dst,
+                                            UnaryOp::ReduceOr,
+                                            non_constant_src,
+                                        );
+                                        continue;
+                                    }
+                                    O::UnsignedLessEqual(_) if num_ones == 0 && csrc2.is_none() => {
+                                        Bits::new_ones(SCALAR_VSIZE)
+                                    }
+                                    O::UnsignedLessEqual(_)
+                                        if num_ones == size.get() && csrc1.is_none() =>
+                                    {
+                                        Bits::new_ones(SCALAR_VSIZE)
+                                    }
+                                    O::UnsignedLessEqual(_)
+                                        if num_ones == size.get() && csrc2.is_none() =>
+                                    {
+                                        *i = Instruction::Unary(
+                                            *dst,
+                                            UnaryOp::ReduceAnd,
+                                            non_constant_src,
+                                        );
+                                        continue;
+                                    }
+                                    O::LogicalShiftLeft(..)
+                                    | O::LogicalShiftRight(..)
+                                    | O::ArithmeticShiftLeft(..)
+                                    | O::ArithmeticShiftRight(..)
+                                        if csrc1.is_none() && num_ones == 0 =>
+                                    {
+                                        set_eq_to_non_constant_src!();
+                                    }
+                                    O::LogicalShiftLeft(..)
+                                    | O::LogicalShiftRight(..)
+                                    | O::ArithmeticShiftLeft(..)
+                                    | O::ArithmeticShiftRight(..)
+                                        if csrc2.is_none() && num_ones == 0 =>
+                                    {
+                                        Bits::new_zeroed(size)
+                                    }
+                                    O::UnsignedLessEqual(_)
+                                    | O::Modulus(_)
+                                    | O::SelectBit(_)
+                                    | O::LogicalShiftLeft(..)
+                                    | O::LogicalShiftRight(..)
+                                    | O::ArithmeticShiftLeft(..)
+                                    | O::ArithmeticShiftRight(..)
+                                    | O::Concat(..) => continue,
+                                }
+                            }
+                            (None, None) => continue,
+                        },
+                    )
+                }
                 I::Intrinsic(_, _, _) => continue,
                 I::Probe(_, _) => continue,
                 I::Drive(_, _, _, _) => continue,
@@ -222,6 +356,65 @@ pub fn propagate_constants<'a>(
             .terminator
             .extend_next_rev(scratch_mfr, scratch_seen);
         bbs.remove(bb_key);
+        scratch_removed.insert(bb_key);
+    }
+
+    if !scratch_removed.is_empty() {
+        scratch_seen.clear();
+        scratch_stack.push(entry);
+        scratch_seen.insert(entry);
+
+        while let Some(bb_key) = scratch_stack.pop() {
+            let BasicBlock {
+                name: _,
+                instrs,
+                terminator,
+            } = &mut bbs[bb_key];
+
+            instrs.retain_mut(|i| {
+                if let Instruction::Phi(dst, origins) = i {
+                    let new_origins = origins
+                        .iter()
+                        .filter(|(bb, _)| !scratch_removed.contains(bb))
+                        .copied()
+                        .collect::<Box<_>>();
+                    if new_origins.len() == 1
+                        && let Some((_, src)) = new_origins.first()
+                    {
+                        scratch_var_to_var_map.insert(*dst, *src);
+                        return false;
+                    }
+                    *origins = new_origins;
+                }
+                true
+            });
+            terminator.extend_next_rev(scratch_stack, scratch_seen);
+        }
+    }
+    if !scratch_var_to_var_map.is_empty() {
+        scratch_seen.clear();
+        scratch_stack.push(entry);
+        scratch_seen.insert(entry);
+
+        while let Some(bb_key) = scratch_stack.pop() {
+            let BasicBlock {
+                name: _,
+                instrs,
+                terminator,
+            } = &mut bbs[bb_key];
+
+            instrs.retain_mut(|i| {
+                if i.get_destination_variable()
+                    .is_some_and(|dst| scratch_var_to_var_map.contains_key(&dst))
+                {
+                    return false;
+                }
+                i.map_vars(|v| scratch_var_to_var_map.get(&v).copied().unwrap_or(v));
+                true
+            });
+            terminator.map_vars(|v| scratch_var_to_var_map.get(&v).copied().unwrap_or(v));
+            terminator.extend_next_rev(scratch_stack, scratch_seen);
+        }
     }
 }
 

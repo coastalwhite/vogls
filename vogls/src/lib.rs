@@ -333,8 +333,10 @@ pub fn run(
     let mut scratch_bb_to_bb_map = HashMap::new();
     let mut scratch_bb_to_u32_map = HashMap::new();
     let mut scratch_bb_to_bits_map = HashMap::new();
+    let mut scratch_var_to_var_map = HashMap::new();
     let mut scratch_var_seen = HashSet::new();
     let mut scratch_seen = HashSet::new();
+    let mut scratch_removed = HashSet::new();
     for process in gl.processes.values_mut() {
         for _ in 0..2 {
             process.entry = vogls_ir::optimize::remove_needless_jumps(
@@ -358,7 +360,9 @@ pub fn run(
                 &mut scratch_stack,
                 &mut scratch_mfr,
                 &mut scratch_seen,
+                &mut scratch_removed,
                 &mut scratch_bb_to_bits_map,
+                &mut scratch_var_to_var_map,
             );
             vogls_ir::optimize::deadcode_elimination(
                 &mut gl.bbs,
