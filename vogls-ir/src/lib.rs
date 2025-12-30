@@ -108,6 +108,17 @@ impl BasicBlockTerminator {
             Self::Halt => {}
         }
     }
+
+    fn for_each_var_src(&self, mut f: impl FnMut(VariableKey)) {
+        match self {
+            Self::Branch(v, _, _) => f(*v),
+            Self::Wait(..)
+            | Self::WaitRegion(..)
+            | Self::Watch(..)
+            | Self::Jump(_)
+            | Self::Halt => {}
+        }
+    }
 }
 
 pub struct Variable {
@@ -198,6 +209,45 @@ impl Instruction {
             | Self::Probe(dst, _)
             | Self::Intrinsic(dst, _, _) => Some(*dst),
             Self::Drive(..) => None,
+        }
+    }
+
+    fn for_each_var_src(&self, mut f: impl FnMut(VariableKey)) {
+        match self {
+            Self::Unary(_, _, src) | Self::Resize(_, _, src) => f(*src),
+            Self::Binary(_, _, src1, src2) => {
+                f(*src1);
+                f(*src2);
+            }
+            Self::Phi(_, srcs) => {
+                for (_, s) in srcs {
+                    f(*s);
+                }
+            }
+            Self::Intrinsic(_, _, srcs) => {
+                for s in srcs {
+                    f(*s);
+                }
+            }
+            Self::Drive(_, src, _, partial) => {
+                f(*src);
+                if let Some((off, _)) = partial {
+                    f(*off);
+                }
+            }
+            Self::Constant(_, _) | Self::Probe(_, _) => {}
+        }
+    }
+
+    pub fn has_side_effects_on_call(&self) -> bool {
+        match self {
+            Self::Constant(..)
+            | Self::Unary(..)
+            | Self::Resize(..)
+            | Self::Binary(..)
+            | Self::Phi(..)
+            | Self::Probe(..) => false,
+            Self::Drive(..) | Self::Intrinsic(..) => true,
         }
     }
 }

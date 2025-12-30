@@ -76,7 +76,7 @@ pub fn remove_needless_jumps(
     scratch_seen.insert(new_entry);
 
     while let Some(bb_key) = scratch_stack.pop() {
-        if let BasicBlockTerminator::Jump(target_bb) = &mut bbs[bb_key].terminator
+        while let BasicBlockTerminator::Jump(target_bb) = &mut bbs[bb_key].terminator
             && scratch_bb_to_u32_map[target_bb] == 1
         {
             let target_bb = *target_bb;
@@ -222,5 +222,62 @@ pub fn propagate_constants<'a>(
             .terminator
             .extend_next_rev(scratch_mfr, scratch_seen);
         bbs.remove(bb_key);
+    }
+}
+
+pub fn deadcode_elimination<'a>(
+    bbs: &mut SlotMap<BasicBlockKey, BasicBlock>,
+    vars: &mut SlotMap<VariableKey, Variable>,
+    entry: BasicBlockKey,
+    scratch_stack: &mut Vec<BasicBlockKey>,
+    scratch_seen: &mut HashSet<BasicBlockKey>,
+    scratch_var_seen: &mut HashSet<VariableKey>,
+) {
+    scratch_stack.clear();
+    scratch_seen.clear();
+    scratch_var_seen.clear();
+
+    scratch_stack.push(entry);
+    scratch_seen.insert(entry);
+
+    while let Some(bb_key) = scratch_stack.pop() {
+        let BasicBlock {
+            name: _,
+            instrs,
+            terminator,
+        } = &bbs[bb_key];
+        for i in instrs {
+            i.for_each_var_src(|v| _ = scratch_var_seen.insert(v));
+        }
+        terminator.for_each_var_src(|v| _ = scratch_var_seen.insert(v));
+        terminator.extend_next_rev(scratch_stack, scratch_seen);
+    }
+
+    scratch_seen.clear();
+    scratch_stack.push(entry);
+    scratch_seen.insert(entry);
+
+    while let Some(bb_key) = scratch_stack.pop() {
+        let BasicBlock {
+            name: _,
+            instrs,
+            terminator,
+        } = &mut bbs[bb_key];
+        terminator.extend_next_rev(scratch_stack, scratch_seen);
+        instrs.retain(|i| {
+            if i.has_side_effects_on_call() {
+                return true;
+            }
+
+            let Some(dst) = i.get_destination_variable() else {
+                return true;
+            };
+            if scratch_var_seen.contains(&dst) {
+                return true;
+            }
+
+            vars.remove(dst);
+            false
+        });
     }
 }
