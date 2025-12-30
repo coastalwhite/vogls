@@ -12,9 +12,22 @@ impl fmt::Display for VmInstruction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Constant(dst, value) => write!(f, "{dst} = const {value}"),
-            Self::Unary(dst, op, src) => write!(f, "{dst} = {} {src}", op.into_mnemonic()),
-            Self::Binary(dst, op, src1, src2) => {
+            Self::Unary(dst, op, _, src) => write!(f, "{dst} = {} {src}", op.into_mnemonic()),
+            Self::Resize(dst, op, _, _, src) => write!(f, "{dst} = {} {src}", op.into_mnemonic()),
+            Self::BinaryArithmetic(dst, op, _, src1, src2) => {
                 write!(f, "{dst} = {} {src1}, {src2}", op.into_mnemonic())
+            }
+            Self::BinaryComparison(dst, op, _, src1, src2) => {
+                write!(f, "{dst} = {} {src1}, {src2}", op.into_mnemonic())
+            }
+            Self::Shift(dst, op, _, src1, src2) => {
+                write!(f, "{dst} = {} {src1}, {src2}", op.into_mnemonic())
+            }
+            Self::SelectBit(dst, _, src1, src2) => {
+                write!(f, "{dst} = bselect {src1}, {src2}")
+            }
+            Self::Concat(dst, _, src1, _, src2) => {
+                write!(f, "{dst} = concat {src1}, {src2}")
             }
             Self::Move(dst, src, _) => {
                 write!(f, "{dst} = {src}")
@@ -72,7 +85,12 @@ impl fmt::Display for VmProcess {
             match i {
                 I::Constant(..)
                 | I::Unary(..)
-                | I::Binary(..)
+                | I::Resize(..)
+                | I::BinaryArithmetic(..)
+                | I::BinaryComparison(..)
+                | I::Shift(..)
+                | I::SelectBit(..)
+                | I::Concat(..)
                 | I::Move(..)
                 | I::Intrinsic(..)
                 | I::Probe(..)

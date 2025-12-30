@@ -3,7 +3,8 @@ use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap};
 
 use slotmap::{SlotMap, new_key_type};
-use vogls_ir::{BinaryOp, Bits, INTEGER_VSIZE, IntrinsicOp, TIME_VSIZE, UnaryOp, VectorSize};
+use vogls_bits::get_disjoint_dst_src;
+use vogls_ir::{Bits, INTEGER_VSIZE, IntrinsicOp, ResizeOp, TIME_VSIZE, UnaryOp, VectorSize};
 
 mod bits;
 mod instruction;
@@ -144,7 +145,7 @@ pub fn drive_bits(bits: &mut Bits, slice: &[u8], partial: Option<(u32, VectorSiz
                 true
             }
             Some((offset, length)) => {
-                bits::set_subslice(signal_value, slice, *size, offset, length)
+                vogls_bits::set_subslice::set_subslice(signal_value, slice, *size, offset, length)
             }
         },
         Bits::Small(signal_value, size) => {
@@ -210,23 +211,23 @@ impl Event {
                     bit_stack[var.offset..][..size.get().div_ceil(8) as usize]
                         .copy_from_slice(value);
                 }
-                I::Unary(dst, op, src) => {
+                I::Unary(dst, op, size, src) => {
                     use UnaryOp as O;
                     match op {
-                        O::Neg(size) => {
+                        O::Neg => {
                             bit_stack[dst.offset] = bit_stack[src.offset]
                                 ^ 1u8.unbounded_shl(size.get() % 8).wrapping_sub(1);
                             for i in 1..size.get().div_ceil(8) as usize {
                                 bit_stack[dst.offset + i] = !bit_stack[src.offset + i];
                             }
                         }
-                        O::ReduceOr(size) => {
+                        O::ReduceOr => {
                             let result = bit_stack[src.offset..][..size.get().div_ceil(8) as usize]
                                 .iter()
                                 .any(|b| *b != 0);
                             bit_stack[dst.offset] = u8::from(result);
                         }
-                        O::ReduceAnd(size) => {
+                        O::ReduceAnd => {
                             let result = bit_stack[src.offset + 1..]
                                 [..size.get().div_ceil(8) as usize]
                                 .iter()
@@ -235,7 +236,7 @@ impl Event {
                             let result = result & (bit_stack[src.offset] & mask == mask);
                             bit_stack[dst.offset] = u8::from(result);
                         }
-                        O::ReduceXor(size) => {
+                        O::ReduceXor => {
                             let mut result = 0;
                             if size.get() > 0 {
                                 result = bit_stack[src.offset..][..size.get().div_ceil(8) as usize]
@@ -245,7 +246,12 @@ impl Event {
                             }
                             bit_stack[dst.offset] = u8::from(result % 2 == 1);
                         }
-                        O::ZeroExtend(dst_size, src_size) => {
+                    };
+                }
+                I::Resize(dst, op, dst_size, src_size, src) => {
+                    use ResizeOp as O;
+                    match op {
+                        O::ZeroExtend => {
                             assert!(dst_size >= src_size);
                             for i in 0..src_size.get().div_ceil(8) as usize {
                                 bit_stack[dst.offset + i] = bit_stack[src.offset + i];
@@ -256,7 +262,7 @@ impl Event {
                                 bit_stack[dst.offset + i] = 0;
                             }
                         }
-                        O::SignExtend(dst_size, src_size) => {
+                        O::SignExtend => {
                             assert!(dst_size >= src_size);
                             let sign_offset = src_size.get() - 1;
                             let sign = (bit_stack[src.offset + (sign_offset / 8) as usize]
@@ -285,167 +291,85 @@ impl Event {
                                 }
                             }
                         }
-                        O::Slice(n, width) => {
-                            bits::slice(bit_stack, dst.offset, src.offset, *width, *n);
+                        O::Truncate => {
+                            let (dst, src) = get_disjoint_dst_src(
+                                bit_stack,
+                                dst.offset,
+                                dst_size.get().div_ceil(8) as usize,
+                                src.offset,
+                                src_size.get().div_ceil(8) as usize,
+                            );
+                            vogls_bits::slice::tv_slice(dst, src, *dst_size);
                         }
                     };
                 }
-                I::Binary(dst, op, lhs, rhs) => {
-                    use BinaryOp as O;
-                    match op {
-                        O::And(n) => {
-                            for i in 0..n.get().div_ceil(8) as usize {
-                                bit_stack[dst.offset + i] =
-                                    bit_stack[lhs.offset + i] & bit_stack[rhs.offset + i]
-                            }
-                        }
-                        O::Or(n) => {
-                            for i in 0..n.get().div_ceil(8) as usize {
-                                bit_stack[dst.offset + i] =
-                                    bit_stack[lhs.offset + i] | bit_stack[rhs.offset + i];
-                            }
-                        }
-                        O::Xor(n) => {
-                            for i in 0..n.get().div_ceil(8) as usize {
-                                bit_stack[dst.offset + i] =
-                                    bit_stack[lhs.offset + i] ^ bit_stack[rhs.offset + i];
-                            }
-                        }
-                        O::Add(n) => {
-                            let n = *n;
-                            if n.get() > 64 {
-                                todo!()
-                            }
-                            let l = bits::store_to_u64(&bit_stack, lhs.offset, n);
-                            let r = bits::store_to_u64(&bit_stack, rhs.offset, n);
-                            let out =
-                                l.wrapping_add(r) & (1u64.unbounded_shl(n.get())).wrapping_sub(1);
-                            bits::load_from_u64(bit_stack, dst.offset, n, out);
-                        }
-                        O::Sub(n) => {
-                            let n = *n;
-                            if n.get() > 64 {
-                                todo!()
-                            }
-                            let l = bits::store_to_u64(&bit_stack, lhs.offset, n);
-                            let r = bits::store_to_u64(&bit_stack, rhs.offset, n);
-                            let out =
-                                l.wrapping_sub(r) & (1u64.unbounded_shl(n.get())).wrapping_sub(1);
-                            bits::load_from_u64(bit_stack, dst.offset, n, out);
-                        }
-                        O::Multiply(n) => {
-                            let n = *n;
-                            if n.get() > 64 {
-                                todo!()
-                            }
-                            let l = bits::store_to_u64(&bit_stack, lhs.offset, n);
-                            let r = bits::store_to_u64(&bit_stack, rhs.offset, n);
-                            let out =
-                                l.wrapping_mul(r) & (1u64.unbounded_shl(n.get())).wrapping_sub(1);
-                            bits::load_from_u64(bit_stack, dst.offset, n, out);
-                        }
-                        O::Divide(n) => {
-                            let n = *n;
-                            if n.get() > 64 {
-                                todo!()
-                            }
-                            let l = bits::store_to_u64(&bit_stack, lhs.offset, n);
-                            let r = bits::store_to_u64(&bit_stack, rhs.offset, n);
-                            let out =
-                                l.wrapping_div(r) & (1u64.unbounded_shl(n.get())).wrapping_sub(1);
-                            bits::load_from_u64(bit_stack, dst.offset, n, out);
-                        }
-                        O::Modulus(n) => {
-                            let n = *n;
-                            if n.get() > 64 {
-                                todo!()
-                            }
-                            let l = bits::store_to_u64(&bit_stack, lhs.offset, n);
-                            let r = bits::store_to_u64(&bit_stack, rhs.offset, n);
-                            let out =
-                                l.wrapping_rem(r) & 1u64.unbounded_shl(n.get()).wrapping_sub(1);
-                            bits::load_from_u64(bit_stack, dst.offset, n, out);
-                        }
-                        O::UnsignedLessEqual(n) => {
-                            let mut set = false;
-                            for i in 0..n.get().div_ceil(8) as usize {
-                                let value = match bit_stack[lhs.offset + i]
-                                    .cmp(&bit_stack[rhs.offset + i])
-                                {
-                                    Ordering::Less => true,
-                                    Ordering::Greater => false,
-                                    Ordering::Equal => continue,
-                                };
-                                set = true;
-                                bit_stack[dst.offset] = u8::from(value);
-                            }
-                            if !set {
-                                bit_stack[dst.offset] = u8::from(true);
-                            }
-                        }
-                        O::SelectBit(n) => {
-                            let idx = bits::store_to_u64(&bit_stack, rhs.offset, INTEGER_VSIZE);
-                            assert!(idx < n.get() as u64);
-                            let idx = idx as u32;
-
-                            bit_stack[dst.offset] =
-                                (bit_stack[lhs.offset + (idx / 8) as usize] >> (idx % 8)) & 1;
-                        }
-                        O::LogicalShiftLeft(n, shift_n) => {
-                            let n = *n;
-                            if n.get() > 64 {
-                                todo!()
-                            }
-                            let l = bits::store_to_u64(&bit_stack, lhs.offset, n);
-                            let r = bits::store_to_u64(&bit_stack, rhs.offset, *shift_n);
-                            let out = l.wrapping_shl(r as u32)
-                                & (1u64.unbounded_shl(n.get())).wrapping_sub(1);
-                            bits::load_from_u64(bit_stack, dst.offset, n, out);
-                        }
-                        O::LogicalShiftRight(n, shift_n) => {
-                            let shift = bits::store_to_u64(&bit_stack, rhs.offset, *shift_n);
-                            if shift == 0 {
-                                for i in 0..n.get().div_ceil(8) as usize {
-                                    bit_stack[dst.offset + i] = bit_stack[lhs.offset + i];
-                                }
-                                continue;
-                            }
-
-                            let shift = VectorSize::new(shift as u32).unwrap();
-                            if shift >= *n {
-                                for i in 0..n.get().div_ceil(8) as usize {
-                                    bit_stack[dst.offset + i] = 0;
-                                }
-                                continue;
-                            }
-                            bits::logical_shift_right(
-                                bit_stack,
-                                dst.offset,
-                                lhs.offset,
-                                shift as VectorSize,
-                                *n,
-                            );
-                        }
-                        O::ArithmeticShiftLeft(..) => todo!(),
-                        O::ArithmeticShiftRight(n, shift_n) => {
-                            let n = *n;
-                            if n.get() > 64 {
-                                todo!()
-                            }
-                            let l = bits::store_to_u64(&bit_stack, lhs.offset, n);
-                            let r = bits::store_to_u64(&bit_stack, rhs.offset, *shift_n);
-
-                            let offset = 64 - n.get();
-
-                            let out = (((l << offset) as i64).unbounded_shr(offset + r as u32)
-                                as u64)
-                                & (1u64.unbounded_shl(n.get())).wrapping_sub(1);
-                            bits::load_from_u64(bit_stack, dst.offset, n, out);
-                        }
-                        O::Concat(lhs_size, rhs_size) => bits::concat(
-                            bit_stack, dst.offset, lhs.offset, rhs.offset, *lhs_size, *rhs_size,
-                        ),
+                I::BinaryArithmetic(dst, op, size, lhs, rhs) => {
+                    use BinaryArithmeticOp as O;
+                    let f = match op {
+                        O::And => vogls_bits::arithmetic::tv_bitwise_and,
+                        O::Or => vogls_bits::arithmetic::tv_bitwise_or,
+                        O::Xor => vogls_bits::arithmetic::tv_bitwise_xor,
+                        O::Add => vogls_bits::arithmetic::tv_addition,
+                        O::Sub => vogls_bits::arithmetic::tv_subtraction,
+                        O::Multiply => vogls_bits::arithmetic::tv_multiplication,
+                        O::Divide => vogls_bits::arithmetic::tv_division,
+                        O::Modulus => vogls_bits::arithmetic::tv_modulus,
                     };
+
+                    let nbytes = size.get().div_ceil(8) as usize;
+
+                    let (dst, lhs, rhs) = vogls_bits::get_disjoint_dst_s1_s2(
+                        bit_stack, dst.offset, nbytes, lhs.offset, nbytes, rhs.offset, nbytes,
+                    );
+
+                    f(dst, lhs, rhs, *size);
+                }
+                I::BinaryComparison(dst, op, size, lhs, rhs) => {
+                    use BinaryComparisonOp as O;
+                    let f = match op {
+                        O::UnsignedLessEqual => vogls_bits::comparison::tv_unsigned_leq,
+                    };
+                    let nbytes = size.get().div_ceil(8) as usize;
+                    let lhs = &bit_stack[lhs.offset..][..nbytes];
+                    let rhs = &bit_stack[rhs.offset..][..nbytes];
+                    let result = f(lhs, rhs, *size);
+                    bit_stack[dst.offset] = u8::from(result);
+                }
+                I::Shift(dst, op, size, src, offset) => {
+                    use ShiftOp as O;
+                    let f = match op {
+                        O::LogicalLeft => vogls_bits::shift::tv_logical_shift_left,
+                        O::LogicalRight => vogls_bits::shift::tv_logical_shift_right,
+                        O::ArithmeticRight => vogls_bits::shift::tv_arithmetic_shift_right,
+                    };
+
+                    let offset = vogls_bits::load::load_full_u32(&bit_stack[offset.offset..]);
+                    let nbytes = size.get().div_ceil(8) as usize;
+
+                    let (dst, src) = vogls_bits::get_disjoint_dst_src(
+                        bit_stack, dst.offset, nbytes, src.offset, nbytes,
+                    );
+                    f(dst, src, offset, *size);
+                }
+                I::SelectBit(dst, size, src, idx) => {
+                    let idx = vogls_bits::load::load_full_u32(&bit_stack[idx.offset..]);
+                    let nbytes = size.get().div_ceil(8) as usize;
+
+                    let src = &bit_stack[src.offset..][..nbytes];
+                    bit_stack[dst.offset] =
+                        u8::from(vogls_bits::select::tv_select_bit(src, idx, *size));
+                }
+                I::Concat(dst, lhs_size, lhs, rhs_size, rhs) => {
+                    let lbytes = lhs_size.get().div_ceil(8) as usize;
+                    let rbytes = rhs_size.get().div_ceil(8) as usize;
+                    let dbytes =
+                        (lhs_size.get().checked_add(rhs_size.get()).unwrap()).div_ceil(8) as usize;
+
+                    let (dst, lhs, rhs) = vogls_bits::get_disjoint_dst_s1_s2(
+                        bit_stack, dst.offset, dbytes, lhs.offset, lbytes, rhs.offset, rbytes,
+                    );
+
+                    vogls_bits::concat::tv_concat(dst, lhs, rhs, *lhs_size, *rhs_size);
                 }
 
                 I::Move(dst, src, size) => {
@@ -467,7 +391,8 @@ impl Event {
                                         *s,
                                     )
                                 }),
-                            ).unwrap();
+                            )
+                            .unwrap();
                         }
                         O::Assert(f) => {
                             let condition = bit_stack[args[0].0.offset] != 0;
@@ -480,7 +405,8 @@ impl Event {
                                             *s,
                                         )
                                     }),
-                                ).unwrap();
+                                )
+                                .unwrap();
                                 return EvalOutcome::Error;
                             }
                         }

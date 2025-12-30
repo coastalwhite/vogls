@@ -352,6 +352,7 @@ pub fn run(
             );
             vogls_ir::optimize::propagate_constants(
                 &mut gl.bbs,
+                &gl.vars,
                 process.entry,
                 &mut scratch_stack,
                 &mut scratch_mfr,

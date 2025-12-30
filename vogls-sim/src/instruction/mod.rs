@@ -1,4 +1,4 @@
-use vogls_ir::{BinaryOp, Bits, IntrinsicOp, Time, UnaryOp, VectorSize};
+use vogls_ir::{Bits, IntrinsicOp, ResizeOp, Time, UnaryOp, VectorSize};
 
 mod format;
 mod lower;
@@ -13,12 +13,44 @@ pub struct StackRef {
     pub offset: usize,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum BinaryArithmeticOp {
+    And,
+    Or,
+    Xor,
+    Add,
+    Sub,
+    Multiply,
+    Divide,
+    Modulus,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum BinaryComparisonOp {
+    UnsignedLessEqual,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ShiftOp {
+    LogicalLeft,
+    LogicalRight,
+    ArithmeticRight,
+}
+
 #[derive(Debug)]
 pub enum VmInstruction {
     Constant(StackRef, Bits),
 
-    Unary(StackRef, UnaryOp, StackRef),
-    Binary(StackRef, BinaryOp, StackRef, StackRef),
+    Unary(StackRef, UnaryOp, VectorSize, StackRef),
+    Resize(StackRef, ResizeOp, VectorSize, VectorSize, StackRef),
+
+
+    // Binary Operations
+    BinaryArithmetic(StackRef, BinaryArithmeticOp, VectorSize, StackRef, StackRef),
+    BinaryComparison(StackRef, BinaryComparisonOp, VectorSize, StackRef, StackRef),
+    Shift(StackRef, ShiftOp, VectorSize, StackRef, StackRef),
+    SelectBit(StackRef, VectorSize, StackRef, StackRef),
+    Concat(StackRef, VectorSize, StackRef, VectorSize, StackRef),
 
     Move(StackRef, StackRef, VectorSize),
 
@@ -41,4 +73,37 @@ pub enum VmInstruction {
 pub struct VmProcess {
     pub bit_stack_size: usize,
     pub instructions: Vec<VmInstruction>,
+}
+
+impl BinaryArithmeticOp {
+    pub fn into_mnemonic(self) -> &'static str {
+        match self {
+            Self::And => "and",
+            Self::Or => "or",
+            Self::Xor => "xor",
+            Self::Add => "add",
+            Self::Sub => "sub",
+            Self::Multiply => "mul",
+            Self::Divide => "div",
+            Self::Modulus => "rem",
+        }
+    }
+}
+
+impl BinaryComparisonOp {
+    pub fn into_mnemonic(self) -> &'static str {
+        match self {
+            Self::UnsignedLessEqual => "leq",
+        }
+    }
+}
+
+impl ShiftOp {
+    pub fn into_mnemonic(self) -> &'static str {
+        match self {
+            Self::LogicalLeft => "lsl",
+            Self::LogicalRight => "lsr",
+            Self::ArithmeticRight => "asr",
+        }
+    }
 }

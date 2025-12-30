@@ -3,7 +3,8 @@ use std::collections::{HashMap, HashSet};
 use slotmap::SlotMap;
 
 use crate::{
-    BasicBlock, BasicBlockKey, BasicBlockTerminator, Bits, Instruction, UnaryOp, VariableKey,
+    BasicBlock, BasicBlockKey, BasicBlockTerminator, Bits, Instruction, ResizeOp, UnaryOp,
+    Variable, VariableKey,
 };
 
 pub fn remove_needless_jumps(
@@ -126,6 +127,7 @@ pub fn remove_needles_branches(
 
 pub fn propagate_constants<'a>(
     bbs: &mut SlotMap<BasicBlockKey, BasicBlock>,
+    vars: &SlotMap<VariableKey, Variable>,
     entry: BasicBlockKey,
     scratch_stack: &mut Vec<BasicBlockKey>,
     scratch_mfr: &mut Vec<BasicBlockKey>,
@@ -162,14 +164,25 @@ pub fn propagate_constants<'a>(
                     (
                         *dst,
                         match op {
-                            UnaryOp::ReduceOr(_) => Bits::from(bits.count_ones() > 0),
-                            UnaryOp::ReduceAnd(_) => {
-                                Bits::from(bits.count_ones() == bits.size().get())
-                            }
-                            UnaryOp::ReduceXor(_) => Bits::from(bits.count_ones() % 2 == 1),
-                            UnaryOp::ZeroExtend(new_size, _) => bits.zero_extend(*new_size),
-                            UnaryOp::SignExtend(new_size, _) => bits.sign_extend(*new_size),
-                            UnaryOp::Neg(_) | UnaryOp::Slice(_, _) => continue,
+                            UnaryOp::ReduceOr => Bits::from(bits.reduce_or()),
+                            UnaryOp::ReduceAnd => Bits::from(bits.reduce_and()),
+                            UnaryOp::ReduceXor => Bits::from(bits.reduce_xor()),
+                            UnaryOp::Neg => bits.bitwise_negate(),
+                        },
+                    )
+                }
+                I::Resize(dst, op, src) => {
+                    let Some(bits) = scratch_map.get(src) else {
+                        continue;
+                    };
+
+                    let target_size = vars[*dst].size;
+                    (
+                        *dst,
+                        match op {
+                            ResizeOp::ZeroExtend => bits.zero_extend(target_size),
+                            ResizeOp::SignExtend => bits.sign_extend(target_size),
+                            ResizeOp::Truncate => bits.truncate(target_size),
                         },
                     )
                 }

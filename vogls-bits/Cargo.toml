@@ -1,10 +1,7 @@
 [package]
-name = "vogls-ir"
+name = "vogls-bits"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
-vogls-bits.workspace = true
-slotmap.workspace = true
-indexmap.workspace = true
 bytemuck.workspace = true

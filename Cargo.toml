@@ -3,6 +3,7 @@ members = [
     "vogls",
     "vogls-test",
     "vogls-ir",
+    "vogls-bits",
     "vogls-sim",
     "vogls-verilog",
 ]
@@ -21,6 +22,7 @@ clap = { version = "4.5", features = ["derive"] }
 vogls.path = "vogls"
 vogls-sim.path = "vogls-sim"
 vogls-ir.path = "vogls-ir"
+vogls-bits.path = "vogls-bits"
 vogls-verilog.path = "vogls-verilog"
 
 [profile.debug-release]

@@ -1,11 +1,12 @@
 use std::collections::{HashMap, HashSet};
 
 use vogls_ir::{
-    BasicBlockKey, BasicBlockTerminator, GlobalContext, Instruction, ProcessKey, SignalKey,
-    VariableKey,
+    BasicBlockKey, BasicBlockTerminator, BinaryOp, GlobalContext, Instruction, ProcessKey,
+    SignalKey, VariableKey,
 };
 
 use crate::instruction::{StackRef, VmInstruction, VmProcess};
+use crate::{BinaryArithmeticOp, BinaryComparisonOp, ShiftOp};
 
 use super::VmSignalKey;
 
@@ -82,8 +83,40 @@ pub fn lower_process_to_vm(
             let instr = match instr {
                 I::Constant(d, value) => VI::Constant(var(*d), value.clone()),
 
-                I::Unary(d, op, s) => VI::Unary(var(*d), *op, var(*s)),
-                I::Binary(d, op, s1, s2) => VI::Binary(var(*d), *op, var(*s1), var(*s2)),
+                I::Unary(d, op, s) => VI::Unary(var(*d), *op, gl.vars[*s].size, var(*s)),
+                I::Resize(d, op, s) => {
+                    VI::Resize(var(*d), *op, gl.vars[*d].size, gl.vars[*s].size, var(*s))
+                }
+                I::Binary(d, op, s1, s2) => {
+                    let d = var(*d);
+                    let s1 = var(*s1);
+                    let s2 = var(*s2);
+                    use BinaryArithmeticOp as BA;
+                    use BinaryComparisonOp as BC;
+                    use BinaryOp as O;
+                    use ShiftOp as S;
+                    match *op {
+                        O::And(n) => VI::BinaryArithmetic(d, BA::And, n, s1, s2),
+                        O::Or(n) => VI::BinaryArithmetic(d, BA::Or, n, s1, s2),
+                        O::Xor(n) => VI::BinaryArithmetic(d, BA::Xor, n, s1, s2),
+                        O::Add(n) => VI::BinaryArithmetic(d, BA::Add, n, s1, s2),
+                        O::Sub(n) => VI::BinaryArithmetic(d, BA::Sub, n, s1, s2),
+                        O::Multiply(n) => VI::BinaryArithmetic(d, BA::Multiply, n, s1, s2),
+                        O::Divide(n) => VI::BinaryArithmetic(d, BA::Divide, n, s1, s2),
+                        O::Modulus(n) => VI::BinaryArithmetic(d, BA::Modulus, n, s1, s2),
+                        O::UnsignedLessEqual(n) => {
+                            VI::BinaryComparison(d, BC::UnsignedLessEqual, n, s1, s2)
+                        }
+                        O::SelectBit(n) => VI::SelectBit(d, n, s1, s2),
+                        O::LogicalShiftLeft(n, _) => VI::Shift(d, S::LogicalLeft, n, s1, s2),
+                        O::LogicalShiftRight(n, _) => VI::Shift(d, S::LogicalRight, n, s1, s2),
+                        O::ArithmeticShiftLeft(n, _) => VI::Shift(d, S::LogicalLeft, n, s1, s2),
+                        O::ArithmeticShiftRight(n, _) => {
+                            VI::Shift(d, S::ArithmeticRight, n, s1, s2)
+                        }
+                        O::Concat(l, r) => VI::Concat(d, l, s1, r, s2),
+                    }
+                }
 
                 I::Intrinsic(dst, op, args) => {
                     let args = args.iter().map(|v| (var(*v), gl.vars[*v].size)).collect();

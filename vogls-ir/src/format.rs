@@ -3,7 +3,7 @@ use std::collections::HashSet;
 
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryOp, GlobalContext, Instruction,
-    IntrinsicOp, Process, Signal, Time, UnaryOp, Variable,
+    IntrinsicOp, Process, ResizeOp, Signal, Time, UnaryOp, Variable,
 };
 
 const INDENT: &str = "  ";
@@ -137,17 +137,23 @@ impl BinaryOp {
 impl UnaryOp {
     pub const fn into_mnemonic(&self) -> &'static str {
         match self {
-            Self::Neg(_) => "bneg",
-            Self::ReduceAnd(_) => "bredand",
-            Self::ReduceOr(_) => "bredor",
-            Self::ReduceXor(_) => "bredxor",
-            Self::Slice(_, _) => "bslice",
-            Self::ZeroExtend(_, _) => "zero_extend",
-            Self::SignExtend(_, _) => "sign_extend",
+            Self::Neg => "negate",
+            Self::ReduceAnd => "reduce_and",
+            Self::ReduceOr => "reduce_or",
+            Self::ReduceXor => "reduce_xor",
         }
     }
 }
 
+impl ResizeOp {
+    pub const fn into_mnemonic(&self) -> &'static str {
+        match self {
+            Self::Truncate => "truncate",
+            Self::ZeroExtend => "zero_extend",
+            Self::SignExtend => "sign_extend",
+        }
+    }
+}
 impl IntrinsicOp {
     pub const fn into_mnemonic(&self) -> &'static str {
         match self {
@@ -171,13 +177,19 @@ impl ContextFormat for Instruction {
                 f.write_str(" = ")?;
                 f.write_str(op.into_mnemonic())?;
                 match op {
-                    UnaryOp::Neg(_)
-                    | UnaryOp::ReduceOr(_)
-                    | UnaryOp::ReduceAnd(_)
-                    | UnaryOp::ReduceXor(_) => {}
-                    UnaryOp::ZeroExtend(out, _)
-                    | UnaryOp::SignExtend(out, _)
-                    | UnaryOp::Slice(_, out) => write!(f, "[{out}]")?,
+                    UnaryOp::Neg | UnaryOp::ReduceOr | UnaryOp::ReduceAnd | UnaryOp::ReduceXor => {}
+                }
+                f.write_str(" ")?;
+                ctx.gl.vars.get(*src).unwrap().ctx_fmt(f, ctx)?;
+            }
+            Self::Resize(dst, op, src) => {
+                ctx.gl.vars.get(*dst).unwrap().typed_ctx_fmt(f, ctx)?;
+                f.write_str(" = ")?;
+                f.write_str(op.into_mnemonic())?;
+                match op {
+                    ResizeOp::Truncate | ResizeOp::ZeroExtend | ResizeOp::SignExtend => {
+                        write!(f, "[{}]", ctx.gl.vars[*dst].size)?
+                    }
                 }
                 f.write_str(" ")?;
                 ctx.gl.vars.get(*src).unwrap().ctx_fmt(f, ctx)?;
