@@ -24,8 +24,8 @@ use scope::Scope;
 
 use constant_expr::eval_constant_expr;
 use vogls_ir::{
-    BasicBlockBuilder, ConnectionDirection, GlobalContext, SCALAR_VSIZE, Signal,
-    SignalKey, VariableKey, VectorSize, new_process,
+    BasicBlockBuilder, ConnectionDirection, GlobalContext, SCALAR_VSIZE, Signal, SignalKey,
+    VariableKey, VectorSize, new_process,
 };
 
 use crate::ast::constant_expr::{
@@ -44,7 +44,7 @@ use crate::ast::{AstId, AstIdRange};
 use crate::parser::{AstArenas, TokenRange};
 
 use self::expression::lower_expr;
-use self::scope::{Symbol, SymbolKey, SymbolVariant};
+use self::scope::{SignalSymbol, Symbol, SymbolKey, SymbolVariant};
 pub use self::vtype::VType;
 use self::vvalue::VValue;
 pub use diagnostics::Diagnostics;
@@ -345,7 +345,11 @@ pub fn lower_module_to_ir<'a>(
             name: name.to_string(),
             // @TODO: better definition site
             definition_site: arenas.get_span(root),
-            variant: SymbolVariant::Signal(Vec::new(), *ty, *signal),
+            variant: SymbolVariant::Signal(SignalSymbol {
+                dims: Vec::new(),
+                ty: *ty,
+                key: *signal,
+            }),
         });
         scope.push(name, symbol_key);
     }
@@ -575,10 +579,10 @@ fn lower_to_signal<'a>(
             diagnostics.var_not_found(arenas, *ast_ident);
             return Err(());
         };
-        if let SymbolVariant::Signal(_dims, signal_ty, key) = &scope.symbols[symbol_key].variant
-            && *signal_ty == ty
+        if let SymbolVariant::Signal(s) = &scope.symbols[symbol_key].variant
+            && s.ty == ty
         {
-            return Ok(*key);
+            return Ok(s.key);
         }
     }
 
@@ -616,10 +620,10 @@ fn assign_port_output<'a>(
             diagnostics.var_not_found(arenas, *ast_ident);
             return Err(());
         };
-        if let SymbolVariant::Signal(_dims, signal_ty, key) = &scope.symbols[symbol_key].variant
-            && *signal_ty == ty
+        if let SymbolVariant::Signal(s) = &scope.symbols[symbol_key].variant
+            && s.ty == ty
         {
-            return Ok(*key);
+            return Ok(s.key);
         }
     }
 
@@ -701,8 +705,7 @@ fn assign_port_output<'a>(
                     error = true;
                     continue;
                 };
-                let SymbolVariant::Signal(_dims, _ty, key) = &scope.symbols[symbol_key].variant
-                else {
+                let SymbolVariant::Signal(s) = &scope.symbols[symbol_key].variant else {
                     diagnostics.output_expr_not_allowed(arenas.get_span(expr));
                     error = true;
                     continue;
@@ -715,7 +718,7 @@ fn assign_port_output<'a>(
                 let src = bb_builder.slice(gl, src, length_src);
                 bb_builder.drive_partial(
                     gl,
-                    *key,
+                    s.key,
                     src,
                     offset_dst,
                     length_dst.unwrap_or(SCALAR_VSIZE),
@@ -771,11 +774,11 @@ fn assign_net_lvalue<'a>(
         return Err(());
     };
 
-    let SymbolVariant::Signal(dims, ty, key) = &scope.symbols[symbol_key].variant else {
+    let SymbolVariant::Signal(s) = &scope.symbols[symbol_key].variant else {
         panic!("not a signal");
     };
-    let key = *key;
-    let mut dims = &dims[..];
+    let key = s.key;
+    let mut dims = &s.dims[..];
 
     let mut exprs = *constant_exprs;
     let mut arr_idx = if !dims.is_empty()
@@ -833,7 +836,7 @@ fn assign_net_lvalue<'a>(
         return Err(());
     }
 
-    let size = ty.force_net_width();
+    let size = s.ty.force_net_width();
     let partial = match range_expression {
         None => match arr_idx {
             None => None,
@@ -860,7 +863,7 @@ fn assign_net_lvalue<'a>(
             })
         }
     };
-    let size = partial.map_or(ty.force_net_width(), |(_, s)| s);
+    let size = partial.map_or(s.ty.force_net_width(), |(_, s)| s);
     let variable = expression::sign_or_zero_extend(gl, builder, variable, variable_ty, size);
     builder.drive_opt_partial(gl, key, variable, partial);
     Ok(())

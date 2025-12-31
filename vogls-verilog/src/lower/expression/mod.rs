@@ -22,7 +22,7 @@ mod system_function_call;
 pub fn lower_expr<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
-    scope: &mut Scope<'a>,
+    scope: &Scope<'a>,
     diagnostics: &mut Diagnostics,
     builder: &mut BasicBlockBuilder,
     expr: AstId<Expr>,
@@ -364,8 +364,8 @@ pub fn lower_expr<'a>(
                             .constant(gl, Bits::from_i64_truncated(value.unwrap(), INTEGER_VSIZE)),
                     ),
                     SymbolVariant::Task(_) => todo!(),
-                    SymbolVariant::Signal(dims, ty, key) => {
-                        let mut dims = &dims[..];
+                    SymbolVariant::Signal(s) => {
+                        let mut dims = &s.dims[..];
                         if !dims.is_empty() {
                             if exprs.pop_front().is_none() {
                                 diagnostics
@@ -413,15 +413,15 @@ pub fn lower_expr<'a>(
                                 continue 'dispatch_loop;
                             }
 
-                            let size = ty.force_net_width();
-                            let variable = builder.probe(gl, *key);
+                            let size = s.ty.force_net_width();
+                            let variable = builder.probe(gl, s.key);
                             let offset = builder.multiply_constant(gl, offset, size.get());
                             let variable = builder.logical_shift_right(gl, variable, offset);
                             let variable = builder.slice(gl, variable, size);
 
-                            (*ty, variable)
+                            (s.ty, variable)
                         } else {
-                            (*ty, builder.probe(gl, *key))
+                            (s.ty, builder.probe(gl, s.key))
                         }
                     }
                 };
@@ -819,9 +819,9 @@ pub fn get_used_signals<'a>(
                 };
                 let symbol = &scope.symbols[symbol_key];
                 match &symbol.variant {
-                    SymbolVariant::Signal(_, _, signal_key) => {
-                        if signals_seen.insert(*signal_key) {
-                            signals.push(*signal_key);
+                    SymbolVariant::Signal(s) => {
+                        if signals_seen.insert(s.key) {
+                            signals.push(s.key);
                         }
                     }
                     SymbolVariant::Genvar(_)

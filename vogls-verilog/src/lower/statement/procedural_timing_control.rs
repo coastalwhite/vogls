@@ -155,11 +155,11 @@ pub fn lower<'a>(
                         diagnostics.var_not_found(arenas, *ast_ident);
                         return Err(());
                     };
-                    let SymbolVariant::Signal(_dims, _ty, key) = &scope.symbols[symbol_key].variant
+                    let SymbolVariant::Signal(s) = &scope.symbols[symbol_key].variant
                     else {
                         panic!("not a signal");
                     };
-                    let key = *key;
+                    let key = s.key;
 
                     let (variable, _) =
                         lower_expr(gl, arenas, scope, diagnostics, &mut builder, *expr)?;

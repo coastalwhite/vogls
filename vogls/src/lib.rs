@@ -31,6 +31,7 @@ pub struct ExecutionContext {
     pub emit_vm: bool,
     pub trace: TracingLevel,
     pub time: u64,
+    pub opt_rounds: u8,
 }
 
 fn append_referenced_modules_generate_block<'a>(
@@ -338,7 +339,7 @@ pub fn run(
     let mut scratch_seen = HashSet::new();
     let mut scratch_removed = HashSet::new();
     for process in gl.processes.values_mut() {
-        for _ in 0..0 {
+        for _ in 0..ectx.opt_rounds {
             process.entry = vogls_ir::optimize::remove_needless_jumps(
                 &mut gl.bbs,
                 process.entry,
@@ -392,18 +393,18 @@ pub fn run(
     // elaborate::elaborate(tl_module_key, &mut gl, &mut elab_processes);
 
     let mut io_signals = HashMap::new();
+    let mut stack_top = 0usize;
     for process in gl.processes.keys() {
         if ectx.emit_vm && ectx.emit_ir {
             println!();
             println!("{}", gl.processes[process].display(&gl));
         }
-        let vm_process = lower_process_to_vm(process, &gl, &mut io_signals);
+        let vm_process = lower_process_to_vm(process, &gl, &mut stack_top, &mut io_signals);
 
         if ectx.emit_vm {
             print!("{}", &vm_process);
         }
 
-        let bit_stack = vec![0u8; vm_process.bit_stack_size];
         let vm_process_key = processes.insert(vm_process);
 
         if ectx.emit_vm {
@@ -412,10 +413,10 @@ pub fn run(
 
         regions.active.push(Event::Evaluation(EvaluationEvent {
             process: vm_process_key,
-            bit_stack,
             ip: 0,
         }));
     }
+    let mut stack = vec![0u8; stack_top];
 
     for (ir_signal, signal) in io_signals {
         let Signal {
@@ -445,6 +446,7 @@ pub fn run(
         &mut signals,
         &mut listeners,
         &mut watches,
+        &mut stack,
         ectx.time,
     )
     .is_err();

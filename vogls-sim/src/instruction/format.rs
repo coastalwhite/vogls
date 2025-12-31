@@ -78,7 +78,7 @@ impl fmt::Display for VmSignalKey {
 
 impl fmt::Display for VmProcess {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "vm_process() : {} {{", self.bit_stack_size)?;
+        writeln!(f, "vm_process() {{")?;
         let mut labels = Vec::new();
         for i in &self.instructions {
             use VmInstruction as I;

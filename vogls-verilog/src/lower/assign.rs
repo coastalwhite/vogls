@@ -98,7 +98,7 @@ pub fn variable_lvalue_flat_ty<'a>(
         SymbolVariant::Genvar(_) => (VType::SignedNet(INTEGER_VSIZE), 0),
         SymbolVariant::Constant(v) => (v.ty(), 0),
         SymbolVariant::Task(_) => todo!(),
-        SymbolVariant::Signal(dims, ty, _key) => (*ty, dims.len()),
+        SymbolVariant::Signal(s) => (s.ty, s.dims.len()),
     };
 
     if exprs.len() > n_dims {
@@ -176,7 +176,7 @@ pub fn assign_variable_lvalue_flat<'a>(
         SymbolVariant::Genvar(_) => (VType::SignedNet(INTEGER_VSIZE), Vec::new()),
         SymbolVariant::Constant(v) => (v.ty(), Vec::new()),
         SymbolVariant::Task(_) => todo!(),
-        SymbolVariant::Signal(dims, ty, _key) => (*ty, dims.clone()),
+        SymbolVariant::Signal(s) => (s.ty, s.dims.clone()),
     };
     let mut dims = &dims[..];
     let mut arr_idx = if !dims.is_empty()
@@ -238,8 +238,8 @@ pub fn assign_variable_lvalue_flat<'a>(
         SymbolVariant::Constant(_) => todo!(),
         SymbolVariant::Genvar(_) => todo!(),
         SymbolVariant::Task(_) => todo!(),
-        SymbolVariant::Signal(_dims, _ty, key) => {
-            let key = *key;
+        SymbolVariant::Signal(s) => {
+            let key = s.key;
             let size = ty.force_net_width();
             let partial = match range_expression {
                 None => match arr_idx {

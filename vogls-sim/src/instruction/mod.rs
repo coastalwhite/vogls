@@ -71,7 +71,6 @@ pub enum VmInstruction {
 
 #[derive(Debug)]
 pub struct VmProcess {
-    pub bit_stack_size: usize,
     pub instructions: Vec<VmInstruction>,
 }
 

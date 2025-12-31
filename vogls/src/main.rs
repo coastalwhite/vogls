@@ -26,6 +26,9 @@ struct Args {
 
     #[arg(short, long, default_value_t = u64::MAX)]
     time: u64,
+
+    #[arg(long = "opt-rounds", default_value_t = 2)]
+    opt_rounds: u8,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -41,8 +44,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             emit_unoptimized_ir: args.emit_unoptimized_ir,
             emit_ir: args.emit_ir,
             emit_vm: args.emit_vm,
-            trace: args.trace.then_some(TracingLevel::Events).unwrap_or(TracingLevel::None),
+            trace: args
+                .trace
+                .then_some(TracingLevel::Events)
+                .unwrap_or(TracingLevel::None),
             time: args.time,
+            opt_rounds: args.opt_rounds,
         },
     )?;
 

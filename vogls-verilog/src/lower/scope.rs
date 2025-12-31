@@ -23,6 +23,13 @@ pub struct Symbol {
     pub variant: SymbolVariant,
 }
 
+#[derive(Clone)]
+pub struct SignalSymbol {
+    pub dims: Vec<u32>,
+    pub ty: VType,
+    pub key: SignalKey,
+}
+
 impl Index<SymbolKey> for SymbolTable {
     type Output = Symbol;
     fn index(&self, index: SymbolKey) -> &Self::Output {
@@ -48,7 +55,7 @@ impl SymbolTable {
 pub enum SymbolVariant {
     Genvar(Option<i64>),
     Constant(VValue),
-    Signal(Vec<u32>, VType, SignalKey),
+    Signal(SignalSymbol),
     Task(AstId<StatementOrNull>),
 }
 

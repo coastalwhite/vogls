@@ -4,7 +4,7 @@ use crate::ast::statement::{LoopStatement, LoopStatementVariant};
 use crate::ast::{AstId, AstIdRange};
 use crate::lower::diagnostics::Diagnostics;
 use crate::lower::scope::{Scope, SymbolVariant};
-use crate::lower::{Region, assign, get_intersect_symbols_generated, lower_expr};
+use crate::lower::{assign, get_intersect_symbols_generated, lower_expr, Region};
 use crate::parser::AstArenas;
 
 pub fn lower_loop_statement<'a>(
@@ -83,7 +83,7 @@ pub fn lower_loop_statement<'a>(
             SymbolVariant::Constant(_) => todo!(),
             SymbolVariant::Genvar(_) => todo!(),
             SymbolVariant::Task(_) => todo!(),
-            SymbolVariant::Signal(_dims, _ty, _) => {}
+            SymbolVariant::Signal(_) => {}
         }
     }
 

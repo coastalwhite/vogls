@@ -51,6 +51,7 @@ pub struct Context {
     pub stderr: Box<dyn std::io::Write>,
     pub tracing_level: TracingLevel,
     pub instruction_count: u64,
+    pub event_count: u64,
 }
 
 impl Context {
@@ -61,6 +62,7 @@ impl Context {
             stderr,
             tracing_level: TracingLevel::Events,
             instruction_count: 0,
+            event_count: 0,
         }
     }
 }
@@ -75,8 +77,6 @@ pub enum Event {
 pub struct EvaluationEvent {
     /// Which process is scheduled.
     pub process: VmProcessKey,
-    /// The stack with which to execute.
-    pub bit_stack: Vec<u8>,
     /// Where to start execution.
     pub ip: usize,
 }
@@ -177,12 +177,9 @@ impl Event {
         signals: &mut HashMap<VmSignalKey, Bits>,
         listeners: &mut SlotMap<ListenerKey, Event>,
         watches: &mut HashMap<VmSignalKey, Vec<ListenerKey>>,
+        stack: &mut [u8],
     ) -> EvalOutcome {
-        let EvaluationEvent {
-            process,
-            bit_stack,
-            ip,
-        } = match &mut self {
+        let EvaluationEvent { process, ip } = match &mut self {
             Event::Drive(sig, assignments) => {
                 let signal_bits = signals.get_mut(sig).unwrap();
                 let mut updated = false;
@@ -208,46 +205,51 @@ impl Event {
             ctx.instruction_count += 1;
             match instr {
                 I::Constant(var, Bits::Small(value, size)) => {
-                    bits::load_from_u64(bit_stack, var.offset, *size, *value);
+                    bits::load_from_u64(stack, var.offset, *size, *value);
                 }
                 I::Constant(var, Bits::Big(size, value)) => {
-                    bit_stack[var.offset..][..size.get().div_ceil(8) as usize]
-                        .copy_from_slice(value);
+                    stack[var.offset..][..size.get().div_ceil(8) as usize].copy_from_slice(value);
                 }
                 I::Unary(dst, op, size, src) => {
                     use UnaryOp as O;
                     match op {
                         O::Neg => {
-                            bit_stack[dst.offset] = bit_stack[src.offset]
-                                ^ 1u8.unbounded_shl(size.get() % 8).wrapping_sub(1);
-                            for i in 1..size.get().div_ceil(8) as usize {
-                                bit_stack[dst.offset + i] = !bit_stack[src.offset + i];
+                            let n_full_bytes = (size.get() / 8) as usize;
+                            if size.get() % 8 == 0 {
+                                for i in 0..n_full_bytes {
+                                    stack[dst.offset + i] = !stack[src.offset + i];
+                                }
+                            } else {
+                                stack[dst.offset + n_full_bytes] = stack[src.offset + n_full_bytes]
+                                    ^ 1u8.unbounded_shl(size.get() % 8).wrapping_sub(1);
+                                for i in 0..n_full_bytes {
+                                    stack[dst.offset + i] = !stack[src.offset + i];
+                                }
                             }
                         }
                         O::ReduceOr => {
-                            let result = bit_stack[src.offset..][..size.get().div_ceil(8) as usize]
+                            let result = stack[src.offset..][..size.get().div_ceil(8) as usize]
                                 .iter()
                                 .any(|b| *b != 0);
-                            bit_stack[dst.offset] = u8::from(result);
+                            stack[dst.offset] = u8::from(result);
                         }
                         O::ReduceAnd => {
-                            let result = bit_stack[src.offset + 1..]
-                                [..size.get().div_ceil(8) as usize]
+                            let result = stack[src.offset + 1..][..size.get().div_ceil(8) as usize]
                                 .iter()
                                 .all(|b| *b == 0xFF);
                             let mask = 1u8.unbounded_shl(size.get() % 8).wrapping_sub(1);
-                            let result = result & (bit_stack[src.offset] & mask == mask);
-                            bit_stack[dst.offset] = u8::from(result);
+                            let result = result & (stack[src.offset] & mask == mask);
+                            stack[dst.offset] = u8::from(result);
                         }
                         O::ReduceXor => {
                             let mut result = 0;
                             if size.get() > 0 {
-                                result = bit_stack[src.offset..][..size.get().div_ceil(8) as usize]
+                                result = stack[src.offset..][..size.get().div_ceil(8) as usize]
                                     .iter()
                                     .map(|b| b.count_ones())
                                     .sum::<u32>();
                             }
-                            bit_stack[dst.offset] = u8::from(result % 2 == 1);
+                            stack[dst.offset] = u8::from(result % 2 == 1);
                         }
                     };
                 }
@@ -257,46 +259,45 @@ impl Event {
                         O::ZeroExtend => {
                             assert!(dst_size >= src_size);
                             for i in 0..src_size.get().div_ceil(8) as usize {
-                                bit_stack[dst.offset + i] = bit_stack[src.offset + i];
+                                stack[dst.offset + i] = stack[src.offset + i];
                             }
                             for i in src_size.get().div_ceil(8) as usize
                                 ..dst_size.get().div_ceil(8) as usize
                             {
-                                bit_stack[dst.offset + i] = 0;
+                                stack[dst.offset + i] = 0;
                             }
                         }
                         O::SignExtend => {
                             assert!(dst_size >= src_size);
                             let sign_offset = src_size.get() - 1;
-                            let sign = (bit_stack[src.offset + (sign_offset / 8) as usize]
+                            let sign = (stack[src.offset + (sign_offset / 8) as usize]
                                 >> (sign_offset % 8))
                                 & 1;
                             let mask = u8::from(sign == 0).wrapping_sub(1);
                             if src_size.get() % 8 == 0 {
                                 for i in 0..(src_size.get() / 8) as usize {
-                                    bit_stack[dst.offset + i] = bit_stack[src.offset + i];
+                                    stack[dst.offset + i] = stack[src.offset + i];
                                 }
                                 for i in (src_size.get() / 8) as usize
                                     ..dst_size.get().div_ceil(8) as usize
                                 {
-                                    bit_stack[dst.offset + i] = mask;
+                                    stack[dst.offset + i] = mask;
                                 }
                             } else {
                                 let sbytes = src_size.get().div_ceil(8) as usize;
                                 for i in 0..sbytes - 1 {
-                                    bit_stack[dst.offset + i] = bit_stack[src.offset + i];
+                                    stack[dst.offset + i] = stack[src.offset + i];
                                 }
-                                bit_stack[dst.offset + sbytes - 1] = bit_stack
-                                    [src.offset + sbytes - 1]
-                                    | (mask << (src_size.get() % 8));
+                                stack[dst.offset + sbytes - 1] =
+                                    stack[src.offset + sbytes - 1] | (mask << (src_size.get() % 8));
                                 for i in sbytes..dst_size.get().div_ceil(8) as usize {
-                                    bit_stack[dst.offset + i] = mask;
+                                    stack[dst.offset + i] = mask;
                                 }
                             }
                         }
                         O::Truncate => {
                             let (dst, src) = get_disjoint_dst_src(
-                                bit_stack,
+                                stack,
                                 dst.offset,
                                 dst_size.get().div_ceil(8) as usize,
                                 src.offset,
@@ -322,7 +323,7 @@ impl Event {
                     let nbytes = size.get().div_ceil(8) as usize;
 
                     let (dst, lhs, rhs) = vogls_bits::get_disjoint_dst_s1_s2(
-                        bit_stack, dst.offset, nbytes, lhs.offset, nbytes, rhs.offset, nbytes,
+                        stack, dst.offset, nbytes, lhs.offset, nbytes, rhs.offset, nbytes,
                     );
 
                     f(dst, lhs, rhs, *size);
@@ -333,10 +334,10 @@ impl Event {
                         O::UnsignedLessEqual => vogls_bits::comparison::tv_unsigned_leq,
                     };
                     let nbytes = size.get().div_ceil(8) as usize;
-                    let lhs = &bit_stack[lhs.offset..][..nbytes];
-                    let rhs = &bit_stack[rhs.offset..][..nbytes];
+                    let lhs = &stack[lhs.offset..][..nbytes];
+                    let rhs = &stack[rhs.offset..][..nbytes];
                     let result = f(lhs, rhs, *size);
-                    bit_stack[dst.offset] = u8::from(result);
+                    stack[dst.offset] = u8::from(result);
                 }
                 I::Shift(dst, op, size, src, offset) => {
                     use ShiftOp as O;
@@ -346,20 +347,20 @@ impl Event {
                         O::ArithmeticRight => vogls_bits::shift::tv_arithmetic_shift_right,
                     };
 
-                    let offset = vogls_bits::load::load_full_u32(&bit_stack[offset.offset..]);
+                    let offset = vogls_bits::load::load_full_u32(&stack[offset.offset..]);
                     let nbytes = size.get().div_ceil(8) as usize;
 
                     let (dst, src) = vogls_bits::get_disjoint_dst_src(
-                        bit_stack, dst.offset, nbytes, src.offset, nbytes,
+                        stack, dst.offset, nbytes, src.offset, nbytes,
                     );
                     f(dst, src, offset, *size);
                 }
                 I::SelectBit(dst, size, src, idx) => {
-                    let idx = vogls_bits::load::load_full_u32(&bit_stack[idx.offset..]);
+                    let idx = vogls_bits::load::load_full_u32(&stack[idx.offset..]);
                     let nbytes = size.get().div_ceil(8) as usize;
 
-                    let src = &bit_stack[src.offset..][..nbytes];
-                    bit_stack[dst.offset] =
+                    let src = &stack[src.offset..][..nbytes];
+                    stack[dst.offset] =
                         u8::from(vogls_bits::select::tv_select_bit(src, idx, *size));
                 }
                 I::Concat(dst, lhs_size, lhs, rhs_size, rhs) => {
@@ -369,7 +370,7 @@ impl Event {
                         (lhs_size.get().checked_add(rhs_size.get()).unwrap()).div_ceil(8) as usize;
 
                     let (dst, lhs, rhs) = vogls_bits::get_disjoint_dst_s1_s2(
-                        bit_stack, dst.offset, dbytes, lhs.offset, lbytes, rhs.offset, rbytes,
+                        stack, dst.offset, dbytes, lhs.offset, lbytes, rhs.offset, rbytes,
                     );
 
                     vogls_bits::concat::tv_concat(dst, lhs, rhs, *lhs_size, *rhs_size);
@@ -377,7 +378,7 @@ impl Event {
 
                 I::Move(dst, src, size) => {
                     for i in 0..size.get().div_ceil(8) as usize {
-                        bit_stack[dst.offset + i] = bit_stack[src.offset + i];
+                        stack[dst.offset + i] = stack[src.offset + i];
                     }
                 }
 
@@ -390,7 +391,7 @@ impl Event {
                                 &mut ctx.stdout,
                                 args.iter().map(|(o, s)| {
                                     Bits::load_from_slice(
-                                        &bit_stack[o.offset..][..s.get().div_ceil(8) as usize],
+                                        &stack[o.offset..][..s.get().div_ceil(8) as usize],
                                         *s,
                                     )
                                 }),
@@ -398,13 +399,13 @@ impl Event {
                             .unwrap();
                         }
                         O::Assert(f) => {
-                            let condition = bit_stack[args[0].0.offset] != 0;
+                            let condition = stack[args[0].0.offset] != 0;
                             if !condition {
                                 f.write_to(
                                     &mut ctx.stdout,
                                     args[1..].iter().map(|(o, s)| {
                                         Bits::load_from_slice(
-                                            &bit_stack[o.offset..][..s.get().div_ceil(8) as usize],
+                                            &stack[o.offset..][..s.get().div_ceil(8) as usize],
                                             *s,
                                         )
                                     }),
@@ -414,7 +415,7 @@ impl Event {
                             }
                         }
                         O::Time => {
-                            bits::load_from_u64(bit_stack, dst.offset, TIME_VSIZE, ctx.time);
+                            bits::load_from_u64(stack, dst.offset, TIME_VSIZE, ctx.time);
                         }
                         O::Finish => {
                             writeln!(&mut ctx.stdout, "[FINISH]").unwrap();
@@ -424,10 +425,10 @@ impl Event {
                 }
                 I::Probe(var, sig) => match signals.get(&sig).unwrap() {
                     Bits::Small(value, size) => {
-                        bits::load_from_u64(bit_stack, var.offset, *size, *value);
+                        bits::load_from_u64(stack, var.offset, *size, *value);
                     }
                     Bits::Big(size, value) => {
-                        bit_stack[var.offset..][..size.get().div_ceil(8) as usize]
+                        stack[var.offset..][..size.get().div_ceil(8) as usize]
                             .copy_from_slice(value);
                     }
                 },
@@ -435,13 +436,13 @@ impl Event {
                     let size = signals[sig].size();
                     let partial = partial.map(|(offset, width)| {
                         (
-                            bits::store_to_u64(&bit_stack, offset.offset, INTEGER_VSIZE) as u32,
+                            bits::store_to_u64(&stack, offset.offset, INTEGER_VSIZE) as u32,
                             width,
                         )
                     });
                     if *region != 0 {
                         let region = (*region - 1) as usize;
-                        let value = Bits::load_from_slice(&bit_stack[var.offset..], size);
+                        let value = Bits::load_from_slice(&stack[var.offset..], size);
                         match regions.other_dispatched[region].entry(DispatchKey::Signal(*sig)) {
                             Entry::Occupied(entry) => {
                                 let Event::Drive(_, assignments) =
@@ -466,7 +467,7 @@ impl Event {
                     let size = partial.map_or(size, |(_, s)| s);
                     let updated = drive_bits(
                         signal,
-                        &bit_stack[var.offset..][..size.get().div_ceil(8) as usize],
+                        &stack[var.offset..][..size.get().div_ceil(8) as usize],
                         partial,
                     );
 
@@ -505,7 +506,7 @@ impl Event {
                 }
                 I::Jump(offset) => *ip = *offset,
                 I::Branch(cond, true_offset, false_offset) => {
-                    let is_true = bit_stack[cond.offset] & 1 != 0;
+                    let is_true = stack[cond.offset] & 1 != 0;
                     if is_true {
                         *ip = *true_offset;
                     } else {
@@ -530,6 +531,7 @@ pub fn run(
     signals: &mut HashMap<VmSignalKey, Bits>,
     listeners: &mut SlotMap<ListenerKey, Event>,
     watches: &mut HashMap<VmSignalKey, Vec<ListenerKey>>,
+    stack: &mut [u8],
     max_time: u64,
 ) -> Result<(), ()> {
     let mut schedule = BTreeMap::<Timestamp, Vec<Event>>::new();
@@ -545,6 +547,9 @@ pub fn run(
                     }
                 }
             }
+            if cfg!(vm_profile) {
+                ctx.event_count += 1;
+            }
 
             let outcome = event.evaluate(
                 ctx,
@@ -554,12 +559,13 @@ pub fn run(
                 signals,
                 listeners,
                 watches,
+                stack,
             );
 
             match outcome {
                 EvalOutcome::Next => continue,
                 EvalOutcome::Error => return Err(()),
-                EvalOutcome::Exit => return Ok(()),
+                EvalOutcome::Exit => break 'region_loop,
             }
         }
 
@@ -583,9 +589,11 @@ pub fn run(
     }
 
     if cfg!(vm_profile) {
-        writeln!(ctx.stdout, "Finished after {} instructions", ctx.instruction_count).unwrap();
+        writeln!(ctx.stdout, "Stats:",).unwrap();
+        writeln!(ctx.stdout, "  # Instructions: {}", ctx.instruction_count).unwrap();
+        writeln!(ctx.stdout, "  # Events:       {}", ctx.event_count).unwrap();
+        writeln!(ctx.stdout, "  # Stack size:   {}", stack.len()).unwrap();
     }
-
 
     Ok(())
 }

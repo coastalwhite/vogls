@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use vogls_ir::{
-    Bits, ConnectionDirection, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE, Signal,
-    SignalKey, VectorSize, new_process,
+    Bits, ConnectionDirection, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE, Signal, SignalKey,
+    VectorSize, new_process,
 };
 
 use crate::ast::constant_expr::ConstantMinTypMaxExpression;
@@ -16,7 +16,7 @@ use crate::ast::module::{
 };
 use crate::ast::{AstId, AstIdRange};
 use crate::lower::expression::{self, lower_expr};
-use crate::lower::scope::{Symbol, SymbolVariant};
+use crate::lower::scope::{SignalSymbol, Symbol, SymbolVariant};
 use crate::lower::statement::statements_to_process;
 use crate::lower::vvalue::VValue;
 use crate::lower::{
@@ -80,7 +80,7 @@ pub fn lower<'a>(
                                 let symbol_key = scope.symbols.insert(Symbol {
                                     name: ident.to_string(),
                                     definition_site: arenas.get_item_span(ast_ident),
-                                    variant: SymbolVariant::Signal(dims, ty, key),
+                                    variant: SymbolVariant::Signal(SignalSymbol { dims, ty, key }),
                                 });
                                 scope.push(ident, symbol_key);
                             }
@@ -100,7 +100,11 @@ pub fn lower<'a>(
                                 let symbol_key = scope.symbols.insert(Symbol {
                                     name: ident.to_string(),
                                     definition_site: arenas.get_item_span(*ast_ident),
-                                    variant: SymbolVariant::Signal(Vec::new(), ty, key),
+                                    variant: SymbolVariant::Signal(SignalSymbol {
+                                        dims: Vec::new(),
+                                        ty,
+                                        key,
+                                    }),
                                 });
                                 scope.push(ident, symbol_key);
 
@@ -148,7 +152,7 @@ pub fn lower<'a>(
                         let symbol_key = scope.symbols.insert(Symbol {
                             name: ident.to_string(),
                             definition_site: arenas.get_span(variable_type),
-                            variant: SymbolVariant::Signal(dims, ty, key),
+                            variant: SymbolVariant::Signal(SignalSymbol { dims, ty, key }),
                         });
                         scope.push(ident, symbol_key);
                     }
@@ -169,7 +173,7 @@ pub fn lower<'a>(
                         let symbol_key = scope.symbols.insert(Symbol {
                             name: ident.to_string(),
                             definition_site: arenas.get_span(variable_type),
-                            variant: SymbolVariant::Signal(dims, ty, key),
+                            variant: SymbolVariant::Signal(SignalSymbol { dims, ty, key }),
                         });
                         scope.push(ident, symbol_key);
                     }
@@ -345,14 +349,12 @@ pub fn lower<'a>(
                         }
 
                         let symbol_key = scope.get(ident).unwrap();
-                        let SymbolVariant::Signal(_dims, _ty, signal_key) =
-                            &scope.symbols[symbol_key].variant
-                        else {
+                        let SymbolVariant::Signal(s) = &scope.symbols[symbol_key].variant else {
                             panic!("not a signal");
                         };
                         // @TODO: Coerce inputs and output
 
-                        bb_builder.drive(gl, *signal_key, value);
+                        bb_builder.drive(gl, s.key, value);
                         bb_builder.watch_for_ins_to(gl, bb_key);
                     }
                 }
@@ -486,14 +488,7 @@ pub fn lower<'a>(
                             let signal = if is_input {
                                 lower_to_signal(gl, arenas, scope, diagnostics, e, width)?
                             } else {
-                                assign_port_output(
-                                    gl,
-                                    arenas,
-                                    scope,
-                                    diagnostics,
-                                    e,
-                                    width,
-                                )?
+                                assign_port_output(gl, arenas, scope, diagnostics, e, width)?
                             };
 
                             if signals[port_idx].replace(signal).is_some() {

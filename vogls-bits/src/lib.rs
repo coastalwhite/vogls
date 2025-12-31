@@ -99,7 +99,7 @@ impl Bits {
     }
 
     pub fn load_from_slice(slice: &[u8], size: VectorSize) -> Self {
-        if size.get() < 64 {
+        if size.get() <= 64 {
             let mut value = 0u64;
             for (i, &b) in slice[..size.get().div_ceil(8) as usize].iter().enumerate() {
                 value |= (b as u64) << (i * 8);

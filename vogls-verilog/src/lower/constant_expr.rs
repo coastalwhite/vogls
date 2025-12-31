@@ -133,7 +133,7 @@ pub fn eval_constant_expr<'a>(
                     }
                     SymbolVariant::Constant(n) => n.clone(),
                     SymbolVariant::Task(_) => todo!(),
-                    SymbolVariant::Signal(_dims, _ty, _) => {
+                    SymbolVariant::Signal(..) => {
                         result_stack.push(None);
                         diagnostics.not_yet_implemented(
                             arenas.get_item_span(*ast_ident),

@@ -13,6 +13,7 @@ use super::VmSignalKey;
 pub fn lower_process_to_vm(
     process: ProcessKey,
     gl: &GlobalContext,
+    stack_top: &mut usize,
     io_signals: &mut HashMap<SignalKey, VmSignalKey>,
 ) -> VmProcess {
     use Instruction as I;
@@ -25,7 +26,6 @@ pub fn lower_process_to_vm(
     let mut bb_phis = HashMap::<BasicBlockKey, Vec<(VariableKey, VariableKey)>>::new();
 
     let mut stack_map = HashMap::new();
-    let mut bit_stack_top = 0;
 
     // Make a map of the stack.
     bb_stack.push(process.entry);
@@ -41,21 +41,14 @@ pub fn lower_process_to_vm(
 
             if let Some(dst) = instr.get_destination_variable() {
                 let size = gl.vars.get(dst).unwrap().size;
-                stack_map.insert(
-                    dst,
-                    StackRef {
-                        offset: bit_stack_top,
-                    },
-                );
-                bit_stack_top += (size.get() as usize).div_ceil(8);
+                stack_map.insert(dst, StackRef { offset: *stack_top });
+                *stack_top += (size.get() as usize).div_ceil(8);
             }
         }
 
         bb_seen.insert(bb_key);
         bb.terminator.extend_next_rev(&mut bb_stack, &mut bb_seen);
     }
-
-    let bit_stack_size = bit_stack_top;
 
     bb_stack.clear();
     bb_seen.clear();
@@ -70,9 +63,11 @@ pub fn lower_process_to_vm(
             *io_signals.entry($signal).or_insert(VmSignalKey(next as _))
         }};
     }
+    macro_rules! var {
+        ($var:expr) => {{ stack_map[&$var] }};
+    }
 
     // Lower the IR instructions to VM instructions.
-    let var = |var: VariableKey| *stack_map.get(&var).unwrap();
     bb_stack.push(process.entry);
     while let Some(bb_key) = bb_stack.pop() {
         let bb = gl.bbs.get(bb_key).unwrap();
@@ -81,19 +76,19 @@ pub fn lower_process_to_vm(
 
         for instr in &bb.instrs {
             let instr = match instr {
-                I::Constant(d, value) => VI::Constant(var(*d), value.clone()),
+                I::Constant(d, value) => VI::Constant(var!(*d), value.clone()),
 
-                I::Unary(d, op, s) => VI::Unary(var(*d), *op, gl.vars[*s].size, var(*s)),
+                I::Unary(d, op, s) => VI::Unary(var!(*d), *op, gl.vars[*s].size, var!(*s)),
                 I::Resize(d, op, s) => {
-                    VI::Resize(var(*d), *op, gl.vars[*d].size, gl.vars[*s].size, var(*s))
+                    VI::Resize(var!(*d), *op, gl.vars[*d].size, gl.vars[*s].size, var!(*s))
                 }
                 I::Binary(d, op, s1, s2) => {
                     let d_size = gl.vars[*d].size;
                     let s1_size = gl.vars[*s1].size;
                     let s2_size = gl.vars[*s2].size;
-                    let d = var(*d);
-                    let s1 = var(*s1);
-                    let s2 = var(*s2);
+                    let d = var!(*d);
+                    let s1 = var!(*s1);
+                    let s2 = var!(*s2);
                     use BinaryArithmeticOp as BA;
                     use BinaryComparisonOp as BC;
                     use BinaryOp as O;
@@ -119,15 +114,15 @@ pub fn lower_process_to_vm(
                 }
 
                 I::Intrinsic(dst, op, args) => {
-                    let args = args.iter().map(|v| (var(*v), gl.vars[*v].size)).collect();
-                    VI::Intrinsic(var(*dst), op.clone(), args)
+                    let args = args.iter().map(|v| (var!(*v), gl.vars[*v].size)).collect();
+                    VI::Intrinsic(var!(*dst), op.clone(), args)
                 }
-                I::Probe(dst, signal) => VI::Probe(var(*dst), signal!(*signal)),
+                I::Probe(dst, signal) => VI::Probe(var!(*dst), signal!(*signal)),
                 I::Drive(signal, src, region, partial) => VI::Drive(
                     signal!(*signal),
-                    var(*src),
+                    var!(*src),
                     *region,
-                    partial.map(|(o, l)| (var(o), l)),
+                    partial.map(|(o, l)| (var!(o), l)),
                 ),
                 I::Phi(..) => continue,
             };
@@ -137,7 +132,7 @@ pub fn lower_process_to_vm(
 
         if let Some(phis) = bb_phis.get(&bb_key) {
             for (dst, src) in phis {
-                instructions.push(VI::Move(var(*dst), var(*src), gl.vars[*src].size));
+                instructions.push(VI::Move(var!(*dst), var!(*src), gl.vars[*src].size));
             }
         }
 
@@ -156,7 +151,7 @@ pub fn lower_process_to_vm(
                 VI::Jump(0)
             }
             T::Jump(_) => VI::Jump(0),
-            T::Branch(cond, _, _) => VI::Branch(var(*cond), 0, 0),
+            T::Branch(cond, _, _) => VI::Branch(var!(*cond), 0, 0),
             T::Halt => VI::Halt,
         };
 
@@ -188,8 +183,5 @@ pub fn lower_process_to_vm(
         }
     }
 
-    VmProcess {
-        bit_stack_size,
-        instructions,
-    }
+    VmProcess { instructions }
 }
