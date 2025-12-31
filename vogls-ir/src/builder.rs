@@ -856,6 +856,7 @@ impl BasicBlockBuilder {
         op: BinaryOp,
     ) -> VariableKey {
         let lhs_size = gl.vars[lhs].size;
+        assert_eq!(gl.vars[rhs].size, INTEGER_VSIZE);
         let dst = self.next_tmp_var(gl, lhs_size);
         self.instrs
             .push(Instruction::Binary(dst, op, lhs, rhs));

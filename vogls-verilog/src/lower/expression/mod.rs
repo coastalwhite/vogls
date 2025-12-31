@@ -682,8 +682,9 @@ macro_rules! impl_shift {
             l: VariableKey,
             l_ty: VType,
             r: VariableKey,
-            _: VType,
+            r_ty: VType,
         ) -> (VariableKey, VType) {
+            let r = sign_or_zero_extend(gl, builder, r, r_ty, INTEGER_VSIZE);
             (builder.$builder_f(gl, l, r), l_ty)
         }
         )+
