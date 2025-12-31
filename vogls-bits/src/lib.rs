@@ -87,10 +87,12 @@ impl Bits {
 
     pub fn new_ones(size: VectorSize) -> Self {
         if size.get() > 64 {
-            Self::Big(
-                size,
-                std::iter::repeat_n(0, size.get().div_ceil(8) as usize).collect(),
-            )
+            let mut bytes =
+                std::iter::repeat_n(0xFFu8, size.get().div_ceil(8) as usize).collect::<Box<[u8]>>();
+            if size.get() % 8 == 0 {
+                *bytes.last_mut().unwrap() &= (1u8 << (size.get() % 8)).wrapping_sub(1);
+            }
+            Self::Big(size, bytes)
         } else {
             Self::Small(1u64.unbounded_shl(size.get()).wrapping_sub(1), size)
         }
