@@ -12,6 +12,8 @@ pub enum LowerErrorReason {
     OutputExprNotAllowed,
     DuplicateDefinition(TextRef),
     ModuleNotFound(TextRef),
+    NetWidthOverflow,
+    ZeroWidthNet,
 }
 
 #[derive(Default)]
@@ -83,5 +85,14 @@ impl Diagnostics {
             LowerErrorReason::ModuleNotFound(ident.item.0),
             Vec::new(),
         ));
+    }
+
+    pub fn net_width_overflow(&mut self, at: TokenRange) {
+        self.errors
+            .push((at, LowerErrorReason::NetWidthOverflow, Vec::new()));
+    }
+    pub fn zero_width_net(&mut self, at: TokenRange) {
+        self.errors
+            .push((at, LowerErrorReason::ZeroWidthNet, Vec::new()));
     }
 }

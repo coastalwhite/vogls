@@ -3,8 +3,8 @@ use vogls_ir::{BasicBlockBuilder, GlobalContext};
 use crate::ast::statement::{LoopStatement, LoopStatementVariant};
 use crate::ast::{AstId, AstIdRange};
 use crate::lower::diagnostics::Diagnostics;
-use crate::lower::scope::{Scope, SymbolVariant};
-use crate::lower::{assign, get_intersect_symbols_generated, lower_expr, Region};
+use crate::lower::scope::Scope;
+use crate::lower::{Region, assign, lower_expr};
 use crate::parser::AstArenas;
 
 pub fn lower_loop_statement<'a>(
@@ -53,39 +53,6 @@ pub fn lower_loop_statement<'a>(
     }
 
     builder = builder.jump(gl);
-
-    let mut intersect_vars_generated =
-        get_intersect_symbols_generated(gl, &*scope, AstIdRange::single(ls.statement), arenas);
-    if let V::For(_, _, step) = ls.variant {
-        let step = arenas.get(step);
-        let step_lvalue = arenas.get(step.lvalue);
-        if step_lvalue.0.len() != 1 {
-            diagnostics.not_yet_implemented(arenas.get_span(step.lvalue), "step concat lvalue");
-            return Err(());
-        }
-        let step_lvalue = arenas.get(step_lvalue.0.get(0));
-        if !step_lvalue.exprs.is_empty() || step_lvalue.range_expression.is_some() {
-            diagnostics.not_yet_implemented(
-                arenas.get_span(step.lvalue),
-                "step with exprs or range expressions",
-            );
-            return Err(());
-        }
-
-        let step_symbol_key = scope
-            .get(arenas.get_ident(step_lvalue.ident.item.0))
-            .unwrap();
-        intersect_vars_generated.push(step_symbol_key);
-    }
-
-    for symkey in &intersect_vars_generated {
-        match &mut scope.symbols[*symkey].variant {
-            SymbolVariant::Constant(_) => todo!(),
-            SymbolVariant::Genvar(_) => todo!(),
-            SymbolVariant::Task(_) => todo!(),
-            SymbolVariant::Signal(_) => {}
-        }
-    }
 
     let loop_start = builder.key();
     let mut repeat_i_phi = None;

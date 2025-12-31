@@ -725,14 +725,18 @@ pub fn lower_variable_type<'a>(
     match arenas.get(variable_type).variant {
         VariableTypeVariant::Dimensions(dimensions) => {
             let dims = dims_to_array(gl, arenas, scope, diagnostics, dimensions)?;
-            let Some(size) = ty
-                .force_net_width()
-                .checked_mul(VectorSize::new(dims.iter().product()).unwrap())
-            else {
-                diagnostics
-                    .not_yet_implemented(arenas.get_span(variable_type), "overflow in net width");
+            let mut size = ty.force_net_width().get();
+            for dim in &dims {
+                size = size.checked_mul(*dim).ok_or_else(|| {
+                    diagnostics.net_width_overflow(arenas.get_span(variable_type));
+                    ()
+                })?;
+            }
+            let Some(size) = VectorSize::new(size) else {
+                diagnostics.zero_width_net(arenas.get_span(variable_type));
                 return Err(());
             };
+
             Ok((dims, size, None))
         }
         VariableTypeVariant::ConstantExpr(expr) => {

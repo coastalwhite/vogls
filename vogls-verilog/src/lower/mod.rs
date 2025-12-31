@@ -28,6 +28,7 @@ use vogls_ir::{
     VariableKey, VectorSize, new_process,
 };
 
+use crate::ast::AstId;
 use crate::ast::constant_expr::{
     ConstantExpr, ConstantMinTypMaxExpression, ConstantRangeExpression,
 };
@@ -36,15 +37,11 @@ use crate::ast::module::{
     GenerateRegion, Module, ModuleItem, ModulePorts, NonPortModuleItem, ParamAssignment,
     ParameterDeclaration, Port, PortDeclaration, PortExpression, PortReference, Range,
 };
-use crate::ast::statement::{
-    LoopStatementVariant, NetLValue, ProceduralTimingControlStatement, Statement, StatementContent,
-    StatementOrNull, VariableAssignment,
-};
-use crate::ast::{AstId, AstIdRange};
+use crate::ast::statement::NetLValue;
 use crate::parser::{AstArenas, TokenRange};
 
 use self::expression::lower_expr;
-use self::scope::{SignalSymbol, Symbol, SymbolKey, SymbolVariant};
+use self::scope::{SignalSymbol, Symbol, SymbolVariant};
 pub use self::vtype::VType;
 use self::vvalue::VValue;
 pub use diagnostics::Diagnostics;
@@ -413,153 +410,6 @@ enum WatchCondition {
     None,
     Posedge,
     Negedge,
-}
-
-fn add_var_assign_intersect_symbols_generated<'a>(
-    _gl: &mut GlobalContext,
-    scope: &Scope<'a>,
-    var_assign: AstId<VariableAssignment>,
-    arenas: &'a AstArenas,
-    black_list: &mut HashSet<&'a str>,
-    symbol_keys: &mut Vec<SymbolKey>,
-) {
-    let va = arenas.get(var_assign);
-    let lvalue = arenas.get(va.lvalue);
-    if lvalue.0.len() != 1 {
-        panic!("not supported");
-    }
-    let lvalue = arenas.get(lvalue.0.get(0));
-    let ident = arenas.get_ident(lvalue.ident.item.0);
-    if black_list.insert(ident) {
-        symbol_keys.push(scope.get(ident).unwrap());
-    }
-}
-
-fn get_intersect_symbols_generated<'a>(
-    gl: &mut GlobalContext,
-    scope: &Scope<'a>,
-    stmts: AstIdRange<Statement>,
-    arenas: &'a AstArenas,
-) -> Vec<SymbolKey> {
-    use StatementContent as S;
-
-    let mut symbols = Vec::new();
-    let mut black_list = HashSet::<&str>::new();
-    let mut stack = Vec::new();
-    stack.push(stmts);
-    while let Some(mut stmts) = stack.pop() {
-        while let Some(stmt) = stmts.pop_front() {
-            let stmt = arenas.get(stmt);
-            match stmt.content {
-                S::BlockingAssignment(id) => {
-                    let ba = arenas.get(id);
-                    let lvalue = arenas.get(ba.variable_lvalue);
-                    for lvalue in lvalue.0.iter() {
-                        let lvalue = arenas.get(lvalue);
-                        let ident = arenas.get_ident(lvalue.ident.item.0);
-                        if black_list.insert(ident) {
-                            symbols.push(scope.get(ident).unwrap());
-                        }
-                    }
-                }
-                S::NonBlockingAssignment(id) => {
-                    let nba = arenas.get(id);
-                    let lvalue = arenas.get(nba.variable_lvalue);
-                    for lvalue in lvalue.0.iter() {
-                        let lvalue = arenas.get(lvalue);
-                        let ident = arenas.get_ident(lvalue.ident.item.0);
-                        if black_list.insert(ident) {
-                            symbols.push(scope.get(ident).unwrap());
-                        }
-                    }
-                }
-                S::CaseStatement(id) => {
-                    let c = arenas.get(id);
-                    stack.push(stmts);
-                    stack.extend(c.items.iter().filter_map(|c| {
-                        match arenas.get(arenas.get(c).statement_or_null) {
-                            StatementOrNull::Attribute(_) => None,
-                            StatementOrNull::Statement(stmt) => Some(AstIdRange::single(*stmt)),
-                        }
-                    }));
-                    break;
-                }
-                S::ConditionalStatement(id) => {
-                    let c = arenas.get(id);
-                    stack.push(stmts);
-                    match arenas.get(c.if_branch.statement) {
-                        StatementOrNull::Attribute(_) => {}
-                        StatementOrNull::Statement(stmt) => stack.push(AstIdRange::single(*stmt)),
-                    }
-                    stack.extend(c.else_ifs.iter().filter_map(|c| {
-                        match arenas.get(arenas.get(c).statement) {
-                            StatementOrNull::Attribute(_) => None,
-                            StatementOrNull::Statement(stmt) => Some(AstIdRange::single(*stmt)),
-                        }
-                    }));
-                    if let Some(else_branch) = c.else_branch {
-                        match arenas.get(else_branch) {
-                            StatementOrNull::Attribute(_) => {}
-                            StatementOrNull::Statement(stmt) => {
-                                stack.push(AstIdRange::single(*stmt))
-                            }
-                        }
-                    }
-                    break;
-                }
-                S::DisableStatement => todo!(),
-                S::EventTrigger => todo!(),
-                S::LoopStatement(id) => {
-                    let ls = arenas.get(id);
-                    if let LoopStatementVariant::For(init, _, step) = &ls.variant {
-                        add_var_assign_intersect_symbols_generated(
-                            gl,
-                            scope,
-                            *init,
-                            arenas,
-                            &mut black_list,
-                            &mut symbols,
-                        );
-                        add_var_assign_intersect_symbols_generated(
-                            gl,
-                            scope,
-                            *step,
-                            arenas,
-                            &mut black_list,
-                            &mut symbols,
-                        );
-                    }
-                    stack.push(stmts);
-                    stack.push(AstIdRange::single(ls.statement));
-                    break;
-                }
-                S::ParBlock => todo!(),
-                S::ProceduralContinuousAssignments => todo!(),
-                S::ProceduralTimingControlStatement(ptc) => {
-                    let ProceduralTimingControlStatement {
-                        procedural_timing_control: _,
-                        statement_or_null,
-                    } = arenas.get(ptc);
-                    stack.push(stmts);
-                    match arenas.get(*statement_or_null) {
-                        StatementOrNull::Attribute(_) => {}
-                        StatementOrNull::Statement(stmt) => stack.push(AstIdRange::single(*stmt)),
-                    };
-                    break;
-                }
-                S::SeqBlock(id) => {
-                    let seq_block = arenas.get(id);
-                    stack.push(stmts);
-                    stack.push(seq_block.statements);
-                    break;
-                }
-                S::SystemTaskEnable(_) => continue,
-                S::TaskEnable(_) => continue,
-                S::WaitStatement(_) => continue,
-            }
-        }
-    }
-    symbols
 }
 
 fn lower_to_signal<'a>(
