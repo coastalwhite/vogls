@@ -498,14 +498,17 @@ pub fn lower<'a>(
                             }
                         }
 
-                        for s in signals.iter() {
-                            if s.is_none() {
-                                diagnostics.not_yet_implemented(
-                                    arenas.get_range_span(*ports),
-                                    "missing port connection",
-                                );
-                                error = true;
-                            }
+                        for (i, s) in signals.iter_mut().enumerate() {
+                            s.get_or_insert_with(|| {
+                                let (name, _, ty) = instant_io.ports[i];
+
+                                let size = ty.force_net_width();
+                                gl.signals.insert(Signal {
+                                    name: format!("{name}::UNCONNECTED"),
+                                    size,
+                                    initialize: None,
+                                })
+                            });
                         }
 
                         if error {
