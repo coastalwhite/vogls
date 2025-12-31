@@ -54,7 +54,7 @@ pub fn lower_system_function_call<'a>(
         "vogls_dbg" => {
             ensure_num_args_equal!(1);
             let (e, e_ty) = arguments[0].ok_or(())?;
-            let format_str = DynFormatString::new("\n".into(), [(0, DynFormatArgument {})].into());
+            let format_str = DynFormatString::new("\n".into(), [(0, DynFormatArgument::default())].into());
             builder.intrinsic(gl, IntrinsicOp::Display(Box::new(format_str)), [e].into());
             Ok((e, e_ty))
         }

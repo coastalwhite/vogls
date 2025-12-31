@@ -3,7 +3,7 @@ module x();
     integer a;
 	initial begin
         $display("Gonna start waiting.");
-        wait (a > 5) $display("Wow, we reached it at %d!", $time);
+        wait (a > 5) $display("Wow, we reached it at %h!", $time);
         $display("Now we can go to rest.");
 	end
 

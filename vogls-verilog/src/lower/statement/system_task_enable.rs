@@ -1,11 +1,11 @@
-use vogls_ir::dyn_format_string::{DynFormatArgument, DynFormatString};
+use vogls_ir::dyn_format_string::{Base, DynFormatArgument, DynFormatString, Padding};
 use vogls_ir::{BasicBlockBuilder, GlobalContext, IntrinsicOp};
 
 use crate::ast::AstId;
 use crate::ast::statement::SystemTaskEnable;
 use crate::lower::expression::lower_expr;
-use crate::lower::{expression, Diagnostics};
 use crate::lower::scope::Scope;
+use crate::lower::{Diagnostics, expression};
 use crate::parser::AstArenas;
 
 pub fn lower_system_task_enable<'a>(
@@ -16,12 +16,15 @@ pub fn lower_system_task_enable<'a>(
     mut builder: BasicBlockBuilder,
     system_task_enable: AstId<SystemTaskEnable>,
 ) -> Result<BasicBlockBuilder, ()> {
-    let SystemTaskEnable { system_task_identifier, expressions } = arenas.get(system_task_enable);
+    let SystemTaskEnable {
+        system_task_identifier,
+        expressions,
+    } = arenas.get(system_task_enable);
     let ident = arenas.get_ident(system_task_identifier.item.0);
 
     match ident {
         "display" => {
-let mut format_string_content = String::new();
+            let mut format_string_content = String::new();
             let mut format_string_arguments = Vec::new();
             let mut format_string_args = Vec::new();
             let mut required_arguments_left = 0;
@@ -42,45 +45,80 @@ let mut format_string_content = String::new();
                         }
 
                         required_arguments_left += 1;
-                        format_string_arguments
-                            .push((format_string_content.len(), DynFormatArgument {}));
 
-                        // @TODO: Make this actually impact formatting.
+                        let nums_start_with_zero = remaining.starts_with('0');
+                        let mut pad_size = None;
                         while remaining.starts_with(|c: char| c.is_ascii_digit()) {
+                            if pad_size.is_some() || !remaining.starts_with('0') {
+                                let p = pad_size.get_or_insert(0);
+                                *p *= 10u32;
+                                *p += (remaining.as_bytes()[0] - b'0') as u32;
+                            }
+
                             at += 1;
                             remaining = &remaining[1..];
-                            continue;
                         }
 
+                        let padding = if let Some(pad_size) = pad_size {
+                            Padding::ZeroPaddedTo(pad_size)
+                        } else if nums_start_with_zero {
+                            Padding::NoPadding
+                        } else {
+                            Padding::ZeroPaddedToSize
+                        };
+                        
                         let Some(b) = remaining.as_bytes().first() else {
+                            format_string_arguments
+                                .push((format_string_content.len(), DynFormatArgument::default()));
                             continue;
                         };
 
+                        at += usize::from(matches!(
+                            b,
+                            b'h' | b'H' |
+                            b'x' | b'X' | // @NOTE: Not in spec: but used by Icarus Verilog
+                            b'd' | b'D' |
+                            b'o' | b'O' |
+                            b'b' | b'B' |
+                            b'c' | b'C' |
+                            b'l' | b'L' |
+                            b'v' | b'V' |
+                            b'm' | b'M' |
+                            b's' | b'S' |
+                            b't' | b'T' |
+                            b'u' | b'U' |
+                            b'z' | b'Z'
+                        ));
+
                         // @TODO: Make this actually impact formatting.
-                        match b {
-                            b'h' | b'H' => at += 1,
-                            b'x' | b'X' => at += 1, // @NOTE: Not in spec: but used by Icarus Verilog
-                            b'd' | b'D' => at += 1,
-                            b'o' | b'O' => at += 1,
-                            b'b' | b'B' => at += 1,
-                            b'c' | b'C' => at += 1,
-                            b'l' | b'L' | b'v' | b'V' | b'm' | b'M' | b's' | b'S' | b't' | b'T'
-                            | b'u' | b'U' | b'z' | b'Z' => {
+                        let base = match b {
+                            b'h' | b'H' => Base::Hexadecimal,
+                            b'x' | b'X' => Base::Hexadecimal, // @NOTE: Not in spec: but used by Icarus Verilog
+                            b'd' | b'D' => Base::Decimal,
+                            b'o' | b'O' => Base::Octal,
+                            b'b' | b'B' => Base::Binary,
+                            b'c' | b'C' | b'l' | b'L' | b'v' | b'V' | b'm' | b'M' | b's' | b'S'
+                            | b't' | b'T' | b'u' | b'U' | b'z' | b'Z' => {
                                 diagnostics.not_yet_implemented(
                                     arenas.get_span(expr),
                                     "format specifier not yet supported",
                                 );
                                 return Err(());
                             }
-                            _ => {}
-                        }
+                            _ => Base::Decimal,
+                        };
+
+                        format_string_arguments.push((
+                            format_string_content.len(),
+                            DynFormatArgument { padding, base },
+                        ));
                     }
                     format_string_content.push_str(&str_literal[at..]);
                 } else {
                     let (var, _) = lower_expr(gl, arenas, scope, diagnostics, &mut builder, expr)?;
                     if required_arguments_left == 0 {
                         format_string_arguments
-                            .push((format_string_content.len(), DynFormatArgument {}));
+                            .push((format_string_content.len(), DynFormatArgument::default()));
                     } else {
                         required_arguments_left -= 1;
                     }
@@ -88,7 +126,10 @@ let mut format_string_content = String::new();
                 }
             }
             if required_arguments_left > 0 {
-                diagnostics.not_yet_implemented(arenas.get_span(system_task_enable), "missing or extra arguments");
+                diagnostics.not_yet_implemented(
+                    arenas.get_span(system_task_enable),
+                    "missing or extra arguments",
+                );
                 return Err(());
             }
             use std::fmt::Write;
@@ -119,7 +160,11 @@ let mut format_string_content = String::new();
             };
             let format_str = DynFormatString::new(
                 content.into(),
-                [(18, DynFormatArgument {}), (22, DynFormatArgument {})].into(),
+                [
+                    (18, DynFormatArgument::default()),
+                    (22, DynFormatArgument::default()),
+                ]
+                .into(),
             );
 
             builder.intrinsic(

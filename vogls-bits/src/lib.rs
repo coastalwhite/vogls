@@ -349,6 +349,46 @@ impl Bits {
             _ => unreachable!(),
         }
     }
+
+    pub fn leading_zeroes(&self) -> u32 {
+        match self {
+            Self::Small(v, s) => v.leading_zeros() - (64 - s.get()),
+            Self::Big(s, v) => {
+                let mut n = 0;
+                let soff = s.get() % 8;
+                if soff != 0 {
+                    let lbn =
+                        self.as_slice()[s.get().div_ceil(8) as usize].leading_zeros() - (8 - soff);
+                    if lbn < soff {
+                        return lbn;
+                    }
+                    n += lbn;
+                }
+                for b in v[..v.len() - 1].iter().rev() {
+                    if *b == 0 {
+                        n += 8;
+                    } else {
+                        return n + b.leading_zeros();
+                    }
+                }
+                debug_assert_eq!(n, s.get());
+                n
+            }
+        }
+    }
+
+    pub fn clog10(&self) -> u32 {
+        match self {
+            Self::Small(v, _) => {
+                if *v == 0 {
+                    1
+                } else {
+                    v.ilog10()
+                }
+            }
+            Self::Big(_, _) => (f64::from(self.leading_zeroes()) / 10.0f64.log2()).ceil() as u32,
+        }
+    }
 }
 
 macro_rules! impl_arithmetic {
