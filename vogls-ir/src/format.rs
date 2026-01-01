@@ -160,6 +160,10 @@ impl IntrinsicOp {
             Self::Time => "time",
             Self::Display(_) => "display",
             Self::Assert(_) => "vogls.assert",
+            Self::VcdOpenFile(_) => "vcd.open_file",
+            Self::VcdAppendModule(_) => "vcd.append_module",
+            Self::VcdPause => "vcd.pause",
+            Self::VcdResume => "vcd.resume",
         }
     }
 }

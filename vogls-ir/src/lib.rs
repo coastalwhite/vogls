@@ -149,11 +149,27 @@ pub const TIME_VSIZE: VectorSize = NonZeroU32::new(64).unwrap();
 pub const SCALAR_VSIZE: VectorSize = NonZeroU32::new(1).unwrap();
 
 #[derive(Debug, Clone)]
+pub struct VcdScope {
+    name: String,
+    items: Vec<VcdScope>,
+}
+
+#[derive(Debug, Clone)]
+pub enum VcdScopeItem {
+    Scope(VcdScope),
+    Variable(SignalKey),
+}
+
+#[derive(Debug, Clone)]
 pub enum IntrinsicOp {
     Time,
     Finish,
     Display(Box<DynFormatString>),
     Assert(Box<DynFormatString>),
+    VcdOpenFile(String),
+    VcdAppendModule(VcdScope),
+    VcdPause,
+    VcdResume,
 }
 
 #[derive(Debug, Clone, Copy)]

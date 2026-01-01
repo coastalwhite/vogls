@@ -11,7 +11,7 @@ pub struct DynFormatString {
     arguments: Box<[(usize, DynFormatArgument)]>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub enum Padding {
     ZeroPaddedToSize,
     ZeroPaddedTo(u32),
@@ -74,78 +74,83 @@ impl DynFormatString {
         for ((arg_at, arg_fmt), arg_bits) in self.arguments.iter().zip(arguments) {
             f.write_all(self.content[at..*arg_at].as_bytes())?;
             at = *arg_at;
-
-            let num_chars = arg_fmt.base.num_chars(&arg_bits);
-            let num_max_chars = arg_fmt.base.num_max_chars(arg_bits.size());
-            assert!(num_chars <= num_max_chars);
-
-            match arg_fmt.padding {
-                Padding::ZeroPaddedToSize => {
-                    for _ in num_chars..num_max_chars {
-                        f.write_all(&[b'0'])?;
-                    }
-                }
-                Padding::ZeroPaddedTo(size) => {
-                    for _ in num_chars.min(size)..size {
-                        f.write_all(&[b'0'])?;
-                    }
-                }
-                Padding::NoPadding => {}
-            }
-
-            match &arg_bits {
-                Bits::Small(v, _) => match arg_fmt.base {
-                    Base::Binary => write!(f, "{v:b}"),
-                    Base::Octal => write!(f, "{v:o}"),
-                    Base::Hexadecimal => write!(f, "{v:x}"),
-                    Base::Decimal => write!(f, "{v:x}"),
-                }?,
-                Bits::Big(_, v) => match arg_fmt.base {
-                    Base::Binary => {
-                        for b in v.iter().rev() {
-                            if *b == 0 {
-                                continue;
-                            }
-                            write!(f, "{b:b}")?
-                        }
-                    }
-                    Base::Octal => {
-                        let left_over = arg_bits.size().get() % (6 * 8);
-                        let num_full = arg_bits.size().get() / (6 * 8);
-
-                        if left_over != 0 {
-                            let v = load_partial_u64(
-                                &arg_bits.as_slice()
-                                    [arg_bits.as_slice().len() - left_over.div_ceil(8) as usize..],
-                                VectorSize::new(left_over).unwrap(),
-                            );
-                            if v != 0 {
-                                write!(f, "{v:o}")?;
-                            }
-                        }
-                        for w in arg_bits.as_slice()[..num_full as usize * 3]
-                            .windows(6)
-                            .rev()
-                        {
-                            let v = load_partial_u64(w, VectorSize::new(6 * 8).unwrap());
-                            if v != 0 {
-                                write!(f, "{v:o}")?;
-                            }
-                        }
-                    }
-                    Base::Hexadecimal => {
-                        for b in v.iter().rev() {
-                            if *b == 0 {
-                                continue;
-                            }
-                            write!(f, "{b:x}")?
-                        }
-                    }
-                    Base::Decimal => todo!(),
-                },
-            }
+            format_bits(f, &arg_bits, arg_fmt.padding, arg_fmt.base)?;
         }
 
         f.write_all(self.content[at..].as_bytes())
     }
+}
+
+pub fn format_bits(
+    f: &mut impl io::Write,
+    bits: &Bits,
+    padding: Padding,
+    base: Base,
+) -> io::Result<()> {
+    let num_chars = base.num_chars(bits);
+    let num_max_chars = base.num_max_chars(bits.size());
+    assert!(num_chars <= num_max_chars);
+
+    match padding {
+        Padding::ZeroPaddedToSize => {
+            for _ in num_chars..num_max_chars {
+                f.write_all(&[b'0'])?;
+            }
+        }
+        Padding::ZeroPaddedTo(size) => {
+            for _ in num_chars.min(size)..size {
+                f.write_all(&[b'0'])?;
+            }
+        }
+        Padding::NoPadding => {}
+    }
+
+    match bits {
+        Bits::Small(v, _) => match base {
+            Base::Binary => write!(f, "{v:b}"),
+            Base::Octal => write!(f, "{v:o}"),
+            Base::Hexadecimal => write!(f, "{v:x}"),
+            Base::Decimal => write!(f, "{v:x}"),
+        }?,
+        Bits::Big(_, v) => match base {
+            Base::Binary => {
+                for b in v.iter().rev() {
+                    if *b == 0 {
+                        continue;
+                    }
+                    write!(f, "{b:b}")?
+                }
+            }
+            Base::Octal => {
+                let left_over = bits.size().get() % (6 * 8);
+                let num_full = bits.size().get() / (6 * 8);
+
+                if left_over != 0 {
+                    let v = load_partial_u64(
+                        &bits.as_slice()[bits.as_slice().len() - left_over.div_ceil(8) as usize..],
+                        VectorSize::new(left_over).unwrap(),
+                    );
+                    if v != 0 {
+                        write!(f, "{v:o}")?;
+                    }
+                }
+                for w in bits.as_slice()[..num_full as usize * 3].windows(6).rev() {
+                    let v = load_partial_u64(w, VectorSize::new(6 * 8).unwrap());
+                    if v != 0 {
+                        write!(f, "{v:o}")?;
+                    }
+                }
+            }
+            Base::Hexadecimal => {
+                for b in v.iter().rev() {
+                    if *b == 0 {
+                        continue;
+                    }
+                    write!(f, "{b:x}")?
+                }
+            }
+            Base::Decimal => todo!(),
+        },
+    }
+    Ok(())
 }

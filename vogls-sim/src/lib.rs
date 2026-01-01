@@ -1,10 +1,11 @@
 use std::cmp::Ordering;
 use std::collections::hash_map::Entry;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use slotmap::{SlotMap, new_key_type};
 use vogls_bits::get_disjoint_dst_src;
-use vogls_ir::{Bits, INTEGER_VSIZE, IntrinsicOp, ResizeOp, TIME_VSIZE, UnaryOp, VectorSize};
+use vogls_ir::dyn_format_string::{Base, Padding, format_bits};
+use vogls_ir::{Bits, IntrinsicOp, ResizeOp, UnaryOp, VectorSize, INTEGER_VSIZE, TIME_VSIZE};
 
 mod bits;
 mod instruction;
@@ -167,6 +168,28 @@ pub fn drive_bits(bits: &mut Bits, slice: &[u8], partial: Option<(u32, VectorSiz
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct VcdScope {
+    name: String,
+    items: Vec<VcdScope>,
+}
+
+#[derive(Debug, Clone)]
+pub enum VcdScopeItem {
+    Scope(VcdScope),
+    Variable(VmSignalKey),
+}
+
+pub struct VcdOutput {
+    start_tracking: Timestamp,
+    paused: bool,
+    scope: VcdScope,
+    tracked: HashMap<VmSignalKey, u64>,
+    set_current_simulation_time: HashMap<VmSignalKey, usize>,
+    set_current_simulation_time_v: Vec<VmSignalKey>,
+    writer: Box<dyn std::io::Write>,
+}
+
 impl Event {
     fn evaluate(
         mut self,
@@ -178,6 +201,7 @@ impl Event {
         listeners: &mut SlotMap<ListenerKey, Event>,
         watches: &mut HashMap<VmSignalKey, Vec<ListenerKey>>,
         stack: &mut [u8],
+        vcd: &mut Option<VcdOutput>,
     ) -> EvalOutcome {
         let EvaluationEvent { process, ip } = match &mut self {
             Event::Drive(sig, assignments) => {
@@ -189,6 +213,18 @@ impl Event {
 
                 if updated {
                     update_watchers(ctx, *sig, watches, listeners, regions);
+                    if let Some(vcd) = vcd.as_mut()
+                        && !vcd.paused
+                        && vcd.tracked.contains_key(sig)
+                    {
+                        vcd.set_current_simulation_time
+                            .entry(*sig)
+                            .or_insert_with(|| {
+                                let idx = vcd.set_current_simulation_time_v.len();
+                                vcd.set_current_simulation_time_v.push(*sig);
+                                idx
+                            });
+                    }
                 }
 
                 return EvalOutcome::Next;
@@ -414,6 +450,36 @@ impl Event {
                                 return EvalOutcome::Error;
                             }
                         }
+                        O::VcdOpenFile(path) => {
+                            if vcd.is_some() {
+                                writeln!(&mut ctx.stderr, "ERR! VCD opened a second file").unwrap();
+                                return EvalOutcome::Error;
+                            }
+
+                            *vcd = Some(VcdOutput {
+                                start_tracking: ctx.time,
+                                paused: false,
+                                scope: VcdScope { name: "top".to_string(), items: Vec::new() },
+                                tracked: HashMap::new(),
+                                set_current_simulation_time: HashMap::new(),
+                                set_current_simulation_time_v: Vec::new(),
+                                writer: Box::new(std::fs::File::create_new(path).unwrap()),
+                            });
+                        }
+                        O::VcdAppendModule(scope) => {
+                            let Some(vcd) = vcd.as_mut() else {
+                                writeln!(&mut ctx.stderr, "ERR! Dumping vars without having a VCD file open").unwrap();
+                                return EvalOutcome::Error;
+                            };
+                            if vcd.start_tracking != ctx.time {
+                                writeln!(&mut ctx.stderr, "ERR! Dumping vars over several simulation times").unwrap();
+                                return EvalOutcome::Error;
+                            }
+
+                            vcd.scope = scope.clone();
+                        }
+                        O::VcdPause => _ = vcd.as_mut().map(|vcd| vcd.paused = true),
+                        O::VcdResume => _ = vcd.as_mut().map(|vcd| vcd.paused = false),
                         O::Time => {
                             bits::load_from_u64(stack, dst.offset, TIME_VSIZE, ctx.time);
                         }
@@ -473,6 +539,18 @@ impl Event {
 
                     if updated {
                         update_watchers(ctx, *sig, watches, listeners, regions);
+                        if let Some(vcd) = vcd.as_mut()
+                            && !vcd.paused
+                            && vcd.tracked.contains_key(sig)
+                        {
+                            vcd.set_current_simulation_time
+                                .entry(*sig)
+                                .or_insert_with(|| {
+                                    let idx = vcd.set_current_simulation_time_v.len();
+                                    vcd.set_current_simulation_time_v.push(*sig);
+                                    idx
+                                });
+                        }
                     }
                 }
                 I::Wait(time) => {
@@ -535,6 +613,19 @@ pub fn run(
     max_time: u64,
 ) -> Result<(), ()> {
     let mut schedule = BTreeMap::<Timestamp, Vec<Event>>::new();
+    let mut vcd = Some(VcdOutput {
+        start_tracking: 0,
+        paused: false,
+        tracked: signals
+            .keys()
+            .map(|s| *s)
+            .enumerate()
+            .map(|(i, s)| (s, i as u64))
+            .collect(),
+        set_current_simulation_time: HashMap::new(),
+        set_current_simulation_time_v: Vec::new(),
+        writer: ,
+    });
     'region_loop: loop {
         while let Some(event) = regions.active.pop() {
             if ctx.tracing_level >= TracingLevel::Events {
@@ -560,6 +651,7 @@ pub fn run(
                 listeners,
                 watches,
                 stack,
+                &mut vcd,
             );
 
             match outcome {
@@ -575,6 +667,32 @@ pub fn run(
                 std::mem::swap(&mut regions.active, region);
                 continue 'region_loop;
             }
+        }
+
+        // Dump the VCD updates for this simulation time.
+        if let Some(vcd) = vcd.as_mut()
+            && !vcd.set_current_simulation_time.is_empty()
+        {
+            writeln!(vcd.writer.as_mut(), "#{}", ctx.time).unwrap();
+            for signal in &vcd.set_current_simulation_time_v {
+                let bits = &signals[&signal];
+                let reference = vcd.tracked[&signal];
+                if bits.size().get() > 1 {
+                    vcd.writer.as_mut().write_all(&[b'b']).unwrap();
+                }
+                format_bits(
+                    &mut vcd.writer,
+                    bits,
+                    Padding::ZeroPaddedToSize,
+                    Base::Binary,
+                )
+                .unwrap();
+
+                writeln!(vcd.writer.as_mut(), "W{reference:X}").unwrap();
+            }
+
+            vcd.set_current_simulation_time.clear();
+            vcd.set_current_simulation_time_v.clear();
         }
 
         let Some((at, events)) = schedule.pop_first() else {
