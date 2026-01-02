@@ -1,12 +1,12 @@
 use std::collections::{HashMap, HashSet};
 
 use vogls_ir::{
-    BasicBlockKey, BasicBlockTerminator, BinaryOp, GlobalContext, Instruction, ProcessKey,
-    SignalKey, VariableKey,
+    BasicBlockKey, BasicBlockTerminator, BinaryOp, GlobalContext, Instruction, IntrinsicOp,
+    ProcessKey, SignalKey, VariableKey,
 };
 
 use crate::instruction::{StackRef, VmInstruction, VmProcess};
-use crate::{BinaryArithmeticOp, BinaryComparisonOp, ShiftOp};
+use crate::{BinaryArithmeticOp, BinaryComparisonOp, ShiftOp, VmIntrinsicOp};
 
 use super::VmSignalKey;
 
@@ -115,7 +115,22 @@ pub fn lower_process_to_vm(
 
                 I::Intrinsic(dst, op, args) => {
                     let args = args.iter().map(|v| (var!(*v), gl.vars[*v].size)).collect();
-                    VI::Intrinsic(var!(*dst), op.clone(), args)
+                    use crate::VcdScope as VmVcdScope;
+                    use IntrinsicOp as O;
+                    use VmIntrinsicOp as VO;
+                    let op = match op.as_ref() {
+                        O::Time => VO::Time,
+                        O::Finish => VO::Finish,
+                        O::Display(f) => VO::Display(f.clone()),
+                        O::Assert(f) => VO::Assert(f.clone()),
+                        O::VcdOpenFile(f) => VO::VcdOpenFile(f.clone()),
+                        O::VcdAppendModule(v) => {
+                            VO::VcdAppendModule(VmVcdScope::lower(v, io_signals))
+                        }
+                        O::VcdPause => VO::VcdPause,
+                        O::VcdResume => VO::VcdResume,
+                    };
+                    VI::Intrinsic(var!(*dst), Box::new(op), args)
                 }
                 I::Probe(dst, signal) => VI::Probe(var!(*dst), signal!(*signal)),
                 I::Drive(signal, src, region, partial) => VI::Drive(

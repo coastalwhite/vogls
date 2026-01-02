@@ -5,7 +5,7 @@ use std::rc::Rc;
 use slotmap::SlotMap;
 use vogls_ir::{Bits, ContextFormat, GlobalContext, Signal};
 use vogls_sim::{
-    Context, EvaluationEvent, Event, Regions, TracingLevel, VmProcess, VmProcessKey,
+    Context, EvaluationEvent, Event, Regions, SignalInfo, TracingLevel, VmProcess, VmProcessKey,
     lower_process_to_vm,
 };
 use vogls_verilog::ast::AstId;
@@ -418,6 +418,14 @@ pub fn run(
     }
     let mut stack = vec![0u8; stack_top];
 
+    let mut signal_info = vec![
+        SignalInfo {
+            name: String::new(),
+            msb: 0u32,
+            lsb: 0u32,
+        };
+        io_signals.len()
+    ];
     for (ir_signal, signal) in io_signals {
         let Signal {
             name: _,
@@ -432,6 +440,8 @@ pub fn run(
             }
         };
         signals.insert(signal, value);
+        signal_info[signal.0 as usize].name = gl.signals[ir_signal].name.clone();
+        signal_info[signal.0 as usize].msb = gl.signals[ir_signal].size.get() - 1;
     }
 
     let stdout = std::mem::replace(&mut ectx.stdout, Box::new(Vec::new()) as _);
@@ -444,6 +454,7 @@ pub fn run(
         &processes,
         &mut regions,
         &mut signals,
+        &signal_info,
         &mut listeners,
         &mut watches,
         &mut stack,

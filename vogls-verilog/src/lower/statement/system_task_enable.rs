@@ -1,5 +1,5 @@
 use vogls_ir::dyn_format_string::{Base, DynFormatArgument, DynFormatString, Padding};
-use vogls_ir::{BasicBlockBuilder, GlobalContext, IntrinsicOp};
+use vogls_ir::{BasicBlockBuilder, GlobalContext, IntrinsicOp, VcdScope, VcdScopeItem};
 
 use crate::ast::AstId;
 use crate::ast::statement::SystemTaskEnable;
@@ -66,7 +66,7 @@ pub fn lower_system_task_enable<'a>(
                         } else {
                             Padding::ZeroPaddedToSize
                         };
-                        
+
                         let Some(b) = remaining.as_bytes().first() else {
                             format_string_arguments
                                 .push((format_string_content.len(), DynFormatArgument::default()));
@@ -174,6 +174,21 @@ pub fn lower_system_task_enable<'a>(
             );
         }
         "finish" => _ = builder.intrinsic(gl, IntrinsicOp::Finish, Default::default()),
+        "dumpfile" => {
+            assert!(expressions.is_empty());
+            builder.intrinsic(gl, IntrinsicOp::VcdOpenFile("dump.vcd".into()), [].into());
+        }
+        "dumpvars" => {
+            assert!(expressions.is_empty());
+            builder.intrinsic(
+                gl,
+                IntrinsicOp::VcdAppendModule(VcdScope {
+                    name: "TOP".into(),
+                    items: gl.signals.keys().map(VcdScopeItem::Variable).collect(),
+                }),
+                [].into(),
+            );
+        }
 
         // @Incomplete: Many variants here.
         _ => {

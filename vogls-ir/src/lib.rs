@@ -150,8 +150,8 @@ pub const SCALAR_VSIZE: VectorSize = NonZeroU32::new(1).unwrap();
 
 #[derive(Debug, Clone)]
 pub struct VcdScope {
-    name: String,
-    items: Vec<VcdScope>,
+    pub name: String,
+    pub items: Vec<VcdScopeItem>,
 }
 
 #[derive(Debug, Clone)]

@@ -1,9 +1,12 @@
-use vogls_ir::{Bits, IntrinsicOp, ResizeOp, Time, UnaryOp, VectorSize};
+use vogls_ir::dyn_format_string::DynFormatString;
+use vogls_ir::{Bits, ResizeOp, Time, UnaryOp, VectorSize};
 
 mod format;
 mod lower;
 
 pub use lower::lower_process_to_vm;
+
+use crate::VcdScope;
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct VmSignalKey(pub u64);
@@ -37,13 +40,24 @@ pub enum ShiftOp {
     ArithmeticRight,
 }
 
+#[derive(Debug, Clone)]
+pub enum VmIntrinsicOp {
+    Time,
+    Finish,
+    Display(Box<DynFormatString>),
+    Assert(Box<DynFormatString>),
+    VcdOpenFile(String),
+    VcdAppendModule(VcdScope),
+    VcdPause,
+    VcdResume,
+}
+
 #[derive(Debug)]
 pub enum VmInstruction {
     Constant(StackRef, Bits),
 
     Unary(StackRef, UnaryOp, VectorSize, StackRef),
     Resize(StackRef, ResizeOp, VectorSize, VectorSize, StackRef),
-
 
     // Binary Operations
     BinaryArithmetic(StackRef, BinaryArithmeticOp, VectorSize, StackRef, StackRef),
@@ -54,7 +68,7 @@ pub enum VmInstruction {
 
     Move(StackRef, StackRef, VectorSize),
 
-    Intrinsic(StackRef, Box<IntrinsicOp>, Box<[(StackRef, VectorSize)]>),
+    Intrinsic(StackRef, Box<VmIntrinsicOp>, Box<[(StackRef, VectorSize)]>),
 
     Probe(StackRef, VmSignalKey),
     Drive(VmSignalKey, StackRef, u8, Option<(StackRef, VectorSize)>),
@@ -72,6 +86,21 @@ pub enum VmInstruction {
 #[derive(Debug)]
 pub struct VmProcess {
     pub instructions: Vec<VmInstruction>,
+}
+
+impl VmIntrinsicOp {
+    pub fn into_mnemonic(&self) -> &'static str {
+        match self {
+            Self::Time => "time",
+            Self::Finish => "finish",
+            Self::Display(_) => "display",
+            Self::Assert(_) => "assert",
+            Self::VcdOpenFile(_) => "vcd.open_file",
+            Self::VcdAppendModule(_) => "vcd.append_scope",
+            Self::VcdPause => "vcd.pause",
+            Self::VcdResume => "vcd.resume",
+        }
+    }
 }
 
 impl BinaryArithmeticOp {
