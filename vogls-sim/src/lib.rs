@@ -119,6 +119,7 @@ fn update_watchers(
     watches: &mut HashMap<VmSignalKey, Vec<ListenerKey>>,
     listeners: &mut SlotMap<ListenerKey, Event>,
     regions: &mut Regions,
+    signal_info: &[SignalInfo],
 ) {
     let start = regions.active.len();
     if let Some(watchers) = watches.remove(&sig) {
@@ -132,8 +133,16 @@ fn update_watchers(
     if ctx.tracing_level >= TracingLevel::Events {
         writeln!(
             ctx.stdout,
-            "drive woke up {} watchers",
-            regions.active.len() - start
+            "drive of {} woke up {:?}",
+            signal_info[sig.0 as usize].name,
+            regions.active[start..]
+                .iter()
+                .map(|e| match e {
+                    Event::Drive(signal, _) =>
+                        format!("drive {}", signal_info[signal.0 as usize].name),
+                    Event::Evaluation(event) => format!("{:?}", event.process),
+                })
+                .collect::<Vec<_>>()
         )
         .unwrap();
     }
@@ -157,7 +166,9 @@ pub fn drive_bits(bits: &mut Bits, slice: &[u8], partial: Option<(u32, VectorSiz
             let before = *signal_value;
             match partial {
                 None => {
+                    eprintln!("signal_value = {signal_value:08X}");
                     *signal_value = bits::store_to_u64(slice, 0, *size);
+                    eprintln!("signal_value = {signal_value:08X}");
                 }
                 Some((offset, length)) => {
                     let value = bits::store_to_u64(slice, 0, length);
@@ -214,16 +225,24 @@ impl VcdScopeItem {
         match self {
             VcdScopeItem::Scope(scope) => scope.write_to(f, info),
             VcdScopeItem::Variable(k) => {
-                let VcdVariable { signal, ty, msb, lsb } = k;
+                let VcdVariable {
+                    signal,
+                    ty,
+                    msb,
+                    lsb,
+                } = k;
                 let SignalInfo { name } = &info[signal.0 as usize];
                 let size = VectorSize::new((msb.abs_diff(*lsb) + 1) as u32).unwrap();
                 let idx = k.signal.0;
                 write!(f, "$var ")?;
-                f.write_all(match ty {
-                    NetType::Integer => "integer",
-                    NetType::Register => "reg",
-                    NetType::Wire => "wire",
-                }.as_bytes())?;
+                f.write_all(
+                    match ty {
+                        NetType::Integer => "integer",
+                        NetType::Register => "reg",
+                        NetType::Wire => "wire",
+                    }
+                    .as_bytes(),
+                )?;
                 write!(f, " {size} W{idx:X} {name} ")?;
                 if size.get() > 1 {
                     write!(f, "[{msb}:{lsb}] ")?;
@@ -308,6 +327,8 @@ impl VcdOutput {
             writeln!(f, "$enddefinitions $end")?;
         }
 
+        dbg!(self.updated_this_time_step.contains(&VmSignalKey(83)));
+
         // Only print for the timestamp if something actually happened.
         let mut show_for_timestamp = !self.updated_this_time_step.is_empty();
         show_for_timestamp |= finish;
@@ -320,6 +341,9 @@ impl VcdOutput {
         writeln!(f, "#{}", ctx.time)?;
         for signal in &self.updated_this_time_step {
             let bits = &signals[&signal];
+            if signal.0 == 83 {
+                dbg!(&bits);
+            }
             let idx = signal.0;
             if bits.size().get() > 1 {
                 f.write_all(&[b'b'])?;
@@ -345,12 +369,16 @@ impl Event {
         schedule: &mut BTreeMap<Timestamp, Vec<Event>>,
         regions: &mut Regions,
         signals: &mut HashMap<VmSignalKey, Bits>,
+        signal_info: &[SignalInfo],
         listeners: &mut SlotMap<ListenerKey, Event>,
         watches: &mut HashMap<VmSignalKey, Vec<ListenerKey>>,
         stack: &mut [u8],
         vcd: &mut Option<VcdOutput>,
     ) -> EvalOutcome {
-        let EvaluationEvent { process, ip } = match &mut self {
+        let EvaluationEvent {
+            process: process_key,
+            ip,
+        } = match &mut self {
             Event::Drive(sig, assignments) => {
                 let signal_bits = signals.get_mut(sig).unwrap();
                 let mut updated = false;
@@ -359,7 +387,7 @@ impl Event {
                 }
 
                 if updated {
-                    update_watchers(ctx, *sig, watches, listeners, regions);
+                    update_watchers(ctx, *sig, watches, listeners, regions, signal_info);
                     if let Some(vcd) = vcd.as_mut()
                         && !vcd.paused
                         && let Some(idx) = vcd.tracked.get_mut(sig)
@@ -376,7 +404,7 @@ impl Event {
             Event::Evaluation(e) => e,
         };
 
-        let process = processes.get(*process).unwrap();
+        let process = processes.get(*process_key).unwrap();
 
         use VmInstruction as I;
         loop {
@@ -685,7 +713,11 @@ impl Event {
                         continue;
                     }
 
+
                     let signal = signals.get_mut(sig).unwrap();
+                    if signal_info[sig.0 as usize].name == "mem_rdata_latched" {
+                        dbg!(&signal);
+                    }
                     let size = partial.map_or(size, |(_, s)| s);
                     let updated = drive_bits(
                         signal,
@@ -693,8 +725,16 @@ impl Event {
                         partial,
                     );
 
+                    if signal_info[sig.0 as usize].name == "mem_rdata_latched" {
+                        dbg!(*process_key, updated, signal);
+                        if let Some(vcd) = vcd.as_mut() {
+                            dbg!(vcd.paused, vcd.tracked.contains_key(sig));
+                        }
+                        dbg!(sig.0);
+                    }
+
                     if updated {
-                        update_watchers(ctx, *sig, watches, listeners, regions);
+                        update_watchers(ctx, *sig, watches, listeners, regions, signal_info);
                         if let Some(vcd) = vcd.as_mut()
                             && !vcd.paused
                             && let Some(idx) = vcd.tracked.get_mut(sig)
@@ -777,9 +817,12 @@ pub fn run(
         while let Some(event) = regions.active.pop() {
             if ctx.tracing_level >= TracingLevel::Events {
                 match &event {
-                    Event::Drive(signal, _) => {
-                        writeln!(&mut ctx.stdout, "drive {signal:?}").unwrap()
-                    }
+                    Event::Drive(signal, _) => writeln!(
+                        &mut ctx.stdout,
+                        "drive {}",
+                        signal_info[signal.0 as usize].name
+                    )
+                    .unwrap(),
                     Event::Evaluation(eval) => {
                         writeln!(&mut ctx.stdout, "eval {:?}", eval.process).unwrap()
                     }
@@ -795,6 +838,7 @@ pub fn run(
                 &mut schedule,
                 regions,
                 signals,
+                signal_info,
                 listeners,
                 watches,
                 stack,

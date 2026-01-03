@@ -364,7 +364,7 @@ impl Bits {
                     }
                     n += lbn;
                 }
-                for b in v[..v.len() - 1].iter().rev() {
+                for b in v[..v.len() - usize::from(n != 0)].iter().rev() {
                     if *b == 0 {
                         n += 8;
                     } else {
