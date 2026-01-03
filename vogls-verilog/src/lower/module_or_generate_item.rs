@@ -74,6 +74,7 @@ pub fn lower<'a>(
                                     name: ident.into(),
                                     size,
                                     initialize: None,
+                                    origin: arenas.get_span(ast_net_ident),
                                 });
                                 let symbol_key = scope.symbols.insert(Symbol {
                                     name: ident.to_string(),
@@ -107,6 +108,7 @@ pub fn lower<'a>(
                                     name: ident.into(),
                                     size: ty.force_net_width(),
                                     initialize: None,
+                                    origin: arenas.get_span(assignment),
                                 });
                                 let symbol_key = scope.symbols.insert(Symbol {
                                     name: ident.to_string(),
@@ -128,7 +130,8 @@ pub fn lower<'a>(
                                 );
                                 scope.push(ident, symbol_key);
 
-                                let mut bb_builder = new_process(gl, "decl_assign".into());
+                                let mut bb_builder =
+                                    new_process(gl, "decl_assign".into(), arenas.get_span(*expr));
                                 let bb_key = bb_builder.key();
                                 let (v, v_ty) = lower_expr(
                                     gl,
@@ -168,6 +171,7 @@ pub fn lower<'a>(
                             name: ident.into(),
                             size,
                             initialize,
+                            origin: arenas.get_span(variable_type),
                         });
                         let symbol_key = scope.symbols.insert(Symbol {
                             name: ident.to_string(),
@@ -204,6 +208,7 @@ pub fn lower<'a>(
                             name: ident.into(),
                             size,
                             initialize,
+                            origin: arenas.get_span(variable_type),
                         });
                         let symbol_key = scope.symbols.insert(Symbol {
                             name: ident.to_string(),
@@ -293,12 +298,12 @@ pub fn lower<'a>(
             }
         }
         ModuleOrGenerateItem::ParameterOverride => todo!(),
-        ModuleOrGenerateItem::ContinuousAssign(assign) => {
-            let assign = arenas.get(*assign);
+        ModuleOrGenerateItem::ContinuousAssign(id) => {
+            let assign = arenas.get(*id);
             for ast_net_assignment in assign.list_of_net_assignments {
                 let net_assignment = arenas.get(ast_net_assignment);
 
-                let mut bb_builder = new_process(gl, "assign".into());
+                let mut bb_builder = new_process(gl, "assign".into(), arenas.get_span(*id));
                 let bb_key = bb_builder.key();
                 let (variable, variable_ty) = lower_expr(
                     gl,
@@ -340,7 +345,7 @@ pub fn lower<'a>(
 
                         let ident = arenas.get_ident(lvalue.0);
 
-                        let mut bb_builder = new_process(gl, "gate".into());
+                        let mut bb_builder = new_process(gl, "gate".into(), arenas.get_span(*id));
                         let bb_key = bb_builder.key();
 
                         assert!(!input_terminals.is_empty());
@@ -555,6 +560,7 @@ pub fn lower<'a>(
                                     name: format!("{name}::UNCONNECTED"),
                                     size,
                                     initialize: None,
+                                    origin: arenas.get_span(instance),
                                 })
                             });
                         }
@@ -584,7 +590,7 @@ pub fn lower<'a>(
         }
         ModuleOrGenerateItem::InitialConstruct(id) => {
             let statement = arenas.get(*id).0;
-            let bb_builder = new_process(gl, "initial".into());
+            let bb_builder = new_process(gl, "initial".into(), arenas.get_span(*id));
             let bb_builder = statements_to_process(
                 gl,
                 arenas,
@@ -598,7 +604,7 @@ pub fn lower<'a>(
         }
         ModuleOrGenerateItem::AlwaysConstruct(id) => {
             let statement = arenas.get(*id).0;
-            let bb_builder = new_process(gl, "always".into());
+            let bb_builder = new_process(gl, "always".into(), arenas.get_span(*id));
             let bb_key = bb_builder.key();
             let bb_builder = statements_to_process(
                 gl,

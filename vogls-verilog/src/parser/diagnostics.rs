@@ -1,10 +1,11 @@
 use std::fmt::{self, Write};
 
+use vogls_ir::token_range::TokenRange;
+
 use crate::span::Span;
 use crate::tokenizer::{Token, Tokenized};
 
 use super::ParseErrorReason;
-use super::token_walker::TokenRange;
 
 #[derive(Default)]
 pub struct Diagnostics {
@@ -142,7 +143,7 @@ pub fn report(tokenized: &Tokenized, location: TokenRange, out: &mut String) -> 
         let (offset, line) = lines[end_line];
         out.write_str("> ")?;
         display_with_tab_width(line, out, TAB_WIDTH)?;
-            let start_pad = display_width(&line[..line.len() - line.trim_start().len()], TAB_WIDTH);
+        let start_pad = display_width(&line[..line.len() - line.trim_start().len()], TAB_WIDTH);
         let len = display_width(&line[..location.end() - offset], TAB_WIDTH) - start_pad;
         writeln!(out)?;
         writeln!(out, "  {:start_pad$}{:^>len$}", " ", " ")?;

@@ -2,10 +2,10 @@ use std::collections::HashMap;
 use std::ops::{Index, IndexMut};
 
 use vogls_ir::SignalKey;
+use vogls_ir::token_range::TokenRange;
 
 use crate::ast::AstId;
 use crate::ast::statement::StatementOrNull;
-use crate::parser::TokenRange;
 
 use super::VType;
 use super::vvalue::VValue;

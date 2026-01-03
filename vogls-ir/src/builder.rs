@@ -1,5 +1,6 @@
 use indexmap::IndexSet;
 
+use crate::token_range::TokenRange;
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryOp, Bits, GlobalContext, INTEGER_VSIZE,
     Instruction, IntrinsicOp, Process, ProcessKey, ResizeOp, SCALAR_VSIZE, SignalKey, TIME_VSIZE,
@@ -16,7 +17,7 @@ pub struct BasicBlockBuilder {
     bbname_offset: usize,
 }
 
-pub fn new_process(gl: &'_ mut GlobalContext, name: String) -> BasicBlockBuilder {
+pub fn new_process(gl: &'_ mut GlobalContext, name: String, origin: TokenRange) -> BasicBlockBuilder {
     let bb_key = gl.bbs.insert(BasicBlock {
         name: String::from("entry"),
         instrs: Vec::new(),
@@ -25,7 +26,7 @@ pub fn new_process(gl: &'_ mut GlobalContext, name: String) -> BasicBlockBuilder
     let process_key = gl.processes.insert(Process {
         name,
         entry: bb_key,
-
+        origin,
         ins: IndexSet::new(),
         outs: IndexSet::new(),
     });

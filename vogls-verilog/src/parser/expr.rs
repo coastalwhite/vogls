@@ -1,9 +1,10 @@
+use vogls_ir::token_range::TokenRange;
+
 use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::expr::{BinaryOperator, BitSlice, Expr, Replication, UnaryOperator};
 use crate::ast::statement::SystemTaskIdentifier;
 use crate::ast::{AstId, AstIdRange, AstItem, DecimalRef, Identifier, SizedNumberRef, StringRef};
 use crate::parser::ParseErrorReason;
-use crate::parser::token_walker::TokenRange;
 use crate::parser::utils::item_parse;
 use crate::tokenizer::Token;
 

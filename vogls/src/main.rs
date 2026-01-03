@@ -2,7 +2,6 @@ use std::path::{Path, PathBuf};
 
 use clap::Parser;
 use vogls::ExecutionContext;
-use vogls_sim::TracingLevel;
 
 #[derive(clap::Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -47,10 +46,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             emit_unoptimized_ir: args.emit_unoptimized_ir,
             emit_ir: args.emit_ir,
             emit_vm: args.emit_vm,
-            trace: args
-                .trace
-                .then_some(TracingLevel::Events)
-                .unwrap_or(TracingLevel::None),
+            trace: args.trace,
             time: args.time,
             opt_rounds: args.opt_rounds,
         },

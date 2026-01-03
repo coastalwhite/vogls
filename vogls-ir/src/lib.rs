@@ -3,6 +3,7 @@ pub mod dyn_format_string;
 mod format;
 pub mod optimize;
 pub mod vcd;
+pub mod token_range;
 
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
@@ -14,6 +15,7 @@ use indexmap::IndexSet;
 use slotmap::{SlotMap, new_key_type};
 
 use self::dyn_format_string::DynFormatString;
+use self::token_range::TokenRange;
 use self::vcd::VcdScope;
 
 new_key_type! { pub struct ProcessKey; }
@@ -144,6 +146,7 @@ pub struct Signal {
     pub name: String,
     pub size: VectorSize,
     pub initialize: Option<Bits>,
+    pub origin: TokenRange,
 }
 
 pub const INTEGER_VSIZE: VectorSize = NonZeroU32::new(32).unwrap();
@@ -329,6 +332,7 @@ pub struct GlobalContext {
 pub struct Process {
     pub name: String,
     pub entry: BasicBlockKey,
+    pub origin: TokenRange,
     pub ins: IndexSet<SignalKey>,
     pub outs: IndexSet<SignalKey>,
 }

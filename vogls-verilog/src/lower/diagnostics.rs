@@ -1,5 +1,7 @@
+use vogls_ir::token_range::TokenRange;
+
 use crate::ast::{AstItem, Identifier, TextRef};
-use crate::parser::{AstArenas, TokenRange};
+use crate::parser::AstArenas;
 
 use super::{ModuleIo, VType};
 

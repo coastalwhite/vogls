@@ -1,5 +1,5 @@
 [package]
-name = "vogls-sim"
+name = "vogls-trace"
 version.workspace = true
 edition.workspace = true
 
@@ -7,7 +7,6 @@ edition.workspace = true
 slotmap.workspace = true
 vogls-ir.workspace = true
 vogls-bits.workspace = true
-vogls-trace.workspace = true
 
 [lints]
 workspace = true

@@ -31,7 +31,7 @@
                 ghdl
                 verilator
                 libelf
-                npm
+                nodejs_24
               ];
             };
           };

@@ -5,7 +5,7 @@ use std::rc::Rc;
 use slotmap::SlotMap;
 use vogls_ir::{Bits, ContextFormat, GlobalContext, Instruction, Signal};
 use vogls_sim::{
-    Context, EvaluationEvent, Event, Regions, SignalInfo, TracingLevel, VmProcess, VmProcessKey,
+    Context, EvaluationEvent, Event, Regions, SignalInfo, VmProcess, VmProcessKey,
     lower_process_to_vm,
 };
 use vogls_verilog::ast::AstId;
@@ -31,7 +31,7 @@ pub struct ExecutionContext {
     pub emit_unoptimized_ir: bool,
     pub emit_ir: bool,
     pub emit_vm: bool,
-    pub trace: TracingLevel,
+    pub trace: bool,
     pub time: u64,
     pub opt_rounds: u8,
 }
@@ -419,7 +419,7 @@ pub fn run(
         }
     }
 
-    let mut processes = SlotMap::<VmProcessKey, VmProcess>::default();
+    let mut processes = Vec::<VmProcess>::default();
     let mut regions = Regions::new(3); // inactive, non-blocking, monitor
     let mut signals = HashMap::default();
     let mut listeners = SlotMap::default();
@@ -428,6 +428,34 @@ pub fn run(
     // // Find the entity for the Top-Level Module.
     // let mut elab_processes = Vec::new();
     // elaborate::elaborate(tl_module_key, &mut gl, &mut elab_processes);
+
+    let mut trace_processes = Vec::new();
+    let mut trace_signals = Vec::new();
+    let mut line_luts = Vec::new();
+
+    if ectx.trace {
+        line_luts.extend(token_buffer.contents.iter().map(|c| {
+            let mut s = c.as_ref();
+            let original_length = s.len();
+            let mut vs = Vec::new();
+            while let Some(p) = s.find(['\n', '\r']) {
+                if s.as_bytes()[p] == b'\r' {
+                    todo!();
+                }
+
+                let offset = original_length - s.len();
+                vs.push(offset);
+                s = &s[p + 1..];
+            }
+
+            if !s.is_empty() {
+                let offset = original_length - s.len();
+                vs.push(offset);
+            }
+
+            vs
+        }));
+    }
 
     let mut io_signals = HashMap::new();
     let mut stack_top = 0usize;
@@ -442,10 +470,38 @@ pub fn run(
             print!("{}", &vm_process);
         }
 
-        let vm_process_key = processes.insert(vm_process);
+        let vm_process_key = VmProcessKey(processes.len() as u64);
+        processes.push(vm_process);
 
         if ectx.emit_vm {
             println!(": {vm_process_key:?}");
+        }
+
+        if ectx.trace {
+            let vogls_ir::Process { name, origin, .. } = &gl.processes[process];
+
+            let file = token_buffer.file_idxs[origin.start];
+            let mut location = None;
+            if file == token_buffer.file_idxs[origin.end - 1] {
+                let span_start = token_buffer.spans[origin.start].start();
+                let span_end = token_buffer.spans[origin.end - 1].end();
+
+                let line_start = line_luts[file as usize]
+                    .binary_search(&span_start)
+                    .unwrap_or_else(|e| e - 1) as u64;
+                let line_end = line_luts[file as usize]
+                    .binary_search(&span_end)
+                    .unwrap_or_else(|e| e + 1) as u64;
+                location = Some(vogls_trace::Span {
+                    file: file as u64,
+                    line_range: line_start..line_end,
+                });
+            }
+
+            trace_processes.push(vogls_trace::Process {
+                name: Some(name.clone()),
+                location,
+            });
         }
 
         regions.active.push(Event::Evaluation(EvaluationEvent {
@@ -466,6 +522,7 @@ pub fn run(
             name: _,
             size,
             initialize,
+            origin: _,
         } = &gl.signals[ir_signal];
         let value = match initialize {
             None => Bits::new_zeroed(*size),
@@ -474,6 +531,35 @@ pub fn run(
                 initialize.clone()
             }
         };
+
+        if ectx.trace {
+            let vogls_ir::Signal { origin, .. } = &gl.signals[ir_signal];
+
+            let file = token_buffer.file_idxs[origin.start];
+            let mut location = None;
+            if file == token_buffer.file_idxs[origin.end - 1] {
+                let span_start = token_buffer.spans[origin.start].start();
+                let span_end = token_buffer.spans[origin.end - 1].end();
+
+                let line_start = line_luts[file as usize]
+                    .binary_search(&span_start)
+                    .unwrap_or_else(|e| e - 1) as u64;
+                let line_end = line_luts[file as usize]
+                    .binary_search(&span_end)
+                    .unwrap_or_else(|e| e + 1) as u64;
+                location = Some(vogls_trace::Span {
+                    file: file as u64,
+                    line_range: line_start..line_end,
+                });
+            }
+
+            trace_signals.push(vogls_trace::Signal {
+                name: Some(gl.signals[ir_signal].name.clone()),
+                location,
+                initial: value.clone(),
+            });
+        }
+
         signals.insert(signal, value);
         signal_info[signal.0 as usize].name = gl.signals[ir_signal].name.clone();
     }
@@ -481,8 +567,27 @@ pub fn run(
     let stdout = std::mem::replace(&mut ectx.stdout, Box::new(Vec::new()) as _);
     let stderr = std::mem::replace(&mut ectx.stderr, Box::new(Vec::new()) as _);
 
+    let mut trace = None;
+    if ectx.trace {
+        trace = Some(vogls_trace::Trace {
+            files: token_buffer
+                .contents
+                .iter()
+                .zip(&token_buffer.paths)
+                .map(|(s, p)| vogls_trace::File {
+                    name: p.as_ref().map(|p| p.display().to_string()),
+                    content: s.to_string(),
+                })
+                .collect(),
+            processes: trace_processes,
+            signals: trace_signals,
+            driven: Vec::new(),
+            woken: Vec::new(),
+            watches: Vec::new(),
+            events: Vec::new(),
+        });
+    }
     let mut ctx = Context::new(stdout, stderr);
-    ctx.tracing_level = ectx.trace;
     let fail = vogls_sim::run(
         &mut ctx,
         &processes,
@@ -491,6 +596,7 @@ pub fn run(
         &signal_info,
         &mut listeners,
         &mut watches,
+        trace.as_mut(),
         &mut stack,
         ectx.time,
     )
@@ -501,6 +607,12 @@ pub fn run(
 
     if fail {
         return Err("execution failed.".into());
+    }
+
+    if let Some(trace) = trace {
+        trace.dump(&mut std::io::BufWriter::new(std::fs::File::create(
+            "dump.vgtd",
+        )?))?;
     }
 
     Ok(())

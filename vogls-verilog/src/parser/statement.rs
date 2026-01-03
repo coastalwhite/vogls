@@ -1,3 +1,5 @@
+use vogls_ir::token_range::TokenRange;
+
 use crate::ast::constant_expr::{ConstantExpr, ConstantRangeExpression};
 use crate::ast::expr::Expr;
 use crate::ast::statement::{
@@ -11,7 +13,6 @@ use crate::ast::statement::{
 use crate::ast::{
     AstIdRange, AstItem, AttributeInstance, DecimalRef, Identifier, RangeExpression, TextRef,
 };
-use crate::parser::token_walker::TokenRange;
 use crate::tokenizer::Token;
 
 use super::{AstArenas, Consumable, ParserScratches, TokenWalker};

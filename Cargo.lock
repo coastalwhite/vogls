@@ -214,6 +214,7 @@ dependencies = [
  "slotmap",
  "vogls-ir",
  "vogls-sim",
+ "vogls-trace",
  "vogls-verilog",
 ]
 
@@ -241,6 +242,7 @@ dependencies = [
  "slotmap",
  "vogls-bits",
  "vogls-ir",
+ "vogls-trace",
 ]
 
 [[package]]
@@ -253,6 +255,15 @@ dependencies = [
  "vogls-ir",
  "vogls-sim",
  "vogls-verilog",
+]
+
+[[package]]
+name = "vogls-trace"
+version = "0.0.1"
+dependencies = [
+ "slotmap",
+ "vogls-bits",
+ "vogls-ir",
 ]
 
 [[package]]

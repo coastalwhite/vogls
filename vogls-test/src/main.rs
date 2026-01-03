@@ -129,7 +129,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             emit_unoptimized_ir: false,
             emit_ir: false,
             emit_vm: false,
-            trace: vogls_sim::TracingLevel::None,
+            trace: false,
             time: 100,
             opt_rounds: 2,
         };

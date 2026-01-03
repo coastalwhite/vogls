@@ -15,7 +15,9 @@ mod instruction;
 pub use instruction::*;
 
 new_key_type! { pub struct ListenerKey; }
-new_key_type! { pub struct VmProcessKey; }
+
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub struct VmProcessKey(pub u64);
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 pub enum DispatchKey {
@@ -42,17 +44,10 @@ impl Regions {
 pub type Timestamp = u64;
 pub type InstanceId = u64;
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum TracingLevel {
-    None,
-    Events,
-}
-
 pub struct Context {
     time: Timestamp,
     pub stdout: Box<dyn std::io::Write>,
     pub stderr: Box<dyn std::io::Write>,
-    pub tracing_level: TracingLevel,
     pub instruction_count: u64,
     pub event_count: u64,
 }
@@ -63,7 +58,6 @@ impl Context {
             time: 0,
             stdout,
             stderr,
-            tracing_level: TracingLevel::Events,
             instruction_count: 0,
             event_count: 0,
         }
@@ -114,12 +108,12 @@ enum EvalOutcome {
 }
 
 fn update_watchers(
-    ctx: &mut Context,
     sig: VmSignalKey,
+    signals: &mut HashMap<VmSignalKey, Bits>,
     watches: &mut HashMap<VmSignalKey, Vec<ListenerKey>>,
     listeners: &mut SlotMap<ListenerKey, Event>,
     regions: &mut Regions,
-    signal_info: &[SignalInfo],
+    trace: Option<&mut vogls_trace::Trace>,
 ) {
     let start = regions.active.len();
     if let Some(watchers) = watches.remove(&sig) {
@@ -130,21 +124,18 @@ fn update_watchers(
         }
     }
 
-    if ctx.tracing_level >= TracingLevel::Events {
-        writeln!(
-            ctx.stdout,
-            "drive of {} woke up {:?}",
-            signal_info[sig.0 as usize].name,
-            regions.active[start..]
-                .iter()
-                .map(|e| match e {
-                    Event::Drive(signal, _) =>
-                        format!("drive {}", signal_info[signal.0 as usize].name),
-                    Event::Evaluation(event) => format!("{:?}", event.process),
-                })
-                .collect::<Vec<_>>()
-        )
-        .unwrap();
+    if let Some(trace) = trace {
+        let woken_start = trace.woken.len() as u64;
+        trace.woken.extend(regions.active[start..].iter().map(|e| {
+            let Event::Evaluation(e) = &e else {
+                panic!("only evaluation events are expected");
+            };
+            e.process.0
+        }));
+        let woken_range = woken_start..trace.woken.len() as u64;
+        trace
+            .driven
+            .push((sig.0, signals[&sig].clone(), woken_range));
     }
 }
 
@@ -365,7 +356,7 @@ impl Event {
     fn evaluate(
         mut self,
         ctx: &mut Context,
-        processes: &SlotMap<VmProcessKey, VmProcess>,
+        processes: &[VmProcess],
         schedule: &mut BTreeMap<Timestamp, Vec<Event>>,
         regions: &mut Regions,
         signals: &mut HashMap<VmSignalKey, Bits>,
@@ -374,6 +365,7 @@ impl Event {
         watches: &mut HashMap<VmSignalKey, Vec<ListenerKey>>,
         stack: &mut [u8],
         vcd: &mut Option<VcdOutput>,
+        mut trace: Option<&mut vogls_trace::Trace>,
     ) -> EvalOutcome {
         let EvaluationEvent {
             process: process_key,
@@ -387,7 +379,7 @@ impl Event {
                 }
 
                 if updated {
-                    update_watchers(ctx, *sig, watches, listeners, regions, signal_info);
+                    update_watchers(*sig, signals, watches, listeners, regions, trace);
                     if let Some(vcd) = vcd.as_mut()
                         && !vcd.paused
                         && let Some(idx) = vcd.tracked.get_mut(sig)
@@ -404,7 +396,7 @@ impl Event {
             Event::Evaluation(e) => e,
         };
 
-        let process = processes.get(*process_key).unwrap();
+        let process = &processes[process_key.0 as usize];
 
         use VmInstruction as I;
         loop {
@@ -713,7 +705,6 @@ impl Event {
                         continue;
                     }
 
-
                     let signal = signals.get_mut(sig).unwrap();
                     if signal_info[sig.0 as usize].name == "mem_rdata_latched" {
                         dbg!(&signal);
@@ -734,7 +725,14 @@ impl Event {
                     }
 
                     if updated {
-                        update_watchers(ctx, *sig, watches, listeners, regions, signal_info);
+                        update_watchers(
+                            *sig,
+                            signals,
+                            watches,
+                            listeners,
+                            regions,
+                            trace.as_deref_mut(),
+                        );
                         if let Some(vcd) = vcd.as_mut()
                             && !vcd.paused
                             && let Some(idx) = vcd.tracked.get_mut(sig)
@@ -748,9 +746,13 @@ impl Event {
                 }
                 I::Wait(time) => {
                     schedule.entry(ctx.time + time.0).or_default().push(self);
-                    if ctx.tracing_level >= TracingLevel::Events {
-                        writeln!(ctx.stdout, "event waiting for time {}.", ctx.time + time.0)
-                            .unwrap();
+                    if let Some(trace) = trace.as_deref_mut() {
+                        let vogls_trace::Event::Evaluation(_, _, stop_reason) =
+                            trace.events.last_mut().unwrap()
+                        else {
+                            unreachable!();
+                        };
+                        *stop_reason = vogls_trace::EventStopReason::Wait(ctx.time + time.0);
                     }
                     return EvalOutcome::Next;
                 }
@@ -760,8 +762,13 @@ impl Event {
                     } else {
                         regions.other[*region as usize - 1].push(self);
                     }
-                    if ctx.tracing_level >= TracingLevel::Events {
-                        writeln!(ctx.stdout, "event waiting for region {region}.").unwrap();
+                    if let Some(trace) = trace.as_deref_mut() {
+                        let vogls_trace::Event::Evaluation(_, _, stop_reason) =
+                            trace.events.last_mut().unwrap()
+                        else {
+                            unreachable!();
+                        };
+                        *stop_reason = vogls_trace::EventStopReason::WaitRegion(*region);
                     }
                     return EvalOutcome::Next;
                 }
@@ -770,8 +777,17 @@ impl Event {
                     for signal in signals {
                         watches.entry(*signal).or_default().push(listener_key);
                     }
-                    if ctx.tracing_level >= TracingLevel::Events {
-                        writeln!(ctx.stdout, "event watching for {signals:?}.").unwrap();
+                    if let Some(trace) = trace.as_mut() {
+                        let watch_range_start = trace.watches.len() as u64;
+                        trace.watches.extend(signals.iter().map(|s| s.0));
+                        let vogls_trace::Event::Evaluation(_, _, stop_reason) =
+                            trace.events.last_mut().unwrap()
+                        else {
+                            unreachable!();
+                        };
+                        *stop_reason = vogls_trace::EventStopReason::WatchSignals(
+                            watch_range_start..trace.watches.len() as u64,
+                        );
                     }
                     return EvalOutcome::Next;
                 }
@@ -785,9 +801,6 @@ impl Event {
                     }
                 }
                 I::Halt => {
-                    if ctx.tracing_level >= TracingLevel::Events {
-                        writeln!(ctx.stdout, "event halted.").unwrap();
-                    }
                     return EvalOutcome::Next;
                 }
             }
@@ -802,12 +815,13 @@ pub struct SignalInfo {
 
 pub fn run(
     ctx: &mut Context,
-    processes: &SlotMap<VmProcessKey, VmProcess>,
+    processes: &[VmProcess],
     regions: &mut Regions,
     signals: &mut HashMap<VmSignalKey, Bits>,
     signal_info: &[SignalInfo],
     listeners: &mut SlotMap<ListenerKey, Event>,
     watches: &mut HashMap<VmSignalKey, Vec<ListenerKey>>,
+    mut trace: Option<&mut vogls_trace::Trace>,
     stack: &mut [u8],
     max_time: u64,
 ) -> Result<(), ()> {
@@ -815,18 +829,17 @@ pub fn run(
     let mut vcd = None;
     'region_loop: loop {
         while let Some(event) = regions.active.pop() {
-            if ctx.tracing_level >= TracingLevel::Events {
-                match &event {
-                    Event::Drive(signal, _) => writeln!(
-                        &mut ctx.stdout,
-                        "drive {}",
-                        signal_info[signal.0 as usize].name
-                    )
-                    .unwrap(),
-                    Event::Evaluation(eval) => {
-                        writeln!(&mut ctx.stdout, "eval {:?}", eval.process).unwrap()
+            if let Some(trace) = trace.as_deref_mut() {
+                trace.events.push(match &event {
+                    Event::Drive(s, _) => {
+                        vogls_trace::Event::Drive(s.0, Some(trace.driven.len() as u64))
                     }
-                }
+                    Event::Evaluation(e) => vogls_trace::Event::Evaluation(
+                        e.process.0 as u64,
+                        trace.driven.len() as u64..trace.driven.len() as u64,
+                        vogls_trace::EventStopReason::Halt,
+                    ),
+                });
             }
             if cfg!(vm_profile) {
                 ctx.event_count += 1;
@@ -843,7 +856,20 @@ pub fn run(
                 watches,
                 stack,
                 &mut vcd,
+                trace.as_deref_mut(),
             );
+
+            if let Some(trace) = trace.as_deref_mut() {
+                match trace.events.last_mut().unwrap() {
+                    vogls_trace::Event::Drive(_, drive) => {
+                        _ = drive.take_if(|d| *d == trace.driven.len() as u64)
+                    }
+                    vogls_trace::Event::Evaluation(_, driven, _) => {
+                        driven.end = trace.driven.len() as u64
+                    }
+                    vogls_trace::Event::Time(_) => {}
+                }
+            }
 
             match outcome {
                 EvalOutcome::Next => continue,
@@ -871,6 +897,9 @@ pub fn run(
         };
 
         ctx.time = at;
+        if let Some(trace) = trace.as_deref_mut() {
+            trace.events.push(vogls_trace::Event::Time(ctx.time));
+        }
         if ctx.time > max_time {
             break;
         }

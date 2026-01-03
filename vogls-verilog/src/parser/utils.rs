@@ -1,7 +1,8 @@
+use vogls_ir::token_range::TokenRange;
+
 use crate::ast::{AstId, AstIdRange, AstItem};
 use crate::tokenizer::Token;
 
-use super::token_walker::TokenRange;
 use super::{AstArenas, Consumable, Diagnostics, ParserScratches, TokenWalker};
 
 pub fn parse<'a, T: Consumable<'a>>(

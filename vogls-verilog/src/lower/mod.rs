@@ -23,6 +23,7 @@ use std::collections::{HashMap, HashSet};
 use scope::Scope;
 
 use constant_expr::eval_constant_expr;
+use vogls_ir::token_range::TokenRange;
 use vogls_ir::vcd::NetType;
 use vogls_ir::{
     BasicBlockBuilder, BasicBlockKey, ConnectionDirection, GlobalContext, SCALAR_VSIZE, Signal,
@@ -40,7 +41,7 @@ use crate::ast::module::{
 use crate::ast::statement::NetLValue;
 use crate::ast::{AstId, Identifier};
 use crate::hierarchy::{ModuleBuilder, ModuleKey};
-use crate::parser::{AstArenas, TokenRange};
+use crate::parser::AstArenas;
 
 use self::expression::lower_expr;
 use self::scope::{SignalSymbol, Symbol, SymbolVariant};
@@ -457,9 +458,10 @@ fn lower_to_signal<'a>(
         name: "anon_port_assignment".to_string(),
         size: ty.force_net_width(),
         initialize: None,
+        origin: arenas.get_span(expr),
     });
 
-    let mut bb_builder = new_process(gl, "port_assignment".into());
+    let mut bb_builder = new_process(gl, "port_assignment".into(), arenas.get_span(expr));
     let bb_key = bb_builder.key();
     let (v, v_ty) = lower_expr(gl, arenas, scope, diagnostics, &mut bb_builder, expr)?;
     let v = expression::sign_or_zero_extend(gl, &mut bb_builder, v, v_ty, ty.force_net_width());
@@ -502,9 +504,10 @@ fn assign_port_output<'a>(
         name: "anon_port_assignment".to_string(),
         size,
         initialize: None,
+        origin: arenas.get_span(expr),
     });
 
-    let mut bb_builder = new_process(gl, "port_assignment".into());
+    let mut bb_builder = new_process(gl, "port_assignment".into(), arenas.get_span(expr));
     let bb_key = bb_builder.key();
 
     let probed = bb_builder.probe(gl, signal);
