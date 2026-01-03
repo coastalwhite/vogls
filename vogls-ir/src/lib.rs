@@ -2,6 +2,7 @@ mod builder;
 pub mod dyn_format_string;
 mod format;
 pub mod optimize;
+pub mod vcd;
 
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
@@ -13,6 +14,7 @@ use indexmap::IndexSet;
 use slotmap::{SlotMap, new_key_type};
 
 use self::dyn_format_string::DynFormatString;
+use self::vcd::VcdScope;
 
 new_key_type! { pub struct ProcessKey; }
 new_key_type! { pub struct BasicBlockKey; }
@@ -147,18 +149,6 @@ pub struct Signal {
 pub const INTEGER_VSIZE: VectorSize = NonZeroU32::new(32).unwrap();
 pub const TIME_VSIZE: VectorSize = NonZeroU32::new(64).unwrap();
 pub const SCALAR_VSIZE: VectorSize = NonZeroU32::new(1).unwrap();
-
-#[derive(Debug, Clone)]
-pub struct VcdScope {
-    pub name: String,
-    pub items: Vec<VcdScopeItem>,
-}
-
-#[derive(Debug, Clone)]
-pub enum VcdScopeItem {
-    Scope(VcdScope),
-    Variable(SignalKey),
-}
 
 #[derive(Debug, Clone)]
 pub enum IntrinsicOp {

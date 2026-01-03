@@ -3,12 +3,12 @@ use std::ops::{Index, IndexMut};
 
 use vogls_ir::SignalKey;
 
-use crate::ast::statement::StatementOrNull;
 use crate::ast::AstId;
+use crate::ast::statement::StatementOrNull;
 use crate::parser::TokenRange;
 
-use super::vvalue::VValue;
 use super::VType;
+use super::vvalue::VValue;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SymbolKey(usize);
@@ -28,6 +28,8 @@ pub struct SignalSymbol {
     pub dims: Vec<u32>,
     pub ty: VType,
     pub key: SignalKey,
+    pub msb: i64,
+    pub lsb: i64,
 }
 
 impl Index<SymbolKey> for SymbolTable {

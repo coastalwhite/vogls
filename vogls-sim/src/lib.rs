@@ -1,10 +1,12 @@
 use std::cmp::Ordering;
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap};
+use std::num::NonZeroUsize;
 
 use slotmap::{SlotMap, new_key_type};
 use vogls_bits::get_disjoint_dst_src;
 use vogls_ir::dyn_format_string::{Base, Padding, format_bits};
+use vogls_ir::vcd::NetType;
 use vogls_ir::{Bits, INTEGER_VSIZE, ResizeOp, SignalKey, TIME_VSIZE, UnaryOp, VectorSize};
 
 mod bits;
@@ -174,10 +176,8 @@ pub struct VcdScope {
     pub items: Vec<VcdScopeItem>,
 }
 
-const SPACES_PER_INDENT: usize = 2;
-
 impl VcdScope {
-    fn lower(v: &vogls_ir::VcdScope, map: &mut HashMap<SignalKey, VmSignalKey>) -> VcdScope {
+    fn lower(v: &vogls_ir::vcd::VcdScope, map: &mut HashMap<SignalKey, VmSignalKey>) -> VcdScope {
         VcdScope {
             name: v.name.clone(),
             items: v
@@ -188,53 +188,43 @@ impl VcdScope {
         }
     }
 
-    fn write_to(
-        &self,
-        f: &mut impl std::io::Write,
-        indent: u32,
-        info: &[SignalInfo],
-    ) -> std::io::Result<()> {
+    fn write_to(&self, f: &mut impl std::io::Write, info: &[SignalInfo]) -> std::io::Result<()> {
         let Self { name, items } = self;
-        let start_pad = indent as usize * SPACES_PER_INDENT;
-        write!(f, "{:start_pad$}", " ")?;
         writeln!(f, "$scope module {name} $end")?;
         for item in items {
-            item.write_to(f, indent + 1, info)?;
+            item.write_to(f, info)?;
         }
-        let start_pad = indent as usize * SPACES_PER_INDENT;
-        write!(f, "{:start_pad$}", " ")?;
         writeln!(f, "$upscope $end")?;
         Ok(())
     }
 
     fn extend_into(
         &self,
-        map: &mut HashMap<VmSignalKey, usize>,
+        tracked: &mut HashMap<VmSignalKey, Option<NonZeroUsize>>,
         values: &mut Vec<VmSignalKey>,
-        tracked: &mut HashMap<VmSignalKey, u64>,
     ) {
         for i in &self.items {
-            i.extend_into(map, values, tracked);
+            i.extend_into(tracked, values);
         }
     }
 }
 
 impl VcdScopeItem {
-    fn write_to(
-        &self,
-        f: &mut impl std::io::Write,
-        indent: u32,
-        info: &[SignalInfo],
-    ) -> std::io::Result<()> {
+    fn write_to(&self, f: &mut impl std::io::Write, info: &[SignalInfo]) -> std::io::Result<()> {
         match self {
-            VcdScopeItem::Scope(scope) => scope.write_to(f, indent, info),
+            VcdScopeItem::Scope(scope) => scope.write_to(f, info),
             VcdScopeItem::Variable(k) => {
-                let SignalInfo { name, msb, lsb } = &info[k.0 as usize];
-                let size = VectorSize::new(msb.abs_diff(*lsb) + 1).unwrap();
-                let reference = k.0;
-                let start_pad = indent as usize * SPACES_PER_INDENT;
-                write!(f, "{:start_pad$}", " ")?;
-                write!(f, "$var wire {size} W{reference:X} {name} ")?;
+                let VcdVariable { signal, ty, msb, lsb } = k;
+                let SignalInfo { name } = &info[signal.0 as usize];
+                let size = VectorSize::new((msb.abs_diff(*lsb) + 1) as u32).unwrap();
+                let idx = k.signal.0;
+                write!(f, "$var ")?;
+                f.write_all(match ty {
+                    NetType::Integer => "integer",
+                    NetType::Register => "reg",
+                    NetType::Wire => "wire",
+                }.as_bytes())?;
+                write!(f, " {size} W{idx:X} {name} ")?;
                 if size.get() > 1 {
                     write!(f, "[{msb}:{lsb}] ")?;
                 }
@@ -245,49 +235,59 @@ impl VcdScopeItem {
 
     fn extend_into(
         &self,
-        map: &mut HashMap<VmSignalKey, usize>,
+        tracked: &mut HashMap<VmSignalKey, Option<NonZeroUsize>>,
         values: &mut Vec<VmSignalKey>,
-        tracked: &mut HashMap<VmSignalKey, u64>,
     ) {
         match self {
-            VcdScopeItem::Scope(s) => s.extend_into(map, values, tracked),
+            VcdScopeItem::Scope(s) => s.extend_into(tracked, values),
             VcdScopeItem::Variable(k) => {
-                _ = map.entry(*k).or_insert_with(|| {
-                    let idx = values.len();
-                    values.push(*k);
-                    tracked.insert(*k, 0);
-                    idx
-                })
+                tracked.entry(k.signal).or_insert_with(|| {
+                    values.push(k.signal);
+                    Some(NonZeroUsize::new(values.len()).unwrap())
+                });
             }
         }
     }
 }
 
 impl VcdScopeItem {
-    fn lower(v: &vogls_ir::VcdScopeItem, map: &mut HashMap<SignalKey, VmSignalKey>) -> Self {
+    fn lower(v: &vogls_ir::vcd::VcdScopeItem, map: &mut HashMap<SignalKey, VmSignalKey>) -> Self {
         match v {
-            vogls_ir::VcdScopeItem::Scope(v) => Self::Scope(VcdScope::lower(v, map)),
-            vogls_ir::VcdScopeItem::Variable(v) => {
+            vogls_ir::vcd::VcdScopeItem::Scope(v) => Self::Scope(VcdScope::lower(v, map)),
+            vogls_ir::vcd::VcdScopeItem::Variable(v) => {
                 let next = map.len();
-                Self::Variable(*map.entry(*v).or_insert(VmSignalKey(next as _)))
+                Self::Variable(VcdVariable {
+                    signal: *map.entry(v.signal).or_insert(VmSignalKey(next as _)),
+                    ty: v.ty,
+                    msb: v.msb,
+                    lsb: v.lsb,
+                })
             }
         }
     }
 }
 
 #[derive(Debug, Clone)]
+pub struct VcdVariable {
+    pub signal: VmSignalKey,
+    pub ty: NetType,
+    pub msb: i64,
+    pub lsb: i64,
+}
+
+#[derive(Debug, Clone)]
 pub enum VcdScopeItem {
     Scope(VcdScope),
-    Variable(VmSignalKey),
+    Variable(VcdVariable),
 }
 
 pub struct VcdOutput {
-    start_tracking: Timestamp,
+    start_ts: Timestamp,
+    last_ts: Timestamp,
     paused: bool,
     scope: VcdScope,
-    tracked: HashMap<VmSignalKey, u64>,
-    set_current_simulation_time: HashMap<VmSignalKey, usize>,
-    set_current_simulation_time_v: Vec<VmSignalKey>,
+    tracked: HashMap<VmSignalKey, Option<NonZeroUsize>>,
+    updated_this_time_step: Vec<VmSignalKey>,
     writer: Box<dyn std::io::Write>,
 }
 impl VcdOutput {
@@ -299,24 +299,28 @@ impl VcdOutput {
         finish: bool,
     ) -> std::io::Result<()> {
         let f = &mut self.writer;
-        if self.start_tracking == ctx.time {
+        if self.start_ts == ctx.time {
             writeln!(f, "$version Generated by VoGLS $end")?;
             // @TODO
             writeln!(f, "$date @TODO $end")?;
             writeln!(f, "$timescale 1ns $end")?;
-            self.scope.write_to(f, 0, signal_info)?;
+            self.scope.write_to(f, signal_info)?;
             writeln!(f, "$enddefinitions $end")?;
         }
 
-        if !self.set_current_simulation_time.is_empty() || finish {
-            writeln!(f, "#{}", ctx.time)?;
-        }
-        if self.set_current_simulation_time.is_empty() {
+        // Only print for the timestamp if something actually happened.
+        let mut show_for_timestamp = !self.updated_this_time_step.is_empty();
+        show_for_timestamp |= finish;
+        show_for_timestamp &= self.last_ts != ctx.time;
+        if !show_for_timestamp {
             return Ok(());
         }
-        for signal in &self.set_current_simulation_time_v {
+
+        self.last_ts = ctx.time;
+        writeln!(f, "#{}", ctx.time)?;
+        for signal in &self.updated_this_time_step {
             let bits = &signals[&signal];
-            let reference = signal.0;
+            let idx = signal.0;
             if bits.size().get() > 1 {
                 f.write_all(&[b'b'])?;
             }
@@ -324,11 +328,11 @@ impl VcdOutput {
             if bits.size().get() > 1 {
                 f.write_all(&[b' '])?;
             }
-            writeln!(f, "W{reference:X}")?;
+            writeln!(f, "W{idx:X}")?;
+            *self.tracked.get_mut(signal).unwrap() = None;
         }
 
-        self.set_current_simulation_time.clear();
-        self.set_current_simulation_time_v.clear();
+        self.updated_this_time_step.clear();
         Ok(())
     }
 }
@@ -358,15 +362,12 @@ impl Event {
                     update_watchers(ctx, *sig, watches, listeners, regions);
                     if let Some(vcd) = vcd.as_mut()
                         && !vcd.paused
-                        && vcd.tracked.contains_key(sig)
+                        && let Some(idx) = vcd.tracked.get_mut(sig)
                     {
-                        vcd.set_current_simulation_time
-                            .entry(*sig)
-                            .or_insert_with(|| {
-                                let idx = vcd.set_current_simulation_time_v.len();
-                                vcd.set_current_simulation_time_v.push(*sig);
-                                idx
-                            });
+                        idx.get_or_insert_with(|| {
+                            vcd.updated_this_time_step.push(*sig);
+                            NonZeroUsize::new(vcd.updated_this_time_step.len()).unwrap()
+                        });
                     }
                 }
 
@@ -600,16 +601,16 @@ impl Event {
                             }
 
                             *vcd = Some(VcdOutput {
-                                start_tracking: ctx.time,
+                                start_ts: ctx.time,
+                                last_ts: Timestamp::MAX,
                                 paused: false,
                                 scope: VcdScope {
                                     name: "top".to_string(),
                                     items: Vec::new(),
                                 },
                                 tracked: HashMap::new(),
-                                set_current_simulation_time: HashMap::new(),
-                                set_current_simulation_time_v: Vec::new(),
-                                writer: Box::new(std::fs::File::create_new(path).unwrap()),
+                                updated_this_time_step: Vec::new(),
+                                writer: Box::new(std::fs::File::create(path).unwrap()),
                             });
                         }
                         O::VcdAppendModule(scope) => {
@@ -621,7 +622,7 @@ impl Event {
                                 .unwrap();
                                 return EvalOutcome::Error;
                             };
-                            if vcd.start_tracking != ctx.time {
+                            if vcd.start_ts != ctx.time {
                                 writeln!(
                                     &mut ctx.stderr,
                                     "ERR! Dumping vars over several simulation times"
@@ -630,11 +631,7 @@ impl Event {
                                 return EvalOutcome::Error;
                             }
 
-                            scope.extend_into(
-                                &mut vcd.set_current_simulation_time,
-                                &mut vcd.set_current_simulation_time_v,
-                                &mut vcd.tracked,
-                            );
+                            scope.extend_into(&mut vcd.tracked, &mut vcd.updated_this_time_step);
                             vcd.scope = scope.clone();
                         }
                         O::VcdPause => _ = vcd.as_mut().map(|vcd| vcd.paused = true),
@@ -700,15 +697,12 @@ impl Event {
                         update_watchers(ctx, *sig, watches, listeners, regions);
                         if let Some(vcd) = vcd.as_mut()
                             && !vcd.paused
-                            && vcd.tracked.contains_key(sig)
+                            && let Some(idx) = vcd.tracked.get_mut(sig)
                         {
-                            vcd.set_current_simulation_time
-                                .entry(*sig)
-                                .or_insert_with(|| {
-                                    let idx = vcd.set_current_simulation_time_v.len();
-                                    vcd.set_current_simulation_time_v.push(*sig);
-                                    idx
-                                });
+                            idx.get_or_insert_with(|| {
+                                vcd.updated_this_time_step.push(*sig);
+                                NonZeroUsize::new(vcd.updated_this_time_step.len()).unwrap()
+                            });
                         }
                     }
                 }
@@ -764,8 +758,6 @@ impl Event {
 #[derive(Clone)]
 pub struct SignalInfo {
     pub name: String,
-    pub msb: u32,
-    pub lsb: u32,
 }
 
 pub fn run(
@@ -843,6 +835,7 @@ pub fn run(
 
     if let Some(vcd) = vcd.as_mut() {
         vcd.dump_time_step(ctx, signals, signal_info, true).unwrap();
+        vcd.writer.flush().unwrap();
     }
 
     if cfg!(vm_profile) {

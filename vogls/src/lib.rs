@@ -3,7 +3,7 @@ use std::path::Path;
 use std::rc::Rc;
 
 use slotmap::SlotMap;
-use vogls_ir::{Bits, ContextFormat, GlobalContext, Signal};
+use vogls_ir::{Bits, ContextFormat, GlobalContext, Instruction, Signal};
 use vogls_sim::{
     Context, EvaluationEvent, Event, Regions, SignalInfo, TracingLevel, VmProcess, VmProcessKey,
     lower_process_to_vm,
@@ -13,9 +13,10 @@ use vogls_verilog::ast::module::{
     CaseGenerateConstruct, CaseGenerateItem, GenerateBlock, IfGenerateConstruct,
     LoopGenerateConstruct, Module, ModuleItem, ModuleOrGenerateItem, NonPortModuleItem,
 };
+use vogls_verilog::hierarchy::{Hierarchy, ModuleBuilder};
 use vogls_verilog::lower::{
-    Diagnostics as LowerDiagnostics, ModuleArgs, ModuleInitialization, fetch_module_interface,
-    lower_module_to_ir,
+    Diagnostics as LowerDiagnostics, ModuleArgs, ModuleContext, ModuleInitialization, ModuleQuery,
+    fetch_module_interface, lower_module_to_ir,
 };
 use vogls_verilog::parser::{
     AstArenas, Diagnostics as ParserDiagnostics, ParseContext, ParserScratches, TokenWalker,
@@ -26,6 +27,7 @@ use vogls_verilog::tokenizer::Tokenized;
 pub struct ExecutionContext {
     pub stdout: Box<dyn std::io::Write>,
     pub stderr: Box<dyn std::io::Write>,
+    pub emit_hierarchy: bool,
     pub emit_unoptimized_ir: bool,
     pub emit_ir: bool,
     pub emit_vm: bool,
@@ -267,6 +269,8 @@ pub fn run(
         return Err("top_level fetch_module error".into());
     };
     assert!(top_level_io.ports.is_empty());
+    let mut hierarchy = Hierarchy::new(tl_module_name.to_string());
+    let top_level_key = hierarchy.top_level_key();
     next_modules.push(ModuleInitialization {
         name: tl_module_name,
         parameters: top_level_params,
@@ -275,14 +279,23 @@ pub fn run(
             parameters,
             signals: Vec::new(),
         },
+        hierarchy_key: top_level_key,
     });
-    while let Some(init) = next_modules.pop() {
+    let mut mc = ModuleContext {
+        named_lookup: module_to_ast_lut,
+        module_builder: ModuleBuilder::new(&mut hierarchy, top_level_key),
+        next_modules,
+        queries_to_resolve: Vec::new(),
+    };
+    while let Some(init) = mc.next_modules.pop() {
         let ModuleInitialization {
             name,
             parameters,
             io,
             args,
+            hierarchy_key,
         } = &init;
+        mc.module_builder.move_to(*hierarchy_key);
         let module_id = ast.modules.get(module_lut[name]);
         let module_key = lower_module_to_ir(
             &mut gl,
@@ -291,8 +304,7 @@ pub fn run(
             &parameters,
             &io,
             &args,
-            &module_to_ast_lut,
-            &mut next_modules,
+            &mut mc,
             &mut diagnostics,
         );
         error |= module_key.is_err();
@@ -321,6 +333,31 @@ pub fn run(
             writeln!(ectx.stderr)?;
         }
         return Err("failed to lower".into());
+    }
+
+    for query in mc.queries_to_resolve {
+        let ModuleQuery {
+            bb,
+            instruction,
+            query,
+        } = query;
+
+        assert!(query.is_none());
+        let scope = hierarchy.vcd_scope(u32::MAX);
+        let i = &mut gl.bbs[bb].instrs[instruction];
+        let dst = i.get_destination_variable().unwrap();
+        *i = Instruction::Intrinsic(
+            dst,
+            Box::new(vogls_ir::IntrinsicOp::VcdAppendModule(scope)),
+            [].into(),
+        )
+    }
+    if ectx.emit_hierarchy {
+        writeln!(
+            ectx.stdout,
+            "{}",
+            hierarchy.display(hierarchy.top_level_key())
+        )?;
     }
 
     if ectx.emit_unoptimized_ir {
@@ -421,8 +458,6 @@ pub fn run(
     let mut signal_info = vec![
         SignalInfo {
             name: String::new(),
-            msb: 0u32,
-            lsb: 0u32,
         };
         io_signals.len()
     ];
@@ -441,7 +476,6 @@ pub fn run(
         };
         signals.insert(signal, value);
         signal_info[signal.0 as usize].name = gl.signals[ir_signal].name.clone();
-        signal_info[signal.0 as usize].msb = gl.signals[ir_signal].size.get() - 1;
     }
 
     let stdout = std::mem::replace(&mut ectx.stdout, Box::new(Vec::new()) as _);

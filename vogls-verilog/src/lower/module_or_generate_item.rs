@@ -1,5 +1,4 @@
-use std::collections::HashMap;
-
+use vogls_ir::vcd::NetType;
 use vogls_ir::{
     Bits, ConnectionDirection, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE, Signal, SignalKey,
     VectorSize, new_process,
@@ -9,10 +8,10 @@ use crate::ast::constant_expr::ConstantMinTypMaxExpression;
 use crate::ast::module::{
     Dimension, GateInstantiation, GenerateBlock, GenvarAssignment, GenvarDeclaration,
     IfGenerateConstruct, ListOfPortConnections, LocalParameterDeclaration, LoopGenerateConstruct,
-    Module, ModuleInstance, ModuleInstantiation, ModuleOrGenerateItem,
-    ModuleOrGenerateItemDeclaration, NInputGateInstance, NInputGateType, NamedParameterAssignment,
-    NamedPortConnection, NetDeclAssignment, NetDeclarationNets, ParamAssignment,
-    ParameterValueAssignment, TaskDeclaration, VariableType, VariableTypeVariant,
+    ModuleInstance, ModuleInstantiation, ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration,
+    NInputGateInstance, NInputGateType, NamedParameterAssignment, NamedPortConnection,
+    NetDeclAssignment, NetDeclarationNets, ParamAssignment, ParameterValueAssignment,
+    TaskDeclaration, VariableType, VariableTypeVariant,
 };
 use crate::ast::{AstId, AstIdRange};
 use crate::lower::expression::{self, lower_expr};
@@ -20,19 +19,18 @@ use crate::lower::scope::{SignalSymbol, Symbol, SymbolVariant};
 use crate::lower::statement::statements_to_process;
 use crate::lower::vvalue::VValue;
 use crate::lower::{
-    ModuleArgs, VType, assign_net_lvalue, assign_port_output, eval_constant_expr,
-    fetch_module_interface, lower_to_signal, range_to_width,
+    ModuleArgs, VType, assign_net_lvalue, assign_port_output, eval_constant_expr, evaluate_range,
+    fetch_module_interface, lower_to_signal,
 };
 use crate::parser::AstArenas;
 
 use super::scope::Scope;
-use super::{Diagnostics, ModuleInitialization};
+use super::{Diagnostics, ModuleContext, ModuleInitialization};
 
 pub fn lower<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
-    module_lut: &HashMap<&'a str, AstId<Module>>,
-    next_modules: &mut Vec<ModuleInitialization<'a>>,
+    mc: &mut ModuleContext<'a>,
     scope: &mut Scope<'a>,
     id: AstId<ModuleOrGenerateItem>,
     diagnostics: &mut Diagnostics,
@@ -43,9 +41,9 @@ pub fn lower<'a>(
             match module_or_generate_item_declaration {
                 ModuleOrGenerateItemDeclaration::Net(id) => {
                     let net_declaration = arenas.get(*id);
-                    let width = match net_declaration.range {
-                        None => SCALAR_VSIZE,
-                        Some(range) => range_to_width(gl, arenas, scope, diagnostics, range)?,
+                    let (msb, lsb, width) = match net_declaration.range {
+                        None => (0, 0, SCALAR_VSIZE),
+                        Some(range) => evaluate_range(gl, arenas, scope, diagnostics, range)?,
                     };
                     let ty = VType::net(width, net_declaration.signed);
                     match net_declaration.nets {
@@ -80,8 +78,21 @@ pub fn lower<'a>(
                                 let symbol_key = scope.symbols.insert(Symbol {
                                     name: ident.to_string(),
                                     definition_site: arenas.get_item_span(ast_ident),
-                                    variant: SymbolVariant::Signal(SignalSymbol { dims, ty, key }),
+                                    variant: SymbolVariant::Signal(SignalSymbol {
+                                        dims,
+                                        ty,
+                                        key,
+                                        msb,
+                                        lsb,
+                                    }),
                                 });
+                                mc.module_builder.push_net(
+                                    ident.to_string(),
+                                    key,
+                                    NetType::Wire,
+                                    msb,
+                                    lsb,
+                                );
                                 scope.push(ident, symbol_key);
                             }
                         }
@@ -104,8 +115,17 @@ pub fn lower<'a>(
                                         dims: Vec::new(),
                                         ty,
                                         key,
+                                        msb,
+                                        lsb,
                                     }),
                                 });
+                                mc.module_builder.push_net(
+                                    ident.to_string(),
+                                    key,
+                                    NetType::Wire,
+                                    msb,
+                                    lsb,
+                                );
                                 scope.push(ident, symbol_key);
 
                                 let mut bb_builder = new_process(gl, "decl_assign".into());
@@ -133,9 +153,9 @@ pub fn lower<'a>(
                 }
                 ModuleOrGenerateItemDeclaration::Reg(id) => {
                     let reg_declaration = arenas.get(*id);
-                    let size = match reg_declaration.range {
-                        None => SCALAR_VSIZE,
-                        Some(range) => range_to_width(gl, arenas, scope, diagnostics, range)?,
+                    let (msb, lsb, size) = match reg_declaration.range {
+                        None => (0, 0, SCALAR_VSIZE),
+                        Some(range) => evaluate_range(gl, arenas, scope, diagnostics, range)?,
                     };
 
                     let ty = VType::net(size, reg_declaration.signed);
@@ -152,13 +172,28 @@ pub fn lower<'a>(
                         let symbol_key = scope.symbols.insert(Symbol {
                             name: ident.to_string(),
                             definition_site: arenas.get_span(variable_type),
-                            variant: SymbolVariant::Signal(SignalSymbol { dims, ty, key }),
+                            variant: SymbolVariant::Signal(SignalSymbol {
+                                dims,
+                                ty,
+                                key,
+                                msb,
+                                lsb,
+                            }),
                         });
+                        mc.module_builder.push_net(
+                            ident.to_string(),
+                            key,
+                            NetType::Register,
+                            msb,
+                            lsb,
+                        );
                         scope.push(ident, symbol_key);
                     }
                 }
                 ModuleOrGenerateItemDeclaration::Integer(id) => {
                     let integer_declaration = arenas.get(*id);
+                    let msb = 31;
+                    let lsb = 31;
                     let ty = VType::SignedNet(INTEGER_VSIZE);
                     for variable_type in integer_declaration.variable_types.iter() {
                         let (dims, size, initialize) =
@@ -173,8 +208,21 @@ pub fn lower<'a>(
                         let symbol_key = scope.symbols.insert(Symbol {
                             name: ident.to_string(),
                             definition_site: arenas.get_span(variable_type),
-                            variant: SymbolVariant::Signal(SignalSymbol { dims, ty, key }),
+                            variant: SymbolVariant::Signal(SignalSymbol {
+                                dims,
+                                ty,
+                                key,
+                                msb,
+                                lsb,
+                            }),
                         });
+                        mc.module_builder.push_net(
+                            ident.to_string(),
+                            key,
+                            NetType::Integer,
+                            msb,
+                            lsb,
+                        );
                         scope.push(ident, symbol_key);
                     }
                 }
@@ -368,7 +416,7 @@ pub fn lower<'a>(
                 module_instances,
             } = arenas.get(*id);
             let instantiation_ident = arenas.get_ident(module_identifier.item.0);
-            let Some(instant_module) = module_lut.get(instantiation_ident) else {
+            let Some(instant_module) = mc.named_lookup.get(instantiation_ident) else {
                 diagnostics.module_not_found(arenas, *module_identifier);
                 return Err(());
             };
@@ -419,7 +467,7 @@ pub fn lower<'a>(
 
             for instance in module_instances.iter() {
                 let ModuleInstance {
-                    name_of_module_instance: _,
+                    name_of_module_instance,
                     list_of_port_connections,
                 } = arenas.get(instance);
 
@@ -437,7 +485,7 @@ pub fn lower<'a>(
                             .ports
                             .iter()
                             .zip(ports.iter())
-                            .map(|((_name, connection, ty), l_p)| {
+                            .map(|((_name, connection, ty, _msb, _lsb), l_p)| {
                                 let is_input = matches!(
                                     connection,
                                     ConnectionDirection::In | ConnectionDirection::Both
@@ -471,7 +519,7 @@ pub fn lower<'a>(
                                 continue;
                             };
 
-                            let (_, connection, width) = instant_io.ports[port_idx];
+                            let (_, connection, width, _, _) = instant_io.ports[port_idx];
 
                             let is_input = matches!(
                                 connection,
@@ -500,7 +548,7 @@ pub fn lower<'a>(
 
                         for (i, s) in signals.iter_mut().enumerate() {
                             s.get_or_insert_with(|| {
-                                let (name, _, ty) = instant_io.ports[i];
+                                let (name, _, ty, _, _) = instant_io.ports[i];
 
                                 let size = ty.force_net_width();
                                 gl.signals.insert(Signal {
@@ -518,7 +566,11 @@ pub fn lower<'a>(
                         signals.into_iter().map(|s| s.unwrap()).collect()
                     }
                 };
-                next_modules.push(ModuleInitialization {
+                let hierarchy_key = mc.module_builder.push_module_instance(
+                    instantiation_ident.to_string(),
+                    arenas.get_ident(name_of_module_instance.item.0).to_string(),
+                );
+                mc.next_modules.push(ModuleInitialization {
                     name: instantiation_ident,
                     parameters: instant_params.clone(),
                     io: instant_io.clone(),
@@ -526,6 +578,7 @@ pub fn lower<'a>(
                         parameters: parameters.clone(),
                         signals,
                     },
+                    hierarchy_key,
                 });
             }
         }
@@ -536,6 +589,7 @@ pub fn lower<'a>(
                 gl,
                 arenas,
                 scope,
+                mc,
                 diagnostics,
                 bb_builder,
                 AstIdRange::single(statement),
@@ -550,6 +604,7 @@ pub fn lower<'a>(
                 gl,
                 arenas,
                 scope,
+                mc,
                 diagnostics,
                 bb_builder,
                 AstIdRange::single(statement),
@@ -607,18 +662,12 @@ pub fn lower<'a>(
                 }
 
                 match arenas.get(*block) {
-                    GenerateBlock::ModuleOrGenerateItem(id) => lower(
-                        gl,
-                        arenas,
-                        module_lut,
-                        next_modules,
-                        scope,
-                        *id,
-                        diagnostics,
-                    )?,
+                    GenerateBlock::ModuleOrGenerateItem(id) => {
+                        lower(gl, arenas, mc, scope, *id, diagnostics)?
+                    }
                     GenerateBlock::BeginEnd(_, ids) => {
                         for id in ids.iter() {
-                            lower(gl, arenas, module_lut, next_modules, scope, id, diagnostics)?;
+                            lower(gl, arenas, mc, scope, id, diagnostics)?;
                         }
                     }
                 }
@@ -639,26 +688,10 @@ pub fn lower<'a>(
             let v = eval_constant_expr(gl, arenas, &scope, diagnostics, *condition)?;
             if v.logical_equal(VValue::UnsignedNet(Bits::new_zeroed(SCALAR_VSIZE))) {
                 if let Some(falsy) = falsy {
-                    lower_opt_generate_block(
-                        gl,
-                        arenas,
-                        scope,
-                        diagnostics,
-                        module_lut,
-                        next_modules,
-                        *falsy,
-                    )?;
+                    lower_opt_generate_block(gl, arenas, scope, diagnostics, mc, *falsy)?;
                 }
             } else {
-                lower_opt_generate_block(
-                    gl,
-                    arenas,
-                    scope,
-                    diagnostics,
-                    module_lut,
-                    next_modules,
-                    *truthy,
-                )?;
+                lower_opt_generate_block(gl, arenas, scope, diagnostics, mc, *truthy)?;
             }
         }
         ModuleOrGenerateItem::CaseGenerateConstruct(_id) => todo!(),
@@ -693,27 +726,20 @@ pub fn lower_opt_generate_block<'a>(
     arenas: &'a AstArenas,
     scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
-    module_lut: &HashMap<&'a str, AstId<Module>>,
-    next_modules: &mut Vec<ModuleInitialization<'a>>,
+    mc: &mut ModuleContext<'a>,
     opt_generate_block: AstId<Option<GenerateBlock>>,
 ) -> Result<(), ()> {
     match arenas.get(opt_generate_block) {
         None => Ok(()),
         Some(GenerateBlock::BeginEnd(_, module_or_generate_items)) => {
             for m in module_or_generate_items.iter() {
-                lower(gl, arenas, module_lut, next_modules, scope, m, diagnostics)?;
+                lower(gl, arenas, mc, scope, m, diagnostics)?;
             }
             Ok(())
         }
-        Some(GenerateBlock::ModuleOrGenerateItem(module_or_generate_item)) => lower(
-            gl,
-            arenas,
-            module_lut,
-            next_modules,
-            scope,
-            *module_or_generate_item,
-            diagnostics,
-        ),
+        Some(GenerateBlock::ModuleOrGenerateItem(module_or_generate_item)) => {
+            lower(gl, arenas, mc, scope, *module_or_generate_item, diagnostics)
+        }
     }
 }
 

@@ -1,19 +1,20 @@
 use vogls_ir::{BasicBlockBuilder, BasicBlockTerminator, GlobalContext};
 
-use crate::ast::{AstId, AstIdRange};
 use crate::ast::statement::{
     CaseItemPattern, CaseStatement, CaseStatementVariant, ConditionalStatement, StatementOrNull,
 };
+use crate::ast::{AstId, AstIdRange};
 use crate::lower::diagnostics::Diagnostics;
 use crate::lower::expression::coerce_bin_arithmetic;
-use crate::lower::lower_expr;
 use crate::lower::scope::Scope;
+use crate::lower::{ModuleContext, lower_expr};
 use crate::parser::AstArenas;
 
 pub fn lower<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
     scope: &mut Scope<'a>,
+    mc: &mut ModuleContext<'a>,
     diagnostics: &mut Diagnostics,
     mut builder: BasicBlockBuilder,
     conditional: AstId<ConditionalStatement>,
@@ -41,6 +42,7 @@ pub fn lower<'a>(
         gl,
         arenas,
         scope,
+        mc,
         diagnostics,
         if_true_builder,
         if_branch.statement,
@@ -68,6 +70,7 @@ pub fn lower<'a>(
             gl,
             arenas,
             scope,
+            mc,
             diagnostics,
             if_true_builder,
             else_if_branch.statement,
@@ -83,7 +86,7 @@ pub fn lower<'a>(
         branch_ref.take().unwrap().update(gl, builder.key());
 
         scope.push_scope();
-        builder = lower_statement_or_null(gl, arenas, scope, diagnostics, builder, *statement)?;
+        builder = lower_statement_or_null(gl, arenas, scope, mc, diagnostics, builder, *statement)?;
         origins.push(builder.key());
         scope.pop_scope();
 
@@ -104,6 +107,7 @@ pub fn lower_case_statement<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
     scope: &mut Scope<'a>,
+    mc: &mut ModuleContext<'a>,
     diagnostics: &mut Diagnostics,
     mut builder: BasicBlockBuilder,
     case_statement: AstId<CaseStatement>,
@@ -153,6 +157,7 @@ pub fn lower_case_statement<'a>(
             gl,
             arenas,
             scope,
+            mc,
             diagnostics,
             if_true_builder,
             case_item.statement_or_null,
@@ -166,7 +171,7 @@ pub fn lower_case_statement<'a>(
 
     if let Some(statement) = default {
         scope.push_scope();
-        builder = lower_statement_or_null(gl, arenas, scope, diagnostics, builder, statement)?;
+        builder = lower_statement_or_null(gl, arenas, scope, mc, diagnostics, builder, statement)?;
         origins.push(builder.key());
         scope.pop_scope();
         builder = builder.jump(gl);
@@ -186,6 +191,7 @@ pub fn lower_statement_or_null<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
     scope: &mut Scope<'a>,
+    mc: &mut ModuleContext<'a>,
     diagnostics: &mut Diagnostics,
     builder: BasicBlockBuilder,
     statement: AstId<StatementOrNull>,
@@ -196,6 +202,7 @@ pub fn lower_statement_or_null<'a>(
             gl,
             arenas,
             scope,
+            mc,
             diagnostics,
             builder,
             AstIdRange::single(*statement),

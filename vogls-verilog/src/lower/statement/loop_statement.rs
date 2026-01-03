@@ -4,13 +4,14 @@ use crate::ast::statement::{LoopStatement, LoopStatementVariant};
 use crate::ast::{AstId, AstIdRange};
 use crate::lower::diagnostics::Diagnostics;
 use crate::lower::scope::Scope;
-use crate::lower::{Region, assign, lower_expr};
+use crate::lower::{assign, lower_expr, ModuleContext, Region};
 use crate::parser::AstArenas;
 
 pub fn lower_loop_statement<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
     scope: &mut Scope<'a>,
+    mc: &mut ModuleContext<'a>,
     diagnostics: &mut Diagnostics,
     mut builder: BasicBlockBuilder,
     ls: AstId<LoopStatement>,
@@ -88,6 +89,7 @@ pub fn lower_loop_statement<'a>(
             gl,
             arenas,
             scope,
+            mc,
             diagnostics,
             builder,
             AstIdRange::single(ls.statement),

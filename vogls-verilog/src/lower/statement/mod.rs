@@ -10,8 +10,8 @@ use crate::lower::scope::SymbolVariant;
 use crate::lower::{Region, assign};
 use crate::parser::AstArenas;
 
-use super::Diagnostics;
 use super::scope::Scope;
+use super::{Diagnostics, ModuleContext};
 
 pub mod conditional;
 pub mod loop_statement;
@@ -22,6 +22,7 @@ pub fn lower_statement_or_null<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
     scope: &mut Scope<'a>,
+    mc: &mut ModuleContext<'a>,
     diagnostics: &mut Diagnostics,
     builder: BasicBlockBuilder,
     statement: AstId<StatementOrNull>,
@@ -32,6 +33,7 @@ pub fn lower_statement_or_null<'a>(
             gl,
             arenas,
             scope,
+            mc,
             diagnostics,
             builder,
             AstIdRange::single(*statement),
@@ -43,6 +45,7 @@ pub fn statements_to_process<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
     scope: &mut Scope<'a>,
+    mc: &mut ModuleContext<'a>,
     diagnostics: &mut Diagnostics,
     mut builder: BasicBlockBuilder,
     stmts: AstIdRange<Statement>,
@@ -78,13 +81,15 @@ pub fn statements_to_process<'a>(
                     gl,
                     arenas,
                     scope,
+                    mc,
                     diagnostics,
                     builder,
                     case_statement,
                 )?
             }
             S::ConditionalStatement(conditional) => {
-                builder = conditional::lower(gl, arenas, scope, diagnostics, builder, conditional)?
+                builder =
+                    conditional::lower(gl, arenas, scope, mc, diagnostics, builder, conditional)?
             }
             S::DisableStatement => todo!(),
             S::EventTrigger => todo!(),
@@ -93,6 +98,7 @@ pub fn statements_to_process<'a>(
                     gl,
                     arenas,
                     scope,
+                    mc,
                     diagnostics,
                     builder,
                     ls,
@@ -136,6 +142,7 @@ pub fn statements_to_process<'a>(
                     gl,
                     arenas,
                     scope,
+                    mc,
                     diagnostics,
                     builder,
                     *procedural_timing_control,
@@ -148,6 +155,7 @@ pub fn statements_to_process<'a>(
                     gl,
                     arenas,
                     scope,
+                    mc,
                     diagnostics,
                     builder,
                     seq_block.statements,
@@ -158,6 +166,7 @@ pub fn statements_to_process<'a>(
                     gl,
                     arenas,
                     scope,
+                    mc,
                     diagnostics,
                     builder,
                     id,
@@ -181,6 +190,7 @@ pub fn statements_to_process<'a>(
                     gl,
                     arenas,
                     scope,
+                    mc,
                     diagnostics,
                     builder,
                     *statement_or_null,
@@ -218,6 +228,7 @@ pub fn statements_to_process<'a>(
                     gl,
                     arenas,
                     scope,
+                    mc,
                     diagnostics,
                     builder,
                     *statement_or_null,

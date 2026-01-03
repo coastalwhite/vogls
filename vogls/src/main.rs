@@ -17,6 +17,8 @@ struct Args {
 
     #[arg(long = "trace")]
     trace: bool,
+    #[arg(long = "emit-hierarchy")]
+    emit_hierarchy: bool,
     #[arg(long = "emit-unoptimized-ir")]
     emit_unoptimized_ir: bool,
     #[arg(long = "emit-ir")]
@@ -41,6 +43,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &mut ExecutionContext {
             stdout: Box::new(std::io::stdout()),
             stderr: Box::new(std::io::stderr()),
+            emit_hierarchy: args.emit_hierarchy,
             emit_unoptimized_ir: args.emit_unoptimized_ir,
             emit_ir: args.emit_ir,
             emit_vm: args.emit_vm,

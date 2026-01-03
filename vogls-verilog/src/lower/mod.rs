@@ -23,12 +23,12 @@ use std::collections::{HashMap, HashSet};
 use scope::Scope;
 
 use constant_expr::eval_constant_expr;
+use vogls_ir::vcd::NetType;
 use vogls_ir::{
-    BasicBlockBuilder, ConnectionDirection, GlobalContext, SCALAR_VSIZE, Signal, SignalKey,
-    VariableKey, VectorSize, new_process,
+    BasicBlockBuilder, BasicBlockKey, ConnectionDirection, GlobalContext, SCALAR_VSIZE, Signal,
+    SignalKey, VariableKey, VectorSize, new_process,
 };
 
-use crate::ast::AstId;
 use crate::ast::constant_expr::{
     ConstantExpr, ConstantMinTypMaxExpression, ConstantRangeExpression,
 };
@@ -38,6 +38,8 @@ use crate::ast::module::{
     ParameterDeclaration, Port, PortDeclaration, PortExpression, PortReference, Range,
 };
 use crate::ast::statement::NetLValue;
+use crate::ast::{AstId, Identifier};
+use crate::hierarchy::{ModuleBuilder, ModuleKey};
 use crate::parser::{AstArenas, TokenRange};
 
 use self::expression::lower_expr;
@@ -51,12 +53,13 @@ pub struct ModuleInitialization<'a> {
     pub parameters: ModuleParameters<'a>,
     pub io: ModuleIo<'a>,
     pub args: ModuleArgs,
+    pub hierarchy_key: ModuleKey,
 }
 
 #[derive(Clone)]
 pub struct ModuleIo<'a> {
     pub lut: HashMap<&'a str, usize>,
-    pub ports: Vec<(&'a str, ConnectionDirection, VType)>,
+    pub ports: Vec<(&'a str, ConnectionDirection, VType, i64, i64)>,
 }
 #[derive(Clone)]
 pub struct ModuleParameters<'a> {
@@ -162,6 +165,8 @@ pub fn fetch_module_interface<'a>(
                             name,
                             ConnectionDirection::Both,
                             VType::UnsignedNet(SCALAR_VSIZE),
+                            0,
+                            0,
                         ));
                     }
                 }
@@ -207,9 +212,9 @@ pub fn fetch_module_interface<'a>(
                         )
                     }
                 };
-                let size = match range {
-                    None => SCALAR_VSIZE,
-                    Some(range) => range_to_width(gl, arenas, &scope, diagnostics, range)?,
+                let (msb, lsb, size) = match range {
+                    None => (0, 0, SCALAR_VSIZE),
+                    Some(range) => evaluate_range(gl, arenas, &scope, diagnostics, range)?,
                 };
 
                 for ast_ident in identifiers {
@@ -229,6 +234,8 @@ pub fn fetch_module_interface<'a>(
 
                     io[*idx].1 = direction;
                     io[*idx].2 = VType::net(size, signed);
+                    io[*idx].3 = msb;
+                    io[*idx].4 = lsb;
                 }
             }
 
@@ -274,9 +281,9 @@ pub fn fetch_module_interface<'a>(
                         )
                     }
                 };
-                let size = match range {
-                    None => SCALAR_VSIZE,
-                    Some(range) => range_to_width(gl, arenas, &scope, diagnostics, range)?,
+                let (msb, lsb, size) = match range {
+                    None => (0, 0, SCALAR_VSIZE),
+                    Some(range) => evaluate_range(gl, arenas, &scope, diagnostics, range)?,
                 };
 
                 let mut error = false;
@@ -287,7 +294,7 @@ pub fn fetch_module_interface<'a>(
                         error = true;
                         continue;
                     }
-                    io.push((name, direction, VType::net(size, signed)));
+                    io.push((name, direction, VType::net(size, signed), msb, lsb));
                 }
 
                 if error {
@@ -306,6 +313,19 @@ pub fn fetch_module_interface<'a>(
     ))
 }
 
+pub struct ModuleContext<'a> {
+    pub named_lookup: HashMap<&'a str, AstId<Module>>,
+    pub module_builder: ModuleBuilder<'a>,
+    pub next_modules: Vec<ModuleInitialization<'a>>,
+    pub queries_to_resolve: Vec<ModuleQuery>,
+}
+
+pub struct ModuleQuery {
+    pub bb: BasicBlockKey,
+    pub instruction: usize,
+    pub query: Option<(u32, Vec<Identifier>)>,
+}
+
 pub fn lower_module_to_ir<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
@@ -313,8 +333,7 @@ pub fn lower_module_to_ir<'a>(
     parameters: &ModuleParameters<'a>,
     io: &ModuleIo<'a>,
     args: &ModuleArgs,
-    module_lut: &HashMap<&'a str, AstId<Module>>,
-    next_modules: &mut Vec<ModuleInitialization<'a>>,
+    mc: &mut ModuleContext<'a>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
     let Module {
@@ -337,17 +356,22 @@ pub fn lower_module_to_ir<'a>(
         scope.push(key, symbol_key);
     }
 
-    for ((name, _con, ty), signal) in io.ports.iter().zip(&args.signals) {
+    for ((name, _con, ty, msb, lsb), signal) in io.ports.iter().zip(&args.signals) {
+        let (ty, signal, msb, lsb) = (*ty, *signal, *msb, *lsb);
         let symbol_key = scope.symbols.insert(Symbol {
             name: name.to_string(),
             // @TODO: better definition site
             definition_site: arenas.get_span(root),
             variant: SymbolVariant::Signal(SignalSymbol {
                 dims: Vec::new(),
-                ty: *ty,
-                key: *signal,
+                ty,
+                key: signal,
+                msb,
+                lsb,
             }),
         });
+        mc.module_builder
+            .push_net(name.to_string(), signal, NetType::Wire, msb, lsb);
         scope.push(name, symbol_key);
     }
 
@@ -355,15 +379,9 @@ pub fn lower_module_to_ir<'a>(
         match arenas.get(module_item) {
             ModuleItem::PortDeclaration(_) => {}
             ModuleItem::NonPortModuleItem(p) => match arenas.get(*p) {
-                NonPortModuleItem::ModuleOrGenerateItem(id) => module_or_generate_item::lower(
-                    gl,
-                    arenas,
-                    module_lut,
-                    next_modules,
-                    &mut scope,
-                    *id,
-                    diagnostics,
-                )?,
+                NonPortModuleItem::ModuleOrGenerateItem(id) => {
+                    module_or_generate_item::lower(gl, arenas, mc, &mut scope, *id, diagnostics)?
+                }
                 NonPortModuleItem::GenerateRegion(region) => {
                     let GenerateRegion {
                         module_or_generate_item,
@@ -372,8 +390,7 @@ pub fn lower_module_to_ir<'a>(
                         module_or_generate_item::lower(
                             gl,
                             arenas,
-                            module_lut,
-                            next_modules,
+                            mc,
                             &mut scope,
                             id,
                             diagnostics,
@@ -724,31 +741,35 @@ fn msb_lsb_to_width<'a>(
     arenas: &'a AstArenas,
     scope: &Scope<'a>,
     diagnostics: &mut Diagnostics,
-    msb: AstId<ConstantExpr>,
-    lsb: AstId<ConstantExpr>,
-) -> Result<(u64, u64, VectorSize), ()> {
-    let msb = eval_constant_expr(gl, arenas, scope, diagnostics, msb);
-    let lsb = eval_constant_expr(gl, arenas, scope, diagnostics, lsb);
+    ast_msb: AstId<ConstantExpr>,
+    ast_lsb: AstId<ConstantExpr>,
+) -> Result<(i64, i64, VectorSize), ()> {
+    let msb = eval_constant_expr(gl, arenas, scope, diagnostics, ast_msb);
+    let lsb = eval_constant_expr(gl, arenas, scope, diagnostics, ast_lsb);
 
     let (Ok(VValue::SignedNet(msb)), Ok(VValue::SignedNet(lsb))) = (msb, lsb) else {
         return Err(());
     };
     let msb = msb.as_i64().unwrap();
     let lsb = lsb.as_i64().unwrap();
-    Ok((
-        msb as u64,
-        lsb as u64,
-        VectorSize::new((msb - lsb + 1) as u32).unwrap(),
-    ))
+    let width = u32::try_from(msb.abs_diff(lsb)).ok();
+    let width = width.and_then(|w| w.checked_add(1));
+    let width = width.and_then(|w| VectorSize::new(w));
+    let Some(width) = width else {
+        let tr = arenas.get_span(ast_msb) | arenas.get_span(ast_lsb);
+        diagnostics.net_width_overflow(tr);
+        return Err(());
+    };
+    Ok((msb, lsb, width))
 }
 
-fn range_to_width<'a>(
+fn evaluate_range<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
     scope: &Scope<'a>,
     diagnostics: &mut Diagnostics,
     range: AstId<Range>,
-) -> Result<VectorSize, ()> {
+) -> Result<(i64, i64, VectorSize), ()> {
     let range = arenas.get(range);
-    msb_lsb_to_width(gl, arenas, scope, diagnostics, range.msb, range.lsb).map(|(_, _, w)| w)
+    msb_lsb_to_width(gl, arenas, scope, diagnostics, range.msb, range.lsb)
 }

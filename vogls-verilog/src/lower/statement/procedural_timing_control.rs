@@ -8,7 +8,7 @@ use crate::ast::statement::{
     DelayControl, DelayValue, EventControl, EventExpressionPrimary, ProceduralTimingControl,
     StatementOrNull,
 };
-use crate::lower::WatchCondition;
+use crate::lower::{ModuleContext, WatchCondition};
 use crate::lower::expression::lower_expr;
 use crate::lower::scope::{Scope, SymbolVariant};
 use crate::number::Decimal;
@@ -20,6 +20,7 @@ pub fn lower<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
     scope: &mut Scope<'a>,
+    mc: &mut ModuleContext<'a>,
     diagnostics: &mut Diagnostics,
     mut builder: BasicBlockBuilder,
     ptc: AstId<ProceduralTimingControl>,
@@ -68,6 +69,7 @@ pub fn lower<'a>(
                         gl,
                         arenas,
                         scope,
+                        mc,
                         diagnostics,
                         builder,
                         statement,
@@ -88,6 +90,7 @@ pub fn lower<'a>(
                     gl,
                     arenas,
                     scope,
+                    mc,
                     diagnostics,
                     builder,
                     statement,
@@ -194,6 +197,7 @@ pub fn lower<'a>(
                     gl,
                     arenas,
                     scope,
+                    mc,
                     diagnostics,
                     builder,
                     statement,

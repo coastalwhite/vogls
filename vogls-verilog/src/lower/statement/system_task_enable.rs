@@ -1,17 +1,19 @@
 use vogls_ir::dyn_format_string::{Base, DynFormatArgument, DynFormatString, Padding};
-use vogls_ir::{BasicBlockBuilder, GlobalContext, IntrinsicOp, VcdScope, VcdScopeItem};
+use vogls_ir::vcd::VcdScope;
+use vogls_ir::{BasicBlockBuilder, GlobalContext, IntrinsicOp};
 
 use crate::ast::AstId;
 use crate::ast::statement::SystemTaskEnable;
 use crate::lower::expression::lower_expr;
 use crate::lower::scope::Scope;
-use crate::lower::{Diagnostics, expression};
+use crate::lower::{Diagnostics, ModuleContext, ModuleQuery, expression};
 use crate::parser::AstArenas;
 
 pub fn lower_system_task_enable<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
     scope: &mut Scope<'a>,
+    mc: &mut ModuleContext<'a>,
     diagnostics: &mut Diagnostics,
     mut builder: BasicBlockBuilder,
     system_task_enable: AstId<SystemTaskEnable>,
@@ -174,17 +176,23 @@ pub fn lower_system_task_enable<'a>(
             );
         }
         "finish" => _ = builder.intrinsic(gl, IntrinsicOp::Finish, Default::default()),
+
         "dumpfile" => {
             assert!(expressions.is_empty());
             builder.intrinsic(gl, IntrinsicOp::VcdOpenFile("dump.vcd".into()), [].into());
         }
         "dumpvars" => {
             assert!(expressions.is_empty());
+            mc.queries_to_resolve.push(ModuleQuery {
+                bb: builder.key(),
+                instruction: builder.instrs_len(),
+                query: None,
+            });
             builder.intrinsic(
                 gl,
                 IntrinsicOp::VcdAppendModule(VcdScope {
-                    name: "TOP".into(),
-                    items: gl.signals.keys().map(VcdScopeItem::Variable).collect(),
+                    name: "".into(),
+                    items: Vec::new(),
                 }),
                 [].into(),
             );

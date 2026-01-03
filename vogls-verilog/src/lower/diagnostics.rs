@@ -39,7 +39,10 @@ impl Diagnostics {
     ) {
         let context = format!(
             "available ports: {:?}",
-            io.ports.iter().map(|(s, _, _)| *s).collect::<Vec<&str>>()
+            io.ports
+                .iter()
+                .map(|(s, _, _, _, _)| *s)
+                .collect::<Vec<&str>>()
         );
         self.errors.push((
             arenas.get_item_span(ident),
