@@ -66,8 +66,6 @@ pub enum VmInstruction {
     SelectBit(StackRef, VectorSize, StackRef, StackRef),
     Concat(StackRef, VectorSize, StackRef, VectorSize, StackRef),
 
-    Move(StackRef, StackRef, VectorSize),
-
     Intrinsic(StackRef, Box<VmIntrinsicOp>, Box<[(StackRef, VectorSize)]>),
 
     Probe(StackRef, VmSignalKey),

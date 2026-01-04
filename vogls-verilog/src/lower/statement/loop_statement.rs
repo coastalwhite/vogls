@@ -1,10 +1,10 @@
-use vogls_ir::{BasicBlockBuilder, GlobalContext};
+use vogls_ir::{BasicBlockBuilder, BasicBlockTerminator, GlobalContext};
 
 use crate::ast::statement::{LoopStatement, LoopStatementVariant};
 use crate::ast::{AstId, AstIdRange};
 use crate::lower::diagnostics::Diagnostics;
 use crate::lower::scope::Scope;
-use crate::lower::{assign, lower_expr, ModuleContext, Region};
+use crate::lower::{ModuleContext, Region, assign, lower_expr};
 use crate::parser::AstArenas;
 
 pub fn lower_loop_statement<'a>(
@@ -20,7 +20,6 @@ pub fn lower_loop_statement<'a>(
 
     let ls = arenas.get(ls);
 
-    let predecessor = builder.key();
     let mut repeat_vars = None;
     match ls.variant {
         V::Repeat(size) => {
@@ -53,6 +52,7 @@ pub fn lower_loop_statement<'a>(
         V::Forever | V::While(_) => {}
     }
 
+    let predecessor = builder.key();
     builder = builder.jump(gl);
 
     let loop_start = builder.key();
@@ -116,20 +116,22 @@ pub fn lower_loop_statement<'a>(
         }
         V::Repeat(_) => {
             let (i, _) = repeat_vars.unwrap();
-            let phi_ref = repeat_i_phi.unwrap();
 
             let one = builder.constant_u32(gl, 1);
             let i_plus_1 = builder.plus(gl, i, one);
+
+            let phi_ref = repeat_i_phi.unwrap();
             builder.update_phi_ref(gl, phi_ref, 1, builder.key(), i_plus_1);
         }
-        V::Forever | V::While(_) => {}
+        V::Forever | V::While(_) => {},
     }
 
-    let next_builder = builder.next_builder(gl);
+    let builder_key = builder.key();
+    let mut builder = builder.next_terminate_later(gl);
     if let Some(branch_ref) = branch_ref {
-        branch_ref.update(gl, next_builder.key());
+        builder.update_branch_ref(gl, branch_ref, builder.key());
     }
-    builder.jump_to(gl, loop_start);
-    builder = next_builder;
+    gl.bbs[builder_key].terminator = BasicBlockTerminator::Jump(loop_start);
+
     Ok(builder)
 }

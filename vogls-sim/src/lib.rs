@@ -157,9 +157,7 @@ pub fn drive_bits(bits: &mut Bits, slice: &[u8], partial: Option<(u32, VectorSiz
             let before = *signal_value;
             match partial {
                 None => {
-                    eprintln!("signal_value = {signal_value:08X}");
                     *signal_value = bits::store_to_u64(slice, 0, *size);
-                    eprintln!("signal_value = {signal_value:08X}");
                 }
                 Some((offset, length)) => {
                     let value = bits::store_to_u64(slice, 0, length);
@@ -179,7 +177,7 @@ pub struct VcdScope {
 }
 
 impl VcdScope {
-    fn lower(v: &vogls_ir::vcd::VcdScope, map: &mut HashMap<SignalKey, VmSignalKey>) -> VcdScope {
+    fn lower(v: &vogls_ir::vcd::VcdScope, map: &HashMap<SignalKey, VmSignalKey>) -> VcdScope {
         VcdScope {
             name: v.name.clone(),
             items: v
@@ -261,18 +259,15 @@ impl VcdScopeItem {
 }
 
 impl VcdScopeItem {
-    fn lower(v: &vogls_ir::vcd::VcdScopeItem, map: &mut HashMap<SignalKey, VmSignalKey>) -> Self {
+    fn lower(v: &vogls_ir::vcd::VcdScopeItem, map: &HashMap<SignalKey, VmSignalKey>) -> Self {
         match v {
             vogls_ir::vcd::VcdScopeItem::Scope(v) => Self::Scope(VcdScope::lower(v, map)),
-            vogls_ir::vcd::VcdScopeItem::Variable(v) => {
-                let next = map.len();
-                Self::Variable(VcdVariable {
-                    signal: *map.entry(v.signal).or_insert(VmSignalKey(next as _)),
-                    ty: v.ty,
-                    msb: v.msb,
-                    lsb: v.lsb,
-                })
-            }
+            vogls_ir::vcd::VcdScopeItem::Variable(v) => Self::Variable(VcdVariable {
+                signal: map[&v.signal],
+                ty: v.ty,
+                msb: v.msb,
+                lsb: v.lsb,
+            }),
         }
     }
 }
@@ -318,8 +313,6 @@ impl VcdOutput {
             writeln!(f, "$enddefinitions $end")?;
         }
 
-        dbg!(self.updated_this_time_step.contains(&VmSignalKey(83)));
-
         // Only print for the timestamp if something actually happened.
         let mut show_for_timestamp = !self.updated_this_time_step.is_empty();
         show_for_timestamp |= finish;
@@ -332,9 +325,6 @@ impl VcdOutput {
         writeln!(f, "#{}", ctx.time)?;
         for signal in &self.updated_this_time_step {
             let bits = &signals[&signal];
-            if signal.0 == 83 {
-                dbg!(&bits);
-            }
             let idx = signal.0;
             if bits.size().get() > 1 {
                 f.write_all(&[b'b'])?;
@@ -413,6 +403,11 @@ impl Event {
                 I::Unary(dst, op, size, src) => {
                     use UnaryOp as O;
                     match op {
+                        O::Copy => {
+                            for i in 0..size.get().div_ceil(8) as usize {
+                                stack[dst.offset + i] = stack[src.offset + i];
+                            }
+                        }
                         O::Neg => {
                             let n_full_bytes = (size.get() / 8) as usize;
                             if size.get() % 8 == 0 {
@@ -576,12 +571,6 @@ impl Event {
                     vogls_bits::concat::tv_concat(dst, lhs, rhs, *lhs_size, *rhs_size);
                 }
 
-                I::Move(dst, src, size) => {
-                    for i in 0..size.get().div_ceil(8) as usize {
-                        stack[dst.offset + i] = stack[src.offset + i];
-                    }
-                }
-
                 I::Intrinsic(dst, op, args) => {
                     use VmIntrinsicOp as O;
 
@@ -706,23 +695,12 @@ impl Event {
                     }
 
                     let signal = signals.get_mut(sig).unwrap();
-                    if signal_info[sig.0 as usize].name == "mem_rdata_latched" {
-                        dbg!(&signal);
-                    }
                     let size = partial.map_or(size, |(_, s)| s);
                     let updated = drive_bits(
                         signal,
                         &stack[var.offset..][..size.get().div_ceil(8) as usize],
                         partial,
                     );
-
-                    if signal_info[sig.0 as usize].name == "mem_rdata_latched" {
-                        dbg!(*process_key, updated, signal);
-                        if let Some(vcd) = vcd.as_mut() {
-                            dbg!(vcd.paused, vcd.tracked.contains_key(sig));
-                        }
-                        dbg!(sig.0);
-                    }
 
                     if updated {
                         update_watchers(

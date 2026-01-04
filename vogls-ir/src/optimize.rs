@@ -1,23 +1,36 @@
 use std::collections::{HashMap, HashSet};
 
-use slotmap::SlotMap;
+use slotmap::{SecondaryMap, SlotMap};
 
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryOp, Bits, Instruction, ResizeOp,
     SCALAR_VSIZE, UnaryOp, Variable, VariableKey,
 };
 
-pub fn remove_needless_jumps(
+pub fn get_fan_in<'a>(
     bbs: &mut SlotMap<BasicBlockKey, BasicBlock>,
     entry: BasicBlockKey,
     scratch_stack: &mut Vec<BasicBlockKey>,
-    scratch_map: &mut HashMap<BasicBlockKey, BasicBlockKey>,
-    scratch_bb_to_u32_map: &mut HashMap<BasicBlockKey, u32>,
     scratch_seen: &mut HashSet<BasicBlockKey>,
-) -> BasicBlockKey {
+    scratch_fan_in: &mut SecondaryMap<BasicBlockKey, Vec<BasicBlockKey>>,
+) {
     scratch_stack.clear();
-    scratch_map.clear();
-    scratch_bb_to_u32_map.clear();
+    scratch_seen.clear();
+    scratch_fan_in.clear();
+
+    scratch_stack.push(entry);
+    scratch_seen.insert(entry);
+
+    while let Some(bb_key) = scratch_stack.pop() {
+        let BasicBlock {
+            name: _,
+            instrs: _,
+            terminator,
+        } = &mut bbs[bb_key];
+        terminator.extend_next_rev(scratch_stack, scratch_seen);
+        scratch_fan_in.insert(bb_key, Vec::new());
+    }
+
     scratch_seen.clear();
 
     scratch_stack.push(entry);
@@ -26,97 +39,111 @@ pub fn remove_needless_jumps(
     while let Some(bb_key) = scratch_stack.pop() {
         let BasicBlock {
             name: _,
-            instrs,
+            instrs: _,
             terminator,
         } = &bbs[bb_key];
         terminator.extend_next_rev(scratch_stack, scratch_seen);
-        if instrs.is_empty()
-            && let BasicBlockTerminator::Jump(target_bb) = terminator
-        {
-            scratch_map.insert(bb_key, *target_bb);
-        }
+        terminator.for_each_bb(|bb| scratch_fan_in[bb].push(bb_key));
     }
 
-    scratch_stack.push(entry);
+    if !cfg!(debug_assertions) {
+        return;
+    }
+
     scratch_seen.clear();
+    scratch_stack.push(entry);
     scratch_seen.insert(entry);
 
     while let Some(bb_key) = scratch_stack.pop() {
-        bbs[bb_key]
-            .terminator
-            .extend_next_rev(scratch_stack, scratch_seen);
-        if let Some(mut target_bb) = scratch_map.get(&bb_key).copied() {
-            while let Some(new_target_bb) = scratch_map.get(&target_bb) {
-                target_bb = *new_target_bb;
+        let BasicBlock {
+            name: _,
+            instrs,
+            terminator,
+        } = &mut bbs[bb_key];
+        terminator.extend_next_rev(scratch_stack, scratch_seen);
+        for i in instrs {
+            if let Instruction::Phi(_, srcs) = i {
+                for (bb, _) in srcs {
+                    assert!(scratch_fan_in[bb_key].contains(bb));
+                }
             }
-            *scratch_map.get_mut(&bb_key).unwrap() = target_bb;
-            bbs.remove(bb_key);
         }
     }
+}
 
-    let new_entry = scratch_map.get(&entry).copied().unwrap_or(entry);
-    scratch_stack.push(new_entry);
+pub fn remove_needless_jumps(
+    bbs: &mut SlotMap<BasicBlockKey, BasicBlock>,
+    entry: BasicBlockKey,
+    scratch_stack: &mut Vec<BasicBlockKey>,
+    scratch_seen: &mut HashSet<BasicBlockKey>,
+    scratch_fan_in: &mut SecondaryMap<BasicBlockKey, Vec<BasicBlockKey>>,
+) {
+    scratch_stack.clear();
     scratch_seen.clear();
-    scratch_seen.insert(new_entry);
-    scratch_bb_to_u32_map.insert(new_entry, 1);
+    scratch_stack.push(entry);
+    scratch_seen.insert(entry);
 
     while let Some(bb_key) = scratch_stack.pop() {
-        bbs[bb_key].map_bbs(&scratch_map);
-
-        bbs[bb_key]
-            .terminator
-            .for_each_bb(|bb| *scratch_bb_to_u32_map.entry(bb).or_default() += 1);
-        bbs[bb_key]
-            .terminator
-            .extend_next_rev(scratch_stack, scratch_seen);
-    }
-
-    scratch_stack.push(new_entry);
-    scratch_seen.clear();
-    scratch_seen.insert(new_entry);
-
-    let mut remapped_jump = false;
-    while let Some(bb_key) = scratch_stack.pop() {
-        while let BasicBlockTerminator::Jump(target_bb) = &mut bbs[bb_key].terminator
-            && scratch_bb_to_u32_map[target_bb] == 1
-        {
-            let target_bb = *target_bb;
-            let [
-                BasicBlock {
-                    name: _,
-                    instrs: bb_instrs,
-                    terminator: bb_terminator,
-                },
-                BasicBlock {
-                    name: _,
-                    instrs: tgt_instrs,
-                    terminator: tgt_terminator,
-                },
-            ] = &mut bbs.get_disjoint_mut([bb_key, target_bb]).unwrap();
-
-            scratch_map.insert(target_bb, bb_key);
-            bb_instrs.extend_from_slice(tgt_instrs);
-            std::mem::swap(bb_terminator, tgt_terminator);
-
-            remapped_jump = true;
-            bbs.remove(target_bb);
-        }
-    }
-
-    if remapped_jump {
-        scratch_stack.push(new_entry);
-        scratch_seen.clear();
-        scratch_seen.insert(new_entry);
-
-        while let Some(bb_key) = scratch_stack.pop() {
-            bbs[bb_key].map_bbs(&scratch_map);
+        let BasicBlockTerminator::Jump(target_bb) = bbs[bb_key].terminator else {
             bbs[bb_key]
                 .terminator
                 .extend_next_rev(scratch_stack, scratch_seen);
-        }
-    }
+            continue;
+        };
 
-    new_entry
+        let [bb, target] = bbs.get_disjoint_mut([bb_key, target_bb]).unwrap();
+        let [bb_fan_in, target_fan_in] = scratch_fan_in
+            .get_disjoint_mut([bb_key, target_bb])
+            .unwrap();
+
+        if !bb.instrs.is_empty() && target_fan_in.len() != 1 {
+            bb.terminator.extend_next_rev(scratch_stack, scratch_seen);
+            continue;
+        }
+
+        for i in bb.instrs.iter_mut() {
+            if let Instruction::Phi(_, srcs) = i {
+                let mut new_srcs = Vec::with_capacity(bb_fan_in.len() + target_fan_in.len() - 1);
+                for (b, v) in srcs.iter() {
+                    if *b == bb_key {
+                        new_srcs.extend(target_fan_in.iter().map(|t| (*t, *v)));
+                    } else {
+                        new_srcs.push((*b, *v));
+                    }
+                }
+                *srcs = new_srcs.into();
+            }
+        }
+
+        if bb.instrs.is_empty() {
+            std::mem::swap(&mut bb.instrs, &mut target.instrs);
+        } else {
+            bb.instrs.extend(std::mem::take(&mut target.instrs));
+        }
+        std::mem::swap(&mut bb.terminator, &mut target.terminator);
+
+        bb_fan_in.reserve(target_fan_in.len() - 1);
+        bb_fan_in.extend(target_fan_in.iter().copied().filter(|k| *k != bb_key));
+
+        for b in target_fan_in.iter().copied().filter(|k| *k != bb_key) {
+            bbs[b].map_bb(|bb| if bb == target_bb { bb_key } else { bb });
+        }
+
+        let start_stack_len = scratch_stack.len();
+        bbs[bb_key]
+            .terminator
+            .for_each_bb(|b| scratch_stack.push(b));
+        for &b in &scratch_stack[start_stack_len..] {
+            for f in scratch_fan_in[b].iter_mut() {
+                if *f == target_bb {
+                    *f = bb_key;
+                }
+            }
+            bbs[b].map_bb(|bb| if bb == target_bb { bb_key } else { bb });
+        }
+        scratch_stack.truncate(start_stack_len);
+        scratch_stack.push(bb_key);
+    }
 }
 
 pub fn remove_needles_branches(
@@ -152,6 +179,7 @@ pub fn propagate_constants<'a>(
     scratch_removed: &mut HashSet<BasicBlockKey>,
     scratch_map: &mut HashMap<VariableKey, Bits>,
     scratch_var_to_var_map: &mut HashMap<VariableKey, VariableKey>,
+    scratch_fan_in: &mut SecondaryMap<BasicBlockKey, Vec<BasicBlockKey>>,
 ) {
     scratch_stack.clear();
     scratch_mfr.clear();
@@ -178,6 +206,14 @@ pub fn propagate_constants<'a>(
                     continue;
                 }
                 I::Unary(dst, op, src) => {
+                    if *op == UnaryOp::Copy {
+                        _ = scratch_var_to_var_map.insert(*dst, *src);
+                        if let Some(bits) = scratch_map.get(src) {
+                            scratch_map.insert(*dst, bits.clone());
+                        }
+                        continue;
+                    }
+
                     let Some(bits) = scratch_map.get(src) else {
                         continue;
                     };
@@ -185,6 +221,7 @@ pub fn propagate_constants<'a>(
                     (
                         *dst,
                         match op {
+                            UnaryOp::Copy => unreachable!(),
                             UnaryOp::ReduceOr => Bits::from(bits.reduce_or()),
                             UnaryOp::ReduceAnd => Bits::from(bits.reduce_and()),
                             UnaryOp::ReduceXor => Bits::from(bits.reduce_xor()),
@@ -324,69 +361,53 @@ pub fn propagate_constants<'a>(
             };
             scratch_map.insert(dst, bits.clone());
             *i = I::Constant(dst, bits);
-
-            // Simplify constant branches.
-            if let BasicBlockTerminator::Branch(condition, truthy_bb, falsy_bb) = terminator
-                && let Some(condition) = scratch_map.get(condition)
-            {
-                let (mfr, jump) = if condition.not_eq_zero() {
-                    (*falsy_bb, *truthy_bb)
-                } else {
-                    (*truthy_bb, *falsy_bb)
-                };
-                if !scratch_seen.contains(&mfr) {
-                    scratch_mfr.push(mfr);
-                }
-                *terminator = BasicBlockTerminator::Jump(jump);
-            }
-
-            terminator.extend_next_rev(scratch_stack, scratch_seen);
         }
+
+        // Simplify constant branches.
+        if let BasicBlockTerminator::Branch(condition, truthy_bb, falsy_bb) = terminator
+            && let Some(condition) = scratch_map.get(condition)
+        {
+            let (mfr, jump) = if condition.not_eq_zero() {
+                (*falsy_bb, *truthy_bb)
+            } else {
+                (*truthy_bb, *falsy_bb)
+            };
+            if !scratch_seen.contains(&mfr) {
+                scratch_mfr.push(mfr);
+            }
+            *terminator = BasicBlockTerminator::Jump(jump);
+
+            bbs[mfr].remove_fan_in_edge(bb_key);
+            scratch_fan_in[mfr].retain(|k| *k != bb_key);
+        }
+        bbs[bb_key]
+            .terminator
+            .extend_next_rev(scratch_stack, scratch_seen);
     }
 
     while let Some(bb_key) = scratch_mfr.pop() {
         if !scratch_seen.insert(bb_key) {
             continue;
         }
+
+        let start_stack_len = scratch_mfr.len();
         bbs[bb_key]
             .terminator
             .extend_next_rev(scratch_mfr, scratch_seen);
-        bbs.remove(bb_key);
-        scratch_removed.insert(bb_key);
-    }
 
-    if !scratch_removed.is_empty() {
-        scratch_seen.clear();
-        scratch_stack.push(entry);
-        scratch_seen.insert(entry);
+        for &fan_out in &scratch_mfr[start_stack_len..] {
+            if !scratch_seen.contains(&fan_out) {
+                continue;
+            }
 
-        while let Some(bb_key) = scratch_stack.pop() {
-            let BasicBlock {
-                name: _,
-                instrs,
-                terminator,
-            } = &mut bbs[bb_key];
-
-            instrs.retain_mut(|i| {
-                if let Instruction::Phi(dst, origins) = i {
-                    let new_origins = origins
-                        .iter()
-                        .filter(|(bb, _)| !scratch_removed.contains(bb))
-                        .copied()
-                        .collect::<Box<_>>();
-                    if new_origins.len() == 1
-                        && let Some((_, src)) = new_origins.first()
-                    {
-                        scratch_var_to_var_map.insert(*dst, *src);
-                        return false;
-                    }
-                    *origins = new_origins;
-                }
-                true
-            });
-            terminator.extend_next_rev(scratch_stack, scratch_seen);
+            bbs[fan_out].remove_fan_in_edge(bb_key);
+            scratch_fan_in[fan_out].retain(|k| *k != bb_key);
         }
+
+        bbs.remove(bb_key);
+        scratch_fan_in.remove(bb_key);
     }
+
     if !scratch_var_to_var_map.is_empty() {
         scratch_seen.clear();
         scratch_stack.push(entry);

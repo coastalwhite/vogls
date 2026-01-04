@@ -14,7 +14,7 @@ pub fn lower_process_to_vm(
     process: ProcessKey,
     gl: &GlobalContext,
     stack_top: &mut usize,
-    io_signals: &mut HashMap<SignalKey, VmSignalKey>,
+    io_signals: &HashMap<SignalKey, VmSignalKey>,
 ) -> VmProcess {
     use Instruction as I;
     use VmInstruction as VI;
@@ -58,10 +58,7 @@ pub fn lower_process_to_vm(
     let mut instructions = Vec::new();
 
     macro_rules! signal {
-        ($signal:expr) => {{
-            let next = io_signals.len();
-            *io_signals.entry($signal).or_insert(VmSignalKey(next as _))
-        }};
+        ($signal:expr) => {{ io_signals[&$signal] }};
     }
     macro_rules! var {
         ($var:expr) => {{ stack_map[&$var] }};
@@ -147,7 +144,7 @@ pub fn lower_process_to_vm(
 
         if let Some(phis) = bb_phis.get(&bb_key) {
             for (dst, src) in phis {
-                instructions.push(VI::Move(var!(*dst), var!(*src), gl.vars[*src].size));
+                instructions.push(VI::Unary(var!(*dst), vogls_ir::UnaryOp::Copy, gl.vars[*src].size, var!(*src)));
             }
         }
 

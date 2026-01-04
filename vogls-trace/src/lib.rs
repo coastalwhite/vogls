@@ -118,8 +118,6 @@ impl Trace {
         f.write_all(&(watches.len() as u64).to_le_bytes())?;
         f.write_all(&(events.len() as u64).to_le_bytes())?;
 
-        dbg!(events.len());
-
         for file in &self.files {
             dump_opt_str(file.name.as_deref(), f)?;
             dump_str(file.content.as_str(), f)?;

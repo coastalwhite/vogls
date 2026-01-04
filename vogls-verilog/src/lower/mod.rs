@@ -87,6 +87,7 @@ pub fn fetch_module_interface<'a>(
         module_parameter_port_list,
         ports,
         module_items,
+        default_nettype: _,
     } = arenas.get(module);
 
     let mut param_lut = HashMap::new();
@@ -343,6 +344,7 @@ pub fn lower_module_to_ir<'a>(
         module_parameter_port_list: _,
         ports: _,
         module_items,
+        default_nettype: _,
     } = arenas.get(root);
 
     let mut scope = Scope::new();

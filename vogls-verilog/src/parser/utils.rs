@@ -24,7 +24,7 @@ pub fn try_parse<'a, T: Consumable<'a>>(
 ) -> Option<AstId<T>> {
     let start = tkw.offset;
     let item = T::try_consume(tkw, sc, arenas)?;
-    let end = tkw.offset - 1;
+    let end = tkw.offset;
     Some(arenas.add(item, TokenRange { start, end }))
 }
 

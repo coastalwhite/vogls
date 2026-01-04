@@ -29,9 +29,6 @@ impl fmt::Display for VmInstruction {
             Self::Concat(dst, _, src1, _, src2) => {
                 write!(f, "{dst} = concat {src1}, {src2}")
             }
-            Self::Move(dst, src, _) => {
-                write!(f, "{dst} = {src}")
-            }
             Self::Intrinsic(dst, op, args) => {
                 write!(f, "{dst} = {}", op.into_mnemonic())?;
                 if let Some((arg, _)) = args.first() {
@@ -91,7 +88,6 @@ impl fmt::Display for VmProcess {
                 | I::Shift(..)
                 | I::SelectBit(..)
                 | I::Concat(..)
-                | I::Move(..)
                 | I::Intrinsic(..)
                 | I::Probe(..)
                 | I::Drive(..)

@@ -28,7 +28,7 @@ struct Args {
     #[arg(short, long, default_value_t = u64::MAX)]
     time: u64,
 
-    #[arg(long = "opt-rounds", default_value_t = 2)]
+    #[arg(long = "opt-rounds", default_value_t = 0)]
     opt_rounds: u8,
 }
 

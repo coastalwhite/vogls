@@ -2,10 +2,11 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::rc::Rc;
 
-use slotmap::SlotMap;
+use slotmap::{SecondaryMap, SlotMap};
+use vogls_ir::token_range::TokenRange;
 use vogls_ir::{Bits, ContextFormat, GlobalContext, Instruction, Signal};
 use vogls_sim::{
-    Context, EvaluationEvent, Event, Regions, SignalInfo, VmProcess, VmProcessKey,
+    Context, EvaluationEvent, Event, Regions, SignalInfo, VmProcess, VmProcessKey, VmSignalKey,
     lower_process_to_vm,
 };
 use vogls_verilog::ast::AstId;
@@ -34,6 +35,31 @@ pub struct ExecutionContext {
     pub trace: bool,
     pub time: u64,
     pub opt_rounds: u8,
+}
+
+pub fn token_range_to_line_range(
+    tokenized: &Tokenized,
+    tr: TokenRange,
+    line_luts: &[Vec<usize>],
+) -> Option<vogls_trace::Span> {
+    let file = tokenized.file_idxs[tr.start];
+    if file == tokenized.file_idxs[tr.end - 1] {
+        let span_start = tokenized.spans[tr.start].start();
+        let span_end = tokenized.spans[tr.end - 1].end();
+
+        let line_start = line_luts[file as usize]
+            .binary_search(&span_start)
+            .unwrap_or_else(|e| e - 1) as u64;
+        let line_end = line_luts[file as usize]
+            .binary_search(&span_end)
+            .unwrap_or_else(|e| e) as u64;
+        return Some(vogls_trace::Span {
+            file: file as u64,
+            line_range: line_start..line_end,
+        });
+    }
+
+    None
 }
 
 fn append_referenced_modules_generate_block<'a>(
@@ -173,6 +199,7 @@ pub fn run(
                     module_parameter_port_list: _,
                     module_items,
                     ports: _,
+                    default_nettype: _,
                 } = ast.arenas.get(module_id);
                 for module_item in module_items.iter() {
                     let ModuleItem::NonPortModuleItem(p) = ast.arenas.get(module_item) else {
@@ -194,6 +221,7 @@ pub fn run(
                     module_parameter_port_list: _,
                     module_items: _,
                     ports: _,
+                    default_nettype: _,
                 } = ast.arenas.get(module_id);
                 let module_name = ast.arenas.get_ident(module_identifier.item.0);
                 if referenced.contains(module_name) {
@@ -368,22 +396,30 @@ pub fn run(
 
     let mut scratch_stack = Vec::new();
     let mut scratch_mfr = Vec::new();
-    let mut scratch_bb_to_bb_map = HashMap::new();
-    let mut scratch_bb_to_u32_map = HashMap::new();
     let mut scratch_bb_to_bits_map = HashMap::new();
     let mut scratch_var_to_var_map = HashMap::new();
     let mut scratch_var_seen = HashSet::new();
     let mut scratch_seen = HashSet::new();
     let mut scratch_removed = HashSet::new();
+    let mut scratch_fan_in = SecondaryMap::new();
     for process in gl.processes.values_mut() {
-        for _ in 0..ectx.opt_rounds {
-            process.entry = vogls_ir::optimize::remove_needless_jumps(
+        if cfg!(debug_assertions) {
+            vogls_ir::optimize::get_fan_in(
                 &mut gl.bbs,
                 process.entry,
                 &mut scratch_stack,
-                &mut scratch_bb_to_bb_map,
-                &mut scratch_bb_to_u32_map,
                 &mut scratch_seen,
+                &mut scratch_fan_in,
+            );
+        }
+
+        for _ in 0..ectx.opt_rounds {
+            vogls_ir::optimize::remove_needless_jumps(
+                &mut gl.bbs,
+                process.entry,
+                &mut scratch_stack,
+                &mut scratch_seen,
+                &mut scratch_fan_in,
             );
             vogls_ir::optimize::remove_needles_branches(
                 &mut gl.bbs,
@@ -401,6 +437,7 @@ pub fn run(
                 &mut scratch_removed,
                 &mut scratch_bb_to_bits_map,
                 &mut scratch_var_to_var_map,
+                &mut scratch_fan_in,
             );
             vogls_ir::optimize::deadcode_elimination(
                 &mut gl.bbs,
@@ -409,6 +446,16 @@ pub fn run(
                 &mut scratch_stack,
                 &mut scratch_seen,
                 &mut scratch_var_seen,
+            );
+        }
+
+        if cfg!(debug_assertions) {
+            vogls_ir::optimize::get_fan_in(
+                &mut gl.bbs,
+                process.entry,
+                &mut scratch_stack,
+                &mut scratch_seen,
+                &mut scratch_fan_in,
             );
         }
     }
@@ -458,6 +505,41 @@ pub fn run(
     }
 
     let mut io_signals = HashMap::new();
+    let mut signal_info = vec![
+        SignalInfo {
+            name: String::new(),
+        };
+        io_signals.len()
+    ];
+    for (key, signal) in &gl.signals {
+        let Signal {
+            name,
+            size,
+            initialize,
+            origin,
+        } = signal;
+        let value = match initialize {
+            None => Bits::new_zeroed(*size),
+            Some(initialize) => {
+                assert_eq!(initialize.size(), *size);
+                initialize.clone()
+            }
+        };
+
+        if ectx.trace {
+            trace_signals.push(vogls_trace::Signal {
+                name: Some(name.clone()),
+                location: token_range_to_line_range(&token_buffer, *origin, &line_luts),
+                initial: value.clone(),
+            });
+        }
+
+        let vm_signal_key = VmSignalKey(io_signals.len() as u64);
+        io_signals.insert(key, vm_signal_key);
+        signals.insert(vm_signal_key, value);
+        signal_info.push(SignalInfo { name: name.clone() });
+    }
+
     let mut stack_top = 0usize;
     for process in gl.processes.keys() {
         if ectx.emit_vm && ectx.emit_ir {
@@ -480,27 +562,9 @@ pub fn run(
         if ectx.trace {
             let vogls_ir::Process { name, origin, .. } = &gl.processes[process];
 
-            let file = token_buffer.file_idxs[origin.start];
-            let mut location = None;
-            if file == token_buffer.file_idxs[origin.end - 1] {
-                let span_start = token_buffer.spans[origin.start].start();
-                let span_end = token_buffer.spans[origin.end - 1].end();
-
-                let line_start = line_luts[file as usize]
-                    .binary_search(&span_start)
-                    .unwrap_or_else(|e| e - 1) as u64;
-                let line_end = line_luts[file as usize]
-                    .binary_search(&span_end)
-                    .unwrap_or_else(|e| e + 1) as u64;
-                location = Some(vogls_trace::Span {
-                    file: file as u64,
-                    line_range: line_start..line_end,
-                });
-            }
-
             trace_processes.push(vogls_trace::Process {
                 name: Some(name.clone()),
-                location,
+                location: token_range_to_line_range(&token_buffer, *origin, &line_luts),
             });
         }
 
@@ -510,59 +574,6 @@ pub fn run(
         }));
     }
     let mut stack = vec![0u8; stack_top];
-
-    let mut signal_info = vec![
-        SignalInfo {
-            name: String::new(),
-        };
-        io_signals.len()
-    ];
-    for (ir_signal, signal) in io_signals {
-        let Signal {
-            name: _,
-            size,
-            initialize,
-            origin: _,
-        } = &gl.signals[ir_signal];
-        let value = match initialize {
-            None => Bits::new_zeroed(*size),
-            Some(initialize) => {
-                assert_eq!(initialize.size(), *size);
-                initialize.clone()
-            }
-        };
-
-        if ectx.trace {
-            let vogls_ir::Signal { origin, .. } = &gl.signals[ir_signal];
-
-            let file = token_buffer.file_idxs[origin.start];
-            let mut location = None;
-            if file == token_buffer.file_idxs[origin.end - 1] {
-                let span_start = token_buffer.spans[origin.start].start();
-                let span_end = token_buffer.spans[origin.end - 1].end();
-
-                let line_start = line_luts[file as usize]
-                    .binary_search(&span_start)
-                    .unwrap_or_else(|e| e - 1) as u64;
-                let line_end = line_luts[file as usize]
-                    .binary_search(&span_end)
-                    .unwrap_or_else(|e| e + 1) as u64;
-                location = Some(vogls_trace::Span {
-                    file: file as u64,
-                    line_range: line_start..line_end,
-                });
-            }
-
-            trace_signals.push(vogls_trace::Signal {
-                name: Some(gl.signals[ir_signal].name.clone()),
-                location,
-                initial: value.clone(),
-            });
-        }
-
-        signals.insert(signal, value);
-        signal_info[signal.0 as usize].name = gl.signals[ir_signal].name.clone();
-    }
 
     let stdout = std::mem::replace(&mut ectx.stdout, Box::new(Vec::new()) as _);
     let stderr = std::mem::replace(&mut ectx.stderr, Box::new(Vec::new()) as _);

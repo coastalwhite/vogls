@@ -136,6 +136,7 @@ impl BinaryOp {
 impl UnaryOp {
     pub const fn into_mnemonic(&self) -> &'static str {
         match self {
+            Self::Copy => "copy",
             Self::Neg => "negate",
             Self::ReduceAnd => "reduce_and",
             Self::ReduceOr => "reduce_or",
@@ -180,7 +181,7 @@ impl ContextFormat for Instruction {
                 f.write_str(" = ")?;
                 f.write_str(op.into_mnemonic())?;
                 match op {
-                    UnaryOp::Neg | UnaryOp::ReduceOr | UnaryOp::ReduceAnd | UnaryOp::ReduceXor => {}
+                    UnaryOp::Copy | UnaryOp::Neg | UnaryOp::ReduceOr | UnaryOp::ReduceAnd | UnaryOp::ReduceXor => {}
                 }
                 f.write_str(" ")?;
                 ctx.gl.vars.get(*src).unwrap().ctx_fmt(f, ctx)?;

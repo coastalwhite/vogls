@@ -17,7 +17,11 @@ pub struct BasicBlockBuilder {
     bbname_offset: usize,
 }
 
-pub fn new_process(gl: &'_ mut GlobalContext, name: String, origin: TokenRange) -> BasicBlockBuilder {
+pub fn new_process(
+    gl: &'_ mut GlobalContext,
+    name: String,
+    origin: TokenRange,
+) -> BasicBlockBuilder {
     let bb_key = gl.bbs.insert(BasicBlock {
         name: String::from("entry"),
         instrs: Vec::new(),
@@ -43,13 +47,6 @@ pub struct PhiRef(BasicBlockKey, usize);
 pub struct BranchRef(BasicBlockKey);
 
 impl BranchRef {
-    pub fn update(&self, gl: &mut GlobalContext, bb: BasicBlockKey) {
-        let BasicBlockTerminator::Branch(_, _, snd) = &mut gl.bbs[self.0].terminator else {
-            panic!("not a branch");
-        };
-        *snd = bb;
-    }
-
     pub fn origin_key(&self) -> BasicBlockKey {
         self.0
     }
@@ -138,6 +135,18 @@ impl BasicBlockBuilder {
         srcs[idx] = (bb, var);
     }
 
+    pub fn update_branch_ref(
+        &mut self,
+        gl: &mut GlobalContext,
+        branch_ref: BranchRef,
+        bb: BasicBlockKey,
+    ) {
+        let BasicBlockTerminator::Branch(_, _, snd) = &mut gl.bbs[branch_ref.0].terminator else {
+            panic!("not a branch");
+        };
+        *snd = bb;
+    }
+
     pub fn constant(&mut self, gl: &mut GlobalContext, value: Bits) -> VariableKey {
         let variable = self.next_tmp_var(gl, value.size());
         self.instrs.push(Instruction::Constant(variable, value));
@@ -165,12 +174,8 @@ impl BasicBlockBuilder {
             gl,
             VectorSize::new(lhs_size.get() + rhs_size.get()).unwrap(),
         );
-        self.instrs.push(Instruction::Binary(
-            dst,
-            BinaryOp::Concat,
-            lhs,
-            rhs,
-        ));
+        self.instrs
+            .push(Instruction::Binary(dst, BinaryOp::Concat, lhs, rhs));
         dst
     }
 
@@ -202,8 +207,7 @@ impl BasicBlockBuilder {
         let size = gl.vars[lhs].size;
         assert_eq!(size, gl.vars[rhs].size);
         let dst = self.next_tmp_var(gl, size);
-        self.instrs
-            .push(Instruction::Binary(dst, op, lhs, rhs));
+        self.instrs.push(Instruction::Binary(dst, op, lhs, rhs));
         dst
     }
 
@@ -309,12 +313,8 @@ impl BasicBlockBuilder {
     ) -> VariableKey {
         let dst = self.next_tmp_var(gl, SCALAR_VSIZE);
         assert_eq!(gl.vars[idx].size, INTEGER_VSIZE);
-        self.instrs.push(Instruction::Binary(
-            dst,
-            BinaryOp::SelectBit,
-            src,
-            idx,
-        ));
+        self.instrs
+            .push(Instruction::Binary(dst, BinaryOp::SelectBit, src, idx));
         dst
     }
     pub fn slice(
@@ -628,27 +628,6 @@ impl BasicBlockBuilder {
         }
     }
 
-    pub fn jump_to_with_dummy(
-        mut self,
-        gl: &mut GlobalContext,
-        bb: BasicBlockKey,
-    ) -> BasicBlockBuilder {
-        let next_key = self.next_bb(gl);
-        let slf = gl.bbs.get_mut(self.key).unwrap();
-        slf.instrs = std::mem::take(&mut self.instrs);
-        slf.terminator = BasicBlockTerminator::Jump(bb);
-        BasicBlockBuilder {
-            key: next_key,
-
-            process: self.process,
-
-            instrs: Vec::new(),
-
-            tmp_offset: self.tmp_offset,
-            bbname_offset: self.bbname_offset,
-        }
-    }
-
     pub fn branch(
         &mut self,
         gl: &mut GlobalContext,
@@ -859,8 +838,7 @@ impl BasicBlockBuilder {
         let lhs_size = gl.vars[lhs].size;
         assert_eq!(gl.vars[rhs].size, INTEGER_VSIZE);
         let dst = self.next_tmp_var(gl, lhs_size);
-        self.instrs
-            .push(Instruction::Binary(dst, op, lhs, rhs));
+        self.instrs.push(Instruction::Binary(dst, op, lhs, rhs));
         dst
     }
     pub fn logical_shift_left(

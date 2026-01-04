@@ -120,6 +120,7 @@ impl<'a> Consumable<'a> for Module {
             module_parameter_port_list,
             ports,
             module_items,
+            default_nettype: None,
         })
     }
 }

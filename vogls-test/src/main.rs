@@ -131,7 +131,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             emit_vm: false,
             trace: false,
             time: 100,
-            opt_rounds: 2,
+            opt_rounds: 0,
         };
         let result = vogls::run(&path, None, &mut ctx);
 

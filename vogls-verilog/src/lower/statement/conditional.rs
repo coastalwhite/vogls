@@ -52,7 +52,7 @@ pub fn lower<'a>(
 
     let mut builder = if_true_builder.next_terminate_later(gl);
     for else_if_branch in else_ifs.iter() {
-        branch_ref.update(gl, builder.key());
+        builder.update_branch_ref(gl, branch_ref, builder.key());
 
         let else_if_branch = arenas.get(else_if_branch);
         let (condition, _) = lower_expr(
@@ -83,7 +83,7 @@ pub fn lower<'a>(
 
     let mut branch_ref = Some(branch_ref);
     if let Some(statement) = else_branch {
-        branch_ref.take().unwrap().update(gl, builder.key());
+        builder.update_branch_ref(gl, branch_ref.take().unwrap(), builder.key());
 
         scope.push_scope();
         builder = lower_statement_or_null(gl, arenas, scope, mc, diagnostics, builder, *statement)?;
@@ -97,7 +97,7 @@ pub fn lower<'a>(
         gl.bbs[*bb].terminator = BasicBlockTerminator::Jump(builder.key());
     }
     if let Some(branch_ref) = branch_ref {
-        branch_ref.update(gl, builder.key());
+        builder.update_branch_ref(gl, branch_ref, builder.key());
     }
 
     Ok(builder)
@@ -166,17 +166,15 @@ pub fn lower_case_statement<'a>(
         scope.pop_scope();
 
         builder = if_true_builder.next_terminate_later(gl);
-        branch_ref.update(gl, builder.key());
+        builder.update_branch_ref(gl, branch_ref, builder.key());
     }
 
     if let Some(statement) = default {
         scope.push_scope();
         builder = lower_statement_or_null(gl, arenas, scope, mc, diagnostics, builder, statement)?;
-        origins.push(builder.key());
         scope.pop_scope();
         builder = builder.jump(gl);
     } else {
-        origins.push(builder.key());
         builder = builder.jump(gl);
     }
 

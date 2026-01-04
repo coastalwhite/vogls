@@ -8,7 +8,7 @@ use crate::ast::{
 use crate::number::{Decimal, SizedNumber};
 use crate::tokenizer::{Takeable, Token};
 pub use diagnostics::{Diagnostics, report, report_error};
-pub use token_walker::{TokenWalker};
+pub use token_walker::TokenWalker;
 use vogls_ir::token_range::TokenRange;
 
 use self::utils::{item_parse, parse, parse_one_or_more_delimited};
@@ -20,7 +20,6 @@ mod module;
 mod statement;
 mod token_walker;
 mod utils;
-// mod net;
 
 #[derive(Default)]
 pub struct ParserScratches {
@@ -132,16 +131,31 @@ pub enum TimeSize {
     N100,
 }
 
+#[derive(Clone, Copy)]
+pub enum DefaultNettype {
+    Wire,
+    Tri,
+    Tri0,
+    Tri1,
+    Wand,
+    Triand,
+    Wor,
+    Trior,
+    Trireg,
+    Uwire,
+}
+
 #[derive(Default)]
 pub struct ParseContext {
     _timescale: Option<(TimeSize, TimeUnit, TimeSize, TimeUnit)>,
+    default_nettype: Option<DefaultNettype>,
 }
 
 pub fn parse_file(
     tkw: &mut TokenWalker<'_>,
     scratches: &mut ParserScratches,
     mut diagnostics: Option<&mut Diagnostics>,
-    _ctx: &mut ParseContext,
+    ctx: &mut ParseContext,
 ) -> Result<Ast, ()> {
     use Token as T;
 
@@ -154,8 +168,9 @@ pub fn parse_file(
         match *t.kind {
             T::KeywordModule | T::LeftParenStar => {
                 let start = tkw.offset;
-                let module =
+                let mut module =
                     Module::consume(tkw, scratches, &mut arenas, diagnostics.as_deref_mut())?;
+                module.default_nettype = ctx.default_nettype;
                 let token_range = TokenRange {
                     start,
                     end: tkw.offset,
@@ -170,6 +185,31 @@ pub fn parse_file(
 
                 match directive {
                     "timescale" => tkw.offset += 6,
+                    "default_nettype" => {
+                        tkw.offset += 1;
+                        let t = tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?;
+                        let nettype = match *t.kind {
+                            T::KeywordWire => Some(DefaultNettype::Wire),
+                            T::KeywordTri => Some(DefaultNettype::Tri),
+                            T::KeywordTri0 => Some(DefaultNettype::Tri0),
+                            T::KeywordTri1 => Some(DefaultNettype::Tri1),
+                            T::KeywordWand => Some(DefaultNettype::Wand),
+                            T::KeywordTriand => Some(DefaultNettype::Triand),
+                            T::KeywordWor => Some(DefaultNettype::Wor),
+                            T::KeywordTrior => Some(DefaultNettype::Trior),
+                            T::KeywordTrireg => Some(DefaultNettype::Trireg),
+                            T::KeywordUwire => Some(DefaultNettype::Uwire),
+                            T::Ident if &tkw.content(*t.file)[t.span.as_range()] == "none" => None,
+                            t => {
+                                if let Some(diagnostics) = diagnostics {
+                                    diagnostics.unexpected_token(tkw.offset - 1, t);
+                                }
+                                return Err(());
+                            }
+                        };
+                        tkw.offset += 1;
+                        ctx.default_nettype = nettype;
+                    }
                     _ => {
                         if let Some(diagnostics) = diagnostics.as_deref_mut() {
                             diagnostics.incomplete(tkw.offset, "directive not-yet supported");

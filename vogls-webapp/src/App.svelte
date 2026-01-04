@@ -4,6 +4,70 @@
   import github from "svelte-highlight/styles/github";
 
   import EventInfo from './EventInfo.svelte'
+  import SignalList from './SignalList.svelte'
+
+  let fileName = $state("");
+  let error = $state(null);
+  let trace = $state(null);
+  let file_focus = $state(0);
+  let event_ptr = $state(0);
+  let last_file_focus = $state(null);
+
+  function determine_current_focus_file() {
+  	if (trace === null) {
+		return;
+	}
+
+	let e = trace.events[event_ptr];
+    if (e.type !== "eval") {
+        return;
+    }
+
+    let process = trace.processes[e.process];
+    if (process.span === null) {
+        return;
+    }
+	file_focus = process.span.file;
+  }
+  function scroll_to_current_highlight(el) {
+  	if (trace === null) {
+		return;
+	}
+
+	let e = trace.events[event_ptr];
+	if (e.type !== "eval") {
+		return;
+	}
+
+	let process = trace.processes[e.process];
+	if (process.span === null) {
+		return;
+	}
+
+	var rows = el.querySelectorAll('div table tbody tr');
+	rows[process.span.line_range[0]].scrollIntoView({
+		behavior: 'smooth',
+		block: 'center'
+	});
+  }
+
+  $effect(() => {
+   	determine_current_focus_file();
+	if (file_focus !== null) {
+		scroll_to_current_highlight(document.querySelectorAll('.source-code')[file_focus]);
+	}
+  });
+
+  function init(el, file_idx) {
+	if (file_idx !== file_focus) {
+		return;
+	}
+
+  	$effect(() => {
+		scroll_to_current_highlight(el);
+	});
+  }
+
 
   type Timestamp = int;
   type FileIdx = int;
@@ -26,7 +90,7 @@
   };
   type Bits = {
     size: int,
-    value: Uint8Array,
+    slice: Uint8Array,
   };
   type Signal = {
     name?: string,
@@ -55,12 +119,6 @@
     events: [TEvent],
   };
 
-  let fileName = "";
-  let error = null;
-  let trace = null;
-  let file_focus = 0;
-  let event_ptr = 0;
-
   function decode_opt_str(view: DataView, ptr: int): [string | null, int] {
       if (
         view.getUint32(ptr,   true) == 0xFFFF_FFFF &&
@@ -86,7 +144,7 @@
       const str = decoder.decode(slice);
       return [str, ptr + length]
   }
-  function decode_opt_span(view: DataView, ptr: int): [Span | null, int] {
+  function decode_opt_span(view: DataView, ptr: int): [Span | null, number] {
       if (
         view.getUint32(ptr,   true) == 0xFFFF_FFFF &&
         view.getUint32(ptr+4, true) == 0xFFFF_FFFF
@@ -99,18 +157,18 @@
       const line_end   = Number(view.getBigUint64(ptr, true)); ptr += 8;
       return [{ file, line_range: [line_start, line_end] }, ptr]
   }
-  function decode_bits(view: DataView, ptr: int): [Span | null, int] {
+  function decode_bits(view: DataView, ptr: int): [Bits | null, number] {
       const size  = view.getUint32(ptr, true); ptr += 4;
       let num_bytes = size >> 3;
       if (size % 8 != 0) {
         num_bytes += 1;
       }
-      const value = new Uint8Array(
+      const slice = new Uint8Array(
         view.buffer, 
         view.byteOffset + ptr, 
         num_bytes
       );
-      return [{ size, value }, ptr + num_bytes]
+      return [{ size, slice }, ptr + num_bytes]
   }
 
   function get_highlighted_lines(e: TEvent): int[] {
@@ -129,26 +187,6 @@
         lines.push(i);
     }
     return lines;
-  }
-
-  function scrollToCurrentEvent() {
-	let e = trace.events[event_ptr];
-    if (e.type !== "eval") {
-        return [];
-    }
-
-    let process = trace.processes[e.process];
-    if (process.span === null) {
-        return [];
-    }
-	file_focus = process.span.file;
-	var source_codes = document.querySelectorAll('.source-code')
-	console.log(source_codes);
-	var rows = source_codes[file_focus].querySelector('div table tbody tr');
-	rows[process.span.line_range[0]].scrollIntoView({
-		behavior: 'smooth',
-		block: 'center'
-	});
   }
 
   async function handleFileChange(event) {
@@ -269,7 +307,7 @@
                 break;
             case 1:
                 const signal = Number(view.getBigUint64(ptr, true)); ptr += 8;
-                let drive = null
+				let drive = null;
                 if (
                   view.getUint32(ptr,   true) != 0xFFFF_FFFF ||
                   view.getUint32(ptr+4, true) != 0xFFFF_FFFF
@@ -290,6 +328,7 @@
 
           trace.events.push(e);
       }
+	  determine_current_focus_file();
     } catch (error) {
       error = "Failed to read file.";
       console.error(error);
@@ -319,37 +358,45 @@
   <div class="source">
   {#if trace}
       {#each trace.files as f, i}
-      <div class="source-code" class:source-code-hidden={i != file_focus}>
+	  <div class="source-code" class:source-code-hidden={i != file_focus} use:init={i}>
           <Highlight language={verilog} code={f.content} let:highlighted>
               <LineNumbers {highlighted}
-                highlightedLines={i == file_focus ? get_highlighted_lines(trace.events[event_ptr]) : []}
+                highlightedLines={i === file_focus ? get_highlighted_lines(trace.events[event_ptr]) : []}
               />
           </Highlight>
       </div>
       {/each}
   {/if}
   </div>
-  <div class="events">
-  {#if trace}
-	<EventInfo trace={trace} bind:ptr={event_ptr} />
-  {:else}
-    <label for="file-upload" class="button">
-      {fileName ? 'Change File' : 'Select Local File'}
-    </label>
-    <input 
-      id="file-upload" 
-      type="file" 
-      on:change={handleFileChange} 
-    />
+  <div class="sidebar">
+	  <div class="events">
+	  {#if trace}
+		<EventInfo trace={trace} bind:ptr={event_ptr} />
+	  {:else}
+		<label for="file-upload" class="button">
+		  {fileName ? 'Change File' : 'Select Local File'}
+		</label>
+		<input 
+		  id="file-upload" 
+		  type="file" 
+		  onchange={handleFileChange} 
+		/>
 
-    {#if fileName}
-      <p class="status">Selected: <strong>{fileName}</strong></p>
-    {/if}
+		{#if fileName}
+		  <p class="status">Selected: <strong>{fileName}</strong></p>
+		{/if}
 
-    {#if error}
-      <p class="error">{error}</p>
-    {/if}
-  {/if}
+		{#if error}
+		  <p class="error">{error}</p>
+		{/if}
+	  {/if}
+	  </div>
+	  {#if trace}
+	  <div class="signals">
+		  <SignalList {trace} ptr={event_ptr} />
+	  </div>
+	  {/if}
+	  
   </div>
 </main>
 
@@ -361,7 +408,7 @@
       flex-direction: row;
   }
   .source {
-      flex-grow: 2;
+	  width: calc(100vw - 400px);
       height: 100%;
       border-right: 2px solid #000;
   }
@@ -383,10 +430,14 @@
   .source-code-hidden {
       display: none;
   }
-  .events {
+  .sidebar {
       margin: auto;
-      height: 100%;
-      flex-grow: 1;
+	  width: 400px;
+	  height: 100%;
+	  display: flex;
+	  flex-direction: column;
+  }
+  .events {
       overflow-y: scroll;
 
       /* Hide scrollbar for Chrome, Safari and Opera */
@@ -397,6 +448,11 @@
       /* Hide scrollbar for IE, Edge and Firefox */
       -ms-overflow-style: none;  /* IE and Edge */
       scrollbar-width: none;     /* Firefox */
+  }
+  .signals {
+	  min-height: 200px;
+	  max-height: 200px;
+	  border-top: 2px solid #000;
   }
   .file-decoder {
     padding: 1rem;

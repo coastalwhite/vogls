@@ -30,6 +30,7 @@
                 gtkwave
                 ghdl
                 verilator
+                iverilog
                 libelf
                 nodejs_24
               ];

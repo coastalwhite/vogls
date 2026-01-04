@@ -2,8 +2,8 @@ mod builder;
 pub mod dyn_format_string;
 mod format;
 pub mod optimize;
-pub mod vcd;
 pub mod token_range;
+pub mod vcd;
 
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
@@ -74,6 +74,37 @@ impl BasicBlock {
             BasicBlockTerminator::Halt => {}
         }
     }
+
+    fn remove_fan_in_edge(&mut self, bb_key: BasicBlockKey) {
+        for i in &mut self.instrs {
+            if let Instruction::Phi(dst, origins) = i {
+                assert!(origins.len() >= 2);
+                let idx = origins
+                    .iter()
+                    .position(|(obb, _)| *obb == bb_key)
+                    .expect("phis are expected to have a variable per fan-in basic-block");
+                if origins.len() == 2 {
+                    *i = Instruction::Unary(*dst, UnaryOp::Copy, origins[1 - idx].1);
+                } else {
+                    let mut new_origins = Vec::with_capacity(origins.len() - 1);
+                    new_origins.extend(&origins[..idx]);
+                    new_origins.extend(&origins[idx + 1..]);
+                    *origins = new_origins.into();
+                }
+            }
+        }
+    }
+
+    pub fn for_each_fanout(&self, f: impl FnMut(BasicBlockKey)) {
+        self.terminator.for_each_bb(f);
+    }
+
+    fn map_bb(&mut self, mut f: impl FnMut(BasicBlockKey) -> BasicBlockKey) {
+        for i in self.instrs.iter_mut() {
+            i.map_bb(&mut f);
+        }
+        self.terminator.map_bb(f);
+    }
 }
 
 impl BasicBlockTerminator {
@@ -100,7 +131,7 @@ impl BasicBlockTerminator {
         }
     }
 
-    fn for_each_bb(&mut self, mut f: impl FnMut(BasicBlockKey)) {
+    fn for_each_bb(&self, mut f: impl FnMut(BasicBlockKey)) {
         match self {
             Self::Wait(bb, _) | Self::WaitRegion(bb, _) | Self::Watch(bb, _) | Self::Jump(bb) => {
                 f(*bb);
@@ -134,6 +165,22 @@ impl BasicBlockTerminator {
             | Self::Halt => {}
         }
     }
+
+    fn map_bb(&mut self, mut f: impl FnMut(BasicBlockKey) -> BasicBlockKey) {
+        match self {
+            BasicBlockTerminator::Wait(bb, _)
+            | BasicBlockTerminator::WaitRegion(bb, _)
+            | BasicBlockTerminator::Watch(bb, _)
+            | BasicBlockTerminator::Jump(bb) => {
+                *bb = f(*bb);
+            }
+            BasicBlockTerminator::Branch(_, bb1, bb2) => {
+                *bb1 = f(*bb1);
+                *bb2 = f(*bb2);
+            }
+            BasicBlockTerminator::Halt => {}
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -165,8 +212,9 @@ pub enum IntrinsicOp {
     VcdResume,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnaryOp {
+    Copy,
     Neg,
     ReduceOr,
     ReduceAnd,
@@ -303,6 +351,21 @@ impl Instruction {
             Self::Constant(dst, _) | Self::Probe(dst, _) => {
                 *dst = f(*dst);
             }
+        }
+    }
+
+    fn map_bb(&mut self, mut f: impl FnMut(BasicBlockKey) -> BasicBlockKey) {
+        match self {
+            Instruction::Constant(..)
+            | Instruction::Unary(..)
+            | Instruction::Binary(..)
+            | Instruction::Resize(..)
+            | Instruction::Intrinsic(..)
+            | Instruction::Probe(..)
+            | Instruction::Drive(..) => {}
+            Instruction::Phi(_, items) => items.iter_mut().for_each(|(bb, _)| {
+                *bb = f(*bb);
+            }),
         }
     }
 }

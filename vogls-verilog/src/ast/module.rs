@@ -1,3 +1,5 @@
+use crate::parser::DefaultNettype;
+
 use super::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression};
 use super::expr::Expr;
 use super::statement::{NetLValue, Statement, StatementOrNull};
@@ -16,6 +18,7 @@ pub struct Module {
     pub module_parameter_port_list: Option<AstIdRange<ParameterDeclaration>>,
     pub ports: ModulePorts,
     pub module_items: AstIdRange<ModuleItem>,
+    pub default_nettype: Option<DefaultNettype>,
 }
 
 #[derive(Clone, Copy)]
