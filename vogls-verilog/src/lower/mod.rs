@@ -40,7 +40,7 @@ use crate::ast::{AstId, Identifier};
 use crate::hierarchy::{ModuleBuilder, ModuleKey};
 use crate::parser::AstArenas;
 
-use self::expression::lower_expr;
+use self::expression::{lower_expr, truncate_or_extend};
 use self::scope::{SignalSymbol, Symbol, SymbolVariant};
 pub use self::vtype::VType;
 use self::vvalue::VValue;
@@ -496,8 +496,8 @@ fn assign_port_output<'a>(
     }
 
     let size = ty.force_net_width();
-    let mut driving: Vec<(AstId<Expr>, Option<VariableKey>, VectorSize)> = Vec::new();
-    driving.push((expr, None, size));
+    let mut driving: Vec<AstId<Expr>> = Vec::new();
+    driving.push(expr);
 
     let signal = gl.signals.insert(Signal {
         name: "anon_port_assignment".to_string(),
@@ -512,14 +512,26 @@ fn assign_port_output<'a>(
     let probed = bb_builder.probe(gl, signal);
 
     let mut error = false;
-    while let Some((expr, offset_src, length_src)) = driving.pop() {
+    while let Some(expr) = driving.pop() {
         match arenas.get(expr) {
             Expr::Concatenation(_) => {
                 todo!()
             }
             Expr::Ident(ast_ident, exprs, range_expression) => {
+                let ident = arenas.get_ident(ast_ident.item.0);
+                let Some(symbol_key) = scope.get(&ident) else {
+                    diagnostics.var_not_found(arenas, *ast_ident);
+                    error = true;
+                    continue;
+                };
+                let SymbolVariant::Signal(s) = &scope.symbols[symbol_key].variant else {
+                    diagnostics.output_expr_not_allowed(arenas.get_span(expr));
+                    error = true;
+                    continue;
+                };
+
                 let (offset_dst, length_dst) = if range_expression.is_none() && exprs.is_empty() {
-                    (bb_builder.constant_u32(gl, 0), None)
+                    (bb_builder.constant_u32(gl, 0), Some(s.ty.force_net_width()))
                 } else if range_expression.is_none() && exprs.len() == 1 {
                     (
                         lower_expr(
@@ -568,30 +580,10 @@ fn assign_port_output<'a>(
                     continue;
                 };
 
-                let ident = arenas.get_ident(ast_ident.item.0);
-                let Some(symbol_key) = scope.get(&ident) else {
-                    diagnostics.var_not_found(arenas, *ast_ident);
-                    error = true;
-                    continue;
-                };
-                let SymbolVariant::Signal(s) = &scope.symbols[symbol_key].variant else {
-                    diagnostics.output_expr_not_allowed(arenas.get_span(expr));
-                    error = true;
-                    continue;
-                };
-
-                let mut src = probed;
-                if let Some(offset_src) = offset_src {
-                    src = bb_builder.logical_shift_right(gl, src, offset_src);
-                }
-                let src = bb_builder.slice(gl, src, length_src);
-                bb_builder.drive_partial(
-                    gl,
-                    s.key,
-                    src,
-                    offset_dst,
-                    length_dst.unwrap_or(SCALAR_VSIZE),
-                );
+                let length_dst = length_dst.unwrap_or(SCALAR_VSIZE);
+                let src = probed;
+                let src = truncate_or_extend(gl, &mut bb_builder, src, ty, length_dst);
+                bb_builder.drive_partial(gl, s.key, src, offset_dst, length_dst);
             }
 
             Expr::Replication(_) => {
