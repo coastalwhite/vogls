@@ -57,8 +57,9 @@ pub struct ProceduralTimingControlStatement {
 //   hierarchical_net_identifier [ { [ constant_expression ] } [ constant_range_expression ] ]
 // | { net_lvalue { , net_lvalue } }
 #[derive(Clone, Copy)]
-pub struct NetLValue {
-    // @Incomplete
+pub struct NetLValue(pub AstIdRange<NetLValueFlat>);
+#[derive(Clone, Copy)]
+pub struct NetLValueFlat {
     pub ident: AstItem<Identifier>,
     pub constant_exprs: AstIdRange<ConstantExpr>,
     pub constant_range_expression: Option<AstId<ConstantRangeExpression>>,

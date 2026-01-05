@@ -26,19 +26,16 @@ use constant_expr::eval_constant_expr;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::vcd::NetType;
 use vogls_ir::{
-    BasicBlockBuilder, BasicBlockKey, ConnectionDirection, GlobalContext, SCALAR_VSIZE, Signal,
-    SignalKey, VariableKey, VectorSize, new_process,
+    BasicBlockKey, ConnectionDirection, GlobalContext, SCALAR_VSIZE, Signal, SignalKey,
+    VariableKey, VectorSize, new_process,
 };
 
-use crate::ast::constant_expr::{
-    ConstantExpr, ConstantMinTypMaxExpression, ConstantRangeExpression,
-};
+use crate::ast::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression};
 use crate::ast::expr::{BitSlice, Expr};
 use crate::ast::module::{
     GenerateRegion, Module, ModuleItem, ModulePorts, NonPortModuleItem, ParamAssignment,
     ParameterDeclaration, Port, PortDeclaration, PortExpression, PortReference, Range,
 };
-use crate::ast::statement::NetLValue;
 use crate::ast::{AstId, Identifier};
 use crate::hierarchy::{ModuleBuilder, ModuleKey};
 use crate::parser::AstArenas;
@@ -623,122 +620,6 @@ fn assign_port_output<'a>(
     }
 
     Ok(signal)
-}
-
-fn assign_net_lvalue<'a>(
-    gl: &mut GlobalContext,
-    arenas: &'a AstArenas,
-    scope: &mut Scope<'a>,
-    diagnostics: &mut Diagnostics,
-    builder: &mut BasicBlockBuilder,
-    lvalue: AstId<NetLValue>,
-    variable: VariableKey,
-    variable_ty: VType,
-) -> Result<(), ()> {
-    let NetLValue {
-        ident,
-        constant_exprs,
-        constant_range_expression,
-    } = arenas.get(lvalue);
-
-    let Some(symbol_key) = scope.get(arenas.get_ident(ident.item.0)) else {
-        diagnostics.var_not_found(arenas, *ident);
-        return Err(());
-    };
-
-    let SymbolVariant::Signal(s) = &scope.symbols[symbol_key].variant else {
-        panic!("not a signal");
-    };
-    let key = s.key;
-    let mut dims = &s.dims[..];
-
-    let mut exprs = *constant_exprs;
-    let mut arr_idx = if !dims.is_empty()
-        && let Some(fst) = exprs.pop_front()
-    {
-        dims = &dims[1..];
-        let mut leaf_arr_items = dims.iter().product::<u32>();
-        let fst = eval_constant_expr(gl, arenas, scope, diagnostics, fst)?;
-        let fst = fst.as_integer().unwrap();
-        let mut offset = fst as u32 * leaf_arr_items;
-
-        while let Some(dim) = dims.first()
-            && let Some(expr) = exprs.pop_front()
-        {
-            leaf_arr_items /= *dim;
-            let expr = eval_constant_expr(gl, arenas, scope, diagnostics, expr)?;
-            let expr = expr.as_integer().unwrap();
-            let expr = expr as u32 * leaf_arr_items;
-            offset += expr;
-            dims = &dims[1..];
-        }
-
-        Some(offset)
-    } else {
-        None
-    };
-    if !exprs.is_empty() {
-        diagnostics.not_yet_implemented(arenas.get_range_span(exprs), "variable_lvalue::exprs");
-        return Err(());
-    }
-
-    let mut range_expression = *constant_range_expression;
-    if !dims.is_empty()
-        && let Some(ConstantRangeExpression::Single(expr)) = range_expression.map(|e| arenas.get(e))
-    {
-        _ = range_expression.take();
-
-        dims = &dims[1..];
-        let leaf_arr_items = dims.iter().product::<u32>();
-        let fst = eval_constant_expr(gl, arenas, scope, diagnostics, *expr)?;
-        let fst = fst.as_integer().unwrap();
-        let offset = fst as u32 * leaf_arr_items;
-
-        arr_idx = Some(match arr_idx {
-            None => offset,
-            Some(arr_idx) => arr_idx + offset,
-        });
-    }
-
-    if !dims.is_empty() {
-        diagnostics.not_yet_implemented(
-            arenas.get_range_span(exprs),
-            "driving array without indices",
-        );
-        return Err(());
-    }
-
-    let size = s.ty.force_net_width();
-    let partial = match range_expression {
-        None => match arr_idx {
-            None => None,
-            Some(idx) => Some((builder.constant_u32(gl, idx * size.get()), size)),
-        },
-        Some(range_expression) => {
-            let (offset, length) = match arenas.get(range_expression) {
-                ConstantRangeExpression::Single(expr) => (
-                    eval_constant_expr(gl, arenas, scope, diagnostics, *expr)?
-                        .as_integer()
-                        .unwrap(),
-                    1,
-                ),
-                _ => todo!("MsbLsb"),
-            };
-
-            let length = VectorSize::new(length).unwrap();
-            Some(match arr_idx {
-                None => (builder.constant_u32(gl, offset as u32), length),
-                Some(idx) => (
-                    builder.constant_u32(gl, idx * size.get() + offset as u32),
-                    length,
-                ),
-            })
-        }
-    };
-    let size = partial.map_or(s.ty.force_net_width(), |(_, s)| s);
-    let variable = expression::sign_or_zero_extend(gl, builder, variable, variable_ty, size);
-    builder.drive_opt_partial(gl, key, variable, partial);
-    Ok(())
 }
 
 fn msb_lsb_to_width<'a>(

@@ -14,12 +14,13 @@ use crate::ast::module::{
     TaskDeclaration, VariableType, VariableTypeVariant,
 };
 use crate::ast::{AstId, AstIdRange};
-use crate::lower::expression::{self, lower_expr};
+use crate::lower::assign::{assign_net_lvalue, net_lvalue_width};
+use crate::lower::expression::{self, lower_expr, truncate_or_extend};
 use crate::lower::scope::{SignalSymbol, Symbol, SymbolVariant};
 use crate::lower::statement::statements_to_process;
 use crate::lower::vvalue::VValue;
 use crate::lower::{
-    ModuleArgs, VType, assign_net_lvalue, assign_port_output, eval_constant_expr, evaluate_range,
+    ModuleArgs, VType, assign_port_output, eval_constant_expr, evaluate_range,
     fetch_module_interface, lower_to_signal,
 };
 use crate::parser::AstArenas;
@@ -340,59 +341,40 @@ pub fn lower<'a>(
                             input_terminals,
                         } = arenas.get(instance);
 
-                        let lvalue = arenas.get(*output_terminal);
-                        let lvalue = lvalue.ident.item;
-
-                        let ident = arenas.get_ident(lvalue.0);
-
                         let mut bb_builder = new_process(gl, "gate".into(), arenas.get_span(*id));
                         let bb_key = bb_builder.key();
 
+                        let output_size =
+                            net_lvalue_width(gl, arenas, scope, diagnostics, *output_terminal)?;
+
                         assert!(!input_terminals.is_empty());
                         let value = input_terminals.first().unwrap();
-                        let (mut value, _) =
+                        let (value, value_ty) =
                             lower_expr(gl, arenas, scope, diagnostics, &mut bb_builder, value)?;
-                        match ninput_gate_instantiation.gatetype.item {
-                            NInputGateType::And | NInputGateType::Nand => {
-                                for input in input_terminals.iter().skip(1) {
-                                    let (input, _) = lower_expr(
-                                        gl,
-                                        arenas,
-                                        scope,
-                                        diagnostics,
-                                        &mut bb_builder,
-                                        input,
-                                    )?;
+                        let mut value =
+                            truncate_or_extend(gl, &mut bb_builder, value, value_ty, output_size);
+                        for input in input_terminals.iter().skip(1) {
+                            let (input, input_ty) =
+                                lower_expr(gl, arenas, scope, diagnostics, &mut bb_builder, input)?;
+                            let input = truncate_or_extend(
+                                gl,
+                                &mut bb_builder,
+                                input,
+                                input_ty,
+                                output_size,
+                            );
+                            match ninput_gate_instantiation.gatetype.item {
+                                NInputGateType::And | NInputGateType::Nand => {
                                     value = bb_builder.and(gl, value, input);
                                 }
-                            }
-                            NInputGateType::Or | NInputGateType::Nor => {
-                                for input in input_terminals.iter().skip(1) {
-                                    let (input, _) = lower_expr(
-                                        gl,
-                                        arenas,
-                                        scope,
-                                        diagnostics,
-                                        &mut bb_builder,
-                                        input,
-                                    )?;
+                                NInputGateType::Or | NInputGateType::Nor => {
                                     value = bb_builder.or(gl, value, input);
                                 }
-                            }
-                            NInputGateType::Xor | NInputGateType::Xnor => {
-                                for input in input_terminals.iter().skip(1) {
-                                    let (input, _) = lower_expr(
-                                        gl,
-                                        arenas,
-                                        scope,
-                                        diagnostics,
-                                        &mut bb_builder,
-                                        input,
-                                    )?;
+                                NInputGateType::Xor | NInputGateType::Xnor => {
                                     value = bb_builder.xor(gl, value, input);
                                 }
                             }
-                        };
+                        }
 
                         if matches!(
                             ninput_gate_instantiation.gatetype.item,
@@ -401,13 +383,17 @@ pub fn lower<'a>(
                             value = bb_builder.binary_neg(gl, value);
                         }
 
-                        let symbol_key = scope.get(ident).unwrap();
-                        let SymbolVariant::Signal(s) = &scope.symbols[symbol_key].variant else {
-                            panic!("not a signal");
-                        };
-                        // @TODO: Coerce inputs and output
+                        assign_net_lvalue(
+                            gl,
+                            arenas,
+                            scope,
+                            diagnostics,
+                            &mut bb_builder,
+                            *output_terminal,
+                            value,
+                            VType::UnsignedNet(output_size),
+                        )?;
 
-                        bb_builder.drive(gl, s.key, value);
                         bb_builder.watch_for_ins_to(gl, bb_key);
                     }
                 }

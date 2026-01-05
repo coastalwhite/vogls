@@ -2,7 +2,8 @@ use vogls_ir::{
     BasicBlockBuilder, Bits, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE, VariableKey, VectorSize,
 };
 
-use crate::ast::statement::{VariableLValue, VariableLValueFlat};
+use crate::ast::constant_expr::ConstantRangeExpression;
+use crate::ast::statement::{NetLValue, NetLValueFlat, VariableLValue, VariableLValueFlat};
 use crate::ast::{AstId, RangeExpression};
 use crate::lower::constant_expr::eval_constant_expr;
 use crate::lower::expression::{self, lower_expr, sign_or_zero_extend, truncate_or_extend};
@@ -291,4 +292,267 @@ pub fn assign_variable_lvalue_flat<'a>(
         }
     }
     Ok(())
+}
+
+pub fn assign_net_lvalue<'a>(
+    gl: &mut GlobalContext,
+    arenas: &'a AstArenas,
+    scope: &mut Scope<'a>,
+    diagnostics: &mut Diagnostics,
+    builder: &mut BasicBlockBuilder,
+    ast_lvalue: AstId<NetLValue>,
+    variable: VariableKey,
+    variable_ty: VType,
+) -> Result<(), ()> {
+    let lvalue = arenas.get(ast_lvalue);
+    if lvalue.0.len() == 1 {
+        return assign_net_lvalue_flat(
+            gl,
+            arenas,
+            scope,
+            diagnostics,
+            builder,
+            lvalue.0.get(0),
+            variable,
+            variable_ty,
+        );
+    }
+
+    assert!(!lvalue.0.is_empty());
+    let mut total_width = 0u32;
+    for lvf in lvalue.0.iter() {
+        let ty = net_lvalue_flat_ty(gl, arenas, scope, diagnostics, lvf)?;
+        total_width += ty.force_net_width().get();
+    }
+    let variable = truncate_or_extend(
+        gl,
+        builder,
+        variable,
+        variable_ty,
+        VectorSize::new(total_width).unwrap(),
+    );
+
+    let mut offset = 0u32;
+    for lvf in lvalue.0.iter().rev() {
+        let ty = net_lvalue_flat_ty(gl, arenas, scope, diagnostics, lvf)?;
+        let width = ty.force_net_width();
+        let variable = builder.extract_constant(gl, variable, offset, width);
+        assign_net_lvalue_flat(gl, arenas, scope, diagnostics, builder, lvf, variable, ty)?;
+        offset += width.get();
+    }
+    Ok(())
+}
+
+pub fn net_lvalue_flat_ty<'a>(
+    gl: &GlobalContext,
+    arenas: &'a AstArenas,
+    scope: &Scope<'a>,
+    diagnostics: &mut Diagnostics,
+    ast_lvalue: AstId<NetLValueFlat>,
+) -> Result<VType, ()> {
+    let NetLValueFlat {
+        ident,
+        constant_exprs,
+        constant_range_expression,
+    } = arenas.get(ast_lvalue);
+
+    let lvalue_ident = arenas.get_ident(ident.item.0);
+    let Some(symbol_key) = scope.get(&lvalue_ident) else {
+        diagnostics.var_not_found(arenas, *ident);
+        return Err(());
+    };
+
+    let exprs = *constant_exprs;
+    let (mut ty, mut n_dims) = match &scope.symbols[symbol_key].variant {
+        SymbolVariant::Genvar(_) => (VType::SignedNet(INTEGER_VSIZE), 0),
+        SymbolVariant::Constant(v) => (v.ty(), 0),
+        SymbolVariant::Task(_) => todo!(),
+        SymbolVariant::Signal(s) => (s.ty, s.dims.len()),
+    };
+
+    if exprs.len() > n_dims {
+        ty = VType::SCALAR_NET;
+    }
+    n_dims = n_dims.saturating_sub(exprs.len());
+
+    match constant_range_expression {
+        None if n_dims > 0 => {
+            diagnostics.not_yet_implemented(
+                arenas.get_range_span(exprs),
+                "driving array without indices",
+            );
+            return Err(());
+        }
+        None => return Ok(ty),
+        Some(range_expression) => match arenas.get(*range_expression) {
+            ConstantRangeExpression::Single(_) => {
+                if n_dims > 1 {
+                    diagnostics.not_yet_implemented(
+                        arenas.get_range_span(exprs),
+                        "driving array without indices",
+                    );
+                    Err(())
+                } else if n_dims == 1 {
+                    Ok(ty)
+                } else {
+                    Ok(VType::SCALAR_NET)
+                }
+            }
+            _ if n_dims > 0 => {
+                diagnostics.not_yet_implemented(
+                    arenas.get_range_span(exprs),
+                    "driving array without indices",
+                );
+                Err(())
+            }
+            ConstantRangeExpression::MsbLsb { msb, lsb } => {
+                let (_, _, width) = msb_lsb_to_width(gl, arenas, scope, diagnostics, *msb, *lsb)?;
+                Ok(VType::UnsignedNet(width))
+            } // RangeExpression::BasePlus(_, width) | RangeExpression::BaseMinus(_, width) => {
+              //     let width = eval_constant_expr(gl, arenas, scope, diagnostics, *width)?;
+              //     Ok(VType::UnsignedNet(width.to_vector_size().unwrap()))
+              // }
+        },
+    }
+}
+
+fn assign_net_lvalue_flat<'a>(
+    gl: &mut GlobalContext,
+    arenas: &'a AstArenas,
+    scope: &mut Scope<'a>,
+    diagnostics: &mut Diagnostics,
+    builder: &mut BasicBlockBuilder,
+    lvalue: AstId<NetLValueFlat>,
+    variable: VariableKey,
+    variable_ty: VType,
+) -> Result<(), ()> {
+    let NetLValueFlat {
+        ident,
+        constant_exprs,
+        constant_range_expression,
+    } = arenas.get(lvalue);
+
+    let Some(symbol_key) = scope.get(arenas.get_ident(ident.item.0)) else {
+        diagnostics.var_not_found(arenas, *ident);
+        return Err(());
+    };
+
+    let SymbolVariant::Signal(s) = &scope.symbols[symbol_key].variant else {
+        panic!("not a signal");
+    };
+    let key = s.key;
+    let mut dims = &s.dims[..];
+
+    let mut exprs = *constant_exprs;
+    let mut arr_idx = if !dims.is_empty()
+        && let Some(fst) = exprs.pop_front()
+    {
+        dims = &dims[1..];
+        let mut leaf_arr_items = dims.iter().product::<u32>();
+        let fst = eval_constant_expr(gl, arenas, scope, diagnostics, fst)?;
+        let fst = fst.as_integer().unwrap();
+        let mut offset = fst as u32 * leaf_arr_items;
+
+        while let Some(dim) = dims.first()
+            && let Some(expr) = exprs.pop_front()
+        {
+            leaf_arr_items /= *dim;
+            let expr = eval_constant_expr(gl, arenas, scope, diagnostics, expr)?;
+            let expr = expr.as_integer().unwrap();
+            let expr = expr as u32 * leaf_arr_items;
+            offset += expr;
+            dims = &dims[1..];
+        }
+
+        Some(offset)
+    } else {
+        None
+    };
+    if !exprs.is_empty() {
+        diagnostics.not_yet_implemented(arenas.get_range_span(exprs), "variable_lvalue::exprs");
+        return Err(());
+    }
+
+    let mut range_expression = *constant_range_expression;
+    if !dims.is_empty()
+        && let Some(ConstantRangeExpression::Single(expr)) = range_expression.map(|e| arenas.get(e))
+    {
+        _ = range_expression.take();
+
+        dims = &dims[1..];
+        let leaf_arr_items = dims.iter().product::<u32>();
+        let fst = eval_constant_expr(gl, arenas, scope, diagnostics, *expr)?;
+        let fst = fst.as_integer().unwrap();
+        let offset = fst as u32 * leaf_arr_items;
+
+        arr_idx = Some(match arr_idx {
+            None => offset,
+            Some(arr_idx) => arr_idx + offset,
+        });
+    }
+
+    if !dims.is_empty() {
+        diagnostics.not_yet_implemented(
+            arenas.get_range_span(exprs),
+            "driving array without indices",
+        );
+        return Err(());
+    }
+
+    let size = s.ty.force_net_width();
+    let partial = match range_expression {
+        None => match arr_idx {
+            None => None,
+            Some(idx) => Some((builder.constant_u32(gl, idx * size.get()), size)),
+        },
+        Some(range_expression) => {
+            let (offset, length) = match arenas.get(range_expression) {
+                ConstantRangeExpression::Single(expr) => (
+                    eval_constant_expr(gl, arenas, scope, diagnostics, *expr)?
+                        .as_integer()
+                        .unwrap(),
+                    1,
+                ),
+                _ => todo!("MsbLsb"),
+            };
+
+            let length = VectorSize::new(length).unwrap();
+            Some(match arr_idx {
+                None => (builder.constant_u32(gl, offset as u32), length),
+                Some(idx) => (
+                    builder.constant_u32(gl, idx * size.get() + offset as u32),
+                    length,
+                ),
+            })
+        }
+    };
+    let size = partial.map_or(s.ty.force_net_width(), |(_, s)| s);
+    let variable = expression::sign_or_zero_extend(gl, builder, variable, variable_ty, size);
+    builder.drive_opt_partial(gl, key, variable, partial);
+    Ok(())
+}
+
+pub fn net_lvalue_width<'a>(
+    gl: &mut GlobalContext,
+    arenas: &'a AstArenas,
+    scope: &mut Scope<'a>,
+    diagnostics: &mut Diagnostics,
+    output_terminal: AstId<NetLValue>,
+) -> Result<VectorSize, ()> {
+    let lvalue = arenas.get(output_terminal);
+    let lvalue_flat = lvalue
+        .0
+        .first()
+        .expect("Concatenation should have at least one value");
+    let mut size =
+        net_lvalue_flat_ty(gl, arenas, scope, diagnostics, lvalue_flat)?.force_net_width();
+
+    for lvalue_flat in lvalue.0.iter().skip(1) {
+        let lvalue_size =
+            net_lvalue_flat_ty(gl, arenas, scope, diagnostics, lvalue_flat)?.force_net_width();
+        size = size.checked_add(lvalue_size.get()).ok_or_else(|| {
+            diagnostics.net_width_overflow(arenas.get_span(output_terminal));
+        })?;
+    }
+    Ok(size)
 }
