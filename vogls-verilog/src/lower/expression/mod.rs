@@ -10,7 +10,7 @@ use crate::ast::expr::{BinaryOperator, BitSlice, Expr, Replication, UnaryOperato
 use crate::lower::constant_expr::eval_constant_expr;
 use crate::lower::scope::SymbolVariant;
 use crate::lower::{VType, msb_lsb_to_width};
-use crate::number::{Decimal, Sign};
+use crate::number::Sign;
 use crate::parser::AstArenas;
 
 use super::Diagnostics;
@@ -529,30 +529,17 @@ pub fn lower_expr<'a>(
             }
             Expr::Decimal(decimal) => {
                 let decimal = &arenas.decimals[decimal.at];
-                let decimal = match decimal {
-                    Decimal::Small(v) => *v as i64,
-                    _ => todo!(),
-                };
-
                 result_stack.push(Some((
-                    builder.constant(gl, Bits::from_i64_truncated(decimal, INTEGER_VSIZE)),
+                    builder.constant(gl, decimal.clone()),
                     VType::SignedNet(INTEGER_VSIZE),
                 )));
             }
             Expr::Sized(sized) => {
                 let sized = &arenas.sized_numbers[sized.item.at];
                 let signed = matches!(sized.sign, Sign::Signed);
-                let crate::number::Bits::Small(v) = sized.value else {
-                    todo!()
-                };
-                let width = match sized.size {
-                    None => (64 - v.leading_zeros()).max(1),
-                    Some(size) => size.as_u32(),
-                };
-                let width = VectorSize::new(width).unwrap();
-                let var = builder.constant(gl, Bits::from_i64_truncated(v as i64, width));
-
-                result_stack.push(Some((var, VType::net(width, signed))));
+                let size = sized.value.size();
+                let var = builder.constant(gl, sized.value.clone());
+                result_stack.push(Some((var, VType::net(size, signed))));
             }
             Expr::String(string_ref) => {
                 let s = arenas.get_ident(string_ref.0);

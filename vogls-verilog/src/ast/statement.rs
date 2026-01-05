@@ -185,7 +185,17 @@ pub enum ProceduralTimingControl {
 // seq_block ::= begin [ : block_identifier { block_item_declaration } ] { statement } end
 #[derive(Clone, Copy)]
 pub struct SeqBlock {
+    pub block: Option<AstId<Block>>,
     pub statements: AstIdRange<Statement>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
+// block_identifier { block_item_declaration }
+#[derive(Clone, Copy)]
+pub struct Block {
+    pub block_identifier: AstItem<Identifier>,
+    // @Incomplete
+    // pub block_item_declaration: AstItem<Identifier>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 499

@@ -11,7 +11,6 @@ use crate::ast::statement::{
 use crate::lower::{ModuleContext, WatchCondition};
 use crate::lower::expression::lower_expr;
 use crate::lower::scope::{Scope, SymbolVariant};
-use crate::number::Decimal;
 use crate::parser::AstArenas;
 
 use super::{Diagnostics, Region};
@@ -34,11 +33,7 @@ pub fn lower<'a>(
                     let value = match arenas.get(*value) {
                         DelayValue::UnsignedNumber(value) => {
                             let value = &arenas.decimals[value.at];
-                            let value = match value {
-                                Decimal::Small(v) => *v as usize,
-                                _ => todo!(),
-                            };
-                            value
+                            value.as_u64().unwrap()
                         }
                         DelayValue::Identifier(_) => {
                             todo!()

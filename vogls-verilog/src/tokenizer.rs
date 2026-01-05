@@ -3,7 +3,7 @@ use std::path::Path;
 use std::rc::Rc;
 
 use crate::number::{
-    Base, BinaryBits, Bits, Decimal, DecimalBits, HexadecimalBits, OctalBits, Sign, Size,
+    Base, skip_binary, skip_decimal, skip_hexadecimal, skip_octal, skip_sign, take_base,
 };
 
 use crate::span::Span;
@@ -95,6 +95,9 @@ impl Tokenized {
                     }
 
                     b'(' => match bytes.get(i + 1) {
+                        Some(b'*') if matches!(bytes.get(i + 2), Some(b')')) => {
+                            (T::LeftParenStarRightParen, 3)
+                        }
                         Some(b'*') => (T::LeftParenStar, 2),
                         _ => (T::LeftParen, 1),
                     },
@@ -195,9 +198,8 @@ impl Tokenized {
                         Some(l) => (T::String, l),
                     },
                     b'0'..=b'9' => {
-                        let s = &content[i..];
-                        let initial_length = s.len();
-
+                        let mut offset = i + 1;
+                        skip_decimal(bytes, &mut offset);
                         fn is_valid_prefix(s: &str) -> bool {
                             let pattern = &['D', 'd', 'B', 'b', 'O', 'o', 'H', 'h'];
                             s.starts_with('\'')
@@ -209,68 +211,36 @@ impl Tokenized {
                         }
 
                         // @TODO: Do without materializing
-                        if s.starts_with('0')
-                            || !is_valid_prefix(
-                                s.trim_start_matches(|c: char| matches!(c, '0'..='9')),
-                            )
-                        {
-                            let (s, _) = Decimal::take(s);
-                            let length = initial_length - s.len();
-                            (T::Decimal, length)
+                        if bytes[i] == b'0' || !is_valid_prefix(&content[offset..]) {
+                            (T::Decimal, offset - i)
                         } else {
-                            let (s, _) = Size::take(s);
-                            debug_assert!(s.starts_with('\''));
-                            let s = &s[1..];
-                            let (s, _) = Sign::take(s);
-                            let (s, base) = Base::take(s);
-                            let s = s.trim_start();
-
-                            fn into_bits((s, bs): (&str, impl Into<Bits>)) -> (&str, Bits) {
-                                (s, bs.into())
-                            }
-
-                            let (s, _) = match base {
-                                Base::Decimal => into_bits(DecimalBits::take(s)),
-                                Base::Binary => into_bits(BinaryBits::take(s)),
-                                Base::Octal => into_bits(OctalBits::take(s)),
-                                Base::Hexadecimal => into_bits(HexadecimalBits::take(s)),
+                            offset += 1;
+                            skip_sign(bytes, &mut offset);
+                            let f = match take_base(bytes, &mut offset).unwrap() {
+                                Base::Decimal => skip_decimal,
+                                Base::Binary => skip_binary,
+                                Base::Octal => skip_octal,
+                                Base::Hexadecimal => skip_hexadecimal,
                             };
-
-                            let length = initial_length - s.len();
-                            (T::Number, length)
+                            f(bytes, &mut offset);
+                            (T::Number, offset - i)
                         }
                     }
                     b'\'' => {
                         let mut offset = i + 1;
-                        if matches!(bytes.get(offset), Some(b's' | b'S')) {
-                            offset += 1;
-                        }
-
-                        // @TODO: Do without materializing
-                        match bytes.get(offset) {
-                            Some(b'D' | b'd') => (
-                                T::Number,
-                                content.len()
-                                    - i
-                                    - DecimalBits::take(&content[offset + 1..]).0.len(),
-                            ),
-                            Some(b'B' | b'b') => (
-                                T::Number,
-                                content.len()
-                                    - i
-                                    - BinaryBits::take(&content[offset + 1..]).0.len(),
-                            ),
-                            Some(b'O' | b'o') => (
-                                T::Number,
-                                content.len() - i - OctalBits::take(&content[offset + 1..]).0.len(),
-                            ),
-                            Some(b'X' | b'x') => (
-                                T::Number,
-                                content.len()
-                                    - i
-                                    - HexadecimalBits::take(&content[offset + 1..]).0.len(),
-                            ),
-                            _ => (T::Unknown, 1),
+                        skip_sign(bytes, &mut offset);
+                        match take_base(bytes, &mut offset) {
+                            None => (T::Unknown, 1),
+                            Some(base) => {
+                                let f = match base {
+                                    Base::Decimal => skip_decimal,
+                                    Base::Binary => skip_binary,
+                                    Base::Octal => skip_octal,
+                                    Base::Hexadecimal => skip_hexadecimal,
+                                };
+                                f(bytes, &mut offset);
+                                (T::Number, offset - i)
+                            }
                         }
                     }
                     b'a'..=b'z' | b'A'..=b'Z' | b'_' => {
@@ -773,10 +743,6 @@ fn str_length(s: &str) -> Option<usize> {
     }
 }
 
-pub trait Takeable<'a>: Sized {
-    fn take(s: &'a str) -> (&'a str, Self);
-}
-
 macro_rules! define_tokens {
     (
         $(
@@ -873,6 +839,7 @@ define_tokens! {
 
     LeftParenStar = "(*",
     StarRightParen = "*)",
+    LeftParenStarRightParen = "(*)",
 
     // Keywords
     KeywordAlways = "always",

@@ -2,14 +2,18 @@ use crate::arena::Arena;
 use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::module::Module;
 use crate::ast::{
-    AstId, AstIdRange, AstItem, AttrSpec, AttributeInstance, DecimalRef, Identifier,
+    AstId, AstIdRange, AstItem, AttrSpec, AttributeInstance, DecimalRef, Identifier, SizedNumber,
     SizedNumberRef, StringRef, TextRef,
 };
-use crate::number::{Decimal, SizedNumber};
-use crate::tokenizer::{Takeable, Token};
+use crate::number::{
+    Base, Sign, parse_decimal_bits, skip_sign, take_base, take_binary_bits, take_hexadecimal_bits,
+    take_octal_bits, take_size,
+};
+use crate::tokenizer::Token;
 pub use diagnostics::{Diagnostics, report, report_error};
 pub use token_walker::TokenWalker;
 use vogls_ir::token_range::TokenRange;
+use vogls_ir::{Bits, INTEGER_VSIZE};
 
 use self::utils::{item_parse, parse, parse_one_or_more_delimited};
 
@@ -33,7 +37,7 @@ pub struct AstArenas {
     pub spans: Vec<TokenRange>,
 
     pub text: String,
-    pub decimals: Vec<Decimal>,
+    pub decimals: Vec<Bits>,
     pub sized_numbers: Vec<SizedNumber>,
 }
 impl AstArenas {
@@ -282,10 +286,17 @@ impl<'a> Consumable<'a> for DecimalRef {
         let t = tkw.next_expect(Token::Decimal, diagnostics.as_deref_mut())?;
         let (span, file) = (*t.span, *t.file);
         let content = &tkw.content(file)[span.as_range()];
-        let (_, decimal) = Decimal::take(content);
-        let at = arenas.decimals.len();
-        arenas.decimals.push(decimal);
-        Ok(Self { at })
+        match parse_decimal_bits(content, Some(INTEGER_VSIZE)) {
+            Ok(decimal) => {
+                let at = arenas.decimals.len();
+                arenas.decimals.push(decimal);
+                Ok(Self { at })
+            }
+            Err(_) => {
+                diagnostics.map(|d| d.incomplete(tkw.offset - 1, "decimal overflow"));
+                Err(())
+            }
+        }
     }
 }
 
@@ -299,7 +310,44 @@ impl<'a> Consumable<'a> for SizedNumberRef {
         let t = tkw.next_expect(Token::Number, diagnostics.as_deref_mut())?;
         let (span, file) = (*t.span, *t.file);
         let content = &tkw.content(file)[span.as_range()];
-        let (_, number) = SizedNumber::take(content);
+        let (content, size) = if content.starts_with('\'') {
+            (content, None)
+        } else {
+            let Ok((content, size)) = take_size(&content) else {
+                diagnostics.map(|d| d.incomplete(tkw.offset - 1, "decimal overflow"));
+                return Err(());
+            };
+            (content, Some(size))
+        };
+        debug_assert!(content.starts_with('\''));
+        let mut i = 1;
+        let has_sign = skip_sign(content.as_bytes(), &mut i);
+        let base = take_base(content.as_bytes(), &mut i).unwrap();
+        let content = &content[i..];
+
+        let f = match base {
+            Base::Decimal => parse_decimal_bits,
+            Base::Binary => take_binary_bits,
+            Base::Octal => take_octal_bits,
+            Base::Hexadecimal => take_hexadecimal_bits,
+        };
+
+        let Ok(bits) = f(content, size) else {
+            diagnostics.map(|d| d.incomplete(tkw.offset - 1, "decimal overflow"));
+            return Err(());
+        };
+
+        let sign = if has_sign {
+            Sign::Signed
+        } else {
+            Sign::Unsigned
+        };
+        let number = SizedNumber {
+            inferred_size: size.is_none(),
+            sign,
+            base,
+            value: bits,
+        };
         let at = arenas.sized_numbers.len();
         arenas.sized_numbers.push(number);
         Ok(Self { at })

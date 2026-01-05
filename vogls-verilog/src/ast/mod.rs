@@ -1,4 +1,7 @@
+use vogls_ir::Bits;
+
 use crate::arena::{ArenaId, ArenaIdRange, ArenaIdRangeIter};
+use crate::number::{Base, Sign};
 
 use self::constant_expr::ConstantExpr;
 use self::expr::Expr;
@@ -198,3 +201,12 @@ pub enum RangeExpression {
     BasePlus(AstId<Expr>, AstId<ConstantExpr>),
     BaseMinus(AstId<Expr>, AstId<ConstantExpr>),
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SizedNumber {
+    pub inferred_size: bool,
+    pub sign: Sign,
+    pub base: Base,
+    pub value: Bits,
+}
+

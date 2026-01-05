@@ -1,8 +1,6 @@
-use std::fmt::{self, Write};
 use std::num::NonZeroU32;
-use std::sync::Arc;
 
-use crate::tokenizer::Takeable;
+use vogls_ir::{Bits, VectorSize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
@@ -22,174 +20,94 @@ pub enum Base {
     Hexadecimal,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SizedNumber {
-    pub size: Option<Size>,
-    pub sign: Sign,
-    pub base: Base,
-    pub value: Bits,
+// pub fn skip_sized_number(s: &[u8], i: &mut usize) -> Option<()> {
+//     if matches!(s.get(*i), Some(b'0'..=b'9' | b'_')) {
+//         skip_decimal(s, i);
+//     }
+//     if s.get(*i).copied() != Some(b'\'') {
+//         return None;
+//     }
+//     *i += 1;
+//
+//     skip_sign(s, i);
+//     let base = take_base(s, i)?;
+//
+//     match base {
+//         Base::Decimal => matches!(s.get(*i), Some(b'0'..=b'9' | b'_')).then(|| skip_decimal(s, i)),
+//         Base::Binary => matches!(s.get(*i), Some(b'0'..=b'1' | b'_')).then(|| skip_binary(s, i)),
+//         Base::Octal => matches!(s.get(*i), Some(b'0'..=b'7' | b'_')).then(|| skip_octal(s, i)),
+//         Base::Hexadecimal => matches!(
+//             s.get(*i),
+//             Some(b'0'..=b'9' | b'a'..b'f' | b'A'..b'F' | b'_')
+//         )
+//         .then(|| skip_hexadecimal(s, i)),
+//     }
+// }
+pub fn skip_decimal(s: &[u8], i: &mut usize) {
+    while let Some(b) = s.get(*i)
+        && matches!(b, b'0'..=b'9' | b'_')
+    {
+        *i += 1;
+    }
+}
+pub fn skip_binary(s: &[u8], i: &mut usize) {
+    while let Some(b) = s.get(*i)
+        && matches!(b, b'0'..=b'1' | b'_')
+    {
+        *i += 1;
+    }
+}
+pub fn skip_octal(s: &[u8], i: &mut usize) {
+    while let Some(b) = s.get(*i)
+        && matches!(b, b'0'..=b'7' | b'_')
+    {
+        *i += 1;
+    }
+}
+pub fn skip_hexadecimal(s: &[u8], i: &mut usize) {
+    while let Some(b) = s.get(*i)
+        && matches!(b, b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F' | b'_')
+    {
+        *i += 1;
+    }
 }
 
-pub struct DecimalBits(Bits);
-pub struct BinaryBits(Bits);
-pub struct OctalBits(Bits);
-pub struct HexadecimalBits(Bits);
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Decimal {
-    Small(u64),
-    Large(Arc<LargeBits>),
+pub fn skip_sign(s: &[u8], i: &mut usize) -> bool {
+    let has_sign = matches!(s.get(*i), Some(b's' | b'S'));
+    *i += usize::from(has_sign);
+    has_sign
 }
 
-impl<'a> Takeable<'a> for SizedNumber {
-    fn take(s: &'a str) -> (&'a str, Self) {
-        let (s, size) = if s.starts_with("'") {
-            (s, None)
-        } else {
-            let (s, size) = Size::take(s);
-            debug_assert!(s.starts_with('\''));
-            (s, Some(size))
+#[rustfmt::skip]
+pub fn take_base(s: &[u8], i: &mut usize) -> Option<Base> {
+    match s.get(*i) {
+        Some(b'D' | b'd') => { *i += 1; Some(Base::Decimal)     },
+        Some(b'B' | b'b') => { *i += 1; Some(Base::Binary)      },
+        Some(b'O' | b'o') => { *i += 1; Some(Base::Octal)       },
+        Some(b'H' | b'h') => { *i += 1; Some(Base::Hexadecimal) },
+        _ => None,
+    }
+}
+
+pub fn take_size<'a>(s: &'a str) -> Result<(&'a str, VectorSize), ()> {
+    let mut chars = s.char_indices();
+
+    let (_, fst) = chars.next().unwrap();
+    let fst = fst.to_digit(10).unwrap();
+
+    let mut size = fst;
+
+    for (i, c) in chars.filter(|(_, c)| *c != '_') {
+        let Some(c) = c.to_digit(10) else {
+            return Ok((&s[i..], VectorSize::new(size).ok_or(())?));
         };
-        let s = &s[1..];
-        let (s, sign) = Sign::take(s);
-        let (s, base) = Base::take(s);
-        let s = s.trim_start();
 
-        fn into_bits((s, bs): (&str, impl Into<Bits>)) -> (&str, Bits) {
-            (s, bs.into())
-        }
-
-        let (s, value) = match base {
-            Base::Decimal => into_bits(DecimalBits::take(s)),
-            Base::Binary => into_bits(BinaryBits::take(s)),
-            Base::Octal => into_bits(OctalBits::take(s)),
-            Base::Hexadecimal => into_bits(HexadecimalBits::take(s)),
-        };
-
-        let value = SizedNumber {
-            size,
-            sign,
-            base,
-            value,
-        };
-        (s, value)
+        size = size.checked_mul(10).ok_or(())?;
+        size = size.checked_add(c).unwrap();
     }
-}
 
-impl fmt::Display for Decimal {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Small(v) => v.fmt(f),
-            Self::Large(_) => todo!(),
-        }
-    }
-}
-
-impl fmt::Display for SizedNumber {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some(size) = self.size {
-            size.0.fmt(f)?;
-        }
-        f.write_char('\'')?;
-        if matches!(self.sign, Sign::Signed) {
-            f.write_char('s')?;
-        }
-        match self.base {
-            Base::Decimal => write!(f, "d{}", self.value),
-            Base::Binary => write!(f, "b{:b}", self.value),
-            Base::Octal => write!(f, "o{:o}", self.value),
-            Base::Hexadecimal => write!(f, "x{:x}", self.value),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Bits {
-    Small(u64),
-    Large(Arc<LargeBits>),
-}
-
-impl fmt::Display for Bits {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Bits::Small(v) => v.fmt(f),
-            Bits::Large(_) => todo!(),
-        }
-    }
-}
-
-impl fmt::Binary for Bits {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Bits::Small(v) => v.fmt(f),
-            Bits::Large(_) => todo!(),
-        }
-    }
-}
-
-impl fmt::Octal for Bits {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Bits::Small(v) => v.fmt(f),
-            Bits::Large(_) => todo!(),
-        }
-    }
-}
-
-impl fmt::LowerHex for Bits {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Bits::Small(v) => v.fmt(f),
-            Bits::Large(_) => todo!(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LargeBits(Vec<u128>);
-
-impl<'a> Takeable<'a> for Size {
-    fn take(s: &'a str) -> (&'a str, Self) {
-        let mut chars = s.char_indices();
-
-        let (_, fst) = chars.next().unwrap();
-        let fst = fst.to_digit(10).unwrap();
-
-        let mut size = NonZeroU32::new(fst).unwrap();
-
-        for (i, c) in chars.filter(|(_, c)| *c != '_') {
-            let Some(c) = c.to_digit(10) else {
-                return (&s[i..], Size(size));
-            };
-
-            size = size.checked_mul(NonZeroU32::new(10).unwrap()).unwrap();
-            size = size.checked_add(c).unwrap();
-        }
-
-        ("", Size(size))
-    }
-}
-
-impl<'a> Takeable<'a> for Sign {
-    fn take(s: &'a str) -> (&'a str, Self) {
-        match s.bytes().next() {
-            Some(b'S' | b's') => (&s[1..], Self::Signed),
-            _ => (s, Self::Unsigned),
-        }
-    }
-}
-
-impl<'a> Takeable<'a> for Base {
-    fn take(s: &'a str) -> (&'a str, Self) {
-        match s.bytes().next() {
-            Some(b'D' | b'd') => (&s[1..], Self::Decimal),
-            Some(b'B' | b'b') => (&s[1..], Self::Binary),
-            Some(b'O' | b'o') => (&s[1..], Self::Octal),
-            Some(b'H' | b'h') => (&s[1..], Self::Hexadecimal),
-            Some(c) => unreachable!("found: {}", char::from(c)),
-            None => unreachable!(),
-        }
-    }
+    let size = VectorSize::new(size).ok_or(())?;
+    Ok(("", size))
 }
 
 impl Base {
@@ -198,228 +116,177 @@ impl Base {
     }
 }
 
-impl<'a> Takeable<'a> for Decimal {
-    fn take(s: &'a str) -> (&'a str, Self) {
-        debug_assert!(s.starts_with(|c: char| matches!(c, '0'..='9' | '_')));
+pub fn parse_decimal_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, ()> {
+    let Some(size) = size else {
+        todo!("Decimal with inferred size");
+    };
 
+    if size.get() <= 64 {
         let mut value = 0u64;
-        let mut bytes = s.bytes();
-
-        let mut offset = 0;
-        loop {
-            let Some(b) = bytes.next().filter(|b| matches!(b, b'0'..=b'9' | b'_')) else {
-                return (&s[offset..], Decimal::Small(value));
-            };
-
-            offset += 1;
-
+        for b in s.bytes() {
             if b == b'_' {
                 continue;
             }
 
-            let digit = b - b'0';
-
-            let Some(new_value) = value
-                .checked_mul(10)
-                .and_then(|v| v.checked_add(u64::from(digit)))
-            else {
-                break;
+            let v = match b {
+                b'x' => 0,
+                b'z' => 0,
+                _ => b - b'0',
             };
 
-            value = new_value;
+            value = value.checked_mul(10).ok_or(())?;
+            value = value.checked_add(u64::from(v)).ok_or(())?;
         }
-
+        Ok(Bits::Small(value, size))
+    } else {
         todo!("Big Decimal Numbers");
     }
 }
 
-impl Size {
-    pub fn as_u32(self) -> u32 {
-        self.0.into()
-    }
-}
-
-impl From<DecimalBits> for Bits {
-    fn from(v: DecimalBits) -> Bits {
-        v.0
-    }
-}
-impl From<BinaryBits> for Bits {
-    fn from(v: BinaryBits) -> Bits {
-        v.0
-    }
-}
-impl From<OctalBits> for Bits {
-    fn from(v: OctalBits) -> Bits {
-        v.0
-    }
-}
-impl From<HexadecimalBits> for Bits {
-    fn from(v: HexadecimalBits) -> Bits {
-        v.0
-    }
-}
-
-impl<'a> Takeable<'a> for DecimalBits {
-    fn take(s: &'a str) -> (&'a str, Self) {
-        debug_assert!(s.starts_with(|c: char| matches!(c, '0'..='9' | '_')));
-
-        let mut value = 0u64;
-        let mut bytes = s.bytes();
-
-        let mut offset = 0;
-        loop {
-            let Some(b) = bytes.next().filter(|b| matches!(b, b'0'..=b'9' | b'_')) else {
-                return (&s[offset..], DecimalBits(Bits::Small(value)));
-            };
-
-            offset += 1;
-
-            if b == b'_' {
-                continue;
+pub fn take_binary_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, ()> {
+    let size = match size {
+        None => {
+            let mut count = 0u32;
+            for b in s.bytes() {
+                count += u32::from(b != b'_');
             }
-
-            let digit = b - b'0';
-
-            let Some(new_value) = value
-                .checked_mul(10)
-                .and_then(|v| v.checked_add(u64::from(digit)))
-            else {
-                break;
-            };
-
-            value = new_value;
+            VectorSize::new(count).ok_or(())?
         }
+        Some(s) => s,
+    };
 
-        todo!("Big Decimal Numbers");
-    }
-}
-
-impl<'a> Takeable<'a> for BinaryBits {
-    fn take(s: &'a str) -> (&'a str, Self) {
-        debug_assert!(s.starts_with(&['0', '1', 'x', 'z', '_']));
-
+    if size.get() <= 64 {
         let mut value = 0u64;
-        let mut bytes = s.bytes();
-
-        let mut offset = 0;
-        let mut num_bits = 0;
-        loop {
-            let Some(b) = bytes
-                .next()
-                .filter(|b| matches!(b, b'0'..=b'1' | b'x' | b'z' | b'_'))
-            else {
-                return (&s[offset..], BinaryBits(Bits::Small(value)));
-            };
-
-            offset += 1;
-
+        for b in s.bytes() {
             if b == b'_' {
                 continue;
             }
-
-            if num_bits + 1 > 64 {
-                break;
-            }
-
-            let digit = if b == b'x' {
-                0
-            } else if b == b'z' {
-                0
-            } else {
-                b - b'0'
-            };
 
             value <<= 1;
-            value |= u64::from(digit);
-
-            num_bits += 1;
+            value |= u64::from(b == b'1');
         }
-
-        todo!("Big Binary Numbers");
-    }
-}
-
-impl<'a> Takeable<'a> for OctalBits {
-    fn take(s: &'a str) -> (&'a str, Self) {
-        debug_assert!(s.starts_with(|b: char| matches!(b, '0'..='7')));
-
-        let mut value = 0u64;
-        let mut bytes = s.bytes();
-
-        let mut offset = 0;
-        let mut num_bits = 0;
-        loop {
-            let Some(b) = bytes.next().filter(|b| matches!(b, b'0'..=b'7' | b'_')) else {
-                return (&s[offset..], OctalBits(Bits::Small(value)));
-            };
-
-            offset += 1;
-
+        Ok(Bits::Small(value, size))
+    } else {
+        let mut value = vec![0u8; size.get().div_ceil(8) as usize];
+        let mut i = 0;
+        for b in s.bytes() {
             if b == b'_' {
                 continue;
             }
 
-            if num_bits + 3 > 64 {
-                break;
+            let p = size.get() as usize - i - 1;
+            value[p / 8] |= u8::from(b == b'1') << (p % 8);
+            i += 1;
+        }
+        Ok(Bits::Big(size, value.into()))
+    }
+}
+
+pub fn take_octal_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, ()> {
+    let size = match size {
+        None => {
+            let mut count = 0u32;
+            for b in s.bytes() {
+                count += u32::from(b != b'_');
+            }
+            let count = count.checked_mul(3).ok_or(())?;
+            VectorSize::new(count).ok_or(())?
+        }
+        Some(s) => s,
+    };
+
+    if size.get() <= 64 {
+        let mut value = 0u64;
+        for b in s.bytes() {
+            if b == b'_' {
+                continue;
             }
 
-            let digit = b - b'0';
+            let v = match b {
+                b'x' => 0,
+                b'z' => 0,
+                _ => b - b'0',
+            };
 
             value <<= 3;
-            value |= u64::from(digit);
-
-            num_bits += 3;
+            value |= u64::from(v);
         }
-
-        todo!("Big Octal Numbers");
-    }
-}
-
-impl<'a> Takeable<'a> for HexadecimalBits {
-    fn take(s: &'a str) -> (&'a str, Self) {
-        fn is_hexadecimal_digit(b: u8) -> bool {
-            matches!(b, b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F')
-        }
-
-        debug_assert!(s.starts_with(|c: char| matches!(c, '0'..='9' | 'a'..='f' | 'A'..='F')));
-
-        let mut value = 0u64;
-        let mut bytes = s.bytes();
-
-        let mut offset = 0;
-        let mut num_bits = 0;
-        loop {
-            let Some(b) = bytes
-                .next()
-                .filter(|b| is_hexadecimal_digit(*b) | (*b == b'_'))
-            else {
-                return (&s[offset..], HexadecimalBits(Bits::Small(value)));
-            };
-
-            offset += 1;
-
+        Ok(Bits::Small(value, size))
+    } else {
+        let mut value = vec![0u8; size.get().div_ceil(8) as usize];
+        let mut i = 0u32;
+        for b in s.bytes().rev() {
             if b == b'_' {
                 continue;
             }
 
-            if num_bits + 4 > 64 {
-                break;
+            let v = match b {
+                b'x' => 0,
+                b'z' => 0,
+                _ => b - b'0',
+            };
+
+            value[i as usize / 8] |= v << (i % 8);
+            if i % 8 >= 6 && 8 - i % 8 < size.get() - i {
+                value[(i as usize / 8) + 1] |= v >> (8 - i % 8);
+            }
+            i += 3;
+        }
+        Ok(Bits::Big(size, value.into()))
+    }
+}
+
+pub fn take_hexadecimal_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, ()> {
+    let size = match size {
+        None => {
+            let mut count = 0u32;
+            for b in s.bytes() {
+                count += u32::from(b != b'_');
+            }
+            let count = count.checked_mul(4).unwrap();
+            VectorSize::new(count).ok_or(())?
+        }
+        Some(s) => s,
+    };
+
+    if size.get() <= 64 {
+        let mut value = 0u64;
+        for b in s.bytes() {
+            if b == b'_' {
+                continue;
             }
 
-            let digit = match b {
+            let v = match b {
+                b'a'..=b'f' => b - b'a' + 10,
+                b'A'..=b'F' => b - b'A' + 10,
+                b'0'..=b'9' => b - b'0',
+                b'x' => 0,
+                b'z' => 0,
+                _ => unreachable!(),
+            };
+
+            value <<= 4;
+            value |= u64::from(v);
+        }
+        Ok(Bits::Small(value, size))
+    } else {
+        let mut value = vec![0u8; size.get().div_ceil(8) as usize];
+        let mut i = 0;
+        for b in s.bytes().rev() {
+            if b == b'_' {
+                continue;
+            }
+
+            let v = match b {
                 b'a'..=b'f' => b - b'a' + 10,
                 b'A'..=b'F' => b - b'A' + 10,
                 b'0'..=b'9' => b - b'0',
                 _ => unreachable!(),
             };
 
-            value <<= 4;
-            value |= u64::from(digit);
-
-            num_bits += 4;
+            value[i / 2] |= v << 4 * (i % 2);
+            i += 1;
         }
-
-        todo!("Big Hex Numbers");
+        Ok(Bits::Big(size, value.into()))
     }
 }

@@ -311,6 +311,12 @@ impl Bits {
             Bits::Big(_, _) => None,
         }
     }
+    pub fn as_u64(&self) -> Option<u64> {
+        match self {
+            Bits::Small(v, _) => Some(*v),
+            Bits::Big(_, _) => None,
+        }
+    }
 
     pub fn is_one(&self) -> bool {
         self.as_slice()[0] == 1u8 && self.count_ones() == 1

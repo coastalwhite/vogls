@@ -1,10 +1,10 @@
-use vogls_ir::{Bits, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE, VectorSize};
+use vogls_ir::{Bits, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE};
 
 use crate::ast::AstId;
 use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::expr::{BinaryOperator, Expr};
 use crate::lower::scope::SymbolVariant;
-use crate::number::{Decimal, Sign};
+use crate::number::Sign;
 use crate::parser::AstArenas;
 
 use super::Diagnostics;
@@ -37,20 +37,7 @@ pub fn eval_constant_expr<'a>(
         match arenas.get(item.expr) {
             Expr::Decimal(decimal) => {
                 let decimal = &arenas.decimals[decimal.at];
-                let Decimal::Small(v) = decimal else {
-                    result_stack.push(None);
-                    diagnostics.not_yet_implemented(
-                        arenas.get_span(item.expr),
-                        "constant expression of this kind not yet implemented",
-                    );
-                    error = true;
-                    continue;
-                };
-
-                result_stack.push(Some(VValue::SignedNet(Bits::from_i64_truncated(
-                    *v as i64,
-                    INTEGER_VSIZE,
-                ))));
+                result_stack.push(Some(VValue::SignedNet(decimal.clone())));
             }
             Expr::Binary(op, lhs, rhs) => {
                 if !item.dispatched {
@@ -148,16 +135,7 @@ pub fn eval_constant_expr<'a>(
             Expr::Sized(sized) => {
                 let sized = &arenas.sized_numbers[sized.item.at];
                 let signed = matches!(sized.sign, Sign::Signed);
-                let crate::number::Bits::Small(v) = sized.value else {
-                    todo!()
-                };
-                let width = match sized.size {
-                    None => (64 - v.leading_zeros()).max(1),
-                    Some(size) => size.as_u32(),
-                };
-                assert!(width <= 64);
-                let width = VectorSize::new(width).unwrap();
-                result_stack.push(Some(VValue::net(Bits::Small(v, width), signed)));
+                result_stack.push(Some(VValue::net(sized.value.clone(), signed)));
             }
             Expr::Ternary(condition, truthy, falsy) => {
                 if !item.dispatched {

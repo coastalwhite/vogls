@@ -3,7 +3,13 @@ use vogls_ir::token_range::TokenRange;
 use crate::ast::constant_expr::{ConstantExpr, ConstantRangeExpression};
 use crate::ast::expr::Expr;
 use crate::ast::statement::{
-    BlockingAssignment, CaseItem, CaseItemPattern, CaseStatement, CaseStatementVariant, ConditionalStatement, DelayControl, DelayOrEventControl, DelayValue, EventControl, EventExpression, EventExpressionPrimary, IfBranch, LoopStatement, LoopStatementVariant, NetLValue, NetLValueFlat, NonBlockingAssignment, ProceduralTimingControl, ProceduralTimingControlStatement, SeqBlock, Statement, StatementContent, StatementOrNull, SystemTaskEnable, SystemTaskIdentifier, TaskEnable, VariableAssignment, VariableLValue, VariableLValueFlat, WaitStatement
+    Block, BlockingAssignment, CaseItem, CaseItemPattern, CaseStatement, CaseStatementVariant,
+    ConditionalStatement, DelayControl, DelayOrEventControl, DelayValue, EventControl,
+    EventExpression, EventExpressionPrimary, IfBranch, LoopStatement, LoopStatementVariant,
+    NetLValue, NetLValueFlat, NonBlockingAssignment, ProceduralTimingControl,
+    ProceduralTimingControlStatement, SeqBlock, Statement, StatementContent, StatementOrNull,
+    SystemTaskEnable, SystemTaskIdentifier, TaskEnable, VariableAssignment, VariableLValue,
+    VariableLValueFlat, WaitStatement,
 };
 use crate::ast::{
     AstIdRange, AstItem, AttributeInstance, DecimalRef, Identifier, RangeExpression, TextRef,
@@ -579,8 +585,11 @@ impl<'a> Consumable<'a> for SeqBlock {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
         // seq_block ::= begin [ : block_identifier { block_item_declaration } ] { statement } end
 
-        // @Incomplete: [ : block_identifier { block_item_declaration } ]
         tkw.next_expect(T::KeywordBegin, diagnostics.as_deref_mut())?;
+        let mut block = None;
+        if tkw.next_if_equals(T::Colon) {
+            block = Some(parse::<Block>(tkw, sc, arenas, diagnostics.as_deref_mut())?);
+        }
         let statements = parse_zero_or_more_while_next::<Statement>(
             tkw,
             sc,
@@ -590,7 +599,23 @@ impl<'a> Consumable<'a> for SeqBlock {
         )?;
         tkw.next_expect(T::KeywordEnd, diagnostics.as_deref_mut())?;
 
-        Ok(Self { statements })
+        Ok(Self { block, statements })
+    }
+}
+
+impl<'a> Consumable<'a> for Block {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
+        // block_identifier { block_item_declaration }
+
+        let block_identifier =
+            item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        Ok(Self { block_identifier })
     }
 }
 
@@ -708,7 +733,7 @@ impl<'a> Consumable<'a> for EventControl {
         // | @ (*)
 
         tkw.next_expect(T::AtSign, diagnostics.as_deref_mut())?;
-        if tkw.next_if_equals(T::Star) {
+        if tkw.next_if_equals(T::Star) || tkw.next_if_equals(T::LeftParenStarRightParen) {
             return Ok(Self::Star);
         }
         if tkw.next_if_equals(T::Ident) {
@@ -717,11 +742,6 @@ impl<'a> Consumable<'a> for EventControl {
             return Ok(Self::EventExpression(EventExpression(AstIdRange::single(
                 event_expression,
             ))));
-        }
-        tkw.next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
-        if tkw.next_if_equals(T::Star) {
-            tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
-            return Ok(Self::Star);
         }
         let event_expression =
             EventExpression::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
