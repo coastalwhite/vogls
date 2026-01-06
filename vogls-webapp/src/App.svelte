@@ -4,7 +4,8 @@
   import github from "svelte-highlight/styles/github";
 
   import EventInfo from './EventInfo.svelte'
-  import SignalList from './SignalList.svelte'
+  import VCDViewer from './VCDViewer.svelte'
+  import { parseTrace, type Trace, type TEvent } from './lib/trace.ts'
 
   let fileName = $state("");
   let error = $state(null);
@@ -12,6 +13,12 @@
   let file_focus = $state(0);
   let event_ptr = $state(0);
   let last_file_focus = $state(null);
+  let manual_file_selection = $state(false);
+  let last_event_ptr = $state(-1);
+  let highlighted_signal = $state<number | null>(null);
+  let vcdPanelOpen = $state(false);
+  let vcdPanelHeight = $state(300);
+  let isDragging = $state(false);
 
   function determine_current_focus_file() {
   	if (trace === null) {
@@ -51,10 +58,27 @@
 	});
   }
 
+  // Auto-switch file when event pointer changes
   $effect(() => {
-   	determine_current_focus_file();
-	if (file_focus !== null) {
-		scroll_to_current_highlight(document.querySelectorAll('.source-code')[file_focus]);
+	// When event pointer changes, always switch to the file containing the event
+	// (manual file selection only prevents auto-switching during continuous navigation)
+	if (event_ptr !== last_event_ptr) {
+		// Always determine and switch to the file containing the current event
+		determine_current_focus_file();
+		// Reset manual selection when event changes (user clicked on a specific event)
+		manual_file_selection = false;
+		// Clear signal highlighting when event changes
+		highlighted_signal = null;
+		last_event_ptr = event_ptr;
+	}
+	
+	// Always scroll to highlight when file_focus or event_ptr changes
+	if (file_focus !== null && trace !== null) {
+		// Find the currently visible file container
+		const fileContainers = document.querySelectorAll('[data-file-container]');
+		if (fileContainers[file_focus]) {
+			scroll_to_current_highlight(fileContainers[file_focus]);
+		}
 	}
   });
 
@@ -69,107 +93,6 @@
   }
 
 
-  type Timestamp = int;
-  type FileIdx = int;
-  type SignalIdx = int;
-  type ProcessIdx = int;
-  type DrivenIdx = int;
-  type WokenIdx = int;
-  type WatchIdx = int;
-  type File = {
-    name?: string,
-    content: string,
-  };
-  type Span = {
-    file?: int,
-    byte_range?: [int, int],
-  };
-  type Process = {
-    name?: string,
-    location?: Span,
-  };
-  type Bits = {
-    size: int,
-    slice: Uint8Array,
-  };
-  type Signal = {
-    name?: string,
-    location?: Span,
-    initial: Bits,
-  };
-  type Driven = {
-    signal: int,
-    value: Bits,
-    woken_range: [int, int],
-  };
-  type TEvent = 
-    { type: "eval", process: int, driven: [int, int], stop_reason:
-      { type: "halt" } | { type: "wait", time: int } | { type: "wait_region", region: int } | { type: "watch_signals", signals: [int, int] }
-    } |
-    { type: "drive", signal: int, drive?: int } |
-    { type: "time", time: int }
-  ;
-  type Trace = {
-    files: [File],
-    processes: [Process],
-    signals: [Signal],
-    driven: [Driven],
-    woken: [ProcessIdx],
-    watches: [SignalIdx],
-    events: [TEvent],
-  };
-
-  function decode_opt_str(view: DataView, ptr: int): [string | null, int] {
-      if (
-        view.getUint32(ptr,   true) == 0xFFFF_FFFF &&
-        view.getUint32(ptr+4, true) == 0xFFFF_FFFF
-      ) {
-        return [null, ptr + 8];
-      }
-      return decode_str(view, ptr);
-  }
-  function decode_str(view: DataView, ptr: int): [string, int] {
-      console.assert(
-        view.getUint32(ptr,   true) != 0xFFFF_FFFF ||
-        view.getUint32(ptr+4, true) != 0xFFFF_FFFF
-      );
-
-      const length = Number(view.getBigUint64(ptr, true)); ptr += 8;
-      const decoder = new TextDecoder("utf-8");
-      const slice = new Uint8Array(
-        view.buffer, 
-        view.byteOffset + ptr, 
-        length
-      );
-      const str = decoder.decode(slice);
-      return [str, ptr + length]
-  }
-  function decode_opt_span(view: DataView, ptr: int): [Span | null, number] {
-      if (
-        view.getUint32(ptr,   true) == 0xFFFF_FFFF &&
-        view.getUint32(ptr+4, true) == 0xFFFF_FFFF
-      ) {
-        return [null, ptr + 24];
-      }
-      
-      const file       = Number(view.getBigUint64(ptr, true)); ptr += 8;
-      const line_start = Number(view.getBigUint64(ptr, true)); ptr += 8;
-      const line_end   = Number(view.getBigUint64(ptr, true)); ptr += 8;
-      return [{ file, line_range: [line_start, line_end] }, ptr]
-  }
-  function decode_bits(view: DataView, ptr: int): [Bits | null, number] {
-      const size  = view.getUint32(ptr, true); ptr += 4;
-      let num_bytes = size >> 3;
-      if (size % 8 != 0) {
-        num_bytes += 1;
-      }
-      const slice = new Uint8Array(
-        view.buffer, 
-        view.byteOffset + ptr, 
-        num_bytes
-      );
-      return [{ size, slice }, ptr + num_bytes]
-  }
 
   function get_highlighted_lines(e: TEvent): int[] {
     if (e.type !== "eval") {
@@ -189,6 +112,74 @@
     return lines;
   }
 
+  function get_current_event_file(): number | null {
+    if (trace === null) {
+      return null;
+    }
+    const e = trace.events[event_ptr];
+    if (e.type !== "eval") {
+      return null;
+    }
+    const process = trace.processes[e.process];
+    if (process.span === null) {
+      return null;
+    }
+    return process.span.file;
+  }
+
+  function navigateToSignalLocation(signalIdx: number) {
+    if (trace === null) {
+      return;
+    }
+    
+    const signal = trace.signals[signalIdx];
+    if (signal.span === null || signal.span.file === undefined) {
+      return;
+    }
+    
+    // Set highlighted signal
+    highlighted_signal = signalIdx;
+    
+    // Switch to the file containing the signal
+    file_focus = signal.span.file;
+    manual_file_selection = true;
+    
+    // Scroll to the signal location
+    setTimeout(() => {
+      const fileContainers = document.querySelectorAll('[data-file-container]');
+      if (fileContainers[signal.span.file]) {
+        const el = fileContainers[signal.span.file];
+        if (signal.span.line_range) {
+          const rows = el.querySelectorAll('div table tbody tr');
+          if (rows[signal.span.line_range[0]]) {
+            rows[signal.span.line_range[0]].scrollIntoView({
+              behavior: 'smooth',
+              block: 'center'
+            });
+          }
+        }
+      }
+    }, 0);
+  }
+
+  function get_highlighted_lines_for_signal(signalIdx: number | null): int[] {
+    if (signalIdx === null || trace === null) {
+      return [];
+    }
+    
+    const signal = trace.signals[signalIdx];
+    if (signal.span === null || signal.span.line_range === undefined) {
+      return [];
+    }
+    
+    let lines = [];
+    let i;
+    for(i = signal.span.line_range[0]; i < signal.span.line_range[1]; i += 1) {
+      lines.push(i);
+    }
+    return lines;
+  }
+
   async function handleFileChange(event) {
     const file = event.target.files[0];
     if (!file) return;
@@ -198,140 +189,20 @@
 
     try {
       const buffer = await readFileAsUint8Array(file);
-
-      let view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
-
-      const magic = view.getUint32(0, false)
-      if (magic != 0x56_47_54_44) { // VGTD
-          error = "Missing magic bytes. Wrong file type?"
-          return;
+      const { trace: parsedTrace, error: parseError } = parseTrace(buffer);
+      
+      if (parseError) {
+        error = parseError;
+        return;
       }
-
-      let ptr = 4
-      const files_len     = Number(view.getBigUint64(ptr, true)); ptr += 8;
-      const processes_len = Number(view.getBigUint64(ptr, true)); ptr += 8;
-      const signals_len   = Number(view.getBigUint64(ptr, true)); ptr += 8;
-      const driven_len    = Number(view.getBigUint64(ptr, true)); ptr += 8;
-      const woken_len     = Number(view.getBigUint64(ptr, true)); ptr += 8;
-      const watches_len   = Number(view.getBigUint64(ptr, true)); ptr += 8;
-      const events_len    = Number(view.getBigUint64(ptr, true)); ptr += 8;
-
-      trace = {
-        files: [],
-        processes: [],
-        signals: [],
-        driven: [],
-        woken: [],
-        watches: [],
-        events: [],
-      };
-    
-      let i;
-      for (i = 0; i < files_len; i += 1) {
-          let name;
-          [name, ptr] = decode_opt_str(view, ptr);
-          let content;
-          [content, ptr] = decode_str(view, ptr);
-          trace.files.push({ name, content });
+      
+      if (parsedTrace) {
+        trace = parsedTrace;
+        determine_current_focus_file();
       }
-
-      for (i = 0; i < processes_len; i += 1) {
-          let name;
-          [name, ptr] = decode_opt_str(view, ptr);
-          let span;
-          [span, ptr] = decode_opt_span(view, ptr);
-          trace.processes.push({ name, span });
-      }
-
-      for (i = 0; i < signals_len; i += 1) {
-          let name;
-          [name, ptr] = decode_opt_str(view, ptr);
-          let span;
-          [span, ptr] = decode_opt_span(view, ptr);
-          let initial;
-          [initial, ptr] = decode_bits(view, ptr);
-          trace.signals.push({ name, span, initial });
-      }
-
-      for (i = 0; i < driven_len; i += 1) {
-          const signal = Number(view.getBigUint64(ptr, true)); ptr += 8;
-          let value;
-          [value, ptr] = decode_bits(view, ptr);
-          const woken_start = Number(view.getBigUint64(ptr, true)); ptr += 8;
-          const woken_end   = Number(view.getBigUint64(ptr, true)); ptr += 8;
-          trace.driven.push({ signal, value, woken_range: [woken_start, woken_end] });
-      }
-
-      for (i = 0; i < woken_len; i += 1) {
-          const process = Number(view.getBigUint64(ptr, true)); ptr += 8;
-          trace.woken.push(process);
-      }
-
-      for (i = 0; i < watches_len; i += 1) {
-          const signal = Number(view.getBigUint64(ptr, true)); ptr += 8;
-          trace.watches.push(signal);
-      }
-
-      for (i = 0; i < events_len; i += 1) {
-          const ty_d   = view.getUint8(ptr);                   ptr += 1;
-          let e;
-          switch (ty_d) {
-            case 0:
-                const process       = Number(view.getBigUint64(ptr, true)); ptr += 8;
-                const driven_start  = Number(view.getBigUint64(ptr, true)); ptr += 8;
-                const driven_end    = Number(view.getBigUint64(ptr, true)); ptr += 8;
-                const stop_reason_d = view.getUint8(ptr);                   ptr += 1;
-                let stop_reason;
-                switch (stop_reason_d) {
-                  case 0:
-                      stop_reason = { type: "halt" };
-                      break;
-                  case 1: 
-                      const t = Number(view.getBigUint64(ptr, true)); ptr += 8;
-                      stop_reason = { type: "wait", time: t };
-                      break;
-                  case 2: 
-                      const region = view.getUint8(ptr); ptr += 1;
-                      stop_reason = { type: "wait_region", region };
-                      break;
-                  case 3: 
-                      const watches_start = Number(view.getBigUint64(ptr, true)); ptr += 8;
-                      const watches_end   = Number(view.getBigUint64(ptr, true)); ptr += 8;
-                      stop_reason = { type: "watch_signals", range: [watches_start, watches_end] };
-                      break;
-                  case 4:
-                      error = "Invalid event stop reason discriminant";
-                      return;
-                }
-                e = { type: "eval", process, driven: [driven_start, driven_end], stop_reason };
-                break;
-            case 1:
-                const signal = Number(view.getBigUint64(ptr, true)); ptr += 8;
-				let drive = null;
-                if (
-                  view.getUint32(ptr,   true) != 0xFFFF_FFFF ||
-                  view.getUint32(ptr+4, true) != 0xFFFF_FFFF
-                ) {
-                    drive  = Number(view.getBigUint64(ptr, true));
-                }
-				ptr += 8;
-                e = { type: "drive", signal, drive };
-                break;
-            case 2:
-                const time = Number(view.getBigUint64(ptr, true)); ptr += 8;
-                e = { type: "time", time };
-                break;
-            default: 
-                error = "Invalid event discriminant";
-                return;
-          }
-
-          trace.events.push(e);
-      }
-	  determine_current_focus_file();
-    } catch (error) {
+    } catch (err) {
       error = "Failed to read file.";
-      console.error(error);
+      console.error(err);
     }
   }
 
@@ -348,133 +219,164 @@
       reader.readAsArrayBuffer(file);
     });
   }
+
+  function handleMouseDown(e: MouseEvent) {
+    isDragging = true;
+    e.preventDefault();
+  }
+
+  function handleMouseMove(e: MouseEvent) {
+    if (!isDragging) return;
+    const newHeight = window.innerHeight - e.clientY;
+    vcdPanelHeight = Math.max(200, Math.min(600, newHeight));
+  }
+
+  function handleMouseUp() {
+    isDragging = false;
+  }
+
+  $effect(() => {
+    if (isDragging) {
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+      return () => {
+        window.removeEventListener('mousemove', handleMouseMove);
+        window.removeEventListener('mouseup', handleMouseUp);
+      };
+    }
+  });
 </script>
 
 <svelte:head>
   {@html github}
 </svelte:head>
 
-<main>
-  <div class="source">
-  {#if trace}
-      {#each trace.files as f, i}
-	  <div class="source-code" class:source-code-hidden={i != file_focus} use:init={i}>
-          <Highlight language={verilog} code={f.content} let:highlighted>
+<main class="w-screen h-screen flex flex-col">
+  <div class="flex-1 flex flex-row" style="height: {vcdPanelOpen ? `calc(100vh - ${vcdPanelHeight}px)` : '100vh'};">
+    <div class="w-[calc(100vw-400px)] h-full border-r-2 border-gray-800 flex flex-col">
+    {#if trace}
+      <!-- File tabs -->
+      {#if trace.files && trace.files.length > 0}
+        <div class="flex border-b border-gray-300 bg-gray-50 overflow-x-auto scrollbar-hide flex-shrink-0">
+          {#each trace.files as f, i}
+            <button
+              onclick={() => {
+                file_focus = i;
+                manual_file_selection = true;
+              }}
+              class="px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap border-b-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+              class:border-blue-600={i === file_focus}
+              class:text-blue-600={i === file_focus}
+              class:bg-white={i === file_focus}
+              class:border-transparent={i !== file_focus}
+              class:text-gray-600={i !== file_focus}
+              class:hover:text-gray-900={i !== file_focus}
+              class:hover:bg-gray-100={i !== file_focus}
+            >
+              {f.name || `File ${i}`}
+            </button>
+          {/each}
+        </div>
+      {/if}
+      
+      <!-- Source code viewer -->
+      <div class="flex-1 overflow-hidden">
+        {#each trace.files as f, i}
+          <div 
+            data-file-container
+            class="w-full h-full overflow-y-scroll scrollbar-hide" 
+            class:hidden={i != file_focus} 
+            use:init={i}
+          >
+            <Highlight language={verilog} code={f.content} let:highlighted>
               <LineNumbers {highlighted}
-                highlightedLines={i === file_focus ? get_highlighted_lines(trace.events[event_ptr]) : []}
+                highlightedLines={(() => {
+                  const eventFile = get_current_event_file();
+                  const eventLines = eventFile !== null && i === eventFile ? get_highlighted_lines(trace.events[event_ptr]) : [];
+                  const signalLines = highlighted_signal !== null && trace.signals[highlighted_signal].span?.file === i 
+                    ? get_highlighted_lines_for_signal(highlighted_signal) 
+                    : [];
+                  // Combine both, removing duplicates
+                  return [...new Set([...eventLines, ...signalLines])];
+                })()}
               />
-          </Highlight>
+            </Highlight>
+          </div>
+        {/each}
       </div>
-      {/each}
+    {/if}
+    </div>
+    <div class="w-[400px] h-full flex flex-col">
+	    <div class="flex-1 overflow-y-scroll scrollbar-hide">
+	    {#if trace}
+		  <EventInfo trace={trace} bind:ptr={event_ptr} />
+	    {:else}
+		  <div class="p-6 space-y-4">
+		    <label for="file-upload" class="inline-block px-5 py-2.5 bg-orange-600 text-white rounded-md cursor-pointer font-semibold hover:bg-orange-700 transition-colors focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2">
+		      {fileName ? 'Change File' : 'Select Local File'}
+		    </label>
+		    <input 
+		      id="file-upload" 
+		      type="file" 
+		      onchange={handleFileChange}
+		      class="hidden"
+		    />
+
+		    {#if fileName}
+		      <p class="mt-2.5 text-gray-600">Selected: <strong class="font-semibold text-gray-900">{fileName}</strong></p>
+		    {/if}
+
+		    {#if error}
+		      <p class="mt-2.5 text-red-600 font-medium">{error}</p>
+		    {/if}
+		  </div>
+	    {/if}
+	    </div>
+	    
+    </div>
+  </div>
+  
+  {#if trace && vcdPanelOpen}
+    <!-- Resizable drag handle -->
+    <div 
+      class="h-2 bg-gray-300 hover:bg-gray-400 cursor-ns-resize flex items-center justify-center transition-colors"
+      onmousedown={handleMouseDown}
+      style="height: 8px;"
+    >
+      <div class="w-12 h-1 bg-gray-500 rounded"></div>
+    </div>
+    
+    <!-- VCD Panel -->
+    <div 
+      class="border-t-2 border-gray-800 bg-white"
+      style="height: {vcdPanelHeight}px;"
+    >
+      <VCDViewer {trace} bind:ptr={event_ptr} onNavigateToSignal={navigateToSignalLocation} />
+    </div>
   {/if}
-  </div>
-  <div class="sidebar">
-	  <div class="events">
-	  {#if trace}
-		<EventInfo trace={trace} bind:ptr={event_ptr} />
-	  {:else}
-		<label for="file-upload" class="button">
-		  {fileName ? 'Change File' : 'Select Local File'}
-		</label>
-		<input 
-		  id="file-upload" 
-		  type="file" 
-		  onchange={handleFileChange} 
-		/>
-
-		{#if fileName}
-		  <p class="status">Selected: <strong>{fileName}</strong></p>
-		{/if}
-
-		{#if error}
-		  <p class="error">{error}</p>
-		{/if}
-	  {/if}
-	  </div>
-	  {#if trace}
-	  <div class="signals">
-		  <SignalList {trace} ptr={event_ptr} />
-	  </div>
-	  {/if}
-	  
-  </div>
+  
+  <!-- Toggle button -->
+  {#if trace}
+    <button
+      onclick={() => vcdPanelOpen = !vcdPanelOpen}
+      class="fixed bottom-4 right-4 px-4 py-2 bg-blue-600 text-white rounded-md font-medium hover:bg-blue-700 transition-colors shadow-lg z-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+    >
+      {vcdPanelOpen ? '▼ Hide VCD' : '▲ Show VCD'}
+    </button>
+  {/if}
 </main>
 
 <style>
-  main {
-      width: 100vw;
-      height: 100vh;
-      display: flex;
-      flex-direction: row;
+  :global(.scrollbar-hide) {
+    /* Hide scrollbar for Chrome, Safari and Opera */
+    -ms-overflow-style: none;  /* IE and Edge */
+    scrollbar-width: none;     /* Firefox */
   }
-  .source {
-	  width: calc(100vw - 400px);
-      height: 100%;
-      border-right: 2px solid #000;
-  }
-  .source-code {
-      width: 100%;
-      height: 100%;
-      --highlighted-background: #88CCCC;
-      overflow-y: scroll;
-
-      /* Hide scrollbar for Chrome, Safari and Opera */
-      &::-webkit-scrollbar {
-        display: none;
-      }
-
-      /* Hide scrollbar for IE, Edge and Firefox */
-      -ms-overflow-style: none;  /* IE and Edge */
-      scrollbar-width: none;     /* Firefox */
-  }
-  .source-code-hidden {
-      display: none;
-  }
-  .sidebar {
-      margin: auto;
-	  width: 400px;
-	  height: 100%;
-	  display: flex;
-	  flex-direction: column;
-  }
-  .events {
-      overflow-y: scroll;
-
-      /* Hide scrollbar for Chrome, Safari and Opera */
-      &::-webkit-scrollbar {
-        display: none;
-      }
-
-      /* Hide scrollbar for IE, Edge and Firefox */
-      -ms-overflow-style: none;  /* IE and Edge */
-      scrollbar-width: none;     /* Firefox */
-  }
-  .signals {
-	  min-height: 200px;
-	  max-height: 200px;
-	  border-top: 2px solid #000;
-  }
-  .file-decoder {
-    padding: 1rem;
-    border: 2px dashed #ccc;
-    border-radius: 8px;
-    text-align: center;
-  }
-
-  input[type="file"] {
+  :global(.scrollbar-hide::-webkit-scrollbar) {
     display: none;
   }
-
-  .button {
-    display: inline-block;
-    padding: 10px 20px;
-    background-color: #ff3e00;
-    color: white;
-    border-radius: 4px;
-    cursor: pointer;
-    font-weight: bold;
+  
+  :global([data-highlighted-background]) {
+    --highlighted-background: #88CCCC;
   }
-
-  .status { margin-top: 10px; color: #555; }
-  .error { color: red; margin-top: 10px; }
 </style>

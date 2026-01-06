@@ -148,9 +148,10 @@ impl Trace {
         for signal in &self.watches {
             f.write_all(&signal.to_le_bytes())?;
         }
-        
-        dbg!(self.events.len());
 
+        dbg!(self.signals.len());
+        dbg!(self.processes.len());
+        
         for e in &self.events {
             match e {
                 Event::Evaluation(process, driven, stop_reason) => {

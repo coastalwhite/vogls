@@ -75,11 +75,13 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         struct TestInfo {
             fail: bool,
             verify_stdout: bool,
+            time: u64,
         }
 
         let mut test_information = TestInfo {
             fail: false,
             verify_stdout: false,
+            time: 1000,
         };
         {
             let s = std::fs::read_to_string(&path)?;
@@ -98,6 +100,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                 match line {
                     "fail" => test_information.fail = true,
                     "verify-stdout" => test_information.verify_stdout = true,
+                    _ if line.starts_with("time=") => test_information.time = line[5..].parse().expect("failed to parse"),
                     _ => {
                         println!();
                         panic!("Invalid vogls test command '{line}'");
@@ -130,7 +133,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             emit_ir: false,
             emit_vm: false,
             trace: false,
-            time: 100,
+            time: test_information.time,
             opt_rounds: 0,
         };
         let result = vogls::run(&path, None, &mut ctx);

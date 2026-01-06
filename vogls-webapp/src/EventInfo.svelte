@@ -2,7 +2,7 @@
 	import display_bits from './lib/bits.ts'
 
 	let { ptr = $bindable(), trace } = $props();
-	let cells = $derived(document.querySelectorAll('.cell'))
+	let cells = $derived(document.querySelectorAll('[data-event-cell]'))
 	let cells_open = $state({});
 
     function num_driven(e): int {
@@ -41,10 +41,12 @@
 		toggle_cells_open(ptr);
 	  }
 
-	  cells[ptr].scrollIntoView({ block: 'center' });
-	  const xs = cells[ptr].querySelector('.title')
-	  if (xs !== null) {
-		  xs.focus();
+	  if (cells[ptr]) {
+		  cells[ptr].scrollIntoView({ block: 'center' });
+		  const xs = cells[ptr].querySelector('[data-event-title]')
+		  if (xs !== null) {
+			  xs.focus();
+		  }
 	  }
 	}
 	function toggle_cells_open(p: number) {
@@ -55,27 +57,89 @@
 		}
 	}
 
+	// Auto-scroll to current event when ptr changes (e.g., from VCD viewer click)
+	$effect(() => {
+		if (cells[ptr]) {
+			cells[ptr].scrollIntoView({ block: 'center', behavior: 'smooth' });
+		}
+	});
+
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
-<div>
-    <p>{trace.events.length} Events</p>
+<div class="h-full overflow-y-scroll scrollbar-hide">
+    <div class="sticky top-0 bg-white z-50 pb-3 pt-2 px-2 mb-3 border-b border-gray-300 shadow-sm">
+      <div class="flex items-center justify-between mb-2">
+        <p class="text-sm font-semibold text-gray-700">Events</p>
+        <p class="text-sm text-gray-600">Event {ptr + 1} of {trace.events.length}</p>
+      </div>
+      <div class="flex gap-2">
+        <button
+          onclick={() => {
+            if (ptr > 0) {
+              ptr -= 1;
+              if (cells[ptr]) {
+                cells[ptr].scrollIntoView({ block: 'center' });
+                const xs = cells[ptr].querySelector('[data-event-title]');
+                if (xs !== null) {
+                  xs.focus();
+                }
+              }
+            }
+          }}
+          disabled={ptr === 0}
+          class="flex-1 px-4 py-2 bg-blue-600 text-white rounded-md font-medium hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed disabled:text-gray-500 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+        >
+          ← Previous
+        </button>
+        <button
+          onclick={() => {
+              if (ptr + 1 < trace.events.length) {
+              ptr += 1;
+              if (cells[ptr]) {
+                cells[ptr].scrollIntoView({ block: 'center' });
+                const xs = cells[ptr].querySelector('[data-event-title]');
+                if (xs !== null) {
+                  xs.focus();
+                }
+              }
+            }
+          }}
+          disabled={ptr + 1 >= trace.events.length}
+          class="flex-1 px-4 py-2 bg-blue-600 text-white rounded-md font-medium hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed disabled:text-gray-500 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+        >
+          Next →
+        </button>
+      </div>
+    </div>
+    <div class="px-2">
     {#each trace.events as e, ei}
-	<a class="cell" class:cell-focus={ei == ptr} onclick={() => ptr = ei}>
-		<div class="title">
-			<div class="info-button">
-				<button onclick={() => toggle_cells_open(ei)}>I</button>
+	<a 
+		data-event-cell
+		class="block text-left text-black border-y border-gray-300 px-3 py-2 cursor-pointer transition-colors" 
+		class:bg-cyan-200={ei == ptr}
+		class:hover:bg-blue-100={ei != ptr}
+		onclick={() => ptr = ei}
+	>
+		<div data-event-title class="flex items-center gap-2" onclick={() => ptr = ei}>
+			<div class="flex-shrink-0">
+				<button 
+					onclick={(e) => { e.stopPropagation(); toggle_cells_open(ei); }}
+					class="px-2 py-1 text-xs font-semibold bg-gray-200 hover:bg-gray-300 rounded transition-colors focus:outline-none focus:ring-2 focus:ring-gray-400"
+				>
+					I
+				</button>
 			</div>
-			<div class="name">
+			<div class="flex-grow min-w-0" onclick={() => ptr = ei}>
 			{#if e.type == "eval"}
-				<i>{trace.processes[e.process].name}</i> ({e.process})
+				<span class="italic">{trace.processes[e.process].name}</span> <span class="text-gray-600">({e.process})</span>
 			{:else if e.type == "drive"}
-				Drive <i>{trace.signals[e.signal].name}</i><br/>
+				Drive <span class="italic">{trace.signals[e.signal].name}</span>
 			{:else if e.type == "time"}
-				Timestep <i>{e.time}</i><br/>
+				Timestep <span class="italic">{e.time}</span>
 			{/if}
 			</div>
-			<div class="stats">
+			<div class="flex-shrink-0 text-sm text-gray-600" onclick={() => ptr = ei}>
 			{#if e.type == "eval"}
 				D {num_driven(e)} W {num_woken_up(e)}
 			{:else if e.type == "drive"}
@@ -85,68 +149,58 @@
 			</div>
 		</div>
 
-		<div class="details" class:details-hidden={!(ei in cells_open)}>
+		<div class="mt-2 pl-6 text-sm" class:hidden={!(ei in cells_open)} onclick={() => ptr = ei}>
 			{#if e.type == "eval"}
-			Driven:
-			<ul>
-			{#each [...Array(e.driven[1] - e.driven[0])] as _, i}
-			{@const drive = trace.driven[e.driven[0] + i]}
-			<li>{trace.signals[drive.signal].name} = {drive.value.slice.length} {display_bits(drive.value.size, drive.value.slice)}</li>
-				<ul>
-				{#each [...Array(drive.woken_range[1] - drive.woken_range[0])] as _, j}
-				{@const woke = trace.woken[drive.woken_range[0] + j]}
-				{@const process = trace.processes[woke]}
-				<li><i>{process.name}</i> ({woke})</li>
-				{/each}
-				</ul>
-			{/each}
-			</ul>
-			Stop-Reason: {e.stop_reason.type} <br/>
-			{:else if e.type == "drive"}
-				{#if e.drive}
-				{@const drive = trace.driven[e.drive]}
-				<li>{trace.signals[drive.signal].name} = {drive.value.slice.length} {display_bits(drive.value.size, drive.value.slice)}</li>
-					<ul>
+			<div class="space-y-2">
+				<div class="font-semibold">Driven:</div>
+				<ul class="list-disc list-inside space-y-1 ml-2">
+				{#each [...Array(e.driven[1] - e.driven[0])] as _, i}
+				{@const drive = trace.driven[e.driven[0] + i]}
+				<li class="text-gray-800">
+					<span class="font-medium">{trace.signals[drive.signal].name}</span> = {drive.value.slice.length} {display_bits(drive.value.size, drive.value.slice)}
+					<ul class="list-circle list-inside ml-4 mt-1 space-y-0.5">
 					{#each [...Array(drive.woken_range[1] - drive.woken_range[0])] as _, j}
 					{@const woke = trace.woken[drive.woken_range[0] + j]}
 					{@const process = trace.processes[woke]}
-					<li><i>{process.name}</i> ({woke})</li>
+					<li class="text-gray-600"><span class="italic">{process.name}</span> ({woke})</li>
 					{/each}
 					</ul>
+				</li>
+				{/each}
+				</ul>
+				<div class="mt-2"><span class="font-semibold">Stop-Reason:</span> {e.stop_reason.type}</div>
+			</div>
+			{:else if e.type == "drive"}
+				{#if e.drive}
+				{@const drive = trace.driven[e.drive]}
+				<div class="space-y-1">
+					<div class="text-gray-800">
+						<span class="font-medium">{trace.signals[drive.signal].name}</span> = {drive.value.slice.length} {display_bits(drive.value.size, drive.value.slice)}
+					</div>
+					<ul class="list-circle list-inside ml-4 space-y-0.5">
+					{#each [...Array(drive.woken_range[1] - drive.woken_range[0])] as _, j}
+					{@const woke = trace.woken[drive.woken_range[0] + j]}
+					{@const process = trace.processes[woke]}
+					<li class="text-gray-600"><span class="italic">{process.name}</span> ({woke})</li>
+					{/each}
+					</ul>
+				</div>
 				{/if}
 			{:else if e.type == "time"}
-				Timestep <i>{e.time}</i><br/>
+				<div>Timestep <span class="italic">{e.time}</span></div>
 			{/if}
 		</div>
 	</a>
     {/each}
+    </div>
 </div>
 
 <style>
-.cell {
-	display: block;
-    text-align: left;
-	color: black;
-    border: 1px solid #000;
-    border-left: none;
-    border-right: none;
-    padding: 4px;
-    
-}
-.cell-focus {
-    background-color: #88CCCC;
-}
-.title {
-    display: flex;
-    flex-direction: horizontal;
-}
-.info-button {
-	margin: 0px 4px 0px 4px;
-}
-.name {
-    flex-grow: 1;
-}
-.details-hidden {
-	display: none;
-}
+  :global(.scrollbar-hide) {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  :global(.scrollbar-hide::-webkit-scrollbar) {
+    display: none;
+  }
 </style>
