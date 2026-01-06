@@ -17,6 +17,7 @@ use super::Diagnostics;
 use super::scope::Scope;
 
 mod system_function_call;
+mod function_call;
 
 #[deny(clippy::question_mark_used)] // Needs to be handled explicitly in the recursion.
 pub fn lower_expr<'a>(
@@ -491,11 +492,34 @@ pub fn lower_expr<'a>(
 
                 result_stack.push(Some((var, ty)));
             }
-            Expr::FunctionCall(..) => {
-                diagnostics.not_yet_implemented(arenas.get_span(expr), "function calls");
-                result_stack.push(None);
-                error = true;
-                continue;
+            Expr::FunctionCall(ident, exprs) => {
+                if !item.dispatched {
+                    item.dispatched = true;
+                    dispatch_stack.push(item);
+                    dispatch_stack.extend(exprs.iter().map(StackItem::new));
+                    continue;
+                }
+
+                let num_args = exprs.len();
+                let result = function_call::lower_function_call(
+                    gl,
+                    arenas,
+                    scope,
+                    diagnostics,
+                    builder,
+                    expr,
+                    *ident,
+                    &result_stack[result_stack.len() - num_args..],
+                );
+
+                result_stack.truncate(result_stack.len() - num_args);
+                match result {
+                    Ok((v, t)) => result_stack.push(Some((v, t))),
+                    Err(_) => {
+                        result_stack.push(None);
+                        error = true;
+                    }
+                }
             }
             Expr::SystemFunctionCall(ident, exprs) => {
                 if !item.dispatched {

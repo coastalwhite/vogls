@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::ops::{Index, IndexMut};
 
-use vogls_ir::SignalKey;
 use vogls_ir::token_range::TokenRange;
+use vogls_ir::{BasicBlockKey, SignalKey, VariableKey};
 
 use crate::ast::AstId;
 use crate::ast::statement::StatementOrNull;
@@ -21,6 +21,15 @@ pub struct Symbol {
     pub name: String,
     pub definition_site: TokenRange,
     pub variant: SymbolVariant,
+}
+
+#[derive(Clone)]
+pub struct FunctionSymbol {
+    pub entry: BasicBlockKey,
+    pub input_vars: Vec<VariableKey>,
+    pub input_types: Vec<VType>,
+    pub output_var: VariableKey,
+    pub output_ty: VType,
 }
 
 #[derive(Clone)]
@@ -51,6 +60,10 @@ impl SymbolTable {
         self.0.push(symbol);
         key
     }
+
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = &Symbol> {
+        self.0.iter()
+    }
 }
 
 #[derive(Clone)]
@@ -68,6 +81,9 @@ pub struct Scope<'a> {
 
     scope_stack: Vec<&'a str>,
     scope_stack_offsets: Vec<usize>,
+
+    pub fns: Vec<FunctionSymbol>,
+    pub fns_lut: HashMap<&'a str, usize>,
 }
 
 impl<'a> Default for Scope<'a> {
@@ -77,6 +93,9 @@ impl<'a> Default for Scope<'a> {
             symbols: SymbolTable::default(),
             scope_stack: Default::default(),
             scope_stack_offsets: Default::default(),
+
+            fns: Default::default(),
+            fns_lut: Default::default(),
         }
     }
 }

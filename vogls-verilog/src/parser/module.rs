@@ -2,17 +2,19 @@ use crate::ast::Identifier;
 use crate::ast::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression};
 use crate::ast::expr::Expr;
 use crate::ast::module::{
-    AlwaysConstruct, CaseGenerateConstruct, CaseGenerateItem, CaseGeneratePattern, ContinousAssign,
-    Dimension, GateInstantiation, GenerateBlock, GenerateRegion, GenvarAssignment,
-    GenvarDeclaration, IfGenerateConstruct, InitialConstruct, InoutDeclaration, InputDeclaration,
-    IntegerDeclaration, ListOfPortConnections, LocalParameterDeclaration, LoopGenerateConstruct,
-    Module, ModuleInstance, ModuleInstantiation, ModuleItem, ModuleOrGenerateItem,
+    AlwaysConstruct, BlockItemDeclaration, CaseGenerateConstruct, CaseGenerateItem,
+    CaseGeneratePattern, ContinousAssign, Dimension, FunctionDeclaration, FunctionRangeOrType,
+    GateInstantiation, GenerateBlock, GenerateRegion, GenvarAssignment, GenvarDeclaration,
+    IfGenerateConstruct, InitialConstruct, InoutDeclaration, InputDeclaration, IntegerDeclaration,
+    ListOfPortConnections, LocalParameterDeclaration, LoopGenerateConstruct, Module,
+    ModuleInstance, ModuleInstantiation, ModuleItem, ModuleOrGenerateItem,
     ModuleOrGenerateItemDeclaration, ModulePorts, NInputGateInstance, NInputGateInstantiation,
     NInputGateType, NameOfGateInstance, NamedParameterAssignment, NamedPortConnection,
     NetAssignment, NetDeclAssignment, NetDeclaration, NetDeclarationNets, NetIdent, NetType,
     NonPortModuleItem, OutputDeclaration, OutputNet, ParamAssignment, ParameterDeclaration,
     ParameterDeclarationTyping, ParameterValueAssignment, Port, PortDeclaration, PortExpression,
-    PortReference, Range, RegDeclaration, TaskDeclaration, VariableType, VariableTypeVariant,
+    PortReference, Range, RegDeclaration, TaskDeclaration, TfInputDeclaration, TfType,
+    VariableType, VariableTypeVariant,
 };
 use crate::ast::statement::{NetLValue, Statement, StatementOrNull};
 use crate::parser::TokenRange;
@@ -611,8 +613,12 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItem {
             | T::KeywordWor
             | T::KeywordReg
             | T::KeywordInteger
+            | T::KeywordReal
+            | T::KeywordRealtime
+            | T::KeywordTime
             | T::KeywordGenvar
-            | T::KeywordTask => {
+            | T::KeywordTask
+            | T::KeywordFunction => {
                 let module_or_generate_item_declaration = parse::<ModuleOrGenerateItemDeclaration>(
                     tkw,
                     sc,
@@ -1171,6 +1177,11 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItemDeclaration {
                 let task_declaration =
                     parse::<TaskDeclaration>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
                 Ok(Self::Task(task_declaration))
+            }
+            T::KeywordFunction => {
+                let function_declaration =
+                    parse::<FunctionDeclaration>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                Ok(Self::Function(function_declaration))
             }
             _ => {
                 diagnostics
@@ -1883,5 +1894,343 @@ impl<'a> Consumable<'a> for Option<GenerateBlock> {
         } else {
             GenerateBlock::consume(tkw, sc, arenas, diagnostics).map(Some)
         }
+    }
+}
+
+impl<'a> Consumable<'a> for BlockItemDeclaration {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 493
+        // block_item_declaration ::=
+        //   { attribute_instance } reg [ signed ] [ range ] list_of_block_variable_identifiers ;
+        // | { attribute_instance } integer list_of_block_variable_identifiers ;
+        // | { attribute_instance } time list_of_block_variable_identifiers ;
+        // | { attribute_instance } real list_of_block_real_identifiers ;
+        // | { attribute_instance } realtime list_of_block_real_identifiers ;
+        // | { attribute_instance } event_declaration
+        // | { attribute_instance } local_parameter_declaration ;
+        // | { attribute_instance } parameter_declaration ;
+
+        match *tkw.try_next(diagnostics.as_deref_mut())?.kind {
+            T::KeywordReg => {
+                tkw.offset += 1;
+                let signed = tkw.next_if_equals(T::KeywordSigned);
+                let mut range = None;
+                if tkw.is_next_equal_to(T::LeftBrace) {
+                    range = Some(parse::<Range>(tkw, sc, arenas, diagnostics.as_deref_mut())?);
+                }
+                let identifiers = parse_one_or_more_delimited::<VariableType>(
+                    tkw,
+                    sc,
+                    arenas,
+                    T::Comma,
+                    diagnostics.as_deref_mut(),
+                )?;
+                tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+                Ok(Self::Reg {
+                    signed,
+                    range,
+                    identifiers,
+                })
+            }
+            T::KeywordInteger => {
+                tkw.offset += 1;
+                let identifiers = parse_one_or_more_delimited::<VariableType>(
+                    tkw,
+                    sc,
+                    arenas,
+                    T::Comma,
+                    diagnostics.as_deref_mut(),
+                )?;
+                tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+                Ok(Self::Integer(identifiers))
+            }
+            T::KeywordLocalParam => {
+                let local_parameter_declaration = parse::<LocalParameterDeclaration>(
+                    tkw,
+                    sc,
+                    arenas,
+                    diagnostics.as_deref_mut(),
+                )?;
+                tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+                Ok(Self::LocalParameterDeclaration(local_parameter_declaration))
+            }
+            T::KeywordParameter => {
+                let parameter_declaration =
+                    parse::<ParameterDeclaration>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+                Ok(Self::ParameterDeclaration(parameter_declaration))
+            }
+            T::KeywordTime | T::KeywordReal | T::KeywordRealtime | T::KeywordEvent => {
+                diagnostics.map(|d| d.incomplete(tkw.offset, "block_item_declaration"));
+                return Err(());
+            }
+            t => {
+                diagnostics.map(|d| d.unexpected_token(tkw.offset - 1, t));
+                Err(())
+            }
+        }
+    }
+}
+
+impl<'a> Consumable<'a> for TfType {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 493
+        // tf_input_declaration ::=
+        //   input [ reg ] [ signed ] [ range ] list_of_port_identifiers
+        // | input task_port_type list_of_port_identifiers
+        // task_port_type ::= integer | real | realtime | time
+
+        let peeked = tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?;
+        match *peeked.kind {
+            T::KeywordReg | T::KeywordSigned | T::LeftBrace => {
+                let reg = tkw.next_if_equals(T::KeywordReg);
+                let signed = tkw.next_if_equals(T::KeywordSigned);
+                let mut range = None;
+                if tkw.is_next_equal_to(T::LeftBrace) {
+                    range = Some(parse::<Range>(tkw, sc, arenas, diagnostics.as_deref_mut())?);
+                }
+                Ok(Self::Net { reg, signed, range })
+            }
+            T::KeywordInteger => {
+                tkw.offset += 1;
+                Ok(Self::Integer)
+            }
+            T::KeywordReal => {
+                tkw.offset += 1;
+                Ok(Self::Real)
+            }
+            T::KeywordRealtime => {
+                tkw.offset += 1;
+                Ok(Self::Realtime)
+            }
+            T::KeywordTime => {
+                tkw.offset += 1;
+                Ok(Self::Time)
+            }
+            _ => Ok(Self::Net {
+                reg: false,
+                signed: false,
+                range: None,
+            }),
+        }
+    }
+}
+
+impl<'a> Consumable<'a> for TfInputDeclaration {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 493
+        // tf_input_declaration ::=
+        //   input [ reg ] [ signed ] [ range ] list_of_port_identifiers
+        // | input task_port_type list_of_port_identifiers
+
+        tkw.next_expect(T::KeywordInput, diagnostics.as_deref_mut())?;
+        let tf_type = TfType::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        let port_identifiers = parse_one_or_more_while::<Identifier>(
+            tkw,
+            sc,
+            arenas,
+            diagnostics.as_deref_mut(),
+            |tkw| {
+                tkw.get(tkw.offset + 1).is_some_and(|t| *t.kind == T::Ident)
+                    && tkw.next_if_equals(T::Comma)
+            },
+        )?;
+
+        Ok(Self {
+            tf_type,
+            port_identifiers,
+        })
+    }
+}
+
+impl<'a> Consumable<'a> for FunctionRangeOrType {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 492
+        // function_range_or_type ::= [ signed ] [ range ] | integer | real | realtime | time
+
+        let peeked = tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?;
+        match *peeked.kind {
+            T::KeywordSigned => {
+                tkw.offset += 1;
+                let mut range = None;
+                if tkw.is_next_equal_to(T::LeftBrace) {
+                    range = Some(parse::<Range>(tkw, sc, arenas, diagnostics.as_deref_mut())?);
+                }
+                Ok(Self::Signed(range))
+            }
+            T::KeywordInteger => {
+                tkw.offset += 1;
+                Ok(Self::Integer)
+            }
+            T::KeywordReal => {
+                tkw.offset += 1;
+                Ok(Self::Real)
+            }
+            T::KeywordRealtime => {
+                tkw.offset += 1;
+                Ok(Self::Realtime)
+            }
+            T::KeywordTime => {
+                tkw.offset += 1;
+                Ok(Self::Time)
+            }
+            _ => {
+                let mut range = None;
+                if tkw.is_next_equal_to(T::LeftBrace) {
+                    range = Some(parse::<Range>(tkw, sc, arenas, diagnostics.as_deref_mut())?);
+                }
+                Ok(Self::Unsigned(range))
+            }
+        }
+    }
+}
+
+impl<'a> Consumable<'a> for FunctionDeclaration {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 492
+        // function_declaration ::=
+        //   function [ automatic ] [ function_range_or_type ] function_identifier ;
+        //     function_item_declaration { function_item_declaration }
+        //     function_statement
+        //   endfunction
+        // | function [ automatic ] [ function_range_or_type ] function_identifier ( function_port_list ) ;
+        //     { block_item_declaration }
+        //     function_statement
+        //   endfunction
+
+        tkw.next_expect(T::KeywordFunction, diagnostics.as_deref_mut())?;
+        let automatic = tkw.next_if_equals(T::KeywordAutomatic);
+        let range_or_type =
+            parse::<FunctionRangeOrType>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        let ident = item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+
+        let (tf_input_decls, block_item_decls) = if tkw.next_if_equals(T::LeftParen) {
+            let tf_input_decls =
+                parse_one_or_more_delimited(tkw, sc, arenas, T::Comma, diagnostics.as_deref_mut())?;
+            tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
+            tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+            let block_item_decls = parse_zero_or_more_while_next::<BlockItemDeclaration>(
+                tkw,
+                sc,
+                arenas,
+                diagnostics.as_deref_mut(),
+                |t| {
+                    matches!(
+                        t,
+                        T::KeywordReg
+                            | T::KeywordInteger
+                            | T::KeywordTime
+                            | T::KeywordReal
+                            | T::KeywordRealtime
+                            | T::KeywordEvent
+                            | T::KeywordLocalParam
+                            | T::KeywordParameter
+                    )
+                },
+            )?;
+
+            (tf_input_decls, block_item_decls)
+        } else {
+            tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+
+            let mut tf_input_decls = Vec::new();
+            let mut tf_input_decls_trs = Vec::new();
+            let mut block_item_decls = Vec::new();
+            let mut block_item_decls_trs = Vec::new();
+
+            loop {
+                let peeked = tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?;
+                match *peeked.kind {
+                    T::KeywordReg
+                    | T::KeywordInteger
+                    | T::KeywordTime
+                    | T::KeywordReal
+                    | T::KeywordRealtime
+                    | T::KeywordEvent
+                    | T::KeywordLocalParam
+                    | T::KeywordParameter => {
+                        let start = tkw.offset;
+                        block_item_decls.push(BlockItemDeclaration::consume(
+                            tkw,
+                            sc,
+                            arenas,
+                            diagnostics.as_deref_mut(),
+                        )?);
+                        let token_range = TokenRange {
+                            start,
+                            end: tkw.offset,
+                        };
+                        block_item_decls_trs.push(token_range);
+                    }
+                    T::KeywordInput => {
+                        let start = tkw.offset;
+                        tf_input_decls.push(TfInputDeclaration::consume(
+                            tkw,
+                            sc,
+                            arenas,
+                            diagnostics.as_deref_mut(),
+                        )?);
+                        let token_range = TokenRange {
+                            start,
+                            end: tkw.offset,
+                        };
+                        tf_input_decls_trs.push(token_range);
+
+                        tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+                    }
+                    _ => break,
+                }
+            }
+
+            let tf_input_decls = arenas.add_range(tf_input_decls, tf_input_decls_trs);
+            let block_item_decls = arenas.add_range(block_item_decls, block_item_decls_trs);
+            (tf_input_decls, block_item_decls)
+        };
+        let statement = parse::<Statement>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::KeywordEndFunction, diagnostics.as_deref_mut())?;
+
+        Ok(Self {
+            automatic,
+            range_or_type,
+            ident,
+            tf_input_decls,
+            block_item_decls,
+            statement,
+        })
     }
 }

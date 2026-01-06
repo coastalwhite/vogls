@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
 pub use vogls_bits::{Bits, VectorSize};
 
-pub use builder::{BasicBlockBuilder, BranchRef, PhiRef, new_process};
+pub use builder::{BasicBlockBuilder, BranchRef, PhiRef, new_process, new_anonymous_builder};
 pub use format::{ContextFormat, DisplayContext};
 use indexmap::IndexSet;
 use slotmap::{SlotMap, new_key_type};
@@ -104,6 +104,13 @@ impl BasicBlock {
             i.map_bb(&mut f);
         }
         self.terminator.map_bb(f);
+    }
+
+    pub fn map_vars(&mut self, mut f: impl FnMut(VariableKey) -> VariableKey) {
+        for i in &mut self.instrs {
+            i.map_vars(&mut f);
+        }
+        self.terminator.map_vars(f);
     }
 }
 

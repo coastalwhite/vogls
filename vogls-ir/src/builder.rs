@@ -42,6 +42,31 @@ pub fn new_process(
         bbname_offset: 0,
     }
 }
+pub fn new_anonymous_builder(
+    gl: &'_ mut GlobalContext,
+    name: String,
+    origin: TokenRange,
+) -> BasicBlockBuilder {
+    let bb_key = gl.bbs.insert(BasicBlock {
+        name: String::from("entry"),
+        instrs: Vec::new(),
+        terminator: BasicBlockTerminator::Halt,
+    });
+    let process_key = gl.processes.insert(Process {
+        name,
+        entry: bb_key,
+        origin,
+        ins: IndexSet::new(),
+        outs: IndexSet::new(),
+    });
+    BasicBlockBuilder {
+        key: bb_key,
+        process: process_key,
+        instrs: Vec::new(),
+        tmp_offset: 0,
+        bbname_offset: 0,
+    }
+}
 
 pub struct PhiRef(BasicBlockKey, usize);
 pub struct BranchRef(BasicBlockKey);

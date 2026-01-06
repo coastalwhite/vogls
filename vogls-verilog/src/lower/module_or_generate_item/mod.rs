@@ -1,17 +1,17 @@
 use vogls_ir::vcd::NetType;
 use vogls_ir::{
-    Bits, ConnectionDirection, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE, Signal, SignalKey,
-    VectorSize, new_process,
+    BasicBlockBuilder, Bits, ConnectionDirection, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE,
+    Signal, SignalKey, VectorSize, new_anonymous_builder, new_process,
 };
 
 use crate::ast::constant_expr::ConstantMinTypMaxExpression;
 use crate::ast::module::{
-    Dimension, GateInstantiation, GenerateBlock, GenvarAssignment, GenvarDeclaration,
-    IfGenerateConstruct, ListOfPortConnections, LocalParameterDeclaration, LoopGenerateConstruct,
-    ModuleInstance, ModuleInstantiation, ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration,
-    NInputGateInstance, NInputGateType, NamedParameterAssignment, NamedPortConnection,
-    NetDeclAssignment, NetDeclarationNets, ParamAssignment, ParameterValueAssignment,
-    TaskDeclaration, VariableType, VariableTypeVariant,
+    Dimension, FunctionDeclaration, FunctionRangeOrType, GateInstantiation, GenerateBlock,
+    GenvarAssignment, GenvarDeclaration, IfGenerateConstruct, ListOfPortConnections,
+    LocalParameterDeclaration, LoopGenerateConstruct, ModuleInstance, ModuleInstantiation,
+    ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration, NInputGateInstance, NInputGateType,
+    NamedParameterAssignment, NamedPortConnection, NetDeclAssignment, NetDeclarationNets,
+    ParamAssignment, ParameterValueAssignment, TaskDeclaration, VariableType, VariableTypeVariant,
 };
 use crate::ast::{AstId, AstIdRange};
 use crate::lower::assign::{assign_net_lvalue, net_lvalue_width};
@@ -27,6 +27,8 @@ use crate::parser::AstArenas;
 
 use super::scope::Scope;
 use super::{Diagnostics, ModuleContext, ModuleInitialization};
+
+mod function;
 
 pub fn lower<'a>(
     gl: &mut GlobalContext,
@@ -263,6 +265,9 @@ pub fn lower<'a>(
                         variant: SymbolVariant::Task(*statement_or_null),
                     });
                     scope.push(name, symbol_key);
+                }
+                ModuleOrGenerateItemDeclaration::Function(id) => {
+                    function::lower(gl, arenas, mc, scope, diagnostics, *id)?
                 }
             }
         }

@@ -417,7 +417,7 @@ pub enum ModuleOrGenerateItemDeclaration {
     // Event(AstId<EventDeclaration>),
     Genvar(AstId<GenvarDeclaration>),
     Task(AstId<TaskDeclaration>),
-    // Function(AstId<FunctionDeclaration>),
+    Function(AstId<FunctionDeclaration>),
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 490
@@ -514,6 +514,82 @@ pub struct TaskDeclaration {
     pub automatic: bool,
     pub statement_or_null: AstId<StatementOrNull>,
 }
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 492
+// function_declaration ::=
+//   function [ automatic ] [ function_range_or_type ] function_identifier ;
+//     function_item_declaration { function_item_declaration }
+//     function_statement
+//   endfunction
+// | function [ automatic ] [ function_range_or_type ] function_identifier ( function_port_list ) ;
+//     { block_item_declaration }
+//     function_statement
+//   endfunction
+#[derive(Clone, Copy)]
+pub struct FunctionDeclaration {
+    pub automatic: bool,
+    pub range_or_type: AstId<FunctionRangeOrType>,
+    pub ident: AstItem<Identifier>,
+    pub tf_input_decls: AstIdRange<TfInputDeclaration>,
+    pub block_item_decls: AstIdRange<BlockItemDeclaration>,
+    pub statement: AstId<Statement>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 492
+// function_range_or_type ::= [ signed ] [ range ] | integer | real | realtime | time
+#[derive(Clone, Copy)]
+pub enum FunctionRangeOrType {
+    Signed(Option<AstId<Range>>),
+    Unsigned(Option<AstId<Range>>),
+    Integer,
+    Real,
+    Realtime,
+    Time,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 493
+// tf_input_declaration ::=
+//   input [ reg ] [ signed ] [ range ] list_of_port_identifiers
+// | input task_port_type list_of_port_identifiers
+#[derive(Clone, Copy)]
+pub struct TfInputDeclaration {
+    pub tf_type: TfType,
+    pub port_identifiers: AstIdRange<Identifier>,
+}
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 493
+// task_port_type ::= integer | real | realtime | time
+#[derive(Clone, Copy)]
+pub enum TfType {
+    Net { reg: bool, signed: bool, range: Option<AstId<Range>> },
+    Integer,
+    Real,
+    Realtime,
+    Time,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 493
+// block_item_declaration ::=
+//   { attribute_instance } reg [ signed ] [ range ] list_of_block_variable_identifiers ;
+// | { attribute_instance } integer list_of_block_variable_identifiers ;
+// | { attribute_instance } time list_of_block_variable_identifiers ;
+// | { attribute_instance } real list_of_block_real_identifiers ;
+// | { attribute_instance } realtime list_of_block_real_identifiers ;
+// | { attribute_instance } event_declaration
+// | { attribute_instance } local_parameter_declaration ;
+// | { attribute_instance } parameter_declaration ;
+#[derive(Clone, Copy)]
+pub enum BlockItemDeclaration {
+    Reg { signed: bool, range: Option<AstId<Range>>, identifiers: AstIdRange<VariableType> },
+    Integer(AstIdRange<VariableType>),
+    // @Incomplete
+    Time,
+    Real,
+    Realtime,
+    Event,
+    LocalParameterDeclaration(AstId<LocalParameterDeclaration>),
+    ParameterDeclaration(AstId<ParameterDeclaration>),
+}
+
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
 // non_port_module_item ::=

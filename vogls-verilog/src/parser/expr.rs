@@ -25,6 +25,7 @@ pub(crate) enum StackItem {
         BraceVariant,
     ),
     SystemFnCall(AstItem<SystemTaskIdentifier>, Vec<Expr>, Vec<TokenRange>),
+    FnCall(AstItem<Identifier>, Vec<Expr>, Vec<TokenRange>),
     Unary(UnaryOperator),
     Binary(BinaryOperator, AstId<Expr>),
     TernaryS1(AstId<Expr>),
@@ -122,6 +123,8 @@ impl<'a> Consumable<'a> for Expr {
 
                         if tkw.next_if_equals(T::LeftBrace) {
                             deepen!(StackItem::Brace(ident, Vec::new(), Vec::new()), 0, span)
+                        } else if tkw.next_if_equals(T::LeftParen) {
+                            deepen!(StackItem::FnCall(ident, Vec::new(), Vec::new()), 0, span)
                         } else {
                             (Expr::Ident(ident, AstIdRange::default(), None), span)
                         }
@@ -392,6 +395,23 @@ impl<'a> Consumable<'a> for Expr {
                             }
                             T::Comma => {
                                 deepen!(StackItem::SystemFnCall(ident, params, trs), 0, location)
+                            }
+                            t => {
+                                diagnostics.map(|d| d.unexpected_token(tkw.offset - 1, t));
+                                return Err(());
+                            }
+                        }
+                    }
+                    StackItem::FnCall(ident, mut params, mut trs) => {
+                        params.push(current.0);
+                        trs.push(current.1);
+                        match *tkw.try_next(diagnostics.as_deref_mut())?.kind {
+                            T::RightParen => {
+                                let params = arenas.add_range(params, trs);
+                                current = (Expr::FunctionCall(ident, params), location);
+                            }
+                            T::Comma => {
+                                deepen!(StackItem::FnCall(ident, params, trs), 0, location)
                             }
                             t => {
                                 diagnostics.map(|d| d.unexpected_token(tkw.offset - 1, t));
