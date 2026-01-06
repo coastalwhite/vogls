@@ -20,53 +20,30 @@ pub enum Base {
     Hexadecimal,
 }
 
-// pub fn skip_sized_number(s: &[u8], i: &mut usize) -> Option<()> {
-//     if matches!(s.get(*i), Some(b'0'..=b'9' | b'_')) {
-//         skip_decimal(s, i);
-//     }
-//     if s.get(*i).copied() != Some(b'\'') {
-//         return None;
-//     }
-//     *i += 1;
-//
-//     skip_sign(s, i);
-//     let base = take_base(s, i)?;
-//
-//     match base {
-//         Base::Decimal => matches!(s.get(*i), Some(b'0'..=b'9' | b'_')).then(|| skip_decimal(s, i)),
-//         Base::Binary => matches!(s.get(*i), Some(b'0'..=b'1' | b'_')).then(|| skip_binary(s, i)),
-//         Base::Octal => matches!(s.get(*i), Some(b'0'..=b'7' | b'_')).then(|| skip_octal(s, i)),
-//         Base::Hexadecimal => matches!(
-//             s.get(*i),
-//             Some(b'0'..=b'9' | b'a'..b'f' | b'A'..b'F' | b'_')
-//         )
-//         .then(|| skip_hexadecimal(s, i)),
-//     }
-// }
 pub fn skip_decimal(s: &[u8], i: &mut usize) {
     while let Some(b) = s.get(*i)
-        && matches!(b, b'0'..=b'9' | b'_')
+        && matches!(b, b'0'..=b'9' | b'x' | b'z' | b'_')
     {
         *i += 1;
     }
 }
 pub fn skip_binary(s: &[u8], i: &mut usize) {
     while let Some(b) = s.get(*i)
-        && matches!(b, b'0'..=b'1' | b'_')
+        && matches!(b, b'0'..=b'1' | b'x' | b'z' | b'_')
     {
         *i += 1;
     }
 }
 pub fn skip_octal(s: &[u8], i: &mut usize) {
     while let Some(b) = s.get(*i)
-        && matches!(b, b'0'..=b'7' | b'_')
+        && matches!(b, b'0'..=b'7' | b'x' | b'z' | b'_')
     {
         *i += 1;
     }
 }
 pub fn skip_hexadecimal(s: &[u8], i: &mut usize) {
     while let Some(b) = s.get(*i)
-        && matches!(b, b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F' | b'_')
+        && matches!(b, b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F' | b'x' | b'z' | b'_')
     {
         *i += 1;
     }

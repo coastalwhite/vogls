@@ -296,7 +296,9 @@ pub fn run(
         }
         return Err("top_level fetch_module error".into());
     };
-    assert!(top_level_io.ports.is_empty());
+    if !top_level_io.ports.is_empty() {
+        return Err("top_level has input and output ports".into());
+    }
     let mut hierarchy = Hierarchy::new(tl_module_name.to_string());
     let top_level_key = hierarchy.top_level_key();
     next_modules.push(ModuleInitialization {

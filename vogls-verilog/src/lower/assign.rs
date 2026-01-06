@@ -5,7 +5,7 @@ use vogls_ir::{
 use crate::ast::constant_expr::ConstantRangeExpression;
 use crate::ast::statement::{NetLValue, NetLValueFlat, VariableLValue, VariableLValueFlat};
 use crate::ast::{AstId, RangeExpression};
-use crate::lower::constant_expr::eval_constant_expr;
+use crate::lower::expression::eval_constant_expr;
 use crate::lower::expression::{self, lower_expr, sign_or_zero_extend, truncate_or_extend};
 use crate::lower::msb_lsb_to_width;
 use crate::lower::scope::SymbolVariant;

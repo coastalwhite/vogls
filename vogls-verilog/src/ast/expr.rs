@@ -35,6 +35,7 @@ pub enum UnaryOperator {
 
 #[derive(Debug, Clone, Copy)]
 pub enum BinaryOperator {
+    Power,
     Multiply,
     Divide,
     Modulus,
@@ -113,6 +114,7 @@ impl BinaryOperator {
     fn into_str(self) -> &'static str {
         use BinaryOperator as B;
         match self {
+            B::Power => "**",
             B::Multiply => "*",
             B::Divide => "/",
             B::Modulus => "%",

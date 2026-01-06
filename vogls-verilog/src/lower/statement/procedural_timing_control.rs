@@ -8,9 +8,9 @@ use crate::ast::statement::{
     DelayControl, DelayValue, EventControl, EventExpressionPrimary, ProceduralTimingControl,
     StatementOrNull,
 };
-use crate::lower::{ModuleContext, WatchCondition};
 use crate::lower::expression::lower_expr;
 use crate::lower::scope::{Scope, SymbolVariant};
+use crate::lower::{ModuleContext, WatchCondition};
 use crate::parser::AstArenas;
 
 use super::{Diagnostics, Region};
@@ -70,6 +70,7 @@ pub fn lower<'a>(
                         statement,
                     )?;
                 }
+                DelayControl::MinTypMax(_) => todo!(),
             }
         }
         ProceduralTimingControl::EventControl(event_control) => match arenas.get(*event_control) {
@@ -153,8 +154,7 @@ pub fn lower<'a>(
                         diagnostics.var_not_found(arenas, *ast_ident);
                         return Err(());
                     };
-                    let SymbolVariant::Signal(s) = &scope.symbols[symbol_key].variant
-                    else {
+                    let SymbolVariant::Signal(s) = &scope.symbols[symbol_key].variant else {
                         panic!("not a signal");
                     };
                     let key = s.key;

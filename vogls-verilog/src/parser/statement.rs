@@ -2,11 +2,12 @@ use vogls_ir::token_range::TokenRange;
 
 use crate::ast::constant_expr::{ConstantExpr, ConstantRangeExpression};
 use crate::ast::expr::Expr;
+use crate::ast::module::BlockItemDeclaration;
 use crate::ast::statement::{
     Block, BlockingAssignment, CaseItem, CaseItemPattern, CaseStatement, CaseStatementVariant,
     ConditionalStatement, DelayControl, DelayOrEventControl, DelayValue, EventControl,
     EventExpression, EventExpressionPrimary, IfBranch, LoopStatement, LoopStatementVariant,
-    NetLValue, NetLValueFlat, NonBlockingAssignment, ProceduralTimingControl,
+    MinTypMaxExpression, NetLValue, NetLValueFlat, NonBlockingAssignment, ProceduralTimingControl,
     ProceduralTimingControlStatement, SeqBlock, Statement, StatementContent, StatementOrNull,
     SystemTaskEnable, SystemTaskIdentifier, TaskEnable, VariableAssignment, VariableLValue,
     VariableLValueFlat, WaitStatement,
@@ -610,12 +611,37 @@ impl<'a> Consumable<'a> for Block {
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ()> {
+        use Token as T;
+
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
         // block_identifier { block_item_declaration }
 
         let block_identifier =
             item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
-        Ok(Self { block_identifier })
+        let block_item_decls = parse_zero_or_more_while_next::<BlockItemDeclaration>(
+            tkw,
+            sc,
+            arenas,
+            diagnostics.as_deref_mut(),
+            |t| {
+                matches!(
+                    t,
+                    T::KeywordReg
+                        | T::KeywordInteger
+                        | T::KeywordTime
+                        | T::KeywordReal
+                        | T::KeywordRealtime
+                        | T::KeywordEvent
+                        | T::KeywordLocalParam
+                        | T::KeywordParameter
+                )
+            },
+        )?;
+
+        Ok(Self {
+            block_identifier,
+            block_item_decls,
+        })
     }
 }
 
@@ -673,10 +699,16 @@ impl<'a> Consumable<'a> for DelayControl {
         // | # ( mintypmax_expression )
 
         tkw.next_expect(T::Hash, diagnostics.as_deref_mut())?;
-        // @Incomplete: | # ( mintypmax_expression )
-        let delay_value = parse::<DelayValue>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
 
-        Ok(Self::DelayValue(delay_value))
+        if tkw.next_if_equals(T::LeftParen) {
+            let mintypmax =
+                parse::<MinTypMaxExpression>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+            tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
+            Ok(Self::MinTypMax(mintypmax))
+        } else {
+            let delay_value = parse::<DelayValue>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+            Ok(Self::DelayValue(delay_value))
+        }
     }
 }
 
@@ -712,6 +744,39 @@ impl<'a> Consumable<'a> for DelayValue {
                 diagnostics.map(|d| d.incomplete(tkw.offset, "delay_value"));
                 Err(())
             }
+        }
+    }
+}
+
+impl<'a> Consumable<'a> for MinTypMaxExpression {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 505
+        // mintypmax_expression ::=
+        //   expression
+        // | expression : expression : expression
+
+        let min_typical = parse::<Expr>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        if tkw.next_if_equals(T::Colon) {
+            let typical = parse::<Expr>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+            tkw.next_expect(T::Colon, diagnostics.as_deref_mut())?;
+            let max = parse::<Expr>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+
+            Ok(Self {
+                typical,
+                min_max: Some((min_typical, max)),
+            })
+        } else {
+            Ok(Self {
+                typical: min_typical,
+                min_max: None,
+            })
         }
     }
 }

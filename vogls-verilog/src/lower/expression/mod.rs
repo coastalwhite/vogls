@@ -7,17 +7,18 @@ use vogls_ir::{
 
 use crate::ast::AstId;
 use crate::ast::expr::{BinaryOperator, BitSlice, Expr, Replication, UnaryOperator};
-use crate::lower::constant_expr::eval_constant_expr;
 use crate::lower::scope::SymbolVariant;
 use crate::lower::{VType, msb_lsb_to_width};
 use crate::number::Sign;
 use crate::parser::AstArenas;
+pub use constant_expr::eval_constant_expr;
 
 use super::Diagnostics;
 use super::scope::Scope;
 
 mod system_function_call;
 mod function_call;
+mod constant_expr;
 
 #[deny(clippy::question_mark_used)] // Needs to be handled explicitly in the recursion.
 pub fn lower_expr<'a>(
@@ -109,6 +110,7 @@ pub fn lower_expr<'a>(
 
                 use BinaryOperator as O;
                 let op = match op {
+                    O::Power => nyi!("power"),
                     O::Multiply => bin_multiply,
                     O::Divide => bin_divide,
                     O::Modulus => bin_modulus,

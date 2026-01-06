@@ -3,13 +3,12 @@ use vogls_ir::{Bits, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE};
 use crate::ast::AstId;
 use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::expr::{BinaryOperator, Expr};
-use crate::lower::scope::SymbolVariant;
+use crate::lower::scope::{Scope, SymbolVariant};
+use crate::lower::vvalue::VValue;
 use crate::number::Sign;
 use crate::parser::AstArenas;
 
 use super::Diagnostics;
-use super::scope::Scope;
-use super::vvalue::VValue;
 
 pub fn eval_constant_expr<'a>(
     _gl: &GlobalContext,
@@ -60,6 +59,7 @@ pub fn eval_constant_expr<'a>(
 
                 use BinaryOperator as O;
                 let result = match op {
+                    O::Power => todo!("nyi: power"),
                     O::Multiply => VValue::multiply(lhs, rhs),
                     O::Divide => VValue::divide(lhs, rhs),
                     O::Modulus => VValue::remainder(lhs, rhs),
@@ -196,11 +196,33 @@ pub fn eval_constant_expr<'a>(
                 }
                 result_stack.push(Some(value));
             }
-            Expr::FunctionCall(..)
-            | Expr::SystemFunctionCall(..)
-            | Expr::String(..)
-            | Expr::Unary(..)
-            | Expr::Replication(..) => {
+            Expr::SystemFunctionCall(ident, exprs) => {
+                if !item.dispatched {
+                    item.dispatched = true;
+                    dispatch_stack.push(item);
+                    if let Some(exprs) = exprs {
+                        dispatch_stack.extend(exprs.iter().map(|expr| StackItem {
+                            expr,
+                            dispatched: false,
+                        }));
+                    }
+                    continue;
+                }
+
+                let num_args = exprs.map_or(0, |e| e.len());
+                let result = super::system_function_call::eval_constant(
+                    arenas,
+                    diagnostics,
+                    expr,
+                    *ident,
+                    &result_stack[result_stack.len() - num_args..],
+                );
+
+                result_stack.truncate(result_stack.len() - num_args);
+                error |= result.is_err();
+                result_stack.push(result.ok());
+            }
+            Expr::FunctionCall(..) | Expr::String(..) | Expr::Unary(..) | Expr::Replication(..) => {
                 result_stack.push(None);
                 diagnostics.not_yet_implemented(
                     arenas.get_span(item.expr),

@@ -7,15 +7,16 @@ use vogls_ir::{
 use crate::ast::constant_expr::ConstantMinTypMaxExpression;
 use crate::ast::module::{
     Dimension, GateInstantiation, GenerateBlock, GenvarAssignment, GenvarDeclaration,
-    IfGenerateConstruct, ListOfPortConnections, LocalParameterDeclaration, LoopGenerateConstruct,
-    ModuleInstance, ModuleInstantiation, ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration,
-    NInputGateInstance, NInputGateType, NamedParameterAssignment, NamedPortConnection,
-    NetDeclAssignment, NetDeclarationNets, ParamAssignment, ParameterValueAssignment,
-    TaskDeclaration, VariableType, VariableTypeVariant,
+    IfGenerateConstruct, ListOfPortConnections, LoopGenerateConstruct, ModuleInstance,
+    ModuleInstantiation, ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration, NInputGateInstance,
+    NInputGateType, NamedParameterAssignment, NamedPortConnection, NetDeclAssignment,
+    NetDeclarationNets, ParameterValueAssignment, TaskDeclaration, VariableType,
+    VariableTypeVariant,
 };
 use crate::ast::{AstId, AstIdRange};
 use crate::lower::assign::{assign_net_lvalue, net_lvalue_width};
 use crate::lower::expression::{self, lower_expr, truncate_or_extend};
+use crate::lower::parameter::push_localparameter_into_scope;
 use crate::lower::scope::{SignalSymbol, Symbol, SymbolVariant};
 use crate::lower::statement::statements_to_process;
 use crate::lower::vvalue::VValue;
@@ -272,36 +273,7 @@ pub fn lower<'a>(
             }
         }
         ModuleOrGenerateItem::LocalParameterDeclaration(id) => {
-            let LocalParameterDeclaration {
-                typing,
-                assignments,
-            } = arenas.get(*id);
-
-            // @FIXME: Coerce value to ty.
-            let _ty = super::parameter::parameter_typing_to_type(
-                gl,
-                arenas,
-                scope,
-                diagnostics,
-                *typing,
-            )?;
-            for assignment in assignments.iter() {
-                let ParamAssignment { param, constant } = arenas.get(assignment);
-                let key = arenas.get_ident(param.item.0);
-                let value = arenas.get(*constant);
-                match value {
-                    ConstantMinTypMaxExpression::Single(id) => {
-                        let value = eval_constant_expr(gl, arenas, &scope, diagnostics, *id)?;
-                        let symbol_key = scope.symbols.insert(Symbol {
-                            name: key.to_string(),
-                            definition_site: arenas.get_item_span(*param),
-                            variant: SymbolVariant::Constant(value.clone()),
-                        });
-                        scope.push(key, symbol_key);
-                    }
-                    ConstantMinTypMaxExpression::MinTypMax { .. } => todo!(),
-                }
-            }
+            push_localparameter_into_scope(gl, arenas, scope, diagnostics, *id)?
         }
         ModuleOrGenerateItem::ParameterOverride => todo!(),
         ModuleOrGenerateItem::ContinuousAssign(id) => {

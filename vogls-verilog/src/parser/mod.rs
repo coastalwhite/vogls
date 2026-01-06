@@ -366,13 +366,25 @@ impl<'a> Consumable<'a> for StringRef {
         let content = &tkw.content(file)[span.as_range()];
         let content = &content[1..content.len() - 1];
 
-        if content.contains("\\") {
-            todo!()
-        }
-
         let start = arenas.text.len();
-        let end = start + content.len();
-        arenas.text.push_str(content);
+        let mut i = 0;
+        while let Some(bs_pos) = content[i..].find('\\') {
+            arenas.text.push_str(&content[i..][..bs_pos]);
+            match content.as_bytes()[i + bs_pos + 1] {
+                b'\\' => arenas.text.push('\\'),
+                b'n' => arenas.text.push('\n'),
+                b'r' => arenas.text.push('\r'),
+                b't' => arenas.text.push('\t'),
+                _ => {
+                    i += bs_pos + 1;
+                    continue;
+                }
+            }
+            i += bs_pos + 2;
+        }
+        arenas.text.push_str(&content[i..]);
+        let end = arenas.text.len();
+
         Ok(Self(TextRef { start, end }))
     }
 }

@@ -42,16 +42,16 @@ fn token_to_prefix_op(t: Token) -> Option<(u8, UnaryOperator)> {
     use Token as T;
     use UnaryOperator as U;
     match t {
-        T::Bang => Some((26, U::LogicalNegation)),
-        T::Tilde => Some((26, U::BitwiseNegation)),
-        T::Ampersand => Some((26, U::ReductionAnd)),
-        T::Bar => Some((26, U::ReductionOr)),
-        T::TildeAmpersand => Some((26, U::ReductionNand)),
-        T::TildeBar => Some((26, U::ReductionNor)),
-        T::Caret => Some((26, U::ReductionXor)),
-        T::TildeCaret | T::CaretTilde => Some((26, U::ReductionXnor)),
-        T::Plus => Some((25, U::SignPlus)),
-        T::Minus => Some((25, U::SignMinus)),
+        T::Bang => Some((27, U::LogicalNegation)),
+        T::Tilde => Some((27, U::BitwiseNegation)),
+        T::Ampersand => Some((27, U::ReductionAnd)),
+        T::Bar => Some((27, U::ReductionOr)),
+        T::TildeAmpersand => Some((27, U::ReductionNand)),
+        T::TildeBar => Some((27, U::ReductionNor)),
+        T::Caret => Some((27, U::ReductionXor)),
+        T::TildeCaret | T::CaretTilde => Some((27, U::ReductionXnor)),
+        T::Plus => Some((27, U::SignPlus)),
+        T::Minus => Some((27, U::SignMinus)),
         _ => None,
     }
 }
@@ -60,6 +60,7 @@ fn token_to_binary_op(t: Token) -> Option<(u8, u8, BinaryOperator)> {
     use BinaryOperator as B;
     use Token as T;
     match t {
+        T::DoubleStar => Some((25, 26, B::Power)),
         T::Star => Some((23, 24, B::Multiply)),
         T::Slash => Some((23, 24, B::Divide)),
         T::Procent => Some((23, 24, B::Modulus)),

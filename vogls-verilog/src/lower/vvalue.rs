@@ -228,6 +228,14 @@ impl VValue {
             Self::String(_) => todo!(),
         }
     }
+
+    pub fn clog2(&self) -> u32 {
+        match self {
+            Self::SignedNet(bits) => bits.size().get() - bits.leading_zeroes(),
+            Self::UnsignedNet(bits) => bits.size().get() - bits.leading_zeroes(),
+            Self::String(_) => todo!(),
+        }
+    }
 }
 
 macro_rules! impl_arithmetic {

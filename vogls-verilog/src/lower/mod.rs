@@ -1,5 +1,4 @@
 mod assign;
-mod constant_expr;
 mod diagnostics;
 mod expression;
 mod module_or_generate_item;
@@ -22,7 +21,6 @@ use std::collections::{HashMap, HashSet};
 
 use scope::Scope;
 
-use constant_expr::eval_constant_expr;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::vcd::NetType;
 use vogls_ir::{
@@ -33,14 +31,16 @@ use vogls_ir::{
 use crate::ast::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression};
 use crate::ast::expr::{BitSlice, Expr};
 use crate::ast::module::{
-    GenerateRegion, Module, ModuleItem, ModulePorts, NonPortModuleItem, ParamAssignment,
-    ParameterDeclaration, Port, PortDeclaration, PortExpression, PortReference, Range,
+    GenerateRegion, Module, ModuleItem, ModuleOrGenerateItem, ModulePorts, NonPortModuleItem,
+    ParamAssignment, ParameterDeclaration, Port, PortDeclaration, PortExpression, PortReference,
+    Range,
 };
 use crate::ast::{AstId, Identifier};
 use crate::hierarchy::{ModuleBuilder, ModuleKey};
 use crate::parser::AstArenas;
 
-use self::expression::{lower_expr, truncate_or_extend};
+use self::expression::{eval_constant_expr, lower_expr, truncate_or_extend};
+use self::parameter::push_localparameter_into_scope;
 use self::scope::{SignalSymbol, Symbol, SymbolVariant};
 pub use self::vtype::VType;
 use self::vvalue::VValue;
@@ -71,6 +71,53 @@ pub struct ModuleArgs {
     pub signals: Vec<SignalKey>,
 }
 
+pub fn append_parameter_declaration<'a>(
+    gl: &mut GlobalContext,
+    arenas: &'a AstArenas,
+    scope: &mut Scope<'a>,
+    diagnostics: &mut Diagnostics,
+    params: &mut Vec<&'a str>,
+    param_lut: &mut HashMap<&'a str, usize>,
+    param_values: &mut Vec<VValue>,
+    p: AstId<ParameterDeclaration>,
+) -> Result<(), ()> {
+    let ParameterDeclaration {
+        typing,
+        assignments,
+    } = arenas.get(p);
+
+    let mut error = false;
+    // @FIXME: Coerce value to ty.
+    let _ty = parameter::parameter_typing_to_type(gl, arenas, scope, diagnostics, *typing)?;
+    for assignment in assignments.iter() {
+        let ParamAssignment { param, constant } = arenas.get(assignment);
+        let key = arenas.get_ident(param.item.0);
+        let value = arenas.get(*constant);
+        match value {
+            ConstantMinTypMaxExpression::Single(id) => {
+                let value = eval_constant_expr(gl, arenas, &scope, diagnostics, *id)?;
+                let symbol_key = scope.symbols.insert(Symbol {
+                    name: key.to_string(),
+                    definition_site: arenas.get_item_span(*param),
+                    variant: SymbolVariant::Constant(value.clone()),
+                });
+                scope.push(key, symbol_key);
+                param_values.push(value);
+            }
+            ConstantMinTypMaxExpression::MinTypMax { .. } => todo!(),
+        }
+
+        if param_lut.insert(key, params.len()).is_some() {
+            diagnostics.duplicate_definition(arenas, *param);
+            error = true;
+            continue;
+        }
+        params.push(key);
+    }
+
+    if error { Err(()) } else { Ok(()) }
+}
+
 pub fn fetch_module_interface<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
@@ -94,51 +141,20 @@ pub fn fetch_module_interface<'a>(
     let mut error = false;
     if let Some(parameters) = module_parameter_port_list {
         for p in parameters.iter() {
-            let ParameterDeclaration {
-                typing,
-                assignments,
-            } = arenas.get(p);
-            // @FIXME: Coerce value to ty.
-            let _ty =
-                parameter::parameter_typing_to_type(gl, arenas, &mut scope, diagnostics, *typing)?;
-            for assignment in assignments.iter() {
-                let ParamAssignment { param, constant } = arenas.get(assignment);
-                let key = arenas.get_ident(param.item.0);
-                let value = arenas.get(*constant);
-                match value {
-                    ConstantMinTypMaxExpression::Single(id) => {
-                        let value = eval_constant_expr(gl, arenas, &scope, diagnostics, *id)?;
-                        let symbol_key = scope.symbols.insert(Symbol {
-                            name: key.to_string(),
-                            definition_site: arenas.get_item_span(*param),
-                            variant: SymbolVariant::Constant(value.clone()),
-                        });
-                        scope.push(key, symbol_key);
-                        param_values.push(value);
-                    }
-                    ConstantMinTypMaxExpression::MinTypMax { .. } => todo!(),
-                }
-
-                if param_lut.insert(key, params.len()).is_some() {
-                    diagnostics.duplicate_definition(arenas, *param);
-                    error = true;
-                    continue;
-                }
-                params.push(key);
-            }
+            error |= append_parameter_declaration(
+                gl,
+                arenas,
+                &mut scope,
+                diagnostics,
+                &mut params,
+                &mut param_lut,
+                &mut param_values,
+                p,
+            )
+            .is_err();
         }
     }
 
-    for (key, value, tr) in parameters {
-        let Some(param_idx) = param_lut.get(key) else {
-            diagnostics.not_yet_implemented(*tr, "missing parameter");
-            error = true;
-            continue;
-        };
-        let symbol_key = scope.get(key).unwrap();
-        scope.symbols[symbol_key].variant = SymbolVariant::Constant(value.clone());
-        param_values[*param_idx] = value.clone();
-    }
     if error {
         return Err(());
     }
@@ -177,64 +193,94 @@ pub fn fetch_module_interface<'a>(
 
             let mut port_seen = HashSet::<&str>::new();
             for item in module_items.iter() {
-                let ModuleItem::PortDeclaration(ast_port_declaration) = arenas.get(item) else {
-                    continue;
-                };
+                match arenas.get(item) {
+                    ModuleItem::PortDeclaration(ast_port_declaration) => {
+                        let port_declaration = arenas.get(*ast_port_declaration);
+                        let (direction, range, signed, identifiers) = match port_declaration {
+                            PortDeclaration::Inout(id) => {
+                                let inout = arenas.get(*id);
+                                (
+                                    ConnectionDirection::Both,
+                                    inout.range,
+                                    inout.signed,
+                                    inout.port_identifiers,
+                                )
+                            }
+                            PortDeclaration::Input(id) => {
+                                let input = arenas.get(*id);
+                                (
+                                    ConnectionDirection::In,
+                                    input.range,
+                                    input.signed,
+                                    input.port_identifiers,
+                                )
+                            }
+                            PortDeclaration::Output(id) => {
+                                let output = arenas.get(*id);
+                                (
+                                    ConnectionDirection::Out,
+                                    output.range,
+                                    output.signed,
+                                    output.identifiers,
+                                )
+                            }
+                        };
+                        let (msb, lsb, size) = match range {
+                            None => (0, 0, SCALAR_VSIZE),
+                            Some(range) => evaluate_range(gl, arenas, &scope, diagnostics, range)?,
+                        };
 
-                let port_declaration = arenas.get(*ast_port_declaration);
-                let (direction, range, signed, identifiers) = match port_declaration {
-                    PortDeclaration::Inout(id) => {
-                        let inout = arenas.get(*id);
-                        (
-                            ConnectionDirection::Both,
-                            inout.range,
-                            inout.signed,
-                            inout.port_identifiers,
-                        )
-                    }
-                    PortDeclaration::Input(id) => {
-                        let input = arenas.get(*id);
-                        (
-                            ConnectionDirection::In,
-                            input.range,
-                            input.signed,
-                            input.port_identifiers,
-                        )
-                    }
-                    PortDeclaration::Output(id) => {
-                        let output = arenas.get(*id);
-                        (
-                            ConnectionDirection::Out,
-                            output.range,
-                            output.signed,
-                            output.identifiers,
-                        )
-                    }
-                };
-                let (msb, lsb, size) = match range {
-                    None => (0, 0, SCALAR_VSIZE),
-                    Some(range) => evaluate_range(gl, arenas, &scope, diagnostics, range)?,
-                };
+                        for ast_ident in identifiers {
+                            let ast_ident = arenas.to_item(ast_ident);
+                            let ident = arenas.get_ident(ast_ident.item.0);
 
-                for ast_ident in identifiers {
-                    let ast_ident = arenas.to_item(ast_ident);
-                    let ident = arenas.get_ident(ast_ident.item.0);
+                            let Some(idx) = lut.get(ident) else {
+                                diagnostics.port_not_defined(arenas, ast_ident);
+                                error = true;
+                                continue;
+                            };
+                            if !port_seen.insert(ident) {
+                                diagnostics.duplicate_definition(arenas, ast_ident);
+                                error = true;
+                                continue;
+                            }
 
-                    let Some(idx) = lut.get(ident) else {
-                        diagnostics.port_not_defined(arenas, ast_ident);
-                        error = true;
-                        continue;
-                    };
-                    if !port_seen.insert(ident) {
-                        diagnostics.duplicate_definition(arenas, ast_ident);
-                        error = true;
-                        continue;
+                            io[*idx].1 = direction;
+                            io[*idx].2 = VType::net(size, signed);
+                            io[*idx].3 = msb;
+                            io[*idx].4 = lsb;
+                        }
                     }
-
-                    io[*idx].1 = direction;
-                    io[*idx].2 = VType::net(size, signed);
-                    io[*idx].3 = msb;
-                    io[*idx].4 = lsb;
+                    ModuleItem::NonPortModuleItem(item) => match arenas.get(*item) {
+                        NonPortModuleItem::ModuleOrGenerateItem(item) => match arenas.get(*item) {
+                            ModuleOrGenerateItem::ModuleOrGenerateItemDeclaration(_) => continue,
+                            ModuleOrGenerateItem::LocalParameterDeclaration(id) => {
+                                push_localparameter_into_scope(
+                                    gl,
+                                    arenas,
+                                    &mut scope,
+                                    diagnostics,
+                                    *id,
+                                )?;
+                            }
+                            ModuleOrGenerateItem::ParameterOverride => todo!(),
+                            _ => continue,
+                        },
+                        NonPortModuleItem::ParameterDeclaration(p) => {
+                            error |= append_parameter_declaration(
+                                gl,
+                                arenas,
+                                &mut scope,
+                                diagnostics,
+                                &mut params,
+                                &mut param_lut,
+                                &mut param_values,
+                                *p,
+                            )
+                            .is_err();
+                        }
+                        _ => continue,
+                    },
                 }
             }
 
@@ -302,6 +348,21 @@ pub fn fetch_module_interface<'a>(
             }
         }
     }
+
+    for (key, value, tr) in parameters {
+        let Some(param_idx) = param_lut.get(key) else {
+            diagnostics.not_yet_implemented(*tr, "missing parameter");
+            error = true;
+            continue;
+        };
+        let symbol_key = scope.get(key).unwrap();
+        scope.symbols[symbol_key].variant = SymbolVariant::Constant(value.clone());
+        param_values[*param_idx] = value.clone();
+    }
+    if error {
+        return Err(());
+    }
+
     Ok((
         ModuleParameters {
             lut: param_lut,

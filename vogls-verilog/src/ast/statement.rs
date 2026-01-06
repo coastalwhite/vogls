@@ -1,5 +1,6 @@
 use super::constant_expr::{ConstantExpr, ConstantRangeExpression};
 use super::expr::Expr;
+use super::module::BlockItemDeclaration;
 use super::{
     AstId, AstIdRange, AstItem, AttributeInstance, DecimalRef, Identifier, RangeExpression, TextRef,
 };
@@ -101,7 +102,18 @@ pub enum DelayOrEventControl {
 // | # ( mintypmax_expression )
 #[derive(Clone, Copy)]
 pub enum DelayControl {
-    DelayValue(AstId<DelayValue>), // @Incomplete: | # ( mintypmax_expression )
+    DelayValue(AstId<DelayValue>),
+    MinTypMax(AstId<MinTypMaxExpression>),
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 505
+// mintypmax_expression ::=
+//   expression
+// | expression : expression : expression
+#[derive(Clone, Copy)]
+pub struct MinTypMaxExpression {
+    pub typical: AstId<Expr>,
+    pub min_max: Option<(AstId<Expr>, AstId<Expr>)>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
@@ -194,8 +206,7 @@ pub struct SeqBlock {
 #[derive(Clone, Copy)]
 pub struct Block {
     pub block_identifier: AstItem<Identifier>,
-    // @Incomplete
-    // pub block_item_declaration: AstItem<Identifier>,
+    pub block_item_decls: AstIdRange<BlockItemDeclaration>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 499
