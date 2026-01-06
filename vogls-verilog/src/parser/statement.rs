@@ -743,6 +743,7 @@ impl<'a> Consumable<'a> for EventControl {
                 event_expression,
             ))));
         }
+        tkw.next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
         let event_expression =
             EventExpression::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
         tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;

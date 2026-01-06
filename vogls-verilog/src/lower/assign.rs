@@ -511,12 +511,15 @@ fn assign_net_lvalue_flat<'a>(
                     eval_constant_expr(gl, arenas, scope, diagnostics, *expr)?
                         .as_integer()
                         .unwrap(),
-                    1,
+                    VectorSize::new(1).unwrap(),
                 ),
-                _ => todo!("MsbLsb"),
+                ConstantRangeExpression::MsbLsb { msb, lsb } => {
+                    let (_, lsb, size) =
+                        msb_lsb_to_width(gl, arenas, scope, diagnostics, *msb, *lsb)?;
+                    (lsb, size)
+                }
             };
 
-            let length = VectorSize::new(length).unwrap();
             Some(match arr_idx {
                 None => (builder.constant_u32(gl, offset as u32), length),
                 Some(idx) => (

@@ -510,24 +510,29 @@ pub fn lower<'a>(
                                 continue;
                             };
 
-                            let (_, connection, width, _, _) = instant_io.ports[port_idx];
+                            let (name, connection, port_ty, _, _) = instant_io.ports[port_idx];
 
                             let is_input = matches!(
                                 connection,
                                 ConnectionDirection::In | ConnectionDirection::Both
                             );
 
-                            let Some(e) = expression else {
-                                diagnostics
-                                    .not_yet_implemented(arenas.get_span(p), "anonymous ports");
-                                error = true;
-                                continue;
-                            };
-
-                            let signal = if is_input {
-                                lower_to_signal(gl, arenas, scope, diagnostics, e, width)?
-                            } else {
-                                assign_port_output(gl, arenas, scope, diagnostics, e, width)?
+                            let signal = match expression {
+                                None => {
+                                    let size = port_ty.force_net_width();
+                                    gl.signals.insert(Signal {
+                                        name: format!("{name}::UNCONNECTED"),
+                                        size,
+                                        initialize: None,
+                                        origin: arenas.get_span(instance),
+                                    })
+                                }
+                                Some(e) if is_input => {
+                                    lower_to_signal(gl, arenas, scope, diagnostics, e, port_ty)?
+                                }
+                                Some(e) => {
+                                    assign_port_output(gl, arenas, scope, diagnostics, e, port_ty)?
+                                }
                             };
 
                             if signals[port_idx].replace(signal).is_some() {
