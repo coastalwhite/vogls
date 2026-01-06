@@ -81,17 +81,19 @@ impl ContextFormat for Process {
         let mut bb_seen = std::mem::take(&mut ctx.bb_seen_scratch);
 
         bb_stack.clear();
-        bb_seen.clear();
         ctx.bb_name_scratch.clear();
 
-        bb_seen.insert(self.entry);
+        ctx.bb_name_scratch.insert(self.entry, 0);
         bb_stack.push(self.entry);
 
         while let Some(bb) = bb_stack.pop() {
-            ctx.bb_name_scratch.insert(bb, (bb_seen.len() - 1) as u32);
-            ctx.gl.bbs[bb]
-                .terminator
-                .extend_next_rev(&mut bb_stack, &mut bb_seen);
+            ctx.gl.bbs[bb].terminator.for_each_bb(|k| {
+                let name = ctx.bb_name_scratch.len();
+                ctx.bb_name_scratch.entry(k).or_insert_with(|| {
+                    bb_stack.push(k);
+                    name as u32
+                });
+            });
         }
 
         bb_seen.clear();

@@ -148,6 +148,8 @@ impl Trace {
         for signal in &self.watches {
             f.write_all(&signal.to_le_bytes())?;
         }
+        
+        dbg!(self.events.len());
 
         for e in &self.events {
             match e {

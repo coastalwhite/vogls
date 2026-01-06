@@ -92,6 +92,7 @@ module tb();
 	integer i;
 	initial begin
 	    for (i = 0; i < 256; i = i + 1) begin
+            $display("hi!");
 			#2
 			data_i = i;
 			#2
