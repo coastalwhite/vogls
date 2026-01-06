@@ -39,7 +39,6 @@ pub enum BasicBlockTerminator {
 
 #[derive(Debug, Clone)]
 pub struct BasicBlock {
-    pub name: String,
     pub instrs: Vec<Instruction>,
     pub terminator: BasicBlockTerminator,
 }

@@ -18,6 +18,7 @@ pub struct DisplayContext<'a> {
 
     bb_stack_scratch: Vec<BasicBlockKey>,
     bb_seen_scratch: HashSet<BasicBlockKey>,
+    bb_name_scratch: HashMap<BasicBlockKey, u32>,
 
     var_map: HashMap<VariableKey, u32>,
 }
@@ -28,6 +29,7 @@ impl<'a> DisplayContext<'a> {
             gl,
             bb_stack_scratch: Vec::new(),
             bb_seen_scratch: HashSet::new(),
+            bb_name_scratch: HashMap::new(),
             var_map: HashMap::new(),
         }
     }
@@ -80,11 +82,25 @@ impl ContextFormat for Process {
 
         bb_stack.clear();
         bb_seen.clear();
+        ctx.bb_name_scratch.clear();
 
         bb_seen.insert(self.entry);
         bb_stack.push(self.entry);
 
         while let Some(bb) = bb_stack.pop() {
+            ctx.bb_name_scratch.insert(bb, (bb_seen.len() - 1) as u32);
+            ctx.gl.bbs[bb]
+                .terminator
+                .extend_next_rev(&mut bb_stack, &mut bb_seen);
+        }
+
+        bb_seen.clear();
+        bb_seen.insert(self.entry);
+        bb_stack.push(self.entry);
+
+        while let Some(bb) = bb_stack.pop() {
+            writeln!(f, "L{}:", ctx.bb_name_scratch[&bb])?;
+
             let bb = ctx.gl.bbs.get(bb).unwrap();
             bb.ctx_fmt(f, ctx)?;
             bb.terminator.extend_next_rev(&mut bb_stack, &mut bb_seen);
@@ -101,7 +117,6 @@ impl ContextFormat for Process {
 
 impl ContextFormat for BasicBlock {
     fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &mut DisplayContext<'_>) -> fmt::Result {
-        writeln!(f, "{}:", self.name)?;
         for i in &self.instrs {
             f.write_str(INDENT)?;
             i.ctx_fmt(f, ctx)?;
@@ -255,7 +270,7 @@ impl ContextFormat for Instruction {
                     if i != 0 {
                         f.write_str(", ")?;
                     }
-                    f.write_str(&ctx.gl.bbs.get(*bb).unwrap().name)?;
+                    write!(f, "L{}", ctx.bb_name_scratch[bb])?;
                     f.write_str(" ")?;
                     var.ctx_fmt(f, ctx)?;
                 }
@@ -281,30 +296,29 @@ impl ContextFormat for BasicBlockTerminator {
 
         match self {
             Self::Wait(bb, time) => {
-                f.write_str(&ctx.gl.bbs.get(*bb).unwrap().name)?;
-                f.write_str(", ")?;
+                write!(f, "L{}, ", ctx.bb_name_scratch[bb])?;
                 time.ctx_fmt(f, ctx)?
             }
             Self::WaitRegion(bb, region) => {
-                f.write_str(&ctx.gl.bbs.get(*bb).unwrap().name)?;
-                write!(f, ", {region}")?;
+                write!(f, "L{}, {region}", ctx.bb_name_scratch[bb])?;
             }
             Self::Watch(bb, signals) => {
-                f.write_str(&ctx.gl.bbs.get(*bb).unwrap().name)?;
+                write!(f, "L{}", ctx.bb_name_scratch[bb])?;
                 for s in signals {
                     f.write_str(", ")?;
                     ctx.gl.signals.get(*s).unwrap().ctx_fmt(f, ctx)?;
                 }
             }
             Self::Jump(bb) => {
-                f.write_str(&ctx.gl.bbs.get(*bb).unwrap().name)?;
+                write!(f, "L{}", ctx.bb_name_scratch[bb])?;
             }
             Self::Branch(var, true_bb, false_bb) => {
                 var.ctx_fmt(f, ctx)?;
-                f.write_str(", ")?;
-                let true_bb = &ctx.gl.bbs.get(*true_bb).unwrap().name;
-                let false_bb = &ctx.gl.bbs.get(*false_bb).unwrap().name;
-                write!(f, "{true_bb}, {false_bb}")?;
+                write!(
+                    f,
+                    ", L{}, L{}",
+                    ctx.bb_name_scratch[true_bb], ctx.bb_name_scratch[false_bb]
+                )?;
             }
             Self::Halt => {}
         }

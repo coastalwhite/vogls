@@ -23,7 +23,6 @@ pub fn get_fan_in<'a>(
 
     while let Some(bb_key) = scratch_stack.pop() {
         let BasicBlock {
-            name: _,
             instrs: _,
             terminator,
         } = &mut bbs[bb_key];
@@ -38,7 +37,6 @@ pub fn get_fan_in<'a>(
 
     while let Some(bb_key) = scratch_stack.pop() {
         let BasicBlock {
-            name: _,
             instrs: _,
             terminator,
         } = &bbs[bb_key];
@@ -56,7 +54,6 @@ pub fn get_fan_in<'a>(
 
     while let Some(bb_key) = scratch_stack.pop() {
         let BasicBlock {
-            name: _,
             instrs,
             terminator,
         } = &mut bbs[bb_key];
@@ -193,7 +190,6 @@ pub fn propagate_constants<'a>(
 
     while let Some(bb_key) = scratch_stack.pop() {
         let BasicBlock {
-            name: _,
             instrs,
             terminator,
         } = &mut bbs[bb_key];
@@ -415,7 +411,6 @@ pub fn propagate_constants<'a>(
 
         while let Some(bb_key) = scratch_stack.pop() {
             let BasicBlock {
-                name: _,
                 instrs,
                 terminator,
             } = &mut bbs[bb_key];
@@ -452,7 +447,6 @@ pub fn deadcode_elimination<'a>(
 
     while let Some(bb_key) = scratch_stack.pop() {
         let BasicBlock {
-            name: _,
             instrs,
             terminator,
         } = &bbs[bb_key];
@@ -469,7 +463,6 @@ pub fn deadcode_elimination<'a>(
 
     while let Some(bb_key) = scratch_stack.pop() {
         let BasicBlock {
-            name: _,
             instrs,
             terminator,
         } = &mut bbs[bb_key];

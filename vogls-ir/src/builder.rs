@@ -13,7 +13,6 @@ pub struct BasicBlockBuilder {
     process: ProcessKey,
 
     pub instrs: Vec<Instruction>,
-    bbname_offset: usize,
 }
 
 pub fn new_process(
@@ -22,7 +21,6 @@ pub fn new_process(
     origin: TokenRange,
 ) -> BasicBlockBuilder {
     let bb_key = gl.bbs.insert(BasicBlock {
-        name: String::from("entry"),
         instrs: Vec::new(),
         terminator: BasicBlockTerminator::Halt,
     });
@@ -37,7 +35,6 @@ pub fn new_process(
         key: bb_key,
         process: process_key,
         instrs: Vec::new(),
-        bbname_offset: 0,
     }
 }
 pub fn new_anonymous_builder(
@@ -46,7 +43,6 @@ pub fn new_anonymous_builder(
     origin: TokenRange,
 ) -> BasicBlockBuilder {
     let bb_key = gl.bbs.insert(BasicBlock {
-        name: String::from("entry"),
         instrs: Vec::new(),
         terminator: BasicBlockTerminator::Halt,
     });
@@ -61,7 +57,6 @@ pub fn new_anonymous_builder(
         key: bb_key,
         process: process_key,
         instrs: Vec::new(),
-        bbname_offset: 0,
     }
 }
 
@@ -79,12 +74,6 @@ impl BasicBlockBuilder {
         self.key
     }
 
-    pub fn claim_bbname(&mut self) -> usize {
-        let t = self.bbname_offset;
-        self.bbname_offset += 1;
-        t
-    }
-
     pub fn instrs_len(&self) -> usize {
         self.instrs.len()
     }
@@ -93,9 +82,7 @@ impl BasicBlockBuilder {
         gl.vars.insert(Variable { size })
     }
     pub fn next_bb(&mut self, gl: &mut GlobalContext) -> BasicBlockKey {
-        let name = format!("L{}", self.claim_bbname());
         gl.bbs.insert(BasicBlock {
-            name,
             instrs: Vec::new(),
             terminator: BasicBlockTerminator::Halt,
         })
@@ -109,8 +96,6 @@ impl BasicBlockBuilder {
             process: self.process,
 
             instrs: Vec::new(),
-
-            bbname_offset: self.bbname_offset,
         }
     }
 
@@ -593,8 +578,6 @@ impl BasicBlockBuilder {
             process: self.process,
 
             instrs: Vec::new(),
-
-            bbname_offset: self.bbname_offset,
         }
     }
     pub fn jump_to(mut self, gl: &mut GlobalContext, bb: BasicBlockKey) {
@@ -614,8 +597,6 @@ impl BasicBlockBuilder {
             process: self.process,
 
             instrs: Vec::new(),
-
-            bbname_offset: self.bbname_offset,
         }
     }
 
@@ -635,8 +616,6 @@ impl BasicBlockBuilder {
             process: self.process,
 
             instrs: std::mem::take(&mut next_bb.instrs),
-
-            bbname_offset: self.bbname_offset,
         }
     }
 
@@ -656,8 +635,6 @@ impl BasicBlockBuilder {
             process: self.process,
 
             instrs: Vec::new(),
-
-            bbname_offset: self.bbname_offset,
         };
         (BranchRef(branch_bb), builder)
     }
@@ -678,8 +655,6 @@ impl BasicBlockBuilder {
             process: self.process,
 
             instrs: Vec::new(),
-
-            bbname_offset: self.bbname_offset,
         }
     }
     pub fn branch_false_to(
@@ -698,8 +673,6 @@ impl BasicBlockBuilder {
             process: self.process,
 
             instrs: Vec::new(),
-
-            bbname_offset: self.bbname_offset,
         }
     }
 
@@ -720,8 +693,6 @@ impl BasicBlockBuilder {
             process: self.process,
 
             instrs: Vec::new(),
-
-            bbname_offset: self.bbname_offset,
         }
     }
     pub fn wait_to(mut self, gl: &mut GlobalContext, time: Time, bb: BasicBlockKey) {
@@ -741,8 +712,6 @@ impl BasicBlockBuilder {
             process: self.process,
 
             instrs: Vec::new(),
-
-            bbname_offset: self.bbname_offset,
         }
     }
 
@@ -757,8 +726,6 @@ impl BasicBlockBuilder {
             process: self.process,
 
             instrs: Vec::new(),
-
-            bbname_offset: self.bbname_offset,
         }
     }
     pub fn watch_to(mut self, gl: &mut GlobalContext, signals: Vec<SignalKey>, bb: BasicBlockKey) {
