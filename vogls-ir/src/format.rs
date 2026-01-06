@@ -1,9 +1,9 @@
 use core::fmt;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryOp, GlobalContext, Instruction,
-    IntrinsicOp, Process, ResizeOp, Signal, Time, UnaryOp, Variable,
+    IntrinsicOp, Process, ResizeOp, Signal, Time, UnaryOp, VariableKey,
 };
 
 const INDENT: &str = "  ";
@@ -18,6 +18,8 @@ pub struct DisplayContext<'a> {
 
     bb_stack_scratch: Vec<BasicBlockKey>,
     bb_seen_scratch: HashSet<BasicBlockKey>,
+
+    var_map: HashMap<VariableKey, u32>,
 }
 
 impl<'a> DisplayContext<'a> {
@@ -26,6 +28,7 @@ impl<'a> DisplayContext<'a> {
             gl,
             bb_stack_scratch: Vec::new(),
             bb_seen_scratch: HashSet::new(),
+            var_map: HashMap::new(),
         }
     }
 }
@@ -173,21 +176,25 @@ impl ContextFormat for Instruction {
     fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &mut DisplayContext<'_>) -> fmt::Result {
         match self {
             Self::Constant(var, val) => {
-                ctx.gl.vars.get(*var).unwrap().typed_ctx_fmt(f, ctx)?;
+                var.ctx_fmt(f, ctx)?;
                 write!(f, " = const {val}")?;
             }
             Self::Unary(dst, op, src) => {
-                ctx.gl.vars.get(*dst).unwrap().typed_ctx_fmt(f, ctx)?;
+                dst.ctx_fmt(f, ctx)?;
                 f.write_str(" = ")?;
                 f.write_str(op.into_mnemonic())?;
                 match op {
-                    UnaryOp::Copy | UnaryOp::Neg | UnaryOp::ReduceOr | UnaryOp::ReduceAnd | UnaryOp::ReduceXor => {}
+                    UnaryOp::Copy
+                    | UnaryOp::Neg
+                    | UnaryOp::ReduceOr
+                    | UnaryOp::ReduceAnd
+                    | UnaryOp::ReduceXor => {}
                 }
                 f.write_str(" ")?;
-                ctx.gl.vars.get(*src).unwrap().ctx_fmt(f, ctx)?;
+                src.ctx_fmt(f, ctx)?;
             }
             Self::Resize(dst, op, src) => {
-                ctx.gl.vars.get(*dst).unwrap().typed_ctx_fmt(f, ctx)?;
+                dst.ctx_fmt(f, ctx)?;
                 f.write_str(" = ")?;
                 f.write_str(op.into_mnemonic())?;
                 match op {
@@ -196,32 +203,32 @@ impl ContextFormat for Instruction {
                     }
                 }
                 f.write_str(" ")?;
-                ctx.gl.vars.get(*src).unwrap().ctx_fmt(f, ctx)?;
+                src.ctx_fmt(f, ctx)?;
             }
             Self::Binary(dst, op, src1, src2) => {
-                ctx.gl.vars.get(*dst).unwrap().typed_ctx_fmt(f, ctx)?;
+                dst.ctx_fmt(f, ctx)?;
                 f.write_str(" = ")?;
                 f.write_str(op.into_mnemonic())?;
                 f.write_str(" ")?;
-                ctx.gl.vars.get(*src1).unwrap().ctx_fmt(f, ctx)?;
+                src1.ctx_fmt(f, ctx)?;
                 f.write_str(", ")?;
-                ctx.gl.vars.get(*src2).unwrap().ctx_fmt(f, ctx)?;
+                src2.ctx_fmt(f, ctx)?;
             }
             Self::Intrinsic(dst, op, args) => {
-                ctx.gl.vars.get(*dst).unwrap().typed_ctx_fmt(f, ctx)?;
+                dst.ctx_fmt(f, ctx)?;
                 f.write_str(" = ")?;
                 f.write_str(op.into_mnemonic())?;
                 f.write_str(" ")?;
                 if let Some(arg) = args.first() {
-                    ctx.gl.vars.get(*arg).unwrap().ctx_fmt(f, ctx)?;
+                    arg.ctx_fmt(f, ctx)?;
                     for arg in &args[1..] {
                         f.write_str(", ")?;
-                        ctx.gl.vars.get(*arg).unwrap().ctx_fmt(f, ctx)?;
+                        arg.ctx_fmt(f, ctx)?;
                     }
                 }
             }
             Self::Probe(var, sig) => {
-                ctx.gl.vars.get(*var).unwrap().typed_ctx_fmt(f, ctx)?;
+                var.ctx_fmt(f, ctx)?;
                 f.write_str(" = probe ")?;
                 ctx.gl.signals.get(*sig).unwrap().ctx_fmt(f, ctx)?;
             }
@@ -232,17 +239,17 @@ impl ContextFormat for Instruction {
                 }
                 if let Some((offset, length)) = partial {
                     f.write_str("[")?;
-                    ctx.gl.vars.get(*offset).unwrap().typed_ctx_fmt(f, ctx)?;
+                    offset.ctx_fmt(f, ctx)?;
                     write!(f, ", {length}]")?;
                 }
                 f.write_str(" ")?;
                 ctx.gl.signals.get(*sig).unwrap().ctx_fmt(f, ctx)?;
                 f.write_str(", ")?;
-                ctx.gl.vars.get(*var).unwrap().typed_ctx_fmt(f, ctx)?;
+                var.ctx_fmt(f, ctx)?;
             }
 
             Self::Phi(dst, srcs) => {
-                ctx.gl.vars.get(*dst).unwrap().typed_ctx_fmt(f, ctx)?;
+                dst.ctx_fmt(f, ctx)?;
                 f.write_str(" = phi ")?;
                 for (i, (bb, var)) in srcs.iter().enumerate() {
                     if i != 0 {
@@ -250,7 +257,7 @@ impl ContextFormat for Instruction {
                     }
                     f.write_str(&ctx.gl.bbs.get(*bb).unwrap().name)?;
                     f.write_str(" ")?;
-                    ctx.gl.vars.get(*var).unwrap().typed_ctx_fmt(f, ctx)?;
+                    var.ctx_fmt(f, ctx)?;
                 }
             }
         }
@@ -293,7 +300,7 @@ impl ContextFormat for BasicBlockTerminator {
                 f.write_str(&ctx.gl.bbs.get(*bb).unwrap().name)?;
             }
             Self::Branch(var, true_bb, false_bb) => {
-                ctx.gl.vars.get(*var).unwrap().ctx_fmt(f, ctx)?;
+                var.ctx_fmt(f, ctx)?;
                 f.write_str(", ")?;
                 let true_bb = &ctx.gl.bbs.get(*true_bb).unwrap().name;
                 let false_bb = &ctx.gl.bbs.get(*false_bb).unwrap().name;
@@ -306,23 +313,11 @@ impl ContextFormat for BasicBlockTerminator {
     }
 }
 
-impl ContextFormat for Variable {
-    fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut DisplayContext<'_>) -> fmt::Result {
-        f.write_str("%")?;
-        f.write_str(&self.name)?;
-        Ok(())
-    }
-}
-
-impl Variable {
-    fn typed_ctx_fmt(
-        &self,
-
-        f: &mut fmt::Formatter<'_>,
-        ctx: &mut DisplayContext<'_>,
-    ) -> fmt::Result {
-        self.ctx_fmt(f, ctx)?;
-        Ok(())
+impl ContextFormat for VariableKey {
+    fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &mut DisplayContext<'_>) -> fmt::Result {
+        let new_idx = ctx.var_map.len() as u32;
+        let idx = ctx.var_map.entry(*self).or_insert(new_idx);
+        write!(f, "%t{idx}")
     }
 }
 

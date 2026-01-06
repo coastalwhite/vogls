@@ -13,7 +13,6 @@ pub struct BasicBlockBuilder {
     process: ProcessKey,
 
     pub instrs: Vec<Instruction>,
-    tmp_offset: usize,
     bbname_offset: usize,
 }
 
@@ -38,7 +37,6 @@ pub fn new_process(
         key: bb_key,
         process: process_key,
         instrs: Vec::new(),
-        tmp_offset: 0,
         bbname_offset: 0,
     }
 }
@@ -63,7 +61,6 @@ pub fn new_anonymous_builder(
         key: bb_key,
         process: process_key,
         instrs: Vec::new(),
-        tmp_offset: 0,
         bbname_offset: 0,
     }
 }
@@ -82,11 +79,6 @@ impl BasicBlockBuilder {
         self.key
     }
 
-    pub fn claim_tmp(&mut self) -> usize {
-        let t = self.tmp_offset;
-        self.tmp_offset += 1;
-        t
-    }
     pub fn claim_bbname(&mut self) -> usize {
         let t = self.bbname_offset;
         self.bbname_offset += 1;
@@ -98,8 +90,7 @@ impl BasicBlockBuilder {
     }
 
     pub fn next_tmp_var(&mut self, gl: &mut GlobalContext, size: VectorSize) -> VariableKey {
-        let name = format!("t{}", self.claim_tmp());
-        gl.vars.insert(Variable { name, size })
+        gl.vars.insert(Variable { size })
     }
     pub fn next_bb(&mut self, gl: &mut GlobalContext) -> BasicBlockKey {
         let name = format!("L{}", self.claim_bbname());
@@ -119,7 +110,6 @@ impl BasicBlockBuilder {
 
             instrs: Vec::new(),
 
-            tmp_offset: self.tmp_offset,
             bbname_offset: self.bbname_offset,
         }
     }
@@ -604,7 +594,6 @@ impl BasicBlockBuilder {
 
             instrs: Vec::new(),
 
-            tmp_offset: self.tmp_offset,
             bbname_offset: self.bbname_offset,
         }
     }
@@ -626,7 +615,6 @@ impl BasicBlockBuilder {
 
             instrs: Vec::new(),
 
-            tmp_offset: self.tmp_offset,
             bbname_offset: self.bbname_offset,
         }
     }
@@ -648,7 +636,6 @@ impl BasicBlockBuilder {
 
             instrs: std::mem::take(&mut next_bb.instrs),
 
-            tmp_offset: self.tmp_offset,
             bbname_offset: self.bbname_offset,
         }
     }
@@ -670,7 +657,6 @@ impl BasicBlockBuilder {
 
             instrs: Vec::new(),
 
-            tmp_offset: self.tmp_offset,
             bbname_offset: self.bbname_offset,
         };
         (BranchRef(branch_bb), builder)
@@ -693,7 +679,6 @@ impl BasicBlockBuilder {
 
             instrs: Vec::new(),
 
-            tmp_offset: self.tmp_offset,
             bbname_offset: self.bbname_offset,
         }
     }
@@ -714,7 +699,6 @@ impl BasicBlockBuilder {
 
             instrs: Vec::new(),
 
-            tmp_offset: self.tmp_offset,
             bbname_offset: self.bbname_offset,
         }
     }
@@ -737,7 +721,6 @@ impl BasicBlockBuilder {
 
             instrs: Vec::new(),
 
-            tmp_offset: self.tmp_offset,
             bbname_offset: self.bbname_offset,
         }
     }
@@ -759,7 +742,6 @@ impl BasicBlockBuilder {
 
             instrs: Vec::new(),
 
-            tmp_offset: self.tmp_offset,
             bbname_offset: self.bbname_offset,
         }
     }
@@ -776,7 +758,6 @@ impl BasicBlockBuilder {
 
             instrs: Vec::new(),
 
-            tmp_offset: self.tmp_offset,
             bbname_offset: self.bbname_offset,
         }
     }

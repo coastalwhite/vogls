@@ -192,7 +192,6 @@ impl BasicBlockTerminator {
 
 #[derive(Clone)]
 pub struct Variable {
-    pub name: String,
     pub size: VectorSize,
 }
 

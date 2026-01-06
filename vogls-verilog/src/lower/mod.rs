@@ -26,8 +26,8 @@ use constant_expr::eval_constant_expr;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::vcd::NetType;
 use vogls_ir::{
-    BasicBlockKey, ConnectionDirection, GlobalContext, SCALAR_VSIZE, Signal, SignalKey,
-    VariableKey, VectorSize, new_process,
+    BasicBlockKey, ConnectionDirection, GlobalContext, SCALAR_VSIZE, Signal, SignalKey, VectorSize,
+    new_process,
 };
 
 use crate::ast::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression};

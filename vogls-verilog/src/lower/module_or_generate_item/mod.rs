@@ -1,17 +1,17 @@
 use vogls_ir::vcd::NetType;
 use vogls_ir::{
-    BasicBlockBuilder, Bits, ConnectionDirection, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE,
-    Signal, SignalKey, VectorSize, new_anonymous_builder, new_process,
+    Bits, ConnectionDirection, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE, Signal, SignalKey,
+    VectorSize, new_process,
 };
 
 use crate::ast::constant_expr::ConstantMinTypMaxExpression;
 use crate::ast::module::{
-    Dimension, FunctionDeclaration, FunctionRangeOrType, GateInstantiation, GenerateBlock,
-    GenvarAssignment, GenvarDeclaration, IfGenerateConstruct, ListOfPortConnections,
-    LocalParameterDeclaration, LoopGenerateConstruct, ModuleInstance, ModuleInstantiation,
-    ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration, NInputGateInstance, NInputGateType,
-    NamedParameterAssignment, NamedPortConnection, NetDeclAssignment, NetDeclarationNets,
-    ParamAssignment, ParameterValueAssignment, TaskDeclaration, VariableType, VariableTypeVariant,
+    Dimension, GateInstantiation, GenerateBlock, GenvarAssignment, GenvarDeclaration,
+    IfGenerateConstruct, ListOfPortConnections, LocalParameterDeclaration, LoopGenerateConstruct,
+    ModuleInstance, ModuleInstantiation, ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration,
+    NInputGateInstance, NInputGateType, NamedParameterAssignment, NamedPortConnection,
+    NetDeclAssignment, NetDeclarationNets, ParamAssignment, ParameterValueAssignment,
+    TaskDeclaration, VariableType, VariableTypeVariant,
 };
 use crate::ast::{AstId, AstIdRange};
 use crate::lower::assign::{assign_net_lvalue, net_lvalue_width};

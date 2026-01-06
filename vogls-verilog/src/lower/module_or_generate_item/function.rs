@@ -199,7 +199,6 @@ pub fn lower<'a>(
     let output_var = match output_var {
         None => {
             let output_var = gl.vars.insert(vogls_ir::Variable {
-                name: "dummy".to_string(),
                 size: output_ty.force_net_width(),
             });
             gl.bbs[entry_key].instrs.push(I::Constant(
@@ -225,7 +224,6 @@ pub fn lower<'a>(
         .map(|(i, ty)| {
             i.unwrap_or_else(|| {
                 gl.vars.insert(vogls_ir::Variable {
-                    name: "dummy".to_string(),
                     size: ty.force_net_width(),
                 })
             })
