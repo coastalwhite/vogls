@@ -429,21 +429,17 @@ impl Event {
                             stack[dst.offset] = u8::from(result);
                         }
                         O::ReduceAnd => {
-                            let result = stack[src.offset + 1..][..size.get().div_ceil(8) as usize]
+                            let result = stack[src.offset..][..size.get().div_ceil(8) as usize]
                                 .iter()
-                                .all(|b| *b == 0xFF);
-                            let mask = 1u8.unbounded_shl(size.get() % 8).wrapping_sub(1);
-                            let result = result & (stack[src.offset] & mask == mask);
-                            stack[dst.offset] = u8::from(result);
+                                .map(|b| b.count_ones())
+                                .sum::<u32>();
+                            stack[dst.offset] = u8::from(result == size.get());
                         }
                         O::ReduceXor => {
-                            let mut result = 0;
-                            if size.get() > 0 {
-                                result = stack[src.offset..][..size.get().div_ceil(8) as usize]
-                                    .iter()
-                                    .map(|b| b.count_ones())
-                                    .sum::<u32>();
-                            }
+                            let result = stack[src.offset..][..size.get().div_ceil(8) as usize]
+                                .iter()
+                                .map(|b| b.count_ones())
+                                .sum::<u32>();
                             stack[dst.offset] = u8::from(result % 2 == 1);
                         }
                     };
