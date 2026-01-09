@@ -114,11 +114,14 @@ pub fn format_bits(
         }?,
         Bits::Big(_, v) => match base {
             Base::Binary => {
+                let mut print_full = false;
                 for b in v.iter().rev() {
-                    if *b == 0 {
-                        continue;
+                    if print_full {
+                        write!(f, "{b:08b}")?
+                    } else {
+                        write!(f, "{b:b}")?
                     }
-                    write!(f, "{b:b}")?
+                    print_full |= *b != 0;
                 }
             }
             Base::Octal => {
@@ -142,11 +145,14 @@ pub fn format_bits(
                 }
             }
             Base::Hexadecimal => {
+                let mut print_full = false;
                 for b in v.iter().rev() {
-                    if *b == 0 {
-                        continue;
+                    if print_full {
+                        write!(f, "{b:02x}")?
+                    } else {
+                        write!(f, "{b:x}")?
                     }
-                    write!(f, "{b:x}")?
+                    print_full |= *b != 0;
                 }
             }
             Base::Decimal => todo!(),

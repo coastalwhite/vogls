@@ -363,12 +363,11 @@ impl Bits {
                 let mut n = 0;
                 let soff = s.get() % 8;
                 if soff != 0 {
-                    let lbn =
-                        self.as_slice()[s.get().div_ceil(8) as usize].leading_zeros() - (8 - soff);
-                    if lbn < soff {
-                        return lbn;
+                    let lbn = self.as_slice().last().unwrap().leading_zeros();
+                    if lbn != 8 {
+                        return lbn - (8 - soff);
                     }
-                    n += lbn;
+                    n += soff;
                 }
                 for b in v[..v.len() - usize::from(n != 0)].iter().rev() {
                     if *b == 0 {

@@ -139,20 +139,31 @@ pub fn take_binary_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, ()> {
                 continue;
             }
 
+            let v = match b {
+                b'x' => 0,
+                b'z' => 0,
+                _ => b - b'0',
+            };
+
             value <<= 1;
-            value |= u64::from(b == b'1');
+            value |= u64::from(v);
         }
         Ok(Bits::Small(value, size))
     } else {
         let mut value = vec![0u8; size.get().div_ceil(8) as usize];
         let mut i = 0;
-        for b in s.bytes() {
+        for b in s.bytes().rev() {
             if b == b'_' {
                 continue;
             }
 
-            let p = size.get() as usize - i - 1;
-            value[p / 8] |= u8::from(b == b'1') << (p % 8);
+            let v = match b {
+                b'x' => 0,
+                b'z' => 0,
+                _ => b - b'0',
+            };
+
+            value[i / 8] |= v << (i % 8);
             i += 1;
         }
         Ok(Bits::Big(size, value.into()))
