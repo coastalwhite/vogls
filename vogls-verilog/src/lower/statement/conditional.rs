@@ -6,7 +6,7 @@ use crate::ast::statement::{
 use crate::ast::{AstId, AstIdRange};
 use crate::lower::diagnostics::Diagnostics;
 use crate::lower::expression::coerce_bin_arithmetic;
-use crate::lower::scope::Scope;
+use crate::lower::Scope;
 use crate::lower::{ModuleContext, lower_expr};
 use crate::parser::AstArenas;
 

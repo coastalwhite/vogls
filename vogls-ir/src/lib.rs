@@ -375,7 +375,7 @@ impl Instruction {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectionDirection {
     In,
     Out,

@@ -8,8 +8,9 @@ use crate::ast::statement::{
     DelayControl, DelayValue, EventControl, EventExpressionPrimary, ProceduralTimingControl,
     StatementOrNull,
 };
+use crate::hierarchy::HierarchyItem;
+use crate::lower::Scope;
 use crate::lower::expression::lower_expr;
-use crate::lower::scope::{Scope, SymbolVariant};
 use crate::lower::{ModuleContext, WatchCondition};
 use crate::parser::AstArenas;
 
@@ -154,10 +155,12 @@ pub fn lower<'a>(
                         diagnostics.var_not_found(arenas, *ast_ident);
                         return Err(());
                     };
-                    let SymbolVariant::Signal(s) = &scope.symbols[symbol_key].variant else {
+                    let HierarchyItem::Net(s) = &scope.hierarchy.items()[symbol_key.as_idx()]
+                    else {
                         panic!("not a signal");
                     };
-                    let key = s.key;
+                    let s = &scope.hierarchy.net()[*s];
+                    let key = s.signal;
 
                     let (variable, _) =
                         lower_expr(gl, arenas, scope, diagnostics, &mut builder, *expr)?;

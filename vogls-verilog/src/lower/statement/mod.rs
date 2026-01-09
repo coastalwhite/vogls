@@ -5,12 +5,12 @@ use crate::ast::statement::{
     StatementContent, StatementOrNull, TaskEnable, WaitStatement,
 };
 use crate::ast::{AstId, AstIdRange};
+use crate::hierarchy::HierarchyItem;
 use crate::lower::expression::{self, lower_expr};
-use crate::lower::scope::SymbolVariant;
 use crate::lower::{Region, assign};
 use crate::parser::AstArenas;
 
-use super::scope::Scope;
+use super::Scope;
 use super::{Diagnostics, ModuleContext};
 
 pub mod conditional;
@@ -179,22 +179,24 @@ pub fn statements_to_process<'a>(
                     diagnostics.var_not_found(arenas, *ident);
                     return Err(());
                 };
-                let SymbolVariant::Task(statement_or_null) = &scope.symbols[symbol_key].variant
+                let HierarchyItem::Task(s) = &scope.hierarchy.items()[symbol_key.as_idx()]
                 else {
                     diagnostics
                         .not_yet_implemented(arenas.get_item_span(*ident), "non-task enabled");
                     return Err(());
                 };
-
-                builder = lower_statement_or_null(
-                    gl,
-                    arenas,
-                    scope,
-                    mc,
-                    diagnostics,
-                    builder,
-                    *statement_or_null,
-                )?;
+                todo!();
+                // let HierarchyItem::Task { }
+//
+                // builder = lower_statement_or_null(
+                //     gl,
+                //     arenas,
+                //     scope,
+                //     mc,
+                //     diagnostics,
+                //     builder,
+                //     *statement_or_null,
+                // )?;
             }
             S::WaitStatement(id) => {
                 let WaitStatement {

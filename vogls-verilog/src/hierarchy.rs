@@ -1,264 +1,426 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
 use std::num::NonZeroUsize;
+use std::ops::Range;
 
-use vogls_ir::SignalKey;
-use vogls_ir::vcd::{NetType, VcdScope, VcdScopeItem, VcdVariable};
+use vogls_ir::vcd::VcdScope;
+use vogls_ir::{ConnectionDirection, SignalKey};
 
-#[derive(Clone, PartialEq, Eq)]
+use crate::ast::AstId;
+use crate::ast::module::{FunctionDeclaration, ModuleInstance, TaskDeclaration};
+use crate::ast::statement::SeqBlock;
+use crate::lower::{Scope, VType, VValue};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct HierarchyKey(NonZeroUsize);
+
+#[derive(Clone)]
 pub struct Hierarchy {
-    modules: Vec<ModuleInstance>,
-    module_children: Vec<ModuleChild>,
-    lookup_table: HashMap<(ModuleKey, String), ModuleChildKey>,
+    pub symbols: Vec<HierarchyItem>,
+    pub lookup_table: HashMap<(HierarchyKey, String), HierarchyKey>,
+
+    pub modules: Vec<HierarchyModule>,
+    pub named_blocks: Vec<HierarchyNamedBlock>,
+    pub tasks: Vec<HierarchyTask>,
+    pub functions: Vec<HierarchyFunction>,
+    pub nets: Vec<HierarchyNet>,
+    pub parameters: Vec<HierarchyParameter>,
+    pub genvars: Vec<HierarchyGenvar>,
 }
 
-pub struct ModuleBuilder<'a> {
-    hierarchy: &'a mut Hierarchy,
-    module_key: ModuleKey,
+#[derive(Clone)]
+pub struct HierarchyModule {
+    pub name: String,
+    pub module_name: String,
+    pub children: HierarchyItemRange,
+
+    pub ast: Option<AstId<ModuleInstance>>,
+    pub parent: Option<HierarchyKey>,
+
+    // @TODO: Do something smarter here.
+    pub lut: HashMap<String, usize>,
+    pub ports: Vec<(usize, ConnectionDirection)>,
+}
+
+#[derive(Clone)]
+pub struct HierarchyNamedBlock {
+    pub name: String,
+    pub ast: AstId<SeqBlock>,
+    pub children: HierarchyItemRange,
+    pub parent: HierarchyKey,
+}
+
+#[derive(Clone)]
+pub struct HierarchyTask {
+    pub name: String,
+    pub ast: AstId<TaskDeclaration>,
+    pub children: HierarchyItemRange,
+    pub parent: HierarchyKey,
+}
+
+#[derive(Clone)]
+pub struct HierarchyFunction {
+    pub name: String,
+    pub ast: AstId<FunctionDeclaration>,
+    pub children: HierarchyItemRange,
+    pub parent: HierarchyKey,
 }
 
 #[derive(Clone, PartialEq, Eq)]
-pub struct ModuleInstance {
-    instance_name: String,
-    module_name: String,
-    parent: Option<ModuleKey>,
-    children: ModuleChildRange,
+pub struct HierarchyNet {
+    pub name: String,
+    pub signal: SignalKey,
+    pub ty: VType,
+    pub dims: Box<[u32]>,
 }
 
-impl ModuleInstance {
+#[derive(Clone, PartialEq, Eq)]
+pub struct HierarchyParameter {
+    pub name: String,
+    pub value: VValue,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct HierarchyGenvar {
+    pub name: String,
+
+    // @TODO: Don't use a RefCell here.
+    pub value: RefCell<VValue>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HierarchyItem {
+    Module(usize),
+    NamedBlock(usize),
+    Task(usize),
+    Function(usize),
+    Net(usize),
+    Parameter(usize),
+    GenVar(usize),
+}
+
+impl HierarchyItem {
+    fn name<'a>(&self, hierarchy: &'a Hierarchy) -> &'a str {
+        use HierarchyItem as I;
+        match self {
+            I::Module(i) => &hierarchy.modules[*i].name,
+            I::NamedBlock(i) => &hierarchy.named_blocks[*i].name,
+            I::Task(i) => &hierarchy.tasks[*i].name,
+            I::Function(i) => &hierarchy.functions[*i].name,
+            I::Net(i) => &hierarchy.nets[*i].name,
+            I::Parameter(i) => &hierarchy.parameters[*i].name,
+            I::GenVar(i) => &hierarchy.genvars[*i].name,
+        }
+    }
+
+    fn children(&self, hierarchy: &Hierarchy) -> HierarchyItemRange {
+        use HierarchyItem as I;
+        match self {
+            I::Module(i) => hierarchy.modules[*i].children,
+            I::NamedBlock(i) => hierarchy.named_blocks[*i].children,
+            I::Task(i) => hierarchy.tasks[*i].children,
+            I::Function(i) => hierarchy.functions[*i].children,
+            I::Net(_) | I::Parameter(_) | I::GenVar(_) => HierarchyItemRange { start: 0, end: 0 },
+        }
+    }
+
+    fn children_mut(self, hierarchy: &mut Hierarchy) -> Option<&mut HierarchyItemRange> {
+        use HierarchyItem as I;
+        match self {
+            I::Module(i) => Some(&mut hierarchy.modules[i].children),
+            I::NamedBlock(i) => Some(&mut hierarchy.named_blocks[i].children),
+            I::Task(i) => Some(&mut hierarchy.tasks[i].children),
+            I::Function(i) => Some(&mut hierarchy.functions[i].children),
+            I::Net(_) | I::Parameter(_) | I::GenVar(_) => None,
+        }
+    }
+
     fn vcd_scope(&self, hierarchy: &Hierarchy, remaining_levels: u32) -> VcdScope {
-        VcdScope {
-            name: self.instance_name.clone(),
-            items: (self.children.start..self.children.end)
-                .filter_map(|i| match &hierarchy.module_children[i] {
-                    ModuleChild::Net(net) => Some(VcdScopeItem::Variable(VcdVariable {
-                        signal: net.signal,
-                        ty: net.ty,
-                        msb: net.msb,
-                        lsb: net.lsb,
-                    })),
-                    ModuleChild::Module(_) if remaining_levels == 0 => None,
-                    ModuleChild::Module(module) => Some(VcdScopeItem::Scope(
-                        hierarchy.modules[module.as_idx()]
-                            .vcd_scope(hierarchy, remaining_levels - 1),
-                    )),
-                })
-                .collect(),
+        todo!()
+        // use HierarchyItem as I;
+        // VcdScope {
+        //     name: self.name().to_string(),
+        //     items: todo!(),
+        //     // self
+        //     // .children()
+        //     // .iter()
+        //     // .filter_map(|i| match &hierarchy.items[i.as_idx()] {
+        //     //     I::Module { instance_name, module_name, children, parent } => {
+        //     //     },
+        //     //     I::NamedBlock { instance_name, module_name, children, parent } => {
+        //     //     },
+        //     //     I::Task { instance_name, module_name, children, parent } => {
+        //     //     },
+        //     //     I::Function { instance_name, module_name, children, parent } => {
+        //     //     },
+        //     //     I::Net { signal, .. } => {
+        //     //         Some(VcdScopeItem::Variable(VcdVariable {
+        //     //             signal: net.signal,
+        //     //             ty: net.ty,
+        //     //             msb: net.msb,
+        //     //             lsb: net.lsb,
+        //     //         }))
+        //     //     },
+        //     //     I::Parameter { .. } => None,
+        //     //     // ScopeItem::Net(net) => {
+        //     //     // }
+        //     //     // ScopeItem::Scope(_) if remaining_levels == 0 => None,
+        //     //     // ScopeItem::Scope(module) => Some(VcdScopeItem::Scope(
+        //     //     //     hierarchy.items[module.as_idx()].vcd_scope(hierarchy, remaining_levels - 1),
+        //     //     // )),
+        //     // })
+        //     // .collect(),
+        // }
+    }
+}
+
+impl HierarchyItem {
+    fn flat_fmt(&self, f: &mut fmt::Formatter<'_>, hierarchy: &Hierarchy) -> fmt::Result {
+        use HierarchyItem as I;
+        match &self {
+            I::Module(i) => {
+                let HierarchyModule {
+                    name: instance_name,
+                    module_name,
+                    children: _,
+                    ast: _,
+                    parent: _,
+                    lut: _,
+                    ports: _,
+                } = &hierarchy.modules[*i];
+                write!(f, "mod {module_name}: {instance_name}")
+            }
+            I::NamedBlock(i) => {
+                let HierarchyNamedBlock {
+                    name,
+                    ast: _,
+                    children: _,
+                    parent: _,
+                } = &hierarchy.named_blocks[*i];
+                write!(f, "named_block {name}")
+            }
+            I::Task(i) => {
+                let HierarchyTask {
+                    name,
+                    ast: _,
+                    children: _,
+                    parent: _,
+                } = &hierarchy.tasks[*i];
+                write!(f, "tasks {name}")
+            }
+            I::Function(i) => {
+                let HierarchyFunction {
+                    name,
+                    ast: _,
+                    children: _,
+                    parent: _,
+                } = &hierarchy.functions[*i];
+                write!(f, "function {name}")
+            }
+            I::Net(i) => {
+                let HierarchyNet {
+                    name,
+                    signal: _,
+                    ty: _,
+                    dims: _,
+                } = &hierarchy.nets[*i];
+                write!(f, "net {name}")
+            }
+            I::Parameter(i) => {
+                let HierarchyParameter { name, value: _ } = &hierarchy.parameters[*i];
+                write!(f, "parameter {name}")
+            }
+            I::GenVar(i) => {
+                let HierarchyGenvar { name, value: _ } = &hierarchy.genvars[*i];
+                write!(f, "genvar {name}")
+            }
         }
     }
 }
 
-pub struct ModuleInstanceDisplay<'a> {
-    module: ModuleKey,
+pub struct HierarchyDisplay<'a> {
+    key: HierarchyKey,
     hierarchy: &'a Hierarchy,
     indent: u32,
 }
 
-pub struct NetDisplay<'a>(&'a Net);
-
-impl ModuleInstance {
-    fn flat_fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "mod {}: {}", self.module_name, self.instance_name)
-    }
-}
-
 const SPACES_PER_INDENT: usize = 2;
 
-impl<'a> fmt::Display for ModuleInstanceDisplay<'a> {
+impl<'a> fmt::Display for HierarchyDisplay<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let indent = self.indent as usize * SPACES_PER_INDENT;
         write!(f, "{:indent$}", "")?;
-        let instance = &self.hierarchy.modules[self.module.as_idx()];
-        instance.flat_fmt(f)?;
+        let item = &self.hierarchy.symbols[self.key.as_idx()];
+        item.flat_fmt(f, self.hierarchy)?;
         writeln!(f)?;
-        for child in instance.children.start..instance.children.end {
-            match &self.hierarchy.module_children[child] {
-                ModuleChild::Net(net) => {
-                    let indent = indent + SPACES_PER_INDENT;
-                    write!(f, "{:indent$}", " ")?;
-                    net.display().fmt(f)?;
-                    writeln!(f)?;
-                }
-                ModuleChild::Module(key) => {
-                    ModuleInstanceDisplay {
-                        module: *key,
-                        hierarchy: self.hierarchy,
-                        indent: self.indent + 1,
-                    }
-                    .fmt(f)?;
-                }
+        for key in item.children(self.hierarchy).iter() {
+            HierarchyDisplay {
+                key,
+                hierarchy: self.hierarchy,
+                indent: self.indent + 1,
             }
+            .fmt(f)?;
         }
         Ok(())
     }
 }
 
-impl<'a> fmt::Display for NetDisplay<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Net {
-            name,
-            signal: _,
-            parent: _,
-            ty,
-            msb,
-            lsb,
-        } = &self.0;
-        let (ty, show_msb_lsb) = match ty {
-            NetType::Integer => ("integer", false),
-            NetType::Register => ("reg", true),
-            NetType::Wire => ("wire", true),
-        };
-
-        if show_msb_lsb && msb != lsb {
-            write!(f, "{ty} [{msb}:{lsb}] {name}")
-        } else {
-            write!(f, "{ty} {name}")
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ModuleChild {
-    Net(Net),
-    Module(ModuleKey),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Net {
-    name: String,
-    signal: SignalKey,
-    parent: ModuleKey,
-    ty: NetType,
-    msb: i64,
-    lsb: i64,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct ModuleChildRange {
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+pub struct HierarchyItemRange {
     pub start: usize,
     pub end: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ModuleKey(NonZeroUsize);
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct ModuleChildKey(NonZeroUsize);
-
-impl ModuleKey {
-    fn as_idx(self) -> usize {
-        self.0.get() - 1
-    }
-
-    fn new(offset: usize) -> Self {
-        Self(NonZeroUsize::new(offset + 1).expect("ModuleKey overflow"))
-    }
-}
-impl ModuleChildKey {
-    fn as_idx(self) -> usize {
-        self.0.get() - 1
-    }
-
-    fn new(offset: usize) -> Self {
-        Self(NonZeroUsize::new(offset + 1).expect("ModuleChildKey overflow"))
+impl HierarchyItemRange {
+    pub fn iter(self) -> impl ExactSizeIterator<Item = HierarchyKey> + DoubleEndedIterator {
+        (self.start..self.end).map(|i| HierarchyKey::new(i))
     }
 }
 
+impl HierarchyKey {
+    pub fn as_idx(self) -> usize {
+        self.0.get() - 1
+    }
+
+    pub fn new(offset: usize) -> Self {
+        Self(NonZeroUsize::new(offset + 1).expect("HierarchyKey overflow"))
+    }
+}
 impl Hierarchy {
     pub fn new(top_level_name: String) -> Self {
-        let top_level = ModuleInstance {
-            instance_name: top_level_name.clone(),
-            module_name: top_level_name.clone(),
-            parent: None,
-            children: ModuleChildRange { start: 0, end: 0 },
-        };
-        Self {
-            modules: vec![top_level],
-            module_children: Vec::new(),
+        let mut slf = Self {
+            symbols: vec![HierarchyItem::Module(0)],
             lookup_table: HashMap::new(),
-        }
+            modules: Vec::new(),
+            named_blocks: Vec::new(),
+            tasks: Vec::new(),
+            functions: Vec::new(),
+            nets: Vec::new(),
+            parameters: Vec::new(),
+            genvars: Vec::new(),
+        };
+        slf.modules.push(HierarchyModule {
+            name: top_level_name.clone(),
+            module_name: top_level_name,
+            children: HierarchyItemRange { start: 1, end: 1 },
+            ast: None,
+            parent: None,
+            lut: Default::default(),
+            ports: Default::default(),
+        });
+        slf
     }
 
-    pub fn top_level_key(&self) -> ModuleKey {
-        ModuleKey::new(0)
+    pub fn top_level_key(&self) -> HierarchyKey {
+        HierarchyKey::new(0)
     }
 
     pub fn vcd_scope(&self, remaining_levels: u32) -> VcdScope {
         let top_level_key = self.top_level_key();
-        self.modules[top_level_key.as_idx()].vcd_scope(&self, remaining_levels)
+        self.symbols[top_level_key.as_idx()].vcd_scope(&self, remaining_levels)
     }
 
-    pub fn display<'b>(&'b self, module: ModuleKey) -> ModuleInstanceDisplay<'b> {
-        ModuleInstanceDisplay {
-            module,
+    pub fn display<'b>(&'b self, key: HierarchyKey) -> HierarchyDisplay<'b> {
+        HierarchyDisplay {
+            key,
             hierarchy: self,
             indent: 0,
         }
     }
+
+    pub fn items(&self) -> &[HierarchyItem] {
+        &self.symbols
+    }
+    pub fn modules(&self) -> &[HierarchyModule] {
+        &self.modules
+    }
+    pub fn named_blocks(&self) -> &[HierarchyNamedBlock] {
+        &self.named_blocks
+    }
+    pub fn tasks(&self) -> &[HierarchyTask] {
+        &self.tasks
+    }
+    pub fn function(&self) -> &[HierarchyFunction] {
+        &self.functions
+    }
+    pub fn net(&self) -> &[HierarchyNet] {
+        &self.nets
+    }
+    pub fn parameters(&self) -> &[HierarchyParameter] {
+        &self.parameters
+    }
+    pub fn genvars(&self) -> &[HierarchyGenvar] {
+        &self.genvars
+    }
+
+    pub(crate) fn lookup(&self) -> &HashMap<(HierarchyKey, String), HierarchyKey> {
+        &self.lookup_table
+    }
 }
 
-impl<'a> ModuleBuilder<'a> {
-    pub fn new(hierarchy: &'a mut Hierarchy, module_key: ModuleKey) -> Self {
-        hierarchy.modules[module_key.as_idx()].children.start = hierarchy.module_children.len();
-        hierarchy.modules[module_key.as_idx()].children.end = hierarchy.module_children.len();
-        Self {
-            hierarchy,
-            module_key,
+pub struct ScopeBuilder<'a> {
+    pub key: HierarchyKey,
+    pub hierarchy: &'a mut Hierarchy,
+}
+
+macro_rules! insert_fn {
+    ($f:ident, $struct:ty, $field:tt, $v:ident, $item:ident) => {
+        pub fn $f(&mut self, $v: $struct) -> Option<HierarchyKey> {
+            let i = self.hierarchy.$field.len();
+            let item_key = HierarchyKey::new(self.hierarchy.symbols.len());
+            let name = $v.name.clone();
+            self.hierarchy.$field.push($v);
+
+            let items_len = self.hierarchy.symbols.len();
+            let children = self.hierarchy.symbols[self.key.as_idx()]
+                .children_mut(self.hierarchy)
+                .unwrap();
+            assert_eq!(children.end, items_len);
+            children.end += 1;
+
+            self.hierarchy.symbols.push(HierarchyItem::$item(i));
+            self.hierarchy
+                .lookup_table
+                .insert((self.key, name), item_key)
         }
-    }
-
-    pub fn move_to(&mut self, module_key: ModuleKey) {
-        self.module_key = module_key;
-        self.hierarchy.modules[module_key.as_idx()].children.start =
-            self.hierarchy.module_children.len();
-        self.hierarchy.modules[module_key.as_idx()].children.end =
-            self.hierarchy.module_children.len();
-    }
-
-    pub fn push_net(&mut self, name: String, signal: SignalKey, ty: NetType, msb: i64, lsb: i64) {
-        let child_key = self.push_child(ModuleChild::Net(Net {
-            name: name.clone(),
-            signal,
-            parent: self.module_key,
-            ty,
-            msb,
-            lsb,
-        }));
-        self.hierarchy
-            .lookup_table
-            .insert((self.module_key, name.clone()), child_key);
-    }
-
-    pub fn push_module_instance(
-        &mut self,
-        module_name: String,
-        instance_name: String,
-    ) -> ModuleKey {
-        let key = ModuleKey::new(self.hierarchy.modules.len());
-        let child_key = self.push_child(ModuleChild::Module(key));
-        self.hierarchy
-            .lookup_table
-            .insert((self.module_key, instance_name.clone()), child_key);
-        self.hierarchy.modules.push(ModuleInstance {
-            instance_name,
-            module_name,
-            parent: Some(self.module_key),
-            children: ModuleChildRange { start: 0, end: 0 },
-        });
-        key
-    }
-
-    fn push_child(&mut self, child: ModuleChild) -> ModuleChildKey {
-        let key = ModuleChildKey::new(self.hierarchy.module_children.len());
-        self.hierarchy.module_children.push(child);
-        self.hierarchy.modules[self.module_key.as_idx()]
-            .children
-            .end += 1;
-        key
-    }
+    };
 }
 
-impl Net {
-    pub fn display<'a>(&'a self) -> NetDisplay<'a> {
-        NetDisplay(self)
+impl<'a> ScopeBuilder<'a> {
+    insert_fn!(insert_module, HierarchyModule, modules, module, Module);
+    insert_fn!(insert_net, HierarchyNet, nets, net, Net);
+    insert_fn!(
+        insert_parameter,
+        HierarchyParameter,
+        parameters,
+        parameter,
+        Parameter
+    );
+    insert_fn!(insert_task, HierarchyTask, tasks, task, Task);
+    insert_fn!(
+        insert_function,
+        HierarchyFunction,
+        functions,
+        function,
+        Function
+    );
+    insert_fn!(
+        insert_named_block,
+        HierarchyNamedBlock,
+        named_blocks,
+        named_block,
+        NamedBlock
+    );
+
+    pub fn key(&self) -> HierarchyKey {
+        self.key
+    }
+
+    pub(crate) fn scope<'b>(&'b self) -> Scope<'b> {
+        Scope {
+            hierarchy: self.hierarchy,
+            key: self.key,
+        }
     }
 }

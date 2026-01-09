@@ -3,7 +3,7 @@ mod diagnostics;
 mod expression;
 mod module_or_generate_item;
 mod parameter;
-mod scope;
+// mod scope;
 mod statement;
 mod vtype;
 mod vvalue;
@@ -17,12 +17,29 @@ pub enum Region {
     Monitor = 3,
 }
 
-use std::collections::{HashMap, HashSet};
+pub struct Scope<'a> {
+    pub hierarchy: &'a Hierarchy,
+    pub key: HierarchyKey,
+}
+impl<'a> Scope<'a> {
+    fn get(&self, ident: &str) -> Option<HierarchyKey> {
+        if let Some(k) = self.hierarchy.lookup().get(&(self.key, ident.to_string())) {
+            return Some(*k);
+        }
 
-use scope::Scope;
+        // @TODO: Hierarchical Path Identifiers.
+        None
+    }
 
-use vogls_ir::token_range::TokenRange;
-use vogls_ir::vcd::NetType;
+    // @TODO: Remove
+    fn push_scope(&mut self) {
+        todo!()
+    }
+    fn pop_scope(&mut self) {
+        todo!()
+    }
+}
+
 use vogls_ir::{
     BasicBlockKey, ConnectionDirection, GlobalContext, SCALAR_VSIZE, Signal, SignalKey, VectorSize,
     new_process,
@@ -31,27 +48,26 @@ use vogls_ir::{
 use crate::ast::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression};
 use crate::ast::expr::{BitSlice, Expr};
 use crate::ast::module::{
-    GenerateRegion, Module, ModuleItem, ModuleOrGenerateItem, ModulePorts, NonPortModuleItem,
-    ParamAssignment, ParameterDeclaration, Port, PortDeclaration, PortExpression, PortReference,
+    GenerateRegion, Module, ModuleItem, NonPortModuleItem, ParamAssignment, ParameterDeclaration,
     Range,
 };
 use crate::ast::{AstId, Identifier};
-use crate::hierarchy::{ModuleBuilder, ModuleKey};
+use crate::hierarchy::{Hierarchy, HierarchyItem, HierarchyKey};
 use crate::parser::AstArenas;
 
-use self::expression::{eval_constant_expr, lower_expr, truncate_or_extend};
-use self::parameter::push_localparameter_into_scope;
-use self::scope::{SignalSymbol, Symbol, SymbolVariant};
+pub use self::expression::eval_constant_expr;
+use self::expression::{lower_expr, truncate_or_extend};
 pub use self::vtype::VType;
-use self::vvalue::VValue;
+pub use self::vvalue::VValue;
 pub use diagnostics::Diagnostics;
+pub use module_or_generate_item::dims_to_array;
+use std::collections::HashMap;
 
 pub struct ModuleInitialization<'a> {
     pub name: &'a str,
     pub parameters: ModuleParameters<'a>,
     pub io: ModuleIo<'a>,
     pub args: ModuleArgs,
-    pub hierarchy_key: ModuleKey,
 }
 
 #[derive(Clone)]
@@ -71,311 +87,8 @@ pub struct ModuleArgs {
     pub signals: Vec<SignalKey>,
 }
 
-pub fn append_parameter_declaration<'a>(
-    gl: &mut GlobalContext,
-    arenas: &'a AstArenas,
-    scope: &mut Scope<'a>,
-    diagnostics: &mut Diagnostics,
-    params: &mut Vec<&'a str>,
-    param_lut: &mut HashMap<&'a str, usize>,
-    param_values: &mut Vec<VValue>,
-    p: AstId<ParameterDeclaration>,
-) -> Result<(), ()> {
-    let ParameterDeclaration {
-        typing,
-        assignments,
-    } = arenas.get(p);
-
-    let mut error = false;
-    // @FIXME: Coerce value to ty.
-    let _ty = parameter::parameter_typing_to_type(gl, arenas, scope, diagnostics, *typing)?;
-    for assignment in assignments.iter() {
-        let ParamAssignment { param, constant } = arenas.get(assignment);
-        let key = arenas.get_ident(param.item.0);
-        let value = arenas.get(*constant);
-        match value {
-            ConstantMinTypMaxExpression::Single(id) => {
-                let value = eval_constant_expr(gl, arenas, &scope, diagnostics, *id)?;
-                let symbol_key = scope.symbols.insert(Symbol {
-                    name: key.to_string(),
-                    definition_site: arenas.get_item_span(*param),
-                    variant: SymbolVariant::Constant(value.clone()),
-                });
-                scope.push(key, symbol_key);
-                param_values.push(value);
-            }
-            ConstantMinTypMaxExpression::MinTypMax { .. } => todo!(),
-        }
-
-        if param_lut.insert(key, params.len()).is_some() {
-            diagnostics.duplicate_definition(arenas, *param);
-            error = true;
-            continue;
-        }
-        params.push(key);
-    }
-
-    if error { Err(()) } else { Ok(()) }
-}
-
-pub fn fetch_module_interface<'a>(
-    gl: &mut GlobalContext,
-    arenas: &'a AstArenas,
-    module: AstId<Module>,
-    parameters: &[(&'a str, VValue, TokenRange)],
-    diagnostics: &mut Diagnostics,
-) -> Result<(ModuleParameters<'a>, ModuleIo<'a>, Vec<VValue>), ()> {
-    let Module {
-        attribute_instances: _,
-        module_identifier: _,
-        module_parameter_port_list,
-        ports,
-        module_items,
-        default_nettype: _,
-    } = arenas.get(module);
-
-    let mut param_lut = HashMap::new();
-    let mut params = Vec::new();
-    let mut param_values = Vec::new();
-    let mut scope = Scope::new();
-    let mut error = false;
-    if let Some(parameters) = module_parameter_port_list {
-        for p in parameters.iter() {
-            error |= append_parameter_declaration(
-                gl,
-                arenas,
-                &mut scope,
-                diagnostics,
-                &mut params,
-                &mut param_lut,
-                &mut param_values,
-                p,
-            )
-            .is_err();
-        }
-    }
-
-    if error {
-        return Err(());
-    }
-
-    let mut lut = HashMap::new();
-    let mut io = Vec::new();
-    match ports {
-        ModulePorts::Ports(ports) => {
-            let mut error = false;
-            for port in ports.iter() {
-                match arenas.get(port) {
-                    Port::PortExpression(id) => {
-                        let PortExpression { references } = arenas.get(*id);
-                        let PortReference { identifier } = arenas.get(*references);
-
-                        let name = arenas.get_ident(identifier.item.0);
-                        if lut.insert(name, io.len()).is_some() {
-                            diagnostics.duplicate_definition(arenas, *identifier);
-                            error = true;
-                            continue;
-                        }
-                        io.push((
-                            name,
-                            ConnectionDirection::Both,
-                            VType::UnsignedNet(SCALAR_VSIZE),
-                            0,
-                            0,
-                        ));
-                    }
-                }
-            }
-
-            if error {
-                return Err(());
-            }
-
-            let mut port_seen = HashSet::<&str>::new();
-            for item in module_items.iter() {
-                match arenas.get(item) {
-                    ModuleItem::PortDeclaration(ast_port_declaration) => {
-                        let port_declaration = arenas.get(*ast_port_declaration);
-                        let (direction, range, signed, identifiers) = match port_declaration {
-                            PortDeclaration::Inout(id) => {
-                                let inout = arenas.get(*id);
-                                (
-                                    ConnectionDirection::Both,
-                                    inout.range,
-                                    inout.signed,
-                                    inout.port_identifiers,
-                                )
-                            }
-                            PortDeclaration::Input(id) => {
-                                let input = arenas.get(*id);
-                                (
-                                    ConnectionDirection::In,
-                                    input.range,
-                                    input.signed,
-                                    input.port_identifiers,
-                                )
-                            }
-                            PortDeclaration::Output(id) => {
-                                let output = arenas.get(*id);
-                                (
-                                    ConnectionDirection::Out,
-                                    output.range,
-                                    output.signed,
-                                    output.identifiers,
-                                )
-                            }
-                        };
-                        let (msb, lsb, size) = match range {
-                            None => (0, 0, SCALAR_VSIZE),
-                            Some(range) => evaluate_range(gl, arenas, &scope, diagnostics, range)?,
-                        };
-
-                        for ast_ident in identifiers {
-                            let ast_ident = arenas.to_item(ast_ident);
-                            let ident = arenas.get_ident(ast_ident.item.0);
-
-                            let Some(idx) = lut.get(ident) else {
-                                diagnostics.port_not_defined(arenas, ast_ident);
-                                error = true;
-                                continue;
-                            };
-                            if !port_seen.insert(ident) {
-                                diagnostics.duplicate_definition(arenas, ast_ident);
-                                error = true;
-                                continue;
-                            }
-
-                            io[*idx].1 = direction;
-                            io[*idx].2 = VType::net(size, signed);
-                            io[*idx].3 = msb;
-                            io[*idx].4 = lsb;
-                        }
-                    }
-                    ModuleItem::NonPortModuleItem(item) => match arenas.get(*item) {
-                        NonPortModuleItem::ModuleOrGenerateItem(item) => match arenas.get(*item) {
-                            ModuleOrGenerateItem::ModuleOrGenerateItemDeclaration(_) => continue,
-                            ModuleOrGenerateItem::LocalParameterDeclaration(id) => {
-                                push_localparameter_into_scope(
-                                    gl,
-                                    arenas,
-                                    &mut scope,
-                                    diagnostics,
-                                    *id,
-                                )?;
-                            }
-                            ModuleOrGenerateItem::ParameterOverride => todo!(),
-                            _ => continue,
-                        },
-                        NonPortModuleItem::ParameterDeclaration(p) => {
-                            error |= append_parameter_declaration(
-                                gl,
-                                arenas,
-                                &mut scope,
-                                diagnostics,
-                                &mut params,
-                                &mut param_lut,
-                                &mut param_values,
-                                *p,
-                            )
-                            .is_err();
-                        }
-                        _ => continue,
-                    },
-                }
-            }
-
-            if port_seen.len() != io.len() {
-                diagnostics
-                    .not_yet_implemented(arenas.get_range_span(*ports), "not all ports referenced");
-                return Err(());
-            }
-
-            if error {
-                return Err(());
-            }
-        }
-        ModulePorts::PortDeclarations(port_declarations) => {
-            for ast_port_declaration in port_declarations.iter() {
-                let port_declaration = arenas.get(ast_port_declaration);
-                let (direction, range, signed, identifiers) = match port_declaration {
-                    PortDeclaration::Inout(id) => {
-                        let inout = arenas.get(*id);
-                        (
-                            ConnectionDirection::Both,
-                            inout.range,
-                            inout.signed,
-                            inout.port_identifiers,
-                        )
-                    }
-                    PortDeclaration::Input(id) => {
-                        let input = arenas.get(*id);
-                        (
-                            ConnectionDirection::In,
-                            input.range,
-                            input.signed,
-                            input.port_identifiers,
-                        )
-                    }
-                    PortDeclaration::Output(id) => {
-                        let output = arenas.get(*id);
-                        (
-                            ConnectionDirection::Out,
-                            output.range,
-                            output.signed,
-                            output.identifiers,
-                        )
-                    }
-                };
-                let (msb, lsb, size) = match range {
-                    None => (0, 0, SCALAR_VSIZE),
-                    Some(range) => evaluate_range(gl, arenas, &scope, diagnostics, range)?,
-                };
-
-                let mut error = false;
-                for ident in identifiers.iter() {
-                    let name = arenas.get_ident(arenas.get(ident).0);
-                    if lut.insert(name, io.len()).is_some() {
-                        diagnostics.duplicate_definition(arenas, arenas.to_item(ident));
-                        error = true;
-                        continue;
-                    }
-                    io.push((name, direction, VType::net(size, signed), msb, lsb));
-                }
-
-                if error {
-                    return Err(());
-                }
-            }
-        }
-    }
-
-    for (key, value, tr) in parameters {
-        let Some(param_idx) = param_lut.get(key) else {
-            diagnostics.not_yet_implemented(*tr, "missing parameter");
-            error = true;
-            continue;
-        };
-        let symbol_key = scope.get(key).unwrap();
-        scope.symbols[symbol_key].variant = SymbolVariant::Constant(value.clone());
-        param_values[*param_idx] = value.clone();
-    }
-    if error {
-        return Err(());
-    }
-
-    Ok((
-        ModuleParameters {
-            lut: param_lut,
-            params,
-        },
-        ModuleIo { lut, ports: io },
-        param_values,
-    ))
-}
-
 pub struct ModuleContext<'a> {
     pub named_lookup: HashMap<&'a str, AstId<Module>>,
-    pub module_builder: ModuleBuilder<'a>,
     pub next_modules: Vec<ModuleInitialization<'a>>,
     pub queries_to_resolve: Vec<ModuleQuery>,
 }
@@ -390,9 +103,7 @@ pub fn lower_module_to_ir<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
     root: AstId<Module>,
-    parameters: &ModuleParameters<'a>,
-    io: &ModuleIo<'a>,
-    args: &ModuleArgs,
+    scope: &mut Scope<'a>,
     mc: &mut ModuleContext<'a>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
@@ -405,57 +116,19 @@ pub fn lower_module_to_ir<'a>(
         default_nettype: _,
     } = arenas.get(root);
 
-    let mut scope = Scope::new();
-
-    for (key, param) in parameters.params.iter().zip(&args.parameters) {
-        let symbol_key = scope.symbols.insert(Symbol {
-            name: key.to_string(),
-            // @TODO: better definition site
-            definition_site: arenas.get_span(root),
-            variant: SymbolVariant::Constant(param.clone()),
-        });
-        scope.push(key, symbol_key);
-    }
-
-    for ((name, _con, ty, msb, lsb), signal) in io.ports.iter().zip(&args.signals) {
-        let (ty, signal, msb, lsb) = (*ty, *signal, *msb, *lsb);
-        let symbol_key = scope.symbols.insert(Symbol {
-            name: name.to_string(),
-            // @TODO: better definition site
-            definition_site: arenas.get_span(root),
-            variant: SymbolVariant::Signal(SignalSymbol {
-                dims: Vec::new(),
-                ty,
-                key: signal,
-                msb,
-                lsb,
-            }),
-        });
-        mc.module_builder
-            .push_net(name.to_string(), signal, NetType::Wire, msb, lsb);
-        scope.push(name, symbol_key);
-    }
-
     for module_item in module_items.iter() {
         match arenas.get(module_item) {
             ModuleItem::PortDeclaration(_) => {}
             ModuleItem::NonPortModuleItem(p) => match arenas.get(*p) {
                 NonPortModuleItem::ModuleOrGenerateItem(id) => {
-                    module_or_generate_item::lower(gl, arenas, mc, &mut scope, *id, diagnostics)?
+                    module_or_generate_item::lower(gl, arenas, mc, scope, *id, diagnostics)?
                 }
                 NonPortModuleItem::GenerateRegion(region) => {
                     let GenerateRegion {
                         module_or_generate_item,
                     } = region;
                     for id in module_or_generate_item.iter() {
-                        module_or_generate_item::lower(
-                            gl,
-                            arenas,
-                            mc,
-                            &mut scope,
-                            id,
-                            diagnostics,
-                        )?;
+                        module_or_generate_item::lower(gl, arenas, mc, scope, id, diagnostics)?;
                     }
                 }
                 NonPortModuleItem::SpecifyBlock => todo!(),
@@ -471,8 +144,7 @@ pub fn lower_module_to_ir<'a>(
                             todo!();
                         };
 
-                        let _value =
-                            eval_constant_expr(gl, arenas, &scope, diagnostics, *constant)?;
+                        let _value = eval_constant_expr(arenas, &scope, diagnostics, *constant)?;
                         todo!()
                         // scope.push(arenas.get_ident(param.item.0), ScopeItem::Constant(v));
                     }
@@ -507,10 +179,11 @@ fn lower_to_signal<'a>(
             diagnostics.var_not_found(arenas, *ast_ident);
             return Err(());
         };
-        if let SymbolVariant::Signal(s) = &scope.symbols[symbol_key].variant
+        if let HierarchyItem::Net(s) = &scope.hierarchy.items()[symbol_key.as_idx()]
+            && let s = &scope.hierarchy.net()[*s]
             && s.ty == ty
         {
-            return Ok(s.key);
+            return Ok(s.signal);
         }
     }
 
@@ -549,10 +222,11 @@ fn assign_port_output<'a>(
             diagnostics.var_not_found(arenas, *ast_ident);
             return Err(());
         };
-        if let SymbolVariant::Signal(s) = &scope.symbols[symbol_key].variant
+        if let HierarchyItem::Net(s) = &scope.hierarchy.items()[symbol_key.as_idx()]
+            && let s = &scope.hierarchy.net()[*s]
             && s.ty == ty
         {
-            return Ok(s.key);
+            return Ok(s.signal);
         }
     }
 
@@ -585,11 +259,12 @@ fn assign_port_output<'a>(
                     error = true;
                     continue;
                 };
-                let SymbolVariant::Signal(s) = &scope.symbols[symbol_key].variant else {
+                let HierarchyItem::Net(s) = &scope.hierarchy.items()[symbol_key.as_idx()] else {
                     diagnostics.output_expr_not_allowed(arenas.get_span(expr));
                     error = true;
                     continue;
                 };
+                let s = &scope.hierarchy.net()[symbol_key.as_idx()];
 
                 let (offset_dst, length_dst) = if range_expression.is_none() && exprs.is_empty() {
                     (bb_builder.constant_u32(gl, 0), Some(s.ty.force_net_width()))
@@ -612,21 +287,21 @@ fn assign_port_output<'a>(
                     match slice {
                         BitSlice::MsbLsb(msb, lsb) => {
                             let (_, lsb, width) =
-                                msb_lsb_to_width(gl, arenas, scope, diagnostics, *msb, *lsb)?;
+                                msb_lsb_to_width(arenas, scope, diagnostics, *msb, *lsb)?;
                             let offset = bb_builder.constant_u32(gl, lsb as u32);
                             (offset, Some(width as VectorSize))
                         }
                         BitSlice::PlusWidth(base, width) => {
                             let offset =
                                 lower_expr(gl, arenas, scope, diagnostics, &mut bb_builder, *base);
-                            let width = eval_constant_expr(gl, arenas, scope, diagnostics, *width);
+                            let width = eval_constant_expr(arenas, scope, diagnostics, *width);
                             let width = width?.as_integer().unwrap();
                             (offset?.0, Some(VectorSize::new(width as u32).unwrap()))
                         }
                         BitSlice::MinusWidth(base, width) => {
                             let offset =
                                 lower_expr(gl, arenas, scope, diagnostics, &mut bb_builder, *base);
-                            let width = eval_constant_expr(gl, arenas, scope, diagnostics, *width)?;
+                            let width = eval_constant_expr(arenas, scope, diagnostics, *width)?;
                             let width =
                                 VectorSize::new(width.as_integer().unwrap() as u32).unwrap();
                             let width_v =
@@ -644,7 +319,7 @@ fn assign_port_output<'a>(
                 let length_dst = length_dst.unwrap_or(SCALAR_VSIZE);
                 let src = probed;
                 let src = truncate_or_extend(gl, &mut bb_builder, src, ty, length_dst);
-                bb_builder.drive_partial(gl, s.key, src, offset_dst, length_dst);
+                bb_builder.drive_partial(gl, s.signal, src, offset_dst, length_dst);
             }
 
             Expr::Replication(_) => {
@@ -676,15 +351,14 @@ fn assign_port_output<'a>(
 }
 
 fn msb_lsb_to_width<'a>(
-    gl: &GlobalContext,
     arenas: &'a AstArenas,
     scope: &Scope<'a>,
     diagnostics: &mut Diagnostics,
     ast_msb: AstId<ConstantExpr>,
     ast_lsb: AstId<ConstantExpr>,
 ) -> Result<(i64, i64, VectorSize), ()> {
-    let msb = eval_constant_expr(gl, arenas, scope, diagnostics, ast_msb);
-    let lsb = eval_constant_expr(gl, arenas, scope, diagnostics, ast_lsb);
+    let msb = eval_constant_expr(arenas, scope, diagnostics, ast_msb);
+    let lsb = eval_constant_expr(arenas, scope, diagnostics, ast_lsb);
 
     let (Ok(VValue::SignedNet(msb)), Ok(VValue::SignedNet(lsb))) = (msb, lsb) else {
         return Err(());
@@ -702,13 +376,12 @@ fn msb_lsb_to_width<'a>(
     Ok((msb, lsb, width))
 }
 
-fn evaluate_range<'a>(
-    gl: &mut GlobalContext,
+pub fn evaluate_range<'a>(
     arenas: &'a AstArenas,
     scope: &Scope<'a>,
     diagnostics: &mut Diagnostics,
     range: AstId<Range>,
 ) -> Result<(i64, i64, VectorSize), ()> {
     let range = arenas.get(range);
-    msb_lsb_to_width(gl, arenas, scope, diagnostics, range.msb, range.lsb)
+    msb_lsb_to_width(arenas, scope, diagnostics, range.msb, range.lsb)
 }

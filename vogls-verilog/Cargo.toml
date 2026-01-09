@@ -5,3 +5,4 @@ edition.workspace = true
 
 [dependencies]
 vogls-ir.workspace = true
+slotmap.workspace = true

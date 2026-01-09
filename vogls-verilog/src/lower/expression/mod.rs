@@ -7,18 +7,18 @@ use vogls_ir::{
 
 use crate::ast::AstId;
 use crate::ast::expr::{BinaryOperator, BitSlice, Expr, Replication, UnaryOperator};
-use crate::lower::scope::SymbolVariant;
+use crate::hierarchy::{HierarchyItem, HierarchyParameter};
 use crate::lower::{VType, msb_lsb_to_width};
 use crate::number::Sign;
 use crate::parser::AstArenas;
 pub use constant_expr::eval_constant_expr;
 
 use super::Diagnostics;
-use super::scope::Scope;
+use super::Scope;
 
-mod system_function_call;
-mod function_call;
 mod constant_expr;
+mod function_call;
+mod system_function_call;
 
 #[deny(clippy::question_mark_used)] // Needs to be handled explicitly in the recursion.
 pub fn lower_expr<'a>(
@@ -202,8 +202,7 @@ pub fn lower_expr<'a>(
                 }
 
                 let end_stack_size = result_stack.len() - exprs.len();
-                let Ok(repeat_n) =
-                    eval_constant_expr(gl, arenas, scope, diagnostics, constant_expr)
+                let Ok(repeat_n) = eval_constant_expr(arenas, scope, diagnostics, constant_expr)
                 else {
                     result_stack.truncate(end_stack_size);
                     result_stack.push(None);
@@ -355,19 +354,21 @@ pub fn lower_expr<'a>(
                     error = true;
                     continue;
                 };
-                let symbol = &scope.symbols[symbol_key];
-                let (mut ty, mut var) = match &symbol.variant {
-                    SymbolVariant::Constant(value) => {
+                let symbol = &scope.hierarchy.items()[symbol_key.as_idx()];
+                let (mut ty, mut var) = match &symbol {
+                    HierarchyItem::Parameter(s) => {
+                        let HierarchyParameter { name: _, value } =
+                            &scope.hierarchy.parameters()[*s];
                         let value = value.clone();
                         (value.ty(), builder.constant(gl, value.into_bits()))
                     }
-                    SymbolVariant::Genvar(value) => (
-                        VType::SignedNet(INTEGER_VSIZE),
-                        builder
-                            .constant(gl, Bits::from_i64_truncated(value.unwrap(), INTEGER_VSIZE)),
-                    ),
-                    SymbolVariant::Task(_) => todo!(),
-                    SymbolVariant::Signal(s) => {
+                    HierarchyItem::GenVar(_)
+                    | HierarchyItem::Task(_)
+                    | HierarchyItem::Function(_)
+                    | HierarchyItem::Module(_)
+                    | HierarchyItem::NamedBlock(_) => todo!(),
+                    HierarchyItem::Net(s) => {
+                        let s = &scope.hierarchy.net()[*s];
                         let mut dims = &s.dims[..];
                         if !dims.is_empty() {
                             if exprs.pop_front().is_none() {
@@ -417,14 +418,14 @@ pub fn lower_expr<'a>(
                             }
 
                             let size = s.ty.force_net_width();
-                            let variable = builder.probe(gl, s.key);
+                            let variable = builder.probe(gl, s.signal);
                             let offset = builder.multiply_constant(gl, offset, size.get());
                             let variable = builder.logical_shift_right(gl, variable, offset);
                             let variable = builder.slice(gl, variable, size);
 
                             (s.ty, variable)
                         } else {
-                            (s.ty, builder.probe(gl, s.key))
+                            (s.ty, builder.probe(gl, s.signal))
                         }
                     }
                 };
@@ -443,7 +444,7 @@ pub fn lower_expr<'a>(
                     let (lsb, width) = match slice {
                         BitSlice::MsbLsb(msb, lsb) => {
                             let Ok((_msb, lsb, width)) =
-                                msb_lsb_to_width(gl, arenas, scope, diagnostics, *msb, *lsb)
+                                msb_lsb_to_width(arenas, scope, diagnostics, *msb, *lsb)
                             else {
                                 result_stack.push(None);
                                 continue;
@@ -457,8 +458,7 @@ pub fn lower_expr<'a>(
                                 result_stack.push(None);
                                 continue;
                             };
-                            let Ok(width) =
-                                eval_constant_expr(gl, arenas, scope, diagnostics, *width)
+                            let Ok(width) = eval_constant_expr(arenas, scope, diagnostics, *width)
                             else {
                                 result_stack.push(None);
                                 continue;
@@ -474,8 +474,7 @@ pub fn lower_expr<'a>(
                                 continue;
                             };
 
-                            let Ok(width) =
-                                eval_constant_expr(gl, arenas, scope, diagnostics, *width)
+                            let Ok(width) = eval_constant_expr(arenas, scope, diagnostics, *width)
                             else {
                                 result_stack.push(None);
                                 continue;
@@ -830,16 +829,20 @@ pub fn get_used_signals<'a>(
                     error = true;
                     continue;
                 };
-                let symbol = &scope.symbols[symbol_key];
-                match &symbol.variant {
-                    SymbolVariant::Signal(s) => {
-                        if signals_seen.insert(s.key) {
-                            signals.push(s.key);
+                let symbol = &scope.hierarchy.items()[symbol_key.as_idx()];
+                match &symbol {
+                    HierarchyItem::Net(s) => {
+                        let net = &scope.hierarchy.net()[*s];
+                        if signals_seen.insert(net.signal) {
+                            signals.push(net.signal);
                         }
                     }
-                    SymbolVariant::Genvar(_)
-                    | SymbolVariant::Constant(_)
-                    | SymbolVariant::Task(_) => {}
+                    HierarchyItem::GenVar(_)
+                    | HierarchyItem::Parameter(_)
+                    | HierarchyItem::Task(_)
+                    | HierarchyItem::Module(_)
+                    | HierarchyItem::NamedBlock(_)
+                    | HierarchyItem::Function(_) => {}
                 }
 
                 dispatch_stack.extend(exprs.iter().map(StackItem::new));

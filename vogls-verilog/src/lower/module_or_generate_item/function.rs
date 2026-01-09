@@ -7,7 +7,7 @@ use vogls_ir::{
 
 use crate::ast::module::{FunctionDeclaration, FunctionRangeOrType, TfInputDeclaration, TfType};
 use crate::ast::{AstId, AstIdRange};
-use crate::lower::scope::{FunctionSymbol, Scope, SignalSymbol, Symbol, SymbolVariant};
+use crate::lower::Scope;
 use crate::lower::{Diagnostics, ModuleContext, VType, evaluate_range};
 use crate::parser::AstArenas;
 
@@ -15,7 +15,7 @@ pub fn lower<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
     mc: &mut ModuleContext<'a>,
-    scope: &mut Scope<'a>,
+    mut scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
     id: AstId<FunctionDeclaration>,
 ) -> Result<(), ()> {
@@ -37,6 +37,10 @@ pub fn lower<'a>(
 
     let name = arenas.get_ident(ident.item.0);
 
+    let fn_key = scope.hierarchy.lookup().get(&(scope.key, name.to_string())).unwrap();
+    // let HierarchyItem::Function(i) = &scope.hierarchy.items()[fn_key.as_idx()] else { panic!() };
+    // let HierarchyFunction { .. } = &scope.hierarchy.function()[*i] else { panic!() };
+
     // @FIXME: This is an extremely simplified implementation of functions and
     // basically only allows for the simplest of functions. Expand this to a more
     // complete solution. Do I even want to support recursive functions...
@@ -49,11 +53,11 @@ pub fn lower<'a>(
         FunctionRangeOrType::Unsigned(None) => (0, 0, VType::UnsignedNet(SCALAR_VSIZE)),
         FunctionRangeOrType::Signed(None) => (0, 0, VType::SignedNet(SCALAR_VSIZE)),
         FunctionRangeOrType::Unsigned(Some(range)) => {
-            let (msb, lsb, size) = evaluate_range(gl, arenas, scope, diagnostics, *range)?;
+            let (msb, lsb, size) = evaluate_range(arenas, scope, diagnostics, *range)?;
             (msb, lsb, VType::UnsignedNet(size))
         }
         FunctionRangeOrType::Signed(Some(range)) => {
-            let (msb, lsb, size) = evaluate_range(gl, arenas, scope, diagnostics, *range)?;
+            let (msb, lsb, size) = evaluate_range(arenas, scope, diagnostics, *range)?;
             (msb, lsb, VType::SignedNet(size))
         }
         FunctionRangeOrType::Integer => (31, 0, VType::SignedNet(INTEGER_VSIZE)),
@@ -66,25 +70,13 @@ pub fn lower<'a>(
         }
     };
 
-    let mut fn_scope = Scope::new();
+    let mut fn_scope = Scope { hierarchy: scope.hierarchy, key: *fn_key };
     let output_key = gl.signals.insert(Signal {
         name: name.to_string(),
         size: output_ty.force_net_width(),
         initialize: None,
         origin: arenas.get_item_span(*ident),
     });
-    let output_symkey = fn_scope.symbols.insert(Symbol {
-        name: name.to_string(),
-        definition_site: arenas.get_item_span(*ident),
-        variant: SymbolVariant::Signal(SignalSymbol {
-            dims: Vec::new(),
-            ty: output_ty,
-            key: output_key,
-            msb,
-            lsb,
-        }),
-    });
-    fn_scope.push(arenas.get_ident(ident.item.0), output_symkey);
 
     let mut input_types = Vec::<VType>::with_capacity(tf_input_decls.len());
     let mut input_lut = HashMap::<SignalKey, usize>::with_capacity(tf_input_decls.len());
@@ -101,7 +93,7 @@ pub fn lower<'a>(
                 range,
             } => {
                 let size = match range {
-                    Some(range) => evaluate_range(gl, arenas, scope, diagnostics, *range)?.2,
+                    Some(range) => evaluate_range(arenas, &mut fn_scope, diagnostics, *range)?.2,
                     None => SCALAR_VSIZE,
                 };
                 if *signed {
@@ -128,18 +120,6 @@ pub fn lower<'a>(
                 initialize: None,
                 origin: arenas.get_span(input_ident),
             });
-            let input_symkey = fn_scope.symbols.insert(Symbol {
-                name: name.to_string(),
-                definition_site: arenas.get_span(input_ident),
-                variant: SymbolVariant::Signal(SignalSymbol {
-                    dims: Vec::new(),
-                    ty: input_ty,
-                    key: input_key,
-                    msb,
-                    lsb,
-                }),
-            });
-            fn_scope.push(name, input_symkey);
 
             input_types.push(input_ty);
             input_lut.insert(input_key, i);
@@ -210,39 +190,17 @@ pub fn lower<'a>(
         Some(v) => v,
     };
 
-    // Clean up all the dummy signals
-    for sym in fn_scope.symbols.iter() {
-        if let SymbolVariant::Signal(s) = &sym.variant {
-            gl.signals.remove(s.key);
-        }
-    }
-    gl.processes.remove(dummy_process_key);
-
-    let input_vars = input_vars
-        .into_iter()
-        .zip(&input_types)
-        .map(|(i, ty)| {
-            i.unwrap_or_else(|| {
-                gl.vars.insert(vogls_ir::Variable {
-                    size: ty.force_net_width(),
-                })
-            })
-        })
-        .collect();
-
-    let fn_key = scope.fns.len();
-    scope.fns.push(FunctionSymbol {
-        entry: entry_key,
-        input_vars,
-        input_types,
-        output_var,
-        output_ty,
-    });
-    let exists = scope.fns_lut.insert(name, fn_key).is_some();
-    if exists {
-        diagnostics.not_yet_implemented(arenas.get_span(id), "duplicate function name");
-        return Err(());
-    }
+    // let input_vars = input_vars
+    //     .into_iter()
+    //     .zip(&input_types)
+    //     .map(|(i, ty)| {
+    //         i.unwrap_or_else(|| {
+    //             gl.vars.insert(vogls_ir::Variable {
+    //                 size: ty.force_net_width(),
+    //             })
+    //         })
+    //     })
+    //     .collect();
 
     Ok(())
 }

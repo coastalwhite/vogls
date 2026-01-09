@@ -14,10 +14,13 @@ use vogls_verilog::ast::module::{
     CaseGenerateConstruct, CaseGenerateItem, GenerateBlock, IfGenerateConstruct,
     LoopGenerateConstruct, Module, ModuleItem, ModuleOrGenerateItem, NonPortModuleItem,
 };
-use vogls_verilog::hierarchy::{Hierarchy, ModuleBuilder};
+use vogls_verilog::elaborate::elaborate_module;
+use vogls_verilog::hierarchy::{
+    Hierarchy, HierarchyItem, HierarchyItemRange, HierarchyKey, HierarchyModule, ScopeBuilder,
+};
 use vogls_verilog::lower::{
     Diagnostics as LowerDiagnostics, ModuleArgs, ModuleContext, ModuleInitialization, ModuleQuery,
-    fetch_module_interface, lower_module_to_ir,
+    lower_module_to_ir,
 };
 use vogls_verilog::parser::{
     AstArenas, Diagnostics as ParserDiagnostics, ParseContext, ParserScratches, TokenWalker,
@@ -264,24 +267,79 @@ pub fn run(
         ));
     };
 
-    // Walk the modules in depth-first order and lower to IR.
-    let mut error = false;
+    let mut hierarchy = Hierarchy::new(tl_module_name.to_string());
+    let top_level_key = hierarchy.top_level_key();
+
     let mut diagnostics = LowerDiagnostics::default();
-    let mut next_modules = Vec::<ModuleInitialization>::new();
-    let Ok((top_level_params, top_level_io, parameters)) = fetch_module_interface(
-        &mut gl,
+    let mut error = false;
+    error |= elaborate_module(
+        &mut gl.signals,
         &ast.arenas,
         ast.modules.get(*tl_module),
-        &[],
+        &mut ScopeBuilder {
+            hierarchy: &mut hierarchy,
+            key: top_level_key,
+        },
         &mut diagnostics,
-    ) else {
+    )
+    .is_err();
+
+    let mut offset = 1;
+    while let Some(item) = hierarchy.symbols.get(offset) {
+        use HierarchyItem as I;
+        match item {
+            I::Module(m) => {
+                let m = *m;
+                let items_len = hierarchy.symbols.len();
+                let HierarchyModule {
+                    name: _,
+                    module_name,
+                    children,
+                    ast: _,
+                    parent: _,
+                    lut: _,
+                    ports: _,
+                } = &mut hierarchy.modules[m];
+
+                *children = HierarchyItemRange {
+                    start: items_len,
+                    end: items_len,
+                };
+                let id = ast.modules.get(module_lut[module_name.as_str()]);
+
+                error |= elaborate_module(
+                    &mut gl.signals,
+                    &ast.arenas,
+                    id,
+                    &mut ScopeBuilder {
+                        hierarchy: &mut hierarchy,
+                        key: HierarchyKey::new(offset),
+                    },
+                    &mut diagnostics,
+                )
+                .is_err();
+                dbg!(&hierarchy.modules[m].children.start);
+                dbg!(&hierarchy.modules[m].children.end);
+            }
+            I::NamedBlock(_) => todo!(),
+            I::Task(_) => todo!(),
+            I::Function(_) => todo!(),
+
+            I::Net(_) | I::Parameter(_) | I::GenVar(_) => {}
+        }
+        offset += 1;
+    }
+
+    if !diagnostics.warnings.is_empty() {
         for (location, warning) in &diagnostics.warnings {
             writeln!(ectx.stderr, "[WARN]: {warning}")?;
             let mut out = String::new();
             report(&token_buffer, *location, &mut out)?;
             writeln!(ectx.stderr, "{out}")?;
         }
+    }
 
+    if error {
         for (location, err, context) in &diagnostics.errors {
             let mut out = String::new();
             report_error(&token_buffer, err.clone(), *location, &mut out)?;
@@ -294,13 +352,51 @@ pub fn run(
             }
             writeln!(ectx.stderr)?;
         }
-        return Err("top_level fetch_module error".into());
-    };
-    if !top_level_io.ports.is_empty() {
-        return Err("top_level has input and output ports".into());
+        return Err("failed to lower".into());
     }
-    let mut hierarchy = Hierarchy::new(tl_module_name.to_string());
-    let top_level_key = hierarchy.top_level_key();
+
+    dbg!(hierarchy.items());
+    eprintln!("{}", hierarchy.display(top_level_key));
+    Ok(())
+
+    // Walk the modules in depth-first order and lower to IR.
+    // let mut error = false;
+    // let mut diagnostics = LowerDiagnostics::default();
+    // let mut next_modules = Vec::<ModuleInitialization>::new();
+    // let Ok((top_level_params, top_level_io, parameters)) = fetch_module_interface(
+    //     &mut gl,
+    //     &ast.arenas,
+    //     ast.modules.get(*tl_module),
+    //     &[],
+    //     &mut diagnostics,
+    // ) else {
+    //     for (location, warning) in &diagnostics.warnings {
+    //         writeln!(ectx.stderr, "[WARN]: {warning}")?;
+    //         let mut out = String::new();
+    //         report(&token_buffer, *location, &mut out)?;
+    //         writeln!(ectx.stderr, "{out}")?;
+    //     }
+    //
+    //     for (location, err, context) in &diagnostics.errors {
+    //         let mut out = String::new();
+    //         report_error(&token_buffer, err.clone(), *location, &mut out)?;
+    //         write!(ectx.stderr, "{out}")?;
+    //         if !context.is_empty() {
+    //             writeln!(ectx.stderr, "context:")?;
+    //             for c in context {
+    //                 writeln!(ectx.stderr, "- {c}")?;
+    //             }
+    //         }
+    //         writeln!(ectx.stderr)?;
+    //     }
+    //     return Err("top_level fetch_module error".into());
+    // };
+    // if !top_level_io.ports.is_empty() {
+    //     return Err("top_level has input and output ports".into());
+    // }
+
+    /*
+
     next_modules.push(ModuleInitialization {
         name: tl_module_name,
         parameters: top_level_params,
@@ -313,7 +409,7 @@ pub fn run(
     });
     let mut mc = ModuleContext {
         named_lookup: module_to_ast_lut,
-        module_builder: ModuleBuilder::new(&mut hierarchy, top_level_key),
+        module_builder: ScopeBuilder::new(&mut hierarchy, top_level_key),
         next_modules,
         queries_to_resolve: Vec::new(),
     };
@@ -629,4 +725,5 @@ pub fn run(
     }
 
     Ok(())
+    */
 }

@@ -5,13 +5,13 @@ use vogls_ir::{
 use crate::ast::constant_expr::ConstantRangeExpression;
 use crate::ast::statement::{NetLValue, NetLValueFlat, VariableLValue, VariableLValueFlat};
 use crate::ast::{AstId, RangeExpression};
+use crate::hierarchy::{HierarchyItem, HierarchyNet, HierarchyParameter};
 use crate::lower::expression::eval_constant_expr;
 use crate::lower::expression::{self, lower_expr, sign_or_zero_extend, truncate_or_extend};
 use crate::lower::msb_lsb_to_width;
-use crate::lower::scope::SymbolVariant;
 use crate::parser::AstArenas;
 
-use super::scope::Scope;
+use super::Scope;
 use super::{Diagnostics, Region, VType};
 
 pub fn assign_variable_lvalue<'a>(
@@ -43,7 +43,7 @@ pub fn assign_variable_lvalue<'a>(
     assert!(!lvalue.0.is_empty());
     let mut total_width = 0u32;
     for lvf in lvalue.0.iter() {
-        let ty = variable_lvalue_flat_ty(gl, arenas, scope, diagnostics, lvf)?;
+        let ty = variable_lvalue_flat_ty(arenas, scope, diagnostics, lvf)?;
         total_width += ty.force_net_width().get();
     }
     let variable = truncate_or_extend(
@@ -56,7 +56,7 @@ pub fn assign_variable_lvalue<'a>(
 
     let mut offset = 0u32;
     for lvf in lvalue.0.iter().rev() {
-        let ty = variable_lvalue_flat_ty(gl, arenas, scope, diagnostics, lvf)?;
+        let ty = variable_lvalue_flat_ty(arenas, scope, diagnostics, lvf)?;
         let width = ty.force_net_width();
         let variable = builder.extract_constant(gl, variable, offset, width);
         assign_variable_lvalue_flat(
@@ -76,7 +76,6 @@ pub fn assign_variable_lvalue<'a>(
 }
 
 pub fn variable_lvalue_flat_ty<'a>(
-    gl: &GlobalContext,
     arenas: &'a AstArenas,
     scope: &Scope<'a>,
     diagnostics: &mut Diagnostics,
@@ -95,11 +94,20 @@ pub fn variable_lvalue_flat_ty<'a>(
     };
 
     let exprs = *exprs;
-    let (mut ty, mut n_dims) = match &scope.symbols[symbol_key].variant {
-        SymbolVariant::Genvar(_) => (VType::SignedNet(INTEGER_VSIZE), 0),
-        SymbolVariant::Constant(v) => (v.ty(), 0),
-        SymbolVariant::Task(_) => todo!(),
-        SymbolVariant::Signal(s) => (s.ty, s.dims.len()),
+    let (mut ty, mut n_dims) = match &scope.hierarchy.items()[symbol_key.as_idx()] {
+        HierarchyItem::GenVar(_) => todo!(),
+        HierarchyItem::Parameter(v) => {
+            let p = &scope.hierarchy.parameters()[*v];
+            (p.value.ty(), 0)
+        }
+        HierarchyItem::Net(s) => {
+            let n = &scope.hierarchy.net()[*s];
+            (n.ty, n.dims.len())
+        }
+        HierarchyItem::Module(_)
+        | HierarchyItem::NamedBlock(_)
+        | HierarchyItem::Task(_)
+        | HierarchyItem::Function(_) => todo!(),
     };
 
     if exprs.len() > n_dims {
@@ -138,11 +146,11 @@ pub fn variable_lvalue_flat_ty<'a>(
                 Err(())
             }
             RangeExpression::MsbLsb(msb, lsb) => {
-                let (_, _, width) = msb_lsb_to_width(gl, arenas, scope, diagnostics, *msb, *lsb)?;
+                let (_, _, width) = msb_lsb_to_width(arenas, scope, diagnostics, *msb, *lsb)?;
                 Ok(VType::UnsignedNet(width))
             }
             RangeExpression::BasePlus(_, width) | RangeExpression::BaseMinus(_, width) => {
-                let width = eval_constant_expr(gl, arenas, scope, diagnostics, *width)?;
+                let width = eval_constant_expr(arenas, scope, diagnostics, *width)?;
                 Ok(VType::UnsignedNet(width.to_vector_size().unwrap()))
             }
         },
@@ -173,11 +181,24 @@ pub fn assign_variable_lvalue_flat<'a>(
     };
 
     let mut exprs = *exprs;
-    let (ty, dims) = match &scope.symbols[symbol_key].variant {
-        SymbolVariant::Genvar(_) => (VType::SignedNet(INTEGER_VSIZE), Vec::new()),
-        SymbolVariant::Constant(v) => (v.ty(), Vec::new()),
-        SymbolVariant::Task(_) => todo!(),
-        SymbolVariant::Signal(s) => (s.ty, s.dims.clone()),
+    let (ty, dims) = match &scope.hierarchy.items()[symbol_key.as_idx()] {
+        HierarchyItem::GenVar(_) => (VType::SignedNet(INTEGER_VSIZE), [].into()),
+        HierarchyItem::Parameter(v) => {
+            let HierarchyParameter { name: _, value } = &scope.hierarchy.parameters()[*v];
+            (value.ty(), [].into())
+        }
+        HierarchyItem::Net(s) => {
+            let HierarchyNet {
+                name: _, ty, dims, ..
+            } = &scope.hierarchy.net()[*s];
+            (ty.clone(), dims.clone())
+        }
+        HierarchyItem::Module(_) => todo!(),
+        HierarchyItem::NamedBlock(_) => todo!(),
+        HierarchyItem::Task(_) => todo!(),
+        HierarchyItem::Function(_) => todo!(),
+        HierarchyItem::Net(_) => todo!(),
+        HierarchyItem::Parameter(_) => todo!(),
     };
     let mut dims = &dims[..];
     let mut arr_idx = if !dims.is_empty()
@@ -235,12 +256,10 @@ pub fn assign_variable_lvalue_flat<'a>(
         return Err(());
     }
 
-    match &mut scope.symbols[symbol_key].variant {
-        SymbolVariant::Constant(_) => todo!(),
-        SymbolVariant::Genvar(_) => todo!(),
-        SymbolVariant::Task(_) => todo!(),
-        SymbolVariant::Signal(s) => {
-            let key = s.key;
+    match &scope.hierarchy.items()[symbol_key.as_idx()] {
+        HierarchyItem::Net(s) => {
+            let s = &scope.hierarchy.net()[*s];
+            let key = s.signal;
             let size = ty.force_net_width();
             let partial = match range_expression {
                 None => match arr_idx {
@@ -262,7 +281,7 @@ pub fn assign_variable_lvalue_flat<'a>(
                         }
                         RangeExpression::MsbLsb(msb, lsb) => {
                             let (_, lsb, width) =
-                                msb_lsb_to_width(gl, arenas, scope, diagnostics, *msb, *lsb)?;
+                                msb_lsb_to_width(arenas, scope, diagnostics, *msb, *lsb)?;
                             (
                                 builder.constant(
                                     gl,
@@ -290,6 +309,12 @@ pub fn assign_variable_lvalue_flat<'a>(
             let variable = expression::truncate_or_extend(gl, builder, variable, variable_ty, size);
             builder.regioned_drive_opt_partial(gl, key, variable, region as u8, partial);
         }
+        HierarchyItem::Module(_) => todo!(),
+        HierarchyItem::NamedBlock(_) => todo!(),
+        HierarchyItem::Task(_) => todo!(),
+        HierarchyItem::Function(_) => todo!(),
+        HierarchyItem::Parameter(_) => todo!(),
+        HierarchyItem::GenVar(_) => todo!(),
     }
     Ok(())
 }
@@ -321,7 +346,7 @@ pub fn assign_net_lvalue<'a>(
     assert!(!lvalue.0.is_empty());
     let mut total_width = 0u32;
     for lvf in lvalue.0.iter() {
-        let ty = net_lvalue_flat_ty(gl, arenas, scope, diagnostics, lvf)?;
+        let ty = net_lvalue_flat_ty(arenas, scope, diagnostics, lvf)?;
         total_width += ty.force_net_width().get();
     }
     let variable = truncate_or_extend(
@@ -334,7 +359,7 @@ pub fn assign_net_lvalue<'a>(
 
     let mut offset = 0u32;
     for lvf in lvalue.0.iter().rev() {
-        let ty = net_lvalue_flat_ty(gl, arenas, scope, diagnostics, lvf)?;
+        let ty = net_lvalue_flat_ty(arenas, scope, diagnostics, lvf)?;
         let width = ty.force_net_width();
         let variable = builder.extract_constant(gl, variable, offset, width);
         assign_net_lvalue_flat(gl, arenas, scope, diagnostics, builder, lvf, variable, ty)?;
@@ -344,7 +369,6 @@ pub fn assign_net_lvalue<'a>(
 }
 
 pub fn net_lvalue_flat_ty<'a>(
-    gl: &GlobalContext,
     arenas: &'a AstArenas,
     scope: &Scope<'a>,
     diagnostics: &mut Diagnostics,
@@ -363,11 +387,20 @@ pub fn net_lvalue_flat_ty<'a>(
     };
 
     let exprs = *constant_exprs;
-    let (mut ty, mut n_dims) = match &scope.symbols[symbol_key].variant {
-        SymbolVariant::Genvar(_) => (VType::SignedNet(INTEGER_VSIZE), 0),
-        SymbolVariant::Constant(v) => (v.ty(), 0),
-        SymbolVariant::Task(_) => todo!(),
-        SymbolVariant::Signal(s) => (s.ty, s.dims.len()),
+    let (mut ty, mut n_dims) = match &scope.hierarchy.items()[symbol_key.as_idx()] {
+        HierarchyItem::GenVar(_) => todo!(),
+        HierarchyItem::Parameter(v) => {
+            let p = &scope.hierarchy.parameters()[*v];
+            (p.value.ty(), 0)
+        }
+        HierarchyItem::Net(s) => {
+            let n = &scope.hierarchy.net()[*s];
+            (n.ty, n.dims.len())
+        }
+        HierarchyItem::Module(_)
+        | HierarchyItem::NamedBlock(_)
+        | HierarchyItem::Task(_)
+        | HierarchyItem::Function(_) => todo!(),
     };
 
     if exprs.len() > n_dims {
@@ -406,7 +439,7 @@ pub fn net_lvalue_flat_ty<'a>(
                 Err(())
             }
             ConstantRangeExpression::MsbLsb { msb, lsb } => {
-                let (_, _, width) = msb_lsb_to_width(gl, arenas, scope, diagnostics, *msb, *lsb)?;
+                let (_, _, width) = msb_lsb_to_width(arenas, scope, diagnostics, *msb, *lsb)?;
                 Ok(VType::UnsignedNet(width))
             } // RangeExpression::BasePlus(_, width) | RangeExpression::BaseMinus(_, width) => {
               //     let width = eval_constant_expr(gl, arenas, scope, diagnostics, *width)?;
@@ -437,10 +470,11 @@ fn assign_net_lvalue_flat<'a>(
         return Err(());
     };
 
-    let SymbolVariant::Signal(s) = &scope.symbols[symbol_key].variant else {
+    let HierarchyItem::Net(s) = &scope.hierarchy.items()[symbol_key.as_idx()] else {
         panic!("not a signal");
     };
-    let key = s.key;
+    let s = &scope.hierarchy.net()[*s];
+    let key = s.signal;
     let mut dims = &s.dims[..];
 
     let mut exprs = *constant_exprs;
@@ -449,7 +483,7 @@ fn assign_net_lvalue_flat<'a>(
     {
         dims = &dims[1..];
         let mut leaf_arr_items = dims.iter().product::<u32>();
-        let fst = eval_constant_expr(gl, arenas, scope, diagnostics, fst)?;
+        let fst = eval_constant_expr(arenas, scope, diagnostics, fst)?;
         let fst = fst.as_integer().unwrap();
         let mut offset = fst as u32 * leaf_arr_items;
 
@@ -457,7 +491,7 @@ fn assign_net_lvalue_flat<'a>(
             && let Some(expr) = exprs.pop_front()
         {
             leaf_arr_items /= *dim;
-            let expr = eval_constant_expr(gl, arenas, scope, diagnostics, expr)?;
+            let expr = eval_constant_expr(arenas, scope, diagnostics, expr)?;
             let expr = expr.as_integer().unwrap();
             let expr = expr as u32 * leaf_arr_items;
             offset += expr;
@@ -481,7 +515,7 @@ fn assign_net_lvalue_flat<'a>(
 
         dims = &dims[1..];
         let leaf_arr_items = dims.iter().product::<u32>();
-        let fst = eval_constant_expr(gl, arenas, scope, diagnostics, *expr)?;
+        let fst = eval_constant_expr(arenas, scope, diagnostics, *expr)?;
         let fst = fst.as_integer().unwrap();
         let offset = fst as u32 * leaf_arr_items;
 
@@ -508,14 +542,13 @@ fn assign_net_lvalue_flat<'a>(
         Some(range_expression) => {
             let (offset, length) = match arenas.get(range_expression) {
                 ConstantRangeExpression::Single(expr) => (
-                    eval_constant_expr(gl, arenas, scope, diagnostics, *expr)?
+                    eval_constant_expr(arenas, scope, diagnostics, *expr)?
                         .as_integer()
                         .unwrap(),
                     VectorSize::new(1).unwrap(),
                 ),
                 ConstantRangeExpression::MsbLsb { msb, lsb } => {
-                    let (_, lsb, size) =
-                        msb_lsb_to_width(gl, arenas, scope, diagnostics, *msb, *lsb)?;
+                    let (_, lsb, size) = msb_lsb_to_width(arenas, scope, diagnostics, *msb, *lsb)?;
                     (lsb, size)
                 }
             };
@@ -536,7 +569,6 @@ fn assign_net_lvalue_flat<'a>(
 }
 
 pub fn net_lvalue_width<'a>(
-    gl: &mut GlobalContext,
     arenas: &'a AstArenas,
     scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
@@ -547,12 +579,11 @@ pub fn net_lvalue_width<'a>(
         .0
         .first()
         .expect("Concatenation should have at least one value");
-    let mut size =
-        net_lvalue_flat_ty(gl, arenas, scope, diagnostics, lvalue_flat)?.force_net_width();
+    let mut size = net_lvalue_flat_ty(arenas, scope, diagnostics, lvalue_flat)?.force_net_width();
 
     for lvalue_flat in lvalue.0.iter().skip(1) {
         let lvalue_size =
-            net_lvalue_flat_ty(gl, arenas, scope, diagnostics, lvalue_flat)?.force_net_width();
+            net_lvalue_flat_ty(arenas, scope, diagnostics, lvalue_flat)?.force_net_width();
         size = size.checked_add(lvalue_size.get()).ok_or_else(|| {
             diagnostics.net_width_overflow(arenas.get_span(output_terminal));
         })?;

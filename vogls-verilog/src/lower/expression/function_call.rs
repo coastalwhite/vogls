@@ -5,20 +5,22 @@ use vogls_ir::{BasicBlockBuilder, BasicBlockTerminator, GlobalContext, VariableK
 use crate::ast::expr::Expr;
 use crate::ast::{AstId, AstItem, Identifier};
 use crate::lower::expression::truncate_or_extend;
-use crate::lower::scope::Scope;
+use crate::lower::Scope;
 use crate::lower::{Diagnostics, VType};
 use crate::parser::AstArenas;
 
 pub fn lower_function_call<'a>(
-    gl: &mut GlobalContext,
-    arenas: &'a AstArenas,
-    scope: &Scope<'a>,
-    diagnostics: &mut Diagnostics,
-    builder: &mut BasicBlockBuilder,
-    expr: AstId<Expr>,
-    ident: AstItem<Identifier>,
-    arguments: &[Option<(VariableKey, VType)>],
+    _gl: &mut GlobalContext,
+    _arenas: &'a AstArenas,
+    _scope: &Scope<'a>,
+    _diagnostics: &mut Diagnostics,
+    _builder: &mut BasicBlockBuilder,
+    _expr: AstId<Expr>,
+    _ident: AstItem<Identifier>,
+    _arguments: &[Option<(VariableKey, VType)>],
 ) -> Result<(VariableKey, VType), ()> {
+    todo!()
+    /*
     let fn_name = arenas.get_ident(ident.item.0);
     let Some(fn_symbol) = scope.fns_lut.get(fn_name) else {
         diagnostics.var_not_found(arenas, ident);
@@ -65,4 +67,5 @@ pub fn lower_function_call<'a>(
     gl.bbs[origin_bb].terminator = BasicBlockTerminator::Jump(fn_bb);
 
     Ok((map[&fn_symbol.output_var], fn_symbol.output_ty))
+    */
 }

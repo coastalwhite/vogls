@@ -6,28 +6,25 @@ use vogls_ir::{
 
 use crate::ast::constant_expr::ConstantMinTypMaxExpression;
 use crate::ast::module::{
-    Dimension, GateInstantiation, GenerateBlock, GenvarAssignment, GenvarDeclaration,
-    IfGenerateConstruct, ListOfPortConnections, LoopGenerateConstruct, ModuleInstance,
-    ModuleInstantiation, ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration, NInputGateInstance,
-    NInputGateType, NamedParameterAssignment, NamedPortConnection, NetDeclAssignment,
-    NetDeclarationNets, ParameterValueAssignment, TaskDeclaration, VariableType,
-    VariableTypeVariant,
+    Dimension, GateInstantiation, GenerateBlock, GenvarAssignment, IfGenerateConstruct,
+    ListOfPortConnections, LoopGenerateConstruct, ModuleInstance, ModuleInstantiation,
+    ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration, NInputGateInstance, NInputGateType,
+    NamedParameterAssignment, NamedPortConnection, NetDeclAssignment, NetDeclarationNets,
+    ParameterValueAssignment, VariableType, VariableTypeVariant,
 };
 use crate::ast::{AstId, AstIdRange};
+use crate::hierarchy::{HierarchyItem, HierarchyModule, HierarchyNet};
 use crate::lower::assign::{assign_net_lvalue, net_lvalue_width};
 use crate::lower::expression::{self, lower_expr, truncate_or_extend};
-use crate::lower::parameter::push_localparameter_into_scope;
-use crate::lower::scope::{SignalSymbol, Symbol, SymbolVariant};
 use crate::lower::statement::statements_to_process;
 use crate::lower::vvalue::VValue;
 use crate::lower::{
-    ModuleArgs, VType, assign_port_output, eval_constant_expr, evaluate_range,
-    fetch_module_interface, lower_to_signal,
+    VType, assign_port_output, eval_constant_expr, evaluate_range, lower_to_signal,
 };
 use crate::parser::AstArenas;
 
-use super::scope::Scope;
-use super::{Diagnostics, ModuleContext, ModuleInitialization};
+use super::Scope;
+use super::{Diagnostics, ModuleContext};
 
 mod function;
 
@@ -47,60 +44,11 @@ pub fn lower<'a>(
                     let net_declaration = arenas.get(*id);
                     let (msb, lsb, width) = match net_declaration.range {
                         None => (0, 0, SCALAR_VSIZE),
-                        Some(range) => evaluate_range(gl, arenas, scope, diagnostics, range)?,
+                        Some(range) => evaluate_range(arenas, scope, diagnostics, range)?,
                     };
                     let ty = VType::net(width, net_declaration.signed);
                     match net_declaration.nets {
-                        NetDeclarationNets::Idents(net_idents) => {
-                            for ast_net_ident in net_idents.iter() {
-                                let net_ident = arenas.get(ast_net_ident);
-                                let dims = dims_to_array(
-                                    gl,
-                                    arenas,
-                                    scope,
-                                    diagnostics,
-                                    net_ident.dimension,
-                                )?;
-                                let Some(size) = ty
-                                    .force_net_width()
-                                    .checked_mul(VectorSize::new(dims.iter().product()).unwrap())
-                                else {
-                                    diagnostics.not_yet_implemented(
-                                        arenas.get_span(ast_net_ident),
-                                        "overflow in net width",
-                                    );
-                                    return Err(());
-                                };
-                                let ast_ident = net_ident.ident;
-                                let ident = ast_ident.item;
-                                let ident = arenas.get_ident(ident.0);
-                                let key = gl.signals.insert(Signal {
-                                    name: ident.into(),
-                                    size,
-                                    initialize: None,
-                                    origin: arenas.get_span(ast_net_ident),
-                                });
-                                let symbol_key = scope.symbols.insert(Symbol {
-                                    name: ident.to_string(),
-                                    definition_site: arenas.get_item_span(ast_ident),
-                                    variant: SymbolVariant::Signal(SignalSymbol {
-                                        dims,
-                                        ty,
-                                        key,
-                                        msb,
-                                        lsb,
-                                    }),
-                                });
-                                mc.module_builder.push_net(
-                                    ident.to_string(),
-                                    key,
-                                    NetType::Wire,
-                                    msb,
-                                    lsb,
-                                );
-                                scope.push(ident, symbol_key);
-                            }
-                        }
+                        NetDeclarationNets::Idents(net_idents) => {}
                         NetDeclarationNets::Assignments(assignments) => {
                             for assignment in assignments.iter() {
                                 let NetDeclAssignment {
@@ -114,25 +62,14 @@ pub fn lower<'a>(
                                     initialize: None,
                                     origin: arenas.get_span(assignment),
                                 });
-                                let symbol_key = scope.symbols.insert(Symbol {
-                                    name: ident.to_string(),
-                                    definition_site: arenas.get_item_span(*ast_ident),
-                                    variant: SymbolVariant::Signal(SignalSymbol {
-                                        dims: Vec::new(),
-                                        ty,
-                                        key,
-                                        msb,
-                                        lsb,
-                                    }),
-                                });
-                                mc.module_builder.push_net(
-                                    ident.to_string(),
-                                    key,
-                                    NetType::Wire,
-                                    msb,
-                                    lsb,
-                                );
-                                scope.push(ident, symbol_key);
+
+                                let symbol_key = scope.get(ident).unwrap();
+                                let HierarchyItem::Net(i) =
+                                    &scope.hierarchy.items()[symbol_key.as_idx()]
+                                else {
+                                    panic!();
+                                };
+                                let net = &scope.hierarchy.net()[*i];
 
                                 let mut bb_builder =
                                     new_process(gl, "decl_assign".into(), arenas.get_span(*expr));
@@ -152,52 +89,13 @@ pub fn lower<'a>(
                                     v_ty,
                                     ty.force_net_width(),
                                 );
-                                bb_builder.drive(gl, key, v);
+                                bb_builder.drive(gl, net.signal, v);
                                 bb_builder.watch_for_ins_to(gl, bb_key);
                             }
                         }
                     }
                 }
-                ModuleOrGenerateItemDeclaration::Reg(id) => {
-                    let reg_declaration = arenas.get(*id);
-                    let (msb, lsb, size) = match reg_declaration.range {
-                        None => (0, 0, SCALAR_VSIZE),
-                        Some(range) => evaluate_range(gl, arenas, scope, diagnostics, range)?,
-                    };
-
-                    let ty = VType::net(size, reg_declaration.signed);
-                    for variable_type in reg_declaration.variable_types.iter() {
-                        let (dims, size, initialize) =
-                            lower_variable_type(gl, arenas, scope, diagnostics, variable_type, ty)?;
-                        let ident = arenas.get_ident(arenas.get(variable_type).identifier.item.0);
-
-                        let key = gl.signals.insert(Signal {
-                            name: ident.into(),
-                            size,
-                            initialize,
-                            origin: arenas.get_span(variable_type),
-                        });
-                        let symbol_key = scope.symbols.insert(Symbol {
-                            name: ident.to_string(),
-                            definition_site: arenas.get_span(variable_type),
-                            variant: SymbolVariant::Signal(SignalSymbol {
-                                dims,
-                                ty,
-                                key,
-                                msb,
-                                lsb,
-                            }),
-                        });
-                        mc.module_builder.push_net(
-                            ident.to_string(),
-                            key,
-                            NetType::Register,
-                            msb,
-                            lsb,
-                        );
-                        scope.push(ident, symbol_key);
-                    }
-                }
+                ModuleOrGenerateItemDeclaration::Reg(id) => {}
                 ModuleOrGenerateItemDeclaration::Integer(id) => {
                     let integer_declaration = arenas.get(*id);
                     let msb = 31;
@@ -205,76 +103,27 @@ pub fn lower<'a>(
                     let ty = VType::SignedNet(INTEGER_VSIZE);
                     for variable_type in integer_declaration.variable_types.iter() {
                         let (dims, size, initialize) =
-                            lower_variable_type(gl, arenas, scope, diagnostics, variable_type, ty)?;
+                            lower_variable_type(arenas, scope, diagnostics, variable_type, ty)?;
+                        let Some(initialize) = initialize else {
+                            continue;
+                        };
                         let ident = arenas.get_ident(arenas.get(variable_type).identifier.item.0);
 
-                        let key = gl.signals.insert(Signal {
-                            name: ident.into(),
-                            size,
-                            initialize,
-                            origin: arenas.get_span(variable_type),
-                        });
-                        let symbol_key = scope.symbols.insert(Symbol {
-                            name: ident.to_string(),
-                            definition_site: arenas.get_span(variable_type),
-                            variant: SymbolVariant::Signal(SignalSymbol {
-                                dims,
-                                ty,
-                                key,
-                                msb,
-                                lsb,
-                            }),
-                        });
-                        mc.module_builder.push_net(
-                            ident.to_string(),
-                            key,
-                            NetType::Integer,
-                            msb,
-                            lsb,
-                        );
-                        scope.push(ident, symbol_key);
+                        let symbol_key = scope.get(ident).unwrap();
+                        let HierarchyItem::Net(i) = &scope.hierarchy.items()[symbol_key.as_idx()]
+                        else {
+                            panic!();
+                        };
+                        let net = &scope.hierarchy.net()[*i];
+                        gl.signals[net.signal].initialize = Some(initialize);
                     }
                 }
-                ModuleOrGenerateItemDeclaration::Genvar(id) => {
-                    let GenvarDeclaration { identifiers } = arenas.get(*id);
-                    for ast_ident in identifiers.iter() {
-                        let ident = arenas.get(ast_ident);
-                        let ident = arenas.get_ident(ident.0);
-
-                        let symbol_key = scope.symbols.insert(Symbol {
-                            name: ident.to_string(),
-                            definition_site: arenas.get_span(ast_ident),
-                            variant: SymbolVariant::Genvar(None),
-                        });
-                        scope.push(ident, symbol_key);
-                    }
-                }
-                ModuleOrGenerateItemDeclaration::Task(id) => {
-                    let TaskDeclaration {
-                        ident,
-                        automatic: _,
-                        statement_or_null,
-                    } = arenas.get(*id);
-
-                    // @FIXME: Currently the tasks just get lowered with the Scope of the caller,
-                    // but this should be the scope of the definer. I think there is probably some
-                    // stuff that can be done here by only lowering once and then reusing.
-                    let name = arenas.get_ident(ident.item.0);
-                    let symbol_key = scope.symbols.insert(Symbol {
-                        name: name.to_string(),
-                        definition_site: arenas.get_item_span(*ident),
-                        variant: SymbolVariant::Task(*statement_or_null),
-                    });
-                    scope.push(name, symbol_key);
-                }
-                ModuleOrGenerateItemDeclaration::Function(id) => {
-                    function::lower(gl, arenas, mc, scope, diagnostics, *id)?
-                }
+                ModuleOrGenerateItemDeclaration::Genvar(id) => {}
+                ModuleOrGenerateItemDeclaration::Task(id) => {}
+                ModuleOrGenerateItemDeclaration::Function(id) => {}
             }
         }
-        ModuleOrGenerateItem::LocalParameterDeclaration(id) => {
-            push_localparameter_into_scope(gl, arenas, scope, diagnostics, *id)?
-        }
+        ModuleOrGenerateItem::LocalParameterDeclaration(id) => {}
         ModuleOrGenerateItem::ParameterOverride => todo!(),
         ModuleOrGenerateItem::ContinuousAssign(id) => {
             let assign = arenas.get(*id);
@@ -322,7 +171,7 @@ pub fn lower<'a>(
                         let bb_key = bb_builder.key();
 
                         let output_size =
-                            net_lvalue_width(gl, arenas, scope, diagnostics, *output_terminal)?;
+                            net_lvalue_width(arenas, scope, diagnostics, *output_terminal)?;
 
                         assert!(!input_terminals.is_empty());
                         let value = input_terminals.first().unwrap();
@@ -423,15 +272,12 @@ pub fn lower<'a>(
                                 return Err(());
                             };
                             let value =
-                                eval_constant_expr(gl, arenas, scope, diagnostics, *expression)?;
+                                eval_constant_expr(arenas, scope, diagnostics, *expression)?;
                             params.push((key, value, arenas.get_span(*expression)));
                         }
                     }
                 }
             }
-
-            let (instant_params, instant_io, parameters) =
-                fetch_module_interface(gl, arenas, *instant_module, &params, diagnostics)?;
 
             for instance in module_instances.iter() {
                 let ModuleInstance {
@@ -439,9 +285,16 @@ pub fn lower<'a>(
                     list_of_port_connections,
                 } = arenas.get(instance);
 
+                let name_of_module_instance = arenas.get_ident(name_of_module_instance.item.0);
+                let symbol_key = scope.get(name_of_module_instance).unwrap();
+                let HierarchyItem::Module(i) = scope.hierarchy.items()[symbol_key.as_idx()] else {
+                    panic!();
+                };
+                let instant_module = &scope.hierarchy.modules()[i];
+
                 let signals: Vec<SignalKey> = match arenas.get(*list_of_port_connections) {
                     ListOfPortConnections::Ordered(ports) => {
-                        if instant_io.ports.len() != ports.len() {
+                        if instant_module.ports.len() != ports.len() {
                             diagnostics.not_yet_implemented(
                                 arenas.get_range_span(*ports),
                                 "unequal number of ports",
@@ -449,26 +302,27 @@ pub fn lower<'a>(
                             return Err(());
                         }
 
-                        instant_io
+                        instant_module
                             .ports
                             .iter()
                             .zip(ports.iter())
-                            .map(|((_name, connection, ty, _msb, _lsb), l_p)| {
+                            .map(|((net, connection), l_p)| {
+                                let ty = scope.hierarchy.net()[*net].ty;
                                 let is_input = matches!(
                                     connection,
                                     ConnectionDirection::In | ConnectionDirection::Both
                                 );
                                 if is_input {
-                                    lower_to_signal(gl, arenas, scope, diagnostics, l_p, *ty)
+                                    lower_to_signal(gl, arenas, scope, diagnostics, l_p, ty)
                                 } else {
-                                    assign_port_output(gl, arenas, scope, diagnostics, l_p, *ty)
+                                    assign_port_output(gl, arenas, scope, diagnostics, l_p, ty)
                                 }
                             })
                             .collect::<Result<Vec<SignalKey>, ()>>()?
                     }
                     ListOfPortConnections::Named(ports) => {
                         let mut error = false;
-                        let mut signals = vec![None; instant_io.ports.len()];
+                        let mut signals = vec![None; instant_module.ports.len()];
                         for p in ports.iter() {
                             let named_port_connection = arenas.get(p);
                             let NamedPortConnection {
@@ -477,17 +331,23 @@ pub fn lower<'a>(
                             } = *named_port_connection;
                             let port_identifier = arenas.get_ident(ast_port_identifier.item.0);
 
-                            let Some(&port_idx) = instant_io.lut.get(port_identifier) else {
+                            let Some(&port_idx) = instant_module.lut.get(port_identifier) else {
                                 diagnostics.port_not_found(
                                     arenas,
-                                    &instant_io,
+                                    &instant_module,
                                     ast_port_identifier,
                                 );
                                 error = true;
                                 continue;
                             };
 
-                            let (name, connection, port_ty, _, _) = instant_io.ports[port_idx];
+                            let (net, connection) = instant_module.ports[port_idx];
+                            let HierarchyNet {
+                                name,
+                                signal: _,
+                                ty: port_ty,
+                                dims: _,
+                            } = &scope.hierarchy.net()[net];
 
                             let is_input = matches!(
                                 connection,
@@ -505,10 +365,10 @@ pub fn lower<'a>(
                                     })
                                 }
                                 Some(e) if is_input => {
-                                    lower_to_signal(gl, arenas, scope, diagnostics, e, port_ty)?
+                                    lower_to_signal(gl, arenas, scope, diagnostics, e, *port_ty)?
                                 }
                                 Some(e) => {
-                                    assign_port_output(gl, arenas, scope, diagnostics, e, port_ty)?
+                                    assign_port_output(gl, arenas, scope, diagnostics, e, *port_ty)?
                                 }
                             };
 
@@ -519,20 +379,6 @@ pub fn lower<'a>(
                             }
                         }
 
-                        for (i, s) in signals.iter_mut().enumerate() {
-                            s.get_or_insert_with(|| {
-                                let (name, _, ty, _, _) = instant_io.ports[i];
-
-                                let size = ty.force_net_width();
-                                gl.signals.insert(Signal {
-                                    name: format!("{name}::UNCONNECTED"),
-                                    size,
-                                    initialize: None,
-                                    origin: arenas.get_span(instance),
-                                })
-                            });
-                        }
-
                         if error {
                             return Err(());
                         }
@@ -540,20 +386,6 @@ pub fn lower<'a>(
                         signals.into_iter().map(|s| s.unwrap()).collect()
                     }
                 };
-                let hierarchy_key = mc.module_builder.push_module_instance(
-                    instantiation_ident.to_string(),
-                    arenas.get_ident(name_of_module_instance.item.0).to_string(),
-                );
-                mc.next_modules.push(ModuleInitialization {
-                    name: instantiation_ident,
-                    parameters: instant_params.clone(),
-                    io: instant_io.clone(),
-                    args: ModuleArgs {
-                        parameters: parameters.clone(),
-                        signals,
-                    },
-                    hierarchy_key,
-                });
             }
         }
         ModuleOrGenerateItem::InitialConstruct(id) => {
@@ -616,6 +448,8 @@ pub fn lower<'a>(
                 return Err(());
             };
 
+            todo!()
+            /*
             let SymbolVariant::Genvar(_) = &mut scope.symbols[symbol_key].variant else {
                 diagnostics.not_yet_implemented(
                     arenas.get_item_span(*init_ident),
@@ -624,12 +458,12 @@ pub fn lower<'a>(
                 return Err(());
             };
 
-            let v = eval_constant_expr(gl, arenas, &scope, diagnostics, *init_expr)?;
+            let v = eval_constant_expr(arenas, &scope, diagnostics, *init_expr)?;
             let mut v = v.as_integer().unwrap();
             scope.symbols[symbol_key].variant = SymbolVariant::Genvar(Some(v));
 
             loop {
-                let condition = eval_constant_expr(gl, arenas, &scope, diagnostics, *condition)?;
+                let condition = eval_constant_expr(arenas, &scope, diagnostics, *condition)?;
                 let condition = condition.as_integer().unwrap();
                 if condition == 0 {
                     break;
@@ -646,11 +480,12 @@ pub fn lower<'a>(
                     }
                 }
 
-                v = eval_constant_expr(gl, arenas, &scope, diagnostics, *iter_expr)?
+                v = eval_constant_expr(arenas, &scope, diagnostics, *iter_expr)?
                     .as_integer()
                     .unwrap();
                 scope.symbols[symbol_key].variant = SymbolVariant::Genvar(Some(v as i64));
             }
+            */
         }
         ModuleOrGenerateItem::IfGenerateConstruct(id) => {
             let IfGenerateConstruct {
@@ -659,7 +494,7 @@ pub fn lower<'a>(
                 falsy,
             } = arenas.get(*id);
 
-            let v = eval_constant_expr(gl, arenas, &scope, diagnostics, *condition)?;
+            let v = eval_constant_expr(arenas, &scope, diagnostics, *condition)?;
             if v.logical_equal(VValue::UnsignedNet(Bits::new_zeroed(SCALAR_VSIZE))) {
                 if let Some(falsy) = falsy {
                     lower_opt_generate_block(gl, arenas, scope, diagnostics, mc, *falsy)?;
@@ -675,7 +510,6 @@ pub fn lower<'a>(
 }
 
 pub fn dims_to_array<'a>(
-    gl: &GlobalContext,
     arenas: &'a AstArenas,
     scope: &Scope<'a>,
     diagnostics: &mut Diagnostics,
@@ -684,8 +518,8 @@ pub fn dims_to_array<'a>(
     let mut dims = Vec::with_capacity(dimensions.len());
     for dim in dimensions.iter().rev() {
         let Dimension { lhs, rhs } = arenas.get(dim);
-        let lhs = eval_constant_expr(gl, arenas, scope, diagnostics, *lhs);
-        let rhs = eval_constant_expr(gl, arenas, scope, diagnostics, *rhs);
+        let lhs = eval_constant_expr(arenas, scope, diagnostics, *lhs);
+        let rhs = eval_constant_expr(arenas, scope, diagnostics, *rhs);
 
         let lhs = lhs?.into_bits().as_i64().unwrap();
         let rhs = rhs?.into_bits().as_i64().unwrap();
@@ -718,7 +552,6 @@ pub fn lower_opt_generate_block<'a>(
 }
 
 pub fn lower_variable_type<'a>(
-    gl: &GlobalContext,
     arenas: &'a AstArenas,
     scope: &Scope<'a>,
     diagnostics: &mut Diagnostics,
@@ -727,7 +560,7 @@ pub fn lower_variable_type<'a>(
 ) -> Result<(Vec<u32>, VectorSize, Option<Bits>), ()> {
     match arenas.get(variable_type).variant {
         VariableTypeVariant::Dimensions(dimensions) => {
-            let dims = dims_to_array(gl, arenas, scope, diagnostics, dimensions)?;
+            let dims = dims_to_array(arenas, scope, diagnostics, dimensions)?;
             let mut size = ty.force_net_width().get();
             for dim in &dims {
                 size = size.checked_mul(*dim).ok_or_else(|| {
@@ -743,7 +576,7 @@ pub fn lower_variable_type<'a>(
             Ok((dims, size, None))
         }
         VariableTypeVariant::ConstantExpr(expr) => {
-            let value = eval_constant_expr(gl, arenas, scope, diagnostics, expr)?;
+            let value = eval_constant_expr(arenas, scope, diagnostics, expr)?;
             let value = value.truncate_or_extend(ty.force_net_width());
             Ok((Vec::new(), ty.force_net_width(), Some(value.into_bits())))
         }

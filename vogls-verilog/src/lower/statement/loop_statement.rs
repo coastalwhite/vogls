@@ -3,7 +3,7 @@ use vogls_ir::{BasicBlockBuilder, BasicBlockTerminator, GlobalContext};
 use crate::ast::statement::{LoopStatement, LoopStatementVariant};
 use crate::ast::{AstId, AstIdRange};
 use crate::lower::diagnostics::Diagnostics;
-use crate::lower::scope::Scope;
+use crate::lower::Scope;
 use crate::lower::{ModuleContext, Region, assign, lower_expr};
 use crate::parser::AstArenas;
 

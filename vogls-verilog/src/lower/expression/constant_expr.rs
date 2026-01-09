@@ -1,9 +1,10 @@
-use vogls_ir::{Bits, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE};
+use vogls_ir::{Bits, INTEGER_VSIZE, SCALAR_VSIZE};
 
 use crate::ast::AstId;
 use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::expr::{BinaryOperator, Expr};
-use crate::lower::scope::{Scope, SymbolVariant};
+use crate::hierarchy::{HierarchyItem, HierarchyParameter};
+use crate::lower::Scope;
 use crate::lower::vvalue::VValue;
 use crate::number::Sign;
 use crate::parser::AstArenas;
@@ -11,7 +12,6 @@ use crate::parser::AstArenas;
 use super::Diagnostics;
 
 pub fn eval_constant_expr<'a>(
-    _gl: &GlobalContext,
     arenas: &'a AstArenas,
     scope: &Scope<'a>,
     diagnostics: &mut Diagnostics,
@@ -114,13 +114,12 @@ pub fn eval_constant_expr<'a>(
                     error = true;
                     continue;
                 };
-                let value = match &scope.symbols[symbol_key].variant {
-                    SymbolVariant::Genvar(n) => {
-                        VValue::SignedNet(Bits::from_i64_truncated(n.unwrap(), INTEGER_VSIZE))
-                    }
-                    SymbolVariant::Constant(n) => n.clone(),
-                    SymbolVariant::Task(_) => todo!(),
-                    SymbolVariant::Signal(..) => {
+                let value = match &scope.hierarchy.items()[symbol_key.as_idx()] {
+                    HierarchyItem::Parameter(n) => {
+                        let HierarchyParameter { name: _, value } = &scope.hierarchy.parameters()[*n];
+                        value.clone()
+                    },
+                    HierarchyItem::Net(..) => {
                         result_stack.push(None);
                         diagnostics.not_yet_implemented(
                             arenas.get_item_span(*ast_ident),
@@ -129,6 +128,11 @@ pub fn eval_constant_expr<'a>(
                         error = true;
                         continue;
                     }
+                    HierarchyItem::Module(_) => todo!(),
+                    HierarchyItem::NamedBlock(_) => todo!(),
+                    HierarchyItem::Task(_) => todo!(),
+                    HierarchyItem::Function(_) => todo!(),
+                    HierarchyItem::GenVar(_) => todo!(),
                 };
                 result_stack.push(Some(value));
             }

@@ -1,6 +1,7 @@
 use vogls_ir::token_range::TokenRange;
 
 use crate::ast::{AstItem, Identifier, TextRef};
+use crate::hierarchy::HierarchyModule;
 use crate::parser::AstArenas;
 
 use super::{ModuleIo, VType};
@@ -36,20 +37,21 @@ impl Diagnostics {
     pub fn port_not_found<'a>(
         &mut self,
         arenas: &'a AstArenas,
-        io: &ModuleIo<'a>,
+        io: &HierarchyModule,
         ident: AstItem<Identifier>,
     ) {
-        let context = format!(
-            "available ports: {:?}",
-            io.ports
-                .iter()
-                .map(|(s, _, _, _, _)| *s)
-                .collect::<Vec<&str>>()
-        );
+        // @TODO
+        // let context = format!(
+        //     "available ports: {:?}",
+        //     io.ports
+        //         .iter()
+        //         .map(|(i, _)| *s)
+        //         .collect::<Vec<&str>>()
+        // );
         self.errors.push((
             arenas.get_item_span(ident),
             LowerErrorReason::PortNotFound(ident.item.0),
-            vec![context],
+            vec![],
         ));
     }
 

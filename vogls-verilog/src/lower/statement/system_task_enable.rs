@@ -5,7 +5,7 @@ use vogls_ir::{BasicBlockBuilder, GlobalContext, IntrinsicOp};
 use crate::ast::AstId;
 use crate::ast::statement::SystemTaskEnable;
 use crate::lower::expression::lower_expr;
-use crate::lower::scope::Scope;
+use crate::lower::Scope;
 use crate::lower::{Diagnostics, ModuleContext, ModuleQuery, expression};
 use crate::parser::AstArenas;
 
