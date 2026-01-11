@@ -10,7 +10,7 @@ use vogls_ir::{ConnectionDirection, SignalKey};
 use crate::ast::AstId;
 use crate::ast::module::{FunctionDeclaration, ModuleInstance, TaskDeclaration};
 use crate::ast::statement::SeqBlock;
-use crate::lower::{Scope, VType, VValue};
+use crate::lower::{EvalScope, Scope, VType, VValue};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct HierarchyKey(NonZeroUsize);
@@ -41,6 +41,17 @@ pub struct HierarchyModule {
     // @TODO: Do something smarter here.
     pub lut: HashMap<String, usize>,
     pub ports: Vec<(usize, ConnectionDirection)>,
+    pub parameter_lut: HashMap<String, usize>,
+    pub parameters: Vec<usize>,
+    pub parameter_overrides: Option<ParameterOverrides>,
+}
+
+#[derive(Clone)]
+pub enum ParameterOverrides {
+    Ordered(Vec<VValue>),
+
+    // @TODO: Make consistently ordered.
+    Named(HashMap<String, VValue>),
 }
 
 #[derive(Clone)]
@@ -70,6 +81,7 @@ pub struct HierarchyFunction {
 #[derive(Clone, PartialEq, Eq)]
 pub struct HierarchyNet {
     pub name: String,
+    pub parent: HierarchyKey,
     pub signal: SignalKey,
     pub ty: VType,
     pub dims: Box<[u32]>,
@@ -188,6 +200,9 @@ impl HierarchyItem {
                     parent: _,
                     lut: _,
                     ports: _,
+                    parameter_lut: _,
+                    parameters: _,
+                    parameter_overrides: _,
                 } = &hierarchy.modules[*i];
                 write!(f, "mod {module_name}: {instance_name}")
             }
@@ -221,11 +236,25 @@ impl HierarchyItem {
             I::Net(i) => {
                 let HierarchyNet {
                     name,
+                    parent: _,
                     signal: _,
-                    ty: _,
-                    dims: _,
+                    ty,
+                    dims,
                 } = &hierarchy.nets[*i];
-                write!(f, "net {name}")
+                f.write_str("net ")?;
+                if ty.is_signed() || ty.force_net_width().get() != 1 {
+                    match ty {
+                        VType::SignedNet(s) => write!(f, "i{} ", s.get()),
+                        VType::UnsignedNet(s) => write!(f, "u{} ", s.get()),
+                        VType::String(_) => f.write_str("str "),
+                    }?;
+                }
+                f.write_str(name)?;
+                for d in dims {
+                    write!(f, "[{d}]")?;
+                }
+
+                Ok(())
             }
             I::Parameter(i) => {
                 let HierarchyParameter { name, value: _ } = &hierarchy.parameters[*i];
@@ -308,6 +337,9 @@ impl Hierarchy {
             parent: None,
             lut: Default::default(),
             ports: Default::default(),
+            parameter_lut: Default::default(),
+            parameters: Default::default(),
+            parameter_overrides: None,
         });
         slf
     }
@@ -360,8 +392,8 @@ impl Hierarchy {
 }
 
 pub struct ScopeBuilder<'a> {
-    pub key: HierarchyKey,
     pub hierarchy: &'a mut Hierarchy,
+    pub key: HierarchyKey,
 }
 
 macro_rules! insert_fn {
@@ -417,8 +449,8 @@ impl<'a> ScopeBuilder<'a> {
         self.key
     }
 
-    pub(crate) fn scope<'b>(&'b self) -> Scope<'b> {
-        Scope {
+    pub fn eval_scope<'b>(&'b self) -> EvalScope<'b> {
+        EvalScope {
             hierarchy: self.hierarchy,
             key: self.key,
         }

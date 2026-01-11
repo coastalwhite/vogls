@@ -2,16 +2,15 @@ use vogls_ir::{BasicBlockBuilder, BasicBlockTerminator, GlobalContext};
 
 use crate::ast::statement::{LoopStatement, LoopStatementVariant};
 use crate::ast::{AstId, AstIdRange};
-use crate::lower::diagnostics::Diagnostics;
 use crate::lower::Scope;
-use crate::lower::{ModuleContext, Region, assign, lower_expr};
+use crate::lower::diagnostics::Diagnostics;
+use crate::lower::{Region, assign, lower_expr};
 use crate::parser::AstArenas;
 
 pub fn lower_loop_statement<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
     scope: &mut Scope<'a>,
-    mc: &mut ModuleContext<'a>,
     diagnostics: &mut Diagnostics,
     mut builder: BasicBlockBuilder,
     ls: AstId<LoopStatement>,
@@ -83,19 +82,14 @@ pub fn lower_loop_statement<'a>(
         }
     };
 
-    {
-        scope.push_scope();
-        builder = super::statements_to_process(
-            gl,
-            arenas,
-            scope,
-            mc,
-            diagnostics,
-            builder,
-            AstIdRange::single(ls.statement),
-        )?;
-        scope.pop_scope();
-    }
+    builder = super::statements_to_process(
+        gl,
+        arenas,
+        scope,
+        diagnostics,
+        builder,
+        AstIdRange::single(ls.statement),
+    )?;
 
     match ls.variant {
         V::For(_, _, step) => {
@@ -123,7 +117,7 @@ pub fn lower_loop_statement<'a>(
             let phi_ref = repeat_i_phi.unwrap();
             builder.update_phi_ref(gl, phi_ref, 1, builder.key(), i_plus_1);
         }
-        V::Forever | V::While(_) => {},
+        V::Forever | V::While(_) => {}
     }
 
     let builder_key = builder.key();

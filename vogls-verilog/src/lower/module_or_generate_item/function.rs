@@ -8,14 +8,13 @@ use vogls_ir::{
 use crate::ast::module::{FunctionDeclaration, FunctionRangeOrType, TfInputDeclaration, TfType};
 use crate::ast::{AstId, AstIdRange};
 use crate::lower::Scope;
-use crate::lower::{Diagnostics, ModuleContext, VType, evaluate_range};
+use crate::lower::{Diagnostics, VType, evaluate_range};
 use crate::parser::AstArenas;
 
 pub fn lower<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
-    mc: &mut ModuleContext<'a>,
-    mut scope: &mut Scope<'a>,
+    scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
     id: AstId<FunctionDeclaration>,
 ) -> Result<(), ()> {
@@ -37,7 +36,11 @@ pub fn lower<'a>(
 
     let name = arenas.get_ident(ident.item.0);
 
-    let fn_key = scope.hierarchy.lookup().get(&(scope.key, name.to_string())).unwrap();
+    let fn_key = scope
+        .hierarchy
+        .lookup()
+        .get(&(scope.key, name.to_string()))
+        .unwrap();
     // let HierarchyItem::Function(i) = &scope.hierarchy.items()[fn_key.as_idx()] else { panic!() };
     // let HierarchyFunction { .. } = &scope.hierarchy.function()[*i] else { panic!() };
 
@@ -53,11 +56,11 @@ pub fn lower<'a>(
         FunctionRangeOrType::Unsigned(None) => (0, 0, VType::UnsignedNet(SCALAR_VSIZE)),
         FunctionRangeOrType::Signed(None) => (0, 0, VType::SignedNet(SCALAR_VSIZE)),
         FunctionRangeOrType::Unsigned(Some(range)) => {
-            let (msb, lsb, size) = evaluate_range(arenas, scope, diagnostics, *range)?;
+            let (msb, lsb, size) = evaluate_range(arenas, scope.eval(), diagnostics, *range)?;
             (msb, lsb, VType::UnsignedNet(size))
         }
         FunctionRangeOrType::Signed(Some(range)) => {
-            let (msb, lsb, size) = evaluate_range(arenas, scope, diagnostics, *range)?;
+            let (msb, lsb, size) = evaluate_range(arenas, scope.eval(), diagnostics, *range)?;
             (msb, lsb, VType::SignedNet(size))
         }
         FunctionRangeOrType::Integer => (31, 0, VType::SignedNet(INTEGER_VSIZE)),
@@ -70,7 +73,12 @@ pub fn lower<'a>(
         }
     };
 
-    let mut fn_scope = Scope { hierarchy: scope.hierarchy, key: *fn_key };
+    let fn_key = *fn_key;
+    let mut fn_scope = Scope {
+        hierarchy: scope.hierarchy,
+        key: fn_key,
+        signal_map: scope.signal_map,
+    };
     let output_key = gl.signals.insert(Signal {
         name: name.to_string(),
         size: output_ty.force_net_width(),
@@ -93,7 +101,7 @@ pub fn lower<'a>(
                 range,
             } => {
                 let size = match range {
-                    Some(range) => evaluate_range(arenas, &mut fn_scope, diagnostics, *range)?.2,
+                    Some(range) => evaluate_range(arenas, fn_scope.eval(), diagnostics, *range)?.2,
                     None => SCALAR_VSIZE,
                 };
                 if *signed {
@@ -130,7 +138,6 @@ pub fn lower<'a>(
         gl,
         arenas,
         &mut fn_scope,
-        mc,
         diagnostics,
         builder,
         AstIdRange::single(*statement),

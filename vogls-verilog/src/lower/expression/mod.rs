@@ -202,7 +202,7 @@ pub fn lower_expr<'a>(
                 }
 
                 let end_stack_size = result_stack.len() - exprs.len();
-                let Ok(repeat_n) = eval_constant_expr(arenas, scope, diagnostics, constant_expr)
+                let Ok(repeat_n) = eval_constant_expr(arenas, scope.eval(), diagnostics, constant_expr)
                 else {
                     result_stack.truncate(end_stack_size);
                     result_stack.push(None);
@@ -362,11 +362,14 @@ pub fn lower_expr<'a>(
                         let value = value.clone();
                         (value.ty(), builder.constant(gl, value.into_bits()))
                     }
-                    HierarchyItem::GenVar(_)
+                    x @ (HierarchyItem::GenVar(_)
                     | HierarchyItem::Task(_)
                     | HierarchyItem::Function(_)
                     | HierarchyItem::Module(_)
-                    | HierarchyItem::NamedBlock(_) => todo!(),
+                    | HierarchyItem::NamedBlock(_)) => {
+                        dbg!(ident, x);
+                        todo!()
+                    },
                     HierarchyItem::Net(s) => {
                         let s = &scope.hierarchy.net()[*s];
                         let mut dims = &s.dims[..];
@@ -444,7 +447,7 @@ pub fn lower_expr<'a>(
                     let (lsb, width) = match slice {
                         BitSlice::MsbLsb(msb, lsb) => {
                             let Ok((_msb, lsb, width)) =
-                                msb_lsb_to_width(arenas, scope, diagnostics, *msb, *lsb)
+                                msb_lsb_to_width(arenas, scope.eval(), diagnostics, *msb, *lsb)
                             else {
                                 result_stack.push(None);
                                 continue;
@@ -458,7 +461,7 @@ pub fn lower_expr<'a>(
                                 result_stack.push(None);
                                 continue;
                             };
-                            let Ok(width) = eval_constant_expr(arenas, scope, diagnostics, *width)
+                            let Ok(width) = eval_constant_expr(arenas, scope.eval(), diagnostics, *width)
                             else {
                                 result_stack.push(None);
                                 continue;
@@ -474,7 +477,7 @@ pub fn lower_expr<'a>(
                                 continue;
                             };
 
-                            let Ok(width) = eval_constant_expr(arenas, scope, diagnostics, *width)
+                            let Ok(width) = eval_constant_expr(arenas, scope.eval(), diagnostics, *width)
                             else {
                                 result_stack.push(None);
                                 continue;

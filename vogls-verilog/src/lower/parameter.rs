@@ -17,7 +17,7 @@ pub fn parameter_typing_to_type<'a>(
         ParameterDeclarationTyping::None(signed, range) => {
             let (msb, lsb, width) = match range {
                 None => (0, 0, SCALAR_VSIZE),
-                Some(range) => evaluate_range(arenas, scope, diagnostics, *range)?,
+                Some(range) => evaluate_range(arenas, scope.eval(), diagnostics, *range)?,
             };
             (msb, lsb, VType::net(width, *signed))
         }

@@ -146,11 +146,11 @@ pub fn variable_lvalue_flat_ty<'a>(
                 Err(())
             }
             RangeExpression::MsbLsb(msb, lsb) => {
-                let (_, _, width) = msb_lsb_to_width(arenas, scope, diagnostics, *msb, *lsb)?;
+                let (_, _, width) = msb_lsb_to_width(arenas, scope.eval(), diagnostics, *msb, *lsb)?;
                 Ok(VType::UnsignedNet(width))
             }
             RangeExpression::BasePlus(_, width) | RangeExpression::BaseMinus(_, width) => {
-                let width = eval_constant_expr(arenas, scope, diagnostics, *width)?;
+                let width = eval_constant_expr(arenas, scope.eval(), diagnostics, *width)?;
                 Ok(VType::UnsignedNet(width.to_vector_size().unwrap()))
             }
         },
@@ -197,8 +197,6 @@ pub fn assign_variable_lvalue_flat<'a>(
         HierarchyItem::NamedBlock(_) => todo!(),
         HierarchyItem::Task(_) => todo!(),
         HierarchyItem::Function(_) => todo!(),
-        HierarchyItem::Net(_) => todo!(),
-        HierarchyItem::Parameter(_) => todo!(),
     };
     let mut dims = &dims[..];
     let mut arr_idx = if !dims.is_empty()
@@ -281,7 +279,7 @@ pub fn assign_variable_lvalue_flat<'a>(
                         }
                         RangeExpression::MsbLsb(msb, lsb) => {
                             let (_, lsb, width) =
-                                msb_lsb_to_width(arenas, scope, diagnostics, *msb, *lsb)?;
+                                msb_lsb_to_width(arenas, scope.eval(), diagnostics, *msb, *lsb)?;
                             (
                                 builder.constant(
                                     gl,
@@ -439,7 +437,7 @@ pub fn net_lvalue_flat_ty<'a>(
                 Err(())
             }
             ConstantRangeExpression::MsbLsb { msb, lsb } => {
-                let (_, _, width) = msb_lsb_to_width(arenas, scope, diagnostics, *msb, *lsb)?;
+                let (_, _, width) = msb_lsb_to_width(arenas, scope.eval(), diagnostics, *msb, *lsb)?;
                 Ok(VType::UnsignedNet(width))
             } // RangeExpression::BasePlus(_, width) | RangeExpression::BaseMinus(_, width) => {
               //     let width = eval_constant_expr(gl, arenas, scope, diagnostics, *width)?;
@@ -483,7 +481,7 @@ fn assign_net_lvalue_flat<'a>(
     {
         dims = &dims[1..];
         let mut leaf_arr_items = dims.iter().product::<u32>();
-        let fst = eval_constant_expr(arenas, scope, diagnostics, fst)?;
+        let fst = eval_constant_expr(arenas, scope.eval(), diagnostics, fst)?;
         let fst = fst.as_integer().unwrap();
         let mut offset = fst as u32 * leaf_arr_items;
 
@@ -491,7 +489,7 @@ fn assign_net_lvalue_flat<'a>(
             && let Some(expr) = exprs.pop_front()
         {
             leaf_arr_items /= *dim;
-            let expr = eval_constant_expr(arenas, scope, diagnostics, expr)?;
+            let expr = eval_constant_expr(arenas, scope.eval(), diagnostics, expr)?;
             let expr = expr.as_integer().unwrap();
             let expr = expr as u32 * leaf_arr_items;
             offset += expr;
@@ -515,7 +513,7 @@ fn assign_net_lvalue_flat<'a>(
 
         dims = &dims[1..];
         let leaf_arr_items = dims.iter().product::<u32>();
-        let fst = eval_constant_expr(arenas, scope, diagnostics, *expr)?;
+        let fst = eval_constant_expr(arenas, scope.eval(), diagnostics, *expr)?;
         let fst = fst.as_integer().unwrap();
         let offset = fst as u32 * leaf_arr_items;
 
@@ -542,13 +540,13 @@ fn assign_net_lvalue_flat<'a>(
         Some(range_expression) => {
             let (offset, length) = match arenas.get(range_expression) {
                 ConstantRangeExpression::Single(expr) => (
-                    eval_constant_expr(arenas, scope, diagnostics, *expr)?
+                    eval_constant_expr(arenas, scope.eval(), diagnostics, *expr)?
                         .as_integer()
                         .unwrap(),
                     VectorSize::new(1).unwrap(),
                 ),
                 ConstantRangeExpression::MsbLsb { msb, lsb } => {
-                    let (_, lsb, size) = msb_lsb_to_width(arenas, scope, diagnostics, *msb, *lsb)?;
+                    let (_, lsb, size) = msb_lsb_to_width(arenas, scope.eval(), diagnostics, *msb, *lsb)?;
                     (lsb, size)
                 }
             };

@@ -18,10 +18,7 @@ use vogls_verilog::elaborate::elaborate_module;
 use vogls_verilog::hierarchy::{
     Hierarchy, HierarchyItem, HierarchyItemRange, HierarchyKey, HierarchyModule, ScopeBuilder,
 };
-use vogls_verilog::lower::{
-    Diagnostics as LowerDiagnostics, ModuleArgs, ModuleContext, ModuleInitialization, ModuleQuery,
-    lower_module_to_ir,
-};
+use vogls_verilog::lower::{Diagnostics as LowerDiagnostics, lower_module_to_ir};
 use vogls_verilog::parser::{
     AstArenas, Diagnostics as ParserDiagnostics, ParseContext, ParserScratches, TokenWalker,
     parse_file, report, report_error,
@@ -299,6 +296,9 @@ pub fn run(
                     parent: _,
                     lut: _,
                     ports: _,
+                    parameter_lut: _,
+                    parameters: _,
+                    parameter_overrides: _,
                 } = &mut hierarchy.modules[m];
 
                 *children = HierarchyItemRange {
@@ -318,8 +318,6 @@ pub fn run(
                     &mut diagnostics,
                 )
                 .is_err();
-                dbg!(&hierarchy.modules[m].children.start);
-                dbg!(&hierarchy.modules[m].children.end);
             }
             I::NamedBlock(_) => todo!(),
             I::Task(_) => todo!(),
@@ -355,14 +353,14 @@ pub fn run(
         return Err("failed to lower".into());
     }
 
-    dbg!(hierarchy.items());
-    eprintln!("{}", hierarchy.display(top_level_key));
-    Ok(())
+    if ectx.emit_hierarchy {
+        writeln!(
+            ectx.stdout,
+            "{}",
+            hierarchy.display(hierarchy.top_level_key())
+        )?;
+    }
 
-    // Walk the modules in depth-first order and lower to IR.
-    // let mut error = false;
-    // let mut diagnostics = LowerDiagnostics::default();
-    // let mut next_modules = Vec::<ModuleInitialization>::new();
     // let Ok((top_level_params, top_level_io, parameters)) = fetch_module_interface(
     //     &mut gl,
     //     &ast.arenas,
@@ -395,42 +393,26 @@ pub fn run(
     //     return Err("top_level has input and output ports".into());
     // }
 
-    /*
-
-    next_modules.push(ModuleInitialization {
-        name: tl_module_name,
-        parameters: top_level_params,
-        io: top_level_io,
-        args: ModuleArgs {
-            parameters,
-            signals: Vec::new(),
-        },
-        hierarchy_key: top_level_key,
-    });
-    let mut mc = ModuleContext {
-        named_lookup: module_to_ast_lut,
-        module_builder: ScopeBuilder::new(&mut hierarchy, top_level_key),
-        next_modules,
-        queries_to_resolve: Vec::new(),
-    };
-    while let Some(init) = mc.next_modules.pop() {
-        let ModuleInitialization {
-            name,
-            parameters,
-            io,
-            args,
-            hierarchy_key,
-        } = &init;
-        mc.module_builder.move_to(*hierarchy_key);
-        let module_id = ast.modules.get(module_lut[name]);
+    // Walk the modules in depth-first order and lower to IR.
+    let mut error = false;
+    let mut diagnostics = LowerDiagnostics::default();
+    // @TODO: Iterate over the modules instead.
+    for i in 0..hierarchy.items().len() {
+        let HierarchyItem::Module(m) = hierarchy.items()[i] else {
+            continue;
+        };
+        let key = HierarchyKey::new(i);
+        let module = &hierarchy.modules()[m];
+        let module_id = ast.modules.get(module_lut[module.module_name.as_str()]);
         let module_key = lower_module_to_ir(
             &mut gl,
             &ast.arenas,
             module_id,
-            &parameters,
-            &io,
-            &args,
-            &mut mc,
+            &mut vogls_verilog::lower::Scope {
+                hierarchy: &mut hierarchy,
+                key,
+                signal_map: &mut HashMap::new(),
+            },
             &mut diagnostics,
         );
         error |= module_key.is_err();
@@ -461,30 +443,23 @@ pub fn run(
         return Err("failed to lower".into());
     }
 
-    for query in mc.queries_to_resolve {
-        let ModuleQuery {
-            bb,
-            instruction,
-            query,
-        } = query;
-
-        assert!(query.is_none());
-        let scope = hierarchy.vcd_scope(u32::MAX);
-        let i = &mut gl.bbs[bb].instrs[instruction];
-        let dst = i.get_destination_variable().unwrap();
-        *i = Instruction::Intrinsic(
-            dst,
-            Box::new(vogls_ir::IntrinsicOp::VcdAppendModule(scope)),
-            [].into(),
-        )
-    }
-    if ectx.emit_hierarchy {
-        writeln!(
-            ectx.stdout,
-            "{}",
-            hierarchy.display(hierarchy.top_level_key())
-        )?;
-    }
+    // for query in mc.queries_to_resolve {
+    //     let ModuleQuery {
+    //         bb,
+    //         instruction,
+    //         query,
+    //     } = query;
+    //
+    //     assert!(query.is_none());
+    //     let scope = hierarchy.vcd_scope(u32::MAX);
+    //     let i = &mut gl.bbs[bb].instrs[instruction];
+    //     let dst = i.get_destination_variable().unwrap();
+    //     *i = Instruction::Intrinsic(
+    //         dst,
+    //         Box::new(vogls_ir::IntrinsicOp::VcdAppendModule(scope)),
+    //         [].into(),
+    //     )
+    // }
 
     if ectx.emit_unoptimized_ir {
         for process in gl.processes.values() {
@@ -725,5 +700,4 @@ pub fn run(
     }
 
     Ok(())
-    */
 }

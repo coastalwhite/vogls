@@ -23,15 +23,14 @@ use crate::lower::{
 };
 use crate::parser::AstArenas;
 
+use super::{Diagnostics, EvalScope};
 use super::Scope;
-use super::{Diagnostics, ModuleContext};
 
 mod function;
 
 pub fn lower<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
-    mc: &mut ModuleContext<'a>,
     scope: &mut Scope<'a>,
     id: AstId<ModuleOrGenerateItem>,
     diagnostics: &mut Diagnostics,
@@ -42,13 +41,13 @@ pub fn lower<'a>(
             match module_or_generate_item_declaration {
                 ModuleOrGenerateItemDeclaration::Net(id) => {
                     let net_declaration = arenas.get(*id);
-                    let (msb, lsb, width) = match net_declaration.range {
+                    let (_, _, width) = match net_declaration.range {
                         None => (0, 0, SCALAR_VSIZE),
-                        Some(range) => evaluate_range(arenas, scope, diagnostics, range)?,
+                        Some(range) => evaluate_range(arenas, scope.eval(), diagnostics, range)?,
                     };
                     let ty = VType::net(width, net_declaration.signed);
                     match net_declaration.nets {
-                        NetDeclarationNets::Idents(net_idents) => {}
+                        NetDeclarationNets::Idents(_) => {}
                         NetDeclarationNets::Assignments(assignments) => {
                             for assignment in assignments.iter() {
                                 let NetDeclAssignment {
@@ -56,20 +55,7 @@ pub fn lower<'a>(
                                     expr,
                                 } = arenas.get(assignment);
                                 let ident = arenas.get_ident(ast_ident.item.0);
-                                let key = gl.signals.insert(Signal {
-                                    name: ident.into(),
-                                    size: ty.force_net_width(),
-                                    initialize: None,
-                                    origin: arenas.get_span(assignment),
-                                });
-
-                                let symbol_key = scope.get(ident).unwrap();
-                                let HierarchyItem::Net(i) =
-                                    &scope.hierarchy.items()[symbol_key.as_idx()]
-                                else {
-                                    panic!();
-                                };
-                                let net = &scope.hierarchy.net()[*i];
+                                let net = scope.get_unwrap_net(ident).unwrap();
 
                                 let mut bb_builder =
                                     new_process(gl, "decl_assign".into(), arenas.get_span(*expr));
@@ -95,14 +81,12 @@ pub fn lower<'a>(
                         }
                     }
                 }
-                ModuleOrGenerateItemDeclaration::Reg(id) => {}
+                ModuleOrGenerateItemDeclaration::Reg(_) => {}
                 ModuleOrGenerateItemDeclaration::Integer(id) => {
                     let integer_declaration = arenas.get(*id);
-                    let msb = 31;
-                    let lsb = 31;
                     let ty = VType::SignedNet(INTEGER_VSIZE);
                     for variable_type in integer_declaration.variable_types.iter() {
-                        let (dims, size, initialize) =
+                        let (_, _, initialize) =
                             lower_variable_type(arenas, scope, diagnostics, variable_type, ty)?;
                         let Some(initialize) = initialize else {
                             continue;
@@ -118,12 +102,12 @@ pub fn lower<'a>(
                         gl.signals[net.signal].initialize = Some(initialize);
                     }
                 }
-                ModuleOrGenerateItemDeclaration::Genvar(id) => {}
-                ModuleOrGenerateItemDeclaration::Task(id) => {}
-                ModuleOrGenerateItemDeclaration::Function(id) => {}
+                ModuleOrGenerateItemDeclaration::Genvar(_) => {}
+                ModuleOrGenerateItemDeclaration::Task(_) => {}
+                ModuleOrGenerateItemDeclaration::Function(_) => {}
             }
         }
-        ModuleOrGenerateItem::LocalParameterDeclaration(id) => {}
+        ModuleOrGenerateItem::LocalParameterDeclaration(_) => {}
         ModuleOrGenerateItem::ParameterOverride => todo!(),
         ModuleOrGenerateItem::ContinuousAssign(id) => {
             let assign = arenas.get(*id);
@@ -233,51 +217,6 @@ pub fn lower<'a>(
                 module_instances,
             } = arenas.get(*id);
             let instantiation_ident = arenas.get_ident(module_identifier.item.0);
-            let Some(instant_module) = mc.named_lookup.get(instantiation_ident) else {
-                diagnostics.module_not_found(arenas, *module_identifier);
-                return Err(());
-            };
-
-            let mut params = Vec::new();
-            if let Some(parameter_value_assignment) = parameter_value_assignment {
-                match arenas.get(*parameter_value_assignment) {
-                    ParameterValueAssignment::Ordered(_) => {
-                        diagnostics.not_yet_implemented(
-                            arenas.get_span(*parameter_value_assignment),
-                            "ordered parameter assignment",
-                        );
-                        return Err(());
-                    }
-                    ParameterValueAssignment::Named(named) => {
-                        for n in named.iter() {
-                            let NamedParameterAssignment {
-                                identifier,
-                                expression,
-                            } = arenas.get(n);
-                            let key = arenas.get_ident(identifier.item.0);
-                            let Some(expression) = expression else {
-                                diagnostics.not_yet_implemented(
-                                    arenas.get_span(n),
-                                    "null parameter assignment",
-                                );
-                                return Err(());
-                            };
-                            let ConstantMinTypMaxExpression::Single(expression) =
-                                arenas.get(*expression)
-                            else {
-                                diagnostics.not_yet_implemented(
-                                    arenas.get_span(n),
-                                    "mintypmax parameter assignment",
-                                );
-                                return Err(());
-                            };
-                            let value =
-                                eval_constant_expr(arenas, scope, diagnostics, *expression)?;
-                            params.push((key, value, arenas.get_span(*expression)));
-                        }
-                    }
-                }
-            }
 
             for instance in module_instances.iter() {
                 let ModuleInstance {
@@ -290,11 +229,15 @@ pub fn lower<'a>(
                 let HierarchyItem::Module(i) = scope.hierarchy.items()[symbol_key.as_idx()] else {
                     panic!();
                 };
-                let instant_module = &scope.hierarchy.modules()[i];
 
-                let signals: Vec<SignalKey> = match arenas.get(*list_of_port_connections) {
+                match arenas.get(*list_of_port_connections) {
                     ListOfPortConnections::Ordered(ports) => {
-                        if instant_module.ports.len() != ports.len() {
+                        // @TODO:
+                        // Icarus Verilog has as well perspective on how to deal with unequal port
+                        // lengths. We should always warn here, but allow less ports.
+                        //
+                        // https://steveicarus.github.io/iverilog/developer/guide/misc/ieee1364-notes.html.
+                        if scope.hierarchy.modules[i].ports.len() != ports.len() {
                             diagnostics.not_yet_implemented(
                                 arenas.get_range_span(*ports),
                                 "unequal number of ports",
@@ -302,27 +245,32 @@ pub fn lower<'a>(
                             return Err(());
                         }
 
-                        instant_module
-                            .ports
-                            .iter()
-                            .zip(ports.iter())
-                            .map(|((net, connection), l_p)| {
-                                let ty = scope.hierarchy.net()[*net].ty;
-                                let is_input = matches!(
-                                    connection,
-                                    ConnectionDirection::In | ConnectionDirection::Both
+                        for (pi, l_p) in ports.iter().enumerate() {
+                            let (net, connection) = scope.hierarchy.modules[i].ports[pi];
+                            let ty = scope.hierarchy.net()[net].ty;
+                            let is_input = matches!(
+                                connection,
+                                ConnectionDirection::In | ConnectionDirection::Both
+                            );
+                            if is_input {
+                                let signal =
+                                    lower_to_signal(gl, arenas, scope, diagnostics, l_p, ty)?;
+                                // @TODO: Just never allocate this signal.
+                                let old_signal = std::mem::replace(
+                                    &mut scope.hierarchy.nets[net].signal,
+                                    signal,
                                 );
-                                if is_input {
-                                    lower_to_signal(gl, arenas, scope, diagnostics, l_p, ty)
-                                } else {
-                                    assign_port_output(gl, arenas, scope, diagnostics, l_p, ty)
-                                }
-                            })
-                            .collect::<Result<Vec<SignalKey>, ()>>()?
+                                scope.signal_map.insert(old_signal, signal);
+                                gl.signals.remove(old_signal);
+                            } else {
+                                assign_port_output(gl, arenas, scope, diagnostics, l_p, net, ty)?;
+                            }
+                        }
                     }
                     ListOfPortConnections::Named(ports) => {
                         let mut error = false;
-                        let mut signals = vec![None; instant_module.ports.len()];
+                        let mut signals_assigned =
+                            vec![false; scope.hierarchy.modules[i].ports.len()];
                         for p in ports.iter() {
                             let named_port_connection = arenas.get(p);
                             let NamedPortConnection {
@@ -331,20 +279,23 @@ pub fn lower<'a>(
                             } = *named_port_connection;
                             let port_identifier = arenas.get_ident(ast_port_identifier.item.0);
 
-                            let Some(&port_idx) = instant_module.lut.get(port_identifier) else {
+                            let Some(&port_idx) =
+                                scope.hierarchy.modules[i].lut.get(port_identifier)
+                            else {
                                 diagnostics.port_not_found(
                                     arenas,
-                                    &instant_module,
+                                    &scope.hierarchy.modules[i],
                                     ast_port_identifier,
                                 );
                                 error = true;
                                 continue;
                             };
 
-                            let (net, connection) = instant_module.ports[port_idx];
+                            let (net, connection) = scope.hierarchy.modules[i].ports[port_idx];
                             let HierarchyNet {
-                                name,
+                                name: _,
                                 signal: _,
+                                parent: _,
                                 ty: port_ty,
                                 dims: _,
                             } = &scope.hierarchy.net()[net];
@@ -354,25 +305,45 @@ pub fn lower<'a>(
                                 ConnectionDirection::In | ConnectionDirection::Both
                             );
 
-                            let signal = match expression {
+                            match expression {
                                 None => {
-                                    let size = port_ty.force_net_width();
-                                    gl.signals.insert(Signal {
-                                        name: format!("{name}::UNCONNECTED"),
-                                        size,
-                                        initialize: None,
-                                        origin: arenas.get_span(instance),
-                                    })
+                                    if is_input {
+                                        let size = port_ty.force_net_width();
+                                        gl.signals[scope.hierarchy.nets[net].signal].initialize =
+                                            Some(Bits::new_zeroed(size));
+                                    }
                                 }
                                 Some(e) if is_input => {
-                                    lower_to_signal(gl, arenas, scope, diagnostics, e, *port_ty)?
+                                    let signal = lower_to_signal(
+                                        gl,
+                                        arenas,
+                                        scope,
+                                        diagnostics,
+                                        e,
+                                        *port_ty,
+                                    )?;
+                                    // @TODO: Just never allocate this signal.
+                                    let old_signal = std::mem::replace(
+                                        &mut scope.hierarchy.nets[net].signal,
+                                        signal,
+                                    );
+                                    scope.signal_map.insert(old_signal, signal);
+                                    gl.signals.remove(old_signal);
                                 }
                                 Some(e) => {
-                                    assign_port_output(gl, arenas, scope, diagnostics, e, *port_ty)?
+                                    assign_port_output(
+                                        gl,
+                                        arenas,
+                                        scope,
+                                        diagnostics,
+                                        e,
+                                        net,
+                                        *port_ty,
+                                    )?;
                                 }
                             };
 
-                            if signals[port_idx].replace(signal).is_some() {
+                            if std::mem::replace(&mut signals_assigned[port_idx], true) {
                                 diagnostics.duplicate_definition(arenas, ast_port_identifier);
                                 error = true;
                                 continue;
@@ -382,8 +353,6 @@ pub fn lower<'a>(
                         if error {
                             return Err(());
                         }
-
-                        signals.into_iter().map(|s| s.unwrap()).collect()
                     }
                 };
             }
@@ -395,7 +364,6 @@ pub fn lower<'a>(
                 gl,
                 arenas,
                 scope,
-                mc,
                 diagnostics,
                 bb_builder,
                 AstIdRange::single(statement),
@@ -410,7 +378,6 @@ pub fn lower<'a>(
                 gl,
                 arenas,
                 scope,
-                mc,
                 diagnostics,
                 bb_builder,
                 AstIdRange::single(statement),
@@ -494,13 +461,13 @@ pub fn lower<'a>(
                 falsy,
             } = arenas.get(*id);
 
-            let v = eval_constant_expr(arenas, &scope, diagnostics, *condition)?;
+            let v = eval_constant_expr(arenas, scope.eval(), diagnostics, *condition)?;
             if v.logical_equal(VValue::UnsignedNet(Bits::new_zeroed(SCALAR_VSIZE))) {
                 if let Some(falsy) = falsy {
-                    lower_opt_generate_block(gl, arenas, scope, diagnostics, mc, *falsy)?;
+                    lower_opt_generate_block(gl, arenas, scope, diagnostics, *falsy)?;
                 }
             } else {
-                lower_opt_generate_block(gl, arenas, scope, diagnostics, mc, *truthy)?;
+                lower_opt_generate_block(gl, arenas, scope, diagnostics, *truthy)?;
             }
         }
         ModuleOrGenerateItem::CaseGenerateConstruct(_id) => todo!(),
@@ -511,7 +478,7 @@ pub fn lower<'a>(
 
 pub fn dims_to_array<'a>(
     arenas: &'a AstArenas,
-    scope: &Scope<'a>,
+    scope: EvalScope<'a>,
     diagnostics: &mut Diagnostics,
     dimensions: AstIdRange<Dimension>,
 ) -> Result<Vec<u32>, ()> {
@@ -534,19 +501,18 @@ pub fn lower_opt_generate_block<'a>(
     arenas: &'a AstArenas,
     scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
-    mc: &mut ModuleContext<'a>,
     opt_generate_block: AstId<Option<GenerateBlock>>,
 ) -> Result<(), ()> {
     match arenas.get(opt_generate_block) {
         None => Ok(()),
         Some(GenerateBlock::BeginEnd(_, module_or_generate_items)) => {
             for m in module_or_generate_items.iter() {
-                lower(gl, arenas, mc, scope, m, diagnostics)?;
+                lower(gl, arenas, scope, m, diagnostics)?;
             }
             Ok(())
         }
         Some(GenerateBlock::ModuleOrGenerateItem(module_or_generate_item)) => {
-            lower(gl, arenas, mc, scope, *module_or_generate_item, diagnostics)
+            lower(gl, arenas, scope, *module_or_generate_item, diagnostics)
         }
     }
 }
@@ -560,7 +526,7 @@ pub fn lower_variable_type<'a>(
 ) -> Result<(Vec<u32>, VectorSize, Option<Bits>), ()> {
     match arenas.get(variable_type).variant {
         VariableTypeVariant::Dimensions(dimensions) => {
-            let dims = dims_to_array(arenas, scope, diagnostics, dimensions)?;
+            let dims = dims_to_array(arenas, scope.eval(), diagnostics, dimensions)?;
             let mut size = ty.force_net_width().get();
             for dim in &dims {
                 size = size.checked_mul(*dim).ok_or_else(|| {
@@ -576,7 +542,7 @@ pub fn lower_variable_type<'a>(
             Ok((dims, size, None))
         }
         VariableTypeVariant::ConstantExpr(expr) => {
-            let value = eval_constant_expr(arenas, scope, diagnostics, expr)?;
+            let value = eval_constant_expr(arenas, scope.eval(), diagnostics, expr)?;
             let value = value.truncate_or_extend(ty.force_net_width());
             Ok((Vec::new(), ty.force_net_width(), Some(value.into_bits())))
         }

@@ -4,7 +4,7 @@ use crate::ast::{AstItem, Identifier, TextRef};
 use crate::hierarchy::HierarchyModule;
 use crate::parser::AstArenas;
 
-use super::{ModuleIo, VType};
+use super::VType;
 
 #[derive(Clone, Debug)]
 pub enum LowerErrorReason {

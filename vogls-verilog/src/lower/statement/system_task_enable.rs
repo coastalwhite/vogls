@@ -6,14 +6,13 @@ use crate::ast::AstId;
 use crate::ast::statement::SystemTaskEnable;
 use crate::lower::expression::lower_expr;
 use crate::lower::Scope;
-use crate::lower::{Diagnostics, ModuleContext, ModuleQuery, expression};
+use crate::lower::{Diagnostics, expression};
 use crate::parser::AstArenas;
 
 pub fn lower_system_task_enable<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
     scope: &mut Scope<'a>,
-    mc: &mut ModuleContext<'a>,
     diagnostics: &mut Diagnostics,
     mut builder: BasicBlockBuilder,
     system_task_enable: AstId<SystemTaskEnable>,
@@ -183,19 +182,15 @@ pub fn lower_system_task_enable<'a>(
         }
         "dumpvars" => {
             assert!(expressions.is_empty());
-            mc.queries_to_resolve.push(ModuleQuery {
-                bb: builder.key(),
-                instruction: builder.instrs_len(),
-                query: None,
-            });
-            builder.intrinsic(
-                gl,
-                IntrinsicOp::VcdAppendModule(VcdScope {
-                    name: "".into(),
-                    items: Vec::new(),
-                }),
-                [].into(),
-            );
+            todo!();
+            // builder.intrinsic(
+            //     gl,
+            //     IntrinsicOp::VcdAppendModule(VcdScope {
+            //         name: "".into(),
+            //         items: Vec::new(),
+            //     }),
+            //     [].into(),
+            // );
         }
 
         // @Incomplete: Many variants here.

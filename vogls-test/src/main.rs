@@ -11,6 +11,9 @@ use vogls::ExecutionContext;
 struct Args {
     #[arg(short, long)]
     filter: Option<String>,
+
+    #[arg(long)]
+    skip: Vec<String>,
 }
 
 fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
@@ -50,13 +53,13 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         .unwrap_or_default()
         + 2;
 
-    let mut paths = match args.filter {
-        None => paths,
-        Some(f) => paths
-            .into_iter()
-            .filter(|p| p.to_str().unwrap().contains(&f))
-            .collect(),
-    };
+    // Filter and skip paths accordingly.
+    if let Some(f) = args.filter.as_ref() {
+        paths.retain(|p| p.to_str().unwrap().contains(f));
+    }
+    for s in args.skip {
+        paths.retain(|p| !p.to_str().unwrap().contains(s.as_str()));
+    }
     paths.sort_unstable();
 
     let mut num_failed = 0;

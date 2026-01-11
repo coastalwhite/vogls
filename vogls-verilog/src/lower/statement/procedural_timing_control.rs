@@ -11,7 +11,7 @@ use crate::ast::statement::{
 use crate::hierarchy::HierarchyItem;
 use crate::lower::Scope;
 use crate::lower::expression::lower_expr;
-use crate::lower::{ModuleContext, WatchCondition};
+use crate::lower::{WatchCondition};
 use crate::parser::AstArenas;
 
 use super::{Diagnostics, Region};
@@ -20,7 +20,6 @@ pub fn lower<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
     scope: &mut Scope<'a>,
-    mc: &mut ModuleContext<'a>,
     diagnostics: &mut Diagnostics,
     mut builder: BasicBlockBuilder,
     ptc: AstId<ProceduralTimingControl>,
@@ -65,7 +64,6 @@ pub fn lower<'a>(
                         gl,
                         arenas,
                         scope,
-                        mc,
                         diagnostics,
                         builder,
                         statement,
@@ -87,7 +85,6 @@ pub fn lower<'a>(
                     gl,
                     arenas,
                     scope,
-                    mc,
                     diagnostics,
                     builder,
                     statement,
@@ -195,7 +192,6 @@ pub fn lower<'a>(
                     gl,
                     arenas,
                     scope,
-                    mc,
                     diagnostics,
                     builder,
                     statement,

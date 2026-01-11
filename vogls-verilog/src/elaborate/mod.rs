@@ -1,14 +1,18 @@
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
+
 use slotmap::SlotMap;
-use vogls_ir::{INTEGER_VSIZE, SCALAR_VSIZE, Signal, SignalKey, VectorSize};
+use vogls_ir::{ConnectionDirection, INTEGER_VSIZE, SCALAR_VSIZE, Signal, SignalKey, VectorSize};
 
 use crate::ast::constant_expr::ConstantMinTypMaxExpression;
 use crate::ast::module::{
-    FunctionDeclaration, IntegerDeclaration, LocalParameterDeclaration, Module, ModuleInstance,
-    ModuleInstantiation, ModuleItem, ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration,
-    ModulePorts, NetDeclAssignment, NetDeclaration, NetDeclarationNets, NetIdent,
-    NonPortModuleItem, ParamAssignment, ParameterDeclaration, ParameterDeclarationTyping, Port,
-    PortDeclaration, PortExpression, PortReference, RegDeclaration, TaskDeclaration, VariableType,
-    VariableTypeVariant,
+    FunctionDeclaration, GateInstantiation, IntegerDeclaration, LocalParameterDeclaration, Module,
+    ModuleInstance, ModuleInstantiation, ModuleItem, ModuleOrGenerateItem,
+    ModuleOrGenerateItemDeclaration, ModulePorts, NInputGateInstantiation,
+    NamedParameterAssignment, NetDeclAssignment, NetDeclaration, NetDeclarationNets, NetIdent,
+    NonPortModuleItem, ParamAssignment, ParameterDeclaration, ParameterDeclarationTyping,
+    ParameterValueAssignment, Port, PortDeclaration, PortExpression, PortReference, RegDeclaration,
+    TaskDeclaration, VariableType, VariableTypeVariant,
 };
 use crate::ast::statement::{
     Block, CaseItem, CaseStatement, ConditionalStatement, IfBranch, LoopStatement,
@@ -17,8 +21,8 @@ use crate::ast::statement::{
 };
 use crate::ast::{AstId, AstIdRange};
 use crate::hierarchy::{
-    HierarchyFunction, HierarchyItemRange, HierarchyModule, HierarchyNamedBlock, HierarchyNet,
-    HierarchyParameter, HierarchyTask, ScopeBuilder,
+    HierarchyFunction, HierarchyItem, HierarchyItemRange, HierarchyModule, HierarchyNamedBlock,
+    HierarchyNet, HierarchyParameter, HierarchyTask, ParameterOverrides, ScopeBuilder,
 };
 use crate::lower::{Diagnostics, VType, dims_to_array, eval_constant_expr, evaluate_range};
 use crate::parser::AstArenas;
@@ -46,8 +50,15 @@ pub fn elaborate_module<'a>(
         default_nettype: _,
     } = arenas.get(module);
 
+    let mut parameter_idx = 0;
+
     if let Some(module_parameter_port_list) = module_parameter_port_list {
         for id in module_parameter_port_list.iter() {
+            let ParameterDeclaration {
+                typing,
+                assignments,
+            } = arenas.get(id);
+
             // @TODO:
             // We need to immediately exit here as a failed elaboration will have knock on effects
             // for future parameters.
@@ -57,7 +68,15 @@ pub fn elaborate_module<'a>(
             // continue.
             //
             // This way, you can get the broadest error messages.
-            elaborate_parameter_declaration(signals, arenas, id, builder, diagnostics)?;
+            elaborate_parameter_declaration(
+                signals,
+                arenas,
+                *typing,
+                *assignments,
+                builder,
+                diagnostics,
+                Some(&mut parameter_idx),
+            )?;
         }
     }
 
@@ -71,27 +90,16 @@ pub fn elaborate_module<'a>(
                         let PortReference { identifier } = arenas.get(*references);
 
                         let name = arenas.get_ident(identifier.item.0);
-                        let origin = arenas.get_item_span(*identifier);
 
-                        let ty = VType::UnsignedNet(SCALAR_VSIZE);
-                        let signal = signals.insert(Signal {
-                            name: name.to_string(),
-                            size: ty.force_net_width(),
-                            initialize: None,
-                            origin,
-                        });
-                        let net = HierarchyNet {
-                            name: name.to_string(),
-                            signal,
-                            ty,
-                            dims: [].into(),
+                        // Insert the port as IO.
+                        let HierarchyItem::Module(m) =
+                            builder.hierarchy.items()[builder.key().as_idx()]
+                        else {
+                            unreachable!()
                         };
-
-                        if builder.insert_net(net).is_some() {
-                            diagnostics.duplicate_definition(arenas, *identifier);
-                            error = true;
-                            continue;
-                        }
+                        let m = &mut builder.hierarchy.modules[m];
+                        m.lut.insert(name.to_string(), m.ports.len());
+                        m.ports.push((usize::MAX, ConnectionDirection::Both));
                     }
                 }
             }
@@ -121,10 +129,33 @@ pub fn elaborate_module<'a>(
                     )
                     .is_err();
                 }
-                NonPortModuleItem::GenerateRegion(id) => {}
+                NonPortModuleItem::GenerateRegion(region) => {
+                    for id in region.module_or_generate_item.iter() {
+                        error |= elaborate_module_or_generate_item(
+                            signals,
+                            arenas,
+                            id,
+                            builder,
+                            diagnostics,
+                        )
+                        .is_err();
+                    }
+                }
                 NonPortModuleItem::SpecifyBlock => todo!(),
                 NonPortModuleItem::ParameterDeclaration(id) => {
-                    elaborate_parameter_declaration(signals, arenas, *id, builder, diagnostics)?
+                    let ParameterDeclaration {
+                        typing,
+                        assignments,
+                    } = arenas.get(*id);
+                    elaborate_parameter_declaration(
+                        signals,
+                        arenas,
+                        *typing,
+                        *assignments,
+                        builder,
+                        diagnostics,
+                        Some(&mut parameter_idx),
+                    )?;
                 }
                 NonPortModuleItem::SpecParamDeclaration => todo!(),
             },
@@ -142,26 +173,47 @@ pub fn elaborate_parameter_declaration<'a>(
     signals: &mut SlotMap<SignalKey, Signal>,
     arenas: &'a AstArenas,
 
-    id: AstId<ParameterDeclaration>,
+    typing: AstId<ParameterDeclarationTyping>,
+    assignments: AstIdRange<ParamAssignment>,
 
     builder: &mut ScopeBuilder<'a>,
     diagnostics: &mut Diagnostics,
+    mut parameter_idx: Option<&mut usize>,
 ) -> Result<(), ()> {
-    let ParameterDeclaration {
-        typing,
-        assignments,
-    } = arenas.get(id);
-
-    let _ty = parameter_typing_to_type(arenas, builder, diagnostics, *typing)?;
+    let _ty = parameter_typing_to_type(arenas, builder, diagnostics, typing)?;
     for assignment in assignments.iter() {
         let ParamAssignment { param, constant } = arenas.get(assignment);
         let name = arenas.get_ident(param.item.0);
-        let value = match arenas.get(*constant) {
+        let mut value = match arenas.get(*constant) {
             ConstantMinTypMaxExpression::Single(id) => {
-                eval_constant_expr(arenas, &builder.scope(), diagnostics, *id)?
+                eval_constant_expr(arenas, builder.eval_scope(), diagnostics, *id)?
             }
             ConstantMinTypMaxExpression::MinTypMax { .. } => todo!(),
         };
+
+        if let Some(parameter_idx) = parameter_idx.as_deref_mut() {
+            // Insert the parameter as a module parameter.
+            let HierarchyItem::Module(m) = builder.hierarchy.items()[builder.key().as_idx()] else {
+                unreachable!()
+            };
+            let idx = builder.hierarchy.parameters().len();
+            let m = &mut builder.hierarchy.modules[m];
+            m.parameter_lut.insert(name.to_string(), m.parameters.len());
+            m.parameters.push(idx);
+
+            if let Some(overrides) = m.parameter_overrides.as_ref() {
+                match overrides {
+                    ParameterOverrides::Ordered(values) => value = values[*parameter_idx].clone(),
+                    ParameterOverrides::Named(map) => {
+                        if let Some(override_value) = map.get(name) {
+                            value = override_value.clone();
+                        }
+                    }
+                }
+            }
+
+            *parameter_idx += 1;
+        }
 
         if builder
             .insert_parameter(HierarchyParameter {
@@ -187,25 +239,27 @@ pub fn elaborate_port_declaration<'a>(
     builder: &mut ScopeBuilder<'a>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
-    let (range, signed, identifiers) = match arenas.get(id) {
+    use ConnectionDirection as D;
+    let (direction, range, signed, identifiers) = match arenas.get(id) {
         PortDeclaration::Inout(id) => {
             let inout = arenas.get(*id);
-            (inout.range, inout.signed, inout.port_identifiers)
+            (D::Both, inout.range, inout.signed, inout.port_identifiers)
         }
         PortDeclaration::Input(id) => {
             let input = arenas.get(*id);
-            (input.range, input.signed, input.port_identifiers)
+            (D::In, input.range, input.signed, input.port_identifiers)
         }
         PortDeclaration::Output(id) => {
             let output = arenas.get(*id);
-            (output.range, output.signed, output.identifiers)
+            (D::Out, output.range, output.signed, output.identifiers)
         }
     };
+
     let (msb, lsb, size) = match range {
         None => (0, 0, SCALAR_VSIZE),
-        Some(range) => evaluate_range(arenas, &builder.scope(), diagnostics, range)?,
+        Some(range) => evaluate_range(arenas, builder.eval_scope(), diagnostics, range)?,
     };
-    let ty = VType::UnsignedNet(SCALAR_VSIZE);
+    let ty = VType::net(size, signed);
 
     let mut error = false;
     for ident in identifiers.iter() {
@@ -219,14 +273,29 @@ pub fn elaborate_port_declaration<'a>(
         });
         let net = HierarchyNet {
             name: name.to_string(),
+            parent: builder.key(),
             signal,
             ty,
             dims: [].into(),
         };
+        let port_key = builder.hierarchy.net().len();
         if builder.insert_net(net).is_some() {
             diagnostics.duplicate_definition(arenas, arenas.to_item(ident));
             error = true;
             continue;
+        }
+
+        // Insert the port as IO.
+        let HierarchyItem::Module(m) = builder.hierarchy.items()[builder.key().as_idx()] else {
+            unreachable!()
+        };
+        let m = &mut builder.hierarchy.modules[m];
+        match m.lut.entry(name.to_string()) {
+            Entry::Vacant(v) => {
+                m.ports.push((port_key, direction));
+                v.insert(m.ports.len() - 1);
+            }
+            Entry::Occupied(idx) => m.ports[*idx.get()] = (port_key, direction),
         }
     }
 
@@ -261,35 +330,23 @@ pub fn elaborate_module_or_generate_item<'a>(
                 typing,
                 assignments,
             } = arenas.get(*id);
-
-            let _ty = parameter_typing_to_type(arenas, builder, diagnostics, *typing)?;
-            for assignment in assignments.iter() {
-                let ParamAssignment { param, constant } = arenas.get(assignment);
-                let name = arenas.get_ident(param.item.0);
-                let value = match arenas.get(*constant) {
-                    ConstantMinTypMaxExpression::Single(id) => {
-                        eval_constant_expr(arenas, &builder.scope(), diagnostics, *id)?
-                    }
-                    ConstantMinTypMaxExpression::MinTypMax { .. } => todo!(),
-                };
-
-                if builder
-                    .insert_parameter(HierarchyParameter {
-                        name: name.to_string(),
-                        value,
-                    })
-                    .is_some()
-                {
-                    diagnostics.duplicate_definition(arenas, *param);
-                    return Err(());
-                }
-            }
-
-            Ok(())
+            elaborate_parameter_declaration(
+                signals,
+                arenas,
+                *typing,
+                *assignments,
+                builder,
+                diagnostics,
+                None,
+            )
         }
         ModuleOrGenerateItem::ParameterOverride => todo!(),
-        ModuleOrGenerateItem::ContinuousAssign(id) => todo!(),
-        ModuleOrGenerateItem::GateInstantiation(id) => todo!(),
+        ModuleOrGenerateItem::ContinuousAssign(_) => Ok(()),
+
+        // @TODO: This actually also needs to be elaborated somewhat. I am not 100% sure how or
+        // what though.
+        ModuleOrGenerateItem::GateInstantiation(id) => Ok(()),
+
         ModuleOrGenerateItem::UdpInstantiation => todo!(),
         ModuleOrGenerateItem::ModuleInstantiation(id) => {
             let ModuleInstantiation {
@@ -297,6 +354,56 @@ pub fn elaborate_module_or_generate_item<'a>(
                 parameter_value_assignment,
                 module_instances,
             } = arenas.get(*id);
+
+            let parameter_overrides = match parameter_value_assignment {
+                None => None,
+                Some(id) => Some(match arenas.get(*id) {
+                    ParameterValueAssignment::Ordered(ids) => {
+                        let mut params = Vec::new();
+                        for id in ids.iter() {
+                            let value =
+                                eval_constant_expr(arenas, builder.eval_scope(), diagnostics, id)?;
+                            params.push(value);
+                        }
+                        ParameterOverrides::Ordered(params)
+                    }
+                    ParameterValueAssignment::Named(named) => {
+                        let mut params = HashMap::new();
+                        for n in named.iter() {
+                            let NamedParameterAssignment {
+                                identifier,
+                                expression,
+                            } = arenas.get(n);
+                            let key = arenas.get_ident(identifier.item.0);
+                            let Some(expression) = expression else {
+                                diagnostics.not_yet_implemented(
+                                    arenas.get_span(n),
+                                    "null parameter assignment",
+                                );
+                                return Err(());
+                            };
+                            let ConstantMinTypMaxExpression::Single(expression) =
+                                arenas.get(*expression)
+                            else {
+                                diagnostics.not_yet_implemented(
+                                    arenas.get_span(n),
+                                    "mintypmax parameter assignment",
+                                );
+                                return Err(());
+                            };
+                            let value = eval_constant_expr(
+                                arenas,
+                                builder.eval_scope(),
+                                diagnostics,
+                                *expression,
+                            )?;
+                            params.insert(key.to_string(), value);
+                        }
+                        ParameterOverrides::Named(params)
+                    }
+                }),
+            };
+
             let module_name = arenas.get_ident(module_identifier.item.0);
             for module_instance in module_instances.iter() {
                 let ModuleInstance {
@@ -312,6 +419,9 @@ pub fn elaborate_module_or_generate_item<'a>(
                     parent: Some(builder.key()),
                     lut: Default::default(),
                     ports: Default::default(),
+                    parameter_lut: Default::default(),
+                    parameters: Default::default(),
+                    parameter_overrides: parameter_overrides.clone(),
                 };
                 builder.insert_module(module);
             }
@@ -357,9 +467,9 @@ pub fn elaborate_module_or_generate_item_declaration<'a>(
             } = arenas.get(*id);
             let (msb, lsb, width) = match range {
                 None => (0, 0, SCALAR_VSIZE),
-                Some(range) => evaluate_range(arenas, &builder.scope(), diagnostics, *range)?,
+                Some(range) => evaluate_range(arenas, builder.eval_scope(), diagnostics, *range)?,
             };
-            let ty = VType::SignedNet(INTEGER_VSIZE);
+            let ty = VType::net(width, *signed);
             match nets {
                 NetDeclarationNets::Idents(idents) => {
                     for net_ident in idents.iter() {
@@ -367,7 +477,7 @@ pub fn elaborate_module_or_generate_item_declaration<'a>(
                         let origin = arenas.get_item_span(*ident);
                         let name = arenas.get_ident(ident.item.0);
                         let dims =
-                            dims_to_array(arenas, &builder.scope(), diagnostics, *dimension)?;
+                            dims_to_array(arenas, builder.eval_scope(), diagnostics, *dimension)?;
                         let mut size = ty.force_net_width().get();
                         for dim in &dims {
                             size = size.checked_mul(*dim).ok_or_else(|| {
@@ -388,6 +498,7 @@ pub fn elaborate_module_or_generate_item_declaration<'a>(
                         });
                         let net = HierarchyNet {
                             name: name.to_string(),
+                            parent: builder.key(),
                             signal,
                             ty,
                             dims: dims.into(),
@@ -412,6 +523,7 @@ pub fn elaborate_module_or_generate_item_declaration<'a>(
                         });
                         let net = HierarchyNet {
                             name: name.to_string(),
+                            parent: builder.key(),
                             signal,
                             ty,
                             dims: [].into(),
@@ -432,7 +544,7 @@ pub fn elaborate_module_or_generate_item_declaration<'a>(
             } = arenas.get(*id);
             let (msb, lsb, size) = match range {
                 None => (0, 0, SCALAR_VSIZE),
-                Some(range) => evaluate_range(arenas, &builder.scope(), diagnostics, *range)?,
+                Some(range) => evaluate_range(arenas, builder.eval_scope(), diagnostics, *range)?,
             };
 
             let ty = VType::net(size, *signed);
@@ -528,7 +640,7 @@ pub fn elaborate_variable_type<'a>(
 
     let (dims, size) = match variant {
         VariableTypeVariant::Dimensions(dimensions) => {
-            let dims = dims_to_array(arenas, &builder.scope(), diagnostics, *dimensions)?;
+            let dims = dims_to_array(arenas, builder.eval_scope(), diagnostics, *dimensions)?;
             let mut size = ty.force_net_width().get();
             for dim in &dims {
                 size = size.checked_mul(*dim).ok_or_else(|| {
@@ -554,6 +666,7 @@ pub fn elaborate_variable_type<'a>(
     });
     let net = HierarchyNet {
         name: name.to_string(),
+        parent: builder.key(),
         signal,
         ty,
         dims,
@@ -576,7 +689,7 @@ pub fn parameter_typing_to_type<'a>(
         ParameterDeclarationTyping::None(signed, range) => {
             let (msb, lsb, width) = match range {
                 None => (0, 0, SCALAR_VSIZE),
-                Some(range) => evaluate_range(arenas, &builder.scope(), diagnostics, *range)?,
+                Some(range) => evaluate_range(arenas, builder.eval_scope(), diagnostics, *range)?,
             };
             (msb, lsb, VType::net(width, *signed))
         }

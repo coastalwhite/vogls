@@ -4,17 +4,16 @@ use crate::ast::statement::{
     CaseItemPattern, CaseStatement, CaseStatementVariant, ConditionalStatement, StatementOrNull,
 };
 use crate::ast::{AstId, AstIdRange};
+use crate::lower::Scope;
 use crate::lower::diagnostics::Diagnostics;
 use crate::lower::expression::coerce_bin_arithmetic;
-use crate::lower::Scope;
-use crate::lower::{ModuleContext, lower_expr};
+use crate::lower::lower_expr;
 use crate::parser::AstArenas;
 
 pub fn lower<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
     scope: &mut Scope<'a>,
-    mc: &mut ModuleContext<'a>,
     diagnostics: &mut Diagnostics,
     mut builder: BasicBlockBuilder,
     conditional: AstId<ConditionalStatement>,
@@ -37,18 +36,15 @@ pub fn lower<'a>(
     let mut origins = Vec::new();
 
     let (mut branch_ref, mut if_true_builder) = builder.branch(gl, condition);
-    scope.push_scope();
     if_true_builder = lower_statement_or_null(
         gl,
         arenas,
         scope,
-        mc,
         diagnostics,
         if_true_builder,
         if_branch.statement,
     )?;
     origins.push(if_true_builder.key());
-    scope.pop_scope();
 
     let mut builder = if_true_builder.next_terminate_later(gl);
     for else_if_branch in else_ifs.iter() {
@@ -65,18 +61,15 @@ pub fn lower<'a>(
         )?;
 
         (branch_ref, if_true_builder) = builder.branch(gl, condition);
-        scope.push_scope();
         if_true_builder = lower_statement_or_null(
             gl,
             arenas,
             scope,
-            mc,
             diagnostics,
             if_true_builder,
             else_if_branch.statement,
         )?;
         origins.push(if_true_builder.key());
-        scope.pop_scope();
 
         builder = if_true_builder.next_terminate_later(gl);
     }
@@ -85,10 +78,8 @@ pub fn lower<'a>(
     if let Some(statement) = else_branch {
         builder.update_branch_ref(gl, branch_ref.take().unwrap(), builder.key());
 
-        scope.push_scope();
-        builder = lower_statement_or_null(gl, arenas, scope, mc, diagnostics, builder, *statement)?;
+        builder = lower_statement_or_null(gl, arenas, scope, diagnostics, builder, *statement)?;
         origins.push(builder.key());
-        scope.pop_scope();
 
         builder = builder.jump(gl);
     }
@@ -107,7 +98,6 @@ pub fn lower_case_statement<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
     scope: &mut Scope<'a>,
-    mc: &mut ModuleContext<'a>,
     diagnostics: &mut Diagnostics,
     mut builder: BasicBlockBuilder,
     case_statement: AstId<CaseStatement>,
@@ -152,27 +142,22 @@ pub fn lower_case_statement<'a>(
         };
 
         let (branch_ref, mut if_true_builder) = builder.branch(gl, condition);
-        scope.push_scope();
         if_true_builder = lower_statement_or_null(
             gl,
             arenas,
             scope,
-            mc,
             diagnostics,
             if_true_builder,
             case_item.statement_or_null,
         )?;
         origins.push(if_true_builder.key());
-        scope.pop_scope();
 
         builder = if_true_builder.next_terminate_later(gl);
         builder.update_branch_ref(gl, branch_ref, builder.key());
     }
 
     if let Some(statement) = default {
-        scope.push_scope();
-        builder = lower_statement_or_null(gl, arenas, scope, mc, diagnostics, builder, statement)?;
-        scope.pop_scope();
+        builder = lower_statement_or_null(gl, arenas, scope, diagnostics, builder, statement)?;
         builder = builder.jump(gl);
     } else {
         builder = builder.jump(gl);
@@ -189,7 +174,6 @@ pub fn lower_statement_or_null<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
     scope: &mut Scope<'a>,
-    mc: &mut ModuleContext<'a>,
     diagnostics: &mut Diagnostics,
     builder: BasicBlockBuilder,
     statement: AstId<StatementOrNull>,
@@ -200,7 +184,6 @@ pub fn lower_statement_or_null<'a>(
             gl,
             arenas,
             scope,
-            mc,
             diagnostics,
             builder,
             AstIdRange::single(*statement),

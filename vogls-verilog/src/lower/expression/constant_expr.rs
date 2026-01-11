@@ -4,7 +4,7 @@ use crate::ast::AstId;
 use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::expr::{BinaryOperator, Expr};
 use crate::hierarchy::{HierarchyItem, HierarchyParameter};
-use crate::lower::Scope;
+use crate::lower::{EvalScope, Scope};
 use crate::lower::vvalue::VValue;
 use crate::number::Sign;
 use crate::parser::AstArenas;
@@ -13,7 +13,7 @@ use super::Diagnostics;
 
 pub fn eval_constant_expr<'a>(
     arenas: &'a AstArenas,
-    scope: &Scope<'a>,
+    scope: EvalScope<'a>,
     diagnostics: &mut Diagnostics,
     expr: AstId<ConstantExpr>,
 ) -> Result<VValue, ()> {

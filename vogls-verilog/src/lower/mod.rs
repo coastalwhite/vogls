@@ -18,9 +18,28 @@ pub enum Region {
 }
 
 pub struct Scope<'a> {
+    pub hierarchy: &'a mut Hierarchy,
+    pub key: HierarchyKey,
+    pub signal_map: &'a mut HashMap<SignalKey, SignalKey>,
+}
+
+#[derive(Clone, Copy)]
+pub struct EvalScope<'a> {
     pub hierarchy: &'a Hierarchy,
     pub key: HierarchyKey,
 }
+
+impl<'a> EvalScope<'a> {
+    fn get(&self, ident: &str) -> Option<HierarchyKey> {
+        if let Some(k) = self.hierarchy.lookup().get(&(self.key, ident.to_string())) {
+            return Some(*k);
+        }
+
+        // @TODO: Hierarchical Path Identifiers.
+        None
+    }
+}
+
 impl<'a> Scope<'a> {
     fn get(&self, ident: &str) -> Option<HierarchyKey> {
         if let Some(k) = self.hierarchy.lookup().get(&(self.key, ident.to_string())) {
@@ -31,15 +50,25 @@ impl<'a> Scope<'a> {
         None
     }
 
-    // @TODO: Remove
-    fn push_scope(&mut self) {
-        todo!()
+    fn get_unwrap_net(&self, ident: &str) -> Option<&HierarchyNet> {
+        let symbol_key = self.get(ident)?;
+        let HierarchyItem::Net(n) = self.hierarchy.items()[symbol_key.as_idx()] else {
+            unreachable!("not a net");
+        };
+        Some(&self.hierarchy.net()[n])
     }
-    fn pop_scope(&mut self) {
-        todo!()
+
+    pub fn eval<'b>(&'b self) -> EvalScope<'b> {
+        EvalScope {
+            hierarchy: &self.hierarchy,
+            key: self.key,
+        }
     }
 }
 
+use std::collections::HashMap;
+
+use slotmap::{SecondaryMap, SparseSecondaryMap};
 use vogls_ir::{
     BasicBlockKey, ConnectionDirection, GlobalContext, SCALAR_VSIZE, Signal, SignalKey, VectorSize,
     new_process,
@@ -52,7 +81,7 @@ use crate::ast::module::{
     Range,
 };
 use crate::ast::{AstId, Identifier};
-use crate::hierarchy::{Hierarchy, HierarchyItem, HierarchyKey};
+use crate::hierarchy::{Hierarchy, HierarchyItem, HierarchyKey, HierarchyNet};
 use crate::parser::AstArenas;
 
 pub use self::expression::eval_constant_expr;
@@ -61,50 +90,12 @@ pub use self::vtype::VType;
 pub use self::vvalue::VValue;
 pub use diagnostics::Diagnostics;
 pub use module_or_generate_item::dims_to_array;
-use std::collections::HashMap;
-
-pub struct ModuleInitialization<'a> {
-    pub name: &'a str,
-    pub parameters: ModuleParameters<'a>,
-    pub io: ModuleIo<'a>,
-    pub args: ModuleArgs,
-}
-
-#[derive(Clone)]
-pub struct ModuleIo<'a> {
-    pub lut: HashMap<&'a str, usize>,
-    pub ports: Vec<(&'a str, ConnectionDirection, VType, i64, i64)>,
-}
-#[derive(Clone)]
-pub struct ModuleParameters<'a> {
-    pub lut: HashMap<&'a str, usize>,
-    pub params: Vec<&'a str>,
-}
-
-#[derive(Clone)]
-pub struct ModuleArgs {
-    pub parameters: Vec<VValue>,
-    pub signals: Vec<SignalKey>,
-}
-
-pub struct ModuleContext<'a> {
-    pub named_lookup: HashMap<&'a str, AstId<Module>>,
-    pub next_modules: Vec<ModuleInitialization<'a>>,
-    pub queries_to_resolve: Vec<ModuleQuery>,
-}
-
-pub struct ModuleQuery {
-    pub bb: BasicBlockKey,
-    pub instruction: usize,
-    pub query: Option<(u32, Vec<Identifier>)>,
-}
 
 pub fn lower_module_to_ir<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
     root: AstId<Module>,
     scope: &mut Scope<'a>,
-    mc: &mut ModuleContext<'a>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
     let Module {
@@ -121,14 +112,14 @@ pub fn lower_module_to_ir<'a>(
             ModuleItem::PortDeclaration(_) => {}
             ModuleItem::NonPortModuleItem(p) => match arenas.get(*p) {
                 NonPortModuleItem::ModuleOrGenerateItem(id) => {
-                    module_or_generate_item::lower(gl, arenas, mc, scope, *id, diagnostics)?
+                    module_or_generate_item::lower(gl, arenas, scope, *id, diagnostics)?
                 }
                 NonPortModuleItem::GenerateRegion(region) => {
                     let GenerateRegion {
                         module_or_generate_item,
                     } = region;
                     for id in module_or_generate_item.iter() {
-                        module_or_generate_item::lower(gl, arenas, mc, scope, id, diagnostics)?;
+                        module_or_generate_item::lower(gl, arenas, scope, id, diagnostics)?;
                     }
                 }
                 NonPortModuleItem::SpecifyBlock => todo!(),
@@ -144,7 +135,7 @@ pub fn lower_module_to_ir<'a>(
                             todo!();
                         };
 
-                        let _value = eval_constant_expr(arenas, &scope, diagnostics, *constant)?;
+                        let _value = eval_constant_expr(arenas, scope.eval(), diagnostics, *constant)?;
                         todo!()
                         // scope.push(arenas.get_ident(param.item.0), ScopeItem::Constant(v));
                     }
@@ -211,8 +202,9 @@ fn assign_port_output<'a>(
     scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
     expr: AstId<Expr>,
+    output_net: usize,
     ty: VType,
-) -> Result<SignalKey, ()> {
+) -> Result<(), ()> {
     if let Expr::Ident(ast_ident, exprs, range_expression) = arenas.get(expr)
         && exprs.is_empty()
         && range_expression.is_none()
@@ -222,24 +214,23 @@ fn assign_port_output<'a>(
             diagnostics.var_not_found(arenas, *ast_ident);
             return Err(());
         };
-        if let HierarchyItem::Net(s) = &scope.hierarchy.items()[symbol_key.as_idx()]
-            && let s = &scope.hierarchy.net()[*s]
+        if let HierarchyItem::Net(s) = scope.hierarchy.items()[symbol_key.as_idx()]
+            && let s = &scope.hierarchy.nets[s]
             && s.ty == ty
         {
-            return Ok(s.signal);
+            let signal = s.signal;
+            let old_signal =
+                std::mem::replace(&mut scope.hierarchy.nets[output_net].signal, signal);
+            scope.signal_map.insert(old_signal, signal);
+            gl.signals.remove(old_signal);
+            return Ok(());
         }
     }
 
-    let size = ty.force_net_width();
     let mut driving: Vec<AstId<Expr>> = Vec::new();
     driving.push(expr);
 
-    let signal = gl.signals.insert(Signal {
-        name: "anon_port_assignment".to_string(),
-        size,
-        initialize: None,
-        origin: arenas.get_span(expr),
-    });
+    let signal = scope.hierarchy.net()[output_net].signal;
 
     let mut bb_builder = new_process(gl, "port_assignment".into(), arenas.get_span(expr));
     let bb_key = bb_builder.key();
@@ -264,7 +255,7 @@ fn assign_port_output<'a>(
                     error = true;
                     continue;
                 };
-                let s = &scope.hierarchy.net()[symbol_key.as_idx()];
+                let s = &scope.hierarchy.net()[*s];
 
                 let (offset_dst, length_dst) = if range_expression.is_none() && exprs.is_empty() {
                     (bb_builder.constant_u32(gl, 0), Some(s.ty.force_net_width()))
@@ -287,21 +278,21 @@ fn assign_port_output<'a>(
                     match slice {
                         BitSlice::MsbLsb(msb, lsb) => {
                             let (_, lsb, width) =
-                                msb_lsb_to_width(arenas, scope, diagnostics, *msb, *lsb)?;
+                                msb_lsb_to_width(arenas, scope.eval(), diagnostics, *msb, *lsb)?;
                             let offset = bb_builder.constant_u32(gl, lsb as u32);
                             (offset, Some(width as VectorSize))
                         }
                         BitSlice::PlusWidth(base, width) => {
                             let offset =
                                 lower_expr(gl, arenas, scope, diagnostics, &mut bb_builder, *base);
-                            let width = eval_constant_expr(arenas, scope, diagnostics, *width);
+                            let width = eval_constant_expr(arenas, scope.eval(), diagnostics, *width);
                             let width = width?.as_integer().unwrap();
                             (offset?.0, Some(VectorSize::new(width as u32).unwrap()))
                         }
                         BitSlice::MinusWidth(base, width) => {
                             let offset =
                                 lower_expr(gl, arenas, scope, diagnostics, &mut bb_builder, *base);
-                            let width = eval_constant_expr(arenas, scope, diagnostics, *width)?;
+                            let width = eval_constant_expr(arenas, scope.eval(), diagnostics, *width)?;
                             let width =
                                 VectorSize::new(width.as_integer().unwrap() as u32).unwrap();
                             let width_v =
@@ -347,12 +338,12 @@ fn assign_port_output<'a>(
         return Err(());
     }
 
-    Ok(signal)
+    Ok(())
 }
 
 fn msb_lsb_to_width<'a>(
     arenas: &'a AstArenas,
-    scope: &Scope<'a>,
+    scope: EvalScope<'a>,
     diagnostics: &mut Diagnostics,
     ast_msb: AstId<ConstantExpr>,
     ast_lsb: AstId<ConstantExpr>,
@@ -378,7 +369,7 @@ fn msb_lsb_to_width<'a>(
 
 pub fn evaluate_range<'a>(
     arenas: &'a AstArenas,
-    scope: &Scope<'a>,
+    scope: EvalScope<'a>,
     diagnostics: &mut Diagnostics,
     range: AstId<Range>,
 ) -> Result<(i64, i64, VectorSize), ()> {
