@@ -4,8 +4,8 @@ use crate::ast::AstId;
 use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::expr::{BinaryOperator, Expr};
 use crate::hierarchy::{HierarchyItem, HierarchyParameter};
-use crate::lower::{EvalScope, Scope};
 use crate::lower::vvalue::VValue;
+use crate::lower::{EvalScope, Scope};
 use crate::number::Sign;
 use crate::parser::AstArenas;
 
@@ -116,9 +116,13 @@ pub fn eval_constant_expr<'a>(
                 };
                 let value = match &scope.hierarchy.items()[symbol_key.as_idx()] {
                     HierarchyItem::Parameter(n) => {
-                        let HierarchyParameter { name: _, value } = &scope.hierarchy.parameters()[*n];
+                        let HierarchyParameter {
+                            name: _,
+                            parent: _,
+                            value,
+                        } = &scope.hierarchy.parameters()[*n];
                         value.clone()
-                    },
+                    }
                     HierarchyItem::Net(..) => {
                         result_stack.push(None);
                         diagnostics.not_yet_implemented(

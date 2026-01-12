@@ -218,6 +218,7 @@ pub fn elaborate_parameter_declaration<'a>(
         if builder
             .insert_parameter(HierarchyParameter {
                 name: name.to_string(),
+                parent: builder.key(),
                 value,
             })
             .is_some()
@@ -423,7 +424,10 @@ pub fn elaborate_module_or_generate_item<'a>(
                     parameters: Default::default(),
                     parameter_overrides: parameter_overrides.clone(),
                 };
-                builder.insert_module(module);
+                if builder.insert_module(module).is_some() {
+                    diagnostics.duplicate_definition(arenas, *name_of_module_instance);
+                    return Err(());
+                }
             }
             Ok(())
         }

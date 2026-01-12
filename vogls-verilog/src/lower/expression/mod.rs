@@ -202,7 +202,8 @@ pub fn lower_expr<'a>(
                 }
 
                 let end_stack_size = result_stack.len() - exprs.len();
-                let Ok(repeat_n) = eval_constant_expr(arenas, scope.eval(), diagnostics, constant_expr)
+                let Ok(repeat_n) =
+                    eval_constant_expr(arenas, scope.eval(), diagnostics, constant_expr)
                 else {
                     result_stack.truncate(end_stack_size);
                     result_stack.push(None);
@@ -357,19 +358,26 @@ pub fn lower_expr<'a>(
                 let symbol = &scope.hierarchy.items()[symbol_key.as_idx()];
                 let (mut ty, mut var) = match &symbol {
                     HierarchyItem::Parameter(s) => {
-                        let HierarchyParameter { name: _, value } =
-                            &scope.hierarchy.parameters()[*s];
+                        let HierarchyParameter {
+                            name: _,
+                            parent: _,
+                            value,
+                        } = &scope.hierarchy.parameters()[*s];
                         let value = value.clone();
                         (value.ty(), builder.constant(gl, value.into_bits()))
                     }
-                    x @ (HierarchyItem::GenVar(_)
+                    HierarchyItem::GenVar(_)
                     | HierarchyItem::Task(_)
                     | HierarchyItem::Function(_)
                     | HierarchyItem::Module(_)
-                    | HierarchyItem::NamedBlock(_)) => {
-                        dbg!(ident, x);
-                        todo!()
-                    },
+                    | HierarchyItem::NamedBlock(_) => {
+                        diagnostics
+                            .not_yet_implemented(arenas.get_span(expr), "cannot use this symbol");
+                        error = true;
+                        result_stack.truncate(end_result_stack_len);
+                        result_stack.push(None);
+                        continue 'dispatch_loop;
+                    }
                     HierarchyItem::Net(s) => {
                         let s = &scope.hierarchy.net()[*s];
                         let mut dims = &s.dims[..];
@@ -461,7 +469,8 @@ pub fn lower_expr<'a>(
                                 result_stack.push(None);
                                 continue;
                             };
-                            let Ok(width) = eval_constant_expr(arenas, scope.eval(), diagnostics, *width)
+                            let Ok(width) =
+                                eval_constant_expr(arenas, scope.eval(), diagnostics, *width)
                             else {
                                 result_stack.push(None);
                                 continue;
@@ -477,7 +486,8 @@ pub fn lower_expr<'a>(
                                 continue;
                             };
 
-                            let Ok(width) = eval_constant_expr(arenas, scope.eval(), diagnostics, *width)
+                            let Ok(width) =
+                                eval_constant_expr(arenas, scope.eval(), diagnostics, *width)
                             else {
                                 result_stack.push(None);
                                 continue;

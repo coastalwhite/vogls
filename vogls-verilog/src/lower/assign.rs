@@ -146,7 +146,8 @@ pub fn variable_lvalue_flat_ty<'a>(
                 Err(())
             }
             RangeExpression::MsbLsb(msb, lsb) => {
-                let (_, _, width) = msb_lsb_to_width(arenas, scope.eval(), diagnostics, *msb, *lsb)?;
+                let (_, _, width) =
+                    msb_lsb_to_width(arenas, scope.eval(), diagnostics, *msb, *lsb)?;
                 Ok(VType::UnsignedNet(width))
             }
             RangeExpression::BasePlus(_, width) | RangeExpression::BaseMinus(_, width) => {
@@ -184,7 +185,11 @@ pub fn assign_variable_lvalue_flat<'a>(
     let (ty, dims) = match &scope.hierarchy.items()[symbol_key.as_idx()] {
         HierarchyItem::GenVar(_) => (VType::SignedNet(INTEGER_VSIZE), [].into()),
         HierarchyItem::Parameter(v) => {
-            let HierarchyParameter { name: _, value } = &scope.hierarchy.parameters()[*v];
+            let HierarchyParameter {
+                name: _,
+                parent: _,
+                value,
+            } = &scope.hierarchy.parameters()[*v];
             (value.ty(), [].into())
         }
         HierarchyItem::Net(s) => {
@@ -437,7 +442,8 @@ pub fn net_lvalue_flat_ty<'a>(
                 Err(())
             }
             ConstantRangeExpression::MsbLsb { msb, lsb } => {
-                let (_, _, width) = msb_lsb_to_width(arenas, scope.eval(), diagnostics, *msb, *lsb)?;
+                let (_, _, width) =
+                    msb_lsb_to_width(arenas, scope.eval(), diagnostics, *msb, *lsb)?;
                 Ok(VType::UnsignedNet(width))
             } // RangeExpression::BasePlus(_, width) | RangeExpression::BaseMinus(_, width) => {
               //     let width = eval_constant_expr(gl, arenas, scope, diagnostics, *width)?;
@@ -546,7 +552,8 @@ fn assign_net_lvalue_flat<'a>(
                     VectorSize::new(1).unwrap(),
                 ),
                 ConstantRangeExpression::MsbLsb { msb, lsb } => {
-                    let (_, lsb, size) = msb_lsb_to_width(arenas, scope.eval(), diagnostics, *msb, *lsb)?;
+                    let (_, lsb, size) =
+                        msb_lsb_to_width(arenas, scope.eval(), diagnostics, *msb, *lsb)?;
                     (lsb, size)
                 }
             };

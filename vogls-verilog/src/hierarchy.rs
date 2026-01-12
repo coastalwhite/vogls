@@ -90,12 +90,14 @@ pub struct HierarchyNet {
 #[derive(Clone, PartialEq, Eq)]
 pub struct HierarchyParameter {
     pub name: String,
+    pub parent: HierarchyKey,
     pub value: VValue,
 }
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct HierarchyGenvar {
     pub name: String,
+    pub parent: HierarchyKey,
 
     // @TODO: Don't use a RefCell here.
     pub value: RefCell<VValue>,
@@ -145,6 +147,19 @@ impl HierarchyItem {
             I::Task(i) => Some(&mut hierarchy.tasks[i].children),
             I::Function(i) => Some(&mut hierarchy.functions[i].children),
             I::Net(_) | I::Parameter(_) | I::GenVar(_) => None,
+        }
+    }
+
+    fn parent<'a>(&self, hierarchy: &'a Hierarchy) -> Option<HierarchyKey> {
+        use HierarchyItem as I;
+        match self {
+            I::Module(i) => hierarchy.modules[*i].parent,
+            I::NamedBlock(i) => Some(hierarchy.named_blocks[*i].parent),
+            I::Task(i) => Some(hierarchy.tasks[*i].parent),
+            I::Function(i) => Some(hierarchy.functions[*i].parent),
+            I::Net(i) => Some(hierarchy.nets[*i].parent),
+            I::Parameter(i) => Some(hierarchy.parameters[*i].parent),
+            I::GenVar(i) => Some(hierarchy.genvars[*i].parent),
         }
     }
 
@@ -199,7 +214,7 @@ impl HierarchyItem {
                     ast: _,
                     parent: _,
                     lut: _,
-                    ports: _,
+                    ports,
                     parameter_lut: _,
                     parameters: _,
                     parameter_overrides: _,
@@ -257,15 +272,28 @@ impl HierarchyItem {
                 Ok(())
             }
             I::Parameter(i) => {
-                let HierarchyParameter { name, value: _ } = &hierarchy.parameters[*i];
+                let HierarchyParameter {
+                    name,
+                    parent: _,
+                    value: _,
+                } = &hierarchy.parameters[*i];
                 write!(f, "parameter {name}")
             }
             I::GenVar(i) => {
-                let HierarchyGenvar { name, value: _ } = &hierarchy.genvars[*i];
+                let HierarchyGenvar {
+                    name,
+                    parent: _,
+                    value: _,
+                } = &hierarchy.genvars[*i];
                 write!(f, "genvar {name}")
             }
         }
     }
+}
+
+pub struct HierarchyPathDisplay<'a> {
+    key: HierarchyKey,
+    hierarchy: &'a Hierarchy,
 }
 
 pub struct HierarchyDisplay<'a> {
@@ -291,6 +319,17 @@ impl<'a> fmt::Display for HierarchyDisplay<'a> {
             }
             .fmt(f)?;
         }
+        Ok(())
+    }
+}
+
+impl<'a> fmt::Display for HierarchyPathDisplay<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let key = self.key;
+        if let Some(parent) = self.hierarchy.items()[key.as_idx()].parent(self.hierarchy) {
+            write!(f, "{}.", self.hierarchy.path_display(parent))?;
+        }
+        f.write_str(self.hierarchy.items()[key.as_idx()].name(self.hierarchy))?;
         Ok(())
     }
 }
@@ -358,6 +397,13 @@ impl Hierarchy {
             key,
             hierarchy: self,
             indent: 0,
+        }
+    }
+
+    pub fn path_display<'b>(&'b self, key: HierarchyKey) -> HierarchyPathDisplay<'b> {
+        HierarchyPathDisplay {
+            key,
+            hierarchy: self,
         }
     }
 

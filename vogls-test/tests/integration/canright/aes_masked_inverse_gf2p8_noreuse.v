@@ -31,7 +31,7 @@ module tb();
 
     reg [7:0] m, n;
     reg [9:0] prd;
-    aes_masked_inverse_gf2p8_noreuse m(i, m, n, prd, o);
+    aes_masked_inverse_gf2p8_noreuse m1(i, m, n, prd, o);
 
 	integer j, k;
 	initial begin
@@ -76,7 +76,7 @@ module aes_masked_inverse_gf2p8_noreuse(
 
     wire [3:0] ss_a1_a0, ss_m1_m0;
     aes_square_scale_gf2p4_gf2p2 blk0_sqsc0(.gamma(a1 ^ a0), .delta(ss_a1_a0));
-    aes_square_scale_gf2p4_gf2p2 blk0_sqsc0(.gamma(m1 ^ m0), .delta(ss_m1_m0));
+    aes_square_scale_gf2p4_gf2p2 blk0_sqsc1(.gamma(m1 ^ m0), .delta(ss_m1_m0));
 
     wire [3:0] mul_a1_a0, mul_a1_m0, mul_a0_m1, mul_m0_m1;
     aes_mul_gf2p4 blk1_m0(.gamma(a1), .delta(a0), .theta(mul_a1_a0));

@@ -13,7 +13,7 @@ module y(o);
 	c0 z1(o[0]);
 	c1 z2(o[1]);
 	c0 z3(o[2]);
-	c1 z3(o[3]);
+	c1 z4(o[3]);
 endmodule
 
 module x();
