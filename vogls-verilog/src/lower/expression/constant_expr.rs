@@ -1,11 +1,11 @@
-use vogls_ir::{Bits, INTEGER_VSIZE, SCALAR_VSIZE};
+use vogls_ir::{Bits, SCALAR_VSIZE};
 
 use crate::ast::AstId;
 use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::expr::{BinaryOperator, Expr};
 use crate::hierarchy::{HierarchyItem, HierarchyParameter};
+use crate::lower::EvalScope;
 use crate::lower::vvalue::VValue;
-use crate::lower::{EvalScope, Scope};
 use crate::number::Sign;
 use crate::parser::AstArenas;
 

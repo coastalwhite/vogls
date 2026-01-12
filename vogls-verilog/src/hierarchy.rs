@@ -2,7 +2,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
 use std::num::NonZeroUsize;
-use std::ops::Range;
 
 use vogls_ir::vcd::VcdScope;
 use vogls_ir::{ConnectionDirection, SignalKey};
@@ -10,7 +9,7 @@ use vogls_ir::{ConnectionDirection, SignalKey};
 use crate::ast::AstId;
 use crate::ast::module::{FunctionDeclaration, ModuleInstance, TaskDeclaration};
 use crate::ast::statement::SeqBlock;
-use crate::lower::{EvalScope, Scope, VType, VValue};
+use crate::lower::{EvalScope, VType, VValue};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct HierarchyKey(NonZeroUsize);

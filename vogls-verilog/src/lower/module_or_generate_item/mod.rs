@@ -1,19 +1,15 @@
-use vogls_ir::vcd::NetType;
 use vogls_ir::{
-    Bits, ConnectionDirection, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE, Signal, SignalKey,
-    VectorSize, new_process,
+    Bits, ConnectionDirection, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE, VectorSize, new_process,
 };
 
-use crate::ast::constant_expr::ConstantMinTypMaxExpression;
 use crate::ast::module::{
     Dimension, GateInstantiation, GenerateBlock, GenvarAssignment, IfGenerateConstruct,
     ListOfPortConnections, LoopGenerateConstruct, ModuleInstance, ModuleInstantiation,
     ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration, NInputGateInstance, NInputGateType,
-    NamedParameterAssignment, NamedPortConnection, NetDeclAssignment, NetDeclarationNets,
-    ParameterValueAssignment, VariableType, VariableTypeVariant,
+    NamedPortConnection, NetDeclAssignment, NetDeclarationNets, VariableType, VariableTypeVariant,
 };
 use crate::ast::{AstId, AstIdRange};
-use crate::hierarchy::{HierarchyItem, HierarchyModule, HierarchyNet};
+use crate::hierarchy::{HierarchyItem, HierarchyNet};
 use crate::lower::assign::{assign_net_lvalue, net_lvalue_width};
 use crate::lower::expression::{self, lower_expr, truncate_or_extend};
 use crate::lower::statement::statements_to_process;
@@ -23,8 +19,8 @@ use crate::lower::{
 };
 use crate::parser::AstArenas;
 
-use super::{Diagnostics, EvalScope};
 use super::Scope;
+use super::{Diagnostics, EvalScope};
 
 mod function;
 

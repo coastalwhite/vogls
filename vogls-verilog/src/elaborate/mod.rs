@@ -6,11 +6,10 @@ use vogls_ir::{ConnectionDirection, INTEGER_VSIZE, SCALAR_VSIZE, Signal, SignalK
 
 use crate::ast::constant_expr::ConstantMinTypMaxExpression;
 use crate::ast::module::{
-    FunctionDeclaration, GateInstantiation, IntegerDeclaration, LocalParameterDeclaration, Module,
-    ModuleInstance, ModuleInstantiation, ModuleItem, ModuleOrGenerateItem,
-    ModuleOrGenerateItemDeclaration, ModulePorts, NInputGateInstantiation,
-    NamedParameterAssignment, NetDeclAssignment, NetDeclaration, NetDeclarationNets, NetIdent,
-    NonPortModuleItem, ParamAssignment, ParameterDeclaration, ParameterDeclarationTyping,
+    FunctionDeclaration, IntegerDeclaration, LocalParameterDeclaration, Module, ModuleInstance,
+    ModuleInstantiation, ModuleItem, ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration,
+    ModulePorts, NamedParameterAssignment, NetDeclAssignment, NetDeclaration, NetDeclarationNets,
+    NetIdent, NonPortModuleItem, ParamAssignment, ParameterDeclaration, ParameterDeclarationTyping,
     ParameterValueAssignment, Port, PortDeclaration, PortExpression, PortReference, RegDeclaration,
     TaskDeclaration, VariableType, VariableTypeVariant,
 };
@@ -69,7 +68,6 @@ pub fn elaborate_module<'a>(
             //
             // This way, you can get the broadest error messages.
             elaborate_parameter_declaration(
-                signals,
                 arenas,
                 *typing,
                 *assignments,
@@ -148,7 +146,6 @@ pub fn elaborate_module<'a>(
                         assignments,
                     } = arenas.get(*id);
                     elaborate_parameter_declaration(
-                        signals,
                         arenas,
                         *typing,
                         *assignments,
@@ -170,7 +167,6 @@ pub fn elaborate_module<'a>(
 }
 
 pub fn elaborate_parameter_declaration<'a>(
-    signals: &mut SlotMap<SignalKey, Signal>,
     arenas: &'a AstArenas,
 
     typing: AstId<ParameterDeclarationTyping>,
@@ -332,7 +328,6 @@ pub fn elaborate_module_or_generate_item<'a>(
                 assignments,
             } = arenas.get(*id);
             elaborate_parameter_declaration(
-                signals,
                 arenas,
                 *typing,
                 *assignments,
@@ -409,7 +404,7 @@ pub fn elaborate_module_or_generate_item<'a>(
             for module_instance in module_instances.iter() {
                 let ModuleInstance {
                     name_of_module_instance,
-                    list_of_port_connections,
+                    list_of_port_connections: _,
                 } = arenas.get(module_instance);
                 let instance_name = arenas.get_ident(name_of_module_instance.item.0);
                 let module = HierarchyModule {

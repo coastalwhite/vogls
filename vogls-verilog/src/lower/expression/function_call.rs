@@ -1,10 +1,7 @@
-use std::collections::HashMap;
-
-use vogls_ir::{BasicBlockBuilder, BasicBlockTerminator, GlobalContext, VariableKey};
+use vogls_ir::{BasicBlockBuilder, GlobalContext, VariableKey};
 
 use crate::ast::expr::Expr;
 use crate::ast::{AstId, AstItem, Identifier};
-use crate::lower::expression::truncate_or_extend;
 use crate::lower::Scope;
 use crate::lower::{Diagnostics, VType};
 use crate::parser::AstArenas;

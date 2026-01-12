@@ -68,19 +68,15 @@ impl<'a> Scope<'a> {
 
 use std::collections::HashMap;
 
-use slotmap::{SecondaryMap, SparseSecondaryMap};
-use vogls_ir::{
-    BasicBlockKey, ConnectionDirection, GlobalContext, SCALAR_VSIZE, Signal, SignalKey, VectorSize,
-    new_process,
-};
+use vogls_ir::{GlobalContext, SCALAR_VSIZE, Signal, SignalKey, VectorSize, new_process};
 
+use crate::ast::AstId;
 use crate::ast::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression};
 use crate::ast::expr::{BitSlice, Expr};
 use crate::ast::module::{
     GenerateRegion, Module, ModuleItem, NonPortModuleItem, ParamAssignment, ParameterDeclaration,
     Range,
 };
-use crate::ast::{AstId, Identifier};
 use crate::hierarchy::{Hierarchy, HierarchyItem, HierarchyKey, HierarchyNet};
 use crate::parser::AstArenas;
 
@@ -135,7 +131,8 @@ pub fn lower_module_to_ir<'a>(
                             todo!();
                         };
 
-                        let _value = eval_constant_expr(arenas, scope.eval(), diagnostics, *constant)?;
+                        let _value =
+                            eval_constant_expr(arenas, scope.eval(), diagnostics, *constant)?;
                         todo!()
                         // scope.push(arenas.get_ident(param.item.0), ScopeItem::Constant(v));
                     }
@@ -285,14 +282,16 @@ fn assign_port_output<'a>(
                         BitSlice::PlusWidth(base, width) => {
                             let offset =
                                 lower_expr(gl, arenas, scope, diagnostics, &mut bb_builder, *base);
-                            let width = eval_constant_expr(arenas, scope.eval(), diagnostics, *width);
+                            let width =
+                                eval_constant_expr(arenas, scope.eval(), diagnostics, *width);
                             let width = width?.as_integer().unwrap();
                             (offset?.0, Some(VectorSize::new(width as u32).unwrap()))
                         }
                         BitSlice::MinusWidth(base, width) => {
                             let offset =
                                 lower_expr(gl, arenas, scope, diagnostics, &mut bb_builder, *base);
-                            let width = eval_constant_expr(arenas, scope.eval(), diagnostics, *width)?;
+                            let width =
+                                eval_constant_expr(arenas, scope.eval(), diagnostics, *width)?;
                             let width =
                                 VectorSize::new(width.as_integer().unwrap() as u32).unwrap();
                             let width_v =
