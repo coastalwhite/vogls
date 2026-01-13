@@ -6,10 +6,12 @@ use vogls_ir::{ConnectionDirection, INTEGER_VSIZE, SCALAR_VSIZE, Signal, SignalK
 
 use crate::ast::constant_expr::ConstantMinTypMaxExpression;
 use crate::ast::module::{
-    FunctionDeclaration, IntegerDeclaration, LocalParameterDeclaration, Module, ModuleInstance,
-    ModuleInstantiation, ModuleItem, ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration,
-    ModulePorts, NamedParameterAssignment, NetDeclAssignment, NetDeclaration, NetDeclarationNets,
-    NetIdent, NonPortModuleItem, ParamAssignment, ParameterDeclaration, ParameterDeclarationTyping,
+    CaseGenerateConstruct, CaseGenerateItem, CaseGeneratePattern, FunctionDeclaration,
+    GenerateBlock, GenvarAssignment, GenvarDeclaration, IfGenerateConstruct, IntegerDeclaration,
+    LocalParameterDeclaration, LoopGenerateConstruct, Module, ModuleInstance, ModuleInstantiation,
+    ModuleItem, ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration, ModulePorts,
+    NamedParameterAssignment, NetDeclAssignment, NetDeclaration, NetDeclarationNets, NetIdent,
+    NonPortModuleItem, ParamAssignment, ParameterDeclaration, ParameterDeclarationTyping,
     ParameterValueAssignment, Port, PortDeclaration, PortExpression, PortReference, RegDeclaration,
     TaskDeclaration, VariableType, VariableTypeVariant,
 };
@@ -20,16 +22,12 @@ use crate::ast::statement::{
 };
 use crate::ast::{AstId, AstIdRange};
 use crate::hierarchy::{
-    HierarchyFunction, HierarchyItem, HierarchyItemRange, HierarchyModule, HierarchyNamedBlock,
-    HierarchyNet, HierarchyParameter, HierarchyTask, ParameterOverrides, ScopeBuilder,
+    HierarchyFunction, HierarchyGenerateBlock, HierarchyItem, HierarchyItemRange, HierarchyKey,
+    HierarchyModule, HierarchyNamedBlock, HierarchyNet, HierarchyParameter, HierarchyTask,
+    ParameterOverrides, ScopeBuilder,
 };
 use crate::lower::{Diagnostics, VType, dims_to_array, eval_constant_expr, evaluate_range};
 use crate::parser::AstArenas;
-
-pub enum ElaborationItem {
-    ModuleInstance,
-    NamedBlock,
-}
 
 pub fn elaborate_module<'a>(
     signals: &mut SlotMap<SignalKey, Signal>,
@@ -50,6 +48,7 @@ pub fn elaborate_module<'a>(
     } = arenas.get(module);
 
     let mut parameter_idx = 0;
+    let mut gen_vars = HashMap::<String, bool>::new();
 
     if let Some(module_parameter_port_list) = module_parameter_port_list {
         for id in module_parameter_port_list.iter() {
@@ -124,6 +123,7 @@ pub fn elaborate_module<'a>(
                         *id,
                         builder,
                         diagnostics,
+                        &mut gen_vars,
                     )
                     .is_err();
                 }
@@ -135,6 +135,7 @@ pub fn elaborate_module<'a>(
                             id,
                             builder,
                             diagnostics,
+                            &mut gen_vars,
                         )
                         .is_err();
                     }
@@ -311,6 +312,7 @@ pub fn elaborate_module_or_generate_item<'a>(
 
     builder: &mut ScopeBuilder<'a>,
     diagnostics: &mut Diagnostics,
+    genvars: &mut HashMap<String, bool>,
 ) -> Result<(), ()> {
     match arenas.get(id) {
         ModuleOrGenerateItem::ModuleOrGenerateItemDeclaration(id) => {
@@ -320,6 +322,7 @@ pub fn elaborate_module_or_generate_item<'a>(
                 *id,
                 builder,
                 diagnostics,
+                genvars,
             )
         }
         ModuleOrGenerateItem::LocalParameterDeclaration(id) => {
@@ -440,9 +443,153 @@ pub fn elaborate_module_or_generate_item<'a>(
             diagnostics,
             AstIdRange::single(arenas.get(*id).0),
         ),
-        ModuleOrGenerateItem::LoopGenerateConstruct(id) => todo!(),
-        ModuleOrGenerateItem::IfGenerateConstruct(id) => todo!(),
-        ModuleOrGenerateItem::CaseGenerateConstruct(id) => todo!(),
+        ModuleOrGenerateItem::LoopGenerateConstruct(id) => {
+            let LoopGenerateConstruct {
+                initialization,
+                condition,
+                iteration,
+                block,
+            } = arenas.get(*id);
+
+            let GenvarAssignment { ident, expr } = arenas.get(*initialization);
+            let GenvarAssignment {
+                ident: iteration_ident,
+                expr: iteration,
+            } = arenas.get(*iteration);
+
+            let genvar_ident = arenas.get_ident(ident.item.0);
+            if arenas.get_ident(iteration_ident.item.0) != genvar_ident {
+                diagnostics.not_yet_implemented(
+                    arenas.get_span(*initialization),
+                    "initialization and iteration assignment identifier are different",
+                );
+                return Err(());
+            }
+            let Some(genvar) = genvars.get_mut(genvar_ident) else {
+                diagnostics.var_not_found(arenas, *ident);
+                return Err(());
+            };
+            *genvar = true;
+
+            let mut value = eval_constant_expr(arenas, builder.eval_scope(), diagnostics, *expr)?;
+
+            // @GJB: Bit of a hack to add the GenVar as a localparameter and then delete it again.
+            // This way it can be used in the condition and iteration.
+            macro_rules! with_constant {
+                ($scope:ident => $stmt:stmt) => {
+                    if let Some(_overwritten) = builder.insert_parameter(HierarchyParameter {
+                        name: genvar_ident.to_string(),
+                        parent: builder.key,
+                        value: value.clone(),
+                    }) {
+                        return Err(());
+                    }
+
+                    let $scope = builder.eval_scope();
+                    $stmt
+                    builder.hierarchy.symbols[builder.key.as_idx()]
+                        .children_mut(builder.hierarchy)
+                        .unwrap()
+                        .end -= 1;
+                    builder.hierarchy.lookup_table.remove(&(builder.key(), genvar_ident.to_string()));
+                    builder.hierarchy.symbols.pop().unwrap();
+                    builder.hierarchy.parameters.pop().unwrap();
+                };
+            }
+
+            loop {
+                with_constant!(
+                    scope => let c = eval_constant_expr(arenas, scope, diagnostics, *condition)?
+                );
+
+                if !c.to_logical() {
+                    break;
+                }
+
+                let (mod_or_gen_items, block_ident, block_ident_ast) = match arenas.get(*block) {
+                    GenerateBlock::ModuleOrGenerateItem(id) => {
+                        (AstIdRange::single(*id), None, None)
+                    }
+                    GenerateBlock::BeginEnd(ident, mod_or_gen_items) => (
+                        *mod_or_gen_items,
+                        ident.map(|i| arenas.get_ident(i.item.0)),
+                        *ident,
+                    ),
+                };
+
+                let name = block_ident.map(|i| i.to_string());
+                if builder
+                    .insert_generate_block(HierarchyGenerateBlock {
+                        name,
+                        ast: mod_or_gen_items,
+                        children: HierarchyItemRange::default(),
+                        parent: builder.key(),
+
+                        genvar: Some((genvar_ident.to_string(), value.clone())),
+                        genvars: genvars.clone(),
+                    })
+                    .is_some()
+                {
+                    diagnostics.duplicate_definition(arenas, block_ident_ast.unwrap());
+                    return Err(());
+                }
+
+                with_constant!(
+                    scope => value = eval_constant_expr(arenas, scope, diagnostics, *iteration)?
+                );
+            }
+
+            Ok(())
+        }
+        ModuleOrGenerateItem::IfGenerateConstruct(id) => {
+            let IfGenerateConstruct {
+                condition,
+                truthy,
+                falsy,
+            } = arenas.get(*id);
+
+            let condition =
+                eval_constant_expr(arenas, builder.eval_scope(), diagnostics, *condition)?;
+            if condition.to_logical() {
+                elaborate_generate_block(arenas, builder, diagnostics, *truthy, genvars)?;
+            } else if let Some(falsy) = falsy {
+                elaborate_generate_block(arenas, builder, diagnostics, *falsy, genvars)?;
+            }
+
+            Ok(())
+        }
+        ModuleOrGenerateItem::CaseGenerateConstruct(id) => {
+            let CaseGenerateConstruct { value, items } = arenas.get(*id);
+            let value = eval_constant_expr(arenas, builder.eval_scope(), diagnostics, *value)?;
+
+            for item in items.iter() {
+                let CaseGenerateItem { pattern, block } = arenas.get(item);
+                let mut is_selected = false;
+                match pattern {
+                    CaseGeneratePattern::Default => is_selected = true,
+                    CaseGeneratePattern::Exprs(exprs) => {
+                        for expr in exprs.iter() {
+                            let expr_value = eval_constant_expr(
+                                arenas,
+                                builder.eval_scope(),
+                                diagnostics,
+                                expr,
+                            )?;
+                            if value.clone().logical_equal(expr_value) {
+                                is_selected = true;
+                                break;
+                            }
+                        }
+                    }
+                };
+
+                if is_selected {
+                    elaborate_generate_block(arenas, builder, diagnostics, *block, genvars)?;
+                }
+            }
+
+            Ok(())
+        }
     }
 }
 
@@ -454,6 +601,7 @@ pub fn elaborate_module_or_generate_item_declaration<'a>(
 
     builder: &mut ScopeBuilder<'a>,
     diagnostics: &mut Diagnostics,
+    genvars: &mut HashMap<String, bool>,
 ) -> Result<(), ()> {
     let mut error = false;
     match arenas.get(id) {
@@ -574,7 +722,22 @@ pub fn elaborate_module_or_generate_item_declaration<'a>(
                 .is_err();
             }
         }
-        ModuleOrGenerateItemDeclaration::Genvar(id) => todo!(),
+        ModuleOrGenerateItemDeclaration::Genvar(id) => {
+            let GenvarDeclaration { identifiers } = arenas.get(*id);
+            let mut error = false;
+            for ast_ident in identifiers.iter() {
+                let ast_ident = arenas.to_item(ast_ident);
+                let ident = arenas.get_ident(ast_ident.item.0);
+
+                if genvars.insert(ident.to_string(), false).is_some() {
+                    diagnostics.duplicate_definition(arenas, ast_ident);
+                    error = true;
+                }
+            }
+            if error {
+                return Err(());
+            }
+        }
         ModuleOrGenerateItemDeclaration::Task(id) => {
             let TaskDeclaration {
                 ident,
@@ -873,4 +1036,40 @@ pub fn elaborate_statement_or_null<'a>(
             AstIdRange::single(*id),
         ),
     }
+}
+
+pub fn elaborate_generate_block<'a>(
+    arenas: &'a AstArenas,
+    builder: &mut ScopeBuilder<'a>,
+    diagnostics: &mut Diagnostics,
+    blk: AstId<Option<GenerateBlock>>,
+    genvars: &HashMap<String, bool>,
+) -> Result<(), ()> {
+    let (mod_or_gen_items, block_ident, block_ident_ast) = match arenas.get(blk) {
+        None => (AstIdRange::default(), None, None),
+        Some(GenerateBlock::ModuleOrGenerateItem(id)) => (AstIdRange::single(*id), None, None),
+        Some(GenerateBlock::BeginEnd(ident, mod_or_gen_items)) => (
+            *mod_or_gen_items,
+            ident.map(|i| arenas.get_ident(i.item.0)),
+            *ident,
+        ),
+    };
+
+    let name = block_ident.map(|i| i.to_string());
+    if builder
+        .insert_generate_block(HierarchyGenerateBlock {
+            name,
+            ast: mod_or_gen_items,
+            children: HierarchyItemRange::default(),
+            parent: builder.key(),
+
+            genvar: None,
+            genvars: genvars.clone(),
+        })
+        .is_some()
+    {
+        diagnostics.duplicate_definition(arenas, block_ident_ast.unwrap());
+        return Err(());
+    }
+    Ok(())
 }

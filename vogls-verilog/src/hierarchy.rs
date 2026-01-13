@@ -6,9 +6,11 @@ use std::num::NonZeroUsize;
 use vogls_ir::vcd::VcdScope;
 use vogls_ir::{ConnectionDirection, SignalKey};
 
-use crate::ast::AstId;
-use crate::ast::module::{FunctionDeclaration, ModuleInstance, TaskDeclaration};
+use crate::ast::module::{
+    FunctionDeclaration, ModuleInstance, ModuleOrGenerateItem, TaskDeclaration,
+};
 use crate::ast::statement::SeqBlock;
+use crate::ast::{AstId, AstIdRange};
 use crate::lower::{EvalScope, VType, VValue};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -21,6 +23,7 @@ pub struct Hierarchy {
 
     pub modules: Vec<HierarchyModule>,
     pub named_blocks: Vec<HierarchyNamedBlock>,
+    pub generate_blocks: Vec<HierarchyGenerateBlock>,
     pub tasks: Vec<HierarchyTask>,
     pub functions: Vec<HierarchyFunction>,
     pub nets: Vec<HierarchyNet>,
@@ -59,6 +62,18 @@ pub struct HierarchyNamedBlock {
     pub ast: AstId<SeqBlock>,
     pub children: HierarchyItemRange,
     pub parent: HierarchyKey,
+}
+
+#[derive(Clone)]
+pub struct HierarchyGenerateBlock {
+    pub name: Option<String>,
+    pub ast: AstIdRange<ModuleOrGenerateItem>,
+    pub children: HierarchyItemRange,
+    pub parent: HierarchyKey,
+
+    // @TODO: Find a better solution for this.
+    pub genvar: Option<(String, VValue)>,
+    pub genvars: HashMap<String, bool>,
 }
 
 #[derive(Clone)]
@@ -106,6 +121,7 @@ pub struct HierarchyGenvar {
 pub enum HierarchyItem {
     Module(usize),
     NamedBlock(usize),
+    GenerateBlock(usize),
     Task(usize),
     Function(usize),
     Net(usize),
@@ -114,16 +130,17 @@ pub enum HierarchyItem {
 }
 
 impl HierarchyItem {
-    fn name<'a>(&self, hierarchy: &'a Hierarchy) -> &'a str {
+    fn name<'a>(&self, hierarchy: &'a Hierarchy) -> Option<&'a str> {
         use HierarchyItem as I;
         match self {
-            I::Module(i) => &hierarchy.modules[*i].name,
-            I::NamedBlock(i) => &hierarchy.named_blocks[*i].name,
-            I::Task(i) => &hierarchy.tasks[*i].name,
-            I::Function(i) => &hierarchy.functions[*i].name,
-            I::Net(i) => &hierarchy.nets[*i].name,
-            I::Parameter(i) => &hierarchy.parameters[*i].name,
-            I::GenVar(i) => &hierarchy.genvars[*i].name,
+            I::Module(i) => Some(&hierarchy.modules[*i].name),
+            I::NamedBlock(i) => Some(&hierarchy.named_blocks[*i].name),
+            I::GenerateBlock(i) => hierarchy.generate_blocks[*i].name.as_deref(),
+            I::Task(i) => Some(&hierarchy.tasks[*i].name),
+            I::Function(i) => Some(&hierarchy.functions[*i].name),
+            I::Net(i) => Some(&hierarchy.nets[*i].name),
+            I::Parameter(i) => Some(&hierarchy.parameters[*i].name),
+            I::GenVar(i) => Some(&hierarchy.genvars[*i].name),
         }
     }
 
@@ -132,28 +149,31 @@ impl HierarchyItem {
         match self {
             I::Module(i) => hierarchy.modules[*i].children,
             I::NamedBlock(i) => hierarchy.named_blocks[*i].children,
+            I::GenerateBlock(i) => hierarchy.generate_blocks[*i].children,
             I::Task(i) => hierarchy.tasks[*i].children,
             I::Function(i) => hierarchy.functions[*i].children,
             I::Net(_) | I::Parameter(_) | I::GenVar(_) => HierarchyItemRange { start: 0, end: 0 },
         }
     }
 
-    fn children_mut(self, hierarchy: &mut Hierarchy) -> Option<&mut HierarchyItemRange> {
+    pub fn children_mut(self, hierarchy: &mut Hierarchy) -> Option<&mut HierarchyItemRange> {
         use HierarchyItem as I;
         match self {
             I::Module(i) => Some(&mut hierarchy.modules[i].children),
             I::NamedBlock(i) => Some(&mut hierarchy.named_blocks[i].children),
+            I::GenerateBlock(i) => Some(&mut hierarchy.generate_blocks[i].children),
             I::Task(i) => Some(&mut hierarchy.tasks[i].children),
             I::Function(i) => Some(&mut hierarchy.functions[i].children),
             I::Net(_) | I::Parameter(_) | I::GenVar(_) => None,
         }
     }
 
-    fn parent<'a>(&self, hierarchy: &'a Hierarchy) -> Option<HierarchyKey> {
+    pub fn parent<'a>(&self, hierarchy: &'a Hierarchy) -> Option<HierarchyKey> {
         use HierarchyItem as I;
         match self {
             I::Module(i) => hierarchy.modules[*i].parent,
             I::NamedBlock(i) => Some(hierarchy.named_blocks[*i].parent),
+            I::GenerateBlock(i) => Some(hierarchy.generate_blocks[*i].parent),
             I::Task(i) => Some(hierarchy.tasks[*i].parent),
             I::Function(i) => Some(hierarchy.functions[*i].parent),
             I::Net(i) => Some(hierarchy.nets[*i].parent),
@@ -228,6 +248,20 @@ impl HierarchyItem {
                     parent: _,
                 } = &hierarchy.named_blocks[*i];
                 write!(f, "named_block {name}")
+            }
+            I::GenerateBlock(i) => {
+                let HierarchyGenerateBlock {
+                    name,
+                    ast: _,
+                    children: _,
+                    parent: _,
+                    genvar: _,
+                    genvars: _,
+                } = &hierarchy.generate_blocks[*i];
+                match name {
+                    None => write!(f, "generate_block <anonymous>"),
+                    Some(name) => write!(f, "generate_block {name}"),
+                }
             }
             I::Task(i) => {
                 let HierarchyTask {
@@ -328,7 +362,13 @@ impl<'a> fmt::Display for HierarchyPathDisplay<'a> {
         if let Some(parent) = self.hierarchy.items()[key.as_idx()].parent(self.hierarchy) {
             write!(f, "{}.", self.hierarchy.path_display(parent))?;
         }
-        f.write_str(self.hierarchy.items()[key.as_idx()].name(self.hierarchy))?;
+        f.write_str(
+            match self.hierarchy.items()[key.as_idx()].name(self.hierarchy) {
+                None => "<anonymous>",
+                Some(v) => v,
+            },
+        )?;
+
         Ok(())
     }
 }
@@ -342,6 +382,12 @@ pub struct HierarchyItemRange {
 impl HierarchyItemRange {
     pub fn iter(self) -> impl ExactSizeIterator<Item = HierarchyKey> + DoubleEndedIterator {
         (self.start..self.end).map(|i| HierarchyKey::new(i))
+    }
+    pub fn len(self) -> usize {
+        self.end - self.start
+    }
+    pub fn is_empty(self) -> bool {
+        self.start == self.end
     }
 }
 
@@ -361,6 +407,7 @@ impl Hierarchy {
             lookup_table: HashMap::new(),
             modules: Vec::new(),
             named_blocks: Vec::new(),
+            generate_blocks: Vec::new(),
             tasks: Vec::new(),
             functions: Vec::new(),
             nets: Vec::new(),
@@ -446,20 +493,29 @@ macro_rules! insert_fn {
         pub fn $f(&mut self, $v: $struct) -> Option<HierarchyKey> {
             let i = self.hierarchy.$field.len();
             let item_key = HierarchyKey::new(self.hierarchy.symbols.len());
-            let name = $v.name.clone();
+            let name: Option<String> = $v.name.clone().into();
             self.hierarchy.$field.push($v);
 
             let items_len = self.hierarchy.symbols.len();
             let children = self.hierarchy.symbols[self.key.as_idx()]
                 .children_mut(self.hierarchy)
                 .unwrap();
-            assert_eq!(children.end, items_len);
-            children.end += 1;
+            if children.is_empty() {
+                children.start = items_len;
+                children.end = items_len + 1;
+            } else {
+                assert_eq!(children.end, items_len);
+                children.end += 1;
+            }
 
             self.hierarchy.symbols.push(HierarchyItem::$item(i));
-            self.hierarchy
-                .lookup_table
-                .insert((self.key, name), item_key)
+            if let Some(name) = name {
+                self.hierarchy
+                    .lookup_table
+                    .insert((self.key, name), item_key)
+            } else {
+                None
+            }
         }
     };
 }
@@ -488,6 +544,13 @@ impl<'a> ScopeBuilder<'a> {
         named_blocks,
         named_block,
         NamedBlock
+    );
+    insert_fn!(
+        insert_generate_block,
+        HierarchyGenerateBlock,
+        generate_blocks,
+        generate_block,
+        GenerateBlock
     );
 
     pub fn key(&self) -> HierarchyKey {

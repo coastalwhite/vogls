@@ -370,7 +370,8 @@ pub fn lower_expr<'a>(
                     | HierarchyItem::Task(_)
                     | HierarchyItem::Function(_)
                     | HierarchyItem::Module(_)
-                    | HierarchyItem::NamedBlock(_) => {
+                    | HierarchyItem::NamedBlock(_)
+                    | HierarchyItem::GenerateBlock(_) => {
                         diagnostics
                             .not_yet_implemented(arenas.get_span(expr), "cannot use this symbol");
                         error = true;
@@ -855,7 +856,8 @@ pub fn get_used_signals<'a>(
                     | HierarchyItem::Task(_)
                     | HierarchyItem::Module(_)
                     | HierarchyItem::NamedBlock(_)
-                    | HierarchyItem::Function(_) => {}
+                    | HierarchyItem::Function(_)
+                    | HierarchyItem::GenerateBlock(_) => {}
                 }
 
                 dispatch_stack.extend(exprs.iter().map(StackItem::new));

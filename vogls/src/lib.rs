@@ -14,9 +14,10 @@ use vogls_verilog::ast::module::{
     CaseGenerateConstruct, CaseGenerateItem, GenerateBlock, IfGenerateConstruct,
     LoopGenerateConstruct, Module, ModuleItem, ModuleOrGenerateItem, NonPortModuleItem,
 };
-use vogls_verilog::elaborate::elaborate_module;
+use vogls_verilog::elaborate::{elaborate_module, elaborate_module_or_generate_item};
 use vogls_verilog::hierarchy::{
-    Hierarchy, HierarchyItem, HierarchyItemRange, HierarchyKey, HierarchyModule, ScopeBuilder,
+    Hierarchy, HierarchyGenerateBlock, HierarchyItem, HierarchyItemRange, HierarchyKey,
+    HierarchyModule, HierarchyParameter, ScopeBuilder,
 };
 use vogls_verilog::lower::{Diagnostics as LowerDiagnostics, lower_module_to_ir};
 use vogls_verilog::parser::{
@@ -320,6 +321,43 @@ pub fn run(
                 .is_err();
             }
             I::NamedBlock(_) => todo!(),
+            I::GenerateBlock(i) => {
+                let HierarchyGenerateBlock {
+                    ast: children,
+                    genvar,
+                    genvars,
+                    ..
+                } = &hierarchy.generate_blocks[*i];
+
+                let children = *children;
+                let genvar = genvar.clone();
+                let mut genvars = genvars.clone();
+
+                let mut builder = ScopeBuilder {
+                    hierarchy: &mut hierarchy,
+                    key: HierarchyKey::new(offset),
+                };
+
+                if let Some((name, value)) = genvar {
+                    builder.insert_parameter(HierarchyParameter {
+                        name,
+                        parent: builder.key(),
+                        value,
+                    });
+                };
+
+                for id in children.iter() {
+                    error |= elaborate_module_or_generate_item(
+                        &mut gl.signals,
+                        &ast.arenas,
+                        id,
+                        &mut builder,
+                        &mut diagnostics,
+                        &mut genvars
+                    )
+                    .is_err();
+                }
+            }
             I::Task(_) => todo!(),
             I::Function(_) => todo!(),
 

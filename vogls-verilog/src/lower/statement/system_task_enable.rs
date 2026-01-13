@@ -4,8 +4,8 @@ use vogls_ir::{BasicBlockBuilder, GlobalContext, IntrinsicOp};
 
 use crate::ast::AstId;
 use crate::ast::statement::SystemTaskEnable;
-use crate::lower::expression::lower_expr;
 use crate::lower::Scope;
+use crate::lower::expression::lower_expr;
 use crate::lower::{Diagnostics, expression};
 use crate::parser::AstArenas;
 
@@ -144,7 +144,13 @@ pub fn lower_system_task_enable<'a>(
             );
         }
         "vogls_assert_eq" | "vogls_assert_ne" => {
-            assert_eq!(expressions.len(), 2); // @Improve: Error message
+            if expressions.len() != 2 {
+                diagnostics.not_yet_implemented(
+                    arenas.get_span(system_task_enable),
+                    "assertions requires two arguments",
+                );
+                return Err(());
+            }
 
             let lhs = expressions.get(0);
             let rhs = expressions.get(1);

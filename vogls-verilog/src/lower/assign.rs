@@ -106,6 +106,7 @@ pub fn variable_lvalue_flat_ty<'a>(
         }
         HierarchyItem::Module(_)
         | HierarchyItem::NamedBlock(_)
+        | HierarchyItem::GenerateBlock(_)
         | HierarchyItem::Task(_)
         | HierarchyItem::Function(_) => todo!(),
     };
@@ -200,6 +201,7 @@ pub fn assign_variable_lvalue_flat<'a>(
         }
         HierarchyItem::Module(_) => todo!(),
         HierarchyItem::NamedBlock(_) => todo!(),
+        HierarchyItem::GenerateBlock(_) => todo!(),
         HierarchyItem::Task(_) => todo!(),
         HierarchyItem::Function(_) => todo!(),
     };
@@ -314,6 +316,7 @@ pub fn assign_variable_lvalue_flat<'a>(
         }
         HierarchyItem::Module(_) => todo!(),
         HierarchyItem::NamedBlock(_) => todo!(),
+        HierarchyItem::GenerateBlock(_) => todo!(),
         HierarchyItem::Task(_) => todo!(),
         HierarchyItem::Function(_) => todo!(),
         HierarchyItem::Parameter(_) => todo!(),
@@ -403,7 +406,8 @@ pub fn net_lvalue_flat_ty<'a>(
         HierarchyItem::Module(_)
         | HierarchyItem::NamedBlock(_)
         | HierarchyItem::Task(_)
-        | HierarchyItem::Function(_) => todo!(),
+        | HierarchyItem::Function(_)
+        | HierarchyItem::GenerateBlock(_) => todo!(),
     };
 
     if exprs.len() > n_dims {

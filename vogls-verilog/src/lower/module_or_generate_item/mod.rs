@@ -380,93 +380,11 @@ pub fn lower<'a>(
             )?;
             bb_builder.jump_to(gl, bb_key);
         }
-        ModuleOrGenerateItem::LoopGenerateConstruct(id) => {
-            let LoopGenerateConstruct {
-                initialization,
-                condition,
-                iteration,
-                block,
-            } = arenas.get(*id);
 
-            let GenvarAssignment {
-                ident: init_ident,
-                expr: init_expr,
-            } = arenas.get(*initialization);
-            let GenvarAssignment {
-                ident: iter_ident,
-                expr: iter_expr,
-            } = arenas.get(*iteration);
-
-            if arenas.get_ident(init_ident.item.0) != arenas.get_ident(iter_ident.item.0) {
-                diagnostics.not_yet_implemented(
-                    arenas.get_item_span(*init_ident),
-                    "cannot do a generate for-loop with different identifiers",
-                );
-                return Err(());
-            }
-
-            let variable = arenas.get_ident(init_ident.item.0);
-            let Some(symbol_key) = scope.get(variable) else {
-                diagnostics.var_not_found(arenas, *init_ident);
-                return Err(());
-            };
-
-            todo!()
-            /*
-            let SymbolVariant::Genvar(_) = &mut scope.symbols[symbol_key].variant else {
-                diagnostics.not_yet_implemented(
-                    arenas.get_item_span(*init_ident),
-                    "generate for-loop on non-genvar",
-                );
-                return Err(());
-            };
-
-            let v = eval_constant_expr(arenas, &scope, diagnostics, *init_expr)?;
-            let mut v = v.as_integer().unwrap();
-            scope.symbols[symbol_key].variant = SymbolVariant::Genvar(Some(v));
-
-            loop {
-                let condition = eval_constant_expr(arenas, &scope, diagnostics, *condition)?;
-                let condition = condition.as_integer().unwrap();
-                if condition == 0 {
-                    break;
-                }
-
-                match arenas.get(*block) {
-                    GenerateBlock::ModuleOrGenerateItem(id) => {
-                        lower(gl, arenas, mc, scope, *id, diagnostics)?
-                    }
-                    GenerateBlock::BeginEnd(_, ids) => {
-                        for id in ids.iter() {
-                            lower(gl, arenas, mc, scope, id, diagnostics)?;
-                        }
-                    }
-                }
-
-                v = eval_constant_expr(arenas, &scope, diagnostics, *iter_expr)?
-                    .as_integer()
-                    .unwrap();
-                scope.symbols[symbol_key].variant = SymbolVariant::Genvar(Some(v as i64));
-            }
-            */
-        }
-        ModuleOrGenerateItem::IfGenerateConstruct(id) => {
-            let IfGenerateConstruct {
-                condition,
-                truthy,
-                falsy,
-            } = arenas.get(*id);
-
-            let v = eval_constant_expr(arenas, scope.eval(), diagnostics, *condition)?;
-            if v.logical_equal(VValue::UnsignedNet(Bits::new_zeroed(SCALAR_VSIZE))) {
-                if let Some(falsy) = falsy {
-                    lower_opt_generate_block(gl, arenas, scope, diagnostics, *falsy)?;
-                }
-            } else {
-                lower_opt_generate_block(gl, arenas, scope, diagnostics, *truthy)?;
-            }
-        }
-        ModuleOrGenerateItem::CaseGenerateConstruct(_id) => todo!(),
+        // Handled by a combination of elaboration + module level elaboration.
+        ModuleOrGenerateItem::LoopGenerateConstruct(_)
+        | ModuleOrGenerateItem::IfGenerateConstruct(_)
+        | ModuleOrGenerateItem::CaseGenerateConstruct(_) => {}
     }
 
     Ok(())

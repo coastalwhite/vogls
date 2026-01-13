@@ -8,7 +8,7 @@ use crate::ast::statement::{
     DelayControl, DelayValue, EventControl, EventExpressionPrimary, ProceduralTimingControl,
     StatementOrNull,
 };
-use crate::hierarchy::HierarchyItem;
+use crate::hierarchy::{HierarchyItem, HierarchyParameter};
 use crate::lower::Scope;
 use crate::lower::expression::lower_expr;
 use crate::lower::{WatchCondition};
@@ -26,8 +26,8 @@ pub fn lower<'a>(
     statement: AstId<StatementOrNull>,
 ) -> Result<BasicBlockBuilder, ()> {
     match arenas.get(ptc) {
-        ProceduralTimingControl::DelayControl(delay_control) => {
-            let delay_control = arenas.get(*delay_control);
+        ProceduralTimingControl::DelayControl(ast_delay_control) => {
+            let delay_control = arenas.get(*ast_delay_control);
             match delay_control {
                 DelayControl::DelayValue(value) => {
                     let value = match arenas.get(*value) {
@@ -35,15 +35,26 @@ pub fn lower<'a>(
                             let value = &arenas.decimals[value.at];
                             value.as_u64().unwrap()
                         }
-                        DelayValue::Identifier(_) => {
-                            todo!()
-                            // let ScopeItem::Constant(v) = scope
-                            //     .get(&arenas.get_ident(value.0))
-                            //     .expect("unknown ident")
-                            // else {
-                            //     todo!();
-                            // };
-                            // *v as usize
+                        DelayValue::Identifier(ast_ident) => {
+                            let ident = arenas.get_ident(ast_ident.0);
+                            let Some(symbol_key) = scope.get(ident) else {
+                                diagnostics.not_yet_implemented(arenas.get_span(*ast_delay_control), "Ident not found");
+                                return Err(());
+                            };
+                            let symbol = &scope.hierarchy.items()[symbol_key.as_idx()];
+                            let value = match &symbol {
+                                HierarchyItem::Parameter(s) => {
+                                    let HierarchyParameter {
+                                        name: _,
+                                        parent: _,
+                                        value,
+                                    } = &scope.hierarchy.parameters()[*s];
+                                    // @TODO: Remove unwrap
+                                    (value.as_integer().unwrap() as u64)
+                                }
+                                _ => todo!(),
+                            };
+                            value
                         }
                     };
 

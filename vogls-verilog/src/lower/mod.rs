@@ -31,23 +31,42 @@ pub struct EvalScope<'a> {
 
 impl<'a> EvalScope<'a> {
     fn get(&self, ident: &str) -> Option<HierarchyKey> {
-        if let Some(k) = self.hierarchy.lookup().get(&(self.key, ident.to_string())) {
-            return Some(*k);
-        }
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 196
+        //
+        // """
+        // If it is declared locally, then the local item shall be used; if not, the search shall
+        // continue upward until an item by that name is found or until a module boundary is
+        // encountered.
+        //
+        // If the item is a variable, it shall stop at a module boundary; if the item is a task,
+        // function, named block, or generate block, it continues to search higher level modules
+        // until found. This fact means that tasks and functions can use and modify the variables
+        // within the containing module by name, without going through their ports.
+        // """
 
-        // @TODO: Hierarchical Path Identifiers.
-        None
+        let mut key = self.key;
+        loop {
+            if let Some(k) = self.hierarchy.lookup().get(&(key, ident.to_string())) {
+                return Some(*k);
+            }
+
+            let item = self.hierarchy.items()[key.as_idx()];
+            if matches!(item, HierarchyItem::Module(_)) {
+                return None;
+            }
+
+            let Some(parent) = item.parent(self.hierarchy) else {
+                unreachable!("All non-modules have parents");
+            };
+
+            key = parent;
+        }
     }
 }
 
 impl<'a> Scope<'a> {
     fn get(&self, ident: &str) -> Option<HierarchyKey> {
-        if let Some(k) = self.hierarchy.lookup().get(&(self.key, ident.to_string())) {
-            return Some(*k);
-        }
-
-        // @TODO: Hierarchical Path Identifiers.
-        None
+        self.eval().get(ident)
     }
 
     fn get_unwrap_net(&self, ident: &str) -> Option<&HierarchyNet> {
@@ -64,6 +83,17 @@ impl<'a> Scope<'a> {
             key: self.key,
         }
     }
+
+    fn module(&self) -> &HierarchyModule {
+        let mut key = self.key;
+        loop {
+            let item = self.hierarchy.items()[key.as_idx()];
+            if let HierarchyItem::Module(i) = item {
+                return &self.hierarchy.modules()[i];
+            };
+            key = item.parent(self.hierarchy).unwrap();
+        }
+    }
 }
 
 use std::collections::HashMap;
@@ -77,7 +107,7 @@ use crate::ast::module::{
     GenerateRegion, Module, ModuleItem, NonPortModuleItem, ParamAssignment, ParameterDeclaration,
     Range,
 };
-use crate::hierarchy::{Hierarchy, HierarchyItem, HierarchyKey, HierarchyNet};
+use crate::hierarchy::{Hierarchy, HierarchyItem, HierarchyKey, HierarchyModule, HierarchyNet};
 use crate::parser::AstArenas;
 
 pub use self::expression::eval_constant_expr;
@@ -102,6 +132,21 @@ pub fn lower_module_to_ir<'a>(
         module_items,
         default_nettype: _,
     } = arenas.get(root);
+
+    // Generated
+    let module = scope.module();
+    for child in module.children.iter() {
+        if let HierarchyItem::GenerateBlock(i) = scope.hierarchy.items()[child.as_idx()] {
+            for id in scope.hierarchy.generate_blocks[i].ast.iter() {
+                let mut scope = Scope {
+                    hierarchy: scope.hierarchy,
+                    key: child,
+                    signal_map: scope.signal_map,
+                };
+                module_or_generate_item::lower(gl, arenas, &mut scope, id, diagnostics)?;
+            }
+        }
+    }
 
     for module_item in module_items.iter() {
         match arenas.get(module_item) {
