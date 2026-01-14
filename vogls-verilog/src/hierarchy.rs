@@ -4,7 +4,7 @@ use std::fmt;
 use std::num::NonZeroUsize;
 
 use vogls_ir::vcd::VcdScope;
-use vogls_ir::{ConnectionDirection, SignalKey};
+use vogls_ir::{BasicBlockKey, ConnectionDirection, SignalKey, VariableKey};
 
 use crate::ast::module::{
     FunctionDeclaration, ModuleInstance, ModuleOrGenerateItem, TaskDeclaration,
@@ -82,6 +82,9 @@ pub struct HierarchyTask {
     pub ast: AstId<TaskDeclaration>,
     pub children: HierarchyItemRange,
     pub parent: HierarchyKey,
+
+    pub automatic: bool,
+    pub lower: Option<LoweredTask>,
 }
 
 #[derive(Clone)]
@@ -90,6 +93,25 @@ pub struct HierarchyFunction {
     pub ast: AstId<FunctionDeclaration>,
     pub children: HierarchyItemRange,
     pub parent: HierarchyKey,
+
+    pub automatic: bool,
+    pub lower: Option<LoweredFunction>,
+}
+
+#[derive(Clone)]
+pub struct LoweredFunction {
+    pub entry: BasicBlockKey,
+    pub input_vars: Vec<VariableKey>,
+    pub input_types: Vec<VType>,
+    pub output_var: VariableKey,
+    pub output_ty: VType,
+}
+
+#[derive(Clone)]
+pub struct LoweredTask {
+    pub entry: BasicBlockKey,
+    pub io_vars: Vec<VariableKey>,
+    pub io_types: Vec<(ConnectionDirection, VType)>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -126,7 +148,6 @@ pub enum HierarchyItem {
     Function(usize),
     Net(usize),
     Parameter(usize),
-    GenVar(usize),
 }
 
 impl HierarchyItem {
@@ -140,7 +161,6 @@ impl HierarchyItem {
             I::Function(i) => Some(&hierarchy.functions[*i].name),
             I::Net(i) => Some(&hierarchy.nets[*i].name),
             I::Parameter(i) => Some(&hierarchy.parameters[*i].name),
-            I::GenVar(i) => Some(&hierarchy.genvars[*i].name),
         }
     }
 
@@ -152,7 +172,7 @@ impl HierarchyItem {
             I::GenerateBlock(i) => hierarchy.generate_blocks[*i].children,
             I::Task(i) => hierarchy.tasks[*i].children,
             I::Function(i) => hierarchy.functions[*i].children,
-            I::Net(_) | I::Parameter(_) | I::GenVar(_) => HierarchyItemRange { start: 0, end: 0 },
+            I::Net(_) | I::Parameter(_) => HierarchyItemRange { start: 0, end: 0 },
         }
     }
 
@@ -164,7 +184,7 @@ impl HierarchyItem {
             I::GenerateBlock(i) => Some(&mut hierarchy.generate_blocks[i].children),
             I::Task(i) => Some(&mut hierarchy.tasks[i].children),
             I::Function(i) => Some(&mut hierarchy.functions[i].children),
-            I::Net(_) | I::Parameter(_) | I::GenVar(_) => None,
+            I::Net(_) | I::Parameter(_) => None,
         }
     }
 
@@ -178,7 +198,6 @@ impl HierarchyItem {
             I::Function(i) => Some(hierarchy.functions[*i].parent),
             I::Net(i) => Some(hierarchy.nets[*i].parent),
             I::Parameter(i) => Some(hierarchy.parameters[*i].parent),
-            I::GenVar(i) => Some(hierarchy.genvars[*i].parent),
         }
     }
 
@@ -264,21 +283,11 @@ impl HierarchyItem {
                 }
             }
             I::Task(i) => {
-                let HierarchyTask {
-                    name,
-                    ast: _,
-                    children: _,
-                    parent: _,
-                } = &hierarchy.tasks[*i];
+                let HierarchyTask { name, .. } = &hierarchy.tasks[*i];
                 write!(f, "tasks {name}")
             }
             I::Function(i) => {
-                let HierarchyFunction {
-                    name,
-                    ast: _,
-                    children: _,
-                    parent: _,
-                } = &hierarchy.functions[*i];
+                let HierarchyFunction { name, .. } = &hierarchy.functions[*i];
                 write!(f, "function {name}")
             }
             I::Net(i) => {
@@ -311,14 +320,6 @@ impl HierarchyItem {
                     value: _,
                 } = &hierarchy.parameters[*i];
                 write!(f, "parameter {name}")
-            }
-            I::GenVar(i) => {
-                let HierarchyGenvar {
-                    name,
-                    parent: _,
-                    value: _,
-                } = &hierarchy.genvars[*i];
-                write!(f, "genvar {name}")
             }
         }
     }

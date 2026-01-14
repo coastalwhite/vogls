@@ -136,7 +136,6 @@ pub fn eval_constant_expr<'a>(
                     HierarchyItem::NamedBlock(_) => todo!(),
                     HierarchyItem::Task(_) => todo!(),
                     HierarchyItem::Function(_) => todo!(),
-                    HierarchyItem::GenVar(_) => todo!(),
                     HierarchyItem::GenerateBlock(_) => todo!(),
                 };
                 result_stack.push(Some(value));

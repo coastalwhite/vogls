@@ -593,9 +593,7 @@ impl BasicBlockBuilder {
         slf.terminator = BasicBlockTerminator::Halt;
         BasicBlockBuilder {
             key: next_key,
-
             process: self.process,
-
             instrs: Vec::new(),
         }
     }

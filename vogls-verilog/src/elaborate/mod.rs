@@ -22,12 +22,14 @@ use crate::ast::statement::{
 };
 use crate::ast::{AstId, AstIdRange};
 use crate::hierarchy::{
-    HierarchyFunction, HierarchyGenerateBlock, HierarchyItem, HierarchyItemRange, HierarchyKey,
-    HierarchyModule, HierarchyNamedBlock, HierarchyNet, HierarchyParameter, HierarchyTask,
-    ParameterOverrides, ScopeBuilder,
+    HierarchyFunction, HierarchyGenerateBlock, HierarchyItem, HierarchyItemRange, HierarchyModule,
+    HierarchyNamedBlock, HierarchyNet, HierarchyParameter, HierarchyTask, ParameterOverrides,
+    ScopeBuilder,
 };
 use crate::lower::{Diagnostics, VType, dims_to_array, eval_constant_expr, evaluate_range};
 use crate::parser::AstArenas;
+
+pub mod function;
 
 pub fn elaborate_module<'a>(
     signals: &mut SlotMap<SignalKey, Signal>,
@@ -253,7 +255,7 @@ pub fn elaborate_port_declaration<'a>(
         }
     };
 
-    let (msb, lsb, size) = match range {
+    let (_, _, size) = match range {
         None => (0, 0, SCALAR_VSIZE),
         Some(range) => evaluate_range(arenas, builder.eval_scope(), diagnostics, range)?,
     };
@@ -344,7 +346,7 @@ pub fn elaborate_module_or_generate_item<'a>(
 
         // @TODO: This actually also needs to be elaborated somewhat. I am not 100% sure how or
         // what though.
-        ModuleOrGenerateItem::GateInstantiation(id) => Ok(()),
+        ModuleOrGenerateItem::GateInstantiation(_) => Ok(()),
 
         ModuleOrGenerateItem::UdpInstantiation => todo!(),
         ModuleOrGenerateItem::ModuleInstantiation(id) => {
@@ -689,7 +691,7 @@ pub fn elaborate_module_or_generate_item_declaration<'a>(
                 range,
                 variable_types,
             } = arenas.get(*id);
-            let (msb, lsb, size) = match range {
+            let (_, _, size) = match range {
                 None => (0, 0, SCALAR_VSIZE),
                 Some(range) => evaluate_range(arenas, builder.eval_scope(), diagnostics, *range)?,
             };
@@ -740,9 +742,7 @@ pub fn elaborate_module_or_generate_item_declaration<'a>(
         }
         ModuleOrGenerateItemDeclaration::Task(id) => {
             let TaskDeclaration {
-                ident,
-                automatic,
-                statement_or_null: _,
+                ident, automatic, ..
             } = arenas.get(*id);
 
             let name = arenas.get_ident(ident.item.0);
@@ -751,6 +751,9 @@ pub fn elaborate_module_or_generate_item_declaration<'a>(
                 ast: *id,
                 children: HierarchyItemRange::default(),
                 parent: builder.key(),
+                automatic: *automatic,
+
+                lower: None,
             };
             if builder.insert_task(task).is_some() {
                 diagnostics.duplicate_definition(arenas, *ident);
@@ -759,12 +762,7 @@ pub fn elaborate_module_or_generate_item_declaration<'a>(
         }
         ModuleOrGenerateItemDeclaration::Function(id) => {
             let FunctionDeclaration {
-                ident,
-                automatic,
-                range_or_type,
-                tf_input_decls,
-                block_item_decls,
-                statement,
+                ident, automatic, ..
             } = arenas.get(*id);
 
             let name = arenas.get_ident(ident.item.0);
@@ -773,6 +771,8 @@ pub fn elaborate_module_or_generate_item_declaration<'a>(
                 ast: *id,
                 children: HierarchyItemRange::default(),
                 parent: builder.key(),
+                automatic: *automatic,
+                lower: None,
             };
             if builder.insert_function(function).is_some() {
                 diagnostics.duplicate_definition(arenas, *ident);

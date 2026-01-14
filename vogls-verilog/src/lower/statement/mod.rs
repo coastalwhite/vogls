@@ -6,6 +6,7 @@ use crate::ast::statement::{
 };
 use crate::ast::{AstId, AstIdRange};
 use crate::hierarchy::HierarchyItem;
+use crate::lower::expression::function_call::lower_task_enable;
 use crate::lower::expression::{self, lower_expr};
 use crate::lower::{Region, assign};
 use crate::parser::AstArenas;
@@ -165,28 +166,15 @@ pub fn statements_to_process<'a>(
             }
             S::TaskEnable(id) => {
                 let TaskEnable { ident } = arenas.get(id);
-                let name = arenas.get_ident(ident.item.0);
-                let Some(symbol_key) = scope.get(name) else {
-                    diagnostics.var_not_found(arenas, *ident);
-                    return Err(());
-                };
-                let HierarchyItem::Task(s) = &scope.hierarchy.items()[symbol_key.as_idx()] else {
-                    diagnostics
-                        .not_yet_implemented(arenas.get_item_span(*ident), "non-task enabled");
-                    return Err(());
-                };
-                todo!();
-                // let HierarchyItem::Task { }
-                //
-                // builder = lower_statement_or_null(
-                //     gl,
-                //     arenas,
-                //     scope,
-                //     mc,
-                //     diagnostics,
-                //     builder,
-                //     *statement_or_null,
-                // )?;
+                builder = lower_task_enable(
+                    gl,
+                    arenas,
+                    scope,
+                    diagnostics,
+                    builder,
+                    *ident,
+                    AstIdRange::default(),
+                )?;
             }
             S::WaitStatement(id) => {
                 let WaitStatement {

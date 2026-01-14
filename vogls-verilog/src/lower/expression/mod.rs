@@ -17,7 +17,7 @@ use super::Diagnostics;
 use super::Scope;
 
 mod constant_expr;
-mod function_call;
+pub mod function_call;
 mod system_function_call;
 
 #[deny(clippy::question_mark_used)] // Needs to be handled explicitly in the recursion.
@@ -366,8 +366,7 @@ pub fn lower_expr<'a>(
                         let value = value.clone();
                         (value.ty(), builder.constant(gl, value.into_bits()))
                     }
-                    HierarchyItem::GenVar(_)
-                    | HierarchyItem::Task(_)
+                    HierarchyItem::Task(_)
                     | HierarchyItem::Function(_)
                     | HierarchyItem::Module(_)
                     | HierarchyItem::NamedBlock(_)
@@ -851,8 +850,7 @@ pub fn get_used_signals<'a>(
                             signals.push(net.signal);
                         }
                     }
-                    HierarchyItem::GenVar(_)
-                    | HierarchyItem::Parameter(_)
+                    HierarchyItem::Parameter(_)
                     | HierarchyItem::Task(_)
                     | HierarchyItem::Module(_)
                     | HierarchyItem::NamedBlock(_)

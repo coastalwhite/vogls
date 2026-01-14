@@ -55,6 +55,31 @@ pub fn try_item_parse<'a, T: Consumable<'a>>(
     Some(AstItem { item, loc })
 }
 
+pub fn parse_zero_or_more_while<'a, T: Consumable<'a>>(
+    tkw: &mut TokenWalker<'a>,
+    sc: &mut ParserScratches,
+    arenas: &mut AstArenas,
+    mut diagnostics: Option<&mut Diagnostics>,
+    condition: impl Fn(&mut TokenWalker<'a>) -> bool,
+) -> Result<AstIdRange<T>, ()> {
+    // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
+    // here.
+    let mut items = Vec::new();
+    let mut spans = Vec::new();
+    while condition(tkw) {
+        let start = tkw.offset;
+        let item = T::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        let token_range = TokenRange {
+            start,
+            end: tkw.offset,
+        };
+        items.push(item);
+        spans.push(token_range);
+    }
+
+    Ok(arenas.add_range(items, spans))
+}
+
 pub fn parse_one_or_more_while<'a, T: Consumable<'a>>(
     tkw: &mut TokenWalker<'a>,
     sc: &mut ParserScratches,

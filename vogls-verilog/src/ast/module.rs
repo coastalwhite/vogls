@@ -512,6 +512,8 @@ pub struct GenvarDeclaration {
 pub struct TaskDeclaration {
     pub ident: AstItem<Identifier>,
     pub automatic: bool,
+    pub task_ports: AstIdRange<TaskPortItem>,
+    pub block_item_decls: AstIdRange<BlockItemDeclaration>,
     pub statement_or_null: AstId<StatementOrNull>,
 }
 
@@ -556,6 +558,44 @@ pub struct TfInputDeclaration {
     pub tf_type: TfType,
     pub port_identifiers: AstIdRange<Identifier>,
 }
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 493
+// tf_output_declaration ::=
+//   output [ reg ] [ signed ] [ range ] list_of_port_identifiers
+// | output task_port_type list_of_port_identifiers
+#[derive(Clone, Copy)]
+pub struct TfOutputDeclaration {
+    pub tf_type: TfType,
+    pub port_identifiers: AstIdRange<Identifier>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 493
+// tf_inout_declaration ::=
+//   inout [ reg ] [ signed ] [ range ] list_of_port_identifiers
+// | inout task_port_type list_of_port_identifiers
+#[derive(Clone, Copy)]
+pub struct TfInoutDeclaration {
+    pub tf_type: TfType,
+    pub port_identifiers: AstIdRange<Identifier>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 492
+// task_port_item ::=
+//   { attribute_instance } tf_input_declaration
+// | { attribute_instance } tf_output_declaration
+// | { attribute_instance } tf_inout_declaration
+#[derive(Clone, Copy)]
+pub struct TaskPortItem {
+    pub attribute_instances: AstIdRange<AttributeInstance>,
+    pub content: TaskPortItemContent,
+}
+#[derive(Clone, Copy)]
+pub enum TaskPortItemContent {
+    Input(TfInputDeclaration),
+    Output(TfOutputDeclaration),
+    Inout(TfInoutDeclaration),
+}
+
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 493
 // task_port_type ::= integer | real | realtime | time
 #[derive(Clone, Copy)]

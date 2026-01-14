@@ -1,7 +1,7 @@
 mod assign;
 mod diagnostics;
-mod expression;
-mod module_or_generate_item;
+pub mod expression;
+pub mod module_or_generate_item;
 mod parameter;
 // mod scope;
 mod statement;
@@ -94,11 +94,18 @@ impl<'a> Scope<'a> {
             key = item.parent(self.hierarchy).unwrap();
         }
     }
+
+    fn builder(&mut self) -> ScopeBuilder {
+        ScopeBuilder {
+            hierarchy: self.hierarchy,
+            key: self.key,
+        }
+    }
 }
 
 use std::collections::HashMap;
 
-use vogls_ir::{GlobalContext, SCALAR_VSIZE, Signal, SignalKey, VectorSize, new_process};
+use vogls_ir::{new_process, BasicBlockBuilder, GlobalContext, Signal, SignalKey, VariableKey, VectorSize, SCALAR_VSIZE};
 
 use crate::ast::AstId;
 use crate::ast::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression};
@@ -107,7 +114,7 @@ use crate::ast::module::{
     GenerateRegion, Module, ModuleItem, NonPortModuleItem, ParamAssignment, ParameterDeclaration,
     Range,
 };
-use crate::hierarchy::{Hierarchy, HierarchyItem, HierarchyKey, HierarchyModule, HierarchyNet};
+use crate::hierarchy::{Hierarchy, HierarchyItem, HierarchyKey, HierarchyModule, HierarchyNet, ScopeBuilder};
 use crate::parser::AstArenas;
 
 pub use self::expression::eval_constant_expr;
@@ -377,6 +384,122 @@ fn assign_port_output<'a>(
     }
 
     bb_builder.watch_for_ins_to(gl, bb_key);
+
+    if error {
+        return Err(());
+    }
+
+    Ok(())
+}
+
+fn assign_task_output<'a>(
+    gl: &mut GlobalContext,
+    arenas: &'a AstArenas,
+    scope: &Scope<'a>,
+    diagnostics: &mut Diagnostics,
+    builder: &mut BasicBlockBuilder,
+    variable: VariableKey,
+    expr: AstId<Expr>,
+    ty: VType,
+) -> Result<(), ()> {
+    let mut driving: Vec<AstId<Expr>> = Vec::new();
+    driving.push(expr);
+
+    let mut error = false;
+    while let Some(expr) = driving.pop() {
+        match arenas.get(expr) {
+            Expr::Concatenation(_) => {
+                todo!()
+            }
+            Expr::Ident(ast_ident, exprs, range_expression) => {
+                let ident = arenas.get_ident(ast_ident.item.0);
+                let Some(symbol_key) = scope.get(&ident) else {
+                    diagnostics.var_not_found(arenas, *ast_ident);
+                    error = true;
+                    continue;
+                };
+                let HierarchyItem::Net(s) = &scope.hierarchy.items()[symbol_key.as_idx()] else {
+                    diagnostics.output_expr_not_allowed(arenas.get_span(expr));
+                    error = true;
+                    continue;
+                };
+                let s = &scope.hierarchy.net()[*s];
+
+                let (offset_dst, length_dst) = if range_expression.is_none() && exprs.is_empty() {
+                    (builder.constant_u32(gl, 0), Some(s.ty.force_net_width()))
+                } else if range_expression.is_none() && exprs.len() == 1 {
+                    (
+                        lower_expr(
+                            gl,
+                            arenas,
+                            scope,
+                            diagnostics,
+                            builder,
+                            exprs.first().unwrap(),
+                        )?
+                        .0,
+                        None,
+                    )
+                } else if let Some(slice) = range_expression
+                    && exprs.is_empty()
+                {
+                    match slice {
+                        BitSlice::MsbLsb(msb, lsb) => {
+                            let (_, lsb, width) =
+                                msb_lsb_to_width(arenas, scope.eval(), diagnostics, *msb, *lsb)?;
+                            let offset = builder.constant_u32(gl, lsb as u32);
+                            (offset, Some(width as VectorSize))
+                        }
+                        BitSlice::PlusWidth(base, width) => {
+                            let offset =
+                                lower_expr(gl, arenas, scope, diagnostics, builder, *base);
+                            let width =
+                                eval_constant_expr(arenas, scope.eval(), diagnostics, *width);
+                            let width = width?.as_integer().unwrap();
+                            (offset?.0, Some(VectorSize::new(width as u32).unwrap()))
+                        }
+                        BitSlice::MinusWidth(base, width) => {
+                            let offset =
+                                lower_expr(gl, arenas, scope, diagnostics, builder, *base);
+                            let width =
+                                eval_constant_expr(arenas, scope.eval(), diagnostics, *width)?;
+                            let width =
+                                VectorSize::new(width.as_integer().unwrap() as u32).unwrap();
+                            let width_v =
+                                builder.constant_u32(gl, width.checked_add(1).unwrap().get());
+                            let offset = builder.minus(gl, offset?.0, width_v);
+                            (offset, Some(width))
+                        }
+                    }
+                } else {
+                    diagnostics.not_yet_implemented(arenas.get_span(expr), "multiple braced");
+                    error = true;
+                    continue;
+                };
+
+                let length_dst = length_dst.unwrap_or(SCALAR_VSIZE);
+                let src = truncate_or_extend(gl, builder, variable, ty, length_dst);
+                builder.drive_partial(gl, s.signal, src, offset_dst, length_dst);
+            }
+
+            Expr::Replication(_) => {
+                diagnostics.not_yet_implemented(arenas.get_span(expr), "repetition in net assign");
+                error = true;
+            }
+
+            Expr::FunctionCall(..)
+            | Expr::SystemFunctionCall(..)
+            | Expr::Decimal(..)
+            | Expr::Sized(..)
+            | Expr::Ternary(..)
+            | Expr::String(..)
+            | Expr::Unary(..)
+            | Expr::Binary(..) => {
+                diagnostics.output_expr_not_allowed(arenas.get_span(expr));
+                error = true;
+            }
+        }
+    }
 
     if error {
         return Err(());

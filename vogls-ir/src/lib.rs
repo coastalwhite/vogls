@@ -137,7 +137,7 @@ impl BasicBlockTerminator {
         }
     }
 
-    fn for_each_bb(&self, mut f: impl FnMut(BasicBlockKey)) {
+    pub fn for_each_bb(&self, mut f: impl FnMut(BasicBlockKey)) {
         match self {
             Self::Wait(bb, _) | Self::WaitRegion(bb, _) | Self::Watch(bb, _) | Self::Jump(bb) => {
                 f(*bb);
@@ -172,7 +172,7 @@ impl BasicBlockTerminator {
         }
     }
 
-    fn map_bb(&mut self, mut f: impl FnMut(BasicBlockKey) -> BasicBlockKey) {
+    pub fn map_bb(&mut self, mut f: impl FnMut(BasicBlockKey) -> BasicBlockKey) {
         match self {
             BasicBlockTerminator::Wait(bb, _)
             | BasicBlockTerminator::WaitRegion(bb, _)

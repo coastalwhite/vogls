@@ -95,7 +95,6 @@ pub fn variable_lvalue_flat_ty<'a>(
 
     let exprs = *exprs;
     let (mut ty, mut n_dims) = match &scope.hierarchy.items()[symbol_key.as_idx()] {
-        HierarchyItem::GenVar(_) => todo!(),
         HierarchyItem::Parameter(v) => {
             let p = &scope.hierarchy.parameters()[*v];
             (p.value.ty(), 0)
@@ -184,7 +183,6 @@ pub fn assign_variable_lvalue_flat<'a>(
 
     let mut exprs = *exprs;
     let (ty, dims) = match &scope.hierarchy.items()[symbol_key.as_idx()] {
-        HierarchyItem::GenVar(_) => (VType::SignedNet(INTEGER_VSIZE), [].into()),
         HierarchyItem::Parameter(v) => {
             let HierarchyParameter {
                 name: _,
@@ -320,7 +318,6 @@ pub fn assign_variable_lvalue_flat<'a>(
         HierarchyItem::Task(_) => todo!(),
         HierarchyItem::Function(_) => todo!(),
         HierarchyItem::Parameter(_) => todo!(),
-        HierarchyItem::GenVar(_) => todo!(),
     }
     Ok(())
 }
@@ -394,7 +391,6 @@ pub fn net_lvalue_flat_ty<'a>(
 
     let exprs = *constant_exprs;
     let (mut ty, mut n_dims) = match &scope.hierarchy.items()[symbol_key.as_idx()] {
-        HierarchyItem::GenVar(_) => todo!(),
         HierarchyItem::Parameter(v) => {
             let p = &scope.hierarchy.parameters()[*v];
             (p.value.ty(), 0)

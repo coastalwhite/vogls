@@ -22,7 +22,7 @@ use crate::parser::AstArenas;
 use super::Scope;
 use super::{Diagnostics, EvalScope};
 
-mod function;
+pub mod function;
 
 pub fn lower<'a>(
     gl: &mut GlobalContext,

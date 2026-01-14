@@ -4,22 +4,29 @@ use std::rc::Rc;
 
 use slotmap::{SecondaryMap, SlotMap};
 use vogls_ir::token_range::TokenRange;
-use vogls_ir::{Bits, ContextFormat, GlobalContext, Instruction, Signal};
+use vogls_ir::{
+    Bits, ContextFormat, GlobalContext, INTEGER_VSIZE, Instruction, SCALAR_VSIZE, Signal,
+};
 use vogls_sim::{
     Context, EvaluationEvent, Event, Regions, SignalInfo, VmProcess, VmProcessKey, VmSignalKey,
     lower_process_to_vm,
 };
-use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{
-    CaseGenerateConstruct, CaseGenerateItem, GenerateBlock, IfGenerateConstruct,
-    LoopGenerateConstruct, Module, ModuleItem, ModuleOrGenerateItem, NonPortModuleItem,
+    CaseGenerateConstruct, CaseGenerateItem, FunctionDeclaration, GenerateBlock,
+    IfGenerateConstruct, LoopGenerateConstruct, Module, ModuleItem, ModuleOrGenerateItem,
+    NonPortModuleItem, TfInputDeclaration, TfType,
 };
-use vogls_verilog::elaborate::{elaborate_module, elaborate_module_or_generate_item};
+use vogls_verilog::ast::{AstId, AstIdRange};
+use vogls_verilog::elaborate::{
+    elaborate_module, elaborate_module_or_generate_item, elaborate_statements,
+};
 use vogls_verilog::hierarchy::{
-    Hierarchy, HierarchyGenerateBlock, HierarchyItem, HierarchyItemRange, HierarchyKey,
-    HierarchyModule, HierarchyParameter, ScopeBuilder,
+    Hierarchy, HierarchyFunction, HierarchyGenerateBlock, HierarchyItem, HierarchyItemRange,
+    HierarchyKey, HierarchyModule, HierarchyNet, HierarchyParameter, ScopeBuilder,
 };
-use vogls_verilog::lower::{Diagnostics as LowerDiagnostics, lower_module_to_ir};
+use vogls_verilog::lower::{
+    Diagnostics as LowerDiagnostics, VType, evaluate_range, lower_module_to_ir,
+};
 use vogls_verilog::parser::{
     AstArenas, Diagnostics as ParserDiagnostics, ParseContext, ParserScratches, TokenWalker,
     parse_file, report, report_error,
@@ -284,11 +291,16 @@ pub fn run(
 
     let mut offset = 1;
     while let Some(item) = hierarchy.symbols.get(offset) {
+        let item = *item;
+        let mut builder = ScopeBuilder {
+            hierarchy: &mut hierarchy,
+            key: HierarchyKey::new(offset),
+        };
+
         use HierarchyItem as I;
         match item {
             I::Module(m) => {
-                let m = *m;
-                let items_len = hierarchy.symbols.len();
+                let items_len = builder.hierarchy.symbols.len();
                 let HierarchyModule {
                     name: _,
                     module_name,
@@ -300,7 +312,7 @@ pub fn run(
                     parameter_lut: _,
                     parameters: _,
                     parameter_overrides: _,
-                } = &mut hierarchy.modules[m];
+                } = &mut builder.hierarchy.modules[m];
 
                 *children = HierarchyItemRange {
                     start: items_len,
@@ -312,10 +324,7 @@ pub fn run(
                     &mut gl.signals,
                     &ast.arenas,
                     id,
-                    &mut ScopeBuilder {
-                        hierarchy: &mut hierarchy,
-                        key: HierarchyKey::new(offset),
-                    },
+                    &mut builder,
                     &mut diagnostics,
                 )
                 .is_err();
@@ -327,16 +336,11 @@ pub fn run(
                     genvar,
                     genvars,
                     ..
-                } = &hierarchy.generate_blocks[*i];
+                } = &builder.hierarchy.generate_blocks[i];
 
                 let children = *children;
                 let genvar = genvar.clone();
                 let mut genvars = genvars.clone();
-
-                let mut builder = ScopeBuilder {
-                    hierarchy: &mut hierarchy,
-                    key: HierarchyKey::new(offset),
-                };
 
                 if let Some((name, value)) = genvar {
                     builder.insert_parameter(HierarchyParameter {
@@ -353,15 +357,31 @@ pub fn run(
                         id,
                         &mut builder,
                         &mut diagnostics,
-                        &mut genvars
+                        &mut genvars,
                     )
                     .is_err();
                 }
             }
-            I::Task(_) => todo!(),
-            I::Function(_) => todo!(),
+            I::Task(_) => {
+                error |= vogls_verilog::elaborate::function::elaborate_task(
+                    &mut gl.signals,
+                    &ast.arenas,
+                    &mut builder,
+                    &mut diagnostics,
+                )
+                .is_err();
+            }
+            I::Function(_) => {
+                error |= vogls_verilog::elaborate::function::elaborate_fn(
+                    &mut gl.signals,
+                    &ast.arenas,
+                    &mut builder,
+                    &mut diagnostics,
+                )
+                .is_err();
+            }
 
-            I::Net(_) | I::Parameter(_) | I::GenVar(_) => {}
+            I::Net(_) | I::Parameter(_) => {}
         }
         offset += 1;
     }
@@ -399,6 +419,56 @@ pub fn run(
         )?;
     }
 
+    let mut error = false;
+    let mut signal_map = HashMap::new();
+    for i in 0..hierarchy.items().len() {
+        match hierarchy.items()[i] {
+            HierarchyItem::Function(i) => {
+                let id = hierarchy.functions[i].ast;
+                error |= vogls_verilog::lower::module_or_generate_item::function::lower(
+                    &mut gl,
+                    &ast.arenas,
+                    &mut diagnostics,
+                    &mut hierarchy,
+                    i,
+                    &mut signal_map,
+                    id,
+                )
+                .is_err();
+            }
+            HierarchyItem::Task(i) => {
+                let id = hierarchy.tasks[i].ast;
+                error |= vogls_verilog::lower::module_or_generate_item::function::lower_task(
+                    &mut gl,
+                    &ast.arenas,
+                    &mut diagnostics,
+                    &mut hierarchy,
+                    i,
+                    &mut signal_map,
+                    id,
+                )
+                .is_err();
+            }
+            _ => continue,
+        }
+    }
+
+    if error {
+        for (location, err, context) in &diagnostics.errors {
+            let mut out = String::new();
+            report_error(&token_buffer, err.clone(), *location, &mut out)?;
+            write!(ectx.stderr, "{out}")?;
+            if !context.is_empty() {
+                writeln!(ectx.stderr, "context:")?;
+                for c in context {
+                    writeln!(ectx.stderr, "- {c}")?;
+                }
+            }
+            writeln!(ectx.stderr)?;
+        }
+        return Err("failed to lower".into());
+    }
+
     // let Ok((top_level_params, top_level_io, parameters)) = fetch_module_interface(
     //     &mut gl,
     //     &ast.arenas,
@@ -432,7 +502,6 @@ pub fn run(
     // }
 
     // Walk the modules in depth-first order and lower to IR.
-    let mut error = false;
     let mut diagnostics = LowerDiagnostics::default();
     // @TODO: Iterate over the modules instead.
     for i in 0..hierarchy.items().len() {
@@ -449,7 +518,7 @@ pub fn run(
             &mut vogls_verilog::lower::Scope {
                 hierarchy: &mut hierarchy,
                 key,
-                signal_map: &mut HashMap::new(),
+                signal_map: &mut signal_map,
             },
             &mut diagnostics,
         );
