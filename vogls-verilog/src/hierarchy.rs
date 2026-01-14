@@ -201,42 +201,56 @@ impl HierarchyItem {
         }
     }
 
-    fn vcd_scope(&self, hierarchy: &Hierarchy, remaining_levels: u32) -> VcdScope {
-        todo!()
-        // use HierarchyItem as I;
-        // VcdScope {
-        //     name: self.name().to_string(),
-        //     items: todo!(),
-        //     // self
-        //     // .children()
-        //     // .iter()
-        //     // .filter_map(|i| match &hierarchy.items[i.as_idx()] {
-        //     //     I::Module { instance_name, module_name, children, parent } => {
-        //     //     },
-        //     //     I::NamedBlock { instance_name, module_name, children, parent } => {
-        //     //     },
-        //     //     I::Task { instance_name, module_name, children, parent } => {
-        //     //     },
-        //     //     I::Function { instance_name, module_name, children, parent } => {
-        //     //     },
-        //     //     I::Net { signal, .. } => {
-        //     //         Some(VcdScopeItem::Variable(VcdVariable {
-        //     //             signal: net.signal,
-        //     //             ty: net.ty,
-        //     //             msb: net.msb,
-        //     //             lsb: net.lsb,
-        //     //         }))
-        //     //     },
-        //     //     I::Parameter { .. } => None,
-        //     //     // ScopeItem::Net(net) => {
-        //     //     // }
-        //     //     // ScopeItem::Scope(_) if remaining_levels == 0 => None,
-        //     //     // ScopeItem::Scope(module) => Some(VcdScopeItem::Scope(
-        //     //     //     hierarchy.items[module.as_idx()].vcd_scope(hierarchy, remaining_levels - 1),
-        //     //     // )),
-        //     // })
-        //     // .collect(),
-        // }
+    fn vcd_scope(&self, hierarchy: &Hierarchy, _remaining_levels: u32) -> VcdScope {
+        fn extend_children(
+            out: &mut Vec<vogls_ir::vcd::VcdScopeItem>,
+            hierarchy: &Hierarchy,
+            items: HierarchyItemRange,
+        ) {
+            for child in items.iter() {
+                match &hierarchy.symbols[child.as_idx()] {
+                    item @ (I::Module(_) | I::NamedBlock(_) | I::Task(_) | I::Function(_)) => {
+                        out.push(vogls_ir::vcd::VcdScopeItem::Scope(
+                            item.vcd_scope(hierarchy, 0),
+                        ));
+                    }
+                    I::Net(i) => {
+                        let HierarchyNet { signal, ty, .. } = &hierarchy.nets[*i];
+                        out.push(vogls_ir::vcd::VcdScopeItem::Variable(
+                            vogls_ir::vcd::VcdVariable {
+                                signal: *signal,
+                                ty: vogls_ir::vcd::NetType::Wire,
+                                msb: (ty.force_net_width().get() - 1) as i64,
+                                lsb: 0,
+                            },
+                        ));
+                    }
+                    I::Parameter(_) => {}
+                    item @ I::GenerateBlock(i) => {
+                        let HierarchyGenerateBlock { name, children, .. } =
+                            &hierarchy.generate_blocks[*i];
+
+                        match name {
+                            Some(_) => {
+                                out.push(vogls_ir::vcd::VcdScopeItem::Scope(
+                                    item.vcd_scope(hierarchy, 0),
+                                ));
+                            }
+                            None => {
+                                extend_children(out, hierarchy, *children);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let mut children = Vec::new();
+        extend_children(&mut children, hierarchy, self.children(hierarchy));
+        use HierarchyItem as I;
+        VcdScope {
+            name: self.name(hierarchy).unwrap_or("<anonymous>").to_string(),
+            items: children,
+        }
     }
 }
 
@@ -252,7 +266,7 @@ impl HierarchyItem {
                     ast: _,
                     parent: _,
                     lut: _,
-                    ports,
+                    ports: _,
                     parameter_lut: _,
                     parameters: _,
                     parameter_overrides: _,
@@ -434,9 +448,8 @@ impl Hierarchy {
         HierarchyKey::new(0)
     }
 
-    pub fn vcd_scope(&self, remaining_levels: u32) -> VcdScope {
-        let top_level_key = self.top_level_key();
-        self.symbols[top_level_key.as_idx()].vcd_scope(&self, remaining_levels)
+    pub fn vcd_scope(&self, top_level: HierarchyKey, remaining_levels: u32) -> VcdScope {
+        self.symbols[top_level.as_idx()].vcd_scope(&self, remaining_levels)
     }
 
     pub fn display<'b>(&'b self, key: HierarchyKey) -> HierarchyDisplay<'b> {

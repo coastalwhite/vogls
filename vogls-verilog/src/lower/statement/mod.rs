@@ -5,7 +5,6 @@ use crate::ast::statement::{
     StatementContent, StatementOrNull, TaskEnable, WaitStatement,
 };
 use crate::ast::{AstId, AstIdRange};
-use crate::hierarchy::HierarchyItem;
 use crate::lower::expression::function_call::lower_task_enable;
 use crate::lower::expression::{self, lower_expr};
 use crate::lower::{Region, assign};

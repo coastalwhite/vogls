@@ -5,11 +5,11 @@ pub mod optimize;
 pub mod token_range;
 pub mod vcd;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::num::NonZeroU32;
 pub use vogls_bits::{Bits, VectorSize};
 
-pub use builder::{BasicBlockBuilder, BranchRef, PhiRef, new_process, new_anonymous_builder};
+pub use builder::{BasicBlockBuilder, BranchRef, PhiRef, new_anonymous_builder, new_process};
 pub use format::{ContextFormat, DisplayContext};
 use indexmap::IndexSet;
 use slotmap::{SlotMap, new_key_type};
@@ -43,7 +43,7 @@ pub struct BasicBlock {
     pub terminator: BasicBlockTerminator,
 }
 impl BasicBlock {
-    fn map_bbs(&mut self, map: &HashMap<BasicBlockKey, BasicBlockKey>) {
+    pub fn map_bbs(&mut self, mut f: impl FnMut(BasicBlockKey) -> BasicBlockKey) {
         for i in self.instrs.iter_mut() {
             match i {
                 Instruction::Constant(..)
@@ -54,24 +54,12 @@ impl BasicBlock {
                 | Instruction::Probe(..)
                 | Instruction::Drive(..) => {}
                 Instruction::Phi(_, items) => items.iter_mut().for_each(|(bb, _)| {
-                    *bb = map.get(bb).copied().unwrap_or(*bb);
+                    *bb = f(*bb);
                 }),
             }
         }
 
-        match &mut self.terminator {
-            BasicBlockTerminator::Wait(bb, _)
-            | BasicBlockTerminator::WaitRegion(bb, _)
-            | BasicBlockTerminator::Watch(bb, _)
-            | BasicBlockTerminator::Jump(bb) => {
-                *bb = map.get(bb).copied().unwrap_or(*bb);
-            }
-            BasicBlockTerminator::Branch(_, bb1, bb2) => {
-                *bb1 = map.get(bb1).copied().unwrap_or(*bb1);
-                *bb2 = map.get(bb2).copied().unwrap_or(*bb2);
-            }
-            BasicBlockTerminator::Halt => {}
-        }
+        self.terminator.map_bb(f);
     }
 
     fn remove_fan_in_edge(&mut self, bb_key: BasicBlockKey) {

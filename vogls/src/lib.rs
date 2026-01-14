@@ -4,29 +4,22 @@ use std::rc::Rc;
 
 use slotmap::{SecondaryMap, SlotMap};
 use vogls_ir::token_range::TokenRange;
-use vogls_ir::{
-    Bits, ContextFormat, GlobalContext, INTEGER_VSIZE, Instruction, SCALAR_VSIZE, Signal,
-};
+use vogls_ir::{Bits, ContextFormat, GlobalContext, Signal};
 use vogls_sim::{
     Context, EvaluationEvent, Event, Regions, SignalInfo, VmProcess, VmProcessKey, VmSignalKey,
     lower_process_to_vm,
 };
+use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{
-    CaseGenerateConstruct, CaseGenerateItem, FunctionDeclaration, GenerateBlock,
-    IfGenerateConstruct, LoopGenerateConstruct, Module, ModuleItem, ModuleOrGenerateItem,
-    NonPortModuleItem, TfInputDeclaration, TfType,
+    CaseGenerateConstruct, CaseGenerateItem, GenerateBlock, IfGenerateConstruct,
+    LoopGenerateConstruct, Module, ModuleItem, ModuleOrGenerateItem, NonPortModuleItem,
 };
-use vogls_verilog::ast::{AstId, AstIdRange};
-use vogls_verilog::elaborate::{
-    elaborate_module, elaborate_module_or_generate_item, elaborate_statements,
-};
+use vogls_verilog::elaborate::{elaborate_module, elaborate_module_or_generate_item};
 use vogls_verilog::hierarchy::{
-    Hierarchy, HierarchyFunction, HierarchyGenerateBlock, HierarchyItem, HierarchyItemRange,
-    HierarchyKey, HierarchyModule, HierarchyNet, HierarchyParameter, ScopeBuilder,
+    Hierarchy, HierarchyGenerateBlock, HierarchyItem, HierarchyItemRange, HierarchyKey,
+    HierarchyModule, HierarchyParameter, ScopeBuilder,
 };
-use vogls_verilog::lower::{
-    Diagnostics as LowerDiagnostics, VType, evaluate_range, lower_module_to_ir,
-};
+use vogls_verilog::lower::{Diagnostics as LowerDiagnostics, lower_module_to_ir};
 use vogls_verilog::parser::{
     AstArenas, Diagnostics as ParserDiagnostics, ParseContext, ParserScratches, TokenWalker,
     parse_file, report, report_error,
@@ -186,14 +179,6 @@ pub fn run(
         HashMap::<&str, usize>::from_iter(ast.modules.iter().enumerate().map(|(i, module_id)| {
             let module = ast.arenas.get(module_id);
             (ast.arenas.get_ident(module.module_identifier.item.0), i)
-        }));
-    let module_to_ast_lut =
-        HashMap::<&str, AstId<Module>>::from_iter(ast.modules.iter().map(|module_id| {
-            let module = ast.arenas.get(module_id);
-            (
-                ast.arenas.get_ident(module.module_identifier.item.0),
-                module_id,
-            )
         }));
 
     let tl_module_name = match top_level_module {

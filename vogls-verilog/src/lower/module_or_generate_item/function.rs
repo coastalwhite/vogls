@@ -64,7 +64,7 @@ pub fn lower<'a>(
     let dummy_process_key = builder.process();
     let entry_key = builder.key();
 
-    let (msb, lsb, output_ty) = match arenas.get(*range_or_type) {
+    let (_, _, output_ty) = match arenas.get(*range_or_type) {
         FunctionRangeOrType::Unsigned(None) => (0, 0, VType::UnsignedNet(SCALAR_VSIZE)),
         FunctionRangeOrType::Signed(None) => (0, 0, VType::SignedNet(SCALAR_VSIZE)),
         FunctionRangeOrType::Unsigned(Some(range)) => {

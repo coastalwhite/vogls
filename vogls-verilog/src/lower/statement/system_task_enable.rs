@@ -1,5 +1,4 @@
 use vogls_ir::dyn_format_string::{Base, DynFormatArgument, DynFormatString, Padding};
-use vogls_ir::vcd::VcdScope;
 use vogls_ir::{BasicBlockBuilder, GlobalContext, IntrinsicOp};
 
 use crate::ast::AstId;
@@ -188,15 +187,11 @@ pub fn lower_system_task_enable<'a>(
         }
         "dumpvars" => {
             assert!(expressions.is_empty());
-            todo!();
-            // builder.intrinsic(
-            //     gl,
-            //     IntrinsicOp::VcdAppendModule(VcdScope {
-            //         name: "".into(),
-            //         items: Vec::new(),
-            //     }),
-            //     [].into(),
-            // );
+            builder.intrinsic(
+                gl,
+                IntrinsicOp::VcdAppendModule(scope.vcd_scope()),
+                [].into(),
+            );
         }
 
         // @Incomplete: Many variants here.

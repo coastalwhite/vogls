@@ -2,7 +2,6 @@ use std::collections::{HashMap, HashSet};
 
 use vogls_ir::{
     BasicBlockBuilder, BasicBlockTerminator, ConnectionDirection, GlobalContext, VariableKey,
-    new_process,
 };
 
 use crate::ast::expr::Expr;
@@ -127,13 +126,13 @@ pub fn lower_task_enable<'a>(
     }
 
     let mut bb_stack = Vec::new();
-    let mut bb_seen = HashMap::new();
+    let mut bb_map = HashMap::new();
 
     let fn_bb = gl.bbs.insert(gl.bbs[task_symbol.entry].clone());
     let mut terminator_bb = fn_bb;
 
     bb_stack.push(fn_bb);
-    bb_seen.insert(task_symbol.entry, fn_bb);
+    bb_map.insert(task_symbol.entry, fn_bb);
     while let Some(bb_key) = bb_stack.pop() {
         let terminator = gl.bbs[bb_key].terminator.clone();
         if matches!(terminator, BasicBlockTerminator::Halt) {
@@ -141,19 +140,27 @@ pub fn lower_task_enable<'a>(
         }
 
         terminator.for_each_bb(|bb| {
-            _ = bb_seen.entry(bb).or_insert_with(|| {
+            _ = bb_map.entry(bb).or_insert_with(|| {
                 let new_bb = gl.bbs.insert(gl.bbs[bb].clone());
                 bb_stack.push(new_bb);
                 new_bb
             })
         });
-        gl.bbs[bb_key].terminator.map_bb(|bb| bb_seen[&bb]);
+        gl.bbs[bb_key].terminator.map_bb(|bb| bb_map[&bb]);
         gl.bbs[bb_key].map_vars(|v| {
             *map.entry(v).or_insert_with(|| {
                 let fn_var = gl.vars[v].clone();
                 gl.vars.insert(fn_var)
             })
         });
+    }
+
+    let mut bb_seen = HashSet::new();
+    bb_stack.push(fn_bb);
+    bb_seen.insert(fn_bb);
+    while let Some(bb_key) = bb_stack.pop() {
+        gl.bbs[bb_key].map_bbs(|bb| bb_map[&bb]);
+        gl.bbs[bb_key].terminator.extend_next_rev(&mut bb_stack, &mut bb_seen);
     }
 
     for i in 0..task_symbol.io_vars.len() {

@@ -1,3 +1,4 @@
+use crate::ast::Identifier;
 use crate::ast::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression};
 use crate::ast::expr::Expr;
 use crate::ast::module::{
@@ -17,7 +18,6 @@ use crate::ast::module::{
     VariableTypeVariant,
 };
 use crate::ast::statement::{NetLValue, Statement, StatementOrNull};
-use crate::ast::{AstIdRange, Identifier};
 use crate::parser::TokenRange;
 use crate::tokenizer::Token;
 

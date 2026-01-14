@@ -37,7 +37,7 @@ impl Diagnostics {
     pub fn port_not_found<'a>(
         &mut self,
         arenas: &'a AstArenas,
-        io: &HierarchyModule,
+        _io: &HierarchyModule,
         ident: AstItem<Identifier>,
     ) {
         // @TODO

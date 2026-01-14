@@ -2,8 +2,6 @@ mod assign;
 mod diagnostics;
 pub mod expression;
 pub mod module_or_generate_item;
-mod parameter;
-// mod scope;
 mod statement;
 mod vtype;
 mod vvalue;
@@ -95,11 +93,15 @@ impl<'a> Scope<'a> {
         }
     }
 
-    fn builder(&mut self) -> ScopeBuilder {
+    fn builder<'b>(&'b mut self) -> ScopeBuilder<'b> {
         ScopeBuilder {
             hierarchy: self.hierarchy,
             key: self.key,
         }
+    }
+
+    fn vcd_scope(&self) -> vogls_ir::vcd::VcdScope {
+        self.hierarchy.vcd_scope(self.key, 0)
     }
 }
 

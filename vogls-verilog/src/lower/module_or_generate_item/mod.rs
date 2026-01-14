@@ -3,17 +3,16 @@ use vogls_ir::{
 };
 
 use crate::ast::module::{
-    Dimension, GateInstantiation, GenerateBlock, GenvarAssignment, IfGenerateConstruct,
-    ListOfPortConnections, LoopGenerateConstruct, ModuleInstance, ModuleInstantiation,
-    ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration, NInputGateInstance, NInputGateType,
-    NamedPortConnection, NetDeclAssignment, NetDeclarationNets, VariableType, VariableTypeVariant,
+    Dimension, GateInstantiation, GenerateBlock, ListOfPortConnections, ModuleInstance,
+    ModuleInstantiation, ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration, NInputGateInstance,
+    NInputGateType, NamedPortConnection, NetDeclAssignment, NetDeclarationNets, VariableType,
+    VariableTypeVariant,
 };
 use crate::ast::{AstId, AstIdRange};
 use crate::hierarchy::{HierarchyItem, HierarchyNet};
 use crate::lower::assign::{assign_net_lvalue, net_lvalue_width};
 use crate::lower::expression::{self, lower_expr, truncate_or_extend};
 use crate::lower::statement::statements_to_process;
-use crate::lower::vvalue::VValue;
 use crate::lower::{
     VType, assign_port_output, eval_constant_expr, evaluate_range, lower_to_signal,
 };
@@ -208,11 +207,8 @@ pub fn lower<'a>(
         ModuleOrGenerateItem::UdpInstantiation => todo!(),
         ModuleOrGenerateItem::ModuleInstantiation(id) => {
             let ModuleInstantiation {
-                module_identifier,
-                parameter_value_assignment,
-                module_instances,
+                module_instances, ..
             } = arenas.get(*id);
-            let instantiation_ident = arenas.get_ident(module_identifier.item.0);
 
             for instance in module_instances.iter() {
                 let ModuleInstance {

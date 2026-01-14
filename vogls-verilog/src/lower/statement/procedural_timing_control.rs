@@ -10,8 +10,8 @@ use crate::ast::statement::{
 };
 use crate::hierarchy::{HierarchyItem, HierarchyParameter};
 use crate::lower::Scope;
+use crate::lower::WatchCondition;
 use crate::lower::expression::lower_expr;
-use crate::lower::{WatchCondition};
 use crate::parser::AstArenas;
 
 use super::{Diagnostics, Region};
@@ -38,7 +38,10 @@ pub fn lower<'a>(
                         DelayValue::Identifier(ast_ident) => {
                             let ident = arenas.get_ident(ast_ident.0);
                             let Some(symbol_key) = scope.get(ident) else {
-                                diagnostics.not_yet_implemented(arenas.get_span(*ast_delay_control), "Ident not found");
+                                diagnostics.not_yet_implemented(
+                                    arenas.get_span(*ast_delay_control),
+                                    "Ident not found",
+                                );
                                 return Err(());
                             };
                             let symbol = &scope.hierarchy.items()[symbol_key.as_idx()];
@@ -50,7 +53,7 @@ pub fn lower<'a>(
                                         value,
                                     } = &scope.hierarchy.parameters()[*s];
                                     // @TODO: Remove unwrap
-                                    (value.as_integer().unwrap() as u64)
+                                    value.as_integer().unwrap() as u64
                                 }
                                 _ => todo!(),
                             };
