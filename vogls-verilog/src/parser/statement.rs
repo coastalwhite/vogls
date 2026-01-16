@@ -144,11 +144,9 @@ impl<'a> Consumable<'a> for StatementContent {
                     .try_get(tkw.offset + 1, diagnostics.as_deref_mut())?
                     .kind
                 {
-                    T::Semicolon => {
-                        // @Incomplete: This also supports arguments
+                    T::LeftParen | T::Semicolon => {
                         let task_enable =
                             parse::<TaskEnable>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
-                        tkw.offset += 1;
                         Ok(Self::TaskEnable(task_enable))
                     }
                     T::Equals => {
@@ -1293,9 +1291,27 @@ impl<'a> Consumable<'a> for TaskEnable {
         arenas: &mut AstArenas,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ()> {
-        // @Incomplete
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 499
+        // task_enable ::= hierarchical_task_identifier [ ( expression { , expression } ) ] ;
+
         let ident = item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
-        Ok(Self { ident })
+
+        let mut exprs = AstIdRange::default();
+        if tkw.next_if_equals(T::LeftParen) {
+            exprs = parse_one_or_more_delimited::<Expr>(
+                tkw,
+                sc,
+                arenas,
+                T::Comma,
+                diagnostics.as_deref_mut(),
+            )?;
+            tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
+        }
+        tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+
+        Ok(Self { ident, exprs })
     }
 }
 

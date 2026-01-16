@@ -319,10 +319,12 @@ pub struct IfBranch {
     pub statement: AstId<StatementOrNull>,
 }
 
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 499
+// task_enable ::= hierarchical_task_identifier [ ( expression { , expression } ) ] ;
 #[derive(Clone, Copy)]
 pub struct TaskEnable {
-    // @Incomplete
     pub ident: AstItem<Identifier>,
+    pub exprs: AstIdRange<Expr>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 499

@@ -164,16 +164,9 @@ pub fn statements_to_process<'a>(
                 )?;
             }
             S::TaskEnable(id) => {
-                let TaskEnable { ident } = arenas.get(id);
-                builder = lower_task_enable(
-                    gl,
-                    arenas,
-                    scope,
-                    diagnostics,
-                    builder,
-                    *ident,
-                    AstIdRange::default(),
-                )?;
+                let TaskEnable { ident, exprs } = arenas.get(id);
+                builder =
+                    lower_task_enable(gl, arenas, scope, diagnostics, builder, *ident, *exprs)?;
             }
             S::WaitStatement(id) => {
                 let WaitStatement {

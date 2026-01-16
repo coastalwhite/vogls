@@ -1409,13 +1409,28 @@ impl<'a> Consumable<'a> for TaskDeclaration {
         let automatic = tkw.next_if_equals(T::KeywordAutomatic);
         let ident = item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
         let (task_ports, block_item_decls) = if tkw.next_if_equals(T::LeftParen) {
+            let mut fst = true;
             let task_ports = parse_zero_or_more_while::<TaskPortItem>(
                 tkw,
                 sc,
                 arenas,
                 diagnostics.as_deref_mut(),
                 |tkw| {
-                    if tkw.is_next_equal_to(T::Comma)
+                    if fst
+                        && matches!(
+                            tkw.get(tkw.offset).map(|t| t.kind),
+                            Some(
+                                T::LeftParenStar
+                                    | T::KeywordInput
+                                    | T::KeywordOutput
+                                    | T::KeywordInout
+                            )
+                        )
+                    {
+                        fst = false;
+                        true
+                    } else if !fst
+                        && tkw.is_next_equal_to(T::Comma)
                         && matches!(
                             tkw.get(tkw.offset + 1).map(|t| t.kind),
                             Some(
@@ -2253,7 +2268,7 @@ impl<'a> Consumable<'a> for TaskPortItem {
         // | { attribute_instance } tf_inout_declaration
 
         let attribute_instances =
-            parse_one_or_more_while_next(tkw, sc, arenas, diagnostics.as_deref_mut(), |t| {
+            parse_zero_or_more_while_next(tkw, sc, arenas, diagnostics.as_deref_mut(), |t| {
                 t == T::LeftParenStar
             })?;
         let t = tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?;
