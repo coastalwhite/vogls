@@ -1,4 +1,4 @@
-use vogls_ir::{Bits, SCALAR_VSIZE};
+use vogls_ir::Bits;
 
 use crate::ast::AstId;
 use crate::ast::constant_expr::ConstantExpr;
@@ -170,7 +170,7 @@ pub fn eval_constant_expr<'a>(
 
                 let (truthy, falsy) = VValue::coerce_max_size(truthy, falsy);
 
-                if condition.logical_equal(VValue::UnsignedNet(Bits::Small(0, SCALAR_VSIZE))) {
+                if condition.logical_equal(VValue::UnsignedNet(Bits::from(false))) {
                     result_stack.push(Some(falsy));
                 } else {
                     result_stack.push(Some(truthy));

@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::num::NonZeroUsize;
 
 use slotmap::{SlotMap, new_key_type};
-use vogls_bits::get_disjoint_dst_src;
+use vogls_bits::{BitsDataRefMut, get_disjoint_dst_src};
 use vogls_ir::dyn_format_string::{Base, Padding, format_bits};
 use vogls_ir::vcd::NetType;
 use vogls_ir::{Bits, INTEGER_VSIZE, ResizeOp, SignalKey, TIME_VSIZE, UnaryOp, VectorSize};
@@ -140,8 +140,9 @@ fn update_watchers(
 }
 
 pub fn drive_bits(bits: &mut Bits, slice: &[u8], partial: Option<(u32, VectorSize)>) -> bool {
-    match bits {
-        Bits::Big(size, signal_value) => match partial {
+    let size = bits.size();
+    match bits.as_data_mut() {
+        BitsDataRefMut::Separate(signal_value) => match partial {
             None => {
                 if slice == signal_value.as_ref() {
                     return false;
@@ -150,14 +151,14 @@ pub fn drive_bits(bits: &mut Bits, slice: &[u8], partial: Option<(u32, VectorSiz
                 true
             }
             Some((offset, length)) => {
-                vogls_bits::set_subslice::set_subslice(signal_value, slice, *size, offset, length)
+                vogls_bits::set_subslice::set_subslice(signal_value, slice, size, offset, length)
             }
         },
-        Bits::Small(signal_value, size) => {
+        BitsDataRefMut::Inline(signal_value) => {
             let before = *signal_value;
             match partial {
                 None => {
-                    *signal_value = bits::store_to_u64(slice, 0, *size);
+                    *signal_value = bits::store_to_u64(slice, 0, size);
                 }
                 Some((offset, length)) => {
                     let value = bits::store_to_u64(slice, 0, length);
@@ -393,11 +394,8 @@ impl Event {
             *ip += 1;
             ctx.instruction_count += 1;
             match instr {
-                I::Constant(var, Bits::Small(value, size)) => {
-                    bits::load_from_u64(stack, var.offset, *size, *value);
-                }
-                I::Constant(var, Bits::Big(size, value)) => {
-                    stack[var.offset..][..size.get().div_ceil(8) as usize].copy_from_slice(value);
+                I::Constant(var, value) => {
+                    stack[var.offset..][..value.num_bytes()].copy_from_slice(value.as_slice());
                 }
                 I::Unary(dst, op, size, src) => {
                     use UnaryOp as O;
@@ -649,15 +647,10 @@ impl Event {
                         }
                     }
                 }
-                I::Probe(var, sig) => match signals.get(&sig).unwrap() {
-                    Bits::Small(value, size) => {
-                        bits::load_from_u64(stack, var.offset, *size, *value);
-                    }
-                    Bits::Big(size, value) => {
-                        stack[var.offset..][..size.get().div_ceil(8) as usize]
-                            .copy_from_slice(value);
-                    }
-                },
+                I::Probe(var, sig) => {
+                    let bits = &signals[&sig];
+                    stack[var.offset..][..bits.num_bytes()].copy_from_slice(bits.as_slice());
+                }
                 I::Drive(sig, var, region, partial) => {
                     let size = signals[sig].size();
                     let partial = partial.map(|(offset, width)| {
@@ -668,7 +661,10 @@ impl Event {
                     });
                     if *region != 0 {
                         let region = (*region - 1) as usize;
-                        let value = Bits::load_from_slice(&stack[var.offset..], size);
+                        let value = Bits::load_from_slice(
+                            &stack[var.offset..][..size.get().div_ceil(8) as usize],
+                            size,
+                        );
                         match regions.other_dispatched[region].entry(DispatchKey::Signal(*sig)) {
                             Entry::Occupied(entry) => {
                                 let Event::Drive(_, assignments) =

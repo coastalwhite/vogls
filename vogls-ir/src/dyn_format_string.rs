@@ -105,57 +105,53 @@ pub fn format_bits(
         Padding::NoPadding => {}
     }
 
-    match bits {
-        Bits::Small(v, _) => match base {
-            Base::Binary => write!(f, "{v:b}"),
-            Base::Octal => write!(f, "{v:o}"),
-            Base::Hexadecimal => write!(f, "{v:x}"),
-            Base::Decimal => write!(f, "{v:x}"),
-        }?,
-        Bits::Big(_, v) => match base {
-            Base::Binary => {
-                let mut print_full = false;
-                for b in v.iter().rev() {
-                    if print_full {
-                        write!(f, "{b:08b}")?
-                    } else {
-                        write!(f, "{b:b}")?
-                    }
-                    print_full |= *b != 0;
+    let (data, rem) = bits.as_u64_slice_and_remainder();
+    match base {
+        Base::Binary => {
+            let mut print_full = false;
+            for b in std::iter::once(rem).chain(data.iter().copied().rev()) {
+                if print_full {
+                    write!(f, "{b:064b}")?
+                } else {
+                    write!(f, "{b:b}")?
                 }
+                print_full |= b != 0;
             }
-            Base::Octal => {
-                let left_over = bits.size().get() % (6 * 8);
-                let num_full = bits.size().get() / (6 * 8);
+        }
+        Base::Octal => {
+            let left_over = bits.size().get() % (6 * 8);
+            let num_full = bits.size().get() / (6 * 8);
 
-                if left_over != 0 {
-                    let v = load_partial_u64(
-                        &bits.as_slice()[bits.as_slice().len() - left_over.div_ceil(8) as usize..],
-                        VectorSize::new(left_over).unwrap(),
-                    );
-                    if v != 0 {
-                        write!(f, "{v:o}")?;
-                    }
-                }
-                for w in bits.as_slice()[..num_full as usize * 3].windows(6).rev() {
-                    let v = load_partial_u64(w, VectorSize::new(6 * 8).unwrap());
-                    if v != 0 {
-                        write!(f, "{v:o}")?;
-                    }
+            if left_over != 0 {
+                let v = load_partial_u64(
+                    &bits.as_slice()[bits.as_slice().len() - left_over.div_ceil(8) as usize..],
+                    VectorSize::new(left_over).unwrap(),
+                );
+                if v != 0 {
+                    write!(f, "{v:o}")?;
                 }
             }
-            Base::Hexadecimal => {
-                let mut print_full = false;
-                for b in v.iter().rev() {
-                    if print_full {
-                        write!(f, "{b:02x}")?
-                    } else {
-                        write!(f, "{b:x}")?
-                    }
-                    print_full |= *b != 0;
+            for w in bits.as_slice()[..num_full as usize * 3].windows(6).rev() {
+                let v = load_partial_u64(w, VectorSize::new(6 * 8).unwrap());
+                if v != 0 {
+                    write!(f, "{v:o}")?;
                 }
             }
-            Base::Decimal => todo!(),
+        }
+        Base::Hexadecimal => {
+            let mut print_full = false;
+            for b in std::iter::once(rem).chain(data.iter().copied().rev()) {
+                if print_full {
+                    write!(f, "{b:016x}")?
+                } else {
+                    write!(f, "{b:x}")?
+                }
+                print_full |= b != 0;
+            }
+        }
+        Base::Decimal => {
+            if !data.is_empty() { todo!() }
+            write!(f, "{rem}")?;
         },
     }
     Ok(())

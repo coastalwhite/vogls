@@ -155,10 +155,8 @@ impl BasicBlockBuilder {
 
     pub fn constant_u32(&mut self, gl: &mut GlobalContext, value: u32) -> VariableKey {
         let variable = self.next_tmp_var(gl, VectorSize::new(32).unwrap());
-        self.instrs.push(Instruction::Constant(
-            variable,
-            Bits::from_i64_truncated(value.into(), VectorSize::new(32).unwrap()),
-        ));
+        self.instrs
+            .push(Instruction::Constant(variable, Bits::new_u32(value.into())));
         variable
     }
 
@@ -296,11 +294,15 @@ impl BasicBlockBuilder {
         let constant = constant.into();
 
         if constant == 0 {
-            self.constant(gl, Bits::from_i64_truncated(constant, size))
+            self.constant(gl, Bits::new_zeroed(size))
         } else if constant == 1 {
             src
         } else {
-            let constant = self.constant(gl, Bits::from_i64_truncated(constant, size));
+            let constant = self.constant(
+                gl,
+                Bits::from_u64(VectorSize::new(64).unwrap(), constant as u64)
+                    .truncate_or_sign_extend(size),
+            );
             self.multiply(gl, src, constant)
         }
     }

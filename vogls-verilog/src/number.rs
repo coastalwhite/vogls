@@ -114,7 +114,7 @@ pub fn parse_decimal_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, ()>
             value = value.checked_mul(10).ok_or(())?;
             value = value.checked_add(u64::from(v)).ok_or(())?;
         }
-        Ok(Bits::Small(value, size))
+        Ok(Bits::from_u64(size, value))
     } else {
         todo!("Big Decimal Numbers");
     }
@@ -148,9 +148,10 @@ pub fn take_binary_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, ()> {
             value <<= 1;
             value |= u64::from(v);
         }
-        Ok(Bits::Small(value, size))
+        Ok(Bits::from_u64(size, value))
     } else {
-        let mut value = vec![0u8; size.get().div_ceil(8) as usize];
+        let mut out = Bits::new_zeroed(size);
+        let value = out.as_mut_slice();
         let mut i = 0;
         for b in s.bytes().rev() {
             if b == b'_' {
@@ -166,7 +167,7 @@ pub fn take_binary_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, ()> {
             value[i / 8] |= v << (i % 8);
             i += 1;
         }
-        Ok(Bits::Big(size, value.into()))
+        Ok(out)
     }
 }
 
@@ -199,9 +200,10 @@ pub fn take_octal_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, ()> {
             value <<= 3;
             value |= u64::from(v);
         }
-        Ok(Bits::Small(value, size))
+        Ok(Bits::from_u64(size, value))
     } else {
-        let mut value = vec![0u8; size.get().div_ceil(8) as usize];
+        let mut out = Bits::new_zeroed(size);
+        let value = out.as_mut_slice();
         let mut i = 0u32;
         for b in s.bytes().rev() {
             if b == b'_' {
@@ -220,7 +222,7 @@ pub fn take_octal_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, ()> {
             }
             i += 3;
         }
-        Ok(Bits::Big(size, value.into()))
+        Ok(out)
     }
 }
 
@@ -256,9 +258,10 @@ pub fn take_hexadecimal_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, 
             value <<= 4;
             value |= u64::from(v);
         }
-        Ok(Bits::Small(value, size))
+        Ok(Bits::from_u64(size, value))
     } else {
-        let mut value = vec![0u8; size.get().div_ceil(8) as usize];
+        let mut out = Bits::new_zeroed(size);
+        let value = out.as_mut_slice();
         let mut i = 0;
         for b in s.bytes().rev() {
             if b == b'_' {
@@ -275,6 +278,6 @@ pub fn take_hexadecimal_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, 
             value[i / 2] |= v << 4 * (i % 2);
             i += 1;
         }
-        Ok(Bits::Big(size, value.into()))
+        Ok(out)
     }
 }

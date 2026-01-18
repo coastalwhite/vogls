@@ -124,7 +124,7 @@ pub fn lower<'a>(
                     .collect::<Vec<_>>();
                 builder = builder.watch(gl, signals.clone());
 
-                let mut acc = builder.constant(gl, Bits::Small(0, SCALAR_VSIZE));
+                let mut acc = builder.constant(gl, Bits::from(false));
                 for (before, signal) in before.into_iter().zip(signals) {
                     let after = builder.probe(gl, signal);
                     let cond = builder.not_equals(gl, before, after);

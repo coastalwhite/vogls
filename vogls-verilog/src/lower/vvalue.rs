@@ -1,6 +1,6 @@
 use std::ops::{BitAnd as _, BitOr as _, BitXor as _};
 
-use vogls_ir::{Bits, SCALAR_VSIZE, VectorSize};
+use vogls_ir::{Bits, VectorSize};
 
 use super::VType;
 
@@ -80,12 +80,8 @@ impl VValue {
         let (mut lhs, rhs) = Self::coerce_max_size(lhs, rhs);
         match (&mut lhs, rhs) {
             (V::UnsignedNet(lb) | V::SignedNet(lb), V::UnsignedNet(r) | V::SignedNet(r)) => {
-                let size = lb.size();
-                let (Some(l), Some(r)) = (lb.as_i64(), r.as_i64()) else {
-                    todo!();
-                };
-
-                *lb = Bits::from_i64_truncated(l.wrapping_shl(r as u32), size);
+                let r = r.truncate(VectorSize::new(32).unwrap()).extract_exact_u32();
+                *lb = Bits::logical_shift_left(lb, r);
             }
             (V::String(_), _) | (_, V::String(_)) => todo!(),
         }
@@ -96,12 +92,8 @@ impl VValue {
         let (mut lhs, rhs) = Self::coerce_max_size(lhs, rhs);
         match (&mut lhs, rhs) {
             (V::UnsignedNet(lb) | V::SignedNet(lb), V::UnsignedNet(r) | V::SignedNet(r)) => {
-                let size = lb.size();
-                let (Some(l), Some(r)) = (lb.as_i64(), r.as_i64()) else {
-                    todo!();
-                };
-
-                *lb = Bits::from_i64_truncated(l.wrapping_shr(r as u32), size);
+                let r = r.truncate(VectorSize::new(32).unwrap()).extract_exact_u32();
+                *lb = Bits::logical_shift_right(lb, r);
             }
             (V::String(_), _) | (_, V::String(_)) => todo!(),
         }
@@ -111,43 +103,38 @@ impl VValue {
         use VValue as V;
         let (mut lhs, rhs) = Self::coerce_max_size(lhs, rhs);
         match (&mut lhs, rhs) {
-            (V::UnsignedNet(lb) | V::SignedNet(lb), V::UnsignedNet(r) | V::SignedNet(r)) => {
-                let size = lb.size();
-                let (Some(l), Some(r)) = (lb.as_i64(), r.as_i64()) else {
-                    todo!();
-                };
-
-                *lb = Bits::from_i64_truncated(!(l ^ r), size);
+            (V::UnsignedNet(lb) | V::SignedNet(lb), V::UnsignedNet(rb) | V::SignedNet(rb)) => {
+                *lb = Bits::tv_bitwise_op(lb, &rb, |l, r| !(l ^ r));
             }
             (V::String(_), _) | (_, V::String(_)) => todo!(),
         }
         lhs
     }
+
     pub fn less_than(lhs: VValue, rhs: VValue) -> bool {
+        !Self::less_than_equal(rhs, lhs)
+    }
+
+    pub fn less_than_equal(lhs: VValue, rhs: VValue) -> bool {
         use VValue as V;
         let (lhs, rhs) = Self::coerce_max_size(lhs, rhs);
         match (lhs, rhs) {
-            (V::UnsignedNet(lb) | V::SignedNet(lb), V::UnsignedNet(r) | V::SignedNet(r)) => {
-                let (Some(l), Some(r)) = (lb.as_i64(), r.as_i64()) else {
-                    todo!();
-                };
-                l < r
+            (V::UnsignedNet(lb), V::UnsignedNet(rb)) => Bits::is_unsigned_leq(&lb, &rb),
+            (V::UnsignedNet(lb) | V::SignedNet(lb), V::UnsignedNet(rb) | V::SignedNet(rb)) => {
+                Bits::is_signed_leq(&lb, &rb)
             }
             (V::String(_), _) | (_, V::String(_)) => todo!(),
         }
     }
-    pub fn less_than_equal(lhs: VValue, rhs: VValue) -> bool {
-        !Self::less_than(rhs, lhs)
-    }
     pub fn greater_than(lhs: VValue, rhs: VValue) -> bool {
-        Self::less_than(rhs, lhs)
+        !Self::less_than_equal(lhs, rhs)
     }
     pub fn greater_than_equal(lhs: VValue, rhs: VValue) -> bool {
-        !Self::less_than(lhs, rhs)
+        Self::less_than(rhs, lhs)
     }
 
     pub fn scalar_from_bool(value: bool) -> VValue {
-        VValue::UnsignedNet(Bits::Small(u64::from(value), SCALAR_VSIZE))
+        VValue::UnsignedNet(Bits::from(value))
     }
 
     pub fn to_logical(&self) -> bool {
@@ -202,21 +189,11 @@ impl VValue {
         if self.ty().force_net_width() == extended_size {
             return self;
         }
-        assert!(self.ty().force_net_width() < extended_size);
-        if extended_size.get() > 64 {
-            todo!()
-        }
 
         use VValue as V;
         match self {
-            V::SignedNet(bits) => Self::SignedNet(Bits::from_i64_truncated(
-                bits.as_i64().unwrap(),
-                extended_size,
-            )),
-            V::UnsignedNet(bits) => Self::UnsignedNet(Bits::from_i64_truncated(
-                bits.as_i64().unwrap(),
-                extended_size,
-            )),
+            V::SignedNet(bits) => Self::SignedNet(bits.sign_extend(extended_size)),
+            V::UnsignedNet(bits) => Self::UnsignedNet(bits.sign_extend(extended_size)),
             V::String(_) => todo!(),
         }
     }
@@ -248,11 +225,11 @@ macro_rules! impl_arithmetic {
             match (&mut lhs, rhs) {
                 (V::UnsignedNet(lb) | V::SignedNet(lb), V::UnsignedNet(r) | V::SignedNet(r)) => {
                     let size = lb.size();
-                    let (Some(l), Some(r)) = (lb.as_i64(), r.as_i64()) else {
+                    let (Some(l), Some(r)) = (lb.as_u64(), r.as_u64()) else {
                         todo!();
                     };
 
-                    *lb = Bits::from_i64_truncated(l.$op(r), size);
+                    *lb = Bits::from_u64(size, l.$op(r));
                 }
                 (V::String(_), _) | (_, V::String(_)) => todo!(),
             }
@@ -266,11 +243,11 @@ macro_rules! impl_arithmetic {
             match (&mut lhs, rhs) {
                 (V::UnsignedNet(lb) | V::SignedNet(lb), V::UnsignedNet(r) | V::SignedNet(r)) => {
                     let size = lb.size();
-                    let (Some(l), Some(r)) = (lb.as_i64(), r.as_i64()) else {
+                    let (Some(l), Some(r)) = (lb.as_u64(), r.as_u64()) else {
                         todo!();
                     };
 
-                    *lb = Bits::from_i64_truncated(l.$opt(r), size);
+                    *lb = Bits::from_u64(size, l.$opt(r));
                 }
                 (V::String(_), _) | (_, V::String(_)) => todo!(),
             }

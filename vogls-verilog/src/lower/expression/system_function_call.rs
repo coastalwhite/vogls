@@ -110,10 +110,9 @@ pub fn eval_constant<'a>(
             ensure_num_args_equal!(1);
             let v = arguments[0].as_ref().ok_or(())?;
             let clog2 = v.clog2();
-            Ok(VValue::SignedNet(Bits::from_i64_truncated(
-                clog2.into(),
-                INTEGER_VSIZE,
-            )))
+            Ok(VValue::SignedNet(
+                Bits::new_u32(clog2.into()).truncate_or_zero_extend(INTEGER_VSIZE),
+            ))
         }
 
         // VoGLS specific system function calls

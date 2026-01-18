@@ -288,7 +288,7 @@ pub fn assign_variable_lvalue_flat<'a>(
                             (
                                 builder.constant(
                                     gl,
-                                    Bits::from_i64_truncated(lsb as i64, INTEGER_VSIZE),
+                                    Bits::new_u64(lsb as u64).truncate(INTEGER_VSIZE),
                                 ),
                                 width,
                             )
