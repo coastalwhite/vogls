@@ -1,5 +1,6 @@
 mod builder;
 pub mod dyn_format_string;
+pub mod evaluation;
 mod format;
 pub mod optimize;
 pub mod token_range;

@@ -394,6 +394,19 @@ impl Bits {
             Self::Big(_, _) => (f64::from(self.leading_zeroes()) / 10.0f64.log2()).ceil() as u32,
         }
     }
+
+    pub fn select_bit(&self, at: u32) -> bool {
+        assert!(at < self.size().get());
+        (self.as_slice()[(at / 8) as usize] >> at % 8) & 1 != 0
+    }
+
+    pub fn extract_exact_u32(&self) -> u32 {
+        assert_eq!(self.size().get(), 32);
+        let Self::Small(v, _) = self else {
+            unreachable!();
+        };
+        *v as u32
+    }
 }
 
 macro_rules! impl_arithmetic {
@@ -413,12 +426,46 @@ macro_rules! impl_arithmetic {
     }
 }
 
+macro_rules! impl_shift {
+    ($(($f:ident, $op:ident)),+ $(,)?) => {
+        impl Bits {
+        $(
+        pub fn $f(&self, amount: u32) -> Self {
+            match self {
+                Bits::Small(v, size) => {
+                    let mut dst = 0u64;
+                    crate::shift::$op(
+                        bytemuck::bytes_of_mut(&mut dst),
+                        bytemuck::bytes_of(v),
+                        amount,
+                        *size,
+                    );
+                    Self::Small(dst, *size)
+                }
+                Bits::Big(size, src) => {
+                    let mut dst = vec![0u8; size.get().div_ceil(8) as usize];
+                    crate::shift::$op(&mut dst, &src, amount, *size);
+                    Self::Big(*size, dst.into())
+                }
+            }
+        }
+        )+
+        }
+    }
+}
+
 impl_arithmetic! {
     (multiply, wrapping_mul),
     (add, wrapping_add),
     (subtract, wrapping_sub),
     (divide, wrapping_div),
     (modulus, wrapping_rem),
+}
+
+impl_shift! {
+    (logical_shift_left, tv_logical_shift_left),
+    (logical_shift_right, tv_logical_shift_right),
+    (arithmetic_shift_right, tv_arithmetic_shift_right),
 }
 
 impl fmt::Display for Bits {
