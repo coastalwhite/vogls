@@ -497,15 +497,28 @@ impl Event {
                 }
                 I::BinaryArithmetic(dst, op, size, lhs, rhs) => {
                     use BinaryArithmeticOp as O;
+
+                    use vogls_bits::arithmetic as A;
+
+                    fn tv_bitwise_and(dst: &mut [u8], lhs: &[u8], rhs: &[u8], _size: VectorSize) {
+                        A::bin_bitwise_op(dst, lhs, rhs, A::tv_bitwise_and);
+                    }
+                    fn tv_bitwise_or(dst: &mut [u8], lhs: &[u8], rhs: &[u8], _size: VectorSize) {
+                        A::bin_bitwise_op(dst, lhs, rhs, A::tv_bitwise_or);
+                    }
+                    fn tv_bitwise_xor(dst: &mut [u8], lhs: &[u8], rhs: &[u8], _size: VectorSize) {
+                        A::bin_bitwise_op(dst, lhs, rhs, A::tv_bitwise_xor);
+                    }
+
                     let f = match op {
-                        O::And => vogls_bits::arithmetic::tv_bitwise_and,
-                        O::Or => vogls_bits::arithmetic::tv_bitwise_or,
-                        O::Xor => vogls_bits::arithmetic::tv_bitwise_xor,
-                        O::Add => vogls_bits::arithmetic::tv_addition,
-                        O::Sub => vogls_bits::arithmetic::tv_subtraction,
-                        O::Multiply => vogls_bits::arithmetic::tv_multiplication,
-                        O::Divide => vogls_bits::arithmetic::tv_division,
-                        O::Modulus => vogls_bits::arithmetic::tv_modulus,
+                        O::And => tv_bitwise_and,
+                        O::Or => tv_bitwise_or,
+                        O::Xor => tv_bitwise_xor,
+                        O::Add => A::tv_addition,
+                        O::Sub => A::tv_subtraction,
+                        O::Multiply => A::tv_multiplication,
+                        O::Divide => A::tv_division,
+                        O::Modulus => A::tv_modulus,
                     };
 
                     let nbytes = size.get().div_ceil(8) as usize;
