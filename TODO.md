@@ -3,13 +3,20 @@ Verilog
 - [ ] Allow `function` in constant contexts
 - [ ] Make distinction between `wire` and `reg`
 - [ ] Hierarchical Module Identifiers
+- [ ] Specify Blocks
+- [ ] Allow for defines at the CLI level
 
 - [ ] Four Value Logic
   - [ ] Separate instructions into `fv.*`
   - [ ] Add kernels for `fv.*`.
+  - [ ] Different execution modes
+    - 2 value - initialize to zero / one
+    - 2 value - initialize randomly (with seed)
+    - 4 value
 
 Optimization
 - [ ] IR text format
+- [ ] Benchmarks
 - [ ] Separate VM stackrefs into persistent and non-persistent.
       Take the max of all live non-persistant stackrefs as the size of the
       non-persistent memory size.
