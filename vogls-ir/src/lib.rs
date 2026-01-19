@@ -224,14 +224,26 @@ pub enum ResizeOp {
 
 #[derive(Debug, Clone, Copy)]
 pub enum BinaryOp {
-    And,
-    Or,
-    Xor,
-    Add,
-    Sub,
-    Multiply,
-    Divide,
-    Modulus,
+    // Two-Value Logic
+    TvAnd,
+    TvOr,
+    TvXor,
+    TvAdd,
+    TvSub,
+    TvMultiply,
+    TvDivide,
+    TvModulus,
+
+    // Four-Value Logic
+    FvAnd,
+    FvOr,
+    FvXor,
+    FvAdd,
+    FvSub,
+    FvMultiply,
+    FvDivide,
+    FvModulus,
+
     UnsignedLessEqual,
     SelectBit,
     LogicalShiftLeft,
@@ -360,6 +372,38 @@ impl Instruction {
             Instruction::Phi(_, items) => items.iter_mut().for_each(|(bb, _)| {
                 *bb = f(*bb);
             }),
+        }
+    }
+}
+
+impl BinaryOp {
+    fn evaluate(self, lhs: &Bits, rhs: &Bits) -> Bits {
+        use BinaryOp as O;
+        match self {
+            O::FvAnd => Bits::fv_bitwise_and(lhs, rhs),
+            O::FvOr => Bits::fv_bitwise_or(lhs, rhs),
+            O::FvXor => Bits::fv_bitwise_xor(lhs, rhs),
+            O::FvAdd => todo!(),
+            O::FvSub => todo!(),
+            O::FvMultiply => todo!(),
+            O::FvDivide => todo!(),
+            O::FvModulus => todo!(),
+
+            O::TvAnd => Bits::tv_bitwise_and(lhs, rhs),
+            O::TvOr => Bits::tv_bitwise_or(lhs, rhs),
+            O::TvXor => Bits::tv_bitwise_xor(lhs, rhs),
+            O::TvAdd => Bits::add(lhs, rhs),
+            O::TvSub => Bits::subtract(lhs, rhs),
+            O::TvMultiply => Bits::multiply(lhs, rhs),
+            O::TvDivide => Bits::divide(lhs, rhs),
+            O::TvModulus => Bits::modulus(lhs, rhs),
+
+            O::UnsignedLessEqual => Bits::from(Bits::is_unsigned_leq(lhs, rhs)),
+            O::SelectBit => Bits::from(lhs.select_bit(rhs.extract_exact_u32())),
+            O::LogicalShiftLeft => lhs.logical_shift_left(rhs.extract_exact_u32()),
+            O::LogicalShiftRight => lhs.logical_shift_right(rhs.extract_exact_u32()),
+            O::ArithmeticShiftRight => lhs.arithmetic_shift_right(rhs.extract_exact_u32()),
+            O::Concat => Bits::concatenate(lhs, rhs),
         }
     }
 }

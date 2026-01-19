@@ -135,14 +135,24 @@ impl ContextFormat for BasicBlock {
 impl BinaryOp {
     pub const fn into_mnemonic(&self) -> &'static str {
         match self {
-            Self::And => "and",
-            Self::Or => "or",
-            Self::Xor => "xor",
-            Self::Add => "add",
-            Self::Sub => "sub",
-            Self::Multiply => "mul",
-            Self::Divide => "div",
-            Self::Modulus => "rem",
+            Self::FvAnd => "fv.and",
+            Self::FvOr => "fv.or",
+            Self::FvXor => "fv.xor",
+            Self::FvAdd => "fv.add",
+            Self::FvSub => "fv.sub",
+            Self::FvMultiply => "fv.mul",
+            Self::FvDivide => "fv.div",
+            Self::FvModulus => "fv.rem",
+
+            Self::TvAnd => "tv.and",
+            Self::TvOr => "tv.or",
+            Self::TvXor => "tv.xor",
+            Self::TvAdd => "tv.add",
+            Self::TvSub => "tv.sub",
+            Self::TvMultiply => "tv.mul",
+            Self::TvDivide => "tv.div",
+            Self::TvModulus => "tv.rem",
+
             Self::UnsignedLessEqual => "ule",
             Self::SelectBit => "bselect",
             Self::LogicalShiftLeft => "lsl",

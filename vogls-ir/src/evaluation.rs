@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use vogls_bits::Bits;
 
 use crate::{
-    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryOp, GlobalContext, Instruction,
-    ResizeOp, SignalKey, UnaryOp, VariableKey,
+    BasicBlock, BasicBlockKey, BasicBlockTerminator, GlobalContext, Instruction, ResizeOp,
+    SignalKey, UnaryOp, VariableKey,
 };
 
 pub fn evaluate(
@@ -53,25 +53,9 @@ fn evaluate_impl(
                 _ = variables.insert(*dst, bits.clone());
             }
             I::Binary(dst, op, lhs, rhs) => {
-                use BinaryOp as O;
                 let lhs = &variables[lhs];
                 let rhs = &variables[rhs];
-                let bits = match op {
-                    O::And => Bits::bitwise_and(lhs, rhs),
-                    O::Or => Bits::bitwise_or(lhs, rhs),
-                    O::Xor => Bits::bitwise_xor(lhs, rhs),
-                    O::Add => Bits::add(lhs, rhs),
-                    O::Sub => Bits::subtract(lhs, rhs),
-                    O::Multiply => Bits::multiply(lhs, rhs),
-                    O::Divide => Bits::divide(lhs, rhs),
-                    O::Modulus => Bits::modulus(lhs, rhs),
-                    O::UnsignedLessEqual => Bits::from(Bits::is_unsigned_leq(lhs, rhs)),
-                    O::SelectBit => Bits::from(lhs.select_bit(rhs.extract_exact_u32())),
-                    O::LogicalShiftLeft => lhs.logical_shift_left(rhs.extract_exact_u32()),
-                    O::LogicalShiftRight => lhs.logical_shift_right(rhs.extract_exact_u32()),
-                    O::ArithmeticShiftRight => lhs.arithmetic_shift_right(rhs.extract_exact_u32()),
-                    O::Concat => Bits::concatenate(lhs, rhs),
-                };
+                let bits = op.evaluate(lhs, rhs);
                 _ = variables.insert(*dst, bits.clone());
             }
             I::Intrinsic(_, _, _) => todo!(),

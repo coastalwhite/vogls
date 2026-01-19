@@ -58,6 +58,8 @@ pub trait BitwisePart:
     fn splat_byte(b: u8) -> Self;
     fn mask(size: VectorSize) -> Self;
     fn count_ones(self) -> u32;
+    fn as_u64(self) -> u64;
+    fn from_u64(w: u64) -> Self;
 }
 
 macro_rules! impl_bitwise_part {
@@ -82,6 +84,15 @@ macro_rules! impl_bitwise_part {
             fn count_ones(self) -> u32 {
                 Self::count_ones(self)
             }
+            #[inline(always)]
+            fn as_u64(self) -> u64 {
+                self as u64
+            }
+            #[inline(always)]
+            fn from_u64(w: u64) -> Self {
+                let zero: Self = 0;
+                (w & (!zero) as u64) as Self
+            }
         }
         )+
     };
@@ -101,6 +112,14 @@ impl BitwisePart for FvLogicValue {
     #[inline(always)]
     fn count_ones(self) -> u32 {
         (self as u8).count_ones()
+    }
+    #[inline(always)]
+    fn as_u64(self) -> u64 {
+        self as u64
+    }
+    #[inline(always)]
+    fn from_u64(w: u64) -> Self {
+        Self::from_repr((w & 0b11) as u8)
     }
 }
 
@@ -370,6 +389,24 @@ pub fn fv_reduce_xor<T: BitwisePart>(x: T, size: VectorSize) -> FvLogicValue {
     FvLogicValue::from_repr((u8::from(z1) << 1) | u8::from(z0))
 }
 
+pub fn fv_addition<T: BitwisePart>(x: T, y: T, carry_in: T, size: VectorSize) -> (T, T) {
+    if has_fv_non_logical(x) | has_fv_non_logical(y) | has_fv_non_logical(carry_in) {
+        return (T::splat_byte(0u8), T::splat_byte(0u8));
+    }
+
+    let x = extract_tv_u64(x.as_u64()) as u64;
+    let y = extract_tv_u64(y.as_u64()) as u64;
+    let carry_in = extract_tv_u64(carry_in.as_u64()) as u64;
+
+    let sum = x.wrapping_add(y).wrapping_add(carry_in);
+    let sum = sum & 1u64.unbounded_shl(size.get()).wrapping_sub(1);
+
+    let carry_out = T::from_u64(encode_fv_u64((sum >> 32) as u32));
+    let sum = T::from_u64(encode_fv_u64((sum & 0xFFFF_FFFF) as u32));
+
+    (carry_out, sum)
+}
+
 pub fn tv_addition(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: VectorSize) {
     if size.get() > 64 {
         todo!()
@@ -420,6 +457,45 @@ pub fn tv_modulus(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: VectorSize) {
     let r = load_partial_u64(&rhs, size);
     let out = l.wrapping_rem(r);
     store_partial_u64(dst, out, size);
+}
+
+#[inline(always)]
+fn extract_tv_u64(w: u64) -> u32 {
+    if is_x86_feature_detected!("bmi2") {
+        (unsafe { ::std::arch::x86_64::_pext_u64(w, 0xAAAA_AAAA_AAAA_AAAA) }) as u32
+    } else {
+        !morton1(w)
+    }
+}
+#[inline(always)]
+fn encode_fv_u64(w: u32) -> u64 {
+    if is_x86_feature_detected!("bmi2") {
+        let w = unsafe { ::std::arch::x86_64::_pdep_u64(w as u64, 0xAAAA_AAAA_AAAA_AAAA) };
+        w | (!w >> 1)
+    } else {
+        // Adapted from https://stackoverflow.com/questions/30539347/2d-morton-code-encode-decode-64bits
+        let mut w = w as u64;
+        w = (w | (w << 16)) & 0x0000FFFF0000FFFF;
+        w = (w | (w << 8)) & 0x00FF00FF00FF00FF;
+        w = (w | (w << 4)) & 0x0F0F0F0F0F0F0F0F;
+        w = (w | (w << 2)) & 0x3333333333333333;
+        w = (w | (w << 1)) & 0x5555555555555555;
+        w |= !w << 1;
+        !w
+    }
+}
+
+// Adapted from https://stackoverflow.com/questions/30539347/2d-morton-code-encode-decode-64bits
+// Extracts the odd bits
+#[inline(always)]
+fn morton1(w: u64) -> u32 {
+    let w = w & 0x5555_5555_5555_5555;
+    let w = (w | (w >> 1)) & 0x3333_3333_3333_3333;
+    let w = (w | (w >> 2)) & 0x0F0F_0F0F_0F0F_0F0F;
+    let w = (w | (w >> 4)) & 0x00FF_00FF_00FF_00FF;
+    let w = (w | (w >> 8)) & 0x0000_FFFF_0000_FFFF;
+    let w = (w | (w >> 16)) & 0x0000_0000_FFFF_FFFF;
+    w as u32
 }
 
 #[cfg(test)]

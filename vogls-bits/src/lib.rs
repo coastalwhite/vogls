@@ -613,13 +613,22 @@ impl Bits {
         value
     }
 
-    pub fn bitwise_and(lhs: &Self, rhs: &Self) -> Self {
+    pub fn fv_bitwise_and(lhs: &Self, rhs: &Self) -> Self {
+        Self::tv_bitwise_op(lhs, rhs, |l, r| arithmetic::fv_bitwise_and(l, r))
+    }
+    pub fn fv_bitwise_or(lhs: &Self, rhs: &Self) -> Self {
+        Self::tv_bitwise_op(lhs, rhs, |l, r| arithmetic::fv_bitwise_or(l, r))
+    }
+    pub fn fv_bitwise_xor(lhs: &Self, rhs: &Self) -> Self {
+        Self::tv_bitwise_op(lhs, rhs, |l, r| arithmetic::fv_bitwise_xor(l, r))
+    }
+    pub fn tv_bitwise_and(lhs: &Self, rhs: &Self) -> Self {
         Self::tv_bitwise_op(lhs, rhs, |l, r| l & r)
     }
-    pub fn bitwise_or(lhs: &Self, rhs: &Self) -> Self {
+    pub fn tv_bitwise_or(lhs: &Self, rhs: &Self) -> Self {
         Self::tv_bitwise_op(lhs, rhs, |l, r| l | r)
     }
-    pub fn bitwise_xor(lhs: &Self, rhs: &Self) -> Self {
+    pub fn tv_bitwise_xor(lhs: &Self, rhs: &Self) -> Self {
         Self::tv_bitwise_op(lhs, rhs, |l, r| l ^ r)
     }
     pub fn is_unsigned_leq(lhs: &Self, rhs: &Self) -> bool {

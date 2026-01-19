@@ -215,7 +215,7 @@ impl BasicBlockBuilder {
         lhs: VariableKey,
         rhs: VariableKey,
     ) -> VariableKey {
-        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::And)
+        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::TvAnd)
     }
     pub fn or(
         &mut self,
@@ -223,7 +223,7 @@ impl BasicBlockBuilder {
         lhs: VariableKey,
         rhs: VariableKey,
     ) -> VariableKey {
-        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::Or)
+        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::TvOr)
     }
     pub fn xor(
         &mut self,
@@ -231,7 +231,7 @@ impl BasicBlockBuilder {
         lhs: VariableKey,
         rhs: VariableKey,
     ) -> VariableKey {
-        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::Xor)
+        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::TvXor)
     }
     pub fn xnor(
         &mut self,
@@ -250,7 +250,7 @@ impl BasicBlockBuilder {
         lhs: VariableKey,
         rhs: VariableKey,
     ) -> VariableKey {
-        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::Multiply)
+        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::TvMultiply)
     }
     pub fn plus(
         &mut self,
@@ -258,7 +258,7 @@ impl BasicBlockBuilder {
         lhs: VariableKey,
         rhs: VariableKey,
     ) -> VariableKey {
-        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::Add)
+        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::TvAdd)
     }
     pub fn minus(
         &mut self,
@@ -266,7 +266,7 @@ impl BasicBlockBuilder {
         lhs: VariableKey,
         rhs: VariableKey,
     ) -> VariableKey {
-        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::Sub)
+        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::TvSub)
     }
     pub fn divide(
         &mut self,
@@ -274,7 +274,7 @@ impl BasicBlockBuilder {
         lhs: VariableKey,
         rhs: VariableKey,
     ) -> VariableKey {
-        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::Divide)
+        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::TvDivide)
     }
     pub fn modulus(
         &mut self,
@@ -282,7 +282,7 @@ impl BasicBlockBuilder {
         lhs: VariableKey,
         rhs: VariableKey,
     ) -> VariableKey {
-        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::Modulus)
+        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::TvModulus)
     }
     pub fn multiply_constant(
         &mut self,

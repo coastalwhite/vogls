@@ -91,14 +91,22 @@ pub fn lower_process_to_vm(
                     use BinaryOp as O;
                     use ShiftOp as S;
                     match *op {
-                        O::And => VI::BinaryArithmetic(d, BA::And, d_size, s1, s2),
-                        O::Or => VI::BinaryArithmetic(d, BA::Or, d_size, s1, s2),
-                        O::Xor => VI::BinaryArithmetic(d, BA::Xor, d_size, s1, s2),
-                        O::Add => VI::BinaryArithmetic(d, BA::Add, d_size, s1, s2),
-                        O::Sub => VI::BinaryArithmetic(d, BA::Sub, d_size, s1, s2),
-                        O::Multiply => VI::BinaryArithmetic(d, BA::Multiply, d_size, s1, s2),
-                        O::Divide => VI::BinaryArithmetic(d, BA::Divide, d_size, s1, s2),
-                        O::Modulus => VI::BinaryArithmetic(d, BA::Modulus, d_size, s1, s2),
+                        O::FvAnd
+                        | O::FvOr
+                        | O::FvXor
+                        | O::FvAdd
+                        | O::FvSub
+                        | O::FvMultiply
+                        | O::FvDivide
+                        | O::FvModulus => todo!(),
+                        O::TvAnd => VI::BinaryArithmetic(d, BA::And, d_size, s1, s2),
+                        O::TvOr => VI::BinaryArithmetic(d, BA::Or, d_size, s1, s2),
+                        O::TvXor => VI::BinaryArithmetic(d, BA::Xor, d_size, s1, s2),
+                        O::TvAdd => VI::BinaryArithmetic(d, BA::Add, d_size, s1, s2),
+                        O::TvSub => VI::BinaryArithmetic(d, BA::Sub, d_size, s1, s2),
+                        O::TvMultiply => VI::BinaryArithmetic(d, BA::Multiply, d_size, s1, s2),
+                        O::TvDivide => VI::BinaryArithmetic(d, BA::Divide, d_size, s1, s2),
+                        O::TvModulus => VI::BinaryArithmetic(d, BA::Modulus, d_size, s1, s2),
                         O::UnsignedLessEqual => {
                             VI::BinaryComparison(d, BC::UnsignedLessEqual, s1_size, s1, s2)
                         }
@@ -144,7 +152,12 @@ pub fn lower_process_to_vm(
 
         if let Some(phis) = bb_phis.get(&bb_key) {
             for (dst, src) in phis {
-                instructions.push(VI::Unary(var!(*dst), vogls_ir::UnaryOp::Copy, gl.vars[*src].size, var!(*src)));
+                instructions.push(VI::Unary(
+                    var!(*dst),
+                    vogls_ir::UnaryOp::Copy,
+                    gl.vars[*src].size,
+                    var!(*src),
+                ));
             }
         }
 
