@@ -22,28 +22,28 @@ pub enum Base {
 
 pub fn skip_decimal(s: &[u8], i: &mut usize) {
     while let Some(b) = s.get(*i)
-        && matches!(b, b'0'..=b'9' | b'x' | b'z' | b'_')
+        && matches!(b, b'0'..=b'9' | b'x' | b'z' | b'X' | b'Z' | b'_')
     {
         *i += 1;
     }
 }
 pub fn skip_binary(s: &[u8], i: &mut usize) {
     while let Some(b) = s.get(*i)
-        && matches!(b, b'0'..=b'1' | b'x' | b'z' | b'_')
+        && matches!(b, b'0'..=b'1' | b'x' | b'z' | b'X' | b'Z' | b'_')
     {
         *i += 1;
     }
 }
 pub fn skip_octal(s: &[u8], i: &mut usize) {
     while let Some(b) = s.get(*i)
-        && matches!(b, b'0'..=b'7' | b'x' | b'z' | b'_')
+        && matches!(b, b'0'..=b'7' | b'x' | b'z' | b'X' | b'Z' | b'_')
     {
         *i += 1;
     }
 }
 pub fn skip_hexadecimal(s: &[u8], i: &mut usize) {
     while let Some(b) = s.get(*i)
-        && matches!(b, b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F' | b'x' | b'z' | b'_')
+        && matches!(b, b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F' | b'x' | b'z' | b'X' | b'Z' | b'_')
     {
         *i += 1;
     }
@@ -106,8 +106,8 @@ pub fn parse_decimal_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, ()>
             }
 
             let v = match b {
-                b'x' => 0,
-                b'z' => 0,
+                b'x' | b'X' => 0,
+                b'z' | b'Z' => 0,
                 _ => b - b'0',
             };
 
@@ -140,8 +140,8 @@ pub fn take_binary_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, ()> {
             }
 
             let v = match b {
-                b'x' => 0,
-                b'z' => 0,
+                b'x' | b'X' => 0,
+                b'z' | b'Z' => 0,
                 _ => b - b'0',
             };
 
@@ -159,8 +159,8 @@ pub fn take_binary_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, ()> {
             }
 
             let v = match b {
-                b'x' => 0,
-                b'z' => 0,
+                b'x' | b'X' => 0,
+                b'z' | b'Z' => 0,
                 _ => b - b'0',
             };
 
@@ -192,8 +192,8 @@ pub fn take_octal_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, ()> {
             }
 
             let v = match b {
-                b'x' => 0,
-                b'z' => 0,
+                b'x' | b'X' => 0,
+                b'z' | b'Z' => 0,
                 _ => b - b'0',
             };
 
@@ -250,8 +250,8 @@ pub fn take_hexadecimal_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, 
                 b'a'..=b'f' => b - b'a' + 10,
                 b'A'..=b'F' => b - b'A' + 10,
                 b'0'..=b'9' => b - b'0',
-                b'x' => 0,
-                b'z' => 0,
+                b'x' | b'X' => 0,
+                b'z' | b'Z' => 0,
                 _ => unreachable!(),
             };
 
