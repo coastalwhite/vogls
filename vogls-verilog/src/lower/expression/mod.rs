@@ -431,8 +431,7 @@ pub fn lower_expr<'a>(
                             let size = s.ty.force_net_width();
                             let variable = builder.probe(gl, s.signal);
                             let offset = builder.multiply_constant(gl, offset, size.get());
-                            let variable = builder.logical_shift_right(gl, variable, offset);
-                            let variable = builder.slice(gl, variable, size);
+                            let variable = builder.extract(gl, variable, offset, size);
 
                             (s.ty, variable)
                         } else {
@@ -442,12 +441,13 @@ pub fn lower_expr<'a>(
                 };
 
                 for _ in 0..exprs.len() {
-                    let Some((expr, _)) = result_stack.pop().unwrap() else {
+                    let Some((expr, expr_ty)) = result_stack.pop().unwrap() else {
                         result_stack.truncate(end_result_stack_len);
                         result_stack.push(None);
                         continue 'dispatch_loop;
                     };
                     ty = VType::SCALAR_NET;
+                    let expr = truncate_or_extend(gl, builder, expr, expr_ty, INTEGER_VSIZE);
                     var = builder.select_bit(gl, var, expr);
                 }
 
@@ -464,7 +464,7 @@ pub fn lower_expr<'a>(
                             (lsb_v, width)
                         }
                         BitSlice::PlusWidth(_, width) => {
-                            let Some((lsb, _)) = result_stack.pop().unwrap() else {
+                            let Some((lsb, lsb_ty)) = result_stack.pop().unwrap() else {
                                 result_stack.truncate(end_result_stack_len);
                                 result_stack.push(None);
                                 continue;
@@ -477,10 +477,11 @@ pub fn lower_expr<'a>(
                             };
                             let width =
                                 VectorSize::new(width.as_integer().unwrap() as u32).unwrap();
+                            let lsb = truncate_or_extend(gl, builder, lsb, lsb_ty, INTEGER_VSIZE);
                             (lsb, width)
                         }
                         BitSlice::MinusWidth(_, width) => {
-                            let Some((lsb, _)) = result_stack.pop().unwrap() else {
+                            let Some((lsb, lsb_ty)) = result_stack.pop().unwrap() else {
                                 result_stack.truncate(end_result_stack_len);
                                 result_stack.push(None);
                                 continue;
@@ -492,6 +493,7 @@ pub fn lower_expr<'a>(
                                 result_stack.push(None);
                                 continue;
                             };
+                            let lsb = truncate_or_extend(gl, builder, lsb, lsb_ty, INTEGER_VSIZE);
                             let width = width.as_integer().unwrap() as u32;
                             let width_v = builder.constant_u32(gl, width - 1);
                             let lsb = builder.minus(gl, lsb, width_v);
@@ -500,8 +502,7 @@ pub fn lower_expr<'a>(
                     };
 
                     ty = VType::UnsignedNet(width);
-                    let shifted = builder.logical_shift_right(gl, var, lsb);
-                    var = builder.slice(gl, shifted, width as VectorSize);
+                    var = builder.extract(gl, var, lsb, width as VectorSize);
                 }
 
                 result_stack.push(Some((var, ty)));
