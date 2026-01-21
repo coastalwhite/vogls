@@ -269,6 +269,7 @@ impl<'a> Consumable<'a> for Identifier {
         let t = tkw.next_expect(Token::Ident, diagnostics.as_deref_mut())?;
         let (span, file) = (*t.span, *t.file);
         let content = &tkw.content(file)[span.as_range()];
+        let content = &content[usize::from(content.starts_with('\\'))..];
         let start = arenas.text.len();
         let end = start + content.len();
         arenas.text.push_str(content);

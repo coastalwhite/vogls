@@ -148,6 +148,13 @@ impl Tokenized {
                         }
                         _ => (T::Slash, 1),
                     },
+                    b'\\' => {
+                        let end = bytes[i + 1..]
+                            .iter()
+                            .position(|b| b.is_ascii_whitespace())
+                            .unwrap_or(bytes.len() - i - 1);
+                        (T::Ident, end + 1)
+                    }
                     b'!' => match (bytes.get(i + 1), bytes.get(i + 2)) {
                         (Some(b'='), Some(b'=')) => (T::BangDoubleEquals, 3),
                         (Some(b'='), _) => (T::BangEquals, 2),
