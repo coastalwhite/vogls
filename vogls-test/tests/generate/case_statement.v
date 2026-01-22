@@ -21,5 +21,8 @@ module x();
             initial $display("Should not be printed");
             initial $vogls_assert_eq(1'b0, 1'b1);
         end
+        default: begin
+            initial $display("%d", D);
+        end
     endcase
 endmodule

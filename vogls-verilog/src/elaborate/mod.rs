@@ -6,7 +6,14 @@ use vogls_ir::{ConnectionDirection, INTEGER_VSIZE, SCALAR_VSIZE, Signal, SignalK
 
 use crate::ast::constant_expr::ConstantMinTypMaxExpression;
 use crate::ast::module::{
-    CaseGenerateConstruct, CaseGenerateItem, CaseGeneratePattern, FunctionDeclaration, GenerateBlock, GenvarAssignment, GenvarDeclaration, IfGenerateConstruct, IntegerDeclaration, LocalParameterDeclaration, LoopGenerateConstruct, Module, ModuleInstance, ModuleInstantiation, ModuleItem, ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration, ModulePorts, NamedParameterAssignment, NetDeclAssignment, NetDeclaration, NetDeclarationNets, NetIdent, NetType, NonPortModuleItem, ParamAssignment, ParameterDeclaration, ParameterDeclarationTyping, ParameterValueAssignment, Port, PortDeclaration, PortExpression, PortReference, RegDeclaration, TaskDeclaration, VariableType, VariableTypeVariant
+    CaseGenerateConstruct, CaseGenerateItem, CaseGeneratePattern, FunctionDeclaration,
+    GenerateBlock, GenvarAssignment, GenvarDeclaration, IfGenerateConstruct, IntegerDeclaration,
+    LocalParameterDeclaration, LoopGenerateConstruct, Module, ModuleInstance, ModuleInstantiation,
+    ModuleItem, ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration, ModulePorts,
+    NamedParameterAssignment, NetDeclAssignment, NetDeclaration, NetDeclarationNets, NetIdent,
+    NetType, NonPortModuleItem, ParamAssignment, ParameterDeclaration, ParameterDeclarationTyping,
+    ParameterValueAssignment, Port, PortDeclaration, PortExpression, PortReference, RegDeclaration,
+    TaskDeclaration, VariableType, VariableTypeVariant,
 };
 use crate::ast::statement::{
     Block, CaseItem, CaseStatement, ConditionalStatement, IfBranch, LoopStatement,
@@ -570,9 +577,10 @@ pub fn elaborate_module_or_generate_item<'a>(
                                 diagnostics,
                                 expr,
                             )?;
+                            let expr_value =
+                                expr_value.truncate_or_extend(value.ty().force_net_width());
                             if value.clone().logical_equal(expr_value) {
                                 is_selected = true;
-                                break;
                             }
                         }
                     }
@@ -580,6 +588,7 @@ pub fn elaborate_module_or_generate_item<'a>(
 
                 if is_selected {
                     elaborate_generate_block(arenas, builder, diagnostics, *block, genvars)?;
+                    break;
                 }
             }
 
@@ -608,7 +617,10 @@ pub fn elaborate_module_or_generate_item_declaration<'a>(
                 nets,
             } = arenas.get(*id);
             if !matches!(net_type.item, NetType::Wire) {
-                diagnostics.not_yet_implemented(arenas.get_item_span(*net_type), "net type not yet supported");
+                diagnostics.not_yet_implemented(
+                    arenas.get_item_span(*net_type),
+                    "net type not yet supported",
+                );
                 return Err(());
             }
 

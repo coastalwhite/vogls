@@ -171,7 +171,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         }
     }
     if num_failed == 0 {
-        println!("All tests passed!");
+        println!("All {} tests passed!", paths.len());
         Ok(ExitCode::SUCCESS)
     } else {
         println!(
