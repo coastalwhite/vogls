@@ -500,34 +500,109 @@ impl Event {
 
                     use vogls_bits::arithmetic as A;
 
-                    fn tv_bitwise_and(dst: &mut [u8], lhs: &[u8], rhs: &[u8], _size: VectorSize) {
+                    fn tv_u8_bitwise_and(
+                        dst: &mut [u8],
+                        lhs: &[u8],
+                        rhs: &[u8],
+                        _size: VectorSize,
+                    ) {
                         A::bin_bitwise_op(dst, lhs, rhs, A::tv_bitwise_and);
                     }
-                    fn tv_bitwise_or(dst: &mut [u8], lhs: &[u8], rhs: &[u8], _size: VectorSize) {
+                    fn tv_u8_bitwise_or(dst: &mut [u8], lhs: &[u8], rhs: &[u8], _size: VectorSize) {
                         A::bin_bitwise_op(dst, lhs, rhs, A::tv_bitwise_or);
                     }
-                    fn tv_bitwise_xor(dst: &mut [u8], lhs: &[u8], rhs: &[u8], _size: VectorSize) {
+                    fn tv_u8_bitwise_xor(
+                        dst: &mut [u8],
+                        lhs: &[u8],
+                        rhs: &[u8],
+                        _size: VectorSize,
+                    ) {
                         A::bin_bitwise_op(dst, lhs, rhs, A::tv_bitwise_xor);
                     }
+                    fn tv_u64_bitwise_and(
+                        dst: &mut [u64],
+                        lhs: &[u64],
+                        rhs: &[u64],
+                        _size: VectorSize,
+                    ) {
+                        A::bin_bitwise_op(dst, lhs, rhs, A::tv_bitwise_and);
+                    }
+                    fn tv_u64_bitwise_or(
+                        dst: &mut [u64],
+                        lhs: &[u64],
+                        rhs: &[u64],
+                        _size: VectorSize,
+                    ) {
+                        A::bin_bitwise_op(dst, lhs, rhs, A::tv_bitwise_or);
+                    }
+                    fn tv_u64_bitwise_xor(
+                        dst: &mut [u64],
+                        lhs: &[u64],
+                        rhs: &[u64],
+                        _size: VectorSize,
+                    ) {
+                        A::bin_bitwise_op(dst, lhs, rhs, A::tv_bitwise_xor);
+                    }
+                    fn tv_u64_division(
+                        dst: &mut [u64],
+                        lhs: &[u64],
+                        rhs: &[u64],
+                        size: VectorSize,
+                    ) {
+                        // @Performance: Scratchpad this somehow.
+                        let mut modulus = vec![0u64; dst.len()];
+                        A::tv_division(dst, &mut modulus, lhs, rhs, size);
+                    }
+                    fn tv_u64_modulus(dst: &mut [u64], lhs: &[u64], rhs: &[u64], size: VectorSize) {
+                        // @Performance: Scratchpad this somehow.
+                        let mut quotient = vec![0u64; dst.len()];
+                        A::tv_division(&mut quotient, dst, lhs, rhs, size);
+                    }
 
-                    let f = match op {
-                        O::And => tv_bitwise_and,
-                        O::Or => tv_bitwise_or,
-                        O::Xor => tv_bitwise_xor,
-                        O::Add => A::tv_addition,
-                        O::Sub => A::tv_subtraction,
-                        O::Multiply => A::tv_multiplication,
-                        O::Divide => A::tv_division,
-                        O::Modulus => A::tv_modulus,
-                    };
+                    if size.get() > 32
+                        && matches!(op, O::And | O::Or | O::Xor | O::Add | O::Sub | O::Multiply)
+                    {
+                        let f = match op {
+                            O::And => tv_u64_bitwise_and,
+                            O::Or => tv_u64_bitwise_or,
+                            O::Xor => tv_u64_bitwise_xor,
+                            O::Add => A::tv_addition,
+                            O::Sub => A::tv_subtraction,
+                            O::Multiply => A::tv_multiplication,
+                            O::Divide => tv_u64_division,
+                            O::Modulus => tv_u64_modulus,
+                        };
 
-                    let nbytes = size.get().div_ceil(8) as usize;
+                        let nwords = size.get().div_ceil(64) as usize;
+                        let nbytes = nwords * 8;
+                        let (dst, lhs, rhs) = vogls_bits::get_disjoint_dst_s1_s2(
+                            stack, dst.offset, nbytes, lhs.offset, nbytes, rhs.offset, nbytes,
+                        );
 
-                    let (dst, lhs, rhs) = vogls_bits::get_disjoint_dst_s1_s2(
-                        stack, dst.offset, nbytes, lhs.offset, nbytes, rhs.offset, nbytes,
-                    );
+                        let dst = bytemuck::cast_slice_mut(dst);
+                        let lhs = bytemuck::cast_slice(lhs);
+                        let rhs = bytemuck::cast_slice(rhs);
 
-                    f(dst, lhs, rhs, *size);
+                        f(dst, lhs, rhs, *size);
+                    } else {
+                        let f = match op {
+                            O::And => tv_u8_bitwise_and,
+                            O::Or => tv_u8_bitwise_or,
+                            O::Xor => tv_u8_bitwise_xor,
+                            O::Add => A::tv_ltu64_addition,
+                            O::Sub => A::tv_ltu64_subtraction,
+                            O::Multiply => A::tv_ltu64_multiplication,
+                            O::Divide => A::tv_ltu64_division,
+                            O::Modulus => A::tv_ltu64_modulus,
+                        };
+
+                        let nbytes = size.get().div_ceil(8) as usize;
+                        let (dst, lhs, rhs) = vogls_bits::get_disjoint_dst_s1_s2(
+                            stack, dst.offset, nbytes, lhs.offset, nbytes, rhs.offset, nbytes,
+                        );
+
+                        f(dst, lhs, rhs, *size);
+                    }
                 }
                 I::BinaryComparison(dst, op, size, lhs, rhs) => {
                     use BinaryComparisonOp as O;

@@ -41,8 +41,21 @@ pub fn lower_process_to_vm(
 
             if let Some(dst) = instr.get_destination_variable() {
                 let size = gl.vars.get(dst).unwrap().size;
+
+                // Most arithmetic operations are implemented on 64-bit chunks, by ensuring that
+                // all variables with a size larger or equal to than 64 are allocated in chunks of
+                // 64 we can efficiently dispatch to these kernels.
+                let nbytes = if size.get() > 32 {
+                    // @TODO: Allow this space to be used somehow. In general, we should use a
+                    // slab allocator instead of this.
+                    *stack_top += 8 - (*stack_top % 8); // pad to 8-bytes
+                    (size.get() as usize).div_ceil(64) * 8
+                } else {
+                    (size.get() as usize).div_ceil(8)
+                };
+
                 stack_map.insert(dst, StackRef { offset: *stack_top });
-                *stack_top += (size.get() as usize).div_ceil(8);
+                *stack_top += nbytes;
             }
         }
 

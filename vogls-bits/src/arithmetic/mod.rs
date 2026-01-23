@@ -1,6 +1,12 @@
 use crate::VectorSize;
-use crate::load::load_partial_u64;
-use crate::store::store_partial_u64;
+
+mod add_sub;
+mod division;
+mod multiplication;
+
+pub use add_sub::{tv_addition, tv_ltu64_addition, tv_ltu64_subtraction, tv_subtraction};
+pub use division::{tv_division, tv_ltu64_division, tv_ltu64_modulus};
+pub use multiplication::{tv_ltu64_multiplication, tv_multiplication};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(u8)]
@@ -407,58 +413,6 @@ pub fn fv_addition<T: BitwisePart>(x: T, y: T, carry_in: T, size: VectorSize) ->
     (carry_out, sum)
 }
 
-pub fn tv_addition(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: VectorSize) {
-    if size.get() > 64 {
-        todo!()
-    }
-    let l = load_partial_u64(&lhs, size);
-    let r = load_partial_u64(&rhs, size);
-    let out = l.wrapping_add(r);
-    store_partial_u64(dst, out, size);
-}
-
-pub fn tv_subtraction(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: VectorSize) {
-    if size.get() > 64 {
-        todo!()
-    }
-    let l = load_partial_u64(&lhs, size);
-    let r = load_partial_u64(&rhs, size);
-    let out = l.wrapping_sub(r);
-    store_partial_u64(dst, out, size);
-}
-
-pub fn tv_multiplication(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: VectorSize) {
-    if size.get() > 64 {
-        todo!()
-    }
-    let l = load_partial_u64(&lhs, size);
-    let r = load_partial_u64(&rhs, size);
-    let out = l.wrapping_mul(r);
-    store_partial_u64(dst, out, size);
-}
-
-pub fn tv_division(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: VectorSize) {
-    if size.get() > 64 {
-        todo!()
-    }
-    // @TODO: Deal with r = 0
-    let l = load_partial_u64(&lhs, size);
-    let r = load_partial_u64(&rhs, size);
-    let out = l.wrapping_div(r);
-    store_partial_u64(dst, out, size);
-}
-
-pub fn tv_modulus(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: VectorSize) {
-    if size.get() > 64 {
-        todo!()
-    }
-    // @TODO: Deal with r = 0
-    let l = load_partial_u64(&lhs, size);
-    let r = load_partial_u64(&rhs, size);
-    let out = l.wrapping_rem(r);
-    store_partial_u64(dst, out, size);
-}
-
 #[inline(always)]
 fn extract_tv_u64(w: u64) -> u32 {
     if is_x86_feature_detected!("bmi2") {
@@ -500,8 +454,11 @@ fn morton1(w: u64) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    use crate::proptest::any_reasonable_size;
+
     use super::*;
     use FvLogicValue as L;
+    use proptest::prelude::Just;
 
     #[rustfmt::skip]
     const FV_BITWISE_AND_LUT: [L; 16] = [
@@ -600,5 +557,45 @@ mod tests {
         assert!(!has_fv_non_logical(L::L0));
         assert!(!has_fv_non_logical(L::L1));
         assert!(has_fv_non_logical(L::Z));
+    }
+
+    pub fn u8_slice_to_u64_vec(s: &[u8]) -> Vec<u64> {
+        s.chunks(8)
+            .map(|c| {
+                let mut x = [0u8; 8];
+                for (i, b) in c.iter().enumerate() {
+                    x[i] = *b;
+                }
+                u64::from_le_bytes(x)
+            })
+            .collect()
+    }
+
+    pub fn u128_to_u64x2(v: u128) -> [u64; 2] {
+        [v as u64, (v >> 64) as u64]
+    }
+    pub fn u64x2_to_slice(v: &[u64; 2], size: VectorSize) -> &[u64] {
+        if size.get() > 64 { &v[..] } else { &v[..1] }
+    }
+    pub fn u64x2_to_slice_mut(v: &mut [u64; 2], size: VectorSize) -> &mut [u64] {
+        if size.get() > 64 {
+            &mut v[..]
+        } else {
+            &mut v[..1]
+        }
+    }
+
+    proptest::prop_compose! {
+        pub fn u128_arith_target
+            ()
+            (size in any_reasonable_size(1..=128))
+            (
+                size in Just(size),
+                lhs in 0..=(1u128.unbounded_shl(size.get())).wrapping_sub(1),
+                rhs in 0..=(1u128.unbounded_shl(size.get())).wrapping_sub(1)
+            )
+                -> (VectorSize, u128, u128) {
+                (size, lhs, rhs)
+        }
     }
 }

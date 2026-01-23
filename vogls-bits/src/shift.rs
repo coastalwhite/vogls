@@ -126,6 +126,63 @@ pub fn tv_arithmetic_shift_right(dst: &mut [u8], src: &[u8], shift: u32, size: V
     store_partial_u64(dst, out as u64, size);
 }
 
+pub fn tv_gtu64_logical_shift_left(dst: &mut [u64], src: &[u64], shift: u32, size: VectorSize) {
+    let nwords = size.get().div_ceil(64) as usize;
+    if shift == 0 {
+        dst[..nwords].copy_from_slice(&src[..nwords]);
+        return;
+    }
+    if shift >= size.get() {
+        for i in 0..nwords {
+            dst[i] = 0;
+        }
+        return;
+    }
+    let shift = shift as usize;
+    let soff = shift % 64;
+    if soff == 0 {
+        for i in 0..shift / 64 {
+            dst[i] = 0;
+        }
+        for i in 0..nwords - shift / 64 {
+            dst[i + shift / 64] = src[i];
+        }
+    } else {
+        // X = [ A ]
+        // LSL (X, 7)
+        //
+        // [ A << 7 ]
+        //
+        // X = [ A B C D ]
+        // LSL (X, 7)
+        // [
+        //     A << 7
+        //    (B << 7) | (A >> 1)
+        //    (C << 7) | (B >> 1)
+        //    (D << 7) | (C >> 1)
+        // ]
+        //
+        // LSL (X, 15)
+        // [
+        //     0
+        //     A << 7
+        //    (B << 7) | (A >> 1)
+        //    (C << 7) | (B >> 1)
+        // ]
+        let swords = shift.div_ceil(64);
+        for i in 0..swords - 1 {
+            dst[i] = 0;
+        }
+        dst[swords - 1] = src[0] << soff;
+        for i in 0..nwords - swords {
+            dst[i + swords] = (src[i + 1] << soff) | (src[i] >> (64 - soff));
+        }
+    }
+    if size.get() % 64 != 0 {
+        dst[nwords - 1] &= (1u64 << (size.get() % 64)) - 1;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::get_disjoint_dst_src;

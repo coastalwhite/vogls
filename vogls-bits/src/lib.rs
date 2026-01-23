@@ -6,8 +6,11 @@ use std::num::NonZeroU32;
 pub mod arithmetic;
 pub mod comparison;
 pub mod concat;
+pub mod leading_trailing;
 pub mod load;
 pub mod negate;
+#[cfg(test)]
+pub mod proptest;
 pub mod select;
 pub mod set_subslice;
 pub mod shift;
@@ -92,7 +95,6 @@ pub fn get_disjoint_dst_src<'a>(
     let src = &s[src_off..][..src_size];
     (dst, src)
 }
-
 
 impl From<bool> for Bits {
     fn from(value: bool) -> Self {
@@ -216,7 +218,9 @@ impl Bits {
 
     pub const fn new_u64(value: u64) -> Self {
         const U64_SIZE: VectorSize = VectorSize::new(64).unwrap();
-        const { assert!(U64_SIZE.get() <= Self::MAX_INLINE_SIZE.get()); }
+        const {
+            assert!(U64_SIZE.get() <= Self::MAX_INLINE_SIZE.get());
+        }
 
         // SAFETY:
         // - size <= MAX_INLINE_SIZE
@@ -226,7 +230,9 @@ impl Bits {
 
     pub const fn new_u32(value: u32) -> Self {
         const U32_SIZE: VectorSize = VectorSize::new(32).unwrap();
-        const { assert!(U32_SIZE.get() <= Self::MAX_INLINE_SIZE.get()); }
+        const {
+            assert!(U32_SIZE.get() <= Self::MAX_INLINE_SIZE.get());
+        }
 
         let value = value as u64;
 
@@ -249,7 +255,6 @@ impl Bits {
             let data = unsafe { &self.data.inline };
             &bytemuck::bytes_of(data)[..num_bytes]
         } else {
-
             // SAFETY: size > MAX_INLINE_SIZE
             unsafe { std::slice::from_raw_parts(self.data.ptr, num_bytes) }
         }
