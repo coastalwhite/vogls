@@ -1,4 +1,3 @@
-use std::alloc::Layout;
 use std::fmt::{self};
 use std::hash::Hash;
 use std::num::NonZeroU32;
@@ -20,7 +19,7 @@ pub mod store;
 /// Literal of a non-zero number of bits.
 ///
 /// For sizes smaller than 64 ([`Self::MAX_INLINE_SIZE`]), this does not allocate and the data is
-/// inlined into the struct. Otherwise, it is represented as `size.div_ceil(8)` bytes in a 8 bytes
+/// inlined into the struct. Otherwise, it is represented as `size.div_ceil(64)` u64's in a 8 bytes
 /// aligned allocated slice.
 pub struct Bits {
     size: VectorSize,
@@ -33,7 +32,7 @@ pub struct Bits {
     ///
     /// If size > MAX_INLINE_SIZE:
     ///   data is `BitsData::ptr`, where the `ptr` is a valid 8 byte aligned pointer to
-    ///   `size.div_ceil(8)` bytes. The bits for in this slice are stored in little-endian
+    ///   `size.div_ceil(64)` u64's. The bits for in this slice are stored in little-endian
     ///   byte-order, where only the value the `0..size.get()`-th least-significant bits may be
     ///   non-zero.
     /// Otherwise:
@@ -47,17 +46,17 @@ union BitsData {
     inline: u64,
 
     // @NOTE: Since this is 8 byte aligned, we could still use the bottom 3 bits for certain flags.
-    /// 8 byte aligned slice of `size.div_ceil(8)` bytes
-    ptr: *mut u8,
+    /// pointer to `size.div_ceil(64) * 8` bytes
+    ptr: *mut u64,
 }
 
 pub enum BitsDataRef<'a> {
     Inline(u64),
-    Separate(&'a [u8]),
+    Separate(&'a [u64]),
 }
 pub enum BitsDataRefMut<'a> {
     Inline(&'a mut u64),
-    Separate(&'a mut [u8]),
+    Separate(&'a mut [u64]),
 }
 
 pub fn get_disjoint_dst_s1_s2<'a>(
@@ -108,8 +107,8 @@ impl Drop for Bits {
             return;
         }
 
-        let layout = size_to_layout(self.size);
-        unsafe { std::alloc::dealloc(self.data.ptr, layout) };
+        let num_words = size_to_num_words(self.size());
+        unsafe { Vec::from_raw_parts(self.data.ptr, num_words, num_words) };
     }
 }
 
@@ -119,8 +118,7 @@ impl Clone for Bits {
             return unsafe { Self::from_raw(self.size, self.data) };
         }
 
-        let (data, rem) = self.as_u64_slice_and_remainder();
-        Self::from_u64_iter_and_remainder(self.size, data.iter().copied(), rem)
+        Self::load_from_u64_slice(self.as_u64_slice(), self.size)
     }
 }
 
@@ -156,25 +154,12 @@ impl Eq for Bits {}
 impl Hash for Bits {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.size().hash(state);
-        let (data, rem) = self.as_u64_slice_and_remainder();
-        rem.hash(state);
-        for v in data.iter() {
-            v.hash(state);
-        }
+        self.as_u64_slice().hash(state);
     }
 }
 
-const fn size_to_num_bytes(size: VectorSize) -> usize {
-    size.get().div_ceil(8) as usize
-}
-const fn size_to_layout(size: VectorSize) -> Layout {
-    assert!(size.get() > Bits::MAX_INLINE_SIZE.get());
-    let num_bytes = size_to_num_bytes(size);
-
-    match Layout::from_size_align(num_bytes, 8) {
-        Ok(v) => v,
-        Err(_) => panic!("size overflow"),
-    }
+const fn size_to_num_words(size: VectorSize) -> usize {
+    size.get().div_ceil(64) as usize
 }
 
 impl Bits {
@@ -199,11 +184,19 @@ impl Bits {
     ///
     /// - `ptr` should follow the safety invariants described in the type with `size` where `size >
     /// MAX_INLINE_SIZE`.
-    unsafe fn from_ptr(size: VectorSize, ptr: *mut u8) -> Self {
+    fn from_box_slice(size: VectorSize, mut b: Box<[u64]>) -> Self {
         assert!(size > Self::MAX_INLINE_SIZE);
-        assert!(ptr.cast::<u64>().is_aligned());
-        let data = BitsData { ptr };
-        unsafe { Self::from_raw(size, data) }
+        assert_eq!(size_to_num_words(size), b.len());
+        if let &[value] = b.as_ref() {
+            Self::from_u64(size, value)
+        } else {
+            if size.get() % 64 != 0 {
+                *b.last_mut().unwrap() &= (1u64 << (size.get() % 64)) - 1;
+            }
+            let ptr = Box::leak(b).as_mut_ptr();
+            let data = BitsData { ptr };
+            unsafe { Self::from_raw(size, data) }
+        }
     }
 
     pub const fn from_u64(size: VectorSize, value: u64) -> Self {
@@ -242,28 +235,52 @@ impl Bits {
         unsafe { Self::from_raw(U32_SIZE, BitsData { inline: value }) }
     }
 
-    pub fn num_bytes(&self) -> usize {
-        size_to_num_bytes(self.size())
+    pub fn as_u64_slice<'a>(&'a self) -> &'a [u64] {
+        const { assert!(cfg!(target_endian = "little")) }
+
+        if self.size <= Self::MAX_INLINE_SIZE {
+            // SAFETY: size <= MAX_INLINE_SIZE
+            let data = unsafe { &self.data.inline };
+            &std::slice::from_ref(data)
+        } else {
+            // SAFETY: size > MAX_INLINE_SIZE
+            let num_words = size_to_num_words(self.size);
+            unsafe { std::slice::from_raw_parts(self.data.ptr, num_words) }
+        }
+    }
+
+    pub fn as_mut_u64_slice<'a>(&'a mut self) -> &'a mut [u64] {
+        const { assert!(cfg!(target_endian = "little")) }
+
+        if self.size <= Self::MAX_INLINE_SIZE {
+            // SAFETY: size <= MAX_INLINE_SIZE
+            let data = unsafe { &mut self.data.inline };
+            std::slice::from_mut(data)
+        } else {
+            // SAFETY: size > MAX_INLINE_SIZE
+            let num_words = size_to_num_words(self.size);
+            unsafe { std::slice::from_raw_parts_mut(self.data.ptr, num_words) }
+        }
     }
 
     pub fn as_slice<'a>(&'a self) -> &'a [u8] {
         const { assert!(cfg!(target_endian = "little")) }
 
-        let num_bytes = self.num_bytes();
+        let num_bytes = self.size.get().div_ceil(8) as usize;
         if self.size <= Self::MAX_INLINE_SIZE {
             // SAFETY: size <= MAX_INLINE_SIZE
             let data = unsafe { &self.data.inline };
             &bytemuck::bytes_of(data)[..num_bytes]
         } else {
             // SAFETY: size > MAX_INLINE_SIZE
-            unsafe { std::slice::from_raw_parts(self.data.ptr, num_bytes) }
+            unsafe { std::slice::from_raw_parts(self.data.ptr.cast(), num_bytes) }
         }
     }
 
-    pub fn as_mut_slice(&mut self) -> &mut [u8] {
+    pub fn as_mut_slice<'a>(&'a mut self) -> &'a mut [u8] {
         const { assert!(cfg!(target_endian = "little")) }
 
-        let num_bytes = self.num_bytes();
+        let num_bytes = self.size.get().div_ceil(8) as usize;
         if self.size <= Self::MAX_INLINE_SIZE {
             // SAFETY: size <= MAX_INLINE_SIZE
             let data = unsafe { &mut self.data.inline };
@@ -271,13 +288,13 @@ impl Bits {
             &mut bytemuck::bytes_of_mut(data)[..num_bytes]
         } else {
             // SAFETY: size > MAX_INLINE_SIZE
-            unsafe { std::slice::from_raw_parts_mut(self.data.ptr, num_bytes) }
+            unsafe { std::slice::from_raw_parts_mut(self.data.ptr.cast(), num_bytes) }
         }
     }
 
     pub fn load_from_slice(slice: &[u8], size: VectorSize) -> Self {
         const { assert!(cfg!(target_endian = "little")) }
-        let num_bytes = size_to_num_bytes(size);
+        let num_bytes = size.get().div_ceil(8) as usize;
         assert_eq!(slice.len(), num_bytes);
 
         if size <= Self::MAX_INLINE_SIZE {
@@ -287,54 +304,29 @@ impl Bits {
             }
             Self::from_u64(size, value)
         } else {
-            let ptr = unsafe { std::alloc::alloc(size_to_layout(size)) };
-            unsafe { std::ptr::copy_nonoverlapping(slice.as_ptr(), ptr, num_bytes) };
-            let lst = unsafe { ptr.add(num_bytes - 1).as_mut() }.unwrap();
-            if size.get() % 8 != 0 {
-                *lst &= (1u8 << (size.get() % 8)).wrapping_sub(1);
-            }
-            unsafe { Self::from_ptr(size, ptr) }
+            let data = slice
+                .chunks(8)
+                .map(|c| {
+                    u64::from_le_bytes(c.try_into().unwrap_or_else(|_| {
+                        let mut data = [0u8; 8];
+                        data.copy_from_slice(c);
+                        data
+                    }))
+                })
+                .collect();
+            Self::from_box_slice(size, data)
         }
     }
 
-    pub fn from_u64_iter_and_remainder(
-        size: VectorSize,
-        mut iterator: impl Iterator<Item = u64>,
-        remainder: u64,
-    ) -> Self {
+    pub fn load_from_u64_slice(slice: &[u64], size: VectorSize) -> Self {
         const { assert!(cfg!(target_endian = "little")) }
+        let num_words = size_to_num_words(size);
+        assert_eq!(slice.len(), num_words);
 
-        if size <= Self::MAX_INLINE_SIZE {
-            assert!(iterator.next().is_none());
-            Self::from_u64(size, remainder)
+        if let &[value] = slice {
+            Self::from_u64(size, value)
         } else {
-            let ptr = unsafe { std::alloc::alloc(size_to_layout(size)) };
-            let mut u64_ptr = ptr.cast::<u64>();
-            for _ in 0..size.get().div_ceil(64) - 1 {
-                let c = iterator.next().unwrap();
-                unsafe { u64_ptr.write(c) };
-                unsafe {
-                    u64_ptr = u64_ptr.add(1);
-                }
-            }
-            assert!(iterator.next().is_none());
-            match VectorSize::new(size.get() % 64) {
-                None => unsafe { u64_ptr.write(remainder) },
-                Some(remainder_size) => {
-                    let remainder =
-                        remainder & 1u64.unbounded_shl(remainder_size.get()).wrapping_sub(1);
-                    let num_remainder_bytes = size_to_num_bytes(remainder_size);
-                    let remainder_bytes = bytemuck::bytes_of(&remainder);
-                    unsafe {
-                        std::ptr::copy_nonoverlapping(
-                            remainder_bytes.as_ptr(),
-                            u64_ptr.cast::<u8>(),
-                            num_remainder_bytes,
-                        )
-                    };
-                }
-            }
-            unsafe { Self::from_ptr(size, ptr) }
+            Self::from_box_slice(size, slice.into())
         }
     }
 
@@ -348,8 +340,7 @@ impl Bits {
 
     pub fn new_zeroed(size: VectorSize) -> Self {
         if size > Self::MAX_INLINE_SIZE {
-            let ptr = unsafe { std::alloc::alloc_zeroed(size_to_layout(size)) };
-            unsafe { Self::from_ptr(size, ptr) }
+            Self::from_box_slice(size, (0..size_to_num_words(size)).map(|_| 0u64).collect())
         } else {
             Self::from_u64(size, 0u64)
         }
@@ -357,18 +348,11 @@ impl Bits {
 
     pub fn new_ones(size: VectorSize) -> Self {
         if size > Self::MAX_INLINE_SIZE {
-            let num_bytes = size_to_num_bytes(size);
-            let ptr = unsafe { std::alloc::alloc(size_to_layout(size)) };
-            for i in 0..num_bytes {
-                unsafe { ptr.add(i).write(0xFF) };
-            }
-            if size.get() % 8 != 0 {
-                unsafe {
-                    ptr.add(num_bytes - 1)
-                        .write((1u8 << (size.get() % 8)).wrapping_sub(1))
-                };
-            }
-            unsafe { Self::from_ptr(size, ptr) }
+            // @NOTE: Final masking is done by from_box_slice.
+            Self::from_box_slice(
+                size,
+                (0..size_to_num_words(size)).map(|_| u64::MAX).collect(),
+            )
         } else {
             let value = 1u64.unbounded_shl(size.get()).wrapping_sub(1);
             Self::from_u64(size, value)
@@ -383,7 +367,7 @@ impl Bits {
         if self.size() <= Self::MAX_INLINE_SIZE {
             BitsDataRef::Inline(unsafe { self.data.inline })
         } else {
-            BitsDataRef::Separate(self.as_slice())
+            BitsDataRef::Separate(self.as_u64_slice())
         }
     }
 
@@ -391,27 +375,7 @@ impl Bits {
         if self.size() <= Self::MAX_INLINE_SIZE {
             BitsDataRefMut::Inline(unsafe { &mut self.data.inline })
         } else {
-            BitsDataRefMut::Separate(self.as_mut_slice())
-        }
-    }
-
-    pub fn as_u64_slice_and_remainder(&self) -> (&[u64], u64) {
-        match self.as_data_ref() {
-            BitsDataRef::Inline(v) => (&[], v),
-            BitsDataRef::Separate(data) => {
-                let num_remainder_bytes = match VectorSize::new(self.size.get() % 64) {
-                    None => 8,
-                    Some(remainder_size) => size_to_num_bytes(remainder_size),
-                };
-
-                let (data, remainder) = data.split_at(data.len() - num_remainder_bytes);
-
-                let mut value = 0u64;
-                for (i, &b) in remainder.iter().enumerate() {
-                    value |= (b as u64) << (i * 8);
-                }
-                (bytemuck::cast_slice(data), value)
-            }
+            BitsDataRefMut::Separate(self.as_mut_u64_slice())
         }
     }
 
@@ -447,7 +411,7 @@ impl Bits {
                 v & 1u64.unbounded_shl(new_size.get()).wrapping_sub(1),
             ),
             BitsDataRef::Separate(slice) => {
-                Bits::load_from_slice(&slice[..size_to_num_bytes(new_size)], new_size)
+                Bits::load_from_u64_slice(&slice[..size_to_num_words(new_size)], new_size)
             }
         }
     }
@@ -489,11 +453,12 @@ impl Bits {
             _ => {
                 let sign = self.select_bit(size.get() - 1);
                 let mut out = Self::new_constant(new_size, sign);
-                let out_slice = out.as_mut_slice();
-                out_slice[..self.num_bytes()].copy_from_slice(self.as_slice());
-                if size.get() % 8 != 0 {
-                    out_slice[self.num_bytes() - 1] |=
-                        u8::from(!sign).wrapping_sub(1) << (size.get() % 8);
+                let out_slice = out.as_mut_u64_slice();
+                let slf_num_words = size_to_num_words(self.size);
+                out_slice[..slf_num_words].copy_from_slice(self.as_u64_slice());
+                if size.get() % 64 != 0 {
+                    out_slice[slf_num_words - 1] |=
+                        u64::from(!sign).wrapping_sub(1) << (size.get() % 64);
                 }
                 out
             }
@@ -513,16 +478,22 @@ impl Bits {
             }
             _ => {
                 let mut out = Self::new_zeroed(new_size);
-                let out_slice = out.as_mut_slice();
-                out_slice[..self.num_bytes()].copy_from_slice(self.as_slice());
+                let out_slice = out.as_mut_u64_slice();
+                let slf_num_words = size_to_num_words(self.size);
+                out_slice[..slf_num_words].copy_from_slice(self.as_u64_slice());
                 out
             }
         }
     }
 
     pub fn count_ones(&self) -> u32 {
-        let (data, rem) = self.as_u64_slice_and_remainder();
-        rem.count_ones() + data.iter().map(|b| b.count_ones()).sum::<u32>()
+        self.as_u64_slice()
+            .iter()
+            .map(|b| b.count_ones())
+            .sum::<u32>()
+    }
+    pub fn count_zeros(&self) -> u32 {
+        self.size.get() - self.count_ones()
     }
 
     pub fn reduce_or(&self) -> bool {
@@ -536,8 +507,10 @@ impl Bits {
     }
 
     pub fn bitwise_negate(&self) -> Self {
-        let (data, remainder) = self.as_u64_slice_and_remainder();
-        Self::from_u64_iter_and_remainder(self.size(), data.iter().map(|d| !d), !remainder)
+        Self::from_box_slice(
+            self.size(),
+            self.as_u64_slice().iter().map(|d| !d).collect(),
+        )
     }
     pub fn not_eq_zero(&self) -> bool {
         self.reduce_or()
@@ -591,13 +564,16 @@ impl Bits {
 
     pub fn tv_bitwise_op(lhs: &Self, rhs: &Self, op: impl Fn(u64, u64) -> u64) -> Self {
         assert_eq!(lhs.size(), rhs.size());
-        let (lhs_data, lhs_rem) = lhs.as_u64_slice_and_remainder();
-        let (rhs_data, rhs_rem) = rhs.as_u64_slice_and_remainder();
+        let lhs_data = lhs.as_u64_slice();
+        let rhs_data = rhs.as_u64_slice();
 
-        Self::from_u64_iter_and_remainder(
+        Self::from_box_slice(
             lhs.size(),
-            lhs_data.iter().zip(rhs_data).map(|(l, r)| op(*l, *r)),
-            op(lhs_rem, rhs_rem),
+            lhs_data
+                .iter()
+                .zip(rhs_data)
+                .map(|(l, r)| op(*l, *r))
+                .collect(),
         )
     }
 
@@ -608,11 +584,11 @@ impl Bits {
         reduce: impl Fn(T, T) -> T,
     ) -> T {
         assert_eq!(lhs.size(), rhs.size());
-        let (lhs_data, lhs_rem) = lhs.as_u64_slice_and_remainder();
-        let (rhs_data, rhs_rem) = rhs.as_u64_slice_and_remainder();
+        let lhs_data = lhs.as_u64_slice();
+        let rhs_data = rhs.as_u64_slice();
 
-        let mut value = op(lhs_rem, rhs_rem);
-        for (&l, &r) in lhs_data.iter().zip(rhs_data) {
+        let mut value = op(lhs_data[0], rhs_data[0]);
+        for (&l, &r) in lhs_data[1..].iter().zip(&rhs_data[1..]) {
             value = reduce(value, op(l, r));
         }
         value
@@ -638,31 +614,11 @@ impl Bits {
     }
     pub fn is_unsigned_leq(lhs: &Self, rhs: &Self) -> bool {
         assert_eq!(lhs.size(), rhs.size());
-        let (lhs_data, lhs_rem) = lhs.as_u64_slice_and_remainder();
-        let (rhs_data, rhs_rem) = rhs.as_u64_slice_and_remainder();
-
-        if lhs_rem > rhs_rem {
-            return false;
-        } else if lhs_rem < rhs_rem {
-            return true;
-        }
-
-        for (l, r) in lhs_data.iter().zip(rhs_data).rev() {
-            if l > r {
-                return false;
-            } else if l < r {
-                return true;
-            }
-        }
-        true
+        comparison::tv_gtu64_unsigned_leq(lhs.as_u64_slice(), rhs.as_u64_slice(), lhs.size())
     }
     pub fn is_signed_leq(lhs: &Self, rhs: &Self) -> bool {
         assert_eq!(lhs.size(), rhs.size());
-        if lhs.select_bit(lhs.size().get() - 1) && !rhs.select_bit(lhs.size().get() - 1) {
-            return true;
-        }
-
-        Self::is_unsigned_leq(lhs, rhs)
+        comparison::tv_gtu64_signed_leq(lhs.as_u64_slice(), rhs.as_u64_slice(), lhs.size())
     }
 
     pub fn leading_zeroes(&self) -> u32 {
@@ -777,13 +733,14 @@ impl fmt::Display for Bits {
         let size = self.size();
         write!(f, "{size}'h")?;
 
-        let (data, rem) = self.as_u64_slice_and_remainder();
+        let data = self.as_u64_slice();
 
         // @TODO: This does not properly pad zeroes for the remainder all the time.
+        let last = data.last().unwrap();
         if size.get() % 64 > 32 {
-            write!(f, "{:X}_{:04X}", rem >> 32, rem & 0xFFFF_FFFF)?;
+            write!(f, "{:X}_{:04X}", last >> 32, last & 0xFFFF_FFFF)?;
         } else {
-            write!(f, "{rem:X}")?;
+            write!(f, "{last:X}")?;
         }
         for &b in data.iter().rev() {
             write!(f, "_{:04X}_{:04X}", b >> 32, b & 0xFFFF_FFFF)?;

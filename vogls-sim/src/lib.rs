@@ -142,18 +142,26 @@ fn update_watchers(
 pub fn drive_bits(bits: &mut Bits, slice: &[u8], partial: Option<(u32, VectorSize)>) -> bool {
     let size = bits.size();
     match bits.as_data_mut() {
-        BitsDataRefMut::Separate(signal_value) => match partial {
-            None => {
-                if slice == signal_value.as_ref() {
-                    return false;
+        BitsDataRefMut::Separate(signal_value) => {
+            let signal_value = bytemuck::cast_slice_mut::<_, u8>(signal_value);
+            let signal_value = &mut signal_value[..size.get().div_ceil(8) as usize];
+            match partial {
+                None => {
+                    if slice == signal_value.as_ref() {
+                        return false;
+                    }
+                    signal_value.copy_from_slice(slice);
+                    true
                 }
-                signal_value.copy_from_slice(slice);
-                true
+                Some((offset, length)) => vogls_bits::set_subslice::set_subslice(
+                    signal_value,
+                    slice,
+                    size,
+                    offset,
+                    length,
+                ),
             }
-            Some((offset, length)) => {
-                vogls_bits::set_subslice::set_subslice(signal_value, slice, size, offset, length)
-            }
-        },
+        }
         BitsDataRefMut::Inline(signal_value) => {
             let before = *signal_value;
             match partial {
@@ -395,7 +403,7 @@ impl Event {
             ctx.instruction_count += 1;
             match instr {
                 I::Constant(var, value) => {
-                    stack[var.offset..][..value.num_bytes()].copy_from_slice(value.as_slice());
+                    stack[var.offset..][..value.as_slice().len()].copy_from_slice(value.as_slice());
                 }
                 I::Unary(dst, op, size, src) => {
                     use UnaryOp as O;
@@ -737,7 +745,7 @@ impl Event {
                 }
                 I::Probe(var, sig) => {
                     let bits = &signals[&sig];
-                    stack[var.offset..][..bits.num_bytes()].copy_from_slice(bits.as_slice());
+                    stack[var.offset..][..bits.as_slice().len()].copy_from_slice(bits.as_slice());
                 }
                 I::Drive(sig, var, region, partial) => {
                     let size = signals[sig].size();

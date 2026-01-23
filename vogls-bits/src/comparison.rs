@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
 
 use crate::VectorSize;
+use crate::select::tv_gtu64_select_bit;
 
 pub fn tv_unsigned_leq(lhs: &[u8], rhs: &[u8], size: VectorSize) -> bool {
     for i in (0..size.get().div_ceil(8) as usize).rev() {
@@ -24,4 +25,14 @@ pub fn tv_gtu64_unsigned_leq(lhs: &[u64], rhs: &[u64], size: VectorSize) -> bool
         return value;
     }
     true
+}
+
+pub fn tv_gtu64_signed_leq(lhs: &[u64], rhs: &[u64], size: VectorSize) -> bool {
+    if tv_gtu64_select_bit(lhs, size.get() - 1, size)
+        && !tv_gtu64_select_bit(rhs, size.get() - 1, size)
+    {
+        return true;
+    }
+
+    tv_gtu64_unsigned_leq(lhs, rhs, size)
 }

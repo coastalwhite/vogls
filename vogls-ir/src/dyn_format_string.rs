@@ -105,11 +105,11 @@ pub fn format_bits(
         Padding::NoPadding => {}
     }
 
-    let (data, rem) = bits.as_u64_slice_and_remainder();
+    let data = bits.as_u64_slice();
     match base {
         Base::Binary => {
             let mut print_full = false;
-            for b in std::iter::once(rem).chain(data.iter().copied().rev()) {
+            for b in data.iter().copied().rev() {
                 if print_full {
                     write!(f, "{b:064b}")?
                 } else {
@@ -140,7 +140,7 @@ pub fn format_bits(
         }
         Base::Hexadecimal => {
             let mut print_full = false;
-            for b in std::iter::once(rem).chain(data.iter().copied().rev()) {
+            for b in data.iter().copied().rev() {
                 if print_full {
                     write!(f, "{b:016x}")?
                 } else {
@@ -150,9 +150,11 @@ pub fn format_bits(
             }
         }
         Base::Decimal => {
-            if !data.is_empty() { todo!() }
-            write!(f, "{rem}")?;
-        },
+            if data.len() > 1 {
+                todo!()
+            }
+            write!(f, "{}", data[0])?;
+        }
     }
     Ok(())
 }
