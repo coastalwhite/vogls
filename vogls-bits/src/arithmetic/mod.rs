@@ -13,16 +13,16 @@ pub use multiplication::{tv_ltu64_multiplication, tv_multiplication};
 pub enum FvLogicValue {
     /// Unknown value
     X = 0b00,
-    /// Logical zero
-    L0 = 0b01,
-    /// Logical one
-    L1 = 0b10,
     /// High impedance
-    Z = 0b11,
+    Z = 0b01,
+    /// Logical zero
+    L0 = 0b10,
+    /// Logical one
+    L1 = 0b11,
 }
 
 impl FvLogicValue {
-    pub const VALUES: &[FvLogicValue] = &[Self::X, Self::L0, Self::L1, Self::Z];
+    pub const VALUES: &[FvLogicValue] = &[Self::X, Self::Z, Self::L0, Self::L1];
 
     #[inline(always)]
     pub const fn from_bool(value: bool) -> Self {
@@ -34,10 +34,10 @@ impl FvLogicValue {
 
     pub const fn from_repr(repr: u8) -> Self {
         match repr & 0b11 {
-            0b00 => Self::X,
-            0b01 => Self::L0,
-            0b10 => Self::L1,
-            _ => Self::Z,
+            0b01 => Self::Z,
+            0b10 => Self::L0,
+            0b11 => Self::L1,
+            _ => Self::X,
         }
     }
 }
@@ -60,7 +60,10 @@ pub trait BitwisePart:
     + std::ops::Shr<u32, Output = Self>
     + Eq
 {
+    const ZERO: Self;
     const NUM_BITS: u32;
+    const SPC_MASK: Self;
+    const VAL_MASK: Self;
     fn splat_byte(b: u8) -> Self;
     fn mask(size: VectorSize) -> Self;
     fn count_ones(self) -> u32;
@@ -72,7 +75,11 @@ macro_rules! impl_bitwise_part {
     ($($ty:ty),+ $(,)?) => {
         $(
         impl BitwisePart for $ty {
+            const ZERO: Self = 0;
             const NUM_BITS: u32 = <$ty>::BITS;
+            const SPC_MASK: Self = (!0) << (Self::NUM_BITS / 2);
+            const VAL_MASK: Self = (!0) >> (Self::NUM_BITS / 2);
+
             #[inline(always)]
             fn splat_byte(b: u8) -> Self {
                 let mut bs = [0u8; size_of::<Self>()];
@@ -106,7 +113,11 @@ macro_rules! impl_bitwise_part {
 
 impl_bitwise_part!(u8, u64);
 impl BitwisePart for FvLogicValue {
+    const ZERO: Self = FvLogicValue::X;
     const NUM_BITS: u32 = 2;
+    const SPC_MASK: Self = FvLogicValue::L0;
+    const VAL_MASK: Self = FvLogicValue::Z;
+
     #[inline(always)]
     fn splat_byte(b: u8) -> Self {
         Self::from_repr(b & 0b11)
@@ -188,14 +199,10 @@ pub fn unary_mut_bitwise_op<T: BitwisePart>(dst: &mut [T], op: impl Fn(T) -> T) 
     }
 }
 
-const ODD_BITS_BYTE: u8 = 0x55;
-const EVEN_BITS_BYTE: u8 = 0xAA;
-
 /// Does the `value` have a `Unknown` or `High Impedance` value?
 #[inline(always)]
-pub fn has_fv_non_logical<T: BitwisePart>(value: T) -> bool {
-    let odd_bits = T::splat_byte(ODD_BITS_BYTE);
-    (value ^ (value >> 1)) & odd_bits != odd_bits
+pub fn has_fv_non_logical<T: BitwisePart>(value: T, size: VectorSize) -> bool {
+    (value >> (T::NUM_BITS / 2)).count_ones() != size.get().min(T::NUM_BITS / 2)
 }
 
 #[inline(always)]
@@ -212,116 +219,115 @@ pub fn tv_bitwise_xor<T: BitwisePart>(l: T, r: T) -> T {
 }
 #[inline(always)]
 pub fn fv_bitwise_inv<T: BitwisePart>(value: T) -> T {
-    //    ~
-    // x  x
-    // 0  1
-    // 1  0
-    // z  x
+    //   x z 1 0
+    // ~ x x 0 1
     //
     // z1z0 = fv.inv(x1x0)
     //
-    // z0 = x0b x1        z1 = x0 x1b
+    // z1 = x1            z0 = x1 x0b
     // x  0               x  0
-    // 0  0               0  1
-    // 1  1               1  0
     // z  0               z  0
-    let x0 = value & T::splat_byte(ODD_BITS_BYTE);
-    let x1 = value & T::splat_byte(EVEN_BITS_BYTE);
-    let z0 = !x0 & (x1 >> 1);
-    let z1 = (x0 << 1) & !x1;
+    // 0  1               0  1
+    // 1  1               1  0
+    let x1 = value & T::SPC_MASK;
+    let x0 = value & T::VAL_MASK;
+    let z1 = x1;
+    let z0 = (x1 >> (T::NUM_BITS / 2)) & !x0;
     z1 | z0
 }
 #[inline(always)]
 pub fn fv_bitwise_and<T: BitwisePart>(x: T, y: T) -> T {
-    // &  x  0  1  z
-    // x  x  0  x  x
-    // 0  0  0  0  0
-    // 1  x  0  1  x
-    // z  x  0  x  x
+    // & | x  z  1  0
+    // --+-----------
+    // x | x  x  x  0
+    // z | x  x  x  0
+    // 1 | x  x  1  0
+    // 0 | 0  0  0  0
     //
     // z1z0 = fv.and(x1x0, y1y0)
     //
-    // z0 = x0 x1b + y0 y1b         z1 = x1 y1 x0b y0b
-    //    x  0  1  z                   x  0  1  z
-    // x  0  1  0  0                x  0  0  0  0
-    // 0  1  1  1  1                0  0  0  0  0
-    // 1  0  1  0  0                1  0  0  1  0
-    // z  0  1  0  0                z  0  0  0  0
-    let x0 = x & T::splat_byte(ODD_BITS_BYTE);
-    let x1 = x & T::splat_byte(EVEN_BITS_BYTE);
-    let y0 = y & T::splat_byte(ODD_BITS_BYTE);
-    let y1 = y & T::splat_byte(EVEN_BITS_BYTE);
-    let z0 = (x0 & !(x1 >> 1)) | (y0 & !(y1 >> 1));
-    let z1 = x1 & y1 & !(x0 << 1) & !(y0 << 1);
+    // z0 = x1 x0 y1 y0             z1 = x1 x0b + y1 y0b + x1 y1
+    // &0| x  z  1  0               &1| x  z  1  0
+    // --+-----------               --+-----------
+    // x | 0  0  0  0               x | 0  0  0  1
+    // z | 0  0  0  0               z | 0  0  0  1
+    // 0 | 0  0  1  0               1 | 0  0  1  1
+    // 1 | 0  0  0  0               0 | 1  1  1  1
+    let x1 = x & T::SPC_MASK;
+    let x0 = x & T::VAL_MASK;
+    let y1 = y & T::SPC_MASK;
+    let y0 = y & T::VAL_MASK;
+
+    let x1s = x1 >> (T::NUM_BITS / 2);
+    let y1s = y1 >> (T::NUM_BITS / 2);
+
+    let z0 = x1s & x0 & y1s & y0;
+    let z1 = ((x1s & !x0) | (y1s & !y0) | z0) << (T::NUM_BITS / 2);
     z1 | z0
 }
 #[inline(always)]
 pub fn fv_bitwise_or<T: BitwisePart>(x: T, y: T) -> T {
-    // &  x  0  1  z
-    // x  x  x  1  x
-    // 0  x  0  1  x
-    // 1  1  1  1  1
-    // z  x  x  1  x
+    // | | x  z  1  0
+    // --+-----------
+    // x | x  x  1  x
+    // z | x  x  1  x
+    // 1 | 1  1  1  1
+    // 0 | x  x  1  0
     //
     // z1z0 = fv.or(x1x0, y1y0)
     //
-    // z0 = x1b y1b x0 y0         z1 = x0b x1 + y0b y1
-    //    x  0  1  z                   x  0  1  z
-    // x  0  0  0  0                x  0  0  1  0
-    // 0  0  1  0  0                0  0  0  1  0
-    // 1  0  0  0  0                1  1  1  1  1
-    // z  0  0  0  0                z  0  0  1  0
-    let x0 = x & T::splat_byte(ODD_BITS_BYTE);
-    let x1 = x & T::splat_byte(EVEN_BITS_BYTE);
-    let y0 = y & T::splat_byte(ODD_BITS_BYTE);
-    let y1 = y & T::splat_byte(EVEN_BITS_BYTE);
-    let z0 = !(x1 >> 1) & !(y1 >> 1) & x0 & y0;
-    let z1 = (!(x0 << 1) & x1) | (!(y0 << 1) & y1);
+    // z0 = x1 x0 + y1 y0           z1 = x1 x0 + y1 y0 + x1 y1
+    // |0| x  z  1  0               |1| x  z  1  0
+    // --+-----------               --+-----------
+    // x | 0  0  1  0               x | 0  0  1  0
+    // z | 0  0  1  0               z | 0  0  1  0
+    // 0 | 1  1  1  1               1 | 1  1  1  1
+    // 1 | 0  0  1  0               0 | 0  0  1  1
+    let x1 = x & T::SPC_MASK;
+    let x0 = x & T::VAL_MASK;
+    let y1 = y & T::SPC_MASK;
+    let y0 = y & T::VAL_MASK;
+
+    let x1s = x1 >> (T::NUM_BITS / 2);
+    let y1s = y1 >> (T::NUM_BITS / 2);
+
+    let z0 = (x1s & x0) | (y1s & y0);
+    let z1 = (z0 << (T::NUM_BITS / 2)) | (x1 & y1);
     z1 | z0
 }
 #[inline(always)]
 pub fn fv_bitwise_xor<T: BitwisePart>(x: T, y: T) -> T {
-    // &  x  0  1  z
-    // x  x  x  x  x
-    // 0  x  0  1  x
-    // 1  x  1  0  x
-    // z  x  x  x  x
+    // ^ | x  z  1  0
+    // --+-----------
+    // x | x  x  x  x
+    // z | x  x  x  x
+    // 1 | x  x  0  1
+    // 0 | x  x  1  0
     //
     // z1z0 = fv.xor(x1x0, y1y0)
     //
-    // z0 = x1^x0 & y1^y0 & (x0^y0)b   z1 = x1^x0 & y1^y0 & x0^y0
-    //    x  0  1  z                      x  0  1  z
-    // x  0  0  0  0                   x  0  0  0  0
-    // 0  0  1  0  0                   0  0  0  1  0
-    // 1  0  0  1  0                   1  0  1  0  0
-    // z  0  0  0  0                   z  0  0  0  0
-    //
-    // Components:
-    // x1^x0:              y1^y0:              x0^y0:
-    //    x  0  1  z          x  0  1  z          x  0  1  z
-    // x  0  1  1  0       x  0  0  0  0       x  0  1  0  1
-    // 0  0  1  1  0       0  1  1  1  1       0  1  0  1  0
-    // 1  0  1  1  0       1  1  1  1  1       1  0  1  0  1
-    // z  0  1  1  0       z  0  0  0  0       z  1  0  1  0
-    let x0 = x & T::splat_byte(ODD_BITS_BYTE);
-    let x1 = x & T::splat_byte(EVEN_BITS_BYTE);
-    let y0 = y & T::splat_byte(ODD_BITS_BYTE);
-    let y1 = y & T::splat_byte(EVEN_BITS_BYTE);
+    // z0 = x1 y1 (x0 ^ y0)         z1 = x1 y1
+    // ^0| x  z  1  0               ^1| x  z  1  0
+    // --+-----------               --+-----------
+    // x | 0  0  0  0               x | 0  0  0  0
+    // z | 0  0  0  0               z | 0  0  0  0
+    // 0 | 0  0  0  1               1 | 0  0  1  1
+    // 1 | 0  0  1  0               0 | 0  0  1  1
+    let x1 = x & T::SPC_MASK;
+    let x0 = x & T::VAL_MASK;
+    let y1 = y & T::SPC_MASK;
+    let y0 = y & T::VAL_MASK;
 
-    let t0 = x0 ^ (x1 >> 1);
-    let t1 = y0 ^ (y1 >> 1);
-    let t2 = x0 ^ y0;
+    let x1s = x1 >> (T::NUM_BITS / 2);
+    let y1s = y1 >> (T::NUM_BITS / 2);
 
-    let r = t0 & t1;
-
-    let z0 = r & !t2;
-    let z1 = (r & t2) << 1;
-
+    let z0 = x1s & y1s & (x0 ^ y0);
+    let z1 = x1 & y1;
     z1 | z0
 }
 #[inline(always)]
-pub fn fv_equality<T: BitwisePart>(x: T, y: T) -> FvLogicValue {
-    if has_fv_non_logical(x) | has_fv_non_logical(y) {
+pub fn fv_equality<T: BitwisePart>(x: T, y: T, size: VectorSize) -> FvLogicValue {
+    if has_fv_non_logical(x, size) | has_fv_non_logical(y, size) {
         return FvLogicValue::X;
     }
 
@@ -329,127 +335,67 @@ pub fn fv_equality<T: BitwisePart>(x: T, y: T) -> FvLogicValue {
 }
 #[inline(always)]
 pub fn fv_reduce_and<T: BitwisePart>(x: T, size: VectorSize) -> FvLogicValue {
-    // &  x  0  1  z
-    // x  x  0  x  x
-    // 0  0  0  0  0
-    // 1  x  0  1  x
-    // z  x  0  x  x
-    let zero = T::splat_byte(0);
-    let mask = T::mask(VectorSize::new(size.get() * 2).unwrap());
-    let odd_bits = T::splat_byte(ODD_BITS_BYTE);
-    let even_bits = T::splat_byte(EVEN_BITS_BYTE);
+    // & | x  z  1  0
+    // --+-----------
+    // x | x  x  x  0
+    // z | x  x  x  0
+    // 1 | x  x  1  0
+    // 0 | 0  0  0  0
+    //
+    // z1z0 = fv.redand(sn vn ... s0 v0)
+    //
+    // z1 = (&si) | (s & !v != 0)
+    let mask = T::mask(size);
+    let spc_mask = mask << (T::NUM_BITS / 2);
+    let val_mask = mask;
+    let x1 = x & spc_mask;
+    let x0 = x & val_mask;
 
-    let x0 = x & odd_bits;
-    let x1 = x & even_bits;
+    let x1s = x1 >> (T::NUM_BITS / 2);
 
-    let z0 = (!(x1 >> 1) & x0) != zero;
-    let z1 = (x1 == even_bits & mask) & (x0 == zero);
-
+    let z1 = (x1 == spc_mask) | (x1s & !x0 != T::ZERO);
+    let z0 = (x1 == spc_mask) & (x0 == val_mask);
     FvLogicValue::from_repr((u8::from(z1) << 1) | u8::from(z0))
 }
 #[inline(always)]
 pub fn fv_reduce_or<T: BitwisePart>(x: T, size: VectorSize) -> FvLogicValue {
-    // &  x  0  1  z
-    // x  x  x  1  x
-    // 0  x  0  1  x
-    // 1  1  1  1  1
-    // z  x  x  1  x
-    let zero = T::splat_byte(0);
-    let mask = T::mask(VectorSize::new(size.get() * 2).unwrap());
-    let odd_bits = T::splat_byte(ODD_BITS_BYTE);
-    let even_bits = T::splat_byte(EVEN_BITS_BYTE);
+    // | | x  z  1  0
+    // --+-----------
+    // x | x  x  1  x
+    // z | x  x  1  x
+    // 1 | 1  1  1  1
+    // 0 | x  x  1  0
+    let mask = T::mask(size);
+    let spc_mask = mask << (T::NUM_BITS / 2);
+    let val_mask = mask;
+    let x1 = x & spc_mask;
+    let x0 = x & val_mask;
 
-    let x0 = x & odd_bits;
-    let x1 = x & even_bits;
+    let x1s = x1 >> (T::NUM_BITS / 2);
 
-    let z0 = (x1 == zero) & (x0 == odd_bits & mask);
-    let z1 = x1 & !(x0 << 1) != zero;
-
+    let z1 = (x1 == spc_mask) | ((x1s & x0) != T::ZERO);
+    let z0 = (x1s & x0) != T::ZERO;
     FvLogicValue::from_repr((u8::from(z1) << 1) | u8::from(z0))
 }
 #[inline(always)]
 pub fn fv_reduce_xor<T: BitwisePart>(x: T, size: VectorSize) -> FvLogicValue {
-    // &  x  0  1  z
-    // x  x  x  x  x
-    // 0  x  0  1  x
-    // 1  x  1  0  x
-    // z  x  x  x  x
-    let odd_bits = T::splat_byte(ODD_BITS_BYTE);
-    let even_bits = T::splat_byte(EVEN_BITS_BYTE);
+    // ^ | x  z  1  0
+    // --+-----------
+    // x | x  x  x  x
+    // z | x  x  x  x
+    // 1 | x  x  0  1
+    // 0 | x  x  1  0
+    let mask = T::mask(size);
+    let spc_mask = mask << (T::NUM_BITS / 2);
+    let val_mask = mask;
+    let x1 = x & spc_mask;
+    let x0 = x & val_mask;
 
-    let x0 = x & odd_bits;
-    let x1 = x & even_bits;
+    let x1s = x1 >> (T::NUM_BITS / 2);
 
-    let t0 = !(x1 >> 1) & x0;
-    let t1 = x1 & !(x0 << 1);
-
-    let num_l0 = t0.count_ones();
-    let num_l1 = t1.count_ones();
-
-    let t2 = num_l1 % 2 == 0;
-    let t3 = num_l0 + num_l1 == size.get();
-
-    let z0 = t2 & t3;
-    let z1 = !t2 & t3;
-
+    let z1 = x1 == spc_mask;
+    let z0 = z1 & ((x1s & x0).count_ones() % 2 == 1);
     FvLogicValue::from_repr((u8::from(z1) << 1) | u8::from(z0))
-}
-
-pub fn fv_addition<T: BitwisePart>(x: T, y: T, carry_in: T, size: VectorSize) -> (T, T) {
-    if has_fv_non_logical(x) | has_fv_non_logical(y) | has_fv_non_logical(carry_in) {
-        return (T::splat_byte(0u8), T::splat_byte(0u8));
-    }
-
-    let x = extract_tv_u64(x.as_u64()) as u64;
-    let y = extract_tv_u64(y.as_u64()) as u64;
-    let carry_in = extract_tv_u64(carry_in.as_u64()) as u64;
-
-    let sum = x.wrapping_add(y).wrapping_add(carry_in);
-    let sum = sum & 1u64.unbounded_shl(size.get()).wrapping_sub(1);
-
-    let carry_out = T::from_u64(encode_fv_u64((sum >> 32) as u32));
-    let sum = T::from_u64(encode_fv_u64((sum & 0xFFFF_FFFF) as u32));
-
-    (carry_out, sum)
-}
-
-#[inline(always)]
-fn extract_tv_u64(w: u64) -> u32 {
-    if is_x86_feature_detected!("bmi2") {
-        (unsafe { ::std::arch::x86_64::_pext_u64(w, 0xAAAA_AAAA_AAAA_AAAA) }) as u32
-    } else {
-        !morton1(w)
-    }
-}
-#[inline(always)]
-fn encode_fv_u64(w: u32) -> u64 {
-    if is_x86_feature_detected!("bmi2") {
-        let w = unsafe { ::std::arch::x86_64::_pdep_u64(w as u64, 0xAAAA_AAAA_AAAA_AAAA) };
-        w | (!w >> 1)
-    } else {
-        // Adapted from https://stackoverflow.com/questions/30539347/2d-morton-code-encode-decode-64bits
-        let mut w = w as u64;
-        w = (w | (w << 16)) & 0x0000FFFF0000FFFF;
-        w = (w | (w << 8)) & 0x00FF00FF00FF00FF;
-        w = (w | (w << 4)) & 0x0F0F0F0F0F0F0F0F;
-        w = (w | (w << 2)) & 0x3333333333333333;
-        w = (w | (w << 1)) & 0x5555555555555555;
-        w |= !w << 1;
-        !w
-    }
-}
-
-// Adapted from https://stackoverflow.com/questions/30539347/2d-morton-code-encode-decode-64bits
-// Extracts the odd bits
-#[inline(always)]
-fn morton1(w: u64) -> u32 {
-    let w = w & 0x5555_5555_5555_5555;
-    let w = (w | (w >> 1)) & 0x3333_3333_3333_3333;
-    let w = (w | (w >> 2)) & 0x0F0F_0F0F_0F0F_0F0F;
-    let w = (w | (w >> 4)) & 0x00FF_00FF_00FF_00FF;
-    let w = (w | (w >> 8)) & 0x0000_FFFF_0000_FFFF;
-    let w = (w | (w >> 16)) & 0x0000_0000_FFFF_FFFF;
-    w as u32
 }
 
 #[cfg(test)]
@@ -462,40 +408,40 @@ mod tests {
 
     #[rustfmt::skip]
     const FV_BITWISE_AND_LUT: [L; 16] = [
-        // x       0     1      z      &
-        L::X,  L::L0, L::X,  L::X,  // x
+        // x      z       0     1      &
+        L::X,  L::X,  L::L0, L::X,  // x
+        L::X,  L::X,  L::L0, L::X,  // z
         L::L0, L::L0, L::L0, L::L0, // 0
-        L::X,  L::L0, L::L1, L::X,  // 1
-        L::X,  L::L0, L::X,  L::X,  // z
+        L::X,  L::X,  L::L0, L::L1, // 1
     ];
     #[rustfmt::skip]
     const FV_BITWISE_OR_LUT: [L; 16] = [
-        // x       0     1      z      &
-        L::X,  L::X,  L::L1, L::X,  // x
-        L::X,  L::L0, L::L1, L::X,  // 0
+        // x      z       0     1      &
+        L::X,  L::X,  L::X,  L::L1, // x
+        L::X,  L::X,  L::X,  L::L1, // z
+        L::X,  L::X,  L::L0, L::L1, // 0
         L::L1, L::L1, L::L1, L::L1, // 1
-        L::X,  L::X,  L::L1, L::X,  // z
     ];
     #[rustfmt::skip]
     const FV_BITWISE_XOR_LUT: [L; 16] = [
-        // x       0     1      z      &
-        L::X,  L::X,  L::X,  L::X,  // x
-        L::X,  L::L0, L::L1, L::X,  // 0
-        L::X,  L::L1, L::L0, L::X,  // 1
-        L::X,  L::X,  L::X,  L::X,  // z
+        // x      z       0     1       &
+        L::X,  L::X,  L::X,  L::X,   // x
+        L::X,  L::X,  L::X,  L::X,   // z
+        L::X,  L::X,  L::L0, L::L1,  // 0
+        L::X,  L::X,  L::L1, L::L0,  // 1
     ];
     #[rustfmt::skip]
     const FV_BITWISE_INV_LUT: [L; 4] = [
-        // x       0      1      z
-        L::X,  L::L1, L::L0,  L::X,
+        // x      z       0       1 
+        L::X,  L::X,  L::L1,  L::L0,
     ];
     #[rustfmt::skip]
     const FV_EQUALITY_LUT: [L; 16] = [
-        // x       0     1      z      &
+        // x      z       0     1      &
         L::X,  L::X,  L::X,  L::X,  // x
-        L::X,  L::L1, L::L0, L::X,  // 0
-        L::X,  L::L0, L::L1, L::X,  // 1
         L::X,  L::X,  L::X,  L::X,  // z
+        L::X,  L::X,  L::L1, L::L0, // 0
+        L::X,  L::X,  L::L0, L::L1, // 1
     ];
 
     #[test]
@@ -506,7 +452,12 @@ mod tests {
                 let z_or = fv_bitwise_or(x, y);
                 let z_xor = fv_bitwise_xor(x, y);
 
-                let concat = ((x as u8) << 2) | (y as u8);
+                let x_u8 = x as u8;
+                let y_u8 = y as u8;
+                let concat = ((x_u8 & 0b10) << 4)
+                    | ((y_u8 & 0b10) << 3)
+                    | ((x_u8 & 0b01) << 1)
+                    | (y_u8 & 0b01);
                 let size = VectorSize::new(2).unwrap();
                 let z_redand = fv_reduce_and(concat, size);
                 let z_redor = fv_reduce_or(concat, size);
@@ -536,7 +487,7 @@ mod tests {
     fn test_fv_equality() {
         for &y in L::VALUES {
             for &x in L::VALUES {
-                let z = fv_equality(x, y);
+                let z = fv_equality(x, y, VectorSize::new(1).unwrap());
 
                 let idx = (((y as u8) << 2) | (x as u8)) as usize;
                 assert_eq!(z, FV_EQUALITY_LUT[idx], "{z:?} != ({x:?} == {y:?})");
@@ -553,10 +504,11 @@ mod tests {
     }
     #[test]
     fn test_fv_has_non_logical() {
-        assert!(has_fv_non_logical(L::X));
-        assert!(!has_fv_non_logical(L::L0));
-        assert!(!has_fv_non_logical(L::L1));
-        assert!(has_fv_non_logical(L::Z));
+        const S: VectorSize = VectorSize::new(1).unwrap();
+        assert!(has_fv_non_logical(L::X, S));
+        assert!(has_fv_non_logical(L::Z, S));
+        assert!(!has_fv_non_logical(L::L0, S));
+        assert!(!has_fv_non_logical(L::L1, S));
     }
 
     pub fn u8_slice_to_u64_vec(s: &[u8]) -> Vec<u64> {
