@@ -1,8 +1,12 @@
 use crate::VectorSize;
+use crate::load::load_partial_u64;
+use crate::store::store_partial_u64;
 
 mod add_sub;
 mod division;
 mod multiplication;
+
+const SIZE32: VectorSize = VectorSize::new(32).unwrap();
 
 pub use add_sub::{tv_addition, tv_ltu64_addition, tv_ltu64_subtraction, tv_subtraction};
 pub use division::{tv_division, tv_ltu64_division, tv_ltu64_modulus};
@@ -398,6 +402,57 @@ pub fn fv_reduce_xor<T: BitwisePart>(x: T, size: VectorSize) -> FvLogicValue {
     FvLogicValue::from_repr((u8::from(z1) << 1) | u8::from(z0))
 }
 
+pub fn fv_contains_special(src: &[u64], size: VectorSize) -> bool {
+    assert!(src.len() > 0 && size.get().div_ceil(64) as usize == src.len());
+    for v in 0..src.len() - 1 {
+        if has_fv_non_logical(src[v], SIZE32) {
+            return true;
+        }
+    }
+
+    let rem_size = VectorSize::new(size.get() % 32).unwrap_or(SIZE32);
+    has_fv_non_logical(fv_fixup_last_u64(src[src.len() - 1], rem_size), rem_size)
+}
+
+#[inline(always)]
+pub fn fv_fixup_last_u64(v: u64, size: VectorSize) -> u64 {
+    debug_assert!(size.get() <= 32);
+    let mask = (1u64 << size.get()) - 1;
+    ((v & !mask) << (size.get() - 32)) | (v & mask)
+}
+
+pub fn fv_ltu32_arith_op(
+    dst: &mut [u8],
+    lhs: &[u8],
+    rhs: &[u8],
+    size: VectorSize,
+    op: impl Fn(u64, u64) -> Option<u64>,
+) {
+    debug_assert!(
+        dst.len() > 0
+            && dst.len() == lhs.len()
+            && dst.len() == rhs.len()
+            && size.get() <= 32
+            && size.get().div_ceil(4) as usize == dst.len()
+    );
+    let dsize = VectorSize::new(size.get() * 2).unwrap();
+    let mask = (1u64 << size.get()) - 1;
+    let l = load_partial_u64(&lhs, dsize);
+    let r = load_partial_u64(&rhs, dsize);
+
+    // If has special values, return X.
+    if l >> size.get() != mask || r >> size.get() != mask {
+        dst.fill(0);
+        return;
+    }
+
+    let out = match op(l, r) {
+        None => 0u64,
+        Some(out) => (mask << size.get()) | (out & mask),
+    };
+    store_partial_u64(dst, out, dsize);
+}
+
 #[cfg(test)]
 mod tests {
     use crate::proptest::any_reasonable_size;
@@ -523,6 +578,16 @@ mod tests {
             .collect()
     }
 
+    pub fn u64_to_fvu64x2(v: u64, size: VectorSize) -> [u64; 2] {
+        let bmask = 1u64.unbounded_shl(size.get()).wrapping_sub(1);
+        let tmask = 1u64
+            .unbounded_shl(size.get().saturating_sub(32))
+            .wrapping_sub(1);
+        [
+            (bmask << size.get().min(32)) | (v & 0xFFFF_FFFF_FFFF_FFFF),
+            (tmask << size.get().saturating_sub(32).min(32)) | (v >> 32) as u64,
+        ]
+    }
     pub fn u128_to_u64x2(v: u128) -> [u64; 2] {
         [v as u64, (v >> 64) as u64]
     }
@@ -531,6 +596,16 @@ mod tests {
     }
     pub fn u64x2_to_slice_mut(v: &mut [u64; 2], size: VectorSize) -> &mut [u64] {
         if size.get() > 64 {
+            &mut v[..]
+        } else {
+            &mut v[..1]
+        }
+    }
+    pub fn fvu64x2_to_slice(v: &[u64; 2], size: VectorSize) -> &[u64] {
+        if size.get() > 32 { &v[..] } else { &v[..1] }
+    }
+    pub fn fvu64x2_to_slice_mut(v: &mut [u64; 2], size: VectorSize) -> &mut [u64] {
+        if size.get() > 32 {
             &mut v[..]
         } else {
             &mut v[..1]
@@ -547,6 +622,19 @@ mod tests {
                 rhs in 0..=(1u128.unbounded_shl(size.get())).wrapping_sub(1)
             )
                 -> (VectorSize, u128, u128) {
+                (size, lhs, rhs)
+        }
+    }
+    proptest::prop_compose! {
+        pub fn u64_arith_target
+            ()
+            (size in any_reasonable_size(1..=64))
+            (
+                size in Just(size),
+                lhs in 0..=(1u64.unbounded_shl(size.get())).wrapping_sub(1),
+                rhs in 0..=(1u64.unbounded_shl(size.get())).wrapping_sub(1)
+            )
+                -> (VectorSize, u64, u64) {
                 (size, lhs, rhs)
         }
     }

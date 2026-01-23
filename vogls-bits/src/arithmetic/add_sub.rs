@@ -1,6 +1,9 @@
 use crate::VectorSize;
+use crate::arithmetic::fv_contains_special;
 use crate::load::load_partial_u64;
 use crate::store::store_partial_u64;
+
+use super::fv_ltu32_arith_op;
 
 pub fn tv_ltu64_addition(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: VectorSize) {
     assert!(size.get() <= 64);
@@ -15,6 +18,12 @@ pub fn tv_ltu64_subtraction(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: Vector
     let r = load_partial_u64(&rhs, size);
     let out = l.wrapping_sub(r);
     store_partial_u64(dst, out, size);
+}
+pub fn fv_ltu32_addition(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: VectorSize) {
+    fv_ltu32_arith_op(dst, lhs, rhs, size, |l, r| Some(l.wrapping_add(r)));
+}
+pub fn fv_ltu32_subtraction(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: VectorSize) {
+    fv_ltu32_arith_op(dst, lhs, rhs, size, |l, r| Some(l.wrapping_sub(r)));
 }
 
 pub fn tv_addition_subtraction(
@@ -31,6 +40,17 @@ pub fn tv_addition_subtraction(
             && size.get().div_ceil(64) as usize == dst.len()
     );
 
+    if dst.len() == 1 {
+        let (lhs, rhs) = (lhs[0], rhs[0]);
+        if subtract {
+            dst[0] = lhs.wrapping_sub(rhs);
+        } else {
+            dst[0] = lhs.wrapping_add(rhs);
+        }
+        dst[0] &= 1u64.unbounded_shl(size.get()).wrapping_sub(1);
+        return;
+    }
+
     let mut carry_in = subtract;
     let mask = if subtract { !0u64 } else { 0u64 };
     for i in 0..dst.len() {
@@ -39,6 +59,48 @@ pub fn tv_addition_subtraction(
     if size.get() % 64 != 0 {
         *dst.last_mut().unwrap() &= (1u64 << (size.get() % 64)).wrapping_sub(1);
     }
+}
+pub fn fv_addition_subtraction(
+    dst: &mut [u64],
+    lhs: &[u64],
+    rhs: &[u64],
+    size: VectorSize,
+    subtract: bool,
+) {
+    assert!(
+        dst.len() > 0
+            && dst.len() == lhs.len()
+            && dst.len() == rhs.len()
+            && size.get().div_ceil(32) as usize == dst.len()
+    );
+
+    if fv_contains_special(lhs, size) || fv_contains_special(rhs, size) {
+        dst.fill(0);
+        return;
+    }
+
+    let num_words = dst.len();
+    let mut carry_in = subtract;
+    if num_words > 1 {
+        let dst = bytemuck::cast_slice_mut::<u64, u32>(dst);
+        let lhs = bytemuck::cast_slice::<u64, u32>(lhs);
+        let rhs = bytemuck::cast_slice::<u64, u32>(rhs);
+
+        let mask = if subtract { !0u32 } else { 0u32 };
+        for i in 0..num_words - 1 {
+            (dst[2 * i], carry_in) = lhs[2 * i].carrying_add(rhs[2 * i] ^ mask, carry_in);
+            dst[2 * i + 1] = u32::MAX;
+        }
+    }
+
+    // The last word needs to be handled differently because the special and value bits are not
+    // layed out as 32-bits followed by 32-bits.
+    let end_mask = (1u64 << (size.get() % 32)) - 1;
+    let sub_mask = (u64::from(subtract) << (size.get() % 32)) - 1;
+    let i = num_words - 1;
+    (dst[i], _) = (lhs[i] & end_mask).carrying_add((rhs[i] & end_mask) ^ sub_mask, carry_in);
+    dst[i] &= end_mask;
+    dst[i] |= end_mask << (size.get() % 32);
 }
 pub fn tv_addition(dst: &mut [u64], lhs: &[u64], rhs: &[u64], size: VectorSize) {
     tv_addition_subtraction(dst, lhs, rhs, size, false)

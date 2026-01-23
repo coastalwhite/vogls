@@ -2,6 +2,8 @@ use crate::VectorSize;
 use crate::load::load_partial_u64;
 use crate::store::store_partial_u64;
 
+use super::fv_ltu32_arith_op;
+
 pub fn tv_ltu64_multiplication(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: VectorSize) {
     assert!(size.get() <= 64);
     let l = load_partial_u64(&lhs, size);
@@ -9,10 +11,14 @@ pub fn tv_ltu64_multiplication(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: Vec
     let out = l.wrapping_mul(r);
     store_partial_u64(dst, out, size);
 }
+pub fn fv_ltu32_multiplication(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: VectorSize) {
+    fv_ltu32_arith_op(dst, lhs, rhs, size, |l, r| Some(l.wrapping_mul(r)));
+}
 
 /// Two-value logic arbitrary precision multiplication.
 pub fn tv_multiplication(dst: &mut [u64], lhs: &[u64], rhs: &[u64], size: VectorSize) {
     assert!(dst.len() > 0 && dst.len() == lhs.len() && dst.len() == rhs.len());
+    dst.fill(0);
 
     // @Performance. This can probably be written in a better way.
     for j in 0..lhs.len() {
@@ -41,13 +47,70 @@ pub fn tv_multiplication(dst: &mut [u64], lhs: &[u64], rhs: &[u64], size: Vector
         *dst.last_mut().unwrap() &= (1u64 << (size.get() % 64)).wrapping_sub(1);
     }
 }
+/// Four-value logic arbitrary precision multiplication.
+pub fn fv_multiplication(dst: &mut [u64], lhs: &[u64], rhs: &[u64], size: VectorSize) {
+    assert!(
+        dst.len() > 0
+            && dst.len() == lhs.len()
+            && dst.len() == rhs.len()
+            && dst.len() == size.get().div_ceil(32) as usize
+    );
+    dst.fill(0);
+
+    let num_words = dst.len();
+
+    {
+        let dst = bytemuck::cast_slice_mut::<u64, u32>(dst);
+        let lhs = bytemuck::cast_slice::<u64, u32>(lhs);
+        let rhs = bytemuck::cast_slice::<u64, u32>(rhs);
+
+        // @Performance. This can probably be written in a better way.
+        for j in 0..num_words {
+            let lhs_mask = 1u32
+                .unbounded_shl(size.get() - 32 * j as u32)
+                .wrapping_sub(1);
+            dst[2 * j + 1] = u32::MAX;
+            for k in 0..num_words - j {
+                let rhs_mask = 1u32
+                    .unbounded_shl(size.get() - 32 * k as u32)
+                    .wrapping_sub(1);
+                let x = (lhs[2 * j] & lhs_mask) as u64;
+                let y = (rhs[2 * k] & rhs_mask) as u64;
+
+                let result = x.wrapping_mul(y);
+
+                let hi = (result >> 32) as u32;
+                let lo = (result & 0xFFFF_FFFF) as u32;
+
+                let mut carry_in;
+                (dst[2 * (j + k)], carry_in) = dst[2 * (j + k)].carrying_add(lo, false);
+                if j + k + 1 < num_words {
+                    (dst[2 * (j + k + 1)], carry_in) =
+                        hi.carrying_add(dst[2 * (j + k + 1)], carry_in);
+                    let mut i = 2;
+                    while carry_in && i + j + k < num_words {
+                        (dst[2 * (i + j + k)], carry_in) =
+                            dst[2 * (i + j + k)].carrying_add(0, carry_in);
+                        i += 1;
+                    }
+                }
+            }
+        }
+    }
+    if size.get() % 32 != 0 {
+        let mask = (1u64 << (size.get() % 32)).wrapping_sub(1);
+        *dst.last_mut().unwrap() &= mask;
+        *dst.last_mut().unwrap() |= mask << (size.get() % 32);
+    }
+}
 
 #[cfg(test)]
 mod tests {
-    use super::tv_multiplication;
+    use super::{fv_multiplication, tv_multiplication};
     use crate::VectorSize;
     use crate::arithmetic::tests::{
-        u64x2_to_slice, u64x2_to_slice_mut, u128_arith_target, u128_to_u64x2,
+        fvu64x2_to_slice, fvu64x2_to_slice_mut, u64_arith_target, u64_to_fvu64x2, u64x2_to_slice,
+        u64x2_to_slice_mut, u128_arith_target, u128_to_u64x2,
     };
     use proptest::proptest;
 
@@ -64,6 +127,25 @@ mod tests {
                 u64x2_to_slice_mut(&mut given, size),
                 u64x2_to_slice(&u128_to_u64x2(lhs), size),
                 u64x2_to_slice(&u128_to_u64x2(rhs), size),
+                size
+            );
+
+            proptest::prop_assert_eq!(given, expected);
+        }
+    }
+    proptest! {
+        #[test]
+        fn proptest_fv_multiplication
+            ((size, lhs, rhs) in u64_arith_target())
+        {
+            let mask = (1u64.unbounded_shl(size.get())).wrapping_sub(1);
+            let expected = u64_to_fvu64x2(lhs.wrapping_mul(rhs) & mask, size);
+            let mut given = [0u64; 2];
+
+            fv_multiplication(
+                fvu64x2_to_slice_mut(&mut given, size),
+                fvu64x2_to_slice(&u64_to_fvu64x2(lhs, size), size),
+                fvu64x2_to_slice(&u64_to_fvu64x2(rhs, size), size),
                 size
             );
 
@@ -302,5 +384,25 @@ mod tests {
                 0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8, 0x00u8
             ]
         );
+    }
+
+    #[test]
+    fn test_fv_multiplication_vectors() {
+        macro_rules! assert_test_vector {
+            ($size:literal, $a:expr, $b:expr, $z:expr) => {
+                let mut dst = [0u64; $size.div_ceil(32) as usize];
+                fv_multiplication(&mut dst, $a, $b, VectorSize::new($size).unwrap());
+                assert_eq!(dst.as_slice(), $z, "u64");
+            };
+        }
+
+        
+        assert_test_vector!(1u32, &[2u64], &[2u64], &[2u64]); // 1'b0 x 1'b0 = 1'b0
+        assert_test_vector!(1u32, &[2u64], &[3u64], &[2u64]); // 1'b0 x 1'b1 = 1'b0
+        assert_test_vector!(1u32, &[3u64], &[3u64], &[3u64]); // 1'b1 x 1'b1 = 1'b1
+        assert_test_vector!(1u32, &[3u64], &[2u64], &[2u64]); // 1'b1 x 1'b0 = 1'b0
+        assert_test_vector!(2u32, &[0xCu64], &[0xCu64], &[0xCu64]); // 2'b0 x 2'b0 = 2'b0
+        assert_test_vector!(2u32, &[0xFu64], &[0xFu64], &[0xDu64]); // 2'b3 x 2'b3 = 2'b1
+        assert_test_vector!(2u32, &[0xFu64], &[0xEu64], &[0xEu64]); // 2'b3 x 2'b2 = 2'b2
     }
 }
