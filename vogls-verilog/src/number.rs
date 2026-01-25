@@ -1,6 +1,6 @@
 use std::num::NonZeroU32;
 
-use vogls_ir::{Bits, VectorSize};
+use vogls_ir::{Bits, Mode, VectorSize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
@@ -120,55 +120,100 @@ pub fn parse_decimal_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, ()>
     }
 }
 
-pub fn take_binary_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, ()> {
+pub fn take_bits<const NBITS_PER_VALUE: usize>(
+    s: &str,
+    size: Option<VectorSize>,
+    to_value: impl Fn(u8) -> u8,
+) -> Result<Bits, ()> {
     let size = match size {
         None => {
             let mut count = 0u32;
             for b in s.bytes() {
                 count += u32::from(b != b'_');
             }
-            VectorSize::new(count).ok_or(())?
+            VectorSize::new(count * (NBITS_PER_VALUE as u32)).ok_or(())?
         }
         Some(s) => s,
     };
+    let contains_special = s
+        .as_bytes()
+        .iter()
+        .find(|b| matches!(b, b'x' | b'X' | b'z' | b'Z'))
+        .is_some();
 
-    if size.get() <= 64 {
+    if !contains_special && size.get() <= 64 {
         let mut value = 0u64;
         for b in s.bytes() {
             if b == b'_' {
                 continue;
             }
-
-            let v = match b {
-                b'x' | b'X' => 0,
-                b'z' | b'Z' => 0,
-                _ => b - b'0',
-            };
-
-            value <<= 1;
+            let v = to_value(b);
+            value <<= NBITS_PER_VALUE;
             value |= u64::from(v);
         }
         Ok(Bits::from_u64(size, value))
-    } else {
-        let mut out = Bits::new_zeroed(size);
-        let value = out.as_mut_slice();
+    } else if contains_special && size.get() <= 32 {
+        let mut res_spc = 0u32;
+        let mut res_val = 0u32;
+        for b in s.bytes() {
+            if b == b'_' {
+                continue;
+            }
+            let (spc, val) = match b {
+                b'x' | b'X' => (0u8, 0u8),
+                b'z' | b'Z' => (0u8, (1u8 << NBITS_PER_VALUE) - 1),
+                _ => (1u8, to_value(b)),
+            };
+            res_spc <<= NBITS_PER_VALUE;
+            res_val <<= NBITS_PER_VALUE;
+            res_spc |= u32::from(spc);
+            res_val |= u32::from(val);
+        }
+        Ok(Bits::from_four_value_u64(size, res_spc, res_val))
+    } else if !contains_special {
+        let nwords = size.get().div_ceil(64) as usize;
+        let mut value = vec![0u64; nwords];
         let mut i = 0;
-        for b in s.bytes().rev() {
+        while i < s.len() {
+            let b = s.as_bytes()[s.len() - i - 1];
             if b == b'_' {
                 continue;
             }
 
-            let v = match b {
-                b'x' | b'X' => 0,
-                b'z' | b'Z' => 0,
-                _ => b - b'0',
-            };
-
-            value[i / 8] |= v << (i % 8);
+            let v = to_value(b);
+            value[i / (64 / NBITS_PER_VALUE)] |=
+                (v as u64) << (i % (64 / NBITS_PER_VALUE)) * NBITS_PER_VALUE;
             i += 1;
         }
-        Ok(out)
+        Ok(Bits::from_boxed_slice(Mode::TwoValue, size, value.into()))
+    } else {
+        let nwords = size.get().div_ceil(64) as usize;
+        let mut value = vec![0u64; 2 * nwords];
+        let mut i = 0;
+        while i < s.len() {
+            let b = s.as_bytes()[s.len() - i - 1];
+            if b == b'_' {
+                continue;
+            }
+
+            let (spc, val) = match b {
+                b'x' | b'X' => (0, 0),
+                b'z' | b'Z' => (0, (1u8 << NBITS_PER_VALUE) - 1),
+                _ => (1, to_value(b)),
+            };
+
+            value[i / (64 / NBITS_PER_VALUE)] |=
+                (spc as u64) << (i % (64 / NBITS_PER_VALUE)) * NBITS_PER_VALUE;
+            value[nwords + i / (64 / NBITS_PER_VALUE)] |=
+                (val as u64) << (i % (64 / NBITS_PER_VALUE)) * NBITS_PER_VALUE;
+            i += 1;
+        }
+        Ok(Bits::from_boxed_slice(Mode::FourValue, size, value.into()))
     }
+}
+
+pub fn take_binary_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, ()> {
+    take_bits::<1>(s, size, |b| b - b'0')
 }
 
 pub fn take_octal_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, ()> {
@@ -183,6 +228,14 @@ pub fn take_octal_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, ()> {
         }
         Some(s) => s,
     };
+    let contains_special = s
+        .as_bytes()
+        .iter()
+        .find(|b| matches!(b, b'x' | b'X' | b'z' | b'Z'))
+        .is_some();
+    if contains_special {
+        todo!()
+    }
 
     if size.get() <= 64 {
         let mut value = 0u64;
@@ -202,82 +255,14 @@ pub fn take_octal_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, ()> {
         }
         Ok(Bits::from_u64(size, value))
     } else {
-        let mut out = Bits::new_zeroed(size);
-        let value = out.as_mut_slice();
-        let mut i = 0u32;
-        for b in s.bytes().rev() {
-            if b == b'_' {
-                continue;
-            }
-
-            let v = match b {
-                b'x' => 0,
-                b'z' => 0,
-                _ => b - b'0',
-            };
-
-            value[i as usize / 8] |= v << (i % 8);
-            if i % 8 >= 6 && 8 - i % 8 < size.get() - i {
-                value[(i as usize / 8) + 1] |= v >> (8 - i % 8);
-            }
-            i += 3;
-        }
-        Ok(out)
+        todo!()
     }
 }
 
 pub fn take_hexadecimal_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, ()> {
-    let size = match size {
-        None => {
-            let mut count = 0u32;
-            for b in s.bytes() {
-                count += u32::from(b != b'_');
-            }
-            let count = count.checked_mul(4).unwrap();
-            VectorSize::new(count).ok_or(())?
-        }
-        Some(s) => s,
-    };
-
-    if size.get() <= 64 {
-        let mut value = 0u64;
-        for b in s.bytes() {
-            if b == b'_' {
-                continue;
-            }
-
-            let v = match b {
-                b'a'..=b'f' => b - b'a' + 10,
-                b'A'..=b'F' => b - b'A' + 10,
-                b'0'..=b'9' => b - b'0',
-                b'x' | b'X' => 0,
-                b'z' | b'Z' => 0,
-                _ => unreachable!(),
-            };
-
-            value <<= 4;
-            value |= u64::from(v);
-        }
-        Ok(Bits::from_u64(size, value))
-    } else {
-        let mut out = Bits::new_zeroed(size);
-        let value = out.as_mut_slice();
-        let mut i = 0;
-        for b in s.bytes().rev() {
-            if b == b'_' {
-                continue;
-            }
-
-            let v = match b {
-                b'a'..=b'f' => b - b'a' + 10,
-                b'A'..=b'F' => b - b'A' + 10,
-                b'0'..=b'9' => b - b'0',
-                _ => unreachable!(),
-            };
-
-            value[i / 2] |= v << 4 * (i % 2);
-            i += 1;
-        }
-        Ok(out)
-    }
+    take_bits::<4>(s, size, |b| match b {
+        b'a'..=b'f' => b - b'a' + 10,
+        b'A'..=b'F' => b - b'A' + 10,
+        _ => b - b'0',
+    })
 }

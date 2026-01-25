@@ -139,7 +139,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             trace: false,
             time: test_information.time,
             opt_rounds: 0,
-            logic_mode: LogicMode::FourValue,
+            logic_mode: LogicMode::TwoValue,
         };
         let result = vogls::run(&path, None, &mut ctx);
 

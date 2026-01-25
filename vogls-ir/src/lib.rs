@@ -8,7 +8,7 @@ pub mod vcd;
 
 use std::collections::HashSet;
 use std::num::NonZeroU32;
-pub use vogls_bits::{Bits, VectorSize};
+pub use vogls_bits::{Bits, VectorSize, Mode};
 
 pub use builder::{BasicBlockBuilder, BranchRef, PhiRef, new_anonymous_builder, new_process};
 pub use format::{ContextFormat, DisplayContext};
@@ -426,8 +426,8 @@ impl BinaryOp {
             O::Add => Bits::add(lhs, rhs),
             O::Sub => Bits::subtract(lhs, rhs),
             O::Multiply => Bits::multiply(lhs, rhs),
-            O::Divide => Bits::divide(lhs, rhs),
-            O::Modulus => Bits::modulus(lhs, rhs),
+            O::Divide => Bits::divide(lhs, rhs).0,
+            O::Modulus => Bits::divide(lhs, rhs).1,
 
             O::UnsignedLessEqual => Bits::from(Bits::is_unsigned_leq(lhs, rhs)),
             O::SelectBit => Bits::from(lhs.select_bit(rhs.extract_exact_u32())),
