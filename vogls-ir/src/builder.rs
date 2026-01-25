@@ -3,8 +3,8 @@ use indexmap::IndexSet;
 use crate::token_range::TokenRange;
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryOp, Bits, GlobalContext, INTEGER_VSIZE,
-    Instruction, IntrinsicOp, Process, ProcessKey, ResizeOp, SCALAR_VSIZE, SignalKey, TIME_VSIZE,
-    Time, UnaryOp, Variable, VariableKey, VectorSize,
+    Instruction, IntrinsicOp, LogicMode, Process, ProcessKey, ResizeOp, SCALAR_VSIZE, SignalKey,
+    TIME_VSIZE, Time, UnaryOp, Variable, VariableKey, VectorSize,
 };
 
 #[must_use]
@@ -172,15 +172,14 @@ impl BasicBlockBuilder {
             gl,
             VectorSize::new(lhs_size.get() + rhs_size.get()).unwrap(),
         );
-        self.instrs
-            .push(Instruction::Binary(dst, BinaryOp::Concat, lhs, rhs));
+        self.bin_op(gl, lhs, rhs, BinaryOp::Concat, dst);
         dst
     }
 
     pub fn binary_neg(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
         let size = gl.vars[src].size;
         let dst = self.next_tmp_var(gl, size);
-        self.instrs.push(Instruction::Unary(dst, UnaryOp::Neg, src));
+        self.unary_op(gl, src, UnaryOp::Neg, dst);
         dst
     }
 
@@ -191,8 +190,52 @@ impl BasicBlockBuilder {
             _ => self.reduce_or(gl, src),
         };
         let dst = self.next_tmp_var(gl, VectorSize::new(1).unwrap());
-        self.instrs.push(Instruction::Unary(dst, UnaryOp::Neg, src));
+        self.unary_op(gl, src, UnaryOp::Neg, dst);
         dst
+    }
+
+    pub fn unary_op(
+        &mut self,
+        gl: &mut GlobalContext,
+        src: VariableKey,
+        op: UnaryOp,
+        dst: VariableKey,
+    ) {
+        let i = if gl.logic_mode == LogicMode::TwoValue {
+            Instruction::TvUnary(dst, op, src)
+        } else {
+            Instruction::FvUnary(dst, op, src)
+        };
+        self.instrs.push(i);
+    }
+    pub fn resize_op(
+        &mut self,
+        gl: &mut GlobalContext,
+        dst: VariableKey,
+        op: ResizeOp,
+        src: VariableKey,
+    ) {
+        let i = if gl.logic_mode == LogicMode::TwoValue {
+            Instruction::TvResize(dst, op, src)
+        } else {
+            Instruction::FvResize(dst, op, src)
+        };
+        self.instrs.push(i);
+    }
+    pub fn bin_op(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+        op: BinaryOp,
+        dst: VariableKey,
+    ) {
+        let i = if gl.logic_mode == LogicMode::TwoValue {
+            Instruction::TvBinary(dst, op, lhs, rhs)
+        } else {
+            Instruction::FvBinary(dst, op, lhs, rhs)
+        };
+        self.instrs.push(i);
     }
 
     pub fn bin_arithmetic(
@@ -205,7 +248,7 @@ impl BasicBlockBuilder {
         let size = gl.vars[lhs].size;
         assert_eq!(size, gl.vars[rhs].size);
         let dst = self.next_tmp_var(gl, size);
-        self.instrs.push(Instruction::Binary(dst, op, lhs, rhs));
+        self.bin_op(gl, lhs, rhs, op, dst);
         dst
     }
 
@@ -215,7 +258,7 @@ impl BasicBlockBuilder {
         lhs: VariableKey,
         rhs: VariableKey,
     ) -> VariableKey {
-        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::TvAnd)
+        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::And)
     }
     pub fn or(
         &mut self,
@@ -223,7 +266,7 @@ impl BasicBlockBuilder {
         lhs: VariableKey,
         rhs: VariableKey,
     ) -> VariableKey {
-        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::TvOr)
+        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::Or)
     }
     pub fn xor(
         &mut self,
@@ -231,7 +274,7 @@ impl BasicBlockBuilder {
         lhs: VariableKey,
         rhs: VariableKey,
     ) -> VariableKey {
-        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::TvXor)
+        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::Xor)
     }
     pub fn xnor(
         &mut self,
@@ -250,7 +293,7 @@ impl BasicBlockBuilder {
         lhs: VariableKey,
         rhs: VariableKey,
     ) -> VariableKey {
-        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::TvMultiply)
+        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::Multiply)
     }
     pub fn plus(
         &mut self,
@@ -258,7 +301,7 @@ impl BasicBlockBuilder {
         lhs: VariableKey,
         rhs: VariableKey,
     ) -> VariableKey {
-        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::TvAdd)
+        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::Add)
     }
     pub fn minus(
         &mut self,
@@ -266,7 +309,7 @@ impl BasicBlockBuilder {
         lhs: VariableKey,
         rhs: VariableKey,
     ) -> VariableKey {
-        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::TvSub)
+        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::Sub)
     }
     pub fn divide(
         &mut self,
@@ -274,7 +317,7 @@ impl BasicBlockBuilder {
         lhs: VariableKey,
         rhs: VariableKey,
     ) -> VariableKey {
-        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::TvDivide)
+        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::Divide)
     }
     pub fn modulus(
         &mut self,
@@ -282,7 +325,7 @@ impl BasicBlockBuilder {
         lhs: VariableKey,
         rhs: VariableKey,
     ) -> VariableKey {
-        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::TvModulus)
+        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::Modulus)
     }
     pub fn multiply_constant(
         &mut self,
@@ -315,8 +358,7 @@ impl BasicBlockBuilder {
     ) -> VariableKey {
         let dst = self.next_tmp_var(gl, SCALAR_VSIZE);
         assert_eq!(gl.vars[idx].size, INTEGER_VSIZE);
-        self.instrs
-            .push(Instruction::Binary(dst, BinaryOp::SelectBit, src, idx));
+        self.bin_op(gl, src, idx, BinaryOp::SelectBit, dst);
         dst
     }
     pub fn slice(
@@ -331,8 +373,7 @@ impl BasicBlockBuilder {
         }
 
         let dst = self.next_tmp_var(gl, width);
-        self.instrs
-            .push(Instruction::Resize(dst, ResizeOp::Truncate, src));
+        self.resize_op(gl, dst, ResizeOp::Truncate, src);
         dst
     }
     pub fn extract_constant(
@@ -391,14 +432,8 @@ impl BasicBlockBuilder {
         rhs: VariableKey,
     ) -> VariableKey {
         assert_eq!(gl.vars[lhs].size, gl.vars[rhs].size);
-
         let dst = self.next_tmp_var(gl, SCALAR_VSIZE);
-        self.instrs.push(Instruction::Binary(
-            dst,
-            BinaryOp::UnsignedLessEqual,
-            lhs,
-            rhs,
-        ));
+        self.bin_op(gl, lhs, rhs, BinaryOp::UnsignedLessEqual, dst);
         dst
     }
     pub fn unsigned_ge(
@@ -460,8 +495,7 @@ impl BasicBlockBuilder {
         }
 
         let dst = self.next_tmp_var(gl, SCALAR_VSIZE);
-        self.instrs
-            .push(Instruction::Unary(dst, UnaryOp::ReduceXor, src));
+        self.unary_op(gl, src, UnaryOp::ReduceXor, dst);
         dst
     }
     pub fn reduce_or(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
@@ -471,8 +505,7 @@ impl BasicBlockBuilder {
         }
 
         let dst = self.next_tmp_var(gl, SCALAR_VSIZE);
-        self.instrs
-            .push(Instruction::Unary(dst, UnaryOp::ReduceOr, src));
+        self.unary_op(gl, src, UnaryOp::ReduceOr, dst);
         dst
     }
     pub fn reduce_and(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
@@ -482,8 +515,7 @@ impl BasicBlockBuilder {
         }
 
         let dst = self.next_tmp_var(gl, SCALAR_VSIZE);
-        self.instrs
-            .push(Instruction::Unary(dst, UnaryOp::ReduceAnd, src));
+        self.unary_op(gl, src, UnaryOp::ReduceAnd, dst);
         dst
     }
     pub fn reduce_xnor(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
@@ -777,8 +809,7 @@ impl BasicBlockBuilder {
         }
 
         let dst = self.next_tmp_var(gl, size);
-        self.instrs
-            .push(Instruction::Resize(dst, ResizeOp::ZeroExtend, src));
+        self.resize_op(gl, dst, ResizeOp::ZeroExtend, src);
         dst
     }
     pub fn sign_extend(
@@ -792,8 +823,7 @@ impl BasicBlockBuilder {
         }
 
         let dst = self.next_tmp_var(gl, size);
-        self.instrs
-            .push(Instruction::Resize(dst, ResizeOp::SignExtend, src));
+        self.resize_op(gl, dst, ResizeOp::SignExtend, src);
         dst
     }
 
@@ -811,7 +841,12 @@ impl BasicBlockBuilder {
         let lhs_size = gl.vars[lhs].size;
         assert_eq!(gl.vars[rhs].size, INTEGER_VSIZE);
         let dst = self.next_tmp_var(gl, lhs_size);
-        self.instrs.push(Instruction::Binary(dst, op, lhs, rhs));
+        let i = if gl.logic_mode == LogicMode::TwoValue {
+            Instruction::TvBinary(dst, op, lhs, rhs)
+        } else {
+            Instruction::FvBinary(dst, op, lhs, rhs)
+        };
+        self.instrs.push(i);
         dst
     }
     pub fn logical_shift_left(

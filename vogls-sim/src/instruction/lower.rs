@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, BinaryOp, GlobalContext, Instruction, IntrinsicOp,
-    ProcessKey, SignalKey, VariableKey,
+    LogicMode, ProcessKey, SignalKey, VariableKey,
 };
 
 use crate::instruction::{StackRef, VmInstruction, VmProcess};
@@ -49,9 +49,17 @@ pub fn lower_process_to_vm(
                     // @TODO: Allow this space to be used somehow. In general, we should use a
                     // slab allocator instead of this.
                     *stack_top += 8 - (*stack_top % 8); // pad to 8-bytes
-                    (size.get() as usize).div_ceil(64) * 8
+                    if gl.logic_mode == LogicMode::TwoValue {
+                        (size.get() as usize).div_ceil(64) * 8
+                    } else {
+                        2 * (size.get() as usize).div_ceil(64) * 8
+                    }
                 } else {
-                    (size.get() as usize).div_ceil(8)
+                    if gl.logic_mode == LogicMode::TwoValue {
+                        (size.get() as usize).div_ceil(8)
+                    } else {
+                        (2 * size.get() as usize).div_ceil(8)
+                    }
                 };
 
                 stack_map.insert(dst, StackRef { offset: *stack_top });
@@ -88,11 +96,11 @@ pub fn lower_process_to_vm(
             let instr = match instr {
                 I::Constant(d, value) => VI::Constant(var!(*d), value.clone()),
 
-                I::Unary(d, op, s) => VI::Unary(var!(*d), *op, gl.vars[*s].size, var!(*s)),
-                I::Resize(d, op, s) => {
-                    VI::Resize(var!(*d), *op, gl.vars[*d].size, gl.vars[*s].size, var!(*s))
+                I::TvUnary(d, op, s) => VI::TvUnary(var!(*d), *op, gl.vars[*s].size, var!(*s)),
+                I::TvResize(d, op, s) => {
+                    VI::TvResize(var!(*d), *op, gl.vars[*d].size, gl.vars[*s].size, var!(*s))
                 }
-                I::Binary(d, op, s1, s2) => {
+                I::TvBinary(d, op, s1, s2) => {
                     let d_size = gl.vars[*d].size;
                     let s1_size = gl.vars[*s1].size;
                     let s2_size = gl.vars[*s2].size;
@@ -104,30 +112,63 @@ pub fn lower_process_to_vm(
                     use BinaryOp as O;
                     use ShiftOp as S;
                     match *op {
-                        O::FvAnd
-                        | O::FvOr
-                        | O::FvXor
-                        | O::FvAdd
-                        | O::FvSub
-                        | O::FvMultiply
-                        | O::FvDivide
-                        | O::FvModulus => todo!(),
-                        O::TvAnd => VI::BinaryArithmetic(d, BA::And, d_size, s1, s2),
-                        O::TvOr => VI::BinaryArithmetic(d, BA::Or, d_size, s1, s2),
-                        O::TvXor => VI::BinaryArithmetic(d, BA::Xor, d_size, s1, s2),
-                        O::TvAdd => VI::BinaryArithmetic(d, BA::Add, d_size, s1, s2),
-                        O::TvSub => VI::BinaryArithmetic(d, BA::Sub, d_size, s1, s2),
-                        O::TvMultiply => VI::BinaryArithmetic(d, BA::Multiply, d_size, s1, s2),
-                        O::TvDivide => VI::BinaryArithmetic(d, BA::Divide, d_size, s1, s2),
-                        O::TvModulus => VI::BinaryArithmetic(d, BA::Modulus, d_size, s1, s2),
+                        O::And => VI::TvBinaryArithmetic(d, BA::And, d_size, s1, s2),
+                        O::Or => VI::TvBinaryArithmetic(d, BA::Or, d_size, s1, s2),
+                        O::Xor => VI::TvBinaryArithmetic(d, BA::Xor, d_size, s1, s2),
+                        O::Add => VI::TvBinaryArithmetic(d, BA::Add, d_size, s1, s2),
+                        O::Sub => VI::TvBinaryArithmetic(d, BA::Sub, d_size, s1, s2),
+                        O::Multiply => VI::TvBinaryArithmetic(d, BA::Multiply, d_size, s1, s2),
+                        O::Divide => VI::TvBinaryArithmetic(d, BA::Divide, d_size, s1, s2),
+                        O::Modulus => VI::TvBinaryArithmetic(d, BA::Modulus, d_size, s1, s2),
+
                         O::UnsignedLessEqual => {
-                            VI::BinaryComparison(d, BC::UnsignedLessEqual, s1_size, s1, s2)
+                            VI::TvBinaryComparison(d, BC::UnsignedLessEqual, s1_size, s1, s2)
                         }
-                        O::SelectBit => VI::SelectBit(d, s1_size, s1, s2),
-                        O::LogicalShiftLeft => VI::Shift(d, S::LogicalLeft, d_size, s1, s2),
-                        O::LogicalShiftRight => VI::Shift(d, S::LogicalRight, d_size, s1, s2),
-                        O::ArithmeticShiftRight => VI::Shift(d, S::ArithmeticRight, d_size, s1, s2),
-                        O::Concat => VI::Concat(d, s1_size, s1, s2_size, s2),
+                        O::SelectBit => VI::TvSelectBit(d, s1_size, s1, s2),
+                        O::LogicalShiftLeft => VI::TvShift(d, S::LogicalLeft, d_size, s1, s2),
+                        O::LogicalShiftRight => VI::TvShift(d, S::LogicalRight, d_size, s1, s2),
+                        O::ArithmeticShiftRight => {
+                            VI::TvShift(d, S::ArithmeticRight, d_size, s1, s2)
+                        }
+                        O::Concat => VI::TvConcat(d, s1_size, s1, s2_size, s2),
+                    }
+                }
+
+                I::FvUnary(d, op, s) => VI::FvUnary(var!(*d), *op, gl.vars[*s].size, var!(*s)),
+                I::FvResize(d, op, s) => {
+                    VI::FvResize(var!(*d), *op, gl.vars[*d].size, gl.vars[*s].size, var!(*s))
+                }
+                I::FvBinary(d, op, s1, s2) => {
+                    let d_size = gl.vars[*d].size;
+                    let s1_size = gl.vars[*s1].size;
+                    let s2_size = gl.vars[*s2].size;
+                    let d = var!(*d);
+                    let s1 = var!(*s1);
+                    let s2 = var!(*s2);
+                    use BinaryArithmeticOp as BA;
+                    use BinaryComparisonOp as BC;
+                    use BinaryOp as O;
+                    use ShiftOp as S;
+                    match *op {
+                        O::And => VI::FvBinaryArithmetic(d, BA::And, d_size, s1, s2),
+                        O::Or => VI::FvBinaryArithmetic(d, BA::Or, d_size, s1, s2),
+                        O::Xor => VI::FvBinaryArithmetic(d, BA::Xor, d_size, s1, s2),
+                        O::Add => VI::FvBinaryArithmetic(d, BA::Add, d_size, s1, s2),
+                        O::Sub => VI::FvBinaryArithmetic(d, BA::Sub, d_size, s1, s2),
+                        O::Multiply => VI::FvBinaryArithmetic(d, BA::Multiply, d_size, s1, s2),
+                        O::Divide => VI::FvBinaryArithmetic(d, BA::Divide, d_size, s1, s2),
+                        O::Modulus => VI::FvBinaryArithmetic(d, BA::Modulus, d_size, s1, s2),
+
+                        O::UnsignedLessEqual => {
+                            VI::FvBinaryComparison(d, BC::UnsignedLessEqual, s1_size, s1, s2)
+                        }
+                        O::SelectBit => VI::FvSelectBit(d, s1_size, s1, s2),
+                        O::LogicalShiftLeft => VI::FvShift(d, S::LogicalLeft, d_size, s1, s2),
+                        O::LogicalShiftRight => VI::FvShift(d, S::LogicalRight, d_size, s1, s2),
+                        O::ArithmeticShiftRight => {
+                            VI::FvShift(d, S::ArithmeticRight, d_size, s1, s2)
+                        }
+                        O::Concat => VI::FvConcat(d, s1_size, s1, s2_size, s2),
                     }
                 }
 
@@ -165,12 +206,15 @@ pub fn lower_process_to_vm(
 
         if let Some(phis) = bb_phis.get(&bb_key) {
             for (dst, src) in phis {
-                instructions.push(VI::Unary(
-                    var!(*dst),
-                    vogls_ir::UnaryOp::Copy,
-                    gl.vars[*src].size,
-                    var!(*src),
-                ));
+                let src_size = gl.vars[*src].size;
+                let dst_size = gl.vars[*dst].size;
+                let (dst, src) = (var!(*dst), var!(*src));
+                let i = if gl.logic_mode == LogicMode::TwoValue {
+                    VI::TvResize(dst, vogls_ir::ResizeOp::Truncate, dst_size, src_size, src)
+                } else {
+                    VI::FvResize(dst, vogls_ir::ResizeOp::Truncate, dst_size, src_size, src)
+                };
+                instructions.push(i);
             }
         }
 

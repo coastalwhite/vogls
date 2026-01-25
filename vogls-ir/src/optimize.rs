@@ -195,15 +195,7 @@ pub fn propagate_constants<'a>(
                     scratch_map.insert(*key, bits.clone());
                     continue;
                 }
-                I::Unary(dst, op, src) => {
-                    if *op == UnaryOp::Copy {
-                        _ = scratch_var_to_var_map.insert(*dst, *src);
-                        if let Some(bits) = scratch_map.get(src) {
-                            scratch_map.insert(*dst, bits.clone());
-                        }
-                        continue;
-                    }
-
+                I::TvUnary(dst, op, src) => {
                     let Some(bits) = scratch_map.get(src) else {
                         continue;
                     };
@@ -211,7 +203,6 @@ pub fn propagate_constants<'a>(
                     (
                         *dst,
                         match op {
-                            UnaryOp::Copy => unreachable!(),
                             UnaryOp::ReduceOr => Bits::from(bits.reduce_or()),
                             UnaryOp::ReduceAnd => Bits::from(bits.reduce_and()),
                             UnaryOp::ReduceXor => Bits::from(bits.reduce_xor()),
@@ -219,7 +210,7 @@ pub fn propagate_constants<'a>(
                         },
                     )
                 }
-                I::Resize(dst, op, src) => {
+                I::TvResize(dst, op, src) => {
                     let Some(bits) = scratch_map.get(src) else {
                         continue;
                     };
@@ -234,7 +225,7 @@ pub fn propagate_constants<'a>(
                         },
                     )
                 }
-                I::Binary(dst, op, src1, src2) => {
+                I::TvBinary(dst, op, src1, src2) => {
                     let csrc1 = scratch_map.get(src1);
                     let csrc2 = scratch_map.get(src2);
 
@@ -242,7 +233,7 @@ pub fn propagate_constants<'a>(
                     (
                         *dst,
                         match (csrc1, csrc2) {
-                            (Some(src1), Some(src2)) => op.evaluate(src1, src2),
+                            (Some(src1), Some(src2)) => op.evaluate_tv(src1, src2),
                             (Some(src), _) | (_, Some(src)) => {
                                 let non_constant_src = if csrc1.is_none() { *src1 } else { *src2 };
                                 macro_rules! set_eq_to_non_constant_src {
@@ -255,26 +246,26 @@ pub fn propagate_constants<'a>(
                                 let num_ones = src.count_ones();
                                 let size = src.size();
                                 match op {
-                                    O::TvAnd if num_ones == 0 => Bits::new_zeroed(size),
-                                    O::TvAnd | O::TvAdd | O::TvSub if num_ones == size.get() => {
+                                    O::And if num_ones == 0 => Bits::new_zeroed(size),
+                                    O::And | O::Add | O::Sub if num_ones == size.get() => {
                                         set_eq_to_non_constant_src!()
                                     }
-                                    O::TvAnd => continue,
-                                    O::TvOr | O::TvXor if num_ones == 0 => {
+                                    O::And => continue,
+                                    O::Or | O::Xor if num_ones == 0 => {
                                         set_eq_to_non_constant_src!()
                                     }
-                                    O::TvOr if num_ones == size.get() => Bits::new_ones(size),
-                                    O::TvOr => continue,
-                                    O::TvXor if num_ones == size.get() => src.bitwise_negate(),
-                                    O::TvXor => continue,
-                                    O::TvAdd | O::TvSub => continue,
-                                    O::TvMultiply if num_ones == 0 => Bits::new_zeroed(size),
-                                    O::TvMultiply | O::TvDivide if src.is_one() => {
+                                    O::Or if num_ones == size.get() => Bits::new_ones(size),
+                                    O::Or => continue,
+                                    O::Xor if num_ones == size.get() => src.bitwise_negate(),
+                                    O::Xor => continue,
+                                    O::Add | O::Sub => continue,
+                                    O::Multiply if num_ones == 0 => Bits::new_zeroed(size),
+                                    O::Multiply | O::Divide if src.is_one() => {
                                         set_eq_to_non_constant_src!()
                                     }
-                                    O::TvMultiply | O::TvDivide => continue,
+                                    O::Multiply | O::Divide => continue,
                                     O::UnsignedLessEqual if num_ones == 0 && csrc1.is_none() => {
-                                        *i = Instruction::Unary(
+                                        *i = Instruction::TvUnary(
                                             *dst,
                                             UnaryOp::ReduceOr,
                                             non_constant_src,
@@ -292,7 +283,7 @@ pub fn propagate_constants<'a>(
                                     O::UnsignedLessEqual
                                         if num_ones == size.get() && csrc2.is_none() =>
                                     {
-                                        *i = Instruction::Unary(
+                                        *i = Instruction::TvUnary(
                                             *dst,
                                             UnaryOp::ReduceAnd,
                                             non_constant_src,
@@ -314,26 +305,21 @@ pub fn propagate_constants<'a>(
                                         Bits::new_zeroed(size)
                                     }
                                     O::UnsignedLessEqual
-                                    | O::TvModulus
+                                    | O::Modulus
                                     | O::SelectBit
                                     | O::LogicalShiftLeft
                                     | O::LogicalShiftRight
                                     | O::ArithmeticShiftRight
-                                    | O::Concat
-                                    | O::FvAnd
-                                    | O::FvOr
-                                    | O::FvXor
-                                    | O::FvAdd
-                                    | O::FvSub
-                                    | O::FvMultiply
-                                    | O::FvDivide
-                                    | O::FvModulus => continue,
+                                    | O::Concat => continue,
                                 }
                             }
                             (None, None) => continue,
                         },
                     )
                 }
+                I::FvUnary(_, _, _) => continue,
+                I::FvResize(_, _, _) => continue,
+                I::FvBinary(_, _, _, _) => continue,
                 I::Intrinsic(_, _, _) => continue,
                 I::Probe(_, _) => continue,
                 I::Drive(_, _, _, _) => continue,

@@ -1,5 +1,5 @@
 use crate::VectorSize;
-use crate::arithmetic::fv_contains_special;
+use crate::arithmetic::{fv_contains_special, fv_set_no_special};
 use crate::load::load_partial_u64;
 use crate::store::store_partial_u64;
 
@@ -71,7 +71,7 @@ pub fn fv_addition_subtraction(
         dst.len() > 0
             && dst.len() == lhs.len()
             && dst.len() == rhs.len()
-            && size.get().div_ceil(32) as usize == dst.len()
+            && dst.len() == 2 * size.get().div_ceil(64) as usize
     );
 
     if fv_contains_special(lhs, size) || fv_contains_special(rhs, size) {
@@ -79,34 +79,27 @@ pub fn fv_addition_subtraction(
         return;
     }
 
-    let num_words = dst.len();
-    let mut carry_in = subtract;
-    if num_words > 1 {
-        let dst = bytemuck::cast_slice_mut::<u64, u32>(dst);
-        let lhs = bytemuck::cast_slice::<u64, u32>(lhs);
-        let rhs = bytemuck::cast_slice::<u64, u32>(rhs);
-
-        let mask = if subtract { !0u32 } else { 0u32 };
-        for i in 0..num_words - 1 {
-            (dst[2 * i], carry_in) = lhs[2 * i].carrying_add(rhs[2 * i] ^ mask, carry_in);
-            dst[2 * i + 1] = u32::MAX;
-        }
-    }
-
-    // The last word needs to be handled differently because the special and value bits are not
-    // layed out as 32-bits followed by 32-bits.
-    let end_mask = (1u64 << (size.get() % 32)) - 1;
-    let sub_mask = (u64::from(subtract) << (size.get() % 32)) - 1;
-    let i = num_words - 1;
-    (dst[i], _) = (lhs[i] & end_mask).carrying_add((rhs[i] & end_mask) ^ sub_mask, carry_in);
-    dst[i] &= end_mask;
-    dst[i] |= end_mask << (size.get() % 32);
+    fv_set_no_special(dst, size);
+    let nwords = dst.len() / 2;
+    tv_addition_subtraction(
+        &mut dst[nwords..],
+        &lhs[nwords..],
+        &rhs[nwords..],
+        size,
+        subtract,
+    );
 }
 pub fn tv_addition(dst: &mut [u64], lhs: &[u64], rhs: &[u64], size: VectorSize) {
     tv_addition_subtraction(dst, lhs, rhs, size, false)
 }
 pub fn tv_subtraction(dst: &mut [u64], lhs: &[u64], rhs: &[u64], size: VectorSize) {
     tv_addition_subtraction(dst, lhs, rhs, size, true)
+}
+pub fn fv_addition(dst: &mut [u64], lhs: &[u64], rhs: &[u64], size: VectorSize) {
+    fv_addition_subtraction(dst, lhs, rhs, size, false)
+}
+pub fn fv_subtraction(dst: &mut [u64], lhs: &[u64], rhs: &[u64], size: VectorSize) {
+    fv_addition_subtraction(dst, lhs, rhs, size, true)
 }
 
 #[cfg(test)]

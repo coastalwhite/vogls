@@ -135,23 +135,14 @@ impl ContextFormat for BasicBlock {
 impl BinaryOp {
     pub const fn into_mnemonic(&self) -> &'static str {
         match self {
-            Self::FvAnd => "fv.and",
-            Self::FvOr => "fv.or",
-            Self::FvXor => "fv.xor",
-            Self::FvAdd => "fv.add",
-            Self::FvSub => "fv.sub",
-            Self::FvMultiply => "fv.mul",
-            Self::FvDivide => "fv.div",
-            Self::FvModulus => "fv.rem",
-
-            Self::TvAnd => "tv.and",
-            Self::TvOr => "tv.or",
-            Self::TvXor => "tv.xor",
-            Self::TvAdd => "tv.add",
-            Self::TvSub => "tv.sub",
-            Self::TvMultiply => "tv.mul",
-            Self::TvDivide => "tv.div",
-            Self::TvModulus => "tv.rem",
+            Self::And => "and",
+            Self::Or => "or",
+            Self::Xor => "xor",
+            Self::Add => "add",
+            Self::Sub => "sub",
+            Self::Multiply => "mul",
+            Self::Divide => "div",
+            Self::Modulus => "rem",
 
             Self::UnsignedLessEqual => "ule",
             Self::SelectBit => "bselect",
@@ -166,7 +157,6 @@ impl BinaryOp {
 impl UnaryOp {
     pub const fn into_mnemonic(&self) -> &'static str {
         match self {
-            Self::Copy => "copy",
             Self::Neg => "negate",
             Self::ReduceAnd => "reduce_and",
             Self::ReduceOr => "reduce_or",
@@ -206,40 +196,63 @@ impl ContextFormat for Instruction {
                 var.ctx_fmt(f, ctx)?;
                 write!(f, " = const {val}")?;
             }
-            Self::Unary(dst, op, src) => {
-                dst.ctx_fmt(f, ctx)?;
-                f.write_str(" = ")?;
-                f.write_str(op.into_mnemonic())?;
-                match op {
-                    UnaryOp::Copy
-                    | UnaryOp::Neg
-                    | UnaryOp::ReduceOr
-                    | UnaryOp::ReduceAnd
-                    | UnaryOp::ReduceXor => {}
-                }
-                f.write_str(" ")?;
-                src.ctx_fmt(f, ctx)?;
+            Self::TvUnary(dst, op, src) => {
+                write!(
+                    f,
+                    "{} = tv.{} {}",
+                    dst.display(ctx.gl),
+                    op.into_mnemonic(),
+                    src.display(ctx.gl),
+                )?;
             }
-            Self::Resize(dst, op, src) => {
-                dst.ctx_fmt(f, ctx)?;
-                f.write_str(" = ")?;
-                f.write_str(op.into_mnemonic())?;
-                match op {
-                    ResizeOp::Truncate | ResizeOp::ZeroExtend | ResizeOp::SignExtend => {
-                        write!(f, "[{}]", ctx.gl.vars[*dst].size)?
-                    }
-                }
-                f.write_str(" ")?;
-                src.ctx_fmt(f, ctx)?;
+            Self::TvResize(dst, op, src) => {
+                write!(
+                    f,
+                    "{} = tv.{}[{}] {}",
+                    dst.display(ctx.gl),
+                    op.into_mnemonic(),
+                    ctx.gl.vars[*dst].size,
+                    src.display(ctx.gl),
+                )?;
             }
-            Self::Binary(dst, op, src1, src2) => {
-                dst.ctx_fmt(f, ctx)?;
-                f.write_str(" = ")?;
-                f.write_str(op.into_mnemonic())?;
-                f.write_str(" ")?;
-                src1.ctx_fmt(f, ctx)?;
-                f.write_str(", ")?;
-                src2.ctx_fmt(f, ctx)?;
+            Self::TvBinary(dst, op, src1, src2) => {
+                write!(
+                    f,
+                    "{} = tv.{} {}, {}",
+                    dst.display(ctx.gl),
+                    op.into_mnemonic(),
+                    src1.display(ctx.gl),
+                    src2.display(ctx.gl),
+                )?;
+            }
+            Self::FvUnary(dst, op, src) => {
+                write!(
+                    f,
+                    "{} = fv.{} {}",
+                    dst.display(ctx.gl),
+                    op.into_mnemonic(),
+                    src.display(ctx.gl),
+                )?;
+            }
+            Self::FvResize(dst, op, src) => {
+                write!(
+                    f,
+                    "{} = fv.{}[{}] {}",
+                    dst.display(ctx.gl),
+                    op.into_mnemonic(),
+                    ctx.gl.vars[*dst].size,
+                    src.display(ctx.gl),
+                )?;
+            }
+            Self::FvBinary(dst, op, src1, src2) => {
+                write!(
+                    f,
+                    "{} = fv.{} {}, {}",
+                    dst.display(ctx.gl),
+                    op.into_mnemonic(),
+                    src1.display(ctx.gl),
+                    src2.display(ctx.gl),
+                )?;
             }
             Self::Intrinsic(dst, op, args) => {
                 dst.ctx_fmt(f, ctx)?;

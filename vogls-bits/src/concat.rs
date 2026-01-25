@@ -1,4 +1,7 @@
 use crate::VectorSize;
+use crate::arithmetic::{fv_pack_u64, fv_separate_packed_u64};
+use crate::load::load_partial_u64;
+use crate::store::store_partial_u64;
 
 pub fn tv_concat(
     dst: &mut [u8],
@@ -38,6 +41,88 @@ pub fn tv_concat(
     if s > 0 {
         dst[dbytes - 1] = lhs[lbytes - 1] >> (8 - roff);
     }
+}
+pub fn tv_l_concat(
+    dst: &mut [u64],
+    lhs: &[u64],
+    rhs: &[u64],
+    lhs_size: VectorSize,
+    rhs_size: VectorSize,
+) {
+    let (lhs_size, rhs_size) = (lhs_size.get() as usize, rhs_size.get() as usize);
+
+    let lwords = lhs_size.div_ceil(64);
+    let rwords = rhs_size.div_ceil(64);
+    let dwords = (lhs_size + rhs_size).div_ceil(64);
+
+    for i in 0..rwords {
+        dst[i] = rhs[i];
+    }
+
+    let roff = rhs_size % 64;
+
+    // Fast path: left side is empty or right side is aligned.
+    if roff == 0 {
+        for i in 0..lwords {
+            dst[rwords + i] = lhs[i];
+        }
+        return;
+    }
+
+    dst[rwords - 1] |= lhs[0] << roff;
+    let mut s = lhs_size.saturating_sub(64 - roff);
+    let mut i = 0;
+    while s > roff {
+        dst[rwords + i] = (lhs[i] >> (64 - roff)) | (lhs[i + 1] << roff);
+        s = s.saturating_sub(64);
+        i += 1;
+    }
+    if s > 0 {
+        dst[dwords - 1] = lhs[lwords - 1] >> (64 - roff);
+    }
+}
+pub fn fv_l_concat(
+    dst: &mut [u64],
+    lhs: &[u64],
+    rhs: &[u64],
+    lhs_size: VectorSize,
+    rhs_size: VectorSize,
+) {
+    let lwords = lhs.len() / 2;
+    let rwords = rhs.len() / 2;
+    let dwords = dst.len() / 2;
+    tv_l_concat(
+        &mut dst[..dwords],
+        &lhs[..lwords],
+        &rhs[..rwords],
+        lhs_size,
+        rhs_size,
+    );
+    tv_l_concat(
+        &mut dst[dwords..],
+        &lhs[lwords..],
+        &rhs[rwords..],
+        lhs_size,
+        rhs_size,
+    );
+}
+
+pub fn fv_s_concat(
+    dst: &mut [u8],
+    lhs: &[u8],
+    rhs: &[u8],
+    lhs_size: VectorSize,
+    rhs_size: VectorSize,
+) {
+    let x = load_partial_u64(lhs, lhs_size);
+    let y = load_partial_u64(rhs, rhs_size);
+    let (xspc, xvalue) = fv_separate_packed_u64(x, lhs_size);
+    let (yspc, yvalue) = fv_separate_packed_u64(y, rhs_size);
+    let spc = (xspc << rhs_size.get()) | yspc;
+    let value = (xvalue << rhs_size.get()) | yvalue;
+    let dsize = VectorSize::new(lhs_size.get() + rhs_size.get()).unwrap();
+    let result = fv_pack_u64(spc, value, dsize);
+    store_partial_u64(dst, result, dsize);
 }
 
 #[cfg(test)]

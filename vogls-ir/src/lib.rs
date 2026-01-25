@@ -48,9 +48,12 @@ impl BasicBlock {
         for i in self.instrs.iter_mut() {
             match i {
                 Instruction::Constant(..)
-                | Instruction::Unary(..)
-                | Instruction::Binary(..)
-                | Instruction::Resize(..)
+                | Instruction::TvUnary(..)
+                | Instruction::TvBinary(..)
+                | Instruction::TvResize(..)
+                | Instruction::FvUnary(..)
+                | Instruction::FvBinary(..)
+                | Instruction::FvResize(..)
                 | Instruction::Intrinsic(..)
                 | Instruction::Probe(..)
                 | Instruction::Drive(..) => {}
@@ -72,7 +75,8 @@ impl BasicBlock {
                     .position(|(obb, _)| *obb == bb_key)
                     .expect("phis are expected to have a variable per fan-in basic-block");
                 if origins.len() == 2 {
-                    *i = Instruction::Unary(*dst, UnaryOp::Copy, origins[1 - idx].1);
+                    todo!()
+                    // *i = Instruction::Unary(*dst, UnaryOp::Copy, origins[1 - idx].1);
                 } else {
                     let mut new_origins = Vec::with_capacity(origins.len() - 1);
                     new_origins.extend(&origins[..idx]);
@@ -208,7 +212,6 @@ pub enum IntrinsicOp {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnaryOp {
-    Copy,
     Neg,
     ReduceOr,
     ReduceAnd,
@@ -224,25 +227,14 @@ pub enum ResizeOp {
 
 #[derive(Debug, Clone, Copy)]
 pub enum BinaryOp {
-    // Two-Value Logic
-    TvAnd,
-    TvOr,
-    TvXor,
-    TvAdd,
-    TvSub,
-    TvMultiply,
-    TvDivide,
-    TvModulus,
-
-    // Four-Value Logic
-    FvAnd,
-    FvOr,
-    FvXor,
-    FvAdd,
-    FvSub,
-    FvMultiply,
-    FvDivide,
-    FvModulus,
+    And,
+    Or,
+    Xor,
+    Add,
+    Sub,
+    Multiply,
+    Divide,
+    Modulus,
 
     UnsignedLessEqual,
     SelectBit,
@@ -256,9 +248,13 @@ pub enum BinaryOp {
 pub enum Instruction {
     Constant(VariableKey, Bits),
 
-    Unary(VariableKey, UnaryOp, VariableKey),
-    Resize(VariableKey, ResizeOp, VariableKey),
-    Binary(VariableKey, BinaryOp, VariableKey, VariableKey),
+    TvUnary(VariableKey, UnaryOp, VariableKey),
+    TvResize(VariableKey, ResizeOp, VariableKey),
+    TvBinary(VariableKey, BinaryOp, VariableKey, VariableKey),
+
+    FvUnary(VariableKey, UnaryOp, VariableKey),
+    FvResize(VariableKey, ResizeOp, VariableKey),
+    FvBinary(VariableKey, BinaryOp, VariableKey, VariableKey),
 
     Intrinsic(VariableKey, Box<IntrinsicOp>, Box<[VariableKey]>),
     Probe(VariableKey, SignalKey),
@@ -276,9 +272,12 @@ impl Instruction {
     pub fn get_destination_variable(&self) -> Option<VariableKey> {
         match self {
             Self::Constant(dst, _)
-            | Self::Unary(dst, _, _)
-            | Self::Resize(dst, _, _)
-            | Self::Binary(dst, _, _, _)
+            | Self::TvUnary(dst, _, _)
+            | Self::TvResize(dst, _, _)
+            | Self::TvBinary(dst, _, _, _)
+            | Self::FvUnary(dst, _, _)
+            | Self::FvResize(dst, _, _)
+            | Self::FvBinary(dst, _, _, _)
             | Self::Phi(dst, _)
             | Self::Probe(dst, _)
             | Self::Intrinsic(dst, _, _) => Some(*dst),
@@ -288,8 +287,11 @@ impl Instruction {
 
     fn for_each_var_src(&self, mut f: impl FnMut(VariableKey)) {
         match self {
-            Self::Unary(_, _, src) | Self::Resize(_, _, src) => f(*src),
-            Self::Binary(_, _, src1, src2) => {
+            Self::TvUnary(_, _, src)
+            | Self::TvResize(_, _, src)
+            | Self::FvUnary(_, _, src)
+            | Self::FvResize(_, _, src) => f(*src),
+            Self::TvBinary(_, _, src1, src2) | Self::FvBinary(_, _, src1, src2) => {
                 f(*src1);
                 f(*src2);
             }
@@ -316,9 +318,12 @@ impl Instruction {
     pub fn has_side_effects_on_call(&self) -> bool {
         match self {
             Self::Constant(..)
-            | Self::Unary(..)
-            | Self::Resize(..)
-            | Self::Binary(..)
+            | Self::TvUnary(..)
+            | Self::TvResize(..)
+            | Self::TvBinary(..)
+            | Self::FvUnary(..)
+            | Self::FvResize(..)
+            | Self::FvBinary(..)
             | Self::Phi(..)
             | Self::Probe(..) => false,
             Self::Drive(..) | Self::Intrinsic(..) => true,
@@ -327,11 +332,14 @@ impl Instruction {
 
     fn map_vars(&mut self, mut f: impl FnMut(VariableKey) -> VariableKey) {
         match self {
-            Self::Unary(dst, _, src) | Self::Resize(dst, _, src) => {
+            Self::TvUnary(dst, _, src)
+            | Self::TvResize(dst, _, src)
+            | Self::FvUnary(dst, _, src)
+            | Self::FvResize(dst, _, src) => {
                 *dst = f(*dst);
                 *src = f(*src)
             }
-            Self::Binary(dst, _, src1, src2) => {
+            Self::TvBinary(dst, _, src1, src2) | Self::FvBinary(dst, _, src1, src2) => {
                 *dst = f(*dst);
                 *src1 = f(*src1);
                 *src2 = f(*src2);
@@ -363,9 +371,12 @@ impl Instruction {
     fn map_bb(&mut self, mut f: impl FnMut(BasicBlockKey) -> BasicBlockKey) {
         match self {
             Instruction::Constant(..)
-            | Instruction::Unary(..)
-            | Instruction::Binary(..)
-            | Instruction::Resize(..)
+            | Instruction::TvUnary(..)
+            | Instruction::TvResize(..)
+            | Instruction::TvBinary(..)
+            | Instruction::FvUnary(..)
+            | Instruction::FvResize(..)
+            | Instruction::FvBinary(..)
             | Instruction::Intrinsic(..)
             | Instruction::Probe(..)
             | Instruction::Drive(..) => {}
@@ -376,27 +387,47 @@ impl Instruction {
     }
 }
 
+impl UnaryOp {
+    pub fn evaluate_tv(self, src: &Bits) -> Bits {
+        use UnaryOp as O;
+        match self {
+            O::Neg => src.bitwise_negate(),
+            O::ReduceOr => Bits::from(src.reduce_or()),
+            O::ReduceAnd => Bits::from(src.reduce_and()),
+            O::ReduceXor => Bits::from(src.reduce_xor()),
+        }
+    }
+    pub fn evaluate_fv(self, src: &Bits) -> Bits {
+        todo!()
+    }
+}
+
+impl ResizeOp {
+    pub fn evaluate_tv(self, src: &Bits, dst_size: VectorSize) -> Bits {
+        use ResizeOp as O;
+        match self {
+            O::Truncate => src.truncate(dst_size),
+            O::ZeroExtend => src.zero_extend(dst_size),
+            O::SignExtend => src.sign_extend(dst_size),
+        }
+    }
+    pub fn evaluate_fv(self, src: &Bits, dst_size: VectorSize) -> Bits {
+        todo!()
+    }
+}
+
 impl BinaryOp {
-    fn evaluate(self, lhs: &Bits, rhs: &Bits) -> Bits {
+    fn evaluate_tv(self, lhs: &Bits, rhs: &Bits) -> Bits {
         use BinaryOp as O;
         match self {
-            O::FvAnd => Bits::fv_bitwise_and(lhs, rhs),
-            O::FvOr => Bits::fv_bitwise_or(lhs, rhs),
-            O::FvXor => Bits::fv_bitwise_xor(lhs, rhs),
-            O::FvAdd => todo!(),
-            O::FvSub => todo!(),
-            O::FvMultiply => todo!(),
-            O::FvDivide => todo!(),
-            O::FvModulus => todo!(),
-
-            O::TvAnd => Bits::tv_bitwise_and(lhs, rhs),
-            O::TvOr => Bits::tv_bitwise_or(lhs, rhs),
-            O::TvXor => Bits::tv_bitwise_xor(lhs, rhs),
-            O::TvAdd => Bits::add(lhs, rhs),
-            O::TvSub => Bits::subtract(lhs, rhs),
-            O::TvMultiply => Bits::multiply(lhs, rhs),
-            O::TvDivide => Bits::divide(lhs, rhs),
-            O::TvModulus => Bits::modulus(lhs, rhs),
+            O::And => Bits::tv_bitwise_and(lhs, rhs),
+            O::Or => Bits::tv_bitwise_or(lhs, rhs),
+            O::Xor => Bits::tv_bitwise_xor(lhs, rhs),
+            O::Add => Bits::add(lhs, rhs),
+            O::Sub => Bits::subtract(lhs, rhs),
+            O::Multiply => Bits::multiply(lhs, rhs),
+            O::Divide => Bits::divide(lhs, rhs),
+            O::Modulus => Bits::modulus(lhs, rhs),
 
             O::UnsignedLessEqual => Bits::from(Bits::is_unsigned_leq(lhs, rhs)),
             O::SelectBit => Bits::from(lhs.select_bit(rhs.extract_exact_u32())),
@@ -405,6 +436,9 @@ impl BinaryOp {
             O::ArithmeticShiftRight => lhs.arithmetic_shift_right(rhs.extract_exact_u32()),
             O::Concat => Bits::concatenate(lhs, rhs),
         }
+    }
+    fn evaluate_fv(self, _lhs: &Bits, _rhs: &Bits) -> Bits {
+        todo!()
     }
 }
 
@@ -421,8 +455,16 @@ pub struct Connection {
     pub direction: ConnectionDirection,
 }
 
+#[derive(Default, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LogicMode {
+    #[default]
+    TwoValue,
+    FourValue,
+}
+
 #[derive(Default)]
 pub struct GlobalContext {
+    pub logic_mode: LogicMode,
     pub processes: SlotMap<ProcessKey, Process>,
     pub bbs: SlotMap<BasicBlockKey, BasicBlock>,
     pub vars: SlotMap<VariableKey, Variable>,

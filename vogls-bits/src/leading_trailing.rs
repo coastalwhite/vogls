@@ -22,7 +22,6 @@ pub fn tv_leading_zeros(src: &[u64], size: VectorSize) -> u32 {
     }
     return size.get();
 }
-
 pub fn tv_leading_ones(src: &[u64], size: VectorSize) -> u32 {
     let off = size.get() % 64;
 

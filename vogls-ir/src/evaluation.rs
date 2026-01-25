@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use vogls_bits::Bits;
 
 use crate::{
-    BasicBlock, BasicBlockKey, BasicBlockTerminator, GlobalContext, Instruction, ResizeOp,
-    SignalKey, UnaryOp, VariableKey,
+    BasicBlock, BasicBlockKey, BasicBlockTerminator, GlobalContext, Instruction, SignalKey,
+    VariableKey,
 };
 
 pub fn evaluate(
@@ -29,33 +29,38 @@ fn evaluate_impl(
         use Instruction as I;
         match instr {
             I::Constant(dst, bits) => _ = variables.insert(*dst, bits.clone()),
-            I::Unary(dst, op, src) => {
-                use UnaryOp as O;
+            I::TvUnary(dst, op, src) => {
                 let src = &variables[src];
-                let bits = match op {
-                    O::Copy => src.clone(),
-                    O::Neg => src.bitwise_negate(),
-                    O::ReduceOr => Bits::from(src.reduce_or()),
-                    O::ReduceAnd => Bits::from(src.reduce_and()),
-                    O::ReduceXor => Bits::from(src.reduce_xor()),
-                };
+                let bits = op.evaluate_tv(src);
                 _ = variables.insert(*dst, bits.clone());
             }
-            I::Resize(dst, op, src) => {
-                use ResizeOp as O;
+            I::TvResize(dst, op, src) => {
                 let src = &variables[src];
                 let dst_size = gl.vars[*dst].size;
-                let bits = match op {
-                    O::Truncate => src.truncate(dst_size),
-                    O::ZeroExtend => src.zero_extend(dst_size),
-                    O::SignExtend => src.sign_extend(dst_size),
-                };
+                let bits = op.evaluate_tv(src, dst_size);
                 _ = variables.insert(*dst, bits.clone());
             }
-            I::Binary(dst, op, lhs, rhs) => {
+            I::TvBinary(dst, op, lhs, rhs) => {
                 let lhs = &variables[lhs];
                 let rhs = &variables[rhs];
-                let bits = op.evaluate(lhs, rhs);
+                let bits = op.evaluate_tv(lhs, rhs);
+                _ = variables.insert(*dst, bits.clone());
+            }
+            I::FvUnary(dst, op, src) => {
+                let src = &variables[src];
+                let bits = op.evaluate_fv(src);
+                _ = variables.insert(*dst, bits.clone());
+            }
+            I::FvResize(dst, op, src) => {
+                let src = &variables[src];
+                let dst_size = gl.vars[*dst].size;
+                let bits = op.evaluate_fv(src, dst_size);
+                _ = variables.insert(*dst, bits.clone());
+            }
+            I::FvBinary(dst, op, lhs, rhs) => {
+                let lhs = &variables[lhs];
+                let rhs = &variables[rhs];
+                let bits = op.evaluate_fv(lhs, rhs);
                 _ = variables.insert(*dst, bits.clone());
             }
             I::Intrinsic(_, _, _) => todo!(),

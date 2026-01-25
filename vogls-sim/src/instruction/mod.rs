@@ -56,15 +56,21 @@ pub enum VmIntrinsicOp {
 pub enum VmInstruction {
     Constant(StackRef, Bits),
 
-    Unary(StackRef, UnaryOp, VectorSize, StackRef),
-    Resize(StackRef, ResizeOp, VectorSize, VectorSize, StackRef),
+    TvUnary(StackRef, UnaryOp, VectorSize, StackRef),
+    TvResize(StackRef, ResizeOp, VectorSize, VectorSize, StackRef),
+    TvBinaryArithmetic(StackRef, BinaryArithmeticOp, VectorSize, StackRef, StackRef),
+    TvBinaryComparison(StackRef, BinaryComparisonOp, VectorSize, StackRef, StackRef),
+    TvShift(StackRef, ShiftOp, VectorSize, StackRef, StackRef),
+    TvSelectBit(StackRef, VectorSize, StackRef, StackRef),
+    TvConcat(StackRef, VectorSize, StackRef, VectorSize, StackRef),
 
-    // Binary Operations
-    BinaryArithmetic(StackRef, BinaryArithmeticOp, VectorSize, StackRef, StackRef),
-    BinaryComparison(StackRef, BinaryComparisonOp, VectorSize, StackRef, StackRef),
-    Shift(StackRef, ShiftOp, VectorSize, StackRef, StackRef),
-    SelectBit(StackRef, VectorSize, StackRef, StackRef),
-    Concat(StackRef, VectorSize, StackRef, VectorSize, StackRef),
+    FvUnary(StackRef, UnaryOp, VectorSize, StackRef),
+    FvResize(StackRef, ResizeOp, VectorSize, VectorSize, StackRef),
+    FvBinaryArithmetic(StackRef, BinaryArithmeticOp, VectorSize, StackRef, StackRef),
+    FvBinaryComparison(StackRef, BinaryComparisonOp, VectorSize, StackRef, StackRef),
+    FvShift(StackRef, ShiftOp, VectorSize, StackRef, StackRef),
+    FvSelectBit(StackRef, VectorSize, StackRef, StackRef),
+    FvConcat(StackRef, VectorSize, StackRef, VectorSize, StackRef),
 
     Intrinsic(StackRef, Box<VmIntrinsicOp>, Box<[(StackRef, VectorSize)]>),
 

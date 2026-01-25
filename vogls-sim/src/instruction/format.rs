@@ -12,23 +12,49 @@ impl fmt::Display for VmInstruction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Constant(dst, value) => write!(f, "{dst} = const {value}"),
-            Self::Unary(dst, op, _, src) => write!(f, "{dst} = {} {src}", op.into_mnemonic()),
-            Self::Resize(dst, op, _, _, src) => write!(f, "{dst} = {} {src}", op.into_mnemonic()),
-            Self::BinaryArithmetic(dst, op, _, src1, src2) => {
-                write!(f, "{dst} = {} {src1}, {src2}", op.into_mnemonic())
+
+            Self::TvUnary(dst, op, _, src) => write!(f, "{dst} = tv.{} {src}", op.into_mnemonic()),
+            Self::TvResize(dst, op, dst_size, _, src) => {
+                write!(f, "{dst} = tv.{}[{dst_size}] {src}", op.into_mnemonic())
             }
-            Self::BinaryComparison(dst, op, _, src1, src2) => {
-                write!(f, "{dst} = {} {src1}, {src2}", op.into_mnemonic())
+            Self::TvBinaryArithmetic(dst, op, _, src1, src2) => {
+                write!(f, "{dst} = tv.{} {src1}, {src2}", op.into_mnemonic())
             }
-            Self::Shift(dst, op, _, src1, src2) => {
-                write!(f, "{dst} = {} {src1}, {src2}", op.into_mnemonic())
+            Self::TvBinaryComparison(dst, op, _, src1, src2) => {
+                write!(f, "{dst} = tv.{} {src1}, {src2}", op.into_mnemonic())
             }
-            Self::SelectBit(dst, _, src1, src2) => {
-                write!(f, "{dst} = bselect {src1}, {src2}")
+            Self::TvShift(dst, op, _, src1, src2) => {
+                write!(f, "{dst} = tv.{} {src1}, {src2}", op.into_mnemonic())
             }
-            Self::Concat(dst, _, src1, _, src2) => {
-                write!(f, "{dst} = concat {src1}, {src2}")
+            Self::TvSelectBit(dst, _, src1, src2) => {
+                write!(f, "{dst} = tv.bselect {src1}, {src2}")
             }
+            Self::TvConcat(dst, _, src1, _, src2) => {
+                write!(f, "{dst} = tv.concat {src1}, {src2}")
+            }
+
+            Self::FvUnary(dst, op, dst_size, src) => {
+                write!(f, "{dst} = fv.{}[{dst_size}] {src}", op.into_mnemonic())
+            }
+            Self::FvResize(dst, op, _, _, src) => {
+                write!(f, "{dst} = fv.{} {src}", op.into_mnemonic())
+            }
+            Self::FvBinaryArithmetic(dst, op, _, src1, src2) => {
+                write!(f, "{dst} = fv.{} {src1}, {src2}", op.into_mnemonic())
+            }
+            Self::FvBinaryComparison(dst, op, _, src1, src2) => {
+                write!(f, "{dst} = fv.{} {src1}, {src2}", op.into_mnemonic())
+            }
+            Self::FvShift(dst, op, _, src1, src2) => {
+                write!(f, "{dst} = fv.{} {src1}, {src2}", op.into_mnemonic())
+            }
+            Self::FvSelectBit(dst, _, src1, src2) => {
+                write!(f, "{dst} = fv.bselect {src1}, {src2}")
+            }
+            Self::FvConcat(dst, _, src1, _, src2) => {
+                write!(f, "{dst} = fv.concat {src1}, {src2}")
+            }
+
             Self::Intrinsic(dst, op, args) => {
                 write!(f, "{dst} = {}", op.into_mnemonic())?;
                 if let Some((arg, _)) = args.first() {
@@ -81,13 +107,20 @@ impl fmt::Display for VmProcess {
             use VmInstruction as I;
             match i {
                 I::Constant(..)
-                | I::Unary(..)
-                | I::Resize(..)
-                | I::BinaryArithmetic(..)
-                | I::BinaryComparison(..)
-                | I::Shift(..)
-                | I::SelectBit(..)
-                | I::Concat(..)
+                | I::TvUnary(..)
+                | I::TvResize(..)
+                | I::TvBinaryArithmetic(..)
+                | I::TvBinaryComparison(..)
+                | I::TvShift(..)
+                | I::TvSelectBit(..)
+                | I::TvConcat(..)
+                | I::FvUnary(..)
+                | I::FvResize(..)
+                | I::FvBinaryArithmetic(..)
+                | I::FvBinaryComparison(..)
+                | I::FvShift(..)
+                | I::FvSelectBit(..)
+                | I::FvConcat(..)
                 | I::Intrinsic(..)
                 | I::Probe(..)
                 | I::Drive(..)

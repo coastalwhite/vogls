@@ -1,4 +1,5 @@
 use crate::VectorSize;
+use crate::arithmetic::{fv_contains_special, fv_set_no_special};
 use crate::load::load_partial_u64;
 use crate::store::store_partial_u64;
 
@@ -55,53 +56,15 @@ pub fn fv_multiplication(dst: &mut [u64], lhs: &[u64], rhs: &[u64], size: Vector
             && dst.len() == rhs.len()
             && dst.len() == size.get().div_ceil(32) as usize
     );
-    dst.fill(0);
 
-    let num_words = dst.len();
-
-    {
-        let dst = bytemuck::cast_slice_mut::<u64, u32>(dst);
-        let lhs = bytemuck::cast_slice::<u64, u32>(lhs);
-        let rhs = bytemuck::cast_slice::<u64, u32>(rhs);
-
-        // @Performance. This can probably be written in a better way.
-        for j in 0..num_words {
-            let lhs_mask = 1u32
-                .unbounded_shl(size.get() - 32 * j as u32)
-                .wrapping_sub(1);
-            dst[2 * j + 1] = u32::MAX;
-            for k in 0..num_words - j {
-                let rhs_mask = 1u32
-                    .unbounded_shl(size.get() - 32 * k as u32)
-                    .wrapping_sub(1);
-                let x = (lhs[2 * j] & lhs_mask) as u64;
-                let y = (rhs[2 * k] & rhs_mask) as u64;
-
-                let result = x.wrapping_mul(y);
-
-                let hi = (result >> 32) as u32;
-                let lo = (result & 0xFFFF_FFFF) as u32;
-
-                let mut carry_in;
-                (dst[2 * (j + k)], carry_in) = dst[2 * (j + k)].carrying_add(lo, false);
-                if j + k + 1 < num_words {
-                    (dst[2 * (j + k + 1)], carry_in) =
-                        hi.carrying_add(dst[2 * (j + k + 1)], carry_in);
-                    let mut i = 2;
-                    while carry_in && i + j + k < num_words {
-                        (dst[2 * (i + j + k)], carry_in) =
-                            dst[2 * (i + j + k)].carrying_add(0, carry_in);
-                        i += 1;
-                    }
-                }
-            }
-        }
+    if fv_contains_special(lhs, size) || fv_contains_special(rhs, size) {
+        dst.fill(0);
+        return;
     }
-    if size.get() % 32 != 0 {
-        let mask = (1u64 << (size.get() % 32)).wrapping_sub(1);
-        *dst.last_mut().unwrap() &= mask;
-        *dst.last_mut().unwrap() |= mask << (size.get() % 32);
-    }
+
+    fv_set_no_special(dst, size);
+    let nwords = dst.len() / 2;
+    tv_multiplication(&mut dst[nwords..], &lhs[nwords..], &rhs[nwords..], size);
 }
 
 #[cfg(test)]
@@ -396,7 +359,6 @@ mod tests {
             };
         }
 
-        
         assert_test_vector!(1u32, &[2u64], &[2u64], &[2u64]); // 1'b0 x 1'b0 = 1'b0
         assert_test_vector!(1u32, &[2u64], &[3u64], &[2u64]); // 1'b0 x 1'b1 = 1'b0
         assert_test_vector!(1u32, &[3u64], &[3u64], &[3u64]); // 1'b1 x 1'b1 = 1'b1

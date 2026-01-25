@@ -12,6 +12,8 @@ pub mod negate;
 pub mod proptest;
 pub mod select;
 pub mod set_subslice;
+pub mod extend;
+pub mod truncate;
 pub mod shift;
 pub mod slice;
 pub mod store;
@@ -594,15 +596,6 @@ impl Bits {
         value
     }
 
-    pub fn fv_bitwise_and(lhs: &Self, rhs: &Self) -> Self {
-        Self::tv_bitwise_op(lhs, rhs, |l, r| arithmetic::fv_bitwise_and(l, r))
-    }
-    pub fn fv_bitwise_or(lhs: &Self, rhs: &Self) -> Self {
-        Self::tv_bitwise_op(lhs, rhs, |l, r| arithmetic::fv_bitwise_or(l, r))
-    }
-    pub fn fv_bitwise_xor(lhs: &Self, rhs: &Self) -> Self {
-        Self::tv_bitwise_op(lhs, rhs, |l, r| arithmetic::fv_bitwise_xor(l, r))
-    }
     pub fn tv_bitwise_and(lhs: &Self, rhs: &Self) -> Self {
         Self::tv_bitwise_op(lhs, rhs, |l, r| l & r)
     }

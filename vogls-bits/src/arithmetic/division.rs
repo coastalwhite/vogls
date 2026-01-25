@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
 
 use crate::VectorSize;
+use crate::arithmetic::{fv_contains_special, fv_ltu32_arith_op, fv_set_no_special};
 use crate::comparison::tv_gtu64_unsigned_leq;
 use crate::leading_trailing::tv_leading_zeros;
 use crate::load::load_partial_u64;
@@ -19,6 +20,12 @@ pub fn tv_ltu64_modulus(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: VectorSize
     let r = load_partial_u64(&rhs, size);
     let out = l.checked_rem(r).unwrap_or(0); // Division by zero, returns 0
     store_partial_u64(dst, out, size);
+}
+pub fn fv_ltu32_division(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: VectorSize) {
+    fv_ltu32_arith_op(dst, lhs, rhs, size, |l, r| l.checked_div(r));
+}
+pub fn fv_ltu32_modulus(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: VectorSize) {
+    fv_ltu32_arith_op(dst, lhs, rhs, size, |l, r| l.checked_rem(r));
 }
 
 /// Two-value logic arbitary precision division.
@@ -68,6 +75,40 @@ pub fn tv_division(
         // modulus -= denum << offset;
         tv_lsl_mut_sub(modulus, denumerator, offset, size);
     }
+}
+/// Four-value logic arbitary precision division.
+pub fn fv_division(
+    quotient: &mut [u64],
+    modulus: &mut [u64],
+    numerator: &[u64],
+    denumerator: &[u64],
+    size: VectorSize,
+) {
+    assert!(
+        quotient.len() > 0
+            && quotient.len() == modulus.len()
+            && quotient.len() == numerator.len()
+            && quotient.len() == denumerator.len()
+            && quotient.len() == 2 * size.get().div_ceil(64) as usize
+    );
+
+    if fv_contains_special(numerator, size) || fv_contains_special(denumerator, size) {
+        quotient.fill(0);
+        modulus.fill(0);
+        return;
+    }
+
+    fv_set_no_special(quotient, size);
+    fv_set_no_special(modulus, size);
+
+    let nwords = size.get().div_ceil(64) as usize;
+    tv_division(
+        &mut quotient[nwords..],
+        &mut modulus[nwords..],
+        &numerator[nwords..],
+        &denumerator[nwords..],
+        size,
+    );
 }
 
 /// Computes `dst_lhs -= rhs << offset`.
@@ -174,10 +215,11 @@ pub fn tv_lsl_unsigned_leq(lhs: &[u64], shift: u32, rhs: &[u64], size: VectorSiz
 
 #[cfg(test)]
 mod tests {
-    use super::{tv_division, tv_lsl_mut_sub, tv_lsl_unsigned_leq};
+    use super::{fv_division, tv_division, tv_lsl_mut_sub, tv_lsl_unsigned_leq};
     use crate::VectorSize;
     use crate::arithmetic::tests::{
-        u64x2_to_slice, u64x2_to_slice_mut, u128_arith_target, u128_to_u64x2,
+        fvu64x2_to_slice, fvu64x2_to_slice_mut, u64_arith_target, u64_to_fvu64x2, u64x2_to_slice,
+        u64x2_to_slice_mut, u128_arith_target, u128_to_u64x2,
     };
     use crate::arithmetic::tv_subtraction;
     use crate::comparison::tv_gtu64_unsigned_leq;
@@ -228,6 +270,30 @@ mod tests {
                 u64x2_to_slice_mut(&mut given_modulus, size),
                 u64x2_to_slice(&u128_to_u64x2(lhs), size),
                 u64x2_to_slice(&u128_to_u64x2(rhs), size),
+                size
+            );
+
+            proptest::prop_assert_eq!(given_quotient, expected_quotient);
+            proptest::prop_assert_eq!(given_modulus, expected_modulus);
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn proptest_fv_division
+            ((size, lhs, rhs) in u64_arith_target())
+        {
+            let mask = (1u64.unbounded_shl(size.get())).wrapping_sub(1);
+            let expected_quotient = if rhs == 0 { [0, 0] } else { u64_to_fvu64x2((lhs / rhs) & mask, size) };
+            let expected_modulus = if rhs == 0 { [0, 0] } else { u64_to_fvu64x2((lhs % rhs) & mask, size) };
+            let mut given_quotient = [0u64; 2];
+            let mut given_modulus = [0u64; 2];
+
+            fv_division(
+                fvu64x2_to_slice_mut(&mut given_quotient, size),
+                fvu64x2_to_slice_mut(&mut given_modulus, size),
+                fvu64x2_to_slice(&u64_to_fvu64x2(lhs, size), size),
+                fvu64x2_to_slice(&u64_to_fvu64x2(rhs, size), size),
                 size
             );
 
@@ -578,6 +644,36 @@ mod tests {
                 0x00209B319C5FCC74u64,
                 0x0000000000000000u64
             ]
+        );
+    }
+
+    #[test]
+    fn test_fv_division_vectors() {
+        macro_rules! assert_test_vector {
+            ($size:literal, $a:expr, $b:expr, $q:expr, $m:expr) => {
+                let mut quotient = [0u64; $size.div_ceil(32) as usize];
+                let mut modulus = [0u64; $size.div_ceil(32) as usize];
+                fv_division(
+                    &mut quotient,
+                    &mut modulus,
+                    $a,
+                    $b,
+                    VectorSize::new($size).unwrap(),
+                );
+                assert_eq!(quotient.as_slice(), $q.as_slice(), "quotient");
+                assert_eq!(modulus.as_slice(), $m.as_slice(), "modulus");
+            };
+        }
+
+        // assert_test_vector!(1u32, &[2u64], &[2u64], &[0u64], &[0u64]);
+        // assert_test_vector!(1u32, &[2u64], &[3u64], &[0u64], &[0u64]);
+        // assert_test_vector!(1u32, &[3u64], &[3u64], &[1u64], &[0u64]);
+        assert_test_vector!(
+            33u32,
+            &[0xFFFF_FFFF_0000_0000u64, 0x3u64],
+            &[0xFFFF_FFFF_0000_0001u64, 0x2u64],
+            &[0xFFFF_FFFF_8000_0000u64, 0x2u64],
+            &[0xFFFF_FFFF_0000_0000u64, 0x2u64]
         );
     }
 }

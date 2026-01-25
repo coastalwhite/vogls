@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use slotmap::{SecondaryMap, SlotMap};
 use vogls_ir::token_range::TokenRange;
-use vogls_ir::{Bits, ContextFormat, GlobalContext, Signal};
+use vogls_ir::{Bits, ContextFormat, GlobalContext, LogicMode, Signal};
 use vogls_sim::{
     Context, EvaluationEvent, Event, Regions, SignalInfo, VmProcess, VmProcessKey, VmSignalKey,
     lower_process_to_vm,
@@ -36,6 +36,7 @@ pub struct ExecutionContext {
     pub trace: bool,
     pub time: u64,
     pub opt_rounds: u8,
+    pub logic_mode: LogicMode,
 }
 
 pub fn token_range_to_line_range(
@@ -174,6 +175,7 @@ pub fn run(
         }
     };
     let mut gl = GlobalContext::default();
+    gl.logic_mode = ectx.logic_mode;
 
     let module_lut =
         HashMap::<&str, usize>::from_iter(ast.modules.iter().enumerate().map(|(i, module_id)| {

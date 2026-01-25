@@ -6,11 +6,17 @@ mod add_sub;
 mod division;
 mod multiplication;
 
-const SIZE32: VectorSize = VectorSize::new(32).unwrap();
-
-pub use add_sub::{tv_addition, tv_ltu64_addition, tv_ltu64_subtraction, tv_subtraction};
-pub use division::{tv_division, tv_ltu64_division, tv_ltu64_modulus};
-pub use multiplication::{tv_ltu64_multiplication, tv_multiplication};
+pub use add_sub::{
+    fv_addition, fv_ltu32_addition, fv_ltu32_subtraction, fv_subtraction, tv_addition,
+    tv_ltu64_addition, tv_ltu64_subtraction, tv_subtraction,
+};
+pub use division::{
+    fv_division, fv_ltu32_division, fv_ltu32_modulus, tv_division, tv_ltu64_division,
+    tv_ltu64_modulus,
+};
+pub use multiplication::{
+    fv_ltu32_multiplication, fv_multiplication, tv_ltu64_multiplication, tv_multiplication,
+};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(u8)]
@@ -53,97 +59,6 @@ impl From<bool> for FvLogicValue {
     }
 }
 
-pub trait BitwisePart:
-    Copy
-    + std::fmt::Debug
-    + std::ops::BitAnd<Output = Self>
-    + std::ops::BitOr<Output = Self>
-    + std::ops::BitXor<Output = Self>
-    + std::ops::Not<Output = Self>
-    + std::ops::Shl<u32, Output = Self>
-    + std::ops::Shr<u32, Output = Self>
-    + Eq
-{
-    const ZERO: Self;
-    const NUM_BITS: u32;
-    const SPC_MASK: Self;
-    const VAL_MASK: Self;
-    fn splat_byte(b: u8) -> Self;
-    fn mask(size: VectorSize) -> Self;
-    fn count_ones(self) -> u32;
-    fn as_u64(self) -> u64;
-    fn from_u64(w: u64) -> Self;
-}
-
-macro_rules! impl_bitwise_part {
-    ($($ty:ty),+ $(,)?) => {
-        $(
-        impl BitwisePart for $ty {
-            const ZERO: Self = 0;
-            const NUM_BITS: u32 = <$ty>::BITS;
-            const SPC_MASK: Self = (!0) << (Self::NUM_BITS / 2);
-            const VAL_MASK: Self = (!0) >> (Self::NUM_BITS / 2);
-
-            #[inline(always)]
-            fn splat_byte(b: u8) -> Self {
-                let mut bs = [0u8; size_of::<Self>()];
-                for i in 0..size_of::<Self>() {
-                    bs[i] = b;
-                }
-                Self::from_le_bytes(bs)
-            }
-            #[inline(always)]
-            fn mask(size: VectorSize) -> Self {
-                let one: Self = 1;
-                one.unbounded_shl(size.get()).wrapping_sub(1)
-            }
-            #[inline(always)]
-            fn count_ones(self) -> u32 {
-                Self::count_ones(self)
-            }
-            #[inline(always)]
-            fn as_u64(self) -> u64 {
-                self as u64
-            }
-            #[inline(always)]
-            fn from_u64(w: u64) -> Self {
-                let zero: Self = 0;
-                (w & (!zero) as u64) as Self
-            }
-        }
-        )+
-    };
-}
-
-impl_bitwise_part!(u8, u64);
-impl BitwisePart for FvLogicValue {
-    const ZERO: Self = FvLogicValue::X;
-    const NUM_BITS: u32 = 2;
-    const SPC_MASK: Self = FvLogicValue::L0;
-    const VAL_MASK: Self = FvLogicValue::Z;
-
-    #[inline(always)]
-    fn splat_byte(b: u8) -> Self {
-        Self::from_repr(b & 0b11)
-    }
-    #[inline(always)]
-    fn mask(size: VectorSize) -> Self {
-        Self::from_repr(1u8.unbounded_shl(size.get()).wrapping_sub(1))
-    }
-    #[inline(always)]
-    fn count_ones(self) -> u32 {
-        (self as u8).count_ones()
-    }
-    #[inline(always)]
-    fn as_u64(self) -> u64 {
-        self as u64
-    }
-    #[inline(always)]
-    fn from_u64(w: u64) -> Self {
-        Self::from_repr((w & 0b11) as u8)
-    }
-}
-
 impl std::ops::BitAnd<Self> for FvLogicValue {
     type Output = Self;
     fn bitand(self, rhs: Self) -> Self::Output {
@@ -181,48 +96,177 @@ impl std::ops::Shr<u32> for FvLogicValue {
     }
 }
 
-pub fn bin_bitwise_op<T: BitwisePart>(dst: &mut [T], lhs: &[T], rhs: &[T], op: impl Fn(T, T) -> T) {
+pub fn tv_bin_bitwise_op(dst: &mut [u8], lhs: &[u8], rhs: &[u8], op: impl Fn(u8, u8) -> u8) {
     for i in 0..dst.len() {
         dst[i] = op(lhs[i], rhs[i]);
     }
 }
-pub fn bin_mut_bitwise_op<T: BitwisePart>(dst: &mut [T], other: &[T], op: impl Fn(T, T) -> T) {
+pub fn tv_bin_mut_bitwise_op(dst: &mut [u8], other: &[u8], op: impl Fn(u8, u8) -> u8) {
     for i in 0..dst.len() {
         dst[i] = op(dst[i], other[i]);
     }
 }
+pub fn fv_bin_bitwise_op(
+    dst: &mut [u8],
+    lhs: &[u8],
+    rhs: &[u8],
+    size: VectorSize,
+    op: impl Fn(u64, u64, u64, u64) -> (u64, u64),
+) {
+    let x = load_partial_u64(lhs, size);
+    let y = load_partial_u64(rhs, size);
+    let (xspc, xvalue) = fv_separate_packed_u64(x, size);
+    let (yspc, yvalue) = fv_separate_packed_u64(y, size);
+    let (spc, value) = op(xspc, xvalue, yspc, yvalue);
+    let result = fv_pack_u64(spc, value, size);
+    store_partial_u64(dst, result, size);
+}
+pub fn fv_bin_mut_bitwise_op(
+    dst: &mut [u8],
+    rhs: &[u8],
+    size: VectorSize,
+    op: impl Fn(u64, u64, u64, u64) -> (u64, u64),
+) {
+    let x = load_partial_u64(dst, size);
+    let y = load_partial_u64(rhs, size);
+    let (xspc, xvalue) = fv_separate_packed_u64(x, size);
+    let (yspc, yvalue) = fv_separate_packed_u64(y, size);
+    let (spc, value) = op(xspc, xvalue, yspc, yvalue);
+    let result = fv_pack_u64(spc, value, size);
+    store_partial_u64(dst, result, size);
+}
 
-pub fn unary_bitwise_op<T: BitwisePart>(dst: &mut [T], src: &[T], op: impl Fn(T) -> T) {
-    for i in 0..dst.len() {
-        dst[i] = op(src[i]);
+pub fn tv_bin_u64_bitwise_op(
+    dst: &mut [u64],
+    lhs: &[u64],
+    rhs: &[u64],
+    op: impl Fn(u64, u64) -> u64,
+) {
+    assert!(dst.len() == lhs.len() && dst.len() == rhs.len());
+    let nwords = dst.len();
+    for i in 0..nwords {
+        dst[i] = op(lhs[i], rhs[i]);
     }
 }
-pub fn unary_mut_bitwise_op<T: BitwisePart>(dst: &mut [T], op: impl Fn(T) -> T) {
-    for i in dst.iter_mut() {
-        *i = op(*i);
+pub fn tv_bin_u64_mut_bitwise_op(dst_lhs: &mut [u64], rhs: &[u64], op: impl Fn(u64, u64) -> u64) {
+    assert!(dst_lhs.len() == rhs.len());
+    let nwords = dst_lhs.len();
+    for i in 0..nwords {
+        dst_lhs[i] = op(dst_lhs[i], rhs[i]);
     }
+}
+pub fn fv_bin_u64_bitwise_op(
+    dst: &mut [u64],
+    lhs: &[u64],
+    rhs: &[u64],
+    op: impl Fn(u64, u64, u64, u64) -> (u64, u64),
+) {
+    assert!(dst.len() == lhs.len() && dst.len() == rhs.len());
+    let nwords = dst.len() / 2;
+    for i in 0..nwords {
+        (dst[i], dst[nwords + i]) = op(lhs[i], lhs[nwords + i], rhs[i], rhs[nwords + i]);
+    }
+}
+pub fn fv_bin_u64_mut_bitwise_op(
+    dst_lhs: &mut [u64],
+    rhs: &[u64],
+    op: impl Fn(u64, u64, u64, u64) -> (u64, u64),
+) {
+    assert!(dst_lhs.len() == rhs.len());
+    let nwords = dst_lhs.len() / 2;
+    for i in 0..nwords {
+        (dst_lhs[i], dst_lhs[nwords + i]) =
+            op(dst_lhs[i], dst_lhs[nwords + i], rhs[i], rhs[nwords + i]);
+    }
+}
+
+pub fn fv_reduce_bitwise_op(
+    src: &[u64],
+    size: VectorSize,
+    unit: FvLogicValue,
+    op: impl Fn(u64, u64, VectorSize) -> FvLogicValue,
+) -> FvLogicValue {
+    let mut gspc = unit as u64 >> 1;
+    let mut gvalue = unit as u64 & 1;
+    let nwords = src.len() / 2;
+    let mut i = 0;
+    let mut shift = 1;
+    let mut size = size.get();
+    while let Some(s) = VectorSize::new(size) {
+        let r = op(src[i], src[nwords + i], s);
+        gspc |= (r as u64 >> 1) << (shift + 1);
+        gvalue |= (r as u64 & 1) << (shift + 1);
+        if shift == 63 {
+            let subresult = op(gspc, gvalue, VectorSize::new(64).unwrap());
+            gspc = subresult as u64 >> 1;
+            gvalue = subresult as u64 & 1;
+            shift = 1;
+        } else {
+            shift += 1;
+        }
+        size = size.saturating_sub(64);
+        i += 1;
+    }
+    op(gspc, gvalue, VectorSize::new(shift).unwrap())
+}
+pub fn fv_s_reduce_bitwise_op(
+    src: &[u8],
+    size: VectorSize,
+    op: impl Fn(u64, u64, VectorSize) -> FvLogicValue,
+) -> FvLogicValue {
+    assert!(size.get() <= 32);
+    let x = load_partial_u64(src, size);
+    let (spc, value) = fv_separate_packed_u64(x, size);
+    op(spc, value, size)
+}
+
+pub fn fv_l_reduce_or(src: &[u64], size: VectorSize) -> FvLogicValue {
+    fv_reduce_bitwise_op(src, size, FvLogicValue::L0, fv_reduce_or_elem)
+}
+pub fn fv_l_reduce_and(src: &[u64], size: VectorSize) -> FvLogicValue {
+    fv_reduce_bitwise_op(src, size, FvLogicValue::L1, fv_reduce_and_elem)
+}
+pub fn fv_l_reduce_xor(src: &[u64], size: VectorSize) -> FvLogicValue {
+    fv_reduce_bitwise_op(src, size, FvLogicValue::L0, fv_reduce_xor_elem)
+}
+pub fn fv_s_reduce_or(src: &[u8], size: VectorSize) -> FvLogicValue {
+    fv_s_reduce_bitwise_op(src, size, fv_reduce_or_elem)
+}
+pub fn fv_s_reduce_and(src: &[u8], size: VectorSize) -> FvLogicValue {
+    fv_s_reduce_bitwise_op(src, size, fv_reduce_and_elem)
+}
+pub fn fv_s_reduce_xor(src: &[u8], size: VectorSize) -> FvLogicValue {
+    fv_s_reduce_bitwise_op(src, size, fv_reduce_xor_elem)
+}
+
+pub fn fv_s_select_bit(src: &[u8], idx: u32, size: VectorSize) -> FvLogicValue {
+    if idx >= size.get() {
+        return FvLogicValue::X;
+    }
+
+    let x = load_partial_u64(src, size);
+    let spc = (x >> (size.get() + idx)) & 1;
+    let val = (x >> idx) & 1;
+    FvLogicValue::from_repr(((spc << 1) & val) as u8)
+}
+pub fn fv_l_select_bit(src: &[u64], idx: u32, size: VectorSize) -> FvLogicValue {
+    if idx >= size.get() {
+        return FvLogicValue::X;
+    }
+
+    let spc = (src[(idx / 64) as usize] >> (idx % 64)) & 1;
+    let val = (src[src.len() + (idx / 64) as usize] >> (idx % 64)) & 1;
+    FvLogicValue::from_repr(((spc << 1) & val) as u8)
 }
 
 /// Does the `value` have a `Unknown` or `High Impedance` value?
 #[inline(always)]
-pub fn has_fv_non_logical<T: BitwisePart>(value: T, size: VectorSize) -> bool {
-    (value >> (T::NUM_BITS / 2)).count_ones() != size.get().min(T::NUM_BITS / 2)
+pub fn has_fv_non_logical(value: u64, size: VectorSize) -> bool {
+    (value >> 32).count_ones() != size.get().min(32)
 }
 
 #[inline(always)]
-pub fn tv_bitwise_and<T: BitwisePart>(l: T, r: T) -> T {
-    l & r
-}
-#[inline(always)]
-pub fn tv_bitwise_or<T: BitwisePart>(l: T, r: T) -> T {
-    l | r
-}
-#[inline(always)]
-pub fn tv_bitwise_xor<T: BitwisePart>(l: T, r: T) -> T {
-    l ^ r
-}
-#[inline(always)]
-pub fn fv_bitwise_inv<T: BitwisePart>(value: T) -> T {
+pub fn fv_bitwise_inv_elem(spc: u64, value: u64) -> (u64, u64) {
     //   x z 1 0
     // ~ x x 0 1
     //
@@ -233,14 +277,10 @@ pub fn fv_bitwise_inv<T: BitwisePart>(value: T) -> T {
     // z  0               z  0
     // 0  1               0  1
     // 1  1               1  0
-    let x1 = value & T::SPC_MASK;
-    let x0 = value & T::VAL_MASK;
-    let z1 = x1;
-    let z0 = (x1 >> (T::NUM_BITS / 2)) & !x0;
-    z1 | z0
+    (spc, spc & !value)
 }
 #[inline(always)]
-pub fn fv_bitwise_and<T: BitwisePart>(x: T, y: T) -> T {
+pub fn fv_bitwise_and_elem(xspc: u64, x: u64, yspc: u64, y: u64) -> (u64, u64) {
     // & | x  z  1  0
     // --+-----------
     // x | x  x  x  0
@@ -257,20 +297,12 @@ pub fn fv_bitwise_and<T: BitwisePart>(x: T, y: T) -> T {
     // z | 0  0  0  0               z | 0  0  0  1
     // 0 | 0  0  1  0               1 | 0  0  1  1
     // 1 | 0  0  0  0               0 | 1  1  1  1
-    let x1 = x & T::SPC_MASK;
-    let x0 = x & T::VAL_MASK;
-    let y1 = y & T::SPC_MASK;
-    let y0 = y & T::VAL_MASK;
-
-    let x1s = x1 >> (T::NUM_BITS / 2);
-    let y1s = y1 >> (T::NUM_BITS / 2);
-
-    let z0 = x1s & x0 & y1s & y0;
-    let z1 = ((x1s & !x0) | (y1s & !y0) | z0) << (T::NUM_BITS / 2);
-    z1 | z0
+    let zvalue = xspc & x & yspc & y;
+    let zspc = (xspc & !x) | (yspc & !y) | zvalue;
+    (zspc, zvalue)
 }
 #[inline(always)]
-pub fn fv_bitwise_or<T: BitwisePart>(x: T, y: T) -> T {
+pub fn fv_bitwise_or_elem(xspc: u64, x: u64, yspc: u64, y: u64) -> (u64, u64) {
     // | | x  z  1  0
     // --+-----------
     // x | x  x  1  x
@@ -287,20 +319,12 @@ pub fn fv_bitwise_or<T: BitwisePart>(x: T, y: T) -> T {
     // z | 0  0  1  0               z | 0  0  1  0
     // 0 | 1  1  1  1               1 | 1  1  1  1
     // 1 | 0  0  1  0               0 | 0  0  1  1
-    let x1 = x & T::SPC_MASK;
-    let x0 = x & T::VAL_MASK;
-    let y1 = y & T::SPC_MASK;
-    let y0 = y & T::VAL_MASK;
-
-    let x1s = x1 >> (T::NUM_BITS / 2);
-    let y1s = y1 >> (T::NUM_BITS / 2);
-
-    let z0 = (x1s & x0) | (y1s & y0);
-    let z1 = (z0 << (T::NUM_BITS / 2)) | (x1 & y1);
-    z1 | z0
+    let zvalue = (xspc & x) | (yspc & y);
+    let zspc = zvalue | (xspc & yspc);
+    (zspc, zvalue)
 }
 #[inline(always)]
-pub fn fv_bitwise_xor<T: BitwisePart>(x: T, y: T) -> T {
+pub fn fv_bitwise_xor_elem(xspc: u64, x: u64, yspc: u64, y: u64) -> (u64, u64) {
     // ^ | x  z  1  0
     // --+-----------
     // x | x  x  x  x
@@ -317,28 +341,21 @@ pub fn fv_bitwise_xor<T: BitwisePart>(x: T, y: T) -> T {
     // z | 0  0  0  0               z | 0  0  0  0
     // 0 | 0  0  0  1               1 | 0  0  1  1
     // 1 | 0  0  1  0               0 | 0  0  1  1
-    let x1 = x & T::SPC_MASK;
-    let x0 = x & T::VAL_MASK;
-    let y1 = y & T::SPC_MASK;
-    let y0 = y & T::VAL_MASK;
-
-    let x1s = x1 >> (T::NUM_BITS / 2);
-    let y1s = y1 >> (T::NUM_BITS / 2);
-
-    let z0 = x1s & y1s & (x0 ^ y0);
-    let z1 = x1 & y1;
-    z1 | z0
+    let zspc = xspc & yspc;
+    let zvalue = xspc & yspc & (x ^ y);
+    (zspc, zvalue)
 }
 #[inline(always)]
-pub fn fv_equality<T: BitwisePart>(x: T, y: T, size: VectorSize) -> FvLogicValue {
-    if has_fv_non_logical(x, size) | has_fv_non_logical(y, size) {
+pub fn fv_equality(xspc: u64, x: u64, yspc: u64, y: u64, size: VectorSize) -> FvLogicValue {
+    let mask = 1u64.unbounded_shl(size.get()).wrapping_sub(1);
+    if (xspc & mask != mask) | (yspc & mask != mask) {
         return FvLogicValue::X;
     }
 
     FvLogicValue::from_bool(x == y)
 }
 #[inline(always)]
-pub fn fv_reduce_and<T: BitwisePart>(x: T, size: VectorSize) -> FvLogicValue {
+pub fn fv_reduce_and_elem(spc: u64, value: u64, size: VectorSize) -> FvLogicValue {
     // & | x  z  1  0
     // --+-----------
     // x | x  x  x  0
@@ -349,76 +366,95 @@ pub fn fv_reduce_and<T: BitwisePart>(x: T, size: VectorSize) -> FvLogicValue {
     // z1z0 = fv.redand(sn vn ... s0 v0)
     //
     // z1 = (&si) | (s & !v != 0)
-    let mask = T::mask(size);
-    let spc_mask = mask << (T::NUM_BITS / 2);
-    let val_mask = mask;
-    let x1 = x & spc_mask;
-    let x0 = x & val_mask;
-
-    let x1s = x1 >> (T::NUM_BITS / 2);
-
-    let z1 = (x1 == spc_mask) | (x1s & !x0 != T::ZERO);
-    let z0 = (x1 == spc_mask) & (x0 == val_mask);
+    let mask = 1u64.unbounded_shl(size.get()).wrapping_sub(1);
+    let z1 = (spc == mask) | (spc & !value != 0);
+    let z0 = (spc == mask) & (value == mask);
     FvLogicValue::from_repr((u8::from(z1) << 1) | u8::from(z0))
 }
 #[inline(always)]
-pub fn fv_reduce_or<T: BitwisePart>(x: T, size: VectorSize) -> FvLogicValue {
+pub fn fv_reduce_or_elem(spc: u64, value: u64, size: VectorSize) -> FvLogicValue {
     // | | x  z  1  0
     // --+-----------
     // x | x  x  1  x
     // z | x  x  1  x
     // 1 | 1  1  1  1
     // 0 | x  x  1  0
-    let mask = T::mask(size);
-    let spc_mask = mask << (T::NUM_BITS / 2);
-    let val_mask = mask;
-    let x1 = x & spc_mask;
-    let x0 = x & val_mask;
 
-    let x1s = x1 >> (T::NUM_BITS / 2);
-
-    let z1 = (x1 == spc_mask) | ((x1s & x0) != T::ZERO);
-    let z0 = (x1s & x0) != T::ZERO;
+    let mask = 1u64.unbounded_shl(size.get()).wrapping_sub(1);
+    let z0 = (spc & value) != 0;
+    let z1 = (spc == mask) | z0;
     FvLogicValue::from_repr((u8::from(z1) << 1) | u8::from(z0))
 }
 #[inline(always)]
-pub fn fv_reduce_xor<T: BitwisePart>(x: T, size: VectorSize) -> FvLogicValue {
+pub fn fv_reduce_xor_elem(spc: u64, value: u64, size: VectorSize) -> FvLogicValue {
     // ^ | x  z  1  0
     // --+-----------
     // x | x  x  x  x
     // z | x  x  x  x
     // 1 | x  x  0  1
     // 0 | x  x  1  0
-    let mask = T::mask(size);
-    let spc_mask = mask << (T::NUM_BITS / 2);
-    let val_mask = mask;
-    let x1 = x & spc_mask;
-    let x0 = x & val_mask;
 
-    let x1s = x1 >> (T::NUM_BITS / 2);
-
-    let z1 = x1 == spc_mask;
-    let z0 = z1 & ((x1s & x0).count_ones() % 2 == 1);
+    let mask = 1u64.unbounded_shl(size.get()).wrapping_sub(1);
+    let z1 = spc == mask;
+    let z0 = z1 & ((spc & value).count_ones() % 2 == 1);
     FvLogicValue::from_repr((u8::from(z1) << 1) | u8::from(z0))
 }
 
 pub fn fv_contains_special(src: &[u64], size: VectorSize) -> bool {
-    assert!(src.len() > 0 && size.get().div_ceil(64) as usize == src.len());
-    for v in 0..src.len() - 1 {
-        if has_fv_non_logical(src[v], SIZE32) {
+    assert!(src.len() > 0 && src.len() == 2 * (size.get().div_ceil(64) as usize));
+    let nwords = src.len() / 2;
+    for i in 0..nwords - 1 {
+        if !src[i] != 0 {
             return true;
         }
     }
+    let last_mask = if size.get() % 64 == 0 {
+        u64::MAX
+    } else {
+        (1u64 << size.get() % 64) - 1
+    };
+    src[nwords - 1] & last_mask != last_mask
+}
 
-    let rem_size = VectorSize::new(size.get() % 32).unwrap_or(SIZE32);
-    has_fv_non_logical(fv_fixup_last_u64(src[src.len() - 1], rem_size), rem_size)
+pub fn fv_separate_packed_u64(v: u64, size: VectorSize) -> (u64, u64) {
+    debug_assert!(size.get() <= 32);
+    let mask = (1u64 << size.get()) - 1;
+    ((v & !mask) << (32 - size.get()), v & mask)
+}
+pub fn fv_pack_u64(spc: u64, value: u64, size: VectorSize) -> u64 {
+    debug_assert!(size.get() <= 32);
+    (spc << size.get()) | value
+}
+
+pub fn fv_leu32_bitwise_inv(dst: &mut [u8], src: &[u8], size: VectorSize) {
+    let dsize = VectorSize::new(size.get() * 2).unwrap();
+    let src = load_partial_u64(&src, dsize);
+    let (spc, value) = fv_separate_packed_u64(src, size);
+    let (spc, value) = fv_bitwise_inv_elem(spc, value);
+    let result = fv_pack_u64(spc, value, size);
+    store_partial_u64(dst, result, dsize);
+}
+
+pub fn fv_gtu32_bitwise_inv(dst: &mut [u64], src: &[u64], size: VectorSize) {
+    assert!(dst.len() == src.len() && dst.len() == 2 * size.get().div_ceil(64) as usize);
+    let nwords = dst.len() / 2;
+    for i in 0..nwords {
+        (dst[i], dst[nwords + i]) = fv_bitwise_inv_elem(src[i], src[nwords + i]);
+    }
+}
+
+pub fn fv_set_no_special(slice: &mut [u64], size: VectorSize) {
+    assert!(slice.len() > 0 && slice.len() == 2 * (size.get().div_ceil(64) as usize));
+    let nwords = slice.len() / 2;
+    slice[..nwords].fill(u64::MAX);
+    slice[nwords - 1] &= (1u64 << size.get() % 64) - 1;
 }
 
 #[inline(always)]
 pub fn fv_fixup_last_u64(v: u64, size: VectorSize) -> u64 {
     debug_assert!(size.get() <= 32);
     let mask = (1u64 << size.get()) - 1;
-    ((v & !mask) << (size.get() - 32)) | (v & mask)
+    ((v & !mask) << (32 - size.get())) | (v & mask)
 }
 
 pub fn fv_ltu32_arith_op(
@@ -503,20 +539,28 @@ mod tests {
     fn test_fv_bitwise() {
         for &y in L::VALUES {
             for &x in L::VALUES {
-                let z_and = fv_bitwise_and(x, y);
-                let z_or = fv_bitwise_or(x, y);
-                let z_xor = fv_bitwise_xor(x, y);
-
                 let x_u8 = x as u8;
                 let y_u8 = y as u8;
-                let concat = ((x_u8 & 0b10) << 4)
-                    | ((y_u8 & 0b10) << 3)
-                    | ((x_u8 & 0b01) << 1)
-                    | (y_u8 & 0b01);
+
+                let xspc = (x_u8 >> 1) as u64;
+                let xvalue = (x_u8 & 1) as u64;
+                let yspc = (y_u8 >> 1) as u64;
+                let yvalue = (y_u8 & 1) as u64;
+
+                let (z_andspc, z_and) = fv_bitwise_and_elem(xspc, xvalue, yspc, yvalue);
+                let (z_orspc, z_or) = fv_bitwise_or_elem(xspc, xvalue, yspc, yvalue);
+                let (z_xorspc, z_xor) = fv_bitwise_xor_elem(xspc, xvalue, yspc, yvalue);
+
+                let z_and = FvLogicValue::from_repr(((z_andspc << 1) | z_and) as u8);
+                let z_or = FvLogicValue::from_repr(((z_orspc << 1) | z_or) as u8);
+                let z_xor = FvLogicValue::from_repr(((z_xorspc << 1) | z_xor) as u8);
+
+                let spc = (xspc << 1) | (yspc);
+                let value = (xvalue << 1) | (yvalue);
                 let size = VectorSize::new(2).unwrap();
-                let z_redand = fv_reduce_and(concat, size);
-                let z_redor = fv_reduce_or(concat, size);
-                let z_redxor = fv_reduce_xor(concat, size);
+                let z_redand = fv_reduce_and_elem(spc, value, size);
+                let z_redor = fv_reduce_or_elem(spc, value, size);
+                let z_redxor = fv_reduce_xor_elem(spc, value, size);
 
                 let idx = (((y as u8) << 2) | (x as u8)) as usize;
                 assert_eq!(z_and, FV_BITWISE_AND_LUT[idx], "{z_and:?} != {x:?} & {y:?}");
@@ -542,7 +586,15 @@ mod tests {
     fn test_fv_equality() {
         for &y in L::VALUES {
             for &x in L::VALUES {
-                let z = fv_equality(x, y, VectorSize::new(1).unwrap());
+                let x_u8 = x as u8;
+                let y_u8 = y as u8;
+
+                let xspc = (x_u8 >> 1) as u64;
+                let xvalue = (x_u8 & 1) as u64;
+                let yspc = (y_u8 >> 1) as u64;
+                let yvalue = (y_u8 & 1) as u64;
+
+                let z = fv_equality(xspc, xvalue, yspc, yvalue, VectorSize::new(1).unwrap());
 
                 let idx = (((y as u8) << 2) | (x as u8)) as usize;
                 assert_eq!(z, FV_EQUALITY_LUT[idx], "{z:?} != ({x:?} == {y:?})");
@@ -552,18 +604,14 @@ mod tests {
     #[test]
     fn test_fv_bitwise_inv() {
         for &x in L::VALUES {
-            let z = fv_bitwise_inv(x);
+            let x_u8 = x as u8;
+            let xspc = (x_u8 >> 1) as u64;
+            let xvalue = (x_u8 & 1) as u64;
+            let (spc, value) = fv_bitwise_inv_elem(xspc, xvalue);
+            let z = FvLogicValue::from_repr(((spc << 1) | value) as u8);
             let idx = (x as u8) as usize;
             assert_eq!(z, FV_BITWISE_INV_LUT[idx], "{z:?} = !{x:?}");
         }
-    }
-    #[test]
-    fn test_fv_has_non_logical() {
-        const S: VectorSize = VectorSize::new(1).unwrap();
-        assert!(has_fv_non_logical(L::X, S));
-        assert!(has_fv_non_logical(L::Z, S));
-        assert!(!has_fv_non_logical(L::L0, S));
-        assert!(!has_fv_non_logical(L::L1, S));
     }
 
     pub fn u8_slice_to_u64_vec(s: &[u8]) -> Vec<u64> {

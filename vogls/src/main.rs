@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use clap::Parser;
 use vogls::ExecutionContext;
+use vogls_ir::LogicMode;
 
 #[derive(clap::Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -30,10 +31,18 @@ struct Args {
 
     #[arg(long = "opt-rounds", default_value_t = 0)]
     opt_rounds: u8,
+    #[arg(long = "fv-logic", short = 'F')]
+    four_value_logic: bool,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
+
+    let logic_mode = if args.four_value_logic {
+        LogicMode::FourValue
+    } else {
+        LogicMode::TwoValue
+    };
 
     let path = Path::new(&args.path);
     vogls::run(
@@ -49,6 +58,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             trace: args.trace,
             time: args.time,
             opt_rounds: args.opt_rounds,
+            logic_mode,
         },
     )?;
 

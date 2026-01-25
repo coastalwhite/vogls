@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use clap::Parser;
 use vogls::ExecutionContext;
+use vogls_ir::LogicMode;
 
 #[derive(clap::Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -138,6 +139,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             trace: false,
             time: test_information.time,
             opt_rounds: 0,
+            logic_mode: LogicMode::FourValue,
         };
         let result = vogls::run(&path, None, &mut ctx);
 
