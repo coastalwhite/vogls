@@ -7,7 +7,7 @@ use slotmap::{SlotMap, new_key_type};
 use vogls_bits::arithmetic::{
     fv_gtu32_bitwise_inv, fv_l_reduce_and, fv_l_reduce_or, fv_l_reduce_xor, fv_l_select_bit,
     fv_leu32_bitwise_inv, fv_pack_u64, fv_s_reduce_and, fv_s_reduce_or, fv_s_reduce_xor,
-    fv_s_select_bit, fv_separate_packed_u64,
+    fv_s_select_bit, fv_separate_packed_u64, fv_set_no_special,
 };
 use vogls_bits::concat::{fv_l_concat, fv_s_concat};
 use vogls_bits::extend::{fv_l_sign_extend, fv_l_zero_extend, fv_s_sign_extend, fv_s_zero_extend};
@@ -18,10 +18,12 @@ use vogls_bits::shift::{
 };
 use vogls_bits::store::store_partial_u64;
 use vogls_bits::truncate::{fv_l_truncate, fv_s_truncate};
-use vogls_bits::{BitsDataRefMut, get_disjoint_dst_s1_s2, get_disjoint_dst_src};
+use vogls_bits::{BitsDataRef, BitsDataRefMut, get_disjoint_dst_s1_s2, get_disjoint_dst_src};
 use vogls_ir::dyn_format_string::{Base, Padding, format_bits};
 use vogls_ir::vcd::NetType;
-use vogls_ir::{Bits, INTEGER_VSIZE, ResizeOp, SignalKey, TIME_VSIZE, UnaryOp, VectorSize};
+use vogls_ir::{
+    Bits, INTEGER_VSIZE, LogicMode, ResizeOp, SignalKey, TIME_VSIZE, UnaryOp, VectorSize,
+};
 
 mod bits;
 mod instruction;
@@ -60,6 +62,7 @@ pub type InstanceId = u64;
 
 pub struct Context {
     time: Timestamp,
+    logic_mode: LogicMode,
     pub stdout: Box<dyn std::io::Write>,
     pub stderr: Box<dyn std::io::Write>,
     pub instruction_count: u64,
@@ -67,9 +70,14 @@ pub struct Context {
 }
 
 impl Context {
-    pub fn new(stdout: Box<dyn std::io::Write>, stderr: Box<dyn std::io::Write>) -> Self {
+    pub fn new(
+        logic_mode: LogicMode,
+        stdout: Box<dyn std::io::Write>,
+        stderr: Box<dyn std::io::Write>,
+    ) -> Self {
         Self {
             time: 0,
+            logic_mode,
             stdout,
             stderr,
             instruction_count: 0,
@@ -417,7 +425,32 @@ impl Event {
             ctx.instruction_count += 1;
             match instr {
                 I::Constant(var, value) => {
-                    stack[var.offset..][..value.as_slice().len()].copy_from_slice(value.as_slice());
+                    match value.as_data_ref() {
+                        BitsDataRef::InlineTv(v) => {
+                            let nbytes = value.size().get().div_ceil(8) as usize;
+                            stack[var.offset..][..nbytes]
+                                .copy_from_slice(&v.to_le_bytes()[..nbytes])
+                        }
+                        BitsDataRef::SeparateTv(items) => {
+                            let dst = bytemuck::cast_slice_mut::<u8, u64>(
+                                &mut stack[var.offset..][..items.len() * 8],
+                            );
+                            dst.copy_from_slice(items);
+                        }
+                        BitsDataRef::InlineFv(spc, val) => {
+                            let size = value.size();
+                            let nbytes = (2 * size.get()).div_ceil(8) as usize;
+                            let v = ((spc as u64) << size.get()) | (val as u64);
+                            stack[var.offset..][..nbytes]
+                                .copy_from_slice(&v.to_le_bytes()[..nbytes])
+                        }
+                        BitsDataRef::SeparateFv(items) => {
+                            let dst = bytemuck::cast_slice_mut::<u8, u64>(
+                                &mut stack[var.offset..][..items.len() * 8],
+                            );
+                            dst.copy_from_slice(items);
+                        }
+                    };
                 }
                 I::TvUnary(dst, op, size, src) => {
                     use UnaryOp as O;
@@ -718,7 +751,7 @@ impl Event {
                     use ResizeOp as O;
                     match op {
                         O::Truncate | O::ZeroExtend | O::SignExtend
-                            if dst_size.get() <= 32 && src_size.get() <= 32 =>
+                            if dst_size.get() <= 16 && src_size.get() <= 16 =>
                         {
                             let (dst, src) = get_disjoint_dst_src(
                                 stack,
@@ -735,7 +768,7 @@ impl Event {
                             f(dst, src, *dst_size, *src_size);
                         }
                         O::Truncate | O::ZeroExtend | O::SignExtend
-                            if dst_size.get() > 32 && src_size.get() > 32 =>
+                            if dst_size.get() > 16 && src_size.get() > 16 =>
                         {
                             let (dst, src) = get_disjoint_dst_src(
                                 stack,
@@ -769,13 +802,14 @@ impl Event {
                             let mut psrc = [0u64; 2];
                             (psrc[0], psrc[1]) = fv_separate_packed_u64(
                                 load_partial_u64(
-                                    &stack[src.offset..][..src_size.get().div_ceil(8) as usize],
+                                    &stack[src.offset..]
+                                        [..(2 * src_size.get()).div_ceil(8) as usize],
                                     *src_size,
                                 ),
-                                *src_size,
+                                VectorSize::new(2 * src_size.get()).unwrap(),
                             );
                             let dst = &mut stack[dst.offset..]
-                                [..2 * src_size.get().div_ceil(64) as usize * 8];
+                                [..2 * dst_size.get().div_ceil(64) as usize * 8];
                             let dst = bytemuck::cast_slice_mut::<u8, u64>(dst);
                             let f = match op {
                                 O::ZeroExtend => fv_l_zero_extend,
@@ -854,7 +888,7 @@ impl Event {
                             O::Modulus => fv_u64_modulus,
                         };
 
-                        let nwords = size.get().div_ceil(32) as usize;
+                        let nwords = 2 * size.get().div_ceil(64) as usize;
                         let nbytes = nwords * 8;
                         let (dst, lhs, rhs) = vogls_bits::get_disjoint_dst_s1_s2(
                             stack, dst.offset, nbytes, lhs.offset, nbytes, rhs.offset, nbytes,
@@ -888,7 +922,7 @@ impl Event {
                 I::FvBinaryComparison(dst, op, size, lhs, rhs) => {
                     use BinaryComparisonOp as O;
                     let result = match op {
-                        O::UnsignedLessEqual if size.get() <= 32 => {
+                        O::UnsignedLessEqual if size.get() <= 16 => {
                             let nbytes = size.get().div_ceil(8) as usize;
                             let lhs = &stack[lhs.offset..][..nbytes];
                             let rhs = &stack[rhs.offset..][..nbytes];
@@ -917,8 +951,8 @@ impl Event {
                     // If the right operand has an x or z value, then the result shall be unknown.
                     // """
                     if offset >> 32 != 0xFFFF_FFFF {
-                        if size.get() > 32 {
-                            let nbytes = size.get().div_ceil(8) as usize;
+                        if size.get() > 16 {
+                            let nbytes = (2 * size.get()).div_ceil(8) as usize;
                             stack[dst.offset..][..nbytes].fill(0u8);
                         } else {
                             let nwords = 2 * size.get().div_ceil(64) as usize;
@@ -931,7 +965,7 @@ impl Event {
                     }
 
                     let offset = (offset & 0xFFFF_FFFF) as u32;
-                    if size.get() > 32 {
+                    if size.get() > 16 {
                         let nbytes = size.get().div_ceil(8) as usize;
                         let (dst, src) =
                             get_disjoint_dst_src(stack, dst.offset, nbytes, src.offset, nbytes);
@@ -964,7 +998,7 @@ impl Event {
                     let idx =
                         load_partial_u64(&stack[idx.offset..][..8], VectorSize::new(32).unwrap());
                     let idx = (idx & 0xFFFF_FFFF) as u32;
-                    if size.get() > 32 {
+                    if size.get() > 16 {
                         stack[dst.offset] = fv_s_select_bit(
                             &stack[src.offset..][..size.get().div_ceil(8) as usize],
                             idx,
@@ -978,7 +1012,7 @@ impl Event {
                     }
                 }
                 I::FvConcat(dst, lhs_size, lhs, rhs_size, rhs) => {
-                    if lhs_size.get() + rhs_size.get() > 32 {
+                    if lhs_size.get() + rhs_size.get() > 16 {
                         let (d, l, r) = get_disjoint_dst_s1_s2(
                             stack,
                             dst.offset,
@@ -1030,14 +1064,71 @@ impl Event {
 
                 I::TvToFv(dst, src, size) => {
                     if size.get() <= 16 {
-                        let tv_nbytes = size.get().div_ceil(8);
-                        let fv_nbytes = (size.get() * 2).div_ceil(8);
-                        load_partial_u64(slice, size)
+                        let tv_nbytes = size.get().div_ceil(8) as usize;
+                        let fv_nbytes = (size.get() * 2).div_ceil(8) as usize;
+                        let v = load_partial_u64(&stack[src.offset..][..tv_nbytes], *size);
+                        store_partial_u64(
+                            &mut stack[dst.offset..][..fv_nbytes],
+                            v | (((1u64 << size.get()) - 1) << size.get()),
+                            VectorSize::new(2 * size.get()).unwrap(),
+                        );
                     } else if size.get() <= 32 {
+                        let tv_nbytes = size.get().div_ceil(8) as usize;
+                        let v = load_partial_u64(&stack[src.offset..][..tv_nbytes], *size);
+                        let dst =
+                            bytemuck::cast_slice_mut::<u8, u64>(&mut stack[dst.offset..][..16]);
+                        dst[0] = (1u64 << size.get()) - 1;
+                        dst[1] = v;
                     } else {
+                        let tv_nwords = size.get().div_ceil(64) as usize;
+                        let fv_nwords = 2 * size.get().div_ceil(64) as usize;
+                        let (dst, src) = get_disjoint_dst_src(
+                            stack,
+                            dst.offset,
+                            fv_nwords * 8,
+                            src.offset,
+                            tv_nwords * 8,
+                        );
+                        let dst = bytemuck::cast_slice_mut::<u8, u64>(dst);
+                        let src = bytemuck::cast_slice::<u8, u64>(src);
+
+                        fv_set_no_special(dst, *size);
+                        dst[tv_nwords..].copy_from_slice(src);
                     }
-                },
-                I::FvToTv(dst, src, size) => todo!(),
+                }
+                I::FvToTv(dst, src, size) => {
+                    if size.get() <= 16 {
+                        let tv_nbytes = size.get().div_ceil(8) as usize;
+                        let fv_nbytes = (size.get() * 2).div_ceil(8) as usize;
+                        let v = load_partial_u64(
+                            &stack[src.offset..][..fv_nbytes],
+                            VectorSize::new(2 * size.get()).unwrap(),
+                        );
+                        store_partial_u64(
+                            &mut stack[dst.offset..][..tv_nbytes],
+                            v & ((1u64 << size.get()) - 1),
+                            *size,
+                        );
+                    } else if size.get() <= 32 {
+                        let tv_nbytes = size.get().div_ceil(8) as usize;
+                        let v = bytemuck::cast_slice::<u8, u64>(&stack[dst.offset..][..16])[1];
+                        store_partial_u64(&mut stack[..tv_nbytes], v, *size);
+                    } else {
+                        let tv_nwords = size.get().div_ceil(64) as usize;
+                        let fv_nwords = 2 * size.get().div_ceil(64) as usize;
+                        let (dst, src) = get_disjoint_dst_src(
+                            stack,
+                            src.offset,
+                            tv_nwords * 8,
+                            dst.offset,
+                            fv_nwords * 8,
+                        );
+                        let dst = bytemuck::cast_slice_mut::<u8, u64>(dst);
+                        let src = bytemuck::cast_slice::<u8, u64>(src);
+
+                        dst.copy_from_slice(&src[tv_nwords..]);
+                    }
+                }
 
                 I::Intrinsic(dst, op, args) => {
                     use VmIntrinsicOp as O;

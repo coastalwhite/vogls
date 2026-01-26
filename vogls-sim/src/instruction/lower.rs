@@ -14,21 +14,18 @@ fn push_variable(stack_top: &mut usize, size: VectorSize, mode: LogicMode) -> St
     // Most arithmetic operations are implemented on 64-bit chunks, by ensuring that
     // all variables with a size larger or equal to than 64 are allocated in chunks of
     // 64 we can efficiently dispatch to these kernels.
-    let nbytes = if size.get() > 32 {
+    let nbytes = if mode == LogicMode::TwoValue && size.get() > 32 {
         // @TODO: Allow this space to be used somehow. In general, we should use a
         // slab allocator instead of this.
         *stack_top += 8 - (*stack_top % 8); // pad to 8-bytes
-        if mode == LogicMode::TwoValue {
-            (size.get() as usize).div_ceil(64) * 8
-        } else {
-            2 * (size.get() as usize).div_ceil(64) * 8
-        }
+        (size.get() as usize).div_ceil(64) * 8
+    } else if mode == LogicMode::FourValue && size.get() > 16 {
+        *stack_top += 8 - (*stack_top % 8); // pad to 8-bytes
+        2 * (size.get() as usize).div_ceil(64) * 8
+    } else if mode == LogicMode::TwoValue {
+        (size.get() as usize).div_ceil(8)
     } else {
-        if mode == LogicMode::TwoValue {
-            (size.get() as usize).div_ceil(8)
-        } else {
-            (2 * size.get() as usize).div_ceil(8)
-        }
+        (2 * size.get() as usize).div_ceil(8)
     };
     let stack_ref = StackRef { offset: *stack_top };
     *stack_top += nbytes;

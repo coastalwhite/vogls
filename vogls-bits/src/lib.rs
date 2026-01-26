@@ -409,7 +409,7 @@ impl Bits {
                 .map(|c| {
                     u64::from_le_bytes(c.try_into().unwrap_or_else(|_| {
                         let mut data = [0u8; 8];
-                        data.copy_from_slice(c);
+                        data[..c.len()].copy_from_slice(c);
                         data
                     }))
                 })
@@ -853,17 +853,17 @@ impl Bits {
             BitsDataRef::InlineTv(v) => v.leading_zeros() - (64 - self.size.get()),
             BitsDataRef::SeparateTv(v) => {
                 let mut n = 0;
-                let soff = self.size.get() % 8;
+                let soff = self.size.get() % 64;
                 if soff != 0 {
-                    let lbn = self.as_slice().last().unwrap().leading_zeros();
-                    if lbn != 8 {
-                        return lbn - (8 - soff);
+                    let lbn = v.last().unwrap().leading_zeros();
+                    if lbn != 64 {
+                        return lbn - (64 - soff);
                     }
                     n += soff;
                 }
                 for b in v[..v.len() - usize::from(n != 0)].iter().rev() {
                     if *b == 0 {
-                        n += 8;
+                        n += 64;
                     } else {
                         return n + b.leading_zeros();
                     }

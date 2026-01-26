@@ -765,7 +765,7 @@ pub fn run(
             events: Vec::new(),
         });
     }
-    let mut ctx = Context::new(stdout, stderr);
+    let mut ctx = Context::new(gl.logic_mode, stdout, stderr);
     let fail = vogls_sim::run(
         &mut ctx,
         &processes,

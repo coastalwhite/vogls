@@ -218,7 +218,7 @@ impl ContextFormat for Instruction {
             Self::Binary(dst, op, src1, src2) => {
                 write!(
                     f,
-                    "{} = tv.{} {}, {}",
+                    "{} = {} {}, {}",
                     dst.display(ctx.gl),
                     op.into_mnemonic(),
                     src1.display(ctx.gl),
