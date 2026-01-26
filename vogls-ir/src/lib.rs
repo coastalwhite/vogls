@@ -49,12 +49,9 @@ impl BasicBlock {
         for i in self.instrs.iter_mut() {
             match i {
                 Instruction::Constant(..)
-                | Instruction::TvUnary(..)
-                | Instruction::TvBinary(..)
-                | Instruction::TvResize(..)
-                | Instruction::FvUnary(..)
-                | Instruction::FvBinary(..)
-                | Instruction::FvResize(..)
+                | Instruction::Unary(..)
+                | Instruction::Binary(..)
+                | Instruction::Resize(..)
                 | Instruction::Intrinsic(..)
                 | Instruction::Probe(..)
                 | Instruction::Drive(..) => {}
@@ -249,13 +246,9 @@ pub enum BinaryOp {
 pub enum Instruction {
     Constant(VariableKey, Bits),
 
-    TvUnary(VariableKey, UnaryOp, VariableKey),
-    TvResize(VariableKey, ResizeOp, VariableKey),
-    TvBinary(VariableKey, BinaryOp, VariableKey, VariableKey),
-
-    FvUnary(VariableKey, UnaryOp, VariableKey),
-    FvResize(VariableKey, ResizeOp, VariableKey),
-    FvBinary(VariableKey, BinaryOp, VariableKey, VariableKey),
+    Unary(VariableKey, UnaryOp, VariableKey),
+    Resize(VariableKey, ResizeOp, VariableKey),
+    Binary(VariableKey, BinaryOp, VariableKey, VariableKey),
 
     Intrinsic(VariableKey, Box<IntrinsicOp>, Box<[VariableKey]>),
     Probe(VariableKey, SignalKey),
@@ -273,12 +266,9 @@ impl Instruction {
     pub fn get_destination_variable(&self) -> Option<VariableKey> {
         match self {
             Self::Constant(dst, _)
-            | Self::TvUnary(dst, _, _)
-            | Self::TvResize(dst, _, _)
-            | Self::TvBinary(dst, _, _, _)
-            | Self::FvUnary(dst, _, _)
-            | Self::FvResize(dst, _, _)
-            | Self::FvBinary(dst, _, _, _)
+            | Self::Unary(dst, _, _)
+            | Self::Resize(dst, _, _)
+            | Self::Binary(dst, _, _, _)
             | Self::Phi(dst, _)
             | Self::Probe(dst, _)
             | Self::Intrinsic(dst, _, _) => Some(*dst),
@@ -288,11 +278,8 @@ impl Instruction {
 
     fn for_each_var_src(&self, mut f: impl FnMut(VariableKey)) {
         match self {
-            Self::TvUnary(_, _, src)
-            | Self::TvResize(_, _, src)
-            | Self::FvUnary(_, _, src)
-            | Self::FvResize(_, _, src) => f(*src),
-            Self::TvBinary(_, _, src1, src2) | Self::FvBinary(_, _, src1, src2) => {
+            Self::Unary(_, _, src) | Self::Resize(_, _, src) => f(*src),
+            Self::Binary(_, _, src1, src2) => {
                 f(*src1);
                 f(*src2);
             }
@@ -319,12 +306,9 @@ impl Instruction {
     pub fn has_side_effects_on_call(&self) -> bool {
         match self {
             Self::Constant(..)
-            | Self::TvUnary(..)
-            | Self::TvResize(..)
-            | Self::TvBinary(..)
-            | Self::FvUnary(..)
-            | Self::FvResize(..)
-            | Self::FvBinary(..)
+            | Self::Unary(..)
+            | Self::Resize(..)
+            | Self::Binary(..)
             | Self::Phi(..)
             | Self::Probe(..) => false,
             Self::Drive(..) | Self::Intrinsic(..) => true,
@@ -333,14 +317,11 @@ impl Instruction {
 
     fn map_vars(&mut self, mut f: impl FnMut(VariableKey) -> VariableKey) {
         match self {
-            Self::TvUnary(dst, _, src)
-            | Self::TvResize(dst, _, src)
-            | Self::FvUnary(dst, _, src)
-            | Self::FvResize(dst, _, src) => {
+            Self::Unary(dst, _, src) | Self::Resize(dst, _, src) => {
                 *dst = f(*dst);
                 *src = f(*src)
             }
-            Self::TvBinary(dst, _, src1, src2) | Self::FvBinary(dst, _, src1, src2) => {
+            Self::Binary(dst, _, src1, src2) => {
                 *dst = f(*dst);
                 *src1 = f(*src1);
                 *src2 = f(*src2);
@@ -372,12 +353,9 @@ impl Instruction {
     fn map_bb(&mut self, mut f: impl FnMut(BasicBlockKey) -> BasicBlockKey) {
         match self {
             Instruction::Constant(..)
-            | Instruction::TvUnary(..)
-            | Instruction::TvResize(..)
-            | Instruction::TvBinary(..)
-            | Instruction::FvUnary(..)
-            | Instruction::FvResize(..)
-            | Instruction::FvBinary(..)
+            | Instruction::Unary(..)
+            | Instruction::Resize(..)
+            | Instruction::Binary(..)
             | Instruction::Intrinsic(..)
             | Instruction::Probe(..)
             | Instruction::Drive(..) => {}

@@ -1028,6 +1028,17 @@ impl Event {
                     }
                 }
 
+                I::TvToFv(dst, src, size) => {
+                    if size.get() <= 16 {
+                        let tv_nbytes = size.get().div_ceil(8);
+                        let fv_nbytes = (size.get() * 2).div_ceil(8);
+                        load_partial_u64(slice, size)
+                    } else if size.get() <= 32 {
+                    } else {
+                    }
+                },
+                I::FvToTv(dst, src, size) => todo!(),
+
                 I::Intrinsic(dst, op, args) => {
                     use VmIntrinsicOp as O;
 

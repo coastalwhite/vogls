@@ -196,58 +196,29 @@ impl ContextFormat for Instruction {
                 var.ctx_fmt(f, ctx)?;
                 write!(f, " = const {val}")?;
             }
-            Self::TvUnary(dst, op, src) => {
+            Self::Unary(dst, op, src) => {
                 write!(
                     f,
-                    "{} = tv.{} {}",
+                    "{} = {} {}",
                     dst.display(ctx.gl),
                     op.into_mnemonic(),
                     src.display(ctx.gl),
                 )?;
             }
-            Self::TvResize(dst, op, src) => {
+            Self::Resize(dst, op, src) => {
                 write!(
                     f,
-                    "{} = tv.{}[{}] {}",
+                    "{} = {}[{}] {}",
                     dst.display(ctx.gl),
                     op.into_mnemonic(),
                     ctx.gl.vars[*dst].size,
                     src.display(ctx.gl),
                 )?;
             }
-            Self::TvBinary(dst, op, src1, src2) => {
+            Self::Binary(dst, op, src1, src2) => {
                 write!(
                     f,
                     "{} = tv.{} {}, {}",
-                    dst.display(ctx.gl),
-                    op.into_mnemonic(),
-                    src1.display(ctx.gl),
-                    src2.display(ctx.gl),
-                )?;
-            }
-            Self::FvUnary(dst, op, src) => {
-                write!(
-                    f,
-                    "{} = fv.{} {}",
-                    dst.display(ctx.gl),
-                    op.into_mnemonic(),
-                    src.display(ctx.gl),
-                )?;
-            }
-            Self::FvResize(dst, op, src) => {
-                write!(
-                    f,
-                    "{} = fv.{}[{}] {}",
-                    dst.display(ctx.gl),
-                    op.into_mnemonic(),
-                    ctx.gl.vars[*dst].size,
-                    src.display(ctx.gl),
-                )?;
-            }
-            Self::FvBinary(dst, op, src1, src2) => {
-                write!(
-                    f,
-                    "{} = fv.{} {}, {}",
                     dst.display(ctx.gl),
                     op.into_mnemonic(),
                     src1.display(ctx.gl),

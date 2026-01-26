@@ -72,6 +72,9 @@ pub enum VmInstruction {
     FvSelectBit(StackRef, VectorSize, StackRef, StackRef),
     FvConcat(StackRef, VectorSize, StackRef, VectorSize, StackRef),
 
+    TvToFv(StackRef, StackRef, VectorSize),
+    FvToTv(StackRef, StackRef, VectorSize),
+
     Intrinsic(StackRef, Box<VmIntrinsicOp>, Box<[(StackRef, VectorSize)]>),
 
     Probe(StackRef, VmSignalKey),

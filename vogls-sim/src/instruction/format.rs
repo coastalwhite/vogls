@@ -55,6 +55,13 @@ impl fmt::Display for VmInstruction {
                 write!(f, "{dst} = fv.concat {src1}, {src2}")
             }
 
+            Self::TvToFv(dst, src, _) => {
+                write!(f, "{dst} = tv2fv {src}")
+            }
+            Self::FvToTv(dst, src, _) => {
+                write!(f, "{dst} = fv2tv {src}")
+            }
+
             Self::Intrinsic(dst, op, args) => {
                 write!(f, "{dst} = {}", op.into_mnemonic())?;
                 if let Some((arg, _)) = args.first() {
@@ -121,6 +128,8 @@ impl fmt::Display for VmProcess {
                 | I::FvShift(..)
                 | I::FvSelectBit(..)
                 | I::FvConcat(..)
+                | I::TvToFv(..)
+                | I::FvToTv(..)
                 | I::Intrinsic(..)
                 | I::Probe(..)
                 | I::Drive(..)

@@ -195,7 +195,7 @@ pub fn propagate_constants<'a>(
                     scratch_map.insert(*key, bits.clone());
                     continue;
                 }
-                I::TvUnary(dst, op, src) => {
+                I::Unary(dst, op, src) => {
                     let Some(bits) = scratch_map.get(src) else {
                         continue;
                     };
@@ -210,7 +210,7 @@ pub fn propagate_constants<'a>(
                         },
                     )
                 }
-                I::TvResize(dst, op, src) => {
+                I::Resize(dst, op, src) => {
                     let Some(bits) = scratch_map.get(src) else {
                         continue;
                     };
@@ -225,7 +225,7 @@ pub fn propagate_constants<'a>(
                         },
                     )
                 }
-                I::TvBinary(dst, op, src1, src2) => {
+                I::Binary(dst, op, src1, src2) => {
                     let csrc1 = scratch_map.get(src1);
                     let csrc2 = scratch_map.get(src2);
 
@@ -265,7 +265,7 @@ pub fn propagate_constants<'a>(
                                     }
                                     O::Multiply | O::Divide => continue,
                                     O::UnsignedLessEqual if num_ones == 0 && csrc1.is_none() => {
-                                        *i = Instruction::TvUnary(
+                                        *i = Instruction::Unary(
                                             *dst,
                                             UnaryOp::ReduceOr,
                                             non_constant_src,
@@ -283,7 +283,7 @@ pub fn propagate_constants<'a>(
                                     O::UnsignedLessEqual
                                         if num_ones == size.get() && csrc2.is_none() =>
                                     {
-                                        *i = Instruction::TvUnary(
+                                        *i = Instruction::Unary(
                                             *dst,
                                             UnaryOp::ReduceAnd,
                                             non_constant_src,
@@ -317,9 +317,6 @@ pub fn propagate_constants<'a>(
                         },
                     )
                 }
-                I::FvUnary(_, _, _) => continue,
-                I::FvResize(_, _, _) => continue,
-                I::FvBinary(_, _, _, _) => continue,
                 I::Intrinsic(_, _, _) => continue,
                 I::Probe(_, _) => continue,
                 I::Drive(_, _, _, _) => continue,

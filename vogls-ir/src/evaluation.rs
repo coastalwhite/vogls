@@ -29,35 +29,18 @@ fn evaluate_impl(
         use Instruction as I;
         match instr {
             I::Constant(dst, bits) => _ = variables.insert(*dst, bits.clone()),
-            I::TvUnary(dst, op, src) => {
+            I::Unary(dst, op, src) => {
                 let src = &variables[src];
                 let bits = op.evaluate(src);
                 _ = variables.insert(*dst, bits.clone());
             }
-            I::TvResize(dst, op, src) => {
+            I::Resize(dst, op, src) => {
                 let src = &variables[src];
                 let dst_size = gl.vars[*dst].size;
                 let bits = op.evaluate(src, dst_size);
                 _ = variables.insert(*dst, bits.clone());
             }
-            I::TvBinary(dst, op, lhs, rhs) => {
-                let lhs = &variables[lhs];
-                let rhs = &variables[rhs];
-                let bits = op.evaluate(lhs, rhs);
-                _ = variables.insert(*dst, bits.clone());
-            }
-            I::FvUnary(dst, op, src) => {
-                let src = &variables[src];
-                let bits = op.evaluate(src);
-                _ = variables.insert(*dst, bits.clone());
-            }
-            I::FvResize(dst, op, src) => {
-                let src = &variables[src];
-                let dst_size = gl.vars[*dst].size;
-                let bits = op.evaluate(src, dst_size);
-                _ = variables.insert(*dst, bits.clone());
-            }
-            I::FvBinary(dst, op, lhs, rhs) => {
+            I::Binary(dst, op, lhs, rhs) => {
                 let lhs = &variables[lhs];
                 let rhs = &variables[rhs];
                 let bits = op.evaluate(lhs, rhs);

@@ -3,8 +3,8 @@ use indexmap::IndexSet;
 use crate::token_range::TokenRange;
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryOp, Bits, GlobalContext, INTEGER_VSIZE,
-    Instruction, IntrinsicOp, LogicMode, Process, ProcessKey, ResizeOp, SCALAR_VSIZE, SignalKey,
-    TIME_VSIZE, Time, UnaryOp, Variable, VariableKey, VectorSize,
+    Instruction, IntrinsicOp, Process, ProcessKey, ResizeOp, SCALAR_VSIZE, SignalKey, TIME_VSIZE,
+    Time, UnaryOp, Variable, VariableKey, VectorSize,
 };
 
 #[must_use]
@@ -166,25 +166,21 @@ impl BasicBlockBuilder {
         lhs: VariableKey,
         rhs: VariableKey,
     ) -> VariableKey {
-        let lhs_size = gl.vars[lhs].size;
-        let rhs_size = gl.vars[rhs].size;
-        let dst = self.next_tmp_var(
-            gl,
-            VectorSize::new(lhs_size.get() + rhs_size.get()).unwrap(),
-        );
+        let size = VectorSize::new(gl.vars[lhs].size.get() + gl.vars[rhs].size.get()).unwrap();
+        let dst = self.next_tmp_var(gl, size);
         self.bin_op(gl, lhs, rhs, BinaryOp::Concat, dst);
         dst
     }
 
     pub fn binary_neg(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
-        let size = gl.vars[src].size;
+        let Variable { size } = gl.vars[src];
         let dst = self.next_tmp_var(gl, size);
         self.unary_op(gl, src, UnaryOp::Neg, dst);
         dst
     }
 
     pub fn logical_neg(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
-        let size = gl.vars[src].size;
+        let Variable { size } = gl.vars[src];
         let src = match size.get() {
             1 => src,
             _ => self.reduce_or(gl, src),
@@ -196,46 +192,31 @@ impl BasicBlockBuilder {
 
     pub fn unary_op(
         &mut self,
-        gl: &mut GlobalContext,
+        _gl: &mut GlobalContext,
         src: VariableKey,
         op: UnaryOp,
         dst: VariableKey,
     ) {
-        let i = if gl.logic_mode == LogicMode::TwoValue {
-            Instruction::TvUnary(dst, op, src)
-        } else {
-            Instruction::FvUnary(dst, op, src)
-        };
-        self.instrs.push(i);
+        self.instrs.push(Instruction::Unary(dst, op, src));
     }
     pub fn resize_op(
         &mut self,
-        gl: &mut GlobalContext,
+        _gl: &mut GlobalContext,
         dst: VariableKey,
         op: ResizeOp,
         src: VariableKey,
     ) {
-        let i = if gl.logic_mode == LogicMode::TwoValue {
-            Instruction::TvResize(dst, op, src)
-        } else {
-            Instruction::FvResize(dst, op, src)
-        };
-        self.instrs.push(i);
+        self.instrs.push(Instruction::Resize(dst, op, src));
     }
     pub fn bin_op(
         &mut self,
-        gl: &mut GlobalContext,
+        _gl: &mut GlobalContext,
         lhs: VariableKey,
         rhs: VariableKey,
         op: BinaryOp,
         dst: VariableKey,
     ) {
-        let i = if gl.logic_mode == LogicMode::TwoValue {
-            Instruction::TvBinary(dst, op, lhs, rhs)
-        } else {
-            Instruction::FvBinary(dst, op, lhs, rhs)
-        };
-        self.instrs.push(i);
+        self.instrs.push(Instruction::Binary(dst, op, lhs, rhs));
     }
 
     pub fn bin_arithmetic(
@@ -367,7 +348,7 @@ impl BasicBlockBuilder {
         src: VariableKey,
         width: VectorSize,
     ) -> VariableKey {
-        let size = gl.vars[src].size;
+        let Variable { size } = gl.vars[src];
         if size == width {
             return src;
         }
@@ -489,7 +470,7 @@ impl BasicBlockBuilder {
     }
 
     pub fn reduce_xor(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
-        let size = gl.vars[src].size;
+        let Variable { size } = gl.vars[src];
         if size == SCALAR_VSIZE {
             return src;
         }
@@ -499,7 +480,7 @@ impl BasicBlockBuilder {
         dst
     }
     pub fn reduce_or(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
-        let size = gl.vars[src].size;
+        let Variable { size } = gl.vars[src];
         if size == SCALAR_VSIZE {
             return src;
         }
@@ -509,7 +490,7 @@ impl BasicBlockBuilder {
         dst
     }
     pub fn reduce_and(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
-        let size = gl.vars[src].size;
+        let Variable { size } = gl.vars[src];
         if size == SCALAR_VSIZE {
             return src;
         }
@@ -802,13 +783,14 @@ impl BasicBlockBuilder {
         &mut self,
         gl: &mut GlobalContext,
         src: VariableKey,
-        size: VectorSize,
+        new_size: VectorSize,
     ) -> VariableKey {
-        if gl.vars[src].size == size {
+        let Variable { size } = gl.vars[src];
+        if size == new_size {
             return src;
         }
 
-        let dst = self.next_tmp_var(gl, size);
+        let dst = self.next_tmp_var(gl, new_size);
         self.resize_op(gl, dst, ResizeOp::ZeroExtend, src);
         dst
     }
@@ -816,13 +798,14 @@ impl BasicBlockBuilder {
         &mut self,
         gl: &mut GlobalContext,
         src: VariableKey,
-        size: VectorSize,
+        new_size: VectorSize,
     ) -> VariableKey {
-        if gl.vars[src].size == size {
+        let Variable { size } = gl.vars[src];
+        if size == new_size {
             return src;
         }
 
-        let dst = self.next_tmp_var(gl, size);
+        let dst = self.next_tmp_var(gl, new_size);
         self.resize_op(gl, dst, ResizeOp::SignExtend, src);
         dst
     }
@@ -841,12 +824,7 @@ impl BasicBlockBuilder {
         let lhs_size = gl.vars[lhs].size;
         assert_eq!(gl.vars[rhs].size, INTEGER_VSIZE);
         let dst = self.next_tmp_var(gl, lhs_size);
-        let i = if gl.logic_mode == LogicMode::TwoValue {
-            Instruction::TvBinary(dst, op, lhs, rhs)
-        } else {
-            Instruction::FvBinary(dst, op, lhs, rhs)
-        };
-        self.instrs.push(i);
+        self.instrs.push(Instruction::Binary(dst, op, lhs, rhs));
         dst
     }
     pub fn logical_shift_left(
