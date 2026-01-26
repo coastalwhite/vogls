@@ -104,7 +104,9 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                 match line {
                     "fail" => test_information.fail = true,
                     "verify-stdout" => test_information.verify_stdout = true,
-                    _ if line.starts_with("time=") => test_information.time = line[5..].parse().expect("failed to parse"),
+                    _ if line.starts_with("time=") => {
+                        test_information.time = line[5..].parse().expect("failed to parse")
+                    }
                     _ => {
                         println!();
                         panic!("Invalid vogls test command '{line}'");
@@ -139,23 +141,34 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             trace: false,
             time: test_information.time,
             opt_rounds: 0,
-            logic_mode: LogicMode::TwoValue,
+            logic_mode: LogicMode::FourValue,
         };
-        let result = vogls::run(&path, None, &mut ctx);
+        let ctx = std::panic::AssertUnwindSafe(&mut ctx);
+        let result = std::panic::catch_unwind(|| {
+            let ctx = ctx;
+            vogls::run(&path, None, ctx.0)
+        });
 
         let stdout = stdout.0.lock().unwrap();
         let stdout = std::str::from_utf8(&stdout).unwrap();
         let stderr = stderr.0.lock().unwrap();
         let stderr = std::str::from_utf8(&stderr).unwrap();
 
-        let mut failed = result.is_err() ^ test_information.fail;
-        if test_information.verify_stdout {
-            let s = std::fs::read_to_string(&path.with_extension("v.stdout"))?;
-            failed |= stdout != s;
+        let mut failed = false;
+        if result.is_err() {
+            failed = true;
+        } else {
+            failed |= result.as_ref().is_ok_and(|r| r.is_err()) ^ test_information.fail;
+            if test_information.verify_stdout {
+                let s = std::fs::read_to_string(&path.with_extension("v.stdout"))?;
+                failed |= stdout != s;
+            }
         }
 
         num_failed += usize::from(failed);
-        if failed {
+        if result.is_err() {
+            println!("\x1b[31mPANIC\x1b[0m");
+        } else if failed {
             println!("\x1b[31mERR\x1b[0m");
             if let Err(err) = result {
                 println!("ERROR: {err:?}");

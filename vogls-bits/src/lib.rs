@@ -1,6 +1,7 @@
 use std::fmt::{self};
 use std::hash::Hash;
 use std::num::NonZeroU32;
+use std::ptr::NonNull;
 
 use self::arithmetic::{FvLogicValue, fv_contains_special};
 use self::truncate::{fv_l_truncate, tv_l_truncate};
@@ -97,7 +98,7 @@ union BitsData {
 
     // @NOTE: Since this is 8 byte aligned, we could still use the bottom 3 bits for certain flags.
     /// pointer to `size.div_ceil(64) * 8` bytes
-    ptr: *mut u64,
+    ptr: NonNull<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,6 +108,12 @@ pub enum BitsDataRef<'a> {
 
     InlineFv(u32, u32),
     SeparateFv(&'a [u64]),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BitsDataOwned {
+    Inline(u64),
+    Boxed(Box<[u64]>),
 }
 
 pub enum BitsDataRefMut<'a> {
@@ -167,8 +174,7 @@ impl Drop for Bits {
             return;
         }
 
-        let num_words = size_to_num_words(self.size);
-        unsafe { Vec::from_raw_parts(self.data.ptr, num_words, num_words) };
+        drop(unsafe { self.into_box() });
     }
 }
 
@@ -178,13 +184,7 @@ impl Clone for Bits {
             return unsafe { Self::from_raw(self.mode, self.size, self.data) };
         }
 
-        let num_words = size_to_num_words(self.size);
-        let num_words = match self.mode {
-            Mode::TwoValue => num_words,
-            Mode::FourValue => 2 * num_words,
-        };
-        // SAFETY: size > mode.max_inline_size()
-        let data = unsafe { std::slice::from_raw_parts(self.data.ptr, num_words) }.into();
+        let data = self.as_u64_slice().into();
         Self::from_boxed_slice(self.mode, self.size, data)
     }
 }
@@ -271,7 +271,7 @@ impl Bits {
                 b[2 * nwords - 1] &= (1u64 << (size.get() % 64)) - 1;
             }
         }
-        let ptr = Box::leak(b).as_mut_ptr();
+        let ptr = NonNull::from_mut(Box::leak(b)).cast();
         let data = BitsData { ptr };
         unsafe { Self::from_raw(mode, size, data) }
     }
@@ -341,7 +341,7 @@ impl Bits {
             if self.mode == Mode::FourValue {
                 num_words *= 2;
             }
-            unsafe { std::slice::from_raw_parts(self.data.ptr, num_words) }
+            unsafe { std::slice::from_raw_parts(self.data.ptr.as_ptr(), num_words) }
         }
     }
 
@@ -354,8 +354,11 @@ impl Bits {
             std::slice::from_mut(data)
         } else {
             // SAFETY: size > MAX_INLINE_SIZE
-            let num_words = size_to_num_words(self.size);
-            unsafe { std::slice::from_raw_parts_mut(self.data.ptr, num_words) }
+            let mut num_words = size_to_num_words(self.size);
+            if self.mode == Mode::FourValue {
+                num_words *= 2;
+            }
+            unsafe { std::slice::from_raw_parts_mut(self.data.ptr.as_ptr(), num_words) }
         }
     }
 
@@ -369,7 +372,7 @@ impl Bits {
             &bytemuck::bytes_of(data)[..num_bytes]
         } else {
             // SAFETY: size > MAX_INLINE_SIZE
-            unsafe { std::slice::from_raw_parts(self.data.ptr.cast(), num_bytes) }
+            unsafe { std::slice::from_raw_parts(self.data.ptr.as_ptr().cast(), num_bytes) }
         }
     }
 
@@ -384,7 +387,7 @@ impl Bits {
             &mut bytemuck::bytes_of_mut(data)[..num_bytes]
         } else {
             // SAFETY: size > MAX_INLINE_SIZE
-            unsafe { std::slice::from_raw_parts_mut(self.data.ptr.cast(), num_bytes) }
+            unsafe { std::slice::from_raw_parts_mut(self.data.ptr.as_ptr().cast(), num_bytes) }
         }
     }
 
@@ -456,6 +459,28 @@ impl Bits {
             )
         } else {
             Self::from_u64(size, (1u64 << size.get()) - 1)
+        }
+    }
+
+    /// Convert bits into to be [`Mode::TwoValue`].
+    ///
+    /// All `X` and `Z` values get converted to zeroes.
+    pub fn into_two_value_zeroed(self) -> Self {
+        if self.mode == Mode::TwoValue {
+            return self;
+        }
+
+        let size = self.size();
+        match self.into_data() {
+            BitsDataOwned::Inline(v) => Self::from_u64(size, (v >> 32) | v),
+            BitsDataOwned::Boxed(v) if size <= Mode::TwoValue.max_inline_size() => {
+                Self::from_u64(size, v[0] & v[1])
+            }
+            BitsDataOwned::Boxed(v) => {
+                let nwords = v.len() / 2;
+                let data = (0..nwords).map(|i| v[i] & v[nwords + i]).collect();
+                Self::from_boxed_slice(Mode::TwoValue, size, data)
+            }
         }
     }
 
@@ -698,7 +723,7 @@ impl Bits {
         let rhs_size = rhs.size();
 
         if lhs.mode == Mode::FourValue || rhs.mode == Mode::FourValue {
-            return todo!();
+            todo!();
         }
 
         match (lhs.as_data_ref(), rhs.as_data_ref()) {
@@ -797,20 +822,28 @@ impl Bits {
         value
     }
 
-    pub fn tv_bitwise_and(lhs: &Self, rhs: &Self) -> Self {
+    pub fn bitwise_and(lhs: &Self, rhs: &Self) -> Self {
         Self::tv_bitwise_op(lhs, rhs, |l, r| l & r, arithmetic::fv_bitwise_and_elem)
     }
-    pub fn tv_bitwise_or(lhs: &Self, rhs: &Self) -> Self {
+    pub fn bitwise_or(lhs: &Self, rhs: &Self) -> Self {
         Self::tv_bitwise_op(lhs, rhs, |l, r| l | r, arithmetic::fv_bitwise_or_elem)
     }
-    pub fn tv_bitwise_xor(lhs: &Self, rhs: &Self) -> Self {
+    pub fn bitwise_xor(lhs: &Self, rhs: &Self) -> Self {
         Self::tv_bitwise_op(lhs, rhs, |l, r| l ^ r, arithmetic::fv_bitwise_xor_elem)
     }
     pub fn is_unsigned_leq(lhs: &Self, rhs: &Self) -> bool {
+        if lhs.mode == Mode::FourValue || rhs.mode == Mode::FourValue {
+            todo!();
+        }
+
         assert_eq!(lhs.size(), rhs.size());
         comparison::tv_gtu64_unsigned_leq(lhs.as_u64_slice(), rhs.as_u64_slice(), lhs.size())
     }
     pub fn is_signed_leq(lhs: &Self, rhs: &Self) -> bool {
+        if lhs.mode == Mode::FourValue || rhs.mode == Mode::FourValue {
+            todo!();
+        }
+
         assert_eq!(lhs.size(), rhs.size());
         comparison::tv_gtu64_signed_leq(lhs.as_u64_slice(), rhs.as_u64_slice(), lhs.size())
     }
@@ -978,6 +1011,29 @@ impl Bits {
         } else {
             BitsDataRefMut::Separate(self.as_mut_u64_slice())
         }
+    }
+
+    fn into_data(mut self) -> BitsDataOwned {
+        if self.size() <= self.mode.max_inline_size() {
+            BitsDataOwned::Inline(unsafe { self.data.inline })
+        } else {
+            BitsDataOwned::Boxed(unsafe { self.into_box() })
+        }
+    }
+
+    unsafe fn into_box(&mut self) -> Box<[u64]> {
+        debug_assert!(self.size() > self.mode.max_inline_size());
+
+        let mut num_words = size_to_num_words(self.size);
+        if self.mode == Mode::FourValue {
+            num_words *= 2;
+        }
+
+        // SAFETY: size > mode.max_inline_siz()
+        let ptr = unsafe { self.data.ptr };
+        let ptr = unsafe { std::slice::from_raw_parts_mut(ptr.as_ptr(), num_words) };
+        let ptr = ptr as *mut [u64];
+        unsafe { Box::from_raw(ptr) }
     }
 }
 

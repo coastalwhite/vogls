@@ -31,36 +31,36 @@ fn evaluate_impl(
             I::Constant(dst, bits) => _ = variables.insert(*dst, bits.clone()),
             I::TvUnary(dst, op, src) => {
                 let src = &variables[src];
-                let bits = op.evaluate_tv(src);
+                let bits = op.evaluate(src);
                 _ = variables.insert(*dst, bits.clone());
             }
             I::TvResize(dst, op, src) => {
                 let src = &variables[src];
                 let dst_size = gl.vars[*dst].size;
-                let bits = op.evaluate_tv(src, dst_size);
+                let bits = op.evaluate(src, dst_size);
                 _ = variables.insert(*dst, bits.clone());
             }
             I::TvBinary(dst, op, lhs, rhs) => {
                 let lhs = &variables[lhs];
                 let rhs = &variables[rhs];
-                let bits = op.evaluate_tv(lhs, rhs);
+                let bits = op.evaluate(lhs, rhs);
                 _ = variables.insert(*dst, bits.clone());
             }
             I::FvUnary(dst, op, src) => {
                 let src = &variables[src];
-                let bits = op.evaluate_fv(src);
+                let bits = op.evaluate(src);
                 _ = variables.insert(*dst, bits.clone());
             }
             I::FvResize(dst, op, src) => {
                 let src = &variables[src];
                 let dst_size = gl.vars[*dst].size;
-                let bits = op.evaluate_fv(src, dst_size);
+                let bits = op.evaluate(src, dst_size);
                 _ = variables.insert(*dst, bits.clone());
             }
             I::FvBinary(dst, op, lhs, rhs) => {
                 let lhs = &variables[lhs];
                 let rhs = &variables[rhs];
-                let bits = op.evaluate_fv(lhs, rhs);
+                let bits = op.evaluate(lhs, rhs);
                 _ = variables.insert(*dst, bits.clone());
             }
             I::Intrinsic(_, _, _) => todo!(),

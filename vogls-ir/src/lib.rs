@@ -389,7 +389,7 @@ impl Instruction {
 }
 
 impl UnaryOp {
-    pub fn evaluate_tv(self, src: &Bits) -> Bits {
+    pub fn evaluate(self, src: &Bits) -> Bits {
         use UnaryOp as O;
         match self {
             O::Neg => src.bitwise_negate(),
@@ -398,13 +398,10 @@ impl UnaryOp {
             O::ReduceXor => Bits::from(src.reduce_xor()),
         }
     }
-    pub fn evaluate_fv(self, src: &Bits) -> Bits {
-        todo!()
-    }
 }
 
 impl ResizeOp {
-    pub fn evaluate_tv(self, src: &Bits, dst_size: VectorSize) -> Bits {
+    pub fn evaluate(self, src: &Bits, dst_size: VectorSize) -> Bits {
         use ResizeOp as O;
         match self {
             O::Truncate => src.truncate(dst_size),
@@ -412,18 +409,15 @@ impl ResizeOp {
             O::SignExtend => src.sign_extend(dst_size),
         }
     }
-    pub fn evaluate_fv(self, src: &Bits, dst_size: VectorSize) -> Bits {
-        todo!()
-    }
 }
 
 impl BinaryOp {
-    fn evaluate_tv(self, lhs: &Bits, rhs: &Bits) -> Bits {
+    fn evaluate(self, lhs: &Bits, rhs: &Bits) -> Bits {
         use BinaryOp as O;
         match self {
-            O::And => Bits::tv_bitwise_and(lhs, rhs),
-            O::Or => Bits::tv_bitwise_or(lhs, rhs),
-            O::Xor => Bits::tv_bitwise_xor(lhs, rhs),
+            O::And => Bits::bitwise_and(lhs, rhs),
+            O::Or => Bits::bitwise_or(lhs, rhs),
+            O::Xor => Bits::bitwise_xor(lhs, rhs),
             O::Add => Bits::add(lhs, rhs),
             O::Sub => Bits::subtract(lhs, rhs),
             O::Multiply => Bits::multiply(lhs, rhs),
@@ -437,9 +431,6 @@ impl BinaryOp {
             O::ArithmeticShiftRight => lhs.arithmetic_shift_right(rhs.extract_exact_u32()),
             O::Concat => Bits::concatenate(lhs, rhs),
         }
-    }
-    fn evaluate_fv(self, _lhs: &Bits, _rhs: &Bits) -> Bits {
-        todo!()
     }
 }
 

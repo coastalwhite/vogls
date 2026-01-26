@@ -1,6 +1,6 @@
 use std::num::NonZeroU32;
 
-use vogls_ir::{Bits, Mode, VectorSize};
+use vogls_ir::{Bits, VectorSize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
