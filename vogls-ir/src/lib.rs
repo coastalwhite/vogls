@@ -8,7 +8,8 @@ pub mod vcd;
 
 use std::collections::HashSet;
 use std::num::NonZeroU32;
-pub use vogls_bits::{Bits, VectorSize, Mode};
+pub use vogls_bits as bits;
+pub use vogls_bits::{Bits, Mode, VectorSize};
 
 pub use builder::{BasicBlockBuilder, BranchRef, PhiRef, new_anonymous_builder, new_process};
 pub use format::{ContextFormat, DisplayContext};

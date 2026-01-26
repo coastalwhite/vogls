@@ -12,6 +12,7 @@ pub mod extend;
 pub mod leading_trailing;
 pub mod load;
 pub mod negate;
+pub mod parse;
 #[cfg(test)]
 pub mod proptest;
 pub mod select;
@@ -99,6 +100,7 @@ union BitsData {
     ptr: *mut u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BitsDataRef<'a> {
     InlineTv(u64),
     SeparateTv(&'a [u64]),
@@ -263,19 +265,15 @@ impl Bits {
         assert!(size > mode.max_inline_size());
         let nwords = size_to_num_words(size);
         assert_eq!(mode.mul_nwords(nwords), b.len());
-        if let &[value] = b.as_ref() {
-            Self::from_u64(size, value)
-        } else {
-            if size.get() % 64 != 0 {
-                b[nwords - 1] &= (1u64 << (size.get() % 64)) - 1;
-                if mode == Mode::FourValue {
-                    b[2 * nwords - 1] &= (1u64 << (size.get() % 64)) - 1;
-                }
+        if size.get() % 64 != 0 {
+            b[nwords - 1] &= (1u64 << (size.get() % 64)) - 1;
+            if mode == Mode::FourValue {
+                b[2 * nwords - 1] &= (1u64 << (size.get() % 64)) - 1;
             }
-            let ptr = Box::leak(b).as_mut_ptr();
-            let data = BitsData { ptr };
-            unsafe { Self::from_raw(mode, size, data) }
         }
+        let ptr = Box::leak(b).as_mut_ptr();
+        let data = BitsData { ptr };
+        unsafe { Self::from_raw(mode, size, data) }
     }
 
     pub const fn from_u64(size: VectorSize, value: u64) -> Self {
@@ -289,10 +287,11 @@ impl Bits {
         unsafe { Self::from_raw(MODE, size, BitsData { inline: value }) }
     }
     pub const fn from_four_value_u64(size: VectorSize, special: u32, value: u32) -> Self {
-        const MODE: Mode = Mode::TwoValue;
+        const MODE: Mode = Mode::FourValue;
         assert!(size.get() <= MODE.max_inline_size().get());
-        let special = special & 1u32.unbounded_shl(size.get()).wrapping_sub(1);
-        let value = value & 1u32.unbounded_shl(size.get()).wrapping_sub(1);
+        let mask = 1u32.unbounded_shl(size.get()).wrapping_sub(1);
+        let special = special & mask;
+        let value = value & mask;
         let inline = ((special as u64) << 32) | value as u64;
 
         // SAFETY:
@@ -338,7 +337,10 @@ impl Bits {
             &std::slice::from_ref(data)
         } else {
             // SAFETY: size > MAX_INLINE_SIZE
-            let num_words = size_to_num_words(self.size);
+            let mut num_words = size_to_num_words(self.size);
+            if self.mode == Mode::FourValue {
+                num_words *= 2;
+            }
             unsafe { std::slice::from_raw_parts(self.data.ptr, num_words) }
         }
     }
