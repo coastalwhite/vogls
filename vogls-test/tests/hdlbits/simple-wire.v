@@ -12,7 +12,7 @@ module tb();
 		
 		r <= 1;
 		#1 $vogls_assert_eq(out, 1);
-		
+		 
 		r <= 0;
 		#1 $vogls_assert_eq(out, 0);
 	end

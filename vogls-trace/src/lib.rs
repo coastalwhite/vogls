@@ -47,6 +47,7 @@ pub enum EventType {
     Drive(SignalIdx),
 }
 
+#[derive(Debug)]
 pub enum EventStopReason {
     Halt,
     Wait(Timestamp),
@@ -58,6 +59,27 @@ pub enum Event {
     Evaluation(ProcessIdx, Range<DrivenIdx>, EventStopReason),
     Drive(SignalIdx, Option<DrivenIdx>),
     Time(Timestamp),
+}
+
+impl Trace {
+    pub fn log_event(&self, f: &mut impl io::Write, event: usize) -> io::Result<()> {
+        match &self.events[event] {
+            Event::Evaluation(process, range, event_stop_reason) => {
+                writeln!(
+                    f,
+                    "eval {}, (driven: {}), stop: {:?}",
+                    self.processes[*process as usize]
+                        .name
+                        .as_deref()
+                        .unwrap_or("<unknown>"),
+                    range.end - range.start,
+                    event_stop_reason
+                )
+            }
+            Event::Drive(_, _) => todo!(),
+            Event::Time(t) => writeln!(f, "time: {t}"),
+        }
+    }
 }
 
 fn dump_opt_str(s: Option<&str>, f: &mut impl io::Write) -> io::Result<()> {
@@ -151,7 +173,7 @@ impl Trace {
 
         dbg!(self.signals.len());
         dbg!(self.processes.len());
-        
+
         for e in &self.events {
             match e {
                 Event::Evaluation(process, driven, stop_reason) => {

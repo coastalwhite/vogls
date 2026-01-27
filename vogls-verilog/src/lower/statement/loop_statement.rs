@@ -4,7 +4,7 @@ use crate::ast::statement::{LoopStatement, LoopStatementVariant};
 use crate::ast::{AstId, AstIdRange};
 use crate::lower::Scope;
 use crate::lower::diagnostics::Diagnostics;
-use crate::lower::{Region, assign, lower_expr};
+use crate::lower::{assign, lower_expr};
 use crate::parser::AstArenas;
 
 pub fn lower_loop_statement<'a>(
@@ -45,7 +45,7 @@ pub fn lower_loop_statement<'a>(
                 initialization.lvalue,
                 initialization_var,
                 initialization_var_ty,
-                Region::Active,
+                false,
             )?;
         }
         V::Forever | V::While(_) => {}
@@ -105,7 +105,7 @@ pub fn lower_loop_statement<'a>(
                 step.lvalue,
                 step_var,
                 step_var_ty,
-                Region::Active,
+                false,
             )?;
         }
         V::Repeat(_) => {

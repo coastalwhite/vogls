@@ -1,116 +1,87 @@
-use vogls_bits::get_disjoint_dst_src;
-use vogls_ir::{ResizeOp, UnaryOp, VectorSize};
+use vogls_ir::{ResizeOp, SCALAR_VSIZE, UnaryOp, VectorSize};
 
-use crate::{BinaryArithmeticOp, BinaryComparisonOp, ShiftOp};
+use crate::{BinaryArithmeticOp, BinaryComparisonOp, ShiftOp, Stack, StackOffset, StackRef};
 
-pub(crate) fn exec_tv_unary(
-    stack: &mut [u8],
-    dst: usize,
-    op: UnaryOp,
-    size: VectorSize,
-    src: usize,
-) {
+pub(crate) fn exec_tv_unary(stack: &mut Stack, dst: StackOffset, op: UnaryOp, src: StackRef) {
     use UnaryOp as O;
     match op {
         O::Neg => {
-            let n_full_bytes = (size.get() / 8) as usize;
-            if size.get() % 8 == 0 {
-                for i in 0..n_full_bytes {
-                    stack[dst + i] = !stack[src + i];
-                }
-            } else {
-                stack[dst + n_full_bytes] =
-                    stack[src + n_full_bytes] ^ 1u8.unbounded_shl(size.get() % 8).wrapping_sub(1);
-                for i in 0..n_full_bytes {
-                    stack[dst + i] = !stack[src + i];
-                }
+            let size = src.size;
+            let (dst, src) = stack.get_disjoint_u8_dst_src(dst.to_ref(size), src);
+            for (d, s) in dst.iter_mut().zip(src) {
+                *d = !*s;
+            }
+            if size.get() % 8 != 0 {
+                *dst.last_mut().unwrap() &= (1u8 << size.get() % 8) - 1;
             }
         }
         O::ReduceOr => {
-            let result = stack[src..][..size.get().div_ceil(8) as usize]
-                .iter()
-                .any(|b| *b != 0);
-            stack[dst] = u8::from(result);
+            let result = stack.get(src).iter().any(|b| *b != 0);
+            stack.set_tv_u64(dst.to_ref(SCALAR_VSIZE), result as u64);
         }
         O::ReduceAnd => {
-            let result = stack[src..][..size.get().div_ceil(8) as usize]
-                .iter()
-                .map(|b| b.count_ones())
-                .sum::<u32>();
-            stack[dst] = u8::from(result == size.get());
+            let result = stack.get(src).iter().map(|b| b.count_ones()).sum::<u32>();
+            stack.set_tv_u64(
+                dst.to_ref(SCALAR_VSIZE),
+                u64::from(result == src.size.get()),
+            );
         }
         O::ReduceXor => {
-            let result = stack[src..][..size.get().div_ceil(8) as usize]
-                .iter()
-                .map(|b| b.count_ones())
-                .sum::<u32>();
-            stack[dst] = u8::from(result % 2 == 1);
+            let result = stack.get(src).iter().map(|b| b.count_ones()).sum::<u32>();
+            stack.set_tv_u64(dst.to_ref(SCALAR_VSIZE), u64::from(result % 2 == 1));
         }
     }
 }
 
-pub(crate) fn exec_tv_resize(
-    stack: &mut [u8],
-    dst: usize,
-    dst_size: VectorSize,
-    op: ResizeOp,
-    src: usize,
-    src_size: VectorSize,
-) {
+pub(crate) fn exec_tv_resize(stack: &mut Stack, dst: StackRef, op: ResizeOp, src: StackRef) {
+    let (d, s) = stack.get_disjoint_u8_dst_src(dst, src);
+
     use ResizeOp as O;
     match op {
         O::ZeroExtend => {
-            assert!(dst_size >= src_size);
-            for i in 0..src_size.get().div_ceil(8) as usize {
-                stack[dst + i] = stack[src + i];
+            assert!(dst.size >= src.size);
+            for i in 0..src.size.get().div_ceil(8) as usize {
+                d[i] = s[i];
             }
-            for i in src_size.get().div_ceil(8) as usize..dst_size.get().div_ceil(8) as usize {
-                stack[dst + i] = 0;
+            for i in src.size.get().div_ceil(8) as usize..dst.size.get().div_ceil(8) as usize {
+                d[i] = 0;
             }
         }
         O::SignExtend => {
-            assert!(dst_size >= src_size);
-            let sign_offset = src_size.get() - 1;
-            let sign = (stack[src + (sign_offset / 8) as usize] >> (sign_offset % 8)) & 1;
+            assert!(dst.size >= src.size);
+            let sign_offset = src.size.get() - 1;
+            let sign = (s[(sign_offset / 8) as usize] >> (sign_offset % 8)) & 1;
             let mask = u8::from(sign == 0).wrapping_sub(1);
-            if src_size.get() % 8 == 0 {
-                for i in 0..(src_size.get() / 8) as usize {
-                    stack[dst + i] = stack[src + i];
+            if src.size.get() % 8 == 0 {
+                for i in 0..(src.size.get() / 8) as usize {
+                    d[i] = s[i];
                 }
-                for i in (src_size.get() / 8) as usize..dst_size.get().div_ceil(8) as usize {
-                    stack[dst + i] = mask;
+                for i in (src.size.get() / 8) as usize..dst.size.get().div_ceil(8) as usize {
+                    d[i] = mask;
                 }
             } else {
-                let sbytes = src_size.get().div_ceil(8) as usize;
+                let sbytes = src.size.get().div_ceil(8) as usize;
                 for i in 0..sbytes - 1 {
-                    stack[dst + i] = stack[src + i];
+                    d[i] = s[i];
                 }
-                stack[dst + sbytes - 1] = stack[src + sbytes - 1] | (mask << (src_size.get() % 8));
-                for i in sbytes..dst_size.get().div_ceil(8) as usize {
-                    stack[dst + i] = mask;
+                d[sbytes - 1] = s[sbytes - 1] | (mask << (src.size.get() % 8));
+                for i in sbytes..dst.size.get().div_ceil(8) as usize {
+                    d[i] = mask;
                 }
             }
         }
         O::Truncate => {
-            let (dst, src) = get_disjoint_dst_src(
-                stack,
-                dst,
-                dst_size.get().div_ceil(8) as usize,
-                src,
-                src_size.get().div_ceil(8) as usize,
-            );
-            vogls_bits::slice::tv_slice(dst, src, dst_size);
+            vogls_bits::slice::tv_slice(d, s, dst.size);
         }
     }
 }
 
 pub(crate) fn exec_tv_bin_arith(
-    stack: &mut [u8],
-    dst: usize,
+    stack: &mut Stack,
+    dst: StackRef,
     op: BinaryArithmeticOp,
-    size: VectorSize,
-    lhs: usize,
-    rhs: usize,
+    lhs: StackOffset,
+    rhs: StackOffset,
 ) {
     use BinaryArithmeticOp as O;
 
@@ -145,6 +116,7 @@ pub(crate) fn exec_tv_bin_arith(
         A::tv_division(&mut quotient, dst, lhs, rhs, size);
     }
 
+    let size = dst.size;
     if size.get() > 32 && matches!(op, O::And | O::Or | O::Xor | O::Add | O::Sub | O::Multiply) {
         let f = match op {
             O::And => tv_u64_bitwise_and,
@@ -158,13 +130,8 @@ pub(crate) fn exec_tv_bin_arith(
         };
 
         let nwords = size.get().div_ceil(64) as usize;
-        let nbytes = nwords * 8;
         let (dst, lhs, rhs) =
-            vogls_bits::get_disjoint_dst_s1_s2(stack, dst, nbytes, lhs, nbytes, rhs, nbytes);
-
-        let dst = bytemuck::cast_slice_mut(dst);
-        let lhs = bytemuck::cast_slice(lhs);
-        let rhs = bytemuck::cast_slice(rhs);
+            stack.get_disjoint_u64_dst_s1_s2((dst.offset, nwords), (lhs, nwords), (rhs, nwords));
 
         f(dst, lhs, rhs, size);
     } else {
@@ -179,40 +146,37 @@ pub(crate) fn exec_tv_bin_arith(
             O::Modulus => A::tv_ltu64_modulus,
         };
 
-        let nbytes = size.get().div_ceil(8) as usize;
         let (dst, lhs, rhs) =
-            vogls_bits::get_disjoint_dst_s1_s2(stack, dst, nbytes, lhs, nbytes, rhs, nbytes);
-
+            stack.get_disjoint_u8_dst_s1_s2(dst, lhs.to_ref(size), rhs.to_ref(size));
         f(dst, lhs, rhs, size);
     }
 }
 
 pub(crate) fn exec_tv_bin_cmp(
-    stack: &mut [u8],
-    dst: usize,
+    stack: &mut Stack,
+    dst: StackOffset,
     op: BinaryComparisonOp,
-    size: VectorSize,
-    lhs: usize,
-    rhs: usize,
+    lhs: StackRef,
+    rhs: StackOffset,
 ) {
     use BinaryComparisonOp as O;
     let f = match op {
         O::UnsignedLessEqual => vogls_bits::comparison::tv_unsigned_leq,
     };
-    let nbytes = size.get().div_ceil(8) as usize;
-    let lhs = &stack[lhs..][..nbytes];
-    let rhs = &stack[rhs..][..nbytes];
+
+    let size = lhs.size;
+    let lhs = stack.get(lhs);
+    let rhs = stack.get(rhs.to_ref(size));
     let result = f(lhs, rhs, size);
-    stack[dst] = u8::from(result);
+    stack.set_tv_u64(dst.to_ref(SCALAR_VSIZE), result as u64);
 }
 
 pub(crate) fn exec_tv_shift(
-    stack: &mut [u8],
-    dst: usize,
+    stack: &mut Stack,
+    dst: StackRef,
     op: ShiftOp,
-    size: VectorSize,
-    src: usize,
-    offset: usize,
+    src: StackOffset,
+    offset: StackOffset,
 ) {
     use ShiftOp as O;
     let f = match op {
@@ -221,41 +185,28 @@ pub(crate) fn exec_tv_shift(
         O::ArithmeticRight => vogls_bits::shift::tv_arithmetic_shift_right,
     };
 
-    let offset = vogls_bits::load::load_full_u32(&stack[offset..]);
-    let nbytes = size.get().div_ceil(8) as usize;
-
-    let (dst, src) = vogls_bits::get_disjoint_dst_src(stack, dst, nbytes, src, nbytes);
+    let size = dst.size;
+    let offset = stack.load_exact_tv_u32(offset);
+    let (dst, src) = stack.get_disjoint_u8_dst_src(dst, src.to_ref(size));
     f(dst, src, offset, size);
 }
 
 pub(crate) fn exec_tv_select_bit(
-    stack: &mut [u8],
-    dst: usize,
-    size: VectorSize,
-    src: usize,
-    idx: usize,
+    stack: &mut Stack,
+    dst: StackOffset,
+    src: StackRef,
+    idx: StackOffset,
 ) {
-    let idx = vogls_bits::load::load_full_u32(&stack[idx..]);
-    let nbytes = size.get().div_ceil(8) as usize;
-
-    let src = &stack[src..][..nbytes];
-    stack[dst] = u8::from(vogls_bits::select::tv_select_bit(src, idx, size));
+    let size = src.size;
+    let idx = stack.load_exact_tv_u32(idx);
+    let src = stack.get(src);
+    let result = vogls_bits::select::tv_select_bit(src, idx, size);
+    stack.set_tv_bool(dst, result);
 }
 
-pub(crate) fn exec_tv_concat(
-    stack: &mut [u8],
-    dst: usize,
-    lhs: usize,
-    lhs_size: VectorSize,
-    rhs: usize,
-    rhs_size: VectorSize,
-) {
-    let lbytes = lhs_size.get().div_ceil(8) as usize;
-    let rbytes = rhs_size.get().div_ceil(8) as usize;
-    let dbytes = (lhs_size.get().checked_add(rhs_size.get()).unwrap()).div_ceil(8) as usize;
-
-    let (dst, lhs, rhs) =
-        vogls_bits::get_disjoint_dst_s1_s2(stack, dst, dbytes, lhs, lbytes, rhs, rbytes);
-
+pub(crate) fn exec_tv_concat(stack: &mut Stack, dst: StackOffset, lhs: StackRef, rhs: StackRef) {
+    let (lhs_size, rhs_size) = (lhs.size, rhs.size);
+    let dst_size = lhs_size.checked_add(rhs_size.get()).unwrap();
+    let (dst, lhs, rhs) = stack.get_disjoint_u8_dst_s1_s2(dst.to_ref(dst_size), lhs, rhs);
     vogls_bits::concat::tv_concat(dst, lhs, rhs, lhs_size, rhs_size);
 }

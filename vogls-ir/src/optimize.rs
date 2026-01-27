@@ -319,7 +319,7 @@ pub fn propagate_constants<'a>(
                 }
                 I::Intrinsic(_, _, _) => continue,
                 I::Probe(_, _) => continue,
-                I::Drive(_, _, _, _) => continue,
+                I::Drive(_, _, _) => continue,
                 I::Phi(_, _) => continue,
             };
             scratch_map.insert(dst, bits.clone());

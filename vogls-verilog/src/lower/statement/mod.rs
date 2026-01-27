@@ -70,7 +70,7 @@ pub fn statements_to_process<'a>(
                     *variable_lvalue,
                     value,
                     value_ty,
-                    Region::Active,
+                    false,
                 )?;
             }
             S::CaseStatement(case_statement) => {
@@ -117,7 +117,7 @@ pub fn statements_to_process<'a>(
                     *variable_lvalue,
                     value,
                     value_ty,
-                    Region::NonBlocking,
+                    true,
                 )?;
             }
             S::ParBlock => todo!(),

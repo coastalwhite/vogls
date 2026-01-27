@@ -1,5 +1,4 @@
 use std::cmp::Ordering;
-use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap};
 use std::num::NonZeroUsize;
 
@@ -7,12 +6,11 @@ use slotmap::{SlotMap, new_key_type};
 use vogls_bits::arithmetic::{fv_pack_u64, fv_separate_packed_u64, fv_set_no_special};
 use vogls_bits::load::load_partial_u64;
 use vogls_bits::store::store_partial_u64;
-use vogls_bits::{BitsDataRef, get_disjoint_dst_src};
+use vogls_bits::{get_disjoint_dst_s1_s2, get_disjoint_dst_src};
 use vogls_ir::dyn_format_string::{Base, Padding, format_bits};
 use vogls_ir::vcd::NetType;
-use vogls_ir::{Bits, INTEGER_VSIZE, LogicMode, SignalKey, TIME_VSIZE, VectorSize};
+use vogls_ir::{Bits, LogicMode, SCALAR_VSIZE, SignalKey, TIME_VSIZE, VectorSize};
 
-mod bits;
 mod execution;
 mod instruction;
 
@@ -74,14 +72,169 @@ impl Context {
     }
 }
 
-#[derive(Clone, Debug)]
-pub enum Event {
-    Drive(VmSignalKey, Vec<(Bits, Option<(u32, VectorSize)>)>),
-    Evaluation(EvaluationEvent),
+pub struct Stack(Box<[u8]>);
+
+impl Stack {
+    fn get(&self, at: StackRef) -> &[u8] {
+        &self.0[at.offset.0..][..at.size.get().div_ceil(8) as usize]
+    }
+    fn get_mut(&mut self, at: StackRef) -> &mut [u8] {
+        &mut self.0[at.offset.0..][..at.size.get().div_ceil(8) as usize]
+    }
+
+    fn get_u64_slice(&self, at: StackOffset, nwords: usize) -> &[u64] {
+        bytemuck::cast_slice(&self.0[at.0..][..nwords * 8])
+    }
+    fn get_mut_u64_slice(&mut self, at: StackOffset, nwords: usize) -> &mut [u64] {
+        bytemuck::cast_slice_mut(&mut self.0[at.0..][..nwords * 8])
+    }
+
+    fn get_u64(&self, at: StackOffset) -> u64 {
+        self.get_u64_slice(at, 1)[0]
+    }
+    fn get_mut_u64(&mut self, at: StackOffset) -> &mut u64 {
+        &mut self.get_mut_u64_slice(at, 1)[0]
+    }
+
+    fn load_exact_tv_u32(&self, at: StackOffset) -> u32 {
+        self.get_tv_u64(at.to_ref(VectorSize::new(32).unwrap())) as u32
+    }
+    fn load_exact_fv_u32(&self, at: StackOffset) -> (u32, u32) {
+        let (spc, val) = self.get_fv_u64(at.to_ref(VectorSize::new(32).unwrap()));
+        (spc as u32, val as u32)
+    }
+
+    fn get_tv_u64(&self, at: StackRef) -> u64 {
+        debug_assert!(at.size.get() <= 64);
+        if at.size.get() <= 32 {
+            load_partial_u64(self.get(at), at.size)
+        } else {
+            self.get_u64(at.offset)
+        }
+    }
+    fn set_tv_u64(&mut self, at: StackRef, value: u64) -> u64 {
+        debug_assert!(at.size.get() <= 64);
+        if at.size.get() <= 32 {
+            let old = load_partial_u64(self.get(at), at.size);
+            store_partial_u64(self.get_mut(at), value, at.size);
+            old
+        } else {
+            std::mem::replace(self.get_mut_u64(at.offset), value)
+        }
+    }
+    fn set_tv_bool(&mut self, at: StackOffset, value: bool) {
+        self.set_tv_u64(at.to_ref(SCALAR_VSIZE), value.into());
+    }
+
+    fn get_fv_u64(&self, at: StackRef) -> (u64, u64) {
+        debug_assert!(at.size.get() <= 64);
+        if at.size.get() <= 16 {
+            fv_separate_packed_u64(
+                load_partial_u64(
+                    self.get(at),
+                    at.size.checked_mul(VectorSize::new(2).unwrap()).unwrap(),
+                ),
+                at.size,
+            )
+        } else {
+            let [spc, val] = self.get_u64_slice(at.offset, 2) else {
+                unreachable!()
+            };
+            (*spc, *val)
+        }
+    }
+    fn set_fv_u64(&mut self, at: StackRef, spc: u64, val: u64) -> (u64, u64) {
+        debug_assert!(at.size.get() <= 64);
+        if at.size.get() <= 16 {
+            let dsize = at.size.checked_mul(VectorSize::new(2).unwrap()).unwrap();
+            let old = load_partial_u64(self.get(at), dsize);
+            store_partial_u64(self.get_mut(at), fv_pack_u64(spc, val, at.size), dsize);
+            fv_separate_packed_u64(old, at.size)
+        } else {
+            let s = self.get_mut_u64_slice(at.offset, 2);
+            (
+                std::mem::replace(&mut s[0], spc),
+                std::mem::replace(&mut s[1], val),
+            )
+        }
+    }
+
+    fn get_disjoint_u64_dst_src(
+        &mut self,
+        dst: (StackOffset, usize),
+        src: (StackOffset, usize),
+    ) -> (&mut [u64], &[u64]) {
+        let (dst, src) = get_disjoint_dst_src(&mut self.0, dst.0.0, dst.1 * 8, src.0.0, src.1 * 8);
+        (bytemuck::cast_slice_mut(dst), bytemuck::cast_slice(src))
+    }
+
+    fn get_disjoint_u64_dst_s1_s2(
+        &mut self,
+        dst: (StackOffset, usize),
+        src1: (StackOffset, usize),
+        src2: (StackOffset, usize),
+    ) -> (&mut [u64], &[u64], &[u64]) {
+        let (dst, src1, src2) = get_disjoint_dst_s1_s2(
+            &mut self.0,
+            dst.0.0,
+            dst.1 * 8,
+            src1.0.0,
+            src1.1 * 8,
+            src2.0.0,
+            src2.1 * 8,
+        );
+        (
+            bytemuck::cast_slice_mut(dst),
+            bytemuck::cast_slice(src1),
+            bytemuck::cast_slice(src2),
+        )
+    }
+
+    fn get_disjoint_u8_dst_src(&mut self, dst: StackRef, src: StackRef) -> (&mut [u8], &[u8]) {
+        let dst_bytes = dst.size.get().div_ceil(8) as usize;
+        let src_bytes = src.size.get().div_ceil(8) as usize;
+        get_disjoint_dst_src(
+            &mut self.0,
+            dst.offset.0,
+            dst_bytes,
+            src.offset.0,
+            src_bytes,
+        )
+    }
+
+    fn get_disjoint_u8_dst_s1_s2(
+        &mut self,
+        dst: StackRef,
+        src1: StackRef,
+        src2: StackRef,
+    ) -> (&mut [u8], &[u8], &[u8]) {
+        get_disjoint_dst_s1_s2(
+            &mut self.0,
+            dst.offset.0,
+            dst.size.get().div_ceil(8) as usize,
+            src1.offset.0,
+            src1.size.get().div_ceil(8) as usize,
+            src2.offset.0,
+            src2.size.get().div_ceil(8) as usize,
+        )
+    }
+
+    fn load_tv_bits(&self, at: StackRef) -> Bits {
+        // @Performance: We should make a specialized path for u64
+        Bits::load_from_slice(self.get(at), at.size)
+    }
+
+    pub fn store_bits(&mut self, dst: StackRef, logic_mode: LogicMode, value: &Bits) {
+        if logic_mode == LogicMode::FourValue {
+            todo!()
+        }
+
+        execution::exec_constant(self, dst.offset, value);
+    }
 }
 
 #[derive(Clone, Debug)]
-pub struct EvaluationEvent {
+pub struct Event {
     /// Which process is scheduled.
     pub process: VmProcessKey,
     /// Where to start execution.
@@ -119,7 +272,8 @@ enum EvalOutcome {
 
 fn update_watchers(
     sig: VmSignalKey,
-    signals: &mut [Bits],
+    stack: &Stack,
+    signals: &[StackRef],
     watches: &mut [Vec<ListenerKey>],
     listeners: &mut SlotMap<ListenerKey, Event>,
     regions: &mut Regions,
@@ -136,59 +290,57 @@ fn update_watchers(
 
     if let Some(trace) = trace {
         let woken_start = trace.woken.len() as u64;
-        trace.woken.extend(regions.active[start..].iter().map(|e| {
-            let Event::Evaluation(e) = &e else {
-                panic!("only evaluation events are expected");
-            };
-            e.process.0
-        }));
-        let woken_range = woken_start..trace.woken.len() as u64;
         trace
-            .driven
-            .push((sig.0, signals[sig.0 as usize].clone(), woken_range));
+            .woken
+            .extend(regions.active[start..].iter().map(|e| e.process.0));
+        let woken_range = woken_start..trace.woken.len() as u64;
+        trace.driven.push((
+            sig.0,
+            stack.load_tv_bits(signals[sig.0 as usize]),
+            woken_range,
+        ));
     }
 }
 
 pub fn drive_bits(
-    bits: &mut Bits,
-    slice: &[u8],
-    offset: usize,
-    size: VectorSize,
-    partial: Option<(u32, VectorSize)>,
+    stack: &mut Stack,
+    dst: StackRef,
+    src: StackRef,
+    partial: Option<u32>,
     logic_mode: LogicMode,
 ) -> bool {
-    if partial.is_some() {
+    if partial.is_some() && dst.size == src.size {
         todo!()
     }
 
-    let prev = bits.clone();
+    let size = dst.size;
     match logic_mode {
         LogicMode::TwoValue if size.get() <= 32 => {
-            let nbytes = size.get().div_ceil(8) as usize;
-            let value = load_partial_u64(&slice[offset..][..nbytes], size);
-            *bits = Bits::from_u64(size, value);
-        }
-        LogicMode::TwoValue => {
-            let nwords = size.get().div_ceil(64) as usize;
-            let slice = bytemuck::cast_slice::<u8, u64>(&slice[offset..][..nwords * 8]);
-            *bits = Bits::from_boxed_slice(vogls_ir::Mode::TwoValue, size, slice.into())
+            let src = stack.get_tv_u64(src);
+            let dst = stack.set_tv_u64(dst, src);
+            dst != src
         }
         LogicMode::FourValue if size.get() <= 16 => {
-            let nbytes = (2 * size.get()).div_ceil(8) as usize;
-            let value = load_partial_u64(
-                &slice[offset..][..nbytes],
-                VectorSize::new(2 * size.get()).unwrap(),
-            );
-            let (spc, val) = fv_separate_packed_u64(value, size);
-            *bits = Bits::from_four_value_u64(size, spc as u32, val as u32);
+            let (spc, val) = stack.get_fv_u64(src);
+            let (dspc, dval) = stack.set_fv_u64(dst, spc, val);
+            dspc != spc || val != dval
         }
-        LogicMode::FourValue => {
-            let nwords = 2 * size.get().div_ceil(64) as usize;
-            let slice = bytemuck::cast_slice::<u8, u64>(&slice[offset..][..nwords * 8]);
-            *bits = Bits::from_boxed_slice(vogls_ir::Mode::FourValue, size, slice.into())
+        LogicMode::TwoValue | LogicMode::FourValue => {
+            let mut nwords = size.get().div_ceil(64) as usize;
+            if logic_mode == LogicMode::FourValue {
+                nwords *= 2;
+            }
+
+            let (dst, src) =
+                stack.get_disjoint_u64_dst_src((dst.offset, nwords), (src.offset, nwords));
+            let mut updated = false;
+            for i in 0..nwords {
+                updated |= dst[i] != src[i];
+                dst[i] = src[i];
+            }
+            updated
         }
     }
-    &prev != bits
 }
 
 #[derive(Debug, Clone)]
@@ -320,7 +472,8 @@ impl VcdOutput {
     fn dump_time_step(
         &mut self,
         ctx: &Context,
-        signals: &[Bits],
+        stack: &Stack,
+        signals: &[StackRef],
         signal_info: &[SignalInfo],
         finish: bool,
     ) -> std::io::Result<()> {
@@ -345,12 +498,13 @@ impl VcdOutput {
         self.last_ts = ctx.time;
         writeln!(f, "#{}", ctx.time)?;
         for signal in &self.updated_this_time_step {
-            let bits = &signals[signal.0 as usize];
+            let bits = signals[signal.0 as usize];
             let idx = signal.0;
+            let bits = stack.load_tv_bits(bits);
             if bits.size().get() > 1 {
                 f.write_all(&[b'b'])?;
             }
-            format_bits(f, bits, Padding::ZeroPaddedToSize, Base::Binary).unwrap();
+            format_bits(f, &bits, Padding::ZeroPaddedToSize, Base::Binary).unwrap();
             if bits.size().get() > 1 {
                 f.write_all(&[b' '])?;
             }
@@ -370,48 +524,17 @@ impl Event {
         processes: &[VmProcess],
         schedule: &mut BTreeMap<Timestamp, Vec<Event>>,
         regions: &mut Regions,
-        signals: &mut [Bits],
+        signals: &mut [StackRef],
         listeners: &mut SlotMap<ListenerKey, Event>,
         watches: &mut [Vec<ListenerKey>],
-        stack: &mut [u8],
+        stack: &mut Stack,
         vcd: &mut Option<VcdOutput>,
         mut trace: Option<&mut vogls_trace::Trace>,
     ) -> EvalOutcome {
-        let EvaluationEvent {
+        let Event {
             process: process_key,
             ip,
-        } = match &mut self {
-            Event::Drive(sig, assignments) => {
-                let signal_bits = &mut signals[sig.0 as usize];
-                let mut updated = false;
-                for (bits, partial) in assignments {
-                    updated |= drive_bits(
-                        signal_bits,
-                        bits.as_slice(),
-                        0,
-                        bits.size(),
-                        *partial,
-                        ctx.logic_mode,
-                    );
-                }
-
-                if updated {
-                    update_watchers(*sig, signals, watches, listeners, regions, trace);
-                    if let Some(vcd) = vcd.as_mut()
-                        && !vcd.paused
-                        && let Some(idx) = vcd.tracked.get_mut(sig)
-                    {
-                        idx.get_or_insert_with(|| {
-                            vcd.updated_this_time_step.push(*sig);
-                            NonZeroUsize::new(vcd.updated_this_time_step.len()).unwrap()
-                        });
-                    }
-                }
-
-                return EvalOutcome::Next;
-            }
-            Event::Evaluation(e) => e,
-        };
+        } = &mut self;
 
         let process = &processes[process_key.0 as usize];
 
@@ -421,106 +544,83 @@ impl Event {
             *ip += 1;
             ctx.instruction_count += 1;
             match instr {
-                I::Constant(dst, value) => execution::exec_constant(stack, dst.0, value),
+                I::Constant(dst, value) => execution::exec_constant(stack, *dst, value),
 
-                I::TvUnary(dst, op, size, src) => {
-                    execution::tv::exec_tv_unary(stack, dst.0, *op, *size, src.0)
+                I::TvUnary(dst, op, src) => execution::tv::exec_tv_unary(stack, *dst, *op, *src),
+                I::TvResize(dst, op, src) => execution::tv::exec_tv_resize(stack, *dst, *op, *src),
+                I::TvBinaryArithmetic(dst, op, lhs, rhs) => {
+                    execution::tv::exec_tv_bin_arith(stack, *dst, *op, *lhs, *rhs)
                 }
-                I::TvResize(dst, op, dst_size, src_size, src) => {
-                    execution::tv::exec_tv_resize(stack, dst.0, *dst_size, *op, src.0, *src_size)
+                I::TvBinaryComparison(dst, op, lhs, rhs) => {
+                    execution::tv::exec_tv_bin_cmp(stack, *dst, *op, *lhs, *rhs)
                 }
-                I::TvBinaryArithmetic(dst, op, size, lhs, rhs) => {
-                    execution::tv::exec_tv_bin_arith(stack, dst.0, *op, *size, lhs.0, rhs.0)
+                I::TvShift(dst, op, src, offset) => {
+                    execution::tv::exec_tv_shift(stack, *dst, *op, *src, *offset)
                 }
-                I::TvBinaryComparison(dst, op, size, lhs, rhs) => {
-                    execution::tv::exec_tv_bin_cmp(stack, dst.0, *op, *size, lhs.0, rhs.0)
+                I::TvSelectBit(dst, src, idx) => {
+                    execution::tv::exec_tv_select_bit(stack, *dst, *src, *idx)
                 }
-                I::TvShift(dst, op, size, src, offset) => {
-                    execution::tv::exec_tv_shift(stack, dst.0, *op, *size, src.0, offset.0)
-                }
-                I::TvSelectBit(dst, size, src, idx) => {
-                    execution::tv::exec_tv_select_bit(stack, dst.0, *size, src.0, idx.0)
-                }
-                I::TvConcat(dst, lhs_size, lhs, rhs_size, rhs) => {
-                    execution::tv::exec_tv_concat(stack, dst.0, lhs.0, *lhs_size, rhs.0, *rhs_size)
+                I::TvConcat(dst, lhs, rhs) => {
+                    execution::tv::exec_tv_concat(stack, *dst, *lhs, *rhs)
                 }
 
                 I::FvUnary(dst, op, size, src) => {
-                    execution::fv::exec_fv_unary(stack, dst.0, *op, *size, src.0)
+                    execution::fv::exec_fv_unary(&mut stack.0, dst.0, *op, *size, src.0)
                 }
-                I::FvResize(dst, op, dst_size, src_size, src) => {
-                    execution::fv::exec_fv_resize(stack, dst.0, *dst_size, *op, src.0, *src_size)
-                }
+                I::FvResize(dst, op, dst_size, src_size, src) => execution::fv::exec_fv_resize(
+                    &mut stack.0,
+                    dst.0,
+                    *dst_size,
+                    *op,
+                    src.0,
+                    *src_size,
+                ),
                 I::FvBinaryArithmetic(dst, op, size, lhs, rhs) => {
-                    execution::fv::exec_fv_bin_arith(stack, dst.0, *op, *size, lhs.0, rhs.0)
+                    execution::fv::exec_fv_bin_arith(&mut stack.0, dst.0, *op, *size, lhs.0, rhs.0)
                 }
                 I::FvBinaryComparison(dst, op, size, lhs, rhs) => {
-                    execution::fv::exec_fv_bin_cmp(stack, dst.0, *op, *size, lhs.0, rhs.0)
+                    execution::fv::exec_fv_bin_cmp(&mut stack.0, dst.0, *op, *size, lhs.0, rhs.0)
                 }
                 I::FvShift(dst, op, size, src, offset) => {
-                    execution::fv::exec_fv_shift(stack, dst.0, *op, *size, src.0, offset.0)
+                    execution::fv::exec_fv_shift(&mut stack.0, dst.0, *op, *size, src.0, offset.0)
                 }
                 I::FvSelectBit(dst, size, src, idx) => {
-                    execution::fv::exec_fv_select_bit(stack, dst.0, *size, src.0, idx.0)
+                    execution::fv::exec_fv_select_bit(&mut stack.0, dst.0, *size, src.0, idx.0)
                 }
-                I::FvConcat(dst, lhs_size, lhs, rhs_size, rhs) => {
-                    execution::fv::exec_fv_concat(stack, dst.0, lhs.0, *lhs_size, rhs.0, *rhs_size)
-                }
+                I::FvConcat(dst, lhs_size, lhs, rhs_size, rhs) => execution::fv::exec_fv_concat(
+                    &mut stack.0,
+                    dst.0,
+                    lhs.0,
+                    *lhs_size,
+                    rhs.0,
+                    *rhs_size,
+                ),
 
-                I::TvToFv(dst, src, size) => {
-                    if size.get() <= 16 {
-                        let tv_nbytes = size.get().div_ceil(8) as usize;
-                        let fv_nbytes = (size.get() * 2).div_ceil(8) as usize;
-                        let v = load_partial_u64(&stack[src.0..][..tv_nbytes], *size);
-                        store_partial_u64(
-                            &mut stack[dst.0..][..fv_nbytes],
-                            v | (((1u64 << size.get()) - 1) << size.get()),
-                            VectorSize::new(2 * size.get()).unwrap(),
-                        );
-                    } else if size.get() <= 32 {
-                        let tv_nbytes = size.get().div_ceil(8) as usize;
-                        let v = load_partial_u64(&stack[src.0..][..tv_nbytes], *size);
-                        let dst = bytemuck::cast_slice_mut::<u8, u64>(&mut stack[dst.0..][..16]);
-                        dst[0] = (1u64 << size.get()) - 1;
-                        dst[1] = v;
+                I::TvToFv(dst, src) => {
+                    let size = dst.size;
+                    if size.get() <= 32 {
+                        let v = stack.get_tv_u64(src.to_ref(size));
+                        stack.set_fv_u64(*dst, 1u64.unbounded_shl(size.get()).wrapping_sub(1), v);
                     } else {
-                        let tv_nwords = size.get().div_ceil(64) as usize;
-                        let fv_nwords = 2 * size.get().div_ceil(64) as usize;
-                        let (dst, src) =
-                            get_disjoint_dst_src(stack, dst.0, fv_nwords * 8, src.0, tv_nwords * 8);
-                        let dst = bytemuck::cast_slice_mut::<u8, u64>(dst);
-                        let src = bytemuck::cast_slice::<u8, u64>(src);
-
-                        fv_set_no_special(dst, *size);
-                        dst[tv_nwords..].copy_from_slice(src);
+                        let nwords = size.get().div_ceil(64) as usize;
+                        let (dst, src) = stack
+                            .get_disjoint_u64_dst_src((dst.offset, nwords * 2), (*src, nwords));
+                        fv_set_no_special(dst, size);
+                        dst[nwords..].copy_from_slice(src);
                     }
                 }
-                I::FvToTv(dst, src, size) => {
-                    if size.get() <= 16 {
-                        let tv_nbytes = size.get().div_ceil(8) as usize;
-                        let fv_nbytes = (size.get() * 2).div_ceil(8) as usize;
-                        let v = load_partial_u64(
-                            &stack[src.0..][..fv_nbytes],
-                            VectorSize::new(2 * size.get()).unwrap(),
-                        );
-                        store_partial_u64(
-                            &mut stack[dst.0..][..tv_nbytes],
-                            v & ((1u64 << size.get()) - 1),
-                            *size,
-                        );
-                    } else if size.get() <= 32 {
-                        let tv_nbytes = size.get().div_ceil(8) as usize;
-                        let v = bytemuck::cast_slice::<u8, u64>(&stack[dst.0..][..16])[1];
-                        store_partial_u64(&mut stack[..tv_nbytes], v, *size);
+                I::FvToTv(dst, src) => {
+                    let size = dst.size;
+                    if size.get() <= 32 {
+                        let (spc, val) = stack.get_fv_u64(src.to_ref(size));
+                        stack.set_tv_u64(*dst, spc & val);
                     } else {
-                        let tv_nwords = size.get().div_ceil(64) as usize;
-                        let fv_nwords = 2 * size.get().div_ceil(64) as usize;
-                        let (dst, src) =
-                            get_disjoint_dst_src(stack, src.0, tv_nwords * 8, dst.0, fv_nwords * 8);
-                        let dst = bytemuck::cast_slice_mut::<u8, u64>(dst);
-                        let src = bytemuck::cast_slice::<u8, u64>(src);
-
-                        dst.copy_from_slice(&src[tv_nwords..]);
+                        let nwords = size.get().div_ceil(64) as usize;
+                        let (dst, src) = stack
+                            .get_disjoint_u64_dst_src((dst.offset, nwords), (*src, nwords * 2));
+                        for i in 0..nwords {
+                            dst[i] = src[i] & src[nwords + i];
+                        }
                     }
                 }
 
@@ -531,25 +631,17 @@ impl Event {
                         O::Display(f) => {
                             f.write_to(
                                 &mut ctx.stdout,
-                                args.iter().map(|(o, s)| {
-                                    Bits::load_from_slice(
-                                        &stack[o.0..][..s.get().div_ceil(8) as usize],
-                                        *s,
-                                    )
-                                }),
+                                args.iter().map(|(o, s)| stack.load_tv_bits(o.to_ref(*s))),
                             )
                             .unwrap();
                         }
                         O::Assert(f) => {
-                            let condition = stack[args[0].0.0] != 0;
+                            let condition = stack.get_tv_u64(args[0].0.to_ref(SCALAR_VSIZE)) != 0;
                             if !condition {
                                 f.write_to(
                                     &mut ctx.stdout,
                                     args[1..].iter().map(|(o, s)| {
-                                        Bits::load_from_slice(
-                                            &stack[o.0..][..s.get().div_ceil(8) as usize],
-                                            *s,
-                                        )
+                                        Bits::load_from_slice(stack.get(o.to_ref(*s)), *s)
                                     }),
                                 )
                                 .unwrap();
@@ -598,82 +690,28 @@ impl Event {
                         }
                         O::VcdPause => _ = vcd.as_mut().map(|vcd| vcd.paused = true),
                         O::VcdResume => _ = vcd.as_mut().map(|vcd| vcd.paused = false),
-                        O::Time => {
-                            bits::load_from_u64(stack, dst.0, TIME_VSIZE, ctx.time);
-                        }
+                        O::Time => _ = stack.set_tv_u64(dst.to_ref(TIME_VSIZE), ctx.time),
                         O::Finish => {
                             writeln!(&mut ctx.stdout, "[FINISH]").unwrap();
                             return EvalOutcome::Exit;
                         }
                     }
                 }
-                I::Probe(var, sig) => {
-                    let bits = &signals[sig.0 as usize];
-                    match (bits.as_data_ref(), ctx.logic_mode) {
-                        (BitsDataRef::InlineTv(v), LogicMode::TwoValue) => {
-                            let nbytes = bits.size().get().div_ceil(8) as usize;
-                            store_partial_u64(&mut stack[var.0..][..nbytes], v, bits.size());
-                        }
-                        (BitsDataRef::InlineFv(spc, v), LogicMode::FourValue) => {
-                            let nbytes = (2 * bits.size().get()).div_ceil(8) as usize;
-                            store_partial_u64(
-                                &mut stack[var.0..][..nbytes],
-                                fv_pack_u64(spc as u64, v as u64, bits.size()),
-                                VectorSize::new(2 * bits.size().get()).unwrap(),
-                            );
-                        }
-                        (BitsDataRef::SeparateTv(v), LogicMode::TwoValue) => {
-                            bytemuck::cast_slice_mut::<u8, u64>(&mut stack[var.0..][..v.len() * 8])
-                                .copy_from_slice(v);
-                        }
-                        (BitsDataRef::SeparateFv(v), LogicMode::FourValue) => {
-                            bytemuck::cast_slice_mut::<u8, u64>(&mut stack[var.0..][..v.len() * 8])
-                                .copy_from_slice(v);
-                        }
-                        _ => unreachable!(),
-                    }
-                }
-                I::Drive(sig, var, region, partial) => {
-                    let size = signals[sig.0 as usize].size();
-                    let partial = partial.map(|(offset, width)| {
-                        (
-                            bits::store_to_u64(&stack, offset.0, INTEGER_VSIZE) as u32,
-                            width,
-                        )
-                    });
-                    if *region != 0 {
-                        let region = (*region - 1) as usize;
-                        let value = Bits::load_from_slice(
-                            &stack[var.0..][..size.get().div_ceil(8) as usize],
-                            size,
-                        );
-                        match regions.other_dispatched[region].entry(DispatchKey::Signal(*sig)) {
-                            Entry::Occupied(entry) => {
-                                let Event::Drive(_, assignments) =
-                                    &mut regions.other[region][*entry.get()]
-                                else {
-                                    unreachable!();
-                                };
-                                assignments.push((value, partial));
-                            }
-                            Entry::Vacant(entry) => {
-                                let event = Event::Drive(*sig, vec![(value, partial)]);
-                                let i = regions.other[region].len();
-                                regions.other[region].push(event);
-                                entry.insert(i);
-                            }
-                        }
+                I::Drive(sig, src, partial) => {
+                    let partial = partial.map(|offset| stack.load_exact_tv_u32(offset));
 
-                        continue;
-                    }
-
-                    let signal = &mut signals[sig.0 as usize];
-                    let size = partial.map_or(size, |(_, s)| s);
-                    let updated = drive_bits(signal, stack, var.0, size, partial, ctx.logic_mode);
+                    let updated = drive_bits(
+                        stack,
+                        signals[sig.0 as usize],
+                        *src,
+                        partial,
+                        ctx.logic_mode,
+                    );
 
                     if updated {
                         update_watchers(
                             *sig,
+                            stack,
                             signals,
                             watches,
                             listeners,
@@ -738,9 +776,10 @@ impl Event {
                     }
                     return EvalOutcome::Next;
                 }
+
                 I::Jump(offset) => *ip = *offset,
                 I::Branch(cond, true_offset, false_offset) => {
-                    let is_true = stack[cond.0] & 1 != 0;
+                    let is_true = stack.get_tv_u64(cond.to_ref(SCALAR_VSIZE)) & 1 != 0;
                     if is_true {
                         *ip = *true_offset;
                     } else {
@@ -764,12 +803,12 @@ pub fn run(
     ctx: &mut Context,
     processes: &[VmProcess],
     regions: &mut Regions,
-    signals: &mut [Bits],
+    signals: &mut [StackRef],
     signal_info: &[SignalInfo],
     listeners: &mut SlotMap<ListenerKey, Event>,
     watches: &mut [Vec<ListenerKey>],
     mut trace: Option<&mut vogls_trace::Trace>,
-    stack: &mut [u8],
+    stack: &mut Stack,
     max_time: u64,
 ) -> Result<(), ()> {
     let mut schedule = BTreeMap::<Timestamp, Vec<Event>>::new();
@@ -777,16 +816,11 @@ pub fn run(
     'region_loop: loop {
         while let Some(event) = regions.active.pop() {
             if let Some(trace) = trace.as_deref_mut() {
-                trace.events.push(match &event {
-                    Event::Drive(s, _) => {
-                        vogls_trace::Event::Drive(s.0, Some(trace.driven.len() as u64))
-                    }
-                    Event::Evaluation(e) => vogls_trace::Event::Evaluation(
-                        e.process.0 as u64,
-                        trace.driven.len() as u64..trace.driven.len() as u64,
-                        vogls_trace::EventStopReason::Halt,
-                    ),
-                });
+                trace.events.push(vogls_trace::Event::Evaluation(
+                    event.process.0 as u64,
+                    trace.driven.len() as u64..trace.driven.len() as u64,
+                    vogls_trace::EventStopReason::Halt,
+                ));
             }
             if cfg!(vm_profile) {
                 ctx.event_count += 1;
@@ -834,7 +868,7 @@ pub fn run(
 
         // Dump the VCD updates for this simulation time.
         if let Some(vcd) = vcd.as_mut() {
-            vcd.dump_time_step(ctx, signals, signal_info, false)
+            vcd.dump_time_step(ctx, stack, signals, signal_info, false)
                 .unwrap();
         }
 
@@ -853,7 +887,8 @@ pub fn run(
     }
 
     if let Some(vcd) = vcd.as_mut() {
-        vcd.dump_time_step(ctx, signals, signal_info, true).unwrap();
+        vcd.dump_time_step(ctx, stack, signals, signal_info, true)
+            .unwrap();
         vcd.writer.flush().unwrap();
     }
 
@@ -861,7 +896,7 @@ pub fn run(
         writeln!(ctx.stdout, "Stats:",).unwrap();
         writeln!(ctx.stdout, "  # Instructions: {}", ctx.instruction_count).unwrap();
         writeln!(ctx.stdout, "  # Events:       {}", ctx.event_count).unwrap();
-        writeln!(ctx.stdout, "  # Stack size:   {}", stack.len()).unwrap();
+        writeln!(ctx.stdout, "  # Stack size:   {}", stack.0.len()).unwrap();
     }
 
     Ok(())

@@ -51,8 +51,8 @@ fn evaluate_impl(
                 let bits = signals[src_signal].clone();
                 _ = variables.insert(*dst, bits);
             }
-            I::Drive(dst_signal, src, region, partial) => {
-                if *region != 0 || partial.is_some() {
+            I::Drive(dst_signal, src, partial) => {
+                if partial.is_some() {
                     todo!()
                 }
 

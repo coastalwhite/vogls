@@ -28,6 +28,7 @@ pub fn new_process(
         name,
         entry: bb_key,
         origin,
+        lazy: false,
         ins: IndexSet::new(),
         outs: IndexSet::new(),
     });
@@ -50,6 +51,7 @@ pub fn new_anonymous_builder(
         name,
         entry: bb_key,
         origin,
+        lazy: false,
         ins: IndexSet::new(),
         outs: IndexSet::new(),
     });
@@ -513,7 +515,7 @@ impl BasicBlockBuilder {
     }
 
     pub fn drive(&mut self, gl: &mut GlobalContext, signal: SignalKey, src: VariableKey) {
-        self.regioned_drive_opt_partial(gl, signal, src, 0, None);
+        self.drive_opt_partial(gl, signal, src, None);
     }
     pub fn drive_partial(
         &mut self,
@@ -523,44 +525,13 @@ impl BasicBlockBuilder {
         offset: VariableKey,
         length: VectorSize,
     ) {
-        self.regioned_drive_opt_partial(gl, signal, src, 0, Some((offset, length)));
+        self.drive_opt_partial(gl, signal, src, Some((offset, length)));
     }
     pub fn drive_opt_partial(
         &mut self,
         gl: &mut GlobalContext,
         signal: SignalKey,
         src: VariableKey,
-        partial: Option<(VariableKey, VectorSize)>,
-    ) {
-        self.regioned_drive_opt_partial(gl, signal, src, 0, partial);
-    }
-
-    pub fn regioned_drive(
-        &mut self,
-        gl: &mut GlobalContext,
-        signal: SignalKey,
-        src: VariableKey,
-        region: u8,
-    ) {
-        self.regioned_drive_opt_partial(gl, signal, src, region, None);
-    }
-    pub fn regioned_drive_partial(
-        &mut self,
-        gl: &mut GlobalContext,
-        signal: SignalKey,
-        src: VariableKey,
-        region: u8,
-        offset: VariableKey,
-        length: VectorSize,
-    ) {
-        self.regioned_drive_opt_partial(gl, signal, src, region, Some((offset, length)));
-    }
-    pub fn regioned_drive_opt_partial(
-        &mut self,
-        gl: &mut GlobalContext,
-        signal: SignalKey,
-        src: VariableKey,
-        region: u8,
         partial: Option<(VariableKey, VectorSize)>,
     ) {
         assert_eq!(
@@ -571,9 +542,9 @@ impl BasicBlockBuilder {
         if let Some((offset, _)) = partial {
             assert_eq!(gl.vars[offset].size, INTEGER_VSIZE);
         }
-        self.instrs
-            .push(Instruction::Drive(signal, src, region, partial));
+        self.instrs.push(Instruction::Drive(signal, src, partial));
     }
+
     pub fn probe(&mut self, gl: &mut GlobalContext, signal: SignalKey) -> VariableKey {
         gl.processes[self.process].ins.insert(signal);
         let size = gl.signals.get(signal).unwrap().size;

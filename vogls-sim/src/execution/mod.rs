@@ -1,29 +1,22 @@
 use vogls_bits::BitsDataRef;
 use vogls_ir::Bits;
 
+use crate::{Stack, StackOffset};
+
 pub(super) mod fv;
 pub(super) mod tv;
 
-pub(crate) fn exec_constant(stack: &mut [u8], dst: usize, value: &Bits) {
+pub(crate) fn exec_constant(stack: &mut Stack, dst: StackOffset, value: &Bits) {
     let size = value.size();
     match value.as_data_ref() {
-        BitsDataRef::InlineTv(v) => {
-            let nbytes = size.get().div_ceil(8) as usize;
-            stack[dst..][..nbytes].copy_from_slice(&v.to_le_bytes()[..nbytes])
-        }
+        BitsDataRef::InlineTv(v) => _ = stack.set_tv_u64(dst.to_ref(size), v),
         BitsDataRef::InlineFv(spc, val) => {
-            let nbytes = (2 * size.get()).div_ceil(8) as usize;
-            let v = ((spc as u64) << size.get()) | (val as u64);
-            stack[dst..][..nbytes].copy_from_slice(&v.to_le_bytes()[..nbytes])
+            _ = stack.set_fv_u64(dst.to_ref(size), spc as u64, val as u64)
         }
-
-        BitsDataRef::SeparateTv(items) => {
-            let dst = bytemuck::cast_slice_mut::<u8, u64>(&mut stack[dst..][..items.len() * 8]);
-            dst.copy_from_slice(items);
-        }
-        BitsDataRef::SeparateFv(items) => {
-            let dst = bytemuck::cast_slice_mut::<u8, u64>(&mut stack[dst..][..items.len() * 8]);
-            dst.copy_from_slice(items);
+        BitsDataRef::SeparateTv(items) | BitsDataRef::SeparateFv(items) => {
+            stack
+                .get_mut_u64_slice(dst, items.len())
+                .copy_from_slice(items);
         }
     }
 }

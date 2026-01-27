@@ -68,6 +68,7 @@ pub fn elaborate_fn<'a>(
                 signal,
                 ty,
                 dims: [].into(),
+                nba: None,
             });
         }
     }
@@ -143,6 +144,7 @@ pub fn elaborate_task<'a>(
                 signal,
                 ty,
                 dims: [].into(),
+                nba: None,
             });
         }
     }

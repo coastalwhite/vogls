@@ -4,7 +4,7 @@ use std::fmt;
 use std::num::NonZeroUsize;
 
 use vogls_ir::vcd::VcdScope;
-use vogls_ir::{BasicBlockKey, ConnectionDirection, SignalKey, VariableKey};
+use vogls_ir::{BasicBlockKey, ConnectionDirection, ProcessKey, SignalKey, VariableKey};
 
 use crate::ast::module::{
     FunctionDeclaration, ModuleInstance, ModuleOrGenerateItem, TaskDeclaration,
@@ -121,6 +121,7 @@ pub struct HierarchyNet {
     pub signal: SignalKey,
     pub ty: VType,
     pub dims: Box<[u32]>,
+    pub nba: Option<(ProcessKey, SignalKey, SignalKey)>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -311,6 +312,7 @@ impl HierarchyItem {
                     signal: _,
                     ty,
                     dims,
+                    nba: _,
                 } = &hierarchy.nets[*i];
                 f.write_str("net ")?;
                 if ty.is_signed() || ty.force_net_width().get() != 1 {

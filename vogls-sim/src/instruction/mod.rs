@@ -4,7 +4,7 @@ use vogls_ir::{Bits, ResizeOp, Time, UnaryOp, VectorSize};
 mod format;
 mod lower;
 
-pub use lower::lower_process_to_vm;
+pub use lower::{StackBuilder, lower_process_to_vm};
 
 use crate::VcdScope;
 
@@ -17,6 +17,12 @@ pub struct StackOffset(pub usize);
 pub struct StackRef {
     pub offset: StackOffset,
     pub size: VectorSize,
+}
+
+impl StackOffset {
+    pub fn to_ref(self, size: VectorSize) -> StackRef {
+        StackRef { offset: self, size }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -59,31 +65,13 @@ pub enum VmIntrinsicOp {
 pub enum VmInstruction {
     Constant(StackOffset, Bits),
 
-    TvUnary(StackOffset, UnaryOp, VectorSize, StackOffset),
-    TvResize(StackOffset, ResizeOp, VectorSize, VectorSize, StackOffset),
-    TvBinaryArithmetic(
-        StackOffset,
-        BinaryArithmeticOp,
-        VectorSize,
-        StackOffset,
-        StackOffset,
-    ),
-    TvBinaryComparison(
-        StackOffset,
-        BinaryComparisonOp,
-        VectorSize,
-        StackOffset,
-        StackOffset,
-    ),
-    TvShift(StackOffset, ShiftOp, VectorSize, StackOffset, StackOffset),
-    TvSelectBit(StackOffset, VectorSize, StackOffset, StackOffset),
-    TvConcat(
-        StackOffset,
-        VectorSize,
-        StackOffset,
-        VectorSize,
-        StackOffset,
-    ),
+    TvUnary(StackOffset, UnaryOp, StackRef),
+    TvResize(StackRef, ResizeOp, StackRef),
+    TvBinaryArithmetic(StackRef, BinaryArithmeticOp, StackOffset, StackOffset),
+    TvBinaryComparison(StackOffset, BinaryComparisonOp, StackRef, StackOffset),
+    TvShift(StackRef, ShiftOp, StackOffset, StackOffset),
+    TvSelectBit(StackOffset, StackRef, StackOffset),
+    TvConcat(StackOffset, StackRef, StackRef),
 
     FvUnary(StackOffset, UnaryOp, VectorSize, StackOffset),
     FvResize(StackOffset, ResizeOp, VectorSize, VectorSize, StackOffset),
@@ -111,8 +99,8 @@ pub enum VmInstruction {
         StackOffset,
     ),
 
-    TvToFv(StackOffset, StackOffset, VectorSize),
-    FvToTv(StackOffset, StackOffset, VectorSize),
+    TvToFv(StackRef, StackOffset),
+    FvToTv(StackRef, StackOffset),
 
     Intrinsic(
         StackOffset,
@@ -120,13 +108,7 @@ pub enum VmInstruction {
         Box<[(StackOffset, VectorSize)]>,
     ),
 
-    Probe(StackOffset, VmSignalKey),
-    Drive(
-        VmSignalKey,
-        StackOffset,
-        u8,
-        Option<(StackOffset, VectorSize)>,
-    ),
+    Drive(VmSignalKey, StackRef, Option<StackOffset>),
 
     Wait(Time),
     WaitRegion(u8),

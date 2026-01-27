@@ -1,5 +1,4 @@
 use core::fmt;
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 use crate::{
@@ -258,11 +257,8 @@ impl ContextFormat for Instruction {
                 f.write_str(" = probe ")?;
                 ctx.gl.signals.get(*sig).unwrap().ctx_fmt(f, ctx)?;
             }
-            Self::Drive(sig, var, region, partial) => {
+            Self::Drive(sig, var, partial) => {
                 f.write_str("drive")?;
-                if *region != 0 {
-                    write!(f, "[r={region}] ")?;
-                }
                 if let Some((offset, length)) = partial {
                     f.write_str("[")?;
                     offset.ctx_fmt(f, ctx)?;

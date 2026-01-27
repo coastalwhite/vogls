@@ -13,24 +13,48 @@ impl fmt::Display for VmInstruction {
         match self {
             Self::Constant(dst, value) => write!(f, "{dst} = const {value}"),
 
-            Self::TvUnary(dst, op, _, src) => write!(f, "{dst} = tv.{} {src}", op.into_mnemonic()),
-            Self::TvResize(dst, op, dst_size, _, src) => {
-                write!(f, "{dst} = tv.{}[{dst_size}] {src}", op.into_mnemonic())
+            Self::TvUnary(dst, op, src) => {
+                write!(f, "{dst} = tv.{} {}", op.into_mnemonic(), src.offset)
             }
-            Self::TvBinaryArithmetic(dst, op, _, src1, src2) => {
-                write!(f, "{dst} = tv.{} {src1}, {src2}", op.into_mnemonic())
+            Self::TvResize(dst, op, src) => {
+                write!(
+                    f,
+                    "{} = tv.{}[{}] {}",
+                    dst.offset,
+                    op.into_mnemonic(),
+                    dst.size,
+                    src.offset
+                )
             }
-            Self::TvBinaryComparison(dst, op, _, src1, src2) => {
-                write!(f, "{dst} = tv.{} {src1}, {src2}", op.into_mnemonic())
+            Self::TvBinaryArithmetic(dst, op, src1, src2) => {
+                write!(
+                    f,
+                    "{} = tv.{} {src1}, {src2}",
+                    dst.offset,
+                    op.into_mnemonic()
+                )
             }
-            Self::TvShift(dst, op, _, src1, src2) => {
-                write!(f, "{dst} = tv.{} {src1}, {src2}", op.into_mnemonic())
+            Self::TvBinaryComparison(dst, op, src1, src2) => {
+                write!(
+                    f,
+                    "{dst} = tv.{} {}, {src2}",
+                    op.into_mnemonic(),
+                    src1.offset
+                )
             }
-            Self::TvSelectBit(dst, _, src1, src2) => {
-                write!(f, "{dst} = tv.bselect {src1}, {src2}")
+            Self::TvShift(dst, op, src1, src2) => {
+                write!(
+                    f,
+                    "{} = tv.{} {src1}, {src2}",
+                    dst.offset,
+                    op.into_mnemonic()
+                )
             }
-            Self::TvConcat(dst, _, src1, _, src2) => {
-                write!(f, "{dst} = tv.concat {src1}, {src2}")
+            Self::TvSelectBit(dst, src1, src2) => {
+                write!(f, "{dst} = tv.bselect {}, {src2}", src1.offset)
+            }
+            Self::TvConcat(dst, src1, src2) => {
+                write!(f, "{dst} = tv.concat {}, {}", src1.offset, src2.offset)
             }
 
             Self::FvUnary(dst, op, dst_size, src) => {
@@ -55,11 +79,11 @@ impl fmt::Display for VmInstruction {
                 write!(f, "{dst} = fv.concat {src1}, {src2}")
             }
 
-            Self::TvToFv(dst, src, _) => {
-                write!(f, "{dst} = tv2fv {src}")
+            Self::TvToFv(dst, src) => {
+                write!(f, "{} = tv2fv {src}", dst.offset)
             }
-            Self::FvToTv(dst, src, _) => {
-                write!(f, "{dst} = fv2tv {src}")
+            Self::FvToTv(dst, src) => {
+                write!(f, "{} = fv2tv {src}", dst.offset)
             }
 
             Self::Intrinsic(dst, op, args) => {
@@ -72,11 +96,15 @@ impl fmt::Display for VmInstruction {
                 }
                 Ok(())
             }
-            Self::Probe(dst, signal) => write!(f, "{dst} = probe {signal}"),
-            Self::Drive(signal, src, region, partial) => match partial {
-                None => write!(f, "drive[r={region}] {signal}, {src}"),
-                Some((offset, length)) => {
-                    write!(f, "drive[r={region}][{offset}, {length}] {signal}, {src}")
+            Self::Drive(signal, src, partial) => match partial {
+                None => write!(f, "drive {signal}, {}", src.offset),
+                Some(offset) => {
+                    write!(
+                        f,
+                        "drive[{offset}, {length}] {signal}, {}",
+                        src.offset,
+                        length = src.size,
+                    )
                 }
             },
             Self::Wait(time) => write!(f, "wait #{}", time.0),
@@ -131,7 +159,6 @@ impl fmt::Display for VmProcess {
                 | I::TvToFv(..)
                 | I::FvToTv(..)
                 | I::Intrinsic(..)
-                | I::Probe(..)
                 | I::Drive(..)
                 | I::Wait(..)
                 | I::WaitRegion(..)

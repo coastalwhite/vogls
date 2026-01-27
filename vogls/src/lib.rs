@@ -4,9 +4,9 @@ use std::rc::Rc;
 
 use slotmap::{SecondaryMap, SlotMap};
 use vogls_ir::token_range::TokenRange;
-use vogls_ir::{Bits, ContextFormat, GlobalContext, LogicMode, Signal};
+use vogls_ir::{Bits, GlobalContext, LogicMode, Signal};
 use vogls_sim::{
-    Context, EvaluationEvent, Event, Regions, SignalInfo, VmProcess, VmProcessKey, VmSignalKey,
+    Context, Event, Regions, SignalInfo, StackBuilder, VmProcess, VmProcessKey, VmSignalKey,
     lower_process_to_vm,
 };
 use vogls_verilog::ast::AstId;
@@ -622,6 +622,7 @@ pub fn run(
         }));
     }
 
+    let mut stack_builder = StackBuilder::new();
     let mut io_signals = HashMap::new();
     let mut signal_info = vec![
         SignalInfo {
@@ -654,18 +655,18 @@ pub fn run(
 
         let vm_signal_key = VmSignalKey(io_signals.len() as u64);
         io_signals.insert(key, vm_signal_key);
-        signals.push(value);
+        signals.push(stack_builder.claim(gl.logic_mode, *size));
         watches.push(Vec::new());
         signal_info.push(SignalInfo { name: name.clone() });
     }
 
-    let mut stack_top = 0usize;
     for process in gl.processes.keys() {
         if ectx.emit_vm && ectx.emit_ir {
             println!();
             println!("{}", gl.processes[process].display(&gl));
         }
-        let vm_process = lower_process_to_vm(process, &gl, &mut stack_top, &mut io_signals);
+        let vm_process =
+            lower_process_to_vm(process, &gl, &mut stack_builder, &signals, &mut io_signals);
 
         if ectx.emit_vm {
             print!("{}", &vm_process);
@@ -678,21 +679,47 @@ pub fn run(
             println!(": {vm_process_key:?}");
         }
 
+        let vogls_ir::Process { name, origin, .. } = &gl.processes[process];
         if ectx.trace {
-            let vogls_ir::Process { name, origin, .. } = &gl.processes[process];
-
             trace_processes.push(vogls_trace::Process {
                 name: Some(name.clone()),
                 location: token_range_to_line_range(&token_buffer, *origin, &line_luts),
             });
         }
 
-        regions.active.push(Event::Evaluation(EvaluationEvent {
+        regions.active.push(Event {
             process: vm_process_key,
             ip: 0,
-        }));
+        });
     }
-    let mut stack = vec![0u8; stack_top];
+    let mut stack = stack_builder.finish();
+
+    for (key, signal) in &gl.signals {
+        let Signal {
+            name,
+            size,
+            initialize,
+            origin,
+        } = signal;
+        let mut value = None;
+        if let Some(initialize) = initialize {
+            assert_eq!(initialize.size(), *size);
+            stack.store_bits(
+                signals[io_signals[&key].0 as usize],
+                gl.logic_mode,
+                initialize,
+            );
+            value = Some(initialize);
+        }
+
+        if ectx.trace {
+            trace_signals.push(vogls_trace::Signal {
+                name: Some(name.clone()),
+                location: token_range_to_line_range(&token_buffer, *origin, &line_luts),
+                initial: value.cloned().unwrap_or_else(|| Bits::new_zeroed(*size)),
+            });
+        }
+    }
 
     if ectx.no_run {
         return Ok(());

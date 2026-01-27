@@ -1,5 +1,6 @@
 use vogls_ir::{
-    BasicBlockBuilder, Bits, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE, VariableKey, VectorSize,
+    BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, INTEGER_VSIZE, ProcessKey,
+    SCALAR_VSIZE, SignalKey, VariableKey, VectorSize, new_process,
 };
 
 use crate::ast::constant_expr::ConstantRangeExpression;
@@ -23,7 +24,7 @@ pub fn assign_variable_lvalue<'a>(
     ast_lvalue: AstId<VariableLValue>,
     variable: VariableKey,
     variable_ty: VType,
-    region: Region,
+    nba: bool,
 ) -> Result<(), ()> {
     let lvalue = arenas.get(ast_lvalue);
     if lvalue.0.len() == 1 {
@@ -36,7 +37,7 @@ pub fn assign_variable_lvalue<'a>(
             lvalue.0.get(0),
             variable,
             variable_ty,
-            region,
+            nba,
         );
     }
 
@@ -68,7 +69,7 @@ pub fn assign_variable_lvalue<'a>(
             lvf,
             variable,
             ty,
-            region,
+            nba,
         )?;
         offset += width.get();
     }
@@ -167,7 +168,7 @@ pub fn assign_variable_lvalue_flat<'a>(
     ast_lvalue: AstId<VariableLValueFlat>,
     variable: VariableKey,
     variable_ty: VType,
-    region: Region,
+    nba: bool,
 ) -> Result<(), ()> {
     let VariableLValueFlat {
         ident,
@@ -260,8 +261,9 @@ pub fn assign_variable_lvalue_flat<'a>(
     }
 
     match &scope.hierarchy.items()[symbol_key.as_idx()] {
-        HierarchyItem::Net(s) => {
-            let s = &scope.hierarchy.net()[*s];
+        HierarchyItem::Net(net_key) => {
+            let net_key = *net_key;
+            let s = &scope.hierarchy.nets[net_key];
             let key = s.signal;
             let size = ty.force_net_width();
             let partial = match range_expression {
@@ -310,7 +312,16 @@ pub fn assign_variable_lvalue_flat<'a>(
             };
             let size = partial.map_or(size, |(_, s)| s);
             let variable = expression::truncate_or_extend(gl, builder, variable, variable_ty, size);
-            builder.regioned_drive_opt_partial(gl, key, variable, region as u8, partial);
+
+            if nba {
+                let s = &mut scope.hierarchy.nets[net_key];
+                let (_, mask, value) = s.nba.get_or_insert_with(|| create_nba_process(gl, key));
+                let mask_value = builder.constant(gl, Bits::new_ones(size));
+                builder.drive_opt_partial(gl, *mask, mask_value, partial);
+                builder.drive_opt_partial(gl, *value, variable, partial);
+            } else {
+                builder.drive_opt_partial(gl, key, variable, partial);
+            }
         }
         HierarchyItem::Module(_) => todo!(),
         HierarchyItem::NamedBlock(_) => todo!(),
@@ -594,4 +605,60 @@ pub fn net_lvalue_width<'a>(
         })?;
     }
     Ok(size)
+}
+
+pub fn create_nba_process(
+    gl: &mut GlobalContext,
+    signal: SignalKey,
+) -> (ProcessKey, SignalKey, SignalKey) {
+    let vogls_ir::Signal {
+        name, origin, size, ..
+    } = &gl.signals[signal];
+
+    let process_name = format!("{name}::NBA_PROC");
+    let mask_name = format!("{name}::NBA_MASK");
+    let value_name = format!("{name}::NBA_VALUE");
+    let (size, origin) = (*size, *origin);
+    let mut builder = new_process(gl, process_name, origin);
+
+    let process_key = builder.process();
+    let mask = gl.signals.insert(vogls_ir::Signal {
+        name: mask_name,
+        size,
+        initialize: None,
+        origin,
+    });
+    let value = gl.signals.insert(vogls_ir::Signal {
+        name: value_name,
+        size,
+        initialize: None,
+        origin,
+    });
+
+    // We need to conditionally branch here as it might have already been assigned before.
+    let mask_v = builder.probe(gl, mask);
+    let mask_ro = builder.reduce_or(gl, mask_v);
+
+    let init_bb = builder.key();
+    builder = builder.next_terminate_later(gl);
+
+    let watch_bb = builder.key();
+    builder = builder.watch(gl, [value].into());
+
+    let waitregion_bb = builder.key();
+    builder = builder.wait_region(gl, Region::NonBlocking as u8);
+
+    let mask_v = builder.probe(gl, mask);
+    let value_v = builder.probe(gl, value);
+    let inv_mask = builder.binary_neg(gl, mask_v);
+    let old = builder.probe(gl, signal);
+    let old = builder.and(gl, old, inv_mask);
+    let value_v = builder.and(gl, value_v, mask_v);
+    let result = builder.or(gl, old, value_v);
+    builder.drive(gl, signal, result);
+    builder.jump_to(gl, watch_bb);
+
+    gl.bbs[init_bb].terminator = BasicBlockTerminator::Branch(mask_ro, waitregion_bb, watch_bb);
+
+    (process_key, mask, value)
 }

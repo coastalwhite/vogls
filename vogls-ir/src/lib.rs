@@ -272,7 +272,6 @@ pub enum Instruction {
     Drive(
         SignalKey,
         VariableKey,
-        u8,
         Option<(VariableKey, VectorSize)>,
     ),
 
@@ -310,7 +309,7 @@ impl Instruction {
                     f(*s);
                 }
             }
-            Self::Drive(_, src, _, partial) => {
+            Self::Drive(_, src, partial) => {
                 f(*src);
                 if let Some((off, _)) = partial {
                     f(*off);
@@ -355,7 +354,7 @@ impl Instruction {
                     *s = f(*s);
                 }
             }
-            Self::Drive(_, src, _, partial) => {
+            Self::Drive(_, src, partial) => {
                 *src = f(*src);
                 if let Some((off, _)) = partial {
                     *off = f(*off);
@@ -389,7 +388,7 @@ impl Instruction {
                     f(*s);
                 }
             }
-            Self::Drive(_, src, _, partial) => {
+            Self::Drive(_, src, partial) => {
                 f(*src);
                 if let Some((off, _)) = partial {
                     f(*off);
@@ -499,4 +498,5 @@ pub struct Process {
     pub origin: TokenRange,
     pub ins: IndexSet<SignalKey>,
     pub outs: IndexSet<SignalKey>,
+    pub lazy: bool,
 }

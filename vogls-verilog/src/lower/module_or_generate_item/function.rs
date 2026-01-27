@@ -102,6 +102,7 @@ pub fn lower<'a>(
         signal: output_key,
         ty: output_ty,
         dims: [].into(),
+        nba: None,
     });
 
     let mut input_types = Vec::<VType>::with_capacity(tf_input_decls.len());
@@ -156,6 +157,7 @@ pub fn lower<'a>(
                 signal: input_key,
                 ty: input_ty,
                 dims: [].into(),
+                nba: None,
             });
             num_inputs += 1;
         }
@@ -194,8 +196,8 @@ pub fn lower<'a>(
 
             false
         }
-        I::Drive(signal_key, variable_key, region, partial) => {
-            if *signal_key != output_key || *region != 0 || partial.is_some() {
+        I::Drive(signal_key, variable_key, partial) => {
+            if *signal_key != output_key || partial.is_some() {
                 nyi = true;
             }
             output_var = Some(*variable_key);
@@ -361,6 +363,7 @@ pub fn lower_task<'a>(
                 signal: port_key,
                 ty: port_ty,
                 dims: [].into(),
+                nba: None,
             });
             num_ports += 1;
         }
@@ -419,12 +422,12 @@ pub fn lower_task<'a>(
 
                 false
             }
-            I::Drive(signal_key, variable_key, region, partial) => {
+            I::Drive(signal_key, variable_key, partial) => {
                 let Some(i) = output_lut.get(signal_key) else {
                     return true;
                 };
 
-                if *region != 0 || partial.is_some() {
+                if partial.is_some() {
                     nyi = true;
                     return false;
                 }

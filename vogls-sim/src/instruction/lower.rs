@@ -6,36 +6,51 @@ use vogls_ir::{
 };
 
 use crate::instruction::{StackOffset, VmInstruction, VmProcess};
-use crate::{BinaryArithmeticOp, BinaryComparisonOp, ShiftOp, VmIntrinsicOp};
+use crate::{BinaryArithmeticOp, BinaryComparisonOp, ShiftOp, Stack, VmIntrinsicOp};
 
-use super::VmSignalKey;
+use super::{StackRef, VmSignalKey};
 
-fn push_variable(stack_top: &mut usize, size: VectorSize, mode: LogicMode) -> StackOffset {
-    // Most arithmetic operations are implemented on 64-bit chunks, by ensuring that
-    // all variables with a size larger or equal to than 64 are allocated in chunks of
-    // 64 we can efficiently dispatch to these kernels.
-    let nbytes = if mode == LogicMode::TwoValue && size.get() > 32 {
-        // @TODO: Allow this space to be used somehow. In general, we should use a
-        // slab allocator instead of this.
-        *stack_top += 8 - (*stack_top % 8); // pad to 8-bytes
-        (size.get() as usize).div_ceil(64) * 8
-    } else if mode == LogicMode::FourValue && size.get() > 16 {
-        *stack_top += 8 - (*stack_top % 8); // pad to 8-bytes
-        2 * (size.get() as usize).div_ceil(64) * 8
-    } else if mode == LogicMode::TwoValue {
-        (size.get() as usize).div_ceil(8)
-    } else {
-        (2 * size.get() as usize).div_ceil(8)
-    };
-    let stack_ref = StackOffset(*stack_top);
-    *stack_top += nbytes;
-    stack_ref
+pub struct StackBuilder {
+    top: usize,
+}
+
+impl StackBuilder {
+    pub fn new() -> Self {
+        Self { top: 0 }
+    }
+
+    pub fn claim(&mut self, mode: LogicMode, size: VectorSize) -> StackRef {
+        // Most arithmetic operations are implemented on 64-bit chunks, by ensuring that
+        // all variables with a size larger or equal to than 64 are allocated in chunks of
+        // 64 we can efficiently dispatch to these kernels.
+        let nbytes = if mode == LogicMode::TwoValue && size.get() > 32 {
+            // @TODO: Allow this space to be used somehow. In general, we should use a
+            // slab allocator instead of this.
+            self.top += 8 - (self.top % 8); // pad to 8-bytes
+            (size.get() as usize).div_ceil(64) * 8
+        } else if mode == LogicMode::FourValue && size.get() > 16 {
+            self.top += 8 - (self.top % 8); // pad to 8-bytes
+            2 * (size.get() as usize).div_ceil(64) * 8
+        } else if mode == LogicMode::TwoValue {
+            (size.get() as usize).div_ceil(8)
+        } else {
+            (2 * size.get() as usize).div_ceil(8)
+        };
+        let stack_ref = StackOffset(self.top);
+        self.top += nbytes;
+        stack_ref.to_ref(size)
+    }
+
+    pub fn finish(self) -> Stack {
+        Stack(vec![0; self.top].into())
+    }
 }
 
 pub fn lower_process_to_vm(
     process: ProcessKey,
     gl: &GlobalContext,
-    stack_top: &mut usize,
+    builder: &mut StackBuilder,
+    signals: &[StackRef],
     io_signals: &HashMap<SignalKey, VmSignalKey>,
 ) -> VmProcess {
     use Instruction as I;
@@ -98,7 +113,7 @@ pub fn lower_process_to_vm(
                     I::Probe(dst, _) => {
                         var_mode.insert(*dst, gl.logic_mode);
                     }
-                    I::Drive(_, _, _, _) => {}
+                    I::Drive(_, _, _) => {}
                     I::Phi(dst, items) => {
                         for (_, v) in items {
                             if let Some(m) = var_mode.get(v).copied() {
@@ -139,7 +154,7 @@ pub fn lower_process_to_vm(
                 let size = gl.vars.get(dst).unwrap().size;
                 let mode = var_mode[&dst];
 
-                stack_map.insert(dst, push_variable(stack_top, size, mode));
+                stack_map.insert(dst, builder.claim(mode, size).offset);
             }
         }
 
@@ -164,14 +179,14 @@ pub fn lower_process_to_vm(
             let r = match ($tgt_mode, $src_mode) {
                 (LogicMode::TwoValue, LogicMode::TwoValue) | (LogicMode::FourValue, LogicMode::FourValue) => r,
                 (LogicMode::TwoValue, LogicMode::FourValue) => {
-                    let tgt = push_variable(stack_top, $size, $tgt_mode);
-                    instructions.push(VmInstruction::FvToTv(tgt, r, $size));
-                    tgt
+                    let tgt = builder.claim($tgt_mode, $size);
+                    instructions.push(VmInstruction::FvToTv(tgt, r));
+                    tgt.offset
                 },
                 (LogicMode::FourValue, LogicMode::TwoValue) => {
-                    let tgt = push_variable(stack_top, $size, $tgt_mode);
-                    instructions.push(VmInstruction::TvToFv(tgt, r, $size));
-                    tgt
+                    let tgt = builder.claim($tgt_mode, $size);
+                    instructions.push(VmInstruction::TvToFv(tgt, r));
+                    tgt.offset
                 },
             };
             )?
@@ -196,7 +211,7 @@ pub fn lower_process_to_vm(
                     if var_mode[d] == LogicMode::FourValue {
                         VI::FvUnary(var!(*d), *op, size, s)
                     } else {
-                        VI::TvUnary(var!(*d), *op, size, s)
+                        VI::TvUnary(var!(*d), *op, s.to_ref(size))
                     }
                 }
                 I::Resize(d, op, s) => {
@@ -205,7 +220,7 @@ pub fn lower_process_to_vm(
                     if var_mode[d] == LogicMode::FourValue {
                         VI::FvResize(var!(*d), *op, gl.vars[*d].size, s_size, s)
                     } else {
-                        VI::TvResize(var!(*d), *op, gl.vars[*d].size, s_size, s)
+                        VI::TvResize(var!(*d).to_ref(gl.vars[*d].size), *op, s.to_ref(s_size))
                     }
                 }
                 I::Binary(d, op, s1, s2) => {
@@ -246,25 +261,38 @@ pub fn lower_process_to_vm(
                         }
                     } else {
                         match *op {
-                            O::And => VI::TvBinaryArithmetic(d, BA::And, d_size, s1, s2),
-                            O::Or => VI::TvBinaryArithmetic(d, BA::Or, d_size, s1, s2),
-                            O::Xor => VI::TvBinaryArithmetic(d, BA::Xor, d_size, s1, s2),
-                            O::Add => VI::TvBinaryArithmetic(d, BA::Add, d_size, s1, s2),
-                            O::Sub => VI::TvBinaryArithmetic(d, BA::Sub, d_size, s1, s2),
-                            O::Multiply => VI::TvBinaryArithmetic(d, BA::Multiply, d_size, s1, s2),
-                            O::Divide => VI::TvBinaryArithmetic(d, BA::Divide, d_size, s1, s2),
-                            O::Modulus => VI::TvBinaryArithmetic(d, BA::Modulus, d_size, s1, s2),
+                            O::And => VI::TvBinaryArithmetic(d.to_ref(d_size), BA::And, s1, s2),
+                            O::Or => VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Or, s1, s2),
+                            O::Xor => VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Xor, s1, s2),
+                            O::Add => VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Add, s1, s2),
+                            O::Sub => VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Sub, s1, s2),
+                            O::Multiply => {
+                                VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Multiply, s1, s2)
+                            }
+                            O::Divide => {
+                                VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Divide, s1, s2)
+                            }
+                            O::Modulus => {
+                                VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Modulus, s1, s2)
+                            }
 
-                            O::UnsignedLessEqual => {
-                                VI::TvBinaryComparison(d, BC::UnsignedLessEqual, s1_size, s1, s2)
+                            O::UnsignedLessEqual => VI::TvBinaryComparison(
+                                d,
+                                BC::UnsignedLessEqual,
+                                s1.to_ref(s1_size),
+                                s2,
+                            ),
+                            O::SelectBit => VI::TvSelectBit(d, s1.to_ref(s1_size), s2),
+                            O::LogicalShiftLeft => {
+                                VI::TvShift(d.to_ref(d_size), S::LogicalLeft, s1, s2)
                             }
-                            O::SelectBit => VI::TvSelectBit(d, s1_size, s1, s2),
-                            O::LogicalShiftLeft => VI::TvShift(d, S::LogicalLeft, d_size, s1, s2),
-                            O::LogicalShiftRight => VI::TvShift(d, S::LogicalRight, d_size, s1, s2),
+                            O::LogicalShiftRight => {
+                                VI::TvShift(d.to_ref(d_size), S::LogicalRight, s1, s2)
+                            }
                             O::ArithmeticShiftRight => {
-                                VI::TvShift(d, S::ArithmeticRight, d_size, s1, s2)
+                                VI::TvShift(d.to_ref(d_size), S::ArithmeticRight, s1, s2)
                             }
-                            O::Concat => VI::TvConcat(d, s1_size, s1, s2_size, s2),
+                            O::Concat => VI::TvConcat(d, s1.to_ref(s1_size), s2.to_ref(s2_size)),
                         }
                     }
                 }
@@ -288,13 +316,30 @@ pub fn lower_process_to_vm(
                     };
                     VI::Intrinsic(var!(*dst), Box::new(op), args)
                 }
-                I::Probe(dst, signal) => VI::Probe(var!(*dst), signal!(*signal)),
-                I::Drive(signal, src, region, partial) => VI::Drive(
-                    signal!(*signal),
-                    var!(*src, (gl.logic_mode, var_mode[src], gl.vars[*src].size)),
-                    *region,
-                    partial.map(|(o, l)| (var!(o), l)),
-                ),
+                I::Probe(dst, signal) => {
+                    let size = gl.vars[*dst].size;
+                    let signal = signal!(*signal);
+                    match gl.logic_mode {
+                        LogicMode::TwoValue => VI::TvResize(
+                            var!(*dst).to_ref(size),
+                            vogls_ir::ResizeOp::Truncate,
+                            signals[signal.0 as usize],
+                        ),
+                        LogicMode::FourValue => VI::TvResize(
+                            var!(*dst).to_ref(size),
+                            vogls_ir::ResizeOp::Truncate,
+                            signals[signal.0 as usize],
+                        ),
+                    }
+                }
+                I::Drive(signal, src, partial) => {
+                    let src_size = gl.vars[*src].size;
+                    VI::Drive(
+                        signal!(*signal),
+                        var!(*src, (gl.logic_mode, var_mode[src], src_size)).to_ref(src_size),
+                        partial.map(|(o, _)| var!(o)),
+                    )
+                }
                 I::Phi(..) => continue,
             };
 
@@ -312,14 +357,16 @@ pub fn lower_process_to_vm(
                 let (dst, src) = (var!(*dst), var!(*src));
                 use LogicMode as M;
                 let i = match (dst_mode, src_mode) {
-                    (M::TwoValue, M::TwoValue) => {
-                        VI::TvResize(dst, vogls_ir::ResizeOp::Truncate, size, size, src)
-                    }
+                    (M::TwoValue, M::TwoValue) => VI::TvResize(
+                        dst.to_ref(size),
+                        vogls_ir::ResizeOp::Truncate,
+                        src.to_ref(size),
+                    ),
                     (M::FourValue, M::FourValue) => {
                         VI::FvResize(dst, vogls_ir::ResizeOp::Truncate, size, size, src)
                     }
-                    (M::TwoValue, M::FourValue) => VI::FvToTv(dst, src, src_size),
-                    (M::FourValue, M::TwoValue) => VI::TvToFv(dst, src, src_size),
+                    (M::TwoValue, M::FourValue) => VI::FvToTv(dst.to_ref(src_size), src),
+                    (M::FourValue, M::TwoValue) => VI::TvToFv(dst.to_ref(src_size), src),
                 };
                 instructions.push(i);
             }

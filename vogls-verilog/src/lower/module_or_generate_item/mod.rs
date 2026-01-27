@@ -290,6 +290,7 @@ pub fn lower<'a>(
                                 parent: _,
                                 ty: port_ty,
                                 dims: _,
+                                nba: _,
                             } = &scope.hierarchy.net()[net];
 
                             let is_input = matches!(

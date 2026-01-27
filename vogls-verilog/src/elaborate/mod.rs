@@ -277,6 +277,7 @@ pub fn elaborate_port_declaration<'a>(
             signal,
             ty,
             dims: [].into(),
+            nba: None,
         };
         let port_key = builder.hierarchy.net().len();
         if builder.insert_net(net).is_some() {
@@ -661,6 +662,7 @@ pub fn elaborate_module_or_generate_item_declaration<'a>(
                             signal,
                             ty,
                             dims: dims.into(),
+                            nba: None,
                         };
                         if builder.insert_net(net).is_some() {
                             diagnostics.duplicate_definition(arenas, *ident);
@@ -686,6 +688,7 @@ pub fn elaborate_module_or_generate_item_declaration<'a>(
                             signal,
                             ty,
                             dims: [].into(),
+                            nba: None,
                         };
                         if builder.insert_net(net).is_some() {
                             diagnostics.duplicate_definition(arenas, *ident);
@@ -842,6 +845,7 @@ pub fn elaborate_variable_type<'a>(
         signal,
         ty,
         dims,
+        nba: None,
     };
     if builder.insert_net(net).is_some() {
         diagnostics.duplicate_definition(arenas, *identifier);
