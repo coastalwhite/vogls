@@ -456,38 +456,6 @@ pub fn run(
         return Err("failed to lower".into());
     }
 
-    // let Ok((top_level_params, top_level_io, parameters)) = fetch_module_interface(
-    //     &mut gl,
-    //     &ast.arenas,
-    //     ast.modules.get(*tl_module),
-    //     &[],
-    //     &mut diagnostics,
-    // ) else {
-    //     for (location, warning) in &diagnostics.warnings {
-    //         writeln!(ectx.stderr, "[WARN]: {warning}")?;
-    //         let mut out = String::new();
-    //         report(&token_buffer, *location, &mut out)?;
-    //         writeln!(ectx.stderr, "{out}")?;
-    //     }
-    //
-    //     for (location, err, context) in &diagnostics.errors {
-    //         let mut out = String::new();
-    //         report_error(&token_buffer, err.clone(), *location, &mut out)?;
-    //         write!(ectx.stderr, "{out}")?;
-    //         if !context.is_empty() {
-    //             writeln!(ectx.stderr, "context:")?;
-    //             for c in context {
-    //                 writeln!(ectx.stderr, "- {c}")?;
-    //             }
-    //         }
-    //         writeln!(ectx.stderr)?;
-    //     }
-    //     return Err("top_level fetch_module error".into());
-    // };
-    // if !top_level_io.ports.is_empty() {
-    //     return Err("top_level has input and output ports".into());
-    // }
-
     // Walk the modules in depth-first order and lower to IR.
     let mut diagnostics = LowerDiagnostics::default();
     // @TODO: Iterate over the modules instead.
@@ -536,24 +504,6 @@ pub fn run(
         }
         return Err("failed to lower".into());
     }
-
-    // for query in mc.queries_to_resolve {
-    //     let ModuleQuery {
-    //         bb,
-    //         instruction,
-    //         query,
-    //     } = query;
-    //
-    //     assert!(query.is_none());
-    //     let scope = hierarchy.vcd_scope(u32::MAX);
-    //     let i = &mut gl.bbs[bb].instrs[instruction];
-    //     let dst = i.get_destination_variable().unwrap();
-    //     *i = Instruction::Intrinsic(
-    //         dst,
-    //         Box::new(vogls_ir::IntrinsicOp::VcdAppendModule(scope)),
-    //         [].into(),
-    //     )
-    // }
 
     if ectx.emit_unoptimized_ir {
         for process in gl.processes.values() {

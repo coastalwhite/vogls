@@ -1,4 +1,5 @@
 use core::fmt;
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 use crate::{
@@ -10,7 +11,7 @@ const INDENT: &str = "  ";
 
 pub struct ContextDisplay<'a, T: ?Sized + ContextFormat> {
     item: &'a T,
-    gl: &'a GlobalContext,
+    ctx: &'a DisplayContext<'a>,
 }
 
 pub struct DisplayContext<'a> {
@@ -37,20 +38,30 @@ impl<'a> DisplayContext<'a> {
 
 impl<'a, T: ?Sized + ContextFormat> fmt::Display for ContextDisplay<'a, T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut ctx = DisplayContext::new(self.gl);
-        self.item.ctx_fmt(f, &mut ctx)
+        self.item.ctx_fmt(f, &self.ctx)
     }
 }
 
 pub trait ContextFormat {
-    fn display<'a>(&'a self, gl: &'a GlobalContext) -> ContextDisplay<'a, Self> {
-        ContextDisplay { item: self, gl }
+    fn display<'a>(&'a self, ctx: &'a DisplayContext<'a>) -> ContextDisplay<'a, Self> {
+        ContextDisplay { item: self, ctx }
     }
-    fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &mut DisplayContext<'_>) -> fmt::Result;
+    fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &DisplayContext<'_>) -> fmt::Result;
 }
 
-impl ContextFormat for Process {
-    fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &mut DisplayContext<'_>) -> fmt::Result {
+impl Process {
+    pub fn display<'a>(&'a self, gl: &'a GlobalContext) -> impl fmt::Display + 'a {
+        struct D<'a>(&'a Process, &'a GlobalContext);
+        impl<'a> fmt::Display for D<'a> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                let mut ctx = DisplayContext::new(self.1);
+                self.0.process_fmt(f, &mut ctx)
+            }
+        }
+        D(self, gl)
+    }
+
+    fn process_fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &mut DisplayContext<'_>) -> fmt::Result {
         write!(f, "process {}(", self.name)?;
         if let Some(i) = self.ins.first() {
             ctx.gl.signals.get(*i).unwrap().typed_ctx_fmt(f, ctx)?;
@@ -87,6 +98,10 @@ impl ContextFormat for Process {
         bb_stack.push(self.entry);
 
         while let Some(bb) = bb_stack.pop() {
+            ctx.gl.bbs[bb].for_each_var(|v| {
+                let new_idx = ctx.var_map.len() as u32;
+                ctx.var_map.entry(v).or_insert(new_idx);
+            });
             ctx.gl.bbs[bb].terminator.for_each_bb(|k| {
                 let name = ctx.bb_name_scratch.len();
                 ctx.bb_name_scratch.entry(k).or_insert_with(|| {
@@ -118,7 +133,7 @@ impl ContextFormat for Process {
 }
 
 impl ContextFormat for BasicBlock {
-    fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &mut DisplayContext<'_>) -> fmt::Result {
+    fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &DisplayContext<'_>) -> fmt::Result {
         for i in &self.instrs {
             f.write_str(INDENT)?;
             i.ctx_fmt(f, ctx)?;
@@ -190,7 +205,7 @@ impl IntrinsicOp {
 }
 
 impl ContextFormat for Instruction {
-    fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &mut DisplayContext<'_>) -> fmt::Result {
+    fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &DisplayContext<'_>) -> fmt::Result {
         match self {
             Self::Constant(var, val) => {
                 var.ctx_fmt(f, ctx)?;
@@ -200,29 +215,29 @@ impl ContextFormat for Instruction {
                 write!(
                     f,
                     "{} = {} {}",
-                    dst.display(ctx.gl),
+                    dst.display(ctx),
                     op.into_mnemonic(),
-                    src.display(ctx.gl),
+                    src.display(ctx),
                 )?;
             }
             Self::Resize(dst, op, src) => {
                 write!(
                     f,
                     "{} = {}[{}] {}",
-                    dst.display(ctx.gl),
+                    dst.display(ctx),
                     op.into_mnemonic(),
                     ctx.gl.vars[*dst].size,
-                    src.display(ctx.gl),
+                    src.display(ctx),
                 )?;
             }
             Self::Binary(dst, op, src1, src2) => {
                 write!(
                     f,
                     "{} = {} {}, {}",
-                    dst.display(ctx.gl),
+                    dst.display(ctx),
                     op.into_mnemonic(),
-                    src1.display(ctx.gl),
-                    src2.display(ctx.gl),
+                    src1.display(ctx),
+                    src2.display(ctx),
                 )?;
             }
             Self::Intrinsic(dst, op, args) => {
@@ -278,7 +293,7 @@ impl ContextFormat for Instruction {
 }
 
 impl ContextFormat for BasicBlockTerminator {
-    fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &mut DisplayContext<'_>) -> fmt::Result {
+    fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &DisplayContext<'_>) -> fmt::Result {
         let mnemonic = match self {
             Self::Wait(..) => "wait",
             Self::WaitRegion(..) => "wait.region",
@@ -324,15 +339,14 @@ impl ContextFormat for BasicBlockTerminator {
 }
 
 impl ContextFormat for VariableKey {
-    fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &mut DisplayContext<'_>) -> fmt::Result {
-        let new_idx = ctx.var_map.len() as u32;
-        let idx = ctx.var_map.entry(*self).or_insert(new_idx);
+    fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &DisplayContext<'_>) -> fmt::Result {
+        let idx = ctx.var_map[self];
         write!(f, "%t{idx}")
     }
 }
 
 impl ContextFormat for Signal {
-    fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut DisplayContext<'_>) -> fmt::Result {
+    fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &DisplayContext<'_>) -> fmt::Result {
         f.write_str("$")?;
         f.write_str(&self.name)?;
         Ok(())
@@ -353,7 +367,7 @@ impl Signal {
 }
 
 impl ContextFormat for Time {
-    fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut DisplayContext<'_>) -> fmt::Result {
+    fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &DisplayContext<'_>) -> fmt::Result {
         write!(f, "#{}", self.0)
     }
 }
