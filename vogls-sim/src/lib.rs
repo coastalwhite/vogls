@@ -4,28 +4,16 @@ use std::collections::{BTreeMap, HashMap};
 use std::num::NonZeroUsize;
 
 use slotmap::{SlotMap, new_key_type};
-use vogls_bits::arithmetic::{
-    fv_gtu32_bitwise_inv, fv_l_reduce_and, fv_l_reduce_or, fv_l_reduce_xor, fv_l_select_bit,
-    fv_leu32_bitwise_inv, fv_pack_u64, fv_s_reduce_and, fv_s_reduce_or, fv_s_reduce_xor,
-    fv_s_select_bit, fv_separate_packed_u64, fv_set_no_special,
-};
-use vogls_bits::concat::{fv_l_concat, fv_s_concat};
-use vogls_bits::extend::{fv_l_sign_extend, fv_l_zero_extend, fv_s_sign_extend, fv_s_zero_extend};
+use vogls_bits::arithmetic::{fv_pack_u64, fv_separate_packed_u64, fv_set_no_special};
 use vogls_bits::load::load_partial_u64;
-use vogls_bits::shift::{
-    fv_l_arithmetic_shift_right, fv_l_logical_shift_left, fv_l_logical_shift_right,
-    fv_s_arithmetic_shift_right, fv_s_logical_shift_left, fv_s_logical_shift_right,
-};
 use vogls_bits::store::store_partial_u64;
-use vogls_bits::truncate::{fv_l_truncate, fv_s_truncate};
-use vogls_bits::{BitsDataRef, BitsDataRefMut, get_disjoint_dst_s1_s2, get_disjoint_dst_src};
+use vogls_bits::{BitsDataRef, get_disjoint_dst_src};
 use vogls_ir::dyn_format_string::{Base, Padding, format_bits};
 use vogls_ir::vcd::NetType;
-use vogls_ir::{
-    Bits, INTEGER_VSIZE, LogicMode, ResizeOp, SignalKey, TIME_VSIZE, UnaryOp, VectorSize,
-};
+use vogls_ir::{Bits, INTEGER_VSIZE, LogicMode, SignalKey, TIME_VSIZE, VectorSize};
 
 mod bits;
+mod execution;
 mod instruction;
 
 pub use instruction::*;
@@ -131,20 +119,20 @@ enum EvalOutcome {
 
 fn update_watchers(
     sig: VmSignalKey,
-    signals: &mut HashMap<VmSignalKey, Bits>,
-    watches: &mut HashMap<VmSignalKey, Vec<ListenerKey>>,
+    signals: &mut [Bits],
+    watches: &mut [Vec<ListenerKey>],
     listeners: &mut SlotMap<ListenerKey, Event>,
     regions: &mut Regions,
     trace: Option<&mut vogls_trace::Trace>,
 ) {
     let start = regions.active.len();
-    if let Some(watchers) = watches.remove(&sig) {
-        for watcher in watchers {
-            if let Some(event) = listeners.remove(watcher) {
-                regions.active.push(event);
-            }
+    let watchers = &mut watches[sig.0 as usize];
+    for watcher in watchers.iter() {
+        if let Some(event) = listeners.remove(*watcher) {
+            regions.active.push(event);
         }
     }
+    watchers.clear();
 
     if let Some(trace) = trace {
         let woken_start = trace.woken.len() as u64;
@@ -157,48 +145,50 @@ fn update_watchers(
         let woken_range = woken_start..trace.woken.len() as u64;
         trace
             .driven
-            .push((sig.0, signals[&sig].clone(), woken_range));
+            .push((sig.0, signals[sig.0 as usize].clone(), woken_range));
     }
 }
 
-pub fn drive_bits(bits: &mut Bits, slice: &[u8], partial: Option<(u32, VectorSize)>) -> bool {
-    let size = bits.size();
-    match bits.as_data_mut() {
-        BitsDataRefMut::Separate(signal_value) => {
-            let signal_value = bytemuck::cast_slice_mut::<_, u8>(signal_value);
-            let signal_value = &mut signal_value[..size.get().div_ceil(8) as usize];
-            match partial {
-                None => {
-                    if slice == signal_value.as_ref() {
-                        return false;
-                    }
-                    signal_value.copy_from_slice(slice);
-                    true
-                }
-                Some((offset, length)) => vogls_bits::set_subslice::set_subslice(
-                    signal_value,
-                    slice,
-                    size,
-                    offset,
-                    length,
-                ),
-            }
+pub fn drive_bits(
+    bits: &mut Bits,
+    slice: &[u8],
+    offset: usize,
+    size: VectorSize,
+    partial: Option<(u32, VectorSize)>,
+    logic_mode: LogicMode,
+) -> bool {
+    if partial.is_some() {
+        todo!()
+    }
+
+    let prev = bits.clone();
+    match logic_mode {
+        LogicMode::TwoValue if size.get() <= 32 => {
+            let nbytes = size.get().div_ceil(8) as usize;
+            let value = load_partial_u64(&slice[offset..][..nbytes], size);
+            *bits = Bits::from_u64(size, value);
         }
-        BitsDataRefMut::Inline(signal_value) => {
-            let before = *signal_value;
-            match partial {
-                None => {
-                    *signal_value = bits::store_to_u64(slice, 0, size);
-                }
-                Some((offset, length)) => {
-                    let value = bits::store_to_u64(slice, 0, length);
-                    *signal_value &= !(((1u64 << length.get()) - 1) << offset);
-                    *signal_value |= value << offset;
-                }
-            }
-            before != *signal_value
+        LogicMode::TwoValue => {
+            let nwords = size.get().div_ceil(64) as usize;
+            let slice = bytemuck::cast_slice::<u8, u64>(&slice[offset..][..nwords * 8]);
+            *bits = Bits::from_boxed_slice(vogls_ir::Mode::TwoValue, size, slice.into())
+        }
+        LogicMode::FourValue if size.get() <= 16 => {
+            let nbytes = (2 * size.get()).div_ceil(8) as usize;
+            let value = load_partial_u64(
+                &slice[offset..][..nbytes],
+                VectorSize::new(2 * size.get()).unwrap(),
+            );
+            let (spc, val) = fv_separate_packed_u64(value, size);
+            *bits = Bits::from_four_value_u64(size, spc as u32, val as u32);
+        }
+        LogicMode::FourValue => {
+            let nwords = 2 * size.get().div_ceil(64) as usize;
+            let slice = bytemuck::cast_slice::<u8, u64>(&slice[offset..][..nwords * 8]);
+            *bits = Bits::from_boxed_slice(vogls_ir::Mode::FourValue, size, slice.into())
         }
     }
+    &prev != bits
 }
 
 #[derive(Debug, Clone)]
@@ -330,7 +320,7 @@ impl VcdOutput {
     fn dump_time_step(
         &mut self,
         ctx: &Context,
-        signals: &HashMap<VmSignalKey, Bits>,
+        signals: &[Bits],
         signal_info: &[SignalInfo],
         finish: bool,
     ) -> std::io::Result<()> {
@@ -355,7 +345,7 @@ impl VcdOutput {
         self.last_ts = ctx.time;
         writeln!(f, "#{}", ctx.time)?;
         for signal in &self.updated_this_time_step {
-            let bits = &signals[&signal];
+            let bits = &signals[signal.0 as usize];
             let idx = signal.0;
             if bits.size().get() > 1 {
                 f.write_all(&[b'b'])?;
@@ -380,9 +370,9 @@ impl Event {
         processes: &[VmProcess],
         schedule: &mut BTreeMap<Timestamp, Vec<Event>>,
         regions: &mut Regions,
-        signals: &mut HashMap<VmSignalKey, Bits>,
+        signals: &mut [Bits],
         listeners: &mut SlotMap<ListenerKey, Event>,
-        watches: &mut HashMap<VmSignalKey, Vec<ListenerKey>>,
+        watches: &mut [Vec<ListenerKey>],
         stack: &mut [u8],
         vcd: &mut Option<VcdOutput>,
         mut trace: Option<&mut vogls_trace::Trace>,
@@ -392,10 +382,17 @@ impl Event {
             ip,
         } = match &mut self {
             Event::Drive(sig, assignments) => {
-                let signal_bits = signals.get_mut(sig).unwrap();
+                let signal_bits = &mut signals[sig.0 as usize];
                 let mut updated = false;
                 for (bits, partial) in assignments {
-                    updated |= drive_bits(signal_bits, bits.as_slice(), *partial);
+                    updated |= drive_bits(
+                        signal_bits,
+                        bits.as_slice(),
+                        0,
+                        bits.size(),
+                        *partial,
+                        ctx.logic_mode,
+                    );
                 }
 
                 if updated {
@@ -424,671 +421,73 @@ impl Event {
             *ip += 1;
             ctx.instruction_count += 1;
             match instr {
-                I::Constant(var, value) => {
-                    match value.as_data_ref() {
-                        BitsDataRef::InlineTv(v) => {
-                            let nbytes = value.size().get().div_ceil(8) as usize;
-                            stack[var.offset..][..nbytes]
-                                .copy_from_slice(&v.to_le_bytes()[..nbytes])
-                        }
-                        BitsDataRef::SeparateTv(items) => {
-                            let dst = bytemuck::cast_slice_mut::<u8, u64>(
-                                &mut stack[var.offset..][..items.len() * 8],
-                            );
-                            dst.copy_from_slice(items);
-                        }
-                        BitsDataRef::InlineFv(spc, val) => {
-                            let size = value.size();
-                            let nbytes = (2 * size.get()).div_ceil(8) as usize;
-                            let v = ((spc as u64) << size.get()) | (val as u64);
-                            stack[var.offset..][..nbytes]
-                                .copy_from_slice(&v.to_le_bytes()[..nbytes])
-                        }
-                        BitsDataRef::SeparateFv(items) => {
-                            let dst = bytemuck::cast_slice_mut::<u8, u64>(
-                                &mut stack[var.offset..][..items.len() * 8],
-                            );
-                            dst.copy_from_slice(items);
-                        }
-                    };
-                }
+                I::Constant(dst, value) => execution::exec_constant(stack, dst.0, value),
+
                 I::TvUnary(dst, op, size, src) => {
-                    use UnaryOp as O;
-                    match op {
-                        O::Neg => {
-                            let n_full_bytes = (size.get() / 8) as usize;
-                            if size.get() % 8 == 0 {
-                                for i in 0..n_full_bytes {
-                                    stack[dst.offset + i] = !stack[src.offset + i];
-                                }
-                            } else {
-                                stack[dst.offset + n_full_bytes] = stack[src.offset + n_full_bytes]
-                                    ^ 1u8.unbounded_shl(size.get() % 8).wrapping_sub(1);
-                                for i in 0..n_full_bytes {
-                                    stack[dst.offset + i] = !stack[src.offset + i];
-                                }
-                            }
-                        }
-                        O::ReduceOr => {
-                            let result = stack[src.offset..][..size.get().div_ceil(8) as usize]
-                                .iter()
-                                .any(|b| *b != 0);
-                            stack[dst.offset] = u8::from(result);
-                        }
-                        O::ReduceAnd => {
-                            let result = stack[src.offset..][..size.get().div_ceil(8) as usize]
-                                .iter()
-                                .map(|b| b.count_ones())
-                                .sum::<u32>();
-                            stack[dst.offset] = u8::from(result == size.get());
-                        }
-                        O::ReduceXor => {
-                            let result = stack[src.offset..][..size.get().div_ceil(8) as usize]
-                                .iter()
-                                .map(|b| b.count_ones())
-                                .sum::<u32>();
-                            stack[dst.offset] = u8::from(result % 2 == 1);
-                        }
-                    };
+                    execution::tv::exec_tv_unary(stack, dst.0, *op, *size, src.0)
                 }
                 I::TvResize(dst, op, dst_size, src_size, src) => {
-                    use ResizeOp as O;
-                    match op {
-                        O::ZeroExtend => {
-                            assert!(dst_size >= src_size);
-                            for i in 0..src_size.get().div_ceil(8) as usize {
-                                stack[dst.offset + i] = stack[src.offset + i];
-                            }
-                            for i in src_size.get().div_ceil(8) as usize
-                                ..dst_size.get().div_ceil(8) as usize
-                            {
-                                stack[dst.offset + i] = 0;
-                            }
-                        }
-                        O::SignExtend => {
-                            assert!(dst_size >= src_size);
-                            let sign_offset = src_size.get() - 1;
-                            let sign = (stack[src.offset + (sign_offset / 8) as usize]
-                                >> (sign_offset % 8))
-                                & 1;
-                            let mask = u8::from(sign == 0).wrapping_sub(1);
-                            if src_size.get() % 8 == 0 {
-                                for i in 0..(src_size.get() / 8) as usize {
-                                    stack[dst.offset + i] = stack[src.offset + i];
-                                }
-                                for i in (src_size.get() / 8) as usize
-                                    ..dst_size.get().div_ceil(8) as usize
-                                {
-                                    stack[dst.offset + i] = mask;
-                                }
-                            } else {
-                                let sbytes = src_size.get().div_ceil(8) as usize;
-                                for i in 0..sbytes - 1 {
-                                    stack[dst.offset + i] = stack[src.offset + i];
-                                }
-                                stack[dst.offset + sbytes - 1] =
-                                    stack[src.offset + sbytes - 1] | (mask << (src_size.get() % 8));
-                                for i in sbytes..dst_size.get().div_ceil(8) as usize {
-                                    stack[dst.offset + i] = mask;
-                                }
-                            }
-                        }
-                        O::Truncate => {
-                            let (dst, src) = get_disjoint_dst_src(
-                                stack,
-                                dst.offset,
-                                dst_size.get().div_ceil(8) as usize,
-                                src.offset,
-                                src_size.get().div_ceil(8) as usize,
-                            );
-                            vogls_bits::slice::tv_slice(dst, src, *dst_size);
-                        }
-                    };
+                    execution::tv::exec_tv_resize(stack, dst.0, *dst_size, *op, src.0, *src_size)
                 }
                 I::TvBinaryArithmetic(dst, op, size, lhs, rhs) => {
-                    use BinaryArithmeticOp as O;
-
-                    use vogls_bits::arithmetic as A;
-
-                    fn tv_u8_bitwise_and(
-                        dst: &mut [u8],
-                        lhs: &[u8],
-                        rhs: &[u8],
-                        _size: VectorSize,
-                    ) {
-                        A::tv_bin_bitwise_op(dst, lhs, rhs, |l, r| l & r);
-                    }
-                    fn tv_u8_bitwise_or(dst: &mut [u8], lhs: &[u8], rhs: &[u8], _size: VectorSize) {
-                        A::tv_bin_bitwise_op(dst, lhs, rhs, |l, r| l | r);
-                    }
-                    fn tv_u8_bitwise_xor(
-                        dst: &mut [u8],
-                        lhs: &[u8],
-                        rhs: &[u8],
-                        _size: VectorSize,
-                    ) {
-                        A::tv_bin_bitwise_op(dst, lhs, rhs, |l, r| l ^ r);
-                    }
-                    fn tv_u64_bitwise_and(
-                        dst: &mut [u64],
-                        lhs: &[u64],
-                        rhs: &[u64],
-                        _size: VectorSize,
-                    ) {
-                        A::tv_bin_u64_bitwise_op(dst, lhs, rhs, |l, r| l & r);
-                    }
-                    fn tv_u64_bitwise_or(
-                        dst: &mut [u64],
-                        lhs: &[u64],
-                        rhs: &[u64],
-                        _size: VectorSize,
-                    ) {
-                        A::tv_bin_u64_bitwise_op(dst, lhs, rhs, |l, r| l | r);
-                    }
-                    fn tv_u64_bitwise_xor(
-                        dst: &mut [u64],
-                        lhs: &[u64],
-                        rhs: &[u64],
-                        _size: VectorSize,
-                    ) {
-                        A::tv_bin_u64_bitwise_op(dst, lhs, rhs, |l, r| l ^ r);
-                    }
-                    fn tv_u64_division(
-                        dst: &mut [u64],
-                        lhs: &[u64],
-                        rhs: &[u64],
-                        size: VectorSize,
-                    ) {
-                        // @Performance: Scratchpad this somehow.
-                        let mut modulus = vec![0u64; dst.len()];
-                        A::tv_division(dst, &mut modulus, lhs, rhs, size);
-                    }
-                    fn tv_u64_modulus(dst: &mut [u64], lhs: &[u64], rhs: &[u64], size: VectorSize) {
-                        // @Performance: Scratchpad this somehow.
-                        let mut quotient = vec![0u64; dst.len()];
-                        A::tv_division(&mut quotient, dst, lhs, rhs, size);
-                    }
-
-                    if size.get() > 32
-                        && matches!(op, O::And | O::Or | O::Xor | O::Add | O::Sub | O::Multiply)
-                    {
-                        let f = match op {
-                            O::And => tv_u64_bitwise_and,
-                            O::Or => tv_u64_bitwise_or,
-                            O::Xor => tv_u64_bitwise_xor,
-                            O::Add => A::tv_addition,
-                            O::Sub => A::tv_subtraction,
-                            O::Multiply => A::tv_multiplication,
-                            O::Divide => tv_u64_division,
-                            O::Modulus => tv_u64_modulus,
-                        };
-
-                        let nwords = size.get().div_ceil(64) as usize;
-                        let nbytes = nwords * 8;
-                        let (dst, lhs, rhs) = vogls_bits::get_disjoint_dst_s1_s2(
-                            stack, dst.offset, nbytes, lhs.offset, nbytes, rhs.offset, nbytes,
-                        );
-
-                        let dst = bytemuck::cast_slice_mut(dst);
-                        let lhs = bytemuck::cast_slice(lhs);
-                        let rhs = bytemuck::cast_slice(rhs);
-
-                        f(dst, lhs, rhs, *size);
-                    } else {
-                        let f = match op {
-                            O::And => tv_u8_bitwise_and,
-                            O::Or => tv_u8_bitwise_or,
-                            O::Xor => tv_u8_bitwise_xor,
-                            O::Add => A::tv_ltu64_addition,
-                            O::Sub => A::tv_ltu64_subtraction,
-                            O::Multiply => A::tv_ltu64_multiplication,
-                            O::Divide => A::tv_ltu64_division,
-                            O::Modulus => A::tv_ltu64_modulus,
-                        };
-
-                        let nbytes = size.get().div_ceil(8) as usize;
-                        let (dst, lhs, rhs) = vogls_bits::get_disjoint_dst_s1_s2(
-                            stack, dst.offset, nbytes, lhs.offset, nbytes, rhs.offset, nbytes,
-                        );
-
-                        f(dst, lhs, rhs, *size);
-                    }
+                    execution::tv::exec_tv_bin_arith(stack, dst.0, *op, *size, lhs.0, rhs.0)
                 }
                 I::TvBinaryComparison(dst, op, size, lhs, rhs) => {
-                    use BinaryComparisonOp as O;
-                    let f = match op {
-                        O::UnsignedLessEqual => vogls_bits::comparison::tv_unsigned_leq,
-                    };
-                    let nbytes = size.get().div_ceil(8) as usize;
-                    let lhs = &stack[lhs.offset..][..nbytes];
-                    let rhs = &stack[rhs.offset..][..nbytes];
-                    let result = f(lhs, rhs, *size);
-                    stack[dst.offset] = u8::from(result);
+                    execution::tv::exec_tv_bin_cmp(stack, dst.0, *op, *size, lhs.0, rhs.0)
                 }
                 I::TvShift(dst, op, size, src, offset) => {
-                    use ShiftOp as O;
-                    let f = match op {
-                        O::LogicalLeft => vogls_bits::shift::tv_logical_shift_left,
-                        O::LogicalRight => vogls_bits::shift::tv_logical_shift_right,
-                        O::ArithmeticRight => vogls_bits::shift::tv_arithmetic_shift_right,
-                    };
-
-                    let offset = vogls_bits::load::load_full_u32(&stack[offset.offset..]);
-                    let nbytes = size.get().div_ceil(8) as usize;
-
-                    let (dst, src) = vogls_bits::get_disjoint_dst_src(
-                        stack, dst.offset, nbytes, src.offset, nbytes,
-                    );
-                    f(dst, src, offset, *size);
+                    execution::tv::exec_tv_shift(stack, dst.0, *op, *size, src.0, offset.0)
                 }
                 I::TvSelectBit(dst, size, src, idx) => {
-                    let idx = vogls_bits::load::load_full_u32(&stack[idx.offset..]);
-                    let nbytes = size.get().div_ceil(8) as usize;
-
-                    let src = &stack[src.offset..][..nbytes];
-                    stack[dst.offset] =
-                        u8::from(vogls_bits::select::tv_select_bit(src, idx, *size));
+                    execution::tv::exec_tv_select_bit(stack, dst.0, *size, src.0, idx.0)
                 }
                 I::TvConcat(dst, lhs_size, lhs, rhs_size, rhs) => {
-                    let lbytes = lhs_size.get().div_ceil(8) as usize;
-                    let rbytes = rhs_size.get().div_ceil(8) as usize;
-                    let dbytes =
-                        (lhs_size.get().checked_add(rhs_size.get()).unwrap()).div_ceil(8) as usize;
-
-                    let (dst, lhs, rhs) = vogls_bits::get_disjoint_dst_s1_s2(
-                        stack, dst.offset, dbytes, lhs.offset, lbytes, rhs.offset, rbytes,
-                    );
-
-                    vogls_bits::concat::tv_concat(dst, lhs, rhs, *lhs_size, *rhs_size);
+                    execution::tv::exec_tv_concat(stack, dst.0, lhs.0, *lhs_size, rhs.0, *rhs_size)
                 }
 
                 I::FvUnary(dst, op, size, src) => {
-                    use UnaryOp as O;
-                    match op {
-                        O::Neg if size.get() > 32 => {
-                            let nbytes = 2 * size.get().div_ceil(64) as usize * 8;
-                            let (dst, src) =
-                                get_disjoint_dst_src(stack, dst.offset, nbytes, src.offset, nbytes);
-                            let dst = bytemuck::cast_slice_mut::<_, u64>(dst);
-                            let src = bytemuck::cast_slice::<_, u64>(src);
-                            fv_gtu32_bitwise_inv(dst, src, *size)
-                        }
-                        O::Neg => {
-                            let nbytes = size.get().div_ceil(8) as usize;
-                            let (dst, src) =
-                                get_disjoint_dst_src(stack, dst.offset, nbytes, src.offset, nbytes);
-                            fv_leu32_bitwise_inv(dst, src, *size)
-                        }
-
-                        O::ReduceOr | O::ReduceAnd | O::ReduceXor if size.get() > 32 => {
-                            let nbytes = 2 * size.get().div_ceil(64) as usize * 8;
-                            let (dst, src) =
-                                get_disjoint_dst_src(stack, dst.offset, 1, src.offset, nbytes);
-                            let src = bytemuck::cast_slice::<_, u64>(src);
-                            let f = match op {
-                                O::Neg => unreachable!(),
-                                O::ReduceOr => fv_l_reduce_or,
-                                O::ReduceAnd => fv_l_reduce_and,
-                                O::ReduceXor => fv_l_reduce_xor,
-                            };
-                            dst[0] = f(src, *size) as u8;
-                        }
-                        O::ReduceOr | O::ReduceAnd | O::ReduceXor => {
-                            let nbytes = size.get().div_ceil(8) as usize;
-                            let (dst, src) =
-                                get_disjoint_dst_src(stack, dst.offset, 1, src.offset, nbytes);
-                            let f = match op {
-                                O::Neg => unreachable!(),
-                                O::ReduceOr => fv_s_reduce_or,
-                                O::ReduceAnd => fv_s_reduce_and,
-                                O::ReduceXor => fv_s_reduce_xor,
-                            };
-                            dst[0] = f(src, *size) as u8;
-                        }
-                    };
+                    execution::fv::exec_fv_unary(stack, dst.0, *op, *size, src.0)
                 }
                 I::FvResize(dst, op, dst_size, src_size, src) => {
-                    use ResizeOp as O;
-                    match op {
-                        O::Truncate | O::ZeroExtend | O::SignExtend
-                            if dst_size.get() <= 16 && src_size.get() <= 16 =>
-                        {
-                            let (dst, src) = get_disjoint_dst_src(
-                                stack,
-                                dst.offset,
-                                dst_size.get().div_ceil(8) as usize,
-                                src.offset,
-                                src_size.get().div_ceil(8) as usize,
-                            );
-                            let f = match op {
-                                O::Truncate => fv_s_truncate,
-                                O::ZeroExtend => fv_s_zero_extend,
-                                O::SignExtend => fv_s_sign_extend,
-                            };
-                            f(dst, src, *dst_size, *src_size);
-                        }
-                        O::Truncate | O::ZeroExtend | O::SignExtend
-                            if dst_size.get() > 16 && src_size.get() > 16 =>
-                        {
-                            let (dst, src) = get_disjoint_dst_src(
-                                stack,
-                                dst.offset,
-                                2 * dst_size.get().div_ceil(64) as usize * 8,
-                                src.offset,
-                                2 * src_size.get().div_ceil(64) as usize * 8,
-                            );
-                            let dst = bytemuck::cast_slice_mut::<u8, u64>(dst);
-                            let src = bytemuck::cast_slice::<u8, u64>(src);
-                            let f = match op {
-                                O::Truncate => fv_l_truncate,
-                                O::ZeroExtend => fv_l_zero_extend,
-                                O::SignExtend => fv_l_sign_extend,
-                            };
-                            f(dst, src, *dst_size, *src_size);
-                        }
-                        O::Truncate => {
-                            let mut pdst = [0u64; 2];
-                            let src = &stack[src.offset..]
-                                [..2 * src_size.get().div_ceil(64) as usize * 8];
-                            let src = bytemuck::cast_slice::<u8, u64>(src);
-                            fv_l_truncate(&mut pdst, src, *dst_size, *src_size);
-                            store_partial_u64(
-                                &mut stack[dst.offset..][..dst_size.get().div_ceil(8) as usize],
-                                fv_pack_u64(pdst[0], pdst[1], *dst_size),
-                                *dst_size,
-                            );
-                        }
-                        O::ZeroExtend | O::SignExtend => {
-                            let mut psrc = [0u64; 2];
-                            (psrc[0], psrc[1]) = fv_separate_packed_u64(
-                                load_partial_u64(
-                                    &stack[src.offset..]
-                                        [..(2 * src_size.get()).div_ceil(8) as usize],
-                                    *src_size,
-                                ),
-                                VectorSize::new(2 * src_size.get()).unwrap(),
-                            );
-                            let dst = &mut stack[dst.offset..]
-                                [..2 * dst_size.get().div_ceil(64) as usize * 8];
-                            let dst = bytemuck::cast_slice_mut::<u8, u64>(dst);
-                            let f = match op {
-                                O::ZeroExtend => fv_l_zero_extend,
-                                O::SignExtend => fv_l_sign_extend,
-                                O::Truncate => unreachable!(),
-                            };
-                            f(dst, &psrc, *dst_size, *src_size);
-                        }
-                    }
+                    execution::fv::exec_fv_resize(stack, dst.0, *dst_size, *op, src.0, *src_size)
                 }
                 I::FvBinaryArithmetic(dst, op, size, lhs, rhs) => {
-                    use BinaryArithmeticOp as O;
-
-                    use vogls_bits::arithmetic as A;
-
-                    fn fv_u8_bitwise_and(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: VectorSize) {
-                        A::fv_bin_bitwise_op(dst, lhs, rhs, size, A::fv_bitwise_and_elem)
-                    }
-                    fn fv_u8_bitwise_or(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: VectorSize) {
-                        A::fv_bin_bitwise_op(dst, lhs, rhs, size, A::fv_bitwise_or_elem)
-                    }
-                    fn fv_u8_bitwise_xor(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: VectorSize) {
-                        A::fv_bin_bitwise_op(dst, lhs, rhs, size, A::fv_bitwise_xor_elem)
-                    }
-                    fn fv_u64_bitwise_and(
-                        dst: &mut [u64],
-                        lhs: &[u64],
-                        rhs: &[u64],
-                        _size: VectorSize,
-                    ) {
-                        A::fv_bin_u64_bitwise_op(dst, lhs, rhs, A::fv_bitwise_and_elem);
-                    }
-                    fn fv_u64_bitwise_or(
-                        dst: &mut [u64],
-                        lhs: &[u64],
-                        rhs: &[u64],
-                        _size: VectorSize,
-                    ) {
-                        A::fv_bin_u64_bitwise_op(dst, lhs, rhs, A::fv_bitwise_or_elem);
-                    }
-                    fn fv_u64_bitwise_xor(
-                        dst: &mut [u64],
-                        lhs: &[u64],
-                        rhs: &[u64],
-                        _size: VectorSize,
-                    ) {
-                        A::fv_bin_u64_bitwise_op(dst, lhs, rhs, A::fv_bitwise_xor_elem);
-                    }
-                    fn fv_u64_division(
-                        dst: &mut [u64],
-                        lhs: &[u64],
-                        rhs: &[u64],
-                        size: VectorSize,
-                    ) {
-                        // @Performance: Scratchpad this somehow.
-                        let mut modulus = vec![0u64; dst.len()];
-                        A::fv_division(dst, &mut modulus, lhs, rhs, size);
-                    }
-                    fn fv_u64_modulus(dst: &mut [u64], lhs: &[u64], rhs: &[u64], size: VectorSize) {
-                        // @Performance: Scratchpad this somehow.
-                        let mut quotient = vec![0u64; dst.len()];
-                        A::fv_division(&mut quotient, dst, lhs, rhs, size);
-                    }
-
-                    if size.get() > 16
-                        && matches!(op, O::And | O::Or | O::Xor | O::Add | O::Sub | O::Multiply)
-                    {
-                        let f = match op {
-                            O::And => fv_u64_bitwise_and,
-                            O::Or => fv_u64_bitwise_or,
-                            O::Xor => fv_u64_bitwise_xor,
-                            O::Add => A::fv_addition,
-                            O::Sub => A::fv_subtraction,
-                            O::Multiply => A::fv_multiplication,
-                            O::Divide => fv_u64_division,
-                            O::Modulus => fv_u64_modulus,
-                        };
-
-                        let nwords = 2 * size.get().div_ceil(64) as usize;
-                        let nbytes = nwords * 8;
-                        let (dst, lhs, rhs) = vogls_bits::get_disjoint_dst_s1_s2(
-                            stack, dst.offset, nbytes, lhs.offset, nbytes, rhs.offset, nbytes,
-                        );
-
-                        let dst = bytemuck::cast_slice_mut(dst);
-                        let lhs = bytemuck::cast_slice(lhs);
-                        let rhs = bytemuck::cast_slice(rhs);
-
-                        f(dst, lhs, rhs, *size);
-                    } else {
-                        let f = match op {
-                            O::And => fv_u8_bitwise_and,
-                            O::Or => fv_u8_bitwise_or,
-                            O::Xor => fv_u8_bitwise_xor,
-                            O::Add => A::fv_ltu32_addition,
-                            O::Sub => A::fv_ltu32_subtraction,
-                            O::Multiply => A::fv_ltu32_multiplication,
-                            O::Divide => A::fv_ltu32_division,
-                            O::Modulus => A::fv_ltu32_modulus,
-                        };
-
-                        let nbytes = size.get().div_ceil(8) as usize;
-                        let (dst, lhs, rhs) = vogls_bits::get_disjoint_dst_s1_s2(
-                            stack, dst.offset, nbytes, lhs.offset, nbytes, rhs.offset, nbytes,
-                        );
-
-                        f(dst, lhs, rhs, *size);
-                    }
+                    execution::fv::exec_fv_bin_arith(stack, dst.0, *op, *size, lhs.0, rhs.0)
                 }
                 I::FvBinaryComparison(dst, op, size, lhs, rhs) => {
-                    use BinaryComparisonOp as O;
-                    let result = match op {
-                        O::UnsignedLessEqual if size.get() <= 16 => {
-                            let nbytes = size.get().div_ceil(8) as usize;
-                            let lhs = &stack[lhs.offset..][..nbytes];
-                            let rhs = &stack[rhs.offset..][..nbytes];
-                            vogls_bits::comparison::fv_s_unsigned_leq(lhs, rhs, *size)
-                        }
-                        O::UnsignedLessEqual => {
-                            let nbytes = 2 * size.get().div_ceil(64) as usize * 8;
-                            let lhs =
-                                bytemuck::cast_slice::<u8, u64>(&stack[lhs.offset..][..nbytes]);
-                            let rhs =
-                                bytemuck::cast_slice::<u8, u64>(&stack[rhs.offset..][..nbytes]);
-                            vogls_bits::comparison::fv_l_unsigned_leq(lhs, rhs, *size)
-                        }
-                    };
-                    stack[dst.offset] = result as u8;
+                    execution::fv::exec_fv_bin_cmp(stack, dst.0, *op, *size, lhs.0, rhs.0)
                 }
                 I::FvShift(dst, op, size, src, offset) => {
-                    use ShiftOp as O;
-                    let offset = load_partial_u64(
-                        &stack[offset.offset..][..8],
-                        VectorSize::new(32).unwrap(),
-                    );
-
-                    // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 53
-                    // """
-                    // If the right operand has an x or z value, then the result shall be unknown.
-                    // """
-                    if offset >> 32 != 0xFFFF_FFFF {
-                        if size.get() > 16 {
-                            let nbytes = (2 * size.get()).div_ceil(8) as usize;
-                            stack[dst.offset..][..nbytes].fill(0u8);
-                        } else {
-                            let nwords = 2 * size.get().div_ceil(64) as usize;
-                            bytemuck::cast_slice_mut::<u8, u64>(
-                                &mut stack[dst.offset..][..nwords * 2],
-                            )
-                            .fill(0u64);
-                        }
-                        continue;
-                    }
-
-                    let offset = (offset & 0xFFFF_FFFF) as u32;
-                    if size.get() > 16 {
-                        let nbytes = size.get().div_ceil(8) as usize;
-                        let (dst, src) =
-                            get_disjoint_dst_src(stack, dst.offset, nbytes, src.offset, nbytes);
-                        let f = match op {
-                            O::LogicalLeft => fv_s_logical_shift_left,
-                            O::LogicalRight => fv_s_logical_shift_right,
-                            O::ArithmeticRight => fv_s_arithmetic_shift_right,
-                        };
-                        f(dst, src, offset, *size);
-                    } else {
-                        let nwords = 2 * size.get().div_ceil(64) as usize;
-                        let (dst, src) = get_disjoint_dst_src(
-                            stack,
-                            dst.offset,
-                            nwords * 8,
-                            src.offset,
-                            nwords * 8,
-                        );
-                        let dst = bytemuck::cast_slice_mut::<u8, u64>(dst);
-                        let src = bytemuck::cast_slice::<u8, u64>(src);
-                        let f = match op {
-                            O::LogicalLeft => fv_l_logical_shift_left,
-                            O::LogicalRight => fv_l_logical_shift_right,
-                            O::ArithmeticRight => fv_l_arithmetic_shift_right,
-                        };
-                        f(dst, src, offset, *size);
-                    }
+                    execution::fv::exec_fv_shift(stack, dst.0, *op, *size, src.0, offset.0)
                 }
                 I::FvSelectBit(dst, size, src, idx) => {
-                    let idx =
-                        load_partial_u64(&stack[idx.offset..][..8], VectorSize::new(32).unwrap());
-                    let idx = (idx & 0xFFFF_FFFF) as u32;
-                    if size.get() > 16 {
-                        stack[dst.offset] = fv_s_select_bit(
-                            &stack[src.offset..][..size.get().div_ceil(8) as usize],
-                            idx,
-                            *size,
-                        ) as u8;
-                    } else {
-                        let nwords = 2 * size.get().div_ceil(64) as usize;
-                        let src =
-                            bytemuck::cast_slice::<u8, u64>(&stack[src.offset..][..nwords * 8]);
-                        stack[dst.offset] = fv_l_select_bit(src, idx, *size) as u8;
-                    }
+                    execution::fv::exec_fv_select_bit(stack, dst.0, *size, src.0, idx.0)
                 }
                 I::FvConcat(dst, lhs_size, lhs, rhs_size, rhs) => {
-                    if lhs_size.get() + rhs_size.get() > 16 {
-                        let (d, l, r) = get_disjoint_dst_s1_s2(
-                            stack,
-                            dst.offset,
-                            2 * (lhs_size.get() + rhs_size.get()).div_ceil(64) as usize * 8,
-                            lhs.offset,
-                            if lhs_size.get() > 32 {
-                                2 * lhs_size.get().div_ceil(64) as usize * 8
-                            } else {
-                                lhs_size.get().div_ceil(8) as usize
-                            },
-                            rhs.offset,
-                            if rhs_size.get() > 32 {
-                                2 * rhs_size.get().div_ceil(64) as usize * 8
-                            } else {
-                                rhs_size.get().div_ceil(8) as usize
-                            },
-                        );
-                        let mut lhs_s = [0u64; 2];
-                        let mut rhs_s = [0u64; 2];
-                        let d = bytemuck::cast_slice_mut::<u8, u64>(d);
-                        let l = if lhs_size.get() <= 32 {
-                            (lhs_s[0], lhs_s[1]) =
-                                fv_separate_packed_u64(load_partial_u64(l, *lhs_size), *lhs_size);
-                            &lhs_s
-                        } else {
-                            bytemuck::cast_slice::<u8, u64>(l)
-                        };
-                        let r = if rhs_size.get() <= 32 {
-                            (rhs_s[0], rhs_s[1]) =
-                                fv_separate_packed_u64(load_partial_u64(r, *rhs_size), *rhs_size);
-                            &rhs_s
-                        } else {
-                            bytemuck::cast_slice::<u8, u64>(r)
-                        };
-                        fv_l_concat(d, l, r, *lhs_size, *rhs_size);
-                    } else {
-                        let (d, l, r) = get_disjoint_dst_s1_s2(
-                            stack,
-                            dst.offset,
-                            (lhs_size.get() + rhs_size.get()).div_ceil(8) as usize,
-                            lhs.offset,
-                            lhs_size.get().div_ceil(8) as usize,
-                            rhs.offset,
-                            rhs_size.get().div_ceil(8) as usize,
-                        );
-                        fv_s_concat(d, l, r, *lhs_size, *rhs_size);
-                    }
+                    execution::fv::exec_fv_concat(stack, dst.0, lhs.0, *lhs_size, rhs.0, *rhs_size)
                 }
 
                 I::TvToFv(dst, src, size) => {
                     if size.get() <= 16 {
                         let tv_nbytes = size.get().div_ceil(8) as usize;
                         let fv_nbytes = (size.get() * 2).div_ceil(8) as usize;
-                        let v = load_partial_u64(&stack[src.offset..][..tv_nbytes], *size);
+                        let v = load_partial_u64(&stack[src.0..][..tv_nbytes], *size);
                         store_partial_u64(
-                            &mut stack[dst.offset..][..fv_nbytes],
+                            &mut stack[dst.0..][..fv_nbytes],
                             v | (((1u64 << size.get()) - 1) << size.get()),
                             VectorSize::new(2 * size.get()).unwrap(),
                         );
                     } else if size.get() <= 32 {
                         let tv_nbytes = size.get().div_ceil(8) as usize;
-                        let v = load_partial_u64(&stack[src.offset..][..tv_nbytes], *size);
-                        let dst =
-                            bytemuck::cast_slice_mut::<u8, u64>(&mut stack[dst.offset..][..16]);
+                        let v = load_partial_u64(&stack[src.0..][..tv_nbytes], *size);
+                        let dst = bytemuck::cast_slice_mut::<u8, u64>(&mut stack[dst.0..][..16]);
                         dst[0] = (1u64 << size.get()) - 1;
                         dst[1] = v;
                     } else {
                         let tv_nwords = size.get().div_ceil(64) as usize;
                         let fv_nwords = 2 * size.get().div_ceil(64) as usize;
-                        let (dst, src) = get_disjoint_dst_src(
-                            stack,
-                            dst.offset,
-                            fv_nwords * 8,
-                            src.offset,
-                            tv_nwords * 8,
-                        );
+                        let (dst, src) =
+                            get_disjoint_dst_src(stack, dst.0, fv_nwords * 8, src.0, tv_nwords * 8);
                         let dst = bytemuck::cast_slice_mut::<u8, u64>(dst);
                         let src = bytemuck::cast_slice::<u8, u64>(src);
 
@@ -1101,28 +500,23 @@ impl Event {
                         let tv_nbytes = size.get().div_ceil(8) as usize;
                         let fv_nbytes = (size.get() * 2).div_ceil(8) as usize;
                         let v = load_partial_u64(
-                            &stack[src.offset..][..fv_nbytes],
+                            &stack[src.0..][..fv_nbytes],
                             VectorSize::new(2 * size.get()).unwrap(),
                         );
                         store_partial_u64(
-                            &mut stack[dst.offset..][..tv_nbytes],
+                            &mut stack[dst.0..][..tv_nbytes],
                             v & ((1u64 << size.get()) - 1),
                             *size,
                         );
                     } else if size.get() <= 32 {
                         let tv_nbytes = size.get().div_ceil(8) as usize;
-                        let v = bytemuck::cast_slice::<u8, u64>(&stack[dst.offset..][..16])[1];
+                        let v = bytemuck::cast_slice::<u8, u64>(&stack[dst.0..][..16])[1];
                         store_partial_u64(&mut stack[..tv_nbytes], v, *size);
                     } else {
                         let tv_nwords = size.get().div_ceil(64) as usize;
                         let fv_nwords = 2 * size.get().div_ceil(64) as usize;
-                        let (dst, src) = get_disjoint_dst_src(
-                            stack,
-                            src.offset,
-                            tv_nwords * 8,
-                            dst.offset,
-                            fv_nwords * 8,
-                        );
+                        let (dst, src) =
+                            get_disjoint_dst_src(stack, src.0, tv_nwords * 8, dst.0, fv_nwords * 8);
                         let dst = bytemuck::cast_slice_mut::<u8, u64>(dst);
                         let src = bytemuck::cast_slice::<u8, u64>(src);
 
@@ -1139,7 +533,7 @@ impl Event {
                                 &mut ctx.stdout,
                                 args.iter().map(|(o, s)| {
                                     Bits::load_from_slice(
-                                        &stack[o.offset..][..s.get().div_ceil(8) as usize],
+                                        &stack[o.0..][..s.get().div_ceil(8) as usize],
                                         *s,
                                     )
                                 }),
@@ -1147,13 +541,13 @@ impl Event {
                             .unwrap();
                         }
                         O::Assert(f) => {
-                            let condition = stack[args[0].0.offset] != 0;
+                            let condition = stack[args[0].0.0] != 0;
                             if !condition {
                                 f.write_to(
                                     &mut ctx.stdout,
                                     args[1..].iter().map(|(o, s)| {
                                         Bits::load_from_slice(
-                                            &stack[o.offset..][..s.get().div_ceil(8) as usize],
+                                            &stack[o.0..][..s.get().div_ceil(8) as usize],
                                             *s,
                                         )
                                     }),
@@ -1205,7 +599,7 @@ impl Event {
                         O::VcdPause => _ = vcd.as_mut().map(|vcd| vcd.paused = true),
                         O::VcdResume => _ = vcd.as_mut().map(|vcd| vcd.paused = false),
                         O::Time => {
-                            bits::load_from_u64(stack, dst.offset, TIME_VSIZE, ctx.time);
+                            bits::load_from_u64(stack, dst.0, TIME_VSIZE, ctx.time);
                         }
                         O::Finish => {
                             writeln!(&mut ctx.stdout, "[FINISH]").unwrap();
@@ -1214,21 +608,43 @@ impl Event {
                     }
                 }
                 I::Probe(var, sig) => {
-                    let bits = &signals[&sig];
-                    stack[var.offset..][..bits.as_slice().len()].copy_from_slice(bits.as_slice());
+                    let bits = &signals[sig.0 as usize];
+                    match (bits.as_data_ref(), ctx.logic_mode) {
+                        (BitsDataRef::InlineTv(v), LogicMode::TwoValue) => {
+                            let nbytes = bits.size().get().div_ceil(8) as usize;
+                            store_partial_u64(&mut stack[var.0..][..nbytes], v, bits.size());
+                        }
+                        (BitsDataRef::InlineFv(spc, v), LogicMode::FourValue) => {
+                            let nbytes = (2 * bits.size().get()).div_ceil(8) as usize;
+                            store_partial_u64(
+                                &mut stack[var.0..][..nbytes],
+                                fv_pack_u64(spc as u64, v as u64, bits.size()),
+                                VectorSize::new(2 * bits.size().get()).unwrap(),
+                            );
+                        }
+                        (BitsDataRef::SeparateTv(v), LogicMode::TwoValue) => {
+                            bytemuck::cast_slice_mut::<u8, u64>(&mut stack[var.0..][..v.len() * 8])
+                                .copy_from_slice(v);
+                        }
+                        (BitsDataRef::SeparateFv(v), LogicMode::FourValue) => {
+                            bytemuck::cast_slice_mut::<u8, u64>(&mut stack[var.0..][..v.len() * 8])
+                                .copy_from_slice(v);
+                        }
+                        _ => unreachable!(),
+                    }
                 }
                 I::Drive(sig, var, region, partial) => {
-                    let size = signals[sig].size();
+                    let size = signals[sig.0 as usize].size();
                     let partial = partial.map(|(offset, width)| {
                         (
-                            bits::store_to_u64(&stack, offset.offset, INTEGER_VSIZE) as u32,
+                            bits::store_to_u64(&stack, offset.0, INTEGER_VSIZE) as u32,
                             width,
                         )
                     });
                     if *region != 0 {
                         let region = (*region - 1) as usize;
                         let value = Bits::load_from_slice(
-                            &stack[var.offset..][..size.get().div_ceil(8) as usize],
+                            &stack[var.0..][..size.get().div_ceil(8) as usize],
                             size,
                         );
                         match regions.other_dispatched[region].entry(DispatchKey::Signal(*sig)) {
@@ -1251,13 +667,9 @@ impl Event {
                         continue;
                     }
 
-                    let signal = signals.get_mut(sig).unwrap();
+                    let signal = &mut signals[sig.0 as usize];
                     let size = partial.map_or(size, |(_, s)| s);
-                    let updated = drive_bits(
-                        signal,
-                        &stack[var.offset..][..size.get().div_ceil(8) as usize],
-                        partial,
-                    );
+                    let updated = drive_bits(signal, stack, var.0, size, partial, ctx.logic_mode);
 
                     if updated {
                         update_watchers(
@@ -1310,7 +722,7 @@ impl Event {
                 I::Watch(signals) => {
                     let listener_key = listeners.insert(self);
                     for signal in signals {
-                        watches.entry(*signal).or_default().push(listener_key);
+                        watches[signal.0 as usize].push(listener_key);
                     }
                     if let Some(trace) = trace.as_mut() {
                         let watch_range_start = trace.watches.len() as u64;
@@ -1328,7 +740,7 @@ impl Event {
                 }
                 I::Jump(offset) => *ip = *offset,
                 I::Branch(cond, true_offset, false_offset) => {
-                    let is_true = stack[cond.offset] & 1 != 0;
+                    let is_true = stack[cond.0] & 1 != 0;
                     if is_true {
                         *ip = *true_offset;
                     } else {
@@ -1352,10 +764,10 @@ pub fn run(
     ctx: &mut Context,
     processes: &[VmProcess],
     regions: &mut Regions,
-    signals: &mut HashMap<VmSignalKey, Bits>,
+    signals: &mut [Bits],
     signal_info: &[SignalInfo],
     listeners: &mut SlotMap<ListenerKey, Event>,
-    watches: &mut HashMap<VmSignalKey, Vec<ListenerKey>>,
+    watches: &mut [Vec<ListenerKey>],
     mut trace: Option<&mut vogls_trace::Trace>,
     stack: &mut [u8],
     max_time: u64,

@@ -5,12 +5,12 @@ use vogls_ir::{
     LogicMode, ProcessKey, SignalKey, VariableKey, VectorSize,
 };
 
-use crate::instruction::{StackRef, VmInstruction, VmProcess};
+use crate::instruction::{StackOffset, VmInstruction, VmProcess};
 use crate::{BinaryArithmeticOp, BinaryComparisonOp, ShiftOp, VmIntrinsicOp};
 
 use super::VmSignalKey;
 
-fn push_variable(stack_top: &mut usize, size: VectorSize, mode: LogicMode) -> StackRef {
+fn push_variable(stack_top: &mut usize, size: VectorSize, mode: LogicMode) -> StackOffset {
     // Most arithmetic operations are implemented on 64-bit chunks, by ensuring that
     // all variables with a size larger or equal to than 64 are allocated in chunks of
     // 64 we can efficiently dispatch to these kernels.
@@ -27,7 +27,7 @@ fn push_variable(stack_top: &mut usize, size: VectorSize, mode: LogicMode) -> St
     } else {
         (2 * size.get() as usize).div_ceil(8)
     };
-    let stack_ref = StackRef { offset: *stack_top };
+    let stack_ref = StackOffset(*stack_top);
     *stack_top += nbytes;
     stack_ref
 }

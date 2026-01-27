@@ -1,10 +1,10 @@
 use std::fmt::{self, Write};
 
-use super::{StackRef, VmInstruction, VmProcess, VmSignalKey};
+use super::{StackOffset, VmInstruction, VmProcess, VmSignalKey};
 
-impl fmt::Display for StackRef {
+impl fmt::Display for StackOffset {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "t{}", self.offset)
+        write!(f, "t{}", self.0)
     }
 }
 

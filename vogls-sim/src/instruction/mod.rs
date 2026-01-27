@@ -12,8 +12,11 @@ use crate::VcdScope;
 pub struct VmSignalKey(pub u64);
 
 #[derive(Debug, Clone, Copy)]
+pub struct StackOffset(pub usize);
+#[derive(Debug, Clone, Copy)]
 pub struct StackRef {
-    pub offset: usize,
+    pub offset: StackOffset,
+    pub size: VectorSize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -54,31 +57,76 @@ pub enum VmIntrinsicOp {
 
 #[derive(Debug)]
 pub enum VmInstruction {
-    Constant(StackRef, Bits),
+    Constant(StackOffset, Bits),
 
-    TvUnary(StackRef, UnaryOp, VectorSize, StackRef),
-    TvResize(StackRef, ResizeOp, VectorSize, VectorSize, StackRef),
-    TvBinaryArithmetic(StackRef, BinaryArithmeticOp, VectorSize, StackRef, StackRef),
-    TvBinaryComparison(StackRef, BinaryComparisonOp, VectorSize, StackRef, StackRef),
-    TvShift(StackRef, ShiftOp, VectorSize, StackRef, StackRef),
-    TvSelectBit(StackRef, VectorSize, StackRef, StackRef),
-    TvConcat(StackRef, VectorSize, StackRef, VectorSize, StackRef),
+    TvUnary(StackOffset, UnaryOp, VectorSize, StackOffset),
+    TvResize(StackOffset, ResizeOp, VectorSize, VectorSize, StackOffset),
+    TvBinaryArithmetic(
+        StackOffset,
+        BinaryArithmeticOp,
+        VectorSize,
+        StackOffset,
+        StackOffset,
+    ),
+    TvBinaryComparison(
+        StackOffset,
+        BinaryComparisonOp,
+        VectorSize,
+        StackOffset,
+        StackOffset,
+    ),
+    TvShift(StackOffset, ShiftOp, VectorSize, StackOffset, StackOffset),
+    TvSelectBit(StackOffset, VectorSize, StackOffset, StackOffset),
+    TvConcat(
+        StackOffset,
+        VectorSize,
+        StackOffset,
+        VectorSize,
+        StackOffset,
+    ),
 
-    FvUnary(StackRef, UnaryOp, VectorSize, StackRef),
-    FvResize(StackRef, ResizeOp, VectorSize, VectorSize, StackRef),
-    FvBinaryArithmetic(StackRef, BinaryArithmeticOp, VectorSize, StackRef, StackRef),
-    FvBinaryComparison(StackRef, BinaryComparisonOp, VectorSize, StackRef, StackRef),
-    FvShift(StackRef, ShiftOp, VectorSize, StackRef, StackRef),
-    FvSelectBit(StackRef, VectorSize, StackRef, StackRef),
-    FvConcat(StackRef, VectorSize, StackRef, VectorSize, StackRef),
+    FvUnary(StackOffset, UnaryOp, VectorSize, StackOffset),
+    FvResize(StackOffset, ResizeOp, VectorSize, VectorSize, StackOffset),
+    FvBinaryArithmetic(
+        StackOffset,
+        BinaryArithmeticOp,
+        VectorSize,
+        StackOffset,
+        StackOffset,
+    ),
+    FvBinaryComparison(
+        StackOffset,
+        BinaryComparisonOp,
+        VectorSize,
+        StackOffset,
+        StackOffset,
+    ),
+    FvShift(StackOffset, ShiftOp, VectorSize, StackOffset, StackOffset),
+    FvSelectBit(StackOffset, VectorSize, StackOffset, StackOffset),
+    FvConcat(
+        StackOffset,
+        VectorSize,
+        StackOffset,
+        VectorSize,
+        StackOffset,
+    ),
 
-    TvToFv(StackRef, StackRef, VectorSize),
-    FvToTv(StackRef, StackRef, VectorSize),
+    TvToFv(StackOffset, StackOffset, VectorSize),
+    FvToTv(StackOffset, StackOffset, VectorSize),
 
-    Intrinsic(StackRef, Box<VmIntrinsicOp>, Box<[(StackRef, VectorSize)]>),
+    Intrinsic(
+        StackOffset,
+        Box<VmIntrinsicOp>,
+        Box<[(StackOffset, VectorSize)]>,
+    ),
 
-    Probe(StackRef, VmSignalKey),
-    Drive(VmSignalKey, StackRef, u8, Option<(StackRef, VectorSize)>),
+    Probe(StackOffset, VmSignalKey),
+    Drive(
+        VmSignalKey,
+        StackOffset,
+        u8,
+        Option<(StackOffset, VectorSize)>,
+    ),
 
     Wait(Time),
     WaitRegion(u8),
@@ -86,7 +134,7 @@ pub enum VmInstruction {
 
     Jump(usize),
     /// (condition, true_offset, false_offset)
-    Branch(StackRef, usize, usize),
+    Branch(StackOffset, usize, usize),
     Halt,
 }
 

@@ -102,6 +102,13 @@ impl BasicBlock {
         }
         self.terminator.map_vars(f);
     }
+
+    fn for_each_var(&self, mut f: impl FnMut(VariableKey)) {
+        for i in &self.instrs {
+            i.for_each_var(&mut f);
+        }
+        self.terminator.for_each_var(f);
+    }
 }
 
 impl BasicBlockTerminator {
@@ -155,6 +162,16 @@ impl BasicBlockTerminator {
     fn map_vars(&mut self, mut f: impl FnMut(VariableKey) -> VariableKey) {
         match self {
             Self::Branch(v, _, _) => *v = f(*v),
+            Self::Wait(..)
+            | Self::WaitRegion(..)
+            | Self::Watch(..)
+            | Self::Jump(_)
+            | Self::Halt => {}
+        }
+    }
+    fn for_each_var(&self, mut f: impl FnMut(VariableKey)) {
+        match self {
+            Self::Branch(v, _, _) => f(*v),
             Self::Wait(..)
             | Self::WaitRegion(..)
             | Self::Watch(..)
@@ -349,6 +366,40 @@ impl Instruction {
             }
         }
     }
+    fn for_each_var(&self, mut f: impl FnMut(VariableKey)) {
+        match self {
+            Self::Unary(dst, _, src) | Self::Resize(dst, _, src) => {
+                f(*dst);
+                f(*src)
+            }
+            Self::Binary(dst, _, src1, src2) => {
+                f(*dst);
+                f(*src1);
+                f(*src2);
+            }
+            Self::Phi(dst, srcs) => {
+                f(*dst);
+                for (_, s) in srcs {
+                    f(*s);
+                }
+            }
+            Self::Intrinsic(dst, _, srcs) => {
+                f(*dst);
+                for s in srcs {
+                    f(*s);
+                }
+            }
+            Self::Drive(_, src, _, partial) => {
+                f(*src);
+                if let Some((off, _)) = partial {
+                    f(*off);
+                }
+            }
+            Self::Constant(dst, _) | Self::Probe(dst, _) => {
+                f(*dst);
+            }
+        }
+    }
 
     fn map_bb(&mut self, mut f: impl FnMut(BasicBlockKey) -> BasicBlockKey) {
         match self {
@@ -425,7 +476,7 @@ pub struct Connection {
     pub direction: ConnectionDirection,
 }
 
-#[derive(Default, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LogicMode {
     #[default]
     TwoValue,

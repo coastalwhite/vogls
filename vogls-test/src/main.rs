@@ -139,9 +139,10 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             emit_ir: false,
             emit_vm: false,
             trace: false,
+            no_run: false,
             time: test_information.time,
             opt_rounds: 0,
-            logic_mode: LogicMode::FourValue,
+            logic_mode: LogicMode::TwoValue,
         };
         let ctx = std::panic::AssertUnwindSafe(&mut ctx);
         let result = std::panic::catch_unwind(|| {

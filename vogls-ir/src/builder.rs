@@ -577,9 +577,9 @@ impl BasicBlockBuilder {
     pub fn probe(&mut self, gl: &mut GlobalContext, signal: SignalKey) -> VariableKey {
         gl.processes[self.process].ins.insert(signal);
         let size = gl.signals.get(signal).unwrap().size;
-        let variable = self.next_tmp_var(gl, size);
-        self.instrs.push(Instruction::Probe(variable, signal));
-        variable
+        let dst = self.next_tmp_var(gl, size);
+        self.instrs.push(Instruction::Probe(dst, signal));
+        dst
     }
 
     pub fn jump(&mut self, gl: &mut GlobalContext) -> BasicBlockBuilder {

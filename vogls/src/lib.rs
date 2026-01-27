@@ -37,6 +37,7 @@ pub struct ExecutionContext {
     pub time: u64,
     pub opt_rounds: u8,
     pub logic_mode: LogicMode,
+    pub no_run: bool,
 }
 
 pub fn token_range_to_line_range(
@@ -585,9 +586,9 @@ pub fn run(
 
     let mut processes = Vec::<VmProcess>::default();
     let mut regions = Regions::new(3); // inactive, non-blocking, monitor
-    let mut signals = HashMap::default();
+    let mut signals = Vec::default();
     let mut listeners = SlotMap::default();
-    let mut watches = HashMap::default();
+    let mut watches = Vec::default();
 
     // // Find the entity for the Top-Level Module.
     // let mut elab_processes = Vec::new();
@@ -653,7 +654,8 @@ pub fn run(
 
         let vm_signal_key = VmSignalKey(io_signals.len() as u64);
         io_signals.insert(key, vm_signal_key);
-        signals.insert(vm_signal_key, value);
+        signals.push(value);
+        watches.push(Vec::new());
         signal_info.push(SignalInfo { name: name.clone() });
     }
 
@@ -691,6 +693,10 @@ pub fn run(
         }));
     }
     let mut stack = vec![0u8; stack_top];
+
+    if ectx.no_run {
+        return Ok(());
+    }
 
     let stdout = std::mem::replace(&mut ectx.stdout, Box::new(Vec::new()) as _);
     let stderr = std::mem::replace(&mut ectx.stderr, Box::new(Vec::new()) as _);

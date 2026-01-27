@@ -26,6 +26,8 @@ struct Args {
     #[arg(long = "emit-vm")]
     emit_vm: bool,
 
+    #[arg(long = "no-run")]
+    no_run: bool,
     #[arg(short, long, default_value_t = u64::MAX)]
     time: u64,
 
@@ -57,6 +59,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             emit_vm: args.emit_vm,
             trace: args.trace,
             time: args.time,
+            no_run: args.no_run,
             opt_rounds: args.opt_rounds,
             logic_mode,
         },

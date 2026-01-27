@@ -1079,7 +1079,7 @@ impl fmt::Display for Bits {
         } else {
             write!(f, "{last:X}")?;
         }
-        for &b in data.iter().rev() {
+        for &b in data.iter().skip(1).rev() {
             write!(f, "_{:04X}_{:04X}", b >> 32, b & 0xFFFF_FFFF)?;
         }
         Ok(())
