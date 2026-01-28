@@ -262,12 +262,16 @@ pub fn lower_process_to_vm(
                                 s2,
                             ),
                             O::SelectBit => VI::FvSelectBit(d, s1.to_ref(s1_size), s2),
-                            O::LogicalShiftLeft => VI::FvShift(d, S::LogicalLeft, d_size, s1, s2),
-                            O::LogicalShiftRight => VI::FvShift(d, S::LogicalRight, d_size, s1, s2),
-                            O::ArithmeticShiftRight => {
-                                VI::FvShift(d, S::ArithmeticRight, d_size, s1, s2)
+                            O::LogicalShiftLeft => {
+                                VI::FvShift(d.to_ref(d_size), S::LogicalLeft, s1, s2)
                             }
-                            O::Concat => VI::FvConcat(d, s1_size, s1, s2_size, s2),
+                            O::LogicalShiftRight => {
+                                VI::FvShift(d.to_ref(d_size), S::LogicalRight, s1, s2)
+                            }
+                            O::ArithmeticShiftRight => {
+                                VI::FvShift(d.to_ref(d_size), S::ArithmeticRight, s1, s2)
+                            }
+                            O::Concat => VI::FvConcat(d, s1.to_ref(s1_size), s2.to_ref(s2_size)),
                         }
                     } else {
                         match *op {

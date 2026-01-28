@@ -54,6 +54,7 @@ pub struct Context {
     pub stderr: Box<dyn std::io::Write>,
     pub instruction_count: u64,
     pub event_count: u64,
+    pub itrace: bool,
 }
 
 impl Context {
@@ -69,6 +70,7 @@ impl Context {
             stderr,
             instruction_count: 0,
             event_count: 0,
+            itrace: true,
         }
     }
 }
@@ -651,6 +653,7 @@ impl Event {
         use VmInstruction as I;
         loop {
             let instr = &process.instructions[*ip];
+
             *ip += 1;
             ctx.instruction_count += 1;
             match instr {
@@ -682,25 +685,15 @@ impl Event {
                 I::FvBinaryComparison(dst, op, lhs, rhs) => {
                     execution::fv::exec_fv_bin_cmp(stack, *dst, *op, *lhs, *rhs)
                 }
-                I::FvShift(dst, op, size, src, offset) => execution::fv::exec_fv_shift(
-                    bytemuck::cast_slice_mut(&mut stack.0),
-                    dst.0,
-                    *op,
-                    *size,
-                    src.0,
-                    offset.0,
-                ),
+                I::FvShift(dst, op, src, offset) => {
+                    execution::fv::exec_fv_shift(stack, *dst, *op, *src, *offset)
+                }
                 I::FvSelectBit(dst, src, idx) => {
                     execution::fv::exec_fv_select_bit(stack, *dst, *src, *idx)
                 }
-                I::FvConcat(dst, lhs_size, lhs, rhs_size, rhs) => execution::fv::exec_fv_concat(
-                    bytemuck::cast_slice_mut(&mut stack.0),
-                    dst.0,
-                    lhs.0,
-                    *lhs_size,
-                    rhs.0,
-                    *rhs_size,
-                ),
+                I::FvConcat(dst, lhs, rhs) => {
+                    execution::fv::exec_fv_concat(stack, *dst, *lhs, *rhs)
+                }
 
                 I::TvToFv(dst, src) => {
                     let size = dst.size;
@@ -909,6 +902,11 @@ impl Event {
                     return EvalOutcome::Next;
                 }
             }
+
+            if ctx.itrace {
+                instr.itrace(stack);
+            }
+
         }
     }
 }

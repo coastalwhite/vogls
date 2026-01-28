@@ -1,7 +1,7 @@
 use vogls_bits::arithmetic::{
     FvLogicValue, fv_gtu32_bitwise_inv, fv_l_reduce_and, fv_l_reduce_or, fv_l_reduce_xor,
-    fv_l_select_bit, fv_leu32_bitwise_inv, fv_pack_u64, fv_s_reduce_and, fv_s_reduce_or,
-    fv_s_reduce_xor, fv_s_select_bit, fv_unpack_u64,
+    fv_l_select_bit, fv_leu32_bitwise_inv, fv_s_reduce_and, fv_s_reduce_or, fv_s_reduce_xor,
+    fv_s_select_bit, fv_unpack_u64,
 };
 use vogls_bits::concat::{fv_l_concat, fv_s_concat};
 use vogls_bits::extend::{fv_l_sign_extend, fv_l_zero_extend, fv_s_sign_extend, fv_s_zero_extend};
@@ -11,7 +11,6 @@ use vogls_bits::shift::{
     fv_s_arithmetic_shift_right, fv_s_logical_shift_left, fv_s_logical_shift_right,
 };
 use vogls_bits::truncate::{fv_l_truncate, fv_s_truncate};
-use vogls_bits::{get_disjoint_dst_s1_s2, get_disjoint_dst_src};
 use vogls_ir::{ResizeOp, UnaryOp, VectorSize};
 
 use crate::{BinaryArithmeticOp, BinaryComparisonOp, ShiftOp, Stack, StackOffset, StackRef};
@@ -210,52 +209,47 @@ pub(crate) fn exec_fv_bin_cmp(
 }
 
 pub(crate) fn exec_fv_shift(
-    stack: &mut [u8],
-    dst: usize,
+    stack: &mut Stack,
+    dst: StackRef,
     op: ShiftOp,
-    size: VectorSize,
-    src: usize,
-    offset: usize,
+    src: StackOffset,
+    offset: StackOffset,
 ) {
     use ShiftOp as O;
-    let offset = load_partial_u64(&stack[offset..][..8], VectorSize::new(32).unwrap());
+    let (spc, offset) = stack.load_exact_fv_u32(offset);
 
     // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 53
     // """
     // If the right operand has an x or z value, then the result shall be unknown.
     // """
-    if offset >> 32 != 0xFFFF_FFFF {
-        if size.get() > 16 {
-            let nbytes = (2 * size.get()).div_ceil(8) as usize;
-            stack[dst..][..nbytes].fill(0u8);
+    if !spc != 0 {
+        if dst.size.get() <= 16 {
+            stack.get_mut(dst).fill(0u8);
         } else {
-            let nwords = 2 * size.get().div_ceil(64) as usize;
-            bytemuck::cast_slice_mut::<u8, u64>(&mut stack[dst..][..nwords * 2]).fill(0u64);
+            let nwords = 2 * dst.size.get().div_ceil(64) as usize;
+            stack.get_mut_u64_slice(dst.offset, nwords).fill(0u64);
         }
         return;
     }
 
-    let offset = (offset & 0xFFFF_FFFF) as u32;
-    if size.get() > 16 {
-        let nbytes = size.get().div_ceil(8) as usize;
-        let (dst, src) = get_disjoint_dst_src(stack, dst, nbytes, src, nbytes);
+    if dst.size.get() <= 16 {
+        let (dst_s, src_s) =
+            stack.get_disjoint_u8_dst_src(dst.to_fv_size(), src.to_ref(dst.size).to_fv_size());
         let f = match op {
             O::LogicalLeft => fv_s_logical_shift_left,
             O::LogicalRight => fv_s_logical_shift_right,
             O::ArithmeticRight => fv_s_arithmetic_shift_right,
         };
-        f(dst, src, offset, size);
+        f(dst_s, src_s, offset, dst.size);
     } else {
-        let nwords = 2 * size.get().div_ceil(64) as usize;
-        let (dst, src) = get_disjoint_dst_src(stack, dst, nwords * 8, src, nwords * 8);
-        let dst = bytemuck::cast_slice_mut::<u8, u64>(dst);
-        let src = bytemuck::cast_slice::<u8, u64>(src);
+        let nwords = 2 * dst.size.get().div_ceil(64) as usize;
+        let (dst_s, src_s) = stack.get_disjoint_u64_dst_src((dst.offset, nwords), (src, nwords));
         let f = match op {
             O::LogicalLeft => fv_l_logical_shift_left,
             O::LogicalRight => fv_l_logical_shift_right,
             O::ArithmeticRight => fv_l_arithmetic_shift_right,
         };
-        f(dst, src, offset, size);
+        f(dst_s, src_s, offset, dst.size);
     }
 }
 
@@ -281,58 +275,47 @@ pub(crate) fn exec_fv_select_bit(
     }
 }
 
-pub(crate) fn exec_fv_concat(
-    stack: &mut [u8],
-    dst: usize,
-    lhs: usize,
-    lhs_size: VectorSize,
-    rhs: usize,
-    rhs_size: VectorSize,
-) {
-    if lhs_size.get() + rhs_size.get() > 16 {
-        let (d, l, r) = get_disjoint_dst_s1_s2(
-            stack,
-            dst,
-            2 * (lhs_size.get() + rhs_size.get()).div_ceil(64) as usize * 8,
-            lhs,
-            if lhs_size.get() > 32 {
-                2 * lhs_size.get().div_ceil(64) as usize * 8
-            } else {
-                lhs_size.get().div_ceil(8) as usize
-            },
-            rhs,
-            if rhs_size.get() > 32 {
-                2 * rhs_size.get().div_ceil(64) as usize * 8
-            } else {
-                rhs_size.get().div_ceil(8) as usize
-            },
+pub(crate) fn exec_fv_concat(stack: &mut Stack, dst: StackOffset, lhs: StackRef, rhs: StackRef) {
+    let dst = dst.to_ref(VectorSize::new(lhs.size.get() + rhs.size.get()).unwrap());
+    if dst.size.get() > 16 {
+        let l_nbytes = if lhs.size.get() <= 16 {
+            lhs.size.get().div_ceil(8)
+        } else {
+            2 * lhs.size.get().div_ceil(64) * 8
+        };
+        let r_nbytes = if rhs.size.get() <= 16 {
+            rhs.size.get().div_ceil(8)
+        } else {
+            2 * rhs.size.get().div_ceil(64) * 8
+        };
+        let d_nbytes = 2 * dst.size.get().div_ceil(64) * 8;
+
+        let (d, l, r) = stack.get_disjoint_u8_dst_s1_s2(
+            dst.offset.to_ref(VectorSize::new(d_nbytes * 8).unwrap()),
+            lhs.offset.to_ref(VectorSize::new(l_nbytes * 8).unwrap()),
+            rhs.offset.to_ref(VectorSize::new(r_nbytes * 8).unwrap()),
         );
         let mut lhs_s = [0u64; 2];
         let mut rhs_s = [0u64; 2];
         let d = bytemuck::cast_slice_mut::<u8, u64>(d);
-        let l = if lhs_size.get() <= 32 {
-            (lhs_s[0], lhs_s[1]) = fv_unpack_u64(load_partial_u64(l, lhs_size), lhs_size);
+        let l = if lhs.size.get() <= 16 {
+            (lhs_s[0], lhs_s[1]) =
+                fv_unpack_u64(load_partial_u64(l, lhs.to_fv_size().size), lhs.size);
             &lhs_s
         } else {
             bytemuck::cast_slice::<u8, u64>(l)
         };
-        let r = if rhs_size.get() <= 32 {
-            (rhs_s[0], rhs_s[1]) = fv_unpack_u64(load_partial_u64(r, rhs_size), rhs_size);
+        let r = if rhs.size.get() <= 16 {
+            (rhs_s[0], rhs_s[1]) =
+                fv_unpack_u64(load_partial_u64(r, rhs.to_fv_size().size), rhs.size);
             &rhs_s
         } else {
             bytemuck::cast_slice::<u8, u64>(r)
         };
-        fv_l_concat(d, l, r, lhs_size, rhs_size);
+        fv_l_concat(d, l, r, lhs.size, rhs.size);
     } else {
-        let (d, l, r) = get_disjoint_dst_s1_s2(
-            stack,
-            dst,
-            (lhs_size.get() + rhs_size.get()).div_ceil(8) as usize,
-            lhs,
-            lhs_size.get().div_ceil(8) as usize,
-            rhs,
-            rhs_size.get().div_ceil(8) as usize,
-        );
-        fv_s_concat(d, l, r, lhs_size, rhs_size);
+        let (d, l, r) =
+            stack.get_disjoint_u8_dst_s1_s2(dst.to_fv_size(), lhs.to_fv_size(), rhs.to_fv_size());
+        fv_s_concat(d, l, r, lhs.size, rhs.size);
     }
 }

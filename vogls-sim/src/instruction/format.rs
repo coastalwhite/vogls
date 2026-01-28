@@ -91,14 +91,19 @@ impl fmt::Display for VmInstruction {
                     src1 = src1.offset
                 )
             }
-            Self::FvShift(dst, op, _, src1, src2) => {
-                write!(f, "{dst} = fv.{} {src1}, {src2}", op.into_mnemonic())
+            Self::FvShift(dst, op, src1, src2) => {
+                write!(
+                    f,
+                    "{dst} = fv.{} {src1}, {src2}",
+                    op.into_mnemonic(),
+                    dst = dst.offset
+                )
             }
             Self::FvSelectBit(dst, src1, src2) => {
                 write!(f, "{dst} = fv.bselect {}, {src2}", src1.offset)
             }
-            Self::FvConcat(dst, _, src1, _, src2) => {
-                write!(f, "{dst} = fv.concat {src1}, {src2}")
+            Self::FvConcat(dst, src1, src2) => {
+                write!(f, "{dst} = fv.concat {}, {}", src1.offset, src2.offset)
             }
 
             Self::TvToFv(dst, src) => {

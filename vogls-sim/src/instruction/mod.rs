@@ -1,12 +1,12 @@
 use vogls_ir::dyn_format_string::DynFormatString;
-use vogls_ir::{Bits, ResizeOp, Time, UnaryOp, VectorSize};
+use vogls_ir::{Bits, INTEGER_VSIZE, ResizeOp, SCALAR_VSIZE, Time, UnaryOp, VectorSize};
 
 mod format;
 mod lower;
 
 pub use lower::{StackBuilder, lower_process_to_vm};
 
-use crate::VcdScope;
+use crate::{Stack, VcdScope};
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct VmSignalKey(pub u64);
@@ -28,6 +28,12 @@ impl StackRef {
 impl StackOffset {
     pub fn to_ref(self, size: VectorSize) -> StackRef {
         StackRef { offset: self, size }
+    }
+    pub fn to_scalar_ref(self) -> StackRef {
+        self.to_ref(SCALAR_VSIZE)
+    }
+    fn to_32bit_ref(self) -> StackRef {
+        self.to_ref(INTEGER_VSIZE)
     }
 }
 
@@ -84,15 +90,9 @@ pub enum VmInstruction {
     FvResize(StackRef, ResizeOp, StackRef),
     FvBinaryArithmetic(StackRef, BinaryArithmeticOp, StackOffset, StackOffset),
     FvBinaryComparison(StackOffset, BinaryComparisonOp, StackRef, StackOffset),
-    FvShift(StackOffset, ShiftOp, VectorSize, StackOffset, StackOffset),
+    FvShift(StackRef, ShiftOp, StackOffset, StackOffset),
     FvSelectBit(StackOffset, StackRef, StackOffset),
-    FvConcat(
-        StackOffset,
-        VectorSize,
-        StackOffset,
-        VectorSize,
-        StackOffset,
-    ),
+    FvConcat(StackOffset, StackRef, StackRef),
 
     TvToFv(StackRef, StackOffset),
     FvToTv(StackRef, StackOffset),
@@ -113,6 +113,108 @@ pub enum VmInstruction {
     /// (condition, true_offset, false_offset)
     Branch(StackOffset, usize, usize),
     Halt,
+}
+impl VmInstruction {
+    pub fn itrace(&self, stack: &Stack) {
+        use VmInstruction as I;
+        let items: &[(&'static str, bool, StackRef)] = match self {
+            I::Constant(dst, src) => &[("dst", src.contains_special(), dst.to_ref(src.size()))],
+            I::TvUnary(dst, op, src) => match op {
+                UnaryOp::Neg => &[("dst", false, dst.to_ref(src.size)), ("src", false, *src)],
+                UnaryOp::ReduceOr | UnaryOp::ReduceAnd | UnaryOp::ReduceXor => {
+                    &[("dst", false, dst.to_scalar_ref()), ("src", false, *src)]
+                }
+            },
+            I::TvResize(dst, _, src) => &[("dst", false, *dst), ("src", false, *src)],
+            I::TvBinaryArithmetic(dst, _, lhs, rhs) => &[
+                ("dst", false, *dst),
+                ("lhs", false, lhs.to_ref(dst.size)),
+                ("rhs", false, rhs.to_ref(dst.size)),
+            ],
+            I::TvBinaryComparison(dst, _, lhs, rhs) => &[
+                ("dst", false, dst.to_scalar_ref()),
+                ("lhs", false, *lhs),
+                ("rhs", false, rhs.to_ref(lhs.size)),
+            ],
+            I::TvShift(dst, _, src, shift) => &[
+                ("dst", false, *dst),
+                ("src", false, src.to_ref(dst.size)),
+                ("shift", false, shift.to_32bit_ref()),
+            ],
+            I::TvSelectBit(dst, src, idx) => &[
+                ("dst", false, dst.to_scalar_ref()),
+                ("src", false, *src),
+                ("idx", false, idx.to_32bit_ref()),
+            ],
+            I::TvConcat(dst, lhs, rhs) => &[
+                (
+                    "dst",
+                    false,
+                    dst.to_ref(VectorSize::new(lhs.size.get() + rhs.size.get()).unwrap()),
+                ),
+                ("lhs", false, *lhs),
+                ("rhs", false, *rhs),
+            ],
+            I::FvUnary(dst, op, src) => match op {
+                UnaryOp::Neg => &[("dst", false, dst.to_ref(src.size)), ("src", true, *src)],
+                UnaryOp::ReduceOr | UnaryOp::ReduceAnd | UnaryOp::ReduceXor => {
+                    &[("dst", true, dst.to_scalar_ref()), ("src", true, *src)]
+                }
+            },
+            I::FvResize(dst, _, src) => &[("dst", true, *dst), ("src", true, *src)],
+            I::FvBinaryArithmetic(dst, _, lhs, rhs) => &[
+                ("dst", true, *dst),
+                ("lhs", true, lhs.to_ref(dst.size)),
+                ("rhs", true, rhs.to_ref(dst.size)),
+            ],
+            I::FvBinaryComparison(dst, _, lhs, rhs) => &[
+                ("dst", true, dst.to_scalar_ref()),
+                ("lhs", true, *lhs),
+                ("rhs", true, rhs.to_ref(lhs.size)),
+            ],
+            I::FvShift(dst, _, src, shift) => &[
+                ("dst", true, *dst),
+                ("src", true, src.to_ref(dst.size)),
+                ("shift", true, shift.to_32bit_ref()),
+            ],
+            I::FvSelectBit(dst, src, idx) => &[
+                ("dst", true, dst.to_scalar_ref()),
+                ("src", true, *src),
+                ("idx", true, idx.to_32bit_ref()),
+            ],
+            I::FvConcat(dst, lhs, rhs) => &[
+                (
+                    "dst",
+                    true,
+                    dst.to_ref(VectorSize::new(lhs.size.get() + rhs.size.get()).unwrap()),
+                ),
+                ("lhs", true, *lhs),
+                ("rhs", true, *rhs),
+            ],
+            I::TvToFv(dst, src) => &[("dst", true, *dst), ("src", false, src.to_ref(dst.size))],
+            I::FvToTv(dst, src) => &[("dst", false, *dst), ("src", true, src.to_ref(dst.size))],
+            I::Intrinsic(_, _, _) => &[],
+            I::Drive(_, _, _) => &[],
+            I::Wait(_) => &[],
+            I::WaitRegion(_) => &[],
+            I::Watch(_) => &[],
+            I::Jump(_) => &[],
+            I::Branch(_, _, _) => &[],
+            I::Halt => &[],
+        };
+        eprint!("{self}");
+        for (name, fv, stack_ref) in items {
+            eprint!(
+                " : {name} = {}",
+                if *fv {
+                    stack.load_fv_bits(*stack_ref)
+                } else {
+                    stack.load_tv_bits(*stack_ref)
+                }
+            );
+        }
+        eprintln!();
+    }
 }
 
 #[derive(Debug)]
