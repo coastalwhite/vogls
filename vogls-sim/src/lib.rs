@@ -5,6 +5,7 @@ use std::num::NonZeroUsize;
 use slotmap::{SlotMap, new_key_type};
 use vogls_bits::arithmetic::{fv_pack_u64, fv_separate_packed_u64, fv_set_no_special};
 use vogls_bits::load::load_partial_u64;
+use vogls_bits::set_subslice::tv_l_set;
 use vogls_bits::store::store_partial_u64;
 use vogls_bits::{get_disjoint_dst_s1_s2, get_disjoint_dst_src};
 use vogls_ir::dyn_format_string::{Base, Padding, format_bits};
@@ -309,8 +310,35 @@ pub fn drive_bits(
     partial: Option<u32>,
     logic_mode: LogicMode,
 ) -> bool {
-    if partial.is_some() && dst.size == src.size {
-        todo!()
+    if partial.is_some() || dst.size != src.size {
+        let partial = partial.unwrap_or(0);
+
+        return match logic_mode {
+            LogicMode::TwoValue if dst.size.get() <= 32 => {
+                let src_v = stack.get_tv_u64(src);
+                let old = stack.get_tv_u64(dst);
+
+                let mask = (1u64 << src.size.get()) - 1;
+                let mask = mask << partial;
+                let new = (src_v << partial) | (old & !mask);
+                stack.set_tv_u64(dst, new);
+                old != new
+            }
+            LogicMode::TwoValue => {
+                let mut src_s = [0u64];
+                let (dst_s, src_s) = if src.size.get() <= 32 {
+                    src_s[0] = stack.get_tv_u64(src);
+                    (stack.get_mut_u64_slice(dst.offset, dst.size.get().div_ceil(64) as usize), &src_s[..])
+                } else {
+                    let dst_nwords = dst.size.get().div_ceil(64) as usize;
+                    let src_nwords = src.size.get().div_ceil(64) as usize;
+                    stack.get_disjoint_u64_dst_src((dst.offset, dst_nwords), (src.offset, src_nwords))
+                };
+
+                tv_l_set(dst_s, src_s, dst.size, partial, src.size)
+            }
+            _ => todo!(),
+        };
     }
 
     let size = dst.size;
