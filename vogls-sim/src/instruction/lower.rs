@@ -298,7 +298,7 @@ pub fn lower_process_to_vm(
                 }
 
                 I::Intrinsic(dst, op, args) => {
-                    let args = args.iter().map(|v| (var!(*v), gl.vars[*v].size)).collect();
+                    let mut vm_args = args.iter().map(|v| (var!(*v), gl.vars[*v].size)).collect();
                     use crate::VcdScope as VmVcdScope;
                     use IntrinsicOp as O;
                     use VmIntrinsicOp as VO;
@@ -306,7 +306,28 @@ pub fn lower_process_to_vm(
                         O::Time => VO::Time,
                         O::Finish => VO::Finish,
                         O::Display(f) => VO::Display(f.clone()),
-                        O::Assert(f) => VO::Assert(f.clone()),
+                        O::Assert(f) => match gl.logic_mode {
+                            LogicMode::TwoValue => VO::AssertTv(f.clone()),
+                            LogicMode::FourValue => {
+                                vm_args = args
+                                    .iter()
+                                    .map(|v| {
+                                        (
+                                            var!(
+                                                *v,
+                                                (
+                                                    LogicMode::FourValue,
+                                                    var_mode[v],
+                                                    gl.vars[*v].size
+                                                )
+                                            ),
+                                            gl.vars[*v].size,
+                                        )
+                                    })
+                                    .collect();
+                                VO::AssertFv(f.clone())
+                            }
+                        },
                         O::VcdOpenFile(f) => VO::VcdOpenFile(f.clone()),
                         O::VcdAppendModule(v) => {
                             VO::VcdAppendModule(VmVcdScope::lower(v, io_signals))
@@ -314,7 +335,7 @@ pub fn lower_process_to_vm(
                         O::VcdPause => VO::VcdPause,
                         O::VcdResume => VO::VcdResume,
                     };
-                    VI::Intrinsic(var!(*dst), Box::new(op), args)
+                    VI::Intrinsic(var!(*dst), Box::new(op), vm_args)
                 }
                 I::Probe(dst, signal) => {
                     let size = gl.vars[*dst].size;

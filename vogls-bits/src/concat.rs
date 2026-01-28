@@ -1,5 +1,5 @@
 use crate::VectorSize;
-use crate::arithmetic::{fv_pack_u64, fv_separate_packed_u64};
+use crate::arithmetic::{fv_pack_u64, fv_unpack_u64};
 use crate::load::load_partial_u64;
 use crate::store::store_partial_u64;
 
@@ -116,8 +116,8 @@ pub fn fv_s_concat(
 ) {
     let x = load_partial_u64(lhs, lhs_size);
     let y = load_partial_u64(rhs, rhs_size);
-    let (xspc, xvalue) = fv_separate_packed_u64(x, lhs_size);
-    let (yspc, yvalue) = fv_separate_packed_u64(y, rhs_size);
+    let (xspc, xvalue) = fv_unpack_u64(x, lhs_size);
+    let (yspc, yvalue) = fv_unpack_u64(y, rhs_size);
     let spc = (xspc << rhs_size.get()) | yspc;
     let value = (xvalue << rhs_size.get()) | yvalue;
     let dsize = VectorSize::new(lhs_size.get() + rhs_size.get()).unwrap();

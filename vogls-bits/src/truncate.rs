@@ -1,5 +1,5 @@
 use crate::VectorSize;
-use crate::arithmetic::{fv_pack_u64, fv_separate_packed_u64};
+use crate::arithmetic::{fv_pack_u64, fv_unpack_u64};
 use crate::load::load_partial_u64;
 use crate::store::store_partial_u64;
 
@@ -15,7 +15,7 @@ pub fn tv_s_truncate(dst: &mut [u8], src: &[u8], dst_size: VectorSize, src_size:
 }
 pub fn fv_s_truncate(dst: &mut [u8], src: &[u8], dst_size: VectorSize, src_size: VectorSize) {
     let src = load_partial_u64(src, VectorSize::new(2 * src_size.get()).unwrap());
-    let (spc, val) = fv_separate_packed_u64(src, src_size);
+    let (spc, val) = fv_unpack_u64(src, src_size);
     let dst_mask = 1u64.unbounded_shl(dst_size.get()).wrapping_sub(1);
     let result = fv_pack_u64(spc & dst_mask, val & dst_mask, dst_size);
     store_partial_u64(dst, result, dst_size);

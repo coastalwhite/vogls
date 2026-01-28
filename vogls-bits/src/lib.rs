@@ -4,12 +4,14 @@ use std::num::NonZeroU32;
 use std::ptr::NonNull;
 
 use self::arithmetic::{FvLogicValue, fv_contains_special};
+use self::leading_trailing::{tv_leading_ones, tv_leading_zeros};
 use self::truncate::{fv_l_truncate, tv_l_truncate};
 
 pub mod arithmetic;
 pub mod comparison;
 pub mod concat;
 pub mod extend;
+pub mod iter;
 pub mod leading_trailing;
 pub mod load;
 pub mod negate;
@@ -851,27 +853,18 @@ impl Bits {
     pub fn leading_zeroes(&self) -> u32 {
         match self.as_data_ref() {
             BitsDataRef::InlineTv(v) => v.leading_zeros() - (64 - self.size.get()),
-            BitsDataRef::SeparateTv(v) => {
-                let mut n = 0;
-                let soff = self.size.get() % 64;
-                if soff != 0 {
-                    let lbn = v.last().unwrap().leading_zeros();
-                    if lbn != 64 {
-                        return lbn - (64 - soff);
-                    }
-                    n += soff;
-                }
-                for b in v[..v.len() - usize::from(n != 0)].iter().rev() {
-                    if *b == 0 {
-                        n += 64;
-                    } else {
-                        return n + b.leading_zeros();
-                    }
-                }
-                debug_assert_eq!(n, self.size.get());
-                n
+            BitsDataRef::SeparateTv(v) => tv_leading_zeros(v, self.size()),
+            BitsDataRef::InlineFv(spc, val) => {
+                let offset = 32 - self.size().get();
+                (spc << offset)
+                    .leading_ones()
+                    .min((val << offset).leading_zeros())
             }
-            _ => todo!(),
+            BitsDataRef::SeparateFv(v) => {
+                let spc_leading_ones = tv_leading_ones(&v[..v.len() / 2], self.size());
+                let val_leading_zeros = tv_leading_zeros(&v[v.len() / 2..], self.size());
+                spc_leading_ones.min(val_leading_zeros)
+            }
         }
     }
 
@@ -1034,6 +1027,39 @@ impl Bits {
         let ptr = unsafe { std::slice::from_raw_parts_mut(ptr.as_ptr(), num_words) };
         let ptr = ptr as *mut [u64];
         unsafe { Box::from_raw(ptr) }
+    }
+
+    pub fn select_value(&self, at: u32) -> FvLogicValue {
+        if at >= self.size().get() {
+            return FvLogicValue::X;
+        }
+
+        match self.as_data_ref() {
+            BitsDataRef::InlineTv(v) => FvLogicValue::from_bool((v >> at) & 1 != 0),
+            BitsDataRef::SeparateTv(items) => {
+                let nwords = (at / 64) as usize;
+                let off = at % 64;
+                FvLogicValue::from_bool((items[nwords] >> off) & 1 != 0)
+            }
+            BitsDataRef::InlineFv(spc, val) => {
+                FvLogicValue::from_spc_and_val((spc >> at) & 1 != 0, (val >> at) & 1 != 0)
+            }
+            BitsDataRef::SeparateFv(items) => {
+                let nwords = (at / 64) as usize;
+                let off = at % 64;
+                let spc = (items[nwords] >> off) & 1 != 0;
+                let val = (items[self.size().get().div_ceil(64) as usize + nwords] >> off) & 1 != 0;
+                FvLogicValue::from_spc_and_val(spc, val)
+            }
+        }
+    }
+
+    pub fn value_iter<'a>(&'a self) -> iter::ValueIter<'a> {
+        iter::ValueIter {
+            bits: self,
+            start: 0,
+            end: self.size().get(),
+        }
     }
 }
 

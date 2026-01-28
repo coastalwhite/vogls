@@ -142,7 +142,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             no_run: false,
             time: test_information.time,
             opt_rounds: 0,
-            logic_mode: LogicMode::TwoValue,
+            logic_mode: LogicMode::FourValue,
         };
         let ctx = std::panic::AssertUnwindSafe(&mut ctx);
         let result = std::panic::catch_unwind(|| {

@@ -3,11 +3,11 @@ use std::collections::{BTreeMap, HashMap};
 use std::num::NonZeroUsize;
 
 use slotmap::{SlotMap, new_key_type};
-use vogls_bits::arithmetic::{fv_pack_u64, fv_separate_packed_u64, fv_set_no_special};
+use vogls_bits::arithmetic::{FvLogicValue, fv_pack_u64, fv_set_no_special, fv_unpack_u64};
 use vogls_bits::load::load_partial_u64;
-use vogls_bits::set_subslice::tv_l_set;
+use vogls_bits::set_subslice::{tv_l_set, tv_s_set};
 use vogls_bits::store::store_partial_u64;
-use vogls_bits::{get_disjoint_dst_s1_s2, get_disjoint_dst_src};
+use vogls_bits::{BitsDataRef, get_disjoint_dst_s1_s2, get_disjoint_dst_src};
 use vogls_ir::dyn_format_string::{Base, Padding, format_bits};
 use vogls_ir::vcd::NetType;
 use vogls_ir::{Bits, LogicMode, SCALAR_VSIZE, SignalKey, TIME_VSIZE, VectorSize};
@@ -127,16 +127,16 @@ impl Stack {
         self.set_tv_u64(at.to_ref(SCALAR_VSIZE), value.into());
     }
 
+    fn get_fv_item(&self, at: StackOffset) -> FvLogicValue {
+        let (spc, val) = self.get_fv_u64(at.to_ref(SCALAR_VSIZE));
+        FvLogicValue::from_repr(((spc as u8) << 1) | (val as u8))
+    }
     fn get_fv_u64(&self, at: StackRef) -> (u64, u64) {
         debug_assert!(at.size.get() <= 64);
         if at.size.get() <= 16 {
-            fv_separate_packed_u64(
-                load_partial_u64(
-                    self.get(at),
-                    at.size.checked_mul(VectorSize::new(2).unwrap()).unwrap(),
-                ),
-                at.size,
-            )
+            let dsize = at.size.checked_mul(VectorSize::new(2).unwrap()).unwrap();
+            let src = self.get(at.offset.to_ref(dsize));
+            fv_unpack_u64(load_partial_u64(src, dsize), at.size)
         } else {
             let [spc, val] = self.get_u64_slice(at.offset, 2) else {
                 unreachable!()
@@ -148,9 +148,10 @@ impl Stack {
         debug_assert!(at.size.get() <= 64);
         if at.size.get() <= 16 {
             let dsize = at.size.checked_mul(VectorSize::new(2).unwrap()).unwrap();
-            let old = load_partial_u64(self.get(at), dsize);
-            store_partial_u64(self.get_mut(at), fv_pack_u64(spc, val, at.size), dsize);
-            fv_separate_packed_u64(old, at.size)
+            let dst = self.get_mut(at.offset.to_ref(dsize));
+            let old = load_partial_u64(dst, dsize);
+            store_partial_u64(dst, fv_pack_u64(spc, val, at.size), dsize);
+            fv_unpack_u64(old, at.size)
         } else {
             let s = self.get_mut_u64_slice(at.offset, 2);
             (
@@ -224,13 +225,42 @@ impl Stack {
         // @Performance: We should make a specialized path for u64
         Bits::load_from_slice(self.get(at), at.size)
     }
+    fn load_fv_bits(&self, at: StackRef) -> Bits {
+        if at.size.get() <= 32 {
+            let (spc, val) = self.get_fv_u64(at);
+            Bits::from_four_value_u64(at.size, spc as u32, val as u32)
+        } else {
+            Bits::from_boxed_slice(
+                vogls_ir::Mode::FourValue,
+                at.size,
+                self.get_u64_slice(at.offset, at.size.get().div_ceil(64) as usize)
+                    .into(),
+            )
+        }
+    }
 
     pub fn store_bits(&mut self, dst: StackRef, logic_mode: LogicMode, value: &Bits) {
-        if logic_mode == LogicMode::FourValue {
-            todo!()
+        match (value.as_data_ref(), logic_mode) {
+            (BitsDataRef::InlineTv(v), LogicMode::TwoValue) => _ = self.set_tv_u64(dst, v),
+            (BitsDataRef::InlineTv(v), LogicMode::FourValue) => {
+                _ = self.set_fv_u64(dst, 1u64.unbounded_shl(dst.size.get()).wrapping_sub(1), v)
+            }
+            (BitsDataRef::InlineFv(..), LogicMode::TwoValue) => unreachable!(),
+            (BitsDataRef::InlineFv(spc, val), LogicMode::FourValue) => {
+                _ = self.set_fv_u64(dst, spc as u64, val as u64);
+            }
+            (BitsDataRef::SeparateTv(items), LogicMode::TwoValue)
+            | (BitsDataRef::SeparateFv(items), LogicMode::FourValue) => {
+                self.get_mut_u64_slice(dst.offset, items.len())
+                    .copy_from_slice(items);
+            }
+            (BitsDataRef::SeparateTv(items), LogicMode::FourValue) => {
+                let target = self.get_mut_u64_slice(dst.offset, items.len() * 2);
+                fv_set_no_special(target, dst.size);
+                target[items.len()..].copy_from_slice(items);
+            }
+            (BitsDataRef::SeparateFv(..), LogicMode::TwoValue) => unreachable!(),
         }
-
-        execution::exec_constant(self, dst.offset, value);
     }
 }
 
@@ -315,29 +345,73 @@ pub fn drive_bits(
 
         return match logic_mode {
             LogicMode::TwoValue if dst.size.get() <= 32 => {
-                let src_v = stack.get_tv_u64(src);
-                let old = stack.get_tv_u64(dst);
-
-                let mask = (1u64 << src.size.get()) - 1;
-                let mask = mask << partial;
-                let new = (src_v << partial) | (old & !mask);
-                stack.set_tv_u64(dst, new);
-                old != new
+                let (dst_s, src_s) = stack.get_disjoint_u8_dst_src(dst, src);
+                tv_s_set(dst_s, src_s, dst.size, partial, src.size)
             }
             LogicMode::TwoValue => {
                 let mut src_s = [0u64];
                 let (dst_s, src_s) = if src.size.get() <= 32 {
                     src_s[0] = stack.get_tv_u64(src);
-                    (stack.get_mut_u64_slice(dst.offset, dst.size.get().div_ceil(64) as usize), &src_s[..])
+                    (
+                        stack.get_mut_u64_slice(dst.offset, dst.size.get().div_ceil(64) as usize),
+                        &src_s[..],
+                    )
                 } else {
                     let dst_nwords = dst.size.get().div_ceil(64) as usize;
                     let src_nwords = src.size.get().div_ceil(64) as usize;
-                    stack.get_disjoint_u64_dst_src((dst.offset, dst_nwords), (src.offset, src_nwords))
+                    stack.get_disjoint_u64_dst_src(
+                        (dst.offset, dst_nwords),
+                        (src.offset, src_nwords),
+                    )
                 };
 
                 tv_l_set(dst_s, src_s, dst.size, partial, src.size)
             }
-            _ => todo!(),
+            LogicMode::FourValue if dst.size.get() <= 16 => {
+                let (src_spc, src_val) = stack.get_fv_u64(src);
+                let (old_spc, old_val) = stack.get_fv_u64(dst);
+
+                let mask = (1u64 << src.size.get()) - 1;
+                let mask = mask << partial;
+                let new_spc = (src_spc << partial) | (old_spc & !mask);
+                let new_val = (src_val << partial) | (old_val & !mask);
+                stack.set_fv_u64(dst, new_spc, new_val);
+                old_spc != new_spc || old_val != new_val
+            }
+            _ => {
+                let mut src_s = [0u64, 0u64];
+                let dst_nwords = dst.size.get().div_ceil(64) as usize;
+                let (dst_s, src_s) = if src.size.get() <= 16 {
+                    (src_s[0], src_s[1]) = stack.get_fv_u64(src);
+                    (
+                        stack.get_mut_u64_slice(dst.offset, 2 * dst_nwords),
+                        &src_s[..],
+                    )
+                } else {
+                    let src_nwords = src.size.get().div_ceil(64) as usize;
+                    stack.get_disjoint_u64_dst_src(
+                        (dst.offset, 2 * dst_nwords),
+                        (src.offset, 2 * src_nwords),
+                    )
+                };
+
+                let mut updated = false;
+                updated |= tv_l_set(
+                    &mut dst_s[..dst_nwords],
+                    &src_s[..src_s.len() / 2],
+                    dst.size,
+                    partial,
+                    src.size,
+                );
+                updated |= tv_l_set(
+                    &mut dst_s[dst_nwords..],
+                    &src_s[src_s.len() / 2..],
+                    dst.size,
+                    partial,
+                    src.size,
+                );
+                updated
+            }
         };
     }
 
@@ -663,7 +737,7 @@ impl Event {
                             )
                             .unwrap();
                         }
-                        O::Assert(f) => {
+                        O::AssertTv(f) => {
                             let condition = stack.get_tv_u64(args[0].0.to_ref(SCALAR_VSIZE)) != 0;
                             if !condition {
                                 f.write_to(
@@ -671,6 +745,19 @@ impl Event {
                                     args[1..].iter().map(|(o, s)| {
                                         Bits::load_from_slice(stack.get(o.to_ref(*s)), *s)
                                     }),
+                                )
+                                .unwrap();
+                                return EvalOutcome::Error;
+                            }
+                        }
+                        O::AssertFv(f) => {
+                            let condition = stack.get_fv_item(args[0].0) == FvLogicValue::L1;
+                            if !condition {
+                                f.write_to(
+                                    &mut ctx.stdout,
+                                    args[1..]
+                                        .iter()
+                                        .map(|(o, s)| stack.load_fv_bits(o.to_ref(*s))),
                                 )
                                 .unwrap();
                                 return EvalOutcome::Error;

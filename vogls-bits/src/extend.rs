@@ -1,5 +1,5 @@
 use crate::VectorSize;
-use crate::arithmetic::{fv_pack_u64, fv_separate_packed_u64};
+use crate::arithmetic::{fv_pack_u64, fv_unpack_u64};
 use crate::load::load_partial_u64;
 use crate::store::store_partial_u64;
 
@@ -65,13 +65,13 @@ pub fn tv_s_sign_extend(dst: &mut [u8], src: &[u8], dst_size: VectorSize, src_si
 }
 pub fn fv_s_zero_extend(dst: &mut [u8], src: &[u8], dst_size: VectorSize, src_size: VectorSize) {
     let src = load_partial_u64(src, VectorSize::new(2 * src_size.get()).unwrap());
-    let (spc, val) = fv_separate_packed_u64(src, src_size);
+    let (spc, val) = fv_unpack_u64(src, src_size);
     let result = fv_pack_u64(spc, val, dst_size);
     store_partial_u64(dst, result, VectorSize::new(2 * dst_size.get()).unwrap());
 }
 pub fn fv_s_sign_extend(dst: &mut [u8], src: &[u8], dst_size: VectorSize, src_size: VectorSize) {
     let src = load_partial_u64(src, VectorSize::new(2 * src_size.get()).unwrap());
-    let (spc, val) = fv_separate_packed_u64(src, src_size);
+    let (spc, val) = fv_unpack_u64(src, src_size);
     let s = 64 - src_size.get();
     let spc = (spc << s) as i64 >> s;
     let val = (val << s) as i64 >> s;

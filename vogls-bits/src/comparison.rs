@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 
 use crate::VectorSize;
-use crate::arithmetic::{FvLogicValue, fv_contains_special, fv_separate_packed_u64};
+use crate::arithmetic::{FvLogicValue, fv_contains_special, fv_unpack_u64};
 use crate::load::load_partial_u64;
 use crate::select::tv_gtu64_select_bit;
 
@@ -58,8 +58,8 @@ pub fn fv_s_unsigned_leq(lhs: &[u8], rhs: &[u8], size: VectorSize) -> FvLogicVal
     let lhs = load_partial_u64(lhs, VectorSize::new(2 * size.get()).unwrap());
     let rhs = load_partial_u64(rhs, VectorSize::new(2 * size.get()).unwrap());
 
-    let (lspc, lval) = fv_separate_packed_u64(lhs, size);
-    let (rspc, rval) = fv_separate_packed_u64(rhs, size);
+    let (lspc, lval) = fv_unpack_u64(lhs, size);
+    let (rspc, rval) = fv_unpack_u64(rhs, size);
 
     let mask = (1u64 << size.get()) - 1;
     if lspc != mask || rspc != mask {

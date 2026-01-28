@@ -1,7 +1,7 @@
 use vogls_bits::arithmetic::{
     fv_gtu32_bitwise_inv, fv_l_reduce_and, fv_l_reduce_or, fv_l_reduce_xor, fv_l_select_bit,
     fv_leu32_bitwise_inv, fv_pack_u64, fv_s_reduce_and, fv_s_reduce_or, fv_s_reduce_xor,
-    fv_s_select_bit, fv_separate_packed_u64,
+    fv_s_select_bit, fv_unpack_u64,
 };
 use vogls_bits::concat::{fv_l_concat, fv_s_concat};
 use vogls_bits::extend::{fv_l_sign_extend, fv_l_zero_extend, fv_s_sign_extend, fv_s_zero_extend};
@@ -124,7 +124,7 @@ pub(crate) fn exec_fv_resize(
         }
         O::ZeroExtend | O::SignExtend => {
             let mut psrc = [0u64; 2];
-            (psrc[0], psrc[1]) = fv_separate_packed_u64(
+            (psrc[0], psrc[1]) = fv_unpack_u64(
                 load_partial_u64(
                     &stack[src..][..(2 * src_size.get()).div_ceil(8) as usize],
                     src_size,
@@ -351,13 +351,13 @@ pub(crate) fn exec_fv_concat(
         let mut rhs_s = [0u64; 2];
         let d = bytemuck::cast_slice_mut::<u8, u64>(d);
         let l = if lhs_size.get() <= 32 {
-            (lhs_s[0], lhs_s[1]) = fv_separate_packed_u64(load_partial_u64(l, lhs_size), lhs_size);
+            (lhs_s[0], lhs_s[1]) = fv_unpack_u64(load_partial_u64(l, lhs_size), lhs_size);
             &lhs_s
         } else {
             bytemuck::cast_slice::<u8, u64>(l)
         };
         let r = if rhs_size.get() <= 32 {
-            (rhs_s[0], rhs_s[1]) = fv_separate_packed_u64(load_partial_u64(r, rhs_size), rhs_size);
+            (rhs_s[0], rhs_s[1]) = fv_unpack_u64(load_partial_u64(r, rhs_size), rhs_size);
             &rhs_s
         } else {
             bytemuck::cast_slice::<u8, u64>(r)

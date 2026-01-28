@@ -42,6 +42,11 @@ impl FvLogicValue {
         }
     }
 
+    #[inline(always)]
+    pub const fn from_spc_and_val(spc: bool, val: bool) -> Self {
+        Self::from_repr(((spc as u8) << 1) | (val as u8))
+    }
+
     pub const fn from_repr(repr: u8) -> Self {
         match repr & 0b11 {
             0b01 => Self::Z,
@@ -115,8 +120,8 @@ pub fn fv_bin_bitwise_op(
 ) {
     let x = load_partial_u64(lhs, size);
     let y = load_partial_u64(rhs, size);
-    let (xspc, xvalue) = fv_separate_packed_u64(x, size);
-    let (yspc, yvalue) = fv_separate_packed_u64(y, size);
+    let (xspc, xvalue) = fv_unpack_u64(x, size);
+    let (yspc, yvalue) = fv_unpack_u64(y, size);
     let (spc, value) = op(xspc, xvalue, yspc, yvalue);
     let result = fv_pack_u64(spc, value, size);
     store_partial_u64(dst, result, size);
@@ -129,8 +134,8 @@ pub fn fv_bin_mut_bitwise_op(
 ) {
     let x = load_partial_u64(dst, size);
     let y = load_partial_u64(rhs, size);
-    let (xspc, xvalue) = fv_separate_packed_u64(x, size);
-    let (yspc, yvalue) = fv_separate_packed_u64(y, size);
+    let (xspc, xvalue) = fv_unpack_u64(x, size);
+    let (yspc, yvalue) = fv_unpack_u64(y, size);
     let (spc, value) = op(xspc, xvalue, yspc, yvalue);
     let result = fv_pack_u64(spc, value, size);
     store_partial_u64(dst, result, size);
@@ -216,7 +221,7 @@ pub fn fv_s_reduce_bitwise_op(
 ) -> FvLogicValue {
     assert!(size.get() <= 32);
     let x = load_partial_u64(src, size);
-    let (spc, value) = fv_separate_packed_u64(x, size);
+    let (spc, value) = fv_unpack_u64(x, size);
     op(spc, value, size)
 }
 
@@ -416,10 +421,9 @@ pub fn fv_contains_special(src: &[u64], size: VectorSize) -> bool {
     src[nwords - 1] & last_mask != last_mask
 }
 
-pub fn fv_separate_packed_u64(v: u64, size: VectorSize) -> (u64, u64) {
+pub fn fv_unpack_u64(v: u64, size: VectorSize) -> (u64, u64) {
     debug_assert!(size.get() <= 32);
-    let mask = (1u64 << size.get()) - 1;
-    ((v & !mask) << (32 - size.get()), v & mask)
+    (v >> size.get(), v & ((1u64 << size.get()) - 1))
 }
 pub fn fv_pack_u64(spc: u64, value: u64, size: VectorSize) -> u64 {
     debug_assert!(size.get() <= 32);
@@ -429,7 +433,7 @@ pub fn fv_pack_u64(spc: u64, value: u64, size: VectorSize) -> u64 {
 pub fn fv_leu32_bitwise_inv(dst: &mut [u8], src: &[u8], size: VectorSize) {
     let dsize = VectorSize::new(size.get() * 2).unwrap();
     let src = load_partial_u64(&src, dsize);
-    let (spc, value) = fv_separate_packed_u64(src, size);
+    let (spc, value) = fv_unpack_u64(src, size);
     let (spc, value) = fv_bitwise_inv_elem(spc, value);
     let result = fv_pack_u64(spc, value, size);
     store_partial_u64(dst, result, dsize);
