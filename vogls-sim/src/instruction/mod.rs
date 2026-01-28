@@ -18,6 +18,12 @@ pub struct StackRef {
     pub offset: StackOffset,
     pub size: VectorSize,
 }
+impl StackRef {
+    pub fn to_fv_size(mut self) -> StackRef {
+        self.size = self.size.checked_mul(VectorSize::new(2).unwrap()).unwrap();
+        self
+    }
+}
 
 impl StackOffset {
     pub fn to_ref(self, size: VectorSize) -> StackRef {
@@ -74,24 +80,12 @@ pub enum VmInstruction {
     TvSelectBit(StackOffset, StackRef, StackOffset),
     TvConcat(StackOffset, StackRef, StackRef),
 
-    FvUnary(StackOffset, UnaryOp, VectorSize, StackOffset),
-    FvResize(StackOffset, ResizeOp, VectorSize, VectorSize, StackOffset),
-    FvBinaryArithmetic(
-        StackOffset,
-        BinaryArithmeticOp,
-        VectorSize,
-        StackOffset,
-        StackOffset,
-    ),
-    FvBinaryComparison(
-        StackOffset,
-        BinaryComparisonOp,
-        VectorSize,
-        StackOffset,
-        StackOffset,
-    ),
+    FvUnary(StackOffset, UnaryOp, StackRef),
+    FvResize(StackRef, ResizeOp, StackRef),
+    FvBinaryArithmetic(StackRef, BinaryArithmeticOp, StackOffset, StackOffset),
+    FvBinaryComparison(StackOffset, BinaryComparisonOp, StackRef, StackOffset),
     FvShift(StackOffset, ShiftOp, VectorSize, StackOffset, StackOffset),
-    FvSelectBit(StackOffset, VectorSize, StackOffset, StackOffset),
+    FvSelectBit(StackOffset, StackRef, StackOffset),
     FvConcat(
         StackOffset,
         VectorSize,

@@ -123,15 +123,15 @@ pub enum BitsDataRefMut<'a> {
     Separate(&'a mut [u64]),
 }
 
-pub fn get_disjoint_dst_s1_s2<'a>(
-    s: &'a mut [u8],
+pub fn get_disjoint_dst_s1_s2<'a, T>(
+    s: &'a mut [T],
     dst_off: usize,
     dst_size: usize,
     s1_off: usize,
     s1_size: usize,
     s2_off: usize,
     s2_size: usize,
-) -> (&'a mut [u8], &'a [u8], &'a [u8]) {
+) -> (&'a mut [T], &'a [T], &'a [T]) {
     assert!(dst_off.strict_add(dst_size) <= s.len());
     assert!(
         (dst_off + dst_size <= s1_off || dst_off >= s1_off + s1_size)
@@ -144,13 +144,13 @@ pub fn get_disjoint_dst_s1_s2<'a>(
     (dst, s1, s2)
 }
 
-pub fn get_disjoint_dst_src<'a>(
-    s: &'a mut [u8],
+pub fn get_disjoint_dst_src<'a, T>(
+    s: &'a mut [T],
     dst_off: usize,
     dst_size: usize,
     src_off: usize,
     src_size: usize,
-) -> (&'a mut [u8], &'a [u8]) {
+) -> (&'a mut [T], &'a [T]) {
     assert!(dst_off.strict_add(dst_size) <= s.len());
     assert!(dst_off + dst_size <= src_off || dst_off >= src_off + src_size);
     // SAFETY: Asserted before.

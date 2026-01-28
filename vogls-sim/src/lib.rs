@@ -73,21 +73,25 @@ impl Context {
     }
 }
 
-pub struct Stack(Box<[u8]>);
+pub struct Stack(Box<[u64]>);
 
 impl Stack {
     fn get(&self, at: StackRef) -> &[u8] {
-        &self.0[at.offset.0..][..at.size.get().div_ceil(8) as usize]
+        &bytemuck::cast_slice::<u64, u8>(&self.0)[at.offset.0..]
+            [..at.size.get().div_ceil(8) as usize]
     }
     fn get_mut(&mut self, at: StackRef) -> &mut [u8] {
-        &mut self.0[at.offset.0..][..at.size.get().div_ceil(8) as usize]
+        &mut bytemuck::cast_slice_mut::<u64, u8>(&mut self.0)[at.offset.0..]
+            [..at.size.get().div_ceil(8) as usize]
     }
 
     fn get_u64_slice(&self, at: StackOffset, nwords: usize) -> &[u64] {
-        bytemuck::cast_slice(&self.0[at.0..][..nwords * 8])
+        debug_assert_eq!(at.0 % 8, 0);
+        &self.0[at.0 / 8..][..nwords]
     }
     fn get_mut_u64_slice(&mut self, at: StackOffset, nwords: usize) -> &mut [u64] {
-        bytemuck::cast_slice_mut(&mut self.0[at.0..][..nwords * 8])
+        debug_assert_eq!(at.0 % 8, 0);
+        &mut self.0[at.0 / 8..][..nwords]
     }
 
     fn get_u64(&self, at: StackOffset) -> u64 {
@@ -166,8 +170,9 @@ impl Stack {
         dst: (StackOffset, usize),
         src: (StackOffset, usize),
     ) -> (&mut [u64], &[u64]) {
-        let (dst, src) = get_disjoint_dst_src(&mut self.0, dst.0.0, dst.1 * 8, src.0.0, src.1 * 8);
-        (bytemuck::cast_slice_mut(dst), bytemuck::cast_slice(src))
+        debug_assert_eq!(dst.0.0 % 8, 0);
+        debug_assert_eq!(src.0.0 % 8, 0);
+        get_disjoint_dst_src(&mut self.0, dst.0.0 / 8, dst.1, src.0.0 / 8, src.1)
     }
 
     fn get_disjoint_u64_dst_s1_s2(
@@ -176,19 +181,17 @@ impl Stack {
         src1: (StackOffset, usize),
         src2: (StackOffset, usize),
     ) -> (&mut [u64], &[u64], &[u64]) {
-        let (dst, src1, src2) = get_disjoint_dst_s1_s2(
+        debug_assert_eq!(dst.0.0 % 8, 0);
+        debug_assert_eq!(src1.0.0 % 8, 0);
+        debug_assert_eq!(src2.0.0 % 8, 0);
+        get_disjoint_dst_s1_s2(
             &mut self.0,
-            dst.0.0,
-            dst.1 * 8,
-            src1.0.0,
-            src1.1 * 8,
-            src2.0.0,
-            src2.1 * 8,
-        );
-        (
-            bytemuck::cast_slice_mut(dst),
-            bytemuck::cast_slice(src1),
-            bytemuck::cast_slice(src2),
+            dst.0.0 / 8,
+            dst.1,
+            src1.0.0 / 8,
+            src1.1,
+            src2.0.0 / 8,
+            src2.1,
         )
     }
 
@@ -196,7 +199,7 @@ impl Stack {
         let dst_bytes = dst.size.get().div_ceil(8) as usize;
         let src_bytes = src.size.get().div_ceil(8) as usize;
         get_disjoint_dst_src(
-            &mut self.0,
+            bytemuck::cast_slice_mut(&mut self.0),
             dst.offset.0,
             dst_bytes,
             src.offset.0,
@@ -211,7 +214,7 @@ impl Stack {
         src2: StackRef,
     ) -> (&mut [u8], &[u8], &[u8]) {
         get_disjoint_dst_s1_s2(
-            &mut self.0,
+            bytemuck::cast_slice_mut(&mut self.0),
             dst.offset.0,
             dst.size.get().div_ceil(8) as usize,
             src1.offset.0,
@@ -261,6 +264,11 @@ impl Stack {
             }
             (BitsDataRef::SeparateFv(..), LogicMode::TwoValue) => unreachable!(),
         }
+    }
+
+    fn set_fv_scalar(&mut self, at: StackOffset, value: FvLogicValue) {
+        let (spc, val) = ((value as u64) >> 1, (value as u64) & 1);
+        self.set_fv_u64(at.to_ref(SCALAR_VSIZE), spc, val);
     }
 }
 
@@ -666,31 +674,27 @@ impl Event {
                     execution::tv::exec_tv_concat(stack, *dst, *lhs, *rhs)
                 }
 
-                I::FvUnary(dst, op, size, src) => {
-                    execution::fv::exec_fv_unary(&mut stack.0, dst.0, *op, *size, src.0)
+                I::FvUnary(dst, op, src) => execution::fv::exec_fv_unary(stack, *dst, *op, *src),
+                I::FvResize(dst, op, src) => execution::fv::exec_fv_resize(stack, *dst, *op, *src),
+                I::FvBinaryArithmetic(dst, op, lhs, rhs) => {
+                    execution::fv::exec_fv_bin_arith(stack, *dst, *op, *lhs, *rhs)
                 }
-                I::FvResize(dst, op, dst_size, src_size, src) => execution::fv::exec_fv_resize(
-                    &mut stack.0,
+                I::FvBinaryComparison(dst, op, lhs, rhs) => {
+                    execution::fv::exec_fv_bin_cmp(stack, *dst, *op, *lhs, *rhs)
+                }
+                I::FvShift(dst, op, size, src, offset) => execution::fv::exec_fv_shift(
+                    bytemuck::cast_slice_mut(&mut stack.0),
                     dst.0,
-                    *dst_size,
                     *op,
+                    *size,
                     src.0,
-                    *src_size,
+                    offset.0,
                 ),
-                I::FvBinaryArithmetic(dst, op, size, lhs, rhs) => {
-                    execution::fv::exec_fv_bin_arith(&mut stack.0, dst.0, *op, *size, lhs.0, rhs.0)
-                }
-                I::FvBinaryComparison(dst, op, size, lhs, rhs) => {
-                    execution::fv::exec_fv_bin_cmp(&mut stack.0, dst.0, *op, *size, lhs.0, rhs.0)
-                }
-                I::FvShift(dst, op, size, src, offset) => {
-                    execution::fv::exec_fv_shift(&mut stack.0, dst.0, *op, *size, src.0, offset.0)
-                }
-                I::FvSelectBit(dst, size, src, idx) => {
-                    execution::fv::exec_fv_select_bit(&mut stack.0, dst.0, *size, src.0, idx.0)
+                I::FvSelectBit(dst, src, idx) => {
+                    execution::fv::exec_fv_select_bit(stack, *dst, *src, *idx)
                 }
                 I::FvConcat(dst, lhs_size, lhs, rhs_size, rhs) => execution::fv::exec_fv_concat(
-                    &mut stack.0,
+                    bytemuck::cast_slice_mut(&mut stack.0),
                     dst.0,
                     lhs.0,
                     *lhs_size,

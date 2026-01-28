@@ -57,23 +57,45 @@ impl fmt::Display for VmInstruction {
                 write!(f, "{dst} = tv.concat {}, {}", src1.offset, src2.offset)
             }
 
-            Self::FvUnary(dst, op, dst_size, src) => {
-                write!(f, "{dst} = fv.{}[{dst_size}] {src}", op.into_mnemonic())
+            Self::FvUnary(dst, op, src) => {
+                write!(
+                    f,
+                    "{dst} = fv.{} {src}",
+                    op.into_mnemonic(),
+                    src = src.offset
+                )
             }
-            Self::FvResize(dst, op, _, _, src) => {
-                write!(f, "{dst} = fv.{} {src}", op.into_mnemonic())
+            Self::FvResize(dst, op, src) => {
+                write!(
+                    f,
+                    "{} = fv.{}[{}] {}",
+                    dst.offset,
+                    op.into_mnemonic(),
+                    dst.size,
+                    src.offset
+                )
             }
-            Self::FvBinaryArithmetic(dst, op, _, src1, src2) => {
-                write!(f, "{dst} = fv.{} {src1}, {src2}", op.into_mnemonic())
+            Self::FvBinaryArithmetic(dst, op, src1, src2) => {
+                write!(
+                    f,
+                    "{dst} = fv.{} {src1}, {src2}",
+                    op.into_mnemonic(),
+                    dst = dst.offset
+                )
             }
-            Self::FvBinaryComparison(dst, op, _, src1, src2) => {
-                write!(f, "{dst} = fv.{} {src1}, {src2}", op.into_mnemonic())
+            Self::FvBinaryComparison(dst, op, src1, src2) => {
+                write!(
+                    f,
+                    "{dst} = fv.{} {src1}, {src2}",
+                    op.into_mnemonic(),
+                    src1 = src1.offset
+                )
             }
             Self::FvShift(dst, op, _, src1, src2) => {
                 write!(f, "{dst} = fv.{} {src1}, {src2}", op.into_mnemonic())
             }
-            Self::FvSelectBit(dst, _, src1, src2) => {
-                write!(f, "{dst} = fv.bselect {src1}, {src2}")
+            Self::FvSelectBit(dst, src1, src2) => {
+                write!(f, "{dst} = fv.bselect {}, {src2}", src1.offset)
             }
             Self::FvConcat(dst, _, src1, _, src2) => {
                 write!(f, "{dst} = fv.concat {src1}, {src2}")

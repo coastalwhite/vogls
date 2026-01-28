@@ -18,7 +18,7 @@ pub fn fv_s_truncate(dst: &mut [u8], src: &[u8], dst_size: VectorSize, src_size:
     let (spc, val) = fv_unpack_u64(src, src_size);
     let dst_mask = 1u64.unbounded_shl(dst_size.get()).wrapping_sub(1);
     let result = fv_pack_u64(spc & dst_mask, val & dst_mask, dst_size);
-    store_partial_u64(dst, result, dst_size);
+    store_partial_u64(dst, result, VectorSize::new(2 * dst_size.get()).unwrap());
 }
 
 pub fn tv_l_truncate(dst: &mut [u64], src: &[u64], dst_size: VectorSize, src_size: VectorSize) {

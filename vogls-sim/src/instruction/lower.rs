@@ -42,7 +42,7 @@ impl StackBuilder {
     }
 
     pub fn finish(self) -> Stack {
-        Stack(vec![0; self.top].into())
+        Stack(vec![0u64; self.top.div_ceil(8)].into())
     }
 }
 
@@ -209,18 +209,19 @@ pub fn lower_process_to_vm(
                     let size = gl.vars[*s].size;
                     let s = var!(*s, (var_mode[d], var_mode[s], size));
                     if var_mode[d] == LogicMode::FourValue {
-                        VI::FvUnary(var!(*d), *op, size, s)
+                        VI::FvUnary(var!(*d), *op, s.to_ref(size))
                     } else {
                         VI::TvUnary(var!(*d), *op, s.to_ref(size))
                     }
                 }
                 I::Resize(d, op, s) => {
+                    let d_size = gl.vars[*d].size;
                     let s_size = gl.vars[*s].size;
                     let s = var!(*s, (var_mode[d], var_mode[s], s_size));
                     if var_mode[d] == LogicMode::FourValue {
-                        VI::FvResize(var!(*d), *op, gl.vars[*d].size, s_size, s)
+                        VI::FvResize(var!(*d).to_ref(d_size), *op, s.to_ref(s_size))
                     } else {
-                        VI::TvResize(var!(*d).to_ref(gl.vars[*d].size), *op, s.to_ref(s_size))
+                        VI::TvResize(var!(*d).to_ref(d_size), *op, s.to_ref(s_size))
                     }
                 }
                 I::Binary(d, op, s1, s2) => {
@@ -239,19 +240,28 @@ pub fn lower_process_to_vm(
                     use ShiftOp as S;
                     if d_mode == LogicMode::FourValue {
                         match *op {
-                            O::And => VI::FvBinaryArithmetic(d, BA::And, d_size, s1, s2),
-                            O::Or => VI::FvBinaryArithmetic(d, BA::Or, d_size, s1, s2),
-                            O::Xor => VI::FvBinaryArithmetic(d, BA::Xor, d_size, s1, s2),
-                            O::Add => VI::FvBinaryArithmetic(d, BA::Add, d_size, s1, s2),
-                            O::Sub => VI::FvBinaryArithmetic(d, BA::Sub, d_size, s1, s2),
-                            O::Multiply => VI::FvBinaryArithmetic(d, BA::Multiply, d_size, s1, s2),
-                            O::Divide => VI::FvBinaryArithmetic(d, BA::Divide, d_size, s1, s2),
-                            O::Modulus => VI::FvBinaryArithmetic(d, BA::Modulus, d_size, s1, s2),
-
-                            O::UnsignedLessEqual => {
-                                VI::FvBinaryComparison(d, BC::UnsignedLessEqual, s1_size, s1, s2)
+                            O::And => VI::FvBinaryArithmetic(d.to_ref(d_size), BA::And, s1, s2),
+                            O::Or => VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Or, s1, s2),
+                            O::Xor => VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Xor, s1, s2),
+                            O::Add => VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Add, s1, s2),
+                            O::Sub => VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Sub, s1, s2),
+                            O::Multiply => {
+                                VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Multiply, s1, s2)
                             }
-                            O::SelectBit => VI::FvSelectBit(d, s1_size, s1, s2),
+                            O::Divide => {
+                                VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Divide, s1, s2)
+                            }
+                            O::Modulus => {
+                                VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Modulus, s1, s2)
+                            }
+
+                            O::UnsignedLessEqual => VI::FvBinaryComparison(
+                                d,
+                                BC::UnsignedLessEqual,
+                                s1.to_ref(s1_size),
+                                s2,
+                            ),
+                            O::SelectBit => VI::FvSelectBit(d, s1.to_ref(s1_size), s2),
                             O::LogicalShiftLeft => VI::FvShift(d, S::LogicalLeft, d_size, s1, s2),
                             O::LogicalShiftRight => VI::FvShift(d, S::LogicalRight, d_size, s1, s2),
                             O::ArithmeticShiftRight => {
@@ -346,7 +356,7 @@ pub fn lower_process_to_vm(
                             vogls_ir::ResizeOp::Truncate,
                             signals[signal.0 as usize],
                         ),
-                        LogicMode::FourValue => VI::TvResize(
+                        LogicMode::FourValue => VI::FvResize(
                             var!(*dst).to_ref(size),
                             vogls_ir::ResizeOp::Truncate,
                             signals[signal.0 as usize],
@@ -383,9 +393,11 @@ pub fn lower_process_to_vm(
                         vogls_ir::ResizeOp::Truncate,
                         src.to_ref(size),
                     ),
-                    (M::FourValue, M::FourValue) => {
-                        VI::FvResize(dst, vogls_ir::ResizeOp::Truncate, size, size, src)
-                    }
+                    (M::FourValue, M::FourValue) => VI::FvResize(
+                        dst.to_ref(size),
+                        vogls_ir::ResizeOp::Truncate,
+                        src.to_ref(size),
+                    ),
                     (M::TwoValue, M::FourValue) => VI::FvToTv(dst.to_ref(src_size), src),
                     (M::FourValue, M::TwoValue) => VI::TvToFv(dst.to_ref(src_size), src),
                 };

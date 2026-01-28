@@ -199,8 +199,8 @@ pub fn fv_reduce_bitwise_op(
     let mut size = size.get();
     while let Some(s) = VectorSize::new(size) {
         let r = op(src[i], src[nwords + i], s);
-        gspc |= (r as u64 >> 1) << (shift + 1);
-        gvalue |= (r as u64 & 1) << (shift + 1);
+        gspc |= (r as u64 >> 1) << shift;
+        gvalue |= (r as u64 & 1) << shift;
         if shift == 63 {
             let subresult = op(gspc, gvalue, VectorSize::new(64).unwrap());
             gspc = subresult as u64 >> 1;
