@@ -222,7 +222,7 @@ pub fn fv_s_reduce_bitwise_op(
     op: impl Fn(u64, u64, VectorSize) -> FvLogicValue,
 ) -> FvLogicValue {
     assert!(size.get() <= 32);
-    let x = load_partial_u64(src, size);
+    let x = load_partial_u64(src, VectorSize::new(size.get() * 2).unwrap());
     let (spc, value) = fv_unpack_u64(x, size);
     op(spc, value, size)
 }

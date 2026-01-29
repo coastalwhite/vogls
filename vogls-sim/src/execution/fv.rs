@@ -43,7 +43,7 @@ pub(crate) fn exec_fv_unary(stack: &mut Stack, dst: StackOffset, op: UnaryOp, sr
             stack.set_fv_scalar(dst, result);
         }
         O::ReduceOr | O::ReduceAnd | O::ReduceXor => {
-            let src_s = stack.get(src);
+            let src_s = stack.get(src.to_fv_size());
             let f = match op {
                 O::Neg => unreachable!(),
                 O::ReduceOr => fv_s_reduce_or,
