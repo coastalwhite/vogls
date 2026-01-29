@@ -238,7 +238,7 @@ impl Stack {
             Bits::from_boxed_slice(
                 vogls_ir::Mode::FourValue,
                 at.size,
-                self.get_u64_slice(at.offset, at.size.get().div_ceil(64) as usize)
+                self.get_u64_slice(at.offset, 2 * at.size.get().div_ceil(64) as usize)
                     .into(),
             )
         }

@@ -279,12 +279,12 @@ pub(crate) fn exec_fv_concat(stack: &mut Stack, dst: StackOffset, lhs: StackRef,
     let dst = dst.to_ref(VectorSize::new(lhs.size.get() + rhs.size.get()).unwrap());
     if dst.size.get() > 16 {
         let l_nbytes = if lhs.size.get() <= 16 {
-            lhs.size.get().div_ceil(8)
+            (2 * lhs.size.get()).div_ceil(8)
         } else {
             2 * lhs.size.get().div_ceil(64) * 8
         };
         let r_nbytes = if rhs.size.get() <= 16 {
-            rhs.size.get().div_ceil(8)
+            (2 * rhs.size.get()).div_ceil(8)
         } else {
             2 * rhs.size.get().div_ceil(64) * 8
         };

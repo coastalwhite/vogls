@@ -44,8 +44,9 @@ pub fn fv_l_unsigned_leq(lhs: &[u64], rhs: &[u64], size: VectorSize) -> FvLogicV
         return FvLogicValue::X;
     }
 
-    for i in (0..size.get().div_ceil(8) as usize).rev() {
-        let value = match lhs[i].cmp(&rhs[i]) {
+    let nwords = lhs.len() / 2;
+    for i in (0..nwords).rev() {
+        let value = match lhs[nwords + i].cmp(&rhs[nwords + i]) {
             Ordering::Less => FvLogicValue::L1,
             Ordering::Greater => FvLogicValue::L0,
             Ordering::Equal => continue,
@@ -55,8 +56,9 @@ pub fn fv_l_unsigned_leq(lhs: &[u64], rhs: &[u64], size: VectorSize) -> FvLogicV
     FvLogicValue::L0
 }
 pub fn fv_s_unsigned_leq(lhs: &[u8], rhs: &[u8], size: VectorSize) -> FvLogicValue {
-    let lhs = load_partial_u64(lhs, VectorSize::new(2 * size.get()).unwrap());
-    let rhs = load_partial_u64(rhs, VectorSize::new(2 * size.get()).unwrap());
+    let dsize = VectorSize::new(2 * size.get()).unwrap();
+    let lhs = load_partial_u64(lhs, dsize);
+    let rhs = load_partial_u64(rhs, dsize);
 
     let (lspc, lval) = fv_unpack_u64(lhs, size);
     let (rspc, rval) = fv_unpack_u64(rhs, size);

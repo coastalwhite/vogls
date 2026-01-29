@@ -54,7 +54,7 @@ pub fn fv_multiplication(dst: &mut [u64], lhs: &[u64], rhs: &[u64], size: Vector
         dst.len() > 0
             && dst.len() == lhs.len()
             && dst.len() == rhs.len()
-            && dst.len() == size.get().div_ceil(32) as usize
+            && dst.len() == 2 * size.get().div_ceil(64) as usize
     );
 
     if fv_contains_special(lhs, size) || fv_contains_special(rhs, size) {

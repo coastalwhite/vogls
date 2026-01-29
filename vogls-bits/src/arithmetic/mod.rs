@@ -261,8 +261,9 @@ pub fn fv_l_select_bit(src: &[u64], idx: u32, size: VectorSize) -> FvLogicValue 
         return FvLogicValue::X;
     }
 
+    let nwords = src.len() / 2;
     let spc = (src[(idx / 64) as usize] >> (idx % 64)) & 1;
-    let val = (src[src.len() + (idx / 64) as usize] >> (idx % 64)) & 1;
+    let val = (src[nwords + (idx / 64) as usize] >> (idx % 64)) & 1;
     FvLogicValue::from_repr(((spc << 1) & val) as u8)
 }
 
