@@ -204,6 +204,17 @@ pub(crate) fn exec_fv_bin_cmp(
             let rhs_s = stack.get_u64_slice(rhs, nwords);
             vogls_bits::comparison::fv_l_unsigned_leq(lhs_s, rhs_s, lhs.size)
         }
+        O::CaseEquality if lhs.size.get() <= 16 => {
+            let lhs_s = stack.get(lhs.to_fv_size());
+            let rhs_s = stack.get(rhs.to_ref(lhs.size).to_fv_size());
+            FvLogicValue::from_bool(lhs_s == rhs_s)
+        }
+        O::CaseEquality => {
+            let nwords = 2 * lhs.size.get().div_ceil(64) as usize;
+            let lhs_s = stack.get_u64_slice(lhs.offset, nwords);
+            let rhs_s = stack.get_u64_slice(rhs, nwords);
+            FvLogicValue::from_bool(lhs_s == rhs_s)
+        }
     };
     stack.set_fv_scalar(dst, result);
 }

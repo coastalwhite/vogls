@@ -52,6 +52,7 @@ pub enum BinaryArithmeticOp {
 #[derive(Debug, Clone, Copy)]
 pub enum BinaryComparisonOp {
     UnsignedLessEqual,
+    CaseEquality,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -277,6 +278,7 @@ impl BinaryComparisonOp {
     pub fn into_mnemonic(self) -> &'static str {
         match self {
             Self::UnsignedLessEqual => "leq",
+            Self::CaseEquality => "ceq",
         }
     }
 }

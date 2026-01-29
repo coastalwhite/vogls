@@ -127,7 +127,7 @@ pub fn lower<'a>(
                 let mut acc = builder.constant(gl, Bits::from(false));
                 for (before, signal) in before.into_iter().zip(signals) {
                     let after = builder.probe(gl, signal);
-                    let cond = builder.not_equals(gl, before, after);
+                    let cond = builder.not_case_equals(gl, before, after);
                     acc = builder.or(gl, acc, cond);
                 }
 
@@ -195,7 +195,7 @@ pub fn lower<'a>(
                             let t = builder.binary_neg(gl, after);
                             builder.and(gl, before, t)
                         }
-                        C::None => builder.not_equals(gl, before, after),
+                        C::None => builder.not_case_equals(gl, before, after),
                     };
                     let cond = builder.reduce_or(gl, cond);
                     acc = builder.or(gl, acc, cond);

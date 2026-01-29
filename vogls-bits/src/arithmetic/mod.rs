@@ -265,7 +265,7 @@ pub fn fv_l_select_bit(src: &[u64], idx: u32, size: VectorSize) -> FvLogicValue 
     let nwords = src.len() / 2;
     let spc = (src[(idx / 64) as usize] >> (idx % 64)) & 1;
     let val = (src[nwords + (idx / 64) as usize] >> (idx % 64)) & 1;
-    FvLogicValue::from_repr(((spc << 1) & val) as u8)
+    FvLogicValue::from_repr(((spc as u8) << 1) | (val as u8))
 }
 
 /// Does the `value` have a `Unknown` or `High Impedance` value?
@@ -455,7 +455,9 @@ pub fn fv_set_no_special(slice: &mut [u64], size: VectorSize) {
     assert!(slice.len() > 0 && slice.len() == 2 * (size.get().div_ceil(64) as usize));
     let nwords = slice.len() / 2;
     slice[..nwords].fill(u64::MAX);
-    slice[nwords - 1] &= (1u64 << size.get() % 64) - 1;
+    if size.get() % 64 != 0 {
+        slice[nwords - 1] &= (1u64 << size.get() % 64) - 1;
+    }
 }
 
 #[inline(always)]

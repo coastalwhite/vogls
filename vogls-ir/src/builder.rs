@@ -470,6 +470,26 @@ impl BasicBlockBuilder {
         let no_equals = self.reduce_or(gl, xor);
         no_equals
     }
+    pub fn case_equals(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+    ) -> VariableKey {
+        assert_eq!(gl.vars[lhs].size, gl.vars[rhs].size);
+        let dst = self.next_tmp_var(gl, SCALAR_VSIZE);
+        self.bin_op(gl, lhs, rhs, BinaryOp::CaseEquality, dst);
+        dst
+    }
+    pub fn not_case_equals(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+    ) -> VariableKey {
+        let case_equals = self.case_equals(gl, lhs, rhs);
+        self.logical_neg(gl, case_equals)
+    }
 
     pub fn reduce_xor(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
         let Variable { size } = gl.vars[src];

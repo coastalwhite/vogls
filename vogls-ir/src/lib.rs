@@ -257,6 +257,8 @@ pub enum BinaryOp {
     LogicalShiftRight,
     ArithmeticShiftRight,
     Concat,
+
+    CaseEquality,
 }
 
 #[derive(Debug, Clone)]
@@ -453,6 +455,7 @@ impl BinaryOp {
             O::Modulus => Bits::divide(lhs, rhs).1,
 
             O::UnsignedLessEqual => Bits::from(Bits::is_unsigned_leq(lhs, rhs)),
+            O::CaseEquality => Bits::from(lhs == rhs),
             O::SelectBit => Bits::from(lhs.select_bit(rhs.extract_exact_u32())),
             O::LogicalShiftLeft => lhs.logical_shift_left(rhs.extract_exact_u32()),
             O::LogicalShiftRight => lhs.logical_shift_right(rhs.extract_exact_u32()),

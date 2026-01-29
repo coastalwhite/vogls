@@ -162,6 +162,12 @@ pub(crate) fn exec_tv_bin_cmp(
     use BinaryComparisonOp as O;
     let f = match op {
         O::UnsignedLessEqual => vogls_bits::comparison::tv_unsigned_leq,
+        O::CaseEquality => {
+            fn tv_case_equality(lhs: &[u8], rhs: &[u8], _size: VectorSize) -> bool {
+                lhs == rhs
+            }
+            tv_case_equality
+        }
     };
 
     let size = lhs.size;

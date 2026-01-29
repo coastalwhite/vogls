@@ -159,6 +159,7 @@ impl BinaryOp {
             Self::Modulus => "rem",
 
             Self::UnsignedLessEqual => "ule",
+            Self::CaseEquality => "ceq",
             Self::SelectBit => "bselect",
             Self::LogicalShiftLeft => "lsl",
             Self::LogicalShiftRight => "lsr",

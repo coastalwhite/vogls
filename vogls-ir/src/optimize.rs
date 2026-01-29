@@ -305,6 +305,7 @@ pub fn propagate_constants<'a>(
                                         Bits::new_zeroed(size)
                                     }
                                     O::UnsignedLessEqual
+                                    | O::CaseEquality
                                     | O::Modulus
                                     | O::SelectBit
                                     | O::LogicalShiftLeft
