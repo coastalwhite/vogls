@@ -118,13 +118,14 @@ pub fn fv_bin_bitwise_op(
     size: VectorSize,
     op: impl Fn(u64, u64, u64, u64) -> (u64, u64),
 ) {
-    let x = load_partial_u64(lhs, size);
-    let y = load_partial_u64(rhs, size);
+    let dsize = VectorSize::new(size.get() * 2).unwrap();
+    let x = load_partial_u64(lhs, dsize);
+    let y = load_partial_u64(rhs, dsize);
     let (xspc, xvalue) = fv_unpack_u64(x, size);
     let (yspc, yvalue) = fv_unpack_u64(y, size);
     let (spc, value) = op(xspc, xvalue, yspc, yvalue);
     let result = fv_pack_u64(spc, value, size);
-    store_partial_u64(dst, result, size);
+    store_partial_u64(dst, result, dsize);
 }
 pub fn fv_bin_mut_bitwise_op(
     dst: &mut [u8],
@@ -132,13 +133,14 @@ pub fn fv_bin_mut_bitwise_op(
     size: VectorSize,
     op: impl Fn(u64, u64, u64, u64) -> (u64, u64),
 ) {
-    let x = load_partial_u64(dst, size);
-    let y = load_partial_u64(rhs, size);
+    let dsize = VectorSize::new(size.get() * 2).unwrap();
+    let x = load_partial_u64(dst, dsize);
+    let y = load_partial_u64(rhs, dsize);
     let (xspc, xvalue) = fv_unpack_u64(x, size);
     let (yspc, yvalue) = fv_unpack_u64(y, size);
     let (spc, value) = op(xspc, xvalue, yspc, yvalue);
     let result = fv_pack_u64(spc, value, size);
-    store_partial_u64(dst, result, size);
+    store_partial_u64(dst, result, dsize);
 }
 
 pub fn tv_bin_u64_bitwise_op(

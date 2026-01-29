@@ -1,5 +1,5 @@
 use vogls_ir::dyn_format_string::DynFormatString;
-use vogls_ir::{Bits, INTEGER_VSIZE, ResizeOp, SCALAR_VSIZE, Time, UnaryOp, VectorSize};
+use vogls_ir::{Bits, INTEGER_VSIZE, LogicMode, ResizeOp, SCALAR_VSIZE, Time, UnaryOp, VectorSize};
 
 mod format;
 mod lower;
@@ -115,7 +115,7 @@ pub enum VmInstruction {
     Halt,
 }
 impl VmInstruction {
-    pub fn itrace(&self, stack: &Stack) {
+    pub fn itrace(&self, stack: &Stack, signals: &[StackRef], logic_mode: LogicMode) {
         use VmInstruction as I;
         let items: &[(&'static str, bool, StackRef)] = match self {
             I::Constant(dst, src) => &[("dst", src.contains_special(), dst.to_ref(src.size()))],
@@ -194,7 +194,29 @@ impl VmInstruction {
             I::TvToFv(dst, src) => &[("dst", true, *dst), ("src", false, src.to_ref(dst.size))],
             I::FvToTv(dst, src) => &[("dst", false, *dst), ("src", true, src.to_ref(dst.size))],
             I::Intrinsic(_, _, _) => &[],
-            I::Drive(_, _, _) => &[],
+            I::Drive(dst, src, partial) => match partial {
+                None => &[
+                    (
+                        "dst",
+                        logic_mode == LogicMode::FourValue,
+                        signals[dst.0 as usize],
+                    ),
+                    ("src", logic_mode == LogicMode::FourValue, *src),
+                ],
+                Some(partial) => &[
+                    (
+                        "dst",
+                        logic_mode == LogicMode::FourValue,
+                        signals[dst.0 as usize],
+                    ),
+                    ("src", logic_mode == LogicMode::FourValue, *src),
+                    (
+                        "offset",
+                        logic_mode == LogicMode::FourValue,
+                        partial.to_32bit_ref(),
+                    ),
+                ],
+            },
             I::Wait(_) => &[],
             I::WaitRegion(_) => &[],
             I::Watch(_) => &[],

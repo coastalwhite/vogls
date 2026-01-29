@@ -70,7 +70,7 @@ impl Context {
             stderr,
             instruction_count: 0,
             event_count: 0,
-            itrace: true,
+            itrace: false,
         }
     }
 }
@@ -650,263 +650,307 @@ impl Event {
 
         let process = &processes[process_key.0 as usize];
 
-        use VmInstruction as I;
         loop {
             let instr = &process.instructions[*ip];
 
             *ip += 1;
             ctx.instruction_count += 1;
-            match instr {
-                I::Constant(dst, value) => execution::exec_constant(stack, *dst, value),
 
-                I::TvUnary(dst, op, src) => execution::tv::exec_tv_unary(stack, *dst, *op, *src),
-                I::TvResize(dst, op, src) => execution::tv::exec_tv_resize(stack, *dst, *op, *src),
-                I::TvBinaryArithmetic(dst, op, lhs, rhs) => {
-                    execution::tv::exec_tv_bin_arith(stack, *dst, *op, *lhs, *rhs)
-                }
-                I::TvBinaryComparison(dst, op, lhs, rhs) => {
-                    execution::tv::exec_tv_bin_cmp(stack, *dst, *op, *lhs, *rhs)
-                }
-                I::TvShift(dst, op, src, offset) => {
-                    execution::tv::exec_tv_shift(stack, *dst, *op, *src, *offset)
-                }
-                I::TvSelectBit(dst, src, idx) => {
-                    execution::tv::exec_tv_select_bit(stack, *dst, *src, *idx)
-                }
-                I::TvConcat(dst, lhs, rhs) => {
-                    execution::tv::exec_tv_concat(stack, *dst, *lhs, *rhs)
-                }
+            let outcome = 'instruction: {
+                use VmInstruction as I;
+                match instr {
+                    I::Constant(dst, value) => execution::exec_constant(stack, *dst, value),
 
-                I::FvUnary(dst, op, src) => execution::fv::exec_fv_unary(stack, *dst, *op, *src),
-                I::FvResize(dst, op, src) => execution::fv::exec_fv_resize(stack, *dst, *op, *src),
-                I::FvBinaryArithmetic(dst, op, lhs, rhs) => {
-                    execution::fv::exec_fv_bin_arith(stack, *dst, *op, *lhs, *rhs)
-                }
-                I::FvBinaryComparison(dst, op, lhs, rhs) => {
-                    execution::fv::exec_fv_bin_cmp(stack, *dst, *op, *lhs, *rhs)
-                }
-                I::FvShift(dst, op, src, offset) => {
-                    execution::fv::exec_fv_shift(stack, *dst, *op, *src, *offset)
-                }
-                I::FvSelectBit(dst, src, idx) => {
-                    execution::fv::exec_fv_select_bit(stack, *dst, *src, *idx)
-                }
-                I::FvConcat(dst, lhs, rhs) => {
-                    execution::fv::exec_fv_concat(stack, *dst, *lhs, *rhs)
-                }
-
-                I::TvToFv(dst, src) => {
-                    let size = dst.size;
-                    if size.get() <= 32 {
-                        let v = stack.get_tv_u64(src.to_ref(size));
-                        stack.set_fv_u64(*dst, 1u64.unbounded_shl(size.get()).wrapping_sub(1), v);
-                    } else {
-                        let nwords = size.get().div_ceil(64) as usize;
-                        let (dst, src) = stack
-                            .get_disjoint_u64_dst_src((dst.offset, nwords * 2), (*src, nwords));
-                        fv_set_no_special(dst, size);
-                        dst[nwords..].copy_from_slice(src);
+                    I::TvUnary(dst, op, src) => {
+                        execution::tv::exec_tv_unary(stack, *dst, *op, *src)
                     }
-                }
-                I::FvToTv(dst, src) => {
-                    let size = dst.size;
-                    if size.get() <= 32 {
-                        let (spc, val) = stack.get_fv_u64(src.to_ref(size));
-                        stack.set_tv_u64(*dst, spc & val);
-                    } else {
-                        let nwords = size.get().div_ceil(64) as usize;
-                        let (dst, src) = stack
-                            .get_disjoint_u64_dst_src((dst.offset, nwords), (*src, nwords * 2));
-                        for i in 0..nwords {
-                            dst[i] = src[i] & src[nwords + i];
+                    I::TvResize(dst, op, src) => {
+                        execution::tv::exec_tv_resize(stack, *dst, *op, *src)
+                    }
+                    I::TvBinaryArithmetic(dst, op, lhs, rhs) => {
+                        execution::tv::exec_tv_bin_arith(stack, *dst, *op, *lhs, *rhs)
+                    }
+                    I::TvBinaryComparison(dst, op, lhs, rhs) => {
+                        execution::tv::exec_tv_bin_cmp(stack, *dst, *op, *lhs, *rhs)
+                    }
+                    I::TvShift(dst, op, src, offset) => {
+                        execution::tv::exec_tv_shift(stack, *dst, *op, *src, *offset)
+                    }
+                    I::TvSelectBit(dst, src, idx) => {
+                        execution::tv::exec_tv_select_bit(stack, *dst, *src, *idx)
+                    }
+                    I::TvConcat(dst, lhs, rhs) => {
+                        execution::tv::exec_tv_concat(stack, *dst, *lhs, *rhs)
+                    }
+
+                    I::FvUnary(dst, op, src) => {
+                        execution::fv::exec_fv_unary(stack, *dst, *op, *src)
+                    }
+                    I::FvResize(dst, op, src) => {
+                        execution::fv::exec_fv_resize(stack, *dst, *op, *src)
+                    }
+                    I::FvBinaryArithmetic(dst, op, lhs, rhs) => {
+                        execution::fv::exec_fv_bin_arith(stack, *dst, *op, *lhs, *rhs)
+                    }
+                    I::FvBinaryComparison(dst, op, lhs, rhs) => {
+                        execution::fv::exec_fv_bin_cmp(stack, *dst, *op, *lhs, *rhs)
+                    }
+                    I::FvShift(dst, op, src, offset) => {
+                        execution::fv::exec_fv_shift(stack, *dst, *op, *src, *offset)
+                    }
+                    I::FvSelectBit(dst, src, idx) => {
+                        execution::fv::exec_fv_select_bit(stack, *dst, *src, *idx)
+                    }
+                    I::FvConcat(dst, lhs, rhs) => {
+                        execution::fv::exec_fv_concat(stack, *dst, *lhs, *rhs)
+                    }
+
+                    I::TvToFv(dst, src) => {
+                        let size = dst.size;
+                        if size.get() <= 32 {
+                            let v = stack.get_tv_u64(src.to_ref(size));
+                            stack.set_fv_u64(
+                                *dst,
+                                1u64.unbounded_shl(size.get()).wrapping_sub(1),
+                                v,
+                            );
+                        } else {
+                            let nwords = size.get().div_ceil(64) as usize;
+                            let (dst, src) = stack
+                                .get_disjoint_u64_dst_src((dst.offset, nwords * 2), (*src, nwords));
+                            fv_set_no_special(dst, size);
+                            dst[nwords..].copy_from_slice(src);
                         }
                     }
-                }
-
-                I::Intrinsic(dst, op, args) => {
-                    use VmIntrinsicOp as O;
-
-                    match op.as_ref() {
-                        O::Display(f) => {
-                            f.write_to(
-                                &mut ctx.stdout,
-                                args.iter().map(|(o, s)| stack.load_tv_bits(o.to_ref(*s))),
-                            )
-                            .unwrap();
+                    I::FvToTv(dst, src) => {
+                        let size = dst.size;
+                        if size.get() <= 32 {
+                            let (spc, val) = stack.get_fv_u64(src.to_ref(size));
+                            stack.set_tv_u64(*dst, spc & val);
+                        } else {
+                            let nwords = size.get().div_ceil(64) as usize;
+                            let (dst, src) = stack
+                                .get_disjoint_u64_dst_src((dst.offset, nwords), (*src, nwords * 2));
+                            for i in 0..nwords {
+                                dst[i] = src[i] & src[nwords + i];
+                            }
                         }
-                        O::AssertTv(f) => {
-                            let condition = stack.get_tv_u64(args[0].0.to_ref(SCALAR_VSIZE)) != 0;
-                            if !condition {
+                    }
+
+                    I::Intrinsic(dst, op, args) => {
+                        use VmIntrinsicOp as O;
+
+                        match op.as_ref() {
+                            O::Display(f) => {
                                 f.write_to(
                                     &mut ctx.stdout,
-                                    args[1..].iter().map(|(o, s)| {
-                                        Bits::load_from_slice(stack.get(o.to_ref(*s)), *s)
-                                    }),
+                                    args.iter().map(|(o, s)| stack.load_tv_bits(o.to_ref(*s))),
                                 )
                                 .unwrap();
-                                return EvalOutcome::Error;
                             }
-                        }
-                        O::AssertFv(f) => {
-                            let condition = stack.get_fv_item(args[0].0) == FvLogicValue::L1;
-                            if !condition {
-                                f.write_to(
-                                    &mut ctx.stdout,
-                                    args[1..]
-                                        .iter()
-                                        .map(|(o, s)| stack.load_fv_bits(o.to_ref(*s))),
-                                )
-                                .unwrap();
-                                return EvalOutcome::Error;
+                            O::AssertTv(f) => {
+                                let condition =
+                                    stack.get_tv_u64(args[0].0.to_ref(SCALAR_VSIZE)) != 0;
+                                if !condition {
+                                    f.write_to(
+                                        &mut ctx.stdout,
+                                        args[1..].iter().map(|(o, s)| {
+                                            Bits::load_from_slice(stack.get(o.to_ref(*s)), *s)
+                                        }),
+                                    )
+                                    .unwrap();
+                                    break 'instruction Some(EvalOutcome::Error);
+                                }
                             }
-                        }
-                        O::VcdOpenFile(path) => {
-                            if vcd.is_some() {
-                                writeln!(&mut ctx.stderr, "ERR! VCD opened a second file").unwrap();
-                                return EvalOutcome::Error;
+                            O::AssertFv(f) => {
+                                let condition = stack.get_fv_item(args[0].0) == FvLogicValue::L1;
+                                if !condition {
+                                    f.write_to(
+                                        &mut ctx.stdout,
+                                        args[1..]
+                                            .iter()
+                                            .map(|(o, s)| stack.load_fv_bits(o.to_ref(*s))),
+                                    )
+                                    .unwrap();
+                                    break 'instruction Some(EvalOutcome::Error);
+                                }
                             }
+                            O::VcdOpenFile(path) => {
+                                if vcd.is_some() {
+                                    writeln!(&mut ctx.stderr, "ERR! VCD opened a second file")
+                                        .unwrap();
+                                    break 'instruction Some(EvalOutcome::Error);
+                                }
 
-                            *vcd = Some(VcdOutput {
-                                start_ts: ctx.time,
-                                last_ts: Timestamp::MAX,
-                                paused: false,
-                                scope: VcdScope {
-                                    name: "top".to_string(),
-                                    items: Vec::new(),
-                                },
-                                tracked: HashMap::new(),
-                                updated_this_time_step: Vec::new(),
-                                writer: Box::new(std::fs::File::create(path).unwrap()),
-                            });
-                        }
-                        O::VcdAppendModule(scope) => {
-                            let Some(vcd) = vcd.as_mut() else {
-                                writeln!(
-                                    &mut ctx.stderr,
-                                    "ERR! Dumping vars without having a VCD file open"
-                                )
-                                .unwrap();
-                                return EvalOutcome::Error;
-                            };
-                            if vcd.start_ts != ctx.time {
-                                writeln!(
-                                    &mut ctx.stderr,
-                                    "ERR! Dumping vars over several simulation times"
-                                )
-                                .unwrap();
-                                return EvalOutcome::Error;
+                                *vcd = Some(VcdOutput {
+                                    start_ts: ctx.time,
+                                    last_ts: Timestamp::MAX,
+                                    paused: false,
+                                    scope: VcdScope {
+                                        name: "top".to_string(),
+                                        items: Vec::new(),
+                                    },
+                                    tracked: HashMap::new(),
+                                    updated_this_time_step: Vec::new(),
+                                    writer: Box::new(std::fs::File::create(path).unwrap()),
+                                });
                             }
+                            O::VcdAppendModule(scope) => {
+                                let Some(vcd) = vcd.as_mut() else {
+                                    writeln!(
+                                        &mut ctx.stderr,
+                                        "ERR! Dumping vars without having a VCD file open"
+                                    )
+                                    .unwrap();
+                                    break 'instruction Some(EvalOutcome::Error);
+                                };
+                                if vcd.start_ts != ctx.time {
+                                    writeln!(
+                                        &mut ctx.stderr,
+                                        "ERR! Dumping vars over several simulation times"
+                                    )
+                                    .unwrap();
+                                    break 'instruction Some(EvalOutcome::Error);
+                                }
 
-                            scope.extend_into(&mut vcd.tracked, &mut vcd.updated_this_time_step);
-                            vcd.scope = scope.clone();
-                        }
-                        O::VcdPause => _ = vcd.as_mut().map(|vcd| vcd.paused = true),
-                        O::VcdResume => _ = vcd.as_mut().map(|vcd| vcd.paused = false),
-                        O::Time => _ = stack.set_tv_u64(dst.to_ref(TIME_VSIZE), ctx.time),
-                        O::Finish => {
-                            writeln!(&mut ctx.stdout, "[FINISH]").unwrap();
-                            return EvalOutcome::Exit;
+                                scope
+                                    .extend_into(&mut vcd.tracked, &mut vcd.updated_this_time_step);
+                                vcd.scope = scope.clone();
+                            }
+                            O::VcdPause => _ = vcd.as_mut().map(|vcd| vcd.paused = true),
+                            O::VcdResume => _ = vcd.as_mut().map(|vcd| vcd.paused = false),
+                            O::Time => _ = stack.set_tv_u64(dst.to_ref(TIME_VSIZE), ctx.time),
+                            O::Finish => {
+                                writeln!(&mut ctx.stdout, "[FINISH]").unwrap();
+                                break 'instruction Some(EvalOutcome::Exit);
+                            }
                         }
                     }
-                }
-                I::Drive(sig, src, partial) => {
-                    let partial = partial.map(|offset| stack.load_exact_tv_u32(offset));
+                    I::Drive(sig, src, partial) => {
+                        let partial = match (partial, ctx.logic_mode) {
+                            (None, _) => None,
+                            (Some(offset), LogicMode::TwoValue) => {
+                                Some(stack.load_exact_tv_u32(*offset))
+                            }
+                            (Some(offset), LogicMode::FourValue) => {
+                                let (spc, val) = stack.load_exact_fv_u32(*offset);
+                                if !spc != 0 {
+                                    break 'instruction None;
+                                }
+                                Some(val)
+                            }
+                        };
 
-                    let updated = drive_bits(
-                        stack,
-                        signals[sig.0 as usize],
-                        *src,
-                        partial,
-                        ctx.logic_mode,
-                    );
-
-                    if updated {
-                        update_watchers(
-                            *sig,
+                        let updated = drive_bits(
                             stack,
-                            signals,
-                            watches,
-                            listeners,
-                            regions,
-                            trace.as_deref_mut(),
+                            signals[sig.0 as usize],
+                            *src,
+                            partial,
+                            ctx.logic_mode,
                         );
-                        if let Some(vcd) = vcd.as_mut()
-                            && !vcd.paused
-                            && let Some(idx) = vcd.tracked.get_mut(sig)
-                        {
-                            idx.get_or_insert_with(|| {
-                                vcd.updated_this_time_step.push(*sig);
-                                NonZeroUsize::new(vcd.updated_this_time_step.len()).unwrap()
-                            });
+
+                        if updated {
+                            update_watchers(
+                                *sig,
+                                stack,
+                                signals,
+                                watches,
+                                listeners,
+                                regions,
+                                trace.as_deref_mut(),
+                            );
+                            if let Some(vcd) = vcd.as_mut()
+                                && !vcd.paused
+                                && let Some(idx) = vcd.tracked.get_mut(sig)
+                            {
+                                idx.get_or_insert_with(|| {
+                                    vcd.updated_this_time_step.push(*sig);
+                                    NonZeroUsize::new(vcd.updated_this_time_step.len()).unwrap()
+                                });
+                            }
                         }
                     }
-                }
-                I::Wait(time) => {
-                    schedule.entry(ctx.time + time.0).or_default().push(self);
-                    if let Some(trace) = trace.as_deref_mut() {
-                        let vogls_trace::Event::Evaluation(_, _, stop_reason) =
-                            trace.events.last_mut().unwrap()
-                        else {
-                            unreachable!();
-                        };
-                        *stop_reason = vogls_trace::EventStopReason::Wait(ctx.time + time.0);
+                    I::Wait(time) => {
+                        schedule.entry(ctx.time + time.0).or_default().push(self);
+                        if let Some(trace) = trace.as_deref_mut() {
+                            let vogls_trace::Event::Evaluation(_, _, stop_reason) =
+                                trace.events.last_mut().unwrap()
+                            else {
+                                unreachable!();
+                            };
+                            *stop_reason = vogls_trace::EventStopReason::Wait(ctx.time + time.0);
+                        }
+                        if ctx.itrace {
+                            instr.itrace(stack, signals, ctx.logic_mode);
+                        }
+                        return EvalOutcome::Next;
                     }
-                    return EvalOutcome::Next;
-                }
-                I::WaitRegion(region) => {
-                    if *region == 0 {
-                        regions.active.push(self);
-                    } else {
-                        regions.other[*region as usize - 1].push(self);
+                    I::WaitRegion(region) => {
+                        if *region == 0 {
+                            regions.active.push(self);
+                        } else {
+                            regions.other[*region as usize - 1].push(self);
+                        }
+                        if let Some(trace) = trace.as_deref_mut() {
+                            let vogls_trace::Event::Evaluation(_, _, stop_reason) =
+                                trace.events.last_mut().unwrap()
+                            else {
+                                unreachable!();
+                            };
+                            *stop_reason = vogls_trace::EventStopReason::WaitRegion(*region);
+                        }
+                        if ctx.itrace {
+                            instr.itrace(stack, signals, ctx.logic_mode);
+                        }
+                        return EvalOutcome::Next;
                     }
-                    if let Some(trace) = trace.as_deref_mut() {
-                        let vogls_trace::Event::Evaluation(_, _, stop_reason) =
-                            trace.events.last_mut().unwrap()
-                        else {
-                            unreachable!();
-                        };
-                        *stop_reason = vogls_trace::EventStopReason::WaitRegion(*region);
+                    I::Watch(watch_signals) => {
+                        let listener_key = listeners.insert(self);
+                        for signal in watch_signals {
+                            watches[signal.0 as usize].push(listener_key);
+                        }
+                        if let Some(trace) = trace.as_mut() {
+                            let watch_range_start = trace.watches.len() as u64;
+                            trace.watches.extend(watch_signals.iter().map(|s| s.0));
+                            let vogls_trace::Event::Evaluation(_, _, stop_reason) =
+                                trace.events.last_mut().unwrap()
+                            else {
+                                unreachable!();
+                            };
+                            *stop_reason = vogls_trace::EventStopReason::WatchSignals(
+                                watch_range_start..trace.watches.len() as u64,
+                            );
+                        }
+                        if ctx.itrace {
+                            instr.itrace(stack, signals, ctx.logic_mode);
+                        }
+                        return EvalOutcome::Next;
                     }
-                    return EvalOutcome::Next;
-                }
-                I::Watch(signals) => {
-                    let listener_key = listeners.insert(self);
-                    for signal in signals {
-                        watches[signal.0 as usize].push(listener_key);
+
+                    I::Jump(offset) => *ip = *offset,
+                    I::Branch(cond, true_offset, false_offset) => {
+                        let is_true = stack.get_tv_u64(cond.to_ref(SCALAR_VSIZE)) & 1 != 0;
+                        if is_true {
+                            *ip = *true_offset;
+                        } else {
+                            *ip = *false_offset;
+                        }
                     }
-                    if let Some(trace) = trace.as_mut() {
-                        let watch_range_start = trace.watches.len() as u64;
-                        trace.watches.extend(signals.iter().map(|s| s.0));
-                        let vogls_trace::Event::Evaluation(_, _, stop_reason) =
-                            trace.events.last_mut().unwrap()
-                        else {
-                            unreachable!();
-                        };
-                        *stop_reason = vogls_trace::EventStopReason::WatchSignals(
-                            watch_range_start..trace.watches.len() as u64,
-                        );
+                    I::Halt => {
+                        break 'instruction Some(EvalOutcome::Next);
                     }
-                    return EvalOutcome::Next;
                 }
 
-                I::Jump(offset) => *ip = *offset,
-                I::Branch(cond, true_offset, false_offset) => {
-                    let is_true = stack.get_tv_u64(cond.to_ref(SCALAR_VSIZE)) & 1 != 0;
-                    if is_true {
-                        *ip = *true_offset;
-                    } else {
-                        *ip = *false_offset;
-                    }
-                }
-                I::Halt => {
-                    return EvalOutcome::Next;
-                }
-            }
+                None
+            };
 
             if ctx.itrace {
-                instr.itrace(stack);
+                instr.itrace(stack, signals, ctx.logic_mode);
             }
 
+            if let Some(outcome) = outcome {
+                return outcome;
+            }
         }
     }
 }
@@ -955,6 +999,10 @@ pub fn run(
                 &mut vcd,
                 trace.as_deref_mut(),
             );
+
+            if ctx.itrace {
+                eprintln!();
+            }
 
             if let Some(trace) = trace.as_deref_mut() {
                 match trace.events.last_mut().unwrap() {

@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, BinaryOp, GlobalContext, Instruction, IntrinsicOp,
-    LogicMode, ProcessKey, SignalKey, VariableKey, VectorSize,
+    LogicMode, ProcessKey, SignalKey, VariableKey, VectorSize, INTEGER_VSIZE,
 };
 
 use crate::instruction::{StackOffset, VmInstruction, VmProcess};
@@ -372,7 +372,7 @@ pub fn lower_process_to_vm(
                     VI::Drive(
                         signal!(*signal),
                         var!(*src, (gl.logic_mode, var_mode[src], src_size)).to_ref(src_size),
-                        partial.map(|(o, _)| var!(o)),
+                        partial.map(|(o, _)| var!(o, (gl.logic_mode, var_mode[&o], INTEGER_VSIZE))),
                     )
                 }
                 I::Phi(..) => continue,

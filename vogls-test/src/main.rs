@@ -139,6 +139,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             emit_ir: false,
             emit_vm: false,
             trace: false,
+            itrace: false,
             no_run: false,
             time: test_information.time,
             opt_rounds: 0,

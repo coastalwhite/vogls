@@ -34,6 +34,7 @@ pub struct ExecutionContext {
     pub emit_ir: bool,
     pub emit_vm: bool,
     pub trace: bool,
+    pub itrace: bool,
     pub time: u64,
     pub opt_rounds: u8,
     pub logic_mode: LogicMode,
@@ -749,6 +750,7 @@ pub fn run(
         });
     }
     let mut ctx = Context::new(gl.logic_mode, stdout, stderr);
+    ctx.itrace = ectx.itrace;
     let fail = vogls_sim::run(
         &mut ctx,
         &processes,

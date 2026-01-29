@@ -262,39 +262,42 @@ pub fn fv_s_logical_shift_left(dst: &mut [u8], src: &[u8], shift: u32, size: Vec
         dst.copy_from_slice(src);
         return;
     }
+    let dsize = VectorSize::new(size.get() * 2).unwrap();
     let mask = (1u64 << size.get()) - 1;
     if shift >= size.get() {
-        store_partial_u64(dst, mask << size.get(), size);
+        store_partial_u64(dst, mask << size.get(), dsize);
         return;
     }
 
     let spc_mask = (1u64 << (size.get() - shift)) - 1;
-    let src = load_partial_u64(&src, size);
+    let src = load_partial_u64(&src, dsize);
     let result = (src << shift) & (mask | mask << size.get()) | (spc_mask << size.get());
-    store_partial_u64(dst, result, size);
+    store_partial_u64(dst, result, dsize);
 }
 pub fn fv_s_logical_shift_right(dst: &mut [u8], src: &[u8], shift: u32, size: VectorSize) {
     if shift == 0 {
         dst.copy_from_slice(src);
         return;
     }
+    let dsize = VectorSize::new(size.get() * 2).unwrap();
     let mask = (1u64 << size.get()) - 1;
     if shift >= size.get() {
-        store_partial_u64(dst, mask << size.get(), size);
+        store_partial_u64(dst, mask << size.get(), dsize);
         return;
     }
 
     let shiftin_mask = (1u64 << shift) - 1;
-    let src = load_partial_u64(&src, size);
+    let src = load_partial_u64(&src, dsize);
     let result =
         (src >> shift) & (mask | mask << size.get()) | (shiftin_mask << (2 * size.get() - shift));
-    store_partial_u64(dst, result, size);
+    store_partial_u64(dst, result, dsize);
 }
 pub fn fv_s_arithmetic_shift_right(dst: &mut [u8], src: &[u8], shift: u32, size: VectorSize) {
     if shift == 0 {
         dst.copy_from_slice(src);
         return;
     }
+    let dsize = VectorSize::new(size.get() * 2).unwrap();
     let mask = (1u64 << size.get()) - 1;
     if shift >= size.get() {
         let mut result = mask << size.get();
@@ -302,19 +305,19 @@ pub fn fv_s_arithmetic_shift_right(dst: &mut [u8], src: &[u8], shift: u32, size:
         if (src[(idx / 8) as usize] >> (idx % 8)) & 1 != 0 {
             result |= mask;
         }
-        store_partial_u64(dst, result, size);
+        store_partial_u64(dst, result, dsize);
         return;
     }
 
     let shiftin_mask = (1u64 << shift) - 1;
-    let src = load_partial_u64(&src, size);
+    let src = load_partial_u64(&src, dsize);
     let mut result =
         (src >> shift) & (mask | mask << size.get()) | (shiftin_mask << (2 * size.get() - shift));
     if (src >> (size.get() - 1)) & 1 != 0 {
         result |= shiftin_mask << (size.get() - shift);
     }
 
-    store_partial_u64(dst, result, size);
+    store_partial_u64(dst, result, dsize);
 }
 pub fn fv_l_logical_shift_left(dst: &mut [u64], src: &[u64], shift: u32, size: VectorSize) {
     let nwords = dst.len() / 2;
