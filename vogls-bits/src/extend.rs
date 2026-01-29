@@ -64,8 +64,16 @@ pub fn tv_s_sign_extend(dst: &mut [u8], src: &[u8], dst_size: VectorSize, src_si
     }
 }
 pub fn fv_s_zero_extend(dst: &mut [u8], src: &[u8], dst_size: VectorSize, src_size: VectorSize) {
+    assert!(dst_size >= src_size);
+
+    if dst_size == src_size {
+        dst.copy_from_slice(src);
+        return;
+    }
+
     let src = load_partial_u64(src, VectorSize::new(2 * src_size.get()).unwrap());
     let (spc, val) = fv_unpack_u64(src, src_size);
+    let spc = spc | (((1u64 << (dst_size.get() - src_size.get())) - 1) << src_size.get());
     let result = fv_pack_u64(spc, val, dst_size);
     store_partial_u64(dst, result, VectorSize::new(2 * dst_size.get()).unwrap());
 }

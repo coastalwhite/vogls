@@ -134,6 +134,7 @@ module tb();
 
 	integer i, j;
 	initial begin
+        #0
         for (j = 0; j < 3; j = j + 1) begin
             mask_i = MASK[8*j +: 8];
             prd    = PRD[18*j +: 18];

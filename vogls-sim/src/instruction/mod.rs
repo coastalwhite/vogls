@@ -117,6 +117,7 @@ pub enum VmInstruction {
 impl VmInstruction {
     pub fn itrace(&self, stack: &Stack, signals: &[StackRef], logic_mode: LogicMode) {
         use VmInstruction as I;
+        eprint!("{self}");
         let items: &[(&'static str, bool, StackRef)] = match self {
             I::Constant(dst, src) => &[("dst", src.contains_special(), dst.to_ref(src.size()))],
             I::TvUnary(dst, op, src) => match op {
@@ -194,29 +195,32 @@ impl VmInstruction {
             I::TvToFv(dst, src) => &[("dst", true, *dst), ("src", false, src.to_ref(dst.size))],
             I::FvToTv(dst, src) => &[("dst", false, *dst), ("src", true, src.to_ref(dst.size))],
             I::Intrinsic(_, _, _) => &[],
-            I::Drive(dst, src, partial) => match partial {
-                None => &[
-                    (
-                        "dst",
-                        logic_mode == LogicMode::FourValue,
-                        signals[dst.0 as usize],
-                    ),
-                    ("src", logic_mode == LogicMode::FourValue, *src),
-                ],
-                Some(partial) => &[
-                    (
-                        "dst",
-                        logic_mode == LogicMode::FourValue,
-                        signals[dst.0 as usize],
-                    ),
-                    ("src", logic_mode == LogicMode::FourValue, *src),
-                    (
-                        "offset",
-                        logic_mode == LogicMode::FourValue,
-                        partial.to_32bit_ref(),
-                    ),
-                ],
-            },
+            I::Drive(dst, src, partial) => {
+                eprint!(" ({})", signals[dst.0 as usize].offset);
+                match partial {
+                    None => &[
+                        (
+                            "dst",
+                            logic_mode == LogicMode::FourValue,
+                            signals[dst.0 as usize],
+                        ),
+                        ("src", logic_mode == LogicMode::FourValue, *src),
+                    ],
+                    Some(partial) => &[
+                        (
+                            "dst",
+                            logic_mode == LogicMode::FourValue,
+                            signals[dst.0 as usize],
+                        ),
+                        ("src", logic_mode == LogicMode::FourValue, *src),
+                        (
+                            "offset",
+                            logic_mode == LogicMode::FourValue,
+                            partial.to_32bit_ref(),
+                        ),
+                    ],
+                }
+            }
             I::Wait(_) => &[],
             I::WaitRegion(_) => &[],
             I::Watch(_) => &[],
@@ -224,7 +228,6 @@ impl VmInstruction {
             I::Branch(_, _, _) => &[],
             I::Halt => &[],
         };
-        eprint!("{self}");
         for (name, fv, stack_ref) in items {
             eprint!(
                 " : {name} = {}",

@@ -53,7 +53,7 @@ pub fn fv_l_unsigned_leq(lhs: &[u64], rhs: &[u64], size: VectorSize) -> FvLogicV
         };
         return value;
     }
-    FvLogicValue::L0
+    FvLogicValue::L1
 }
 pub fn fv_s_unsigned_leq(lhs: &[u8], rhs: &[u8], size: VectorSize) -> FvLogicValue {
     let dsize = VectorSize::new(2 * size.get()).unwrap();

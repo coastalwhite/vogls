@@ -25,6 +25,7 @@ module tb();
 
     integer j, k;
     initial begin
+        #0
         for (k = 0; k < 3; k = k + 1) begin
             q = PRD[k*10+2 +: 4];
             r = PRD[k*10+0 +: 2];

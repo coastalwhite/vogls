@@ -35,6 +35,7 @@ module tb();
 
 	integer j, k;
 	initial begin
+        #0
         for (k = 0; k < 3; k = k + 1) begin
             prd = PRD[k*10 +: 10];
             m   = MLUT[k*8 +:  8];
