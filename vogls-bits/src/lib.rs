@@ -11,6 +11,7 @@ pub mod arithmetic;
 pub mod comparison;
 pub mod concat;
 pub mod extend;
+pub mod format;
 pub mod iter;
 pub mod leading_trailing;
 pub mod load;
@@ -108,7 +109,7 @@ pub enum BitsDataRef<'a> {
     InlineTv(u64),
     SeparateTv(&'a [u64]),
 
-    InlineFv(u32, u32),
+    InlineFv(u64, u64),
     SeparateFv(&'a [u64]),
 }
 
@@ -523,7 +524,7 @@ impl Bits {
             (Mode::TwoValue, true) => BitsDataRef::InlineTv(unsafe { self.data.inline }),
             (Mode::FourValue, true) => {
                 let inline = unsafe { self.data.inline };
-                BitsDataRef::InlineFv((inline >> 32) as u32, inline as u32)
+                BitsDataRef::InlineFv(inline >> 32, inline & 0xFFFF_FFFF)
             }
             (Mode::TwoValue, false) => BitsDataRef::SeparateTv(self.as_u64_slice()),
             (Mode::FourValue, false) => BitsDataRef::SeparateFv(self.as_u64_slice()),
@@ -563,8 +564,8 @@ impl Bits {
             ),
             BitsDataRef::InlineFv(spc, val) => Bits::from_four_value_u64(
                 new_size,
-                spc & 1u32.unbounded_shl(new_size.get()).wrapping_sub(1),
-                val & 1u32.unbounded_shl(new_size.get()).wrapping_sub(1),
+                (spc as u32) & 1u32.unbounded_shl(new_size.get()).wrapping_sub(1),
+                (val as u32) & 1u32.unbounded_shl(new_size.get()).wrapping_sub(1),
             ),
             BitsDataRef::SeparateTv(v) if new_size <= Mode::TwoValue.max_inline_size() => {
                 let mut dst = 0u64;
@@ -756,7 +757,7 @@ impl Bits {
         match self.as_data_ref() {
             BitsDataRef::InlineTv(v) => Some(v),
             BitsDataRef::InlineFv(spc, val) => {
-                if spc != 1u32.unbounded_shl(self.size().get()).wrapping_sub(1) {
+                if spc != 1u64.unbounded_shl(self.size().get()).wrapping_sub(1) {
                     None
                 } else {
                     Some(val.into())
@@ -907,7 +908,7 @@ impl Bits {
         match self.as_data_ref() {
             BitsDataRef::InlineTv(_) | BitsDataRef::SeparateTv(_) => false,
             BitsDataRef::InlineFv(spc, _) => {
-                spc != 1u32.unbounded_shl(self.size().get()).wrapping_sub(1)
+                spc != 1u64.unbounded_shl(self.size().get()).wrapping_sub(1)
             }
             BitsDataRef::SeparateFv(src) => fv_contains_special(src, self.size()),
         }
@@ -1093,23 +1094,24 @@ impl_shift! {
 
 impl fmt::Display for Bits {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let size = self.size();
-        write!(f, "{size}'h")?;
-
-        let data = self.as_u64_slice();
-
-        // @TODO: This does not properly pad zeroes for the remainder all the time.
-        let last = data.last().unwrap();
-        if size.get() % 64 > 32 {
-            write!(f, "{:X}_{:04X}", last >> 32, last & 0xFFFF_FFFF)?;
-        } else {
-            write!(f, "{last:X}")?;
-        }
-        for &b in data.iter().skip(1).rev() {
-            write!(f, "_{:04X}_{:04X}", b >> 32, b & 0xFFFF_FFFF)?;
-        }
-        Ok(())
+        <Self as fmt::UpperHex>::fmt(self, f)
     }
 }
 
 pub type VectorSize = NonZeroU32;
+
+impl<'a> BitsDataRef<'a> {
+    pub fn to_u64_slices<'b>(&'b self) -> (&'b [u64], Option<&'b [u64]>) {
+        match self {
+            BitsDataRef::InlineTv(v) => (std::slice::from_ref(v), None),
+            BitsDataRef::SeparateTv(v) => (v, None),
+            BitsDataRef::InlineFv(spc, val) => {
+                (std::slice::from_ref(val), Some(std::slice::from_ref(spc)))
+            }
+            BitsDataRef::SeparateFv(items) => {
+                let nwords = items.len() / 2;
+                (&items[nwords..], Some(&items[..nwords]))
+            }
+        }
+    }
+}

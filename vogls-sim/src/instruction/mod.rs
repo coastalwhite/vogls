@@ -66,8 +66,7 @@ pub enum VmIntrinsicOp {
     Time,
     Finish,
     Display(Box<DynFormatString>),
-    AssertTv(Box<DynFormatString>),
-    AssertFv(Box<DynFormatString>),
+    Assert(Box<DynFormatString>),
     VcdOpenFile(String),
     VcdAppendModule(VcdScope),
     VcdPause,
@@ -100,7 +99,7 @@ pub enum VmInstruction {
     Intrinsic(
         StackOffset,
         Box<VmIntrinsicOp>,
-        Box<[(StackOffset, VectorSize)]>,
+        Box<[(StackRef, LogicMode)]>,
     ),
 
     Drive(VmSignalKey, StackRef, Option<StackOffset>),
@@ -250,8 +249,7 @@ impl VmIntrinsicOp {
             Self::Time => "time",
             Self::Finish => "finish",
             Self::Display(_) => "display",
-            Self::AssertTv(_) => "tv.assert",
-            Self::AssertFv(_) => "fv.assert",
+            Self::Assert(_) => "assert",
             Self::VcdOpenFile(_) => "vcd.open_file",
             Self::VcdAppendModule(_) => "vcd.append_scope",
             Self::VcdPause => "vcd.pause",

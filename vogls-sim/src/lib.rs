@@ -132,6 +132,10 @@ impl Stack {
     fn set_tv_bool(&mut self, at: StackOffset, value: bool) {
         self.set_tv_u64(at.to_ref(SCALAR_VSIZE), value.into());
     }
+    fn get_tv_bool(&self, at: StackOffset) -> bool {
+        let val = self.get_tv_u64(at.to_ref(SCALAR_VSIZE));
+        val & 1 != 0
+    }
 
     fn get_fv_item(&self, at: StackOffset) -> FvLogicValue {
         let (spc, val) = self.get_fv_u64(at.to_ref(SCALAR_VSIZE));
@@ -744,32 +748,29 @@ impl Event {
                             O::Display(f) => {
                                 f.write_to(
                                     &mut ctx.stdout,
-                                    args.iter().map(|(o, s)| stack.load_tv_bits(o.to_ref(*s))),
+                                    args.iter().map(|(sr, lm)| match lm {
+                                        LogicMode::TwoValue => stack.load_tv_bits(*sr),
+                                        LogicMode::FourValue => stack.load_fv_bits(*sr),
+                                    }),
                                 )
                                 .unwrap();
                             }
-                            O::AssertTv(f) => {
-                                let condition =
-                                    stack.get_tv_u64(args[0].0.to_ref(SCALAR_VSIZE)) != 0;
+                            O::Assert(f) => {
+                                let (cond_sr, cond_lm) = args[0];
+                                let condition = match cond_lm {
+                                    LogicMode::TwoValue => stack.get_tv_bool(cond_sr.offset),
+                                    LogicMode::FourValue => {
+                                        stack.get_fv_item(cond_sr.offset) == FvLogicValue::L1
+                                    }
+                                };
+
                                 if !condition {
                                     f.write_to(
                                         &mut ctx.stdout,
-                                        args[1..].iter().map(|(o, s)| {
-                                            Bits::load_from_slice(stack.get(o.to_ref(*s)), *s)
+                                        args[1..].iter().map(|(sr, lm)| match lm {
+                                            LogicMode::TwoValue => stack.load_tv_bits(*sr),
+                                            LogicMode::FourValue => stack.load_fv_bits(*sr),
                                         }),
-                                    )
-                                    .unwrap();
-                                    break 'instruction Some(EvalOutcome::Error);
-                                }
-                            }
-                            O::AssertFv(f) => {
-                                let condition = stack.get_fv_item(args[0].0) == FvLogicValue::L1;
-                                if !condition {
-                                    f.write_to(
-                                        &mut ctx.stdout,
-                                        args[1..]
-                                            .iter()
-                                            .map(|(o, s)| stack.load_fv_bits(o.to_ref(*s))),
                                     )
                                     .unwrap();
                                     break 'instruction Some(EvalOutcome::Error);

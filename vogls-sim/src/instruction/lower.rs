@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use vogls_ir::{
-    BasicBlockKey, BasicBlockTerminator, BinaryOp, GlobalContext, Instruction, IntrinsicOp,
-    LogicMode, ProcessKey, SignalKey, VariableKey, VectorSize, INTEGER_VSIZE,
+    BasicBlockKey, BasicBlockTerminator, BinaryOp, GlobalContext, INTEGER_VSIZE, Instruction,
+    IntrinsicOp, LogicMode, ProcessKey, SignalKey, VariableKey, VectorSize,
 };
 
 use crate::instruction::{StackOffset, VmInstruction, VmProcess};
@@ -312,7 +312,10 @@ pub fn lower_process_to_vm(
                 }
 
                 I::Intrinsic(dst, op, args) => {
-                    let mut vm_args = args.iter().map(|v| (var!(*v), gl.vars[*v].size)).collect();
+                    let vm_args = args
+                        .iter()
+                        .map(|v| (var!(*v).to_ref(gl.vars[*v].size), var_mode[v]))
+                        .collect();
                     use crate::VcdScope as VmVcdScope;
                     use IntrinsicOp as O;
                     use VmIntrinsicOp as VO;
@@ -320,28 +323,7 @@ pub fn lower_process_to_vm(
                         O::Time => VO::Time,
                         O::Finish => VO::Finish,
                         O::Display(f) => VO::Display(f.clone()),
-                        O::Assert(f) => match gl.logic_mode {
-                            LogicMode::TwoValue => VO::AssertTv(f.clone()),
-                            LogicMode::FourValue => {
-                                vm_args = args
-                                    .iter()
-                                    .map(|v| {
-                                        (
-                                            var!(
-                                                *v,
-                                                (
-                                                    LogicMode::FourValue,
-                                                    var_mode[v],
-                                                    gl.vars[*v].size
-                                                )
-                                            ),
-                                            gl.vars[*v].size,
-                                        )
-                                    })
-                                    .collect();
-                                VO::AssertFv(f.clone())
-                            }
-                        },
+                        O::Assert(f) => VO::Assert(f.clone()),
                         O::VcdOpenFile(f) => VO::VcdOpenFile(f.clone()),
                         O::VcdAppendModule(v) => {
                             VO::VcdAppendModule(VmVcdScope::lower(v, io_signals))

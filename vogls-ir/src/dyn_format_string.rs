@@ -105,19 +105,10 @@ pub fn format_bits(
         Padding::NoPadding => {}
     }
 
-    let data = bits.as_u64_slice();
+    let data_ref = bits.as_data_ref();
+    let (val, _spc) = data_ref.to_u64_slices();
     match base {
-        Base::Binary => {
-            let mut print_full = false;
-            for b in data.iter().copied().rev() {
-                if print_full {
-                    write!(f, "{b:064b}")?
-                } else {
-                    write!(f, "{b:b}")?
-                }
-                print_full |= b != 0;
-            }
-        }
+        Base::Binary => write!(f, "{bits:b}")?,
         Base::Octal => {
             let left_over = bits.size().get() % (6 * 8);
             let num_full = bits.size().get() / (6 * 8);
@@ -138,22 +129,12 @@ pub fn format_bits(
                 }
             }
         }
-        Base::Hexadecimal => {
-            let mut print_full = false;
-            for b in data.iter().copied().rev() {
-                if print_full {
-                    write!(f, "{b:016x}")?
-                } else {
-                    write!(f, "{b:x}")?
-                }
-                print_full |= b != 0;
-            }
-        }
+        Base::Hexadecimal => write!(f, "{bits:x}")?,
         Base::Decimal => {
-            if data.len() > 1 {
+            if val.len() > 1 {
                 todo!()
             }
-            write!(f, "{}", data[0])?;
+            write!(f, "{}", val[0])?;
         }
     }
     Ok(())

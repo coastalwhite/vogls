@@ -114,15 +114,15 @@ pub fn fv_s_concat(
     lhs_size: VectorSize,
     rhs_size: VectorSize,
 ) {
-    let x = load_partial_u64(lhs, lhs_size);
-    let y = load_partial_u64(rhs, rhs_size);
+    let x = load_partial_u64(lhs, VectorSize::new(lhs_size.get() * 2).unwrap());
+    let y = load_partial_u64(rhs, VectorSize::new(rhs_size.get() * 2).unwrap());
     let (xspc, xvalue) = fv_unpack_u64(x, lhs_size);
     let (yspc, yvalue) = fv_unpack_u64(y, rhs_size);
     let spc = (xspc << rhs_size.get()) | yspc;
     let value = (xvalue << rhs_size.get()) | yvalue;
-    let dsize = VectorSize::new(lhs_size.get() + rhs_size.get()).unwrap();
-    let result = fv_pack_u64(spc, value, dsize);
-    store_partial_u64(dst, result, dsize);
+    let dst_size = VectorSize::new(lhs_size.get() + rhs_size.get()).unwrap();
+    let result = fv_pack_u64(spc, value, dst_size);
+    store_partial_u64(dst, result, VectorSize::new(dst_size.get() * 2).unwrap());
 }
 
 #[cfg(test)]

@@ -251,10 +251,11 @@ pub fn fv_s_select_bit(src: &[u8], idx: u32, size: VectorSize) -> FvLogicValue {
         return FvLogicValue::X;
     }
 
-    let x = load_partial_u64(src, size);
+    let dsize = VectorSize::new(size.get() * 2).unwrap();
+    let x = load_partial_u64(src, dsize);
     let spc = (x >> (size.get() + idx)) & 1;
     let val = (x >> idx) & 1;
-    FvLogicValue::from_repr(((spc << 1) & val) as u8)
+    FvLogicValue::from_repr(((spc as u8) << 1) | (val as u8))
 }
 pub fn fv_l_select_bit(src: &[u64], idx: u32, size: VectorSize) -> FvLogicValue {
     if idx >= size.get() {

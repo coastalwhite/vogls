@@ -116,9 +116,9 @@ impl fmt::Display for VmInstruction {
             Self::Intrinsic(dst, op, args) => {
                 write!(f, "{dst} = {}", op.into_mnemonic())?;
                 if let Some((arg, _)) = args.first() {
-                    write!(f, " {arg}")?;
+                    write!(f, " {}", arg.offset)?;
                     for (arg, _) in &args[1..] {
-                        write!(f, ", {arg}")?;
+                        write!(f, ", {}", arg.offset)?;
                     }
                 }
                 Ok(())
