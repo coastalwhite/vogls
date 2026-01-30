@@ -3,7 +3,10 @@ use std::hash::Hash;
 use std::num::NonZeroU32;
 use std::ptr::NonNull;
 
-use self::arithmetic::{FvLogicValue, fv_contains_special};
+use self::arithmetic::{
+    FvLogicValue, fv_contains_high_impedance, fv_contains_special, fv_contains_unknown,
+};
+use self::format::{BitsDisplay, BitsFormatOptions};
 use self::leading_trailing::{tv_leading_ones, tv_leading_zeros};
 use self::truncate::{fv_l_truncate, tv_l_truncate};
 
@@ -913,6 +916,24 @@ impl Bits {
             BitsDataRef::SeparateFv(src) => fv_contains_special(src, self.size()),
         }
     }
+    pub fn contains_unknown(&self) -> bool {
+        match self.as_data_ref() {
+            BitsDataRef::InlineTv(_) | BitsDataRef::SeparateTv(_) => false,
+            BitsDataRef::InlineFv(spc, val) => {
+                !spc & !val & 1u64.unbounded_shl(self.size().get()).wrapping_sub(1) != 0
+            }
+            BitsDataRef::SeparateFv(src) => fv_contains_unknown(src, self.size()),
+        }
+    }
+    pub fn contains_high_impedance(&self) -> bool {
+        match self.as_data_ref() {
+            BitsDataRef::InlineTv(_) | BitsDataRef::SeparateTv(_) => false,
+            BitsDataRef::InlineFv(spc, val) => {
+                !spc & val & 1u64.unbounded_shl(self.size().get()).wrapping_sub(1) != 0
+            }
+            BitsDataRef::SeparateFv(src) => fv_contains_high_impedance(src, self.size()),
+        }
+    }
 
     pub fn add(lhs: &Self, rhs: &Self) -> Self {
         assert_eq!(lhs.size(), rhs.size());
@@ -1062,6 +1083,13 @@ impl Bits {
             end: self.size().get(),
         }
     }
+
+    pub fn display<'a>(&'a self, options: &'a BitsFormatOptions) -> BitsDisplay<'a> {
+        BitsDisplay {
+            bits: self,
+            options,
+        }
+    }
 }
 
 macro_rules! impl_shift {
@@ -1094,7 +1122,7 @@ impl_shift! {
 
 impl fmt::Display for Bits {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        <Self as fmt::UpperHex>::fmt(self, f)
+        write!(f, "{:#>0}", self.display(&BitsFormatOptions::default()))
     }
 }
 

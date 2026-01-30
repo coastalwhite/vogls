@@ -425,6 +425,38 @@ pub fn fv_contains_special(src: &[u64], size: VectorSize) -> bool {
     src[nwords - 1] & last_mask != last_mask
 }
 
+pub fn fv_contains_unknown(src: &[u64], size: VectorSize) -> bool {
+    assert!(src.len() > 0 && src.len() == 2 * (size.get().div_ceil(64) as usize));
+    let nwords = src.len() / 2;
+    for i in 0..nwords - 1 {
+        if !src[i] & !src[nwords + i] != 0 {
+            return true;
+        }
+    }
+    let last_mask = if size.get() % 64 == 0 {
+        u64::MAX
+    } else {
+        (1u64 << size.get() % 64) - 1
+    };
+    !src[nwords - 1] & !src[2 * nwords - 1] & last_mask != 0
+}
+
+pub fn fv_contains_high_impedance(src: &[u64], size: VectorSize) -> bool {
+    assert!(src.len() > 0 && src.len() == 2 * (size.get().div_ceil(64) as usize));
+    let nwords = src.len() / 2;
+    for i in 0..nwords - 1 {
+        if !src[i] & src[nwords + i] != 0 {
+            return true;
+        }
+    }
+    let last_mask = if size.get() % 64 == 0 {
+        u64::MAX
+    } else {
+        (1u64 << size.get() % 64) - 1
+    };
+    !src[nwords - 1] & src[2 * nwords - 1] & last_mask != 0
+}
+
 pub fn fv_unpack_u64(v: u64, size: VectorSize) -> (u64, u64) {
     debug_assert!(size.get() <= 32);
     (v >> size.get(), v & ((1u64 << size.get()) - 1))

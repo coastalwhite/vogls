@@ -1,6 +1,8 @@
+use std::fmt::Alignment;
 use std::io;
 
 use vogls_bits::VectorSize;
+use vogls_bits::format::{BitsFormatBase, BitsFormatOptions, BitsFormatWidth};
 use vogls_bits::load::load_partial_u64;
 
 use crate::Bits;
@@ -87,55 +89,29 @@ pub fn format_bits(
     padding: Padding,
     base: Base,
 ) -> io::Result<()> {
-    let num_chars = base.num_chars(bits);
-    let num_max_chars = base.num_max_chars(bits.size());
-    assert!(num_chars <= num_max_chars);
+    let mut options = BitsFormatOptions::default();
 
+    options.base = match base {
+        Base::Binary => BitsFormatBase::Binary,
+        Base::Octal => BitsFormatBase::Octal,
+        Base::Hexadecimal => BitsFormatBase::LowerHex,
+        Base::Decimal => BitsFormatBase::Decimal,
+    };
+
+    if options.base != BitsFormatBase::Decimal {
+        options.fill = '0';
+    }
     match padding {
         Padding::ZeroPaddedToSize => {
-            for _ in num_chars..num_max_chars {
-                f.write_all(&[b'0'])?;
-            }
+            options.width = BitsFormatWidth::Expand;
+            options.align = Some(Alignment::Right);
         }
         Padding::ZeroPaddedTo(size) => {
-            for _ in num_chars.min(size)..size {
-                f.write_all(&[b'0'])?;
-            }
+            options.width = BitsFormatWidth::Minimum(size as usize);
+            options.align = None;
         }
         Padding::NoPadding => {}
     }
 
-    let data_ref = bits.as_data_ref();
-    let (val, _spc) = data_ref.to_u64_slices();
-    match base {
-        Base::Binary => write!(f, "{bits:b}")?,
-        Base::Octal => {
-            let left_over = bits.size().get() % (6 * 8);
-            let num_full = bits.size().get() / (6 * 8);
-
-            if left_over != 0 {
-                let v = load_partial_u64(
-                    &bits.as_slice()[bits.as_slice().len() - left_over.div_ceil(8) as usize..],
-                    VectorSize::new(left_over).unwrap(),
-                );
-                if v != 0 {
-                    write!(f, "{v:o}")?;
-                }
-            }
-            for w in bits.as_slice()[..num_full as usize * 3].windows(6).rev() {
-                let v = load_partial_u64(w, VectorSize::new(6 * 8).unwrap());
-                if v != 0 {
-                    write!(f, "{v:o}")?;
-                }
-            }
-        }
-        Base::Hexadecimal => write!(f, "{bits:x}")?,
-        Base::Decimal => {
-            if val.len() > 1 {
-                todo!()
-            }
-            write!(f, "{}", val[0])?;
-        }
-    }
-    Ok(())
+    write!(f, "{}", bits.display(&options))
 }
