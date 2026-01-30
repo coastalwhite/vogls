@@ -1,9 +1,7 @@
 use std::fmt::Alignment;
 use std::io;
 
-use vogls_bits::VectorSize;
 use vogls_bits::format::{BitsFormatBase, BitsFormatOptions, BitsFormatWidth};
-use vogls_bits::load::load_partial_u64;
 
 use crate::Bits;
 
@@ -27,27 +25,6 @@ pub enum Base {
     #[default]
     Hexadecimal,
     Decimal,
-}
-
-impl Base {
-    fn num_chars(self, v: &Bits) -> u32 {
-        match self {
-            Base::Binary => v.size().get() - v.leading_zeroes(),
-            Base::Octal => (v.size().get() - v.leading_zeroes()).div_ceil(3),
-            Base::Hexadecimal => (v.size().get() - v.leading_zeroes()).div_ceil(4),
-            Base::Decimal => v.clog10(),
-        }
-        .max(1)
-    }
-
-    fn num_max_chars(self, v: VectorSize) -> u32 {
-        match self {
-            Base::Binary => v.get(),
-            Base::Octal => v.get().div_ceil(3),
-            Base::Hexadecimal => v.get().div_ceil(4),
-            Base::Decimal => ((2.0f64.log10() * f64::from(v.get())).ceil()) as u32,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Default)]

@@ -859,7 +859,7 @@ impl Bits {
             BitsDataRef::InlineTv(v) => v.leading_zeros() - (64 - self.size.get()),
             BitsDataRef::SeparateTv(v) => tv_leading_zeros(v, self.size()),
             BitsDataRef::InlineFv(spc, val) => {
-                let offset = 32 - self.size().get();
+                let offset = 64 - self.size().get();
                 (spc << offset)
                     .leading_ones()
                     .min((val << offset).leading_zeros())
@@ -1122,7 +1122,18 @@ impl_shift! {
 
 impl fmt::Display for Bits {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:#>0}", self.display(&BitsFormatOptions::default()))
+        write!(
+            f,
+            "{}",
+            self.display(&BitsFormatOptions {
+                prefix: true,
+                base: format::BitsFormatBase::UpperHex,
+                separator: Some('_'),
+                align: None,
+                fill: '0',
+                width: format::BitsFormatWidth::Expand
+            })
+        )
     }
 }
 

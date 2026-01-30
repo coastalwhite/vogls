@@ -124,6 +124,15 @@ impl BitsFormatBase {
             }
         }
     }
+
+    fn separator_digits(&self) -> usize {
+        match self {
+            BitsFormatBase::Binary => 4,
+            BitsFormatBase::Octal => 3,
+            BitsFormatBase::LowerHex | BitsFormatBase::UpperHex => 4,
+            BitsFormatBase::Decimal => 3,
+        }
+    }
 }
 
 impl<'a> fmt::Display for BitsDisplay<'a> {
@@ -172,7 +181,7 @@ fn fmt_bits(bits: &Bits, f: &mut impl fmt::Write, options: &BitsFormatOptions) -
     let num_digits = options.base.num_digits(bits);
     let num_fill = match options.width {
         BitsFormatWidth::Shrink => 0,
-        BitsFormatWidth::Expand => options.base.max_num_digits(bits.size()),
+        BitsFormatWidth::Expand => options.base.max_num_digits(bits.size()) - num_digits,
         BitsFormatWidth::Minimum(width) => width.saturating_sub(num_digits),
     };
 
@@ -182,21 +191,27 @@ fn fmt_bits(bits: &Bits, f: &mut impl fmt::Write, options: &BitsFormatOptions) -
         Alignment::Right => (num_fill, 0),
     };
 
-    for _ in 0..num_left_fill {
-        f.write_char(options.fill)?;
-    }
-
     let size = bits.size();
     if options.prefix {
         write!(f, "{size}'")?;
         let c = match options.base {
             B::Binary => 'b',
             B::Octal => 'o',
-            B::LowerHex => 'h',
-            B::UpperHex => 'H',
+            B::LowerHex | B::UpperHex => 'h',
             B::Decimal => 'd',
         };
         f.write_char(c)?;
+    }
+
+    for i in 0..num_left_fill {
+        f.write_char(options.fill)?;
+        if let Some(separator) = options.separator
+            && matches!(options.width, BitsFormatWidth::Expand)
+            && i % options.base.separator_digits() == options.base.separator_digits() - 1
+            && i != 0
+        {
+            f.write_char(separator)?;
+        }
     }
 
     match options.base {
@@ -408,10 +423,10 @@ fn fmt_bits_hex(
             f.write_char(separator)?;
         }
         *fst = false;
+        let mut rem_size = actual_size;
 
         match spc {
             None => {
-                let mut rem_size = actual_size;
                 while rem_size > 0 {
                     let shift = if rem_size % 4 == 0 {
                         rem_size - 4
@@ -435,7 +450,6 @@ fn fmt_bits_hex(
                 Ok(())
             }
             Some(spc) => {
-                let mut rem_size = actual_size;
                 while rem_size > 0 {
                     let shift = if rem_size % 4 == 0 {
                         rem_size - 4
