@@ -20,7 +20,7 @@ pub fn lower_system_task_enable<'a>(
         system_task_identifier,
         expressions,
     } = arenas.get(system_task_enable);
-    let ident = arenas.get_ident(system_task_identifier.item.0);
+    let ident = arenas.ident_to_str(system_task_identifier.item.0);
 
     match ident {
         "display" => {

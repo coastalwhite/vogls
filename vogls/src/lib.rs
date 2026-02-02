@@ -109,7 +109,7 @@ fn append_referenced_modules<'a>(
     match arenas.get(module_or_generate_item) {
         ModuleOrGenerateItem::ModuleInstantiation(module_instantiation) => {
             let module_instantiation = arenas.get(*module_instantiation);
-            let module_name = arenas.get_ident(module_instantiation.module_identifier.item.0);
+            let module_name = arenas.ident_to_str(module_instantiation.module_identifier.item.0);
             referenced.insert(module_name);
         }
         ModuleOrGenerateItem::ModuleOrGenerateItemDeclaration(_) => {}
@@ -182,7 +182,7 @@ pub fn run(
     let module_lut =
         HashMap::<&str, usize>::from_iter(ast.modules.iter().enumerate().map(|(i, module_id)| {
             let module = ast.arenas.get(module_id);
-            (ast.arenas.get_ident(module.module_identifier.item.0), i)
+            (ast.arenas.ident_to_str(module.module_identifier.item.0), i)
         }));
 
     let tl_module_name = match top_level_module {
@@ -220,7 +220,7 @@ pub fn run(
                     ports: _,
                     default_nettype: _,
                 } = ast.arenas.get(module_id);
-                let module_name = ast.arenas.get_ident(module_identifier.item.0);
+                let module_name = ast.arenas.ident_to_str(module_identifier.item.0);
                 if referenced.contains(module_name) {
                     continue;
                 }
@@ -277,6 +277,12 @@ pub fn run(
         &mut diagnostics,
     )
     .is_err();
+
+    // 1. Create name hierarchy
+    // 2. Assign types to Symbols 
+    // 3. Convert hierarchy to lowering hierarchy
+    // 4. Lower.
+
 
     let mut offset = 1;
     while let Some(item) = hierarchy.symbols.get(offset) {

@@ -12,9 +12,7 @@ use crate::ast::statement::{
     SystemTaskEnable, SystemTaskIdentifier, TaskEnable, VariableAssignment, VariableLValue,
     VariableLValueFlat, WaitStatement,
 };
-use crate::ast::{
-    AstIdRange, AstItem, AttributeInstance, DecimalRef, Identifier, RangeExpression, TextRef,
-};
+use crate::ast::{AstIdRange, AstItem, AttributeInstance, DecimalRef, Identifier, RangeExpression};
 use crate::tokenizer::Token;
 
 use super::{AstArenas, Consumable, ParserScratches, TokenWalker};
@@ -959,10 +957,8 @@ impl<'a> Consumable<'a> for SystemTaskIdentifier {
         let t = tkw.next_expect(T::DollarIdent, diagnostics.as_deref_mut())?;
         let (span, file) = (*t.span, *t.file);
         let content = &tkw.content(file)[span.start() + 1..span.end()];
-        let start = arenas.text.len();
-        let end = start + content.len();
-        arenas.text.push_str(content);
-        Ok(Self(TextRef { start, end }))
+        let ident_id = arenas.get_or_insert_ident(content);
+        Ok(Self(ident_id))
     }
 }
 

@@ -1,20 +1,20 @@
 use vogls_ir::token_range::TokenRange;
 
-use crate::ast::{AstItem, Identifier, TextRef};
+use crate::ast::{AstItem, Identifier};
 use crate::hierarchy::HierarchyModule;
-use crate::parser::AstArenas;
+use crate::parser::{AstArenas, IdentId};
 
 use super::VType;
 
 #[derive(Clone, Debug)]
 pub enum LowerErrorReason {
-    VariableNotFound(TextRef),
-    PortNotFound(TextRef),
-    PortNotDefined(TextRef),
+    VariableNotFound(IdentId),
+    PortNotFound(IdentId),
+    PortNotDefined(IdentId),
     NotYetImplemented(&'static str),
     OutputExprNotAllowed,
-    DuplicateDefinition(TextRef),
-    ModuleNotFound(TextRef),
+    DuplicateDefinition(IdentId),
+    ModuleNotFound(IdentId),
     NetWidthOverflow,
     ZeroWidthNet,
 }

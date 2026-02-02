@@ -36,7 +36,7 @@ pub fn lower<'a>(
                             value.as_u64().unwrap()
                         }
                         DelayValue::Identifier(ast_ident) => {
-                            let ident = arenas.get_ident(ast_ident.0);
+                            let ident = arenas.ident_to_str(ast_ident.0);
                             let Some(symbol_key) = scope.get(ident) else {
                                 diagnostics.not_yet_implemented(
                                     arenas.get_span(*ast_delay_control),
@@ -161,7 +161,7 @@ pub fn lower<'a>(
                         return Err(());
                     }
 
-                    let ident = arenas.get_ident(ast_ident.item.0);
+                    let ident = arenas.ident_to_str(ast_ident.item.0);
                     let Some(symbol_key) = scope.get(ident) else {
                         diagnostics.var_not_found(arenas, *ast_ident);
                         return Err(());

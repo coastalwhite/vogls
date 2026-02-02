@@ -49,7 +49,7 @@ pub fn lower<'a>(
                                     ident: ast_ident,
                                     expr,
                                 } = arenas.get(assignment);
-                                let ident = arenas.get_ident(ast_ident.item.0);
+                                let ident = arenas.ident_to_str(ast_ident.item.0);
                                 let net = scope.get_unwrap_net(ident).unwrap();
 
                                 let mut bb_builder =
@@ -86,7 +86,8 @@ pub fn lower<'a>(
                         let Some(initialize) = initialize else {
                             continue;
                         };
-                        let ident = arenas.get_ident(arenas.get(variable_type).identifier.item.0);
+                        let ident =
+                            arenas.ident_to_str(arenas.get(variable_type).identifier.item.0);
 
                         let symbol_key = scope.get(ident).unwrap();
                         let HierarchyItem::Net(i) = &scope.hierarchy.items()[symbol_key.as_idx()]
@@ -216,7 +217,7 @@ pub fn lower<'a>(
                     list_of_port_connections,
                 } = arenas.get(instance);
 
-                let name_of_module_instance = arenas.get_ident(name_of_module_instance.item.0);
+                let name_of_module_instance = arenas.ident_to_str(name_of_module_instance.item.0);
                 let symbol_key = scope.get(name_of_module_instance).unwrap();
                 let HierarchyItem::Module(i) = scope.hierarchy.items()[symbol_key.as_idx()] else {
                     panic!();
@@ -269,7 +270,7 @@ pub fn lower<'a>(
                                 port_identifier: ast_port_identifier,
                                 expression,
                             } = *named_port_connection;
-                            let port_identifier = arenas.get_ident(ast_port_identifier.item.0);
+                            let port_identifier = arenas.ident_to_str(ast_port_identifier.item.0);
 
                             let Some(&port_idx) =
                                 scope.hierarchy.modules[i].lut.get(port_identifier)

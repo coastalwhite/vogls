@@ -55,7 +55,7 @@ pub fn elaborate_fn<'a>(
                 TfType::Real | TfType::Realtime | TfType::Time => todo!(),
             };
             let ident = arenas.to_item(ident);
-            let name = arenas.get_ident(ident.item.0);
+            let name = arenas.ident_to_str(ident.item.0);
             let signal = signals.insert(Signal {
                 name: name.to_string(),
                 size: ty.force_net_width(),
@@ -131,7 +131,7 @@ pub fn elaborate_task<'a>(
                 TfType::Real | TfType::Realtime | TfType::Time => todo!(),
             };
             let ident = arenas.to_item(ident);
-            let name = arenas.get_ident(ident.item.0);
+            let name = arenas.ident_to_str(ident.item.0);
             let signal = signals.insert(Signal {
                 name: name.to_string(),
                 size: ty.force_net_width(),

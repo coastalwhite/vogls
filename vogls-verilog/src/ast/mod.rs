@@ -2,6 +2,7 @@ use vogls_ir::Bits;
 
 use crate::arena::{ArenaId, ArenaIdRange, ArenaIdRangeIter};
 use crate::number::{Base, Sign};
+use crate::parser::IdentId;
 
 use self::constant_expr::ConstantExpr;
 use self::expr::Expr;
@@ -168,7 +169,7 @@ pub struct SizedNumberRef {
 pub struct StringRef(pub TextRef);
 
 #[derive(Clone, Copy)]
-pub struct Identifier(pub TextRef);
+pub struct Identifier(pub IdentId);
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 507
 // attribute_instance ::= (* attr_spec { , attr_spec } *)

@@ -22,7 +22,7 @@ pub fn lower_function_call<'a>(
     ident: AstItem<Identifier>,
     arguments: &[Option<(VariableKey, VType)>],
 ) -> Result<(VariableKey, VType), ()> {
-    let fn_name = arenas.get_ident(ident.item.0);
+    let fn_name = arenas.ident_to_str(ident.item.0);
     let Some(fn_symbol) = scope.get(fn_name) else {
         diagnostics.var_not_found(arenas, ident);
         return Err(());
@@ -83,7 +83,7 @@ pub fn lower_task_enable<'a>(
     ident: AstItem<Identifier>,
     arguments: AstIdRange<Expr>,
 ) -> Result<BasicBlockBuilder, ()> {
-    let fn_name = arenas.get_ident(ident.item.0);
+    let fn_name = arenas.ident_to_str(ident.item.0);
     let Some(fn_symbol) = scope.get(fn_name) else {
         diagnostics.var_not_found(arenas, ident);
         return Err(());

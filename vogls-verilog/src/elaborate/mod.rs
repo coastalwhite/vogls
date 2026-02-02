@@ -88,7 +88,7 @@ pub fn elaborate_module<'a>(
                         let PortExpression { references } = arenas.get(*id);
                         let PortReference { identifier } = arenas.get(*references);
 
-                        let name = arenas.get_ident(identifier.item.0);
+                        let name = arenas.ident_to_str(identifier.item.0);
 
                         // Insert the port as IO.
                         let HierarchyItem::Module(m) =
@@ -182,7 +182,7 @@ pub fn elaborate_parameter_declaration<'a>(
     let _ty = parameter_typing_to_type(arenas, builder, diagnostics, typing)?;
     for assignment in assignments.iter() {
         let ParamAssignment { param, constant } = arenas.get(assignment);
-        let name = arenas.get_ident(param.item.0);
+        let name = arenas.ident_to_str(param.item.0);
         let mut value = match arenas.get(*constant) {
             ConstantMinTypMaxExpression::Single(id) => {
                 eval_constant_expr(arenas, builder.eval_scope(), diagnostics, *id)?
@@ -263,7 +263,7 @@ pub fn elaborate_port_declaration<'a>(
 
     let mut error = false;
     for ident in identifiers.iter() {
-        let name = arenas.get_ident(arenas.get(ident).0);
+        let name = arenas.ident_to_str(arenas.get(ident).0);
         let origin = arenas.get_span(ident);
         let signal = signals.insert(Signal {
             name: name.to_string(),
@@ -376,7 +376,7 @@ pub fn elaborate_module_or_generate_item<'a>(
                                 identifier,
                                 expression,
                             } = arenas.get(n);
-                            let key = arenas.get_ident(identifier.item.0);
+                            let key = arenas.ident_to_str(identifier.item.0);
                             let Some(expression) = expression else {
                                 diagnostics.not_yet_implemented(
                                     arenas.get_span(n),
@@ -406,13 +406,13 @@ pub fn elaborate_module_or_generate_item<'a>(
                 }),
             };
 
-            let module_name = arenas.get_ident(module_identifier.item.0);
+            let module_name = arenas.ident_to_str(module_identifier.item.0);
             for module_instance in module_instances.iter() {
                 let ModuleInstance {
                     name_of_module_instance,
                     list_of_port_connections: _,
                 } = arenas.get(module_instance);
-                let instance_name = arenas.get_ident(name_of_module_instance.item.0);
+                let instance_name = arenas.ident_to_str(name_of_module_instance.item.0);
                 let module = HierarchyModule {
                     name: instance_name.to_string(),
                     module_name: module_name.to_string(),
@@ -460,8 +460,8 @@ pub fn elaborate_module_or_generate_item<'a>(
                 expr: iteration,
             } = arenas.get(*iteration);
 
-            let genvar_ident = arenas.get_ident(ident.item.0);
-            if arenas.get_ident(iteration_ident.item.0) != genvar_ident {
+            let genvar_ident = arenas.ident_to_str(ident.item.0);
+            if arenas.ident_to_str(iteration_ident.item.0) != genvar_ident {
                 diagnostics.not_yet_implemented(
                     arenas.get_span(*initialization),
                     "initialization and iteration assignment identifier are different",
@@ -515,7 +515,7 @@ pub fn elaborate_module_or_generate_item<'a>(
                     }
                     GenerateBlock::BeginEnd(ident, mod_or_gen_items) => (
                         *mod_or_gen_items,
-                        ident.map(|i| arenas.get_ident(i.item.0)),
+                        ident.map(|i| arenas.ident_to_str(i.item.0)),
                         *ident,
                     ),
                 };
@@ -635,7 +635,7 @@ pub fn elaborate_module_or_generate_item_declaration<'a>(
                     for net_ident in idents.iter() {
                         let NetIdent { ident, dimension } = arenas.get(net_ident);
                         let origin = arenas.get_item_span(*ident);
-                        let name = arenas.get_ident(ident.item.0);
+                        let name = arenas.ident_to_str(ident.item.0);
                         let dims =
                             dims_to_array(arenas, builder.eval_scope(), diagnostics, *dimension)?;
                         let mut size = ty.force_net_width().get();
@@ -674,7 +674,7 @@ pub fn elaborate_module_or_generate_item_declaration<'a>(
                     for assignment in assignments.iter() {
                         let NetDeclAssignment { ident, expr: _ } = arenas.get(assignment);
                         let origin = arenas.get_item_span(*ident);
-                        let name = arenas.get_ident(ident.item.0);
+                        let name = arenas.ident_to_str(ident.item.0);
                         let size = ty.force_net_width();
                         let signal = signals.insert(Signal {
                             name: name.to_string(),
@@ -742,7 +742,7 @@ pub fn elaborate_module_or_generate_item_declaration<'a>(
             let mut error = false;
             for ast_ident in identifiers.iter() {
                 let ast_ident = arenas.to_item(ast_ident);
-                let ident = arenas.get_ident(ast_ident.item.0);
+                let ident = arenas.ident_to_str(ast_ident.item.0);
 
                 if genvars.insert(ident.to_string(), false).is_some() {
                     diagnostics.duplicate_definition(arenas, ast_ident);
@@ -758,7 +758,7 @@ pub fn elaborate_module_or_generate_item_declaration<'a>(
                 ident, automatic, ..
             } = arenas.get(*id);
 
-            let name = arenas.get_ident(ident.item.0);
+            let name = arenas.ident_to_str(ident.item.0);
             let task = HierarchyTask {
                 name: name.to_string(),
                 ast: *id,
@@ -778,7 +778,7 @@ pub fn elaborate_module_or_generate_item_declaration<'a>(
                 ident, automatic, ..
             } = arenas.get(*id);
 
-            let name = arenas.get_ident(ident.item.0);
+            let name = arenas.ident_to_str(ident.item.0);
             let function = HierarchyFunction {
                 name: name.to_string(),
                 ast: *id,
@@ -811,7 +811,7 @@ pub fn elaborate_variable_type<'a>(
     } = arenas.get(variable_type);
 
     let origin = arenas.get_span(variable_type);
-    let name = arenas.get_ident(identifier.item.0);
+    let name = arenas.ident_to_str(identifier.item.0);
 
     let (dims, size) = match variant {
         VariableTypeVariant::Dimensions(dimensions) => {
@@ -994,7 +994,7 @@ pub fn elaborate_statements<'a>(
                             block_identifier,
                             block_item_decls: _,
                         } = arenas.get(*block);
-                        let name = arenas.get_ident(block_identifier.item.0);
+                        let name = arenas.ident_to_str(block_identifier.item.0);
                         let named_block = HierarchyNamedBlock {
                             name: name.to_string(),
                             ast: *id,
@@ -1064,7 +1064,7 @@ pub fn elaborate_generate_block<'a>(
         Some(GenerateBlock::ModuleOrGenerateItem(id)) => (AstIdRange::single(*id), None, None),
         Some(GenerateBlock::BeginEnd(ident, mod_or_gen_items)) => (
             *mod_or_gen_items,
-            ident.map(|i| arenas.get_ident(i.item.0)),
+            ident.map(|i| arenas.ident_to_str(i.item.0)),
             *ident,
         ),
     };

@@ -216,7 +216,7 @@ fn lower_to_signal<'a>(
         && exprs.is_empty()
         && range_expression.is_none()
     {
-        let ident = arenas.get_ident(ast_ident.item.0);
+        let ident = arenas.ident_to_str(ast_ident.item.0);
         let Some(symbol_key) = scope.get(&ident) else {
             diagnostics.var_not_found(arenas, *ast_ident);
             return Err(());
@@ -260,7 +260,7 @@ fn assign_port_output<'a>(
         && exprs.is_empty()
         && range_expression.is_none()
     {
-        let ident = arenas.get_ident(ast_ident.item.0);
+        let ident = arenas.ident_to_str(ast_ident.item.0);
         let Some(symbol_key) = scope.get(&ident) else {
             diagnostics.var_not_found(arenas, *ast_ident);
             return Err(());
@@ -295,7 +295,7 @@ fn assign_port_output<'a>(
                 todo!()
             }
             Expr::Ident(ast_ident, exprs, range_expression) => {
-                let ident = arenas.get_ident(ast_ident.item.0);
+                let ident = arenas.ident_to_str(ast_ident.item.0);
                 let Some(symbol_key) = scope.get(&ident) else {
                     diagnostics.var_not_found(arenas, *ast_ident);
                     error = true;
@@ -414,7 +414,7 @@ fn assign_task_output<'a>(
                 todo!()
             }
             Expr::Ident(ast_ident, exprs, range_expression) => {
-                let ident = arenas.get_ident(ast_ident.item.0);
+                let ident = arenas.ident_to_str(ast_ident.item.0);
                 let Some(symbol_key) = scope.get(&ident) else {
                     diagnostics.var_not_found(arenas, *ast_ident);
                     error = true;

@@ -1,3 +1,6 @@
+use std::hash::BuildHasher;
+use std::num::NonZeroU64;
+
 use crate::arena::Arena;
 use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::module::Module;
@@ -31,6 +34,15 @@ pub struct ParserScratches {
     exprs_sp: Vec<(expr::StackItem, expr::BindingPower, TokenRange)>,
 }
 
+#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+pub struct IdentRef {
+    offset: usize,
+    length: usize,
+}
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+#[repr(transparent)]
+pub struct IdentId(NonZeroU64);
+
 #[derive(Default)]
 pub struct AstArenas {
     pub nodes: Arena,
@@ -39,6 +51,10 @@ pub struct AstArenas {
     pub text: String,
     pub decimals: Vec<Bits>,
     pub sized_numbers: Vec<SizedNumber>,
+
+    ident_id_lut: hashbrown::HashTable<(IdentRef, IdentId)>,
+    ident_hash_random_stage: foldhash::fast::RandomState,
+    ident_refs: Vec<IdentRef>,
 }
 impl AstArenas {
     fn add<T: Copy + 'static>(&mut self, item: T, range: TokenRange) -> AstId<T> {
@@ -84,6 +100,36 @@ impl AstArenas {
 
     pub fn get_item_span<T: Copy>(&self, id: AstItem<T>) -> TokenRange {
         self.spans[id.loc]
+    }
+
+    pub fn get_or_insert_ident(&mut self, ident: &str) -> IdentId {
+        let hash = self.ident_hash_random_stage.hash_one(ident);
+        match self.ident_id_lut.entry(
+            hash,
+            |(r, _)| ident == &self.text[r.offset..][..r.length],
+            |(r, _)| {
+                self.ident_hash_random_stage
+                    .hash_one(&self.text[r.offset..][..r.length])
+            },
+        ) {
+            hashbrown::hash_table::Entry::Occupied(entry) => entry.get().1,
+            hashbrown::hash_table::Entry::Vacant(entry) => {
+                let ident_ref = IdentRef {
+                    offset: self.text.len(),
+                    length: ident.len(),
+                };
+                self.ident_refs.push(ident_ref);
+                let ident_id = IdentId(NonZeroU64::new(self.ident_refs.len() as u64).unwrap());
+                self.text.push_str(ident);
+                entry.insert((ident_ref, ident_id));
+                ident_id
+            }
+        }
+    }
+
+    pub fn ident_to_str(&self, ident: IdentId) -> &str {
+        let ident_ref = self.ident_refs[ident.0.get() as usize];
+        &self.text[ident_ref.offset..][..ident_ref.length]
     }
 
     pub fn get_ident(&self, ident_ref: TextRef) -> &str {
@@ -270,10 +316,8 @@ impl<'a> Consumable<'a> for Identifier {
         let (span, file) = (*t.span, *t.file);
         let content = &tkw.content(file)[span.as_range()];
         let content = &content[usize::from(content.starts_with('\\'))..];
-        let start = arenas.text.len();
-        let end = start + content.len();
-        arenas.text.push_str(content);
-        Ok(Self(TextRef { start, end }))
+        let ident_id = arenas.get_or_insert_ident(content);
+        Ok(Self(ident_id))
     }
 }
 

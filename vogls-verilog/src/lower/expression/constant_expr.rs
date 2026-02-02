@@ -107,7 +107,7 @@ pub fn eval_constant_expr<'a>(
                     continue;
                 }
 
-                let ident = arenas.get_ident(ast_ident.item.0);
+                let ident = arenas.ident_to_str(ast_ident.item.0);
                 let Some(symbol_key) = scope.get(ident) else {
                     result_stack.push(None);
                     diagnostics.var_not_found(arenas, *ast_ident);

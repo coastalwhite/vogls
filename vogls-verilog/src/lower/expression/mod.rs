@@ -348,7 +348,7 @@ pub fn lower_expr<'a>(
                         Some(BitSlice::PlusWidth(..) | BitSlice::MinusWidth(..))
                     ));
                 let mut exprs = *exprs;
-                let ident = arenas.get_ident(ast_ident.item.0);
+                let ident = arenas.ident_to_str(ast_ident.item.0);
                 let Some(symbol_key) = scope.get(&ident) else {
                     diagnostics.var_not_found(arenas, *ast_ident);
                     result_stack.push(None);
@@ -837,7 +837,7 @@ pub fn get_used_signals<'a>(
                 dispatch_stack.extend([*c, *t, *f].into_iter().map(StackItem::new))
             }
             Expr::Ident(ident, exprs, range_expression) => {
-                let name = arenas.get_ident(ident.item.0);
+                let name = arenas.ident_to_str(ident.item.0);
                 let Some(symbol_key) = scope.get(name) else {
                     diagnostics.var_not_found(arenas, *ident);
                     error = true;
