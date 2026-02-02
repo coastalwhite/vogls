@@ -1,10 +1,10 @@
-use crate::parser::IdentId;
+use vogls_frontend::ident_table::IdentId;
 
 use super::constant_expr::{ConstantExpr, ConstantRangeExpression};
 use super::expr::Expr;
 use super::module::BlockItemDeclaration;
 use super::{
-    AstId, AstIdRange, AstItem, AttributeInstance, DecimalRef, Identifier, RangeExpression
+    AstId, AstIdRange, AstItem, AttributeInstance, DecimalRef, Identifier, RangeExpression,
 };
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498

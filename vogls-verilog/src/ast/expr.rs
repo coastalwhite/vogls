@@ -202,7 +202,7 @@ impl Expr {
                 arenas.get(*falsy).tree_fmt_impl(arenas, f, depth + 1)?;
             }
             Expr::Ident(ident, expr, range_expr) => {
-                writeln!(f, "ident: {}", arenas.ident_to_str(ident.item.0))?;
+                writeln!(f, "ident: {}", &arenas.ident_table[ident.item.0])?;
                 for e in expr.iter() {
                     arenas.get(e).tree_fmt_impl(arenas, f, depth + 1)?;
                 }
@@ -232,13 +232,13 @@ impl Expr {
                 }
             }
             Expr::FunctionCall(ident, exprs) => {
-                writeln!(f, "fn call: {}", arenas.ident_to_str(ident.item.0))?;
+                writeln!(f, "fn call: {}", &arenas.ident_table[ident.item.0])?;
                 for e in exprs.iter() {
                     arenas.get(e).tree_fmt_impl(arenas, f, depth + 1)?;
                 }
             }
             Expr::SystemFunctionCall(ident, exprs) => {
-                writeln!(f, "system fn call: {}", arenas.ident_to_str(ident.item.0))?;
+                writeln!(f, "system fn call: {}", &arenas.ident_table[ident.item.0])?;
                 if let Some(exprs) = exprs {
                     for e in exprs.iter() {
                         arenas.get(e).tree_fmt_impl(arenas, f, depth + 1)?;

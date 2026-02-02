@@ -107,7 +107,10 @@ impl<'a> Scope<'a> {
 
 use std::collections::HashMap;
 
-use vogls_ir::{new_process, BasicBlockBuilder, GlobalContext, Signal, SignalKey, VariableKey, VectorSize, SCALAR_VSIZE};
+use vogls_ir::{
+    BasicBlockBuilder, GlobalContext, SCALAR_VSIZE, Signal, SignalKey, VariableKey, VectorSize,
+    new_process,
+};
 
 use crate::ast::AstId;
 use crate::ast::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression};
@@ -116,14 +119,16 @@ use crate::ast::module::{
     GenerateRegion, Module, ModuleItem, NonPortModuleItem, ParamAssignment, ParameterDeclaration,
     Range,
 };
-use crate::hierarchy::{Hierarchy, HierarchyItem, HierarchyKey, HierarchyModule, HierarchyNet, ScopeBuilder};
+use crate::hierarchy::{
+    Hierarchy, HierarchyItem, HierarchyKey, HierarchyModule, HierarchyNet, ScopeBuilder,
+};
 use crate::parser::AstArenas;
 
 pub use self::expression::eval_constant_expr;
 use self::expression::{lower_expr, truncate_or_extend};
 pub use self::vtype::VType;
 pub use self::vvalue::VValue;
-pub use diagnostics::Diagnostics;
+pub use diagnostics::{Diagnostics, LowerErrorReason};
 pub use module_or_generate_item::dims_to_array;
 
 pub fn lower_module_to_ir<'a>(
@@ -216,7 +221,7 @@ fn lower_to_signal<'a>(
         && exprs.is_empty()
         && range_expression.is_none()
     {
-        let ident = arenas.ident_to_str(ast_ident.item.0);
+        let ident = &arenas.ident_table[ast_ident.item.0];
         let Some(symbol_key) = scope.get(&ident) else {
             diagnostics.var_not_found(arenas, *ast_ident);
             return Err(());
@@ -260,7 +265,7 @@ fn assign_port_output<'a>(
         && exprs.is_empty()
         && range_expression.is_none()
     {
-        let ident = arenas.ident_to_str(ast_ident.item.0);
+        let ident = &arenas.ident_table[ast_ident.item.0];
         let Some(symbol_key) = scope.get(&ident) else {
             diagnostics.var_not_found(arenas, *ast_ident);
             return Err(());
@@ -295,7 +300,7 @@ fn assign_port_output<'a>(
                 todo!()
             }
             Expr::Ident(ast_ident, exprs, range_expression) => {
-                let ident = arenas.ident_to_str(ast_ident.item.0);
+                let ident = &arenas.ident_table[ast_ident.item.0];
                 let Some(symbol_key) = scope.get(&ident) else {
                     diagnostics.var_not_found(arenas, *ast_ident);
                     error = true;
@@ -414,7 +419,7 @@ fn assign_task_output<'a>(
                 todo!()
             }
             Expr::Ident(ast_ident, exprs, range_expression) => {
-                let ident = arenas.ident_to_str(ast_ident.item.0);
+                let ident = &arenas.ident_table[ast_ident.item.0];
                 let Some(symbol_key) = scope.get(&ident) else {
                     diagnostics.var_not_found(arenas, *ast_ident);
                     error = true;
@@ -453,16 +458,14 @@ fn assign_task_output<'a>(
                             (offset, Some(width as VectorSize))
                         }
                         BitSlice::PlusWidth(base, width) => {
-                            let offset =
-                                lower_expr(gl, arenas, scope, diagnostics, builder, *base);
+                            let offset = lower_expr(gl, arenas, scope, diagnostics, builder, *base);
                             let width =
                                 eval_constant_expr(arenas, scope.eval(), diagnostics, *width);
                             let width = width?.as_integer().unwrap();
                             (offset?.0, Some(VectorSize::new(width as u32).unwrap()))
                         }
                         BitSlice::MinusWidth(base, width) => {
-                            let offset =
-                                lower_expr(gl, arenas, scope, diagnostics, builder, *base);
+                            let offset = lower_expr(gl, arenas, scope, diagnostics, builder, *base);
                             let width =
                                 eval_constant_expr(arenas, scope.eval(), diagnostics, *width)?;
                             let width =

@@ -1,8 +1,8 @@
+use vogls_frontend::ident_table::IdentId;
 use vogls_ir::Bits;
 
 use crate::arena::{ArenaId, ArenaIdRange, ArenaIdRangeIter};
 use crate::number::{Base, Sign};
-use crate::parser::IdentId;
 
 use self::constant_expr::ConstantExpr;
 use self::expr::Expr;
@@ -210,4 +210,3 @@ pub struct SizedNumber {
     pub base: Base,
     pub value: Bits,
 }
-

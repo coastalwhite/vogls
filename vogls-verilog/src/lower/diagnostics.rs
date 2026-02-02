@@ -2,7 +2,8 @@ use vogls_ir::token_range::TokenRange;
 
 use crate::ast::{AstItem, Identifier};
 use crate::hierarchy::HierarchyModule;
-use crate::parser::{AstArenas, IdentId};
+use crate::parser::AstArenas;
+use vogls_frontend::ident_table::IdentId;
 
 use super::VType;
 

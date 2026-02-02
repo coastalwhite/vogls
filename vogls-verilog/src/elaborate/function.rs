@@ -1,4 +1,5 @@
 use slotmap::SlotMap;
+use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{INTEGER_VSIZE, SCALAR_VSIZE, Signal, SignalKey};
 
 use crate::ast::AstIdRange;
@@ -7,12 +8,16 @@ use crate::hierarchy::{HierarchyItem, HierarchyNet, ScopeBuilder};
 use crate::lower::{Diagnostics, VType, evaluate_range};
 use crate::parser::AstArenas;
 
+use super::ElabTable;
+
 pub fn elaborate_fn<'a>(
-    signals: &mut SlotMap<SignalKey, Signal>,
     arenas: &'a AstArenas,
-    builder: &mut ScopeBuilder<'a>,
+    parent: SymbolId,
+    table: &mut ElabTable,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
+    todo!()
+        /*
     let HierarchyItem::Function(i) = builder.hierarchy.symbols[builder.key.as_idx()] else {
         unreachable!();
     };
@@ -55,7 +60,7 @@ pub fn elaborate_fn<'a>(
                 TfType::Real | TfType::Realtime | TfType::Time => todo!(),
             };
             let ident = arenas.to_item(ident);
-            let name = arenas.ident_to_str(ident.item.0);
+            let name = &arenas.ident_table[ident.item.0];
             let signal = signals.insert(Signal {
                 name: name.to_string(),
                 size: ty.force_net_width(),
@@ -80,14 +85,17 @@ pub fn elaborate_fn<'a>(
         diagnostics,
         AstIdRange::single(*statement),
     )
+        */
 }
 
 pub fn elaborate_task<'a>(
-    signals: &mut SlotMap<SignalKey, Signal>,
     arenas: &'a AstArenas,
-    builder: &mut ScopeBuilder<'a>,
+    symbol: SymbolId,
+    table: &mut ElabTable,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
+    todo!()
+    /*
     let HierarchyItem::Task(i) = builder.hierarchy.symbols[builder.key.as_idx()] else {
         unreachable!();
     };
@@ -131,7 +139,7 @@ pub fn elaborate_task<'a>(
                 TfType::Real | TfType::Realtime | TfType::Time => todo!(),
             };
             let ident = arenas.to_item(ident);
-            let name = arenas.ident_to_str(ident.item.0);
+            let name = &arenas.ident_table[ident.item.0];
             let signal = signals.insert(Signal {
                 name: name.to_string(),
                 size: ty.force_net_width(),
@@ -156,4 +164,5 @@ pub fn elaborate_task<'a>(
         diagnostics,
         *statement_or_null,
     )
+    */
 }

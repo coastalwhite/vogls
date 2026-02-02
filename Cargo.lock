@@ -457,6 +457,7 @@ version = "0.0.1"
 dependencies = [
  "clap",
  "slotmap",
+ "vogls-frontend",
  "vogls-ir",
  "vogls-sim",
  "vogls-trace",
@@ -469,6 +470,14 @@ version = "0.0.1"
 dependencies = [
  "bytemuck",
  "proptest",
+]
+
+[[package]]
+name = "vogls-frontend"
+version = "0.0.1"
+dependencies = [
+ "foldhash",
+ "hashbrown 0.16.1",
 ]
 
 [[package]]
@@ -520,6 +529,7 @@ dependencies = [
  "foldhash",
  "hashbrown 0.16.1",
  "slotmap",
+ "vogls-frontend",
  "vogls-ir",
 ]
 

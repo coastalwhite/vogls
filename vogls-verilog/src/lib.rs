@@ -7,4 +7,3 @@ pub mod number;
 pub mod parser;
 mod span;
 pub mod tokenizer;
-pub mod name_pass;

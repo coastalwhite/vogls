@@ -1,8 +1,11 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use slotmap::{SecondaryMap, SlotMap};
+use vogls_frontend::VgHashMap;
+use vogls_frontend::ident_table::IdentId;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::{Bits, GlobalContext, LogicMode, Signal};
 use vogls_sim::{
@@ -14,7 +17,9 @@ use vogls_verilog::ast::module::{
     CaseGenerateConstruct, CaseGenerateItem, GenerateBlock, IfGenerateConstruct,
     LoopGenerateConstruct, Module, ModuleItem, ModuleOrGenerateItem, NonPortModuleItem,
 };
-use vogls_verilog::elaborate::{elaborate_module, elaborate_module_or_generate_item};
+use vogls_verilog::elaborate::{
+    ElabModule, ElabSymbol, ElabTable, elaborate_module, elaborate_module_or_generate_item,
+};
 use vogls_verilog::hierarchy::{
     Hierarchy, HierarchyGenerateBlock, HierarchyItem, HierarchyItemRange, HierarchyKey,
     HierarchyModule, HierarchyParameter, ScopeBuilder,
@@ -69,7 +74,7 @@ pub fn token_range_to_line_range(
 fn append_referenced_modules_generate_block<'a>(
     arenas: &'a AstArenas,
     generate_block: AstId<GenerateBlock>,
-    referenced: &mut HashSet<&'a str>,
+    referenced: &mut HashSet<IdentId>,
 ) {
     match arenas.get(generate_block) {
         GenerateBlock::ModuleOrGenerateItem(id) => {
@@ -86,7 +91,7 @@ fn append_referenced_modules_generate_block<'a>(
 fn append_referenced_modules_opt_generate_block<'a>(
     arenas: &'a AstArenas,
     generate_block: AstId<Option<GenerateBlock>>,
-    referenced: &mut HashSet<&'a str>,
+    referenced: &mut HashSet<IdentId>,
 ) {
     match arenas.get(generate_block) {
         None => {}
@@ -104,12 +109,12 @@ fn append_referenced_modules_opt_generate_block<'a>(
 fn append_referenced_modules<'a>(
     arenas: &'a AstArenas,
     module_or_generate_item: AstId<ModuleOrGenerateItem>,
-    referenced: &mut HashSet<&'a str>,
+    referenced: &mut HashSet<IdentId>,
 ) {
     match arenas.get(module_or_generate_item) {
         ModuleOrGenerateItem::ModuleInstantiation(module_instantiation) => {
             let module_instantiation = arenas.get(*module_instantiation);
-            let module_name = arenas.ident_to_str(module_instantiation.module_identifier.item.0);
+            let module_name = module_instantiation.module_identifier.item.0;
             referenced.insert(module_name);
         }
         ModuleOrGenerateItem::ModuleOrGenerateItemDeclaration(_) => {}
@@ -179,14 +184,15 @@ pub fn run(
     let mut gl = GlobalContext::default();
     gl.logic_mode = ectx.logic_mode;
 
-    let module_lut =
-        HashMap::<&str, usize>::from_iter(ast.modules.iter().enumerate().map(|(i, module_id)| {
+    let module_lut = HashMap::<IdentId, usize>::from_iter(ast.modules.iter().enumerate().map(
+        |(i, module_id)| {
             let module = ast.arenas.get(module_id);
-            (ast.arenas.ident_to_str(module.module_identifier.item.0), i)
-        }));
+            (module.module_identifier.item.0, i)
+        },
+    ));
 
     let tl_module_name = match top_level_module {
-        Some(v) => v,
+        Some(v) => ast.arenas.ident_table.get_or_insert(v),
         None => {
             let mut referenced = HashSet::new();
             for module_id in ast.modules {
@@ -220,8 +226,8 @@ pub fn run(
                     ports: _,
                     default_nettype: _,
                 } = ast.arenas.get(module_id);
-                let module_name = ast.arenas.ident_to_str(module_identifier.item.0);
-                if referenced.contains(module_name) {
+                let module_name = module_identifier.item.0;
+                if referenced.contains(&module_name) {
                     continue;
                 }
                 top_level_modules.push((module_id, module_name));
@@ -234,7 +240,7 @@ pub fn run(
             } else if top_level_modules.len() > 1 {
                 let names = top_level_modules
                     .iter()
-                    .map(|(_, n)| *n)
+                    .map(|(_, n)| &ast.arenas.ident_table[*n])
                     .collect::<Vec<&str>>();
                 writeln!(
                     ectx.stderr,
@@ -255,130 +261,45 @@ pub fn run(
             }
         }
     };
-    let Some(tl_module) = module_lut.get(tl_module_name) else {
+    let Some(tl_module) = module_lut.get(&tl_module_name) else {
         return Err(<Box<dyn std::error::Error>>::from(
             "cannot find top-level module".to_string(),
         ));
     };
 
-    let mut hierarchy = Hierarchy::new(tl_module_name.to_string());
-    let top_level_key = hierarchy.top_level_key();
+    let mut elab_table = ElabTable::default();
+    let module_instance_stack = Vec::new();
+
+    let tl_module_symid = elab_table
+        .insert_root(
+            tl_module_name,
+            ElabSymbol::Module(ElabModule {
+                module: tl_module_name,
+                ports: Vec::new(),
+                parameters: Vec::new(),
+                parameter_overrides: Arc::new(VgHashMap::default()),
+                parameter_override_values: Arc::new(Vec::new()),
+            }),
+        )
+        .expect("There are no symbols yet. This cannot fail");
 
     let mut diagnostics = LowerDiagnostics::default();
     let mut error = false;
-    error |= elaborate_module(
-        &mut gl.signals,
-        &ast.arenas,
-        ast.modules.get(*tl_module),
-        &mut ScopeBuilder {
-            hierarchy: &mut hierarchy,
-            key: top_level_key,
-        },
-        &mut diagnostics,
-    )
-    .is_err();
 
-    // 1. Create name hierarchy
-    // 2. Assign types to Symbols 
-    // 3. Convert hierarchy to lowering hierarchy
-    // 4. Lower.
-
-
-    let mut offset = 1;
-    while let Some(item) = hierarchy.symbols.get(offset) {
-        let item = *item;
-        let mut builder = ScopeBuilder {
-            hierarchy: &mut hierarchy,
-            key: HierarchyKey::new(offset),
+    module_instance_stack.push(tl_module_symid);
+    while let Some(module_symid) = module_instance_stack.pop() {
+        let ElabSymbol::Module(m) = &elab_table[module_symid].content else {
+            unreachable!()
         };
-
-        use HierarchyItem as I;
-        match item {
-            I::Module(m) => {
-                let items_len = builder.hierarchy.symbols.len();
-                let HierarchyModule {
-                    name: _,
-                    module_name,
-                    children,
-                    ast: _,
-                    parent: _,
-                    lut: _,
-                    ports: _,
-                    parameter_lut: _,
-                    parameters: _,
-                    parameter_overrides: _,
-                } = &mut builder.hierarchy.modules[m];
-
-                *children = HierarchyItemRange {
-                    start: items_len,
-                    end: items_len,
-                };
-                let id = ast.modules.get(module_lut[module_name.as_str()]);
-
-                error |= elaborate_module(
-                    &mut gl.signals,
-                    &ast.arenas,
-                    id,
-                    &mut builder,
-                    &mut diagnostics,
-                )
-                .is_err();
-            }
-            I::NamedBlock(_) => todo!(),
-            I::GenerateBlock(i) => {
-                let HierarchyGenerateBlock {
-                    ast: children,
-                    genvar,
-                    genvars,
-                    ..
-                } = &builder.hierarchy.generate_blocks[i];
-
-                let children = *children;
-                let genvar = genvar.clone();
-                let mut genvars = genvars.clone();
-
-                if let Some((name, value)) = genvar {
-                    builder.insert_parameter(HierarchyParameter {
-                        name,
-                        parent: builder.key(),
-                        value,
-                    });
-                };
-
-                for id in children.iter() {
-                    error |= elaborate_module_or_generate_item(
-                        &mut gl.signals,
-                        &ast.arenas,
-                        id,
-                        &mut builder,
-                        &mut diagnostics,
-                        &mut genvars,
-                    )
-                    .is_err();
-                }
-            }
-            I::Task(_) => {
-                error |= vogls_verilog::elaborate::function::elaborate_task(
-                    &mut gl.signals,
-                    &ast.arenas,
-                    &mut builder,
-                    &mut diagnostics,
-                )
-                .is_err();
-            }
-            I::Function(_) => {
-                error |= vogls_verilog::elaborate::function::elaborate_fn(
-                    &mut gl.signals,
-                    &ast.arenas,
-                    &mut builder,
-                    &mut diagnostics,
-                )
-                .is_err();
-            }
-
-            I::Net(_) | I::Parameter(_) => {}
-        }
-        offset += 1;
+        error |= elaborate_module(
+            &ast.arenas,
+            ast.modules.get(module_lut[&m.module]),
+            module_symid,
+            &mut elab_table,
+            &mut module_instance_stack,
+            &mut diagnostics,
+        )
+        .is_err();
     }
 
     if !diagnostics.warnings.is_empty() {

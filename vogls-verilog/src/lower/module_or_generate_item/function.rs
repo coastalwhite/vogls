@@ -40,7 +40,7 @@ pub fn lower<'a>(
         return Err(());
     }
 
-    let name = arenas.ident_to_str(ident.item.0);
+    let name = &arenas.ident_table[ ident.item.0 ];
     let parent_key = hierarchy.functions[hierarchy_function_i].parent;
 
     macro_rules! scope {
@@ -141,7 +141,7 @@ pub fn lower<'a>(
         };
 
         for input_ident in port_identifiers.iter() {
-            let name = arenas.ident_to_str(arenas.get(input_ident).0);
+            let name = &arenas.ident_table[ arenas.get(input_ident).0 ];
             let input_key = gl.signals.insert(Signal {
                 name: name.to_string(),
                 size: input_ty.force_net_width(),
@@ -274,7 +274,7 @@ pub fn lower_task<'a>(
         return Err(());
     }
 
-    let name = arenas.ident_to_str(ident.item.0);
+    let name = &arenas.ident_table[ ident.item.0 ];
     let parent_key = hierarchy.tasks[hierarchy_task_i].parent;
 
     let fn_key = *hierarchy
@@ -336,7 +336,7 @@ pub fn lower_task<'a>(
         };
 
         for port_ident in port_identifiers.iter() {
-            let name = arenas.ident_to_str(arenas.get(port_ident).0);
+            let name = &arenas.ident_table[ arenas.get(port_ident).0 ];
             let port_key = gl.signals.insert(Signal {
                 name: name.to_string(),
                 size: port_ty.force_net_width(),

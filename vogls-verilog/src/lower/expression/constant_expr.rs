@@ -8,12 +8,46 @@ use crate::lower::EvalScope;
 use crate::lower::vvalue::VValue;
 use crate::number::Sign;
 use crate::parser::AstArenas;
+use vogls_frontend::ident_table::IdentId;
 
 use super::Diagnostics;
 
 pub fn eval_constant_expr<'a>(
     arenas: &'a AstArenas,
-    scope: EvalScope<'a>,
+    scope: EvalScope<'_>,
+    diagnostics: &mut Diagnostics,
+    expr: AstId<ConstantExpr>,
+) -> Result<VValue, ()> {
+    eval_constant_expr_f(
+        arenas,
+        |ident| {
+            let ident = &arenas.ident_table[ident];
+            let symbol_key = scope.get(ident)?;
+            match &scope.hierarchy.items()[symbol_key.as_idx()] {
+                HierarchyItem::Parameter(n) => {
+                    let HierarchyParameter {
+                        name: _,
+                        parent: _,
+                        value,
+                    } = &scope.hierarchy.parameters()[*n];
+                    Some(value.clone())
+                }
+                HierarchyItem::Net(..) => None,
+                HierarchyItem::Module(_) => todo!(),
+                HierarchyItem::NamedBlock(_) => todo!(),
+                HierarchyItem::Task(_) => todo!(),
+                HierarchyItem::Function(_) => todo!(),
+                HierarchyItem::GenerateBlock(_) => todo!(),
+            }
+        },
+        diagnostics,
+        expr,
+    )
+}
+
+pub fn eval_constant_expr_f<'a>(
+    arenas: &'a AstArenas,
+    resolve: impl Fn(IdentId) -> Option<VValue>,
     diagnostics: &mut Diagnostics,
     expr: AstId<ConstantExpr>,
 ) -> Result<VValue, ()> {
@@ -107,36 +141,11 @@ pub fn eval_constant_expr<'a>(
                     continue;
                 }
 
-                let ident = arenas.ident_to_str(ast_ident.item.0);
-                let Some(symbol_key) = scope.get(ident) else {
+                let Some(value) = resolve(ast_ident.item.0) else {
                     result_stack.push(None);
                     diagnostics.var_not_found(arenas, *ast_ident);
                     error = true;
                     continue;
-                };
-                let value = match &scope.hierarchy.items()[symbol_key.as_idx()] {
-                    HierarchyItem::Parameter(n) => {
-                        let HierarchyParameter {
-                            name: _,
-                            parent: _,
-                            value,
-                        } = &scope.hierarchy.parameters()[*n];
-                        value.clone()
-                    }
-                    HierarchyItem::Net(..) => {
-                        result_stack.push(None);
-                        diagnostics.not_yet_implemented(
-                            arenas.get_item_span(*ast_ident),
-                            "non-constant symbol in constant-expr",
-                        );
-                        error = true;
-                        continue;
-                    }
-                    HierarchyItem::Module(_) => todo!(),
-                    HierarchyItem::NamedBlock(_) => todo!(),
-                    HierarchyItem::Task(_) => todo!(),
-                    HierarchyItem::Function(_) => todo!(),
-                    HierarchyItem::GenerateBlock(_) => todo!(),
                 };
                 result_stack.push(Some(value));
             }

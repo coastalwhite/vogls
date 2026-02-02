@@ -88,7 +88,7 @@ pub fn variable_lvalue_flat_ty<'a>(
         range_expression,
     } = arenas.get(ast_lvalue);
 
-    let lvalue_ident = arenas.ident_to_str(ident.item.0);
+    let lvalue_ident = &arenas.ident_table[ident.item.0];
     let Some(symbol_key) = scope.get(&lvalue_ident) else {
         diagnostics.var_not_found(arenas, *ident);
         return Err(());
@@ -176,7 +176,7 @@ pub fn assign_variable_lvalue_flat<'a>(
         range_expression,
     } = arenas.get(ast_lvalue);
 
-    let lvalue_ident = arenas.ident_to_str(ident.item.0);
+    let lvalue_ident = &arenas.ident_table[ident.item.0];
     let Some(symbol_key) = scope.get(&lvalue_ident) else {
         diagnostics.var_not_found(arenas, *ident);
         return Err(());
@@ -394,7 +394,7 @@ pub fn net_lvalue_flat_ty<'a>(
         constant_range_expression,
     } = arenas.get(ast_lvalue);
 
-    let lvalue_ident = arenas.ident_to_str(ident.item.0);
+    let lvalue_ident = &arenas.ident_table[ident.item.0];
     let Some(symbol_key) = scope.get(&lvalue_ident) else {
         diagnostics.var_not_found(arenas, *ident);
         return Err(());
@@ -480,7 +480,7 @@ fn assign_net_lvalue_flat<'a>(
         constant_range_expression,
     } = arenas.get(lvalue);
 
-    let Some(symbol_key) = scope.get(arenas.ident_to_str(ident.item.0)) else {
+    let Some(symbol_key) = scope.get(&arenas.ident_table[ident.item.0]) else {
         diagnostics.var_not_found(arenas, *ident);
         return Err(());
     };

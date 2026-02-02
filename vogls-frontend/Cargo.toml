@@ -1,11 +1,11 @@
 [package]
-name = "vogls-verilog"
+name = "vogls-frontend"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
-vogls-ir.workspace = true
-vogls-frontend.workspace = true
-slotmap.workspace = true
 foldhash.workspace = true
 hashbrown.workspace = true
+
+[lints]
+workspace = true

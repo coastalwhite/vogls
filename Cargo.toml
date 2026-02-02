@@ -7,6 +7,7 @@ members = [
     "vogls-bits",
     "vogls-sim",
     "vogls-verilog",
+    "vogls-frontend",
 ]
 resolver = "3"
 
@@ -24,6 +25,7 @@ foldhash = "0.2.0"
 clap = { version = "4.5", features = ["derive"] }
 
 vogls.path = "vogls"
+vogls-frontend.path = "vogls-frontend"
 vogls-sim.path = "vogls-sim"
 vogls-ir.path = "vogls-ir"
 vogls-trace.path = "vogls-trace"

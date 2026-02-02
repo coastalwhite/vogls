@@ -957,7 +957,7 @@ impl<'a> Consumable<'a> for SystemTaskIdentifier {
         let t = tkw.next_expect(T::DollarIdent, diagnostics.as_deref_mut())?;
         let (span, file) = (*t.span, *t.file);
         let content = &tkw.content(file)[span.start() + 1..span.end()];
-        let ident_id = arenas.get_or_insert_ident(content);
+        let ident_id = arenas.ident_table.get_or_insert(content);
         Ok(Self(ident_id))
     }
 }

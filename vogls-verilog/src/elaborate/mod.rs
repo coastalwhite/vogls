@@ -1,43 +1,104 @@
 use std::collections::HashMap;
-use std::collections::hash_map::Entry;
+use std::sync::Arc;
 
-use slotmap::SlotMap;
-use vogls_ir::{ConnectionDirection, INTEGER_VSIZE, SCALAR_VSIZE, Signal, SignalKey, VectorSize};
+use vogls_frontend::VgHashMap;
+use vogls_frontend::ident_table::{IdentId, IdentTable};
+use vogls_frontend::symbol_table::SymbolId;
+use vogls_ir::{ConnectionDirection, INTEGER_VSIZE, SCALAR_VSIZE, VectorSize};
 
-use crate::ast::constant_expr::ConstantMinTypMaxExpression;
+use crate::ast::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression};
 use crate::ast::module::{
-    CaseGenerateConstruct, CaseGenerateItem, CaseGeneratePattern, FunctionDeclaration,
+    CaseGenerateConstruct, CaseGenerateItem, CaseGeneratePattern, Dimension, FunctionDeclaration,
     GenerateBlock, GenvarAssignment, GenvarDeclaration, IfGenerateConstruct, IntegerDeclaration,
     LocalParameterDeclaration, LoopGenerateConstruct, Module, ModuleInstance, ModuleInstantiation,
     ModuleItem, ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration, ModulePorts,
     NamedParameterAssignment, NetDeclAssignment, NetDeclaration, NetDeclarationNets, NetIdent,
     NetType, NonPortModuleItem, ParamAssignment, ParameterDeclaration, ParameterDeclarationTyping,
-    ParameterValueAssignment, Port, PortDeclaration, PortExpression, PortReference, RegDeclaration,
-    TaskDeclaration, VariableType, VariableTypeVariant,
+    ParameterValueAssignment, Port, PortDeclaration, PortExpression, PortReference, Range,
+    RegDeclaration, TaskDeclaration, VariableType, VariableTypeVariant,
 };
 use crate::ast::statement::{
     Block, CaseItem, CaseStatement, ConditionalStatement, IfBranch, LoopStatement,
     ProceduralTimingControlStatement, SeqBlock, Statement, StatementContent, StatementOrNull,
     WaitStatement,
 };
-use crate::ast::{AstId, AstIdRange};
+use crate::ast::{AstId, AstIdRange, AstItem, Identifier};
 use crate::hierarchy::{
-    HierarchyFunction, HierarchyGenerateBlock, HierarchyItem, HierarchyItemRange, HierarchyModule,
-    HierarchyNamedBlock, HierarchyNet, HierarchyParameter, HierarchyTask, ParameterOverrides,
-    ScopeBuilder,
+    HierarchyGenerateBlock, HierarchyItemRange, HierarchyModule, ParameterOverrides,
 };
-use crate::lower::{Diagnostics, VType, dims_to_array, eval_constant_expr, evaluate_range};
+use crate::lower::expression::eval_constant_expr_f;
+use crate::lower::{Diagnostics, VType, VValue};
 use crate::parser::AstArenas;
 
 pub mod function;
 
+pub type ElabTable = vogls_frontend::symbol_table::SymbolTable<ElabSymbol>;
+
+pub enum ElabSymbol {
+    Module(ElabModule),
+    Parameter(VValue),
+    Net(VType, Vec<u32>),
+    Reg(VType, Vec<u32>),
+    NamedBlock,
+    GenerateBlock,
+    GenVar,
+    Task(AstId<TaskDeclaration>),
+    Function(AstId<FunctionDeclaration>),
+}
+
+pub struct ElabModule {
+    pub module: IdentId,
+
+    pub ports: Vec<SymbolId>,
+    pub parameters: Vec<SymbolId>,
+
+    pub parameter_overrides: Arc<VgHashMap<IdentId, usize>>,
+    pub parameter_override_values: Arc<Vec<VValue>>,
+}
+
+pub fn try_table_insert(
+    arenas: &AstArenas,
+    table: &mut ElabTable,
+    parent: SymbolId,
+    name: AstItem<Identifier>,
+    content: ElabSymbol,
+    diagnostics: &mut Diagnostics,
+) -> Result<SymbolId, ()> {
+    let Ok(symid) = table.insert(name.item.0, parent, content) else {
+        diagnostics.duplicate_definition(arenas, name);
+        return Err(());
+    };
+
+    Ok(symid)
+}
+pub fn table_recursive_resolve(
+    table: &ElabTable,
+    parent: SymbolId,
+    name: IdentId,
+) -> Option<SymbolId> {
+    // @TODO: Actually recursively resolve
+    table.resolve(parent, name)
+}
+pub fn try_table_resolve(
+    arenas: &AstArenas,
+    table: &ElabTable,
+    parent: SymbolId,
+    name: AstItem<Identifier>,
+    diagnostics: &mut Diagnostics,
+) -> Result<SymbolId, ()> {
+    let Some(symid) = table_recursive_resolve(table, parent, name.item.0) else {
+        diagnostics.var_not_found(arenas, name);
+        return Err(());
+    };
+    Ok(symid)
+}
+
 pub fn elaborate_module<'a>(
-    signals: &mut SlotMap<SignalKey, Signal>,
     arenas: &'a AstArenas,
-
     module: AstId<Module>,
-
-    builder: &mut ScopeBuilder<'a>,
+    module_symid: SymbolId,
+    table: &mut ElabTable,
+    module_instances_todo: &mut Vec<SymbolId>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
     let Module {
@@ -49,8 +110,11 @@ pub fn elaborate_module<'a>(
         default_nettype: _,
     } = arenas.get(module);
 
-    let mut parameter_idx = 0;
-    let mut gen_vars = HashMap::<String, bool>::new();
+    let symbol = &table[module_symid];
+    let ElabSymbol::Module(elab_module) = &symbol.content else {
+        unreachable!("elaborated module is not a module");
+    };
+    let mut param_override_is_used = vec![false; elab_module.parameter_override_values.len()];
 
     if let Some(module_parameter_port_list) = module_parameter_port_list {
         for id in module_parameter_port_list.iter() {
@@ -72,9 +136,10 @@ pub fn elaborate_module<'a>(
                 arenas,
                 *typing,
                 *assignments,
-                builder,
+                module_symid,
+                table,
                 diagnostics,
-                Some(&mut parameter_idx),
+                Some(&mut param_override_is_used),
             )?;
         }
     }
@@ -88,25 +153,25 @@ pub fn elaborate_module<'a>(
                         let PortExpression { references } = arenas.get(*id);
                         let PortReference { identifier } = arenas.get(*references);
 
-                        let name = arenas.ident_to_str(identifier.item.0);
-
-                        // Insert the port as IO.
-                        let HierarchyItem::Module(m) =
-                            builder.hierarchy.items()[builder.key().as_idx()]
-                        else {
-                            unreachable!()
-                        };
-                        let m = &mut builder.hierarchy.modules[m];
-                        m.lut.insert(name.to_string(), m.ports.len());
-                        m.ports.push((usize::MAX, ConnectionDirection::Both));
+                        if table
+                            .insert(
+                                identifier.item.0,
+                                module_symid,
+                                ElabSymbol::Net(VType::SCALAR_NET, Vec::new()),
+                            )
+                            .is_err()
+                        {
+                            diagnostics.duplicate_definition(arenas, *identifier);
+                            error = true;
+                        }
                     }
                 }
             }
         }
         ModulePorts::PortDeclarations(port_declarations) => {
             for id in port_declarations.iter() {
-                error |=
-                    elaborate_port_declaration(signals, arenas, id, builder, diagnostics).is_err();
+                error |= elaborate_port_declaration(arenas, id, module_symid, table, diagnostics)
+                    .is_err();
             }
         }
     }
@@ -114,30 +179,30 @@ pub fn elaborate_module<'a>(
     for item in module_items.iter() {
         match arenas.get(item) {
             ModuleItem::PortDeclaration(id) => {
-                error |=
-                    elaborate_port_declaration(signals, arenas, *id, builder, diagnostics).is_err();
+                error |= elaborate_port_declaration(arenas, *id, module_symid, table, diagnostics)
+                    .is_err();
             }
             ModuleItem::NonPortModuleItem(id) => match arenas.get(*id) {
                 NonPortModuleItem::ModuleOrGenerateItem(id) => {
                     error |= elaborate_module_or_generate_item(
-                        signals,
                         arenas,
                         *id,
-                        builder,
+                        module_symid,
+                        table,
+                        module_instances_todo,
                         diagnostics,
-                        &mut gen_vars,
                     )
                     .is_err();
                 }
                 NonPortModuleItem::GenerateRegion(region) => {
                     for id in region.module_or_generate_item.iter() {
                         error |= elaborate_module_or_generate_item(
-                            signals,
                             arenas,
                             id,
-                            builder,
+                            module_symid,
+                            table,
+                            module_instances_todo,
                             diagnostics,
-                            &mut gen_vars,
                         )
                         .is_err();
                     }
@@ -152,14 +217,20 @@ pub fn elaborate_module<'a>(
                         arenas,
                         *typing,
                         *assignments,
-                        builder,
+                        module_symid,
+                        table,
                         diagnostics,
-                        Some(&mut parameter_idx),
+                        Some(&mut param_override_is_used),
                     )?;
                 }
                 NonPortModuleItem::SpecParamDeclaration => todo!(),
             },
         }
+    }
+
+    if !param_override_is_used.iter().all(|v| *v) {
+        diagnostics.not_yet_implemented(arenas.get_span(module), "unused parameter override");
+        error = true;
     }
 
     if error {
@@ -175,55 +246,75 @@ pub fn elaborate_parameter_declaration<'a>(
     typing: AstId<ParameterDeclarationTyping>,
     assignments: AstIdRange<ParamAssignment>,
 
-    builder: &mut ScopeBuilder<'a>,
+    parent: SymbolId,
+    table: &mut ElabTable,
     diagnostics: &mut Diagnostics,
-    mut parameter_idx: Option<&mut usize>,
+    mut param_override_is_used: Option<&mut [bool]>,
 ) -> Result<(), ()> {
-    let _ty = parameter_typing_to_type(arenas, builder, diagnostics, typing)?;
+    let (_, _, ty) = match arenas.get(typing) {
+        ParameterDeclarationTyping::None(signed, range) => {
+            let (msb, lsb, width) = match range {
+                None => (0, 0, SCALAR_VSIZE),
+                Some(ast_range) => {
+                    eval_constant_range(arenas, parent, table, diagnostics, *ast_range)?
+                }
+            };
+            (msb, lsb, VType::net(width, *signed))
+        }
+        ParameterDeclarationTyping::Integer => (31, 0, VType::SignedNet(INTEGER_VSIZE)),
+        ParameterDeclarationTyping::Real
+        | ParameterDeclarationTyping::Realtime
+        | ParameterDeclarationTyping::Time => {
+            diagnostics
+                .not_yet_implemented(arenas.get_span(typing), "real / realtime / time parameter");
+            return Err(());
+        }
+    };
+
     for assignment in assignments.iter() {
         let ParamAssignment { param, constant } = arenas.get(assignment);
-        let name = arenas.ident_to_str(param.item.0);
+        let name = param.item.0;
         let mut value = match arenas.get(*constant) {
             ConstantMinTypMaxExpression::Single(id) => {
-                eval_constant_expr(arenas, builder.eval_scope(), diagnostics, *id)?
+                eval_constant_expr_elab(arenas, parent, table, diagnostics, *id)?
             }
             ConstantMinTypMaxExpression::MinTypMax { .. } => todo!(),
         };
 
-        if let Some(parameter_idx) = parameter_idx.as_deref_mut() {
-            // Insert the parameter as a module parameter.
-            let HierarchyItem::Module(m) = builder.hierarchy.items()[builder.key().as_idx()] else {
-                unreachable!()
+        if let Some(param_override_is_used) = param_override_is_used.as_mut() {
+            let symbol = &mut table[parent];
+            let ElabSymbol::Module(module) = &mut symbol.content else {
+                unreachable!("non-local parameter can only be defined at module-level");
             };
-            let idx = builder.hierarchy.parameters().len();
-            let m = &mut builder.hierarchy.modules[m];
-            m.parameter_lut.insert(name.to_string(), m.parameters.len());
-            m.parameters.push(idx);
 
-            if let Some(overrides) = m.parameter_overrides.as_ref() {
-                match overrides {
-                    ParameterOverrides::Ordered(values) => value = values[*parameter_idx].clone(),
-                    ParameterOverrides::Named(map) => {
-                        if let Some(override_value) = map.get(name) {
-                            value = override_value.clone();
-                        }
-                    }
-                }
+            let override_idx = if module.parameter_overrides.is_empty() {
+                // Ordered parameter overrides.
+                (module.parameters.len() < module.parameter_override_values.len())
+                    .then_some(module.parameters.len())
+            } else {
+                // Named parameter overrides.
+                module.parameter_overrides.get(&name).copied()
+            };
+
+            if let Some(override_idx) = override_idx {
+                param_override_is_used[override_idx] = true;
+                value = module.parameter_override_values[override_idx].clone();
             }
-
-            *parameter_idx += 1;
         }
 
-        if builder
-            .insert_parameter(HierarchyParameter {
-                name: name.to_string(),
-                parent: builder.key(),
-                value,
-            })
-            .is_some()
-        {
+        value = value.truncate_or_extend(ty.force_net_width());
+
+        let Ok(param_symid) = table.insert(name, parent, ElabSymbol::Parameter(value)) else {
             diagnostics.duplicate_definition(arenas, *param);
             return Err(());
+        };
+
+        if param_override_is_used.is_some() {
+            let symbol = &mut table[parent];
+            let ElabSymbol::Module(module) = &mut symbol.content else {
+                unreachable!("non-local parameter can only be defined at module-level");
+            };
+            module.parameters.push(param_symid);
         }
     }
 
@@ -231,12 +322,12 @@ pub fn elaborate_parameter_declaration<'a>(
 }
 
 pub fn elaborate_port_declaration<'a>(
-    signals: &mut SlotMap<SignalKey, Signal>,
     arenas: &'a AstArenas,
 
     id: AstId<PortDeclaration>,
 
-    builder: &mut ScopeBuilder<'a>,
+    parent: SymbolId,
+    table: &mut ElabTable,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
     use ConnectionDirection as D;
@@ -257,47 +348,26 @@ pub fn elaborate_port_declaration<'a>(
 
     let (_, _, size) = match range {
         None => (0, 0, SCALAR_VSIZE),
-        Some(range) => evaluate_range(arenas, builder.eval_scope(), diagnostics, range)?,
+        Some(range) => eval_constant_range(arenas, parent, table, diagnostics, range)?,
     };
     let ty = VType::net(size, signed);
 
     let mut error = false;
     for ident in identifiers.iter() {
-        let name = arenas.ident_to_str(arenas.get(ident).0);
         let origin = arenas.get_span(ident);
-        let signal = signals.insert(Signal {
-            name: name.to_string(),
-            size: ty.force_net_width(),
-            initialize: None,
-            origin,
-        });
-        let net = HierarchyNet {
-            name: name.to_string(),
-            parent: builder.key(),
-            signal,
-            ty,
-            dims: [].into(),
-            nba: None,
-        };
-        let port_key = builder.hierarchy.net().len();
-        if builder.insert_net(net).is_some() {
+        let Ok(symid) = table.insert(arenas.get(ident).0, parent, ElabSymbol::Net(ty, Vec::new()))
+        else {
             diagnostics.duplicate_definition(arenas, arenas.to_item(ident));
             error = true;
             continue;
-        }
-
-        // Insert the port as IO.
-        let HierarchyItem::Module(m) = builder.hierarchy.items()[builder.key().as_idx()] else {
-            unreachable!()
         };
-        let m = &mut builder.hierarchy.modules[m];
-        match m.lut.entry(name.to_string()) {
-            Entry::Vacant(v) => {
-                m.ports.push((port_key, direction));
-                v.insert(m.ports.len() - 1);
-            }
-            Entry::Occupied(idx) => m.ports[*idx.get()] = (port_key, direction),
-        }
+
+        let symbol = &mut table[parent];
+        let ElabSymbol::Module(module) = &mut symbol.content else {
+            unreachable!("non-local parameter can only be defined at module-level");
+        };
+
+        module.ports.push(symid);
     }
 
     if error {
@@ -308,25 +378,18 @@ pub fn elaborate_port_declaration<'a>(
 }
 
 pub fn elaborate_module_or_generate_item<'a>(
-    signals: &mut SlotMap<SignalKey, Signal>,
     arenas: &'a AstArenas,
 
     id: AstId<ModuleOrGenerateItem>,
 
-    builder: &mut ScopeBuilder<'a>,
+    parent: SymbolId,
+    table: &mut ElabTable,
+    module_instances_todo: &mut Vec<SymbolId>,
     diagnostics: &mut Diagnostics,
-    genvars: &mut HashMap<String, bool>,
 ) -> Result<(), ()> {
     match arenas.get(id) {
         ModuleOrGenerateItem::ModuleOrGenerateItemDeclaration(id) => {
-            elaborate_module_or_generate_item_declaration(
-                signals,
-                arenas,
-                *id,
-                builder,
-                diagnostics,
-                genvars,
-            )
+            elaborate_module_or_generate_item_declaration(arenas, *id, parent, table, diagnostics)
         }
         ModuleOrGenerateItem::LocalParameterDeclaration(id) => {
             let LocalParameterDeclaration {
@@ -337,7 +400,8 @@ pub fn elaborate_module_or_generate_item<'a>(
                 arenas,
                 *typing,
                 *assignments,
-                builder,
+                parent,
+                table,
                 diagnostics,
                 None,
             )
@@ -357,26 +421,27 @@ pub fn elaborate_module_or_generate_item<'a>(
                 module_instances,
             } = arenas.get(*id);
 
-            let parameter_overrides = match parameter_value_assignment {
-                None => None,
-                Some(id) => Some(match arenas.get(*id) {
+            let (parameter_overrides, parameter_override_values) = match parameter_value_assignment
+            {
+                None => Default::default(),
+                Some(id) => match arenas.get(*id) {
                     ParameterValueAssignment::Ordered(ids) => {
                         let mut params = Vec::new();
                         for id in ids.iter() {
                             let value =
-                                eval_constant_expr(arenas, builder.eval_scope(), diagnostics, id)?;
+                                eval_constant_expr_elab(arenas, parent, table, diagnostics, id)?;
                             params.push(value);
                         }
-                        ParameterOverrides::Ordered(params)
+                        (Default::default(), params)
                     }
                     ParameterValueAssignment::Named(named) => {
-                        let mut params = HashMap::new();
+                        let mut params = VgHashMap::default();
+                        let mut param_values = Vec::new();
                         for n in named.iter() {
                             let NamedParameterAssignment {
                                 identifier,
                                 expression,
                             } = arenas.get(n);
-                            let key = arenas.ident_to_str(identifier.item.0);
                             let Some(expression) = expression else {
                                 diagnostics.not_yet_implemented(
                                     arenas.get_span(n),
@@ -393,56 +458,59 @@ pub fn elaborate_module_or_generate_item<'a>(
                                 );
                                 return Err(());
                             };
-                            let value = eval_constant_expr(
+                            let value = eval_constant_expr_elab(
                                 arenas,
-                                builder.eval_scope(),
+                                parent,
+                                table,
                                 diagnostics,
                                 *expression,
                             )?;
-                            params.insert(key.to_string(), value);
+                            params.insert(identifier.item.0, param_values.len());
+                            param_values.push(value);
                         }
-                        ParameterOverrides::Named(params)
+                        (params, param_values)
                     }
-                }),
+                },
             };
 
-            let module_name = arenas.ident_to_str(module_identifier.item.0);
+            let parameter_overrides = Arc::new(parameter_overrides);
+            let parameter_override_values = Arc::new(parameter_override_values);
+
             for module_instance in module_instances.iter() {
                 let ModuleInstance {
                     name_of_module_instance,
                     list_of_port_connections: _,
                 } = arenas.get(module_instance);
-                let instance_name = arenas.ident_to_str(name_of_module_instance.item.0);
-                let module = HierarchyModule {
-                    name: instance_name.to_string(),
-                    module_name: module_name.to_string(),
-                    children: Default::default(),
-                    ast: Some(module_instance),
-                    parent: Some(builder.key()),
-                    lut: Default::default(),
-                    ports: Default::default(),
-                    parameter_lut: Default::default(),
-                    parameters: Default::default(),
-                    parameter_overrides: parameter_overrides.clone(),
-                };
-                if builder.insert_module(module).is_some() {
-                    diagnostics.duplicate_definition(arenas, *name_of_module_instance);
-                    return Err(());
-                }
+
+                let symid = try_table_insert(
+                    arenas,
+                    table,
+                    parent,
+                    *name_of_module_instance,
+                    ElabSymbol::Module(ElabModule {
+                        module: module_identifier.item.0,
+                        ports: Vec::new(),
+                        parameters: Vec::new(),
+                        parameter_overrides: parameter_overrides.clone(),
+                        parameter_override_values: parameter_override_values.clone(),
+                    }),
+                    diagnostics,
+                )?;
+                module_instances_todo.push(symid);
             }
             Ok(())
         }
         ModuleOrGenerateItem::InitialConstruct(id) => elaborate_statements(
-            signals,
             arenas,
-            builder,
+            parent,
+            table,
             diagnostics,
             AstIdRange::single(arenas.get(*id).0),
         ),
         ModuleOrGenerateItem::AlwaysConstruct(id) => elaborate_statements(
-            signals,
             arenas,
-            builder,
+            parent,
+            table,
             diagnostics,
             AstIdRange::single(arenas.get(*id).0),
         ),
@@ -454,92 +522,111 @@ pub fn elaborate_module_or_generate_item<'a>(
                 block,
             } = arenas.get(*id);
 
-            let GenvarAssignment { ident, expr } = arenas.get(*initialization);
+            let GenvarAssignment {
+                ident: initialization_ident,
+                expr: initialization,
+            } = arenas.get(*initialization);
             let GenvarAssignment {
                 ident: iteration_ident,
                 expr: iteration,
             } = arenas.get(*iteration);
 
-            let genvar_ident = arenas.ident_to_str(ident.item.0);
-            if arenas.ident_to_str(iteration_ident.item.0) != genvar_ident {
+            if initialization_ident.item.0 != iteration_ident.item.0 {
                 diagnostics.not_yet_implemented(
                     arenas.get_span(*initialization),
                     "initialization and iteration assignment identifier are different",
                 );
                 return Err(());
             }
-            let Some(genvar) = genvars.get_mut(genvar_ident) else {
-                diagnostics.var_not_found(arenas, *ident);
+            let symid =
+                try_table_resolve(arenas, table, parent, *initialization_ident, diagnostics)?;
+            let ElabSymbol::GenVar = &table[symid].content else {
+                diagnostics.not_yet_implemented(
+                    arenas.get_span(*initialization),
+                    "non-genvar used as genvar",
+                );
                 return Err(());
             };
-            *genvar = true;
 
-            let mut value = eval_constant_expr(arenas, builder.eval_scope(), diagnostics, *expr)?;
+            let mut value =
+                eval_constant_expr_elab(arenas, parent, table, diagnostics, *initialization)?;
 
-            // @GJB: Bit of a hack to add the GenVar as a localparameter and then delete it again.
-            // This way it can be used in the condition and iteration.
-            macro_rules! with_constant {
-                ($scope:ident => $stmt:stmt) => {
-                    if let Some(_overwritten) = builder.insert_parameter(HierarchyParameter {
-                        name: genvar_ident.to_string(),
-                        parent: builder.key,
-                        value: value.clone(),
-                    }) {
-                        return Err(());
-                    }
-
-                    let $scope = builder.eval_scope();
-                    $stmt
-                    builder.hierarchy.symbols[builder.key.as_idx()]
-                        .children_mut(builder.hierarchy)
-                        .unwrap()
-                        .end -= 1;
-                    builder.hierarchy.lookup_table.remove(&(builder.key(), genvar_ident.to_string()));
-                    builder.hierarchy.symbols.pop().unwrap();
-                    builder.hierarchy.parameters.pop().unwrap();
-                };
+            // @GJB: Bit of a hack to allow the genvar to be used in the constant expression
+            // evaluation.
+            macro_rules! eval_constant_expr_with_genvar {
+                ($expr:expr) => {{
+                    eval_constant_expr_f(
+                        arenas,
+                        |ident| {
+                            if ident == initialization_ident.item.0 {
+                                return Some(value.clone());
+                            }
+                            let symid = table_recursive_resolve(table, parent, ident)?;
+                            match &table[symid].content {
+                                ElabSymbol::Parameter(value) => Some(value.clone()),
+                                _ => None,
+                            }
+                        },
+                        diagnostics,
+                        $expr,
+                    )
+                }};
             }
 
             loop {
-                with_constant!(
-                    scope => let c = eval_constant_expr(arenas, scope, diagnostics, *condition)?
-                );
-
+                let c = eval_constant_expr_with_genvar!(*condition)?;
                 if !c.to_logical() {
                     break;
                 }
 
-                let (mod_or_gen_items, block_ident, block_ident_ast) = match arenas.get(*block) {
-                    GenerateBlock::ModuleOrGenerateItem(id) => {
-                        (AstIdRange::single(*id), None, None)
-                    }
-                    GenerateBlock::BeginEnd(ident, mod_or_gen_items) => (
-                        *mod_or_gen_items,
-                        ident.map(|i| arenas.ident_to_str(i.item.0)),
-                        *ident,
+                let (mod_or_gen_items, block_ident_ast) = match arenas.get(*block) {
+                    GenerateBlock::ModuleOrGenerateItem(id) => (AstIdRange::single(*id), None),
+                    GenerateBlock::BeginEnd(ident, mod_or_gen_items) => (*mod_or_gen_items, *ident),
+                };
+
+                let symid = match block_ident_ast {
+                    Some(block_ident) => try_table_insert(
+                        arenas,
+                        table,
+                        parent,
+                        block_ident,
+                        ElabSymbol::GenerateBlock,
+                        diagnostics,
+                    )?,
+                    None => table.insert_unlinked(
+                        IdentTable::EMPTY_IDENT,
+                        parent,
+                        ElabSymbol::GenerateBlock,
                     ),
                 };
 
-                let name = block_ident.map(|i| i.to_string());
-                if builder
-                    .insert_generate_block(HierarchyGenerateBlock {
-                        name,
-                        ast: mod_or_gen_items,
-                        children: HierarchyItemRange::default(),
-                        parent: builder.key(),
+                assert!(
+                    table
+                        .insert(
+                            initialization_ident.item.0,
+                            symid,
+                            ElabSymbol::Parameter(value.clone())
+                        )
+                        .is_ok()
+                );
 
-                        genvar: Some((genvar_ident.to_string(), value.clone())),
-                        genvars: genvars.clone(),
-                    })
-                    .is_some()
-                {
-                    diagnostics.duplicate_definition(arenas, block_ident_ast.unwrap());
+                let mut error = false;
+                for id in mod_or_gen_items.iter() {
+                    error |= elaborate_module_or_generate_item(
+                        arenas,
+                        id,
+                        symid,
+                        table,
+                        module_instances_todo,
+                        diagnostics,
+                    )
+                    .is_err();
+                }
+                if error {
                     return Err(());
                 }
 
-                with_constant!(
-                    scope => value = eval_constant_expr(arenas, scope, diagnostics, *iteration)?
-                );
+                value = eval_constant_expr_with_genvar!(*iteration)?;
             }
 
             Ok(())
@@ -552,18 +639,32 @@ pub fn elaborate_module_or_generate_item<'a>(
             } = arenas.get(*id);
 
             let condition =
-                eval_constant_expr(arenas, builder.eval_scope(), diagnostics, *condition)?;
+                eval_constant_expr_elab(arenas, parent, table, diagnostics, *condition)?;
             if condition.to_logical() {
-                elaborate_generate_block(arenas, builder, diagnostics, *truthy, genvars)?;
+                elaborate_generate_block(
+                    arenas,
+                    parent,
+                    table,
+                    module_instances_todo,
+                    diagnostics,
+                    *truthy,
+                )?;
             } else if let Some(falsy) = falsy {
-                elaborate_generate_block(arenas, builder, diagnostics, *falsy, genvars)?;
+                elaborate_generate_block(
+                    arenas,
+                    parent,
+                    table,
+                    module_instances_todo,
+                    diagnostics,
+                    *falsy,
+                )?;
             }
 
             Ok(())
         }
         ModuleOrGenerateItem::CaseGenerateConstruct(id) => {
             let CaseGenerateConstruct { value, items } = arenas.get(*id);
-            let value = eval_constant_expr(arenas, builder.eval_scope(), diagnostics, *value)?;
+            let value = eval_constant_expr_elab(arenas, parent, table, diagnostics, *value)?;
 
             for item in items.iter() {
                 let CaseGenerateItem { pattern, block } = arenas.get(item);
@@ -572,12 +673,8 @@ pub fn elaborate_module_or_generate_item<'a>(
                     CaseGeneratePattern::Default => is_selected = true,
                     CaseGeneratePattern::Exprs(exprs) => {
                         for expr in exprs.iter() {
-                            let expr_value = eval_constant_expr(
-                                arenas,
-                                builder.eval_scope(),
-                                diagnostics,
-                                expr,
-                            )?;
+                            let expr_value =
+                                eval_constant_expr_elab(arenas, parent, table, diagnostics, expr)?;
                             let expr_value =
                                 expr_value.truncate_or_extend(value.ty().force_net_width());
                             if value.clone().logical_equal(expr_value) {
@@ -588,7 +685,14 @@ pub fn elaborate_module_or_generate_item<'a>(
                 };
 
                 if is_selected {
-                    elaborate_generate_block(arenas, builder, diagnostics, *block, genvars)?;
+                    elaborate_generate_block(
+                        arenas,
+                        parent,
+                        table,
+                        module_instances_todo,
+                        diagnostics,
+                        *block,
+                    )?;
                     break;
                 }
             }
@@ -599,14 +703,13 @@ pub fn elaborate_module_or_generate_item<'a>(
 }
 
 pub fn elaborate_module_or_generate_item_declaration<'a>(
-    signals: &mut SlotMap<SignalKey, Signal>,
     arenas: &'a AstArenas,
 
     id: AstId<ModuleOrGenerateItemDeclaration>,
 
-    builder: &mut ScopeBuilder<'a>,
+    parent: SymbolId,
+    table: &mut ElabTable,
     diagnostics: &mut Diagnostics,
-    genvars: &mut HashMap<String, bool>,
 ) -> Result<(), ()> {
     let mut error = false;
     match arenas.get(id) {
@@ -627,73 +730,39 @@ pub fn elaborate_module_or_generate_item_declaration<'a>(
 
             let (_, _, width) = match range {
                 None => (0, 0, SCALAR_VSIZE),
-                Some(range) => evaluate_range(arenas, builder.eval_scope(), diagnostics, *range)?,
+                Some(range) => eval_constant_range(arenas, parent, table, diagnostics, *range)?,
             };
             let ty = VType::net(width, *signed);
             match nets {
                 NetDeclarationNets::Idents(idents) => {
                     for net_ident in idents.iter() {
                         let NetIdent { ident, dimension } = arenas.get(net_ident);
-                        let origin = arenas.get_item_span(*ident);
-                        let name = arenas.ident_to_str(ident.item.0);
                         let dims =
-                            dims_to_array(arenas, builder.eval_scope(), diagnostics, *dimension)?;
-                        let mut size = ty.force_net_width().get();
-                        for dim in &dims {
-                            size = size.checked_mul(*dim).ok_or_else(|| {
-                                diagnostics.net_width_overflow(arenas.get_span(net_ident));
-                                ()
-                            })?;
-                        }
-                        let Some(size) = VectorSize::new(size) else {
-                            diagnostics.zero_width_net(arenas.get_span(net_ident));
-                            return Err(());
-                        };
+                            dims_to_array_elab(arenas, parent, table, diagnostics, *dimension)?;
 
-                        let signal = signals.insert(Signal {
-                            name: name.to_string(),
-                            size,
-                            initialize: None,
-                            origin,
-                        });
-                        let net = HierarchyNet {
-                            name: name.to_string(),
-                            parent: builder.key(),
-                            signal,
-                            ty,
-                            dims: dims.into(),
-                            nba: None,
-                        };
-                        if builder.insert_net(net).is_some() {
-                            diagnostics.duplicate_definition(arenas, *ident);
-                            return Err(());
-                        }
+                        try_table_insert(
+                            arenas,
+                            table,
+                            parent,
+                            *ident,
+                            ElabSymbol::Net(ty, dims),
+                            diagnostics,
+                        )?;
                     }
                 }
                 NetDeclarationNets::Assignments(assignments) => {
                     for assignment in assignments.iter() {
                         let NetDeclAssignment { ident, expr: _ } = arenas.get(assignment);
                         let origin = arenas.get_item_span(*ident);
-                        let name = arenas.ident_to_str(ident.item.0);
-                        let size = ty.force_net_width();
-                        let signal = signals.insert(Signal {
-                            name: name.to_string(),
-                            size,
-                            initialize: None,
-                            origin,
-                        });
-                        let net = HierarchyNet {
-                            name: name.to_string(),
-                            parent: builder.key(),
-                            signal,
-                            ty,
-                            dims: [].into(),
-                            nba: None,
-                        };
-                        if builder.insert_net(net).is_some() {
-                            diagnostics.duplicate_definition(arenas, *ident);
-                            return Err(());
-                        }
+
+                        try_table_insert(
+                            arenas,
+                            table,
+                            parent,
+                            *ident,
+                            ElabSymbol::Net(ty, Vec::new()),
+                            diagnostics,
+                        )?;
                     }
                 }
             }
@@ -706,35 +775,23 @@ pub fn elaborate_module_or_generate_item_declaration<'a>(
             } = arenas.get(*id);
             let (_, _, size) = match range {
                 None => (0, 0, SCALAR_VSIZE),
-                Some(range) => evaluate_range(arenas, builder.eval_scope(), diagnostics, *range)?,
+                Some(range) => eval_constant_range(arenas, parent, table, diagnostics, *range)?,
             };
 
             let ty = VType::net(size, *signed);
             for variable_type in variable_types.iter() {
-                error |= elaborate_variable_type(
-                    signals,
-                    arenas,
-                    builder,
-                    diagnostics,
-                    variable_type,
-                    ty,
-                )
-                .is_err();
+                error |=
+                    elaborate_variable_type(arenas, parent, table, diagnostics, variable_type, ty)
+                        .is_err();
             }
         }
         ModuleOrGenerateItemDeclaration::Integer(id) => {
             let IntegerDeclaration { variable_types } = arenas.get(*id);
             let ty = VType::SignedNet(INTEGER_VSIZE);
             for variable_type in variable_types.iter() {
-                error |= elaborate_variable_type(
-                    signals,
-                    arenas,
-                    builder,
-                    diagnostics,
-                    variable_type,
-                    ty,
-                )
-                .is_err();
+                error |=
+                    elaborate_variable_type(arenas, parent, table, diagnostics, variable_type, ty)
+                        .is_err();
             }
         }
         ModuleOrGenerateItemDeclaration::Genvar(id) => {
@@ -742,12 +799,16 @@ pub fn elaborate_module_or_generate_item_declaration<'a>(
             let mut error = false;
             for ast_ident in identifiers.iter() {
                 let ast_ident = arenas.to_item(ast_ident);
-                let ident = arenas.ident_to_str(ast_ident.item.0);
 
-                if genvars.insert(ident.to_string(), false).is_some() {
-                    diagnostics.duplicate_definition(arenas, ast_ident);
-                    error = true;
-                }
+                error |= try_table_insert(
+                    arenas,
+                    table,
+                    parent,
+                    ast_ident,
+                    ElabSymbol::GenVar,
+                    diagnostics,
+                )
+                .is_err();
             }
             if error {
                 return Err(());
@@ -758,39 +819,30 @@ pub fn elaborate_module_or_generate_item_declaration<'a>(
                 ident, automatic, ..
             } = arenas.get(*id);
 
-            let name = arenas.ident_to_str(ident.item.0);
-            let task = HierarchyTask {
-                name: name.to_string(),
-                ast: *id,
-                children: HierarchyItemRange::default(),
-                parent: builder.key(),
-                automatic: *automatic,
-
-                lower: None,
-            };
-            if builder.insert_task(task).is_some() {
-                diagnostics.duplicate_definition(arenas, *ident);
-                error = true;
-            }
+            error |= try_table_insert(
+                arenas,
+                table,
+                parent,
+                *ident,
+                ElabSymbol::Task(*id),
+                diagnostics,
+            )
+            .is_err();
         }
         ModuleOrGenerateItemDeclaration::Function(id) => {
             let FunctionDeclaration {
                 ident, automatic, ..
             } = arenas.get(*id);
 
-            let name = arenas.ident_to_str(ident.item.0);
-            let function = HierarchyFunction {
-                name: name.to_string(),
-                ast: *id,
-                children: HierarchyItemRange::default(),
-                parent: builder.key(),
-                automatic: *automatic,
-                lower: None,
-            };
-            if builder.insert_function(function).is_some() {
-                diagnostics.duplicate_definition(arenas, *ident);
-                error = true;
-            }
+            error |= try_table_insert(
+                arenas,
+                table,
+                parent,
+                *ident,
+                ElabSymbol::Function(*id),
+                diagnostics,
+            )
+            .is_err();
         }
     }
 
@@ -798,9 +850,9 @@ pub fn elaborate_module_or_generate_item_declaration<'a>(
 }
 
 pub fn elaborate_variable_type<'a>(
-    signals: &mut SlotMap<SignalKey, Signal>,
     arenas: &'a AstArenas,
-    builder: &mut ScopeBuilder<'a>,
+    parent: SymbolId,
+    table: &mut ElabTable,
     diagnostics: &mut Diagnostics,
     variable_type: AstId<VariableType>,
     ty: VType,
@@ -811,79 +863,29 @@ pub fn elaborate_variable_type<'a>(
     } = arenas.get(variable_type);
 
     let origin = arenas.get_span(variable_type);
-    let name = arenas.ident_to_str(identifier.item.0);
-
-    let (dims, size) = match variant {
+    let dims = match variant {
         VariableTypeVariant::Dimensions(dimensions) => {
-            let dims = dims_to_array(arenas, builder.eval_scope(), diagnostics, *dimensions)?;
-            let mut size = ty.force_net_width().get();
-            for dim in &dims {
-                size = size.checked_mul(*dim).ok_or_else(|| {
-                    diagnostics.net_width_overflow(arenas.get_span(variable_type));
-                    ()
-                })?;
-            }
-            let Some(size) = VectorSize::new(size) else {
-                diagnostics.zero_width_net(arenas.get_span(variable_type));
-                return Err(());
-            };
-
-            Ok((dims.into(), size))
+            dims_to_array_elab(arenas, parent, table, diagnostics, *dimensions)?
         }
-        VariableTypeVariant::ConstantExpr(_) => Ok(([].into(), ty.force_net_width())),
-    }?;
-
-    let signal = signals.insert(Signal {
-        name: name.to_string(),
-        size,
-        initialize: None,
-        origin,
-    });
-    let net = HierarchyNet {
-        name: name.to_string(),
-        parent: builder.key(),
-        signal,
-        ty,
-        dims,
-        nba: None,
+        VariableTypeVariant::ConstantExpr(_) => Vec::new(),
     };
-    if builder.insert_net(net).is_some() {
-        diagnostics.duplicate_definition(arenas, *identifier);
-        return Err(());
-    }
+
+    try_table_insert(
+        arenas,
+        table,
+        parent,
+        *identifier,
+        ElabSymbol::Reg(ty, dims),
+        diagnostics,
+    )?;
 
     Ok(())
 }
 
-pub fn parameter_typing_to_type<'a>(
-    arenas: &'a AstArenas,
-    builder: &mut ScopeBuilder<'a>,
-    diagnostics: &mut Diagnostics,
-    typing: AstId<ParameterDeclarationTyping>,
-) -> Result<(i64, i64, VType), ()> {
-    Ok(match arenas.get(typing) {
-        ParameterDeclarationTyping::None(signed, range) => {
-            let (msb, lsb, width) = match range {
-                None => (0, 0, SCALAR_VSIZE),
-                Some(range) => evaluate_range(arenas, builder.eval_scope(), diagnostics, *range)?,
-            };
-            (msb, lsb, VType::net(width, *signed))
-        }
-        ParameterDeclarationTyping::Integer => (31, 0, VType::SignedNet(INTEGER_VSIZE)),
-        ParameterDeclarationTyping::Real
-        | ParameterDeclarationTyping::Realtime
-        | ParameterDeclarationTyping::Time => {
-            diagnostics
-                .not_yet_implemented(arenas.get_span(typing), "real / realtime / time parameter");
-            return Err(());
-        }
-    })
-}
-
 pub fn elaborate_statements<'a>(
-    signals: &mut SlotMap<SignalKey, Signal>,
     arenas: &'a AstArenas,
-    builder: &mut ScopeBuilder<'a>,
+    parent: SymbolId,
+    table: &mut ElabTable,
     diagnostics: &mut Diagnostics,
     stmts: AstIdRange<Statement>,
 ) -> Result<(), ()> {
@@ -907,9 +909,9 @@ pub fn elaborate_statements<'a>(
                         statement_or_null,
                     } = arenas.get(item);
                     error |= elaborate_statement_or_null(
-                        signals,
                         arenas,
-                        builder,
+                        parent,
+                        table,
                         diagnostics,
                         *statement_or_null,
                     )
@@ -927,31 +929,21 @@ pub fn elaborate_statements<'a>(
                     statement,
                 } = if_branch;
                 error |=
-                    elaborate_statement_or_null(signals, arenas, builder, diagnostics, *statement)
+                    elaborate_statement_or_null(arenas, parent, table, diagnostics, *statement)
                         .is_err();
                 for else_if in else_ifs.iter() {
                     let IfBranch {
                         condition: _,
                         statement,
                     } = arenas.get(else_if);
-                    error |= elaborate_statement_or_null(
-                        signals,
-                        arenas,
-                        builder,
-                        diagnostics,
-                        *statement,
-                    )
-                    .is_err();
+                    error |=
+                        elaborate_statement_or_null(arenas, parent, table, diagnostics, *statement)
+                            .is_err();
                 }
                 if let Some(statement) = else_branch {
-                    error |= elaborate_statement_or_null(
-                        signals,
-                        arenas,
-                        builder,
-                        diagnostics,
-                        *statement,
-                    )
-                    .is_err();
+                    error |=
+                        elaborate_statement_or_null(arenas, parent, table, diagnostics, *statement)
+                            .is_err();
                 }
             }
             S::LoopStatement(id) => {
@@ -960,9 +952,9 @@ pub fn elaborate_statements<'a>(
                     statement,
                 } = arenas.get(*id);
                 error |= elaborate_statements(
-                    signals,
                     arenas,
-                    builder,
+                    parent,
+                    table,
                     diagnostics,
                     AstIdRange::single(*statement),
                 )
@@ -978,9 +970,9 @@ pub fn elaborate_statements<'a>(
                     statement_or_null,
                 } = arenas.get(*id);
                 error |= elaborate_statement_or_null(
-                    signals,
                     arenas,
-                    builder,
+                    parent,
+                    table,
                     diagnostics,
                     *statement_or_null,
                 )
@@ -994,19 +986,28 @@ pub fn elaborate_statements<'a>(
                             block_identifier,
                             block_item_decls: _,
                         } = arenas.get(*block);
-                        let name = arenas.ident_to_str(block_identifier.item.0);
-                        let named_block = HierarchyNamedBlock {
-                            name: name.to_string(),
-                            ast: *id,
-                            children: Default::default(),
-                            parent: builder.key(),
+
+                        let Ok(named_block_symid) =
+                            table.insert(block_identifier.item.0, parent, ElabSymbol::NamedBlock)
+                        else {
+                            diagnostics.duplicate_definition(arenas, *block_identifier);
+                            error = true;
+                            continue;
                         };
-                        builder.insert_named_block(named_block);
+
+                        error |= elaborate_statements(
+                            arenas,
+                            named_block_symid,
+                            table,
+                            diagnostics,
+                            *statements,
+                        )
+                        .is_err();
                     }
                     None => {
                         error |=
-                            elaborate_statements(signals, arenas, builder, diagnostics, *statements)
-                                .is_err()
+                            elaborate_statements(arenas, parent, table, diagnostics, *statements)
+                                .is_err();
                     }
                 }
             }
@@ -1016,9 +1017,9 @@ pub fn elaborate_statements<'a>(
                     statement_or_null,
                 } = arenas.get(*id);
                 error |= elaborate_statement_or_null(
-                    signals,
                     arenas,
-                    builder,
+                    parent,
+                    table,
                     diagnostics,
                     *statement_or_null,
                 )
@@ -1034,56 +1035,127 @@ pub fn elaborate_statements<'a>(
 }
 
 pub fn elaborate_statement_or_null<'a>(
-    signals: &mut SlotMap<SignalKey, Signal>,
     arenas: &'a AstArenas,
-    builder: &mut ScopeBuilder<'a>,
+    parent: SymbolId,
+    table: &mut ElabTable,
     diagnostics: &mut Diagnostics,
     stmt: AstId<StatementOrNull>,
 ) -> Result<(), ()> {
     match arenas.get(stmt) {
         StatementOrNull::Attribute(_) => Ok(()),
-        StatementOrNull::Statement(id) => elaborate_statements(
-            signals,
-            arenas,
-            builder,
-            diagnostics,
-            AstIdRange::single(*id),
-        ),
+        StatementOrNull::Statement(id) => {
+            elaborate_statements(arenas, parent, table, diagnostics, AstIdRange::single(*id))
+        }
     }
+}
+
+pub fn eval_constant_expr_elab<'a>(
+    arenas: &'a AstArenas,
+    scope: SymbolId,
+    table: &ElabTable,
+    diagnostics: &mut Diagnostics,
+    expr: AstId<ConstantExpr>,
+) -> Result<VValue, ()> {
+    eval_constant_expr_f(
+        arenas,
+        |ident| {
+            let symid = table_recursive_resolve(table, scope, ident)?;
+            match &table[symid].content {
+                ElabSymbol::Parameter(value) => Some(value.clone()),
+                _ => None,
+            }
+        },
+        diagnostics,
+        expr,
+    )
+}
+
+pub fn eval_constant_range(
+    arenas: &AstArenas,
+    scope: SymbolId,
+    table: &ElabTable,
+    diagnostics: &mut Diagnostics,
+    ast_range: AstId<Range>,
+) -> Result<(i64, i64, VectorSize), ()> {
+    let range = arenas.get(ast_range);
+    let msb = eval_constant_expr_elab(arenas, scope, table, diagnostics, range.msb);
+    let lsb = eval_constant_expr_elab(arenas, scope, table, diagnostics, range.lsb);
+
+    let (Ok(VValue::SignedNet(msb)), Ok(VValue::SignedNet(lsb))) = (msb, lsb) else {
+        return Err(());
+    };
+    let msb = msb.as_i64().unwrap();
+    let lsb = lsb.as_i64().unwrap();
+    let width = u32::try_from(msb.abs_diff(lsb)).ok();
+    let width = width.and_then(|w| w.checked_add(1));
+    let width = width.and_then(|w| VectorSize::new(w));
+    let Some(width) = width else {
+        let tr = arenas.get_span(range.msb) | arenas.get_span(range.lsb);
+        diagnostics.net_width_overflow(tr);
+        return Err(());
+    };
+    Ok((msb, lsb, width))
 }
 
 pub fn elaborate_generate_block<'a>(
     arenas: &'a AstArenas,
-    builder: &mut ScopeBuilder<'a>,
+    parent: SymbolId,
+    table: &mut ElabTable,
+    module_instances_todo: &mut Vec<SymbolId>,
     diagnostics: &mut Diagnostics,
     blk: AstId<Option<GenerateBlock>>,
-    genvars: &HashMap<String, bool>,
 ) -> Result<(), ()> {
-    let (mod_or_gen_items, block_ident, block_ident_ast) = match arenas.get(blk) {
-        None => (AstIdRange::default(), None, None),
-        Some(GenerateBlock::ModuleOrGenerateItem(id)) => (AstIdRange::single(*id), None, None),
-        Some(GenerateBlock::BeginEnd(ident, mod_or_gen_items)) => (
-            *mod_or_gen_items,
-            ident.map(|i| arenas.ident_to_str(i.item.0)),
-            *ident,
-        ),
+    let (mod_or_gen_items, block_ident_ast) = match arenas.get(blk) {
+        None => (AstIdRange::default(), None),
+        Some(GenerateBlock::ModuleOrGenerateItem(id)) => (AstIdRange::single(*id), None),
+        Some(GenerateBlock::BeginEnd(ident, mod_or_gen_items)) => (*mod_or_gen_items, *ident),
     };
 
-    let name = block_ident.map(|i| i.to_string());
-    if builder
-        .insert_generate_block(HierarchyGenerateBlock {
-            name,
-            ast: mod_or_gen_items,
-            children: HierarchyItemRange::default(),
-            parent: builder.key(),
+    let symid = match block_ident_ast {
+        None => table.insert_unlinked(IdentTable::EMPTY_IDENT, parent, ElabSymbol::GenerateBlock),
+        Some(block_ident) => try_table_insert(
+            arenas,
+            table,
+            parent,
+            block_ident,
+            ElabSymbol::GenerateBlock,
+            diagnostics,
+        )?,
+    };
 
-            genvar: None,
-            genvars: genvars.clone(),
-        })
-        .is_some()
-    {
-        diagnostics.duplicate_definition(arenas, block_ident_ast.unwrap());
-        return Err(());
+    let mut error = false;
+    for id in mod_or_gen_items.iter() {
+        error |= elaborate_module_or_generate_item(
+            arenas,
+            id,
+            symid,
+            table,
+            module_instances_todo,
+            diagnostics,
+        )
+        .is_err();
     }
-    Ok(())
+
+    if error { Err(()) } else { Ok(()) }
+}
+
+pub fn dims_to_array_elab<'a>(
+    arenas: &'a AstArenas,
+    scope: SymbolId,
+    table: &ElabTable,
+    diagnostics: &mut Diagnostics,
+    dimensions: AstIdRange<Dimension>,
+) -> Result<Vec<u32>, ()> {
+    let mut dims = Vec::with_capacity(dimensions.len());
+    for dim in dimensions.iter().rev() {
+        let Dimension { lhs, rhs } = arenas.get(dim);
+        let lhs = eval_constant_expr_elab(arenas, scope, table, diagnostics, *lhs);
+        let rhs = eval_constant_expr_elab(arenas, scope, table, diagnostics, *rhs);
+
+        let lhs = lhs?.into_bits().as_i64().unwrap();
+        let rhs = rhs?.into_bits().as_i64().unwrap();
+
+        dims.push((lhs.abs_diff(rhs) + 1) as u32);
+    }
+    Ok(dims)
 }
