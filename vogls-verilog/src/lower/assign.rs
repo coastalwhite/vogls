@@ -6,7 +6,7 @@ use vogls_ir::{
 use crate::ast::constant_expr::ConstantRangeExpression;
 use crate::ast::statement::{NetLValue, NetLValueFlat, VariableLValue, VariableLValueFlat};
 use crate::ast::{AstId, RangeExpression};
-use crate::elaborate::ElabSymbol;
+use crate::elaborate::VSymbol;
 use crate::lower::expression::eval_constant_expr;
 use crate::lower::expression::{self, lower_expr, sign_or_zero_extend, truncate_or_extend};
 use crate::lower::{msb_lsb_to_width, try_resolve_symbol_id, unwrap_get_net_mut};
@@ -92,8 +92,8 @@ pub fn variable_lvalue_flat_ty<'a>(
 
     let exprs = *exprs;
     let (mut ty, mut n_dims) = match &scope.table[symbol_key].content {
-        ElabSymbol::Parameter(v) => (v.ty(), 0),
-        ElabSymbol::Net(s) => (s.ty, s.dims.len()),
+        VSymbol::Parameter(v) => (v.ty(), 0),
+        VSymbol::Net(s) => (s.ty, s.dims.len()),
         _ => todo!(),
     };
 
@@ -166,8 +166,8 @@ pub fn assign_variable_lvalue_flat<'a>(
 
     let mut exprs = *exprs;
     let (ty, dims) = match &scope.table[symbol_key].content {
-        ElabSymbol::Parameter(v) => (v.ty(), [].into()),
-        ElabSymbol::Net(s) => (s.ty.clone(), s.dims.clone()),
+        VSymbol::Parameter(v) => (v.ty(), [].into()),
+        VSymbol::Net(s) => (s.ty.clone(), s.dims.clone()),
         _ => todo!(),
     };
     let mut dims = &dims[..];
@@ -227,7 +227,7 @@ pub fn assign_variable_lvalue_flat<'a>(
     }
 
     match &scope.table[symbol_key].content {
-        ElabSymbol::Net(s) => {
+        VSymbol::Net(s) => {
             let key = s.signal;
             let size = ty.force_net_width();
             let partial = match range_expression {
@@ -357,8 +357,8 @@ pub fn net_lvalue_flat_ty<'a>(
 
     let exprs = *constant_exprs;
     let (mut ty, mut n_dims) = match &scope.table[symbol_key].content {
-        ElabSymbol::Parameter(v) => (v.ty(), 0),
-        ElabSymbol::Net(s) => (s.ty, s.dims.len()),
+        VSymbol::Parameter(v) => (v.ty(), 0),
+        VSymbol::Net(s) => (s.ty, s.dims.len()),
         _ => todo!(),
     };
 

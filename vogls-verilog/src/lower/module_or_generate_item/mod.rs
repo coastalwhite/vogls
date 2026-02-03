@@ -9,7 +9,7 @@ use crate::ast::module::{
     VariableTypeVariant,
 };
 use crate::ast::{AstId, AstIdRange};
-use crate::elaborate::ElabSymbol;
+use crate::elaborate::VSymbol;
 use crate::lower::assign::{assign_net_lvalue, net_lvalue_width};
 use crate::lower::expression::{self, lower_expr, truncate_or_extend};
 use crate::lower::statement::statements_to_process;
@@ -244,7 +244,7 @@ pub fn lower<'a>(
                         for (pi, l_p) in ports.iter().enumerate() {
                             let (net, connection) =
                                 unwrap_get_module(scope.table, instance_sid).ports[pi];
-                            let ElabSymbol::Net(n) = &scope.table[net].content else {
+                            let VSymbol::Net(n) = &scope.table[net].content else {
                                 unreachable!();
                             };
                             let ty = n.ty;
@@ -282,7 +282,7 @@ pub fn lower<'a>(
                                 .table
                                 .resolve(instance_sid, ast_port_identifier.item.0)
                                 .and_then(|symid| {
-                                    let ElabSymbol::Net(n) = &scope.table[symid].content else {
+                                    let VSymbol::Net(n) = &scope.table[symid].content else {
                                         return None;
                                     };
                                     n.port_idx.map(|i| (i, &n.ty))

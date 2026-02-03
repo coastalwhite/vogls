@@ -7,7 +7,7 @@ use vogls_ir::{
 
 use crate::ast::AstId;
 use crate::ast::expr::{BinaryOperator, BitSlice, Expr, Replication, UnaryOperator};
-use crate::elaborate::ElabSymbol;
+use crate::elaborate::VSymbol;
 use crate::lower::{VType, msb_lsb_to_width, try_resolve_symbol_id};
 use crate::number::Sign;
 use crate::parser::AstArenas;
@@ -352,16 +352,16 @@ pub fn lower_expr<'a>(
                     try_resolve_symbol_id(scope.key, scope.table, arenas, *ast_ident, diagnostics)?;
                 let symbol = &scope.table[symbol_key].content;
                 let (mut ty, mut var) = match &symbol {
-                    ElabSymbol::Parameter(value) => {
+                    VSymbol::Parameter(value) => {
                         let value = value.clone();
                         (value.ty(), builder.constant(gl, value.into_bits()))
                     }
-                    ElabSymbol::Task(_)
-                    | ElabSymbol::GenVar
-                    | ElabSymbol::Function(_)
-                    | ElabSymbol::Module(_)
-                    | ElabSymbol::NamedBlock
-                    | ElabSymbol::GenerateBlock(_) => {
+                    VSymbol::Task(_)
+                    | VSymbol::GenVar
+                    | VSymbol::Function(_)
+                    | VSymbol::Module(_)
+                    | VSymbol::NamedBlock
+                    | VSymbol::GenerateBlock(_) => {
                         diagnostics
                             .not_yet_implemented(arenas.get_span(expr), "cannot use this symbol");
                         error = true;
@@ -369,7 +369,7 @@ pub fn lower_expr<'a>(
                         result_stack.push(None);
                         continue 'dispatch_loop;
                     }
-                    ElabSymbol::Net(s) => {
+                    VSymbol::Net(s) => {
                         let mut dims = &s.dims[..];
                         if !dims.is_empty() {
                             if exprs.pop_front().is_none() {
@@ -830,18 +830,18 @@ pub fn get_used_signals<'a>(
                 let symbol_key =
                     try_resolve_symbol_id(scope.key, scope.table, arenas, *ident, diagnostics)?;
                 match &scope.table[symbol_key].content {
-                    ElabSymbol::Net(s) => {
+                    VSymbol::Net(s) => {
                         if signals_seen.insert(s.signal) {
                             signals.push(s.signal);
                         }
                     }
-                    ElabSymbol::Parameter(_)
-                    | ElabSymbol::GenVar
-                    | ElabSymbol::Task(_)
-                    | ElabSymbol::Module(_)
-                    | ElabSymbol::NamedBlock
-                    | ElabSymbol::Function(_)
-                    | ElabSymbol::GenerateBlock(_) => {}
+                    VSymbol::Parameter(_)
+                    | VSymbol::GenVar
+                    | VSymbol::Task(_)
+                    | VSymbol::Module(_)
+                    | VSymbol::NamedBlock
+                    | VSymbol::Function(_)
+                    | VSymbol::GenerateBlock(_) => {}
                 }
 
                 dispatch_stack.extend(exprs.iter().map(StackItem::new));

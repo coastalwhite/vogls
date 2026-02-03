@@ -16,14 +16,14 @@ pub enum Region {
 }
 
 pub struct Scope<'a> {
-    pub table: &'a mut ElabTable,
+    pub table: &'a mut VSymbolTable,
     pub key: SymbolId,
     pub signal_map: &'a mut HashMap<SignalKey, SignalKey>,
 }
 
 #[derive(Clone, Copy)]
 pub struct EvalScope<'a> {
-    pub table: &'a ElabTable,
+    pub table: &'a VSymbolTable,
     pub key: SymbolId,
 }
 
@@ -41,7 +41,7 @@ impl<'a> Scope<'a> {
     }
 }
 
-pub fn resolve_symbol_id(scope: SymbolId, table: &ElabTable, ident: IdentId) -> Option<SymbolId> {
+pub fn resolve_symbol_id(scope: SymbolId, table: &VSymbolTable, ident: IdentId) -> Option<SymbolId> {
     // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 196
     //
     // """
@@ -63,7 +63,7 @@ pub fn resolve_symbol_id(scope: SymbolId, table: &ElabTable, ident: IdentId) -> 
 
         let item = &table[scope];
         let parent = item.parent()?;
-        if matches!(item.content, ElabSymbol::Module(_)) {
+        if matches!(item.content, VSymbol::Module(_)) {
             return None;
         }
 
@@ -73,7 +73,7 @@ pub fn resolve_symbol_id(scope: SymbolId, table: &ElabTable, ident: IdentId) -> 
 
 pub fn try_resolve_symbol_id(
     scope: SymbolId,
-    table: &ElabTable,
+    table: &VSymbolTable,
     arenas: &AstArenas,
     ident: AstItem<Identifier>,
     diagnostics: &mut Diagnostics,
@@ -87,13 +87,13 @@ pub fn try_resolve_symbol_id(
 
 pub fn try_resolve_net<'a>(
     scope: SymbolId,
-    table: &'a ElabTable,
+    table: &'a VSymbolTable,
     arenas: &AstArenas,
     ident: AstItem<Identifier>,
     diagnostics: &mut Diagnostics,
-) -> Result<&'a ElabNet, ()> {
+) -> Result<&'a NetSymbol, ()> {
     let sid = try_resolve_symbol_id(scope, table, arenas, ident, diagnostics)?;
-    let ElabSymbol::Net(n) = &table[sid].content else {
+    let VSymbol::Net(n) = &table[sid].content else {
         diagnostics.not_yet_implemented(arenas.get_item_span(ident), "cannot be used as net");
         return Err(());
     };
@@ -102,24 +102,31 @@ pub fn try_resolve_net<'a>(
 
 pub fn strict_resolve_module<'a>(
     scope: SymbolId,
-    table: &'a ElabTable,
+    table: &'a VSymbolTable,
     ident: IdentId,
-) -> &'a ElabModule {
+) -> &'a ModuleSymbol {
     let sid = resolve_symbol_id(scope, table, ident).unwrap();
-    let ElabSymbol::Module(n) = &table[sid].content else {
+    let VSymbol::Module(n) = &table[sid].content else {
         panic!()
     };
     n
 }
 
-pub fn unwrap_get_net<'a>(table: &'a ElabTable, sid: SymbolId) -> &'a ElabNet {
-    let ElabSymbol::Net(n) = &table[sid].content else {
+pub fn unwrap_get_fn_mut<'a>(table: &'a mut VSymbolTable, sid: SymbolId) -> &'a mut FunctionSymbol {
+    let VSymbol::Function(n) = &mut table[sid].content else {
         panic!()
     };
     n
 }
-pub fn unwrap_get_net_mut<'a>(table: &'a mut ElabTable, sid: SymbolId) -> &'a mut ElabNet {
-    let ElabSymbol::Net(n) = &mut table[sid].content else {
+
+pub fn unwrap_get_net<'a>(table: &'a VSymbolTable, sid: SymbolId) -> &'a NetSymbol {
+    let VSymbol::Net(n) = &table[sid].content else {
+        panic!()
+    };
+    n
+}
+pub fn unwrap_get_net_mut<'a>(table: &'a mut VSymbolTable, sid: SymbolId) -> &'a mut NetSymbol {
+    let VSymbol::Net(n) = &mut table[sid].content else {
         panic!()
     };
     n
@@ -127,29 +134,29 @@ pub fn unwrap_get_net_mut<'a>(table: &'a mut ElabTable, sid: SymbolId) -> &'a mu
 
 pub fn unwrap_resolve_net<'a>(
     scope: SymbolId,
-    table: &'a ElabTable,
+    table: &'a VSymbolTable,
     ident: IdentId,
-) -> &'a ElabNet {
+) -> &'a NetSymbol {
     let sid = resolve_symbol_id(scope, table, ident).unwrap();
     unwrap_get_net(table, sid)
 }
 pub fn unwrap_resolve_net_mut<'a>(
     scope: SymbolId,
-    table: &'a mut ElabTable,
+    table: &'a mut VSymbolTable,
     ident: IdentId,
-) -> &'a mut ElabNet {
+) -> &'a mut NetSymbol {
     let sid = resolve_symbol_id(scope, table, ident).unwrap();
     unwrap_get_net_mut(table, sid)
 }
 
-pub fn unwrap_get_module<'a>(table: &'a ElabTable, sid: SymbolId) -> &'a ElabModule {
-    let ElabSymbol::Module(n) = &table[sid].content else {
+pub fn unwrap_get_module<'a>(table: &'a VSymbolTable, sid: SymbolId) -> &'a ModuleSymbol {
+    let VSymbol::Module(n) = &table[sid].content else {
         panic!()
     };
     n
 }
-pub fn unwrap_get_module_mut<'a>(table: &'a mut ElabTable, sid: SymbolId) -> &'a mut ElabModule {
-    let ElabSymbol::Module(n) = &mut table[sid].content else {
+pub fn unwrap_get_module_mut<'a>(table: &'a mut VSymbolTable, sid: SymbolId) -> &'a mut ModuleSymbol {
+    let VSymbol::Module(n) = &mut table[sid].content else {
         panic!()
     };
     n
@@ -157,13 +164,13 @@ pub fn unwrap_get_module_mut<'a>(table: &'a mut ElabTable, sid: SymbolId) -> &'a
 
 pub fn try_resolve_constant<'a>(
     scope: SymbolId,
-    table: &'a ElabTable,
+    table: &'a VSymbolTable,
     arenas: &AstArenas,
     ident: AstItem<Identifier>,
     diagnostics: &mut Diagnostics,
 ) -> Result<&'a VValue, ()> {
     let sid = try_resolve_symbol_id(scope, table, arenas, ident, diagnostics)?;
-    let ElabSymbol::Parameter(value) = &table[sid].content else {
+    let VSymbol::Parameter(value) = &table[sid].content else {
         diagnostics.not_yet_implemented(arenas.get_item_span(ident), "cannot be used as net");
         return Err(());
     };
@@ -186,7 +193,7 @@ use crate::ast::module::{
     Range,
 };
 use crate::ast::{AstId, AstItem, Identifier};
-use crate::elaborate::{ElabModule, ElabNet, ElabSymbol, ElabTable};
+use crate::elaborate::{FunctionSymbol, ModuleSymbol, NetSymbol, VSymbol, VSymbolTable};
 use crate::parser::AstArenas;
 
 pub use self::expression::eval_constant_expr;
@@ -214,7 +221,7 @@ pub fn lower_module_to_ir<'a>(
 
     for i in 0..scope.table[scope.key].children().len() {
         let child = scope.table[scope.key].children()[i];
-        let ElabSymbol::GenerateBlock(ast_ids) = &scope.table[child].content else {
+        let VSymbol::GenerateBlock(ast_ids) = &scope.table[child].content else {
             continue;
         };
 
@@ -293,7 +300,7 @@ fn lower_to_signal<'a>(
             diagnostics.var_not_found(arenas, *ast_ident);
             return Err(());
         };
-        if let ElabSymbol::Net(s) = &scope.table[symbol_key].content
+        if let VSymbol::Net(s) = &scope.table[symbol_key].content
             && s.ty == ty
         {
             return Ok(s.signal);
@@ -333,7 +340,7 @@ fn assign_port_output<'a>(
     {
         let symbol_key =
             try_resolve_symbol_id(scope.key, scope.table, arenas, *ast_ident, diagnostics)?;
-        if let ElabSymbol::Net(s) = &scope.table[symbol_key].content
+        if let VSymbol::Net(s) = &scope.table[symbol_key].content
             && s.ty == ty
         {
             let signal = s.signal;
@@ -366,7 +373,7 @@ fn assign_port_output<'a>(
             Expr::Ident(ast_ident, exprs, range_expression) => {
                 let symbol_key =
                     try_resolve_symbol_id(scope.key, scope.table, arenas, *ast_ident, diagnostics)?;
-                let ElabSymbol::Net(s) = &scope.table[symbol_key].content else {
+                let VSymbol::Net(s) = &scope.table[symbol_key].content else {
                     diagnostics.output_expr_not_allowed(arenas.get_span(expr));
                     error = true;
                     continue;
@@ -480,7 +487,7 @@ fn assign_task_output<'a>(
             Expr::Ident(ast_ident, exprs, range_expression) => {
                 let symbol_key =
                     try_resolve_symbol_id(scope.key, scope.table, arenas, *ast_ident, diagnostics)?;
-                let ElabSymbol::Net(s) = &scope.table[symbol_key].content else {
+                let VSymbol::Net(s) = &scope.table[symbol_key].content else {
                     diagnostics.output_expr_not_allowed(arenas.get_span(expr));
                     error = true;
                     continue;

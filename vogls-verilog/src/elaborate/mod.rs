@@ -5,19 +5,19 @@ use vogls_frontend::VgHashMap;
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{
-    ConnectionDirection, INTEGER_VSIZE, ProcessKey, SCALAR_VSIZE, Signal, SignalKey, VectorSize,
+    BasicBlockKey, ConnectionDirection, ProcessKey, Signal, SignalKey, VariableKey, VectorSize, INTEGER_VSIZE, SCALAR_VSIZE
 };
 
 use crate::ast::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression};
 use crate::ast::module::{
-    CaseGenerateConstruct, CaseGenerateItem, CaseGeneratePattern, Dimension, FunctionDeclaration,
-    GenerateBlock, GenvarAssignment, GenvarDeclaration, IfGenerateConstruct, IntegerDeclaration,
-    LocalParameterDeclaration, LoopGenerateConstruct, Module, ModuleInstance, ModuleInstantiation,
-    ModuleItem, ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration, ModulePorts,
-    NamedParameterAssignment, NetDeclAssignment, NetDeclaration, NetDeclarationNets, NetIdent,
-    NetType, NonPortModuleItem, ParamAssignment, ParameterDeclaration, ParameterDeclarationTyping,
-    ParameterValueAssignment, Port, PortDeclaration, PortExpression, PortReference, Range,
-    RegDeclaration, TaskDeclaration, VariableType, VariableTypeVariant,
+    BlockItemDeclaration, CaseGenerateConstruct, CaseGenerateItem, CaseGeneratePattern, Dimension,
+    FunctionDeclaration, GenerateBlock, GenvarAssignment, GenvarDeclaration, IfGenerateConstruct,
+    IntegerDeclaration, LocalParameterDeclaration, LoopGenerateConstruct, Module, ModuleInstance,
+    ModuleInstantiation, ModuleItem, ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration,
+    ModulePorts, NamedParameterAssignment, NetDeclAssignment, NetDeclaration, NetDeclarationNets,
+    NetIdent, NetType, NonPortModuleItem, ParamAssignment, ParameterDeclaration,
+    ParameterDeclarationTyping, ParameterValueAssignment, Port, PortDeclaration, PortExpression,
+    PortReference, Range, RegDeclaration, TaskDeclaration, VariableType, VariableTypeVariant,
 };
 use crate::ast::statement::{
     Block, CaseItem, CaseStatement, ConditionalStatement, IfBranch, LoopStatement,
@@ -26,27 +26,26 @@ use crate::ast::statement::{
 };
 use crate::ast::{AstId, AstIdRange, AstItem, Identifier};
 use crate::lower::{
-    Diagnostics, EvalScope, VType, VValue, eval_constant_expr, unwrap_get_module,
-    unwrap_get_module_mut,
+    Diagnostics, EvalScope, VType, VValue, eval_constant_expr, unwrap_get_module_mut,
 };
 use crate::parser::AstArenas;
 
 pub mod function;
 
-pub type ElabTable = vogls_frontend::symbol_table::SymbolTable<ElabSymbol>;
+pub type VSymbolTable = vogls_frontend::symbol_table::SymbolTable<VSymbol>;
 
-pub enum ElabSymbol {
-    Module(ElabModule),
+pub enum VSymbol {
+    Module(ModuleSymbol),
     Parameter(VValue),
-    Net(ElabNet),
+    Net(NetSymbol),
     NamedBlock,
     GenerateBlock(AstIdRange<ModuleOrGenerateItem>),
     GenVar,
-    Task(AstId<TaskDeclaration>),
-    Function(AstId<FunctionDeclaration>),
+    Task(TaskSymbol),
+    Function(FunctionSymbol),
 }
 
-pub struct ElabModule {
+pub struct ModuleSymbol {
     pub module: IdentId,
 
     pub ports: Vec<(SymbolId, ConnectionDirection)>,
@@ -56,7 +55,7 @@ pub struct ElabModule {
     pub parameter_override_values: Arc<Vec<VValue>>,
 }
 
-pub struct ElabNet {
+pub struct NetSymbol {
     pub ty: VType,
     pub dims: Vec<u32>,
     pub signal: vogls_ir::SignalKey,
@@ -64,12 +63,31 @@ pub struct ElabNet {
     pub port_idx: Option<usize>,
 }
 
+pub struct FunctionSymbol {
+    pub ast_id: AstId<FunctionDeclaration>,
+    pub lowered: Option<LoweredFunction>,
+}
+
+pub struct TaskSymbol {
+    pub ast_id: AstId<TaskDeclaration>,
+    pub lowered: Option<BasicBlockKey>,
+}
+
+#[derive(Clone)]
+pub struct LoweredFunction {
+    pub entry: BasicBlockKey,
+    pub input_vars: Vec<VariableKey>,
+    pub input_types: Vec<VType>,
+    pub output_var: VariableKey,
+    pub output_ty: VType,
+}
+
 pub fn try_table_insert(
     arenas: &AstArenas,
-    table: &mut ElabTable,
+    table: &mut VSymbolTable,
     parent: SymbolId,
     name: AstItem<Identifier>,
-    content: ElabSymbol,
+    content: VSymbol,
     diagnostics: &mut Diagnostics,
 ) -> Result<SymbolId, ()> {
     let Ok(symid) = table.insert(name.item.0, parent, arenas.get_item_span(name), content) else {
@@ -80,7 +98,7 @@ pub fn try_table_insert(
     Ok(symid)
 }
 pub fn table_recursive_resolve(
-    table: &ElabTable,
+    table: &VSymbolTable,
     parent: SymbolId,
     name: IdentId,
 ) -> Option<SymbolId> {
@@ -89,7 +107,7 @@ pub fn table_recursive_resolve(
 }
 pub fn try_table_resolve(
     arenas: &AstArenas,
-    table: &ElabTable,
+    table: &VSymbolTable,
     parent: SymbolId,
     name: AstItem<Identifier>,
     diagnostics: &mut Diagnostics,
@@ -106,7 +124,7 @@ pub fn elaborate_module<'a>(
     arenas: &'a AstArenas,
     module: AstId<Module>,
     module_symid: SymbolId,
-    table: &mut ElabTable,
+    table: &mut VSymbolTable,
     module_instances_todo: &mut Vec<SymbolId>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
@@ -120,7 +138,7 @@ pub fn elaborate_module<'a>(
     } = arenas.get(module);
 
     let symbol = &table[module_symid];
-    let ElabSymbol::Module(elab_module) = &symbol.content else {
+    let VSymbol::Module(elab_module) = &symbol.content else {
         unreachable!("elaborated module is not a module");
     };
     let mut param_override_is_used = vec![false; elab_module.parameter_override_values.len()];
@@ -166,7 +184,7 @@ pub fn elaborate_module<'a>(
                             new_signal(signals, arenas, &VType::SCALAR_NET, &[], *identifier);
 
                         let symbol = &table[module_symid];
-                        let ElabSymbol::Module(elab_module) = &symbol.content else {
+                        let VSymbol::Module(elab_module) = &symbol.content else {
                             unreachable!("elaborated module is not a module");
                         };
                         let port_idx = elab_module.ports.len();
@@ -176,7 +194,7 @@ pub fn elaborate_module<'a>(
                             table,
                             module_symid,
                             *identifier,
-                            ElabSymbol::Net(ElabNet {
+                            VSymbol::Net(NetSymbol {
                                 ty: VType::SCALAR_NET,
                                 dims: Vec::new(),
                                 signal,
@@ -207,7 +225,7 @@ pub fn elaborate_module<'a>(
                 };
 
                 let symbol = &table[module_symid];
-                let ElabSymbol::Module(module) = &symbol.content else {
+                let VSymbol::Module(module) = &symbol.content else {
                     unreachable!("non-local parameter can only be defined at module-level");
                 };
                 let mut port_idx = module.ports.len();
@@ -220,7 +238,7 @@ pub fn elaborate_module<'a>(
                         table,
                         module_symid,
                         ident,
-                        ElabSymbol::Net(ElabNet {
+                        VSymbol::Net(NetSymbol {
                             ty,
                             dims: Vec::new(),
                             signal,
@@ -234,7 +252,7 @@ pub fn elaborate_module<'a>(
                     };
 
                     let symbol = &mut table[module_symid];
-                    let ElabSymbol::Module(module) = &mut symbol.content else {
+                    let VSymbol::Module(module) = &mut symbol.content else {
                         unreachable!("non-local parameter can only be defined at module-level");
                     };
 
@@ -265,7 +283,7 @@ pub fn elaborate_module<'a>(
                         error = true;
                         continue;
                     };
-                    let ElabSymbol::Net(net) = &mut table[sid].content else {
+                    let VSymbol::Net(net) = &mut table[sid].content else {
                         diagnostics
                             .not_yet_implemented(arenas.get_span(ident), "non-port used as port");
                         error = true;
@@ -350,7 +368,7 @@ pub fn elaborate_parameter_declaration<'a>(
     assignments: AstIdRange<ParamAssignment>,
 
     parent: SymbolId,
-    table: &mut ElabTable,
+    table: &mut VSymbolTable,
     diagnostics: &mut Diagnostics,
     mut param_override_is_used: Option<&mut [bool]>,
 ) -> Result<(), ()> {
@@ -386,7 +404,7 @@ pub fn elaborate_parameter_declaration<'a>(
 
         if let Some(param_override_is_used) = param_override_is_used.as_mut() {
             let symbol = &mut table[parent];
-            let ElabSymbol::Module(module) = &mut symbol.content else {
+            let VSymbol::Module(module) = &mut symbol.content else {
                 unreachable!("non-local parameter can only be defined at module-level");
             };
 
@@ -412,13 +430,13 @@ pub fn elaborate_parameter_declaration<'a>(
             table,
             parent,
             *param,
-            ElabSymbol::Parameter(value),
+            VSymbol::Parameter(value),
             diagnostics,
         )?;
 
         if param_override_is_used.is_some() {
             let symbol = &mut table[parent];
-            let ElabSymbol::Module(module) = &mut symbol.content else {
+            let VSymbol::Module(module) = &mut symbol.content else {
                 unreachable!("non-local parameter can only be defined at module-level");
             };
             module.parameters.push(param_symid);
@@ -434,7 +452,7 @@ pub fn port_declaration_to_info<'a>(
     id: AstId<PortDeclaration>,
 
     parent: SymbolId,
-    table: &mut ElabTable,
+    table: &mut VSymbolTable,
     diagnostics: &mut Diagnostics,
 ) -> Result<(VType, ConnectionDirection, AstIdRange<Identifier>), ()> {
     use ConnectionDirection as D;
@@ -468,7 +486,7 @@ pub fn elaborate_module_or_generate_item<'a>(
     id: AstId<ModuleOrGenerateItem>,
 
     parent: SymbolId,
-    table: &mut ElabTable,
+    table: &mut VSymbolTable,
     module_instances_todo: &mut Vec<SymbolId>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
@@ -579,7 +597,7 @@ pub fn elaborate_module_or_generate_item<'a>(
                     table,
                     parent,
                     *name_of_module_instance,
-                    ElabSymbol::Module(ElabModule {
+                    VSymbol::Module(ModuleSymbol {
                         module: module_identifier.item.0,
                         ports: Vec::new(),
                         parameters: Vec::new(),
@@ -593,6 +611,7 @@ pub fn elaborate_module_or_generate_item<'a>(
             Ok(())
         }
         ModuleOrGenerateItem::InitialConstruct(id) => elaborate_statements(
+            signals,
             arenas,
             parent,
             table,
@@ -600,6 +619,7 @@ pub fn elaborate_module_or_generate_item<'a>(
             AstIdRange::single(arenas.get(*id).0),
         ),
         ModuleOrGenerateItem::AlwaysConstruct(id) => elaborate_statements(
+            signals,
             arenas,
             parent,
             table,
@@ -632,7 +652,7 @@ pub fn elaborate_module_or_generate_item<'a>(
             }
             let symid =
                 try_table_resolve(arenas, table, parent, *initialization_ident, diagnostics)?;
-            let ElabSymbol::GenVar = &table[symid].content else {
+            let VSymbol::GenVar = &table[symid].content else {
                 diagnostics.not_yet_implemented(
                     arenas.get_span(*initialization),
                     "non-genvar used as genvar",
@@ -655,14 +675,14 @@ pub fn elaborate_module_or_generate_item<'a>(
                         table,
                         parent,
                         block_ident,
-                        ElabSymbol::GenerateBlock(mod_or_gen_items),
+                        VSymbol::GenerateBlock(mod_or_gen_items),
                         diagnostics,
                     )?,
                     None => table.insert_unlinked(
                         IdentTable::EMPTY_IDENT,
                         parent,
                         arenas.get_range_span(mod_or_gen_items),
-                        ElabSymbol::GenerateBlock(mod_or_gen_items),
+                        VSymbol::GenerateBlock(mod_or_gen_items),
                     ),
                 };
 
@@ -671,7 +691,7 @@ pub fn elaborate_module_or_generate_item<'a>(
                         initialization_ident.item.0,
                         symid,
                         arenas.get_item_span(*initialization_ident),
-                        ElabSymbol::Parameter(value.clone()),
+                        VSymbol::Parameter(value.clone()),
                     )
                     .expect("No other idents in this block yet");
 
@@ -781,7 +801,7 @@ pub fn elaborate_module_or_generate_item_declaration<'a>(
     id: AstId<ModuleOrGenerateItemDeclaration>,
 
     parent: SymbolId,
-    table: &mut ElabTable,
+    table: &mut VSymbolTable,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
     let mut error = false;
@@ -819,7 +839,7 @@ pub fn elaborate_module_or_generate_item_declaration<'a>(
                             table,
                             parent,
                             *ident,
-                            ElabSymbol::Net(ElabNet {
+                            VSymbol::Net(NetSymbol {
                                 ty,
                                 dims,
                                 signal,
@@ -840,7 +860,7 @@ pub fn elaborate_module_or_generate_item_declaration<'a>(
                             table,
                             parent,
                             *ident,
-                            ElabSymbol::Net(ElabNet {
+                            VSymbol::Net(NetSymbol {
                                 ty,
                                 dims: Vec::new(),
                                 signal,
@@ -905,7 +925,7 @@ pub fn elaborate_module_or_generate_item_declaration<'a>(
                     table,
                     parent,
                     ast_ident,
-                    ElabSymbol::GenVar,
+                    VSymbol::GenVar,
                     diagnostics,
                 )
                 .is_err();
@@ -924,7 +944,10 @@ pub fn elaborate_module_or_generate_item_declaration<'a>(
                 table,
                 parent,
                 *ident,
-                ElabSymbol::Task(*id),
+                VSymbol::Task(TaskSymbol {
+                    ast_id: *id,
+                    lowered: None,
+                }),
                 diagnostics,
             )
             .is_err();
@@ -939,7 +962,10 @@ pub fn elaborate_module_or_generate_item_declaration<'a>(
                 table,
                 parent,
                 *ident,
-                ElabSymbol::Function(*id),
+                VSymbol::Function(FunctionSymbol {
+                    ast_id: *id,
+                    lowered: None,
+                }),
                 diagnostics,
             )
             .is_err();
@@ -953,7 +979,7 @@ pub fn elaborate_variable_type<'a>(
     signals: &mut slotmap::SlotMap<SignalKey, Signal>,
     arenas: &'a AstArenas,
     parent: SymbolId,
-    table: &mut ElabTable,
+    table: &mut VSymbolTable,
     diagnostics: &mut Diagnostics,
     variable_type: AstId<VariableType>,
     ty: VType,
@@ -976,7 +1002,7 @@ pub fn elaborate_variable_type<'a>(
         table,
         parent,
         *identifier,
-        ElabSymbol::Net(ElabNet {
+        VSymbol::Net(NetSymbol {
             ty,
             dims,
             signal,
@@ -1011,9 +1037,10 @@ fn new_signal(
 }
 
 pub fn elaborate_statements<'a>(
+    signals: &mut slotmap::SlotMap<SignalKey, Signal>,
     arenas: &'a AstArenas,
     parent: SymbolId,
-    table: &mut ElabTable,
+    table: &mut VSymbolTable,
     diagnostics: &mut Diagnostics,
     stmts: AstIdRange<Statement>,
 ) -> Result<(), ()> {
@@ -1037,6 +1064,7 @@ pub fn elaborate_statements<'a>(
                         statement_or_null,
                     } = arenas.get(item);
                     error |= elaborate_statement_or_null(
+                        signals,
                         arenas,
                         parent,
                         table,
@@ -1056,22 +1084,40 @@ pub fn elaborate_statements<'a>(
                     condition: _,
                     statement,
                 } = if_branch;
-                error |=
-                    elaborate_statement_or_null(arenas, parent, table, diagnostics, *statement)
-                        .is_err();
+                error |= elaborate_statement_or_null(
+                    signals,
+                    arenas,
+                    parent,
+                    table,
+                    diagnostics,
+                    *statement,
+                )
+                .is_err();
                 for else_if in else_ifs.iter() {
                     let IfBranch {
                         condition: _,
                         statement,
                     } = arenas.get(else_if);
-                    error |=
-                        elaborate_statement_or_null(arenas, parent, table, diagnostics, *statement)
-                            .is_err();
+                    error |= elaborate_statement_or_null(
+                        signals,
+                        arenas,
+                        parent,
+                        table,
+                        diagnostics,
+                        *statement,
+                    )
+                    .is_err();
                 }
                 if let Some(statement) = else_branch {
-                    error |=
-                        elaborate_statement_or_null(arenas, parent, table, diagnostics, *statement)
-                            .is_err();
+                    error |= elaborate_statement_or_null(
+                        signals,
+                        arenas,
+                        parent,
+                        table,
+                        diagnostics,
+                        *statement,
+                    )
+                    .is_err();
                 }
             }
             S::LoopStatement(id) => {
@@ -1080,6 +1126,7 @@ pub fn elaborate_statements<'a>(
                     statement,
                 } = arenas.get(*id);
                 error |= elaborate_statements(
+                    signals,
                     arenas,
                     parent,
                     table,
@@ -1098,6 +1145,7 @@ pub fn elaborate_statements<'a>(
                     statement_or_null,
                 } = arenas.get(*id);
                 error |= elaborate_statement_or_null(
+                    signals,
                     arenas,
                     parent,
                     table,
@@ -1112,7 +1160,7 @@ pub fn elaborate_statements<'a>(
                     Some(block) => {
                         let Block {
                             block_identifier,
-                            block_item_decls: _,
+                            block_item_decls,
                         } = arenas.get(*block);
 
                         let Ok(named_block_symid) = try_table_insert(
@@ -1120,14 +1168,97 @@ pub fn elaborate_statements<'a>(
                             table,
                             parent,
                             *block_identifier,
-                            ElabSymbol::NamedBlock,
+                            VSymbol::NamedBlock,
                             diagnostics,
                         ) else {
                             error = true;
                             continue;
                         };
 
+                        for item_decl in block_item_decls.iter() {
+                            use BlockItemDeclaration as B;
+                            match arenas.get(item_decl) {
+                                B::Reg {
+                                    signed,
+                                    range,
+                                    identifiers,
+                                } => {
+                                    let (_, _, size) = match range {
+                                        None => (0, 0, SCALAR_VSIZE),
+                                        Some(range) => eval_constant_range(
+                                            arenas,
+                                            parent,
+                                            table,
+                                            diagnostics,
+                                            *range,
+                                        )?,
+                                    };
+
+                                    let ty = VType::net(size, *signed);
+                                    for variable_type in identifiers.iter() {
+                                        error |= elaborate_variable_type(
+                                            signals,
+                                            arenas,
+                                            parent,
+                                            table,
+                                            diagnostics,
+                                            variable_type,
+                                            ty,
+                                        )
+                                        .is_err();
+                                    }
+                                }
+                                B::Integer(var_types) => {
+                                    let ty = VType::SignedNet(INTEGER_VSIZE);
+                                    for variable_type in var_types.iter() {
+                                        error |= elaborate_variable_type(
+                                            signals,
+                                            arenas,
+                                            parent,
+                                            table,
+                                            diagnostics,
+                                            variable_type,
+                                            ty,
+                                        )
+                                        .is_err();
+                                    }
+                                }
+                                B::Time | B::Real | B::Realtime | B::Event => todo!(),
+                                B::LocalParameterDeclaration(ast_id) => {
+                                    let LocalParameterDeclaration {
+                                        typing,
+                                        assignments,
+                                    } = arenas.get(*ast_id);
+                                    elaborate_parameter_declaration(
+                                        arenas,
+                                        *typing,
+                                        *assignments,
+                                        parent,
+                                        table,
+                                        diagnostics,
+                                        None,
+                                    )?;
+                                }
+                                B::ParameterDeclaration(ast_id) => {
+                                    let ParameterDeclaration {
+                                        typing,
+                                        assignments,
+                                    } = arenas.get(*ast_id);
+                                    elaborate_parameter_declaration(
+                                        arenas,
+                                        *typing,
+                                        *assignments,
+                                        parent,
+                                        table,
+                                        diagnostics,
+                                        None,
+                                    )?;
+                                }
+                            }
+                        }
+
                         error |= elaborate_statements(
+                            signals,
                             arenas,
                             named_block_symid,
                             table,
@@ -1137,9 +1268,15 @@ pub fn elaborate_statements<'a>(
                         .is_err();
                     }
                     None => {
-                        error |=
-                            elaborate_statements(arenas, parent, table, diagnostics, *statements)
-                                .is_err();
+                        error |= elaborate_statements(
+                            signals,
+                            arenas,
+                            parent,
+                            table,
+                            diagnostics,
+                            *statements,
+                        )
+                        .is_err();
                     }
                 }
             }
@@ -1149,6 +1286,7 @@ pub fn elaborate_statements<'a>(
                     statement_or_null,
                 } = arenas.get(*id);
                 error |= elaborate_statement_or_null(
+                    signals,
                     arenas,
                     parent,
                     table,
@@ -1167,24 +1305,30 @@ pub fn elaborate_statements<'a>(
 }
 
 pub fn elaborate_statement_or_null<'a>(
+    signals: &mut slotmap::SlotMap<SignalKey, Signal>,
     arenas: &'a AstArenas,
     parent: SymbolId,
-    table: &mut ElabTable,
+    table: &mut VSymbolTable,
     diagnostics: &mut Diagnostics,
     stmt: AstId<StatementOrNull>,
 ) -> Result<(), ()> {
     match arenas.get(stmt) {
         StatementOrNull::Attribute(_) => Ok(()),
-        StatementOrNull::Statement(id) => {
-            elaborate_statements(arenas, parent, table, diagnostics, AstIdRange::single(*id))
-        }
+        StatementOrNull::Statement(id) => elaborate_statements(
+            signals,
+            arenas,
+            parent,
+            table,
+            diagnostics,
+            AstIdRange::single(*id),
+        ),
     }
 }
 
 pub fn eval_constant_expr_elab<'a>(
     arenas: &'a AstArenas,
     scope: SymbolId,
-    table: &ElabTable,
+    table: &VSymbolTable,
     diagnostics: &mut Diagnostics,
     expr: AstId<ConstantExpr>,
 ) -> Result<VValue, ()> {
@@ -1194,7 +1338,7 @@ pub fn eval_constant_expr_elab<'a>(
 pub fn eval_constant_range(
     arenas: &AstArenas,
     scope: SymbolId,
-    table: &ElabTable,
+    table: &VSymbolTable,
     diagnostics: &mut Diagnostics,
     ast_range: AstId<Range>,
 ) -> Result<(i64, i64, VectorSize), ()> {
@@ -1222,7 +1366,7 @@ pub fn elaborate_generate_block<'a>(
     signals: &mut slotmap::SlotMap<SignalKey, Signal>,
     arenas: &'a AstArenas,
     parent: SymbolId,
-    table: &mut ElabTable,
+    table: &mut VSymbolTable,
     module_instances_todo: &mut Vec<SymbolId>,
     diagnostics: &mut Diagnostics,
     blk: AstId<Option<GenerateBlock>>,
@@ -1241,14 +1385,14 @@ pub fn elaborate_generate_block<'a>(
             IdentTable::EMPTY_IDENT,
             parent,
             arenas.get_range_span(mod_or_gen_items),
-            ElabSymbol::GenerateBlock(mod_or_gen_items),
+            VSymbol::GenerateBlock(mod_or_gen_items),
         ),
         Some(block_ident) => try_table_insert(
             arenas,
             table,
             parent,
             block_ident,
-            ElabSymbol::GenerateBlock(mod_or_gen_items),
+            VSymbol::GenerateBlock(mod_or_gen_items),
             diagnostics,
         )?,
     };
@@ -1273,7 +1417,7 @@ pub fn elaborate_generate_block<'a>(
 pub fn dims_to_array_elab<'a>(
     arenas: &'a AstArenas,
     scope: SymbolId,
-    table: &ElabTable,
+    table: &VSymbolTable,
     diagnostics: &mut Diagnostics,
     dimensions: AstIdRange<Dimension>,
 ) -> Result<Vec<u32>, ()> {

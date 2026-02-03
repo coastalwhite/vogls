@@ -1,26 +1,27 @@
-use slotmap::SlotMap;
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{INTEGER_VSIZE, SCALAR_VSIZE, Signal, SignalKey};
 
 use crate::ast::AstIdRange;
-use crate::ast::module::{FunctionDeclaration, TaskDeclaration, TaskPortItemContent, TfInputDeclaration, TfType};
-use crate::lower::{Diagnostics, VType, evaluate_range};
+use crate::ast::module::{
+    FunctionDeclaration, TaskDeclaration, TaskPortItemContent, TfInputDeclaration, TfType,
+};
+use crate::elaborate::NetSymbol;
+use crate::lower::{Diagnostics, EvalScope, VType, evaluate_range};
 use crate::parser::AstArenas;
 
-use super::ElabTable;
+use super::{VSymbol, VSymbolTable};
 
 pub fn elaborate_fn<'a>(
+    signals: &mut slotmap::SlotMap<SignalKey, Signal>,
     arenas: &'a AstArenas,
-    parent: SymbolId,
-    table: &mut ElabTable,
+    symbol: SymbolId,
+    table: &mut VSymbolTable,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
-    todo!()
-        /*
-    let HierarchyItem::Function(i) = builder.hierarchy.symbols[builder.key.as_idx()] else {
+    let VSymbol::Function(i) = &table[symbol].content else {
         unreachable!();
     };
-    let id = builder.hierarchy.functions[i].ast;
+    let id = i.ast_id;
     let FunctionDeclaration {
         tf_input_decls,
         statement,
@@ -48,10 +49,13 @@ pub fn elaborate_fn<'a>(
                     let (_, _, width) = match range {
                         None => (0, 0, SCALAR_VSIZE),
                         // @TODO: Better error
-                        Some(range) => {
-                            evaluate_range(arenas, builder.eval_scope(), diagnostics, *range)
-                                .unwrap()
-                        }
+                        Some(range) => evaluate_range(
+                            arenas,
+                            EvalScope { table, key: symbol },
+                            diagnostics,
+                            *range,
+                        )
+                        .unwrap(),
                     };
                     VType::net(width, *signed)
                 }
@@ -60,37 +64,42 @@ pub fn elaborate_fn<'a>(
             };
             let ident = arenas.to_item(ident);
             let name = &arenas.ident_table[ident.item.0];
+            let origin = arenas.get_item_span(ident);
             let signal = signals.insert(Signal {
                 name: name.to_string(),
                 size: ty.force_net_width(),
                 initialize: None,
                 origin: arenas.get_item_span(ident),
             });
-            builder.insert_net(HierarchyNet {
-                name: name.to_string(),
-                parent: builder.key(),
-                signal,
-                ty,
-                dims: [].into(),
-                nba: None,
-            });
+            table.insert_unlinked(
+                ident.item.0,
+                symbol,
+                origin,
+                VSymbol::Net(NetSymbol {
+                    ty,
+                    dims: [].into(),
+                    signal,
+                    nba: None,
+                    port_idx: None,
+                }),
+            );
         }
     }
 
     super::elaborate_statements(
         signals,
         arenas,
-        builder,
+        symbol,
+        table,
         diagnostics,
         AstIdRange::single(*statement),
     )
-        */
 }
 
 pub fn elaborate_task<'a>(
     arenas: &'a AstArenas,
     symbol: SymbolId,
-    table: &mut ElabTable,
+    table: &mut VSymbolTable,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
     todo!()

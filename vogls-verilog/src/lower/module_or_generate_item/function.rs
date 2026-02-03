@@ -11,8 +11,8 @@ use crate::ast::module::{
     TfInputDeclaration, TfType,
 };
 use crate::ast::{AstId, AstIdRange};
-use crate::elaborate::ElabTable;
-use crate::lower::{Diagnostics, VType, evaluate_range};
+use crate::elaborate::{LoweredFunction, NetSymbol, VSymbol, VSymbolTable};
+use crate::lower::{Diagnostics, VType, evaluate_range, unwrap_get_fn_mut};
 use crate::lower::{EvalScope, Scope};
 use crate::parser::AstArenas;
 
@@ -20,12 +20,9 @@ pub fn lower<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
     diagnostics: &mut Diagnostics,
-    scope: &mut Scope,
-    signal_map: &mut HashMap<SignalKey, SignalKey>,
+    scope: &mut Scope<'a>,
     id: AstId<FunctionDeclaration>,
 ) -> Result<(), ()> {
-    Ok(())
-    /*
     use vogls_ir::Instruction as I;
 
     let FunctionDeclaration {
@@ -42,23 +39,16 @@ pub fn lower<'a>(
         return Err(());
     }
 
-    let name = &arenas.ident_table[ ident.item.0 ];
-    let parent_key = hierarchy.functions[hierarchy_function_i].parent;
-
     macro_rules! scope {
         () => {
             EvalScope {
-                hierarchy,
-                key: parent_key,
+                table: scope.table,
+                key: scope.key,
             }
         };
     }
-    let fn_key = *hierarchy
-        .lookup()
-        .get(&(parent_key, name.to_string()))
-        .unwrap();
 
-    // @FIXME: This is an extremely simplified implementation of functions and
+    // @TODO: This is an extremely simplified implementation of functions and
     // basically only allows for the simplest of functions. Expand this to a more
     // complete solution. Do I even want to support recursive functions...
     let builder = new_anonymous_builder(gl, "function".into(), arenas.get_span(id));
@@ -87,25 +77,26 @@ pub fn lower<'a>(
         }
     };
 
-    let mut scope = Scope {
-        hierarchy,
-        key: fn_key,
-        signal_map,
-    };
+    let fn_name = &arenas.ident_table[ident.item.0];
+    let output_origin = arenas.get_item_span(*ident);
     let output_key = gl.signals.insert(Signal {
-        name: name.to_string(),
+        name: fn_name.to_string(),
         size: output_ty.force_net_width(),
         initialize: None,
-        origin: arenas.get_item_span(*ident),
+        origin: output_origin,
     });
-    scope.builder().insert_net(crate::hierarchy::HierarchyNet {
-        name: name.to_string(),
-        parent: fn_key,
-        signal: output_key,
-        ty: output_ty,
-        dims: [].into(),
-        nba: None,
-    });
+    scope.table.insert_unlinked(
+        ident.item.0,
+        scope.key,
+        output_origin,
+        VSymbol::Net(NetSymbol {
+            ty: output_ty,
+            dims: [].into(),
+            signal: output_key,
+            nba: None,
+            port_idx: None,
+        }),
+    );
 
     let mut input_types = Vec::<VType>::with_capacity(tf_input_decls.len());
     let mut input_lut = HashMap::<SignalKey, usize>::with_capacity(tf_input_decls.len());
@@ -143,7 +134,7 @@ pub fn lower<'a>(
         };
 
         for input_ident in port_identifiers.iter() {
-            let name = &arenas.ident_table[ arenas.get(input_ident).0 ];
+            let name = &arenas.ident_table[arenas.get(input_ident).0];
             let input_key = gl.signals.insert(Signal {
                 name: name.to_string(),
                 size: input_ty.force_net_width(),
@@ -153,14 +144,18 @@ pub fn lower<'a>(
 
             input_types.push(input_ty);
             input_lut.insert(input_key, i);
-            scope.builder().insert_net(crate::hierarchy::HierarchyNet {
-                name: name.to_string(),
-                parent: fn_key,
-                signal: input_key,
-                ty: input_ty,
-                dims: [].into(),
-                nba: None,
-            });
+            scope.table.insert_unlinked(
+                arenas.get(input_ident).0,
+                scope.key,
+                output_origin,
+                VSymbol::Net(NetSymbol {
+                    ty: input_ty,
+                    dims: [].into(),
+                    signal: input_key,
+                    nba: None,
+                    port_idx: None,
+                }),
+            );
             num_inputs += 1;
         }
     }
@@ -168,7 +163,7 @@ pub fn lower<'a>(
     let builder = crate::lower::statement::statements_to_process(
         gl,
         arenas,
-        &mut scope,
+        scope,
         diagnostics,
         builder,
         AstIdRange::single(*statement),
@@ -241,7 +236,7 @@ pub fn lower<'a>(
         })
         .collect();
 
-    hierarchy.functions[hierarchy_function_i].lower = Some(LoweredFunction {
+    unwrap_get_fn_mut(scope.table, scope.key).lowered = Some(LoweredFunction {
         entry: entry_key,
         input_vars,
         input_types,
@@ -250,16 +245,13 @@ pub fn lower<'a>(
     });
 
     Ok(())
-        */
 }
 
 pub fn lower_task<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
     diagnostics: &mut Diagnostics,
-    elab_table: &mut ElabTable,
-    task: SymbolId,
-    signal_map: &mut HashMap<SignalKey, SignalKey>,
+    scope: &mut Scope,
     id: AstId<TaskDeclaration>,
 ) -> Result<(), ()> {
     return Ok(());

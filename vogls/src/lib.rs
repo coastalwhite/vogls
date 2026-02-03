@@ -17,8 +17,8 @@ use vogls_verilog::ast::module::{
     CaseGenerateConstruct, CaseGenerateItem, GenerateBlock, IfGenerateConstruct,
     LoopGenerateConstruct, Module, ModuleItem, ModuleOrGenerateItem, NonPortModuleItem,
 };
-use vogls_verilog::elaborate::{ElabModule, ElabSymbol, ElabTable, elaborate_module};
-use vogls_verilog::lower::{Diagnostics as LowerDiagnostics, lower_module_to_ir};
+use vogls_verilog::elaborate::{ModuleSymbol, VSymbol, VSymbolTable, elaborate_module};
+use vogls_verilog::lower::{Diagnostics as LowerDiagnostics, Scope, lower_module_to_ir};
 use vogls_verilog::parser::{
     AstArenas, Diagnostics as ParserDiagnostics, ParseContext, ParserScratches, TokenWalker,
     parse_file, report, report_error,
@@ -261,7 +261,7 @@ pub fn run(
         ));
     };
 
-    let mut elab_table = ElabTable::default();
+    let mut elab_table = VSymbolTable::default();
     let mut module_instance_stack = Vec::new();
 
     let tl_module_symid = elab_table
@@ -272,7 +272,7 @@ pub fn run(
                     .get(ast.modules.get(*tl_module))
                     .module_identifier,
             ),
-            ElabSymbol::Module(ElabModule {
+            VSymbol::Module(ModuleSymbol {
                 module: tl_module_name,
                 ports: Vec::new(),
                 parameters: Vec::new(),
@@ -287,7 +287,7 @@ pub fn run(
 
     module_instance_stack.push(tl_module_symid);
     while let Some(module_symid) = module_instance_stack.pop() {
-        let ElabSymbol::Module(m) = &elab_table[module_symid].content else {
+        let VSymbol::Module(m) = &elab_table[module_symid].content else {
             unreachable!()
         };
         error |= elaborate_module(
@@ -333,17 +333,55 @@ pub fn run(
             "{}",
             elab_table.display(tl_module_symid, &ast.arenas.ident_table, |s, f| {
                 match s {
-                    ElabSymbol::Module(_) => f.write_str("mod"),
-                    ElabSymbol::Parameter(v) => write!(f, "{v:?}"),
-                    ElabSymbol::Net(_) => f.write_str("net"),
-                    ElabSymbol::NamedBlock => f.write_str("named block"),
-                    ElabSymbol::GenerateBlock(_) => f.write_str("generate block"),
-                    ElabSymbol::GenVar => f.write_str("genvar"),
-                    ElabSymbol::Task(_) => f.write_str("task"),
-                    ElabSymbol::Function(_) => f.write_str("function"),
+                    VSymbol::Module(_) => f.write_str("mod"),
+                    VSymbol::Parameter(v) => write!(f, "{v:?}"),
+                    VSymbol::Net(_) => f.write_str("net"),
+                    VSymbol::NamedBlock => f.write_str("named block"),
+                    VSymbol::GenerateBlock(_) => f.write_str("generate block"),
+                    VSymbol::GenVar => f.write_str("genvar"),
+                    VSymbol::Task(_) => f.write_str("task"),
+                    VSymbol::Function(_) => f.write_str("function"),
                 }
             })
         )?;
+    }
+
+    let mut signal_map = HashMap::new();
+    // @TODO: Iterate over the modules instead.
+    for key in elab_table.symbol_id_iter() {
+        match &elab_table[key].content {
+            VSymbol::Function(i) => {
+                let fn_decl = i.ast_id;
+                error |= vogls_verilog::lower::module_or_generate_item::function::lower(
+                    &mut gl,
+                    &ast.arenas,
+                    &mut diagnostics,
+                    &mut Scope {
+                        table: &mut elab_table,
+                        key,
+                        signal_map: &mut signal_map,
+                    },
+                    fn_decl,
+                )
+                .is_err();
+            }
+            VSymbol::Task(i) => {
+                let task_decl = i.ast_id;
+                error |= vogls_verilog::lower::module_or_generate_item::function::lower_task(
+                    &mut gl,
+                    &ast.arenas,
+                    &mut diagnostics,
+                    &mut Scope {
+                        table: &mut elab_table,
+                        key,
+                        signal_map: &mut signal_map,
+                    },
+                    task_decl,
+                )
+                .is_err();
+            }
+            _ => {}
+        }
     }
 
     if error {
@@ -367,7 +405,7 @@ pub fn run(
     let mut signal_map = HashMap::new();
     // @TODO: Iterate over the modules instead.
     for key in elab_table.symbol_id_iter() {
-        let ElabSymbol::Module(m) = &elab_table[key].content else {
+        let VSymbol::Module(m) = &elab_table[key].content else {
             continue;
         };
         let module_id = ast.modules.get(module_lut[&m.module]);

@@ -6,8 +6,9 @@ use vogls_ir::{
 
 use crate::ast::expr::Expr;
 use crate::ast::{AstId, AstIdRange, AstItem, Identifier};
+use crate::elaborate::VSymbol;
 use crate::lower::expression::{lower_expr, truncate_or_extend};
-use crate::lower::{Diagnostics, VType};
+use crate::lower::{Diagnostics, VType, try_resolve_symbol_id};
 use crate::lower::{Scope, assign_task_output};
 use crate::parser::AstArenas;
 
@@ -21,33 +22,26 @@ pub fn lower_function_call<'a>(
     ident: AstItem<Identifier>,
     arguments: &[Option<(VariableKey, VType)>],
 ) -> Result<(VariableKey, VType), ()> {
-    todo!()
-        /*
-    let fn_name = &arenas.ident_table[ident.item.0];
-    let Some(fn_symbol) = scope.get(fn_name) else {
-        diagnostics.var_not_found(arenas, ident);
-        return Err(());
-    };
-    let HierarchyItem::Function(i) = &scope.hierarchy.symbols[fn_symbol.as_idx()] else {
+    let fn_symbol = try_resolve_symbol_id(scope.key, scope.table, arenas, ident, diagnostics)?;
+    let VSymbol::Function(fn_symbol) = &scope.table[fn_symbol].content else {
         diagnostics.not_yet_implemented(arenas.get_item_span(ident), "not calling a function");
         return Err(());
     };
-    // @TODO: Error handling
-    let fn_symbol = &scope.hierarchy.functions[*i].lower.as_ref().unwrap();
 
-    assert_eq!(fn_symbol.input_vars.len(), fn_symbol.input_types.len());
-    if fn_symbol.input_vars.len() != arguments.len() {
+    let lowered = fn_symbol.lowered.as_ref().unwrap();
+    assert_eq!(lowered.input_vars.len(), lowered.input_types.len());
+    if lowered.input_vars.len() != arguments.len() {
         diagnostics.not_yet_implemented(arenas.get_span(expr), "invalid number of arguments");
         return Err(());
     }
 
     let mut map = HashMap::new();
-    for i in 0..fn_symbol.input_vars.len() {
+    for i in 0..lowered.input_vars.len() {
         let Some((arg_variable, arg_ty)) = arguments[i] else {
             return Err(());
         };
-        let input_var = fn_symbol.input_vars[i];
-        let input_ty = fn_symbol.input_types[i];
+        let input_var = lowered.input_vars[i];
+        let input_ty = lowered.input_types[i];
         let arg_variable = truncate_or_extend(
             gl,
             builder,
@@ -58,7 +52,7 @@ pub fn lower_function_call<'a>(
         map.insert(input_var, arg_variable);
     }
 
-    let mut fn_bb = gl.bbs[fn_symbol.entry].clone();
+    let mut fn_bb = gl.bbs[lowered.entry].clone();
     fn_bb.map_vars(|v| {
         *map.entry(v).or_insert_with(|| {
             let fn_var = gl.vars[v].clone();
@@ -72,8 +66,7 @@ pub fn lower_function_call<'a>(
     let fn_bb = gl.bbs.insert(fn_bb);
     gl.bbs[origin_bb].terminator = BasicBlockTerminator::Jump(fn_bb);
 
-    Ok((map[&fn_symbol.output_var], fn_symbol.output_ty))
-        */
+    Ok((map[&lowered.output_var], lowered.output_ty))
 }
 
 pub fn lower_task_enable<'a>(
@@ -86,7 +79,7 @@ pub fn lower_task_enable<'a>(
     arguments: AstIdRange<Expr>,
 ) -> Result<BasicBlockBuilder, ()> {
     todo!()
-        /*
+    /*
     let fn_name = &arenas.ident_table[ident.item.0];
     let Some(fn_symbol) = scope.get(fn_name) else {
         diagnostics.var_not_found(arenas, ident);
