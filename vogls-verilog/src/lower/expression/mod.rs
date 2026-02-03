@@ -827,8 +827,12 @@ pub fn get_used_signals<'a>(
                 dispatch_stack.extend([*c, *t, *f].into_iter().map(StackItem::new))
             }
             Expr::Ident(ident, exprs, range_expression) => {
-                let symbol_key =
-                    try_resolve_symbol_id(scope.key, scope.table, arenas, *ident, diagnostics)?;
+                let Ok(symbol_key) =
+                    try_resolve_symbol_id(scope.key, scope.table, arenas, *ident, diagnostics)
+                else {
+                    error |= true;
+                    continue;
+                };
                 match &scope.table[symbol_key].content {
                     VSymbol::Net(s) => {
                         if signals_seen.insert(s.signal) {

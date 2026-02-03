@@ -66,7 +66,7 @@ impl BasicBlock {
 
     fn remove_fan_in_edge(&mut self, bb_key: BasicBlockKey) {
         for i in &mut self.instrs {
-            if let Instruction::Phi(dst, origins) = i {
+            if let Instruction::Phi(_dst, origins) = i {
                 assert!(origins.len() >= 2);
                 let idx = origins
                     .iter()
@@ -271,11 +271,7 @@ pub enum Instruction {
 
     Intrinsic(VariableKey, Box<IntrinsicOp>, Box<[VariableKey]>),
     Probe(VariableKey, SignalKey),
-    Drive(
-        SignalKey,
-        VariableKey,
-        Option<(VariableKey, VectorSize)>,
-    ),
+    Drive(SignalKey, VariableKey, Option<(VariableKey, VectorSize)>),
 
     Phi(VariableKey, Box<[(BasicBlockKey, VariableKey)]>),
 }

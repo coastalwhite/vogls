@@ -100,7 +100,15 @@ impl VValue {
         lhs
     }
     pub fn bitwise_xnor(lhs: VValue, rhs: VValue) -> VValue {
-        todo!()
+        use VValue as V;
+        let (mut lhs, rhs) = Self::coerce_max_size(lhs, rhs);
+        match (&mut lhs, rhs) {
+            (V::UnsignedNet(lb) | V::SignedNet(lb), V::UnsignedNet(r) | V::SignedNet(r)) => {
+                *lb = Bits::bitwise_or(lb, &r).bitwise_negate();
+            }
+            (V::String(_), _) | (_, V::String(_)) => todo!(),
+        }
+        lhs
     }
 
     pub fn less_than(lhs: VValue, rhs: VValue) -> bool {

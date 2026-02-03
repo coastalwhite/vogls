@@ -959,9 +959,7 @@ pub fn elaborate_module_or_generate_item_declaration<'a>(
             }
         }
         ModuleOrGenerateItemDeclaration::Task(id) => {
-            let TaskDeclaration {
-                ident, automatic, ..
-            } = arenas.get(*id);
+            let TaskDeclaration { ident, .. } = arenas.get(*id);
 
             let symbol = try_table_insert(
                 arenas,
@@ -977,9 +975,7 @@ pub fn elaborate_module_or_generate_item_declaration<'a>(
             function::elaborate_task(signals, arenas, symbol, table, diagnostics)?;
         }
         ModuleOrGenerateItemDeclaration::Function(id) => {
-            let FunctionDeclaration {
-                ident, automatic, ..
-            } = arenas.get(*id);
+            let FunctionDeclaration { ident, .. } = arenas.get(*id);
 
             let symbol = try_table_insert(
                 arenas,

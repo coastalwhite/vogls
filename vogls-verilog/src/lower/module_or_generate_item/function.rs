@@ -1,22 +1,19 @@
 use std::collections::{HashMap, HashSet};
 
-use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{
-    BasicBlockTerminator, Bits, ConnectionDirection, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE,
-    Signal, SignalKey, VariableKey, new_anonymous_builder,
+    BasicBlockTerminator, Bits, ConnectionDirection, GlobalContext, SignalKey, VariableKey,
+    new_anonymous_builder,
 };
 
 use crate::ast::module::{
-    FunctionDeclaration, FunctionRangeOrType, TaskDeclaration, TaskPortItemContent,
-    TfInputDeclaration, TfType,
+    FunctionDeclaration, TaskDeclaration, TaskPortItemContent, TfInputDeclaration,
 };
 use crate::ast::{AstId, AstIdRange};
-use crate::elaborate::{LoweredFunction, LoweredTask, NetSymbol, VSymbol, VSymbolTable};
+use crate::elaborate::{LoweredFunction, LoweredTask};
+use crate::lower::Scope;
 use crate::lower::{
-    Diagnostics, VType, evaluate_range, try_resolve_net, unwrap_get_fn_mut, unwrap_get_task_mut,
-    unwrap_resolve_net,
+    Diagnostics, VType, unwrap_get_fn_mut, unwrap_get_task_mut, unwrap_resolve_net,
 };
-use crate::lower::{EvalScope, Scope};
 use crate::parser::AstArenas;
 
 pub fn lower<'a>(
