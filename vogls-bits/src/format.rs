@@ -12,7 +12,7 @@ pub enum BitsFormatBase {
     Decimal,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum BitsFormatWidth {
     Minimum(usize),
     Shrink,

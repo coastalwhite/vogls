@@ -75,6 +75,7 @@ pub fn format_bits(
         Base::Decimal => BitsFormatBase::Decimal,
     };
 
+    options.separator = None;
     if options.base != BitsFormatBase::Decimal {
         options.fill = '0';
     }
