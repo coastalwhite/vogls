@@ -78,19 +78,13 @@ pub fn lower_task_enable<'a>(
     ident: AstItem<Identifier>,
     arguments: AstIdRange<Expr>,
 ) -> Result<BasicBlockBuilder, ()> {
-    todo!()
-    /*
-    let fn_name = &arenas.ident_table[ident.item.0];
-    let Some(fn_symbol) = scope.get(fn_name) else {
-        diagnostics.var_not_found(arenas, ident);
-        return Err(());
-    };
-    let HierarchyItem::Task(i) = &scope.hierarchy.symbols[fn_symbol.as_idx()] else {
+    let fn_symbol = try_resolve_symbol_id(scope.key, scope.table, arenas, ident, diagnostics)?;
+    let VSymbol::Task(task_symbol) = &scope.table[fn_symbol].content else {
         diagnostics.not_yet_implemented(arenas.get_item_span(ident), "not enabling a task");
         return Err(());
     };
-    // @TODO: Error handling
-    let task_symbol = &scope.hierarchy.tasks[*i].lower.as_ref().unwrap();
+
+    let task_symbol = task_symbol.lowered.as_ref().unwrap();
 
     assert_eq!(task_symbol.io_vars.len(), task_symbol.io_types.len());
     if task_symbol.io_vars.len() != arguments.len() {
@@ -143,7 +137,6 @@ pub fn lower_task_enable<'a>(
                 new_bb
             })
         });
-        gl.bbs[bb_key].terminator.map_bb(|bb| bb_map[&bb]);
         gl.bbs[bb_key].map_vars(|v| {
             *map.entry(v).or_insert_with(|| {
                 let fn_var = gl.vars[v].clone();
@@ -191,5 +184,4 @@ pub fn lower_task_enable<'a>(
     gl.bbs[terminator_bb].terminator = BasicBlockTerminator::Jump(builder.key());
 
     Ok(builder)
-        */
 }

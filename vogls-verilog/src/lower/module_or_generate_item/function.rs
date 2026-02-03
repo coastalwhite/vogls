@@ -11,8 +11,11 @@ use crate::ast::module::{
     TfInputDeclaration, TfType,
 };
 use crate::ast::{AstId, AstIdRange};
-use crate::elaborate::{LoweredFunction, NetSymbol, VSymbol, VSymbolTable};
-use crate::lower::{Diagnostics, VType, evaluate_range, unwrap_get_fn_mut};
+use crate::elaborate::{LoweredFunction, LoweredTask, NetSymbol, VSymbol, VSymbolTable};
+use crate::lower::{
+    Diagnostics, VType, evaluate_range, try_resolve_net, unwrap_get_fn_mut, unwrap_get_task_mut,
+    unwrap_resolve_net,
+};
 use crate::lower::{EvalScope, Scope};
 use crate::parser::AstArenas;
 
@@ -27,7 +30,7 @@ pub fn lower<'a>(
 
     let FunctionDeclaration {
         automatic: _,
-        range_or_type,
+        range_or_type: _,
         ident,
         tf_input_decls,
         block_item_decls,
@@ -39,15 +42,6 @@ pub fn lower<'a>(
         return Err(());
     }
 
-    macro_rules! scope {
-        () => {
-            EvalScope {
-                table: scope.table,
-                key: scope.key,
-            }
-        };
-    }
-
     // @TODO: This is an extremely simplified implementation of functions and
     // basically only allows for the simplest of functions. Expand this to a more
     // complete solution. Do I even want to support recursive functions...
@@ -56,47 +50,9 @@ pub fn lower<'a>(
     let dummy_process_key = builder.process();
     let entry_key = builder.key();
 
-    let (_, _, output_ty) = match arenas.get(*range_or_type) {
-        FunctionRangeOrType::Unsigned(None) => (0, 0, VType::UnsignedNet(SCALAR_VSIZE)),
-        FunctionRangeOrType::Signed(None) => (0, 0, VType::SignedNet(SCALAR_VSIZE)),
-        FunctionRangeOrType::Unsigned(Some(range)) => {
-            let (msb, lsb, size) = evaluate_range(arenas, scope!(), diagnostics, *range)?;
-            (msb, lsb, VType::UnsignedNet(size))
-        }
-        FunctionRangeOrType::Signed(Some(range)) => {
-            let (msb, lsb, size) = evaluate_range(arenas, scope!(), diagnostics, *range)?;
-            (msb, lsb, VType::SignedNet(size))
-        }
-        FunctionRangeOrType::Integer => (31, 0, VType::SignedNet(INTEGER_VSIZE)),
-        FunctionRangeOrType::Real | FunctionRangeOrType::Realtime | FunctionRangeOrType::Time => {
-            diagnostics.not_yet_implemented(
-                arenas.get_span(id),
-                "real / time / realtime function output",
-            );
-            return Err(());
-        }
-    };
-
-    let fn_name = &arenas.ident_table[ident.item.0];
-    let output_origin = arenas.get_item_span(*ident);
-    let output_key = gl.signals.insert(Signal {
-        name: fn_name.to_string(),
-        size: output_ty.force_net_width(),
-        initialize: None,
-        origin: output_origin,
-    });
-    scope.table.insert_unlinked(
-        ident.item.0,
-        scope.key,
-        output_origin,
-        VSymbol::Net(NetSymbol {
-            ty: output_ty,
-            dims: [].into(),
-            signal: output_key,
-            nba: None,
-            port_idx: None,
-        }),
-    );
+    let output = unwrap_resolve_net(scope.key, scope.table, ident.item.0);
+    let output_key = output.signal;
+    let output_ty = output.ty.clone();
 
     let mut input_types = Vec::<VType>::with_capacity(tf_input_decls.len());
     let mut input_lut = HashMap::<SignalKey, usize>::with_capacity(tf_input_decls.len());
@@ -104,58 +60,17 @@ pub fn lower<'a>(
     let mut num_inputs = 0;
     for (i, input) in tf_input_decls.iter().enumerate() {
         let TfInputDeclaration {
-            tf_type,
+            tf_type: _,
             port_identifiers,
         } = arenas.get(input);
-        let input_ty = match tf_type {
-            TfType::Net {
-                reg: _,
-                signed,
-                range,
-            } => {
-                let size = match range {
-                    Some(range) => evaluate_range(arenas, scope.eval(), diagnostics, *range)?.2,
-                    None => SCALAR_VSIZE,
-                };
-                if *signed {
-                    VType::SignedNet(size)
-                } else {
-                    VType::UnsignedNet(size)
-                }
-            }
-            TfType::Integer => VType::SignedNet(INTEGER_VSIZE),
-            TfType::Real | TfType::Realtime | TfType::Time => {
-                diagnostics.not_yet_implemented(
-                    arenas.get_span(id),
-                    "real / time / realtime function input",
-                );
-                return Err(());
-            }
-        };
 
         for input_ident in port_identifiers.iter() {
-            let name = &arenas.ident_table[arenas.get(input_ident).0];
-            let input_key = gl.signals.insert(Signal {
-                name: name.to_string(),
-                size: input_ty.force_net_width(),
-                initialize: None,
-                origin: arenas.get_span(input_ident),
-            });
+            let input = unwrap_resolve_net(scope.key, scope.table, arenas.get(input_ident).0);
+            let input_key = input.signal;
+            let input_ty = input.ty.clone();
 
             input_types.push(input_ty);
             input_lut.insert(input_key, i);
-            scope.table.insert_unlinked(
-                arenas.get(input_ident).0,
-                scope.key,
-                output_origin,
-                VSymbol::Net(NetSymbol {
-                    ty: input_ty,
-                    dims: [].into(),
-                    signal: input_key,
-                    nba: None,
-                    port_idx: None,
-                }),
-            );
             num_inputs += 1;
         }
     }
@@ -251,16 +166,14 @@ pub fn lower_task<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
     diagnostics: &mut Diagnostics,
-    scope: &mut Scope,
+    scope: &mut Scope<'a>,
     id: AstId<TaskDeclaration>,
 ) -> Result<(), ()> {
-    return Ok(());
-    /*
     use vogls_ir::Instruction as I;
 
     let TaskDeclaration {
         automatic: _,
-        ident,
+        ident: _,
         task_ports,
         block_item_decls,
         statement_or_null,
@@ -271,13 +184,13 @@ pub fn lower_task<'a>(
         return Err(());
     }
 
-    let name = &arenas.ident_table[ ident.item.0 ];
-    let parent_key = hierarchy.tasks[hierarchy_task_i].parent;
-
-    let fn_key = *hierarchy
-        .lookup()
-        .get(&(parent_key, name.to_string()))
-        .unwrap();
+    // let name = &arenas.ident_table[ident.item.0];
+    // let parent = hierarchy.tasks[hierarchy_task_i].parent;
+    //
+    // let fn_key = *hierarchy
+    //     .lookup()
+    //     .get(&(parent_key, name.to_string()))
+    //     .unwrap();
 
     // @FIXME: This is an extremely simplified implementation of functions and
     // basically only allows for the simplest of functions. Expand this to a more
@@ -291,55 +204,20 @@ pub fn lower_task<'a>(
     let mut input_lut = HashMap::<SignalKey, usize>::new();
     let mut output_lut = HashMap::<SignalKey, usize>::new();
 
-    let mut scope = Scope {
-        hierarchy,
-        key: fn_key,
-        signal_map,
-    };
-
     let mut num_ports = 0;
     for (_, port) in task_ports.iter().enumerate() {
         use ConnectionDirection as D;
         use TaskPortItemContent as TPIC;
-        let (direction, tf_type, port_identifiers) = match arenas.get(port).content {
-            TPIC::Input(d) => (D::In, d.tf_type, d.port_identifiers),
-            TPIC::Output(d) => (D::Out, d.tf_type, d.port_identifiers),
-            TPIC::Inout(d) => (D::Both, d.tf_type, d.port_identifiers),
-        };
-        let port_ty = match tf_type {
-            TfType::Net {
-                reg: _,
-                signed,
-                range,
-            } => {
-                let size = match range {
-                    Some(range) => evaluate_range(arenas, scope.eval(), diagnostics, range)?.2,
-                    None => SCALAR_VSIZE,
-                };
-                if signed {
-                    VType::SignedNet(size)
-                } else {
-                    VType::UnsignedNet(size)
-                }
-            }
-            TfType::Integer => VType::SignedNet(INTEGER_VSIZE),
-            TfType::Real | TfType::Realtime | TfType::Time => {
-                diagnostics.not_yet_implemented(
-                    arenas.get_span(id),
-                    "real / time / realtime function input",
-                );
-                return Err(());
-            }
+        let (direction, port_identifiers) = match arenas.get(port).content {
+            TPIC::Input(d) => (D::In, d.port_identifiers),
+            TPIC::Output(d) => (D::Out, d.port_identifiers),
+            TPIC::Inout(d) => (D::Both, d.port_identifiers),
         };
 
         for port_ident in port_identifiers.iter() {
-            let name = &arenas.ident_table[ arenas.get(port_ident).0 ];
-            let port_key = gl.signals.insert(Signal {
-                name: name.to_string(),
-                size: port_ty.force_net_width(),
-                initialize: None,
-                origin: arenas.get_span(port_ident),
-            });
+            let port_net = unwrap_resolve_net(scope.key, scope.table, arenas.get(port_ident).0);
+            let port_key = port_net.signal;
+            let port_ty = port_net.ty;
 
             io_types.push((direction, port_ty));
             match direction {
@@ -354,14 +232,6 @@ pub fn lower_task<'a>(
                     output_lut.insert(port_key, num_ports);
                 }
             }
-            scope.builder().insert_net(crate::hierarchy::HierarchyNet {
-                name: name.to_string(),
-                parent: fn_key,
-                signal: port_key,
-                ty: port_ty,
-                dims: [].into(),
-                nba: None,
-            });
             num_ports += 1;
         }
     }
@@ -369,7 +239,7 @@ pub fn lower_task<'a>(
     let builder = crate::lower::statement::lower_statement_or_null(
         gl,
         arenas,
-        &mut scope,
+        scope,
         diagnostics,
         builder,
         *statement_or_null,
@@ -481,12 +351,11 @@ pub fn lower_task<'a>(
         })
         .collect();
 
-    hierarchy.tasks[hierarchy_task_i].lower = Some(LoweredTask {
+    unwrap_get_task_mut(scope.table, scope.key).lowered = Some(LoweredTask {
         entry: entry_key,
         io_vars,
         io_types,
     });
 
     Ok(())
-        */
 }

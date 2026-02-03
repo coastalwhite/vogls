@@ -118,6 +118,12 @@ pub fn unwrap_get_fn_mut<'a>(table: &'a mut VSymbolTable, sid: SymbolId) -> &'a 
     };
     n
 }
+pub fn unwrap_get_task_mut<'a>(table: &'a mut VSymbolTable, sid: SymbolId) -> &'a mut TaskSymbol {
+    let VSymbol::Task(n) = &mut table[sid].content else {
+        panic!()
+    };
+    n
+}
 
 pub fn unwrap_get_net<'a>(table: &'a VSymbolTable, sid: SymbolId) -> &'a NetSymbol {
     let VSymbol::Net(n) = &table[sid].content else {
@@ -193,7 +199,7 @@ use crate::ast::module::{
     Range,
 };
 use crate::ast::{AstId, AstItem, Identifier};
-use crate::elaborate::{FunctionSymbol, ModuleSymbol, NetSymbol, VSymbol, VSymbolTable};
+use crate::elaborate::{FunctionSymbol, ModuleSymbol, NetSymbol, TaskSymbol, VSymbol, VSymbolTable};
 use crate::parser::AstArenas;
 
 pub use self::expression::eval_constant_expr;

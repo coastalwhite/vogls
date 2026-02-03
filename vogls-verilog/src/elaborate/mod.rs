@@ -1,3 +1,4 @@
+use core::fmt;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
@@ -5,7 +6,8 @@ use vogls_frontend::VgHashMap;
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{
-    BasicBlockKey, ConnectionDirection, ProcessKey, Signal, SignalKey, VariableKey, VectorSize, INTEGER_VSIZE, SCALAR_VSIZE
+    BasicBlockKey, ConnectionDirection, INTEGER_VSIZE, ProcessKey, SCALAR_VSIZE, Signal, SignalKey,
+    VariableKey, VectorSize,
 };
 
 use crate::ast::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression};
@@ -45,6 +47,21 @@ pub enum VSymbol {
     Function(FunctionSymbol),
 }
 
+impl fmt::Debug for VSymbol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            VSymbol::Module(_) => "module",
+            VSymbol::Parameter(_) => "param",
+            VSymbol::Net(_) => "net",
+            VSymbol::NamedBlock => "named_block",
+            VSymbol::GenerateBlock(_) => "generate_block",
+            VSymbol::GenVar => "genvar",
+            VSymbol::Task(_) => "task",
+            VSymbol::Function(_) => "function",
+        })
+    }
+}
+
 pub struct ModuleSymbol {
     pub module: IdentId,
 
@@ -70,7 +87,7 @@ pub struct FunctionSymbol {
 
 pub struct TaskSymbol {
     pub ast_id: AstId<TaskDeclaration>,
-    pub lowered: Option<BasicBlockKey>,
+    pub lowered: Option<LoweredTask>,
 }
 
 #[derive(Clone)]
@@ -80,6 +97,13 @@ pub struct LoweredFunction {
     pub input_types: Vec<VType>,
     pub output_var: VariableKey,
     pub output_ty: VType,
+}
+
+#[derive(Clone)]
+pub struct LoweredTask {
+    pub entry: BasicBlockKey,
+    pub io_vars: Vec<VariableKey>,
+    pub io_types: Vec<(ConnectionDirection, VType)>,
 }
 
 pub fn try_table_insert(
@@ -939,7 +963,7 @@ pub fn elaborate_module_or_generate_item_declaration<'a>(
                 ident, automatic, ..
             } = arenas.get(*id);
 
-            error |= try_table_insert(
+            let symbol = try_table_insert(
                 arenas,
                 table,
                 parent,
@@ -949,15 +973,15 @@ pub fn elaborate_module_or_generate_item_declaration<'a>(
                     lowered: None,
                 }),
                 diagnostics,
-            )
-            .is_err();
+            )?;
+            function::elaborate_task(signals, arenas, symbol, table, diagnostics)?;
         }
         ModuleOrGenerateItemDeclaration::Function(id) => {
             let FunctionDeclaration {
                 ident, automatic, ..
             } = arenas.get(*id);
 
-            error |= try_table_insert(
+            let symbol = try_table_insert(
                 arenas,
                 table,
                 parent,
@@ -967,8 +991,8 @@ pub fn elaborate_module_or_generate_item_declaration<'a>(
                     lowered: None,
                 }),
                 diagnostics,
-            )
-            .is_err();
+            )?;
+            function::elaborate_fn(signals, arenas, symbol, table, diagnostics)?;
         }
     }
 

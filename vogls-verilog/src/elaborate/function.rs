@@ -3,13 +3,14 @@ use vogls_ir::{INTEGER_VSIZE, SCALAR_VSIZE, Signal, SignalKey};
 
 use crate::ast::AstIdRange;
 use crate::ast::module::{
-    FunctionDeclaration, TaskDeclaration, TaskPortItemContent, TfInputDeclaration, TfType,
+    FunctionDeclaration, FunctionRangeOrType, TaskDeclaration, TaskPortItemContent,
+    TfInputDeclaration, TfType,
 };
 use crate::elaborate::NetSymbol;
 use crate::lower::{Diagnostics, EvalScope, VType, evaluate_range};
 use crate::parser::AstArenas;
 
-use super::{VSymbol, VSymbolTable};
+use super::{VSymbol, VSymbolTable, eval_constant_range};
 
 pub fn elaborate_fn<'a>(
     signals: &mut slotmap::SlotMap<SignalKey, Signal>,
@@ -21,16 +22,68 @@ pub fn elaborate_fn<'a>(
     let VSymbol::Function(i) = &table[symbol].content else {
         unreachable!();
     };
+
+    let parent = table[symbol].parent().unwrap();
     let id = i.ast_id;
     let FunctionDeclaration {
+        ident,
         tf_input_decls,
         statement,
         block_item_decls,
+        range_or_type,
         ..
     } = arenas.get(id);
 
     if !block_item_decls.is_empty() {
         diagnostics.not_yet_implemented(arenas.get_span(id), "block item decls");
+        return Err(());
+    }
+
+    let (_, _, output_ty) = match arenas.get(*range_or_type) {
+        FunctionRangeOrType::Unsigned(None) => (0, 0, VType::UnsignedNet(SCALAR_VSIZE)),
+        FunctionRangeOrType::Signed(None) => (0, 0, VType::SignedNet(SCALAR_VSIZE)),
+        FunctionRangeOrType::Unsigned(Some(range)) => {
+            let (msb, lsb, size) = eval_constant_range(arenas, parent, table, diagnostics, *range)?;
+            (msb, lsb, VType::UnsignedNet(size))
+        }
+        FunctionRangeOrType::Signed(Some(range)) => {
+            let (msb, lsb, size) = eval_constant_range(arenas, parent, table, diagnostics, *range)?;
+            (msb, lsb, VType::SignedNet(size))
+        }
+        FunctionRangeOrType::Integer => (31, 0, VType::SignedNet(INTEGER_VSIZE)),
+        FunctionRangeOrType::Real | FunctionRangeOrType::Realtime | FunctionRangeOrType::Time => {
+            diagnostics.not_yet_implemented(
+                arenas.get_span(id),
+                "real / time / realtime function output",
+            );
+            return Err(());
+        }
+    };
+
+    let fn_name = &arenas.ident_table[ident.item.0];
+    let output_origin = arenas.get_item_span(*ident);
+    let output_key = signals.insert(Signal {
+        name: fn_name.to_string(),
+        size: output_ty.force_net_width(),
+        initialize: None,
+        origin: output_origin,
+    });
+    if table
+        .insert(
+            ident.item.0,
+            symbol,
+            arenas.get_item_span(*ident),
+            VSymbol::Net(NetSymbol {
+                ty: output_ty,
+                dims: [].into(),
+                signal: output_key,
+                nba: None,
+                port_idx: None,
+            }),
+        )
+        .is_err()
+    {
+        diagnostics.duplicate_definition(arenas, *ident);
         return Err(());
     }
 
@@ -71,18 +124,24 @@ pub fn elaborate_fn<'a>(
                 initialize: None,
                 origin: arenas.get_item_span(ident),
             });
-            table.insert_unlinked(
-                ident.item.0,
-                symbol,
-                origin,
-                VSymbol::Net(NetSymbol {
-                    ty,
-                    dims: [].into(),
-                    signal,
-                    nba: None,
-                    port_idx: None,
-                }),
-            );
+            if table
+                .insert(
+                    ident.item.0,
+                    symbol,
+                    origin,
+                    VSymbol::Net(NetSymbol {
+                        ty,
+                        dims: [].into(),
+                        signal,
+                        nba: None,
+                        port_idx: None,
+                    }),
+                )
+                .is_err()
+            {
+                diagnostics.duplicate_definition(arenas, ident);
+                return Err(());
+            }
         }
     }
 
@@ -97,17 +156,18 @@ pub fn elaborate_fn<'a>(
 }
 
 pub fn elaborate_task<'a>(
+    signals: &mut slotmap::SlotMap<SignalKey, Signal>,
     arenas: &'a AstArenas,
     symbol: SymbolId,
     table: &mut VSymbolTable,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
-    todo!()
-    /*
-    let HierarchyItem::Task(i) = builder.hierarchy.symbols[builder.key.as_idx()] else {
+    let VSymbol::Task(i) = &table[symbol].content else {
         unreachable!();
     };
-    let id = builder.hierarchy.tasks[i].ast;
+
+    let parent = table[symbol].parent().unwrap();
+    let id = i.ast_id;
     let TaskDeclaration {
         task_ports,
         block_item_decls,
@@ -137,8 +197,7 @@ pub fn elaborate_task<'a>(
                         None => (0, 0, SCALAR_VSIZE),
                         // @TODO: Better error
                         Some(range) => {
-                            evaluate_range(arenas, builder.eval_scope(), diagnostics, range)
-                                .unwrap()
+                            eval_constant_range(arenas, parent, table, diagnostics, range)?
                         }
                     };
                     VType::net(width, signed)
@@ -148,29 +207,40 @@ pub fn elaborate_task<'a>(
             };
             let ident = arenas.to_item(ident);
             let name = &arenas.ident_table[ident.item.0];
+            let origin = arenas.get_item_span(ident);
             let signal = signals.insert(Signal {
                 name: name.to_string(),
                 size: ty.force_net_width(),
                 initialize: None,
-                origin: arenas.get_item_span(ident),
+                origin,
             });
-            builder.insert_net(HierarchyNet {
-                name: name.to_string(),
-                parent: builder.key(),
-                signal,
-                ty,
-                dims: [].into(),
-                nba: None,
-            });
+            if table
+                .insert(
+                    ident.item.0,
+                    symbol,
+                    origin,
+                    VSymbol::Net(NetSymbol {
+                        ty,
+                        dims: [].into(),
+                        signal,
+                        nba: None,
+                        port_idx: None,
+                    }),
+                )
+                .is_err()
+            {
+                diagnostics.duplicate_definition(arenas, ident);
+                return Err(());
+            }
         }
     }
 
     super::elaborate_statement_or_null(
         signals,
         arenas,
-        builder,
+        symbol,
+        table,
         diagnostics,
         *statement_or_null,
     )
-    */
 }

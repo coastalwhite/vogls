@@ -168,7 +168,7 @@ pub fn assign_variable_lvalue_flat<'a>(
     let (ty, dims) = match &scope.table[symbol_key].content {
         VSymbol::Parameter(v) => (v.ty(), [].into()),
         VSymbol::Net(s) => (s.ty.clone(), s.dims.clone()),
-        _ => todo!(),
+        v => panic!("{v:?}"),
     };
     let mut dims = &dims[..];
     let mut arr_idx = if !dims.is_empty()
