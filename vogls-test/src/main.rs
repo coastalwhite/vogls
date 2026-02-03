@@ -64,15 +64,17 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     paths.sort_unstable();
 
     let mut num_failed = 0;
-    println!("Running {} tests...", paths.len());
+    let mut o = std::io::stdout();
+    writeln!(&mut o, "Running {} tests...", paths.len())?;
     for path in paths.iter() {
         let path = path.as_path();
-        print!(
+        write!(
+            &mut o,
             "  {}{:.<2$} ",
             path.display(),
             "",
             max_size - path.as_os_str().len()
-        );
+        )?;
         std::io::stdout().flush()?;
         let path = tests_dir.join(&path);
 
@@ -128,74 +130,79 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             }
         }
 
-        let stdout = Io::default();
-        let stderr = Io::default();
+        for config in [LogicMode::TwoValue, LogicMode::FourValue] {
+            let stdout = Io::default();
+            let stderr = Io::default();
 
-        let mut ctx = ExecutionContext {
-            stdout: Box::new(stdout.clone()) as Box<dyn std::io::Write>,
-            stderr: Box::new(stderr.clone()) as Box<dyn std::io::Write>,
-            emit_hierarchy: false,
-            emit_unoptimized_ir: false,
-            emit_ir: false,
-            emit_vm: false,
-            trace: false,
-            itrace: false,
-            no_run: false,
-            time: test_information.time,
-            opt_rounds: 0,
-            logic_mode: LogicMode::FourValue,
-        };
-        let ctx = std::panic::AssertUnwindSafe(&mut ctx);
-        let result = std::panic::catch_unwind(|| {
-            let ctx = ctx;
-            vogls::run(&path, None, ctx.0)
-        });
-
-        let stdout = stdout.0.lock().unwrap();
-        let stdout = std::str::from_utf8(&stdout).unwrap();
-        let stderr = stderr.0.lock().unwrap();
-        let stderr = std::str::from_utf8(&stderr).unwrap();
-
-        let mut failed = false;
-        if result.is_err() {
-            failed = true;
-        } else {
-            failed |= result.as_ref().is_ok_and(|r| r.is_err()) ^ test_information.fail;
-            if test_information.verify_stdout {
-                let s = std::fs::read_to_string(&path.with_extension("v.stdout"))?;
-                failed |= stdout != s;
-            }
-        }
-
-        num_failed += usize::from(failed);
-        if result.is_err() {
-            println!("\x1b[31mPANIC\x1b[0m");
-        } else if failed {
-            println!("\x1b[31mERR\x1b[0m");
-            if let Err(err) = result {
-                println!("ERROR: {err:?}");
+            let mut ctx = ExecutionContext {
+                stdout: Box::new(stdout.clone()) as Box<dyn std::io::Write>,
+                stderr: Box::new(stderr.clone()) as Box<dyn std::io::Write>,
+                emit_hierarchy: false,
+                emit_unoptimized_ir: false,
+                emit_ir: false,
+                emit_vm: false,
+                trace: false,
+                itrace: false,
+                no_run: false,
+                time: test_information.time,
+                opt_rounds: 0,
+                logic_mode: config,
             };
-            println!("--- [START STDOUT] ---");
-            print!("{stdout}");
-            println!("---  [END STDOUT]  ---");
-            println!();
-            println!("--- [START STDERR] ---");
-            print!("{stderr}");
-            println!("---  [END STDERR]  ---");
-            println!();
-        } else {
-            println!("\x1b[32mOK\x1b[0m");
+            let ctx = std::panic::AssertUnwindSafe(&mut ctx);
+            let result = std::panic::catch_unwind(|| {
+                let ctx = ctx;
+                vogls::run(&path, None, ctx.0)
+            });
+
+            let stdout = stdout.0.lock().unwrap();
+            let stdout = std::str::from_utf8(&stdout).unwrap();
+            let stderr = stderr.0.lock().unwrap();
+            let stderr = std::str::from_utf8(&stderr).unwrap();
+
+            let mut failed = false;
+            if result.is_err() {
+                failed = true;
+            } else {
+                failed |= result.as_ref().is_ok_and(|r| r.is_err()) ^ test_information.fail;
+                if test_information.verify_stdout {
+                    let s = std::fs::read_to_string(&path.with_extension("v.stdout"))?;
+                    failed |= stdout != s;
+                }
+            }
+
+            num_failed += usize::from(failed);
+            if result.is_err() {
+                writeln!(&mut o, "\x1b[31mPANIC\x1b[0m")?;
+            } else if failed {
+                writeln!(&mut o, "\x1b[31mERR\x1b[0m")?;
+                if let Err(err) = result {
+                    writeln!(&mut o, "ERROR: {err:?}")?;
+                };
+                writeln!(&mut o, "--- [START STDOUT] ---")?;
+                write!(&mut o, "{stdout}")?;
+                writeln!(&mut o, "---  [END STDOUT]  ---")?;
+                writeln!(&mut o)?;
+                writeln!(&mut o, "--- [START STDERR] ---")?;
+                write!(&mut o, "{stderr}")?;
+                writeln!(&mut o, "---  [END STDERR]  ---")?;
+                writeln!(&mut o)?;
+            } else {
+                write!(&mut o, " \x1b[32mP\x1b[0m")?;
+            }
+            o.flush()?;
         }
+        writeln!(&mut o)?;
     }
     if num_failed == 0 {
-        println!("All {} tests passed!", paths.len());
+        writeln!(&mut o, "All {} tests passed!", paths.len())?;
         Ok(ExitCode::SUCCESS)
     } else {
-        println!(
+        writeln!(
+            &mut o,
             "\x1b[31mFailed {}/{} tests.\x1b[0m",
             num_failed,
             paths.len()
-        );
+        )?;
         Ok(ExitCode::FAILURE)
     }
 }
