@@ -73,7 +73,7 @@ impl IdentTable {
 impl Index<IdentId> for IdentTable {
     type Output = str;
     fn index(&self, id: IdentId) -> &Self::Output {
-        let ident_ref = self.ident_refs[id.0.get() as usize];
+        let ident_ref = self.ident_refs[id.0.get() as usize - 1];
         &self.content[ident_ref.0..][..ident_ref.1]
     }
 }

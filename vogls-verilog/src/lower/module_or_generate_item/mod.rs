@@ -9,12 +9,13 @@ use crate::ast::module::{
     VariableTypeVariant,
 };
 use crate::ast::{AstId, AstIdRange};
-use crate::hierarchy::{HierarchyItem, HierarchyNet};
+use crate::elaborate::ElabSymbol;
 use crate::lower::assign::{assign_net_lvalue, net_lvalue_width};
 use crate::lower::expression::{self, lower_expr, truncate_or_extend};
 use crate::lower::statement::statements_to_process;
 use crate::lower::{
     VType, assign_port_output, eval_constant_expr, evaluate_range, lower_to_signal,
+    resolve_symbol_id, try_resolve_net, unwrap_get_module, unwrap_get_net, unwrap_get_net_mut,
 };
 use crate::parser::AstArenas;
 
@@ -49,8 +50,13 @@ pub fn lower<'a>(
                                     ident: ast_ident,
                                     expr,
                                 } = arenas.get(assignment);
-                                let ident = &arenas.ident_table[ast_ident.item.0];
-                                let net = scope.get_unwrap_net(ident).unwrap();
+                                let net = try_resolve_net(
+                                    scope.key,
+                                    scope.table,
+                                    arenas,
+                                    *ast_ident,
+                                    diagnostics,
+                                )?;
 
                                 let mut bb_builder =
                                     new_process(gl, "decl_assign".into(), arenas.get_span(*expr));
@@ -86,15 +92,14 @@ pub fn lower<'a>(
                         let Some(initialize) = initialize else {
                             continue;
                         };
-                        let ident =
-                            &arenas.ident_table[arenas.get(variable_type).identifier.item.0];
 
-                        let symbol_key = scope.get(ident).unwrap();
-                        let HierarchyItem::Net(i) = &scope.hierarchy.items()[symbol_key.as_idx()]
-                        else {
-                            panic!();
-                        };
-                        let net = &scope.hierarchy.net()[*i];
+                        let net = try_resolve_net(
+                            scope.key,
+                            scope.table,
+                            arenas,
+                            arenas.get(variable_type).identifier,
+                            diagnostics,
+                        )?;
                         gl.signals[net.signal].initialize = Some(initialize);
                     }
                 }
@@ -217,20 +222,18 @@ pub fn lower<'a>(
                     list_of_port_connections,
                 } = arenas.get(instance);
 
-                let name_of_module_instance = &arenas.ident_table[name_of_module_instance.item.0];
-                let symbol_key = scope.get(name_of_module_instance).unwrap();
-                let HierarchyItem::Module(i) = scope.hierarchy.items()[symbol_key.as_idx()] else {
-                    panic!();
-                };
+                let instance_sid =
+                    resolve_symbol_id(scope.key, scope.table, name_of_module_instance.item.0)
+                        .unwrap();
 
                 match arenas.get(*list_of_port_connections) {
                     ListOfPortConnections::Ordered(ports) => {
                         // @TODO:
-                        // Icarus Verilog has as well perspective on how to deal with unequal port
+                        // Icarus Verilog has as good perspective on how to deal with unequal port
                         // lengths. We should always warn here, but allow less ports.
                         //
                         // https://steveicarus.github.io/iverilog/developer/guide/misc/ieee1364-notes.html.
-                        if scope.hierarchy.modules[i].ports.len() != ports.len() {
+                        if unwrap_get_module(scope.table, instance_sid).ports.len() != ports.len() {
                             diagnostics.not_yet_implemented(
                                 arenas.get_range_span(*ports),
                                 "unequal number of ports",
@@ -239,8 +242,12 @@ pub fn lower<'a>(
                         }
 
                         for (pi, l_p) in ports.iter().enumerate() {
-                            let (net, connection) = scope.hierarchy.modules[i].ports[pi];
-                            let ty = scope.hierarchy.net()[net].ty;
+                            let (net, connection) =
+                                unwrap_get_module(scope.table, instance_sid).ports[pi];
+                            let ElabSymbol::Net(n) = &scope.table[net].content else {
+                                unreachable!();
+                            };
+                            let ty = n.ty;
                             let is_input = matches!(
                                 connection,
                                 ConnectionDirection::In | ConnectionDirection::Both
@@ -250,7 +257,7 @@ pub fn lower<'a>(
                                     lower_to_signal(gl, arenas, scope, diagnostics, l_p, ty)?;
                                 // @TODO: Just never allocate this signal.
                                 let old_signal = std::mem::replace(
-                                    &mut scope.hierarchy.nets[net].signal,
+                                    &mut unwrap_get_net_mut(scope.table, net).signal,
                                     signal,
                                 );
                                 scope.signal_map.insert(old_signal, signal);
@@ -263,36 +270,36 @@ pub fn lower<'a>(
                     ListOfPortConnections::Named(ports) => {
                         let mut error = false;
                         let mut signals_assigned =
-                            vec![false; scope.hierarchy.modules[i].ports.len()];
+                            vec![false; unwrap_get_module(scope.table, instance_sid).ports.len()];
                         for p in ports.iter() {
                             let named_port_connection = arenas.get(p);
                             let NamedPortConnection {
                                 port_identifier: ast_port_identifier,
                                 expression,
                             } = *named_port_connection;
-                            let port_identifier = &arenas.ident_table[ast_port_identifier.item.0];
 
-                            let Some(&port_idx) =
-                                scope.hierarchy.modules[i].lut.get(port_identifier)
-                            else {
+                            let port = scope
+                                .table
+                                .resolve(instance_sid, ast_port_identifier.item.0)
+                                .and_then(|symid| {
+                                    let ElabSymbol::Net(n) = &scope.table[symid].content else {
+                                        return None;
+                                    };
+                                    n.port_idx.map(|i| (i, &n.ty))
+                                });
+
+                            let Some((port_idx, port_ty)) = port else {
                                 diagnostics.port_not_found(
                                     arenas,
-                                    &scope.hierarchy.modules[i],
+                                    unwrap_get_module(scope.table, instance_sid),
                                     ast_port_identifier,
                                 );
                                 error = true;
                                 continue;
                             };
 
-                            let (net, connection) = scope.hierarchy.modules[i].ports[port_idx];
-                            let HierarchyNet {
-                                name: _,
-                                signal: _,
-                                parent: _,
-                                ty: port_ty,
-                                dims: _,
-                                nba: _,
-                            } = &scope.hierarchy.net()[net];
+                            let (net, connection) =
+                                unwrap_get_module(scope.table, instance_sid).ports[port_idx];
 
                             let is_input = matches!(
                                 connection,
@@ -303,8 +310,8 @@ pub fn lower<'a>(
                                 None => {
                                     if is_input {
                                         let size = port_ty.force_net_width();
-                                        gl.signals[scope.hierarchy.nets[net].signal].initialize =
-                                            Some(Bits::new_zeroed(size));
+                                        gl.signals[unwrap_get_net(scope.table, net).signal]
+                                            .initialize = Some(Bits::new_zeroed(size));
                                     }
                                 }
                                 Some(e) if is_input => {
@@ -318,7 +325,7 @@ pub fn lower<'a>(
                                     )?;
                                     // @TODO: Just never allocate this signal.
                                     let old_signal = std::mem::replace(
-                                        &mut scope.hierarchy.nets[net].signal,
+                                        &mut unwrap_get_net_mut(scope.table, net).signal,
                                         signal,
                                     );
                                     scope.signal_map.insert(old_signal, signal);

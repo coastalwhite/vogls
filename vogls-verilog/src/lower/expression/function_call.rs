@@ -6,7 +6,6 @@ use vogls_ir::{
 
 use crate::ast::expr::Expr;
 use crate::ast::{AstId, AstIdRange, AstItem, Identifier};
-use crate::hierarchy::HierarchyItem;
 use crate::lower::expression::{lower_expr, truncate_or_extend};
 use crate::lower::{Diagnostics, VType};
 use crate::lower::{Scope, assign_task_output};
@@ -22,6 +21,8 @@ pub fn lower_function_call<'a>(
     ident: AstItem<Identifier>,
     arguments: &[Option<(VariableKey, VType)>],
 ) -> Result<(VariableKey, VType), ()> {
+    todo!()
+        /*
     let fn_name = &arenas.ident_table[ident.item.0];
     let Some(fn_symbol) = scope.get(fn_name) else {
         diagnostics.var_not_found(arenas, ident);
@@ -72,6 +73,7 @@ pub fn lower_function_call<'a>(
     gl.bbs[origin_bb].terminator = BasicBlockTerminator::Jump(fn_bb);
 
     Ok((map[&fn_symbol.output_var], fn_symbol.output_ty))
+        */
 }
 
 pub fn lower_task_enable<'a>(
@@ -83,6 +85,8 @@ pub fn lower_task_enable<'a>(
     ident: AstItem<Identifier>,
     arguments: AstIdRange<Expr>,
 ) -> Result<BasicBlockBuilder, ()> {
+    todo!()
+        /*
     let fn_name = &arenas.ident_table[ident.item.0];
     let Some(fn_symbol) = scope.get(fn_name) else {
         diagnostics.var_not_found(arenas, ident);
@@ -194,4 +198,5 @@ pub fn lower_task_enable<'a>(
     gl.bbs[terminator_bb].terminator = BasicBlockTerminator::Jump(builder.key());
 
     Ok(builder)
+        */
 }

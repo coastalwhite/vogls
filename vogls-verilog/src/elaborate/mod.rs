@@ -1,10 +1,12 @@
-use std::collections::HashMap;
+use std::num::NonZeroU32;
 use std::sync::Arc;
 
 use vogls_frontend::VgHashMap;
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_frontend::symbol_table::SymbolId;
-use vogls_ir::{ConnectionDirection, INTEGER_VSIZE, SCALAR_VSIZE, VectorSize};
+use vogls_ir::{
+    ConnectionDirection, INTEGER_VSIZE, ProcessKey, SCALAR_VSIZE, Signal, SignalKey, VectorSize,
+};
 
 use crate::ast::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression};
 use crate::ast::module::{
@@ -23,11 +25,10 @@ use crate::ast::statement::{
     WaitStatement,
 };
 use crate::ast::{AstId, AstIdRange, AstItem, Identifier};
-use crate::hierarchy::{
-    HierarchyGenerateBlock, HierarchyItemRange, HierarchyModule, ParameterOverrides,
+use crate::lower::{
+    Diagnostics, EvalScope, VType, VValue, eval_constant_expr, unwrap_get_module,
+    unwrap_get_module_mut,
 };
-use crate::lower::expression::eval_constant_expr_f;
-use crate::lower::{Diagnostics, VType, VValue};
 use crate::parser::AstArenas;
 
 pub mod function;
@@ -37,10 +38,9 @@ pub type ElabTable = vogls_frontend::symbol_table::SymbolTable<ElabSymbol>;
 pub enum ElabSymbol {
     Module(ElabModule),
     Parameter(VValue),
-    Net(VType, Vec<u32>),
-    Reg(VType, Vec<u32>),
+    Net(ElabNet),
     NamedBlock,
-    GenerateBlock,
+    GenerateBlock(AstIdRange<ModuleOrGenerateItem>),
     GenVar,
     Task(AstId<TaskDeclaration>),
     Function(AstId<FunctionDeclaration>),
@@ -49,11 +49,19 @@ pub enum ElabSymbol {
 pub struct ElabModule {
     pub module: IdentId,
 
-    pub ports: Vec<SymbolId>,
+    pub ports: Vec<(SymbolId, ConnectionDirection)>,
     pub parameters: Vec<SymbolId>,
 
     pub parameter_overrides: Arc<VgHashMap<IdentId, usize>>,
     pub parameter_override_values: Arc<Vec<VValue>>,
+}
+
+pub struct ElabNet {
+    pub ty: VType,
+    pub dims: Vec<u32>,
+    pub signal: vogls_ir::SignalKey,
+    pub nba: Option<(ProcessKey, SignalKey, SignalKey)>,
+    pub port_idx: Option<usize>,
 }
 
 pub fn try_table_insert(
@@ -64,7 +72,7 @@ pub fn try_table_insert(
     content: ElabSymbol,
     diagnostics: &mut Diagnostics,
 ) -> Result<SymbolId, ()> {
-    let Ok(symid) = table.insert(name.item.0, parent, content) else {
+    let Ok(symid) = table.insert(name.item.0, parent, arenas.get_item_span(name), content) else {
         diagnostics.duplicate_definition(arenas, name);
         return Err(());
     };
@@ -94,6 +102,7 @@ pub fn try_table_resolve(
 }
 
 pub fn elaborate_module<'a>(
+    signals: &mut slotmap::SlotMap<SignalKey, Signal>,
     arenas: &'a AstArenas,
     module: AstId<Module>,
     module_symid: SymbolId,
@@ -153,25 +162,89 @@ pub fn elaborate_module<'a>(
                         let PortExpression { references } = arenas.get(*id);
                         let PortReference { identifier } = arenas.get(*references);
 
-                        if table
-                            .insert(
-                                identifier.item.0,
-                                module_symid,
-                                ElabSymbol::Net(VType::SCALAR_NET, Vec::new()),
-                            )
-                            .is_err()
-                        {
-                            diagnostics.duplicate_definition(arenas, *identifier);
+                        let signal =
+                            new_signal(signals, arenas, &VType::SCALAR_NET, &[], *identifier);
+
+                        let symbol = &table[module_symid];
+                        let ElabSymbol::Module(elab_module) = &symbol.content else {
+                            unreachable!("elaborated module is not a module");
+                        };
+                        let port_idx = elab_module.ports.len();
+
+                        let Ok(symid) = try_table_insert(
+                            arenas,
+                            table,
+                            module_symid,
+                            *identifier,
+                            ElabSymbol::Net(ElabNet {
+                                ty: VType::SCALAR_NET,
+                                dims: Vec::new(),
+                                signal,
+                                nba: None,
+                                port_idx: Some(port_idx),
+                            }),
+                            diagnostics,
+                        ) else {
                             error = true;
-                        }
+                            continue;
+                        };
+
+                        unwrap_get_module_mut(table, module_symid)
+                            .ports
+                            .push((symid, ConnectionDirection::Both));
                     }
                 }
             }
         }
         ModulePorts::PortDeclarations(port_declarations) => {
+            let mut error = false;
             for id in port_declarations.iter() {
-                error |= elaborate_port_declaration(arenas, id, module_symid, table, diagnostics)
-                    .is_err();
+                let Ok((ty, direction, identifiers)) =
+                    port_declaration_to_info(arenas, id, module_symid, table, diagnostics)
+                else {
+                    error = true;
+                    continue;
+                };
+
+                let symbol = &table[module_symid];
+                let ElabSymbol::Module(module) = &symbol.content else {
+                    unreachable!("non-local parameter can only be defined at module-level");
+                };
+                let mut port_idx = module.ports.len();
+
+                for ident in identifiers.iter() {
+                    let ident = arenas.to_item(ident);
+                    let signal = new_signal(signals, arenas, &ty, &[], ident);
+                    let Ok(symid) = try_table_insert(
+                        arenas,
+                        table,
+                        module_symid,
+                        ident,
+                        ElabSymbol::Net(ElabNet {
+                            ty,
+                            dims: Vec::new(),
+                            signal,
+                            nba: None,
+                            port_idx: Some(port_idx),
+                        }),
+                        diagnostics,
+                    ) else {
+                        error = true;
+                        continue;
+                    };
+
+                    let symbol = &mut table[module_symid];
+                    let ElabSymbol::Module(module) = &mut symbol.content else {
+                        unreachable!("non-local parameter can only be defined at module-level");
+                    };
+
+                    module.ports.push((symid, direction));
+                    port_idx += 1;
+                }
+            }
+
+            if error {
+                return Err(());
             }
         }
     }
@@ -179,12 +252,41 @@ pub fn elaborate_module<'a>(
     for item in module_items.iter() {
         match arenas.get(item) {
             ModuleItem::PortDeclaration(id) => {
-                error |= elaborate_port_declaration(arenas, *id, module_symid, table, diagnostics)
-                    .is_err();
+                let Ok((ty, direction, identifiers)) =
+                    port_declaration_to_info(arenas, *id, module_symid, table, diagnostics)
+                else {
+                    error = true;
+                    continue;
+                };
+
+                for ident in identifiers.iter() {
+                    let Some(sid) = table.resolve(module_symid, arenas.get(ident).0) else {
+                        diagnostics.var_not_found(arenas, arenas.to_item(ident));
+                        error = true;
+                        continue;
+                    };
+                    let ElabSymbol::Net(net) = &mut table[sid].content else {
+                        diagnostics
+                            .not_yet_implemented(arenas.get_span(ident), "non-port used as port");
+                        error = true;
+                        continue;
+                    };
+                    let Some(port_idx) = net.port_idx else {
+                        diagnostics
+                            .not_yet_implemented(arenas.get_span(ident), "non-port used as port");
+                        error = true;
+                        continue;
+                    };
+
+                    signals[net.signal].size = ty.force_net_width();
+                    net.ty = ty;
+                    unwrap_get_module_mut(table, module_symid).ports[port_idx].1 = direction;
+                }
             }
             ModuleItem::NonPortModuleItem(id) => match arenas.get(*id) {
                 NonPortModuleItem::ModuleOrGenerateItem(id) => {
                     error |= elaborate_module_or_generate_item(
+                        signals,
                         arenas,
                         *id,
                         module_symid,
@@ -197,6 +299,7 @@ pub fn elaborate_module<'a>(
                 NonPortModuleItem::GenerateRegion(region) => {
                     for id in region.module_or_generate_item.iter() {
                         error |= elaborate_module_or_generate_item(
+                            signals,
                             arenas,
                             id,
                             module_symid,
@@ -304,10 +407,14 @@ pub fn elaborate_parameter_declaration<'a>(
 
         value = value.truncate_or_extend(ty.force_net_width());
 
-        let Ok(param_symid) = table.insert(name, parent, ElabSymbol::Parameter(value)) else {
-            diagnostics.duplicate_definition(arenas, *param);
-            return Err(());
-        };
+        let param_symid = try_table_insert(
+            arenas,
+            table,
+            parent,
+            *param,
+            ElabSymbol::Parameter(value),
+            diagnostics,
+        )?;
 
         if param_override_is_used.is_some() {
             let symbol = &mut table[parent];
@@ -321,7 +428,7 @@ pub fn elaborate_parameter_declaration<'a>(
     Ok(())
 }
 
-pub fn elaborate_port_declaration<'a>(
+pub fn port_declaration_to_info<'a>(
     arenas: &'a AstArenas,
 
     id: AstId<PortDeclaration>,
@@ -329,7 +436,7 @@ pub fn elaborate_port_declaration<'a>(
     parent: SymbolId,
     table: &mut ElabTable,
     diagnostics: &mut Diagnostics,
-) -> Result<(), ()> {
+) -> Result<(VType, ConnectionDirection, AstIdRange<Identifier>), ()> {
     use ConnectionDirection as D;
     let (direction, range, signed, identifiers) = match arenas.get(id) {
         PortDeclaration::Inout(id) => {
@@ -351,33 +458,11 @@ pub fn elaborate_port_declaration<'a>(
         Some(range) => eval_constant_range(arenas, parent, table, diagnostics, range)?,
     };
     let ty = VType::net(size, signed);
-
-    let mut error = false;
-    for ident in identifiers.iter() {
-        let origin = arenas.get_span(ident);
-        let Ok(symid) = table.insert(arenas.get(ident).0, parent, ElabSymbol::Net(ty, Vec::new()))
-        else {
-            diagnostics.duplicate_definition(arenas, arenas.to_item(ident));
-            error = true;
-            continue;
-        };
-
-        let symbol = &mut table[parent];
-        let ElabSymbol::Module(module) = &mut symbol.content else {
-            unreachable!("non-local parameter can only be defined at module-level");
-        };
-
-        module.ports.push(symid);
-    }
-
-    if error {
-        return Err(());
-    }
-
-    Ok(())
+    Ok((ty, direction, identifiers))
 }
 
 pub fn elaborate_module_or_generate_item<'a>(
+    signals: &mut slotmap::SlotMap<SignalKey, Signal>,
     arenas: &'a AstArenas,
 
     id: AstId<ModuleOrGenerateItem>,
@@ -389,7 +474,14 @@ pub fn elaborate_module_or_generate_item<'a>(
 ) -> Result<(), ()> {
     match arenas.get(id) {
         ModuleOrGenerateItem::ModuleOrGenerateItemDeclaration(id) => {
-            elaborate_module_or_generate_item_declaration(arenas, *id, parent, table, diagnostics)
+            elaborate_module_or_generate_item_declaration(
+                signals,
+                arenas,
+                *id,
+                parent,
+                table,
+                diagnostics,
+            )
         }
         ModuleOrGenerateItem::LocalParameterDeclaration(id) => {
             let LocalParameterDeclaration {
@@ -551,68 +643,49 @@ pub fn elaborate_module_or_generate_item<'a>(
             let mut value =
                 eval_constant_expr_elab(arenas, parent, table, diagnostics, *initialization)?;
 
-            // @GJB: Bit of a hack to allow the genvar to be used in the constant expression
-            // evaluation.
-            macro_rules! eval_constant_expr_with_genvar {
-                ($expr:expr) => {{
-                    eval_constant_expr_f(
-                        arenas,
-                        |ident| {
-                            if ident == initialization_ident.item.0 {
-                                return Some(value.clone());
-                            }
-                            let symid = table_recursive_resolve(table, parent, ident)?;
-                            match &table[symid].content {
-                                ElabSymbol::Parameter(value) => Some(value.clone()),
-                                _ => None,
-                            }
-                        },
-                        diagnostics,
-                        $expr,
-                    )
-                }};
-            }
+            let (mod_or_gen_items, block_ident_ast) = match arenas.get(*block) {
+                GenerateBlock::ModuleOrGenerateItem(id) => (AstIdRange::single(*id), None),
+                GenerateBlock::BeginEnd(ident, mod_or_gen_items) => (*mod_or_gen_items, *ident),
+            };
 
             loop {
-                let c = eval_constant_expr_with_genvar!(*condition)?;
-                if !c.to_logical() {
-                    break;
-                }
-
-                let (mod_or_gen_items, block_ident_ast) = match arenas.get(*block) {
-                    GenerateBlock::ModuleOrGenerateItem(id) => (AstIdRange::single(*id), None),
-                    GenerateBlock::BeginEnd(ident, mod_or_gen_items) => (*mod_or_gen_items, *ident),
-                };
-
                 let symid = match block_ident_ast {
                     Some(block_ident) => try_table_insert(
                         arenas,
                         table,
                         parent,
                         block_ident,
-                        ElabSymbol::GenerateBlock,
+                        ElabSymbol::GenerateBlock(mod_or_gen_items),
                         diagnostics,
                     )?,
                     None => table.insert_unlinked(
                         IdentTable::EMPTY_IDENT,
                         parent,
-                        ElabSymbol::GenerateBlock,
+                        arenas.get_range_span(mod_or_gen_items),
+                        ElabSymbol::GenerateBlock(mod_or_gen_items),
                     ),
                 };
 
-                assert!(
-                    table
-                        .insert(
-                            initialization_ident.item.0,
-                            symid,
-                            ElabSymbol::Parameter(value.clone())
-                        )
-                        .is_ok()
-                );
+                let genvar_constant = table
+                    .insert(
+                        initialization_ident.item.0,
+                        symid,
+                        arenas.get_item_span(*initialization_ident),
+                        ElabSymbol::Parameter(value.clone()),
+                    )
+                    .expect("No other idents in this block yet");
+
+                let c = eval_constant_expr_elab(arenas, symid, table, diagnostics, *condition)?;
+                if !c.to_logical() {
+                    table.pop_last_inserted(genvar_constant);
+                    table.pop_last_inserted(symid);
+                    break;
+                }
 
                 let mut error = false;
                 for id in mod_or_gen_items.iter() {
                     error |= elaborate_module_or_generate_item(
+                        signals,
                         arenas,
                         id,
                         symid,
@@ -626,7 +699,7 @@ pub fn elaborate_module_or_generate_item<'a>(
                     return Err(());
                 }
 
-                value = eval_constant_expr_with_genvar!(*iteration)?;
+                value = eval_constant_expr_elab(arenas, symid, table, diagnostics, *iteration)?;
             }
 
             Ok(())
@@ -640,23 +713,21 @@ pub fn elaborate_module_or_generate_item<'a>(
 
             let condition =
                 eval_constant_expr_elab(arenas, parent, table, diagnostics, *condition)?;
-            if condition.to_logical() {
+
+            let blk = if condition.to_logical() {
+                Some(*truthy)
+            } else {
+                *falsy
+            };
+            if let Some(blk) = blk {
                 elaborate_generate_block(
+                    signals,
                     arenas,
                     parent,
                     table,
                     module_instances_todo,
                     diagnostics,
-                    *truthy,
-                )?;
-            } else if let Some(falsy) = falsy {
-                elaborate_generate_block(
-                    arenas,
-                    parent,
-                    table,
-                    module_instances_todo,
-                    diagnostics,
-                    *falsy,
+                    blk,
                 )?;
             }
 
@@ -686,6 +757,7 @@ pub fn elaborate_module_or_generate_item<'a>(
 
                 if is_selected {
                     elaborate_generate_block(
+                        signals,
                         arenas,
                         parent,
                         table,
@@ -703,6 +775,7 @@ pub fn elaborate_module_or_generate_item<'a>(
 }
 
 pub fn elaborate_module_or_generate_item_declaration<'a>(
+    signals: &mut slotmap::SlotMap<SignalKey, Signal>,
     arenas: &'a AstArenas,
 
     id: AstId<ModuleOrGenerateItemDeclaration>,
@@ -740,12 +813,19 @@ pub fn elaborate_module_or_generate_item_declaration<'a>(
                         let dims =
                             dims_to_array_elab(arenas, parent, table, diagnostics, *dimension)?;
 
+                        let signal = new_signal(signals, arenas, &ty, &dims, *ident);
                         try_table_insert(
                             arenas,
                             table,
                             parent,
                             *ident,
-                            ElabSymbol::Net(ty, dims),
+                            ElabSymbol::Net(ElabNet {
+                                ty,
+                                dims,
+                                signal,
+                                nba: None,
+                                port_idx: None,
+                            }),
                             diagnostics,
                         )?;
                     }
@@ -753,14 +833,20 @@ pub fn elaborate_module_or_generate_item_declaration<'a>(
                 NetDeclarationNets::Assignments(assignments) => {
                     for assignment in assignments.iter() {
                         let NetDeclAssignment { ident, expr: _ } = arenas.get(assignment);
-                        let origin = arenas.get_item_span(*ident);
 
+                        let signal = new_signal(signals, arenas, &ty, &[], *ident);
                         try_table_insert(
                             arenas,
                             table,
                             parent,
                             *ident,
-                            ElabSymbol::Net(ty, Vec::new()),
+                            ElabSymbol::Net(ElabNet {
+                                ty,
+                                dims: Vec::new(),
+                                signal,
+                                nba: None,
+                                port_idx: None,
+                            }),
                             diagnostics,
                         )?;
                     }
@@ -780,18 +866,32 @@ pub fn elaborate_module_or_generate_item_declaration<'a>(
 
             let ty = VType::net(size, *signed);
             for variable_type in variable_types.iter() {
-                error |=
-                    elaborate_variable_type(arenas, parent, table, diagnostics, variable_type, ty)
-                        .is_err();
+                error |= elaborate_variable_type(
+                    signals,
+                    arenas,
+                    parent,
+                    table,
+                    diagnostics,
+                    variable_type,
+                    ty,
+                )
+                .is_err();
             }
         }
         ModuleOrGenerateItemDeclaration::Integer(id) => {
             let IntegerDeclaration { variable_types } = arenas.get(*id);
             let ty = VType::SignedNet(INTEGER_VSIZE);
             for variable_type in variable_types.iter() {
-                error |=
-                    elaborate_variable_type(arenas, parent, table, diagnostics, variable_type, ty)
-                        .is_err();
+                error |= elaborate_variable_type(
+                    signals,
+                    arenas,
+                    parent,
+                    table,
+                    diagnostics,
+                    variable_type,
+                    ty,
+                )
+                .is_err();
             }
         }
         ModuleOrGenerateItemDeclaration::Genvar(id) => {
@@ -850,6 +950,7 @@ pub fn elaborate_module_or_generate_item_declaration<'a>(
 }
 
 pub fn elaborate_variable_type<'a>(
+    signals: &mut slotmap::SlotMap<SignalKey, Signal>,
     arenas: &'a AstArenas,
     parent: SymbolId,
     table: &mut ElabTable,
@@ -862,24 +963,51 @@ pub fn elaborate_variable_type<'a>(
         variant,
     } = arenas.get(variable_type);
 
-    let origin = arenas.get_span(variable_type);
     let dims = match variant {
         VariableTypeVariant::Dimensions(dimensions) => {
             dims_to_array_elab(arenas, parent, table, diagnostics, *dimensions)?
         }
         VariableTypeVariant::ConstantExpr(_) => Vec::new(),
     };
+    let signal = new_signal(signals, arenas, &ty, &dims, *identifier);
 
     try_table_insert(
         arenas,
         table,
         parent,
         *identifier,
-        ElabSymbol::Reg(ty, dims),
+        ElabSymbol::Net(ElabNet {
+            ty,
+            dims,
+            signal,
+            nba: None,
+            port_idx: None,
+        }),
         diagnostics,
     )?;
 
     Ok(())
+}
+
+fn new_signal(
+    signals: &mut slotmap::SlotMap<SignalKey, Signal>,
+    arenas: &AstArenas,
+    ty: &VType,
+    dims: &[u32],
+    name: AstItem<Identifier>,
+) -> SignalKey {
+    let mut size = ty.force_net_width();
+    for dim in dims {
+        size = size.checked_mul(NonZeroU32::new(*dim).unwrap()).unwrap();
+    }
+    let origin = arenas.get_item_span(name);
+    let name = arenas.ident_table[name.item.0].to_string();
+    signals.insert(Signal {
+        name,
+        size,
+        initialize: None,
+        origin,
+    })
 }
 
 pub fn elaborate_statements<'a>(
@@ -987,10 +1115,14 @@ pub fn elaborate_statements<'a>(
                             block_item_decls: _,
                         } = arenas.get(*block);
 
-                        let Ok(named_block_symid) =
-                            table.insert(block_identifier.item.0, parent, ElabSymbol::NamedBlock)
-                        else {
-                            diagnostics.duplicate_definition(arenas, *block_identifier);
+                        let Ok(named_block_symid) = try_table_insert(
+                            arenas,
+                            table,
+                            parent,
+                            *block_identifier,
+                            ElabSymbol::NamedBlock,
+                            diagnostics,
+                        ) else {
                             error = true;
                             continue;
                         };
@@ -1056,18 +1188,7 @@ pub fn eval_constant_expr_elab<'a>(
     diagnostics: &mut Diagnostics,
     expr: AstId<ConstantExpr>,
 ) -> Result<VValue, ()> {
-    eval_constant_expr_f(
-        arenas,
-        |ident| {
-            let symid = table_recursive_resolve(table, scope, ident)?;
-            match &table[symid].content {
-                ElabSymbol::Parameter(value) => Some(value.clone()),
-                _ => None,
-            }
-        },
-        diagnostics,
-        expr,
-    )
+    eval_constant_expr(arenas, EvalScope { table, key: scope }, diagnostics, expr)
 }
 
 pub fn eval_constant_range(
@@ -1098,6 +1219,7 @@ pub fn eval_constant_range(
 }
 
 pub fn elaborate_generate_block<'a>(
+    signals: &mut slotmap::SlotMap<SignalKey, Signal>,
     arenas: &'a AstArenas,
     parent: SymbolId,
     table: &mut ElabTable,
@@ -1105,20 +1227,28 @@ pub fn elaborate_generate_block<'a>(
     diagnostics: &mut Diagnostics,
     blk: AstId<Option<GenerateBlock>>,
 ) -> Result<(), ()> {
-    let (mod_or_gen_items, block_ident_ast) = match arenas.get(blk) {
-        None => (AstIdRange::default(), None),
-        Some(GenerateBlock::ModuleOrGenerateItem(id)) => (AstIdRange::single(*id), None),
-        Some(GenerateBlock::BeginEnd(ident, mod_or_gen_items)) => (*mod_or_gen_items, *ident),
+    let Some(blk) = arenas.get(blk) else {
+        return Ok(());
+    };
+
+    let (mod_or_gen_items, block_ident_ast) = match blk {
+        GenerateBlock::ModuleOrGenerateItem(id) => (AstIdRange::single(*id), None),
+        GenerateBlock::BeginEnd(ident, mod_or_gen_items) => (*mod_or_gen_items, *ident),
     };
 
     let symid = match block_ident_ast {
-        None => table.insert_unlinked(IdentTable::EMPTY_IDENT, parent, ElabSymbol::GenerateBlock),
+        None => table.insert_unlinked(
+            IdentTable::EMPTY_IDENT,
+            parent,
+            arenas.get_range_span(mod_or_gen_items),
+            ElabSymbol::GenerateBlock(mod_or_gen_items),
+        ),
         Some(block_ident) => try_table_insert(
             arenas,
             table,
             parent,
             block_ident,
-            ElabSymbol::GenerateBlock,
+            ElabSymbol::GenerateBlock(mod_or_gen_items),
             diagnostics,
         )?,
     };
@@ -1126,6 +1256,7 @@ pub fn elaborate_generate_block<'a>(
     let mut error = false;
     for id in mod_or_gen_items.iter() {
         error |= elaborate_module_or_generate_item(
+            signals,
             arenas,
             id,
             symid,

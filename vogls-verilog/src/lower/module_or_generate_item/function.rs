@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{
     BasicBlockTerminator, Bits, ConnectionDirection, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE,
     Signal, SignalKey, VariableKey, new_anonymous_builder,
@@ -10,7 +11,7 @@ use crate::ast::module::{
     TfInputDeclaration, TfType,
 };
 use crate::ast::{AstId, AstIdRange};
-use crate::hierarchy::{Hierarchy, LoweredFunction, LoweredTask};
+use crate::elaborate::ElabTable;
 use crate::lower::{Diagnostics, VType, evaluate_range};
 use crate::lower::{EvalScope, Scope};
 use crate::parser::AstArenas;
@@ -19,11 +20,12 @@ pub fn lower<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
     diagnostics: &mut Diagnostics,
-    hierarchy: &mut Hierarchy,
-    hierarchy_function_i: usize,
+    scope: &mut Scope,
     signal_map: &mut HashMap<SignalKey, SignalKey>,
     id: AstId<FunctionDeclaration>,
 ) -> Result<(), ()> {
+    Ok(())
+    /*
     use vogls_ir::Instruction as I;
 
     let FunctionDeclaration {
@@ -248,17 +250,20 @@ pub fn lower<'a>(
     });
 
     Ok(())
+        */
 }
 
 pub fn lower_task<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
     diagnostics: &mut Diagnostics,
-    hierarchy: &mut Hierarchy,
-    hierarchy_task_i: usize,
+    elab_table: &mut ElabTable,
+    task: SymbolId,
     signal_map: &mut HashMap<SignalKey, SignalKey>,
     id: AstId<TaskDeclaration>,
 ) -> Result<(), ()> {
+    return Ok(());
+    /*
     use vogls_ir::Instruction as I;
 
     let TaskDeclaration {
@@ -491,4 +496,5 @@ pub fn lower_task<'a>(
     });
 
     Ok(())
+        */
 }

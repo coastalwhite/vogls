@@ -7,11 +7,11 @@ use vogls_ir::{
 
 use crate::ast::AstId;
 use crate::ast::expr::{BinaryOperator, BitSlice, Expr, Replication, UnaryOperator};
-use crate::hierarchy::{HierarchyItem, HierarchyParameter};
-use crate::lower::{VType, msb_lsb_to_width};
+use crate::elaborate::ElabSymbol;
+use crate::lower::{VType, msb_lsb_to_width, try_resolve_symbol_id};
 use crate::number::Sign;
 use crate::parser::AstArenas;
-pub use constant_expr::{eval_constant_expr, eval_constant_expr_f};
+pub use constant_expr::eval_constant_expr;
 
 use super::Diagnostics;
 use super::Scope;
@@ -348,29 +348,20 @@ pub fn lower_expr<'a>(
                         Some(BitSlice::PlusWidth(..) | BitSlice::MinusWidth(..))
                     ));
                 let mut exprs = *exprs;
-                let ident = &arenas.ident_table[ast_ident.item.0];
-                let Some(symbol_key) = scope.get(&ident) else {
-                    diagnostics.var_not_found(arenas, *ast_ident);
-                    result_stack.push(None);
-                    error = true;
-                    continue;
-                };
-                let symbol = &scope.hierarchy.items()[symbol_key.as_idx()];
+                let symbol_key =
+                    try_resolve_symbol_id(scope.key, scope.table, arenas, *ast_ident, diagnostics)?;
+                let symbol = &scope.table[symbol_key].content;
                 let (mut ty, mut var) = match &symbol {
-                    HierarchyItem::Parameter(s) => {
-                        let HierarchyParameter {
-                            name: _,
-                            parent: _,
-                            value,
-                        } = &scope.hierarchy.parameters()[*s];
+                    ElabSymbol::Parameter(value) => {
                         let value = value.clone();
                         (value.ty(), builder.constant(gl, value.into_bits()))
                     }
-                    HierarchyItem::Task(_)
-                    | HierarchyItem::Function(_)
-                    | HierarchyItem::Module(_)
-                    | HierarchyItem::NamedBlock(_)
-                    | HierarchyItem::GenerateBlock(_) => {
+                    ElabSymbol::Task(_)
+                    | ElabSymbol::GenVar
+                    | ElabSymbol::Function(_)
+                    | ElabSymbol::Module(_)
+                    | ElabSymbol::NamedBlock
+                    | ElabSymbol::GenerateBlock(_) => {
                         diagnostics
                             .not_yet_implemented(arenas.get_span(expr), "cannot use this symbol");
                         error = true;
@@ -378,8 +369,7 @@ pub fn lower_expr<'a>(
                         result_stack.push(None);
                         continue 'dispatch_loop;
                     }
-                    HierarchyItem::Net(s) => {
-                        let s = &scope.hierarchy.net()[*s];
+                    ElabSymbol::Net(s) => {
                         let mut dims = &s.dims[..];
                         if !dims.is_empty() {
                             if exprs.pop_front().is_none() {
@@ -837,26 +827,21 @@ pub fn get_used_signals<'a>(
                 dispatch_stack.extend([*c, *t, *f].into_iter().map(StackItem::new))
             }
             Expr::Ident(ident, exprs, range_expression) => {
-                let name = &arenas.ident_table[ident.item.0];
-                let Some(symbol_key) = scope.get(name) else {
-                    diagnostics.var_not_found(arenas, *ident);
-                    error = true;
-                    continue;
-                };
-                let symbol = &scope.hierarchy.items()[symbol_key.as_idx()];
-                match &symbol {
-                    HierarchyItem::Net(s) => {
-                        let net = &scope.hierarchy.net()[*s];
-                        if signals_seen.insert(net.signal) {
-                            signals.push(net.signal);
+                let symbol_key =
+                    try_resolve_symbol_id(scope.key, scope.table, arenas, *ident, diagnostics)?;
+                match &scope.table[symbol_key].content {
+                    ElabSymbol::Net(s) => {
+                        if signals_seen.insert(s.signal) {
+                            signals.push(s.signal);
                         }
                     }
-                    HierarchyItem::Parameter(_)
-                    | HierarchyItem::Task(_)
-                    | HierarchyItem::Module(_)
-                    | HierarchyItem::NamedBlock(_)
-                    | HierarchyItem::Function(_)
-                    | HierarchyItem::GenerateBlock(_) => {}
+                    ElabSymbol::Parameter(_)
+                    | ElabSymbol::GenVar
+                    | ElabSymbol::Task(_)
+                    | ElabSymbol::Module(_)
+                    | ElabSymbol::NamedBlock
+                    | ElabSymbol::Function(_)
+                    | ElabSymbol::GenerateBlock(_) => {}
                 }
 
                 dispatch_stack.extend(exprs.iter().map(StackItem::new));

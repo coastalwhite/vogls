@@ -3,51 +3,16 @@ use vogls_ir::Bits;
 use crate::ast::AstId;
 use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::expr::{BinaryOperator, Expr};
-use crate::hierarchy::{HierarchyItem, HierarchyParameter};
-use crate::lower::EvalScope;
 use crate::lower::vvalue::VValue;
+use crate::lower::{EvalScope, try_resolve_constant};
 use crate::number::Sign;
 use crate::parser::AstArenas;
-use vogls_frontend::ident_table::IdentId;
 
 use super::Diagnostics;
 
 pub fn eval_constant_expr<'a>(
     arenas: &'a AstArenas,
     scope: EvalScope<'_>,
-    diagnostics: &mut Diagnostics,
-    expr: AstId<ConstantExpr>,
-) -> Result<VValue, ()> {
-    eval_constant_expr_f(
-        arenas,
-        |ident| {
-            let ident = &arenas.ident_table[ident];
-            let symbol_key = scope.get(ident)?;
-            match &scope.hierarchy.items()[symbol_key.as_idx()] {
-                HierarchyItem::Parameter(n) => {
-                    let HierarchyParameter {
-                        name: _,
-                        parent: _,
-                        value,
-                    } = &scope.hierarchy.parameters()[*n];
-                    Some(value.clone())
-                }
-                HierarchyItem::Net(..) => None,
-                HierarchyItem::Module(_) => todo!(),
-                HierarchyItem::NamedBlock(_) => todo!(),
-                HierarchyItem::Task(_) => todo!(),
-                HierarchyItem::Function(_) => todo!(),
-                HierarchyItem::GenerateBlock(_) => todo!(),
-            }
-        },
-        diagnostics,
-        expr,
-    )
-}
-
-pub fn eval_constant_expr_f<'a>(
-    arenas: &'a AstArenas,
-    resolve: impl Fn(IdentId) -> Option<VValue>,
     diagnostics: &mut Diagnostics,
     expr: AstId<ConstantExpr>,
 ) -> Result<VValue, ()> {
@@ -141,13 +106,14 @@ pub fn eval_constant_expr_f<'a>(
                     continue;
                 }
 
-                let Some(value) = resolve(ast_ident.item.0) else {
+                let Ok(value) =
+                    try_resolve_constant(scope.key, scope.table, arenas, *ast_ident, diagnostics)
+                else {
                     result_stack.push(None);
-                    diagnostics.var_not_found(arenas, *ast_ident);
                     error = true;
                     continue;
                 };
-                result_stack.push(Some(value));
+                result_stack.push(Some(value.clone()));
             }
             Expr::Sized(sized) => {
                 let sized = &arenas.sized_numbers[sized.item.at];

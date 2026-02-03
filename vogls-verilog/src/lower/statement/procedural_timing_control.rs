@@ -2,16 +2,15 @@ use vogls_ir::{
     BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, SCALAR_VSIZE, Time, VariableKey,
 };
 
-use crate::ast::AstId;
 use crate::ast::expr::Expr;
 use crate::ast::statement::{
     DelayControl, DelayValue, EventControl, EventExpressionPrimary, ProceduralTimingControl,
     StatementOrNull,
 };
-use crate::hierarchy::{HierarchyItem, HierarchyParameter};
-use crate::lower::Scope;
-use crate::lower::WatchCondition;
+use crate::ast::{AstId, AstItem};
 use crate::lower::expression::lower_expr;
+use crate::lower::{Scope, try_resolve_net};
+use crate::lower::{WatchCondition, try_resolve_constant};
 use crate::parser::AstArenas;
 
 use super::{Diagnostics, Region};
@@ -29,35 +28,25 @@ pub fn lower<'a>(
         ProceduralTimingControl::DelayControl(ast_delay_control) => {
             let delay_control = arenas.get(*ast_delay_control);
             match delay_control {
-                DelayControl::DelayValue(value) => {
-                    let value = match arenas.get(*value) {
+                DelayControl::DelayValue(ast_value) => {
+                    let value = match arenas.get(*ast_value) {
                         DelayValue::UnsignedNumber(value) => {
                             let value = &arenas.decimals[value.at];
                             value.as_u64().unwrap()
                         }
-                        DelayValue::Identifier(ast_ident) => {
-                            let ident = &arenas.ident_table[ast_ident.0];
-                            let Some(symbol_key) = scope.get(ident) else {
-                                diagnostics.not_yet_implemented(
-                                    arenas.get_span(*ast_delay_control),
-                                    "Ident not found",
-                                );
-                                return Err(());
+                        DelayValue::Identifier(ident) => {
+                            let ident = AstItem {
+                                item: *ident,
+                                loc: ast_value.loc,
                             };
-                            let symbol = &scope.hierarchy.items()[symbol_key.as_idx()];
-                            let value = match &symbol {
-                                HierarchyItem::Parameter(s) => {
-                                    let HierarchyParameter {
-                                        name: _,
-                                        parent: _,
-                                        value,
-                                    } = &scope.hierarchy.parameters()[*s];
-                                    // @TODO: Remove unwrap
-                                    value.as_integer().unwrap() as u64
-                                }
-                                _ => todo!(),
-                            };
-                            value
+                            let value = try_resolve_constant(
+                                scope.key,
+                                scope.table,
+                                arenas,
+                                ident,
+                                diagnostics,
+                            )?;
+                            value.as_integer().unwrap() as u64
                         }
                     };
 
@@ -161,17 +150,9 @@ pub fn lower<'a>(
                         return Err(());
                     }
 
-                    let ident = &arenas.ident_table[ast_ident.item.0];
-                    let Some(symbol_key) = scope.get(ident) else {
-                        diagnostics.var_not_found(arenas, *ast_ident);
-                        return Err(());
-                    };
-                    let HierarchyItem::Net(s) = &scope.hierarchy.items()[symbol_key.as_idx()]
-                    else {
-                        panic!("not a signal");
-                    };
-                    let s = &scope.hierarchy.net()[*s];
-                    let key = s.signal;
+                    let net =
+                        try_resolve_net(scope.key, scope.table, arenas, *ast_ident, diagnostics)?;
+                    let key = net.signal;
 
                     let (variable, _) =
                         lower_expr(gl, arenas, scope, diagnostics, &mut builder, *expr)?;

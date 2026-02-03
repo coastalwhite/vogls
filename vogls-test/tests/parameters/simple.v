@@ -1,5 +1,5 @@
 module y
-#( parameter N = 0 )
+#( parameter integer N = 0 )
 (output [3:0] out);
     assign out = N;
 endmodule

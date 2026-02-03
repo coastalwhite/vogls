@@ -16,112 +16,177 @@ pub enum Region {
 }
 
 pub struct Scope<'a> {
-    pub hierarchy: &'a mut Hierarchy,
-    pub key: HierarchyKey,
+    pub table: &'a mut ElabTable,
+    pub key: SymbolId,
     pub signal_map: &'a mut HashMap<SignalKey, SignalKey>,
 }
 
 #[derive(Clone, Copy)]
 pub struct EvalScope<'a> {
-    pub hierarchy: &'a Hierarchy,
-    pub key: HierarchyKey,
-}
-
-impl<'a> EvalScope<'a> {
-    fn get(&self, ident: &str) -> Option<HierarchyKey> {
-        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 196
-        //
-        // """
-        // If it is declared locally, then the local item shall be used; if not, the search shall
-        // continue upward until an item by that name is found or until a module boundary is
-        // encountered.
-        //
-        // If the item is a variable, it shall stop at a module boundary; if the item is a task,
-        // function, named block, or generate block, it continues to search higher level modules
-        // until found. This fact means that tasks and functions can use and modify the variables
-        // within the containing module by name, without going through their ports.
-        // """
-
-        let mut key = self.key;
-        loop {
-            if let Some(k) = self.hierarchy.lookup().get(&(key, ident.to_string())) {
-                return Some(*k);
-            }
-
-            let item = self.hierarchy.items()[key.as_idx()];
-            if matches!(item, HierarchyItem::Module(_)) {
-                return None;
-            }
-
-            let Some(parent) = item.parent(self.hierarchy) else {
-                unreachable!("All non-modules have parents");
-            };
-
-            key = parent;
-        }
-    }
+    pub table: &'a ElabTable,
+    pub key: SymbolId,
 }
 
 impl<'a> Scope<'a> {
-    fn get(&self, ident: &str) -> Option<HierarchyKey> {
-        self.eval().get(ident)
-    }
-
-    fn get_unwrap_net(&self, ident: &str) -> Option<&HierarchyNet> {
-        let symbol_key = self.get(ident)?;
-        let HierarchyItem::Net(n) = self.hierarchy.items()[symbol_key.as_idx()] else {
-            unreachable!("not a net");
-        };
-        Some(&self.hierarchy.net()[n])
-    }
-
     pub fn eval<'b>(&'b self) -> EvalScope<'b> {
         EvalScope {
-            hierarchy: &self.hierarchy,
-            key: self.key,
-        }
-    }
-
-    fn module(&self) -> &HierarchyModule {
-        let mut key = self.key;
-        loop {
-            let item = self.hierarchy.items()[key.as_idx()];
-            if let HierarchyItem::Module(i) = item {
-                return &self.hierarchy.modules()[i];
-            };
-            key = item.parent(self.hierarchy).unwrap();
-        }
-    }
-
-    fn builder<'b>(&'b mut self) -> ScopeBuilder<'b> {
-        ScopeBuilder {
-            hierarchy: self.hierarchy,
+            table: &self.table,
             key: self.key,
         }
     }
 
     fn vcd_scope(&self) -> vogls_ir::vcd::VcdScope {
-        self.hierarchy.vcd_scope(self.key, 0)
+        todo!()
+        // self.hierarchy.vcd_scope(self.key, 0)
     }
+}
+
+pub fn resolve_symbol_id(scope: SymbolId, table: &ElabTable, ident: IdentId) -> Option<SymbolId> {
+    // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 196
+    //
+    // """
+    // If it is declared locally, then the local item shall be used; if not, the search shall
+    // continue upward until an item by that name is found or until a module boundary is
+    // encountered.
+    //
+    // If the item is a variable, it shall stop at a module boundary; if the item is a task,
+    // function, named block, or generate block, it continues to search higher level modules
+    // until found. This fact means that tasks and functions can use and modify the variables
+    // within the containing module by name, without going through their ports.
+    // """
+
+    let mut scope = scope;
+    loop {
+        if let Some(k) = table.resolve(scope, ident) {
+            return Some(k);
+        }
+
+        let item = &table[scope];
+        let parent = item.parent()?;
+        if matches!(item.content, ElabSymbol::Module(_)) {
+            return None;
+        }
+
+        scope = parent;
+    }
+}
+
+pub fn try_resolve_symbol_id(
+    scope: SymbolId,
+    table: &ElabTable,
+    arenas: &AstArenas,
+    ident: AstItem<Identifier>,
+    diagnostics: &mut Diagnostics,
+) -> Result<SymbolId, ()> {
+    let Some(symid) = resolve_symbol_id(scope, table, ident.item.0) else {
+        diagnostics.var_not_found(arenas, ident);
+        return Err(());
+    };
+    Ok(symid)
+}
+
+pub fn try_resolve_net<'a>(
+    scope: SymbolId,
+    table: &'a ElabTable,
+    arenas: &AstArenas,
+    ident: AstItem<Identifier>,
+    diagnostics: &mut Diagnostics,
+) -> Result<&'a ElabNet, ()> {
+    let sid = try_resolve_symbol_id(scope, table, arenas, ident, diagnostics)?;
+    let ElabSymbol::Net(n) = &table[sid].content else {
+        diagnostics.not_yet_implemented(arenas.get_item_span(ident), "cannot be used as net");
+        return Err(());
+    };
+    Ok(n)
+}
+
+pub fn strict_resolve_module<'a>(
+    scope: SymbolId,
+    table: &'a ElabTable,
+    ident: IdentId,
+) -> &'a ElabModule {
+    let sid = resolve_symbol_id(scope, table, ident).unwrap();
+    let ElabSymbol::Module(n) = &table[sid].content else {
+        panic!()
+    };
+    n
+}
+
+pub fn unwrap_get_net<'a>(table: &'a ElabTable, sid: SymbolId) -> &'a ElabNet {
+    let ElabSymbol::Net(n) = &table[sid].content else {
+        panic!()
+    };
+    n
+}
+pub fn unwrap_get_net_mut<'a>(table: &'a mut ElabTable, sid: SymbolId) -> &'a mut ElabNet {
+    let ElabSymbol::Net(n) = &mut table[sid].content else {
+        panic!()
+    };
+    n
+}
+
+pub fn unwrap_resolve_net<'a>(
+    scope: SymbolId,
+    table: &'a ElabTable,
+    ident: IdentId,
+) -> &'a ElabNet {
+    let sid = resolve_symbol_id(scope, table, ident).unwrap();
+    unwrap_get_net(table, sid)
+}
+pub fn unwrap_resolve_net_mut<'a>(
+    scope: SymbolId,
+    table: &'a mut ElabTable,
+    ident: IdentId,
+) -> &'a mut ElabNet {
+    let sid = resolve_symbol_id(scope, table, ident).unwrap();
+    unwrap_get_net_mut(table, sid)
+}
+
+pub fn unwrap_get_module<'a>(table: &'a ElabTable, sid: SymbolId) -> &'a ElabModule {
+    let ElabSymbol::Module(n) = &table[sid].content else {
+        panic!()
+    };
+    n
+}
+pub fn unwrap_get_module_mut<'a>(table: &'a mut ElabTable, sid: SymbolId) -> &'a mut ElabModule {
+    let ElabSymbol::Module(n) = &mut table[sid].content else {
+        panic!()
+    };
+    n
+}
+
+pub fn try_resolve_constant<'a>(
+    scope: SymbolId,
+    table: &'a ElabTable,
+    arenas: &AstArenas,
+    ident: AstItem<Identifier>,
+    diagnostics: &mut Diagnostics,
+) -> Result<&'a VValue, ()> {
+    let sid = try_resolve_symbol_id(scope, table, arenas, ident, diagnostics)?;
+    let ElabSymbol::Parameter(value) = &table[sid].content else {
+        diagnostics.not_yet_implemented(arenas.get_item_span(ident), "cannot be used as net");
+        return Err(());
+    };
+    Ok(value)
 }
 
 use std::collections::HashMap;
 
+use vogls_frontend::ident_table::IdentId;
+use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{
     BasicBlockBuilder, GlobalContext, SCALAR_VSIZE, Signal, SignalKey, VariableKey, VectorSize,
     new_process,
 };
 
-use crate::ast::AstId;
 use crate::ast::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression};
 use crate::ast::expr::{BitSlice, Expr};
 use crate::ast::module::{
     GenerateRegion, Module, ModuleItem, NonPortModuleItem, ParamAssignment, ParameterDeclaration,
     Range,
 };
-use crate::hierarchy::{
-    Hierarchy, HierarchyItem, HierarchyKey, HierarchyModule, HierarchyNet, ScopeBuilder,
-};
+use crate::ast::{AstId, AstItem, Identifier};
+use crate::elaborate::{ElabModule, ElabNet, ElabSymbol, ElabTable};
 use crate::parser::AstArenas;
 
 pub use self::expression::eval_constant_expr;
@@ -147,18 +212,19 @@ pub fn lower_module_to_ir<'a>(
         default_nettype: _,
     } = arenas.get(root);
 
-    // Generated
-    let module = scope.module();
-    for child in module.children.iter() {
-        if let HierarchyItem::GenerateBlock(i) = scope.hierarchy.items()[child.as_idx()] {
-            for id in scope.hierarchy.generate_blocks[i].ast.iter() {
-                let mut scope = Scope {
-                    hierarchy: scope.hierarchy,
-                    key: child,
-                    signal_map: scope.signal_map,
-                };
-                module_or_generate_item::lower(gl, arenas, &mut scope, id, diagnostics)?;
-            }
+    for i in 0..scope.table[scope.key].children().len() {
+        let child = scope.table[scope.key].children()[i];
+        let ElabSymbol::GenerateBlock(ast_ids) = &scope.table[child].content else {
+            continue;
+        };
+
+        for id in ast_ids.iter() {
+            let mut scope = Scope {
+                table: &mut scope.table,
+                key: child,
+                signal_map: scope.signal_map,
+            };
+            module_or_generate_item::lower(gl, arenas, &mut scope, id, diagnostics)?;
         }
     }
 
@@ -221,13 +287,13 @@ fn lower_to_signal<'a>(
         && exprs.is_empty()
         && range_expression.is_none()
     {
-        let ident = &arenas.ident_table[ast_ident.item.0];
-        let Some(symbol_key) = scope.get(&ident) else {
+        let Ok(symbol_key) =
+            try_resolve_symbol_id(scope.key, scope.table, arenas, *ast_ident, diagnostics)
+        else {
             diagnostics.var_not_found(arenas, *ast_ident);
             return Err(());
         };
-        if let HierarchyItem::Net(s) = &scope.hierarchy.items()[symbol_key.as_idx()]
-            && let s = &scope.hierarchy.net()[*s]
+        if let ElabSymbol::Net(s) = &scope.table[symbol_key].content
             && s.ty == ty
         {
             return Ok(s.signal);
@@ -258,25 +324,23 @@ fn assign_port_output<'a>(
     scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
     expr: AstId<Expr>,
-    output_net: usize,
+    output_net: SymbolId,
     ty: VType,
 ) -> Result<(), ()> {
     if let Expr::Ident(ast_ident, exprs, range_expression) = arenas.get(expr)
         && exprs.is_empty()
         && range_expression.is_none()
     {
-        let ident = &arenas.ident_table[ast_ident.item.0];
-        let Some(symbol_key) = scope.get(&ident) else {
-            diagnostics.var_not_found(arenas, *ast_ident);
-            return Err(());
-        };
-        if let HierarchyItem::Net(s) = scope.hierarchy.items()[symbol_key.as_idx()]
-            && let s = &scope.hierarchy.nets[s]
+        let symbol_key =
+            try_resolve_symbol_id(scope.key, scope.table, arenas, *ast_ident, diagnostics)?;
+        if let ElabSymbol::Net(s) = &scope.table[symbol_key].content
             && s.ty == ty
         {
             let signal = s.signal;
-            let old_signal =
-                std::mem::replace(&mut scope.hierarchy.nets[output_net].signal, signal);
+            let old_signal = std::mem::replace(
+                &mut unwrap_get_net_mut(scope.table, output_net).signal,
+                signal,
+            );
             scope.signal_map.insert(old_signal, signal);
             gl.signals.remove(old_signal);
             return Ok(());
@@ -286,7 +350,7 @@ fn assign_port_output<'a>(
     let mut driving: Vec<AstId<Expr>> = Vec::new();
     driving.push(expr);
 
-    let signal = scope.hierarchy.net()[output_net].signal;
+    let signal = unwrap_get_net(scope.table, output_net).signal;
 
     let mut bb_builder = new_process(gl, "port_assignment".into(), arenas.get_span(expr));
     let bb_key = bb_builder.key();
@@ -300,18 +364,13 @@ fn assign_port_output<'a>(
                 todo!()
             }
             Expr::Ident(ast_ident, exprs, range_expression) => {
-                let ident = &arenas.ident_table[ast_ident.item.0];
-                let Some(symbol_key) = scope.get(&ident) else {
-                    diagnostics.var_not_found(arenas, *ast_ident);
-                    error = true;
-                    continue;
-                };
-                let HierarchyItem::Net(s) = &scope.hierarchy.items()[symbol_key.as_idx()] else {
+                let symbol_key =
+                    try_resolve_symbol_id(scope.key, scope.table, arenas, *ast_ident, diagnostics)?;
+                let ElabSymbol::Net(s) = &scope.table[symbol_key].content else {
                     diagnostics.output_expr_not_allowed(arenas.get_span(expr));
                     error = true;
                     continue;
                 };
-                let s = &scope.hierarchy.net()[*s];
 
                 let (offset_dst, length_dst) = if range_expression.is_none() && exprs.is_empty() {
                     (bb_builder.constant_u32(gl, 0), Some(s.ty.force_net_width()))
@@ -419,18 +478,13 @@ fn assign_task_output<'a>(
                 todo!()
             }
             Expr::Ident(ast_ident, exprs, range_expression) => {
-                let ident = &arenas.ident_table[ast_ident.item.0];
-                let Some(symbol_key) = scope.get(&ident) else {
-                    diagnostics.var_not_found(arenas, *ast_ident);
-                    error = true;
-                    continue;
-                };
-                let HierarchyItem::Net(s) = &scope.hierarchy.items()[symbol_key.as_idx()] else {
+                let symbol_key =
+                    try_resolve_symbol_id(scope.key, scope.table, arenas, *ast_ident, diagnostics)?;
+                let ElabSymbol::Net(s) = &scope.table[symbol_key].content else {
                     diagnostics.output_expr_not_allowed(arenas.get_span(expr));
                     error = true;
                     continue;
                 };
-                let s = &scope.hierarchy.net()[*s];
 
                 let (offset_dst, length_dst) = if range_expression.is_none() && exprs.is_empty() {
                     (builder.constant_u32(gl, 0), Some(s.ty.force_net_width()))

@@ -1,7 +1,6 @@
 pub mod arena;
 pub mod ast;
 pub mod elaborate;
-pub mod hierarchy;
 pub mod lower;
 pub mod number;
 pub mod parser;

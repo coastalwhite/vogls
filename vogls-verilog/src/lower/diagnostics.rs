@@ -1,7 +1,7 @@
 use vogls_ir::token_range::TokenRange;
 
 use crate::ast::{AstItem, Identifier};
-use crate::hierarchy::HierarchyModule;
+use crate::elaborate::ElabModule;
 use crate::parser::AstArenas;
 use vogls_frontend::ident_table::IdentId;
 
@@ -38,7 +38,7 @@ impl Diagnostics {
     pub fn port_not_found<'a>(
         &mut self,
         arenas: &'a AstArenas,
-        _io: &HierarchyModule,
+        _io: &ElabModule,
         ident: AstItem<Identifier>,
     ) {
         // @TODO

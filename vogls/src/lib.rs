@@ -17,13 +17,7 @@ use vogls_verilog::ast::module::{
     CaseGenerateConstruct, CaseGenerateItem, GenerateBlock, IfGenerateConstruct,
     LoopGenerateConstruct, Module, ModuleItem, ModuleOrGenerateItem, NonPortModuleItem,
 };
-use vogls_verilog::elaborate::{
-    ElabModule, ElabSymbol, ElabTable, elaborate_module, elaborate_module_or_generate_item,
-};
-use vogls_verilog::hierarchy::{
-    Hierarchy, HierarchyGenerateBlock, HierarchyItem, HierarchyItemRange, HierarchyKey,
-    HierarchyModule, HierarchyParameter, ScopeBuilder,
-};
+use vogls_verilog::elaborate::{ElabModule, ElabSymbol, ElabTable, elaborate_module};
 use vogls_verilog::lower::{Diagnostics as LowerDiagnostics, lower_module_to_ir};
 use vogls_verilog::parser::{
     AstArenas, Diagnostics as ParserDiagnostics, ParseContext, ParserScratches, TokenWalker,
@@ -165,7 +159,7 @@ pub fn run(
     let mut tkw = TokenWalker::new(&token_buffer);
     let mut diagnostics = ParserDiagnostics::default();
 
-    let ast = match parse_file(
+    let mut ast = match parse_file(
         &mut tkw,
         &mut ParserScratches::default(),
         Some(&mut diagnostics),
@@ -268,11 +262,16 @@ pub fn run(
     };
 
     let mut elab_table = ElabTable::default();
-    let module_instance_stack = Vec::new();
+    let mut module_instance_stack = Vec::new();
 
     let tl_module_symid = elab_table
         .insert_root(
             tl_module_name,
+            ast.arenas.get_item_span(
+                ast.arenas
+                    .get(ast.modules.get(*tl_module))
+                    .module_identifier,
+            ),
             ElabSymbol::Module(ElabModule {
                 module: tl_module_name,
                 ports: Vec::new(),
@@ -292,6 +291,7 @@ pub fn run(
             unreachable!()
         };
         error |= elaborate_module(
+            &mut gl.signals,
             &ast.arenas,
             ast.modules.get(module_lut[&m.module]),
             module_symid,
@@ -331,42 +331,19 @@ pub fn run(
         writeln!(
             ectx.stdout,
             "{}",
-            hierarchy.display(hierarchy.top_level_key())
+            elab_table.display(tl_module_symid, &ast.arenas.ident_table, |s, f| {
+                match s {
+                    ElabSymbol::Module(_) => f.write_str("mod"),
+                    ElabSymbol::Parameter(v) => write!(f, "{v:?}"),
+                    ElabSymbol::Net(_) => f.write_str("net"),
+                    ElabSymbol::NamedBlock => f.write_str("named block"),
+                    ElabSymbol::GenerateBlock(_) => f.write_str("generate block"),
+                    ElabSymbol::GenVar => f.write_str("genvar"),
+                    ElabSymbol::Task(_) => f.write_str("task"),
+                    ElabSymbol::Function(_) => f.write_str("function"),
+                }
+            })
         )?;
-    }
-
-    let mut error = false;
-    let mut signal_map = HashMap::new();
-    for i in 0..hierarchy.items().len() {
-        match hierarchy.items()[i] {
-            HierarchyItem::Function(i) => {
-                let id = hierarchy.functions[i].ast;
-                error |= vogls_verilog::lower::module_or_generate_item::function::lower(
-                    &mut gl,
-                    &ast.arenas,
-                    &mut diagnostics,
-                    &mut hierarchy,
-                    i,
-                    &mut signal_map,
-                    id,
-                )
-                .is_err();
-            }
-            HierarchyItem::Task(i) => {
-                let id = hierarchy.tasks[i].ast;
-                error |= vogls_verilog::lower::module_or_generate_item::function::lower_task(
-                    &mut gl,
-                    &ast.arenas,
-                    &mut diagnostics,
-                    &mut hierarchy,
-                    i,
-                    &mut signal_map,
-                    id,
-                )
-                .is_err();
-            }
-            _ => continue,
-        }
     }
 
     if error {
@@ -387,20 +364,19 @@ pub fn run(
 
     // Walk the modules in depth-first order and lower to IR.
     let mut diagnostics = LowerDiagnostics::default();
+    let mut signal_map = HashMap::new();
     // @TODO: Iterate over the modules instead.
-    for i in 0..hierarchy.items().len() {
-        let HierarchyItem::Module(m) = hierarchy.items()[i] else {
+    for key in elab_table.symbol_id_iter() {
+        let ElabSymbol::Module(m) = &elab_table[key].content else {
             continue;
         };
-        let key = HierarchyKey::new(i);
-        let module = &hierarchy.modules()[m];
-        let module_id = ast.modules.get(module_lut[module.module_name.as_str()]);
+        let module_id = ast.modules.get(module_lut[&m.module]);
         let module_key = lower_module_to_ir(
             &mut gl,
             &ast.arenas,
             module_id,
             &mut vogls_verilog::lower::Scope {
-                hierarchy: &mut hierarchy,
+                table: &mut elab_table,
                 key,
                 signal_map: &mut signal_map,
             },

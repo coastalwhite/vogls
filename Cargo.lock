@@ -478,6 +478,7 @@ version = "0.0.1"
 dependencies = [
  "foldhash",
  "hashbrown 0.16.1",
+ "vogls-ir",
 ]
 
 [[package]]

@@ -4,7 +4,6 @@ use vogls_ir::{INTEGER_VSIZE, SCALAR_VSIZE, Signal, SignalKey};
 
 use crate::ast::AstIdRange;
 use crate::ast::module::{FunctionDeclaration, TaskDeclaration, TaskPortItemContent, TfInputDeclaration, TfType};
-use crate::hierarchy::{HierarchyItem, HierarchyNet, ScopeBuilder};
 use crate::lower::{Diagnostics, VType, evaluate_range};
 use crate::parser::AstArenas;
 

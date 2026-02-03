@@ -6,14 +6,14 @@ use vogls_ir::{
 use crate::ast::constant_expr::ConstantRangeExpression;
 use crate::ast::statement::{NetLValue, NetLValueFlat, VariableLValue, VariableLValueFlat};
 use crate::ast::{AstId, RangeExpression};
-use crate::hierarchy::{HierarchyItem, HierarchyNet, HierarchyParameter};
+use crate::elaborate::ElabSymbol;
 use crate::lower::expression::eval_constant_expr;
 use crate::lower::expression::{self, lower_expr, sign_or_zero_extend, truncate_or_extend};
-use crate::lower::msb_lsb_to_width;
+use crate::lower::{msb_lsb_to_width, try_resolve_symbol_id, unwrap_get_net_mut};
 use crate::parser::AstArenas;
 
-use super::Scope;
 use super::{Diagnostics, Region, VType};
+use super::{Scope, try_resolve_net};
 
 pub fn assign_variable_lvalue<'a>(
     gl: &mut GlobalContext,
@@ -88,27 +88,13 @@ pub fn variable_lvalue_flat_ty<'a>(
         range_expression,
     } = arenas.get(ast_lvalue);
 
-    let lvalue_ident = &arenas.ident_table[ident.item.0];
-    let Some(symbol_key) = scope.get(&lvalue_ident) else {
-        diagnostics.var_not_found(arenas, *ident);
-        return Err(());
-    };
+    let symbol_key = try_resolve_symbol_id(scope.key, scope.table, arenas, *ident, diagnostics)?;
 
     let exprs = *exprs;
-    let (mut ty, mut n_dims) = match &scope.hierarchy.items()[symbol_key.as_idx()] {
-        HierarchyItem::Parameter(v) => {
-            let p = &scope.hierarchy.parameters()[*v];
-            (p.value.ty(), 0)
-        }
-        HierarchyItem::Net(s) => {
-            let n = &scope.hierarchy.net()[*s];
-            (n.ty, n.dims.len())
-        }
-        HierarchyItem::Module(_)
-        | HierarchyItem::NamedBlock(_)
-        | HierarchyItem::GenerateBlock(_)
-        | HierarchyItem::Task(_)
-        | HierarchyItem::Function(_) => todo!(),
+    let (mut ty, mut n_dims) = match &scope.table[symbol_key].content {
+        ElabSymbol::Parameter(v) => (v.ty(), 0),
+        ElabSymbol::Net(s) => (s.ty, s.dims.len()),
+        _ => todo!(),
     };
 
     if exprs.len() > n_dims {
@@ -176,33 +162,13 @@ pub fn assign_variable_lvalue_flat<'a>(
         range_expression,
     } = arenas.get(ast_lvalue);
 
-    let lvalue_ident = &arenas.ident_table[ident.item.0];
-    let Some(symbol_key) = scope.get(&lvalue_ident) else {
-        diagnostics.var_not_found(arenas, *ident);
-        return Err(());
-    };
+    let symbol_key = try_resolve_symbol_id(scope.key, scope.table, arenas, *ident, diagnostics)?;
 
     let mut exprs = *exprs;
-    let (ty, dims) = match &scope.hierarchy.items()[symbol_key.as_idx()] {
-        HierarchyItem::Parameter(v) => {
-            let HierarchyParameter {
-                name: _,
-                parent: _,
-                value,
-            } = &scope.hierarchy.parameters()[*v];
-            (value.ty(), [].into())
-        }
-        HierarchyItem::Net(s) => {
-            let HierarchyNet {
-                name: _, ty, dims, ..
-            } = &scope.hierarchy.net()[*s];
-            (ty.clone(), dims.clone())
-        }
-        HierarchyItem::Module(_) => todo!(),
-        HierarchyItem::NamedBlock(_) => todo!(),
-        HierarchyItem::GenerateBlock(_) => todo!(),
-        HierarchyItem::Task(_) => todo!(),
-        HierarchyItem::Function(_) => todo!(),
+    let (ty, dims) = match &scope.table[symbol_key].content {
+        ElabSymbol::Parameter(v) => (v.ty(), [].into()),
+        ElabSymbol::Net(s) => (s.ty.clone(), s.dims.clone()),
+        _ => todo!(),
     };
     let mut dims = &dims[..];
     let mut arr_idx = if !dims.is_empty()
@@ -260,10 +226,8 @@ pub fn assign_variable_lvalue_flat<'a>(
         return Err(());
     }
 
-    match &scope.hierarchy.items()[symbol_key.as_idx()] {
-        HierarchyItem::Net(net_key) => {
-            let net_key = *net_key;
-            let s = &scope.hierarchy.nets[net_key];
+    match &scope.table[symbol_key].content {
+        ElabSymbol::Net(s) => {
             let key = s.signal;
             let size = ty.force_net_width();
             let partial = match range_expression {
@@ -314,7 +278,7 @@ pub fn assign_variable_lvalue_flat<'a>(
             let variable = expression::truncate_or_extend(gl, builder, variable, variable_ty, size);
 
             if nba {
-                let s = &mut scope.hierarchy.nets[net_key];
+                let s = unwrap_get_net_mut(scope.table, symbol_key);
                 let (_, mask, value) = s.nba.get_or_insert_with(|| create_nba_process(gl, key));
                 let mask_value = builder.constant(gl, Bits::new_ones(size));
                 builder.drive_opt_partial(gl, *mask, mask_value, partial);
@@ -323,12 +287,7 @@ pub fn assign_variable_lvalue_flat<'a>(
                 builder.drive_opt_partial(gl, key, variable, partial);
             }
         }
-        HierarchyItem::Module(_) => todo!(),
-        HierarchyItem::NamedBlock(_) => todo!(),
-        HierarchyItem::GenerateBlock(_) => todo!(),
-        HierarchyItem::Task(_) => todo!(),
-        HierarchyItem::Function(_) => todo!(),
-        HierarchyItem::Parameter(_) => todo!(),
+        _ => todo!(),
     }
     Ok(())
 }
@@ -394,27 +353,13 @@ pub fn net_lvalue_flat_ty<'a>(
         constant_range_expression,
     } = arenas.get(ast_lvalue);
 
-    let lvalue_ident = &arenas.ident_table[ident.item.0];
-    let Some(symbol_key) = scope.get(&lvalue_ident) else {
-        diagnostics.var_not_found(arenas, *ident);
-        return Err(());
-    };
+    let symbol_key = try_resolve_symbol_id(scope.key, scope.table, arenas, *ident, diagnostics)?;
 
     let exprs = *constant_exprs;
-    let (mut ty, mut n_dims) = match &scope.hierarchy.items()[symbol_key.as_idx()] {
-        HierarchyItem::Parameter(v) => {
-            let p = &scope.hierarchy.parameters()[*v];
-            (p.value.ty(), 0)
-        }
-        HierarchyItem::Net(s) => {
-            let n = &scope.hierarchy.net()[*s];
-            (n.ty, n.dims.len())
-        }
-        HierarchyItem::Module(_)
-        | HierarchyItem::NamedBlock(_)
-        | HierarchyItem::Task(_)
-        | HierarchyItem::Function(_)
-        | HierarchyItem::GenerateBlock(_) => todo!(),
+    let (mut ty, mut n_dims) = match &scope.table[symbol_key].content {
+        ElabSymbol::Parameter(v) => (v.ty(), 0),
+        ElabSymbol::Net(s) => (s.ty, s.dims.len()),
+        _ => todo!(),
     };
 
     if exprs.len() > n_dims {
@@ -480,15 +425,7 @@ fn assign_net_lvalue_flat<'a>(
         constant_range_expression,
     } = arenas.get(lvalue);
 
-    let Some(symbol_key) = scope.get(&arenas.ident_table[ident.item.0]) else {
-        diagnostics.var_not_found(arenas, *ident);
-        return Err(());
-    };
-
-    let HierarchyItem::Net(s) = &scope.hierarchy.items()[symbol_key.as_idx()] else {
-        panic!("not a signal");
-    };
-    let s = &scope.hierarchy.net()[*s];
+    let s = try_resolve_net(scope.key, scope.table, arenas, *ident, diagnostics)?;
     let key = s.signal;
     let mut dims = &s.dims[..];
 
