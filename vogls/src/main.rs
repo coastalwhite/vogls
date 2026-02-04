@@ -38,6 +38,9 @@ struct Args {
     opt_rounds: u8,
     #[arg(long = "fv-logic", short = 'F')]
     four_value_logic: bool,
+
+    #[arg(long = "vcd")]
+    vcd: Option<PathBuf>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -66,6 +69,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             no_run: args.no_run,
             opt_rounds: args.opt_rounds,
             logic_mode,
+            vcd: args.vcd,
         },
     )?;
 

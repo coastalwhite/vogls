@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
 use std::num::NonZeroUsize;
+use std::path::Path;
 
 use slotmap::{SlotMap, new_key_type};
 use vogls_bits::arithmetic::{FvLogicValue, fv_pack_u64, fv_set_no_special, fv_unpack_u64};
@@ -466,7 +467,7 @@ pub struct VcdScope {
 }
 
 impl VcdScope {
-    fn lower(v: &vogls_ir::vcd::VcdScope, map: &HashMap<SignalKey, VmSignalKey>) -> VcdScope {
+    pub fn lower(v: &vogls_ir::vcd::VcdScope, map: &HashMap<SignalKey, VmSignalKey>) -> VcdScope {
         VcdScope {
             name: v.name.clone(),
             items: v
@@ -821,7 +822,7 @@ impl Event {
                             O::VcdPause => _ = vcd.as_mut().map(|vcd| vcd.paused = true),
                             O::VcdResume => _ = vcd.as_mut().map(|vcd| vcd.paused = false),
                             O::Time => _ = stack.set_tv_u64(dst.to_ref(TIME_VSIZE), ctx.time),
-                            O::Random => _ = stack.set_tv_u64(dst.to_ref(INTEGER_VSIZE), 0x42),
+                            O::Random => _ = stack.set_tv_u64(dst.to_ref(INTEGER_VSIZE), ctx.time),
                             O::Finish => {
                                 writeln!(&mut ctx.stdout, "[FINISH]").unwrap();
                                 break 'instruction Some(EvalOutcome::Exit);
@@ -973,9 +974,29 @@ pub fn run(
     mut trace: Option<&mut vogls_trace::Trace>,
     stack: &mut Stack,
     max_time: u64,
+    vcd: Option<(&Path, VcdScope)>,
 ) -> Result<(), ()> {
     let mut schedule = BTreeMap::<Timestamp, Vec<Event>>::new();
-    let mut vcd = None;
+    let mut vcd = match vcd {
+        None => None,
+        Some((p, scope)) => {
+            let mut tracked = HashMap::new();
+            let mut updated_this_time_step = Vec::new();
+
+            scope.extend_into(&mut tracked, &mut updated_this_time_step);
+
+            Some(VcdOutput {
+                start_ts: ctx.time,
+                last_ts: Timestamp::MAX,
+                paused: false,
+                scope,
+                tracked,
+                updated_this_time_step,
+                writer: Box::new(std::fs::File::create(p).unwrap()),
+            })
+        }
+    };
+
     'region_loop: loop {
         while let Some(event) = regions.active.pop() {
             if let Some(trace) = trace.as_deref_mut() {

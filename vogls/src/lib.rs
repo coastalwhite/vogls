@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -38,6 +38,7 @@ pub struct ExecutionContext {
     pub opt_rounds: u8,
     pub logic_mode: LogicMode,
     pub no_run: bool,
+    pub vcd: Option<PathBuf>,
 }
 
 pub fn token_range_to_line_range(
@@ -690,6 +691,7 @@ pub fn run(
             events: Vec::new(),
         });
     }
+
     let mut ctx = Context::new(gl.logic_mode, stdout, stderr);
     ctx.itrace = ectx.itrace;
     let fail = vogls_sim::run(
@@ -703,6 +705,16 @@ pub fn run(
         trace.as_mut(),
         &mut stack,
         ectx.time,
+        ectx.vcd.as_deref().map(|p| {
+            let scope = Scope {
+                table: &mut elab_table,
+                key: tl_module_symid,
+                signal_map: &mut signal_map,
+            };
+            let scope = scope.vcd_scope(&ast.arenas.ident_table);
+            let scope = vogls_sim::VcdScope::lower(&scope, &io_signals);
+            (p, scope)
+        }),
     )
     .is_err();
 

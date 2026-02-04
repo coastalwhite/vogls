@@ -380,16 +380,15 @@ pub fn elaborate_parameter_declaration<'a>(
     mut param_override_is_used: Option<&mut [bool]>,
 ) -> Result<(), ()> {
     let (_, _, ty) = match arenas.get(typing) {
-        ParameterDeclarationTyping::None(signed, range) => {
-            let (msb, lsb, width) = match range {
-                None => (0, 0, SCALAR_VSIZE),
-                Some(ast_range) => {
-                    eval_constant_range(gl, arenas, parent, table, diagnostics, *ast_range)?
-                }
-            };
-            (msb, lsb, VType::net(width, *signed))
-        }
-        ParameterDeclarationTyping::Integer => (31, 0, VType::SignedNet(INTEGER_VSIZE)),
+        ParameterDeclarationTyping::None(signed, range) => match range {
+            None => (0, 0, None),
+            Some(ast_range) => {
+                let (msb, lsb, width) =
+                    eval_constant_range(gl, arenas, parent, table, diagnostics, *ast_range)?;
+                (msb, lsb, Some(VType::net(width, *signed)))
+            }
+        },
+        ParameterDeclarationTyping::Integer => (31, 0, Some(VType::SignedNet(INTEGER_VSIZE))),
         ParameterDeclarationTyping::Real
         | ParameterDeclarationTyping::Realtime
         | ParameterDeclarationTyping::Time => {
@@ -430,7 +429,8 @@ pub fn elaborate_parameter_declaration<'a>(
             }
         }
 
-        value = value.truncate_or_extend(ty.force_net_width());
+        let width = ty.map_or_else(|| value.ty().force_net_width(), |ty| ty.force_net_width());
+        value = value.truncate_or_extend(width);
 
         let param_symid = try_table_insert(
             arenas,

@@ -32,6 +32,7 @@ fn extend_symbol_table_to_vcd_scope(
     symbols: &[SymbolId],
     table: &VSymbolTable,
     ident_table: &IdentTable,
+    signal_map: &HashMap<SignalKey, SignalKey>,
 ) {
     use VSymbol as S;
     for sid in symbols.iter() {
@@ -47,6 +48,7 @@ fn extend_symbol_table_to_vcd_scope(
                     table[*sid].children(),
                     table,
                     ident_table,
+                    signal_map,
                 );
                 scope
                     .items
@@ -55,7 +57,7 @@ fn extend_symbol_table_to_vcd_scope(
             S::Net(i) => {
                 scope.items.push(vogls_ir::vcd::VcdScopeItem::Variable(
                     vogls_ir::vcd::VcdVariable {
-                        signal: i.signal,
+                        signal: signal_map.get(&i.signal).copied().unwrap_or(i.signal),
                         ty: vogls_ir::vcd::NetType::Wire,
                         msb: (i.ty.force_net_width().get() - 1) as i64,
                         lsb: 0,
@@ -75,7 +77,7 @@ impl<'a> Scope<'a> {
         }
     }
 
-    fn vcd_scope(&self, ident_table: &IdentTable) -> vogls_ir::vcd::VcdScope {
+    pub fn vcd_scope(&self, ident_table: &IdentTable) -> vogls_ir::vcd::VcdScope {
         let mut key = self.key;
         while let Some(parent) = self.table[key].parent() {
             key = parent;
@@ -85,7 +87,13 @@ impl<'a> Scope<'a> {
             name: "ROOT".to_string(),
             items: Vec::new(),
         };
-        extend_symbol_table_to_vcd_scope(&mut scope, &[key], self.table, ident_table);
+        extend_symbol_table_to_vcd_scope(
+            &mut scope,
+            &[key],
+            self.table,
+            ident_table,
+            self.signal_map,
+        );
         scope
     }
 }

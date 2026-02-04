@@ -127,7 +127,12 @@ pub fn lower_case_statement<'a>(
                     coerce_bin_arithmetic(gl, &mut builder, expr_var, expr_var_ty, v, v_ty);
                 let expr_var_adj = match variant {
                     CaseStatementVariant::Case => expr_var,
-                    CaseStatementVariant::CaseX => builder.copy_x(gl, expr_var, v),
+                    CaseStatementVariant::CaseX => {
+                        // @Performance: This should probably be one instruction
+                        let x = builder.copy_x(gl, expr_var, v);
+                        let x = builder.copy_z(gl, x, v);
+                        x
+                    }
                     CaseStatementVariant::CaseZ => builder.copy_z(gl, expr_var, v),
                 };
                 let mut acc = builder.case_equals(gl, expr_var_adj, v);
@@ -135,7 +140,12 @@ pub fn lower_case_statement<'a>(
                     let (v, _) = lower_expr(gl, arenas, scope, diagnostics, &mut builder, e)?;
                     let expr_var_adj = match variant {
                         CaseStatementVariant::Case => expr_var,
-                        CaseStatementVariant::CaseX => builder.copy_x(gl, expr_var, v),
+                        CaseStatementVariant::CaseX => {
+                            // @Performance: This should probably be one instruction
+                            let x = builder.copy_x(gl, expr_var, v);
+                            let x = builder.copy_z(gl, x, v);
+                            x
+                        }
                         CaseStatementVariant::CaseZ => builder.copy_z(gl, expr_var, v),
                     };
                     let v = builder.case_equals(gl, expr_var_adj, v);
