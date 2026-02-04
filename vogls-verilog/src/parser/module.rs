@@ -2039,8 +2039,9 @@ impl<'a> Consumable<'a> for BlockItemDeclaration {
         // | { attribute_instance } local_parameter_declaration ;
         // | { attribute_instance } parameter_declaration ;
 
-        match *tkw.try_next(diagnostics.as_deref_mut())?.kind {
+        match *tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?.kind {
             T::KeywordReg => {
+                tkw.offset += 1;
                 let signed = tkw.next_if_equals(T::KeywordSigned);
                 let mut range = None;
                 if tkw.is_next_equal_to(T::LeftBrace) {
@@ -2061,6 +2062,7 @@ impl<'a> Consumable<'a> for BlockItemDeclaration {
                 })
             }
             T::KeywordInteger => {
+                tkw.offset += 1;
                 let identifiers = parse_one_or_more_delimited::<VariableType>(
                     tkw,
                     sc,
