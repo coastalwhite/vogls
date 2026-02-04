@@ -447,8 +447,8 @@ impl BinaryOp {
             O::Add => Bits::add(lhs, rhs),
             O::Sub => Bits::subtract(lhs, rhs),
             O::Multiply => Bits::multiply(lhs, rhs),
-            O::Divide => Bits::divide(lhs, rhs).0,
-            O::Modulus => Bits::divide(lhs, rhs).1,
+            O::Divide => Bits::divide(lhs, rhs),
+            O::Modulus => Bits::remainder(lhs, rhs),
 
             O::UnsignedLessEqual => Bits::from(Bits::is_unsigned_leq(lhs, rhs)),
             O::CaseEquality => Bits::from(lhs == rhs),

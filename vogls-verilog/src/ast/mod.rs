@@ -171,6 +171,28 @@ pub struct StringRef(pub TextRef);
 #[derive(Clone, Copy)]
 pub struct Identifier(pub IdentId);
 
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 508
+// hierarchical_identifier ::= { identifier [ [ constant_expression ] ] . } identifier
+#[derive(Clone, Copy)]
+pub struct HIdent {
+    pub components: AstIdRange<HIdentComponent>,
+    pub ident: AstItem<Identifier>,
+}
+#[derive(Clone, Copy)]
+pub struct HIdentComponent {
+    pub ident: AstItem<Identifier>,
+    pub constant_expr: Option<AstId<ConstantExpr>>,
+}
+
+impl From<AstItem<Identifier>> for HIdent {
+    fn from(ident: AstItem<Identifier>) -> Self {
+        Self {
+            components: AstIdRange::default(),
+            ident,
+        }
+    }
+}
+
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 507
 // attribute_instance ::= (* attr_spec { , attr_spec } *)
 #[derive(Clone, Copy)]

@@ -4,8 +4,8 @@ use crate::arena::Arena;
 use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::module::Module;
 use crate::ast::{
-    AstId, AstIdRange, AstItem, AttrSpec, AttributeInstance, DecimalRef, Identifier, SizedNumber,
-    SizedNumberRef, StringRef, TextRef,
+    AstId, AstIdRange, AstItem, AttrSpec, AttributeInstance, DecimalRef, HIdent, HIdentComponent,
+    Identifier, SizedNumber, SizedNumberRef, StringRef, TextRef,
 };
 use crate::number::{
     Base, Sign, parse_decimal_bits, skip_sign, take_base, take_binary_bits, take_hexadecimal_bits,
@@ -444,5 +444,64 @@ impl<'a> Consumable<'a> for AttrSpec {
             attr_name,
             constant_expression,
         })
+    }
+}
+
+impl<'a> Consumable<'a> for HIdent {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 508
+        // hierarchical_identifier ::= { identifier [ [ constant_expression ] ] . } identifier
+
+        // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
+        // here.
+        let mut items = Vec::new();
+        let mut spans = Vec::new();
+
+        loop {
+            let ident = item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+
+            let t = tkw.get(tkw.offset).map(|t| *t.kind);
+            if t == Some(T::Dot) {
+                items.push(HIdentComponent {
+                    ident,
+                    constant_expr: None,
+                });
+                spans.push(arenas.get_item_span(ident));
+                tkw.offset += 1;
+                continue;
+            } else if t == Some(T::LeftBrace) {
+                tkw.offset += 1;
+                let Some(at) = tkw.find_next_same_depth(T::RightBrace) else {
+                    diagnostics.map(|d| d.no_corresponding(tkw.offset - 1, T::RightBrace));
+                    return Err(());
+                };
+
+                if tkw.get(at + 1).map(|t| *t.kind) == Some(T::Dot) {
+                    let constant_expr =
+                        parse::<ConstantExpr>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                    tkw.next_expect(T::RightBrace, diagnostics.as_deref_mut())?;
+                    tkw.offset += 1;
+                    items.push(HIdentComponent {
+                        ident,
+                        constant_expr: Some(constant_expr),
+                    });
+                    spans.push(arenas.get_item_span(ident));
+                    continue;
+                }
+                tkw.offset -= 1;
+            }
+
+            return Ok(HIdent {
+                components: arenas.add_range(items, spans),
+                ident,
+            });
+        }
     }
 }

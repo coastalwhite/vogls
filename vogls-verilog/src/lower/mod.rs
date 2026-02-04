@@ -41,7 +41,11 @@ impl<'a> Scope<'a> {
     }
 }
 
-pub fn resolve_symbol_id(scope: SymbolId, table: &VSymbolTable, ident: IdentId) -> Option<SymbolId> {
+pub fn resolve_symbol_id(
+    scope: SymbolId,
+    table: &VSymbolTable,
+    ident: IdentId,
+) -> Option<SymbolId> {
     // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 196
     //
     // """
@@ -75,6 +79,29 @@ pub fn try_resolve_symbol_id(
     scope: SymbolId,
     table: &VSymbolTable,
     arenas: &AstArenas,
+    ident: impl Into<HIdent>,
+    diagnostics: &mut Diagnostics,
+) -> Result<SymbolId, ()> {
+    let ident = ident.into();
+
+    let mut scope = scope;
+
+    for component in ident.components {
+        scope = try_resolve_symbol_id_nonhier(
+            scope,
+            table,
+            arenas,
+            arenas.get(component).ident,
+            diagnostics,
+        )?;
+    }
+
+    try_resolve_symbol_id_nonhier(scope, table, arenas, ident.ident, diagnostics)
+}
+pub fn try_resolve_symbol_id_nonhier(
+    scope: SymbolId,
+    table: &VSymbolTable,
+    arenas: &AstArenas,
     ident: AstItem<Identifier>,
     diagnostics: &mut Diagnostics,
 ) -> Result<SymbolId, ()> {
@@ -89,12 +116,13 @@ pub fn try_resolve_net<'a>(
     scope: SymbolId,
     table: &'a VSymbolTable,
     arenas: &AstArenas,
-    ident: AstItem<Identifier>,
+    ident: impl Into<HIdent>,
     diagnostics: &mut Diagnostics,
 ) -> Result<&'a NetSymbol, ()> {
+    let ident = ident.into();
     let sid = try_resolve_symbol_id(scope, table, arenas, ident, diagnostics)?;
     let VSymbol::Net(n) = &table[sid].content else {
-        diagnostics.not_yet_implemented(arenas.get_item_span(ident), "cannot be used as net");
+        diagnostics.not_yet_implemented(hident_span(arenas, ident), "cannot be used as net");
         return Err(());
     };
     Ok(n)
@@ -161,23 +189,35 @@ pub fn unwrap_get_module<'a>(table: &'a VSymbolTable, sid: SymbolId) -> &'a Modu
     };
     n
 }
-pub fn unwrap_get_module_mut<'a>(table: &'a mut VSymbolTable, sid: SymbolId) -> &'a mut ModuleSymbol {
+pub fn unwrap_get_module_mut<'a>(
+    table: &'a mut VSymbolTable,
+    sid: SymbolId,
+) -> &'a mut ModuleSymbol {
     let VSymbol::Module(n) = &mut table[sid].content else {
         panic!()
     };
     n
 }
 
+fn hident_span(arenas: &AstArenas, ident: HIdent) -> TokenRange {
+    let lst = arenas.get_item_span(ident.ident);
+    match ident.components.first() {
+        None => lst,
+        Some(fst) => arenas.get_span(fst) | lst,
+    }
+}
+
 pub fn try_resolve_constant<'a>(
     scope: SymbolId,
     table: &'a VSymbolTable,
     arenas: &AstArenas,
-    ident: AstItem<Identifier>,
+    ident: impl Into<HIdent>,
     diagnostics: &mut Diagnostics,
 ) -> Result<&'a VValue, ()> {
+    let ident = ident.into();
     let sid = try_resolve_symbol_id(scope, table, arenas, ident, diagnostics)?;
     let VSymbol::Parameter(value) = &table[sid].content else {
-        diagnostics.not_yet_implemented(arenas.get_item_span(ident), "cannot be used as net");
+        diagnostics.not_yet_implemented(hident_span(arenas, ident), "cannot be used as net");
         return Err(());
     };
     Ok(value)
@@ -187,6 +227,7 @@ use std::collections::HashMap;
 
 use vogls_frontend::ident_table::IdentId;
 use vogls_frontend::symbol_table::SymbolId;
+use vogls_ir::token_range::TokenRange;
 use vogls_ir::{
     BasicBlockBuilder, GlobalContext, SCALAR_VSIZE, Signal, SignalKey, VariableKey, VectorSize,
     new_process,
@@ -198,8 +239,10 @@ use crate::ast::module::{
     GenerateRegion, Module, ModuleItem, NonPortModuleItem, ParamAssignment, ParameterDeclaration,
     Range,
 };
-use crate::ast::{AstId, AstItem, Identifier};
-use crate::elaborate::{FunctionSymbol, ModuleSymbol, NetSymbol, TaskSymbol, VSymbol, VSymbolTable};
+use crate::ast::{AstId, AstItem, HIdent, Identifier};
+use crate::elaborate::{
+    FunctionSymbol, ModuleSymbol, NetSymbol, TaskSymbol, VSymbol, VSymbolTable,
+};
 use crate::parser::AstArenas;
 
 pub use self::expression::eval_constant_expr;
@@ -300,12 +343,8 @@ fn lower_to_signal<'a>(
         && exprs.is_empty()
         && range_expression.is_none()
     {
-        let Ok(symbol_key) =
-            try_resolve_symbol_id(scope.key, scope.table, arenas, *ast_ident, diagnostics)
-        else {
-            diagnostics.var_not_found(arenas, *ast_ident);
-            return Err(());
-        };
+        let symbol_key =
+            try_resolve_symbol_id(scope.key, scope.table, arenas, *ast_ident, diagnostics)?;
         if let VSymbol::Net(s) = &scope.table[symbol_key].content
             && s.ty == ty
         {

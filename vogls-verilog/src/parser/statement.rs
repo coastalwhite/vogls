@@ -12,7 +12,9 @@ use crate::ast::statement::{
     SystemTaskEnable, SystemTaskIdentifier, TaskEnable, VariableAssignment, VariableLValue,
     VariableLValueFlat, WaitStatement,
 };
-use crate::ast::{AstIdRange, AstItem, AttributeInstance, DecimalRef, Identifier, RangeExpression};
+use crate::ast::{
+    AstIdRange, AstItem, AttributeInstance, DecimalRef, HIdent, Identifier, RangeExpression,
+};
 use crate::tokenizer::Token;
 
 use super::{AstArenas, Consumable, ParserScratches, TokenWalker};
@@ -138,10 +140,34 @@ impl<'a> Consumable<'a> for StatementContent {
                 diagnostics.as_deref_mut(),
             )?)),
             T::Ident => {
-                match *tkw
-                    .try_get(tkw.offset + 1, diagnostics.as_deref_mut())?
-                    .kind
-                {
+                // Peek past the hierarchical_identifier / lvalue.
+
+                let start_offset = tkw.offset;
+                tkw.offset += 1;
+
+                loop {
+                    while tkw.next_if_equals(T::LeftBrace) {
+                        let Some(corresponding_brace) = tkw.find_next_same_depth(T::RightBrace)
+                        else {
+                            diagnostics.map(|d| d.no_corresponding(tkw.offset - 1, T::RightBrace));
+                            return Err(());
+                        };
+
+                        tkw.offset = corresponding_brace + 1;
+                    }
+
+                    if *tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?.kind != T::Dot {
+                        break;
+                    }
+
+                    tkw.offset += 1;
+                    tkw.next_expect(T::Ident, diagnostics.as_deref_mut())?;
+                }
+
+                let next_offset = tkw.offset;
+                tkw.offset = start_offset;
+
+                match *tkw.try_get(next_offset, diagnostics.as_deref_mut())?.kind {
                     T::LeftParen | T::Semicolon => {
                         let task_enable =
                             parse::<TaskEnable>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
@@ -166,54 +192,6 @@ impl<'a> Consumable<'a> for StatementContent {
                         )?;
                         tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
                         return Ok(Self::NonBlockingAssignment(nba));
-                    }
-                    T::LeftBrace => {
-                        let start = tkw.offset;
-                        let end = loop {
-                            tkw.offset += 2;
-                            let Some(corresponding_brace) = tkw.find_next_same_depth(T::RightBrace)
-                            else {
-                                diagnostics
-                                    .map(|d| d.no_corresponding(tkw.offset - 1, T::RightBrace));
-                                return Err(());
-                            };
-
-                            tkw.offset = corresponding_brace;
-                            if tkw
-                                .get(corresponding_brace + 1)
-                                .is_none_or(|t| *t.kind != T::LeftBrace)
-                            {
-                                break corresponding_brace + 1;
-                            }
-                        };
-                        tkw.offset = start;
-
-                        match *tkw.try_get(end, diagnostics.as_deref_mut())?.kind {
-                            T::LessThanEquals => {
-                                let nba = parse::<NonBlockingAssignment>(
-                                    tkw,
-                                    sc,
-                                    arenas,
-                                    diagnostics.as_deref_mut(),
-                                )?;
-                                tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
-                                Ok(Self::NonBlockingAssignment(nba))
-                            }
-                            T::Equals => {
-                                let ba = parse::<BlockingAssignment>(
-                                    tkw,
-                                    sc,
-                                    arenas,
-                                    diagnostics.as_deref_mut(),
-                                )?;
-                                tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
-                                Ok(Self::BlockingAssignment(ba))
-                            }
-                            _ => {
-                                diagnostics.map(|d| d.incomplete(tkw.offset, "statement"));
-                                Err(())
-                            }
-                        }
                     }
                     _ => {
                         diagnostics.map(|d| d.incomplete(tkw.offset, "statement"));
@@ -324,7 +302,7 @@ impl<'a> Consumable<'a> for NetLValueFlat {
         // net_lvalue ::=
         //   hierarchical_net_identifier [ { [ constant_expression ] } [ constant_range_expression ] ]
         // | { net_lvalue { , net_lvalue } }
-        let ident = item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        let ident = HIdent::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
         let mut constant_exprs = AstIdRange::default();
         let mut constant_range_expression = None;
         if tkw.get(tkw.offset).is_some_and(|t| *t.kind == T::LeftBrace) {
@@ -421,7 +399,7 @@ impl<'a> Consumable<'a> for VariableLValueFlat {
         //   hierarchical_variable_identifier [ { [ expression ] } [ range_expression ] ]
         //   | { variable_lvalue { , variable_lvalue } }
 
-        let ident = item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        let ident = HIdent::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
         let mut exprs = AstIdRange::default();
         let mut range_expression = None;
         if tkw.get(tkw.offset).is_some_and(|t| *t.kind == T::LeftBrace) {

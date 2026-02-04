@@ -5,10 +5,10 @@ use vogls_ir::{
 };
 
 use crate::ast::expr::Expr;
-use crate::ast::{AstId, AstIdRange, AstItem, Identifier};
+use crate::ast::{AstId, AstIdRange, AstItem, HIdent, Identifier};
 use crate::elaborate::VSymbol;
 use crate::lower::expression::{lower_expr, truncate_or_extend};
-use crate::lower::{Diagnostics, VType, try_resolve_symbol_id};
+use crate::lower::{Diagnostics, VType, hident_span, try_resolve_symbol_id};
 use crate::lower::{Scope, assign_task_output};
 use crate::parser::AstArenas;
 
@@ -19,12 +19,12 @@ pub fn lower_function_call<'a>(
     diagnostics: &mut Diagnostics,
     builder: &mut BasicBlockBuilder,
     expr: AstId<Expr>,
-    ident: AstItem<Identifier>,
+    ident: HIdent,
     arguments: &[Option<(VariableKey, VType)>],
 ) -> Result<(VariableKey, VType), ()> {
     let fn_symbol = try_resolve_symbol_id(scope.key, scope.table, arenas, ident, diagnostics)?;
     let VSymbol::Function(fn_symbol) = &scope.table[fn_symbol].content else {
-        diagnostics.not_yet_implemented(arenas.get_item_span(ident), "not calling a function");
+        diagnostics.not_yet_implemented(hident_span(arenas, ident), "not calling a function");
         return Err(());
     };
 

@@ -986,7 +986,14 @@ impl Bits {
         Self::from_boxed_slice(Mode::TwoValue, size, dst.into())
     }
 
-    pub fn divide(lhs: &Self, rhs: &Self) -> (Self, Self) {
+    pub fn divide(lhs: &Self, rhs: &Self) -> Self {
+        Self::euclid_divide(lhs, rhs).0
+    }
+    pub fn remainder(lhs: &Self, rhs: &Self) -> Self {
+        Self::euclid_divide(lhs, rhs).1
+    }
+
+    pub fn euclid_divide(lhs: &Self, rhs: &Self) -> (Self, Self) {
         assert_eq!(lhs.size(), rhs.size());
         if lhs.contains_special() || rhs.contains_special() {
             return (Self::new_unknown(lhs.size()), Self::new_unknown(rhs.size()));

@@ -4,7 +4,7 @@ use crate::parser::AstArenas;
 
 use super::constant_expr::ConstantExpr;
 use super::statement::SystemTaskIdentifier;
-use super::{AstId, AstIdRange, AstItem, DecimalRef, Identifier, SizedNumberRef, StringRef};
+use super::{AstId, AstIdRange, AstItem, DecimalRef, HIdent, SizedNumberRef, StringRef};
 
 #[derive(Clone, Copy)]
 pub enum BitSlice {
@@ -68,8 +68,8 @@ pub enum Expr {
     Concatenation(AstIdRange<Expr>),
     Replication(Replication),
     Ternary(AstId<Expr>, AstId<Expr>, AstId<Expr>),
-    Ident(AstItem<Identifier>, AstIdRange<Expr>, Option<BitSlice>),
-    FunctionCall(AstItem<Identifier>, AstIdRange<Expr>),
+    Ident(HIdent, AstIdRange<Expr>, Option<BitSlice>),
+    FunctionCall(HIdent, AstIdRange<Expr>),
     SystemFunctionCall(AstItem<SystemTaskIdentifier>, Option<AstIdRange<Expr>>),
     Decimal(DecimalRef),
     Sized(AstItem<SizedNumberRef>),
@@ -202,7 +202,7 @@ impl Expr {
                 arenas.get(*falsy).tree_fmt_impl(arenas, f, depth + 1)?;
             }
             Expr::Ident(ident, expr, range_expr) => {
-                writeln!(f, "ident: {}", &arenas.ident_table[ident.item.0])?;
+                writeln!(f, "ident: {}", &arenas.ident_table[ident.ident.item.0])?;
                 for e in expr.iter() {
                     arenas.get(e).tree_fmt_impl(arenas, f, depth + 1)?;
                 }
@@ -232,7 +232,7 @@ impl Expr {
                 }
             }
             Expr::FunctionCall(ident, exprs) => {
-                writeln!(f, "fn call: {}", &arenas.ident_table[ident.item.0])?;
+                writeln!(f, "fn call: {}", &arenas.ident_table[ident.ident.item.0])?;
                 for e in exprs.iter() {
                     arenas.get(e).tree_fmt_impl(arenas, f, depth + 1)?;
                 }

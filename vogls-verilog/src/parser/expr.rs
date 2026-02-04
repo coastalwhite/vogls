@@ -3,7 +3,7 @@ use vogls_ir::token_range::TokenRange;
 use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::expr::{BinaryOperator, BitSlice, Expr, Replication, UnaryOperator};
 use crate::ast::statement::SystemTaskIdentifier;
-use crate::ast::{AstId, AstIdRange, AstItem, DecimalRef, Identifier, SizedNumberRef, StringRef};
+use crate::ast::{AstId, AstIdRange, AstItem, DecimalRef, HIdent, SizedNumberRef, StringRef};
 use crate::parser::ParseErrorReason;
 use crate::parser::utils::item_parse;
 use crate::tokenizer::Token;
@@ -17,15 +17,10 @@ pub(crate) enum StackItem {
     Bracket,
     Concatenation(Vec<Expr>, Vec<TokenRange>),
     Replication(AstId<ConstantExpr>, Vec<Expr>, Vec<TokenRange>),
-    Brace(AstItem<Identifier>, Vec<Expr>, Vec<TokenRange>),
-    BraceS2(
-        AstItem<Identifier>,
-        AstIdRange<Expr>,
-        AstId<Expr>,
-        BraceVariant,
-    ),
+    Brace(HIdent, Vec<Expr>, Vec<TokenRange>),
+    BraceS2(HIdent, AstIdRange<Expr>, AstId<Expr>, BraceVariant),
     SystemFnCall(AstItem<SystemTaskIdentifier>, Vec<Expr>, Vec<TokenRange>),
-    FnCall(AstItem<Identifier>, Vec<Expr>, Vec<TokenRange>),
+    FnCall(HIdent, Vec<Expr>, Vec<TokenRange>),
     Unary(UnaryOperator),
     Binary(BinaryOperator, AstId<Expr>),
     TernaryS1(AstId<Expr>),
@@ -119,8 +114,7 @@ impl<'a> Consumable<'a> for Expr {
             current = {
                 match token.kind {
                     T::Ident => {
-                        let ident =
-                            item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                        let ident = HIdent::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
 
                         if tkw.next_if_equals(T::LeftBrace) {
                             deepen!(StackItem::Brace(ident, Vec::new(), Vec::new()), 0, span)

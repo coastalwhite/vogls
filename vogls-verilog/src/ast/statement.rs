@@ -4,7 +4,7 @@ use super::constant_expr::{ConstantExpr, ConstantRangeExpression};
 use super::expr::Expr;
 use super::module::BlockItemDeclaration;
 use super::{
-    AstId, AstIdRange, AstItem, AttributeInstance, DecimalRef, Identifier, RangeExpression,
+    AstId, AstIdRange, AstItem, AttributeInstance, DecimalRef, HIdent, Identifier, RangeExpression
 };
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
@@ -63,7 +63,7 @@ pub struct ProceduralTimingControlStatement {
 pub struct NetLValue(pub AstIdRange<NetLValueFlat>);
 #[derive(Clone, Copy)]
 pub struct NetLValueFlat {
-    pub ident: AstItem<Identifier>,
+    pub ident: HIdent,
     pub constant_exprs: AstIdRange<ConstantExpr>,
     pub constant_range_expression: Option<AstId<ConstantRangeExpression>>,
 }
@@ -81,7 +81,7 @@ pub struct VariableLValue(pub AstIdRange<VariableLValueFlat>);
 //   | { variable_lvalue { , variable_lvalue } }
 #[derive(Clone, Copy)]
 pub struct VariableLValueFlat {
-    pub ident: AstItem<Identifier>,
+    pub ident: HIdent,
     pub exprs: AstIdRange<Expr>,
     pub range_expression: Option<AstId<RangeExpression>>,
 }

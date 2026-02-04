@@ -216,7 +216,7 @@ impl VValue {
 }
 
 macro_rules! impl_arithmetic {
-    ($(($f:ident, $op:tt),)+ : $(($ft:ident, $opt:tt),)+) => {
+    ($(($f:ident, $op:tt),)+) => {
         impl VValue {
         $(
         pub fn $f(lhs: VValue, rhs: VValue) -> VValue {
@@ -224,30 +224,7 @@ macro_rules! impl_arithmetic {
             let (mut lhs, rhs) = Self::coerce_max_size(lhs, rhs);
             match (&mut lhs, rhs) {
                 (V::UnsignedNet(lb) | V::SignedNet(lb), V::UnsignedNet(r) | V::SignedNet(r)) => {
-                    let size = lb.size();
-                    let (Some(l), Some(r)) = (lb.as_u64(), r.as_u64()) else {
-                        todo!();
-                    };
-
-                    *lb = Bits::from_u64(size, l.$op(r));
-                }
-                (V::String(_), _) | (_, V::String(_)) => todo!(),
-            }
-            lhs
-        }
-        )+
-        $(
-        pub fn $ft(lhs: VValue, rhs: VValue) -> VValue {
-            use VValue as V;
-            let (mut lhs, rhs) = Self::coerce_max_size(lhs, rhs);
-            match (&mut lhs, rhs) {
-                (V::UnsignedNet(lb) | V::SignedNet(lb), V::UnsignedNet(r) | V::SignedNet(r)) => {
-                    let size = lb.size();
-                    let (Some(l), Some(r)) = (lb.as_u64(), r.as_u64()) else {
-                        todo!();
-                    };
-
-                    *lb = Bits::from_u64(size, l.$opt(r));
+                    *lb = Bits::$op(lb, &r);
                 }
                 (V::String(_), _) | (_, V::String(_)) => todo!(),
             }
@@ -259,13 +236,12 @@ macro_rules! impl_arithmetic {
 }
 
 impl_arithmetic! {
-    (multiply, wrapping_mul),
-    :
-    (divide, wrapping_div),
-    (remainder, wrapping_rem),
-    (add, wrapping_add),
-    (sub, wrapping_sub),
-    (bitwise_and, bitand),
-    (bitwise_xor, bitxor),
-    (bitwise_or, bitor),
+    (multiply, multiply),
+    (divide, divide),
+    (remainder, remainder),
+    (add, add),
+    (sub, subtract),
+    (bitwise_and, bitwise_and),
+    (bitwise_xor, bitwise_xor),
+    (bitwise_or, bitwise_or),
 }
