@@ -1,13 +1,13 @@
 use vogls_ir::{BasicBlockBuilder, BasicBlockTerminator, GlobalContext};
 
 use crate::ast::statement::{
-    BlockingAssignment, NonBlockingAssignment, ProceduralTimingControlStatement, Statement,
-    StatementContent, StatementOrNull, TaskEnable, WaitStatement,
+    Block, BlockingAssignment, NonBlockingAssignment, ProceduralTimingControlStatement, SeqBlock,
+    Statement, StatementContent, StatementOrNull, TaskEnable, WaitStatement,
 };
 use crate::ast::{AstId, AstIdRange};
 use crate::lower::expression::function_call::lower_task_enable;
 use crate::lower::expression::{self, lower_expr};
-use crate::lower::{Region, assign};
+use crate::lower::{Region, assign, try_resolve_symbol_id};
 use crate::parser::AstArenas;
 
 use super::Diagnostics;
@@ -143,14 +143,32 @@ pub fn statements_to_process<'a>(
                 )?
             }
             S::SeqBlock(id) => {
-                let seq_block = arenas.get(id);
+                let SeqBlock { block, statements } = arenas.get(id);
+
+                let scope_key = match block {
+                    Some(blk) => try_resolve_symbol_id(
+                        scope.key,
+                        scope.table,
+                        arenas,
+                        arenas.get(*blk).block_identifier,
+                        diagnostics,
+                    )?,
+                    None => scope.key,
+                };
+
+                let mut scope = Scope {
+                    table: scope.table,
+                    key: scope_key,
+                    signal_map: scope.signal_map,
+                };
+
                 builder = statements_to_process(
                     gl,
                     arenas,
-                    scope,
+                    &mut scope,
                     diagnostics,
                     builder,
-                    seq_block.statements,
+                    *statements,
                 )?;
             }
             S::SystemTaskEnable(id) => {

@@ -291,7 +291,7 @@ pub fn run(
             unreachable!()
         };
         error |= elaborate_module(
-            &mut gl.signals,
+            &mut gl,
             &ast.arenas,
             ast.modules.get(module_lut[&m.module]),
             module_symid,

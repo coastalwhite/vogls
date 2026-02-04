@@ -44,9 +44,12 @@ pub enum BinaryArithmeticOp {
     Xor,
     Add,
     Sub,
+    Power,
     Multiply,
     Divide,
     Modulus,
+    CopyX,
+    CopyZ,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -66,6 +69,7 @@ pub enum ShiftOp {
 pub enum VmIntrinsicOp {
     Time,
     Finish,
+    Random,
     Display(Box<DynFormatString>),
     Assert(Box<DynFormatString>),
     VcdOpenFile(String),
@@ -252,6 +256,7 @@ impl VmIntrinsicOp {
         match self {
             Self::Time => "time",
             Self::Finish => "finish",
+            Self::Random => "random",
             Self::Display(_) => "display",
             Self::Assert(_) => "assert",
             Self::VcdOpenFile(_) => "vcd.open_file",
@@ -270,9 +275,12 @@ impl BinaryArithmeticOp {
             Self::Xor => "xor",
             Self::Add => "add",
             Self::Sub => "sub",
+            Self::Power => "pow",
             Self::Multiply => "mul",
             Self::Divide => "div",
             Self::Modulus => "rem",
+            Self::CopyX => "copyx",
+            Self::CopyZ => "copyz",
         }
     }
 }

@@ -245,6 +245,9 @@ pub fn lower_process_to_vm(
                             O::Xor => VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Xor, s1, s2),
                             O::Add => VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Add, s1, s2),
                             O::Sub => VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Sub, s1, s2),
+                            O::Power => {
+                                VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Power, s1, s2)
+                            }
                             O::Multiply => {
                                 VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Multiply, s1, s2)
                             }
@@ -275,6 +278,9 @@ pub fn lower_process_to_vm(
                                 VI::FvShift(d.to_ref(d_size), S::ArithmeticRight, s1, s2)
                             }
                             O::Concat => VI::FvConcat(d, s1.to_ref(s1_size), s2.to_ref(s2_size)),
+
+                            O::CopyX => VI::FvBinaryArithmetic(d.to_ref(d_size), BA::CopyX, s1, s2),
+                            O::CopyZ => VI::FvBinaryArithmetic(d.to_ref(d_size), BA::CopyZ, s1, s2),
                         }
                     } else {
                         match *op {
@@ -283,6 +289,9 @@ pub fn lower_process_to_vm(
                             O::Xor => VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Xor, s1, s2),
                             O::Add => VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Add, s1, s2),
                             O::Sub => VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Sub, s1, s2),
+                            O::Power => {
+                                VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Power, s1, s2)
+                            }
                             O::Multiply => {
                                 VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Multiply, s1, s2)
                             }
@@ -313,6 +322,11 @@ pub fn lower_process_to_vm(
                                 VI::TvShift(d.to_ref(d_size), S::ArithmeticRight, s1, s2)
                             }
                             O::Concat => VI::TvConcat(d, s1.to_ref(s1_size), s2.to_ref(s2_size)),
+                            O::CopyX | O::CopyZ => VI::TvResize(
+                                d.to_ref(d_size),
+                                vogls_ir::ResizeOp::Truncate,
+                                s1.to_ref(s1_size),
+                            ),
                         }
                     }
                 }
@@ -328,6 +342,7 @@ pub fn lower_process_to_vm(
                     let op = match op.as_ref() {
                         O::Time => VO::Time,
                         O::Finish => VO::Finish,
+                        O::Random => VO::Random,
                         O::Display(f) => VO::Display(f.clone()),
                         O::Assert(f) => VO::Assert(f.clone()),
                         O::VcdOpenFile(f) => VO::VcdOpenFile(f.clone()),

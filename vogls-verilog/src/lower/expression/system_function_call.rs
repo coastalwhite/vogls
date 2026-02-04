@@ -48,6 +48,10 @@ pub fn lower_system_function_call<'a>(
             ensure_num_args_equal!(0);
             Ok((builder.time(gl), VType::UnsignedNet(TIME_VSIZE)))
         }
+        "random" => {
+            ensure_num_args_equal!(0);
+            Ok((builder.random(gl), VType::UnsignedNet(TIME_VSIZE)))
+        }
         "clog2" => {
             diagnostics.not_yet_implemented(arenas.get_span(expr), "clog2 is not yet implemented");
             Err(())
@@ -104,6 +108,11 @@ pub fn eval_constant<'a>(
         "time" => {
             ensure_num_args_equal!(0);
             diagnostics.not_yet_implemented(arenas.get_span(expr), "time is not yet implemented");
+            Err(())
+        }
+        "random" => {
+            ensure_num_args_equal!(0);
+            diagnostics.not_yet_implemented(arenas.get_span(expr), "random is not allow in constant expressions");
             Err(())
         }
         "clog2" => {

@@ -110,7 +110,7 @@ pub fn lower_expr<'a>(
 
                 use BinaryOperator as O;
                 let op = match op {
-                    O::Power => nyi!("power"),
+                    O::Power => bin_power,
                     O::Multiply => bin_multiply,
                     O::Divide => bin_divide,
                     O::Modulus => bin_modulus,
@@ -203,7 +203,7 @@ pub fn lower_expr<'a>(
 
                 let end_stack_size = result_stack.len() - exprs.len();
                 let Ok(repeat_n) =
-                    eval_constant_expr(arenas, scope.eval(), diagnostics, constant_expr)
+                    eval_constant_expr(gl, arenas, scope.eval(), diagnostics, constant_expr)
                 else {
                     result_stack.truncate(end_stack_size);
                     result_stack.push(None);
@@ -445,7 +445,7 @@ pub fn lower_expr<'a>(
                     let (lsb, width) = match slice {
                         BitSlice::MsbLsb(msb, lsb) => {
                             let Ok((_msb, lsb, width)) =
-                                msb_lsb_to_width(arenas, scope.eval(), diagnostics, *msb, *lsb)
+                                msb_lsb_to_width(gl, arenas, scope.eval(), diagnostics, *msb, *lsb)
                             else {
                                 result_stack.push(None);
                                 continue;
@@ -460,7 +460,7 @@ pub fn lower_expr<'a>(
                                 continue;
                             };
                             let Ok(width) =
-                                eval_constant_expr(arenas, scope.eval(), diagnostics, *width)
+                                eval_constant_expr(gl, arenas, scope.eval(), diagnostics, *width)
                             else {
                                 result_stack.push(None);
                                 continue;
@@ -478,7 +478,7 @@ pub fn lower_expr<'a>(
                             };
 
                             let Ok(width) =
-                                eval_constant_expr(arenas, scope.eval(), diagnostics, *width)
+                                eval_constant_expr(gl, arenas, scope.eval(), diagnostics, *width)
                             else {
                                 result_stack.push(None);
                                 continue;
@@ -708,6 +708,7 @@ macro_rules! impl_shift {
 }
 
 impl_bin_arithmetic! {
+    bin_power => power,
     bin_multiply => multiply,
     bin_divide => divide,
     bin_modulus => modulus,

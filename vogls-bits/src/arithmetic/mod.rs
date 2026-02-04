@@ -5,6 +5,7 @@ use crate::store::store_partial_u64;
 mod add_sub;
 mod division;
 mod multiplication;
+mod power;
 
 pub use add_sub::{
     fv_addition, fv_ltu32_addition, fv_ltu32_subtraction, fv_subtraction, tv_addition,
@@ -17,6 +18,7 @@ pub use division::{
 pub use multiplication::{
     fv_ltu32_multiplication, fv_multiplication, tv_ltu64_multiplication, tv_multiplication,
 };
+pub use power::{fv_ltu32_power, fv_power, tv_ltu64_power, tv_power};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(u8)]

@@ -1,16 +1,20 @@
-use vogls_ir::Bits;
+use std::collections::HashMap;
+
+use vogls_ir::{Bits, GlobalContext};
 
 use crate::ast::AstId;
 use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::expr::{BinaryOperator, Expr};
+use crate::elaborate::VSymbol;
 use crate::lower::vvalue::VValue;
-use crate::lower::{EvalScope, try_resolve_constant};
+use crate::lower::{EvalScope, hident_span, try_resolve_constant, try_resolve_symbol_id};
 use crate::number::Sign;
 use crate::parser::AstArenas;
 
 use super::Diagnostics;
 
 pub fn eval_constant_expr<'a>(
+    gl: &GlobalContext,
     arenas: &'a AstArenas,
     scope: EvalScope<'_>,
     diagnostics: &mut Diagnostics,
@@ -205,7 +209,59 @@ pub fn eval_constant_expr<'a>(
                 error |= result.is_err();
                 result_stack.push(result.ok());
             }
-            Expr::FunctionCall(..) | Expr::String(..) | Expr::Unary(..) | Expr::Replication(..) => {
+            Expr::FunctionCall(ident, arguments) => {
+                if !item.dispatched {
+                    item.dispatched = true;
+                    dispatch_stack.extend(arguments.iter().map(|expr| StackItem {
+                        expr,
+                        dispatched: false,
+                    }));
+                    continue;
+                }
+
+                let return_stack_length = result_stack.len() - arguments.len();
+
+                let Ok(fn_sid) =
+                    try_resolve_symbol_id(scope.key, scope.table, arenas, *ident, diagnostics)
+                else {
+                    result_stack.truncate(return_stack_length);
+                    error = true;
+                    continue;
+                };
+
+                let VSymbol::Function(fn_symbol) = &scope.table[fn_sid].content else {
+                    diagnostics
+                        .not_yet_implemented(hident_span(arenas, *ident), "not calling a function");
+                    return Err(());
+                };
+
+                let Some(lowered) = fn_symbol.lowered.as_ref() else {
+                    diagnostics.not_yet_implemented(
+                        hident_span(arenas, *ident),
+                        "function is not yet lowered",
+                    );
+                    return Err(());
+                };
+                if fn_symbol.inputs.len() != arguments.len() {
+                    diagnostics
+                        .not_yet_implemented(arenas.get_span(expr), "invalid number of arguments");
+                    return Err(());
+                }
+
+                let mut esignals = HashMap::new();
+                let mut evars = HashMap::new();
+
+                for (sig, ty) in &fn_symbol.inputs {
+                    esignals.insert(*sig, Bits::new_unknown(ty.force_net_width()));
+                }
+                esignals.insert(
+                    fn_symbol.output,
+                    Bits::new_unknown(fn_symbol.output_ty.force_net_width()),
+                );
+
+                vogls_ir::evaluation::evaluate(gl, lowered.entry, &mut esignals, &mut evars);
+            }
+            Expr::String(..) | Expr::Unary(..) | Expr::Replication(..) => {
                 result_stack.push(None);
                 diagnostics.not_yet_implemented(
                     arenas.get_span(item.expr),

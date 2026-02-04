@@ -10,7 +10,7 @@ use vogls_bits::store::store_partial_u64;
 use vogls_bits::{BitsDataRef, get_disjoint_dst_s1_s2, get_disjoint_dst_src};
 use vogls_ir::dyn_format_string::{Base, Padding, format_bits};
 use vogls_ir::vcd::NetType;
-use vogls_ir::{Bits, LogicMode, SCALAR_VSIZE, SignalKey, TIME_VSIZE, VectorSize};
+use vogls_ir::{Bits, INTEGER_VSIZE, LogicMode, SCALAR_VSIZE, SignalKey, TIME_VSIZE, VectorSize};
 
 mod execution;
 mod instruction;
@@ -821,6 +821,7 @@ impl Event {
                             O::VcdPause => _ = vcd.as_mut().map(|vcd| vcd.paused = true),
                             O::VcdResume => _ = vcd.as_mut().map(|vcd| vcd.paused = false),
                             O::Time => _ = stack.set_tv_u64(dst.to_ref(TIME_VSIZE), ctx.time),
+                            O::Random => _ = stack.set_tv_u64(dst.to_ref(INTEGER_VSIZE), 0x42),
                             O::Finish => {
                                 writeln!(&mut ctx.stdout, "[FINISH]").unwrap();
                                 break 'instruction Some(EvalOutcome::Exit);

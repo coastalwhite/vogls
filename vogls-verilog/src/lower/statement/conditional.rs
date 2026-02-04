@@ -108,12 +108,6 @@ pub fn lower_case_statement<'a>(
         items,
     } = arenas.get(case_statement);
 
-    match variant {
-        CaseStatementVariant::Case => {}
-        CaseStatementVariant::CaseZ => todo!(),
-        CaseStatementVariant::CaseX => todo!(),
-    }
-
     let (expr_var, expr_var_ty) = lower_expr(gl, arenas, scope, diagnostics, &mut builder, *expr)?;
 
     let mut origins = Vec::new();
@@ -131,10 +125,20 @@ pub fn lower_case_statement<'a>(
                 let (v, v_ty) = lower_expr(gl, arenas, scope, diagnostics, &mut builder, fst)?;
                 let (expr_var, _, v, _) =
                     coerce_bin_arithmetic(gl, &mut builder, expr_var, expr_var_ty, v, v_ty);
-                let mut acc = builder.equals(gl, expr_var, v);
+                let expr_var_adj = match variant {
+                    CaseStatementVariant::Case => expr_var,
+                    CaseStatementVariant::CaseX => builder.copy_x(gl, expr_var, v),
+                    CaseStatementVariant::CaseZ => builder.copy_z(gl, expr_var, v),
+                };
+                let mut acc = builder.case_equals(gl, expr_var_adj, v);
                 for e in exprs.iter().skip(1) {
                     let (v, _) = lower_expr(gl, arenas, scope, diagnostics, &mut builder, e)?;
-                    let v = builder.equals(gl, expr_var, v);
+                    let expr_var_adj = match variant {
+                        CaseStatementVariant::Case => expr_var,
+                        CaseStatementVariant::CaseX => builder.copy_x(gl, expr_var, v),
+                        CaseStatementVariant::CaseZ => builder.copy_z(gl, expr_var, v),
+                    };
+                    let v = builder.case_equals(gl, expr_var_adj, v);
                     acc = builder.or(gl, acc, v);
                 }
                 acc

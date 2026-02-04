@@ -1,5 +1,3 @@
-use std::ops::{BitAnd as _, BitOr as _, BitXor as _};
-
 use vogls_ir::{Bits, VectorSize};
 
 use super::VType;

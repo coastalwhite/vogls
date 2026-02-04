@@ -39,7 +39,7 @@ pub fn lower<'a>(
                     let net_declaration = arenas.get(*id);
                     let (_, _, width) = match net_declaration.range {
                         None => (0, 0, SCALAR_VSIZE),
-                        Some(range) => evaluate_range(arenas, scope.eval(), diagnostics, range)?,
+                        Some(range) => evaluate_range(gl, arenas, scope.eval(), diagnostics, range)?,
                     };
                     let ty = VType::net(width, net_declaration.signed);
                     match net_declaration.nets {
@@ -88,7 +88,7 @@ pub fn lower<'a>(
                     let ty = VType::SignedNet(INTEGER_VSIZE);
                     for variable_type in integer_declaration.variable_types.iter() {
                         let (_, _, initialize) =
-                            lower_variable_type(arenas, scope, diagnostics, variable_type, ty)?;
+                            lower_variable_type(gl, arenas, scope, diagnostics, variable_type, ty)?;
                         let Some(initialize) = initialize else {
                             continue;
                         };
@@ -156,7 +156,7 @@ pub fn lower<'a>(
                         let bb_key = bb_builder.key();
 
                         let output_size =
-                            net_lvalue_width(arenas, scope, diagnostics, *output_terminal)?;
+                            net_lvalue_width(gl, arenas, scope, diagnostics, *output_terminal)?;
 
                         assert!(!input_terminals.is_empty());
                         let value = input_terminals.first().unwrap();
@@ -396,6 +396,7 @@ pub fn lower<'a>(
 }
 
 pub fn dims_to_array<'a>(
+    gl: &GlobalContext,
     arenas: &'a AstArenas,
     scope: EvalScope<'a>,
     diagnostics: &mut Diagnostics,
@@ -404,8 +405,8 @@ pub fn dims_to_array<'a>(
     let mut dims = Vec::with_capacity(dimensions.len());
     for dim in dimensions.iter().rev() {
         let Dimension { lhs, rhs } = arenas.get(dim);
-        let lhs = eval_constant_expr(arenas, scope, diagnostics, *lhs);
-        let rhs = eval_constant_expr(arenas, scope, diagnostics, *rhs);
+        let lhs = eval_constant_expr(gl, arenas, scope, diagnostics, *lhs);
+        let rhs = eval_constant_expr(gl, arenas, scope, diagnostics, *rhs);
 
         let lhs = lhs?.into_bits().as_i64().unwrap();
         let rhs = rhs?.into_bits().as_i64().unwrap();
@@ -437,6 +438,7 @@ pub fn lower_opt_generate_block<'a>(
 }
 
 pub fn lower_variable_type<'a>(
+    gl: &GlobalContext,
     arenas: &'a AstArenas,
     scope: &Scope<'a>,
     diagnostics: &mut Diagnostics,
@@ -445,7 +447,7 @@ pub fn lower_variable_type<'a>(
 ) -> Result<(Vec<u32>, VectorSize, Option<Bits>), ()> {
     match arenas.get(variable_type).variant {
         VariableTypeVariant::Dimensions(dimensions) => {
-            let dims = dims_to_array(arenas, scope.eval(), diagnostics, dimensions)?;
+            let dims = dims_to_array(gl, arenas, scope.eval(), diagnostics, dimensions)?;
             let mut size = ty.force_net_width().get();
             for dim in &dims {
                 size = size.checked_mul(*dim).ok_or_else(|| {
@@ -461,7 +463,7 @@ pub fn lower_variable_type<'a>(
             Ok((dims, size, None))
         }
         VariableTypeVariant::ConstantExpr(expr) => {
-            let value = eval_constant_expr(arenas, scope.eval(), diagnostics, expr)?;
+            let value = eval_constant_expr(gl, arenas, scope.eval(), diagnostics, expr)?;
             let value = value.truncate_or_extend(ty.force_net_width());
             Ok((Vec::new(), ty.force_net_width(), Some(value.into_bits())))
         }

@@ -44,7 +44,7 @@ pub fn assign_variable_lvalue<'a>(
     assert!(!lvalue.0.is_empty());
     let mut total_width = 0u32;
     for lvf in lvalue.0.iter() {
-        let ty = variable_lvalue_flat_ty(arenas, scope, diagnostics, lvf)?;
+        let ty = variable_lvalue_flat_ty(gl, arenas, scope, diagnostics, lvf)?;
         total_width += ty.force_net_width().get();
     }
     let variable = truncate_or_extend(
@@ -57,7 +57,7 @@ pub fn assign_variable_lvalue<'a>(
 
     let mut offset = 0u32;
     for lvf in lvalue.0.iter().rev() {
-        let ty = variable_lvalue_flat_ty(arenas, scope, diagnostics, lvf)?;
+        let ty = variable_lvalue_flat_ty(gl, arenas, scope, diagnostics, lvf)?;
         let width = ty.force_net_width();
         let variable = builder.extract_constant(gl, variable, offset, width);
         assign_variable_lvalue_flat(
@@ -77,6 +77,7 @@ pub fn assign_variable_lvalue<'a>(
 }
 
 pub fn variable_lvalue_flat_ty<'a>(
+    gl: &GlobalContext,
     arenas: &'a AstArenas,
     scope: &Scope<'a>,
     diagnostics: &mut Diagnostics,
@@ -134,11 +135,11 @@ pub fn variable_lvalue_flat_ty<'a>(
             }
             RangeExpression::MsbLsb(msb, lsb) => {
                 let (_, _, width) =
-                    msb_lsb_to_width(arenas, scope.eval(), diagnostics, *msb, *lsb)?;
+                    msb_lsb_to_width(gl, arenas, scope.eval(), diagnostics, *msb, *lsb)?;
                 Ok(VType::UnsignedNet(width))
             }
             RangeExpression::BasePlus(_, width) | RangeExpression::BaseMinus(_, width) => {
-                let width = eval_constant_expr(arenas, scope.eval(), diagnostics, *width)?;
+                let width = eval_constant_expr(gl, arenas, scope.eval(), diagnostics, *width)?;
                 Ok(VType::UnsignedNet(width.to_vector_size().unwrap()))
             }
         },
@@ -249,8 +250,14 @@ pub fn assign_variable_lvalue_flat<'a>(
                             (expr, SCALAR_VSIZE)
                         }
                         RangeExpression::MsbLsb(msb, lsb) => {
-                            let (_, lsb, width) =
-                                msb_lsb_to_width(arenas, scope.eval(), diagnostics, *msb, *lsb)?;
+                            let (_, lsb, width) = msb_lsb_to_width(
+                                gl,
+                                arenas,
+                                scope.eval(),
+                                diagnostics,
+                                *msb,
+                                *lsb,
+                            )?;
                             (
                                 builder.constant(
                                     gl,
@@ -259,8 +266,54 @@ pub fn assign_variable_lvalue_flat<'a>(
                                 width,
                             )
                         }
-                        RangeExpression::BasePlus(_, _) => todo!("BasePlus"),
-                        RangeExpression::BaseMinus(_, _) => todo!("BaseMinus"),
+                        RangeExpression::BasePlus(expr, ast_width) => {
+                            let (expr, expr_ty) =
+                                lower_expr(gl, arenas, scope, diagnostics, builder, *expr)?;
+                            let expr =
+                                sign_or_zero_extend(gl, builder, expr, expr_ty, INTEGER_VSIZE);
+                            let width = eval_constant_expr(
+                                gl,
+                                arenas,
+                                scope.eval(),
+                                diagnostics,
+                                *ast_width,
+                            )?;
+                            let width = width
+                                .truncate_or_extend(INTEGER_VSIZE)
+                                .as_integer()
+                                .unwrap() as u32;
+                            let Some(width) = VectorSize::new(width) else {
+                                diagnostics
+                                    .not_yet_implemented(arenas.get_span(*ast_width), "zero width");
+                                return Err(());
+                            };
+                            (expr, width)
+                        }
+                        RangeExpression::BaseMinus(expr, ast_width) => {
+                            let (expr, expr_ty) =
+                                lower_expr(gl, arenas, scope, diagnostics, builder, *expr)?;
+                            let expr =
+                                sign_or_zero_extend(gl, builder, expr, expr_ty, INTEGER_VSIZE);
+                            let width = eval_constant_expr(
+                                gl,
+                                arenas,
+                                scope.eval(),
+                                diagnostics,
+                                *ast_width,
+                            )?;
+                            let width = width
+                                .truncate_or_extend(INTEGER_VSIZE)
+                                .as_integer()
+                                .unwrap() as u32;
+                            let Some(width) = VectorSize::new(width) else {
+                                diagnostics
+                                    .not_yet_implemented(arenas.get_span(*ast_width), "zero width");
+                                return Err(());
+                            };
+                            let width_v = builder.constant_u32(gl, width.get() - 1);
+                            let lsb = builder.minus(gl, expr, width_v);
+                            (lsb, width)
+                        }
                     };
 
                     match arr_idx {
@@ -319,7 +372,7 @@ pub fn assign_net_lvalue<'a>(
     assert!(!lvalue.0.is_empty());
     let mut total_width = 0u32;
     for lvf in lvalue.0.iter() {
-        let ty = net_lvalue_flat_ty(arenas, scope, diagnostics, lvf)?;
+        let ty = net_lvalue_flat_ty(gl, arenas, scope, diagnostics, lvf)?;
         total_width += ty.force_net_width().get();
     }
     let variable = truncate_or_extend(
@@ -332,7 +385,7 @@ pub fn assign_net_lvalue<'a>(
 
     let mut offset = 0u32;
     for lvf in lvalue.0.iter().rev() {
-        let ty = net_lvalue_flat_ty(arenas, scope, diagnostics, lvf)?;
+        let ty = net_lvalue_flat_ty(gl, arenas, scope, diagnostics, lvf)?;
         let width = ty.force_net_width();
         let variable = builder.extract_constant(gl, variable, offset, width);
         assign_net_lvalue_flat(gl, arenas, scope, diagnostics, builder, lvf, variable, ty)?;
@@ -342,6 +395,7 @@ pub fn assign_net_lvalue<'a>(
 }
 
 pub fn net_lvalue_flat_ty<'a>(
+    gl: &GlobalContext,
     arenas: &'a AstArenas,
     scope: &Scope<'a>,
     diagnostics: &mut Diagnostics,
@@ -399,7 +453,7 @@ pub fn net_lvalue_flat_ty<'a>(
             }
             ConstantRangeExpression::MsbLsb { msb, lsb } => {
                 let (_, _, width) =
-                    msb_lsb_to_width(arenas, scope.eval(), diagnostics, *msb, *lsb)?;
+                    msb_lsb_to_width(gl, arenas, scope.eval(), diagnostics, *msb, *lsb)?;
                 Ok(VType::UnsignedNet(width))
             } // RangeExpression::BasePlus(_, width) | RangeExpression::BaseMinus(_, width) => {
               //     let width = eval_constant_expr(gl, arenas, scope, diagnostics, *width)?;
@@ -435,7 +489,7 @@ fn assign_net_lvalue_flat<'a>(
     {
         dims = &dims[1..];
         let mut leaf_arr_items = dims.iter().product::<u32>();
-        let fst = eval_constant_expr(arenas, scope.eval(), diagnostics, fst)?;
+        let fst = eval_constant_expr(gl, arenas, scope.eval(), diagnostics, fst)?;
         let fst = fst.as_integer().unwrap();
         let mut offset = fst as u32 * leaf_arr_items;
 
@@ -443,7 +497,7 @@ fn assign_net_lvalue_flat<'a>(
             && let Some(expr) = exprs.pop_front()
         {
             leaf_arr_items /= *dim;
-            let expr = eval_constant_expr(arenas, scope.eval(), diagnostics, expr)?;
+            let expr = eval_constant_expr(gl, arenas, scope.eval(), diagnostics, expr)?;
             let expr = expr.as_integer().unwrap();
             let expr = expr as u32 * leaf_arr_items;
             offset += expr;
@@ -467,7 +521,7 @@ fn assign_net_lvalue_flat<'a>(
 
         dims = &dims[1..];
         let leaf_arr_items = dims.iter().product::<u32>();
-        let fst = eval_constant_expr(arenas, scope.eval(), diagnostics, *expr)?;
+        let fst = eval_constant_expr(gl, arenas, scope.eval(), diagnostics, *expr)?;
         let fst = fst.as_integer().unwrap();
         let offset = fst as u32 * leaf_arr_items;
 
@@ -494,14 +548,14 @@ fn assign_net_lvalue_flat<'a>(
         Some(range_expression) => {
             let (offset, length) = match arenas.get(range_expression) {
                 ConstantRangeExpression::Single(expr) => (
-                    eval_constant_expr(arenas, scope.eval(), diagnostics, *expr)?
+                    eval_constant_expr(gl, arenas, scope.eval(), diagnostics, *expr)?
                         .as_integer()
                         .unwrap(),
                     VectorSize::new(1).unwrap(),
                 ),
                 ConstantRangeExpression::MsbLsb { msb, lsb } => {
                     let (_, lsb, size) =
-                        msb_lsb_to_width(arenas, scope.eval(), diagnostics, *msb, *lsb)?;
+                        msb_lsb_to_width(gl, arenas, scope.eval(), diagnostics, *msb, *lsb)?;
                     (lsb, size)
                 }
             };
@@ -522,6 +576,7 @@ fn assign_net_lvalue_flat<'a>(
 }
 
 pub fn net_lvalue_width<'a>(
+    gl: &GlobalContext,
     arenas: &'a AstArenas,
     scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
@@ -532,11 +587,12 @@ pub fn net_lvalue_width<'a>(
         .0
         .first()
         .expect("Concatenation should have at least one value");
-    let mut size = net_lvalue_flat_ty(arenas, scope, diagnostics, lvalue_flat)?.force_net_width();
+    let mut size =
+        net_lvalue_flat_ty(gl, arenas, scope, diagnostics, lvalue_flat)?.force_net_width();
 
     for lvalue_flat in lvalue.0.iter().skip(1) {
         let lvalue_size =
-            net_lvalue_flat_ty(arenas, scope, diagnostics, lvalue_flat)?.force_net_width();
+            net_lvalue_flat_ty(gl, arenas, scope, diagnostics, lvalue_flat)?.force_net_width();
         size = size.checked_add(lvalue_size.get()).ok_or_else(|| {
             diagnostics.net_width_overflow(arenas.get_span(output_terminal));
         })?;

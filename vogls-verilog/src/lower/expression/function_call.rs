@@ -29,19 +29,19 @@ pub fn lower_function_call<'a>(
     };
 
     let lowered = fn_symbol.lowered.as_ref().unwrap();
-    assert_eq!(lowered.input_vars.len(), lowered.input_types.len());
-    if lowered.input_vars.len() != arguments.len() {
+    if fn_symbol.inputs.len() != arguments.len() {
         diagnostics.not_yet_implemented(arenas.get_span(expr), "invalid number of arguments");
         return Err(());
     }
 
     let mut map = HashMap::new();
-    for i in 0..lowered.input_vars.len() {
+    for i in 0..fn_symbol.inputs.len() {
+        let (input_signal, input_ty) = fn_symbol.inputs[i] else {
+            return Err(());
+        };
         let Some((arg_variable, arg_ty)) = arguments[i] else {
             return Err(());
         };
-        let input_var = lowered.input_vars[i];
-        let input_ty = lowered.input_types[i];
         let arg_variable = truncate_or_extend(
             gl,
             builder,
@@ -49,7 +49,7 @@ pub fn lower_function_call<'a>(
             arg_ty,
             input_ty.force_net_width(),
         );
-        map.insert(input_var, arg_variable);
+        builder.drive(gl, input_signal, arg_variable);
     }
 
     let mut fn_bb = gl.bbs[lowered.entry].clone();
@@ -66,7 +66,9 @@ pub fn lower_function_call<'a>(
     let fn_bb = gl.bbs.insert(fn_bb);
     gl.bbs[origin_bb].terminator = BasicBlockTerminator::Jump(fn_bb);
 
-    Ok((map[&lowered.output_var], lowered.output_ty))
+    let output_var = builder.probe(gl, fn_symbol.output);
+
+    Ok((output_var, fn_symbol.output_ty.clone()))
 }
 
 pub fn lower_task_enable<'a>(
@@ -84,17 +86,15 @@ pub fn lower_task_enable<'a>(
         return Err(());
     };
 
-    let task_symbol = task_symbol.lowered.as_ref().unwrap();
-
-    assert_eq!(task_symbol.io_vars.len(), task_symbol.io_types.len());
-    if task_symbol.io_vars.len() != arguments.len() {
+    let lowered = task_symbol.lowered.as_ref().unwrap();
+    if task_symbol.io.len() != arguments.len() {
         diagnostics.not_yet_implemented(arenas.get_item_span(ident), "invalid number of arguments");
         return Err(());
     }
 
     let mut map = HashMap::new();
-    for i in 0..task_symbol.io_vars.len() {
-        let (direction, input_ty) = task_symbol.io_types[i];
+    for i in 0..task_symbol.io.len() {
+        let (signal, direction, input_ty) = task_symbol.io[i];
         if !matches!(
             direction,
             ConnectionDirection::In | ConnectionDirection::Both
@@ -103,7 +103,6 @@ pub fn lower_task_enable<'a>(
         }
 
         let arg = arguments.get(i);
-        let input_var = task_symbol.io_vars[i];
 
         let (arg_variable, arg_ty) = lower_expr(gl, arenas, scope, diagnostics, &mut builder, arg)?;
         let arg_variable = truncate_or_extend(
@@ -113,23 +112,18 @@ pub fn lower_task_enable<'a>(
             arg_ty,
             input_ty.force_net_width(),
         );
-        map.insert(input_var, arg_variable);
+        builder.drive(gl, signal, arg_variable);
     }
 
     let mut bb_stack = Vec::new();
     let mut bb_map = HashMap::new();
 
-    let fn_bb = gl.bbs.insert(gl.bbs[task_symbol.entry].clone());
-    let mut terminator_bb = fn_bb;
+    let fn_bb = gl.bbs.insert(gl.bbs[lowered.entry].clone());
 
     bb_stack.push(fn_bb);
-    bb_map.insert(task_symbol.entry, fn_bb);
+    bb_map.insert(lowered.entry, fn_bb);
     while let Some(bb_key) = bb_stack.pop() {
         let terminator = gl.bbs[bb_key].terminator.clone();
-        if matches!(terminator, BasicBlockTerminator::Halt) {
-            terminator_bb = bb_key;
-        }
-
         terminator.for_each_bb(|bb| {
             _ = bb_map.entry(bb).or_insert_with(|| {
                 let new_bb = gl.bbs.insert(gl.bbs[bb].clone());
@@ -155,8 +149,8 @@ pub fn lower_task_enable<'a>(
             .extend_next_rev(&mut bb_stack, &mut bb_seen);
     }
 
-    for i in 0..task_symbol.io_vars.len() {
-        let (direction, output_ty) = task_symbol.io_types[i];
+    for i in 0..task_symbol.io.len() {
+        let (signal, direction, output_ty) = task_symbol.io[i];
         if !matches!(
             direction,
             ConnectionDirection::Out | ConnectionDirection::Both
@@ -165,7 +159,7 @@ pub fn lower_task_enable<'a>(
         }
 
         let arg = arguments.get(i);
-        let output_var = task_symbol.io_vars[i];
+        let output_var = builder.probe(gl, signal);
         assign_task_output(
             gl,
             arenas,
@@ -181,7 +175,10 @@ pub fn lower_task_enable<'a>(
     let origin_bb = builder.key();
     let builder = builder.next_terminate_later(gl);
     gl.bbs[origin_bb].terminator = BasicBlockTerminator::Jump(fn_bb);
-    gl.bbs[terminator_bb].terminator = BasicBlockTerminator::Jump(builder.key());
+    if let Some(terminate) = bb_map.get(&lowered.terminate) {
+        // Procedure might contain infinite loop.
+        gl.bbs[*terminate].terminator = BasicBlockTerminator::Jump(builder.key());
+    }
 
     Ok(builder)
 }

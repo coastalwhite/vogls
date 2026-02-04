@@ -124,9 +124,11 @@ pub(crate) fn exec_tv_bin_arith(
             O::Xor => tv_u64_bitwise_xor,
             O::Add => A::tv_addition,
             O::Sub => A::tv_subtraction,
+            O::Power => A::tv_power,
             O::Multiply => A::tv_multiplication,
             O::Divide => tv_u64_division,
             O::Modulus => tv_u64_modulus,
+            O::CopyX | O::CopyZ => unreachable!(),
         };
 
         let nwords = size.get().div_ceil(64) as usize;
@@ -141,9 +143,11 @@ pub(crate) fn exec_tv_bin_arith(
             O::Xor => tv_u8_bitwise_xor,
             O::Add => A::tv_ltu64_addition,
             O::Sub => A::tv_ltu64_subtraction,
+            O::Power => A::tv_ltu64_power,
             O::Multiply => A::tv_ltu64_multiplication,
             O::Divide => A::tv_ltu64_division,
             O::Modulus => A::tv_ltu64_modulus,
+            O::CopyX | O::CopyZ => unreachable!(),
         };
 
         let (dst, lhs, rhs) =

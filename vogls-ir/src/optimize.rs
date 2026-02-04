@@ -304,14 +304,17 @@ pub fn propagate_constants<'a>(
                                     {
                                         Bits::new_zeroed(size)
                                     }
-                                    O::UnsignedLessEqual
+                                    O::Power
+                                    | O::UnsignedLessEqual
                                     | O::CaseEquality
                                     | O::Modulus
                                     | O::SelectBit
                                     | O::LogicalShiftLeft
                                     | O::LogicalShiftRight
                                     | O::ArithmeticShiftRight
-                                    | O::Concat => continue,
+                                    | O::Concat
+                                    | O::CopyX
+                                    | O::CopyZ => continue,
                                 }
                             }
                             (None, None) => continue,

@@ -270,6 +270,45 @@ impl BasicBlockBuilder {
         xnor
     }
 
+    fn copy_op(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+        op: BinaryOp,
+    ) -> VariableKey {
+        let size = gl.vars[lhs].size;
+        assert_eq!(size, gl.vars[rhs].size);
+        let dst = self.next_tmp_var(gl, size);
+        self.bin_op(gl, lhs, rhs, op, dst);
+        dst
+    }
+
+    pub fn copy_x(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+    ) -> VariableKey {
+        self.copy_op(gl, lhs, rhs, BinaryOp::CopyX)
+    }
+    pub fn copy_z(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+    ) -> VariableKey {
+        self.copy_op(gl, lhs, rhs, BinaryOp::CopyZ)
+    }
+
+    pub fn power(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+    ) -> VariableKey {
+        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::Power)
+    }
     pub fn multiply(
         &mut self,
         gl: &mut GlobalContext,
@@ -765,6 +804,15 @@ impl BasicBlockBuilder {
         self.instrs.push(Instruction::Intrinsic(
             dst,
             Box::new(IntrinsicOp::Time),
+            Default::default(),
+        ));
+        dst
+    }
+    pub fn random(&mut self, gl: &mut GlobalContext) -> VariableKey {
+        let dst = self.next_tmp_var(gl, INTEGER_VSIZE);
+        self.instrs.push(Instruction::Intrinsic(
+            dst,
+            Box::new(IntrinsicOp::Random),
             Default::default(),
         ));
         dst

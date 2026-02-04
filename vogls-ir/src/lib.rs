@@ -217,6 +217,7 @@ pub const SCALAR_VSIZE: VectorSize = NonZeroU32::new(1).unwrap();
 pub enum IntrinsicOp {
     Time,
     Finish,
+    Random,
     Display(Box<DynFormatString>),
     Assert(Box<DynFormatString>),
     VcdOpenFile(String),
@@ -247,6 +248,7 @@ pub enum BinaryOp {
     Xor,
     Add,
     Sub,
+    Power,
     Multiply,
     Divide,
     Modulus,
@@ -258,6 +260,12 @@ pub enum BinaryOp {
     ArithmeticShiftRight,
     Concat,
 
+    /// Copy X from rhs into lhs
+    CopyX,
+    /// Copy Z from rhs into lhs
+    CopyZ,
+
+    /// Exact bitpattern equality
     CaseEquality,
 }
 
@@ -446,6 +454,7 @@ impl BinaryOp {
             O::Xor => Bits::bitwise_xor(lhs, rhs),
             O::Add => Bits::add(lhs, rhs),
             O::Sub => Bits::subtract(lhs, rhs),
+            O::Power => Bits::power(lhs, rhs),
             O::Multiply => Bits::multiply(lhs, rhs),
             O::Divide => Bits::divide(lhs, rhs),
             O::Modulus => Bits::remainder(lhs, rhs),
@@ -457,6 +466,8 @@ impl BinaryOp {
             O::LogicalShiftRight => lhs.logical_shift_right(rhs.extract_exact_u32()),
             O::ArithmeticShiftRight => lhs.arithmetic_shift_right(rhs.extract_exact_u32()),
             O::Concat => Bits::concatenate(lhs, rhs),
+            O::CopyX => Bits::copyx(lhs, rhs),
+            O::CopyZ => Bits::copyz(lhs, rhs),
         }
     }
 }

@@ -154,6 +154,7 @@ impl BinaryOp {
             Self::Xor => "xor",
             Self::Add => "add",
             Self::Sub => "sub",
+            Self::Power => "pow",
             Self::Multiply => "mul",
             Self::Divide => "div",
             Self::Modulus => "rem",
@@ -165,6 +166,9 @@ impl BinaryOp {
             Self::LogicalShiftRight => "lsr",
             Self::ArithmeticShiftRight => "asr",
             Self::Concat => "concat",
+
+            Self::CopyX => "copyx",
+            Self::CopyZ => "copyz",
         }
     }
 }
@@ -194,6 +198,7 @@ impl IntrinsicOp {
         match self {
             Self::Finish => "finish",
             Self::Time => "time",
+            Self::Random => "random",
             Self::Display(_) => "display",
             Self::Assert(_) => "vogls.assert",
             Self::VcdOpenFile(_) => "vcd.open_file",

@@ -1,5 +1,7 @@
 use vogls_frontend::symbol_table::SymbolId;
-use vogls_ir::{INTEGER_VSIZE, SCALAR_VSIZE, Signal, SignalKey};
+use vogls_ir::{
+    ConnectionDirection, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE, Signal, SignalKey,
+};
 
 use crate::ast::AstIdRange;
 use crate::ast::module::{
@@ -10,10 +12,10 @@ use crate::elaborate::NetSymbol;
 use crate::lower::{Diagnostics, EvalScope, VType, evaluate_range};
 use crate::parser::AstArenas;
 
-use super::{VSymbol, VSymbolTable, eval_constant_range};
+use super::{VSymbol, VSymbolTable, elaborate_block_item_decl, eval_constant_range};
 
 pub fn elaborate_fn<'a>(
-    signals: &mut slotmap::SlotMap<SignalKey, Signal>,
+    gl: &mut GlobalContext,
     arenas: &'a AstArenas,
     symbol: SymbolId,
     table: &mut VSymbolTable,
@@ -25,6 +27,7 @@ pub fn elaborate_fn<'a>(
 
     let parent = table[symbol].parent().unwrap();
     let id = i.ast_id;
+    let output_key = i.output;
     let FunctionDeclaration {
         ident,
         tf_input_decls,
@@ -34,20 +37,17 @@ pub fn elaborate_fn<'a>(
         ..
     } = arenas.get(id);
 
-    if !block_item_decls.is_empty() {
-        diagnostics.not_yet_implemented(arenas.get_span(id), "block item decls");
-        return Err(());
-    }
-
     let (_, _, output_ty) = match arenas.get(*range_or_type) {
         FunctionRangeOrType::Unsigned(None) => (0, 0, VType::UnsignedNet(SCALAR_VSIZE)),
         FunctionRangeOrType::Signed(None) => (0, 0, VType::SignedNet(SCALAR_VSIZE)),
         FunctionRangeOrType::Unsigned(Some(range)) => {
-            let (msb, lsb, size) = eval_constant_range(arenas, parent, table, diagnostics, *range)?;
+            let (msb, lsb, size) =
+                eval_constant_range(gl, arenas, parent, table, diagnostics, *range)?;
             (msb, lsb, VType::UnsignedNet(size))
         }
         FunctionRangeOrType::Signed(Some(range)) => {
-            let (msb, lsb, size) = eval_constant_range(arenas, parent, table, diagnostics, *range)?;
+            let (msb, lsb, size) =
+                eval_constant_range(gl, arenas, parent, table, diagnostics, *range)?;
             (msb, lsb, VType::SignedNet(size))
         }
         FunctionRangeOrType::Integer => (31, 0, VType::SignedNet(INTEGER_VSIZE)),
@@ -62,12 +62,12 @@ pub fn elaborate_fn<'a>(
 
     let fn_name = &arenas.ident_table[ident.item.0];
     let output_origin = arenas.get_item_span(*ident);
-    let output_key = signals.insert(Signal {
+    gl.signals[output_key] = Signal {
         name: fn_name.to_string(),
         size: output_ty.force_net_width(),
         initialize: None,
         origin: output_origin,
-    });
+    };
     if table
         .insert(
             ident.item.0,
@@ -87,6 +87,11 @@ pub fn elaborate_fn<'a>(
         return Err(());
     }
 
+    for item_decl in block_item_decls.iter() {
+        elaborate_block_item_decl(gl, arenas, symbol, table, diagnostics, item_decl)?;
+    }
+
+    let mut inputs = Vec::<(SignalKey, VType)>::new();
     for input_decl in tf_input_decls.iter() {
         let TfInputDeclaration {
             tf_type,
@@ -103,6 +108,7 @@ pub fn elaborate_fn<'a>(
                         None => (0, 0, SCALAR_VSIZE),
                         // @TODO: Better error
                         Some(range) => evaluate_range(
+                            gl,
                             arenas,
                             EvalScope { table, key: symbol },
                             diagnostics,
@@ -118,7 +124,7 @@ pub fn elaborate_fn<'a>(
             let ident = arenas.to_item(ident);
             let name = &arenas.ident_table[ident.item.0];
             let origin = arenas.get_item_span(ident);
-            let signal = signals.insert(Signal {
+            let signal = gl.signals.insert(Signal {
                 name: name.to_string(),
                 size: ty.force_net_width(),
                 initialize: None,
@@ -142,11 +148,18 @@ pub fn elaborate_fn<'a>(
                 diagnostics.duplicate_definition(arenas, ident);
                 return Err(());
             }
+            inputs.push((signal, ty));
         }
     }
 
+    let VSymbol::Function(i) = &mut table[symbol].content else {
+        unreachable!();
+    };
+    i.inputs = inputs;
+    i.output_ty = output_ty;
+
     super::elaborate_statements(
-        signals,
+        gl,
         arenas,
         symbol,
         table,
@@ -156,7 +169,7 @@ pub fn elaborate_fn<'a>(
 }
 
 pub fn elaborate_task<'a>(
-    signals: &mut slotmap::SlotMap<SignalKey, Signal>,
+    gl: &mut GlobalContext,
     arenas: &'a AstArenas,
     symbol: SymbolId,
     table: &mut VSymbolTable,
@@ -175,16 +188,17 @@ pub fn elaborate_task<'a>(
         ..
     } = arenas.get(id);
 
-    if !block_item_decls.is_empty() {
-        diagnostics.not_yet_implemented(arenas.get_span(id), "block item decls");
-        return Err(());
+    for item_decl in block_item_decls.iter() {
+        elaborate_block_item_decl(gl, arenas, symbol, table, diagnostics, item_decl)?;
     }
 
+    let mut io = Vec::<(SignalKey, ConnectionDirection, VType)>::new();
     for decl in task_ports.iter() {
-        let (tf_type, port_identifiers) = match arenas.get(decl).content {
-            TaskPortItemContent::Input(d) => (d.tf_type, d.port_identifiers),
-            TaskPortItemContent::Output(d) => (d.tf_type, d.port_identifiers),
-            TaskPortItemContent::Inout(d) => (d.tf_type, d.port_identifiers),
+        use ConnectionDirection as D;
+        let (tf_type, direction, port_identifiers) = match arenas.get(decl).content {
+            TaskPortItemContent::Input(d) => (d.tf_type, D::In, d.port_identifiers),
+            TaskPortItemContent::Output(d) => (d.tf_type, D::Out, d.port_identifiers),
+            TaskPortItemContent::Inout(d) => (d.tf_type, D::Both, d.port_identifiers),
         };
         for ident in port_identifiers.iter() {
             let ty = match tf_type {
@@ -197,7 +211,7 @@ pub fn elaborate_task<'a>(
                         None => (0, 0, SCALAR_VSIZE),
                         // @TODO: Better error
                         Some(range) => {
-                            eval_constant_range(arenas, parent, table, diagnostics, range)?
+                            eval_constant_range(gl, arenas, parent, table, diagnostics, range)?
                         }
                     };
                     VType::net(width, signed)
@@ -208,7 +222,7 @@ pub fn elaborate_task<'a>(
             let ident = arenas.to_item(ident);
             let name = &arenas.ident_table[ident.item.0];
             let origin = arenas.get_item_span(ident);
-            let signal = signals.insert(Signal {
+            let signal = gl.signals.insert(Signal {
                 name: name.to_string(),
                 size: ty.force_net_width(),
                 initialize: None,
@@ -232,15 +246,14 @@ pub fn elaborate_task<'a>(
                 diagnostics.duplicate_definition(arenas, ident);
                 return Err(());
             }
+            io.push((signal, direction, ty));
         }
     }
 
-    super::elaborate_statement_or_null(
-        signals,
-        arenas,
-        symbol,
-        table,
-        diagnostics,
-        *statement_or_null,
-    )
+    let VSymbol::Task(i) = &mut table[symbol].content else {
+        unreachable!();
+    };
+    i.io = io;
+
+    super::elaborate_statement_or_null(gl, arenas, symbol, table, diagnostics, *statement_or_null)
 }

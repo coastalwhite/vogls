@@ -115,6 +115,7 @@ pub(crate) fn exec_fv_bin_arith(
     use BinaryArithmeticOp as O;
 
     use vogls_bits::arithmetic as A;
+    use vogls_bits::copyxz as C;
 
     fn fv_u8_bitwise_and(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: VectorSize) {
         A::fv_bin_bitwise_op(dst, lhs, rhs, size, A::fv_bitwise_and_elem)
@@ -144,6 +145,12 @@ pub(crate) fn exec_fv_bin_arith(
         let mut quotient = vec![0u64; dst.len()];
         A::fv_division(&mut quotient, dst, lhs, rhs, size);
     }
+    fn fv_u64_copy_x(dst: &mut [u64], lhs: &[u64], rhs: &[u64], _size: VectorSize) {
+        C::fv_l_copy_x(dst, lhs, rhs);
+    }
+    fn fv_u64_copy_z(dst: &mut [u64], lhs: &[u64], rhs: &[u64], _size: VectorSize) {
+        C::fv_l_copy_z(dst, lhs, rhs);
+    }
 
     if dst.size.get() > 16 {
         let f = match op {
@@ -152,9 +159,12 @@ pub(crate) fn exec_fv_bin_arith(
             O::Xor => fv_u64_bitwise_xor,
             O::Add => A::fv_addition,
             O::Sub => A::fv_subtraction,
+            O::Power => A::fv_power,
             O::Multiply => A::fv_multiplication,
             O::Divide => fv_u64_division,
             O::Modulus => fv_u64_modulus,
+            O::CopyX => fv_u64_copy_x,
+            O::CopyZ => fv_u64_copy_z,
         };
 
         let nwords = 2 * dst.size.get().div_ceil(64) as usize;
@@ -169,9 +179,12 @@ pub(crate) fn exec_fv_bin_arith(
             O::Xor => fv_u8_bitwise_xor,
             O::Add => A::fv_ltu32_addition,
             O::Sub => A::fv_ltu32_subtraction,
+            O::Power => A::fv_ltu32_power,
             O::Multiply => A::fv_ltu32_multiplication,
             O::Divide => A::fv_ltu32_division,
             O::Modulus => A::fv_ltu32_modulus,
+            O::CopyX => C::fv_s_copy_x,
+            O::CopyZ => C::fv_s_copy_z,
         };
 
         let (dst_s, lhs_s, rhs_s) = stack.get_disjoint_u8_dst_s1_s2(

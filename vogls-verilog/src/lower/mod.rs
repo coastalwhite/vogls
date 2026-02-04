@@ -27,6 +27,46 @@ pub struct EvalScope<'a> {
     pub key: SymbolId,
 }
 
+fn extend_symbol_table_to_vcd_scope(
+    scope: &mut VcdScope,
+    symbols: &[SymbolId],
+    table: &VSymbolTable,
+    ident_table: &IdentTable,
+) {
+    use VSymbol as S;
+    for sid in symbols.iter() {
+        let name = &ident_table[table[*sid].name()];
+        match &table[*sid].content {
+            S::Module(_) | S::NamedBlock | S::GenerateBlock(_) => {
+                let mut subscope = VcdScope {
+                    name: name.to_string(),
+                    items: Vec::new(),
+                };
+                extend_symbol_table_to_vcd_scope(
+                    &mut subscope,
+                    table[*sid].children(),
+                    table,
+                    ident_table,
+                );
+                scope
+                    .items
+                    .push(vogls_ir::vcd::VcdScopeItem::Scope(subscope));
+            }
+            S::Net(i) => {
+                scope.items.push(vogls_ir::vcd::VcdScopeItem::Variable(
+                    vogls_ir::vcd::VcdVariable {
+                        signal: i.signal,
+                        ty: vogls_ir::vcd::NetType::Wire,
+                        msb: (i.ty.force_net_width().get() - 1) as i64,
+                        lsb: 0,
+                    },
+                ));
+            }
+            S::Task(_) | S::Function(_) | S::Parameter(_) | S::GenVar => {}
+        }
+    }
+}
+
 impl<'a> Scope<'a> {
     pub fn eval<'b>(&'b self) -> EvalScope<'b> {
         EvalScope {
@@ -35,9 +75,18 @@ impl<'a> Scope<'a> {
         }
     }
 
-    fn vcd_scope(&self) -> vogls_ir::vcd::VcdScope {
-        todo!()
-        // self.hierarchy.vcd_scope(self.key, 0)
+    fn vcd_scope(&self, ident_table: &IdentTable) -> vogls_ir::vcd::VcdScope {
+        let mut key = self.key;
+        while let Some(parent) = self.table[key].parent() {
+            key = parent;
+        }
+
+        let mut scope = VcdScope {
+            name: "ROOT".to_string(),
+            items: Vec::new(),
+        };
+        extend_symbol_table_to_vcd_scope(&mut scope, &[key], self.table, ident_table);
+        scope
     }
 }
 
@@ -225,20 +274,18 @@ pub fn try_resolve_constant<'a>(
 
 use std::collections::HashMap;
 
-use vogls_frontend::ident_table::IdentId;
+use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::token_range::TokenRange;
+use vogls_ir::vcd::VcdScope;
 use vogls_ir::{
     BasicBlockBuilder, GlobalContext, SCALAR_VSIZE, Signal, SignalKey, VariableKey, VectorSize,
-    new_process,
+    new_anonymous_builder, new_process,
 };
 
-use crate::ast::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression};
+use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::expr::{BitSlice, Expr};
-use crate::ast::module::{
-    GenerateRegion, Module, ModuleItem, NonPortModuleItem, ParamAssignment, ParameterDeclaration,
-    Range,
-};
+use crate::ast::module::{GenerateRegion, Module, ModuleItem, NonPortModuleItem, Range};
 use crate::ast::{AstId, AstItem, HIdent, Identifier};
 use crate::elaborate::{
     FunctionSymbol, ModuleSymbol, NetSymbol, TaskSymbol, VSymbol, VSymbolTable,
@@ -300,24 +347,7 @@ pub fn lower_module_to_ir<'a>(
                     }
                 }
                 NonPortModuleItem::SpecifyBlock => todo!(),
-                NonPortModuleItem::ParameterDeclaration(id) => {
-                    let ParameterDeclaration {
-                        typing: _,
-                        assignments,
-                    } = arenas.get(*id);
-                    for assignment in assignments.iter() {
-                        let ParamAssignment { param: _, constant } = arenas.get(assignment);
-                        let ConstantMinTypMaxExpression::Single(constant) = arenas.get(*constant)
-                        else {
-                            todo!();
-                        };
-
-                        let _value =
-                            eval_constant_expr(arenas, scope.eval(), diagnostics, *constant)?;
-                        todo!()
-                        // scope.push(arenas.get_ident(param.item.0), ScopeItem::Constant(v));
-                    }
-                }
+                NonPortModuleItem::ParameterDeclaration(_) => {}
                 NonPortModuleItem::SpecParamDeclaration => todo!(),
             },
         }
@@ -399,21 +429,29 @@ fn assign_port_output<'a>(
         }
     }
 
-    let mut driving: Vec<AstId<Expr>> = Vec::new();
-    driving.push(expr);
-
-    let signal = unwrap_get_net(scope.table, output_net).signal;
-
     let mut bb_builder = new_process(gl, "port_assignment".into(), arenas.get_span(expr));
     let bb_key = bb_builder.key();
 
+    let net = unwrap_get_net(scope.table, output_net);
+    let signal = net.signal;
+    let ty = net.ty;
     let probed = bb_builder.probe(gl, signal);
 
+    let mut driving: Vec<(VariableKey, VType, AstId<Expr>)> = Vec::new();
+    driving.push((probed, ty, expr));
+
     let mut error = false;
-    while let Some(expr) = driving.pop() {
+    while let Some((var, var_ty, expr)) = driving.pop() {
         match arenas.get(expr) {
-            Expr::Concatenation(_) => {
-                todo!()
+            Expr::Concatenation(exprs) => {
+                let mut shift = 0;
+                for e in exprs.iter().rev() {
+                    let e_ty = expr_to_ty(gl, arenas, scope, e, diagnostics)?;
+                    let e_width = e_ty.force_net_width();
+                    let subvar = bb_builder.extract_constant(gl, var, shift, e_width);
+                    driving.push((subvar, e_ty, e));
+                    shift += e_width.get();
+                }
             }
             Expr::Ident(ast_ident, exprs, range_expression) => {
                 let symbol_key =
@@ -444,8 +482,14 @@ fn assign_port_output<'a>(
                 {
                     match slice {
                         BitSlice::MsbLsb(msb, lsb) => {
-                            let (_, lsb, width) =
-                                msb_lsb_to_width(arenas, scope.eval(), diagnostics, *msb, *lsb)?;
+                            let (_, lsb, width) = msb_lsb_to_width(
+                                gl,
+                                arenas,
+                                scope.eval(),
+                                diagnostics,
+                                *msb,
+                                *lsb,
+                            )?;
                             let offset = bb_builder.constant_u32(gl, lsb as u32);
                             (offset, Some(width as VectorSize))
                         }
@@ -453,7 +497,7 @@ fn assign_port_output<'a>(
                             let offset =
                                 lower_expr(gl, arenas, scope, diagnostics, &mut bb_builder, *base);
                             let width =
-                                eval_constant_expr(arenas, scope.eval(), diagnostics, *width);
+                                eval_constant_expr(gl, arenas, scope.eval(), diagnostics, *width);
                             let width = width?.as_integer().unwrap();
                             (offset?.0, Some(VectorSize::new(width as u32).unwrap()))
                         }
@@ -461,7 +505,7 @@ fn assign_port_output<'a>(
                             let offset =
                                 lower_expr(gl, arenas, scope, diagnostics, &mut bb_builder, *base);
                             let width =
-                                eval_constant_expr(arenas, scope.eval(), diagnostics, *width)?;
+                                eval_constant_expr(gl, arenas, scope.eval(), diagnostics, *width)?;
                             let width =
                                 VectorSize::new(width.as_integer().unwrap() as u32).unwrap();
                             let width_v =
@@ -477,8 +521,8 @@ fn assign_port_output<'a>(
                 };
 
                 let length_dst = length_dst.unwrap_or(SCALAR_VSIZE);
-                let src = probed;
-                let src = truncate_or_extend(gl, &mut bb_builder, src, ty, length_dst);
+                let src = var;
+                let src = truncate_or_extend(gl, &mut bb_builder, src, var_ty, length_dst);
                 bb_builder.drive_partial(gl, s.signal, src, offset_dst, length_dst);
             }
 
@@ -508,6 +552,20 @@ fn assign_port_output<'a>(
     }
 
     Ok(())
+}
+
+fn expr_to_ty<'a>(
+    gl: &mut GlobalContext,
+    arenas: &'a AstArenas,
+    scope: &Scope<'a>,
+    expr: AstId<Expr>,
+    diagnostics: &mut Diagnostics,
+) -> Result<VType, ()> {
+    // @Performance: make specialized implementation
+    let mut builder = new_anonymous_builder(gl, "tmp".to_string(), TokenRange { start: 0, end: 0 });
+    let (_, ty) = lower_expr(gl, arenas, scope, diagnostics, &mut builder, expr)?;
+    gl.processes.remove(builder.process());
+    Ok(ty)
 }
 
 fn assign_task_output<'a>(
@@ -558,22 +616,28 @@ fn assign_task_output<'a>(
                 {
                     match slice {
                         BitSlice::MsbLsb(msb, lsb) => {
-                            let (_, lsb, width) =
-                                msb_lsb_to_width(arenas, scope.eval(), diagnostics, *msb, *lsb)?;
+                            let (_, lsb, width) = msb_lsb_to_width(
+                                gl,
+                                arenas,
+                                scope.eval(),
+                                diagnostics,
+                                *msb,
+                                *lsb,
+                            )?;
                             let offset = builder.constant_u32(gl, lsb as u32);
                             (offset, Some(width as VectorSize))
                         }
                         BitSlice::PlusWidth(base, width) => {
                             let offset = lower_expr(gl, arenas, scope, diagnostics, builder, *base);
                             let width =
-                                eval_constant_expr(arenas, scope.eval(), diagnostics, *width);
+                                eval_constant_expr(gl, arenas, scope.eval(), diagnostics, *width);
                             let width = width?.as_integer().unwrap();
                             (offset?.0, Some(VectorSize::new(width as u32).unwrap()))
                         }
                         BitSlice::MinusWidth(base, width) => {
                             let offset = lower_expr(gl, arenas, scope, diagnostics, builder, *base);
                             let width =
-                                eval_constant_expr(arenas, scope.eval(), diagnostics, *width)?;
+                                eval_constant_expr(gl, arenas, scope.eval(), diagnostics, *width)?;
                             let width =
                                 VectorSize::new(width.as_integer().unwrap() as u32).unwrap();
                             let width_v =
@@ -620,14 +684,15 @@ fn assign_task_output<'a>(
 }
 
 fn msb_lsb_to_width<'a>(
+    gl: &GlobalContext,
     arenas: &'a AstArenas,
     scope: EvalScope<'a>,
     diagnostics: &mut Diagnostics,
     ast_msb: AstId<ConstantExpr>,
     ast_lsb: AstId<ConstantExpr>,
 ) -> Result<(i64, i64, VectorSize), ()> {
-    let msb = eval_constant_expr(arenas, scope, diagnostics, ast_msb);
-    let lsb = eval_constant_expr(arenas, scope, diagnostics, ast_lsb);
+    let msb = eval_constant_expr(gl, arenas, scope, diagnostics, ast_msb);
+    let lsb = eval_constant_expr(gl, arenas, scope, diagnostics, ast_lsb);
 
     let (Ok(VValue::SignedNet(msb)), Ok(VValue::SignedNet(lsb))) = (msb, lsb) else {
         return Err(());
@@ -646,11 +711,12 @@ fn msb_lsb_to_width<'a>(
 }
 
 pub fn evaluate_range<'a>(
+    gl: &GlobalContext,
     arenas: &'a AstArenas,
     scope: EvalScope<'a>,
     diagnostics: &mut Diagnostics,
     range: AstId<Range>,
 ) -> Result<(i64, i64, VectorSize), ()> {
     let range = arenas.get(range);
-    msb_lsb_to_width(arenas, scope, diagnostics, range.msb, range.lsb)
+    msb_lsb_to_width(gl, arenas, scope, diagnostics, range.msb, range.lsb)
 }

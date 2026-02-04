@@ -1,8 +1,9 @@
 use vogls_ir::dyn_format_string::{Base, DynFormatArgument, DynFormatString, Padding};
-use vogls_ir::{BasicBlockBuilder, GlobalContext, IntrinsicOp};
+use vogls_ir::{BasicBlockBuilder, GlobalContext, IntrinsicOp, VariableKey};
 
-use crate::ast::AstId;
+use crate::ast::expr::Expr;
 use crate::ast::statement::SystemTaskEnable;
+use crate::ast::{AstId, AstIdRange};
 use crate::lower::Scope;
 use crate::lower::expression::lower_expr;
 use crate::lower::{Diagnostics, expression};
@@ -24,116 +25,35 @@ pub fn lower_system_task_enable<'a>(
 
     match ident {
         "display" => {
-            let mut format_string_content = String::new();
-            let mut format_string_arguments = Vec::new();
-            let mut format_string_args = Vec::new();
-            let mut required_arguments_left = 0;
-            for expr in expressions.iter() {
-                if let Some(str_literal) = arenas.get(expr).into_str_literal() {
-                    let str_literal = &arenas.text[str_literal.0.start..str_literal.0.end];
-
-                    let mut at = 0;
-                    while let Some(next) = str_literal[at..].find('%') {
-                        format_string_content.push_str(&str_literal[at..at + next]);
-
-                        let mut remaining = &str_literal[at + next + 1..];
-                        at += next + 1;
-
-                        if remaining.starts_with('%') {
-                            format_string_content.push('%');
-                            continue;
-                        }
-
-                        required_arguments_left += 1;
-
-                        let nums_start_with_zero = remaining.starts_with('0');
-                        let mut pad_size = None;
-                        while remaining.starts_with(|c: char| c.is_ascii_digit()) {
-                            if pad_size.is_some() || !remaining.starts_with('0') {
-                                let p = pad_size.get_or_insert(0);
-                                *p *= 10u32;
-                                *p += (remaining.as_bytes()[0] - b'0') as u32;
-                            }
-
-                            at += 1;
-                            remaining = &remaining[1..];
-                        }
-
-                        let padding = if let Some(pad_size) = pad_size {
-                            Padding::ZeroPaddedTo(pad_size)
-                        } else if nums_start_with_zero {
-                            Padding::NoPadding
-                        } else {
-                            Padding::ZeroPaddedToSize
-                        };
-
-                        let Some(b) = remaining.as_bytes().first() else {
-                            format_string_arguments
-                                .push((format_string_content.len(), DynFormatArgument::default()));
-                            continue;
-                        };
-
-                        at += usize::from(matches!(
-                            b,
-                            b'h' | b'H' |
-                            b'x' | b'X' | // @NOTE: Not in spec: but used by Icarus Verilog
-                            b'd' | b'D' |
-                            b'o' | b'O' |
-                            b'b' | b'B' |
-                            b'c' | b'C' |
-                            b'l' | b'L' |
-                            b'v' | b'V' |
-                            b'm' | b'M' |
-                            b's' | b'S' |
-                            b't' | b'T' |
-                            b'u' | b'U' |
-                            b'z' | b'Z'
-                        ));
-
-                        // @TODO: Make this actually impact formatting.
-                        let base = match b {
-                            b'h' | b'H' => Base::Hexadecimal,
-                            b'x' | b'X' => Base::Hexadecimal, // @NOTE: Not in spec: but used by Icarus Verilog
-                            b'd' | b'D' => Base::Decimal,
-                            b'o' | b'O' => Base::Octal,
-                            b'b' | b'B' => Base::Binary,
-                            b'c' | b'C' | b'l' | b'L' | b'v' | b'V' | b'm' | b'M' | b's' | b'S'
-                            | b't' | b'T' | b'u' | b'U' | b'z' | b'Z' => {
-                                diagnostics.not_yet_implemented(
-                                    arenas.get_span(expr),
-                                    "format specifier not yet supported",
-                                );
-                                return Err(());
-                            }
-                            _ => Base::Decimal,
-                        };
-
-                        format_string_arguments.push((
-                            format_string_content.len(),
-                            DynFormatArgument { padding, base },
-                        ));
-                    }
-                    format_string_content.push_str(&str_literal[at..]);
-                } else {
-                    let (var, _) = lower_expr(gl, arenas, scope, diagnostics, &mut builder, expr)?;
-                    if required_arguments_left == 0 {
-                        format_string_arguments
-                            .push((format_string_content.len(), DynFormatArgument::default()));
-                    } else {
-                        required_arguments_left -= 1;
-                    }
-                    format_string_args.push(var);
-                }
-            }
-            if required_arguments_left > 0 {
-                diagnostics.not_yet_implemented(
-                    arenas.get_span(system_task_enable),
-                    "missing or extra arguments",
-                );
-                return Err(());
-            }
+            let (mut format_string_content, format_string_arguments, format_string_args) =
+                lower_write_arguments(
+                    gl,
+                    arenas,
+                    scope,
+                    system_task_enable,
+                    &mut builder,
+                    diagnostics,
+                )?;
             use std::fmt::Write;
             writeln!(&mut format_string_content).unwrap();
+            let format_str =
+                DynFormatString::new(format_string_content.into(), format_string_arguments.into());
+            builder.intrinsic(
+                gl,
+                IntrinsicOp::Display(Box::new(format_str)),
+                format_string_args.into(),
+            );
+        }
+        "write" => {
+            let (format_string_content, format_string_arguments, format_string_args) =
+                lower_write_arguments(
+                    gl,
+                    arenas,
+                    scope,
+                    system_task_enable,
+                    &mut builder,
+                    diagnostics,
+                )?;
             let format_str =
                 DynFormatString::new(format_string_content.into(), format_string_arguments.into());
             builder.intrinsic(
@@ -182,14 +102,28 @@ pub fn lower_system_task_enable<'a>(
         "finish" => _ = builder.intrinsic(gl, IntrinsicOp::Finish, Default::default()),
 
         "dumpfile" => {
-            assert!(expressions.is_empty());
-            builder.intrinsic(gl, IntrinsicOp::VcdOpenFile("dump.vcd".into()), [].into());
+            assert!(expressions.len() <= 1);
+            let path = match expressions
+                .first()
+                .and_then(|e| arenas.get(e).into_str_literal())
+            {
+                None => "dump.vcd".to_string(),
+                Some(str_literal) => {
+                    arenas.text[str_literal.0.start..str_literal.0.end].to_string()
+                }
+            };
+            builder.intrinsic(gl, IntrinsicOp::VcdOpenFile(path), [].into());
         }
         "dumpvars" => {
-            assert!(expressions.is_empty());
+            if !expressions.is_empty() {
+                diagnostics.warnings.push((
+                    arenas.get_span(system_task_enable),
+                    "not yet supported to select subset of hierarchy".to_string(),
+                ));
+            }
             builder.intrinsic(
                 gl,
-                IntrinsicOp::VcdAppendModule(scope.vcd_scope()),
+                IntrinsicOp::VcdAppendModule(scope.vcd_scope(&arenas.ident_table)),
                 [].into(),
             );
         }
@@ -204,4 +138,128 @@ pub fn lower_system_task_enable<'a>(
         }
     }
     Ok(builder)
+}
+
+pub fn lower_write_arguments<'a>(
+    gl: &mut GlobalContext,
+    arenas: &'a AstArenas,
+    scope: &mut Scope<'a>,
+    system_task_enable: AstId<SystemTaskEnable>,
+    builder: &mut BasicBlockBuilder,
+    diagnostics: &mut Diagnostics,
+) -> Result<(String, Vec<(usize, DynFormatArgument)>, Vec<VariableKey>), ()> {
+    let expressions = arenas.get(system_task_enable).expressions;
+    let mut format_string_content = String::new();
+    let mut format_string_arguments = Vec::new();
+    let mut format_string_args = Vec::new();
+    let mut required_arguments_left = 0;
+    for expr in expressions.iter() {
+        if let Some(str_literal) = arenas.get(expr).into_str_literal() {
+            let str_literal = &arenas.text[str_literal.0.start..str_literal.0.end];
+
+            let mut at = 0;
+            while let Some(next) = str_literal[at..].find('%') {
+                format_string_content.push_str(&str_literal[at..at + next]);
+
+                let mut remaining = &str_literal[at + next + 1..];
+                at += next + 1;
+
+                if remaining.starts_with('%') {
+                    format_string_content.push('%');
+                    continue;
+                }
+
+                required_arguments_left += 1;
+
+                let nums_start_with_zero = remaining.starts_with('0');
+                let mut pad_size = None;
+                while remaining.starts_with(|c: char| c.is_ascii_digit()) {
+                    if pad_size.is_some() || !remaining.starts_with('0') {
+                        let p = pad_size.get_or_insert(0);
+                        *p *= 10u32;
+                        *p += (remaining.as_bytes()[0] - b'0') as u32;
+                    }
+
+                    at += 1;
+                    remaining = &remaining[1..];
+                }
+
+                let padding = if let Some(pad_size) = pad_size {
+                    Padding::ZeroPaddedTo(pad_size)
+                } else if nums_start_with_zero {
+                    Padding::NoPadding
+                } else {
+                    Padding::ZeroPaddedToSize
+                };
+
+                let Some(b) = remaining.as_bytes().first() else {
+                    format_string_arguments
+                        .push((format_string_content.len(), DynFormatArgument::default()));
+                    continue;
+                };
+
+                at += usize::from(matches!(
+                    b,
+                    b'h' | b'H' |
+                            b'x' | b'X' | // @NOTE: Not in spec: but used by Icarus Verilog
+                            b'd' | b'D' |
+                            b'o' | b'O' |
+                            b'b' | b'B' |
+                            b'c' | b'C' |
+                            b'l' | b'L' |
+                            b'v' | b'V' |
+                            b'm' | b'M' |
+                            b's' | b'S' |
+                            b't' | b'T' |
+                            b'u' | b'U' |
+                            b'z' | b'Z'
+                ));
+
+                // @TODO: Make this actually impact formatting.
+                let base = match b {
+                    b'h' | b'H' => Base::Hexadecimal,
+                    b'x' | b'X' => Base::Hexadecimal, // @NOTE: Not in spec: but used by Icarus Verilog
+                    b'd' | b'D' => Base::Decimal,
+                    b'o' | b'O' => Base::Octal,
+                    b'b' | b'B' => Base::Binary,
+                    b'c' | b'C' | b'l' | b'L' | b'v' | b'V' | b'm' | b'M' | b's' | b'S' | b't'
+                    | b'T' | b'u' | b'U' | b'z' | b'Z' => {
+                        diagnostics.not_yet_implemented(
+                            arenas.get_span(expr),
+                            "format specifier not yet supported",
+                        );
+                        return Err(());
+                    }
+                    _ => Base::Decimal,
+                };
+
+                format_string_arguments.push((
+                    format_string_content.len(),
+                    DynFormatArgument { padding, base },
+                ));
+            }
+            format_string_content.push_str(&str_literal[at..]);
+        } else {
+            let (var, _) = lower_expr(gl, arenas, scope, diagnostics, builder, expr)?;
+            if required_arguments_left == 0 {
+                format_string_arguments
+                    .push((format_string_content.len(), DynFormatArgument::default()));
+            } else {
+                required_arguments_left -= 1;
+            }
+            format_string_args.push(var);
+        }
+    }
+    if required_arguments_left > 0 {
+        diagnostics.not_yet_implemented(
+            arenas.get_span(system_task_enable),
+            "missing or extra arguments",
+        );
+        return Err(());
+    }
+    Ok((
+        format_string_content,
+        format_string_arguments,
+        format_string_args,
+    ))
 }
