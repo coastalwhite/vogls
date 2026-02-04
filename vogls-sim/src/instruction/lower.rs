@@ -52,6 +52,7 @@ pub fn lower_process_to_vm(
     builder: &mut StackBuilder,
     signals: &[StackRef],
     io_signals: &HashMap<SignalKey, VmSignalKey>,
+    signal_map: &HashMap<SignalKey, SignalKey>,
 ) -> VmProcess {
     use Instruction as I;
     use VmInstruction as VI;
@@ -245,9 +246,7 @@ pub fn lower_process_to_vm(
                             O::Xor => VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Xor, s1, s2),
                             O::Add => VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Add, s1, s2),
                             O::Sub => VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Sub, s1, s2),
-                            O::Power => {
-                                VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Power, s1, s2)
-                            }
+                            O::Power => VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Power, s1, s2),
                             O::Multiply => {
                                 VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Multiply, s1, s2)
                             }
@@ -289,9 +288,7 @@ pub fn lower_process_to_vm(
                             O::Xor => VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Xor, s1, s2),
                             O::Add => VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Add, s1, s2),
                             O::Sub => VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Sub, s1, s2),
-                            O::Power => {
-                                VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Power, s1, s2)
-                            }
+                            O::Power => VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Power, s1, s2),
                             O::Multiply => {
                                 VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Multiply, s1, s2)
                             }
@@ -347,7 +344,7 @@ pub fn lower_process_to_vm(
                         O::Assert(f) => VO::Assert(f.clone()),
                         O::VcdOpenFile(f) => VO::VcdOpenFile(f.clone()),
                         O::VcdAppendModule(v) => {
-                            VO::VcdAppendModule(VmVcdScope::lower(v, io_signals))
+                            VO::VcdAppendModule(VmVcdScope::lower(v, io_signals, signal_map))
                         }
                         O::VcdPause => VO::VcdPause,
                         O::VcdResume => VO::VcdResume,

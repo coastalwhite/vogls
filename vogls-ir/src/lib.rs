@@ -109,6 +109,12 @@ impl BasicBlock {
         }
         self.terminator.for_each_var(f);
     }
+
+    pub fn map_signals(&mut self, mut f: impl FnMut(SignalKey) -> SignalKey) {
+        for i in &mut self.instrs {
+            i.map_signals(&mut f);
+        }
+    }
 }
 
 impl BasicBlockTerminator {
@@ -403,6 +409,18 @@ impl Instruction {
             Self::Constant(dst, _) | Self::Probe(dst, _) => {
                 f(*dst);
             }
+        }
+    }
+
+    fn map_signals(&mut self, mut f: impl FnMut(SignalKey) -> SignalKey) {
+        match self {
+            Instruction::Probe(_, s) | Instruction::Drive(s, _, _) => *s = f(*s),
+            Instruction::Constant(..)
+            | Instruction::Unary(..)
+            | Instruction::Resize(..)
+            | Instruction::Binary(..)
+            | Instruction::Intrinsic(..)
+            | Instruction::Phi(..) => {}
         }
     }
 

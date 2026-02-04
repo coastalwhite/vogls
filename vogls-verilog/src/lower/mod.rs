@@ -55,9 +55,13 @@ fn extend_symbol_table_to_vcd_scope(
                     .push(vogls_ir::vcd::VcdScopeItem::Scope(subscope));
             }
             S::Net(i) => {
+                let mut signal = i.signal;
+                while let Some(s) = signal_map.get(&signal) {
+                    signal = *s;
+                }
                 scope.items.push(vogls_ir::vcd::VcdScopeItem::Variable(
                     vogls_ir::vcd::VcdVariable {
-                        signal: signal_map.get(&i.signal).copied().unwrap_or(i.signal),
+                        signal,
                         ty: vogls_ir::vcd::NetType::Wire,
                         msb: (i.ty.force_net_width().get() - 1) as i64,
                         lsb: 0,

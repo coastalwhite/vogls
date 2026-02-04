@@ -1,9 +1,8 @@
 use vogls_ir::dyn_format_string::{Base, DynFormatArgument, DynFormatString, Padding};
 use vogls_ir::{BasicBlockBuilder, GlobalContext, IntrinsicOp, VariableKey};
 
-use crate::ast::expr::Expr;
+use crate::ast::AstId;
 use crate::ast::statement::SystemTaskEnable;
-use crate::ast::{AstId, AstIdRange};
 use crate::lower::Scope;
 use crate::lower::expression::lower_expr;
 use crate::lower::{Diagnostics, expression};

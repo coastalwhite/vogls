@@ -467,13 +467,17 @@ pub struct VcdScope {
 }
 
 impl VcdScope {
-    pub fn lower(v: &vogls_ir::vcd::VcdScope, map: &HashMap<SignalKey, VmSignalKey>) -> VcdScope {
+    pub fn lower(
+        v: &vogls_ir::vcd::VcdScope,
+        map: &HashMap<SignalKey, VmSignalKey>,
+        signal_map: &HashMap<SignalKey, SignalKey>,
+    ) -> VcdScope {
         VcdScope {
             name: v.name.clone(),
             items: v
                 .items
                 .iter()
-                .map(|i| VcdScopeItem::lower(i, map))
+                .map(|i| VcdScopeItem::lower(i, map, signal_map))
                 .collect(),
         }
     }
@@ -549,15 +553,28 @@ impl VcdScopeItem {
 }
 
 impl VcdScopeItem {
-    fn lower(v: &vogls_ir::vcd::VcdScopeItem, map: &HashMap<SignalKey, VmSignalKey>) -> Self {
+    fn lower(
+        v: &vogls_ir::vcd::VcdScopeItem,
+        map: &HashMap<SignalKey, VmSignalKey>,
+        signal_map: &HashMap<SignalKey, SignalKey>,
+    ) -> Self {
         match v {
-            vogls_ir::vcd::VcdScopeItem::Scope(v) => Self::Scope(VcdScope::lower(v, map)),
-            vogls_ir::vcd::VcdScopeItem::Variable(v) => Self::Variable(VcdVariable {
-                signal: map[&v.signal],
-                ty: v.ty,
-                msb: v.msb,
-                lsb: v.lsb,
-            }),
+            vogls_ir::vcd::VcdScopeItem::Scope(v) => {
+                Self::Scope(VcdScope::lower(v, map, signal_map))
+            }
+            vogls_ir::vcd::VcdScopeItem::Variable(v) => {
+                let mut signal = v.signal;
+                while let Some(ns) = signal_map.get(&signal) {
+                    signal = *ns;
+                }
+                let signal = map[&signal];
+                Self::Variable(VcdVariable {
+                    signal,
+                    ty: v.ty,
+                    msb: v.msb,
+                    lsb: v.lsb,
+                })
+            }
         }
     }
 }

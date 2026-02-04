@@ -1,19 +1,10 @@
-use std::collections::{HashMap, HashSet};
+use vogls_ir::{GlobalContext, new_anonymous_builder};
 
-use vogls_ir::{
-    BasicBlockTerminator, Bits, ConnectionDirection, GlobalContext, SignalKey, VariableKey,
-    new_anonymous_builder,
-};
-
-use crate::ast::module::{
-    FunctionDeclaration, TaskDeclaration, TaskPortItemContent, TfInputDeclaration,
-};
+use crate::ast::module::{FunctionDeclaration, TaskDeclaration};
 use crate::ast::{AstId, AstIdRange};
 use crate::elaborate::{LoweredFunction, LoweredTask};
 use crate::lower::Scope;
-use crate::lower::{
-    Diagnostics, VType, unwrap_get_fn_mut, unwrap_get_task_mut, unwrap_resolve_net,
-};
+use crate::lower::{Diagnostics, unwrap_get_fn_mut, unwrap_get_task_mut};
 use crate::parser::AstArenas;
 
 pub fn lower<'a>(

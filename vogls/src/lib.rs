@@ -403,7 +403,6 @@ pub fn run(
 
     // Walk the modules in depth-first order and lower to IR.
     let mut diagnostics = LowerDiagnostics::default();
-    let mut signal_map = HashMap::new();
     // @TODO: Iterate over the modules instead.
     for key in elab_table.symbol_id_iter() {
         let VSymbol::Module(m) = &elab_table[key].content else {
@@ -447,6 +446,22 @@ pub fn run(
             writeln!(ectx.stderr)?;
         }
         return Err("failed to lower".into());
+    }
+
+    for symbol in elab_table.symbol_id_iter() {
+        if let VSymbol::Net(n) = &mut elab_table[symbol].content {
+            while let Some(s) = signal_map.get(&n.signal) {
+                n.signal = *s;
+            }
+        }
+    }
+    for bb in gl.bbs.values_mut() {
+        bb.map_signals(|mut s| {
+            while let Some(ns) = signal_map.get(&s) {
+                s = *ns;
+            }
+            s
+        });
     }
 
     if ectx.emit_unoptimized_ir {
@@ -533,10 +548,6 @@ pub fn run(
     let mut listeners = SlotMap::default();
     let mut watches = Vec::default();
 
-    // // Find the entity for the Top-Level Module.
-    // let mut elab_processes = Vec::new();
-    // elaborate::elaborate(tl_module_key, &mut gl, &mut elab_processes);
-
     let mut trace_processes = Vec::new();
     let mut trace_signals = Vec::new();
     let mut line_luts = Vec::new();
@@ -608,8 +619,14 @@ pub fn run(
             println!();
             println!("{}", gl.processes[process].display(&gl));
         }
-        let vm_process =
-            lower_process_to_vm(process, &gl, &mut stack_builder, &signals, &mut io_signals);
+        let vm_process = lower_process_to_vm(
+            process,
+            &gl,
+            &mut stack_builder,
+            &signals,
+            &mut io_signals,
+            &signal_map,
+        );
 
         if ectx.emit_vm {
             print!("{}", &vm_process);
@@ -712,7 +729,7 @@ pub fn run(
                 signal_map: &mut signal_map,
             };
             let scope = scope.vcd_scope(&ast.arenas.ident_table);
-            let scope = vogls_sim::VcdScope::lower(&scope, &io_signals);
+            let scope = vogls_sim::VcdScope::lower(&scope, &io_signals, &signal_map);
             (p, scope)
         }),
     )

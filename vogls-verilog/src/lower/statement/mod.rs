@@ -1,7 +1,7 @@
 use vogls_ir::{BasicBlockBuilder, BasicBlockTerminator, GlobalContext};
 
 use crate::ast::statement::{
-    Block, BlockingAssignment, NonBlockingAssignment, ProceduralTimingControlStatement, SeqBlock,
+    BlockingAssignment, NonBlockingAssignment, ProceduralTimingControlStatement, SeqBlock,
     Statement, StatementContent, StatementOrNull, TaskEnable, WaitStatement,
 };
 use crate::ast::{AstId, AstIdRange};
