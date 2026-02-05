@@ -1,10 +1,12 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap};
+use std::fmt::Alignment;
 use std::num::NonZeroUsize;
 use std::path::Path;
 
 use slotmap::{SlotMap, new_key_type};
 use vogls_bits::arithmetic::{FvLogicValue, fv_pack_u64, fv_set_no_special, fv_unpack_u64};
+use vogls_bits::format::{BitsFormatBase, BitsFormatOptions};
 use vogls_bits::load::load_partial_u64;
 use vogls_bits::set_subslice::{tv_l_set, tv_s_set};
 use vogls_bits::store::store_partial_u64;
@@ -482,11 +484,11 @@ impl VcdScope {
         }
     }
 
-    fn write_to(&self, f: &mut impl std::io::Write, info: &[SignalInfo]) -> std::io::Result<()> {
+    fn write_to(&self, f: &mut impl std::io::Write) -> std::io::Result<()> {
         let Self { name, items } = self;
         writeln!(f, "$scope module {name} $end")?;
         for item in items {
-            item.write_to(f, info)?;
+            item.write_to(f)?;
         }
         writeln!(f, "$upscope $end")?;
         Ok(())
@@ -504,17 +506,17 @@ impl VcdScope {
 }
 
 impl VcdScopeItem {
-    fn write_to(&self, f: &mut impl std::io::Write, info: &[SignalInfo]) -> std::io::Result<()> {
+    fn write_to(&self, f: &mut impl std::io::Write) -> std::io::Result<()> {
         match self {
-            VcdScopeItem::Scope(scope) => scope.write_to(f, info),
+            VcdScopeItem::Scope(scope) => scope.write_to(f),
             VcdScopeItem::Variable(k) => {
                 let VcdVariable {
-                    signal,
+                    name,
+                    signal: _,
                     ty,
                     msb,
                     lsb,
                 } = k;
-                let SignalInfo { name } = &info[signal.0 as usize];
                 let size = VectorSize::new((msb.abs_diff(*lsb) + 1) as u32).unwrap();
                 let idx = k.signal.0;
                 write!(f, "$var ")?;
@@ -569,6 +571,7 @@ impl VcdScopeItem {
                 }
                 let signal = map[&signal];
                 Self::Variable(VcdVariable {
+                    name: v.name.clone(),
                     signal,
                     ty: v.ty,
                     msb: v.msb,
@@ -581,6 +584,7 @@ impl VcdScopeItem {
 
 #[derive(Debug, Clone)]
 pub struct VcdVariable {
+    pub name: String,
     pub signal: VmSignalKey,
     pub ty: NetType,
     pub msb: i64,
@@ -601,6 +605,7 @@ pub struct VcdOutput {
     tracked: HashMap<VmSignalKey, Option<NonZeroUsize>>,
     updated_this_time_step: Vec<VmSignalKey>,
     writer: Box<dyn std::io::Write>,
+    time_scale: u64,
 }
 impl VcdOutput {
     fn dump_time_step(
@@ -608,7 +613,6 @@ impl VcdOutput {
         ctx: &Context,
         stack: &Stack,
         signals: &[StackRef],
-        signal_info: &[SignalInfo],
         finish: bool,
     ) -> std::io::Result<()> {
         let f = &mut self.writer;
@@ -617,7 +621,7 @@ impl VcdOutput {
             // @TODO
             writeln!(f, "$date @TODO $end")?;
             writeln!(f, "$timescale 1ns $end")?;
-            self.scope.write_to(f, signal_info)?;
+            self.scope.write_to(f)?;
             writeln!(f, "$enddefinitions $end")?;
         }
 
@@ -630,7 +634,7 @@ impl VcdOutput {
         }
 
         self.last_ts = ctx.time;
-        writeln!(f, "#{}", ctx.time)?;
+        writeln!(f, "#{}", ctx.time * self.time_scale)?;
         for signal in &self.updated_this_time_step {
             let bits = signals[signal.0 as usize];
             let idx = signal.0;
@@ -638,7 +642,18 @@ impl VcdOutput {
             if bits.size().get() > 1 {
                 f.write_all(&[b'b'])?;
             }
-            format_bits(f, &bits, Padding::ZeroPaddedToSize, Base::Binary).unwrap();
+            write!(
+                f,
+                "{}",
+                bits.display(&BitsFormatOptions {
+                    prefix: false,
+                    base: BitsFormatBase::Binary,
+                    separator: None,
+                    align: Some(Alignment::Right),
+                    fill: '0',
+                    width: vogls_bits::format::BitsFormatWidth::Expand
+                })
+            )?;
             if bits.size().get() > 1 {
                 f.write_all(&[b' '])?;
             }
@@ -812,6 +827,7 @@ impl Event {
                                     tracked: HashMap::new(),
                                     updated_this_time_step: Vec::new(),
                                     writer: Box::new(std::fs::File::create(path).unwrap()),
+                                    time_scale: 1000,
                                 });
                             }
                             O::VcdAppendModule(scope) => {
@@ -985,7 +1001,6 @@ pub fn run(
     processes: &[VmProcess],
     regions: &mut Regions,
     signals: &mut [StackRef],
-    signal_info: &[SignalInfo],
     listeners: &mut SlotMap<ListenerKey, Event>,
     watches: &mut [Vec<ListenerKey>],
     mut trace: Option<&mut vogls_trace::Trace>,
@@ -1010,6 +1025,7 @@ pub fn run(
                 tracked,
                 updated_this_time_step,
                 writer: Box::new(std::fs::File::create(p).unwrap()),
+                time_scale: 1000,
             })
         }
     };
@@ -1073,8 +1089,7 @@ pub fn run(
 
         // Dump the VCD updates for this simulation time.
         if let Some(vcd) = vcd.as_mut() {
-            vcd.dump_time_step(ctx, stack, signals, signal_info, false)
-                .unwrap();
+            vcd.dump_time_step(ctx, stack, signals, false).unwrap();
         }
 
         let Some((at, events)) = schedule.pop_first() else {
@@ -1092,8 +1107,7 @@ pub fn run(
     }
 
     if let Some(vcd) = vcd.as_mut() {
-        vcd.dump_time_step(ctx, stack, signals, signal_info, true)
-            .unwrap();
+        vcd.dump_time_step(ctx, stack, signals, true).unwrap();
         vcd.writer.flush().unwrap();
     }
 

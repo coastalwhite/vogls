@@ -79,7 +79,7 @@ pub fn assign_variable_lvalue<'a>(
 pub fn variable_lvalue_flat_ty<'a>(
     gl: &GlobalContext,
     arenas: &'a AstArenas,
-    scope: &Scope<'a>,
+    scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
     ast_lvalue: AstId<VariableLValueFlat>,
 ) -> Result<VType, ()> {

@@ -61,6 +61,7 @@ fn extend_symbol_table_to_vcd_scope(
                 }
                 scope.items.push(vogls_ir::vcd::VcdScopeItem::Variable(
                     vogls_ir::vcd::VcdVariable {
+                        name: ident_table[table[*sid].name()].to_string(),
                         signal,
                         ty: vogls_ir::vcd::NetType::Wire,
                         msb: (i.ty.force_net_width().get() - 1) as i64,

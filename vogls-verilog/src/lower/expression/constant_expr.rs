@@ -35,7 +35,7 @@ pub fn eval_constant_expr<'a>(
         dispatched: false,
     });
 
-    while let Some(mut item) = dispatch_stack.pop() {
+    'dispatch_loop: while let Some(mut item) = dispatch_stack.pop() {
         match arenas.get(item.expr) {
             Expr::Decimal(decimal) => {
                 let decimal = &arenas.decimals[decimal.at];
@@ -212,6 +212,7 @@ pub fn eval_constant_expr<'a>(
             Expr::FunctionCall(ident, arguments) => {
                 if !item.dispatched {
                     item.dispatched = true;
+                    dispatch_stack.push(item);
                     dispatch_stack.extend(arguments.iter().map(|expr| StackItem {
                         expr,
                         dispatched: false,
@@ -230,36 +231,60 @@ pub fn eval_constant_expr<'a>(
                 };
 
                 let VSymbol::Function(fn_symbol) = &scope.table[fn_sid].content else {
+                    result_stack.truncate(return_stack_length);
                     diagnostics
                         .not_yet_implemented(hident_span(arenas, *ident), "not calling a function");
-                    return Err(());
+                    error = true;
+                    continue;
                 };
 
                 let Some(lowered) = fn_symbol.lowered.as_ref() else {
+                    result_stack.truncate(return_stack_length);
                     diagnostics.not_yet_implemented(
                         hident_span(arenas, *ident),
                         "function is not yet lowered",
                     );
-                    return Err(());
+                    error = true;
+                    continue;
                 };
                 if fn_symbol.inputs.len() != arguments.len() {
+                    result_stack.truncate(return_stack_length);
                     diagnostics
                         .not_yet_implemented(arenas.get_span(expr), "invalid number of arguments");
-                    return Err(());
+                    error = true;
+                    continue;
                 }
 
                 let mut esignals = HashMap::new();
                 let mut evars = HashMap::new();
 
-                for (sig, ty) in &fn_symbol.inputs {
-                    esignals.insert(*sig, Bits::new_unknown(ty.force_net_width()));
+                for ((sig, ty), value) in fn_symbol
+                    .inputs
+                    .iter()
+                    .zip(result_stack.drain(return_stack_length..))
+                {
+                    let Some(value) = value else {
+                        error = true;
+                        continue 'dispatch_loop;
+                    };
+                    esignals.insert(
+                        *sig,
+                        value.truncate_or_extend(ty.force_net_width()).into_bits(),
+                    );
                 }
                 esignals.insert(
                     fn_symbol.output,
                     Bits::new_unknown(fn_symbol.output_ty.force_net_width()),
                 );
 
+                dbg!(&esignals);
+
                 vogls_ir::evaluation::evaluate(gl, lowered.entry, &mut esignals, &mut evars);
+
+                result_stack.push(Some(VValue::net(
+                    esignals[&fn_symbol.output].clone(),
+                    fn_symbol.output_ty.is_signed(),
+                )));
             }
             Expr::String(..) | Expr::Unary(..) | Expr::Replication(..) => {
                 result_stack.push(None);

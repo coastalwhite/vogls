@@ -69,5 +69,6 @@ module tb();
 		#120
 
 		$vogls_assert_eq(Dout, 128'h66e94bd4ef8a2c3b884cfa59ca342b2e);
+        $finish();
 	end
 endmodule

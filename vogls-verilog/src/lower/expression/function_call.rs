@@ -49,23 +49,50 @@ pub fn lower_function_call<'a>(
         );
         builder.drive(gl, input_signal, arg_variable);
     }
+    
+    let mut bb_stack = Vec::new();
+    let mut bb_map = HashMap::new();
+    let mut bb_seen = HashSet::new();
 
-    let mut fn_bb = gl.bbs[lowered.entry].clone();
-    fn_bb.map_vars(|v| {
-        *map.entry(v).or_insert_with(|| {
-            let fn_var = gl.vars[v].clone();
-            gl.vars.insert(fn_var)
-        })
-    });
+    let fn_bb = gl.bbs.insert(gl.bbs[lowered.entry].clone());
+
+    bb_stack.push(fn_bb);
+    bb_map.insert(lowered.entry, fn_bb);
+    while let Some(bb_key) = bb_stack.pop() {
+        let terminator = gl.bbs[bb_key].terminator.clone();
+        terminator.for_each_bb(|bb| {
+            _ = bb_map.entry(bb).or_insert_with(|| {
+                let new_bb = gl.bbs.insert(gl.bbs[bb].clone());
+                bb_stack.push(new_bb);
+                new_bb
+            })
+        });
+        gl.bbs[bb_key].map_vars(|v| {
+            *map.entry(v).or_insert_with(|| {
+                let fn_var = gl.vars[v].clone();
+                gl.vars.insert(fn_var)
+            })
+        });
+    }
+
+    bb_stack.push(fn_bb);
+    bb_seen.insert(fn_bb);
+    while let Some(bb_key) = bb_stack.pop() {
+        gl.bbs[bb_key].map_bbs(|bb| bb_map[&bb]);
+        gl.bbs[bb_key]
+            .terminator
+            .extend_next_rev(&mut bb_stack, &mut bb_seen);
+    }
 
     let origin_bb = builder.key();
     *builder = builder.next_terminate_later(gl);
-    fn_bb.terminator = BasicBlockTerminator::Jump(builder.key());
-    let fn_bb = gl.bbs.insert(fn_bb);
     gl.bbs[origin_bb].terminator = BasicBlockTerminator::Jump(fn_bb);
+    if let Some(terminate) = bb_map.get(&lowered.terminate) {
+        // Procedure might contain infinite loop.
+        gl.bbs[*terminate].terminator = BasicBlockTerminator::Jump(builder.key());
+    }
 
     let output_var = builder.probe(gl, fn_symbol.output);
-
     Ok((output_var, fn_symbol.output_ty.clone()))
 }
 

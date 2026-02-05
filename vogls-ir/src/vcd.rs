@@ -15,6 +15,7 @@ pub struct VcdScope {
 
 #[derive(Debug, Clone)]
 pub struct VcdVariable {
+    pub name: String,
     pub signal: SignalKey,
     pub ty: NetType,
     pub msb: i64,

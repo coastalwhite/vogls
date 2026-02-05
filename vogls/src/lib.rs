@@ -716,7 +716,6 @@ pub fn run(
         &processes,
         &mut regions,
         &mut signals,
-        &signal_info,
         &mut listeners,
         &mut watches,
         trace.as_mut(),
