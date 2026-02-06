@@ -1709,8 +1709,20 @@ pub fn finalize_symbol<'a>(
         InLevelSymbol::Task(_) => {
             super::function::elaborate_task(gl, arenas, sid, table, diagnostics)?;
         }
-        InLevelSymbol::Function(_) => {
+        InLevelSymbol::Function(id) => {
             super::function::elaborate_fn(gl, arenas, sid, table, diagnostics)?;
+            // @TODO: This should ignore errors with unresolved symbols.
+            _ = crate::lower::module_or_generate_item::function::lower(
+                gl,
+                arenas,
+                diagnostics,
+                &mut crate::lower::Scope {
+                    table: table,
+                    key: sid,
+                    signal_map: &mut std::collections::HashMap::new(),
+                },
+                *id,
+            )?;
         }
         InLevelSymbol::ModuleInstance(parameter_value_assignment, module) => {
             let (parameter_overrides, parameter_override_values) = match *parameter_value_assignment
