@@ -248,7 +248,7 @@ fn fmt_bits_binary(bits: &Bits, f: &mut impl fmt::Write, separator: Option<char>
                 leading_zeroes = leading_zeroes.min((spc << (64 - size.get())).leading_ones());
             }
             leading_zeroes = leading_zeroes.min(size.get());
-            actual_size = actual_size.min(64 - leading_zeroes);
+            actual_size = actual_size.min(size.get() - leading_zeroes);
 
             if actual_size == 0 {
                 return Ok(());
@@ -257,8 +257,8 @@ fn fmt_bits_binary(bits: &Bits, f: &mut impl fmt::Write, separator: Option<char>
 
         if !*fst && let Some(separator) = separator {
             f.write_char(separator)?;
-            *fst = false;
         }
+        *fst = false;
 
         match spc {
             None => {
@@ -340,6 +340,10 @@ fn fmt_bits_binary(bits: &Bits, f: &mut impl fmt::Write, separator: Option<char>
                 )?;
             }
         }
+    }
+
+    if fst {
+        f.write_char('0')?;
     }
 
     Ok(())
