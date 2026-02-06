@@ -1,7 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::Arc;
 
 use slotmap::{SecondaryMap, SlotMap};
 use vogls_frontend::VgHashMap;
@@ -17,7 +16,7 @@ use vogls_verilog::ast::module::{
     CaseGenerateConstruct, CaseGenerateItem, GenerateBlock, IfGenerateConstruct,
     LoopGenerateConstruct, Module, ModuleItem, ModuleOrGenerateItem, NonPortModuleItem,
 };
-use vogls_verilog::elaborate::{ModuleSymbol, VSymbol, VSymbolTable, elaborate_module};
+use vogls_verilog::elaborate::VSymbol;
 use vogls_verilog::lower::{Diagnostics as LowerDiagnostics, Scope, lower_module_to_ir};
 use vogls_verilog::parser::{
     AstArenas, Diagnostics as ParserDiagnostics, ParseContext, ParserScratches, TokenWalker,
@@ -185,6 +184,11 @@ pub fn run(
             (module.module_identifier.item.0, i)
         },
     ));
+    let module_ast_lut = VgHashMap::<IdentId, AstId<Module>>::from_iter(
+        ast.modules
+            .iter()
+            .map(|id| (ast.arenas.get(id).module_identifier.item.0, id)),
+    );
 
     let tl_module_name = match top_level_module {
         Some(v) => ast.arenas.ident_table.get_or_insert(v),
@@ -262,46 +266,14 @@ pub fn run(
         ));
     };
 
-    let mut elab_table = VSymbolTable::default();
-    let mut module_instance_stack = Vec::new();
-
-    let tl_module_symid = elab_table
-        .insert_root(
-            tl_module_name,
-            ast.arenas.get_item_span(
-                ast.arenas
-                    .get(ast.modules.get(*tl_module))
-                    .module_identifier,
-            ),
-            VSymbol::Module(ModuleSymbol {
-                module: tl_module_name,
-                ports: Vec::new(),
-                parameters: Vec::new(),
-                parameter_overrides: Arc::new(VgHashMap::default()),
-                parameter_override_values: Arc::new(Vec::new()),
-            }),
-        )
-        .expect("There are no symbols yet. This cannot fail");
-
     let mut diagnostics = LowerDiagnostics::default();
-    let mut error = false;
-
-    module_instance_stack.push(tl_module_symid);
-    while let Some(module_symid) = module_instance_stack.pop() {
-        let VSymbol::Module(m) = &elab_table[module_symid].content else {
-            unreachable!()
-        };
-        error |= elaborate_module(
-            &mut gl,
-            &ast.arenas,
-            ast.modules.get(module_lut[&m.module]),
-            module_symid,
-            &mut elab_table,
-            &mut module_instance_stack,
-            &mut diagnostics,
-        )
-        .is_err();
-    }
+    let result = vogls_verilog::elaborate::next::elaborate(
+        &mut gl,
+        &ast.arenas,
+        ast.modules.get(*tl_module),
+        &module_ast_lut,
+        &mut diagnostics,
+    );
 
     if !diagnostics.warnings.is_empty() {
         for (location, warning) in &diagnostics.warnings {
@@ -312,7 +284,7 @@ pub fn run(
         }
     }
 
-    if error {
+    let Ok(mut elab_table) = result else {
         for (location, err, context) in &diagnostics.errors {
             let mut out = String::new();
             report_error(&token_buffer, err.clone(), *location, &mut out)?;
@@ -326,27 +298,45 @@ pub fn run(
             writeln!(ectx.stderr)?;
         }
         return Err("failed to lower".into());
-    }
+    };
 
     if ectx.emit_hierarchy {
-        writeln!(
-            ectx.stdout,
-            "{}",
-            elab_table.display(tl_module_symid, &ast.arenas.ident_table, |s, f| {
-                match s {
-                    VSymbol::Module(_) => f.write_str("mod"),
-                    VSymbol::Parameter(v) => write!(f, "{v:?}"),
-                    VSymbol::Net(_) => f.write_str("net"),
-                    VSymbol::NamedBlock => f.write_str("named block"),
-                    VSymbol::GenerateBlock(_) => f.write_str("generate block"),
-                    VSymbol::GenVar => f.write_str("genvar"),
-                    VSymbol::Task(_) => f.write_str("task"),
-                    VSymbol::Function(_) => f.write_str("function"),
-                }
-            })
-        )?;
+        for root in elab_table.roots() {
+            writeln!(
+                ectx.stdout,
+                "{}",
+                elab_table.display(*root, &ast.arenas.ident_table, |s, f| {
+                    match s {
+                        VSymbol::Module(_) => f.write_str("mod"),
+                        VSymbol::Parameter(v) => {
+                            if v.ty().is_signed() {
+                                f.write_str("signed ")?;
+                            }
+                            write!(f, "{}", v.clone().into_bits())?;
+                            Ok(())
+                        }
+                        VSymbol::Net(s) => {
+                            f.write_str("net")?;
+                            if s.ty.is_signed() {
+                                f.write_str(" signed")?;
+                            }
+                            if s.ty.force_net_width().get() > 1 {
+                                write!(f, "[{}]", s.ty.force_net_width().get())?;
+                            }
+                            Ok(())
+                        }
+                        VSymbol::NamedBlock => f.write_str("named block"),
+                        VSymbol::GenerateBlock(_) => f.write_str("generate block"),
+                        VSymbol::GenVar => f.write_str("genvar"),
+                        VSymbol::Task(_) => f.write_str("task"),
+                        VSymbol::Function(_) => f.write_str("function"),
+                    }
+                })
+            )?;
+        }
     }
 
+    let mut error = false;
     let mut signal_map = HashMap::new();
     // @TODO: Iterate over the modules instead.
     for key in elab_table.symbol_id_iter() {
@@ -711,6 +701,7 @@ pub fn run(
 
     let mut ctx = Context::new(gl.logic_mode, stdout, stderr);
     ctx.itrace = ectx.itrace;
+    let tlm = elab_table.roots()[0];
     let fail = vogls_sim::run(
         &mut ctx,
         &processes,
@@ -724,7 +715,7 @@ pub fn run(
         ectx.vcd.as_deref().map(|p| {
             let scope = Scope {
                 table: &mut elab_table,
-                key: tl_module_symid,
+                key: tlm,
                 signal_map: &mut signal_map,
             };
             let scope = scope.vcd_scope(&ast.arenas.ident_table);

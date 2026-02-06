@@ -159,6 +159,10 @@ impl<T> SymbolTable<T> {
         };
         self.symbols.pop();
     }
+
+    pub fn roots(&self) -> &[SymbolId] {
+        &self.roots
+    }
 }
 
 impl<T> Symbol<T> {

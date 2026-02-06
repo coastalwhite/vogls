@@ -11,7 +11,6 @@ use vogls_bits::load::load_partial_u64;
 use vogls_bits::set_subslice::{tv_l_set, tv_s_set};
 use vogls_bits::store::store_partial_u64;
 use vogls_bits::{BitsDataRef, get_disjoint_dst_s1_s2, get_disjoint_dst_src};
-use vogls_ir::dyn_format_string::{Base, Padding, format_bits};
 use vogls_ir::vcd::NetType;
 use vogls_ir::{Bits, INTEGER_VSIZE, LogicMode, SCALAR_VSIZE, SignalKey, TIME_VSIZE, VectorSize};
 

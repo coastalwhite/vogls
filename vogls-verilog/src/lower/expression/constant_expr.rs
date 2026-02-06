@@ -277,8 +277,6 @@ pub fn eval_constant_expr<'a>(
                     Bits::new_unknown(fn_symbol.output_ty.force_net_width()),
                 );
 
-                dbg!(&esignals);
-
                 vogls_ir::evaluation::evaluate(gl, lowered.entry, &mut esignals, &mut evars);
 
                 result_stack.push(Some(VValue::net(

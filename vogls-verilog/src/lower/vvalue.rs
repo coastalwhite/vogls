@@ -50,6 +50,27 @@ impl VValue {
 
                 (l.sign_extend(max_size), r.sign_extend(max_size))
             }
+            // (V::UnsignedNet(l), V::SignedNet(r)) => {
+            //     let max_size = l.size().max(r.size());
+            //     (
+            //         VValue::SignedNet(l.zero_extend(max_size)),
+            //         VValue::SignedNet(r.sign_extend(max_size)),
+            //     )
+            // }
+            // (V::SignedNet(l), V::UnsignedNet(r)) => {
+            //     let max_size = l.size().max(r.size());
+            //     (
+            //         VValue::SignedNet(l.sign_extend(max_size)),
+            //         VValue::SignedNet(r.zero_extend(max_size)),
+            //     )
+            // }
+            // (V::UnsignedNet(l), V::UnsignedNet(r)) => {
+            //     let max_size = l.size().max(r.size());
+            //     (
+            //         VValue::UnsignedNet(l.zero_extend(max_size)),
+            //         VValue::UnsignedNet(r.zero_extend(max_size)),
+            //     )
+            // }
             (
                 l @ (V::UnsignedNet(_) | V::SignedNet(_)),
                 r @ (V::UnsignedNet(_) | V::SignedNet(_)),

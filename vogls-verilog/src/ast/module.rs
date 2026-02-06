@@ -374,6 +374,21 @@ pub enum GenerateBlock {
     ),
 }
 
+impl GenerateBlock {
+    pub fn ident(self) -> Option<AstItem<Identifier>> {
+        match self {
+            GenerateBlock::ModuleOrGenerateItem(_) => None,
+            GenerateBlock::BeginEnd(ident, _) => ident,
+        }
+    }
+    pub fn module_or_generate_items(self) -> AstIdRange<ModuleOrGenerateItem> {
+        match self {
+            GenerateBlock::ModuleOrGenerateItem(id) => AstIdRange::single(id),
+            GenerateBlock::BeginEnd(_, ids) => ids,
+        }
+    }
+}
+
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
 // genvar_initialization ::= genvar_identifier = constant_expression
 // genvar_iteration      ::= genvar_identifier = genvar_expression

@@ -64,6 +64,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     paths.sort_unstable();
 
     let mut num_failed = 0;
+    let mut num_tests = 0;
     let mut o = std::io::stdout();
     writeln!(&mut o, "Running {} tests...", paths.len())?;
     for path in paths.iter() {
@@ -171,6 +172,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                 }
             }
 
+            num_tests += 1;
             num_failed += usize::from(failed);
             if result.is_err() {
                 writeln!(&mut o, "\x1b[31mPANIC\x1b[0m")?;
@@ -202,7 +204,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             &mut o,
             "\x1b[31mFailed {}/{} tests.\x1b[0m",
             num_failed,
-            paths.len()
+            num_tests,
         )?;
         Ok(ExitCode::FAILURE)
     }

@@ -12,7 +12,7 @@ use crate::elaborate::NetSymbol;
 use crate::lower::{Diagnostics, EvalScope, VType, evaluate_range};
 use crate::parser::AstArenas;
 
-use super::{VSymbol, VSymbolTable, elaborate_block_item_decl, eval_constant_range};
+use super::{VSymbol, VSymbolTable, eval_constant_range};
 
 pub fn elaborate_fn<'a>(
     gl: &mut GlobalContext,
@@ -27,12 +27,11 @@ pub fn elaborate_fn<'a>(
 
     let parent = table[symbol].parent().unwrap();
     let id = i.ast_id;
-    let output_key = i.output;
     let FunctionDeclaration {
         ident,
         tf_input_decls,
         statement,
-        block_item_decls,
+        block_item_decls: _,
         range_or_type,
         ..
     } = arenas.get(id);
@@ -60,14 +59,7 @@ pub fn elaborate_fn<'a>(
         }
     };
 
-    let fn_name = &arenas.ident_table[ident.item.0];
-    let output_origin = arenas.get_item_span(*ident);
-    gl.signals[output_key] = Signal {
-        name: fn_name.to_string(),
-        size: output_ty.force_net_width(),
-        initialize: None,
-        origin: output_origin,
-    };
+    let output_key = super::new_signal(gl, arenas, &output_ty, &[], *ident);
     if table
         .insert(
             ident.item.0,
@@ -85,10 +77,6 @@ pub fn elaborate_fn<'a>(
     {
         diagnostics.duplicate_definition(arenas, *ident);
         return Err(());
-    }
-
-    for item_decl in block_item_decls.iter() {
-        elaborate_block_item_decl(gl, arenas, symbol, table, diagnostics, item_decl)?;
     }
 
     let mut inputs = Vec::<(SignalKey, VType)>::new();
@@ -122,14 +110,8 @@ pub fn elaborate_fn<'a>(
                 TfType::Real | TfType::Realtime | TfType::Time => todo!(),
             };
             let ident = arenas.to_item(ident);
-            let name = &arenas.ident_table[ident.item.0];
             let origin = arenas.get_item_span(ident);
-            let signal = gl.signals.insert(Signal {
-                name: name.to_string(),
-                size: ty.force_net_width(),
-                initialize: None,
-                origin: arenas.get_item_span(ident),
-            });
+            let signal = super::new_signal(gl, arenas, &ty, &[], ident);
             if table
                 .insert(
                     ident.item.0,
@@ -156,6 +138,7 @@ pub fn elaborate_fn<'a>(
         unreachable!();
     };
     i.inputs = inputs;
+    i.output = output_key;
     i.output_ty = output_ty;
 
     super::elaborate_statements(
@@ -183,14 +166,10 @@ pub fn elaborate_task<'a>(
     let id = i.ast_id;
     let TaskDeclaration {
         task_ports,
-        block_item_decls,
+        block_item_decls: _,
         statement_or_null,
         ..
     } = arenas.get(id);
-
-    for item_decl in block_item_decls.iter() {
-        elaborate_block_item_decl(gl, arenas, symbol, table, diagnostics, item_decl)?;
-    }
 
     let mut io = Vec::<(SignalKey, ConnectionDirection, VType)>::new();
     for decl in task_ports.iter() {
@@ -220,14 +199,8 @@ pub fn elaborate_task<'a>(
                 TfType::Real | TfType::Realtime | TfType::Time => todo!(),
             };
             let ident = arenas.to_item(ident);
-            let name = &arenas.ident_table[ident.item.0];
             let origin = arenas.get_item_span(ident);
-            let signal = gl.signals.insert(Signal {
-                name: name.to_string(),
-                size: ty.force_net_width(),
-                initialize: None,
-                origin,
-            });
+            let signal = super::new_signal(gl, arenas, &ty, &[], ident);
             if table
                 .insert(
                     ident.item.0,
