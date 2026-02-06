@@ -83,11 +83,13 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             fail: bool,
             verify_stdout: bool,
             time: u64,
+            top_level_module: Option<String>,
         }
 
         let mut test_information = TestInfo {
             fail: false,
             verify_stdout: false,
+            top_level_module: None,
             time: 1000,
         };
         {
@@ -107,8 +109,11 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                 match line {
                     "fail" => test_information.fail = true,
                     "verify-stdout" => test_information.verify_stdout = true,
+                    _ if line.starts_with("tlm=") => {
+                        test_information.top_level_module = Some(line[4..].trim().to_string());
+                    }
                     _ if line.starts_with("time=") => {
-                        test_information.time = line[5..].parse().expect("failed to parse")
+                        test_information.time = line[5..].parse().expect("failed to parse");
                     }
                     _ => {
                         println!();
@@ -153,7 +158,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             let ctx = std::panic::AssertUnwindSafe(&mut ctx);
             let result = std::panic::catch_unwind(|| {
                 let ctx = ctx;
-                vogls::run(&path, None, ctx.0)
+                vogls::run(&path, test_information.top_level_module.as_deref(), ctx.0)
             });
 
             let stdout = stdout.0.lock().unwrap();
@@ -203,8 +208,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         writeln!(
             &mut o,
             "\x1b[31mFailed {}/{} tests.\x1b[0m",
-            num_failed,
-            num_tests,
+            num_failed, num_tests,
         )?;
         Ok(ExitCode::FAILURE)
     }

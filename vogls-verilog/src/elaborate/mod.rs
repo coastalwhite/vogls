@@ -6,8 +6,8 @@ use vogls_frontend::VgHashMap;
 use vogls_frontend::ident_table::IdentId;
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{
-    BasicBlockKey, ConnectionDirection, GlobalContext, ProcessKey, SCALAR_VSIZE,
-    Signal, SignalKey, VectorSize,
+    BasicBlockKey, ConnectionDirection, GlobalContext, ProcessKey, SCALAR_VSIZE, Signal, SignalKey,
+    VectorSize,
 };
 
 use crate::ast::constant_expr::ConstantExpr;
@@ -32,6 +32,8 @@ pub enum VSymbol {
     GenVar,
     Task(TaskSymbol),
     Function(FunctionSymbol),
+
+    GenerateBlocks,
 }
 
 impl fmt::Debug for VSymbol {
@@ -45,6 +47,7 @@ impl fmt::Debug for VSymbol {
             VSymbol::GenVar => "genvar",
             VSymbol::Task(_) => "task",
             VSymbol::Function(_) => "function",
+            VSymbol::GenerateBlocks => "generate_blocks",
         })
     }
 }

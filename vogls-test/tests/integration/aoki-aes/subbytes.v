@@ -1,3 +1,5 @@
+// vogls: tlm=tb
+
 `define AESMODULE AES_ENC
 `include "../../../submodules/aoki-aes/AES.v"
 

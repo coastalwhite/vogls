@@ -361,7 +361,8 @@ pub fn lower_expr<'a>(
                     | VSymbol::Function(_)
                     | VSymbol::Module(_)
                     | VSymbol::NamedBlock
-                    | VSymbol::GenerateBlock(_) => {
+                    | VSymbol::GenerateBlock(_)
+                    | VSymbol::GenerateBlocks => {
                         diagnostics
                             .not_yet_implemented(arenas.get_span(expr), "cannot use this symbol");
                         error = true;
@@ -846,7 +847,8 @@ pub fn get_used_signals<'a>(
                     | VSymbol::Module(_)
                     | VSymbol::NamedBlock
                     | VSymbol::Function(_)
-                    | VSymbol::GenerateBlock(_) => {}
+                    | VSymbol::GenerateBlock(_)
+                    | VSymbol::GenerateBlocks => {}
                 }
 
                 dispatch_stack.extend(exprs.iter().map(StackItem::new));

@@ -38,7 +38,7 @@ fn extend_symbol_table_to_vcd_scope(
     for sid in symbols.iter() {
         let name = &ident_table[table[*sid].name()];
         match &table[*sid].content {
-            S::Module(_) | S::NamedBlock | S::GenerateBlock(_) => {
+            S::Module(_) | S::NamedBlock | S::GenerateBlock(_) | S::GenerateBlocks => {
                 let mut subscope = VcdScope {
                     name: name.to_string(),
                     items: Vec::new(),
@@ -352,20 +352,30 @@ pub fn lower_module_to_ir<'a>(
         default_nettype: _,
     } = arenas.get(root);
 
-    for i in 0..scope.table[scope.key].children().len() {
-        let child = scope.table[scope.key].children()[i];
-        let VSymbol::GenerateBlock(ast_ids) = &scope.table[child].content else {
-            continue;
-        };
-
-        for id in ast_ids.iter() {
-            let mut scope = Scope {
-                table: &mut scope.table,
-                key: child,
-                signal_map: scope.signal_map,
-            };
-            module_or_generate_item::lower(gl, arenas, &mut scope, id, diagnostics)?;
+    let mut scopes = Vec::new();
+    scopes.extend(scope.table[scope.key].children().iter().filter(|c| {
+        matches!(
+            scope.table[**c].content,
+            VSymbol::GenerateBlock(_) | VSymbol::GenerateBlocks
+        )
+    }));
+    while let Some(scope_key) = scopes.pop() {
+        if let VSymbol::GenerateBlock(ast_ids) = &scope.table[scope_key].content {
+            for id in ast_ids.iter() {
+                let mut scope = Scope {
+                    table: &mut scope.table,
+                    key: scope_key,
+                    signal_map: scope.signal_map,
+                };
+                module_or_generate_item::lower(gl, arenas, &mut scope, id, diagnostics)?;
+            }
         }
+        scopes.extend(scope.table[scope_key].children().iter().filter(|c| {
+            matches!(
+                scope.table[**c].content,
+                VSymbol::GenerateBlock(_) | VSymbol::GenerateBlocks
+            )
+        }));
     }
 
     for module_item in module_items.iter() {

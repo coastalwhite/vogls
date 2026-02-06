@@ -3,7 +3,6 @@ use vogls_ir::{
     ConnectionDirection, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE, SignalKey,
 };
 
-use crate::ast::AstIdRange;
 use crate::ast::module::{
     FunctionDeclaration, FunctionRangeOrType, TaskDeclaration, TaskPortItemContent,
     TfInputDeclaration, TfType,

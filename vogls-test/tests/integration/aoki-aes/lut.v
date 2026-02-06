@@ -1,3 +1,5 @@
+// vogls: tlm=tb
+
 `ifdef AES_IMPL_COMP
 
 `include "../../../submodules/aoki-aes/AES_Comp.v"

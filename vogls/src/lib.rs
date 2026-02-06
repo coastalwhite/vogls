@@ -327,6 +327,7 @@ pub fn run(
                         }
                         VSymbol::NamedBlock => f.write_str("named block"),
                         VSymbol::GenerateBlock(_) => f.write_str("generate block"),
+                        VSymbol::GenerateBlocks => f.write_str("generate blocks"),
                         VSymbol::GenVar => f.write_str("genvar"),
                         VSymbol::Task(_) => f.write_str("task"),
                         VSymbol::Function(_) => f.write_str("function"),

@@ -12,13 +12,14 @@ use crate::ast::expr::{BitSlice, Expr, Replication};
 use crate::ast::module::{
     AlwaysConstruct, BlockItemDeclaration, CaseGenerateConstruct, CaseGenerateItem,
     CaseGeneratePattern, Dimension, FunctionDeclaration, FunctionRangeOrType, GenerateBlock,
-    GenerateRegion, GenvarDeclaration, IfGenerateConstruct, InitialConstruct, IntegerDeclaration,
-    LocalParameterDeclaration, LoopGenerateConstruct, Module, ModuleInstantiation, ModuleItem,
-    ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration, ModulePorts, NamedParameterAssignment,
-    NetDeclAssignment, NetDeclaration, NetDeclarationNets, NetIdent, NetType, NonPortModuleItem,
-    ParamAssignment, ParameterDeclaration, ParameterDeclarationTyping, ParameterValueAssignment,
-    Port, PortDeclaration, PortExpression, PortReference, Range, RegDeclaration, TaskDeclaration,
-    TaskPortItem, TaskPortItemContent, TfType, VariableType, VariableTypeVariant,
+    GenerateRegion, GenvarAssignment, GenvarDeclaration, IfGenerateConstruct, InitialConstruct,
+    IntegerDeclaration, LocalParameterDeclaration, LoopGenerateConstruct, Module,
+    ModuleInstantiation, ModuleItem, ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration,
+    ModulePorts, NamedParameterAssignment, NetDeclAssignment, NetDeclaration, NetDeclarationNets,
+    NetIdent, NetType, NonPortModuleItem, ParamAssignment, ParameterDeclaration,
+    ParameterDeclarationTyping, ParameterValueAssignment, Port, PortDeclaration, PortExpression,
+    PortReference, Range, RegDeclaration, TaskDeclaration, TaskPortItem, TaskPortItemContent,
+    TfType, VariableType, VariableTypeVariant,
 };
 use crate::ast::statement::{
     Block, ConditionalStatement, SeqBlock, Statement, StatementContent, StatementOrNull,
@@ -26,8 +27,8 @@ use crate::ast::statement::{
 use crate::ast::{AstId, AstIdRange, AstItem, Identifier};
 use crate::elaborate::{FunctionSymbol, TaskSymbol};
 use crate::lower::{
-    Diagnostics, VType, VValue, resolve_symbol_id_hier, unwrap_get_module, unwrap_get_module_mut,
-    unwrap_get_net_mut, unwrap_get_param_mut,
+    Diagnostics, VType, VValue, resolve_symbol_id_hier, try_resolve_symbol_id, unwrap_get_module,
+    unwrap_get_module_mut, unwrap_get_net_mut, unwrap_get_param_mut,
 };
 use crate::parser::AstArenas;
 
@@ -177,7 +178,6 @@ pub fn elaborate<'a>(
             ElabLevel::GenerateRegion(region) => {
                 for item in region.module_or_generate_item.iter() {
                     lvl_error |= extend_module_or_generate_item_sids(
-                        gl,
                         arenas,
                         item,
                         scope,
@@ -190,7 +190,7 @@ pub fn elaborate<'a>(
             }
             ElabLevel::Module(module) => {
                 lvl_error |=
-                    elaborate_module(gl, arenas, module, scope, &mut table, &mut st, diagnostics)
+                    elaborate_module(arenas, module, scope, &mut table, &mut st, diagnostics)
                         .is_err();
             }
         };
@@ -282,7 +282,6 @@ pub fn elaborate<'a>(
 }
 
 fn extend_opt_generate_block_sids<'a>(
-    gl: &mut GlobalContext,
     arenas: &'a AstArenas,
     scope: SymbolId,
     table: &mut VSymbolTable,
@@ -303,7 +302,7 @@ fn extend_opt_generate_block_sids<'a>(
 
     let mut error = false;
     for item in items.iter() {
-        error |= extend_module_or_generate_item_sids(gl, arenas, item, sid, table, st, diagnostics)
+        error |= extend_module_or_generate_item_sids(arenas, item, sid, table, st, diagnostics)
             .is_err();
     }
     if error { Err(()) } else { Ok(()) }
@@ -334,7 +333,7 @@ fn extend_generate_if_sids<'a>(
             Some(blk) => *blk,
         }
     };
-    extend_opt_generate_block_sids(gl, arenas, scope, table, st, blk, diagnostics)
+    extend_opt_generate_block_sids(arenas, scope, table, st, blk, diagnostics)
 }
 
 fn extend_generate_loop_sids<'a>(
@@ -346,7 +345,109 @@ fn extend_generate_loop_sids<'a>(
     id: AstId<LoopGenerateConstruct>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
-    todo!()
+    let LoopGenerateConstruct {
+        initialization,
+        condition,
+        iteration,
+        block,
+    } = arenas.get(id);
+
+    let GenvarAssignment {
+        ident: initialization_ident,
+        expr: initialization,
+    } = arenas.get(*initialization);
+    let GenvarAssignment {
+        ident: iteration_ident,
+        expr: iteration,
+    } = arenas.get(*iteration);
+
+    if initialization_ident.item.0 != iteration_ident.item.0 {
+        diagnostics.not_yet_implemented(
+            arenas.get_span(*initialization),
+            "initialization and iteration assignment identifier are different",
+        );
+        return Err(());
+    }
+    let genvar_sid =
+        try_resolve_symbol_id(scope, table, arenas, *initialization_ident, diagnostics)?;
+    let VSymbol::GenVar = &table[genvar_sid].content else {
+        diagnostics.not_yet_implemented(
+            arenas.get_span(*initialization),
+            "non-genvar used as genvar",
+        );
+        return Err(());
+    };
+
+    let mut value =
+        super::eval_constant_expr_elab(gl, arenas, scope, table, diagnostics, *initialization)?;
+
+    let (mod_or_gen_items, block_ident_ast) = match arenas.get(*block) {
+        GenerateBlock::ModuleOrGenerateItem(id) => (AstIdRange::single(*id), None),
+        GenerateBlock::BeginEnd(ident, mod_or_gen_items) => (*mod_or_gen_items, *ident),
+    };
+
+    let loop_sid = match block_ident_ast {
+        Some(block_ident) => try_table_insert(
+            arenas,
+            table,
+            scope,
+            block_ident,
+            VSymbol::GenerateBlocks,
+            diagnostics,
+        )?,
+        None => table.insert_unlinked(
+            IdentTable::EMPTY_IDENT,
+            scope,
+            arenas.get_range_span(mod_or_gen_items),
+            VSymbol::GenerateBlocks,
+        ),
+    };
+
+    loop {
+        let iter_sid = table.insert_unlinked(
+            IdentTable::EMPTY_IDENT,
+            loop_sid,
+            table[loop_sid].origin(),
+            VSymbol::GenerateBlock(mod_or_gen_items),
+        );
+
+        let genvar_constant = table
+            .insert(
+                initialization_ident.item.0,
+                iter_sid,
+                arenas.get_item_span(*initialization_ident),
+                VSymbol::Parameter(value.clone()),
+            )
+            .expect("No other idents in this block yet");
+
+        let c =
+            super::eval_constant_expr_elab(gl, arenas, iter_sid, table, diagnostics, *condition)?;
+        if !c.to_logical() {
+            table.pop_last_inserted(genvar_constant);
+            table.pop_last_inserted(iter_sid);
+            break;
+        }
+
+        let mut error = false;
+        for item in mod_or_gen_items.iter() {
+            error |= extend_module_or_generate_item_sids(
+                arenas,
+                item,
+                iter_sid,
+                table,
+                st,
+                diagnostics,
+            )
+            .is_err();
+        }
+        if error {
+            return Err(());
+        }
+
+        value =
+            super::eval_constant_expr_elab(gl, arenas, iter_sid, table, diagnostics, *iteration)?;
+    }
+    Ok(())
 }
 
 fn extend_generate_case_sids<'a>(
@@ -386,7 +487,6 @@ fn extend_generate_case_sids<'a>(
 
         if is_selected {
             return extend_opt_generate_block_sids(
-                gl,
                 arenas,
                 scope,
                 table,
@@ -450,7 +550,6 @@ pub enum ParameterType {
 }
 
 fn elaborate_module<'a>(
-    gl: &mut GlobalContext,
     arenas: &'a AstArenas,
     module: AstId<Module>,
     scope: SymbolId,
@@ -603,7 +702,6 @@ fn elaborate_module<'a>(
             ModuleItem::NonPortModuleItem(id) => match arenas.get(*id) {
                 NonPortModuleItem::ModuleOrGenerateItem(id) => {
                     error |= extend_module_or_generate_item_sids(
-                        gl,
                         arenas,
                         *id,
                         scope,
@@ -650,7 +748,6 @@ fn elaborate_module<'a>(
 }
 
 fn extend_module_or_generate_item_sids<'a>(
-    gl: &mut GlobalContext,
     arenas: &'a AstArenas,
     id: AstId<ModuleOrGenerateItem>,
     scope: SymbolId,
@@ -704,7 +801,7 @@ fn extend_module_or_generate_item_sids<'a>(
                     }
                     NetDeclarationNets::Assignments(assignments) => {
                         for assignment in assignments.iter() {
-                            let NetDeclAssignment { ident, expr } = arenas.get(assignment);
+                            let NetDeclAssignment { ident, expr: _ } = arenas.get(assignment);
                             let symbol = NetSymbol {
                                 ty: VType::SCALAR_NET,
                                 dims: Vec::new(),
@@ -797,7 +894,6 @@ fn extend_module_or_generate_item_sids<'a>(
                 let mut error = false;
                 for block_item_decl in block_item_decls.iter() {
                     error |= extend_block_item_decl_sid(
-                        gl,
                         arenas,
                         sid,
                         table,
@@ -810,7 +906,6 @@ fn extend_module_or_generate_item_sids<'a>(
 
                 if let StatementOrNull::Statement(stmt) = arenas.get(*statement_or_null) {
                     error |= extend_statements_sids(
-                        gl,
                         arenas,
                         AstIdRange::single(*stmt),
                         scope,
@@ -854,7 +949,6 @@ fn extend_module_or_generate_item_sids<'a>(
                 let mut error = false;
                 for block_item_decl in block_item_decls.iter() {
                     error |= extend_block_item_decl_sid(
-                        gl,
                         arenas,
                         sid,
                         table,
@@ -866,7 +960,6 @@ fn extend_module_or_generate_item_sids<'a>(
                 }
 
                 error |= extend_statements_sids(
-                    gl,
                     arenas,
                     AstIdRange::single(*statement),
                     scope,
@@ -944,7 +1037,6 @@ fn extend_module_or_generate_item_sids<'a>(
         ModuleOrGenerateItem::InitialConstruct(id) => {
             let InitialConstruct(id) = arenas.get(*id);
             extend_statements_sids(
-                gl,
                 arenas,
                 AstIdRange::single(*id),
                 scope,
@@ -956,7 +1048,6 @@ fn extend_module_or_generate_item_sids<'a>(
         ModuleOrGenerateItem::AlwaysConstruct(id) => {
             let AlwaysConstruct(id) = arenas.get(*id);
             extend_statements_sids(
-                gl,
                 arenas,
                 AstIdRange::single(*id),
                 scope,
@@ -984,7 +1075,6 @@ fn extend_module_or_generate_item_sids<'a>(
 }
 
 fn extend_statements_sids<'a>(
-    gl: &mut GlobalContext,
     arenas: &'a AstArenas,
     stmts: AstIdRange<Statement>,
     scope: SymbolId,
@@ -1034,7 +1124,6 @@ fn extend_statements_sids<'a>(
 
                         for block_item_decl in block_item_decls.iter() {
                             error |= extend_block_item_decl_sid(
-                                gl,
                                 arenas,
                                 scope,
                                 table,
@@ -1097,7 +1186,6 @@ fn extend_statements_sids<'a>(
 }
 
 fn extend_block_item_decl_sid<'a>(
-    gl: &mut GlobalContext,
     arenas: &'a AstArenas,
     scope: SymbolId,
     table: &mut VSymbolTable,
