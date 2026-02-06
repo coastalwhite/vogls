@@ -302,8 +302,8 @@ fn extend_opt_generate_block_sids<'a>(
 
     let mut error = false;
     for item in items.iter() {
-        error |= extend_module_or_generate_item_sids(arenas, item, sid, table, st, diagnostics)
-            .is_err();
+        error |=
+            extend_module_or_generate_item_sids(arenas, item, sid, table, st, diagnostics).is_err();
     }
     if error { Err(()) } else { Ok(()) }
 }
@@ -430,15 +430,9 @@ fn extend_generate_loop_sids<'a>(
 
         let mut error = false;
         for item in mod_or_gen_items.iter() {
-            error |= extend_module_or_generate_item_sids(
-                arenas,
-                item,
-                iter_sid,
-                table,
-                st,
-                diagnostics,
-            )
-            .is_err();
+            error |=
+                extend_module_or_generate_item_sids(arenas, item, iter_sid, table, st, diagnostics)
+                    .is_err();
         }
         if error {
             return Err(());
@@ -486,14 +480,7 @@ fn extend_generate_case_sids<'a>(
         };
 
         if is_selected {
-            return extend_opt_generate_block_sids(
-                arenas,
-                scope,
-                table,
-                st,
-                *block,
-                diagnostics,
-            );
+            return extend_opt_generate_block_sids(arenas, scope, table, st, *block, diagnostics);
         }
     }
 
@@ -1319,7 +1306,7 @@ impl InLevelSymbol {
                     ParameterDeclarationTyping::None(_, Some(range)) => {
                         let Range { msb, lsb } = arenas.get(*range);
                         for e in [*msb, *lsb] {
-                            extend_constant_expr_symbol_needs(arenas, scope, table, st, e);
+                            extend_expr_needs(arenas, scope, table, st, e);
                         }
                     }
                     ParameterDeclarationTyping::None(..)
@@ -1334,7 +1321,7 @@ impl InLevelSymbol {
                     ConstantMinTypMaxExpression::MinTypMax { min, typ, max } => &[*min, *typ, *max],
                 };
                 for e in exprs {
-                    extend_constant_expr_symbol_needs(arenas, scope, table, st, *e);
+                    extend_expr_needs(arenas, scope, table, st, *e);
                 }
             }
             InLevelSymbol::ModuleInstance(parameter_value_assignment, _) => {
@@ -1342,7 +1329,7 @@ impl InLevelSymbol {
                     match arenas.get(*parameter_value_assignment) {
                         ParameterValueAssignment::Ordered(exprs) => {
                             for e in exprs.iter() {
-                                extend_constant_expr_symbol_needs(arenas, scope, table, st, e);
+                                extend_expr_needs(arenas, scope, table, st, e);
                             }
                         }
                         ParameterValueAssignment::Named(named_exprs) => {
@@ -1357,7 +1344,7 @@ impl InLevelSymbol {
                                     }
                                 };
                                 for e in exprs {
-                                    extend_constant_expr_symbol_needs(arenas, scope, table, st, *e);
+                                    extend_expr_needs(arenas, scope, table, st, *e);
                                 }
                             }
                         }
@@ -1374,14 +1361,14 @@ impl InLevelSymbol {
                 if let Some(range) = range {
                     let Range { msb, lsb } = arenas.get(*range);
                     for e in [*msb, *lsb] {
-                        extend_constant_expr_symbol_needs(arenas, scope, table, st, e);
+                        extend_expr_needs(arenas, scope, table, st, e);
                     }
                 }
                 if let Some(dims) = dimension {
                     for dim in dims.iter() {
                         let Dimension { lhs, rhs } = arenas.get(dim);
                         for e in [*lhs, *rhs] {
-                            extend_constant_expr_symbol_needs(arenas, scope, table, st, e);
+                            extend_expr_needs(arenas, scope, table, st, e);
                         }
                     }
                 }
@@ -1390,7 +1377,7 @@ impl InLevelSymbol {
                 if let Some(range) = range {
                     let Range { msb, lsb } = arenas.get(*range);
                     for e in [*msb, *lsb] {
-                        extend_constant_expr_symbol_needs(arenas, scope, table, st, e);
+                        extend_expr_needs(arenas, scope, table, st, e);
                     }
                 }
 
@@ -1409,7 +1396,7 @@ impl InLevelSymbol {
                 if let Some(range) = range {
                     let Range { msb, lsb } = arenas.get(range);
                     for e in [*msb, *lsb] {
-                        extend_constant_expr_symbol_needs(arenas, scope, table, st, e);
+                        extend_expr_needs(arenas, scope, table, st, e);
                     }
                 }
             }
@@ -1451,7 +1438,7 @@ impl InLevelSymbol {
                 {
                     let Range { msb, lsb } = arenas.get(*range);
                     for e in [*msb, *lsb] {
-                        extend_constant_expr_symbol_needs(arenas, scope, table, st, e);
+                        extend_expr_needs(arenas, scope, table, st, e);
                     }
                 }
                 for tf_input_decl in tf_input_decls.iter() {
@@ -1483,7 +1470,7 @@ fn extend_tf_type_needs<'a>(
     {
         let Range { msb, lsb } = arenas.get(*range);
         for e in [*msb, *lsb] {
-            extend_constant_expr_symbol_needs(arenas, scope, table, st, e);
+            extend_expr_needs(arenas, scope, table, st, e);
         }
     }
 }
@@ -1500,17 +1487,17 @@ pub fn extend_var_type_needs<'a>(
             for dim in dims.iter() {
                 let Dimension { lhs, rhs } = arenas.get(dim);
                 for e in [*lhs, *rhs] {
-                    extend_constant_expr_symbol_needs(arenas, scope, table, st, e);
+                    extend_expr_needs(arenas, scope, table, st, e);
                 }
             }
         }
         VariableTypeVariant::ConstantExpr(e) => {
-            extend_constant_expr_symbol_needs(arenas, scope, table, st, e);
+            extend_expr_needs(arenas, scope, table, st, e);
         }
     }
 }
 
-pub fn extend_constant_expr_symbol_needs<'a>(
+pub fn extend_expr_needs<'a>(
     arenas: &'a AstArenas,
     scope: SymbolId,
     table: &VSymbolTable,
