@@ -229,6 +229,7 @@ impl Tokenized {
                                 Base::Octal => skip_octal,
                                 Base::Hexadecimal => skip_hexadecimal,
                             };
+                            skip_whitespace(bytes, &mut offset);
                             f(bytes, &mut offset);
                             (T::Number, offset - i)
                         }
@@ -239,6 +240,7 @@ impl Tokenized {
                         match take_base(bytes, &mut offset) {
                             None => (T::Unknown, 1),
                             Some(base) => {
+                                skip_whitespace(bytes, &mut offset);
                                 let f = match base {
                                     Base::Decimal => skip_decimal,
                                     Base::Binary => skip_binary,
@@ -730,6 +732,9 @@ fn skip_sameline_whitespace(s: &str, i: &mut usize) {
     while b.get(*i).is_some_and(|b| matches!(b, b' ' | b'\r' | b'\t')) {
         *i += 1;
     }
+}
+fn skip_whitespace(s: &[u8], i: &mut usize) {
+    *i += s[*i..].len() - s[*i..].trim_ascii_start().len();
 }
 
 fn str_length(s: &str) -> Option<usize> {

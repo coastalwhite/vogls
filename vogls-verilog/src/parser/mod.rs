@@ -325,6 +325,7 @@ impl<'a> Consumable<'a> for SizedNumberRef {
         let has_sign = skip_sign(content.as_bytes(), &mut i);
         let base = take_base(content.as_bytes(), &mut i).unwrap();
         let content = &content[i..];
+        let content = content.trim_ascii_start();
 
         let f = match base {
             Base::Decimal => parse_decimal_bits,
