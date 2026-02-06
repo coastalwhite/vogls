@@ -1,6 +1,6 @@
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{
-    ConnectionDirection, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE, Signal, SignalKey,
+    ConnectionDirection, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE, SignalKey,
 };
 
 use crate::ast::AstIdRange;
@@ -30,7 +30,7 @@ pub fn elaborate_fn<'a>(
     let FunctionDeclaration {
         ident,
         tf_input_decls,
-        statement,
+        statement: _,
         block_item_decls: _,
         range_or_type,
         ..
@@ -141,14 +141,7 @@ pub fn elaborate_fn<'a>(
     i.output = output_key;
     i.output_ty = output_ty;
 
-    super::elaborate_statements(
-        gl,
-        arenas,
-        symbol,
-        table,
-        diagnostics,
-        AstIdRange::single(*statement),
-    )
+    Ok(())
 }
 
 pub fn elaborate_task<'a>(
@@ -167,7 +160,7 @@ pub fn elaborate_task<'a>(
     let TaskDeclaration {
         task_ports,
         block_item_decls: _,
-        statement_or_null,
+        statement_or_null: _,
         ..
     } = arenas.get(id);
 
@@ -228,5 +221,5 @@ pub fn elaborate_task<'a>(
     };
     i.io = io;
 
-    super::elaborate_statement_or_null(gl, arenas, symbol, table, diagnostics, *statement_or_null)
+    Ok(())
 }
