@@ -137,6 +137,23 @@ pub fn resolve_symbol_id(
     }
 }
 
+pub fn resolve_symbol_id_hier(
+    scope: SymbolId,
+    table: &VSymbolTable,
+    arenas: &AstArenas,
+    ident: impl Into<HIdent>,
+) -> Option<SymbolId> {
+    let ident = ident.into();
+
+    let mut scope = scope;
+
+    for component in ident.components {
+        scope = resolve_symbol_id(scope, table, arenas.get(component).ident.item.0)?;
+    }
+
+    resolve_symbol_id(scope, table, ident.ident.item.0)
+}
+
 pub fn try_resolve_symbol_id(
     scope: SymbolId,
     table: &VSymbolTable,
@@ -256,6 +273,13 @@ pub fn unwrap_get_module_mut<'a>(
     sid: SymbolId,
 ) -> &'a mut ModuleSymbol {
     let VSymbol::Module(n) = &mut table[sid].content else {
+        panic!()
+    };
+    n
+}
+
+pub fn unwrap_get_param_mut<'a>(table: &'a mut VSymbolTable, sid: SymbolId) -> &'a mut VValue {
+    let VSymbol::Parameter(n) = &mut table[sid].content else {
         panic!()
     };
     n

@@ -35,6 +35,7 @@ use crate::lower::{
 use crate::parser::AstArenas;
 
 pub mod function;
+pub mod next;
 
 pub type VSymbolTable = vogls_frontend::symbol_table::SymbolTable<VSymbol>;
 
