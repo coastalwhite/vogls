@@ -1,8 +1,8 @@
 use std::fmt::{self, Write};
 
-use super::{StackOffset, VmInstruction, VmProcess, VmSignalKey};
+use super::{HeapOffset, VmInstruction, VmProcess, VmSignalKey};
 
-impl fmt::Display for StackOffset {
+impl fmt::Display for HeapOffset {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "t{}", self.0)
     }

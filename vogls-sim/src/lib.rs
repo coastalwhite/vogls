@@ -16,7 +16,7 @@ mod instruction;
 mod heap;
 
 pub use instruction::*;
-use heap::Stack;
+use heap::Heap;
 
 new_key_type! { pub struct ListenerKey; }
 
@@ -115,8 +115,8 @@ enum EvalOutcome {
 
 fn update_watchers(
     sig: VmSignalKey,
-    stack: &Stack,
-    signals: &[StackRef],
+    stack: &Heap,
+    signals: &[HeapRef],
     watches: &mut [Vec<ListenerKey>],
     listeners: &mut SlotMap<ListenerKey, Event>,
     regions: &mut Regions,
@@ -146,9 +146,9 @@ fn update_watchers(
 }
 
 pub fn drive_bits(
-    stack: &mut Stack,
-    dst: StackRef,
-    src: StackRef,
+    heap: &mut Heap,
+    dst: HeapRef,
+    src: HeapRef,
     partial: Option<u32>,
     logic_mode: LogicMode,
 ) -> bool {
@@ -157,21 +157,21 @@ pub fn drive_bits(
 
         return match logic_mode {
             LogicMode::TwoValue if dst.size.get() <= 32 => {
-                let (dst_s, src_s) = stack.get_disjoint_u8_dst_src(dst, src);
+                let (dst_s, src_s) = heap.get_disjoint_u8_dst_src(dst, src);
                 tv_s_set(dst_s, src_s, dst.size, partial, src.size)
             }
             LogicMode::TwoValue => {
                 let mut src_s = [0u64];
                 let (dst_s, src_s) = if src.size.get() <= 32 {
-                    src_s[0] = stack.get_tv_u64(src);
+                    src_s[0] = heap.get_tv_u64(src);
                     (
-                        stack.get_mut_u64_slice(dst.offset, dst.size.get().div_ceil(64) as usize),
+                        heap.get_mut_u64_slice(dst.offset, dst.size.get().div_ceil(64) as usize),
                         &src_s[..],
                     )
                 } else {
                     let dst_nwords = dst.size.get().div_ceil(64) as usize;
                     let src_nwords = src.size.get().div_ceil(64) as usize;
-                    stack.get_disjoint_u64_dst_src(
+                    heap.get_disjoint_u64_dst_src(
                         (dst.offset, dst_nwords),
                         (src.offset, src_nwords),
                     )
@@ -180,28 +180,28 @@ pub fn drive_bits(
                 tv_l_set(dst_s, src_s, dst.size, partial, src.size)
             }
             LogicMode::FourValue if dst.size.get() <= 16 => {
-                let (src_spc, src_val) = stack.get_fv_u64(src);
-                let (old_spc, old_val) = stack.get_fv_u64(dst);
+                let (src_spc, src_val) = heap.get_fv_u64(src);
+                let (old_spc, old_val) = heap.get_fv_u64(dst);
 
                 let mask = (1u64 << src.size.get()) - 1;
                 let mask = mask << partial;
                 let new_spc = (src_spc << partial) | (old_spc & !mask);
                 let new_val = (src_val << partial) | (old_val & !mask);
-                stack.set_fv_u64(dst, new_spc, new_val);
+                heap.set_fv_u64(dst, new_spc, new_val);
                 old_spc != new_spc || old_val != new_val
             }
             _ => {
                 let mut src_s = [0u64, 0u64];
                 let dst_nwords = dst.size.get().div_ceil(64) as usize;
                 let (dst_s, src_s) = if src.size.get() <= 16 {
-                    (src_s[0], src_s[1]) = stack.get_fv_u64(src);
+                    (src_s[0], src_s[1]) = heap.get_fv_u64(src);
                     (
-                        stack.get_mut_u64_slice(dst.offset, 2 * dst_nwords),
+                        heap.get_mut_u64_slice(dst.offset, 2 * dst_nwords),
                         &src_s[..],
                     )
                 } else {
                     let src_nwords = src.size.get().div_ceil(64) as usize;
-                    stack.get_disjoint_u64_dst_src(
+                    heap.get_disjoint_u64_dst_src(
                         (dst.offset, 2 * dst_nwords),
                         (src.offset, 2 * src_nwords),
                     )
@@ -230,13 +230,13 @@ pub fn drive_bits(
     let size = dst.size;
     match logic_mode {
         LogicMode::TwoValue if size.get() <= 32 => {
-            let src = stack.get_tv_u64(src);
-            let dst = stack.set_tv_u64(dst, src);
+            let src = heap.get_tv_u64(src);
+            let dst = heap.set_tv_u64(dst, src);
             dst != src
         }
         LogicMode::FourValue if size.get() <= 16 => {
-            let (spc, val) = stack.get_fv_u64(src);
-            let (dspc, dval) = stack.set_fv_u64(dst, spc, val);
+            let (spc, val) = heap.get_fv_u64(src);
+            let (dspc, dval) = heap.set_fv_u64(dst, spc, val);
             dspc != spc || val != dval
         }
         LogicMode::TwoValue | LogicMode::FourValue => {
@@ -246,7 +246,7 @@ pub fn drive_bits(
             }
 
             let (dst, src) =
-                stack.get_disjoint_u64_dst_src((dst.offset, nwords), (src.offset, nwords));
+                heap.get_disjoint_u64_dst_src((dst.offset, nwords), (src.offset, nwords));
             let mut updated = false;
             for i in 0..nwords {
                 updated |= dst[i] != src[i];
@@ -406,8 +406,8 @@ impl VcdOutput {
     fn dump_time_step(
         &mut self,
         ctx: &Context,
-        stack: &Stack,
-        signals: &[StackRef],
+        heap: &Heap,
+        signals: &[HeapRef],
         finish: bool,
     ) -> std::io::Result<()> {
         let f = &mut self.writer;
@@ -433,7 +433,7 @@ impl VcdOutput {
         for signal in &self.updated_this_time_step {
             let bits = signals[signal.0 as usize];
             let idx = signal.0;
-            let bits = stack.load_tv_bits(bits);
+            let bits = heap.load_tv_bits(bits);
             if bits.size().get() > 1 {
                 f.write_all(&[b'b'])?;
             }
@@ -468,10 +468,10 @@ impl Event {
         processes: &[VmProcess],
         schedule: &mut BTreeMap<Timestamp, Vec<Event>>,
         regions: &mut Regions,
-        signals: &mut [StackRef],
+        signals: &mut [HeapRef],
         listeners: &mut SlotMap<ListenerKey, Event>,
         watches: &mut [Vec<ListenerKey>],
-        stack: &mut Stack,
+        heap: &mut Heap,
         vcd: &mut Option<VcdOutput>,
         mut trace: Option<&mut vogls_trace::Trace>,
     ) -> EvalOutcome {
@@ -491,64 +491,64 @@ impl Event {
             let outcome = 'instruction: {
                 use VmInstruction as I;
                 match instr {
-                    I::Constant(dst, value) => execution::exec_constant(stack, *dst, value),
+                    I::Constant(dst, value) => execution::exec_constant(heap, *dst, value),
 
                     I::TvUnary(dst, op, src) => {
-                        execution::tv::exec_tv_unary(stack, *dst, *op, *src)
+                        execution::tv::exec_tv_unary(heap, *dst, *op, *src)
                     }
                     I::TvResize(dst, op, src) => {
-                        execution::tv::exec_tv_resize(stack, *dst, *op, *src)
+                        execution::tv::exec_tv_resize(heap, *dst, *op, *src)
                     }
                     I::TvBinaryArithmetic(dst, op, lhs, rhs) => {
-                        execution::tv::exec_tv_bin_arith(stack, *dst, *op, *lhs, *rhs)
+                        execution::tv::exec_tv_bin_arith(heap, *dst, *op, *lhs, *rhs)
                     }
                     I::TvBinaryComparison(dst, op, lhs, rhs) => {
-                        execution::tv::exec_tv_bin_cmp(stack, *dst, *op, *lhs, *rhs)
+                        execution::tv::exec_tv_bin_cmp(heap, *dst, *op, *lhs, *rhs)
                     }
                     I::TvShift(dst, op, src, offset) => {
-                        execution::tv::exec_tv_shift(stack, *dst, *op, *src, *offset)
+                        execution::tv::exec_tv_shift(heap, *dst, *op, *src, *offset)
                     }
                     I::TvSelectBit(dst, src, idx) => {
-                        execution::tv::exec_tv_select_bit(stack, *dst, *src, *idx)
+                        execution::tv::exec_tv_select_bit(heap, *dst, *src, *idx)
                     }
                     I::TvConcat(dst, lhs, rhs) => {
-                        execution::tv::exec_tv_concat(stack, *dst, *lhs, *rhs)
+                        execution::tv::exec_tv_concat(heap, *dst, *lhs, *rhs)
                     }
 
                     I::FvUnary(dst, op, src) => {
-                        execution::fv::exec_fv_unary(stack, *dst, *op, *src)
+                        execution::fv::exec_fv_unary(heap, *dst, *op, *src)
                     }
                     I::FvResize(dst, op, src) => {
-                        execution::fv::exec_fv_resize(stack, *dst, *op, *src)
+                        execution::fv::exec_fv_resize(heap, *dst, *op, *src)
                     }
                     I::FvBinaryArithmetic(dst, op, lhs, rhs) => {
-                        execution::fv::exec_fv_bin_arith(stack, *dst, *op, *lhs, *rhs)
+                        execution::fv::exec_fv_bin_arith(heap, *dst, *op, *lhs, *rhs)
                     }
                     I::FvBinaryComparison(dst, op, lhs, rhs) => {
-                        execution::fv::exec_fv_bin_cmp(stack, *dst, *op, *lhs, *rhs)
+                        execution::fv::exec_fv_bin_cmp(heap, *dst, *op, *lhs, *rhs)
                     }
                     I::FvShift(dst, op, src, offset) => {
-                        execution::fv::exec_fv_shift(stack, *dst, *op, *src, *offset)
+                        execution::fv::exec_fv_shift(heap, *dst, *op, *src, *offset)
                     }
                     I::FvSelectBit(dst, src, idx) => {
-                        execution::fv::exec_fv_select_bit(stack, *dst, *src, *idx)
+                        execution::fv::exec_fv_select_bit(heap, *dst, *src, *idx)
                     }
                     I::FvConcat(dst, lhs, rhs) => {
-                        execution::fv::exec_fv_concat(stack, *dst, *lhs, *rhs)
+                        execution::fv::exec_fv_concat(heap, *dst, *lhs, *rhs)
                     }
 
                     I::TvToFv(dst, src) => {
                         let size = dst.size;
                         if size.get() <= 32 {
-                            let v = stack.get_tv_u64(src.to_ref(size));
-                            stack.set_fv_u64(
+                            let v = heap.get_tv_u64(src.to_ref(size));
+                            heap.set_fv_u64(
                                 *dst,
                                 1u64.unbounded_shl(size.get()).wrapping_sub(1),
                                 v,
                             );
                         } else {
                             let nwords = size.get().div_ceil(64) as usize;
-                            let (dst, src) = stack
+                            let (dst, src) = heap
                                 .get_disjoint_u64_dst_src((dst.offset, nwords * 2), (*src, nwords));
                             fv_set_no_special(dst, size);
                             dst[nwords..].copy_from_slice(src);
@@ -557,11 +557,11 @@ impl Event {
                     I::FvToTv(dst, src) => {
                         let size = dst.size;
                         if size.get() <= 32 {
-                            let (spc, val) = stack.get_fv_u64(src.to_ref(size));
-                            stack.set_tv_u64(*dst, spc & val);
+                            let (spc, val) = heap.get_fv_u64(src.to_ref(size));
+                            heap.set_tv_u64(*dst, spc & val);
                         } else {
                             let nwords = size.get().div_ceil(64) as usize;
-                            let (dst, src) = stack
+                            let (dst, src) = heap
                                 .get_disjoint_u64_dst_src((dst.offset, nwords), (*src, nwords * 2));
                             for i in 0..nwords {
                                 dst[i] = src[i] & src[nwords + i];
@@ -577,8 +577,8 @@ impl Event {
                                 f.write_to(
                                     &mut ctx.stdout,
                                     args.iter().map(|(sr, lm)| match lm {
-                                        LogicMode::TwoValue => stack.load_tv_bits(*sr),
-                                        LogicMode::FourValue => stack.load_fv_bits(*sr),
+                                        LogicMode::TwoValue => heap.load_tv_bits(*sr),
+                                        LogicMode::FourValue => heap.load_fv_bits(*sr),
                                     }),
                                 )
                                 .unwrap();
@@ -586,9 +586,9 @@ impl Event {
                             O::Assert(f) => {
                                 let (cond_sr, cond_lm) = args[0];
                                 let condition = match cond_lm {
-                                    LogicMode::TwoValue => stack.get_tv_bool(cond_sr.offset),
+                                    LogicMode::TwoValue => heap.get_tv_bool(cond_sr.offset),
                                     LogicMode::FourValue => {
-                                        stack.get_fv_item(cond_sr.offset) == FvLogicValue::L1
+                                        heap.get_fv_item(cond_sr.offset) == FvLogicValue::L1
                                     }
                                 };
 
@@ -596,8 +596,8 @@ impl Event {
                                     f.write_to(
                                         &mut ctx.stdout,
                                         args[1..].iter().map(|(sr, lm)| match lm {
-                                            LogicMode::TwoValue => stack.load_tv_bits(*sr),
-                                            LogicMode::FourValue => stack.load_fv_bits(*sr),
+                                            LogicMode::TwoValue => heap.load_tv_bits(*sr),
+                                            LogicMode::FourValue => heap.load_fv_bits(*sr),
                                         }),
                                     )
                                     .unwrap();
@@ -649,8 +649,8 @@ impl Event {
                             }
                             O::VcdPause => _ = vcd.as_mut().map(|vcd| vcd.paused = true),
                             O::VcdResume => _ = vcd.as_mut().map(|vcd| vcd.paused = false),
-                            O::Time => _ = stack.set_tv_u64(dst.to_ref(TIME_VSIZE), ctx.time),
-                            O::Random => _ = stack.set_tv_u64(dst.to_ref(INTEGER_VSIZE), ctx.time),
+                            O::Time => _ = heap.set_tv_u64(dst.to_ref(TIME_VSIZE), ctx.time),
+                            O::Random => _ = heap.set_tv_u64(dst.to_ref(INTEGER_VSIZE), ctx.time),
                             O::Finish => {
                                 writeln!(&mut ctx.stdout, "[FINISH]").unwrap();
                                 break 'instruction Some(EvalOutcome::Exit);
@@ -661,10 +661,10 @@ impl Event {
                         let partial = match (partial, ctx.logic_mode) {
                             (None, _) => None,
                             (Some(offset), LogicMode::TwoValue) => {
-                                Some(stack.load_exact_tv_u32(*offset))
+                                Some(heap.load_exact_tv_u32(*offset))
                             }
                             (Some(offset), LogicMode::FourValue) => {
-                                let (spc, val) = stack.load_exact_fv_u32(*offset);
+                                let (spc, val) = heap.load_exact_fv_u32(*offset);
                                 if !spc != 0 {
                                     break 'instruction None;
                                 }
@@ -673,7 +673,7 @@ impl Event {
                         };
 
                         let updated = drive_bits(
-                            stack,
+                            heap,
                             signals[sig.0 as usize],
                             *src,
                             partial,
@@ -683,7 +683,7 @@ impl Event {
                         if updated {
                             update_watchers(
                                 *sig,
-                                stack,
+                                heap,
                                 signals,
                                 watches,
                                 listeners,
@@ -712,7 +712,7 @@ impl Event {
                             *stop_reason = vogls_trace::EventStopReason::Wait(ctx.time + time.0);
                         }
                         if ctx.itrace {
-                            instr.itrace(stack, signals, ctx.logic_mode);
+                            instr.itrace(heap, signals, ctx.logic_mode);
                         }
                         return EvalOutcome::Next;
                     }
@@ -731,7 +731,7 @@ impl Event {
                             *stop_reason = vogls_trace::EventStopReason::WaitRegion(*region);
                         }
                         if ctx.itrace {
-                            instr.itrace(stack, signals, ctx.logic_mode);
+                            instr.itrace(heap, signals, ctx.logic_mode);
                         }
                         return EvalOutcome::Next;
                     }
@@ -753,14 +753,14 @@ impl Event {
                             );
                         }
                         if ctx.itrace {
-                            instr.itrace(stack, signals, ctx.logic_mode);
+                            instr.itrace(heap, signals, ctx.logic_mode);
                         }
                         return EvalOutcome::Next;
                     }
 
                     I::Jump(offset) => *ip = *offset,
                     I::Branch(cond, true_offset, false_offset) => {
-                        let is_true = stack.get_tv_u64(cond.to_ref(SCALAR_VSIZE)) & 1 != 0;
+                        let is_true = heap.get_tv_u64(cond.to_ref(SCALAR_VSIZE)) & 1 != 0;
                         if is_true {
                             *ip = *true_offset;
                         } else {
@@ -776,7 +776,7 @@ impl Event {
             };
 
             if ctx.itrace {
-                instr.itrace(stack, signals, ctx.logic_mode);
+                instr.itrace(heap, signals, ctx.logic_mode);
             }
 
             if let Some(outcome) = outcome {
@@ -795,11 +795,11 @@ pub fn run(
     ctx: &mut Context,
     processes: &[VmProcess],
     regions: &mut Regions,
-    signals: &mut [StackRef],
+    signals: &mut [HeapRef],
     listeners: &mut SlotMap<ListenerKey, Event>,
     watches: &mut [Vec<ListenerKey>],
     mut trace: Option<&mut vogls_trace::Trace>,
-    stack: &mut Stack,
+    heap: &mut Heap,
     max_time: u64,
     vcd: Option<(&Path, VcdScope)>,
 ) -> Result<(), ()> {
@@ -846,7 +846,7 @@ pub fn run(
                 signals,
                 listeners,
                 watches,
-                stack,
+                heap,
                 &mut vcd,
                 trace.as_deref_mut(),
             );
@@ -884,7 +884,7 @@ pub fn run(
 
         // Dump the VCD updates for this simulation time.
         if let Some(vcd) = vcd.as_mut() {
-            vcd.dump_time_step(ctx, stack, signals, false).unwrap();
+            vcd.dump_time_step(ctx, heap, signals, false).unwrap();
         }
 
         let Some((at, events)) = schedule.pop_first() else {
@@ -902,7 +902,7 @@ pub fn run(
     }
 
     if let Some(vcd) = vcd.as_mut() {
-        vcd.dump_time_step(ctx, stack, signals, true).unwrap();
+        vcd.dump_time_step(ctx, heap, signals, true).unwrap();
         vcd.writer.flush().unwrap();
     }
 
@@ -910,7 +910,7 @@ pub fn run(
         writeln!(ctx.stdout, "Stats:",).unwrap();
         writeln!(ctx.stdout, "  # Instructions: {}", ctx.instruction_count).unwrap();
         writeln!(ctx.stdout, "  # Events:       {}", ctx.event_count).unwrap();
-        writeln!(ctx.stdout, "  # Stack size:   {}", stack.0.len()).unwrap();
+        writeln!(ctx.stdout, "  # Stack size:   {}", heap.0.len()).unwrap();
     }
 
     Ok(())

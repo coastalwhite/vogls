@@ -1,12 +1,12 @@
 use vogls_bits::BitsDataRef;
 use vogls_ir::Bits;
 
-use crate::{Stack, StackOffset};
+use crate::{Heap, HeapOffset};
 
 pub(super) mod fv;
 pub(super) mod tv;
 
-pub(crate) fn exec_constant(stack: &mut Stack, dst: StackOffset, value: &Bits) {
+pub(crate) fn exec_constant(stack: &mut Heap, dst: HeapOffset, value: &Bits) {
     let size = value.size();
     match value.as_data_ref() {
         BitsDataRef::InlineTv(v) => _ = stack.set_tv_u64(dst.to_ref(size), v),

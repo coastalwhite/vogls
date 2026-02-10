@@ -13,9 +13,9 @@ use vogls_bits::shift::{
 use vogls_bits::truncate::{fv_l_truncate, fv_s_truncate};
 use vogls_ir::{ResizeOp, UnaryOp, VectorSize};
 
-use crate::{BinaryArithmeticOp, BinaryComparisonOp, ShiftOp, Stack, StackOffset, StackRef};
+use crate::{BinaryArithmeticOp, BinaryComparisonOp, ShiftOp, Heap, HeapOffset, HeapRef};
 
-pub(crate) fn exec_fv_unary(stack: &mut Stack, dst: StackOffset, op: UnaryOp, src: StackRef) {
+pub(crate) fn exec_fv_unary(stack: &mut Heap, dst: HeapOffset, op: UnaryOp, src: HeapRef) {
     use UnaryOp as O;
     match op {
         O::Neg if src.size.get() > 16 => {
@@ -56,7 +56,7 @@ pub(crate) fn exec_fv_unary(stack: &mut Stack, dst: StackOffset, op: UnaryOp, sr
     };
 }
 
-pub(crate) fn exec_fv_resize(stack: &mut Stack, dst: StackRef, op: ResizeOp, src: StackRef) {
+pub(crate) fn exec_fv_resize(stack: &mut Heap, dst: HeapRef, op: ResizeOp, src: HeapRef) {
     use ResizeOp as O;
     match op {
         O::Truncate | O::ZeroExtend | O::SignExtend
@@ -106,11 +106,11 @@ pub(crate) fn exec_fv_resize(stack: &mut Stack, dst: StackRef, op: ResizeOp, src
 }
 
 pub(crate) fn exec_fv_bin_arith(
-    stack: &mut Stack,
-    dst: StackRef,
+    stack: &mut Heap,
+    dst: HeapRef,
     op: BinaryArithmeticOp,
-    lhs: StackOffset,
-    rhs: StackOffset,
+    lhs: HeapOffset,
+    rhs: HeapOffset,
 ) {
     use BinaryArithmeticOp as O;
 
@@ -198,11 +198,11 @@ pub(crate) fn exec_fv_bin_arith(
 }
 
 pub(crate) fn exec_fv_bin_cmp(
-    stack: &mut Stack,
-    dst: StackOffset,
+    stack: &mut Heap,
+    dst: HeapOffset,
     op: BinaryComparisonOp,
-    lhs: StackRef,
-    rhs: StackOffset,
+    lhs: HeapRef,
+    rhs: HeapOffset,
 ) {
     use BinaryComparisonOp as O;
     let result = match op {
@@ -233,11 +233,11 @@ pub(crate) fn exec_fv_bin_cmp(
 }
 
 pub(crate) fn exec_fv_shift(
-    stack: &mut Stack,
-    dst: StackRef,
+    stack: &mut Heap,
+    dst: HeapRef,
     op: ShiftOp,
-    src: StackOffset,
-    offset: StackOffset,
+    src: HeapOffset,
+    offset: HeapOffset,
 ) {
     use ShiftOp as O;
     let (spc, offset) = stack.load_exact_fv_u32(offset);
@@ -278,10 +278,10 @@ pub(crate) fn exec_fv_shift(
 }
 
 pub(crate) fn exec_fv_select_bit(
-    stack: &mut Stack,
-    dst: StackOffset,
-    src: StackRef,
-    idx: StackOffset,
+    stack: &mut Heap,
+    dst: HeapOffset,
+    src: HeapRef,
+    idx: HeapOffset,
 ) {
     let (spc, idx) = stack.load_exact_fv_u32(idx);
     if !spc != 0 || idx >= src.size.get() {
@@ -299,7 +299,7 @@ pub(crate) fn exec_fv_select_bit(
     }
 }
 
-pub(crate) fn exec_fv_concat(stack: &mut Stack, dst: StackOffset, lhs: StackRef, rhs: StackRef) {
+pub(crate) fn exec_fv_concat(stack: &mut Heap, dst: HeapOffset, lhs: HeapRef, rhs: HeapRef) {
     let dst = dst.to_ref(VectorSize::new(lhs.size.get() + rhs.size.get()).unwrap());
     if dst.size.get() > 16 {
         let l_nbytes = if lhs.size.get() <= 16 {

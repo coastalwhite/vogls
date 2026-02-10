@@ -8,7 +8,7 @@ use vogls_frontend::ident_table::IdentId;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::{Bits, GlobalContext, LogicMode, Signal};
 use vogls_sim::{
-    Context, Event, Regions, SignalInfo, StackBuilder, VmProcess, VmProcessKey, VmSignalKey,
+    Context, Event, Regions, SignalInfo, HeapBuilder, VmProcess, VmProcessKey, VmSignalKey,
     lower_process_to_vm,
 };
 use vogls_verilog::ast::AstId;
@@ -567,7 +567,7 @@ pub fn run(
         }));
     }
 
-    let mut stack_builder = StackBuilder::new();
+    let mut heap_builder = HeapBuilder::new();
     let mut io_signals = HashMap::new();
     let mut signal_info = vec![
         SignalInfo {
@@ -600,7 +600,7 @@ pub fn run(
 
         let vm_signal_key = VmSignalKey(io_signals.len() as u64);
         io_signals.insert(key, vm_signal_key);
-        signals.push(stack_builder.claim(gl.logic_mode, *size));
+        signals.push(heap_builder.claim(gl.logic_mode, *size));
         watches.push(Vec::new());
         signal_info.push(SignalInfo { name: name.clone() });
     }
@@ -613,7 +613,7 @@ pub fn run(
         let vm_process = lower_process_to_vm(
             process,
             &gl,
-            &mut stack_builder,
+            &mut heap_builder,
             &signals,
             &mut io_signals,
             &signal_map,
@@ -643,7 +643,7 @@ pub fn run(
             ip: 0,
         });
     }
-    let mut stack = stack_builder.finish();
+    let mut heap = heap_builder.finish();
 
     for (key, signal) in &gl.signals {
         let Signal {
@@ -655,7 +655,7 @@ pub fn run(
         let mut value = None;
         if let Some(initialize) = initialize {
             assert_eq!(initialize.size(), *size);
-            stack.store_bits(
+            heap.store_bits(
                 signals[io_signals[&key].0 as usize],
                 gl.logic_mode,
                 initialize,
@@ -711,7 +711,7 @@ pub fn run(
         &mut listeners,
         &mut watches,
         trace.as_mut(),
-        &mut stack,
+        &mut heap,
         ectx.time,
         ectx.vcd.as_deref().map(|p| {
             let scope = Scope {

@@ -1,8 +1,8 @@
 use vogls_ir::{ResizeOp, SCALAR_VSIZE, UnaryOp, VectorSize};
 
-use crate::{BinaryArithmeticOp, BinaryComparisonOp, ShiftOp, Stack, StackOffset, StackRef};
+use crate::{BinaryArithmeticOp, BinaryComparisonOp, ShiftOp, Heap, HeapOffset, HeapRef};
 
-pub(crate) fn exec_tv_unary(stack: &mut Stack, dst: StackOffset, op: UnaryOp, src: StackRef) {
+pub(crate) fn exec_tv_unary(stack: &mut Heap, dst: HeapOffset, op: UnaryOp, src: HeapRef) {
     use UnaryOp as O;
     match op {
         O::Neg => {
@@ -33,7 +33,7 @@ pub(crate) fn exec_tv_unary(stack: &mut Stack, dst: StackOffset, op: UnaryOp, sr
     }
 }
 
-pub(crate) fn exec_tv_resize(stack: &mut Stack, dst: StackRef, op: ResizeOp, src: StackRef) {
+pub(crate) fn exec_tv_resize(stack: &mut Heap, dst: HeapRef, op: ResizeOp, src: HeapRef) {
     let (d, s) = stack.get_disjoint_u8_dst_src(dst, src);
 
     use ResizeOp as O;
@@ -77,11 +77,11 @@ pub(crate) fn exec_tv_resize(stack: &mut Stack, dst: StackRef, op: ResizeOp, src
 }
 
 pub(crate) fn exec_tv_bin_arith(
-    stack: &mut Stack,
-    dst: StackRef,
+    stack: &mut Heap,
+    dst: HeapRef,
     op: BinaryArithmeticOp,
-    lhs: StackOffset,
-    rhs: StackOffset,
+    lhs: HeapOffset,
+    rhs: HeapOffset,
 ) {
     use BinaryArithmeticOp as O;
 
@@ -157,11 +157,11 @@ pub(crate) fn exec_tv_bin_arith(
 }
 
 pub(crate) fn exec_tv_bin_cmp(
-    stack: &mut Stack,
-    dst: StackOffset,
+    stack: &mut Heap,
+    dst: HeapOffset,
     op: BinaryComparisonOp,
-    lhs: StackRef,
-    rhs: StackOffset,
+    lhs: HeapRef,
+    rhs: HeapOffset,
 ) {
     use BinaryComparisonOp as O;
     let f = match op {
@@ -182,11 +182,11 @@ pub(crate) fn exec_tv_bin_cmp(
 }
 
 pub(crate) fn exec_tv_shift(
-    stack: &mut Stack,
-    dst: StackRef,
+    stack: &mut Heap,
+    dst: HeapRef,
     op: ShiftOp,
-    src: StackOffset,
-    offset: StackOffset,
+    src: HeapOffset,
+    offset: HeapOffset,
 ) {
     use ShiftOp as O;
     let f = match op {
@@ -202,10 +202,10 @@ pub(crate) fn exec_tv_shift(
 }
 
 pub(crate) fn exec_tv_select_bit(
-    stack: &mut Stack,
-    dst: StackOffset,
-    src: StackRef,
-    idx: StackOffset,
+    stack: &mut Heap,
+    dst: HeapOffset,
+    src: HeapRef,
+    idx: HeapOffset,
 ) {
     let size = src.size;
     let idx = stack.load_exact_tv_u32(idx);
@@ -214,7 +214,7 @@ pub(crate) fn exec_tv_select_bit(
     stack.set_tv_bool(dst, result);
 }
 
-pub(crate) fn exec_tv_concat(stack: &mut Stack, dst: StackOffset, lhs: StackRef, rhs: StackRef) {
+pub(crate) fn exec_tv_concat(stack: &mut Heap, dst: HeapOffset, lhs: HeapRef, rhs: HeapRef) {
     let (lhs_size, rhs_size) = (lhs.size, rhs.size);
     let dst_size = lhs_size.checked_add(rhs_size.get()).unwrap();
     let (dst, lhs, rhs) = stack.get_disjoint_u8_dst_s1_s2(dst.to_ref(dst_size), lhs, rhs);

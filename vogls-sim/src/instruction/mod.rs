@@ -4,35 +4,35 @@ use vogls_ir::{Bits, INTEGER_VSIZE, LogicMode, ResizeOp, SCALAR_VSIZE, Time, Una
 mod format;
 mod lower;
 
-pub use lower::{StackBuilder, lower_process_to_vm};
+pub use lower::{HeapBuilder, lower_process_to_vm};
 
-use crate::{Stack, VcdScope};
+use crate::{Heap, VcdScope};
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct VmSignalKey(pub u64);
 
 #[derive(Debug, Clone, Copy)]
-pub struct StackOffset(pub usize);
+pub struct HeapOffset(pub usize);
 #[derive(Debug, Clone, Copy)]
-pub struct StackRef {
-    pub offset: StackOffset,
+pub struct HeapRef {
+    pub offset: HeapOffset,
     pub size: VectorSize,
 }
-impl StackRef {
-    pub fn to_fv_size(mut self) -> StackRef {
+impl HeapRef {
+    pub fn to_fv_size(mut self) -> HeapRef {
         self.size = self.size.checked_mul(VectorSize::new(2).unwrap()).unwrap();
         self
     }
 }
 
-impl StackOffset {
-    pub fn to_ref(self, size: VectorSize) -> StackRef {
-        StackRef { offset: self, size }
+impl HeapOffset {
+    pub fn to_ref(self, size: VectorSize) -> HeapRef {
+        HeapRef { offset: self, size }
     }
-    pub fn to_scalar_ref(self) -> StackRef {
+    pub fn to_scalar_ref(self) -> HeapRef {
         self.to_ref(SCALAR_VSIZE)
     }
-    fn to_32bit_ref(self) -> StackRef {
+    fn to_32bit_ref(self) -> HeapRef {
         self.to_ref(INTEGER_VSIZE)
     }
 }
@@ -80,34 +80,34 @@ pub enum VmIntrinsicOp {
 
 #[derive(Debug)]
 pub enum VmInstruction {
-    Constant(StackOffset, Bits),
+    Constant(HeapOffset, Bits),
 
-    TvUnary(StackOffset, UnaryOp, StackRef),
-    TvResize(StackRef, ResizeOp, StackRef),
-    TvBinaryArithmetic(StackRef, BinaryArithmeticOp, StackOffset, StackOffset),
-    TvBinaryComparison(StackOffset, BinaryComparisonOp, StackRef, StackOffset),
-    TvShift(StackRef, ShiftOp, StackOffset, StackOffset),
-    TvSelectBit(StackOffset, StackRef, StackOffset),
-    TvConcat(StackOffset, StackRef, StackRef),
+    TvUnary(HeapOffset, UnaryOp, HeapRef),
+    TvResize(HeapRef, ResizeOp, HeapRef),
+    TvBinaryArithmetic(HeapRef, BinaryArithmeticOp, HeapOffset, HeapOffset),
+    TvBinaryComparison(HeapOffset, BinaryComparisonOp, HeapRef, HeapOffset),
+    TvShift(HeapRef, ShiftOp, HeapOffset, HeapOffset),
+    TvSelectBit(HeapOffset, HeapRef, HeapOffset),
+    TvConcat(HeapOffset, HeapRef, HeapRef),
 
-    FvUnary(StackOffset, UnaryOp, StackRef),
-    FvResize(StackRef, ResizeOp, StackRef),
-    FvBinaryArithmetic(StackRef, BinaryArithmeticOp, StackOffset, StackOffset),
-    FvBinaryComparison(StackOffset, BinaryComparisonOp, StackRef, StackOffset),
-    FvShift(StackRef, ShiftOp, StackOffset, StackOffset),
-    FvSelectBit(StackOffset, StackRef, StackOffset),
-    FvConcat(StackOffset, StackRef, StackRef),
+    FvUnary(HeapOffset, UnaryOp, HeapRef),
+    FvResize(HeapRef, ResizeOp, HeapRef),
+    FvBinaryArithmetic(HeapRef, BinaryArithmeticOp, HeapOffset, HeapOffset),
+    FvBinaryComparison(HeapOffset, BinaryComparisonOp, HeapRef, HeapOffset),
+    FvShift(HeapRef, ShiftOp, HeapOffset, HeapOffset),
+    FvSelectBit(HeapOffset, HeapRef, HeapOffset),
+    FvConcat(HeapOffset, HeapRef, HeapRef),
 
-    TvToFv(StackRef, StackOffset),
-    FvToTv(StackRef, StackOffset),
+    TvToFv(HeapRef, HeapOffset),
+    FvToTv(HeapRef, HeapOffset),
 
     Intrinsic(
-        StackOffset,
+        HeapOffset,
         Box<VmIntrinsicOp>,
-        Box<[(StackRef, LogicMode)]>,
+        Box<[(HeapRef, LogicMode)]>,
     ),
 
-    Drive(VmSignalKey, StackRef, Option<StackOffset>),
+    Drive(VmSignalKey, HeapRef, Option<HeapOffset>),
 
     Wait(Time),
     WaitRegion(u8),
@@ -115,14 +115,14 @@ pub enum VmInstruction {
 
     Jump(usize),
     /// (condition, true_offset, false_offset)
-    Branch(StackOffset, usize, usize),
+    Branch(HeapOffset, usize, usize),
     Halt,
 }
 impl VmInstruction {
-    pub fn itrace(&self, stack: &Stack, signals: &[StackRef], logic_mode: LogicMode) {
+    pub fn itrace(&self, stack: &Heap, signals: &[HeapRef], logic_mode: LogicMode) {
         use VmInstruction as I;
         eprint!("{self}");
-        let items: &[(&'static str, bool, StackRef)] = match self {
+        let items: &[(&'static str, bool, HeapRef)] = match self {
             I::Constant(dst, src) => &[("dst", src.contains_special(), dst.to_ref(src.size()))],
             I::TvUnary(dst, op, src) => match op {
                 UnaryOp::Neg => &[("dst", false, dst.to_ref(src.size)), ("src", false, *src)],

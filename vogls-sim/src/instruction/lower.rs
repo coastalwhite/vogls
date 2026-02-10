@@ -5,21 +5,21 @@ use vogls_ir::{
     IntrinsicOp, LogicMode, ProcessKey, SignalKey, VariableKey, VectorSize,
 };
 
-use crate::instruction::{StackOffset, VmInstruction, VmProcess};
-use crate::{BinaryArithmeticOp, BinaryComparisonOp, ShiftOp, Stack, VmIntrinsicOp};
+use crate::instruction::{HeapOffset, VmInstruction, VmProcess};
+use crate::{BinaryArithmeticOp, BinaryComparisonOp, ShiftOp, Heap, VmIntrinsicOp};
 
-use super::{StackRef, VmSignalKey};
+use super::{HeapRef, VmSignalKey};
 
-pub struct StackBuilder {
+pub struct HeapBuilder {
     top: usize,
 }
 
-impl StackBuilder {
+impl HeapBuilder {
     pub fn new() -> Self {
         Self { top: 0 }
     }
 
-    pub fn claim(&mut self, mode: LogicMode, size: VectorSize) -> StackRef {
+    pub fn claim(&mut self, mode: LogicMode, size: VectorSize) -> HeapRef {
         // Most arithmetic operations are implemented on 64-bit chunks, by ensuring that
         // all variables with a size larger or equal to than 64 are allocated in chunks of
         // 64 we can efficiently dispatch to these kernels.
@@ -36,21 +36,21 @@ impl StackBuilder {
         } else {
             (2 * size.get() as usize).div_ceil(8)
         };
-        let stack_ref = StackOffset(self.top);
+        let heap_ref = HeapOffset(self.top);
         self.top += nbytes;
-        stack_ref.to_ref(size)
+        heap_ref.to_ref(size)
     }
 
-    pub fn finish(self) -> Stack {
-        Stack(vec![0u64; self.top.div_ceil(8)].into())
+    pub fn finish(self) -> Heap {
+        Heap(vec![0u64; self.top.div_ceil(8)].into())
     }
 }
 
 pub fn lower_process_to_vm(
     process: ProcessKey,
     gl: &GlobalContext,
-    builder: &mut StackBuilder,
-    signals: &[StackRef],
+    builder: &mut HeapBuilder,
+    signals: &[HeapRef],
     io_signals: &HashMap<SignalKey, VmSignalKey>,
     signal_map: &HashMap<SignalKey, SignalKey>,
 ) -> VmProcess {
@@ -64,7 +64,7 @@ pub fn lower_process_to_vm(
     let mut bb_phis = HashMap::<BasicBlockKey, Vec<(VariableKey, VariableKey)>>::new();
 
     let mut var_mode = HashMap::<VariableKey, LogicMode>::new();
-    let mut stack_map = HashMap::new();
+    let mut heap_map = HashMap::new();
 
     // Fill `var_mode` with the `LogicMode` for each variable.
     //
@@ -139,7 +139,7 @@ pub fn lower_process_to_vm(
         }
     }
 
-    // Make a map of the stack.
+    // Make a map of the heap.
     bb_stack.push(process.entry);
     while let Some(bb_key) = bb_stack.pop() {
         let bb = gl.bbs.get(bb_key).unwrap();
@@ -155,7 +155,7 @@ pub fn lower_process_to_vm(
                 let size = gl.vars.get(dst).unwrap().size;
                 let mode = var_mode[&dst];
 
-                stack_map.insert(dst, builder.claim(mode, size).offset);
+                heap_map.insert(dst, builder.claim(mode, size).offset);
             }
         }
 
@@ -175,7 +175,7 @@ pub fn lower_process_to_vm(
     }
     macro_rules! var {
         ($var:expr$(, ($tgt_mode:expr, $src_mode:expr, $size:expr))?) => {{
-            let r = stack_map[&$var];
+            let r = heap_map[&$var];
             $(
             let r = match ($tgt_mode, $src_mode) {
                 (LogicMode::TwoValue, LogicMode::TwoValue) | (LogicMode::FourValue, LogicMode::FourValue) => r,
