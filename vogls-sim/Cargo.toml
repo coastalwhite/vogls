@@ -9,6 +9,7 @@ bytemuck.workspace = true
 vogls-ir.workspace = true
 vogls-bits.workspace = true
 vogls-trace.workspace = true
+vogls-utils.workspace = true
 
 [lints]
 workspace = true

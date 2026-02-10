@@ -11,3 +11,4 @@ vogls-sim.workspace = true
 vogls-trace.workspace = true
 vogls-verilog.workspace = true
 vogls-frontend.workspace = true
+vogls-utils.workspace = true

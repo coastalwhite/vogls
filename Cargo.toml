@@ -8,6 +8,7 @@ members = [
     "vogls-sim",
     "vogls-verilog",
     "vogls-frontend",
+    "vogls-utils",
 ]
 resolver = "3"
 
@@ -31,6 +32,7 @@ vogls-ir.path = "vogls-ir"
 vogls-trace.path = "vogls-trace"
 vogls-bits.path = "vogls-bits"
 vogls-verilog.path = "vogls-verilog"
+vogls-utils.path = "vogls-utils"
 
 [profile.debug-release]
 inherits = "release"

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use slotmap::{SecondaryMap, SlotMap};
-use vogls_frontend::VgHashMap;
+use vogls_utils::VgHashMap;
 use vogls_frontend::ident_table::IdentId;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::{Bits, GlobalContext, LogicMode, Signal};

@@ -1,13 +1,11 @@
 [package]
-name = "vogls-frontend"
+name = "vogls-utils"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
 foldhash.workspace = true
 hashbrown.workspace = true
-vogls-ir.workspace = true
-vogls-utils.workspace = true
 
 [lints]
 workspace = true

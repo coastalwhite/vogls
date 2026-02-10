@@ -461,6 +461,7 @@ dependencies = [
  "vogls-ir",
  "vogls-sim",
  "vogls-trace",
+ "vogls-utils",
  "vogls-verilog",
 ]
 
@@ -479,6 +480,7 @@ dependencies = [
  "foldhash",
  "hashbrown 0.16.1",
  "vogls-ir",
+ "vogls-utils",
 ]
 
 [[package]]
@@ -500,6 +502,7 @@ dependencies = [
  "vogls-bits",
  "vogls-ir",
  "vogls-trace",
+ "vogls-utils",
 ]
 
 [[package]]
@@ -524,6 +527,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "vogls-utils"
+version = "0.0.1"
+dependencies = [
+ "foldhash",
+ "hashbrown 0.16.1",
+]
+
+[[package]]
 name = "vogls-verilog"
 version = "0.0.1"
 dependencies = [
@@ -532,6 +543,7 @@ dependencies = [
  "slotmap",
  "vogls-frontend",
  "vogls-ir",
+ "vogls-utils",
 ]
 
 [[package]]

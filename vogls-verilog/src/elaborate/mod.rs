@@ -2,13 +2,13 @@ use core::fmt;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
-use vogls_frontend::VgHashMap;
 use vogls_frontend::ident_table::IdentId;
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{
     BasicBlockKey, ConnectionDirection, GlobalContext, ProcessKey, SCALAR_VSIZE, Signal, SignalKey,
     VectorSize,
 };
+use vogls_utils::VgHashMap;
 
 use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::module::{

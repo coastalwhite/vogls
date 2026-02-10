@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_frontend::symbol_table::SymbolId;
-use vogls_frontend::{VgHashMap, VgHashSet};
+use vogls_utils::{VgHashMap, VgHashSet};
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::{ConnectionDirection, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE, SignalKey};
 

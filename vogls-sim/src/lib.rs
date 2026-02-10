@@ -12,11 +12,12 @@ use vogls_ir::vcd::NetType;
 use vogls_ir::{INTEGER_VSIZE, LogicMode, SCALAR_VSIZE, SignalKey, TIME_VSIZE, VectorSize};
 
 mod execution;
-mod instruction;
 mod heap;
+mod instruction;
 
-pub use instruction::*;
 use heap::Heap;
+pub use instruction::*;
+use vogls_utils::NonMaxU64;
 
 new_key_type! { pub struct ListenerKey; }
 
@@ -469,6 +470,7 @@ impl Event {
         schedule: &mut BTreeMap<Timestamp, Vec<Event>>,
         regions: &mut Regions,
         signals: &mut [HeapRef],
+        last_active_time: &mut [NonMaxU64],
         listeners: &mut SlotMap<ListenerKey, Event>,
         watches: &mut [Vec<ListenerKey>],
         heap: &mut Heap,
@@ -493,9 +495,7 @@ impl Event {
                 match instr {
                     I::Constant(dst, value) => execution::exec_constant(heap, *dst, value),
 
-                    I::TvUnary(dst, op, src) => {
-                        execution::tv::exec_tv_unary(heap, *dst, *op, *src)
-                    }
+                    I::TvUnary(dst, op, src) => execution::tv::exec_tv_unary(heap, *dst, *op, *src),
                     I::TvResize(dst, op, src) => {
                         execution::tv::exec_tv_resize(heap, *dst, *op, *src)
                     }
@@ -515,9 +515,7 @@ impl Event {
                         execution::tv::exec_tv_concat(heap, *dst, *lhs, *rhs)
                     }
 
-                    I::FvUnary(dst, op, src) => {
-                        execution::fv::exec_fv_unary(heap, *dst, *op, *src)
-                    }
+                    I::FvUnary(dst, op, src) => execution::fv::exec_fv_unary(heap, *dst, *op, *src),
                     I::FvResize(dst, op, src) => {
                         execution::fv::exec_fv_resize(heap, *dst, *op, *src)
                     }
@@ -699,6 +697,7 @@ impl Event {
                                     NonZeroUsize::new(vcd.updated_this_time_step.len()).unwrap()
                                 });
                             }
+                            last_active_time[sig.0 as usize] = NonMaxU64::new(ctx.time).unwrap();
                         }
                     }
                     I::Wait(time) => {
@@ -804,6 +803,7 @@ pub fn run(
     vcd: Option<(&Path, VcdScope)>,
 ) -> Result<(), ()> {
     let mut schedule = BTreeMap::<Timestamp, Vec<Event>>::new();
+    let mut last_active_time = vec![NonMaxU64::ZERO; signals.len()];
     let mut vcd = match vcd {
         None => None,
         Some((p, scope)) => {
@@ -844,6 +844,7 @@ pub fn run(
                 &mut schedule,
                 regions,
                 signals,
+                &mut last_active_time,
                 listeners,
                 watches,
                 heap,
