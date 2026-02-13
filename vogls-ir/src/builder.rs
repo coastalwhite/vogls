@@ -894,4 +894,10 @@ impl BasicBlockBuilder {
     pub fn equals_zero(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
         self.reduce_or(gl, src)
     }
+
+    pub fn lupdt(&mut self, gl: &mut GlobalContext, signal: SignalKey) -> VariableKey {
+        let dst = self.next_tmp_var(gl, TIME_VSIZE);
+        self.instrs.push(Instruction::LastUpdateTime(dst, signal));
+        dst
+    }
 }

@@ -1,5 +1,7 @@
 use vogls_ir::dyn_format_string::DynFormatString;
-use vogls_ir::{Bits, INTEGER_VSIZE, LogicMode, ResizeOp, SCALAR_VSIZE, Time, UnaryOp, VectorSize};
+use vogls_ir::{
+    Bits, INTEGER_VSIZE, LogicMode, ResizeOp, SCALAR_VSIZE, TIME_VSIZE, Time, UnaryOp, VectorSize,
+};
 
 mod format;
 mod lower;
@@ -34,6 +36,9 @@ impl HeapOffset {
     }
     fn to_32bit_ref(self) -> HeapRef {
         self.to_ref(INTEGER_VSIZE)
+    }
+    fn to_64bit_ref(self) -> HeapRef {
+        self.to_ref(TIME_VSIZE)
     }
 }
 
@@ -101,12 +106,9 @@ pub enum VmInstruction {
     TvToFv(HeapRef, HeapOffset),
     FvToTv(HeapRef, HeapOffset),
 
-    Intrinsic(
-        HeapOffset,
-        Box<VmIntrinsicOp>,
-        Box<[(HeapRef, LogicMode)]>,
-    ),
+    Intrinsic(HeapOffset, Box<VmIntrinsicOp>, Box<[(HeapRef, LogicMode)]>),
 
+    LastUpdateTime(HeapOffset, VmSignalKey),
     Drive(VmSignalKey, HeapRef, Option<HeapOffset>),
 
     Wait(Time),
@@ -199,6 +201,7 @@ impl VmInstruction {
             I::TvToFv(dst, src) => &[("dst", true, *dst), ("src", false, src.to_ref(dst.size))],
             I::FvToTv(dst, src) => &[("dst", false, *dst), ("src", true, src.to_ref(dst.size))],
             I::Intrinsic(_, _, _) => &[],
+            I::LastUpdateTime(dst, _) => &[("dst", false, dst.to_64bit_ref())],
             I::Drive(dst, src, partial) => {
                 eprint!(" ({})", signals[dst.0 as usize].offset);
                 match partial {

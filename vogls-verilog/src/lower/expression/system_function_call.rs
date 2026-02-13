@@ -5,9 +5,9 @@ use vogls_ir::{
 
 use crate::ast::expr::Expr;
 use crate::ast::statement::SystemTaskIdentifier;
-use crate::ast::{AstId, AstItem};
+use crate::ast::{AstId, AstIdRange, AstItem};
 use crate::lower::vvalue::VValue;
-use crate::lower::{Diagnostics, VType};
+use crate::lower::{Diagnostics, Scope, VType, try_resolve_net};
 use crate::parser::AstArenas;
 
 pub fn lower_system_function_call<'a>(
@@ -74,6 +74,60 @@ pub fn lower_system_function_call<'a>(
     }
 }
 
+pub fn lower_unevaluated_system_function_call<'a>(
+    gl: &mut GlobalContext,
+    arenas: &'a AstArenas,
+    diagnostics: &mut Diagnostics,
+    builder: &mut BasicBlockBuilder,
+    scope: &Scope,
+    ident: AstItem<SystemTaskIdentifier>,
+    arguments: Option<AstIdRange<Expr>>,
+) -> Result<Option<(VariableKey, VType)>, ()> {
+    match &arenas.ident_table[ident.item.0] {
+        "vogls_lupdt" => {
+            let Some(arguments) = arguments else {
+                diagnostics.not_yet_implemented(
+                    arenas.get_item_span(ident),
+                    "last update time requires one argument",
+                );
+                return Err(());
+            };
+
+            let Some(expr) = arguments.first().filter(|_| arguments.len() == 1) else {
+                diagnostics.not_yet_implemented(
+                    arenas.get_item_span(ident),
+                    "last update time requires one argument",
+                );
+                return Err(());
+            };
+
+            let Expr::Ident(arg_ident, array_exprs, bitslice) = arenas.get(expr) else {
+                diagnostics.not_yet_implemented(
+                    arenas.get_item_span(ident),
+                    "last update time expects an identifier",
+                );
+                return Err(());
+            };
+
+            if !array_exprs.is_empty() || bitslice.is_some() {
+                diagnostics.not_yet_implemented(
+                    arenas.get_item_span(ident),
+                    "last update time expects an identifier",
+                );
+                return Err(());
+            }
+
+            let net_symbol =
+                try_resolve_net(scope.key, scope.table, arenas, *arg_ident, diagnostics)?;
+            Ok(Some((
+                builder.lupdt(gl, net_symbol.signal),
+                VType::UnsignedNet(TIME_VSIZE),
+            )))
+        }
+        _ => Ok(None),
+    }
+}
+
 pub fn eval_constant<'a>(
     arenas: &'a AstArenas,
     diagnostics: &mut Diagnostics,
@@ -112,7 +166,10 @@ pub fn eval_constant<'a>(
         }
         "random" => {
             ensure_num_args_equal!(0);
-            diagnostics.not_yet_implemented(arenas.get_span(expr), "random is not allow in constant expressions");
+            diagnostics.not_yet_implemented(
+                arenas.get_span(expr),
+                "random is not allow in constant expressions",
+            );
             Err(())
         }
         "clog2" => {

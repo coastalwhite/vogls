@@ -258,6 +258,11 @@ impl ContextFormat for Instruction {
                     }
                 }
             }
+            Self::LastUpdateTime(var, sig) => {
+                var.ctx_fmt(f, ctx)?;
+                f.write_str(" = lastupdatetime ")?;
+                ctx.gl.signals.get(*sig).unwrap().ctx_fmt(f, ctx)?;
+            }
             Self::Probe(var, sig) => {
                 var.ctx_fmt(f, ctx)?;
                 f.write_str(" = probe ")?;

@@ -47,6 +47,7 @@ fn evaluate_impl(
                 _ = variables.insert(*dst, bits.clone());
             }
             I::Intrinsic(_, _, _) => todo!(),
+            I::LastUpdateTime(_, _) => todo!(),
             I::Probe(dst, src_signal) => {
                 let bits = signals[src_signal].clone();
                 _ = variables.insert(*dst, bits);

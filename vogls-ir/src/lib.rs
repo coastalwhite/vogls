@@ -47,20 +47,8 @@ pub struct BasicBlock {
 impl BasicBlock {
     pub fn map_bbs(&mut self, mut f: impl FnMut(BasicBlockKey) -> BasicBlockKey) {
         for i in self.instrs.iter_mut() {
-            match i {
-                Instruction::Constant(..)
-                | Instruction::Unary(..)
-                | Instruction::Binary(..)
-                | Instruction::Resize(..)
-                | Instruction::Intrinsic(..)
-                | Instruction::Probe(..)
-                | Instruction::Drive(..) => {}
-                Instruction::Phi(_, items) => items.iter_mut().for_each(|(bb, _)| {
-                    *bb = f(*bb);
-                }),
-            }
+            i.map_bb(&mut f);
         }
-
         self.terminator.map_bb(f);
     }
 
@@ -284,6 +272,7 @@ pub enum Instruction {
     Binary(VariableKey, BinaryOp, VariableKey, VariableKey),
 
     Intrinsic(VariableKey, Box<IntrinsicOp>, Box<[VariableKey]>),
+    LastUpdateTime(VariableKey, SignalKey),
     Probe(VariableKey, SignalKey),
     Drive(SignalKey, VariableKey, Option<(VariableKey, VectorSize)>),
 
@@ -298,6 +287,7 @@ impl Instruction {
             | Self::Resize(dst, _, _)
             | Self::Binary(dst, _, _, _)
             | Self::Phi(dst, _)
+            | Self::LastUpdateTime(dst, _)
             | Self::Probe(dst, _)
             | Self::Intrinsic(dst, _, _) => Some(*dst),
             Self::Drive(..) => None,
@@ -327,7 +317,7 @@ impl Instruction {
                     f(*off);
                 }
             }
-            Self::Constant(_, _) | Self::Probe(_, _) => {}
+            Self::Constant(_, _) | Self::LastUpdateTime(_, _) | Self::Probe(..) => {}
         }
     }
 
@@ -338,6 +328,7 @@ impl Instruction {
             | Self::Resize(..)
             | Self::Binary(..)
             | Self::Phi(..)
+            | Self::LastUpdateTime(..)
             | Self::Probe(..) => false,
             Self::Drive(..) | Self::Intrinsic(..) => true,
         }
@@ -372,7 +363,7 @@ impl Instruction {
                     *off = f(*off);
                 }
             }
-            Self::Constant(dst, _) | Self::Probe(dst, _) => {
+            Self::Constant(dst, _) | Self::Probe(dst, _) | Self::LastUpdateTime(dst, _) => {
                 *dst = f(*dst);
             }
         }
@@ -406,7 +397,7 @@ impl Instruction {
                     f(*off);
                 }
             }
-            Self::Constant(dst, _) | Self::Probe(dst, _) => {
+            Self::Constant(dst, _) | Self::LastUpdateTime(dst, _) | Self::Probe(dst, _) => {
                 f(*dst);
             }
         }
@@ -414,7 +405,9 @@ impl Instruction {
 
     fn map_signals(&mut self, mut f: impl FnMut(SignalKey) -> SignalKey) {
         match self {
-            Instruction::Probe(_, s) | Instruction::Drive(s, _, _) => *s = f(*s),
+            Instruction::Probe(_, s)
+            | Instruction::Drive(s, _, _)
+            | Instruction::LastUpdateTime(_, s) => *s = f(*s),
             Instruction::Constant(..)
             | Instruction::Unary(..)
             | Instruction::Resize(..)
@@ -432,7 +425,8 @@ impl Instruction {
             | Instruction::Binary(..)
             | Instruction::Intrinsic(..)
             | Instruction::Probe(..)
-            | Instruction::Drive(..) => {}
+            | Instruction::Drive(..)
+            | Instruction::LastUpdateTime(..) => {}
             Instruction::Phi(_, items) => items.iter_mut().for_each(|(bb, _)| {
                 *bb = f(*bb);
             }),

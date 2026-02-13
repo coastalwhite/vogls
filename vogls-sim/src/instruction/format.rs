@@ -123,6 +123,9 @@ impl fmt::Display for VmInstruction {
                 }
                 Ok(())
             }
+            Self::LastUpdateTime(dst, signal) => {
+                write!(f, "{dst} = lastupdatetime {signal}")
+            }
             Self::Drive(signal, src, partial) => match partial {
                 None => write!(f, "drive {signal}, {}", src.offset),
                 Some(offset) => {
@@ -186,6 +189,7 @@ impl fmt::Display for VmProcess {
                 | I::TvToFv(..)
                 | I::FvToTv(..)
                 | I::Intrinsic(..)
+                | I::LastUpdateTime(..)
                 | I::Drive(..)
                 | I::Wait(..)
                 | I::WaitRegion(..)

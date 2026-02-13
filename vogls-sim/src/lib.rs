@@ -655,6 +655,10 @@ impl Event {
                             }
                         }
                     }
+                    I::LastUpdateTime(dst, signal) => {
+                        let lupdt = last_active_time[signal.0 as usize];
+                        heap.set_tv_u64(dst.to_ref(TIME_VSIZE), lupdt.get());
+                    }
                     I::Drive(sig, src, partial) => {
                         let partial = match (partial, ctx.logic_mode) {
                             (None, _) => None,

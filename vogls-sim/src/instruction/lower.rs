@@ -6,7 +6,7 @@ use vogls_ir::{
 };
 
 use crate::instruction::{HeapOffset, VmInstruction, VmProcess};
-use crate::{BinaryArithmeticOp, BinaryComparisonOp, ShiftOp, Heap, VmIntrinsicOp};
+use crate::{BinaryArithmeticOp, BinaryComparisonOp, Heap, ShiftOp, VmIntrinsicOp};
 
 use super::{HeapRef, VmSignalKey};
 
@@ -108,9 +108,8 @@ pub fn lower_process_to_vm(
                             var_mode.insert(*dst, m);
                         }
                     }
-                    I::Intrinsic(dst, _, _) => {
-                        var_mode.insert(*dst, LogicMode::TwoValue);
-                    }
+                    I::Intrinsic(dst, _, _) => _ = var_mode.insert(*dst, LogicMode::TwoValue),
+                    I::LastUpdateTime(dst, _) => _ = var_mode.insert(*dst, LogicMode::TwoValue),
                     I::Probe(dst, _) => {
                         var_mode.insert(*dst, gl.logic_mode);
                     }
@@ -350,6 +349,10 @@ pub fn lower_process_to_vm(
                         O::VcdResume => VO::VcdResume,
                     };
                     VI::Intrinsic(var!(*dst), Box::new(op), vm_args)
+                }
+                I::LastUpdateTime(dst, signal) => {
+                    let signal = signal!(*signal);
+                    VI::LastUpdateTime(var!(*dst), signal)
                 }
                 I::Probe(dst, signal) => {
                     let size = gl.vars[*dst].size;

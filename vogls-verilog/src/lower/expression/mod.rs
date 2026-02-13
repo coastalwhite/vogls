@@ -529,6 +529,26 @@ pub fn lower_expr<'a>(
             }
             Expr::SystemFunctionCall(ident, exprs) => {
                 if !item.dispatched {
+                    match system_function_call::lower_unevaluated_system_function_call(
+                        gl,
+                        arenas,
+                        diagnostics,
+                        builder,
+                        scope,
+                        *ident,
+                        *exprs,
+                    ) {
+                        Ok(Some(res)) => {
+                            result_stack.push(Some(res));
+                            continue;
+                        }
+                        Err(()) => {
+                            result_stack.push(None);
+                            continue;
+                        }
+                        Ok(None) => {}
+                    }
+
                     item.dispatched = true;
                     dispatch_stack.push(item);
                     if let Some(exprs) = exprs {
