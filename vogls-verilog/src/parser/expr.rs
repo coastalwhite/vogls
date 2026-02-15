@@ -204,13 +204,13 @@ impl<'a> Consumable<'a> for Expr {
 
                     // Ternary operator ( ... ? ... : ... )
                     if *peeked.kind == T::QuestionMark {
-                        let (l_bp, r_bp) = (1, 2);
+                        let (l_bp, r_bp) = (2, 1);
 
                         if l_bp < min_bp {
                             break;
                         }
 
-                        tkw.next();
+                        tkw.offset += 1;
                         let span = current.1;
                         let condition = arenas.add_tuple(current);
                         deepen!(StackItem::TernaryS1(condition), r_bp, span);
@@ -224,7 +224,7 @@ impl<'a> Consumable<'a> for Expr {
                         break;
                     }
 
-                    tkw.next();
+                    tkw.offset += 1;
                     let span = current.1;
                     let lhs = arenas.add_tuple(current);
                     deepen!(StackItem::Binary(op, lhs), r_bp, span);
