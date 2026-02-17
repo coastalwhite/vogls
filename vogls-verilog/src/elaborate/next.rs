@@ -41,6 +41,7 @@ pub enum ElabLevel {
     GenerateLoop(AstId<LoopGenerateConstruct>),
     GenerateCase(AstId<CaseGenerateConstruct>),
     GenerateRegion(GenerateRegion),
+    GenerateBlock(AstIdRange<ModuleOrGenerateItem>),
     Module(AstId<Module>),
 }
 
@@ -177,6 +178,19 @@ pub fn elaborate<'a>(
             }
             ElabLevel::GenerateRegion(region) => {
                 for item in region.module_or_generate_item.iter() {
+                    lvl_error |= extend_module_or_generate_item_sids(
+                        arenas,
+                        item,
+                        scope,
+                        &mut table,
+                        &mut st,
+                        diagnostics,
+                    )
+                    .is_err();
+                }
+            }
+            ElabLevel::GenerateBlock(mod_or_gen_items) => {
+                for item in mod_or_gen_items.iter() {
                     lvl_error |= extend_module_or_generate_item_sids(
                         arenas,
                         item,
@@ -428,15 +442,8 @@ fn extend_generate_loop_sids<'a>(
             break;
         }
 
-        let mut error = false;
-        for item in mod_or_gen_items.iter() {
-            error |=
-                extend_module_or_generate_item_sids(arenas, item, iter_sid, table, st, diagnostics)
-                    .is_err();
-        }
-        if error {
-            return Err(());
-        }
+        st.next_levels
+            .push_back((iter_sid, ElabLevel::GenerateBlock(mod_or_gen_items)));
 
         value =
             super::eval_constant_expr_elab(gl, arenas, iter_sid, table, diagnostics, *iteration)?;
@@ -1577,6 +1584,7 @@ pub fn extend_expr_needs<'a>(
 
                 if let Some(ident_sid) = resolve_symbol_id_hier(scope, table, arenas, *ident)
                     && st.marked.insert(ident_sid)
+                    && st.lvl_symbols_lookup.contains_key(&ident_sid)
                 {
                     st.needs_adjacency_list_items.push(ident_sid);
                 };
@@ -1586,6 +1594,7 @@ pub fn extend_expr_needs<'a>(
 
                 if let Some(ident_sid) = resolve_symbol_id_hier(scope, table, arenas, *ident)
                     && st.marked.insert(ident_sid)
+                    && st.lvl_symbols_lookup.contains_key(&ident_sid)
                 {
                     st.needs_adjacency_list_items.push(ident_sid);
                 };

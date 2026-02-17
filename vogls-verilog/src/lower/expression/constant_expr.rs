@@ -4,7 +4,7 @@ use vogls_ir::{Bits, GlobalContext, VectorSize};
 
 use crate::ast::AstId;
 use crate::ast::constant_expr::ConstantExpr;
-use crate::ast::expr::{BinaryOperator, Expr};
+use crate::ast::expr::{BinaryOperator, Expr, UnaryOperator};
 use crate::elaborate::VSymbol;
 use crate::lower::vvalue::VValue;
 use crate::lower::{EvalScope, hident_span, try_resolve_constant, try_resolve_symbol_id};
@@ -35,11 +35,50 @@ pub fn eval_constant_expr<'a>(
         dispatched: false,
     });
 
-    'dispatch_loop: while let Some(mut item) = dispatch_stack.pop() {
+    while let Some(mut item) = dispatch_stack.pop() {
         match arenas.get(item.expr) {
             Expr::Decimal(decimal) => {
                 let decimal = &arenas.decimals[decimal.at];
                 result_stack.push(Some(VValue::SignedNet(decimal.clone())));
+            }
+            Expr::Unary(op, child) => {
+                if !item.dispatched {
+                    item.dispatched = true;
+                    dispatch_stack.push(item);
+                    dispatch_stack.push(StackItem {
+                        expr: *child,
+                        dispatched: false,
+                    });
+                    continue;
+                }
+
+                let Some(child) = result_stack.pop().unwrap() else {
+                    result_stack.push(None);
+                    continue;
+                };
+
+                use UnaryOperator as O;
+                let result = match op {
+                    O::LogicalNegation => VValue::scalar_from_bool(child.to_logical()),
+                    O::BitwiseNegation => child.bitwise_invert(),
+                    O::ReductionAnd
+                    | O::ReductionOr
+                    | O::ReductionNand
+                    | O::ReductionNor
+                    | O::ReductionXor
+                    | O::ReductionXnor
+                    | O::SignPlus
+                    | O::SignMinus => {
+                        result_stack.push(None);
+                        diagnostics.not_yet_implemented(
+                            arenas.get_span(item.expr),
+                            "constant expression of this kind not yet implemented",
+                        );
+                        error = true;
+                        continue;
+                    }
+                };
+                result_stack.push(Some(result));
             }
             Expr::Binary(op, lhs, rhs) => {
                 if !item.dispatched {
@@ -62,7 +101,7 @@ pub fn eval_constant_expr<'a>(
 
                 use BinaryOperator as O;
                 let result = match op {
-                    O::Power => todo!("nyi: power"),
+                    O::Power => VValue::power(lhs, rhs),
                     O::Multiply => VValue::multiply(lhs, rhs),
                     O::Divide => VValue::divide(lhs, rhs),
                     O::Modulus => VValue::remainder(lhs, rhs),
@@ -82,10 +121,10 @@ pub fn eval_constant_expr<'a>(
                     }
                     O::LogicalAnd => VValue::scalar_from_bool(VValue::logical_and(lhs, rhs)),
                     O::LogicalOr => VValue::scalar_from_bool(VValue::logical_or(lhs, rhs)),
+                    O::LogicalEquality => VValue::scalar_from_bool(lhs.logical_equal(rhs)),
+                    O::LogicalInequality => VValue::scalar_from_bool(lhs.logical_not_equal(rhs)),
                     O::ArithmeticLeftShift
                     | O::ArithmeticRightShift
-                    | O::LogicalEquality
-                    | O::LogicalInequality
                     | O::CaseEquality
                     | O::CaseInequality => {
                         result_stack.push(None);
@@ -226,12 +265,14 @@ pub fn eval_constant_expr<'a>(
                     try_resolve_symbol_id(scope.key, scope.table, arenas, *ident, diagnostics)
                 else {
                     result_stack.truncate(return_stack_length);
+                    result_stack.push(None);
                     error = true;
                     continue;
                 };
 
                 let VSymbol::Function(fn_symbol) = &scope.table[fn_sid].content else {
                     result_stack.truncate(return_stack_length);
+                    result_stack.push(None);
                     diagnostics
                         .not_yet_implemented(hident_span(arenas, *ident), "not calling a function");
                     error = true;
@@ -249,6 +290,7 @@ pub fn eval_constant_expr<'a>(
                 };
                 if fn_symbol.inputs.len() != arguments.len() {
                     result_stack.truncate(return_stack_length);
+                    result_stack.push(None);
                     diagnostics
                         .not_yet_implemented(arenas.get_span(expr), "invalid number of arguments");
                     error = true;
@@ -258,19 +300,25 @@ pub fn eval_constant_expr<'a>(
                 let mut esignals = HashMap::new();
                 let mut evars = HashMap::new();
 
+                let mut inputs_error = false;
                 for ((sig, ty), value) in fn_symbol
                     .inputs
                     .iter()
                     .zip(result_stack.drain(return_stack_length..))
                 {
                     let Some(value) = value else {
-                        error = true;
-                        continue 'dispatch_loop;
+                        inputs_error = true;
+                        break;
                     };
                     esignals.insert(
                         *sig,
                         value.truncate_or_extend(ty.force_net_width()).into_bits(),
                     );
+                }
+                if inputs_error {
+                    result_stack.push(None);
+                    error = true;
+                    continue;
                 }
                 esignals.insert(
                     fn_symbol.output,
@@ -296,7 +344,7 @@ pub fn eval_constant_expr<'a>(
                 let value = Bits::load_from_slice(&s, size);
                 result_stack.push(Some(VValue::UnsignedNet(value)));
             }
-            Expr::Unary(..) | Expr::Replication(..) => {
+            Expr::Replication(..) => {
                 result_stack.push(None);
                 diagnostics.not_yet_implemented(
                     arenas.get_span(item.expr),

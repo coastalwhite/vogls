@@ -303,7 +303,7 @@ pub fn try_resolve_constant<'a>(
     let ident = ident.into();
     let sid = try_resolve_symbol_id(scope, table, arenas, ident, diagnostics)?;
     let VSymbol::Parameter(value) = &table[sid].content else {
-        diagnostics.not_yet_implemented(hident_span(arenas, ident), "cannot be used as net");
+        diagnostics.not_yet_implemented(hident_span(arenas, ident), "cannot be used as constant");
         return Err(());
     };
     Ok(value)

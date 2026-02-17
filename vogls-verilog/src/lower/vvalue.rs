@@ -93,6 +93,9 @@ impl VValue {
             (V::String(_), _) | (_, V::String(_)) => todo!(),
         }
     }
+    pub fn logical_not_equal(self, rhs: VValue) -> bool {
+        !self.logical_equal(rhs)
+    }
 
     pub fn logical_shift_left(lhs: VValue, rhs: VValue) -> VValue {
         use VValue as V;
@@ -118,6 +121,16 @@ impl VValue {
         }
         lhs
     }
+
+    pub fn bitwise_invert(self) -> VValue {
+        use VValue as V;
+        match self {
+            V::SignedNet(v) => V::SignedNet(v.bitwise_negate()),
+            V::UnsignedNet(v) => V::UnsignedNet(v.bitwise_negate()),
+            V::String(_) => todo!(),
+        }
+    }
+
     pub fn bitwise_xnor(lhs: VValue, rhs: VValue) -> VValue {
         use VValue as V;
         let (mut lhs, rhs) = Self::coerce_max_size(lhs, rhs);
@@ -256,6 +269,7 @@ macro_rules! impl_arithmetic {
 
 impl_arithmetic! {
     (multiply, multiply),
+    (power, power),
     (divide, divide),
     (remainder, remainder),
     (add, add),

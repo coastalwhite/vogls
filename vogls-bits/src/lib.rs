@@ -608,7 +608,11 @@ impl Bits {
         match self.as_data_ref() {
             BitsDataRef::InlineTv(v) => {
                 if new_size > Mode::TwoValue.max_inline_size() {
-                    todo!()
+                    let mut vs =
+                        std::iter::repeat_n(u64::MAX, new_size.get().div_ceil(64) as usize)
+                            .collect::<Box<[u64]>>();
+                    vs[0] = (u64::MAX << size.get()) | v;
+                    return Self::from_boxed_slice(Mode::TwoValue, new_size, vs);
                 }
                 let sign_bit = v >> (size.get() - 1);
                 let mask = !u64::from(sign_bit == 0);
@@ -797,6 +801,9 @@ impl Bits {
         let rhs_data = rhs.as_u64_slice();
 
         match (lhs.mode, rhs.mode) {
+            (Mode::TwoValue, Mode::TwoValue) if lhs.size() <= Mode::TwoValue.max_inline_size() => {
+                Self::from_u64(lhs.size(), tv_op(lhs_data[0], rhs_data[0]))
+            }
             (Mode::TwoValue, Mode::TwoValue) => Self::from_boxed_slice(
                 Mode::TwoValue,
                 lhs.size(),

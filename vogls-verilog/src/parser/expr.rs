@@ -114,7 +114,15 @@ impl<'a> Consumable<'a> for Expr {
             current = {
                 match token.kind {
                     T::Ident => {
-                        let ident = HIdent::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                        let ident = HIdent::consume(
+                            tkw,
+                            // We cannot reuse the exprs_sp
+                            &mut ParserScratches {
+                                exprs_sp: Vec::new(),
+                            },
+                            arenas,
+                            diagnostics.as_deref_mut(),
+                        )?;
 
                         if tkw.next_if_equals(T::LeftBrace) {
                             deepen!(StackItem::Brace(ident, Vec::new(), Vec::new()), 0, span)
