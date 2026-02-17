@@ -23,6 +23,7 @@ pub mod design;
 pub struct ExecutionContext {
     pub stdout: Box<dyn std::io::Write + Send + Sync>,
     pub stderr: Box<dyn std::io::Write + Send + Sync>,
+    pub defines: Vec<String>,
     pub emit_hierarchy: bool,
     pub emit_unoptimized_ir: bool,
     pub emit_ir: bool,

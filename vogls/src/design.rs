@@ -18,7 +18,7 @@ use vogls_verilog::parser::{
     Diagnostics as ParserDiagnostics, ParseContext, ParserScratches, TokenWalker, parse_file,
     report, report_error,
 };
-use vogls_verilog::tokenizer::Tokenized;
+use vogls_verilog::tokenizer::{Macro, Tokenized};
 
 use crate::{ExecutionContext, append_referenced_modules, token_range_to_line_range};
 
@@ -39,7 +39,11 @@ impl Design {
         ectx: &mut ExecutionContext,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let content: Rc<str> = std::fs::read_to_string(&path)?.into();
-        let token_buffer = Tokenized::tokenize(content.clone(), Some(path.into()));
+        let mut macros = HashMap::new();
+        for define in &ectx.defines {
+            macros.insert(define.clone(), Macro::default());
+        }
+        let token_buffer = Tokenized::tokenize_with_macros(content.clone(), Some(path.into()), &mut macros);
         let mut tkw = TokenWalker::new(&token_buffer);
         let mut diagnostics = ParserDiagnostics::default();
 

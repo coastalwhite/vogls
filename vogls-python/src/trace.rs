@@ -62,10 +62,10 @@ pub struct Trace {
 impl Trace {
     pub fn hamming_distance(&self, py: pyo3::Python<'_>) -> pyo3::Py<pyo3::types::PyList> {
         let mut values = vogls::utils::VgHashMap::<vogls::sim::VmSignalKey, usize>::default();
-        let mut hds = Vec::<u64>::new();
+        let mut out = Vec::<(u64, u64)>::new();
         for i in 0..self.time_offsets.len() - 1 {
             let mut hd = 0;
-            let (_, start) = self.time_offsets[i];
+            let (time, start) = self.time_offsets[i];
             let end = self.time_offsets[i + 1].1;
 
             for (i, (signal, value)) in self.trace[start..end].iter().enumerate() {
@@ -84,8 +84,8 @@ impl Trace {
                 }
             }
 
-            hds.push(hd);
+            out.push((time, hd));
         }
-        pyo3::types::PyList::new(py, hds).unwrap().into()
+        pyo3::types::PyList::new(py, out).unwrap().into()
     }
 }

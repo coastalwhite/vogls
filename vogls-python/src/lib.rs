@@ -6,10 +6,11 @@ mod vogls {
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
 
-    use hashbrown::hash_map::Entry;
     use pyo3::exceptions::{PyException, PyValueError};
     use pyo3::{PyResult, prelude::*};
-    use vogls::{BitsFormatOptions, ExecutionContext, LogicMode, SimulationIo, VSymbol};
+    use vogls::{
+        BitsFormatOptions, ExecutionContext, LogicMode, SimulationIo, VSymbol, VectorSize,
+    };
 
     use crate::trace::TracePlugin;
 
@@ -46,11 +47,16 @@ mod vogls {
     #[pymethods]
     impl Design {
         #[new]
-        #[pyo3(signature = (path, top_level_module = None))]
-        fn new(path: PathBuf, top_level_module: Option<String>) -> PyResult<Self> {
+        #[pyo3(signature = (path, top_level_module = None, defines = None))]
+        fn new(
+            path: PathBuf,
+            top_level_module: Option<String>,
+            defines: Option<Vec<String>>,
+        ) -> PyResult<Self> {
             let mut ectx = ExecutionContext {
                 stdout: Box::new(std::io::stdout()),
                 stderr: Box::new(std::io::stderr()),
+                defines: defines.unwrap_or_default(),
                 emit_hierarchy: false,
                 emit_unoptimized_ir: false,
                 emit_ir: false,
@@ -90,16 +96,19 @@ mod vogls {
         }
 
         fn run_from(&self, py: Python<'_>, snapshot: Py<Snapshot>, time: u64) -> PyResult<()> {
-            self.inner
-                .run_from_state(
-                    &mut snapshot.borrow(py).inner.lock().unwrap(),
-                    &mut SimulationIo {
-                        stdout: Box::new(stdout()) as _,
-                        stderr: Box::new(stderr()) as _,
-                    },
-                    time,
-                )
-                .map_err(|e| PyException::new_err(e.to_string()))
+            let snapshot = snapshot.borrow(py).inner.clone();
+            py.detach(|| {
+                self.inner
+                    .run_from_state(
+                        &mut snapshot.lock().unwrap(),
+                        &mut SimulationIo {
+                            stdout: Box::new(stdout()) as _,
+                            stderr: Box::new(stderr()) as _,
+                        },
+                        time,
+                    )
+                    .map_err(|e| PyException::new_err(e.to_string()))
+            })
         }
 
         fn snapshot(&self) -> PyResult<Snapshot> {
@@ -236,6 +245,17 @@ mod vogls {
                 })
                 .to_string()
         }
+
+        pub fn slice(&self, offset: u32, size: VectorSize) -> Self {
+            Self {
+                inner: self.inner.logical_shift_right(offset).truncate(size),
+            }
+        }
+
+        #[getter]
+        pub fn size(&self) -> VectorSize {
+            self.inner.size()
+        }
     }
 
     #[pymethods]
@@ -260,7 +280,10 @@ mod vogls {
             let trace = state.plugins.remove(self.plugin_idx);
             let trace = trace as Box<dyn std::any::Any>;
             let trace = trace.downcast::<super::trace::TracePlugin>().unwrap();
-            Trace { trace: trace.trace, time_offsets: trace.time_offsets }
+            Trace {
+                trace: trace.trace,
+                time_offsets: trace.time_offsets,
+            }
         }
     }
 

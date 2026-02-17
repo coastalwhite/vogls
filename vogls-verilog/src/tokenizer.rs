@@ -17,8 +17,23 @@ pub struct Tokenized {
     pub paths: Vec<Option<Rc<Path>>>,
 }
 
+#[derive(Default)]
+pub struct Macro {
+    tokens: Vec<Token>,
+    spans: Vec<Span>,
+    file: Vec<FileIdx>,
+}
+
 impl Tokenized {
     pub fn tokenize(content: Rc<str>, path: Option<Rc<Path>>) -> Self {
+        Self::tokenize_with_macros(content, path, &mut HashMap::new())
+    }
+
+    pub fn tokenize_with_macros(
+        content: Rc<str>,
+        path: Option<Rc<Path>>,
+        macros: &mut HashMap<String, Macro>,
+    ) -> Self {
         use Token as T;
 
         let mut tokens = Vec::new();
@@ -42,12 +57,6 @@ impl Tokenized {
         let mut if_stack = Vec::<IfState>::new();
         let mut if_untaken_depth = 0;
 
-        struct Macro {
-            tokens: Vec<Token>,
-            spans: Vec<Span>,
-            file: Vec<FileIdx>,
-        }
-
         struct MacroItem {
             name: String,
             arguments: HashMap<String, usize>,
@@ -63,8 +72,6 @@ impl Tokenized {
 
             preprocessor_macro: Option<MacroItem>,
         }
-
-        let mut macros: HashMap<String, Macro> = HashMap::new();
 
         let mut lex_stack = Vec::new();
         lex_stack.push(LexItem {

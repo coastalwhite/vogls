@@ -41,6 +41,9 @@ struct Args {
 
     #[arg(long = "vcd")]
     vcd: Option<PathBuf>,
+
+    #[arg(short = 'D')]
+    defines: Vec<String>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -59,6 +62,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &mut ExecutionContext {
             stdout: Box::new(std::io::stdout()),
             stderr: Box::new(std::io::stderr()),
+            defines: args.defines,
             emit_hierarchy: args.emit_hierarchy,
             emit_unoptimized_ir: args.emit_unoptimized_ir,
             emit_ir: args.emit_ir,
