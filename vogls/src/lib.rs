@@ -15,6 +15,9 @@ pub use vogls_verilog::elaborate::VSymbol;
 use vogls_verilog::parser::AstArenas;
 use vogls_verilog::tokenizer::Tokenized;
 
+pub use vogls_utils as utils;
+pub use vogls_sim as sim;
+
 pub mod design;
 
 pub struct ExecutionContext {

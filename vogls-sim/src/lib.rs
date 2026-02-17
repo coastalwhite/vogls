@@ -14,6 +14,9 @@ use vogls_ir::{INTEGER_VSIZE, LogicMode, SCALAR_VSIZE, SignalKey, TIME_VSIZE, Ve
 mod execution;
 mod heap;
 mod instruction;
+mod plugin;
+
+pub use plugin::Plugin;
 
 pub use heap::Heap;
 pub use instruction::*;
@@ -485,6 +488,7 @@ impl Simulation {
             listeners,
             watches,
             vcd: None,
+            plugins: Vec::new(),
             heap,
             time: 0,
             instruction_count: 0,
@@ -526,6 +530,11 @@ impl Simulation {
                 vcd.dump_time_step(state.time, &state.heap, &self.signals, false)
                     .unwrap();
             }
+            let mut plugins = std::mem::take(&mut state.plugins);
+            for plugin in plugins.iter_mut() {
+                plugin.timestep(self, state);
+            }
+            state.plugins = plugins;
 
             let Some((at, events)) = state.schedule.pop_first() else {
                 break;
@@ -543,6 +552,11 @@ impl Simulation {
                 .unwrap();
             vcd.writer.flush().unwrap();
         }
+        let mut plugins = std::mem::take(&mut state.plugins);
+        for plugin in plugins.iter_mut() {
+            plugin.finish(self, state);
+        }
+        state.plugins = plugins;
 
         if cfg!(vm_profile) {
             state.dump_profile_stats(io, state);
@@ -857,6 +871,11 @@ impl Simulation {
                 NonZeroUsize::new(vcd.updated_this_time_step.len()).unwrap()
             });
         }
+        let mut plugins = std::mem::take(&mut state.plugins);
+        for plugin in plugins.iter_mut() {
+            plugin.update_signal(self, state, signal);
+        }
+        state.plugins = plugins;
         state.last_active_time[signal.0 as usize] = NonMaxU64::new(state.time).unwrap();
     }
 
@@ -884,6 +903,7 @@ pub struct SimulationState {
     pub listeners: SlotMap<ListenerKey, Event>,
     pub watches: Vec<Vec<ListenerKey>>,
     pub vcd: Option<VcdOutput>,
+    pub plugins: Vec<plugin::PluginState>,
 
     pub heap: Heap,
     pub time: Timestamp,
@@ -901,6 +921,7 @@ impl Clone for SimulationState {
             listeners: self.listeners.clone(),
             watches: self.watches.clone(),
             vcd: None,
+            plugins: vec![],
 
             heap: self.heap.clone(),
             time: self.time.clone(),

@@ -10,6 +10,7 @@ crate-type = ["cdylib"]
 [dependencies]
 pyo3 = "0.28.1"
 vogls.path = "../vogls"
+hashbrown.workspace = true
 
 [lints]
 workspace = true

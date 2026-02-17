@@ -568,6 +568,7 @@ dependencies = [
 name = "vogls-python"
 version = "0.0.1"
 dependencies = [
+ "hashbrown 0.16.1",
  "pyo3",
  "vogls",
 ]

@@ -1,12 +1,17 @@
+pub mod trace;
+
 #[pyo3::pymodule]
 mod vogls {
     use std::io::{stderr, stdout};
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
 
+    use hashbrown::hash_map::Entry;
     use pyo3::exceptions::{PyException, PyValueError};
     use pyo3::{PyResult, prelude::*};
     use vogls::{BitsFormatOptions, ExecutionContext, LogicMode, SimulationIo, VSymbol};
+
+    use crate::trace::TracePlugin;
 
     #[pyo3::pyclass(frozen)]
     #[repr(transparent)]
@@ -30,6 +35,12 @@ mod vogls {
     #[repr(transparent)]
     pub struct Snapshot {
         inner: Arc<Mutex<vogls::SimulationState>>,
+    }
+
+    #[pyo3::pyclass(frozen)]
+    pub struct TraceRef {
+        snapshot: Snapshot,
+        plugin_idx: usize,
     }
 
     #[pymethods]
@@ -150,14 +161,48 @@ mod vogls {
             };
             Ok(Bits { inner: bits })
         }
+
+        pub fn trace(&self, py: Python<'_>, snapshot: Py<Snapshot>) -> TraceRef {
+            let snapshot = snapshot.borrow(py);
+            let mut state = snapshot.inner.lock().unwrap();
+            let idx = state.plugins.len();
+
+            let mut trace = TracePlugin::default();
+            for signal in self.inner.elab_table.symbol_iter() {
+                if let VSymbol::Net(n) = &signal.content {
+                    let vm_signal = self.inner.vm_signal_map[&n.signal];
+                    trace.updated_this_time_step.push(vm_signal);
+                    trace.tracked.insert(
+                        vm_signal,
+                        Some(
+                            std::num::NonZeroUsize::new(trace.updated_this_time_step.len())
+                                .unwrap(),
+                        ),
+                    );
+                }
+            }
+
+            state.plugins.push(Box::new(trace));
+
+            TraceRef {
+                snapshot: Snapshot {
+                    inner: snapshot.inner.clone(),
+                },
+                plugin_idx: idx,
+            }
+        }
     }
 
     #[pymethods]
     impl Snapshot {
-        pub fn clone(&self) -> Self {
+        pub fn fork(&self) -> Self {
             Self {
                 inner: Arc::new(Mutex::new(self.inner.lock().unwrap().clone())),
             }
+        }
+
+        pub fn time(&self) -> u64 {
+            self.inner.lock().unwrap().time
         }
     }
 
@@ -192,4 +237,33 @@ mod vogls {
                 .to_string()
         }
     }
+
+    #[pymethods]
+    impl TraceRef {
+        pub fn print(&self) {
+            let state = self.snapshot.inner.lock().unwrap();
+            let trace = (state.plugins[self.plugin_idx].as_ref() as &dyn std::any::Any)
+                .downcast_ref::<super::trace::TracePlugin>()
+                .unwrap();
+
+            for i in 0..trace.time_offsets.len() - 1 {
+                println!(
+                    "[T={}] {} events",
+                    trace.time_offsets[i].0,
+                    trace.time_offsets[i + 1].1 - trace.time_offsets[i].1
+                );
+            }
+        }
+
+        pub fn extract(&self) -> Trace {
+            let mut state = self.snapshot.inner.lock().unwrap();
+            let trace = state.plugins.remove(self.plugin_idx);
+            let trace = trace as Box<dyn std::any::Any>;
+            let trace = trace.downcast::<super::trace::TracePlugin>().unwrap();
+            Trace { trace: trace.trace, time_offsets: trace.time_offsets }
+        }
+    }
+
+    #[pymodule_export]
+    pub use super::trace::Trace;
 }
