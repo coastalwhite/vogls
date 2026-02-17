@@ -1,5 +1,6 @@
-use crate::ast::Identifier;
-use crate::ast::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression};
+use crate::ast::constant_expr::{
+    ConstantExpr, ConstantMinTypMaxExpression, ConstantRangeExpression,
+};
 use crate::ast::expr::Expr;
 use crate::ast::module::{
     AlwaysConstruct, BlockItemDeclaration, CaseGenerateConstruct, CaseGenerateItem,
@@ -8,16 +9,22 @@ use crate::ast::module::{
     IfGenerateConstruct, InitialConstruct, InoutDeclaration, InputDeclaration, IntegerDeclaration,
     ListOfPortConnections, LocalParameterDeclaration, LoopGenerateConstruct, Module,
     ModuleInstance, ModuleInstantiation, ModuleItem, ModuleOrGenerateItem,
-    ModuleOrGenerateItemDeclaration, ModulePorts, NInputGateInstance, NInputGateInstantiation,
-    NInputGateType, NameOfGateInstance, NamedParameterAssignment, NamedPortConnection,
-    NetAssignment, NetDeclAssignment, NetDeclaration, NetDeclarationNets, NetIdent, NetType,
-    NonPortModuleItem, OutputDeclaration, OutputNet, ParamAssignment, ParameterDeclaration,
-    ParameterDeclarationTyping, ParameterValueAssignment, Port, PortDeclaration, PortExpression,
-    PortReference, Range, RegDeclaration, TaskDeclaration, TaskPortItem, TaskPortItemContent,
-    TfInoutDeclaration, TfInputDeclaration, TfOutputDeclaration, TfType, VariableType,
-    VariableTypeVariant,
+    ModuleOrGenerateItemContent, ModuleOrGenerateItemDeclaration, ModulePorts, NInputGateInstance,
+    NInputGateInstantiation, NInputGateType, NameOfGateInstance, NamedParameterAssignment,
+    NamedPortConnection, NetAssignment, NetDeclAssignment, NetDeclaration, NetDeclarationNets,
+    NetIdent, NetType, NonPortModuleItem, OutputDeclaration, OutputNet, ParamAssignment,
+    ParameterDeclaration, ParameterDeclarationTyping, ParameterValueAssignment, Port,
+    PortDeclaration, PortExpression, PortReference, Range, RegDeclaration, TaskDeclaration,
+    TaskPortItem, TaskPortItemContent, TfInoutDeclaration, TfInputDeclaration, TfOutputDeclaration,
+    TfType, VariableType, VariableTypeVariant,
+};
+use crate::ast::specify::{
+    PathDeclaration, PathDelayValue, PolarityOperator, SimplePathDeclaration,
+    SimplePathDeclarationVariant, SpecifyBlock, SpecifyBlockItem, SystemTimingCheck,
+    TerminalDescriptor,
 };
 use crate::ast::statement::{NetLValue, Statement, StatementOrNull};
+use crate::ast::{AttributeInstance, Identifier};
 use crate::parser::TokenRange;
 use crate::tokenizer::Token;
 
@@ -141,6 +148,14 @@ impl<'a> Consumable<'a> for ModuleItem {
         // module_item ::=
         //   port_declaration ;
         // | non_port_module_item
+
+        parse_zero_or_more_while_next::<AttributeInstance>(
+            tkw,
+            sc,
+            arenas,
+            diagnostics.as_deref_mut(),
+            |t| t == T::LeftParenStar,
+        )?;
         let peeked = tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?;
         match peeked.kind {
             T::KeywordInput | T::KeywordOutput | T::KeywordInout => {
@@ -189,9 +204,9 @@ impl<'a> Consumable<'a> for NonPortModuleItem {
                 Ok(Self::GenerateRegion(generate_region))
             }
             T::KeywordSpecify => {
-                diagnostics
-                    .map(|d| d.incomplete(tkw.offset, "non_port_module_item::specify_block"));
-                Err(())
+                let specify_block =
+                    SpecifyBlock::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                Ok(Self::SpecifyBlock(specify_block))
             }
             T::KeywordSpecParam => {
                 diagnostics.map(|d| {
@@ -544,7 +559,267 @@ impl<'a> Consumable<'a> for GenerateRegion {
     }
 }
 
+impl<'a> Consumable<'a> for SpecifyBlock {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 500
+        // specify_block ::= specify { specify_item } endspecify
+
+        tkw.next_expect(T::KeywordSpecify, diagnostics.as_deref_mut())?;
+        let items = parse_zero_or_more_while_next::<SpecifyBlockItem>(
+            tkw,
+            sc,
+            arenas,
+            diagnostics.as_deref_mut(),
+            |t| t == T::Comma,
+        )?;
+        tkw.next_expect(T::KeywordEndSpecify, diagnostics.as_deref_mut())?;
+
+        Ok(SpecifyBlock { items })
+    }
+}
+
+impl<'a> Consumable<'a> for SpecifyBlockItem {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 500
+        // specify_item ::=
+        //   specparam_declaration
+        // | pulsestyle_declaration
+        // | showcancelled_declaration
+        // | path_declaration
+        // | system_timing_check
+
+        match *tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?.kind {
+            T::KeywordSpecParam => {
+                diagnostics.map(|d| {
+                    d.incomplete(tkw.offset, "specify_block_item::pulsestyle_declaration")
+                });
+                Err(())
+            }
+            T::KeywordPulseStyleOnEvent | T::KeywordPulseStyleOnDetect => {
+                diagnostics.map(|d| {
+                    d.incomplete(tkw.offset, "specify_block_item::pulsestyle_declaration")
+                });
+                Err(())
+            }
+            T::KeywordShowCancelled | T::KeywordNoShowCancelled => {
+                diagnostics.map(|d| {
+                    d.incomplete(tkw.offset, "specify_block_item::showcancelled_declaration")
+                });
+                Err(())
+            }
+            T::LeftParen => {
+                let path_declaration =
+                    PathDeclaration::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                Ok(Self::PathDeclaration(path_declaration))
+            }
+            T::DollarIdent => {
+                let system_timing_check =
+                    SystemTimingCheck::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                Ok(Self::SystemTimingCheck(system_timing_check))
+            }
+            t => {
+                diagnostics.map(|d| d.unexpected_token(tkw.offset, t));
+                Err(())
+            }
+        }
+    }
+}
+
+impl<'a> Consumable<'a> for PathDeclaration {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // path_declaration ::=
+        //   simple_path_declaration ;
+        // | edge_sensitive_path_declaration ;
+        // | state_dependent_path_declaration ;
+
+        tkw.next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
+        let input_terminal_descriptors = parse_one_or_more_while_next::<TerminalDescriptor>(
+            tkw,
+            sc,
+            arenas,
+            diagnostics.as_deref_mut(),
+            |t| t == T::Comma,
+        )?;
+
+        let polarity_operator = match tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?.kind {
+            T::Minus | T::Plus => Some(item_parse::<PolarityOperator>(
+                tkw,
+                sc,
+                arenas,
+                diagnostics.as_deref_mut(),
+            )?),
+            _ => None,
+        };
+        let simple_path_declaration_variant =
+            match *tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?.kind {
+                T::EqualsGreaterThan => {
+                    tkw.offset += 1;
+                    SimplePathDeclarationVariant::Full
+                }
+                T::StarGreaterThan => {
+                    tkw.offset += 1;
+                    SimplePathDeclarationVariant::Parallel
+                }
+                t => {
+                    diagnostics.map(|d| d.unexpected_token(tkw.offset, t));
+                    return Err(());
+                }
+            };
+        let output_terminal_descriptors = parse_one_or_more_while_next::<TerminalDescriptor>(
+            tkw,
+            sc,
+            arenas,
+            diagnostics.as_deref_mut(),
+            |t| t == T::Comma,
+        )?;
+        tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::Equals, diagnostics.as_deref_mut())?;
+        let path_delay_value =
+            parse::<PathDelayValue>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+
+        Ok(PathDeclaration::Simple(SimplePathDeclaration {
+            input_terminal_descriptors,
+            polarity_operator,
+            simple_path_declaration_variant,
+            output_terminal_descriptors,
+            path_delay_value,
+        }))
+    }
+}
+
+impl<'a> Consumable<'a> for TerminalDescriptor {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 500
+        // specify_input_terminal_descriptor ::= input_identifier [ [ constant_range_expression ] ]
+        // specify_output_terminal_descriptor ::= output_identifier [ [ constant_range_expression ] ]
+
+        let ident = item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        let mut constant_range_expr = None;
+        if tkw.next_if_equals(T::LeftBrace) {
+            constant_range_expr = Some(parse::<ConstantRangeExpression>(
+                tkw,
+                sc,
+                arenas,
+                diagnostics.as_deref_mut(),
+            )?);
+            tkw.next_expect(T::RightBrace, diagnostics.as_deref_mut())?;
+        }
+        Ok(Self {
+            ident,
+            constant_range_expr,
+        })
+    }
+}
+
+impl<'a> Consumable<'a> for PolarityOperator {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        _sc: &mut ParserScratches,
+        _arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 500
+        // specify_input_terminal_descriptor ::= input_identifier [ [ constant_range_expression ] ]
+        // specify_output_terminal_descriptor ::= output_identifier [ [ constant_range_expression ] ]
+
+        match *tkw.try_next(diagnostics.as_deref_mut())?.kind {
+            T::Minus => Ok(Self::Minus),
+            T::Plus => Ok(Self::Plus),
+            t => {
+                diagnostics.map(|d| d.unexpected_token(tkw.offset - 1, t));
+                Err(())
+            }
+        }
+    }
+}
+
+impl<'a> Consumable<'a> for PathDelayValue {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        Ok(Self {
+            list_of_delay_expressions: parse_one_or_more_while_next::<ConstantMinTypMaxExpression>(
+                tkw,
+                sc,
+                arenas,
+                diagnostics.as_deref_mut(),
+                |t| t == T::Comma,
+            )?,
+        })
+    }
+}
+
+impl<'a> Consumable<'a> for SystemTimingCheck {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        _sc: &mut ParserScratches,
+        _arenas: &mut AstArenas,
+        diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        diagnostics.map(|d| d.incomplete(tkw.offset, "system_timing_check"));
+        Err(())
+    }
+}
+
 impl<'a> Consumable<'a> for ModuleOrGenerateItem {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        let attribute_instances =
+            parse_zero_or_more_while_next(tkw, sc, arenas, diagnostics.as_deref_mut(), |t| {
+                t == T::LeftParenStar
+            })?;
+        let content =
+            ModuleOrGenerateItemContent::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+
+        Ok(Self {
+            attribute_instances,
+            content,
+        })
+    }
+}
+impl<'a> Consumable<'a> for ModuleOrGenerateItemContent {
     fn consume(
         tkw: &mut TokenWalker<'a>,
         sc: &mut ParserScratches,

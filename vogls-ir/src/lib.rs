@@ -102,6 +102,7 @@ impl BasicBlock {
         for i in &mut self.instrs {
             i.map_signals(&mut f);
         }
+        self.terminator.map_signal(f);
     }
 }
 
@@ -187,6 +188,28 @@ impl BasicBlockTerminator {
                 *bb2 = f(*bb2);
             }
             BasicBlockTerminator::Halt => {}
+        }
+    }
+
+    #[expect(unused)]
+    fn for_each_signal(&self, f: impl FnMut(SignalKey)) {
+        match self {
+            Self::Branch(..)
+            | Self::Wait(..)
+            | Self::WaitRegion(..)
+            | Self::Jump(_)
+            | Self::Halt => {}
+            Self::Watch(_, signals) => signals.iter().copied().for_each(f),
+        }
+    }
+    fn map_signal(&mut self, mut f: impl FnMut(SignalKey) -> SignalKey) {
+        match self {
+            Self::Branch(..)
+            | Self::Wait(..)
+            | Self::WaitRegion(..)
+            | Self::Jump(_)
+            | Self::Halt => {}
+            Self::Watch(_, signals) => signals.iter_mut().for_each(|s| *s = f(*s)),
         }
     }
 }

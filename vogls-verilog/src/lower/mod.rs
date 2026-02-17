@@ -393,7 +393,7 @@ pub fn lower_module_to_ir<'a>(
                         module_or_generate_item::lower(gl, arenas, scope, id, diagnostics)?;
                     }
                 }
-                NonPortModuleItem::SpecifyBlock => todo!(),
+                NonPortModuleItem::SpecifyBlock(_) => todo!(),
                 NonPortModuleItem::ParameterDeclaration(_) => {}
                 NonPortModuleItem::SpecParamDeclaration => todo!(),
             },

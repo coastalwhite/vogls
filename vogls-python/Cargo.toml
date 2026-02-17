@@ -1,0 +1,15 @@
+[package]
+name = "vogls-python"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "vogls"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = "0.28.1"
+vogls.path = "../vogls"
+
+[lints]
+workspace = true

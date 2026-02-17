@@ -68,6 +68,13 @@ impl IdentTable {
             }
         }
     }
+
+    pub fn get(&self, ident: &str) -> Option<IdentId> {
+        let hash = self.random_state.hash_one(ident);
+        self.ident_id_lut
+            .find(hash, |(r, _)| ident == &self.content[r.0..][..r.1])
+            .map(|(_, id)| *id)
+    }
 }
 
 impl Index<IdentId> for IdentTable {

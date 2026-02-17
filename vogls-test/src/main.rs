@@ -141,8 +141,8 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             let stderr = Io::default();
 
             let mut ctx = ExecutionContext {
-                stdout: Box::new(stdout.clone()) as Box<dyn std::io::Write>,
-                stderr: Box::new(stderr.clone()) as Box<dyn std::io::Write>,
+                stdout: Box::new(stdout.clone()) as Box<dyn std::io::Write + Send + Sync>,
+                stderr: Box::new(stderr.clone()) as Box<dyn std::io::Write + Send + Sync>,
                 emit_hierarchy: false,
                 emit_unoptimized_ir: false,
                 emit_ir: false,

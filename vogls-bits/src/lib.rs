@@ -82,6 +82,9 @@ pub struct Bits {
     data: BitsData,
 }
 
+unsafe impl Send for Bits {}
+unsafe impl Sync for Bits {}
+
 macro_rules! as_u64_value_slice {
     ($x:expr, $b:expr) => {{
         $x = [0u64];
@@ -1219,6 +1222,13 @@ impl Bits {
             bits: self,
             options,
         }
+    }
+
+    pub fn parse_binary(s: &str, size: VectorSize) -> Result<Bits, ()> {
+        parse::parse_bits_binary(s, size)
+    }
+    pub fn parse_hexadecimal(s: &str, size: VectorSize) -> Result<Bits, ()> {
+        parse::parse_bits_hexadecimal(s, size)
     }
 }
 

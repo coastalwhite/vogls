@@ -8,7 +8,7 @@ members = [
     "vogls-sim",
     "vogls-verilog",
     "vogls-frontend",
-    "vogls-utils",
+    "vogls-utils", "vogls-python",
 ]
 resolver = "3"
 

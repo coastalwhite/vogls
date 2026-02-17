@@ -6,6 +6,7 @@ use vogls_ir::{Bits, LogicMode, SCALAR_VSIZE, VectorSize};
 
 use crate::{HeapOffset, HeapRef};
 
+#[derive(Clone)]
 pub struct Heap(pub Box<[u64]>);
 
 impl Heap {
@@ -176,6 +177,13 @@ impl Heap {
                 self.get_u64_slice(at.offset, 2 * at.size.get().div_ceil(64) as usize)
                     .into(),
             )
+        }
+    }
+
+    pub fn load_bits(&self, at: HeapRef, logic_mode: LogicMode) -> Bits {
+        match logic_mode {
+            LogicMode::TwoValue => self.load_tv_bits(at),
+            LogicMode::FourValue => self.load_fv_bits(at),
         }
     }
 

@@ -83,7 +83,7 @@ pub enum VmIntrinsicOp {
     VcdResume,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum VmInstruction {
     Constant(HeapOffset, Bits),
 
@@ -249,7 +249,7 @@ impl VmInstruction {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct VmProcess {
     pub instructions: Vec<VmInstruction>,
 }

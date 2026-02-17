@@ -61,6 +61,11 @@ impl Diagnostics {
             .push((tr, LowerErrorReason::NotYetImplemented(reason), Vec::new()));
     }
 
+    pub fn warn_not_yet_implemented(&mut self, tr: TokenRange, reason: &'static str) {
+        self.warnings
+            .push((tr, format!("not yet implemented: {reason}")));
+    }
+
     pub fn warn_assign_type_mismatch(&mut self, tr: TokenRange, dst: VType, src: VType) {
         self.warnings
             .push((tr, format!("assign type mismatch: {dst:?} <- {src:?}")));

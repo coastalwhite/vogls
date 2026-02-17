@@ -2,6 +2,7 @@ use crate::parser::DefaultNettype;
 
 use super::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression};
 use super::expr::Expr;
+use super::specify::SpecifyBlock;
 use super::statement::{NetLValue, Statement, StatementOrNull};
 use super::{AstId, AstIdRange, AstItem, AttributeInstance, Identifier};
 
@@ -159,7 +160,12 @@ pub enum NetType {
 // | { attribute_instance } loop_generate_construct
 // | { attribute_instance } conditional_generate_construct
 #[derive(Clone, Copy)]
-pub enum ModuleOrGenerateItem {
+pub struct ModuleOrGenerateItem {
+    pub attribute_instances: AstIdRange<AttributeInstance>,
+    pub content: ModuleOrGenerateItemContent,
+}
+#[derive(Clone, Copy)]
+pub enum ModuleOrGenerateItemContent {
     ModuleOrGenerateItemDeclaration(AstId<ModuleOrGenerateItemDeclaration>),
     LocalParameterDeclaration(AstId<LocalParameterDeclaration>),
     ParameterOverride,
@@ -657,7 +663,7 @@ pub enum BlockItemDeclaration {
 pub enum NonPortModuleItem {
     ModuleOrGenerateItem(AstId<ModuleOrGenerateItem>),
     GenerateRegion(GenerateRegion),
-    SpecifyBlock,
+    SpecifyBlock(SpecifyBlock),
     ParameterDeclaration(AstId<ParameterDeclaration>),
     SpecParamDeclaration,
 }

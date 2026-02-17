@@ -127,6 +127,14 @@ pub fn lower_system_task_enable<'a>(
             );
         }
 
+        "readmemb" | "readmemh" => {
+            // diagnostics.warn_not_yet_implemented(
+            //     arenas.get_span(system_task_enable),
+            //     "stubs at the moment",
+            // );
+            builder.intrinsic(gl, IntrinsicOp::Finish, [].into());
+        }
+
         // @Incomplete: Many variants here.
         _ => {
             diagnostics.not_yet_implemented(

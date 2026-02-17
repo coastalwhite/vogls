@@ -23,9 +23,20 @@
             lib,
             self',
             ...
-          }: {
+          }: 
+          let
+            pythonPlatform = lib.recursiveUpdate {
+              python = pkgs.python311;
+            } pkgs.python311Packages;
+          in {
             devShells.default = pkgs.mkShell {
               packages = with pkgs; [
+                pythonPlatform.python
+                pythonPlatform.venvShellHook
+                pythonPlatform.build
+            
+                samply
+                uv
 								(yosys.withPlugins [yosys-ghdl])
                 gtkwave
                 ghdl
@@ -34,6 +45,12 @@
                 libelf
                 nodejs_24
               ];
+
+              postVenvCreation = ''
+                unset CONDA_PREFIX 
+                uv pip install -r pyproject.toml
+              '';
+              venvDir = ".venv";
             };
           };
       });

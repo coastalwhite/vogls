@@ -180,12 +180,14 @@ impl Tokenized {
                     },
                     b'*' => match bytes.get(i + 1) {
                         Some(b'*') => (T::DoubleStar, 2),
+                        Some(b'>') => (T::StarGreaterThan, 2),
                         Some(b')') => (T::StarRightParen, 2),
                         _ => (T::Star, 1),
                     },
                     b'=' => match (bytes.get(i + 1), bytes.get(i + 2)) {
                         (Some(b'='), Some(b'=')) => (T::TripleEquals, 3),
                         (Some(b'='), _) => (T::DoubleEquals, 2),
+                        (Some(b'>'), _) => (T::EqualsGreaterThan, 2),
                         (_, _) => (T::Equals, 1),
                     },
                     b'>' => match (bytes.get(i + 1), bytes.get(i + 2)) {
@@ -852,6 +854,9 @@ define_tokens! {
     LeftParenStar = "(*",
     StarRightParen = "*)",
     LeftParenStarRightParen = "(*)",
+
+    StarGreaterThan = "*>",
+    EqualsGreaterThan = "=>",
 
     // Keywords
     KeywordAlways = "always",

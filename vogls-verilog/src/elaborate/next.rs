@@ -3,9 +3,9 @@ use std::sync::Arc;
 
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_frontend::symbol_table::SymbolId;
-use vogls_utils::{VgHashMap, VgHashSet};
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::{ConnectionDirection, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE, SignalKey};
+use vogls_utils::{VgHashMap, VgHashSet};
 
 use crate::ast::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression};
 use crate::ast::expr::{BitSlice, Expr, Replication};
@@ -14,12 +14,12 @@ use crate::ast::module::{
     CaseGeneratePattern, Dimension, FunctionDeclaration, FunctionRangeOrType, GenerateBlock,
     GenerateRegion, GenvarAssignment, GenvarDeclaration, IfGenerateConstruct, InitialConstruct,
     IntegerDeclaration, LocalParameterDeclaration, LoopGenerateConstruct, Module,
-    ModuleInstantiation, ModuleItem, ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration,
-    ModulePorts, NamedParameterAssignment, NetDeclAssignment, NetDeclaration, NetDeclarationNets,
-    NetIdent, NetType, NonPortModuleItem, ParamAssignment, ParameterDeclaration,
-    ParameterDeclarationTyping, ParameterValueAssignment, Port, PortDeclaration, PortExpression,
-    PortReference, Range, RegDeclaration, TaskDeclaration, TaskPortItem, TaskPortItemContent,
-    TfType, VariableType, VariableTypeVariant,
+    ModuleInstantiation, ModuleItem, ModuleOrGenerateItem, ModuleOrGenerateItemContent,
+    ModuleOrGenerateItemDeclaration, ModulePorts, NamedParameterAssignment, NetDeclAssignment,
+    NetDeclaration, NetDeclarationNets, NetIdent, NetType, NonPortModuleItem, ParamAssignment,
+    ParameterDeclaration, ParameterDeclarationTyping, ParameterValueAssignment, Port,
+    PortDeclaration, PortExpression, PortReference, Range, RegDeclaration, TaskDeclaration,
+    TaskPortItem, TaskPortItemContent, TfType, VariableType, VariableTypeVariant,
 };
 use crate::ast::statement::{
     Block, ConditionalStatement, SeqBlock, Statement, StatementContent, StatementOrNull,
@@ -708,7 +708,7 @@ fn elaborate_module<'a>(
                     st.next_levels
                         .push_back((sid, ElabLevel::GenerateRegion(*region)));
                 }
-                NonPortModuleItem::SpecifyBlock => todo!(),
+                NonPortModuleItem::SpecifyBlock(_) => todo!(),
                 NonPortModuleItem::ParameterDeclaration(id) => {
                     let ParameterDeclaration {
                         typing,
@@ -742,8 +742,8 @@ fn extend_module_or_generate_item_sids<'a>(
     st: &mut ElaborationState,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
-    match arenas.get(id) {
-        ModuleOrGenerateItem::ModuleOrGenerateItemDeclaration(id) => match arenas.get(*id) {
+    match arenas.get(id).content {
+        ModuleOrGenerateItemContent::ModuleOrGenerateItemDeclaration(id) => match arenas.get(id) {
             ModuleOrGenerateItemDeclaration::Net(id) => {
                 let NetDeclaration {
                     net_type,
@@ -765,6 +765,23 @@ fn extend_module_or_generate_item_sids<'a>(
                     NetDeclarationNets::Idents(idents) => {
                         for net_ident in idents.iter() {
                             let NetIdent { ident, dimension } = arenas.get(net_ident);
+
+                            if let Some(sid) = table.resolve(scope, ident.item.0) {
+                                // @Hack.
+                                // Verilog allows shadowing ports with wires.
+                                let Some(sym_idx) = st.lvl_symbols_lookup.get(&sid) else {
+                                    error = true;
+                                    continue;
+                                };
+                                let (_, InLevelSymbol::Port(..)) = &mut st.lvl_symbols[*sym_idx]
+                                else {
+                                    error = true;
+                                    continue;
+                                };
+
+                                continue;
+                            }
+
                             let symbol = NetSymbol {
                                 ty: VType::SCALAR_NET,
                                 dims: Vec::new(),
@@ -789,6 +806,23 @@ fn extend_module_or_generate_item_sids<'a>(
                     NetDeclarationNets::Assignments(assignments) => {
                         for assignment in assignments.iter() {
                             let NetDeclAssignment { ident, expr: _ } = arenas.get(assignment);
+
+                            if let Some(sid) = table.resolve(scope, ident.item.0) {
+                                // @Hack.
+                                // Verilog allows shadowing ports with wires.
+                                let Some(sym_idx) = st.lvl_symbols_lookup.get(&sid) else {
+                                    error = true;
+                                    continue;
+                                };
+                                let (_, InLevelSymbol::Port(..)) = &mut st.lvl_symbols[*sym_idx]
+                                else {
+                                    error = true;
+                                    continue;
+                                };
+
+                                continue;
+                            }
+
                             let symbol = NetSymbol {
                                 ty: VType::SCALAR_NET,
                                 dims: Vec::new(),
@@ -960,11 +994,11 @@ fn extend_module_or_generate_item_sids<'a>(
                 if error { Err(()) } else { Ok(()) }
             }
         },
-        ModuleOrGenerateItem::LocalParameterDeclaration(id) => {
+        ModuleOrGenerateItemContent::LocalParameterDeclaration(id) => {
             let LocalParameterDeclaration {
                 typing,
                 assignments,
-            } = arenas.get(*id);
+            } = arenas.get(id);
             extend_param_decl_idents_into_scope(
                 arenas,
                 scope,
@@ -976,17 +1010,16 @@ fn extend_module_or_generate_item_sids<'a>(
                 diagnostics,
             )
         }
-        ModuleOrGenerateItem::ParameterOverride => todo!(),
-        ModuleOrGenerateItem::ContinuousAssign(_) | ModuleOrGenerateItem::GateInstantiation(_) => {
-            Ok(())
-        }
-        ModuleOrGenerateItem::UdpInstantiation => todo!(),
-        ModuleOrGenerateItem::ModuleInstantiation(id) => {
+        ModuleOrGenerateItemContent::ParameterOverride => todo!(),
+        ModuleOrGenerateItemContent::ContinuousAssign(_)
+        | ModuleOrGenerateItemContent::GateInstantiation(_) => Ok(()),
+        ModuleOrGenerateItemContent::UdpInstantiation => todo!(),
+        ModuleOrGenerateItemContent::ModuleInstantiation(id) => {
             let ModuleInstantiation {
                 module_identifier,
                 parameter_value_assignment,
                 module_instances,
-            } = arenas.get(*id);
+            } = arenas.get(id);
 
             let Some(module) = st.module_lut.get(&module_identifier.item.0) else {
                 diagnostics.module_not_found(arenas, *module_identifier);
@@ -1021,8 +1054,8 @@ fn extend_module_or_generate_item_sids<'a>(
             }
             if error { Err(()) } else { Ok(()) }
         }
-        ModuleOrGenerateItem::InitialConstruct(id) => {
-            let InitialConstruct(id) = arenas.get(*id);
+        ModuleOrGenerateItemContent::InitialConstruct(id) => {
+            let InitialConstruct(id) = arenas.get(id);
             extend_statements_sids(
                 arenas,
                 AstIdRange::single(*id),
@@ -1032,8 +1065,8 @@ fn extend_module_or_generate_item_sids<'a>(
                 diagnostics,
             )
         }
-        ModuleOrGenerateItem::AlwaysConstruct(id) => {
-            let AlwaysConstruct(id) = arenas.get(*id);
+        ModuleOrGenerateItemContent::AlwaysConstruct(id) => {
+            let AlwaysConstruct(id) = arenas.get(id);
             extend_statements_sids(
                 arenas,
                 AstIdRange::single(*id),
@@ -1043,18 +1076,18 @@ fn extend_module_or_generate_item_sids<'a>(
                 diagnostics,
             )
         }
-        ModuleOrGenerateItem::LoopGenerateConstruct(id) => {
-            let lvl = ElabLevel::GenerateLoop(*id);
+        ModuleOrGenerateItemContent::LoopGenerateConstruct(id) => {
+            let lvl = ElabLevel::GenerateLoop(id);
             st.next_levels.push_back((scope, lvl));
             Ok(())
         }
-        ModuleOrGenerateItem::IfGenerateConstruct(id) => {
-            let lvl = ElabLevel::GenerateIf(*id);
+        ModuleOrGenerateItemContent::IfGenerateConstruct(id) => {
+            let lvl = ElabLevel::GenerateIf(id);
             st.next_levels.push_back((scope, lvl));
             Ok(())
         }
-        ModuleOrGenerateItem::CaseGenerateConstruct(id) => {
-            let lvl = ElabLevel::GenerateCase(*id);
+        ModuleOrGenerateItemContent::CaseGenerateConstruct(id) => {
+            let lvl = ElabLevel::GenerateCase(id);
             st.next_levels.push_back((scope, lvl));
             Ok(())
         }

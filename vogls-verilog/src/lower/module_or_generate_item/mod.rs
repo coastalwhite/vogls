@@ -4,9 +4,9 @@ use vogls_ir::{
 
 use crate::ast::module::{
     Dimension, GateInstantiation, GenerateBlock, ListOfPortConnections, ModuleInstance,
-    ModuleInstantiation, ModuleOrGenerateItem, ModuleOrGenerateItemDeclaration, NInputGateInstance,
-    NInputGateType, NamedPortConnection, NetDeclAssignment, NetDeclarationNets, VariableType,
-    VariableTypeVariant,
+    ModuleInstantiation, ModuleOrGenerateItem, ModuleOrGenerateItemContent,
+    ModuleOrGenerateItemDeclaration, NInputGateInstance, NInputGateType, NamedPortConnection,
+    NetDeclAssignment, NetDeclarationNets, VariableType, VariableTypeVariant,
 };
 use crate::ast::{AstId, AstIdRange};
 use crate::elaborate::VSymbol;
@@ -31,15 +31,17 @@ pub fn lower<'a>(
     id: AstId<ModuleOrGenerateItem>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
-    match arenas.get(id) {
-        ModuleOrGenerateItem::ModuleOrGenerateItemDeclaration(id) => {
-            let module_or_generate_item_declaration = arenas.get(*id);
+    match arenas.get(id).content {
+        ModuleOrGenerateItemContent::ModuleOrGenerateItemDeclaration(id) => {
+            let module_or_generate_item_declaration = arenas.get(id);
             match module_or_generate_item_declaration {
                 ModuleOrGenerateItemDeclaration::Net(id) => {
                     let net_declaration = arenas.get(*id);
                     let (_, _, width) = match net_declaration.range {
                         None => (0, 0, SCALAR_VSIZE),
-                        Some(range) => evaluate_range(gl, arenas, scope.eval(), diagnostics, range)?,
+                        Some(range) => {
+                            evaluate_range(gl, arenas, scope.eval(), diagnostics, range)?
+                        }
                     };
                     let ty = VType::net(width, net_declaration.signed);
                     match net_declaration.nets {
@@ -108,14 +110,14 @@ pub fn lower<'a>(
                 ModuleOrGenerateItemDeclaration::Function(_) => {}
             }
         }
-        ModuleOrGenerateItem::LocalParameterDeclaration(_) => {}
-        ModuleOrGenerateItem::ParameterOverride => todo!(),
-        ModuleOrGenerateItem::ContinuousAssign(id) => {
-            let assign = arenas.get(*id);
+        ModuleOrGenerateItemContent::LocalParameterDeclaration(_) => {}
+        ModuleOrGenerateItemContent::ParameterOverride => todo!(),
+        ModuleOrGenerateItemContent::ContinuousAssign(id) => {
+            let assign = arenas.get(id);
             for ast_net_assignment in assign.list_of_net_assignments {
                 let net_assignment = arenas.get(ast_net_assignment);
 
-                let mut bb_builder = new_process(gl, "assign".into(), arenas.get_span(*id));
+                let mut bb_builder = new_process(gl, "assign".into(), arenas.get_span(id));
                 let bb_key = bb_builder.key();
                 let (variable, variable_ty) = lower_expr(
                     gl,
@@ -140,8 +142,8 @@ pub fn lower<'a>(
                 bb_builder.watch_for_ins_to(gl, bb_key);
             }
         }
-        ModuleOrGenerateItem::GateInstantiation(id) => {
-            let gate_instantiation = arenas.get(*id);
+        ModuleOrGenerateItemContent::GateInstantiation(id) => {
+            let gate_instantiation = arenas.get(id);
             match gate_instantiation {
                 GateInstantiation::NInput(id) => {
                     let ninput_gate_instantiation = arenas.get(*id);
@@ -210,11 +212,11 @@ pub fn lower<'a>(
                 }
             }
         }
-        ModuleOrGenerateItem::UdpInstantiation => todo!(),
-        ModuleOrGenerateItem::ModuleInstantiation(id) => {
+        ModuleOrGenerateItemContent::UdpInstantiation => todo!(),
+        ModuleOrGenerateItemContent::ModuleInstantiation(id) => {
             let ModuleInstantiation {
                 module_instances, ..
-            } = arenas.get(*id);
+            } = arenas.get(id);
 
             for instance in module_instances.iter() {
                 let ModuleInstance {
@@ -358,9 +360,9 @@ pub fn lower<'a>(
                 };
             }
         }
-        ModuleOrGenerateItem::InitialConstruct(id) => {
-            let statement = arenas.get(*id).0;
-            let bb_builder = new_process(gl, "initial".into(), arenas.get_span(*id));
+        ModuleOrGenerateItemContent::InitialConstruct(id) => {
+            let statement = arenas.get(id).0;
+            let bb_builder = new_process(gl, "initial".into(), arenas.get_span(id));
             let bb_builder = statements_to_process(
                 gl,
                 arenas,
@@ -371,9 +373,9 @@ pub fn lower<'a>(
             )?;
             bb_builder.halt(gl);
         }
-        ModuleOrGenerateItem::AlwaysConstruct(id) => {
-            let statement = arenas.get(*id).0;
-            let bb_builder = new_process(gl, "always".into(), arenas.get_span(*id));
+        ModuleOrGenerateItemContent::AlwaysConstruct(id) => {
+            let statement = arenas.get(id).0;
+            let bb_builder = new_process(gl, "always".into(), arenas.get_span(id));
             let bb_key = bb_builder.key();
             let bb_builder = statements_to_process(
                 gl,
@@ -387,9 +389,9 @@ pub fn lower<'a>(
         }
 
         // Handled by a combination of elaboration + module level elaboration.
-        ModuleOrGenerateItem::LoopGenerateConstruct(_)
-        | ModuleOrGenerateItem::IfGenerateConstruct(_)
-        | ModuleOrGenerateItem::CaseGenerateConstruct(_) => {}
+        ModuleOrGenerateItemContent::LoopGenerateConstruct(_)
+        | ModuleOrGenerateItemContent::IfGenerateConstruct(_)
+        | ModuleOrGenerateItemContent::CaseGenerateConstruct(_) => {}
     }
 
     Ok(())

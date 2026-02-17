@@ -11,6 +11,7 @@ pub mod constant_expr;
 pub mod expr;
 pub mod module;
 pub mod statement;
+pub mod specify;
 
 pub struct AstId<T> {
     pub node: ArenaId<T>,

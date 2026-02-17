@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use vogls_ir::{Bits, GlobalContext};
+use vogls_ir::{Bits, GlobalContext, VectorSize};
 
 use crate::ast::AstId;
 use crate::ast::constant_expr::ConstantExpr;
@@ -284,7 +284,19 @@ pub fn eval_constant_expr<'a>(
                     fn_symbol.output_ty.is_signed(),
                 )));
             }
-            Expr::String(..) | Expr::Unary(..) | Expr::Replication(..) => {
+            Expr::String(string_ref) => {
+                let s = arenas.get_ident(string_ref.0);
+                let s = s
+                    .as_bytes()
+                    .iter()
+                    .copied()
+                    .chain(std::iter::once(b'\0'))
+                    .collect::<Box<[u8]>>();
+                let size = VectorSize::new((s.len() * 8) as u32).unwrap();
+                let value = Bits::load_from_slice(&s, size);
+                result_stack.push(Some(VValue::UnsignedNet(value)));
+            }
+            Expr::Unary(..) | Expr::Replication(..) => {
                 result_stack.push(None);
                 diagnostics.not_yet_implemented(
                     arenas.get_span(item.expr),
