@@ -95,21 +95,24 @@ impl<'a> TokenWalker<'a> {
         }
     }
 
+    pub fn next_if(&mut self, f: impl FnMut(Token) -> bool) -> bool {
+        let do_next = self.is_next(f);
+        self.offset += usize::from(do_next);
+        do_next
+    }
     pub fn next_if_equals(&mut self, kind: Token) -> bool {
-        let Some(next) = self.next() else {
-            return false;
-        };
-        let next = *next.kind;
-        self.offset -= usize::from(next != kind);
-        next == kind
+        self.next_if(|t| t == kind)
     }
 
-    pub fn is_next_equal_to(&self, kind: Token) -> bool {
+    pub fn is_next(&self, mut f: impl FnMut(Token) -> bool) -> bool {
         let Some(next) = self.get(self.offset) else {
             return false;
         };
         let next = *next.kind;
-        next == kind
+        f(next)
+    }
+    pub fn is_next_equal_to(&self, kind: Token) -> bool {
+        self.is_next(|t| t == kind)
     }
     pub fn is_next_nth_equal_to(&self, nth: usize, kind: Token) -> bool {
         let Some(next) = self.get(self.offset + nth) else {

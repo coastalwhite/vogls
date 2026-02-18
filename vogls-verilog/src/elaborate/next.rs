@@ -715,7 +715,7 @@ fn elaborate_module<'a>(
                     st.next_levels
                         .push_back((sid, ElabLevel::GenerateRegion(*region)));
                 }
-                NonPortModuleItem::SpecifyBlock(_) => todo!(),
+                NonPortModuleItem::SpecifyBlock(_) => {},
                 NonPortModuleItem::ParameterDeclaration(id) => {
                     let ParameterDeclaration {
                         typing,

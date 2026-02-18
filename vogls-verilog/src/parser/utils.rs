@@ -257,7 +257,7 @@ pub fn parse_zero_or_more_while_next<'a, T: Consumable<'a>>(
     sc: &mut ParserScratches,
     arenas: &mut AstArenas,
     mut diagnostics: Option<&mut Diagnostics>,
-    condition: impl Fn(Token) -> bool,
+    mut condition: impl FnMut(Token) -> bool,
 ) -> Result<AstIdRange<T>, ()> {
     // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
     // here.

@@ -19,11 +19,11 @@ use crate::ast::module::{
     TfType, VariableType, VariableTypeVariant,
 };
 use crate::ast::specify::{
-    PathDeclaration, PathDelayValue, PolarityOperator, SimplePathDeclaration,
-    SimplePathDeclarationVariant, SpecifyBlock, SpecifyBlockItem, SystemTimingCheck,
-    TerminalDescriptor,
+    EdgeIdentifier, ModulePathExpr, PathDeclaration, PathDelayValue, PolarityOperator,
+    SimplePathDeclarationVariant, SpecifyBlock, SpecifyBlockItem, StateDependentCondition,
+    SystemTimingCheck, TerminalDescriptor,
 };
-use crate::ast::statement::{NetLValue, Statement, StatementOrNull};
+use crate::ast::statement::{NetLValue, Statement, StatementOrNull, SystemTaskIdentifier};
 use crate::ast::{AttributeInstance, Identifier};
 use crate::parser::TokenRange;
 use crate::tokenizer::Token;
@@ -577,7 +577,7 @@ impl<'a> Consumable<'a> for SpecifyBlock {
             sc,
             arenas,
             diagnostics.as_deref_mut(),
-            |t| t == T::Comma,
+            |t| t != T::KeywordEndSpecify,
         )?;
         tkw.next_expect(T::KeywordEndSpecify, diagnostics.as_deref_mut())?;
 
@@ -605,7 +605,7 @@ impl<'a> Consumable<'a> for SpecifyBlockItem {
         match *tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?.kind {
             T::KeywordSpecParam => {
                 diagnostics.map(|d| {
-                    d.incomplete(tkw.offset, "specify_block_item::pulsestyle_declaration")
+                    d.incomplete(tkw.offset, "specify_block_item::spec_param")
                 });
                 Err(())
             }
@@ -621,7 +621,7 @@ impl<'a> Consumable<'a> for SpecifyBlockItem {
                 });
                 Err(())
             }
-            T::LeftParen => {
+            T::LeftParen | T::KeywordIf | T::KeywordIfnone => {
                 let path_declaration =
                     PathDeclaration::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
                 Ok(Self::PathDeclaration(path_declaration))
@@ -653,24 +653,50 @@ impl<'a> Consumable<'a> for PathDeclaration {
         // | edge_sensitive_path_declaration ;
         // | state_dependent_path_declaration ;
 
-        tkw.next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
-        let input_terminal_descriptors = parse_one_or_more_while_next::<TerminalDescriptor>(
-            tkw,
-            sc,
-            arenas,
-            diagnostics.as_deref_mut(),
-            |t| t == T::Comma,
-        )?;
+        let mut state_dependent_condition = None;
+        let mut edge_identifier = None;
+        let mut polarity_operator = None;
+        let mut data_source_expression = None;
 
-        let polarity_operator = match tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?.kind {
-            T::Minus | T::Plus => Some(item_parse::<PolarityOperator>(
+        let allow_edge_sensitive = !tkw.is_next_equal_to(T::KeywordIfnone);
+
+        if tkw.is_next(|t| matches!(t, T::KeywordIf | T::KeywordIfnone)) {
+            state_dependent_condition = Some(parse::<StateDependentCondition>(
                 tkw,
                 sc,
                 arenas,
                 diagnostics.as_deref_mut(),
-            )?),
-            _ => None,
-        };
+            )?);
+        }
+
+        tkw.next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
+
+        if allow_edge_sensitive
+            && tkw.is_next(|t| matches!(t, T::KeywordPosedge | T::KeywordNegedge))
+        {
+            edge_identifier = Some(item_parse::<EdgeIdentifier>(
+                tkw,
+                sc,
+                arenas,
+                diagnostics.as_deref_mut(),
+            )?);
+        }
+        let input_terminal_descriptors = parse_one_or_more_while::<TerminalDescriptor>(
+            tkw,
+            sc,
+            arenas,
+            diagnostics.as_deref_mut(),
+            |tkw| tkw.next_if_equals(T::Comma),
+        )?;
+
+        if edge_identifier.is_none() && tkw.is_next(|t| matches!(t, T::Minus | T::Plus)) {
+            polarity_operator = Some(item_parse::<PolarityOperator>(
+                tkw,
+                sc,
+                arenas,
+                diagnostics.as_deref_mut(),
+            )?);
+        }
         let simple_path_declaration_variant =
             match *tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?.kind {
                 T::EqualsGreaterThan => {
@@ -686,26 +712,115 @@ impl<'a> Consumable<'a> for PathDeclaration {
                     return Err(());
                 }
             };
-        let output_terminal_descriptors = parse_one_or_more_while_next::<TerminalDescriptor>(
+
+        let mut is_edge_sensitive_path = edge_identifier.is_some();
+        if is_edge_sensitive_path {
+            tkw.next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
+        } else if allow_edge_sensitive && polarity_operator.is_none() {
+            is_edge_sensitive_path = tkw.next_if_equals(T::LeftParen);
+        }
+
+        let output_terminal_descriptors = parse_one_or_more_while::<TerminalDescriptor>(
             tkw,
             sc,
             arenas,
             diagnostics.as_deref_mut(),
-            |t| t == T::Comma,
+            |tkw| tkw.next_if_equals(T::Comma),
         )?;
+
+        if is_edge_sensitive_path {
+            if tkw.is_next(|t| matches!(t, T::Minus | T::Plus)) {
+                polarity_operator = Some(item_parse::<PolarityOperator>(
+                    tkw,
+                    sc,
+                    arenas,
+                    diagnostics.as_deref_mut(),
+                )?);
+            }
+
+            tkw.next_expect(T::Colon, diagnostics.as_deref_mut())?;
+            data_source_expression =
+                Some(parse::<Expr>(tkw, sc, arenas, diagnostics.as_deref_mut())?);
+            tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
+        }
+
         tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
         tkw.next_expect(T::Equals, diagnostics.as_deref_mut())?;
         let path_delay_value =
             parse::<PathDelayValue>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
         tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
 
-        Ok(PathDeclaration::Simple(SimplePathDeclaration {
+        Ok(PathDeclaration {
+            state_dependent_condition,
+            edge_identifier,
             input_terminal_descriptors,
             polarity_operator,
             simple_path_declaration_variant,
+            data_source_expression,
             output_terminal_descriptors,
             path_delay_value,
-        }))
+        })
+    }
+}
+
+impl<'a> Consumable<'a> for StateDependentCondition {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        match *tkw.try_next(diagnostics.as_deref_mut())?.kind {
+            T::KeywordIf => {
+                tkw.next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
+                let module_path_expr =
+                    parse::<ModulePathExpr>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
+                Ok(Self::If(module_path_expr))
+            }
+            T::KeywordIfnone => Ok(Self::Ifnone),
+            t => {
+                diagnostics.map(|d| d.unexpected_token(tkw.offset - 1, t));
+                Err(())
+            }
+        }
+    }
+}
+
+impl<'a> Consumable<'a> for ModulePathExpr {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        let expr = Expr::consume(tkw, sc, arenas, diagnostics)?;
+        Ok(Self(expr))
+    }
+}
+
+impl<'a> Consumable<'a> for EdgeIdentifier {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        _sc: &mut ParserScratches,
+        _arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 501
+        // edge_identifier ::= posedge | negedge
+
+        match *tkw.try_next(diagnostics.as_deref_mut())?.kind {
+            T::KeywordPosedge => Ok(Self::Posedge),
+            T::KeywordNegedge => Ok(Self::Negedge),
+            t => {
+                diagnostics.map(|d| d.unexpected_token(tkw.offset - 1, t));
+                Err(())
+            }
+        }
     }
 }
 
@@ -773,14 +888,25 @@ impl<'a> Consumable<'a> for PathDelayValue {
     ) -> Result<Self, ()> {
         use Token as T;
 
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 500 - 501
+        // path_delay_value ::=
+        //   list_of_path_delay_expressions
+        // | ( list_of_path_delay_expressions )
+
+        let starts_with_left_paren = tkw.next_if_equals(T::LeftParen);
+        let list_of_delay_expressions = parse_one_or_more_while::<ConstantMinTypMaxExpression>(
+            tkw,
+            sc,
+            arenas,
+            diagnostics.as_deref_mut(),
+            |tkw| tkw.next_if_equals(T::Comma),
+        )?;
+        if starts_with_left_paren {
+            tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
+        }
+
         Ok(Self {
-            list_of_delay_expressions: parse_one_or_more_while_next::<ConstantMinTypMaxExpression>(
-                tkw,
-                sc,
-                arenas,
-                diagnostics.as_deref_mut(),
-                |t| t == T::Comma,
-            )?,
+            list_of_delay_expressions,
         })
     }
 }
@@ -788,12 +914,43 @@ impl<'a> Consumable<'a> for PathDelayValue {
 impl<'a> Consumable<'a> for SystemTimingCheck {
     fn consume(
         tkw: &mut TokenWalker<'a>,
-        _sc: &mut ParserScratches,
-        _arenas: &mut AstArenas,
-        diagnostics: Option<&mut Diagnostics>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ()> {
-        diagnostics.map(|d| d.incomplete(tkw.offset, "system_timing_check"));
-        Err(())
+        use Token as T;
+
+        let system_timing_check_ident =
+            SystemTaskIdentifier::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+
+        let item = match &arenas.ident_table[system_timing_check_ident.0] {
+            "setup" => Self::Setup,
+            "hold" => Self::Hold,
+            "setuphold" => Self::SetupHold,
+            "recovery" => Self::Recovery,
+            "removal" => Self::Removal,
+            "recrem" => Self::Recrem,
+            "skew" => Self::Skew,
+            "timeskew" => Self::TimeSkew,
+            "fullskew" => Self::FullSkew,
+            "period" => Self::Period,
+            "width" => Self::Width,
+            "nochange" => Self::NoChange,
+            _ => {
+                diagnostics.map(|d| d.unexpected_token(tkw.offset - 1, T::DollarIdent));
+                return Err(());
+            }
+        };
+
+        tkw.next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
+        let Some(offset) = tkw.find_next_same_depth(T::RightParen) else {
+            diagnostics.map(|d| d.no_corresponding(tkw.offset - 1, T::RightParen));
+            return Err(());
+        };
+        tkw.offset = offset + 1;
+        tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+
+        Ok(item)
     }
 }
 

@@ -1,4 +1,5 @@
 use super::constant_expr::{ConstantMinTypMaxExpression, ConstantRangeExpression};
+use super::expr::Expr;
 use super::{AstId, AstIdRange, AstItem, Identifier};
 
 // specify_block ::= specify { specify_item } endspecify
@@ -214,29 +215,64 @@ pub enum SpecifyBlockItem {
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 500
-// path_declaration ::=
-//   simple_path_declaration ;
-// | edge_sensitive_path_declaration ;
-// | state_dependent_path_declaration ;
-#[derive(Clone, Copy)]
-pub enum PathDeclaration {
-    Simple(SimplePathDeclaration),
-    EdgeSensitive,
-    StateDependent,
-}
-
-// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 500
 // simple_path_declaration ::=
 //   parallel_path_description = path_delay_value
 // | full_path_description = path_delay_value
+//
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 501
+// edge_sensitive_path_declaration ::=
+//   parallel_edge_sensitive_path_description = path_delay_value
+// | full_edge_sensitive_path_description = path_delay_value
+// parallel_edge_sensitive_path_description ::=
+//   ( [ edge_identifier ] specify_input_terminal_descriptor =>
+//   ( specify_output_terminal_descriptor [ polarity_operator ] : data_source_expression ) )
+// full_edge_sensitive_path_description ::=
+//   ( [ edge_identifier ] list_of_path_inputs *>
+//   ( list_of_path_outputs [ polarity_operator ] : data_source_expression ) )
+// data_source_expression ::= expression
 #[derive(Clone, Copy)]
-pub struct SimplePathDeclaration {
+pub struct PathDeclaration {
+    pub state_dependent_condition: Option<AstId<StateDependentCondition>>,
+    pub edge_identifier: Option<AstItem<EdgeIdentifier>>,
     pub input_terminal_descriptors: AstIdRange<TerminalDescriptor>,
     pub polarity_operator: Option<AstItem<PolarityOperator>>,
     pub simple_path_declaration_variant: SimplePathDeclarationVariant,
+    pub data_source_expression: Option<AstId<Expr>>,
     pub output_terminal_descriptors: AstIdRange<TerminalDescriptor>,
     pub path_delay_value: AstId<PathDelayValue>,
 }
+
+impl PathDeclaration {
+    pub fn is_simple(&self) -> bool {
+        self.data_source_expression.is_none()
+    }
+
+    pub fn is_edge_sensitive(&self) -> bool {
+        self.data_source_expression.is_some()
+    }
+
+    pub fn is_state_dependent(&self) -> bool {
+        self.state_dependent_condition.is_some()
+    }
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 501
+// edge_identifier ::= posedge | negedge
+#[derive(Clone, Copy)]
+pub enum EdgeIdentifier {
+    Posedge,
+    Negedge,
+}
+
+#[derive(Clone, Copy)]
+pub enum StateDependentCondition {
+    If(AstId<ModulePathExpr>),
+    Ifnone,
+}
+
+#[derive(Clone, Copy)]
+#[repr(transparent)]
+pub struct ModulePathExpr(pub Expr);
 
 #[derive(Clone, Copy)]
 pub enum SimplePathDeclarationVariant {
@@ -261,10 +297,40 @@ pub struct TerminalDescriptor {
     pub constant_range_expr: Option<AstId<ConstantRangeExpression>>,
 }
 
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 500 - 501
+// path_delay_value ::=
+//   list_of_path_delay_expressions
+// | ( list_of_path_delay_expressions )
 #[derive(Clone, Copy)]
 pub struct PathDelayValue {
     pub list_of_delay_expressions: AstIdRange<ConstantMinTypMaxExpression>,
 }
 
+// system_timing_check ::=
+//   $setup_timing_check
+// | $hold_timing_check
+// | $setuphold_timing_check
+// | $recovery_timing_check
+// | $removal_timing_check
+// | $recrem_timing_check
+// | $skew_timing_check
+// | $timeskew_timing_check
+// | $fullskew_timing_check
+// | $period_timing_check
+// | $width_timing_check
+// | $nochange_timing_check
 #[derive(Clone, Copy)]
-pub struct SystemTimingCheck;
+pub enum SystemTimingCheck {
+    Setup,
+    Hold,
+    SetupHold,
+    Recovery,
+    Removal,
+    Recrem,
+    Skew,
+    TimeSkew,
+    FullSkew,
+    Period,
+    Width,
+    NoChange,
+}
