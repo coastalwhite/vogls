@@ -792,6 +792,18 @@ impl Simulation {
                             self.update_signal(state, *sig);
                         }
                     }
+                    I::VariableWait(time) => {
+                        let time = state.heap.get_tv_u64(time.to_ref(TIME_VSIZE));
+                        state
+                            .schedule
+                            .entry(state.time + time)
+                            .or_default()
+                            .push(event);
+                        if self.itrace {
+                            instr.itrace(&mut state.heap, &self.signals, self.logic_mode);
+                        }
+                        return EvalOutcome::Next;
+                    }
                     I::Wait(time) => {
                         state
                             .schedule

@@ -137,6 +137,7 @@ impl fmt::Display for VmInstruction {
                     )
                 }
             },
+            Self::VariableWait(time) => write!(f, "wait.var {}", time),
             Self::Wait(time) => write!(f, "wait #{}", time.0),
             Self::WaitRegion(region) => write!(f, "wait.region {region}"),
             Self::Watch(signals) => {
@@ -191,6 +192,7 @@ impl fmt::Display for VmProcess {
                 | I::Intrinsic(..)
                 | I::LastUpdateTime(..)
                 | I::Drive(..)
+                | I::VariableWait(..)
                 | I::Wait(..)
                 | I::WaitRegion(..)
                 | I::Watch(..)

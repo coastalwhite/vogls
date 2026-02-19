@@ -55,6 +55,8 @@ pub enum BinaryArithmeticOp {
     Modulus,
     CopyX,
     CopyZ,
+    Min,
+    Max,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -112,6 +114,7 @@ pub enum VmInstruction {
     Drive(VmSignalKey, HeapRef, Option<HeapOffset>),
 
     Wait(Time),
+    VariableWait(HeapOffset),
     WaitRegion(u8),
     Watch(Vec<VmSignalKey>),
 
@@ -228,6 +231,7 @@ impl VmInstruction {
                     ],
                 }
             }
+            I::VariableWait(var) => &[("time", false, var.to_64bit_ref())],
             I::Wait(_) => &[],
             I::WaitRegion(_) => &[],
             I::Watch(_) => &[],
@@ -284,6 +288,8 @@ impl BinaryArithmeticOp {
             Self::Modulus => "rem",
             Self::CopyX => "copyx",
             Self::CopyZ => "copyz",
+            Self::Min => "min",
+            Self::Max => "max",
         }
     }
 }

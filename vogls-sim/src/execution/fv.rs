@@ -13,7 +13,7 @@ use vogls_bits::shift::{
 use vogls_bits::truncate::{fv_l_truncate, fv_s_truncate};
 use vogls_ir::{ResizeOp, UnaryOp, VectorSize};
 
-use crate::{BinaryArithmeticOp, BinaryComparisonOp, ShiftOp, Heap, HeapOffset, HeapRef};
+use crate::{BinaryArithmeticOp, BinaryComparisonOp, Heap, HeapOffset, HeapRef, ShiftOp};
 
 pub(crate) fn exec_fv_unary(stack: &mut Heap, dst: HeapOffset, op: UnaryOp, src: HeapRef) {
     use UnaryOp as O;
@@ -126,6 +126,20 @@ pub(crate) fn exec_fv_bin_arith(
     fn fv_u8_bitwise_xor(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: VectorSize) {
         A::fv_bin_bitwise_op(dst, lhs, rhs, size, A::fv_bitwise_xor_elem)
     }
+    fn fv_u8_min(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: VectorSize) {
+        if vogls_bits::comparison::fv_s_unsigned_leq(lhs, rhs, size) == FvLogicValue::L1 {
+            dst.copy_from_slice(lhs);
+        } else {
+            dst.copy_from_slice(rhs);
+        }
+    }
+    fn fv_u8_max(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: VectorSize) {
+        if vogls_bits::comparison::fv_s_unsigned_leq(lhs, rhs, size) == FvLogicValue::L1 {
+            dst.copy_from_slice(rhs);
+        } else {
+            dst.copy_from_slice(lhs);
+        }
+    }
     fn fv_u64_bitwise_and(dst: &mut [u64], lhs: &[u64], rhs: &[u64], _size: VectorSize) {
         A::fv_bin_u64_bitwise_op(dst, lhs, rhs, A::fv_bitwise_and_elem);
     }
@@ -151,6 +165,22 @@ pub(crate) fn exec_fv_bin_arith(
     fn fv_u64_copy_z(dst: &mut [u64], lhs: &[u64], rhs: &[u64], _size: VectorSize) {
         C::fv_l_copy_z(dst, lhs, rhs);
     }
+    fn fv_u64_min(dst: &mut [u64], lhs: &[u64], rhs: &[u64], size: VectorSize) {
+        // @TODO: Decide what to do with X / Z
+        if vogls_bits::comparison::fv_l_unsigned_leq(lhs, rhs, size) == FvLogicValue::L1 {
+            dst.copy_from_slice(lhs);
+        } else {
+            dst.copy_from_slice(rhs);
+        }
+    }
+    fn fv_u64_max(dst: &mut [u64], lhs: &[u64], rhs: &[u64], size: VectorSize) {
+        // @TODO: Decide what to do with X / Z
+        if vogls_bits::comparison::fv_l_unsigned_leq(lhs, rhs, size) == FvLogicValue::L1 {
+            dst.copy_from_slice(rhs);
+        } else {
+            dst.copy_from_slice(lhs);
+        }
+    }
 
     if dst.size.get() > 16 {
         let f = match op {
@@ -165,6 +195,8 @@ pub(crate) fn exec_fv_bin_arith(
             O::Modulus => fv_u64_modulus,
             O::CopyX => fv_u64_copy_x,
             O::CopyZ => fv_u64_copy_z,
+            O::Min => fv_u64_min,
+            O::Max => fv_u64_max,
         };
 
         let nwords = 2 * dst.size.get().div_ceil(64) as usize;
@@ -185,6 +217,8 @@ pub(crate) fn exec_fv_bin_arith(
             O::Modulus => A::fv_ltu32_modulus,
             O::CopyX => C::fv_s_copy_x,
             O::CopyZ => C::fv_s_copy_z,
+            O::Min => fv_u8_min,
+            O::Max => fv_u8_max,
         };
 
         let (dst_s, lhs_s, rhs_s) = stack.get_disjoint_u8_dst_s1_s2(
@@ -277,12 +311,7 @@ pub(crate) fn exec_fv_shift(
     }
 }
 
-pub(crate) fn exec_fv_select_bit(
-    stack: &mut Heap,
-    dst: HeapOffset,
-    src: HeapRef,
-    idx: HeapOffset,
-) {
+pub(crate) fn exec_fv_select_bit(stack: &mut Heap, dst: HeapOffset, src: HeapRef, idx: HeapOffset) {
     let (spc, idx) = stack.load_exact_fv_u32(idx);
     if !spc != 0 || idx >= src.size.get() {
         stack.set_fv_scalar(dst, FvLogicValue::X);

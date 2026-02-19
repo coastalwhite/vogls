@@ -1,6 +1,6 @@
 use std::ops::{BitOr, BitOrAssign};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TokenRange {
     pub start: usize,
     pub end: usize,

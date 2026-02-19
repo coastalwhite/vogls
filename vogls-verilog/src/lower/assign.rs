@@ -230,6 +230,7 @@ pub fn assign_variable_lvalue_flat<'a>(
     match &scope.table[symbol_key].content {
         VSymbol::Net(s) => {
             let key = s.signal;
+            let specify_proxy = s.specify_proxy;
             let size = ty.force_net_width();
             let partial = match range_expression {
                 None => match arr_idx {
@@ -332,12 +333,15 @@ pub fn assign_variable_lvalue_flat<'a>(
 
             if nba {
                 let s = unwrap_get_net_mut(scope.table, symbol_key);
+                if specify_proxy.is_some() {
+                    todo!()
+                }
                 let (_, mask, value) = s.nba.get_or_insert_with(|| create_nba_process(gl, key));
                 let mask_value = builder.constant(gl, Bits::new_ones(size));
                 builder.drive_opt_partial(gl, *mask, mask_value, partial);
                 builder.drive_opt_partial(gl, *value, variable, partial);
             } else {
-                builder.drive_opt_partial(gl, key, variable, partial);
+                builder.drive_opt_partial(gl, specify_proxy.unwrap_or(key), variable, partial);
             }
         }
         _ => todo!(),
@@ -480,6 +484,7 @@ fn assign_net_lvalue_flat<'a>(
     } = arenas.get(lvalue);
 
     let s = try_resolve_net(scope.key, scope.table, arenas, *ident, diagnostics)?;
+    let specify_proxy = s.specify_proxy;
     let key = s.signal;
     let mut dims = &s.dims[..];
 
@@ -571,7 +576,7 @@ fn assign_net_lvalue_flat<'a>(
     };
     let size = partial.map_or(s.ty.force_net_width(), |(_, s)| s);
     let variable = expression::sign_or_zero_extend(gl, builder, variable, variable_ty, size);
-    builder.drive_opt_partial(gl, key, variable, partial);
+    builder.drive_opt_partial(gl, specify_proxy.unwrap_or(key), variable, partial);
     Ok(())
 }
 

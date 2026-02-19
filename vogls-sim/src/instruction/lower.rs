@@ -255,6 +255,8 @@ pub fn lower_process_to_vm(
                             O::Modulus => {
                                 VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Modulus, s1, s2)
                             }
+                            O::Min => VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Min, s1, s2),
+                            O::Max => VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Max, s1, s2),
 
                             O::UnsignedLessEqual => VI::FvBinaryComparison(
                                 d,
@@ -297,6 +299,8 @@ pub fn lower_process_to_vm(
                             O::Modulus => {
                                 VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Modulus, s1, s2)
                             }
+                            O::Min => VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Min, s1, s2),
+                            O::Max => VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Max, s1, s2),
 
                             O::UnsignedLessEqual => VI::TvBinaryComparison(
                                 d,
@@ -418,6 +422,10 @@ pub fn lower_process_to_vm(
                 instructions.push(VI::Wait(*time));
                 VI::Jump(0)
             }
+            T::VariableWait(_, var) => {
+                instructions.push(VI::VariableWait(var!(*var)));
+                VI::Jump(0)
+            }
             T::WaitRegion(_, region) => {
                 instructions.push(VI::WaitRegion(*region));
                 VI::Jump(0)
@@ -447,6 +455,7 @@ pub fn lower_process_to_vm(
         use VmInstruction as VI;
         match (&bb.terminator, &mut instructions[offset]) {
             (T::Wait(bb, _), VI::Jump(offset)) => *offset = bb_to_offset(*bb),
+            (T::VariableWait(bb, _), VI::Jump(offset)) => *offset = bb_to_offset(*bb),
             (T::WaitRegion(bb, _), VI::Jump(offset)) => *offset = bb_to_offset(*bb),
             (T::Watch(bb, _), VI::Jump(offset)) => *offset = bb_to_offset(*bb),
             (T::Jump(bb), VI::Jump(offset)) => *offset = bb_to_offset(*bb),

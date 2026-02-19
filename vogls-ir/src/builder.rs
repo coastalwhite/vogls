@@ -743,6 +743,24 @@ impl BasicBlockBuilder {
         slf.instrs = std::mem::take(&mut self.instrs);
         slf.terminator = BasicBlockTerminator::Wait(bb, time);
     }
+    pub fn variable_wait(mut self, gl: &mut GlobalContext, time: VariableKey) -> BasicBlockBuilder {
+        let next_key = self.next_bb(gl);
+        let slf = gl.bbs.get_mut(self.key).unwrap();
+        slf.instrs = std::mem::take(&mut self.instrs);
+        slf.terminator = BasicBlockTerminator::VariableWait(next_key, time);
+        BasicBlockBuilder {
+            key: next_key,
+
+            process: self.process,
+
+            instrs: Vec::new(),
+        }
+    }
+    pub fn variable_wait_to(mut self, gl: &mut GlobalContext, time: VariableKey, bb: BasicBlockKey) {
+        let slf = gl.bbs.get_mut(self.key).unwrap();
+        slf.instrs = std::mem::take(&mut self.instrs);
+        slf.terminator = BasicBlockTerminator::VariableWait(bb, time);
+    }
 
     pub fn wait_region(mut self, gl: &mut GlobalContext, region: u8) -> BasicBlockBuilder {
         let next_key = self.next_bb(gl);
@@ -899,5 +917,12 @@ impl BasicBlockBuilder {
         let dst = self.next_tmp_var(gl, TIME_VSIZE);
         self.instrs.push(Instruction::LastUpdateTime(dst, signal));
         dst
+    }
+
+    pub fn min(&mut self, gl: &mut GlobalContext, lhs: VariableKey, rhs: VariableKey) -> VariableKey {
+        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::Min)
+    }
+    pub fn max(&mut self, gl: &mut GlobalContext, lhs: VariableKey, rhs: VariableKey) -> VariableKey {
+        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::Max)
     }
 }

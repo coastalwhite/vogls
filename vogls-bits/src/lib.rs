@@ -1151,6 +1151,21 @@ impl Bits {
         }
     }
 
+    pub fn min(lhs: &Self, rhs: &Self) -> Self {
+        if Self::is_unsigned_leq(lhs, rhs) {
+            lhs.clone()
+        } else {
+            rhs.clone()
+        }
+    }
+    pub fn max(lhs: &Self, rhs: &Self) -> Self {
+        if Self::is_unsigned_leq(lhs, rhs) {
+            rhs.clone()
+        } else {
+            lhs.clone()
+        }
+    }
+
     fn is_equal_to_zero(&self) -> bool {
         let mut x;
         !self.contains_special() && as_u64_value_slice!(x, self).iter().all(|v| *v == 0)

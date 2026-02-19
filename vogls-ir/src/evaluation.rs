@@ -74,6 +74,7 @@ fn evaluate_impl(
 
     let next_bb = match terminator {
         BasicBlockTerminator::Wait(..)
+        | BasicBlockTerminator::VariableWait(..)
         | BasicBlockTerminator::WaitRegion(..)
         | BasicBlockTerminator::Watch(..) => todo!(),
         BasicBlockTerminator::Jump(bb) => *bb,

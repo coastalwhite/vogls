@@ -20,7 +20,7 @@ use crate::ast::module::{
 };
 use crate::ast::specify::{
     EdgeIdentifier, ModulePathExpr, PathDeclaration, PathDelayValue, PolarityOperator,
-    SimplePathDeclarationVariant, SpecifyBlock, SpecifyBlockItem, StateDependentCondition,
+    PathDeclarationVariant, SpecifyBlock, SpecifyBlockItem, StateDependentCondition,
     SystemTimingCheck, TerminalDescriptor,
 };
 use crate::ast::statement::{NetLValue, Statement, StatementOrNull, SystemTaskIdentifier};
@@ -604,9 +604,7 @@ impl<'a> Consumable<'a> for SpecifyBlockItem {
 
         match *tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?.kind {
             T::KeywordSpecParam => {
-                diagnostics.map(|d| {
-                    d.incomplete(tkw.offset, "specify_block_item::spec_param")
-                });
+                diagnostics.map(|d| d.incomplete(tkw.offset, "specify_block_item::spec_param"));
                 Err(())
             }
             T::KeywordPulseStyleOnEvent | T::KeywordPulseStyleOnDetect => {
@@ -701,11 +699,11 @@ impl<'a> Consumable<'a> for PathDeclaration {
             match *tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?.kind {
                 T::EqualsGreaterThan => {
                     tkw.offset += 1;
-                    SimplePathDeclarationVariant::Full
+                    PathDeclarationVariant::Full
                 }
                 T::StarGreaterThan => {
                     tkw.offset += 1;
-                    SimplePathDeclarationVariant::Parallel
+                    PathDeclarationVariant::Parallel
                 }
                 t => {
                     diagnostics.map(|d| d.unexpected_token(tkw.offset, t));
@@ -755,7 +753,7 @@ impl<'a> Consumable<'a> for PathDeclaration {
             edge_identifier,
             input_terminal_descriptors,
             polarity_operator,
-            simple_path_declaration_variant,
+            variant: simple_path_declaration_variant,
             data_source_expression,
             output_terminal_descriptors,
             path_delay_value,
@@ -901,6 +899,19 @@ impl<'a> Consumable<'a> for PathDelayValue {
             diagnostics.as_deref_mut(),
             |tkw| tkw.next_if_equals(T::Comma),
         )?;
+
+        if !matches!(list_of_delay_expressions.len(), 1 | 2 | 3 | 6 | 12) {
+            diagnostics.map(|d| {
+                d.errors.push((
+                    arenas.get_range_span(list_of_delay_expressions),
+                    crate::parser::ParseErrorReason::Incomplete(
+                        "invalid amount of delay expressions",
+                    ),
+                ))
+            });
+            return Err(());
+        }
+
         if starts_with_left_paren {
             tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
         }

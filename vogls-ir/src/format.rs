@@ -169,6 +169,9 @@ impl BinaryOp {
 
             Self::CopyX => "copyx",
             Self::CopyZ => "copyz",
+
+            Self::Min => "min",
+            Self::Max => "min",
         }
     }
 }
@@ -260,7 +263,7 @@ impl ContextFormat for Instruction {
             }
             Self::LastUpdateTime(var, sig) => {
                 var.ctx_fmt(f, ctx)?;
-                f.write_str(" = lastupdatetime ")?;
+                f.write_str(" = lupdt ")?;
                 ctx.gl.signals.get(*sig).unwrap().ctx_fmt(f, ctx)?;
             }
             Self::Probe(var, sig) => {
@@ -303,6 +306,7 @@ impl ContextFormat for BasicBlockTerminator {
     fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &DisplayContext<'_>) -> fmt::Result {
         let mnemonic = match self {
             Self::Wait(..) => "wait",
+            Self::VariableWait(..) => "wait.var",
             Self::WaitRegion(..) => "wait.region",
             Self::Watch(..) => "watch",
             Self::Jump(..) => "jump",
@@ -316,6 +320,10 @@ impl ContextFormat for BasicBlockTerminator {
             Self::Wait(bb, time) => {
                 write!(f, "L{}, ", ctx.bb_name_scratch[bb])?;
                 time.ctx_fmt(f, ctx)?
+            }
+            Self::VariableWait(bb, time) => {
+                write!(f, "L{}, ", ctx.bb_name_scratch[bb])?;
+                time.ctx_fmt(f, ctx)?;
             }
             Self::WaitRegion(bb, region) => {
                 write!(f, "L{}, {region}", ctx.bb_name_scratch[bb])?;

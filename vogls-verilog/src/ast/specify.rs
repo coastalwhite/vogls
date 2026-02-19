@@ -236,7 +236,7 @@ pub struct PathDeclaration {
     pub edge_identifier: Option<AstItem<EdgeIdentifier>>,
     pub input_terminal_descriptors: AstIdRange<TerminalDescriptor>,
     pub polarity_operator: Option<AstItem<PolarityOperator>>,
-    pub simple_path_declaration_variant: SimplePathDeclarationVariant,
+    pub variant: PathDeclarationVariant,
     pub data_source_expression: Option<AstId<Expr>>,
     pub output_terminal_descriptors: AstIdRange<TerminalDescriptor>,
     pub path_delay_value: AstId<PathDelayValue>,
@@ -275,7 +275,7 @@ pub enum StateDependentCondition {
 pub struct ModulePathExpr(pub Expr);
 
 #[derive(Clone, Copy)]
-pub enum SimplePathDeclarationVariant {
+pub enum PathDeclarationVariant {
     Parallel,
     Full,
 }

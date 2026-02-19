@@ -6,12 +6,13 @@ use slotmap::{SecondaryMap, SlotMap};
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_ir::{Bits, GlobalContext, Signal, SignalKey};
 use vogls_sim::{
-    Event, HeapBuilder, Regions, Simulation, SimulationIo, SimulationState,
-    VmProcess, VmProcessKey, VmSignalKey, lower_process_to_vm,
+    Event, HeapBuilder, Regions, Simulation, SimulationIo, SimulationState, VmProcess,
+    VmProcessKey, VmSignalKey, lower_process_to_vm,
 };
 use vogls_utils::VgHashMap;
 use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{Module, ModuleItem, NonPortModuleItem};
+use vogls_verilog::ast::specify::{PathDeclaration, SpecifyBlockItem};
 use vogls_verilog::elaborate::{VSymbol, VSymbolTable};
 use vogls_verilog::lower::{Diagnostics as LowerDiagnostics, Scope, lower_module_to_ir};
 use vogls_verilog::parser::{
@@ -43,7 +44,8 @@ impl Design {
         for define in &ectx.defines {
             macros.insert(define.clone(), Macro::default());
         }
-        let token_buffer = Tokenized::tokenize_with_macros(content.clone(), Some(path.into()), &mut macros);
+        let token_buffer =
+            Tokenized::tokenize_with_macros(content.clone(), Some(path.into()), &mut macros);
         let mut tkw = TokenWalker::new(&token_buffer);
         let mut diagnostics = ParserDiagnostics::default();
 
@@ -228,9 +230,38 @@ impl Design {
 
         let mut error = false;
         let mut signal_map = HashMap::new();
+        let mut outs_lut = VgHashMap::default();
+        let mut outs = Vec::new();
+
         // @TODO: Iterate over the modules instead.
         for key in elab_table.symbol_id_iter() {
             match &elab_table[key].content {
+                VSymbol::Module(i) if i.contains_specify => {
+                    let module = module_ast_lut[&i.module];
+                    for item in ast.arenas.get(module).module_items.iter() {
+                        let ModuleItem::NonPortModuleItem(id) = ast.arenas.get(item) else {
+                            continue;
+                        };
+                        let NonPortModuleItem::SpecifyBlock(specify_block) = ast.arenas.get(*id)
+                        else {
+                            continue;
+                        };
+
+                        error |= vogls_verilog::lower::specify::lower_specify(
+                            &mut gl,
+                            &ast.arenas,
+                            &mut Scope {
+                                table: &mut elab_table,
+                                key,
+                                signal_map: &mut signal_map,
+                            },
+                            specify_block.items,
+                            &mut outs_lut,
+                            &mut outs,
+                            &mut diagnostics,
+                        ).is_err();
+                    }
+                }
                 VSymbol::Function(i) => {
                     let fn_decl = i.ast_id;
                     error |= vogls_verilog::lower::module_or_generate_item::function::lower(

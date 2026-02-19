@@ -1,6 +1,6 @@
 use vogls_ir::{ResizeOp, SCALAR_VSIZE, UnaryOp, VectorSize};
 
-use crate::{BinaryArithmeticOp, BinaryComparisonOp, ShiftOp, Heap, HeapOffset, HeapRef};
+use crate::{BinaryArithmeticOp, BinaryComparisonOp, Heap, HeapOffset, HeapRef, ShiftOp};
 
 pub(crate) fn exec_tv_unary(stack: &mut Heap, dst: HeapOffset, op: UnaryOp, src: HeapRef) {
     use UnaryOp as O;
@@ -96,6 +96,20 @@ pub(crate) fn exec_tv_bin_arith(
     fn tv_u8_bitwise_xor(dst: &mut [u8], lhs: &[u8], rhs: &[u8], _size: VectorSize) {
         A::tv_bin_bitwise_op(dst, lhs, rhs, |l, r| l ^ r);
     }
+    fn tv_u8_min(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: VectorSize) {
+        if vogls_bits::comparison::tv_unsigned_leq(lhs, rhs, size) {
+            dst.copy_from_slice(lhs);
+        } else {
+            dst.copy_from_slice(rhs);
+        }
+    }
+    fn tv_u8_max(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: VectorSize) {
+        if vogls_bits::comparison::tv_unsigned_leq(lhs, rhs, size) {
+            dst.copy_from_slice(rhs);
+        } else {
+            dst.copy_from_slice(lhs);
+        }
+    }
     fn tv_u64_bitwise_and(dst: &mut [u64], lhs: &[u64], rhs: &[u64], _size: VectorSize) {
         A::tv_bin_u64_bitwise_op(dst, lhs, rhs, |l, r| l & r);
     }
@@ -115,6 +129,20 @@ pub(crate) fn exec_tv_bin_arith(
         let mut quotient = vec![0u64; dst.len()];
         A::tv_division(&mut quotient, dst, lhs, rhs, size);
     }
+    fn tv_u64_min(dst: &mut [u64], lhs: &[u64], rhs: &[u64], size: VectorSize) {
+        if vogls_bits::comparison::tv_gtu64_unsigned_leq(lhs, rhs, size) {
+            dst.copy_from_slice(lhs);
+        } else {
+            dst.copy_from_slice(rhs);
+        }
+    }
+    fn tv_u64_max(dst: &mut [u64], lhs: &[u64], rhs: &[u64], size: VectorSize) {
+        if vogls_bits::comparison::tv_gtu64_unsigned_leq(lhs, rhs, size) {
+            dst.copy_from_slice(rhs);
+        } else {
+            dst.copy_from_slice(lhs);
+        }
+    }
 
     let size = dst.size;
     if size.get() > 32 && matches!(op, O::And | O::Or | O::Xor | O::Add | O::Sub | O::Multiply) {
@@ -128,6 +156,8 @@ pub(crate) fn exec_tv_bin_arith(
             O::Multiply => A::tv_multiplication,
             O::Divide => tv_u64_division,
             O::Modulus => tv_u64_modulus,
+            O::Min => tv_u64_min,
+            O::Max => tv_u64_max,
             O::CopyX | O::CopyZ => unreachable!(),
         };
 
@@ -147,6 +177,8 @@ pub(crate) fn exec_tv_bin_arith(
             O::Multiply => A::tv_ltu64_multiplication,
             O::Divide => A::tv_ltu64_division,
             O::Modulus => A::tv_ltu64_modulus,
+            O::Min => tv_u8_min,
+            O::Max => tv_u8_max,
             O::CopyX | O::CopyZ => unreachable!(),
         };
 
@@ -201,12 +233,7 @@ pub(crate) fn exec_tv_shift(
     f(dst, src, offset, size);
 }
 
-pub(crate) fn exec_tv_select_bit(
-    stack: &mut Heap,
-    dst: HeapOffset,
-    src: HeapRef,
-    idx: HeapOffset,
-) {
+pub(crate) fn exec_tv_select_bit(stack: &mut Heap, dst: HeapOffset, src: HeapRef, idx: HeapOffset) {
     let size = src.size;
     let idx = stack.load_exact_tv_u32(idx);
     let src = stack.get(src);

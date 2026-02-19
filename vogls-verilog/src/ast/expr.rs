@@ -3,6 +3,7 @@ use std::fmt;
 use crate::parser::AstArenas;
 
 use super::constant_expr::ConstantExpr;
+use super::specify::ModulePathExpr;
 use super::statement::SystemTaskIdentifier;
 use super::{AstId, AstIdRange, AstItem, DecimalRef, HIdent, SizedNumberRef, StringRef};
 
@@ -149,8 +150,22 @@ impl AstId<Expr> {
             loc: self.loc,
         }
     }
+    pub fn into_module_path_expr(self) -> AstId<ModulePathExpr> {
+        AstId {
+            node: unsafe { self.node.transmute() },
+            loc: self.loc,
+        }
+    }
 }
 impl AstId<ConstantExpr> {
+    pub fn into_expr(self) -> AstId<Expr> {
+        AstId {
+            node: unsafe { self.node.transmute() },
+            loc: self.loc,
+        }
+    }
+}
+impl AstId<ModulePathExpr> {
     pub fn into_expr(self) -> AstId<Expr> {
         AstId {
             node: unsafe { self.node.transmute() },

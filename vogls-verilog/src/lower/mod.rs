@@ -2,6 +2,7 @@ mod assign;
 mod diagnostics;
 pub mod expression;
 pub mod module_or_generate_item;
+pub mod specify;
 mod statement;
 mod vtype;
 mod vvalue;

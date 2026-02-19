@@ -60,13 +60,18 @@ pub struct ModuleSymbol {
 
     pub parameter_overrides: Arc<VgHashMap<IdentId, usize>>,
     pub parameter_override_values: Arc<Vec<VValue>>,
+
+    pub contains_specify: bool,
 }
 
 pub struct NetSymbol {
     pub ty: VType,
     pub dims: Vec<u32>,
+
     pub signal: vogls_ir::SignalKey,
+    pub specify_proxy: Option<SignalKey>,
     pub nba: Option<(ProcessKey, SignalKey, SignalKey)>,
+
     pub port_idx: Option<usize>,
 }
 

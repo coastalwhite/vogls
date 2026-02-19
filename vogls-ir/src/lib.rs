@@ -31,6 +31,7 @@ pub struct Time(pub u64);
 #[derive(Debug, Clone)]
 pub enum BasicBlockTerminator {
     Wait(BasicBlockKey, Time),
+    VariableWait(BasicBlockKey, VariableKey),
     WaitRegion(BasicBlockKey, u8),
     Watch(BasicBlockKey, Vec<SignalKey>),
     Jump(BasicBlockKey),
@@ -113,7 +114,11 @@ impl BasicBlockTerminator {
         bb_seen: &mut HashSet<BasicBlockKey>,
     ) {
         match self {
-            Self::Wait(bb, _) | Self::WaitRegion(bb, _) | Self::Watch(bb, _) | Self::Jump(bb) => {
+            Self::Wait(bb, _)
+            | Self::VariableWait(bb, _)
+            | Self::WaitRegion(bb, _)
+            | Self::Watch(bb, _)
+            | Self::Jump(bb) => {
                 if bb_seen.insert(*bb) {
                     bb_stack.push(*bb);
                 }
@@ -132,7 +137,11 @@ impl BasicBlockTerminator {
 
     pub fn for_each_bb(&self, mut f: impl FnMut(BasicBlockKey)) {
         match self {
-            Self::Wait(bb, _) | Self::WaitRegion(bb, _) | Self::Watch(bb, _) | Self::Jump(bb) => {
+            Self::Wait(bb, _)
+            | Self::VariableWait(bb, _)
+            | Self::WaitRegion(bb, _)
+            | Self::Watch(bb, _)
+            | Self::Jump(bb) => {
                 f(*bb);
             }
             Self::Branch(_, true_bb, false_bb) => {
@@ -145,7 +154,7 @@ impl BasicBlockTerminator {
 
     fn for_each_var_src(&self, mut f: impl FnMut(VariableKey)) {
         match self {
-            Self::Branch(v, _, _) => f(*v),
+            Self::VariableWait(_, v) | Self::Branch(v, _, _) => f(*v),
             Self::Wait(..)
             | Self::WaitRegion(..)
             | Self::Watch(..)
@@ -156,7 +165,7 @@ impl BasicBlockTerminator {
 
     fn map_vars(&mut self, mut f: impl FnMut(VariableKey) -> VariableKey) {
         match self {
-            Self::Branch(v, _, _) => *v = f(*v),
+            Self::VariableWait(_, v) | Self::Branch(v, _, _) => *v = f(*v),
             Self::Wait(..)
             | Self::WaitRegion(..)
             | Self::Watch(..)
@@ -166,7 +175,7 @@ impl BasicBlockTerminator {
     }
     fn for_each_var(&self, mut f: impl FnMut(VariableKey)) {
         match self {
-            Self::Branch(v, _, _) => f(*v),
+            Self::VariableWait(_, v) | Self::Branch(v, _, _) => f(*v),
             Self::Wait(..)
             | Self::WaitRegion(..)
             | Self::Watch(..)
@@ -178,6 +187,7 @@ impl BasicBlockTerminator {
     pub fn map_bb(&mut self, mut f: impl FnMut(BasicBlockKey) -> BasicBlockKey) {
         match self {
             BasicBlockTerminator::Wait(bb, _)
+            | BasicBlockTerminator::VariableWait(bb, _)
             | BasicBlockTerminator::WaitRegion(bb, _)
             | BasicBlockTerminator::Watch(bb, _)
             | BasicBlockTerminator::Jump(bb) => {
@@ -195,6 +205,7 @@ impl BasicBlockTerminator {
     fn for_each_signal(&self, f: impl FnMut(SignalKey)) {
         match self {
             Self::Branch(..)
+            | Self::VariableWait(..)
             | Self::Wait(..)
             | Self::WaitRegion(..)
             | Self::Jump(_)
@@ -206,6 +217,7 @@ impl BasicBlockTerminator {
         match self {
             Self::Branch(..)
             | Self::Wait(..)
+            | Self::VariableWait(..)
             | Self::WaitRegion(..)
             | Self::Jump(_)
             | Self::Halt => {}
@@ -219,6 +231,7 @@ pub struct Variable {
     pub size: VectorSize,
 }
 
+#[derive(Clone)]
 pub struct Signal {
     pub name: String,
     pub size: VectorSize,
@@ -281,6 +294,11 @@ pub enum BinaryOp {
     CopyX,
     /// Copy Z from rhs into lhs
     CopyZ,
+
+    /// Minimum of lhs and rhs
+    Min,
+    /// Maximum of lhs and rhs
+    Max,
 
     /// Exact bitpattern equality
     CaseEquality,
@@ -503,6 +521,9 @@ impl BinaryOp {
             O::Concat => Bits::concatenate(lhs, rhs),
             O::CopyX => Bits::copyx(lhs, rhs),
             O::CopyZ => Bits::copyz(lhs, rhs),
+
+            O::Min => Bits::min(lhs, rhs),
+            O::Max => Bits::max(lhs, rhs),
         }
     }
 }

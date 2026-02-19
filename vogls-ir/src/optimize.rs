@@ -306,6 +306,8 @@ pub fn propagate_constants<'a>(
                                     }
                                     O::Power
                                     | O::UnsignedLessEqual
+                                    | O::Min
+                                    | O::Max
                                     | O::CaseEquality
                                     | O::Modulus
                                     | O::SelectBit

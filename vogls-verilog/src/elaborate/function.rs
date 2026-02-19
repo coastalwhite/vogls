@@ -1,7 +1,5 @@
 use vogls_frontend::symbol_table::SymbolId;
-use vogls_ir::{
-    ConnectionDirection, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE, SignalKey,
-};
+use vogls_ir::{ConnectionDirection, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE, SignalKey};
 
 use crate::ast::module::{
     FunctionDeclaration, FunctionRangeOrType, TaskDeclaration, TaskPortItemContent,
@@ -69,6 +67,7 @@ pub fn elaborate_fn<'a>(
                 dims: [].into(),
                 signal: output_key,
                 nba: None,
+                specify_proxy: None,
                 port_idx: None,
             }),
         )
@@ -121,6 +120,7 @@ pub fn elaborate_fn<'a>(
                         dims: [].into(),
                         signal,
                         nba: None,
+                        specify_proxy: None,
                         port_idx: None,
                     }),
                 )
@@ -203,6 +203,7 @@ pub fn elaborate_task<'a>(
                         dims: [].into(),
                         signal,
                         nba: None,
+                        specify_proxy: None,
                         port_idx: None,
                     }),
                 )

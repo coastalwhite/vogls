@@ -91,6 +91,21 @@ impl ElaborationState<'_> {
     }
 }
 
+/// Elaborate from the top-level module down.
+///
+/// This resolves symbols and fill the symbol table level-by-level as specified in the Verilog
+/// Specification section on elaboration. This is done by keeping a list of next levels to process
+/// and elaborating symbols at each level.
+///
+/// Per level, the level-symbols are enumerated three times.
+/// 1. Walk the AST to get the identifier and type of all symbols.
+/// 2. Order the symbols to create a dependency graph. For instance, if the size of a net `a`
+///    depends on the value of a parameter `b`. Then, symbol `a` is dependent on symbol `b`.
+/// 3. Walk dependency graph and finalize symbols of which all dependencies are ready.
+///
+/// This allows for symbols to be defined and used out-of-order in the AST, but still resolve
+/// correctly. This also makes sure that functions can be used during the evaluation of constant
+/// expressions.
 pub fn elaborate<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
@@ -127,6 +142,7 @@ pub fn elaborate<'a>(
         parameters: Vec::new(),
         parameter_overrides: Arc::new(VgHashMap::default()),
         parameter_override_values: Arc::new(Vec::new()),
+        contains_specify: false,
     };
     let tlm_sid = table
         .insert_root(
@@ -595,6 +611,7 @@ fn elaborate_module<'a>(
                             dims: Vec::new(),
                             signal: st.dummy_signal,
                             nba: None,
+                            specify_proxy: None,
                             port_idx: Some(port_idx),
                         };
                         let symbol = VSymbol::Net(symbol);
@@ -634,6 +651,7 @@ fn elaborate_module<'a>(
                         dims: Vec::new(),
                         signal: st.dummy_signal,
                         nba: None,
+                        specify_proxy: None,
                         port_idx: Some(port_idx),
                     };
                     let symbol = VSymbol::Net(symbol);
@@ -715,7 +733,6 @@ fn elaborate_module<'a>(
                     st.next_levels
                         .push_back((sid, ElabLevel::GenerateRegion(*region)));
                 }
-                NonPortModuleItem::SpecifyBlock(_) => {},
                 NonPortModuleItem::ParameterDeclaration(id) => {
                     let ParameterDeclaration {
                         typing,
@@ -734,6 +751,12 @@ fn elaborate_module<'a>(
                     .is_err();
                 }
                 NonPortModuleItem::SpecParamDeclaration => todo!(),
+
+                // Specify blocks are ignored during elaboration and are expanded on after
+                // elaboration.
+                NonPortModuleItem::SpecifyBlock(_) => {
+                    unwrap_get_module_mut(table, scope).contains_specify = true;
+                }
             },
         }
     }
@@ -794,6 +817,7 @@ fn extend_module_or_generate_item_sids<'a>(
                                 dims: Vec::new(),
                                 signal: st.dummy_signal,
                                 nba: None,
+                                specify_proxy: None,
                                 port_idx: None,
                             };
                             let symbol = VSymbol::Net(symbol);
@@ -835,6 +859,7 @@ fn extend_module_or_generate_item_sids<'a>(
                                 dims: Vec::new(),
                                 signal: st.dummy_signal,
                                 nba: None,
+                                specify_proxy: None,
                                 port_idx: None,
                             };
                             let symbol = VSymbol::Net(symbol);
@@ -1042,6 +1067,7 @@ fn extend_module_or_generate_item_sids<'a>(
                     // @Performance: Remove these allocations.
                     parameter_overrides: Arc::new(VgHashMap::default()),
                     parameter_override_values: Arc::new(Vec::default()),
+                    contains_specify: false,
                 };
                 let Ok(sid) = try_table_insert(
                     arenas,
@@ -1299,6 +1325,7 @@ fn extend_variable_type_sids<'a>(
             dims: Vec::new(),
             signal: st.dummy_signal,
             nba: None,
+            specify_proxy: None,
             port_idx: None,
         };
         let symbol = VSymbol::Net(symbol);
