@@ -407,6 +407,18 @@ impl BasicBlockBuilder {
         self.bin_op(gl, src, idx, BinaryOp::SelectBit, dst);
         dst
     }
+    pub fn select_bit_constant(
+        &mut self,
+        gl: &mut GlobalContext,
+        src: VariableKey,
+        idx: u32,
+    ) -> VariableKey {
+        if idx == 0 && gl.vars[src].size == SCALAR_VSIZE {
+            return src;
+        }
+        let idx = self.constant_u32(gl, idx);
+        self.select_bit(gl, src, idx)
+    }
     pub fn slice(
         &mut self,
         gl: &mut GlobalContext,
@@ -433,7 +445,9 @@ impl BasicBlockBuilder {
         if offset == 0 && size == width {
             return src;
         }
-
+        if width == SCALAR_VSIZE {
+            return self.select_bit_constant(gl, src, offset);
+        }
         let offset = self.constant_u32(gl, offset);
         self.extract(gl, src, offset, width)
     }
@@ -447,6 +461,9 @@ impl BasicBlockBuilder {
         let size = gl.vars[src].size;
         if size == width {
             return src;
+        }
+        if width.get() == 1 {
+            return self.select_bit(gl, src, offset);
         }
 
         let dst = self.logical_shift_right(gl, src, offset);
@@ -599,6 +616,21 @@ impl BasicBlockBuilder {
 
     pub fn drive(&mut self, gl: &mut GlobalContext, signal: SignalKey, src: VariableKey) {
         self.drive_opt_partial(gl, signal, src, None);
+    }
+    pub fn drive_partial_constant(
+        &mut self,
+        gl: &mut GlobalContext,
+        signal: SignalKey,
+        src: VariableKey,
+        offset: u32,
+        length: VectorSize,
+    ) {
+        if offset == 0 && length == gl.signals[signal].size {
+            return self.drive(gl, signal, src);
+        }
+
+        let offset = self.constant_u32(gl, offset);
+        self.drive_opt_partial(gl, signal, src, Some((offset, length)));
     }
     pub fn drive_partial(
         &mut self,

@@ -42,6 +42,7 @@ pub struct SpecifyOutput {
 pub struct SpecifyPath {
     condition: Condition,
     delays: Delays,
+    variant: PathDeclarationVariant,
 }
 
 // @Performance.
@@ -98,6 +99,7 @@ impl Delays {
         builder: &mut vogls_ir::BasicBlockBuilder,
         tstart: SignalKey,
         tend: SignalKey,
+        bitidx: u32,
     ) -> VariableKey {
         if let Delays::One(delay) = self {
             // @Performance: At the moment, this is still a variable wait. We could propagate this
@@ -127,7 +129,9 @@ impl Delays {
             let mut out_delay = builder.constant_u64(gl, t01);
             if t01 != t10 {
                 let tstart = builder.probe(gl, tstart);
+                let tstart = builder.select_bit_constant(gl, tstart, bitidx);
                 let tend = builder.probe(gl, tend);
+                let tend = builder.select_bit_constant(gl, tend, bitidx);
                 let is_t10 = builder.ornot(gl, tstart, tend);
                 let t10_delay = builder.constant_u64(gl, t10);
                 out_delay = builder.select(gl, is_t10, t10_delay, out_delay)
@@ -164,7 +168,9 @@ impl Delays {
             let mut out_delay = builder.constant_u64(gl, trise);
             if trise != tfall {
                 let tstart = builder.probe(gl, tstart);
+                let tstart = builder.select_bit_constant(gl, tstart, bitidx);
                 let tend = builder.probe(gl, tend);
+                let tend = builder.select_bit_constant(gl, tend, bitidx);
                 let x = builder.constant(gl, Bits::from(FvLogicValue::X));
                 let z = builder.constant(gl, Bits::from(FvLogicValue::Z));
                 let zero = builder.constant(gl, Bits::from(false));
@@ -226,7 +232,9 @@ impl Delays {
             let mut out_delay = builder.constant_u64(gl, trise_delay);
             if trise_delay != tfall_delay || trise_delay != tz_delay {
                 let tstart = builder.probe(gl, tstart);
+                let tstart = builder.select_bit_constant(gl, tstart, bitidx);
                 let tend = builder.probe(gl, tend);
+                let tend = builder.select_bit_constant(gl, tend, bitidx);
                 let zero = builder.constant(gl, Bits::from(false));
                 let one = builder.constant(gl, Bits::from(true));
                 let x = builder.constant(gl, Bits::from(FvLogicValue::X));
@@ -345,7 +353,9 @@ impl Delays {
         // We should be able to do some better delay merging here.
         let mut out_delay = builder.constant_u64(gl, t01);
         let tstart = builder.probe(gl, tstart);
+        let tstart = builder.select_bit_constant(gl, tstart, bitidx);
         let tend = builder.probe(gl, tend);
+        let tend = builder.select_bit_constant(gl, tend, bitidx);
         let zero = builder.constant(gl, Bits::from(false));
         let one = builder.constant(gl, Bits::from(true));
         let x = builder.constant(gl, Bits::from(FvLogicValue::X));
@@ -498,10 +508,6 @@ pub fn lower_specify<'a>(
                     },
                 };
 
-                if matches!(variant, PathDeclarationVariant::Parallel) {
-                    todo!()
-                }
-
                 // @TODO: Remove assertions
                 assert_eq!(input_terminal_descriptors.len(), 1);
                 assert_eq!(output_terminal_descriptors.len(), 1);
@@ -544,10 +550,21 @@ pub fn lower_specify<'a>(
                 };
                 let output = output_net.signal;
 
-                if input_net.ty.force_net_width() != output_net.ty.force_net_width() {
+                if matches!(variant, PathDeclarationVariant::Full)
+                    && input_net.ty.force_net_width() != output_net.ty.force_net_width()
+                {
                     diagnostics.not_yet_implemented(
                         arenas.get_span(item),
                         "input and output don't have the same net width",
+                    );
+                    return Err(());
+                }
+                if matches!(variant, PathDeclarationVariant::Parallel)
+                    && input_net.ty.force_net_width().get() != 1
+                {
+                    diagnostics.not_yet_implemented(
+                        arenas.get_span(item),
+                        "parallel specify with `n` wide input",
                     );
                     return Err(());
                 }
@@ -642,9 +659,11 @@ pub fn lower_specify<'a>(
                     out.paths.push((input, Vec::new()));
                     idx
                 });
-                out.paths[paths_idx]
-                    .1
-                    .push(SpecifyPath { condition, delays });
+                out.paths[paths_idx].1.push(SpecifyPath {
+                    condition,
+                    delays,
+                    variant: *variant,
+                });
             }
             SpecifyBlockItem::SystemTimingCheck(_) => {
                 // @TODO: Don't ignore these.
@@ -659,156 +678,170 @@ pub fn lower_specify<'a>(
 
     outs_lut.clear();
     for (output, specify) in outs.drain(..) {
-        input_before_lut.clear();
-        input_before.clear();
-
         let mut proxy = gl.signals.get(output).unwrap().clone();
         proxy.name = format!("{}::SPECIFY_PROXY", proxy.name);
         let proxy = gl.signals.insert(proxy);
-
         unwrap_get_net_mut(scope.table, specify.sid).specify_proxy = Some(proxy);
 
-        let mut builder =
-            new_anonymous_builder(gl, "specify_proxy".to_string(), TokenRange::default());
-        let entry = builder.key();
+        for output_bitidx in 0..gl.signals[output].size.get() {
+            input_before_lut.clear();
+            input_before.clear();
 
-        for (input, paths) in &specify.paths {
-            for path in paths {
-                if matches!(
-                    path.condition,
-                    Condition::InputPosedge
-                        | Condition::InputNegedge
-                        | Condition::InputPosedgeExpr(_)
-                        | Condition::InputNegedgeExpr(_)
-                ) {
-                    let before = builder.probe(gl, *input);
-                    let idx = input_before.len();
-                    input_before_lut.insert(*input, idx);
-                    input_before.push((*input, before, None));
-                    break;
-                }
-            }
-        }
+            let mut builder =
+                new_anonymous_builder(gl, "specify_proxy".to_string(), TokenRange::default());
+            let entry = builder.key();
 
-        builder = builder.watch(gl, vec![proxy]);
-        let wait_loop_bb = builder.key();
-
-        for (_, variable, phi_ref) in input_before.iter_mut() {
-            let pr;
-            (*variable, pr) = builder.phi(gl, [(entry, *variable), (entry, *variable)].into());
-            *phi_ref = Some(pr);
-        }
-
-        let time = builder.time(gl);
-        let mut active_time = builder.constant(gl, Bits::new_zeroed(TIME_VSIZE));
-        for (input, _) in &specify.paths {
-            let lupdt = builder.lupdt(gl, *input);
-            active_time = builder.max(gl, active_time, lupdt);
-        }
-
-        let mut wait_time_set = builder.constant(gl, Bits::new_zeroed(SCALAR_VSIZE));
-        let mut wait_time = builder.constant(gl, Bits::new_ones(TIME_VSIZE));
-
-        for (input, paths) in &specify.paths {
-            let lupdt = builder.lupdt(gl, *input);
-            let is_active = builder.equals(gl, lupdt, active_time);
-
-            let start_bb = builder.key();
-            builder = builder.next_terminate_later(gl);
-            let true_bb = builder.key();
-
-            let mut new_wait_time_set = Some(wait_time_set);
-            let mut new_wait_time = wait_time;
-
-            for path in paths {
-                let mut condition = None;
-                if matches!(
-                    path.condition,
-                    Condition::InputPosedge | Condition::InputPosedgeExpr(_)
-                ) {
-                    let before = input_before[input_before_lut[input]].1;
-                    let after = builder.probe(gl, *input);
-                    condition = Some(builder.posedge(gl, before, after));
-                }
-                if matches!(
-                    path.condition,
-                    Condition::InputNegedge | Condition::InputNegedgeExpr(_)
-                ) {
-                    let before = input_before[input_before_lut[input]].1;
-                    let after = builder.probe(gl, *input);
-                    condition = Some(builder.negedge(gl, before, after));
-                }
-
-                if let Condition::Expr(expr)
-                | Condition::InputPosedgeExpr(expr)
-                | Condition::InputNegedgeExpr(expr) = path.condition
-                {
-                    let (expr, _) = lower_expr(gl, arenas, scope, diagnostics, &mut builder, expr)?;
-                    let expr = builder.reduce_or(gl, expr);
-                    condition = Some(match condition {
-                        None => expr,
-                        Some(condition) => builder.and(gl, condition, expr),
-                    });
-                }
-
-                if matches!(path.condition, Condition::NoOtherCondition) {
-                    todo!();
-                }
-
-                let condition = condition.map(|c| builder.extract_constant(gl, c, 0, SCALAR_VSIZE));
-                match (condition, &mut new_wait_time_set) {
-                    (None, _) | (_, None) => new_wait_time_set = None,
-                    (Some(condition), Some(new_wait_time_set)) => {
-                        *new_wait_time_set = builder.or(gl, *new_wait_time_set, condition);
+            for (input, paths) in &specify.paths {
+                for path in paths {
+                    if matches!(
+                        path.condition,
+                        Condition::InputPosedge
+                            | Condition::InputNegedge
+                            | Condition::InputPosedgeExpr(_)
+                            | Condition::InputNegedgeExpr(_)
+                    ) {
+                        let before = builder.probe(gl, *input);
+                        let idx = input_before.len();
+                        input_before_lut.insert(*input, idx);
+                        input_before.push((*input, before, None));
+                        break;
                     }
                 }
-
-                let path_wait_time = builder.minus(gl, time, lupdt);
-                let delay = path.delays.calculate(gl, &mut builder, output, proxy);
-                let path_wait_time = builder.plus(gl, path_wait_time, delay);
-                let path_wait_time = builder.min(gl, new_wait_time, path_wait_time);
-
-                new_wait_time = match condition {
-                    None => path_wait_time,
-                    Some(condition) => builder.select(gl, condition, path_wait_time, new_wait_time),
-                };
             }
 
-            let new_wait_time_set = new_wait_time_set
-                .unwrap_or_else(|| builder.constant(gl, Bits::new_ones(SCALAR_VSIZE)));
+            builder = builder.watch(gl, vec![proxy]);
+            let wait_loop_bb = builder.key();
 
-            let end_bb = builder.key();
-            builder = builder.jump(gl);
+            for (_, variable, phi_ref) in input_before.iter_mut() {
+                let pr;
+                (*variable, pr) = builder.phi(gl, [(entry, *variable), (entry, *variable)].into());
+                *phi_ref = Some(pr);
+            }
 
-            gl.bbs[start_bb].terminator =
-                BasicBlockTerminator::Branch(is_active, true_bb, builder.key());
-            (wait_time_set, _) = builder.phi(
+            let time = builder.time(gl);
+            let mut active_time = builder.constant(gl, Bits::new_zeroed(TIME_VSIZE));
+            for (input, _) in &specify.paths {
+                let lupdt = builder.lupdt(gl, *input);
+                active_time = builder.max(gl, active_time, lupdt);
+            }
+
+            let mut wait_time_set = builder.constant(gl, Bits::new_zeroed(SCALAR_VSIZE));
+            let mut wait_time = builder.constant(gl, Bits::new_ones(TIME_VSIZE));
+
+            for (input, paths) in &specify.paths {
+                let lupdt = builder.lupdt(gl, *input);
+                let is_active = builder.equals(gl, lupdt, active_time);
+
+                let start_bb = builder.key();
+                builder = builder.next_terminate_later(gl);
+                let true_bb = builder.key();
+
+                let mut new_wait_time_set = Some(wait_time_set);
+                let mut new_wait_time = wait_time;
+
+                for path in paths {
+                    let mut condition = None;
+                    if matches!(
+                        path.condition,
+                        Condition::InputPosedge | Condition::InputPosedgeExpr(_)
+                    ) {
+                        let before = input_before[input_before_lut[input]].1;
+                        let after = builder.probe(gl, *input);
+                        condition = Some(builder.posedge(gl, before, after));
+                    }
+                    if matches!(
+                        path.condition,
+                        Condition::InputNegedge | Condition::InputNegedgeExpr(_)
+                    ) {
+                        let before = input_before[input_before_lut[input]].1;
+                        let after = builder.probe(gl, *input);
+                        condition = Some(builder.negedge(gl, before, after));
+                    }
+
+                    if let Condition::Expr(expr)
+                    | Condition::InputPosedgeExpr(expr)
+                    | Condition::InputNegedgeExpr(expr) = path.condition
+                    {
+                        let (expr, _) =
+                            lower_expr(gl, arenas, scope, diagnostics, &mut builder, expr)?;
+                        let expr = builder.reduce_or(gl, expr);
+                        condition = Some(match condition {
+                            None => expr,
+                            Some(condition) => builder.and(gl, condition, expr),
+                        });
+                    }
+
+                    if matches!(path.condition, Condition::NoOtherCondition) {
+                        todo!();
+                    }
+
+                    let condition = condition.map(|c| builder.select_bit_constant(gl, c, 0));
+                    match (condition, &mut new_wait_time_set) {
+                        (None, _) | (_, None) => new_wait_time_set = None,
+                        (Some(condition), Some(new_wait_time_set)) => {
+                            *new_wait_time_set = builder.or(gl, *new_wait_time_set, condition);
+                        }
+                    }
+
+                    let path_wait_time = builder.minus(gl, time, lupdt);
+                    let delay =
+                        path.delays
+                            .calculate(gl, &mut builder, output, proxy, output_bitidx);
+                    let path_wait_time = builder.plus(gl, path_wait_time, delay);
+                    let path_wait_time = builder.min(gl, new_wait_time, path_wait_time);
+
+                    new_wait_time = match condition {
+                        None => path_wait_time,
+                        Some(condition) => {
+                            builder.select(gl, condition, path_wait_time, new_wait_time)
+                        }
+                    };
+                }
+
+                let new_wait_time_set = new_wait_time_set
+                    .unwrap_or_else(|| builder.constant(gl, Bits::new_ones(SCALAR_VSIZE)));
+
+                let end_bb = builder.key();
+                builder = builder.jump(gl);
+
+                gl.bbs[start_bb].terminator =
+                    BasicBlockTerminator::Branch(is_active, true_bb, builder.key());
+                (wait_time_set, _) = builder.phi(
+                    gl,
+                    [(start_bb, wait_time_set), (end_bb, new_wait_time_set)].into(),
+                );
+                (wait_time, _) =
+                    builder.phi(gl, [(start_bb, wait_time), (end_bb, new_wait_time)].into());
+            }
+
+            // @TODO: wait_time_set == 0
+            let old_proxy_value = builder.probe(gl, proxy);
+            let old_proxy_value = builder.select_bit_constant(gl, old_proxy_value, output_bitidx);
+            for (input, variable, _) in input_before.iter_mut() {
+                *variable = builder.probe(gl, *input);
+            }
+
+            builder = builder.variable_wait(gl, wait_time);
+
+            for (_, variable, phi_ref) in input_before.iter_mut() {
+                builder.update_phi_ref(gl, phi_ref.take().unwrap(), 1, builder.key(), *variable);
+            }
+
+            // do ... while(...);
+            let new_proxy_value = builder.probe(gl, proxy);
+            let new_proxy_value = builder.select_bit_constant(gl, new_proxy_value, output_bitidx);
+            let do_while_condition = builder.case_equals(gl, old_proxy_value, new_proxy_value);
+            builder = builder.branch_false_to(gl, do_while_condition, wait_loop_bb);
+
+            builder.drive_partial_constant(
                 gl,
-                [(start_bb, wait_time_set), (end_bb, new_wait_time_set)].into(),
+                output,
+                new_proxy_value,
+                output_bitidx,
+                SCALAR_VSIZE,
             );
-            (wait_time, _) =
-                builder.phi(gl, [(start_bb, wait_time), (end_bb, new_wait_time)].into());
+            builder.jump_to(gl, entry);
         }
-
-        // @TODO: wait_time_set == 0
-        let old_proxy_value = builder.probe(gl, proxy);
-        for (input, variable, _) in input_before.iter_mut() {
-            *variable = builder.probe(gl, *input);
-        }
-
-        builder = builder.variable_wait(gl, wait_time);
-
-        for (_, variable, phi_ref) in input_before.iter_mut() {
-            builder.update_phi_ref(gl, phi_ref.take().unwrap(), 1, builder.key(), *variable);
-        }
-
-        // do ... while(...);
-        let new_proxy_value = builder.probe(gl, proxy);
-        let do_while_condition = builder.case_equals(gl, old_proxy_value, new_proxy_value);
-        builder = builder.branch_false_to(gl, do_while_condition, wait_loop_bb);
-
-        builder.drive(gl, output, new_proxy_value);
-        builder.jump_to(gl, entry);
     }
 
     Ok(())
