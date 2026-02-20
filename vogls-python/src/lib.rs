@@ -47,11 +47,12 @@ mod vogls {
     #[pymethods]
     impl Design {
         #[new]
-        #[pyo3(signature = (path, top_level_module = None, defines = None))]
+        #[pyo3(signature = (path, top_level_module = None, defines = None, four_value_logic = false))]
         fn new(
             path: PathBuf,
             top_level_module: Option<String>,
             defines: Option<Vec<String>>,
+            four_value_logic: bool,
         ) -> PyResult<Self> {
             let mut ectx = ExecutionContext {
                 stdout: Box::new(std::io::stdout()),
@@ -65,7 +66,11 @@ mod vogls {
                 itrace: false,
                 time: 0,
                 opt_rounds: 0,
-                logic_mode: LogicMode::TwoValue,
+                logic_mode: if four_value_logic {
+                    LogicMode::FourValue
+                } else {
+                    LogicMode::TwoValue
+                },
                 no_run: false,
                 vcd: None,
             };

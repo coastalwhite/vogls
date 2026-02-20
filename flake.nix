@@ -28,6 +28,7 @@
             pythonPlatform = lib.recursiveUpdate {
               python = pkgs.python311;
             } pkgs.python311Packages;
+						stdenv = pkgs.stdenv;
           in {
             devShells.default = pkgs.mkShell {
               packages = with pkgs; [
@@ -49,6 +50,7 @@
               postVenvCreation = ''
                 unset CONDA_PREFIX 
                 uv pip install -r pyproject.toml
+								export LD_LIBRARY_PATH="${stdenv.cc.cc.lib}/lib:$PYTHON_SHARED_LIB"
               '';
               venvDir = ".venv";
             };

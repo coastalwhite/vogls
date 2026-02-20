@@ -258,7 +258,15 @@ impl VcdScope {
 
     fn write_to(&self, f: &mut impl std::io::Write) -> std::io::Result<()> {
         let Self { name, items } = self;
-        writeln!(f, "$scope module {name} $end")?;
+        write!(f, "$scope module ")?;
+        if name.contains(|c: char| !(c.is_ascii_alphanumeric() || c == '_')) {
+            f.write_all(b"\\")?;
+        }
+        f.write_all(name.as_bytes())?;
+        if name.trim().is_empty() {
+            f.write_all(b"<anon>")?;
+        }
+        writeln!(f, " $end")?;
         for item in items {
             item.write_to(f)?;
         }
@@ -794,26 +802,30 @@ impl Simulation {
                     }
                     I::VariableWait(time) => {
                         let time = state.heap.get_tv_u64(time.to_ref(TIME_VSIZE));
-                        state
-                            .schedule
-                            .entry(state.time + time)
-                            .or_default()
-                            .push(event);
-                        if self.itrace {
-                            instr.itrace(&mut state.heap, &self.signals, self.logic_mode);
+                        if time > 0 {
+                            state
+                                .schedule
+                                .entry(state.time + time)
+                                .or_default()
+                                .push(event);
+                            if self.itrace {
+                                instr.itrace(&mut state.heap, &self.signals, self.logic_mode);
+                            }
+                            return EvalOutcome::Next;
                         }
-                        return EvalOutcome::Next;
                     }
                     I::Wait(time) => {
-                        state
-                            .schedule
-                            .entry(state.time + time.0)
-                            .or_default()
-                            .push(event);
-                        if self.itrace {
-                            instr.itrace(&mut state.heap, &self.signals, self.logic_mode);
+                        if time.0 > 0 {
+                            state
+                                .schedule
+                                .entry(state.time + time.0)
+                                .or_default()
+                                .push(event);
+                            if self.itrace {
+                                instr.itrace(&mut state.heap, &self.signals, self.logic_mode);
+                            }
+                            return EvalOutcome::Next;
                         }
-                        return EvalOutcome::Next;
                     }
                     I::WaitRegion(region) => {
                         if *region == 0 {

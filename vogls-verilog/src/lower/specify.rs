@@ -709,7 +709,7 @@ pub fn lower_specify<'a>(
                 }
             }
 
-            builder = builder.watch(gl, vec![proxy]);
+            builder = builder.jump(gl);
             let wait_loop_bb = builder.key();
 
             for (_, variable, phi_ref) in input_before.iter_mut() {
@@ -814,7 +814,10 @@ pub fn lower_specify<'a>(
                     builder.phi(gl, [(start_bb, wait_time), (end_bb, new_wait_time)].into());
             }
 
-            // @TODO: wait_time_set == 0
+            // Set the wait time to zero, if no condition matched.
+            let wait_time_mask = builder.sign_extend(gl, wait_time_set, TIME_VSIZE);
+            let wait_time = builder.and(gl, wait_time, wait_time_mask);
+
             let old_proxy_value = builder.probe(gl, proxy);
             let old_proxy_value = builder.select_bit_constant(gl, old_proxy_value, output_bitidx);
             for (input, variable, _) in input_before.iter_mut() {
@@ -840,7 +843,7 @@ pub fn lower_specify<'a>(
                 output_bitidx,
                 SCALAR_VSIZE,
             );
-            builder.jump_to(gl, entry);
+            builder.watch_to(gl, vec![proxy], wait_loop_bb);
         }
     }
 

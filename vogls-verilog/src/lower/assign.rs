@@ -333,10 +333,9 @@ pub fn assign_variable_lvalue_flat<'a>(
 
             if nba {
                 let s = unwrap_get_net_mut(scope.table, symbol_key);
-                if specify_proxy.is_some() {
-                    todo!()
-                }
-                let (_, mask, value) = s.nba.get_or_insert_with(|| create_nba_process(gl, key));
+                let (_, mask, value) = s
+                    .nba
+                    .get_or_insert_with(|| create_nba_process(gl, specify_proxy.unwrap_or(key)));
                 let mask_value = builder.constant(gl, Bits::new_ones(size));
                 builder.drive_opt_partial(gl, *mask, mask_value, partial);
                 builder.drive_opt_partial(gl, *value, variable, partial);
