@@ -751,6 +751,10 @@ pub fn lower_specify<'a>(
                     });
                 }
 
+                if matches!(path.condition, Condition::NoOtherCondition) {
+                    todo!();
+                }
+
                 let condition = condition.map(|c| builder.extract_constant(gl, c, 0, SCALAR_VSIZE));
                 match (condition, &mut new_wait_time_set) {
                     (None, _) | (_, None) => new_wait_time_set = None,
