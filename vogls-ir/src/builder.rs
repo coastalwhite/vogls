@@ -756,7 +756,12 @@ impl BasicBlockBuilder {
             instrs: Vec::new(),
         }
     }
-    pub fn variable_wait_to(mut self, gl: &mut GlobalContext, time: VariableKey, bb: BasicBlockKey) {
+    pub fn variable_wait_to(
+        mut self,
+        gl: &mut GlobalContext,
+        time: VariableKey,
+        bb: BasicBlockKey,
+    ) {
         let slf = gl.bbs.get_mut(self.key).unwrap();
         slf.instrs = std::mem::take(&mut self.instrs);
         slf.terminator = BasicBlockTerminator::VariableWait(bb, time);
@@ -919,10 +924,51 @@ impl BasicBlockBuilder {
         dst
     }
 
-    pub fn min(&mut self, gl: &mut GlobalContext, lhs: VariableKey, rhs: VariableKey) -> VariableKey {
+    pub fn min(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+    ) -> VariableKey {
         self.bin_arithmetic(gl, lhs, rhs, BinaryOp::Min)
     }
-    pub fn max(&mut self, gl: &mut GlobalContext, lhs: VariableKey, rhs: VariableKey) -> VariableKey {
+    pub fn max(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+    ) -> VariableKey {
         self.bin_arithmetic(gl, lhs, rhs, BinaryOp::Max)
+    }
+    pub fn select(
+        &mut self,
+        gl: &mut GlobalContext,
+        select: VariableKey,
+        truthy: VariableKey,
+        falsy: VariableKey,
+    ) -> VariableKey {
+        let size = gl.vars[truthy].size;
+        assert_eq!(size, gl.vars[falsy].size);
+        assert_eq!(SCALAR_VSIZE, gl.vars[select].size);
+        let mask = self.sign_extend(gl, select, size);
+        let mask_inv = self.binary_neg(gl, mask);
+        let truthy = self.and(gl, mask, truthy);
+        let falsy = self.and(gl, mask_inv, falsy);
+        self.or(gl, truthy, falsy)
+    }
+
+    pub fn posedge(&mut self, gl: &mut GlobalContext, before: VariableKey, after: VariableKey) -> VariableKey {
+        let size = gl.vars[before].size;
+        assert_eq!(size, gl.vars[after].size);
+        let t = self.binary_neg(gl, before);
+        let t = self.and(gl, t, after);
+        self.reduce_or(gl, t)
+    }
+    pub fn negedge(&mut self, gl: &mut GlobalContext, before: VariableKey, after: VariableKey) -> VariableKey {
+        let size = gl.vars[before].size;
+        assert_eq!(size, gl.vars[after].size);
+        let t = self.binary_neg(gl, after);
+        let t = self.and(gl, before, t);
+        self.reduce_or(gl, t)
     }
 }

@@ -171,7 +171,7 @@ impl BinaryOp {
             Self::CopyZ => "copyz",
 
             Self::Min => "min",
-            Self::Max => "min",
+            Self::Max => "max",
         }
     }
 }
