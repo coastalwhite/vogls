@@ -454,7 +454,7 @@ impl Bits {
                 (0..2 * size_to_num_words(size)).map(|_| 0u64).collect(),
             )
         } else {
-            Self::from_u64(size, 0u64)
+            Self::from_four_value_u64(size, 0u32, 0u32)
         }
     }
     pub fn new_high_impedance(size: VectorSize) -> Self {
@@ -469,7 +469,7 @@ impl Bits {
                     .collect(),
             )
         } else {
-            Self::from_u64(size, (1u64 << size.get()) - 1)
+            Self::from_four_value_u64(size, 0u32, 1u32.unbounded_shl(size.get()).wrapping_sub(1))
         }
     }
 

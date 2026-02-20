@@ -12,7 +12,6 @@ use vogls_sim::{
 use vogls_utils::VgHashMap;
 use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{Module, ModuleItem, NonPortModuleItem};
-use vogls_verilog::ast::specify::{PathDeclaration, SpecifyBlockItem};
 use vogls_verilog::elaborate::{VSymbol, VSymbolTable};
 use vogls_verilog::lower::{Diagnostics as LowerDiagnostics, Scope, lower_module_to_ir};
 use vogls_verilog::parser::{
@@ -259,7 +258,8 @@ impl Design {
                             &mut outs_lut,
                             &mut outs,
                             &mut diagnostics,
-                        ).is_err();
+                        )
+                        .is_err();
                     }
                 }
                 VSymbol::Function(i) => {

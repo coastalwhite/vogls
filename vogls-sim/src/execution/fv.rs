@@ -1,7 +1,8 @@
 use vogls_bits::arithmetic::{
-    FvLogicValue, fv_gtu32_bitwise_inv, fv_l_reduce_and, fv_l_reduce_or, fv_l_reduce_xor,
-    fv_l_select_bit, fv_leu32_bitwise_inv, fv_s_reduce_and, fv_s_reduce_or, fv_s_reduce_xor,
-    fv_s_select_bit, fv_unpack_u64,
+    FvLogicValue, fv_contains_unknown, fv_gtu32_bitwise_inv, fv_l_reduce_and, fv_l_reduce_or,
+    fv_l_reduce_xor, fv_l_select_bit, fv_leu32_bitwise_inv,
+    fv_s_contains_unknown as fv_s_contains_unknown_bool, fv_s_reduce_and, fv_s_reduce_or,
+    fv_s_reduce_xor, fv_s_select_bit, fv_unpack_u64,
 };
 use vogls_bits::concat::{fv_l_concat, fv_s_concat};
 use vogls_bits::extend::{fv_l_sign_extend, fv_l_zero_extend, fv_s_sign_extend, fv_s_zero_extend};
@@ -16,6 +17,13 @@ use vogls_ir::{ResizeOp, UnaryOp, VectorSize};
 use crate::{BinaryArithmeticOp, BinaryComparisonOp, Heap, HeapOffset, HeapRef, ShiftOp};
 
 pub(crate) fn exec_fv_unary(stack: &mut Heap, dst: HeapOffset, op: UnaryOp, src: HeapRef) {
+    fn fv_s_contains_unknown(src: &[u8], size: VectorSize) -> FvLogicValue {
+        FvLogicValue::from_bool(fv_s_contains_unknown_bool(src, size))
+    }
+    fn fv_l_contains_unknown(src: &[u64], size: VectorSize) -> FvLogicValue {
+        FvLogicValue::from_bool(fv_contains_unknown(src, size))
+    }
+
     use UnaryOp as O;
     match op {
         O::Neg if src.size.get() > 16 => {
@@ -30,7 +38,7 @@ pub(crate) fn exec_fv_unary(stack: &mut Heap, dst: HeapOffset, op: UnaryOp, src:
             fv_leu32_bitwise_inv(dst_s, src_s, src.size)
         }
 
-        O::ReduceOr | O::ReduceAnd | O::ReduceXor if src.size.get() > 16 => {
+        O::ReduceOr | O::ReduceAnd | O::ReduceXor | O::ContainsX if src.size.get() > 16 => {
             let nwords = 2 * src.size.get().div_ceil(64) as usize;
             let src_s = stack.get_u64_slice(src.offset, nwords);
             let f = match op {
@@ -38,17 +46,19 @@ pub(crate) fn exec_fv_unary(stack: &mut Heap, dst: HeapOffset, op: UnaryOp, src:
                 O::ReduceOr => fv_l_reduce_or,
                 O::ReduceAnd => fv_l_reduce_and,
                 O::ReduceXor => fv_l_reduce_xor,
+                O::ContainsX => fv_l_contains_unknown,
             };
             let result = f(src_s, src.size);
             stack.set_fv_scalar(dst, result);
         }
-        O::ReduceOr | O::ReduceAnd | O::ReduceXor => {
+        O::ReduceOr | O::ReduceAnd | O::ReduceXor | O::ContainsX => {
             let src_s = stack.get(src.to_fv_size());
             let f = match op {
                 O::Neg => unreachable!(),
                 O::ReduceOr => fv_s_reduce_or,
                 O::ReduceAnd => fv_s_reduce_and,
                 O::ReduceXor => fv_s_reduce_xor,
+                O::ContainsX => fv_s_contains_unknown,
             };
             let result = f(src_s, src.size);
             stack.set_fv_scalar(dst, result);

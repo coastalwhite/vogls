@@ -131,7 +131,10 @@ impl VmInstruction {
             I::Constant(dst, src) => &[("dst", src.contains_special(), dst.to_ref(src.size()))],
             I::TvUnary(dst, op, src) => match op {
                 UnaryOp::Neg => &[("dst", false, dst.to_ref(src.size)), ("src", false, *src)],
-                UnaryOp::ReduceOr | UnaryOp::ReduceAnd | UnaryOp::ReduceXor => {
+                UnaryOp::ReduceOr
+                | UnaryOp::ReduceAnd
+                | UnaryOp::ReduceXor
+                | UnaryOp::ContainsX => {
                     &[("dst", false, dst.to_scalar_ref()), ("src", false, *src)]
                 }
             },
@@ -167,9 +170,10 @@ impl VmInstruction {
             ],
             I::FvUnary(dst, op, src) => match op {
                 UnaryOp::Neg => &[("dst", false, dst.to_ref(src.size)), ("src", true, *src)],
-                UnaryOp::ReduceOr | UnaryOp::ReduceAnd | UnaryOp::ReduceXor => {
-                    &[("dst", true, dst.to_scalar_ref()), ("src", true, *src)]
-                }
+                UnaryOp::ReduceOr
+                | UnaryOp::ReduceAnd
+                | UnaryOp::ReduceXor
+                | UnaryOp::ContainsX => &[("dst", true, dst.to_scalar_ref()), ("src", true, *src)],
             },
             I::FvResize(dst, _, src) => &[("dst", true, *dst), ("src", true, *src)],
             I::FvBinaryArithmetic(dst, _, lhs, rhs) => &[

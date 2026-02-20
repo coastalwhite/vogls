@@ -459,6 +459,13 @@ pub fn fv_contains_high_impedance(src: &[u64], size: VectorSize) -> bool {
     !src[nwords - 1] & src[2 * nwords - 1] & last_mask != 0
 }
 
+pub fn fv_s_contains_unknown(src: &[u8], size: VectorSize) -> bool {
+    let dsize = VectorSize::new(size.get() * 2).unwrap();
+    let x = load_partial_u64(src, dsize);
+    let (spc, val) = fv_unpack_u64(x, size);
+    !spc & !val & 1u64.unbounded_shl(size.get()).wrapping_sub(1) != 0
+}
+
 pub fn fv_unpack_u64(v: u64, size: VectorSize) -> (u64, u64) {
     debug_assert!(size.get() <= 32);
     (v >> size.get(), v & ((1u64 << size.get()) - 1))

@@ -25,7 +25,8 @@ pub fn tv_l_zero_extend(dst: &mut [u64], src: &[u64], dst_size: VectorSize, src_
     tv_l_extend_with(dst, src, dst_size, src_size, false)
 }
 pub fn tv_l_sign_extend(dst: &mut [u64], src: &[u64], dst_size: VectorSize, src_size: VectorSize) {
-    let sign = (src[(src_size.get() / 64) as usize] >> (src_size.get() % 64)) & 1 != 0;
+    let shift = src_size.get() - 1;
+    let sign = (src[(shift / 64) as usize] >> (shift % 64)) & 1 != 0;
     tv_l_extend_with(dst, src, dst_size, src_size, sign)
 }
 pub fn fv_l_zero_extend(dst: &mut [u64], src: &[u64], dst_size: VectorSize, src_size: VectorSize) {

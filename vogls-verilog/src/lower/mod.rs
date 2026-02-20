@@ -394,12 +394,7 @@ pub fn lower_module_to_ir<'a>(
                         module_or_generate_item::lower(gl, arenas, scope, id, diagnostics)?;
                     }
                 }
-                NonPortModuleItem::SpecifyBlock(_) => {
-                    diagnostics.warn_not_yet_implemented(
-                        arenas.get_span(module_item),
-                        "specify block is ignored",
-                    );
-                }
+                NonPortModuleItem::SpecifyBlock(_) => {}
                 NonPortModuleItem::ParameterDeclaration(_) => {}
                 NonPortModuleItem::SpecParamDeclaration => todo!(),
             },

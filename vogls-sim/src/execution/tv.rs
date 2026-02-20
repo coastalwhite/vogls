@@ -30,6 +30,7 @@ pub(crate) fn exec_tv_unary(stack: &mut Heap, dst: HeapOffset, op: UnaryOp, src:
             let result = stack.get(src).iter().map(|b| b.count_ones()).sum::<u32>();
             stack.set_tv_u64(dst.to_ref(SCALAR_VSIZE), u64::from(result % 2 == 1));
         }
+        O::ContainsX => stack.set_tv_bool(dst, false),
     }
 }
 

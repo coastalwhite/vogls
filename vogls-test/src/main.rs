@@ -84,6 +84,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             verify_stdout: bool,
             time: u64,
             top_level_module: Option<String>,
+            skip: Option<LogicMode>,
         }
 
         let mut test_information = TestInfo {
@@ -91,6 +92,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             verify_stdout: false,
             top_level_module: None,
             time: 1000,
+            skip: None,
         };
         {
             let s = std::fs::read_to_string(&path)?;
@@ -115,6 +117,11 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                     _ if line.starts_with("time=") => {
                         test_information.time = line[5..].parse().expect("failed to parse");
                     }
+                    _ if line.starts_with("skip=") => match &line[5..] {
+                        "two-value-logic" => test_information.skip = Some(LogicMode::TwoValue),
+                        "four-value-logic" => test_information.skip = Some(LogicMode::FourValue),
+                        _ => panic!("failed to parse"),
+                    },
                     _ => {
                         println!();
                         panic!("Invalid vogls test command '{line}'");
@@ -137,6 +144,11 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         }
 
         for config in [LogicMode::TwoValue, LogicMode::FourValue] {
+            if Some(config) == test_information.skip {
+                write!(&mut o, " \x1b[32mS\x1b[0m")?;
+                continue;
+            }
+
             let stdout = Io::default();
             let stderr = Io::default();
 

@@ -81,7 +81,7 @@ pub fn report(tokenized: &Tokenized, location: TokenRange, out: &mut String) -> 
     let content = tokenized.contents[tokenized.file_idxs[location.start] as usize].as_ref();
     let location = Span::new(
         tokenized.spans[location.start].start(),
-        tokenized.spans[location.end - 1].end() + 1,
+        tokenized.spans[location.end - 1].end(),
     );
 
     // @Performance: Cache lines per file.

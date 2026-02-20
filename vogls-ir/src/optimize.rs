@@ -3,8 +3,8 @@ use std::collections::{HashMap, HashSet};
 use slotmap::{SecondaryMap, SlotMap};
 
 use crate::{
-    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryOp, Bits, Instruction, ResizeOp,
-    SCALAR_VSIZE, UnaryOp, Variable, VariableKey,
+    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryOp, Bits, Instruction, SCALAR_VSIZE,
+    UnaryOp, Variable, VariableKey,
 };
 
 pub fn get_fan_in<'a>(
@@ -200,15 +200,7 @@ pub fn propagate_constants<'a>(
                         continue;
                     };
 
-                    (
-                        *dst,
-                        match op {
-                            UnaryOp::ReduceOr => Bits::from(bits.reduce_or()),
-                            UnaryOp::ReduceAnd => Bits::from(bits.reduce_and()),
-                            UnaryOp::ReduceXor => Bits::from(bits.reduce_xor()),
-                            UnaryOp::Neg => bits.bitwise_negate(),
-                        },
-                    )
+                    (*dst, op.evaluate(bits))
                 }
                 I::Resize(dst, op, src) => {
                     let Some(bits) = scratch_map.get(src) else {
@@ -216,14 +208,7 @@ pub fn propagate_constants<'a>(
                     };
 
                     let target_size = vars[*dst].size;
-                    (
-                        *dst,
-                        match op {
-                            ResizeOp::ZeroExtend => bits.zero_extend(target_size),
-                            ResizeOp::SignExtend => bits.sign_extend(target_size),
-                            ResizeOp::Truncate => bits.truncate(target_size),
-                        },
-                    )
+                    (*dst, op.evaluate(bits, target_size))
                 }
                 I::Binary(dst, op, src1, src2) => {
                     let csrc1 = scratch_map.get(src1);

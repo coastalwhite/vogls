@@ -158,7 +158,13 @@ impl BasicBlockBuilder {
     pub fn constant_u32(&mut self, gl: &mut GlobalContext, value: u32) -> VariableKey {
         let variable = self.next_tmp_var(gl, VectorSize::new(32).unwrap());
         self.instrs
-            .push(Instruction::Constant(variable, Bits::new_u32(value.into())));
+            .push(Instruction::Constant(variable, Bits::new_u32(value)));
+        variable
+    }
+    pub fn constant_u64(&mut self, gl: &mut GlobalContext, value: u64) -> VariableKey {
+        let variable = self.next_tmp_var(gl, VectorSize::new(64).unwrap());
+        self.instrs
+            .push(Instruction::Constant(variable, Bits::new_u64(value)));
         variable
     }
 
@@ -268,6 +274,24 @@ impl BasicBlockBuilder {
         let xor = self.xor(gl, lhs, rhs);
         let xnor = self.binary_neg(gl, xor);
         xnor
+    }
+    pub fn andnot(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+    ) -> VariableKey {
+        let rhs = self.binary_neg(gl, rhs);
+        self.and(gl, lhs, rhs)
+    }
+    pub fn ornot(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+    ) -> VariableKey {
+        let rhs = self.binary_neg(gl, rhs);
+        self.or(gl, lhs, rhs)
     }
 
     fn copy_op(
@@ -915,7 +939,8 @@ impl BasicBlockBuilder {
     }
 
     pub fn equals_zero(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
-        self.reduce_or(gl, src)
+        let not_equals_zero = self.reduce_or(gl, src);
+        self.logical_neg(gl, not_equals_zero)
     }
 
     pub fn lupdt(&mut self, gl: &mut GlobalContext, signal: SignalKey) -> VariableKey {
@@ -957,18 +982,34 @@ impl BasicBlockBuilder {
         self.or(gl, truthy, falsy)
     }
 
-    pub fn posedge(&mut self, gl: &mut GlobalContext, before: VariableKey, after: VariableKey) -> VariableKey {
+    pub fn posedge(
+        &mut self,
+        gl: &mut GlobalContext,
+        before: VariableKey,
+        after: VariableKey,
+    ) -> VariableKey {
         let size = gl.vars[before].size;
         assert_eq!(size, gl.vars[after].size);
         let t = self.binary_neg(gl, before);
         let t = self.and(gl, t, after);
         self.reduce_or(gl, t)
     }
-    pub fn negedge(&mut self, gl: &mut GlobalContext, before: VariableKey, after: VariableKey) -> VariableKey {
+    pub fn negedge(
+        &mut self,
+        gl: &mut GlobalContext,
+        before: VariableKey,
+        after: VariableKey,
+    ) -> VariableKey {
         let size = gl.vars[before].size;
         assert_eq!(size, gl.vars[after].size);
         let t = self.binary_neg(gl, after);
         let t = self.and(gl, before, t);
         self.reduce_or(gl, t)
+    }
+
+    pub fn contains_x(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
+        let dst = self.next_tmp_var(gl, SCALAR_VSIZE);
+        self.unary_op(gl, src, UnaryOp::ContainsX, dst);
+        dst
     }
 }
