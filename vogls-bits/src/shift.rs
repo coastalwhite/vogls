@@ -256,6 +256,11 @@ pub fn tv_l_logical_shift_right_with(
         }
     }
 }
+pub fn tv_l_arithmetic_shift_right(dst: &mut [u64], src: &[u64], shift: u32, size: VectorSize) {
+    let msb_idx = (size.get() - 1) as usize;
+    let msb_val = (src[msb_idx / 64] >> (msb_idx % 64)) & 1 != 0;
+    tv_l_logical_shift_right_with(dst, src, shift, size, msb_val);
+}
 
 pub fn fv_s_logical_shift_left(dst: &mut [u8], src: &[u8], shift: u32, size: VectorSize) {
     if shift == 0 {

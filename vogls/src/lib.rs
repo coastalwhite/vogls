@@ -17,6 +17,7 @@ use vogls_verilog::tokenizer::Tokenized;
 
 pub use vogls_utils as utils;
 pub use vogls_sim as sim;
+pub use vogls_bits as bits;
 
 pub mod design;
 

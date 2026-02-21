@@ -3,6 +3,13 @@ name = "vogls-bits"
 version.workspace = true
 edition.workspace = true
 
+[dev-dependencies]
+proptest.workspace = true
+
 [dependencies]
 bytemuck.workspace = true
-proptest.workspace = true
+rand = { workspace = true, optional = true }
+rand_pcg = { workspace = true, optional = true }
+
+[features]
+random = ["rand", "rand_pcg"]

@@ -23,6 +23,8 @@ pub mod negate;
 pub mod parse;
 #[cfg(test)]
 pub mod proptest;
+#[cfg(feature = "rand")]
+pub mod random;
 pub mod select;
 pub mod set_subslice;
 pub mod shift;
@@ -1255,21 +1257,44 @@ impl Bits {
 }
 
 macro_rules! impl_shift {
-    ($(($f:ident, $op:ident)),+ $(,)?) => {
+    ($(($f:ident, $tv_op:ident, $fv_op:ident)),+ $(,)?) => {
         impl Bits {
         $(
         pub fn $f(&self, amount: u32) -> Self {
-            if self.mode == Mode::FourValue {
-                todo!()
+            let data_ref = self.as_data_ref();
+
+            match data_ref {
+                BitsDataRef::InlineTv(_) | BitsDataRef::SeparateTv(_) => {
+                    let mut shifted = Self::new_zeroed(self.size());
+                    crate::shift::$tv_op(
+                        shifted.as_mut_u64_slice(),
+                        self.as_u64_slice(),
+                        amount,
+                        self.size(),
+                    );
+                    shifted
+                }
+                BitsDataRef::InlineFv(spc, val) => {
+                    let mut shifted = Self::new_unknown(self.size());
+                    crate::shift::$fv_op(
+                        shifted.as_mut_u64_slice(),
+                        &[spc, val],
+                        amount,
+                        self.size(),
+                    );
+                    shifted
+                }
+                BitsDataRef::SeparateFv(slice) => {
+                    let mut shifted = Self::new_unknown(self.size());
+                    crate::shift::$fv_op(
+                        shifted.as_mut_u64_slice(),
+                        slice,
+                        amount,
+                        self.size(),
+                    );
+                    shifted
+                }
             }
-            let mut shifted = Self::new_zeroed(self.size());
-            crate::shift::$op(
-                shifted.as_mut_slice(),
-                self.as_slice(),
-                amount,
-                self.size(),
-            );
-            shifted
         }
         )+
         }
@@ -1277,9 +1302,9 @@ macro_rules! impl_shift {
 }
 
 impl_shift! {
-    (logical_shift_left, tv_logical_shift_left),
-    (logical_shift_right, tv_logical_shift_right),
-    (arithmetic_shift_right, tv_arithmetic_shift_right),
+    (logical_shift_left, tv_gtu64_logical_shift_left, fv_l_logical_shift_left),
+    (logical_shift_right, tv_l_logical_shift_right, fv_l_logical_shift_right),
+    (arithmetic_shift_right, tv_l_arithmetic_shift_right, fv_l_arithmetic_shift_right),
 }
 
 impl fmt::Display for Bits {

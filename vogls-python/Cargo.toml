@@ -9,7 +9,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pyo3 = "0.28.1"
-vogls.path = "../vogls"
+vogls = { path = "../vogls", features = ["random"] }
 hashbrown.workspace = true
 
 [lints]

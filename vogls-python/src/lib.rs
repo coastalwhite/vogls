@@ -238,6 +238,25 @@ mod vogls {
             })
         }
 
+        #[staticmethod]
+        #[pyo3(signature = (size, two_value_logic=false))]
+        pub fn random(
+            py: pyo3::Python<'_>,
+            size: vogls::VectorSize,
+            two_value_logic: bool,
+        ) -> Self {
+            py.detach(|| Self {
+                inner: vogls::bits::random::rand_bits(
+                    size,
+                    if two_value_logic {
+                        vogls::bits::Mode::TwoValue
+                    } else {
+                        vogls::bits::Mode::FourValue
+                    },
+                ),
+            })
+        }
+
         pub fn to_hex(&self) -> String {
             self.inner
                 .display(&BitsFormatOptions {
