@@ -5,7 +5,7 @@ use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::{ConnectionDirection, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE, SignalKey};
-use vogls_utils::{VgHashMap, VgHashSet};
+use vogls_utils::{IndexMap, VgHashMap, VgHashSet};
 
 use crate::ast::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression};
 use crate::ast::expr::{BitSlice, Expr, Replication};
@@ -66,8 +66,7 @@ pub enum InLevelSymbol {
 }
 
 pub struct ElaborationState<'a> {
-    lvl_symbols_lookup: VgHashMap<SymbolId, usize>,
-    lvl_symbols: Vec<(SymbolId, InLevelSymbol)>,
+    lvl_symbols: IndexMap<SymbolId, InLevelSymbol>,
     next_levels: VecDeque<(SymbolId, ElabLevel)>,
     marked: VgHashSet<SymbolId>,
 
@@ -85,9 +84,7 @@ pub struct ElaborationState<'a> {
 
 impl ElaborationState<'_> {
     pub fn insert_lvl_symbol(&mut self, sid: SymbolId, symbol: InLevelSymbol) {
-        let idx = self.lvl_symbols.len();
-        self.lvl_symbols_lookup.insert(sid, idx);
-        self.lvl_symbols.push((sid, symbol));
+        assert!(self.lvl_symbols.insert(sid, symbol).is_none());
     }
 }
 
@@ -121,8 +118,7 @@ pub fn elaborate<'a>(
     });
     gl.signals.remove(dummy_signal);
     let mut st = ElaborationState {
-        lvl_symbols_lookup: VgHashMap::default(),
-        lvl_symbols: Vec::new(),
+        lvl_symbols: Default::default(),
         next_levels: VecDeque::new(),
         marked: VgHashSet::default(),
         needs_adjacency_list: Vec::new(),
@@ -157,7 +153,6 @@ pub fn elaborate<'a>(
 
     let mut error = false;
     while let Some((scope, lvl)) = st.next_levels.pop_front() {
-        st.lvl_symbols_lookup.clear();
         st.lvl_symbols.clear();
         st.needs_adjacency_list_items.clear();
 
@@ -237,7 +232,7 @@ pub fn elaborate<'a>(
 
             st.marked.reserve(st.lvl_symbols.len());
             for i in 0..st.lvl_symbols.len() {
-                let (sid, symbol) = st.lvl_symbols[i];
+                let (&sid, &symbol) = st.lvl_symbols.at(i);
                 st.needs_adjacency_list.push((
                     sid,
                     st.needs_adjacency_list_items.len(),
@@ -274,7 +269,7 @@ pub fn elaborate<'a>(
                     }
 
                     st.marked.insert(*sid);
-                    let lvl_symbol = st.lvl_symbols[st.lvl_symbols_lookup[sid]].1;
+                    let lvl_symbol = &st.lvl_symbols[*sid];
                     if finalize_symbol(
                         gl,
                         arenas,
@@ -799,12 +794,7 @@ fn extend_module_or_generate_item_sids<'a>(
                             if let Some(sid) = table.resolve(scope, ident.item.0) {
                                 // @Hack.
                                 // Verilog allows shadowing ports with wires.
-                                let Some(sym_idx) = st.lvl_symbols_lookup.get(&sid) else {
-                                    error = true;
-                                    continue;
-                                };
-                                let (_, InLevelSymbol::Port(..)) = &mut st.lvl_symbols[*sym_idx]
-                                else {
+                                let InLevelSymbol::Port(..) = &mut st.lvl_symbols[sid] else {
                                     error = true;
                                     continue;
                                 };
@@ -841,12 +831,7 @@ fn extend_module_or_generate_item_sids<'a>(
                             if let Some(sid) = table.resolve(scope, ident.item.0) {
                                 // @Hack.
                                 // Verilog allows shadowing ports with wires.
-                                let Some(sym_idx) = st.lvl_symbols_lookup.get(&sid) else {
-                                    error = true;
-                                    continue;
-                                };
-                                let (_, InLevelSymbol::Port(..)) = &mut st.lvl_symbols[*sym_idx]
-                                else {
+                                let InLevelSymbol::Port(..) = &mut st.lvl_symbols[sid] else {
                                     error = true;
                                     continue;
                                 };
@@ -1611,7 +1596,7 @@ pub fn extend_expr_needs<'a>(
 
                 if let Some(ident_sid) = resolve_symbol_id_hier(scope, table, arenas, *ident)
                     && st.marked.insert(ident_sid)
-                    && st.lvl_symbols_lookup.contains_key(&ident_sid)
+                    && st.lvl_symbols.contains_key(&ident_sid)
                 {
                     st.needs_adjacency_list_items.push(ident_sid);
                 };
@@ -1621,7 +1606,7 @@ pub fn extend_expr_needs<'a>(
 
                 if let Some(ident_sid) = resolve_symbol_id_hier(scope, table, arenas, *ident)
                     && st.marked.insert(ident_sid)
-                    && st.lvl_symbols_lookup.contains_key(&ident_sid)
+                    && st.lvl_symbols.contains_key(&ident_sid)
                 {
                     st.needs_adjacency_list_items.push(ident_sid);
                 };
