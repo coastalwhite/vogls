@@ -1,12 +1,11 @@
-use std::collections::HashSet;
-
 use vogls_ir::{
     BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, INTEGER_VSIZE, SignalKey,
     VariableKey, VectorSize,
 };
+use vogls_utils::OrderedSet;
 
-use crate::ast::AstId;
 use crate::ast::expr::{BinaryOperator, BitSlice, Expr, Replication, UnaryOperator};
+use crate::ast::{AstId, HIdent};
 use crate::elaborate::VSymbol;
 use crate::lower::{VType, msb_lsb_to_width, try_resolve_symbol_id};
 use crate::number::Sign;
@@ -804,8 +803,9 @@ pub fn get_used_signals<'a>(
     arenas: &'a AstArenas,
     scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
+    signals: &mut OrderedSet<SignalKey>,
     expr: AstId<Expr>,
-) -> Result<Vec<SignalKey>, ()> {
+) -> Result<(), ()> {
     struct StackItem {
         expr: AstId<Expr>,
         _dispatched: bool,
@@ -821,8 +821,6 @@ pub fn get_used_signals<'a>(
 
     let mut error = false;
     let mut dispatch_stack: Vec<StackItem> = Vec::new();
-    let mut signals_seen: HashSet<SignalKey> = HashSet::new();
-    let mut signals: Vec<SignalKey> = Vec::new();
 
     dispatch_stack.push(StackItem::new(expr));
 
@@ -849,26 +847,9 @@ pub fn get_used_signals<'a>(
                 dispatch_stack.extend([*c, *t, *f].into_iter().map(StackItem::new))
             }
             Expr::Ident(ident, exprs, range_expression) => {
-                let Ok(symbol_key) =
-                    try_resolve_symbol_id(scope.key, scope.table, arenas, *ident, diagnostics)
-                else {
-                    error |= true;
+                if get_used_ident_signals(arenas, scope, diagnostics, signals, *ident).is_err() {
+                    error = true;
                     continue;
-                };
-                match &scope.table[symbol_key].content {
-                    VSymbol::Net(s) => {
-                        if signals_seen.insert(s.signal) {
-                            signals.push(s.signal);
-                        }
-                    }
-                    VSymbol::Parameter(_)
-                    | VSymbol::GenVar
-                    | VSymbol::Task(_)
-                    | VSymbol::Module(_)
-                    | VSymbol::NamedBlock
-                    | VSymbol::Function(_)
-                    | VSymbol::GenerateBlock(_)
-                    | VSymbol::GenerateBlocks => {}
                 }
 
                 dispatch_stack.extend(exprs.iter().map(StackItem::new));
@@ -889,5 +870,30 @@ pub fn get_used_signals<'a>(
         return Err(());
     }
 
-    Ok(signals)
+    Ok(())
+}
+
+pub fn get_used_ident_signals<'a>(
+    arenas: &'a AstArenas,
+    scope: &mut Scope<'a>,
+    diagnostics: &mut Diagnostics,
+    signals: &mut OrderedSet<SignalKey>,
+    ident: impl Into<HIdent>,
+) -> Result<(), ()> {
+    let Ok(symbol_key) = try_resolve_symbol_id(scope.key, scope.table, arenas, ident, diagnostics)
+    else {
+        return Err(());
+    };
+    match &scope.table[symbol_key].content {
+        VSymbol::Net(s) => _ = signals.insert(s.signal),
+        VSymbol::Parameter(_)
+        | VSymbol::GenVar
+        | VSymbol::Task(_)
+        | VSymbol::Module(_)
+        | VSymbol::NamedBlock
+        | VSymbol::Function(_)
+        | VSymbol::GenerateBlock(_)
+        | VSymbol::GenerateBlocks => {}
+    }
+    Ok(())
 }

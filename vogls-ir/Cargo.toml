@@ -6,5 +6,4 @@ edition.workspace = true
 [dependencies]
 vogls-bits.workspace = true
 slotmap.workspace = true
-indexmap.workspace = true
 bytemuck.workspace = true

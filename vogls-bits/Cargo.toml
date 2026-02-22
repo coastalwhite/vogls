@@ -9,7 +9,6 @@ proptest.workspace = true
 [dependencies]
 bytemuck.workspace = true
 rand = { workspace = true, optional = true }
-rand_pcg = { workspace = true, optional = true }
 
 [features]
-random = ["rand", "rand_pcg"]
+random = ["rand"]

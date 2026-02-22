@@ -13,7 +13,6 @@ pub use vogls_bits::{Bits, Mode, VectorSize};
 
 pub use builder::{BasicBlockBuilder, BranchRef, PhiRef, new_anonymous_builder, new_process};
 pub use format::{ContextFormat, DisplayContext};
-use indexmap::IndexSet;
 use slotmap::{SlotMap, new_key_type};
 
 use self::dyn_format_string::DynFormatString;
@@ -565,7 +564,5 @@ pub struct Process {
     pub name: String,
     pub entry: BasicBlockKey,
     pub origin: TokenRange,
-    pub ins: IndexSet<SignalKey>,
-    pub outs: IndexSet<SignalKey>,
     pub lazy: bool,
 }

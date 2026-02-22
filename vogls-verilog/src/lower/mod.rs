@@ -320,6 +320,7 @@ use vogls_ir::{
     BasicBlockBuilder, GlobalContext, SCALAR_VSIZE, Signal, SignalKey, VariableKey, VectorSize,
     new_anonymous_builder, new_process,
 };
+use vogls_utils::OrderedSet;
 
 use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::expr::{BitSlice, Expr};
@@ -331,7 +332,7 @@ use crate::elaborate::{
 use crate::parser::AstArenas;
 
 pub use self::expression::eval_constant_expr;
-use self::expression::{lower_expr, truncate_or_extend};
+use self::expression::{get_used_signals, lower_expr, truncate_or_extend};
 pub use self::vtype::VType;
 pub use self::vvalue::VValue;
 pub use diagnostics::{Diagnostics, LowerErrorReason};
@@ -444,7 +445,9 @@ fn lower_to_signal<'a>(
 
     bb_builder.drive(gl, signal, v);
 
-    bb_builder.watch_for_ins_to(gl, bb_key);
+    let mut signals = OrderedSet::new();
+    expression::get_used_signals(arenas, scope, diagnostics, &mut signals, expr)?;
+    bb_builder.watch_to(gl, signals.items, bb_key);
     Ok(signal)
 }
 
@@ -593,7 +596,10 @@ fn assign_port_output<'a>(
         }
     }
 
-    bb_builder.watch_for_ins_to(gl, bb_key);
+    let mut ins = OrderedSet::new();
+    ins.insert(signal);
+    get_used_signals(arenas, scope, diagnostics, &mut ins, expr)?;
+    bb_builder.watch_to(gl, ins.items, bb_key);
 
     if error {
         return Err(());

@@ -1,5 +1,3 @@
-use indexmap::IndexSet;
-
 use crate::token_range::TokenRange;
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryOp, Bits, GlobalContext, INTEGER_VSIZE,
@@ -29,8 +27,6 @@ pub fn new_process(
         entry: bb_key,
         origin,
         lazy: false,
-        ins: IndexSet::new(),
-        outs: IndexSet::new(),
     });
     BasicBlockBuilder {
         key: bb_key,
@@ -52,8 +48,6 @@ pub fn new_anonymous_builder(
         entry: bb_key,
         origin,
         lazy: false,
-        ins: IndexSet::new(),
-        outs: IndexSet::new(),
     });
     BasicBlockBuilder {
         key: bb_key,
@@ -653,7 +647,6 @@ impl BasicBlockBuilder {
             gl.vars[src].size,
             partial.map_or(gl.signals[signal].size, |(_, w)| w)
         );
-        gl.processes[self.process].outs.insert(signal);
         if let Some((offset, _)) = partial {
             assert_eq!(gl.vars[offset].size, INTEGER_VSIZE);
         }
@@ -661,7 +654,6 @@ impl BasicBlockBuilder {
     }
 
     pub fn probe(&mut self, gl: &mut GlobalContext, signal: SignalKey) -> VariableKey {
-        gl.processes[self.process].ins.insert(signal);
         let size = gl.signals.get(signal).unwrap().size;
         let dst = self.next_tmp_var(gl, size);
         self.instrs.push(Instruction::Probe(dst, signal));
@@ -854,16 +846,6 @@ impl BasicBlockBuilder {
         let slf = gl.bbs.get_mut(self.key).unwrap();
         slf.instrs = std::mem::take(&mut self.instrs);
         slf.terminator = BasicBlockTerminator::Watch(bb, signals);
-    }
-
-    pub fn watch_for_ins_to(self, gl: &mut GlobalContext, bb: BasicBlockKey) {
-        let ins = &gl.processes[self.process].ins;
-        if ins.is_empty() {
-            self.halt(gl);
-        } else {
-            let signals = ins.iter().copied().collect::<Vec<_>>();
-            self.watch_to(gl, signals, bb);
-        }
     }
 
     pub fn intrinsic(

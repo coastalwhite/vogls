@@ -366,30 +366,6 @@ impl Design {
                 }
             }
         }
-        for process in gl.processes.values_mut() {
-            process.ins = process
-                .ins
-                .iter()
-                .map(|s| {
-                    let mut s = *s;
-                    while let Some(ns) = signal_map.get(&s) {
-                        s = *ns;
-                    }
-                    s
-                })
-                .collect();
-            process.outs = process
-                .outs
-                .iter()
-                .map(|s| {
-                    let mut s = *s;
-                    while let Some(ns) = signal_map.get(&s) {
-                        s = *ns;
-                    }
-                    s
-                })
-                .collect();
-        }
         for bb in gl.bbs.values_mut() {
             bb.map_signals(|mut s| {
                 while let Some(ns) = signal_map.get(&s) {

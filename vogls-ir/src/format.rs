@@ -61,31 +61,7 @@ impl Process {
     }
 
     fn process_fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &mut DisplayContext<'_>) -> fmt::Result {
-        write!(f, "process {}(", self.name)?;
-        if let Some(i) = self.ins.first() {
-            ctx.gl.signals.get(*i).unwrap().typed_ctx_fmt(f, ctx)?;
-            for i in self.ins.iter().skip(1) {
-                f.write_str(", ")?;
-                ctx.gl.signals.get(*i).unwrap().typed_ctx_fmt(f, ctx)?;
-            }
-        }
-        write!(f, ")")?;
-        if let Some(i) = self.outs.first() {
-            f.write_str(" -> ")?;
-            if self.outs.len() > 1 {
-                f.write_str("(")?;
-            }
-            ctx.gl.signals.get(*i).unwrap().typed_ctx_fmt(f, ctx)?;
-            for i in self.outs.iter().skip(1) {
-                f.write_str(", ")?;
-                ctx.gl.signals.get(*i).unwrap().typed_ctx_fmt(f, ctx)?;
-            }
-            if self.outs.len() > 1 {
-                f.write_str(")")?;
-            }
-        }
-
-        writeln!(f, " {{")?;
+        writeln!(f, "process {} {{", self.name)?;
 
         let mut bb_stack = std::mem::take(&mut ctx.bb_stack_scratch);
         let mut bb_seen = std::mem::take(&mut ctx.bb_seen_scratch);
@@ -365,19 +341,6 @@ impl ContextFormat for Signal {
     fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, _ctx: &DisplayContext<'_>) -> fmt::Result {
         f.write_str("$")?;
         f.write_str(&self.name)?;
-        Ok(())
-    }
-}
-
-impl Signal {
-    fn typed_ctx_fmt(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        ctx: &mut DisplayContext<'_>,
-    ) -> fmt::Result {
-        write!(f, "{}", self.size)?;
-        f.write_str(" ")?;
-        self.ctx_fmt(f, ctx)?;
         Ok(())
     }
 }

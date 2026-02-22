@@ -1,6 +1,7 @@
 use vogls_ir::{
     Bits, ConnectionDirection, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE, VectorSize, new_process,
 };
+use vogls_utils::OrderedSet;
 
 use crate::ast::module::{
     Dimension, GateInstantiation, GenerateBlock, ListOfPortConnections, ModuleInstance,
@@ -11,7 +12,7 @@ use crate::ast::module::{
 use crate::ast::{AstId, AstIdRange};
 use crate::elaborate::VSymbol;
 use crate::lower::assign::{assign_net_lvalue, net_lvalue_width};
-use crate::lower::expression::{self, lower_expr, truncate_or_extend};
+use crate::lower::expression::{self, get_used_signals, lower_expr, truncate_or_extend};
 use crate::lower::statement::statements_to_process;
 use crate::lower::{
     VType, assign_port_output, eval_constant_expr, evaluate_range, lower_to_signal,
@@ -79,7 +80,9 @@ pub fn lower<'a>(
                                     ty.force_net_width(),
                                 );
                                 bb_builder.drive(gl, net.signal, v);
-                                bb_builder.watch_for_ins_to(gl, bb_key);
+                                let mut ins = OrderedSet::new();
+                                get_used_signals(arenas, scope, diagnostics, &mut ins, *expr)?;
+                                bb_builder.watch_to(gl, ins.items, bb_key);
                             }
                         }
                     }
@@ -139,7 +142,15 @@ pub fn lower<'a>(
                     variable_ty,
                 )?;
 
-                bb_builder.watch_for_ins_to(gl, bb_key);
+                let mut ins = OrderedSet::new();
+                get_used_signals(
+                    arenas,
+                    scope,
+                    diagnostics,
+                    &mut ins,
+                    net_assignment.expression,
+                )?;
+                bb_builder.watch_to(gl, ins.items, bb_key);
             }
         }
         ModuleOrGenerateItemContent::GateInstantiation(id) => {
@@ -166,7 +177,9 @@ pub fn lower<'a>(
                             lower_expr(gl, arenas, scope, diagnostics, &mut bb_builder, value)?;
                         let mut value =
                             truncate_or_extend(gl, &mut bb_builder, value, value_ty, output_size);
+                        let mut ins = OrderedSet::new();
                         for input in input_terminals.iter().skip(1) {
+                            get_used_signals(arenas, scope, diagnostics, &mut ins, input)?;
                             let (input, input_ty) =
                                 lower_expr(gl, arenas, scope, diagnostics, &mut bb_builder, input)?;
                             let input = truncate_or_extend(
@@ -207,7 +220,7 @@ pub fn lower<'a>(
                             VType::UnsignedNet(output_size),
                         )?;
 
-                        bb_builder.watch_for_ins_to(gl, bb_key);
+                        bb_builder.watch_to(gl, ins.items, bb_key);
                     }
                 }
             }

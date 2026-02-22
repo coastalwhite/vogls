@@ -1,6 +1,7 @@
 use vogls_ir::{
     BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, SCALAR_VSIZE, Time, VariableKey,
 };
+use vogls_utils::OrderedSet;
 
 use crate::ast::expr::Expr;
 use crate::ast::statement::{
@@ -80,8 +81,13 @@ pub fn lower<'a>(
                 let start_bb = builder.key();
                 builder = builder.jump(gl);
 
-                let process = builder.process();
-                let start_ins = gl.processes[process].ins.len();
+                let mut ins = OrderedSet::new();
+                match arenas.get(statement) {
+                    StatementOrNull::Attribute(_) => {}
+                    StatementOrNull::Statement(stmt) => {
+                        super::get_used_signals(arenas, scope, diagnostics, &mut ins, *stmt)?
+                    }
+                }
 
                 let statement_start_bb = builder.key();
                 builder = super::lower_statement_or_null(
@@ -97,24 +103,16 @@ pub fn lower<'a>(
                 builder = builder.jump(gl);
                 let watch_bb = builder.key();
                 gl.bbs[start_bb].terminator = BasicBlockTerminator::Jump(watch_bb);
-                let end_ins = gl.processes[process].ins.len();
 
-                let signals = gl.processes[process]
-                    .ins
-                    .iter()
-                    .skip(start_ins)
-                    .take(end_ins - start_ins)
-                    .copied()
-                    .collect::<Vec<_>>();
-
-                let before = signals
+                let before = ins
+                    .items
                     .iter()
                     .map(|s| builder.probe(gl, *s))
                     .collect::<Vec<_>>();
-                builder = builder.watch(gl, signals.clone());
+                builder = builder.watch(gl, ins.items.clone());
 
                 let mut acc = builder.constant(gl, Bits::from(false));
-                for (before, signal) in before.into_iter().zip(signals) {
+                for (before, signal) in before.into_iter().zip(ins.items) {
                     let after = builder.probe(gl, signal);
                     let cond = builder.not_case_equals(gl, before, after);
                     acc = builder.or(gl, acc, cond);
