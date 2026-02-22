@@ -1,18 +1,220 @@
 Verilog
-- [ ] `$monitor`
-- [ ] Allow `function` in constant contexts
 - [ ] Make distinction between `wire` and `reg`
-- [ ] Hierarchical Module Identifiers
+- [ ] Allow module arrays
+- [ ] Implicit declarations
+- [ ] Wire delay
+- [ ] Data Types
+  - [ ] `event`
+  - [ ] `time`
+  - [ ] `realtime`
+  - [ ] `real`
+  - [ ] Net Types
+  - [ ] Strengths
+  - [ ] Remove string type and make compliant with standard
+- [ ] Gate level modeling
+- [ ] `defparam`
+- [ ] `task` and `function`
+  - [ ] `automatic` vs. non-`automatic`
+- [ ] `fork` `join` constructs
+- [ ] procedural continuous assignment
+- [ ] `force` / `release
+- [ ] UDPs
+- [ ] SDF
+- [ ] VCD
+  - [ ] General writing
+  - [ ] dumpvars level selection
+  - [ ] proper tagging of all levels
+- [ ] VPI
+- [ ] Delays
+  - [ ] Select between min-typ-max
+    - [ ] Compile-time randomness
+    - [ ] Runtime randomness
+    - [ ] Static selection
 - [ ] Specify Blocks
-- [ ] Allow for defines at the CLI level
-
-- [ ] Four Value Logic
-  - [ ] Separate instructions into `fv.*`
-  - [ ] Add kernels for `fv.*`.
-  - [ ] Different execution modes
-    - 2 value - initialize to zero / one
-    - 2 value - initialize randomly (with seed)
-    - 4 value
+  - [ ] Spec params
+  - [ ] Pulse style declarations
+  - [ ] Show cancelled declarations
+  - [ ] Path Declaration
+      - [ ] n times m parallel paths
+      - [ ] multi-terminal paths
+      - [x] Simple Path
+      - [x] Edge Path
+      - [ ] State Path
+        - [ ] `ifnone`
+        - [x] `if`
+  - [ ] System timing checks
+- [ ] System Tasks
+  - [ ] Display tasks
+    - [ ] Format specifiers
+      - [x] `%h` / `%H` (`%x` / `%X` also as in Icarus)
+      - [x] `%d` / `%D`
+      - [x] `%o` / `%O`
+      - [x] `%b` / `%B`
+      - [ ] `%c` / `%C`
+      - [ ] `%l` / `%L`
+      - [ ] `%v` / `%V`
+      - [ ] `%m` / `%M`
+      - [ ] `%s` / `%S`
+      - [ ] `%t` / `%T`
+      - [ ] `%u` / `%U`
+      - [ ] `%z` / `%Z`
+      - [ ] `%e` / `%E`
+      - [ ] `%f` / `%F`
+      - [ ] `%g` / `%G`
+    - [ ] Escape sequences
+    - [x] `$display`
+    - [ ] `$displayb`
+    - [ ] `$displayh`
+    - [ ] `$displayo`
+    - [ ] `$strobe`
+    - [ ] `$strobeb`
+    - [ ] `$strobeh`
+    - [ ] `$strobeo`
+    - [ ] `$write`
+    - [ ] `$writeb`
+    - [ ] `$writeh`
+    - [ ] `$writeo`
+    - [ ] `$monitor`
+    - [ ] `$monitorb`
+    - [ ] `$monitorh`
+    - [ ] `$monitoro`
+    - [ ] `$monitoroff`
+    - [ ] `$monitoron`
+  - [ ] File I/O tasks
+    - [ ] `$fclose`
+    - [ ] `$fdisplay`
+    - [ ] `$fdisplayb`
+    - [ ] `$fdisplayh`
+    - [ ] `$fdisplayo`
+    - [ ] `$fstrobe`
+    - [ ] `$fstrobeb`
+    - [ ] `$fstrobeh`
+    - [ ] `$fstrobeo`
+    - [ ] `$swrite`
+    - [ ] `$swriteb`
+    - [ ] `$swriteh`
+    - [ ] `$swriteo`
+    - [ ] `$fscanf`
+    - [ ] `$fread`
+    - [ ] `$fseek`
+    - [ ] `$fflush`
+    - [ ] `$feof`
+    - [ ] `$sdf_annotate`
+    - [ ] `$fopen`
+    - [ ] `$fwrite`
+    - [ ] `$fwriteb`
+    - [ ] `$fwriteh`
+    - [ ] `$fwriteo`
+    - [ ] `$fmonitor`
+    - [ ] `$fmonitorb`
+    - [ ] `$fmonitorh`
+    - [ ] `$fmonitoro`
+    - [ ] `$sformat`
+    - [ ] `$fgetc`
+    - [ ] `$ungetc`
+    - [ ] `$fgets`
+    - [ ] `$sscanf`
+    - [ ] `$rewind`
+    - [ ] `$ftell`
+    - [ ] `$ferror`
+    - [ ] `$readmemb`
+    - [ ] `$readmemh`
+  - [ ] Timescale tasks
+    - [ ] $printtimescale`
+    - [ ] $timeformat`
+  - [ ] Simulation control tasks
+    - [ ] $finish
+    - [ ] $stop
+  - [ ] PLA modeling tasks
+    - [ ] `$async$and$array`
+    - [ ] `$async$nand$array`
+    - [ ] `$async$or$array`
+    - [ ] `$async$and$plane`
+    - [ ] `$async$nand$plane`
+    - [ ] `$async$or$plane`
+    - [ ] `$async$nor$array`
+    - [ ] `$sync$and$array`
+    - [ ] `$sync$nand$array`
+    - [ ] `$sync$or$array`
+    - [ ] `$sync$nor$array`
+    - [ ] `$async$nor$plane`
+    - [ ] `$sync$and$plane`
+    - [ ] `$sync$nand$plane`
+    - [ ] `$sync$or$plane`
+    - [ ] `$sync$nor$plane`
+  - [ ] Stochastic analysis tasks
+    - [ ] `$q_initialize`
+    - [ ] `$q_remove`
+    - [ ] `$q_exam`
+    - [ ] `$q_add`
+    - [ ] `$q_full`
+  - [ ] Simulation time functions
+    - [ ] `$realtime`
+    - [x] `$time`
+    - [ ] `$stime`
+  - [ ] Conversion functions
+    - [ ] `$bitstoreal`
+    - [ ] `$itor`
+    - [x] `$signed`
+    - [ ] `$realtobits`
+    - [ ] `$rtoi`
+    - [x] `$unsigned`
+  - [ ] Probabilistic distribution functions
+    - [ ] `$random` (currently stub implemented)
+    - [ ] `$dist_erlang`
+    - [ ] `$dist_normal`
+    - [ ] `$dist_t`
+    - [ ] `$dist_chi_square`
+    - [ ] `$dist_exponential`
+    - [ ] `$dist_poisson`
+    - [ ] `$dist_uniform`
+  - [ ] Command line input
+    - [ ] `$test$plusargs`
+    - [ ] `$value$plusargs`
+  - [ ] Math functions
+    - [ ] `$clog2`
+    - [ ] `$ln`
+    - [ ] `$log10`
+    - [ ] `$exp`
+    - [ ] `$sqrt`
+    - [ ] `$pow`
+    - [ ] `$floor`
+    - [ ] `$ceil`
+    - [ ] `$sin`
+    - [ ] `$cos`
+    - [ ] `$tan`
+    - [ ] `$asin`
+    - [ ] `$acos`
+    - [ ] `$atan`
+    - [ ] `$atan2`
+    - [ ] `$hypot`
+    - [ ] `$sinh`
+    - [ ] `$cosh`
+    - [ ] `$tanh`
+    - [ ] `$asinh`
+    - [ ] `$acosh`
+    - [ ] `$atanh`
+- [ ] Compiler Directives
+  - [ ] `begin_keywords`
+  - [ ] `celldefine`
+  - [ ] `default_nettype`
+  - [x] `define`
+  - [ ] `define` (with arguments)
+  - [x] `else`
+  - [x] `elsif`
+  - [ ] `end_keywords`
+  - [ ] `endcelldefine`
+  - [x] `endif`
+  - [x] `ifdef`
+  - [x] `ifndef`
+  - [x] `include`
+  - [ ] `line`
+  - [ ] `nounconnected_drive`
+  - [ ] `pragma`
+  - [ ] `resetall`
+  - [ ] `timescale`
+  - [ ] `unconnected_drive`
+  - [x] `undef`
 
 Optimization
 - [ ] IR text format
