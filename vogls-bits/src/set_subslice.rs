@@ -104,7 +104,7 @@ pub fn tv_l_set(
         updated |= old != new;
         i += 1;
 
-        src_rem_size = src_rem_size.saturating_sub(64 - sh_offset);
+        src_rem_size = src_rem_size.saturating_sub(sh_offset);
         while src_rem_size >= 64 {
             let value = (src[i - 1] >> sh_offset) | src[i] << (64 - sh_offset);
             updated |= value != std::mem::replace(&mut dst[i + sh_words], value);

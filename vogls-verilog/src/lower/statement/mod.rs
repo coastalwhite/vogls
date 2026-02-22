@@ -458,12 +458,24 @@ pub fn get_used_signals<'a>(
             get_used_signals_stmt_or_null(arenas, scope, diagnostics, signals, *statement_or_null)?;
         }
         StatementContent::SeqBlock(id) => {
-            let SeqBlock {
-                block: _,
-                statements,
-            } = arenas.get(id);
+            let SeqBlock { block, statements } = arenas.get(id);
+            let scope_key = match block {
+                Some(blk) => try_resolve_symbol_id(
+                    scope.key,
+                    scope.table,
+                    arenas,
+                    arenas.get(*blk).block_identifier,
+                    diagnostics,
+                )?,
+                None => scope.key,
+            };
+            let mut scope = Scope {
+                table: scope.table,
+                key: scope_key,
+                signal_map: scope.signal_map,
+            };
             for s in statements.iter() {
-                get_used_signals(arenas, scope, diagnostics, signals, s)?;
+                get_used_signals(arenas, &mut scope, diagnostics, signals, s)?;
             }
         }
         StatementContent::SystemTaskEnable(id) => {

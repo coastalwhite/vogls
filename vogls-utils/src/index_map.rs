@@ -2,10 +2,12 @@ use std::hash::BuildHasher;
 use std::ops::{Index, IndexMut};
 use std::{fmt, hash};
 
+use crate::NonMaxUsize;
+
 #[derive(Clone)]
 pub struct IndexSet<K> {
     keys: Vec<K>,
-    table: hashbrown::HashTable<usize>,
+    table: hashbrown::HashTable<NonMaxUsize>,
     random_state: foldhash::fast::RandomState,
 }
 
@@ -13,7 +15,7 @@ pub struct IndexSet<K> {
 pub struct IndexMap<K, V> {
     keys: Vec<K>,
     values: Vec<V>,
-    table: hashbrown::HashTable<usize>,
+    table: hashbrown::HashTable<NonMaxUsize>,
     random_state: foldhash::fast::RandomState,
 }
 
@@ -127,15 +129,15 @@ impl<K: Eq + hash::Hash> IndexSet<K> {
         let hash = self.random_state.hash_one(&key);
         match self.table.entry(
             hash,
-            |i| K::eq(&key, unsafe { self.keys.get_unchecked(*i) }),
+            |i| K::eq(&key, unsafe { self.keys.get_unchecked(i.get()) }),
             |i| {
-                let i = unsafe { self.keys.get_unchecked(*i) };
+                let i = unsafe { self.keys.get_unchecked(i.get()) };
                 self.random_state.hash_one(i)
             },
         ) {
-            hashbrown::hash_table::Entry::Occupied(i) => Some(*i.get()),
+            hashbrown::hash_table::Entry::Occupied(i) => Some(i.get().get()),
             hashbrown::hash_table::Entry::Vacant(i) => {
-                i.insert(self.keys.len());
+                i.insert(NonMaxUsize::new(self.keys.len()).unwrap());
                 self.keys.push(key);
                 None
             }
@@ -143,10 +145,10 @@ impl<K: Eq + hash::Hash> IndexSet<K> {
     }
 
     #[inline(always)]
-    fn get_index_ref(&self, key: &K) -> Option<&usize> {
+    fn get_index_ref(&self, key: &K) -> Option<&NonMaxUsize> {
         let hash = self.random_state.hash_one(key);
         self.table.find(hash, |i| {
-            K::eq(&key, unsafe { self.keys.get_unchecked(*i) })
+            K::eq(&key, unsafe { self.keys.get_unchecked(i.get()) })
         })
     }
 
@@ -154,7 +156,7 @@ impl<K: Eq + hash::Hash> IndexSet<K> {
         self.get_index_ref(key).is_some()
     }
     pub fn get_index(&self, key: &K) -> Option<usize> {
-        self.get_index_ref(key).copied()
+        self.get_index_ref(key).map(|i| i.get())
     }
 }
 impl<K: Eq + hash::Hash, V> IndexMap<K, V> {
@@ -162,15 +164,15 @@ impl<K: Eq + hash::Hash, V> IndexMap<K, V> {
         let hash = self.random_state.hash_one(&key);
         match self.table.entry(
             hash,
-            |i| K::eq(&key, unsafe { self.keys.get_unchecked(*i) }),
+            |i| K::eq(&key, unsafe { self.keys.get_unchecked(i.get()) }),
             |i| {
-                let i = unsafe { self.keys.get_unchecked(*i) };
+                let i = unsafe { self.keys.get_unchecked(i.get()) };
                 self.random_state.hash_one(i)
             },
         ) {
-            hashbrown::hash_table::Entry::Occupied(i) => Some(*i.get()),
+            hashbrown::hash_table::Entry::Occupied(i) => Some(i.get().get()),
             hashbrown::hash_table::Entry::Vacant(i) => {
-                i.insert(self.keys.len());
+                i.insert(NonMaxUsize::new(self.keys.len()).unwrap());
                 self.keys.push(key);
                 self.values.push(value);
                 None
@@ -179,10 +181,10 @@ impl<K: Eq + hash::Hash, V> IndexMap<K, V> {
     }
 
     #[inline(always)]
-    fn get_index_ref(&self, key: &K) -> Option<&usize> {
+    fn get_index_ref(&self, key: &K) -> Option<&NonMaxUsize> {
         let hash = self.random_state.hash_one(key);
         self.table.find(hash, |i| {
-            K::eq(&key, unsafe { self.keys.get_unchecked(*i) })
+            K::eq(&key, unsafe { self.keys.get_unchecked(i.get()) })
         })
     }
 
@@ -190,7 +192,7 @@ impl<K: Eq + hash::Hash, V> IndexMap<K, V> {
         self.get_index_ref(key).is_some()
     }
     pub fn get_index(&self, key: &K) -> Option<usize> {
-        self.get_index_ref(key).copied()
+        self.get_index_ref(key).map(|i| i.get())
     }
     pub fn get(&self, key: &K) -> Option<&V> {
         self.get_index(key)
