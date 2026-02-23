@@ -148,7 +148,7 @@ fn append_referenced_modules<'a>(
 }
 
 pub fn run(
-    path: &Path,
+    path: &[&Path],
     top_level_module: Option<&str>,
     ectx: &mut ExecutionContext,
 ) -> Result<(), Box<dyn std::error::Error>> {

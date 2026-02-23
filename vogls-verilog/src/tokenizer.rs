@@ -9,6 +9,7 @@ use crate::number::{
 use crate::span::Span;
 
 pub type FileIdx = u32;
+#[derive(Default)]
 pub struct Tokenized {
     pub tokens: Vec<Token>,
     pub spans: Vec<Span>,
@@ -34,13 +35,32 @@ impl Tokenized {
         path: Option<Rc<Path>>,
         macros: &mut HashMap<String, Macro>,
     ) -> Self {
-        use Token as T;
+        let mut ts = Self {
+            tokens: Vec::new(),
+            spans: Vec::new(),
+            file_idxs: Vec::new(),
+            paths: Vec::new(),
+            contents: Vec::new(),
+        };
+        ts.append_tokenize_with_macros(content, path, macros);
+        ts
+    }
 
-        let mut tokens = Vec::new();
-        let mut offsets = Vec::new();
-        let mut file_idxs = Vec::new();
-        let mut paths = Vec::new();
-        let mut contents = Vec::new();
+    pub fn append_tokenize_with_macros(
+        &mut self,
+        content: Rc<str>,
+        path: Option<Rc<Path>>,
+        macros: &mut HashMap<String, Macro>,
+    ) {
+        let Self {
+            tokens,
+            spans,
+            file_idxs,
+            contents,
+            paths,
+        } = self;
+
+        use Token as T;
 
         // @Performance: bit-field
         #[derive(Clone, Copy)]
@@ -75,7 +95,7 @@ impl Tokenized {
 
         let mut lex_stack = Vec::new();
         lex_stack.push(LexItem {
-            file_idx: 0,
+            file_idx: paths.len() as u32,
             start: 0,
             i: 0,
             end_offset: content.len(),
@@ -672,7 +692,7 @@ impl Tokenized {
                                     }
 
                                     tokens.extend_from_slice(&m.tokens);
-                                    offsets.extend_from_slice(&m.spans);
+                                    spans.extend_from_slice(&m.spans);
                                     file_idxs.extend_from_slice(&m.file);
                                 }
                                 continue;
@@ -686,7 +706,7 @@ impl Tokenized {
 
                 if if_untaken_depth >= if_stack.len() {
                     tokens.push(token);
-                    offsets.push(Span::new(i, i + length));
+                    spans.push(Span::new(i, i + length));
                     file_idxs.push(file_idx);
                 }
                 i += length;
@@ -697,19 +717,11 @@ impl Tokenized {
                     preprocessor_macro.name,
                     Macro {
                         tokens: tokens.drain(start..).collect(),
-                        spans: offsets.drain(start..).collect(),
+                        spans: spans.drain(start..).collect(),
                         file: file_idxs.drain(start..).collect(),
                     },
                 );
             }
-        }
-
-        Self {
-            tokens,
-            spans: offsets,
-            file_idxs,
-            contents,
-            paths,
         }
     }
 }

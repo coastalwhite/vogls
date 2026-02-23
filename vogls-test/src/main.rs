@@ -171,7 +171,11 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             let ctx = std::panic::AssertUnwindSafe(&mut ctx);
             let result = std::panic::catch_unwind(|| {
                 let ctx = ctx;
-                vogls::run(&path, test_information.top_level_module.as_deref(), ctx.0)
+                vogls::run(
+                    &[&path],
+                    test_information.top_level_module.as_deref(),
+                    ctx.0,
+                )
             });
 
             let stdout = stdout.0.lock().unwrap();

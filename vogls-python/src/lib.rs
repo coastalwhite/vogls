@@ -75,9 +75,12 @@ mod vogls {
                 vcd: None,
             };
 
-            let inner =
-                vogls::design::Design::new(path.as_path(), top_level_module.as_deref(), &mut ectx)
-                    .map_err(|e| PyException::new_err(e.to_string()))?;
+            let inner = vogls::design::Design::new(
+                &[path.as_path()],
+                top_level_module.as_deref(),
+                &mut ectx,
+            )
+            .map_err(|e| PyException::new_err(e.to_string()))?;
             let snapshot = Snapshot {
                 inner: Arc::new(Mutex::new(inner.initial_state.clone())),
             };

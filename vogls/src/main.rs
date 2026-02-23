@@ -7,7 +7,7 @@ use vogls_ir::LogicMode;
 #[derive(clap::Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
-    path: PathBuf,
+    path: Vec<PathBuf>,
 
     #[arg(short = 'm', long = "top-level-module")]
     top_level_module: Option<String>,
@@ -55,9 +55,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         LogicMode::TwoValue
     };
 
-    let path = Path::new(&args.path);
+    let paths: Vec<&Path> = args.path.iter().map(|p| p.as_path()).collect();
     vogls::run(
-        &path,
+        &paths,
         args.top_level_module.as_deref(),
         &mut ExecutionContext {
             stdout: Box::new(std::io::stdout()),

@@ -34,17 +34,20 @@ pub struct Design {
 
 impl Design {
     pub fn new(
-        path: &Path,
+        paths: &[&Path],
         top_level_module: Option<&str>,
         ectx: &mut ExecutionContext,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let content: Rc<str> = std::fs::read_to_string(&path)?.into();
+        let mut token_buffer = Tokenized::default();
         let mut macros = HashMap::new();
         for define in &ectx.defines {
             macros.insert(define.clone(), Macro::default());
         }
-        let token_buffer =
-            Tokenized::tokenize_with_macros(content.clone(), Some(path.into()), &mut macros);
+        for path in paths {
+            let content: Rc<str> = std::fs::read_to_string(&path)?.into();
+            token_buffer.append_tokenize_with_macros(content, Some((*path).into()), &mut macros);
+        }
+
         let mut tkw = TokenWalker::new(&token_buffer);
         let mut diagnostics = ParserDiagnostics::default();
 
