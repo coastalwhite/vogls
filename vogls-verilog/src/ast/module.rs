@@ -4,7 +4,21 @@ use super::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression};
 use super::expr::Expr;
 use super::specify::SpecifyBlock;
 use super::statement::{NetLValue, Statement, StatementOrNull};
+use super::udp::UdpDeclaration;
 use super::{AstId, AstIdRange, AstItem, AttributeInstance, Identifier};
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 487
+// description ::=
+//   module_declaration
+// | udp_declaration
+// | config_declaration
+#[derive(Clone, Copy)]
+pub enum Description {
+    Module(AstId<Module>),
+    Udp(AstId<UdpDeclaration>),
+    // @Incomplete
+    Config,
+}
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 487
 // module_declaration ::=

@@ -10,8 +10,9 @@ use self::expr::Expr;
 pub mod constant_expr;
 pub mod expr;
 pub mod module;
-pub mod statement;
 pub mod specify;
+pub mod statement;
+pub mod udp;
 
 pub struct AstId<T> {
     pub node: ArenaId<T>,
