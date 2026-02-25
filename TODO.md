@@ -18,9 +18,10 @@ Verilog
 - [ ] `fork` `join` constructs
 - [ ] procedural continuous assignment
 - [ ] `force` / `release
-- [ ] UDPs
-- [ ] SDF
-- [ ] VCD
+- [ ] User Defined Primitives (UDPs)
+- [ ] Standard Delay Format (SDF)
+- [ ] Fast Signal Trace (FST)
+- [ ] Value Change Dump (VCD)
   - [ ] General writing
   - [ ] dumpvars level selection
   - [ ] proper tagging of all levels
@@ -221,15 +222,28 @@ Optimization
 - [ ] Benchmarks
 - [ ] Separate VM stackrefs into persistent and non-persistent.
       Take the max of all live non-persistant stackrefs as the size of the
-      non-persistent memory size.
-- IR
-  - [ ] Common Subexpression Elimination
-  - [ ] Constant Propagation
-  - [ ] Branches to lookup tables
-- Flow Graph
-  - [ ] Fuse Always 
-  - [ ] Make signals into vars when only used once
-  - [ ] Inline single watch, single drive processes
+      non-persistent memory size
+  - IR
+    - [ ] Common Subexpression Elimination
+    - [ ] Constant Propagation
+    - [ ] Deadcode elimination
+    - [ ] Branches to lookup tables
+    - [ ] Lookup Table Instruction
+    - [ ] Lookup Table Optimization
+    - [ ] Select Instruction
+    - [ ] Select Inference
+    - [ ] Peephole optimization
+      - [ ] Concat -> Slice / Slice -> Concat
+      - [ ] Multiply to Shift
+    - [ ] Variable length concat
+    - [ ] Loop unrolling
+  - Flow Graph
+    - [ ] Fuse Always 
+    - [ ] Internalize signals into process, when only used there
+    - [ ] Inline single watch, single drive processes
+    - [ ] Simplify CFG
+      - [ ] Remove redundant jumps
+      - [ ] Remove redundant branches
 
 Long Term Goals
 - [ ] Web Playground
