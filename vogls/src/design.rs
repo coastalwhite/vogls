@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use slotmap::{SecondaryMap, SlotMap};
 use vogls_frontend::ident_table::{IdentId, IdentTable};
-use vogls_ir::{Bits, GlobalContext, Signal, SignalKey};
+use vogls_ir::{Bits, GlobalContext, LogicMode, Signal, SignalKey};
 use vogls_sim::{
     Event, HeapBuilder, Regions, Simulation, SimulationIo, SimulationState, VmProcess,
     VmProcessKey, VmSignalKey, lower_process_to_vm,
@@ -42,6 +42,9 @@ impl Design {
         let mut macros = HashMap::new();
         for define in &ectx.defines {
             macros.insert(define.clone(), Macro::default());
+        }
+        if ectx.logic_mode == LogicMode::TwoValue {
+            macros.insert("__VOGLS__TWO_VALUE_LOGIC".to_string(), Macro::default());
         }
         for path in paths {
             let content: Rc<str> = std::fs::read_to_string(&path)?.into();

@@ -574,7 +574,7 @@ impl<'a> Consumable<'a> for UdpEdgeIndicator {
                 let content = &tkw.content(file)[span.as_range()];
 
                 let before = content.as_bytes()[0];
-                let after = content.as_bytes()[0];
+                let after = content.as_bytes()[1];
 
                 let (Some(before), Some(after)) =
                     (byte_to_level_symbol(before), byte_to_level_symbol(after))
@@ -590,7 +590,7 @@ impl<'a> Consumable<'a> for UdpEdgeIndicator {
 
                 let before = AstItem { item: before, loc };
                 let after = AstItem { item: after, loc };
-
+                tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
                 Ok(Self::Levels(before, after))
             } else {
                 let before =
