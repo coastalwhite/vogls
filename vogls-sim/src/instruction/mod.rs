@@ -13,9 +13,9 @@ use crate::{Heap, VcdScope};
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct VmSignalKey(pub u64);
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct HeapOffset(pub usize);
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct HeapRef {
     pub offset: HeapOffset,
     pub size: VectorSize,

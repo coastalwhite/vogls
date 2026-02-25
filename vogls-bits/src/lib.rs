@@ -731,6 +731,10 @@ impl Bits {
             }
         }
     }
+
+    pub fn eq_zero(&self) -> bool {
+        self.reduce_or() == FvLogicValue::L0
+    }
     pub fn not_eq_zero(&self) -> bool {
         self.reduce_or() == FvLogicValue::L1
     }

@@ -16,7 +16,7 @@ mod heap;
 mod instruction;
 mod plugin;
 
-pub use plugin::Plugin;
+pub use plugin::{InstructionPlugin, Plugin};
 
 pub use heap::Heap;
 pub use instruction::*;
@@ -497,6 +497,7 @@ impl Simulation {
             watches,
             vcd: None,
             plugins: Vec::new(),
+            iplugins: Vec::new(),
             heap,
             time: 0,
             instruction_count: 0,
@@ -588,6 +589,12 @@ impl Simulation {
 
         loop {
             let instr = &process.instructions[*ip];
+
+            let mut iplugins = std::mem::take(&mut state.iplugins);
+            for p in iplugins.iter_mut() {
+                p.as_mut().instruction(self, state, instr);
+            }
+            state.iplugins = iplugins;
 
             *ip += 1;
             state.instruction_count += 1;
@@ -928,6 +935,7 @@ pub struct SimulationState {
     pub watches: Vec<Vec<ListenerKey>>,
     pub vcd: Option<VcdOutput>,
     pub plugins: Vec<plugin::PluginState>,
+    pub iplugins: Vec<plugin::InstructionPluginState>,
 
     pub heap: Heap,
     pub time: Timestamp,
@@ -946,6 +954,7 @@ impl Clone for SimulationState {
             watches: self.watches.clone(),
             vcd: None,
             plugins: vec![],
+            iplugins: vec![],
 
             heap: self.heap.clone(),
             time: self.time.clone(),
