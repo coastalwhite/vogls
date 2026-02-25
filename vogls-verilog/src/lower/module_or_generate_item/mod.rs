@@ -9,11 +9,13 @@ use crate::ast::module::{
     ModuleOrGenerateItemDeclaration, NInputGateInstance, NInputGateType, NamedPortConnection,
     NetDeclAssignment, NetDeclarationNets, VariableType, VariableTypeVariant,
 };
+use crate::ast::udp::{UdpInstance, UdpInstantiation};
 use crate::ast::{AstId, AstIdRange};
 use crate::elaborate::VSymbol;
 use crate::lower::assign::{assign_net_lvalue, net_lvalue_width};
 use crate::lower::expression::{self, get_used_signals, lower_expr, truncate_or_extend};
 use crate::lower::statement::statements_to_process;
+use crate::lower::udp::lower_udp;
 use crate::lower::{
     VType, assign_port_output, eval_constant_expr, evaluate_range, lower_to_signal,
     resolve_symbol_id, try_resolve_net, unwrap_get_module, unwrap_get_net, unwrap_get_net_mut,
@@ -225,7 +227,35 @@ pub fn lower<'a>(
                 }
             }
         }
-        ModuleOrGenerateItemContent::UdpInstantiation => todo!(),
+        ModuleOrGenerateItemContent::UdpInstantiation(id) => {
+            let UdpInstantiation {
+                identifier,
+                instances,
+            } = arenas.get(id);
+
+            let Some(udp) = scope.udps.get(&identifier.item.0) else {
+                diagnostics.udp_not_found(arenas, *identifier);
+                return Err(());
+            };
+
+            for instance in instances.iter() {
+                let UdpInstance {
+                    name: _,
+                    output_terminal,
+                    input_terminals,
+                } = arenas.get(instance);
+
+                lower_udp(
+                    gl,
+                    arenas,
+                    scope,
+                    diagnostics,
+                    *udp,
+                    *output_terminal,
+                    *input_terminals,
+                )?;
+            }
+        }
         ModuleOrGenerateItemContent::ModuleInstantiation(id) => {
             let ModuleInstantiation {
                 module_instances, ..

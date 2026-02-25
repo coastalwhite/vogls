@@ -4,7 +4,7 @@ use super::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression};
 use super::expr::Expr;
 use super::specify::SpecifyBlock;
 use super::statement::{NetLValue, Statement, StatementOrNull};
-use super::udp::UdpDeclaration;
+use super::udp::{UdpDeclaration, UdpInstantiation};
 use super::{AstId, AstIdRange, AstItem, AttributeInstance, Identifier};
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 487
@@ -185,7 +185,7 @@ pub enum ModuleOrGenerateItemContent {
     ParameterOverride,
     ContinuousAssign(AstId<ContinousAssign>),
     GateInstantiation(AstId<GateInstantiation>),
-    UdpInstantiation,
+    UdpInstantiation(AstId<UdpInstantiation>),
     ModuleInstantiation(AstId<ModuleInstantiation>),
     InitialConstruct(AstId<InitialConstruct>),
     AlwaysConstruct(AstId<AlwaysConstruct>),
@@ -218,6 +218,9 @@ pub enum GateInstantiation {
     // Pulldown(PulldownGateInstantiation),
     // Pullup(PullupGateInstantiation),
 }
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
+// udp_instantiation ::= udp_identifier [ drive_strength ] [ delay2 ] udp_instance { , udp_instance } ;
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 493
 // n_input_gatetype [drive_strength] [delay2] n_input_gate_instance { , n_input_gate_instance }
@@ -635,7 +638,11 @@ pub enum TaskPortItemContent {
 // task_port_type ::= integer | real | realtime | time
 #[derive(Clone, Copy)]
 pub enum TfType {
-    Net { reg: bool, signed: bool, range: Option<AstId<Range>> },
+    Net {
+        reg: bool,
+        signed: bool,
+        range: Option<AstId<Range>>,
+    },
     Integer,
     Real,
     Realtime,
@@ -654,7 +661,11 @@ pub enum TfType {
 // | { attribute_instance } parameter_declaration ;
 #[derive(Clone, Copy)]
 pub enum BlockItemDeclaration {
-    Reg { signed: bool, range: Option<AstId<Range>>, identifiers: AstIdRange<VariableType> },
+    Reg {
+        signed: bool,
+        range: Option<AstId<Range>>,
+        identifiers: AstIdRange<VariableType>,
+    },
     Integer(AstIdRange<VariableType>),
     // @Incomplete
     Time,
@@ -664,7 +675,6 @@ pub enum BlockItemDeclaration {
     LocalParameterDeclaration(AstId<LocalParameterDeclaration>),
     ParameterDeclaration(AstId<ParameterDeclaration>),
 }
-
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
 // non_port_module_item ::=

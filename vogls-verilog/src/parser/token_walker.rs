@@ -10,7 +10,7 @@ use super::{Diagnostics, ParseErrorReason};
 
 #[derive(Clone)]
 pub struct TokenWalker<'a> {
-    tokens: &'a [Token],
+    pub tokens: &'a [Token],
     spans: &'a [Span],
     file_idxs: &'a [FileIdx],
 
@@ -38,6 +38,11 @@ impl<'a> TokenWalker<'a> {
             paths: &buffer.paths,
             offset: 0,
         }
+    }
+
+    pub fn token_content(&self, token_idx: usize) -> Option<&str> {
+        self.get(token_idx)
+            .map(|t| &self.content(*t.file)[t.span.as_range()])
     }
 
     pub fn content(&self, file: FileIdx) -> &str {

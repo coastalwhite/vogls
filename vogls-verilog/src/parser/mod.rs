@@ -1,8 +1,10 @@
-use vogls_frontend::ident_table::IdentTable;
+use vogls_frontend::ident_table::{IdentId, IdentTable};
+use vogls_utils::VgHashSet;
 
 use crate::arena::Arena;
 use crate::ast::constant_expr::ConstantExpr;
-use crate::ast::module::Module;
+use crate::ast::module::{Description, Module};
+use crate::ast::udp::UdpDeclaration;
 use crate::ast::{
     AstId, AstIdRange, AstItem, AttrSpec, AttributeInstance, DecimalRef, HIdent, HIdentComponent,
     Identifier, SizedNumber, SizedNumberRef, StringRef, TextRef,
@@ -25,12 +27,14 @@ mod expr;
 mod module;
 mod statement;
 mod token_walker;
+mod udp;
 mod utils;
 
 #[derive(Default)]
 pub struct ParserScratches {
     /// A `scratchpad` to parse expressions
     exprs_sp: Vec<(expr::StackItem, expr::BindingPower, TokenRange)>,
+    udps: VgHashSet<IdentId>,
 }
 
 #[derive(Default)]
@@ -83,6 +87,9 @@ impl AstArenas {
     pub fn get<T: Copy + 'static>(&self, id: AstId<T>) -> &T {
         self.nodes.get(id.node)
     }
+    pub fn get_mut<T: Copy + 'static>(&mut self, id: AstId<T>) -> &mut T {
+        self.nodes.get_mut(id.node)
+    }
 
     pub fn get_item_span<T: Copy>(&self, id: AstItem<T>) -> TokenRange {
         self.spans[id.loc]
@@ -101,7 +108,7 @@ impl AstArenas {
 }
 
 pub struct Ast {
-    pub modules: AstIdRange<Module>,
+    pub descriptions: AstIdRange<Description>,
     pub arenas: AstArenas,
 }
 
@@ -167,24 +174,88 @@ pub fn parse_file(
 
     let mut arenas = AstArenas::default();
 
-    let mut modules = Vec::new();
+    // @NOTE 
+    // UDPs instantiations use the exact same syntax as module instantiations. In many cases, the
+    // only differentiating item is the name. We, therefore, make an overview of all the UDPs
+    // defined and use that to differentiate between them.
+    scratches.udps.clear();
+    for (i, t) in tkw.tokens.iter().enumerate() {
+        if *t == T::KeywordPrimitive {
+            tkw.offset = i + 1;
+            if let Ok(ident) = Identifier::consume(tkw, scratches, &mut arenas, None) {
+                scratches.udps.insert(ident.0);
+            }
+        }
+    }
+    tkw.offset = 0;
+
+    let mut descriptions = Vec::new();
     let mut trs = Vec::new();
 
-    while let Some(t) = tkw.get(tkw.offset) {
+    loop {
+        let attr_instances = utils::parse_zero_or_more_while_next::<AttributeInstance>(
+            tkw,
+            scratches,
+            &mut arenas,
+            diagnostics.as_deref_mut(),
+            |t| t == T::LeftParenStar,
+        )?;
+
+        let Some(t) = tkw.get(tkw.offset) else {
+            break;
+        };
+
         match *t.kind {
-            T::KeywordModule | T::LeftParenStar => {
+            T::KeywordModule => {
                 let start = tkw.offset;
-                let mut module =
-                    Module::consume(tkw, scratches, &mut arenas, diagnostics.as_deref_mut())?;
-                module.default_nettype = ctx.default_nettype;
+                let module =
+                    parse::<Module>(tkw, scratches, &mut arenas, diagnostics.as_deref_mut())?;
+                {
+                    let module = arenas.get_mut(module);
+                    module.attribute_instances = attr_instances;
+                    module.default_nettype = ctx.default_nettype;
+                }
+
                 let token_range = TokenRange {
                     start,
                     end: tkw.offset,
                 };
-                modules.push(module);
+                descriptions.push(Description::Module(module));
                 trs.push(token_range);
             }
+            T::KeywordPrimitive => {
+                let start = tkw.offset;
+                let primitive = parse::<UdpDeclaration>(
+                    tkw,
+                    scratches,
+                    &mut arenas,
+                    diagnostics.as_deref_mut(),
+                )?;
+                {
+                    let primitive = arenas.get_mut(primitive);
+                    primitive.attribute_instances = attr_instances;
+                }
+                let token_range = TokenRange {
+                    start,
+                    end: tkw.offset,
+                };
+                descriptions.push(Description::Udp(primitive));
+                trs.push(token_range);
+            }
+            T::KeywordConfig => {
+                diagnostics.map(|d| d.incomplete(tkw.offset, "description::config"));
+                return Err(());
+            }
             T::Directive => {
+                if !attr_instances.is_empty() {
+                    // @Note: This is not entirely correct although, this is not really a limitation
+                    // you should generally run into.
+                    if let Some(diagnostics) = diagnostics {
+                        diagnostics.unexpected_token(tkw.offset, T::Directive);
+                        return Err(());
+                    }
+                }
+
                 let (span, file) = (*t.span, *t.file);
                 let content = &tkw.content(file)[span.as_range()];
                 let directive = &content[1..content.len()];
@@ -233,9 +304,12 @@ pub fn parse_file(
         }
     }
 
-    let modules = arenas.add_range(modules, trs);
+    let descriptions = arenas.add_range(descriptions, trs);
 
-    Ok(Ast { modules, arenas })
+    Ok(Ast {
+        descriptions,
+        arenas,
+    })
 }
 
 pub trait Consumable<'a>: Sized + Copy + 'static {

@@ -1,4 +1,5 @@
 use vogls_ir::token_range::TokenRange;
+use vogls_utils::VgHashSet;
 
 use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::expr::{BinaryOperator, BitSlice, Expr, Replication, UnaryOperator};
@@ -118,6 +119,7 @@ impl<'a> Consumable<'a> for Expr {
                             tkw,
                             // We cannot reuse the exprs_sp
                             &mut ParserScratches {
+                                udps: VgHashSet::default(),
                                 exprs_sp: Vec::new(),
                             },
                             arenas,

@@ -164,6 +164,7 @@ pub fn statements_to_process<'a>(
                 let mut scope = Scope {
                     table: scope.table,
                     key: scope_key,
+                    udps: scope.udps,
                     signal_map: scope.signal_map,
                 };
 
@@ -472,6 +473,7 @@ pub fn get_used_signals<'a>(
             let mut scope = Scope {
                 table: scope.table,
                 key: scope_key,
+                udps: scope.udps,
                 signal_map: scope.signal_map,
             };
             for s in statements.iter() {

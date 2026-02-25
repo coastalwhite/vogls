@@ -1029,8 +1029,8 @@ fn extend_module_or_generate_item_sids<'a>(
         }
         ModuleOrGenerateItemContent::ParameterOverride => todo!(),
         ModuleOrGenerateItemContent::ContinuousAssign(_)
-        | ModuleOrGenerateItemContent::GateInstantiation(_) => Ok(()),
-        ModuleOrGenerateItemContent::UdpInstantiation => todo!(),
+        | ModuleOrGenerateItemContent::GateInstantiation(_)
+        | ModuleOrGenerateItemContent::UdpInstantiation(_) => Ok(()),
         ModuleOrGenerateItemContent::ModuleInstantiation(id) => {
             let ModuleInstantiation {
                 module_identifier,
@@ -1773,6 +1773,7 @@ pub fn finalize_symbol<'a>(
                 &mut crate::lower::Scope {
                     table: table,
                     key: sid,
+                    udps: &VgHashMap::default(),
                     signal_map: &mut std::collections::HashMap::new(),
                 },
                 *id,

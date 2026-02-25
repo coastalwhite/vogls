@@ -85,7 +85,7 @@ pub fn parse_one_or_more_while<'a, T: Consumable<'a>>(
     sc: &mut ParserScratches,
     arenas: &mut AstArenas,
     mut diagnostics: Option<&mut Diagnostics>,
-    condition: impl Fn(&mut TokenWalker<'a>) -> bool,
+    mut condition: impl FnMut(&mut TokenWalker<'a>) -> bool,
 ) -> Result<AstIdRange<T>, ()> {
     let start = tkw.offset;
     let item = T::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;

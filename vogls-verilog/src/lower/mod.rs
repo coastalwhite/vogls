@@ -4,6 +4,7 @@ pub mod expression;
 pub mod module_or_generate_item;
 pub mod specify;
 mod statement;
+pub mod udp;
 mod vtype;
 mod vvalue;
 
@@ -19,6 +20,7 @@ pub enum Region {
 pub struct Scope<'a> {
     pub table: &'a mut VSymbolTable,
     pub key: SymbolId,
+    pub udps: &'a VgHashMap<IdentId, AstId<UdpDeclaration>>,
     pub signal_map: &'a mut HashMap<SignalKey, SignalKey>,
 }
 
@@ -320,11 +322,12 @@ use vogls_ir::{
     BasicBlockBuilder, GlobalContext, SCALAR_VSIZE, Signal, SignalKey, VariableKey, VectorSize,
     new_anonymous_builder, new_process,
 };
-use vogls_utils::OrderedSet;
+use vogls_utils::{OrderedSet, VgHashMap};
 
 use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::expr::{BitSlice, Expr};
 use crate::ast::module::{GenerateRegion, Module, ModuleItem, NonPortModuleItem, Range};
+use crate::ast::udp::UdpDeclaration;
 use crate::ast::{AstId, AstItem, HIdent, Identifier};
 use crate::elaborate::{
     FunctionSymbol, ModuleSymbol, NetSymbol, TaskSymbol, VSymbol, VSymbolTable,
@@ -367,6 +370,7 @@ pub fn lower_module_to_ir<'a>(
                 let mut scope = Scope {
                     table: &mut scope.table,
                     key: scope_key,
+                    udps: scope.udps,
                     signal_map: scope.signal_map,
                 };
                 module_or_generate_item::lower(gl, arenas, &mut scope, id, diagnostics)?;

@@ -19,11 +19,12 @@ use crate::ast::module::{
     TfType, VariableType, VariableTypeVariant,
 };
 use crate::ast::specify::{
-    EdgeIdentifier, ModulePathExpr, PathDeclaration, PathDelayValue, PolarityOperator,
-    PathDeclarationVariant, SpecifyBlock, SpecifyBlockItem, StateDependentCondition,
-    SystemTimingCheck, TerminalDescriptor,
+    EdgeIdentifier, ModulePathExpr, PathDeclaration, PathDeclarationVariant, PathDelayValue,
+    PolarityOperator, SpecifyBlock, SpecifyBlockItem, StateDependentCondition, SystemTimingCheck,
+    TerminalDescriptor,
 };
 use crate::ast::statement::{NetLValue, Statement, StatementOrNull, SystemTaskIdentifier};
+use crate::ast::udp::UdpInstantiation;
 use crate::ast::{AttributeInstance, Identifier};
 use crate::parser::TokenRange;
 use crate::tokenizer::Token;
@@ -1031,9 +1032,19 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItemContent {
                 Ok(Self::ContinuousAssign(continous_assign))
             }
             T::Ident => {
-                let module_instance =
-                    parse::<ModuleInstantiation>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
-                Ok(Self::ModuleInstantiation(module_instance))
+                let start = tkw.offset;
+                let ident = Identifier::consume(tkw, sc, arenas, None);
+                tkw.offset = start;
+
+                if ident.is_ok_and(|ident| sc.udps.contains(&ident.0)) {
+                    let udp_instance =
+                        parse::<UdpInstantiation>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                    Ok(Self::UdpInstantiation(udp_instance))
+                } else {
+                    let module_instance =
+                        parse::<ModuleInstantiation>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                    Ok(Self::ModuleInstantiation(module_instance))
+                }
             }
             T::KeywordAnd
             | T::KeywordNand

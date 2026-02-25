@@ -114,7 +114,7 @@ fn append_referenced_modules<'a>(
         ModuleOrGenerateItemContent::ParameterOverride => {}
         ModuleOrGenerateItemContent::ContinuousAssign(_) => {}
         ModuleOrGenerateItemContent::GateInstantiation(_) => {}
-        ModuleOrGenerateItemContent::UdpInstantiation => {}
+        ModuleOrGenerateItemContent::UdpInstantiation(_) => {}
         ModuleOrGenerateItemContent::InitialConstruct(_) => {}
         ModuleOrGenerateItemContent::AlwaysConstruct(_) => {}
         ModuleOrGenerateItemContent::LoopGenerateConstruct(loop_generate_construct) => {

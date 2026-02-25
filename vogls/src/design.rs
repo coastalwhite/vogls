@@ -11,7 +11,7 @@ use vogls_sim::{
 };
 use vogls_utils::VgHashMap;
 use vogls_verilog::ast::AstId;
-use vogls_verilog::ast::module::{Module, ModuleItem, NonPortModuleItem};
+use vogls_verilog::ast::module::{Description, Module, ModuleItem, NonPortModuleItem};
 use vogls_verilog::elaborate::{VSymbol, VSymbolTable};
 use vogls_verilog::lower::{Diagnostics as LowerDiagnostics, Scope, lower_module_to_ir};
 use vogls_verilog::parser::{
@@ -70,23 +70,25 @@ impl Design {
         let mut gl = GlobalContext::default();
         gl.logic_mode = ectx.logic_mode;
 
-        let module_lut = HashMap::<IdentId, usize>::from_iter(ast.modules.iter().enumerate().map(
-            |(i, module_id)| {
-                let module = ast.arenas.get(module_id);
-                (module.module_identifier.item.0, i)
-            },
-        ));
-        let module_ast_lut = VgHashMap::<IdentId, AstId<Module>>::from_iter(
-            ast.modules
-                .iter()
-                .map(|id| (ast.arenas.get(id).module_identifier.item.0, id)),
-        );
+        let module_lut =
+            VgHashMap::<IdentId, AstId<Module>>::from_iter(ast.descriptions.iter().filter_map(
+                |id| match ast.arenas.get(id) {
+                    Description::Module(id) => {
+                        Some((ast.arenas.get(*id).module_identifier.item.0, *id))
+                    }
+                    Description::Udp(_) | Description::Config => None,
+                },
+            ));
 
         let tl_module_name = match top_level_module {
             Some(v) => ast.arenas.ident_table.get_or_insert(v),
             None => {
                 let mut referenced = HashSet::new();
-                for module_id in ast.modules {
+                for id in ast.descriptions {
+                    let Description::Module(module_id) = *ast.arenas.get(id) else {
+                        continue;
+                    };
+
                     let Module {
                         attribute_instances: _,
                         module_identifier: _,
@@ -109,7 +111,10 @@ impl Design {
                 }
 
                 let mut top_level_modules = Vec::new();
-                for module_id in ast.modules {
+                for id in ast.descriptions {
+                    let Description::Module(module_id) = *ast.arenas.get(id) else {
+                        continue;
+                    };
                     let Module {
                         attribute_instances: _,
                         module_identifier,
@@ -163,8 +168,8 @@ impl Design {
         let result = vogls_verilog::elaborate::next::elaborate(
             &mut gl,
             &ast.arenas,
-            ast.modules.get(*tl_module),
-            &module_ast_lut,
+            *tl_module,
+            &module_lut,
             &mut diagnostics,
         );
 
@@ -230,6 +235,18 @@ impl Design {
             }
         }
 
+        let mut udps = VgHashMap::default();
+        for description in ast.descriptions.iter() {
+            let Description::Udp(udp_id) = ast.arenas.get(description) else {
+                continue;
+            };
+
+            let udp_id = *udp_id;
+            let ident = ast.arenas.get(udp_id).identifier.item.0;
+
+            udps.insert(ident, udp_id);
+        }
+
         let mut error = false;
         let mut signal_map = HashMap::new();
         let mut outs_lut = VgHashMap::default();
@@ -239,7 +256,7 @@ impl Design {
         for key in elab_table.symbol_id_iter() {
             match &elab_table[key].content {
                 VSymbol::Module(i) if i.contains_specify => {
-                    let module = module_ast_lut[&i.module];
+                    let module = module_lut[&i.module];
                     for item in ast.arenas.get(module).module_items.iter() {
                         let ModuleItem::NonPortModuleItem(id) = ast.arenas.get(item) else {
                             continue;
@@ -255,6 +272,7 @@ impl Design {
                             &mut Scope {
                                 table: &mut elab_table,
                                 key,
+                                udps: &udps,
                                 signal_map: &mut signal_map,
                             },
                             specify_block.items,
@@ -274,6 +292,7 @@ impl Design {
                         &mut Scope {
                             table: &mut elab_table,
                             key,
+                            udps: &udps,
                             signal_map: &mut signal_map,
                         },
                         fn_decl,
@@ -289,6 +308,7 @@ impl Design {
                         &mut Scope {
                             table: &mut elab_table,
                             key,
+                            udps: &udps,
                             signal_map: &mut signal_map,
                         },
                         task_decl,
@@ -322,7 +342,7 @@ impl Design {
             let VSymbol::Module(m) = &elab_table[key].content else {
                 continue;
             };
-            let module_id = ast.modules.get(module_lut[&m.module]);
+            let module_id = module_lut[&m.module];
             let module_key = lower_module_to_ir(
                 &mut gl,
                 &ast.arenas,
@@ -330,6 +350,7 @@ impl Design {
                 &mut vogls_verilog::lower::Scope {
                     table: &mut elab_table,
                     key,
+                    udps: &udps,
                     signal_map: &mut signal_map,
                 },
                 &mut diagnostics,
@@ -597,6 +618,7 @@ impl Design {
             let scope = Scope {
                 table: &mut elab_table,
                 key: tlm,
+                udps: &udps,
                 signal_map: &mut signal_map,
             };
             let scope = scope.vcd_scope(&ast.arenas.ident_table);

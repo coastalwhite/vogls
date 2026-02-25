@@ -13,6 +13,11 @@ pub struct Diagnostics {
 }
 
 impl Diagnostics {
+    pub fn missing_token(&mut self, tr: usize) {
+        self.errors
+            .push((TokenRange::at(tr), ParseErrorReason::MissingToken));
+    }
+
     pub fn incomplete(&mut self, tr: usize, reason: &'static str) {
         self.errors
             .push((TokenRange::at(tr), ParseErrorReason::Incomplete(reason)));

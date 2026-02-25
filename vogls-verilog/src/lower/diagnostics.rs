@@ -16,6 +16,7 @@ pub enum LowerErrorReason {
     OutputExprNotAllowed,
     DuplicateDefinition(IdentId),
     ModuleNotFound(IdentId),
+    UdpNotFound(IdentId),
     NetWidthOverflow,
     ZeroWidthNet,
 }
@@ -96,6 +97,14 @@ impl Diagnostics {
         self.errors.push((
             arenas.get_item_span(ident),
             LowerErrorReason::ModuleNotFound(ident.item.0),
+            Vec::new(),
+        ));
+    }
+
+    pub fn udp_not_found(&mut self, arenas: &AstArenas, ident: AstItem<Identifier>) {
+        self.errors.push((
+            arenas.get_item_span(ident),
+            LowerErrorReason::UdpNotFound(ident.item.0),
             Vec::new(),
         ));
     }
