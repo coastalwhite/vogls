@@ -15,10 +15,10 @@ Verilog
 - [ ] `defparam`
 - [ ] `task` and `function`
   - [ ] `automatic` vs. non-`automatic`
-- [ ] `fork` `join` constructs
+- [x] `fork` `join` constructs
 - [ ] procedural continuous assignment
 - [ ] `force` / `release
-- [ ] User Defined Primitives (UDPs)
+- [x] User Defined Primitives (UDPs)
 - [ ] Standard Delay Format (SDF)
 - [ ] Fast Signal Trace (FST)
 - [ ] Value Change Dump (VCD)
