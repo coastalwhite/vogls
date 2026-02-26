@@ -22,7 +22,7 @@ use crate::ast::module::{
     TaskPortItem, TaskPortItemContent, TfType, VariableType, VariableTypeVariant,
 };
 use crate::ast::statement::{
-    Block, ConditionalStatement, SeqBlock, Statement, StatementContent, StatementOrNull,
+    Block, ConditionalStatement, ParBlock, SeqBlock, Statement, StatementContent, StatementOrNull,
 };
 use crate::ast::{AstId, AstIdRange, AstItem, Identifier};
 use crate::elaborate::{FunctionSymbol, TaskSymbol};
@@ -1139,41 +1139,29 @@ fn extend_statements_sids<'a>(
             match arenas.get(stmt).content {
                 StatementContent::SeqBlock(id) => {
                     let SeqBlock { block, statements } = arenas.get(id);
-
-                    let mut scope = scope;
-                    if let Some(block) = block {
-                        let Block {
-                            block_identifier,
-                            block_item_decls,
-                        } = arenas.get(*block);
-
-                        let Ok(named_block_scope) = try_table_insert(
-                            arenas,
-                            table,
-                            scope,
-                            *block_identifier,
-                            VSymbol::NamedBlock,
-                            diagnostics,
-                        ) else {
-                            error = true;
-                            continue;
-                        };
-                        scope = named_block_scope;
-
-                        for block_item_decl in block_item_decls.iter() {
-                            error |= extend_block_item_decl_sid(
-                                arenas,
-                                scope,
-                                table,
-                                st,
-                                block_item_decl,
-                                diagnostics,
-                            )
-                            .is_err();
-                        }
-                    }
-
-                    st.stmt_dispatch_stack.push((scope, *statements));
+                    error |= extend_block_sids(
+                        arenas,
+                        scope,
+                        table,
+                        st,
+                        diagnostics,
+                        *block,
+                        *statements,
+                    )
+                    .is_err();
+                }
+                StatementContent::ParBlock(id) => {
+                    let ParBlock { block, statements } = arenas.get(id);
+                    error |= extend_block_sids(
+                        arenas,
+                        scope,
+                        table,
+                        st,
+                        diagnostics,
+                        *block,
+                        *statements,
+                    )
+                    .is_err();
                 }
 
                 StatementContent::CaseStatement(id) => {
@@ -1210,7 +1198,6 @@ fn extend_statements_sids<'a>(
 
                 StatementContent::DisableStatement
                 | StatementContent::EventTrigger
-                | StatementContent::ParBlock
                 | StatementContent::ProceduralContinuousAssignments
                 | StatementContent::BlockingAssignment(_)
                 | StatementContent::NonBlockingAssignment(_)
@@ -1847,5 +1834,45 @@ pub fn finalize_symbol<'a>(
         }
     }
 
+    Ok(())
+}
+
+fn extend_block_sids<'a>(
+    arenas: &'a AstArenas,
+    scope: SymbolId,
+    table: &mut VSymbolTable,
+    st: &mut ElaborationState,
+    diagnostics: &mut Diagnostics,
+    block: Option<AstId<Block>>,
+    stmts: AstIdRange<Statement>,
+) -> Result<(), ()> {
+    let mut scope = scope;
+    if let Some(block) = block {
+        let Block {
+            block_identifier,
+            block_item_decls,
+        } = arenas.get(block);
+
+        let named_block_scope = try_table_insert(
+            arenas,
+            table,
+            scope,
+            *block_identifier,
+            VSymbol::NamedBlock,
+            diagnostics,
+        )?;
+        scope = named_block_scope;
+
+        let mut error = false;
+        for block_item_decl in block_item_decls.iter() {
+            error |=
+                extend_block_item_decl_sid(arenas, scope, table, st, block_item_decl, diagnostics)
+                    .is_err();
+        }
+        if error {
+            return Err(());
+        }
+    }
+    st.stmt_dispatch_stack.push((scope, stmts));
     Ok(())
 }

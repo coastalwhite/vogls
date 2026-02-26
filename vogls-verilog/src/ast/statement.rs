@@ -38,7 +38,7 @@ pub enum StatementContent {
     EventTrigger,
     LoopStatement(AstId<LoopStatement>),
     NonBlockingAssignment(AstId<NonBlockingAssignment>),
-    ParBlock,
+    ParBlock(AstId<ParBlock>),
     ProceduralContinuousAssignments,
     ProceduralTimingControlStatement(AstId<ProceduralTimingControlStatement>),
     SeqBlock(AstId<SeqBlock>),
@@ -193,6 +193,14 @@ pub struct NonBlockingAssignment {
 pub enum ProceduralTimingControl {
     DelayControl(AstId<DelayControl>),
     EventControl(AstId<EventControl>),
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
+// par_block ::= fork [ : block_identifier { block_item_declaration } ] { statement } join
+#[derive(Clone, Copy)]
+pub struct ParBlock {
+    pub block: Option<AstId<Block>>,
+    pub statements: AstIdRange<Statement>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498

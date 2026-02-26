@@ -1,10 +1,13 @@
-use vogls_ir::{BasicBlockBuilder, BasicBlockTerminator, GlobalContext, SignalKey};
+use vogls_ir::{
+    BasicBlockBuilder, BasicBlockTerminator, GlobalContext, SCALAR_VSIZE, SignalKey, VectorSize,
+    new_process,
+};
 use vogls_utils::OrderedSet;
 
 use crate::ast::statement::{
     BlockingAssignment, CaseItem, CaseItemPattern, CaseStatement, ConditionalStatement,
     DelayControl, DelayOrEventControl, DelayValue, EventControl, EventExpressionPrimary,
-    LoopStatement, LoopStatementVariant, MinTypMaxExpression, NonBlockingAssignment,
+    LoopStatement, LoopStatementVariant, MinTypMaxExpression, NonBlockingAssignment, ParBlock,
     ProceduralTimingControl, ProceduralTimingControlStatement, SeqBlock, Statement,
     StatementContent, StatementOrNull, SystemTaskEnable, TaskEnable, VariableAssignment,
     VariableLValue, VariableLValueFlat, WaitStatement,
@@ -125,7 +128,6 @@ pub fn statements_to_process<'a>(
                     true,
                 )?;
             }
-            S::ParBlock => todo!(),
             S::ProceduralContinuousAssignments => {
                 diagnostics.not_yet_implemented(
                     arenas.get_span(statement),
@@ -176,6 +178,89 @@ pub fn statements_to_process<'a>(
                     builder,
                     *statements,
                 )?;
+            }
+            S::ParBlock(id) => {
+                let ParBlock { block, statements } = arenas.get(id);
+
+                let scope_key = match block {
+                    Some(blk) => try_resolve_symbol_id(
+                        scope.key,
+                        scope.table,
+                        arenas,
+                        arenas.get(*blk).block_identifier,
+                        diagnostics,
+                    )?,
+                    None => scope.key,
+                };
+
+                let mut scope = Scope {
+                    table: scope.table,
+                    key: scope_key,
+                    udps: scope.udps,
+                    signal_map: scope.signal_map,
+                };
+
+                let origin = arenas.get_span(id);
+                let Some(num_processes) =
+                    statements.len().try_into().ok().and_then(VectorSize::new)
+                else {
+                    diagnostics.not_yet_implemented(origin, "overflow num processes");
+                    return Err(());
+                };
+
+                let fork_trigger = gl.signals.insert(vogls_ir::Signal {
+                    name: "::fork_trigger".to_string(),
+                    size: num_processes,
+                    initialize: Some(vogls_ir::Bits::new_zeroed(num_processes)),
+                    origin,
+                });
+
+                for (i, stmt) in statements.iter().enumerate() {
+                    let mut fork_builder = new_process(gl, "fork".to_string(), origin);
+                    let fork_entry_bb = fork_builder.key();
+                    let condition = fork_builder.probe(gl, fork_trigger);
+                    let i = fork_builder.constant_u32(gl, i as u32);
+                    let condition = fork_builder.select_bit(gl, condition, i);
+                    fork_builder = fork_builder.next_terminate_later(gl);
+                    let ret_with_watch_bb = fork_builder.key();
+                    fork_builder = fork_builder.next_terminate_later(gl);
+                    let end_bb = fork_builder.key();
+
+                    gl.bbs[fork_entry_bb].terminator =
+                        BasicBlockTerminator::Branch(condition, end_bb, ret_with_watch_bb);
+                    gl.bbs[ret_with_watch_bb].terminator =
+                        BasicBlockTerminator::Watch(fork_entry_bb, vec![fork_trigger]);
+
+                    fork_builder = statements_to_process(
+                        gl,
+                        arenas,
+                        &mut scope,
+                        diagnostics,
+                        fork_builder,
+                        AstIdRange::single(stmt),
+                    )?;
+                    let l0 = fork_builder.constant(gl, vogls_ir::Bits::from(false));
+                    fork_builder.drive_partial(gl, fork_trigger, l0, i, SCALAR_VSIZE);
+                    fork_builder.jump_to(gl, fork_entry_bb);
+                }
+
+                let l1 = builder.constant(gl, vogls_ir::Bits::new_ones(num_processes));
+                builder.drive(gl, fork_trigger, l1);
+
+                builder = builder.jump(gl);
+
+                let start_bb = builder.key();
+                let condition = builder.probe(gl, fork_trigger);
+                let condition = builder.reduce_or(gl, condition);
+                builder = builder.next_terminate_later(gl);
+                let ret_with_watch_bb = builder.key();
+                builder = builder.next_terminate_later(gl);
+                let end_bb = builder.key();
+
+                gl.bbs[start_bb].terminator =
+                    BasicBlockTerminator::Branch(condition, ret_with_watch_bb, end_bb);
+                gl.bbs[ret_with_watch_bb].terminator =
+                    BasicBlockTerminator::Watch(start_bb, vec![fork_trigger]);
             }
             S::SystemTaskEnable(id) => {
                 builder = system_task_enable::lower_system_task_enable(
@@ -436,7 +521,6 @@ pub fn get_used_signals<'a>(
                 .is_err();
         }
 
-        StatementContent::ParBlock => todo!(),
         StatementContent::ProceduralContinuousAssignments => todo!(),
         StatementContent::ProceduralTimingControlStatement(id) => {
             let ProceduralTimingControlStatement {
@@ -480,6 +564,29 @@ pub fn get_used_signals<'a>(
                 get_used_signals(arenas, &mut scope, diagnostics, signals, s)?;
             }
         }
+        StatementContent::ParBlock(id) => {
+            let ParBlock { block, statements } = arenas.get(id);
+            let scope_key = match block {
+                Some(blk) => try_resolve_symbol_id(
+                    scope.key,
+                    scope.table,
+                    arenas,
+                    arenas.get(*blk).block_identifier,
+                    diagnostics,
+                )?,
+                None => scope.key,
+            };
+            let mut scope = Scope {
+                table: scope.table,
+                key: scope_key,
+                udps: scope.udps,
+                signal_map: scope.signal_map,
+            };
+            for s in statements.iter() {
+                get_used_signals(arenas, &mut scope, diagnostics, signals, s)?;
+            }
+        }
+
         StatementContent::SystemTaskEnable(id) => {
             let SystemTaskEnable {
                 system_task_identifier: _,

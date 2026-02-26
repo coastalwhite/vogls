@@ -7,10 +7,10 @@ use crate::ast::statement::{
     Block, BlockingAssignment, CaseItem, CaseItemPattern, CaseStatement, CaseStatementVariant,
     ConditionalStatement, DelayControl, DelayOrEventControl, DelayValue, EventControl,
     EventExpression, EventExpressionPrimary, IfBranch, LoopStatement, LoopStatementVariant,
-    MinTypMaxExpression, NetLValue, NetLValueFlat, NonBlockingAssignment, ProceduralTimingControl,
-    ProceduralTimingControlStatement, SeqBlock, Statement, StatementContent, StatementOrNull,
-    SystemTaskEnable, SystemTaskIdentifier, TaskEnable, VariableAssignment, VariableLValue,
-    VariableLValueFlat, WaitStatement,
+    MinTypMaxExpression, NetLValue, NetLValueFlat, NonBlockingAssignment, ParBlock,
+    ProceduralTimingControl, ProceduralTimingControlStatement, SeqBlock, Statement,
+    StatementContent, StatementOrNull, SystemTaskEnable, SystemTaskIdentifier, TaskEnable,
+    VariableAssignment, VariableLValue, VariableLValueFlat, WaitStatement,
 };
 use crate::ast::{
     AstIdRange, AstItem, AttributeInstance, DecimalRef, HIdent, Identifier, RangeExpression,
@@ -90,6 +90,10 @@ impl<'a> Consumable<'a> for StatementContent {
 
         let peeked = tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?;
         match peeked.kind {
+            T::KeywordFork => {
+                let par_block = parse::<ParBlock>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                Ok(Self::ParBlock(par_block))
+            }
             T::KeywordBegin => {
                 let seq_block = parse::<SeqBlock>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
                 Ok(Self::SeqBlock(seq_block))
@@ -545,6 +549,36 @@ impl<'a> Consumable<'a> for NonBlockingAssignment {
             delay_or_event_control,
             expression,
         })
+    }
+}
+
+impl<'a> Consumable<'a> for ParBlock {
+    fn consume(
+        tkw: &mut TokenWalker<'a>,
+        sc: &mut ParserScratches,
+        arenas: &mut AstArenas,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
+        // par_block ::= fork [ : block_identifier { block_item_declaration } ] { statement } join
+
+        tkw.next_expect(T::KeywordFork, diagnostics.as_deref_mut())?;
+        let mut block = None;
+        if tkw.next_if_equals(T::Colon) {
+            block = Some(parse::<Block>(tkw, sc, arenas, diagnostics.as_deref_mut())?);
+        }
+        let statements = parse_zero_or_more_while_next::<Statement>(
+            tkw,
+            sc,
+            arenas,
+            diagnostics.as_deref_mut(),
+            |t| t != T::KeywordJoin,
+        )?;
+        tkw.next_expect(T::KeywordJoin, diagnostics.as_deref_mut())?;
+
+        Ok(Self { block, statements })
     }
 }
 
