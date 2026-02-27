@@ -50,16 +50,17 @@ pub fn fv_l_sign_extend(dst: &mut [u64], src: &[u64], dst_size: VectorSize, src_
 
 pub fn tv_s_zero_extend(dst: &mut [u8], src: &[u8], _dst_size: VectorSize, _src_size: VectorSize) {
     dst.fill(0);
-    dst.copy_from_slice(src);
+    dst[..src.len()].copy_from_slice(src);
 }
 pub fn tv_s_sign_extend(dst: &mut [u8], src: &[u8], dst_size: VectorSize, src_size: VectorSize) {
-    let sign = (src[(src_size.get() / 8) as usize] >> (src_size.get() % 8)) & 1 != 0;
+    let sign_idx = src_size.get() - 1;
+    let sign = (src[(sign_idx / 8) as usize] >> (sign_idx % 8)) & 1 != 0;
     let mask = u8::from(!sign).wrapping_sub(1);
     dst.fill(mask);
     if dst_size.get() % 8 != 0 {
         *dst.last_mut().unwrap() &= (1u8 << (dst_size.get() % 8)) - 1;
     }
-    dst.copy_from_slice(src);
+    dst[..src.len()].copy_from_slice(src);
     if src_size.get() % 8 != 0 {
         dst[src.len() - 1] |= 0xFFu8 << (src_size.get() % 8);
     }

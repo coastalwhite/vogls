@@ -1,6 +1,6 @@
 use vogls_bits::arithmetic::{
     FvLogicValue, fv_contains_unknown, fv_gtu32_bitwise_inv, fv_l_reduce_and, fv_l_reduce_or,
-    fv_l_reduce_xor, fv_l_select_bit, fv_leu32_bitwise_inv,
+    fv_l_reduce_xor, fv_l_select_bit, fv_leu32_bitwise_inv, fv_pack_u64,
     fv_s_contains_unknown as fv_s_contains_unknown_bool, fv_s_reduce_and, fv_s_reduce_or,
     fv_s_reduce_xor, fv_s_select_bit, fv_unpack_u64,
 };
@@ -26,6 +26,15 @@ pub(crate) fn exec_fv_unary(stack: &mut Heap, dst: HeapOffset, op: UnaryOp, src:
 
     use UnaryOp as O;
     match op {
+        O::Neg if src.size.get() <= 2 => {
+            let b = stack.get_subbit_byte(src.to_fv_size());
+            let (spc, value) = fv_unpack_u64(b as u64, src.size);
+            let (spc, value) = vogls_bits::arithmetic::fv_bitwise_inv_elem(spc, value);
+            stack.set_aligned_raw_bits(
+                dst.to_ref(src.size).to_fv_size(),
+                fv_pack_u64(spc, value, src.size) as u8,
+            );
+        }
         O::Neg if src.size.get() > 16 => {
             let nwords = 2 * src.size.get().div_ceil(64) as usize;
             let (dst_s, src_s) =
@@ -69,6 +78,49 @@ pub(crate) fn exec_fv_unary(stack: &mut Heap, dst: HeapOffset, op: UnaryOp, src:
 pub(crate) fn exec_fv_resize(stack: &mut Heap, dst: HeapRef, op: ResizeOp, src: HeapRef) {
     use ResizeOp as O;
     match op {
+        O::Truncate | O::ZeroExtend | O::SignExtend
+            if dst.size.get() <= 2 && src.size.get() <= 2 =>
+        {
+            let src_s = stack.get_subbit_byte(src.to_fv_size());
+            let mut dst_s = [0];
+            let f = match op {
+                O::Truncate => fv_s_truncate,
+                O::ZeroExtend => fv_s_zero_extend,
+                O::SignExtend => fv_s_sign_extend,
+            };
+            f(&mut dst_s, &[src_s], dst.size, src.size);
+            stack.set_aligned_raw_bits(dst.to_fv_size(), dst_s[0]);
+        }
+        O::Truncate if dst.size.get() <= 2 => {
+            let src_s = stack.get(src.to_fv_size());
+            let src_s = src_s.as_slice();
+            let mut dst_s = [0];
+            fv_s_truncate(&mut dst_s, src_s, dst.size, src.size);
+            stack.set_aligned_raw_bits(dst.to_fv_size(), dst_s[0]);
+        }
+        O::ZeroExtend | O::SignExtend if dst.size.get() > 16 && src.size.get() <= 2 => {
+            let mut src_s = [0, 0];
+            (src_s[0], src_s[1]) =
+                fv_unpack_u64(stack.get_subbit_byte(src.to_fv_size()) as u64, src.size);
+            let dst_s =
+                stack.get_mut_u64_slice(dst.offset, 2 * dst.size.get().div_ceil(64) as usize);
+            let f = match op {
+                O::Truncate => unreachable!(),
+                O::ZeroExtend => fv_l_zero_extend,
+                O::SignExtend => fv_l_sign_extend,
+            };
+            f(dst_s, &src_s, dst.size, src.size);
+        }
+        O::ZeroExtend | O::SignExtend if src.size.get() <= 2 => {
+            let src_s = stack.get_subbit_byte(src.to_fv_size());
+            let dst_s = stack.get_mut(dst.to_fv_size());
+            let f = match op {
+                O::Truncate => unreachable!(),
+                O::ZeroExtend => fv_s_zero_extend,
+                O::SignExtend => fv_s_sign_extend,
+            };
+            f(dst_s, &[src_s], dst.size, src.size);
+        }
         O::Truncate | O::ZeroExtend | O::SignExtend
             if dst.size.get() <= 16 && src.size.get() <= 16 =>
         {
@@ -314,7 +366,17 @@ pub(crate) fn exec_fv_shift(
         return;
     }
 
-    if dst.size.get() <= 16 {
+    if dst.size.get() <= 2 {
+        let src_s = &[stack.get_subbit_byte(src.to_ref(dst.size).to_fv_size())];
+        let mut dst_s = [0];
+        let f = match op {
+            O::LogicalLeft => fv_s_logical_shift_left,
+            O::LogicalRight => fv_s_logical_shift_right,
+            O::ArithmeticRight => fv_s_arithmetic_shift_right,
+        };
+        f(&mut dst_s, src_s, offset, dst.size);
+        stack.set_aligned_raw_bits(dst.to_fv_size(), dst_s[0]);
+    } else if dst.size.get() <= 16 {
         let (dst_s, src_s) =
             stack.get_disjoint_u8_dst_src(dst.to_fv_size(), src.to_ref(dst.size).to_fv_size());
         let f = match op {

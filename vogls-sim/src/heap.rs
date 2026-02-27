@@ -43,6 +43,7 @@ impl Heap {
         }
     }
     pub fn get_mut(&mut self, at: HeapRef) -> &mut [u8] {
+        debug_assert!(at.size.get() > 4);
         &mut bytemuck::cast_slice_mut::<u64, u8>(&mut self.0)[(at.offset.bit_offset / 8)..]
             [..at.size.get().div_ceil(8) as usize]
     }
@@ -276,9 +277,9 @@ impl Heap {
             (at.offset.bit_offset + at.size.get() as usize) / 8
         );
         let shift = at.offset.bit_offset % 64;
-        let mask = ((1u64 << at.size.get()) - 1) << shift;
-        self.0[at.offset.bit_offset / 64] &= !mask;
-        self.0[at.offset.bit_offset / 64] |= (byte as u64) << shift;
+        let shifted_mask = ((1u64 << at.size.get()) - 1) << shift;
+        self.0[at.offset.bit_offset / 64] &= !shifted_mask;
+        self.0[at.offset.bit_offset / 64] |= ((byte as u64) << shift) & shifted_mask;
     }
     pub fn set_unaligned_raw_bits(&mut self, at: HeapRef, byte: u8) -> bool {
         debug_assert!(at.size.get() <= 4);
@@ -290,7 +291,7 @@ impl Heap {
         let w = &mut self.0[at.offset.bit_offset / 64];
         let before = *w;
         *w &= !shifted_mask;
-        *w |= (byte as u64) << shift;
+        *w |= ((byte as u64) << shift) & shifted_mask;
         let mut updated = before != *w;
 
         // Second word
@@ -300,7 +301,7 @@ impl Heap {
             let shift = 64 - shift;
             let shifted_mask = mask >> shift;
             *w &= !shifted_mask;
-            *w |= (byte as u64) >> shift;
+            *w |= ((byte as u64) >> shift) & shifted_mask;
             updated |= before != *w;
         }
 

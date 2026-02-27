@@ -5,6 +5,10 @@ use crate::{BinaryArithmeticOp, BinaryComparisonOp, Heap, HeapOffset, HeapRef, S
 pub(crate) fn exec_tv_unary(stack: &mut Heap, dst: HeapOffset, op: UnaryOp, src: HeapRef) {
     use UnaryOp as O;
     match op {
+        O::Neg if src.size.get() <= 4 => {
+            let b = stack.get_subbit_byte(src);
+            stack.set_aligned_raw_bits(dst.to_ref(src.size), !b);
+        }
         O::Neg => {
             let size = src.size;
             let (dst, src) = stack.get_disjoint_u8_dst_src(dst.to_ref(size), src);
@@ -17,7 +21,7 @@ pub(crate) fn exec_tv_unary(stack: &mut Heap, dst: HeapOffset, op: UnaryOp, src:
         }
         O::ReduceOr => {
             let result = stack.get(src).as_slice().iter().any(|b| *b != 0);
-            stack.set_tv_u64(dst.to_ref(SCALAR_VSIZE), result as u64);
+            stack.set_tv_bool(dst, result);
         }
         O::ReduceAnd => {
             let result = stack
@@ -26,10 +30,7 @@ pub(crate) fn exec_tv_unary(stack: &mut Heap, dst: HeapOffset, op: UnaryOp, src:
                 .iter()
                 .map(|b| b.count_ones())
                 .sum::<u32>();
-            stack.set_tv_u64(
-                dst.to_ref(SCALAR_VSIZE),
-                u64::from(result == src.size.get()),
-            );
+            stack.set_tv_bool(dst, result == src.size.get());
         }
         O::ReduceXor => {
             let result = stack
@@ -38,52 +39,58 @@ pub(crate) fn exec_tv_unary(stack: &mut Heap, dst: HeapOffset, op: UnaryOp, src:
                 .iter()
                 .map(|b| b.count_ones())
                 .sum::<u32>();
-            stack.set_tv_u64(dst.to_ref(SCALAR_VSIZE), u64::from(result % 2 == 1));
+            stack.set_tv_bool(dst, result % 2 == 1);
         }
         O::ContainsX => stack.set_tv_bool(dst, false),
     }
 }
 
 pub(crate) fn exec_tv_resize(stack: &mut Heap, dst: HeapRef, op: ResizeOp, src: HeapRef) {
-    let (d, s) = stack.get_disjoint_u8_dst_src(dst, src);
-
     use ResizeOp as O;
+
+    if dst.size.get() <= 4 && src.size.get() <= 4 {
+        let src_b = &[stack.get_subbit_byte(src)];
+        let mut dst_b = [0];
+        match op {
+            O::Truncate => vogls_bits::slice::tv_slice(&mut dst_b, src_b, dst.size),
+            O::ZeroExtend => {
+                vogls_bits::extend::tv_s_zero_extend(&mut dst_b, src_b, dst.size, src.size)
+            }
+            O::SignExtend => {
+                vogls_bits::extend::tv_s_sign_extend(&mut dst_b, src_b, dst.size, src.size)
+            }
+        }
+        stack.set_aligned_raw_bits(dst, dst_b[0]);
+        return;
+    }
+
+    let mut d_byte = [0];
+    let s_byte;
+    let (mut d, mut s) =
+        stack.get_disjoint_u8_dst_src(dst.prev_byte_align(), src.prev_byte_align());
+    if dst.size.get() <= 4 {
+        d = &mut d_byte;
+    }
+    if src.size.get() <= 4 {
+        s_byte = s[0];
+        s = std::slice::from_ref(&s_byte);
+    }
+
     match op {
         O::ZeroExtend => {
             assert!(dst.size >= src.size);
-            for i in 0..src.size.get().div_ceil(8) as usize {
-                d[i] = s[i];
-            }
-            for i in src.size.get().div_ceil(8) as usize..dst.size.get().div_ceil(8) as usize {
-                d[i] = 0;
-            }
+            vogls_bits::extend::tv_s_zero_extend(d, s, dst.size, src.size);
         }
         O::SignExtend => {
             assert!(dst.size >= src.size);
-            let sign_offset = src.size.get() - 1;
-            let sign = (s[(sign_offset / 8) as usize] >> (sign_offset % 8)) & 1;
-            let mask = u8::from(sign == 0).wrapping_sub(1);
-            if src.size.get() % 8 == 0 {
-                for i in 0..(src.size.get() / 8) as usize {
-                    d[i] = s[i];
-                }
-                for i in (src.size.get() / 8) as usize..dst.size.get().div_ceil(8) as usize {
-                    d[i] = mask;
-                }
-            } else {
-                let sbytes = src.size.get().div_ceil(8) as usize;
-                for i in 0..sbytes - 1 {
-                    d[i] = s[i];
-                }
-                d[sbytes - 1] = s[sbytes - 1] | (mask << (src.size.get() % 8));
-                for i in sbytes..dst.size.get().div_ceil(8) as usize {
-                    d[i] = mask;
-                }
-            }
+            vogls_bits::extend::tv_s_sign_extend(d, s, dst.size, src.size);
         }
         O::Truncate => {
             vogls_bits::slice::tv_slice(d, s, dst.size);
         }
+    }
+    if dst.size.get() <= 4 {
+        stack.set_aligned_raw_bits(dst, d_byte[0]);
     }
 }
 
@@ -255,8 +262,16 @@ pub(crate) fn exec_tv_shift(
 
     let size = dst.size;
     let offset = stack.load_exact_tv_u32(offset);
-    let (dst, src) = stack.get_disjoint_u8_dst_src(dst, src.to_ref(size));
-    f(dst, src, offset, size);
+
+    if size.get() <= 4 {
+        let src_s = &[stack.get_subbit_byte(src.to_ref(size))];
+        let mut dst_s = [0];
+        f(&mut dst_s, src_s, offset, size);
+        stack.set_aligned_raw_bits(dst, dst_s[0]);
+    } else {
+        let (dst, src) = stack.get_disjoint_u8_dst_src(dst, src.to_ref(size));
+        f(dst, src, offset, size);
+    }
 }
 
 pub(crate) fn exec_tv_select_bit(stack: &mut Heap, dst: HeapOffset, src: HeapRef, idx: HeapOffset) {
