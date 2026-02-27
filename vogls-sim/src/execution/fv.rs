@@ -246,7 +246,7 @@ pub(crate) fn exec_fv_bin_arith(
                 rhs.as_slice(),
                 size,
             );
-            stack.set_raw_bits(dst, dst_b);
+            stack.set_aligned_raw_bits(dst, dst_b);
         } else {
             let (dst_s, lhs_s, rhs_s) = stack.get_disjoint_u8_dst_s1_s2(dst, lhs, rhs);
             f(dst_s, lhs_s, rhs_s, size);

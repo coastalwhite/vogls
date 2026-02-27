@@ -76,7 +76,7 @@ impl Heap {
         debug_assert!(at.size.get() <= 64);
         if at.size.get() <= 4 {
             let old = load_partial_u64(self.get(at).as_slice(), at.size);
-            self.set_raw_bits(at, value as u8);
+            self.set_aligned_raw_bits(at, value as u8);
             old
         } else if at.size.get() <= 32 {
             let old = load_partial_u64(self.get(at).as_slice(), at.size);
@@ -121,7 +121,7 @@ impl Heap {
             let src = self.get(dat);
             let old = load_partial_u64(src.as_slice(), dat.size);
             let result = fv_pack_u64(spc, val, at.size);
-            self.set_raw_bits(dat, result as u8);
+            self.set_aligned_raw_bits(dat, result as u8);
             fv_unpack_u64(old, at.size)
         } else if at.size.get() <= 16 {
             let dst = bytemuck::cast_slice_mut::<u64, u8>(&mut self.0);
@@ -262,11 +262,41 @@ impl Heap {
         self.set_fv_u64(at.to_ref(SCALAR_VSIZE), spc, val);
     }
 
-    pub fn set_raw_bits(&mut self, at: HeapRef, byte: u8) {
+    pub fn set_aligned_raw_bits(&mut self, at: HeapRef, byte: u8) {
         debug_assert!(at.size.get() <= 4);
+        debug_assert_eq!(
+            at.offset.bit_offset / 8,
+            (at.offset.bit_offset + at.size.get() as usize) / 8
+        );
         let shift = at.offset.bit_offset % 64;
         let mask = ((1u64 << at.size.get()) - 1) << shift;
         self.0[at.offset.bit_offset / 64] &= !mask;
         self.0[at.offset.bit_offset / 64] |= (byte as u64) << shift;
+    }
+    pub fn set_unaligned_raw_bits(&mut self, at: HeapRef, byte: u8) -> bool {
+        debug_assert!(at.size.get() <= 4);
+
+        // First word
+        let shift = at.offset.bit_offset % 64;
+        let mask = (1u64 << at.size.get()) - 1;
+        let shifted_mask = mask << shift;
+        let w = &mut self.0[at.offset.bit_offset / 64];
+        let before = *w;
+        *w &= !shifted_mask;
+        *w |= (byte as u64) << shift;
+        let mut updated = before != *w;
+
+        // Second word
+        if (at.offset.bit_offset % 64) + at.size.get() as usize > 64 {
+            let w = &mut self.0[(at.offset.bit_offset / 64) + 1];
+            let before = *w;
+            let shift = 64 - shift;
+            let shifted_mask = mask >> shift;
+            *w &= !shifted_mask;
+            *w |= (byte as u64) >> shift;
+            updated |= before != *w;
+        }
+
+        updated
     }
 }

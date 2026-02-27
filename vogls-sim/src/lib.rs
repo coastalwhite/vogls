@@ -129,10 +129,21 @@ pub fn drive_bits(
     partial: Option<u32>,
     logic_mode: LogicMode,
 ) -> bool {
+    debug_assert!(dst.size >= src.size);
     if partial.is_some() || dst.size != src.size {
         let partial = partial.unwrap_or(0);
 
         return match logic_mode {
+            LogicMode::TwoValue if src.size.get() <= 4 => {
+                let src_v = heap.get_tv_u64(src);
+                heap.set_unaligned_raw_bits(
+                    HeapOffset {
+                        bit_offset: dst.offset.bit_offset + partial as usize,
+                    }
+                    .to_ref(src.size),
+                    src_v as u8,
+                )
+            }
             LogicMode::TwoValue if dst.size.get() <= 32 => {
                 let (dst_s, src_s) = heap.get_disjoint_u8_dst_src(dst, src);
                 tv_s_set(dst_s, src_s, dst.size, partial, src.size)
