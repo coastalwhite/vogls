@@ -421,7 +421,7 @@ pub(crate) fn exec_fv_select_bit(stack: &mut Heap, dst: HeapOffset, src: HeapRef
 
 pub(crate) fn exec_fv_concat(stack: &mut Heap, dst: HeapOffset, lhs: HeapRef, rhs: HeapRef) {
     let dst = dst.to_ref(VectorSize::new(lhs.size.get() + rhs.size.get()).unwrap());
-    if dst.size.get() <= 2 {
+    if dst.size <= Heap::FV_SUBBITS_MAX_SIZE {
         let lhs_byte = stack.get_subbit_byte(lhs.to_fv_size());
         let rhs_byte = stack.get_subbit_byte(rhs.to_fv_size());
         let mut dst_byte = [0];
@@ -434,7 +434,7 @@ pub(crate) fn exec_fv_concat(stack: &mut Heap, dst: HeapOffset, lhs: HeapRef, rh
             rhs.size,
         );
         stack.set_aligned_raw_bits(dst.to_fv_size(), dst_byte[0]);
-    } else if dst.size > Heap::FV_U64_MIN_SIZE {
+    } else if dst.size >= Heap::FV_U64_MIN_SIZE {
         let l_nbytes = if lhs.size < Heap::FV_U64_MIN_SIZE {
             (2 * lhs.size.get()).div_ceil(8)
         } else {
