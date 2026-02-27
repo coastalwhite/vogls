@@ -6,8 +6,8 @@ use slotmap::{SecondaryMap, SlotMap};
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_ir::{Bits, GlobalContext, LogicMode, Signal, SignalKey};
 use vogls_sim::{
-    Event, HeapBuilder, Regions, Simulation, SimulationIo, SimulationState, VmProcess,
-    VmProcessKey, VmSignalKey, lower_process_to_vm,
+    Event, HeapBuilder, HeapOffset, HeapRef, Regions, Simulation, SimulationIo, SimulationState,
+    VmProcess, VmProcessKey, VmSignalKey, lower_process_to_vm,
 };
 use vogls_utils::VgHashMap;
 use vogls_verilog::ast::AstId;
@@ -541,8 +541,34 @@ impl Design {
 
             let vm_signal_key = VmSignalKey(io_signals.len() as u64);
             io_signals.insert(key, vm_signal_key);
-            signals.push(heap_builder.claim(gl.logic_mode, *size));
+            signals.push(HeapRef {
+                offset: HeapOffset { bit_offset: 0 },
+                size: vogls_ir::SCALAR_VSIZE,
+            });
             watches.push(Vec::new());
+        }
+
+        for (min_bits, max_bits) in [
+            // (1, u32::MAX)
+            (33, u32::MAX),
+            (17, 32),
+            (9, 16),
+            (5, 8),
+            (3, 4),
+            (2, 2),
+            (1, 1),
+        ] {
+            for (i, signal) in gl.signals.values().enumerate() {
+                let size = signal.size;
+                let mut num_bits = size.get();
+                if gl.logic_mode == LogicMode::FourValue {
+                    num_bits = num_bits * 2;
+                }
+
+                if (min_bits..=max_bits).contains(&num_bits) {
+                    signals[i] = heap_builder.claim(gl.logic_mode, size);
+                }
+            }
         }
 
         for process in gl.processes.keys() {

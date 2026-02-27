@@ -26,7 +26,7 @@ pub(crate) fn exec_fv_unary(stack: &mut Heap, dst: HeapOffset, op: UnaryOp, src:
 
     use UnaryOp as O;
     match op {
-        O::Neg if src.size.get() <= 2 => {
+        O::Neg if src.size <= Heap::FV_SUBBITS_MAX_SIZE => {
             let b = stack.get_subbit_byte(src.to_fv_size());
             let (spc, value) = fv_unpack_u64(b as u64, src.size);
             let (spc, value) = vogls_bits::arithmetic::fv_bitwise_inv_elem(spc, value);
@@ -35,7 +35,7 @@ pub(crate) fn exec_fv_unary(stack: &mut Heap, dst: HeapOffset, op: UnaryOp, src:
                 fv_pack_u64(spc, value, src.size) as u8,
             );
         }
-        O::Neg if src.size.get() > 16 => {
+        O::Neg if src.size >= Heap::FV_U64_MIN_SIZE => {
             let nwords = 2 * src.size.get().div_ceil(64) as usize;
             let (dst_s, src_s) =
                 stack.get_disjoint_u64_dst_src((dst, nwords), (src.offset, nwords));
@@ -47,7 +47,9 @@ pub(crate) fn exec_fv_unary(stack: &mut Heap, dst: HeapOffset, op: UnaryOp, src:
             fv_leu32_bitwise_inv(dst_s, src_s, src.size)
         }
 
-        O::ReduceOr | O::ReduceAnd | O::ReduceXor | O::ContainsX if src.size.get() > 16 => {
+        O::ReduceOr | O::ReduceAnd | O::ReduceXor | O::ContainsX
+            if src.size >= Heap::FV_U64_MIN_SIZE =>
+        {
             let nwords = 2 * src.size.get().div_ceil(64) as usize;
             let src_s = stack.get_u64_slice(src.offset, nwords);
             let f = match op {
@@ -79,7 +81,7 @@ pub(crate) fn exec_fv_resize(stack: &mut Heap, dst: HeapRef, op: ResizeOp, src: 
     use ResizeOp as O;
     match op {
         O::Truncate | O::ZeroExtend | O::SignExtend
-            if dst.size.get() <= 2 && src.size.get() <= 2 =>
+            if dst.size <= Heap::FV_SUBBITS_MAX_SIZE && src.size <= Heap::FV_SUBBITS_MAX_SIZE =>
         {
             let src_s = stack.get_subbit_byte(src.to_fv_size());
             let mut dst_s = [0];
@@ -91,14 +93,16 @@ pub(crate) fn exec_fv_resize(stack: &mut Heap, dst: HeapRef, op: ResizeOp, src: 
             f(&mut dst_s, &[src_s], dst.size, src.size);
             stack.set_aligned_raw_bits(dst.to_fv_size(), dst_s[0]);
         }
-        O::Truncate if dst.size.get() <= 2 => {
+        O::Truncate if dst.size <= Heap::FV_SUBBITS_MAX_SIZE => {
             let src_s = stack.get(src.to_fv_size());
             let src_s = src_s.as_slice();
             let mut dst_s = [0];
             fv_s_truncate(&mut dst_s, src_s, dst.size, src.size);
             stack.set_aligned_raw_bits(dst.to_fv_size(), dst_s[0]);
         }
-        O::ZeroExtend | O::SignExtend if dst.size.get() > 16 && src.size.get() <= 2 => {
+        O::ZeroExtend | O::SignExtend
+            if dst.size >= Heap::FV_U64_MIN_SIZE && src.size <= Heap::FV_SUBBITS_MAX_SIZE =>
+        {
             let mut src_s = [0, 0];
             (src_s[0], src_s[1]) =
                 fv_unpack_u64(stack.get_subbit_byte(src.to_fv_size()) as u64, src.size);
@@ -111,7 +115,7 @@ pub(crate) fn exec_fv_resize(stack: &mut Heap, dst: HeapRef, op: ResizeOp, src: 
             };
             f(dst_s, &src_s, dst.size, src.size);
         }
-        O::ZeroExtend | O::SignExtend if src.size.get() <= 2 => {
+        O::ZeroExtend | O::SignExtend if src.size <= Heap::FV_SUBBITS_MAX_SIZE => {
             let src_s = stack.get_subbit_byte(src.to_fv_size());
             let dst_s = stack.get_mut(dst.to_fv_size());
             let f = match op {
@@ -122,7 +126,7 @@ pub(crate) fn exec_fv_resize(stack: &mut Heap, dst: HeapRef, op: ResizeOp, src: 
             f(dst_s, &[src_s], dst.size, src.size);
         }
         O::Truncate | O::ZeroExtend | O::SignExtend
-            if dst.size.get() <= 16 && src.size.get() <= 16 =>
+            if dst.size < Heap::FV_U64_MIN_SIZE && src.size < Heap::FV_U64_MIN_SIZE =>
         {
             let (dst_s, src_s) = stack.get_disjoint_u8_dst_src(dst.to_fv_size(), src.to_fv_size());
             let f = match op {
@@ -133,7 +137,7 @@ pub(crate) fn exec_fv_resize(stack: &mut Heap, dst: HeapRef, op: ResizeOp, src: 
             f(dst_s, src_s, dst.size, src.size);
         }
         O::Truncate | O::ZeroExtend | O::SignExtend
-            if dst.size.get() > 16 && src.size.get() > 16 =>
+            if dst.size >= Heap::FV_U64_MIN_SIZE && src.size >= Heap::FV_U64_MIN_SIZE =>
         {
             let (dst_s, src_s) = stack.get_disjoint_u64_dst_src(
                 (dst.offset, 2 * dst.size.get().div_ceil(64) as usize),
@@ -244,7 +248,7 @@ pub(crate) fn exec_fv_bin_arith(
         }
     }
 
-    if dst.size.get() > 16 {
+    if dst.size >= Heap::FV_U64_MIN_SIZE {
         let f = match op {
             O::And => fv_u64_bitwise_and,
             O::Or => fv_u64_bitwise_or,
@@ -288,7 +292,7 @@ pub(crate) fn exec_fv_bin_arith(
         let lhs = lhs.to_ref(dst.size);
         let rhs = rhs.to_ref(dst.size);
 
-        if dst.size.get() <= 2 {
+        if size <= Heap::FV_SUBBITS_MAX_SIZE {
             let mut dst_b = 0u8;
             let lhs = stack.get(lhs);
             let rhs = stack.get(rhs);
@@ -315,7 +319,7 @@ pub(crate) fn exec_fv_bin_cmp(
 ) {
     use BinaryComparisonOp as O;
     let result = match op {
-        O::UnsignedLessEqual if lhs.size.get() <= 16 => {
+        O::UnsignedLessEqual if lhs.size < Heap::FV_U64_MIN_SIZE => {
             let lhs_s = stack.get(lhs.to_fv_size());
             let rhs_s = stack.get(rhs.to_ref(lhs.size).to_fv_size());
             vogls_bits::comparison::fv_s_unsigned_leq(lhs_s.as_slice(), rhs_s.as_slice(), lhs.size)
@@ -326,7 +330,7 @@ pub(crate) fn exec_fv_bin_cmp(
             let rhs_s = stack.get_u64_slice(rhs, nwords);
             vogls_bits::comparison::fv_l_unsigned_leq(lhs_s, rhs_s, lhs.size)
         }
-        O::CaseEquality if lhs.size.get() <= 16 => {
+        O::CaseEquality if lhs.size < Heap::FV_U64_MIN_SIZE => {
             let lhs_s = stack.get(lhs.to_fv_size());
             let rhs_s = stack.get(rhs.to_ref(lhs.size).to_fv_size());
             FvLogicValue::from_bool(lhs_s.as_slice() == rhs_s.as_slice())
@@ -356,7 +360,7 @@ pub(crate) fn exec_fv_shift(
     // If the right operand has an x or z value, then the result shall be unknown.
     // """
     if !spc != 0 {
-        if dst.size.get() <= 16 {
+        if dst.size < Heap::FV_U64_MIN_SIZE {
             let mask = ((1u64 << dst.size.get()) - 1) << (dst.offset.bit_offset % 64);
             stack.0[dst.offset.bit_offset / 64] &= !mask;
         } else {
@@ -376,7 +380,7 @@ pub(crate) fn exec_fv_shift(
         };
         f(&mut dst_s, src_s, offset, dst.size);
         stack.set_aligned_raw_bits(dst.to_fv_size(), dst_s[0]);
-    } else if dst.size.get() <= 16 {
+    } else if dst.size < Heap::FV_U64_MIN_SIZE {
         let (dst_s, src_s) =
             stack.get_disjoint_u8_dst_src(dst.to_fv_size(), src.to_ref(dst.size).to_fv_size());
         let f = match op {
@@ -404,7 +408,7 @@ pub(crate) fn exec_fv_select_bit(stack: &mut Heap, dst: HeapOffset, src: HeapRef
         return;
     }
 
-    if src.size.get() <= 16 {
+    if src.size < Heap::FV_U64_MIN_SIZE {
         let src_slice = stack.get(src.to_fv_size());
         let result = fv_s_select_bit(src_slice.as_slice(), idx, src.size);
         stack.set_fv_scalar(dst, result);
@@ -430,13 +434,13 @@ pub(crate) fn exec_fv_concat(stack: &mut Heap, dst: HeapOffset, lhs: HeapRef, rh
             rhs.size,
         );
         stack.set_aligned_raw_bits(dst.to_fv_size(), dst_byte[0]);
-    } else if dst.size.get() > 16 {
-        let l_nbytes = if lhs.size.get() <= 16 {
+    } else if dst.size > Heap::FV_U64_MIN_SIZE {
+        let l_nbytes = if lhs.size < Heap::FV_U64_MIN_SIZE {
             (2 * lhs.size.get()).div_ceil(8)
         } else {
             2 * lhs.size.get().div_ceil(64) * 8
         };
-        let r_nbytes = if rhs.size.get() <= 16 {
+        let r_nbytes = if rhs.size < Heap::FV_U64_MIN_SIZE {
             (2 * rhs.size.get()).div_ceil(8)
         } else {
             2 * rhs.size.get().div_ceil(64) * 8
@@ -455,22 +459,22 @@ pub(crate) fn exec_fv_concat(stack: &mut Heap, dst: HeapOffset, lhs: HeapRef, rh
         let mut lhs_s = [0u64; 2];
         let mut rhs_s = [0u64; 2];
         let d = bytemuck::cast_slice_mut::<u8, u64>(d);
-        let l = if lhs.size.get() <= 2 {
+        let l = if lhs.size <= Heap::FV_SUBBITS_MAX_SIZE {
             (lhs_s[0], lhs_s[1]) =
                 fv_unpack_u64((l[0] >> (lhs.offset.bit_offset % 8)) as u64, lhs.size);
             &lhs_s
-        } else if lhs.size.get() <= 16 {
+        } else if lhs.size < Heap::FV_U64_MIN_SIZE {
             (lhs_s[0], lhs_s[1]) =
                 fv_unpack_u64(load_partial_u64(l, lhs.to_fv_size().size), lhs.size);
             &lhs_s
         } else {
             bytemuck::cast_slice::<u8, u64>(l)
         };
-        let r = if rhs.size.get() <= 2 {
+        let r = if rhs.size <= Heap::FV_SUBBITS_MAX_SIZE {
             (rhs_s[0], rhs_s[1]) =
                 fv_unpack_u64((r[0] >> (rhs.offset.bit_offset % 8)) as u64, rhs.size);
             &rhs_s
-        } else if rhs.size.get() <= 16 {
+        } else if rhs.size < Heap::FV_U64_MIN_SIZE {
             (rhs_s[0], rhs_s[1]) =
                 fv_unpack_u64(load_partial_u64(r, rhs.to_fv_size().size), rhs.size);
             &rhs_s
@@ -487,12 +491,12 @@ pub(crate) fn exec_fv_concat(stack: &mut Heap, dst: HeapOffset, lhs: HeapRef, rh
             rhs.to_fv_size().prev_byte_align(),
         );
 
-        if lhs.size.get() <= 4 {
-            lhs_byte = l[0] >> (lhs.offset.bit_offset % 8);
+        if lhs.size <= Heap::FV_SUBBITS_MAX_SIZE {
+            lhs_byte = lhs.to_fv_size().align_subbits(l[0]);
             l = std::slice::from_ref(&lhs_byte);
         }
-        if rhs.size.get() <= 4 {
-            rhs_byte = r[0] >> (rhs.offset.bit_offset % 8);
+        if rhs.size <= Heap::FV_SUBBITS_MAX_SIZE {
+            rhs_byte = rhs.to_fv_size().align_subbits(r[0]);
             r = std::slice::from_ref(&rhs_byte);
         }
         fv_s_concat(d, l, r, lhs.size, rhs.size);

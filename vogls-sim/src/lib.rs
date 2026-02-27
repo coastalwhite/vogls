@@ -980,7 +980,12 @@ impl SimulationState {
         writeln!(io.stdout, "Stats:",).unwrap();
         writeln!(io.stdout, "  # Instructions: {}", state.instruction_count).unwrap();
         writeln!(io.stdout, "  # Events:       {}", state.event_count).unwrap();
-        writeln!(io.stdout, "  # Stack size:   {}", state.heap.0.len()).unwrap();
+        writeln!(
+            io.stdout,
+            "  # Stack size:   {}",
+            state.heap.0.len() * size_of::<u64>()
+        )
+        .unwrap();
     }
 
     pub fn start_vcd(&mut self, path: &Path, scope: VcdScope) {

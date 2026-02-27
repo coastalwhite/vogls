@@ -12,35 +12,40 @@ use super::{HeapRef, VmSignalKey};
 
 pub struct HeapBuilder {
     top: usize,
+    padding: usize,
 }
 
 impl HeapBuilder {
     pub fn new() -> Self {
-        Self { top: 0 }
+        Self { top: 0, padding: 0 }
     }
 
     pub fn claim(&mut self, mode: LogicMode, size: VectorSize) -> HeapRef {
-        // Most arithmetic operations are implemented on 64-bit chunks, by ensuring that
-        // all variables with a size larger or equal to than 64 are allocated in chunks of
-        // 64 we can efficiently dispatch to these kernels.
-        let nbits = if mode == LogicMode::TwoValue && size.get() > 32 {
-            // @TODO: Allow this space to be used somehow. In general, we should use a
-            // slab allocator instead of this.
-            self.top += 64 - (self.top % 64); // pad to 8-bytes
-            (size.get() as usize).next_multiple_of(64)
-        } else if mode == LogicMode::FourValue && size.get() > 16 {
-            self.top += 64 - (self.top % 64); // pad to 8-bytes
-            2 * (size.get() as usize).next_multiple_of(64)
-        } else if mode == LogicMode::TwoValue {
-            (size.get() as usize).next_multiple_of(8)
-        } else {
-            (2 * size.get() as usize).next_multiple_of(8)
+        let (bit_alignment, bit_size) = match mode {
+            LogicMode::TwoValue => {
+                let nbits = size.get() as usize;
+                let alignment = nbits.min(64).next_power_of_two();
+                (alignment, nbits.next_multiple_of(alignment))
+            }
+            LogicMode::FourValue if size.get() <= 16 => {
+                let nbits = 2 * size.get() as usize;
+                let alignment = nbits.next_power_of_two();
+                (alignment, nbits.next_multiple_of(alignment))
+            }
+            LogicMode::FourValue => (64, 2 * (size.get() as usize).next_multiple_of(64)),
         };
+
+        self.padding += self.top.next_multiple_of(bit_alignment) - self.top;
+        self.top = self.top.next_multiple_of(bit_alignment);
         let heap_ref = HeapOffset {
             bit_offset: self.top,
         };
-        self.top += nbits;
+        self.top += bit_size;
         heap_ref.to_ref(size)
+    }
+
+    pub fn padding(&self) -> usize {
+        self.padding
     }
 
     pub fn finish(self) -> Heap {
@@ -141,7 +146,15 @@ pub fn lower_process_to_vm(
     }
 
     // Make a map of the heap.
-    for (min_bits, max_bits) in [(1, u32::MAX) /*(33, u32::MAX), (1, 32)*/] {
+    for (min_bits, max_bits) in [
+        (33, u32::MAX),
+        (17, 32),
+        (9, 16),
+        (5, 8),
+        (3, 4),
+        (2, 2),
+        (1, 1),
+    ] {
         bb_seen.clear();
         bb_stack.push(process.entry);
         while let Some(bb_key) = bb_stack.pop() {

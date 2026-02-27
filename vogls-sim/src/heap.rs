@@ -24,8 +24,14 @@ impl<'a> HeapSlice<'a> {
 }
 
 impl Heap {
+    pub const TV_SUBBITS_MAX_SIZE: VectorSize = VectorSize::new(4).unwrap();
+    pub const TV_U64_MIN_SIZE: VectorSize = VectorSize::new(33).unwrap();
+
+    pub const FV_SUBBITS_MAX_SIZE: VectorSize = VectorSize::new(2).unwrap();
+    pub const FV_U64_MIN_SIZE: VectorSize = VectorSize::new(17).unwrap();
+
     pub fn get_subbit_byte<'a>(&'a self, at: HeapRef) -> u8 {
-        debug_assert!(at.size.get() <= 4);
+        debug_assert!(at.size <= Self::TV_SUBBITS_MAX_SIZE);
         let slice = bytemuck::cast_slice::<u64, u8>(&self.0);
         let start_byte = at.offset.bit_offset / 8;
         let b = slice[start_byte];
@@ -34,7 +40,7 @@ impl Heap {
     }
 
     pub fn get<'a>(&'a self, at: HeapRef) -> HeapSlice<'a> {
-        if at.size.get() > 4 {
+        if at.size > Self::TV_SUBBITS_MAX_SIZE {
             let slice = bytemuck::cast_slice::<u64, u8>(&self.0);
             let start_byte = at.offset.bit_offset / 8;
             HeapSlice::Bytes(&slice[start_byte..][..at.size.get().div_ceil(8) as usize])
@@ -43,7 +49,7 @@ impl Heap {
         }
     }
     pub fn get_mut(&mut self, at: HeapRef) -> &mut [u8] {
-        debug_assert!(at.size.get() > 4);
+        debug_assert!(at.size > Self::TV_SUBBITS_MAX_SIZE);
         &mut bytemuck::cast_slice_mut::<u64, u8>(&mut self.0)[(at.offset.bit_offset / 8)..]
             [..at.size.get().div_ceil(8) as usize]
     }
@@ -82,11 +88,11 @@ impl Heap {
     }
     pub fn set_tv_u64(&mut self, at: HeapRef, value: u64) -> u64 {
         debug_assert!(at.size.get() <= 64);
-        if at.size.get() <= 4 {
+        if at.size <= Self::TV_SUBBITS_MAX_SIZE {
             let old = load_partial_u64(self.get(at).as_slice(), at.size);
             self.set_aligned_raw_bits(at, value as u8);
             old
-        } else if at.size.get() <= 32 {
+        } else if at.size < Self::TV_U64_MIN_SIZE {
             let old = load_partial_u64(self.get(at).as_slice(), at.size);
             let dst = bytemuck::cast_slice_mut::<u64, u8>(&mut self.0);
             let dst = &mut dst[(at.offset.bit_offset / 8)..][..at.size.get().div_ceil(8) as usize];
@@ -110,11 +116,10 @@ impl Heap {
     }
     pub fn get_fv_u64(&self, at: HeapRef) -> (u64, u64) {
         debug_assert!(at.size.get() <= 64);
-        if at.size.get() <= 16 {
-            let dsize = at.size.checked_mul(VectorSize::new(2).unwrap()).unwrap();
-            let src = self.get(at.offset.to_ref(dsize));
+        if at.size < Self::FV_U64_MIN_SIZE {
+            let src = self.get(at.to_fv_size());
             let src = src.as_slice();
-            fv_unpack_u64(load_partial_u64(src, dsize), at.size)
+            fv_unpack_u64(load_partial_u64(src, at.to_fv_size().size), at.size)
         } else {
             let [spc, val] = self.get_u64_slice(at.offset, 2) else {
                 unreachable!()
@@ -125,13 +130,13 @@ impl Heap {
     pub fn set_fv_u64(&mut self, at: HeapRef, spc: u64, val: u64) -> (u64, u64) {
         debug_assert!(at.size.get() <= 64);
         let dat = at.to_fv_size();
-        if at.size.get() <= 2 {
+        if at.size <= Self::FV_SUBBITS_MAX_SIZE {
             let src = self.get(dat);
             let old = load_partial_u64(src.as_slice(), dat.size);
             let result = fv_pack_u64(spc, val, at.size);
             self.set_aligned_raw_bits(dat, result as u8);
             fv_unpack_u64(old, at.size)
-        } else if at.size.get() <= 16 {
+        } else if at.size < Self::FV_U64_MIN_SIZE {
             let dst = bytemuck::cast_slice_mut::<u64, u8>(&mut self.0);
             let dst = &mut dst[(at.offset.bit_offset / 8)..][..dat.size.get().div_ceil(8) as usize];
             let old = load_partial_u64(dst, dat.size);
@@ -221,7 +226,7 @@ impl Heap {
         Bits::load_from_slice(self.get(at).as_slice(), at.size)
     }
     pub fn load_fv_bits(&self, at: HeapRef) -> Bits {
-        if at.size.get() <= 32 {
+        if at.size < Self::TV_U64_MIN_SIZE {
             let (spc, val) = self.get_fv_u64(at);
             Bits::from_four_value_u64(at.size, spc as u32, val as u32)
         } else {
@@ -271,10 +276,11 @@ impl Heap {
     }
 
     pub fn set_aligned_raw_bits(&mut self, at: HeapRef, byte: u8) {
-        debug_assert!(at.size.get() <= 4);
-        debug_assert_eq!(
-            at.offset.bit_offset / 8,
-            (at.offset.bit_offset + at.size.get() as usize) / 8
+        debug_assert!(at.size <= Self::TV_SUBBITS_MAX_SIZE);
+        debug_assert!(
+            ((at.offset.bit_offset - (at.offset.bit_offset % 8))
+                ..=(at.offset.bit_offset - (at.offset.bit_offset % 8) + 8))
+                .contains(&(at.offset.bit_offset + at.size.get() as usize)),
         );
         let shift = at.offset.bit_offset % 64;
         let shifted_mask = ((1u64 << at.size.get()) - 1) << shift;
@@ -282,7 +288,7 @@ impl Heap {
         self.0[at.offset.bit_offset / 64] |= ((byte as u64) << shift) & shifted_mask;
     }
     pub fn set_unaligned_raw_bits(&mut self, at: HeapRef, byte: u8) -> bool {
-        debug_assert!(at.size.get() <= 4);
+        debug_assert!(at.size <= Self::TV_SUBBITS_MAX_SIZE);
 
         // First word
         let shift = at.offset.bit_offset % 64;

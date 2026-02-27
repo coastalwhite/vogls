@@ -34,6 +34,10 @@ impl HeapRef {
             size: self.size,
         }
     }
+    pub fn align_subbits(self, byte: u8) -> u8 {
+        debug_assert!(self.size.get() <= 4);
+        (byte >> (self.offset.bit_offset % 8)) & ((1u8 << self.size.get()) - 1)
+    }
 }
 
 impl HeapOffset {

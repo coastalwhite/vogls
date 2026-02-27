@@ -41,6 +41,9 @@ pub fn tv_concat(
     if s > 0 {
         dst[dbytes - 1] = lhs[lbytes - 1] >> (8 - roff);
     }
+    if (lhs_size + rhs_size) % 8 != 0 {
+        dst[dbytes - 1] &= (1u8 << ((lhs_size + rhs_size) % 8)) - 1;
+    }
 }
 pub fn tv_l_concat(
     dst: &mut [u64],

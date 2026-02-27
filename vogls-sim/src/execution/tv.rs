@@ -5,7 +5,7 @@ use crate::{BinaryArithmeticOp, BinaryComparisonOp, Heap, HeapOffset, HeapRef, S
 pub(crate) fn exec_tv_unary(stack: &mut Heap, dst: HeapOffset, op: UnaryOp, src: HeapRef) {
     use UnaryOp as O;
     match op {
-        O::Neg if src.size.get() <= 4 => {
+        O::Neg if src.size <= Heap::TV_SUBBITS_MAX_SIZE => {
             let b = stack.get_subbit_byte(src);
             stack.set_aligned_raw_bits(dst.to_ref(src.size), !b);
         }
@@ -48,7 +48,7 @@ pub(crate) fn exec_tv_unary(stack: &mut Heap, dst: HeapOffset, op: UnaryOp, src:
 pub(crate) fn exec_tv_resize(stack: &mut Heap, dst: HeapRef, op: ResizeOp, src: HeapRef) {
     use ResizeOp as O;
 
-    if dst.size.get() <= 4 && src.size.get() <= 4 {
+    if dst.size <= Heap::TV_SUBBITS_MAX_SIZE && src.size <= Heap::TV_SUBBITS_MAX_SIZE {
         let src_b = &[stack.get_subbit_byte(src)];
         let mut dst_b = [0];
         match op {
@@ -68,11 +68,11 @@ pub(crate) fn exec_tv_resize(stack: &mut Heap, dst: HeapRef, op: ResizeOp, src: 
     let s_byte;
     let (mut d, mut s) =
         stack.get_disjoint_u8_dst_src(dst.prev_byte_align(), src.prev_byte_align());
-    if dst.size.get() <= 4 {
+    if dst.size <= Heap::TV_SUBBITS_MAX_SIZE {
         d = &mut d_byte;
     }
-    if src.size.get() <= 4 {
-        s_byte = s[0];
+    if src.size <= Heap::TV_SUBBITS_MAX_SIZE {
+        s_byte = src.align_subbits(s[0]);
         s = std::slice::from_ref(&s_byte);
     }
 
@@ -89,7 +89,7 @@ pub(crate) fn exec_tv_resize(stack: &mut Heap, dst: HeapRef, op: ResizeOp, src: 
             vogls_bits::slice::tv_slice(d, s, dst.size);
         }
     }
-    if dst.size.get() <= 4 {
+    if dst.size <= Heap::TV_SUBBITS_MAX_SIZE {
         stack.set_aligned_raw_bits(dst, d_byte[0]);
     }
 }
@@ -163,7 +163,9 @@ pub(crate) fn exec_tv_bin_arith(
     }
 
     let size = dst.size;
-    if size.get() > 32 && matches!(op, O::And | O::Or | O::Xor | O::Add | O::Sub | O::Multiply) {
+    if size >= Heap::TV_U64_MIN_SIZE
+        && matches!(op, O::And | O::Or | O::Xor | O::Add | O::Sub | O::Multiply)
+    {
         let f = match op {
             O::And => tv_u64_bitwise_and,
             O::Or => tv_u64_bitwise_or,
@@ -203,7 +205,7 @@ pub(crate) fn exec_tv_bin_arith(
         let lhs = lhs.to_ref(dst.size);
         let rhs = rhs.to_ref(dst.size);
 
-        if dst.size.get() <= 4 {
+        if dst.size <= Heap::TV_SUBBITS_MAX_SIZE {
             let mut dst_b = 0u8;
             let lhs = stack.get(lhs);
             let rhs = stack.get(rhs);
@@ -263,7 +265,7 @@ pub(crate) fn exec_tv_shift(
     let size = dst.size;
     let offset = stack.load_exact_tv_u32(offset);
 
-    if size.get() <= 4 {
+    if size <= Heap::TV_SUBBITS_MAX_SIZE {
         let src_s = &[stack.get_subbit_byte(src.to_ref(size))];
         let mut dst_s = [0];
         f(&mut dst_s, src_s, offset, size);
@@ -286,7 +288,7 @@ pub(crate) fn exec_tv_concat(stack: &mut Heap, dst: HeapOffset, lhs: HeapRef, rh
     let (lhs_size, rhs_size) = (lhs.size, rhs.size);
     let dst_size = lhs_size.checked_add(rhs_size.get()).unwrap();
 
-    if dst_size.get() <= 4 {
+    if dst_size <= Heap::TV_SUBBITS_MAX_SIZE {
         let lhs_byte = stack.get_subbit_byte(lhs);
         let rhs_byte = stack.get_subbit_byte(rhs);
         let mut dst_byte = [0];
@@ -303,12 +305,12 @@ pub(crate) fn exec_tv_concat(stack: &mut Heap, dst: HeapOffset, lhs: HeapRef, rh
             rhs.prev_byte_align(),
         );
 
-        if lhs.size.get() <= 4 {
-            lhs_byte = lhs_slice[0] >> (lhs.offset.bit_offset % 8);
+        if lhs.size <= Heap::TV_SUBBITS_MAX_SIZE {
+            lhs_byte = lhs.align_subbits(lhs_slice[0]);
             lhs_slice = std::slice::from_ref(&lhs_byte);
         }
-        if rhs.size.get() <= 4 {
-            rhs_byte = rhs_slice[0] >> (rhs.offset.bit_offset % 8);
+        if rhs.size <= Heap::TV_SUBBITS_MAX_SIZE {
+            rhs_byte = rhs.align_subbits(rhs_slice[0]);
             rhs_slice = std::slice::from_ref(&rhs_byte);
         }
         vogls_bits::concat::tv_concat(dst, lhs_slice, rhs_slice, lhs_size, rhs_size);
