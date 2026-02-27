@@ -16,18 +16,28 @@ pub(crate) fn exec_tv_unary(stack: &mut Heap, dst: HeapOffset, op: UnaryOp, src:
             }
         }
         O::ReduceOr => {
-            let result = stack.get(src).iter().any(|b| *b != 0);
+            let result = stack.get(src).as_slice().iter().any(|b| *b != 0);
             stack.set_tv_u64(dst.to_ref(SCALAR_VSIZE), result as u64);
         }
         O::ReduceAnd => {
-            let result = stack.get(src).iter().map(|b| b.count_ones()).sum::<u32>();
+            let result = stack
+                .get(src)
+                .as_slice()
+                .iter()
+                .map(|b| b.count_ones())
+                .sum::<u32>();
             stack.set_tv_u64(
                 dst.to_ref(SCALAR_VSIZE),
                 u64::from(result == src.size.get()),
             );
         }
         O::ReduceXor => {
-            let result = stack.get(src).iter().map(|b| b.count_ones()).sum::<u32>();
+            let result = stack
+                .get(src)
+                .as_slice()
+                .iter()
+                .map(|b| b.count_ones())
+                .sum::<u32>();
             stack.set_tv_u64(dst.to_ref(SCALAR_VSIZE), u64::from(result % 2 == 1));
         }
         O::ContainsX => stack.set_tv_bool(dst, false),
@@ -210,7 +220,7 @@ pub(crate) fn exec_tv_bin_cmp(
     let size = lhs.size;
     let lhs = stack.get(lhs);
     let rhs = stack.get(rhs.to_ref(size));
-    let result = f(lhs, rhs, size);
+    let result = f(lhs.as_slice(), rhs.as_slice(), size);
     stack.set_tv_u64(dst.to_ref(SCALAR_VSIZE), result as u64);
 }
 
@@ -238,7 +248,7 @@ pub(crate) fn exec_tv_select_bit(stack: &mut Heap, dst: HeapOffset, src: HeapRef
     let size = src.size;
     let idx = stack.load_exact_tv_u32(idx);
     let src = stack.get(src);
-    let result = vogls_bits::select::tv_select_bit(src, idx, size);
+    let result = vogls_bits::select::tv_select_bit(src.as_slice(), idx, size);
     stack.set_tv_bool(dst, result);
 }
 

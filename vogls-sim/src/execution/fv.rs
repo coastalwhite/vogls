@@ -60,7 +60,7 @@ pub(crate) fn exec_fv_unary(stack: &mut Heap, dst: HeapOffset, op: UnaryOp, src:
                 O::ReduceXor => fv_s_reduce_xor,
                 O::ContainsX => fv_s_contains_unknown,
             };
-            let result = f(src_s, src.size);
+            let result = f(src_s.as_slice(), src.size);
             stack.set_fv_scalar(dst, result);
         }
     };
@@ -253,7 +253,7 @@ pub(crate) fn exec_fv_bin_cmp(
         O::UnsignedLessEqual if lhs.size.get() <= 16 => {
             let lhs_s = stack.get(lhs.to_fv_size());
             let rhs_s = stack.get(rhs.to_ref(lhs.size).to_fv_size());
-            vogls_bits::comparison::fv_s_unsigned_leq(lhs_s, rhs_s, lhs.size)
+            vogls_bits::comparison::fv_s_unsigned_leq(lhs_s.as_slice(), rhs_s.as_slice(), lhs.size)
         }
         O::UnsignedLessEqual => {
             let nwords = 2 * lhs.size.get().div_ceil(64) as usize;
@@ -264,7 +264,7 @@ pub(crate) fn exec_fv_bin_cmp(
         O::CaseEquality if lhs.size.get() <= 16 => {
             let lhs_s = stack.get(lhs.to_fv_size());
             let rhs_s = stack.get(rhs.to_ref(lhs.size).to_fv_size());
-            FvLogicValue::from_bool(lhs_s == rhs_s)
+            FvLogicValue::from_bool(lhs_s.as_slice() == rhs_s.as_slice())
         }
         O::CaseEquality => {
             let nwords = 2 * lhs.size.get().div_ceil(64) as usize;
@@ -292,7 +292,8 @@ pub(crate) fn exec_fv_shift(
     // """
     if !spc != 0 {
         if dst.size.get() <= 16 {
-            stack.get_mut(dst).fill(0u8);
+            let mask = ((1u64 << dst.size.get()) - 1) << (dst.offset.bit_offset % 64);
+            stack.0[dst.offset.bit_offset / 64] &= !mask;
         } else {
             let nwords = 2 * dst.size.get().div_ceil(64) as usize;
             stack.get_mut_u64_slice(dst.offset, nwords).fill(0u64);
@@ -329,7 +330,8 @@ pub(crate) fn exec_fv_select_bit(stack: &mut Heap, dst: HeapOffset, src: HeapRef
     }
 
     if src.size.get() <= 16 {
-        let result = fv_s_select_bit(stack.get(src.to_fv_size()), idx, src.size);
+        let src_slice = stack.get(src.to_fv_size());
+        let result = fv_s_select_bit(src_slice.as_slice(), idx, src.size);
         stack.set_fv_scalar(dst, result);
     } else {
         let nwords = 2 * src.size.get().div_ceil(64) as usize;

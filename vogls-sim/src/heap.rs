@@ -9,10 +9,31 @@ use crate::{HeapOffset, HeapRef};
 #[derive(Clone)]
 pub struct Heap(pub Box<[u64]>);
 
+pub enum HeapSlice<'a> {
+    Bytes(&'a [u8]),
+    Bits(u8),
+}
+
+impl<'a> HeapSlice<'a> {
+    pub fn as_slice(&self) -> &[u8] {
+        match self {
+            Self::Bytes(s) => s,
+            Self::Bits(b) => std::slice::from_ref(b),
+        }
+    }
+}
+
 impl Heap {
-    pub fn get(&self, at: HeapRef) -> &[u8] {
-        &bytemuck::cast_slice::<u64, u8>(&self.0)[(at.offset.bit_offset / 8)..]
-            [..at.size.get().div_ceil(8) as usize]
+    pub fn get<'a>(&'a self, at: HeapRef) -> HeapSlice<'a> {
+        let slice = bytemuck::cast_slice::<u64, u8>(&self.0);
+        let start_byte = at.offset.bit_offset / 8;
+        if at.size.get() > 4 {
+            HeapSlice::Bytes(&slice[start_byte..][..at.size.get().div_ceil(8) as usize])
+        } else {
+            let b = slice[start_byte];
+            let b = (b >> at.offset.bit_offset % 8) & ((1u8 << at.size.get()) - 1);
+            HeapSlice::Bits(b)
+        }
     }
     pub fn get_mut(&mut self, at: HeapRef) -> &mut [u8] {
         &mut bytemuck::cast_slice_mut::<u64, u8>(&mut self.0)[(at.offset.bit_offset / 8)..]
@@ -46,16 +67,24 @@ impl Heap {
     pub fn get_tv_u64(&self, at: HeapRef) -> u64 {
         debug_assert!(at.size.get() <= 64);
         if at.size.get() <= 32 {
-            load_partial_u64(self.get(at), at.size)
+            load_partial_u64(self.get(at).as_slice(), at.size)
         } else {
             self.get_u64(at.offset)
         }
     }
     pub fn set_tv_u64(&mut self, at: HeapRef, value: u64) -> u64 {
         debug_assert!(at.size.get() <= 64);
-        if at.size.get() <= 32 {
-            let old = load_partial_u64(self.get(at), at.size);
-            store_partial_u64(self.get_mut(at), value, at.size);
+        if at.size.get() <= 4 {
+            let old = load_partial_u64(self.get(at).as_slice(), at.size);
+            let mask = ((1u64 << at.size.get()) - 1) << (at.offset.bit_offset % 64);
+            self.0[at.offset.bit_offset / 64] &= !mask;
+            self.0[at.offset.bit_offset / 64] |= value << (at.offset.bit_offset % 64);
+            old
+        } else if at.size.get() <= 32 {
+            let old = load_partial_u64(self.get(at).as_slice(), at.size);
+            let dst = bytemuck::cast_slice_mut::<u64, u8>(&mut self.0);
+            let dst = &mut dst[(at.offset.bit_offset / 8)..][..at.size.get().div_ceil(8) as usize];
+            store_partial_u64(dst, value, at.size);
             old
         } else {
             std::mem::replace(self.get_mut_u64(at.offset), value)
@@ -78,6 +107,7 @@ impl Heap {
         if at.size.get() <= 16 {
             let dsize = at.size.checked_mul(VectorSize::new(2).unwrap()).unwrap();
             let src = self.get(at.offset.to_ref(dsize));
+            let src = src.as_slice();
             fv_unpack_u64(load_partial_u64(src, dsize), at.size)
         } else {
             let [spc, val] = self.get_u64_slice(at.offset, 2) else {
@@ -88,9 +118,20 @@ impl Heap {
     }
     pub fn set_fv_u64(&mut self, at: HeapRef, spc: u64, val: u64) -> (u64, u64) {
         debug_assert!(at.size.get() <= 64);
-        if at.size.get() <= 16 {
+        if at.size.get() <= 2 {
             let dsize = at.size.checked_mul(VectorSize::new(2).unwrap()).unwrap();
-            let dst = self.get_mut(at.offset.to_ref(dsize));
+            let src = self.get(at.to_fv_size());
+            let old = load_partial_u64(src.as_slice(), dsize);
+            let result = fv_pack_u64(spc, val, at.size);
+            let shift = at.offset.bit_offset % 64;
+            let mask = ((1u64 << dsize.get()) - 1) << shift;
+            self.0[at.offset.bit_offset / 64] &= !mask;
+            self.0[at.offset.bit_offset / 64] |= result << shift;
+            fv_unpack_u64(old, at.size)
+        } else if at.size.get() <= 16 {
+            let dsize = at.size.checked_mul(VectorSize::new(2).unwrap()).unwrap();
+            let dst = bytemuck::cast_slice_mut::<u64, u8>(&mut self.0);
+            let dst = &mut dst[(at.offset.bit_offset / 8)..][..dsize.get().div_ceil(8) as usize];
             let old = load_partial_u64(dst, dsize);
             store_partial_u64(dst, fv_pack_u64(spc, val, at.size), dsize);
             fv_unpack_u64(old, at.size)
@@ -175,7 +216,7 @@ impl Heap {
 
     pub fn load_tv_bits(&self, at: HeapRef) -> Bits {
         // @Performance: We should make a specialized path for u64
-        Bits::load_from_slice(self.get(at), at.size)
+        Bits::load_from_slice(self.get(at).as_slice(), at.size)
     }
     pub fn load_fv_bits(&self, at: HeapRef) -> Bits {
         if at.size.get() <= 32 {
