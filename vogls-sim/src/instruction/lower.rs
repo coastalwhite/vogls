@@ -23,26 +23,28 @@ impl HeapBuilder {
         // Most arithmetic operations are implemented on 64-bit chunks, by ensuring that
         // all variables with a size larger or equal to than 64 are allocated in chunks of
         // 64 we can efficiently dispatch to these kernels.
-        let nbytes = if mode == LogicMode::TwoValue && size.get() > 32 {
+        let nbits = if mode == LogicMode::TwoValue && size.get() > 32 {
             // @TODO: Allow this space to be used somehow. In general, we should use a
             // slab allocator instead of this.
-            self.top += 8 - (self.top % 8); // pad to 8-bytes
-            (size.get() as usize).div_ceil(64) * 8
+            self.top += 64 - (self.top % 64); // pad to 8-bytes
+            (size.get() as usize).next_multiple_of(64)
         } else if mode == LogicMode::FourValue && size.get() > 16 {
-            self.top += 8 - (self.top % 8); // pad to 8-bytes
-            2 * (size.get() as usize).div_ceil(64) * 8
+            self.top += 64 - (self.top % 64); // pad to 8-bytes
+            2 * (size.get() as usize).next_multiple_of(64)
         } else if mode == LogicMode::TwoValue {
-            (size.get() as usize).div_ceil(8)
+            (size.get() as usize).next_multiple_of(8)
         } else {
-            (2 * size.get() as usize).div_ceil(8)
+            (2 * size.get() as usize).next_multiple_of(8)
         };
-        let heap_ref = HeapOffset(self.top);
-        self.top += nbytes;
+        let heap_ref = HeapOffset {
+            bit_offset: self.top,
+        };
+        self.top += nbits;
         heap_ref.to_ref(size)
     }
 
     pub fn finish(self) -> Heap {
-        Heap(vec![0u64; self.top.div_ceil(8)].into())
+        Heap(vec![0u64; self.top.div_ceil(64)].into())
     }
 }
 
@@ -139,27 +141,38 @@ pub fn lower_process_to_vm(
     }
 
     // Make a map of the heap.
-    bb_stack.push(process.entry);
-    while let Some(bb_key) = bb_stack.pop() {
-        let bb = gl.bbs.get(bb_key).unwrap();
+    for (min_bits, max_bits) in [(1, u32::MAX) /*(33, u32::MAX), (1, 32)*/] {
+        bb_seen.clear();
+        bb_stack.push(process.entry);
+        while let Some(bb_key) = bb_stack.pop() {
+            let bb = gl.bbs.get(bb_key).unwrap();
 
-        for instr in &bb.instrs {
-            if let Instruction::Phi(dst, srcs) = instr {
-                for (bb, var) in srcs {
-                    bb_phis.entry(*bb).or_insert(Vec::new()).push((*dst, *var));
+            for instr in &bb.instrs {
+                if let Instruction::Phi(dst, srcs) = instr {
+                    for (bb, var) in srcs {
+                        bb_phis.entry(*bb).or_insert(Vec::new()).push((*dst, *var));
+                    }
+                }
+
+                if let Some(dst) = instr.get_destination_variable() {
+                    let size = gl.vars.get(dst).unwrap().size;
+                    let mode = var_mode[&dst];
+
+                    let mut num_bits = size.get();
+                    if mode == LogicMode::FourValue {
+                        num_bits = num_bits * 2;
+                    }
+
+                    if (min_bits..=max_bits).contains(&num_bits) {
+                        let prev = heap_map.insert(dst, builder.claim(mode, size).offset);
+                        assert!(prev.is_none());
+                    }
                 }
             }
 
-            if let Some(dst) = instr.get_destination_variable() {
-                let size = gl.vars.get(dst).unwrap().size;
-                let mode = var_mode[&dst];
-
-                heap_map.insert(dst, builder.claim(mode, size).offset);
-            }
+            bb_seen.insert(bb_key);
+            bb.terminator.extend_next_rev(&mut bb_stack, &mut bb_seen);
         }
-
-        bb_seen.insert(bb_key);
-        bb.terminator.extend_next_rev(&mut bb_stack, &mut bb_seen);
     }
 
     bb_stack.clear();

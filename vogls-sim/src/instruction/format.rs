@@ -4,7 +4,7 @@ use super::{HeapOffset, VmInstruction, VmProcess, VmSignalKey};
 
 impl fmt::Display for HeapOffset {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "t{}", self.0)
+        write!(f, "t{}", self.bit_offset)
     }
 }
 

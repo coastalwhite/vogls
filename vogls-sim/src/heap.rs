@@ -11,21 +11,21 @@ pub struct Heap(pub Box<[u64]>);
 
 impl Heap {
     pub fn get(&self, at: HeapRef) -> &[u8] {
-        &bytemuck::cast_slice::<u64, u8>(&self.0)[at.offset.0..]
+        &bytemuck::cast_slice::<u64, u8>(&self.0)[(at.offset.bit_offset / 8)..]
             [..at.size.get().div_ceil(8) as usize]
     }
     pub fn get_mut(&mut self, at: HeapRef) -> &mut [u8] {
-        &mut bytemuck::cast_slice_mut::<u64, u8>(&mut self.0)[at.offset.0..]
+        &mut bytemuck::cast_slice_mut::<u64, u8>(&mut self.0)[(at.offset.bit_offset / 8)..]
             [..at.size.get().div_ceil(8) as usize]
     }
 
     pub fn get_u64_slice(&self, at: HeapOffset, nwords: usize) -> &[u64] {
-        debug_assert_eq!(at.0 % 8, 0);
-        &self.0[at.0 / 8..][..nwords]
+        debug_assert_eq!(at.bit_offset % 64, 0);
+        &self.0[at.bit_offset / 64..][..nwords]
     }
     pub fn get_mut_u64_slice(&mut self, at: HeapOffset, nwords: usize) -> &mut [u64] {
-        debug_assert_eq!(at.0 % 8, 0);
-        &mut self.0[at.0 / 8..][..nwords]
+        debug_assert_eq!(at.bit_offset % 64, 0);
+        &mut self.0[at.bit_offset / 64..][..nwords]
     }
 
     pub fn get_u64(&self, at: HeapOffset) -> u64 {
@@ -108,9 +108,15 @@ impl Heap {
         dst: (HeapOffset, usize),
         src: (HeapOffset, usize),
     ) -> (&mut [u64], &[u64]) {
-        debug_assert_eq!(dst.0.0 % 8, 0);
-        debug_assert_eq!(src.0.0 % 8, 0);
-        get_disjoint_dst_src(&mut self.0, dst.0.0 / 8, dst.1, src.0.0 / 8, src.1)
+        debug_assert_eq!(dst.0.bit_offset % 64, 0);
+        debug_assert_eq!(src.0.bit_offset % 64, 0);
+        get_disjoint_dst_src(
+            &mut self.0,
+            dst.0.bit_offset / 64,
+            dst.1,
+            src.0.bit_offset / 64,
+            src.1,
+        )
     }
 
     pub fn get_disjoint_u64_dst_s1_s2(
@@ -119,28 +125,30 @@ impl Heap {
         src1: (HeapOffset, usize),
         src2: (HeapOffset, usize),
     ) -> (&mut [u64], &[u64], &[u64]) {
-        debug_assert_eq!(dst.0.0 % 8, 0);
-        debug_assert_eq!(src1.0.0 % 8, 0);
-        debug_assert_eq!(src2.0.0 % 8, 0);
+        debug_assert_eq!(dst.0.bit_offset % 64, 0);
+        debug_assert_eq!(src1.0.bit_offset % 64, 0);
+        debug_assert_eq!(src2.0.bit_offset % 64, 0);
         get_disjoint_dst_s1_s2(
             &mut self.0,
-            dst.0.0 / 8,
+            dst.0.bit_offset / 64,
             dst.1,
-            src1.0.0 / 8,
+            src1.0.bit_offset / 64,
             src1.1,
-            src2.0.0 / 8,
+            src2.0.bit_offset / 64,
             src2.1,
         )
     }
 
     pub fn get_disjoint_u8_dst_src(&mut self, dst: HeapRef, src: HeapRef) -> (&mut [u8], &[u8]) {
+        debug_assert_eq!(dst.offset.bit_offset % 8, 0);
+        debug_assert_eq!(src.offset.bit_offset % 8, 0);
         let dst_bytes = dst.size.get().div_ceil(8) as usize;
         let src_bytes = src.size.get().div_ceil(8) as usize;
         get_disjoint_dst_src(
             bytemuck::cast_slice_mut(&mut self.0),
-            dst.offset.0,
+            dst.offset.bit_offset / 8,
             dst_bytes,
-            src.offset.0,
+            src.offset.bit_offset / 8,
             src_bytes,
         )
     }
@@ -151,13 +159,16 @@ impl Heap {
         src1: HeapRef,
         src2: HeapRef,
     ) -> (&mut [u8], &[u8], &[u8]) {
+        debug_assert_eq!(dst.offset.bit_offset % 8, 0);
+        debug_assert_eq!(src1.offset.bit_offset % 8, 0);
+        debug_assert_eq!(src2.offset.bit_offset % 8, 0);
         get_disjoint_dst_s1_s2(
             bytemuck::cast_slice_mut(&mut self.0),
-            dst.offset.0,
+            dst.offset.bit_offset / 8,
             dst.size.get().div_ceil(8) as usize,
-            src1.offset.0,
+            src1.offset.bit_offset / 8,
             src1.size.get().div_ceil(8) as usize,
-            src2.offset.0,
+            src2.offset.bit_offset / 8,
             src2.size.get().div_ceil(8) as usize,
         )
     }

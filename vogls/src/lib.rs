@@ -20,7 +20,7 @@ pub use vogls_sim as sim;
 pub use vogls_bits as bits;
 
 pub mod design;
-pub mod symbolic_execution;
+// pub mod symbolic_execution;
 
 pub struct ExecutionContext {
     pub stdout: Box<dyn std::io::Write + Send + Sync>,
