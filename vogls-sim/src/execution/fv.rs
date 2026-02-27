@@ -355,7 +355,20 @@ pub(crate) fn exec_fv_select_bit(stack: &mut Heap, dst: HeapOffset, src: HeapRef
 
 pub(crate) fn exec_fv_concat(stack: &mut Heap, dst: HeapOffset, lhs: HeapRef, rhs: HeapRef) {
     let dst = dst.to_ref(VectorSize::new(lhs.size.get() + rhs.size.get()).unwrap());
-    if dst.size.get() > 16 {
+    if dst.size.get() <= 2 {
+        let lhs_byte = stack.get_subbit_byte(lhs.to_fv_size());
+        let rhs_byte = stack.get_subbit_byte(rhs.to_fv_size());
+        let mut dst_byte = [0];
+
+        vogls_bits::concat::fv_s_concat(
+            &mut dst_byte,
+            &[lhs_byte],
+            &[rhs_byte],
+            lhs.size,
+            rhs.size,
+        );
+        stack.set_aligned_raw_bits(dst.to_fv_size(), dst_byte[0]);
+    } else if dst.size.get() > 16 {
         let l_nbytes = if lhs.size.get() <= 16 {
             (2 * lhs.size.get()).div_ceil(8)
         } else {
@@ -370,20 +383,32 @@ pub(crate) fn exec_fv_concat(stack: &mut Heap, dst: HeapOffset, lhs: HeapRef, rh
 
         let (d, l, r) = stack.get_disjoint_u8_dst_s1_s2(
             dst.offset.to_ref(VectorSize::new(d_nbytes * 8).unwrap()),
-            lhs.offset.to_ref(VectorSize::new(l_nbytes * 8).unwrap()),
-            rhs.offset.to_ref(VectorSize::new(r_nbytes * 8).unwrap()),
+            lhs.offset
+                .to_ref(VectorSize::new(l_nbytes * 8).unwrap())
+                .prev_byte_align(),
+            rhs.offset
+                .to_ref(VectorSize::new(r_nbytes * 8).unwrap())
+                .prev_byte_align(),
         );
         let mut lhs_s = [0u64; 2];
         let mut rhs_s = [0u64; 2];
         let d = bytemuck::cast_slice_mut::<u8, u64>(d);
-        let l = if lhs.size.get() <= 16 {
+        let l = if lhs.size.get() <= 2 {
+            (lhs_s[0], lhs_s[1]) =
+                fv_unpack_u64((l[0] >> (lhs.offset.bit_offset % 8)) as u64, lhs.size);
+            &lhs_s
+        } else if lhs.size.get() <= 16 {
             (lhs_s[0], lhs_s[1]) =
                 fv_unpack_u64(load_partial_u64(l, lhs.to_fv_size().size), lhs.size);
             &lhs_s
         } else {
             bytemuck::cast_slice::<u8, u64>(l)
         };
-        let r = if rhs.size.get() <= 16 {
+        let r = if rhs.size.get() <= 2 {
+            (rhs_s[0], rhs_s[1]) =
+                fv_unpack_u64((r[0] >> (rhs.offset.bit_offset % 8)) as u64, rhs.size);
+            &rhs_s
+        } else if rhs.size.get() <= 16 {
             (rhs_s[0], rhs_s[1]) =
                 fv_unpack_u64(load_partial_u64(r, rhs.to_fv_size().size), rhs.size);
             &rhs_s
@@ -392,8 +417,22 @@ pub(crate) fn exec_fv_concat(stack: &mut Heap, dst: HeapOffset, lhs: HeapRef, rh
         };
         fv_l_concat(d, l, r, lhs.size, rhs.size);
     } else {
-        let (d, l, r) =
-            stack.get_disjoint_u8_dst_s1_s2(dst.to_fv_size(), lhs.to_fv_size(), rhs.to_fv_size());
+        let lhs_byte;
+        let rhs_byte;
+        let (d, mut l, mut r) = stack.get_disjoint_u8_dst_s1_s2(
+            dst.to_fv_size(),
+            lhs.to_fv_size().prev_byte_align(),
+            rhs.to_fv_size().prev_byte_align(),
+        );
+
+        if lhs.size.get() <= 4 {
+            lhs_byte = l[0] >> (lhs.offset.bit_offset % 8);
+            l = std::slice::from_ref(&lhs_byte);
+        }
+        if rhs.size.get() <= 4 {
+            rhs_byte = r[0] >> (rhs.offset.bit_offset % 8);
+            r = std::slice::from_ref(&rhs_byte);
+        }
         fv_s_concat(d, l, r, lhs.size, rhs.size);
     }
 }

@@ -24,15 +24,22 @@ impl<'a> HeapSlice<'a> {
 }
 
 impl Heap {
-    pub fn get<'a>(&'a self, at: HeapRef) -> HeapSlice<'a> {
+    pub fn get_subbit_byte<'a>(&'a self, at: HeapRef) -> u8 {
+        debug_assert!(at.size.get() <= 4);
         let slice = bytemuck::cast_slice::<u64, u8>(&self.0);
         let start_byte = at.offset.bit_offset / 8;
+        let b = slice[start_byte];
+        let b = (b >> at.offset.bit_offset % 8) & ((1u8 << at.size.get()) - 1);
+        b
+    }
+
+    pub fn get<'a>(&'a self, at: HeapRef) -> HeapSlice<'a> {
         if at.size.get() > 4 {
+            let slice = bytemuck::cast_slice::<u64, u8>(&self.0);
+            let start_byte = at.offset.bit_offset / 8;
             HeapSlice::Bytes(&slice[start_byte..][..at.size.get().div_ceil(8) as usize])
         } else {
-            let b = slice[start_byte];
-            let b = (b >> at.offset.bit_offset % 8) & ((1u8 << at.size.get()) - 1);
-            HeapSlice::Bits(b)
+            HeapSlice::Bits(self.get_subbit_byte(at))
         }
     }
     pub fn get_mut(&mut self, at: HeapRef) -> &mut [u8] {

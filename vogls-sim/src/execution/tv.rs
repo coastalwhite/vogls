@@ -270,6 +270,32 @@ pub(crate) fn exec_tv_select_bit(stack: &mut Heap, dst: HeapOffset, src: HeapRef
 pub(crate) fn exec_tv_concat(stack: &mut Heap, dst: HeapOffset, lhs: HeapRef, rhs: HeapRef) {
     let (lhs_size, rhs_size) = (lhs.size, rhs.size);
     let dst_size = lhs_size.checked_add(rhs_size.get()).unwrap();
-    let (dst, lhs, rhs) = stack.get_disjoint_u8_dst_s1_s2(dst.to_ref(dst_size), lhs, rhs);
-    vogls_bits::concat::tv_concat(dst, lhs, rhs, lhs_size, rhs_size);
+
+    if dst_size.get() <= 4 {
+        let lhs_byte = stack.get_subbit_byte(lhs);
+        let rhs_byte = stack.get_subbit_byte(rhs);
+        let mut dst_byte = [0];
+
+        vogls_bits::concat::tv_concat(&mut dst_byte, &[lhs_byte], &[rhs_byte], lhs_size, rhs_size);
+        stack.set_aligned_raw_bits(dst.to_ref(dst_size), dst_byte[0]);
+    } else {
+        let lhs_byte;
+        let rhs_byte;
+
+        let (dst, mut lhs_slice, mut rhs_slice) = stack.get_disjoint_u8_dst_s1_s2(
+            dst.to_ref(dst_size),
+            lhs.prev_byte_align(),
+            rhs.prev_byte_align(),
+        );
+
+        if lhs.size.get() <= 4 {
+            lhs_byte = lhs_slice[0] >> (lhs.offset.bit_offset % 8);
+            lhs_slice = std::slice::from_ref(&lhs_byte);
+        }
+        if rhs.size.get() <= 4 {
+            rhs_byte = rhs_slice[0] >> (rhs.offset.bit_offset % 8);
+            rhs_slice = std::slice::from_ref(&rhs_byte);
+        }
+        vogls_bits::concat::tv_concat(dst, lhs_slice, rhs_slice, lhs_size, rhs_size);
+    }
 }

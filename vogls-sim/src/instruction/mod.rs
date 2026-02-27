@@ -27,6 +27,13 @@ impl HeapRef {
         self.size = self.size.checked_mul(VectorSize::new(2).unwrap()).unwrap();
         self
     }
+
+    pub fn prev_byte_align(self) -> HeapRef {
+        Self {
+            offset: self.offset.prev_byte_align(),
+            size: self.size,
+        }
+    }
 }
 
 impl HeapOffset {
@@ -41,6 +48,11 @@ impl HeapOffset {
     }
     fn to_64bit_ref(self) -> HeapRef {
         self.to_ref(TIME_VSIZE)
+    }
+    pub fn prev_byte_align(self) -> Self {
+        Self {
+            bit_offset: self.bit_offset - self.bit_offset % 8,
+        }
     }
 }
 
