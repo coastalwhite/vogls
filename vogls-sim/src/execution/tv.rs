@@ -193,9 +193,24 @@ pub(crate) fn exec_tv_bin_arith(
             O::CopyX | O::CopyZ => unreachable!(),
         };
 
-        let (dst, lhs, rhs) =
-            stack.get_disjoint_u8_dst_s1_s2(dst, lhs.to_ref(size), rhs.to_ref(size));
-        f(dst, lhs, rhs, size);
+        let lhs = lhs.to_ref(dst.size);
+        let rhs = rhs.to_ref(dst.size);
+
+        if dst.size.get() <= 4 {
+            let mut dst_b = 0u8;
+            let lhs = stack.get(lhs);
+            let rhs = stack.get(rhs);
+            f(
+                std::slice::from_mut(&mut dst_b),
+                lhs.as_slice(),
+                rhs.as_slice(),
+                dst.size,
+            );
+            stack.set_raw_bits(dst, dst_b);
+        } else {
+            let (dst_s, lhs_s, rhs_s) = stack.get_disjoint_u8_dst_s1_s2(dst, lhs, rhs);
+            f(dst_s, lhs_s, rhs_s, dst.size);
+        }
     }
 }
 

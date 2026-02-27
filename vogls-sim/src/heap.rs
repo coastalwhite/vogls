@@ -76,9 +76,7 @@ impl Heap {
         debug_assert!(at.size.get() <= 64);
         if at.size.get() <= 4 {
             let old = load_partial_u64(self.get(at).as_slice(), at.size);
-            let mask = ((1u64 << at.size.get()) - 1) << (at.offset.bit_offset % 64);
-            self.0[at.offset.bit_offset / 64] &= !mask;
-            self.0[at.offset.bit_offset / 64] |= value << (at.offset.bit_offset % 64);
+            self.set_raw_bits(at, value as u8);
             old
         } else if at.size.get() <= 32 {
             let old = load_partial_u64(self.get(at).as_slice(), at.size);
@@ -118,22 +116,18 @@ impl Heap {
     }
     pub fn set_fv_u64(&mut self, at: HeapRef, spc: u64, val: u64) -> (u64, u64) {
         debug_assert!(at.size.get() <= 64);
+        let dat = at.to_fv_size();
         if at.size.get() <= 2 {
-            let dsize = at.size.checked_mul(VectorSize::new(2).unwrap()).unwrap();
-            let src = self.get(at.to_fv_size());
-            let old = load_partial_u64(src.as_slice(), dsize);
+            let src = self.get(dat);
+            let old = load_partial_u64(src.as_slice(), dat.size);
             let result = fv_pack_u64(spc, val, at.size);
-            let shift = at.offset.bit_offset % 64;
-            let mask = ((1u64 << dsize.get()) - 1) << shift;
-            self.0[at.offset.bit_offset / 64] &= !mask;
-            self.0[at.offset.bit_offset / 64] |= result << shift;
+            self.set_raw_bits(dat, result as u8);
             fv_unpack_u64(old, at.size)
         } else if at.size.get() <= 16 {
-            let dsize = at.size.checked_mul(VectorSize::new(2).unwrap()).unwrap();
             let dst = bytemuck::cast_slice_mut::<u64, u8>(&mut self.0);
-            let dst = &mut dst[(at.offset.bit_offset / 8)..][..dsize.get().div_ceil(8) as usize];
-            let old = load_partial_u64(dst, dsize);
-            store_partial_u64(dst, fv_pack_u64(spc, val, at.size), dsize);
+            let dst = &mut dst[(at.offset.bit_offset / 8)..][..dat.size.get().div_ceil(8) as usize];
+            let old = load_partial_u64(dst, dat.size);
+            store_partial_u64(dst, fv_pack_u64(spc, val, at.size), dat.size);
             fv_unpack_u64(old, at.size)
         } else {
             let s = self.get_mut_u64_slice(at.offset, 2);
@@ -266,5 +260,13 @@ impl Heap {
     pub fn set_fv_scalar(&mut self, at: HeapOffset, value: FvLogicValue) {
         let (spc, val) = ((value as u64) >> 1, (value as u64) & 1);
         self.set_fv_u64(at.to_ref(SCALAR_VSIZE), spc, val);
+    }
+
+    pub fn set_raw_bits(&mut self, at: HeapRef, byte: u8) {
+        debug_assert!(at.size.get() <= 4);
+        let shift = at.offset.bit_offset % 64;
+        let mask = ((1u64 << at.size.get()) - 1) << shift;
+        self.0[at.offset.bit_offset / 64] &= !mask;
+        self.0[at.offset.bit_offset / 64] |= (byte as u64) << shift;
     }
 }
