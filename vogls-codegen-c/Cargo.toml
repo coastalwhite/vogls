@@ -1,5 +1,5 @@
 [package]
-name = "vogls-codegen"
+name = "vogls-codegen-c"
 version.workspace = true
 edition.workspace = true
 

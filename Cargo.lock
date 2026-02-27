@@ -690,6 +690,7 @@ dependencies = [
  "clap",
  "slotmap",
  "vogls-bits",
+ "vogls-codegen",
  "vogls-frontend",
  "vogls-ir",
  "vogls-sim",
@@ -705,6 +706,25 @@ dependencies = [
  "bytemuck",
  "proptest",
  "rand 0.10.0",
+]
+
+[[package]]
+name = "vogls-codegen"
+version = "0.0.1"
+dependencies = [
+ "bytemuck",
+ "vogls-bits",
+ "vogls-ir",
+ "vogls-utils",
+]
+
+[[package]]
+name = "vogls-codegen-c"
+version = "0.0.1"
+dependencies = [
+ "vogls-bits",
+ "vogls-ir",
+ "vogls-utils",
 ]
 
 [[package]]
@@ -742,6 +762,7 @@ dependencies = [
  "bytemuck",
  "slotmap",
  "vogls-bits",
+ "vogls-codegen",
  "vogls-ir",
  "vogls-trace",
  "vogls-utils",

@@ -8,5 +8,7 @@ vogls-ir.workspace = true
 vogls-bits.workspace = true
 vogls-utils.workspace = true
 
+bytemuck.workspace = true
+
 [lints]
 workspace = true

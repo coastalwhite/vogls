@@ -3,11 +3,12 @@ use std::path::Path;
 use std::rc::Rc;
 
 use slotmap::{SecondaryMap, SlotMap};
+use vogls_codegen::{HeapBuilder, HeapOffset, HeapRef};
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_ir::{Bits, GlobalContext, LogicMode, Signal, SignalKey};
 use vogls_sim::{
-    Event, HeapBuilder, HeapOffset, HeapRef, Regions, Simulation, SimulationIo, SimulationState,
-    VmProcess, VmProcessKey, VmSignalKey, lower_process_to_vm,
+    Event, Regions, Simulation, SimulationIo, SimulationState, VmProcess, VmProcessKey,
+    VmSignalKey, lower_process_to_vm,
 };
 use vogls_utils::VgHashMap;
 use vogls_verilog::ast::AstId;

@@ -1,57 +1,15 @@
 use std::collections::{HashMap, HashSet};
 
+use vogls_codegen::{HeapBuilder, HeapRef};
 use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, BinaryOp, GlobalContext, INTEGER_VSIZE, Instruction,
-    IntrinsicOp, LogicMode, ProcessKey, SignalKey, VariableKey, VectorSize,
+    IntrinsicOp, LogicMode, ProcessKey, SignalKey, VariableKey
 };
 
-use crate::instruction::{HeapOffset, VmInstruction, VmProcess};
-use crate::{BinaryArithmeticOp, BinaryComparisonOp, Heap, ShiftOp, VmIntrinsicOp};
+use crate::instruction::{VmInstruction, VmProcess};
+use crate::{BinaryArithmeticOp, BinaryComparisonOp, ShiftOp, VmIntrinsicOp};
 
-use super::{HeapRef, VmSignalKey};
-
-pub struct HeapBuilder {
-    top: usize,
-    padding: usize,
-}
-
-impl HeapBuilder {
-    pub fn new() -> Self {
-        Self { top: 0, padding: 0 }
-    }
-
-    pub fn claim(&mut self, mode: LogicMode, size: VectorSize) -> HeapRef {
-        let (bit_alignment, bit_size) = match mode {
-            LogicMode::TwoValue => {
-                let nbits = size.get() as usize;
-                let alignment = nbits.min(64).next_power_of_two();
-                (alignment, nbits.next_multiple_of(alignment))
-            }
-            LogicMode::FourValue if size.get() <= 16 => {
-                let nbits = 2 * size.get() as usize;
-                let alignment = nbits.next_power_of_two();
-                (alignment, nbits.next_multiple_of(alignment))
-            }
-            LogicMode::FourValue => (64, 2 * (size.get() as usize).next_multiple_of(64)),
-        };
-
-        self.padding += self.top.next_multiple_of(bit_alignment) - self.top;
-        self.top = self.top.next_multiple_of(bit_alignment);
-        let heap_ref = HeapOffset {
-            bit_offset: self.top,
-        };
-        self.top += bit_size;
-        heap_ref.to_ref(size)
-    }
-
-    pub fn padding(&self) -> usize {
-        self.padding
-    }
-
-    pub fn finish(self) -> Heap {
-        Heap(vec![0u64; self.top.div_ceil(64)].into())
-    }
-}
+use super::{VmSignalKey};
 
 pub fn lower_process_to_vm(
     process: ProcessKey,

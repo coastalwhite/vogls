@@ -1,64 +1,16 @@
 use vogls_ir::dyn_format_string::DynFormatString;
-use vogls_ir::{
-    Bits, INTEGER_VSIZE, LogicMode, ResizeOp, SCALAR_VSIZE, TIME_VSIZE, Time, UnaryOp, VectorSize,
-};
+use vogls_ir::{Bits, LogicMode, ResizeOp, Time, UnaryOp, VectorSize};
 
 mod format;
 mod lower;
 
-pub use lower::{HeapBuilder, lower_process_to_vm};
+pub use lower::lower_process_to_vm;
 
-use crate::{Heap, VcdScope};
+use crate::VcdScope;
+use vogls_codegen::{Heap, HeapOffset, HeapRef};
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct VmSignalKey(pub u64);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct HeapOffset {
-    pub bit_offset: usize,
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct HeapRef {
-    pub offset: HeapOffset,
-    pub size: VectorSize,
-}
-impl HeapRef {
-    pub fn to_fv_size(mut self) -> HeapRef {
-        self.size = self.size.checked_mul(VectorSize::new(2).unwrap()).unwrap();
-        self
-    }
-
-    pub fn prev_byte_align(self) -> HeapRef {
-        Self {
-            offset: self.offset.prev_byte_align(),
-            size: self.size,
-        }
-    }
-    pub fn align_subbits(self, byte: u8) -> u8 {
-        debug_assert!(self.size.get() <= 4);
-        (byte >> (self.offset.bit_offset % 8)) & ((1u8 << self.size.get()) - 1)
-    }
-}
-
-impl HeapOffset {
-    pub fn to_ref(self, size: VectorSize) -> HeapRef {
-        HeapRef { offset: self, size }
-    }
-    pub fn to_scalar_ref(self) -> HeapRef {
-        self.to_ref(SCALAR_VSIZE)
-    }
-    fn to_32bit_ref(self) -> HeapRef {
-        self.to_ref(INTEGER_VSIZE)
-    }
-    fn to_64bit_ref(self) -> HeapRef {
-        self.to_ref(TIME_VSIZE)
-    }
-    pub fn prev_byte_align(self) -> Self {
-        Self {
-            bit_offset: self.bit_offset - self.bit_offset % 8,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy)]
 pub enum BinaryArithmeticOp {

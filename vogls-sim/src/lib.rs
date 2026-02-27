@@ -8,17 +8,16 @@ use slotmap::{SlotMap, new_key_type};
 use vogls_bits::arithmetic::{FvLogicValue, fv_set_no_special};
 use vogls_bits::format::{BitsFormatBase, BitsFormatOptions};
 use vogls_bits::set_subslice::{tv_l_set, tv_s_set};
+use vogls_codegen::{Heap, HeapOffset, HeapRef};
 use vogls_ir::vcd::NetType;
 use vogls_ir::{INTEGER_VSIZE, LogicMode, SCALAR_VSIZE, SignalKey, TIME_VSIZE, VectorSize};
 
 mod execution;
-mod heap;
 mod instruction;
 mod plugin;
 
 pub use plugin::{InstructionPlugin, Plugin};
 
-pub use heap::Heap;
 pub use instruction::*;
 use vogls_utils::NonMaxU64;
 

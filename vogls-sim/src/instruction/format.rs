@@ -1,12 +1,6 @@
 use std::fmt::{self, Write};
 
-use super::{HeapOffset, VmInstruction, VmProcess, VmSignalKey};
-
-impl fmt::Display for HeapOffset {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "t{}", self.bit_offset)
-    }
-}
+use super::{VmInstruction, VmProcess, VmSignalKey};
 
 impl fmt::Display for VmInstruction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

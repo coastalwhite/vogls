@@ -1,10 +1,106 @@
+use std::fmt;
+
 use vogls_bits::arithmetic::{FvLogicValue, fv_pack_u64, fv_set_no_special, fv_unpack_u64};
 use vogls_bits::load::load_partial_u64;
 use vogls_bits::store::store_partial_u64;
 use vogls_bits::{BitsDataRef, get_disjoint_dst_s1_s2, get_disjoint_dst_src};
-use vogls_ir::{Bits, LogicMode, SCALAR_VSIZE, VectorSize};
+use vogls_ir::{Bits, INTEGER_VSIZE, LogicMode, SCALAR_VSIZE, TIME_VSIZE, VectorSize};
 
-use crate::{HeapOffset, HeapRef};
+pub struct HeapBuilder {
+    top: usize,
+    padding: usize,
+}
+
+impl HeapBuilder {
+    pub fn new() -> Self {
+        Self { top: 0, padding: 0 }
+    }
+
+    pub fn claim(&mut self, mode: LogicMode, size: VectorSize) -> HeapRef {
+        let (bit_alignment, bit_size) = match mode {
+            LogicMode::TwoValue => {
+                let nbits = size.get() as usize;
+                let alignment = nbits.min(64).next_power_of_two();
+                (alignment, nbits.next_multiple_of(alignment))
+            }
+            LogicMode::FourValue if size.get() <= 16 => {
+                let nbits = 2 * size.get() as usize;
+                let alignment = nbits.next_power_of_two();
+                (alignment, nbits.next_multiple_of(alignment))
+            }
+            LogicMode::FourValue => (64, 2 * (size.get() as usize).next_multiple_of(64)),
+        };
+
+        self.padding += self.top.next_multiple_of(bit_alignment) - self.top;
+        self.top = self.top.next_multiple_of(bit_alignment);
+        let heap_ref = HeapOffset {
+            bit_offset: self.top,
+        };
+        self.top += bit_size;
+        heap_ref.to_ref(size)
+    }
+
+    pub fn padding(&self) -> usize {
+        self.padding
+    }
+
+    pub fn finish(self) -> Heap {
+        Heap(vec![0u64; self.top.div_ceil(64)].into())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct HeapOffset {
+    pub bit_offset: usize,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct HeapRef {
+    pub offset: HeapOffset,
+    pub size: VectorSize,
+}
+impl HeapRef {
+    pub fn to_fv_size(mut self) -> HeapRef {
+        self.size = self.size.checked_mul(VectorSize::new(2).unwrap()).unwrap();
+        self
+    }
+
+    pub fn prev_byte_align(self) -> HeapRef {
+        Self {
+            offset: self.offset.prev_byte_align(),
+            size: self.size,
+        }
+    }
+    pub fn align_subbits(self, byte: u8) -> u8 {
+        debug_assert!(self.size.get() <= 4);
+        (byte >> (self.offset.bit_offset % 8)) & ((1u8 << self.size.get()) - 1)
+    }
+}
+
+impl HeapOffset {
+    pub fn to_ref(self, size: VectorSize) -> HeapRef {
+        HeapRef { offset: self, size }
+    }
+    pub fn to_scalar_ref(self) -> HeapRef {
+        self.to_ref(SCALAR_VSIZE)
+    }
+    pub fn to_32bit_ref(self) -> HeapRef {
+        self.to_ref(INTEGER_VSIZE)
+    }
+    pub fn to_64bit_ref(self) -> HeapRef {
+        self.to_ref(TIME_VSIZE)
+    }
+    pub fn prev_byte_align(self) -> Self {
+        Self {
+            bit_offset: self.bit_offset - self.bit_offset % 8,
+        }
+    }
+}
+
+impl fmt::Display for HeapOffset {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "t{}", self.bit_offset)
+    }
+}
 
 #[derive(Clone)]
 pub struct Heap(pub Box<[u64]>);
