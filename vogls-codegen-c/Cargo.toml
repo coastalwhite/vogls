@@ -1,0 +1,12 @@
+[package]
+name = "vogls-codegen"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+vogls-ir.workspace = true
+vogls-bits.workspace = true
+vogls-utils.workspace = true
+
+[lints]
+workspace = true
