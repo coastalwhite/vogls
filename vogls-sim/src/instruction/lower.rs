@@ -1,20 +1,21 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
-use vogls_codegen::{HeapBuilder, HeapRef};
+use vogls_codegen::{HeapBuilder, HeapRef, resolve_heap_map, resolve_var_logic_mode_map};
 use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, BinaryOp, GlobalContext, INTEGER_VSIZE, Instruction,
-    IntrinsicOp, LogicMode, ProcessKey, SignalKey, VariableKey
+    IntrinsicOp, LogicMode, ProcessKey, SignalKey, VariableKey,
 };
+use vogls_utils::{VgHashMap, VgHashSet};
 
 use crate::instruction::{VmInstruction, VmProcess};
 use crate::{BinaryArithmeticOp, BinaryComparisonOp, ShiftOp, VmIntrinsicOp};
 
-use super::{VmSignalKey};
+use super::VmSignalKey;
 
 pub fn lower_process_to_vm(
     process: ProcessKey,
     gl: &GlobalContext,
-    builder: &mut HeapBuilder,
+    heap_builder: &mut HeapBuilder,
     signals: &[HeapRef],
     io_signals: &HashMap<SignalKey, VmSignalKey>,
     signal_map: &HashMap<SignalKey, SignalKey>,
@@ -25,126 +26,29 @@ pub fn lower_process_to_vm(
     let process = &gl.processes[process];
 
     let mut bb_stack = Vec::new();
-    let mut bb_seen = HashSet::new();
-    let mut bb_phis = HashMap::<BasicBlockKey, Vec<(VariableKey, VariableKey)>>::new();
+    let mut bb_seen = VgHashSet::<BasicBlockKey>::default();
+    let mut bb_phis = VgHashMap::<BasicBlockKey, Vec<(VariableKey, VariableKey)>>::default();
 
-    let mut var_mode = HashMap::<VariableKey, LogicMode>::new();
-    let mut heap_map = HashMap::new();
+    let mut var_mode = VgHashMap::<VariableKey, LogicMode>::default();
+    let mut heap_map = VgHashMap::default();
 
-    // Fill `var_mode` with the `LogicMode` for each variable.
-    //
-    // @Performance
-    loop {
-        bb_stack.push(process.entry);
-        bb_seen.insert(process.entry);
-        let mut has_unresolved_variables = false;
-
-        while let Some(bb_key) = bb_stack.pop() {
-            let bb = &gl.bbs[bb_key];
-            bb.terminator.extend_next_rev(&mut bb_stack, &mut bb_seen);
-
-            use Instruction as I;
-            for instr in &bb.instrs {
-                match instr {
-                    I::Constant(dst, bits) => {
-                        var_mode.insert(
-                            *dst,
-                            if bits.contains_special() {
-                                LogicMode::FourValue
-                            } else {
-                                LogicMode::TwoValue
-                            },
-                        );
-                    }
-                    I::Unary(dst, _, src) | I::Resize(dst, _, src) => {
-                        if let Some(m) = var_mode.get(&src).copied() {
-                            var_mode.insert(*dst, m);
-                        }
-                    }
-                    I::Binary(dst, _, lhs, rhs) => {
-                        if let (Some(m1), Some(m2)) =
-                            (var_mode.get(&lhs).copied(), var_mode.get(&rhs).copied())
-                        {
-                            let m = if m1 == LogicMode::FourValue || m2 == LogicMode::FourValue {
-                                LogicMode::FourValue
-                            } else {
-                                LogicMode::TwoValue
-                            };
-                            var_mode.insert(*dst, m);
-                        }
-                    }
-                    I::Intrinsic(dst, _, _) => _ = var_mode.insert(*dst, LogicMode::TwoValue),
-                    I::LastUpdateTime(dst, _) => _ = var_mode.insert(*dst, LogicMode::TwoValue),
-                    I::Probe(dst, _) => {
-                        var_mode.insert(*dst, gl.logic_mode);
-                    }
-                    I::Drive(_, _, _) => {}
-                    I::Phi(dst, items) => {
-                        for (_, v) in items {
-                            if let Some(m) = var_mode.get(v).copied() {
-                                if m == LogicMode::FourValue {
-                                    var_mode.insert(*dst, LogicMode::FourValue);
-                                    continue;
-                                }
-                            } else {
-                                has_unresolved_variables = true;
-                                continue;
-                            }
-                        }
-                        var_mode.insert(*dst, LogicMode::TwoValue);
-                    }
-                }
-            }
-        }
-
-        bb_seen.clear();
-        if !has_unresolved_variables {
-            break;
-        }
-    }
-
-    // Make a map of the heap.
-    for (min_bits, max_bits) in [
-        (33, u32::MAX),
-        (17, 32),
-        (9, 16),
-        (5, 8),
-        (3, 4),
-        (2, 2),
-        (1, 1),
-    ] {
-        bb_seen.clear();
-        bb_stack.push(process.entry);
-        while let Some(bb_key) = bb_stack.pop() {
-            let bb = gl.bbs.get(bb_key).unwrap();
-
-            for instr in &bb.instrs {
-                if let Instruction::Phi(dst, srcs) = instr {
-                    for (bb, var) in srcs {
-                        bb_phis.entry(*bb).or_insert(Vec::new()).push((*dst, *var));
-                    }
-                }
-
-                if let Some(dst) = instr.get_destination_variable() {
-                    let size = gl.vars.get(dst).unwrap().size;
-                    let mode = var_mode[&dst];
-
-                    let mut num_bits = size.get();
-                    if mode == LogicMode::FourValue {
-                        num_bits = num_bits * 2;
-                    }
-
-                    if (min_bits..=max_bits).contains(&num_bits) {
-                        let prev = heap_map.insert(dst, builder.claim(mode, size).offset);
-                        assert!(prev.is_none());
-                    }
-                }
-            }
-
-            bb_seen.insert(bb_key);
-            bb.terminator.extend_next_rev(&mut bb_stack, &mut bb_seen);
-        }
-    }
+    resolve_var_logic_mode_map(
+        process.entry,
+        gl,
+        &mut bb_stack,
+        &mut bb_seen,
+        &mut var_mode,
+    );
+    resolve_heap_map(
+        process.entry,
+        gl,
+        &mut bb_stack,
+        &mut bb_seen,
+        &var_mode,
+        heap_builder,
+        &mut heap_map,
+        &mut bb_phis,
+    );
 
     bb_stack.clear();
     bb_seen.clear();
@@ -163,12 +67,12 @@ pub fn lower_process_to_vm(
             let r = match ($tgt_mode, $src_mode) {
                 (LogicMode::TwoValue, LogicMode::TwoValue) | (LogicMode::FourValue, LogicMode::FourValue) => r,
                 (LogicMode::TwoValue, LogicMode::FourValue) => {
-                    let tgt = builder.claim($tgt_mode, $size);
+                    let tgt = heap_builder.claim($tgt_mode, $size);
                     instructions.push(VmInstruction::FvToTv(tgt, r));
                     tgt.offset
                 },
                 (LogicMode::FourValue, LogicMode::TwoValue) => {
-                    let tgt = builder.claim($tgt_mode, $size);
+                    let tgt = heap_builder.claim($tgt_mode, $size);
                     instructions.push(VmInstruction::TvToFv(tgt, r));
                     tgt.offset
                 },
@@ -427,7 +331,11 @@ pub fn lower_process_to_vm(
         instructions.push(terminator_instr);
 
         bb_seen.insert(bb_key);
-        bb.terminator.extend_next_rev(&mut bb_stack, &mut bb_seen);
+        bb.terminator.for_each_bb(|bb| {
+            if bb_seen.insert(bb) {
+                bb_stack.push(bb);
+            }
+        });
     }
 
     // Correct the offsets of the transitions between basic blocks.
