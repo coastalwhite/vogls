@@ -4,6 +4,9 @@ use std::rc::Rc;
 
 use slotmap::{SecondaryMap, SlotMap};
 use vogls_codegen::{HeapBuilder, HeapOffset, HeapRef};
+use vogls_codegen_c::{
+    ListenerBuilder, lower_signal_listener_waker, lower_signal_listener_waker_header,
+};
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_ir::{Bits, GlobalContext, LogicMode, Signal, SignalKey};
 use vogls_sim::{
@@ -573,10 +576,16 @@ impl Design {
         }
 
         if ectx.compile {
+            let mut listener_builder = ListenerBuilder::default();
             let io_signals = io_signals
                 .iter()
                 .map(|(k, v)| (*k, signals[v.0 as usize]))
                 .collect();
+
+            for signal in gl.signals.keys() {
+                lower_signal_listener_waker_header(&mut ectx.stdout, signal, &io_signals)?;
+            }
+
             for (i, process) in gl.processes.keys().enumerate() {
                 vogls_codegen_c::lower_process(
                     &mut ectx.stdout,
@@ -584,6 +593,17 @@ impl Design {
                     i,
                     &gl,
                     &mut heap_builder,
+                    &mut listener_builder,
+                    &io_signals,
+                )?;
+            }
+
+            for signal in gl.signals.keys() {
+                lower_signal_listener_waker(
+                    &mut ectx.stdout,
+                    &gl,
+                    signal,
+                    &listener_builder,
                     &io_signals,
                 )?;
             }

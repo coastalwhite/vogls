@@ -139,7 +139,7 @@ impl<K: Eq + hash::Hash> IndexSet<K> {
                 self.random_state.hash_one(i)
             },
         ) {
-            hashbrown::hash_table::Entry::Occupied(i) => Ok(i.get().get()),
+            hashbrown::hash_table::Entry::Occupied(i) => Err(i.get().get()),
             hashbrown::hash_table::Entry::Vacant(i) => {
                 let idx = self.keys.len();
                 i.insert(NonMaxUsize::new(idx).unwrap());
