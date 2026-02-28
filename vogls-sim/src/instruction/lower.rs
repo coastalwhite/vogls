@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use vogls_codegen::{HeapBuilder, HeapRef, resolve_heap_map, resolve_var_logic_mode_map};
+use vogls_codegen::{
+    HeapBuilder, HeapOffset, HeapRef, resolve_heap_map, resolve_var_logic_mode_map,
+};
 use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, BinaryOp, GlobalContext, INTEGER_VSIZE, Instruction,
     IntrinsicOp, LogicMode, ProcessKey, SignalKey, VariableKey,
@@ -30,6 +32,7 @@ pub fn lower_process_to_vm(
     let mut bb_phis = VgHashMap::<BasicBlockKey, Vec<(VariableKey, VariableKey)>>::default();
 
     let mut var_mode = VgHashMap::<VariableKey, LogicMode>::default();
+    let mut conv_map = VgHashMap::<VariableKey, HeapOffset>::default();
     let mut heap_map = VgHashMap::default();
 
     resolve_var_logic_mode_map(
@@ -38,6 +41,7 @@ pub fn lower_process_to_vm(
         &mut bb_stack,
         &mut bb_seen,
         &mut var_mode,
+        &mut conv_map,
     );
     resolve_heap_map(
         process.entry,
@@ -45,6 +49,7 @@ pub fn lower_process_to_vm(
         &mut bb_stack,
         &mut bb_seen,
         &var_mode,
+        &mut conv_map,
         heap_builder,
         &mut heap_map,
         &mut bb_phis,
@@ -67,12 +72,12 @@ pub fn lower_process_to_vm(
             let r = match ($tgt_mode, $src_mode) {
                 (LogicMode::TwoValue, LogicMode::TwoValue) | (LogicMode::FourValue, LogicMode::FourValue) => r,
                 (LogicMode::TwoValue, LogicMode::FourValue) => {
-                    let tgt = heap_builder.claim($tgt_mode, $size);
+                    let tgt = conv_map[&$var].to_ref($size);
                     instructions.push(VmInstruction::FvToTv(tgt, r));
                     tgt.offset
                 },
                 (LogicMode::FourValue, LogicMode::TwoValue) => {
-                    let tgt = heap_builder.claim($tgt_mode, $size);
+                    let tgt = conv_map[&$var].to_ref($size);
                     instructions.push(VmInstruction::TvToFv(tgt, r));
                     tgt.offset
                 },

@@ -125,7 +125,11 @@ impl<K, V> IndexMap<K, V> {
 }
 
 impl<K: Eq + hash::Hash> IndexSet<K> {
-    pub fn insert(&mut self, key: K) -> Option<usize> {
+    pub fn insert(&mut self, key: K) -> bool {
+        self.insert_new(key).is_ok()
+    }
+
+    pub fn insert_new(&mut self, key: K) -> Result<usize, usize> {
         let hash = self.random_state.hash_one(&key);
         match self.table.entry(
             hash,
@@ -135,11 +139,12 @@ impl<K: Eq + hash::Hash> IndexSet<K> {
                 self.random_state.hash_one(i)
             },
         ) {
-            hashbrown::hash_table::Entry::Occupied(i) => Some(i.get().get()),
+            hashbrown::hash_table::Entry::Occupied(i) => Ok(i.get().get()),
             hashbrown::hash_table::Entry::Vacant(i) => {
-                i.insert(NonMaxUsize::new(self.keys.len()).unwrap());
+                let idx = self.keys.len();
+                i.insert(NonMaxUsize::new(idx).unwrap());
                 self.keys.push(key);
-                None
+                Ok(idx)
             }
         }
     }

@@ -73,6 +73,7 @@ mod vogls {
                 },
                 no_run: false,
                 vcd: None,
+                compile: false,
             };
 
             let inner = vogls::design::Design::new(

@@ -37,6 +37,7 @@ pub struct ExecutionContext {
     pub logic_mode: LogicMode,
     pub no_run: bool,
     pub vcd: Option<PathBuf>,
+    pub compile: bool,
 }
 
 pub fn token_range_to_line_range(

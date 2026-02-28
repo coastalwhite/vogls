@@ -167,6 +167,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                 opt_rounds: 0,
                 logic_mode: config,
                 vcd: None,
+                compile: false,
             };
             let ctx = std::panic::AssertUnwindSafe(&mut ctx);
             let result = std::panic::catch_unwind(|| {

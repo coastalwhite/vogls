@@ -44,6 +44,9 @@ struct Args {
 
     #[arg(short = 'D')]
     defines: Vec<String>,
+    
+    #[arg(short = 'C')]
+    compile: bool,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -74,6 +77,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             opt_rounds: args.opt_rounds,
             logic_mode,
             vcd: args.vcd,
+            compile: args.compile,
         },
     )?;
 

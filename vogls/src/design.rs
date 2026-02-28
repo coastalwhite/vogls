@@ -572,6 +572,23 @@ impl Design {
             }
         }
 
+        if ectx.compile {
+            let io_signals = io_signals
+                .iter()
+                .map(|(k, v)| (*k, signals[v.0 as usize]))
+                .collect();
+            for (i, process) in gl.processes.keys().enumerate() {
+                vogls_codegen_c::lower_process(
+                    &mut ectx.stdout,
+                    process,
+                    i,
+                    &gl,
+                    &mut heap_builder,
+                    &io_signals,
+                )?;
+            }
+        }
+
         for process in gl.processes.keys() {
             if ectx.emit_vm && ectx.emit_ir {
                 println!();

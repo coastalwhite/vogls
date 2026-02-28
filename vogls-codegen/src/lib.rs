@@ -10,7 +10,14 @@ pub fn resolve_var_logic_mode_map(
     bb_stack: &mut Vec<BasicBlockKey>,
     bb_seen: &mut VgHashSet<BasicBlockKey>,
     var_mode: &mut VgHashMap<VariableKey, LogicMode>,
+    conv_map: &mut VgHashMap<VariableKey, HeapOffset>,
 ) {
+    macro_rules! mark_conv {
+        ($var:expr) => {
+            conv_map.insert($var, HeapOffset { bit_offset: 0 })
+        };
+    }
+
     bb_stack.clear();
     // Fill `var_mode` with the `LogicMode` for each variable.
     //
@@ -47,10 +54,17 @@ pub fn resolve_var_logic_mode_map(
                         }
                     }
                     I::Binary(dst, _, lhs, rhs) => {
-                        if let (Some(m1), Some(m2)) =
-                            (var_mode.get(lhs).copied(), var_mode.get(rhs).copied())
-                        {
+                        let m1 = var_mode.get(lhs);
+                        let m2 = var_mode.get(rhs);
+
+                        if let (Some(&m1), Some(&m2)) = (m1, m2) {
                             let m = if m1 == LogicMode::FourValue || m2 == LogicMode::FourValue {
+                                if m1 == LogicMode::TwoValue {
+                                    mark_conv!(*lhs);
+                                }
+                                if m2 == LogicMode::TwoValue {
+                                    mark_conv!(*rhs);
+                                }
                                 LogicMode::FourValue
                             } else {
                                 LogicMode::TwoValue
@@ -63,20 +77,44 @@ pub fn resolve_var_logic_mode_map(
                     I::Probe(dst, _) => {
                         var_mode.insert(*dst, gl.logic_mode);
                     }
-                    I::Drive(_, _, _) => {}
+                    I::Drive(_, src, partial) => {
+                        if let Some(m) = var_mode.get(src)
+                            && *m != gl.logic_mode
+                        {
+                            mark_conv!(*src);
+                        }
+                        if let Some((offset, _)) = partial
+                            && let Some(m) = var_mode.get(offset)
+                            && *m != gl.logic_mode
+                        {
+                            mark_conv!(*offset);
+                        }
+                    }
                     I::Phi(dst, items) => {
+                        let mut logic_mode = Some(LogicMode::TwoValue);
                         for (_, v) in items {
-                            if let Some(m) = var_mode.get(v).copied() {
-                                if m == LogicMode::FourValue {
-                                    var_mode.insert(*dst, LogicMode::FourValue);
-                                    continue;
+                            match var_mode.get(v) {
+                                None => {
+                                    logic_mode = None;
+                                    has_unresolved_variables = true;
+                                    break;
                                 }
-                            } else {
-                                has_unresolved_variables = true;
-                                continue;
+                                Some(LogicMode::TwoValue) => {}
+                                Some(LogicMode::FourValue) => {
+                                    logic_mode = Some(LogicMode::FourValue);
+                                }
                             }
                         }
-                        var_mode.insert(*dst, LogicMode::TwoValue);
+                        if let Some(logic_mode) = logic_mode {
+                            if logic_mode == LogicMode::FourValue {
+                                for (_, v) in items {
+                                    if var_mode.get(v) == Some(&LogicMode::TwoValue) {
+                                        mark_conv!(*v);
+                                    }
+                                }
+                            }
+                            var_mode.insert(*dst, logic_mode);
+                        }
                     }
                 }
             }
@@ -95,6 +133,7 @@ pub fn resolve_heap_map(
     bb_stack: &mut Vec<BasicBlockKey>,
     bb_seen: &mut VgHashSet<BasicBlockKey>,
     var_mode: &VgHashMap<VariableKey, LogicMode>,
+    conv_map: &mut VgHashMap<VariableKey, HeapOffset>,
     heap_builder: &mut HeapBuilder,
     heap_map: &mut VgHashMap<VariableKey, HeapOffset>,
     bb_phis: &mut VgHashMap<BasicBlockKey, Vec<(VariableKey, VariableKey)>>,
@@ -124,8 +163,8 @@ pub fn resolve_heap_map(
                 }
 
                 if let Some(dst) = instr.get_destination_variable() {
-                    let size = gl.vars.get(dst).unwrap().size;
                     let mode = var_mode[&dst];
+                    let size = gl.vars[dst].size;
 
                     let mut num_bits = size.get();
                     if mode == LogicMode::FourValue {
@@ -135,6 +174,14 @@ pub fn resolve_heap_map(
                     if (min_bits..=max_bits).contains(&num_bits) {
                         let prev = heap_map.insert(dst, heap_builder.claim(mode, size).offset);
                         assert!(prev.is_none());
+
+                        if let Some(heap_ref) = conv_map.get_mut(&dst) {
+                            let other_mode = match mode {
+                                LogicMode::TwoValue => LogicMode::FourValue,
+                                LogicMode::FourValue => LogicMode::TwoValue,
+                            };
+                            *heap_ref = heap_builder.claim(other_mode, size).offset;
+                        }
                     }
                 }
             }

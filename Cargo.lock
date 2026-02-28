@@ -691,6 +691,7 @@ dependencies = [
  "slotmap",
  "vogls-bits",
  "vogls-codegen",
+ "vogls-codegen-c",
  "vogls-frontend",
  "vogls-ir",
  "vogls-sim",
@@ -723,6 +724,7 @@ name = "vogls-codegen-c"
 version = "0.0.1"
 dependencies = [
  "vogls-bits",
+ "vogls-codegen",
  "vogls-ir",
  "vogls-utils",
 ]
