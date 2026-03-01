@@ -40,6 +40,9 @@ impl HeapBuilder {
         heap_ref.to_ref(size)
     }
 
+    pub fn top(&self) -> usize {
+        self.top
+    }
     pub fn padding(&self) -> usize {
         self.padding
     }

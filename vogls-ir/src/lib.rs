@@ -550,6 +550,15 @@ pub enum LogicMode {
     FourValue,
 }
 
+impl From<Mode> for LogicMode {
+    fn from(value: Mode) -> Self {
+        match value {
+            Mode::TwoValue => Self::TwoValue,
+            Mode::FourValue => Self::FourValue,
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct GlobalContext {
     pub logic_mode: LogicMode,

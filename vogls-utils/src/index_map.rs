@@ -233,3 +233,24 @@ impl<K: Eq + hash::Hash + Copy, V> IndexMut<K> for IndexMap<K, V> {
         self.get_mut(&index).expect("index failed")
     }
 }
+
+impl<K: Eq + hash::Hash> FromIterator<K> for IndexSet<K> {
+    fn from_iter<T: IntoIterator<Item = K>>(iter: T) -> Self {
+        let iter = iter.into_iter();
+        let mut set = Self::new();
+        for i in iter {
+            set.insert(i);
+        }
+        set
+    }
+}
+impl<K: Eq + hash::Hash, V> FromIterator<(K, V)> for IndexMap<K, V> {
+    fn from_iter<T: IntoIterator<Item = (K, V)>>(iter: T) -> Self {
+        let iter = iter.into_iter();
+        let mut map = Self::new();
+        for (k, v) in iter {
+            map.insert(k, v);
+        }
+        map
+    }
+}

@@ -4,9 +4,7 @@ use std::rc::Rc;
 
 use slotmap::{SecondaryMap, SlotMap};
 use vogls_codegen::{HeapBuilder, HeapOffset, HeapRef};
-use vogls_codegen_c::{
-    ListenerBuilder, lower_signal_listener_waker, lower_signal_listener_waker_header,
-};
+use vogls_codegen_c::{ListenerBuilder, lower_signal_drive_fn, lower_signal_drive_header};
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_ir::{Bits, GlobalContext, LogicMode, Signal, SignalKey};
 use vogls_sim::{
@@ -582,13 +580,15 @@ impl Design {
                 .map(|(k, v)| (*k, signals[v.0 as usize]))
                 .collect();
 
+            let mut out = Vec::new();
+
             for signal in gl.signals.keys() {
-                lower_signal_listener_waker_header(&mut ectx.stdout, signal, &io_signals)?;
+                lower_signal_drive_header(&mut out, signal, &io_signals)?;
             }
 
             for (i, process) in gl.processes.keys().enumerate() {
                 vogls_codegen_c::lower_process(
-                    &mut ectx.stdout,
+                    &mut out,
                     process,
                     i,
                     &gl,
@@ -599,14 +599,25 @@ impl Design {
             }
 
             for signal in gl.signals.keys() {
-                lower_signal_listener_waker(
-                    &mut ectx.stdout,
-                    &gl,
-                    signal,
-                    &listener_builder,
-                    &io_signals,
-                )?;
+                lower_signal_drive_fn(&mut out, &gl, signal, &listener_builder, &io_signals)?;
             }
+
+            vogls_codegen_c::lower_startup_function(&mut out, &gl)?;
+
+            writeln!(
+                &mut ectx.stdout,
+                r#"
+static uint64_t heap[{heap_size}] = {{}};
+static uint64_t is_scheduled[{is_scheduled_size}] = {{}};
+static uint64_t listening[{listening_size}] = {{}};
+static uint64_t last_active_time[{last_active_time_size}] = {{}};
+                "#,
+                heap_size = heap_builder.top().div_ceil(64),
+                is_scheduled_size = gl.processes.len().div_ceil(64),
+                listening_size = listener_builder.top.div_ceil(64),
+                last_active_time_size = gl.signals.len().div_ceil(64),
+            )?;
+            ectx.stdout.write_all(&out)?;
         }
 
         for process in gl.processes.keys() {
