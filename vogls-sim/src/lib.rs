@@ -19,7 +19,6 @@ mod plugin;
 pub use plugin::{InstructionPlugin, Plugin};
 
 pub use instruction::*;
-use vogls_utils::NonMaxU64;
 
 new_key_type! { pub struct ListenerKey; }
 
@@ -501,17 +500,14 @@ impl Simulation {
     ) -> SimulationState {
         SimulationState {
             schedule: BTreeMap::<Timestamp, Vec<Event>>::new(),
-            last_active_time: vec![NonMaxU64::ZERO; self.signals.len()],
+            runtime: vogls_runtime::RuntimeState::new(heap, self.signals.len()),
             regions,
             listeners,
             watches,
             vcd: None,
             plugins: Vec::new(),
             iplugins: Vec::new(),
-            heap,
-            time: 0,
             instruction_count: 0,
-            event_count: 0,
         }
     }
 
@@ -523,7 +519,7 @@ impl Simulation {
     ) -> Result<(), ()> {
         'region_loop: loop {
             while let Some(event) = state.regions.active.pop() {
-                state.event_count += 1;
+                state.runtime.event_count += 1;
                 let outcome = self.evaluate_event(io, state, event);
                 if self.itrace {
                     eprintln!();
@@ -546,8 +542,13 @@ impl Simulation {
 
             // Dump the VCD updates for this simulation time.
             if let Some(vcd) = state.vcd.as_mut() {
-                vcd.dump_time_step(state.time, &state.heap, &self.signals, false)
-                    .unwrap();
+                vcd.dump_time_step(
+                    state.runtime.time,
+                    &state.runtime.heap,
+                    &self.signals,
+                    false,
+                )
+                .unwrap();
             }
             let mut plugins = std::mem::take(&mut state.plugins);
             for plugin in plugins.iter_mut() {
@@ -559,15 +560,15 @@ impl Simulation {
                 break;
             };
 
-            state.time = at;
+            state.runtime.time = at;
             state.regions.active = events;
-            if state.time > max_time {
+            if state.runtime.time > max_time {
                 break;
             }
         }
 
         if let Some(vcd) = state.vcd.as_mut() {
-            vcd.dump_time_step(state.time, &state.heap, &self.signals, true)
+            vcd.dump_time_step(state.runtime.time, &state.runtime.heap, &self.signals, true)
                 .unwrap();
             vcd.writer.flush().unwrap();
         }
@@ -613,58 +614,82 @@ impl Simulation {
                 use VmInstruction as I;
                 match instr {
                     I::Constant(dst, value) => {
-                        execution::exec_constant(&mut state.heap, *dst, value)
+                        execution::exec_constant(&mut state.runtime.heap, *dst, value)
                     }
 
                     I::TvUnary(dst, op, src) => {
-                        execution::tv::exec_tv_unary(&mut state.heap, *dst, *op, *src)
+                        execution::tv::exec_tv_unary(&mut state.runtime.heap, *dst, *op, *src)
                     }
                     I::TvResize(dst, op, src) => {
-                        execution::tv::exec_tv_resize(&mut state.heap, *dst, *op, *src)
+                        execution::tv::exec_tv_resize(&mut state.runtime.heap, *dst, *op, *src)
                     }
-                    I::TvBinaryArithmetic(dst, op, lhs, rhs) => {
-                        execution::tv::exec_tv_bin_arith(&mut state.heap, *dst, *op, *lhs, *rhs)
-                    }
-                    I::TvBinaryComparison(dst, op, lhs, rhs) => {
-                        execution::tv::exec_tv_bin_cmp(&mut state.heap, *dst, *op, *lhs, *rhs)
-                    }
-                    I::TvShift(dst, op, src, offset) => {
-                        execution::tv::exec_tv_shift(&mut state.heap, *dst, *op, *src, *offset)
-                    }
+                    I::TvBinaryArithmetic(dst, op, lhs, rhs) => execution::tv::exec_tv_bin_arith(
+                        &mut state.runtime.heap,
+                        *dst,
+                        *op,
+                        *lhs,
+                        *rhs,
+                    ),
+                    I::TvBinaryComparison(dst, op, lhs, rhs) => execution::tv::exec_tv_bin_cmp(
+                        &mut state.runtime.heap,
+                        *dst,
+                        *op,
+                        *lhs,
+                        *rhs,
+                    ),
+                    I::TvShift(dst, op, src, offset) => execution::tv::exec_tv_shift(
+                        &mut state.runtime.heap,
+                        *dst,
+                        *op,
+                        *src,
+                        *offset,
+                    ),
                     I::TvSelectBit(dst, src, idx) => {
-                        execution::tv::exec_tv_select_bit(&mut state.heap, *dst, *src, *idx)
+                        execution::tv::exec_tv_select_bit(&mut state.runtime.heap, *dst, *src, *idx)
                     }
                     I::TvConcat(dst, lhs, rhs) => {
-                        execution::tv::exec_tv_concat(&mut state.heap, *dst, *lhs, *rhs)
+                        execution::tv::exec_tv_concat(&mut state.runtime.heap, *dst, *lhs, *rhs)
                     }
 
                     I::FvUnary(dst, op, src) => {
-                        execution::fv::exec_fv_unary(&mut state.heap, *dst, *op, *src)
+                        execution::fv::exec_fv_unary(&mut state.runtime.heap, *dst, *op, *src)
                     }
                     I::FvResize(dst, op, src) => {
-                        execution::fv::exec_fv_resize(&mut state.heap, *dst, *op, *src)
+                        execution::fv::exec_fv_resize(&mut state.runtime.heap, *dst, *op, *src)
                     }
-                    I::FvBinaryArithmetic(dst, op, lhs, rhs) => {
-                        execution::fv::exec_fv_bin_arith(&mut state.heap, *dst, *op, *lhs, *rhs)
-                    }
-                    I::FvBinaryComparison(dst, op, lhs, rhs) => {
-                        execution::fv::exec_fv_bin_cmp(&mut state.heap, *dst, *op, *lhs, *rhs)
-                    }
-                    I::FvShift(dst, op, src, offset) => {
-                        execution::fv::exec_fv_shift(&mut state.heap, *dst, *op, *src, *offset)
-                    }
+                    I::FvBinaryArithmetic(dst, op, lhs, rhs) => execution::fv::exec_fv_bin_arith(
+                        &mut state.runtime.heap,
+                        *dst,
+                        *op,
+                        *lhs,
+                        *rhs,
+                    ),
+                    I::FvBinaryComparison(dst, op, lhs, rhs) => execution::fv::exec_fv_bin_cmp(
+                        &mut state.runtime.heap,
+                        *dst,
+                        *op,
+                        *lhs,
+                        *rhs,
+                    ),
+                    I::FvShift(dst, op, src, offset) => execution::fv::exec_fv_shift(
+                        &mut state.runtime.heap,
+                        *dst,
+                        *op,
+                        *src,
+                        *offset,
+                    ),
                     I::FvSelectBit(dst, src, idx) => {
-                        execution::fv::exec_fv_select_bit(&mut state.heap, *dst, *src, *idx)
+                        execution::fv::exec_fv_select_bit(&mut state.runtime.heap, *dst, *src, *idx)
                     }
                     I::FvConcat(dst, lhs, rhs) => {
-                        execution::fv::exec_fv_concat(&mut state.heap, *dst, *lhs, *rhs)
+                        execution::fv::exec_fv_concat(&mut state.runtime.heap, *dst, *lhs, *rhs)
                     }
 
                     I::TvToFv(dst, src) => {
                         let size = dst.size;
                         if size.get() <= 32 {
-                            let v = state.heap.get_tv_u64(src.to_ref(size));
-                            state.heap.set_fv_u64(
+                            let v = state.runtime.heap.get_tv_u64(src.to_ref(size));
+                            state.runtime.heap.set_fv_u64(
                                 *dst,
                                 1u64.unbounded_shl(size.get()).wrapping_sub(1),
                                 v,
@@ -672,6 +697,7 @@ impl Simulation {
                         } else {
                             let nwords = size.get().div_ceil(64) as usize;
                             let (dst, src) = state
+                                .runtime
                                 .heap
                                 .get_disjoint_u64_dst_src((dst.offset, nwords * 2), (*src, nwords));
                             fv_set_no_special(dst, size);
@@ -681,11 +707,12 @@ impl Simulation {
                     I::FvToTv(dst, src) => {
                         let size = dst.size;
                         if size.get() <= 32 {
-                            let (spc, val) = state.heap.get_fv_u64(src.to_ref(size));
-                            state.heap.set_tv_u64(*dst, spc & val);
+                            let (spc, val) = state.runtime.heap.get_fv_u64(src.to_ref(size));
+                            state.runtime.heap.set_tv_u64(*dst, spc & val);
                         } else {
                             let nwords = size.get().div_ceil(64) as usize;
                             let (dst, src) = state
+                                .runtime
                                 .heap
                                 .get_disjoint_u64_dst_src((dst.offset, nwords), (*src, nwords * 2));
                             for i in 0..nwords {
@@ -702,8 +729,10 @@ impl Simulation {
                                 f.write_to(
                                     &mut io.stdout,
                                     args.iter().map(|(sr, lm)| match lm {
-                                        LogicMode::TwoValue => state.heap.load_tv_bits(*sr),
-                                        LogicMode::FourValue => state.heap.load_fv_bits(*sr),
+                                        LogicMode::TwoValue => state.runtime.heap.load_tv_bits(*sr),
+                                        LogicMode::FourValue => {
+                                            state.runtime.heap.load_fv_bits(*sr)
+                                        }
                                     }),
                                 )
                                 .unwrap();
@@ -711,9 +740,12 @@ impl Simulation {
                             O::Assert(f) => {
                                 let (cond_sr, cond_lm) = args[0];
                                 let condition = match cond_lm {
-                                    LogicMode::TwoValue => state.heap.get_tv_bool(cond_sr.offset),
+                                    LogicMode::TwoValue => {
+                                        state.runtime.heap.get_tv_bool(cond_sr.offset)
+                                    }
                                     LogicMode::FourValue => {
-                                        state.heap.get_fv_item(cond_sr.offset) == FvLogicValue::L1
+                                        state.runtime.heap.get_fv_item(cond_sr.offset)
+                                            == FvLogicValue::L1
                                     }
                                 };
 
@@ -721,8 +753,12 @@ impl Simulation {
                                     f.write_to(
                                         &mut io.stdout,
                                         args[1..].iter().map(|(sr, lm)| match lm {
-                                            LogicMode::TwoValue => state.heap.load_tv_bits(*sr),
-                                            LogicMode::FourValue => state.heap.load_fv_bits(*sr),
+                                            LogicMode::TwoValue => {
+                                                state.runtime.heap.load_tv_bits(*sr)
+                                            }
+                                            LogicMode::FourValue => {
+                                                state.runtime.heap.load_fv_bits(*sr)
+                                            }
                                         }),
                                     )
                                     .unwrap();
@@ -737,7 +773,7 @@ impl Simulation {
                                 }
 
                                 state.vcd = Some(VcdOutput {
-                                    start_ts: state.time,
+                                    start_ts: state.runtime.time,
                                     last_ts: Timestamp::MAX,
                                     paused: false,
                                     scope: VcdScope {
@@ -759,7 +795,7 @@ impl Simulation {
                                     .unwrap();
                                     break 'instruction Some(EvalOutcome::Error);
                                 };
-                                if vcd.start_ts != state.time {
+                                if vcd.start_ts != state.runtime.time {
                                     writeln!(
                                         &mut io.stderr,
                                         "ERR! Dumping vars over several simulation times"
@@ -775,10 +811,16 @@ impl Simulation {
                             O::VcdPause => _ = state.vcd.as_mut().map(|vcd| vcd.paused = true),
                             O::VcdResume => _ = state.vcd.as_mut().map(|vcd| vcd.paused = false),
                             O::Time => {
-                                _ = state.heap.set_tv_u64(dst.to_ref(TIME_VSIZE), state.time)
+                                _ = state
+                                    .runtime
+                                    .heap
+                                    .set_tv_u64(dst.to_ref(TIME_VSIZE), state.runtime.time)
                             }
                             O::Random => {
-                                _ = state.heap.set_tv_u64(dst.to_ref(INTEGER_VSIZE), state.time)
+                                _ = state
+                                    .runtime
+                                    .heap
+                                    .set_tv_u64(dst.to_ref(INTEGER_VSIZE), state.runtime.time)
                             }
                             O::Finish => {
                                 writeln!(&mut io.stdout, "[FINISH]").unwrap();
@@ -787,17 +829,17 @@ impl Simulation {
                         }
                     }
                     I::LastUpdateTime(dst, signal) => {
-                        let lupdt = state.last_active_time[signal.0 as usize];
-                        state.heap.set_tv_u64(dst.to_ref(TIME_VSIZE), lupdt.get());
+                        let lupdt = state.runtime.last_active_time[signal.0 as usize];
+                        state.runtime.heap.set_tv_u64(dst.to_ref(TIME_VSIZE), lupdt);
                     }
                     I::Drive(sig, src, partial) => {
                         let partial = match (partial, self.logic_mode) {
                             (None, _) => None,
                             (Some(offset), LogicMode::TwoValue) => {
-                                Some(state.heap.load_exact_tv_u32(*offset))
+                                Some(state.runtime.heap.load_exact_tv_u32(*offset))
                             }
                             (Some(offset), LogicMode::FourValue) => {
-                                let (spc, val) = state.heap.load_exact_fv_u32(*offset);
+                                let (spc, val) = state.runtime.heap.load_exact_fv_u32(*offset);
                                 if !spc != 0 {
                                     break 'instruction None;
                                 }
@@ -806,7 +848,7 @@ impl Simulation {
                         };
 
                         let updated = drive_bits(
-                            &mut state.heap,
+                            &mut state.runtime.heap,
                             self.signals[sig.0 as usize],
                             *src,
                             partial,
@@ -818,15 +860,19 @@ impl Simulation {
                         }
                     }
                     I::VariableWait(time) => {
-                        let time = state.heap.get_tv_u64(time.to_ref(TIME_VSIZE));
+                        let time = state.runtime.heap.get_tv_u64(time.to_ref(TIME_VSIZE));
                         if time > 0 {
                             state
                                 .schedule
-                                .entry(state.time + time)
+                                .entry(state.runtime.time + time)
                                 .or_default()
                                 .push(event);
                             if self.itrace {
-                                instr.itrace(&mut state.heap, &self.signals, self.logic_mode);
+                                instr.itrace(
+                                    &mut state.runtime.heap,
+                                    &self.signals,
+                                    self.logic_mode,
+                                );
                             }
                             return EvalOutcome::Next;
                         }
@@ -835,11 +881,15 @@ impl Simulation {
                         if time.0 > 0 {
                             state
                                 .schedule
-                                .entry(state.time + time.0)
+                                .entry(state.runtime.time + time.0)
                                 .or_default()
                                 .push(event);
                             if self.itrace {
-                                instr.itrace(&mut state.heap, &self.signals, self.logic_mode);
+                                instr.itrace(
+                                    &mut state.runtime.heap,
+                                    &self.signals,
+                                    self.logic_mode,
+                                );
                             }
                             return EvalOutcome::Next;
                         }
@@ -851,7 +901,7 @@ impl Simulation {
                             state.regions.other[*region as usize - 1].push(event);
                         }
                         if self.itrace {
-                            instr.itrace(&mut state.heap, &self.signals, self.logic_mode);
+                            instr.itrace(&mut state.runtime.heap, &self.signals, self.logic_mode);
                         }
                         return EvalOutcome::Next;
                     }
@@ -861,14 +911,15 @@ impl Simulation {
                             state.watches[signal.0 as usize].push(listener_key);
                         }
                         if self.itrace {
-                            instr.itrace(&mut state.heap, &self.signals, self.logic_mode);
+                            instr.itrace(&mut state.runtime.heap, &self.signals, self.logic_mode);
                         }
                         return EvalOutcome::Next;
                     }
 
                     I::Jump(offset) => *ip = *offset,
                     I::Branch(cond, true_offset, false_offset) => {
-                        let is_true = state.heap.get_tv_u64(cond.to_ref(SCALAR_VSIZE)) & 1 != 0;
+                        let is_true =
+                            state.runtime.heap.get_tv_u64(cond.to_ref(SCALAR_VSIZE)) & 1 != 0;
                         if is_true {
                             *ip = *true_offset;
                         } else {
@@ -884,7 +935,7 @@ impl Simulation {
             };
 
             if self.itrace {
-                instr.itrace(&mut state.heap, &self.signals, self.logic_mode);
+                instr.itrace(&mut state.runtime.heap, &self.signals, self.logic_mode);
             }
 
             if let Some(outcome) = outcome {
@@ -896,7 +947,7 @@ impl Simulation {
     pub fn update_signal(&self, state: &mut SimulationState, signal: VmSignalKey) {
         update_watchers(
             signal,
-            &mut state.heap,
+            &mut state.runtime.heap,
             &self.signals,
             &mut state.watches,
             &mut state.listeners,
@@ -917,7 +968,7 @@ impl Simulation {
             plugin.update_signal(self, state, signal);
         }
         state.plugins = plugins;
-        state.last_active_time[signal.0 as usize] = NonMaxU64::new(state.time).unwrap();
+        state.runtime.last_active_time[signal.0 as usize] = state.runtime.time;
     }
 
     pub fn drive_bits(
@@ -927,10 +978,13 @@ impl Simulation {
         value: &vogls_ir::Bits,
     ) {
         let heap_ref = self.signals[signal.0 as usize];
-        let updated = &state.heap.load_bits(heap_ref, self.logic_mode) != value;
+        let updated = &state.runtime.heap.load_bits(heap_ref, self.logic_mode) != value;
 
         if updated {
-            state.heap.store_bits(heap_ref, self.logic_mode, value);
+            state
+                .runtime
+                .heap
+                .store_bits(heap_ref, self.logic_mode, value);
             self.update_signal(state, signal);
         }
     }
@@ -938,7 +992,7 @@ impl Simulation {
 
 pub struct SimulationState {
     pub schedule: BTreeMap<Timestamp, Vec<Event>>,
-    pub last_active_time: Vec<NonMaxU64>,
+    pub runtime: vogls_runtime::RuntimeState,
 
     pub regions: Regions,
     pub listeners: SlotMap<ListenerKey, Event>,
@@ -947,17 +1001,14 @@ pub struct SimulationState {
     pub plugins: Vec<plugin::PluginState>,
     pub iplugins: Vec<plugin::InstructionPluginState>,
 
-    pub heap: Heap,
-    pub time: Timestamp,
     pub instruction_count: u64,
-    pub event_count: u64,
 }
 
 impl Clone for SimulationState {
     fn clone(&self) -> Self {
         Self {
             schedule: self.schedule.clone(),
-            last_active_time: self.last_active_time.clone(),
+            runtime: self.runtime.clone(),
 
             regions: self.regions.clone(),
             listeners: self.listeners.clone(),
@@ -966,10 +1017,7 @@ impl Clone for SimulationState {
             plugins: vec![],
             iplugins: vec![],
 
-            heap: self.heap.clone(),
-            time: self.time.clone(),
             instruction_count: self.instruction_count.clone(),
-            event_count: self.instruction_count.clone(),
         }
     }
 }
@@ -978,11 +1026,11 @@ impl SimulationState {
     pub fn dump_profile_stats(&self, io: &mut SimulationIo, state: &SimulationState) {
         writeln!(io.stdout, "Stats:",).unwrap();
         writeln!(io.stdout, "  # Instructions: {}", state.instruction_count).unwrap();
-        writeln!(io.stdout, "  # Events:       {}", state.event_count).unwrap();
+        writeln!(io.stdout, "  # Events:       {}", state.runtime.event_count).unwrap();
         writeln!(
             io.stdout,
             "  # Stack size:   {}",
-            state.heap.0.len() * size_of::<u64>()
+            state.runtime.heap.0.len() * size_of::<u64>()
         )
         .unwrap();
     }

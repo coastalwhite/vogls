@@ -8,6 +8,8 @@ vogls-ir.workspace = true
 vogls-bits.workspace = true
 vogls-utils.workspace = true
 vogls-codegen.workspace = true
+vogls-runtime.workspace = true
+libloading = "0.9.0"
 
 [lints]
 workspace = true

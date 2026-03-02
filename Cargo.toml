@@ -12,6 +12,7 @@ members = [
 	"vogls-python",
 	"vogls-codegen",
 	"vogls-codegen-c",
+    "vogls-runtime",
 ]
 resolver = "3"
 
@@ -38,6 +39,7 @@ vogls-verilog.path = "vogls-verilog"
 vogls-utils.path = "vogls-utils"
 vogls-codegen.path = "vogls-codegen"
 vogls-codegen-c.path = "vogls-codegen-c"
+vogls-runtime.path = "vogls-runtime"
 
 [profile.debug-release]
 inherits = "release"

@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use vogls::ExecutionContext;
 use vogls_ir::LogicMode;
 

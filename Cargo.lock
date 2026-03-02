@@ -304,6 +304,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bcc35a38544a891a5f7c865aca548a982ccb3b8650a5b06d0fd33a10283c56fc"
 
 [[package]]
+name = "libloading"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "754ca22de805bb5744484a5b151a9e1a8e837d5dc232c2d7d8c2e3492edc8b60"
+dependencies = [
+ "cfg-if",
+ "windows-link",
+]
+
+[[package]]
 name = "linux-raw-sys"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -723,9 +733,11 @@ dependencies = [
 name = "vogls-codegen-c"
 version = "0.0.1"
 dependencies = [
+ "libloading",
  "vogls-bits",
  "vogls-codegen",
  "vogls-ir",
+ "vogls-runtime",
  "vogls-utils",
 ]
 
@@ -758,6 +770,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "vogls-runtime"
+version = "0.0.1"
+dependencies = [
+ "vogls-codegen",
+]
+
+[[package]]
 name = "vogls-sim"
 version = "0.0.1"
 dependencies = [
@@ -766,6 +785,7 @@ dependencies = [
  "vogls-bits",
  "vogls-codegen",
  "vogls-ir",
+ "vogls-runtime",
  "vogls-trace",
  "vogls-utils",
 ]

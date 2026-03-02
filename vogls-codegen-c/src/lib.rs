@@ -13,6 +13,8 @@ use vogls_ir::{
 };
 use vogls_utils::{IndexMap, IndexSet, VgHashMap, VgHashSet};
 
+pub mod runtime;
+
 mod binary;
 mod resize;
 mod unary;
@@ -191,7 +193,10 @@ pub fn lower_process(
     let mut buffer = Vec::<u8>::new();
     let procedure = process_to_procedure_name(process, process_idx);
 
-    writeln!(f, "void {procedure}(int state) {{",)?;
+    writeln!(
+        f,
+        "void {procedure}(int state, uint64_t *heap, schedule_t *schedule, uint64_t time, uint64_t *is_scheduled, uint64_t *listening, uint64_t *last_active_time) {{",
+    )?;
 
     let mut bb_ident = IndexSet::<BasicBlockKey>::new();
     let mut states_set = IndexSet::<BasicBlockKey>::new();
@@ -536,7 +541,7 @@ pub fn lower_process(
                         )?;
                         writeln!(
                             buffer,
-                            "{INDENT}{INDENT}drive_signal_{idx}();",
+                            "{INDENT}{INDENT}drive_signal_{idx}(schedule, time, is_scheduled, listening, last_active_time);",
                             idx = io_signals.get_index(signal).unwrap()
                         )?;
                         store_slice(&mut buffer, io_signals[signal], offset_t, t)?;
@@ -552,7 +557,7 @@ pub fn lower_process(
                         )?;
                         writeln!(
                             buffer,
-                            "{INDENT}{INDENT}drive_signal_{idx}();",
+                            "{INDENT}{INDENT}drive_signal_{idx}(schedule, time, is_scheduled, listening, last_active_time);",
                             idx = io_signals.get_index(signal).unwrap()
                         )?;
                         store(&mut buffer, io_signals[signal].offset, t)?;
@@ -569,7 +574,7 @@ pub fn lower_process(
                 let state = states_set.get_index(bb_key).unwrap();
                 writeln!(
                     buffer,
-                    "{INDENT}schedule_future_event(time + {time}, (event_t){{.ptr=&{procedure}, .state={state}}});"
+                    "{INDENT}schedule_future_event(schedule, time + {time}, (event_t){{.ptr=&{procedure}, .state={state}}});"
                 )?;
                 writeln!(buffer, "{INDENT}return;",)?;
             }
@@ -579,7 +584,7 @@ pub fn lower_process(
                 let state = states_set.get_index(bb_key).unwrap();
                 writeln!(
                     buffer,
-                    "{INDENT}schedule_future_event(time + {t}, (event_t){{.ptr=&{procedure}, .state={state}}});",
+                    "{INDENT}schedule_future_event(schedule, time + {t}, (event_t){{.ptr=&{procedure}, .state={state}}});",
                     t = t.ident,
                 )?;
                 writeln!(buffer, "{INDENT}return;",)?;
@@ -664,7 +669,11 @@ fn lower_dyn_format_str(
 }
 
 const fn mask(num_bits: u32) -> u64 {
-    (1u64 << num_bits) - 1
+    if num_bits == 64 {
+        u64::MAX
+    } else {
+        (1u64 << num_bits) - 1
+    }
 }
 
 fn load(b: &mut impl io::Write, heap_offset: HeapOffset, t: CVar) -> io::Result<()> {
@@ -722,7 +731,12 @@ fn store(f: &mut impl io::Write, heap_offset: HeapOffset, t: CVar) -> io::Result
     let offset = heap_offset;
     let word = offset.bit_offset / 64;
     let shift = offset.bit_offset % 64;
-    let mask = !(((1u64 << num_bits) - 1) << shift);
+    let mask = if num_bits == 64 {
+        assert_eq!(shift, 0);
+        u64::MAX
+    } else {
+        !(((1u64 << num_bits) - 1) << shift)
+    };
 
     writeln!(
         f,
@@ -841,7 +855,10 @@ pub fn lower_signal_drive_header(
     io_signals: &IndexMap<SignalKey, HeapRef>,
 ) -> io::Result<()> {
     let idx = io_signals.get_index(&signal).unwrap();
-    writeln!(f, "void drive_signal_{idx}();")
+    writeln!(
+        f,
+        "void drive_signal_{idx}(schedule_t *schedule, uint64_t time, uint64_t *is_scheduled, uint64_t *listening, uint64_t *last_active_time);"
+    )
 }
 
 pub fn lower_signal_drive_fn(
@@ -852,7 +869,10 @@ pub fn lower_signal_drive_fn(
     io_signals: &IndexMap<SignalKey, HeapRef>,
 ) -> io::Result<()> {
     let idx = io_signals.get_index(&signal).unwrap();
-    writeln!(f, "void drive_signal_{idx}() {{",)?;
+    writeln!(
+        f,
+        "void drive_signal_{idx}(schedule_t *schedule, uint64_t time, uint64_t *is_scheduled, uint64_t *listening, uint64_t *last_active_time) {{",
+    )?;
 
     writeln!(f, "{INDENT}last_active_time[{idx}] = time;")?;
     if let Some(listeners) = listener_builder.map.get(&signal) {
@@ -873,7 +893,7 @@ pub fn lower_signal_drive_fn(
             )?;
             writeln!(
                 f,
-                "{INDENT}{INDENT}event_vec_push(&schedule.active_region, (event_t){{.ptr=&{}, .state={}}});",
+                "{INDENT}{INDENT}event_vec_push(&schedule->active_region, (event_t){{.ptr=&{}, .state={}}});",
                 process_to_procedure_name(
                     &gl.processes[listener.process_key],
                     listener.process_idx
@@ -889,14 +909,30 @@ pub fn lower_signal_drive_fn(
 }
 
 pub fn lower_startup_function(f: &mut impl io::Write, gl: &GlobalContext) -> io::Result<()> {
-    writeln!(f, "void startup() {{")?;
+    f.write_all(
+        b"void startup(
+    uint64_t *heap,
+    schedule_t *schedule,
+    uint64_t time,
+    uint64_t *is_scheduled,
+    uint64_t *listening,
+    uint64_t *last_active_time
+) {\n",
+    )?;
     writeln!(f, "{INDENT}(void)heap;")?;
+    writeln!(f, "{INDENT}(void)schedule;")?;
+    writeln!(f, "{INDENT}(void)time;")?;
     writeln!(f, "{INDENT}(void)is_scheduled;")?;
     writeln!(f, "{INDENT}(void)listening;")?;
     writeln!(f, "{INDENT}(void)last_active_time;")?;
     writeln!(f)?;
     for (i, process) in gl.processes.values().enumerate() {
-        writeln!(f, "{INDENT}{}(0);", process_to_procedure_name(process, i))?;
+        writeln!(
+            f,
+            "{INDENT}{}(0, heap, schedule, time, is_scheduled, listening, last_active_time);",
+            // int state, uint64_t *heap, schedule_t *schedule, uint64_t *time, uint64_t *is_scheduled, uint64_t *listening, uint64_t *last_active_time
+            process_to_procedure_name(process, i)
+        )?;
     }
     writeln!(f, "}}")?;
     Ok(())
@@ -910,8 +946,12 @@ pub fn prologue(f: &mut impl io::Write) -> io::Result<()> {
 #include <stdlib.h>
 #include <string.h>
 
+struct schedule;
+struct event_vec;
+struct timed_event_vec;
+
 typedef struct event {
-  void (*ptr)(int);
+  void (*ptr)(int, uint64_t*, struct schedule*, uint64_t, uint64_t*, uint64_t*, uint64_t*);
   int state;
 } event_t;
 typedef struct timed_event {
@@ -922,11 +962,13 @@ typedef struct event_vec {
   event_t *ptr;
   size_t length;
   size_t capacity;
+  void (*grow)(struct event_vec*);
 } event_vec_t;
 typedef struct timed_event_vec {
   timed_event_t *ptr;
   size_t length;
   size_t capacity;
+  void (*grow)(struct timed_event_vec*);
 } timed_event_vec_t;
 
 typedef struct schedule {
@@ -936,16 +978,9 @@ typedef struct schedule {
   uint64_t next_time;
 } schedule_t;
 
-static uint64_t time = 0;
-static schedule_t schedule = {
-    .active_region = {},
-    .regions = NULL,
-    .future = {},
-};
-
-void schedule_future_event(uint64_t time, event_t event);
-void event_vec_push(event_vec_t *v, event_t event);
-bool event_vec_pop(event_vec_t *v, event_t *event);
+static inline void schedule_future_event(schedule_t *schedule, uint64_t time, event_t event);
+static inline void event_vec_push(event_vec_t *v, event_t event);
+static inline bool event_vec_pop(event_vec_t *v, event_t *event);
 
 static inline uint32_t popcount64(uint64_t n) {
 #if defined(__GNUC__) || defined(__clang__)
@@ -981,41 +1016,28 @@ pub fn epilogue(f: &mut impl io::Write) -> io::Result<()> {
     f.write_all(
         br#"
 
-void schedule_future_event(uint64_t time, event_t event) {
-  schedule.next_time = (schedule.future.length == 0 || time < schedule.next_time) ? time : schedule.next_time;
-  if (schedule.future.length >= schedule.future.capacity) {
-    size_t new_capacity =
-        (schedule.future.length == 0) ? 1 : (schedule.future.length * 2);
-    schedule.future.ptr = realloc(schedule.future.ptr, sizeof(timed_event_t) * new_capacity);
-    if (schedule.future.ptr == NULL) {
-      printf("Failed to allocate");
-      exit(1);
-    }
-    schedule.future.capacity = new_capacity;
+static inline void schedule_future_event(schedule_t *schedule, uint64_t time, event_t event) {
+  schedule->next_time = (schedule->future.length == 0 || time < schedule->next_time) ? time : schedule->next_time;
+  if (schedule->future.length >= schedule->future.capacity) {
+    (schedule->future.grow)(&schedule->future);
   }
 
   timed_event_t te = {
       .event = event,
       .time = time,
   };
-  schedule.future.ptr[schedule.future.length] = te;
-  schedule.future.length += 1;
+  schedule->future.ptr[schedule->future.length] = te;
+  schedule->future.length += 1;
 }
 
-void event_vec_push(event_vec_t *v, event_t event) {
+static inline void event_vec_push(event_vec_t *v, event_t event) {
   if (v->length >= v->capacity) {
-    size_t new_capacity = (v->length == 0) ? 1 : (v->length * 2);
-    v->ptr = realloc(v->ptr, sizeof(event_t) * new_capacity);
-    if (v->ptr == NULL) {
-      printf("Failed to allocate");
-      exit(1);
-    }
-    v->capacity = new_capacity;
+    (v->grow)(v);
   }
   v->ptr[v->length] = event;
   v->length += 1;
 }
-bool event_vec_pop(event_vec_t *v, event_t *event) {
+static inline bool event_vec_pop(event_vec_t *v, event_t *event) {
   if (v->length == 0) {
     event->ptr = NULL;
     return false;
@@ -1024,21 +1046,51 @@ bool event_vec_pop(event_vec_t *v, event_t *event) {
   v->length -= 1;
   return true;
 }
+"#)
+}
 
-int main() {
-  startup();
+pub fn add_main(
+    f: &mut impl io::Write,
+    gl: &GlobalContext,
+    heap_builder: &HeapBuilder,
+    listener_builder: &ListenerBuilder,
+) -> io::Result<()> {
+    f.write_all(b"int main() {")?;
+    write!(
+        f,
+        r#"
+  uint64_t time = 0;
+  schedule_t schedule = {{
+      .active_region = {{}},
+      .regions = NULL,
+      .future = {{}},
+  }};
+  uint64_t heap[{heap_size}] = {{}};
+  uint64_t is_scheduled[{is_scheduled_size}] = {{}};
+  uint64_t listening[{listening_size}] = {{}};
+  uint64_t last_active_time[{last_active_time_size}] = {{}};
+"#,
+        heap_size = heap_builder.top().div_ceil(64),
+        is_scheduled_size = gl.processes.len().div_ceil(64),
+        listening_size = listener_builder.top.div_ceil(64),
+        last_active_time_size = gl.signals.len(),
+    )?;
+    f.write_all(
+        b"
+  size_t j;
+  startup(heap, &schedule, time, is_scheduled, listening, last_active_time);
 
-  while (schedule.active_region.length > 0) {
+  while (schedule.active_region.length > 0) {{
     event_t e;
-    while (event_vec_pop(&schedule.active_region, &e)) {
-      (e.ptr)(e.state);
-    }
+    while (event_vec_pop(&schedule.active_region, &e)) {{
+      (e.ptr)(e.state, heap, &schedule, time, is_scheduled, listening, last_active_time);
+    }}
 
     // @TODO: Regions
 
     uint64_t next_time;
     timed_event_t te;
-    size_t j = 0;
+    j = 0;
     for (size_t i = 0; i < schedule.future.length; ++i) {
       te = (timed_event_t)schedule.future.ptr[i];
       if (te.time == schedule.next_time) {
@@ -1048,9 +1100,9 @@ int main() {
         schedule.future.ptr[j] = te;
         j += 1;
       }
-    }
+    }}
     schedule.future.length = j;
   }
-}"#,
+}",
     )
 }

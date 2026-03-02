@@ -6,6 +6,7 @@ use std::rc::Rc;
 
 use slotmap::{SecondaryMap, SlotMap};
 use vogls_codegen::{HeapBuilder, HeapOffset, HeapRef};
+use vogls_codegen_c::runtime::{CDesign, CDesignState};
 use vogls_codegen_c::{ListenerBuilder, lower_signal_drive_fn, lower_signal_drive_header};
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_ir::{Bits, GlobalContext, LogicMode, Signal, SignalKey};
@@ -26,14 +27,28 @@ use vogls_verilog::tokenizer::{Macro, Tokenized};
 
 use crate::{ExecutionContext, append_referenced_modules, token_range_to_line_range};
 
+pub enum DesignBackend {
+    Interpretted {
+        vm_signal_map: HashMap<SignalKey, VmSignalKey>,
+        simulation: vogls_sim::Simulation,
+        initial_state: vogls_sim::SimulationState,
+    },
+    Compiled {
+        design: vogls_codegen_c::runtime::CDesign,
+        initial_state: vogls_codegen_c::runtime::CDesignState,
+    },
+}
+
 pub struct Design {
     pub gl: GlobalContext,
     pub ident_table: IdentTable,
     pub elab_table: VSymbolTable,
-    pub vm_signal_map: HashMap<SignalKey, VmSignalKey>,
+    pub backend: DesignBackend,
+}
 
-    pub simulation: vogls_sim::Simulation,
-    pub initial_state: vogls_sim::SimulationState,
+pub enum DesignState {
+    Interpretted(vogls_sim::SimulationState),
+    Compiled(vogls_codegen_c::runtime::CDesignState),
 }
 
 impl Design {
@@ -609,26 +624,14 @@ impl Design {
             let mut c_file = Vec::new();
 
             vogls_codegen_c::prologue(&mut c_file)?;
-            writeln!(
-                &mut c_file,
-                r#"
-static uint64_t heap[{heap_size}] = {{}};
-static uint64_t is_scheduled[{is_scheduled_size}] = {{}};
-static uint64_t listening[{listening_size}] = {{}};
-static uint64_t last_active_time[{last_active_time_size}] = {{}};
-                "#,
-                heap_size = heap_builder.top().div_ceil(64),
-                is_scheduled_size = gl.processes.len().div_ceil(64),
-                listening_size = listener_builder.top.div_ceil(64),
-                last_active_time_size = gl.signals.len(),
-            )?;
             c_file.extend(&out);
             vogls_codegen_c::epilogue(&mut c_file)?;
+            vogls_codegen_c::add_main(&mut c_file, &gl, &heap_builder, &listener_builder)?;
 
             std::fs::write("t2.c", &c_file)?;
 
             let mut cc = Command::new("cc")
-                .args(["-x", "c", "-", "-o", "/tmp/vogls-target"])
+                .args(["-x", "c", "-", "-shared", "-o", "/tmp/vogls-target.so"])
                 .stdin(std::process::Stdio::piped())
                 .spawn()
                 .unwrap();
@@ -637,15 +640,17 @@ static uint64_t last_active_time[{last_active_time_size}] = {{}};
                 return Err("compilation failed!".into());
             }
 
-            if !Command::new("/tmp/vogls-target")
-                .status()
-                .unwrap()
-                .success()
-            {
-                return Err("run failed!".into());
-            }
-
-            return Err("run success!".into());
+            let initial_state = CDesignState::new(&gl, heap_builder.finish(), listener_builder.top);
+            let design = CDesign::new(&Path::new("/tmp/vogls-target.so"));
+            return Ok(Self {
+                gl,
+                ident_table: ast.arenas.ident_table,
+                elab_table,
+                backend: DesignBackend::Compiled {
+                    design,
+                    initial_state,
+                },
+            });
         }
 
         for process in gl.processes.keys() {
@@ -736,9 +741,11 @@ static uint64_t last_active_time[{last_active_time_size}] = {{}};
             gl,
             ident_table: ast.arenas.ident_table,
             elab_table,
-            vm_signal_map: io_signals,
-            simulation,
-            initial_state,
+            backend: DesignBackend::Interpretted {
+                vm_signal_map: io_signals,
+                simulation,
+                initial_state,
+            },
         })
     }
 
@@ -747,19 +754,52 @@ static uint64_t last_active_time[{last_active_time_size}] = {{}};
         io: &mut SimulationIo,
         time: u64,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        self.simulation
-            .run(&mut self.initial_state, io, time)
-            .map_err(|_| "execution failed.".into())
+        match &mut self.backend {
+            DesignBackend::Interpretted {
+                vm_signal_map: _,
+                simulation,
+                initial_state,
+            } => simulation
+                .run(initial_state, io, time)
+                .map_err(|_| "execution failed.".into()),
+            DesignBackend::Compiled {
+                design,
+                initial_state,
+            } => {
+                design.run(initial_state);
+                Ok(())
+            }
+        }
     }
 
     pub fn run_from_state(
         &self,
-        state: &mut SimulationState,
+        state: &mut DesignState,
         io: &mut SimulationIo,
         time: u64,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        self.simulation
-            .run(state, io, time)
-            .map_err(|_| "execution failed.".into())
+        match (&self.backend, state) {
+            (
+                DesignBackend::Interpretted {
+                    vm_signal_map: _,
+                    simulation,
+                    initial_state: _,
+                },
+                DesignState::Interpretted(state),
+            ) => simulation
+                .run(state, io, time)
+                .map_err(|_| "execution failed.".into()),
+            (
+                DesignBackend::Compiled {
+                    design,
+                    initial_state: _,
+                },
+                DesignState::Compiled(state),
+            ) => {
+                design.run(state);
+                Ok(())
+            }
+            _ => unreachable!(),
+        }
     }
 }

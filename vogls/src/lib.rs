@@ -15,9 +15,9 @@ pub use vogls_verilog::elaborate::VSymbol;
 use vogls_verilog::parser::AstArenas;
 use vogls_verilog::tokenizer::Tokenized;
 
-pub use vogls_utils as utils;
-pub use vogls_sim as sim;
 pub use vogls_bits as bits;
+pub use vogls_sim as sim;
+pub use vogls_utils as utils;
 
 pub mod design;
 // pub mod symbolic_execution;
@@ -154,7 +154,7 @@ pub fn run(
     top_level_module: Option<&str>,
     ectx: &mut ExecutionContext,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut design = design::Design::new(path, top_level_module, ectx)?;
+    let design = design::Design::new(path, top_level_module, ectx)?;
 
     if ectx.no_run {
         return Ok(());
@@ -165,8 +165,7 @@ pub fn run(
     let mut io = SimulationIo::new(stdout, stderr);
 
     design
-        .simulation
-        .run(&mut design.initial_state, &mut io, ectx.time)
+        .run(&mut io, ectx.time)
         .map_err(|_| <Box<dyn std::error::Error>>::from("execution failed."))?;
 
     ectx.stdout = io.stdout;

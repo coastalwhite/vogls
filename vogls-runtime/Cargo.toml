@@ -1,0 +1,10 @@
+[package]
+name = "vogls-runtime"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+vogls-codegen.workspace = true
+
+[lints]
+workspace = true
