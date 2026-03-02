@@ -1,15 +1,112 @@
-use std::collections::HashMap;
-use std::io;
+use std::fmt::Write;
+use std::{fmt, io};
 
 use vogls_bits::format::{BitsFormatBase, BitsFormatOptions, BitsFormatWidth};
 use vogls_codegen::{
     HeapBuilder, HeapOffset, HeapRef, resolve_heap_map, resolve_var_logic_mode_map,
 };
+use vogls_ir::dyn_format_string::DynFormatString;
 use vogls_ir::{
-    BasicBlockKey, BasicBlockTerminator, GlobalContext, Instruction, LogicMode, Process,
-    ProcessKey, SCALAR_VSIZE, SignalKey, TIME_VSIZE, UnaryOp, VariableKey, VectorSize,
+    BasicBlockKey, BasicBlockTerminator, GlobalContext, INTEGER_VSIZE, Instruction, LogicMode,
+    Process, ProcessKey, ResizeOp, SCALAR_VSIZE, SignalKey, TIME_VSIZE, UnaryOp, VariableKey,
+    VectorSize,
 };
 use vogls_utils::{IndexMap, IndexSet, VgHashMap, VgHashSet};
+
+mod binary;
+mod resize;
+mod unary;
+
+#[derive(Clone, Copy)]
+struct CIdent(u64);
+impl fmt::Display for CIdent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_char('t')?;
+        self.0.fmt(f)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct CVar {
+    ident: CIdent,
+    ty: CType,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CType {
+    size: VectorSize,
+    mode: LogicMode,
+}
+
+#[derive(Clone, Copy)]
+enum CElementType {
+    U8,
+    U16,
+    U32,
+    U64,
+}
+
+impl CElementType {
+    const fn size(self) -> VectorSize {
+        VectorSize::new(match self {
+            CElementType::U8 => 8,
+            CElementType::U16 => 16,
+            CElementType::U32 => 32,
+            CElementType::U64 => 64,
+        })
+        .unwrap()
+    }
+
+    const fn signed_ty_str(self) -> &'static str {
+        match self {
+            CElementType::U8 => "int8_t",
+            CElementType::U16 => "int16_t",
+            CElementType::U32 => "int32_t",
+            CElementType::U64 => "int64_t",
+        }
+    }
+}
+
+impl CType {
+    fn is_array(self) -> bool {
+        self.array_size().is_some()
+    }
+
+    fn array_size(self) -> Option<u32> {
+        match self.mode {
+            LogicMode::TwoValue => (self.size.get() > 64).then_some(self.size.get().div_ceil(64)),
+            LogicMode::FourValue => {
+                (self.size.get() > 32).then_some(2 * self.size.get().div_ceil(32))
+            }
+        }
+    }
+
+    fn element_type(self) -> CElementType {
+        use LogicMode as M;
+        match self.mode {
+            M::FourValue if self.size.get() <= 4 => CElementType::U8,
+            M::TwoValue if self.size.get() <= 8 => CElementType::U8,
+
+            M::FourValue if self.size.get() <= 8 => CElementType::U16,
+            M::TwoValue if self.size.get() <= 16 => CElementType::U16,
+
+            M::FourValue if self.size.get() <= 16 => CElementType::U32,
+            M::TwoValue if self.size.get() <= 32 => CElementType::U32,
+
+            M::TwoValue | M::FourValue => CElementType::U64,
+        }
+    }
+}
+
+impl fmt::Display for CElementType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            CElementType::U8 => "uint8_t",
+            CElementType::U16 => "uint16_t",
+            CElementType::U32 => "uint32_t",
+            CElementType::U64 => "uint64_t",
+        })
+    }
+}
 
 const INDENT: &str = "    ";
 
@@ -137,29 +234,20 @@ pub fn lower_process(
     let mut tmp_counter = 0u64;
     macro_rules! claim_tmp {
         ($size:expr, $mode:expr) => {{
-            if $mode == LogicMode::FourValue {
-                todo!()
-            }
-            if $size.get() > 64 {
-                todo!()
-            }
-
-            let t = tmp_counter;
-            write!(f, "{INDENT}")?;
-            if $size.get() <= 8 {
-                f.write_all(b"uint8_t")?;
-            } else if $size.get() <= 16 {
-                f.write_all(b"uint16_t")?;
-            } else if $size.get() <= 32 {
-                f.write_all(b"uint32_t")?;
-            } else if $size.get() <= 64 {
-                f.write_all(b"uint64_t")?;
-            } else {
-                todo!()
-            }
-
-            writeln!(f, " t{t};")?;
+            let t = CVar {
+                ident: CIdent(tmp_counter),
+                ty: CType {
+                    size: $size,
+                    mode: $mode,
+                },
+            };
             tmp_counter += 1;
+
+            write!(f, "{INDENT}{} {}", t.ty.element_type(), t.ident)?;
+            if let Some(array_size) = t.ty.array_size() {
+                write!(f, "[{array_size}]")?;
+            }
+            writeln!(f, ";")?;
             t
         }};
     }
@@ -180,29 +268,53 @@ pub fn lower_process(
         writeln!(buffer, "L{ident}:")?;
 
         for i in &bb.instrs {
+            writeln!(buffer, "{INDENT}// {i:?}")?;
             match i {
                 I::Constant(dst, bits) => {
                     let mode = var_mode[dst];
                     let t = claim_tmp!(bits.size(), mode);
 
-                    writeln!(
-                        buffer,
-                        "{INDENT}t{t} = 0x{};",
-                        bits.display(&BitsFormatOptions {
-                            prefix: false,
-                            base: BitsFormatBase::UpperHex,
-                            separator: None,
-                            align: None,
-                            fill: '0',
-                            width: BitsFormatWidth::Shrink,
-                        })
-                    )?;
-                    store(
-                        &mut buffer,
-                        heap_map[dst].to_ref(gl.vars[*dst].size),
-                        mode,
-                        t,
-                    )?;
+                    match (t.ty.array_size(), t.ty.mode) {
+                        (None, _) => {
+                            writeln!(
+                                buffer,
+                                "{INDENT}{} = 0x{};",
+                                t.ident,
+                                bits.display(&BitsFormatOptions {
+                                    prefix: false,
+                                    base: BitsFormatBase::UpperHex,
+                                    separator: None,
+                                    align: None,
+                                    fill: '0',
+                                    width: BitsFormatWidth::Shrink,
+                                })
+                            )?;
+                        }
+                        (Some(arr_size), LogicMode::TwoValue) => {
+                            for i in 0..arr_size {
+                                writeln!(
+                                    f,
+                                    "{INDENT}{}[{i}] = 0x{};",
+                                    t.ident,
+                                    bits.slice(i * arr_size, VectorSize::new(64).unwrap())
+                                        .display(&BitsFormatOptions {
+                                            prefix: false,
+                                            base: BitsFormatBase::UpperHex,
+                                            separator: None,
+                                            align: None,
+                                            fill: '0',
+                                            width: BitsFormatWidth::Shrink,
+                                        })
+                                )?;
+                            }
+                        }
+                        (Some(_), LogicMode::FourValue) => {
+                            for (i, v) in bits.as_u64_slice().iter().enumerate() {
+                                writeln!(f, "{INDENT}{}[{i}] = 0x{v:x};", t.ident)?;
+                            }
+                        }
+                    }
+                    store(&mut buffer, heap_map[dst], t)?;
                 }
                 I::Unary(dst, op, src) => {
                     let src_size = gl.vars[*src].size;
@@ -211,44 +323,47 @@ pub fn lower_process(
                     let mdst = var_mode[dst];
 
                     let mut t = claim_tmp!(src_size, msrc);
-                    load(
-                        &mut buffer,
-                        heap_map[src].to_ref(src_size),
-                        var_mode[src],
-                        t,
-                    )?;
+                    load(&mut buffer, heap_map[src], t)?;
                     if msrc != mdst {
                         let unconverted_t = t;
                         t = claim_tmp!(src_size, mdst);
-                        convert(f, src_size, msrc, mdst, unconverted_t, t)?;
+                        convert(f, src_size, msrc, mdst, unconverted_t.ident, t.ident)?;
                     }
 
                     let dst_t = claim_tmp!(dst_size, mdst);
                     use UnaryOp as O;
                     match op {
-                        O::Neg => {
-                            writeln!(
-                                buffer,
-                                "{INDENT}t{dst_t} = t{t} ^ 0x{:x};",
-                                mask(src_size.get())
-                            )?;
-                        }
-                        O::ReduceOr => {
-                            writeln!(buffer, "{INDENT}t{dst_t} = t{t} != 0;")?;
-                        }
-                        O::ReduceAnd => {
-                            writeln!(
-                                buffer,
-                                "{INDENT}t{dst_t} = t{t} == 0x{:x};",
-                                mask(src_size.get())
-                            )?;
-                        }
-                        O::ReduceXor => todo!(),
+                        O::Neg => unary::cgc_negate(&mut buffer, dst_t, t)?,
+                        O::ReduceOr => unary::cgc_reduce_or(&mut buffer, dst_t, t)?,
+                        O::ReduceAnd => unary::cgc_reduce_and(&mut buffer, dst_t, t)?,
+                        O::ReduceXor => unary::cgc_reduce_xor(&mut buffer, dst_t, t)?,
                         O::ContainsX => todo!(),
                     }
-                    store(&mut buffer, heap_map[dst].to_ref(dst_size), mdst, dst_t)?;
+                    store(&mut buffer, heap_map[dst], dst_t)?;
                 }
-                I::Resize(dst, op, src) => todo!(),
+                I::Resize(dst, op, src) => {
+                    let src_size = gl.vars[*src].size;
+                    let dst_size = gl.vars[*dst].size;
+                    let msrc = var_mode[src];
+                    let mdst = var_mode[dst];
+
+                    let mut t = claim_tmp!(src_size, msrc);
+                    load(&mut buffer, heap_map[src], t)?;
+                    if msrc != mdst {
+                        let unconverted_t = t;
+                        t = claim_tmp!(src_size, mdst);
+                        convert(f, src_size, msrc, mdst, unconverted_t.ident, t.ident)?;
+                    }
+
+                    let dst_t = claim_tmp!(dst_size, mdst);
+                    use ResizeOp as O;
+                    match op {
+                        O::Truncate => resize::cgc_truncate(&mut buffer, dst_t, t)?,
+                        O::ZeroExtend => resize::cgc_zero_extend(&mut buffer, dst_t, t)?,
+                        O::SignExtend => resize::cgc_sign_extend(&mut buffer, dst_t, t)?,
+                    }
+                    store(&mut buffer, heap_map[dst], dst_t)?;
+                }
                 I::Binary(dst, op, lhs, rhs) => {
                     let lhs_size = gl.vars[*lhs].size;
                     let rhs_size = gl.vars[*rhs].size;
@@ -257,89 +372,70 @@ pub fn lower_process(
 
                     let (mut lhs_t, mut rhs_t) =
                         (claim_tmp!(lhs_size, mlhs), claim_tmp!(rhs_size, mrhs));
-                    load(&mut buffer, heap_map[lhs].to_ref(lhs_size), mlhs, lhs_t)?;
+                    load(&mut buffer, heap_map[lhs], lhs_t)?;
                     if mlhs != mdst {
                         let unconverted_t = lhs_t;
                         lhs_t = claim_tmp!(lhs_size, mdst);
-                        convert(f, lhs_size, mlhs, mdst, unconverted_t, lhs_t)?;
+                        convert(f, lhs_size, mlhs, mdst, unconverted_t.ident, lhs_t.ident)?;
                     }
-                    load(&mut buffer, heap_map[rhs].to_ref(rhs_size), mrhs, rhs_t)?;
+                    load(&mut buffer, heap_map[rhs], rhs_t)?;
                     if mrhs != mdst {
                         let unconverted_t = rhs_t;
                         rhs_t = claim_tmp!(rhs_size, mdst);
-                        convert(f, rhs_size, mrhs, mdst, unconverted_t, rhs_t)?;
+                        convert(f, rhs_size, mrhs, mdst, unconverted_t.ident, rhs_t.ident)?;
                     }
 
                     let dst_t = claim_tmp!(dst_size, mdst);
+
                     use vogls_ir::BinaryOp as O;
                     match op {
-                        O::And => writeln!(buffer, "{INDENT}t{dst_t} = t{lhs_t} & t{rhs_t};")?,
-                        O::Or => writeln!(buffer, "{INDENT}t{dst_t} = t{lhs_t} | t{rhs_t};")?,
-                        O::Xor => writeln!(buffer, "{INDENT}t{dst_t} = t{lhs_t} ^ t{rhs_t};")?,
-                        O::Add => writeln!(
-                            buffer,
-                            "{INDENT}t{dst_t} = (t{lhs_t} + t{rhs_t}) & 0x{:x};",
-                            mask(dst_size.get())
-                        )?,
-                        O::Sub => writeln!(
-                            buffer,
-                            "{INDENT}t{dst_t} = (t{lhs_t} - t{rhs_t}) & 0x{:x};",
-                            mask(dst_size.get())
-                        )?,
-                        O::Power => writeln!(
-                            buffer,
-                            "{INDENT}t{dst_t} = pow(t{lhs_t}, t{rhs_t}) & 0x{:x};",
-                            mask(dst_size.get())
-                        )?,
-                        O::Multiply => writeln!(
-                            buffer,
-                            "{INDENT}t{dst_t} = (t{lhs_t} * t{rhs_t}) & 0x{:x};",
-                            mask(dst_size.get())
-                        )?,
-                        O::Divide => writeln!(
-                            buffer,
-                            "{INDENT}t{dst_t} = (t{lhs_t} / t{rhs_t}) & 0x{:x};",
-                            mask(dst_size.get())
-                        )?,
-                        O::Modulus => writeln!(
-                            buffer,
-                            "{INDENT}t{dst_t} = (t{lhs_t} % t{rhs_t}) & 0x{:x};",
-                            mask(dst_size.get())
-                        )?,
+                        O::And => {
+                            binary::cgc_bin_and(&mut buffer, dst_t, lhs_t.ident, rhs_t.ident)?
+                        }
+                        O::Or => binary::cgc_bin_or(&mut buffer, dst_t, lhs_t.ident, rhs_t.ident)?,
+                        O::Xor => {
+                            binary::cgc_bin_xor(&mut buffer, dst_t, lhs_t.ident, rhs_t.ident)?
+                        }
+                        O::Add => {
+                            binary::cgc_bin_add(&mut buffer, dst_t, lhs_t.ident, rhs_t.ident)?
+                        }
+                        O::Sub => {
+                            binary::cgc_bin_sub(&mut buffer, dst_t, lhs_t.ident, rhs_t.ident)?
+                        }
+                        O::Power => {
+                            binary::cgc_bin_pow(&mut buffer, dst_t, lhs_t.ident, rhs_t.ident)?
+                        }
+                        O::Multiply => {
+                            binary::cgc_bin_mul(&mut buffer, dst_t, lhs_t.ident, rhs_t.ident)?
+                        }
+                        O::Divide => {
+                            binary::cgc_bin_div(&mut buffer, dst_t, lhs_t.ident, rhs_t.ident)?
+                        }
+                        O::Modulus => {
+                            binary::cgc_bin_mod(&mut buffer, dst_t, lhs_t.ident, rhs_t.ident)?
+                        }
                         O::UnsignedLessEqual => {
-                            writeln!(buffer, "{INDENT}t{dst_t} = (t{lhs_t} < t{rhs_t});")?
+                            binary::cgc_bin_ule(&mut buffer, dst_t.ident, lhs_t, rhs_t.ident)?
                         }
+
                         O::SelectBit => {
-                            writeln!(buffer, "{INDENT}t{dst_t} = (t{lhs_t} >> t{rhs_t}) & 1;")?
+                            binary::cgc_select_bit(&mut buffer, dst_t.ident, lhs_t, rhs_t)?
                         }
-                        O::LogicalShiftLeft => writeln!(
-                            buffer,
-                            "{INDENT}t{dst_t} = (t{lhs_t} << t{rhs_t}) & 0x{:x};",
-                            mask(lhs_size.get())
-                        )?,
-                        O::LogicalShiftRight => writeln!(
-                            buffer,
-                            "{INDENT}t{dst_t} = (t{lhs_t} >> t{rhs_t}) & 0x{:x};",
-                            mask(lhs_size.get())
-                        )?,
-                        O::ArithmeticShiftRight => todo!(),
-                        O::Concat => todo!(),
-                        O::CopyX => todo!(),
-                        O::CopyZ => todo!(),
-                        O::Min => writeln!(
-                            buffer,
-                            "{INDENT}t{dst_t} = (t{lhs_t} < t{rhs_t}) ? t{lhs_t} : t{rhs_t};"
-                        )?,
-                        O::Max => writeln!(
-                            buffer,
-                            "{INDENT}t{dst_t} = (t{lhs_t} < t{rhs_t}) ? t{rhs_t} : t{lhs_t};"
-                        )?,
-                        O::CaseEquality => writeln!(
-                            buffer,
-                            "{INDENT}t{dst_t} = (uint32_t)(t{lhs_t} == t{rhs_t});",
-                        )?,
+                        O::LogicalShiftLeft => binary::cgc_lsl(&mut buffer, dst_t, lhs_t, rhs_t)?,
+                        O::LogicalShiftRight => binary::cgc_lsr(&mut buffer, dst_t, lhs_t, rhs_t)?,
+                        O::ArithmeticShiftRight => {
+                            binary::cgc_asr(&mut buffer, dst_t, lhs_t, rhs_t)?
+                        }
+                        O::Concat => binary::cgc_concat(&mut buffer, dst_t, lhs_t, rhs_t)?,
+                        O::CopyX => binary::cgc_copy_x(&mut buffer, dst_t, lhs_t, rhs_t)?,
+                        O::CopyZ => binary::cgc_copy_y(&mut buffer, dst_t, lhs_t, rhs_t)?,
+                        O::Min => binary::cgc_bin_min(&mut buffer, dst_t, lhs_t, rhs_t)?,
+                        O::Max => binary::cgc_bin_max(&mut buffer, dst_t, lhs_t, rhs_t)?,
+                        O::CaseEquality => {
+                            binary::cgc_case_eq(&mut buffer, dst_t.ident, lhs_t, rhs_t)?
+                        }
                     }
-                    store(&mut buffer, heap_map[dst].to_ref(dst_size), mdst, dst_t)?;
+                    store(&mut buffer, heap_map[dst], dst_t)?;
                 }
                 I::Intrinsic(dst, op, items) => match op.as_ref() {
                     vogls_ir::IntrinsicOp::Time => {
@@ -350,20 +446,44 @@ pub fn lower_process(
                         writeln!(buffer, "{INDENT}printf(\"[FINISH]\\n\"); exit(0);")?;
                     }
                     vogls_ir::IntrinsicOp::Random => todo!(),
-                    vogls_ir::IntrinsicOp::Display(_dyn_format_string) => todo!(),
-                    vogls_ir::IntrinsicOp::Assert(_dyn_format_string) => {
+                    vogls_ir::IntrinsicOp::Display(dyn_format_string) => {
+                        // @Performance: scratchpad this.
+                        let args = items
+                            .iter()
+                            .map(|i| {
+                                let t = claim_tmp!(gl.vars[*i].size, var_mode[i]);
+                                load(&mut buffer, heap_map[i], t)?;
+                                Ok(t)
+                            })
+                            .collect::<io::Result<Vec<CVar>>>()?;
+                        lower_dyn_format_str(&mut buffer, &dyn_format_string, args)?;
+                    }
+                    vogls_ir::IntrinsicOp::Assert(dyn_format_string) => {
                         // @TODO: Format
                         let fst = items[0];
                         let t = claim_tmp!(SCALAR_VSIZE, LogicMode::TwoValue);
-                        load(
-                            &mut buffer,
-                            heap_map[&fst].to_scalar_ref(),
-                            LogicMode::TwoValue,
-                            t,
-                        )?;
+                        load(&mut buffer, heap_map[&fst], t)?;
                         writeln!(
                             buffer,
-                            "{INDENT}if (t{t} == 0) {{ printf(\"Assertion failed\\n\"); exit(1); }}"
+                            r#"{INDENT}if ({t} == 0) {{
+"#,
+                            t = t.ident
+                        )?;
+                        // @Performance: scratchpad this.
+                        let args = items
+                            .iter()
+                            .skip(1)
+                            .map(|i| {
+                                let t = claim_tmp!(gl.vars[*i].size, var_mode[i]);
+                                load(&mut buffer, heap_map[i], t)?;
+                                Ok(t)
+                            })
+                            .collect::<io::Result<Vec<CVar>>>()?;
+                        lower_dyn_format_str(&mut buffer, &dyn_format_string, args)?;
+                        writeln!(
+                            buffer,
+                            r#"{INDENT}{INDENT}exit(1);
+{INDENT}}}"#
                         )?;
                     }
                     vogls_ir::IntrinsicOp::VcdOpenFile(_) => todo!(),
@@ -385,33 +505,59 @@ pub fn lower_process(
                     assert_eq!(var_mode[dst], gl.logic_mode);
 
                     let t = claim_tmp!(size, gl.logic_mode);
-                    load(&mut buffer, signal, gl.logic_mode, t)?;
-                    store(&mut buffer, heap_map[dst].to_ref(size), gl.logic_mode, t)?;
+                    load(&mut buffer, signal.offset, t)?;
+                    store(&mut buffer, heap_map[dst], t)?;
                 }
                 I::Drive(signal, src, partial) => {
-                    if partial.is_some() {
-                        todo!()
-                    }
-
                     let size = gl.vars[*src].size;
                     let msrc = var_mode[src];
                     let mut t = claim_tmp!(size, msrc);
-                    load(&mut buffer, heap_map[src].to_ref(size), var_mode[src], t)?;
+                    load(&mut buffer, heap_map[src], t)?;
                     if msrc != gl.logic_mode {
                         let unconverted_t = t;
                         t = claim_tmp!(size, gl.logic_mode);
-                        convert(f, size, msrc, gl.logic_mode, unconverted_t, t)?;
+                        convert(f, size, msrc, gl.logic_mode, unconverted_t.ident, t.ident)?;
                     }
-                    let current_t = claim_tmp!(size, gl.logic_mode);
-                    load(&mut buffer, io_signals[signal], gl.logic_mode, current_t)?;
-                    writeln!(buffer, "{INDENT}if (t{t} != t{current_t}) {{")?;
-                    writeln!(
-                        buffer,
-                        "{INDENT}{INDENT}drive_signal_{idx}();",
-                        idx = io_signals.get_index(signal).unwrap()
-                    )?;
-                    store(&mut buffer, io_signals[signal], gl.logic_mode, t)?;
-                    writeln!(buffer, "{INDENT}}}")?;
+
+                    if let Some((offset, partial_size)) = partial {
+                        // @TODO: offset > size
+                        // @TODO: offset contains special
+                        let offset_t = claim_tmp!(INTEGER_VSIZE, LogicMode::TwoValue);
+                        load(&mut buffer, heap_map[offset], offset_t)?;
+
+                        let current_t = claim_tmp!(*partial_size, gl.logic_mode);
+                        load_slice(&mut buffer, current_t, offset_t, io_signals[signal])?;
+
+                        writeln!(
+                            buffer,
+                            "{INDENT}if ({t} != {current_t}) {{",
+                            t = t.ident,
+                            current_t = current_t.ident
+                        )?;
+                        writeln!(
+                            buffer,
+                            "{INDENT}{INDENT}drive_signal_{idx}();",
+                            idx = io_signals.get_index(signal).unwrap()
+                        )?;
+                        store_slice(&mut buffer, io_signals[signal], offset_t, t)?;
+                        writeln!(buffer, "{INDENT}}}")?;
+                    } else {
+                        let current_t = claim_tmp!(size, gl.logic_mode);
+                        load(&mut buffer, io_signals[signal].offset, current_t)?;
+                        writeln!(
+                            buffer,
+                            "{INDENT}if ({t} != {current_t}) {{",
+                            t = t.ident,
+                            current_t = current_t.ident
+                        )?;
+                        writeln!(
+                            buffer,
+                            "{INDENT}{INDENT}drive_signal_{idx}();",
+                            idx = io_signals.get_index(signal).unwrap()
+                        )?;
+                        store(&mut buffer, io_signals[signal].offset, t)?;
+                        writeln!(buffer, "{INDENT}}}")?;
+                    }
                 }
                 I::Phi(_, _) => todo!(),
             }
@@ -429,16 +575,12 @@ pub fn lower_process(
             }
             BasicBlockTerminator::VariableWait(bb_key, time) => {
                 let t = claim_tmp!(TIME_VSIZE, LogicMode::TwoValue);
-                load(
-                    &mut buffer,
-                    heap_map[time].to_64bit_ref(),
-                    LogicMode::TwoValue,
-                    t,
-                )?;
+                load(&mut buffer, heap_map[time], t)?;
                 let state = states_set.get_index(bb_key).unwrap();
                 writeln!(
                     buffer,
-                    "{INDENT}schedule_future_event(time + t{t}, (event_t){{.ptr=&{procedure}, .state={state}}});"
+                    "{INDENT}schedule_future_event(time + {t}, (event_t){{.ptr=&{procedure}, .state={state}}});",
+                    t = t.ident,
                 )?;
                 writeln!(buffer, "{INDENT}return;",)?;
             }
@@ -477,11 +619,12 @@ pub fn lower_process(
                 let size = gl.vars[*condition].size;
                 let mcondition = var_mode[condition];
                 let t = claim_tmp!(size, mcondition);
-                load(&mut buffer, heap_map[condition].to_ref(size), mcondition, t)?;
+                load(&mut buffer, heap_map[condition], t)?;
 
                 writeln!(
                     buffer,
-                    "{INDENT}if (t{t} != 0) {{ goto L{truthy}; }} else {{ goto L{falsy}; }}"
+                    "{INDENT}if ({t} != 0) {{ goto L{truthy}; }} else {{ goto L{falsy}; }}",
+                    t = t.ident
                 )?;
             }
             BasicBlockTerminator::Halt => {
@@ -497,38 +640,187 @@ pub fn lower_process(
     Ok(())
 }
 
+fn lower_dyn_format_str(
+    f: &mut impl io::Write,
+    dyn_format_string: &DynFormatString,
+    args: Vec<CVar>,
+) -> io::Result<()> {
+    // @TODO: This is very simplistic.
+    let mut at = 0usize;
+    let content = dyn_format_string.content();
+    write!(f, "{INDENT}printf(\"")?;
+    for (offset, _) in dyn_format_string.arguments() {
+        f.write_all(content[at..*offset].as_bytes())?;
+        at = *offset;
+        f.write_all(b"%x")?;
+    }
+    write!(f, "{}", content[at..].as_bytes().escape_ascii())?;
+    f.write_all(b"\"")?;
+    for arg in args {
+        write!(f, ", {}", arg.ident)?;
+    }
+    writeln!(f, ");")?;
+    Ok(())
+}
+
 const fn mask(num_bits: u32) -> u64 {
     (1u64 << num_bits) - 1
 }
 
-fn load(b: &mut impl io::Write, heap_ref: HeapRef, mode: LogicMode, t: u64) -> io::Result<()> {
-    let mut num_bits = heap_ref.size.get();
-    if mode == LogicMode::FourValue {
+fn load(b: &mut impl io::Write, heap_offset: HeapOffset, t: CVar) -> io::Result<()> {
+    if t.ty.mode == LogicMode::FourValue {
+        todo!()
+    }
+    if let Some(arr_size) = t.ty.array_size() {
+        let offset = heap_offset;
+        let word = offset.bit_offset / 64;
+        writeln!(
+            b,
+            "{INDENT}memmove(&{t}, heap + {word}, {arr_size} * sizeof(uint64_t));",
+            t = t.ident
+        )?;
+        return Ok(());
+    }
+
+    let mut num_bits = t.ty.size.get();
+    if t.ty.mode == LogicMode::FourValue {
         num_bits *= 2;
     }
 
-    let offset = heap_ref.offset;
+    let offset = heap_offset;
     let word = offset.bit_offset / 64;
     let shift = offset.bit_offset % 64;
     let mask = mask(num_bits);
 
-    writeln!(b, "{INDENT}t{t} = (heap[{word}] >> {shift}) & 0x{mask:x};")
+    writeln!(
+        b,
+        "{INDENT}{t} = (heap[{word}] >> {shift}) & 0x{mask:x};",
+        t = t.ident
+    )
 }
 
-fn store(f: &mut impl io::Write, heap_ref: HeapRef, mode: LogicMode, t: u64) -> io::Result<()> {
-    let mut num_bits = heap_ref.size.get();
-    if mode == LogicMode::FourValue {
+fn store(f: &mut impl io::Write, heap_offset: HeapOffset, t: CVar) -> io::Result<()> {
+    if t.ty.mode == LogicMode::FourValue {
+        todo!()
+    }
+    if let Some(arr_size) = t.ty.array_size() {
+        let offset = heap_offset;
+        let word = offset.bit_offset / 64;
+        writeln!(
+            f,
+            "{INDENT}memmove(heap + {word}, &{t}, {arr_size} * sizeof(uint64_t));",
+            t = t.ident
+        )?;
+        return Ok(());
+    }
+
+    let mut num_bits = t.ty.size.get();
+    if t.ty.mode == LogicMode::FourValue {
         num_bits *= 2;
     }
 
-    let offset = heap_ref.offset;
+    let offset = heap_offset;
     let word = offset.bit_offset / 64;
     let shift = offset.bit_offset % 64;
     let mask = !(((1u64 << num_bits) - 1) << shift);
 
     writeln!(
         f,
-        "{INDENT}heap[{word}] = (heap[{word}] & 0x{mask:x}) | ((uint64_t)t{t} << {shift});"
+        "{INDENT}heap[{word}] = (heap[{word}] & 0x{mask:x}) | ((uint64_t){t} << {shift});",
+        t = t.ident
+    )
+}
+
+fn load_slice(b: &mut impl io::Write, dst: CVar, offset: CVar, src: HeapRef) -> io::Result<()> {
+    if dst.ty.mode == LogicMode::FourValue {
+        todo!()
+    }
+    let src_ty = CType {
+        size: src.size,
+        mode: dst.ty.mode,
+    };
+    if let Some(_) = src_ty.array_size() {
+        match dst.ty.array_size() {
+            None => {
+                write!(
+                    b,
+                    r#"
+{INDENT}if (({offset}%64)+{dst_size} <= 64) {dst} = (heap[{word}+({offset}/64)] >> ({offset}%64)) & 0x{mask:x};
+{INDENT}else {dst} = (heap[{word}+({offset}/64)] >> ({offset}%64)) | (heap[{word}+({offset}/64) + 1] >> (64 - {offset}%64)) & 0x{mask:x};
+"#,
+                    offset = offset.ident,
+                    dst = dst.ident,
+                    dst_size = dst.ty.size,
+                    word = src.offset.bit_offset / 64,
+                    mask = mask(dst.ty.size.get())
+                )?;
+            }
+            _ => todo!(),
+        }
+
+        return Ok(());
+    }
+
+    let mut num_bits = dst.ty.size.get();
+    if dst.ty.mode == LogicMode::FourValue {
+        num_bits *= 2;
+    }
+
+    let word = src.offset.bit_offset / 64;
+    let shift = src.offset.bit_offset % 64;
+    let mask = mask(num_bits);
+
+    writeln!(
+        b,
+        "{INDENT}{t} = (heap[{word}] >> ({shift} + {offset})) & 0x{mask:x};",
+        t = dst.ident,
+        offset = offset.ident,
+    )
+}
+
+fn store_slice(f: &mut impl io::Write, dst: HeapRef, offset: CVar, src: CVar) -> io::Result<()> {
+    if src.ty.mode == LogicMode::FourValue {
+        todo!()
+    }
+    let dst_ty = CType {
+        size: dst.size,
+        mode: src.ty.mode,
+    };
+    if let Some(_) = dst_ty.array_size() {
+        match src.ty.array_size() {
+            None => {
+                write!(
+                    f,
+                    r#"
+{INDENT}if (({offset}%64)+{src_size} <= 64) heap[{word}+({offset}/64)] = (heap[{word}+({offset}/64)] & ~(((uint64_t)0x{mask:x}) << ({offset}%64))) | (((uint64_t){src}) << ({offset}%64));
+{INDENT}else {{ printf("NYI"); exit(1); }};
+"#,
+                    src_size = src.ty.size,
+                    offset = offset.ident,
+                    src = src.ident,
+                    word = dst.offset.bit_offset / 64,
+                    mask = mask(src.ty.size.get()),
+                )?;
+            }
+            _ => todo!(),
+        }
+        return Ok(());
+    }
+
+    let mut num_bits = src.ty.size.get();
+    if src.ty.mode == LogicMode::FourValue {
+        num_bits *= 2;
+    }
+
+    let word = dst.offset.bit_offset / 64;
+    let shift = dst.offset.bit_offset % 64;
+    let mask = mask(num_bits);
+
+    writeln!(
+        f,
+        "{INDENT}heap[{word}] = (heap[{word}] & ~(((uint64_t)0x{mask:x}) << ({shift}+{offset}))) | ((uint64_t){t} << ({shift} + {offset}));",
+        t = src.ident,
+        offset = offset.ident,
     )
 }
 
@@ -537,8 +829,8 @@ fn convert(
     size: std::num::NonZero<u32>,
     msrc: LogicMode,
     mdst: LogicMode,
-    unconverted_t: u64,
-    t: u64,
+    unconverted_t: CIdent,
+    t: CIdent,
 ) -> io::Result<()> {
     todo!()
 }
@@ -598,13 +890,167 @@ pub fn lower_signal_drive_fn(
 
 pub fn lower_startup_function(f: &mut impl io::Write, gl: &GlobalContext) -> io::Result<()> {
     writeln!(f, "void startup() {{")?;
+    writeln!(f, "{INDENT}(void)heap;")?;
+    writeln!(f, "{INDENT}(void)is_scheduled;")?;
+    writeln!(f, "{INDENT}(void)listening;")?;
+    writeln!(f, "{INDENT}(void)last_active_time;")?;
+    writeln!(f)?;
     for (i, process) in gl.processes.values().enumerate() {
-        writeln!(
-            f,
-            "{INDENT}{}(0);",
-            process_to_procedure_name(process, i)
-        )?;
+        writeln!(f, "{INDENT}{}(0);", process_to_procedure_name(process, i))?;
     }
     writeln!(f, "}}")?;
     Ok(())
+}
+
+pub fn prologue(f: &mut impl io::Write) -> io::Result<()> {
+    f.write_all(
+        br#"#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+typedef struct event {
+  void (*ptr)(int);
+  int state;
+} event_t;
+typedef struct timed_event {
+  event_t event;
+  uint64_t time;
+} timed_event_t;
+typedef struct event_vec {
+  event_t *ptr;
+  size_t length;
+  size_t capacity;
+} event_vec_t;
+typedef struct timed_event_vec {
+  timed_event_t *ptr;
+  size_t length;
+  size_t capacity;
+} timed_event_vec_t;
+
+typedef struct schedule {
+  event_vec_t active_region;
+  event_vec_t *regions;
+  timed_event_vec_t future;
+  uint64_t next_time;
+} schedule_t;
+
+static uint64_t time = 0;
+static schedule_t schedule = {
+    .active_region = {},
+    .regions = NULL,
+    .future = {},
+};
+
+void schedule_future_event(uint64_t time, event_t event);
+void event_vec_push(event_vec_t *v, event_t event);
+bool event_vec_pop(event_vec_t *v, event_t *event);
+
+static inline uint32_t popcount64(uint64_t n) {
+#if defined(__GNUC__) || defined(__clang__)
+    return __builtin_popcount(n);
+#elif defined(_MSC_VER)
+    #include <intrin.h>
+    return __popcnt(n);
+#else
+#error "No popcount built-in"
+#endif
+}
+static inline uint32_t popcount32(uint32_t n) {
+#if defined(__GNUC__) || defined(__clang__)
+    return __builtin_popcount(n);
+#elif defined(_MSC_VER)
+    #include <intrin.h>
+    return __popcnt(n);
+#else
+#error "No popcount built-in"
+#endif
+}
+static inline uint32_t popcount16(uint16_t n) {
+	return popcount32((uint32_t)n);
+}
+static inline uint32_t popcount8(uint8_t n) {
+	return popcount32((uint32_t)n);
+}
+"#,
+    )
+}
+
+pub fn epilogue(f: &mut impl io::Write) -> io::Result<()> {
+    f.write_all(
+        br#"
+
+void schedule_future_event(uint64_t time, event_t event) {
+  schedule.next_time = (schedule.future.length == 0 || time < schedule.next_time) ? time : schedule.next_time;
+  if (schedule.future.length >= schedule.future.capacity) {
+    size_t new_capacity =
+        (schedule.future.length == 0) ? 1 : (schedule.future.length * 2);
+    schedule.future.ptr = realloc(schedule.future.ptr, sizeof(timed_event_t) * new_capacity);
+    if (schedule.future.ptr == NULL) {
+      printf("Failed to allocate");
+      exit(1);
+    }
+    schedule.future.capacity = new_capacity;
+  }
+
+  timed_event_t te = {
+      .event = event,
+      .time = time,
+  };
+  schedule.future.ptr[schedule.future.length] = te;
+  schedule.future.length += 1;
+}
+
+void event_vec_push(event_vec_t *v, event_t event) {
+  if (v->length >= v->capacity) {
+    size_t new_capacity = (v->length == 0) ? 1 : (v->length * 2);
+    v->ptr = realloc(v->ptr, sizeof(event_t) * new_capacity);
+    if (v->ptr == NULL) {
+      printf("Failed to allocate");
+      exit(1);
+    }
+    v->capacity = new_capacity;
+  }
+  v->ptr[v->length] = event;
+  v->length += 1;
+}
+bool event_vec_pop(event_vec_t *v, event_t *event) {
+  if (v->length == 0) {
+    event->ptr = NULL;
+    return false;
+  }
+  *event = v->ptr[v->length - 1];
+  v->length -= 1;
+  return true;
+}
+
+int main() {
+  startup();
+
+  while (schedule.active_region.length > 0) {
+    event_t e;
+    while (event_vec_pop(&schedule.active_region, &e)) {
+      (e.ptr)(e.state);
+    }
+
+    // @TODO: Regions
+
+    uint64_t next_time;
+    timed_event_t te;
+    size_t j = 0;
+    for (size_t i = 0; i < schedule.future.length; ++i) {
+      te = (timed_event_t)schedule.future.ptr[i];
+      if (te.time == schedule.next_time) {
+        event_vec_push(&schedule.active_region, te.event);
+      } else {
+        next_time = (te.time < next_time) ? time : next_time;
+        schedule.future.ptr[j] = te;
+        j += 1;
+      }
+    }
+    schedule.future.length = j;
+  }
+}"#,
+    )
 }

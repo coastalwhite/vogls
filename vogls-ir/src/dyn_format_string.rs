@@ -58,6 +58,13 @@ impl DynFormatString {
 
         f.write_all(self.content[at..].as_bytes())
     }
+
+    pub fn content(&self) -> &str {
+        &self.content
+    }
+    pub fn arguments(&self) -> &[(usize, DynFormatArgument)] {
+        &self.arguments
+    }
 }
 
 pub fn format_bits(

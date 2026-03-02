@@ -913,6 +913,11 @@ impl Bits {
         (self.as_slice()[(at / 8) as usize] >> at % 8) & 1 != 0
     }
 
+    pub fn slice(&self, offset: u32, size: VectorSize) -> Self {
+        // @Performance
+        self.logical_shift_right(offset).truncate(size)
+    }
+
     pub fn extract_exact_u32(&self) -> u32 {
         if self.mode == Mode::FourValue {
             todo!()

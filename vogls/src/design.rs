@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
+use std::io::Write as _;
 use std::path::Path;
+use std::process::Command;
 use std::rc::Rc;
 
 use slotmap::{SecondaryMap, SlotMap};
@@ -604,8 +606,11 @@ impl Design {
 
             vogls_codegen_c::lower_startup_function(&mut out, &gl)?;
 
+            let mut c_file = Vec::new();
+
+            vogls_codegen_c::prologue(&mut c_file)?;
             writeln!(
-                &mut ectx.stdout,
+                &mut c_file,
                 r#"
 static uint64_t heap[{heap_size}] = {{}};
 static uint64_t is_scheduled[{is_scheduled_size}] = {{}};
@@ -615,9 +620,32 @@ static uint64_t last_active_time[{last_active_time_size}] = {{}};
                 heap_size = heap_builder.top().div_ceil(64),
                 is_scheduled_size = gl.processes.len().div_ceil(64),
                 listening_size = listener_builder.top.div_ceil(64),
-                last_active_time_size = gl.signals.len().div_ceil(64),
+                last_active_time_size = gl.signals.len(),
             )?;
-            ectx.stdout.write_all(&out)?;
+            c_file.extend(&out);
+            vogls_codegen_c::epilogue(&mut c_file)?;
+
+            std::fs::write("t2.c", &c_file)?;
+
+            let mut cc = Command::new("cc")
+                .args(["-x", "c", "-", "-o", "/tmp/vogls-target"])
+                .stdin(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            cc.stdin.take().unwrap().write_all(&c_file)?;
+            if !cc.wait().unwrap().success() {
+                return Err("compilation failed!".into());
+            }
+
+            if !Command::new("/tmp/vogls-target")
+                .status()
+                .unwrap()
+                .success()
+            {
+                return Err("run failed!".into());
+            }
+
+            return Err("run success!".into());
         }
 
         for process in gl.processes.keys() {

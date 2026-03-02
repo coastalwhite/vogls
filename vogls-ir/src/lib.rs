@@ -314,6 +314,7 @@ pub enum Instruction {
     Binary(VariableKey, BinaryOp, VariableKey, VariableKey),
 
     Intrinsic(VariableKey, Box<IntrinsicOp>, Box<[VariableKey]>),
+    /// Store the 64-bit simulation time when a signal was last updated.
     LastUpdateTime(VariableKey, SignalKey),
     Probe(VariableKey, SignalKey),
     Drive(SignalKey, VariableKey, Option<(VariableKey, VectorSize)>),
