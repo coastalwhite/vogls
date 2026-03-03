@@ -15,6 +15,7 @@ vogls-utils.workspace = true
 vogls-bits.workspace = true
 vogls-codegen.workspace = true
 vogls-codegen-c.workspace = true
+vogls-runtime.workspace = true
 
 [features]
 random = ["vogls-bits/random"]

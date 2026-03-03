@@ -143,8 +143,12 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             }
         }
 
-        for config in [LogicMode::TwoValue, LogicMode::FourValue] {
-            if Some(config) == test_information.skip {
+        for (logic_mode, compile) in [
+            (LogicMode::TwoValue, false),
+            (LogicMode::FourValue, false),
+            (LogicMode::TwoValue, true),
+        ] {
+            if Some(logic_mode) == test_information.skip {
                 write!(&mut o, " \x1b[32mS\x1b[0m")?;
                 continue;
             }
@@ -165,9 +169,9 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                 no_run: false,
                 time: test_information.time,
                 opt_rounds: 0,
-                logic_mode: config,
+                logic_mode,
                 vcd: None,
-                compile: false,
+                compile,
             };
             let ctx = std::panic::AssertUnwindSafe(&mut ctx);
             let result = std::panic::catch_unwind(|| {

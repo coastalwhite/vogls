@@ -232,7 +232,43 @@ pub fn cgc_concat(f: &mut impl io::Write, dst: CVar, lhs: CVar, rhs: CVar) -> io
             dst_elem_ty = dst.ty.element_type(),
             r_size = rhs.ty.size
         )?,
-        (LogicMode::TwoValue, Some(_)) => todo!(),
+        (LogicMode::TwoValue, Some(_)) => {
+            if rhs.ty.size.get() % 64 == 0 {
+                match rhs.ty.array_size() {
+                    None => writeln!(f, "{INDENT}{d}[0] = (uint64_t){r};")?,
+                    Some(r_arr_size) => writeln!(
+                        f,
+                        "{INDENT}memmove({d}, {r}, sizeof(uint64_t)*{r_arr_size});"
+                    )?,
+                }
+                let rwords = rhs.ty.array_size().unwrap_or(1);
+                match lhs.ty.array_size() {
+                    None => writeln!(f, "{INDENT}{d}[{rwords}] = (uint64_t){l};")?,
+                    Some(l_arr_size) => writeln!(
+                        f,
+                        "{INDENT}memmove({d}+{rwords}, {l}, sizeof(uint64_t)*{l_arr_size});"
+                    )?,
+                }
+            } else {
+                match (lhs.ty.array_size(), rhs.ty.array_size()) {
+                    (None, None) => {
+                        writeln!(
+                            f,
+                            "{INDENT}{d}[0] = (((uint64_t){l}) << {r_size}) | (uint64_t){r};",
+                            r_size = rhs.ty.size
+                        )?;
+                        writeln!(
+                            f,
+                            "{INDENT}{d}[1] = ((uint64_t){l}) >> {shift};",
+                            shift = 64 - rhs.ty.size.get()
+                        )?
+                    }
+                    (Some(l), None) => {}
+                    (None, Some(r)) => {}
+                    (Some(l), Some(r)) => {}
+                }
+            }
+        }
         (LogicMode::FourValue, _) => todo!(),
     }
 
@@ -290,7 +326,10 @@ pub fn cgc_case_eq(f: &mut impl io::Write, dst: CIdent, lhs: CVar, rhs: CVar) ->
     let (d, l, r) = (dst, lhs.ident, rhs.ident);
     match (lhs.ty.mode, lhs.ty.array_size()) {
         (LogicMode::TwoValue, None) => writeln!(f, "{INDENT}{d} = (uint8_t)({l} <= {r});")?,
-        (LogicMode::TwoValue, Some(_)) => todo!(),
+        (LogicMode::TwoValue, Some(arr_size)) => writeln!(
+            f,
+            "{INDENT}{d} = 1; for (int i = 0; i < {arr_size}; ++i) {d} &= {l}[i] == {r}[i];"
+        )?,
         (LogicMode::FourValue, _) => todo!(),
     }
 

@@ -33,12 +33,13 @@ impl vogls::sim::Plugin for TracePlugin {
         simulation: &vogls::sim::Simulation,
         state: &mut vogls::SimulationState,
     ) {
-        self.time_offsets.push((state.time, self.trace.len()));
+        self.time_offsets.push((state.runtime.time, self.trace.len()));
         self.trace
             .extend(self.updated_this_time_step.iter().map(|&s| {
                 (
                     s,
                     state
+                        .runtime
                         .heap
                         .load_bits(simulation.signals[s.0 as usize], simulation.logic_mode),
                 )
@@ -48,7 +49,7 @@ impl vogls::sim::Plugin for TracePlugin {
     }
 
     fn finish(&mut self, _simulation: &vogls::sim::Simulation, state: &mut vogls::SimulationState) {
-        self.time_offsets.push((state.time, self.trace.len()));
+        self.time_offsets.push((state.runtime.time, self.trace.len()));
     }
 }
 

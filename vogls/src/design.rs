@@ -10,6 +10,7 @@ use vogls_codegen_c::runtime::{CDesign, CDesignState};
 use vogls_codegen_c::{ListenerBuilder, lower_signal_drive_fn, lower_signal_drive_header};
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_ir::{Bits, GlobalContext, LogicMode, Signal, SignalKey};
+use vogls_runtime::RuntimeState;
 use vogls_sim::{
     Event, Regions, Simulation, SimulationIo, SimulationState, VmProcess, VmProcessKey,
     VmSignalKey, lower_process_to_vm,
@@ -31,11 +32,9 @@ pub enum DesignBackend {
     Interpretted {
         vm_signal_map: HashMap<SignalKey, VmSignalKey>,
         simulation: vogls_sim::Simulation,
-        initial_state: vogls_sim::SimulationState,
     },
     Compiled {
         design: vogls_codegen_c::runtime::CDesign,
-        initial_state: vogls_codegen_c::runtime::CDesignState,
     },
 }
 
@@ -44,11 +43,28 @@ pub struct Design {
     pub ident_table: IdentTable,
     pub elab_table: VSymbolTable,
     pub backend: DesignBackend,
+    pub initial_state: DesignState,
 }
 
+#[derive(Clone)]
 pub enum DesignState {
     Interpretted(vogls_sim::SimulationState),
     Compiled(vogls_codegen_c::runtime::CDesignState),
+}
+
+impl DesignState {
+    pub fn runtime_mut(&mut self) -> &mut RuntimeState {
+        match self {
+            DesignState::Interpretted(s) => &mut s.runtime,
+            DesignState::Compiled(s) => &mut s.runtime,
+        }
+    }
+    pub fn runtime(&self) -> &RuntimeState {
+        match self {
+            DesignState::Interpretted(s) => &s.runtime,
+            DesignState::Compiled(s) => &s.runtime,
+        }
+    }
 }
 
 impl Design {
@@ -626,12 +642,22 @@ impl Design {
             vogls_codegen_c::prologue(&mut c_file)?;
             c_file.extend(&out);
             vogls_codegen_c::epilogue(&mut c_file)?;
-            vogls_codegen_c::add_main(&mut c_file, &gl, &heap_builder, &listener_builder)?;
+            // vogls_codegen_c::add_main(&mut c_file, &gl, &heap_builder, &listener_builder)?;
 
             std::fs::write("t2.c", &c_file)?;
 
             let mut cc = Command::new("cc")
-                .args(["-x", "c", "-", "-shared", "-o", "/tmp/vogls-target.so"])
+                .args([
+                    "-x",
+                    "c",
+                    "-g3",
+                    "-fPIC",
+                    "-O2",
+                    "-",
+                    "-shared",
+                    "-o",
+                    "/tmp/vogls-target.so",
+                ])
                 .stdin(std::process::Stdio::piped())
                 .spawn()
                 .unwrap();
@@ -646,10 +672,8 @@ impl Design {
                 gl,
                 ident_table: ast.arenas.ident_table,
                 elab_table,
-                backend: DesignBackend::Compiled {
-                    design,
-                    initial_state,
-                },
+                backend: DesignBackend::Compiled { design },
+                initial_state: DesignState::Compiled(initial_state),
             });
         }
 
@@ -744,8 +768,8 @@ impl Design {
             backend: DesignBackend::Interpretted {
                 vm_signal_map: io_signals,
                 simulation,
-                initial_state,
             },
+            initial_state: DesignState::Interpretted(initial_state),
         })
     }
 
@@ -754,21 +778,20 @@ impl Design {
         io: &mut SimulationIo,
         time: u64,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        match &mut self.backend {
-            DesignBackend::Interpretted {
-                vm_signal_map: _,
-                simulation,
-                initial_state,
-            } => simulation
+        match (&mut self.backend, &mut self.initial_state) {
+            (
+                DesignBackend::Interpretted {
+                    vm_signal_map: _,
+                    simulation,
+                },
+                DesignState::Interpretted(initial_state),
+            ) => simulation
                 .run(initial_state, io, time)
                 .map_err(|_| "execution failed.".into()),
-            DesignBackend::Compiled {
-                design,
-                initial_state,
-            } => {
-                design.run(initial_state);
-                Ok(())
-            }
+            (DesignBackend::Compiled { design }, DesignState::Compiled(initial_state)) => design
+                .run(initial_state)
+                .map_err(|_| "execution failed.".into()),
+            _ => panic!(),
         }
     }
 
@@ -783,21 +806,13 @@ impl Design {
                 DesignBackend::Interpretted {
                     vm_signal_map: _,
                     simulation,
-                    initial_state: _,
                 },
                 DesignState::Interpretted(state),
             ) => simulation
                 .run(state, io, time)
                 .map_err(|_| "execution failed.".into()),
-            (
-                DesignBackend::Compiled {
-                    design,
-                    initial_state: _,
-                },
-                DesignState::Compiled(state),
-            ) => {
-                design.run(state);
-                Ok(())
+            (DesignBackend::Compiled { design }, DesignState::Compiled(state)) => {
+                design.run(state).map_err(|_| "execution failed.".into())
             }
             _ => unreachable!(),
         }

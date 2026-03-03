@@ -195,7 +195,7 @@ pub fn lower_process(
 
     writeln!(
         f,
-        "void {procedure}(int state, uint64_t *heap, schedule_t *schedule, uint64_t time, uint64_t *is_scheduled, uint64_t *listening, uint64_t *last_active_time) {{",
+        "void {procedure}(int state, uint64_t *heap, schedule_t *schedule, uint64_t time, uint64_t *is_scheduled, uint64_t *listening, uint64_t *last_active_time, cold_context_t *cldctx) {{",
     )?;
 
     let mut bb_ident = IndexSet::<BasicBlockKey>::new();
@@ -487,7 +487,7 @@ pub fn lower_process(
                         lower_dyn_format_str(&mut buffer, &dyn_format_string, args)?;
                         writeln!(
                             buffer,
-                            r#"{INDENT}{INDENT}exit(1);
+                            r#"{INDENT}{INDENT}cldctx->exit = 2; return;
 {INDENT}}}"#
                         )?;
                     }
@@ -533,12 +533,21 @@ pub fn lower_process(
                         let current_t = claim_tmp!(*partial_size, gl.logic_mode);
                         load_slice(&mut buffer, current_t, offset_t, io_signals[signal])?;
 
-                        writeln!(
-                            buffer,
-                            "{INDENT}if ({t} != {current_t}) {{",
-                            t = t.ident,
-                            current_t = current_t.ident
-                        )?;
+                        match current_t.ty.array_size() {
+                            None => {
+                                writeln!(
+                                    buffer,
+                                    "{INDENT}if ({t} != {current_t}) {{",
+                                    t = t.ident,
+                                    current_t = current_t.ident
+                                )?;
+                            }
+                            Some(_) => {
+                                let condition = claim_tmp!(SCALAR_VSIZE, LogicMode::TwoValue);
+                                binary::cgc_case_eq(&mut buffer, condition.ident, t, current_t)?;
+                                writeln!(buffer, "{INDENT}if (!{}) {{", condition.ident)?;
+                            }
+                        }
                         writeln!(
                             buffer,
                             "{INDENT}{INDENT}drive_signal_{idx}(schedule, time, is_scheduled, listening, last_active_time);",
@@ -549,12 +558,21 @@ pub fn lower_process(
                     } else {
                         let current_t = claim_tmp!(size, gl.logic_mode);
                         load(&mut buffer, io_signals[signal].offset, current_t)?;
-                        writeln!(
-                            buffer,
-                            "{INDENT}if ({t} != {current_t}) {{",
-                            t = t.ident,
-                            current_t = current_t.ident
-                        )?;
+                        match current_t.ty.array_size() {
+                            None => {
+                                writeln!(
+                                    buffer,
+                                    "{INDENT}if ({t} != {current_t}) {{",
+                                    t = t.ident,
+                                    current_t = current_t.ident
+                                )?;
+                            }
+                            Some(_) => {
+                                let condition = claim_tmp!(SCALAR_VSIZE, LogicMode::TwoValue);
+                                binary::cgc_case_eq(&mut buffer, condition.ident, t, current_t)?;
+                                writeln!(buffer, "{INDENT}if (!{}) {{", condition.ident)?;
+                            }
+                        }
                         writeln!(
                             buffer,
                             "{INDENT}{INDENT}drive_signal_{idx}(schedule, time, is_scheduled, listening, last_active_time);",
@@ -598,7 +616,7 @@ pub fn lower_process(
                         buffer,
                         "{INDENT}listening[{}] |= 0x{:x};",
                         offset / 64,
-                        1 << (offset % 64)
+                        1u64 << (offset % 64)
                     )?;
                     listener_builder.insert(*item, process_idx, process_key, state as u32);
                 }
@@ -606,7 +624,7 @@ pub fn lower_process(
                     buffer,
                     "{INDENT}is_scheduled[{}] &= 0x{:x};",
                     process_idx / 64,
-                    !(1 << (process_idx % 64)),
+                    !(1u64 << (process_idx % 64)),
                 )?;
                 writeln!(buffer, "{INDENT}return;",)?;
             }
@@ -807,7 +825,7 @@ fn store_slice(f: &mut impl io::Write, dst: HeapRef, offset: CVar, src: CVar) ->
                     f,
                     r#"
 {INDENT}if (({offset}%64)+{src_size} <= 64) heap[{word}+({offset}/64)] = (heap[{word}+({offset}/64)] & ~(((uint64_t)0x{mask:x}) << ({offset}%64))) | (((uint64_t){src}) << ({offset}%64));
-{INDENT}else {{ printf("NYI"); exit(1); }};
+{INDENT}else {{ printf("NYI [STORE SLICE]\n"); cldctx->exit = 2; return; }};
 "#,
                     src_size = src.ty.size,
                     offset = offset.ident,
@@ -887,9 +905,9 @@ pub fn lower_signal_drive_fn(
             )?;
             writeln!(
                 f,
-                "{INDENT}{INDENT}is_scheduled[{}] |= {};",
+                "{INDENT}{INDENT}is_scheduled[{}] |= 0x{:x};",
                 listener.process_idx / 64,
-                1 << (listener.process_idx % 64),
+                1u64 << (listener.process_idx % 64),
             )?;
             writeln!(
                 f,
@@ -898,7 +916,7 @@ pub fn lower_signal_drive_fn(
                     &gl.processes[listener.process_key],
                     listener.process_idx
                 ),
-                1u64 << (listener.process_idx % 64),
+                listener.state
             )?;
             writeln!(f, "{INDENT}}}",)?;
         }
@@ -916,7 +934,8 @@ pub fn lower_startup_function(f: &mut impl io::Write, gl: &GlobalContext) -> io:
     uint64_t time,
     uint64_t *is_scheduled,
     uint64_t *listening,
-    uint64_t *last_active_time
+    uint64_t *last_active_time,
+    cold_context_t *cldctx
 ) {\n",
     )?;
     writeln!(f, "{INDENT}(void)heap;")?;
@@ -929,7 +948,7 @@ pub fn lower_startup_function(f: &mut impl io::Write, gl: &GlobalContext) -> io:
     for (i, process) in gl.processes.values().enumerate() {
         writeln!(
             f,
-            "{INDENT}{}(0, heap, schedule, time, is_scheduled, listening, last_active_time);",
+            "{INDENT}{}(0, heap, schedule, time, is_scheduled, listening, last_active_time, cldctx); if (cldctx->exit != 0) return;",
             // int state, uint64_t *heap, schedule_t *schedule, uint64_t *time, uint64_t *is_scheduled, uint64_t *listening, uint64_t *last_active_time
             process_to_procedure_name(process, i)
         )?;
@@ -947,11 +966,12 @@ pub fn prologue(f: &mut impl io::Write) -> io::Result<()> {
 #include <string.h>
 
 struct schedule;
-struct event_vec;
-struct timed_event_vec;
+typedef struct cold_context {
+    uint8_t exit;
+} cold_context_t;
 
 typedef struct event {
-  void (*ptr)(int, uint64_t*, struct schedule*, uint64_t, uint64_t*, uint64_t*, uint64_t*);
+  void (*ptr)(int, uint64_t*, struct schedule*, uint64_t, uint64_t*, uint64_t*, uint64_t*, cold_context_t*);
   int state;
 } event_t;
 typedef struct timed_event {
@@ -962,13 +982,13 @@ typedef struct event_vec {
   event_t *ptr;
   size_t length;
   size_t capacity;
-  void (*grow)(struct event_vec*);
+  void (*grow)(void*);
 } event_vec_t;
 typedef struct timed_event_vec {
   timed_event_t *ptr;
   size_t length;
   size_t capacity;
-  void (*grow)(struct timed_event_vec*);
+  void (*grow)(void*);
 } timed_event_vec_t;
 
 typedef struct schedule {
@@ -1019,7 +1039,7 @@ pub fn epilogue(f: &mut impl io::Write) -> io::Result<()> {
 static inline void schedule_future_event(schedule_t *schedule, uint64_t time, event_t event) {
   schedule->next_time = (schedule->future.length == 0 || time < schedule->next_time) ? time : schedule->next_time;
   if (schedule->future.length >= schedule->future.capacity) {
-    (schedule->future.grow)(&schedule->future);
+    (schedule->future.grow)((void*)&schedule->future);
   }
 
   timed_event_t te = {
@@ -1032,7 +1052,7 @@ static inline void schedule_future_event(schedule_t *schedule, uint64_t time, ev
 
 static inline void event_vec_push(event_vec_t *v, event_t event) {
   if (v->length >= v->capacity) {
-    (v->grow)(v);
+    (v->grow)((void*)v);
   }
   v->ptr[v->length] = event;
   v->length += 1;

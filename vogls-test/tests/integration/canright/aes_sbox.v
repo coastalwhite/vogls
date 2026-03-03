@@ -98,5 +98,6 @@ module tb();
 		    $vogls_assert_eq(sbox_fwd_o, SBOX_LUT    [2047 - 8*i-:8]);
 		    $vogls_assert_eq(sbox_inv_o, SBOX_INV_LUT[2047 - 8*i-:8]);
 		end
+		$finish();
 	end
 endmodule

@@ -55,6 +55,7 @@ macro_rules! impl_non_max_int {
 }
 
 impl_non_max_int! {
+    (NonMaxU8, std::num::NonZeroU8, u8)
     (NonMaxU32, std::num::NonZeroU32, u32)
     (NonMaxU64, std::num::NonZeroU64, u64)
     (NonMaxUsize, std::num::NonZeroUsize, usize)

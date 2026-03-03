@@ -3,11 +3,13 @@ pub mod trace;
 #[pyo3::pymodule]
 mod vogls {
     use std::io::{stderr, stdout};
+    use std::ops::DerefMut;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
 
     use pyo3::exceptions::{PyException, PyValueError};
     use pyo3::{PyResult, prelude::*};
+    use vogls::design::{DesignBackend, DesignState};
     use vogls::{
         BitsFormatOptions, ExecutionContext, LogicMode, SimulationIo, VSymbol, VectorSize,
     };
@@ -35,7 +37,7 @@ mod vogls {
     #[pyo3::pyclass]
     #[repr(transparent)]
     pub struct Snapshot {
-        inner: Arc<Mutex<vogls::SimulationState>>,
+        inner: Arc<Mutex<vogls::design::DesignState>>,
     }
 
     #[pyo3::pyclass(frozen)]
@@ -152,13 +154,22 @@ mod vogls {
             signal: Py<SignalRef>,
             value: Py<Bits>,
         ) -> PyResult<()> {
+            let DesignBackend::Interpretted {
+                vm_signal_map,
+                simulation,
+            } = &self.inner.backend
+            else {
+                todo!()
+            };
             let signal = signal.get().inner;
-            let vm_signal = self.inner.vm_signal_map[&signal];
-            self.inner.simulation.drive_bits(
-                &mut snapshot.borrow(py).inner.lock().unwrap(),
-                vm_signal,
-                &value.get().inner,
-            );
+            let vm_signal = vm_signal_map[&signal];
+            let state = snapshot.borrow(py);
+            let mut state = state.inner.lock().unwrap();
+            let DesignState::Interpretted(state) = state.deref_mut()
+            else {
+                todo!()
+            };
+            simulation.drive_bits(state, vm_signal, &value.get().inner);
             Ok(())
         }
 
@@ -168,14 +179,21 @@ mod vogls {
             snapshot: Py<Snapshot>,
             signal: Py<SignalRef>,
         ) -> PyResult<Bits> {
+            let DesignBackend::Interpretted {
+                vm_signal_map,
+                simulation,
+            } = &self.inner.backend
+            else {
+                todo!()
+            };
             let signal = signal.get().inner;
-            let vm_signal = self.inner.vm_signal_map[&signal];
-            let heap_ref = self.inner.simulation.signals[vm_signal.0 as usize];
+            let vm_signal = vm_signal_map[&signal];
+            let heap_ref = simulation.signals[vm_signal.0 as usize];
             let snapshot = snapshot.borrow(py);
             let snapshot = snapshot.inner.lock().unwrap();
             let bits = match self.inner.gl.logic_mode {
-                LogicMode::TwoValue => snapshot.heap.load_tv_bits(heap_ref),
-                LogicMode::FourValue => snapshot.heap.load_fv_bits(heap_ref),
+                LogicMode::TwoValue => snapshot.runtime().heap.load_tv_bits(heap_ref),
+                LogicMode::FourValue => snapshot.runtime().heap.load_fv_bits(heap_ref),
             };
             Ok(Bits { inner: bits })
         }
@@ -183,12 +201,23 @@ mod vogls {
         pub fn trace(&self, py: Python<'_>, snapshot: Py<Snapshot>) -> TraceRef {
             let snapshot = snapshot.borrow(py);
             let mut state = snapshot.inner.lock().unwrap();
+            let DesignState::Interpretted(state) = state.deref_mut() else {
+                todo!()
+            };
             let idx = state.plugins.len();
+
+            let DesignBackend::Interpretted {
+                vm_signal_map,
+                simulation: _,
+            } = &self.inner.backend
+            else {
+                todo!()
+            };
 
             let mut trace = TracePlugin::default();
             for signal in self.inner.elab_table.symbol_iter() {
                 if let VSymbol::Net(n) = &signal.content {
-                    let vm_signal = self.inner.vm_signal_map[&n.signal];
+                    let vm_signal = vm_signal_map[&n.signal];
                     trace.updated_this_time_step.push(vm_signal);
                     trace.tracked.insert(
                         vm_signal,
@@ -220,7 +249,7 @@ mod vogls {
         }
 
         pub fn time(&self) -> u64 {
-            self.inner.lock().unwrap().time
+            self.inner.lock().unwrap().runtime().time
         }
     }
 
@@ -290,6 +319,9 @@ mod vogls {
     impl TraceRef {
         pub fn print(&self) {
             let state = self.snapshot.inner.lock().unwrap();
+            let DesignState::Interpretted(state) = &*state else {
+                todo!()
+            };
             let trace = (state.plugins[self.plugin_idx].as_ref() as &dyn std::any::Any)
                 .downcast_ref::<super::trace::TracePlugin>()
                 .unwrap();
@@ -305,6 +337,9 @@ mod vogls {
 
         pub fn extract(&self) -> Trace {
             let mut state = self.snapshot.inner.lock().unwrap();
+            let DesignState::Interpretted(state) = state.deref_mut() else {
+                todo!()
+            };
             let trace = state.plugins.remove(self.plugin_idx);
             let trace = trace as Box<dyn std::any::Any>;
             let trace = trace.downcast::<super::trace::TracePlugin>().unwrap();

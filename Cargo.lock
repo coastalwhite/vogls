@@ -704,6 +704,7 @@ dependencies = [
  "vogls-codegen-c",
  "vogls-frontend",
  "vogls-ir",
+ "vogls-runtime",
  "vogls-sim",
  "vogls-trace",
  "vogls-utils",
