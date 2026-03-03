@@ -11,9 +11,10 @@ use vogls_codegen_c::{ListenerBuilder, lower_signal_drive_fn, lower_signal_drive
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_ir::{Bits, GlobalContext, LogicMode, Signal, SignalKey};
 use vogls_runtime::RuntimeState;
+use vogls_runtime::SimulationIo;
 use vogls_sim::{
-    Event, Regions, Simulation, SimulationIo, SimulationState, VmProcess, VmProcessKey,
-    VmSignalKey, lower_process_to_vm,
+    Event, Regions, Simulation, VmProcess, VmProcessKey, VmSignalKey,
+    lower_process_to_vm,
 };
 use vogls_utils::VgHashMap;
 use vogls_verilog::ast::AstId;
@@ -666,8 +667,16 @@ impl Design {
                 return Err("compilation failed!".into());
             }
 
-            let initial_state = CDesignState::new(&gl, heap_builder.finish(), listener_builder.top);
-            let design = CDesign::new(&Path::new("/tmp/vogls-target.so"));
+            let initial_state = CDesignState::new(
+                &gl,
+                heap_builder.finish(),
+                listener_builder.top,
+                regions.num_additional_regions() as u8,
+            );
+            let design = CDesign::new(
+                &Path::new("/tmp/vogls-target.so"),
+                regions.num_additional_regions() as u8,
+            );
             return Ok(Self {
                 gl,
                 ident_table: ast.arenas.ident_table,
@@ -789,7 +798,7 @@ impl Design {
                 .run(initial_state, io, time)
                 .map_err(|_| "execution failed.".into()),
             (DesignBackend::Compiled { design }, DesignState::Compiled(initial_state)) => design
-                .run(initial_state)
+                .run(initial_state, io)
                 .map_err(|_| "execution failed.".into()),
             _ => panic!(),
         }
@@ -811,9 +820,9 @@ impl Design {
             ) => simulation
                 .run(state, io, time)
                 .map_err(|_| "execution failed.".into()),
-            (DesignBackend::Compiled { design }, DesignState::Compiled(state)) => {
-                design.run(state).map_err(|_| "execution failed.".into())
-            }
+            (DesignBackend::Compiled { design }, DesignState::Compiled(state)) => design
+                .run(state, io)
+                .map_err(|_| "execution failed.".into()),
             _ => unreachable!(),
         }
     }

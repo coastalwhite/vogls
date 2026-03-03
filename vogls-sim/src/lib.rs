@@ -11,6 +11,7 @@ use vogls_bits::set_subslice::{tv_l_set, tv_s_set};
 use vogls_codegen::{Heap, HeapOffset, HeapRef};
 use vogls_ir::vcd::NetType;
 use vogls_ir::{INTEGER_VSIZE, LogicMode, SCALAR_VSIZE, SignalKey, TIME_VSIZE, VectorSize};
+use vogls_runtime::SimulationIo;
 
 mod execution;
 mod instruction;
@@ -34,7 +35,6 @@ pub enum DispatchKey {
 #[derive(Clone)]
 pub struct Regions {
     pub active: Vec<Event>,
-    pub other_dispatched: Vec<HashMap<DispatchKey, usize>>,
     pub other: Vec<Vec<Event>>,
 }
 
@@ -42,9 +42,12 @@ impl Regions {
     pub fn new(num_additional_regions: usize) -> Self {
         Self {
             active: Vec::new(),
-            other_dispatched: vec![HashMap::new(); num_additional_regions],
             other: vec![Vec::new(); num_additional_regions],
         }
+    }
+
+    pub fn num_additional_regions(&self) -> usize {
+        self.other.len()
     }
 }
 
@@ -467,20 +470,6 @@ pub struct Simulation {
     pub itrace: bool,
 }
 
-pub struct SimulationIo {
-    pub stdout: Box<dyn std::io::Write + Send + Sync>,
-    pub stderr: Box<dyn std::io::Write + Send + Sync>,
-}
-
-impl SimulationIo {
-    pub fn new(
-        stdout: Box<dyn std::io::Write + Send + Sync>,
-        stderr: Box<dyn std::io::Write + Send + Sync>,
-    ) -> SimulationIo {
-        Self { stdout, stderr }
-    }
-}
-
 impl Simulation {
     pub fn new(processes: Vec<VmProcess>, signals: Vec<HeapRef>, logic_mode: LogicMode) -> Self {
         Self {
@@ -532,9 +521,8 @@ impl Simulation {
                 }
             }
 
-            for (i, region) in state.regions.other.iter_mut().enumerate() {
+            for region in state.regions.other.iter_mut() {
                 if !region.is_empty() {
-                    state.regions.other_dispatched[i].clear();
                     std::mem::swap(&mut state.regions.active, region);
                     continue 'region_loop;
                 }

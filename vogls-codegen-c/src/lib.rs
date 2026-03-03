@@ -113,7 +113,12 @@ impl fmt::Display for CElementType {
 const INDENT: &str = "    ";
 
 pub fn process_to_procedure_name(process: &Process, idx: usize) -> String {
-    format!("vogls_proc_{idx}_{}", &process.name)
+    format!(
+        "vogls_proc_{idx}_{}",
+        &process
+            .name
+            .replace(|c: char| !c.is_ascii_alphanumeric(), "_")
+    )
 }
 
 pub struct Listener {
@@ -582,7 +587,36 @@ pub fn lower_process(
                         writeln!(buffer, "{INDENT}}}")?;
                     }
                 }
-                I::Phi(_, _) => todo!(),
+                I::Phi(_, _) => continue,
+            }
+        }
+
+        if let Some(phis) = bb_phis.get(&bb_key) {
+            for (dst, src) in phis {
+                let src_size = gl.vars[*src].size;
+                let dst_size = gl.vars[*dst].size;
+                assert_eq!(src_size, dst_size);
+                let size = src_size;
+                let src_mode = var_mode[src];
+                let dst_mode = var_mode[dst];
+                let (dst, src) = (heap_map[dst], heap_map[src]);
+                use LogicMode as M;
+                match (dst_mode, src_mode) {
+                    (M::TwoValue, M::TwoValue) if size.get() > 64 => writeln!(
+                        &mut buffer,
+                        "{INDENT}memmove(heap+{}, heap+{}, {}*sizeof(uint64_t));",
+                        dst.bit_offset / 64,
+                        src.bit_offset / 64,
+                        size.get().div_ceil(64)
+                    )?,
+                    (M::TwoValue, M::TwoValue) => {
+                        // @Performance. Better lowering.
+                        let t = claim_tmp!(size, src_mode);
+                        load(&mut buffer, src, t)?;
+                        store(&mut buffer, dst, t)?;
+                    }
+                    _ => todo!(),
+                };
             }
         }
 
@@ -607,7 +641,14 @@ pub fn lower_process(
                 )?;
                 writeln!(buffer, "{INDENT}return;",)?;
             }
-            BasicBlockTerminator::WaitRegion(basic_block_key, _) => todo!(),
+            BasicBlockTerminator::WaitRegion(bb_key, region) => {
+                let state = states_set.get_index(bb_key).unwrap();
+                writeln!(
+                    buffer,
+                    "{INDENT}event_vec_push(&schedule->regions[{region}], (event_t){{.ptr=&{procedure}, .state={state}}});",
+                )?;
+                writeln!(buffer, "{INDENT}return;",)?;
+            }
             BasicBlockTerminator::Watch(bb_key, items) => {
                 let state = states_set.get_index(bb_key).unwrap();
                 for item in items {
@@ -668,21 +709,37 @@ fn lower_dyn_format_str(
     dyn_format_string: &DynFormatString,
     args: Vec<CVar>,
 ) -> io::Result<()> {
-    // @TODO: This is very simplistic.
-    let mut at = 0usize;
-    let content = dyn_format_string.content();
-    write!(f, "{INDENT}printf(\"")?;
-    for (offset, _) in dyn_format_string.arguments() {
-        f.write_all(content[at..*offset].as_bytes())?;
-        at = *offset;
-        f.write_all(b"%x")?;
+    write!(f, r#"{INDENT}{{ "#)?;
+    for (i, arg) in args.iter().enumerate() {
+        if !arg.ty.is_array() {
+            write!(f, "uint64_t arg{i} = (uint64_t){}; ", arg.ident)?;
+        }
     }
-    write!(f, "{}", content[at..].as_bytes().escape_ascii())?;
-    f.write_all(b"\"")?;
-    for arg in args {
-        write!(f, ", {}", arg.ident)?;
+    write!(
+        f,
+        r#"bits_ref_t args[{num_args}] = {{ "#,
+        num_args = args.len()
+    )?;
+    for (i, arg) in args.iter().enumerate() {
+        if arg.ty.is_array() {
+            write!(
+                f,
+                r#"(bits_ref_t){{ .size={}, .ptr={} }}, "#,
+                arg.ty.size, arg.ident
+            )?;
+        } else {
+            write!(
+                f,
+                r#"(bits_ref_t){{ .size={}, .ptr=&arg{i} }}, "#,
+                arg.ty.size
+            )?;
+        }
     }
-    writeln!(f, ");")?;
+    write!(
+        f,
+        r#"}}; (cldctx->fmt)(cldctx->stdout, (void*){dyn_fmt_ptr:p}, args); }}"#,
+        dyn_fmt_ptr = dyn_format_string as *const DynFormatString,
+    )?;
     Ok(())
 }
 
@@ -965,9 +1022,17 @@ pub fn prologue(f: &mut impl io::Write) -> io::Result<()> {
 #include <stdlib.h>
 #include <string.h>
 
+typedef struct bits_ref {
+    uint32_t size;
+    uint64_t* ptr;
+} bits_ref_t;
+
 struct schedule;
 typedef struct cold_context {
     uint8_t exit;
+    void (*fmt)(void*, void*, bits_ref_t*);
+    void *stdout;
+    void *stderr;
 } cold_context_t;
 
 typedef struct event {
@@ -1004,10 +1069,7 @@ static inline bool event_vec_pop(event_vec_t *v, event_t *event);
 
 static inline uint32_t popcount64(uint64_t n) {
 #if defined(__GNUC__) || defined(__clang__)
-    return __builtin_popcount(n);
-#elif defined(_MSC_VER)
-    #include <intrin.h>
-    return __popcnt(n);
+    return __builtin_popcountll(n);
 #else
 #error "No popcount built-in"
 #endif

@@ -18,3 +18,18 @@ impl RuntimeState {
         }
     }
 }
+
+pub struct SimulationIo {
+    pub stdout: Box<dyn std::io::Write + Send + Sync>,
+    pub stderr: Box<dyn std::io::Write + Send + Sync>,
+}
+
+impl SimulationIo {
+    pub fn new(
+        stdout: Box<dyn std::io::Write + Send + Sync>,
+        stderr: Box<dyn std::io::Write + Send + Sync>,
+    ) -> SimulationIo {
+        Self { stdout, stderr }
+    }
+}
+

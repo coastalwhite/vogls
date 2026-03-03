@@ -55,7 +55,7 @@ pub fn cgc_truncate(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Result<
             )?;
             writeln!(
                 f,
-                "{INDENT}{d}[{i}] = {s}[{i}] & {msbs_mask:x};",
+                "{INDENT}{d}[{i}] = {s}[{i}] & 0x{msbs_mask:x};",
                 i = dst_arr_size - 1
             )?;
         }

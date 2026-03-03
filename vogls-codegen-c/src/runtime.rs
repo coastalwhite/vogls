@@ -1,9 +1,11 @@
-use std::ffi::c_int;
-use std::ops::Deref as _;
+use std::ffi::{c_int, c_void};
+use std::ops::{Deref as _, DerefMut};
 use std::path::Path;
 use std::ptr::NonNull;
 
-use vogls_ir::GlobalContext;
+use vogls_ir::dyn_format_string::DynFormatString;
+use vogls_ir::{Bits, GlobalContext, VectorSize};
+use vogls_runtime::SimulationIo;
 
 type Time = u64;
 type HeapPtr = Option<NonNull<u64>>;
@@ -22,10 +24,25 @@ type StartupFn = extern "C" fn(
 );
 
 #[repr(C)]
+pub struct BitsRefT {
+    size: u32,
+    ptr: NonNull<u64>,
+}
+
+#[repr(C)]
 pub struct ColdContextT {
     /// 0: No exit
     /// 1-255: Exited with -1 exit code
     exit: u8,
+
+    fmt: extern "C" fn(
+        NonNull<Box<dyn std::io::Write + Send + Sync>>,
+        NonNull<DynFormatString>,
+        *const BitsRefT,
+    ),
+
+    stdout: NonNull<Box<dyn std::io::Write + Send + Sync>>,
+    stderr: NonNull<Box<dyn std::io::Write + Send + Sync>>,
 }
 #[repr(C)]
 #[derive(Debug, Clone)]
@@ -125,7 +142,7 @@ impl<T> Drop for VecT<T> {
 #[repr(C)]
 pub struct ScheduleT {
     active_region: VecT<EventT>,
-    regions: Option<NonNull<VecT<EventT>>>,
+    regions: *mut VecT<EventT>,
     future: VecT<TimedEventT>,
     next_time: Time,
 }
@@ -133,7 +150,7 @@ pub struct ScheduleT {
 #[derive(Clone)]
 pub struct Schedule {
     active_region: Vec<EventT>,
-    regions: Option<Box<[Vec<EventT>]>>,
+    regions: Box<[Vec<EventT>]>,
     future: Vec<TimedEventT>,
     next_time: Time,
 }
@@ -141,17 +158,23 @@ pub struct Schedule {
 impl Schedule {
     fn with_t(&mut self, mut f: impl FnMut(&mut ScheduleT)) {
         let active_region = std::mem::take(&mut self.active_region);
-        let _regions = std::mem::take(&mut self.regions);
+        let regions = std::mem::take(&mut self.regions);
         let future = std::mem::take(&mut self.future);
+
+        let mut tregions = regions
+            .into_iter()
+            .map(|r| r.into())
+            .collect::<Vec<VecT<EventT>>>();
+
         let mut t = ScheduleT {
             active_region: active_region.into(),
-            regions: None,
+            regions: tregions.as_mut_ptr(),
             future: future.into(),
             next_time: self.next_time,
         };
         f(&mut t);
         self.active_region = t.active_region.into();
-        // self.regions = t.regions.into();
+        self.regions = tregions.into_iter().map(|r| r.into()).collect();
         self.future = t.future.into();
         self.next_time = t.next_time;
     }
@@ -168,13 +191,19 @@ pub struct CDesignState {
 
 pub struct CDesign {
     lib: libloading::Library,
+    num_regions: u8,
 }
 
 impl CDesignState {
-    pub fn new(gl: &GlobalContext, heap: vogls_codegen::Heap, num_listening: usize) -> Self {
+    pub fn new(
+        gl: &GlobalContext,
+        heap: vogls_codegen::Heap,
+        num_listening: usize,
+        num_regions: u8,
+    ) -> Self {
         let schedule = Schedule {
             active_region: Vec::new(),
-            regions: None,
+            regions: std::iter::repeat_n(Vec::new(), num_regions.into()).collect(),
             future: Vec::new(),
             next_time: u64::MAX,
         };
@@ -196,16 +225,46 @@ impl CDesignState {
     }
 }
 
+extern "C" fn fmt(
+    mut file: NonNull<Box<dyn std::io::Write + Send + Sync>>,
+    mut dyn_fmt: NonNull<DynFormatString>,
+    bits: *const BitsRefT,
+) {
+    let file = unsafe { file.as_mut() };
+    let dyn_fmt = unsafe { dyn_fmt.as_mut() };
+    let args = (0..dyn_fmt.arguments().len()).map(|i| {
+        let ref_t = unsafe { bits.add(i).as_ref() }.unwrap();
+        let size = VectorSize::new(ref_t.size).unwrap();
+        if size.get() <= 64 {
+            Bits::from_u64(size, *unsafe { ref_t.ptr.as_ref() })
+        } else {
+            Bits::from_boxed_slice(
+                vogls_ir::Mode::TwoValue,
+                size,
+                (0..size.get().div_ceil(64))
+                    .map(|j| *unsafe { ref_t.ptr.add(j as usize).as_ref() })
+                    .collect(),
+            )
+        }
+    });
+    dyn_fmt.write_to(file, args).unwrap();
+}
+
 impl CDesign {
-    pub fn new(path: &Path) -> Self {
+    pub fn new(path: &Path, num_regions: u8) -> Self {
         let lib = unsafe { libloading::Library::new(path) }.unwrap();
-        Self { lib }
+        Self { lib, num_regions }
     }
 
-    pub fn start(&self, state: &mut CDesignState) -> Result<(), ()> {
+    pub fn start(&self, state: &mut CDesignState, io: &mut SimulationIo) -> Result<(), ()> {
         if !state.started {
             let startup = unsafe { self.lib.get::<StartupFn>("startup") }.unwrap();
-            let mut cldctx = ColdContextT { exit: 0 };
+            let mut cldctx = ColdContextT {
+                exit: 0,
+                fmt,
+                stdout: NonNull::from_mut(&mut io.stdout),
+                stderr: NonNull::from_mut(&mut io.stderr),
+            };
             state.schedule.with_t(|schedule| {
                 (startup.deref())(
                     NonNull::new(state.runtime.heap.0.as_mut_ptr()),
@@ -230,14 +289,19 @@ impl CDesign {
         Ok(())
     }
 
-    pub fn run(&self, state: &mut CDesignState) -> Result<(), ()> {
+    pub fn run(&self, state: &mut CDesignState, io: &mut SimulationIo) -> Result<(), ()> {
         if !state.started {
-            self.start(state)?;
+            self.start(state, io)?;
         }
 
-        let mut cldctx = ColdContextT { exit: 0 };
+        let mut cldctx = ColdContextT {
+            exit: 0,
+            fmt,
+            stdout: NonNull::from_mut(&mut io.stdout),
+            stderr: NonNull::from_mut(&mut io.stderr),
+        };
         state.schedule.with_t(|schedule| {
-            while schedule.active_region.length > 0 || schedule.future.length > 0 {
+            'main_loop: while schedule.active_region.length > 0 || schedule.future.length > 0 {
                 while let Some(e) = schedule.active_region.pop() {
                     state.runtime.event_count += 1;
                     (e.ptr)(
@@ -253,6 +317,14 @@ impl CDesign {
 
                     if cldctx.exit > 0 {
                         return;
+                    }
+                }
+
+                for i in 0..self.num_regions as usize {
+                    let region = unsafe { schedule.regions.add(i).as_mut() }.unwrap();
+                    if region.length > 0 {
+                        std::mem::swap(&mut schedule.active_region, region);
+                        continue 'main_loop;
                     }
                 }
 

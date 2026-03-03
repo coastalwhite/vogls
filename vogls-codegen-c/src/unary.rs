@@ -85,7 +85,7 @@ pub fn cgc_reduce_and(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Resul
             )?;
             writeln!(
                 f,
-                "{INDENT}for (int i = 0; i < {end}; ++i) {d} &= (uint8_t)(!{s}[{end} - i - 1] == 0);",
+                "{INDENT}for (int i = 0; i < {end}; ++i) {d} &= (uint8_t)((~{s}[{end} - i - 1]) == 0);",
                 end = arr_size - 1
             )?;
         }
@@ -109,7 +109,7 @@ pub fn cgc_reduce_xor(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Resul
         (LogicMode::TwoValue, Some(arr_size)) => {
             writeln!(
                 f,
-                "{INDENT}{{ uint32_t cnt = 0; for (int i = 0; i < {arr_size}; ++i) {{ count += popcount64({s}[i]); }} {d} = (uint8_t)(count % 2 == 1); }}",
+                "{INDENT}{{ uint32_t cnt = 0; for (int i = 0; i < {arr_size}; ++i) {{ cnt += popcount64({s}[i]); }} {d} = (uint8_t)(cnt % 2 == 1); }}",
             )?;
         }
         (LogicMode::FourValue, _) => todo!(),
