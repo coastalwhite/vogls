@@ -289,7 +289,12 @@ impl CDesign {
         Ok(())
     }
 
-    pub fn run(&self, state: &mut CDesignState, io: &mut SimulationIo, max_time: u64) -> Result<(), ()> {
+    pub fn run(
+        &self,
+        state: &mut CDesignState,
+        io: &mut SimulationIo,
+        max_time: u64,
+    ) -> Result<(), ()> {
         if !state.started {
             self.start(state, io)?;
         }
@@ -301,7 +306,7 @@ impl CDesign {
             stderr: NonNull::from_mut(&mut io.stderr),
         };
         state.schedule.with_t(|schedule| {
-            'main_loop: while schedule.active_region.length > 0 || schedule.future.length > 0 {
+            'main_loop: loop {
                 while let Some(e) = schedule.active_region.pop() {
                     state.runtime.event_count += 1;
                     (e.ptr)(
@@ -353,6 +358,10 @@ impl CDesign {
                 schedule.active_region = active.into();
                 schedule.future = future.into();
                 schedule.next_time = next_time;
+
+                if schedule.active_region.length == 0 {
+                    break;
+                }
             }
         });
 

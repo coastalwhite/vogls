@@ -3,6 +3,7 @@ module x();
     reg [31:0] a = 0;
 
     initial begin
+        #0
         a = 4;
         #1
         a = 0;
