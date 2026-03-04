@@ -289,7 +289,7 @@ impl CDesign {
         Ok(())
     }
 
-    pub fn run(&self, state: &mut CDesignState, io: &mut SimulationIo) -> Result<(), ()> {
+    pub fn run(&self, state: &mut CDesignState, io: &mut SimulationIo, max_time: u64) -> Result<(), ()> {
         if !state.started {
             self.start(state, io)?;
         }
@@ -308,7 +308,7 @@ impl CDesign {
                         e.state,
                         NonNull::new(state.runtime.heap.0.as_mut_ptr()),
                         NonNull::new(schedule as *mut ScheduleT).unwrap(),
-                        0,
+                        state.runtime.time,
                         NonNull::new(state.is_scheduled.as_mut_ptr()),
                         NonNull::new(state.listening.as_mut_ptr()),
                         NonNull::new(state.runtime.last_active_time.as_mut_ptr()),
@@ -328,11 +328,15 @@ impl CDesign {
                     }
                 }
 
+                if schedule.next_time > max_time {
+                    state.runtime.time = max_time;
+                    break;
+                }
+
                 let mut active: Vec<_> = std::mem::take(&mut schedule.active_region).into();
                 let mut future: Vec<_> = std::mem::take(&mut schedule.future).into();
 
-                // @TODO: Regions
-
+                state.runtime.time = schedule.next_time;
                 let mut next_time = Time::MAX;
                 active.extend(
                     future

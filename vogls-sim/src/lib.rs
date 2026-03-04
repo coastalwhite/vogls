@@ -548,11 +548,14 @@ impl Simulation {
                 break;
             };
 
-            state.runtime.time = at;
-            state.regions.active = events;
-            if state.runtime.time > max_time {
+            if at > max_time {
+                state.runtime.time = max_time;
+                state.schedule.insert(at, events);
                 break;
             }
+
+            state.runtime.time = at;
+            state.regions.active = events;
         }
 
         if let Some(vcd) = state.vcd.as_mut() {

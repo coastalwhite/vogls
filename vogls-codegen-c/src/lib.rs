@@ -453,7 +453,7 @@ pub fn lower_process(
                         writeln!(buffer, "{INDENT}heap[{heap_idx}] = time;")?;
                     }
                     vogls_ir::IntrinsicOp::Finish => {
-                        writeln!(buffer, "{INDENT}printf(\"[FINISH]\\n\"); exit(0);")?;
+                        writeln!(buffer, "{INDENT}printf(\"[FINISH]\\n\"); cldctx->exit = 1;")?;
                     }
                     vogls_ir::IntrinsicOp::Random => todo!(),
                     vogls_ir::IntrinsicOp::Display(dyn_format_string) => {
@@ -601,6 +601,7 @@ pub fn lower_process(
                 let dst_mode = var_mode[dst];
                 let (dst, src) = (heap_map[dst], heap_map[src]);
                 use LogicMode as M;
+                writeln!(&mut buffer, "{INDENT}// Phi({dst:?}, {src:?});")?;
                 match (dst_mode, src_mode) {
                     (M::TwoValue, M::TwoValue) if size.get() > 64 => writeln!(
                         &mut buffer,

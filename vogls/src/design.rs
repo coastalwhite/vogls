@@ -798,7 +798,7 @@ impl Design {
                 .run(initial_state, io, time)
                 .map_err(|_| "execution failed.".into()),
             (DesignBackend::Compiled { design }, DesignState::Compiled(initial_state)) => design
-                .run(initial_state, io)
+                .run(initial_state, io, time)
                 .map_err(|_| "execution failed.".into()),
             _ => panic!(),
         }
@@ -821,7 +821,7 @@ impl Design {
                 .run(state, io, time)
                 .map_err(|_| "execution failed.".into()),
             (DesignBackend::Compiled { design }, DesignState::Compiled(state)) => design
-                .run(state, io)
+                .run(state, io, time)
                 .map_err(|_| "execution failed.".into()),
             _ => unreachable!(),
         }

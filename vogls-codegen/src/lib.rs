@@ -18,46 +18,58 @@ pub fn resolve_var_logic_mode_map(
         };
     }
 
-    bb_stack.clear();
+    let mut unresolved = VgHashMap::<VariableKey, Vec<VariableKey>>::default();
+    let mut need_modes = VgHashMap::<VariableKey, u8>::default();
+
+    fn mode_to_flag(m: LogicMode) -> u8 {
+        match m {
+            LogicMode::TwoValue => 1,
+            LogicMode::FourValue => 2,
+        }
+    }
+
     // Fill `var_mode` with the `LogicMode` for each variable.
     //
     // @Performance
-    loop {
-        bb_stack.push(entry);
-        bb_seen.insert(entry);
-        let mut has_unresolved_variables = false;
+    bb_seen.clear();
+    bb_seen.insert(entry);
+    bb_stack.clear();
+    bb_stack.push(entry);
 
-        while let Some(bb_key) = bb_stack.pop() {
-            let bb = &gl.bbs[bb_key];
-            bb.terminator.for_each_bb(|bb| {
-                if bb_seen.insert(bb) {
-                    bb_stack.push(bb);
+    while let Some(bb_key) = bb_stack.pop() {
+        let bb = &gl.bbs[bb_key];
+        bb.terminator.for_each_bb(|bb| {
+            if bb_seen.insert(bb) {
+                bb_stack.push(bb);
+            }
+        });
+
+        use Instruction as I;
+        for instr in &bb.instrs {
+            match instr {
+                I::Constant(dst, bits) => {
+                    var_mode.insert(
+                        *dst,
+                        if bits.contains_special() {
+                            LogicMode::FourValue
+                        } else {
+                            LogicMode::TwoValue
+                        },
+                    );
                 }
-            });
-
-            use Instruction as I;
-            for instr in &bb.instrs {
-                match instr {
-                    I::Constant(dst, bits) => {
-                        var_mode.insert(
-                            *dst,
-                            if bits.contains_special() {
-                                LogicMode::FourValue
-                            } else {
-                                LogicMode::TwoValue
-                            },
-                        );
+                I::Unary(dst, _, src) | I::Resize(dst, _, src) => {
+                    match var_mode.get(src).copied() {
+                        Some(m) => _ = var_mode.insert(*dst, m),
+                        None => unresolved.entry(*dst).or_default().push(*src),
                     }
-                    I::Unary(dst, _, src) | I::Resize(dst, _, src) => {
-                        if let Some(m) = var_mode.get(src).copied() {
-                            var_mode.insert(*dst, m);
-                        }
-                    }
-                    I::Binary(dst, _, lhs, rhs) => {
-                        let m1 = var_mode.get(lhs);
-                        let m2 = var_mode.get(rhs);
+                }
+                I::Binary(dst, _, lhs, rhs) => {
+                    let m1 = var_mode.get(lhs);
+                    let m2 = var_mode.get(rhs);
 
-                        if let (Some(&m1), Some(&m2)) = (m1, m2) {
+                    use LogicMode as M;
+                    match (m1, m2) {
+                        (Some(&m1), Some(&m2)) => {
                             let m = if m1 == LogicMode::FourValue || m2 == LogicMode::FourValue {
                                 if m1 == LogicMode::TwoValue {
                                     mark_conv!(*lhs);
@@ -71,58 +83,118 @@ pub fn resolve_var_logic_mode_map(
                             };
                             var_mode.insert(*dst, m);
                         }
-                    }
-                    I::Intrinsic(dst, _, _) => _ = var_mode.insert(*dst, LogicMode::TwoValue),
-                    I::LastUpdateTime(dst, _) => _ = var_mode.insert(*dst, LogicMode::TwoValue),
-                    I::Probe(dst, _) => {
-                        var_mode.insert(*dst, gl.logic_mode);
-                    }
-                    I::Drive(_, src, partial) => {
-                        if let Some(m) = var_mode.get(src)
-                            && *m != gl.logic_mode
-                        {
-                            mark_conv!(*src);
+                        (Some(M::FourValue), _) => {
+                            *need_modes.entry(*rhs).or_default() |= mode_to_flag(M::FourValue);
+                            var_mode.insert(*dst, M::FourValue);
                         }
-                        if let Some((offset, _)) = partial
-                            && let Some(m) = var_mode.get(offset)
-                            && *m != gl.logic_mode
-                        {
-                            mark_conv!(*offset);
+                        (_, Some(M::FourValue)) => {
+                            *need_modes.entry(*lhs).or_default() |= mode_to_flag(M::FourValue);
+                            var_mode.insert(*dst, M::FourValue);
+                        }
+                        (Some(_), None) => unresolved.entry(*dst).or_default().push(*rhs),
+                        (None, Some(_)) => unresolved.entry(*dst).or_default().push(*lhs),
+                        (None, None) => unresolved.entry(*dst).or_default().extend([*lhs, *rhs]),
+                    }
+                }
+                I::Intrinsic(dst, _, _) => _ = var_mode.insert(*dst, LogicMode::TwoValue),
+                I::LastUpdateTime(dst, _) => _ = var_mode.insert(*dst, LogicMode::TwoValue),
+                I::Probe(dst, _) => {
+                    var_mode.insert(*dst, gl.logic_mode);
+                }
+                I::Drive(_, src, partial) => {
+                    match var_mode.get(src) {
+                        Some(m) if *m != gl.logic_mode => _ = mark_conv!(*src),
+                        Some(_) => {}
+                        None => *need_modes.entry(*src).or_default() |= mode_to_flag(gl.logic_mode),
+                    }
+
+                    if let Some((offset, _)) = partial {
+                        match var_mode.get(offset) {
+                            Some(m) if *m != gl.logic_mode => _ = mark_conv!(*src),
+                            Some(_) => {}
+                            None => {
+                                *need_modes.entry(*offset).or_default() |=
+                                    mode_to_flag(gl.logic_mode)
+                            }
                         }
                     }
-                    I::Phi(dst, items) => {
-                        let mut logic_mode = Some(LogicMode::TwoValue);
-                        for (_, v) in items {
-                            match var_mode.get(v) {
-                                None => {
-                                    logic_mode = None;
-                                    has_unresolved_variables = true;
-                                    break;
-                                }
-                                Some(LogicMode::TwoValue) => {}
-                                Some(LogicMode::FourValue) => {
-                                    logic_mode = Some(LogicMode::FourValue);
+                }
+                I::Phi(dst, items) => {
+                    let mut logic_mode = Some(LogicMode::TwoValue);
+                    for (_, v) in items {
+                        match var_mode.get(v) {
+                            None => {
+                                logic_mode = None;
+                                unresolved.entry(*dst).or_default().push(*v);
+                            }
+                            Some(LogicMode::TwoValue) => {}
+                            Some(LogicMode::FourValue) => {
+                                logic_mode = Some(LogicMode::FourValue);
+                            }
+                        }
+                    }
+                    if let Some(logic_mode) = logic_mode {
+                        if logic_mode == LogicMode::FourValue {
+                            for (_, v) in items {
+                                if var_mode.get(v) == Some(&LogicMode::TwoValue) {
+                                    mark_conv!(*v);
                                 }
                             }
                         }
-                        if let Some(logic_mode) = logic_mode {
-                            if logic_mode == LogicMode::FourValue {
-                                for (_, v) in items {
-                                    if var_mode.get(v) == Some(&LogicMode::TwoValue) {
-                                        mark_conv!(*v);
-                                    }
-                                }
-                            }
-                            var_mode.insert(*dst, logic_mode);
-                        }
+                        var_mode.insert(*dst, logic_mode);
                     }
                 }
             }
         }
+    }
 
-        bb_seen.clear();
-        if !has_unresolved_variables {
-            break;
+    while !unresolved.is_empty() {
+        let start_length = unresolved.len();
+        unresolved.retain(|k, v| {
+            let mut num_fvs = 0usize;
+            let mut num_tvs = 0usize;
+            v.iter().for_each(|dep| {
+                let m = var_mode.get(dep);
+                num_tvs += usize::from(matches!(m, Some(LogicMode::TwoValue)));
+                num_fvs += usize::from(matches!(m, Some(LogicMode::FourValue)));
+            });
+
+            if num_fvs > 0 {
+                v.iter().for_each(|dep| {
+                    *need_modes.entry(*dep).or_default() |= mode_to_flag(LogicMode::FourValue);
+                });
+                var_mode.insert(*k, LogicMode::FourValue);
+                false
+            } else if num_tvs == v.len() {
+                v.iter().for_each(|dep| {
+                    *need_modes.entry(*dep).or_default() |= mode_to_flag(LogicMode::TwoValue);
+                });
+                var_mode.insert(*k, LogicMode::TwoValue);
+                false
+            } else {
+                true
+            }
+        });
+
+        // @Hack. This is weird, there is probably a better solution here.
+        //
+        // There is a loop in the implication graph. This means no-one is hard wired to FV, so we
+        // just set it to TV.
+        if unresolved.len() == start_length {
+            let &k = unresolved.keys().next().unwrap();
+            let v = unresolved.remove(&k).unwrap();
+
+            v.iter().for_each(|dep| {
+                *need_modes.entry(*dep).or_default() |= mode_to_flag(LogicMode::TwoValue);
+            });
+            var_mode.insert(k, LogicMode::TwoValue);
+        }
+    }
+
+    for (k, f) in need_modes {
+        let m = var_mode[&k];
+        if f != mode_to_flag(m) {
+            mark_conv!(k);
         }
     }
 }
