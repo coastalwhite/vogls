@@ -1,9 +1,13 @@
 mod heap;
 
+use std::ops::Range;
+
+use hashbrown::hash_map::Entry;
 pub use heap::{Heap, HeapBuilder, HeapOffset, HeapRef};
 use vogls_ir::{BasicBlockKey, GlobalContext, Instruction, LogicMode, VariableKey};
 use vogls_utils::{VgHashMap, VgHashSet};
 
+/// Fill `var_mode` with the `LogicMode` for each variable present in the control-flow graph.
 pub fn resolve_var_logic_mode_map(
     entry: BasicBlockKey,
     gl: &GlobalContext,
@@ -18,19 +22,21 @@ pub fn resolve_var_logic_mode_map(
         };
     }
 
-    let mut unresolved = VgHashMap::<VariableKey, Vec<VariableKey>>::default();
-    let mut need_modes = VgHashMap::<VariableKey, u8>::default();
+    // Variable need to need a converted equivalent if they don't match the specific mode. This is
+    // used for variables which have not yet been seen in the linear traversal, but have been
+    // assumed to be of a certain mode.
+    let mut maybe_mark_conv_later = Vec::<(VariableKey, LogicMode)>::new();
 
-    fn mode_to_flag(m: LogicMode) -> u8 {
-        match m {
-            LogicMode::TwoValue => 1,
-            LogicMode::FourValue => 2,
-        }
-    }
-
-    // Fill `var_mode` with the `LogicMode` for each variable.
+    // A directed multi-graph of the variables for which the mode could not immediately resolved
+    // with edges representing which variables their mode depends on. This can be case if phi
+    // instructions are encountered that references basic blocks that have not yet been traversed
+    // (e.g. in loops). Note, these might be cyclic. These need to be resolved separatedly
+    // afterwards.
     //
-    // @Performance
+    // Represented as a map from node to range in a continous list of edges.
+    let mut graph_offsets = VgHashMap::<VariableKey, Range<usize>>::default();
+    let mut graph_inputs = Vec::<VariableKey>::new();
+
     bb_seen.clear();
     bb_seen.insert(entry);
     bb_stack.clear();
@@ -60,7 +66,10 @@ pub fn resolve_var_logic_mode_map(
                 I::Unary(dst, _, src) | I::Resize(dst, _, src) => {
                     match var_mode.get(src).copied() {
                         Some(m) => _ = var_mode.insert(*dst, m),
-                        None => unresolved.entry(*dst).or_default().push(*src),
+                        None => {
+                            graph_offsets.insert(*dst, graph_inputs.len()..graph_inputs.len() + 1);
+                            graph_inputs.push(*src)
+                        }
                     }
                 }
                 I::Binary(dst, _, lhs, rhs) => {
@@ -70,30 +79,39 @@ pub fn resolve_var_logic_mode_map(
                     use LogicMode as M;
                     match (m1, m2) {
                         (Some(&m1), Some(&m2)) => {
-                            let m = if m1 == LogicMode::FourValue || m2 == LogicMode::FourValue {
-                                if m1 == LogicMode::TwoValue {
+                            let m = if m1 == M::FourValue || m2 == M::FourValue {
+                                if m1 == M::TwoValue {
                                     mark_conv!(*lhs);
                                 }
-                                if m2 == LogicMode::TwoValue {
+                                if m2 == M::TwoValue {
                                     mark_conv!(*rhs);
                                 }
-                                LogicMode::FourValue
+                                M::FourValue
                             } else {
-                                LogicMode::TwoValue
+                                M::TwoValue
                             };
                             var_mode.insert(*dst, m);
                         }
                         (Some(M::FourValue), _) => {
-                            *need_modes.entry(*rhs).or_default() |= mode_to_flag(M::FourValue);
+                            maybe_mark_conv_later.push((*rhs, M::FourValue));
                             var_mode.insert(*dst, M::FourValue);
                         }
                         (_, Some(M::FourValue)) => {
-                            *need_modes.entry(*lhs).or_default() |= mode_to_flag(M::FourValue);
+                            maybe_mark_conv_later.push((*lhs, M::FourValue));
                             var_mode.insert(*dst, M::FourValue);
                         }
-                        (Some(_), None) => unresolved.entry(*dst).or_default().push(*rhs),
-                        (None, Some(_)) => unresolved.entry(*dst).or_default().push(*lhs),
-                        (None, None) => unresolved.entry(*dst).or_default().extend([*lhs, *rhs]),
+                        (Some(_), None) => {
+                            graph_offsets.insert(*dst, graph_inputs.len()..graph_inputs.len() + 1);
+                            graph_inputs.push(*rhs);
+                        }
+                        (None, Some(_)) => {
+                            graph_offsets.insert(*dst, graph_inputs.len()..graph_inputs.len() + 1);
+                            graph_inputs.push(*lhs);
+                        }
+                        (None, None) => {
+                            graph_offsets.insert(*dst, graph_inputs.len()..graph_inputs.len() + 2);
+                            graph_inputs.extend([*lhs, *rhs]);
+                        }
                     }
                 }
                 I::Intrinsic(dst, _, _) => _ = var_mode.insert(*dst, LogicMode::TwoValue),
@@ -105,16 +123,17 @@ pub fn resolve_var_logic_mode_map(
                     match var_mode.get(src) {
                         Some(m) if *m != gl.logic_mode => _ = mark_conv!(*src),
                         Some(_) => {}
-                        None => *need_modes.entry(*src).or_default() |= mode_to_flag(gl.logic_mode),
+                        None => {
+                            maybe_mark_conv_later.push((*src, gl.logic_mode));
+                        }
                     }
 
                     if let Some((offset, _)) = partial {
                         match var_mode.get(offset) {
-                            Some(m) if *m != gl.logic_mode => _ = mark_conv!(*src),
+                            Some(m) if *m != gl.logic_mode => _ = mark_conv!(*offset),
                             Some(_) => {}
                             None => {
-                                *need_modes.entry(*offset).or_default() |=
-                                    mode_to_flag(gl.logic_mode)
+                                maybe_mark_conv_later.push((*offset, gl.logic_mode));
                             }
                         }
                     }
@@ -123,78 +142,78 @@ pub fn resolve_var_logic_mode_map(
                     let mut logic_mode = Some(LogicMode::TwoValue);
                     for (_, v) in items {
                         match var_mode.get(v) {
-                            None => {
-                                logic_mode = None;
-                                unresolved.entry(*dst).or_default().push(*v);
-                            }
+                            None => logic_mode = None,
                             Some(LogicMode::TwoValue) => {}
                             Some(LogicMode::FourValue) => {
                                 logic_mode = Some(LogicMode::FourValue);
+                                break;
                             }
                         }
                     }
                     if let Some(logic_mode) = logic_mode {
                         if logic_mode == LogicMode::FourValue {
                             for (_, v) in items {
-                                if var_mode.get(v) == Some(&LogicMode::TwoValue) {
-                                    mark_conv!(*v);
+                                match var_mode.get(v) {
+                                    None => maybe_mark_conv_later.push((*v, LogicMode::FourValue)),
+                                    Some(&LogicMode::TwoValue) => _ = mark_conv!(*v),
+                                    Some(&LogicMode::FourValue) => {}
                                 }
                             }
                         }
                         var_mode.insert(*dst, logic_mode);
+                    } else {
+                        graph_offsets
+                            .insert(*dst, graph_inputs.len()..graph_inputs.len() + items.len());
+                        graph_inputs.extend(items.iter().map(|(_, v)| *v));
                     }
                 }
             }
         }
     }
 
-    while !unresolved.is_empty() {
-        let start_length = unresolved.len();
-        unresolved.retain(|k, v| {
-            let mut num_fvs = 0usize;
-            let mut num_tvs = 0usize;
-            v.iter().for_each(|dep| {
-                let m = var_mode.get(dep);
-                num_tvs += usize::from(matches!(m, Some(LogicMode::TwoValue)));
-                num_fvs += usize::from(matches!(m, Some(LogicMode::FourValue)));
-            });
+    // For all the variable which could not immediately
+    let mut seen = VgHashSet::default();
+    let mut stack = Vec::new();
+    while let Some(&fst) = graph_offsets.keys().next() {
+        seen.clear();
 
-            if num_fvs > 0 {
-                v.iter().for_each(|dep| {
-                    *need_modes.entry(*dep).or_default() |= mode_to_flag(LogicMode::FourValue);
-                });
-                var_mode.insert(*k, LogicMode::FourValue);
-                false
-            } else if num_tvs == v.len() {
-                v.iter().for_each(|dep| {
-                    *need_modes.entry(*dep).or_default() |= mode_to_flag(LogicMode::TwoValue);
-                });
-                var_mode.insert(*k, LogicMode::TwoValue);
-                false
-            } else {
-                true
+        seen.insert(fst);
+        stack.push(fst);
+
+        let mut seen_fv = false;
+        while let Some(k) = stack.pop() {
+            if let Some(m) = var_mode.get(&k) {
+                seen_fv |= matches!(m, LogicMode::FourValue);
+                continue;
+            }
+
+            for i in graph_offsets[&k].clone() {
+                let neighbour = graph_inputs[i];
+                if seen.insert(neighbour) {
+                    stack.push(neighbour);
+                }
+            }
+        }
+
+        let mode = if seen_fv {
+            LogicMode::FourValue
+        } else {
+            LogicMode::TwoValue
+        };
+        seen.iter().for_each(|k| match var_mode.entry(*k) {
+            Entry::Vacant(entry) => _ = entry.insert(mode),
+            Entry::Occupied(entry) => {
+                if *entry.get() != mode {
+                    _ = mark_conv!(*k);
+                }
             }
         });
-
-        // @Hack. This is weird, there is probably a better solution here.
-        //
-        // There is a loop in the implication graph. This means no-one is hard wired to FV, so we
-        // just set it to TV.
-        if unresolved.len() == start_length {
-            let &k = unresolved.keys().next().unwrap();
-            let v = unresolved.remove(&k).unwrap();
-
-            v.iter().for_each(|dep| {
-                *need_modes.entry(*dep).or_default() |= mode_to_flag(LogicMode::TwoValue);
-            });
-            var_mode.insert(k, LogicMode::TwoValue);
-        }
+        graph_offsets.retain(|k, _| !seen.contains(k));
     }
 
-    for (k, f) in need_modes {
-        let m = var_mode[&k];
-        if f != mode_to_flag(m) {
-            mark_conv!(k);
+    for (v, m) in maybe_mark_conv_later {
+        if m != var_mode[&v] {
+            mark_conv!(v);
         }
     }
 }

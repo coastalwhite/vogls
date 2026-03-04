@@ -725,6 +725,7 @@ name = "vogls-codegen"
 version = "0.0.1"
 dependencies = [
  "bytemuck",
+ "hashbrown 0.16.1",
  "vogls-bits",
  "vogls-ir",
  "vogls-utils",

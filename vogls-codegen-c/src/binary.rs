@@ -325,7 +325,7 @@ pub fn cgc_bin_max(f: &mut impl io::Write, dst: CVar, lhs: CVar, rhs: CVar) -> i
 pub fn cgc_case_eq(f: &mut impl io::Write, dst: CIdent, lhs: CVar, rhs: CVar) -> io::Result<()> {
     let (d, l, r) = (dst, lhs.ident, rhs.ident);
     match (lhs.ty.mode, lhs.ty.array_size()) {
-        (LogicMode::TwoValue, None) => writeln!(f, "{INDENT}{d} = (uint8_t)({l} <= {r});")?,
+        (LogicMode::TwoValue, None) => writeln!(f, "{INDENT}{d} = (uint8_t)({l} == {r});")?,
         (LogicMode::TwoValue, Some(arr_size)) => writeln!(
             f,
             "{INDENT}{d} = 1; for (int i = 0; i < {arr_size}; ++i) {d} &= {l}[i] == {r}[i];"
