@@ -12,7 +12,7 @@ pub fn cgc_negate(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Result<()
     let msbs_mask = if size.get() % 64 == 0 {
         u64::MAX
     } else {
-        (1u64 << dst.ty.size.get()) - 1
+        (1u64 << (dst.ty.size.get() % 64)) - 1
     };
 
     let (d, s) = (dst.ident, src.ident);

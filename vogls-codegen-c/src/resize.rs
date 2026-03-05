@@ -122,7 +122,34 @@ pub fn cgc_sign_extend(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Resu
             mask = mask(dst.ty.size.get()),
         )?,
         (LogicMode::TwoValue, Some(dst_arr_size), None) => {
-            todo!()
+            writeln!(
+                f,
+                "{INDENT}{d}[0] = ({unsigned_elem_ty})(((({signed_elem_ty}){s}) << {shift}) >> {shift});",
+                unsigned_elem_ty = dst.ty.element_type(),
+                signed_elem_ty = src.ty.element_type().signed_ty_str(),
+                shift = src.ty.element_type().size().get() - src.ty.size.get(),
+            )?;
+            let dst_arr_size_m_1 = dst_arr_size - 1;
+            write!(
+                f,
+                "{INDENT}{{ uint64_t sign_mask = (!(((uint64_t){s}) >> {shift})) - 1; ",
+                shift = src.ty.size.get() - 1,
+            )?;
+            if dst_arr_size > 2 {
+                write!(
+                    f,
+                    "for (int i = 1; i < {dst_arr_size_m_1}; ++i) {{ {d}[i] = sign_mask; }} "
+                )?;
+            }
+            writeln!(
+                f,
+                "{d}[{dst_arr_size_m_1}] = sign_mask & 0x{mask:x}; }}",
+                mask = if dst.ty.size.get() % 64 == 0 {
+                    u64::MAX
+                } else {
+                    mask(dst.ty.size.get() % 64)
+                }
+            )?;
         }
         (LogicMode::TwoValue, Some(dst_arr_size), Some(src_arr_size)) => {
             todo!()

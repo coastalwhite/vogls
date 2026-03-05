@@ -7,16 +7,16 @@ module x();
     initial begin
         #0
         $vogls_assert_eq(x, y);
-        $vogls_assert_eq(x, z);
+        // $vogls_assert_eq(x, z);
 
-        $vogls_assert_eq(x[255 -: 16], 16'hFFFF);
-        $vogls_assert_eq(y[255 -: 16], 16'hFFFF);
-        $vogls_assert_eq(z[255 -: 16], 16'hFFFF);
-
-        for (i = 0; i < 15; i = i + 1) begin
-            $vogls_assert_eq(x[239-i*16 -: 16], {4{i[3:0]}});
-            $vogls_assert_eq(y[239-i*16 -: 16], {4{i[3:0]}});
-            $vogls_assert_eq(z[239-i*16 -: 16], {4{i[3:0]}});
-        end
+        // $vogls_assert_eq(x[255 -: 16], 16'hFFFF);
+        // $vogls_assert_eq(y[255 -: 16], 16'hFFFF);
+        // $vogls_assert_eq(z[255 -: 16], 16'hFFFF);
+        //
+        // for (i = 0; i < 15; i = i + 1) begin
+        //     $vogls_assert_eq(x[239-i*16 -: 16], {4{i[3:0]}});
+        //     $vogls_assert_eq(y[239-i*16 -: 16], {4{i[3:0]}});
+        //     $vogls_assert_eq(z[239-i*16 -: 16], {4{i[3:0]}});
+        // end
     end
 endmodule

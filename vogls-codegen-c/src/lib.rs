@@ -19,6 +19,23 @@ mod binary;
 mod resize;
 mod unary;
 
+// Variables are represented as u8, u16, u32, u64 or an array of u64s depending or their size and
+// their logic mode.
+//
+// |  size | mode |                         type | bit layout              |
+// |-------|------|------------------------------|-------------------------|
+// |   1-8 |   TV |                           u8 | `size` least sign. bits |
+// |  9-16 |   TV |                          u16 | `size` least sign. bits |
+// | 17-32 |   TV |                          u32 | `size` least sign. bits |
+// | 33-64 |   TV |                          u64 | `size` least sign. bits |
+// |   65+ |   TV |     [u64; size.div_ceil(64)] | little endian word order. Last word same as u64 |
+// |       |      |                              |                         |
+// |   1-4 |   FV |                           u8 |                         |
+// |   5-8 |   FV |                          u16 |                         |
+// |  9-16 |   FV |                          u32 |                         |
+// | 17-32 |   FV |                          u64 |                         |
+// |   33+ |   FV | [u64; 2 * size.div_ceil(64)] |                         |
+//
 #[derive(Clone, Copy)]
 struct CIdent(u64);
 impl fmt::Display for CIdent {

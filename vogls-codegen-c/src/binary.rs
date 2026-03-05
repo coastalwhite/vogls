@@ -11,7 +11,7 @@ pub fn cgc_bin_and(f: &mut impl io::Write, dst: CVar, lhs: CIdent, rhs: CIdent) 
         (LogicMode::TwoValue, Some(arr_size)) => {
             writeln!(
                 f,
-                "{INDENT}for (int i = 1; i < {arr_size}; ++i) {d}[i] = {l}[i] & {r}[i];",
+                "{INDENT}for (int i = 0; i < {arr_size}; ++i) {d}[i] = {l}[i] & {r}[i];",
             )?;
         }
         (LogicMode::FourValue, _) => todo!(),
@@ -27,7 +27,7 @@ pub fn cgc_bin_or(f: &mut impl io::Write, dst: CVar, lhs: CIdent, rhs: CIdent) -
         (LogicMode::TwoValue, Some(arr_size)) => {
             writeln!(
                 f,
-                "{INDENT}for (int i = 1; i < {arr_size}; ++i) {d}[i] = {l}[i] | {r}[i];",
+                "{INDENT}for (int i = 0; i < {arr_size}; ++i) {d}[i] = {l}[i] | {r}[i];",
             )?;
         }
         (LogicMode::FourValue, _) => todo!(),
@@ -43,7 +43,7 @@ pub fn cgc_bin_xor(f: &mut impl io::Write, dst: CVar, lhs: CIdent, rhs: CIdent) 
         (LogicMode::TwoValue, Some(arr_size)) => {
             writeln!(
                 f,
-                "{INDENT}for (int i = 1; i < {arr_size}; ++i) {d}[i] = {l}[i] ^ {r}[i];",
+                "{INDENT}for (int i = 0; i < {arr_size}; ++i) {d}[i] = {l}[i] ^ {r}[i];",
             )?;
         }
         (LogicMode::FourValue, _) => todo!(),
