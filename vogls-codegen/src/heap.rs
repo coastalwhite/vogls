@@ -370,7 +370,7 @@ impl Heap {
     }
 
     pub fn set_fv_scalar(&mut self, at: HeapOffset, value: FvLogicValue) {
-        let (spc, val) = ((value as u64) >> 1, (value as u64) & 1);
+        let (spc, val) = ((value as u64) & 1, (value as u64) >> 1);
         self.set_fv_u64(at.to_ref(SCALAR_VSIZE), spc, val);
     }
 

@@ -17,13 +17,6 @@ use vogls_ir::{ResizeOp, UnaryOp, VectorSize};
 use crate::{BinaryArithmeticOp, BinaryComparisonOp, Heap, HeapOffset, HeapRef, ShiftOp};
 
 pub(crate) fn exec_fv_unary(stack: &mut Heap, dst: HeapOffset, op: UnaryOp, src: HeapRef) {
-    fn fv_s_contains_unknown(src: &[u8], size: VectorSize) -> FvLogicValue {
-        FvLogicValue::from_bool(fv_s_contains_unknown_bool(src, size))
-    }
-    fn fv_l_contains_unknown(src: &[u64], size: VectorSize) -> FvLogicValue {
-        FvLogicValue::from_bool(fv_contains_unknown(src, size))
-    }
-
     use UnaryOp as O;
     match op {
         O::Neg if src.size <= Heap::FV_SUBBITS_MAX_SIZE => {

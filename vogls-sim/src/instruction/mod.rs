@@ -90,7 +90,8 @@ pub enum VmInstruction {
 
     Jump(usize),
     /// (condition, true_offset, false_offset)
-    Branch(HeapOffset, usize, usize),
+    TvBranch(HeapOffset, usize, usize),
+    FvBranch(HeapOffset, usize, usize),
     Halt,
 }
 impl VmInstruction {
@@ -136,7 +137,7 @@ impl VmInstruction {
                 ("rhs", false, *rhs),
             ],
             I::FvUnary(dst, op, src) => match op {
-                UnaryOp::Neg => &[("dst", false, dst.to_ref(src.size)), ("src", true, *src)],
+                UnaryOp::Neg => &[("dst", true, dst.to_ref(src.size)), ("src", true, *src)],
                 UnaryOp::ReduceOr | UnaryOp::ReduceAnd | UnaryOp::ReduceXor => {
                     &[("dst", true, dst.to_scalar_ref()), ("src", true, *src)]
                 }
@@ -206,7 +207,8 @@ impl VmInstruction {
             I::WaitRegion(_) => &[],
             I::Watch(_) => &[],
             I::Jump(_) => &[],
-            I::Branch(_, _, _) => &[],
+            I::TvBranch(_, _, _) => &[],
+            I::FvBranch(_, _, _) => &[],
             I::Halt => &[],
         };
         for (name, fv, stack_ref) in items {

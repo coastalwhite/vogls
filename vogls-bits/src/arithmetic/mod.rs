@@ -26,9 +26,9 @@ pub enum FvLogicValue {
     /// Unknown value
     X = 0b00,
     /// High impedance
-    Z = 0b01,
+    Z = 0b10,
     /// Logical zero
-    L0 = 0b10,
+    L0 = 0b01,
     /// Logical one
     L1 = 0b11,
 }
@@ -46,13 +46,13 @@ impl FvLogicValue {
 
     #[inline(always)]
     pub const fn from_spc_and_val(spc: bool, val: bool) -> Self {
-        Self::from_repr(((spc as u8) << 1) | (val as u8))
+        Self::from_repr(((val as u8) << 1) | (spc as u8))
     }
 
     pub const fn from_repr(repr: u8) -> Self {
         match repr & 0b11 {
-            0b01 => Self::Z,
-            0b10 => Self::L0,
+            0b01 => Self::L0,
+            0b10 => Self::Z,
             0b11 => Self::L1,
             _ => Self::X,
         }
@@ -195,20 +195,20 @@ pub fn fv_reduce_bitwise_op(
     unit: FvLogicValue,
     op: impl Fn(u64, u64, VectorSize) -> FvLogicValue,
 ) -> FvLogicValue {
-    let mut gspc = unit as u64 >> 1;
-    let mut gvalue = unit as u64 & 1;
+    let mut gspc = unit as u64 & 1;
+    let mut gvalue = unit as u64 >> 1;
     let nwords = src.len() / 2;
     let mut i = 0;
     let mut shift = 1;
     let mut size = size.get();
     while let Some(s) = VectorSize::new(size) {
         let r = op(src[i], src[nwords + i], s);
-        gspc |= (r as u64 >> 1) << shift;
-        gvalue |= (r as u64 & 1) << shift;
+        gspc |= (r as u64 & 1) << shift;
+        gvalue |= (r as u64 >> 1) << shift;
         if shift == 63 {
             let subresult = op(gspc, gvalue, VectorSize::new(64).unwrap());
-            gspc = subresult as u64 >> 1;
-            gvalue = subresult as u64 & 1;
+            gspc = subresult as u64 & 1;
+            gvalue = subresult as u64 >> 1;
             shift = 1;
         } else {
             shift += 1;
@@ -380,7 +380,7 @@ pub fn fv_reduce_and_elem(spc: u64, value: u64, size: VectorSize) -> FvLogicValu
     let mask = 1u64.unbounded_shl(size.get()).wrapping_sub(1);
     let z1 = (spc == mask) | (spc & !value != 0);
     let z0 = (spc == mask) & (value == mask);
-    FvLogicValue::from_repr((u8::from(z1) << 1) | u8::from(z0))
+    FvLogicValue::from_repr((u8::from(z0) << 1) | u8::from(z1))
 }
 #[inline(always)]
 pub fn fv_reduce_or_elem(spc: u64, value: u64, size: VectorSize) -> FvLogicValue {
@@ -394,7 +394,7 @@ pub fn fv_reduce_or_elem(spc: u64, value: u64, size: VectorSize) -> FvLogicValue
     let mask = 1u64.unbounded_shl(size.get()).wrapping_sub(1);
     let z0 = (spc & value) != 0;
     let z1 = (spc == mask) | z0;
-    FvLogicValue::from_repr((u8::from(z1) << 1) | u8::from(z0))
+    FvLogicValue::from_repr((u8::from(z0) << 1) | u8::from(z1))
 }
 #[inline(always)]
 pub fn fv_reduce_xor_elem(spc: u64, value: u64, size: VectorSize) -> FvLogicValue {
@@ -408,7 +408,7 @@ pub fn fv_reduce_xor_elem(spc: u64, value: u64, size: VectorSize) -> FvLogicValu
     let mask = 1u64.unbounded_shl(size.get()).wrapping_sub(1);
     let z1 = spc == mask;
     let z0 = z1 & (value.count_ones() % 2 == 1);
-    FvLogicValue::from_repr((u8::from(z1) << 1) | u8::from(z0))
+    FvLogicValue::from_repr((u8::from(z0) << 1) | u8::from(z1))
 }
 
 pub fn fv_contains_special(src: &[u64], size: VectorSize) -> bool {
@@ -530,14 +530,14 @@ pub fn fv_ltu32_arith_op(
     let r = load_partial_u64(&rhs, dsize);
 
     // If has special values, return X.
-    if l >> size.get() != mask || r >> size.get() != mask {
+    if (l & mask) != mask || (r & mask) != mask {
         dst.fill(0);
         return;
     }
 
-    let out = match op(l, r) {
+    let out = match op(l >> size.get(), r >> size.get()) {
         None => 0u64,
-        Some(out) => (mask << size.get()) | (out & mask),
+        Some(out) => mask | ((out & mask) << size.get()),
     };
     store_partial_u64(dst, out, dsize);
 }

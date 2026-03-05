@@ -145,8 +145,11 @@ impl fmt::Display for VmInstruction {
                 f.write_char(']')
             }
             Self::Jump(offset) => write!(f, "jump <{offset}>"),
-            Self::Branch(cond, true_offset, false_offset) => {
-                write!(f, "branch {cond}, <{true_offset}>, <{false_offset}>")
+            Self::TvBranch(cond, true_offset, false_offset) => {
+                write!(f, "tv.branch {cond}, <{true_offset}>, <{false_offset}>")
+            }
+            Self::FvBranch(cond, true_offset, false_offset) => {
+                write!(f, "fv.branch {cond}, <{true_offset}>, <{false_offset}>")
             }
             Self::Halt => f.write_str("halt"),
         }
@@ -192,7 +195,8 @@ impl fmt::Display for VmProcess {
                 | I::Watch(..)
                 | I::Halt => {}
                 I::Jump(offset) => labels.push(*offset),
-                I::Branch(_, true_offset, false_offset) => {
+                I::TvBranch(_, true_offset, false_offset)
+                | I::FvBranch(_, true_offset, false_offset) => {
                     labels.extend([*true_offset, *false_offset]);
                 }
             }

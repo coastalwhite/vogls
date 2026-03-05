@@ -147,29 +147,28 @@ pub fn cgc_zero_extend(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Resu
 
         (LogicMode::FourValue, None, None) => {
             let dst_elem_ty = dst.ty.element_type();
-            let src_val_mask = mask(src.ty.size.get());
-            let src_spc_mask = src_val_mask << src.ty.size.get();
-            let ext_mask = mask(dst.ty.size.get() - src.ty.size.get())
-                << (dst.ty.size.get() + src.ty.size.get());
+            let src_spc_mask = mask(src.ty.size.get());
+            let src_val_mask = src_spc_mask << src.ty.size.get();
+            let ext_mask = mask(dst.ty.size.get() - src.ty.size.get()) << src.ty.size.get();
             writeln!(
                 f,
-                "{INDENT}{d} = (((({dst_elem_ty}){s}) & 0x{src_spc_mask:x}) << {diff_size}) | ((({dst_elem_ty}){s}) & 0x{src_val_mask:x}) | 0x{ext_mask:x};",
+                "{INDENT}{d} = (((({dst_elem_ty}){s}) & 0x{src_val_mask:x}) << {diff_size}) | ((({dst_elem_ty}){s}) & 0x{src_spc_mask:x}) | 0x{ext_mask:x};",
                 diff_size = dst.ty.size.get() - src.ty.size.get(),
             )?
         }
         (LogicMode::FourValue, Some(dst_arr_size), None) => {
-            let src_val_mask = mask(src.ty.size.get());
-            let src_spc_mask = src_val_mask << src.ty.size.get();
-            let ext_mask = mask(dst.ty.size.get().min(64) - src.ty.size.get()) << src.ty.size.get();
+            let src_spc_mask = mask(src.ty.size.get());
+            let src_val_mask = src_spc_mask << src.ty.size.get();
+            let ext_mask = mask(dst.ty.size.get() - src.ty.size.get()) << src.ty.size.get();
             let num_words = dst_arr_size / 2;
             writeln!(
                 f,
-                "{INDENT}{d}[0] = ((((uint64_t){s}) & 0x{src_spc_mask:x}) >> {ssize}) | 0x{ext_mask:x};",
-                ssize = src.ty.size,
+                "{INDENT}{d}[0] = (((uint64_t){s}) & 0x{src_spc_mask:x}) | 0x{ext_mask:x};"
             )?;
             writeln!(
                 f,
-                "{INDENT}{d}[{num_words}] = ((uint64_t){s}) & 0x{src_val_mask:x};"
+                "{INDENT}{d}[{num_words}] = (((uint64_t){s}) & 0x{src_val_mask:x}) >> {ssize};",
+                ssize = src.ty.size,
             )?;
             if num_words > 1 {
                 writeln!(

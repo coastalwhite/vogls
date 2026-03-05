@@ -10,7 +10,7 @@ use vogls_bits::format::{BitsFormatBase, BitsFormatOptions};
 use vogls_bits::set_subslice::{tv_l_set, tv_s_set};
 use vogls_codegen::{Heap, HeapOffset, HeapRef};
 use vogls_ir::vcd::NetType;
-use vogls_ir::{INTEGER_VSIZE, LogicMode, SCALAR_VSIZE, SignalKey, TIME_VSIZE, VectorSize};
+use vogls_ir::{INTEGER_VSIZE, LogicMode, SignalKey, TIME_VSIZE, VectorSize};
 use vogls_runtime::SimulationIo;
 
 mod execution;
@@ -135,7 +135,7 @@ pub fn drive_bits(
         let partial = partial.unwrap_or(0);
 
         return match logic_mode {
-            LogicMode::TwoValue if src.size.get() <= 4 => {
+            LogicMode::TwoValue if src.size <= Heap::TV_SUBBITS_MAX_SIZE => {
                 let src_v = heap.get_tv_u64(src);
                 heap.set_unaligned_raw_bits(
                     HeapOffset {
@@ -145,13 +145,13 @@ pub fn drive_bits(
                     src_v as u8,
                 )
             }
-            LogicMode::TwoValue if dst.size.get() <= 32 => {
+            LogicMode::TwoValue if dst.size < Heap::TV_U64_MIN_SIZE => {
                 let (dst_s, src_s) = heap.get_disjoint_u8_dst_src(dst, src);
                 tv_s_set(dst_s, src_s, dst.size, partial, src.size)
             }
             LogicMode::TwoValue => {
                 let mut src_s = [0u64];
-                let (dst_s, src_s) = if src.size.get() <= 32 {
+                let (dst_s, src_s) = if src.size < Heap::TV_U64_MIN_SIZE {
                     src_s[0] = heap.get_tv_u64(src);
                     (
                         heap.get_mut_u64_slice(dst.offset, dst.size.get().div_ceil(64) as usize),
@@ -168,7 +168,7 @@ pub fn drive_bits(
 
                 tv_l_set(dst_s, src_s, dst.size, partial, src.size)
             }
-            LogicMode::FourValue if dst.size.get() <= 16 => {
+            LogicMode::FourValue if dst.size <= Heap::FV_U64_MIN_SIZE => {
                 let (src_spc, src_val) = heap.get_fv_u64(src);
                 let (old_spc, old_val) = heap.get_fv_u64(dst);
 
@@ -182,7 +182,7 @@ pub fn drive_bits(
             _ => {
                 let mut src_s = [0u64, 0u64];
                 let dst_nwords = dst.size.get().div_ceil(64) as usize;
-                let (dst_s, src_s) = if src.size.get() <= 16 {
+                let (dst_s, src_s) = if src.size < Heap::FV_U64_MIN_SIZE {
                     (src_s[0], src_s[1]) = heap.get_fv_u64(src);
                     (
                         heap.get_mut_u64_slice(dst.offset, 2 * dst_nwords),
@@ -908,9 +908,16 @@ impl Simulation {
                     }
 
                     I::Jump(offset) => *ip = *offset,
-                    I::Branch(cond, true_offset, false_offset) => {
-                        let is_true =
-                            state.runtime.heap.get_tv_u64(cond.to_ref(SCALAR_VSIZE)) & 1 != 0;
+                    I::TvBranch(cond, true_offset, false_offset) => {
+                        let is_true = state.runtime.heap.get_tv_bool(*cond);
+                        if is_true {
+                            *ip = *true_offset;
+                        } else {
+                            *ip = *false_offset;
+                        }
+                    }
+                    I::FvBranch(cond, true_offset, false_offset) => {
+                        let is_true = state.runtime.heap.get_fv_item(*cond) == FvLogicValue::L1;
                         if is_true {
                             *ip = *true_offset;
                         } else {

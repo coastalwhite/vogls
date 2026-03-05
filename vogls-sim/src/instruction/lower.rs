@@ -328,7 +328,10 @@ pub fn lower_process_to_vm(
                 VI::Jump(0)
             }
             T::Jump(_) => VI::Jump(0),
-            T::Branch(cond, _, _) => VI::Branch(var!(*cond), 0, 0),
+            T::Branch(cond, _, _) if var_mode[cond] == LogicMode::TwoValue => {
+                VI::TvBranch(var!(*cond), 0, 0)
+            }
+            T::Branch(cond, _, _) => VI::FvBranch(var!(*cond), 0, 0),
             T::Halt => VI::Halt,
         };
 
@@ -356,7 +359,11 @@ pub fn lower_process_to_vm(
             (T::WaitRegion(bb, _), VI::Jump(offset)) => *offset = bb_to_offset(*bb),
             (T::Watch(bb, _), VI::Jump(offset)) => *offset = bb_to_offset(*bb),
             (T::Jump(bb), VI::Jump(offset)) => *offset = bb_to_offset(*bb),
-            (T::Branch(_, true_bb, false_bb), VI::Branch(_, true_offset, false_offset)) => {
+            (
+                T::Branch(_, true_bb, false_bb),
+                VI::TvBranch(_, true_offset, false_offset)
+                | VI::FvBranch(_, true_offset, false_offset),
+            ) => {
                 *true_offset = bb_to_offset(*true_bb);
                 *false_offset = bb_to_offset(*false_bb);
             }

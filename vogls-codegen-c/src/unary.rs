@@ -32,10 +32,9 @@ pub fn cgc_negate(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Result<()
         }
         // (spc, val) -> (spc, spc & !val)
         (LogicMode::FourValue, None) => {
-            let inv_mask = !msbs_mask;
             writeln!(
                 f,
-                "{INDENT}{d} = ({s} & 0x{inv_mask:x}) | (({s} >> {size}) & ~{s});"
+                "{INDENT}{d} = ({s} & 0x{msbs_mask:x}) | (({s} << {size}) & ~{s});"
             )?;
         }
         (LogicMode::FourValue, Some(arr_size)) => {
@@ -78,17 +77,17 @@ pub fn cgc_reduce_or(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Result
         // z1 = (spc == mask) | z0
         (LogicMode::FourValue, None) => {
             let size = src.ty.size;
-            let spc_mask = mask(src.ty.size.get()) << size.get();
+            let spc_mask = mask(src.ty.size.get());
             writeln!(f, "{INDENT}{{")?;
             writeln!(
                 f,
-                "{INDENT}{INDENT}uint8_t z0 = (({s} >> {size}) & {s}) != 0;"
+                "{INDENT}{INDENT}uint8_t z0 = (({s} << {size}) & {s}) != 0;"
             )?;
             writeln!(
                 f,
-                "{INDENT}{INDENT}uint8_t z1 = (({s} == 0x{spc_mask:x}) != 0) | z0;"
+                "{INDENT}{INDENT}uint8_t z1 = (({s} & 0x{spc_mask:x}) == 0x{spc_mask:x}) | z0;"
             )?;
-            writeln!(f, "{INDENT}{INDENT}{d} = (z1 << 1) | z0;")?;
+            writeln!(f, "{INDENT}{INDENT}{d} = (z0 << 1) | z1;")?;
             writeln!(f, "{INDENT}}}")?;
         }
         (LogicMode::FourValue, Some(arr_size)) => {
@@ -120,7 +119,7 @@ pub fn cgc_reduce_or(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Result
                 )?;
             }
             writeln!(f, "{INDENT}{INDENT}z1 |= z0;")?;
-            writeln!(f, "{INDENT}{INDENT}{d} = (z1 << 1) | z0;")?;
+            writeln!(f, "{INDENT}{INDENT}{d} = (z0 << 1) | z1;")?;
             writeln!(f, "{INDENT}}}")?;
         }
     }
@@ -161,8 +160,8 @@ pub fn cgc_reduce_and(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Resul
         // z0 = &spc & &value;
         (LogicMode::FourValue, None) => {
             let size = src.ty.size;
-            let spc_mask = mask(src.ty.size.get()) << size.get();
-            let val_mask = mask(src.ty.size.get());
+            let spc_mask = mask(src.ty.size.get());
+            let val_mask = spc_mask << size.get();
             writeln!(f, "{INDENT}{{")?;
             writeln!(
                 f,
@@ -174,9 +173,9 @@ pub fn cgc_reduce_and(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Resul
             )?;
             writeln!(
                 f,
-                "{INDENT}{INDENT}uint8_t z1 = redandspc | ((({s} >> {size}) & ~{s}) != 0);"
+                "{INDENT}{INDENT}uint8_t z1 = redandspc | ((({s} << {size}) & ({s} ^ 0x{val_mask:x})) != 0);"
             )?;
-            writeln!(f, "{INDENT}{INDENT}{d} = (z1 << 1) | z0;")?;
+            writeln!(f, "{INDENT}{INDENT}{d} = (z0 << 1) | z1;")?;
             writeln!(f, "{INDENT}}}")?;
         }
         (LogicMode::FourValue, Some(arr_size)) => {
@@ -204,7 +203,7 @@ pub fn cgc_reduce_and(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Resul
                 )?;
                 writeln!(
                     f,
-                    "{INDENT}{INDENT}z0 &= {s}[{last_i}] == 0x{mask:x}; z1 |= ({s}[{num_words_loop}] & ~{s}[{last_i}]) != 0;"
+                    "{INDENT}{INDENT}z0 &= {s}[{last_i}] == 0x{mask:x};;"
                 )?;
                 writeln!(
                     f,
@@ -213,7 +212,7 @@ pub fn cgc_reduce_and(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Resul
             }
             writeln!(f, "{INDENT}{INDENT}z1 |= redandspc;")?;
             writeln!(f, "{INDENT}{INDENT}z0 &= redandspc;")?;
-            writeln!(f, "{INDENT}{INDENT}{d} = (z1 << 1) | z0;")?;
+            writeln!(f, "{INDENT}{INDENT}{d} = (z0 << 1) | z1;")?;
             writeln!(f, "{INDENT}}}")?;
         }
     }
@@ -243,8 +242,8 @@ pub fn cgc_reduce_xor(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Resul
         // z1 = spc == mask
         (LogicMode::FourValue, None) => {
             let size = src.ty.size;
-            let spc_mask = mask(src.ty.size.get()) << size.get();
-            let val_mask = mask(src.ty.size.get());
+            let spc_mask = mask(src.ty.size.get());
+            let val_mask = mask(src.ty.size.get()) << size.get();
             writeln!(f, "{INDENT}{{")?;
             writeln!(
                 f,
@@ -255,7 +254,7 @@ pub fn cgc_reduce_xor(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Resul
                 "{INDENT}{INDENT}uint8_t z0 = z1 & (popcount{}({s} & 0x{val_mask:x}) % 2 == 1);",
                 src.ty.element_type().size()
             )?;
-            writeln!(f, "{INDENT}{INDENT}{d} = (z1 << 1) | z0;")?;
+            writeln!(f, "{INDENT}{INDENT}{d} = (z0 << 1) | z1;")?;
             writeln!(f, "{INDENT}}}")?;
         }
         (LogicMode::FourValue, Some(arr_size)) => {
@@ -285,7 +284,7 @@ pub fn cgc_reduce_xor(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Resul
                 writeln!(f, "{INDENT}{INDENT}z1 &= {s}[{last_i}] == 0x{mask:x};")?;
             }
             writeln!(f, "{INDENT}{INDENT}z0 = z1 & (cnt % 2 == 1);")?;
-            writeln!(f, "{INDENT}{INDENT}{d} = (z1 << 1) | z0;")?;
+            writeln!(f, "{INDENT}{INDENT}{d} = (z0 << 1) | z1;")?;
             writeln!(f, "{INDENT}}}")?;
         }
     }
