@@ -159,7 +159,6 @@ impl UnaryOp {
             Self::ReduceAnd => "reduce_and",
             Self::ReduceOr => "reduce_or",
             Self::ReduceXor => "reduce_xor",
-            Self::ContainsX => "contains_x",
         }
     }
 }

@@ -1,6 +1,7 @@
 use std::fmt::Write;
 use std::{fmt, io};
 
+use vogls_bits::BitsDataRef;
 use vogls_bits::format::{BitsFormatBase, BitsFormatOptions, BitsFormatWidth};
 use vogls_codegen::{
     HeapBuilder, HeapOffset, HeapRef, resolve_heap_map, resolve_var_logic_mode_map,
@@ -94,7 +95,7 @@ impl CType {
         match self.mode {
             LogicMode::TwoValue => (self.size.get() > 64).then_some(self.size.get().div_ceil(64)),
             LogicMode::FourValue => {
-                (self.size.get() > 32).then_some(2 * self.size.get().div_ceil(32))
+                (self.size.get() > 32).then_some(2 * self.size.get().div_ceil(64))
             }
         }
     }
@@ -113,6 +114,10 @@ impl CType {
 
             M::TwoValue | M::FourValue => CElementType::U64,
         }
+    }
+
+    fn num_bits(&self) -> u32 {
+        self.size.get() << u32::from(self.mode == LogicMode::FourValue)
     }
 }
 
@@ -302,7 +307,7 @@ pub fn lower_process(
                     let t = claim_tmp!(bits.size(), mode);
 
                     match (t.ty.array_size(), t.ty.mode) {
-                        (None, _) => {
+                        (None, LogicMode::TwoValue) => {
                             writeln!(
                                 buffer,
                                 "{INDENT}{} = 0x{};",
@@ -315,6 +320,18 @@ pub fn lower_process(
                                     fill: '0',
                                     width: BitsFormatWidth::Shrink,
                                 })
+                            )?;
+                        }
+                        (None, LogicMode::FourValue) => {
+                            let BitsDataRef::InlineFv(spc, val) = bits.as_data_ref() else {
+                                unreachable!();
+                            };
+
+                            writeln!(
+                                buffer,
+                                "{INDENT}{} = 0x{:x};",
+                                t.ident,
+                                (spc << bits.size().get()) | val
                             )?;
                         }
                         (Some(arr_size), LogicMode::TwoValue) => {
@@ -354,7 +371,14 @@ pub fn lower_process(
                     if msrc != mdst {
                         let unconverted_t = t;
                         t = claim_tmp!(src_size, mdst);
-                        convert(f, src_size, msrc, mdst, unconverted_t.ident, t.ident)?;
+                        convert(
+                            &mut buffer,
+                            src_size,
+                            mdst,
+                            msrc,
+                            t.ident,
+                            unconverted_t.ident,
+                        )?;
                     }
 
                     let dst_t = claim_tmp!(dst_size, mdst);
@@ -364,7 +388,6 @@ pub fn lower_process(
                         O::ReduceOr => unary::cgc_reduce_or(&mut buffer, dst_t, t)?,
                         O::ReduceAnd => unary::cgc_reduce_and(&mut buffer, dst_t, t)?,
                         O::ReduceXor => unary::cgc_reduce_xor(&mut buffer, dst_t, t)?,
-                        O::ContainsX => todo!(),
                     }
                     store(&mut buffer, heap_map[dst], dst_t)?;
                 }
@@ -379,7 +402,14 @@ pub fn lower_process(
                     if msrc != mdst {
                         let unconverted_t = t;
                         t = claim_tmp!(src_size, mdst);
-                        convert(f, src_size, msrc, mdst, unconverted_t.ident, t.ident)?;
+                        convert(
+                            &mut buffer,
+                            src_size,
+                            mdst,
+                            msrc,
+                            t.ident,
+                            unconverted_t.ident,
+                        )?;
                     }
 
                     let dst_t = claim_tmp!(dst_size, mdst);
@@ -403,13 +433,27 @@ pub fn lower_process(
                     if mlhs != mdst {
                         let unconverted_t = lhs_t;
                         lhs_t = claim_tmp!(lhs_size, mdst);
-                        convert(f, lhs_size, mlhs, mdst, unconverted_t.ident, lhs_t.ident)?;
+                        convert(
+                            &mut buffer,
+                            lhs_size,
+                            mdst,
+                            mlhs,
+                            lhs_t.ident,
+                            unconverted_t.ident,
+                        )?;
                     }
                     load(&mut buffer, heap_map[rhs], rhs_t)?;
                     if mrhs != mdst {
                         let unconverted_t = rhs_t;
                         rhs_t = claim_tmp!(rhs_size, mdst);
-                        convert(f, rhs_size, mrhs, mdst, unconverted_t.ident, rhs_t.ident)?;
+                        convert(
+                            &mut buffer,
+                            rhs_size,
+                            mdst,
+                            mrhs,
+                            rhs_t.ident,
+                            unconverted_t.ident,
+                        )?;
                     }
 
                     let dst_t = claim_tmp!(dst_size, mdst);
@@ -543,7 +587,14 @@ pub fn lower_process(
                     if msrc != gl.logic_mode {
                         let unconverted_t = t;
                         t = claim_tmp!(size, gl.logic_mode);
-                        convert(f, size, msrc, gl.logic_mode, unconverted_t.ident, t.ident)?;
+                        convert(
+                            &mut buffer,
+                            size,
+                            gl.logic_mode,
+                            msrc,
+                            t.ident,
+                            unconverted_t.ident,
+                        )?;
                     }
 
                     if let Some((offset, partial_size)) = partial {
@@ -770,72 +821,58 @@ const fn mask(num_bits: u32) -> u64 {
 }
 
 fn load(b: &mut impl io::Write, heap_offset: HeapOffset, t: CVar) -> io::Result<()> {
-    if t.ty.mode == LogicMode::FourValue {
-        todo!()
-    }
-    if let Some(arr_size) = t.ty.array_size() {
-        let offset = heap_offset;
-        let word = offset.bit_offset / 64;
-        writeln!(
-            b,
-            "{INDENT}memmove(&{t}, heap + {word}, {arr_size} * sizeof(uint64_t));",
-            t = t.ident
-        )?;
-        return Ok(());
-    }
+    match t.ty.array_size() {
+        None => {
+            let word = heap_offset.bit_offset / 64;
+            let shift = heap_offset.bit_offset % 64;
+            let num_bits = t.ty.num_bits();
+            let mask = mask(num_bits);
 
-    let mut num_bits = t.ty.size.get();
-    if t.ty.mode == LogicMode::FourValue {
-        num_bits *= 2;
+            writeln!(
+                b,
+                "{INDENT}{t} = (heap[{word}] >> {shift}) & 0x{mask:x};",
+                t = t.ident
+            )
+        }
+        Some(arr_size) => {
+            let word = heap_offset.bit_offset / 64;
+            writeln!(
+                b,
+                "{INDENT}memmove(&{t}, heap + {word}, {arr_size} * sizeof(uint64_t));",
+                t = t.ident
+            )
+        }
     }
-
-    let offset = heap_offset;
-    let word = offset.bit_offset / 64;
-    let shift = offset.bit_offset % 64;
-    let mask = mask(num_bits);
-
-    writeln!(
-        b,
-        "{INDENT}{t} = (heap[{word}] >> {shift}) & 0x{mask:x};",
-        t = t.ident
-    )
 }
 
 fn store(f: &mut impl io::Write, heap_offset: HeapOffset, t: CVar) -> io::Result<()> {
-    if t.ty.mode == LogicMode::FourValue {
-        todo!()
-    }
-    if let Some(arr_size) = t.ty.array_size() {
-        let offset = heap_offset;
-        let word = offset.bit_offset / 64;
-        writeln!(
-            f,
-            "{INDENT}memmove(heap + {word}, &{t}, {arr_size} * sizeof(uint64_t));",
-            t = t.ident
-        )?;
-        return Ok(());
-    }
+    match t.ty.array_size() {
+        None => {
+            let word = heap_offset.bit_offset / 64;
+            let shift = heap_offset.bit_offset % 64;
+            let num_bits = t.ty.num_bits();
+            let mask = if num_bits == 64 {
+                assert_eq!(shift, 0);
+                u64::MAX
+            } else {
+                !(((1u64 << num_bits) - 1) << shift)
+            };
 
-    let mut num_bits = t.ty.size.get();
-    if t.ty.mode == LogicMode::FourValue {
-        num_bits *= 2;
+            writeln!(
+                f,
+                "{INDENT}heap[{word}] = (heap[{word}] & 0x{mask:x}) | ((uint64_t){t} << {shift});",
+                t = t.ident
+            )
+        }
+        Some(arr_size) => {
+            let word = heap_offset.bit_offset / 64;
+            writeln!(
+                f,
+                "{INDENT}memmove(heap + {word}, &{t}, {arr_size} * sizeof(uint64_t));",
+                t = t.ident
+            )
+        }
     }
-
-    let offset = heap_offset;
-    let word = offset.bit_offset / 64;
-    let shift = offset.bit_offset % 64;
-    let mask = if num_bits == 64 {
-        assert_eq!(shift, 0);
-        u64::MAX
-    } else {
-        !(((1u64 << num_bits) - 1) << shift)
-    };
-
-    writeln!(
-        f,
-        "{INDENT}heap[{word}] = (heap[{word}] & 0x{mask:x}) | ((uint64_t){t} << {shift});",
-        t = t.ident
-    )
 }
 
 fn load_slice(b: &mut impl io::Write, dst: CVar, offset: CVar, src: HeapRef) -> io::Result<()> {
@@ -933,13 +970,67 @@ fn store_slice(f: &mut impl io::Write, dst: HeapRef, offset: CVar, src: CVar) ->
 
 fn convert(
     f: &mut impl io::Write,
-    size: std::num::NonZero<u32>,
+    size: VectorSize,
     msrc: LogicMode,
     mdst: LogicMode,
-    unconverted_t: CIdent,
-    t: CIdent,
+    dst: CIdent,
+    src: CIdent,
 ) -> io::Result<()> {
-    todo!()
+    use LogicMode as M;
+    let dst_ty = CType { size, mode: mdst };
+    let src_ty = CType { size, mode: msrc };
+    let msbw_mask = if size.get() % 64 == 0 {
+        u64::MAX
+    } else {
+        mask(size.get() % 64)
+    };
+    match (mdst, msrc, dst_ty.array_size(), src_ty.array_size()) {
+        (M::TwoValue, M::FourValue, None, None) => writeln!(
+            f,
+            "{INDENT}{dst} = (({dst_elem_ty}){src}) | 0x{mask:x};",
+            dst_elem_ty = dst_ty.element_type(),
+            mask = msbw_mask << size.get()
+        ),
+        (M::TwoValue, M::FourValue, None, Some(_)) => {
+            writeln!(
+                f,
+                "{INDENT}{dst}[0] = 0x{msbw_mask:x}; {dst}[1] = (uint64_t){src};"
+            )
+        }
+        (M::TwoValue, M::FourValue, Some(arr_size), Some(_)) => {
+            writeln!(
+                f,
+                "{INDENT}for (int i = 0; i < {arr_size}; ++i) {{ {dst}[i] = ~0; {dst}[{arr_size}+i] = {src}[i]; }} dst[{last_i}] = 0x{msbw_mask:x};",
+                last_i = 2 * arr_size - 1,
+            )
+        }
+
+        (M::FourValue, M::TwoValue, None, None) => {
+            writeln!(
+                f,
+                "{INDENT}{dst} = ({dst_elem_ty})({src}) & 0x{msbw_mask:x};",
+                dst_elem_ty = dst_ty.element_type(),
+            )
+        }
+        (M::FourValue, M::TwoValue, Some(_), None) => {
+            writeln!(
+                f,
+                "{INDENT}{dst} = ({dst_elem_ty}){src}[1];",
+                dst_elem_ty = dst_ty.element_type(),
+            )
+        }
+        (M::FourValue, M::TwoValue, Some(arr_size), Some(_)) => {
+            writeln!(
+                f,
+                "{INDENT}memmove({dst}, {src} + {arr_size}, {arr_size} * sizeof(uint64_t));"
+            )
+        }
+
+        (M::TwoValue, M::FourValue, Some(_), None) | (M::FourValue, M::TwoValue, None, Some(_)) => {
+            unreachable!()
+        }
+        (M::FourValue, M::FourValue, _, _) | (M::TwoValue, M::TwoValue, _, _) => unreachable!(),
+    }
 }
 
 pub fn lower_signal_drive_header(

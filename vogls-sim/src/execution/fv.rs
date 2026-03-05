@@ -47,7 +47,7 @@ pub(crate) fn exec_fv_unary(stack: &mut Heap, dst: HeapOffset, op: UnaryOp, src:
             fv_leu32_bitwise_inv(dst_s, src_s, src.size)
         }
 
-        O::ReduceOr | O::ReduceAnd | O::ReduceXor | O::ContainsX
+        O::ReduceOr | O::ReduceAnd | O::ReduceXor
             if src.size >= Heap::FV_U64_MIN_SIZE =>
         {
             let nwords = 2 * src.size.get().div_ceil(64) as usize;
@@ -57,19 +57,17 @@ pub(crate) fn exec_fv_unary(stack: &mut Heap, dst: HeapOffset, op: UnaryOp, src:
                 O::ReduceOr => fv_l_reduce_or,
                 O::ReduceAnd => fv_l_reduce_and,
                 O::ReduceXor => fv_l_reduce_xor,
-                O::ContainsX => fv_l_contains_unknown,
             };
             let result = f(src_s, src.size);
             stack.set_fv_scalar(dst, result);
         }
-        O::ReduceOr | O::ReduceAnd | O::ReduceXor | O::ContainsX => {
+        O::ReduceOr | O::ReduceAnd | O::ReduceXor => {
             let src_s = stack.get(src.to_fv_size());
             let f = match op {
                 O::Neg => unreachable!(),
                 O::ReduceOr => fv_s_reduce_or,
                 O::ReduceAnd => fv_s_reduce_and,
                 O::ReduceXor => fv_s_reduce_xor,
-                O::ContainsX => fv_s_contains_unknown,
             };
             let result = f(src_s.as_slice(), src.size);
             stack.set_fv_scalar(dst, result);

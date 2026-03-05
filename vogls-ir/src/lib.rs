@@ -261,8 +261,6 @@ pub enum UnaryOp {
     ReduceOr,
     ReduceAnd,
     ReduceXor,
-
-    ContainsX,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -485,7 +483,6 @@ impl UnaryOp {
             O::ReduceOr => Bits::from(src.reduce_or()),
             O::ReduceAnd => Bits::from(src.reduce_and()),
             O::ReduceXor => Bits::from(src.reduce_xor()),
-            O::ContainsX => Bits::from(src.contains_unknown()),
         }
     }
 }

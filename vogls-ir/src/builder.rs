@@ -1020,10 +1020,4 @@ impl BasicBlockBuilder {
         let t = self.and(gl, before, t);
         self.reduce_or(gl, t)
     }
-
-    pub fn contains_x(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
-        let dst = self.next_tmp_var(gl, SCALAR_VSIZE);
-        self.unary_op(gl, src, UnaryOp::ContainsX, dst);
-        dst
-    }
 }

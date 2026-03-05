@@ -96,8 +96,80 @@ pub fn cgc_zero_extend(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Resu
             )?;
         }
 
+        (LogicMode::FourValue, None, None) => {
+            let dst_elem_ty = dst.ty.element_type();
+            let src_val_mask = mask(src.ty.size.get());
+            let src_spc_mask = src_val_mask << src.ty.size.get();
+            let ext_mask = mask(dst.ty.size.get() - src.ty.size.get())
+                << (dst.ty.size.get() + src.ty.size.get());
+            writeln!(
+                f,
+                "{INDENT}{d} = (((({dst_elem_ty}){s}) & 0x{src_spc_mask:x}) << {diff_size}) | ((({dst_elem_ty}){s}) & 0x{src_val_mask:x}) | 0x{ext_mask:x};",
+                diff_size = dst.ty.size.get() - src.ty.size.get(),
+            )?
+        }
+        (LogicMode::FourValue, Some(dst_arr_size), None) => {
+            let src_val_mask = mask(src.ty.size.get());
+            let src_spc_mask = src_val_mask << src.ty.size.get();
+            let ext_mask = mask(dst.ty.size.get().min(64) - src.ty.size.get()) << src.ty.size.get();
+            let num_words = dst_arr_size / 2;
+            writeln!(
+                f,
+                "{INDENT}{d}[0] = ((((uint64_t){s}) & 0x{src_spc_mask:x}) >> {ssize}) | 0x{ext_mask:x};",
+                ssize = src.ty.size,
+            )?;
+            writeln!(
+                f,
+                "{INDENT}{d}[{num_words}] = ((uint64_t){s}) & 0x{src_val_mask:x};"
+            )?;
+            if num_words > 1 {
+                writeln!(
+                    f,
+                    "{INDENT}for (int i = 1; i < {num_words}; ++i) {{ {d}[i] = ~0; {d}[{num_words}+i] = 0; }}"
+                )?;
+                if dst.ty.size.get() % 64 != 0 {
+                    let last_i = dst_arr_size - 1;
+                    let mask = mask(dst.ty.size.get() % 64);
+                    writeln!(f, "{INDENT}d[{last_i}] = 0x{mask:x};")?;
+                }
+            }
+        }
+        (LogicMode::FourValue, Some(dst_arr_size), Some(src_arr_size)) => {
+            let src_num_words = src_arr_size / 2;
+            let dst_num_words = dst_arr_size / 2;
+            writeln!(
+                f,
+                "{INDENT}memmove({d}, {s}, {src_num_words}*sizeof(uint64_t));"
+            )?;
+            writeln!(
+                f,
+                "{INDENT}memmove({d}+{dst_num_words}, {s}+{src_num_words}, {src_num_words}*sizeof(uint64_t));"
+            )?;
+            if src.ty.size.get() % 64 != 0 {
+                let ext_mask = mask((dst.ty.size.get() - src.ty.size.get()).min(63))
+                    << (src.ty.size.get() % 64);
+                writeln!(f, "{INDENT}{d}[{src_num_words} - 1] |= 0x{ext_mask:x};")?;
+            }
+            if src_arr_size > dst_arr_size {
+                let diff_num_words = dst_arr_size - src_arr_size;
+                let sum_num_words = dst_arr_size + src_arr_size;
+                writeln!(
+                    f,
+                    "{INDENT}memset({d}+{src_num_words}, 0xFF, {diff_num_words}*sizeof(uint64_t));"
+                )?;
+                if dst.ty.size.get() % 64 != 0 {
+                    let last_i = dst_arr_size - 1;
+                    let mask = mask(dst.ty.size.get() % 64);
+                    writeln!(f, "{INDENT}{d}[{last_i} = 0x{mask:x};")?;
+                }
+                writeln!(
+                    f,
+                    "{INDENT}memset({d}+{sum_num_words}, 0, {diff_num_words}*sizeof(uint64_t));"
+                )?;
+            }
+        }
+
         (_, None, Some(_)) => unreachable!(),
-        (LogicMode::FourValue, _, _) => todo!(),
     }
 
     Ok(())

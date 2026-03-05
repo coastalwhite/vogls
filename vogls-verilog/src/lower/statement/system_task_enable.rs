@@ -79,9 +79,9 @@ pub fn lower_system_task_enable<'a>(
             let (lhs, _, rhs, _) =
                 expression::coerce_bin_arithmetic(gl, &mut builder, lhs, lhs_ty, rhs, rhs_ty);
             let (condition, content) = if ident == "vogls_assert_eq" {
-                (builder.equals(gl, lhs, rhs), "Assertion failed.  != \n")
+                (builder.case_equals(gl, lhs, rhs), "Assertion failed.  != \n")
             } else {
-                (builder.not_equals(gl, lhs, rhs), "Assertion failed.  == \n")
+                (builder.not_case_equals(gl, lhs, rhs), "Assertion failed.  == \n")
             };
             let format_str = DynFormatString::new(
                 content.into(),

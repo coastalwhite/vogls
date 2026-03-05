@@ -30,7 +30,25 @@ pub fn cgc_negate(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Result<()
                 i = arr_size - 1
             )?;
         }
-        (LogicMode::FourValue, _) => todo!(),
+        // (spc, val) -> (spc, spc & !val)
+        (LogicMode::FourValue, None) => {
+            let inv_mask = !msbs_mask;
+            writeln!(
+                f,
+                "{INDENT}{d} = ({s} & 0x{inv_mask:x}) | (({s} >> {size}) & ~{s});"
+            )?;
+        }
+        (LogicMode::FourValue, Some(arr_size)) => {
+            let num_words = arr_size / 2;
+            writeln!(
+                f,
+                "{INDENT}memmove({d}, {s}, {num_words}*sizeof(uint64_t));"
+            )?;
+            writeln!(
+                f,
+                "{INDENT}for (int i = 0; i < {num_words}; ++i) {d}[{num_words}+i] = {s}[i] & ~{s}[{num_words}+i];"
+            )?;
+        }
     }
 
     Ok(())

@@ -55,9 +55,6 @@ impl vogls_sim::InstructionPlugin for InstructionTracer {
                         tsrc.iter().filter_map(|e| e.as_ref().cloned()).collect(),
                     )))]
                     .into(),
-
-                    // @TODO: Pessismistic
-                    UnaryOp::ContainsX => return,
                 };
                 self.tracked.insert(*dst, tdst);
             }

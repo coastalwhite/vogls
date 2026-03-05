@@ -41,7 +41,6 @@ pub(crate) fn exec_tv_unary(stack: &mut Heap, dst: HeapOffset, op: UnaryOp, src:
                 .sum::<u32>();
             stack.set_tv_bool(dst, result % 2 == 1);
         }
-        O::ContainsX => stack.set_tv_bool(dst, false),
     }
 }
 

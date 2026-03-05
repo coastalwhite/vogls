@@ -263,9 +263,9 @@ pub fn cgc_concat(f: &mut impl io::Write, dst: CVar, lhs: CVar, rhs: CVar) -> io
                             shift = 64 - rhs.ty.size.get()
                         )?
                     }
-                    (Some(l), None) => {}
-                    (None, Some(r)) => {}
-                    (Some(l), Some(r)) => {}
+                    (Some(l), None) => todo!(),
+                    (None, Some(r)) => todo!(),
+                    (Some(l), Some(r)) => todo!(),
                 }
             }
         }
@@ -324,13 +324,12 @@ pub fn cgc_bin_max(f: &mut impl io::Write, dst: CVar, lhs: CVar, rhs: CVar) -> i
 
 pub fn cgc_case_eq(f: &mut impl io::Write, dst: CIdent, lhs: CVar, rhs: CVar) -> io::Result<()> {
     let (d, l, r) = (dst, lhs.ident, rhs.ident);
-    match (lhs.ty.mode, lhs.ty.array_size()) {
-        (LogicMode::TwoValue, None) => writeln!(f, "{INDENT}{d} = (uint8_t)({l} == {r});")?,
-        (LogicMode::TwoValue, Some(arr_size)) => writeln!(
+    match lhs.ty.array_size() {
+        None => writeln!(f, "{INDENT}{d} = (uint8_t)({l} == {r});")?,
+        Some(arr_size) => writeln!(
             f,
             "{INDENT}{d} = 1; for (int i = 0; i < {arr_size}; ++i) {d} &= {l}[i] == {r}[i];"
         )?,
-        (LogicMode::FourValue, _) => todo!(),
     }
 
     Ok(())

@@ -487,6 +487,8 @@ pub fn fv_leu32_bitwise_inv(dst: &mut [u8], src: &[u8], size: VectorSize) {
 pub fn fv_gtu32_bitwise_inv(dst: &mut [u64], src: &[u64], size: VectorSize) {
     assert!(dst.len() == src.len() && dst.len() == 2 * size.get().div_ceil(64) as usize);
     let nwords = dst.len() / 2;
+    // @NOTE: We don't have to mask out the most significant bits because the inverted value of
+    // unknown is unknown.
     for i in 0..nwords {
         (dst[i], dst[nwords + i]) = fv_bitwise_inv_elem(src[i], src[nwords + i]);
     }
