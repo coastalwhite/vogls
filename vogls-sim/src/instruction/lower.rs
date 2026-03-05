@@ -96,7 +96,7 @@ pub fn lower_process_to_vm(
 
         for instr in &bb.instrs {
             let instr = match instr {
-                I::Constant(d, value) => VI::Constant(var!(*d), value.clone()),
+                I::Constant(d, value) => VI::Constant(var!(*d), value.clone_lowering_mode()),
 
                 I::Unary(d, op, s) => {
                     let size = gl.vars[*s].size;

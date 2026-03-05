@@ -31,7 +31,7 @@ pub fn cgc_truncate(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Result<
     let msbs_mask = if dst.ty.size.get() % 64 == 0 {
         u64::MAX
     } else {
-        (1u64 << dst.ty.size.get()) - 1
+        (1u64 << (dst.ty.size.get() % 64)) - 1
     };
 
     let (d, s) = (dst.ident, src.ident);
@@ -46,7 +46,6 @@ pub fn cgc_truncate(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Result<
             "{INDENT}{d} = ({})({s}[0] & 0x{msbs_mask:x});",
             dst.ty.element_type()
         )?,
-        (LogicMode::TwoValue, Some(_), None) => unreachable!(),
         (LogicMode::TwoValue, Some(dst_arr_size), Some(_)) => {
             writeln!(
                 f,
@@ -59,7 +58,57 @@ pub fn cgc_truncate(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Result<
                 i = dst_arr_size - 1
             )?;
         }
-        (LogicMode::FourValue, _, _) => todo!(),
+        (LogicMode::FourValue, None, None) => {
+            let spc_mask = msbs_mask;
+            let val_mask = msbs_mask << dst.ty.size.get();
+            writeln!(
+                f,
+                "{INDENT}{d} = ({dst_ty_elem})({s} & 0x{spc_mask:x}) | ({dst_ty_elem})(({s} >> {shift}) & 0x{val_mask:x});",
+                dst_ty_elem = dst.ty.element_type(),
+                shift = src.ty.size.get() - dst.ty.size.get(),
+            )?
+        }
+        (LogicMode::FourValue, None, Some(arr_size)) => {
+            let num_words = arr_size / 2;
+            writeln!(
+                f,
+                "{INDENT}{d} = ({dst_ty_elem})({s}[0] & 0x{msbs_mask:x}) | ({dst_ty_elem})(({s}[{num_words}] & 0x{msbs_mask:x}) << {shift});",
+                dst_ty_elem = dst.ty.element_type(),
+                shift = dst.ty.size.get(),
+            )?
+        }
+        (LogicMode::FourValue, Some(dst_arr_size), Some(src_arr_size)) => {
+            let dst_num_words = dst_arr_size / 2;
+            let src_num_words = src_arr_size / 2;
+
+            let num_copy_words = if dst.ty.size.get() % 64 == 0 {
+                dst_num_words
+            } else {
+                dst_num_words - 1
+            };
+            if num_copy_words > 0 {
+                writeln!(
+                    f,
+                    "{INDENT}memmove({d}, {s}, {num_copy_words}*sizeof(uint64_t));"
+                )?;
+                writeln!(
+                    f,
+                    "{INDENT}memmove({d}+{dst_num_words}, {s}+{src_num_words}, {num_copy_words}*sizeof(uint64_t));"
+                )?;
+            }
+            if dst.ty.size.get() % 64 != 0 {
+                let spc_i = dst_num_words - 1;
+                let dst_val_i = dst_arr_size - 1;
+                let src_val_i = src_num_words + spc_i;
+                writeln!(f, "{INDENT}{d}[{spc_i}] = {s}[{spc_i}] & 0x{msbs_mask:x};")?;
+                writeln!(
+                    f,
+                    "{INDENT}{d}[{dst_val_i}] = {s}[{src_val_i}] & 0x{msbs_mask:x};"
+                )?;
+            }
+        }
+
+        (_, Some(_), None) => unreachable!(),
     }
 
     Ok(())

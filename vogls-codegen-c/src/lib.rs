@@ -331,7 +331,7 @@ pub fn lower_process(
                                 buffer,
                                 "{INDENT}{} = 0x{:x};",
                                 t.ident,
-                                (spc << bits.size().get()) | val
+                                (val << bits.size().get()) | spc
                             )?;
                         }
                         (Some(arr_size), LogicMode::TwoValue) => {
@@ -340,15 +340,16 @@ pub fn lower_process(
                                     buffer,
                                     "{INDENT}{}[{i}] = 0x{};",
                                     t.ident,
-                                    bits.slice(i * 64, VectorSize::new(64).unwrap())
-                                        .display(&BitsFormatOptions {
+                                    bits.slice(i * 64, VectorSize::new(64).unwrap()).display(
+                                        &BitsFormatOptions {
                                             prefix: false,
                                             base: BitsFormatBase::UpperHex,
                                             separator: None,
                                             align: None,
                                             fill: '0',
                                             width: BitsFormatWidth::Shrink,
-                                        })
+                                        }
+                                    )
                                 )?;
                             }
                         }
@@ -514,7 +515,10 @@ pub fn lower_process(
                         writeln!(buffer, "{INDENT}heap[{heap_idx}] = time;")?;
                     }
                     vogls_ir::IntrinsicOp::Finish => {
-                        writeln!(buffer, "{INDENT}printf(\"[FINISH]\\n\"); cldctx->exit = 1;")?;
+                        writeln!(
+                            buffer,
+                            "{INDENT}printf(\"[FINISH]\\n\"); cldctx->exit = 1; return;"
+                        )?;
                     }
                     vogls_ir::IntrinsicOp::Random => todo!(),
                     vogls_ir::IntrinsicOp::Display(dyn_format_string) => {
@@ -793,14 +797,17 @@ fn lower_dyn_format_str(
         if arg.ty.is_array() {
             write!(
                 f,
-                r#"(bits_ref_t){{ .size={}, .ptr={} }}, "#,
-                arg.ty.size, arg.ident
+                r#"(bits_ref_t){{ .size={}, .mode={}, .ptr={} }}, "#,
+                arg.ty.size,
+                u8::from(arg.ty.mode == LogicMode::FourValue),
+                arg.ident
             )?;
         } else {
             write!(
                 f,
-                r#"(bits_ref_t){{ .size={}, .ptr=&arg{i} }}, "#,
-                arg.ty.size
+                r#"(bits_ref_t){{ .size={}, .mode={}, .ptr=&arg{i} }}, "#,
+                arg.ty.size,
+                u8::from(arg.ty.mode == LogicMode::FourValue)
             )?;
         }
     }
@@ -851,18 +858,16 @@ fn store(f: &mut impl io::Write, heap_offset: HeapOffset, t: CVar) -> io::Result
             let word = heap_offset.bit_offset / 64;
             let shift = heap_offset.bit_offset % 64;
             let num_bits = t.ty.num_bits();
-            let mask = if num_bits == 64 {
-                assert_eq!(shift, 0);
-                u64::MAX
+            if num_bits == 64 {
+                writeln!(f, "{INDENT}heap[{word}] = {t};", t = t.ident)
             } else {
-                !(((1u64 << num_bits) - 1) << shift)
-            };
-
-            writeln!(
-                f,
-                "{INDENT}heap[{word}] = (heap[{word}] & 0x{mask:x}) | ((uint64_t){t} << {shift});",
-                t = t.ident
-            )
+                let mask = !(((1u64 << num_bits) - 1) << shift);
+                writeln!(
+                    f,
+                    "{INDENT}heap[{word}] = (heap[{word}] & 0x{mask:x}) | ((uint64_t){t} << {shift});",
+                    t = t.ident
+                )
+            }
         }
         Some(arr_size) => {
             let word = heap_offset.bit_offset / 64;
@@ -971,8 +976,8 @@ fn store_slice(f: &mut impl io::Write, dst: HeapRef, offset: CVar, src: CVar) ->
 fn convert(
     f: &mut impl io::Write,
     size: VectorSize,
-    msrc: LogicMode,
     mdst: LogicMode,
+    msrc: LogicMode,
     dst: CIdent,
     src: CIdent,
 ) -> io::Result<()> {
@@ -985,41 +990,53 @@ fn convert(
         mask(size.get() % 64)
     };
     match (mdst, msrc, dst_ty.array_size(), src_ty.array_size()) {
-        (M::TwoValue, M::FourValue, None, None) => writeln!(
-            f,
-            "{INDENT}{dst} = (({dst_elem_ty}){src}) | 0x{mask:x};",
-            dst_elem_ty = dst_ty.element_type(),
-            mask = msbw_mask << size.get()
-        ),
-        (M::TwoValue, M::FourValue, None, Some(_)) => {
+        (M::FourValue, M::TwoValue, None, None) => {
+            writeln!(
+                f,
+                "{INDENT}{dst} = ((({dst_elem_ty}){src}) << {size}) | 0x{mask:x};",
+                dst_elem_ty = dst_ty.element_type(),
+                mask = msbw_mask
+            )
+        }
+        (M::FourValue, M::TwoValue, Some(_), None) => {
             writeln!(
                 f,
                 "{INDENT}{dst}[0] = 0x{msbw_mask:x}; {dst}[1] = (uint64_t){src};"
             )
         }
-        (M::TwoValue, M::FourValue, Some(arr_size), Some(_)) => {
-            writeln!(
-                f,
-                "{INDENT}for (int i = 0; i < {arr_size}; ++i) {{ {dst}[i] = ~0; {dst}[{arr_size}+i] = {src}[i]; }} dst[{last_i}] = 0x{msbw_mask:x};",
-                last_i = 2 * arr_size - 1,
-            )
+        (M::FourValue, M::TwoValue, Some(_), Some(arr_size)) => {
+            let main_loop_size = if size.get() % 64 == 0 {
+                arr_size
+            } else {
+                arr_size - 1
+            };
+            if main_loop_size > 0 {
+                writeln!(f, "{INDENT}memset({dst}, 0xFF, {main_loop_size}*sizeof(uint64_t));")?;
+                writeln!(f, "{INDENT}memmove({dst}+{arr_size}, {src}, {main_loop_size}*sizeof(uint64_t));")?;
+            }
+            if size.get() % 64 != 0 {
+                let last_i = 2 * arr_size - 1;
+                writeln!(f, "{INDENT}{dst}[{main_loop_size}] = 0x{msbw_mask:x};")?;
+                writeln!(f, "{INDENT}{dst}[{last_i}] = {src}[{main_loop_size}];")?;
+            }
+            Ok(())
         }
 
-        (M::FourValue, M::TwoValue, None, None) => {
+        (M::TwoValue, M::FourValue, None, None) => {
             writeln!(
                 f,
-                "{INDENT}{dst} = ({dst_elem_ty})({src}) & 0x{msbw_mask:x};",
+                "{INDENT}{dst} = ({dst_elem_ty})({src} >> {size});",
                 dst_elem_ty = dst_ty.element_type(),
             )
         }
-        (M::FourValue, M::TwoValue, Some(_), None) => {
+        (M::TwoValue, M::FourValue, None, Some(_)) => {
             writeln!(
                 f,
                 "{INDENT}{dst} = ({dst_elem_ty}){src}[1];",
                 dst_elem_ty = dst_ty.element_type(),
             )
         }
-        (M::FourValue, M::TwoValue, Some(arr_size), Some(_)) => {
+        (M::TwoValue, M::FourValue, Some(arr_size), Some(_)) => {
             writeln!(
                 f,
                 "{INDENT}memmove({dst}, {src} + {arr_size}, {arr_size} * sizeof(uint64_t));"
@@ -1133,6 +1150,7 @@ pub fn prologue(f: &mut impl io::Write) -> io::Result<()> {
 
 typedef struct bits_ref {
     uint32_t size;
+    uint8_t mode;
     uint64_t* ptr;
 } bits_ref_t;
 

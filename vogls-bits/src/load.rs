@@ -5,7 +5,8 @@ pub fn load_full_u32(slice: &[u8]) -> u32 {
 }
 
 pub fn load_partial_u64(slice: &[u8], size: VectorSize) -> u64 {
-    assert!(size.get() <= 64 && slice.len() >= size.get().div_ceil(8) as usize);
+    assert!(size.get() <= 64);
+    assert!(slice.len() >= size.get().div_ceil(8) as usize);
     if slice.len() >= 8 {
         return u64::from_le_bytes(slice[..8].try_into().unwrap());
     }

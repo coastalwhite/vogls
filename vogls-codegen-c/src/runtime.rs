@@ -1,5 +1,5 @@
-use std::ffi::{c_int, c_void};
-use std::ops::{Deref as _, DerefMut};
+use std::ffi::c_int;
+use std::ops::Deref as _;
 use std::path::Path;
 use std::ptr::NonNull;
 
@@ -26,6 +26,7 @@ type StartupFn = extern "C" fn(
 #[repr(C)]
 pub struct BitsRefT {
     size: u32,
+    mode: u8,
     ptr: NonNull<u64>,
 }
 
@@ -230,13 +231,28 @@ extern "C" fn fmt(
     mut dyn_fmt: NonNull<DynFormatString>,
     bits: *const BitsRefT,
 ) {
+    // @TODO: Catch unwind
     let file = unsafe { file.as_mut() };
     let dyn_fmt = unsafe { dyn_fmt.as_mut() };
     let args = (0..dyn_fmt.arguments().len()).map(|i| {
         let ref_t = unsafe { bits.add(i).as_ref() }.unwrap();
         let size = VectorSize::new(ref_t.size).unwrap();
-        if size.get() <= 64 {
+        if ref_t.mode == 0 && size.get() <= 64 {
             Bits::from_u64(size, *unsafe { ref_t.ptr.as_ref() })
+        } else if ref_t.mode == 1 && size.get() <= 32 {
+            Bits::from_four_value_u64(
+                size,
+                *unsafe { ref_t.ptr.as_ref() } as u32,
+                (*unsafe { ref_t.ptr.as_ref() } >> size.get()) as u32,
+            )
+        } else if ref_t.mode == 1 {
+            Bits::from_boxed_slice(
+                vogls_ir::Mode::FourValue,
+                size,
+                (0..2 * size.get().div_ceil(64))
+                    .map(|j| *unsafe { ref_t.ptr.add(j as usize).as_ref() })
+                    .collect(),
+            )
         } else {
             Bits::from_boxed_slice(
                 vogls_ir::Mode::TwoValue,

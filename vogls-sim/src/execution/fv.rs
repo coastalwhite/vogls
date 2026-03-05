@@ -47,9 +47,7 @@ pub(crate) fn exec_fv_unary(stack: &mut Heap, dst: HeapOffset, op: UnaryOp, src:
             fv_leu32_bitwise_inv(dst_s, src_s, src.size)
         }
 
-        O::ReduceOr | O::ReduceAnd | O::ReduceXor
-            if src.size >= Heap::FV_U64_MIN_SIZE =>
-        {
+        O::ReduceOr | O::ReduceAnd | O::ReduceXor if src.size >= Heap::FV_U64_MIN_SIZE => {
             let nwords = 2 * src.size.get().div_ceil(64) as usize;
             let src_s = stack.get_u64_slice(src.offset, nwords);
             let f = match op {
@@ -91,7 +89,9 @@ pub(crate) fn exec_fv_resize(stack: &mut Heap, dst: HeapRef, op: ResizeOp, src: 
             f(&mut dst_s, &[src_s], dst.size, src.size);
             stack.set_aligned_raw_bits(dst.to_fv_size(), dst_s[0]);
         }
-        O::Truncate if dst.size <= Heap::FV_SUBBITS_MAX_SIZE => {
+        O::Truncate
+            if src.size < Heap::FV_U64_MIN_SIZE && dst.size <= Heap::FV_SUBBITS_MAX_SIZE =>
+        {
             let src_s = stack.get(src.to_fv_size());
             let src_s = src_s.as_slice();
             let mut dst_s = [0];

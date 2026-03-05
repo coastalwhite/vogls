@@ -305,7 +305,7 @@ impl Bits {
         let mask = 1u32.unbounded_shl(size.get()).wrapping_sub(1);
         let special = special & mask;
         let value = value & mask;
-        let inline = ((special as u64) << 32) | value as u64;
+        let inline = ((value as u64) << 32) | special as u64;
 
         // SAFETY:
         // - size <= MAX_INLINE_SIZE
@@ -534,7 +534,7 @@ impl Bits {
             (Mode::TwoValue, true) => BitsDataRef::InlineTv(unsafe { self.data.inline }),
             (Mode::FourValue, true) => {
                 let inline = unsafe { self.data.inline };
-                BitsDataRef::InlineFv(inline >> 32, inline & 0xFFFF_FFFF)
+                BitsDataRef::InlineFv(inline & 0xFFFF_FFFF, inline >> 32)
             }
             (Mode::TwoValue, false) => BitsDataRef::SeparateTv(self.as_u64_slice()),
             (Mode::FourValue, false) => BitsDataRef::SeparateFv(self.as_u64_slice()),
@@ -1262,6 +1262,23 @@ impl Bits {
     }
     pub fn parse_hexadecimal(s: &str, size: VectorSize) -> Result<Bits, ()> {
         parse::parse_bits_hexadecimal(s, size)
+    }
+
+    /// Clone a bits and lower the mode to two value if possible.
+    pub fn clone_lowering_mode(&self) -> Bits {
+        match self.as_data_ref() {
+            BitsDataRef::InlineTv(_) | BitsDataRef::SeparateTv(_) => self.clone(),
+            BitsDataRef::InlineFv(_, _) | BitsDataRef::SeparateFv(_) if self.contains_special() => {
+                self.clone()
+            }
+            BitsDataRef::InlineFv(_, val) => Self::from_u64(self.size(), val),
+            BitsDataRef::SeparateFv(items) if self.size() <= Mode::TwoValue.max_inline_size() => {
+                Self::from_u64(self.size(), items[items.len() / 2])
+            }
+            BitsDataRef::SeparateFv(items) => {
+                Self::from_boxed_slice(Mode::TwoValue, self.size(), items.into())
+            }
+        }
     }
 }
 

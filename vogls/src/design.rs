@@ -654,6 +654,7 @@ impl Design {
                     "-g3",
                     "-fPIC",
                     "-O2",
+                    // "t2.c",
                     "-",
                     "-shared",
                     "-o",

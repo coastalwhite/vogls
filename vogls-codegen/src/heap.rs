@@ -124,10 +124,10 @@ impl<'a> HeapSlice<'a> {
 
 impl Heap {
     pub const TV_SUBBITS_MAX_SIZE: VectorSize = VectorSize::new(4).unwrap();
-    pub const TV_U64_MIN_SIZE: VectorSize = VectorSize::new(33).unwrap();
+    pub const TV_U64_MIN_SIZE: VectorSize = VectorSize::new(65).unwrap();
 
     pub const FV_SUBBITS_MAX_SIZE: VectorSize = VectorSize::new(2).unwrap();
-    pub const FV_U64_MIN_SIZE: VectorSize = VectorSize::new(17).unwrap();
+    pub const FV_U64_MIN_SIZE: VectorSize = VectorSize::new(33).unwrap();
 
     pub fn get_subbit_byte<'a>(&'a self, at: HeapRef) -> u8 {
         debug_assert!(at.size <= Self::TV_SUBBITS_MAX_SIZE);
@@ -325,7 +325,7 @@ impl Heap {
         Bits::load_from_slice(self.get(at).as_slice(), at.size)
     }
     pub fn load_fv_bits(&self, at: HeapRef) -> Bits {
-        if at.size < Self::TV_U64_MIN_SIZE {
+        if at.size < Self::FV_U64_MIN_SIZE {
             let (spc, val) = self.get_fv_u64(at);
             Bits::from_four_value_u64(at.size, spc as u32, val as u32)
         } else {

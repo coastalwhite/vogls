@@ -468,11 +468,11 @@ pub fn fv_s_contains_unknown(src: &[u8], size: VectorSize) -> bool {
 
 pub fn fv_unpack_u64(v: u64, size: VectorSize) -> (u64, u64) {
     debug_assert!(size.get() <= 32);
-    (v >> size.get(), v & ((1u64 << size.get()) - 1))
+    (v & ((1u64 << size.get()) - 1), v >> size.get())
 }
 pub fn fv_pack_u64(spc: u64, value: u64, size: VectorSize) -> u64 {
     debug_assert!(size.get() <= 32);
-    (spc << size.get()) | value
+    (value << size.get()) | spc
 }
 
 pub fn fv_leu32_bitwise_inv(dst: &mut [u8], src: &[u8], size: VectorSize) {
