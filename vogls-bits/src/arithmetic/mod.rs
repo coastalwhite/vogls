@@ -407,7 +407,7 @@ pub fn fv_reduce_xor_elem(spc: u64, value: u64, size: VectorSize) -> FvLogicValu
 
     let mask = 1u64.unbounded_shl(size.get()).wrapping_sub(1);
     let z1 = spc == mask;
-    let z0 = z1 & ((spc & value).count_ones() % 2 == 1);
+    let z0 = z1 & (value.count_ones() % 2 == 1);
     FvLogicValue::from_repr((u8::from(z1) << 1) | u8::from(z0))
 }
 

@@ -1,44 +1,103 @@
 module tb();
     initial begin
-        // $vogls_assert_eq(^8'b0000_0000, 0);
-        // $vogls_assert_eq(^8'b0000_0001, 1);
-        // $vogls_assert_eq(^8'b1000_0001, 0);
-        // $vogls_assert_eq(^8'b1001_1001, 0);
-        // $vogls_assert_eq(^8'b1011_1111, 1);
-        // $vogls_assert_eq(^8'b1111_1111, 0);
-        // $vogls_assert_eq(^9'b1111_1111, 0);
-        // $vogls_assert_eq(^9'b1_1111_1111, 1);
-        // $vogls_assert_eq(^9'b0_0000_0000, 0);
-        // $vogls_assert_eq(^129'h0_89ABCDEF_12345678_A37BF258_12398791, 0);
+        $vogls_assert_eq(^8'b0000_0000, 0);
+        $vogls_assert_eq(^8'b0000_0001, 1);
+        $vogls_assert_eq(^8'b1000_0001, 0);
+        $vogls_assert_eq(^8'b1001_1001, 0);
+        $vogls_assert_eq(^8'b1011_1111, 1);
+        $vogls_assert_eq(^8'b1111_1111, 0);
+        $vogls_assert_eq(^9'b1111_1111, 0);
+        $vogls_assert_eq(^9'b1_1111_1111, 1);
+        $vogls_assert_eq(^9'b0_0000_0000, 0);
+        $vogls_assert_eq(^128'h89ABCDEF_12345678_A37BF258_12398791, 0);
+        $vogls_assert_eq(^128'h89ABCDEF_13345678_A37BF258_12398791, 1);
+        $vogls_assert_eq(^128'h0000000_00000000_00000000_00000000, 0);
+        $vogls_assert_eq(^129'h0_89ABCDEF_12345678_A37BF258_12398791, 0);
         $vogls_assert_eq(^129'h0_89ABCDEF_13345678_A37BF258_12398791, 1);
-        // $vogls_assert_eq(^129'h0_0000000_00000000_00000000_00000000, 0);
-        //
-        // $vogls_assert_eq(|8'b0000_0000, 0);
-        // $vogls_assert_eq(|8'b0000_0001, 1);
-        // $vogls_assert_eq(|8'b1000_0001, 1);
-        // $vogls_assert_eq(|8'b1001_1001, 1);
-        // $vogls_assert_eq(|8'b1011_1111, 1);
-        // $vogls_assert_eq(|8'b1111_1111, 1);
-        // $vogls_assert_eq(|9'b1111_1111, 1);
-        // $vogls_assert_eq(|9'b1_1111_1111, 1);
-        // $vogls_assert_eq(|9'b0_0000_0000, 0);
-        // $vogls_assert_eq(|129'h0_89ABCDEF_12345678_A37BF258_12398791, 1);
-        // $vogls_assert_eq(|129'h0_89ABCDEF_13345678_A37BF258_12398791, 1);
-        // $vogls_assert_eq(|129'h0_00000000_00000000_00000000_00000000, 0);
-        // $vogls_assert_eq(|129'h1_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF, 1);
-        //
-        // $vogls_assert_eq(&8'b0000_0000, 0);
-        // $vogls_assert_eq(&8'b0000_0001, 0);
-        // $vogls_assert_eq(&8'b1000_0001, 0);
-        // $vogls_assert_eq(&8'b1001_1001, 0);
-        // $vogls_assert_eq(&8'b1011_1111, 0);
-        // $vogls_assert_eq(&8'b1111_1111, 1);
-        // $vogls_assert_eq(&9'b1111_1111, 0);
-        // $vogls_assert_eq(&9'b1_1111_1111, 1);
-        // $vogls_assert_eq(&9'b0_0000_0000, 0);
-        // $vogls_assert_eq(&129'h0_89ABCDEF_12345678_A37BF258_12398791, 0);
-        // $vogls_assert_eq(&129'h0_89ABCDEF_13345678_A37BF258_12398791, 0);
-        // $vogls_assert_eq(&129'h0_00000000_00000000_00000000_00000000, 0);
-        // $vogls_assert_eq(&129'h1_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF, 1);
+        $vogls_assert_eq(^129'h0_0000000_00000000_00000000_00000000, 0);
+        $vogls_assert_eq(^129'h1_0000000_00000000_00000000_00000000, 1);
+`ifndef __VOGLS__TWO_VALUE_LOGIC
+        $vogls_assert_eq(^1'bx, 1'bx);
+        $vogls_assert_eq(^8'b000x_0000, 1'bx);
+        $vogls_assert_eq(^8'b000z_0000, 1'bx);
+        $vogls_assert_eq(^8'bxxxx_xxxx, 1'bx);
+        $vogls_assert_eq(^8'b010x_0000, 1'bx);
+        $vogls_assert_eq(^9'b0000_000x, 1'bx);
+        $vogls_assert_eq(^9'b0z0x_0010, 1'bx);
+        $vogls_assert_eq(^128'h00000000_00000000_00000000_0000x000, 1'bx);
+        $vogls_assert_eq(^128'h01000000_00000000_00000000_0000x000, 1'bx);
+        $vogls_assert_eq(^128'h0zzzzzz0_00000000_00000000_0000x000, 1'bx);
+        $vogls_assert_eq(^129'h0_00000000_00000000_00000000_0000x000, 1'bx);
+        $vogls_assert_eq(^129'h0_01000000_00000000_00000000_0000x000, 1'bx);
+        $vogls_assert_eq(^129'h0_0zzzzzz0_00000000_00000000_0000x000, 1'bx);
+        $vogls_assert_eq(^129'hx_00000000_00000000_00000000_00000000, 1'bx);
+`endif
+
+        $vogls_assert_eq(|8'b0000_0000, 0);
+        $vogls_assert_eq(|8'b0000_0001, 1);
+        $vogls_assert_eq(|8'b1000_0001, 1);
+        $vogls_assert_eq(|8'b1001_1001, 1);
+        $vogls_assert_eq(|8'b1011_1111, 1);
+        $vogls_assert_eq(|8'b1111_1111, 1);
+        $vogls_assert_eq(|9'b1111_1111, 1);
+        $vogls_assert_eq(|9'b1_1111_1111, 1);
+        $vogls_assert_eq(|9'b0_0000_0000, 0);
+        $vogls_assert_eq(|128'h89ABCDEF_12345678_A37BF258_12398791, 1);
+        $vogls_assert_eq(|128'h89ABCDEF_13345678_A37BF258_12398791, 1);
+        $vogls_assert_eq(|128'h00000000_00000000_00000000_00000000, 0);
+        $vogls_assert_eq(|128'hFFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF, 1);
+        $vogls_assert_eq(|129'h0_89ABCDEF_12345678_A37BF258_12398791, 1);
+        $vogls_assert_eq(|129'h0_89ABCDEF_13345678_A37BF258_12398791, 1);
+        $vogls_assert_eq(|129'h0_00000000_00000000_00000000_00000000, 0);
+        $vogls_assert_eq(|129'h1_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF, 1);
+`ifndef __VOGLS__TWO_VALUE_LOGIC
+        $vogls_assert_eq(|1'bx, 1'bx);
+        $vogls_assert_eq(|8'b000x_0000, 1'bx);
+        $vogls_assert_eq(|8'b000z_0000, 1'bx);
+        $vogls_assert_eq(|8'bxxxx_xxxx, 1'bx);
+        $vogls_assert_eq(|8'b010x_0000, 1);
+        $vogls_assert_eq(|9'b0000_000x, 1'bx);
+        $vogls_assert_eq(|9'b0z0x_0010, 1);
+        $vogls_assert_eq(|128'h00000000_00000000_00000000_0000x000, 1'bx);
+        $vogls_assert_eq(|128'h01000000_00000000_00000000_0000x000, 1);
+        $vogls_assert_eq(|128'h0zzzzzz0_00000000_00000000_0000x000, 1'bx);
+        $vogls_assert_eq(|129'h0_00000000_00000000_00000000_0000x000, 1'bx);
+        $vogls_assert_eq(|129'h0_01000000_00000000_00000000_0000x000, 1);
+        $vogls_assert_eq(|129'h0_0zzzzzz0_00000000_00000000_0000x000, 1'bx);
+        $vogls_assert_eq(|129'hx_00000000_00000000_00000000_00000000, 1'bx);
+`endif
+
+        $vogls_assert_eq(&8'b0000_0000, 0);
+        $vogls_assert_eq(&8'b0000_0001, 0);
+        $vogls_assert_eq(&8'b1000_0001, 0);
+        $vogls_assert_eq(&8'b1001_1001, 0);
+        $vogls_assert_eq(&8'b1011_1111, 0);
+        $vogls_assert_eq(&8'b1111_1111, 1);
+        $vogls_assert_eq(&9'b1111_1111, 0);
+        $vogls_assert_eq(&9'b1_1111_1111, 1);
+        $vogls_assert_eq(&9'b0_0000_0000, 0);
+        $vogls_assert_eq(&129'h0_89ABCDEF_12345678_A37BF258_12398791, 0);
+        $vogls_assert_eq(&129'h0_89ABCDEF_13345678_A37BF258_12398791, 0);
+        $vogls_assert_eq(&129'h0_00000000_00000000_00000000_00000000, 0);
+        $vogls_assert_eq(&129'h1_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF, 1);
+`ifndef __VOGLS__TWO_VALUE_LOGIC
+        $vogls_assert_eq(&1'bx, 1'bx);
+        $vogls_assert_eq(&8'b000x_0000, 1'b0);
+        $vogls_assert_eq(&8'b000z_0000, 1'b0);
+        $vogls_assert_eq(&8'bxxxx_xxxx, 1'bx);
+        $vogls_assert_eq(&8'b111x_1111, 1'bx);
+        $vogls_assert_eq(&8'b010x_0000, 1'b0);
+        $vogls_assert_eq(&9'b0000_000x, 1'b0);
+        $vogls_assert_eq(&9'b0z0x_0010, 1'b0);
+        $vogls_assert_eq(&9'b1111_111x, 1'bx);
+        $vogls_assert_eq(&128'h00000000_00000000_00000000_0000x000, 1'b0);
+        $vogls_assert_eq(&128'h01000000_00000000_00000000_0000x000, 1'b0);
+        $vogls_assert_eq(&128'hFFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFzFFF, 1'bx);
+        $vogls_assert_eq(&128'hFFxFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF, 1'bx);
+        $vogls_assert_eq(&129'hx_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF, 1'bx);
+        $vogls_assert_eq(&129'hx_FFFFFFFF_FFFFFFFF_FFFFFF0F_FFFFFFFF, 1'b0);
+        $vogls_assert_eq(&129'h1_FFFFFFFF_FFFFFFFF_FFFFFF0F_FFFFxFFF, 1'b0);
+        $vogls_assert_eq(&129'h1_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFxFFF, 1'bx);
+`endif
     end
 endmodule

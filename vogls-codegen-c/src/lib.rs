@@ -337,10 +337,10 @@ pub fn lower_process(
                         (Some(arr_size), LogicMode::TwoValue) => {
                             for i in 0..arr_size {
                                 writeln!(
-                                    f,
+                                    buffer,
                                     "{INDENT}{}[{i}] = 0x{};",
                                     t.ident,
-                                    bits.slice(i * arr_size, VectorSize::new(64).unwrap())
+                                    bits.slice(i * 64, VectorSize::new(64).unwrap())
                                         .display(&BitsFormatOptions {
                                             prefix: false,
                                             base: BitsFormatBase::UpperHex,
@@ -354,7 +354,7 @@ pub fn lower_process(
                         }
                         (Some(_), LogicMode::FourValue) => {
                             for (i, v) in bits.as_u64_slice().iter().enumerate() {
-                                writeln!(f, "{INDENT}{}[{i}] = 0x{v:x};", t.ident)?;
+                                writeln!(buffer, "{INDENT}{}[{i}] = 0x{v:x};", t.ident)?;
                             }
                         }
                     }

@@ -2,7 +2,7 @@ use std::io;
 
 use vogls_ir::{LogicMode, SCALAR_VSIZE};
 
-use crate::{CVar, INDENT};
+use crate::{CVar, INDENT, mask};
 
 pub fn cgc_negate(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Result<()> {
     assert_eq!(dst.ty.mode, src.ty.mode);
@@ -73,7 +73,56 @@ pub fn cgc_reduce_or(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Result
                 end = arr_size - 1
             )?;
         }
-        (LogicMode::FourValue, _) => todo!(),
+
+        // z0 = (spc & value) != 0
+        // z1 = (spc == mask) | z0
+        (LogicMode::FourValue, None) => {
+            let size = src.ty.size;
+            let spc_mask = mask(src.ty.size.get()) << size.get();
+            writeln!(f, "{INDENT}{{")?;
+            writeln!(
+                f,
+                "{INDENT}{INDENT}uint8_t z0 = (({s} >> {size}) & {s}) != 0;"
+            )?;
+            writeln!(
+                f,
+                "{INDENT}{INDENT}uint8_t z1 = (({s} == 0x{spc_mask:x}) != 0) | z0;"
+            )?;
+            writeln!(f, "{INDENT}{INDENT}{d} = (z1 << 1) | z0;")?;
+            writeln!(f, "{INDENT}}}")?;
+        }
+        (LogicMode::FourValue, Some(arr_size)) => {
+            let num_words = arr_size / 2;
+            let num_words_m_1 = num_words - 1;
+            writeln!(f, "{INDENT}{{")?;
+            writeln!(f, "{INDENT}{INDENT}uint8_t z0 = 0, z1 = 1;")?;
+            let num_words_loop = if src.ty.size.get() % 64 == 0 {
+                num_words
+            } else {
+                num_words - 1
+            };
+            if num_words_loop > 0 {
+                writeln!(
+                    f,
+                    "{INDENT}{INDENT}for (int i = 0; i < {num_words_loop}; ++i) {{ z0 |= ({s}[i] & {s}[{num_words}+i]) != 0; z1 &= ~{s}[i] == 0; }}"
+                )?;
+            }
+            if src.ty.size.get() % 64 != 0 {
+                let last_i = arr_size - 1;
+                let mask = mask(src.ty.size.get() % 64);
+                writeln!(
+                    f,
+                    "{INDENT}{INDENT}z0 |= ({s}[{num_words_m_1}] & {s}[{last_i}]) != 0;"
+                )?;
+                writeln!(
+                    f,
+                    "{INDENT}{INDENT}z1 &= {s}[{num_words_m_1}] == 0x{mask:x};"
+                )?;
+            }
+            writeln!(f, "{INDENT}{INDENT}z1 |= z0;")?;
+            writeln!(f, "{INDENT}{INDENT}{d} = (z1 << 1) | z0;")?;
+            writeln!(f, "{INDENT}}}")?;
+        }
     }
 
     Ok(())
@@ -83,19 +132,18 @@ pub fn cgc_reduce_and(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Resul
     assert_eq!(dst.ty.mode, src.ty.mode);
     assert_eq!(dst.ty.size, SCALAR_VSIZE);
 
-    let size = src.ty.size;
-    let msbs_mask = if size.get() % 64 == 0 {
-        u64::MAX
-    } else {
-        (1u64 << dst.ty.size.get()) - 1
-    };
-
     let (d, s) = (dst.ident, src.ident);
     match (dst.ty.mode, src.ty.array_size()) {
         (LogicMode::TwoValue, None) => {
+            let msbs_mask = mask(src.ty.size.get());
             writeln!(f, "{INDENT}{d} = (uint8_t)({s} == 0x{msbs_mask:x});")?
         }
         (LogicMode::TwoValue, Some(arr_size)) => {
+            let msbs_mask = if src.ty.size.get() % 64 == 0 {
+                u64::MAX
+            } else {
+                mask(src.ty.size.get() % 64)
+            };
             writeln!(
                 f,
                 "{INDENT}{d} = (uint8_t)({s}[{i}] == 0x{msbs_mask:x});",
@@ -103,11 +151,71 @@ pub fn cgc_reduce_and(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Resul
             )?;
             writeln!(
                 f,
-                "{INDENT}for (int i = 0; i < {end}; ++i) {d} &= (uint8_t)((~{s}[{end} - i - 1]) == 0);",
-                end = arr_size - 1
+                "{INDENT}for (int i = 0; i < {end}; ++i) {d} &= (uint8_t)(({s}[{end_idx}-i]) == ~0);",
+                end = arr_size - 1,
+                end_idx = arr_size - 2
             )?;
         }
-        (LogicMode::FourValue, _) => todo!(),
+
+        // z1 = &spc | (spc & !value != 0);
+        // z0 = &spc & &value;
+        (LogicMode::FourValue, None) => {
+            let size = src.ty.size;
+            let spc_mask = mask(src.ty.size.get()) << size.get();
+            let val_mask = mask(src.ty.size.get());
+            writeln!(f, "{INDENT}{{")?;
+            writeln!(
+                f,
+                "{INDENT}{INDENT}uint8_t redandspc = ({s} & 0x{spc_mask:x}) == 0x{spc_mask:x};"
+            )?;
+            writeln!(
+                f,
+                "{INDENT}{INDENT}uint8_t z0 = redandspc & (({s} & 0x{val_mask:x}) == 0x{val_mask:x});"
+            )?;
+            writeln!(
+                f,
+                "{INDENT}{INDENT}uint8_t z1 = redandspc | ((({s} >> {size}) & ~{s}) != 0);"
+            )?;
+            writeln!(f, "{INDENT}{INDENT}{d} = (z1 << 1) | z0;")?;
+            writeln!(f, "{INDENT}}}")?;
+        }
+        (LogicMode::FourValue, Some(arr_size)) => {
+            let num_words = arr_size / 2;
+            writeln!(f, "{INDENT}{{")?;
+            writeln!(f, "{INDENT}{INDENT}uint8_t redandspc = 1, z0 = 1, z1 = 0;")?;
+
+            let num_words_loop = if src.ty.size.get() % 64 == 0 {
+                num_words
+            } else {
+                num_words - 1
+            };
+            if num_words_loop > 0 {
+                writeln!(
+                    f,
+                    "{INDENT}{INDENT}for (int i = 0; i < {num_words_loop}; ++i) {{ redandspc &= ~{s}[i] == 0; z0 &= ~{s}[{num_words}+i] == 0; z1 |= ({s}[i] & ~{s}[{num_words}+i]) != 0; }}"
+                )?;
+            }
+            if src.ty.size.get() % 64 != 0 {
+                let mask = mask(src.ty.size.get() % 64);
+                let last_i = arr_size - 1;
+                writeln!(
+                    f,
+                    "{INDENT}{INDENT}redandspc &= {s}[{num_words_loop}] == 0x{mask:x};"
+                )?;
+                writeln!(
+                    f,
+                    "{INDENT}{INDENT}z0 &= {s}[{last_i}] == 0x{mask:x}; z1 |= ({s}[{num_words_loop}] & ~{s}[{last_i}]) != 0;"
+                )?;
+                writeln!(
+                    f,
+                    "{INDENT}{INDENT}z1 |= ({s}[{num_words_loop}] & ~{s}[{last_i}]) != 0;"
+                )?;
+            }
+            writeln!(f, "{INDENT}{INDENT}z1 |= redandspc;")?;
+            writeln!(f, "{INDENT}{INDENT}z0 &= redandspc;")?;
+            writeln!(f, "{INDENT}{INDENT}{d} = (z1 << 1) | z0;")?;
+            writeln!(f, "{INDENT}}}")?;
+        }
     }
 
     Ok(())
@@ -130,7 +238,56 @@ pub fn cgc_reduce_xor(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Resul
                 "{INDENT}{{ uint32_t cnt = 0; for (int i = 0; i < {arr_size}; ++i) {{ cnt += popcount64({s}[i]); }} {d} = (uint8_t)(cnt % 2 == 1); }}",
             )?;
         }
-        (LogicMode::FourValue, _) => todo!(),
+
+        // z0 = z1 & (popcount(value) % 2 == 0)
+        // z1 = spc == mask
+        (LogicMode::FourValue, None) => {
+            let size = src.ty.size;
+            let spc_mask = mask(src.ty.size.get()) << size.get();
+            let val_mask = mask(src.ty.size.get());
+            writeln!(f, "{INDENT}{{")?;
+            writeln!(
+                f,
+                "{INDENT}{INDENT}uint8_t z1 = ({s} & 0x{spc_mask:x}) == 0x{spc_mask:x};"
+            )?;
+            writeln!(
+                f,
+                "{INDENT}{INDENT}uint8_t z0 = z1 & (popcount{}({s} & 0x{val_mask:x}) % 2 == 1);",
+                src.ty.element_type().size()
+            )?;
+            writeln!(f, "{INDENT}{INDENT}{d} = (z1 << 1) | z0;")?;
+            writeln!(f, "{INDENT}}}")?;
+        }
+        (LogicMode::FourValue, Some(arr_size)) => {
+            let num_words = arr_size / 2;
+            let num_words_m_1 = num_words - 1;
+            writeln!(f, "{INDENT}{{")?;
+            writeln!(f, "{INDENT}{INDENT}uint8_t z0, z1 = 1;")?;
+            writeln!(f, "{INDENT}{INDENT}uint32_t cnt = 0;")?;
+            let num_words_loop = if src.ty.size.get() % 64 == 0 {
+                num_words
+            } else {
+                num_words - 1
+            };
+            if num_words_loop > 0 {
+                writeln!(
+                    f,
+                    "{INDENT}{INDENT}for (int i = 0; i < {num_words_loop}; ++i) {{ cnt += popcount64({s}[{num_words}+i]); z1 &= ~{s}[i] == 0; }}"
+                )?;
+            }
+            if src.ty.size.get() % 64 != 0 {
+                let last_i = arr_size - 1;
+                let mask = mask(src.ty.size.get() % 64);
+                writeln!(
+                    f,
+                    "{INDENT}{INDENT}cnt += popcount64({s}[{num_words_m_1}]);"
+                )?;
+                writeln!(f, "{INDENT}{INDENT}z1 &= {s}[{last_i}] == 0x{mask:x};")?;
+            }
+            writeln!(f, "{INDENT}{INDENT}z0 = z1 & (cnt % 2 == 1);")?;
+            writeln!(f, "{INDENT}{INDENT}{d} = (z1 << 1) | z0;")?;
+            writeln!(f, "{INDENT}}}")?;
+        }
     }
 
     Ok(())
