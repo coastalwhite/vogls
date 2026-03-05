@@ -172,6 +172,11 @@ pub fn resolve_var_logic_mode_map(
     }
 
     // For all the variable which could not immediately
+    //
+    // @TODO: This is current pessimistic because if performs a depth-first search and marks all
+    // reachable node with the same mode. It should perform a bread-first search and mark only
+    // according to what is actually reachable from a node. This is a bit more complex and probably
+    // is quite rare so I leave it as a future problem.
     let mut seen = VgHashSet::default();
     let mut stack = Vec::new();
     while let Some(&fst) = graph_offsets.keys().next() {
