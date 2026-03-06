@@ -1,7 +1,7 @@
 use std::io;
 
 use vogls_bits::arithmetic::FvLogicValue;
-use vogls_ir::{INTEGER_VSIZE, LogicMode, SCALAR_VSIZE};
+use vogls_ir::{INTEGER_VSIZE, LogicMode};
 
 use crate::{CIdent, CVar, INDENT};
 
@@ -280,7 +280,9 @@ pub fn cgc_copy_x(f: &mut impl io::Write, dst: CVar, lhs: CVar, rhs: CVar) -> io
     let (d, l, _r) = (dst.ident, lhs.ident, rhs.ident);
     match (lhs.ty.mode, lhs.ty.array_size()) {
         (LogicMode::TwoValue, None) => writeln!(f, "{INDENT}{d} = {l};")?,
-        (LogicMode::TwoValue, Some(_)) => todo!(),
+        (LogicMode::TwoValue, Some(arr_size)) => {
+            writeln!(f, "{INDENT}memmove({d}, {l}, {arr_size}*sizeof(uint64_t));")?
+        }
         (LogicMode::FourValue, _) => todo!(),
     }
 
@@ -291,7 +293,9 @@ pub fn cgc_copy_y(f: &mut impl io::Write, dst: CVar, lhs: CVar, rhs: CVar) -> io
     let (d, l, _r) = (dst.ident, lhs.ident, rhs.ident);
     match (lhs.ty.mode, lhs.ty.array_size()) {
         (LogicMode::TwoValue, None) => writeln!(f, "{INDENT}{d} = {l};")?,
-        (LogicMode::TwoValue, Some(_)) => todo!(),
+        (LogicMode::TwoValue, Some(arr_size)) => {
+            writeln!(f, "{INDENT}memmove({d}, {l}, {arr_size}*sizeof(uint64_t));")?
+        }
         (LogicMode::FourValue, _) => todo!(),
     }
 

@@ -265,23 +265,113 @@ pub enum UnaryOp {
 
 #[derive(Debug, Clone, Copy)]
 pub enum ResizeOp {
+    /// Extract the least-significant bits from the source.
     Truncate,
+    /// Extend the source with `0` bits.
     ZeroExtend,
+    /// Extend the source with the most-significant bit.
     SignExtend,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub enum BinaryOp {
+    /// A bitwise-and operator.
+    ///
+    /// Takes two operands of equal size and outputs equal size.
+    ///
+    /// Results are calculated according to the following truth-table.
+    ///
+    /// ```
+    /// & | x  z  1  0
+    /// --+-----------
+    /// x | x  x  x  0
+    /// z | x  x  x  0
+    /// 1 | x  x  1  0
+    /// 0 | 0  0  0  0
+    /// ```
     And,
+
+    /// A bitwise-or operator.
+    ///
+    /// Takes two operands of equal size and outputs equal size.
+    ///
+    /// Results are calculated according to the following truth-table.
+    ///
+    /// ```
+    /// | | x  z  1  0
+    /// --+-----------
+    /// x | x  x  1  x
+    /// z | x  x  1  x
+    /// 1 | 1  1  1  1
+    /// 0 | x  x  1  0
+    /// ```
     Or,
+
+    /// A bitwise exclusive-or operator.
+    ///
+    /// Takes two operands of equal size and outputs equal size.
+    ///
+    /// Results are calculated according to the following truth-table.
+    ///
+    /// ```
+    /// ^ | x  z  1  0
+    /// --+-----------
+    /// x | x  x  x  x
+    /// z | x  x  x  x
+    /// 1 | x  x  0  1
+    /// 0 | x  x  1  0
+    /// ```
     Xor,
+
+    /// Wrapping arithmetic addition operator.
+    ///
+    /// Takes two operands of equal size and outputs equal size.
+    ///
+    /// If either operands contains an unknown `x` or high-impedance `z` bit, the result is all
+    /// unknown bits.
     Add,
+    /// Wrapping arithmetic subtraction operator.
+    ///
+    /// Takes two operands of equal size and outputs equal size.
+    ///
+    /// If either operands contains an unknown `x` or high-impedance `z` bit, the result is all
+    /// unknown bits.
     Sub,
+    /// Wrapping arithmetic power operator.
+    ///
+    /// Takes two operands of equal size and outputs equal size.
+    ///
+    /// If either operands contains an unknown `x` or high-impedance `z` bit, the result is all
+    /// unknown bits.
     Power,
+    /// Wrapping arithmetic multiplication operator.
+    ///
+    /// Takes two operands of equal size and outputs equal size.
+    ///
+    /// If either operands contains an unknown `x` or high-impedance `z` bit, the result is all
+    /// unknown bits.
     Multiply,
+    /// Wrapping arithmetic division operator.
+    ///
+    /// Takes two operands of equal size and outputs equal size.
+    ///
+    /// If either operands contains an unknown `x` or high-impedance `z` bit, the result is all
+    /// unknown bits.
     Divide,
+    /// Wrapping arithmetic modulus operator.
+    ///
+    /// Takes two operands of equal size and outputs equal size.
+    ///
+    /// If either operands contains an unknown `x` or high-impedance `z` bit, the result is all
+    /// unknown bits.
     Modulus,
 
+    /// Unsigned relational less-than equals operator.
+    ///
+    /// Takes two operands of equal size and outputs a single bit.
+    ///
+    /// If either operands contains an unknown `x` or high-impedance `z` bit, the result is all
+    /// unknown bits.
     UnsignedLessEqual,
     SelectBit,
     LogicalShiftLeft,
