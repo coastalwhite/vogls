@@ -1,5 +1,6 @@
 use std::io;
 
+use vogls_bits::arithmetic::FvLogicValue;
 use vogls_ir::{INTEGER_VSIZE, LogicMode, SCALAR_VSIZE};
 
 use crate::{CIdent, CVar, INDENT};
@@ -329,6 +330,55 @@ pub fn cgc_case_eq(f: &mut impl io::Write, dst: CIdent, lhs: CVar, rhs: CVar) ->
         Some(arr_size) => writeln!(
             f,
             "{INDENT}{d} = 1; for (int i = 0; i < {arr_size}; ++i) {d} &= {l}[i] == {r}[i];"
+        )?,
+    }
+
+    Ok(())
+}
+
+const FV_POSEDGE_LUT: u16 = {
+    let mut fv_lut = 0u16;
+    let mut i = 0;
+    while i < 16 {
+        let before = FvLogicValue::from_repr(i >> 2);
+        let after = FvLogicValue::from_repr(i & 0x3);
+        fv_lut |= (vogls_bits::edge::fv_posedge(before, after) as u16) << i;
+        i += 1;
+    }
+    fv_lut
+};
+const FV_NEGEDGE_LUT: u16 = {
+    let mut fv_lut = 0u16;
+    let mut i = 0;
+    while i < 16 {
+        let before = FvLogicValue::from_repr(i >> 2);
+        let after = FvLogicValue::from_repr(i & 0x3);
+        fv_lut |= (vogls_bits::edge::fv_negedge(before, after) as u16) << i;
+        i += 1;
+    }
+    fv_lut
+};
+
+pub fn cgc_posedge(f: &mut impl io::Write, dst: CIdent, lhs: CVar, rhs: CVar) -> io::Result<()> {
+    let (d, l, r) = (dst, lhs.ident, rhs.ident);
+    match lhs.ty.mode {
+        LogicMode::TwoValue => writeln!(f, "{INDENT}{d} = {r} & ~{l};")?,
+        LogicMode::FourValue => writeln!(
+            f,
+            "{INDENT}{d} = (0x{FV_POSEDGE_LUT:x} >> (({l} << 2) | {r})) & 1;"
+        )?,
+    }
+
+    Ok(())
+}
+
+pub fn cgc_negedge(f: &mut impl io::Write, dst: CIdent, lhs: CVar, rhs: CVar) -> io::Result<()> {
+    let (d, l, r) = (dst, lhs.ident, rhs.ident);
+    match lhs.ty.mode {
+        LogicMode::TwoValue => writeln!(f, "{INDENT}{d} = (uint8_t)({l} & ~{r});")?,
+        LogicMode::FourValue => writeln!(
+            f,
+            "{INDENT}{d} = (0x{FV_NEGEDGE_LUT:x} >> (({l} << 2) | {r})) & 1;"
         )?,
     }
 

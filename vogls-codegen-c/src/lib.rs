@@ -506,8 +506,8 @@ pub fn lower_process(
                         O::CaseEquality => {
                             binary::cgc_case_eq(&mut buffer, dst_t.ident, lhs_t, rhs_t)?
                         }
-                        O::Posedge => todo!(),
-                        O::Negedge => todo!(),
+                        O::Posedge => binary::cgc_posedge(&mut buffer, dst_t.ident, lhs_t, rhs_t)?,
+                        O::Negedge => binary::cgc_negedge(&mut buffer, dst_t.ident, lhs_t, rhs_t)?,
                     }
                     store(&mut buffer, heap_map[dst], dst_t)?;
                 }
@@ -517,10 +517,7 @@ pub fn lower_process(
                         writeln!(buffer, "{INDENT}heap[{heap_idx}] = time;")?;
                     }
                     vogls_ir::IntrinsicOp::Finish => {
-                        writeln!(
-                            buffer,
-                            "{INDENT}cldctx->exit = 1; return;"
-                        )?;
+                        writeln!(buffer, "{INDENT}cldctx->exit = 1; return;")?;
                     }
                     vogls_ir::IntrinsicOp::Random => todo!(),
                     vogls_ir::IntrinsicOp::Display(dyn_format_string) => {
@@ -1013,8 +1010,14 @@ fn convert(
                 arr_size - 1
             };
             if main_loop_size > 0 {
-                writeln!(f, "{INDENT}memset({dst}, 0xFF, {main_loop_size}*sizeof(uint64_t));")?;
-                writeln!(f, "{INDENT}memmove({dst}+{arr_size}, {src}, {main_loop_size}*sizeof(uint64_t));")?;
+                writeln!(
+                    f,
+                    "{INDENT}memset({dst}, 0xFF, {main_loop_size}*sizeof(uint64_t));"
+                )?;
+                writeln!(
+                    f,
+                    "{INDENT}memmove({dst}+{arr_size}, {src}, {main_loop_size}*sizeof(uint64_t));"
+                )?;
             }
             if size.get() % 64 != 0 {
                 let last_i = 2 * arr_size - 1;

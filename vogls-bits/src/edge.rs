@@ -1,6 +1,6 @@
 use crate::arithmetic::FvLogicValue;
 
-pub fn fv_posedge(before: FvLogicValue, after: FvLogicValue) -> bool {
+pub const fn fv_posedge(before: FvLogicValue, after: FvLogicValue) -> bool {
     use FvLogicValue as L;
     matches!(
         (before, after),
@@ -8,7 +8,7 @@ pub fn fv_posedge(before: FvLogicValue, after: FvLogicValue) -> bool {
     )
 }
 
-pub fn fv_negedge(before: FvLogicValue, after: FvLogicValue) -> bool {
+pub const fn fv_negedge(before: FvLogicValue, after: FvLogicValue) -> bool {
     use FvLogicValue as L;
     matches!(
         (before, after),
@@ -16,9 +16,9 @@ pub fn fv_negedge(before: FvLogicValue, after: FvLogicValue) -> bool {
     )
 }
 
-pub fn tv_posedge(before: bool, after: bool) -> bool {
+pub const fn tv_posedge(before: bool, after: bool) -> bool {
     after & !before
 }
-pub fn tv_negedge(before: bool, after: bool) -> bool {
+pub const fn tv_negedge(before: bool, after: bool) -> bool {
     before & !after
 }
