@@ -14,6 +14,7 @@ pub mod arithmetic;
 pub mod comparison;
 pub mod concat;
 pub mod copyxz;
+pub mod edge;
 pub mod extend;
 pub mod format;
 pub mod iter;
@@ -471,7 +472,7 @@ impl Bits {
                     .collect(),
             )
         } else {
-            Self::from_four_value_u64(size, 0u32, 1u32.unbounded_shl(size.get()).wrapping_sub(1))
+            Self::from_four_value_u64(size, 0u32, u32::MAX)
         }
     }
 

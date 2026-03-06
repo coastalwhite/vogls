@@ -62,7 +62,7 @@ pub fn tv_s_sign_extend(dst: &mut [u8], src: &[u8], dst_size: VectorSize, src_si
     }
     dst[..src.len()].copy_from_slice(src);
     if src_size.get() % 8 != 0 {
-        dst[src.len() - 1] |= 0xFFu8 << (src_size.get() % 8);
+        dst[src.len() - 1] |= u8::from(!sign).wrapping_sub(1) << (src_size.get() % 8);
     }
 }
 pub fn fv_s_zero_extend(dst: &mut [u8], src: &[u8], dst_size: VectorSize, src_size: VectorSize) {

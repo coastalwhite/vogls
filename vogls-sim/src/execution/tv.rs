@@ -1,6 +1,6 @@
 use vogls_ir::{ResizeOp, SCALAR_VSIZE, UnaryOp, VectorSize};
 
-use crate::{BinaryArithmeticOp, BinaryComparisonOp, Heap, HeapOffset, HeapRef, ShiftOp};
+use crate::{BinaryArithmeticOp, BinaryComparisonOp, EdgeOp, Heap, HeapOffset, HeapRef, ShiftOp};
 
 pub(crate) fn exec_tv_unary(stack: &mut Heap, dst: HeapOffset, op: UnaryOp, src: HeapRef) {
     use UnaryOp as O;
@@ -229,15 +229,14 @@ pub(crate) fn exec_tv_bin_cmp(
     lhs: HeapRef,
     rhs: HeapOffset,
 ) {
+    fn tv_case_equality(lhs: &[u8], rhs: &[u8], _size: VectorSize) -> bool {
+        lhs == rhs
+    }
+
     use BinaryComparisonOp as O;
     let f = match op {
         O::UnsignedLessEqual => vogls_bits::comparison::tv_unsigned_leq,
-        O::CaseEquality => {
-            fn tv_case_equality(lhs: &[u8], rhs: &[u8], _size: VectorSize) -> bool {
-                lhs == rhs
-            }
-            tv_case_equality
-        }
+        O::CaseEquality => tv_case_equality,
     };
 
     let size = lhs.size;
@@ -245,6 +244,25 @@ pub(crate) fn exec_tv_bin_cmp(
     let rhs = stack.get(rhs.to_ref(size));
     let result = f(lhs.as_slice(), rhs.as_slice(), size);
     stack.set_tv_u64(dst.to_ref(SCALAR_VSIZE), result as u64);
+}
+
+pub(crate) fn exec_tv_edge(
+    heap: &mut Heap,
+    dst: HeapOffset,
+    op: EdgeOp,
+    lhs: HeapOffset,
+    rhs: HeapOffset,
+) {
+    use EdgeOp as O;
+    let f = match op {
+        O::Posedge => vogls_bits::edge::tv_posedge,
+        O::Negedge => vogls_bits::edge::tv_negedge,
+    };
+
+    let lhs = heap.get_tv_bool(lhs);
+    let rhs = heap.get_tv_bool(rhs);
+    let result = f(lhs, rhs);
+    heap.set_tv_bool(dst, result);
 }
 
 pub(crate) fn exec_tv_shift(

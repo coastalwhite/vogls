@@ -281,7 +281,7 @@ fn fmt_bits_binary(bits: &Bits, f: &mut impl fmt::Write, separator: Option<char>
                     let shift = actual_size - i - 1;
                     let s = (spc >> shift) & 1;
                     let v = (val >> shift) & 1;
-                    let fv = FvLogicValue::from_repr(((s as u8) << 1) | (v as u8));
+                    let fv = FvLogicValue::from_repr((s as u8) | ((v as u8) << 1));
 
                     f.write_char(match fv {
                         FvLogicValue::X => 'x',

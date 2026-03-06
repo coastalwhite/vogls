@@ -255,9 +255,10 @@ pub fn fv_s_select_bit(src: &[u8], idx: u32, size: VectorSize) -> FvLogicValue {
 
     let dsize = VectorSize::new(size.get() * 2).unwrap();
     let x = load_partial_u64(src, dsize);
-    let spc = (x >> (size.get() + idx)) & 1;
-    let val = (x >> idx) & 1;
-    FvLogicValue::from_repr(((spc as u8) << 1) | (val as u8))
+    let (spc, val) = fv_unpack_u64(x, size);
+    let spc = ((spc >> idx) & 1) != 0;
+    let val = ((val >> idx) & 1) != 0;
+    FvLogicValue::from_spc_and_val(spc, val)
 }
 pub fn fv_l_select_bit(src: &[u64], idx: u32, size: VectorSize) -> FvLogicValue {
     if idx >= size.get() {
@@ -265,9 +266,9 @@ pub fn fv_l_select_bit(src: &[u64], idx: u32, size: VectorSize) -> FvLogicValue 
     }
 
     let nwords = src.len() / 2;
-    let spc = (src[(idx / 64) as usize] >> (idx % 64)) & 1;
-    let val = (src[nwords + (idx / 64) as usize] >> (idx % 64)) & 1;
-    FvLogicValue::from_repr(((spc as u8) << 1) | (val as u8))
+    let spc = ((src[(idx / 64) as usize] >> (idx % 64)) & 1) != 0;
+    let val = ((src[nwords + (idx / 64) as usize] >> (idx % 64)) & 1) != 0;
+    FvLogicValue::from_spc_and_val(spc, val)
 }
 
 /// Does the `value` have a `Unknown` or `High Impedance` value?

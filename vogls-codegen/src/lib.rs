@@ -4,7 +4,7 @@ use std::ops::Range;
 
 use hashbrown::hash_map::Entry;
 pub use heap::{Heap, HeapBuilder, HeapOffset, HeapRef};
-use vogls_ir::{BasicBlockKey, GlobalContext, Instruction, LogicMode, VariableKey};
+use vogls_ir::{BasicBlockKey, BinaryOp, GlobalContext, Instruction, LogicMode, VariableKey};
 use vogls_utils::{VgHashMap, VgHashSet};
 
 /// Fill `var_mode` with the `LogicMode` for each variable present in the control-flow graph.
@@ -36,6 +36,7 @@ pub fn resolve_var_logic_mode_map(
     // Represented as a map from node to range in a continous list of edges.
     let mut graph_offsets = VgHashMap::<VariableKey, Range<usize>>::default();
     let mut graph_inputs = Vec::<VariableKey>::new();
+    let mut is_fixed = VgHashSet::<VariableKey>::default();
 
     bb_seen.clear();
     bb_seen.insert(entry);
@@ -72,34 +73,40 @@ pub fn resolve_var_logic_mode_map(
                         }
                     }
                 }
-                I::Binary(dst, _, lhs, rhs) => {
-                    let m1 = var_mode.get(lhs);
-                    let m2 = var_mode.get(rhs);
+                I::Binary(dst, op, lhs, rhs) => {
+                    let m1 = var_mode.get(lhs).copied();
+                    let m2 = var_mode.get(rhs).copied();
 
                     use LogicMode as M;
+                    match (m1, m2, op) {
+                        (_, _, BinaryOp::CaseEquality | BinaryOp::Posedge | BinaryOp::Negedge) => {
+                            if m1.is_none() || m2.is_none() {
+                                is_fixed.insert(*dst);
+                            }
+                            _ = var_mode.insert(*dst, M::TwoValue)
+                        }
+                        (Some(M::TwoValue), Some(M::TwoValue), _) => {
+                            _ = var_mode.insert(*dst, M::TwoValue)
+                        }
+                        (Some(M::FourValue), _, _) | (_, Some(M::FourValue), _) => {
+                            _ = var_mode.insert(*dst, M::FourValue)
+                        }
+                        _ => {}
+                    }
+
                     match (m1, m2) {
-                        (Some(&m1), Some(&m2)) => {
-                            let m = if m1 == M::FourValue || m2 == M::FourValue {
-                                if m1 == M::TwoValue {
-                                    mark_conv!(*lhs);
-                                }
-                                if m2 == M::TwoValue {
-                                    mark_conv!(*rhs);
-                                }
-                                M::FourValue
-                            } else {
-                                M::TwoValue
-                            };
-                            var_mode.insert(*dst, m);
+                        (Some(M::TwoValue), Some(M::TwoValue))
+                        | (Some(M::FourValue), Some(M::FourValue)) => {}
+
+                        (Some(M::FourValue), None) => {
+                            maybe_mark_conv_later.push((*rhs, M::FourValue))
                         }
-                        (Some(M::FourValue), _) => {
-                            maybe_mark_conv_later.push((*rhs, M::FourValue));
-                            var_mode.insert(*dst, M::FourValue);
+                        (Some(M::FourValue), Some(M::TwoValue)) => _ = mark_conv!(*rhs),
+                        (None, Some(M::FourValue)) => {
+                            maybe_mark_conv_later.push((*lhs, M::FourValue))
                         }
-                        (_, Some(M::FourValue)) => {
-                            maybe_mark_conv_later.push((*lhs, M::FourValue));
-                            var_mode.insert(*dst, M::FourValue);
-                        }
+                        (Some(M::TwoValue), Some(M::FourValue)) => _ = mark_conv!(*lhs),
+
                         (Some(_), None) => {
                             graph_offsets.insert(*dst, graph_inputs.len()..graph_inputs.len() + 1);
                             graph_inputs.push(*rhs);
@@ -189,13 +196,14 @@ pub fn resolve_var_logic_mode_map(
         while let Some(k) = stack.pop() {
             if let Some(m) = var_mode.get(&k) {
                 seen_fv |= matches!(m, LogicMode::FourValue);
-                continue;
             }
 
-            for i in graph_offsets[&k].clone() {
-                let neighbour = graph_inputs[i];
-                if seen.insert(neighbour) {
-                    stack.push(neighbour);
+            if let Some(neighbours_range) = graph_offsets.get(&k) {
+                for i in neighbours_range.clone() {
+                    let neighbour = graph_inputs[i];
+                    if seen.insert(neighbour) {
+                        stack.push(neighbour);
+                    }
                 }
             }
         }
@@ -208,7 +216,7 @@ pub fn resolve_var_logic_mode_map(
         seen.iter().for_each(|k| match var_mode.entry(*k) {
             Entry::Vacant(entry) => _ = entry.insert(mode),
             Entry::Occupied(entry) => {
-                if *entry.get() != mode {
+                if *entry.get() != mode && !is_fixed.contains(k) {
                     _ = mark_conv!(*k);
                 }
             }

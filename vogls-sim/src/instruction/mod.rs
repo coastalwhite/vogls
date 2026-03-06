@@ -36,6 +36,12 @@ pub enum BinaryComparisonOp {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub enum EdgeOp {
+    Posedge,
+    Negedge,
+}
+
+#[derive(Debug, Clone, Copy)]
 pub enum ShiftOp {
     LogicalLeft,
     LogicalRight,
@@ -63,6 +69,7 @@ pub enum VmInstruction {
     TvResize(HeapRef, ResizeOp, HeapRef),
     TvBinaryArithmetic(HeapRef, BinaryArithmeticOp, HeapOffset, HeapOffset),
     TvBinaryComparison(HeapOffset, BinaryComparisonOp, HeapRef, HeapOffset),
+    TvEdge(HeapOffset, EdgeOp, HeapOffset, HeapOffset),
     TvShift(HeapRef, ShiftOp, HeapOffset, HeapOffset),
     TvSelectBit(HeapOffset, HeapRef, HeapOffset),
     TvConcat(HeapOffset, HeapRef, HeapRef),
@@ -71,6 +78,7 @@ pub enum VmInstruction {
     FvResize(HeapRef, ResizeOp, HeapRef),
     FvBinaryArithmetic(HeapRef, BinaryArithmeticOp, HeapOffset, HeapOffset),
     FvBinaryComparison(HeapOffset, BinaryComparisonOp, HeapRef, HeapOffset),
+    FvEdge(HeapOffset, EdgeOp, HeapOffset, HeapOffset),
     FvShift(HeapRef, ShiftOp, HeapOffset, HeapOffset),
     FvSelectBit(HeapOffset, HeapRef, HeapOffset),
     FvConcat(HeapOffset, HeapRef, HeapRef),
@@ -84,7 +92,8 @@ pub enum VmInstruction {
     Drive(VmSignalKey, HeapRef, Option<HeapOffset>),
 
     Wait(Time),
-    VariableWait(HeapOffset),
+    TvVariableWait(HeapOffset),
+    FvVariableWait(HeapOffset),
     WaitRegion(u8),
     Watch(Vec<VmSignalKey>),
 
@@ -117,6 +126,11 @@ impl VmInstruction {
                 ("lhs", false, *lhs),
                 ("rhs", false, rhs.to_ref(lhs.size)),
             ],
+            I::TvEdge(dst, _, lhs, rhs) => &[
+                ("dst", false, dst.to_scalar_ref()),
+                ("lhs", false, lhs.to_scalar_ref()),
+                ("rhs", false, rhs.to_scalar_ref()),
+            ],
             I::TvShift(dst, _, src, shift) => &[
                 ("dst", false, *dst),
                 ("src", false, src.to_ref(dst.size)),
@@ -148,10 +162,22 @@ impl VmInstruction {
                 ("lhs", true, lhs.to_ref(dst.size)),
                 ("rhs", true, rhs.to_ref(dst.size)),
             ],
-            I::FvBinaryComparison(dst, _, lhs, rhs) => &[
-                ("dst", true, dst.to_scalar_ref()),
-                ("lhs", true, *lhs),
-                ("rhs", true, rhs.to_ref(lhs.size)),
+            I::FvBinaryComparison(dst, op, lhs, rhs) => match op {
+                BinaryComparisonOp::CaseEquality => &[
+                    ("dst", false, dst.to_scalar_ref()),
+                    ("lhs", true, *lhs),
+                    ("rhs", true, rhs.to_ref(lhs.size)),
+                ],
+                BinaryComparisonOp::UnsignedLessEqual => &[
+                    ("dst", true, dst.to_scalar_ref()),
+                    ("lhs", true, *lhs),
+                    ("rhs", true, rhs.to_ref(lhs.size)),
+                ],
+            },
+            I::FvEdge(dst, _, lhs, rhs) => &[
+                ("dst", false, dst.to_scalar_ref()),
+                ("lhs", true, lhs.to_scalar_ref()),
+                ("rhs", true, rhs.to_scalar_ref()),
             ],
             I::FvShift(dst, _, src, shift) => &[
                 ("dst", true, *dst),
@@ -202,7 +228,8 @@ impl VmInstruction {
                     ],
                 }
             }
-            I::VariableWait(var) => &[("time", false, var.to_64bit_ref())],
+            I::TvVariableWait(var) => &[("time", false, var.to_64bit_ref())],
+            I::FvVariableWait(var) => &[("time", true, var.to_64bit_ref())],
             I::Wait(_) => &[],
             I::WaitRegion(_) => &[],
             I::Watch(_) => &[],
@@ -271,6 +298,15 @@ impl BinaryComparisonOp {
         match self {
             Self::UnsignedLessEqual => "leq",
             Self::CaseEquality => "ceq",
+        }
+    }
+}
+
+impl EdgeOp {
+    pub fn into_mnemonic(self) -> &'static str {
+        match self {
+            Self::Posedge => "posedge",
+            Self::Negedge => "negedge",
         }
     }
 }

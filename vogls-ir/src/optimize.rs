@@ -301,7 +301,9 @@ pub fn propagate_constants<'a>(
                                     | O::ArithmeticShiftRight
                                     | O::Concat
                                     | O::CopyX
-                                    | O::CopyZ => continue,
+                                    | O::CopyZ
+                                    | O::Posedge
+                                    | O::Negedge => continue,
                                 }
                             }
                             (None, None) => continue,

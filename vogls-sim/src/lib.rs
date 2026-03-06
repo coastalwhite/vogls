@@ -628,6 +628,9 @@ impl Simulation {
                         *lhs,
                         *rhs,
                     ),
+                    I::TvEdge(dst, op, lhs, rhs) => {
+                        execution::tv::exec_tv_edge(&mut state.runtime.heap, *dst, *op, *lhs, *rhs)
+                    }
                     I::TvShift(dst, op, src, offset) => execution::tv::exec_tv_shift(
                         &mut state.runtime.heap,
                         *dst,
@@ -662,6 +665,9 @@ impl Simulation {
                         *lhs,
                         *rhs,
                     ),
+                    I::FvEdge(dst, op, lhs, rhs) => {
+                        execution::fv::exec_fv_edge(&mut state.runtime.heap, *dst, *op, *lhs, *rhs)
+                    }
                     I::FvShift(dst, op, src, offset) => execution::fv::exec_fv_shift(
                         &mut state.runtime.heap,
                         *dst,
@@ -850,8 +856,14 @@ impl Simulation {
                             self.update_signal(state, *sig);
                         }
                     }
-                    I::VariableWait(time) => {
-                        let time = state.runtime.heap.get_tv_u64(time.to_ref(TIME_VSIZE));
+                    I::TvVariableWait(time) | I::FvVariableWait(time) => {
+                        let time = if matches!(instr, I::TvVariableWait(_)) {
+                            state.runtime.heap.get_tv_u64(time.to_ref(TIME_VSIZE))
+                        } else {
+                            let (spc, val) = state.runtime.heap.get_fv_u64(time.to_ref(TIME_VSIZE));
+                            assert_eq!(spc, u64::MAX, "variable wait with four-value logic");
+                            val
+                        };
                         if time > 0 {
                             state
                                 .schedule

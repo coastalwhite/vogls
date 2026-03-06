@@ -36,6 +36,9 @@ impl fmt::Display for VmInstruction {
                     src1.offset
                 )
             }
+            Self::TvEdge(dst, op, src1, src2) => {
+                write!(f, "{dst} = tv.{} {src1}, {src2}", op.into_mnemonic(),)
+            }
             Self::TvShift(dst, op, src1, src2) => {
                 write!(
                     f,
@@ -85,6 +88,9 @@ impl fmt::Display for VmInstruction {
                     src1 = src1.offset
                 )
             }
+            Self::FvEdge(dst, op, src1, src2) => {
+                write!(f, "{dst} = fv.{} {src1}, {src2}", op.into_mnemonic(),)
+            }
             Self::FvShift(dst, op, src1, src2) => {
                 write!(
                     f,
@@ -131,7 +137,8 @@ impl fmt::Display for VmInstruction {
                     )
                 }
             },
-            Self::VariableWait(time) => write!(f, "wait.var {}", time),
+            Self::TvVariableWait(time) => write!(f, "tv.wait.var {}", time),
+            Self::FvVariableWait(time) => write!(f, "fv.wait.var {}", time),
             Self::Wait(time) => write!(f, "wait #{}", time.0),
             Self::WaitRegion(region) => write!(f, "wait.region {region}"),
             Self::Watch(signals) => {
@@ -174,6 +181,7 @@ impl fmt::Display for VmProcess {
                 | I::TvResize(..)
                 | I::TvBinaryArithmetic(..)
                 | I::TvBinaryComparison(..)
+                | I::TvEdge(..)
                 | I::TvShift(..)
                 | I::TvSelectBit(..)
                 | I::TvConcat(..)
@@ -181,6 +189,7 @@ impl fmt::Display for VmProcess {
                 | I::FvResize(..)
                 | I::FvBinaryArithmetic(..)
                 | I::FvBinaryComparison(..)
+                | I::FvEdge(..)
                 | I::FvShift(..)
                 | I::FvSelectBit(..)
                 | I::FvConcat(..)
@@ -189,7 +198,8 @@ impl fmt::Display for VmProcess {
                 | I::Intrinsic(..)
                 | I::LastUpdateTime(..)
                 | I::Drive(..)
-                | I::VariableWait(..)
+                | I::TvVariableWait(..)
+                | I::FvVariableWait(..)
                 | I::Wait(..)
                 | I::WaitRegion(..)
                 | I::Watch(..)

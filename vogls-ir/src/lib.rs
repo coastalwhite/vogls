@@ -301,6 +301,10 @@ pub enum BinaryOp {
 
     /// Exact bitpattern equality
     CaseEquality,
+    /// Positive edge
+    Posedge,
+    /// Negedge edge
+    Negedge,
 }
 
 #[derive(Debug, Clone)]
@@ -524,6 +528,15 @@ impl BinaryOp {
 
             O::Min => Bits::min(lhs, rhs),
             O::Max => Bits::max(lhs, rhs),
+
+            O::Posedge => Bits::from(vogls_bits::edge::fv_posedge(
+                lhs.select_value(0),
+                rhs.select_value(0),
+            )),
+            O::Negedge => Bits::from(vogls_bits::edge::fv_negedge(
+                lhs.select_value(0),
+                rhs.select_value(0),
+            )),
         }
     }
 }

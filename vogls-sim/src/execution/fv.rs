@@ -14,7 +14,7 @@ use vogls_bits::shift::{
 use vogls_bits::truncate::{fv_l_truncate, fv_s_truncate};
 use vogls_ir::{ResizeOp, UnaryOp, VectorSize};
 
-use crate::{BinaryArithmeticOp, BinaryComparisonOp, Heap, HeapOffset, HeapRef, ShiftOp};
+use crate::{BinaryArithmeticOp, BinaryComparisonOp, EdgeOp, Heap, HeapOffset, HeapRef, ShiftOp};
 
 pub(crate) fn exec_fv_unary(stack: &mut Heap, dst: HeapOffset, op: UnaryOp, src: HeapRef) {
     use UnaryOp as O;
@@ -309,31 +309,55 @@ pub(crate) fn exec_fv_bin_cmp(
     rhs: HeapOffset,
 ) {
     use BinaryComparisonOp as O;
-    let result = match op {
+    match op {
         O::UnsignedLessEqual if lhs.size < Heap::FV_U64_MIN_SIZE => {
             let lhs_s = stack.get(lhs.to_fv_size());
             let rhs_s = stack.get(rhs.to_ref(lhs.size).to_fv_size());
-            vogls_bits::comparison::fv_s_unsigned_leq(lhs_s.as_slice(), rhs_s.as_slice(), lhs.size)
+            let result = vogls_bits::comparison::fv_s_unsigned_leq(
+                lhs_s.as_slice(),
+                rhs_s.as_slice(),
+                lhs.size,
+            );
+            stack.set_fv_scalar(dst, result);
         }
         O::UnsignedLessEqual => {
             let nwords = 2 * lhs.size.get().div_ceil(64) as usize;
             let lhs_s = stack.get_u64_slice(lhs.offset, nwords);
             let rhs_s = stack.get_u64_slice(rhs, nwords);
-            vogls_bits::comparison::fv_l_unsigned_leq(lhs_s, rhs_s, lhs.size)
+            let result = vogls_bits::comparison::fv_l_unsigned_leq(lhs_s, rhs_s, lhs.size);
+            stack.set_fv_scalar(dst, result);
         }
         O::CaseEquality if lhs.size < Heap::FV_U64_MIN_SIZE => {
             let lhs_s = stack.get(lhs.to_fv_size());
             let rhs_s = stack.get(rhs.to_ref(lhs.size).to_fv_size());
-            FvLogicValue::from_bool(lhs_s.as_slice() == rhs_s.as_slice())
+            stack.set_tv_bool(dst, lhs_s.as_slice() == rhs_s.as_slice());
         }
         O::CaseEquality => {
             let nwords = 2 * lhs.size.get().div_ceil(64) as usize;
             let lhs_s = stack.get_u64_slice(lhs.offset, nwords);
             let rhs_s = stack.get_u64_slice(rhs, nwords);
-            FvLogicValue::from_bool(lhs_s == rhs_s)
+            stack.set_tv_bool(dst, lhs_s == rhs_s);
         }
+    }
+}
+
+pub(crate) fn exec_fv_edge(
+    heap: &mut Heap,
+    dst: HeapOffset,
+    op: EdgeOp,
+    lhs: HeapOffset,
+    rhs: HeapOffset,
+) {
+    use EdgeOp as O;
+    let f = match op {
+        O::Posedge => vogls_bits::edge::fv_posedge,
+        O::Negedge => vogls_bits::edge::fv_negedge,
     };
-    stack.set_fv_scalar(dst, result);
+
+    let lhs = heap.get_fv_item(lhs);
+    let rhs = heap.get_fv_item(rhs);
+    let result = f(lhs, rhs);
+    heap.set_tv_bool(dst, result);
 }
 
 pub(crate) fn exec_fv_shift(

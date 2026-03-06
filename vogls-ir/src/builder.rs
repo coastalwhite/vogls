@@ -1002,11 +1002,11 @@ impl BasicBlockBuilder {
         before: VariableKey,
         after: VariableKey,
     ) -> VariableKey {
-        let size = gl.vars[before].size;
-        assert_eq!(size, gl.vars[after].size);
-        let t = self.binary_neg(gl, before);
-        let t = self.and(gl, t, after);
-        self.reduce_or(gl, t)
+        assert_eq!(gl.vars[before].size, SCALAR_VSIZE);
+        assert_eq!(gl.vars[after].size, SCALAR_VSIZE);
+        let dst = self.next_tmp_var(gl, SCALAR_VSIZE);
+        self.bin_op(gl, before, after, BinaryOp::Posedge, dst);
+        dst
     }
     pub fn negedge(
         &mut self,
@@ -1014,10 +1014,10 @@ impl BasicBlockBuilder {
         before: VariableKey,
         after: VariableKey,
     ) -> VariableKey {
-        let size = gl.vars[before].size;
-        assert_eq!(size, gl.vars[after].size);
-        let t = self.binary_neg(gl, after);
-        let t = self.and(gl, before, t);
-        self.reduce_or(gl, t)
+        assert_eq!(gl.vars[before].size, SCALAR_VSIZE);
+        assert_eq!(gl.vars[after].size, SCALAR_VSIZE);
+        let dst = self.next_tmp_var(gl, SCALAR_VSIZE);
+        self.bin_op(gl, before, after, BinaryOp::Negedge, dst);
+        dst
     }
 }

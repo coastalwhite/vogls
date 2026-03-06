@@ -166,14 +166,8 @@ pub fn lower<'a>(
                     let (after, _) =
                         lower_expr(gl, arenas, scope, diagnostics, &mut builder, expr)?;
                     let cond = match condition {
-                        C::Posedge => {
-                            let t = builder.binary_neg(gl, before);
-                            builder.and(gl, t, after)
-                        }
-                        C::Negedge => {
-                            let t = builder.binary_neg(gl, after);
-                            builder.and(gl, before, t)
-                        }
+                        C::Posedge => builder.posedge(gl, before, after),
+                        C::Negedge => builder.negedge(gl, before, after),
                         C::None => builder.not_case_equals(gl, before, after),
                     };
                     let cond = builder.reduce_or(gl, cond);

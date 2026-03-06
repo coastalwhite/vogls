@@ -15,6 +15,15 @@ struct Args {
 
     #[arg(long)]
     skip: Vec<String>,
+
+    #[arg(short = 'T')]
+    tv: bool,
+    #[arg(short = 'F')]
+    fv: bool,
+    #[arg(short = 'I')]
+    interpretted: bool,
+    #[arg(short = 'C')]
+    compiled: bool,
 }
 
 fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
@@ -63,21 +72,41 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     }
     paths.sort_unstable();
 
-    let mut num_failed = 0;
+    struct Fail {
+        name: String,
+        mode: LogicMode,
+        compile: bool,
+        error: Option<Box<dyn std::error::Error>>,
+        stdout: String,
+        stderr: String,
+    }
+
+    let modes: &[LogicMode] = match (args.tv, args.fv) {
+        (true, false) => &[LogicMode::TwoValue],
+        (false, true) => &[LogicMode::FourValue],
+        _ => &[LogicMode::TwoValue, LogicMode::FourValue],
+    };
+    let compiled: &[bool] = match (args.interpretted, args.compiled) {
+        (true, false) => &[false],
+        (false, true) => &[true],
+        _ => &[false, true],
+    };
+
+    let mut fails = Vec::<Fail>::new();
     let mut num_tests = 0;
     let mut o = std::io::stdout();
     writeln!(&mut o, "Running {} tests...", paths.len())?;
     for path in paths.iter() {
-        let path = path.as_path();
+        let offset_path = path.as_path();
         write!(
             &mut o,
             "  {}{:.<2$} ",
-            path.display(),
+            offset_path.display(),
             "",
-            max_size - path.as_os_str().len()
+            max_size - offset_path.as_os_str().len()
         )?;
         std::io::stdout().flush()?;
-        let path = tests_dir.join(&path);
+        let path = tests_dir.join(&offset_path);
 
         struct TestInfo {
             fail: bool,
@@ -143,94 +172,141 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             }
         }
 
-        for (logic_mode, compile) in [
-            (LogicMode::TwoValue, false),
-            (LogicMode::FourValue, false),
-            (LogicMode::TwoValue, true),
-        ] {
-            if Some(logic_mode) == test_information.skip {
-                write!(&mut o, " \x1b[32mS\x1b[0m")?;
-                continue;
-            }
-
-            let stdout = Io::default();
-            let stderr = Io::default();
-
-            let mut ctx = ExecutionContext {
-                stdout: Box::new(stdout.clone()) as Box<dyn std::io::Write + Send + Sync>,
-                stderr: Box::new(stderr.clone()) as Box<dyn std::io::Write + Send + Sync>,
-                defines: Vec::new(),
-                emit_hierarchy: false,
-                emit_unoptimized_ir: false,
-                emit_ir: false,
-                emit_vm: false,
-                trace: false,
-                itrace: false,
-                no_run: false,
-                time: test_information.time,
-                opt_rounds: 0,
-                logic_mode,
-                vcd: None,
-                compile,
-            };
-            let ctx = std::panic::AssertUnwindSafe(&mut ctx);
-            let result = std::panic::catch_unwind(|| {
-                let ctx = ctx;
-                vogls::run(
-                    &[&path],
-                    test_information.top_level_module.as_deref(),
-                    ctx.0,
-                )
-            });
-
-            let stdout = stdout.0.lock().unwrap();
-            let stdout = std::str::from_utf8(&stdout).unwrap();
-            let stderr = stderr.0.lock().unwrap();
-            let stderr = std::str::from_utf8(&stderr).unwrap();
-
-            let mut failed = false;
-            if result.is_err() {
-                failed = true;
-            } else {
-                failed |= result.as_ref().is_ok_and(|r| r.is_err()) ^ test_information.fail;
-                if test_information.verify_stdout {
-                    let s = std::fs::read_to_string(&path.with_extension("v.stdout"))?;
-                    failed |= stdout != s;
+        for &logic_mode in modes {
+            for &compile in compiled {
+                if Some(logic_mode) == test_information.skip {
+                    write!(&mut o, " \x1b[32mS\x1b[0m")?;
+                    continue;
                 }
-            }
 
-            num_tests += 1;
-            num_failed += usize::from(failed);
-            if result.is_err() {
-                writeln!(&mut o, "\x1b[31mPANIC\x1b[0m")?;
-            } else if failed {
-                writeln!(&mut o, "\x1b[31mERR\x1b[0m")?;
-                if let Err(err) = result {
-                    writeln!(&mut o, "ERROR: {err:?}")?;
+                let stdout = Io::default();
+                let stderr = Io::default();
+
+                let mut ctx = ExecutionContext {
+                    stdout: Box::new(stdout.clone()) as Box<dyn std::io::Write + Send + Sync>,
+                    stderr: Box::new(stderr.clone()) as Box<dyn std::io::Write + Send + Sync>,
+                    defines: Vec::new(),
+                    emit_hierarchy: false,
+                    emit_unoptimized_ir: false,
+                    emit_ir: false,
+                    emit_vm: false,
+                    trace: false,
+                    itrace: false,
+                    no_run: false,
+                    time: test_information.time,
+                    opt_rounds: 0,
+                    logic_mode,
+                    vcd: None,
+                    compile,
                 };
-                writeln!(&mut o, "--- [START STDOUT] ---")?;
-                write!(&mut o, "{stdout}")?;
-                writeln!(&mut o, "---  [END STDOUT]  ---")?;
-                writeln!(&mut o)?;
-                writeln!(&mut o, "--- [START STDERR] ---")?;
-                write!(&mut o, "{stderr}")?;
-                writeln!(&mut o, "---  [END STDERR]  ---")?;
-                writeln!(&mut o)?;
-            } else {
-                write!(&mut o, " \x1b[32mP\x1b[0m")?;
+                let ctx = std::panic::AssertUnwindSafe(&mut ctx);
+                let result = std::panic::catch_unwind(|| {
+                    let ctx = ctx;
+                    vogls::run(
+                        &[&path],
+                        test_information.top_level_module.as_deref(),
+                        ctx.0,
+                    )
+                });
+
+                let stdout = stdout.0.lock().unwrap();
+                let stdout = std::str::from_utf8(&stdout).unwrap();
+                let stderr = stderr.0.lock().unwrap();
+                let stderr = std::str::from_utf8(&stderr).unwrap();
+
+                let mut failed = false;
+                let mut panic = false;
+                if result.is_err() {
+                    failed = true;
+                    panic = true;
+                } else {
+                    failed |= result.as_ref().is_ok_and(|r| r.is_err()) ^ test_information.fail;
+                    if test_information.verify_stdout {
+                        let s = std::fs::read_to_string(&path.with_extension("v.stdout"))?;
+                        failed |= stdout != s;
+                    }
+                }
+
+                num_tests += 1;
+                if failed {
+                    let error = match result {
+                        Ok(Ok(_)) => None,
+                        Ok(Err(err)) => Some(err),
+                        Err(_) => None,
+                    };
+                    fails.push(Fail {
+                        name: offset_path.display().to_string(),
+                        mode: logic_mode,
+                        compile,
+                        error,
+                        stdout: stdout.to_string(),
+                        stderr: stderr.to_string(),
+                    });
+                }
+                if panic {
+                    write!(&mut o, " \x1b[31mP\x1b[0m")?;
+                } else if failed {
+                    write!(&mut o, " \x1b[31mE\x1b[0m")?;
+                } else {
+                    write!(&mut o, " \x1b[32mP\x1b[0m")?;
+                }
+                o.flush()?;
             }
-            o.flush()?;
         }
         writeln!(&mut o)?;
     }
-    if num_failed == 0 {
+
+    writeln!(&mut o)?;
+    if fails.is_empty() {
         writeln!(&mut o, "All {} tests passed!", paths.len())?;
         Ok(ExitCode::SUCCESS)
     } else {
+        for fail in fails.iter() {
+            let Fail {
+                name,
+                mode,
+                compile,
+                error,
+                stdout,
+                stderr,
+            } = fail;
+            let mode_str = match mode {
+                LogicMode::TwoValue => "tvl",
+                LogicMode::FourValue => "fvl",
+            };
+
+            write!(&mut o, "+ {name}[{mode_str}-compile={compile}]")?;
+            if let Some(err) = error {
+                write!(&mut o, ": ERROR={err:?}")?;
+            };
+            writeln!(&mut o)?;
+
+            if !stdout.is_empty() {
+                writeln!(&mut o, "  --- [START STDOUT] ---")?;
+                let stdout = if stdout.ends_with('\n') {
+                    &stdout[..stdout.len() - 1]
+                } else {
+                    stdout
+                };
+                writeln!(&mut o, "  {}", stdout.replace("\n", "\n  "))?;
+                writeln!(&mut o, "  ---  [END STDOUT]  ---")?;
+            }
+            if !stderr.is_empty() {
+                writeln!(&mut o, "  --- [START STDERR] ---")?;
+                let stderr = if stderr.ends_with('\n') {
+                    &stderr[..stderr.len() - 1]
+                } else {
+                    stderr
+                };
+                writeln!(&mut o, "  {}", stderr.replace("\n", "\n  "))?;
+                writeln!(&mut o, "  ---  [END STDERR]  ---")?;
+            }
+        }
         writeln!(
             &mut o,
             "\x1b[31mFailed {}/{} tests.\x1b[0m",
-            num_failed, num_tests,
+            fails.len(),
+            num_tests,
         )?;
         Ok(ExitCode::FAILURE)
     }

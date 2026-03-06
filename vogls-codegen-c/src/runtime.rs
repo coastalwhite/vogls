@@ -383,6 +383,7 @@ impl CDesign {
 
         if cldctx.exit > 0 {
             if cldctx.exit == 1 {
+                writeln!(io.stdout, "[FINISH]").unwrap();
                 return Ok(());
             } else {
                 return Err(());

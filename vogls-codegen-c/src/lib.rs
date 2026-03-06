@@ -506,6 +506,8 @@ pub fn lower_process(
                         O::CaseEquality => {
                             binary::cgc_case_eq(&mut buffer, dst_t.ident, lhs_t, rhs_t)?
                         }
+                        O::Posedge => todo!(),
+                        O::Negedge => todo!(),
                     }
                     store(&mut buffer, heap_map[dst], dst_t)?;
                 }
@@ -517,7 +519,7 @@ pub fn lower_process(
                     vogls_ir::IntrinsicOp::Finish => {
                         writeln!(
                             buffer,
-                            "{INDENT}printf(\"[FINISH]\\n\"); cldctx->exit = 1; return;"
+                            "{INDENT}cldctx->exit = 1; return;"
                         )?;
                     }
                     vogls_ir::IntrinsicOp::Random => todo!(),

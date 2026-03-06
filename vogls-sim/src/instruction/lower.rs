@@ -10,7 +10,7 @@ use vogls_ir::{
 use vogls_utils::{VgHashMap, VgHashSet};
 
 use crate::instruction::{VmInstruction, VmProcess};
-use crate::{BinaryArithmeticOp, BinaryComparisonOp, ShiftOp, VmIntrinsicOp};
+use crate::{BinaryArithmeticOp, BinaryComparisonOp, EdgeOp, ShiftOp, VmIntrinsicOp};
 
 use super::VmSignalKey;
 
@@ -118,20 +118,25 @@ pub fn lower_process_to_vm(
                     }
                 }
                 I::Binary(d, op, s1, s2) => {
+                    use LogicMode as M;
+
                     let d_size = gl.vars[*d].size;
                     let s1_size = gl.vars[*s1].size;
                     let s2_size = gl.vars[*s2].size;
-                    let d_mode = var_mode[d];
                     let s1_mode = var_mode[s1];
                     let s2_mode = var_mode[s2];
                     let d = var!(*d);
-                    let s1 = var!(*s1, (d_mode, s1_mode, s1_size));
-                    let s2 = var!(*s2, (d_mode, s2_mode, s2_size));
+                    let mode = match (s1_mode, s2_mode) {
+                        (M::FourValue, _) | (_, M::FourValue) => M::FourValue,
+                        _ => M::TwoValue,
+                    };
+                    let s1 = var!(*s1, (mode, s1_mode, s1_size));
+                    let s2 = var!(*s2, (mode, s2_mode, s2_size));
                     use BinaryArithmeticOp as BA;
                     use BinaryComparisonOp as BC;
                     use BinaryOp as O;
                     use ShiftOp as S;
-                    if d_mode == LogicMode::FourValue {
+                    if mode == M::FourValue {
                         match *op {
                             O::And => VI::FvBinaryArithmetic(d.to_ref(d_size), BA::And, s1, s2),
                             O::Or => VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Or, s1, s2),
@@ -174,6 +179,8 @@ pub fn lower_process_to_vm(
 
                             O::CopyX => VI::FvBinaryArithmetic(d.to_ref(d_size), BA::CopyX, s1, s2),
                             O::CopyZ => VI::FvBinaryArithmetic(d.to_ref(d_size), BA::CopyZ, s1, s2),
+                            O::Posedge => VI::FvEdge(d, EdgeOp::Posedge, s1, s2),
+                            O::Negedge => VI::FvEdge(d, EdgeOp::Negedge, s1, s2),
                         }
                     } else {
                         match *op {
@@ -220,6 +227,8 @@ pub fn lower_process_to_vm(
                                 vogls_ir::ResizeOp::Truncate,
                                 s1.to_ref(s1_size),
                             ),
+                            O::Posedge => VI::TvEdge(d, EdgeOp::Posedge, s1, s2),
+                            O::Negedge => VI::TvEdge(d, EdgeOp::Negedge, s1, s2),
                         }
                     }
                 }
@@ -315,8 +324,12 @@ pub fn lower_process_to_vm(
                 instructions.push(VI::Wait(*time));
                 VI::Jump(0)
             }
+            T::VariableWait(_, var) if var_mode[var] == LogicMode::TwoValue => {
+                instructions.push(VI::TvVariableWait(var!(*var)));
+                VI::Jump(0)
+            }
             T::VariableWait(_, var) => {
-                instructions.push(VI::VariableWait(var!(*var)));
+                instructions.push(VI::FvVariableWait(var!(*var)));
                 VI::Jump(0)
             }
             T::WaitRegion(_, region) => {
