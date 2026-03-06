@@ -8,9 +8,9 @@ use vogls_codegen::{
 };
 use vogls_ir::dyn_format_string::DynFormatString;
 use vogls_ir::{
-    BasicBlockKey, BasicBlockTerminator, GlobalContext, INTEGER_VSIZE, Instruction, LogicMode,
-    Process, ProcessKey, ResizeOp, SCALAR_VSIZE, SignalKey, TIME_VSIZE, UnaryOp, VariableKey,
-    VectorSize,
+    BasicBlockKey, BasicBlockTerminator, BinaryOp, GlobalContext, INTEGER_VSIZE, Instruction,
+    LogicMode, Process, ProcessKey, ResizeOp, SCALAR_VSIZE, SignalKey, TIME_VSIZE, UnaryOp,
+    VariableKey, VectorSize,
 };
 use vogls_utils::{IndexMap, IndexSet, VgHashMap, VgHashSet};
 
@@ -431,26 +431,29 @@ pub fn lower_process(
                     let (mut lhs_t, mut rhs_t) =
                         (claim_tmp!(lhs_size, mlhs), claim_tmp!(rhs_size, mrhs));
                     load(&mut buffer, heap_map[lhs], lhs_t)?;
-                    if mlhs != mdst {
+
+                    let (mtgt, conv_lhs, conv_rhs) =
+                        bin_args_need_conversion(*op, mdst, mlhs, mrhs);
+                    if conv_lhs {
                         let unconverted_t = lhs_t;
-                        lhs_t = claim_tmp!(lhs_size, mdst);
+                        lhs_t = claim_tmp!(lhs_size, mtgt);
                         convert(
                             &mut buffer,
                             lhs_size,
-                            mdst,
+                            mtgt,
                             mlhs,
                             lhs_t.ident,
                             unconverted_t.ident,
                         )?;
                     }
                     load(&mut buffer, heap_map[rhs], rhs_t)?;
-                    if mrhs != mdst {
+                    if conv_rhs {
                         let unconverted_t = rhs_t;
-                        rhs_t = claim_tmp!(rhs_size, mdst);
+                        rhs_t = claim_tmp!(rhs_size, mtgt);
                         convert(
                             &mut buffer,
                             rhs_size,
-                            mdst,
+                            mtgt,
                             mrhs,
                             rhs_t.ident,
                             unconverted_t.ident,
@@ -774,6 +777,24 @@ pub fn lower_process(
     writeln!(f, "}}")?;
 
     Ok(())
+}
+
+fn bin_args_need_conversion(
+    op: BinaryOp,
+    mdst: LogicMode,
+    mlhs: LogicMode,
+    mrhs: LogicMode,
+) -> (LogicMode, bool, bool) {
+    use LogicMode as M;
+    if op.always_outputs_bool() {
+        (
+            M::FourValue,
+            mlhs == M::TwoValue && mrhs == M::FourValue,
+            mlhs == M::FourValue && mrhs == M::TwoValue,
+        )
+    } else {
+        (mdst, mdst != mlhs, mdst != mrhs)
+    }
 }
 
 fn lower_dyn_format_str(

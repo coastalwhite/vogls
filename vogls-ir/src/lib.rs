@@ -539,6 +539,10 @@ impl BinaryOp {
             )),
         }
     }
+
+    pub fn always_outputs_bool(&self) -> bool {
+        matches!(self, Self::CaseEquality | Self::Posedge | Self::Negedge)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -159,7 +159,8 @@ pub fn cgc_zero_extend(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Resu
         (LogicMode::FourValue, Some(dst_arr_size), None) => {
             let src_spc_mask = mask(src.ty.size.get());
             let src_val_mask = src_spc_mask << src.ty.size.get();
-            let ext_mask = mask(dst.ty.size.get() - src.ty.size.get()) << src.ty.size.get();
+            let ext_mask =
+                mask((dst.ty.size.get() - src.ty.size.get()).min(63)) << src.ty.size.get();
             let num_words = dst_arr_size / 2;
             writeln!(
                 f,
@@ -176,9 +177,9 @@ pub fn cgc_zero_extend(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Resu
                     "{INDENT}for (int i = 1; i < {num_words}; ++i) {{ {d}[i] = ~0; {d}[{num_words}+i] = 0; }}"
                 )?;
                 if dst.ty.size.get() % 64 != 0 {
-                    let last_i = dst_arr_size - 1;
+                    let last_spc_i = num_words - 1;
                     let mask = mask(dst.ty.size.get() % 64);
-                    writeln!(f, "{INDENT}d[{last_i}] = 0x{mask:x};")?;
+                    writeln!(f, "{INDENT}{d}[{last_spc_i}] = 0x{mask:x};")?;
                 }
             }
         }
@@ -198,17 +199,17 @@ pub fn cgc_zero_extend(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Resu
                     << (src.ty.size.get() % 64);
                 writeln!(f, "{INDENT}{d}[{src_num_words} - 1] |= 0x{ext_mask:x};")?;
             }
-            if src_arr_size > dst_arr_size {
-                let diff_num_words = dst_arr_size - src_arr_size;
-                let sum_num_words = dst_arr_size + src_arr_size;
+            if dst_arr_size > src_arr_size {
+                let diff_num_words = dst_num_words - src_num_words;
+                let sum_num_words = dst_num_words + src_num_words;
                 writeln!(
                     f,
                     "{INDENT}memset({d}+{src_num_words}, 0xFF, {diff_num_words}*sizeof(uint64_t));"
                 )?;
                 if dst.ty.size.get() % 64 != 0 {
-                    let last_i = dst_arr_size - 1;
+                    let last_spc_i = dst_num_words - 1;
                     let mask = mask(dst.ty.size.get() % 64);
-                    writeln!(f, "{INDENT}{d}[{last_i} = 0x{mask:x};")?;
+                    writeln!(f, "{INDENT}{d}[{last_spc_i}] = 0x{mask:x};")?;
                 }
                 writeln!(
                     f,

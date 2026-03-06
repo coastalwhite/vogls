@@ -95,8 +95,7 @@ pub(crate) fn exec_fv_resize(stack: &mut Heap, dst: HeapRef, op: ResizeOp, src: 
             if dst.size >= Heap::FV_U64_MIN_SIZE && src.size <= Heap::FV_SUBBITS_MAX_SIZE =>
         {
             let mut src_s = [0, 0];
-            (src_s[0], src_s[1]) =
-                fv_unpack_u64(stack.get_subbit_byte(src.to_fv_size()) as u64, src.size);
+            (src_s[0], src_s[1]) = stack.get_fv_u64(src);
             let dst_s =
                 stack.get_mut_u64_slice(dst.offset, 2 * dst.size.get().div_ceil(64) as usize);
             let f = match op {
