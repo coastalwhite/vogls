@@ -1,5 +1,6 @@
 use std::io;
 
+use vogls_bits::util::saturating_rem;
 use vogls_ir::LogicMode;
 
 use crate::mask;
@@ -236,48 +237,209 @@ pub fn cgc_sign_extend(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Resu
     match (dst.ty.mode, dst.ty.array_size(), src.ty.array_size()) {
         (LogicMode::TwoValue, None, None) => writeln!(
             f,
-            "{INDENT}{d} = (({unsigned_elem_ty})(((({signed_elem_ty}){s}) << {shift}) >> {shift})) & 0x{mask:x};",
+            "{INDENT}{d} = (({unsigned_elem_ty})((({signed_elem_ty})(({unsigned_elem_ty}){s} << {shift})) >> {shift})) & 0x{mask:x};",
             unsigned_elem_ty = dst.ty.element_type(),
-            signed_elem_ty = src.ty.element_type().signed_ty_str(),
-            shift = src.ty.element_type().size().get() - src.ty.size.get(),
+            signed_elem_ty = dst.ty.element_type().signed_ty_str(),
+            shift = dst.ty.element_type().size().get() - src.ty.size.get(),
             mask = mask(dst.ty.size.get()),
         )?,
         (LogicMode::TwoValue, Some(dst_arr_size), None) => {
             writeln!(
                 f,
-                "{INDENT}{d}[0] = ({unsigned_elem_ty})(((({signed_elem_ty}){s}) << {shift}) >> {shift});",
+                "{INDENT}{d}[0] = (({unsigned_elem_ty})((({signed_elem_ty})(({unsigned_elem_ty}){s} << {shift})) >> {shift}));",
                 unsigned_elem_ty = dst.ty.element_type(),
-                signed_elem_ty = src.ty.element_type().signed_ty_str(),
-                shift = src.ty.element_type().size().get() - src.ty.size.get(),
+                signed_elem_ty = dst.ty.element_type().signed_ty_str(),
+                shift = dst.ty.element_type().size().get() - src.ty.size.get(),
             )?;
             let dst_arr_size_m_1 = dst_arr_size - 1;
-            write!(
-                f,
-                "{INDENT}{{ uint64_t sign_mask = (!(((uint64_t){s}) >> {shift})) - 1; ",
-                shift = src.ty.size.get() - 1,
-            )?;
-            if dst_arr_size > 2 {
-                write!(
-                    f,
-                    "for (int i = 1; i < {dst_arr_size_m_1}; ++i) {{ {d}[i] = sign_mask; }} "
-                )?;
-            }
+            writeln!(f, "{INDENT}{{")?;
             writeln!(
                 f,
-                "{d}[{dst_arr_size_m_1}] = sign_mask & 0x{mask:x}; }}",
-                mask = if dst.ty.size.get() % 64 == 0 {
-                    u64::MAX
-                } else {
-                    mask(dst.ty.size.get() % 64)
-                }
+                "{INDENT}{INDENT}uint8_t sign_mask = !(({s} >> {shift}) & 1) - 1;",
+                shift = src.ty.size.get() - 1,
             )?;
+            writeln!(
+                f,
+                "{INDENT}{INDENT}memset({d}+1, sign_mask, {dst_arr_size_m_1}*sizeof(uint64_t));"
+            )?;
+            if dst.ty.size.get() % 64 != 0 {
+                let mask = mask(dst.ty.size.get() % 64);
+                writeln!(
+                    f,
+                    "{INDENT}{INDENT}{d}[{dst_arr_size_m_1}] = sign_mask & 0x{mask:x};"
+                )?;
+            }
+            writeln!(f, "{INDENT}}}")?;
         }
         (LogicMode::TwoValue, Some(dst_arr_size), Some(src_arr_size)) => {
-            todo!()
+            let num_items_main_loop = if src.ty.size.get() % 64 == 0 {
+                src_arr_size
+            } else {
+                src_arr_size - 1
+            };
+            if num_items_main_loop > 0 {
+                writeln!(
+                    f,
+                    "{INDENT}memmove({d}, {s}, {num_items_main_loop}*sizeof(uint64_t));"
+                )?;
+            }
+            let last_src_i = src_arr_size - 1;
+            if src.ty.size.get() % 64 != 0 {
+                writeln!(
+                    f,
+                    "{INDENT}{d}[{last_src_i}] = (({unsigned_elem_ty})((({signed_elem_ty})(({unsigned_elem_ty}){s}[{last_src_i}] << {shift})) >> {shift}));",
+                    unsigned_elem_ty = dst.ty.element_type(),
+                    signed_elem_ty = dst.ty.element_type().signed_ty_str(),
+                    shift = 64 - (src.ty.size.get() % 64),
+                )?;
+            }
+
+            let shift = saturating_rem(src.ty.size.get(), 64) - 1;
+            if dst_arr_size > src_arr_size {
+                let diff_arr_size = dst_arr_size - src_arr_size;
+                writeln!(
+                    f,
+                    "{INDENT}memset({d}+{src_arr_size}, !(({s}[{last_src_i}] >> {shift}) & 1) - 1, {diff_arr_size}*sizeof(uint64_t));"
+                )?;
+            }
+            if dst.ty.size.get() % 64 != 0 {
+                let last_dst_i = dst_arr_size - 1;
+                let mask = mask(dst.ty.size.get() % 64);
+                writeln!(f, "{INDENT}{d}[{last_dst_i}] &= 0x{mask:x};")?;
+            }
+        }
+        (LogicMode::FourValue, None, None) => {
+            writeln!(
+                f,
+                "{INDENT}{d} = (({unsigned_elem_ty})((({signed_elem_ty})(({unsigned_elem_ty}){s} << {shift})) >> {shift})) & 0x{mask:x};",
+                unsigned_elem_ty = dst.ty.element_type(),
+                signed_elem_ty = dst.ty.element_type().signed_ty_str(),
+                shift = dst.ty.element_type().size().get() - src.ty.size.get(),
+                mask = mask(dst.ty.size.get()),
+            )?;
+            writeln!(
+                f,
+                "{INDENT}{d} |= ((({unsigned_elem_ty})((({signed_elem_ty})(({unsigned_elem_ty}){s} << {lshift})) >> {rshift})) & 0x{mask:x}) << {dst_size};",
+                unsigned_elem_ty = dst.ty.element_type(),
+                signed_elem_ty = dst.ty.element_type().signed_ty_str(),
+                lshift = dst.ty.element_type().size().get() - 2 * src.ty.size.get(),
+                rshift = dst.ty.element_type().size().get() - src.ty.size.get(),
+                mask = mask(dst.ty.size.get()),
+                dst_size = dst.ty.size,
+            )?;
+        }
+        (LogicMode::FourValue, Some(dst_arr_size), None) => {
+            let num_words = dst_arr_size / 2;
+            let num_words_m_1 = num_words - 1;
+            writeln!(
+                f,
+                "{INDENT}{d}[0] = ({unsigned_elem_ty})((({signed_elem_ty})(({unsigned_elem_ty}){s} << {shift})) >> {shift});",
+                unsigned_elem_ty = dst.ty.element_type(),
+                signed_elem_ty = dst.ty.element_type().signed_ty_str(),
+                shift = dst.ty.element_type().size().get() - src.ty.size.get(),
+            )?;
+            writeln!(
+                f,
+                "{INDENT}{d}[{num_words}] = ({unsigned_elem_ty})((({signed_elem_ty})(({unsigned_elem_ty}){s} << {lshift})) >> {rshift});",
+                unsigned_elem_ty = dst.ty.element_type(),
+                signed_elem_ty = dst.ty.element_type().signed_ty_str(),
+                lshift = dst.ty.element_type().size().get() - 2 * src.ty.size.get(),
+                rshift = dst.ty.element_type().size().get() - src.ty.size.get(),
+            )?;
+
+            if num_words > 1 {
+                let num_words_p_1 = num_words + 1;
+                writeln!(f, "{INDENT}{{")?;
+                writeln!(
+                    f,
+                    "{INDENT}{INDENT}uint8_t spc_sign_mask = !(({s} >> {shift}) & 1) - 1;",
+                    shift = src.ty.size.get() - 1,
+                )?;
+                writeln!(
+                    f,
+                    "{INDENT}{INDENT}uint8_t val_sign_mask = !(({s} >> {shift}) & 1) - 1;",
+                    shift = 2 * src.ty.size.get() - 1,
+                )?;
+                writeln!(
+                    f,
+                    "{INDENT}{INDENT}memset({d}+1, spc_sign_mask, {num_words_m_1}*sizeof(uint64_t));"
+                )?;
+                writeln!(
+                    f,
+                    "{INDENT}{INDENT}memset({d}+{num_words_p_1}, val_sign_mask, {num_words_m_1}*sizeof(uint64_t));"
+                )?;
+                writeln!(f, "{INDENT}}}")?;
+            }
+
+            if dst.ty.size.get() % 64 != 0 {
+                let last_i = dst_arr_size - 1;
+                let mask = mask(dst.ty.size.get() % 64);
+                writeln!(f, "{INDENT}{d}[{num_words_m_1}] &= 0x{mask:x};")?;
+                writeln!(f, "{INDENT}{d}[{last_i}] &= 0x{mask:x};")?;
+            }
+        }
+        (LogicMode::FourValue, Some(dst_arr_size), Some(src_arr_size)) => {
+            let dst_num_words = dst_arr_size / 2;
+            let src_num_words = src_arr_size / 2;
+
+            let num_items_main_loop = if src.ty.size.get() % 64 == 0 {
+                src_num_words
+            } else {
+                src_num_words - 1
+            };
+            if num_items_main_loop > 0 {
+                writeln!(
+                    f,
+                    "{INDENT}memmove({d}, {s}, {num_items_main_loop}*sizeof(uint64_t));"
+                )?;
+                writeln!(
+                    f,
+                    "{INDENT}memmove({d}+{dst_num_words}, {s}+{src_num_words}, {num_items_main_loop}*sizeof(uint64_t));"
+                )?;
+            }
+            let src_num_words_m_1 = src_num_words - 1;
+            let src_arr_size_m_1 = src_arr_size - 1;
+            if src.ty.size.get() % 64 != 0 {
+                let sum_num_words_m_1 = dst_num_words + src_num_words_m_1;
+                writeln!(
+                    f,
+                    "{INDENT}{d}[{src_num_words_m_1}] = (({unsigned_elem_ty})((({signed_elem_ty})(({unsigned_elem_ty}){s}[{src_num_words_m_1}] << {shift})) >> {shift}));",
+                    unsigned_elem_ty = dst.ty.element_type(),
+                    signed_elem_ty = dst.ty.element_type().signed_ty_str(),
+                    shift = 64 - (src.ty.size.get() % 64),
+                )?;
+                writeln!(
+                    f,
+                    "{INDENT}{d}[{sum_num_words_m_1}] = (({unsigned_elem_ty})((({signed_elem_ty})(({unsigned_elem_ty}){s}[{src_arr_size_m_1}] << {shift})) >> {shift}));",
+                    unsigned_elem_ty = dst.ty.element_type(),
+                    signed_elem_ty = dst.ty.element_type().signed_ty_str(),
+                    shift = 64 - (src.ty.size.get() % 64),
+                )?;
+            }
+
+            let shift = saturating_rem(src.ty.size.get(), 64) - 1;
+            if dst_arr_size > src_arr_size {
+                let sum_num_words = dst_num_words + src_num_words;
+                let diff_num_words = dst_num_words - src_num_words;
+                writeln!(
+                    f,
+                    "{INDENT}memset({d}+{src_num_words}, !(({s}[{src_num_words_m_1}] >> {shift}) & 1) - 1, {diff_num_words}*sizeof(uint64_t));"
+                )?;
+                writeln!(
+                    f,
+                    "{INDENT}memset({d}+{sum_num_words}, !(({s}[{src_arr_size_m_1}] >> {shift}) & 1) - 1, {diff_num_words}*sizeof(uint64_t));"
+                )?;
+            }
+            if dst.ty.size.get() % 64 != 0 {
+                let dst_num_words_m_1 = dst_num_words - 1;
+                let dst_arr_size_m_1 = dst_arr_size - 1;
+                let mask = mask(dst.ty.size.get() % 64);
+                writeln!(f, "{INDENT}{d}[{dst_num_words_m_1}] &= 0x{mask:x};")?;
+                writeln!(f, "{INDENT}{d}[{dst_arr_size_m_1}] &= 0x{mask:x};")?;
+            }
         }
 
         (_, None, Some(_)) => unreachable!(),
-        (LogicMode::FourValue, _, _) => todo!(),
     }
 
     Ok(())
