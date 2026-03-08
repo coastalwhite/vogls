@@ -133,10 +133,7 @@ pub fn cgc_bin_xor(f: &mut impl io::Write, dst: CVar, lhs: CIdent, rhs: CIdent) 
 
             writeln!(f, "{INDENT}for (int i = 0; i < {num_words}; ++i) {{")?;
             // spc
-            writeln!(
-                f,
-                "{INDENT}{INDENT}{d}[i] = {l}[i] & {r}[i];"
-            )?;
+            writeln!(f, "{INDENT}{INDENT}{d}[i] = {l}[i] & {r}[i];")?;
             // value
             writeln!(
                 f,
@@ -147,6 +144,48 @@ pub fn cgc_bin_xor(f: &mut impl io::Write, dst: CVar, lhs: CIdent, rhs: CIdent) 
     }
 
     Ok(())
+}
+
+fn fv_inline_arith(
+    f: &mut impl io::Write,
+    dst: CVar,
+    lhs: CIdent,
+    rhs: CIdent,
+    op: char,
+) -> io::Result<()> {
+    let size = dst.ty.size;
+    let msbs_mask = if size.get() % 64 == 0 {
+        u64::MAX
+    } else {
+        (1u64 << dst.ty.size.get()) - 1
+    };
+
+    let (d, l, r) = (dst.ident, lhs, rhs);
+    writeln!(
+        f,
+        "{INDENT}{d} = (({l} & 0x{msbs_mask:x}) != 0x{msbs_mask:x} || ({r} & 0x{msbs_mask:x}) != 0x{msbs_mask:x}) ? 0 : ((({l} {op} {r}) & 0x{msbs_mask:x}) | (0x{msbs_mask:x} << {size}));"
+    )
+}
+
+fn fv_inline_div_rem(
+    f: &mut impl io::Write,
+    dst: CVar,
+    lhs: CIdent,
+    rhs: CIdent,
+    op: char,
+) -> io::Result<()> {
+    let size = dst.ty.size;
+    let msbs_mask = if size.get() % 64 == 0 {
+        u64::MAX
+    } else {
+        (1u64 << dst.ty.size.get()) - 1
+    };
+
+    let (d, l, r) = (dst.ident, lhs, rhs);
+    writeln!(
+        f,
+        "{INDENT}{d} = (({l} & 0x{msbs_mask:x}) != 0x{msbs_mask:x} || ({r} & 0x{msbs_mask:x}) != 0x{msbs_mask:x} || ({r} >> {size}) == 0) ? 0 : ((({l} {op} {r}) & 0x{msbs_mask:x}) | (0x{msbs_mask:x} << {size}));"
+    )
 }
 
 pub fn cgc_bin_add(f: &mut impl io::Write, dst: CVar, lhs: CIdent, rhs: CIdent) -> io::Result<()> {
@@ -161,7 +200,8 @@ pub fn cgc_bin_add(f: &mut impl io::Write, dst: CVar, lhs: CIdent, rhs: CIdent) 
     match (dst.ty.mode, dst.ty.array_size()) {
         (LogicMode::TwoValue, None) => writeln!(f, "{INDENT}{d} = ({l} + {r}) & 0x{msbs_mask:x};")?,
         (LogicMode::TwoValue, Some(_)) => todo!(),
-        (LogicMode::FourValue, _) => todo!(),
+        (LogicMode::FourValue, None) => fv_inline_arith(f, dst, lhs, rhs, '+')?,
+        (LogicMode::FourValue, Some(_)) => todo!(),
     }
 
     Ok(())
@@ -179,7 +219,8 @@ pub fn cgc_bin_sub(f: &mut impl io::Write, dst: CVar, lhs: CIdent, rhs: CIdent) 
     match (dst.ty.mode, dst.ty.array_size()) {
         (LogicMode::TwoValue, None) => writeln!(f, "{INDENT}{d} = ({l} - {r}) & 0x{msbs_mask:x};")?,
         (LogicMode::TwoValue, Some(_)) => todo!(),
-        (LogicMode::FourValue, _) => todo!(),
+        (LogicMode::FourValue, None) => fv_inline_arith(f, dst, lhs, rhs, '-')?,
+        (LogicMode::FourValue, Some(_)) => todo!(),
     }
 
     Ok(())
@@ -201,7 +242,8 @@ pub fn cgc_bin_mul(f: &mut impl io::Write, dst: CVar, lhs: CIdent, rhs: CIdent) 
     match (dst.ty.mode, dst.ty.array_size()) {
         (LogicMode::TwoValue, None) => writeln!(f, "{INDENT}{d} = ({l} * {r}) & 0x{msbs_mask:x};")?,
         (LogicMode::TwoValue, Some(_)) => todo!(),
-        (LogicMode::FourValue, _) => todo!(),
+        (LogicMode::FourValue, None) => fv_inline_arith(f, dst, lhs, rhs, '*')?,
+        (LogicMode::FourValue, Some(_)) => todo!(),
     }
 
     Ok(())
@@ -217,9 +259,13 @@ pub fn cgc_bin_div(f: &mut impl io::Write, dst: CVar, lhs: CIdent, rhs: CIdent) 
 
     let (d, l, r) = (dst.ident, lhs, rhs);
     match (dst.ty.mode, dst.ty.array_size()) {
-        (LogicMode::TwoValue, None) => writeln!(f, "{INDENT}{d} = ({l} / {r}) & 0x{msbs_mask:x};")?,
+        (LogicMode::TwoValue, None) => writeln!(
+            f,
+            "{INDENT}{d} = ({r} == 0) ? 0 : (({l} / {r}) & 0x{msbs_mask:x});"
+        )?,
         (LogicMode::TwoValue, Some(_)) => todo!(),
-        (LogicMode::FourValue, _) => todo!(),
+        (LogicMode::FourValue, None) => fv_inline_div_rem(f, dst, lhs, rhs, '/')?,
+        (LogicMode::FourValue, Some(_)) => todo!(),
     }
 
     Ok(())
@@ -237,7 +283,8 @@ pub fn cgc_bin_mod(f: &mut impl io::Write, dst: CVar, lhs: CIdent, rhs: CIdent) 
     match (dst.ty.mode, dst.ty.array_size()) {
         (LogicMode::TwoValue, None) => writeln!(f, "{INDENT}{d} = ({l} % {r}) & 0x{msbs_mask:x};")?,
         (LogicMode::TwoValue, Some(_)) => todo!(),
-        (LogicMode::FourValue, _) => todo!(),
+        (LogicMode::FourValue, None) => fv_inline_div_rem(f, dst, lhs, rhs, '%')?,
+        (LogicMode::FourValue, Some(_)) => todo!(),
     }
 
     Ok(())
