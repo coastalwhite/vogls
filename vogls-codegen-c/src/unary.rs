@@ -21,7 +21,7 @@ pub fn cgc_negate(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Result<()
         (LogicMode::TwoValue, Some(arr_size)) => {
             writeln!(
                 f,
-                "{INDENT}for (int i = 0; i < {}; ++i) {d}[i] = {s}[i];",
+                "{INDENT}for (int i = 0; i < {}; ++i) {d}[i] = ~{s}[i];",
                 arr_size - 1
             )?;
             writeln!(
