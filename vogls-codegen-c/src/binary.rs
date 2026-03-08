@@ -3,7 +3,7 @@ use std::io;
 use vogls_bits::arithmetic::FvLogicValue;
 use vogls_ir::{INTEGER_VSIZE, LogicMode};
 
-use crate::{CIdent, CVar, INDENT};
+use crate::{CIdent, CVar, INDENT, mask};
 
 pub fn cgc_bin_and(f: &mut impl io::Write, dst: CVar, lhs: CIdent, rhs: CIdent) -> io::Result<()> {
     let (d, l, r) = (dst.ident, lhs, rhs);
@@ -15,7 +15,40 @@ pub fn cgc_bin_and(f: &mut impl io::Write, dst: CVar, lhs: CIdent, rhs: CIdent) 
                 "{INDENT}for (int i = 0; i < {arr_size}; ++i) {d}[i] = {l}[i] & {r}[i];",
             )?;
         }
-        (LogicMode::FourValue, _) => todo!(),
+
+        // value = xspc xvalue yspc yvalue
+        // spc = xspc ~xvalue + yspc ~yvalue + xspc yspc
+        (LogicMode::FourValue, None) => {
+            let size = dst.ty.size;
+            let mask = mask(size.get());
+            write!(f, "{INDENT}{d} = ")?;
+            write!(
+                f,
+                "((({l} & (~{l}) >> {size}) | ({r} & (~{r}) >> {size}) | ({l} & {r})) & 0x{mask:x}) | "
+            )?;
+            write!(
+                f,
+                "((({l} & ({l} >> {size}) & {r} & ({r} >> {size})) & 0x{mask:x}) << {size})"
+            )?;
+
+            writeln!(f, ";")?
+        }
+        (LogicMode::FourValue, Some(arr_size)) => {
+            let num_words = arr_size / 2;
+
+            writeln!(f, "{INDENT}for (int i = 0; i < {num_words}; ++i) {{")?;
+            // spc
+            writeln!(
+                f,
+                "{INDENT}{INDENT}{d}[i] = ({l}[i] & ~{l}[i+{num_words}]) | ({r}[i] & ~{r}[i+{num_words}]) | ({l}[i] & {r}[i]);"
+            )?;
+            // value
+            writeln!(
+                f,
+                "{INDENT}{INDENT}{d}[{num_words}+i] = {l}[i] & {l}[i+{num_words}] & {r}[i] & {r}[i+{num_words}];"
+            )?;
+            writeln!(f, "{INDENT}}}")?;
+        }
     }
 
     Ok(())
@@ -31,7 +64,40 @@ pub fn cgc_bin_or(f: &mut impl io::Write, dst: CVar, lhs: CIdent, rhs: CIdent) -
                 "{INDENT}for (int i = 0; i < {arr_size}; ++i) {d}[i] = {l}[i] | {r}[i];",
             )?;
         }
-        (LogicMode::FourValue, _) => todo!(),
+
+        // value = xspc xvalue + yspc yvalue
+        // spc = xspc xvalue + yspc yvalue + xspc yspc
+        (LogicMode::FourValue, None) => {
+            let size = dst.ty.size;
+            let mask = mask(size.get());
+            write!(f, "{INDENT}{d} = ")?;
+            write!(
+                f,
+                "((({l} & ({l}) >> {size}) | ({r} & ({r}) >> {size}) | ({l} & {r})) & 0x{mask:x}) | "
+            )?;
+            write!(
+                f,
+                "(((({l} & ({l} >> {size})) | ({r} & ({r} >> {size}))) & 0x{mask:x}) << {size})"
+            )?;
+
+            writeln!(f, ";")?
+        }
+        (LogicMode::FourValue, Some(arr_size)) => {
+            let num_words = arr_size / 2;
+
+            writeln!(f, "{INDENT}for (int i = 0; i < {num_words}; ++i) {{")?;
+            // spc
+            writeln!(
+                f,
+                "{INDENT}{INDENT}{d}[i] = ({l}[i] & {l}[i+{num_words}]) | ({r}[i] & {r}[i+{num_words}]) | ({l}[i] & {r}[i]);"
+            )?;
+            // value
+            writeln!(
+                f,
+                "{INDENT}{INDENT}{d}[{num_words}+i] = ({l}[i] & {l}[i+{num_words}]) | ({r}[i] & {r}[i+{num_words}]);"
+            )?;
+            writeln!(f, "{INDENT}}}")?;
+        }
     }
 
     Ok(())
@@ -47,7 +113,37 @@ pub fn cgc_bin_xor(f: &mut impl io::Write, dst: CVar, lhs: CIdent, rhs: CIdent) 
                 "{INDENT}for (int i = 0; i < {arr_size}; ++i) {d}[i] = {l}[i] ^ {r}[i];",
             )?;
         }
-        (LogicMode::FourValue, _) => todo!(),
+
+        // value = xspc yspc (xvalue ^ yvalue)
+        // spc = xspc yspc
+        (LogicMode::FourValue, None) => {
+            let size = dst.ty.size;
+            let mask = mask(size.get());
+            write!(f, "{INDENT}{d} = ")?;
+            write!(f, "({l} & {r} & 0x{mask:x}) | ")?;
+            write!(
+                f,
+                "((({l} & {r} & (({l} >> {size}) ^ ({r} >> {size}))) & 0x{mask:x}) << {size})"
+            )?;
+
+            writeln!(f, ";")?
+        }
+        (LogicMode::FourValue, Some(arr_size)) => {
+            let num_words = arr_size / 2;
+
+            writeln!(f, "{INDENT}for (int i = 0; i < {num_words}; ++i) {{")?;
+            // spc
+            writeln!(
+                f,
+                "{INDENT}{INDENT}{d}[i] = {l}[i] & {r}[i];"
+            )?;
+            // value
+            writeln!(
+                f,
+                "{INDENT}{INDENT}{d}[{num_words}+i] = {l}[i] & {r}[i] & ({l}[i+{num_words}] ^ {r}[i+{num_words}]);"
+            )?;
+            writeln!(f, "{INDENT}}}")?;
+        }
     }
 
     Ok(())
