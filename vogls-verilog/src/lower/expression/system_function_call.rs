@@ -6,6 +6,7 @@ use vogls_ir::{
 use crate::ast::expr::Expr;
 use crate::ast::statement::SystemTaskIdentifier;
 use crate::ast::{AstId, AstIdRange, AstItem};
+use crate::lower::expression::{coerce_to_max_size_ty, sign_or_zero_extend};
 use crate::lower::vvalue::VValue;
 use crate::lower::{Diagnostics, Scope, VType, try_resolve_net};
 use crate::parser::AstArenas;
@@ -17,6 +18,7 @@ pub fn lower_system_function_call<'a>(
     builder: &mut BasicBlockBuilder,
     expr: AstId<Expr>,
     ident: AstItem<SystemTaskIdentifier>,
+    // arguments are in reverse order
     arguments: &[Option<(VariableKey, VType)>],
 ) -> Result<(VariableKey, VType), ()> {
     macro_rules! ensure_num_args_equal {
@@ -65,6 +67,28 @@ pub fn lower_system_function_call<'a>(
                 DynFormatString::new("\n".into(), [(0, DynFormatArgument::default())].into());
             builder.intrinsic(gl, IntrinsicOp::Display(Box::new(format_str)), [e].into());
             Ok((e, e_ty))
+        }
+        "vogls_copyx" => {
+            ensure_num_args_equal!(2);
+            let (l, l_ty) = arguments[1].ok_or(())?;
+            let (r, r_ty) = arguments[0].ok_or(())?;
+
+            let ty = coerce_to_max_size_ty(l_ty, r_ty);
+            let l = sign_or_zero_extend(gl, builder, l, l_ty, ty.force_net_width());
+            let r = sign_or_zero_extend(gl, builder, r, r_ty, ty.force_net_width());
+            let e = builder.copy_x(gl, l, r);
+            Ok((e, ty))
+        }
+        "vogls_copyz" => {
+            ensure_num_args_equal!(2);
+            let (l, l_ty) = arguments[1].ok_or(())?;
+            let (r, r_ty) = arguments[0].ok_or(())?;
+
+            let ty = coerce_to_max_size_ty(l_ty, r_ty);
+            let l = sign_or_zero_extend(gl, builder, l, l_ty, ty.force_net_width());
+            let r = sign_or_zero_extend(gl, builder, r, r_ty, ty.force_net_width());
+            let e = builder.copy_z(gl, l, r);
+            Ok((e, ty))
         }
 
         _ => {

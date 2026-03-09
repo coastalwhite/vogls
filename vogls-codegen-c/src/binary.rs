@@ -480,26 +480,48 @@ pub fn cgc_concat(f: &mut impl io::Write, dst: CVar, lhs: CVar, rhs: CVar) -> io
 }
 
 pub fn cgc_copy_x(f: &mut impl io::Write, dst: CVar, lhs: CVar, rhs: CVar) -> io::Result<()> {
-    let (d, l, _r) = (dst.ident, lhs.ident, rhs.ident);
+    let size = dst.ty.size;
+    let (d, l, r) = (dst.ident, lhs.ident, rhs.ident);
     match (lhs.ty.mode, lhs.ty.array_size()) {
         (LogicMode::TwoValue, None) => writeln!(f, "{INDENT}{d} = {l};")?,
         (LogicMode::TwoValue, Some(arr_size)) => {
             writeln!(f, "{INDENT}memmove({d}, {l}, {arr_size}*sizeof(uint64_t));")?
         }
-        (LogicMode::FourValue, _) => todo!(),
+        (LogicMode::FourValue, None) => writeln!(
+            f,
+            "{INDENT}{d} = {l} & ({r} | ({r} >> {size}) | ({r} | ({r} >> {size})) << {size});"
+        )?,
+        (LogicMode::FourValue, Some(arr_size)) => {
+            let num_words = arr_size / 2;
+            writeln!(
+                f,
+                "{INDENT}for (int i = 0; i < {num_words}; ++i) {{ {d}[i] = {l}[i] & ({r}[i] | {r}[i+{num_words}]); {d}[i+{num_words}] = {l}[i+{num_words}] & ({r}[i] | {r}[i+{num_words}]); }}"
+            )?
+        }
     }
 
     Ok(())
 }
 
 pub fn cgc_copy_y(f: &mut impl io::Write, dst: CVar, lhs: CVar, rhs: CVar) -> io::Result<()> {
-    let (d, l, _r) = (dst.ident, lhs.ident, rhs.ident);
+    let size = dst.ty.size;
+    let (d, l, r) = (dst.ident, lhs.ident, rhs.ident);
     match (lhs.ty.mode, lhs.ty.array_size()) {
         (LogicMode::TwoValue, None) => writeln!(f, "{INDENT}{d} = {l};")?,
         (LogicMode::TwoValue, Some(arr_size)) => {
             writeln!(f, "{INDENT}memmove({d}, {l}, {arr_size}*sizeof(uint64_t));")?
         }
-        (LogicMode::FourValue, _) => todo!(),
+        (LogicMode::FourValue, None) => writeln!(
+            f,
+            "{INDENT}{d} = ({l} & ({r} | ~({r} >> {size}))) | ((({l} >> {size}) | (~{r} & ({r} >> {size}))) << {size});"
+        )?,
+        (LogicMode::FourValue, Some(arr_size)) => {
+            let num_words = arr_size / 2;
+            writeln!(
+                f,
+                "{INDENT}for (int i = 0; i < {num_words}; ++i) {{ {d}[i] = {l}[i] & ({r}[i] | ~{r}[i+{num_words}]); {d}[i+{num_words}] = {l}[i+{num_words}] | (~{r}[i] & {r}[i+{num_words}]); }}"
+            )?
+        }
     }
 
     Ok(())
