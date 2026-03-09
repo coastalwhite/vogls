@@ -1289,6 +1289,46 @@ static inline void tv_bigint_add_sub(uint64_t *dst, uint64_t *lhs, uint64_t *rhs
         dst[num_words-1] &= (1ULL << (size % 64)) - 1;
     }
 }
+
+static inline void tv_bigint_mul(uint64_t *dst, uint64_t *lhs, uint64_t *rhs, uint32_t size) {
+    size_t num_words = (size + 63) / 64;
+    if (num_words == 1) {
+        dst[0] = lhs[0] * rhs[0];
+        if (size % 64 != 0) {
+            dst[0] &= (1ULL << (size % 64)) - 1;
+        }
+        return;
+    }
+
+    memset(dst, 0, num_words*sizeof(uint64_t));
+
+    // @Performance. This can probably be written in a better way.
+    uint64_t carry_in, hi, lo;
+    unsigned __int128 result;
+    int i, j, k;
+    for (j = 0; j < num_words; ++j) {
+        for (k = 0; k < num_words; ++k) {
+            result = ((unsigned __int128)lhs[j]) * ((unsigned __int128)rhs[k]);
+
+            hi = (uint64_t)(result >> 64);
+            lo = (uint64_t)(result & 0xFFFFFFFFFFFFFFFF);
+
+            carry_in = 0;
+            dst[j + k] = __builtin_addcl(dst[j + k], lo, false, &carry_in);
+            if (j + k + 1 < num_words) {
+                dst[j + k + 1] = __builtin_addcl(hi, dst[j + k + 1], carry_in, &carry_in);
+                i = 2;
+                while (carry_in && i + j + k < num_words) {
+                    dst[i + j + k] = __builtin_addcl(dst[i + j + k], 0, carry_in, &carry_in);
+                    i += 1;
+                }
+            }
+        }
+    }
+    if (size % 64 != 0) {
+        dst[num_words-1] &= (1ULL << (size % 64)) - 1;
+    }
+}
 "#,
     )
 }

@@ -276,15 +276,34 @@ pub fn cgc_bin_mul(f: &mut impl io::Write, dst: CVar, lhs: CIdent, rhs: CIdent) 
     let msbs_mask = if size.get() % 64 == 0 {
         u64::MAX
     } else {
-        (1u64 << dst.ty.size.get()) - 1
+        (1u64 << (dst.ty.size.get() % 64)) - 1
     };
 
     let (d, l, r) = (dst.ident, lhs, rhs);
     match (dst.ty.mode, dst.ty.array_size()) {
         (LogicMode::TwoValue, None) => writeln!(f, "{INDENT}{d} = ({l} * {r}) & 0x{msbs_mask:x};")?,
-        (LogicMode::TwoValue, Some(_)) => todo!(),
+        (LogicMode::TwoValue, Some(_)) => {
+            writeln!(f, "{INDENT}tv_bigint_mul({d}, {l}, {r}, {size});")?;
+        }
         (LogicMode::FourValue, None) => fv_inline_arith(f, dst, lhs, rhs, '*')?,
-        (LogicMode::FourValue, Some(_)) => todo!(),
+        (LogicMode::FourValue, Some(arr_size)) => {
+            let num_words = arr_size / 2;
+            writeln!(
+                f,
+                "{INDENT}if ((contains_special({l}, {size})) | (contains_special({r}, {size})))"
+            )?;
+            writeln!(
+                f,
+                "{INDENT}{INDENT}memset({d}, 0, {arr_size}*sizeof(uint64_t));"
+            )?;
+            writeln!(f, "{INDENT}else {{")?;
+            writeln!(
+                f,
+                "{INDENT}{INDENT}tv_bigint_mul({d}+{num_words}, {l}+{num_words}, {r}+{num_words}, {size});"
+            )?;
+            writeln!(f, "{INDENT}{INDENT}set_no_special({d}, {size});")?;
+            writeln!(f, "{INDENT}}}")?;
+        }
     }
 
     Ok(())
