@@ -1243,6 +1243,52 @@ static inline uint32_t popcount16(uint16_t n) {
 static inline uint32_t popcount8(uint8_t n) {
 	return popcount32((uint32_t)n);
 }
+
+static inline bool contains_special(uint64_t *src, uint32_t size) {
+    size_t num_full_words = size / 64;
+    bool contains_special = false;
+    for (int i = 0; i < num_full_words; ++i) contains_special |= ~src[i] != 0;
+    if (size % 64 != 0) {
+        uint64_t mask = (1ULL << (size % 64)) - 1;
+        contains_special |= (src[num_full_words] & mask) != mask;
+    }
+    return contains_special;
+}
+
+static inline void set_no_special(uint64_t *dst, uint32_t size) {
+    size_t num_full_words = size / 64;
+    for (int i = 0; i < num_full_words; ++i) dst[i] = ~0;;
+    if (size % 64 != 0) {
+        dst[num_full_words] = (1ULL << (size % 64)) - 1;
+    }
+}
+
+static inline void tv_bigint_add_sub(uint64_t *dst, uint64_t *lhs, uint64_t *rhs, uint32_t size, bool subtract) {
+    size_t num_words = (size + 63) / 64;
+    if (num_words == 1) {
+        if (subtract) {
+            dst[0] = lhs[0] - rhs[0];
+        } else {
+            dst[0] = lhs[0] + rhs[0];
+        }
+        if (size % 64 != 0) {
+            dst[0] &= (1ULL << (size % 64)) - 1;
+        }
+        return;
+    }
+
+    uint64_t mask = 0;
+    if (subtract) {
+        mask = ~(0ULL);
+    }
+    uint64_t carry_in = subtract;
+    for (int i = 0; i < num_words; ++i) {
+        dst[i] = __builtin_addcl(lhs[i], rhs[i] ^ mask, carry_in, &carry_in);
+    }
+    if (size % 64 != 0) {
+        dst[num_words-1] &= (1ULL << (size % 64)) - 1;
+    }
+}
 "#,
     )
 }

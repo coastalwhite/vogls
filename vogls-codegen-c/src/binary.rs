@@ -163,7 +163,7 @@ fn fv_inline_arith(
     let (d, l, r) = (dst.ident, lhs, rhs);
     writeln!(
         f,
-        "{INDENT}{d} = (({l} & 0x{msbs_mask:x}) != 0x{msbs_mask:x} || ({r} & 0x{msbs_mask:x}) != 0x{msbs_mask:x}) ? 0 : ((({l} {op} {r}) & 0x{msbs_mask:x}) | (0x{msbs_mask:x} << {size}));"
+        "{INDENT}{d} = (({l} & 0x{msbs_mask:x}) != 0x{msbs_mask:x} || ({r} & 0x{msbs_mask:x}) != 0x{msbs_mask:x}) ? 0 : ((({l} {op} {r}) & (uint64_t)0x{msbs_mask:x}) | ((uint64_t)0x{msbs_mask:x} << {size}));"
     )
 }
 
@@ -184,7 +184,7 @@ fn fv_inline_div_rem(
     let (d, l, r) = (dst.ident, lhs, rhs);
     writeln!(
         f,
-        "{INDENT}{d} = (({l} & 0x{msbs_mask:x}) != 0x{msbs_mask:x} || ({r} & 0x{msbs_mask:x}) != 0x{msbs_mask:x} || ({r} >> {size}) == 0) ? 0 : ((({l} {op} {r}) & 0x{msbs_mask:x}) | (0x{msbs_mask:x} << {size}));"
+        "{INDENT}{d} = (({l} & 0x{msbs_mask:x}) != 0x{msbs_mask:x} || ({r} & 0x{msbs_mask:x}) != 0x{msbs_mask:x} || ({r} >> {size}) == 0) ? 0 : ((({l} {op} {r}) & (uint64_t)0x{msbs_mask:x}) | ((uint64_t)0x{msbs_mask:x} << {size}));"
     )
 }
 
@@ -193,15 +193,37 @@ pub fn cgc_bin_add(f: &mut impl io::Write, dst: CVar, lhs: CIdent, rhs: CIdent) 
     let msbs_mask = if size.get() % 64 == 0 {
         u64::MAX
     } else {
-        (1u64 << dst.ty.size.get()) - 1
+        (1u64 << (dst.ty.size.get() % 64)) - 1
     };
 
     let (d, l, r) = (dst.ident, lhs, rhs);
     match (dst.ty.mode, dst.ty.array_size()) {
         (LogicMode::TwoValue, None) => writeln!(f, "{INDENT}{d} = ({l} + {r}) & 0x{msbs_mask:x};")?,
-        (LogicMode::TwoValue, Some(_)) => todo!(),
+        (LogicMode::TwoValue, Some(_)) => {
+            writeln!(
+                f,
+                "{INDENT}tv_bigint_add_sub({d}, {l}, {r}, {size}, false);"
+            )?;
+        }
         (LogicMode::FourValue, None) => fv_inline_arith(f, dst, lhs, rhs, '+')?,
-        (LogicMode::FourValue, Some(_)) => todo!(),
+        (LogicMode::FourValue, Some(arr_size)) => {
+            let num_words = arr_size / 2;
+            writeln!(
+                f,
+                "{INDENT}if ((contains_special({l}, {size})) | (contains_special({r}, {size})))"
+            )?;
+            writeln!(
+                f,
+                "{INDENT}{INDENT}memset({d}, 0, {arr_size}*sizeof(uint64_t));"
+            )?;
+            writeln!(f, "{INDENT}else {{")?;
+            writeln!(
+                f,
+                "{INDENT}{INDENT}tv_bigint_add_sub({d}+{num_words}, {l}+{num_words}, {r}+{num_words}, {size}, false);"
+            )?;
+            writeln!(f, "{INDENT}{INDENT}set_no_special({d}, {size});")?;
+            writeln!(f, "{INDENT}}}")?;
+        }
     }
 
     Ok(())
@@ -212,15 +234,34 @@ pub fn cgc_bin_sub(f: &mut impl io::Write, dst: CVar, lhs: CIdent, rhs: CIdent) 
     let msbs_mask = if size.get() % 64 == 0 {
         u64::MAX
     } else {
-        (1u64 << dst.ty.size.get()) - 1
+        (1u64 << (dst.ty.size.get() % 64)) - 1
     };
 
     let (d, l, r) = (dst.ident, lhs, rhs);
     match (dst.ty.mode, dst.ty.array_size()) {
         (LogicMode::TwoValue, None) => writeln!(f, "{INDENT}{d} = ({l} - {r}) & 0x{msbs_mask:x};")?,
-        (LogicMode::TwoValue, Some(_)) => todo!(),
+        (LogicMode::TwoValue, Some(_)) => {
+            writeln!(f, "{INDENT}tv_bigint_add_sub({d}, {l}, {r}, {size}, true);")?;
+        }
         (LogicMode::FourValue, None) => fv_inline_arith(f, dst, lhs, rhs, '-')?,
-        (LogicMode::FourValue, Some(_)) => todo!(),
+        (LogicMode::FourValue, Some(arr_size)) => {
+            let num_words = arr_size / 2;
+            writeln!(
+                f,
+                "{INDENT}if ((contains_special({l}, {size})) | (contains_special({r}, {size})))"
+            )?;
+            writeln!(
+                f,
+                "{INDENT}{INDENT}memset({d}, 0, {arr_size}*sizeof(uint64_t));"
+            )?;
+            writeln!(f, "{INDENT}else {{")?;
+            writeln!(
+                f,
+                "{INDENT}{INDENT}tv_bigint_add_sub({d}+{num_words}, {l}+{num_words}, {r}+{num_words}, {size}, true);"
+            )?;
+            writeln!(f, "{INDENT}{INDENT}set_no_special({d}, {size});")?;
+            writeln!(f, "{INDENT}}}")?;
+        }
     }
 
     Ok(())
