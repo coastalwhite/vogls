@@ -34,7 +34,8 @@ pub fn cgc_negate(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Result<()
         (LogicMode::FourValue, None) => {
             writeln!(
                 f,
-                "{INDENT}{d} = ({s} & 0x{msbs_mask:x}) | (({s} << {size}) & ~{s});"
+                "{INDENT}{d} = ({s} & 0x{msbs_mask:x}) | ((({s} << {size}) & ~{s}) & 0x{mask:x});",
+                mask = mask(src.ty.size.get() * 2)
             )?;
         }
         (LogicMode::FourValue, Some(arr_size)) => {
@@ -201,10 +202,7 @@ pub fn cgc_reduce_and(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Resul
                     f,
                     "{INDENT}{INDENT}redandspc &= {s}[{num_words_loop}] == 0x{mask:x};"
                 )?;
-                writeln!(
-                    f,
-                    "{INDENT}{INDENT}z0 &= {s}[{last_i}] == 0x{mask:x};;"
-                )?;
+                writeln!(f, "{INDENT}{INDENT}z0 &= {s}[{last_i}] == 0x{mask:x};;")?;
                 writeln!(
                     f,
                     "{INDENT}{INDENT}z1 |= ({s}[{num_words_loop}] & ~{s}[{last_i}]) != 0;"

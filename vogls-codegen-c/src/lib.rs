@@ -617,12 +617,16 @@ pub fn lower_process(
                     vogls_ir::IntrinsicOp::VcdResume => todo!(),
                 },
                 I::LastUpdateTime(dst, signal) => {
-                    let heap_idx = heap_map[dst].bit_offset / 64;
+                    let t = temp_map[&(*dst, LogicMode::TwoValue)];
                     let signal_idx = io_signals[signal].as_u64();
                     writeln!(
                         buffer,
-                        "{INDENT}heap[{heap_idx}] = last_active_time[{signal_idx}];"
+                        "{INDENT}{} = last_active_time[{signal_idx}];",
+                        t.ident
                     )?;
+                    if temporal_variables.contains(dst) {
+                        store(&mut buffer, heap_map[dst], t)?;
+                    }
                 }
                 I::Probe(dst, signal) => {
                     let signal = signals[io_signals[signal].as_usize()];
