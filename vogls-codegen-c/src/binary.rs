@@ -390,7 +390,11 @@ pub fn cgc_lsl(f: &mut impl io::Write, dst: CVar, lhs: CVar, rhs: CVar) -> io::R
     let (d, l, r) = (dst.ident, lhs.ident, rhs.ident);
     use LogicMode as M;
     match (lhs.ty.mode, rhs.ty.mode, lhs.ty.array_size()) {
-        (M::TwoValue, M::TwoValue, None) => writeln!(f, "{INDENT}{d} = {l} << {r};")?,
+        (M::TwoValue, M::TwoValue, None) => writeln!(
+            f,
+            "{INDENT}{d} = ({l} << {r}) & 0x{:x};",
+            mask(lhs.ty.size.get())
+        )?,
         (_, _, _) => todo!(),
     }
 
