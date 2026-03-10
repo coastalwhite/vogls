@@ -168,6 +168,7 @@ pub fn statements_to_process<'a>(
                     key: scope_key,
                     udps: scope.udps,
                     signal_map: scope.signal_map,
+                    tokenized: scope.tokenized,
                 };
 
                 builder = statements_to_process(
@@ -198,6 +199,7 @@ pub fn statements_to_process<'a>(
                     key: scope_key,
                     udps: scope.udps,
                     signal_map: scope.signal_map,
+                    tokenized: scope.tokenized,
                 };
 
                 let origin = arenas.get_span(id);
@@ -559,6 +561,7 @@ pub fn get_used_signals<'a>(
                 key: scope_key,
                 udps: scope.udps,
                 signal_map: scope.signal_map,
+                tokenized: scope.tokenized,
             };
             for s in statements.iter() {
                 get_used_signals(arenas, &mut scope, diagnostics, signals, s)?;
@@ -581,6 +584,7 @@ pub fn get_used_signals<'a>(
                 key: scope_key,
                 udps: scope.udps,
                 signal_map: scope.signal_map,
+                tokenized: scope.tokenized,
             };
             for s in statements.iter() {
                 get_used_signals(arenas, &mut scope, diagnostics, signals, s)?;

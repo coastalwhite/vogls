@@ -13,8 +13,7 @@ use vogls_ir::{Bits, GlobalContext, LogicMode, Signal, SignalKey};
 use vogls_runtime::RuntimeState;
 use vogls_runtime::SimulationIo;
 use vogls_sim::{
-    Event, Regions, Simulation, VmProcess, VmProcessKey, VmSignalKey,
-    lower_process_to_vm,
+    Event, Regions, Simulation, VmProcess, VmProcessKey, VmSignalKey, lower_process_to_vm,
 };
 use vogls_utils::VgHashMap;
 use vogls_verilog::ast::AstId;
@@ -207,6 +206,7 @@ impl Design {
         let result = vogls_verilog::elaborate::next::elaborate(
             &mut gl,
             &ast.arenas,
+            &token_buffer,
             *tl_module,
             &module_lut,
             &mut diagnostics,
@@ -313,6 +313,7 @@ impl Design {
                                 key,
                                 udps: &udps,
                                 signal_map: &mut signal_map,
+                                tokenized: &token_buffer,
                             },
                             specify_block.items,
                             &mut outs_lut,
@@ -333,6 +334,7 @@ impl Design {
                             key,
                             udps: &udps,
                             signal_map: &mut signal_map,
+                            tokenized: &token_buffer,
                         },
                         fn_decl,
                     )
@@ -349,6 +351,7 @@ impl Design {
                             key,
                             udps: &udps,
                             signal_map: &mut signal_map,
+                            tokenized: &token_buffer,
                         },
                         task_decl,
                     )
@@ -391,6 +394,7 @@ impl Design {
                     key,
                     udps: &udps,
                     signal_map: &mut signal_map,
+                    tokenized: &token_buffer,
                 },
                 &mut diagnostics,
             );
@@ -765,6 +769,7 @@ impl Design {
                 key: tlm,
                 udps: &udps,
                 signal_map: &mut signal_map,
+                tokenized: &token_buffer,
             };
             let scope = scope.vcd_scope(&ast.arenas.ident_table);
             let scope = vogls_sim::VcdScope::lower(&scope, &io_signals, &signal_map);

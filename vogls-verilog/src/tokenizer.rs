@@ -16,6 +16,7 @@ pub struct Tokenized {
     pub file_idxs: Vec<FileIdx>,
     pub contents: Vec<Rc<str>>,
     pub paths: Vec<Option<Rc<Path>>>,
+    pub file_line_offsets: Vec<Vec<usize>>,
 }
 
 #[derive(Default)]
@@ -41,6 +42,7 @@ impl Tokenized {
             file_idxs: Vec::new(),
             paths: Vec::new(),
             contents: Vec::new(),
+            file_line_offsets: Vec::new(),
         };
         ts.append_tokenize_with_macros(content, path, macros);
         ts
@@ -58,6 +60,7 @@ impl Tokenized {
             file_idxs,
             contents,
             paths,
+            file_line_offsets,
         } = self;
 
         use Token as T;
@@ -103,6 +106,7 @@ impl Tokenized {
         });
         contents.push(content);
         paths.push(path);
+        file_line_offsets.push(vec![0]);
 
         'lex_stack: while let Some(LexItem {
             file_idx,
@@ -116,7 +120,12 @@ impl Tokenized {
             let bytes = content[..end_offset].as_bytes();
             while let Some(&b) = bytes.get(i) {
                 let (token, length) = match b {
-                    b' ' | b'\r' | b'\t' | b'\n' => {
+                    b'\n' => {
+                        i += 1;
+                        file_line_offsets[file_idx as usize].push(i);
+                        continue;
+                    }
+                    b' ' | b'\r' | b'\t' => {
                         i += 1;
                         continue;
                     }
@@ -157,20 +166,27 @@ impl Tokenized {
                                 .iter()
                                 .position(|c: &u8| *c == b'\n')
                                 .map_or(bytes.len(), |j| i + 2 + j);
+                            file_line_offsets[file_idx as usize].push(i);
                             continue;
                         }
 
                         // Block comments
                         Some(b'*') => {
+                            i += 2;
                             let mut prev_was_star = false;
-                            i = bytes[i + 2..]
-                                .iter()
-                                .position(|c: &u8| {
-                                    let done = prev_was_star && *c == b'/';
-                                    prev_was_star = *c == b'*';
-                                    done
-                                })
-                                .map_or(bytes.len(), |j| i + 2 + j + 1);
+                            while let Some(b) = bytes.get(i) {
+                                let done = prev_was_star && *b == b'/';
+                                prev_was_star = *b == b'*';
+
+                                i += 1;
+                                if done {
+                                    break;
+                                }
+
+                                if *b == b'\n' {
+                                    file_line_offsets[file_idx as usize].push(i);
+                                }
+                            }
                             continue;
                         }
                         _ => (T::Slash, 1),

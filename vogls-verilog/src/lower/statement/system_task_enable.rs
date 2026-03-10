@@ -70,6 +70,9 @@ pub fn lower_system_task_enable<'a>(
                 return Err(());
             }
 
+            let line_number =
+                scope.get_line_number(arenas.get_item_span(*system_task_identifier).start);
+
             let lhs = expressions.get(0);
             let rhs = expressions.get(1);
 
@@ -78,24 +81,33 @@ pub fn lower_system_task_enable<'a>(
 
             let (lhs, _, rhs, _) =
                 expression::coerce_bin_arithmetic(gl, &mut builder, lhs, lhs_ty, rhs, rhs_ty);
+            static FAILED_STR: &str = "Assertion failed on line .  != \n";
             let (condition, content) = if ident == "vogls_assert_eq" {
-                (builder.case_equals(gl, lhs, rhs), "Assertion failed.  != \n")
+                (builder.case_equals(gl, lhs, rhs), FAILED_STR)
             } else {
-                (builder.not_case_equals(gl, lhs, rhs), "Assertion failed.  == \n")
+                (builder.not_case_equals(gl, lhs, rhs), FAILED_STR)
             };
             let format_str = DynFormatString::new(
                 content.into(),
                 [
-                    (18, DynFormatArgument::default()),
-                    (22, DynFormatArgument::default()),
+                    (
+                        25,
+                        DynFormatArgument {
+                            padding: Padding::NoPadding,
+                            base: Base::Decimal,
+                        },
+                    ),
+                    (27, DynFormatArgument::default()),
+                    (31, DynFormatArgument::default()),
                 ]
                 .into(),
             );
 
+            let line = builder.constant_u32(gl, line_number as u32);
             builder.intrinsic(
                 gl,
                 IntrinsicOp::Assert(Box::new(format_str)),
-                [condition, lhs, rhs].into(),
+                [condition, line, lhs, rhs].into(),
             );
         }
         "finish" => _ = builder.intrinsic(gl, IntrinsicOp::Finish, Default::default()),

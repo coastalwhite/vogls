@@ -22,6 +22,7 @@ pub struct Scope<'a> {
     pub key: SymbolId,
     pub udps: &'a VgHashMap<IdentId, AstId<UdpDeclaration>>,
     pub signal_map: &'a mut HashMap<SignalKey, SignalKey>,
+    pub tokenized: &'a Tokenized,
 }
 
 #[derive(Clone, Copy)]
@@ -103,6 +104,16 @@ impl<'a> Scope<'a> {
             self.signal_map,
         );
         scope
+    }
+
+    pub fn get_line_number(&self, token_idx: usize) -> usize {
+        let file_idx = self.tokenized.file_idxs[token_idx];
+        let start = self.tokenized.spans[token_idx].start();
+        let idx = match self.tokenized.file_line_offsets[file_idx as usize].binary_search(&start) {
+            Ok(l) => l,
+            Err(l) => l - 1,
+        };
+        idx + 1
     }
 }
 
@@ -333,6 +344,7 @@ use crate::elaborate::{
     FunctionSymbol, ModuleSymbol, NetSymbol, TaskSymbol, VSymbol, VSymbolTable,
 };
 use crate::parser::AstArenas;
+use crate::tokenizer::Tokenized;
 
 pub use self::expression::eval_constant_expr;
 use self::expression::{get_used_signals, lower_expr, truncate_or_extend};
@@ -372,6 +384,7 @@ pub fn lower_module_to_ir<'a>(
                     key: scope_key,
                     udps: scope.udps,
                     signal_map: scope.signal_map,
+                    tokenized: scope.tokenized,
                 };
                 module_or_generate_item::lower(gl, arenas, &mut scope, id, diagnostics)?;
             }

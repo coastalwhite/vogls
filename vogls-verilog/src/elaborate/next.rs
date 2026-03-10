@@ -31,6 +31,7 @@ use crate::lower::{
     unwrap_get_module_mut, unwrap_get_net_mut, unwrap_get_param_mut,
 };
 use crate::parser::AstArenas;
+use crate::tokenizer::Tokenized;
 
 use super::{
     ModuleSymbol, NetSymbol, VSymbol, VSymbolTable, port_declaration_to_info, try_table_insert,
@@ -106,6 +107,7 @@ impl ElaborationState<'_> {
 pub fn elaborate<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
+    tokenized: &'a Tokenized,
     top_level: AstId<Module>,
     module_lut: &VgHashMap<IdentId, AstId<Module>>,
     diagnostics: &mut Diagnostics,
@@ -273,6 +275,7 @@ pub fn elaborate<'a>(
                     if finalize_symbol(
                         gl,
                         arenas,
+                        tokenized,
                         &lvl_symbol,
                         *sid,
                         scope,
@@ -1609,6 +1612,7 @@ pub fn extend_expr_needs<'a>(
 pub fn finalize_symbol<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
+    tokenized: &'a Tokenized,
     symbol: &InLevelSymbol,
     sid: SymbolId,
     scope: SymbolId,
@@ -1762,6 +1766,7 @@ pub fn finalize_symbol<'a>(
                     key: sid,
                     udps: &VgHashMap::default(),
                     signal_map: &mut std::collections::HashMap::new(),
+                    tokenized,
                 },
                 *id,
             )?;
