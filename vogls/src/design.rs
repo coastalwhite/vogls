@@ -646,13 +646,13 @@ impl Design {
 
             std::fs::write("t2.c", &c_file)?;
 
-            let mut cc = Command::new("cc")
+            let mut cc = Command::new("clang")
                 .args([
                     "-x",
                     "c",
                     "-g3",
                     "-fPIC",
-                    "-O2",
+                    // "-O2",
                     "t2.c",
                     // "-",
                     "-shared",

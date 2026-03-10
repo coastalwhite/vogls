@@ -166,7 +166,6 @@ impl Tokenized {
                                 .iter()
                                 .position(|c: &u8| *c == b'\n')
                                 .map_or(bytes.len(), |j| i + 2 + j);
-                            file_line_offsets[file_idx as usize].push(i);
                             continue;
                         }
 

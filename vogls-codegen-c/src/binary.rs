@@ -387,15 +387,44 @@ pub fn cgc_lsl(f: &mut impl io::Write, dst: CVar, lhs: CVar, rhs: CVar) -> io::R
     assert_eq!(dst.ty, lhs.ty);
     assert_eq!(rhs.ty.size, INTEGER_VSIZE);
 
+    let l_size = lhs.ty.size;
     let (d, l, r) = (dst.ident, lhs.ident, rhs.ident);
     use LogicMode as M;
-    match (lhs.ty.mode, rhs.ty.mode, lhs.ty.array_size()) {
-        (M::TwoValue, M::TwoValue, None) => writeln!(
+    match (lhs.ty.mode, lhs.ty.array_size()) {
+        (M::TwoValue, None) => writeln!(
             f,
-            "{INDENT}{d} = ({l} << {r}) & 0x{:x};",
+            "{INDENT}{d} = ({r} >= {l_size}) ? 0 : (({l} << {r}) & 0x{:x});",
             mask(lhs.ty.size.get())
         )?,
-        (_, _, _) => todo!(),
+        (M::TwoValue, Some(_)) => {
+            writeln!(f, "{INDENT}tv_l_lsl_with({d}, {l}, {r}, {l_size}, 0);")?
+        }
+        (M::FourValue, None) => {
+            writeln!(f, "{INDENT}if (({r} & 0xFFFFFFFF) == 0xFFFFFFFF) {{")?;
+            writeln!(
+                f,
+                "{INDENT}{INDENT}{d} = (({r} >> 32) >= {l_size}) ? 0x{mask:x}ULL : (({l} << ({r} >> 32)) & 0x{double_mask:x}ULL & ~(((1ULL << ({r} >> 32)) - 1) << {l_size})) | ((1ULL << ({r} >> 32)) - 1);",
+                mask = mask(lhs.ty.size.get()),
+                double_mask = mask(lhs.ty.size.get() * 2),
+            )?;
+            writeln!(f, "{INDENT}}} else {d} = 0;")?;
+        }
+        (M::FourValue, Some(arr_size)) => {
+            let words = arr_size / 2;
+            writeln!(f, "{INDENT}if (({r} & 0xFFFFFFFF) == 0xFFFFFFFF) {{")?;
+            writeln!(
+                f,
+                "{INDENT}{INDENT}tv_l_lsl_with({d}, {l}, {r} >> 32, {l_size}, true);"
+            )?;
+            writeln!(
+                f,
+                "{INDENT}{INDENT}tv_l_lsl_with({d}+{words}, {l}+{words}, {r} >> 32, {l_size}, false);"
+            )?;
+            writeln!(
+                f,
+                "{INDENT}}} else memset({d}, 0, {arr_size}*sizeof(uint64_t));"
+            )?;
+        }
     }
 
     Ok(())
@@ -405,24 +434,43 @@ pub fn cgc_lsr(f: &mut impl io::Write, dst: CVar, lhs: CVar, rhs: CVar) -> io::R
     assert_eq!(dst.ty, lhs.ty);
     assert_eq!(rhs.ty.size, INTEGER_VSIZE);
 
+    let l_size = lhs.ty.size;
     let (d, l, r) = (dst.ident, lhs.ident, rhs.ident);
     use LogicMode as M;
     match (lhs.ty.mode, lhs.ty.array_size()) {
-        (M::TwoValue, None) => writeln!(f, "{INDENT}{d} = {l} >> {r};")?,
-        (M::TwoValue, Some(arr_size)) => {
+        (M::TwoValue, None) => writeln!(
+            f,
+            "{INDENT}{d} = ({r} >= {l_size}) ? 0 : (({l} >> {r}) & 0x{:x});",
+            mask(lhs.ty.size.get())
+        )?,
+        (M::TwoValue, Some(_)) => {
+            writeln!(f, "{INDENT}tv_l_lsr_with({d}, {l}, {r}, {l_size}, 0);")?
+        }
+        (M::FourValue, None) => {
+            writeln!(f, "{INDENT}if (({r} & 0xFFFFFFFF) == 0xFFFFFFFF) {{")?;
             writeln!(
                 f,
-                r#"{INDENT}if ({r} % 64 == 0) {{
-{INDENT}{INDENT}for (int i = 0; i < {arr_size} - ({r}/64+({r}%64 != 0)); i++) {d}[i] = {l}[i + ({r}/64+({r}%64 != 0))];
-{INDENT}{INDENT}for (int i = {arr_size} - ({r}/64+({r}%64 != 0)); i < {arr_size}; i++) {d}[i] = 0;
-{INDENT}}} else {{
-{INDENT}{INDENT}for (int i = 0; i < {arr_size} - ({r}/64+({r}%64 != 0)); i++) {d}[i] = ({l}[i + ({r}/64+({r}%64 != 0)) - 1] >> ({r}%64)) | ({l}[i + ({r}/64+({r}%64 != 0))] << (64 - {r}%64));
-{INDENT}{INDENT}{d}[{arr_size} - ({r}/64+({r}%64 != 0))] = ({l}[{arr_size}-1] >> ({r}%64)) | (0 << (64 - {r}%64));
-{INDENT}{INDENT}for (int i = {arr_size} - ({r}/64+({r}%64 != 0)) + 1; i < {arr_size}; i++) {d}[i] = 0;
-{INDENT}}}"#
+                "{INDENT}{INDENT}{d} = (({r} >> 32) >= {l_size}) ? 0x{mask:x}ULL : (({l} >> ({r} >> 32)) | (((1ULL << ({r} >> 32)) - 1) << ({l_size} - ({r} >> 32))));",
+                mask = mask(lhs.ty.size.get()),
+            )?;
+            writeln!(f, "{INDENT}}} else {d} = 0;")?;
+        }
+        (M::FourValue, Some(arr_size)) => {
+            let words = arr_size / 2;
+            writeln!(f, "{INDENT}if (({r} & 0xFFFFFFFF) == 0xFFFFFFFF) {{")?;
+            writeln!(
+                f,
+                "{INDENT}{INDENT}tv_l_lsr_with({d}, {l}, {r} >> 32, {l_size}, true);"
+            )?;
+            writeln!(
+                f,
+                "{INDENT}{INDENT}tv_l_lsr_with({d}+{words}, {l}+{words}, {r} >> 32, {l_size}, false);"
+            )?;
+            writeln!(
+                f,
+                "{INDENT}}} else memset({d}, 0, {arr_size}*sizeof(uint64_t));"
             )?;
         }
-        (_, _) => todo!(),
     }
 
     Ok(())

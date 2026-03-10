@@ -1,4 +1,5 @@
 use crate::VectorSize;
+use crate::arithmetic::{fv_pack_u64, fv_unpack_u64};
 use crate::load::load_partial_u64;
 use crate::store::store_partial_u64;
 
@@ -136,53 +137,29 @@ pub fn tv_gtu64_logical_shift_left_with(
     size: VectorSize,
     shiftin_value: bool,
 ) {
-    let shiftin_mask = u64::from(!shiftin_value).wrapping_sub(1);
     let nwords = size.get().div_ceil(64) as usize;
     if shift == 0 {
         dst[..nwords].copy_from_slice(&src[..nwords]);
         return;
     }
+
+    let shiftin_mask = u64::from(!shiftin_value).wrapping_sub(1);
     if shift >= size.get() {
-        for i in 0..nwords {
-            dst[i] = shiftin_mask;
+        dst.fill(shiftin_mask);
+        if size.get() % 64 != 0 {
+            dst[nwords - 1] &= (1u64 << (size.get() % 64)) - 1;
         }
         return;
     }
+
     let shift = shift as usize;
     let soff = shift % 64;
     if soff == 0 {
-        for i in 0..shift / 64 {
-            dst[i] = shiftin_mask;
-        }
-        for i in 0..nwords - shift / 64 {
-            dst[i + shift / 64] = src[i];
-        }
+        dst[..shift / 64].fill(shiftin_mask);
+        dst[shift / 64..].copy_from_slice(&src[..nwords - shift / 64]);
     } else {
-        // X = [ A ]
-        // LSL (X, 7)
-        //
-        // [ A << 7 ]
-        //
-        // X = [ A B C D ]
-        // LSL (X, 7)
-        // [
-        //     A << 7
-        //    (B << 7) | (A >> 1)
-        //    (C << 7) | (B >> 1)
-        //    (D << 7) | (C >> 1)
-        // ]
-        //
-        // LSL (X, 15)
-        // [
-        //     0
-        //     A << 7
-        //    (B << 7) | (A >> 1)
-        //    (C << 7) | (B >> 1)
-        // ]
         let swords = shift.div_ceil(64);
-        for i in 0..swords - 1 {
-            dst[i] = shiftin_mask;
-        }
+        dst[..swords - 1].fill(shiftin_mask);
         dst[swords - 1] = (src[0] << soff) | (shiftin_mask >> (64 - soff));
         for i in 0..nwords - swords {
             dst[i + swords] = (src[i + 1] << soff) | (src[i] >> (64 - soff));
@@ -209,51 +186,43 @@ pub fn tv_l_logical_shift_right_with(
         return;
     }
     if shift >= size.get() {
-        for i in 0..nwords {
-            dst[i] = shiftin_mask;
+        dst.fill(shiftin_mask);
+        if size.get() % 64 != 0 {
+            dst[nwords - 1] &= (1u64 << (size.get() % 64)) - 1;
         }
         return;
     }
+
+    //       >> 54                      >> 68                      >> 129
+    // [     [                          [                          [
+    // I0    (I1 << 8) | (I0 >> 54)     (I2 << 60) | (I1 >> 4)     (I3 << 63) | (I2 >> 1)
+    // I1    (I2 << 8) | (I1 >> 54)     (I3 << 60) | (I2 >> 4)     (SM << 63) | (I3 >> 1)
+    // I2    (I3 << 8) | (I2 >> 54)     (SM << 60) | (I3 >> 4)     (SM << 63) | (SM >> 1)
+    // I3    (SM << 8) | (I3 >> 54)      SM                         SM
+    // ]     ]                          ]                          ]
 
     let shift = shift as usize;
     let swords = shift.div_ceil(64);
     let soff = shift % 64;
     if soff == 0 {
-        for i in 0..nwords - swords {
-            dst[i] = src[i + swords];
-        }
-        for i in nwords - swords..nwords {
-            dst[i] = shiftin_mask;
-        }
+        dst[..nwords - swords].copy_from_slice(&src[swords..]);
+        dst[nwords - swords..].fill(shiftin_mask);
     } else {
-        // X = [ A ]
-        // LSR (X, 7)
-        //
-        // [ A >> 7 ]
-        //
-        // X = [ A B C D ]
-        // LSR (X, 7)
-        // [
-        //    (A >> 7) | (B << 1)
-        //    (B >> 7) | (C << 1)
-        //    (C >> 7) | (D << 1)
-        //     D >> 7
-        // ]
-        //
-        // LSR (X, 15)
-        // [
-        //    (B >> 7) | (C << 1)
-        //    (C >> 7) | (D << 1)
-        //     D >> 7
-        //    0
-        // ]
         for i in 0..nwords - swords {
-            dst[i] = (src[i + swords - 1] >> soff) | (src[i + swords] << (64 - soff));
+            dst[i] = (src[i + swords] << (64 - soff)) | (src[i + swords - 1] >> soff);
         }
-        dst[nwords - swords] = (src[nwords - 1] >> soff) | (shiftin_mask << (64 - soff));
-        for i in nwords - swords + 1..nwords {
-            dst[i] = shiftin_mask;
+        dst[nwords - swords] = (shiftin_mask << (64 - soff)) | (src[nwords - 1] >> soff);
+        dst[nwords - swords + 1..].fill(shiftin_mask);
+    }
+    if size.get() % 64 != 0 {
+        let mask = shiftin_mask << (size.get() % 64);
+        if shiftin_value {
+            dst[nwords - shift / 64 - 1] |= mask >> soff;
+            if soff != 0 && nwords >= shift / 64 + 2 {
+                dst[nwords - shift / 64 - 2] |= mask << (64 - soff);
+            }
         }
+        dst[nwords - 1] &= (1u64 << (size.get() % 64)) - 1;
     }
 }
 pub fn tv_l_arithmetic_shift_right(dst: &mut [u64], src: &[u64], shift: u32, size: VectorSize) {
@@ -270,13 +239,15 @@ pub fn fv_s_logical_shift_left(dst: &mut [u8], src: &[u8], shift: u32, size: Vec
     let dsize = VectorSize::new(size.get() * 2).unwrap();
     let mask = (1u64 << size.get()) - 1;
     if shift >= size.get() {
-        store_partial_u64(dst, mask << size.get(), dsize);
+        store_partial_u64(dst, mask, dsize);
         return;
     }
 
-    let spc_mask = (1u64 << (size.get() - shift)) - 1;
     let src = load_partial_u64(&src, dsize);
-    let result = (src << shift) & (mask | mask << size.get()) | (spc_mask << size.get());
+    let (spc, val) = fv_unpack_u64(src, size);
+    let spc = ((spc << shift) & mask) | ((1u64 << shift) - 1);
+    let val = (val << shift) & mask;
+    let result = fv_pack_u64(spc, val, size);
     store_partial_u64(dst, result, dsize);
 }
 pub fn fv_s_logical_shift_right(dst: &mut [u8], src: &[u8], shift: u32, size: VectorSize) {
@@ -287,14 +258,15 @@ pub fn fv_s_logical_shift_right(dst: &mut [u8], src: &[u8], shift: u32, size: Ve
     let dsize = VectorSize::new(size.get() * 2).unwrap();
     let mask = (1u64 << size.get()) - 1;
     if shift >= size.get() {
-        store_partial_u64(dst, mask << size.get(), dsize);
+        store_partial_u64(dst, mask, dsize);
         return;
     }
 
-    let shiftin_mask = (1u64 << shift) - 1;
     let src = load_partial_u64(&src, dsize);
-    let result =
-        (src >> shift) & (mask | mask << size.get()) | (shiftin_mask << (2 * size.get() - shift));
+    let (spc, val) = fv_unpack_u64(src, size);
+    let spc = ((spc >> shift) & mask) | (((1u64 << shift) - 1) << (size.get() - shift));
+    let val = (val >> shift) & mask;
+    let result = fv_pack_u64(spc, val, size);
     store_partial_u64(dst, result, dsize);
 }
 pub fn fv_s_arithmetic_shift_right(dst: &mut [u8], src: &[u8], shift: u32, size: VectorSize) {
@@ -305,23 +277,20 @@ pub fn fv_s_arithmetic_shift_right(dst: &mut [u8], src: &[u8], shift: u32, size:
     let dsize = VectorSize::new(size.get() * 2).unwrap();
     let mask = (1u64 << size.get()) - 1;
     if shift >= size.get() {
-        let mut result = mask << size.get();
+        let mut result = mask;
         let idx = size.get() - 1;
         if (src[(idx / 8) as usize] >> (idx % 8)) & 1 != 0 {
-            result |= mask;
+            result |= mask << size.get();
         }
         store_partial_u64(dst, result, dsize);
         return;
     }
 
-    let shiftin_mask = (1u64 << shift) - 1;
     let src = load_partial_u64(&src, dsize);
-    let mut result =
-        (src >> shift) & (mask | mask << size.get()) | (shiftin_mask << (2 * size.get() - shift));
-    if (src >> (size.get() - 1)) & 1 != 0 {
-        result |= shiftin_mask << (size.get() - shift);
-    }
-
+    let (spc, val) = fv_unpack_u64(src, size);
+    let spc = ((spc as i64) << (64 - size.get())) >> (size.get() + shift);
+    let val = ((val as i64) << (64 - size.get())) >> (size.get() + shift);
+    let result = fv_pack_u64(spc as u64 & mask, val as u64 & mask, size);
     store_partial_u64(dst, result, dsize);
 }
 pub fn fv_l_logical_shift_left(dst: &mut [u64], src: &[u64], shift: u32, size: VectorSize) {

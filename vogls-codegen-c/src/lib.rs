@@ -758,7 +758,11 @@ pub fn lower_process(
                             "{INDENT}{INDENT}drive_signal_{idx}(schedule, time, is_scheduled, listening, last_active_time);",
                             idx = io_signals[signal].as_u64()
                         )?;
-                        store(&mut buffer, signals[io_signals[signal].as_usize()].offset, t)?;
+                        store(
+                            &mut buffer,
+                            signals[io_signals[signal].as_usize()].offset,
+                            t,
+                        )?;
                         writeln!(buffer, "{INDENT}}}")?;
                     }
 
@@ -1487,6 +1491,83 @@ static inline void tv_l_concat(
     }
     if (s > 0) {
         dst[dwords - 1] = lhs[lwords - 1] >> (64 - roff);
+    }
+}
+static inline void tv_l_lsl_with(
+    uint64_t *dst,
+    uint64_t *src,
+    uint32_t amount,
+    uint32_t size,
+    bool shiftin_value
+) {
+    uint32_t nwords = (size + 63) / 64;
+    if (amount == 0) {
+        memmove(dst, src, nwords*sizeof(uint64_t));
+        return;
+    }
+    if (amount >= size) {
+        memset(dst, ((uint8_t)(!shiftin_value)) - 1, nwords*sizeof(uint64_t));
+        if (size % 64 != 0) dst[nwords - 1] &= (((uint64_t)1) << (size % 64)) - 1;
+        return;
+    }
+
+    uint32_t swords = (amount + 63) / 64;
+    uint32_t soff = amount % 64;
+    uint64_t shiftin_mask = ((uint64_t)(!shiftin_value)) - 1;
+    if (soff == 0) {
+        memset(dst, ((uint8_t)(!shiftin_value)) - 1, swords*sizeof(uint64_t));
+        memmove(dst+swords, src, (nwords - swords)*sizeof(uint64_t));
+    } else {
+        memset(dst, ((uint8_t)(!shiftin_value)) - 1, (swords-1)*sizeof(uint64_t));
+        dst[swords - 1] = (src[0] << soff) | (shiftin_mask >> (64 - soff));
+        for (int i = 0; i < nwords - swords; ++i)
+            dst[i + swords] = (src[i + 1] << soff) | (src[i] >> (64 - soff));
+    }
+
+    if (size % 64 != 0) {
+        dst[nwords - 1] &= (((uint64_t)1) << (size % 64)) - 1;
+    }
+}
+static inline void tv_l_lsr_with(
+    uint64_t *dst,
+    uint64_t *src,
+    uint32_t amount,
+    uint32_t size,
+    bool shiftin_value
+) {
+    uint32_t nwords = (size + 63) / 64;
+    if (amount == 0) {
+        memmove(dst, src, nwords*sizeof(uint64_t));
+        return;
+    }
+    if (amount >= size) {
+        memset(dst, ((uint8_t)(!shiftin_value)) - 1, nwords*sizeof(uint64_t));
+        if (size % 64 != 0) dst[nwords - 1] &= (((uint64_t)1) << (size % 64)) - 1;
+        return;
+    }
+
+    uint32_t swords = (amount + 63) / 64;
+    uint32_t soff = amount % 64;
+    uint64_t shiftin_mask = ((uint64_t)(!shiftin_value)) - 1;
+    if (soff == 0) {
+        memmove(dst, src + swords, (nwords - swords)*sizeof(uint64_t));
+        memset(dst+(nwords-swords), ((uint8_t)(!shiftin_value)) - 1, swords*sizeof(uint64_t));
+    } else {
+        for (int i = 0; i < nwords - swords; ++i)
+            dst[i] = (src[i + swords] << (64 - soff)) | (src[i + swords - 1] >> soff);
+        dst[nwords - swords] = (shiftin_mask << (64 - soff)) | (src[nwords - 1] >> soff);
+        memset(dst+(nwords-swords+1), ((uint8_t)(!shiftin_value)) - 1, (swords - 1)*sizeof(uint64_t));
+    }
+
+    if (size % 64 != 0) {
+        uint64_t mask = shiftin_mask << (size % 64);
+        if (shiftin_value) {
+            dst[nwords - amount / 64 - 1] |= mask >> soff;
+            if (nwords >= amount / 64 + 2) {
+                dst[nwords - amount / 64 - 2] |= mask << (64 - soff);
+            }
+        }
+        dst[nwords - 1] &= (((uint64_t)1) << (size % 64)) - 1;
     }
 }
 "#,
