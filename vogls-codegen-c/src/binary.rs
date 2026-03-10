@@ -1,9 +1,10 @@
 use std::io;
 
 use vogls_bits::arithmetic::FvLogicValue;
-use vogls_ir::{INTEGER_VSIZE, LogicMode};
+use vogls_ir::{INTEGER_VSIZE, LogicMode, VectorSize};
+use vogls_utils::saturating_rem;
 
-use crate::{CIdent, CVar, INDENT, mask};
+use crate::{CIdent, CType, CVar, INDENT, mask};
 
 pub fn cgc_bin_and(f: &mut impl io::Write, dst: CVar, lhs: CIdent, rhs: CIdent) -> io::Result<()> {
     let (d, l, r) = (dst.ident, lhs, rhs);
@@ -437,43 +438,76 @@ pub fn cgc_concat(f: &mut impl io::Write, dst: CVar, lhs: CVar, rhs: CVar) -> io
             r_size = rhs.ty.size
         )?,
         (LogicMode::TwoValue, Some(_)) => {
-            if rhs.ty.size.get() % 64 == 0 {
-                match rhs.ty.array_size() {
-                    None => writeln!(f, "{INDENT}{d}[0] = (uint64_t){r};")?,
-                    Some(r_arr_size) => writeln!(
-                        f,
-                        "{INDENT}memmove({d}, {r}, sizeof(uint64_t)*{r_arr_size});"
-                    )?,
-                }
-                let rwords = rhs.ty.array_size().unwrap_or(1);
-                match lhs.ty.array_size() {
-                    None => writeln!(f, "{INDENT}{d}[{rwords}] = (uint64_t){l};")?,
-                    Some(l_arr_size) => writeln!(
-                        f,
-                        "{INDENT}memmove({d}+{rwords}, {l}, sizeof(uint64_t)*{l_arr_size});"
-                    )?,
-                }
-            } else {
-                match (lhs.ty.array_size(), rhs.ty.array_size()) {
-                    (None, None) => {
-                        writeln!(
-                            f,
-                            "{INDENT}{d}[0] = (((uint64_t){l}) << {r_size}) | (uint64_t){r};",
-                            r_size = rhs.ty.size
-                        )?;
-                        writeln!(
-                            f,
-                            "{INDENT}{d}[1] = ((uint64_t){l}) >> {shift};",
-                            shift = 64 - rhs.ty.size.get()
-                        )?
-                    }
-                    (Some(l), None) => todo!(),
-                    (None, Some(r)) => todo!(),
-                    (Some(l), Some(r)) => todo!(),
-                }
+            let l_size = lhs.ty.size;
+            let r_size = rhs.ty.size;
+
+            write!(f, "{INDENT}tv_l_concat({d}, ")?;
+            match lhs.ty.array_size() {
+                None => write!(f, "(uint64_t[1]){{{l} & 0x{:x}}}", mask(l_size.get()))?,
+                Some(_) => write!(f, "{l}")?,
             }
+            f.write_all(b", ")?;
+            match rhs.ty.array_size() {
+                None => write!(f, "(uint64_t[1]){{{r} & 0x{:x}}}", mask(r_size.get()))?,
+                Some(_) => write!(f, "{r}")?,
+            }
+            writeln!(f, ", {l_size}, {r_size});")?;
         }
-        (LogicMode::FourValue, _) => todo!(),
+        (LogicMode::FourValue, None) => {
+            let dst_elem_ty = dst.ty.element_type();
+            let (l_size, r_size) = (lhs.ty.size, rhs.ty.size);
+
+            write!(f, "{INDENT}{d} = ")?;
+            write!(
+                f,
+                "(((({dst_elem_ty}){l}) & 0x{l_mask:x}) << {r_size}) | ((({dst_elem_ty}){r}) & 0x{r_mask:x}) |",
+                l_mask = mask(lhs.ty.size.get()),
+                r_mask = mask(rhs.ty.size.get()),
+            )?;
+            writeln!(
+                f,
+                "(((({dst_elem_ty}){l}) >> {l_size}) << {l_shift}) | (((({dst_elem_ty}){r}) >> {r_size}) << {r_shift});",
+                l_shift = l_size.get() + r_size.get() * 2,
+                r_shift = l_size.get() + r_size.get(),
+            )?;
+        }
+        (LogicMode::FourValue, Some(dst_arr_size)) => {
+            let dst_num_words = dst_arr_size / 2;
+            let l_size = lhs.ty.size;
+            let r_size = rhs.ty.size;
+
+            write!(f, "{INDENT}tv_l_concat({d}, ")?;
+            match lhs.ty.array_size() {
+                None => write!(
+                    f,
+                    "(uint64_t[1]){{(uint64_t){l} & 0x{:x}}}",
+                    mask(l_size.get())
+                )?,
+                Some(_) => write!(f, "{l}")?,
+            }
+            f.write_all(b", ")?;
+            match rhs.ty.array_size() {
+                None => write!(
+                    f,
+                    "(uint64_t[1]){{(uint64_t){r} & 0x{:x}}}",
+                    mask(r_size.get())
+                )?,
+                Some(_) => write!(f, "{r}")?,
+            }
+            writeln!(f, ", {l_size}, {r_size});")?;
+
+            write!(f, "{INDENT}tv_l_concat({d}+{dst_num_words}, ")?;
+            match lhs.ty.array_size() {
+                None => write!(f, "(uint64_t[1]){{(uint64_t){l} >> {l_size}}}")?,
+                Some(arr_size) => write!(f, "{l}+{}", arr_size / 2)?,
+            }
+            f.write_all(b", ")?;
+            match rhs.ty.array_size() {
+                None => write!(f, "(uint64_t[1]){{(uint64_t){r} >> {r_size}}}")?,
+                Some(arr_size) => write!(f, "{r}+{}", arr_size / 2)?,
+            }
+            writeln!(f, ", {l_size}, {r_size});")?;
+        }
     }
 
     Ok(())

@@ -474,8 +474,8 @@ pub(crate) fn exec_fv_concat(stack: &mut Heap, dst: HeapOffset, lhs: HeapRef, rh
         let mut rhs_s = [0u64; 2];
         let d = bytemuck::cast_slice_mut::<u8, u64>(d);
         let l = if lhs.size <= Heap::FV_SUBBITS_MAX_SIZE {
-            (lhs_s[0], lhs_s[1]) =
-                fv_unpack_u64((l[0] >> (lhs.offset.bit_offset % 8)) as u64, lhs.size);
+            let l = lhs.to_fv_size().align_subbits(l[0]);
+            (lhs_s[0], lhs_s[1]) = fv_unpack_u64(l as u64, lhs.size);
             &lhs_s
         } else if lhs.size < Heap::FV_U64_MIN_SIZE {
             (lhs_s[0], lhs_s[1]) =
@@ -485,8 +485,8 @@ pub(crate) fn exec_fv_concat(stack: &mut Heap, dst: HeapOffset, lhs: HeapRef, rh
             bytemuck::cast_slice::<u8, u64>(l)
         };
         let r = if rhs.size <= Heap::FV_SUBBITS_MAX_SIZE {
-            (rhs_s[0], rhs_s[1]) =
-                fv_unpack_u64((r[0] >> (rhs.offset.bit_offset % 8)) as u64, rhs.size);
+            let r = rhs.to_fv_size().align_subbits(r[0]);
+            (rhs_s[0], rhs_s[1]) = fv_unpack_u64(r as u64, rhs.size);
             &rhs_s
         } else if rhs.size < Heap::FV_U64_MIN_SIZE {
             (rhs_s[0], rhs_s[1]) =

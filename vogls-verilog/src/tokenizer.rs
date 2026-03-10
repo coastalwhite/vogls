@@ -674,6 +674,7 @@ impl Tokenized {
                                     });
                                     contents.push(content);
                                     paths.push(Some(path.into()));
+                                    file_line_offsets.push(vec![0]);
                                     continue 'lex_stack;
                                 }
                             }

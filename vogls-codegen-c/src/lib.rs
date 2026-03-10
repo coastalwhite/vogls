@@ -1329,6 +1329,46 @@ static inline void tv_bigint_mul(uint64_t *dst, uint64_t *lhs, uint64_t *rhs, ui
         dst[num_words-1] &= (1ULL << (size % 64)) - 1;
     }
 }
+static inline void tv_l_concat(
+    uint64_t *dst,
+    uint64_t *lhs,
+    uint64_t *rhs,
+    uint32_t lhs_size,
+    uint32_t rhs_size
+) {
+    uint32_t lwords = (lhs_size + 63) / 64;
+    uint32_t rwords = (rhs_size + 63) / 64;
+    uint32_t dwords = (lhs_size + rhs_size + 63) / 64;
+
+    for (int i = 0; i < rwords; ++i) {
+        dst[i] = rhs[i];
+    }
+
+    uint32_t roff = rhs_size % 64;
+
+    // Fast path: left side is empty or right side is aligned.
+    if (roff == 0) {
+        for (int i = 0; i < lwords; ++i) {
+            dst[rwords + i] = lhs[i];
+        }
+        return;
+    }
+
+    dst[rwords - 1] |= lhs[0] << roff;
+    uint64_t s;
+    if (lhs_size < (64 - roff)) s = 0;
+    else                        s = lhs_size - (64 - roff);
+    int i = 0;
+    while (s > roff) {
+        dst[rwords + i] = (lhs[i] >> (64 - roff)) | (lhs[i + 1] << roff);
+        if (s < 64) s = 0;
+        else        s -= 64;
+        i += 1;
+    }
+    if (s > 0) {
+        dst[dwords - 1] = lhs[lwords - 1] >> (64 - roff);
+    }
+}
 "#,
     )
 }
