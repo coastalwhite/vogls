@@ -1,4 +1,6 @@
-use crate::{Simulation, SimulationState, VmInstruction, VmSignalKey};
+use vogls_runtime::RtSignalKey;
+
+use crate::{Simulation, SimulationState, VmInstruction};
 
 pub type PluginState = Box<dyn Plugin + Send + Sync>;
 
@@ -7,7 +9,7 @@ pub trait Plugin: std::any::Any {
         &mut self,
         simulation: &Simulation,
         state: &mut SimulationState,
-        signal: VmSignalKey,
+        signal: RtSignalKey,
     );
     fn timestep(&mut self, simulation: &Simulation, state: &mut SimulationState);
     fn finish(&mut self, simulation: &Simulation, state: &mut SimulationState);

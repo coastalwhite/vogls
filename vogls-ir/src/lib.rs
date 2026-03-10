@@ -246,7 +246,7 @@ pub struct Variable {
     pub size: VectorSize,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Signal {
     pub name: String,
     pub size: VectorSize,

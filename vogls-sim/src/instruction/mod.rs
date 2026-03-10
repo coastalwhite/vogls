@@ -5,12 +5,10 @@ mod format;
 mod lower;
 
 pub use lower::lower_process_to_vm;
+use vogls_runtime::RtSignalKey;
 
 use crate::VcdScope;
 use vogls_codegen::{Heap, HeapOffset, HeapRef};
-
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-pub struct VmSignalKey(pub u64);
 
 #[derive(Debug, Clone, Copy)]
 pub enum BinaryArithmeticOp {
@@ -88,14 +86,14 @@ pub enum VmInstruction {
 
     Intrinsic(HeapOffset, Box<VmIntrinsicOp>, Box<[(HeapRef, LogicMode)]>),
 
-    LastUpdateTime(HeapOffset, VmSignalKey),
-    Drive(VmSignalKey, HeapRef, Option<HeapOffset>),
+    LastUpdateTime(HeapOffset, RtSignalKey),
+    Drive(RtSignalKey, HeapRef, Option<HeapOffset>),
 
     Wait(Time),
     TvVariableWait(HeapOffset),
     FvVariableWait(HeapOffset),
     WaitRegion(u8),
-    Watch(Vec<VmSignalKey>),
+    Watch(Vec<RtSignalKey>),
 
     Jump(usize),
     /// (condition, true_offset, false_offset)
@@ -203,13 +201,13 @@ impl VmInstruction {
             I::Intrinsic(_, _, _) => &[],
             I::LastUpdateTime(dst, _) => &[("dst", false, dst.to_64bit_ref())],
             I::Drive(dst, src, partial) => {
-                eprint!(" ({})", signals[dst.0 as usize].offset);
+                eprint!(" ({})", signals[dst.as_usize()].offset);
                 match partial {
                     None => &[
                         (
                             "dst",
                             logic_mode == LogicMode::FourValue,
-                            signals[dst.0 as usize],
+                            signals[dst.as_usize()],
                         ),
                         ("src", logic_mode == LogicMode::FourValue, *src),
                     ],
@@ -217,7 +215,7 @@ impl VmInstruction {
                         (
                             "dst",
                             logic_mode == LogicMode::FourValue,
-                            signals[dst.0 as usize],
+                            signals[dst.as_usize()],
                         ),
                         ("src", logic_mode == LogicMode::FourValue, *src),
                         (

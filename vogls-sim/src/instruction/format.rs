@@ -1,6 +1,6 @@
 use std::fmt::{self, Write};
 
-use super::{VmInstruction, VmProcess, VmSignalKey};
+use super::{VmInstruction, VmProcess};
 
 impl fmt::Display for VmInstruction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -124,15 +124,16 @@ impl fmt::Display for VmInstruction {
                 Ok(())
             }
             Self::LastUpdateTime(dst, signal) => {
-                write!(f, "{dst} = lastupdatetime {signal}")
+                write!(f, "{dst} = lastupdatetime {}", signal.as_usize())
             }
             Self::Drive(signal, src, partial) => match partial {
-                None => write!(f, "drive {signal}, {}", src.offset),
+                None => write!(f, "drive {}, {}", signal.as_usize(), src.offset),
                 Some(offset) => {
                     write!(
                         f,
-                        "drive[{offset}, {length}] {signal}, {}",
+                        "drive[{offset}, {length}] {}, {}",
                         src.offset,
+                        signal.as_usize(),
                         length = src.size,
                     )
                 }
@@ -144,9 +145,9 @@ impl fmt::Display for VmInstruction {
             Self::Watch(signals) => {
                 f.write_str("watch [")?;
                 if let Some(signal) = signals.first() {
-                    signal.fmt(f)?;
+                    signal.as_usize().fmt(f)?;
                     for signal in &signals[1..] {
-                        write!(f, ", {}", signal)?;
+                        write!(f, ", {}", signal.as_usize())?;
                     }
                 }
                 f.write_char(']')
@@ -160,12 +161,6 @@ impl fmt::Display for VmInstruction {
             }
             Self::Halt => f.write_str("halt"),
         }
-    }
-}
-
-impl fmt::Display for VmSignalKey {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "${}", self.0)
     }
 }
 

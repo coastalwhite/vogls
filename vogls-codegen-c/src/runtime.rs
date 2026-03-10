@@ -3,9 +3,11 @@ use std::ops::Deref as _;
 use std::path::Path;
 use std::ptr::NonNull;
 
+use vogls_codegen::HeapRef;
 use vogls_ir::dyn_format_string::DynFormatString;
-use vogls_ir::{Bits, GlobalContext, VectorSize};
-use vogls_runtime::SimulationIo;
+use vogls_ir::{Bits, GlobalContext, LogicMode, SignalKey, VectorSize};
+use vogls_runtime::{RtSignalKey, SimulationIo};
+use vogls_utils::{IndexMap, VgHashMap};
 
 type Time = u64;
 type HeapPtr = Option<NonNull<u64>>;
@@ -390,5 +392,24 @@ impl CDesign {
             }
         }
         Ok(())
+    }
+
+    pub fn poke_signal(&self, state: &mut CDesignState, signal: RtSignalKey) {
+        type DriveFn =
+            extern "C" fn(NonNull<ScheduleT>, Time, IsScheduled, Listening, LastActiveTime);
+        let drive = unsafe {
+            self.lib
+                .get::<DriveFn>(&format!("drive_signal_{}", signal.as_u64()))
+        }
+        .unwrap();
+        state.schedule.with_t(|schedule| {
+            (drive.deref())(
+                NonNull::from_mut(schedule),
+                state.runtime.time,
+                NonNull::new(state.is_scheduled.as_mut_ptr()),
+                NonNull::new(state.listening.as_mut_ptr()),
+                NonNull::new(state.runtime.last_active_time.as_mut_ptr()),
+            );
+        });
     }
 }

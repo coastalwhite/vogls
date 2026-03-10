@@ -1,5 +1,18 @@
 use vogls_codegen::Heap;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RtSignalKey(pub u64);
+
+impl RtSignalKey {
+    pub fn as_usize(self) -> usize {
+        self.0 as usize
+    }
+
+    pub fn as_u64(self) -> u64 {
+        self.0
+    }
+}
+
 #[derive(Clone)]
 pub struct RuntimeState {
     pub heap: Heap,
@@ -32,4 +45,3 @@ impl SimulationIo {
         Self { stdout, stderr }
     }
 }
-

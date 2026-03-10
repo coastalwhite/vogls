@@ -1,15 +1,15 @@
 use std::num::NonZeroUsize;
 
 use hashbrown::hash_map::Entry;
-use vogls::sim::VmSignalKey;
+use vogls::RtSignalKey;
 
 /// Simulation plugin to trace signals when they can updated.
 #[derive(Default)]
 pub struct TracePlugin {
-    pub tracked: vogls::utils::VgHashMap<VmSignalKey, Option<NonZeroUsize>>,
-    pub updated_this_time_step: Vec<VmSignalKey>,
+    pub tracked: vogls::utils::VgHashMap<RtSignalKey, Option<NonZeroUsize>>,
+    pub updated_this_time_step: Vec<RtSignalKey>,
 
-    pub trace: Vec<(VmSignalKey, vogls::Bits)>,
+    pub trace: Vec<(RtSignalKey, vogls::Bits)>,
     pub time_offsets: Vec<(u64, usize)>,
 }
 
@@ -18,7 +18,7 @@ impl vogls::sim::Plugin for TracePlugin {
         &mut self,
         _simulation: &vogls::sim::Simulation,
         _state: &mut vogls::SimulationState,
-        signal: VmSignalKey,
+        signal: RtSignalKey,
     ) {
         if let Some(idx) = self.tracked.get_mut(&signal) {
             idx.get_or_insert_with(|| {
@@ -59,7 +59,7 @@ impl vogls::sim::Plugin for TracePlugin {
 
 #[pyo3::pyclass(frozen)]
 pub struct Trace {
-    pub trace: Vec<(VmSignalKey, vogls::Bits)>,
+    pub trace: Vec<(RtSignalKey, vogls::Bits)>,
     pub time_offsets: Vec<(u64, usize)>,
 }
 
@@ -68,7 +68,7 @@ impl Trace {
     pub fn hamming_distance(&self, py: pyo3::Python<'_>) -> pyo3::Py<pyo3::types::PyList> {
         let mut out = Vec::<(u64, u64)>::new();
         py.detach(|| {
-            let mut values = vogls::utils::VgHashMap::<vogls::sim::VmSignalKey, usize>::default();
+            let mut values = vogls::utils::VgHashMap::<vogls::RtSignalKey, usize>::default();
             for i in 0..self.time_offsets.len() - 1 {
                 let mut hd = 0;
                 let (time, start) = self.time_offsets[i];

@@ -10,11 +10,9 @@ use vogls_codegen_c::runtime::{CDesign, CDesignState};
 use vogls_codegen_c::{ListenerBuilder, lower_signal_drive_fn, lower_signal_drive_header};
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_ir::{Bits, GlobalContext, LogicMode, Signal, SignalKey};
-use vogls_runtime::RuntimeState;
 use vogls_runtime::SimulationIo;
-use vogls_sim::{
-    Event, Regions, Simulation, VmProcess, VmProcessKey, VmSignalKey, lower_process_to_vm,
-};
+use vogls_runtime::{RtSignalKey, RuntimeState};
+use vogls_sim::{Event, Regions, Simulation, VmProcess, VmProcessKey, lower_process_to_vm};
 use vogls_utils::VgHashMap;
 use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{Description, Module, ModuleItem, NonPortModuleItem};
@@ -30,7 +28,6 @@ use crate::{ExecutionContext, append_referenced_modules, token_range_to_line_ran
 
 pub enum DesignBackend {
     Interpretted {
-        vm_signal_map: HashMap<SignalKey, VmSignalKey>,
         simulation: vogls_sim::Simulation,
     },
     Compiled {
@@ -43,6 +40,8 @@ pub struct Design {
     pub ident_table: IdentTable,
     pub elab_table: VSymbolTable,
     pub backend: DesignBackend,
+    pub rt_signal_map: VgHashMap<SignalKey, RtSignalKey>,
+    pub signal_to_heap: Vec<HeapRef>,
     pub initial_state: DesignState,
 }
 
@@ -555,7 +554,7 @@ impl Design {
         }
 
         let mut heap_builder = HeapBuilder::new();
-        let mut io_signals = HashMap::new();
+        let mut io_signals = VgHashMap::default();
         for (key, signal) in &gl.signals {
             let Signal {
                 name,
@@ -579,7 +578,7 @@ impl Design {
                 });
             }
 
-            let vm_signal_key = VmSignalKey(io_signals.len() as u64);
+            let vm_signal_key = RtSignalKey(io_signals.len() as u64);
             io_signals.insert(key, vm_signal_key);
             signals.push(HeapRef {
                 offset: HeapOffset { bit_offset: 0 },
@@ -613,11 +612,6 @@ impl Design {
 
         if ectx.compile {
             let mut listener_builder = ListenerBuilder::default();
-            let io_signals = io_signals
-                .iter()
-                .map(|(k, v)| (*k, signals[v.0 as usize]))
-                .collect();
-
             let mut out = Vec::new();
 
             for signal in gl.signals.keys() {
@@ -633,6 +627,7 @@ impl Design {
                     &mut heap_builder,
                     &mut listener_builder,
                     &io_signals,
+                    &signals,
                 )?;
             }
 
@@ -687,6 +682,8 @@ impl Design {
                 ident_table: ast.arenas.ident_table,
                 elab_table,
                 backend: DesignBackend::Compiled { design },
+                rt_signal_map: io_signals,
+                signal_to_heap: signals,
                 initial_state: DesignState::Compiled(initial_state),
             });
         }
@@ -758,7 +755,8 @@ impl Design {
             }
         }
 
-        let mut simulation = Simulation::new(processes, signals, gl.logic_mode);
+        // @TODO: Remove clone
+        let mut simulation = Simulation::new(processes, signals.clone(), gl.logic_mode);
         simulation.itrace = ectx.itrace;
         let mut initial_state = simulation.new_state(regions, listeners, watches, heap);
 
@@ -780,10 +778,9 @@ impl Design {
             gl,
             ident_table: ast.arenas.ident_table,
             elab_table,
-            backend: DesignBackend::Interpretted {
-                vm_signal_map: io_signals,
-                simulation,
-            },
+            backend: DesignBackend::Interpretted { simulation },
+            rt_signal_map: io_signals,
+            signal_to_heap: signals,
             initial_state: DesignState::Interpretted(initial_state),
         })
     }
@@ -795,10 +792,7 @@ impl Design {
     ) -> Result<(), Box<dyn std::error::Error>> {
         match (&mut self.backend, &mut self.initial_state) {
             (
-                DesignBackend::Interpretted {
-                    vm_signal_map: _,
-                    simulation,
-                },
+                DesignBackend::Interpretted { simulation },
                 DesignState::Interpretted(initial_state),
             ) => simulation
                 .run(initial_state, io, time)
@@ -817,19 +811,50 @@ impl Design {
         time: u64,
     ) -> Result<(), Box<dyn std::error::Error>> {
         match (&self.backend, state) {
-            (
-                DesignBackend::Interpretted {
-                    vm_signal_map: _,
-                    simulation,
-                },
-                DesignState::Interpretted(state),
-            ) => simulation
-                .run(state, io, time)
-                .map_err(|_| "execution failed.".into()),
+            (DesignBackend::Interpretted { simulation }, DesignState::Interpretted(state)) => {
+                simulation
+                    .run(state, io, time)
+                    .map_err(|_| "execution failed.".into())
+            }
             (DesignBackend::Compiled { design }, DesignState::Compiled(state)) => design
                 .run(state, io, time)
                 .map_err(|_| "execution failed.".into()),
             _ => unreachable!(),
         }
+    }
+
+    pub fn get_rt_signal(&self, signal: SignalKey) -> RtSignalKey {
+        self.rt_signal_map[&signal]
+    }
+
+    pub fn get_heap_ref(&self, signal: RtSignalKey) -> HeapRef {
+        self.signal_to_heap[signal.as_usize()]
+    }
+
+    pub fn set_signal(&self, state: &mut DesignState, signal: RtSignalKey, bits: &Bits) {
+        let heap_ref = self.get_heap_ref(signal);
+        let updated = &state.runtime().heap.load_bits(heap_ref, self.gl.logic_mode) != bits;
+
+        if updated {
+            state
+                .runtime_mut()
+                .heap
+                .store_bits(heap_ref, self.gl.logic_mode, bits);
+
+            match (&self.backend, state) {
+                (DesignBackend::Interpretted { simulation }, DesignState::Interpretted(state)) => {
+                    simulation.poke_signal(state, signal)
+                }
+                (DesignBackend::Compiled { design }, DesignState::Compiled(state)) => {
+                    design.poke_signal(state, signal)
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    pub fn get_signal(&self, state: &DesignState, signal: RtSignalKey) -> Bits {
+        let heap_ref = self.get_heap_ref(signal);
+        state.runtime().heap.load_bits(heap_ref, self.gl.logic_mode)
     }
 }

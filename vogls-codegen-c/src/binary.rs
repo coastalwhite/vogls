@@ -407,9 +407,9 @@ pub fn cgc_lsr(f: &mut impl io::Write, dst: CVar, lhs: CVar, rhs: CVar) -> io::R
 
     let (d, l, r) = (dst.ident, lhs.ident, rhs.ident);
     use LogicMode as M;
-    match (lhs.ty.mode, rhs.ty.mode, lhs.ty.array_size()) {
-        (M::TwoValue, M::TwoValue, None) => writeln!(f, "{INDENT}{d} = {l} >> {r};")?,
-        (M::TwoValue, M::TwoValue, Some(arr_size)) => {
+    match (lhs.ty.mode, lhs.ty.array_size()) {
+        (M::TwoValue, None) => writeln!(f, "{INDENT}{d} = {l} >> {r};")?,
+        (M::TwoValue, Some(arr_size)) => {
             writeln!(
                 f,
                 r#"{INDENT}if ({r} % 64 == 0) {{
@@ -422,7 +422,7 @@ pub fn cgc_lsr(f: &mut impl io::Write, dst: CVar, lhs: CVar, rhs: CVar) -> io::R
 {INDENT}}}"#
             )?;
         }
-        (_, _, _) => todo!(),
+        (_, _) => todo!(),
     }
 
     Ok(())

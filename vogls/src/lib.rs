@@ -5,7 +5,7 @@ pub use vogls_bits::format::{BitsFormatBase, BitsFormatOptions, BitsFormatWidth}
 use vogls_frontend::ident_table::IdentId;
 use vogls_ir::token_range::TokenRange;
 pub use vogls_ir::{Bits, LogicMode, SignalKey, VectorSize};
-pub use vogls_runtime::SimulationIo;
+pub use vogls_runtime::{RtSignalKey, SimulationIo};
 pub use vogls_sim::{SimulationState, VcdOutput};
 use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{

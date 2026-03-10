@@ -11,7 +11,7 @@ use vogls_bits::set_subslice::{tv_l_set, tv_s_set};
 use vogls_codegen::{Heap, HeapOffset, HeapRef};
 use vogls_ir::vcd::NetType;
 use vogls_ir::{INTEGER_VSIZE, LogicMode, SignalKey, TIME_VSIZE, VectorSize};
-use vogls_runtime::SimulationIo;
+use vogls_runtime::{RtSignalKey, SimulationIo};
 
 mod execution;
 mod instruction;
@@ -20,17 +20,12 @@ mod plugin;
 pub use plugin::{InstructionPlugin, Plugin};
 
 pub use instruction::*;
+use vogls_utils::VgHashMap;
 
 new_key_type! { pub struct ListenerKey; }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct VmProcessKey(pub u64);
-
-#[derive(Clone, Copy, Hash, PartialEq, Eq)]
-pub enum DispatchKey {
-    Signal(VmSignalKey),
-    Process(VmProcessKey),
-}
 
 #[derive(Clone)]
 pub struct Regions {
@@ -92,7 +87,7 @@ enum EvalOutcome {
 }
 
 fn update_watchers(
-    sig: VmSignalKey,
+    sig: RtSignalKey,
     stack: &Heap,
     signals: &[HeapRef],
     watches: &mut [Vec<ListenerKey>],
@@ -101,7 +96,7 @@ fn update_watchers(
     trace: Option<&mut vogls_trace::Trace>,
 ) {
     let start = regions.active.len();
-    let watchers = &mut watches[sig.0 as usize];
+    let watchers = &mut watches[sig.as_usize()];
     for watcher in watchers.iter() {
         if let Some(event) = listeners.remove(*watcher) {
             regions.active.push(event);
@@ -116,8 +111,8 @@ fn update_watchers(
             .extend(regions.active[start..].iter().map(|e| e.process.0));
         let woken_range = woken_start..trace.woken.len() as u64;
         trace.driven.push((
-            sig.0,
-            stack.load_tv_bits(signals[sig.0 as usize]),
+            sig.as_u64(),
+            stack.load_tv_bits(signals[sig.as_usize()]),
             woken_range,
         ));
     }
@@ -255,7 +250,7 @@ pub struct VcdScope {
 impl VcdScope {
     pub fn lower(
         v: &vogls_ir::vcd::VcdScope,
-        map: &HashMap<SignalKey, VmSignalKey>,
+        map: &VgHashMap<SignalKey, RtSignalKey>,
         signal_map: &HashMap<SignalKey, SignalKey>,
     ) -> VcdScope {
         VcdScope {
@@ -288,8 +283,8 @@ impl VcdScope {
 
     fn extend_into(
         &self,
-        tracked: &mut HashMap<VmSignalKey, Option<NonZeroUsize>>,
-        values: &mut Vec<VmSignalKey>,
+        tracked: &mut VgHashMap<RtSignalKey, Option<NonZeroUsize>>,
+        values: &mut Vec<RtSignalKey>,
     ) {
         for i in &self.items {
             i.extend_into(tracked, values);
@@ -310,7 +305,7 @@ impl VcdScopeItem {
                     lsb,
                 } = k;
                 let size = VectorSize::new((msb.abs_diff(*lsb) + 1) as u32).unwrap();
-                let idx = k.signal.0;
+                let idx = k.signal.as_u64();
                 write!(f, "$var ")?;
                 f.write_all(
                     match ty {
@@ -336,8 +331,8 @@ impl VcdScopeItem {
 
     fn extend_into(
         &self,
-        tracked: &mut HashMap<VmSignalKey, Option<NonZeroUsize>>,
-        values: &mut Vec<VmSignalKey>,
+        tracked: &mut VgHashMap<RtSignalKey, Option<NonZeroUsize>>,
+        values: &mut Vec<RtSignalKey>,
     ) {
         match self {
             VcdScopeItem::Scope(s) => s.extend_into(tracked, values),
@@ -354,7 +349,7 @@ impl VcdScopeItem {
 impl VcdScopeItem {
     fn lower(
         v: &vogls_ir::vcd::VcdScopeItem,
-        map: &HashMap<SignalKey, VmSignalKey>,
+        map: &VgHashMap<SignalKey, RtSignalKey>,
         signal_map: &HashMap<SignalKey, SignalKey>,
     ) -> Self {
         match v {
@@ -382,7 +377,7 @@ impl VcdScopeItem {
 #[derive(Debug, Clone)]
 pub struct VcdVariable {
     pub name: String,
-    pub signal: VmSignalKey,
+    pub signal: RtSignalKey,
     pub ty: NetType,
     pub msb: i64,
     pub lsb: i64,
@@ -399,8 +394,8 @@ pub struct VcdOutput {
     last_ts: Timestamp,
     paused: bool,
     scope: VcdScope,
-    tracked: HashMap<VmSignalKey, Option<NonZeroUsize>>,
-    updated_this_time_step: Vec<VmSignalKey>,
+    tracked: VgHashMap<RtSignalKey, Option<NonZeroUsize>>,
+    updated_this_time_step: Vec<RtSignalKey>,
     writer: Box<dyn std::io::Write + Send + Sync>,
     time_scale: u64,
 }
@@ -433,8 +428,8 @@ impl VcdOutput {
         self.last_ts = time;
         writeln!(f, "#{}", time * self.time_scale)?;
         for signal in &self.updated_this_time_step {
-            let bits = signals[signal.0 as usize];
-            let idx = signal.0;
+            let bits = signals[signal.as_usize()];
+            let idx = signal.as_usize();
             let bits = heap.load_tv_bits(bits);
             if bits.size().get() > 1 {
                 f.write_all(&[b'b'])?;
@@ -777,7 +772,7 @@ impl Simulation {
                                         name: "top".to_string(),
                                         items: Vec::new(),
                                     },
-                                    tracked: HashMap::new(),
+                                    tracked: VgHashMap::default(),
                                     updated_this_time_step: Vec::new(),
                                     writer: Box::new(std::fs::File::create(path).unwrap()),
                                     time_scale: 1000,
@@ -826,7 +821,7 @@ impl Simulation {
                         }
                     }
                     I::LastUpdateTime(dst, signal) => {
-                        let lupdt = state.runtime.last_active_time[signal.0 as usize];
+                        let lupdt = state.runtime.last_active_time[signal.as_usize()];
                         state.runtime.heap.set_tv_u64(dst.to_ref(TIME_VSIZE), lupdt);
                     }
                     I::Drive(sig, src, partial) => {
@@ -846,7 +841,7 @@ impl Simulation {
 
                         let updated = drive_bits(
                             &mut state.runtime.heap,
-                            self.signals[sig.0 as usize],
+                            self.signals[sig.as_usize()],
                             *src,
                             partial,
                             self.logic_mode,
@@ -911,7 +906,7 @@ impl Simulation {
                     I::Watch(watch_signals) => {
                         let listener_key = state.listeners.insert(event);
                         for signal in watch_signals {
-                            state.watches[signal.0 as usize].push(listener_key);
+                            state.watches[signal.as_usize()].push(listener_key);
                         }
                         if self.itrace {
                             instr.itrace(&mut state.runtime.heap, &self.signals, self.logic_mode);
@@ -954,7 +949,7 @@ impl Simulation {
         }
     }
 
-    pub fn update_signal(&self, state: &mut SimulationState, signal: VmSignalKey) {
+    pub fn update_signal(&self, state: &mut SimulationState, signal: RtSignalKey) {
         update_watchers(
             signal,
             &mut state.runtime.heap,
@@ -978,16 +973,16 @@ impl Simulation {
             plugin.update_signal(self, state, signal);
         }
         state.plugins = plugins;
-        state.runtime.last_active_time[signal.0 as usize] = state.runtime.time;
+        state.runtime.last_active_time[signal.as_usize()] = state.runtime.time;
     }
 
     pub fn drive_bits(
         &self,
         state: &mut SimulationState,
-        signal: VmSignalKey,
+        signal: RtSignalKey,
         value: &vogls_ir::Bits,
     ) {
-        let heap_ref = self.signals[signal.0 as usize];
+        let heap_ref = self.signals[signal.as_usize()];
         let updated = &state.runtime.heap.load_bits(heap_ref, self.logic_mode) != value;
 
         if updated {
@@ -997,6 +992,10 @@ impl Simulation {
                 .store_bits(heap_ref, self.logic_mode, value);
             self.update_signal(state, signal);
         }
+    }
+
+    pub fn poke_signal(&self, state: &mut SimulationState, signal: RtSignalKey) {
+        self.update_signal(state, signal);
     }
 }
 
@@ -1054,7 +1053,7 @@ impl SimulationState {
         writer: Box<dyn std::io::Write + Send + Sync>,
         scope: VcdScope,
     ) {
-        let mut tracked = HashMap::new();
+        let mut tracked = VgHashMap::default();
         let mut updated_this_time_step = Vec::new();
 
         scope.extend_into(&mut tracked, &mut updated_this_time_step);

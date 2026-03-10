@@ -25,7 +25,7 @@ mod vogls {
     #[pyo3::pyclass(frozen)]
     #[repr(transparent)]
     pub struct SignalRef {
-        inner: vogls::SignalKey,
+        inner: vogls::RtSignalKey,
     }
 
     #[pyo3::pyclass]
@@ -49,12 +49,13 @@ mod vogls {
     #[pymethods]
     impl Design {
         #[new]
-        #[pyo3(signature = (path, top_level_module = None, defines = None, four_value_logic = false))]
+        #[pyo3(signature = (path, top_level_module = None, defines = None, four_value_logic = false, compile = false))]
         fn new(
             path: PathBuf,
             top_level_module: Option<String>,
             defines: Option<Vec<String>>,
             four_value_logic: bool,
+            compile: bool,
         ) -> PyResult<Self> {
             let mut ectx = ExecutionContext {
                 stdout: Box::new(std::io::stdout()),
@@ -75,7 +76,7 @@ mod vogls {
                 },
                 no_run: false,
                 vcd: None,
-                compile: false,
+                compile,
             };
 
             let inner = vogls::design::Design::new(
@@ -143,7 +144,7 @@ mod vogls {
                 return Err(PyException::new_err("not a signal"));
             };
             Ok(SignalRef {
-                inner: net_symbol.signal,
+                inner: self.inner.get_rt_signal(net_symbol.signal),
             })
         }
 
@@ -154,22 +155,10 @@ mod vogls {
             signal: Py<SignalRef>,
             value: Py<Bits>,
         ) -> PyResult<()> {
-            let DesignBackend::Interpretted {
-                vm_signal_map,
-                simulation,
-            } = &self.inner.backend
-            else {
-                todo!()
-            };
-            let signal = signal.get().inner;
-            let vm_signal = vm_signal_map[&signal];
-            let state = snapshot.borrow(py);
-            let mut state = state.inner.lock().unwrap();
-            let DesignState::Interpretted(state) = state.deref_mut()
-            else {
-                todo!()
-            };
-            simulation.drive_bits(state, vm_signal, &value.get().inner);
+            let snapshot = snapshot.borrow(py);
+            let mut snapshot = snapshot.inner.lock().unwrap();
+            self.inner
+                .set_signal(&mut snapshot, signal.get().inner, &value.get().inner);
             Ok(())
         }
 
@@ -179,22 +168,9 @@ mod vogls {
             snapshot: Py<Snapshot>,
             signal: Py<SignalRef>,
         ) -> PyResult<Bits> {
-            let DesignBackend::Interpretted {
-                vm_signal_map,
-                simulation,
-            } = &self.inner.backend
-            else {
-                todo!()
-            };
-            let signal = signal.get().inner;
-            let vm_signal = vm_signal_map[&signal];
-            let heap_ref = simulation.signals[vm_signal.0 as usize];
             let snapshot = snapshot.borrow(py);
             let snapshot = snapshot.inner.lock().unwrap();
-            let bits = match self.inner.gl.logic_mode {
-                LogicMode::TwoValue => snapshot.runtime().heap.load_tv_bits(heap_ref),
-                LogicMode::FourValue => snapshot.runtime().heap.load_fv_bits(heap_ref),
-            };
+            let bits = self.inner.get_signal(&snapshot, signal.get().inner);
             Ok(Bits { inner: bits })
         }
 
@@ -206,18 +182,10 @@ mod vogls {
             };
             let idx = state.plugins.len();
 
-            let DesignBackend::Interpretted {
-                vm_signal_map,
-                simulation: _,
-            } = &self.inner.backend
-            else {
-                todo!()
-            };
-
             let mut trace = TracePlugin::default();
             for signal in self.inner.elab_table.symbol_iter() {
                 if let VSymbol::Net(n) = &signal.content {
-                    let vm_signal = vm_signal_map[&n.signal];
+                    let vm_signal = self.inner.get_rt_signal(n.signal);
                     trace.updated_this_time_step.push(vm_signal);
                     trace.tracked.insert(
                         vm_signal,

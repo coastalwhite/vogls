@@ -8,12 +8,12 @@ use vogls_codegen::{
 };
 use vogls_ir::dyn_format_string::DynFormatString;
 use vogls_ir::{
-    BasicBlockKey, BasicBlockTerminator, BinaryOp, GlobalContext, INTEGER_VSIZE, Instruction,
-    LogicMode, Process, ProcessKey, ResizeOp, SCALAR_VSIZE, SignalKey, TIME_VSIZE, UnaryOp,
-    VariableKey, VectorSize,
+    BasicBlockKey, BasicBlockTerminator, BinaryOp, GlobalContext, Instruction, LogicMode, Process,
+    ProcessKey, ResizeOp, SCALAR_VSIZE, SignalKey, UnaryOp, VariableKey, VectorSize,
 };
 use vogls_ir_properties::get_temporal_variables;
-use vogls_utils::{IndexMap, IndexSet, VgHashMap, VgHashSet};
+use vogls_runtime::RtSignalKey;
+use vogls_utils::{IndexSet, VgHashMap, VgHashSet};
 
 pub mod runtime;
 
@@ -191,7 +191,8 @@ pub fn lower_process(
     gl: &GlobalContext,
     heap_builder: &mut HeapBuilder,
     listener_builder: &mut ListenerBuilder,
-    io_signals: &IndexMap<SignalKey, HeapRef>,
+    io_signals: &VgHashMap<SignalKey, RtSignalKey>,
+    signals: &[HeapRef],
 ) -> io::Result<()> {
     use Instruction as I;
 
@@ -266,10 +267,9 @@ pub fn lower_process(
         });
 
         bb.try_for_each_dst_var(|v| {
-            let tmp_i = temp_map.len() as u64;
             let mode = var_mode[&v];
             let t = CVar {
-                ident: CIdent(tmp_i),
+                ident: CIdent(temp_map.len() as u64),
                 ty: CType {
                     size: gl.vars[v].size,
                     mode,
@@ -281,6 +281,7 @@ pub fn lower_process(
 
             if conv_map.contains_key(&v) {
                 let mut t = t;
+                t.ident = CIdent(temp_map.len() as u64);
                 t.ty.mode = t.ty.mode.other();
                 write_cvar(f, t)?;
                 temp_map.insert((v, t.ty.mode), t);
@@ -395,7 +396,6 @@ pub fn lower_process(
                 }
                 I::Unary(dst, op, src) => {
                     let src_size = gl.vars[*src].size;
-                    let dst_size = gl.vars[*dst].size;
                     let msrc = var_mode[src];
                     let mdst = var_mode[dst];
 
@@ -430,7 +430,6 @@ pub fn lower_process(
                 }
                 I::Resize(dst, op, src) => {
                     let src_size = gl.vars[*src].size;
-                    let dst_size = gl.vars[*dst].size;
                     let msrc = var_mode[src];
                     let mdst = var_mode[dst];
 
@@ -465,7 +464,6 @@ pub fn lower_process(
                 I::Binary(dst, op, lhs, rhs) => {
                     let lhs_size = gl.vars[*lhs].size;
                     let rhs_size = gl.vars[*rhs].size;
-                    let dst_size = gl.vars[*dst].size;
                     let (mlhs, mrhs, mdst) = (var_mode[lhs], var_mode[rhs], var_mode[dst]);
 
                     let (mut lhs_t, mut rhs_t) = (temp_map[&(*lhs, mlhs)], temp_map[&(*rhs, mrhs)]);
@@ -620,15 +618,14 @@ pub fn lower_process(
                 },
                 I::LastUpdateTime(dst, signal) => {
                     let heap_idx = heap_map[dst].bit_offset / 64;
-                    let signal_idx = io_signals.get_index(signal).unwrap();
+                    let signal_idx = io_signals[signal].as_u64();
                     writeln!(
                         buffer,
                         "{INDENT}heap[{heap_idx}] = last_active_time[{signal_idx}];"
                     )?;
                 }
                 I::Probe(dst, signal) => {
-                    let signal = io_signals[signal];
-                    let size = gl.vars[*dst].size;
+                    let signal = signals[io_signals[signal].as_usize()];
                     assert_eq!(var_mode[dst], gl.logic_mode);
 
                     let t = temp_map[&(*dst, gl.logic_mode)];
@@ -657,7 +654,7 @@ pub fn lower_process(
                         )?;
                     }
 
-                    writeln!(f, "{INDENT}{{")?;
+                    writeln!(buffer, "{INDENT}{{")?;
 
                     if let Some((offset, partial_size)) = partial {
                         // @TODO: offset > size
@@ -675,8 +672,13 @@ pub fn lower_process(
                             },
                         };
                         temp_counter += 1;
-                        write_cvar(&mut buffer, current_t);
-                        load_slice(&mut buffer, current_t, offset_t, io_signals[signal])?;
+                        write_cvar(&mut buffer, current_t)?;
+                        load_slice(
+                            &mut buffer,
+                            current_t,
+                            offset_t,
+                            signals[io_signals[signal].as_usize()],
+                        )?;
 
                         match current_t.ty.array_size() {
                             None => {
@@ -696,7 +698,7 @@ pub fn lower_process(
                                     },
                                 };
                                 temp_counter += 1;
-                                write_cvar(&mut buffer, condition);
+                                write_cvar(&mut buffer, condition)?;
                                 binary::cgc_case_eq(&mut buffer, condition.ident, t, current_t)?;
                                 writeln!(buffer, "{INDENT}if (!{}) {{", condition.ident)?;
                             }
@@ -704,9 +706,14 @@ pub fn lower_process(
                         writeln!(
                             buffer,
                             "{INDENT}{INDENT}drive_signal_{idx}(schedule, time, is_scheduled, listening, last_active_time);",
-                            idx = io_signals.get_index(signal).unwrap()
+                            idx = io_signals[signal].as_u64()
                         )?;
-                        store_slice(&mut buffer, io_signals[signal], offset_t, t)?;
+                        store_slice(
+                            &mut buffer,
+                            signals[io_signals[signal].as_usize()],
+                            offset_t,
+                            t,
+                        )?;
                         writeln!(buffer, "{INDENT}}}")?;
                     } else {
                         let current_t = CVar {
@@ -717,8 +724,12 @@ pub fn lower_process(
                             },
                         };
                         temp_counter += 1;
-                        write_cvar(&mut buffer, current_t);
-                        load(&mut buffer, io_signals[signal].offset, current_t)?;
+                        write_cvar(&mut buffer, current_t)?;
+                        load(
+                            &mut buffer,
+                            signals[io_signals[signal].as_usize()].offset,
+                            current_t,
+                        )?;
                         match current_t.ty.array_size() {
                             None => {
                                 writeln!(
@@ -737,7 +748,7 @@ pub fn lower_process(
                                     },
                                 };
                                 temp_counter += 1;
-                                write_cvar(&mut buffer, condition);
+                                write_cvar(&mut buffer, condition)?;
                                 binary::cgc_case_eq(&mut buffer, condition.ident, t, current_t)?;
                                 writeln!(buffer, "{INDENT}if (!{}) {{", condition.ident)?;
                             }
@@ -745,13 +756,13 @@ pub fn lower_process(
                         writeln!(
                             buffer,
                             "{INDENT}{INDENT}drive_signal_{idx}(schedule, time, is_scheduled, listening, last_active_time);",
-                            idx = io_signals.get_index(signal).unwrap()
+                            idx = io_signals[signal].as_u64()
                         )?;
-                        store(&mut buffer, io_signals[signal].offset, t)?;
+                        store(&mut buffer, signals[io_signals[signal].as_usize()].offset, t)?;
                         writeln!(buffer, "{INDENT}}}")?;
                     }
 
-                    writeln!(f, "{INDENT}}}")?;
+                    writeln!(buffer, "{INDENT}}}")?;
                 }
                 I::Phi(_, _) => continue,
             }
@@ -762,7 +773,6 @@ pub fn lower_process(
                 let src_size = gl.vars[*src].size;
                 let dst_size = gl.vars[*dst].size;
                 assert_eq!(src_size, dst_size);
-                let size = src_size;
                 let src_mode = var_mode[src];
                 let dst_mode = var_mode[dst];
 
@@ -864,7 +874,6 @@ pub fn lower_process(
                 let truthy = bb_ident.get_index(truthy).unwrap();
                 let falsy = bb_ident.get_index(falsy).unwrap();
 
-                let size = gl.vars[*condition].size;
                 let mcondition = var_mode[condition];
                 let t = temp_map[&(*condition, mcondition)];
                 if temporal_variables.contains(condition) {
@@ -1190,9 +1199,9 @@ fn convert(
 pub fn lower_signal_drive_header(
     f: &mut impl io::Write,
     signal: SignalKey,
-    io_signals: &IndexMap<SignalKey, HeapRef>,
+    io_signals: &VgHashMap<SignalKey, RtSignalKey>,
 ) -> io::Result<()> {
-    let idx = io_signals.get_index(&signal).unwrap();
+    let idx = io_signals[&signal].as_u64();
     writeln!(
         f,
         "void drive_signal_{idx}(schedule_t *schedule, uint64_t time, uint64_t *is_scheduled, uint64_t *listening, uint64_t *last_active_time);"
@@ -1204,9 +1213,9 @@ pub fn lower_signal_drive_fn(
     gl: &GlobalContext,
     signal: SignalKey,
     listener_builder: &ListenerBuilder,
-    io_signals: &IndexMap<SignalKey, HeapRef>,
+    io_signals: &VgHashMap<SignalKey, RtSignalKey>,
 ) -> io::Result<()> {
-    let idx = io_signals.get_index(&signal).unwrap();
+    let idx = io_signals[&signal].as_u64();
     writeln!(
         f,
         "void drive_signal_{idx}(schedule_t *schedule, uint64_t time, uint64_t *is_scheduled, uint64_t *listening, uint64_t *last_active_time) {{",

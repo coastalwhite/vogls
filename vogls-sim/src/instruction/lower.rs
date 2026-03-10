@@ -7,19 +7,18 @@ use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, BinaryOp, GlobalContext, INTEGER_VSIZE, Instruction,
     IntrinsicOp, LogicMode, ProcessKey, SignalKey, VariableKey,
 };
+use vogls_runtime::RtSignalKey;
 use vogls_utils::{VgHashMap, VgHashSet};
 
 use crate::instruction::{VmInstruction, VmProcess};
 use crate::{BinaryArithmeticOp, BinaryComparisonOp, EdgeOp, ShiftOp, VmIntrinsicOp};
-
-use super::VmSignalKey;
 
 pub fn lower_process_to_vm(
     process: ProcessKey,
     gl: &GlobalContext,
     heap_builder: &mut HeapBuilder,
     signals: &[HeapRef],
-    io_signals: &HashMap<SignalKey, VmSignalKey>,
+    io_signals: &VgHashMap<SignalKey, RtSignalKey>,
     signal_map: &HashMap<SignalKey, SignalKey>,
 ) -> VmProcess {
     use Instruction as I;
@@ -268,12 +267,12 @@ pub fn lower_process_to_vm(
                         LogicMode::TwoValue => VI::TvResize(
                             var!(*dst).to_ref(size),
                             vogls_ir::ResizeOp::Truncate,
-                            signals[signal.0 as usize],
+                            signals[signal.as_usize()],
                         ),
                         LogicMode::FourValue => VI::FvResize(
                             var!(*dst).to_ref(size),
                             vogls_ir::ResizeOp::Truncate,
-                            signals[signal.0 as usize],
+                            signals[signal.as_usize()],
                         ),
                     }
                 }
