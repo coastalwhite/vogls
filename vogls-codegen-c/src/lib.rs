@@ -808,9 +808,9 @@ pub fn lower_process(
                 let d = dst_t.ident;
                 let s = src_t.ident;
                 match dst_t.ty.array_size() {
-                    None => writeln!(f, "{INDENT}{d} = {s};")?,
+                    None => writeln!(buffer, "{INDENT}{d} = {s};")?,
                     Some(num_words) => writeln!(
-                        f,
+                        buffer,
                         "{INDENT}memmove({d}, {s}, {num_words}*sizeof(uint64_t));"
                     )?,
                 }
