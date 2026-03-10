@@ -53,6 +53,7 @@ pub fn lower_process_to_vm(
         heap_builder,
         &mut heap_map,
         &mut bb_phis,
+        None,
     );
 
     bb_stack.clear();

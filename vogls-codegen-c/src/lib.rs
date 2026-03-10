@@ -12,6 +12,7 @@ use vogls_ir::{
     LogicMode, Process, ProcessKey, ResizeOp, SCALAR_VSIZE, SignalKey, TIME_VSIZE, UnaryOp,
     VariableKey, VectorSize,
 };
+use vogls_ir_properties::get_temporal_variables;
 use vogls_utils::{IndexMap, IndexSet, VgHashMap, VgHashSet};
 
 pub mod runtime;
@@ -175,6 +176,14 @@ impl ListenerBuilder {
     }
 }
 
+fn write_cvar(f: &mut impl io::Write, var: CVar) -> io::Result<()> {
+    write!(f, "{INDENT}{} {}", var.ty.element_type(), var.ident)?;
+    if let Some(array_size) = var.ty.array_size() {
+        write!(f, "[{array_size}]")?;
+    }
+    writeln!(f, ";")
+}
+
 pub fn lower_process(
     f: &mut impl io::Write,
     process_key: ProcessKey,
@@ -195,7 +204,22 @@ pub fn lower_process(
     let mut var_mode = VgHashMap::<VariableKey, LogicMode>::default();
     let mut conv_map = VgHashMap::<VariableKey, HeapOffset>::default();
     let mut heap_map = VgHashMap::default();
-
+    let mut temporal_variables = Default::default();
+    {
+        let mut temporal_roots = Default::default();
+        let mut temporal = Default::default();
+        let mut variable_to_tmr_map = Default::default();
+        get_temporal_variables(
+            process.entry,
+            &gl.bbs,
+            &mut bb_stack,
+            &mut bb_seen,
+            &mut temporal_roots,
+            &mut temporal,
+            &mut variable_to_tmr_map,
+            &mut temporal_variables,
+        );
+    }
     resolve_var_logic_mode_map(
         process.entry,
         gl,
@@ -214,6 +238,7 @@ pub fn lower_process(
         heap_builder,
         &mut heap_map,
         &mut bb_phis,
+        Some(&temporal_variables),
     );
 
     // @Performance. Amortize buffer.
@@ -227,6 +252,7 @@ pub fn lower_process(
 
     let mut bb_ident = IndexSet::<BasicBlockKey>::new();
     let mut states_set = IndexSet::<BasicBlockKey>::new();
+    let mut temp_map = VgHashMap::<(VariableKey, LogicMode), CVar>::default();
 
     bb_stack.push(process.entry);
     bb_ident.insert(process.entry);
@@ -238,6 +264,29 @@ pub fn lower_process(
                 bb_stack.push(bb);
             }
         });
+
+        bb.try_for_each_dst_var(|v| {
+            let tmp_i = temp_map.len() as u64;
+            let mode = var_mode[&v];
+            let t = CVar {
+                ident: CIdent(tmp_i),
+                ty: CType {
+                    size: gl.vars[v].size,
+                    mode,
+                },
+            };
+
+            write_cvar(f, t)?;
+            temp_map.insert((v, t.ty.mode), t);
+
+            if conv_map.contains_key(&v) {
+                let mut t = t;
+                t.ty.mode = t.ty.mode.other();
+                write_cvar(f, t)?;
+                temp_map.insert((v, t.ty.mode), t);
+            }
+            io::Result::Ok(())
+        })?;
 
         match bb.terminator {
             BasicBlockTerminator::Wait(target, _)
@@ -263,26 +312,7 @@ pub fn lower_process(
         writeln!(buffer)?;
     }
 
-    let mut tmp_counter = 0u64;
-    macro_rules! claim_tmp {
-        ($size:expr, $mode:expr) => {{
-            let t = CVar {
-                ident: CIdent(tmp_counter),
-                ty: CType {
-                    size: $size,
-                    mode: $mode,
-                },
-            };
-            tmp_counter += 1;
-
-            write!(f, "{INDENT}{} {}", t.ty.element_type(), t.ident)?;
-            if let Some(array_size) = t.ty.array_size() {
-                write!(f, "[{array_size}]")?;
-            }
-            writeln!(f, ";")?;
-            t
-        }};
-    }
+    let mut temp_counter = temp_map.len() as u64;
 
     bb_seen.clear();
     bb_seen.insert(process.entry);
@@ -304,7 +334,7 @@ pub fn lower_process(
             match i {
                 I::Constant(dst, bits) => {
                     let mode = var_mode[dst];
-                    let t = claim_tmp!(bits.size(), mode);
+                    let t = temp_map[&(*dst, mode)];
 
                     match (t.ty.array_size(), t.ty.mode) {
                         (None, LogicMode::TwoValue) => {
@@ -359,7 +389,9 @@ pub fn lower_process(
                             }
                         }
                     }
-                    store(&mut buffer, heap_map[dst], t)?;
+                    if temporal_variables.contains(dst) {
+                        store(&mut buffer, heap_map[dst], t)?;
+                    }
                 }
                 I::Unary(dst, op, src) => {
                     let src_size = gl.vars[*src].size;
@@ -367,11 +399,13 @@ pub fn lower_process(
                     let msrc = var_mode[src];
                     let mdst = var_mode[dst];
 
-                    let mut t = claim_tmp!(src_size, msrc);
-                    load(&mut buffer, heap_map[src], t)?;
+                    let mut t = temp_map[&(*src, msrc)];
+                    if temporal_variables.contains(src) {
+                        load(&mut buffer, heap_map[src], t)?;
+                    }
                     if msrc != mdst {
                         let unconverted_t = t;
-                        t = claim_tmp!(src_size, mdst);
+                        t = temp_map[&(*src, mdst)];
                         convert(
                             &mut buffer,
                             src_size,
@@ -382,7 +416,7 @@ pub fn lower_process(
                         )?;
                     }
 
-                    let dst_t = claim_tmp!(dst_size, mdst);
+                    let dst_t = temp_map[&(*dst, mdst)];
                     use UnaryOp as O;
                     match op {
                         O::Neg => unary::cgc_negate(&mut buffer, dst_t, t)?,
@@ -390,7 +424,9 @@ pub fn lower_process(
                         O::ReduceAnd => unary::cgc_reduce_and(&mut buffer, dst_t, t)?,
                         O::ReduceXor => unary::cgc_reduce_xor(&mut buffer, dst_t, t)?,
                     }
-                    store(&mut buffer, heap_map[dst], dst_t)?;
+                    if temporal_variables.contains(dst) {
+                        store(&mut buffer, heap_map[dst], dst_t)?;
+                    }
                 }
                 I::Resize(dst, op, src) => {
                     let src_size = gl.vars[*src].size;
@@ -398,11 +434,13 @@ pub fn lower_process(
                     let msrc = var_mode[src];
                     let mdst = var_mode[dst];
 
-                    let mut t = claim_tmp!(src_size, msrc);
-                    load(&mut buffer, heap_map[src], t)?;
+                    let mut t = temp_map[&(*src, msrc)];
+                    if temporal_variables.contains(src) {
+                        load(&mut buffer, heap_map[src], t)?;
+                    }
                     if msrc != mdst {
                         let unconverted_t = t;
-                        t = claim_tmp!(src_size, mdst);
+                        t = temp_map[&(*src, mdst)];
                         convert(
                             &mut buffer,
                             src_size,
@@ -413,14 +451,16 @@ pub fn lower_process(
                         )?;
                     }
 
-                    let dst_t = claim_tmp!(dst_size, mdst);
+                    let dst_t = temp_map[&(*dst, mdst)];
                     use ResizeOp as O;
                     match op {
                         O::Truncate => resize::cgc_truncate(&mut buffer, dst_t, t)?,
                         O::ZeroExtend => resize::cgc_zero_extend(&mut buffer, dst_t, t)?,
                         O::SignExtend => resize::cgc_sign_extend(&mut buffer, dst_t, t)?,
                     }
-                    store(&mut buffer, heap_map[dst], dst_t)?;
+                    if temporal_variables.contains(dst) {
+                        store(&mut buffer, heap_map[dst], dst_t)?;
+                    }
                 }
                 I::Binary(dst, op, lhs, rhs) => {
                     let lhs_size = gl.vars[*lhs].size;
@@ -428,15 +468,15 @@ pub fn lower_process(
                     let dst_size = gl.vars[*dst].size;
                     let (mlhs, mrhs, mdst) = (var_mode[lhs], var_mode[rhs], var_mode[dst]);
 
-                    let (mut lhs_t, mut rhs_t) =
-                        (claim_tmp!(lhs_size, mlhs), claim_tmp!(rhs_size, mrhs));
-                    load(&mut buffer, heap_map[lhs], lhs_t)?;
-
+                    let (mut lhs_t, mut rhs_t) = (temp_map[&(*lhs, mlhs)], temp_map[&(*rhs, mrhs)]);
+                    if temporal_variables.contains(lhs) {
+                        load(&mut buffer, heap_map[lhs], lhs_t)?;
+                    }
                     let (mtgt, conv_lhs, conv_rhs) =
                         bin_args_need_conversion(*op, mdst, mlhs, mrhs);
                     if conv_lhs {
                         let unconverted_t = lhs_t;
-                        lhs_t = claim_tmp!(lhs_size, mtgt);
+                        lhs_t = temp_map[&(*lhs, mtgt)];
                         convert(
                             &mut buffer,
                             lhs_size,
@@ -446,10 +486,12 @@ pub fn lower_process(
                             unconverted_t.ident,
                         )?;
                     }
-                    load(&mut buffer, heap_map[rhs], rhs_t)?;
+                    if temporal_variables.contains(rhs) {
+                        load(&mut buffer, heap_map[rhs], rhs_t)?;
+                    }
                     if conv_rhs {
                         let unconverted_t = rhs_t;
-                        rhs_t = claim_tmp!(rhs_size, mtgt);
+                        rhs_t = temp_map[&(*rhs, mtgt)];
                         convert(
                             &mut buffer,
                             rhs_size,
@@ -460,7 +502,7 @@ pub fn lower_process(
                         )?;
                     }
 
-                    let dst_t = claim_tmp!(dst_size, mdst);
+                    let dst_t = temp_map[&(*dst, mdst)];
 
                     use vogls_ir::BinaryOp as O;
                     match op {
@@ -512,7 +554,9 @@ pub fn lower_process(
                         O::Posedge => binary::cgc_posedge(&mut buffer, dst_t.ident, lhs_t, rhs_t)?,
                         O::Negedge => binary::cgc_negedge(&mut buffer, dst_t.ident, lhs_t, rhs_t)?,
                     }
-                    store(&mut buffer, heap_map[dst], dst_t)?;
+                    if temporal_variables.contains(dst) {
+                        store(&mut buffer, heap_map[dst], dst_t)?;
+                    }
                 }
                 I::Intrinsic(dst, op, items) => match op.as_ref() {
                     vogls_ir::IntrinsicOp::Time => {
@@ -528,8 +572,10 @@ pub fn lower_process(
                         let args = items
                             .iter()
                             .map(|i| {
-                                let t = claim_tmp!(gl.vars[*i].size, var_mode[i]);
-                                load(&mut buffer, heap_map[i], t)?;
+                                let t = temp_map[&(*i, var_mode[i])];
+                                if temporal_variables.contains(i) {
+                                    load(&mut buffer, heap_map[i], t)?;
+                                }
                                 Ok(t)
                             })
                             .collect::<io::Result<Vec<CVar>>>()?;
@@ -538,8 +584,10 @@ pub fn lower_process(
                     vogls_ir::IntrinsicOp::Assert(dyn_format_string) => {
                         // @TODO: Format
                         let fst = items[0];
-                        let t = claim_tmp!(SCALAR_VSIZE, LogicMode::TwoValue);
-                        load(&mut buffer, heap_map[&fst], t)?;
+                        let t = temp_map[&(fst, LogicMode::TwoValue)];
+                        if temporal_variables.contains(&fst) {
+                            load(&mut buffer, heap_map[&fst], t)?;
+                        }
                         writeln!(
                             buffer,
                             r#"{INDENT}if ({t} == 0) {{
@@ -551,8 +599,10 @@ pub fn lower_process(
                             .iter()
                             .skip(1)
                             .map(|i| {
-                                let t = claim_tmp!(gl.vars[*i].size, var_mode[i]);
-                                load(&mut buffer, heap_map[i], t)?;
+                                let t = temp_map[&(*i, var_mode[i])];
+                                if temporal_variables.contains(i) {
+                                    load(&mut buffer, heap_map[i], t)?;
+                                }
                                 Ok(t)
                             })
                             .collect::<io::Result<Vec<CVar>>>()?;
@@ -581,18 +631,22 @@ pub fn lower_process(
                     let size = gl.vars[*dst].size;
                     assert_eq!(var_mode[dst], gl.logic_mode);
 
-                    let t = claim_tmp!(size, gl.logic_mode);
+                    let t = temp_map[&(*dst, gl.logic_mode)];
                     load(&mut buffer, signal.offset, t)?;
-                    store(&mut buffer, heap_map[dst], t)?;
+                    if temporal_variables.contains(dst) {
+                        store(&mut buffer, heap_map[dst], t)?;
+                    }
                 }
                 I::Drive(signal, src, partial) => {
                     let size = gl.vars[*src].size;
                     let msrc = var_mode[src];
-                    let mut t = claim_tmp!(size, msrc);
-                    load(&mut buffer, heap_map[src], t)?;
+                    let mut t = temp_map[&(*src, msrc)];
+                    if temporal_variables.contains(src) {
+                        load(&mut buffer, heap_map[src], t)?;
+                    }
                     if msrc != gl.logic_mode {
                         let unconverted_t = t;
-                        t = claim_tmp!(size, gl.logic_mode);
+                        t = temp_map[&(*src, gl.logic_mode)];
                         convert(
                             &mut buffer,
                             size,
@@ -603,13 +657,25 @@ pub fn lower_process(
                         )?;
                     }
 
+                    writeln!(f, "{INDENT}{{")?;
+
                     if let Some((offset, partial_size)) = partial {
                         // @TODO: offset > size
                         // @TODO: offset contains special
-                        let offset_t = claim_tmp!(INTEGER_VSIZE, LogicMode::TwoValue);
-                        load(&mut buffer, heap_map[offset], offset_t)?;
+                        let offset_t = temp_map[&(*offset, LogicMode::TwoValue)];
+                        if temporal_variables.contains(offset) {
+                            load(&mut buffer, heap_map[offset], offset_t)?;
+                        }
 
-                        let current_t = claim_tmp!(*partial_size, gl.logic_mode);
+                        let current_t = CVar {
+                            ident: CIdent(temp_counter),
+                            ty: CType {
+                                size: *partial_size,
+                                mode: gl.logic_mode,
+                            },
+                        };
+                        temp_counter += 1;
+                        write_cvar(&mut buffer, current_t);
                         load_slice(&mut buffer, current_t, offset_t, io_signals[signal])?;
 
                         match current_t.ty.array_size() {
@@ -622,7 +688,15 @@ pub fn lower_process(
                                 )?;
                             }
                             Some(_) => {
-                                let condition = claim_tmp!(SCALAR_VSIZE, LogicMode::TwoValue);
+                                let condition = CVar {
+                                    ident: CIdent(temp_counter),
+                                    ty: CType {
+                                        size: SCALAR_VSIZE,
+                                        mode: LogicMode::TwoValue,
+                                    },
+                                };
+                                temp_counter += 1;
+                                write_cvar(&mut buffer, condition);
                                 binary::cgc_case_eq(&mut buffer, condition.ident, t, current_t)?;
                                 writeln!(buffer, "{INDENT}if (!{}) {{", condition.ident)?;
                             }
@@ -635,7 +709,15 @@ pub fn lower_process(
                         store_slice(&mut buffer, io_signals[signal], offset_t, t)?;
                         writeln!(buffer, "{INDENT}}}")?;
                     } else {
-                        let current_t = claim_tmp!(size, gl.logic_mode);
+                        let current_t = CVar {
+                            ident: CIdent(temp_counter),
+                            ty: CType {
+                                size,
+                                mode: gl.logic_mode,
+                            },
+                        };
+                        temp_counter += 1;
+                        write_cvar(&mut buffer, current_t);
                         load(&mut buffer, io_signals[signal].offset, current_t)?;
                         match current_t.ty.array_size() {
                             None => {
@@ -647,7 +729,15 @@ pub fn lower_process(
                                 )?;
                             }
                             Some(_) => {
-                                let condition = claim_tmp!(SCALAR_VSIZE, LogicMode::TwoValue);
+                                let condition = CVar {
+                                    ident: CIdent(temp_counter),
+                                    ty: CType {
+                                        size: SCALAR_VSIZE,
+                                        mode: LogicMode::TwoValue,
+                                    },
+                                };
+                                temp_counter += 1;
+                                write_cvar(&mut buffer, condition);
                                 binary::cgc_case_eq(&mut buffer, condition.ident, t, current_t)?;
                                 writeln!(buffer, "{INDENT}if (!{}) {{", condition.ident)?;
                             }
@@ -660,6 +750,8 @@ pub fn lower_process(
                         store(&mut buffer, io_signals[signal].offset, t)?;
                         writeln!(buffer, "{INDENT}}}")?;
                     }
+
+                    writeln!(f, "{INDENT}}}")?;
                 }
                 I::Phi(_, _) => continue,
             }
@@ -673,25 +765,40 @@ pub fn lower_process(
                 let size = src_size;
                 let src_mode = var_mode[src];
                 let dst_mode = var_mode[dst];
-                let (dst, src) = (heap_map[dst], heap_map[src]);
-                use LogicMode as M;
-                writeln!(&mut buffer, "{INDENT}// Phi({dst:?}, {src:?});")?;
-                match (dst_mode, src_mode) {
-                    (M::TwoValue, M::TwoValue) if size.get() > 64 => writeln!(
+
+                let mut src_t = temp_map[&(*src, src_mode)];
+                let dst_t = temp_map[&(*dst, dst_mode)];
+
+                if temporal_variables.contains(src) {
+                    load(&mut buffer, heap_map[src], src_t)?;
+                }
+
+                if src_mode != dst_mode {
+                    let unconverted_t = src_t;
+                    src_t = temp_map[&(*src, dst_mode)];
+                    convert(
                         &mut buffer,
-                        "{INDENT}memmove(heap+{}, heap+{}, {}*sizeof(uint64_t));",
-                        dst.bit_offset / 64,
-                        src.bit_offset / 64,
-                        size.get().div_ceil(64)
+                        src_size,
+                        dst_mode,
+                        src_mode,
+                        src_t.ident,
+                        unconverted_t.ident,
+                    )?;
+                }
+
+                writeln!(&mut buffer, "{INDENT}// Phi({dst:?}, {src:?});")?;
+                let d = dst_t.ident;
+                let s = src_t.ident;
+                match dst_t.ty.array_size() {
+                    None => writeln!(f, "{INDENT}{d} = {s};")?,
+                    Some(num_words) => writeln!(
+                        f,
+                        "{INDENT}memmove({d}, {s}, {num_words}*sizeof(uint64_t));"
                     )?,
-                    (M::TwoValue, M::TwoValue) => {
-                        // @Performance. Better lowering.
-                        let t = claim_tmp!(size, src_mode);
-                        load(&mut buffer, src, t)?;
-                        store(&mut buffer, dst, t)?;
-                    }
-                    _ => todo!(),
-                };
+                }
+                if temporal_variables.contains(dst) {
+                    store(&mut buffer, heap_map[dst], dst_t)?;
+                }
             }
         }
 
@@ -706,8 +813,10 @@ pub fn lower_process(
                 writeln!(buffer, "{INDENT}return;",)?;
             }
             BasicBlockTerminator::VariableWait(bb_key, time) => {
-                let t = claim_tmp!(TIME_VSIZE, LogicMode::TwoValue);
-                load(&mut buffer, heap_map[time], t)?;
+                let t = temp_map[&(*time, LogicMode::TwoValue)];
+                if temporal_variables.contains(time) {
+                    load(&mut buffer, heap_map[time], t)?;
+                }
                 let state = states_set.get_index(bb_key).unwrap();
                 writeln!(
                     buffer,
@@ -757,8 +866,10 @@ pub fn lower_process(
 
                 let size = gl.vars[*condition].size;
                 let mcondition = var_mode[condition];
-                let t = claim_tmp!(size, mcondition);
-                load(&mut buffer, heap_map[condition], t)?;
+                let t = temp_map[&(*condition, mcondition)];
+                if temporal_variables.contains(condition) {
+                    load(&mut buffer, heap_map[condition], t)?;
+                }
 
                 writeln!(
                     buffer,

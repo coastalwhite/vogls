@@ -739,6 +739,7 @@ dependencies = [
  "vogls-bits",
  "vogls-codegen",
  "vogls-ir",
+ "vogls-ir-properties",
  "vogls-runtime",
  "vogls-utils",
 ]
@@ -760,6 +761,16 @@ dependencies = [
  "bytemuck",
  "slotmap",
  "vogls-bits",
+]
+
+[[package]]
+name = "vogls-ir-properties"
+version = "0.0.1"
+dependencies = [
+ "hashbrown 0.16.1",
+ "slotmap",
+ "vogls-ir",
+ "vogls-utils",
 ]
 
 [[package]]

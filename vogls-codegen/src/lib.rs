@@ -241,6 +241,7 @@ pub fn resolve_heap_map(
     heap_builder: &mut HeapBuilder,
     heap_map: &mut VgHashMap<VariableKey, HeapOffset>,
     bb_phis: &mut VgHashMap<BasicBlockKey, Vec<(VariableKey, VariableKey)>>,
+    temporal_variables: Option<&VgHashSet<VariableKey>>,
 ) {
     bb_stack.clear();
 
@@ -275,16 +276,18 @@ pub fn resolve_heap_map(
                         num_bits = num_bits * 2;
                     }
 
-                    if (min_bits..=max_bits).contains(&num_bits) {
-                        let prev = heap_map.insert(dst, heap_builder.claim(mode, size).offset);
-                        assert!(prev.is_none());
+                    if temporal_variables.is_none_or(|t| t.contains(&dst)) {
+                        if (min_bits..=max_bits).contains(&num_bits) {
+                            let prev = heap_map.insert(dst, heap_builder.claim(mode, size).offset);
+                            assert!(prev.is_none());
 
-                        if let Some(heap_ref) = conv_map.get_mut(&dst) {
-                            let other_mode = match mode {
-                                LogicMode::TwoValue => LogicMode::FourValue,
-                                LogicMode::FourValue => LogicMode::TwoValue,
-                            };
-                            *heap_ref = heap_builder.claim(other_mode, size).offset;
+                            if let Some(heap_ref) = conv_map.get_mut(&dst) {
+                                let other_mode = match mode {
+                                    LogicMode::TwoValue => LogicMode::FourValue,
+                                    LogicMode::FourValue => LogicMode::TwoValue,
+                                };
+                                *heap_ref = heap_builder.claim(other_mode, size).offset;
+                            }
                         }
                     }
                 }

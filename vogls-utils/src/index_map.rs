@@ -96,6 +96,10 @@ impl<K> IndexSet<K> {
     pub fn into_iter(self) -> impl Iterator<Item = K> {
         self.keys.into_iter()
     }
+
+    pub fn get_at_index(&self, index: usize) -> Option<&K> {
+        self.keys.get(index)
+    }
 }
 impl<K, V> IndexMap<K, V> {
     pub fn new() -> Self {

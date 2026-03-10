@@ -91,11 +91,20 @@ impl BasicBlock {
         self.terminator.map_vars(f);
     }
 
-    fn for_each_var(&self, mut f: impl FnMut(VariableKey)) {
+    pub fn for_each_var(&self, mut f: impl FnMut(VariableKey)) {
         for i in &self.instrs {
             i.for_each_var(&mut f);
         }
         self.terminator.for_each_var(f);
+    }
+
+    pub fn try_for_each_dst_var<E>(&self, mut f: impl FnMut(VariableKey) -> Result<(), E>) -> Result<(), E> {
+        for i in &self.instrs {
+            if let Some(dst) = i.get_destination_variable() {
+                f(dst)?;
+            }
+        }
+        Ok(())
     }
 
     pub fn map_signals(&mut self, mut f: impl FnMut(SignalKey) -> SignalKey) {
@@ -222,6 +231,13 @@ impl BasicBlockTerminator {
             | Self::Halt => {}
             Self::Watch(_, signals) => signals.iter_mut().for_each(|s| *s = f(*s)),
         }
+    }
+
+    pub fn is_temporal(&self) -> bool {
+        matches!(
+            self,
+            Self::Wait(..) | Self::VariableWait(..) | Self::WaitRegion(..) | Self::Watch(..)
+        )
     }
 }
 
@@ -653,6 +669,14 @@ pub enum LogicMode {
     #[default]
     TwoValue,
     FourValue,
+}
+impl LogicMode {
+    pub fn other(&self) -> LogicMode {
+        match self {
+            Self::TwoValue => Self::FourValue,
+            Self::FourValue => Self::TwoValue,
+        }
+    }
 }
 
 impl From<Mode> for LogicMode {

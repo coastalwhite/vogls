@@ -3,6 +3,7 @@ members = [
     "vogls",
     "vogls-test",
     "vogls-ir",
+    "vogls-ir-properties",
     "vogls-trace",
     "vogls-bits",
     "vogls-sim",
@@ -33,6 +34,7 @@ vogls.path = "vogls"
 vogls-frontend.path = "vogls-frontend"
 vogls-sim.path = "vogls-sim"
 vogls-ir.path = "vogls-ir"
+vogls-ir-properties.path = "vogls-ir-properties"
 vogls-trace.path = "vogls-trace"
 vogls-bits.path = "vogls-bits"
 vogls-verilog.path = "vogls-verilog"

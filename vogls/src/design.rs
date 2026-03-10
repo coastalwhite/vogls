@@ -658,8 +658,8 @@ impl Design {
                     "-g3",
                     "-fPIC",
                     "-O2",
-                    // "t2.c",
-                    "-",
+                    "t2.c",
+                    // "-",
                     "-shared",
                     "-o",
                     "/tmp/vogls-target.so",
@@ -667,7 +667,7 @@ impl Design {
                 .stdin(std::process::Stdio::piped())
                 .spawn()
                 .unwrap();
-            cc.stdin.take().unwrap().write_all(&c_file)?;
+            // cc.stdin.take().unwrap().write_all(&c_file)?;
             if !cc.wait().unwrap().success() {
                 return Err("compilation failed!".into());
             }
