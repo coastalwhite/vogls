@@ -1,6 +1,5 @@
 module tb();
 	initial begin
-        /*
         $vogls_assert_eq(1'b0 << 0, 1'b0);
         $vogls_assert_eq(1'b0 << 1, 1'b0);
         $vogls_assert_eq(1'b0 << 2, 1'b0);
@@ -119,9 +118,7 @@ module tb();
 		$vogls_assert_eq(33'b1_1011_1110_1100_0011_1001_1010_0011_0111 << 32'bz, 33'bx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx);
 		$vogls_assert_eq(33'bx_1x11_x100_xz0x_10xx_z111_xx1x_zxx0_z011 << 32'bz, 33'bx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx);
 		$vogls_assert_eq(33'bz_x0z0_x0zx_xzx0_1z0x_10zx_z010_0xz0_011z << 0, 33'bz_x0z0_x0zx_xzx0_1z0x_10zx_z010_0xz0_011z);
-        */
 		$vogls_assert_eq(33'bz_xz1z_0zzx_0x1z_z1x0_xx0z_x10z_0100_x111 << 1, 33'bx_z1z0_zzx0_x1zz_1x0x_x0zx_10z0_100x_1110);
-        /*
 		$vogls_assert_eq(33'b0_111x_10x1_1x10_010x_1x01_x01z_00zz_x0z1 << 32, 33'b1_0000_0000_0000_0000_0000_0000_0000_0000);
 		$vogls_assert_eq(33'b0_xz00_zzz0_zz00_x101_xxzx_zz00_1zz1_zxzz << 33, 33'b0_0000_0000_0000_0000_0000_0000_0000_0000);
 		$vogls_assert_eq(33'bz_0xzx_xx1z_0000_z0x1_0x0z_xz0x_xx01_1z10 << 34, 33'b0_0000_0000_0000_0000_0000_0000_0000_0000);
@@ -286,6 +283,5 @@ module tb();
 		$vogls_assert_eq(129'bz_0x01_xzz1_01zz_0z11_1xzz_1x1z_x101_z0z1_xzzz_00xz_xxz1_z11z_zz10_z011_xx01_zz0x_00xz_z1x1_0z00_zzxz_1z00_x01x_zzz0_01z1_zx11_001x_0z10_0x1z_x110_1z00_zxz0_00z1 << 63, 129'b0_x00x_zz1x_10z0_0zzx_z1z0_0x01_xzzz_001z_1zx1_1001_x0z1_00x1_zx11_01z0_0zxz_000z_1000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000);
 		$vogls_assert_eq(129'bx_1100_z00x_1010_110z_0xx1_1zz0_110x_x10z_x0z1_z10x_x001_zxz0_1x0x_z1x1_xz0x_0zz1_0100_x1z1_001x_zx11_z101_zx1x_x0zx_01xx_1101_1zx1_z00z_0101_1101_110z_zx11_1z11 << 77, 129'bz_x11z_101z_x1xx_0zx0_1xx1_1011_zx1z_00z0_1011_1011_10zz_x111_z110_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000);
 `endif
-*/
 	end
 endmodule

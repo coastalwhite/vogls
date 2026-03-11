@@ -613,7 +613,7 @@ pub fn lower_process(
                         )?;
                     }
                     vogls_ir::IntrinsicOp::VcdOpenFile(_) => todo!(),
-                    vogls_ir::IntrinsicOp::VcdAppendModule(vcd_scope) => todo!(),
+                    vogls_ir::IntrinsicOp::VcdAppendModule(_) => todo!(),
                     vogls_ir::IntrinsicOp::VcdPause => todo!(),
                     vogls_ir::IntrinsicOp::VcdResume => todo!(),
                 },

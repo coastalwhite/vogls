@@ -1,10 +1,9 @@
 use std::{fmt, io};
 
 use vogls_bits::arithmetic::FvLogicValue;
-use vogls_ir::{INTEGER_VSIZE, LogicMode, VectorSize};
-use vogls_utils::saturating_rem;
+use vogls_ir::{INTEGER_VSIZE, LogicMode};
 
-use crate::{CIdent, CType, CVar, INDENT, mask};
+use crate::{CIdent, CVar, INDENT, mask};
 
 pub fn cgc_bin_and(f: &mut impl io::Write, dst: CVar, lhs: CIdent, rhs: CIdent) -> io::Result<()> {
     let (d, l, r) = (dst.ident, lhs, rhs);
@@ -506,7 +505,69 @@ pub fn cgc_lsr(f: &mut impl io::Write, dst: CVar, lhs: CVar, rhs: CVar) -> io::R
 }
 
 pub fn cgc_asr(f: &mut impl io::Write, dst: CVar, lhs: CVar, rhs: CVar) -> io::Result<()> {
-    todo!()
+    let size = dst.ty.size;
+    let (d, l, r) = (dst.ident, lhs.ident, rhs.ident);
+    match (dst.ty.mode, dst.ty.array_size()) {
+        (LogicMode::TwoValue, None) => {
+            let unsigned_elem_ty = dst.ty.element_type();
+            let signed_elem_ty = dst.ty.element_type().signed_ty_str();
+            let elem_size = dst.ty.element_type().size();
+            let shift = elem_size.get() - size.get();
+            let mask = mask(size.get());
+            writeln!(
+                f,
+                "{INDENT}{d} = ((({unsigned_elem_ty})(((({signed_elem_ty})(({unsigned_elem_ty}){l} << {shift})) >> {shift}) >> (({r} >= {elem_size}) ? ({elem_size}-1) : {r})))) & 0x{mask:x};"
+            )?;
+        }
+        (LogicMode::TwoValue, Some(_)) => {
+            let wi = (size.get() - 1) / 64;
+            let bi = (size.get() - 1) % 64;
+            writeln!(
+                f,
+                "{INDENT}tv_l_lsr_with({d}, {l}, {r}, {size}, ({l}[{wi}] >> {bi}) & 1);"
+            )?
+        }
+        (LogicMode::FourValue, None) => {
+            let unsigned_elem_ty = dst.ty.element_type();
+            let signed_elem_ty = dst.ty.element_type().signed_ty_str();
+            let elem_size = dst.ty.element_type().size();
+            let shift = elem_size.get() - size.get();
+            let rhs_mask = mask(rhs.ty.size.get());
+            let mask = mask(size.get());
+            writeln!(
+                f,
+                "{INDENT}if (({r} & 0x{rhs_mask:x}) != 0x{rhs_mask:x}) {d} = 0;"
+            )?;
+            writeln!(f, "{INDENT}else {d} =")?;
+            writeln!(
+                f,
+                "{INDENT}{INDENT}(((({unsigned_elem_ty})(((({signed_elem_ty})(({unsigned_elem_ty})({l} & 0x{mask:x}) << {shift})) >> {shift}) >> ((({r} >> 32) >= {elem_size}) ? ({elem_size}-1) : ({r} >> 32))))) & 0x{mask:x}) |"
+            )?;
+            writeln!(
+                f,
+                "{INDENT}{INDENT}((((({unsigned_elem_ty})(((({signed_elem_ty})(({unsigned_elem_ty})({l} >> {size}) << {shift})) >> {shift}) >> ((({r} >> 32) >= {elem_size}) ? ({elem_size}-1) : ({r} >> 32))))) & 0x{mask:x}) << {size});"
+            )?;
+        }
+        (LogicMode::FourValue, Some(arr_size)) => {
+            let num_words = arr_size / 2;
+            let wi = (size.get() - 1) / 64;
+            let bi = (size.get() - 1) % 64;
+            writeln!(f, "{INDENT}if (({r} & 0xFFFFFFFF) == 0xFFFFFFFF) {{")?;
+            writeln!(
+                f,
+                "{INDENT}{INDENT}tv_l_lsr_with({d}, {l}, {r} >> 32, {size}, ({l}[{wi}] >> {bi}) & 1);"
+            )?;
+            writeln!(
+                f,
+                "{INDENT}{INDENT}tv_l_lsr_with({d}+{num_words}, {l}+{num_words}, {r} >> 32, {size}, ({l}[{num_words}+{wi}] >> {bi}) & 1);"
+            )?;
+            writeln!(
+                f,
+                "{INDENT}}} else memset({d}, 0, {arr_size}*sizeof(uint64_t));"
+            )?;
+        }
+    }
+    Ok(())
 }
 
 pub fn cgc_concat(f: &mut impl io::Write, dst: CVar, lhs: CVar, rhs: CVar) -> io::Result<()> {

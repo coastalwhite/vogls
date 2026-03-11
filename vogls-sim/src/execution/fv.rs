@@ -1,7 +1,6 @@
 use vogls_bits::arithmetic::{
-    FvLogicValue, fv_contains_unknown, fv_gtu32_bitwise_inv, fv_l_reduce_and, fv_l_reduce_or,
-    fv_l_reduce_xor, fv_l_select_bit, fv_leu32_bitwise_inv, fv_pack_u64,
-    fv_s_contains_unknown as fv_s_contains_unknown_bool, fv_s_reduce_and, fv_s_reduce_or,
+    FvLogicValue, fv_gtu32_bitwise_inv, fv_l_reduce_and, fv_l_reduce_or, fv_l_reduce_xor,
+    fv_l_select_bit, fv_leu32_bitwise_inv, fv_pack_u64, fv_s_reduce_and, fv_s_reduce_or,
     fv_s_reduce_xor, fv_s_select_bit, fv_unpack_u64,
 };
 use vogls_bits::concat::{fv_l_concat, fv_s_concat};

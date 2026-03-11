@@ -273,11 +273,6 @@ pub(crate) fn exec_tv_shift(
     offset: HeapOffset,
 ) {
     use ShiftOp as O;
-    let f = match op {
-        O::LogicalLeft => vogls_bits::shift::tv_logical_shift_left,
-        O::LogicalRight => vogls_bits::shift::tv_logical_shift_right,
-        O::ArithmeticRight => vogls_bits::shift::tv_arithmetic_shift_right,
-    };
 
     let size = dst.size;
     let offset = stack.load_exact_tv_u32(offset);
@@ -285,10 +280,29 @@ pub(crate) fn exec_tv_shift(
     if size <= Heap::TV_SUBBITS_MAX_SIZE {
         let src_s = &[stack.get_subbit_byte(src.to_ref(size))];
         let mut dst_s = [0];
+        let f = match op {
+            O::LogicalLeft => vogls_bits::shift::tv_s_logical_shift_left,
+            O::LogicalRight => vogls_bits::shift::tv_s_logical_shift_right,
+            O::ArithmeticRight => vogls_bits::shift::tv_s_arithmetic_shift_right,
+        };
         f(&mut dst_s, src_s, offset, size);
         stack.set_aligned_raw_bits(dst, dst_s[0]);
-    } else {
+    } else if size < Heap::TV_U64_MIN_SIZE {
         let (dst, src) = stack.get_disjoint_u8_dst_src(dst, src.to_ref(size));
+        let f = match op {
+            O::LogicalLeft => vogls_bits::shift::tv_s_logical_shift_left,
+            O::LogicalRight => vogls_bits::shift::tv_s_logical_shift_right,
+            O::ArithmeticRight => vogls_bits::shift::tv_s_arithmetic_shift_right,
+        };
+        f(dst, src, offset, size);
+    } else {
+        let num_words = size.get().div_ceil(64) as usize;
+        let (dst, src) = stack.get_disjoint_u64_dst_src((dst.offset, num_words), (src, num_words));
+        let f = match op {
+            O::LogicalLeft => vogls_bits::shift::tv_l_logical_shift_left,
+            O::LogicalRight => vogls_bits::shift::tv_l_logical_shift_right,
+            O::ArithmeticRight => vogls_bits::shift::tv_l_arithmetic_shift_right,
+        };
         f(dst, src, offset, size);
     }
 }

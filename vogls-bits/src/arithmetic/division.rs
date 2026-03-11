@@ -224,7 +224,7 @@ mod tests {
     use crate::arithmetic::tv_subtraction;
     use crate::comparison::tv_gtu64_unsigned_leq;
     use crate::proptest::{any_bits_of_size, any_reasonable_size};
-    use crate::shift::tv_gtu64_logical_shift_left;
+    use crate::shift::tv_l_logical_shift_left;
     use proptest::prelude::Just;
     use proptest::proptest;
 
@@ -246,7 +246,7 @@ mod tests {
             let nwords = size.get().div_ceil(64) as usize;
             let mut reference = vec![0u64; nwords];
 
-            tv_gtu64_logical_shift_left(&mut reference, &lhs, shift, size);
+            tv_l_logical_shift_left(&mut reference, &lhs, shift, size);
             let reference = tv_gtu64_unsigned_leq(&reference, &rhs, size);
             let target = tv_lsl_unsigned_leq(&lhs, shift, &rhs, size);
 
@@ -321,7 +321,7 @@ mod tests {
             let mut reference_shift = vec![0u64; nwords];
             let mut reference_sub = vec![0u64; nwords];
 
-            tv_gtu64_logical_shift_left(&mut reference_shift, &rhs, shift, size);
+            tv_l_logical_shift_left(&mut reference_shift, &rhs, shift, size);
             tv_subtraction(&mut reference_sub, &lhs, &reference_shift, size);
             tv_lsl_mut_sub(&mut lhs, &rhs, shift, size);
 

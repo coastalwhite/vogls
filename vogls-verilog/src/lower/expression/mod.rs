@@ -754,7 +754,22 @@ impl_bin_eq_ineq! {
 impl_shift! {
     bin_logical_shift_left => logical_shift_left,
     bin_logical_shift_right => logical_shift_right,
-    bin_arithmetic_shift_right => arithmetic_shift_right,
+}
+
+fn bin_arithmetic_shift_right<'a>(
+    gl: &mut GlobalContext,
+    builder: &mut BasicBlockBuilder,
+    l: VariableKey,
+    l_ty: VType,
+    r: VariableKey,
+    r_ty: VType,
+) -> (VariableKey, VType) {
+    let r = sign_or_zero_extend(gl, builder, r, r_ty, INTEGER_VSIZE);
+    if l_ty.is_signed() {
+        (builder.arithmetic_shift_right(gl, l, r), l_ty)
+    } else {
+        (builder.logical_shift_right(gl, l, r), l_ty)
+    }
 }
 
 pub fn sign_or_zero_extend(

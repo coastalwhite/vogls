@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use clap::{Parser, Subcommand};
+use clap::Parser;
 use vogls::ExecutionContext;
 use vogls_ir::LogicMode;
 
@@ -44,7 +44,7 @@ struct Args {
 
     #[arg(short = 'D')]
     defines: Vec<String>,
-    
+
     #[arg(short = 'C')]
     compile: bool,
 }

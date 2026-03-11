@@ -42,7 +42,6 @@ pub struct SpecifyOutput {
 pub struct SpecifyPath {
     condition: Condition,
     delays: Delays,
-    variant: PathDeclarationVariant,
 }
 
 // @Performance.
@@ -662,7 +661,6 @@ pub fn lower_specify<'a>(
                 out.paths[paths_idx].1.push(SpecifyPath {
                     condition,
                     delays,
-                    variant: *variant,
                 });
             }
             SpecifyBlockItem::SystemTimingCheck(_) => {

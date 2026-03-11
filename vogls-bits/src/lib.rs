@@ -1329,7 +1329,7 @@ macro_rules! impl_shift {
 }
 
 impl_shift! {
-    (logical_shift_left, tv_gtu64_logical_shift_left, fv_l_logical_shift_left),
+    (logical_shift_left, tv_l_logical_shift_left, fv_l_logical_shift_left),
     (logical_shift_right, tv_l_logical_shift_right, fv_l_logical_shift_right),
     (arithmetic_shift_right, tv_l_arithmetic_shift_right, fv_l_arithmetic_shift_right),
 }
