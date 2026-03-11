@@ -405,7 +405,19 @@ pub fn cgc_select_bit(f: &mut impl io::Write, dst: CIdent, lhs: CVar, rhs: CVar)
             "{INDENT}{d} = ({r} >= {l_size}) ? 0 : (uint8_t)(({l}[{r} / 64] >> ({r} % 64)) & 1);",
             l_size = lhs.ty.size
         )?,
-        (LogicMode::FourValue, _) => todo!(),
+        (LogicMode::FourValue, None) => writeln!(
+            f,
+            "{INDENT}{d} = (({r} & 0xFFFFFFFF) != 0xFFFFFFFF || ({r} >> 32) >= {l_size}) ? 0 : (((uint8_t)(({l} >> ({r} >> 32)) & 1)) | ((uint8_t)(({l} >> (({r} >> 32)+{l_size})) & 1) << 1));",
+            l_size = lhs.ty.size
+        )?,
+        (LogicMode::FourValue, Some(arr_size)) => {
+            let num_words = arr_size / 2;
+            writeln!(
+                f,
+                "{INDENT}{d} = (({r} & 0xFFFFFFFF) != 0xFFFFFFFF || ({r} >> 32) >= {l_size}) ? 0 : ((uint8_t)(({l}[({r} >> 32)/64] >> (({r} >> 32)%64)) & 1) | (((uint8_t)(({l}[{num_words}+({r}>>32)/64] >> (({r}>>32)%64)) & 1)) << 1));",
+                l_size = lhs.ty.size
+            )?;
+        }
     }
 
     Ok(())
