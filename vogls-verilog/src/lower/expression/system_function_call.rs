@@ -90,6 +90,28 @@ pub fn lower_system_function_call<'a>(
             let e = builder.copy_z(gl, l, r);
             Ok((e, ty))
         }
+        "vogls_min" => {
+            ensure_num_args_equal!(2);
+            let (l, l_ty) = arguments[1].ok_or(())?;
+            let (r, r_ty) = arguments[0].ok_or(())?;
+
+            let ty = coerce_to_max_size_ty(l_ty, r_ty);
+            let l = sign_or_zero_extend(gl, builder, l, l_ty, ty.force_net_width());
+            let r = sign_or_zero_extend(gl, builder, r, r_ty, ty.force_net_width());
+            let e = builder.min(gl, l, r);
+            Ok((e, ty))
+        }
+        "vogls_max" => {
+            ensure_num_args_equal!(2);
+            let (l, l_ty) = arguments[1].ok_or(())?;
+            let (r, r_ty) = arguments[0].ok_or(())?;
+
+            let ty = coerce_to_max_size_ty(l_ty, r_ty);
+            let l = sign_or_zero_extend(gl, builder, l, l_ty, ty.force_net_width());
+            let r = sign_or_zero_extend(gl, builder, r, r_ty, ty.force_net_width());
+            let e = builder.max(gl, l, r);
+            Ok((e, ty))
+        }
 
         _ => {
             diagnostics.not_yet_implemented(arenas.get_span(expr), "unknown system function call");

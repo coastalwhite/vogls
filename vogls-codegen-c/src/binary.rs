@@ -1,4 +1,4 @@
-use std::io;
+use std::{fmt, io};
 
 use vogls_bits::arithmetic::FvLogicValue;
 use vogls_ir::{INTEGER_VSIZE, LogicMode, VectorSize};
@@ -351,12 +351,46 @@ pub fn cgc_bin_mod(f: &mut impl io::Write, dst: CVar, lhs: CIdent, rhs: CIdent) 
     Ok(())
 }
 
+fn tv_l_ule(
+    f: &mut impl io::Write,
+    d: impl fmt::Display,
+    l: CIdent,
+    r: CIdent,
+    num_words: u32,
+    arr_size: u32,
+) -> io::Result<()> {
+    writeln!(
+        f,
+        "{INDENT}{d} = 1; for (int i = 0; i < {num_words}; ++i) {{  if ({l}[{arr_size}-i-1] > {r}[{arr_size}-i-1]) {{ {d} = 0; break; }} else if ({l}[{arr_size}-i-1] < {r}[{arr_size}-i-1]) break; }}"
+    )
+}
+
 pub fn cgc_bin_ule(f: &mut impl io::Write, dst: CIdent, lhs: CVar, rhs: CIdent) -> io::Result<()> {
+    let size = lhs.ty.size;
     let (d, l, r) = (dst, lhs.ident, rhs);
+
     match (lhs.ty.mode, lhs.ty.array_size()) {
         (LogicMode::TwoValue, None) => writeln!(f, "{INDENT}{d} = (uint8_t)({l} <= {r});")?,
-        (LogicMode::TwoValue, Some(_)) => todo!(),
-        (LogicMode::FourValue, _) => todo!(),
+        (LogicMode::TwoValue, Some(arr_size)) => tv_l_ule(f, d, l, r, arr_size, arr_size)?,
+        (LogicMode::FourValue, None) => {
+            let mask = mask(size.get());
+            writeln!(
+                f,
+                "{INDENT}{d} = (({l} & 0x{mask:x}) == 0x{mask:x} && ({r} & 0x{mask:x}) == 0x{mask:x}) ? (((uint8_t)(({l} >> {size}) <= ({r} >> {size})) << 1) | 1) : 0;"
+            )?;
+        }
+        (LogicMode::FourValue, Some(arr_size)) => {
+            let num_words = arr_size / 2;
+            writeln!(
+                f,
+                "{INDENT}if (contains_special({l}, {size}) || contains_special({r}, {size})) {d} = 0;"
+            )?;
+            writeln!(f, "{INDENT}else {{")?;
+            write!(f, "{INDENT}")?;
+            tv_l_ule(f, d, l, r, num_words, arr_size)?;
+            writeln!(f, "{INDENT}{INDENT}{d} = ({d} << 1) | 1;")?;
+            writeln!(f, "{INDENT}}}")?;
+        }
     }
 
     Ok(())
@@ -614,11 +648,45 @@ pub fn cgc_copy_y(f: &mut impl io::Write, dst: CVar, lhs: CVar, rhs: CVar) -> io
 }
 
 pub fn cgc_bin_min(f: &mut impl io::Write, dst: CVar, lhs: CVar, rhs: CVar) -> io::Result<()> {
+    let size = lhs.ty.size;
     let (d, l, r) = (dst.ident, lhs.ident, rhs.ident);
     match (lhs.ty.mode, lhs.ty.array_size()) {
         (LogicMode::TwoValue, None) => writeln!(f, "{INDENT}{d} = ({l} < {r}) ? {l} : {r};")?,
-        (LogicMode::TwoValue, Some(_)) => todo!(),
-        (LogicMode::FourValue, _) => todo!(),
+        (LogicMode::FourValue, None) => {
+            let mask = mask(size.get());
+            writeln!(
+                f,
+                "{INDENT}{d} = (({l} & 0x{mask:x}) == 0x{mask:x} && ({r} & 0x{mask:x}) == 0x{mask:x}) ? ((({l} >> {size}) < ({r} >> {size})) ? {l} : {r}) : 0;"
+            )?;
+        }
+        (mode, Some(arr_size)) => {
+            let num_words = match mode {
+                LogicMode::TwoValue => arr_size,
+                LogicMode::FourValue => arr_size / 2,
+            };
+            writeln!(f, "{INDENT}{{")?;
+            if mode == LogicMode::FourValue {
+                writeln!(
+                    f,
+                    "{INDENT}if (contains_special({l}, {size}) || contains_special({r}, {size})) memset({d}, 0, {arr_size}*sizeof(uint64_t));"
+                )?;
+                writeln!(f, "{INDENT}else {{")?;
+            }
+            writeln!(f, "{INDENT}uint8_t is_ule;")?;
+            tv_l_ule(f, "is_ule", l, r, num_words, arr_size)?;
+            writeln!(
+                f,
+                "{INDENT}if (is_ule) memmove({d}, {l}, {arr_size}*sizeof(uint64_t));"
+            )?;
+            writeln!(
+                f,
+                "{INDENT}else memmove({d}, {r}, {arr_size}*sizeof(uint64_t));"
+            )?;
+            if mode == LogicMode::FourValue {
+                writeln!(f, "{INDENT}}}")?;
+            }
+            writeln!(f, "{INDENT}}}")?;
+        }
     }
 
     Ok(())
@@ -628,11 +696,45 @@ pub fn cgc_bin_max(f: &mut impl io::Write, dst: CVar, lhs: CVar, rhs: CVar) -> i
     assert_eq!(dst.ty, lhs.ty);
     assert_eq!(dst.ty, rhs.ty);
 
+    let size = lhs.ty.size;
     let (d, l, r) = (dst.ident, lhs.ident, rhs.ident);
     match (lhs.ty.mode, lhs.ty.array_size()) {
         (LogicMode::TwoValue, None) => writeln!(f, "{INDENT}{d} = ({l} > {r}) ? {l} : {r};")?,
-        (LogicMode::TwoValue, Some(_)) => todo!(),
-        (LogicMode::FourValue, _) => todo!(),
+        (LogicMode::FourValue, None) => {
+            let mask = mask(size.get());
+            writeln!(
+                f,
+                "{INDENT}{d} = (({l} & 0x{mask:x}) == 0x{mask:x} && ({r} & 0x{mask:x}) == 0x{mask:x}) ? ((({l} >> {size}) > ({r} >> {size})) ? {l} : {r}) : 0;"
+            )?;
+        }
+        (mode, Some(arr_size)) => {
+            let num_words = match mode {
+                LogicMode::TwoValue => arr_size,
+                LogicMode::FourValue => arr_size / 2,
+            };
+            writeln!(f, "{INDENT}{{")?;
+            if mode == LogicMode::FourValue {
+                writeln!(
+                    f,
+                    "{INDENT}if (contains_special({l}, {size}) || contains_special({r}, {size})) memset({d}, 0, {arr_size}*sizeof(uint64_t));"
+                )?;
+                writeln!(f, "{INDENT}else {{")?;
+            }
+            writeln!(f, "{INDENT}uint8_t is_ule;")?;
+            tv_l_ule(f, "is_ule", l, r, num_words, arr_size)?;
+            writeln!(
+                f,
+                "{INDENT}if (is_ule) memmove({d}, {r}, {arr_size}*sizeof(uint64_t));"
+            )?;
+            writeln!(
+                f,
+                "{INDENT}else memmove({d}, {l}, {arr_size}*sizeof(uint64_t));"
+            )?;
+            if mode == LogicMode::FourValue {
+                writeln!(f, "{INDENT}}}")?;
+            }
+            writeln!(f, "{INDENT}}}")?;
+        }
     }
 
     Ok(())
