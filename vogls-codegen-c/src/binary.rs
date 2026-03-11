@@ -155,16 +155,11 @@ fn fv_inline_arith(
     op: char,
 ) -> io::Result<()> {
     let size = dst.ty.size;
-    let msbs_mask = if size.get() % 64 == 0 {
-        u64::MAX
-    } else {
-        (1u64 << dst.ty.size.get()) - 1
-    };
-
+    let msbs_mask = mask(size.get());
     let (d, l, r) = (dst.ident, lhs, rhs);
     writeln!(
         f,
-        "{INDENT}{d} = (({l} & 0x{msbs_mask:x}) != 0x{msbs_mask:x} || ({r} & 0x{msbs_mask:x}) != 0x{msbs_mask:x}) ? 0 : ((({l} {op} {r}) & (uint64_t)0x{msbs_mask:x}) | ((uint64_t)0x{msbs_mask:x} << {size}));"
+        "{INDENT}{d} = (({l} & 0x{msbs_mask:x}) != 0x{msbs_mask:x} || ({r} & 0x{msbs_mask:x}) != 0x{msbs_mask:x}) ? 0 : ((((({l} >> {size}) {op} ({r} >> {size})) & (uint64_t)0x{msbs_mask:x}) << {size}) | (uint64_t)0x{msbs_mask:x});"
     )
 }
 

@@ -5,20 +5,20 @@ use vogls_bits::format::{BitsFormatBase, BitsFormatOptions, BitsFormatWidth};
 
 use crate::Bits;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DynFormatString {
     content: Box<str>,
     arguments: Box<[(usize, DynFormatArgument)]>,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum Padding {
     ZeroPaddedToSize,
     ZeroPaddedTo(u32),
     #[default]
     NoPadding,
 }
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum Base {
     Binary,
     Octal,
@@ -27,7 +27,7 @@ pub enum Base {
     Decimal,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct DynFormatArgument {
     pub padding: Padding,
     pub base: Base,

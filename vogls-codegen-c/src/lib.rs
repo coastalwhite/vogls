@@ -191,6 +191,7 @@ pub fn lower_process(
     gl: &GlobalContext,
     heap_builder: &mut HeapBuilder,
     listener_builder: &mut ListenerBuilder,
+    dyn_fmt_strs: &mut IndexSet<DynFormatString>,
     io_signals: &VgHashMap<SignalKey, RtSignalKey>,
     signals: &[HeapRef],
 ) -> io::Result<()> {
@@ -577,7 +578,7 @@ pub fn lower_process(
                                 Ok(t)
                             })
                             .collect::<io::Result<Vec<CVar>>>()?;
-                        lower_dyn_format_str(&mut buffer, &dyn_format_string, args)?;
+                        lower_dyn_format_str(&mut buffer, dyn_fmt_strs, &dyn_format_string, args)?;
                     }
                     vogls_ir::IntrinsicOp::Assert(dyn_format_string) => {
                         // @TODO: Format
@@ -604,7 +605,7 @@ pub fn lower_process(
                                 Ok(t)
                             })
                             .collect::<io::Result<Vec<CVar>>>()?;
-                        lower_dyn_format_str(&mut buffer, &dyn_format_string, args)?;
+                        lower_dyn_format_str(&mut buffer, dyn_fmt_strs, &dyn_format_string, args)?;
                         writeln!(
                             buffer,
                             r#"{INDENT}{INDENT}cldctx->exit = 2; return;
@@ -888,11 +889,12 @@ pub fn lower_process(
                     load(&mut buffer, heap_map[condition], t)?;
                 }
 
-                writeln!(
-                    buffer,
-                    "{INDENT}if ({t} != 0) {{ goto L{truthy}; }} else {{ goto L{falsy}; }}",
-                    t = t.ident
-                )?;
+                let t = t.ident;
+                match mcondition {
+                    LogicMode::TwoValue => write!(buffer, "{INDENT}if ({t} == 1)")?,
+                    LogicMode::FourValue => write!(buffer, "{INDENT}if ({t} == 3)")?,
+                }
+                writeln!(buffer, " {{ goto L{truthy}; }} else {{ goto L{falsy}; }}")?;
             }
             BasicBlockTerminator::Halt => {
                 writeln!(buffer, "{INDENT}return;")?;
@@ -927,6 +929,7 @@ fn bin_args_need_conversion(
 
 fn lower_dyn_format_str(
     f: &mut impl io::Write,
+    dyn_fmt_strs: &mut IndexSet<DynFormatString>,
     dyn_format_string: &DynFormatString,
     args: Vec<CVar>,
 ) -> io::Result<()> {
@@ -959,10 +962,10 @@ fn lower_dyn_format_str(
             )?;
         }
     }
+    let dyn_fmt_ptr = dyn_fmt_strs.insert_index(dyn_format_string.clone());
     write!(
         f,
-        r#"}}; (cldctx->fmt)(cldctx->stdout, (void*){dyn_fmt_ptr:p}, args); }}"#,
-        dyn_fmt_ptr = dyn_format_string as *const DynFormatString,
+        r#"}}; (cldctx->fmt)(cldctx->stdout, &cldctx->fmt_strs[{dyn_fmt_ptr}], args); }}"#,
     )?;
     Ok(())
 }
@@ -1312,6 +1315,7 @@ struct schedule;
 typedef struct cold_context {
     uint8_t exit;
     void (*fmt)(void*, void*, bits_ref_t*);
+    void *fmt_strs;
     void *stdout;
     void *stderr;
 } cold_context_t;

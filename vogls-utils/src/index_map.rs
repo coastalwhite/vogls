@@ -100,6 +100,10 @@ impl<K> IndexSet<K> {
     pub fn get_at_index(&self, index: usize) -> Option<&K> {
         self.keys.get(index)
     }
+
+    pub fn take_keys(self) -> Vec<K> {
+        self.keys
+    }
 }
 impl<K, V> IndexMap<K, V> {
     pub fn new() -> Self {
@@ -131,6 +135,13 @@ impl<K, V> IndexMap<K, V> {
 impl<K: Eq + hash::Hash> IndexSet<K> {
     pub fn insert(&mut self, key: K) -> bool {
         self.insert_new(key).is_ok()
+    }
+
+    pub fn insert_index(&mut self, key: K) -> usize {
+        match self.insert_new(key) {
+            Ok(v) => v,
+            Err(v) => v,
+        }
     }
 
     pub fn insert_new(&mut self, key: K) -> Result<usize, usize> {

@@ -715,6 +715,7 @@ impl BasicBlockBuilder {
         gl: &mut GlobalContext,
         condition: VariableKey,
     ) -> (BranchRef, BasicBlockBuilder) {
+        assert_eq!(gl.vars[condition].size, SCALAR_VSIZE);
         let branch_bb = self.key();
         let next_key = self.next_bb(gl);
         let slf = gl.bbs.get_mut(self.key).unwrap();

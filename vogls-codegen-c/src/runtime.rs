@@ -3,11 +3,9 @@ use std::ops::Deref as _;
 use std::path::Path;
 use std::ptr::NonNull;
 
-use vogls_codegen::HeapRef;
 use vogls_ir::dyn_format_string::DynFormatString;
-use vogls_ir::{Bits, GlobalContext, LogicMode, SignalKey, VectorSize};
+use vogls_ir::{Bits, GlobalContext, VectorSize};
 use vogls_runtime::{RtSignalKey, SimulationIo};
-use vogls_utils::{IndexMap, VgHashMap};
 
 type Time = u64;
 type HeapPtr = Option<NonNull<u64>>;
@@ -43,6 +41,7 @@ pub struct ColdContextT {
         NonNull<DynFormatString>,
         *const BitsRefT,
     ),
+    fmt_strs: *const DynFormatString,
 
     stdout: NonNull<Box<dyn std::io::Write + Send + Sync>>,
     stderr: NonNull<Box<dyn std::io::Write + Send + Sync>>,
@@ -194,6 +193,7 @@ pub struct CDesignState {
 
 pub struct CDesign {
     lib: libloading::Library,
+    dyn_fmt_strs: Vec<DynFormatString>,
     num_regions: u8,
 }
 
@@ -269,9 +269,13 @@ extern "C" fn fmt(
 }
 
 impl CDesign {
-    pub fn new(path: &Path, num_regions: u8) -> Self {
+    pub fn new(path: &Path, dyn_fmt_strs: Vec<DynFormatString>, num_regions: u8) -> Self {
         let lib = unsafe { libloading::Library::new(path) }.unwrap();
-        Self { lib, num_regions }
+        Self {
+            lib,
+            dyn_fmt_strs,
+            num_regions,
+        }
     }
 
     pub fn start(&self, state: &mut CDesignState, io: &mut SimulationIo) -> Result<(), ()> {
@@ -280,6 +284,7 @@ impl CDesign {
             let mut cldctx = ColdContextT {
                 exit: 0,
                 fmt,
+                fmt_strs: self.dyn_fmt_strs.as_ptr(),
                 stdout: NonNull::from_mut(&mut io.stdout),
                 stderr: NonNull::from_mut(&mut io.stderr),
             };
@@ -320,6 +325,7 @@ impl CDesign {
         let mut cldctx = ColdContextT {
             exit: 0,
             fmt,
+            fmt_strs: self.dyn_fmt_strs.as_ptr(),
             stdout: NonNull::from_mut(&mut io.stdout),
             stderr: NonNull::from_mut(&mut io.stderr),
         };

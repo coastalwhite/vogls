@@ -13,7 +13,7 @@ use vogls_ir::{Bits, GlobalContext, LogicMode, Signal, SignalKey};
 use vogls_runtime::SimulationIo;
 use vogls_runtime::{RtSignalKey, RuntimeState};
 use vogls_sim::{Event, Regions, Simulation, VmProcess, VmProcessKey, lower_process_to_vm};
-use vogls_utils::VgHashMap;
+use vogls_utils::{IndexSet, VgHashMap};
 use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{Description, Module, ModuleItem, NonPortModuleItem};
 use vogls_verilog::elaborate::{VSymbol, VSymbolTable};
@@ -613,6 +613,7 @@ impl Design {
         if ectx.compile {
             let mut listener_builder = ListenerBuilder::default();
             let mut out = Vec::new();
+            let mut dyn_fmt_strs = IndexSet::new();
 
             for signal in gl.signals.keys() {
                 lower_signal_drive_header(&mut out, signal, &io_signals)?;
@@ -626,6 +627,7 @@ impl Design {
                     &gl,
                     &mut heap_builder,
                     &mut listener_builder,
+                    &mut dyn_fmt_strs,
                     &io_signals,
                     &signals,
                 )?;
@@ -675,6 +677,7 @@ impl Design {
             );
             let design = CDesign::new(
                 &Path::new("/tmp/vogls-target.so"),
+                dyn_fmt_strs.take_keys(),
                 regions.num_additional_regions() as u8,
             );
             return Ok(Self {

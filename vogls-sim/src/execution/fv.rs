@@ -222,19 +222,17 @@ pub(crate) fn exec_fv_bin_arith(
         C::fv_l_copy_z(dst, lhs, rhs);
     }
     fn fv_u64_min(dst: &mut [u64], lhs: &[u64], rhs: &[u64], size: VectorSize) {
-        // @TODO: Decide what to do with X / Z
-        if vogls_bits::comparison::fv_l_unsigned_leq(lhs, rhs, size) == FvLogicValue::L1 {
-            dst.copy_from_slice(lhs);
-        } else {
-            dst.copy_from_slice(rhs);
+        match vogls_bits::comparison::fv_l_unsigned_leq(lhs, rhs, size) {
+            FvLogicValue::L1 => dst.copy_from_slice(lhs),
+            FvLogicValue::L0 => dst.copy_from_slice(rhs),
+            FvLogicValue::X | FvLogicValue::Z => dst.fill(0),
         }
     }
     fn fv_u64_max(dst: &mut [u64], lhs: &[u64], rhs: &[u64], size: VectorSize) {
-        // @TODO: Decide what to do with X / Z
-        if vogls_bits::comparison::fv_l_unsigned_leq(lhs, rhs, size) == FvLogicValue::L1 {
-            dst.copy_from_slice(rhs);
-        } else {
-            dst.copy_from_slice(lhs);
+        match vogls_bits::comparison::fv_l_unsigned_leq(lhs, rhs, size) {
+            FvLogicValue::L1 => dst.copy_from_slice(rhs),
+            FvLogicValue::L0 => dst.copy_from_slice(lhs),
+            FvLogicValue::X | FvLogicValue::Z => dst.fill(0),
         }
     }
 
