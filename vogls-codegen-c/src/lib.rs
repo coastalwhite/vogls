@@ -18,8 +18,10 @@ use vogls_utils::{IndexSet, VgHashMap, VgHashSet};
 pub mod runtime;
 
 mod binary;
+mod drive;
 mod resize;
 mod unary;
+mod extract;
 
 // Variables are represented as u8, u16, u32, u64 or an array of u64s depending or their size and
 // their logic mode.
@@ -176,12 +178,15 @@ impl ListenerBuilder {
     }
 }
 
-fn write_cvar(f: &mut impl io::Write, var: CVar) -> io::Result<()> {
-    write!(f, "{INDENT}{} {}", var.ty.element_type(), var.ident)?;
-    if let Some(array_size) = var.ty.array_size() {
+fn write_var(f: &mut impl io::Write, name: impl fmt::Display, ty: CType) -> io::Result<()> {
+    write!(f, "{INDENT}{} {}", ty.element_type(), name)?;
+    if let Some(array_size) = ty.array_size() {
         write!(f, "[{array_size}]")?;
     }
     writeln!(f, ";")
+}
+fn write_cvar(f: &mut impl io::Write, var: CVar) -> io::Result<()> {
+    write_var(f, var.ident, var.ty)
 }
 
 pub fn lower_process(
@@ -658,120 +663,18 @@ pub fn lower_process(
                             unconverted_t.ident,
                         )?;
                     }
-
-                    writeln!(buffer, "{INDENT}{{")?;
-
-                    if let Some((offset, partial_size)) = partial {
-                        // @TODO: offset > size
-                        // @TODO: offset contains special
-                        let offset_t = temp_map[&(*offset, LogicMode::TwoValue)];
-                        if temporal_variables.contains(offset) {
-                            load(&mut buffer, heap_map[offset], offset_t)?;
+                    let partial = match partial {
+                        None => None,
+                        Some((offset, partial_size)) => {
+                            let offset_t = temp_map[&(*offset, LogicMode::TwoValue)];
+                            if temporal_variables.contains(offset) {
+                                load(&mut buffer, heap_map[offset], offset_t)?;
+                            }
+                            Some((offset_t, *partial_size))
                         }
-
-                        let current_t = CVar {
-                            ident: CIdent(temp_counter),
-                            ty: CType {
-                                size: *partial_size,
-                                mode: gl.logic_mode,
-                            },
-                        };
-                        temp_counter += 1;
-                        write_cvar(&mut buffer, current_t)?;
-                        load_slice(
-                            &mut buffer,
-                            current_t,
-                            offset_t,
-                            signals[io_signals[signal].as_usize()],
-                        )?;
-
-                        match current_t.ty.array_size() {
-                            None => {
-                                writeln!(
-                                    buffer,
-                                    "{INDENT}if ({t} != {current_t}) {{",
-                                    t = t.ident,
-                                    current_t = current_t.ident
-                                )?;
-                            }
-                            Some(_) => {
-                                let condition = CVar {
-                                    ident: CIdent(temp_counter),
-                                    ty: CType {
-                                        size: SCALAR_VSIZE,
-                                        mode: LogicMode::TwoValue,
-                                    },
-                                };
-                                temp_counter += 1;
-                                write_cvar(&mut buffer, condition)?;
-                                binary::cgc_case_eq(&mut buffer, condition.ident, t, current_t)?;
-                                writeln!(buffer, "{INDENT}if (!{}) {{", condition.ident)?;
-                            }
-                        }
-                        writeln!(
-                            buffer,
-                            "{INDENT}{INDENT}drive_signal_{idx}(schedule, time, is_scheduled, listening, last_active_time);",
-                            idx = io_signals[signal].as_u64()
-                        )?;
-                        store_slice(
-                            &mut buffer,
-                            signals[io_signals[signal].as_usize()],
-                            offset_t,
-                            t,
-                        )?;
-                        writeln!(buffer, "{INDENT}}}")?;
-                    } else {
-                        let current_t = CVar {
-                            ident: CIdent(temp_counter),
-                            ty: CType {
-                                size,
-                                mode: gl.logic_mode,
-                            },
-                        };
-                        temp_counter += 1;
-                        write_cvar(&mut buffer, current_t)?;
-                        load(
-                            &mut buffer,
-                            signals[io_signals[signal].as_usize()].offset,
-                            current_t,
-                        )?;
-                        match current_t.ty.array_size() {
-                            None => {
-                                writeln!(
-                                    buffer,
-                                    "{INDENT}if ({t} != {current_t}) {{",
-                                    t = t.ident,
-                                    current_t = current_t.ident
-                                )?;
-                            }
-                            Some(_) => {
-                                let condition = CVar {
-                                    ident: CIdent(temp_counter),
-                                    ty: CType {
-                                        size: SCALAR_VSIZE,
-                                        mode: LogicMode::TwoValue,
-                                    },
-                                };
-                                temp_counter += 1;
-                                write_cvar(&mut buffer, condition)?;
-                                binary::cgc_case_eq(&mut buffer, condition.ident, t, current_t)?;
-                                writeln!(buffer, "{INDENT}if (!{}) {{", condition.ident)?;
-                            }
-                        }
-                        writeln!(
-                            buffer,
-                            "{INDENT}{INDENT}drive_signal_{idx}(schedule, time, is_scheduled, listening, last_active_time);",
-                            idx = io_signals[signal].as_u64()
-                        )?;
-                        store(
-                            &mut buffer,
-                            signals[io_signals[signal].as_usize()].offset,
-                            t,
-                        )?;
-                        writeln!(buffer, "{INDENT}}}")?;
-                    }
-
-                    writeln!(buffer, "{INDENT}}}")?;
+                    };
+                    let dst = io_signals[signal];
+                    drive::drive(f, signals, dst, t, partial)?;
                 }
                 I::Phi(_, _) => continue,
             }
@@ -1029,99 +932,6 @@ fn store(f: &mut impl io::Write, heap_offset: HeapOffset, t: CVar) -> io::Result
             )
         }
     }
-}
-
-fn load_slice(b: &mut impl io::Write, dst: CVar, offset: CVar, src: HeapRef) -> io::Result<()> {
-    if dst.ty.mode == LogicMode::FourValue {
-        todo!()
-    }
-    let src_ty = CType {
-        size: src.size,
-        mode: dst.ty.mode,
-    };
-    if let Some(_) = src_ty.array_size() {
-        match dst.ty.array_size() {
-            None => {
-                write!(
-                    b,
-                    r#"
-{INDENT}if (({offset}%64)+{dst_size} <= 64) {dst} = (heap[{word}+({offset}/64)] >> ({offset}%64)) & 0x{mask:x};
-{INDENT}else {dst} = (heap[{word}+({offset}/64)] >> ({offset}%64)) | (heap[{word}+({offset}/64) + 1] >> (64 - {offset}%64)) & 0x{mask:x};
-"#,
-                    offset = offset.ident,
-                    dst = dst.ident,
-                    dst_size = dst.ty.size,
-                    word = src.offset.bit_offset / 64,
-                    mask = mask(dst.ty.size.get())
-                )?;
-            }
-            _ => todo!(),
-        }
-
-        return Ok(());
-    }
-
-    let mut num_bits = dst.ty.size.get();
-    if dst.ty.mode == LogicMode::FourValue {
-        num_bits *= 2;
-    }
-
-    let word = src.offset.bit_offset / 64;
-    let shift = src.offset.bit_offset % 64;
-    let mask = mask(num_bits);
-
-    writeln!(
-        b,
-        "{INDENT}{t} = (heap[{word}] >> ({shift} + {offset})) & 0x{mask:x};",
-        t = dst.ident,
-        offset = offset.ident,
-    )
-}
-
-fn store_slice(f: &mut impl io::Write, dst: HeapRef, offset: CVar, src: CVar) -> io::Result<()> {
-    if src.ty.mode == LogicMode::FourValue {
-        todo!()
-    }
-    let dst_ty = CType {
-        size: dst.size,
-        mode: src.ty.mode,
-    };
-    if let Some(_) = dst_ty.array_size() {
-        match src.ty.array_size() {
-            None => {
-                write!(
-                    f,
-                    r#"
-{INDENT}if (({offset}%64)+{src_size} <= 64) heap[{word}+({offset}/64)] = (heap[{word}+({offset}/64)] & ~(((uint64_t)0x{mask:x}) << ({offset}%64))) | (((uint64_t){src}) << ({offset}%64));
-{INDENT}else {{ printf("NYI [STORE SLICE]\n"); cldctx->exit = 2; return; }};
-"#,
-                    src_size = src.ty.size,
-                    offset = offset.ident,
-                    src = src.ident,
-                    word = dst.offset.bit_offset / 64,
-                    mask = mask(src.ty.size.get()),
-                )?;
-            }
-            _ => todo!(),
-        }
-        return Ok(());
-    }
-
-    let mut num_bits = src.ty.size.get();
-    if src.ty.mode == LogicMode::FourValue {
-        num_bits *= 2;
-    }
-
-    let word = dst.offset.bit_offset / 64;
-    let shift = dst.offset.bit_offset % 64;
-    let mask = mask(num_bits);
-
-    writeln!(
-        f,
-        "{INDENT}heap[{word}] = (heap[{word}] & ~(((uint64_t)0x{mask:x}) << ({shift}+{offset}))) | ((uint64_t){t} << ({shift} + {offset}));",
-        t = src.ident,
-        offset = offset.ident,
-    )
 }
 
 fn convert(

@@ -471,6 +471,16 @@ pub fn cgc_lsl(f: &mut impl io::Write, dst: CVar, lhs: CVar, rhs: CVar) -> io::R
 }
 
 pub fn cgc_lsr(f: &mut impl io::Write, dst: CVar, lhs: CVar, rhs: CVar) -> io::Result<()> {
+    cgc_lsr_with(f, dst, lhs, rhs, true)
+}
+
+pub fn cgc_lsr_with(
+    f: &mut impl io::Write,
+    dst: CVar,
+    lhs: CVar,
+    rhs: CVar,
+    valid: bool,
+) -> io::Result<()> {
     assert_eq!(dst.ty, lhs.ty);
     assert_eq!(rhs.ty.size, INTEGER_VSIZE);
 
@@ -488,11 +498,18 @@ pub fn cgc_lsr(f: &mut impl io::Write, dst: CVar, lhs: CVar, rhs: CVar) -> io::R
         }
         (M::FourValue, None) => {
             writeln!(f, "{INDENT}if (({r} & 0xFFFFFFFF) == 0xFFFFFFFF) {{")?;
-            writeln!(
+            write!(
                 f,
-                "{INDENT}{INDENT}{d} = (({r} >> 32) >= {l_size}) ? 0x{mask:x}ULL : (({l} >> ({r} >> 32)) | (((1ULL << ({r} >> 32)) - 1) << ({l_size} - ({r} >> 32))));",
+                "{INDENT}{INDENT}{d} = (({r} >> 32) >= {l_size}) ? 0x{mask:x}ULL : (({l} >> ({r} >> 32))",
                 mask = mask(lhs.ty.size.get()),
             )?;
+            if valid {
+                write!(
+                    f,
+                    " | (((1ULL << ({r} >> 32)) - 1) << ({l_size} - ({r} >> 32)))"
+                )?;
+            }
+            write!(f, ");")?;
             writeln!(f, "{INDENT}}} else {d} = 0;")?;
         }
         (M::FourValue, Some(arr_size)) => {
@@ -500,7 +517,7 @@ pub fn cgc_lsr(f: &mut impl io::Write, dst: CVar, lhs: CVar, rhs: CVar) -> io::R
             writeln!(f, "{INDENT}if (({r} & 0xFFFFFFFF) == 0xFFFFFFFF) {{")?;
             writeln!(
                 f,
-                "{INDENT}{INDENT}tv_l_lsr_with({d}, {l}, {r} >> 32, {l_size}, true);"
+                "{INDENT}{INDENT}tv_l_lsr_with({d}, {l}, {r} >> 32, {l_size}, {valid});"
             )?;
             writeln!(
                 f,
