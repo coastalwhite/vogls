@@ -1,6 +1,6 @@
 Verilog
 - [ ] Make distinction between `wire` and `reg`
-- [ ] Fix division by zero in four-value mode
+- [ ] Fix division by zero in four-value mode, same problem from extract
 - [ ] Allow module arrays
 - [ ] Implicit declarations
 - [ ] Wire delay

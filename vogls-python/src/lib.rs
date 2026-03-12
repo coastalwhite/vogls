@@ -9,7 +9,7 @@ mod vogls {
 
     use pyo3::exceptions::{PyException, PyValueError};
     use pyo3::{PyResult, prelude::*};
-    use vogls::design::{DesignBackend, DesignState};
+    use vogls::design::DesignState;
     use vogls::{
         BitsFormatOptions, ExecutionContext, LogicMode, SimulationIo, VSymbol, VectorSize,
     };

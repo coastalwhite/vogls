@@ -9,7 +9,7 @@ use vogls_codegen::{
 use vogls_ir::dyn_format_string::DynFormatString;
 use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, BinaryOp, GlobalContext, Instruction, LogicMode, Process,
-    ProcessKey, ResizeOp, SCALAR_VSIZE, SignalKey, UnaryOp, VariableKey, VectorSize,
+    ProcessKey, ResizeOp, SignalKey, UnaryOp, VariableKey, VectorSize,
 };
 use vogls_ir_properties::get_temporal_variables;
 use vogls_runtime::RtSignalKey;
@@ -19,9 +19,9 @@ pub mod runtime;
 
 mod binary;
 mod drive;
+mod extract;
 mod resize;
 mod unary;
-mod extract;
 
 // Variables are represented as u8, u16, u32, u64 or an array of u64s depending or their size and
 // their logic mode.
@@ -318,8 +318,6 @@ pub fn lower_process(
         writeln!(buffer, "{INDENT}}}")?;
         writeln!(buffer)?;
     }
-
-    let mut temp_counter = temp_map.len() as u64;
 
     bb_seen.clear();
     bb_seen.insert(process.entry);
@@ -1185,6 +1183,12 @@ static inline uint32_t popcount16(uint16_t n) {
 static inline uint32_t popcount8(uint8_t n) {
 	return popcount32((uint32_t)n);
 }
+static inline uint64_t min(uint64_t l, uint64_t) {
+    return (l < r) ? l : r;
+}
+static inline uint64_t max(uint64_t l, uint64_t) {
+    return (l < r) ? l : r;
+}
 
 static inline bool contains_special(uint64_t *src, uint32_t size) {
     size_t num_full_words = size / 64;
@@ -1388,6 +1392,50 @@ static inline void tv_l_lsr_with(
         dst[nwords - 1] &= (((uint64_t)1) << (size % 64)) - 1;
     }
 }
+// static inline void tv_l_extract(
+//     uint64_t *dst,
+//     uint64_t *src,
+//     uint32_t amount,
+//     uint32_t dst_size,
+//     uint32_t src_size,
+//     bool shiftin_value
+// ) {
+//     uint32_t dst_words = (dst_size + 63) / 64;
+//     uint32_t src_words = (src_size + 63) / 64;
+//     if (amount == 0) {
+//         memmove(dst, src, dst_words*sizeof(uint64_t));
+//         return;
+//     }
+//     if (amount >= size) {
+//         memset(dst, ((uint8_t)(!shiftin_value)) - 1, dst_words*sizeof(uint64_t));
+//         if (dst_size % 64 != 0) dst[dst_words - 1] &= (((uint64_t)1) << (dst_size % 64)) - 1;
+//         return;
+//     }
+//
+//     uint32_t swords = (amount + 63) / 64;
+//     uint32_t soff = amount % 64;
+//     uint64_t shiftin_mask = ((uint64_t)(!shiftin_value)) - 1;
+//     if (soff == 0) {
+//         memmove(dst, src + swords, min((src_words - swords), dst_words)*sizeof(uint64_t));
+//         memset(dst+(nwords-swords), ((uint8_t)(!shiftin_value)) - 1, swords*sizeof(uint64_t));
+//     } else {
+//         for (int i = 0; i < nwords - swords; ++i)
+//             dst[i] = (src[i + swords] << (64 - soff)) | (src[i + swords - 1] >> soff);
+//         dst[nwords - swords] = (shiftin_mask << (64 - soff)) | (src[nwords - 1] >> soff);
+//         memset(dst+(nwords-swords+1), ((uint8_t)(!shiftin_value)) - 1, (swords - 1)*sizeof(uint64_t));
+//     }
+//
+//     if (size % 64 != 0) {
+//         uint64_t mask = shiftin_mask << (size % 64);
+//         if (shiftin_value) {
+//             dst[nwords - amount / 64 - 1] |= mask >> soff;
+//             if (nwords >= amount / 64 + 2) {
+//                 dst[nwords - amount / 64 - 2] |= mask << (64 - soff);
+//             }
+//         }
+//         dst[nwords - 1] &= (((uint64_t)1) << (size % 64)) - 1;
+//     }
+// }
 "#,
     )
 }
