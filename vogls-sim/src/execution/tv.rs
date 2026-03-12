@@ -51,7 +51,7 @@ pub(crate) fn exec_tv_resize(stack: &mut Heap, dst: HeapRef, op: ResizeOp, src: 
         let src_b = &[stack.get_subbit_byte(src)];
         let mut dst_b = [0];
         match op {
-            O::Truncate => vogls_bits::slice::tv_slice(&mut dst_b, src_b, dst.size),
+            O::Truncate => vogls_bits::slice::tv_s_truncate(&mut dst_b, src_b, dst.size),
             O::ZeroExtend => {
                 vogls_bits::extend::tv_s_zero_extend(&mut dst_b, src_b, dst.size, src.size)
             }
@@ -85,7 +85,7 @@ pub(crate) fn exec_tv_resize(stack: &mut Heap, dst: HeapRef, op: ResizeOp, src: 
             vogls_bits::extend::tv_s_sign_extend(d, s, dst.size, src.size);
         }
         O::Truncate => {
-            vogls_bits::slice::tv_slice(d, s, dst.size);
+            vogls_bits::slice::tv_s_truncate(d, s, dst.size);
         }
     }
     if dst.size <= Heap::TV_SUBBITS_MAX_SIZE {
@@ -307,12 +307,25 @@ pub(crate) fn exec_tv_shift(
     }
 }
 
-pub(crate) fn exec_tv_select_bit(stack: &mut Heap, dst: HeapOffset, src: HeapRef, idx: HeapOffset) {
-    let size = src.size;
-    let idx = stack.load_exact_tv_u32(idx);
-    let src = stack.get(src);
-    let result = vogls_bits::select::tv_select_bit(src.as_slice(), idx, size);
-    stack.set_tv_bool(dst, result);
+pub(crate) fn exec_tv_slice(stack: &mut Heap, dst: HeapRef, src: HeapRef, idx: HeapOffset) {
+    let offset = stack.load_exact_tv_u32(idx);
+
+    if dst.size < Heap::FV_U64_MIN_SIZE && src.size < Heap::TV_U64_MIN_SIZE {
+        let val = stack.get_tv_u64(src);
+        let (spc, val) = vogls_bits::slice::tv_s_slice(val, offset, dst.size, src.size);
+        stack.set_fv_u64(dst, spc, val);
+    } else if dst.size < Heap::FV_U64_MIN_SIZE && src.size >= Heap::TV_U64_MIN_SIZE {
+        let src_size = src.size;
+        let src = stack.get_mut_u64_slice(src.offset, src.size.get().div_ceil(64) as usize);
+        let (spc, val) = vogls_bits::slice::tv_ls_slice(src, offset, dst.size, src_size);
+        stack.set_fv_u64(dst, spc, val);
+    } else {
+        let (dst_s, src_s) = stack.get_disjoint_u64_dst_src(
+            (dst.offset, 2 * dst.size.get().div_ceil(64) as usize),
+            (src.offset, src.size.get().div_ceil(64) as usize),
+        );
+        vogls_bits::slice::tv_ll_slice(dst_s, src_s, offset, dst.size, src.size);
+    }
 }
 
 pub(crate) fn exec_tv_concat(stack: &mut Heap, dst: HeapOffset, lhs: HeapRef, rhs: HeapRef) {

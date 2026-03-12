@@ -47,8 +47,12 @@ impl fmt::Display for VmInstruction {
                     op.into_mnemonic()
                 )
             }
-            Self::TvSelectBit(dst, src1, src2) => {
-                write!(f, "{dst} = tv.bselect {}, {src2}", src1.offset)
+            Self::TvSlice(dst, src1, src2) => {
+                write!(
+                    f,
+                    "{} = tv.slice[{}] {}, {src2}",
+                    dst.offset, dst.size, src1.offset
+                )
             }
             Self::TvConcat(dst, src1, src2) => {
                 write!(f, "{dst} = tv.concat {}, {}", src1.offset, src2.offset)
@@ -99,8 +103,12 @@ impl fmt::Display for VmInstruction {
                     dst = dst.offset
                 )
             }
-            Self::FvSelectBit(dst, src1, src2) => {
-                write!(f, "{dst} = fv.bselect {}, {src2}", src1.offset)
+            Self::FvSlice(dst, src1, src2) => {
+                write!(
+                    f,
+                    "{} = fv.slice[{}] {}, {src2}",
+                    dst.offset, dst.size, src1.offset
+                )
             }
             Self::FvConcat(dst, src1, src2) => {
                 write!(f, "{dst} = fv.concat {}, {}", src1.offset, src2.offset)
@@ -178,7 +186,7 @@ impl fmt::Display for VmProcess {
                 | I::TvBinaryComparison(..)
                 | I::TvEdge(..)
                 | I::TvShift(..)
-                | I::TvSelectBit(..)
+                | I::TvSlice(..)
                 | I::TvConcat(..)
                 | I::FvUnary(..)
                 | I::FvResize(..)
@@ -186,7 +194,7 @@ impl fmt::Display for VmProcess {
                 | I::FvBinaryComparison(..)
                 | I::FvEdge(..)
                 | I::FvShift(..)
-                | I::FvSelectBit(..)
+                | I::FvSlice(..)
                 | I::FvConcat(..)
                 | I::TvToFv(..)
                 | I::FvToTv(..)

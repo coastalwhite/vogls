@@ -137,7 +137,7 @@ impl BinaryOp {
 
             Self::UnsignedLessEqual => "ule",
             Self::CaseEquality => "ceq",
-            Self::SelectBit => "bselect",
+            Self::Slice => "slice",
             Self::LogicalShiftLeft => "lsl",
             Self::LogicalShiftRight => "lsr",
             Self::ArithmeticShiftRight => "asr",
@@ -218,14 +218,11 @@ impl ContextFormat for Instruction {
                 )?;
             }
             Self::Binary(dst, op, src1, src2) => {
-                write!(
-                    f,
-                    "{} = {} {}, {}",
-                    dst.display(ctx),
-                    op.into_mnemonic(),
-                    src1.display(ctx),
-                    src2.display(ctx),
-                )?;
+                write!(f, "{} = {}", dst.display(ctx), op.into_mnemonic(),)?;
+                if *op == BinaryOp::Slice {
+                    write!(f, "[{}]", ctx.gl.vars[*dst].size)?;
+                }
+                write!(f, " {}, {}", src1.display(ctx), src2.display(ctx),)?;
             }
             Self::Intrinsic(dst, op, args) => {
                 dst.ctx_fmt(f, ctx)?;

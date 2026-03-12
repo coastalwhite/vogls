@@ -633,8 +633,8 @@ impl Simulation {
                         *src,
                         *offset,
                     ),
-                    I::TvSelectBit(dst, src, idx) => {
-                        execution::tv::exec_tv_select_bit(&mut state.runtime.heap, *dst, *src, *idx)
+                    I::TvSlice(dst, src, idx) => {
+                        execution::tv::exec_tv_slice(&mut state.runtime.heap, *dst, *src, *idx)
                     }
                     I::TvConcat(dst, lhs, rhs) => {
                         execution::tv::exec_tv_concat(&mut state.runtime.heap, *dst, *lhs, *rhs)
@@ -670,8 +670,8 @@ impl Simulation {
                         *src,
                         *offset,
                     ),
-                    I::FvSelectBit(dst, src, idx) => {
-                        execution::fv::exec_fv_select_bit(&mut state.runtime.heap, *dst, *src, *idx)
+                    I::FvSlice(dst, src, idx) => {
+                        execution::fv::exec_fv_slice(&mut state.runtime.heap, *dst, *src, *idx)
                     }
                     I::FvConcat(dst, lhs, rhs) => {
                         execution::fv::exec_fv_concat(&mut state.runtime.heap, *dst, *lhs, *rhs)

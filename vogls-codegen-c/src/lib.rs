@@ -19,8 +19,8 @@ pub mod runtime;
 
 mod binary;
 mod drive;
-mod extract;
 mod resize;
+mod slice;
 mod unary;
 
 // Variables are represented as u8, u16, u32, u64 or an array of u64s depending or their size and
@@ -537,9 +537,7 @@ pub fn lower_process(
                             binary::cgc_bin_ule(&mut buffer, dst_t.ident, lhs_t, rhs_t.ident)?
                         }
 
-                        O::SelectBit => {
-                            binary::cgc_select_bit(&mut buffer, dst_t.ident, lhs_t, rhs_t)?
-                        }
+                        O::Slice => slice::slice(&mut buffer, dst_t, lhs_t, rhs_t)?,
                         O::LogicalShiftLeft => binary::cgc_lsl(&mut buffer, dst_t, lhs_t, rhs_t)?,
                         O::LogicalShiftRight => binary::cgc_lsr(&mut buffer, dst_t, lhs_t, rhs_t)?,
                         O::ArithmeticShiftRight => {
@@ -817,9 +815,9 @@ fn bin_args_need_conversion(
     mrhs: LogicMode,
 ) -> (LogicMode, bool, bool) {
     use LogicMode as M;
-    if op.always_outputs_bool() {
+    if op.always_outputs_bool() | op.always_outputs_four_value() {
         (
-            M::FourValue,
+            M::FourValue, // Operand target mode. So not destination mode!
             mlhs == M::TwoValue && mrhs == M::FourValue,
             mlhs == M::FourValue && mrhs == M::TwoValue,
         )
@@ -1183,10 +1181,10 @@ static inline uint32_t popcount16(uint16_t n) {
 static inline uint32_t popcount8(uint8_t n) {
 	return popcount32((uint32_t)n);
 }
-static inline uint64_t min(uint64_t l, uint64_t) {
+static inline uint64_t min(uint64_t l, uint64_t r) {
     return (l < r) ? l : r;
 }
-static inline uint64_t max(uint64_t l, uint64_t) {
+static inline uint64_t max(uint64_t l, uint64_t r) {
     return (l < r) ? l : r;
 }
 
@@ -1392,50 +1390,83 @@ static inline void tv_l_lsr_with(
         dst[nwords - 1] &= (((uint64_t)1) << (size % 64)) - 1;
     }
 }
-// static inline void tv_l_extract(
-//     uint64_t *dst,
-//     uint64_t *src,
-//     uint32_t amount,
-//     uint32_t dst_size,
-//     uint32_t src_size,
-//     bool shiftin_value
-// ) {
-//     uint32_t dst_words = (dst_size + 63) / 64;
-//     uint32_t src_words = (src_size + 63) / 64;
-//     if (amount == 0) {
-//         memmove(dst, src, dst_words*sizeof(uint64_t));
-//         return;
-//     }
-//     if (amount >= size) {
-//         memset(dst, ((uint8_t)(!shiftin_value)) - 1, dst_words*sizeof(uint64_t));
-//         if (dst_size % 64 != 0) dst[dst_words - 1] &= (((uint64_t)1) << (dst_size % 64)) - 1;
-//         return;
-//     }
-//
-//     uint32_t swords = (amount + 63) / 64;
-//     uint32_t soff = amount % 64;
-//     uint64_t shiftin_mask = ((uint64_t)(!shiftin_value)) - 1;
-//     if (soff == 0) {
-//         memmove(dst, src + swords, min((src_words - swords), dst_words)*sizeof(uint64_t));
-//         memset(dst+(nwords-swords), ((uint8_t)(!shiftin_value)) - 1, swords*sizeof(uint64_t));
-//     } else {
-//         for (int i = 0; i < nwords - swords; ++i)
-//             dst[i] = (src[i + swords] << (64 - soff)) | (src[i + swords - 1] >> soff);
-//         dst[nwords - swords] = (shiftin_mask << (64 - soff)) | (src[nwords - 1] >> soff);
-//         memset(dst+(nwords-swords+1), ((uint8_t)(!shiftin_value)) - 1, (swords - 1)*sizeof(uint64_t));
-//     }
-//
-//     if (size % 64 != 0) {
-//         uint64_t mask = shiftin_mask << (size % 64);
-//         if (shiftin_value) {
-//             dst[nwords - amount / 64 - 1] |= mask >> soff;
-//             if (nwords >= amount / 64 + 2) {
-//                 dst[nwords - amount / 64 - 2] |= mask << (64 - soff);
-//             }
-//         }
-//         dst[nwords - 1] &= (((uint64_t)1) << (size % 64)) - 1;
-//     }
-// }
+static inline void tv_part_ll_slice(
+    uint64_t *dst,
+    uint64_t *src,
+    uint32_t offset,
+    uint32_t dst_size,
+    uint32_t src_size
+) {
+    uint32_t dst_words = (dst_size + 63)/64;
+    uint32_t src_words = (src_size + 63)/64;
+    if (offset == 0) {
+        memmove(dst, src, dst_words*sizeof(uint64_t));
+        if (dst_size % 64 != 0) {
+            dst[dst_words-1] &= (((uint64_t)1) << (dst_size%64))-1;
+        }
+        return;
+    }
+    if (offset >= src_size) {
+        memset(dst, 0, dst_words*sizeof(uint64_t));
+        return;
+    }
+
+    uint32_t swords = (offset+63)/64;
+    uint32_t soff = offset % 64;
+    uint32_t num_copy_words = min(src_words-swords, dst_words);
+    if (soff == 0) {
+        memmove(dst, src+swords, num_copy_words*sizeof(uint64_t));
+        memset(dst+num_copy_words, 0, (dst_words-num_copy_words)*sizeof(uint64_t));
+    } else {
+        for (int i = 0; i < num_copy_words; ++i) {
+            dst[i] = (src[i + swords] << (64 - soff)) | (src[i + swords - 1] >> soff);
+        }
+        if (num_copy_words < dst_words) {
+            dst[num_copy_words] = src[src_words - 1] >> soff;
+            memset(dst+num_copy_words+1, 0, (dst_words-num_copy_words-1)*sizeof(uint64_t));
+        }
+    }
+    if (dst_size % 64 != 0) {
+        dst[dst_words-1] &= (((uint64_t)1) << (dst_size%64))-1;
+    }
+}
+static inline void tv_ll_slice(
+    uint64_t *dst,
+    uint64_t *src,
+    uint32_t offset,
+    uint32_t dst_size,
+    uint32_t src_size
+) {
+    uint32_t dst_words = (dst_size + 63)/64;
+    uint32_t src_words = (src_size + 63)/64;
+    if (offset == 0) {
+        set_no_special(dst, dst_size);
+        memmove(dst+dst_words, src, dst_words*sizeof(uint64_t));
+        if (dst_size % 64 != 0) {
+            dst[dst_words*2-1] &= (((uint64_t)1) << (dst_size%64))-1;
+        }
+        return;
+    }
+    if (offset >= src_size) {
+        memset(dst, 0, 2*dst_words*sizeof(uint64_t));
+        return;
+    }
+
+    // Fill valid bits.
+    uint32_t num_x_bits = (src_size-dst_size) ? 0 : (offset-(src_size-dst_size));
+    if (num_x_bits == 0) {
+        set_no_special(dst, dst_size);
+    } else {
+        uint32_t num_valid_bits = dst_size - num_x_bits;
+        memset(dst, 0xFF, (num_valid_bits / 64)*sizeof(uint64_t));
+        if (num_valid_bits % 64 != 0) {
+            dst[num_valid_bits / 64] = (((uint64_t)1) << (num_valid_bits%64))-1;
+        }
+        uint32_t o = (num_valid_bits / 64)+((uint32_t)(num_valid_bits % 64 != 0));
+        memset(dst+o, 0, (dst_words-o)*sizeof(uint64_t));
+    }
+    tv_part_ll_slice(dst+dst_words, src, offset, dst_size, src_size);
+}
 "#,
     )
 }

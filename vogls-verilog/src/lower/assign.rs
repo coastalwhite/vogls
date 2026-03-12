@@ -59,7 +59,7 @@ pub fn assign_variable_lvalue<'a>(
     for lvf in lvalue.0.iter().rev() {
         let ty = variable_lvalue_flat_ty(gl, arenas, scope, diagnostics, lvf)?;
         let width = ty.force_net_width();
-        let variable = builder.extract_constant(gl, variable, offset, width);
+        let variable = builder.slice_constant(gl, variable, offset, width);
         assign_variable_lvalue_flat(
             gl,
             arenas,
@@ -390,7 +390,7 @@ pub fn assign_net_lvalue<'a>(
     for lvf in lvalue.0.iter().rev() {
         let ty = net_lvalue_flat_ty(gl, arenas, scope, diagnostics, lvf)?;
         let width = ty.force_net_width();
-        let variable = builder.extract_constant(gl, variable, offset, width);
+        let variable = builder.slice_constant(gl, variable, offset, width);
         assign_net_lvalue_flat(gl, arenas, scope, diagnostics, builder, lvf, variable, ty)?;
         offset += width.get();
     }

@@ -165,7 +165,7 @@ pub fn lower_process_to_vm(
                             O::CaseEquality => {
                                 VI::FvBinaryComparison(d, BC::CaseEquality, s1.to_ref(s1_size), s2)
                             }
-                            O::SelectBit => VI::FvSelectBit(d, s1.to_ref(s1_size), s2),
+                            O::Slice => VI::FvSlice(d.to_ref(d_size), s1.to_ref(s1_size), s2),
                             O::LogicalShiftLeft => {
                                 VI::FvShift(d.to_ref(d_size), S::LogicalLeft, s1, s2)
                             }
@@ -211,7 +211,7 @@ pub fn lower_process_to_vm(
                             O::CaseEquality => {
                                 VI::TvBinaryComparison(d, BC::CaseEquality, s1.to_ref(s1_size), s2)
                             }
-                            O::SelectBit => VI::TvSelectBit(d, s1.to_ref(s1_size), s2),
+                            O::Slice => VI::TvSlice(d.to_ref(d_size), s1.to_ref(s1_size), s2),
                             O::LogicalShiftLeft => {
                                 VI::TvShift(d.to_ref(d_size), S::LogicalLeft, s1, s2)
                             }

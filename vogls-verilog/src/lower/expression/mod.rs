@@ -421,7 +421,7 @@ pub fn lower_expr<'a>(
                             let size = s.ty.force_net_width();
                             let variable = builder.probe(gl, s.signal);
                             let offset = builder.multiply_constant(gl, offset, size.get());
-                            let variable = builder.extract(gl, variable, offset, size);
+                            let variable = builder.slice(gl, variable, offset, size);
 
                             (s.ty, variable)
                         } else {
@@ -492,7 +492,7 @@ pub fn lower_expr<'a>(
                     };
 
                     ty = VType::UnsignedNet(width);
-                    var = builder.extract(gl, var, lsb, width as VectorSize);
+                    var = builder.slice(gl, var, lsb, width as VectorSize);
                 }
 
                 result_stack.push(Some((var, ty)));
@@ -783,7 +783,7 @@ pub fn sign_or_zero_extend(
     if from_width == to {
         src
     } else if from_width > to {
-        builder.slice(gl, src, to)
+        builder.truncate(gl, src, to)
     } else {
         if from.is_signed() {
             builder.sign_extend(gl, src, to)
@@ -804,7 +804,7 @@ pub fn truncate_or_extend(
     if from_width == to {
         src
     } else if from_width > to {
-        builder.slice(gl, src, to)
+        builder.truncate(gl, src, to)
     } else {
         if from.is_signed() {
             builder.sign_extend(gl, src, to)

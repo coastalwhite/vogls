@@ -289,7 +289,7 @@ pub enum ResizeOp {
     SignExtend,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryOp {
     /// A bitwise-and operator.
     ///
@@ -389,7 +389,12 @@ pub enum BinaryOp {
     /// If either operands contains an unknown `x` or high-impedance `z` bit, the result is all
     /// unknown bits.
     UnsignedLessEqual,
-    SelectBit,
+
+    /// Extract the destination size bits from the source. Starting from a specified offset. If the
+    /// offset plus the destination size are larger than the source size, additional `x` bits are
+    /// inserted.
+    Slice,
+
     LogicalShiftLeft,
     LogicalShiftRight,
     ArithmeticShiftRight,
@@ -609,7 +614,7 @@ impl ResizeOp {
 }
 
 impl BinaryOp {
-    fn evaluate(self, lhs: &Bits, rhs: &Bits) -> Bits {
+    fn evaluate(self, lhs: &Bits, rhs: &Bits, dst_size: VectorSize) -> Bits {
         use BinaryOp as O;
         match self {
             O::And => Bits::bitwise_and(lhs, rhs),
@@ -624,7 +629,7 @@ impl BinaryOp {
 
             O::UnsignedLessEqual => Bits::from(Bits::is_unsigned_leq(lhs, rhs)),
             O::CaseEquality => Bits::from(lhs == rhs),
-            O::SelectBit => Bits::from(lhs.select_bit(rhs.extract_exact_u32())),
+            O::Slice => Bits::from(lhs.slice(rhs.extract_exact_u32(), dst_size)),
             O::LogicalShiftLeft => lhs.logical_shift_left(rhs.extract_exact_u32()),
             O::LogicalShiftRight => lhs.logical_shift_right(rhs.extract_exact_u32()),
             O::ArithmeticShiftRight => lhs.arithmetic_shift_right(rhs.extract_exact_u32()),
@@ -648,6 +653,10 @@ impl BinaryOp {
 
     pub fn always_outputs_bool(&self) -> bool {
         matches!(self, Self::CaseEquality | Self::Posedge | Self::Negedge)
+    }
+
+    pub fn always_outputs_four_value(&self) -> bool {
+        matches!(self, Self::Slice)
     }
 }
 

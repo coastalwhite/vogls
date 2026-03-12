@@ -43,7 +43,7 @@ fn evaluate_impl(
             I::Binary(dst, op, lhs, rhs) => {
                 let lhs = &variables[lhs];
                 let rhs = &variables[rhs];
-                let bits = op.evaluate(lhs, rhs);
+                let bits = op.evaluate(lhs, rhs, gl.vars[*dst].size);
                 _ = variables.insert(*dst, bits.clone());
             }
             I::Intrinsic(_, _, _) => todo!(),

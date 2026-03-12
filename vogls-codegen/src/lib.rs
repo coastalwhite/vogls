@@ -4,7 +4,7 @@ use std::ops::Range;
 
 use hashbrown::hash_map::Entry;
 pub use heap::{Heap, HeapBuilder, HeapOffset, HeapRef};
-use vogls_ir::{BasicBlockKey, BinaryOp, GlobalContext, Instruction, LogicMode, VariableKey};
+use vogls_ir::{BasicBlockKey, GlobalContext, Instruction, LogicMode, VariableKey};
 use vogls_utils::{VgHashMap, VgHashSet};
 
 /// Fill `var_mode` with the `LogicMode` for each variable present in the control-flow graph.
@@ -79,11 +79,17 @@ pub fn resolve_var_logic_mode_map(
 
                     use LogicMode as M;
                     match (m1, m2, op) {
-                        (_, _, BinaryOp::CaseEquality | BinaryOp::Posedge | BinaryOp::Negedge) => {
+                        (_, _, op) if op.always_outputs_bool() => {
                             if m1.is_none() || m2.is_none() {
                                 is_fixed.insert(*dst);
                             }
                             _ = var_mode.insert(*dst, M::TwoValue)
+                        }
+                        (_, _, op) if op.always_outputs_four_value() => {
+                            if m1.is_none() || m2.is_none() {
+                                is_fixed.insert(*dst);
+                            }
+                            _ = var_mode.insert(*dst, M::FourValue)
                         }
                         (Some(M::TwoValue), Some(M::TwoValue), _) => {
                             _ = var_mode.insert(*dst, M::TwoValue)

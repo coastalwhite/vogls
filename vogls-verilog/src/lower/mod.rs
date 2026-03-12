@@ -516,7 +516,7 @@ fn assign_port_output<'a>(
                 for e in exprs.iter().rev() {
                     let e_ty = expr_to_ty(gl, arenas, scope, e, diagnostics)?;
                     let e_width = e_ty.force_net_width();
-                    let subvar = bb_builder.extract_constant(gl, var, shift, e_width);
+                    let subvar = bb_builder.slice_constant(gl, var, shift, e_width);
                     driving.push((subvar, e_ty, e));
                     shift += e_width.get();
                 }

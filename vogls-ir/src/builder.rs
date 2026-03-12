@@ -396,10 +396,7 @@ impl BasicBlockBuilder {
         src: VariableKey,
         idx: VariableKey,
     ) -> VariableKey {
-        let dst = self.next_tmp_var(gl, SCALAR_VSIZE);
-        assert_eq!(gl.vars[idx].size, INTEGER_VSIZE);
-        self.bin_op(gl, src, idx, BinaryOp::SelectBit, dst);
-        dst
+        self.slice(gl, src, idx, SCALAR_VSIZE)
     }
     pub fn select_bit_constant(
         &mut self,
@@ -407,13 +404,9 @@ impl BasicBlockBuilder {
         src: VariableKey,
         idx: u32,
     ) -> VariableKey {
-        if idx == 0 && gl.vars[src].size == SCALAR_VSIZE {
-            return src;
-        }
-        let idx = self.constant_u32(gl, idx);
-        self.select_bit(gl, src, idx)
+        self.slice_constant(gl, src, idx, SCALAR_VSIZE)
     }
-    pub fn slice(
+    pub fn truncate(
         &mut self,
         gl: &mut GlobalContext,
         src: VariableKey,
@@ -428,7 +421,7 @@ impl BasicBlockBuilder {
         self.resize_op(gl, dst, ResizeOp::Truncate, src);
         dst
     }
-    pub fn extract_constant(
+    pub fn slice_constant(
         &mut self,
         gl: &mut GlobalContext,
         src: VariableKey,
@@ -436,32 +429,27 @@ impl BasicBlockBuilder {
         width: VectorSize,
     ) -> VariableKey {
         let size = gl.vars[src].size;
-        if offset == 0 && size == width {
-            return src;
+        if offset == 0 {
+            return self.truncate(gl, src, width);
         }
-        if width == SCALAR_VSIZE {
-            return self.select_bit_constant(gl, src, offset);
+        if offset >= size.get() {
+            return self.constant(gl, Bits::new_unknown(width));
         }
         let offset = self.constant_u32(gl, offset);
-        self.extract(gl, src, offset, width)
+        self.slice(gl, src, offset, width)
     }
-    pub fn extract(
+    pub fn slice(
         &mut self,
         gl: &mut GlobalContext,
         src: VariableKey,
         offset: VariableKey,
         width: VectorSize,
     ) -> VariableKey {
-        let size = gl.vars[src].size;
-        if size == width {
-            return src;
-        }
-        if width.get() == 1 {
-            return self.select_bit(gl, src, offset);
-        }
-
-        let dst = self.logical_shift_right(gl, src, offset);
-        self.slice(gl, dst, width)
+        assert_eq!(gl.vars[offset].size, INTEGER_VSIZE);
+        assert!(gl.vars[src].size >= width);
+        let dst = self.next_tmp_var(gl, width);
+        self.bin_op(gl, src, offset, BinaryOp::Slice, dst);
+        dst
     }
 
     pub fn unsigned_lt(

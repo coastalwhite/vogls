@@ -1,7 +1,7 @@
 use vogls_bits::arithmetic::{
     FvLogicValue, fv_gtu32_bitwise_inv, fv_l_reduce_and, fv_l_reduce_or, fv_l_reduce_xor,
-    fv_l_select_bit, fv_leu32_bitwise_inv, fv_pack_u64, fv_s_reduce_and, fv_s_reduce_or,
-    fv_s_reduce_xor, fv_s_select_bit, fv_unpack_u64,
+    fv_leu32_bitwise_inv, fv_pack_u64, fv_s_reduce_and, fv_s_reduce_or, fv_s_reduce_xor,
+    fv_unpack_u64,
 };
 use vogls_bits::concat::{fv_l_concat, fv_s_concat};
 use vogls_bits::extend::{fv_l_sign_extend, fv_l_zero_extend, fv_s_sign_extend, fv_s_zero_extend};
@@ -371,13 +371,7 @@ pub(crate) fn exec_fv_shift(
     // If the right operand has an x or z value, then the result shall be unknown.
     // """
     if !spc != 0 {
-        if dst.size < Heap::FV_U64_MIN_SIZE {
-            let mask = ((1u64 << dst.size.get()) - 1) << (dst.offset.bit_offset % 64);
-            stack.0[dst.offset.bit_offset / 64] &= !mask;
-        } else {
-            let nwords = 2 * dst.size.get().div_ceil(64) as usize;
-            stack.get_mut_u64_slice(dst.offset, nwords).fill(0u64);
-        }
+        stack.set_unknown(dst);
         return;
     }
 
@@ -412,21 +406,28 @@ pub(crate) fn exec_fv_shift(
     }
 }
 
-pub(crate) fn exec_fv_select_bit(stack: &mut Heap, dst: HeapOffset, src: HeapRef, idx: HeapOffset) {
-    let (spc, idx) = stack.load_exact_fv_u32(idx);
-    if !spc != 0 || idx >= src.size.get() {
-        stack.set_fv_scalar(dst, FvLogicValue::X);
+pub(crate) fn exec_fv_slice(stack: &mut Heap, dst: HeapRef, src: HeapRef, idx: HeapOffset) {
+    let (spc, offset) = stack.load_exact_fv_u32(idx);
+    if !spc != 0 {
+        stack.set_unknown(dst);
         return;
     }
 
-    if src.size < Heap::FV_U64_MIN_SIZE {
-        let src_slice = stack.get(src.to_fv_size());
-        let result = fv_s_select_bit(src_slice.as_slice(), idx, src.size);
-        stack.set_fv_scalar(dst, result);
+    if dst.size < Heap::FV_U64_MIN_SIZE && src.size < Heap::FV_U64_MIN_SIZE {
+        let (spc, val) = stack.get_fv_u64(src);
+        let (spc, val) = vogls_bits::slice::fv_s_slice(spc, val, offset, dst.size, src.size);
+        stack.set_fv_u64(dst, spc, val);
+    } else if dst.size < Heap::FV_U64_MIN_SIZE && src.size >= Heap::FV_U64_MIN_SIZE {
+        let src_size = src.size;
+        let src = stack.get_mut_u64_slice(src.offset, 2 * src.size.get().div_ceil(64) as usize);
+        let (spc, val) = vogls_bits::slice::fv_ls_slice(src, offset, dst.size, src_size);
+        stack.set_fv_u64(dst, spc, val);
     } else {
-        let nwords = 2 * src.size.get().div_ceil(64) as usize;
-        let result = fv_l_select_bit(stack.get_u64_slice(src.offset, nwords), idx, src.size);
-        stack.set_fv_scalar(dst, result);
+        let (dst_s, src_s) = stack.get_disjoint_u64_dst_src(
+            (dst.offset, 2 * dst.size.get().div_ceil(64) as usize),
+            (src.offset, 2 * src.size.get().div_ceil(64) as usize),
+        );
+        vogls_bits::slice::fv_ll_slice(dst_s, src_s, offset, dst.size, src.size);
     }
 }
 

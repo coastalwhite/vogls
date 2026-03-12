@@ -218,7 +218,7 @@ pub fn propagate_constants<'a>(
                     (
                         *dst,
                         match (csrc1, csrc2) {
-                            (Some(src1), Some(src2)) => op.evaluate(src1, src2),
+                            (Some(src1), Some(src2)) => op.evaluate(src1, src2, vars[*dst].size),
                             (Some(src), _) | (_, Some(src)) => {
                                 let non_constant_src = if csrc1.is_none() { *src1 } else { *src2 };
                                 macro_rules! set_eq_to_non_constant_src {
@@ -295,7 +295,7 @@ pub fn propagate_constants<'a>(
                                     | O::Max
                                     | O::CaseEquality
                                     | O::Modulus
-                                    | O::SelectBit
+                                    | O::Slice
                                     | O::LogicalShiftLeft
                                     | O::LogicalShiftRight
                                     | O::ArithmeticShiftRight

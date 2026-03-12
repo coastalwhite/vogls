@@ -412,4 +412,13 @@ impl Heap {
 
         updated
     }
+
+    pub fn set_unknown(&mut self, dst: HeapRef) {
+        if dst.size < Heap::FV_U64_MIN_SIZE {
+            self.set_fv_u64(dst, 0, 0);
+        } else {
+            let nwords = 2 * dst.size.get().div_ceil(64) as usize;
+            self.get_mut_u64_slice(dst.offset, nwords).fill(0u64);
+        }
+    }
 }
