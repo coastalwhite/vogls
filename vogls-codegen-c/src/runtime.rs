@@ -19,6 +19,10 @@ type LastActiveTime = Option<NonNull<u64>>;
 #[derive(Clone, Copy)]
 pub struct ReturnValue(c_int);
 
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy)]
+pub struct StatePtr(c_int);
+
 impl ReturnValue {
     pub const CONTINUE: Self = Self(0);
     pub const STOP: Self = Self(1);
@@ -65,7 +69,7 @@ pub struct ColdContextT {
 #[derive(Debug, Clone)]
 pub struct EventT {
     ptr: extern "C" fn(
-        c_int,
+        StatePtr,
         HeapPtr,
         NonNull<ScheduleT>,
         Time,
@@ -74,7 +78,7 @@ pub struct EventT {
         LastActiveTime,
         NonNull<ColdContextT>,
     ) -> ReturnValue,
-    state: c_int,
+    state: StatePtr,
 }
 
 unsafe impl Sync for EventT {}
