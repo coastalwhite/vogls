@@ -1453,7 +1453,7 @@ static inline void tv_ll_slice(
     }
 
     // Fill valid bits.
-    uint32_t num_x_bits = (src_size-dst_size) ? 0 : (offset-(src_size-dst_size));
+    uint32_t num_x_bits = ((src_size-dst_size)>=offset) ? 0 : (offset-(src_size-dst_size));
     if (num_x_bits == 0) {
         set_no_special(dst, dst_size);
     } else {

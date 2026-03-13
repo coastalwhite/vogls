@@ -22,8 +22,8 @@ pub fn slice(f: &mut impl io::Write, dst: CVar, src: CVar, offset: CVar) -> io::
             // spc
             write!(
                 f,
-                "(({o} < {}) ? (({d_elem_ty})0x{mask:x}) : ((({d_elem_ty})0x{mask:x}) >> {o})) |",
-                src.ty.size.get() - dst.ty.size.get()
+                "(({diff}>={o}) ? (({d_elem_ty})0x{mask:x}) : ((({d_elem_ty})0x{mask:x}) >> ({o}-{diff}))) |",
+                diff = src.ty.size.get() - dst.ty.size.get()
             )?;
             // val
             write!(f, "((({d_elem_ty})({s} >> {o}) & 0x{mask:x}) << {d_size})")?;
@@ -35,8 +35,8 @@ pub fn slice(f: &mut impl io::Write, dst: CVar, src: CVar, offset: CVar) -> io::
             // spc
             write!(
                 f,
-                "(({o} < {}) ? (({d_elem_ty})0x{mask:x}) : ((({d_elem_ty})0x{mask:x}) >> {o})) |",
-                src.ty.size.get() - dst.ty.size.get()
+                "(({diff}>={o}) ? (({d_elem_ty})0x{mask:x}) : ((({d_elem_ty})0x{mask:x}) >> ({o}-{diff}))) |",
+                diff = src.ty.size.get() - dst.ty.size.get()
             )?;
             // val
             write!(
@@ -76,7 +76,7 @@ pub fn slice(f: &mut impl io::Write, dst: CVar, src: CVar, offset: CVar) -> io::
             // spc
             write!(
                 f,
-                "(({d_elem_ty})((({s}[{o}/64] >> (({o}>>32)%64)) | (((({o}>>32)/64)<{src_words_m_1} && (({o}>>32)%64)>0) ? ({s}[({o}>>32)/64+1]<<(64-({o}>>32)%64)) : 0))) & 0x{mask:x}) |"
+                "(({d_elem_ty})((({s}[({o}>>32)/64] >> (({o}>>32)%64)) | (((({o}>>32)/64)<{src_words_m_1} && (({o}>>32)%64)>0) ? ({s}[({o}>>32)/64+1]<<(64-({o}>>32)%64)) : 0))) & 0x{mask:x}) |"
             )?;
             // val
             write!(
@@ -88,7 +88,7 @@ pub fn slice(f: &mut impl io::Write, dst: CVar, src: CVar, offset: CVar) -> io::
         (M::FourValue, Some(dst_arr_size), Some(src_arr_size)) => {
             let dst_words = dst_arr_size / 2;
             let src_words = src_arr_size / 2;
-            writeln!(f, "{INDENT}if (({o}&0xFFFFFFF)==0xFFFFFFF) {{")?;
+            writeln!(f, "{INDENT}if (({o}&0xFFFFFFFF)==0xFFFFFFFF) {{")?;
             writeln!(
                 f,
                 "{INDENT}{INDENT}tv_part_ll_slice({d}, {s}, {o}>>32, {d_size}, {s_size});"
@@ -103,7 +103,7 @@ pub fn slice(f: &mut impl io::Write, dst: CVar, src: CVar, offset: CVar) -> io::
         (M::TwoValue, Some(_), None) => {
             writeln!(
                 f,
-                "{INDENT}tv_ll_slice({d}, (uint64_t[1]){{{s}}}, {o}, {d_size}, {s_size});"
+                "{INDENT}tv_ll_slice({d}, &{s}, {o}, {d_size}, {s_size});"
             )?;
         }
         (_, Some(_), None) => unreachable!(),
