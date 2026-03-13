@@ -275,7 +275,7 @@ pub fn lower_process(
 
     writeln!(
         f,
-        "void {procedure}(int state, uint64_t *heap, schedule_t *schedule, uint64_t time, uint64_t *is_scheduled, uint64_t *listening, uint64_t *last_active_time, cold_context_t *cldctx) {{",
+        "int {procedure}(int state, uint64_t *heap, schedule_t *schedule, uint64_t time, uint64_t *is_scheduled, uint64_t *listening, uint64_t *last_active_time, cold_context_t *cldctx) {{",
     )?;
     if lower_options.itrace {
         writeln!(f, r#"printf("\n* PROC {procedure}\n");"#)?;
@@ -598,7 +598,7 @@ pub fn lower_process(
                         }
                     }
                     vogls_ir::IntrinsicOp::Finish => {
-                        writeln!(buffer, "{INDENT}cldctx->exit = 1; return;")?;
+                        writeln!(buffer, "{INDENT}return 1;")?;
                     }
                     vogls_ir::IntrinsicOp::Random => todo!(),
                     vogls_ir::IntrinsicOp::Display(dyn_format_string) => {
@@ -643,7 +643,7 @@ pub fn lower_process(
                         lower_dyn_format_str(&mut buffer, dyn_fmt_strs, &dyn_format_string, args)?;
                         writeln!(
                             buffer,
-                            r#"{INDENT}{INDENT}cldctx->exit = 2; return;
+                            r#"{INDENT}{INDENT}return 2;
 {INDENT}}}"#
                         )?;
                     }
@@ -814,7 +814,7 @@ pub fn lower_process(
                     buffer,
                     "{INDENT}schedule_future_event(schedule, time + {time}, (event_t){{.ptr=&{procedure}, .state={state}}});"
                 )?;
-                writeln!(buffer, "{INDENT}return;",)?;
+                writeln!(buffer, "{INDENT}return 0;",)?;
             }
             BasicBlockTerminator::VariableWait(bb_key, time) => {
                 let mtime = var_mode[time];
@@ -844,7 +844,7 @@ pub fn lower_process(
                     buffer,
                     "{INDENT}schedule_future_event(schedule, time + {s0}, (event_t){{.ptr=&{procedure}, .state={state}}});",
                 )?;
-                writeln!(buffer, "{INDENT}return;",)?;
+                writeln!(buffer, "{INDENT}return 0;",)?;
                 writeln!(buffer, "{INDENT}}}")?;
             }
             BasicBlockTerminator::WaitRegion(bb_key, region) => {
@@ -853,7 +853,7 @@ pub fn lower_process(
                     buffer,
                     "{INDENT}event_vec_push(&schedule->regions[{region}], (event_t){{.ptr=&{procedure}, .state={state}}});",
                 )?;
-                writeln!(buffer, "{INDENT}return;",)?;
+                writeln!(buffer, "{INDENT}return 0;",)?;
             }
             BasicBlockTerminator::Watch(bb_key, items) => {
                 let state = states_set.get_index(bb_key).unwrap();
@@ -873,7 +873,7 @@ pub fn lower_process(
                     process_idx / 64,
                     !(1u64 << (process_idx % 64)),
                 )?;
-                writeln!(buffer, "{INDENT}return;",)?;
+                writeln!(buffer, "{INDENT}return 0;",)?;
             }
             BasicBlockTerminator::Jump(bb_key) => {
                 writeln!(
@@ -900,7 +900,7 @@ pub fn lower_process(
                 writeln!(buffer, " {{ goto L{truthy}; }} else {{ goto L{falsy}; }}")?;
             }
             BasicBlockTerminator::Halt => {
-                writeln!(buffer, "{INDENT}return;")?;
+                writeln!(buffer, "{INDENT}return 0;")?;
             }
         }
     }
@@ -1188,7 +1188,7 @@ pub fn lower_signal_drive_fn(
 
 pub fn lower_startup_function(f: &mut impl io::Write, gl: &GlobalContext) -> io::Result<()> {
     f.write_all(
-        b"void startup(
+        b"int startup(
     uint64_t *heap,
     schedule_t *schedule,
     uint64_t time,
@@ -1205,14 +1205,15 @@ pub fn lower_startup_function(f: &mut impl io::Write, gl: &GlobalContext) -> io:
     writeln!(f, "{INDENT}(void)listening;")?;
     writeln!(f, "{INDENT}(void)last_active_time;")?;
     writeln!(f)?;
+    writeln!(f, "{INDENT}int exit = 0;")?;
     for (i, process) in gl.processes.values().enumerate() {
         writeln!(
             f,
-            "{INDENT}{}(0, heap, schedule, time, is_scheduled, listening, last_active_time, cldctx); if (cldctx->exit != 0) return;",
-            // int state, uint64_t *heap, schedule_t *schedule, uint64_t *time, uint64_t *is_scheduled, uint64_t *listening, uint64_t *last_active_time
+            "{INDENT}if ((exit = {}(0, heap, schedule, time, is_scheduled, listening, last_active_time, cldctx)) != 0) return exit;",
             process_to_procedure_name(process, i)
         )?;
     }
+    writeln!(f, "{INDENT}return 0;")?;
     writeln!(f, "}}")?;
     Ok(())
 }
@@ -1233,7 +1234,6 @@ typedef struct bits_ref {
 
 struct schedule;
 typedef struct cold_context {
-    uint8_t exit;
     void (*fmt)(void*, void*, bits_ref_t*);
     void *fmt_strs;
     void *stdout;
@@ -1241,7 +1241,7 @@ typedef struct cold_context {
 } cold_context_t;
 
 typedef struct event {
-  void (*ptr)(int, uint64_t*, struct schedule*, uint64_t, uint64_t*, uint64_t*, uint64_t*, cold_context_t*);
+  int (*ptr)(int, uint64_t*, struct schedule*, uint64_t, uint64_t*, uint64_t*, uint64_t*, cold_context_t*);
   int state;
 } event_t;
 typedef struct timed_event {

@@ -13,6 +13,25 @@ type IsScheduled = Option<NonNull<u64>>;
 type Listening = Option<NonNull<u64>>;
 type LastActiveTime = Option<NonNull<u64>>;
 
+/// 0: No exit
+/// 1-255: Exited with `value-1` exit code
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub struct ReturnValue(c_int);
+
+impl ReturnValue {
+    pub const CONTINUE: Self = Self(0);
+    pub const STOP: Self = Self(1);
+
+    fn should_exit(self) -> bool {
+        self.0 > 0
+    }
+
+    fn is_ok(self) -> bool {
+        self.0 <= 1
+    }
+}
+
 type StartupFn = extern "C" fn(
     HeapPtr,
     NonNull<ScheduleT>,
@@ -21,7 +40,7 @@ type StartupFn = extern "C" fn(
     Listening,
     LastActiveTime,
     NonNull<ColdContextT>,
-);
+) -> ReturnValue;
 
 #[repr(C)]
 pub struct BitsRefT {
@@ -32,10 +51,6 @@ pub struct BitsRefT {
 
 #[repr(C)]
 pub struct ColdContextT {
-    /// 0: No exit
-    /// 1-255: Exited with -1 exit code
-    exit: u8,
-
     fmt: extern "C" fn(
         NonNull<Box<dyn std::io::Write + Send + Sync>>,
         *const DynFormatString,
@@ -58,7 +73,7 @@ pub struct EventT {
         Listening,
         LastActiveTime,
         NonNull<ColdContextT>,
-    ),
+    ) -> ReturnValue,
     state: c_int,
 }
 
@@ -158,7 +173,7 @@ pub struct Schedule {
 }
 
 impl Schedule {
-    fn with_t(&mut self, mut f: impl FnMut(&mut ScheduleT)) {
+    fn with_t<T>(&mut self, mut f: impl FnMut(&mut ScheduleT) -> T) -> T {
         let active_region = std::mem::take(&mut self.active_region);
         let regions = std::mem::take(&mut self.regions);
         let future = std::mem::take(&mut self.future);
@@ -174,11 +189,12 @@ impl Schedule {
             future: future.into(),
             next_time: self.next_time,
         };
-        f(&mut t);
+        let result = f(&mut t);
         self.active_region = t.active_region.into();
         self.regions = tregions.into_iter().map(|r| r.into()).collect();
         self.future = t.future.into();
         self.next_time = t.next_time;
+        result
     }
 }
 
@@ -282,13 +298,12 @@ impl CDesign {
         if !state.started {
             let startup = unsafe { self.lib.get::<StartupFn>("startup") }.unwrap();
             let mut cldctx = ColdContextT {
-                exit: 0,
                 fmt,
                 fmt_strs: self.dyn_fmt_strs.as_ptr(),
                 stdout: NonNull::from_mut(&mut io.stdout),
                 stderr: NonNull::from_mut(&mut io.stderr),
             };
-            state.schedule.with_t(|schedule| {
+            let return_value = state.schedule.with_t(|schedule| {
                 (startup.deref())(
                     NonNull::new(state.runtime.heap.0.as_mut_ptr()),
                     NonNull::new(schedule as *mut ScheduleT).unwrap(),
@@ -297,11 +312,11 @@ impl CDesign {
                     NonNull::new(state.listening.as_mut_ptr()),
                     NonNull::new(state.runtime.last_active_time.as_mut_ptr()),
                     NonNull::new(&mut cldctx as *mut ColdContextT).unwrap(),
-                );
+                )
             });
 
-            if cldctx.exit > 0 {
-                if cldctx.exit == 1 {
+            if return_value.should_exit() {
+                if return_value.is_ok() {
                     return Ok(());
                 } else {
                     return Err(());
@@ -323,17 +338,16 @@ impl CDesign {
         }
 
         let mut cldctx = ColdContextT {
-            exit: 0,
             fmt,
             fmt_strs: self.dyn_fmt_strs.as_ptr(),
             stdout: NonNull::from_mut(&mut io.stdout),
             stderr: NonNull::from_mut(&mut io.stderr),
         };
-        state.schedule.with_t(|schedule| {
+        let return_value = state.schedule.with_t(|schedule| {
             'main_loop: loop {
                 while let Some(e) = schedule.active_region.pop() {
                     state.runtime.event_count += 1;
-                    (e.ptr)(
+                    let return_value = (e.ptr)(
                         e.state,
                         NonNull::new(state.runtime.heap.0.as_mut_ptr()),
                         NonNull::new(schedule as *mut ScheduleT).unwrap(),
@@ -344,8 +358,8 @@ impl CDesign {
                         NonNull::new(&mut cldctx as *mut ColdContextT).unwrap(),
                     );
 
-                    if cldctx.exit > 0 {
-                        return;
+                    if return_value.should_exit() {
+                        return return_value;
                     }
                 }
 
@@ -359,7 +373,7 @@ impl CDesign {
 
                 if schedule.next_time > max_time {
                     state.runtime.time = max_time;
-                    break;
+                    break ReturnValue::CONTINUE;
                 }
 
                 let mut active: Vec<_> = std::mem::take(&mut schedule.active_region).into();
@@ -384,13 +398,13 @@ impl CDesign {
                 schedule.next_time = next_time;
 
                 if schedule.active_region.length == 0 {
-                    break;
+                    break ReturnValue::CONTINUE;
                 }
             }
         });
 
-        if cldctx.exit > 0 {
-            if cldctx.exit == 1 {
+        if return_value.should_exit() {
+            if return_value.is_ok() {
                 writeln!(io.stdout, "[FINISH]").unwrap();
                 return Ok(());
             } else {
