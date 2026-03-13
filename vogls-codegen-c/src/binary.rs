@@ -390,39 +390,6 @@ pub fn cgc_bin_ule(f: &mut impl io::Write, dst: CIdent, lhs: CVar, rhs: CIdent) 
     Ok(())
 }
 
-pub fn cgc_select_bit(f: &mut impl io::Write, dst: CIdent, lhs: CVar, rhs: CVar) -> io::Result<()> {
-    assert_eq!(rhs.ty.size, INTEGER_VSIZE);
-
-    let (d, l, r) = (dst, lhs.ident, rhs.ident);
-    match (lhs.ty.mode, lhs.ty.array_size()) {
-        (LogicMode::TwoValue, None) => writeln!(
-            f,
-            "{INDENT}{d} = ({r} >= {l_size}) ? 0 : (uint8_t)(({l} >> {r}) & 1);",
-            l_size = lhs.ty.size
-        )?,
-        (LogicMode::TwoValue, Some(_)) => writeln!(
-            f,
-            "{INDENT}{d} = ({r} >= {l_size}) ? 0 : (uint8_t)(({l}[{r} / 64] >> ({r} % 64)) & 1);",
-            l_size = lhs.ty.size
-        )?,
-        (LogicMode::FourValue, None) => writeln!(
-            f,
-            "{INDENT}{d} = (({r} & 0xFFFFFFFF) != 0xFFFFFFFF || ({r} >> 32) >= {l_size}) ? 0 : (((uint8_t)(({l} >> ({r} >> 32)) & 1)) | ((uint8_t)(({l} >> (({r} >> 32)+{l_size})) & 1) << 1));",
-            l_size = lhs.ty.size
-        )?,
-        (LogicMode::FourValue, Some(arr_size)) => {
-            let num_words = arr_size / 2;
-            writeln!(
-                f,
-                "{INDENT}{d} = (({r} & 0xFFFFFFFF) != 0xFFFFFFFF || ({r} >> 32) >= {l_size}) ? 0 : ((uint8_t)(({l}[({r} >> 32)/64] >> (({r} >> 32)%64)) & 1) | (((uint8_t)(({l}[{num_words}+({r}>>32)/64] >> (({r}>>32)%64)) & 1)) << 1));",
-                l_size = lhs.ty.size
-            )?;
-        }
-    }
-
-    Ok(())
-}
-
 pub fn cgc_lsl(f: &mut impl io::Write, dst: CVar, lhs: CVar, rhs: CVar) -> io::Result<()> {
     assert_eq!(dst.ty, lhs.ty);
     assert_eq!(rhs.ty.size, INTEGER_VSIZE);

@@ -141,6 +141,8 @@ pub fn resolve_var_logic_mode_map(
                         }
                     }
 
+                    // @Performance. This conversion is kinda useless, but lets keep it for now as
+                    // the interpreter relies on it.
                     if let Some((offset, _)) = partial {
                         match var_mode.get(offset) {
                             Some(m) if *m != gl.logic_mode => _ = mark_conv!(*offset),

@@ -1,6 +1,4 @@
 use crate::VectorSize;
-use crate::load::load_partial_u64;
-use crate::store::store_partial_u64;
 
 pub fn set_subslice(
     mut dst: &mut [u8],
@@ -34,28 +32,26 @@ pub fn set_subslice(
 
 /// Updates dst[offset +: src_size] to src and returns whether changes were made.
 pub fn tv_s_set(
-    dst: &mut [u8],
-    src: &[u8],
+    dst: u64,
+    src: u64,
     dst_size: VectorSize,
     offset: u32,
     src_size: VectorSize,
-) -> bool {
+) -> u64 {
     assert!(dst_size >= src_size);
 
     if dst_size == src_size && offset == 0 {
-        let updated = dst == src;
-        dst.copy_from_slice(src);
-        return updated;
+        return src;
+    }
+    if offset >= dst_size.get() {
+        return dst;
     }
 
-    let dst_v = load_partial_u64(dst, dst_size);
-    let src_v = load_partial_u64(src, src_size);
-
-    let mask = (1u64 << src_size.get()) - 1;
+    let update_size = u32::min(src_size.get(), dst_size.get() - offset);
+    let mask = (1u64 << update_size) - 1;
+    let src = src & mask;
     let mask = mask << offset;
-    let new = (src_v << offset) | (dst_v & !mask);
-    store_partial_u64(dst, new, dst_size);
-    dst_v != new
+    (src << offset) | (dst & !mask)
 }
 
 /// Updates dst[offset +: src_size] to src and returns whether changes were made.
@@ -91,39 +87,47 @@ pub fn tv_l_set(
     let sh_words = (offset / 64) as usize;
     let sh_offset = offset % 64;
     let mut i = 0;
+    let mut bits_consumed = 0u32;
     let mut updated = false;
-    let mut src_rem_size = src_size.get();
 
     // Least-Significant Word
     if sh_offset > 0 {
-        let old = dst[i + sh_words];
-        let mask = 1u64.unbounded_shl(src_rem_size).wrapping_sub(1);
-        let value = src[i] & 1u64.unbounded_shl(src_rem_size).wrapping_sub(1);
+        let old = dst[sh_words];
+        let mask = 1u64.unbounded_shl(src_size.get()).wrapping_sub(1);
+        let value = src[0] & 1u64.unbounded_shl(src_size.get()).wrapping_sub(1);
         let new = (value << sh_offset) | (old & !(mask << sh_offset));
-        dst[i + sh_words] = new;
+        dst[sh_words] = new;
         updated |= old != new;
         i += 1;
-
-        src_rem_size = src_rem_size.saturating_sub(sh_offset);
-        while src_rem_size >= 64 {
-            let value = (src[i - 1] >> sh_offset) | src[i] << (64 - sh_offset);
+        bits_consumed += 64 - sh_offset;
+        while bits_consumed + 64 <= src_size.get() {
+            let value = (src[(bits_consumed / 64) as usize] >> (64 - sh_offset))
+                | src[(bits_consumed / 64) as usize + 1] << sh_offset;
             updated |= value != std::mem::replace(&mut dst[i + sh_words], value);
+            bits_consumed += 64;
             i += 1;
-            src_rem_size -= 64;
         }
     } else {
-        while src_rem_size >= 64 {
-            updated |= src[i] != std::mem::replace(&mut dst[i + sh_words], src[i]);
+        while bits_consumed + 64 <= src_size.get() {
+            updated |= src[(bits_consumed / 64) as usize]
+                != std::mem::replace(&mut dst[i + sh_words], src[(bits_consumed / 64) as usize]);
+            bits_consumed += 64;
             i += 1;
-            src_rem_size -= 64;
         }
     }
 
     // Most-Significant Word
-    if let Some(src_rem_size) = VectorSize::new(src_rem_size) {
+    if bits_consumed < src_size.get() {
         let old = dst[i + sh_words];
-        let mask = 1u64.unbounded_shl(src_rem_size.get()).wrapping_sub(1);
-        let new = ((src[i] >> sh_offset) & mask) | (old & !mask);
+        let num_rem_bits = src_size.get() - bits_consumed;
+        let mask = (1u64 << num_rem_bits) - 1;
+        let mut new_src = src[(bits_consumed / 64) as usize] >> ((64 - sh_offset) % 64);
+        bits_consumed += sh_offset;
+        if bits_consumed < src_size.get() {
+            new_src |= src[(bits_consumed / 64) as usize] << sh_offset;
+        }
+        new_src &= mask;
+        let new = new_src | (old & !mask);
         dst[i + sh_words] = new;
         updated |= old != new;
     }

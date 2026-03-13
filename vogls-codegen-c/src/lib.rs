@@ -8,8 +8,8 @@ use vogls_codegen::{
 };
 use vogls_ir::dyn_format_string::DynFormatString;
 use vogls_ir::{
-    BasicBlockKey, BasicBlockTerminator, BinaryOp, GlobalContext, Instruction, LogicMode, Process,
-    ProcessKey, ResizeOp, SignalKey, UnaryOp, VariableKey, VectorSize,
+    BasicBlockKey, BasicBlockTerminator, BinaryOp, GlobalContext, INTEGER_VSIZE, Instruction,
+    LogicMode, Process, ProcessKey, ResizeOp, SignalKey, UnaryOp, VariableKey, VectorSize,
 };
 use vogls_ir_properties::get_temporal_variables;
 use vogls_runtime::RtSignalKey;
@@ -41,11 +41,26 @@ mod unary;
 // |   33+ |   FV | [u64; 2 * size.div_ceil(64)] |                         |
 //
 #[derive(Clone, Copy)]
-struct CIdent(u64);
+enum CIdent {
+    Numbered(u64),
+    Scoped(u64),
+    HeapWords(u64),
+}
 impl fmt::Display for CIdent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_char('t')?;
-        self.0.fmt(f)
+        match self {
+            Self::Numbered(t) => {
+                f.write_char('t')?;
+                t.fmt(f)
+            }
+            Self::Scoped(t) => {
+                f.write_char('s')?;
+                t.fmt(f)
+            }
+            Self::HeapWords(t) => {
+                write!(f, "(heap+{t})")
+            }
+        }
     }
 }
 
@@ -275,7 +290,7 @@ pub fn lower_process(
         bb.try_for_each_dst_var(|v| {
             let mode = var_mode[&v];
             let t = CVar {
-                ident: CIdent(temp_map.len() as u64),
+                ident: CIdent::Numbered(temp_map.len() as u64),
                 ty: CType {
                     size: gl.vars[v].size,
                     mode,
@@ -287,7 +302,7 @@ pub fn lower_process(
 
             if conv_map.contains_key(&v) {
                 let mut t = t;
-                t.ident = CIdent(temp_map.len() as u64);
+                t.ident = CIdent::Numbered(temp_map.len() as u64);
                 t.ty.mode = t.ty.mode.other();
                 write_cvar(f, t)?;
                 temp_map.insert((v, t.ty.mode), t);
@@ -662,15 +677,28 @@ pub fn lower_process(
                     let partial = match partial {
                         None => None,
                         Some((offset, partial_size)) => {
-                            let offset_t = temp_map[&(*offset, LogicMode::TwoValue)];
+                            let moffset = var_mode[offset];
+                            let mut offset_t = temp_map[&(*offset, moffset)];
                             if temporal_variables.contains(offset) {
                                 load(&mut buffer, heap_map[offset], offset_t)?;
+                            }
+                            if moffset != gl.logic_mode {
+                                let unconverted_t = offset_t;
+                                offset_t = temp_map[&(*offset, gl.logic_mode)];
+                                convert(
+                                    &mut buffer,
+                                    INTEGER_VSIZE,
+                                    gl.logic_mode,
+                                    moffset,
+                                    offset_t.ident,
+                                    unconverted_t.ident,
+                                )?;
                             }
                             Some((offset_t, *partial_size))
                         }
                     };
                     let dst = io_signals[signal];
-                    drive::drive(f, signals, dst, t, partial)?;
+                    drive::drive(&mut buffer, signals, dst, t, partial)?;
                 }
                 I::Phi(_, _) => continue,
             }
@@ -1466,6 +1494,86 @@ static inline void tv_ll_slice(
         memset(dst+o, 0, (dst_words-o)*sizeof(uint64_t));
     }
     tv_part_ll_slice(dst+dst_words, src, offset, dst_size, src_size);
+}
+static inline uint64_t tv_s_set(
+    uint64_t dst,
+    uint64_t src,
+    uint32_t dst_size,
+    uint32_t offset,
+    uint32_t src_size
+) {
+    if (dst_size == src_size && offset == 0) {
+        return src;
+    }
+    if (offset >= dst_size) {
+        return dst;
+    }
+
+    uint32_t update_size = min(src_size, dst_size - offset);
+    uint64_t mask = (((uint64_t)1) << update_size) - 1;
+    src = src & mask;
+    mask = mask << offset;
+    uint64_t res = (src << offset) | (dst & ~mask);
+    return res;
+}
+
+static inline void tv_l_set(
+    uint64_t *dst,
+    uint64_t *src,
+    uint32_t dst_size,
+    uint32_t offset,
+    uint32_t src_size
+) {
+    uint32_t dst_words = (dst_size+63)/64;
+    uint32_t src_words = (src_size+63)/64;
+
+    if (dst_size == src_size && offset == 0) {
+        memmove(dst, src, dst_words*sizeof(uint64_t));
+        return;
+    }
+    if (offset >= dst_size) {
+        return;
+    }
+
+    // Truncate `src << offset` to fit in `dst`.
+    src_size = min(src_size, dst_size-offset);
+
+    uint32_t sh_words = offset / 64;
+    uint32_t sh_offset = offset % 64;
+    int i = 0;
+    uint32_t bits_consumed = 0;
+
+    // Least-Significant Word
+    if (sh_offset > 0) {
+        uint64_t mask = (src_size>=64) ? ~((uint64_t)0) : ((((uint64_t)1) << src_size) - 1);
+        dst[sh_words] = ((src[0] & mask) << sh_offset) | (dst[sh_words] & ~(mask << sh_offset));
+        i += 1;
+        bits_consumed += 64 - sh_offset;
+        while (bits_consumed + 64 <= src_size) {
+            dst[i + sh_words] = (src[(bits_consumed / 64)] >> (64 - sh_offset))
+                | src[(bits_consumed / 64) + 1] << sh_offset;
+            bits_consumed += 64;
+            i += 1;
+        }
+    } else {
+        while (bits_consumed + 64 <= src_size) {
+            dst[i + sh_words] = src[bits_consumed/64];
+            bits_consumed += 64;
+            i += 1;
+        }
+    }
+
+    // Most-Significant Word
+    if (bits_consumed < src_size) {
+        uint32_t num_rem_bits = src_size - bits_consumed;
+        uint64_t mask = (((uint64_t)1) << num_rem_bits) - 1;
+        uint64_t new_src = src[bits_consumed/64] >> ((64 - sh_offset) % 64);
+        bits_consumed += sh_offset;
+        if (bits_consumed < src_size) {
+            new_src |= src[bits_consumed/64] << sh_offset;
+        }
+        dst[i + sh_words] = (new_src & mask) | (dst[i + sh_words] & ~mask);
+    }
 }
 "#,
     )

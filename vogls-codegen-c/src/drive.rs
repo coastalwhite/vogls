@@ -5,7 +5,7 @@ use vogls_ir::{LogicMode, VectorSize};
 use vogls_runtime::RtSignalKey;
 
 use super::INDENT;
-use crate::CVar;
+use crate::{CIdent, CType, CVar, write_cvar};
 
 pub fn drive(
     f: &mut impl io::Write,
@@ -15,9 +15,9 @@ pub fn drive(
     partial: Option<(CVar, VectorSize)>,
 ) -> io::Result<()> {
     let s = src.ident;
-    let Some((_offset, _partial_size)) = partial else {
-        let dst_ref = signals[dst.as_usize()];
-        let dst_wi = dst.as_u64() / 64;
+    let dst_ref = signals[dst.as_usize()];
+    let Some((offset, partial_size)) = partial else {
+        let dst_wi = dst_ref.offset.bit_offset / 64;
         match src.ty.array_size() {
             None => {
                 let s_elem_ty = src.ty.element_type();
@@ -38,7 +38,7 @@ pub fn drive(
             Some(arr_size) => {
                 writeln!(
                     f,
-                    "{INDENT}if (memcmp({s}, &(heap+{dst_wi}), {arr_size}*sizeof(uint64_t)) == 0) {{"
+                    "{INDENT}if (memcmp({s}, heap+{dst_wi}, {arr_size}*sizeof(uint64_t)) != 0) {{"
                 )?;
             }
         }
@@ -52,163 +52,144 @@ pub fn drive(
         writeln!(f, "{INDENT}}}")?;
         return Ok(());
     };
-    todo!()
-    /*
 
-        writeln!(f, "{INDENT}{{")?;
+    writeln!(f, "{INDENT}{{")?;
 
-        let current_ty = CType {
+    let dst_ty = CType {
+        size: dst_ref.size,
+        mode: src.ty.mode,
+    };
+    let current = CVar {
+        ident: CIdent::Scoped(0),
+        ty: CType {
             size: partial_size,
             mode: src.ty.mode,
+        },
+    };
+    super::write_cvar(f, current)?;
+
+    // @TODO: offset > size
+    // @TODO: offset contains special
+
+    // Load the current value
+    let s1 = if dst_ty.is_array() {
+        CVar {
+            ident: CIdent::HeapWords((dst_ref.offset.bit_offset / 64) as u64),
+            ty: dst_ty,
+        }
+    } else {
+        let v = CVar {
+            ident: CIdent::Scoped(1),
+            ty: dst_ty,
         };
-        super::write_var(f, "current", current_ty)?;
-
-        // @TODO: offset > size
-        // @TODO: offset contains special
-
-        // Load the current value
-        {
-            if current_ty.mode == LogicMode::FourValue {
-                todo!()
-            }
-            let src_ty = CType {
-                size: src.ty.size,
-                mode: dst.ty.mode,
-            };
-            if let Some(_) = src_ty.array_size() {
-                match dst.ty.array_size() {
-                    None => {
-                        write!(
-                            b,
-                            r#"
-{INDENT}if (({offset}%64)+{dst_size} <= 64) {dst} = (heap[{word}+({offset}/64)] >> ({offset}%64)) & 0x{mask:x};
-{INDENT}else {dst} = (heap[{word}+({offset}/64)] >> ({offset}%64)) | (heap[{word}+({offset}/64) + 1] >> (64 - {offset}%64)) & 0x{mask:x};
-"#,
-                            offset = offset.ident,
-                            dst = dst.ident,
-                            dst_size = dst.ty.size,
-                            word = src.offset.bit_offset / 64,
-                            mask = mask(dst.ty.size.get())
-                        )?;
-                    }
-                    _ => todo!(),
-                }
-
-                return Ok(());
-            }
-
-            let mut num_bits = dst.ty.size.get();
-            if dst.ty.mode == LogicMode::FourValue {
-                num_bits *= 2;
-            }
-
-            let word = src.offset.bit_offset / 64;
-            let shift = src.offset.bit_offset % 64;
-            let mask = mask(num_bits);
-
-            writeln!(
-                b,
-                "{INDENT}{t} = (heap[{word}] >> ({shift} + {offset})) & 0x{mask:x};",
-                t = dst.ident,
-                offset = offset.ident,
-            )
-        }
-
-        let dst_wi = dst.as_u64() / 64;
-        match current_ty.array_size() {
-            None => {
-                let s_elem_ty = src.ty.element_type();
-                let dst_bi = dst.as_u64() % 64;
-                let mask = super::mask(src.ty.size.get());
-                writeln!(f, "{INDENT}if ({s} != current) {{")?;
-            }
-            Some(arr_size) => {
-                writeln!(
-                    f,
-                    "{INDENT}if (memcmp({s}, current, {arr_size}*sizeof(uint64_t)) == 0) {{"
-                )?;
-            }
-        }
-        match current_t.ty.array_size() {
-            None => {
-                writeln!(
-                    f,
-                    "{INDENT}if ({t} != {current_t}) {{",
-                    t = t.ident,
-                    current_t = current_t.ident
-                )?;
-            }
-            Some(_) => {
-                let condition = CVar {
-                    ident: CIdent(temp_counter),
-                    ty: CType {
-                        size: SCALAR_VSIZE,
-                        mode: LogicMode::TwoValue,
-                    },
-                };
-                temp_counter += 1;
-                write_cvar(&mut buffer, condition)?;
-                binary::cgc_case_eq(&mut buffer, condition.ident, t, current_t)?;
-                writeln!(buffer, "{INDENT}if (!{}) {{", condition.ident)?;
-            }
-        }
-        writeln!(
+        super::write_cvar(f, v)?;
+        super::load(f, dst_ref.offset, v)?;
+        v
+    };
+    super::slice::slice(f, current, s1, offset)?;
+    let c = current.ident;
+    let o = offset.ident;
+    match src.ty.array_size() {
+        None => write!(f, "{INDENT}if ({s} != {c}")?,
+        Some(arr_size) => write!(
             f,
-            "{INDENT}{INDENT}drive_signal_{idx}(schedule, time, is_scheduled, listening, last_active_time);",
-            idx = dst.as_u64()
-        )?;
-        store_slice(f, signals[dst.as_usize()], offset, src)?;
-        writeln!(f, "{INDENT}}}")?;
-
-        writeln!(f, "{INDENT}}}")?;
-        Ok(())
+            "{INDENT}if (memcmp({s}, {c}, {arr_size}*sizeof(uint64_t)) != 0"
+        )?,
     }
+    if offset.ty.mode == LogicMode::FourValue {
+        write!(f, " && ({o}&0xFFFFFFFF) ==0xFFFFFFFF")?;
+    }
+    writeln!(f, ") {{")?;
 
-    fn load_slice(b: &mut impl io::Write, dst: CVar, offset: CVar, src: HeapRef) -> io::Result<()> {}
+    use LogicMode as M;
+    let o_s = match offset.ty.mode {
+        M::TwoValue => "",
+        M::FourValue => ">>32",
+    };
 
-    fn store_slice(f: &mut impl io::Write, dst: HeapRef, offset: CVar, src: CVar) -> io::Result<()> {
-        if src.ty.mode == LogicMode::FourValue {
-            todo!()
+    let d_size = dst_ty.size;
+    let s_size = src.ty.size;
+    match (dst_ty.mode, dst_ty.array_size()) {
+        (M::TwoValue, None) => {
+            f.write_all(INDENT.as_bytes())?;
+            let current = CVar {
+                ident: c,
+                ty: dst_ty,
+            };
+            write_cvar(f, current)?;
+            f.write_all(INDENT.as_bytes())?;
+            super::load(f, dst_ref.offset, current)?;
+            writeln!(
+                f,
+                "{INDENT}{INDENT}{c} = tv_s_set({c}, {s}, {d_size}, ({o}{o_s}), {s_size});"
+            )?;
+            f.write_all(INDENT.as_bytes())?;
+            super::store(f, dst_ref.offset, current)?;
         }
-        let dst_ty = CType {
-            size: dst.size,
-            mode: src.ty.mode,
-        };
-        if let Some(_) = dst_ty.array_size() {
+        (M::TwoValue, Some(_)) => {
+            let d_word = dst_ref.offset.bit_offset / 64;
+            if src.ty.is_array() {
+                writeln!(
+                    f,
+                    "{INDENT}{INDENT}tv_l_set(heap+{d_word}, {s}, {d_size}, ({o}{o_s}), {s_size});",
+                )?;
+            } else {
+                writeln!(
+                    f,
+                    "{INDENT}{INDENT}tv_l_set(heap+{d_word}, (uint64_t[1]){{{s}}}, {d_size}, ({o}{o_s}), {s_size});",
+                )?;
+            }
+        }
+        (M::FourValue, None) => {
+            let d_mask = super::mask(d_size.get());
+            let s_mask = super::mask(s_size.get());
+            f.write_all(INDENT.as_bytes())?;
+            let current = CVar {
+                ident: c,
+                ty: dst_ty,
+            };
+            write_cvar(f, current)?;
+            f.write_all(INDENT.as_bytes())?;
+            super::load(f, dst_ref.offset, current)?;
+            writeln!(
+                f,
+                "{INDENT}{INDENT}{c} = tv_s_set({c} & 0x{d_mask:x}, {s} & 0x{s_mask:x}, {d_size}, ({o}{o_s}), {s_size}) | (tv_s_set({c} >> {d_size}, {s} >> {s_size}, {d_size}, ({o}{o_s}), {s_size}) << {d_size});"
+            )?;
+            f.write_all(INDENT.as_bytes())?;
+            super::store(f, dst_ref.offset, current)?;
+            f.write_all(INDENT.as_bytes())?;
+        }
+        (M::FourValue, Some(dst_arr_size)) => {
+            let dst_words = dst_arr_size / 2;
+            let d_word = dst_ref.offset.bit_offset / 64;
             match src.ty.array_size() {
                 None => {
-                    write!(
+                    let s_mask = super::mask(s_size.get());
+                    writeln!(
                         f,
-                        r#"
-{INDENT}if (({offset}%64)+{src_size} <= 64) heap[{word}+({offset}/64)] = (heap[{word}+({offset}/64)] & ~(((uint64_t)0x{mask:x}) << ({offset}%64))) | (((uint64_t){src}) << ({offset}%64));
-{INDENT}else {{ printf("NYI [STORE SLICE]\n"); cldctx->exit = 2; return; }};
-"#,
-                        src_size = src.ty.size,
-                        offset = offset.ident,
-                        src = src.ident,
-                        word = dst.offset.bit_offset / 64,
-                        mask = mask(src.ty.size.get()),
+                        "{INDENT}{INDENT}tv_l_set(heap+{d_word}, (uint64_t[1]){{{s}&0x{s_mask:x}}}, {d_size}, ({o}{o_s}), {s_size});",
+                    )?;
+                    writeln!(
+                        f,
+                        "{INDENT}{INDENT}tv_l_set(heap+{dst_words}+{d_word}, (uint64_t[1]){{{s}>>{s_size}}}, {d_size}, ({o}{o_s}), {s_size});",
                     )?;
                 }
-                _ => todo!(),
+                Some(src_arr_size) => {
+                    let src_words = src_arr_size / 2;
+                    writeln!(
+                        f,
+                        "{INDENT}{INDENT}tv_l_set(heap+{d_word}, {s}, {d_size}, ({o}{o_s}), {s_size});",
+                    )?;
+                    writeln!(
+                        f,
+                        "{INDENT}{INDENT}tv_l_set(heap+{dst_words}+{d_word}, {s}+{src_words}, {d_size}, ({o}{o_s}), {s_size});",
+                    )?;
+                }
             }
-            return Ok(());
         }
+    }
 
-        let mut num_bits = src.ty.size.get();
-        if src.ty.mode == LogicMode::FourValue {
-            num_bits *= 2;
-        }
-
-        let word = dst.offset.bit_offset / 64;
-        let shift = dst.offset.bit_offset % 64;
-        let mask = mask(num_bits);
-
-        writeln!(
-            f,
-            "{INDENT}heap[{word}] = (heap[{word}] & ~(((uint64_t)0x{mask:x}) << ({shift}+{offset}))) | ((uint64_t){t} << ({shift} + {offset}));",
-            t = src.ident,
-            offset = offset.ident,
-        )
-        */
+    writeln!(f, "{INDENT}}}")?;
+    writeln!(f, "{INDENT}}}")?;
+    Ok(())
 }

@@ -126,23 +126,16 @@ pub fn drive_bits(
     logic_mode: LogicMode,
 ) -> bool {
     debug_assert!(dst.size >= src.size);
-    if partial.is_some() || dst.size != src.size {
+    if partial.is_some() {
         let partial = partial.unwrap_or(0);
 
         return match logic_mode {
-            LogicMode::TwoValue if src.size <= Heap::TV_SUBBITS_MAX_SIZE => {
-                let src_v = heap.get_tv_u64(src);
-                heap.set_unaligned_raw_bits(
-                    HeapOffset {
-                        bit_offset: dst.offset.bit_offset + partial as usize,
-                    }
-                    .to_ref(src.size),
-                    src_v as u8,
-                )
-            }
             LogicMode::TwoValue if dst.size < Heap::TV_U64_MIN_SIZE => {
-                let (dst_s, src_s) = heap.get_disjoint_u8_dst_src(dst, src);
-                tv_s_set(dst_s, src_s, dst.size, partial, src.size)
+                let old_val = heap.get_tv_u64(dst);
+                let src_val = heap.get_tv_u64(src);
+                let new_val = tv_s_set(old_val, src_val, dst.size, partial, src.size);
+                heap.set_tv_u64(dst, new_val);
+                old_val != new_val
             }
             LogicMode::TwoValue => {
                 let mut src_s = [0u64];
@@ -163,18 +156,15 @@ pub fn drive_bits(
 
                 tv_l_set(dst_s, src_s, dst.size, partial, src.size)
             }
-            LogicMode::FourValue if dst.size <= Heap::FV_U64_MIN_SIZE => {
-                let (src_spc, src_val) = heap.get_fv_u64(src);
+            LogicMode::FourValue if dst.size < Heap::FV_U64_MIN_SIZE => {
                 let (old_spc, old_val) = heap.get_fv_u64(dst);
-
-                let mask = (1u64 << src.size.get()) - 1;
-                let mask = mask << partial;
-                let new_spc = (src_spc << partial) | (old_spc & !mask);
-                let new_val = (src_val << partial) | (old_val & !mask);
+                let (src_spc, src_val) = heap.get_fv_u64(src);
+                let new_spc = tv_s_set(old_spc, src_spc, dst.size, partial, src.size);
+                let new_val = tv_s_set(old_val, src_val, dst.size, partial, src.size);
                 heap.set_fv_u64(dst, new_spc, new_val);
                 old_spc != new_spc || old_val != new_val
             }
-            _ => {
+            LogicMode::FourValue => {
                 let mut src_s = [0u64, 0u64];
                 let dst_nwords = dst.size.get().div_ceil(64) as usize;
                 let (dst_s, src_s) = if src.size < Heap::FV_U64_MIN_SIZE {
