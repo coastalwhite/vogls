@@ -324,7 +324,7 @@ pub(crate) fn exec_tv_slice(stack: &mut Heap, dst: HeapRef, src: HeapRef, idx: H
             (dst.offset, 2 * dst.size.get().div_ceil(64) as usize),
             (src.offset, src.size.get().div_ceil(64) as usize),
         );
-        vogls_bits::slice::tv_ll_slice(dst_s, src_s, offset, dst.size, src.size);
+        vogls_bits::slice::tv_ll_slice(dst_s, src_s, offset, dst.size, src.size, true);
     }
 }
 

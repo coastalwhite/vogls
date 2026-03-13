@@ -26,7 +26,7 @@ module tb();
 
     integer i = 0;
     initial begin
-        in = 4'h0;
+        #0 in = 4'h0;
         #1 $vogls_assert_eq(pos, 0); in = 4'h1; 
         #1 $vogls_assert_eq(pos, 0); in = 4'h4; 
         #1 $vogls_assert_eq(pos, 2);

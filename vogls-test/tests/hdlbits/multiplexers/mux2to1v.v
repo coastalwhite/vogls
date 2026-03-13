@@ -27,6 +27,7 @@ module tb();
     top_module m(a, b, c, d, e, f, g, h, i, sel, out);
 
     initial begin
+        #0
         a=1;b=42;c=13;d=37;e=78;f=21;g=81;h=93;i=32;
         
         sel = 1; #1 $vogls_assert_eq(out, 42);

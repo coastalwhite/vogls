@@ -21,7 +21,7 @@ pub fn drive(
         match src.ty.array_size() {
             None => {
                 let s_elem_ty = src.ty.element_type();
-                let dst_bi = dst.as_u64() % 64;
+                let dst_bi = dst_ref.offset.bit_offset % 64;
                 let mask = super::mask(
                     src.ty.size.get()
                         * if src.ty.mode == LogicMode::FourValue {
@@ -86,7 +86,7 @@ pub fn drive(
         super::load(f, dst_ref.offset, v)?;
         v
     };
-    super::slice::slice(f, current, s1, offset)?;
+    super::slice::slice_with(f, current, s1, offset, false)?;
     let c = current.ident;
     let o = offset.ident;
     match src.ty.array_size() {
@@ -188,6 +188,11 @@ pub fn drive(
             }
         }
     }
+    writeln!(
+        f,
+        "{INDENT}{INDENT}drive_signal_{idx}(schedule, time, is_scheduled, listening, last_active_time);",
+        idx = dst.as_u64()
+    )?;
 
     writeln!(f, "{INDENT}}}")?;
     writeln!(f, "{INDENT}}}")?;

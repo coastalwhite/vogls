@@ -95,6 +95,7 @@ pub fn lower_system_task_enable<'a>(
                         DynFormatArgument {
                             padding: Padding::NoPadding,
                             base: Base::Decimal,
+                            prefix: true,
                         },
                     ),
                     (27, DynFormatArgument::default()),
@@ -254,15 +255,25 @@ pub fn lower_write_arguments<'a>(
 
                 format_string_arguments.push((
                     format_string_content.len(),
-                    DynFormatArgument { padding, base },
+                    DynFormatArgument {
+                        padding,
+                        base,
+                        prefix: false,
+                    },
                 ));
             }
             format_string_content.push_str(&str_literal[at..]);
         } else {
             let (var, _) = lower_expr(gl, arenas, scope, diagnostics, builder, expr)?;
             if required_arguments_left == 0 {
-                format_string_arguments
-                    .push((format_string_content.len(), DynFormatArgument::default()));
+                format_string_arguments.push((
+                    format_string_content.len(),
+                    DynFormatArgument {
+                        padding: Padding::default(),
+                        base: Base::default(),
+                        prefix: false,
+                    },
+                ));
             } else {
                 required_arguments_left -= 1;
             }

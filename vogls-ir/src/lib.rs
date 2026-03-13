@@ -98,7 +98,10 @@ impl BasicBlock {
         self.terminator.for_each_var(f);
     }
 
-    pub fn try_for_each_dst_var<E>(&self, mut f: impl FnMut(VariableKey) -> Result<(), E>) -> Result<(), E> {
+    pub fn try_for_each_dst_var<E>(
+        &self,
+        mut f: impl FnMut(VariableKey) -> Result<(), E>,
+    ) -> Result<(), E> {
         for i in &self.instrs {
             if let Some(dst) = i.get_destination_variable() {
                 f(dst)?;
@@ -556,6 +559,33 @@ impl Instruction {
             Self::Constant(dst, _) | Self::LastUpdateTime(dst, _) | Self::Probe(dst, _) => {
                 f(*dst);
             }
+        }
+    }
+
+    pub fn for_each_src(&self, mut f: impl FnMut(VariableKey)) {
+        match self {
+            Self::Unary(_, _, src) | Self::Resize(_, _, src) => f(*src),
+            Self::Binary(_, _, src1, src2) => {
+                f(*src1);
+                f(*src2);
+            }
+            Self::Phi(_, srcs) => {
+                for (_, s) in srcs {
+                    f(*s);
+                }
+            }
+            Self::Intrinsic(_, _, srcs) => {
+                for s in srcs {
+                    f(*s);
+                }
+            }
+            Self::Drive(_, src, partial) => {
+                f(*src);
+                if let Some((off, _)) = partial {
+                    f(*off);
+                }
+            }
+            Self::Constant(_, _) | Self::LastUpdateTime(_, _) | Self::Probe(_, _) => {}
         }
     }
 

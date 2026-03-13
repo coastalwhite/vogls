@@ -46,6 +46,7 @@ pub fn tv_part_ll_slice(
     offset: u32,
     dst_size: VectorSize,
     src_size: VectorSize,
+    shiftin_value: bool,
 ) {
     assert!(dst_size <= src_size);
     let dst_words = dst.len();
@@ -56,8 +57,12 @@ pub fn tv_part_ll_slice(
         }
         return;
     }
+    let shiftin_mask = u64::from(!shiftin_value).wrapping_sub(1);
     if offset >= src_size.get() {
-        dst.fill(0);
+        dst.fill(shiftin_mask);
+        if dst_size.get() % 64 != 0 {
+            dst[dst.len() - 1] &= (1u64 << dst_size.get() % 64) - 1;
+        }
         return;
     }
 
@@ -66,14 +71,14 @@ pub fn tv_part_ll_slice(
     let num_copy_words = (src.len() - swords).min(dst.len());
     if soff == 0 {
         dst[..num_copy_words].copy_from_slice(&src[swords..][..num_copy_words]);
-        dst[num_copy_words..].fill(0);
+        dst[num_copy_words..].fill(shiftin_mask);
     } else {
         for i in 0..num_copy_words {
             dst[i] = (src[i + swords] << (64 - soff)) | (src[i + swords - 1] >> soff);
         }
         if num_copy_words < dst.len() {
-            dst[num_copy_words] = src[src.len() - 1] >> soff;
-            dst[num_copy_words + 1..].fill(0);
+            dst[num_copy_words] = (shiftin_mask << (64 - soff)) | (src[src.len() - 1] >> soff);
+            dst[num_copy_words + 1..].fill(shiftin_mask);
         }
     }
     if dst_size.get() % 64 != 0 {
@@ -86,12 +91,17 @@ pub fn tv_ll_slice(
     offset: u32,
     dst_size: VectorSize,
     src_size: VectorSize,
+    fill_with_null: bool,
 ) {
     assert!(dst_size <= src_size);
     let dst_words = dst.len() / 2;
     if offset == 0 {
-        fv_set_no_special(dst, dst_size);
-        dst[dst_words..].copy_from_slice(&src[..dst_words]);
+        if fill_with_null {
+            fv_set_no_special(dst, dst_size);
+            dst[dst_words..].copy_from_slice(&src[..dst_words]);
+        } else {
+            dst.copy_from_slice(&src[..dst_words]);
+        }
         if dst_size.get() % 64 != 0 {
             dst[dst.len() - 1] &= (1u64 << dst_size.get() % 64) - 1;
         }
@@ -103,18 +113,29 @@ pub fn tv_ll_slice(
     }
 
     // Fill valid bits.
-    let num_x_bits = offset.saturating_sub(src_size.get() - dst_size.get());
-    if num_x_bits == 0 {
-        fv_set_no_special(dst, dst_size);
-    } else {
-        let num_valid_bits = dst_size.get() - num_x_bits;
-        dst[..(num_valid_bits / 64) as usize].fill(u64::MAX);
-        if num_valid_bits % 64 != 0 {
-            dst[(num_valid_bits / 64) as usize] = (1u64 << (num_valid_bits % 64)) - 1;
+    if fill_with_null {
+        let num_x_bits = offset.saturating_sub(src_size.get() - dst_size.get());
+        if num_x_bits == 0 {
+            fv_set_no_special(dst, dst_size);
+        } else {
+            let num_valid_bits = dst_size.get() - num_x_bits;
+            dst[..(num_valid_bits / 64) as usize].fill(u64::MAX);
+            if num_valid_bits % 64 != 0 {
+                dst[(num_valid_bits / 64) as usize] = (1u64 << (num_valid_bits % 64)) - 1;
+            }
+            dst[(num_valid_bits / 64) as usize + usize::from(num_valid_bits % 64 != 0)..].fill(0);
         }
-        dst[(num_valid_bits / 64) as usize + usize::from(num_valid_bits % 64 != 0)..].fill(0);
+        tv_part_ll_slice(
+            &mut dst[dst_words..],
+            src,
+            offset,
+            dst_size,
+            src_size,
+            false,
+        );
+    } else {
+        tv_part_ll_slice(dst, src, offset, dst_size, src_size, false);
     }
-    tv_part_ll_slice(&mut dst[dst_words..], src, offset, dst_size, src_size);
 }
 
 pub fn fv_s_slice(
@@ -171,8 +192,22 @@ pub fn fv_ll_slice(
     assert!(dst_size <= src_size);
     let src_words = src.len() / 2;
     let dst_words = dst.len() / 2;
-    tv_part_ll_slice(&mut dst[..dst_words], &src[..src_words], offset, dst_size, src_size);
-    tv_part_ll_slice(&mut dst[dst_words..], &src[src_words..], offset, dst_size, src_size);
+    tv_part_ll_slice(
+        &mut dst[..dst_words],
+        &src[..src_words],
+        offset,
+        dst_size,
+        src_size,
+        false,
+    );
+    tv_part_ll_slice(
+        &mut dst[dst_words..],
+        &src[src_words..],
+        offset,
+        dst_size,
+        src_size,
+        false,
+    );
 }
 
 pub fn tv_s_truncate(dst: &mut [u8], src: &[u8], out_size: VectorSize) {

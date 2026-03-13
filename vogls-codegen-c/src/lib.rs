@@ -6,10 +6,11 @@ use vogls_bits::format::{BitsFormatBase, BitsFormatOptions, BitsFormatWidth};
 use vogls_codegen::{
     HeapBuilder, HeapOffset, HeapRef, resolve_heap_map, resolve_var_logic_mode_map,
 };
-use vogls_ir::dyn_format_string::DynFormatString;
+use vogls_ir::dyn_format_string::{DynFormatArgument, DynFormatString};
 use vogls_ir::{
-    BasicBlockKey, BasicBlockTerminator, BinaryOp, GlobalContext, INTEGER_VSIZE, Instruction,
-    LogicMode, Process, ProcessKey, ResizeOp, SignalKey, UnaryOp, VariableKey, VectorSize,
+    BasicBlockKey, BasicBlockTerminator, BinaryOp, ContextFormat, DisplayContext, GlobalContext,
+    INTEGER_VSIZE, Instruction, LogicMode, Process, ProcessKey, ResizeOp, SignalKey, TIME_VSIZE,
+    UnaryOp, VariableKey, VectorSize,
 };
 use vogls_ir_properties::get_temporal_variables;
 use vogls_runtime::RtSignalKey;
@@ -204,6 +205,10 @@ fn write_cvar(f: &mut impl io::Write, var: CVar) -> io::Result<()> {
     write_var(f, var.ident, var.ty)
 }
 
+pub struct CLowerOptions {
+    pub itrace: bool,
+}
+
 pub fn lower_process(
     f: &mut impl io::Write,
     process_key: ProcessKey,
@@ -214,6 +219,7 @@ pub fn lower_process(
     dyn_fmt_strs: &mut IndexSet<DynFormatString>,
     io_signals: &VgHashMap<SignalKey, RtSignalKey>,
     signals: &[HeapRef],
+    lower_options: &CLowerOptions,
 ) -> io::Result<()> {
     use Instruction as I;
 
@@ -271,6 +277,9 @@ pub fn lower_process(
         f,
         "void {procedure}(int state, uint64_t *heap, schedule_t *schedule, uint64_t time, uint64_t *is_scheduled, uint64_t *listening, uint64_t *last_active_time, cold_context_t *cldctx) {{",
     )?;
+    if lower_options.itrace {
+        writeln!(f, r#"printf("\n* PROC {procedure}\n");"#)?;
+    }
 
     let mut bb_ident = IndexSet::<BasicBlockKey>::new();
     let mut states_set = IndexSet::<BasicBlockKey>::new();
@@ -334,6 +343,11 @@ pub fn lower_process(
         writeln!(buffer)?;
     }
 
+    let mut display_context = DisplayContext::new(gl);
+    if lower_options.itrace {
+        display_context.prepare_process(process.entry);
+    }
+
     bb_seen.clear();
     bb_seen.insert(process.entry);
     bb_stack.push(process.entry);
@@ -350,7 +364,9 @@ pub fn lower_process(
         writeln!(buffer, "L{ident}:")?;
 
         for i in &bb.instrs {
-            writeln!(buffer, "{INDENT}// {i:?}")?;
+            if lower_options.itrace {
+                writeln!(buffer, "{INDENT}// {}", i.display(&display_context))?;
+            }
             match i {
                 I::Constant(dst, bits) => {
                     let mode = var_mode[dst];
@@ -575,8 +591,11 @@ pub fn lower_process(
                 }
                 I::Intrinsic(dst, op, items) => match op.as_ref() {
                     vogls_ir::IntrinsicOp::Time => {
-                        let heap_idx = heap_map[dst].bit_offset / 64;
-                        writeln!(buffer, "{INDENT}heap[{heap_idx}] = time;")?;
+                        let t = temp_map[&(*dst, LogicMode::TwoValue)];
+                        writeln!(buffer, "{INDENT}{} = time;", t.ident)?;
+                        if temporal_variables.contains(dst) {
+                            store(&mut buffer, heap_map[dst], t)?;
+                        }
                     }
                     vogls_ir::IntrinsicOp::Finish => {
                         writeln!(buffer, "{INDENT}cldctx->exit = 1; return;")?;
@@ -702,6 +721,45 @@ pub fn lower_process(
                 }
                 I::Phi(_, _) => continue,
             }
+            if lower_options.itrace && !matches!(i, I::Phi(_, _)) {
+                writeln!(
+                    &mut buffer,
+                    r#"{INDENT}printf("* {}\n");"#,
+                    i.display(&display_context)
+                        .to_string()
+                        .replace("%", "%%")
+                        .escape_default()
+                )?;
+                let mut content = String::from("*   : ");
+                let mut arg_offsets = Vec::new();
+                let mut args = Vec::new();
+                if let Some(dst) = i.get_destination_variable() {
+                    let mode = var_mode[&dst];
+                    let var = temp_map[&(dst, mode)];
+                    content.push_str(&dst.display(&display_context).to_string());
+                    content.push_str(" = ");
+                    arg_offsets.push((content.len(), DynFormatArgument::default()));
+                    content.push_str("; ");
+                    args.push(var);
+                }
+                i.for_each_src(|src| {
+                    let mode = var_mode[&src];
+                    let var = temp_map[&(src, mode)];
+                    content.push_str(&src.display(&display_context).to_string());
+                    content.push_str(" = ");
+                    arg_offsets.push((content.len(), DynFormatArgument::default()));
+                    content.push_str("; ");
+                    args.push(var);
+                });
+                content.push('\n');
+                lower_dyn_format_str(
+                    &mut buffer,
+                    dyn_fmt_strs,
+                    &DynFormatString::new(content.into(), arg_offsets.into()),
+                    args,
+                )?;
+                writeln!(&mut buffer)?;
+            }
         }
 
         if let Some(phis) = bb_phis.get(&bb_key) {
@@ -759,17 +817,35 @@ pub fn lower_process(
                 writeln!(buffer, "{INDENT}return;",)?;
             }
             BasicBlockTerminator::VariableWait(bb_key, time) => {
-                let t = temp_map[&(*time, LogicMode::TwoValue)];
+                let mtime = var_mode[time];
+                let t = temp_map[&(*time, mtime)];
                 if temporal_variables.contains(time) {
                     load(&mut buffer, heap_map[time], t)?;
                 }
                 let state = states_set.get_index(bb_key).unwrap();
+                writeln!(buffer, "{INDENT}{{")?;
+                let s0 = CVar {
+                    ident: CIdent::Scoped(0),
+                    ty: CType {
+                        size: TIME_VSIZE,
+                        mode: LogicMode::TwoValue,
+                    },
+                };
+                write_cvar(&mut buffer, s0)?;
+                let t = t.ident;
+                let s0 = s0.ident;
+                match mtime {
+                    LogicMode::TwoValue => writeln!(buffer, "{INDENT}{s0} = {t};")?,
+                    LogicMode::FourValue => {
+                        writeln!(buffer, "{INDENT}{s0} = (~{t}[0] == 0) ? 0 : {t}[1];")?;
+                    }
+                }
                 writeln!(
                     buffer,
-                    "{INDENT}schedule_future_event(schedule, time + {t}, (event_t){{.ptr=&{procedure}, .state={state}}});",
-                    t = t.ident,
+                    "{INDENT}schedule_future_event(schedule, time + {s0}, (event_t){{.ptr=&{procedure}, .state={state}}});",
                 )?;
                 writeln!(buffer, "{INDENT}return;",)?;
+                writeln!(buffer, "{INDENT}}}")?;
             }
             BasicBlockTerminator::WaitRegion(bb_key, region) => {
                 let state = states_set.get_index(bb_key).unwrap();
@@ -892,7 +968,8 @@ fn lower_dyn_format_str(
     let dyn_fmt_ptr = dyn_fmt_strs.insert_index(dyn_format_string.clone());
     write!(
         f,
-        r#"}}; (cldctx->fmt)(cldctx->stdout, &cldctx->fmt_strs[{dyn_fmt_ptr}], args); }}"#,
+        r#"}}; (cldctx->fmt)(cldctx->stdout, (cldctx->fmt_strs+{size_of_dyn_str}*{dyn_fmt_ptr}), args); }}"#,
+        size_of_dyn_str = size_of::<DynFormatString>(),
     )?;
     Ok(())
 }
@@ -1059,12 +1136,21 @@ pub fn lower_signal_drive_fn(
     signal: SignalKey,
     listener_builder: &ListenerBuilder,
     io_signals: &VgHashMap<SignalKey, RtSignalKey>,
+    lower_options: &CLowerOptions,
 ) -> io::Result<()> {
     let idx = io_signals[&signal].as_u64();
     writeln!(
         f,
         "void drive_signal_{idx}(schedule_t *schedule, uint64_t time, uint64_t *is_scheduled, uint64_t *listening, uint64_t *last_active_time) {{",
     )?;
+
+    if lower_options.itrace {
+        writeln!(
+            f,
+            r#"{INDENT}printf("* poke {}\n");"#,
+            gl.signals[signal].name.escape_default()
+        )?;
+    }
 
     writeln!(f, "{INDENT}last_active_time[{idx}] = time;")?;
     if let Some(listeners) = listener_builder.map.get(&signal) {
@@ -1423,7 +1509,8 @@ static inline void tv_part_ll_slice(
     uint64_t *src,
     uint32_t offset,
     uint32_t dst_size,
-    uint32_t src_size
+    uint32_t src_size,
+    bool shiftin_value
 ) {
     uint32_t dst_words = (dst_size + 63)/64;
     uint32_t src_words = (src_size + 63)/64;
@@ -1434,8 +1521,9 @@ static inline void tv_part_ll_slice(
         }
         return;
     }
+    uint64_t shiftin_mask = ((uint64_t)(!shiftin_value)) - 1;
     if (offset >= src_size) {
-        memset(dst, 0, dst_words*sizeof(uint64_t));
+        memset(dst, shiftin_mask, dst_words*sizeof(uint64_t));
         return;
     }
 
@@ -1444,14 +1532,14 @@ static inline void tv_part_ll_slice(
     uint32_t num_copy_words = min(src_words-swords, dst_words);
     if (soff == 0) {
         memmove(dst, src+swords, num_copy_words*sizeof(uint64_t));
-        memset(dst+num_copy_words, 0, (dst_words-num_copy_words)*sizeof(uint64_t));
+        memset(dst+num_copy_words, shiftin_mask, (dst_words-num_copy_words)*sizeof(uint64_t));
     } else {
         for (int i = 0; i < num_copy_words; ++i) {
             dst[i] = (src[i + swords] << (64 - soff)) | (src[i + swords - 1] >> soff);
         }
         if (num_copy_words < dst_words) {
-            dst[num_copy_words] = src[src_words - 1] >> soff;
-            memset(dst+num_copy_words+1, 0, (dst_words-num_copy_words-1)*sizeof(uint64_t));
+            dst[num_copy_words] = (shiftin_mask << (64 - soff)) | (src[src_words - 1] >> soff);
+            memset(dst+num_copy_words+1, shiftin_mask, (dst_words-num_copy_words-1)*sizeof(uint64_t));
         }
     }
     if (dst_size % 64 != 0) {
@@ -1463,13 +1551,18 @@ static inline void tv_ll_slice(
     uint64_t *src,
     uint32_t offset,
     uint32_t dst_size,
-    uint32_t src_size
+    uint32_t src_size,
+    bool fill_with_null
 ) {
     uint32_t dst_words = (dst_size + 63)/64;
     uint32_t src_words = (src_size + 63)/64;
     if (offset == 0) {
-        set_no_special(dst, dst_size);
-        memmove(dst+dst_words, src, dst_words*sizeof(uint64_t));
+        if (fill_with_null) {
+            set_no_special(dst, dst_size);
+            memmove(dst+dst_words, src, dst_words*sizeof(uint64_t));
+        } else {
+            memmove(dst, src, dst_words*sizeof(uint64_t));
+        }
         if (dst_size % 64 != 0) {
             dst[dst_words*2-1] &= (((uint64_t)1) << (dst_size%64))-1;
         }
@@ -1481,19 +1574,23 @@ static inline void tv_ll_slice(
     }
 
     // Fill valid bits.
-    uint32_t num_x_bits = ((src_size-dst_size)>=offset) ? 0 : (offset-(src_size-dst_size));
-    if (num_x_bits == 0) {
-        set_no_special(dst, dst_size);
-    } else {
-        uint32_t num_valid_bits = dst_size - num_x_bits;
-        memset(dst, 0xFF, (num_valid_bits / 64)*sizeof(uint64_t));
-        if (num_valid_bits % 64 != 0) {
-            dst[num_valid_bits / 64] = (((uint64_t)1) << (num_valid_bits%64))-1;
+    if (fill_with_null) {
+        uint32_t num_x_bits = ((src_size-dst_size)>=offset) ? 0 : (offset-(src_size-dst_size));
+        if (num_x_bits == 0) {
+            set_no_special(dst, dst_size);
+        } else {
+            uint32_t num_valid_bits = dst_size - num_x_bits;
+            memset(dst, 0xFF, (num_valid_bits / 64)*sizeof(uint64_t));
+            if (num_valid_bits % 64 != 0) {
+                dst[num_valid_bits / 64] = (((uint64_t)1) << (num_valid_bits%64))-1;
+            }
+            uint32_t o = (num_valid_bits / 64)+((uint32_t)(num_valid_bits % 64 != 0));
+            memset(dst+o, 0, (dst_words-o)*sizeof(uint64_t));
         }
-        uint32_t o = (num_valid_bits / 64)+((uint32_t)(num_valid_bits % 64 != 0));
-        memset(dst+o, 0, (dst_words-o)*sizeof(uint64_t));
+        tv_part_ll_slice(dst+dst_words, src, offset, dst_size, src_size, false);
+    } else {
+        tv_part_ll_slice(dst, src, offset, dst_size, src_size, false);
     }
-    tv_part_ll_slice(dst+dst_words, src, offset, dst_size, src_size);
 }
 static inline uint64_t tv_s_set(
     uint64_t dst,

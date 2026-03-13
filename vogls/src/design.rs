@@ -7,7 +7,9 @@ use std::rc::Rc;
 use slotmap::{SecondaryMap, SlotMap};
 use vogls_codegen::{HeapBuilder, HeapOffset, HeapRef};
 use vogls_codegen_c::runtime::{CDesign, CDesignState};
-use vogls_codegen_c::{ListenerBuilder, lower_signal_drive_fn, lower_signal_drive_header};
+use vogls_codegen_c::{
+    CLowerOptions, ListenerBuilder, lower_signal_drive_fn, lower_signal_drive_header,
+};
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_ir::{Bits, GlobalContext, LogicMode, Signal, SignalKey};
 use vogls_runtime::SimulationIo;
@@ -619,6 +621,9 @@ impl Design {
                 lower_signal_drive_header(&mut out, signal, &io_signals)?;
             }
 
+            let lower_options = CLowerOptions {
+                itrace: ectx.itrace,
+            };
             for (i, process) in gl.processes.keys().enumerate() {
                 vogls_codegen_c::lower_process(
                     &mut out,
@@ -630,11 +635,19 @@ impl Design {
                     &mut dyn_fmt_strs,
                     &io_signals,
                     &signals,
+                    &lower_options,
                 )?;
             }
 
             for signal in gl.signals.keys() {
-                lower_signal_drive_fn(&mut out, &gl, signal, &listener_builder, &io_signals)?;
+                lower_signal_drive_fn(
+                    &mut out,
+                    &gl,
+                    signal,
+                    &listener_builder,
+                    &io_signals,
+                    &lower_options,
+                )?;
             }
 
             vogls_codegen_c::lower_startup_function(&mut out, &gl)?;

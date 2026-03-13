@@ -38,7 +38,7 @@ pub struct ColdContextT {
 
     fmt: extern "C" fn(
         NonNull<Box<dyn std::io::Write + Send + Sync>>,
-        NonNull<DynFormatString>,
+        *const DynFormatString,
         *const BitsRefT,
     ),
     fmt_strs: *const DynFormatString,
@@ -230,12 +230,12 @@ impl CDesignState {
 
 extern "C" fn fmt(
     mut file: NonNull<Box<dyn std::io::Write + Send + Sync>>,
-    mut dyn_fmt: NonNull<DynFormatString>,
+    dyn_fmt: *const DynFormatString,
     bits: *const BitsRefT,
 ) {
     // @TODO: Catch unwind
     let file = unsafe { file.as_mut() };
-    let dyn_fmt = unsafe { dyn_fmt.as_mut() };
+    let dyn_fmt = unsafe { dyn_fmt.as_ref() }.unwrap();
     let args = (0..dyn_fmt.arguments().len()).map(|i| {
         let ref_t = unsafe { bits.add(i).as_ref() }.unwrap();
         let size = VectorSize::new(ref_t.size).unwrap();

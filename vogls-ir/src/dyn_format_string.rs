@@ -20,17 +20,25 @@ pub enum Padding {
 }
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum Base {
+    #[default]
+    Adaptive,
     Binary,
     Octal,
-    #[default]
     Hexadecimal,
     Decimal,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DynFormatArgument {
     pub padding: Padding,
     pub base: Base,
+    pub prefix: bool,
+}
+
+impl Default for DynFormatArgument {
+    fn default() -> Self {
+        Self { padding: Default::default(), base: Default::default(), prefix: true }
+    }
 }
 
 impl DynFormatString {
@@ -53,7 +61,7 @@ impl DynFormatString {
         for ((arg_at, arg_fmt), arg_bits) in self.arguments.iter().zip(arguments) {
             f.write_all(self.content[at..*arg_at].as_bytes())?;
             at = *arg_at;
-            format_bits(f, &arg_bits, arg_fmt.padding, arg_fmt.base)?;
+            format_bits(f, &arg_bits, arg_fmt.padding, arg_fmt.base, arg_fmt.prefix)?;
         }
 
         f.write_all(self.content[at..].as_bytes())
@@ -72,10 +80,18 @@ pub fn format_bits(
     bits: &Bits,
     padding: Padding,
     base: Base,
+    prefix: bool,
 ) -> io::Result<()> {
     let mut options = BitsFormatOptions::default();
 
     options.base = match base {
+        Base::Adaptive => {
+            if bits.contains_special() && bits.count_ones() + bits.count_ones() != 0 {
+                BitsFormatBase::Binary
+            } else {
+                BitsFormatBase::LowerHex
+            }
+        },
         Base::Binary => BitsFormatBase::Binary,
         Base::Octal => BitsFormatBase::Octal,
         Base::Hexadecimal => BitsFormatBase::LowerHex,
@@ -86,6 +102,7 @@ pub fn format_bits(
     if options.base != BitsFormatBase::Decimal {
         options.fill = '0';
     }
+    options.prefix = prefix;
     match padding {
         Padding::ZeroPaddedToSize => {
             options.width = BitsFormatWidth::Expand;

@@ -33,6 +33,28 @@ impl<'a> DisplayContext<'a> {
             var_map: HashMap::new(),
         }
     }
+
+    pub fn prepare_process(&mut self, entry: BasicBlockKey) {
+        self.bb_stack_scratch.clear();
+        self.bb_name_scratch.clear();
+
+        self.bb_name_scratch.insert(entry, 0);
+        self.bb_stack_scratch.push(entry);
+
+        while let Some(bb) = self.bb_stack_scratch.pop() {
+            self.gl.bbs[bb].for_each_var(|v| {
+                let new_idx = self.var_map.len() as u32;
+                self.var_map.entry(v).or_insert(new_idx);
+            });
+            self.gl.bbs[bb].terminator.for_each_bb(|k| {
+                let name = self.bb_name_scratch.len();
+                self.bb_name_scratch.entry(k).or_insert_with(|| {
+                    self.bb_stack_scratch.push(k);
+                    name as u32
+                });
+            });
+        }
+    }
 }
 
 impl<'a, T: ?Sized + ContextFormat> fmt::Display for ContextDisplay<'a, T> {
@@ -61,30 +83,12 @@ impl Process {
     }
 
     fn process_fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &mut DisplayContext<'_>) -> fmt::Result {
+        ctx.prepare_process(self.entry);
+
         writeln!(f, "process {} {{", self.name)?;
 
         let mut bb_stack = std::mem::take(&mut ctx.bb_stack_scratch);
         let mut bb_seen = std::mem::take(&mut ctx.bb_seen_scratch);
-
-        bb_stack.clear();
-        ctx.bb_name_scratch.clear();
-
-        ctx.bb_name_scratch.insert(self.entry, 0);
-        bb_stack.push(self.entry);
-
-        while let Some(bb) = bb_stack.pop() {
-            ctx.gl.bbs[bb].for_each_var(|v| {
-                let new_idx = ctx.var_map.len() as u32;
-                ctx.var_map.entry(v).or_insert(new_idx);
-            });
-            ctx.gl.bbs[bb].terminator.for_each_bb(|k| {
-                let name = ctx.bb_name_scratch.len();
-                ctx.bb_name_scratch.entry(k).or_insert_with(|| {
-                    bb_stack.push(k);
-                    name as u32
-                });
-            });
-        }
 
         bb_seen.clear();
         bb_seen.insert(self.entry);
