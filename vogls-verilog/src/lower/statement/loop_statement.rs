@@ -77,6 +77,7 @@ pub fn lower_loop_statement<'a>(
         None => None,
         Some(condition) => {
             let branch_ref;
+            let condition = builder.reduce_or(gl, condition);
             (branch_ref, builder) = builder.branch(gl, condition);
             Some(branch_ref)
         }

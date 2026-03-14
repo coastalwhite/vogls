@@ -32,6 +32,7 @@ pub fn lower<'a>(
         &mut builder,
         if_branch.condition,
     )?;
+    let condition = builder.reduce_or(gl, condition);
 
     let mut origins = Vec::new();
 
@@ -59,6 +60,7 @@ pub fn lower<'a>(
             &mut builder,
             else_if_branch.condition,
         )?;
+        let condition = builder.reduce_or(gl, condition);
 
         (branch_ref, if_true_builder) = builder.branch(gl, condition);
         if_true_builder = lower_statement_or_null(
@@ -155,6 +157,7 @@ pub fn lower_case_statement<'a>(
             }
         };
 
+        let condition = builder.reduce_or(gl, condition);
         let (branch_ref, mut if_true_builder) = builder.branch(gl, condition);
         if_true_builder = lower_statement_or_null(
             gl,

@@ -133,6 +133,14 @@ impl<K, V> IndexMap<K, V> {
 }
 
 impl<K: Eq + hash::Hash> IndexSet<K> {
+    pub fn reserve(&mut self, additional: usize) {
+        self.keys.reserve(additional);
+        self.table.reserve(additional, |i| {
+            let i = unsafe { self.keys.get_unchecked(i.get()) };
+            self.random_state.hash_one(i)
+        });
+    }
+
     pub fn insert(&mut self, key: K) -> bool {
         self.insert_new(key).is_ok()
     }
@@ -221,6 +229,18 @@ impl<K: Eq + hash::Hash, V> IndexMap<K, V> {
     pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
         self.get_index(key)
             .map(|idx| unsafe { self.values.get_unchecked_mut(idx) })
+    }
+}
+
+impl<K: Eq + hash::Hash> Extend<K> for IndexSet<K> {
+    fn extend<T: IntoIterator<Item = K>>(&mut self, iter: T) {
+        let iter = iter.into_iter();
+        if let Some(size) = iter.size_hint().1 {
+            self.reserve(size);
+        }
+        for k in iter {
+            _ = self.insert_new(k);
+        }
     }
 }
 

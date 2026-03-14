@@ -275,7 +275,7 @@ pub fn lower_process(
 
     writeln!(
         f,
-        "int {procedure}(int state, uint64_t *heap, schedule_t *schedule, uint64_t time, uint64_t *is_scheduled, uint64_t *listening, uint64_t *last_active_time, cold_context_t *cldctx) {{",
+        "NOINLINE int {procedure}(int state, uint64_t *restrict heap, schedule_t *restrict schedule, uint64_t time, uint64_t *restrict is_scheduled, uint64_t *restrict listening, uint64_t *restrict last_active_time, cold_context_t *restrict cldctx) {{",
     )?;
     if lower_options.itrace {
         writeln!(f, r#"printf("\n* PROC {procedure}\n");"#)?;
@@ -283,6 +283,7 @@ pub fn lower_process(
 
     let mut bb_ident = IndexSet::<BasicBlockKey>::new();
     let mut states_set = IndexSet::<BasicBlockKey>::new();
+    let mut goto_target_set = IndexSet::<BasicBlockKey>::new();
     let mut temp_map = VgHashMap::<(VariableKey, LogicMode), CVar>::default();
 
     bb_stack.push(process.entry);
@@ -326,9 +327,11 @@ pub fn lower_process(
             | BasicBlockTerminator::Watch(target, _) => {
                 states_set.insert(target);
             }
-            BasicBlockTerminator::Jump(..)
-            | BasicBlockTerminator::Branch(..)
-            | BasicBlockTerminator::Halt => {}
+            BasicBlockTerminator::Jump(target) => _ = goto_target_set.insert(target),
+            BasicBlockTerminator::Branch(_, truthy, falsy) => {
+                goto_target_set.extend([truthy, falsy])
+            }
+            BasicBlockTerminator::Halt => {}
         }
     }
 
@@ -361,7 +364,11 @@ pub fn lower_process(
 
         let ident = bb_ident.get_index(&bb_key).unwrap();
 
-        writeln!(buffer, "L{ident}:")?;
+        if goto_target_set.contains(&bb_key)
+            || (states_set.len() > 1 && states_set.contains(&bb_key))
+        {
+            writeln!(buffer, "L{ident}:")?;
+        }
 
         for i in &bb.instrs {
             if lower_options.itrace {
@@ -1225,6 +1232,14 @@ pub fn prologue(f: &mut impl io::Write) -> io::Result<()> {
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#if defined(_MSC_VER)
+    #define NOINLINE __declspec(noinline)
+#elif defined(__GNUC__) || defined(__clang__)
+    #define NOINLINE __attribute__((noinline))
+#else
+    #define NOINLINE
+#endif
 
 typedef struct bits_ref {
     uint32_t size;

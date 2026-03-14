@@ -661,11 +661,13 @@ impl Design {
 
             std::fs::write("t2.c", &c_file)?;
 
+            // clang -x c -fPIC t2.c -shared -o /tmp/vogls-target.so
             let mut cc = Command::new("clang")
                 .args([
                     "-x",
                     "c",
-                    "-g3",
+                    "-O1",
+                    // "-g3",
                     "-fPIC",
                     // "-O2",
                     "t2.c",
