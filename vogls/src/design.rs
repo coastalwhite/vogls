@@ -288,7 +288,7 @@ impl Design {
         }
 
         let mut error = false;
-        let mut signal_map = HashMap::new();
+        let mut signal_map = VgHashMap::default();
         let mut outs_lut = VgHashMap::default();
         let mut outs = Vec::new();
 

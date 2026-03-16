@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::fmt::Alignment;
 use std::num::NonZeroUsize;
 use std::path::Path;
@@ -241,7 +241,7 @@ impl VcdScope {
     pub fn lower(
         v: &vogls_ir::vcd::VcdScope,
         map: &VgHashMap<SignalKey, RtSignalKey>,
-        signal_map: &HashMap<SignalKey, SignalKey>,
+        signal_map: &VgHashMap<SignalKey, SignalKey>,
     ) -> VcdScope {
         VcdScope {
             name: v.name.clone(),
@@ -340,7 +340,7 @@ impl VcdScopeItem {
     fn lower(
         v: &vogls_ir::vcd::VcdScopeItem,
         map: &VgHashMap<SignalKey, RtSignalKey>,
-        signal_map: &HashMap<SignalKey, SignalKey>,
+        signal_map: &VgHashMap<SignalKey, SignalKey>,
     ) -> Self {
         match v {
             vogls_ir::vcd::VcdScopeItem::Scope(v) => {

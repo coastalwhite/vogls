@@ -19,7 +19,7 @@ pub fn lower_process_to_vm(
     heap_builder: &mut HeapBuilder,
     signals: &[HeapRef],
     io_signals: &VgHashMap<SignalKey, RtSignalKey>,
-    signal_map: &HashMap<SignalKey, SignalKey>,
+    signal_map: &VgHashMap<SignalKey, SignalKey>,
 ) -> VmProcess {
     use Instruction as I;
     use VmInstruction as VI;

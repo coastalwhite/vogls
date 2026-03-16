@@ -21,7 +21,7 @@ pub struct Scope<'a> {
     pub table: &'a mut VSymbolTable,
     pub key: SymbolId,
     pub udps: &'a VgHashMap<IdentId, AstId<UdpDeclaration>>,
-    pub signal_map: &'a mut HashMap<SignalKey, SignalKey>,
+    pub signal_map: &'a mut VgHashMap<SignalKey, SignalKey>,
     pub tokenized: &'a Tokenized,
 }
 
@@ -36,7 +36,7 @@ fn extend_symbol_table_to_vcd_scope(
     symbols: &[SymbolId],
     table: &VSymbolTable,
     ident_table: &IdentTable,
-    signal_map: &HashMap<SignalKey, SignalKey>,
+    signal_map: &VgHashMap<SignalKey, SignalKey>,
 ) {
     use VSymbol as S;
     for sid in symbols.iter() {
@@ -322,8 +322,6 @@ pub fn try_resolve_constant<'a>(
     };
     Ok(value)
 }
-
-use std::collections::HashMap;
 
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_frontend::symbol_table::SymbolId;
