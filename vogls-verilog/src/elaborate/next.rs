@@ -1765,7 +1765,7 @@ pub fn finalize_symbol<'a>(
                     table: table,
                     key: sid,
                     udps: &VgHashMap::default(),
-                    signal_map: &mut VgHashMap::default(),
+                    signal_aliases: &mut VgHashMap::default(),
                     tokenized,
                 },
                 *id,

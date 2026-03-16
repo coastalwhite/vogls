@@ -5,7 +5,7 @@ use vogls_codegen::{
 };
 use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, BinaryOp, GlobalContext, INTEGER_VSIZE, Instruction,
-    IntrinsicOp, LogicMode, ProcessKey, SignalKey, VariableKey,
+    IntrinsicOp, LogicMode, ProcessKey, SignalAlias, SignalKey, VariableKey,
 };
 use vogls_runtime::RtSignalKey;
 use vogls_utils::{VgHashMap, VgHashSet};
@@ -19,7 +19,7 @@ pub fn lower_process_to_vm(
     heap_builder: &mut HeapBuilder,
     signals: &[HeapRef],
     io_signals: &VgHashMap<SignalKey, RtSignalKey>,
-    signal_map: &VgHashMap<SignalKey, SignalKey>,
+    signal_aliases: &VgHashMap<SignalKey, SignalAlias>,
 ) -> VmProcess {
     use Instruction as I;
     use VmInstruction as VI;
@@ -249,7 +249,7 @@ pub fn lower_process_to_vm(
                         O::Assert(f) => VO::Assert(f.clone()),
                         O::VcdOpenFile(f) => VO::VcdOpenFile(f.clone()),
                         O::VcdAppendModule(v) => {
-                            VO::VcdAppendModule(VmVcdScope::lower(v, io_signals, signal_map))
+                            VO::VcdAppendModule(VmVcdScope::lower(v, io_signals, signal_aliases))
                         }
                         O::VcdPause => VO::VcdPause,
                         O::VcdResume => VO::VcdResume,

@@ -298,14 +298,15 @@ pub fn lower<'a>(
                                 ConnectionDirection::In | ConnectionDirection::Both
                             );
                             if is_input {
-                                let signal =
+                                let alias =
                                     lower_to_signal(gl, arenas, scope, diagnostics, l_p, ty)?;
                                 // @TODO: Just never allocate this signal.
                                 let old_signal = std::mem::replace(
                                     &mut unwrap_get_net_mut(scope.table, net).signal,
-                                    signal,
+                                    alias.signal,
                                 );
-                                scope.signal_map.insert(old_signal, signal);
+                                assert!(alias.range.is_none());
+                                scope.signal_aliases.insert(old_signal, alias);
                                 gl.signals.remove(old_signal);
                             } else {
                                 assign_port_output(gl, arenas, scope, diagnostics, l_p, net, ty)?;
@@ -371,9 +372,10 @@ pub fn lower<'a>(
                                     // @TODO: Just never allocate this signal.
                                     let old_signal = std::mem::replace(
                                         &mut unwrap_get_net_mut(scope.table, net).signal,
-                                        signal,
+                                        signal.signal,
                                     );
-                                    scope.signal_map.insert(old_signal, signal);
+                                    assert!(signal.range.is_none());
+                                    scope.signal_aliases.insert(old_signal, signal);
                                     gl.signals.remove(old_signal);
                                 }
                                 Some(e) => {

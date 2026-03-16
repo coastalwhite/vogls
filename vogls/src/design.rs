@@ -288,7 +288,7 @@ impl Design {
         }
 
         let mut error = false;
-        let mut signal_map = VgHashMap::default();
+        let mut signal_aliases = VgHashMap::default();
         let mut outs_lut = VgHashMap::default();
         let mut outs = Vec::new();
 
@@ -313,7 +313,7 @@ impl Design {
                                 table: &mut elab_table,
                                 key,
                                 udps: &udps,
-                                signal_map: &mut signal_map,
+                                signal_aliases: &mut signal_aliases,
                                 tokenized: &token_buffer,
                             },
                             specify_block.items,
@@ -334,7 +334,7 @@ impl Design {
                             table: &mut elab_table,
                             key,
                             udps: &udps,
-                            signal_map: &mut signal_map,
+                            signal_aliases: &mut signal_aliases,
                             tokenized: &token_buffer,
                         },
                         fn_decl,
@@ -351,7 +351,7 @@ impl Design {
                             table: &mut elab_table,
                             key,
                             udps: &udps,
-                            signal_map: &mut signal_map,
+                            signal_aliases: &mut signal_aliases,
                             tokenized: &token_buffer,
                         },
                         task_decl,
@@ -394,7 +394,7 @@ impl Design {
                     table: &mut elab_table,
                     key,
                     udps: &udps,
-                    signal_map: &mut signal_map,
+                    signal_aliases: &mut signal_aliases,
                     tokenized: &token_buffer,
                 },
                 &mut diagnostics,
@@ -425,22 +425,6 @@ impl Design {
                 writeln!(ectx.stderr)?;
             }
             return Err("failed to lower".into());
-        }
-
-        for symbol in elab_table.symbol_id_iter() {
-            if let VSymbol::Net(n) = &mut elab_table[symbol].content {
-                while let Some(s) = signal_map.get(&n.signal) {
-                    n.signal = *s;
-                }
-            }
-        }
-        for bb in gl.bbs.values_mut() {
-            bb.map_signals(|mut s| {
-                while let Some(ns) = signal_map.get(&s) {
-                    s = *ns;
-                }
-                s
-            });
         }
 
         if ectx.emit_unoptimized_ir {
@@ -717,7 +701,7 @@ impl Design {
                 &mut heap_builder,
                 &signals,
                 &mut io_signals,
-                &signal_map,
+                &signal_aliases,
             );
 
             if ectx.emit_vm {
@@ -784,11 +768,11 @@ impl Design {
                 table: &mut elab_table,
                 key: tlm,
                 udps: &udps,
-                signal_map: &mut signal_map,
+                signal_aliases: &mut signal_aliases,
                 tokenized: &token_buffer,
             };
             let scope = scope.vcd_scope(&ast.arenas.ident_table);
-            let scope = vogls_sim::VcdScope::lower(&scope, &io_signals, &signal_map);
+            let scope = vogls_sim::VcdScope::lower(&scope, &io_signals, &signal_aliases);
             initial_state.start_vcd(vcd_path, scope);
         }
 

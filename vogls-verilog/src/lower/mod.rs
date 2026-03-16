@@ -21,7 +21,7 @@ pub struct Scope<'a> {
     pub table: &'a mut VSymbolTable,
     pub key: SymbolId,
     pub udps: &'a VgHashMap<IdentId, AstId<UdpDeclaration>>,
-    pub signal_map: &'a mut VgHashMap<SignalKey, SignalKey>,
+    pub signal_aliases: &'a mut VgHashMap<SignalKey, SignalAlias>,
     pub tokenized: &'a Tokenized,
 }
 
@@ -36,7 +36,7 @@ fn extend_symbol_table_to_vcd_scope(
     symbols: &[SymbolId],
     table: &VSymbolTable,
     ident_table: &IdentTable,
-    signal_map: &VgHashMap<SignalKey, SignalKey>,
+    signal_aliases: &VgHashMap<SignalKey, SignalAlias>,
 ) {
     use VSymbol as S;
     for sid in symbols.iter() {
@@ -52,7 +52,7 @@ fn extend_symbol_table_to_vcd_scope(
                     table[*sid].children(),
                     table,
                     ident_table,
-                    signal_map,
+                    signal_aliases,
                 );
                 scope
                     .items
@@ -60,16 +60,21 @@ fn extend_symbol_table_to_vcd_scope(
             }
             S::Net(i) => {
                 let mut signal = i.signal;
-                while let Some(s) = signal_map.get(&signal) {
-                    signal = *s;
+                let mut msb = (i.ty.force_net_width().get() - 1) as i64;
+                let mut lsb = 0;
+                while let Some(s) = signal_aliases.get(&signal) {
+                    signal = s.signal;
+                    if let Some((s_msb, s_lsb)) = s.range {
+                        (msb, lsb) = (s_msb as i64, s_lsb as i64);
+                    }
                 }
                 scope.items.push(vogls_ir::vcd::VcdScopeItem::Variable(
                     vogls_ir::vcd::VcdVariable {
                         name: ident_table[table[*sid].name()].to_string(),
                         signal,
                         ty: vogls_ir::vcd::NetType::Wire,
-                        msb: (i.ty.force_net_width().get() - 1) as i64,
-                        lsb: 0,
+                        msb,
+                        lsb,
                     },
                 ));
             }
@@ -101,7 +106,7 @@ impl<'a> Scope<'a> {
             &[key],
             self.table,
             ident_table,
-            self.signal_map,
+            self.signal_aliases,
         );
         scope
     }
@@ -328,8 +333,8 @@ use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::vcd::VcdScope;
 use vogls_ir::{
-    BasicBlockBuilder, GlobalContext, SCALAR_VSIZE, Signal, SignalKey, VariableKey, VectorSize,
-    new_anonymous_builder, new_process,
+    BasicBlockBuilder, GlobalContext, SCALAR_VSIZE, Signal, SignalAlias, SignalKey, VariableKey,
+    VectorSize, new_anonymous_builder, new_process,
 };
 use vogls_utils::{OrderedSet, VgHashMap};
 
@@ -381,7 +386,7 @@ pub fn lower_module_to_ir<'a>(
                     table: &mut scope.table,
                     key: scope_key,
                     udps: scope.udps,
-                    signal_map: scope.signal_map,
+                    signal_aliases: scope.signal_aliases,
                     tokenized: scope.tokenized,
                 };
                 module_or_generate_item::lower(gl, arenas, &mut scope, id, diagnostics)?;
@@ -432,7 +437,7 @@ fn lower_to_signal<'a>(
     diagnostics: &mut Diagnostics,
     expr: AstId<Expr>,
     ty: VType,
-) -> Result<SignalKey, ()> {
+) -> Result<SignalAlias, ()> {
     if let Expr::Ident(ast_ident, exprs, range_expression) = arenas.get(expr)
         && exprs.is_empty()
         && range_expression.is_none()
@@ -442,7 +447,10 @@ fn lower_to_signal<'a>(
         if let VSymbol::Net(s) = &scope.table[symbol_key].content
             && s.ty == ty
         {
-            return Ok(s.signal);
+            return Ok(SignalAlias {
+                signal: s.signal,
+                range: None,
+            });
         }
     }
 
@@ -463,7 +471,10 @@ fn lower_to_signal<'a>(
     let mut signals = OrderedSet::new();
     expression::get_used_signals(arenas, scope, diagnostics, &mut signals, expr)?;
     bb_builder.watch_to(gl, signals.items, bb_key);
-    Ok(signal)
+    Ok(SignalAlias {
+        signal,
+        range: None,
+    })
 }
 
 fn assign_port_output<'a>(
@@ -489,7 +500,13 @@ fn assign_port_output<'a>(
                 &mut unwrap_get_net_mut(scope.table, output_net).signal,
                 signal,
             );
-            scope.signal_map.insert(old_signal, signal);
+            scope.signal_aliases.insert(
+                old_signal,
+                SignalAlias {
+                    signal,
+                    range: None,
+                },
+            );
             gl.signals.remove(old_signal);
             return Ok(());
         }

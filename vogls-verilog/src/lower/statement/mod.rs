@@ -167,7 +167,7 @@ pub fn statements_to_process<'a>(
                     table: scope.table,
                     key: scope_key,
                     udps: scope.udps,
-                    signal_map: scope.signal_map,
+                    signal_aliases: scope.signal_aliases,
                     tokenized: scope.tokenized,
                 };
 
@@ -198,7 +198,7 @@ pub fn statements_to_process<'a>(
                     table: scope.table,
                     key: scope_key,
                     udps: scope.udps,
-                    signal_map: scope.signal_map,
+                    signal_aliases: scope.signal_aliases,
                     tokenized: scope.tokenized,
                 };
 
@@ -560,7 +560,7 @@ pub fn get_used_signals<'a>(
                 table: scope.table,
                 key: scope_key,
                 udps: scope.udps,
-                signal_map: scope.signal_map,
+                signal_aliases: scope.signal_aliases,
                 tokenized: scope.tokenized,
             };
             for s in statements.iter() {
@@ -583,7 +583,7 @@ pub fn get_used_signals<'a>(
                 table: scope.table,
                 key: scope_key,
                 udps: scope.udps,
-                signal_map: scope.signal_map,
+                signal_aliases: scope.signal_aliases,
                 tokenized: scope.tokenized,
             };
             for s in statements.iter() {
