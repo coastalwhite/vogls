@@ -68,10 +68,10 @@ pub fn token_range_to_line_range(
 
 fn append_referenced_modules_generate_block<'a>(
     arenas: &'a AstArenas,
-    generate_block: AstId<GenerateBlock>,
+    generate_block: AstId<'a, GenerateBlock<'a>>,
     referenced: &mut HashSet<IdentId>,
 ) {
-    match arenas.get(generate_block) {
+    match &*generate_block {
         GenerateBlock::ModuleOrGenerateItem(id) => {
             append_referenced_modules(arenas, *id, referenced)
         }
@@ -85,10 +85,10 @@ fn append_referenced_modules_generate_block<'a>(
 
 fn append_referenced_modules_opt_generate_block<'a>(
     arenas: &'a AstArenas,
-    generate_block: AstId<Option<GenerateBlock>>,
+    generate_block: AstId<Option<GenerateBlock<'a>>>,
     referenced: &mut HashSet<IdentId>,
 ) {
-    match arenas.get(generate_block) {
+    match &*generate_block {
         None => {}
         Some(GenerateBlock::ModuleOrGenerateItem(id)) => {
             append_referenced_modules(arenas, *id, referenced)
@@ -103,12 +103,12 @@ fn append_referenced_modules_opt_generate_block<'a>(
 
 fn append_referenced_modules<'a>(
     arenas: &'a AstArenas,
-    module_or_generate_item: AstId<ModuleOrGenerateItem>,
+    module_or_generate_item: AstId<'a, ModuleOrGenerateItem<'a>>,
     referenced: &mut HashSet<IdentId>,
 ) {
-    match arenas.get(module_or_generate_item).content {
+    match module_or_generate_item.content {
         ModuleOrGenerateItemContent::ModuleInstantiation(module_instantiation) => {
-            let module_instantiation = arenas.get(module_instantiation);
+            let module_instantiation = &*module_instantiation;
             let module_name = module_instantiation.module_identifier.item.0;
             referenced.insert(module_name);
         }
@@ -126,7 +126,7 @@ fn append_referenced_modules<'a>(
                 condition: _,
                 iteration: _,
                 block,
-            } = arenas.get(loop_generate_construct);
+            } = &*loop_generate_construct;
             append_referenced_modules_generate_block(arenas, *block, referenced);
         }
         ModuleOrGenerateItemContent::IfGenerateConstruct(if_generate_construct) => {
@@ -134,16 +134,16 @@ fn append_referenced_modules<'a>(
                 condition: _,
                 truthy,
                 falsy,
-            } = arenas.get(if_generate_construct);
+            } = &*if_generate_construct;
             append_referenced_modules_opt_generate_block(arenas, *truthy, referenced);
             if let Some(falsy) = falsy {
                 append_referenced_modules_opt_generate_block(arenas, *falsy, referenced);
             }
         }
         ModuleOrGenerateItemContent::CaseGenerateConstruct(case_generate_construct) => {
-            let CaseGenerateConstruct { value: _, items } = arenas.get(case_generate_construct);
+            let CaseGenerateConstruct { value: _, items } = &*case_generate_construct;
             for item in items.iter() {
-                let CaseGenerateItem { pattern: _, block } = arenas.get(item);
+                let CaseGenerateItem { pattern: _, block } = &*item;
                 append_referenced_modules_opt_generate_block(arenas, *block, referenced);
             }
         }

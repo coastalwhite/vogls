@@ -275,11 +275,11 @@ pub fn cgc_reduce_xor(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Resul
             if src.ty.size.get() % 64 != 0 {
                 let last_i = arr_size - 1;
                 let mask = mask(src.ty.size.get() % 64);
+                writeln!(f, "{INDENT}{INDENT}cnt += popcount64({s}[{last_i}]);")?;
                 writeln!(
                     f,
-                    "{INDENT}{INDENT}cnt += popcount64({s}[{last_i}]);"
+                    "{INDENT}{INDENT}z1 &= {s}[{num_words_m_1}] == 0x{mask:x};"
                 )?;
-                writeln!(f, "{INDENT}{INDENT}z1 &= {s}[{num_words_m_1}] == 0x{mask:x};")?;
             }
             writeln!(f, "{INDENT}{INDENT}z0 = z1 & (cnt % 2 == 1);")?;
             writeln!(f, "{INDENT}{INDENT}{d} = (z0 << 1) | z1;")?;

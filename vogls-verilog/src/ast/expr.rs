@@ -8,16 +8,16 @@ use super::statement::SystemTaskIdentifier;
 use super::{AstId, AstIdRange, AstItem, DecimalRef, HIdent, SizedNumberRef, StringRef};
 
 #[derive(Clone, Copy)]
-pub enum BitSlice {
-    MsbLsb(AstId<ConstantExpr>, AstId<ConstantExpr>),
-    PlusWidth(AstId<Expr>, AstId<ConstantExpr>),
-    MinusWidth(AstId<Expr>, AstId<ConstantExpr>),
+pub enum BitSlice<'a> {
+    MsbLsb(AstId<'a, ConstantExpr<'a>>, AstId<'a, ConstantExpr<'a>>),
+    PlusWidth(AstId<'a, Expr<'a>>, AstId<'a, ConstantExpr<'a>>),
+    MinusWidth(AstId<'a, Expr<'a>>, AstId<'a, ConstantExpr<'a>>),
 }
 
 #[derive(Clone, Copy)]
-pub struct Replication {
-    pub constant_expr: AstId<ConstantExpr>,
-    pub exprs: AstIdRange<Expr>,
+pub struct Replication<'a> {
+    pub constant_expr: AstId<'a, ConstantExpr<'a>>,
+    pub exprs: AstIdRange<'a, Expr<'a>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -63,21 +63,28 @@ pub enum BinaryOperator {
 }
 
 #[derive(Clone, Copy)]
-pub enum Expr {
-    Unary(UnaryOperator, AstId<Expr>),
-    Binary(BinaryOperator, AstId<Expr>, AstId<Expr>),
-    Concatenation(AstIdRange<Expr>),
-    Replication(Replication),
-    Ternary(AstId<Expr>, AstId<Expr>, AstId<Expr>),
-    Ident(HIdent, AstIdRange<Expr>, Option<BitSlice>),
-    FunctionCall(HIdent, AstIdRange<Expr>),
-    SystemFunctionCall(AstItem<SystemTaskIdentifier>, Option<AstIdRange<Expr>>),
+pub enum Expr<'a> {
+    Unary(UnaryOperator, AstId<'a, Expr<'a>>),
+    Binary(BinaryOperator, AstId<'a, Expr<'a>>, AstId<'a, Expr<'a>>),
+    Concatenation(AstIdRange<'a, Expr<'a>>),
+    Replication(Replication<'a>),
+    Ternary(
+        AstId<'a, Expr<'a>>,
+        AstId<'a, Expr<'a>>,
+        AstId<'a, Expr<'a>>,
+    ),
+    Ident(HIdent<'a>, AstIdRange<'a, Expr<'a>>, Option<BitSlice<'a>>),
+    FunctionCall(HIdent<'a>, AstIdRange<'a, Expr<'a>>),
+    SystemFunctionCall(
+        AstItem<SystemTaskIdentifier>,
+        Option<AstIdRange<'a, Expr<'a>>>,
+    ),
     Decimal(DecimalRef),
     Sized(AstItem<SizedNumberRef>),
     String(StringRef),
 }
 
-impl Expr {
+impl<'a> Expr<'a> {
     pub fn into_str_literal(&self) -> Option<StringRef> {
         match self {
             Expr::String(s) => Some(*s),
@@ -143,38 +150,38 @@ impl BinaryOperator {
     }
 }
 
-impl AstId<Expr> {
-    pub fn into_constant(self) -> AstId<ConstantExpr> {
+impl<'a> AstId<'a, Expr<'a>> {
+    pub fn into_constant(self) -> AstId<'a, ConstantExpr<'a>> {
         AstId {
-            node: unsafe { self.node.transmute() },
+            node: unsafe { std::mem::transmute(self.node) },
             loc: self.loc,
         }
     }
-    pub fn into_module_path_expr(self) -> AstId<ModulePathExpr> {
+    pub fn into_module_path_expr(self) -> AstId<'a, ModulePathExpr<'a>> {
         AstId {
-            node: unsafe { self.node.transmute() },
-            loc: self.loc,
-        }
-    }
-}
-impl AstId<ConstantExpr> {
-    pub fn into_expr(self) -> AstId<Expr> {
-        AstId {
-            node: unsafe { self.node.transmute() },
+            node: unsafe { std::mem::transmute(self.node) },
             loc: self.loc,
         }
     }
 }
-impl AstId<ModulePathExpr> {
-    pub fn into_expr(self) -> AstId<Expr> {
+impl<'a> AstId<'a, ConstantExpr<'a>> {
+    pub fn into_expr(self) -> AstId<'a, Expr<'a>> {
         AstId {
-            node: unsafe { self.node.transmute() },
+            node: unsafe { std::mem::transmute(self.node) },
+            loc: self.loc,
+        }
+    }
+}
+impl<'a> AstId<'a, ModulePathExpr<'a>> {
+    pub fn into_expr(self) -> AstId<'a, Expr<'a>> {
+        AstId {
+            node: unsafe { std::mem::transmute(self.node) },
             loc: self.loc,
         }
     }
 }
 
-impl Expr {
+impl<'a> Expr<'a> {
     pub fn tree_fmt(&self, arenas: &AstArenas, mut f: impl fmt::Write) -> fmt::Result {
         self.tree_fmt_impl(arenas, &mut f, 0)
     }
@@ -190,12 +197,12 @@ impl Expr {
         match self {
             Expr::Unary(op, child) => {
                 writeln!(f, "unary [{}]", op.into_str())?;
-                arenas.get(*child).tree_fmt_impl(arenas, f, depth + 1)?;
+                child.tree_fmt_impl(arenas, f, depth + 1)?;
             }
             Expr::Binary(op, lhs, rhs) => {
                 writeln!(f, "binary [{}]", op.into_str())?;
-                arenas.get(*lhs).tree_fmt_impl(arenas, f, depth + 1)?;
-                arenas.get(*rhs).tree_fmt_impl(arenas, f, depth + 1)?;
+                lhs.tree_fmt_impl(arenas, f, depth + 1)?;
+                rhs.tree_fmt_impl(arenas, f, depth + 1)?;
             }
             Expr::Concatenation(..) => f.write_str("concatenation")?,
             Expr::Replication(Replication {
@@ -203,45 +210,37 @@ impl Expr {
                 exprs,
             }) => {
                 writeln!(f, "replication")?;
-                arenas
-                    .get(constant_expr.into_expr())
+                constant_expr
+                    .into_expr()
                     .tree_fmt_impl(arenas, f, depth + 1)?;
                 for e in exprs.iter() {
-                    arenas.get(e).tree_fmt_impl(arenas, f, depth + 1)?;
+                    e.tree_fmt_impl(arenas, f, depth + 1)?;
                 }
             }
             Expr::Ternary(condition, truthy, falsy) => {
                 writeln!(f, "ternary")?;
-                arenas.get(*condition).tree_fmt_impl(arenas, f, depth + 1)?;
-                arenas.get(*truthy).tree_fmt_impl(arenas, f, depth + 1)?;
-                arenas.get(*falsy).tree_fmt_impl(arenas, f, depth + 1)?;
+                condition.tree_fmt_impl(arenas, f, depth + 1)?;
+                truthy.tree_fmt_impl(arenas, f, depth + 1)?;
+                falsy.tree_fmt_impl(arenas, f, depth + 1)?;
             }
             Expr::Ident(ident, expr, range_expr) => {
                 writeln!(f, "ident: {}", &arenas.ident_table[ident.ident.item.0])?;
                 for e in expr.iter() {
-                    arenas.get(e).tree_fmt_impl(arenas, f, depth + 1)?;
+                    e.tree_fmt_impl(arenas, f, depth + 1)?;
                 }
                 if let Some(range_expr) = range_expr {
                     match range_expr {
                         BitSlice::MsbLsb(msb, lsb) => {
-                            arenas
-                                .get(msb.into_expr())
-                                .tree_fmt_impl(arenas, f, depth + 1)?;
-                            arenas
-                                .get(lsb.into_expr())
-                                .tree_fmt_impl(arenas, f, depth + 1)?;
+                            msb.into_expr().tree_fmt_impl(arenas, f, depth + 1)?;
+                            lsb.into_expr().tree_fmt_impl(arenas, f, depth + 1)?;
                         }
                         BitSlice::PlusWidth(base, width) => {
-                            arenas.get(*base).tree_fmt_impl(arenas, f, depth + 1)?;
-                            arenas
-                                .get(width.into_expr())
-                                .tree_fmt_impl(arenas, f, depth + 1)?;
+                            base.tree_fmt_impl(arenas, f, depth + 1)?;
+                            width.into_expr().tree_fmt_impl(arenas, f, depth + 1)?;
                         }
                         BitSlice::MinusWidth(base, width) => {
-                            arenas.get(*base).tree_fmt_impl(arenas, f, depth + 1)?;
-                            arenas
-                                .get(width.into_expr())
-                                .tree_fmt_impl(arenas, f, depth + 1)?;
+                            base.tree_fmt_impl(arenas, f, depth + 1)?;
+                            width.into_expr().tree_fmt_impl(arenas, f, depth + 1)?;
                         }
                     }
                 }
@@ -249,14 +248,14 @@ impl Expr {
             Expr::FunctionCall(ident, exprs) => {
                 writeln!(f, "fn call: {}", &arenas.ident_table[ident.ident.item.0])?;
                 for e in exprs.iter() {
-                    arenas.get(e).tree_fmt_impl(arenas, f, depth + 1)?;
+                    e.tree_fmt_impl(arenas, f, depth + 1)?;
                 }
             }
             Expr::SystemFunctionCall(ident, exprs) => {
                 writeln!(f, "system fn call: {}", &arenas.ident_table[ident.item.0])?;
                 if let Some(exprs) = exprs {
                     for e in exprs.iter() {
-                        arenas.get(e).tree_fmt_impl(arenas, f, depth + 1)?;
+                        e.tree_fmt_impl(arenas, f, depth + 1)?;
                     }
                 }
             }

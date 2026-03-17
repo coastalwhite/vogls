@@ -16,13 +16,13 @@ pub fn lower<'a>(
     scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
     mut builder: BasicBlockBuilder,
-    conditional: AstId<ConditionalStatement>,
+    conditional: AstId<'a, ConditionalStatement<'a>>,
 ) -> Result<BasicBlockBuilder, ()> {
     let ConditionalStatement {
         if_branch,
         else_ifs,
         else_branch,
-    } = arenas.get(conditional);
+    } = &*conditional;
 
     let (condition, _) = lower_expr(
         gl,
@@ -51,7 +51,7 @@ pub fn lower<'a>(
     for else_if_branch in else_ifs.iter() {
         builder.update_branch_ref(gl, branch_ref, builder.key());
 
-        let else_if_branch = arenas.get(else_if_branch);
+        let else_if_branch = &*else_if_branch;
         let (condition, _) = lower_expr(
             gl,
             arenas,
@@ -102,21 +102,20 @@ pub fn lower_case_statement<'a>(
     scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
     mut builder: BasicBlockBuilder,
-    case_statement: AstId<CaseStatement>,
+    case_statement: AstId<'a, CaseStatement<'a>>,
 ) -> Result<BasicBlockBuilder, ()> {
     let CaseStatement {
         variant,
         expr,
         items,
-    } = arenas.get(case_statement);
+    } = &*case_statement;
 
     let (expr_var, expr_var_ty) = lower_expr(gl, arenas, scope, diagnostics, &mut builder, *expr)?;
 
     let mut origins = Vec::new();
     let mut default = None;
 
-    for item in items.iter() {
-        let case_item = arenas.get(item);
+    for case_item in items.iter() {
         let condition = match case_item.pattern.item {
             CaseItemPattern::Default => {
                 default = Some(case_item.statement_or_null);
@@ -193,9 +192,9 @@ pub fn lower_statement_or_null<'a>(
     scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
     builder: BasicBlockBuilder,
-    statement: AstId<StatementOrNull>,
+    statement: AstId<'a, StatementOrNull<'a>>,
 ) -> Result<BasicBlockBuilder, ()> {
-    match arenas.get(statement) {
+    match &*statement {
         StatementOrNull::Attribute(_) => Ok(builder),
         StatementOrNull::Statement(statement) => super::statements_to_process(
             gl,

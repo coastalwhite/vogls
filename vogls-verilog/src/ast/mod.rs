@@ -1,7 +1,8 @@
+use std::ops::Deref;
+
 use vogls_frontend::ident_table::IdentId;
 use vogls_ir::Bits;
 
-use crate::arena::{ArenaId, ArenaIdRange, ArenaIdRangeIter};
 use crate::number::{Base, Sign};
 
 use self::constant_expr::ConstantExpr;
@@ -14,16 +15,16 @@ pub mod specify;
 pub mod statement;
 pub mod udp;
 
-pub struct AstId<T> {
-    pub node: ArenaId<T>,
+pub struct AstId<'a, T> {
+    pub node: &'a T,
     pub loc: usize,
 }
-pub struct AstIdRange<T> {
-    pub node: ArenaIdRange<T>,
+pub struct AstIdRange<'a, T> {
+    pub node: &'a [T],
     pub loc: usize,
 }
 
-impl<T> Clone for AstId<T> {
+impl<'a, T> Clone for AstId<'a, T> {
     fn clone(&self) -> Self {
         Self {
             node: self.node,
@@ -31,9 +32,16 @@ impl<T> Clone for AstId<T> {
         }
     }
 }
-impl<T> Copy for AstId<T> {}
+impl<'a, T> Copy for AstId<'a, T> {}
 
-impl<T> Default for AstIdRange<T> {
+impl<'a, T> Deref for AstId<'a, T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        self.node
+    }
+}
+
+impl<'a, T> Default for AstIdRange<'a, T> {
     fn default() -> Self {
         Self {
             node: Default::default(),
@@ -41,7 +49,7 @@ impl<T> Default for AstIdRange<T> {
         }
     }
 }
-impl<T> Clone for AstIdRange<T> {
+impl<'a, T> Clone for AstIdRange<'a, T> {
     fn clone(&self) -> Self {
         Self {
             node: self.node,
@@ -49,23 +57,23 @@ impl<T> Clone for AstIdRange<T> {
         }
     }
 }
-impl<T> Copy for AstIdRange<T> {}
+impl<'a, T> Copy for AstIdRange<'a, T> {}
 
-impl<T> AstIdRange<T> {
-    pub fn first(self) -> Option<AstId<T>> {
+impl<'a, T> AstIdRange<'a, T> {
+    pub fn first(self) -> Option<AstId<'a, T>> {
         self.node.first().map(|node| AstId {
             node,
             loc: self.loc,
         })
     }
-    pub fn last(self) -> Option<AstId<T>> {
+    pub fn last(self) -> Option<AstId<'a, T>> {
         self.node.last().map(|node| AstId {
             node,
             loc: self.loc + self.len() - 1,
         })
     }
 
-    pub fn iter(self) -> AstIdRangeIter<T> {
+    pub fn iter(self) -> AstIdRangeIter<'a, T> {
         AstIdRangeIter {
             inner: self.node.iter(),
             loc: self.loc,
@@ -79,12 +87,12 @@ impl<T> AstIdRange<T> {
         self.len() == 0
     }
 
-    pub fn get(&self, i: usize) -> AstId<T> {
+    pub fn get(&self, i: usize) -> AstId<'a, T> {
         (*self).iter().nth(i).unwrap()
     }
 
-    pub fn pop_front(&mut self) -> Option<AstId<T>> {
-        let fst = self.node.pop_front()?;
+    pub fn pop_front(&mut self) -> Option<AstId<'a, T>> {
+        let (fst, _) = self.node.split_first()?;
         let fst = AstId {
             node: fst,
             loc: self.loc,
@@ -92,8 +100,8 @@ impl<T> AstIdRange<T> {
         self.loc += 1;
         Some(fst)
     }
-    pub fn pop_back(&mut self) -> Option<AstId<T>> {
-        let lst = self.node.pop_back()?;
+    pub fn pop_back(&mut self) -> Option<AstId<'a, T>> {
+        let (lst, _) = self.node.split_last()?;
         let lst = AstId {
             node: lst,
             loc: self.loc + self.len() - 1,
@@ -101,21 +109,21 @@ impl<T> AstIdRange<T> {
         Some(lst)
     }
 
-    pub fn single(id: AstId<T>) -> AstIdRange<T> {
+    pub fn single(id: AstId<'a, T>) -> Self {
         Self {
-            node: ArenaIdRange::single(id.node),
+            node: std::slice::from_ref(id.node),
             loc: id.loc,
         }
     }
 }
 
-pub struct AstIdRangeIter<T> {
-    inner: ArenaIdRangeIter<T>,
+pub struct AstIdRangeIter<'a, T> {
+    inner: std::slice::Iter<'a, T>,
     loc: usize,
 }
 
-impl<T> Iterator for AstIdRangeIter<T> {
-    type Item = AstId<T>;
+impl<'a, T> Iterator for AstIdRangeIter<'a, T> {
+    type Item = AstId<'a, T>;
     fn next(&mut self) -> Option<Self::Item> {
         let node = self.inner.next()?;
         let id = AstId {
@@ -129,7 +137,7 @@ impl<T> Iterator for AstIdRangeIter<T> {
         self.inner.size_hint()
     }
 }
-impl<T> DoubleEndedIterator for AstIdRangeIter<T> {
+impl<'a, T> DoubleEndedIterator for AstIdRangeIter<'a, T> {
     fn next_back(&mut self) -> Option<Self::Item> {
         let node = self.inner.next_back()?;
         let id = AstId {
@@ -139,10 +147,10 @@ impl<T> DoubleEndedIterator for AstIdRangeIter<T> {
         Some(id)
     }
 }
-impl<T> ExactSizeIterator for AstIdRangeIter<T> {}
-impl<T> IntoIterator for AstIdRange<T> {
-    type Item = AstId<T>;
-    type IntoIter = AstIdRangeIter<T>;
+impl<'a, T> ExactSizeIterator for AstIdRangeIter<'a, T> {}
+impl<'a, T> IntoIterator for AstIdRange<'a, T> {
+    type Item = AstId<'a, T>;
+    type IntoIter = AstIdRangeIter<'a, T>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.iter()
@@ -176,17 +184,17 @@ pub struct Identifier(pub IdentId);
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 508
 // hierarchical_identifier ::= { identifier [ [ constant_expression ] ] . } identifier
 #[derive(Clone, Copy)]
-pub struct HIdent {
-    pub components: AstIdRange<HIdentComponent>,
+pub struct HIdent<'a> {
+    pub components: AstIdRange<'a, HIdentComponent<'a>>,
     pub ident: AstItem<Identifier>,
 }
 #[derive(Clone, Copy)]
-pub struct HIdentComponent {
+pub struct HIdentComponent<'a> {
     pub ident: AstItem<Identifier>,
-    pub constant_expr: Option<AstId<ConstantExpr>>,
+    pub constant_expr: Option<AstId<'a, ConstantExpr<'a>>>,
 }
 
-impl From<AstItem<Identifier>> for HIdent {
+impl<'a> From<AstItem<Identifier>> for HIdent<'a> {
     fn from(ident: AstItem<Identifier>) -> Self {
         Self {
             components: AstIdRange::default(),
@@ -198,15 +206,15 @@ impl From<AstItem<Identifier>> for HIdent {
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 507
 // attribute_instance ::= (* attr_spec { , attr_spec } *)
 #[derive(Clone, Copy)]
-pub struct AttributeInstance(pub AstIdRange<AttrSpec>);
+pub struct AttributeInstance<'a>(pub AstIdRange<'a, AttrSpec<'a>>);
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 507
 // attr_spec ::= attr_name [ = constant_expression ]
 // attr_name ::= identifier
 #[derive(Clone, Copy)]
-pub struct AttrSpec {
+pub struct AttrSpec<'a> {
     pub attr_name: AstItem<Identifier>,
-    pub constant_expression: Option<AstId<ConstantExpr>>,
+    pub constant_expression: Option<AstId<'a, ConstantExpr<'a>>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 505
@@ -220,11 +228,11 @@ pub struct AttrSpec {
 // msb_constant_expression ::= constant_expression
 // lsb_constant_expression ::= constant_expression
 #[derive(Clone, Copy)]
-pub enum RangeExpression {
-    Expr(AstId<Expr>),
-    MsbLsb(AstId<ConstantExpr>, AstId<ConstantExpr>),
-    BasePlus(AstId<Expr>, AstId<ConstantExpr>),
-    BaseMinus(AstId<Expr>, AstId<ConstantExpr>),
+pub enum RangeExpression<'a> {
+    Expr(AstId<'a, Expr<'a>>),
+    MsbLsb(AstId<'a, ConstantExpr<'a>>, AstId<'a, ConstantExpr<'a>>),
+    BasePlus(AstId<'a, Expr<'a>>, AstId<'a, ConstantExpr<'a>>),
+    BaseMinus(AstId<'a, Expr<'a>>, AstId<'a, ConstantExpr<'a>>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

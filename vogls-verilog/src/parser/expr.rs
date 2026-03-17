@@ -1,31 +1,41 @@
 use vogls_ir::token_range::TokenRange;
 use vogls_utils::VgHashSet;
 
+use crate::arena::Arena;
 use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::expr::{BinaryOperator, BitSlice, Expr, Replication, UnaryOperator};
 use crate::ast::statement::SystemTaskIdentifier;
 use crate::ast::{AstId, AstIdRange, AstItem, DecimalRef, HIdent, SizedNumberRef, StringRef};
 use crate::parser::ParseErrorReason;
-use crate::parser::utils::item_parse;
+use crate::parser::utils::{item_parse, push, push_range};
 use crate::tokenizer::Token;
 
 use super::{AstArenas, Consumable, Diagnostics, ParserScratches, TokenWalker};
 
 pub(crate) type BindingPower = u8;
 
-pub(crate) enum StackItem {
+pub(crate) enum StackItem<'a> {
     Paren,
     Bracket,
-    Concatenation(Vec<Expr>, Vec<TokenRange>),
-    Replication(AstId<ConstantExpr>, Vec<Expr>, Vec<TokenRange>),
-    Brace(HIdent, Vec<Expr>, Vec<TokenRange>),
-    BraceS2(HIdent, AstIdRange<Expr>, AstId<Expr>, BraceVariant),
-    SystemFnCall(AstItem<SystemTaskIdentifier>, Vec<Expr>, Vec<TokenRange>),
-    FnCall(HIdent, Vec<Expr>, Vec<TokenRange>),
+    Concatenation(Vec<Expr<'a>>, Vec<TokenRange>),
+    Replication(AstId<'a, ConstantExpr<'a>>, Vec<Expr<'a>>, Vec<TokenRange>),
+    Brace(HIdent<'a>, Vec<Expr<'a>>, Vec<TokenRange>),
+    BraceS2(
+        HIdent<'a>,
+        AstIdRange<'a, Expr<'a>>,
+        AstId<'a, Expr<'a>>,
+        BraceVariant,
+    ),
+    SystemFnCall(
+        AstItem<SystemTaskIdentifier>,
+        Vec<Expr<'a>>,
+        Vec<TokenRange>,
+    ),
+    FnCall(HIdent<'a>, Vec<Expr<'a>>, Vec<TokenRange>),
     Unary(UnaryOperator),
-    Binary(BinaryOperator, AstId<Expr>),
-    TernaryS1(AstId<Expr>),
-    TernaryS2(AstId<Expr>, AstId<Expr>),
+    Binary(BinaryOperator, AstId<'a, Expr<'a>>),
+    TernaryS1(AstId<'a, Expr<'a>>),
+    TernaryS2(AstId<'a, Expr<'a>>, AstId<'a, Expr<'a>>),
 }
 
 pub(crate) enum BraceVariant {
@@ -84,11 +94,12 @@ fn token_to_binary_op(t: Token) -> Option<(u8, u8, BinaryOperator)> {
     }
 }
 
-impl<'a> Consumable<'a> for Expr {
+impl<'a> Consumable<'a> for Expr<'a> {
     fn consume(
-        tkw: &mut TokenWalker<'a>,
-        sc: &mut ParserScratches,
+        tkw: &mut TokenWalker<'_>,
+        sc: &mut ParserScratches<'a>,
         arenas: &mut AstArenas,
+        ast: &'a Arena,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ()> {
         use Token as T;
@@ -123,6 +134,7 @@ impl<'a> Consumable<'a> for Expr {
                                 exprs_sp: Vec::new(),
                             },
                             arenas,
+                            ast,
                             diagnostics.as_deref_mut(),
                         )?;
 
@@ -139,6 +151,7 @@ impl<'a> Consumable<'a> for Expr {
                             tkw,
                             sc,
                             arenas,
+                            ast,
                             diagnostics.as_deref_mut(),
                         )?;
 
@@ -161,8 +174,14 @@ impl<'a> Consumable<'a> for Expr {
                     }
                     T::Decimal => (
                         Expr::Decimal(
-                            item_parse::<DecimalRef>(tkw, sc, arenas, diagnostics.as_deref_mut())?
-                                .item,
+                            item_parse::<DecimalRef>(
+                                tkw,
+                                sc,
+                                arenas,
+                                ast,
+                                diagnostics.as_deref_mut(),
+                            )?
+                            .item,
                         ),
                         span,
                     ),
@@ -171,14 +190,21 @@ impl<'a> Consumable<'a> for Expr {
                             tkw,
                             sc,
                             arenas,
+                            ast,
                             diagnostics.as_deref_mut(),
                         )?),
                         span,
                     ),
                     T::String => (
                         Expr::String(
-                            item_parse::<StringRef>(tkw, sc, arenas, diagnostics.as_deref_mut())?
-                                .item,
+                            item_parse::<StringRef>(
+                                tkw,
+                                sc,
+                                arenas,
+                                ast,
+                                diagnostics.as_deref_mut(),
+                            )?
+                            .item,
                         ),
                         span,
                     ),
@@ -222,7 +248,7 @@ impl<'a> Consumable<'a> for Expr {
 
                         tkw.offset += 1;
                         let span = current.1;
-                        let condition = arenas.add_tuple(current);
+                        let condition = push(arenas, ast, current.0, current.1);
                         deepen!(StackItem::TernaryS1(condition), r_bp, span);
                     }
 
@@ -236,7 +262,7 @@ impl<'a> Consumable<'a> for Expr {
 
                     tkw.offset += 1;
                     let span = current.1;
-                    let lhs = arenas.add_tuple(current);
+                    let lhs = push(arenas, ast, current.0, current.1);
                     deepen!(StackItem::Binary(op, lhs), r_bp, span);
                 }
 
@@ -255,7 +281,7 @@ impl<'a> Consumable<'a> for Expr {
                     }
                     StackItem::Bracket => match *tkw.try_next(diagnostics.as_deref_mut())?.kind {
                         T::RightBracket => {
-                            let expr = arenas.add(current.0, current.1);
+                            let expr = push(arenas, ast, current.0, current.1);
                             let expr = AstIdRange::single(expr);
                             current = (Expr::Concatenation(expr), location);
                         }
@@ -267,7 +293,7 @@ impl<'a> Consumable<'a> for Expr {
                             );
                         }
                         T::LeftBracket => {
-                            let expr = arenas.add(current.0, current.1);
+                            let expr = push(arenas, ast, current.0, current.1);
                             let expr = expr.into_constant();
                             deepen!(StackItem::Replication(expr, Vec::new(), Vec::new()), 0, loc);
                         }
@@ -281,7 +307,7 @@ impl<'a> Consumable<'a> for Expr {
                         trs.push(current.1);
                         match *tkw.try_next(diagnostics.as_deref_mut())?.kind {
                             T::RightBracket => {
-                                let exprs = arenas.add_range(exprs, trs);
+                                let exprs = push_range(arenas, ast, exprs, trs);
                                 current = (Expr::Concatenation(exprs), location);
                             }
                             T::Comma => {
@@ -299,7 +325,7 @@ impl<'a> Consumable<'a> for Expr {
                         match *tkw.try_next(diagnostics.as_deref_mut())?.kind {
                             T::RightBracket => {
                                 tkw.next_expect(T::RightBracket, diagnostics.as_deref_mut())?;
-                                let exprs = arenas.add_range(exprs, trs);
+                                let exprs = push_range(arenas, ast, exprs, trs);
                                 current = (
                                     Expr::Replication(Replication {
                                         constant_expr,
@@ -329,13 +355,14 @@ impl<'a> Consumable<'a> for Expr {
                                         loc
                                     );
                                 } else {
-                                    let braced = arenas.add_range(current_braced, current_trs);
+                                    let braced =
+                                        push_range(arenas, ast, current_braced, current_trs);
                                     current = (Expr::Ident(ident, braced, None), location)
                                 }
                             }
                             T::Colon => {
-                                let exprs = arenas.add_range(current_braced, current_trs);
-                                let braced = arenas.add_tuple(current);
+                                let exprs = push_range(arenas, ast, current_braced, current_trs);
+                                let braced = push(arenas, ast, current.0, current.1);
                                 deepen!(
                                     StackItem::BraceS2(ident, exprs, braced, BraceVariant::MsbLsb),
                                     0,
@@ -343,8 +370,8 @@ impl<'a> Consumable<'a> for Expr {
                                 );
                             }
                             T::PlusColon => {
-                                let exprs = arenas.add_range(current_braced, current_trs);
-                                let braced = arenas.add_tuple(current);
+                                let exprs = push_range(arenas, ast, current_braced, current_trs);
+                                let braced = push(arenas, ast, current.0, current.1);
                                 deepen!(
                                     StackItem::BraceS2(
                                         ident,
@@ -357,8 +384,8 @@ impl<'a> Consumable<'a> for Expr {
                                 );
                             }
                             T::MinusColon => {
-                                let exprs = arenas.add_range(current_braced, current_trs);
-                                let braced = arenas.add_tuple(current);
+                                let exprs = push_range(arenas, ast, current_braced, current_trs);
+                                let braced = push(arenas, ast, current.0, current.1);
                                 deepen!(
                                     StackItem::BraceS2(
                                         ident,
@@ -377,7 +404,7 @@ impl<'a> Consumable<'a> for Expr {
                         }
                     }
                     StackItem::BraceS2(subject, exprs, lhs, variant) => {
-                        let rhs = arenas.add_tuple(current);
+                        let rhs = push(arenas, ast, current.0, current.1);
                         let bit_slice = match variant {
                             BraceVariant::MsbLsb => {
                                 BitSlice::MsbLsb(lhs.into_constant(), rhs.into_constant())
@@ -395,7 +422,7 @@ impl<'a> Consumable<'a> for Expr {
                         trs.push(current.1);
                         match *tkw.try_next(diagnostics.as_deref_mut())?.kind {
                             T::RightParen => {
-                                let params = arenas.add_range(params, trs);
+                                let params = push_range(arenas, ast, params, trs);
                                 current = (Expr::SystemFunctionCall(ident, Some(params)), location);
                             }
                             T::Comma => {
@@ -412,7 +439,7 @@ impl<'a> Consumable<'a> for Expr {
                         trs.push(current.1);
                         match *tkw.try_next(diagnostics.as_deref_mut())?.kind {
                             T::RightParen => {
-                                let params = arenas.add_range(params, trs);
+                                let params = push_range(arenas, ast, params, trs);
                                 current = (Expr::FunctionCall(ident, params), location);
                             }
                             T::Comma => {
@@ -425,20 +452,20 @@ impl<'a> Consumable<'a> for Expr {
                         }
                     }
                     StackItem::Unary(op) => {
-                        let subexpr = arenas.add_tuple(current);
+                        let subexpr = push(arenas, ast, current.0, current.1);
                         current = (Expr::Unary(op, subexpr), location)
                     }
                     StackItem::Binary(op, lhs) => {
-                        let rhs = arenas.add_tuple(current);
+                        let rhs = push(arenas, ast, current.0, current.1);
                         current = (Expr::Binary(op, lhs, rhs), location)
                     }
                     StackItem::TernaryS1(condition) => {
                         tkw.next_expect(T::Colon, diagnostics.as_deref_mut())?;
-                        let truthy = arenas.add_tuple(current);
+                        let truthy = push(arenas, ast, current.0, current.1);
                         deepen!(StackItem::TernaryS2(condition, truthy), bp, loc);
                     }
                     StackItem::TernaryS2(condition, truthy) => {
-                        let falsy = arenas.add_tuple(current);
+                        let falsy = push(arenas, ast, current.0, current.1);
                         current = (Expr::Ternary(condition, truthy, falsy), location)
                     }
                 }

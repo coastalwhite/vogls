@@ -14,12 +14,12 @@ pub fn lower_system_task_enable<'a>(
     scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
     mut builder: BasicBlockBuilder,
-    system_task_enable: AstId<SystemTaskEnable>,
+    system_task_enable: AstId<'a, SystemTaskEnable<'a>>,
 ) -> Result<BasicBlockBuilder, ()> {
     let SystemTaskEnable {
         system_task_identifier,
         expressions,
-    } = arenas.get(system_task_enable);
+    } = &*system_task_enable;
     let ident = &arenas.ident_table[system_task_identifier.item.0];
 
     match ident {
@@ -115,10 +115,7 @@ pub fn lower_system_task_enable<'a>(
 
         "dumpfile" => {
             assert!(expressions.len() <= 1);
-            let path = match expressions
-                .first()
-                .and_then(|e| arenas.get(e).into_str_literal())
-            {
+            let path = match expressions.first().and_then(|e| e.into_str_literal()) {
                 None => "dump.vcd".to_string(),
                 Some(str_literal) => {
                     arenas.text[str_literal.0.start..str_literal.0.end].to_string()
@@ -164,17 +161,17 @@ pub fn lower_write_arguments<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
     scope: &mut Scope<'a>,
-    system_task_enable: AstId<SystemTaskEnable>,
+    system_task_enable: AstId<'a, SystemTaskEnable<'a>>,
     builder: &mut BasicBlockBuilder,
     diagnostics: &mut Diagnostics,
 ) -> Result<(String, Vec<(usize, DynFormatArgument)>, Vec<VariableKey>), ()> {
-    let expressions = arenas.get(system_task_enable).expressions;
+    let expressions = system_task_enable.expressions;
     let mut format_string_content = String::new();
     let mut format_string_arguments = Vec::new();
     let mut format_string_args = Vec::new();
     let mut required_arguments_left = 0;
     for expr in expressions.iter() {
-        if let Some(str_literal) = arenas.get(expr).into_str_literal() {
+        if let Some(str_literal) = expr.into_str_literal() {
             let str_literal = &arenas.text[str_literal.0.start..str_literal.0.end];
 
             let mut at = 0;

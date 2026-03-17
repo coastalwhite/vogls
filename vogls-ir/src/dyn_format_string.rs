@@ -37,7 +37,11 @@ pub struct DynFormatArgument {
 
 impl Default for DynFormatArgument {
     fn default() -> Self {
-        Self { padding: Default::default(), base: Default::default(), prefix: true }
+        Self {
+            padding: Default::default(),
+            base: Default::default(),
+            prefix: true,
+        }
     }
 }
 
@@ -91,7 +95,7 @@ pub fn format_bits(
             } else {
                 BitsFormatBase::LowerHex
             }
-        },
+        }
         Base::Binary => BitsFormatBase::Binary,
         Base::Octal => BitsFormatBase::Octal,
         Base::Hexadecimal => BitsFormatBase::LowerHex,

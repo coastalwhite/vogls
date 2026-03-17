@@ -31,15 +31,14 @@ mod udp;
 mod utils;
 
 #[derive(Default)]
-pub struct ParserScratches {
+pub struct ParserScratches<'a> {
     /// A `scratchpad` to parse expressions
-    exprs_sp: Vec<(expr::StackItem, expr::BindingPower, TokenRange)>,
+    exprs_sp: Vec<(expr::StackItem<'a>, expr::BindingPower, TokenRange)>,
     udps: VgHashSet<IdentId>,
 }
 
 #[derive(Default)]
 pub struct AstArenas {
-    pub nodes: Arena,
     pub spans: Vec<TokenRange>,
     pub text: String,
     pub decimals: Vec<Bits>,
@@ -47,30 +46,16 @@ pub struct AstArenas {
     pub ident_table: IdentTable,
 }
 impl AstArenas {
-    fn add<T: Copy + 'static>(&mut self, item: T, range: TokenRange) -> AstId<T> {
+    pub fn add_tr(&mut self, tr: TokenRange) -> usize {
         let loc = self.spans.len();
-        self.spans.push(range);
-        AstId {
-            node: self.nodes.add(item),
-            loc,
-        }
+        self.spans.push(tr);
+        loc
     }
 
-    fn add_tuple<T: Copy + 'static>(&mut self, (item, span): (T, TokenRange)) -> AstId<T> {
-        self.add(item, span)
-    }
-
-    fn add_range<T: Copy + 'static>(
-        &mut self,
-        items: impl IntoIterator<Item = T>,
-        spans: impl IntoIterator<Item = TokenRange>,
-    ) -> AstIdRange<T> {
+    pub fn add_tr_range(&mut self, trs: impl IntoIterator<Item = TokenRange>) -> usize {
         let loc = self.spans.len();
-        self.spans.extend(spans);
-        AstIdRange {
-            node: self.nodes.extend(items),
-            loc,
-        }
+        self.spans.extend(trs);
+        loc
     }
 
     pub fn get_range_span<T: Copy>(&self, id: AstIdRange<T>) -> TokenRange {
@@ -84,13 +69,6 @@ impl AstArenas {
         self.spans[id.loc]
     }
 
-    pub fn get<T: Copy + 'static>(&self, id: AstId<T>) -> &T {
-        self.nodes.get(id.node)
-    }
-    pub fn get_mut<T: Copy + 'static>(&mut self, id: AstId<T>) -> &mut T {
-        self.nodes.get_mut(id.node)
-    }
-
     pub fn get_item_span<T: Copy>(&self, id: AstItem<T>) -> TokenRange {
         self.spans[id.loc]
     }
@@ -101,15 +79,14 @@ impl AstArenas {
 
     pub fn to_item<T: Copy + 'static>(&self, id: AstId<T>) -> AstItem<T> {
         AstItem {
-            item: *self.get(id),
+            item: *id,
             loc: id.loc,
         }
     }
 }
 
-pub struct Ast {
-    pub descriptions: AstIdRange<Description>,
-    pub arenas: AstArenas,
+pub struct Ast<'a> {
+    pub descriptions: AstIdRange<'a, Description<'a>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -164,17 +141,17 @@ pub struct ParseContext {
     default_nettype: Option<DefaultNettype>,
 }
 
-pub fn parse_file(
+pub fn parse_file<'a>(
     tkw: &mut TokenWalker<'_>,
-    scratches: &mut ParserScratches,
+    scratches: &mut ParserScratches<'a>,
     mut diagnostics: Option<&mut Diagnostics>,
+    arenas: &mut AstArenas,
+    ast: &'a Arena,
     ctx: &mut ParseContext,
-) -> Result<Ast, ()> {
+) -> Result<Ast<'a>, ()> {
     use Token as T;
 
-    let mut arenas = AstArenas::default();
-
-    // @NOTE 
+    // @NOTE
     // UDPs instantiations use the exact same syntax as module instantiations. In many cases, the
     // only differentiating item is the name. We, therefore, make an overview of all the UDPs
     // defined and use that to differentiate between them.
@@ -182,7 +159,7 @@ pub fn parse_file(
     for (i, t) in tkw.tokens.iter().enumerate() {
         if *t == T::KeywordPrimitive {
             tkw.offset = i + 1;
-            if let Ok(ident) = Identifier::consume(tkw, scratches, &mut arenas, None) {
+            if let Ok(ident) = Identifier::consume(tkw, scratches, arenas, &ast, None) {
                 scratches.udps.insert(ident.0);
             }
         }
@@ -196,7 +173,8 @@ pub fn parse_file(
         let attr_instances = utils::parse_zero_or_more_while_next::<AttributeInstance>(
             tkw,
             scratches,
-            &mut arenas,
+            arenas,
+            &ast,
             diagnostics.as_deref_mut(),
             |t| t == T::LeftParenStar,
         )?;
@@ -208,39 +186,34 @@ pub fn parse_file(
         match *t.kind {
             T::KeywordModule => {
                 let start = tkw.offset;
-                let module =
-                    parse::<Module>(tkw, scratches, &mut arenas, diagnostics.as_deref_mut())?;
-                {
-                    let module = arenas.get_mut(module);
-                    module.attribute_instances = attr_instances;
-                    module.default_nettype = ctx.default_nettype;
-                }
-
-                let token_range = TokenRange {
+                let mut module =
+                    Module::consume(tkw, scratches, arenas, &ast, diagnostics.as_deref_mut())?;
+                let tr = TokenRange {
                     start,
                     end: tkw.offset,
                 };
-                descriptions.push(Description::Module(module));
-                trs.push(token_range);
+
+                module.attribute_instances = attr_instances;
+                module.default_nettype = ctx.default_nettype;
+                descriptions.push(Description::Module(utils::push(arenas, ast, module, tr)));
+                trs.push(tr);
             }
             T::KeywordPrimitive => {
                 let start = tkw.offset;
-                let primitive = parse::<UdpDeclaration>(
+                let mut primitive = UdpDeclaration::consume(
                     tkw,
                     scratches,
-                    &mut arenas,
+                    arenas,
+                    &ast,
                     diagnostics.as_deref_mut(),
                 )?;
-                {
-                    let primitive = arenas.get_mut(primitive);
-                    primitive.attribute_instances = attr_instances;
-                }
-                let token_range = TokenRange {
+                let tr = TokenRange {
                     start,
                     end: tkw.offset,
                 };
-                descriptions.push(Description::Udp(primitive));
-                trs.push(token_range);
+                primitive.attribute_instances = attr_instances;
+                descriptions.push(Description::Udp(utils::push(arenas, ast, primitive, tr)));
+                trs.push(tr);
             }
             T::KeywordConfig => {
                 diagnostics.map(|d| d.incomplete(tkw.offset, "description::config"));
@@ -304,28 +277,26 @@ pub fn parse_file(
         }
     }
 
-    let descriptions = arenas.add_range(descriptions, trs);
-
-    Ok(Ast {
-        descriptions,
-        arenas,
-    })
+    let descriptions = utils::push_range(arenas, ast, descriptions, trs);
+    Ok(Ast { descriptions })
 }
 
-pub trait Consumable<'a>: Sized + Copy + 'static {
+pub trait Consumable<'a>: Sized + Copy {
     fn consume(
-        tkw: &mut TokenWalker<'a>,
-        sc: &mut ParserScratches,
+        tkw: &mut TokenWalker<'_>,
+        sc: &mut ParserScratches<'a>,
         arenas: &mut AstArenas,
+        ast: &'a Arena,
         diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ()>;
     fn try_consume(
-        tkw: &mut TokenWalker<'a>,
-        sc: &mut ParserScratches,
+        tkw: &mut TokenWalker<'_>,
+        sc: &mut ParserScratches<'a>,
         arenas: &mut AstArenas,
+        ast: &'a Arena,
     ) -> Option<Self> {
         let save = tkw.offset;
-        match Self::consume(tkw, sc, arenas, None) {
+        match Self::consume(tkw, sc, arenas, ast, None) {
             Ok(v) => Some(v),
             Err(_) => {
                 tkw.offset = save;
@@ -337,9 +308,10 @@ pub trait Consumable<'a>: Sized + Copy + 'static {
 
 impl<'a> Consumable<'a> for Identifier {
     fn consume(
-        tkw: &mut TokenWalker<'a>,
-        _sc: &mut ParserScratches,
+        tkw: &mut TokenWalker<'_>,
+        _sc: &mut ParserScratches<'a>,
         arenas: &mut AstArenas,
+        _ast: &'a Arena,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ()> {
         let t = tkw.next_expect(Token::Ident, diagnostics.as_deref_mut())?;
@@ -353,9 +325,10 @@ impl<'a> Consumable<'a> for Identifier {
 
 impl<'a> Consumable<'a> for DecimalRef {
     fn consume(
-        tkw: &mut TokenWalker<'a>,
-        _sc: &mut ParserScratches,
+        tkw: &mut TokenWalker<'_>,
+        _sc: &mut ParserScratches<'a>,
         arenas: &mut AstArenas,
+        _ast: &'a Arena,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ()> {
         let t = tkw.next_expect(Token::Decimal, diagnostics.as_deref_mut())?;
@@ -377,9 +350,10 @@ impl<'a> Consumable<'a> for DecimalRef {
 
 impl<'a> Consumable<'a> for SizedNumberRef {
     fn consume(
-        tkw: &mut TokenWalker<'a>,
-        _sc: &mut ParserScratches,
+        tkw: &mut TokenWalker<'_>,
+        _sc: &mut ParserScratches<'a>,
         arenas: &mut AstArenas,
+        _ast: &'a Arena,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ()> {
         let t = tkw.next_expect(Token::Number, diagnostics.as_deref_mut())?;
@@ -432,9 +406,10 @@ impl<'a> Consumable<'a> for SizedNumberRef {
 
 impl<'a> Consumable<'a> for StringRef {
     fn consume(
-        tkw: &mut TokenWalker<'a>,
-        _sc: &mut ParserScratches,
+        tkw: &mut TokenWalker<'_>,
+        _sc: &mut ParserScratches<'a>,
         arenas: &mut AstArenas,
+        _ast: &'a Arena,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ()> {
         let t = tkw.next_expect(Token::String, diagnostics.as_deref_mut())?;
@@ -465,11 +440,12 @@ impl<'a> Consumable<'a> for StringRef {
     }
 }
 
-impl<'a> Consumable<'a> for AttributeInstance {
+impl<'a> Consumable<'a> for AttributeInstance<'a> {
     fn consume(
-        tkw: &mut TokenWalker<'a>,
-        sc: &mut ParserScratches,
+        tkw: &mut TokenWalker<'_>,
+        sc: &mut ParserScratches<'a>,
         arenas: &mut AstArenas,
+        ast: &'a Arena,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ()> {
         use Token as T;
@@ -482,6 +458,7 @@ impl<'a> Consumable<'a> for AttributeInstance {
             tkw,
             sc,
             arenas,
+            ast,
             T::Comma,
             diagnostics.as_deref_mut(),
         )?;
@@ -491,11 +468,12 @@ impl<'a> Consumable<'a> for AttributeInstance {
     }
 }
 
-impl<'a> Consumable<'a> for AttrSpec {
+impl<'a> Consumable<'a> for AttrSpec<'a> {
     fn consume(
-        tkw: &mut TokenWalker<'a>,
-        sc: &mut ParserScratches,
+        tkw: &mut TokenWalker<'_>,
+        sc: &mut ParserScratches<'a>,
         arenas: &mut AstArenas,
+        ast: &'a Arena,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ()> {
         use Token as T;
@@ -504,13 +482,14 @@ impl<'a> Consumable<'a> for AttrSpec {
         // attr_spec ::= attr_name [ = constant_expression ]
         // attr_name ::= identifier
 
-        let attr_name = item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        let attr_name = item_parse::<Identifier>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
         let mut constant_expression = None;
         if tkw.next_if_equals(T::Equals) {
             constant_expression = Some(parse::<ConstantExpr>(
                 tkw,
                 sc,
                 arenas,
+                ast,
                 diagnostics.as_deref_mut(),
             )?);
         }
@@ -522,11 +501,12 @@ impl<'a> Consumable<'a> for AttrSpec {
     }
 }
 
-impl<'a> Consumable<'a> for HIdent {
+impl<'a> Consumable<'a> for HIdent<'a> {
     fn consume(
-        tkw: &mut TokenWalker<'a>,
-        sc: &mut ParserScratches,
+        tkw: &mut TokenWalker<'_>,
+        sc: &mut ParserScratches<'a>,
         arenas: &mut AstArenas,
+        ast: &'a Arena,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ()> {
         use Token as T;
@@ -540,7 +520,7 @@ impl<'a> Consumable<'a> for HIdent {
         let mut spans = Vec::new();
 
         loop {
-            let ident = item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+            let ident = item_parse::<Identifier>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
 
             let t = tkw.get(tkw.offset).map(|t| *t.kind);
             if t == Some(T::Dot) {
@@ -560,7 +540,7 @@ impl<'a> Consumable<'a> for HIdent {
 
                 if tkw.get(at + 1).map(|t| *t.kind) == Some(T::Dot) {
                     let constant_expr =
-                        parse::<ConstantExpr>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                        parse::<ConstantExpr>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
                     tkw.next_expect(T::RightBrace, diagnostics.as_deref_mut())?;
                     tkw.offset += 1;
                     items.push(HIdentComponent {
@@ -573,10 +553,11 @@ impl<'a> Consumable<'a> for HIdent {
                 tkw.offset -= 1;
             }
 
-            return Ok(HIdent {
-                components: arenas.add_range(items, spans),
-                ident,
-            });
+            let loc = arenas.add_tr_range(spans);
+            let node = ast.extend(items);
+            let components = AstIdRange { node, loc };
+
+            return Ok(HIdent { components, ident });
         }
     }
 }

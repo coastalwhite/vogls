@@ -12,7 +12,7 @@ pub fn lower<'a>(
     arenas: &'a AstArenas,
     diagnostics: &mut Diagnostics,
     scope: &mut Scope<'a>,
-    id: AstId<FunctionDeclaration>,
+    id: AstId<'a, FunctionDeclaration<'a>>,
 ) -> Result<(), ()> {
     let FunctionDeclaration {
         automatic: _,
@@ -21,7 +21,7 @@ pub fn lower<'a>(
         tf_input_decls: _,
         block_item_decls: _,
         statement,
-    } = arenas.get(id);
+    } = &*id;
 
     let builder = new_anonymous_builder(gl, "function".into(), arenas.get_span(id));
 
@@ -55,7 +55,7 @@ pub fn lower_task<'a>(
     arenas: &'a AstArenas,
     diagnostics: &mut Diagnostics,
     scope: &mut Scope<'a>,
-    id: AstId<TaskDeclaration>,
+    id: AstId<'a, TaskDeclaration<'a>>,
 ) -> Result<(), ()> {
     let TaskDeclaration {
         automatic: _,
@@ -63,7 +63,7 @@ pub fn lower_task<'a>(
         task_ports: _,
         block_item_decls: _,
         statement_or_null,
-    } = arenas.get(id);
+    } = &*id;
 
     let builder = new_anonymous_builder(gl, "task".into(), arenas.get_span(id));
 

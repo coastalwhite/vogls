@@ -4,7 +4,7 @@ use super::constant_expr::{ConstantExpr, ConstantRangeExpression};
 use super::expr::Expr;
 use super::module::BlockItemDeclaration;
 use super::{
-    AstId, AstIdRange, AstItem, AttributeInstance, DecimalRef, HIdent, Identifier, RangeExpression
+    AstId, AstIdRange, AstItem, AttributeInstance, DecimalRef, HIdent, Identifier, RangeExpression,
 };
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
@@ -24,35 +24,35 @@ use super::{
 //   | { attribute_instance } task_enable
 //   | { attribute_instance } wait_statement
 #[derive(Clone, Copy)]
-pub struct Statement {
-    pub attr_instances: AstIdRange<AttributeInstance>,
-    pub content: StatementContent,
+pub struct Statement<'a> {
+    pub attr_instances: AstIdRange<'a, AttributeInstance<'a>>,
+    pub content: StatementContent<'a>,
 }
 
 #[derive(Clone, Copy)]
-pub enum StatementContent {
-    BlockingAssignment(AstId<BlockingAssignment>),
-    CaseStatement(AstId<CaseStatement>),
-    ConditionalStatement(AstId<ConditionalStatement>),
+pub enum StatementContent<'a> {
+    BlockingAssignment(AstId<'a, BlockingAssignment<'a>>),
+    CaseStatement(AstId<'a, CaseStatement<'a>>),
+    ConditionalStatement(AstId<'a, ConditionalStatement<'a>>),
     DisableStatement,
     EventTrigger,
-    LoopStatement(AstId<LoopStatement>),
-    NonBlockingAssignment(AstId<NonBlockingAssignment>),
-    ParBlock(AstId<ParBlock>),
+    LoopStatement(AstId<'a, LoopStatement<'a>>),
+    NonBlockingAssignment(AstId<'a, NonBlockingAssignment<'a>>),
+    ParBlock(AstId<'a, ParBlock<'a>>),
     ProceduralContinuousAssignments,
-    ProceduralTimingControlStatement(AstId<ProceduralTimingControlStatement>),
-    SeqBlock(AstId<SeqBlock>),
-    SystemTaskEnable(AstId<SystemTaskEnable>),
-    TaskEnable(AstId<TaskEnable>),
-    WaitStatement(AstId<WaitStatement>),
+    ProceduralTimingControlStatement(AstId<'a, ProceduralTimingControlStatement<'a>>),
+    SeqBlock(AstId<'a, SeqBlock<'a>>),
+    SystemTaskEnable(AstId<'a, SystemTaskEnable<'a>>),
+    TaskEnable(AstId<'a, TaskEnable<'a>>),
+    WaitStatement(AstId<'a, WaitStatement<'a>>),
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 499
 // procedural_timing_control_statement ::= procedural_timing_control statement_or_null
 #[derive(Clone, Copy)]
-pub struct ProceduralTimingControlStatement {
-    pub procedural_timing_control: AstId<ProceduralTimingControl>,
-    pub statement_or_null: AstId<StatementOrNull>,
+pub struct ProceduralTimingControlStatement<'a> {
+    pub procedural_timing_control: AstId<'a, ProceduralTimingControl<'a>>,
+    pub statement_or_null: AstId<'a, StatementOrNull<'a>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 506
@@ -60,12 +60,12 @@ pub struct ProceduralTimingControlStatement {
 //   hierarchical_net_identifier [ { [ constant_expression ] } [ constant_range_expression ] ]
 // | { net_lvalue { , net_lvalue } }
 #[derive(Clone, Copy)]
-pub struct NetLValue(pub AstIdRange<NetLValueFlat>);
+pub struct NetLValue<'a>(pub AstIdRange<'a, NetLValueFlat<'a>>);
 #[derive(Clone, Copy)]
-pub struct NetLValueFlat {
-    pub ident: HIdent,
-    pub constant_exprs: AstIdRange<ConstantExpr>,
-    pub constant_range_expression: Option<AstId<ConstantRangeExpression>>,
+pub struct NetLValueFlat<'a> {
+    pub ident: HIdent<'a>,
+    pub constant_exprs: AstIdRange<'a, ConstantExpr<'a>>,
+    pub constant_range_expression: Option<AstId<'a, ConstantRangeExpression<'a>>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 506
@@ -73,17 +73,17 @@ pub struct NetLValueFlat {
 //   hierarchical_variable_identifier [ { [ expression ] } [ range_expression ] ]
 //   | { variable_lvalue { , variable_lvalue } }
 #[derive(Clone, Copy)]
-pub struct VariableLValue(pub AstIdRange<VariableLValueFlat>);
+pub struct VariableLValue<'a>(pub AstIdRange<'a, VariableLValueFlat<'a>>);
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 506
 // variable_lvalue ::=
 //   hierarchical_variable_identifier [ { [ expression ] } [ range_expression ] ]
 //   | { variable_lvalue { , variable_lvalue } }
 #[derive(Clone, Copy)]
-pub struct VariableLValueFlat {
-    pub ident: HIdent,
-    pub exprs: AstIdRange<Expr>,
-    pub range_expression: Option<AstId<RangeExpression>>,
+pub struct VariableLValueFlat<'a> {
+    pub ident: HIdent<'a>,
+    pub exprs: AstIdRange<'a, Expr<'a>>,
+    pub range_expression: Option<AstId<'a, RangeExpression<'a>>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
@@ -92,9 +92,9 @@ pub struct VariableLValueFlat {
 //   | event_control
 //   | repeat ( expression ) event_control
 #[derive(Clone, Copy)]
-pub enum DelayOrEventControl {
-    DelayControl(AstId<DelayControl>),
-    EventControl(AstId<EventControl>),
+pub enum DelayOrEventControl<'a> {
+    DelayControl(AstId<'a, DelayControl<'a>>),
+    EventControl(AstId<'a, EventControl<'a>>),
     // @Incomplete
 }
 
@@ -103,9 +103,9 @@ pub enum DelayOrEventControl {
 //   # delay_value
 // | # ( mintypmax_expression )
 #[derive(Clone, Copy)]
-pub enum DelayControl {
-    DelayValue(AstId<DelayValue>),
-    MinTypMax(AstId<MinTypMaxExpression>),
+pub enum DelayControl<'a> {
+    DelayValue(AstId<'a, DelayValue>),
+    MinTypMax(AstId<'a, MinTypMaxExpression<'a>>),
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 505
@@ -113,9 +113,9 @@ pub enum DelayControl {
 //   expression
 // | expression : expression : expression
 #[derive(Clone, Copy)]
-pub struct MinTypMaxExpression {
-    pub typical: AstId<Expr>,
-    pub min_max: Option<(AstId<Expr>, AstId<Expr>)>,
+pub struct MinTypMaxExpression<'a> {
+    pub typical: AstId<'a, Expr<'a>>,
+    pub min_max: Option<(AstId<'a, Expr<'a>>, AstId<'a, Expr<'a>>)>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
@@ -125,11 +125,11 @@ pub struct MinTypMaxExpression {
 // | @*
 // | @ (*)
 #[derive(Clone, Copy)]
-pub enum EventControl {
+pub enum EventControl<'a> {
     // @Incomplete: @ hierarchical_event_identifier
     Star,
-    EventExpression(EventExpression), // @Incomplete: | @*
-                                      // @Incomplete: | @ (*)
+    EventExpression(EventExpression<'a>), // @Incomplete: | @*
+                                          // @Incomplete: | @ (*)
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
@@ -140,10 +140,10 @@ pub enum EventControl {
 // | event_expression or event_expression
 // | event_expression, event_expression
 #[derive(Clone, Copy)]
-pub enum EventExpressionPrimary {
-    Expression(AstId<Expr>),
-    Posedge(AstId<Expr>),
-    Negedge(AstId<Expr>),
+pub enum EventExpressionPrimary<'a> {
+    Expression(AstId<'a, Expr<'a>>),
+    Posedge(AstId<'a, Expr<'a>>),
+    Negedge(AstId<'a, Expr<'a>>),
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
@@ -154,7 +154,7 @@ pub enum EventExpressionPrimary {
 // | event_expression or event_expression
 // | event_expression, event_expression
 #[derive(Clone, Copy)]
-pub struct EventExpression(pub AstIdRange<EventExpressionPrimary>);
+pub struct EventExpression<'a>(pub AstIdRange<'a, EventExpressionPrimary<'a>>);
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 491
 // delay_value ::=
@@ -170,19 +170,19 @@ pub enum DelayValue {
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
 // blocking_assignment ::= variable_lvalue = [ delay_or_event_control ] expression
 #[derive(Clone, Copy)]
-pub struct BlockingAssignment {
-    pub variable_lvalue: AstId<VariableLValue>,
-    pub delay_or_event_control: Option<AstId<DelayOrEventControl>>,
-    pub expression: AstId<Expr>,
+pub struct BlockingAssignment<'a> {
+    pub variable_lvalue: AstId<'a, VariableLValue<'a>>,
+    pub delay_or_event_control: Option<AstId<'a, DelayOrEventControl<'a>>>,
+    pub expression: AstId<'a, Expr<'a>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
 // nonblocking_assignment ::= variable_lvalue <= [ delay_or_event_control ] expression
 #[derive(Clone, Copy)]
-pub struct NonBlockingAssignment {
-    pub variable_lvalue: AstId<VariableLValue>,
-    pub delay_or_event_control: Option<AstId<DelayOrEventControl>>,
-    pub expression: AstId<Expr>,
+pub struct NonBlockingAssignment<'a> {
+    pub variable_lvalue: AstId<'a, VariableLValue<'a>>,
+    pub delay_or_event_control: Option<AstId<'a, DelayOrEventControl<'a>>>,
+    pub expression: AstId<'a, Expr<'a>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 499
@@ -190,41 +190,41 @@ pub struct NonBlockingAssignment {
 //   delay_control
 // | event_control
 #[derive(Clone, Copy)]
-pub enum ProceduralTimingControl {
-    DelayControl(AstId<DelayControl>),
-    EventControl(AstId<EventControl>),
+pub enum ProceduralTimingControl<'a> {
+    DelayControl(AstId<'a, DelayControl<'a>>),
+    EventControl(AstId<'a, EventControl<'a>>),
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
 // par_block ::= fork [ : block_identifier { block_item_declaration } ] { statement } join
 #[derive(Clone, Copy)]
-pub struct ParBlock {
-    pub block: Option<AstId<Block>>,
-    pub statements: AstIdRange<Statement>,
+pub struct ParBlock<'a> {
+    pub block: Option<AstId<'a, Block<'a>>>,
+    pub statements: AstIdRange<'a, Statement<'a>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
 // seq_block ::= begin [ : block_identifier { block_item_declaration } ] { statement } end
 #[derive(Clone, Copy)]
-pub struct SeqBlock {
-    pub block: Option<AstId<Block>>,
-    pub statements: AstIdRange<Statement>,
+pub struct SeqBlock<'a> {
+    pub block: Option<AstId<'a, Block<'a>>>,
+    pub statements: AstIdRange<'a, Statement<'a>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
 // block_identifier { block_item_declaration }
 #[derive(Clone, Copy)]
-pub struct Block {
+pub struct Block<'a> {
     pub block_identifier: AstItem<Identifier>,
-    pub block_item_decls: AstIdRange<BlockItemDeclaration>,
+    pub block_item_decls: AstIdRange<'a, BlockItemDeclaration<'a>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 499
 // system_task_enable ::= system_task_identifier [ ( [ expression ] { , [ expression ] } ) ] ;
 #[derive(Clone, Copy)]
-pub struct SystemTaskEnable {
+pub struct SystemTaskEnable<'a> {
     pub system_task_identifier: AstItem<SystemTaskIdentifier>,
-    pub expressions: AstIdRange<Expr>,
+    pub expressions: AstIdRange<'a, Expr<'a>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 508
@@ -235,9 +235,9 @@ pub struct SystemTaskIdentifier(pub IdentId);
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
 // variable_assignment ::= variable_lvalue = expression
 #[derive(Clone, Copy)]
-pub struct VariableAssignment {
-    pub lvalue: AstId<VariableLValue>,
-    pub expr: AstId<Expr>,
+pub struct VariableAssignment<'a> {
+    pub lvalue: AstId<'a, VariableLValue<'a>>,
+    pub expr: AstId<'a, Expr<'a>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 499
@@ -247,20 +247,20 @@ pub struct VariableAssignment {
 // | while ( expression ) statement
 // | for ( variable_assignment ; expression ; variable_assignment ) statement
 #[derive(Clone, Copy)]
-pub struct LoopStatement {
-    pub variant: LoopStatementVariant,
-    pub statement: AstId<Statement>,
+pub struct LoopStatement<'a> {
+    pub variant: LoopStatementVariant<'a>,
+    pub statement: AstId<'a, Statement<'a>>,
 }
 
 #[derive(Clone, Copy)]
-pub enum LoopStatementVariant {
+pub enum LoopStatementVariant<'a> {
     Forever,
-    Repeat(AstId<Expr>),
-    While(AstId<Expr>),
+    Repeat(AstId<'a, Expr<'a>>),
+    While(AstId<'a, Expr<'a>>),
     For(
-        AstId<VariableAssignment>,
-        AstId<Expr>,
-        AstId<VariableAssignment>,
+        AstId<'a, VariableAssignment<'a>>,
+        AstId<'a, Expr<'a>>,
+        AstId<'a, VariableAssignment<'a>>,
     ),
 }
 
@@ -270,10 +270,10 @@ pub enum LoopStatementVariant {
 // | casez ( expression ) case_item { case_item } endcase
 // | casex ( expression ) case_item { case_item } endcase
 #[derive(Clone, Copy)]
-pub struct CaseStatement {
+pub struct CaseStatement<'a> {
     pub variant: CaseStatementVariant,
-    pub expr: AstId<Expr>,
-    pub items: AstIdRange<CaseItem>,
+    pub expr: AstId<'a, Expr<'a>>,
+    pub items: AstIdRange<'a, CaseItem<'a>>,
 }
 
 #[derive(Clone, Copy)]
@@ -288,23 +288,23 @@ pub enum CaseStatementVariant {
 //   expression { , expression } : statement_or_null
 // | default [ : ] statement_or_null
 #[derive(Clone, Copy)]
-pub struct CaseItem {
-    pub pattern: AstItem<CaseItemPattern>,
-    pub statement_or_null: AstId<StatementOrNull>,
+pub struct CaseItem<'a> {
+    pub pattern: AstItem<CaseItemPattern<'a>>,
+    pub statement_or_null: AstId<'a, StatementOrNull<'a>>,
 }
 
 #[derive(Clone, Copy)]
-pub enum CaseItemPattern {
+pub enum CaseItemPattern<'a> {
     Default,
-    Expressions(AstIdRange<Expr>),
+    Expressions(AstIdRange<'a, Expr<'a>>),
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
 // statement_or_null ::= statement | { attribute_instance } ;
 #[derive(Clone, Copy)]
-pub enum StatementOrNull {
-    Attribute(AstIdRange<AttributeInstance>),
-    Statement(AstId<Statement>),
+pub enum StatementOrNull<'a> {
+    Attribute(AstIdRange<'a, AttributeInstance<'a>>),
+    Statement(AstId<'a, Statement<'a>>),
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 499
@@ -317,30 +317,30 @@ pub enum StatementOrNull {
 //   { else if ( expression ) statement_or_null }
 //   [ else statement_or_null ]
 #[derive(Clone, Copy)]
-pub struct ConditionalStatement {
-    pub if_branch: IfBranch,
-    pub else_ifs: AstIdRange<IfBranch>,
-    pub else_branch: Option<AstId<StatementOrNull>>,
+pub struct ConditionalStatement<'a> {
+    pub if_branch: IfBranch<'a>,
+    pub else_ifs: AstIdRange<'a, IfBranch<'a>>,
+    pub else_branch: Option<AstId<'a, StatementOrNull<'a>>>,
 }
 
 #[derive(Clone, Copy)]
-pub struct IfBranch {
-    pub condition: AstId<Expr>,
-    pub statement: AstId<StatementOrNull>,
+pub struct IfBranch<'a> {
+    pub condition: AstId<'a, Expr<'a>>,
+    pub statement: AstId<'a, StatementOrNull<'a>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 499
 // task_enable ::= hierarchical_task_identifier [ ( expression { , expression } ) ] ;
 #[derive(Clone, Copy)]
-pub struct TaskEnable {
+pub struct TaskEnable<'a> {
     pub ident: AstItem<Identifier>,
-    pub exprs: AstIdRange<Expr>,
+    pub exprs: AstIdRange<'a, Expr<'a>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 499
 // wait_statement ::= wait ( expression ) statement_or_null
 #[derive(Clone, Copy)]
-pub struct WaitStatement {
-    pub expression: AstId<Expr>,
-    pub statement_or_null: AstId<StatementOrNull>,
+pub struct WaitStatement<'a> {
+    pub expression: AstId<'a, Expr<'a>>,
+    pub statement_or_null: AstId<'a, StatementOrNull<'a>>,
 }

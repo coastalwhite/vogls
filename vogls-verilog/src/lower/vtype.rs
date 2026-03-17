@@ -1,4 +1,4 @@
-use vogls_ir::{VectorSize, SCALAR_VSIZE};
+use vogls_ir::{SCALAR_VSIZE, VectorSize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum VType {

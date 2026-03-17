@@ -87,7 +87,7 @@ pub fn get_temporal_variables(
 
     temporal_roots: &mut IndexSet<BasicBlockKey>,
     temporal: &mut VgHashMap<BasicBlockKey, usize>,
-    
+
     variable_to_tmr_map: &mut VgHashMap<VariableKey, usize>,
     temporal_variables: &mut VgHashSet<VariableKey>,
 ) {

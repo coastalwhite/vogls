@@ -32,9 +32,9 @@ pub fn lower_statement_or_null<'a>(
     scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
     builder: BasicBlockBuilder,
-    statement: AstId<StatementOrNull>,
+    statement: AstId<'a, StatementOrNull<'a>>,
 ) -> Result<BasicBlockBuilder, ()> {
-    match arenas.get(statement) {
+    match &*statement {
         StatementOrNull::Attribute(_) => Ok(builder),
         StatementOrNull::Statement(statement) => statements_to_process(
             gl,
@@ -53,18 +53,17 @@ pub fn statements_to_process<'a>(
     scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
     mut builder: BasicBlockBuilder,
-    stmts: AstIdRange<Statement>,
+    stmts: AstIdRange<'a, Statement<'a>>,
 ) -> Result<BasicBlockBuilder, ()> {
     use StatementContent as S;
     for statement in stmts.iter() {
-        match arenas.get(statement).content {
+        match statement.content {
             S::BlockingAssignment(ba) => {
-                let ba = arenas.get(ba);
                 let BlockingAssignment {
                     variable_lvalue,
                     delay_or_event_control,
                     expression,
-                } = ba;
+                } = &*ba;
                 assert!(delay_or_event_control.is_none());
 
                 let (value, value_ty) =
@@ -111,7 +110,7 @@ pub fn statements_to_process<'a>(
                     variable_lvalue,
                     delay_or_event_control,
                     expression,
-                } = arenas.get(nba);
+                } = &*nba;
                 assert!(delay_or_event_control.is_none());
 
                 let (value, value_ty) =
@@ -138,7 +137,7 @@ pub fn statements_to_process<'a>(
                 let ProceduralTimingControlStatement {
                     procedural_timing_control,
                     statement_or_null,
-                } = arenas.get(id);
+                } = &*id;
                 builder = procedural_timing_control::lower(
                     gl,
                     arenas,
@@ -150,14 +149,14 @@ pub fn statements_to_process<'a>(
                 )?
             }
             S::SeqBlock(id) => {
-                let SeqBlock { block, statements } = arenas.get(id);
+                let SeqBlock { block, statements } = &*id;
 
                 let scope_key = match block {
                     Some(blk) => try_resolve_symbol_id(
                         scope.key,
                         scope.table,
                         arenas,
-                        arenas.get(*blk).block_identifier,
+                        blk.block_identifier,
                         diagnostics,
                     )?,
                     None => scope.key,
@@ -167,6 +166,7 @@ pub fn statements_to_process<'a>(
                     table: scope.table,
                     key: scope_key,
                     udps: scope.udps,
+                    table_ast_refs: scope.table_ast_refs,
                     signal_aliases: scope.signal_aliases,
                     tokenized: scope.tokenized,
                 };
@@ -181,14 +181,14 @@ pub fn statements_to_process<'a>(
                 )?;
             }
             S::ParBlock(id) => {
-                let ParBlock { block, statements } = arenas.get(id);
+                let ParBlock { block, statements } = &*id;
 
                 let scope_key = match block {
                     Some(blk) => try_resolve_symbol_id(
                         scope.key,
                         scope.table,
                         arenas,
-                        arenas.get(*blk).block_identifier,
+                        blk.block_identifier,
                         diagnostics,
                     )?,
                     None => scope.key,
@@ -198,6 +198,7 @@ pub fn statements_to_process<'a>(
                     table: scope.table,
                     key: scope_key,
                     udps: scope.udps,
+                    table_ast_refs: scope.table_ast_refs,
                     signal_aliases: scope.signal_aliases,
                     tokenized: scope.tokenized,
                 };
@@ -275,7 +276,7 @@ pub fn statements_to_process<'a>(
                 )?;
             }
             S::TaskEnable(id) => {
-                let TaskEnable { ident, exprs } = arenas.get(id);
+                let TaskEnable { ident, exprs } = &*id;
                 builder =
                     lower_task_enable(gl, arenas, scope, diagnostics, builder, *ident, *exprs)?;
             }
@@ -283,7 +284,7 @@ pub fn statements_to_process<'a>(
                 let WaitStatement {
                     expression,
                     statement_or_null,
-                } = arenas.get(id);
+                } = &*id;
 
                 builder = builder.jump(gl);
                 let (condition, _) = expression::lower_expr(
@@ -329,23 +330,23 @@ pub fn get_used_signals<'a>(
     scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
     signals: &mut OrderedSet<SignalKey>,
-    stmt: AstId<Statement>,
+    stmt: AstId<'a, Statement<'a>>,
 ) -> Result<(), ()> {
     let mut error = false;
-    match arenas.get(stmt).content {
+    match stmt.content {
         StatementContent::CaseStatement(id) => {
             let CaseStatement {
                 variant: _,
                 expr,
                 items,
-            } = arenas.get(id);
+            } = &*id;
             error |=
                 expression::get_used_signals(arenas, scope, diagnostics, signals, *expr).is_err();
             for item in items.iter() {
                 let CaseItem {
                     pattern,
                     statement_or_null,
-                } = arenas.get(item);
+                } = &*item;
                 match pattern.item {
                     CaseItemPattern::Default => {}
                     CaseItemPattern::Expressions(exprs) => {
@@ -377,7 +378,7 @@ pub fn get_used_signals<'a>(
                 if_branch,
                 else_ifs,
                 else_branch,
-            } = arenas.get(id);
+            } = &*id;
             error |= expression::get_used_signals(
                 arenas,
                 scope,
@@ -395,7 +396,6 @@ pub fn get_used_signals<'a>(
             )
             .is_err();
             for else_if in else_ifs.iter() {
-                let else_if = arenas.get(else_if);
                 error |= expression::get_used_signals(
                     arenas,
                     scope,
@@ -427,7 +427,7 @@ pub fn get_used_signals<'a>(
         StatementContent::DisableStatement => todo!(),
         StatementContent::EventTrigger => todo!(),
         StatementContent::LoopStatement(id) => {
-            let LoopStatement { variant, statement } = arenas.get(id);
+            let LoopStatement { variant, statement } = &*id;
             match variant {
                 LoopStatementVariant::Forever => {}
                 LoopStatementVariant::Repeat(expr) | LoopStatementVariant::While(expr) => {
@@ -439,11 +439,11 @@ pub fn get_used_signals<'a>(
                     let VariableAssignment {
                         lvalue: initialization_lvalue,
                         expr: initialization,
-                    } = arenas.get(*initialization);
+                    } = &**initialization;
                     let VariableAssignment {
                         lvalue: step_lvalue,
                         expr: step,
-                    } = arenas.get(*step);
+                    } = &**step;
 
                     for lvalue in [*initialization_lvalue, *step_lvalue] {
                         error |= get_variable_lvalue_used_signals(
@@ -471,7 +471,7 @@ pub fn get_used_signals<'a>(
                 variable_lvalue,
                 delay_or_event_control,
                 expression,
-            } = arenas.get(id);
+            } = &*id;
 
             error |= get_variable_lvalue_used_signals(
                 arenas,
@@ -499,7 +499,7 @@ pub fn get_used_signals<'a>(
                 variable_lvalue,
                 delay_or_event_control,
                 expression,
-            } = arenas.get(id);
+            } = &*id;
 
             error |= get_variable_lvalue_used_signals(
                 arenas,
@@ -528,9 +528,9 @@ pub fn get_used_signals<'a>(
             let ProceduralTimingControlStatement {
                 procedural_timing_control,
                 statement_or_null,
-            } = arenas.get(id);
+            } = &*id;
 
-            match arenas.get(*procedural_timing_control) {
+            match &**procedural_timing_control {
                 ProceduralTimingControl::DelayControl(id) => {
                     error |=
                         get_delay_control_used_signals(arenas, scope, diagnostics, signals, *id)
@@ -545,13 +545,13 @@ pub fn get_used_signals<'a>(
             get_used_signals_stmt_or_null(arenas, scope, diagnostics, signals, *statement_or_null)?;
         }
         StatementContent::SeqBlock(id) => {
-            let SeqBlock { block, statements } = arenas.get(id);
+            let SeqBlock { block, statements } = &*id;
             let scope_key = match block {
                 Some(blk) => try_resolve_symbol_id(
                     scope.key,
                     scope.table,
                     arenas,
-                    arenas.get(*blk).block_identifier,
+                    blk.block_identifier,
                     diagnostics,
                 )?,
                 None => scope.key,
@@ -560,6 +560,7 @@ pub fn get_used_signals<'a>(
                 table: scope.table,
                 key: scope_key,
                 udps: scope.udps,
+                table_ast_refs: scope.table_ast_refs,
                 signal_aliases: scope.signal_aliases,
                 tokenized: scope.tokenized,
             };
@@ -568,13 +569,13 @@ pub fn get_used_signals<'a>(
             }
         }
         StatementContent::ParBlock(id) => {
-            let ParBlock { block, statements } = arenas.get(id);
+            let ParBlock { block, statements } = &*id;
             let scope_key = match block {
                 Some(blk) => try_resolve_symbol_id(
                     scope.key,
                     scope.table,
                     arenas,
-                    arenas.get(*blk).block_identifier,
+                    blk.block_identifier,
                     diagnostics,
                 )?,
                 None => scope.key,
@@ -583,6 +584,7 @@ pub fn get_used_signals<'a>(
                 table: scope.table,
                 key: scope_key,
                 udps: scope.udps,
+                table_ast_refs: scope.table_ast_refs,
                 signal_aliases: scope.signal_aliases,
                 tokenized: scope.tokenized,
             };
@@ -595,13 +597,13 @@ pub fn get_used_signals<'a>(
             let SystemTaskEnable {
                 system_task_identifier: _,
                 expressions,
-            } = arenas.get(id);
+            } = &*id;
             for expr in expressions.iter() {
                 expression::get_used_signals(arenas, scope, diagnostics, signals, expr)?;
             }
         }
         StatementContent::TaskEnable(id) => {
-            let TaskEnable { ident: _, exprs } = arenas.get(id);
+            let TaskEnable { ident: _, exprs } = &*id;
             for expr in exprs.iter() {
                 expression::get_used_signals(arenas, scope, diagnostics, signals, expr)?;
             }
@@ -610,7 +612,7 @@ pub fn get_used_signals<'a>(
             let WaitStatement {
                 expression,
                 statement_or_null,
-            } = arenas.get(id);
+            } = &*id;
             expression::get_used_signals(arenas, scope, diagnostics, signals, *expression)?;
             get_used_signals_stmt_or_null(arenas, scope, diagnostics, signals, *statement_or_null)?;
         }
@@ -623,9 +625,9 @@ pub fn get_used_signals_stmt_or_null<'a>(
     scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
     signals: &mut OrderedSet<SignalKey>,
-    stmt: AstId<StatementOrNull>,
+    stmt: AstId<'a, StatementOrNull<'a>>,
 ) -> Result<(), ()> {
-    match arenas.get(stmt) {
+    match &*stmt {
         StatementOrNull::Attribute(_) => Ok(()),
         StatementOrNull::Statement(id) => {
             get_used_signals(arenas, scope, diagnostics, signals, *id)
@@ -638,22 +640,22 @@ pub fn get_variable_lvalue_used_signals<'a>(
     scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
     signals: &mut OrderedSet<SignalKey>,
-    lvalue: AstId<VariableLValue>,
+    lvalue: AstId<'a, VariableLValue<'a>>,
 ) -> Result<(), ()> {
     let mut error = false;
-    for flat_lvalue in arenas.get(lvalue).0.iter() {
+    for flat_lvalue in lvalue.0.iter() {
         let VariableLValueFlat {
             ident: _,
             exprs,
             range_expression,
-        } = arenas.get(flat_lvalue);
+        } = &*flat_lvalue;
 
         for expr in exprs.iter() {
             error |=
                 expression::get_used_signals(arenas, scope, diagnostics, signals, expr).is_err();
         }
         if let Some(range_expression) = range_expression {
-            match arenas.get(*range_expression) {
+            match &**range_expression {
                 RangeExpression::Expr(expr)
                 | RangeExpression::BasePlus(expr, _)
                 | RangeExpression::BaseMinus(expr, _) => {
@@ -673,9 +675,9 @@ pub fn get_delay_or_event_control_used_signals<'a>(
     scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
     signals: &mut OrderedSet<SignalKey>,
-    delay_or_event_control: AstId<DelayOrEventControl>,
+    delay_or_event_control: AstId<'a, DelayOrEventControl<'a>>,
 ) -> Result<(), ()> {
-    match arenas.get(delay_or_event_control) {
+    match &*delay_or_event_control {
         DelayOrEventControl::DelayControl(id) => {
             get_delay_control_used_signals(arenas, scope, diagnostics, signals, *id)
         }
@@ -690,11 +692,11 @@ pub fn get_delay_control_used_signals<'a>(
     scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
     signals: &mut OrderedSet<SignalKey>,
-    delay_control: AstId<DelayControl>,
+    delay_control: AstId<'a, DelayControl<'a>>,
 ) -> Result<(), ()> {
     let mut error = false;
-    match arenas.get(delay_control) {
-        DelayControl::DelayValue(id) => match arenas.get(*id) {
+    match &*delay_control {
+        DelayControl::DelayValue(id) => match &**id {
             DelayValue::UnsignedNumber(_) => {}
             DelayValue::Identifier(ident) => {
                 error |= expression::get_used_ident_signals(
@@ -711,7 +713,7 @@ pub fn get_delay_control_used_signals<'a>(
             }
         },
         DelayControl::MinTypMax(id) => {
-            let MinTypMaxExpression { min_max, typical } = arenas.get(*id);
+            let MinTypMaxExpression { min_max, typical } = &**id;
             error |= expression::get_used_signals(arenas, scope, diagnostics, signals, *typical)
                 .is_err();
             if let Some((min, max)) = min_max {
@@ -730,14 +732,14 @@ pub fn get_event_control_used_signals<'a>(
     scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
     signals: &mut OrderedSet<SignalKey>,
-    event_control: AstId<EventControl>,
+    event_control: AstId<'a, EventControl<'a>>,
 ) -> Result<(), ()> {
     let mut error = false;
-    match arenas.get(event_control) {
+    match &*event_control {
         EventControl::Star => {}
         EventControl::EventExpression(event_expr) => {
             for expr in event_expr.0 {
-                let expr = match arenas.get(expr) {
+                let expr = match &*expr {
                     EventExpressionPrimary::Expression(expr) => *expr,
                     EventExpressionPrimary::Posedge(expr) => *expr,
                     EventExpressionPrimary::Negedge(expr) => *expr,

@@ -23,12 +23,19 @@ pub mod next;
 
 pub type VSymbolTable = vogls_frontend::symbol_table::SymbolTable<VSymbol>;
 
+#[derive(Default)]
+pub struct SymbolAstRefs<'a> {
+    pub gen_blocks: Vec<AstIdRange<'a, ModuleOrGenerateItem<'a>>>,
+    pub fns: Vec<AstId<'a, FunctionDeclaration<'a>>>,
+    pub tasks: Vec<AstId<'a, TaskDeclaration<'a>>>,
+}
+
 pub enum VSymbol {
     Module(ModuleSymbol),
     Parameter(VValue),
     Net(NetSymbol),
     NamedBlock,
-    GenerateBlock(AstIdRange<ModuleOrGenerateItem>),
+    GenerateBlock(usize),
     GenVar,
     Task(TaskSymbol),
     Function(FunctionSymbol),
@@ -76,7 +83,7 @@ pub struct NetSymbol {
 }
 
 pub struct FunctionSymbol {
-    pub ast_id: AstId<FunctionDeclaration>,
+    pub ast_id: usize,
     pub inputs: Vec<(SignalKey, VType)>,
     pub output: SignalKey,
     pub output_ty: VType,
@@ -84,7 +91,7 @@ pub struct FunctionSymbol {
 }
 
 pub struct TaskSymbol {
-    pub ast_id: AstId<TaskDeclaration>,
+    pub ast_id: usize,
     pub io: Vec<(SignalKey, ConnectionDirection, VType)>,
     pub lowered: Option<LoweredTask>,
 }
@@ -121,24 +128,19 @@ pub fn port_declaration_to_info<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
 
-    id: AstId<PortDeclaration>,
+    id: AstId<'a, PortDeclaration<'a>>,
 
     parent: SymbolId,
     table: &mut VSymbolTable,
     diagnostics: &mut Diagnostics,
-) -> Result<(VType, ConnectionDirection, AstIdRange<Identifier>), ()> {
+) -> Result<(VType, ConnectionDirection, AstIdRange<'a, Identifier>), ()> {
     use ConnectionDirection as D;
-    let (direction, range, signed, identifiers) = match arenas.get(id) {
-        PortDeclaration::Inout(id) => {
-            let inout = arenas.get(*id);
+    let (direction, range, signed, identifiers) = match &*id {
+        PortDeclaration::Inout(inout) => {
             (D::Both, inout.range, inout.signed, inout.port_identifiers)
         }
-        PortDeclaration::Input(id) => {
-            let input = arenas.get(*id);
-            (D::In, input.range, input.signed, input.port_identifiers)
-        }
-        PortDeclaration::Output(id) => {
-            let output = arenas.get(*id);
+        PortDeclaration::Input(input) => (D::In, input.range, input.signed, input.port_identifiers),
+        PortDeclaration::Output(output) => {
             (D::Out, output.range, output.signed, output.identifiers)
         }
     };
@@ -189,15 +191,15 @@ pub fn eval_constant_expr_elab<'a>(
     )
 }
 
-pub fn eval_constant_range(
+pub fn eval_constant_range<'a>(
     gl: &GlobalContext,
-    arenas: &AstArenas,
+    arenas: &'a AstArenas,
     scope: SymbolId,
     table: &VSymbolTable,
     diagnostics: &mut Diagnostics,
-    ast_range: AstId<Range>,
+    ast_range: AstId<'a, Range<'a>>,
 ) -> Result<(i64, i64, VectorSize), ()> {
-    let range = arenas.get(ast_range);
+    let range = ast_range;
     let msb = eval_constant_expr_elab(gl, arenas, scope, table, diagnostics, range.msb);
     let lsb = eval_constant_expr_elab(gl, arenas, scope, table, diagnostics, range.lsb);
 
@@ -223,11 +225,11 @@ pub fn dims_to_array_elab<'a>(
     scope: SymbolId,
     table: &VSymbolTable,
     diagnostics: &mut Diagnostics,
-    dimensions: AstIdRange<Dimension>,
+    dimensions: AstIdRange<'a, Dimension<'a>>,
 ) -> Result<Vec<u32>, ()> {
     let mut dims = Vec::with_capacity(dimensions.len());
     for dim in dimensions.iter().rev() {
-        let Dimension { lhs, rhs } = arenas.get(dim);
+        let Dimension { lhs, rhs } = &*dim;
         let lhs = eval_constant_expr_elab(gl, arenas, scope, table, diagnostics, *lhs);
         let rhs = eval_constant_expr_elab(gl, arenas, scope, table, diagnostics, *rhs);
 

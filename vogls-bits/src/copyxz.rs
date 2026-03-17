@@ -12,20 +12,12 @@ pub fn copy_z(src_spc: u64, src_val: u64, mask_spc: u64, mask_val: u64) -> (u64,
     (src_spc & !copy_mask, src_val | copy_mask)
 }
 
-pub fn fv_l_copy_x(
-    dst: &mut [u64],
-    src: &[u64],
-    mask: &[u64],
-) {
+pub fn fv_l_copy_x(dst: &mut [u64], src: &[u64], mask: &[u64]) {
     let (src_spc, src_val) = src.split_at(src.len() / 2);
     let (mask_spc, mask_val) = mask.split_at(mask.len() / 2);
     fv_l_copy_x_sep(dst, src_spc, src_val, mask_spc, mask_val);
 }
-pub fn fv_l_copy_z(
-    dst: &mut [u64],
-    src: &[u64],
-    mask: &[u64],
-) {
+pub fn fv_l_copy_z(dst: &mut [u64], src: &[u64], mask: &[u64]) {
     let (src_spc, src_val) = src.split_at(src.len() / 2);
     let (mask_spc, mask_val) = mask.split_at(mask.len() / 2);
     fv_l_copy_z_sep(dst, src_spc, src_val, mask_spc, mask_val);

@@ -49,7 +49,7 @@ pub fn lower_function_call<'a>(
         );
         builder.drive(gl, input_signal, arg_variable);
     }
-    
+
     let mut bb_stack = Vec::new();
     let mut bb_map = HashMap::new();
     let mut bb_seen = HashSet::new();

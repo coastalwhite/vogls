@@ -1,6 +1,6 @@
 use crate::parser::DefaultNettype;
 
-use super::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression};
+use super::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression, ConstantRangeExpression};
 use super::expr::Expr;
 use super::specify::SpecifyBlock;
 use super::statement::{NetLValue, Statement, StatementOrNull};
@@ -13,9 +13,9 @@ use super::{AstId, AstIdRange, AstItem, AttributeInstance, Identifier};
 // | udp_declaration
 // | config_declaration
 #[derive(Clone, Copy)]
-pub enum Description {
-    Module(AstId<Module>),
-    Udp(AstId<UdpDeclaration>),
+pub enum Description<'a> {
+    Module(AstId<'a, Module<'a>>),
+    Udp(AstId<'a, UdpDeclaration<'a>>),
     // @Incomplete
     Config,
 }
@@ -27,19 +27,19 @@ pub enum Description {
 // | { attribute_instance } module_keyword module_identifier [ module_parameter_port_list ] [ list_of_port_declarations ] ; { non_port_module_item }
 //   endmodule
 #[derive(Clone, Copy)]
-pub struct Module {
-    pub attribute_instances: AstIdRange<AttributeInstance>,
+pub struct Module<'a> {
+    pub attribute_instances: AstIdRange<'a, AttributeInstance<'a>>,
     pub module_identifier: AstItem<Identifier>,
-    pub module_parameter_port_list: Option<AstIdRange<ParameterDeclaration>>,
-    pub ports: ModulePorts,
-    pub module_items: AstIdRange<ModuleItem>,
+    pub module_parameter_port_list: Option<AstIdRange<'a, ParameterDeclaration<'a>>>,
+    pub ports: ModulePorts<'a>,
+    pub module_items: AstIdRange<'a, ModuleItem<'a>>,
     pub default_nettype: Option<DefaultNettype>,
 }
 
 #[derive(Clone, Copy)]
-pub enum ModulePorts {
-    Ports(AstIdRange<Port>),
-    PortDeclarations(AstIdRange<PortDeclaration>),
+pub enum ModulePorts<'a> {
+    Ports(AstIdRange<'a, Port<'a>>),
+    PortDeclarations(AstIdRange<'a, PortDeclaration<'a>>),
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
@@ -47,8 +47,8 @@ pub enum ModulePorts {
 //   [ port_expression ]
 // | . port_identifier ( [ port_expression ] )
 #[derive(Clone, Copy)]
-pub enum Port {
-    PortExpression(AstId<PortExpression>),
+pub enum Port<'a> {
+    PortExpression(AstId<'a, PortExpression<'a>>),
     // PortIdentifer(AstId<PortIdentifier>, AstId<PortExpression>),
 }
 
@@ -57,19 +57,18 @@ pub enum Port {
 //   port_reference
 // | { port_reference { , port_reference } }
 #[derive(Clone, Copy)]
-pub struct PortExpression {
+pub struct PortExpression<'a> {
     // @Incomplete: { port_reference { , port_reference } }
-    pub references: AstId<PortReference>,
+    pub references: AstId<'a, PortReference<'a>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
 // port_reference ::=
 //   port_identifier [ [ constant_range_expression ] ]
 #[derive(Clone, Copy)]
-pub struct PortReference {
+pub struct PortReference<'a> {
     pub identifier: AstItem<Identifier>,
-    // @Incomplete
-    // range: Option<ConstantRangeExpression>,
+    pub range: Option<AstId<'a, ConstantRangeExpression<'a>>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
@@ -78,30 +77,30 @@ pub struct PortReference {
 // | {attribute_instance} input_declaration
 // | {attribute_instance} output_declaration
 #[derive(Clone, Copy)]
-pub enum PortDeclaration {
-    Inout(AstId<InoutDeclaration>),
-    Input(AstId<InputDeclaration>),
-    Output(AstId<OutputDeclaration>),
+pub enum PortDeclaration<'a> {
+    Inout(AstId<'a, InoutDeclaration<'a>>),
+    Input(AstId<'a, InputDeclaration<'a>>),
+    Output(AstId<'a, OutputDeclaration<'a>>),
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 489
 // inout_declaration ::= inout [ net_type ] [ signed ] [ range ] list_of_port_identifiers
 #[derive(Clone, Copy)]
-pub struct InoutDeclaration {
+pub struct InoutDeclaration<'a> {
     pub net_type: Option<AstItem<NetType>>,
     pub signed: bool,
-    pub range: Option<AstId<Range>>,
-    pub port_identifiers: AstIdRange<Identifier>,
+    pub range: Option<AstId<'a, Range<'a>>>,
+    pub port_identifiers: AstIdRange<'a, Identifier>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 489
 // input_declaration ::= input [ net_type ] [ signed ] [ range ] list_of_port_identifiers
 #[derive(Clone, Copy)]
-pub struct InputDeclaration {
+pub struct InputDeclaration<'a> {
     pub net_type: Option<AstItem<NetType>>,
     pub signed: bool,
-    pub range: Option<AstId<Range>>,
-    pub port_identifiers: AstIdRange<Identifier>,
+    pub range: Option<AstId<'a, Range<'a>>>,
+    pub port_identifiers: AstIdRange<'a, Identifier>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 489
@@ -110,19 +109,19 @@ pub struct InputDeclaration {
 // | output reg [ signed ] [ range ] list_of_variable_port_identifiers
 // | output output_variable_type list_of_variable_port_identifiers
 #[derive(Clone, Copy)]
-pub struct OutputDeclaration {
+pub struct OutputDeclaration<'a> {
     pub net: Option<AstItem<OutputNet>>,
     pub signed: bool,
-    pub range: Option<AstId<Range>>,
-    pub identifiers: AstIdRange<Identifier>,
+    pub range: Option<AstId<'a, Range<'a>>>,
+    pub identifiers: AstIdRange<'a, Identifier>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 492
 // range ::= [ msb_constant_expression : lsb_constant_expression ]
 #[derive(Clone, Copy)]
-pub struct Range {
-    pub msb: AstId<ConstantExpr>,
-    pub lsb: AstId<ConstantExpr>,
+pub struct Range<'a> {
+    pub msb: AstId<'a, ConstantExpr<'a>>,
+    pub lsb: AstId<'a, ConstantExpr<'a>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 489-490
@@ -174,24 +173,24 @@ pub enum NetType {
 // | { attribute_instance } loop_generate_construct
 // | { attribute_instance } conditional_generate_construct
 #[derive(Clone, Copy)]
-pub struct ModuleOrGenerateItem {
-    pub attribute_instances: AstIdRange<AttributeInstance>,
-    pub content: ModuleOrGenerateItemContent,
+pub struct ModuleOrGenerateItem<'a> {
+    pub attribute_instances: AstIdRange<'a, AttributeInstance<'a>>,
+    pub content: ModuleOrGenerateItemContent<'a>,
 }
 #[derive(Clone, Copy)]
-pub enum ModuleOrGenerateItemContent {
-    ModuleOrGenerateItemDeclaration(AstId<ModuleOrGenerateItemDeclaration>),
-    LocalParameterDeclaration(AstId<LocalParameterDeclaration>),
+pub enum ModuleOrGenerateItemContent<'a> {
+    ModuleOrGenerateItemDeclaration(AstId<'a, ModuleOrGenerateItemDeclaration<'a>>),
+    LocalParameterDeclaration(AstId<'a, LocalParameterDeclaration<'a>>),
     ParameterOverride,
-    ContinuousAssign(AstId<ContinousAssign>),
-    GateInstantiation(AstId<GateInstantiation>),
-    UdpInstantiation(AstId<UdpInstantiation>),
-    ModuleInstantiation(AstId<ModuleInstantiation>),
-    InitialConstruct(AstId<InitialConstruct>),
-    AlwaysConstruct(AstId<AlwaysConstruct>),
-    LoopGenerateConstruct(AstId<LoopGenerateConstruct>),
-    IfGenerateConstruct(AstId<IfGenerateConstruct>),
-    CaseGenerateConstruct(AstId<CaseGenerateConstruct>),
+    ContinuousAssign(AstId<'a, ContinousAssign<'a>>),
+    GateInstantiation(AstId<'a, GateInstantiation<'a>>),
+    UdpInstantiation(AstId<'a, UdpInstantiation<'a>>),
+    ModuleInstantiation(AstId<'a, ModuleInstantiation<'a>>),
+    InitialConstruct(AstId<'a, InitialConstruct<'a>>),
+    AlwaysConstruct(AstId<'a, AlwaysConstruct<'a>>),
+    LoopGenerateConstruct(AstId<'a, LoopGenerateConstruct<'a>>),
+    IfGenerateConstruct(AstId<'a, IfGenerateConstruct<'a>>),
+    CaseGenerateConstruct(AstId<'a, CaseGenerateConstruct<'a>>),
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 493
@@ -206,12 +205,12 @@ pub enum ModuleOrGenerateItemContent {
 // | pulldown [pulldown_strength] pull_gate_instance { , pull_gate_instance } ;
 // | pullup [pullup_strength] pull_gate_instance { , pull_gate_instance } ;
 #[derive(Clone, Copy)]
-pub enum GateInstantiation {
+pub enum GateInstantiation<'a> {
     // @Incomplete
     // Cmos(CmosGateInstantiation),
     // Enable(EnableGateInstantiation),
     // Mos(MosGateInstantiation),
-    NInput(AstId<NInputGateInstantiation>),
+    NInput(AstId<'a, NInputGateInstantiation<'a>>),
     // NOutput(NOutputGateInstantiation),
     // PassEn(PassEnGateInstantiation),
     // PassSwitch(PassSwitchGateInstantiation),
@@ -225,18 +224,18 @@ pub enum GateInstantiation {
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 493
 // n_input_gatetype [drive_strength] [delay2] n_input_gate_instance { , n_input_gate_instance }
 #[derive(Clone, Copy)]
-pub struct NInputGateInstantiation {
+pub struct NInputGateInstantiation<'a> {
     pub gatetype: AstItem<NInputGateType>,
-    pub instances: AstIdRange<NInputGateInstance>,
+    pub instances: AstIdRange<'a, NInputGateInstance<'a>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 494
 // n_input_gate_instance ::= [ name_of_gate_instance ] ( output_terminal , input_terminal { , input_terminal } )
 #[derive(Clone, Copy)]
-pub struct NInputGateInstance {
-    pub name: Option<AstId<NameOfGateInstance>>,
-    pub output_terminal: AstId<NetLValue>,
-    pub input_terminals: AstIdRange<Expr>,
+pub struct NInputGateInstance<'a> {
+    pub name: Option<AstId<'a, NameOfGateInstance>>,
+    pub output_terminal: AstId<'a, NetLValue<'a>>,
+    pub input_terminals: AstIdRange<'a, Expr<'a>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 494
@@ -264,16 +263,16 @@ pub enum NInputGateType {
 // continuous_assign ::= assign [ drive_strength ] [ delay3 ] list_of_net_assignments ;
 // list_of_net_assignments ::= net_assignment { , net_assignment }
 #[derive(Clone, Copy)]
-pub struct ContinousAssign {
-    pub list_of_net_assignments: AstIdRange<NetAssignment>,
+pub struct ContinousAssign<'a> {
+    pub list_of_net_assignments: AstIdRange<'a, NetAssignment<'a>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
 // net_assignment ::= net_lvalue = expression
 #[derive(Clone, Copy)]
-pub struct NetAssignment {
-    pub net_lvalue: AstId<NetLValue>,
-    pub expression: AstId<Expr>,
+pub struct NetAssignment<'a> {
+    pub net_lvalue: AstId<'a, NetLValue<'a>>,
+    pub expression: AstId<'a, Expr<'a>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 495
@@ -281,10 +280,10 @@ pub struct NetAssignment {
 //   module_identifier [ parameter_value_assignment ]
 //   module_instance { , module_instance } ;
 #[derive(Clone, Copy)]
-pub struct ModuleInstantiation {
+pub struct ModuleInstantiation<'a> {
     pub module_identifier: AstItem<Identifier>,
-    pub parameter_value_assignment: Option<AstId<ParameterValueAssignment>>,
-    pub module_instances: AstIdRange<ModuleInstance>,
+    pub parameter_value_assignment: Option<AstId<'a, ParameterValueAssignment<'a>>>,
+    pub module_instances: AstIdRange<'a, ModuleInstance<'a>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 495
@@ -293,25 +292,25 @@ pub struct ModuleInstantiation {
 //   ordered_parameter_assignment { , ordered_parameter_assignment }
 // | named_parameter_assignment { , named_parameter_assignment }
 #[derive(Clone, Copy)]
-pub enum ParameterValueAssignment {
-    Ordered(AstIdRange<ConstantExpr>),
-    Named(AstIdRange<NamedParameterAssignment>),
+pub enum ParameterValueAssignment<'a> {
+    Ordered(AstIdRange<'a, ConstantExpr<'a>>),
+    Named(AstIdRange<'a, NamedParameterAssignment<'a>>),
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 495
 // named_parameter_assignment ::= . parameter_identifier ( [ mintypmax_expression ] )
 #[derive(Clone, Copy)]
-pub struct NamedParameterAssignment {
+pub struct NamedParameterAssignment<'a> {
     pub identifier: AstItem<Identifier>,
-    pub expression: Option<AstId<ConstantMinTypMaxExpression>>,
+    pub expression: Option<AstId<'a, ConstantMinTypMaxExpression<'a>>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 495
 // module_instance ::= name_of_module_instance ( [ list_of_port_connections ] )
 #[derive(Clone, Copy)]
-pub struct ModuleInstance {
+pub struct ModuleInstance<'a> {
     pub name_of_module_instance: AstItem<Identifier>,
-    pub list_of_port_connections: AstId<ListOfPortConnections>,
+    pub list_of_port_connections: AstId<'a, ListOfPortConnections<'a>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 495
@@ -319,92 +318,92 @@ pub struct ModuleInstance {
 //   ordered_port_connection { , ordered_port_connection }
 // | named_port_connection { , named_port_connection }
 #[derive(Clone, Copy)]
-pub enum ListOfPortConnections {
-    Ordered(AstIdRange<Expr>),
-    Named(AstIdRange<NamedPortConnection>),
+pub enum ListOfPortConnections<'a> {
+    Ordered(AstIdRange<'a, Expr<'a>>),
+    Named(AstIdRange<'a, NamedPortConnection<'a>>),
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 495
 // named_port_connection ::= { attribute_instance } . port_identifier ( [ expression ] )
 #[derive(Clone, Copy)]
-pub struct NamedPortConnection {
+pub struct NamedPortConnection<'a> {
     pub port_identifier: AstItem<Identifier>,
-    pub expression: Option<AstId<Expr>>,
+    pub expression: Option<AstId<'a, Expr<'a>>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
 // initial_construct ::= initial statement
 #[derive(Clone, Copy)]
-pub struct InitialConstruct(pub AstId<Statement>);
+pub struct InitialConstruct<'a>(pub AstId<'a, Statement<'a>>);
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
 // always_construct ::= always statement
 #[derive(Clone, Copy)]
-pub struct AlwaysConstruct(pub AstId<Statement>);
+pub struct AlwaysConstruct<'a>(pub AstId<'a, Statement<'a>>);
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 495
 // loop_generate_construct ::= for ( genvar_initialization ; genvar_expression ; genvar_iteration ) generate_block
 #[derive(Clone, Copy)]
-pub struct LoopGenerateConstruct {
-    pub initialization: AstId<GenvarAssignment>,
-    pub condition: AstId<ConstantExpr>,
-    pub iteration: AstId<GenvarAssignment>,
-    pub block: AstId<GenerateBlock>,
+pub struct LoopGenerateConstruct<'a> {
+    pub initialization: AstId<'a, GenvarAssignment<'a>>,
+    pub condition: AstId<'a, ConstantExpr<'a>>,
+    pub iteration: AstId<'a, GenvarAssignment<'a>>,
+    pub block: AstId<'a, GenerateBlock<'a>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 495
 // if_generate_construct ::= if ( constant_expression ) generate_block_or_null
 //   [ else generate_block_or_null ]
 #[derive(Clone, Copy)]
-pub struct IfGenerateConstruct {
-    pub condition: AstId<ConstantExpr>,
-    pub truthy: AstId<Option<GenerateBlock>>,
-    pub falsy: Option<AstId<Option<GenerateBlock>>>,
+pub struct IfGenerateConstruct<'a> {
+    pub condition: AstId<'a, ConstantExpr<'a>>,
+    pub truthy: AstId<'a, Option<GenerateBlock<'a>>>,
+    pub falsy: Option<AstId<'a, Option<GenerateBlock<'a>>>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 496
 // case_generate_construct ::= case ( constant_expression ) case_generate_item { case_generate_item } endcase
 #[derive(Clone, Copy)]
-pub struct CaseGenerateConstruct {
-    pub value: AstId<ConstantExpr>,
-    pub items: AstIdRange<CaseGenerateItem>,
+pub struct CaseGenerateConstruct<'a> {
+    pub value: AstId<'a, ConstantExpr<'a>>,
+    pub items: AstIdRange<'a, CaseGenerateItem<'a>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 496
 // case_generate_item ::= constant_expression { , constant_expression } : generate_block_or_null | default [ : ] generate_block_or_null
 #[derive(Clone, Copy)]
-pub struct CaseGenerateItem {
-    pub pattern: CaseGeneratePattern,
-    pub block: AstId<Option<GenerateBlock>>,
+pub struct CaseGenerateItem<'a> {
+    pub pattern: CaseGeneratePattern<'a>,
+    pub block: AstId<'a, Option<GenerateBlock<'a>>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 496
 // case_generate_item ::= constant_expression { , constant_expression } : generate_block_or_null | default [ : ] generate_block_or_null
 #[derive(Clone, Copy)]
-pub enum CaseGeneratePattern {
+pub enum CaseGeneratePattern<'a> {
     Default,
-    Exprs(AstIdRange<ConstantExpr>),
+    Exprs(AstIdRange<'a, ConstantExpr<'a>>),
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 496
 // generate_block ::= module_or_generate_item | begin [ : generate_block_identifier ] { module_or_generate_item } end
 #[derive(Clone, Copy)]
-pub enum GenerateBlock {
-    ModuleOrGenerateItem(AstId<ModuleOrGenerateItem>),
+pub enum GenerateBlock<'a> {
+    ModuleOrGenerateItem(AstId<'a, ModuleOrGenerateItem<'a>>),
     BeginEnd(
         Option<AstItem<Identifier>>,
-        AstIdRange<ModuleOrGenerateItem>,
+        AstIdRange<'a, ModuleOrGenerateItem<'a>>,
     ),
 }
 
-impl GenerateBlock {
+impl<'a> GenerateBlock<'a> {
     pub fn ident(self) -> Option<AstItem<Identifier>> {
         match self {
             GenerateBlock::ModuleOrGenerateItem(_) => None,
             GenerateBlock::BeginEnd(ident, _) => ident,
         }
     }
-    pub fn module_or_generate_items(self) -> AstIdRange<ModuleOrGenerateItem> {
+    pub fn module_or_generate_items(self) -> AstIdRange<'a, ModuleOrGenerateItem<'a>> {
         match self {
             GenerateBlock::ModuleOrGenerateItem(id) => AstIdRange::single(id),
             GenerateBlock::BeginEnd(_, ids) => ids,
@@ -416,9 +415,9 @@ impl GenerateBlock {
 // genvar_initialization ::= genvar_identifier = constant_expression
 // genvar_iteration      ::= genvar_identifier = genvar_expression
 #[derive(Clone, Copy)]
-pub struct GenvarAssignment {
+pub struct GenvarAssignment<'a> {
     pub ident: AstItem<Identifier>,
-    pub expr: AstId<ConstantExpr>,
+    pub expr: AstId<'a, ConstantExpr<'a>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
@@ -426,9 +425,9 @@ pub struct GenvarAssignment {
 //   port_declaration ;
 // | non_port_module_item
 #[derive(Clone, Copy)]
-pub enum ModuleItem {
-    PortDeclaration(AstId<PortDeclaration>),
-    NonPortModuleItem(AstId<NonPortModuleItem>),
+pub enum ModuleItem<'a> {
+    PortDeclaration(AstId<'a, PortDeclaration<'a>>),
+    NonPortModuleItem(AstId<'a, NonPortModuleItem<'a>>),
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
@@ -444,18 +443,18 @@ pub enum ModuleItem {
 // | task_declaration
 // | function_declaration
 #[derive(Clone, Copy)]
-pub enum ModuleOrGenerateItemDeclaration {
+pub enum ModuleOrGenerateItemDeclaration<'a> {
     // @Incomplete
-    Net(AstId<NetDeclaration>),
-    Reg(AstId<RegDeclaration>),
-    Integer(AstId<IntegerDeclaration>),
+    Net(AstId<'a, NetDeclaration<'a>>),
+    Reg(AstId<'a, RegDeclaration<'a>>),
+    Integer(AstId<'a, IntegerDeclaration<'a>>),
     // Real(AstId<RealDeclaration>),
     // Time(AstId<TimeDeclaration>),
     // Realtime(AstId<RealtimeDeclaration>),
     // Event(AstId<EventDeclaration>),
-    Genvar(AstId<GenvarDeclaration>),
-    Task(AstId<TaskDeclaration>),
-    Function(AstId<FunctionDeclaration>),
+    Genvar(AstId<'a, GenvarDeclaration<'a>>),
+    Task(AstId<'a, TaskDeclaration<'a>>),
+    Function(AstId<'a, FunctionDeclaration<'a>>),
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 490
@@ -469,43 +468,43 @@ pub enum ModuleOrGenerateItemDeclaration {
 // | trireg [ charge_strength ] [ vectored | scalared ] [ signed ] range [ delay3 ] list_of_net_identifiers ;
 // | trireg [ drive_strength ] [ vectored | scalared ] [ signed ] range [ delay3 ] list_of_net_decl_assignments ;
 #[derive(Clone, Copy)]
-pub struct NetDeclaration {
+pub struct NetDeclaration<'a> {
     // @Incomplete
     pub net_type: AstItem<NetType>,
     pub signed: bool,
-    pub range: Option<AstId<Range>>,
-    pub nets: NetDeclarationNets,
+    pub range: Option<AstId<'a, Range<'a>>>,
+    pub nets: NetDeclarationNets<'a>,
 }
 
 #[derive(Clone, Copy)]
-pub enum NetDeclarationNets {
-    Idents(AstIdRange<NetIdent>),
-    Assignments(AstIdRange<NetDeclAssignment>),
+pub enum NetDeclarationNets<'a> {
+    Idents(AstIdRange<'a, NetIdent<'a>>),
+    Assignments(AstIdRange<'a, NetDeclAssignment<'a>>),
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 491
 // net_decl_assignment ::= net_identifier = expression
 #[derive(Clone, Copy)]
-pub struct NetDeclAssignment {
+pub struct NetDeclAssignment<'a> {
     pub ident: AstItem<Identifier>,
-    pub expr: AstId<Expr>,
+    pub expr: AstId<'a, Expr<'a>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 491
 // net_identifier { dimension }
 #[derive(Clone, Copy)]
-pub struct NetIdent {
+pub struct NetIdent<'a> {
     pub ident: AstItem<Identifier>,
-    pub dimension: AstIdRange<Dimension>,
+    pub dimension: AstIdRange<'a, Dimension<'a>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 490
 // reg_declaration ::= reg [ signed ] [ range ] list_of_variable_identifiers ;
 #[derive(Clone, Copy)]
-pub struct RegDeclaration {
+pub struct RegDeclaration<'a> {
     pub signed: bool,
-    pub range: Option<AstId<Range>>,
-    pub variable_types: AstIdRange<VariableType>,
+    pub range: Option<AstId<'a, Range<'a>>>,
+    pub variable_types: AstIdRange<'a, VariableType<'a>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 490
@@ -513,28 +512,28 @@ pub struct RegDeclaration {
 //   variable_identifier { dimension } |
 //   variable_identifier = constant_expression
 #[derive(Clone, Copy)]
-pub struct VariableType {
+pub struct VariableType<'a> {
     pub identifier: AstItem<Identifier>,
-    pub variant: VariableTypeVariant,
+    pub variant: VariableTypeVariant<'a>,
 }
 #[derive(Clone, Copy)]
-pub enum VariableTypeVariant {
-    Dimensions(AstIdRange<Dimension>),
-    ConstantExpr(AstId<ConstantExpr>),
+pub enum VariableTypeVariant<'a> {
+    Dimensions(AstIdRange<'a, Dimension<'a>>),
+    ConstantExpr(AstId<'a, ConstantExpr<'a>>),
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 490
 // integer_declaration ::= integer list_of_variable_identifiers ;
 #[derive(Clone, Copy)]
-pub struct IntegerDeclaration {
-    pub variable_types: AstIdRange<VariableType>,
+pub struct IntegerDeclaration<'a> {
+    pub variable_types: AstIdRange<'a, VariableType<'a>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
 // genvar_declaration ::= genvar list_of_genvar_identifiers ;
 #[derive(Clone, Copy)]
-pub struct GenvarDeclaration {
-    pub identifiers: AstIdRange<Identifier>,
+pub struct GenvarDeclaration<'a> {
+    pub identifiers: AstIdRange<'a, Identifier>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 492
@@ -547,12 +546,12 @@ pub struct GenvarDeclaration {
 //   statement_or_null
 //   endtask
 #[derive(Clone, Copy)]
-pub struct TaskDeclaration {
+pub struct TaskDeclaration<'a> {
     pub ident: AstItem<Identifier>,
     pub automatic: bool,
-    pub task_ports: AstIdRange<TaskPortItem>,
-    pub block_item_decls: AstIdRange<BlockItemDeclaration>,
-    pub statement_or_null: AstId<StatementOrNull>,
+    pub task_ports: AstIdRange<'a, TaskPortItem<'a>>,
+    pub block_item_decls: AstIdRange<'a, BlockItemDeclaration<'a>>,
+    pub statement_or_null: AstId<'a, StatementOrNull<'a>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 492
@@ -566,21 +565,21 @@ pub struct TaskDeclaration {
 //     function_statement
 //   endfunction
 #[derive(Clone, Copy)]
-pub struct FunctionDeclaration {
+pub struct FunctionDeclaration<'a> {
     pub automatic: bool,
-    pub range_or_type: AstId<FunctionRangeOrType>,
+    pub range_or_type: AstId<'a, FunctionRangeOrType<'a>>,
     pub ident: AstItem<Identifier>,
-    pub tf_input_decls: AstIdRange<TfInputDeclaration>,
-    pub block_item_decls: AstIdRange<BlockItemDeclaration>,
-    pub statement: AstId<Statement>,
+    pub tf_input_decls: AstIdRange<'a, TfInputDeclaration<'a>>,
+    pub block_item_decls: AstIdRange<'a, BlockItemDeclaration<'a>>,
+    pub statement: AstId<'a, Statement<'a>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 492
 // function_range_or_type ::= [ signed ] [ range ] | integer | real | realtime | time
 #[derive(Clone, Copy)]
-pub enum FunctionRangeOrType {
-    Signed(Option<AstId<Range>>),
-    Unsigned(Option<AstId<Range>>),
+pub enum FunctionRangeOrType<'a> {
+    Signed(Option<AstId<'a, Range<'a>>>),
+    Unsigned(Option<AstId<'a, Range<'a>>>),
     Integer,
     Real,
     Realtime,
@@ -592,9 +591,9 @@ pub enum FunctionRangeOrType {
 //   input [ reg ] [ signed ] [ range ] list_of_port_identifiers
 // | input task_port_type list_of_port_identifiers
 #[derive(Clone, Copy)]
-pub struct TfInputDeclaration {
-    pub tf_type: TfType,
-    pub port_identifiers: AstIdRange<Identifier>,
+pub struct TfInputDeclaration<'a> {
+    pub tf_type: TfType<'a>,
+    pub port_identifiers: AstIdRange<'a, Identifier>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 493
@@ -602,9 +601,9 @@ pub struct TfInputDeclaration {
 //   output [ reg ] [ signed ] [ range ] list_of_port_identifiers
 // | output task_port_type list_of_port_identifiers
 #[derive(Clone, Copy)]
-pub struct TfOutputDeclaration {
-    pub tf_type: TfType,
-    pub port_identifiers: AstIdRange<Identifier>,
+pub struct TfOutputDeclaration<'a> {
+    pub tf_type: TfType<'a>,
+    pub port_identifiers: AstIdRange<'a, Identifier>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 493
@@ -612,9 +611,9 @@ pub struct TfOutputDeclaration {
 //   inout [ reg ] [ signed ] [ range ] list_of_port_identifiers
 // | inout task_port_type list_of_port_identifiers
 #[derive(Clone, Copy)]
-pub struct TfInoutDeclaration {
-    pub tf_type: TfType,
-    pub port_identifiers: AstIdRange<Identifier>,
+pub struct TfInoutDeclaration<'a> {
+    pub tf_type: TfType<'a>,
+    pub port_identifiers: AstIdRange<'a, Identifier>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 492
@@ -623,25 +622,25 @@ pub struct TfInoutDeclaration {
 // | { attribute_instance } tf_output_declaration
 // | { attribute_instance } tf_inout_declaration
 #[derive(Clone, Copy)]
-pub struct TaskPortItem {
-    pub attribute_instances: AstIdRange<AttributeInstance>,
-    pub content: TaskPortItemContent,
+pub struct TaskPortItem<'a> {
+    pub attribute_instances: AstIdRange<'a, AttributeInstance<'a>>,
+    pub content: TaskPortItemContent<'a>,
 }
 #[derive(Clone, Copy)]
-pub enum TaskPortItemContent {
-    Input(TfInputDeclaration),
-    Output(TfOutputDeclaration),
-    Inout(TfInoutDeclaration),
+pub enum TaskPortItemContent<'a> {
+    Input(TfInputDeclaration<'a>),
+    Output(TfOutputDeclaration<'a>),
+    Inout(TfInoutDeclaration<'a>),
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 493
 // task_port_type ::= integer | real | realtime | time
 #[derive(Clone, Copy)]
-pub enum TfType {
+pub enum TfType<'a> {
     Net {
         reg: bool,
         signed: bool,
-        range: Option<AstId<Range>>,
+        range: Option<AstId<'a, Range<'a>>>,
     },
     Integer,
     Real,
@@ -660,20 +659,20 @@ pub enum TfType {
 // | { attribute_instance } local_parameter_declaration ;
 // | { attribute_instance } parameter_declaration ;
 #[derive(Clone, Copy)]
-pub enum BlockItemDeclaration {
+pub enum BlockItemDeclaration<'a> {
     Reg {
         signed: bool,
-        range: Option<AstId<Range>>,
-        identifiers: AstIdRange<VariableType>,
+        range: Option<AstId<'a, Range<'a>>>,
+        identifiers: AstIdRange<'a, VariableType<'a>>,
     },
-    Integer(AstIdRange<VariableType>),
+    Integer(AstIdRange<'a, VariableType<'a>>),
     // @Incomplete
     Time,
     Real,
     Realtime,
     Event,
-    LocalParameterDeclaration(AstId<LocalParameterDeclaration>),
-    ParameterDeclaration(AstId<ParameterDeclaration>),
+    LocalParameterDeclaration(AstId<'a, LocalParameterDeclaration<'a>>),
+    ParameterDeclaration(AstId<'a, ParameterDeclaration<'a>>),
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 488
@@ -684,19 +683,19 @@ pub enum BlockItemDeclaration {
 // | { attribute_instance } parameter_declaration ;
 // | { attribute_instance } specparam_declaration
 #[derive(Clone, Copy)]
-pub enum NonPortModuleItem {
-    ModuleOrGenerateItem(AstId<ModuleOrGenerateItem>),
-    GenerateRegion(GenerateRegion),
-    SpecifyBlock(SpecifyBlock),
-    ParameterDeclaration(AstId<ParameterDeclaration>),
+pub enum NonPortModuleItem<'a> {
+    ModuleOrGenerateItem(AstId<'a, ModuleOrGenerateItem<'a>>),
+    GenerateRegion(GenerateRegion<'a>),
+    SpecifyBlock(SpecifyBlock<'a>),
+    ParameterDeclaration(AstId<'a, ParameterDeclaration<'a>>),
     SpecParamDeclaration,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 495
 // generate_region ::= generate { module_or_generate_item } endgenerate
 #[derive(Clone, Copy)]
-pub struct GenerateRegion {
-    pub module_or_generate_item: AstIdRange<ModuleOrGenerateItem>,
+pub struct GenerateRegion<'a> {
+    pub module_or_generate_item: AstIdRange<'a, ModuleOrGenerateItem<'a>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 489
@@ -704,9 +703,9 @@ pub struct GenerateRegion {
 //   localparam [ signed ] [ range ] list_of_param_assignments
 // | localparam parameter_type list_of_param_assignments
 #[derive(Clone, Copy)]
-pub struct LocalParameterDeclaration {
-    pub typing: AstId<ParameterDeclarationTyping>,
-    pub assignments: AstIdRange<ParamAssignment>,
+pub struct LocalParameterDeclaration<'a> {
+    pub typing: AstId<'a, ParameterDeclarationTyping<'a>>,
+    pub assignments: AstIdRange<'a, ParamAssignment<'a>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 489
@@ -714,9 +713,9 @@ pub struct LocalParameterDeclaration {
 //   parameter [ signed ] [ range ] list_of_param_assignments
 // | parameter parameter_type list_of_param_assignments
 #[derive(Clone, Copy)]
-pub struct ParameterDeclaration {
-    pub typing: AstId<ParameterDeclarationTyping>,
-    pub assignments: AstIdRange<ParamAssignment>,
+pub struct ParameterDeclaration<'a> {
+    pub typing: AstId<'a, ParameterDeclarationTyping<'a>>,
+    pub assignments: AstIdRange<'a, ParamAssignment<'a>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 489
@@ -725,8 +724,8 @@ pub struct ParameterDeclaration {
 // | parameter parameter_type list_of_param_assignments
 // parameter_type ::= integer | real | realtime | time
 #[derive(Clone, Copy)]
-pub enum ParameterDeclarationTyping {
-    None(bool, Option<AstId<Range>>),
+pub enum ParameterDeclarationTyping<'a> {
+    None(bool, Option<AstId<'a, Range<'a>>>),
     Integer,
     Real,
     Realtime,
@@ -736,15 +735,15 @@ pub enum ParameterDeclarationTyping {
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 491
 // param_assignment ::= parameter_identifier = constant_mintypmax_expression
 #[derive(Clone, Copy)]
-pub struct ParamAssignment {
+pub struct ParamAssignment<'a> {
     pub param: AstItem<Identifier>,
-    pub constant: AstId<ConstantMinTypMaxExpression>,
+    pub constant: AstId<'a, ConstantMinTypMaxExpression<'a>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 492
 // dimension ::= [ dimension_constant_expression : dimension_constant_expression ]
 #[derive(Clone, Copy)]
-pub struct Dimension {
-    pub lhs: AstId<ConstantExpr>,
-    pub rhs: AstId<ConstantExpr>,
+pub struct Dimension<'a> {
+    pub lhs: AstId<'a, ConstantExpr<'a>>,
+    pub rhs: AstId<'a, ConstantExpr<'a>>,
 }

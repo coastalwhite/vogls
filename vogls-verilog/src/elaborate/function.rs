@@ -9,13 +9,14 @@ use crate::elaborate::NetSymbol;
 use crate::lower::{Diagnostics, EvalScope, VType, evaluate_range};
 use crate::parser::AstArenas;
 
-use super::{VSymbol, VSymbolTable, eval_constant_range};
+use super::{SymbolAstRefs, VSymbol, VSymbolTable, eval_constant_range};
 
 pub fn elaborate_fn<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
     symbol: SymbolId,
     table: &mut VSymbolTable,
+    ast_refs: &SymbolAstRefs<'a>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
     let VSymbol::Function(i) = &table[symbol].content else {
@@ -24,6 +25,7 @@ pub fn elaborate_fn<'a>(
 
     let parent = table[symbol].parent().unwrap();
     let id = i.ast_id;
+    let id = ast_refs.fns[id];
     let FunctionDeclaration {
         ident,
         tf_input_decls,
@@ -31,9 +33,9 @@ pub fn elaborate_fn<'a>(
         block_item_decls: _,
         range_or_type,
         ..
-    } = arenas.get(id);
+    } = &*id;
 
-    let (_, _, output_ty) = match arenas.get(*range_or_type) {
+    let (_, _, output_ty) = match &**range_or_type {
         FunctionRangeOrType::Unsigned(None) => (0, 0, VType::UnsignedNet(SCALAR_VSIZE)),
         FunctionRangeOrType::Signed(None) => (0, 0, VType::SignedNet(SCALAR_VSIZE)),
         FunctionRangeOrType::Unsigned(Some(range)) => {
@@ -82,7 +84,7 @@ pub fn elaborate_fn<'a>(
         let TfInputDeclaration {
             tf_type,
             port_identifiers,
-        } = arenas.get(input_decl);
+        } = &*input_decl;
         for ident in port_identifiers.iter() {
             let ty = match tf_type {
                 TfType::Net {
@@ -148,6 +150,7 @@ pub fn elaborate_task<'a>(
     arenas: &'a AstArenas,
     symbol: SymbolId,
     table: &mut VSymbolTable,
+    ast_refs: &SymbolAstRefs<'a>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
     let VSymbol::Task(i) = &table[symbol].content else {
@@ -161,12 +164,12 @@ pub fn elaborate_task<'a>(
         block_item_decls: _,
         statement_or_null: _,
         ..
-    } = arenas.get(id);
+    } = &*ast_refs.tasks[id];
 
     let mut io = Vec::<(SignalKey, ConnectionDirection, VType)>::new();
     for decl in task_ports.iter() {
         use ConnectionDirection as D;
-        let (tf_type, direction, port_identifiers) = match arenas.get(decl).content {
+        let (tf_type, direction, port_identifiers) = match decl.content {
             TaskPortItemContent::Input(d) => (d.tf_type, D::In, d.port_identifiers),
             TaskPortItemContent::Output(d) => (d.tf_type, D::Out, d.port_identifiers),
             TaskPortItemContent::Inout(d) => (d.tf_type, D::Both, d.port_identifiers),

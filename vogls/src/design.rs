@@ -16,13 +16,14 @@ use vogls_runtime::SimulationIo;
 use vogls_runtime::{RtSignalKey, RuntimeState};
 use vogls_sim::{Event, Regions, Simulation, VmProcess, VmProcessKey, lower_process_to_vm};
 use vogls_utils::{IndexSet, VgHashMap};
+use vogls_verilog::arena::Arena;
 use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{Description, Module, ModuleItem, NonPortModuleItem};
 use vogls_verilog::elaborate::{VSymbol, VSymbolTable};
 use vogls_verilog::lower::{Diagnostics as LowerDiagnostics, Scope, lower_module_to_ir};
 use vogls_verilog::parser::{
-    Diagnostics as ParserDiagnostics, ParseContext, ParserScratches, TokenWalker, parse_file,
-    report, report_error,
+    AstArenas, Diagnostics as ParserDiagnostics, ParseContext, ParserScratches, TokenWalker,
+    parse_file, report, report_error,
 };
 use vogls_verilog::tokenizer::{Macro, Tokenized};
 
@@ -89,11 +90,15 @@ impl Design {
 
         let mut tkw = TokenWalker::new(&token_buffer);
         let mut diagnostics = ParserDiagnostics::default();
+        let ast = Arena::new();
+        let mut arenas = AstArenas::default();
 
-        let mut ast = match parse_file(
+        let f = match parse_file(
             &mut tkw,
             &mut ParserScratches::default(),
             Some(&mut diagnostics),
+            &mut arenas,
+            &ast,
             &mut ParseContext::default(),
         ) {
             Ok(ast) => ast,
@@ -109,22 +114,19 @@ impl Design {
         let mut gl = GlobalContext::default();
         gl.logic_mode = ectx.logic_mode;
 
-        let module_lut =
-            VgHashMap::<IdentId, AstId<Module>>::from_iter(ast.descriptions.iter().filter_map(
-                |id| match ast.arenas.get(id) {
-                    Description::Module(id) => {
-                        Some((ast.arenas.get(*id).module_identifier.item.0, *id))
-                    }
-                    Description::Udp(_) | Description::Config => None,
-                },
-            ));
+        let module_lut = VgHashMap::<IdentId, AstId<Module>>::from_iter(
+            f.descriptions.iter().filter_map(|id| match &*id {
+                Description::Module(id) => Some((id.module_identifier.item.0, *id)),
+                Description::Udp(_) | Description::Config => None,
+            }),
+        );
 
         let tl_module_name = match top_level_module {
-            Some(v) => ast.arenas.ident_table.get_or_insert(v),
+            Some(v) => arenas.ident_table.get_or_insert(v),
             None => {
                 let mut referenced = HashSet::new();
-                for id in ast.descriptions {
-                    let Description::Module(module_id) = *ast.arenas.get(id) else {
+                for id in f.descriptions {
+                    let Description::Module(module_id) = &*id else {
                         continue;
                     };
 
@@ -135,23 +137,22 @@ impl Design {
                         module_items,
                         ports: _,
                         default_nettype: _,
-                    } = ast.arenas.get(module_id);
+                    } = &**module_id;
+
                     for module_item in module_items.iter() {
-                        let ModuleItem::NonPortModuleItem(p) = ast.arenas.get(module_item) else {
+                        let ModuleItem::NonPortModuleItem(p) = &*module_item else {
                             continue;
                         };
 
-                        if let NonPortModuleItem::ModuleOrGenerateItem(module_item) =
-                            ast.arenas.get(*p)
-                        {
-                            append_referenced_modules(&ast.arenas, *module_item, &mut referenced);
+                        if let NonPortModuleItem::ModuleOrGenerateItem(module_item) = &**p {
+                            append_referenced_modules(&arenas, *module_item, &mut referenced);
                         }
                     }
                 }
 
                 let mut top_level_modules = Vec::new();
-                for id in ast.descriptions {
-                    let Description::Module(module_id) = *ast.arenas.get(id) else {
+                for id in f.descriptions {
+                    let Description::Module(module_id) = &*id else {
                         continue;
                     };
                     let Module {
@@ -161,12 +162,12 @@ impl Design {
                         module_items: _,
                         ports: _,
                         default_nettype: _,
-                    } = ast.arenas.get(module_id);
+                    } = &**module_id;
                     let module_name = module_identifier.item.0;
                     if referenced.contains(&module_name) {
                         continue;
                     }
-                    top_level_modules.push((module_id, module_name));
+                    top_level_modules.push((*module_id, module_name));
                 }
 
                 if top_level_modules.len() == 0 {
@@ -176,7 +177,7 @@ impl Design {
                 } else if top_level_modules.len() > 1 {
                     let names = top_level_modules
                         .iter()
-                        .map(|(_, n)| &ast.arenas.ident_table[*n])
+                        .map(|(_, n)| &arenas.ident_table[*n])
                         .collect::<Vec<&str>>();
                     writeln!(
                         ectx.stderr,
@@ -186,8 +187,7 @@ impl Design {
                     let mut out = String::new();
                     for (m, _) in top_level_modules {
                         out.clear();
-                        let m = ast.arenas.get(m);
-                        let span = ast.arenas.get_item_span(m.module_identifier);
+                        let span = arenas.get_item_span(m.module_identifier);
                         report(&token_buffer, span, &mut out)?;
                         writeln!(ectx.stderr, "{out}").unwrap();
                     }
@@ -206,7 +206,7 @@ impl Design {
         let mut diagnostics = LowerDiagnostics::default();
         let result = vogls_verilog::elaborate::next::elaborate(
             &mut gl,
-            &ast.arenas,
+            &arenas,
             &token_buffer,
             *tl_module,
             &module_lut,
@@ -222,7 +222,7 @@ impl Design {
             }
         }
 
-        let Ok(mut elab_table) = result else {
+        let Ok((mut elab_table, table_ast_refs)) = result else {
             for (location, err, context) in &diagnostics.errors {
                 let mut out = String::new();
                 report_error(&token_buffer, err.clone(), *location, &mut out)?;
@@ -243,7 +243,7 @@ impl Design {
                 writeln!(
                     ectx.stdout,
                     "{}",
-                    elab_table.display(*root, &ast.arenas.ident_table, |s, f| {
+                    elab_table.display(*root, &arenas.ident_table, |s, f| {
                         match s {
                             VSymbol::Module(_) => f.write_str("mod"),
                             VSymbol::Parameter(v) => {
@@ -276,13 +276,13 @@ impl Design {
         }
 
         let mut udps = VgHashMap::default();
-        for description in ast.descriptions.iter() {
-            let Description::Udp(udp_id) = ast.arenas.get(description) else {
+        for description in f.descriptions.iter() {
+            let Description::Udp(udp_id) = &*description else {
                 continue;
             };
 
             let udp_id = *udp_id;
-            let ident = ast.arenas.get(udp_id).identifier.item.0;
+            let ident = udp_id.identifier.item.0;
 
             udps.insert(ident, udp_id);
         }
@@ -292,30 +292,34 @@ impl Design {
         let mut outs_lut = VgHashMap::default();
         let mut outs = Vec::new();
 
+        let dummy_key = elab_table.roots()[0];
+        let mut scope = Scope {
+            table: &mut elab_table,
+            key: dummy_key,
+            udps: &udps,
+            table_ast_refs: &table_ast_refs,
+            signal_aliases: &mut signal_aliases,
+            tokenized: &token_buffer,
+        };
+
         // @TODO: Iterate over the modules instead.
-        for key in elab_table.symbol_id_iter() {
-            match &elab_table[key].content {
+        for key in scope.table.symbol_id_iter() {
+            scope.key = key;
+            match &scope.table[key].content {
                 VSymbol::Module(i) if i.contains_specify => {
                     let module = module_lut[&i.module];
-                    for item in ast.arenas.get(module).module_items.iter() {
-                        let ModuleItem::NonPortModuleItem(id) = ast.arenas.get(item) else {
+                    for item in module.module_items.iter() {
+                        let ModuleItem::NonPortModuleItem(id) = &*item else {
                             continue;
                         };
-                        let NonPortModuleItem::SpecifyBlock(specify_block) = ast.arenas.get(*id)
-                        else {
+                        let NonPortModuleItem::SpecifyBlock(specify_block) = **id else {
                             continue;
                         };
 
                         error |= vogls_verilog::lower::specify::lower_specify(
                             &mut gl,
-                            &ast.arenas,
-                            &mut Scope {
-                                table: &mut elab_table,
-                                key,
-                                udps: &udps,
-                                signal_aliases: &mut signal_aliases,
-                                tokenized: &token_buffer,
-                            },
+                            &arenas,
+                            &mut scope,
                             specify_block.items,
                             &mut outs_lut,
                             &mut outs,
@@ -325,35 +329,23 @@ impl Design {
                     }
                 }
                 VSymbol::Function(i) => {
-                    let fn_decl = i.ast_id;
+                    let fn_decl = table_ast_refs.fns[i.ast_id];
                     error |= vogls_verilog::lower::module_or_generate_item::function::lower(
                         &mut gl,
-                        &ast.arenas,
+                        &arenas,
                         &mut diagnostics,
-                        &mut Scope {
-                            table: &mut elab_table,
-                            key,
-                            udps: &udps,
-                            signal_aliases: &mut signal_aliases,
-                            tokenized: &token_buffer,
-                        },
+                        &mut scope,
                         fn_decl,
                     )
                     .is_err();
                 }
                 VSymbol::Task(i) => {
-                    let task_decl = i.ast_id;
+                    let task_decl = table_ast_refs.tasks[i.ast_id];
                     error |= vogls_verilog::lower::module_or_generate_item::function::lower_task(
                         &mut gl,
-                        &ast.arenas,
+                        &arenas,
                         &mut diagnostics,
-                        &mut Scope {
-                            table: &mut elab_table,
-                            key,
-                            udps: &udps,
-                            signal_aliases: &mut signal_aliases,
-                            tokenized: &token_buffer,
-                        },
+                        &mut scope,
                         task_decl,
                     )
                     .is_err();
@@ -388,12 +380,13 @@ impl Design {
             let module_id = module_lut[&m.module];
             let module_key = lower_module_to_ir(
                 &mut gl,
-                &ast.arenas,
+                &arenas,
                 module_id,
                 &mut vogls_verilog::lower::Scope {
                     table: &mut elab_table,
                     key,
                     udps: &udps,
+                    table_ast_refs: &table_ast_refs,
                     signal_aliases: &mut signal_aliases,
                     tokenized: &token_buffer,
                 },
@@ -681,7 +674,7 @@ impl Design {
             );
             return Ok(Self {
                 gl,
-                ident_table: ast.arenas.ident_table,
+                ident_table: arenas.ident_table,
                 elab_table,
                 backend: DesignBackend::Compiled { design },
                 rt_signal_map: io_signals,
@@ -768,17 +761,18 @@ impl Design {
                 table: &mut elab_table,
                 key: tlm,
                 udps: &udps,
+                table_ast_refs: &table_ast_refs,
                 signal_aliases: &mut signal_aliases,
                 tokenized: &token_buffer,
             };
-            let scope = scope.vcd_scope(&ast.arenas.ident_table);
+            let scope = scope.vcd_scope(&arenas.ident_table);
             let scope = vogls_sim::VcdScope::lower(&scope, &io_signals, &signal_aliases);
             initial_state.start_vcd(vcd_path, scope);
         }
 
         Ok(Self {
             gl,
-            ident_table: ast.arenas.ident_table,
+            ident_table: arenas.ident_table,
             elab_table,
             backend: DesignBackend::Interpretted { simulation },
             rt_signal_map: io_signals,

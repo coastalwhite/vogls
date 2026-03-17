@@ -20,7 +20,8 @@ pub enum Region {
 pub struct Scope<'a> {
     pub table: &'a mut VSymbolTable,
     pub key: SymbolId,
-    pub udps: &'a VgHashMap<IdentId, AstId<UdpDeclaration>>,
+    pub table_ast_refs: &'a SymbolAstRefs<'a>,
+    pub udps: &'a VgHashMap<IdentId, AstId<'a, UdpDeclaration<'a>>>,
     pub signal_aliases: &'a mut VgHashMap<SignalKey, SignalAlias>,
     pub tokenized: &'a Tokenized,
 }
@@ -156,28 +157,27 @@ pub fn resolve_symbol_id(
     }
 }
 
-pub fn resolve_symbol_id_hier(
+pub fn resolve_symbol_id_hier<'a>(
     scope: SymbolId,
     table: &VSymbolTable,
-    arenas: &AstArenas,
-    ident: impl Into<HIdent>,
+    ident: impl Into<HIdent<'a>>,
 ) -> Option<SymbolId> {
     let ident = ident.into();
 
     let mut scope = scope;
 
     for component in ident.components {
-        scope = resolve_symbol_id(scope, table, arenas.get(component).ident.item.0)?;
+        scope = resolve_symbol_id(scope, table, component.ident.item.0)?;
     }
 
     resolve_symbol_id(scope, table, ident.ident.item.0)
 }
 
-pub fn try_resolve_symbol_id(
+pub fn try_resolve_symbol_id<'a>(
     scope: SymbolId,
     table: &VSymbolTable,
     arenas: &AstArenas,
-    ident: impl Into<HIdent>,
+    ident: impl Into<HIdent<'a>>,
     diagnostics: &mut Diagnostics,
 ) -> Result<SymbolId, ()> {
     let ident = ident.into();
@@ -185,13 +185,7 @@ pub fn try_resolve_symbol_id(
     let mut scope = scope;
 
     for component in ident.components {
-        scope = try_resolve_symbol_id_nonhier(
-            scope,
-            table,
-            arenas,
-            arenas.get(component).ident,
-            diagnostics,
-        )?;
+        scope = try_resolve_symbol_id_nonhier(scope, table, arenas, component.ident, diagnostics)?;
     }
 
     try_resolve_symbol_id_nonhier(scope, table, arenas, ident.ident, diagnostics)
@@ -210,13 +204,13 @@ pub fn try_resolve_symbol_id_nonhier(
     Ok(symid)
 }
 
-pub fn try_resolve_net<'a>(
+pub fn try_resolve_net<'a, 's>(
     scope: SymbolId,
-    table: &'a VSymbolTable,
+    table: &'s VSymbolTable,
     arenas: &AstArenas,
-    ident: impl Into<HIdent>,
+    ident: impl Into<HIdent<'a>>,
     diagnostics: &mut Diagnostics,
-) -> Result<&'a NetSymbol, ()> {
+) -> Result<&'s NetSymbol, ()> {
     let ident = ident.into();
     let sid = try_resolve_symbol_id(scope, table, arenas, ident, diagnostics)?;
     let VSymbol::Net(n) = &table[sid].content else {
@@ -304,7 +298,7 @@ pub fn unwrap_get_param_mut<'a>(table: &'a mut VSymbolTable, sid: SymbolId) -> &
     n
 }
 
-fn hident_span(arenas: &AstArenas, ident: HIdent) -> TokenRange {
+fn hident_span<'a>(arenas: &AstArenas, ident: HIdent<'a>) -> TokenRange {
     let lst = arenas.get_item_span(ident.ident);
     match ident.components.first() {
         None => lst,
@@ -312,13 +306,13 @@ fn hident_span(arenas: &AstArenas, ident: HIdent) -> TokenRange {
     }
 }
 
-pub fn try_resolve_constant<'a>(
+pub fn try_resolve_constant<'a, 's>(
     scope: SymbolId,
-    table: &'a VSymbolTable,
+    table: &'s VSymbolTable,
     arenas: &AstArenas,
-    ident: impl Into<HIdent>,
+    ident: impl Into<HIdent<'a>>,
     diagnostics: &mut Diagnostics,
-) -> Result<&'a VValue, ()> {
+) -> Result<&'s VValue, ()> {
     let ident = ident.into();
     let sid = try_resolve_symbol_id(scope, table, arenas, ident, diagnostics)?;
     let VSymbol::Parameter(value) = &table[sid].content else {
@@ -344,7 +338,7 @@ use crate::ast::module::{GenerateRegion, Module, ModuleItem, NonPortModuleItem, 
 use crate::ast::udp::UdpDeclaration;
 use crate::ast::{AstId, AstItem, HIdent, Identifier};
 use crate::elaborate::{
-    FunctionSymbol, ModuleSymbol, NetSymbol, TaskSymbol, VSymbol, VSymbolTable,
+    FunctionSymbol, ModuleSymbol, NetSymbol, SymbolAstRefs, TaskSymbol, VSymbol, VSymbolTable,
 };
 use crate::parser::AstArenas;
 use crate::tokenizer::Tokenized;
@@ -359,7 +353,7 @@ pub use module_or_generate_item::dims_to_array;
 pub fn lower_module_to_ir<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
-    root: AstId<Module>,
+    root: AstId<'a, Module<'a>>,
     scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
@@ -370,7 +364,7 @@ pub fn lower_module_to_ir<'a>(
         ports: _,
         module_items,
         default_nettype: _,
-    } = arenas.get(root);
+    } = &*root;
 
     let mut scopes = Vec::new();
     scopes.extend(scope.table[scope.key].children().iter().filter(|c| {
@@ -380,12 +374,13 @@ pub fn lower_module_to_ir<'a>(
         )
     }));
     while let Some(scope_key) = scopes.pop() {
-        if let VSymbol::GenerateBlock(ast_ids) = &scope.table[scope_key].content {
-            for id in ast_ids.iter() {
+        if let VSymbol::GenerateBlock(offset) = &scope.table[scope_key].content {
+            for id in scope.table_ast_refs.gen_blocks[*offset].iter() {
                 let mut scope = Scope {
                     table: &mut scope.table,
                     key: scope_key,
                     udps: scope.udps,
+                    table_ast_refs: scope.table_ast_refs,
                     signal_aliases: scope.signal_aliases,
                     tokenized: scope.tokenized,
                 };
@@ -401,9 +396,9 @@ pub fn lower_module_to_ir<'a>(
     }
 
     for module_item in module_items.iter() {
-        match arenas.get(module_item) {
+        match &*module_item {
             ModuleItem::PortDeclaration(_) => {}
-            ModuleItem::NonPortModuleItem(p) => match arenas.get(*p) {
+            ModuleItem::NonPortModuleItem(p) => match &**p {
                 NonPortModuleItem::ModuleOrGenerateItem(id) => {
                     module_or_generate_item::lower(gl, arenas, scope, *id, diagnostics)?
                 }
@@ -435,10 +430,10 @@ fn lower_to_signal<'a>(
     arenas: &'a AstArenas,
     scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
-    expr: AstId<Expr>,
+    expr: AstId<'a, Expr<'a>>,
     ty: VType,
 ) -> Result<SignalAlias, ()> {
-    if let Expr::Ident(ast_ident, exprs, range_expression) = arenas.get(expr)
+    if let Expr::Ident(ast_ident, exprs, range_expression) = &*expr
         && exprs.is_empty()
         && range_expression.is_none()
     {
@@ -482,11 +477,11 @@ fn assign_port_output<'a>(
     arenas: &'a AstArenas,
     scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
-    expr: AstId<Expr>,
+    expr: AstId<'a, Expr<'a>>,
     output_net: SymbolId,
     ty: VType,
 ) -> Result<(), ()> {
-    if let Expr::Ident(ast_ident, exprs, range_expression) = arenas.get(expr)
+    if let Expr::Ident(ast_ident, exprs, range_expression) = &*expr
         && exprs.is_empty()
         && range_expression.is_none()
     {
@@ -525,7 +520,7 @@ fn assign_port_output<'a>(
 
     let mut error = false;
     while let Some((var, var_ty, expr)) = driving.pop() {
-        match arenas.get(expr) {
+        match &*expr {
             Expr::Concatenation(exprs) => {
                 let mut shift = 0;
                 for e in exprs.iter().rev() {
@@ -661,15 +656,15 @@ fn assign_task_output<'a>(
     diagnostics: &mut Diagnostics,
     builder: &mut BasicBlockBuilder,
     variable: VariableKey,
-    expr: AstId<Expr>,
+    expr: AstId<'a, Expr<'a>>,
     ty: VType,
 ) -> Result<(), ()> {
-    let mut driving: Vec<AstId<Expr>> = Vec::new();
+    let mut driving: Vec<AstId<'a, Expr<'a>>> = Vec::new();
     driving.push(expr);
 
     let mut error = false;
     while let Some(expr) = driving.pop() {
-        match arenas.get(expr) {
+        match &*expr {
             Expr::Concatenation(_) => {
                 todo!()
             }
@@ -801,8 +796,8 @@ pub fn evaluate_range<'a>(
     arenas: &'a AstArenas,
     scope: EvalScope<'a>,
     diagnostics: &mut Diagnostics,
-    range: AstId<Range>,
+    range: AstId<'a, Range<'a>>,
 ) -> Result<(i64, i64, VectorSize), ()> {
-    let range = arenas.get(range);
+    let range = &*range;
     msb_lsb_to_width(gl, arenas, scope, diagnostics, range.msb, range.lsb)
 }

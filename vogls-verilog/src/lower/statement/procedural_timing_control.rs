@@ -22,15 +22,15 @@ pub fn lower<'a>(
     scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
     mut builder: BasicBlockBuilder,
-    ptc: AstId<ProceduralTimingControl>,
-    statement: AstId<StatementOrNull>,
+    ptc: AstId<'a, ProceduralTimingControl<'a>>,
+    statement: AstId<'a, StatementOrNull<'a>>,
 ) -> Result<BasicBlockBuilder, ()> {
-    match arenas.get(ptc) {
+    match &*ptc {
         ProceduralTimingControl::DelayControl(ast_delay_control) => {
-            let delay_control = arenas.get(*ast_delay_control);
+            let delay_control = &**ast_delay_control;
             match delay_control {
                 DelayControl::DelayValue(ast_value) => {
-                    let value = match arenas.get(*ast_value) {
+                    let value = match &**ast_value {
                         DelayValue::UnsignedNumber(value) => {
                             let value = &arenas.decimals[value.at];
                             value.as_u64().unwrap()
@@ -76,13 +76,13 @@ pub fn lower<'a>(
                 DelayControl::MinTypMax(_) => todo!(),
             }
         }
-        ProceduralTimingControl::EventControl(event_control) => match arenas.get(*event_control) {
+        ProceduralTimingControl::EventControl(event_control) => match &**event_control {
             EventControl::Star => {
                 let start_bb = builder.key();
                 builder = builder.jump(gl);
 
                 let mut ins = OrderedSet::new();
-                match arenas.get(statement) {
+                match &*statement {
                     StatementOrNull::Attribute(_) => {}
                     StatementOrNull::Statement(stmt) => {
                         super::get_used_signals(arenas, scope, diagnostics, &mut ins, *stmt)?
@@ -131,13 +131,13 @@ pub fn lower<'a>(
                 let mut conditions: Vec<(WatchCondition, VariableKey, AstId<Expr>)> = Vec::new();
                 let mut signals = Vec::new();
                 for event_expression in event_expression.0.iter() {
-                    let (expr, condition) = match arenas.get(event_expression) {
+                    let (expr, condition) = match &*event_expression {
                         EventExpressionPrimary::Expression(expr) => (expr, WatchCondition::None),
                         EventExpressionPrimary::Posedge(expr) => (expr, WatchCondition::Posedge),
                         EventExpressionPrimary::Negedge(expr) => (expr, WatchCondition::Negedge),
                     };
 
-                    let Expr::Ident(ast_ident, exprs, range_expression) = arenas.get(*expr) else {
+                    let Expr::Ident(ast_ident, exprs, range_expression) = &**expr else {
                         panic!("not an ident");
                     };
                     if !exprs.is_empty() || range_expression.is_some() {

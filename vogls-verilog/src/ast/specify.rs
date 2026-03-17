@@ -194,8 +194,8 @@ use super::{AstId, AstIdRange, AstItem, Identifier};
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 500
 // specify_block ::= specify { specify_item } endspecify
 #[derive(Clone, Copy)]
-pub struct SpecifyBlock {
-    pub items: AstIdRange<SpecifyBlockItem>,
+pub struct SpecifyBlock<'a> {
+    pub items: AstIdRange<'a, SpecifyBlockItem<'a>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 500
@@ -206,11 +206,11 @@ pub struct SpecifyBlock {
 // | path_declaration
 // | system_timing_check
 #[derive(Clone, Copy)]
-pub enum SpecifyBlockItem {
+pub enum SpecifyBlockItem<'a> {
     SpecParamDeclaration,
     PulseStyleDeclaration,
     ShowCancelledDeclaration,
-    PathDeclaration(PathDeclaration),
+    PathDeclaration(PathDeclaration<'a>),
     SystemTimingCheck(SystemTimingCheck),
 }
 
@@ -231,18 +231,18 @@ pub enum SpecifyBlockItem {
 //   ( list_of_path_outputs [ polarity_operator ] : data_source_expression ) )
 // data_source_expression ::= expression
 #[derive(Clone, Copy)]
-pub struct PathDeclaration {
-    pub state_dependent_condition: Option<AstId<StateDependentCondition>>,
+pub struct PathDeclaration<'a> {
+    pub state_dependent_condition: Option<AstId<'a, StateDependentCondition<'a>>>,
     pub edge_identifier: Option<AstItem<EdgeIdentifier>>,
-    pub input_terminal_descriptors: AstIdRange<TerminalDescriptor>,
+    pub input_terminal_descriptors: AstIdRange<'a, TerminalDescriptor<'a>>,
     pub polarity_operator: Option<AstItem<PolarityOperator>>,
     pub variant: PathDeclarationVariant,
-    pub data_source_expression: Option<AstId<Expr>>,
-    pub output_terminal_descriptors: AstIdRange<TerminalDescriptor>,
-    pub path_delay_value: AstId<PathDelayValue>,
+    pub data_source_expression: Option<AstId<'a, Expr<'a>>>,
+    pub output_terminal_descriptors: AstIdRange<'a, TerminalDescriptor<'a>>,
+    pub path_delay_value: AstId<'a, PathDelayValue<'a>>,
 }
 
-impl PathDeclaration {
+impl<'a> PathDeclaration<'a> {
     pub fn is_simple(&self) -> bool {
         self.data_source_expression.is_none()
     }
@@ -265,14 +265,14 @@ pub enum EdgeIdentifier {
 }
 
 #[derive(Clone, Copy)]
-pub enum StateDependentCondition {
-    If(AstId<ModulePathExpr>),
+pub enum StateDependentCondition<'a> {
+    If(AstId<'a, ModulePathExpr<'a>>),
     Ifnone,
 }
 
 #[derive(Clone, Copy)]
 #[repr(transparent)]
-pub struct ModulePathExpr(pub Expr);
+pub struct ModulePathExpr<'a>(pub Expr<'a>);
 
 #[derive(Clone, Copy)]
 pub enum PathDeclarationVariant {
@@ -292,9 +292,9 @@ pub enum PolarityOperator {
 // specify_input_terminal_descriptor ::= input_identifier [ [ constant_range_expression ] ]
 // specify_output_terminal_descriptor ::= output_identifier [ [ constant_range_expression ] ]
 #[derive(Clone, Copy)]
-pub struct TerminalDescriptor {
+pub struct TerminalDescriptor<'a> {
     pub ident: AstItem<Identifier>,
-    pub constant_range_expr: Option<AstId<ConstantRangeExpression>>,
+    pub constant_range_expr: Option<AstId<'a, ConstantRangeExpression<'a>>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 500 - 501
@@ -302,8 +302,8 @@ pub struct TerminalDescriptor {
 //   list_of_path_delay_expressions
 // | ( list_of_path_delay_expressions )
 #[derive(Clone, Copy)]
-pub struct PathDelayValue {
-    pub list_of_delay_expressions: AstIdRange<ConstantMinTypMaxExpression>,
+pub struct PathDelayValue<'a> {
+    pub list_of_delay_expressions: AstIdRange<'a, ConstantMinTypMaxExpression<'a>>,
 }
 
 // system_timing_check ::=

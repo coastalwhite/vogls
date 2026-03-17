@@ -53,16 +53,16 @@ pub fn lower_udp<'a>(
     arenas: &'a AstArenas,
     scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
-    id: AstId<UdpDeclaration>,
-    output_terminal: AstId<NetLValue>,
-    inputs: AstIdRange<Expr>,
+    id: AstId<'a, UdpDeclaration<'a>>,
+    output_terminal: AstId<'a, NetLValue<'a>>,
+    inputs: AstIdRange<'a, Expr<'a>>,
 ) -> Result<(), ()> {
     let UdpDeclaration {
         attribute_instances: _,
         identifier: _,
         ports,
         body,
-    } = arenas.get(id);
+    } = &*id;
 
     let mut builder = new_anonymous_builder(gl, "udp".into(), arenas.get_span(id));
 
@@ -80,7 +80,7 @@ pub fn lower_udp<'a>(
                 edge_list,
                 current_state: _,
                 next_state: _,
-            } = arenas.get(entry);
+            } = &*entry;
             if level_list.len() < inputs.len() && edge_list.is_some() {
                 let i = level_list.len();
                 if before_inputs[i].is_none() {
@@ -108,7 +108,7 @@ pub fn lower_udp<'a>(
                 let UdpCombinationalEntry {
                     level_input_list,
                     output_symbol,
-                } = arenas.get(entry);
+                } = &*entry;
 
                 if level_input_list.len() != inputs.len() {
                     diagnostics.not_yet_implemented(
@@ -120,7 +120,7 @@ pub fn lower_udp<'a>(
 
                 let mut acc = builder.constant(gl, Bits::from(true));
                 for (input, level) in input_vars.iter().zip(level_input_list.iter()) {
-                    let is_level = lower_level(gl, &mut builder, *input, *arenas.get(level));
+                    let is_level = lower_level(gl, &mut builder, *input, *level);
                     acc = builder.and(gl, acc, is_level);
                 }
 
@@ -172,7 +172,7 @@ pub fn lower_udp<'a>(
                     assert!(port_list.len() >= 2);
 
                     let ast_output = port_list.pop_front().unwrap();
-                    let output = arenas.get(ast_output);
+                    let output = *ast_output;
                     let output_name = output.0;
                     let output_signal = gl.signals.insert(vogls_ir::Signal {
                         name: arenas.ident_table[output.0].to_string(),
@@ -183,7 +183,7 @@ pub fn lower_udp<'a>(
                     (output_signal, output_name)
                 }
                 UdpPorts::DeclarationPortList(decl_list) => {
-                    let output = arenas.get(decl_list.output_decl);
+                    let output = *decl_list.output_decl;
                     if let Some(constant_expr) = output.constant_expr {
                         diagnostics.not_yet_implemented(
                             arenas.get_span(constant_expr),
@@ -206,7 +206,7 @@ pub fn lower_udp<'a>(
                 let UdpInitialStatement {
                     output_port_ident,
                     init_val,
-                } = arenas.get(*initial);
+                } = &**initial;
                 if output_port_ident.item.0 != output_name {
                     diagnostics.not_yet_implemented(
                         arenas.get_item_span(*output_port_ident),
@@ -227,7 +227,7 @@ pub fn lower_udp<'a>(
                     edge_list,
                     current_state,
                     next_state,
-                } = arenas.get(entry);
+                } = &*entry;
 
                 if level_list.len() + edge_list.map_or(0, |(_, after_list)| 1 + after_list.len())
                     != inputs.len()
@@ -245,13 +245,13 @@ pub fn lower_udp<'a>(
 
                 let mut acc = builder.constant(gl, Bits::from(true));
                 for (i, level) in level_list.iter().enumerate() {
-                    let is_level = lower_level(gl, &mut builder, input_vars[i], *arenas.get(level));
+                    let is_level = lower_level(gl, &mut builder, input_vars[i], *level);
                     acc = builder.and(gl, acc, is_level);
                 }
                 if let Some((edge_indicator, after_level_list)) = edge_list {
                     let prb_before = before_inputs[level_list.len()].unwrap();
                     let prb_after = input_vars[level_list.len()];
-                    match arenas.get(*edge_indicator) {
+                    match &**edge_indicator {
                         UdpEdgeIndicator::Levels(before, after) => {
                             let is_before = lower_level(gl, &mut builder, prb_before, before.item);
                             acc = builder.and(gl, acc, is_before);
@@ -317,7 +317,7 @@ pub fn lower_udp<'a>(
                             gl,
                             &mut builder,
                             input_vars[level_list.len() + 1 + i],
-                            *arenas.get(level),
+                            *level,
                         );
                         acc = builder.and(gl, acc, is_level);
                     }

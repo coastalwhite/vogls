@@ -6,6 +6,7 @@ use crate::ast::AstId;
 use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::expr::{BinaryOperator, Expr, UnaryOperator};
 use crate::elaborate::VSymbol;
+use crate::lower::expression::StackItem;
 use crate::lower::vvalue::VValue;
 use crate::lower::{EvalScope, hident_span, try_resolve_constant, try_resolve_symbol_id};
 use crate::number::Sign;
@@ -18,16 +19,12 @@ pub fn eval_constant_expr<'a>(
     arenas: &'a AstArenas,
     scope: EvalScope<'_>,
     diagnostics: &mut Diagnostics,
-    expr: AstId<ConstantExpr>,
+    expr: AstId<'a, ConstantExpr<'a>>,
 ) -> Result<VValue, ()> {
     let expr = expr.into_expr();
-    struct StackItem {
-        expr: AstId<Expr>,
-        dispatched: bool,
-    }
 
     let mut error = false;
-    let mut dispatch_stack: Vec<StackItem> = Vec::new();
+    let mut dispatch_stack: Vec<StackItem<'a>> = Vec::new();
     let mut result_stack: Vec<Option<VValue>> = Vec::new();
 
     dispatch_stack.push(StackItem {
@@ -36,7 +33,7 @@ pub fn eval_constant_expr<'a>(
     });
 
     while let Some(mut item) = dispatch_stack.pop() {
-        match arenas.get(item.expr) {
+        match *item.expr {
             Expr::Decimal(decimal) => {
                 let decimal = &arenas.decimals[decimal.at];
                 result_stack.push(Some(VValue::SignedNet(decimal.clone())));
@@ -46,7 +43,7 @@ pub fn eval_constant_expr<'a>(
                     item.dispatched = true;
                     dispatch_stack.push(item);
                     dispatch_stack.push(StackItem {
-                        expr: *child,
+                        expr: child,
                         dispatched: false,
                     });
                     continue;
@@ -84,10 +81,7 @@ pub fn eval_constant_expr<'a>(
                 if !item.dispatched {
                     item.dispatched = true;
                     dispatch_stack.push(item);
-                    dispatch_stack.extend([*rhs, *lhs].into_iter().map(|expr| StackItem {
-                        expr,
-                        dispatched: false,
-                    }));
+                    dispatch_stack.extend([rhs, lhs].into_iter().map(StackItem::new));
                     continue;
                 }
 
@@ -150,7 +144,7 @@ pub fn eval_constant_expr<'a>(
                 }
 
                 let Ok(value) =
-                    try_resolve_constant(scope.key, scope.table, arenas, *ast_ident, diagnostics)
+                    try_resolve_constant(scope.key, scope.table, arenas, ast_ident, diagnostics)
                 else {
                     result_stack.push(None);
                     error = true;
@@ -167,12 +161,8 @@ pub fn eval_constant_expr<'a>(
                 if !item.dispatched {
                     item.dispatched = true;
                     dispatch_stack.push(item);
-                    dispatch_stack.extend([*condition, *truthy, *falsy].into_iter().map(|expr| {
-                        StackItem {
-                            expr,
-                            dispatched: false,
-                        }
-                    }));
+                    dispatch_stack
+                        .extend([condition, truthy, falsy].into_iter().map(StackItem::new));
                     continue;
                 }
 
@@ -240,7 +230,7 @@ pub fn eval_constant_expr<'a>(
                     arenas,
                     diagnostics,
                     expr,
-                    *ident,
+                    ident,
                     &result_stack[result_stack.len() - num_args..],
                 );
 
@@ -262,7 +252,7 @@ pub fn eval_constant_expr<'a>(
                 let return_stack_length = result_stack.len() - arguments.len();
 
                 let Ok(fn_sid) =
-                    try_resolve_symbol_id(scope.key, scope.table, arenas, *ident, diagnostics)
+                    try_resolve_symbol_id(scope.key, scope.table, arenas, ident, diagnostics)
                 else {
                     result_stack.truncate(return_stack_length);
                     result_stack.push(None);
@@ -274,7 +264,7 @@ pub fn eval_constant_expr<'a>(
                     result_stack.truncate(return_stack_length);
                     result_stack.push(None);
                     diagnostics
-                        .not_yet_implemented(hident_span(arenas, *ident), "not calling a function");
+                        .not_yet_implemented(hident_span(arenas, ident), "not calling a function");
                     error = true;
                     continue;
                 };
@@ -282,7 +272,7 @@ pub fn eval_constant_expr<'a>(
                 let Some(lowered) = fn_symbol.lowered.as_ref() else {
                     result_stack.truncate(return_stack_length);
                     diagnostics.not_yet_implemented(
-                        hident_span(arenas, *ident),
+                        hident_span(arenas, ident),
                         "function is not yet lowered",
                     );
                     error = true;

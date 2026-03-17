@@ -13,11 +13,11 @@ pub fn lower_loop_statement<'a>(
     scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
     mut builder: BasicBlockBuilder,
-    ls: AstId<LoopStatement>,
+    ls: AstId<'a, LoopStatement<'a>>,
 ) -> Result<BasicBlockBuilder, ()> {
     use LoopStatementVariant as V;
 
-    let ls = arenas.get(ls);
+    let ls = &*ls;
 
     let mut repeat_vars = None;
     match ls.variant {
@@ -27,7 +27,7 @@ pub fn lower_loop_statement<'a>(
             repeat_vars = Some((i, size));
         }
         V::For(initialization, _, _) => {
-            let initialization = arenas.get(initialization);
+            let initialization = &*initialization;
             let (initialization_var, initialization_var_ty) = lower_expr(
                 gl,
                 arenas,
@@ -94,7 +94,6 @@ pub fn lower_loop_statement<'a>(
 
     match ls.variant {
         V::For(_, _, step) => {
-            let step = arenas.get(step);
             let (step_var, step_var_ty) =
                 lower_expr(gl, arenas, scope, diagnostics, &mut builder, step.expr)?;
             assign::assign_variable_lvalue(

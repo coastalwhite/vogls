@@ -4,8 +4,8 @@ use std::ops::{Index, IndexMut};
 
 use vogls_ir::token_range::TokenRange;
 
-use vogls_utils::VgHashMap;
 use crate::ident_table::{IdentId, IdentTable};
+use vogls_utils::VgHashMap;
 
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]

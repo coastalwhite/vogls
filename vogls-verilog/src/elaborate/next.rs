@@ -34,41 +34,49 @@ use crate::parser::AstArenas;
 use crate::tokenizer::Tokenized;
 
 use super::{
-    ModuleSymbol, NetSymbol, VSymbol, VSymbolTable, port_declaration_to_info, try_table_insert,
+    ModuleSymbol, NetSymbol, SymbolAstRefs, VSymbol, VSymbolTable, port_declaration_to_info,
+    try_table_insert,
 };
 
-pub enum ElabLevel {
-    GenerateIf(AstId<IfGenerateConstruct>),
-    GenerateLoop(AstId<LoopGenerateConstruct>),
-    GenerateCase(AstId<CaseGenerateConstruct>),
-    GenerateRegion(GenerateRegion),
-    GenerateBlock(AstIdRange<ModuleOrGenerateItem>),
-    Module(AstId<Module>),
+pub enum ElabLevel<'a> {
+    GenerateIf(AstId<'a, IfGenerateConstruct<'a>>),
+    GenerateLoop(AstId<'a, LoopGenerateConstruct<'a>>),
+    GenerateCase(AstId<'a, CaseGenerateConstruct<'a>>),
+    GenerateRegion(GenerateRegion<'a>),
+    GenerateBlock(AstIdRange<'a, ModuleOrGenerateItem<'a>>),
+    Module(AstId<'a, Module<'a>>),
 }
 
 #[derive(Clone, Copy)]
-pub enum InLevelSymbol {
+pub enum InLevelSymbol<'a> {
     Param(
-        AstId<ParameterDeclarationTyping>,
-        AstId<ConstantMinTypMaxExpression>,
+        AstId<'a, ParameterDeclarationTyping<'a>>,
+        AstId<'a, ConstantMinTypMaxExpression<'a>>,
         Option<SymbolId>,
     ),
-    ModuleInstance(Option<AstId<ParameterValueAssignment>>, AstId<Module>),
-    Integer(AstId<VariableType>),
-    Reg(bool, Option<AstId<Range>>, AstId<VariableType>),
+    ModuleInstance(
+        Option<AstId<'a, ParameterValueAssignment<'a>>>,
+        AstId<'a, Module<'a>>,
+    ),
+    Integer(AstId<'a, VariableType<'a>>),
+    Reg(
+        bool,
+        Option<AstId<'a, Range<'a>>>,
+        AstId<'a, VariableType<'a>>,
+    ),
     Net(
-        AstId<NetDeclaration>,
-        Option<AstIdRange<Dimension>>,
+        AstId<'a, NetDeclaration<'a>>,
+        Option<AstIdRange<'a, Dimension<'a>>>,
         AstItem<Identifier>,
     ),
-    Port(AstId<PortDeclaration>, AstItem<Identifier>),
-    Task(AstId<TaskDeclaration>),
-    Function(AstId<FunctionDeclaration>),
+    Port(AstId<'a, PortDeclaration<'a>>, AstItem<Identifier>),
+    Task(AstId<'a, TaskDeclaration<'a>>),
+    Function(AstId<'a, FunctionDeclaration<'a>>),
 }
 
 pub struct ElaborationState<'a> {
-    lvl_symbols: IndexMap<SymbolId, InLevelSymbol>,
-    next_levels: VecDeque<(SymbolId, ElabLevel)>,
+    lvl_symbols: IndexMap<SymbolId, InLevelSymbol<'a>>,
+    next_levels: VecDeque<(SymbolId, ElabLevel<'a>)>,
     marked: VgHashSet<SymbolId>,
 
     needs_adjacency_list: Vec<(SymbolId, usize, usize)>,
@@ -77,14 +85,15 @@ pub struct ElaborationState<'a> {
     dummy_signal: SignalKey,
 
     /// Scratchpad for traversing the constant expressions.
-    dispatch_stack: Vec<AstId<Expr>>,
-    stmt_dispatch_stack: Vec<(SymbolId, AstIdRange<Statement>)>,
+    dispatch_stack: Vec<AstId<'a, Expr<'a>>>,
+    stmt_dispatch_stack: Vec<(SymbolId, AstIdRange<'a, Statement<'a>>)>,
 
-    module_lut: &'a VgHashMap<IdentId, AstId<Module>>,
+    ast_refs: SymbolAstRefs<'a>,
+    module_lut: &'a VgHashMap<IdentId, AstId<'a, Module<'a>>>,
 }
 
-impl ElaborationState<'_> {
-    pub fn insert_lvl_symbol(&mut self, sid: SymbolId, symbol: InLevelSymbol) {
+impl<'a> ElaborationState<'a> {
+    pub fn insert_lvl_symbol(&mut self, sid: SymbolId, symbol: InLevelSymbol<'a>) {
         assert!(self.lvl_symbols.insert(sid, symbol).is_none());
     }
 }
@@ -108,10 +117,10 @@ pub fn elaborate<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
     tokenized: &'a Tokenized,
-    top_level: AstId<Module>,
-    module_lut: &VgHashMap<IdentId, AstId<Module>>,
+    top_level: AstId<'a, Module<'a>>,
+    module_lut: &'a VgHashMap<IdentId, AstId<'a, Module<'a>>>,
     diagnostics: &mut Diagnostics,
-) -> Result<VSymbolTable, ()> {
+) -> Result<(VSymbolTable, SymbolAstRefs<'a>), ()> {
     let dummy_signal = gl.signals.insert(vogls_ir::Signal {
         name: "".to_string(),
         size: SCALAR_VSIZE,
@@ -128,11 +137,12 @@ pub fn elaborate<'a>(
         dummy_signal,
         dispatch_stack: Vec::new(),
         stmt_dispatch_stack: Vec::new(),
+        ast_refs: SymbolAstRefs::default(),
         module_lut: &module_lut,
     };
 
     let mut table = VSymbolTable::default();
-    let tlm_ident = arenas.get(top_level).module_identifier;
+    let tlm_ident = top_level.module_identifier;
     let tlm = tlm_ident.item.0;
     let module_symbol = ModuleSymbol {
         module: tlm,
@@ -240,7 +250,7 @@ pub fn elaborate<'a>(
                     st.needs_adjacency_list_items.len(),
                     st.needs_adjacency_list_items.len(),
                 ));
-                symbol.extend_needs(arenas, sid, &table, &mut st);
+                symbol.extend_needs(sid, &table, &mut st);
                 st.needs_adjacency_list.last_mut().unwrap().2 = st.needs_adjacency_list_items.len();
                 st.marked.clear();
             }
@@ -280,6 +290,7 @@ pub fn elaborate<'a>(
                         *sid,
                         scope,
                         &mut table,
+                        &st.ast_refs,
                         &mut st.next_levels,
                         diagnostics,
                     )
@@ -306,23 +317,29 @@ pub fn elaborate<'a>(
         }
     }
 
-    if error { Err(()) } else { Ok(table) }
+    if error {
+        Err(())
+    } else {
+        Ok((table, st.ast_refs))
+    }
 }
 
 fn extend_opt_generate_block_sids<'a>(
     arenas: &'a AstArenas,
     scope: SymbolId,
     table: &mut VSymbolTable,
-    st: &mut ElaborationState,
-    id: AstId<Option<GenerateBlock>>,
+    st: &mut ElaborationState<'a>,
+    id: AstId<'a, Option<GenerateBlock<'a>>>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
-    let Some(blk) = arenas.get(id) else {
+    let Some(blk) = &*id else {
         return Ok(());
     };
 
     let items = blk.module_or_generate_items();
-    let symbol = VSymbol::GenerateBlock(items);
+    let offset = st.ast_refs.gen_blocks.len();
+    st.ast_refs.gen_blocks.push(items);
+    let symbol = VSymbol::GenerateBlock(offset);
     let sid = match blk.ident() {
         None => table.insert_unlinked(IdentTable::EMPTY_IDENT, scope, arenas.get_span(id), symbol),
         Some(ident) => try_table_insert(arenas, table, scope, ident, symbol, diagnostics)?,
@@ -341,22 +358,17 @@ fn extend_generate_if_sids<'a>(
     arenas: &'a AstArenas,
     scope: SymbolId,
     table: &mut VSymbolTable,
-    st: &mut ElaborationState,
-    id: AstId<IfGenerateConstruct>,
+    st: &mut ElaborationState<'a>,
+    id: AstId<'a, IfGenerateConstruct<'a>>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
-    let IfGenerateConstruct {
-        condition,
-        truthy,
-        falsy,
-    } = arenas.get(id);
     let condition =
-        super::eval_constant_expr_elab(gl, arenas, scope, &table, diagnostics, *condition)?;
+        super::eval_constant_expr_elab(gl, arenas, scope, &table, diagnostics, id.condition)?;
 
     let blk = if condition.to_logical() {
-        *truthy
+        id.truthy
     } else {
-        match falsy {
+        match &id.falsy {
             None => return Ok(()),
             Some(blk) => *blk,
         }
@@ -369,8 +381,8 @@ fn extend_generate_loop_sids<'a>(
     arenas: &'a AstArenas,
     scope: SymbolId,
     table: &mut VSymbolTable,
-    st: &mut ElaborationState,
-    id: AstId<LoopGenerateConstruct>,
+    st: &mut ElaborationState<'a>,
+    id: AstId<'a, LoopGenerateConstruct<'a>>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
     let LoopGenerateConstruct {
@@ -378,16 +390,16 @@ fn extend_generate_loop_sids<'a>(
         condition,
         iteration,
         block,
-    } = arenas.get(id);
+    } = &*id;
 
     let GenvarAssignment {
         ident: initialization_ident,
         expr: initialization,
-    } = arenas.get(*initialization);
+    } = &**initialization;
     let GenvarAssignment {
         ident: iteration_ident,
         expr: iteration,
-    } = arenas.get(*iteration);
+    } = &**iteration;
 
     if initialization_ident.item.0 != iteration_ident.item.0 {
         diagnostics.not_yet_implemented(
@@ -409,7 +421,7 @@ fn extend_generate_loop_sids<'a>(
     let mut value =
         super::eval_constant_expr_elab(gl, arenas, scope, table, diagnostics, *initialization)?;
 
-    let (mod_or_gen_items, block_ident_ast) = match arenas.get(*block) {
+    let (mod_or_gen_items, block_ident_ast) = match &**block {
         GenerateBlock::ModuleOrGenerateItem(id) => (AstIdRange::single(*id), None),
         GenerateBlock::BeginEnd(ident, mod_or_gen_items) => (*mod_or_gen_items, *ident),
     };
@@ -431,12 +443,14 @@ fn extend_generate_loop_sids<'a>(
         ),
     };
 
+    let gen_block_ast_offset = st.ast_refs.gen_blocks.len();
+    st.ast_refs.gen_blocks.push(mod_or_gen_items);
     loop {
         let iter_sid = table.insert_unlinked(
             IdentTable::EMPTY_IDENT,
             loop_sid,
             table[loop_sid].origin(),
-            VSymbol::GenerateBlock(mod_or_gen_items),
+            VSymbol::GenerateBlock(gen_block_ast_offset),
         );
 
         let genvar_constant = table
@@ -470,15 +484,15 @@ fn extend_generate_case_sids<'a>(
     arenas: &'a AstArenas,
     scope: SymbolId,
     table: &mut VSymbolTable,
-    st: &mut ElaborationState,
-    id: AstId<CaseGenerateConstruct>,
+    st: &mut ElaborationState<'a>,
+    id: AstId<'a, CaseGenerateConstruct<'a>>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
-    let CaseGenerateConstruct { value, items } = arenas.get(id);
+    let CaseGenerateConstruct { value, items } = &*id;
     let value = super::eval_constant_expr_elab(gl, arenas, scope, table, diagnostics, *value)?;
 
     for item in items.iter() {
-        let CaseGenerateItem { pattern, block } = arenas.get(item);
+        let CaseGenerateItem { pattern, block } = &*item;
         let mut is_selected = false;
         match pattern {
             CaseGeneratePattern::Default => is_selected = true,
@@ -508,13 +522,13 @@ fn extend_generate_case_sids<'a>(
     Ok(())
 }
 
-fn extend_param_decl_idents_into_scope(
-    arenas: &AstArenas,
+fn extend_param_decl_idents_into_scope<'a>(
+    arenas: &'a AstArenas,
     scope: SymbolId,
     table: &mut VSymbolTable,
-    st: &mut ElaborationState,
-    typing: AstId<ParameterDeclarationTyping>,
-    assignments: AstIdRange<ParamAssignment>,
+    st: &mut ElaborationState<'a>,
+    typing: AstId<'a, ParameterDeclarationTyping<'a>>,
+    assignments: AstIdRange<'a, ParamAssignment<'a>>,
     parameter_type: ParameterType,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
@@ -530,7 +544,7 @@ fn extend_param_decl_idents_into_scope(
     };
     let mut error = false;
     for assignment in assignments.iter() {
-        let ParamAssignment { param, constant } = arenas.get(assignment);
+        let ParamAssignment { param, constant } = &*assignment;
         let Ok(sid) = try_table_insert(
             arenas,
             table,
@@ -559,10 +573,10 @@ pub enum ParameterType {
 
 fn elaborate_module<'a>(
     arenas: &'a AstArenas,
-    module: AstId<Module>,
+    module: AstId<'a, Module<'a>>,
     scope: SymbolId,
     table: &mut VSymbolTable,
-    st: &mut ElaborationState,
+    st: &mut ElaborationState<'a>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
     let Module {
@@ -572,7 +586,7 @@ fn elaborate_module<'a>(
         ports,
         module_items,
         default_nettype: _,
-    } = arenas.get(module);
+    } = &*module;
 
     // 1. Assign a SymbolId to each symbol.
     let mut error = false;
@@ -581,7 +595,7 @@ fn elaborate_module<'a>(
             let ParameterDeclaration {
                 typing,
                 assignments,
-            } = arenas.get(id);
+            } = &*id;
             error |= extend_param_decl_idents_into_scope(
                 arenas,
                 scope,
@@ -600,10 +614,10 @@ fn elaborate_module<'a>(
     match ports {
         ModulePorts::Ports(ports) => {
             for id in ports.iter() {
-                match arenas.get(id) {
+                match &*id {
                     Port::PortExpression(id) => {
-                        let PortExpression { references } = arenas.get(*id);
-                        let PortReference { identifier } = arenas.get(*references);
+                        let PortExpression { references } = &**id;
+                        let PortReference { identifier, .. } = &**references;
                         let symbol = NetSymbol {
                             ty: VType::SCALAR_NET,
                             dims: Vec::new(),
@@ -636,10 +650,10 @@ fn elaborate_module<'a>(
         ModulePorts::PortDeclarations(port_declarations) => {
             for id in port_declarations.iter() {
                 use ConnectionDirection as D;
-                let (direction, identifiers) = match arenas.get(id) {
-                    PortDeclaration::Inout(id) => (D::Both, arenas.get(*id).port_identifiers),
-                    PortDeclaration::Input(id) => (D::In, arenas.get(*id).port_identifiers),
-                    PortDeclaration::Output(id) => (D::Out, arenas.get(*id).identifiers),
+                let (direction, identifiers) = match &*id {
+                    PortDeclaration::Inout(id) => (D::Both, id.port_identifiers),
+                    PortDeclaration::Input(id) => (D::In, id.port_identifiers),
+                    PortDeclaration::Output(id) => (D::Out, id.identifiers),
                 };
 
                 for ident in identifiers.iter() {
@@ -675,19 +689,19 @@ fn elaborate_module<'a>(
     }
 
     for item in module_items.iter() {
-        match arenas.get(item) {
+        match &*item {
             ModuleItem::PortDeclaration(id) => {
                 let id = *id;
 
                 use ConnectionDirection as D;
-                let (direction, identifiers) = match arenas.get(id) {
-                    PortDeclaration::Inout(id) => (D::Both, arenas.get(*id).port_identifiers),
-                    PortDeclaration::Input(id) => (D::In, arenas.get(*id).port_identifiers),
-                    PortDeclaration::Output(id) => (D::Out, arenas.get(*id).identifiers),
+                let (direction, identifiers) = match &*id {
+                    PortDeclaration::Inout(id) => (D::Both, id.port_identifiers),
+                    PortDeclaration::Input(id) => (D::In, id.port_identifiers),
+                    PortDeclaration::Output(id) => (D::Out, id.identifiers),
                 };
 
                 for ident in identifiers.iter() {
-                    let Some(sid) = table.resolve(scope, arenas.get(ident).0) else {
+                    let Some(sid) = table.resolve(scope, ident.0) else {
                         diagnostics.var_not_found(arenas, arenas.to_item(ident));
                         error = true;
                         continue;
@@ -709,7 +723,7 @@ fn elaborate_module<'a>(
                     unwrap_get_module_mut(table, scope).ports[port_idx].1 = direction;
                 }
             }
-            ModuleItem::NonPortModuleItem(id) => match arenas.get(*id) {
+            ModuleItem::NonPortModuleItem(id) => match &**id {
                 NonPortModuleItem::ModuleOrGenerateItem(id) => {
                     error |= extend_module_or_generate_item_sids(
                         arenas,
@@ -722,11 +736,13 @@ fn elaborate_module<'a>(
                     .is_err();
                 }
                 NonPortModuleItem::GenerateRegion(region) => {
+                    let offset = st.ast_refs.gen_blocks.len();
+                    st.ast_refs.gen_blocks.push(region.module_or_generate_item);
                     let sid = table.insert_unlinked(
                         IdentTable::EMPTY_IDENT,
                         scope,
                         arenas.get_span(*id),
-                        VSymbol::GenerateBlock(region.module_or_generate_item),
+                        VSymbol::GenerateBlock(offset),
                     );
                     st.next_levels
                         .push_back((sid, ElabLevel::GenerateRegion(*region)));
@@ -735,7 +751,7 @@ fn elaborate_module<'a>(
                     let ParameterDeclaration {
                         typing,
                         assignments,
-                    } = arenas.get(*id);
+                    } = &**id;
                     error |= extend_param_decl_idents_into_scope(
                         arenas,
                         scope,
@@ -764,21 +780,21 @@ fn elaborate_module<'a>(
 
 fn extend_module_or_generate_item_sids<'a>(
     arenas: &'a AstArenas,
-    id: AstId<ModuleOrGenerateItem>,
+    id: AstId<'a, ModuleOrGenerateItem<'a>>,
     scope: SymbolId,
     table: &mut VSymbolTable,
-    st: &mut ElaborationState,
+    st: &mut ElaborationState<'a>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
-    match arenas.get(id).content {
-        ModuleOrGenerateItemContent::ModuleOrGenerateItemDeclaration(id) => match arenas.get(id) {
+    match id.content {
+        ModuleOrGenerateItemContent::ModuleOrGenerateItemDeclaration(id) => match &*id {
             ModuleOrGenerateItemDeclaration::Net(id) => {
                 let NetDeclaration {
                     net_type,
                     signed: _,
                     range: _,
                     nets,
-                } = arenas.get(*id);
+                } = &**id;
 
                 if !matches!(net_type.item, NetType::Wire) {
                     diagnostics.not_yet_implemented(
@@ -792,7 +808,7 @@ fn extend_module_or_generate_item_sids<'a>(
                 match nets {
                     NetDeclarationNets::Idents(idents) => {
                         for net_ident in idents.iter() {
-                            let NetIdent { ident, dimension } = arenas.get(net_ident);
+                            let NetIdent { ident, dimension } = &*net_ident;
 
                             if let Some(sid) = table.resolve(scope, ident.item.0) {
                                 // @Hack.
@@ -829,7 +845,7 @@ fn extend_module_or_generate_item_sids<'a>(
                     }
                     NetDeclarationNets::Assignments(assignments) => {
                         for assignment in assignments.iter() {
-                            let NetDeclAssignment { ident, expr: _ } = arenas.get(assignment);
+                            let NetDeclAssignment { ident, expr: _ } = &*assignment;
 
                             if let Some(sid) = table.resolve(scope, ident.item.0) {
                                 // @Hack.
@@ -869,7 +885,7 @@ fn extend_module_or_generate_item_sids<'a>(
                     signed,
                     range,
                     variable_types,
-                } = arenas.get(*id);
+                } = &**id;
                 extend_variable_type_sids(
                     arenas,
                     *variable_types,
@@ -881,7 +897,7 @@ fn extend_module_or_generate_item_sids<'a>(
                 )
             }
             ModuleOrGenerateItemDeclaration::Integer(id) => {
-                let IntegerDeclaration { variable_types } = arenas.get(*id);
+                let IntegerDeclaration { variable_types } = &**id;
                 extend_variable_type_sids(
                     arenas,
                     *variable_types,
@@ -893,7 +909,7 @@ fn extend_module_or_generate_item_sids<'a>(
                 )
             }
             ModuleOrGenerateItemDeclaration::Genvar(id) => {
-                let GenvarDeclaration { identifiers } = arenas.get(*id);
+                let GenvarDeclaration { identifiers } = &**id;
                 let mut error = false;
                 for ident in identifiers.iter() {
                     error |= try_table_insert(
@@ -915,9 +931,11 @@ fn extend_module_or_generate_item_sids<'a>(
                     task_ports: _,
                     block_item_decls,
                     statement_or_null,
-                } = arenas.get(*id);
+                } = &**id;
+                let offset = st.ast_refs.tasks.len();
+                st.ast_refs.tasks.push(*id);
                 let symbol = TaskSymbol {
-                    ast_id: *id,
+                    ast_id: offset,
                     io: Vec::new(),
                     lowered: None,
                 };
@@ -945,7 +963,7 @@ fn extend_module_or_generate_item_sids<'a>(
                     .is_err();
                 }
 
-                if let StatementOrNull::Statement(stmt) = arenas.get(*statement_or_null) {
+                if let StatementOrNull::Statement(stmt) = &**statement_or_null {
                     error |= extend_statements_sids(
                         arenas,
                         AstIdRange::single(*stmt),
@@ -967,10 +985,12 @@ fn extend_module_or_generate_item_sids<'a>(
                     tf_input_decls: _,
                     block_item_decls,
                     statement,
-                } = arenas.get(*id);
+                } = &**id;
 
+                let offset = st.ast_refs.fns.len();
+                st.ast_refs.fns.push(*id);
                 let symbol = FunctionSymbol {
-                    ast_id: *id,
+                    ast_id: offset,
                     inputs: Vec::new(),
                     output: st.dummy_signal,
                     output_ty: VType::SCALAR_NET,
@@ -980,7 +1000,7 @@ fn extend_module_or_generate_item_sids<'a>(
                     arenas,
                     table,
                     scope,
-                    arenas.get(*id).ident,
+                    id.ident,
                     VSymbol::Function(symbol),
                     diagnostics,
                 ) else {
@@ -1018,7 +1038,7 @@ fn extend_module_or_generate_item_sids<'a>(
             let LocalParameterDeclaration {
                 typing,
                 assignments,
-            } = arenas.get(id);
+            } = &*id;
             extend_param_decl_idents_into_scope(
                 arenas,
                 scope,
@@ -1039,7 +1059,7 @@ fn extend_module_or_generate_item_sids<'a>(
                 module_identifier,
                 parameter_value_assignment,
                 module_instances,
-            } = arenas.get(id);
+            } = &*id;
 
             let Some(module) = st.module_lut.get(&module_identifier.item.0) else {
                 diagnostics.module_not_found(arenas, *module_identifier);
@@ -1061,7 +1081,7 @@ fn extend_module_or_generate_item_sids<'a>(
                     arenas,
                     table,
                     scope,
-                    arenas.get(module_instance).name_of_module_instance,
+                    module_instance.name_of_module_instance,
                     VSymbol::Module(symbol),
                     diagnostics,
                 ) else {
@@ -1076,7 +1096,7 @@ fn extend_module_or_generate_item_sids<'a>(
             if error { Err(()) } else { Ok(()) }
         }
         ModuleOrGenerateItemContent::InitialConstruct(id) => {
-            let InitialConstruct(id) = arenas.get(id);
+            let InitialConstruct(id) = &*id;
             extend_statements_sids(
                 arenas,
                 AstIdRange::single(*id),
@@ -1087,7 +1107,7 @@ fn extend_module_or_generate_item_sids<'a>(
             )
         }
         ModuleOrGenerateItemContent::AlwaysConstruct(id) => {
-            let AlwaysConstruct(id) = arenas.get(id);
+            let AlwaysConstruct(id) = &*id;
             extend_statements_sids(
                 arenas,
                 AstIdRange::single(*id),
@@ -1117,10 +1137,10 @@ fn extend_module_or_generate_item_sids<'a>(
 
 fn extend_statements_sids<'a>(
     arenas: &'a AstArenas,
-    stmts: AstIdRange<Statement>,
+    stmts: AstIdRange<'a, Statement<'a>>,
     scope: SymbolId,
     table: &mut VSymbolTable,
-    st: &mut ElaborationState,
+    st: &mut ElaborationState<'a>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
     assert!(st.stmt_dispatch_stack.is_empty());
@@ -1131,7 +1151,7 @@ fn extend_statements_sids<'a>(
     while let Some((scope, stmts)) = st.stmt_dispatch_stack.pop() {
         macro_rules! dispatch_stmt_or_null {
             ($stmt_or_null:expr) => {
-                if let StatementOrNull::Statement(stmt) = arenas.get($stmt_or_null) {
+                if let StatementOrNull::Statement(stmt) = &*$stmt_or_null {
                     st.stmt_dispatch_stack
                         .push((scope, AstIdRange::single(*stmt)));
                 }
@@ -1139,9 +1159,9 @@ fn extend_statements_sids<'a>(
         }
 
         for stmt in stmts.iter() {
-            match arenas.get(stmt).content {
+            match stmt.content {
                 StatementContent::SeqBlock(id) => {
-                    let SeqBlock { block, statements } = arenas.get(id);
+                    let SeqBlock { block, statements } = &*id;
                     error |= extend_block_sids(
                         arenas,
                         scope,
@@ -1154,7 +1174,7 @@ fn extend_statements_sids<'a>(
                     .is_err();
                 }
                 StatementContent::ParBlock(id) => {
-                    let ParBlock { block, statements } = arenas.get(id);
+                    let ParBlock { block, statements } = &*id;
                     error |= extend_block_sids(
                         arenas,
                         scope,
@@ -1168,8 +1188,8 @@ fn extend_statements_sids<'a>(
                 }
 
                 StatementContent::CaseStatement(id) => {
-                    for item in arenas.get(id).items {
-                        dispatch_stmt_or_null!(arenas.get(item).statement_or_null)
+                    for item in id.items {
+                        dispatch_stmt_or_null!(item.statement_or_null)
                     }
                 }
                 StatementContent::ConditionalStatement(id) => {
@@ -1177,11 +1197,11 @@ fn extend_statements_sids<'a>(
                         if_branch,
                         else_ifs,
                         else_branch,
-                    } = arenas.get(id);
+                    } = &*id;
 
                     dispatch_stmt_or_null!(if_branch.statement);
                     for else_if in else_ifs.iter() {
-                        dispatch_stmt_or_null!(arenas.get(else_if).statement);
+                        dispatch_stmt_or_null!(else_if.statement);
                     }
                     if let Some(stmt_or_null) = else_branch {
                         dispatch_stmt_or_null!(*stmt_or_null);
@@ -1189,14 +1209,14 @@ fn extend_statements_sids<'a>(
                 }
                 StatementContent::LoopStatement(id) => {
                     st.stmt_dispatch_stack
-                        .push((scope, AstIdRange::single(arenas.get(id).statement)));
+                        .push((scope, AstIdRange::single(id.statement)));
                 }
 
                 StatementContent::ProceduralTimingControlStatement(id) => {
-                    dispatch_stmt_or_null!(arenas.get(id).statement_or_null)
+                    dispatch_stmt_or_null!(id.statement_or_null)
                 }
                 StatementContent::WaitStatement(id) => {
-                    dispatch_stmt_or_null!(arenas.get(id).statement_or_null)
+                    dispatch_stmt_or_null!(id.statement_or_null)
                 }
 
                 StatementContent::DisableStatement
@@ -1217,11 +1237,11 @@ fn extend_block_item_decl_sid<'a>(
     arenas: &'a AstArenas,
     scope: SymbolId,
     table: &mut VSymbolTable,
-    st: &mut ElaborationState,
-    block_item_decl: AstId<BlockItemDeclaration>,
+    st: &mut ElaborationState<'a>,
+    block_item_decl: AstId<'a, BlockItemDeclaration<'a>>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
-    match arenas.get(block_item_decl) {
+    match &*block_item_decl {
         BlockItemDeclaration::Reg {
             signed,
             range,
@@ -1248,7 +1268,7 @@ fn extend_block_item_decl_sid<'a>(
             let LocalParameterDeclaration {
                 typing,
                 assignments,
-            } = arenas.get(*id);
+            } = &**id;
             extend_param_decl_idents_into_scope(
                 arenas,
                 scope,
@@ -1264,7 +1284,7 @@ fn extend_block_item_decl_sid<'a>(
             let ParameterDeclaration {
                 typing,
                 assignments,
-            } = arenas.get(*id);
+            } = &**id;
             extend_param_decl_idents_into_scope(
                 arenas,
                 scope,
@@ -1286,11 +1306,11 @@ fn extend_block_item_decl_sid<'a>(
 
 fn extend_variable_type_sids<'a>(
     arenas: &'a AstArenas,
-    var_types: AstIdRange<VariableType>,
-    f: impl Fn(AstId<VariableType>) -> InLevelSymbol,
+    var_types: AstIdRange<'a, VariableType<'a>>,
+    f: impl Fn(AstId<'a, VariableType<'a>>) -> InLevelSymbol,
     scope: SymbolId,
     table: &mut VSymbolTable,
-    st: &mut ElaborationState,
+    st: &mut ElaborationState<'a>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
     let mut error = false;
@@ -1309,7 +1329,7 @@ fn extend_variable_type_sids<'a>(
             arenas,
             table,
             scope,
-            arenas.get(var_type).identifier,
+            var_type.identifier,
             symbol,
             diagnostics,
         ) else {
@@ -1321,14 +1341,8 @@ fn extend_variable_type_sids<'a>(
     if error { Err(()) } else { Ok(()) }
 }
 
-impl InLevelSymbol {
-    pub fn extend_needs<'a>(
-        &self,
-        arenas: &'a AstArenas,
-        sid: SymbolId,
-        table: &VSymbolTable,
-        st: &mut ElaborationState,
-    ) {
+impl<'a> InLevelSymbol<'a> {
+    pub fn extend_needs(&self, sid: SymbolId, table: &VSymbolTable, st: &mut ElaborationState<'a>) {
         let scope = table[sid]
             .parent()
             .expect("in-level symbols should always have parents");
@@ -1344,11 +1358,11 @@ impl InLevelSymbol {
                         return;
                     }
                 }
-                match arenas.get(*typing) {
+                match &**typing {
                     ParameterDeclarationTyping::None(_, Some(range)) => {
-                        let Range { msb, lsb } = arenas.get(*range);
+                        let Range { msb, lsb } = &**range;
                         for e in [*msb, *lsb] {
-                            extend_expr_needs(arenas, scope, table, st, e);
+                            extend_expr_needs(scope, table, st, e);
                         }
                     }
                     ParameterDeclarationTyping::None(..)
@@ -1358,35 +1372,35 @@ impl InLevelSymbol {
                     | ParameterDeclarationTyping::Time => {}
                 }
 
-                let exprs: &[_] = match arenas.get(*expr) {
+                let exprs: &[_] = match &**expr {
                     ConstantMinTypMaxExpression::Single(e) => &[*e],
                     ConstantMinTypMaxExpression::MinTypMax { min, typ, max } => &[*min, *typ, *max],
                 };
                 for e in exprs {
-                    extend_expr_needs(arenas, scope, table, st, *e);
+                    extend_expr_needs(scope, table, st, *e);
                 }
             }
             InLevelSymbol::ModuleInstance(parameter_value_assignment, _) => {
                 if let Some(parameter_value_assignment) = parameter_value_assignment {
-                    match arenas.get(*parameter_value_assignment) {
+                    match &**parameter_value_assignment {
                         ParameterValueAssignment::Ordered(exprs) => {
                             for e in exprs.iter() {
-                                extend_expr_needs(arenas, scope, table, st, e);
+                                extend_expr_needs(scope, table, st, e);
                             }
                         }
                         ParameterValueAssignment::Named(named_exprs) => {
                             for named_expr in named_exprs.iter() {
-                                let Some(expr) = arenas.get(named_expr).expression else {
+                                let Some(expr) = named_expr.expression else {
                                     continue;
                                 };
-                                let exprs: &[_] = match arenas.get(expr) {
+                                let exprs: &[_] = match &*expr {
                                     ConstantMinTypMaxExpression::Single(e) => &[*e],
                                     ConstantMinTypMaxExpression::MinTypMax { min, typ, max } => {
                                         &[*min, *typ, *max]
                                     }
                                 };
                                 for e in exprs {
-                                    extend_expr_needs(arenas, scope, table, st, *e);
+                                    extend_expr_needs(scope, table, st, *e);
                                 }
                             }
                         }
@@ -1399,46 +1413,44 @@ impl InLevelSymbol {
                     signed: _,
                     range,
                     nets: _,
-                } = arenas.get(*id);
+                } = &**id;
                 if let Some(range) = range {
-                    let Range { msb, lsb } = arenas.get(*range);
+                    let Range { msb, lsb } = &**range;
                     for e in [*msb, *lsb] {
-                        extend_expr_needs(arenas, scope, table, st, e);
+                        extend_expr_needs(scope, table, st, e);
                     }
                 }
                 if let Some(dims) = dimension {
                     for dim in dims.iter() {
-                        let Dimension { lhs, rhs } = arenas.get(dim);
+                        let Dimension { lhs, rhs } = &*dim;
                         for e in [*lhs, *rhs] {
-                            extend_expr_needs(arenas, scope, table, st, e);
+                            extend_expr_needs(scope, table, st, e);
                         }
                     }
                 }
             }
             InLevelSymbol::Reg(_, range, var_type) => {
                 if let Some(range) = range {
-                    let Range { msb, lsb } = arenas.get(*range);
+                    let Range { msb, lsb } = &**range;
                     for e in [*msb, *lsb] {
-                        extend_expr_needs(arenas, scope, table, st, e);
+                        extend_expr_needs(scope, table, st, e);
                     }
                 }
 
-                extend_var_type_needs(arenas, scope, table, st, *var_type)
+                extend_var_type_needs(scope, table, st, *var_type)
             }
-            InLevelSymbol::Integer(var_type) => {
-                extend_var_type_needs(arenas, scope, table, st, *var_type)
-            }
+            InLevelSymbol::Integer(var_type) => extend_var_type_needs(scope, table, st, *var_type),
             InLevelSymbol::Port(decl, _) => {
-                let range = match arenas.get(*decl) {
-                    PortDeclaration::Inout(id) => arenas.get(*id).range,
-                    PortDeclaration::Input(id) => arenas.get(*id).range,
-                    PortDeclaration::Output(id) => arenas.get(*id).range,
+                let range = match &**decl {
+                    PortDeclaration::Inout(id) => id.range,
+                    PortDeclaration::Input(id) => id.range,
+                    PortDeclaration::Output(id) => id.range,
                 };
 
                 if let Some(range) = range {
-                    let Range { msb, lsb } = arenas.get(range);
+                    let Range { msb, lsb } = &*range;
                     for e in [*msb, *lsb] {
-                        extend_expr_needs(arenas, scope, table, st, e);
+                        extend_expr_needs(scope, table, st, e);
                     }
                 }
             }
@@ -1449,20 +1461,20 @@ impl InLevelSymbol {
                     task_ports,
                     block_item_decls: _,
                     statement_or_null: _,
-                } = arenas.get(*id);
+                } = &**id;
 
                 for task_port in task_ports.iter() {
                     let TaskPortItem {
                         attribute_instances: _,
                         content,
-                    } = arenas.get(task_port);
+                    } = &*task_port;
                     let tf_type = match content {
                         TaskPortItemContent::Input(decl) => &decl.tf_type,
                         TaskPortItemContent::Output(decl) => &decl.tf_type,
                         TaskPortItemContent::Inout(decl) => &decl.tf_type,
                     };
 
-                    extend_tf_type_needs(arenas, scope, table, st, tf_type);
+                    extend_tf_type_needs(scope, table, st, tf_type);
                 }
             }
             InLevelSymbol::Function(id) => {
@@ -1473,24 +1485,18 @@ impl InLevelSymbol {
                     tf_input_decls,
                     block_item_decls: _,
                     statement: _,
-                } = arenas.get(*id);
+                } = &**id;
 
                 if let FunctionRangeOrType::Signed(Some(range))
-                | FunctionRangeOrType::Unsigned(Some(range)) = arenas.get(*range_or_type)
+                | FunctionRangeOrType::Unsigned(Some(range)) = &**range_or_type
                 {
-                    let Range { msb, lsb } = arenas.get(*range);
+                    let Range { msb, lsb } = &**range;
                     for e in [*msb, *lsb] {
-                        extend_expr_needs(arenas, scope, table, st, e);
+                        extend_expr_needs(scope, table, st, e);
                     }
                 }
                 for tf_input_decl in tf_input_decls.iter() {
-                    extend_tf_type_needs(
-                        arenas,
-                        sid,
-                        table,
-                        st,
-                        &arenas.get(tf_input_decl).tf_type,
-                    );
+                    extend_tf_type_needs(sid, table, st, &tf_input_decl.tf_type);
                 }
             }
         }
@@ -1498,11 +1504,10 @@ impl InLevelSymbol {
 }
 
 fn extend_tf_type_needs<'a>(
-    arenas: &'a AstArenas,
     scope: SymbolId,
     table: &VSymbolTable,
-    st: &mut ElaborationState,
-    tf_type: &TfType,
+    st: &mut ElaborationState<'a>,
+    tf_type: &TfType<'a>,
 ) {
     if let TfType::Net {
         reg: _,
@@ -1510,41 +1515,39 @@ fn extend_tf_type_needs<'a>(
         range: Some(range),
     } = tf_type
     {
-        let Range { msb, lsb } = arenas.get(*range);
+        let Range { msb, lsb } = &**range;
         for e in [*msb, *lsb] {
-            extend_expr_needs(arenas, scope, table, st, e);
+            extend_expr_needs(scope, table, st, e);
         }
     }
 }
 
 pub fn extend_var_type_needs<'a>(
-    arenas: &'a AstArenas,
     scope: SymbolId,
     table: &VSymbolTable,
-    st: &mut ElaborationState,
-    var_type: AstId<VariableType>,
+    st: &mut ElaborationState<'a>,
+    var_type: AstId<'a, VariableType<'a>>,
 ) {
-    match arenas.get(var_type).variant {
+    match var_type.variant {
         VariableTypeVariant::Dimensions(dims) => {
             for dim in dims.iter() {
-                let Dimension { lhs, rhs } = arenas.get(dim);
+                let Dimension { lhs, rhs } = &*dim;
                 for e in [*lhs, *rhs] {
-                    extend_expr_needs(arenas, scope, table, st, e);
+                    extend_expr_needs(scope, table, st, e);
                 }
             }
         }
         VariableTypeVariant::ConstantExpr(e) => {
-            extend_expr_needs(arenas, scope, table, st, e);
+            extend_expr_needs(scope, table, st, e);
         }
     }
 }
 
 pub fn extend_expr_needs<'a>(
-    arenas: &'a AstArenas,
     scope: SymbolId,
     table: &VSymbolTable,
-    st: &mut ElaborationState,
-    expr: AstId<ConstantExpr>,
+    st: &mut ElaborationState<'a>,
+    expr: AstId<'a, ConstantExpr<'a>>,
 ) {
     let expr = expr.into_expr();
     assert!(st.dispatch_stack.is_empty());
@@ -1553,7 +1556,7 @@ pub fn extend_expr_needs<'a>(
     dispatch_stack.push(expr);
 
     while let Some(item) = dispatch_stack.pop() {
-        match arenas.get(item) {
+        match &*item {
             Expr::Unary(_, subexpr) => dispatch_stack.push(*subexpr),
             Expr::Binary(_, lhs, rhs) => dispatch_stack.extend([*lhs, *rhs]),
             Expr::Concatenation(exprs) => dispatch_stack.extend(exprs.iter()),
@@ -1584,7 +1587,7 @@ pub fn extend_expr_needs<'a>(
                     }
                 }
 
-                if let Some(ident_sid) = resolve_symbol_id_hier(scope, table, arenas, *ident)
+                if let Some(ident_sid) = resolve_symbol_id_hier(scope, table, *ident)
                     && st.marked.insert(ident_sid)
                     && st.lvl_symbols.contains_key(&ident_sid)
                 {
@@ -1594,7 +1597,7 @@ pub fn extend_expr_needs<'a>(
             Expr::FunctionCall(ident, exprs) => {
                 dispatch_stack.extend(exprs.iter());
 
-                if let Some(ident_sid) = resolve_symbol_id_hier(scope, table, arenas, *ident)
+                if let Some(ident_sid) = resolve_symbol_id_hier(scope, table, *ident)
                     && st.marked.insert(ident_sid)
                     && st.lvl_symbols.contains_key(&ident_sid)
                 {
@@ -1613,18 +1616,19 @@ pub fn finalize_symbol<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
     tokenized: &'a Tokenized,
-    symbol: &InLevelSymbol,
+    symbol: &InLevelSymbol<'a>,
     sid: SymbolId,
     scope: SymbolId,
     table: &mut VSymbolTable,
-    next_levels: &mut VecDeque<(SymbolId, ElabLevel)>,
+    ast_refs: &SymbolAstRefs<'a>,
+    next_levels: &mut VecDeque<(SymbolId, ElabLevel<'a>)>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
     match symbol {
         InLevelSymbol::Param(typing, constant_expr, module_sid) => {
             let (typing, constant_expr) = (*typing, *constant_expr);
             use ParameterDeclarationTyping as T;
-            let (_, _, ty) = match arenas.get(typing) {
+            let (_, _, ty) = match &*typing {
                 T::None(signed, range) => match range {
                     None => (0, 0, None),
                     Some(ast_range) => {
@@ -1655,7 +1659,7 @@ pub fn finalize_symbol<'a>(
             {
                 module.parameter_override_values[*param_override_idx].clone()
             } else {
-                match arenas.get(constant_expr) {
+                match &*constant_expr {
                     ConstantMinTypMaxExpression::Single(id) => {
                         super::eval_constant_expr_elab(gl, arenas, scope, table, diagnostics, *id)?
                     }
@@ -1672,7 +1676,7 @@ pub fn finalize_symbol<'a>(
             let VariableType {
                 identifier,
                 variant,
-            } = arenas.get(*var_type);
+            } = &**var_type;
             let ty = match range {
                 None => VType::net(SCALAR_VSIZE, *signed),
                 Some(range) => {
@@ -1699,7 +1703,7 @@ pub fn finalize_symbol<'a>(
                 range,
                 net_type: _,
                 nets: _,
-            } = arenas.get(*id);
+            } = &**id;
 
             let ty = match range {
                 None => VType::net(SCALAR_VSIZE, *signed),
@@ -1725,7 +1729,7 @@ pub fn finalize_symbol<'a>(
             let VariableType {
                 identifier,
                 variant,
-            } = arenas.get(*id);
+            } = &**id;
             let parent = table[sid].parent().unwrap();
             let dims = match variant {
                 VariableTypeVariant::Dimensions(dimensions) => {
@@ -1752,10 +1756,10 @@ pub fn finalize_symbol<'a>(
             net.ty = ty;
         }
         InLevelSymbol::Task(_) => {
-            super::function::elaborate_task(gl, arenas, sid, table, diagnostics)?;
+            super::function::elaborate_task(gl, arenas, sid, table, ast_refs, diagnostics)?;
         }
         InLevelSymbol::Function(id) => {
-            super::function::elaborate_fn(gl, arenas, sid, table, diagnostics)?;
+            super::function::elaborate_fn(gl, arenas, sid, table, ast_refs, diagnostics)?;
             // @TODO: This should ignore errors with unresolved symbols.
             _ = crate::lower::module_or_generate_item::function::lower(
                 gl,
@@ -1764,6 +1768,7 @@ pub fn finalize_symbol<'a>(
                 &mut crate::lower::Scope {
                     table: table,
                     key: sid,
+                    table_ast_refs: &SymbolAstRefs::default(),
                     udps: &VgHashMap::default(),
                     signal_aliases: &mut VgHashMap::default(),
                     tokenized,
@@ -1775,7 +1780,7 @@ pub fn finalize_symbol<'a>(
             let (parameter_overrides, parameter_override_values) = match *parameter_value_assignment
             {
                 None => Default::default(),
-                Some(id) => match arenas.get(id) {
+                Some(id) => match &*id {
                     ParameterValueAssignment::Ordered(ids) => {
                         let mut params = Vec::new();
                         for id in ids.iter() {
@@ -1798,7 +1803,7 @@ pub fn finalize_symbol<'a>(
                             let NamedParameterAssignment {
                                 identifier,
                                 expression,
-                            } = arenas.get(n);
+                            } = &*n;
                             let Some(expression) = expression else {
                                 diagnostics.not_yet_implemented(
                                     arenas.get_span(n),
@@ -1806,8 +1811,7 @@ pub fn finalize_symbol<'a>(
                                 );
                                 return Err(());
                             };
-                            let ConstantMinTypMaxExpression::Single(expression) =
-                                arenas.get(*expression)
+                            let ConstantMinTypMaxExpression::Single(expression) = &**expression
                             else {
                                 diagnostics.not_yet_implemented(
                                     arenas.get_span(n),
@@ -1846,17 +1850,17 @@ fn extend_block_sids<'a>(
     arenas: &'a AstArenas,
     scope: SymbolId,
     table: &mut VSymbolTable,
-    st: &mut ElaborationState,
+    st: &mut ElaborationState<'a>,
     diagnostics: &mut Diagnostics,
-    block: Option<AstId<Block>>,
-    stmts: AstIdRange<Statement>,
+    block: Option<AstId<'a, Block<'a>>>,
+    stmts: AstIdRange<'a, Statement<'a>>,
 ) -> Result<(), ()> {
     let mut scope = scope;
     if let Some(block) = block {
         let Block {
             block_identifier,
             block_item_decls,
-        } = arenas.get(block);
+        } = &*block;
 
         let named_block_scope = try_table_insert(
             arenas,

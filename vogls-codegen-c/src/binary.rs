@@ -262,7 +262,12 @@ pub fn cgc_bin_sub(f: &mut impl io::Write, dst: CVar, lhs: CIdent, rhs: CIdent) 
     Ok(())
 }
 
-pub fn cgc_bin_pow(_f: &mut impl io::Write, _dst: CVar, _lhs: CIdent, _rhs: CIdent) -> io::Result<()> {
+pub fn cgc_bin_pow(
+    _f: &mut impl io::Write,
+    _dst: CVar,
+    _lhs: CIdent,
+    _rhs: CIdent,
+) -> io::Result<()> {
     todo!()
 }
 

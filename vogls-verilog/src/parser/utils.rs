@@ -1,74 +1,107 @@
 use vogls_ir::token_range::TokenRange;
 
+use crate::arena::Arena;
 use crate::ast::{AstId, AstIdRange, AstItem};
 use crate::tokenizer::Token;
 
 use super::{AstArenas, Consumable, Diagnostics, ParserScratches, TokenWalker};
 
-pub fn parse<'a, T: Consumable<'a>>(
-    tkw: &mut TokenWalker<'a>,
-    sc: &mut ParserScratches,
+pub fn push<'a, T>(
     arenas: &mut AstArenas,
+    ast: &'a Arena,
+    item: T,
+    tr: TokenRange,
+) -> AstId<'a, T> {
+    let ptr = ast.add(item);
+    let loc = arenas.add_tr(tr);
+    AstId { node: ptr, loc }
+}
+
+pub fn push_range<'a, T, II: IntoIterator<Item = T>, IT: IntoIterator<Item = TokenRange>>(
+    arenas: &mut AstArenas,
+    ast: &'a Arena,
+    items: II,
+    trs: IT,
+) -> AstIdRange<'a, T>
+where
+    II::IntoIter: ExactSizeIterator,
+    IT::IntoIter: ExactSizeIterator,
+{
+    let items = items.into_iter();
+    let trs = trs.into_iter();
+    debug_assert_eq!(items.len(), trs.len());
+    let ptr = ast.extend(items);
+    let loc = arenas.add_tr_range(trs);
+    AstIdRange { node: ptr, loc }
+}
+
+pub fn parse<'a, T: Consumable<'a>>(
+    tkw: &mut TokenWalker<'_>,
+    sc: &mut ParserScratches<'a>,
+    arenas: &mut AstArenas,
+    ast: &'a Arena,
     diagnostics: Option<&mut Diagnostics>,
-) -> Result<AstId<T>, ()> {
+) -> Result<AstId<'a, T>, ()> {
     let start = tkw.offset;
-    let item = T::consume(tkw, sc, arenas, diagnostics)?;
+    let item = T::consume(tkw, sc, arenas, ast, diagnostics)?;
     let end = tkw.offset;
-    Ok(arenas.add(item, TokenRange { start, end }))
+    Ok(push(arenas, ast, item, TokenRange { start, end }))
 }
 
 pub fn try_parse<'a, T: Consumable<'a>>(
-    tkw: &mut TokenWalker<'a>,
-    sc: &mut ParserScratches,
+    tkw: &mut TokenWalker<'_>,
+    sc: &mut ParserScratches<'a>,
     arenas: &mut AstArenas,
-) -> Option<AstId<T>> {
+    ast: &'a Arena,
+) -> Option<AstId<'a, T>> {
     let start = tkw.offset;
-    let item = T::try_consume(tkw, sc, arenas)?;
+    let item = T::try_consume(tkw, sc, arenas, ast)?;
     let end = tkw.offset;
-    Some(arenas.add(item, TokenRange { start, end }))
+    Some(push(arenas, ast, item, TokenRange { start, end }))
 }
 
 pub fn item_parse<'a, T: Consumable<'a>>(
-    tkw: &mut TokenWalker<'a>,
-    sc: &mut ParserScratches,
+    tkw: &mut TokenWalker<'_>,
+    sc: &mut ParserScratches<'a>,
     arenas: &mut AstArenas,
+    ast: &'a Arena,
     diagnostics: Option<&mut Diagnostics>,
 ) -> Result<AstItem<T>, ()> {
     let start = tkw.offset;
-    let item = T::consume(tkw, sc, arenas, diagnostics)?;
+    let item = T::consume(tkw, sc, arenas, ast, diagnostics)?;
     let end = tkw.offset;
-    let loc = arenas.spans.len();
-    arenas.spans.push(TokenRange { start, end });
+    let loc = arenas.add_tr(TokenRange { start, end });
     Ok(AstItem { item, loc })
 }
 
 pub fn try_item_parse<'a, T: Consumable<'a>>(
-    tkw: &mut TokenWalker<'a>,
-    sc: &mut ParserScratches,
+    tkw: &mut TokenWalker<'_>,
+    sc: &mut ParserScratches<'a>,
     arenas: &mut AstArenas,
+    ast: &'a Arena,
 ) -> Option<AstItem<T>> {
     let start = tkw.offset;
-    let item = T::try_consume(tkw, sc, arenas)?;
+    let item = T::try_consume(tkw, sc, arenas, ast)?;
     let end = tkw.offset;
-    let loc = arenas.spans.len();
-    arenas.spans.push(TokenRange { start, end });
+    let loc = arenas.add_tr(TokenRange { start, end });
     Some(AstItem { item, loc })
 }
 
 pub fn parse_zero_or_more_while<'a, T: Consumable<'a>>(
-    tkw: &mut TokenWalker<'a>,
-    sc: &mut ParserScratches,
+    tkw: &mut TokenWalker<'_>,
+    sc: &mut ParserScratches<'a>,
     arenas: &mut AstArenas,
+    ast: &'a Arena,
     mut diagnostics: Option<&mut Diagnostics>,
-    mut condition: impl FnMut(&mut TokenWalker<'a>) -> bool,
-) -> Result<AstIdRange<T>, ()> {
+    mut condition: impl FnMut(&mut TokenWalker<'_>) -> bool,
+) -> Result<AstIdRange<'a, T>, ()> {
     // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
     // here.
     let mut items = Vec::new();
     let mut spans = Vec::new();
     while condition(tkw) {
         let start = tkw.offset;
-        let item = T::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        let item = T::consume(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
         let token_range = TokenRange {
             start,
             end: tkw.offset,
@@ -77,18 +110,21 @@ pub fn parse_zero_or_more_while<'a, T: Consumable<'a>>(
         spans.push(token_range);
     }
 
-    Ok(arenas.add_range(items, spans))
+    let items = ast.extend(items);
+    let loc = arenas.add_tr_range(spans);
+    Ok(AstIdRange { node: items, loc })
 }
 
 pub fn parse_one_or_more_while<'a, T: Consumable<'a>>(
-    tkw: &mut TokenWalker<'a>,
-    sc: &mut ParserScratches,
+    tkw: &mut TokenWalker<'_>,
+    sc: &mut ParserScratches<'a>,
     arenas: &mut AstArenas,
+    ast: &'a Arena,
     mut diagnostics: Option<&mut Diagnostics>,
-    mut condition: impl FnMut(&mut TokenWalker<'a>) -> bool,
-) -> Result<AstIdRange<T>, ()> {
+    mut condition: impl FnMut(&mut TokenWalker<'_>) -> bool,
+) -> Result<AstIdRange<'a, T>, ()> {
     let start = tkw.offset;
-    let item = T::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+    let item = T::consume(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
     let token_range = TokenRange {
         start,
         end: tkw.offset,
@@ -103,7 +139,7 @@ pub fn parse_one_or_more_while<'a, T: Consumable<'a>>(
 
     while condition(tkw) {
         let start = tkw.offset;
-        let item = T::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        let item = T::consume(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
         let token_range = TokenRange {
             start,
             end: tkw.offset,
@@ -112,31 +148,35 @@ pub fn parse_one_or_more_while<'a, T: Consumable<'a>>(
         spans.push(token_range);
     }
 
-    Ok(arenas.add_range(items, spans))
+    let items = ast.extend(items);
+    let loc = arenas.add_tr_range(spans);
+    Ok(AstIdRange { node: items, loc })
 }
 
 pub fn parse_one_or_more_delimited<'a, T: Consumable<'a>>(
-    tkw: &mut TokenWalker<'a>,
-    sc: &mut ParserScratches,
+    tkw: &mut TokenWalker<'_>,
+    sc: &mut ParserScratches<'a>,
     arenas: &mut AstArenas,
+    ast: &'a Arena,
     delimiter: Token,
     diagnostics: Option<&mut Diagnostics>,
-) -> Result<AstIdRange<T>, ()> {
-    parse_one_or_more_while(tkw, sc, arenas, diagnostics, |tkw| {
+) -> Result<AstIdRange<'a, T>, ()> {
+    parse_one_or_more_while(tkw, sc, arenas, ast, diagnostics, |tkw| {
         tkw.next_if_equals(delimiter)
     })
 }
 
 pub fn parse_one_or_more_delimited_and_after<'a, T: Consumable<'a>>(
-    tkw: &mut TokenWalker<'a>,
-    sc: &mut ParserScratches,
+    tkw: &mut TokenWalker<'_>,
+    sc: &mut ParserScratches<'a>,
     arenas: &mut AstArenas,
+    ast: &'a Arena,
     delimiter: Token,
     after: Token,
     mut diagnostics: Option<&mut Diagnostics>,
-) -> Result<AstIdRange<T>, ()> {
+) -> Result<AstIdRange<'a, T>, ()> {
     let start = tkw.offset;
-    let item = T::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+    let item = T::consume(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
     let token_range = TokenRange {
         start,
         end: tkw.offset,
@@ -156,7 +196,7 @@ pub fn parse_one_or_more_delimited_and_after<'a, T: Consumable<'a>>(
         tkw.offset += 1;
 
         let start = tkw.offset;
-        let item = T::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        let item = T::consume(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
         let token_range = TokenRange {
             start,
             end: tkw.offset,
@@ -165,18 +205,21 @@ pub fn parse_one_or_more_delimited_and_after<'a, T: Consumable<'a>>(
         spans.push(token_range);
     }
 
-    Ok(arenas.add_range(items, spans))
+    let items = ast.extend(items);
+    let loc = arenas.add_tr_range(spans);
+    Ok(AstIdRange { node: items, loc })
 }
 
 pub fn parse_one_or_more_delimited_one_of<'a, T: Consumable<'a>>(
-    tkw: &mut TokenWalker<'a>,
-    sc: &mut ParserScratches,
+    tkw: &mut TokenWalker<'_>,
+    sc: &mut ParserScratches<'a>,
     arenas: &mut AstArenas,
+    ast: &'a Arena,
     delimiter: &[Token],
     mut diagnostics: Option<&mut Diagnostics>,
-) -> Result<AstIdRange<T>, ()> {
+) -> Result<AstIdRange<'a, T>, ()> {
     let start = tkw.offset;
-    let item = T::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+    let item = T::consume(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
     let token_range = TokenRange {
         start,
         end: tkw.offset,
@@ -199,7 +242,7 @@ pub fn parse_one_or_more_delimited_one_of<'a, T: Consumable<'a>>(
         tkw.offset += 1;
 
         let start = tkw.offset;
-        let item = T::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        let item = T::consume(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
         let token_range = TokenRange {
             start,
             end: tkw.offset,
@@ -208,18 +251,21 @@ pub fn parse_one_or_more_delimited_one_of<'a, T: Consumable<'a>>(
         spans.push(token_range);
     }
 
-    Ok(arenas.add_range(items, spans))
+    let items = ast.extend(items);
+    let loc = arenas.add_tr_range(spans);
+    Ok(AstIdRange { node: items, loc })
 }
 
 pub fn parse_zero_or_more_delimited<'a, T: Consumable<'a>>(
-    tkw: &mut TokenWalker<'a>,
-    sc: &mut ParserScratches,
+    tkw: &mut TokenWalker<'_>,
+    sc: &mut ParserScratches<'a>,
     arenas: &mut AstArenas,
+    ast: &'a Arena,
     delimiter: Token,
     mut diagnostics: Option<&mut Diagnostics>,
-) -> Result<AstIdRange<T>, ()> {
+) -> Result<AstIdRange<'a, T>, ()> {
     let start = tkw.offset;
-    let Some(item) = T::try_consume(tkw, sc, arenas) else {
+    let Some(item) = T::try_consume(tkw, sc, arenas, ast) else {
         return Ok(AstIdRange::default());
     };
     let token_range = TokenRange {
@@ -240,7 +286,7 @@ pub fn parse_zero_or_more_delimited<'a, T: Consumable<'a>>(
         }
 
         let start = tkw.offset;
-        let item = T::consume(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        let item = T::consume(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
         let token_range = TokenRange {
             start,
             end: tkw.offset,
@@ -249,16 +295,19 @@ pub fn parse_zero_or_more_delimited<'a, T: Consumable<'a>>(
         spans.push(token_range);
     }
 
-    Ok(arenas.add_range(items, spans))
+    let items = ast.extend(items);
+    let loc = arenas.add_tr_range(spans);
+    Ok(AstIdRange { node: items, loc })
 }
 
 pub fn parse_zero_or_more_while_next<'a, T: Consumable<'a>>(
-    tkw: &mut TokenWalker<'a>,
-    sc: &mut ParserScratches,
+    tkw: &mut TokenWalker<'_>,
+    sc: &mut ParserScratches<'a>,
     arenas: &mut AstArenas,
+    ast: &'a Arena,
     mut diagnostics: Option<&mut Diagnostics>,
     mut condition: impl FnMut(Token) -> bool,
-) -> Result<AstIdRange<T>, ()> {
+) -> Result<AstIdRange<'a, T>, ()> {
     // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
     // here.
     let mut items = Vec::new();
@@ -266,7 +315,7 @@ pub fn parse_zero_or_more_while_next<'a, T: Consumable<'a>>(
 
     while tkw.get(tkw.offset).is_some_and(|t| condition(*t.kind)) {
         let start = tkw.offset;
-        let Ok(item) = T::consume(tkw, sc, arenas, diagnostics.as_deref_mut()) else {
+        let Ok(item) = T::consume(tkw, sc, arenas, ast, diagnostics.as_deref_mut()) else {
             return Err(());
         };
         let token_range = TokenRange {
@@ -277,16 +326,19 @@ pub fn parse_zero_or_more_while_next<'a, T: Consumable<'a>>(
         spans.push(token_range);
     }
 
-    Ok(arenas.add_range(items, spans))
+    let items = ast.extend(items);
+    let loc = arenas.add_tr_range(spans);
+    Ok(AstIdRange { node: items, loc })
 }
 
 pub fn parse_one_or_more_while_next<'a, T: Consumable<'a>>(
-    tkw: &mut TokenWalker<'a>,
-    sc: &mut ParserScratches,
+    tkw: &mut TokenWalker<'_>,
+    sc: &mut ParserScratches<'a>,
     arenas: &mut AstArenas,
+    ast: &'a Arena,
     mut diagnostics: Option<&mut Diagnostics>,
     mut condition: impl FnMut(Token) -> bool,
-) -> Result<AstIdRange<T>, ()> {
+) -> Result<AstIdRange<'a, T>, ()> {
     // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
     // here.
     let mut items = Vec::new();
@@ -294,7 +346,7 @@ pub fn parse_one_or_more_while_next<'a, T: Consumable<'a>>(
 
     loop {
         let start = tkw.offset;
-        match T::consume(tkw, sc, arenas, diagnostics.as_deref_mut()) {
+        match T::consume(tkw, sc, arenas, ast, diagnostics.as_deref_mut()) {
             Ok(item) => {
                 let token_range = TokenRange {
                     start,
@@ -316,15 +368,19 @@ pub fn parse_one_or_more_while_next<'a, T: Consumable<'a>>(
             break;
         }
     }
-    Ok(arenas.add_range(items, spans))
+
+    let items = ast.extend(items);
+    let loc = arenas.add_tr_range(spans);
+    Ok(AstIdRange { node: items, loc })
 }
 
 pub fn parse_zero_or_more<'a, T: Consumable<'a>>(
-    tkw: &mut TokenWalker<'a>,
-    sc: &mut ParserScratches,
+    tkw: &mut TokenWalker<'_>,
+    sc: &mut ParserScratches<'a>,
     arenas: &mut AstArenas,
+    ast: &'a Arena,
     mut diagnostics: Option<&mut Diagnostics>,
-) -> Result<AstIdRange<T>, ()> {
+) -> Result<AstIdRange<'a, T>, ()> {
     // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
     // here.
     let mut items = Vec::new();
@@ -332,7 +388,7 @@ pub fn parse_zero_or_more<'a, T: Consumable<'a>>(
 
     while !tkw.is_empty() {
         let start = tkw.offset;
-        match T::consume(tkw, sc, arenas, diagnostics.as_deref_mut()) {
+        match T::consume(tkw, sc, arenas, ast, diagnostics.as_deref_mut()) {
             Ok(item) => {
                 let token_range = TokenRange {
                     start,
@@ -347,15 +403,18 @@ pub fn parse_zero_or_more<'a, T: Consumable<'a>>(
         }
     }
 
-    Ok(arenas.add_range(items, spans))
+    let items = ast.extend(items);
+    let loc = arenas.add_tr_range(spans);
+    Ok(AstIdRange { node: items, loc })
 }
 
 pub fn parse_one_or_more<'a, T: Consumable<'a>>(
-    tkw: &mut TokenWalker<'a>,
-    sc: &mut ParserScratches,
+    tkw: &mut TokenWalker<'_>,
+    sc: &mut ParserScratches<'a>,
     arenas: &mut AstArenas,
+    ast: &'a Arena,
     mut diagnostics: Option<&mut Diagnostics>,
-) -> Result<AstIdRange<T>, ()> {
+) -> Result<AstIdRange<'a, T>, ()> {
     // @Optimize: Scratchpad this somehow, it is a bit difficult because we can be recursive
     // here.
     let mut items = Vec::new();
@@ -363,7 +422,7 @@ pub fn parse_one_or_more<'a, T: Consumable<'a>>(
 
     loop {
         let start = tkw.offset;
-        match T::consume(tkw, sc, arenas, diagnostics.as_deref_mut()) {
+        match T::consume(tkw, sc, arenas, ast, diagnostics.as_deref_mut()) {
             Err(_) => return Err(()),
             Ok(item) => {
                 let token_range = TokenRange {
@@ -380,5 +439,7 @@ pub fn parse_one_or_more<'a, T: Consumable<'a>>(
         }
     }
 
-    Ok(arenas.add_range(items, spans))
+    let items = ast.extend(items);
+    let loc = arenas.add_tr_range(spans);
+    Ok(AstIdRange { node: items, loc })
 }

@@ -19,6 +19,19 @@ mod constant_expr;
 pub mod function_call;
 mod system_function_call;
 
+struct StackItem<'a> {
+    expr: AstId<'a, Expr<'a>>,
+    dispatched: bool,
+}
+impl<'a> StackItem<'a> {
+    pub fn new(expr: AstId<'a, Expr<'a>>) -> Self {
+        Self {
+            expr,
+            dispatched: false,
+        }
+    }
+}
+
 #[deny(clippy::question_mark_used)] // Needs to be handled explicitly in the recursion.
 pub fn lower_expr<'a>(
     gl: &mut GlobalContext,
@@ -26,34 +39,21 @@ pub fn lower_expr<'a>(
     scope: &Scope<'a>,
     diagnostics: &mut Diagnostics,
     builder: &mut BasicBlockBuilder,
-    expr: AstId<Expr>,
+    expr: AstId<'a, Expr<'a>>,
 ) -> Result<(VariableKey, VType), ()> {
-    struct StackItem {
-        expr: AstId<Expr>,
-        dispatched: bool,
-    }
-    impl StackItem {
-        pub fn new(expr: AstId<Expr>) -> Self {
-            Self {
-                expr,
-                dispatched: false,
-            }
-        }
-    }
-
     let mut error = false;
-    let mut dispatch_stack: Vec<StackItem> = Vec::new();
+    let mut dispatch_stack: Vec<StackItem<'a>> = Vec::new();
     let mut result_stack: Vec<Option<(VariableKey, VType)>> = Vec::new();
 
     dispatch_stack.push(StackItem::new(expr));
 
     'dispatch_loop: while let Some(mut item) = dispatch_stack.pop() {
-        match arenas.get(item.expr) {
+        match *item.expr {
             Expr::Unary(op, child) => {
                 if !item.dispatched {
                     item.dispatched = true;
                     dispatch_stack.push(item);
-                    dispatch_stack.push(StackItem::new(*child));
+                    dispatch_stack.push(StackItem::new(child));
                     continue;
                 }
 
@@ -83,7 +83,7 @@ pub fn lower_expr<'a>(
                 if !item.dispatched {
                     item.dispatched = true;
                     dispatch_stack.push(item);
-                    dispatch_stack.extend([*r, *l].into_iter().map(StackItem::new));
+                    dispatch_stack.extend([r, l].into_iter().map(StackItem::new));
                     continue;
                 }
 
@@ -181,7 +181,7 @@ pub fn lower_expr<'a>(
                 let Replication {
                     constant_expr,
                     exprs,
-                } = *replication;
+                } = replication;
 
                 if exprs.is_empty() {
                     diagnostics.not_yet_implemented(
@@ -265,7 +265,7 @@ pub fn lower_expr<'a>(
                 if !item.dispatched {
                     item.dispatched = true;
                     dispatch_stack.push(item);
-                    dispatch_stack.push(StackItem::new(*condition));
+                    dispatch_stack.push(StackItem::new(condition));
                     continue;
                 }
 
@@ -283,7 +283,7 @@ pub fn lower_expr<'a>(
 
                 *builder = builder.next_terminate_later(gl);
                 let truthy_start_bb = builder.key();
-                let Ok((t, t_ty)) = lower_expr(gl, arenas, scope, diagnostics, builder, *truthy)
+                let Ok((t, t_ty)) = lower_expr(gl, arenas, scope, diagnostics, builder, truthy)
                 else {
                     result_stack.push(None);
                     error = true;
@@ -293,7 +293,7 @@ pub fn lower_expr<'a>(
 
                 *builder = builder.next_terminate_later(gl);
                 let falsy_start_bb = builder.key();
-                let Ok((f, f_ty)) = lower_expr(gl, arenas, scope, diagnostics, builder, *falsy)
+                let Ok((f, f_ty)) = lower_expr(gl, arenas, scope, diagnostics, builder, falsy)
                 else {
                     result_stack.push(None);
                     error = true;
@@ -333,7 +333,7 @@ pub fn lower_expr<'a>(
                         None => {}
                         Some(BitSlice::MsbLsb(..)) => {}
                         Some(BitSlice::PlusWidth(base, _) | BitSlice::MinusWidth(base, _)) => {
-                            dispatch_stack.push(StackItem::new(*base))
+                            dispatch_stack.push(StackItem::new(base))
                         }
                     }
                     dispatch_stack.extend(exprs.iter().map(StackItem::new));
@@ -346,9 +346,9 @@ pub fn lower_expr<'a>(
                         range_expression,
                         Some(BitSlice::PlusWidth(..) | BitSlice::MinusWidth(..))
                     ));
-                let mut exprs = *exprs;
+                let mut exprs = exprs;
                 let symbol_key =
-                    try_resolve_symbol_id(scope.key, scope.table, arenas, *ast_ident, diagnostics)?;
+                    try_resolve_symbol_id(scope.key, scope.table, arenas, ast_ident, diagnostics)?;
                 let symbol = &scope.table[symbol_key].content;
                 let (mut ty, mut var) = match &symbol {
                     VSymbol::Parameter(value) => {
@@ -445,7 +445,7 @@ pub fn lower_expr<'a>(
                     let (lsb, width) = match slice {
                         BitSlice::MsbLsb(msb, lsb) => {
                             let Ok((_msb, lsb, width)) =
-                                msb_lsb_to_width(gl, arenas, scope.eval(), diagnostics, *msb, *lsb)
+                                msb_lsb_to_width(gl, arenas, scope.eval(), diagnostics, msb, lsb)
                             else {
                                 result_stack.push(None);
                                 continue;
@@ -460,7 +460,7 @@ pub fn lower_expr<'a>(
                                 continue;
                             };
                             let Ok(width) =
-                                eval_constant_expr(gl, arenas, scope.eval(), diagnostics, *width)
+                                eval_constant_expr(gl, arenas, scope.eval(), diagnostics, width)
                             else {
                                 result_stack.push(None);
                                 continue;
@@ -478,7 +478,7 @@ pub fn lower_expr<'a>(
                             };
 
                             let Ok(width) =
-                                eval_constant_expr(gl, arenas, scope.eval(), diagnostics, *width)
+                                eval_constant_expr(gl, arenas, scope.eval(), diagnostics, width)
                             else {
                                 result_stack.push(None);
                                 continue;
@@ -513,7 +513,7 @@ pub fn lower_expr<'a>(
                     diagnostics,
                     builder,
                     expr,
-                    *ident,
+                    ident,
                     &result_stack[result_stack.len() - num_args..],
                 );
 
@@ -534,8 +534,8 @@ pub fn lower_expr<'a>(
                         diagnostics,
                         builder,
                         scope,
-                        *ident,
-                        *exprs,
+                        ident,
+                        exprs,
                     ) {
                         Ok(Some(res)) => {
                             result_stack.push(Some(res));
@@ -563,7 +563,7 @@ pub fn lower_expr<'a>(
                     diagnostics,
                     builder,
                     expr,
-                    *ident,
+                    ident,
                     &result_stack[result_stack.len() - num_args..],
                 );
 
@@ -819,28 +819,15 @@ pub fn get_used_signals<'a>(
     scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
     signals: &mut OrderedSet<SignalKey>,
-    expr: AstId<Expr>,
+    expr: AstId<'a, Expr<'a>>,
 ) -> Result<(), ()> {
-    struct StackItem {
-        expr: AstId<Expr>,
-        _dispatched: bool,
-    }
-    impl StackItem {
-        pub fn new(expr: AstId<Expr>) -> Self {
-            Self {
-                expr,
-                _dispatched: false,
-            }
-        }
-    }
-
     let mut error = false;
-    let mut dispatch_stack: Vec<StackItem> = Vec::new();
+    let mut dispatch_stack: Vec<StackItem<'a>> = Vec::new();
 
     dispatch_stack.push(StackItem::new(expr));
 
     while let Some(item) = dispatch_stack.pop() {
-        match arenas.get(item.expr) {
+        match &*item.expr {
             Expr::Unary(_, c) => dispatch_stack.push(StackItem::new(*c)),
             Expr::Binary(_, l, r) => {
                 dispatch_stack.extend([*l, *r].into_iter().map(StackItem::new))
@@ -893,7 +880,7 @@ pub fn get_used_ident_signals<'a>(
     scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
     signals: &mut OrderedSet<SignalKey>,
-    ident: impl Into<HIdent>,
+    ident: impl Into<HIdent<'a>>,
 ) -> Result<(), ()> {
     let Ok(symbol_key) = try_resolve_symbol_id(scope.key, scope.table, arenas, ident, diagnostics)
     else {

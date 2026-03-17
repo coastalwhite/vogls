@@ -10,3 +10,4 @@ vogls-utils.workspace = true
 slotmap.workspace = true
 foldhash.workspace = true
 hashbrown.workspace = true
+bumpalo.workspace = true

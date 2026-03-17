@@ -31,15 +31,15 @@ pub fn lower<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
     scope: &mut Scope<'a>,
-    id: AstId<ModuleOrGenerateItem>,
+    id: AstId<'a, ModuleOrGenerateItem<'a>>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
-    match arenas.get(id).content {
+    match id.content {
         ModuleOrGenerateItemContent::ModuleOrGenerateItemDeclaration(id) => {
-            let module_or_generate_item_declaration = arenas.get(id);
+            let module_or_generate_item_declaration = &*id;
             match module_or_generate_item_declaration {
                 ModuleOrGenerateItemDeclaration::Net(id) => {
-                    let net_declaration = arenas.get(*id);
+                    let net_declaration = &**id;
                     let (_, _, width) = match net_declaration.range {
                         None => (0, 0, SCALAR_VSIZE),
                         Some(range) => {
@@ -54,7 +54,7 @@ pub fn lower<'a>(
                                 let NetDeclAssignment {
                                     ident: ast_ident,
                                     expr,
-                                } = arenas.get(assignment);
+                                } = &*assignment;
                                 let net = try_resolve_net(
                                     scope.key,
                                     scope.table,
@@ -91,7 +91,7 @@ pub fn lower<'a>(
                 }
                 ModuleOrGenerateItemDeclaration::Reg(_) => {}
                 ModuleOrGenerateItemDeclaration::Integer(id) => {
-                    let integer_declaration = arenas.get(*id);
+                    let integer_declaration = &**id;
                     let ty = VType::SignedNet(INTEGER_VSIZE);
                     for variable_type in integer_declaration.variable_types.iter() {
                         let (_, _, initialize) =
@@ -104,7 +104,7 @@ pub fn lower<'a>(
                             scope.key,
                             scope.table,
                             arenas,
-                            arenas.get(variable_type).identifier,
+                            variable_type.identifier,
                             diagnostics,
                         )?;
                         gl.signals[net.signal].initialize = Some(initialize);
@@ -118,9 +118,9 @@ pub fn lower<'a>(
         ModuleOrGenerateItemContent::LocalParameterDeclaration(_) => {}
         ModuleOrGenerateItemContent::ParameterOverride => todo!(),
         ModuleOrGenerateItemContent::ContinuousAssign(id) => {
-            let assign = arenas.get(id);
+            let assign = &*id;
             for ast_net_assignment in assign.list_of_net_assignments {
-                let net_assignment = arenas.get(ast_net_assignment);
+                let net_assignment = &*ast_net_assignment;
 
                 let mut bb_builder = new_process(gl, "assign".into(), arenas.get_span(id));
                 let bb_key = bb_builder.key();
@@ -156,16 +156,16 @@ pub fn lower<'a>(
             }
         }
         ModuleOrGenerateItemContent::GateInstantiation(id) => {
-            let gate_instantiation = arenas.get(id);
+            let gate_instantiation = &*id;
             match gate_instantiation {
                 GateInstantiation::NInput(id) => {
-                    let ninput_gate_instantiation = arenas.get(*id);
+                    let ninput_gate_instantiation = &**id;
                     for instance in ninput_gate_instantiation.instances.iter() {
                         let NInputGateInstance {
                             name: _,
                             output_terminal,
                             input_terminals,
-                        } = arenas.get(instance);
+                        } = &*instance;
 
                         let mut bb_builder = new_process(gl, "gate".into(), arenas.get_span(*id));
                         let bb_key = bb_builder.key();
@@ -231,7 +231,7 @@ pub fn lower<'a>(
             let UdpInstantiation {
                 identifier,
                 instances,
-            } = arenas.get(id);
+            } = &*id;
 
             let Some(udp) = scope.udps.get(&identifier.item.0) else {
                 diagnostics.udp_not_found(arenas, *identifier);
@@ -243,7 +243,7 @@ pub fn lower<'a>(
                     name: _,
                     output_terminal,
                     input_terminals,
-                } = arenas.get(instance);
+                } = &*instance;
 
                 lower_udp(
                     gl,
@@ -259,19 +259,19 @@ pub fn lower<'a>(
         ModuleOrGenerateItemContent::ModuleInstantiation(id) => {
             let ModuleInstantiation {
                 module_instances, ..
-            } = arenas.get(id);
+            } = &*id;
 
             for instance in module_instances.iter() {
                 let ModuleInstance {
                     name_of_module_instance,
                     list_of_port_connections,
-                } = arenas.get(instance);
+                } = &*instance;
 
                 let instance_sid =
                     resolve_symbol_id(scope.key, scope.table, name_of_module_instance.item.0)
                         .unwrap();
 
-                match arenas.get(*list_of_port_connections) {
+                match &**list_of_port_connections {
                     ListOfPortConnections::Ordered(ports) => {
                         // @TODO:
                         // Icarus Verilog has as good perspective on how to deal with unequal port
@@ -318,7 +318,7 @@ pub fn lower<'a>(
                         let mut signals_assigned =
                             vec![false; unwrap_get_module(scope.table, instance_sid).ports.len()];
                         for p in ports.iter() {
-                            let named_port_connection = arenas.get(p);
+                            let named_port_connection = &*p;
                             let NamedPortConnection {
                                 port_identifier: ast_port_identifier,
                                 expression,
@@ -406,7 +406,7 @@ pub fn lower<'a>(
             }
         }
         ModuleOrGenerateItemContent::InitialConstruct(id) => {
-            let statement = arenas.get(id).0;
+            let statement = id.0;
             let bb_builder = new_process(gl, "initial".into(), arenas.get_span(id));
             let bb_builder = statements_to_process(
                 gl,
@@ -419,7 +419,7 @@ pub fn lower<'a>(
             bb_builder.halt(gl);
         }
         ModuleOrGenerateItemContent::AlwaysConstruct(id) => {
-            let statement = arenas.get(id).0;
+            let statement = id.0;
             let bb_builder = new_process(gl, "always".into(), arenas.get_span(id));
             let bb_key = bb_builder.key();
             let bb_builder = statements_to_process(
@@ -447,11 +447,11 @@ pub fn dims_to_array<'a>(
     arenas: &'a AstArenas,
     scope: EvalScope<'a>,
     diagnostics: &mut Diagnostics,
-    dimensions: AstIdRange<Dimension>,
+    dimensions: AstIdRange<'a, Dimension<'a>>,
 ) -> Result<Vec<u32>, ()> {
     let mut dims = Vec::with_capacity(dimensions.len());
     for dim in dimensions.iter().rev() {
-        let Dimension { lhs, rhs } = arenas.get(dim);
+        let Dimension { lhs, rhs } = &*dim;
         let lhs = eval_constant_expr(gl, arenas, scope, diagnostics, *lhs);
         let rhs = eval_constant_expr(gl, arenas, scope, diagnostics, *rhs);
 
@@ -468,9 +468,9 @@ pub fn lower_opt_generate_block<'a>(
     arenas: &'a AstArenas,
     scope: &mut Scope<'a>,
     diagnostics: &mut Diagnostics,
-    opt_generate_block: AstId<Option<GenerateBlock>>,
+    opt_generate_block: AstId<'a, Option<GenerateBlock<'a>>>,
 ) -> Result<(), ()> {
-    match arenas.get(opt_generate_block) {
+    match &*opt_generate_block {
         None => Ok(()),
         Some(GenerateBlock::BeginEnd(_, module_or_generate_items)) => {
             for m in module_or_generate_items.iter() {
@@ -489,10 +489,10 @@ pub fn lower_variable_type<'a>(
     arenas: &'a AstArenas,
     scope: &Scope<'a>,
     diagnostics: &mut Diagnostics,
-    variable_type: AstId<VariableType>,
+    variable_type: AstId<'a, VariableType<'a>>,
     ty: VType,
 ) -> Result<(Vec<u32>, VectorSize, Option<Bits>), ()> {
-    match arenas.get(variable_type).variant {
+    match variable_type.variant {
         VariableTypeVariant::Dimensions(dimensions) => {
             let dims = dims_to_array(gl, arenas, scope.eval(), diagnostics, dimensions)?;
             let mut size = ty.force_net_width().get();

@@ -1,5 +1,6 @@
 use vogls_ir::token_range::TokenRange;
 
+use crate::arena::Arena;
 use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::module::Range;
 use crate::ast::statement::NetLValue;
@@ -18,11 +19,12 @@ use crate::tokenizer::Token;
 
 use super::{AstArenas, Consumable, Diagnostics, ParserScratches, TokenWalker};
 
-impl<'a> Consumable<'a> for UdpDeclaration {
+impl<'a> Consumable<'a> for UdpDeclaration<'a> {
     fn consume(
-        tkw: &mut TokenWalker<'a>,
-        sc: &mut ParserScratches,
+        tkw: &mut TokenWalker<'_>,
+        sc: &mut ParserScratches<'a>,
         arenas: &mut AstArenas,
+        ast: &'a Arena,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ()> {
         use Token as T;
@@ -38,21 +40,23 @@ impl<'a> Consumable<'a> for UdpDeclaration {
         //   endprimitive
 
         let attribute_instances =
-            parse_zero_or_more_while_next(tkw, sc, arenas, diagnostics.as_deref_mut(), |t| {
+            parse_zero_or_more_while_next(tkw, sc, arenas, ast, diagnostics.as_deref_mut(), |t| {
                 t == T::LeftParenStar
             })?;
         tkw.next_expect(T::KeywordPrimitive, diagnostics.as_deref_mut())?;
-        let identifier = item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        let identifier =
+            item_parse::<Identifier>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
         tkw.next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
 
         let ports = if tkw.is_next(|t| matches!(t, T::KeywordInput | T::KeywordOutput)) {
             let output_decl =
-                parse::<UdpOutputDeclaration>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                parse::<UdpOutputDeclaration>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
             tkw.next_expect(T::Comma, diagnostics.as_deref_mut())?;
             let input_decls = parse_one_or_more_while::<UdpInputDeclaration>(
                 tkw,
                 sc,
                 arenas,
+                ast,
                 diagnostics.as_deref_mut(),
                 |t| t.next_if_equals(T::Comma),
             )?;
@@ -69,6 +73,7 @@ impl<'a> Consumable<'a> for UdpDeclaration {
                 tkw,
                 sc,
                 arenas,
+                ast,
                 diagnostics.as_deref_mut(),
                 |tkw| std::mem::replace(&mut first, false) || tkw.next_if_equals(T::Comma),
             )?;
@@ -79,6 +84,7 @@ impl<'a> Consumable<'a> for UdpDeclaration {
                 tkw,
                 sc,
                 arenas,
+                ast,
                 diagnostics.as_deref_mut(),
                 |t| matches!(t, T::KeywordInput | T::KeywordOutput | T::KeywordReg),
             )?;
@@ -91,6 +97,7 @@ impl<'a> Consumable<'a> for UdpDeclaration {
                 tkw,
                 sc,
                 arenas,
+                ast,
                 diagnostics.as_deref_mut(),
             )?)
         } else {
@@ -116,6 +123,7 @@ impl<'a> Consumable<'a> for UdpDeclaration {
                     tkw,
                     sc,
                     arenas,
+                    ast,
                     diagnostics.as_deref_mut(),
                     |t| !matches!(t, T::KeywordEndTable),
                 )?;
@@ -125,6 +133,7 @@ impl<'a> Consumable<'a> for UdpDeclaration {
                     tkw,
                     sc,
                     arenas,
+                    ast,
                     diagnostics.as_deref_mut(),
                     |t| !matches!(t, T::KeywordEndTable),
                 )?;
@@ -146,11 +155,12 @@ impl<'a> Consumable<'a> for UdpDeclaration {
     }
 }
 
-impl<'a> Consumable<'a> for UdpPortDeclaration {
+impl<'a> Consumable<'a> for UdpPortDeclaration<'a> {
     fn consume(
-        tkw: &mut TokenWalker<'a>,
-        sc: &mut ParserScratches,
+        tkw: &mut TokenWalker<'_>,
+        sc: &mut ParserScratches<'a>,
         arenas: &mut AstArenas,
+        ast: &'a Arena,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ()> {
         use Token as T;
@@ -164,18 +174,24 @@ impl<'a> Consumable<'a> for UdpPortDeclaration {
         match tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?.kind {
             T::KeywordInput => {
                 let decl =
-                    parse::<UdpInputDeclaration>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                    parse::<UdpInputDeclaration>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
                 tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
                 Ok(Self::Input(decl))
             }
             T::KeywordOutput => {
-                let decl =
-                    parse::<UdpOutputDeclaration>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                let decl = parse::<UdpOutputDeclaration>(
+                    tkw,
+                    sc,
+                    arenas,
+                    ast,
+                    diagnostics.as_deref_mut(),
+                )?;
                 tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
                 Ok(Self::Output(decl))
             }
             T::KeywordReg => {
-                let decl = parse::<UdpRegDeclaration>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                let decl =
+                    parse::<UdpRegDeclaration>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
                 tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
                 Ok(Self::Reg(decl))
             }
@@ -187,11 +203,12 @@ impl<'a> Consumable<'a> for UdpPortDeclaration {
     }
 }
 
-impl<'a> Consumable<'a> for UdpInputDeclaration {
+impl<'a> Consumable<'a> for UdpInputDeclaration<'a> {
     fn consume(
-        tkw: &mut TokenWalker<'a>,
-        sc: &mut ParserScratches,
+        tkw: &mut TokenWalker<'_>,
+        sc: &mut ParserScratches<'a>,
         arenas: &mut AstArenas,
+        ast: &'a Arena,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ()> {
         use Token as T;
@@ -200,13 +217,13 @@ impl<'a> Consumable<'a> for UdpInputDeclaration {
         // udp_input_declaration ::= { attribute_instance } input list_of_port_identifiers
 
         let attribute_instances =
-            parse_zero_or_more_while_next(tkw, sc, arenas, diagnostics.as_deref_mut(), |t| {
+            parse_zero_or_more_while_next(tkw, sc, arenas, ast, diagnostics.as_deref_mut(), |t| {
                 t == T::LeftParenStar
             })?;
         tkw.next_expect(T::KeywordInput, diagnostics.as_deref_mut())?;
 
         let port_idents =
-            parse_one_or_more_while::<Identifier>(tkw, sc, arenas, diagnostics, |tkw| {
+            parse_one_or_more_while::<Identifier>(tkw, sc, arenas, ast, diagnostics, |tkw| {
                 tkw.next_if_equals(T::Comma)
             })?;
 
@@ -216,11 +233,12 @@ impl<'a> Consumable<'a> for UdpInputDeclaration {
         })
     }
 }
-impl<'a> Consumable<'a> for UdpOutputDeclaration {
+impl<'a> Consumable<'a> for UdpOutputDeclaration<'a> {
     fn consume(
-        tkw: &mut TokenWalker<'a>,
-        sc: &mut ParserScratches,
+        tkw: &mut TokenWalker<'_>,
+        sc: &mut ParserScratches<'a>,
         arenas: &mut AstArenas,
+        ast: &'a Arena,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ()> {
         use Token as T;
@@ -231,13 +249,13 @@ impl<'a> Consumable<'a> for UdpOutputDeclaration {
         // | { attribute_instance } output reg port_identifier [ = constant_expression ]
 
         let attribute_instances =
-            parse_zero_or_more_while_next(tkw, sc, arenas, diagnostics.as_deref_mut(), |t| {
+            parse_zero_or_more_while_next(tkw, sc, arenas, ast, diagnostics.as_deref_mut(), |t| {
                 t == T::LeftParenStar
             })?;
         tkw.next_expect(T::KeywordOutput, diagnostics.as_deref_mut())?;
         let is_reg = tkw.next_if_equals(T::KeywordReg);
         let port_identifier =
-            item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+            item_parse::<Identifier>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
 
         let mut constant_expr = None;
         if is_reg && tkw.next_if_equals(T::Equals) {
@@ -245,6 +263,7 @@ impl<'a> Consumable<'a> for UdpOutputDeclaration {
                 tkw,
                 sc,
                 arenas,
+                ast,
                 diagnostics.as_deref_mut(),
             )?);
         }
@@ -257,11 +276,12 @@ impl<'a> Consumable<'a> for UdpOutputDeclaration {
         })
     }
 }
-impl<'a> Consumable<'a> for UdpRegDeclaration {
+impl<'a> Consumable<'a> for UdpRegDeclaration<'a> {
     fn consume(
-        tkw: &mut TokenWalker<'a>,
-        sc: &mut ParserScratches,
+        tkw: &mut TokenWalker<'_>,
+        sc: &mut ParserScratches<'a>,
         arenas: &mut AstArenas,
+        ast: &'a Arena,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ()> {
         use Token as T;
@@ -270,11 +290,11 @@ impl<'a> Consumable<'a> for UdpRegDeclaration {
         // udp_reg_declaration ::= { attribute_instance } reg variable_identifier
 
         let attribute_instances =
-            parse_zero_or_more_while_next(tkw, sc, arenas, diagnostics.as_deref_mut(), |t| {
+            parse_zero_or_more_while_next(tkw, sc, arenas, ast, diagnostics.as_deref_mut(), |t| {
                 t == T::LeftParenStar
             })?;
         tkw.next_expect(T::KeywordReg, diagnostics.as_deref_mut())?;
-        let ident = item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        let ident = item_parse::<Identifier>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
 
         Ok(Self {
             attribute_instances,
@@ -283,11 +303,12 @@ impl<'a> Consumable<'a> for UdpRegDeclaration {
     }
 }
 
-impl<'a> Consumable<'a> for UdpCombinationalEntry {
+impl<'a> Consumable<'a> for UdpCombinationalEntry<'a> {
     fn consume(
-        tkw: &mut TokenWalker<'a>,
-        sc: &mut ParserScratches,
+        tkw: &mut TokenWalker<'_>,
+        sc: &mut ParserScratches<'a>,
         arenas: &mut AstArenas,
+        ast: &'a Arena,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ()> {
         use Token as T;
@@ -299,12 +320,13 @@ impl<'a> Consumable<'a> for UdpCombinationalEntry {
             tkw,
             sc,
             arenas,
+            ast,
             diagnostics.as_deref_mut(),
             |t| !matches!(t, T::Colon),
         )?;
         tkw.next_expect(T::Colon, diagnostics.as_deref_mut())?;
         let output_symbol =
-            item_parse::<UdpOutputSymbol>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+            item_parse::<UdpOutputSymbol>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
         tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
 
         Ok(Self {
@@ -313,11 +335,12 @@ impl<'a> Consumable<'a> for UdpCombinationalEntry {
         })
     }
 }
-impl<'a> Consumable<'a> for UdpSequentialEntry {
+impl<'a> Consumable<'a> for UdpSequentialEntry<'a> {
     fn consume(
-        tkw: &mut TokenWalker<'a>,
-        sc: &mut ParserScratches,
+        tkw: &mut TokenWalker<'_>,
+        sc: &mut ParserScratches<'a>,
         arenas: &mut AstArenas,
+        ast: &'a Arena,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ()> {
         use Token as T;
@@ -331,6 +354,7 @@ impl<'a> Consumable<'a> for UdpSequentialEntry {
             tkw,
             sc,
             arenas,
+            ast,
             diagnostics.as_deref_mut(),
             |tkw| {
                 tkw.token_content(tkw.offset).is_some_and(|t| {
@@ -345,11 +369,12 @@ impl<'a> Consumable<'a> for UdpSequentialEntry {
                 .is_some_and(|t| t.len() == 1 && byte_to_edge_symbol(t.as_bytes()[0]).is_some())
         {
             let edge_indicator =
-                parse::<UdpEdgeIndicator>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                parse::<UdpEdgeIndicator>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
             let after_level_list = parse_zero_or_more_while_next::<UdpLevelSymbol>(
                 tkw,
                 sc,
                 arenas,
+                ast,
                 diagnostics.as_deref_mut(),
                 |t| !matches!(t, T::Colon),
             )?;
@@ -358,9 +383,10 @@ impl<'a> Consumable<'a> for UdpSequentialEntry {
 
         tkw.next_expect(T::Colon, diagnostics.as_deref_mut())?;
         let current_state =
-            item_parse::<UdpLevelSymbol>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+            item_parse::<UdpLevelSymbol>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
         tkw.next_expect(T::Colon, diagnostics.as_deref_mut())?;
-        let next_state = item_parse::<UdpNextState>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        let next_state =
+            item_parse::<UdpNextState>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
         tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
 
         Ok(Self {
@@ -374,9 +400,10 @@ impl<'a> Consumable<'a> for UdpSequentialEntry {
 
 impl<'a> Consumable<'a> for UdpInitialStatement {
     fn consume(
-        tkw: &mut TokenWalker<'a>,
-        sc: &mut ParserScratches,
+        tkw: &mut TokenWalker<'_>,
+        sc: &mut ParserScratches<'a>,
         arenas: &mut AstArenas,
+        ast: &'a Arena,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ()> {
         use Token as T;
@@ -385,9 +412,9 @@ impl<'a> Consumable<'a> for UdpInitialStatement {
         // udp_initial_statement ::= initial output_port_identifier = init_val ;
 
         let output_port_ident =
-            item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+            item_parse::<Identifier>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
         tkw.next_expect(T::Equals, diagnostics.as_deref_mut())?;
-        let init_val = item_parse::<UdpInitVal>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        let init_val = item_parse::<UdpInitVal>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
         tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
 
         Ok(Self {
@@ -433,9 +460,10 @@ fn byte_to_edge_symbol(b: u8) -> Option<UdpEdgeSymbol> {
 
 impl<'a> Consumable<'a> for UdpLevelSymbol {
     fn consume(
-        tkw: &mut TokenWalker<'a>,
-        _sc: &mut ParserScratches,
+        tkw: &mut TokenWalker<'_>,
+        _sc: &mut ParserScratches<'a>,
         _arenas: &mut AstArenas,
+        _ast: &'a Arena,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ()> {
         use Token as T;
@@ -468,9 +496,10 @@ impl<'a> Consumable<'a> for UdpLevelSymbol {
 
 impl<'a> Consumable<'a> for UdpOutputSymbol {
     fn consume(
-        tkw: &mut TokenWalker<'a>,
-        _sc: &mut ParserScratches,
+        tkw: &mut TokenWalker<'_>,
+        _sc: &mut ParserScratches<'a>,
         _arenas: &mut AstArenas,
+        _ast: &'a Arena,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ()> {
         use Token as T;
@@ -502,9 +531,10 @@ impl<'a> Consumable<'a> for UdpOutputSymbol {
 
 impl<'a> Consumable<'a> for UdpEdgeSymbol {
     fn consume(
-        tkw: &mut TokenWalker<'a>,
-        _sc: &mut ParserScratches,
+        tkw: &mut TokenWalker<'_>,
+        _sc: &mut ParserScratches<'a>,
         _arenas: &mut AstArenas,
+        _ast: &'a Arena,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ()> {
         use Token as T;
@@ -537,9 +567,10 @@ impl<'a> Consumable<'a> for UdpEdgeSymbol {
 
 impl<'a> Consumable<'a> for UdpNextState {
     fn consume(
-        tkw: &mut TokenWalker<'a>,
-        sc: &mut ParserScratches,
+        tkw: &mut TokenWalker<'_>,
+        sc: &mut ParserScratches<'a>,
         arenas: &mut AstArenas,
+        ast: &'a Arena,
         diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ()> {
         use Token as T;
@@ -550,16 +581,17 @@ impl<'a> Consumable<'a> for UdpNextState {
         if tkw.next_if_equals(T::Minus) {
             Ok(Self::Dash)
         } else {
-            UdpOutputSymbol::consume(tkw, sc, arenas, diagnostics).map(Self::Output)
+            UdpOutputSymbol::consume(tkw, sc, arenas, ast, diagnostics).map(Self::Output)
         }
     }
 }
 
 impl<'a> Consumable<'a> for UdpEdgeIndicator {
     fn consume(
-        tkw: &mut TokenWalker<'a>,
-        sc: &mut ParserScratches,
+        tkw: &mut TokenWalker<'_>,
+        sc: &mut ParserScratches<'a>,
         arenas: &mut AstArenas,
+        ast: &'a Arena,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ()> {
         use Token as T;
@@ -594,23 +626,25 @@ impl<'a> Consumable<'a> for UdpEdgeIndicator {
                 Ok(Self::Levels(before, after))
             } else {
                 let before =
-                    item_parse::<UdpLevelSymbol>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                    item_parse::<UdpLevelSymbol>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
                 let after =
-                    item_parse::<UdpLevelSymbol>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+                    item_parse::<UdpLevelSymbol>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
                 tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
                 Ok(Self::Levels(before, after))
             }
         } else {
-            item_parse::<UdpEdgeSymbol>(tkw, sc, arenas, diagnostics.as_deref_mut()).map(Self::Edge)
+            item_parse::<UdpEdgeSymbol>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())
+                .map(Self::Edge)
         }
     }
 }
 
 impl<'a> Consumable<'a> for UdpInitVal {
     fn consume(
-        tkw: &mut TokenWalker<'a>,
-        _sc: &mut ParserScratches,
+        tkw: &mut TokenWalker<'_>,
+        _sc: &mut ParserScratches<'a>,
         _arenas: &mut AstArenas,
+        _ast: &'a Arena,
         diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ()> {
         // init_val ::= 1'b0 | 1'b1 | 1'bx | 1'bX | 1'B0 | 1'B1 | 1'Bx | 1'BX | 1 | 0
@@ -634,11 +668,12 @@ impl<'a> Consumable<'a> for UdpInitVal {
     }
 }
 
-impl<'a> Consumable<'a> for UdpInstantiation {
+impl<'a> Consumable<'a> for UdpInstantiation<'a> {
     fn consume(
-        tkw: &mut TokenWalker<'a>,
-        sc: &mut ParserScratches,
+        tkw: &mut TokenWalker<'_>,
+        sc: &mut ParserScratches<'a>,
         arenas: &mut AstArenas,
+        ast: &'a Arena,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ()> {
         use Token as T;
@@ -646,12 +681,14 @@ impl<'a> Consumable<'a> for UdpInstantiation {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
         // udp_instantiation ::= udp_identifier [ drive_strength ] [ delay2 ] udp_instance { , udp_instance } ;
 
-        let identifier = item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        let identifier =
+            item_parse::<Identifier>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
         // @Incomplete
         let instances = parse_one_or_more_while::<UdpInstance>(
             tkw,
             sc,
             arenas,
+            ast,
             diagnostics.as_deref_mut(),
             |tkw| tkw.next_if_equals(T::Comma),
         )?;
@@ -664,11 +701,12 @@ impl<'a> Consumable<'a> for UdpInstantiation {
     }
 }
 
-impl<'a> Consumable<'a> for UdpInstance {
+impl<'a> Consumable<'a> for UdpInstance<'a> {
     fn consume(
-        tkw: &mut TokenWalker<'a>,
-        sc: &mut ParserScratches,
+        tkw: &mut TokenWalker<'_>,
+        sc: &mut ParserScratches<'a>,
         arenas: &mut AstArenas,
+        ast: &'a Arena,
         mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ()> {
         use Token as T;
@@ -679,9 +717,15 @@ impl<'a> Consumable<'a> for UdpInstance {
 
         let mut name = None;
         if tkw.is_next_equal_to(T::Ident) {
-            let ident = item_parse::<Identifier>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+            let ident = item_parse::<Identifier>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
             let range = if tkw.is_next_equal_to(T::LeftBrace) {
-                Some(parse::<Range>(tkw, sc, arenas, diagnostics.as_deref_mut())?)
+                Some(parse::<Range>(
+                    tkw,
+                    sc,
+                    arenas,
+                    ast,
+                    diagnostics.as_deref_mut(),
+                )?)
             } else {
                 None
             };
@@ -689,10 +733,10 @@ impl<'a> Consumable<'a> for UdpInstance {
         }
 
         tkw.next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
-        let output_terminal = parse::<NetLValue>(tkw, sc, arenas, diagnostics.as_deref_mut())?;
+        let output_terminal = parse::<NetLValue>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
         tkw.next_expect(T::Comma, diagnostics.as_deref_mut())?;
         let input_terminals =
-            parse_one_or_more_while(tkw, sc, arenas, diagnostics.as_deref_mut(), |tkw| {
+            parse_one_or_more_while(tkw, sc, arenas, ast, diagnostics.as_deref_mut(), |tkw| {
                 tkw.next_if_equals(T::Comma)
             })?;
         tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;

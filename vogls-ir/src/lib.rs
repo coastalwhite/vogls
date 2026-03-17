@@ -752,4 +752,3 @@ pub struct SignalAliasRange {
     pub msb: u32,
     pub lsb: u32,
 }
-

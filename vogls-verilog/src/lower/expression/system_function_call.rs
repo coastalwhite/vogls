@@ -1,6 +1,7 @@
 use vogls_ir::dyn_format_string::{DynFormatArgument, DynFormatString};
 use vogls_ir::{
-    BasicBlockBuilder, Bits, GlobalContext, IntrinsicOp, VariableKey, VectorSize, INTEGER_VSIZE, TIME_VSIZE
+    BasicBlockBuilder, Bits, GlobalContext, INTEGER_VSIZE, IntrinsicOp, TIME_VSIZE, VariableKey,
+    VectorSize,
 };
 
 use crate::ast::expr::Expr;
@@ -127,7 +128,7 @@ pub fn lower_unevaluated_system_function_call<'a>(
     builder: &mut BasicBlockBuilder,
     scope: &Scope,
     ident: AstItem<SystemTaskIdentifier>,
-    arguments: Option<AstIdRange<Expr>>,
+    arguments: Option<AstIdRange<'a, Expr<'a>>>,
 ) -> Result<Option<(VariableKey, VType)>, ()> {
     match &arenas.ident_table[ident.item.0] {
         "vogls_lupdt" => {
@@ -147,7 +148,7 @@ pub fn lower_unevaluated_system_function_call<'a>(
                 return Err(());
             };
 
-            let Expr::Ident(arg_ident, array_exprs, bitslice) = arenas.get(expr) else {
+            let Expr::Ident(arg_ident, array_exprs, bitslice) = &*expr else {
                 diagnostics.not_yet_implemented(
                     arenas.get_item_span(ident),
                     "last update time expects an identifier",
@@ -189,21 +190,21 @@ pub fn lower_unevaluated_system_function_call<'a>(
 
             let (src, offset, width) = (arguments.get(0), arguments.get(1), arguments.get(2));
 
-            let Expr::Sized(sized) = arenas.get(src) else {
+            let Expr::Sized(sized) = &*src else {
                 diagnostics.not_yet_implemented(
                     arenas.get_item_span(ident),
                     "slice first argument should be sized",
                 );
                 return Err(());
             };
-            let Expr::Decimal(offset) = arenas.get(offset) else {
+            let Expr::Decimal(offset) = &*offset else {
                 diagnostics.not_yet_implemented(
                     arenas.get_item_span(ident),
                     "slice snd argument should be decimal",
                 );
                 return Err(());
             };
-            let Expr::Decimal(width) = arenas.get(width) else {
+            let Expr::Decimal(width) = &*width else {
                 diagnostics.not_yet_implemented(
                     arenas.get_item_span(ident),
                     "slice snd argument should be decimal",
@@ -217,18 +218,13 @@ pub fn lower_unevaluated_system_function_call<'a>(
             let width = arenas.decimals[width.at].extract_exact_u32();
 
             let Some(width) = VectorSize::new(width) else {
-                diagnostics.not_yet_implemented(
-                    arenas.get_item_span(ident),
-                    "width should be non-zero",
-                );
+                diagnostics
+                    .not_yet_implemented(arenas.get_item_span(ident), "width should be non-zero");
                 return Err(());
             };
 
             if width > src.size() {
-                diagnostics.not_yet_implemented(
-                    arenas.get_item_span(ident),
-                    "width <= src.size()",
-                );
+                diagnostics.not_yet_implemented(arenas.get_item_span(ident), "width <= src.size()");
                 return Err(());
             }
 
@@ -240,7 +236,7 @@ pub fn lower_unevaluated_system_function_call<'a>(
                 builder.slice(gl, src, offset, width),
                 VType::UnsignedNet(width),
             )))
-        },
+        }
         _ => Ok(None),
     }
 }

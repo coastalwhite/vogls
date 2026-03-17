@@ -9,18 +9,18 @@ use super::expr::Expr;
 // | constant_expression ? { attribute_instance } constant_expression : constant_expression
 #[derive(Clone, Copy)]
 #[repr(transparent)]
-pub struct ConstantExpr(pub Expr);
+pub struct ConstantExpr<'a>(pub Expr<'a>);
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 504
 // constant_range_expression ::=
 //   constant_expression
 // | msb_constant_expression : lsb_constant_expression
 #[derive(Clone, Copy)]
-pub enum ConstantRangeExpression {
-    Single(AstId<ConstantExpr>),
+pub enum ConstantRangeExpression<'a> {
+    Single(AstId<'a, ConstantExpr<'a>>),
     MsbLsb {
-        msb: AstId<ConstantExpr>,
-        lsb: AstId<ConstantExpr>,
+        msb: AstId<'a, ConstantExpr<'a>>,
+        lsb: AstId<'a, ConstantExpr<'a>>,
     },
 }
 
@@ -29,11 +29,11 @@ pub enum ConstantRangeExpression {
 //   constant_expression
 // | constant_expression : constant_expression : constant_expression
 #[derive(Clone, Copy)]
-pub enum ConstantMinTypMaxExpression {
-    Single(AstId<ConstantExpr>),
+pub enum ConstantMinTypMaxExpression<'a> {
+    Single(AstId<'a, ConstantExpr<'a>>),
     MinTypMax {
-        min: AstId<ConstantExpr>,
-        typ: AstId<ConstantExpr>,
-        max: AstId<ConstantExpr>,
+        min: AstId<'a, ConstantExpr<'a>>,
+        typ: AstId<'a, ConstantExpr<'a>>,
+        max: AstId<'a, ConstantExpr<'a>>,
     },
 }

@@ -21,26 +21,26 @@ use crate::parser::AstArenas;
 
 use super::{Diagnostics, Scope};
 
-enum Condition {
+enum Condition<'a> {
     None,
 
     InputPosedge,
     InputNegedge,
     NoOtherCondition,
 
-    Expr(AstId<Expr>),
-    InputPosedgeExpr(AstId<Expr>),
-    InputNegedgeExpr(AstId<Expr>),
+    Expr(AstId<'a, Expr<'a>>),
+    InputPosedgeExpr(AstId<'a, Expr<'a>>),
+    InputNegedgeExpr(AstId<'a, Expr<'a>>),
 }
 
-pub struct SpecifyOutput {
+pub struct SpecifyOutput<'a> {
     sid: SymbolId,
     inputs: VgHashMap<SignalKey, usize>,
-    paths: Vec<(SignalKey, Vec<SpecifyPath>)>,
+    paths: Vec<(SignalKey, Vec<SpecifyPath<'a>>)>,
 }
 
-pub struct SpecifyPath {
-    condition: Condition,
+pub struct SpecifyPath<'a> {
+    condition: Condition<'a>,
     delays: Delays,
 }
 
@@ -397,10 +397,10 @@ impl Delay {
         gl: &mut GlobalContext,
         arenas: &'a AstArenas,
         scope: &mut Scope<'a>,
-        id: AstId<ConstantMinTypMaxExpression>,
+        id: AstId<'a, ConstantMinTypMaxExpression<'a>>,
         diagnostics: &mut Diagnostics,
     ) -> Result<Self, ()> {
-        match arenas.get(id) {
+        match &*id {
             ConstantMinTypMaxExpression::Single(delay) => {
                 let delay = eval_constant_expr(gl, arenas, scope.eval(), diagnostics, *delay)?
                     .as_integer()
@@ -457,14 +457,14 @@ pub fn lower_specify<'a>(
     arenas: &'a AstArenas,
     scope: &mut Scope<'a>,
 
-    items: AstIdRange<SpecifyBlockItem>,
+    items: AstIdRange<'a, SpecifyBlockItem<'a>>,
     outs_lut: &mut VgHashMap<SignalKey, usize>,
-    outs: &mut Vec<(SignalKey, SpecifyOutput)>,
+    outs: &mut Vec<(SignalKey, SpecifyOutput<'a>)>,
 
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
     for item in items.iter() {
-        match arenas.get(item) {
+        match &*item {
             SpecifyBlockItem::SpecParamDeclaration => todo!(),
             SpecifyBlockItem::PulseStyleDeclaration => todo!(),
             SpecifyBlockItem::ShowCancelledDeclaration => todo!(),
@@ -486,7 +486,7 @@ pub fn lower_specify<'a>(
 
                 let condition = match (state_dependent_condition, edge_identifier) {
                     (None, None) => Condition::None,
-                    (Some(c), None) => match arenas.get(*c) {
+                    (Some(c), None) => match &**c {
                         StateDependentCondition::If(id) => Condition::Expr(id.into_expr()),
                         StateDependentCondition::Ifnone => Condition::NoOtherCondition,
                     },
@@ -494,7 +494,7 @@ pub fn lower_specify<'a>(
                         EdgeIdentifier::Posedge => Condition::InputPosedge,
                         EdgeIdentifier::Negedge => Condition::InputNegedge,
                     },
-                    (Some(c), Some(e)) => match (arenas.get(*c), e.item) {
+                    (Some(c), Some(e)) => match (&**c, e.item) {
                         (StateDependentCondition::If(id), EdgeIdentifier::Posedge) => {
                             Condition::InputPosedgeExpr(id.into_expr())
                         }
@@ -511,8 +511,8 @@ pub fn lower_specify<'a>(
                 assert_eq!(input_terminal_descriptors.len(), 1);
                 assert_eq!(output_terminal_descriptors.len(), 1);
 
-                let input = arenas.get(input_terminal_descriptors.get(0));
-                let output = arenas.get(output_terminal_descriptors.get(0));
+                let input = input_terminal_descriptors.get(0);
+                let output = output_terminal_descriptors.get(0);
 
                 let (None, None) = (input.constant_range_expr, output.constant_range_expr) else {
                     todo!()
@@ -578,7 +578,7 @@ pub fn lower_specify<'a>(
                     return Err(());
                 }
 
-                let delays = arenas.get(*path_delay_value);
+                let delays = &**path_delay_value;
                 let delays = delays.list_of_delay_expressions;
                 let delays = match delays.len() {
                     1 => Delays::One(Delay::eval(gl, arenas, scope, delays.get(0), diagnostics)?),
@@ -658,10 +658,9 @@ pub fn lower_specify<'a>(
                     out.paths.push((input, Vec::new()));
                     idx
                 });
-                out.paths[paths_idx].1.push(SpecifyPath {
-                    condition,
-                    delays,
-                });
+                out.paths[paths_idx]
+                    .1
+                    .push(SpecifyPath { condition, delays });
             }
             SpecifyBlockItem::SystemTimingCheck(_) => {
                 // @TODO: Don't ignore these.
