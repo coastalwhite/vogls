@@ -1,6 +1,5 @@
-use vogls_ir::{
-    BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, SCALAR_VSIZE, Time, VariableKey,
-};
+use vogls_frontend::symbol_table::SymbolId;
+use vogls_ir::{BasicBlockBuilder, BasicBlockTerminator, Bits, SCALAR_VSIZE, Time, VariableKey};
 use vogls_utils::OrderedSet;
 
 use crate::ast::expr::Expr;
@@ -10,17 +9,15 @@ use crate::ast::statement::{
 };
 use crate::ast::{AstId, AstItem};
 use crate::lower::expression::lower_expr;
-use crate::lower::{Scope, try_resolve_net};
+use crate::lower::{LowerContext, MutLowerContext, try_resolve_net};
 use crate::lower::{WatchCondition, try_resolve_constant};
-use crate::parser::AstArenas;
 
-use super::{Diagnostics, Region};
+use super::Region;
 
 pub fn lower<'a>(
-    gl: &mut GlobalContext,
-    arenas: &'a AstArenas,
-    scope: &mut Scope<'a>,
-    diagnostics: &mut Diagnostics,
+    ctx: &LowerContext<'a>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
     mut builder: BasicBlockBuilder,
     ptc: AstId<'a, ProceduralTimingControl<'a>>,
     statement: AstId<'a, StatementOrNull<'a>>,
@@ -32,7 +29,7 @@ pub fn lower<'a>(
                 DelayControl::DelayValue(ast_value) => {
                     let value = match &**ast_value {
                         DelayValue::UnsignedNumber(value) => {
-                            let value = &arenas.decimals[value.at];
+                            let value = &ctx.arenas.decimals[value.at];
                             value.as_u64().unwrap()
                         }
                         DelayValue::Identifier(ident) => {
@@ -41,11 +38,11 @@ pub fn lower<'a>(
                                 loc: ast_value.loc,
                             };
                             let value = try_resolve_constant(
-                                scope.key,
-                                scope.table,
-                                arenas,
+                                scope,
+                                &ctx.table,
+                                &ctx.arenas,
                                 ident,
-                                diagnostics,
+                                &mut mctx.diagnostics,
                             )?;
                             value.as_integer().unwrap() as u64
                         }
@@ -60,18 +57,11 @@ pub fn lower<'a>(
                         // that the process is resumed in the next simulation cycle in the
                         // current time.
                         // """
-                        builder.wait_region(gl, Region::Inactive as u8)
+                        builder.wait_region(mctx.gl(), Region::Inactive as u8)
                     } else {
-                        builder.wait(gl, Time(value as u64))
+                        builder.wait(mctx.gl(), Time(value as u64))
                     };
-                    builder = super::lower_statement_or_null(
-                        gl,
-                        arenas,
-                        scope,
-                        diagnostics,
-                        builder,
-                        statement,
-                    )?;
+                    builder = super::lower_statement_or_null(ctx, mctx, scope, builder, statement)?;
                 }
                 DelayControl::MinTypMax(_) => todo!(),
             }
@@ -79,53 +69,47 @@ pub fn lower<'a>(
         ProceduralTimingControl::EventControl(event_control) => match &**event_control {
             EventControl::Star => {
                 let start_bb = builder.key();
-                builder = builder.jump(gl);
+                builder = builder.jump(mctx.gl());
 
                 let mut ins = OrderedSet::new();
                 match &*statement {
                     StatementOrNull::Attribute(_) => {}
                     StatementOrNull::Statement(stmt) => {
-                        super::get_used_signals(arenas, scope, diagnostics, &mut ins, *stmt)?
+                        super::get_used_signals(ctx, mctx, scope, &mut ins, *stmt)?
                     }
                 }
 
                 let statement_start_bb = builder.key();
-                builder = super::lower_statement_or_null(
-                    gl,
-                    arenas,
-                    scope,
-                    diagnostics,
-                    builder,
-                    statement,
-                )?;
+                builder = super::lower_statement_or_null(ctx, mctx, scope, builder, statement)?;
                 let statement_end_bb = builder.key();
 
-                builder = builder.jump(gl);
+                builder = builder.jump(mctx.gl());
                 let watch_bb = builder.key();
-                gl.bbs[start_bb].terminator = BasicBlockTerminator::Jump(watch_bb);
+                mctx.gl.bbs[start_bb].terminator = BasicBlockTerminator::Jump(watch_bb);
 
                 let before = ins
                     .items
                     .iter()
-                    .map(|s| builder.probe(gl, *s))
+                    .map(|s| builder.probe(mctx.gl(), *s))
                     .collect::<Vec<_>>();
-                builder = builder.watch(gl, ins.items.clone());
+                builder = builder.watch(mctx.gl(), ins.items.clone());
 
-                let mut acc = builder.constant(gl, Bits::from(false));
+                let mut acc = builder.constant(mctx.gl(), Bits::from(false));
                 for (before, signal) in before.into_iter().zip(ins.items) {
-                    let after = builder.probe(gl, signal);
-                    let cond = builder.not_case_equals(gl, before, after);
-                    acc = builder.or(gl, acc, cond);
+                    let after = builder.probe(mctx.gl(), signal);
+                    let cond = builder.not_case_equals(mctx.gl(), before, after);
+                    acc = builder.or(mctx.gl(), acc, cond);
                 }
 
-                builder = builder.branch_false_to(gl, acc, watch_bb);
-                let next_builder = builder.next_builder(gl);
-                builder.jump_to(gl, statement_start_bb);
+                builder = builder.branch_false_to(mctx.gl(), acc, watch_bb);
+                let next_builder = builder.next_builder(mctx.gl());
+                builder.jump_to(mctx.gl(), statement_start_bb);
                 builder = next_builder;
-                gl.bbs[statement_end_bb].terminator = BasicBlockTerminator::Jump(builder.key());
+                mctx.gl.bbs[statement_end_bb].terminator =
+                    BasicBlockTerminator::Jump(builder.key());
             }
             EventControl::EventExpression(event_expression) => {
-                builder = builder.jump(gl);
+                builder = builder.jump(mctx.gl());
                 let start_key = builder.key();
 
                 let mut conditions: Vec<(WatchCondition, VariableKey, AstId<Expr>)> = Vec::new();
@@ -141,48 +125,44 @@ pub fn lower<'a>(
                         panic!("not an ident");
                     };
                     if !exprs.is_empty() || range_expression.is_some() {
-                        diagnostics.not_yet_implemented(
-                            arenas.get_span(*expr),
+                        mctx.diagnostics.not_yet_implemented(
+                            ctx.arenas.get_span(*expr),
                             "event expression of this kind",
                         );
                         return Err(());
                     }
 
-                    let net =
-                        try_resolve_net(scope.key, scope.table, arenas, *ast_ident, diagnostics)?;
-                    let key = net.signal;
+                    let net = try_resolve_net(
+                        scope,
+                        &ctx.table,
+                        &ctx.arenas,
+                        *ast_ident,
+                        &mut mctx.diagnostics,
+                    )?;
+                    let key = net.net.probe_signal();
 
-                    let (variable, _) =
-                        lower_expr(gl, arenas, scope, diagnostics, &mut builder, *expr)?;
+                    let (variable, _) = lower_expr(ctx, mctx, scope, &mut builder, *expr)?;
                     conditions.push((condition, variable, *expr));
                     signals.push(key);
                 }
-                builder = builder.watch(gl, signals);
+                builder = builder.watch(mctx.gl(), signals);
 
-                let mut acc = builder.constant(gl, Bits::new_zeroed(SCALAR_VSIZE));
+                let mut acc = builder.constant(mctx.gl(), Bits::new_zeroed(SCALAR_VSIZE));
                 for (condition, before, expr) in conditions.into_iter() {
                     use WatchCondition as C;
 
-                    let (after, _) =
-                        lower_expr(gl, arenas, scope, diagnostics, &mut builder, expr)?;
+                    let (after, _) = lower_expr(ctx, mctx, scope, &mut builder, expr)?;
                     let cond = match condition {
-                        C::Posedge => builder.posedge(gl, before, after),
-                        C::Negedge => builder.negedge(gl, before, after),
-                        C::None => builder.not_case_equals(gl, before, after),
+                        C::Posedge => builder.posedge(mctx.gl(), before, after),
+                        C::Negedge => builder.negedge(mctx.gl(), before, after),
+                        C::None => builder.not_case_equals(mctx.gl(), before, after),
                     };
-                    let cond = builder.reduce_or(gl, cond);
-                    acc = builder.or(gl, acc, cond);
+                    let cond = builder.reduce_or(mctx.gl(), cond);
+                    acc = builder.or(mctx.gl(), acc, cond);
                 }
 
-                builder = builder.branch_false_to(gl, acc, start_key);
-                builder = super::lower_statement_or_null(
-                    gl,
-                    arenas,
-                    scope,
-                    diagnostics,
-                    builder,
-                    statement,
-                )?;
+                builder = builder.branch_false_to(mctx.gl(), acc, start_key);
+                builder = super::lower_statement_or_null(ctx, mctx, scope, builder, statement)?;
             }
         },
     }

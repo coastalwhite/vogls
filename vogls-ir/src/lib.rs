@@ -743,12 +743,3 @@ pub struct Process {
     pub origin: TokenRange,
     pub lazy: bool,
 }
-
-pub struct SignalAlias {
-    pub signal: SignalKey,
-    pub range: Option<(u32, u32)>,
-}
-pub struct SignalAliasRange {
-    pub msb: u32,
-    pub lsb: u32,
-}

@@ -1,20 +1,20 @@
-use vogls_ir::{BasicBlockBuilder, BasicBlockTerminator, GlobalContext};
+use vogls_frontend::symbol_table::SymbolId;
+use vogls_ir::{BasicBlockBuilder, BasicBlockTerminator};
 
+use crate::ast::AstId;
 use crate::ast::statement::{
-    CaseItemPattern, CaseStatement, CaseStatementVariant, ConditionalStatement, StatementOrNull,
+    CaseItemPattern, CaseStatement, CaseStatementVariant, ConditionalStatement,
 };
-use crate::ast::{AstId, AstIdRange};
-use crate::lower::Scope;
-use crate::lower::diagnostics::Diagnostics;
 use crate::lower::expression::coerce_bin_arithmetic;
 use crate::lower::lower_expr;
-use crate::parser::AstArenas;
+use crate::lower::{LowerContext, MutLowerContext};
+
+use super::lower_statement_or_null;
 
 pub fn lower<'a>(
-    gl: &mut GlobalContext,
-    arenas: &'a AstArenas,
-    scope: &mut Scope<'a>,
-    diagnostics: &mut Diagnostics,
+    ctx: &LowerContext<'a>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
     mut builder: BasicBlockBuilder,
     conditional: AstId<'a, ConditionalStatement<'a>>,
 ) -> Result<BasicBlockBuilder, ()> {
@@ -24,83 +24,72 @@ pub fn lower<'a>(
         else_branch,
     } = &*conditional;
 
-    let (condition, _) = lower_expr(
-        gl,
-        arenas,
-        scope,
-        diagnostics,
-        &mut builder,
-        if_branch.condition,
-    )?;
-    let condition = builder.reduce_or(gl, condition);
+    let (condition, _) = lower_expr(ctx, mctx, scope, &mut builder, if_branch.condition)?;
+    let condition = builder.reduce_or(mctx.gl(), condition);
 
     let mut origins = Vec::new();
 
-    let (mut branch_ref, mut if_true_builder) = builder.branch(gl, condition);
+    let (mut branch_ref, mut if_true_builder) = builder.branch(mctx.gl(), condition);
     if_true_builder = lower_statement_or_null(
-        gl,
-        arenas,
+        ctx,
+        mctx,
         scope,
-        diagnostics,
         if_true_builder,
         if_branch.statement,
     )?;
     origins.push(if_true_builder.key());
 
-    let mut builder = if_true_builder.next_terminate_later(gl);
+    let mut builder = if_true_builder.next_terminate_later(mctx.gl());
     for else_if_branch in else_ifs.iter() {
-        builder.update_branch_ref(gl, branch_ref, builder.key());
+        builder.update_branch_ref(mctx.gl(), branch_ref, builder.key());
 
         let else_if_branch = &*else_if_branch;
         let (condition, _) = lower_expr(
-            gl,
-            arenas,
+            ctx,
+            mctx,
             scope,
-            diagnostics,
             &mut builder,
             else_if_branch.condition,
         )?;
-        let condition = builder.reduce_or(gl, condition);
+        let condition = builder.reduce_or(mctx.gl(), condition);
 
-        (branch_ref, if_true_builder) = builder.branch(gl, condition);
+        (branch_ref, if_true_builder) = builder.branch(mctx.gl(), condition);
         if_true_builder = lower_statement_or_null(
-            gl,
-            arenas,
+            ctx,
+            mctx,
             scope,
-            diagnostics,
             if_true_builder,
             else_if_branch.statement,
         )?;
         origins.push(if_true_builder.key());
 
-        builder = if_true_builder.next_terminate_later(gl);
+        builder = if_true_builder.next_terminate_later(mctx.gl());
     }
 
     let mut branch_ref = Some(branch_ref);
     if let Some(statement) = else_branch {
-        builder.update_branch_ref(gl, branch_ref.take().unwrap(), builder.key());
+        builder.update_branch_ref(mctx.gl(), branch_ref.take().unwrap(), builder.key());
 
-        builder = lower_statement_or_null(gl, arenas, scope, diagnostics, builder, *statement)?;
+        builder = lower_statement_or_null(ctx, mctx, scope, builder, *statement)?;
         origins.push(builder.key());
 
-        builder = builder.jump(gl);
+        builder = builder.jump(mctx.gl());
     }
 
     for bb in &origins {
-        gl.bbs[*bb].terminator = BasicBlockTerminator::Jump(builder.key());
+        mctx.gl.bbs[*bb].terminator = BasicBlockTerminator::Jump(builder.key());
     }
     if let Some(branch_ref) = branch_ref {
-        builder.update_branch_ref(gl, branch_ref, builder.key());
+        builder.update_branch_ref(mctx.gl(), branch_ref, builder.key());
     }
 
     Ok(builder)
 }
 
 pub fn lower_case_statement<'a>(
-    gl: &mut GlobalContext,
-    arenas: &'a AstArenas,
-    scope: &mut Scope<'a>,
-    diagnostics: &mut Diagnostics,
+    ctx: &LowerContext<'a>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
     mut builder: BasicBlockBuilder,
     case_statement: AstId<'a, CaseStatement<'a>>,
 ) -> Result<BasicBlockBuilder, ()> {
@@ -110,7 +99,7 @@ pub fn lower_case_statement<'a>(
         items,
     } = &*case_statement;
 
-    let (expr_var, expr_var_ty) = lower_expr(gl, arenas, scope, diagnostics, &mut builder, *expr)?;
+    let (expr_var, expr_var_ty) = lower_expr(ctx, mctx, scope, &mut builder, *expr)?;
 
     let mut origins = Vec::new();
     let mut default = None;
@@ -123,86 +112,64 @@ pub fn lower_case_statement<'a>(
             }
             CaseItemPattern::Expressions(exprs) => {
                 let fst = exprs.first().expect("spec: 1+ pattern expr in case_item");
-                let (v, v_ty) = lower_expr(gl, arenas, scope, diagnostics, &mut builder, fst)?;
+                let (v, v_ty) = lower_expr(ctx, mctx, scope, &mut builder, fst)?;
                 let (expr_var, _, v, _) =
-                    coerce_bin_arithmetic(gl, &mut builder, expr_var, expr_var_ty, v, v_ty);
+                    coerce_bin_arithmetic(mctx.gl(), &mut builder, expr_var, expr_var_ty, v, v_ty);
                 let expr_var_adj = match variant {
                     CaseStatementVariant::Case => expr_var,
                     CaseStatementVariant::CaseX => {
                         // @Performance: This should probably be one instruction
-                        let x = builder.copy_x(gl, expr_var, v);
-                        let x = builder.copy_z(gl, x, v);
+                        let x = builder.copy_x(mctx.gl(), expr_var, v);
+                        let x = builder.copy_z(mctx.gl(), x, v);
                         x
                     }
-                    CaseStatementVariant::CaseZ => builder.copy_z(gl, expr_var, v),
+                    CaseStatementVariant::CaseZ => builder.copy_z(mctx.gl(), expr_var, v),
                 };
-                let mut acc = builder.case_equals(gl, expr_var_adj, v);
+                let mut acc = builder.case_equals(mctx.gl(), expr_var_adj, v);
                 for e in exprs.iter().skip(1) {
-                    let (v, _) = lower_expr(gl, arenas, scope, diagnostics, &mut builder, e)?;
+                    let (v, _) = lower_expr(ctx, mctx, scope, &mut builder, e)?;
                     let expr_var_adj = match variant {
                         CaseStatementVariant::Case => expr_var,
                         CaseStatementVariant::CaseX => {
                             // @Performance: This should probably be one instruction
-                            let x = builder.copy_x(gl, expr_var, v);
-                            let x = builder.copy_z(gl, x, v);
+                            let x = builder.copy_x(mctx.gl(), expr_var, v);
+                            let x = builder.copy_z(mctx.gl(), x, v);
                             x
                         }
-                        CaseStatementVariant::CaseZ => builder.copy_z(gl, expr_var, v),
+                        CaseStatementVariant::CaseZ => builder.copy_z(mctx.gl(), expr_var, v),
                     };
-                    let v = builder.case_equals(gl, expr_var_adj, v);
-                    acc = builder.or(gl, acc, v);
+                    let v = builder.case_equals(mctx.gl(), expr_var_adj, v);
+                    acc = builder.or(mctx.gl(), acc, v);
                 }
                 acc
             }
         };
 
-        let condition = builder.reduce_or(gl, condition);
-        let (branch_ref, mut if_true_builder) = builder.branch(gl, condition);
+        let condition = builder.reduce_or(mctx.gl(), condition);
+        let (branch_ref, mut if_true_builder) = builder.branch(mctx.gl(), condition);
         if_true_builder = lower_statement_or_null(
-            gl,
-            arenas,
+            ctx,
+            mctx,
             scope,
-            diagnostics,
             if_true_builder,
             case_item.statement_or_null,
         )?;
         origins.push(if_true_builder.key());
 
-        builder = if_true_builder.next_terminate_later(gl);
-        builder.update_branch_ref(gl, branch_ref, builder.key());
+        builder = if_true_builder.next_terminate_later(mctx.gl());
+        builder.update_branch_ref(mctx.gl(), branch_ref, builder.key());
     }
 
     if let Some(statement) = default {
-        builder = lower_statement_or_null(gl, arenas, scope, diagnostics, builder, statement)?;
-        builder = builder.jump(gl);
+        builder = lower_statement_or_null(ctx, mctx, scope, builder, statement)?;
+        builder = builder.jump(mctx.gl());
     } else {
-        builder = builder.jump(gl);
+        builder = builder.jump(mctx.gl());
     }
 
     for bb in &origins {
-        gl.bbs[*bb].terminator = BasicBlockTerminator::Jump(builder.key());
+        mctx.gl.bbs[*bb].terminator = BasicBlockTerminator::Jump(builder.key());
     }
 
     Ok(builder)
-}
-
-pub fn lower_statement_or_null<'a>(
-    gl: &mut GlobalContext,
-    arenas: &'a AstArenas,
-    scope: &mut Scope<'a>,
-    diagnostics: &mut Diagnostics,
-    builder: BasicBlockBuilder,
-    statement: AstId<'a, StatementOrNull<'a>>,
-) -> Result<BasicBlockBuilder, ()> {
-    match &*statement {
-        StatementOrNull::Attribute(_) => Ok(builder),
-        StatementOrNull::Statement(statement) => super::statements_to_process(
-            gl,
-            arenas,
-            scope,
-            diagnostics,
-            builder,
-            AstIdRange::single(*statement),
-        ),
-    }
 }

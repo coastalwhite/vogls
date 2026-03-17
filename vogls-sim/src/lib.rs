@@ -10,7 +10,7 @@ use vogls_bits::format::{BitsFormatBase, BitsFormatOptions};
 use vogls_bits::set_subslice::{tv_l_set, tv_s_set};
 use vogls_codegen::{Heap, HeapOffset, HeapRef};
 use vogls_ir::vcd::NetType;
-use vogls_ir::{INTEGER_VSIZE, LogicMode, SignalAlias, SignalKey, TIME_VSIZE, VectorSize};
+use vogls_ir::{INTEGER_VSIZE, LogicMode, SignalKey, TIME_VSIZE, VectorSize};
 use vogls_runtime::{RtSignalKey, SimulationIo};
 
 mod execution;
@@ -241,14 +241,13 @@ impl VcdScope {
     pub fn lower(
         v: &vogls_ir::vcd::VcdScope,
         map: &VgHashMap<SignalKey, RtSignalKey>,
-        signal_aliases: &VgHashMap<SignalKey, SignalAlias>,
     ) -> VcdScope {
         VcdScope {
             name: v.name.clone(),
             items: v
                 .items
                 .iter()
-                .map(|i| VcdScopeItem::lower(i, map, signal_aliases))
+                .map(|i| VcdScopeItem::lower(i, map))
                 .collect(),
         }
     }
@@ -340,21 +339,14 @@ impl VcdScopeItem {
     fn lower(
         v: &vogls_ir::vcd::VcdScopeItem,
         map: &VgHashMap<SignalKey, RtSignalKey>,
-        signal_aliases: &VgHashMap<SignalKey, SignalAlias>,
     ) -> Self {
         match v {
             vogls_ir::vcd::VcdScopeItem::Scope(v) => {
-                Self::Scope(VcdScope::lower(v, map, signal_aliases))
+                Self::Scope(VcdScope::lower(v, map))
             }
             vogls_ir::vcd::VcdScopeItem::Variable(v) => {
-                let (mut msb, mut lsb) = (v.msb, v.lsb);
-                let mut signal = v.signal;
-                while let Some(ns) = signal_aliases.get(&signal) {
-                    signal = ns.signal;
-                    if let Some((s_msb, s_lsb)) = ns.range {
-                        (msb, lsb) = (s_msb as i64, s_lsb as i64);
-                    }
-                }
+                let (msb, lsb) = (v.msb, v.lsb);
+                let signal = v.signal;
                 let signal = map[&signal];
                 Self::Variable(VcdVariable {
                     name: v.name.clone(),

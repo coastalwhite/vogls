@@ -1,3 +1,4 @@
+use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{
     BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, INTEGER_VSIZE, SignalKey,
     VariableKey, VectorSize,
@@ -9,11 +10,10 @@ use crate::ast::{AstId, HIdent};
 use crate::elaborate::VSymbol;
 use crate::lower::{VType, msb_lsb_to_width, try_resolve_symbol_id};
 use crate::number::Sign;
-use crate::parser::AstArenas;
 pub use constant_expr::eval_constant_expr;
 
-use super::Diagnostics;
-use super::Scope;
+use super::LowerContext;
+use super::{Diagnostics, MutLowerContext};
 
 mod constant_expr;
 pub mod function_call;
@@ -34,10 +34,9 @@ impl<'a> StackItem<'a> {
 
 #[deny(clippy::question_mark_used)] // Needs to be handled explicitly in the recursion.
 pub fn lower_expr<'a>(
-    gl: &mut GlobalContext,
-    arenas: &'a AstArenas,
-    scope: &Scope<'a>,
-    diagnostics: &mut Diagnostics,
+    ctx: &LowerContext<'a>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
     builder: &mut BasicBlockBuilder,
     expr: AstId<'a, Expr<'a>>,
 ) -> Result<(VariableKey, VType), ()> {
@@ -66,14 +65,20 @@ pub fn lower_expr<'a>(
 
                 use UnaryOperator as O;
                 let (variable, ty) = match op {
-                    O::LogicalNegation => (builder.logical_neg(gl, child), VType::SCALAR_NET),
-                    O::BitwiseNegation => (builder.binary_neg(gl, child), ty),
-                    O::ReductionAnd => (builder.reduce_and(gl, child), VType::SCALAR_NET),
-                    O::ReductionOr => (builder.reduce_or(gl, child), VType::SCALAR_NET),
-                    O::ReductionNand => (builder.reduce_nand(gl, child), VType::SCALAR_NET),
-                    O::ReductionNor => (builder.reduce_nor(gl, child), VType::SCALAR_NET),
-                    O::ReductionXor => (builder.reduce_xor(gl, child), VType::SCALAR_NET),
-                    O::ReductionXnor => (builder.reduce_xnor(gl, child), VType::SCALAR_NET),
+                    O::LogicalNegation => {
+                        (builder.logical_neg(&mut mctx.gl, child), VType::SCALAR_NET)
+                    }
+                    O::BitwiseNegation => (builder.binary_neg(&mut mctx.gl, child), ty),
+                    O::ReductionAnd => (builder.reduce_and(&mut mctx.gl, child), VType::SCALAR_NET),
+                    O::ReductionOr => (builder.reduce_or(&mut mctx.gl, child), VType::SCALAR_NET),
+                    O::ReductionNand => {
+                        (builder.reduce_nand(&mut mctx.gl, child), VType::SCALAR_NET)
+                    }
+                    O::ReductionNor => (builder.reduce_nor(&mut mctx.gl, child), VType::SCALAR_NET),
+                    O::ReductionXor => (builder.reduce_xor(&mut mctx.gl, child), VType::SCALAR_NET),
+                    O::ReductionXnor => {
+                        (builder.reduce_xnor(&mut mctx.gl, child), VType::SCALAR_NET)
+                    }
                     O::SignPlus => todo!(),
                     O::SignMinus => todo!(),
                 };
@@ -97,8 +102,8 @@ pub fn lower_expr<'a>(
 
                 macro_rules! nyi {
                     ($t:literal) => {{
-                        diagnostics.not_yet_implemented(
-                            arenas.get_span(item.expr),
+                        mctx.diagnostics.not_yet_implemented(
+                            ctx.arenas.get_span(item.expr),
                             concat!("binexpr not implemented: ", $t),
                         );
                         result_stack.push(None);
@@ -134,13 +139,13 @@ pub fn lower_expr<'a>(
                     O::LogicalAnd => bin_logical_and,
                     O::LogicalOr => bin_logical_or,
                 };
-                let result = (op)(gl, builder, l, l_ty, r, r_ty);
+                let result = (op)(&mut mctx.gl, builder, l, l_ty, r, r_ty);
                 result_stack.push(Some(result));
             }
             Expr::Concatenation(exprs) => {
                 if exprs.is_empty() {
-                    diagnostics.not_yet_implemented(
-                        arenas.get_span(item.expr),
+                    mctx.diagnostics.not_yet_implemented(
+                        ctx.arenas.get_span(item.expr),
                         "concatenation without expressions",
                     );
                     error = true;
@@ -169,7 +174,7 @@ pub fn lower_expr<'a>(
                         continue;
                     };
                     let next_width = next_ty.force_net_width();
-                    output = builder.concat(gl, next, output);
+                    output = builder.concat(&mut mctx.gl, next, output);
                     width += next_width.get();
                 }
                 result_stack.push(Some((
@@ -184,8 +189,8 @@ pub fn lower_expr<'a>(
                 } = replication;
 
                 if exprs.is_empty() {
-                    diagnostics.not_yet_implemented(
-                        arenas.get_span(item.expr),
+                    mctx.diagnostics.not_yet_implemented(
+                        ctx.arenas.get_span(item.expr),
                         "concatenation without expressions",
                     );
                     error = true;
@@ -201,17 +206,22 @@ pub fn lower_expr<'a>(
                 }
 
                 let end_stack_size = result_stack.len() - exprs.len();
-                let Ok(repeat_n) =
-                    eval_constant_expr(gl, arenas, scope.eval(), diagnostics, constant_expr)
-                else {
+                let Ok(repeat_n) = eval_constant_expr(
+                    &mctx.gl,
+                    &ctx.arenas,
+                    &ctx.table,
+                    scope,
+                    &mut mctx.diagnostics,
+                    constant_expr,
+                ) else {
                     result_stack.truncate(end_stack_size);
                     result_stack.push(None);
                     continue;
                 };
 
                 let Some(repeat_n) = repeat_n.as_integer() else {
-                    diagnostics.not_yet_implemented(
-                        arenas.get_span(constant_expr),
+                    mctx.diagnostics.not_yet_implemented(
+                        ctx.arenas.get_span(constant_expr),
                         "replication overflow",
                     );
                     error = true;
@@ -220,8 +230,10 @@ pub fn lower_expr<'a>(
                     continue;
                 };
                 if repeat_n == 0 {
-                    diagnostics
-                        .not_yet_implemented(arenas.get_span(constant_expr), "replication is 0");
+                    mctx.diagnostics.not_yet_implemented(
+                        ctx.arenas.get_span(constant_expr),
+                        "replication is 0",
+                    );
                     error = true;
                     result_stack.truncate(end_stack_size);
                     result_stack.push(None);
@@ -240,13 +252,15 @@ pub fn lower_expr<'a>(
                         continue;
                     };
                     let next_width = next_ty.force_net_width();
-                    output = builder.concat(gl, next, output);
+                    output = builder.concat(mctx.gl(), next, output);
                     width += next_width.get();
                 }
 
                 let Some(output_width) = width.checked_mul(repeat_n as u32) else {
-                    diagnostics
-                        .not_yet_implemented(arenas.get_span(item.expr), "replication overflow");
+                    mctx.diagnostics.not_yet_implemented(
+                        ctx.arenas.get_span(item.expr),
+                        "replication overflow",
+                    );
                     error = true;
                     result_stack.push(None);
                     continue;
@@ -254,7 +268,7 @@ pub fn lower_expr<'a>(
 
                 let output_single = output;
                 for _ in 1..repeat_n {
-                    output = builder.concat(gl, output_single, output);
+                    output = builder.concat(mctx.gl(), output_single, output);
                 }
                 result_stack.push(Some((
                     output,
@@ -278,23 +292,21 @@ pub fn lower_expr<'a>(
                     continue;
                 };
 
-                let c = builder.reduce_or(gl, c);
+                let c = builder.reduce_or(mctx.gl(), c);
                 let condition_bb = builder.key();
 
-                *builder = builder.next_terminate_later(gl);
+                *builder = builder.next_terminate_later(mctx.gl());
                 let truthy_start_bb = builder.key();
-                let Ok((t, t_ty)) = lower_expr(gl, arenas, scope, diagnostics, builder, truthy)
-                else {
+                let Ok((t, t_ty)) = lower_expr(ctx, mctx, scope, builder, truthy) else {
                     result_stack.push(None);
                     error = true;
                     continue;
                 };
                 let truthy_end_bb = builder.key();
 
-                *builder = builder.next_terminate_later(gl);
+                *builder = builder.next_terminate_later(mctx.gl());
                 let falsy_start_bb = builder.key();
-                let Ok((f, f_ty)) = lower_expr(gl, arenas, scope, diagnostics, builder, falsy)
-                else {
+                let Ok((f, f_ty)) = lower_expr(ctx, mctx, scope, builder, falsy) else {
                     result_stack.push(None);
                     error = true;
                     continue;
@@ -304,19 +316,20 @@ pub fn lower_expr<'a>(
                 let ty = coerce_to_max_size_ty(t_ty, f_ty);
                 let ty_size = ty.force_net_width();
 
-                *builder = builder.continue_with(gl, truthy_end_bb);
-                let t = sign_or_zero_extend(gl, builder, t, t_ty, ty_size);
+                *builder = builder.continue_with(mctx.gl(), truthy_end_bb);
+                let t = sign_or_zero_extend(mctx.gl(), builder, t, t_ty, ty_size);
 
-                *builder = builder.continue_with(gl, falsy_end_bb);
-                let f = sign_or_zero_extend(gl, builder, f, f_ty, ty_size);
+                *builder = builder.continue_with(mctx.gl(), falsy_end_bb);
+                let f = sign_or_zero_extend(mctx.gl(), builder, f, f_ty, ty_size);
 
-                *builder = builder.next_terminate_later(gl);
-                let (outcome, _) = builder.phi(gl, [(truthy_end_bb, t), (falsy_end_bb, f)].into());
+                *builder = builder.next_terminate_later(mctx.gl());
+                let (outcome, _) =
+                    builder.phi(mctx.gl(), [(truthy_end_bb, t), (falsy_end_bb, f)].into());
 
-                gl.bbs[condition_bb].terminator =
+                mctx.gl().bbs[condition_bb].terminator =
                     BasicBlockTerminator::Branch(c, truthy_start_bb, falsy_start_bb);
-                gl.bbs[truthy_end_bb].terminator = BasicBlockTerminator::Jump(builder.key());
-                gl.bbs[falsy_end_bb].terminator = BasicBlockTerminator::Jump(builder.key());
+                mctx.gl().bbs[truthy_end_bb].terminator = BasicBlockTerminator::Jump(builder.key());
+                mctx.gl().bbs[falsy_end_bb].terminator = BasicBlockTerminator::Jump(builder.key());
 
                 result_stack.push(Some((outcome, ty)));
             }
@@ -347,13 +360,18 @@ pub fn lower_expr<'a>(
                         Some(BitSlice::PlusWidth(..) | BitSlice::MinusWidth(..))
                     ));
                 let mut exprs = exprs;
-                let symbol_key =
-                    try_resolve_symbol_id(scope.key, scope.table, arenas, ast_ident, diagnostics)?;
-                let symbol = &scope.table[symbol_key].content;
+                let symbol_key = try_resolve_symbol_id(
+                    scope,
+                    &ctx.table,
+                    &ctx.arenas,
+                    ast_ident,
+                    &mut mctx.diagnostics,
+                )?;
+                let symbol = &ctx.table[symbol_key].content;
                 let (mut ty, mut var) = match &symbol {
                     VSymbol::Parameter(value) => {
                         let value = value.clone();
-                        (value.ty(), builder.constant(gl, value.into_bits()))
+                        (value.ty(), builder.constant(mctx.gl(), value.into_bits()))
                     }
                     VSymbol::Task(_)
                     | VSymbol::GenVar
@@ -362,8 +380,10 @@ pub fn lower_expr<'a>(
                     | VSymbol::NamedBlock
                     | VSymbol::GenerateBlock(_)
                     | VSymbol::GenerateBlocks => {
-                        diagnostics
-                            .not_yet_implemented(arenas.get_span(expr), "cannot use this symbol");
+                        mctx.diagnostics.not_yet_implemented(
+                            ctx.arenas.get_span(expr),
+                            "cannot use this symbol",
+                        );
                         error = true;
                         result_stack.truncate(end_result_stack_len);
                         result_stack.push(None);
@@ -373,8 +393,10 @@ pub fn lower_expr<'a>(
                         let mut dims = &s.dims[..];
                         if !dims.is_empty() {
                             if exprs.pop_front().is_none() {
-                                diagnostics
-                                    .not_yet_implemented(arenas.get_span(expr), "variable array");
+                                mctx.diagnostics.not_yet_implemented(
+                                    ctx.arenas.get_span(expr),
+                                    "variable array",
+                                );
                                 error = true;
                                 result_stack.truncate(end_result_stack_len);
                                 result_stack.push(None);
@@ -389,8 +411,15 @@ pub fn lower_expr<'a>(
 
                             dims = &dims[..dims.len() - 1];
                             let mut leaf_arr_items = dims.iter().product::<u32>();
-                            let idx = truncate_or_extend(gl, builder, idx, idx_ty, INTEGER_VSIZE);
-                            let mut offset = builder.multiply_constant(gl, idx, leaf_arr_items);
+                            let idx = truncate_or_extend(
+                                &mut mctx.gl,
+                                builder,
+                                idx,
+                                idx_ty,
+                                INTEGER_VSIZE,
+                            );
+                            let mut offset =
+                                builder.multiply_constant(&mut mctx.gl, idx, leaf_arr_items);
 
                             while let Some(dim) = dims.last()
                                 && exprs.pop_front().is_some()
@@ -402,16 +431,24 @@ pub fn lower_expr<'a>(
                                 };
 
                                 leaf_arr_items /= *dim;
+                                let expr = truncate_or_extend(
+                                    mctx.gl(),
+                                    builder,
+                                    expr,
+                                    expr_ty,
+                                    INTEGER_VSIZE,
+                                );
                                 let expr =
-                                    truncate_or_extend(gl, builder, expr, expr_ty, INTEGER_VSIZE);
-                                let expr = builder.multiply_constant(gl, expr, leaf_arr_items);
-                                offset = builder.plus(gl, offset, expr);
+                                    builder.multiply_constant(mctx.gl(), expr, leaf_arr_items);
+                                offset = builder.plus(mctx.gl(), offset, expr);
                                 dims = &dims[..dims.len() - 1];
                             }
 
                             if !dims.is_empty() {
-                                diagnostics
-                                    .not_yet_implemented(arenas.get_span(expr), "variable array");
+                                mctx.diagnostics.not_yet_implemented(
+                                    ctx.arenas.get_span(expr),
+                                    "variable array",
+                                );
                                 error = true;
                                 result_stack.truncate(end_result_stack_len);
                                 result_stack.push(None);
@@ -419,13 +456,13 @@ pub fn lower_expr<'a>(
                             }
 
                             let size = s.ty.force_net_width();
-                            let variable = builder.probe(gl, s.signal);
-                            let offset = builder.multiply_constant(gl, offset, size.get());
-                            let variable = builder.slice(gl, variable, offset, size);
+                            let variable = s.net.probe(mctx.gl(), builder);
+                            let offset = builder.multiply_constant(mctx.gl(), offset, size.get());
+                            let variable = builder.slice(mctx.gl(), variable, offset, size);
 
                             (s.ty, variable)
                         } else {
-                            (s.ty, builder.probe(gl, s.signal))
+                            (s.ty, s.net.probe(mctx.gl(), builder))
                         }
                     }
                 };
@@ -437,20 +474,27 @@ pub fn lower_expr<'a>(
                         continue 'dispatch_loop;
                     };
                     ty = VType::SCALAR_NET;
-                    let expr = truncate_or_extend(gl, builder, expr, expr_ty, INTEGER_VSIZE);
-                    var = builder.select_bit(gl, var, expr);
+                    let expr =
+                        truncate_or_extend(&mut mctx.gl, builder, expr, expr_ty, INTEGER_VSIZE);
+                    var = builder.select_bit(&mut mctx.gl, var, expr);
                 }
 
                 if let Some(slice) = range_expression {
                     let (lsb, width) = match slice {
                         BitSlice::MsbLsb(msb, lsb) => {
-                            let Ok((_msb, lsb, width)) =
-                                msb_lsb_to_width(gl, arenas, scope.eval(), diagnostics, msb, lsb)
-                            else {
+                            let Ok((_msb, lsb, width)) = msb_lsb_to_width(
+                                &mctx.gl,
+                                &ctx.arenas,
+                                &ctx.table,
+                                scope,
+                                &mut mctx.diagnostics,
+                                msb,
+                                lsb,
+                            ) else {
                                 result_stack.push(None);
                                 continue;
                             };
-                            let lsb_v = builder.constant_u32(gl, lsb as u32);
+                            let lsb_v = builder.constant_u32(&mut mctx.gl, lsb as u32);
                             (lsb_v, width)
                         }
                         BitSlice::PlusWidth(_, width) => {
@@ -459,15 +503,26 @@ pub fn lower_expr<'a>(
                                 result_stack.push(None);
                                 continue;
                             };
-                            let Ok(width) =
-                                eval_constant_expr(gl, arenas, scope.eval(), diagnostics, width)
-                            else {
+                            let Ok(width) = eval_constant_expr(
+                                &mctx.gl,
+                                &ctx.arenas,
+                                &ctx.table,
+                                scope,
+                                &mut mctx.diagnostics,
+                                width,
+                            ) else {
                                 result_stack.push(None);
                                 continue;
                             };
                             let width =
                                 VectorSize::new(width.as_integer().unwrap() as u32).unwrap();
-                            let lsb = truncate_or_extend(gl, builder, lsb, lsb_ty, INTEGER_VSIZE);
+                            let lsb = truncate_or_extend(
+                                &mut mctx.gl,
+                                builder,
+                                lsb,
+                                lsb_ty,
+                                INTEGER_VSIZE,
+                            );
                             (lsb, width)
                         }
                         BitSlice::MinusWidth(_, width) => {
@@ -477,22 +532,33 @@ pub fn lower_expr<'a>(
                                 continue;
                             };
 
-                            let Ok(width) =
-                                eval_constant_expr(gl, arenas, scope.eval(), diagnostics, width)
-                            else {
+                            let Ok(width) = eval_constant_expr(
+                                &mctx.gl,
+                                &ctx.arenas,
+                                &ctx.table,
+                                scope,
+                                &mut mctx.diagnostics,
+                                width,
+                            ) else {
                                 result_stack.push(None);
                                 continue;
                             };
-                            let lsb = truncate_or_extend(gl, builder, lsb, lsb_ty, INTEGER_VSIZE);
+                            let lsb = truncate_or_extend(
+                                &mut mctx.gl,
+                                builder,
+                                lsb,
+                                lsb_ty,
+                                INTEGER_VSIZE,
+                            );
                             let width = width.as_integer().unwrap() as u32;
-                            let width_v = builder.constant_u32(gl, width - 1);
-                            let lsb = builder.minus(gl, lsb, width_v);
+                            let width_v = builder.constant_u32(&mut mctx.gl, width - 1);
+                            let lsb = builder.minus(&mut mctx.gl, lsb, width_v);
                             (lsb, VectorSize::new(width).unwrap())
                         }
                     };
 
                     ty = VType::UnsignedNet(width);
-                    var = builder.slice(gl, var, lsb, width as VectorSize);
+                    var = builder.slice(&mut mctx.gl, var, lsb, width as VectorSize);
                 }
 
                 result_stack.push(Some((var, ty)));
@@ -507,10 +573,9 @@ pub fn lower_expr<'a>(
 
                 let num_args = exprs.len();
                 let result = function_call::lower_function_call(
-                    gl,
-                    arenas,
+                    ctx,
+                    mctx, 
                     scope,
-                    diagnostics,
                     builder,
                     expr,
                     ident,
@@ -529,11 +594,10 @@ pub fn lower_expr<'a>(
             Expr::SystemFunctionCall(ident, exprs) => {
                 if !item.dispatched {
                     match system_function_call::lower_unevaluated_system_function_call(
-                        gl,
-                        arenas,
-                        diagnostics,
-                        builder,
+                        ctx,
+                        mctx,
                         scope,
+                        builder,
                         ident,
                         exprs,
                     ) {
@@ -558,9 +622,8 @@ pub fn lower_expr<'a>(
 
                 let num_args = exprs.map_or(0, |e| e.len());
                 let result = system_function_call::lower_system_function_call(
-                    gl,
-                    arenas,
-                    diagnostics,
+                    &ctx.arenas,
+                    mctx,
                     builder,
                     expr,
                     ident,
@@ -577,21 +640,21 @@ pub fn lower_expr<'a>(
                 }
             }
             Expr::Decimal(decimal) => {
-                let decimal = &arenas.decimals[decimal.at];
+                let decimal = &ctx.arenas.decimals[decimal.at];
                 result_stack.push(Some((
-                    builder.constant(gl, decimal.clone()),
+                    builder.constant(&mut mctx.gl, decimal.clone()),
                     VType::SignedNet(INTEGER_VSIZE),
                 )));
             }
             Expr::Sized(sized) => {
-                let sized = &arenas.sized_numbers[sized.item.at];
+                let sized = &ctx.arenas.sized_numbers[sized.item.at];
                 let signed = matches!(sized.sign, Sign::Signed);
                 let size = sized.value.size();
-                let var = builder.constant(gl, sized.value.clone());
+                let var = builder.constant(&mut mctx.gl, sized.value.clone());
                 result_stack.push(Some((var, VType::net(size, signed))));
             }
             Expr::String(string_ref) => {
-                let s = arenas.get_ident(string_ref.0);
+                let s = ctx.arenas.get_ident(string_ref.0);
                 let s = s
                     .as_bytes()
                     .iter()
@@ -600,7 +663,7 @@ pub fn lower_expr<'a>(
                     .collect::<Box<[u8]>>();
                 let value =
                     Bits::load_from_slice(&s, VectorSize::new((s.len() * 8) as u32).unwrap());
-                let var = builder.constant(gl, value);
+                let var = builder.constant(&mut mctx.gl, value);
                 result_stack.push(Some((var, VType::String(s.len() as u32))));
             }
         }
@@ -815,9 +878,9 @@ pub fn truncate_or_extend(
 }
 
 pub fn get_used_signals<'a>(
-    arenas: &'a AstArenas,
-    scope: &mut Scope<'a>,
-    diagnostics: &mut Diagnostics,
+    ctx: &LowerContext<'a>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
     signals: &mut OrderedSet<SignalKey>,
     expr: AstId<'a, Expr<'a>>,
 ) -> Result<(), ()> {
@@ -849,7 +912,7 @@ pub fn get_used_signals<'a>(
                 dispatch_stack.extend([*c, *t, *f].into_iter().map(StackItem::new))
             }
             Expr::Ident(ident, exprs, range_expression) => {
-                if get_used_ident_signals(arenas, scope, diagnostics, signals, *ident).is_err() {
+                if get_used_ident_signals(ctx, mctx, scope, signals, *ident).is_err() {
                     error = true;
                     continue;
                 }
@@ -876,18 +939,19 @@ pub fn get_used_signals<'a>(
 }
 
 pub fn get_used_ident_signals<'a>(
-    arenas: &'a AstArenas,
-    scope: &mut Scope<'a>,
-    diagnostics: &mut Diagnostics,
+    ctx: &LowerContext<'a>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
     signals: &mut OrderedSet<SignalKey>,
     ident: impl Into<HIdent<'a>>,
 ) -> Result<(), ()> {
-    let Ok(symbol_key) = try_resolve_symbol_id(scope.key, scope.table, arenas, ident, diagnostics)
+    let Ok(symbol_key) =
+        try_resolve_symbol_id(scope, &ctx.table, &ctx.arenas, ident, &mut mctx.diagnostics)
     else {
         return Err(());
     };
-    match &scope.table[symbol_key].content {
-        VSymbol::Net(s) => _ = signals.insert(s.signal),
+    match &ctx.table[symbol_key].content {
+        VSymbol::Net(s) => _ = signals.insert(s.net.probe_signal()),
         VSymbol::Parameter(_)
         | VSymbol::GenVar
         | VSymbol::Task(_)

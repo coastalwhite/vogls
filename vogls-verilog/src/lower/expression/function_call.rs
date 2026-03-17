@@ -1,36 +1,36 @@
 use std::collections::{HashMap, HashSet};
 
-use vogls_ir::{
-    BasicBlockBuilder, BasicBlockTerminator, ConnectionDirection, GlobalContext, VariableKey,
-};
+use vogls_frontend::symbol_table::SymbolId;
+use vogls_ir::{BasicBlockBuilder, BasicBlockTerminator, ConnectionDirection, VariableKey};
 
 use crate::ast::expr::Expr;
 use crate::ast::{AstId, AstIdRange, AstItem, HIdent, Identifier};
 use crate::elaborate::VSymbol;
 use crate::lower::expression::{lower_expr, truncate_or_extend};
-use crate::lower::{Diagnostics, VType, hident_span, try_resolve_symbol_id};
-use crate::lower::{Scope, assign_task_output};
-use crate::parser::AstArenas;
+use crate::lower::{LowerContext, assign_task_output};
+use crate::lower::{MutLowerContext, VType, hident_span, try_resolve_symbol_id};
 
 pub fn lower_function_call<'a>(
-    gl: &mut GlobalContext,
-    arenas: &'a AstArenas,
-    scope: &Scope<'a>,
-    diagnostics: &mut Diagnostics,
+    ctx: &LowerContext<'a>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
     builder: &mut BasicBlockBuilder,
     expr: AstId<Expr>,
     ident: HIdent,
     arguments: &[Option<(VariableKey, VType)>],
 ) -> Result<(VariableKey, VType), ()> {
-    let fn_symbol = try_resolve_symbol_id(scope.key, scope.table, arenas, ident, diagnostics)?;
-    let VSymbol::Function(fn_symbol) = &scope.table[fn_symbol].content else {
-        diagnostics.not_yet_implemented(hident_span(arenas, ident), "not calling a function");
+    let fn_symbol =
+        try_resolve_symbol_id(scope, &ctx.table, &ctx.arenas, ident, &mut mctx.diagnostics)?;
+    let VSymbol::Function(fn_symbol) = &ctx.table[fn_symbol].content else {
+        mctx.diagnostics
+            .not_yet_implemented(hident_span(&ctx.arenas, ident), "not calling a function");
         return Err(());
     };
 
     let lowered = fn_symbol.lowered.as_ref().unwrap();
     if fn_symbol.inputs.len() != arguments.len() {
-        diagnostics.not_yet_implemented(arenas.get_span(expr), "invalid number of arguments");
+        mctx.diagnostics
+            .not_yet_implemented(ctx.arenas.get_span(expr), "invalid number of arguments");
         return Err(());
     }
 
@@ -41,19 +41,20 @@ pub fn lower_function_call<'a>(
             return Err(());
         };
         let arg_variable = truncate_or_extend(
-            gl,
+            mctx.gl(),
             builder,
             arg_variable,
             arg_ty,
             input_ty.force_net_width(),
         );
-        builder.drive(gl, input_signal, arg_variable);
+        builder.drive(mctx.gl(), input_signal, arg_variable);
     }
 
     let mut bb_stack = Vec::new();
     let mut bb_map = HashMap::new();
     let mut bb_seen = HashSet::new();
 
+    let gl = mctx.gl();
     let fn_bb = gl.bbs.insert(gl.bbs[lowered.entry].clone());
 
     bb_stack.push(fn_bb);
@@ -97,23 +98,27 @@ pub fn lower_function_call<'a>(
 }
 
 pub fn lower_task_enable<'a>(
-    gl: &mut GlobalContext,
-    arenas: &'a AstArenas,
-    scope: &Scope<'a>,
-    diagnostics: &mut Diagnostics,
+    ctx: &LowerContext<'a>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
     mut builder: BasicBlockBuilder,
     ident: AstItem<Identifier>,
     arguments: AstIdRange<Expr>,
 ) -> Result<BasicBlockBuilder, ()> {
-    let fn_symbol = try_resolve_symbol_id(scope.key, scope.table, arenas, ident, diagnostics)?;
-    let VSymbol::Task(task_symbol) = &scope.table[fn_symbol].content else {
-        diagnostics.not_yet_implemented(arenas.get_item_span(ident), "not enabling a task");
+    let fn_symbol =
+        try_resolve_symbol_id(scope, &ctx.table, &ctx.arenas, ident, &mut mctx.diagnostics)?;
+    let VSymbol::Task(task_symbol) = &ctx.table[fn_symbol].content else {
+        mctx.diagnostics
+            .not_yet_implemented(ctx.arenas.get_item_span(ident), "not enabling a task");
         return Err(());
     };
 
     let lowered = task_symbol.lowered.as_ref().unwrap();
     if task_symbol.io.len() != arguments.len() {
-        diagnostics.not_yet_implemented(arenas.get_item_span(ident), "invalid number of arguments");
+        mctx.diagnostics.not_yet_implemented(
+            ctx.arenas.get_item_span(ident),
+            "invalid number of arguments",
+        );
         return Err(());
     }
 
@@ -129,20 +134,21 @@ pub fn lower_task_enable<'a>(
 
         let arg = arguments.get(i);
 
-        let (arg_variable, arg_ty) = lower_expr(gl, arenas, scope, diagnostics, &mut builder, arg)?;
+        let (arg_variable, arg_ty) = lower_expr(ctx, mctx, scope, &mut builder, arg)?;
         let arg_variable = truncate_or_extend(
-            gl,
+            mctx.gl(),
             &mut builder,
             arg_variable,
             arg_ty,
             input_ty.force_net_width(),
         );
-        builder.drive(gl, signal, arg_variable);
+        builder.drive(mctx.gl(), signal, arg_variable);
     }
 
     let mut bb_stack = Vec::new();
     let mut bb_map = HashMap::new();
 
+    let gl = &mut mctx.gl;
     let fn_bb = gl.bbs.insert(gl.bbs[lowered.entry].clone());
 
     bb_stack.push(fn_bb);
@@ -168,8 +174,8 @@ pub fn lower_task_enable<'a>(
     bb_stack.push(fn_bb);
     bb_seen.insert(fn_bb);
     while let Some(bb_key) = bb_stack.pop() {
-        gl.bbs[bb_key].map_bbs(|bb| bb_map[&bb]);
-        gl.bbs[bb_key]
+        mctx.gl().bbs[bb_key].map_bbs(|bb| bb_map[&bb]);
+        mctx.gl().bbs[bb_key]
             .terminator
             .extend_next_rev(&mut bb_stack, &mut bb_seen);
     }
@@ -184,25 +190,16 @@ pub fn lower_task_enable<'a>(
         }
 
         let arg = arguments.get(i);
-        let output_var = builder.probe(gl, signal);
-        assign_task_output(
-            gl,
-            arenas,
-            scope,
-            diagnostics,
-            &mut builder,
-            output_var,
-            arg,
-            output_ty,
-        )?;
+        let output_var = builder.probe(mctx.gl(), signal);
+        assign_task_output(ctx, mctx, scope, &mut builder, output_var, arg, output_ty)?;
     }
 
     let origin_bb = builder.key();
-    let builder = builder.next_terminate_later(gl);
-    gl.bbs[origin_bb].terminator = BasicBlockTerminator::Jump(fn_bb);
+    let builder = builder.next_terminate_later(mctx.gl());
+    mctx.gl().bbs[origin_bb].terminator = BasicBlockTerminator::Jump(fn_bb);
     if let Some(terminate) = bb_map.get(&lowered.terminate) {
         // Procedure might contain infinite loop.
-        gl.bbs[*terminate].terminator = BasicBlockTerminator::Jump(builder.key());
+        mctx.gl().bbs[*terminate].terminator = BasicBlockTerminator::Jump(builder.key());
     }
 
     Ok(builder)

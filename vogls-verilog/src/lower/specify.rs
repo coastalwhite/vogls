@@ -17,9 +17,8 @@ use crate::ast::{AstId, AstIdRange};
 use crate::elaborate::VSymbol;
 use crate::lower::expression::lower_expr;
 use crate::lower::{eval_constant_expr, try_resolve_symbol_id, unwrap_get_net_mut};
-use crate::parser::AstArenas;
 
-use super::{Diagnostics, Scope};
+use super::{LowerContext, MutLowerContext};
 
 enum Condition<'a> {
     None,
@@ -394,17 +393,23 @@ pub struct Delay {
 
 impl Delay {
     fn eval<'a>(
-        gl: &mut GlobalContext,
-        arenas: &'a AstArenas,
-        scope: &mut Scope<'a>,
+        ctx: &LowerContext<'a>,
+        mctx: &mut MutLowerContext,
+        scope: SymbolId,
         id: AstId<'a, ConstantMinTypMaxExpression<'a>>,
-        diagnostics: &mut Diagnostics,
     ) -> Result<Self, ()> {
         match &*id {
             ConstantMinTypMaxExpression::Single(delay) => {
-                let delay = eval_constant_expr(gl, arenas, scope.eval(), diagnostics, *delay)?
-                    .as_integer()
-                    .unwrap();
+                let delay = eval_constant_expr(
+                    &mctx.gl,
+                    &ctx.arenas,
+                    &ctx.table,
+                    scope,
+                    &mut mctx.diagnostics,
+                    *delay,
+                )?
+                .as_integer()
+                .unwrap();
 
                 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 222
                 // "If the path delay expression results in a negative value, it shall be treated as zero."
@@ -417,15 +422,36 @@ impl Delay {
                 })
             }
             ConstantMinTypMaxExpression::MinTypMax { min, typ, max } => {
-                let min = eval_constant_expr(gl, arenas, scope.eval(), diagnostics, *min)?
-                    .as_integer()
-                    .unwrap();
-                let typ = eval_constant_expr(gl, arenas, scope.eval(), diagnostics, *typ)?
-                    .as_integer()
-                    .unwrap();
-                let max = eval_constant_expr(gl, arenas, scope.eval(), diagnostics, *max)?
-                    .as_integer()
-                    .unwrap();
+                let min = eval_constant_expr(
+                    &mctx.gl,
+                    &ctx.arenas,
+                    &ctx.table,
+                    scope,
+                    &mut mctx.diagnostics,
+                    *min,
+                )?
+                .as_integer()
+                .unwrap();
+                let typ = eval_constant_expr(
+                    &mctx.gl,
+                    &ctx.arenas,
+                    &ctx.table,
+                    scope,
+                    &mut mctx.diagnostics,
+                    *typ,
+                )?
+                .as_integer()
+                .unwrap();
+                let max = eval_constant_expr(
+                    &mctx.gl,
+                    &ctx.arenas,
+                    &ctx.table,
+                    scope,
+                    &mut mctx.diagnostics,
+                    *max,
+                )?
+                .as_integer()
+                .unwrap();
 
                 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 222
                 // "If the path delay expression results in a negative value, it shall be treated as zero."
@@ -453,15 +479,13 @@ impl Delay {
 }
 
 pub fn lower_specify<'a>(
-    gl: &mut GlobalContext,
-    arenas: &'a AstArenas,
-    scope: &mut Scope<'a>,
+    ctx: &mut LowerContext<'a>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
 
     items: AstIdRange<'a, SpecifyBlockItem<'a>>,
     outs_lut: &mut VgHashMap<SignalKey, usize>,
     outs: &mut Vec<(SignalKey, SpecifyOutput<'a>)>,
-
-    diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
     for item in items.iter() {
         match &*item {
@@ -519,41 +543,41 @@ pub fn lower_specify<'a>(
                 };
 
                 let input_sid = try_resolve_symbol_id(
-                    scope.key,
-                    scope.table,
-                    arenas,
+                    scope,
+                    &ctx.table,
+                    &ctx.arenas,
                     input.ident,
-                    diagnostics,
+                    &mut mctx.diagnostics,
                 )?;
-                let VSymbol::Net(input_net) = &scope.table[input_sid].content else {
-                    diagnostics.not_yet_implemented(
-                        arenas.get_item_span(input.ident),
+                let VSymbol::Net(input_net) = &ctx.table[input_sid].content else {
+                    mctx.diagnostics.not_yet_implemented(
+                        ctx.arenas.get_item_span(input.ident),
                         "cannot be used as net",
                     );
                     return Err(());
                 };
-                let input = input_net.signal;
+                let input = input_net.net.probe_signal();
                 let output_sid = try_resolve_symbol_id(
-                    scope.key,
-                    scope.table,
-                    arenas,
+                    scope,
+                    &ctx.table,
+                    &ctx.arenas,
                     output.ident,
-                    diagnostics,
+                    &mut mctx.diagnostics,
                 )?;
-                let VSymbol::Net(output_net) = &scope.table[output_sid].content else {
-                    diagnostics.not_yet_implemented(
-                        arenas.get_item_span(output.ident),
+                let VSymbol::Net(output_net) = &ctx.table[output_sid].content else {
+                    mctx.diagnostics.not_yet_implemented(
+                        ctx.arenas.get_item_span(output.ident),
                         "cannot be used as net",
                     );
                     return Err(());
                 };
-                let output = output_net.signal;
+                let output = output_net.net.blocking_drive_signal();
 
                 if matches!(variant, PathDeclarationVariant::Full)
                     && input_net.ty.force_net_width() != output_net.ty.force_net_width()
                 {
-                    diagnostics.not_yet_implemented(
-                        arenas.get_span(item),
+                    mctx.diagnostics.not_yet_implemented(
+                        ctx.arenas.get_span(item),
                         "input and output don't have the same net width",
                     );
                     return Err(());
@@ -561,45 +585,47 @@ pub fn lower_specify<'a>(
                 if matches!(variant, PathDeclarationVariant::Parallel)
                     && input_net.ty.force_net_width().get() != 1
                 {
-                    diagnostics.not_yet_implemented(
-                        arenas.get_span(item),
+                    mctx.diagnostics.not_yet_implemented(
+                        ctx.arenas.get_span(item),
                         "parallel specify with `n` wide input",
                     );
                     return Err(());
                 }
                 if !input_net.dims.is_empty() || !output_net.dims.is_empty() {
-                    diagnostics
-                        .not_yet_implemented(arenas.get_span(item), "input or output is array");
+                    mctx.diagnostics
+                        .not_yet_implemented(ctx.arenas.get_span(item), "input or output is array");
                     return Err(());
                 }
                 if input_net.ty.force_net_width() != SCALAR_VSIZE {
-                    diagnostics
-                        .not_yet_implemented(arenas.get_span(item), "specify for non-scalar net");
+                    mctx.diagnostics.not_yet_implemented(
+                        ctx.arenas.get_span(item),
+                        "specify for non-scalar net",
+                    );
                     return Err(());
                 }
 
                 let delays = &**path_delay_value;
                 let delays = delays.list_of_delay_expressions;
                 let delays = match delays.len() {
-                    1 => Delays::One(Delay::eval(gl, arenas, scope, delays.get(0), diagnostics)?),
+                    1 => Delays::One(Delay::eval(ctx, mctx, scope, delays.get(0))?),
                     2 => {
-                        let trise = Delay::eval(gl, arenas, scope, delays.get(0), diagnostics)?;
-                        let tfall = Delay::eval(gl, arenas, scope, delays.get(1), diagnostics)?;
+                        let trise = Delay::eval(ctx, mctx, scope, delays.get(0))?;
+                        let tfall = Delay::eval(ctx, mctx, scope, delays.get(1))?;
                         Delays::Two { trise, tfall }
                     }
                     3 => {
-                        let trise = Delay::eval(gl, arenas, scope, delays.get(0), diagnostics)?;
-                        let tfall = Delay::eval(gl, arenas, scope, delays.get(1), diagnostics)?;
-                        let tz = Delay::eval(gl, arenas, scope, delays.get(2), diagnostics)?;
+                        let trise = Delay::eval(ctx, mctx, scope, delays.get(0))?;
+                        let tfall = Delay::eval(ctx, mctx, scope, delays.get(1))?;
+                        let tz = Delay::eval(ctx, mctx, scope, delays.get(2))?;
                         Delays::Three { trise, tfall, tz }
                     }
                     6 => {
-                        let t01 = Delay::eval(gl, arenas, scope, delays.get(0), diagnostics)?;
-                        let t10 = Delay::eval(gl, arenas, scope, delays.get(1), diagnostics)?;
-                        let t0z = Delay::eval(gl, arenas, scope, delays.get(2), diagnostics)?;
-                        let tz1 = Delay::eval(gl, arenas, scope, delays.get(3), diagnostics)?;
-                        let t1z = Delay::eval(gl, arenas, scope, delays.get(4), diagnostics)?;
-                        let tz0 = Delay::eval(gl, arenas, scope, delays.get(5), diagnostics)?;
+                        let t01 = Delay::eval(ctx, mctx, scope, delays.get(0))?;
+                        let t10 = Delay::eval(ctx, mctx, scope, delays.get(1))?;
+                        let t0z = Delay::eval(ctx, mctx, scope, delays.get(2))?;
+                        let tz1 = Delay::eval(ctx, mctx, scope, delays.get(3))?;
+                        let t1z = Delay::eval(ctx, mctx, scope, delays.get(4))?;
+                        let tz0 = Delay::eval(ctx, mctx, scope, delays.get(5))?;
                         Delays::Six {
                             t01,
                             t10,
@@ -610,18 +636,18 @@ pub fn lower_specify<'a>(
                         }
                     }
                     12 => {
-                        let t01 = Delay::eval(gl, arenas, scope, delays.get(0), diagnostics)?;
-                        let t10 = Delay::eval(gl, arenas, scope, delays.get(1), diagnostics)?;
-                        let t0z = Delay::eval(gl, arenas, scope, delays.get(2), diagnostics)?;
-                        let tz1 = Delay::eval(gl, arenas, scope, delays.get(3), diagnostics)?;
-                        let t1z = Delay::eval(gl, arenas, scope, delays.get(4), diagnostics)?;
-                        let tz0 = Delay::eval(gl, arenas, scope, delays.get(5), diagnostics)?;
-                        let t0x = Delay::eval(gl, arenas, scope, delays.get(6), diagnostics)?;
-                        let tx1 = Delay::eval(gl, arenas, scope, delays.get(7), diagnostics)?;
-                        let t1x = Delay::eval(gl, arenas, scope, delays.get(8), diagnostics)?;
-                        let tx0 = Delay::eval(gl, arenas, scope, delays.get(9), diagnostics)?;
-                        let txz = Delay::eval(gl, arenas, scope, delays.get(10), diagnostics)?;
-                        let tzx = Delay::eval(gl, arenas, scope, delays.get(11), diagnostics)?;
+                        let t01 = Delay::eval(ctx, mctx, scope, delays.get(0))?;
+                        let t10 = Delay::eval(ctx, mctx, scope, delays.get(1))?;
+                        let t0z = Delay::eval(ctx, mctx, scope, delays.get(2))?;
+                        let tz1 = Delay::eval(ctx, mctx, scope, delays.get(3))?;
+                        let t1z = Delay::eval(ctx, mctx, scope, delays.get(4))?;
+                        let tz0 = Delay::eval(ctx, mctx, scope, delays.get(5))?;
+                        let t0x = Delay::eval(ctx, mctx, scope, delays.get(6))?;
+                        let tx1 = Delay::eval(ctx, mctx, scope, delays.get(7))?;
+                        let t1x = Delay::eval(ctx, mctx, scope, delays.get(8))?;
+                        let tx0 = Delay::eval(ctx, mctx, scope, delays.get(9))?;
+                        let txz = Delay::eval(ctx, mctx, scope, delays.get(10))?;
+                        let tzx = Delay::eval(ctx, mctx, scope, delays.get(11))?;
                         Delays::Twelve {
                             t01,
                             t10,
@@ -675,17 +701,22 @@ pub fn lower_specify<'a>(
 
     outs_lut.clear();
     for (output, specify) in outs.drain(..) {
-        let mut proxy = gl.signals.get(output).unwrap().clone();
+        let mut proxy = mctx.gl.signals.get(output).unwrap().clone();
         proxy.name = format!("{}::SPECIFY_PROXY", proxy.name);
-        let proxy = gl.signals.insert(proxy);
-        unwrap_get_net_mut(scope.table, specify.sid).specify_proxy = Some(proxy);
+        let proxy = mctx.gl.signals.insert(proxy);
+        let net = unwrap_get_net_mut(&mut ctx.table, specify.sid);
+        let prev = net.net.set_specify(proxy);
+        assert!(prev.is_none());
 
-        for output_bitidx in 0..gl.signals[output].size.get() {
+        for output_bitidx in 0..mctx.gl.signals[output].size.get() {
             input_before_lut.clear();
             input_before.clear();
 
-            let mut builder =
-                new_anonymous_builder(gl, "specify_proxy".to_string(), TokenRange::default());
+            let mut builder = new_anonymous_builder(
+                mctx.gl(),
+                "specify_proxy".to_string(),
+                TokenRange::default(),
+            );
             let entry = builder.key();
 
             for (input, paths) in &specify.paths {
@@ -697,7 +728,7 @@ pub fn lower_specify<'a>(
                             | Condition::InputPosedgeExpr(_)
                             | Condition::InputNegedgeExpr(_)
                     ) {
-                        let before = builder.probe(gl, *input);
+                        let before = builder.probe(mctx.gl(), *input);
                         let idx = input_before.len();
                         input_before_lut.insert(*input, idx);
                         input_before.push((*input, before, None));
@@ -706,31 +737,32 @@ pub fn lower_specify<'a>(
                 }
             }
 
-            builder = builder.jump(gl);
+            builder = builder.jump(mctx.gl());
             let wait_loop_bb = builder.key();
 
             for (_, variable, phi_ref) in input_before.iter_mut() {
                 let pr;
-                (*variable, pr) = builder.phi(gl, [(entry, *variable), (entry, *variable)].into());
+                (*variable, pr) =
+                    builder.phi(mctx.gl(), [(entry, *variable), (entry, *variable)].into());
                 *phi_ref = Some(pr);
             }
 
-            let time = builder.time(gl);
-            let mut active_time = builder.constant(gl, Bits::new_zeroed(TIME_VSIZE));
+            let time = builder.time(mctx.gl());
+            let mut active_time = builder.constant(mctx.gl(), Bits::new_zeroed(TIME_VSIZE));
             for (input, _) in &specify.paths {
-                let lupdt = builder.lupdt(gl, *input);
-                active_time = builder.max(gl, active_time, lupdt);
+                let lupdt = builder.lupdt(mctx.gl(), *input);
+                active_time = builder.max(mctx.gl(), active_time, lupdt);
             }
 
-            let mut wait_time_set = builder.constant(gl, Bits::new_zeroed(SCALAR_VSIZE));
-            let mut wait_time = builder.constant(gl, Bits::new_ones(TIME_VSIZE));
+            let mut wait_time_set = builder.constant(mctx.gl(), Bits::new_zeroed(SCALAR_VSIZE));
+            let mut wait_time = builder.constant(mctx.gl(), Bits::new_ones(TIME_VSIZE));
 
             for (input, paths) in &specify.paths {
-                let lupdt = builder.lupdt(gl, *input);
-                let is_active = builder.equals(gl, lupdt, active_time);
+                let lupdt = builder.lupdt(mctx.gl(), *input);
+                let is_active = builder.equals(mctx.gl(), lupdt, active_time);
 
                 let start_bb = builder.key();
-                builder = builder.next_terminate_later(gl);
+                builder = builder.next_terminate_later(mctx.gl());
                 let true_bb = builder.key();
 
                 let mut new_wait_time_set = Some(wait_time_set);
@@ -743,28 +775,27 @@ pub fn lower_specify<'a>(
                         Condition::InputPosedge | Condition::InputPosedgeExpr(_)
                     ) {
                         let before = input_before[input_before_lut[input]].1;
-                        let after = builder.probe(gl, *input);
-                        condition = Some(builder.posedge(gl, before, after));
+                        let after = builder.probe(mctx.gl(), *input);
+                        condition = Some(builder.posedge(mctx.gl(), before, after));
                     }
                     if matches!(
                         path.condition,
                         Condition::InputNegedge | Condition::InputNegedgeExpr(_)
                     ) {
                         let before = input_before[input_before_lut[input]].1;
-                        let after = builder.probe(gl, *input);
-                        condition = Some(builder.negedge(gl, before, after));
+                        let after = builder.probe(mctx.gl(), *input);
+                        condition = Some(builder.negedge(mctx.gl(), before, after));
                     }
 
                     if let Condition::Expr(expr)
                     | Condition::InputPosedgeExpr(expr)
                     | Condition::InputNegedgeExpr(expr) = path.condition
                     {
-                        let (expr, _) =
-                            lower_expr(gl, arenas, scope, diagnostics, &mut builder, expr)?;
-                        let expr = builder.reduce_or(gl, expr);
+                        let (expr, _) = lower_expr(ctx, mctx, scope, &mut builder, expr)?;
+                        let expr = builder.reduce_or(mctx.gl(), expr);
                         condition = Some(match condition {
                             None => expr,
-                            Some(condition) => builder.and(gl, condition, expr),
+                            Some(condition) => builder.and(mctx.gl(), condition, expr),
                         });
                     }
 
@@ -772,75 +803,91 @@ pub fn lower_specify<'a>(
                         todo!();
                     }
 
-                    let condition = condition.map(|c| builder.select_bit_constant(gl, c, 0));
+                    let condition = condition.map(|c| builder.select_bit_constant(mctx.gl(), c, 0));
                     match (condition, &mut new_wait_time_set) {
                         (None, _) | (_, None) => new_wait_time_set = None,
                         (Some(condition), Some(new_wait_time_set)) => {
-                            *new_wait_time_set = builder.or(gl, *new_wait_time_set, condition);
+                            *new_wait_time_set =
+                                builder.or(mctx.gl(), *new_wait_time_set, condition);
                         }
                     }
 
-                    let path_wait_time = builder.minus(gl, time, lupdt);
-                    let delay =
-                        path.delays
-                            .calculate(gl, &mut builder, output, proxy, output_bitidx);
-                    let path_wait_time = builder.plus(gl, path_wait_time, delay);
-                    let path_wait_time = builder.min(gl, new_wait_time, path_wait_time);
+                    let path_wait_time = builder.minus(mctx.gl(), time, lupdt);
+                    let delay = path.delays.calculate(
+                        mctx.gl(),
+                        &mut builder,
+                        output,
+                        proxy,
+                        output_bitidx,
+                    );
+                    let path_wait_time = builder.plus(mctx.gl(), path_wait_time, delay);
+                    let path_wait_time = builder.min(mctx.gl(), new_wait_time, path_wait_time);
 
                     new_wait_time = match condition {
                         None => path_wait_time,
                         Some(condition) => {
-                            builder.select(gl, condition, path_wait_time, new_wait_time)
+                            builder.select(mctx.gl(), condition, path_wait_time, new_wait_time)
                         }
                     };
                 }
 
                 let new_wait_time_set = new_wait_time_set
-                    .unwrap_or_else(|| builder.constant(gl, Bits::new_ones(SCALAR_VSIZE)));
+                    .unwrap_or_else(|| builder.constant(mctx.gl(), Bits::new_ones(SCALAR_VSIZE)));
 
                 let end_bb = builder.key();
-                builder = builder.jump(gl);
+                builder = builder.jump(mctx.gl());
 
-                gl.bbs[start_bb].terminator =
+                mctx.gl.bbs[start_bb].terminator =
                     BasicBlockTerminator::Branch(is_active, true_bb, builder.key());
                 (wait_time_set, _) = builder.phi(
-                    gl,
+                    mctx.gl(),
                     [(start_bb, wait_time_set), (end_bb, new_wait_time_set)].into(),
                 );
-                (wait_time, _) =
-                    builder.phi(gl, [(start_bb, wait_time), (end_bb, new_wait_time)].into());
+                (wait_time, _) = builder.phi(
+                    mctx.gl(),
+                    [(start_bb, wait_time), (end_bb, new_wait_time)].into(),
+                );
             }
 
             // Set the wait time to zero, if no condition matched.
-            let wait_time_mask = builder.sign_extend(gl, wait_time_set, TIME_VSIZE);
-            let wait_time = builder.and(gl, wait_time, wait_time_mask);
+            let wait_time_mask = builder.sign_extend(mctx.gl(), wait_time_set, TIME_VSIZE);
+            let wait_time = builder.and(mctx.gl(), wait_time, wait_time_mask);
 
-            let old_proxy_value = builder.probe(gl, proxy);
-            let old_proxy_value = builder.select_bit_constant(gl, old_proxy_value, output_bitidx);
+            let old_proxy_value = builder.probe(mctx.gl(), proxy);
+            let old_proxy_value =
+                builder.select_bit_constant(mctx.gl(), old_proxy_value, output_bitidx);
             for (input, variable, _) in input_before.iter_mut() {
-                *variable = builder.probe(gl, *input);
+                *variable = builder.probe(mctx.gl(), *input);
             }
 
-            builder = builder.variable_wait(gl, wait_time);
+            builder = builder.variable_wait(mctx.gl(), wait_time);
 
             for (_, variable, phi_ref) in input_before.iter_mut() {
-                builder.update_phi_ref(gl, phi_ref.take().unwrap(), 1, builder.key(), *variable);
+                builder.update_phi_ref(
+                    mctx.gl(),
+                    phi_ref.take().unwrap(),
+                    1,
+                    builder.key(),
+                    *variable,
+                );
             }
 
             // do ... while(...);
-            let new_proxy_value = builder.probe(gl, proxy);
-            let new_proxy_value = builder.select_bit_constant(gl, new_proxy_value, output_bitidx);
-            let do_while_condition = builder.case_equals(gl, old_proxy_value, new_proxy_value);
-            builder = builder.branch_false_to(gl, do_while_condition, wait_loop_bb);
+            let new_proxy_value = builder.probe(mctx.gl(), proxy);
+            let new_proxy_value =
+                builder.select_bit_constant(mctx.gl(), new_proxy_value, output_bitidx);
+            let do_while_condition =
+                builder.case_equals(mctx.gl(), old_proxy_value, new_proxy_value);
+            builder = builder.branch_false_to(mctx.gl(), do_while_condition, wait_loop_bb);
 
             builder.drive_partial_constant(
-                gl,
+                mctx.gl(),
                 output,
                 new_proxy_value,
                 output_bitidx,
                 SCALAR_VSIZE,
             );
-            builder.watch_to(gl, vec![proxy], wait_loop_bb);
+            builder.watch_to(mctx.gl(), vec![proxy], wait_loop_bb);
         }
     }
 

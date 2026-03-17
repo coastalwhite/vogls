@@ -1,6 +1,6 @@
+use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{
-    BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, INTEGER_VSIZE, ProcessKey,
-    SCALAR_VSIZE, SignalKey, VariableKey, VectorSize, new_process,
+    BasicBlockBuilder, Bits, INTEGER_VSIZE, SCALAR_VSIZE, VariableKey, VectorSize,
 };
 
 use crate::ast::constant_expr::ConstantRangeExpression;
@@ -9,17 +9,15 @@ use crate::ast::{AstId, RangeExpression};
 use crate::elaborate::VSymbol;
 use crate::lower::expression::eval_constant_expr;
 use crate::lower::expression::{self, lower_expr, sign_or_zero_extend, truncate_or_extend};
-use crate::lower::{msb_lsb_to_width, try_resolve_symbol_id, unwrap_get_net_mut};
-use crate::parser::AstArenas;
+use crate::lower::{msb_lsb_to_width, try_resolve_symbol_id};
 
-use super::{Diagnostics, Region, VType};
-use super::{Scope, try_resolve_net};
+use super::{MutLowerContext, VType};
+use super::{LowerContext, try_resolve_net};
 
 pub fn assign_variable_lvalue<'a>(
-    gl: &mut GlobalContext,
-    arenas: &'a AstArenas,
-    scope: &mut Scope<'a>,
-    diagnostics: &mut Diagnostics,
+    ctx: &LowerContext<'a>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
     builder: &mut BasicBlockBuilder,
     ast_lvalue: AstId<'a, VariableLValue<'a>>,
     variable: VariableKey,
@@ -28,10 +26,9 @@ pub fn assign_variable_lvalue<'a>(
 ) -> Result<(), ()> {
     if ast_lvalue.0.len() == 1 {
         return assign_variable_lvalue_flat(
-            gl,
-            arenas,
+            ctx,
+            mctx,
             scope,
-            diagnostics,
             builder,
             ast_lvalue.0.get(0),
             variable,
@@ -43,11 +40,11 @@ pub fn assign_variable_lvalue<'a>(
     assert!(!ast_lvalue.0.is_empty());
     let mut total_width = 0u32;
     for lvf in ast_lvalue.0.iter() {
-        let ty = variable_lvalue_flat_ty(gl, arenas, scope, diagnostics, lvf)?;
+        let ty = variable_lvalue_flat_ty(ctx, mctx, scope, lvf)?;
         total_width += ty.force_net_width().get();
     }
     let variable = truncate_or_extend(
-        gl,
+        mctx.gl(),
         builder,
         variable,
         variable_ty,
@@ -56,30 +53,19 @@ pub fn assign_variable_lvalue<'a>(
 
     let mut offset = 0u32;
     for lvf in ast_lvalue.0.iter().rev() {
-        let ty = variable_lvalue_flat_ty(gl, arenas, scope, diagnostics, lvf)?;
+        let ty = variable_lvalue_flat_ty(ctx, mctx, scope, lvf)?;
         let width = ty.force_net_width();
-        let variable = builder.slice_constant(gl, variable, offset, width);
-        assign_variable_lvalue_flat(
-            gl,
-            arenas,
-            scope,
-            diagnostics,
-            builder,
-            lvf,
-            variable,
-            ty,
-            nba,
-        )?;
+        let variable = builder.slice_constant(mctx.gl(), variable, offset, width);
+        assign_variable_lvalue_flat(ctx, mctx, scope, builder, lvf, variable, ty, nba)?;
         offset += width.get();
     }
     Ok(())
 }
 
 pub fn variable_lvalue_flat_ty<'a>(
-    gl: &GlobalContext,
-    arenas: &'a AstArenas,
-    scope: &mut Scope<'a>,
-    diagnostics: &mut Diagnostics,
+    ctx: &LowerContext<'a>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
     ast_lvalue: AstId<'a, VariableLValueFlat<'a>>,
 ) -> Result<VType, ()> {
     let VariableLValueFlat {
@@ -88,10 +74,16 @@ pub fn variable_lvalue_flat_ty<'a>(
         range_expression,
     } = &*ast_lvalue;
 
-    let symbol_key = try_resolve_symbol_id(scope.key, scope.table, arenas, *ident, diagnostics)?;
+    let symbol_key = try_resolve_symbol_id(
+        scope,
+        &ctx.table,
+        &ctx.arenas,
+        *ident,
+        &mut mctx.diagnostics,
+    )?;
 
     let exprs = *exprs;
-    let (mut ty, mut n_dims) = match &scope.table[symbol_key].content {
+    let (mut ty, mut n_dims) = match &ctx.table[symbol_key].content {
         VSymbol::Parameter(v) => (v.ty(), 0),
         VSymbol::Net(s) => (s.ty, s.dims.len()),
         _ => todo!(),
@@ -104,8 +96,8 @@ pub fn variable_lvalue_flat_ty<'a>(
 
     match range_expression {
         None if n_dims > 0 => {
-            diagnostics.not_yet_implemented(
-                arenas.get_range_span(exprs),
+            mctx.diagnostics.not_yet_implemented(
+                ctx.arenas.get_range_span(exprs),
                 "driving array without indices",
             );
             return Err(());
@@ -114,8 +106,8 @@ pub fn variable_lvalue_flat_ty<'a>(
         Some(range_expression) => match &**range_expression {
             RangeExpression::Expr(_) => {
                 if n_dims > 1 {
-                    diagnostics.not_yet_implemented(
-                        arenas.get_range_span(exprs),
+                    mctx.diagnostics.not_yet_implemented(
+                        ctx.arenas.get_range_span(exprs),
                         "driving array without indices",
                     );
                     Err(())
@@ -126,19 +118,33 @@ pub fn variable_lvalue_flat_ty<'a>(
                 }
             }
             _ if n_dims > 0 => {
-                diagnostics.not_yet_implemented(
-                    arenas.get_range_span(exprs),
+                mctx.diagnostics.not_yet_implemented(
+                    ctx.arenas.get_range_span(exprs),
                     "driving array without indices",
                 );
                 Err(())
             }
             RangeExpression::MsbLsb(msb, lsb) => {
-                let (_, _, width) =
-                    msb_lsb_to_width(gl, arenas, scope.eval(), diagnostics, *msb, *lsb)?;
+                let (_, _, width) = msb_lsb_to_width(
+                    &mctx.gl,
+                    &ctx.arenas,
+                    &ctx.table,
+                    scope,
+                    &mut mctx.diagnostics,
+                    *msb,
+                    *lsb,
+                )?;
                 Ok(VType::UnsignedNet(width))
             }
             RangeExpression::BasePlus(_, width) | RangeExpression::BaseMinus(_, width) => {
-                let width = eval_constant_expr(gl, arenas, scope.eval(), diagnostics, *width)?;
+                let width = eval_constant_expr(
+                    &mctx.gl,
+                    &ctx.arenas,
+                    &ctx.table,
+                    scope,
+                    &mut mctx.diagnostics,
+                    *width,
+                )?;
                 Ok(VType::UnsignedNet(width.to_vector_size().unwrap()))
             }
         },
@@ -146,10 +152,9 @@ pub fn variable_lvalue_flat_ty<'a>(
 }
 
 pub fn assign_variable_lvalue_flat<'a>(
-    gl: &mut GlobalContext,
-    arenas: &'a AstArenas,
-    scope: &mut Scope<'a>,
-    diagnostics: &mut Diagnostics,
+    ctx: &LowerContext<'a>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
     builder: &mut BasicBlockBuilder,
     ast_lvalue: AstId<'a, VariableLValueFlat<'a>>,
     variable: VariableKey,
@@ -162,10 +167,16 @@ pub fn assign_variable_lvalue_flat<'a>(
         range_expression,
     } = &*ast_lvalue;
 
-    let symbol_key = try_resolve_symbol_id(scope.key, scope.table, arenas, *ident, diagnostics)?;
+    let symbol_key = try_resolve_symbol_id(
+        scope,
+        &ctx.table,
+        &ctx.arenas,
+        *ident,
+        &mut mctx.diagnostics,
+    )?;
 
     let mut exprs = *exprs;
-    let (ty, dims) = match &scope.table[symbol_key].content {
+    let (ty, dims) = match &ctx.table[symbol_key].content {
         VSymbol::Parameter(v) => (v.ty(), [].into()),
         VSymbol::Net(s) => (s.ty.clone(), s.dims.clone()),
         v => panic!("{v:?}"),
@@ -176,18 +187,18 @@ pub fn assign_variable_lvalue_flat<'a>(
     {
         dims = &dims[..dims.len() - 1];
         let mut leaf_arr_items = dims.iter().product::<u32>();
-        let (fst, fst_ty) = lower_expr(gl, arenas, scope, diagnostics, builder, fst)?;
-        let fst = sign_or_zero_extend(gl, builder, fst, fst_ty, INTEGER_VSIZE);
-        let mut offset = builder.multiply_constant(gl, fst, leaf_arr_items);
+        let (fst, fst_ty) = lower_expr(ctx, mctx, scope, builder, fst)?;
+        let fst = sign_or_zero_extend(mctx.gl(), builder, fst, fst_ty, INTEGER_VSIZE);
+        let mut offset = builder.multiply_constant(mctx.gl(), fst, leaf_arr_items);
 
         while let Some(dim) = dims.last()
             && let Some(expr) = exprs.pop_front()
         {
             leaf_arr_items /= *dim;
-            let (expr, expr_ty) = lower_expr(gl, arenas, scope, diagnostics, builder, expr)?;
-            let expr = sign_or_zero_extend(gl, builder, expr, expr_ty, INTEGER_VSIZE);
-            let expr = builder.multiply_constant(gl, expr, leaf_arr_items);
-            offset = builder.plus(gl, offset, expr);
+            let (expr, expr_ty) = lower_expr(ctx, mctx, scope, builder, expr)?;
+            let expr = sign_or_zero_extend(mctx.gl(), builder, expr, expr_ty, INTEGER_VSIZE);
+            let expr = builder.multiply_constant(mctx.gl(), expr, leaf_arr_items);
+            offset = builder.plus(mctx.gl(), offset, expr);
             dims = &dims[1..];
         }
 
@@ -196,7 +207,8 @@ pub fn assign_variable_lvalue_flat<'a>(
         None
     };
     if !exprs.is_empty() {
-        diagnostics.not_yet_implemented(arenas.get_range_span(exprs), "variable_lvalue::exprs");
+        mctx.diagnostics
+            .not_yet_implemented(ctx.arenas.get_range_span(exprs), "variable_lvalue::exprs");
         return Err(());
     }
 
@@ -208,74 +220,83 @@ pub fn assign_variable_lvalue_flat<'a>(
 
         dims = &dims[..dims.len() - 1];
         let leaf_arr_items = dims.iter().product::<u32>();
-        let (fst, fst_ty) = lower_expr(gl, arenas, scope, diagnostics, builder, expr)?;
-        let fst = sign_or_zero_extend(gl, builder, fst, fst_ty, INTEGER_VSIZE);
-        let offset = builder.multiply_constant(gl, fst, leaf_arr_items);
+        let (fst, fst_ty) = lower_expr(ctx, mctx, scope, builder, expr)?;
+        let fst = sign_or_zero_extend(mctx.gl(), builder, fst, fst_ty, INTEGER_VSIZE);
+        let offset = builder.multiply_constant(mctx.gl(), fst, leaf_arr_items);
 
         arr_idx = Some(match arr_idx {
             None => offset,
-            Some(arr_idx) => builder.plus(gl, arr_idx, offset),
+            Some(arr_idx) => builder.plus(mctx.gl(), arr_idx, offset),
         });
     }
 
     if !dims.is_empty() {
-        diagnostics.not_yet_implemented(
-            arenas.get_range_span(exprs),
+        mctx.diagnostics.not_yet_implemented(
+            ctx.arenas.get_range_span(exprs),
             "driving array without indices",
         );
         return Err(());
     }
 
-    match &scope.table[symbol_key].content {
+    match &ctx.table[symbol_key].content {
         VSymbol::Net(s) => {
-            let key = s.signal;
-            let specify_proxy = s.specify_proxy;
+            let net = &s.net;
             let size = ty.force_net_width();
             let partial = match range_expression {
                 None => match arr_idx {
                     None => None,
                     Some(idx) => {
                         // @TODO: Verify size.
-                        let idx = builder.multiply_constant(gl, idx, size.get());
+                        let idx = builder.multiply_constant(mctx.gl(), idx, size.get());
                         Some((idx, size))
                     }
                 },
                 Some(range_expression) => {
                     let (offset, length) = match &*range_expression {
                         RangeExpression::Expr(expr) => {
-                            let (expr, expr_ty) =
-                                lower_expr(gl, arenas, scope, diagnostics, builder, *expr)?;
-                            let expr =
-                                sign_or_zero_extend(gl, builder, expr, expr_ty, INTEGER_VSIZE);
+                            let (expr, expr_ty) = lower_expr(ctx, mctx, scope, builder, *expr)?;
+                            let expr = sign_or_zero_extend(
+                                mctx.gl(),
+                                builder,
+                                expr,
+                                expr_ty,
+                                INTEGER_VSIZE,
+                            );
                             (expr, SCALAR_VSIZE)
                         }
                         RangeExpression::MsbLsb(msb, lsb) => {
                             let (_, lsb, width) = msb_lsb_to_width(
-                                gl,
-                                arenas,
-                                scope.eval(),
-                                diagnostics,
+                                &mctx.gl,
+                                &ctx.arenas,
+                                &ctx.table,
+                                scope,
+                                &mut mctx.diagnostics,
                                 *msb,
                                 *lsb,
                             )?;
                             (
                                 builder.constant(
-                                    gl,
+                                    mctx.gl(),
                                     Bits::new_u64(lsb as u64).truncate(INTEGER_VSIZE),
                                 ),
                                 width,
                             )
                         }
                         RangeExpression::BasePlus(expr, ast_width) => {
-                            let (expr, expr_ty) =
-                                lower_expr(gl, arenas, scope, diagnostics, builder, *expr)?;
-                            let expr =
-                                sign_or_zero_extend(gl, builder, expr, expr_ty, INTEGER_VSIZE);
+                            let (expr, expr_ty) = lower_expr(ctx, mctx, scope, builder, *expr)?;
+                            let expr = sign_or_zero_extend(
+                                mctx.gl(),
+                                builder,
+                                expr,
+                                expr_ty,
+                                INTEGER_VSIZE,
+                            );
                             let width = eval_constant_expr(
-                                gl,
-                                arenas,
-                                scope.eval(),
-                                diagnostics,
+                                &mctx.gl,
+                                &ctx.arenas,
+                                &ctx.table,
+                                scope,
+                                &mut mctx.diagnostics,
                                 *ast_width,
                             )?;
                             let width = width
@@ -283,22 +304,29 @@ pub fn assign_variable_lvalue_flat<'a>(
                                 .as_integer()
                                 .unwrap() as u32;
                             let Some(width) = VectorSize::new(width) else {
-                                diagnostics
-                                    .not_yet_implemented(arenas.get_span(*ast_width), "zero width");
+                                mctx.diagnostics.not_yet_implemented(
+                                    ctx.arenas.get_span(*ast_width),
+                                    "zero width",
+                                );
                                 return Err(());
                             };
                             (expr, width)
                         }
                         RangeExpression::BaseMinus(expr, ast_width) => {
-                            let (expr, expr_ty) =
-                                lower_expr(gl, arenas, scope, diagnostics, builder, *expr)?;
-                            let expr =
-                                sign_or_zero_extend(gl, builder, expr, expr_ty, INTEGER_VSIZE);
+                            let (expr, expr_ty) = lower_expr(ctx, mctx, scope, builder, *expr)?;
+                            let expr = sign_or_zero_extend(
+                                mctx.gl(),
+                                builder,
+                                expr,
+                                expr_ty,
+                                INTEGER_VSIZE,
+                            );
                             let width = eval_constant_expr(
-                                gl,
-                                arenas,
-                                scope.eval(),
-                                diagnostics,
+                                &mctx.gl,
+                                &ctx.arenas,
+                                &ctx.table,
+                                scope,
+                                &mut mctx.diagnostics,
                                 *ast_width,
                             )?;
                             let width = width
@@ -306,12 +334,14 @@ pub fn assign_variable_lvalue_flat<'a>(
                                 .as_integer()
                                 .unwrap() as u32;
                             let Some(width) = VectorSize::new(width) else {
-                                diagnostics
-                                    .not_yet_implemented(arenas.get_span(*ast_width), "zero width");
+                                mctx.diagnostics.not_yet_implemented(
+                                    ctx.arenas.get_span(*ast_width),
+                                    "zero width",
+                                );
                                 return Err(());
                             };
-                            let width_v = builder.constant_u32(gl, width.get() - 1);
-                            let lsb = builder.minus(gl, expr, width_v);
+                            let width_v = builder.constant_u32(mctx.gl(), width.get() - 1);
+                            let lsb = builder.minus(mctx.gl(), expr, width_v);
                             (lsb, width)
                         }
                     };
@@ -320,26 +350,21 @@ pub fn assign_variable_lvalue_flat<'a>(
                         None => Some((offset, length)),
                         Some(idx) => {
                             // @TODO: Verify size.
-                            let idx = builder.multiply_constant(gl, idx, size.get());
-                            let offset = builder.plus(gl, offset, idx);
+                            let idx = builder.multiply_constant(mctx.gl(), idx, size.get());
+                            let offset = builder.plus(mctx.gl(), offset, idx);
                             Some((offset, length))
                         }
                     }
                 }
             };
             let size = partial.map_or(size, |(_, s)| s);
-            let variable = expression::truncate_or_extend(gl, builder, variable, variable_ty, size);
+            let variable =
+                expression::truncate_or_extend(mctx.gl(), builder, variable, variable_ty, size);
 
             if nba {
-                let s = unwrap_get_net_mut(scope.table, symbol_key);
-                let (_, mask, value) = s
-                    .nba
-                    .get_or_insert_with(|| create_nba_process(gl, specify_proxy.unwrap_or(key)));
-                let mask_value = builder.constant(gl, Bits::new_ones(size));
-                builder.drive_opt_partial(gl, *mask, mask_value, partial);
-                builder.drive_opt_partial(gl, *value, variable, partial);
+                net.drive_non_blocking(mctx.gl(), builder, variable, partial);
             } else {
-                builder.drive_opt_partial(gl, specify_proxy.unwrap_or(key), variable, partial);
+                net.drive_blocking(mctx.gl(), builder, variable, partial);
             }
         }
         _ => todo!(),
@@ -348,10 +373,9 @@ pub fn assign_variable_lvalue_flat<'a>(
 }
 
 pub fn assign_net_lvalue<'a>(
-    gl: &mut GlobalContext,
-    arenas: &'a AstArenas,
-    scope: &mut Scope<'a>,
-    diagnostics: &mut Diagnostics,
+    ctx: &LowerContext<'a>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
     builder: &mut BasicBlockBuilder,
     ast_lvalue: AstId<'a, NetLValue<'a>>,
     variable: VariableKey,
@@ -360,10 +384,9 @@ pub fn assign_net_lvalue<'a>(
     let lvalue = &*ast_lvalue;
     if lvalue.0.len() == 1 {
         return assign_net_lvalue_flat(
-            gl,
-            arenas,
+            ctx,
+            mctx,
             scope,
-            diagnostics,
             builder,
             lvalue.0.get(0),
             variable,
@@ -374,11 +397,11 @@ pub fn assign_net_lvalue<'a>(
     assert!(!lvalue.0.is_empty());
     let mut total_width = 0u32;
     for lvf in lvalue.0.iter() {
-        let ty = net_lvalue_flat_ty(gl, arenas, scope, diagnostics, lvf)?;
+        let ty = net_lvalue_flat_ty(ctx, mctx, scope, lvf)?;
         total_width += ty.force_net_width().get();
     }
     let variable = truncate_or_extend(
-        gl,
+        mctx.gl(),
         builder,
         variable,
         variable_ty,
@@ -387,20 +410,19 @@ pub fn assign_net_lvalue<'a>(
 
     let mut offset = 0u32;
     for lvf in lvalue.0.iter().rev() {
-        let ty = net_lvalue_flat_ty(gl, arenas, scope, diagnostics, lvf)?;
+        let ty = net_lvalue_flat_ty(ctx, mctx, scope, lvf)?;
         let width = ty.force_net_width();
-        let variable = builder.slice_constant(gl, variable, offset, width);
-        assign_net_lvalue_flat(gl, arenas, scope, diagnostics, builder, lvf, variable, ty)?;
+        let variable = builder.slice_constant(mctx.gl(), variable, offset, width);
+        assign_net_lvalue_flat(ctx, mctx, scope, builder, lvf, variable, ty)?;
         offset += width.get();
     }
     Ok(())
 }
 
 pub fn net_lvalue_flat_ty<'a>(
-    gl: &GlobalContext,
-    arenas: &'a AstArenas,
-    scope: &Scope<'a>,
-    diagnostics: &mut Diagnostics,
+    ctx: &LowerContext<'a>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
     ast_lvalue: AstId<'a, NetLValueFlat<'a>>,
 ) -> Result<VType, ()> {
     let NetLValueFlat {
@@ -409,10 +431,16 @@ pub fn net_lvalue_flat_ty<'a>(
         constant_range_expression,
     } = &*ast_lvalue;
 
-    let symbol_key = try_resolve_symbol_id(scope.key, scope.table, arenas, *ident, diagnostics)?;
+    let symbol_key = try_resolve_symbol_id(
+        scope,
+        &ctx.table,
+        &ctx.arenas,
+        *ident,
+        &mut mctx.diagnostics,
+    )?;
 
     let exprs = *constant_exprs;
-    let (mut ty, mut n_dims) = match &scope.table[symbol_key].content {
+    let (mut ty, mut n_dims) = match &ctx.table[symbol_key].content {
         VSymbol::Parameter(v) => (v.ty(), 0),
         VSymbol::Net(s) => (s.ty, s.dims.len()),
         _ => todo!(),
@@ -425,8 +453,8 @@ pub fn net_lvalue_flat_ty<'a>(
 
     match constant_range_expression {
         None if n_dims > 0 => {
-            diagnostics.not_yet_implemented(
-                arenas.get_range_span(exprs),
+            mctx.diagnostics.not_yet_implemented(
+                ctx.arenas.get_range_span(exprs),
                 "driving array without indices",
             );
             return Err(());
@@ -435,8 +463,8 @@ pub fn net_lvalue_flat_ty<'a>(
         Some(range_expression) => match &**range_expression {
             ConstantRangeExpression::Single(_) => {
                 if n_dims > 1 {
-                    diagnostics.not_yet_implemented(
-                        arenas.get_range_span(exprs),
+                    mctx.diagnostics.not_yet_implemented(
+                        ctx.arenas.get_range_span(exprs),
                         "driving array without indices",
                     );
                     Err(())
@@ -447,15 +475,22 @@ pub fn net_lvalue_flat_ty<'a>(
                 }
             }
             _ if n_dims > 0 => {
-                diagnostics.not_yet_implemented(
-                    arenas.get_range_span(exprs),
+                mctx.diagnostics.not_yet_implemented(
+                    ctx.arenas.get_range_span(exprs),
                     "driving array without indices",
                 );
                 Err(())
             }
             ConstantRangeExpression::MsbLsb { msb, lsb } => {
-                let (_, _, width) =
-                    msb_lsb_to_width(gl, arenas, scope.eval(), diagnostics, *msb, *lsb)?;
+                let (_, _, width) = msb_lsb_to_width(
+                    &mctx.gl,
+                    &ctx.arenas,
+                    &ctx.table,
+                    scope,
+                    &mut mctx.diagnostics,
+                    *msb,
+                    *lsb,
+                )?;
                 Ok(VType::UnsignedNet(width))
             } // RangeExpression::BasePlus(_, width) | RangeExpression::BaseMinus(_, width) => {
               //     let width = eval_constant_expr(gl, arenas, scope, diagnostics, *width)?;
@@ -466,10 +501,9 @@ pub fn net_lvalue_flat_ty<'a>(
 }
 
 fn assign_net_lvalue_flat<'a>(
-    gl: &mut GlobalContext,
-    arenas: &'a AstArenas,
-    scope: &mut Scope<'a>,
-    diagnostics: &mut Diagnostics,
+    ctx: &LowerContext<'a>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
     builder: &mut BasicBlockBuilder,
     lvalue: AstId<'a, NetLValueFlat<'a>>,
     variable: VariableKey,
@@ -481,9 +515,13 @@ fn assign_net_lvalue_flat<'a>(
         constant_range_expression,
     } = &*lvalue;
 
-    let s = try_resolve_net(scope.key, scope.table, arenas, *ident, diagnostics)?;
-    let specify_proxy = s.specify_proxy;
-    let key = s.signal;
+    let s = try_resolve_net(
+        scope,
+        &ctx.table,
+        &ctx.arenas,
+        *ident,
+        &mut mctx.diagnostics,
+    )?;
     let mut dims = &s.dims[..];
 
     let mut exprs = *constant_exprs;
@@ -492,7 +530,14 @@ fn assign_net_lvalue_flat<'a>(
     {
         dims = &dims[1..];
         let mut leaf_arr_items = dims.iter().product::<u32>();
-        let fst = eval_constant_expr(gl, arenas, scope.eval(), diagnostics, fst)?;
+        let fst = eval_constant_expr(
+            &mctx.gl,
+            &ctx.arenas,
+            &ctx.table,
+            scope,
+            &mut mctx.diagnostics,
+            fst,
+        )?;
         let fst = fst.as_integer().unwrap();
         let mut offset = fst as u32 * leaf_arr_items;
 
@@ -500,7 +545,14 @@ fn assign_net_lvalue_flat<'a>(
             && let Some(expr) = exprs.pop_front()
         {
             leaf_arr_items /= *dim;
-            let expr = eval_constant_expr(gl, arenas, scope.eval(), diagnostics, expr)?;
+            let expr = eval_constant_expr(
+                &mctx.gl,
+                &ctx.arenas,
+                &ctx.table,
+                scope,
+                &mut mctx.diagnostics,
+                expr,
+            )?;
             let expr = expr.as_integer().unwrap();
             let expr = expr as u32 * leaf_arr_items;
             offset += expr;
@@ -512,7 +564,8 @@ fn assign_net_lvalue_flat<'a>(
         None
     };
     if !exprs.is_empty() {
-        diagnostics.not_yet_implemented(arenas.get_range_span(exprs), "variable_lvalue::exprs");
+        mctx.diagnostics
+            .not_yet_implemented(ctx.arenas.get_range_span(exprs), "variable_lvalue::exprs");
         return Err(());
     }
 
@@ -524,7 +577,14 @@ fn assign_net_lvalue_flat<'a>(
 
         dims = &dims[1..];
         let leaf_arr_items = dims.iter().product::<u32>();
-        let fst = eval_constant_expr(gl, arenas, scope.eval(), diagnostics, expr)?;
+        let fst = eval_constant_expr(
+            &mctx.gl,
+            &ctx.arenas,
+            &ctx.table,
+            scope,
+            &mut mctx.diagnostics,
+            expr,
+        )?;
         let fst = fst.as_integer().unwrap();
         let offset = fst as u32 * leaf_arr_items;
 
@@ -535,8 +595,8 @@ fn assign_net_lvalue_flat<'a>(
     }
 
     if !dims.is_empty() {
-        diagnostics.not_yet_implemented(
-            arenas.get_range_span(exprs),
+        mctx.diagnostics.not_yet_implemented(
+            ctx.arenas.get_range_span(exprs),
             "driving array without indices",
         );
         return Err(());
@@ -546,43 +606,56 @@ fn assign_net_lvalue_flat<'a>(
     let partial = match range_expression {
         None => match arr_idx {
             None => None,
-            Some(idx) => Some((builder.constant_u32(gl, idx * size.get()), size)),
+            Some(idx) => Some((builder.constant_u32(mctx.gl(), idx * size.get()), size)),
         },
         Some(range_expression) => {
             let (offset, length) = match &*range_expression {
                 ConstantRangeExpression::Single(expr) => (
-                    eval_constant_expr(gl, arenas, scope.eval(), diagnostics, *expr)?
-                        .as_integer()
-                        .unwrap(),
+                    eval_constant_expr(
+                        &mctx.gl,
+                        &ctx.arenas,
+                        &ctx.table,
+                        scope,
+                        &mut mctx.diagnostics,
+                        *expr,
+                    )?
+                    .as_integer()
+                    .unwrap(),
                     VectorSize::new(1).unwrap(),
                 ),
                 ConstantRangeExpression::MsbLsb { msb, lsb } => {
-                    let (_, lsb, size) =
-                        msb_lsb_to_width(gl, arenas, scope.eval(), diagnostics, *msb, *lsb)?;
+                    let (_, lsb, size) = msb_lsb_to_width(
+                        &mctx.gl,
+                        &ctx.arenas,
+                        &ctx.table,
+                        scope,
+                        &mut mctx.diagnostics,
+                        *msb,
+                        *lsb,
+                    )?;
                     (lsb, size)
                 }
             };
 
             Some(match arr_idx {
-                None => (builder.constant_u32(gl, offset as u32), length),
+                None => (builder.constant_u32(mctx.gl(), offset as u32), length),
                 Some(idx) => (
-                    builder.constant_u32(gl, idx * size.get() + offset as u32),
+                    builder.constant_u32(mctx.gl(), idx * size.get() + offset as u32),
                     length,
                 ),
             })
         }
     };
     let size = partial.map_or(s.ty.force_net_width(), |(_, s)| s);
-    let variable = expression::sign_or_zero_extend(gl, builder, variable, variable_ty, size);
-    builder.drive_opt_partial(gl, specify_proxy.unwrap_or(key), variable, partial);
+    let variable = expression::sign_or_zero_extend(mctx.gl(), builder, variable, variable_ty, size);
+    s.net.drive_blocking(mctx.gl(), builder, variable, partial);
     Ok(())
 }
 
 pub fn net_lvalue_width<'a>(
-    gl: &GlobalContext,
-    arenas: &'a AstArenas,
-    scope: &mut Scope<'a>,
-    diagnostics: &mut Diagnostics,
+    ctx: &LowerContext<'a>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
     output_terminal: AstId<'a, NetLValue<'a>>,
 ) -> Result<VectorSize, ()> {
     let lvalue = &*output_terminal;
@@ -590,71 +663,14 @@ pub fn net_lvalue_width<'a>(
         .0
         .first()
         .expect("Concatenation should have at least one value");
-    let mut size =
-        net_lvalue_flat_ty(gl, arenas, scope, diagnostics, lvalue_flat)?.force_net_width();
+    let mut size = net_lvalue_flat_ty(ctx, mctx, scope, lvalue_flat)?.force_net_width();
 
     for lvalue_flat in lvalue.0.iter().skip(1) {
-        let lvalue_size =
-            net_lvalue_flat_ty(gl, arenas, scope, diagnostics, lvalue_flat)?.force_net_width();
+        let lvalue_size = net_lvalue_flat_ty(ctx, mctx, scope, lvalue_flat)?.force_net_width();
         size = size.checked_add(lvalue_size.get()).ok_or_else(|| {
-            diagnostics.net_width_overflow(arenas.get_span(output_terminal));
+            mctx.diagnostics
+                .net_width_overflow(ctx.arenas.get_span(output_terminal));
         })?;
     }
     Ok(size)
-}
-
-pub fn create_nba_process(
-    gl: &mut GlobalContext,
-    signal: SignalKey,
-) -> (ProcessKey, SignalKey, SignalKey) {
-    let vogls_ir::Signal {
-        name, origin, size, ..
-    } = &gl.signals[signal];
-
-    let process_name = format!("{name}::NBA_PROC");
-    let mask_name = format!("{name}::NBA_MASK");
-    let value_name = format!("{name}::NBA_VALUE");
-    let (size, origin) = (*size, *origin);
-    let mut builder = new_process(gl, process_name, origin);
-
-    let process_key = builder.process();
-    let mask = gl.signals.insert(vogls_ir::Signal {
-        name: mask_name,
-        size,
-        initialize: None,
-        origin,
-    });
-    let value = gl.signals.insert(vogls_ir::Signal {
-        name: value_name,
-        size,
-        initialize: None,
-        origin,
-    });
-
-    // We need to conditionally branch here as it might have already been assigned before.
-    let mask_v = builder.probe(gl, mask);
-    let mask_ro = builder.reduce_or(gl, mask_v);
-
-    let init_bb = builder.key();
-    builder = builder.next_terminate_later(gl);
-
-    let watch_bb = builder.key();
-    builder = builder.watch(gl, [value].into());
-
-    let waitregion_bb = builder.key();
-    builder = builder.wait_region(gl, Region::NonBlocking as u8);
-
-    let mask_v = builder.probe(gl, mask);
-    let value_v = builder.probe(gl, value);
-    let inv_mask = builder.binary_neg(gl, mask_v);
-    let old = builder.probe(gl, signal);
-    let old = builder.and(gl, old, inv_mask);
-    let value_v = builder.and(gl, value_v, mask_v);
-    let result = builder.or(gl, old, value_v);
-    builder.drive(gl, signal, result);
-    builder.jump_to(gl, watch_bb);
-
-    gl.bbs[init_bb].terminator = BasicBlockTerminator::Branch(mask_ro, waitregion_bb, watch_bb);
-
-    (process_key, mask, value)
 }

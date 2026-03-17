@@ -1,6 +1,6 @@
+use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{
-    BasicBlockBuilder, BasicBlockTerminator, GlobalContext, SCALAR_VSIZE, SignalKey, VectorSize,
-    new_process,
+    BasicBlockBuilder, BasicBlockTerminator, SCALAR_VSIZE, SignalKey, VectorSize, new_process,
 };
 use vogls_utils::OrderedSet;
 
@@ -16,10 +16,9 @@ use crate::ast::{AstId, AstIdRange, AstItem, RangeExpression};
 use crate::lower::expression::function_call::lower_task_enable;
 use crate::lower::expression::{self, lower_expr};
 use crate::lower::{Region, assign, try_resolve_symbol_id};
-use crate::parser::AstArenas;
 
-use super::Diagnostics;
-use super::Scope;
+use super::LowerContext;
+use super::MutLowerContext;
 
 pub mod conditional;
 pub mod loop_statement;
@@ -27,31 +26,24 @@ pub mod procedural_timing_control;
 pub mod system_task_enable;
 
 pub fn lower_statement_or_null<'a>(
-    gl: &mut GlobalContext,
-    arenas: &'a AstArenas,
-    scope: &mut Scope<'a>,
-    diagnostics: &mut Diagnostics,
+    ctx: &LowerContext<'a>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
     builder: BasicBlockBuilder,
     statement: AstId<'a, StatementOrNull<'a>>,
 ) -> Result<BasicBlockBuilder, ()> {
     match &*statement {
         StatementOrNull::Attribute(_) => Ok(builder),
-        StatementOrNull::Statement(statement) => statements_to_process(
-            gl,
-            arenas,
-            scope,
-            diagnostics,
-            builder,
-            AstIdRange::single(*statement),
-        ),
+        StatementOrNull::Statement(statement) => {
+            statements_to_process(ctx, mctx, scope, builder, AstIdRange::single(*statement))
+        }
     }
 }
 
 pub fn statements_to_process<'a>(
-    gl: &mut GlobalContext,
-    arenas: &'a AstArenas,
-    scope: &mut Scope<'a>,
-    diagnostics: &mut Diagnostics,
+    ctx: &LowerContext<'a>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
     mut builder: BasicBlockBuilder,
     stmts: AstIdRange<'a, Statement<'a>>,
 ) -> Result<BasicBlockBuilder, ()> {
@@ -66,13 +58,11 @@ pub fn statements_to_process<'a>(
                 } = &*ba;
                 assert!(delay_or_event_control.is_none());
 
-                let (value, value_ty) =
-                    lower_expr(gl, arenas, scope, diagnostics, &mut builder, *expression)?;
+                let (value, value_ty) = lower_expr(ctx, mctx, scope, &mut builder, *expression)?;
                 assign::assign_variable_lvalue(
-                    gl,
-                    arenas,
+                    ctx,
+                    mctx,
                     scope,
-                    diagnostics,
                     &mut builder,
                     *variable_lvalue,
                     value,
@@ -81,29 +71,16 @@ pub fn statements_to_process<'a>(
                 )?;
             }
             S::CaseStatement(case_statement) => {
-                builder = conditional::lower_case_statement(
-                    gl,
-                    arenas,
-                    scope,
-                    diagnostics,
-                    builder,
-                    case_statement,
-                )?
+                builder =
+                    conditional::lower_case_statement(ctx, mctx, scope, builder, case_statement)?
             }
             S::ConditionalStatement(conditional) => {
-                builder = conditional::lower(gl, arenas, scope, diagnostics, builder, conditional)?
+                builder = conditional::lower(ctx, mctx, scope, builder, conditional)?
             }
             S::DisableStatement => todo!(),
             S::EventTrigger => todo!(),
             S::LoopStatement(ls) => {
-                builder = loop_statement::lower_loop_statement(
-                    gl,
-                    arenas,
-                    scope,
-                    diagnostics,
-                    builder,
-                    ls,
-                )?
+                builder = loop_statement::lower_loop_statement(ctx, mctx, scope, builder, ls)?
             }
             S::NonBlockingAssignment(nba) => {
                 let NonBlockingAssignment {
@@ -113,13 +90,11 @@ pub fn statements_to_process<'a>(
                 } = &*nba;
                 assert!(delay_or_event_control.is_none());
 
-                let (value, value_ty) =
-                    lower_expr(gl, arenas, scope, diagnostics, &mut builder, *expression)?;
+                let (value, value_ty) = lower_expr(ctx, mctx, scope, &mut builder, *expression)?;
                 assign::assign_variable_lvalue(
-                    gl,
-                    arenas,
+                    ctx,
+                    mctx,
                     scope,
-                    diagnostics,
                     &mut builder,
                     *variable_lvalue,
                     value,
@@ -128,8 +103,8 @@ pub fn statements_to_process<'a>(
                 )?;
             }
             S::ProceduralContinuousAssignments => {
-                diagnostics.not_yet_implemented(
-                    arenas.get_span(statement),
+                mctx.diagnostics.not_yet_implemented(
+                    ctx.arenas.get_span(statement),
                     "procedural continous assignments are not yet supported",
                 );
             }
@@ -139,10 +114,9 @@ pub fn statements_to_process<'a>(
                     statement_or_null,
                 } = &*id;
                 builder = procedural_timing_control::lower(
-                    gl,
-                    arenas,
+                    ctx,
+                    mctx,
                     scope,
-                    diagnostics,
                     builder,
                     *procedural_timing_control,
                     *statement_or_null,
@@ -153,65 +127,41 @@ pub fn statements_to_process<'a>(
 
                 let scope_key = match block {
                     Some(blk) => try_resolve_symbol_id(
-                        scope.key,
-                        scope.table,
-                        arenas,
+                        scope,
+                        &ctx.table,
+                        &ctx.arenas,
                         blk.block_identifier,
-                        diagnostics,
+                        &mut mctx.diagnostics,
                     )?,
-                    None => scope.key,
+                    None => scope,
                 };
 
-                let mut scope = Scope {
-                    table: scope.table,
-                    key: scope_key,
-                    udps: scope.udps,
-                    table_ast_refs: scope.table_ast_refs,
-                    signal_aliases: scope.signal_aliases,
-                    tokenized: scope.tokenized,
-                };
-
-                builder = statements_to_process(
-                    gl,
-                    arenas,
-                    &mut scope,
-                    diagnostics,
-                    builder,
-                    *statements,
-                )?;
+                builder = statements_to_process(ctx, mctx, scope_key, builder, *statements)?;
             }
             S::ParBlock(id) => {
                 let ParBlock { block, statements } = &*id;
 
                 let scope_key = match block {
                     Some(blk) => try_resolve_symbol_id(
-                        scope.key,
-                        scope.table,
-                        arenas,
+                        scope,
+                        &ctx.table,
+                        &ctx.arenas,
                         blk.block_identifier,
-                        diagnostics,
+                        &mut mctx.diagnostics,
                     )?,
-                    None => scope.key,
+                    None => scope,
                 };
 
-                let mut scope = Scope {
-                    table: scope.table,
-                    key: scope_key,
-                    udps: scope.udps,
-                    table_ast_refs: scope.table_ast_refs,
-                    signal_aliases: scope.signal_aliases,
-                    tokenized: scope.tokenized,
-                };
-
-                let origin = arenas.get_span(id);
+                let origin = ctx.arenas.get_span(id);
                 let Some(num_processes) =
                     statements.len().try_into().ok().and_then(VectorSize::new)
                 else {
-                    diagnostics.not_yet_implemented(origin, "overflow num processes");
+                    mctx.diagnostics
+                        .not_yet_implemented(origin, "overflow num processes");
                     return Err(());
                 };
 
-                let fork_trigger = gl.signals.insert(vogls_ir::Signal {
+                let fork_trigger = mctx.gl.signals.insert(vogls_ir::Signal {
                     name: "::fork_trigger".to_string(),
                     size: num_processes,
                     initialize: Some(vogls_ir::Bits::new_zeroed(num_processes)),
@@ -219,66 +169,58 @@ pub fn statements_to_process<'a>(
                 });
 
                 for (i, stmt) in statements.iter().enumerate() {
-                    let mut fork_builder = new_process(gl, "fork".to_string(), origin);
+                    let mut fork_builder = new_process(mctx.gl(), "fork".to_string(), origin);
                     let fork_entry_bb = fork_builder.key();
-                    let condition = fork_builder.probe(gl, fork_trigger);
-                    let i = fork_builder.constant_u32(gl, i as u32);
-                    let condition = fork_builder.select_bit(gl, condition, i);
-                    fork_builder = fork_builder.next_terminate_later(gl);
+                    let condition = fork_builder.probe(mctx.gl(), fork_trigger);
+                    let i = fork_builder.constant_u32(mctx.gl(), i as u32);
+                    let condition = fork_builder.select_bit(mctx.gl(), condition, i);
+                    fork_builder = fork_builder.next_terminate_later(mctx.gl());
                     let ret_with_watch_bb = fork_builder.key();
-                    fork_builder = fork_builder.next_terminate_later(gl);
+                    fork_builder = fork_builder.next_terminate_later(mctx.gl());
                     let end_bb = fork_builder.key();
 
-                    gl.bbs[fork_entry_bb].terminator =
+                    mctx.gl.bbs[fork_entry_bb].terminator =
                         BasicBlockTerminator::Branch(condition, end_bb, ret_with_watch_bb);
-                    gl.bbs[ret_with_watch_bb].terminator =
+                    mctx.gl.bbs[ret_with_watch_bb].terminator =
                         BasicBlockTerminator::Watch(fork_entry_bb, vec![fork_trigger]);
 
                     fork_builder = statements_to_process(
-                        gl,
-                        arenas,
-                        &mut scope,
-                        diagnostics,
+                        ctx,
+                        mctx,
+                        scope_key,
                         fork_builder,
                         AstIdRange::single(stmt),
                     )?;
-                    let l0 = fork_builder.constant(gl, vogls_ir::Bits::from(false));
-                    fork_builder.drive_partial(gl, fork_trigger, l0, i, SCALAR_VSIZE);
-                    fork_builder.jump_to(gl, fork_entry_bb);
+                    let l0 = fork_builder.constant(mctx.gl(), vogls_ir::Bits::from(false));
+                    fork_builder.drive_partial(mctx.gl(), fork_trigger, l0, i, SCALAR_VSIZE);
+                    fork_builder.jump_to(mctx.gl(), fork_entry_bb);
                 }
 
-                let l1 = builder.constant(gl, vogls_ir::Bits::new_ones(num_processes));
-                builder.drive(gl, fork_trigger, l1);
+                let l1 = builder.constant(mctx.gl(), vogls_ir::Bits::new_ones(num_processes));
+                builder.drive(mctx.gl(), fork_trigger, l1);
 
-                builder = builder.jump(gl);
+                builder = builder.jump(mctx.gl());
 
                 let start_bb = builder.key();
-                let condition = builder.probe(gl, fork_trigger);
-                let condition = builder.reduce_or(gl, condition);
-                builder = builder.next_terminate_later(gl);
+                let condition = builder.probe(mctx.gl(), fork_trigger);
+                let condition = builder.reduce_or(mctx.gl(), condition);
+                builder = builder.next_terminate_later(mctx.gl());
                 let ret_with_watch_bb = builder.key();
-                builder = builder.next_terminate_later(gl);
+                builder = builder.next_terminate_later(mctx.gl());
                 let end_bb = builder.key();
 
-                gl.bbs[start_bb].terminator =
+                mctx.gl.bbs[start_bb].terminator =
                     BasicBlockTerminator::Branch(condition, ret_with_watch_bb, end_bb);
-                gl.bbs[ret_with_watch_bb].terminator =
+                mctx.gl.bbs[ret_with_watch_bb].terminator =
                     BasicBlockTerminator::Watch(start_bb, vec![fork_trigger]);
             }
             S::SystemTaskEnable(id) => {
-                builder = system_task_enable::lower_system_task_enable(
-                    gl,
-                    arenas,
-                    scope,
-                    diagnostics,
-                    builder,
-                    id,
-                )?;
+                builder =
+                    system_task_enable::lower_system_task_enable(ctx, mctx, scope, builder, id)?;
             }
             S::TaskEnable(id) => {
                 let TaskEnable { ident, exprs } = &*id;
-                builder =
-                    lower_task_enable(gl, arenas, scope, diagnostics, builder, *ident, *exprs)?;
+                builder = lower_task_enable(ctx, mctx, scope, builder, *ident, *exprs)?;
             }
             S::WaitStatement(id) => {
                 let WaitStatement {
@@ -286,38 +228,25 @@ pub fn statements_to_process<'a>(
                     statement_or_null,
                 } = &*id;
 
-                builder = builder.jump(gl);
-                let (condition, _) = expression::lower_expr(
-                    gl,
-                    arenas,
-                    scope,
-                    diagnostics,
-                    &mut builder,
-                    *expression,
-                )?;
-                let condition = builder.reduce_or(gl, condition);
+                builder = builder.jump(mctx.gl());
+                let (condition, _) =
+                    expression::lower_expr(ctx, mctx, scope, &mut builder, *expression)?;
+                let condition = builder.reduce_or(mctx.gl(), condition);
                 let mut ins = OrderedSet::new();
-                expression::get_used_signals(arenas, scope, diagnostics, &mut ins, *expression)?;
+                expression::get_used_signals(ctx, mctx, scope, &mut ins, *expression)?;
 
                 let start_bb = builder.key();
-                builder = builder.next_terminate_later(gl);
+                builder = builder.next_terminate_later(mctx.gl());
                 let ret_with_watch_bb = builder.key();
-                builder = builder.next_terminate_later(gl);
+                builder = builder.next_terminate_later(mctx.gl());
                 let statement_bb = builder.key();
 
-                gl.bbs[start_bb].terminator =
+                mctx.gl.bbs[start_bb].terminator =
                     BasicBlockTerminator::Branch(condition, statement_bb, ret_with_watch_bb);
-                gl.bbs[ret_with_watch_bb].terminator =
+                mctx.gl.bbs[ret_with_watch_bb].terminator =
                     BasicBlockTerminator::Watch(start_bb, ins.items);
 
-                builder = lower_statement_or_null(
-                    gl,
-                    arenas,
-                    scope,
-                    diagnostics,
-                    builder,
-                    *statement_or_null,
-                )?;
+                builder = lower_statement_or_null(ctx, mctx, scope, builder, *statement_or_null)?;
             }
         }
     }
@@ -326,9 +255,9 @@ pub fn statements_to_process<'a>(
 }
 
 pub fn get_used_signals<'a>(
-    arenas: &'a AstArenas,
-    scope: &mut Scope<'a>,
-    diagnostics: &mut Diagnostics,
+    ctx: &LowerContext<'a>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
     signals: &mut OrderedSet<SignalKey>,
     stmt: AstId<'a, Statement<'a>>,
 ) -> Result<(), ()> {
@@ -340,8 +269,7 @@ pub fn get_used_signals<'a>(
                 expr,
                 items,
             } = &*id;
-            error |=
-                expression::get_used_signals(arenas, scope, diagnostics, signals, *expr).is_err();
+            error |= expression::get_used_signals(ctx, mctx, scope, signals, *expr).is_err();
             for item in items.iter() {
                 let CaseItem {
                     pattern,
@@ -351,26 +279,15 @@ pub fn get_used_signals<'a>(
                     CaseItemPattern::Default => {}
                     CaseItemPattern::Expressions(exprs) => {
                         for expr in exprs.iter() {
-                            error |= expression::get_used_signals(
-                                arenas,
-                                scope,
-                                diagnostics,
-                                signals,
-                                expr,
-                            )
-                            .is_err();
+                            error |= expression::get_used_signals(ctx, mctx, scope, signals, expr)
+                                .is_err();
                         }
                     }
                 }
 
-                error |= get_used_signals_stmt_or_null(
-                    arenas,
-                    scope,
-                    diagnostics,
-                    signals,
-                    *statement_or_null,
-                )
-                .is_err();
+                error |=
+                    get_used_signals_stmt_or_null(ctx, mctx, scope, signals, *statement_or_null)
+                        .is_err();
             }
         }
         StatementContent::ConditionalStatement(id) => {
@@ -379,49 +296,20 @@ pub fn get_used_signals<'a>(
                 else_ifs,
                 else_branch,
             } = &*id;
-            error |= expression::get_used_signals(
-                arenas,
-                scope,
-                diagnostics,
-                signals,
-                if_branch.condition,
-            )
-            .is_err();
-            error |= get_used_signals_stmt_or_null(
-                arenas,
-                scope,
-                diagnostics,
-                signals,
-                if_branch.statement,
-            )
-            .is_err();
+            error |= expression::get_used_signals(ctx, mctx, scope, signals, if_branch.condition)
+                .is_err();
+            error |= get_used_signals_stmt_or_null(ctx, mctx, scope, signals, if_branch.statement)
+                .is_err();
             for else_if in else_ifs.iter() {
-                error |= expression::get_used_signals(
-                    arenas,
-                    scope,
-                    diagnostics,
-                    signals,
-                    else_if.condition,
-                )
-                .is_err();
-                error |= get_used_signals_stmt_or_null(
-                    arenas,
-                    scope,
-                    diagnostics,
-                    signals,
-                    else_if.statement,
-                )
-                .is_err();
+                error |= expression::get_used_signals(ctx, mctx, scope, signals, else_if.condition)
+                    .is_err();
+                error |=
+                    get_used_signals_stmt_or_null(ctx, mctx, scope, signals, else_if.statement)
+                        .is_err();
             }
             if let Some(else_branch) = else_branch {
-                error |= get_used_signals_stmt_or_null(
-                    arenas,
-                    scope,
-                    diagnostics,
-                    signals,
-                    *else_branch,
-                )
-                .is_err();
+                error |=
+                    get_used_signals_stmt_or_null(ctx, mctx, scope, signals, *else_branch).is_err();
             }
         }
         StatementContent::DisableStatement => todo!(),
@@ -431,9 +319,7 @@ pub fn get_used_signals<'a>(
             match variant {
                 LoopStatementVariant::Forever => {}
                 LoopStatementVariant::Repeat(expr) | LoopStatementVariant::While(expr) => {
-                    error |=
-                        expression::get_used_signals(arenas, scope, diagnostics, signals, *expr)
-                            .is_err()
+                    error |= expression::get_used_signals(ctx, mctx, scope, signals, *expr).is_err()
                 }
                 LoopStatementVariant::For(initialization, condition, step) => {
                     let VariableAssignment {
@@ -446,24 +332,18 @@ pub fn get_used_signals<'a>(
                     } = &**step;
 
                     for lvalue in [*initialization_lvalue, *step_lvalue] {
-                        error |= get_variable_lvalue_used_signals(
-                            arenas,
-                            scope,
-                            diagnostics,
-                            signals,
-                            lvalue,
-                        )
-                        .is_err();
+                        error |=
+                            get_variable_lvalue_used_signals(ctx, mctx, scope, signals, lvalue)
+                                .is_err();
                     }
 
                     for expr in [*initialization, *condition, *step] {
                         error |=
-                            expression::get_used_signals(arenas, scope, diagnostics, signals, expr)
-                                .is_err()
+                            expression::get_used_signals(ctx, mctx, scope, signals, expr).is_err()
                     }
                 }
             }
-            error |= get_used_signals(arenas, scope, diagnostics, signals, *statement).is_err();
+            error |= get_used_signals(ctx, mctx, scope, signals, *statement).is_err();
         }
 
         StatementContent::BlockingAssignment(id) => {
@@ -473,26 +353,19 @@ pub fn get_used_signals<'a>(
                 expression,
             } = &*id;
 
-            error |= get_variable_lvalue_used_signals(
-                arenas,
-                scope,
-                diagnostics,
-                signals,
-                *variable_lvalue,
-            )
-            .is_err();
+            error |= get_variable_lvalue_used_signals(ctx, mctx, scope, signals, *variable_lvalue)
+                .is_err();
             if let Some(delay_or_event_control) = delay_or_event_control {
                 error |= get_delay_or_event_control_used_signals(
-                    arenas,
+                    ctx,
+                    mctx,
                     scope,
-                    diagnostics,
                     signals,
                     *delay_or_event_control,
                 )
                 .is_err();
             }
-            error |= expression::get_used_signals(arenas, scope, diagnostics, signals, *expression)
-                .is_err();
+            error |= expression::get_used_signals(ctx, mctx, scope, signals, *expression).is_err();
         }
         StatementContent::NonBlockingAssignment(id) => {
             let NonBlockingAssignment {
@@ -501,26 +374,19 @@ pub fn get_used_signals<'a>(
                 expression,
             } = &*id;
 
-            error |= get_variable_lvalue_used_signals(
-                arenas,
-                scope,
-                diagnostics,
-                signals,
-                *variable_lvalue,
-            )
-            .is_err();
+            error |= get_variable_lvalue_used_signals(ctx, mctx, scope, signals, *variable_lvalue)
+                .is_err();
             if let Some(delay_or_event_control) = delay_or_event_control {
                 error |= get_delay_or_event_control_used_signals(
-                    arenas,
+                    ctx,
+                    mctx,
                     scope,
-                    diagnostics,
                     signals,
                     *delay_or_event_control,
                 )
                 .is_err();
             }
-            error |= expression::get_used_signals(arenas, scope, diagnostics, signals, *expression)
-                .is_err();
+            error |= expression::get_used_signals(ctx, mctx, scope, signals, *expression).is_err();
         }
 
         StatementContent::ProceduralContinuousAssignments => todo!(),
@@ -532,64 +398,44 @@ pub fn get_used_signals<'a>(
 
             match &**procedural_timing_control {
                 ProceduralTimingControl::DelayControl(id) => {
-                    error |=
-                        get_delay_control_used_signals(arenas, scope, diagnostics, signals, *id)
-                            .is_err()
+                    error |= get_delay_control_used_signals(ctx, mctx, scope, signals, *id).is_err()
                 }
                 ProceduralTimingControl::EventControl(id) => {
-                    error |=
-                        get_event_control_used_signals(arenas, scope, diagnostics, signals, *id)
-                            .is_err()
+                    error |= get_event_control_used_signals(ctx, mctx, scope, signals, *id).is_err()
                 }
             }
-            get_used_signals_stmt_or_null(arenas, scope, diagnostics, signals, *statement_or_null)?;
+            get_used_signals_stmt_or_null(ctx, mctx, scope, signals, *statement_or_null)?;
         }
         StatementContent::SeqBlock(id) => {
             let SeqBlock { block, statements } = &*id;
             let scope_key = match block {
                 Some(blk) => try_resolve_symbol_id(
-                    scope.key,
-                    scope.table,
-                    arenas,
+                    scope,
+                    &ctx.table,
+                    &ctx.arenas,
                     blk.block_identifier,
-                    diagnostics,
+                    &mut mctx.diagnostics,
                 )?,
-                None => scope.key,
-            };
-            let mut scope = Scope {
-                table: scope.table,
-                key: scope_key,
-                udps: scope.udps,
-                table_ast_refs: scope.table_ast_refs,
-                signal_aliases: scope.signal_aliases,
-                tokenized: scope.tokenized,
+                None => scope,
             };
             for s in statements.iter() {
-                get_used_signals(arenas, &mut scope, diagnostics, signals, s)?;
+                get_used_signals(ctx, mctx, scope_key, signals, s)?;
             }
         }
         StatementContent::ParBlock(id) => {
             let ParBlock { block, statements } = &*id;
             let scope_key = match block {
                 Some(blk) => try_resolve_symbol_id(
-                    scope.key,
-                    scope.table,
-                    arenas,
+                    scope,
+                    &ctx.table,
+                    &ctx.arenas,
                     blk.block_identifier,
-                    diagnostics,
+                    &mut mctx.diagnostics,
                 )?,
-                None => scope.key,
-            };
-            let mut scope = Scope {
-                table: scope.table,
-                key: scope_key,
-                udps: scope.udps,
-                table_ast_refs: scope.table_ast_refs,
-                signal_aliases: scope.signal_aliases,
-                tokenized: scope.tokenized,
+                None => scope,
             };
             for s in statements.iter() {
-                get_used_signals(arenas, &mut scope, diagnostics, signals, s)?;
+                get_used_signals(ctx, mctx, scope_key, signals, s)?;
             }
         }
 
@@ -599,13 +445,13 @@ pub fn get_used_signals<'a>(
                 expressions,
             } = &*id;
             for expr in expressions.iter() {
-                expression::get_used_signals(arenas, scope, diagnostics, signals, expr)?;
+                expression::get_used_signals(ctx, mctx, scope, signals, expr)?;
             }
         }
         StatementContent::TaskEnable(id) => {
             let TaskEnable { ident: _, exprs } = &*id;
             for expr in exprs.iter() {
-                expression::get_used_signals(arenas, scope, diagnostics, signals, expr)?;
+                expression::get_used_signals(ctx, mctx, scope, signals, expr)?;
             }
         }
         StatementContent::WaitStatement(id) => {
@@ -613,32 +459,30 @@ pub fn get_used_signals<'a>(
                 expression,
                 statement_or_null,
             } = &*id;
-            expression::get_used_signals(arenas, scope, diagnostics, signals, *expression)?;
-            get_used_signals_stmt_or_null(arenas, scope, diagnostics, signals, *statement_or_null)?;
+            expression::get_used_signals(ctx, mctx, scope, signals, *expression)?;
+            get_used_signals_stmt_or_null(ctx, mctx, scope, signals, *statement_or_null)?;
         }
     }
     if error { Err(()) } else { Ok(()) }
 }
 
 pub fn get_used_signals_stmt_or_null<'a>(
-    arenas: &'a AstArenas,
-    scope: &mut Scope<'a>,
-    diagnostics: &mut Diagnostics,
+    ctx: &LowerContext<'a>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
     signals: &mut OrderedSet<SignalKey>,
     stmt: AstId<'a, StatementOrNull<'a>>,
 ) -> Result<(), ()> {
     match &*stmt {
         StatementOrNull::Attribute(_) => Ok(()),
-        StatementOrNull::Statement(id) => {
-            get_used_signals(arenas, scope, diagnostics, signals, *id)
-        }
+        StatementOrNull::Statement(id) => get_used_signals(ctx, mctx, scope, signals, *id),
     }
 }
 
 pub fn get_variable_lvalue_used_signals<'a>(
-    arenas: &'a AstArenas,
-    scope: &mut Scope<'a>,
-    diagnostics: &mut Diagnostics,
+    ctx: &LowerContext<'a>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
     signals: &mut OrderedSet<SignalKey>,
     lvalue: AstId<'a, VariableLValue<'a>>,
 ) -> Result<(), ()> {
@@ -651,17 +495,14 @@ pub fn get_variable_lvalue_used_signals<'a>(
         } = &*flat_lvalue;
 
         for expr in exprs.iter() {
-            error |=
-                expression::get_used_signals(arenas, scope, diagnostics, signals, expr).is_err();
+            error |= expression::get_used_signals(ctx, mctx, scope, signals, expr).is_err();
         }
         if let Some(range_expression) = range_expression {
             match &**range_expression {
                 RangeExpression::Expr(expr)
                 | RangeExpression::BasePlus(expr, _)
                 | RangeExpression::BaseMinus(expr, _) => {
-                    error |=
-                        expression::get_used_signals(arenas, scope, diagnostics, signals, *expr)
-                            .is_err()
+                    error |= expression::get_used_signals(ctx, mctx, scope, signals, *expr).is_err()
                 }
                 RangeExpression::MsbLsb(_, _) => {}
             }
@@ -671,26 +512,26 @@ pub fn get_variable_lvalue_used_signals<'a>(
 }
 
 pub fn get_delay_or_event_control_used_signals<'a>(
-    arenas: &'a AstArenas,
-    scope: &mut Scope<'a>,
-    diagnostics: &mut Diagnostics,
+    ctx: &LowerContext<'a>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
     signals: &mut OrderedSet<SignalKey>,
     delay_or_event_control: AstId<'a, DelayOrEventControl<'a>>,
 ) -> Result<(), ()> {
     match &*delay_or_event_control {
         DelayOrEventControl::DelayControl(id) => {
-            get_delay_control_used_signals(arenas, scope, diagnostics, signals, *id)
+            get_delay_control_used_signals(ctx, mctx, scope, signals, *id)
         }
         DelayOrEventControl::EventControl(id) => {
-            get_event_control_used_signals(arenas, scope, diagnostics, signals, *id)
+            get_event_control_used_signals(ctx, mctx, scope, signals, *id)
         }
     }
 }
 
 pub fn get_delay_control_used_signals<'a>(
-    arenas: &'a AstArenas,
-    scope: &mut Scope<'a>,
-    diagnostics: &mut Diagnostics,
+    ctx: &LowerContext<'a>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
     signals: &mut OrderedSet<SignalKey>,
     delay_control: AstId<'a, DelayControl<'a>>,
 ) -> Result<(), ()> {
@@ -700,9 +541,9 @@ pub fn get_delay_control_used_signals<'a>(
             DelayValue::UnsignedNumber(_) => {}
             DelayValue::Identifier(ident) => {
                 error |= expression::get_used_ident_signals(
-                    arenas,
+                    ctx,
+                    mctx,
                     scope,
-                    diagnostics,
                     signals,
                     AstItem {
                         item: *ident,
@@ -714,13 +555,10 @@ pub fn get_delay_control_used_signals<'a>(
         },
         DelayControl::MinTypMax(id) => {
             let MinTypMaxExpression { min_max, typical } = &**id;
-            error |= expression::get_used_signals(arenas, scope, diagnostics, signals, *typical)
-                .is_err();
+            error |= expression::get_used_signals(ctx, mctx, scope, signals, *typical).is_err();
             if let Some((min, max)) = min_max {
-                error |= expression::get_used_signals(arenas, scope, diagnostics, signals, *min)
-                    .is_err();
-                error |= expression::get_used_signals(arenas, scope, diagnostics, signals, *max)
-                    .is_err();
+                error |= expression::get_used_signals(ctx, mctx, scope, signals, *min).is_err();
+                error |= expression::get_used_signals(ctx, mctx, scope, signals, *max).is_err();
             }
         }
     }
@@ -728,9 +566,9 @@ pub fn get_delay_control_used_signals<'a>(
 }
 
 pub fn get_event_control_used_signals<'a>(
-    arenas: &'a AstArenas,
-    scope: &mut Scope<'a>,
-    diagnostics: &mut Diagnostics,
+    ctx: &LowerContext<'a>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
     signals: &mut OrderedSet<SignalKey>,
     event_control: AstId<'a, EventControl<'a>>,
 ) -> Result<(), ()> {
@@ -744,8 +582,7 @@ pub fn get_event_control_used_signals<'a>(
                     EventExpressionPrimary::Posedge(expr) => *expr,
                     EventExpressionPrimary::Negedge(expr) => *expr,
                 };
-                error |= expression::get_used_signals(arenas, scope, diagnostics, signals, expr)
-                    .is_err();
+                error |= expression::get_used_signals(ctx, mctx, scope, signals, expr).is_err();
             }
         }
     }

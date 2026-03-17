@@ -6,26 +6,23 @@ use crate::ast::module::{
     TfInputDeclaration, TfType,
 };
 use crate::elaborate::NetSymbol;
-use crate::lower::{Diagnostics, EvalScope, VType, evaluate_range};
-use crate::parser::AstArenas;
+use crate::lower::{Diagnostics, LowerContext, VType, evaluate_range};
 
-use super::{SymbolAstRefs, VSymbol, VSymbolTable, eval_constant_range};
+use super::{VSymbol, eval_constant_range};
 
 pub fn elaborate_fn<'a>(
     gl: &mut GlobalContext,
-    arenas: &'a AstArenas,
     symbol: SymbolId,
-    table: &mut VSymbolTable,
-    ast_refs: &SymbolAstRefs<'a>,
+    ctx: &mut LowerContext<'a>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
-    let VSymbol::Function(i) = &table[symbol].content else {
+    let VSymbol::Function(i) = &ctx.table[symbol].content else {
         unreachable!();
     };
 
-    let parent = table[symbol].parent().unwrap();
+    let parent = ctx.table[symbol].parent().unwrap();
     let id = i.ast_id;
-    let id = ast_refs.fns[id];
+    let id = ctx.table_ast_refs.fns[id];
     let FunctionDeclaration {
         ident,
         tf_input_decls,
@@ -40,42 +37,42 @@ pub fn elaborate_fn<'a>(
         FunctionRangeOrType::Signed(None) => (0, 0, VType::SignedNet(SCALAR_VSIZE)),
         FunctionRangeOrType::Unsigned(Some(range)) => {
             let (msb, lsb, size) =
-                eval_constant_range(gl, arenas, parent, table, diagnostics, *range)?;
+                eval_constant_range(gl, &ctx.arenas, parent, &ctx.table, diagnostics, *range)?;
             (msb, lsb, VType::UnsignedNet(size))
         }
         FunctionRangeOrType::Signed(Some(range)) => {
             let (msb, lsb, size) =
-                eval_constant_range(gl, arenas, parent, table, diagnostics, *range)?;
+                eval_constant_range(gl, &ctx.arenas, parent, &ctx.table, diagnostics, *range)?;
             (msb, lsb, VType::SignedNet(size))
         }
         FunctionRangeOrType::Integer => (31, 0, VType::SignedNet(INTEGER_VSIZE)),
         FunctionRangeOrType::Real | FunctionRangeOrType::Realtime | FunctionRangeOrType::Time => {
             diagnostics.not_yet_implemented(
-                arenas.get_span(id),
+                ctx.arenas.get_span(id),
                 "real / time / realtime function output",
             );
             return Err(());
         }
     };
 
-    let output_key = super::new_signal(gl, arenas, &output_ty, &[], *ident);
-    if table
+    let net = super::new_net(gl, &ctx.arenas, &output_ty, &[], *ident, None);
+    let output_key = net.ba;
+    if ctx
+        .table
         .insert(
             ident.item.0,
             symbol,
-            arenas.get_item_span(*ident),
+            ctx.arenas.get_item_span(*ident),
             VSymbol::Net(NetSymbol {
                 ty: output_ty,
                 dims: [].into(),
-                signal: output_key,
-                nba: None,
-                specify_proxy: None,
+                net,
                 port_idx: None,
             }),
         )
         .is_err()
     {
-        diagnostics.duplicate_definition(arenas, *ident);
+        diagnostics.duplicate_definition(&ctx.arenas, *ident);
         return Err(());
     }
 
@@ -95,24 +92,22 @@ pub fn elaborate_fn<'a>(
                     let (_, _, width) = match range {
                         None => (0, 0, SCALAR_VSIZE),
                         // @TODO: Better error
-                        Some(range) => evaluate_range(
-                            gl,
-                            arenas,
-                            EvalScope { table, key: symbol },
-                            diagnostics,
-                            *range,
-                        )
-                        .unwrap(),
+                        Some(range) => {
+                            evaluate_range(gl, &ctx.arenas, &ctx.table, symbol, diagnostics, *range)
+                                .unwrap()
+                        }
                     };
                     VType::net(width, *signed)
                 }
                 TfType::Integer => VType::SignedNet(INTEGER_VSIZE),
                 TfType::Real | TfType::Realtime | TfType::Time => todo!(),
             };
-            let ident = arenas.to_item(ident);
-            let origin = arenas.get_item_span(ident);
-            let signal = super::new_signal(gl, arenas, &ty, &[], ident);
-            if table
+            let ident = ctx.arenas.to_item(ident);
+            let origin = ctx.arenas.get_item_span(ident);
+            let net = super::new_net(gl, &ctx.arenas, &ty, &[], ident, None);
+            let signal = net.ba;
+            if ctx
+                .table
                 .insert(
                     ident.item.0,
                     symbol,
@@ -120,22 +115,20 @@ pub fn elaborate_fn<'a>(
                     VSymbol::Net(NetSymbol {
                         ty,
                         dims: [].into(),
-                        signal,
-                        nba: None,
-                        specify_proxy: None,
+                        net,
                         port_idx: None,
                     }),
                 )
                 .is_err()
             {
-                diagnostics.duplicate_definition(arenas, ident);
+                diagnostics.duplicate_definition(&ctx.arenas, ident);
                 return Err(());
             }
             inputs.push((signal, ty));
         }
     }
 
-    let VSymbol::Function(i) = &mut table[symbol].content else {
+    let VSymbol::Function(i) = &mut ctx.table[symbol].content else {
         unreachable!();
     };
     i.inputs = inputs;
@@ -147,24 +140,22 @@ pub fn elaborate_fn<'a>(
 
 pub fn elaborate_task<'a>(
     gl: &mut GlobalContext,
-    arenas: &'a AstArenas,
     symbol: SymbolId,
-    table: &mut VSymbolTable,
-    ast_refs: &SymbolAstRefs<'a>,
+    ctx: &mut LowerContext<'a>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
-    let VSymbol::Task(i) = &table[symbol].content else {
+    let VSymbol::Task(i) = &ctx.table[symbol].content else {
         unreachable!();
     };
 
-    let parent = table[symbol].parent().unwrap();
+    let parent = ctx.table[symbol].parent().unwrap();
     let id = i.ast_id;
     let TaskDeclaration {
         task_ports,
         block_item_decls: _,
         statement_or_null: _,
         ..
-    } = &*ast_refs.tasks[id];
+    } = &*ctx.table_ast_refs.tasks[id];
 
     let mut io = Vec::<(SignalKey, ConnectionDirection, VType)>::new();
     for decl in task_ports.iter() {
@@ -185,7 +176,7 @@ pub fn elaborate_task<'a>(
                         None => (0, 0, SCALAR_VSIZE),
                         // @TODO: Better error
                         Some(range) => {
-                            eval_constant_range(gl, arenas, parent, table, diagnostics, range)?
+                            eval_constant_range(gl, &ctx.arenas, parent, &ctx.table, diagnostics, range)?
                         }
                     };
                     VType::net(width, signed)
@@ -193,10 +184,12 @@ pub fn elaborate_task<'a>(
                 TfType::Integer => VType::SignedNet(INTEGER_VSIZE),
                 TfType::Real | TfType::Realtime | TfType::Time => todo!(),
             };
-            let ident = arenas.to_item(ident);
-            let origin = arenas.get_item_span(ident);
-            let signal = super::new_signal(gl, arenas, &ty, &[], ident);
-            if table
+            let ident = ctx.arenas.to_item(ident);
+            let origin = ctx.arenas.get_item_span(ident);
+            let net = super::new_net(gl, &ctx.arenas, &ty, &[], ident, None);
+            let signal = net.ba;
+            if ctx
+                .table
                 .insert(
                     ident.item.0,
                     symbol,
@@ -204,22 +197,20 @@ pub fn elaborate_task<'a>(
                     VSymbol::Net(NetSymbol {
                         ty,
                         dims: [].into(),
-                        signal,
-                        nba: None,
-                        specify_proxy: None,
+                        net,
                         port_idx: None,
                     }),
                 )
                 .is_err()
             {
-                diagnostics.duplicate_definition(arenas, ident);
+                diagnostics.duplicate_definition(&ctx.arenas, ident);
                 return Err(());
             }
             io.push((signal, direction, ty));
         }
     }
 
-    let VSymbol::Task(i) = &mut table[symbol].content else {
+    let VSymbol::Task(i) = &mut ctx.table[symbol].content else {
         unreachable!();
     };
     i.io = io;

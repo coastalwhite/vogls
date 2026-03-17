@@ -17,19 +17,22 @@ pub enum Region {
     Monitor = 3,
 }
 
-pub struct Scope<'a> {
-    pub table: &'a mut VSymbolTable,
-    pub key: SymbolId,
-    pub table_ast_refs: &'a SymbolAstRefs<'a>,
-    pub udps: &'a VgHashMap<IdentId, AstId<'a, UdpDeclaration<'a>>>,
-    pub signal_aliases: &'a mut VgHashMap<SignalKey, SignalAlias>,
+pub struct LowerContext<'a> {
+    pub table: VSymbolTable,
+    pub table_ast_refs: SymbolAstRefs<'a>,
+    pub udps: VgHashMap<IdentId, AstId<'a, UdpDeclaration<'a>>>,
+    pub arenas: AstArenas,
     pub tokenized: &'a Tokenized,
 }
 
-#[derive(Clone, Copy)]
-pub struct EvalScope<'a> {
-    pub table: &'a VSymbolTable,
-    pub key: SymbolId,
+pub struct MutLowerContext {
+    pub gl: GlobalContext,
+    pub diagnostics: Diagnostics,
+}
+impl MutLowerContext {
+    fn gl(&mut self) -> &mut GlobalContext {
+        &mut self.gl
+    }
 }
 
 fn extend_symbol_table_to_vcd_scope(
@@ -37,7 +40,6 @@ fn extend_symbol_table_to_vcd_scope(
     symbols: &[SymbolId],
     table: &VSymbolTable,
     ident_table: &IdentTable,
-    signal_aliases: &VgHashMap<SignalKey, SignalAlias>,
 ) {
     use VSymbol as S;
     for sid in symbols.iter() {
@@ -53,21 +55,20 @@ fn extend_symbol_table_to_vcd_scope(
                     table[*sid].children(),
                     table,
                     ident_table,
-                    signal_aliases,
                 );
                 scope
                     .items
                     .push(vogls_ir::vcd::VcdScopeItem::Scope(subscope));
             }
             S::Net(i) => {
-                let mut signal = i.signal;
-                let mut msb = (i.ty.force_net_width().get() - 1) as i64;
+                let net = &i.net;
+                let width = i.ty.force_net_width().min(net.width());
+                let mut msb = (width.get() - 1) as i64;
                 let mut lsb = 0;
-                while let Some(s) = signal_aliases.get(&signal) {
-                    signal = s.signal;
-                    if let Some((s_msb, s_lsb)) = s.range {
-                        (msb, lsb) = (s_msb as i64, s_lsb as i64);
-                    }
+                let signal = net.probe_signal();
+                if let Some(offset) = &net.offset {
+                    msb += *offset as i64;
+                    lsb += *offset as i64;
                 }
                 scope.items.push(vogls_ir::vcd::VcdScopeItem::Variable(
                     vogls_ir::vcd::VcdVariable {
@@ -84,16 +85,9 @@ fn extend_symbol_table_to_vcd_scope(
     }
 }
 
-impl<'a> Scope<'a> {
-    pub fn eval<'b>(&'b self) -> EvalScope<'b> {
-        EvalScope {
-            table: &self.table,
-            key: self.key,
-        }
-    }
-
-    pub fn vcd_scope(&self, ident_table: &IdentTable) -> vogls_ir::vcd::VcdScope {
-        let mut key = self.key;
+impl<'a> LowerContext<'a> {
+    pub fn vcd_scope(&self, scope: SymbolId, ident_table: &IdentTable) -> vogls_ir::vcd::VcdScope {
+        let mut key = scope;
         while let Some(parent) = self.table[key].parent() {
             key = parent;
         }
@@ -102,13 +96,7 @@ impl<'a> Scope<'a> {
             name: "ROOT".to_string(),
             items: Vec::new(),
         };
-        extend_symbol_table_to_vcd_scope(
-            &mut scope,
-            &[key],
-            self.table,
-            ident_table,
-            self.signal_aliases,
-        );
+        extend_symbol_table_to_vcd_scope(&mut scope, &[key], &self.table, ident_table);
         scope
     }
 
@@ -214,6 +202,22 @@ pub fn try_resolve_net<'a, 's>(
     let ident = ident.into();
     let sid = try_resolve_symbol_id(scope, table, arenas, ident, diagnostics)?;
     let VSymbol::Net(n) = &table[sid].content else {
+        diagnostics.not_yet_implemented(hident_span(arenas, ident), "cannot be used as net");
+        return Err(());
+    };
+    Ok(n)
+}
+
+pub fn try_resolve_net_mut<'a, 's>(
+    scope: SymbolId,
+    table: &'s mut VSymbolTable,
+    arenas: &AstArenas,
+    ident: impl Into<HIdent<'a>>,
+    diagnostics: &mut Diagnostics,
+) -> Result<&'s mut NetSymbol, ()> {
+    let ident = ident.into();
+    let sid = try_resolve_symbol_id(scope, table, arenas, ident, diagnostics)?;
+    let VSymbol::Net(n) = &mut table[sid].content else {
         diagnostics.not_yet_implemented(hident_span(arenas, ident), "cannot be used as net");
         return Err(());
     };
@@ -327,16 +331,20 @@ use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::vcd::VcdScope;
 use vogls_ir::{
-    BasicBlockBuilder, GlobalContext, SCALAR_VSIZE, Signal, SignalAlias, SignalKey, VariableKey,
-    VectorSize, new_anonymous_builder, new_process,
+    BasicBlockBuilder, BasicBlockTerminator, GlobalContext, ProcessKey, SCALAR_VSIZE, SignalKey,
+    VariableKey, VectorSize, new_anonymous_builder, new_process,
 };
 use vogls_utils::{OrderedSet, VgHashMap};
 
 use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::expr::{BitSlice, Expr};
-use crate::ast::module::{GenerateRegion, Module, ModuleItem, NonPortModuleItem, Range};
+use crate::ast::module::{
+    GenerateRegion, Module, ModuleItem, ModuleOrGenerateItem, ModuleOrGenerateItemContent,
+    NonPortModuleItem, Range,
+};
+use crate::ast::statement::{Statement, StatementContent, StatementOrNull};
 use crate::ast::udp::UdpDeclaration;
-use crate::ast::{AstId, AstItem, HIdent, Identifier};
+use crate::ast::{AstId, AstIdRange, AstItem, HIdent, Identifier};
 use crate::elaborate::{
     FunctionSymbol, ModuleSymbol, NetSymbol, SymbolAstRefs, TaskSymbol, VSymbol, VSymbolTable,
 };
@@ -351,11 +359,10 @@ pub use diagnostics::{Diagnostics, LowerErrorReason};
 pub use module_or_generate_item::dims_to_array;
 
 pub fn lower_module_to_ir<'a>(
-    gl: &mut GlobalContext,
-    arenas: &'a AstArenas,
     root: AstId<'a, Module<'a>>,
-    scope: &mut Scope<'a>,
-    diagnostics: &mut Diagnostics,
+    ctx: &LowerContext<'a>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
 ) -> Result<(), ()> {
     let Module {
         attribute_instances: _,
@@ -367,29 +374,21 @@ pub fn lower_module_to_ir<'a>(
     } = &*root;
 
     let mut scopes = Vec::new();
-    scopes.extend(scope.table[scope.key].children().iter().filter(|c| {
+    scopes.extend(ctx.table[scope].children().iter().filter(|c| {
         matches!(
-            scope.table[**c].content,
+            ctx.table[**c].content,
             VSymbol::GenerateBlock(_) | VSymbol::GenerateBlocks
         )
     }));
     while let Some(scope_key) = scopes.pop() {
-        if let VSymbol::GenerateBlock(offset) = &scope.table[scope_key].content {
-            for id in scope.table_ast_refs.gen_blocks[*offset].iter() {
-                let mut scope = Scope {
-                    table: &mut scope.table,
-                    key: scope_key,
-                    udps: scope.udps,
-                    table_ast_refs: scope.table_ast_refs,
-                    signal_aliases: scope.signal_aliases,
-                    tokenized: scope.tokenized,
-                };
-                module_or_generate_item::lower(gl, arenas, &mut scope, id, diagnostics)?;
+        if let VSymbol::GenerateBlock(offset) = &ctx.table[scope_key].content {
+            for id in ctx.table_ast_refs.gen_blocks[*offset].iter() {
+                module_or_generate_item::lower(ctx, mctx, scope_key, id)?;
             }
         }
-        scopes.extend(scope.table[scope_key].children().iter().filter(|c| {
+        scopes.extend(ctx.table[scope_key].children().iter().filter(|c| {
             matches!(
-                scope.table[**c].content,
+                ctx.table[**c].content,
                 VSymbol::GenerateBlock(_) | VSymbol::GenerateBlocks
             )
         }));
@@ -400,14 +399,14 @@ pub fn lower_module_to_ir<'a>(
             ModuleItem::PortDeclaration(_) => {}
             ModuleItem::NonPortModuleItem(p) => match &**p {
                 NonPortModuleItem::ModuleOrGenerateItem(id) => {
-                    module_or_generate_item::lower(gl, arenas, scope, *id, diagnostics)?
+                    module_or_generate_item::lower(ctx, mctx, scope, *id)?
                 }
                 NonPortModuleItem::GenerateRegion(region) => {
                     let GenerateRegion {
                         module_or_generate_item,
                     } = region;
                     for id in module_or_generate_item.iter() {
-                        module_or_generate_item::lower(gl, arenas, scope, id, diagnostics)?;
+                        module_or_generate_item::lower(ctx, mctx, scope, id)?;
                     }
                 }
                 NonPortModuleItem::SpecifyBlock(_) => {}
@@ -425,98 +424,53 @@ enum WatchCondition {
     Negedge,
 }
 
-fn lower_to_signal<'a>(
-    gl: &mut GlobalContext,
-    arenas: &'a AstArenas,
-    scope: &mut Scope<'a>,
-    diagnostics: &mut Diagnostics,
+fn assign_input_port<'a>(
+    ctx: &LowerContext<'a>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
     expr: AstId<'a, Expr<'a>>,
-    ty: VType,
-) -> Result<SignalAlias, ()> {
-    if let Expr::Ident(ast_ident, exprs, range_expression) = &*expr
-        && exprs.is_empty()
-        && range_expression.is_none()
-    {
-        let symbol_key =
-            try_resolve_symbol_id(scope.key, scope.table, arenas, *ast_ident, diagnostics)?;
-        if let VSymbol::Net(s) = &scope.table[symbol_key].content
-            && s.ty == ty
-        {
-            return Ok(SignalAlias {
-                signal: s.signal,
-                range: None,
-            });
-        }
-    }
-
-    let signal = gl.signals.insert(Signal {
-        name: "anon_port_assignment".to_string(),
-        size: ty.force_net_width(),
-        initialize: None,
-        origin: arenas.get_span(expr),
-    });
-
-    let mut bb_builder = new_process(gl, "port_assignment".into(), arenas.get_span(expr));
+    port: SymbolId,
+) -> Result<(), ()> {
+    let port = unwrap_get_net(&ctx.table, port);
+    let mut bb_builder = new_process(mctx.gl(), "input_port".into(), ctx.arenas.get_span(expr));
     let bb_key = bb_builder.key();
-    let (v, v_ty) = lower_expr(gl, arenas, scope, diagnostics, &mut bb_builder, expr)?;
-    let v = expression::sign_or_zero_extend(gl, &mut bb_builder, v, v_ty, ty.force_net_width());
-
-    bb_builder.drive(gl, signal, v);
+    let (v, v_ty) = lower_expr(ctx, mctx, scope, &mut bb_builder, expr)?;
+    let v = expression::sign_or_zero_extend(
+        mctx.gl(),
+        &mut bb_builder,
+        v,
+        v_ty,
+        port.ty.force_net_width(),
+    );
+    bb_builder.drive(mctx.gl(), port.net.blocking_drive_signal(), v);
 
     let mut signals = OrderedSet::new();
-    expression::get_used_signals(arenas, scope, diagnostics, &mut signals, expr)?;
-    bb_builder.watch_to(gl, signals.items, bb_key);
-    Ok(SignalAlias {
-        signal,
-        range: None,
-    })
+    expression::get_used_signals(ctx, mctx, scope, &mut signals, expr)?;
+    bb_builder.watch_to(mctx.gl(), signals.items, bb_key);
+    Ok(())
 }
 
 fn assign_port_output<'a>(
-    gl: &mut GlobalContext,
-    arenas: &'a AstArenas,
-    scope: &mut Scope<'a>,
-    diagnostics: &mut Diagnostics,
+    ctx: &LowerContext<'a>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
     expr: AstId<'a, Expr<'a>>,
     output_net: SymbolId,
-    ty: VType,
+    _ty: VType,
 ) -> Result<(), ()> {
-    if let Expr::Ident(ast_ident, exprs, range_expression) = &*expr
-        && exprs.is_empty()
-        && range_expression.is_none()
-    {
-        let symbol_key =
-            try_resolve_symbol_id(scope.key, scope.table, arenas, *ast_ident, diagnostics)?;
-        if let VSymbol::Net(s) = &scope.table[symbol_key].content
-            && s.ty == ty
-        {
-            let signal = s.signal;
-            let old_signal = std::mem::replace(
-                &mut unwrap_get_net_mut(scope.table, output_net).signal,
-                signal,
-            );
-            scope.signal_aliases.insert(
-                old_signal,
-                SignalAlias {
-                    signal,
-                    range: None,
-                },
-            );
-            gl.signals.remove(old_signal);
-            return Ok(());
-        }
-    }
-
-    let mut bb_builder = new_process(gl, "port_assignment".into(), arenas.get_span(expr));
+    let mut bb_builder = new_process(mctx.gl(), "output_port".into(), ctx.arenas.get_span(expr));
     let bb_key = bb_builder.key();
 
-    let net = unwrap_get_net(scope.table, output_net);
-    let signal = net.signal;
+    let net = unwrap_get_net(&ctx.table, output_net);
+    let signal = &net.net;
     let ty = net.ty;
-    let probed = bb_builder.probe(gl, signal);
+    let probed = net.net.probe(mctx.gl(), &mut bb_builder);
 
     let mut driving: Vec<(VariableKey, VType, AstId<Expr>)> = Vec::new();
     driving.push((probed, ty, expr));
+
+    let mut ins = OrderedSet::new();
+    ins.insert(signal.probe_signal());
 
     let mut error = false;
     while let Some((var, var_ty, expr)) = driving.pop() {
@@ -524,35 +478,48 @@ fn assign_port_output<'a>(
             Expr::Concatenation(exprs) => {
                 let mut shift = 0;
                 for e in exprs.iter().rev() {
-                    let e_ty = expr_to_ty(gl, arenas, scope, e, diagnostics)?;
+                    let e_ty = expr_to_ty(ctx, mctx, scope, e)?;
                     let e_width = e_ty.force_net_width();
-                    let subvar = bb_builder.slice_constant(gl, var, shift, e_width);
+                    let subvar = bb_builder.slice_constant(mctx.gl(), var, shift, e_width);
                     driving.push((subvar, e_ty, e));
                     shift += e_width.get();
                 }
             }
             Expr::Ident(ast_ident, exprs, range_expression) => {
-                let symbol_key =
-                    try_resolve_symbol_id(scope.key, scope.table, arenas, *ast_ident, diagnostics)?;
-                let VSymbol::Net(s) = &scope.table[symbol_key].content else {
-                    diagnostics.output_expr_not_allowed(arenas.get_span(expr));
+                let symbol_key = try_resolve_symbol_id(
+                    scope,
+                    &ctx.table,
+                    &ctx.arenas,
+                    *ast_ident,
+                    &mut mctx.diagnostics,
+                )?;
+                let VSymbol::Net(s) = &ctx.table[symbol_key].content else {
+                    mctx.diagnostics
+                        .output_expr_not_allowed(ctx.arenas.get_span(expr));
                     error = true;
                     continue;
                 };
 
-                let (offset_dst, length_dst) = if range_expression.is_none() && exprs.is_empty() {
-                    (bb_builder.constant_u32(gl, 0), Some(s.ty.force_net_width()))
-                } else if range_expression.is_none() && exprs.len() == 1 {
+                if range_expression.is_none() && exprs.is_empty() {
+                    s.net.drive_blocking(mctx.gl(), &mut bb_builder, var, None);
+                    continue;
+                }
+
+                if let Some(range_expression) = range_expression {
+                    match range_expression {
+                        BitSlice::MsbLsb(_, _) => {}
+                        BitSlice::PlusWidth(base, _) | BitSlice::MinusWidth(base, _) => {
+                            get_used_signals(ctx, mctx, scope, &mut ins, *base)?;
+                        }
+                    }
+                }
+                for expr in exprs.iter() {
+                    get_used_signals(ctx, mctx, scope, &mut ins, expr)?;
+                }
+
+                let (offset_dst, length_dst) = if range_expression.is_none() && exprs.len() == 1 {
                     (
-                        lower_expr(
-                            gl,
-                            arenas,
-                            scope,
-                            diagnostics,
-                            &mut bb_builder,
-                            exprs.first().unwrap(),
-                        )?
-                        .0,
+                        lower_expr(ctx, mctx, scope, &mut bb_builder, exprs.first().unwrap())?.0,
                         None,
                     )
                 } else if let Some(slice) = range_expression
@@ -561,51 +528,69 @@ fn assign_port_output<'a>(
                     match slice {
                         BitSlice::MsbLsb(msb, lsb) => {
                             let (_, lsb, width) = msb_lsb_to_width(
-                                gl,
-                                arenas,
-                                scope.eval(),
-                                diagnostics,
+                                &mctx.gl,
+                                &ctx.arenas,
+                                &ctx.table,
+                                scope,
+                                &mut mctx.diagnostics,
                                 *msb,
                                 *lsb,
                             )?;
-                            let offset = bb_builder.constant_u32(gl, lsb as u32);
+                            let offset = bb_builder.constant_u32(mctx.gl(), lsb as u32);
                             (offset, Some(width as VectorSize))
                         }
                         BitSlice::PlusWidth(base, width) => {
-                            let offset =
-                                lower_expr(gl, arenas, scope, diagnostics, &mut bb_builder, *base);
-                            let width =
-                                eval_constant_expr(gl, arenas, scope.eval(), diagnostics, *width);
+                            let offset = lower_expr(ctx, mctx, scope, &mut bb_builder, *base);
+                            let width = eval_constant_expr(
+                                &mctx.gl,
+                                &ctx.arenas,
+                                &ctx.table,
+                                scope,
+                                &mut mctx.diagnostics,
+                                *width,
+                            );
                             let width = width?.as_integer().unwrap();
                             (offset?.0, Some(VectorSize::new(width as u32).unwrap()))
                         }
                         BitSlice::MinusWidth(base, width) => {
-                            let offset =
-                                lower_expr(gl, arenas, scope, diagnostics, &mut bb_builder, *base);
-                            let width =
-                                eval_constant_expr(gl, arenas, scope.eval(), diagnostics, *width)?;
+                            let offset = lower_expr(ctx, mctx, scope, &mut bb_builder, *base);
+                            let width = eval_constant_expr(
+                                &mctx.gl,
+                                &ctx.arenas,
+                                &ctx.table,
+                                scope,
+                                &mut mctx.diagnostics,
+                                *width,
+                            )?;
                             let width =
                                 VectorSize::new(width.as_integer().unwrap() as u32).unwrap();
-                            let width_v =
-                                bb_builder.constant_u32(gl, width.checked_add(1).unwrap().get());
-                            let offset = bb_builder.minus(gl, offset?.0, width_v);
+                            let width_v = bb_builder
+                                .constant_u32(mctx.gl(), width.checked_add(1).unwrap().get());
+                            let offset = bb_builder.minus(mctx.gl(), offset?.0, width_v);
                             (offset, Some(width))
                         }
                     }
                 } else {
-                    diagnostics.not_yet_implemented(arenas.get_span(expr), "multiple braced");
+                    mctx.diagnostics
+                        .not_yet_implemented(ctx.arenas.get_span(expr), "multiple braced");
                     error = true;
                     continue;
                 };
 
                 let length_dst = length_dst.unwrap_or(SCALAR_VSIZE);
                 let src = var;
-                let src = truncate_or_extend(gl, &mut bb_builder, src, var_ty, length_dst);
-                bb_builder.drive_partial(gl, s.signal, src, offset_dst, length_dst);
+                let src = truncate_or_extend(mctx.gl(), &mut bb_builder, src, var_ty, length_dst);
+                s.net.drive_blocking(
+                    mctx.gl(),
+                    &mut bb_builder,
+                    src,
+                    Some((offset_dst, length_dst)),
+                );
             }
 
             Expr::Replication(_) => {
-                diagnostics.not_yet_implemented(arenas.get_span(expr), "repetition in net assign");
+                mctx.diagnostics
+                    .not_yet_implemented(ctx.arenas.get_span(expr), "repetition in net assign");
                 error = true;
             }
 
@@ -617,16 +602,14 @@ fn assign_port_output<'a>(
             | Expr::String(..)
             | Expr::Unary(..)
             | Expr::Binary(..) => {
-                diagnostics.output_expr_not_allowed(arenas.get_span(expr));
+                mctx.diagnostics
+                    .output_expr_not_allowed(ctx.arenas.get_span(expr));
                 error = true;
             }
         }
     }
 
-    let mut ins = OrderedSet::new();
-    ins.insert(signal);
-    get_used_signals(arenas, scope, diagnostics, &mut ins, expr)?;
-    bb_builder.watch_to(gl, ins.items, bb_key);
+    bb_builder.watch_to(mctx.gl(), ins.items, bb_key);
 
     if error {
         return Err(());
@@ -636,24 +619,26 @@ fn assign_port_output<'a>(
 }
 
 fn expr_to_ty<'a>(
-    gl: &mut GlobalContext,
-    arenas: &'a AstArenas,
-    scope: &Scope<'a>,
+    ctx: &LowerContext<'a>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
     expr: AstId<Expr>,
-    diagnostics: &mut Diagnostics,
 ) -> Result<VType, ()> {
     // @Performance: make specialized implementation
-    let mut builder = new_anonymous_builder(gl, "tmp".to_string(), TokenRange { start: 0, end: 0 });
-    let (_, ty) = lower_expr(gl, arenas, scope, diagnostics, &mut builder, expr)?;
-    gl.processes.remove(builder.process());
+    let mut builder = new_anonymous_builder(
+        mctx.gl(),
+        "tmp".to_string(),
+        TokenRange { start: 0, end: 0 },
+    );
+    let (_, ty) = lower_expr(ctx, mctx, scope, &mut builder, expr)?;
+    mctx.gl().processes.remove(builder.process());
     Ok(ty)
 }
 
 fn assign_task_output<'a>(
-    gl: &mut GlobalContext,
-    arenas: &'a AstArenas,
-    scope: &Scope<'a>,
-    diagnostics: &mut Diagnostics,
+    ctx: &LowerContext<'a>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
     builder: &mut BasicBlockBuilder,
     variable: VariableKey,
     expr: AstId<'a, Expr<'a>>,
@@ -669,27 +654,28 @@ fn assign_task_output<'a>(
                 todo!()
             }
             Expr::Ident(ast_ident, exprs, range_expression) => {
-                let symbol_key =
-                    try_resolve_symbol_id(scope.key, scope.table, arenas, *ast_ident, diagnostics)?;
-                let VSymbol::Net(s) = &scope.table[symbol_key].content else {
-                    diagnostics.output_expr_not_allowed(arenas.get_span(expr));
+                let symbol_key = try_resolve_symbol_id(
+                    scope,
+                    &ctx.table,
+                    &ctx.arenas,
+                    *ast_ident,
+                    &mut mctx.diagnostics,
+                )?;
+                let VSymbol::Net(s) = &ctx.table[symbol_key].content else {
+                    mctx.diagnostics
+                        .output_expr_not_allowed(ctx.arenas.get_span(expr));
                     error = true;
                     continue;
                 };
 
                 let (offset_dst, length_dst) = if range_expression.is_none() && exprs.is_empty() {
-                    (builder.constant_u32(gl, 0), Some(s.ty.force_net_width()))
+                    (
+                        builder.constant_u32(mctx.gl(), 0),
+                        Some(s.ty.force_net_width()),
+                    )
                 } else if range_expression.is_none() && exprs.len() == 1 {
                     (
-                        lower_expr(
-                            gl,
-                            arenas,
-                            scope,
-                            diagnostics,
-                            builder,
-                            exprs.first().unwrap(),
-                        )?
-                        .0,
+                        lower_expr(ctx, mctx, scope, builder, exprs.first().unwrap())?.0,
                         None,
                     )
                 } else if let Some(slice) = range_expression
@@ -698,48 +684,64 @@ fn assign_task_output<'a>(
                     match slice {
                         BitSlice::MsbLsb(msb, lsb) => {
                             let (_, lsb, width) = msb_lsb_to_width(
-                                gl,
-                                arenas,
-                                scope.eval(),
-                                diagnostics,
+                                &mctx.gl,
+                                &ctx.arenas,
+                                &ctx.table,
+                                scope,
+                                &mut mctx.diagnostics,
                                 *msb,
                                 *lsb,
                             )?;
-                            let offset = builder.constant_u32(gl, lsb as u32);
+                            let offset = builder.constant_u32(mctx.gl(), lsb as u32);
                             (offset, Some(width as VectorSize))
                         }
                         BitSlice::PlusWidth(base, width) => {
-                            let offset = lower_expr(gl, arenas, scope, diagnostics, builder, *base);
-                            let width =
-                                eval_constant_expr(gl, arenas, scope.eval(), diagnostics, *width);
+                            let offset = lower_expr(ctx, mctx, scope, builder, *base);
+                            let width = eval_constant_expr(
+                                &mctx.gl,
+                                &ctx.arenas,
+                                &ctx.table,
+                                scope,
+                                &mut mctx.diagnostics,
+                                *width,
+                            );
                             let width = width?.as_integer().unwrap();
                             (offset?.0, Some(VectorSize::new(width as u32).unwrap()))
                         }
                         BitSlice::MinusWidth(base, width) => {
-                            let offset = lower_expr(gl, arenas, scope, diagnostics, builder, *base);
-                            let width =
-                                eval_constant_expr(gl, arenas, scope.eval(), diagnostics, *width)?;
+                            let offset = lower_expr(ctx, mctx, scope, builder, *base);
+                            let width = eval_constant_expr(
+                                &mctx.gl,
+                                &ctx.arenas,
+                                &ctx.table,
+                                scope,
+                                &mut mctx.diagnostics,
+                                *width,
+                            )?;
                             let width =
                                 VectorSize::new(width.as_integer().unwrap() as u32).unwrap();
-                            let width_v =
-                                builder.constant_u32(gl, width.checked_add(1).unwrap().get());
-                            let offset = builder.minus(gl, offset?.0, width_v);
+                            let width_v = builder
+                                .constant_u32(mctx.gl(), width.checked_add(1).unwrap().get());
+                            let offset = builder.minus(mctx.gl(), offset?.0, width_v);
                             (offset, Some(width))
                         }
                     }
                 } else {
-                    diagnostics.not_yet_implemented(arenas.get_span(expr), "multiple braced");
+                    mctx.diagnostics
+                        .not_yet_implemented(ctx.arenas.get_span(expr), "multiple braced");
                     error = true;
                     continue;
                 };
 
                 let length_dst = length_dst.unwrap_or(SCALAR_VSIZE);
-                let src = truncate_or_extend(gl, builder, variable, ty, length_dst);
-                builder.drive_partial(gl, s.signal, src, offset_dst, length_dst);
+                let src = truncate_or_extend(mctx.gl(), builder, variable, ty, length_dst);
+                s.net
+                    .drive_blocking(mctx.gl(), builder, src, Some((offset_dst, length_dst)));
             }
 
             Expr::Replication(_) => {
-                diagnostics.not_yet_implemented(arenas.get_span(expr), "repetition in net assign");
+                mctx.diagnostics
+                    .not_yet_implemented(ctx.arenas.get_span(expr), "repetition in net assign");
                 error = true;
             }
 
@@ -751,7 +753,8 @@ fn assign_task_output<'a>(
             | Expr::String(..)
             | Expr::Unary(..)
             | Expr::Binary(..) => {
-                diagnostics.output_expr_not_allowed(arenas.get_span(expr));
+                mctx.diagnostics
+                    .output_expr_not_allowed(ctx.arenas.get_span(expr));
                 error = true;
             }
         }
@@ -767,13 +770,14 @@ fn assign_task_output<'a>(
 fn msb_lsb_to_width<'a>(
     gl: &GlobalContext,
     arenas: &'a AstArenas,
-    scope: EvalScope<'a>,
+    table: &VSymbolTable,
+    scope: SymbolId,
     diagnostics: &mut Diagnostics,
     ast_msb: AstId<ConstantExpr>,
     ast_lsb: AstId<ConstantExpr>,
 ) -> Result<(i64, i64, VectorSize), ()> {
-    let msb = eval_constant_expr(gl, arenas, scope, diagnostics, ast_msb);
-    let lsb = eval_constant_expr(gl, arenas, scope, diagnostics, ast_lsb);
+    let msb = eval_constant_expr(gl, arenas, table, scope, diagnostics, ast_msb);
+    let lsb = eval_constant_expr(gl, arenas, table, scope, diagnostics, ast_lsb);
 
     let (Ok(VValue::SignedNet(msb)), Ok(VValue::SignedNet(lsb))) = (msb, lsb) else {
         return Err(());
@@ -794,10 +798,264 @@ fn msb_lsb_to_width<'a>(
 pub fn evaluate_range<'a>(
     gl: &GlobalContext,
     arenas: &'a AstArenas,
-    scope: EvalScope<'a>,
+    table: &VSymbolTable,
+    scope: SymbolId,
     diagnostics: &mut Diagnostics,
     range: AstId<'a, Range<'a>>,
 ) -> Result<(i64, i64, VectorSize), ()> {
     let range = &*range;
-    msb_lsb_to_width(gl, arenas, scope, diagnostics, range.msb, range.lsb)
+    msb_lsb_to_width(gl, arenas, table, scope, diagnostics, range.msb, range.lsb)
+}
+
+pub fn create_nba_process(
+    gl: &mut GlobalContext,
+    signal: SignalKey,
+) -> (ProcessKey, SignalKey, SignalKey) {
+    let vogls_ir::Signal {
+        name, origin, size, ..
+    } = &gl.signals[signal];
+
+    let process_name = format!("{name}::NBA_PROC");
+    let mask_name = format!("{name}::NBA_MASK");
+    let value_name = format!("{name}::NBA_VALUE");
+    let (size, origin) = (*size, *origin);
+    let mut builder = new_process(gl, process_name, origin);
+
+    let process_key = builder.process();
+    let mask = gl.signals.insert(vogls_ir::Signal {
+        name: mask_name,
+        size,
+        initialize: None,
+        origin,
+    });
+    let value = gl.signals.insert(vogls_ir::Signal {
+        name: value_name,
+        size,
+        initialize: None,
+        origin,
+    });
+
+    // We need to conditionally branch here as it might have already been assigned before.
+    let mask_v = builder.probe(gl, mask);
+    let mask_ro = builder.reduce_or(gl, mask_v);
+
+    let init_bb = builder.key();
+    builder = builder.next_terminate_later(gl);
+
+    let watch_bb = builder.key();
+    builder = builder.watch(gl, [value].into());
+
+    let waitregion_bb = builder.key();
+    builder = builder.wait_region(gl, Region::NonBlocking as u8);
+
+    let mask_v = builder.probe(gl, mask);
+    let value_v = builder.probe(gl, value);
+    let inv_mask = builder.binary_neg(gl, mask_v);
+    let old = builder.probe(gl, signal);
+    let old = builder.and(gl, old, inv_mask);
+    let value_v = builder.and(gl, value_v, mask_v);
+    let result = builder.or(gl, old, value_v);
+    builder.drive(gl, signal, result);
+    builder.jump_to(gl, watch_bb);
+
+    gl.bbs[init_bb].terminator = BasicBlockTerminator::Branch(mask_ro, waitregion_bb, watch_bb);
+
+    (process_key, mask, value)
+}
+
+pub fn instantiate_nba_signals<'a>(
+    gl: &mut GlobalContext,
+    ctx: &mut LowerContext<'a>,
+    scope: SymbolId,
+    module: AstId<'a, Module<'a>>,
+    diagnostics: &mut Diagnostics,
+) -> Result<(), ()> {
+    let mut scopes = Vec::new();
+    scopes.extend(ctx.table[scope].children().iter().filter(|c| {
+        matches!(
+            ctx.table[**c].content,
+            VSymbol::GenerateBlock(_) | VSymbol::GenerateBlocks
+        )
+    }));
+    while let Some(scope_key) = scopes.pop() {
+        if let VSymbol::GenerateBlock(offset) = &ctx.table[scope_key].content {
+            for id in ctx.table_ast_refs.gen_blocks[*offset].iter() {
+                instantiate_module_or_generate_item_nba_signals(
+                    gl,
+                    ctx,
+                    scope_key,
+                    id,
+                    diagnostics,
+                )?;
+            }
+        }
+        scopes.extend(ctx.table[scope_key].children().iter().filter(|c| {
+            matches!(
+                ctx.table[**c].content,
+                VSymbol::GenerateBlock(_) | VSymbol::GenerateBlocks
+            )
+        }));
+    }
+
+    for module_item in module.module_items.iter() {
+        match &*module_item {
+            ModuleItem::PortDeclaration(_) => {}
+            ModuleItem::NonPortModuleItem(p) => match &**p {
+                NonPortModuleItem::ModuleOrGenerateItem(id) => {
+                    instantiate_module_or_generate_item_nba_signals(
+                        gl,
+                        ctx,
+                        scope,
+                        *id,
+                        diagnostics,
+                    )?;
+                }
+                NonPortModuleItem::GenerateRegion(_) => {}
+                NonPortModuleItem::SpecifyBlock(_) => {}
+                NonPortModuleItem::ParameterDeclaration(_) => {}
+                NonPortModuleItem::SpecParamDeclaration => todo!(),
+            },
+        }
+    }
+
+    Ok(())
+}
+
+pub fn instantiate_module_or_generate_item_nba_signals<'a>(
+    gl: &mut GlobalContext,
+    ctx: &mut LowerContext<'a>,
+    scope: SymbolId,
+    item: AstId<'a, ModuleOrGenerateItem<'a>>,
+    diagnostics: &mut Diagnostics,
+) -> Result<(), ()> {
+    match item.content {
+        ModuleOrGenerateItemContent::ModuleOrGenerateItemDeclaration(_)
+        | ModuleOrGenerateItemContent::LocalParameterDeclaration(_)
+        | ModuleOrGenerateItemContent::ParameterOverride
+        | ModuleOrGenerateItemContent::ContinuousAssign(_)
+        | ModuleOrGenerateItemContent::GateInstantiation(_)
+        | ModuleOrGenerateItemContent::UdpInstantiation(_)
+        | ModuleOrGenerateItemContent::ModuleInstantiation(_)
+        | ModuleOrGenerateItemContent::LoopGenerateConstruct(_)
+        | ModuleOrGenerateItemContent::IfGenerateConstruct(_)
+        | ModuleOrGenerateItemContent::CaseGenerateConstruct(_) => Ok(()),
+        ModuleOrGenerateItemContent::InitialConstruct(id) => {
+            instantiate_stmts_nba_signals(gl, ctx, scope, AstIdRange::single(id.0), diagnostics)
+        }
+        ModuleOrGenerateItemContent::AlwaysConstruct(id) => {
+            instantiate_stmts_nba_signals(gl, ctx, scope, AstIdRange::single(id.0), diagnostics)
+        }
+    }
+}
+
+pub fn instantiate_stmts_nba_signals<'a>(
+    gl: &mut GlobalContext,
+    ctx: &mut LowerContext<'a>,
+    scope: SymbolId,
+    stmts: AstIdRange<'a, Statement<'a>>,
+    diagnostics: &mut Diagnostics,
+) -> Result<(), ()> {
+    for stmt in stmts {
+        match stmt.content {
+            StatementContent::NonBlockingAssignment(nba) => {
+                for vlvalue in nba.variable_lvalue.0 {
+                    let net = try_resolve_net_mut(
+                        scope,
+                        &mut ctx.table,
+                        &ctx.arenas,
+                        vlvalue.ident,
+                        diagnostics,
+                    )?;
+                    if net.net.nba.is_none() {
+                        net.net.nba = Some(create_nba_process(gl, net.net.blocking_drive_signal()));
+                    };
+                }
+            }
+            StatementContent::DisableStatement => todo!(),
+            StatementContent::EventTrigger => todo!(),
+            StatementContent::CaseStatement(id) => {
+                for case_item in id.items {
+                    instantiate_stmt_or_null_nba_signals(
+                        gl,
+                        ctx,
+                        scope,
+                        case_item.statement_or_null,
+                        diagnostics,
+                    )?;
+                }
+            }
+            StatementContent::ConditionalStatement(id) => {
+                instantiate_stmt_or_null_nba_signals(
+                    gl,
+                    ctx,
+                    scope,
+                    id.if_branch.statement,
+                    diagnostics,
+                )?;
+                for else_if in id.else_ifs {
+                    instantiate_stmt_or_null_nba_signals(
+                        gl,
+                        ctx,
+                        scope,
+                        else_if.statement,
+                        diagnostics,
+                    )?;
+                }
+                if let Some(else_branch) = id.else_branch {
+                    instantiate_stmt_or_null_nba_signals(gl, ctx, scope, else_branch, diagnostics)?;
+                }
+            }
+            StatementContent::LoopStatement(id) => instantiate_stmts_nba_signals(
+                gl,
+                ctx,
+                scope,
+                AstIdRange::single(id.statement),
+                diagnostics,
+            )?,
+            StatementContent::ProceduralContinuousAssignments => todo!(),
+
+            StatementContent::ParBlock(id) => {
+                instantiate_stmts_nba_signals(gl, ctx, scope, id.statements, diagnostics)?
+            }
+            StatementContent::SeqBlock(id) => {
+                instantiate_stmts_nba_signals(gl, ctx, scope, id.statements, diagnostics)?
+            }
+            StatementContent::ProceduralTimingControlStatement(id) => {
+                instantiate_stmt_or_null_nba_signals(
+                    gl,
+                    ctx,
+                    scope,
+                    id.statement_or_null,
+                    diagnostics,
+                )?
+            }
+            StatementContent::WaitStatement(id) => instantiate_stmt_or_null_nba_signals(
+                gl,
+                ctx,
+                scope,
+                id.statement_or_null,
+                diagnostics,
+            )?,
+            StatementContent::TaskEnable(_) => {
+                // @TODO: this needs to instantiate something...
+            }
+            StatementContent::BlockingAssignment(_) | StatementContent::SystemTaskEnable(_) => {}
+        }
+    }
+    Ok(())
+}
+
+pub fn instantiate_stmt_or_null_nba_signals<'a>(
+    gl: &mut GlobalContext,
+    ctx: &mut LowerContext<'a>,
+    scope: SymbolId,
+    stmt: AstId<'a, StatementOrNull<'a>>,
+    diagnostics: &mut Diagnostics,
+) -> Result<(), ()> {
+    match &*stmt {
+        StatementOrNull::Attribute(_) => Ok(()),
+        StatementOrNull::Statement(stmt) => {
+            instantiate_stmts_nba_signals(gl, ctx, scope, AstIdRange::single(*stmt), diagnostics)
+        }
+    }
 }

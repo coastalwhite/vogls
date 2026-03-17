@@ -1,14 +1,15 @@
 use std::collections::HashMap;
 
+use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{Bits, GlobalContext, VectorSize};
 
 use crate::ast::AstId;
 use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::expr::{BinaryOperator, Expr, UnaryOperator};
-use crate::elaborate::VSymbol;
+use crate::elaborate::{VSymbol, VSymbolTable};
 use crate::lower::expression::StackItem;
 use crate::lower::vvalue::VValue;
-use crate::lower::{EvalScope, hident_span, try_resolve_constant, try_resolve_symbol_id};
+use crate::lower::{hident_span, try_resolve_constant, try_resolve_symbol_id};
 use crate::number::Sign;
 use crate::parser::AstArenas;
 
@@ -17,7 +18,8 @@ use super::Diagnostics;
 pub fn eval_constant_expr<'a>(
     gl: &GlobalContext,
     arenas: &'a AstArenas,
-    scope: EvalScope<'_>,
+    table: &VSymbolTable,
+    scope: SymbolId,
     diagnostics: &mut Diagnostics,
     expr: AstId<'a, ConstantExpr<'a>>,
 ) -> Result<VValue, ()> {
@@ -144,7 +146,7 @@ pub fn eval_constant_expr<'a>(
                 }
 
                 let Ok(value) =
-                    try_resolve_constant(scope.key, scope.table, arenas, ast_ident, diagnostics)
+                    try_resolve_constant(scope, &table, arenas, ast_ident, diagnostics)
                 else {
                     result_stack.push(None);
                     error = true;
@@ -252,7 +254,7 @@ pub fn eval_constant_expr<'a>(
                 let return_stack_length = result_stack.len() - arguments.len();
 
                 let Ok(fn_sid) =
-                    try_resolve_symbol_id(scope.key, scope.table, arenas, ident, diagnostics)
+                    try_resolve_symbol_id(scope, &table, arenas, ident, diagnostics)
                 else {
                     result_stack.truncate(return_stack_length);
                     result_stack.push(None);
@@ -260,7 +262,7 @@ pub fn eval_constant_expr<'a>(
                     continue;
                 };
 
-                let VSymbol::Function(fn_symbol) = &scope.table[fn_sid].content else {
+                let VSymbol::Function(fn_symbol) = &table[fn_sid].content else {
                     result_stack.truncate(return_stack_length);
                     result_stack.push(None);
                     diagnostics

@@ -92,7 +92,8 @@ impl<'a, T> AstIdRange<'a, T> {
     }
 
     pub fn pop_front(&mut self) -> Option<AstId<'a, T>> {
-        let (fst, _) = self.node.split_first()?;
+        let fst;
+        (fst, self.node) = self.node.split_first()?;
         let fst = AstId {
             node: fst,
             loc: self.loc,
@@ -101,7 +102,8 @@ impl<'a, T> AstIdRange<'a, T> {
         Some(fst)
     }
     pub fn pop_back(&mut self) -> Option<AstId<'a, T>> {
-        let (lst, _) = self.node.split_last()?;
+        let lst;
+        (lst, self.node) = self.node.split_last()?;
         let lst = AstId {
             node: lst,
             loc: self.loc + self.len() - 1,

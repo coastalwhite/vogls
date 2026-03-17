@@ -1009,4 +1009,14 @@ impl BasicBlockBuilder {
         self.bin_op(gl, before, after, BinaryOp::Negedge, dst);
         dst
     }
+
+    pub fn plus_constant(
+        &mut self,
+        gl: &mut GlobalContext,
+        src: VariableKey,
+        constant: Bits,
+    ) -> VariableKey {
+        let constant = self.constant(gl, constant);
+        self.plus(gl, src, constant)
+    }
 }

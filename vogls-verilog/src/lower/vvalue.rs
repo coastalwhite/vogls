@@ -34,6 +34,25 @@ impl VValue {
         }
     }
 
+    pub fn coerce(self, ty: &VType) -> VValue {
+        use VType as T;
+        use VValue as V;
+        match (self, ty) {
+            (V::SignedNet(v), T::SignedNet(size)) => V::SignedNet(v.truncate_or_sign_extend(*size)),
+            (V::SignedNet(v), T::UnsignedNet(size)) => {
+                V::UnsignedNet(v.truncate_or_sign_extend(*size))
+            }
+            (V::UnsignedNet(v), T::SignedNet(size)) => {
+                V::SignedNet(v.truncate_or_zero_extend(*size))
+            }
+            (V::UnsignedNet(v), T::UnsignedNet(size)) => {
+                V::UnsignedNet(v.truncate_or_zero_extend(*size))
+            }
+
+            (V::String(_), _) | (_, T::String(_)) => todo!(),
+        }
+    }
+
     pub fn coerce_max_size(l: VValue, r: VValue) -> (VValue, VValue) {
         use VValue as V;
         match (l, r) {

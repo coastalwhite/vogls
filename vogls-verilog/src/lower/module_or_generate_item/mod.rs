@@ -1,6 +1,5 @@
-use vogls_ir::{
-    Bits, ConnectionDirection, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE, VectorSize, new_process,
-};
+use vogls_frontend::symbol_table::SymbolId;
+use vogls_ir::{Bits, ConnectionDirection, GlobalContext, SCALAR_VSIZE, VectorSize, new_process};
 use vogls_utils::OrderedSet;
 
 use crate::ast::module::{
@@ -11,28 +10,27 @@ use crate::ast::module::{
 };
 use crate::ast::udp::{UdpInstance, UdpInstantiation};
 use crate::ast::{AstId, AstIdRange};
-use crate::elaborate::VSymbol;
+use crate::elaborate::{VSymbol, VSymbolTable};
 use crate::lower::assign::{assign_net_lvalue, net_lvalue_width};
 use crate::lower::expression::{self, get_used_signals, lower_expr, truncate_or_extend};
 use crate::lower::statement::statements_to_process;
 use crate::lower::udp::lower_udp;
 use crate::lower::{
-    VType, assign_port_output, eval_constant_expr, evaluate_range, lower_to_signal,
-    resolve_symbol_id, try_resolve_net, unwrap_get_module, unwrap_get_net, unwrap_get_net_mut,
+    VType, assign_input_port, assign_port_output, eval_constant_expr, evaluate_range,
+    resolve_symbol_id, try_resolve_net, unwrap_get_module,
 };
 use crate::parser::AstArenas;
 
-use super::Scope;
-use super::{Diagnostics, EvalScope};
+use super::LowerContext;
+use super::{Diagnostics, MutLowerContext};
 
 pub mod function;
 
 pub fn lower<'a>(
-    gl: &mut GlobalContext,
-    arenas: &'a AstArenas,
-    scope: &mut Scope<'a>,
+    ctx: &LowerContext<'a>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
     id: AstId<'a, ModuleOrGenerateItem<'a>>,
-    diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
     match id.content {
         ModuleOrGenerateItemContent::ModuleOrGenerateItemDeclaration(id) => {
@@ -42,9 +40,14 @@ pub fn lower<'a>(
                     let net_declaration = &**id;
                     let (_, _, width) = match net_declaration.range {
                         None => (0, 0, SCALAR_VSIZE),
-                        Some(range) => {
-                            evaluate_range(gl, arenas, scope.eval(), diagnostics, range)?
-                        }
+                        Some(range) => evaluate_range(
+                            &mut mctx.gl,
+                            &ctx.arenas,
+                            &ctx.table,
+                            scope,
+                            &mut mctx.diagnostics,
+                            range,
+                        )?,
                     };
                     let ty = VType::net(width, net_declaration.signed);
                     match net_declaration.nets {
@@ -56,60 +59,38 @@ pub fn lower<'a>(
                                     expr,
                                 } = &*assignment;
                                 let net = try_resolve_net(
-                                    scope.key,
-                                    scope.table,
-                                    arenas,
+                                    scope,
+                                    &ctx.table,
+                                    &ctx.arenas,
                                     *ast_ident,
-                                    diagnostics,
+                                    &mut mctx.diagnostics,
                                 )?;
 
-                                let mut bb_builder =
-                                    new_process(gl, "decl_assign".into(), arenas.get_span(*expr));
+                                let mut bb_builder = new_process(
+                                    &mut mctx.gl,
+                                    "decl_assign".into(),
+                                    ctx.arenas.get_span(*expr),
+                                );
                                 let bb_key = bb_builder.key();
-                                let (v, v_ty) = lower_expr(
-                                    gl,
-                                    arenas,
-                                    scope,
-                                    diagnostics,
-                                    &mut bb_builder,
-                                    *expr,
-                                )?;
+                                let (v, v_ty) =
+                                    lower_expr(ctx, mctx, scope, &mut bb_builder, *expr)?;
                                 let v = expression::sign_or_zero_extend(
-                                    gl,
+                                    &mut mctx.gl,
                                     &mut bb_builder,
                                     v,
                                     v_ty,
                                     ty.force_net_width(),
                                 );
-                                bb_builder.drive(gl, net.signal, v);
+                                net.net.drive_blocking(mctx.gl(), &mut bb_builder, v, None);
                                 let mut ins = OrderedSet::new();
-                                get_used_signals(arenas, scope, diagnostics, &mut ins, *expr)?;
-                                bb_builder.watch_to(gl, ins.items, bb_key);
+                                get_used_signals(ctx, mctx, scope, &mut ins, *expr)?;
+                                bb_builder.watch_to(mctx.gl(), ins.items, bb_key);
                             }
                         }
                     }
                 }
                 ModuleOrGenerateItemDeclaration::Reg(_) => {}
-                ModuleOrGenerateItemDeclaration::Integer(id) => {
-                    let integer_declaration = &**id;
-                    let ty = VType::SignedNet(INTEGER_VSIZE);
-                    for variable_type in integer_declaration.variable_types.iter() {
-                        let (_, _, initialize) =
-                            lower_variable_type(gl, arenas, scope, diagnostics, variable_type, ty)?;
-                        let Some(initialize) = initialize else {
-                            continue;
-                        };
-
-                        let net = try_resolve_net(
-                            scope.key,
-                            scope.table,
-                            arenas,
-                            variable_type.identifier,
-                            diagnostics,
-                        )?;
-                        gl.signals[net.signal].initialize = Some(initialize);
-                    }
-                }
+                ModuleOrGenerateItemDeclaration::Integer(_) => {}
                 ModuleOrGenerateItemDeclaration::Genvar(_) => {}
                 ModuleOrGenerateItemDeclaration::Task(_) => {}
                 ModuleOrGenerateItemDeclaration::Function(_) => {}
@@ -122,22 +103,16 @@ pub fn lower<'a>(
             for ast_net_assignment in assign.list_of_net_assignments {
                 let net_assignment = &*ast_net_assignment;
 
-                let mut bb_builder = new_process(gl, "assign".into(), arenas.get_span(id));
+                let mut bb_builder =
+                    new_process(mctx.gl(), "assign".into(), ctx.arenas.get_span(id));
                 let bb_key = bb_builder.key();
-                let (variable, variable_ty) = lower_expr(
-                    gl,
-                    arenas,
-                    scope,
-                    diagnostics,
-                    &mut bb_builder,
-                    net_assignment.expression,
-                )?;
+                let (variable, variable_ty) =
+                    lower_expr(ctx, mctx, scope, &mut bb_builder, net_assignment.expression)?;
 
                 assign_net_lvalue(
-                    gl,
-                    arenas,
+                    ctx,
+                    mctx,
                     scope,
-                    diagnostics,
                     &mut bb_builder,
                     net_assignment.net_lvalue,
                     variable,
@@ -145,14 +120,8 @@ pub fn lower<'a>(
                 )?;
 
                 let mut ins = OrderedSet::new();
-                get_used_signals(
-                    arenas,
-                    scope,
-                    diagnostics,
-                    &mut ins,
-                    net_assignment.expression,
-                )?;
-                bb_builder.watch_to(gl, ins.items, bb_key);
+                get_used_signals(ctx, mctx, scope, &mut ins, net_assignment.expression)?;
+                bb_builder.watch_to(mctx.gl(), ins.items, bb_key);
             }
         }
         ModuleOrGenerateItemContent::GateInstantiation(id) => {
@@ -167,25 +136,31 @@ pub fn lower<'a>(
                             input_terminals,
                         } = &*instance;
 
-                        let mut bb_builder = new_process(gl, "gate".into(), arenas.get_span(*id));
+                        let mut bb_builder =
+                            new_process(mctx.gl(), "gate".into(), ctx.arenas.get_span(*id));
                         let bb_key = bb_builder.key();
 
-                        let output_size =
-                            net_lvalue_width(gl, arenas, scope, diagnostics, *output_terminal)?;
+                        let output_size = net_lvalue_width(ctx, mctx, scope, *output_terminal)?;
 
+                        let mut ins = OrderedSet::new();
                         assert!(!input_terminals.is_empty());
                         let value = input_terminals.first().unwrap();
+                        get_used_signals(ctx, mctx, scope, &mut ins, value)?;
                         let (value, value_ty) =
-                            lower_expr(gl, arenas, scope, diagnostics, &mut bb_builder, value)?;
-                        let mut value =
-                            truncate_or_extend(gl, &mut bb_builder, value, value_ty, output_size);
-                        let mut ins = OrderedSet::new();
+                            lower_expr(ctx, mctx, scope, &mut bb_builder, value)?;
+                        let mut value = truncate_or_extend(
+                            mctx.gl(),
+                            &mut bb_builder,
+                            value,
+                            value_ty,
+                            output_size,
+                        );
                         for input in input_terminals.iter().skip(1) {
-                            get_used_signals(arenas, scope, diagnostics, &mut ins, input)?;
+                            get_used_signals(ctx, mctx, scope, &mut ins, input)?;
                             let (input, input_ty) =
-                                lower_expr(gl, arenas, scope, diagnostics, &mut bb_builder, input)?;
+                                lower_expr(ctx, mctx, scope, &mut bb_builder, input)?;
                             let input = truncate_or_extend(
-                                gl,
+                                mctx.gl(),
                                 &mut bb_builder,
                                 input,
                                 input_ty,
@@ -193,13 +168,13 @@ pub fn lower<'a>(
                             );
                             match ninput_gate_instantiation.gatetype.item {
                                 NInputGateType::And | NInputGateType::Nand => {
-                                    value = bb_builder.and(gl, value, input);
+                                    value = bb_builder.and(mctx.gl(), value, input);
                                 }
                                 NInputGateType::Or | NInputGateType::Nor => {
-                                    value = bb_builder.or(gl, value, input);
+                                    value = bb_builder.or(mctx.gl(), value, input);
                                 }
                                 NInputGateType::Xor | NInputGateType::Xnor => {
-                                    value = bb_builder.xor(gl, value, input);
+                                    value = bb_builder.xor(mctx.gl(), value, input);
                                 }
                             }
                         }
@@ -208,21 +183,20 @@ pub fn lower<'a>(
                             ninput_gate_instantiation.gatetype.item,
                             NInputGateType::Nand | NInputGateType::Nor | NInputGateType::Xnor
                         ) {
-                            value = bb_builder.binary_neg(gl, value);
+                            value = bb_builder.binary_neg(mctx.gl(), value);
                         }
 
                         assign_net_lvalue(
-                            gl,
-                            arenas,
+                            ctx,
+                            mctx,
                             scope,
-                            diagnostics,
                             &mut bb_builder,
                             *output_terminal,
                             value,
                             VType::UnsignedNet(output_size),
                         )?;
 
-                        bb_builder.watch_to(gl, ins.items, bb_key);
+                        bb_builder.watch_to(mctx.gl(), ins.items, bb_key);
                     }
                 }
             }
@@ -233,8 +207,8 @@ pub fn lower<'a>(
                 instances,
             } = &*id;
 
-            let Some(udp) = scope.udps.get(&identifier.item.0) else {
-                diagnostics.udp_not_found(arenas, *identifier);
+            let Some(udp) = ctx.udps.get(&identifier.item.0) else {
+                mctx.diagnostics.udp_not_found(&ctx.arenas, *identifier);
                 return Err(());
             };
 
@@ -246,10 +220,9 @@ pub fn lower<'a>(
                 } = &*instance;
 
                 lower_udp(
-                    gl,
-                    arenas,
+                    ctx,
+                    mctx,
                     scope,
-                    diagnostics,
                     *udp,
                     *output_terminal,
                     *input_terminals,
@@ -268,8 +241,7 @@ pub fn lower<'a>(
                 } = &*instance;
 
                 let instance_sid =
-                    resolve_symbol_id(scope.key, scope.table, name_of_module_instance.item.0)
-                        .unwrap();
+                    resolve_symbol_id(scope, &ctx.table, name_of_module_instance.item.0).unwrap();
 
                 match &**list_of_port_connections {
                     ListOfPortConnections::Ordered(ports) => {
@@ -278,9 +250,9 @@ pub fn lower<'a>(
                         // lengths. We should always warn here, but allow less ports.
                         //
                         // https://steveicarus.github.io/iverilog/developer/guide/misc/ieee1364-notes.html.
-                        if unwrap_get_module(scope.table, instance_sid).ports.len() != ports.len() {
-                            diagnostics.not_yet_implemented(
-                                arenas.get_range_span(*ports),
+                        if unwrap_get_module(&ctx.table, instance_sid).ports.len() != ports.len() {
+                            mctx.diagnostics.not_yet_implemented(
+                                ctx.arenas.get_range_span(*ports),
                                 "unequal number of ports",
                             );
                             return Err(());
@@ -288,8 +260,8 @@ pub fn lower<'a>(
 
                         for (pi, l_p) in ports.iter().enumerate() {
                             let (net, connection) =
-                                unwrap_get_module(scope.table, instance_sid).ports[pi];
-                            let VSymbol::Net(n) = &scope.table[net].content else {
+                                unwrap_get_module(&ctx.table, instance_sid).ports[pi];
+                            let VSymbol::Net(n) = &ctx.table[net].content else {
                                 unreachable!();
                             };
                             let ty = n.ty;
@@ -298,25 +270,16 @@ pub fn lower<'a>(
                                 ConnectionDirection::In | ConnectionDirection::Both
                             );
                             if is_input {
-                                let alias =
-                                    lower_to_signal(gl, arenas, scope, diagnostics, l_p, ty)?;
-                                // @TODO: Just never allocate this signal.
-                                let old_signal = std::mem::replace(
-                                    &mut unwrap_get_net_mut(scope.table, net).signal,
-                                    alias.signal,
-                                );
-                                assert!(alias.range.is_none());
-                                scope.signal_aliases.insert(old_signal, alias);
-                                gl.signals.remove(old_signal);
+                                assign_input_port(ctx, mctx, scope, l_p, net)?;
                             } else {
-                                assign_port_output(gl, arenas, scope, diagnostics, l_p, net, ty)?;
+                                assign_port_output(ctx, mctx, scope, l_p, net, ty)?;
                             }
                         }
                     }
                     ListOfPortConnections::Named(ports) => {
                         let mut error = false;
                         let mut signals_assigned =
-                            vec![false; unwrap_get_module(scope.table, instance_sid).ports.len()];
+                            vec![false; unwrap_get_module(&ctx.table, instance_sid).ports.len()];
                         for p in ports.iter() {
                             let named_port_connection = &*p;
                             let NamedPortConnection {
@@ -324,20 +287,20 @@ pub fn lower<'a>(
                                 expression,
                             } = *named_port_connection;
 
-                            let port = scope
+                            let port = ctx
                                 .table
                                 .resolve(instance_sid, ast_port_identifier.item.0)
                                 .and_then(|symid| {
-                                    let VSymbol::Net(n) = &scope.table[symid].content else {
+                                    let VSymbol::Net(n) = &ctx.table[symid].content else {
                                         return None;
                                     };
                                     n.port_idx.map(|i| (i, &n.ty))
                                 });
 
                             let Some((port_idx, port_ty)) = port else {
-                                diagnostics.port_not_found(
-                                    arenas,
-                                    unwrap_get_module(scope.table, instance_sid),
+                                mctx.diagnostics.port_not_found(
+                                    &ctx.arenas,
+                                    unwrap_get_module(&ctx.table, instance_sid),
                                     ast_port_identifier,
                                 );
                                 error = true;
@@ -345,54 +308,24 @@ pub fn lower<'a>(
                             };
 
                             let (net, connection) =
-                                unwrap_get_module(scope.table, instance_sid).ports[port_idx];
+                                unwrap_get_module(&ctx.table, instance_sid).ports[port_idx];
 
                             let is_input = matches!(
                                 connection,
                                 ConnectionDirection::In | ConnectionDirection::Both
                             );
 
-                            match expression {
-                                None => {
-                                    if is_input {
-                                        let size = port_ty.force_net_width();
-                                        gl.signals[unwrap_get_net(scope.table, net).signal]
-                                            .initialize = Some(Bits::new_zeroed(size));
-                                    }
+                            if let Some(e) = expression {
+                                if is_input {
+                                    assign_input_port(ctx, mctx, scope, e, net)?;
+                                } else {
+                                    assign_port_output(ctx, mctx, scope, e, net, *port_ty)?;
                                 }
-                                Some(e) if is_input => {
-                                    let signal = lower_to_signal(
-                                        gl,
-                                        arenas,
-                                        scope,
-                                        diagnostics,
-                                        e,
-                                        *port_ty,
-                                    )?;
-                                    // @TODO: Just never allocate this signal.
-                                    let old_signal = std::mem::replace(
-                                        &mut unwrap_get_net_mut(scope.table, net).signal,
-                                        signal.signal,
-                                    );
-                                    assert!(signal.range.is_none());
-                                    scope.signal_aliases.insert(old_signal, signal);
-                                    gl.signals.remove(old_signal);
-                                }
-                                Some(e) => {
-                                    assign_port_output(
-                                        gl,
-                                        arenas,
-                                        scope,
-                                        diagnostics,
-                                        e,
-                                        net,
-                                        *port_ty,
-                                    )?;
-                                }
-                            };
+                            }
 
                             if std::mem::replace(&mut signals_assigned[port_idx], true) {
-                                diagnostics.duplicate_definition(arenas, ast_port_identifier);
+                                mctx.diagnostics
+                                    .duplicate_definition(&ctx.arenas, ast_port_identifier);
                                 error = true;
                                 continue;
                             }
@@ -407,30 +340,28 @@ pub fn lower<'a>(
         }
         ModuleOrGenerateItemContent::InitialConstruct(id) => {
             let statement = id.0;
-            let bb_builder = new_process(gl, "initial".into(), arenas.get_span(id));
+            let bb_builder = new_process(mctx.gl(), "initial".into(), ctx.arenas.get_span(id));
             let bb_builder = statements_to_process(
-                gl,
-                arenas,
+                ctx,
+                mctx,
                 scope,
-                diagnostics,
                 bb_builder,
                 AstIdRange::single(statement),
             )?;
-            bb_builder.halt(gl);
+            bb_builder.halt(mctx.gl());
         }
         ModuleOrGenerateItemContent::AlwaysConstruct(id) => {
             let statement = id.0;
-            let bb_builder = new_process(gl, "always".into(), arenas.get_span(id));
+            let bb_builder = new_process(mctx.gl(), "always".into(), ctx.arenas.get_span(id));
             let bb_key = bb_builder.key();
             let bb_builder = statements_to_process(
-                gl,
-                arenas,
+                ctx,
+                mctx,
                 scope,
-                diagnostics,
                 bb_builder,
                 AstIdRange::single(statement),
             )?;
-            bb_builder.jump_to(gl, bb_key);
+            bb_builder.jump_to(mctx.gl(), bb_key);
         }
 
         // Handled by a combination of elaboration + module level elaboration.
@@ -445,15 +376,16 @@ pub fn lower<'a>(
 pub fn dims_to_array<'a>(
     gl: &GlobalContext,
     arenas: &'a AstArenas,
-    scope: EvalScope<'a>,
+    table: &VSymbolTable,
+    scope: SymbolId,
     diagnostics: &mut Diagnostics,
     dimensions: AstIdRange<'a, Dimension<'a>>,
 ) -> Result<Vec<u32>, ()> {
     let mut dims = Vec::with_capacity(dimensions.len());
     for dim in dimensions.iter().rev() {
         let Dimension { lhs, rhs } = &*dim;
-        let lhs = eval_constant_expr(gl, arenas, scope, diagnostics, *lhs);
-        let rhs = eval_constant_expr(gl, arenas, scope, diagnostics, *rhs);
+        let lhs = eval_constant_expr(gl, arenas, table, scope, diagnostics, *lhs);
+        let rhs = eval_constant_expr(gl, arenas, table, scope, diagnostics, *rhs);
 
         let lhs = lhs?.into_bits().as_i64().unwrap();
         let rhs = rhs?.into_bits().as_i64().unwrap();
@@ -464,22 +396,21 @@ pub fn dims_to_array<'a>(
 }
 
 pub fn lower_opt_generate_block<'a>(
-    gl: &mut GlobalContext,
-    arenas: &'a AstArenas,
-    scope: &mut Scope<'a>,
-    diagnostics: &mut Diagnostics,
+    ctx: &LowerContext<'a>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
     opt_generate_block: AstId<'a, Option<GenerateBlock<'a>>>,
 ) -> Result<(), ()> {
     match &*opt_generate_block {
         None => Ok(()),
         Some(GenerateBlock::BeginEnd(_, module_or_generate_items)) => {
             for m in module_or_generate_items.iter() {
-                lower(gl, arenas, scope, m, diagnostics)?;
+                lower(ctx, mctx, scope, m)?;
             }
             Ok(())
         }
         Some(GenerateBlock::ModuleOrGenerateItem(module_or_generate_item)) => {
-            lower(gl, arenas, scope, *module_or_generate_item, diagnostics)
+            lower(ctx, mctx, scope, *module_or_generate_item)
         }
     }
 }
@@ -487,14 +418,15 @@ pub fn lower_opt_generate_block<'a>(
 pub fn lower_variable_type<'a>(
     gl: &GlobalContext,
     arenas: &'a AstArenas,
-    scope: &Scope<'a>,
+    table: &VSymbolTable,
+    scope: SymbolId,
     diagnostics: &mut Diagnostics,
     variable_type: AstId<'a, VariableType<'a>>,
     ty: VType,
 ) -> Result<(Vec<u32>, VectorSize, Option<Bits>), ()> {
     match variable_type.variant {
         VariableTypeVariant::Dimensions(dimensions) => {
-            let dims = dims_to_array(gl, arenas, scope.eval(), diagnostics, dimensions)?;
+            let dims = dims_to_array(gl, arenas, table, scope, diagnostics, dimensions)?;
             let mut size = ty.force_net_width().get();
             for dim in &dims {
                 size = size.checked_mul(*dim).ok_or_else(|| {
@@ -510,7 +442,7 @@ pub fn lower_variable_type<'a>(
             Ok((dims, size, None))
         }
         VariableTypeVariant::ConstantExpr(expr) => {
-            let value = eval_constant_expr(gl, arenas, scope.eval(), diagnostics, expr)?;
+            let value = eval_constant_expr(gl, arenas, table, scope, diagnostics, expr)?;
             let value = value.truncate_or_extend(ty.force_net_width());
             Ok((Vec::new(), ty.force_net_width(), Some(value.into_bits())))
         }

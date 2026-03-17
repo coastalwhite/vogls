@@ -1,18 +1,17 @@
+use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::dyn_format_string::{Base, DynFormatArgument, DynFormatString, Padding};
-use vogls_ir::{BasicBlockBuilder, GlobalContext, IntrinsicOp, VariableKey};
+use vogls_ir::{BasicBlockBuilder, IntrinsicOp, VariableKey};
 
 use crate::ast::AstId;
 use crate::ast::statement::SystemTaskEnable;
-use crate::lower::Scope;
+use crate::lower::expression;
 use crate::lower::expression::lower_expr;
-use crate::lower::{Diagnostics, expression};
-use crate::parser::AstArenas;
+use crate::lower::{LowerContext, MutLowerContext};
 
 pub fn lower_system_task_enable<'a>(
-    gl: &mut GlobalContext,
-    arenas: &'a AstArenas,
-    scope: &mut Scope<'a>,
-    diagnostics: &mut Diagnostics,
+    ctx: &LowerContext<'a>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
     mut builder: BasicBlockBuilder,
     system_task_enable: AstId<'a, SystemTaskEnable<'a>>,
 ) -> Result<BasicBlockBuilder, ()> {
@@ -20,25 +19,18 @@ pub fn lower_system_task_enable<'a>(
         system_task_identifier,
         expressions,
     } = &*system_task_enable;
-    let ident = &arenas.ident_table[system_task_identifier.item.0];
+    let ident = &ctx.arenas.ident_table[system_task_identifier.item.0];
 
     match ident {
         "display" => {
             let (mut format_string_content, format_string_arguments, format_string_args) =
-                lower_write_arguments(
-                    gl,
-                    arenas,
-                    scope,
-                    system_task_enable,
-                    &mut builder,
-                    diagnostics,
-                )?;
+                lower_write_arguments(ctx, mctx, scope, system_task_enable, &mut builder)?;
             use std::fmt::Write;
             writeln!(&mut format_string_content).unwrap();
             let format_str =
                 DynFormatString::new(format_string_content.into(), format_string_arguments.into());
             builder.intrinsic(
-                gl,
+                mctx.gl(),
                 IntrinsicOp::Display(Box::new(format_str)),
                 format_string_args.into(),
             );
@@ -46,46 +38,45 @@ pub fn lower_system_task_enable<'a>(
         "write" => {
             let (format_string_content, format_string_arguments, format_string_args) =
                 lower_write_arguments(
-                    gl,
-                    arenas,
+                    ctx,
+                    mctx,
                     scope,
                     system_task_enable,
                     &mut builder,
-                    diagnostics,
                 )?;
             let format_str =
                 DynFormatString::new(format_string_content.into(), format_string_arguments.into());
             builder.intrinsic(
-                gl,
+                mctx.gl(),
                 IntrinsicOp::Display(Box::new(format_str)),
                 format_string_args.into(),
             );
         }
         "vogls_assert_eq" | "vogls_assert_ne" => {
             if expressions.len() != 2 {
-                diagnostics.not_yet_implemented(
-                    arenas.get_span(system_task_enable),
+                mctx.diagnostics.not_yet_implemented(
+                    ctx.arenas.get_span(system_task_enable),
                     "assertions requires two arguments",
                 );
                 return Err(());
             }
 
             let line_number =
-                scope.get_line_number(arenas.get_item_span(*system_task_identifier).start);
+                ctx.get_line_number(ctx.arenas.get_item_span(*system_task_identifier).start);
 
             let lhs = expressions.get(0);
             let rhs = expressions.get(1);
 
-            let (lhs, lhs_ty) = lower_expr(gl, arenas, scope, diagnostics, &mut builder, lhs)?;
-            let (rhs, rhs_ty) = lower_expr(gl, arenas, scope, diagnostics, &mut builder, rhs)?;
+            let (lhs, lhs_ty) = lower_expr(ctx, mctx, scope, &mut builder, lhs)?;
+            let (rhs, rhs_ty) = lower_expr(ctx, mctx, scope, &mut builder, rhs)?;
 
             let (lhs, _, rhs, _) =
-                expression::coerce_bin_arithmetic(gl, &mut builder, lhs, lhs_ty, rhs, rhs_ty);
+                expression::coerce_bin_arithmetic(mctx.gl(), &mut builder, lhs, lhs_ty, rhs, rhs_ty);
             static FAILED_STR: &str = "Assertion failed on line .  != \n";
             let (condition, content) = if ident == "vogls_assert_eq" {
-                (builder.case_equals(gl, lhs, rhs), FAILED_STR)
+                (builder.case_equals(mctx.gl(), lhs, rhs), FAILED_STR)
             } else {
-                (builder.not_case_equals(gl, lhs, rhs), FAILED_STR)
+                (builder.not_case_equals(mctx.gl(), lhs, rhs), FAILED_STR)
             };
             let format_str = DynFormatString::new(
                 content.into(),
@@ -104,35 +95,35 @@ pub fn lower_system_task_enable<'a>(
                 .into(),
             );
 
-            let line = builder.constant_u32(gl, line_number as u32);
+            let line = builder.constant_u32(mctx.gl(), line_number as u32);
             builder.intrinsic(
-                gl,
+                mctx.gl(),
                 IntrinsicOp::Assert(Box::new(format_str)),
                 [condition, line, lhs, rhs].into(),
             );
         }
-        "finish" => _ = builder.intrinsic(gl, IntrinsicOp::Finish, Default::default()),
+        "finish" => _ = builder.intrinsic(mctx.gl(), IntrinsicOp::Finish, Default::default()),
 
         "dumpfile" => {
             assert!(expressions.len() <= 1);
             let path = match expressions.first().and_then(|e| e.into_str_literal()) {
                 None => "dump.vcd".to_string(),
                 Some(str_literal) => {
-                    arenas.text[str_literal.0.start..str_literal.0.end].to_string()
+                    ctx.arenas.text[str_literal.0.start..str_literal.0.end].to_string()
                 }
             };
-            builder.intrinsic(gl, IntrinsicOp::VcdOpenFile(path), [].into());
+            builder.intrinsic(mctx.gl(), IntrinsicOp::VcdOpenFile(path), [].into());
         }
         "dumpvars" => {
             if !expressions.is_empty() {
-                diagnostics.warnings.push((
-                    arenas.get_span(system_task_enable),
+                mctx.diagnostics.warnings.push((
+                    ctx.arenas.get_span(system_task_enable),
                     "not yet supported to select subset of hierarchy".to_string(),
                 ));
             }
             builder.intrinsic(
-                gl,
-                IntrinsicOp::VcdAppendModule(scope.vcd_scope(&arenas.ident_table)),
+                mctx.gl(),
+                IntrinsicOp::VcdAppendModule(ctx.vcd_scope(scope, &ctx.arenas.ident_table)),
                 [].into(),
             );
         }
@@ -142,13 +133,13 @@ pub fn lower_system_task_enable<'a>(
             //     arenas.get_span(system_task_enable),
             //     "stubs at the moment",
             // );
-            builder.intrinsic(gl, IntrinsicOp::Finish, [].into());
+            builder.intrinsic(mctx.gl(), IntrinsicOp::Finish, [].into());
         }
 
         // @Incomplete: Many variants here.
         _ => {
-            diagnostics.not_yet_implemented(
-                arenas.get_span(system_task_enable),
+            mctx.diagnostics.not_yet_implemented(
+                ctx.arenas.get_span(system_task_enable),
                 "system task not yet implemented",
             );
             return Err(());
@@ -158,12 +149,11 @@ pub fn lower_system_task_enable<'a>(
 }
 
 pub fn lower_write_arguments<'a>(
-    gl: &mut GlobalContext,
-    arenas: &'a AstArenas,
-    scope: &mut Scope<'a>,
+    ctx: &LowerContext<'a>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
     system_task_enable: AstId<'a, SystemTaskEnable<'a>>,
     builder: &mut BasicBlockBuilder,
-    diagnostics: &mut Diagnostics,
 ) -> Result<(String, Vec<(usize, DynFormatArgument)>, Vec<VariableKey>), ()> {
     let expressions = system_task_enable.expressions;
     let mut format_string_content = String::new();
@@ -172,7 +162,7 @@ pub fn lower_write_arguments<'a>(
     let mut required_arguments_left = 0;
     for expr in expressions.iter() {
         if let Some(str_literal) = expr.into_str_literal() {
-            let str_literal = &arenas.text[str_literal.0.start..str_literal.0.end];
+            let str_literal = &ctx.arenas.text[str_literal.0.start..str_literal.0.end];
 
             let mut at = 0;
             while let Some(next) = str_literal[at..].find('%') {
@@ -241,8 +231,8 @@ pub fn lower_write_arguments<'a>(
                     b'b' | b'B' => Base::Binary,
                     b'c' | b'C' | b'l' | b'L' | b'v' | b'V' | b'm' | b'M' | b's' | b'S' | b't'
                     | b'T' | b'u' | b'U' | b'z' | b'Z' => {
-                        diagnostics.not_yet_implemented(
-                            arenas.get_span(expr),
+                        mctx.diagnostics.not_yet_implemented(
+                            ctx.arenas.get_span(expr),
                             "format specifier not yet supported",
                         );
                         return Err(());
@@ -261,7 +251,7 @@ pub fn lower_write_arguments<'a>(
             }
             format_string_content.push_str(&str_literal[at..]);
         } else {
-            let (var, _) = lower_expr(gl, arenas, scope, diagnostics, builder, expr)?;
+            let (var, _) = lower_expr(ctx, mctx, scope, builder, expr)?;
             if required_arguments_left == 0 {
                 format_string_arguments.push((
                     format_string_content.len(),
@@ -278,8 +268,8 @@ pub fn lower_write_arguments<'a>(
         }
     }
     if required_arguments_left > 0 {
-        diagnostics.not_yet_implemented(
-            arenas.get_span(system_task_enable),
+        mctx.diagnostics.not_yet_implemented(
+            ctx.arenas.get_span(system_task_enable),
             "missing or extra arguments",
         );
         return Err(());

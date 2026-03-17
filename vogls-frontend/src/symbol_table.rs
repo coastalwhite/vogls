@@ -58,6 +58,10 @@ impl<T> IndexMut<SymbolId> for SymbolTable<T> {
 }
 
 impl<T> SymbolTable<T> {
+    pub fn is_empty(&self) -> bool {
+        self.symbols.is_empty()
+    }
+
     fn insert_opt_parent(
         &mut self,
         name: IdentId,

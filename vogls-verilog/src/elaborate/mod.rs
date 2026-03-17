@@ -5,17 +5,17 @@ use std::sync::Arc;
 use vogls_frontend::ident_table::IdentId;
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{
-    BasicBlockKey, ConnectionDirection, GlobalContext, ProcessKey, SCALAR_VSIZE, Signal, SignalKey,
-    VectorSize,
+    BasicBlockBuilder, BasicBlockKey, Bits, ConnectionDirection, GlobalContext, INTEGER_VSIZE,
+    ProcessKey, SCALAR_VSIZE, Signal, SignalKey, VariableKey, VectorSize,
 };
-use vogls_utils::VgHashMap;
+use vogls_utils::{new_table_key, Table, VgHashMap};
 
 use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::module::{
     Dimension, FunctionDeclaration, ModuleOrGenerateItem, PortDeclaration, Range, TaskDeclaration,
 };
 use crate::ast::{AstId, AstIdRange, AstItem, Identifier};
-use crate::lower::{Diagnostics, EvalScope, VType, VValue, eval_constant_expr};
+use crate::lower::{Diagnostics, VType, VValue, eval_constant_expr};
 use crate::parser::AstArenas;
 
 pub mod function;
@@ -23,11 +23,15 @@ pub mod next;
 
 pub type VSymbolTable = vogls_frontend::symbol_table::SymbolTable<VSymbol>;
 
+new_table_key! { pub struct AstGenBlockKey; }
+new_table_key! { pub struct AstFnDeclKey; }
+new_table_key! { pub struct AstTaskDeclKey; }
+
 #[derive(Default)]
 pub struct SymbolAstRefs<'a> {
-    pub gen_blocks: Vec<AstIdRange<'a, ModuleOrGenerateItem<'a>>>,
-    pub fns: Vec<AstId<'a, FunctionDeclaration<'a>>>,
-    pub tasks: Vec<AstId<'a, TaskDeclaration<'a>>>,
+    pub gen_blocks: Table<AstGenBlockKey, AstIdRange<'a, ModuleOrGenerateItem<'a>>>,
+    pub fns: Table<AstFnDeclKey, AstId<'a, FunctionDeclaration<'a>>>,
+    pub tasks: Table<AstTaskDeclKey, AstId<'a, TaskDeclaration<'a>>>,
 }
 
 pub enum VSymbol {
@@ -35,7 +39,7 @@ pub enum VSymbol {
     Parameter(VValue),
     Net(NetSymbol),
     NamedBlock,
-    GenerateBlock(usize),
+    GenerateBlock(AstGenBlockKey),
     GenVar,
     Task(TaskSymbol),
     Function(FunctionSymbol),
@@ -71,19 +75,103 @@ pub struct ModuleSymbol {
     pub contains_specify: bool,
 }
 
+pub struct Net {
+    width: VectorSize,
+    pub offset: Option<u32>,
+
+    specify: Option<SignalKey>,
+    ba: SignalKey,
+    pub nba: Option<(ProcessKey, SignalKey, SignalKey)>,
+}
+
+impl Net {
+    pub fn set_specify(&mut self, value: SignalKey) -> Option<SignalKey> {
+        self.specify.replace(value)
+    }
+
+    pub fn probe_signal(&self) -> SignalKey {
+        self.ba
+    }
+
+    pub fn blocking_drive_signal(&self) -> SignalKey {
+        self.specify.unwrap_or(self.ba)
+    }
+
+    pub fn non_blocking_drive_signal(&self) -> (SignalKey, SignalKey) {
+        let (_, value, mask) = self.nba.unwrap();
+        (value, mask)
+    }
+
+    pub fn probe(&self, gl: &mut GlobalContext, bbb: &mut BasicBlockBuilder) -> VariableKey {
+        let v = bbb.probe(gl, self.probe_signal());
+        match self.offset {
+            None => v,
+            Some(offset) => bbb.slice_constant(gl, v, offset, self.width),
+        }
+    }
+
+    pub fn drive_blocking(
+        &self,
+        gl: &mut GlobalContext,
+        bbb: &mut BasicBlockBuilder,
+        src: VariableKey,
+        partial: Option<(VariableKey, VectorSize)>,
+    ) {
+        let signal = self.blocking_drive_signal();
+        match (self.offset, partial) {
+            (None, _) => bbb.drive_opt_partial(gl, signal, src, partial),
+            (Some(offset), None) => {
+                bbb.drive_partial_constant(gl, signal, src, offset, self.width);
+            }
+            (Some(net_offset), Some((offset, length))) => {
+                let offset =
+                    bbb.plus_constant(gl, offset, Bits::from_u64(INTEGER_VSIZE, net_offset as u64));
+                bbb.drive_partial(gl, signal, src, offset, length);
+            }
+        }
+    }
+    pub fn drive_non_blocking(
+        &self,
+        gl: &mut GlobalContext,
+        bbb: &mut BasicBlockBuilder,
+        src: VariableKey,
+        partial: Option<(VariableKey, VectorSize)>,
+    ) {
+        let (mask, value) = self.non_blocking_drive_signal();
+        let size = gl.vars[src].size;
+        let mask_value = bbb.constant(gl, Bits::new_ones(size));
+        match (self.offset, partial) {
+            (None, _) => {
+                bbb.drive_opt_partial(gl, mask, mask_value, partial);
+                bbb.drive_opt_partial(gl, value, src, partial);
+            }
+            (Some(offset), None) => {
+                bbb.drive_partial_constant(gl, mask, mask_value, offset, self.width);
+                bbb.drive_partial_constant(gl, value, src, offset, self.width);
+            }
+            (Some(net_offset), Some((offset, length))) => {
+                let offset =
+                    bbb.plus_constant(gl, offset, Bits::from_u64(INTEGER_VSIZE, net_offset as u64));
+                bbb.drive_partial(gl, mask, mask_value, offset, length);
+                bbb.drive_partial(gl, value, src, offset, length);
+            }
+        }
+    }
+
+    pub fn width(&self) -> VectorSize {
+        self.width
+    }
+}
+
 pub struct NetSymbol {
     pub ty: VType,
     pub dims: Vec<u32>,
-
-    pub signal: vogls_ir::SignalKey,
-    pub specify_proxy: Option<SignalKey>,
-    pub nba: Option<(ProcessKey, SignalKey, SignalKey)>,
-
+    pub net: Net,
     pub port_idx: Option<usize>,
 }
 
 pub struct FunctionSymbol {
-    pub ast_id: usize,
+    pub ast_id: AstFnDeclKey,
     pub inputs: Vec<(SignalKey, VType)>,
     pub output: SignalKey,
     pub output_ty: VType,
@@ -91,7 +179,7 @@ pub struct FunctionSymbol {
 }
 
 pub struct TaskSymbol {
-    pub ast_id: usize,
+    pub ast_id: AstTaskDeclKey,
     pub io: Vec<(SignalKey, ConnectionDirection, VType)>,
     pub lowered: Option<LoweredTask>,
 }
@@ -131,7 +219,7 @@ pub fn port_declaration_to_info<'a>(
     id: AstId<'a, PortDeclaration<'a>>,
 
     parent: SymbolId,
-    table: &mut VSymbolTable,
+    table: &VSymbolTable,
     diagnostics: &mut Diagnostics,
 ) -> Result<(VType, ConnectionDirection, AstIdRange<'a, Identifier>), ()> {
     use ConnectionDirection as D;
@@ -153,25 +241,35 @@ pub fn port_declaration_to_info<'a>(
     Ok((ty, direction, identifiers))
 }
 
-fn new_signal(
+fn new_net(
     gl: &mut GlobalContext,
     arenas: &AstArenas,
     ty: &VType,
     dims: &[u32],
     name: AstItem<Identifier>,
-) -> SignalKey {
+    initialize: Option<VValue>,
+) -> Net {
     let mut size = ty.force_net_width();
     for dim in dims {
         size = size.checked_mul(NonZeroU32::new(*dim).unwrap()).unwrap();
     }
     let origin = arenas.get_item_span(name);
     let name = arenas.ident_table[name.item.0].to_string();
-    gl.signals.insert(Signal {
+    let signal = gl.signals.insert(Signal {
         name,
         size,
-        initialize: None,
+        initialize: initialize.map(|i| i.into_bits()),
         origin,
-    })
+    });
+
+    Net {
+        width: size,
+        offset: None,
+
+        specify: None,
+        ba: signal,
+        nba: None,
+    }
 }
 
 pub fn eval_constant_expr_elab<'a>(
@@ -182,13 +280,7 @@ pub fn eval_constant_expr_elab<'a>(
     diagnostics: &mut Diagnostics,
     expr: AstId<ConstantExpr>,
 ) -> Result<VValue, ()> {
-    eval_constant_expr(
-        gl,
-        arenas,
-        EvalScope { table, key: scope },
-        diagnostics,
-        expr,
-    )
+    eval_constant_expr(gl, arenas, table, scope, diagnostics, expr)
 }
 
 pub fn eval_constant_range<'a>(

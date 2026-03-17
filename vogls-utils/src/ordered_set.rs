@@ -34,6 +34,11 @@ impl<T> OrderedSet<T> {
             set: VgHashSet::default(),
         }
     }
+
+    pub fn clear(&mut self) {
+        self.items.clear();
+        self.set.clear();
+    }
 }
 
 impl<T: Eq + hash::Hash + Clone> OrderedSet<T> {

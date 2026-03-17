@@ -19,8 +19,10 @@ use vogls_utils::{IndexSet, VgHashMap};
 use vogls_verilog::arena::Arena;
 use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{Description, Module, ModuleItem, NonPortModuleItem};
-use vogls_verilog::elaborate::{VSymbol, VSymbolTable};
-use vogls_verilog::lower::{Diagnostics as LowerDiagnostics, Scope, lower_module_to_ir};
+use vogls_verilog::elaborate::{SymbolAstRefs, VSymbol, VSymbolTable};
+use vogls_verilog::lower::{
+    Diagnostics as LowerDiagnostics, LowerContext, MutLowerContext, lower_module_to_ir,
+};
 use vogls_verilog::parser::{
     AstArenas, Diagnostics as ParserDiagnostics, ParseContext, ParserScratches, TokenWalker,
     parse_file, report, report_error,
@@ -203,18 +205,27 @@ impl Design {
             ));
         };
 
-        let mut diagnostics = LowerDiagnostics::default();
+        let mut ctx = LowerContext {
+            table: VSymbolTable::default(),
+            table_ast_refs: SymbolAstRefs::default(),
+            udps: VgHashMap::default(),
+            arenas,
+            tokenized: &token_buffer,
+        };
+        let mut mctx = MutLowerContext {
+            gl,
+            diagnostics: LowerDiagnostics::default(),
+        };
         let result = vogls_verilog::elaborate::next::elaborate(
-            &mut gl,
-            &arenas,
-            &token_buffer,
+            &mut mctx.gl,
+            &mut ctx,
             *tl_module,
             &module_lut,
-            &mut diagnostics,
+            &mut mctx.diagnostics,
         );
 
-        if !diagnostics.warnings.is_empty() {
-            for (location, warning) in &diagnostics.warnings {
+        if !mctx.diagnostics.warnings.is_empty() {
+            for (location, warning) in &mctx.diagnostics.warnings {
                 writeln!(ectx.stderr, "[WARN]: {warning}")?;
                 let mut out = String::new();
                 report(&token_buffer, *location, &mut out)?;
@@ -222,8 +233,8 @@ impl Design {
             }
         }
 
-        let Ok((mut elab_table, table_ast_refs)) = result else {
-            for (location, err, context) in &diagnostics.errors {
+        if result.is_err() {
+            for (location, err, context) in &mctx.diagnostics.errors {
                 let mut out = String::new();
                 report_error(&token_buffer, err.clone(), *location, &mut out)?;
                 write!(ectx.stderr, "{out}")?;
@@ -239,11 +250,11 @@ impl Design {
         };
 
         if ectx.emit_hierarchy {
-            for root in elab_table.roots() {
+            for root in ctx.table.roots() {
                 writeln!(
                     ectx.stdout,
                     "{}",
-                    elab_table.display(*root, &arenas.ident_table, |s, f| {
+                    ctx.table.display(*root, &ctx.arenas.ident_table, |s, f| {
                         match s {
                             VSymbol::Module(_) => f.write_str("mod"),
                             VSymbol::Parameter(v) => {
@@ -288,65 +299,55 @@ impl Design {
         }
 
         let mut error = false;
-        let mut signal_aliases = VgHashMap::default();
         let mut outs_lut = VgHashMap::default();
         let mut outs = Vec::new();
 
-        let dummy_key = elab_table.roots()[0];
-        let mut scope = Scope {
-            table: &mut elab_table,
-            key: dummy_key,
-            udps: &udps,
-            table_ast_refs: &table_ast_refs,
-            signal_aliases: &mut signal_aliases,
-            tokenized: &token_buffer,
-        };
-
         // @TODO: Iterate over the modules instead.
-        for key in scope.table.symbol_id_iter() {
-            scope.key = key;
-            match &scope.table[key].content {
-                VSymbol::Module(i) if i.contains_specify => {
+        for key in ctx.table.symbol_id_iter() {
+            match &ctx.table[key].content {
+                VSymbol::Module(i) => {
                     let module = module_lut[&i.module];
-                    for item in module.module_items.iter() {
-                        let ModuleItem::NonPortModuleItem(id) = &*item else {
-                            continue;
-                        };
-                        let NonPortModuleItem::SpecifyBlock(specify_block) = **id else {
-                            continue;
-                        };
+                    if i.contains_specify {
+                        for item in module.module_items.iter() {
+                            let ModuleItem::NonPortModuleItem(id) = &*item else {
+                                continue;
+                            };
+                            let NonPortModuleItem::SpecifyBlock(specify_block) = **id else {
+                                continue;
+                            };
 
-                        error |= vogls_verilog::lower::specify::lower_specify(
-                            &mut gl,
-                            &arenas,
-                            &mut scope,
-                            specify_block.items,
-                            &mut outs_lut,
-                            &mut outs,
-                            &mut diagnostics,
-                        )
-                        .is_err();
+                            error |= vogls_verilog::lower::specify::lower_specify(
+                                &mut ctx,
+                                &mut mctx,
+                                key,
+                                specify_block.items,
+                                &mut outs_lut,
+                                &mut outs,
+                            )
+                            .is_err();
+                        }
                     }
+
+                    error |= vogls_verilog::lower::instantiate_nba_signals(
+                        &mut mctx.gl,
+                        &mut ctx,
+                        key,
+                        module,
+                        &mut mctx.diagnostics,
+                    )
+                    .is_err();
                 }
                 VSymbol::Function(i) => {
-                    let fn_decl = table_ast_refs.fns[i.ast_id];
+                    let fn_decl = ctx.table_ast_refs.fns[i.ast_id];
                     error |= vogls_verilog::lower::module_or_generate_item::function::lower(
-                        &mut gl,
-                        &arenas,
-                        &mut diagnostics,
-                        &mut scope,
-                        fn_decl,
+                        &mut ctx, &mut mctx, key, fn_decl,
                     )
                     .is_err();
                 }
                 VSymbol::Task(i) => {
-                    let task_decl = table_ast_refs.tasks[i.ast_id];
+                    let task_decl = ctx.table_ast_refs.tasks[i.ast_id];
                     error |= vogls_verilog::lower::module_or_generate_item::function::lower_task(
-                        &mut gl,
-                        &arenas,
-                        &mut diagnostics,
-                        &mut scope,
-                        task_decl,
+                        &mut ctx, &mut mctx, key, task_decl,
                     )
                     .is_err();
                 }
@@ -355,7 +356,7 @@ impl Design {
         }
 
         if error {
-            for (location, err, context) in &diagnostics.errors {
+            for (location, err, context) in &mctx.diagnostics.errors {
                 let mut out = String::new();
                 report_error(&token_buffer, err.clone(), *location, &mut out)?;
                 write!(ectx.stderr, "{out}")?;
@@ -371,32 +372,18 @@ impl Design {
         }
 
         // Walk the modules in depth-first order and lower to IR.
-        let mut diagnostics = LowerDiagnostics::default();
         // @TODO: Iterate over the modules instead.
-        for key in elab_table.symbol_id_iter() {
-            let VSymbol::Module(m) = &elab_table[key].content else {
+        for key in ctx.table.symbol_id_iter() {
+            let VSymbol::Module(m) = &ctx.table[key].content else {
                 continue;
             };
             let module_id = module_lut[&m.module];
-            let module_key = lower_module_to_ir(
-                &mut gl,
-                &arenas,
-                module_id,
-                &mut vogls_verilog::lower::Scope {
-                    table: &mut elab_table,
-                    key,
-                    udps: &udps,
-                    table_ast_refs: &table_ast_refs,
-                    signal_aliases: &mut signal_aliases,
-                    tokenized: &token_buffer,
-                },
-                &mut diagnostics,
-            );
+            let module_key = lower_module_to_ir(module_id, &ctx, &mut mctx, key);
             error |= module_key.is_err();
         }
 
-        if !diagnostics.warnings.is_empty() {
-            for (location, warning) in &diagnostics.warnings {
+        if !mctx.diagnostics.warnings.is_empty() {
+            for (location, warning) in &mctx.diagnostics.warnings {
                 writeln!(ectx.stderr, "[WARN]: {warning}")?;
                 let mut out = String::new();
                 report(&token_buffer, *location, &mut out)?;
@@ -405,7 +392,7 @@ impl Design {
         }
 
         if error {
-            for (location, err, context) in &diagnostics.errors {
+            for (location, err, context) in &mctx.diagnostics.errors {
                 let mut out = String::new();
                 report_error(&token_buffer, err.clone(), *location, &mut out)?;
                 write!(ectx.stderr, "{out}")?;
@@ -421,8 +408,8 @@ impl Design {
         }
 
         if ectx.emit_unoptimized_ir {
-            for process in gl.processes.values() {
-                writeln!(ectx.stdout, "{}", process.display(&gl))?;
+            for process in mctx.gl.processes.values() {
+                writeln!(ectx.stdout, "{}", process.display(&mctx.gl))?;
             }
         }
 
@@ -434,10 +421,10 @@ impl Design {
         let mut scratch_seen = HashSet::new();
         let mut scratch_removed = HashSet::new();
         let mut scratch_fan_in = SecondaryMap::new();
-        for process in gl.processes.values_mut() {
+        for process in mctx.gl.processes.values_mut() {
             if cfg!(debug_assertions) {
                 vogls_ir::optimize::get_fan_in(
-                    &mut gl.bbs,
+                    &mut mctx.gl.bbs,
                     process.entry,
                     &mut scratch_stack,
                     &mut scratch_seen,
@@ -447,21 +434,21 @@ impl Design {
 
             for _ in 0..ectx.opt_rounds {
                 vogls_ir::optimize::remove_needless_jumps(
-                    &mut gl.bbs,
+                    &mut mctx.gl.bbs,
                     process.entry,
                     &mut scratch_stack,
                     &mut scratch_seen,
                     &mut scratch_fan_in,
                 );
                 vogls_ir::optimize::remove_needles_branches(
-                    &mut gl.bbs,
+                    &mut mctx.gl.bbs,
                     process.entry,
                     &mut scratch_stack,
                     &mut scratch_seen,
                 );
                 vogls_ir::optimize::propagate_constants(
-                    &mut gl.bbs,
-                    &gl.vars,
+                    &mut mctx.gl.bbs,
+                    &mctx.gl.vars,
                     process.entry,
                     &mut scratch_stack,
                     &mut scratch_mfr,
@@ -472,8 +459,8 @@ impl Design {
                     &mut scratch_fan_in,
                 );
                 vogls_ir::optimize::deadcode_elimination(
-                    &mut gl.bbs,
-                    &mut gl.vars,
+                    &mut mctx.gl.bbs,
+                    &mut mctx.gl.vars,
                     process.entry,
                     &mut scratch_stack,
                     &mut scratch_seen,
@@ -483,7 +470,7 @@ impl Design {
 
             if cfg!(debug_assertions) {
                 vogls_ir::optimize::get_fan_in(
-                    &mut gl.bbs,
+                    &mut mctx.gl.bbs,
                     process.entry,
                     &mut scratch_stack,
                     &mut scratch_seen,
@@ -493,8 +480,8 @@ impl Design {
         }
 
         if ectx.emit_ir && !ectx.emit_vm {
-            for process in gl.processes.values() {
-                writeln!(ectx.stdout, "{}", process.display(&gl))?;
+            for process in mctx.gl.processes.values() {
+                writeln!(ectx.stdout, "{}", process.display(&mctx.gl))?;
             }
         }
 
@@ -534,7 +521,7 @@ impl Design {
 
         let mut heap_builder = HeapBuilder::new();
         let mut io_signals = VgHashMap::default();
-        for (key, signal) in &gl.signals {
+        for (key, signal) in &mctx.gl.signals {
             let Signal {
                 name,
                 size,
@@ -576,15 +563,15 @@ impl Design {
             (2, 2),
             (1, 1),
         ] {
-            for (i, signal) in gl.signals.values().enumerate() {
+            for (i, signal) in mctx.gl.signals.values().enumerate() {
                 let size = signal.size;
                 let mut num_bits = size.get();
-                if gl.logic_mode == LogicMode::FourValue {
+                if mctx.gl.logic_mode == LogicMode::FourValue {
                     num_bits = num_bits * 2;
                 }
 
                 if (min_bits..=max_bits).contains(&num_bits) {
-                    signals[i] = heap_builder.claim(gl.logic_mode, size);
+                    signals[i] = heap_builder.claim(mctx.gl.logic_mode, size);
                 }
             }
         }
@@ -594,19 +581,19 @@ impl Design {
             let mut out = Vec::new();
             let mut dyn_fmt_strs = IndexSet::new();
 
-            for signal in gl.signals.keys() {
+            for signal in mctx.gl.signals.keys() {
                 lower_signal_drive_header(&mut out, signal, &io_signals)?;
             }
 
             let lower_options = CLowerOptions {
                 itrace: ectx.itrace,
             };
-            for (i, process) in gl.processes.keys().enumerate() {
+            for (i, process) in mctx.gl.processes.keys().enumerate() {
                 vogls_codegen_c::lower_process(
                     &mut out,
                     process,
                     i,
-                    &gl,
+                    &mctx.gl,
                     &mut heap_builder,
                     &mut listener_builder,
                     &mut dyn_fmt_strs,
@@ -616,10 +603,10 @@ impl Design {
                 )?;
             }
 
-            for signal in gl.signals.keys() {
+            for signal in mctx.gl.signals.keys() {
                 lower_signal_drive_fn(
                     &mut out,
-                    &gl,
+                    &mctx.gl,
                     signal,
                     &listener_builder,
                     &io_signals,
@@ -627,7 +614,7 @@ impl Design {
                 )?;
             }
 
-            vogls_codegen_c::lower_startup_function(&mut out, &gl)?;
+            vogls_codegen_c::lower_startup_function(&mut out, &mctx.gl)?;
 
             let mut c_file = Vec::new();
 
@@ -662,7 +649,7 @@ impl Design {
             }
 
             let initial_state = CDesignState::new(
-                &gl,
+                &mctx.gl,
                 heap_builder.finish(),
                 listener_builder.top,
                 regions.num_additional_regions() as u8,
@@ -672,10 +659,18 @@ impl Design {
                 dyn_fmt_strs.take_keys(),
                 regions.num_additional_regions() as u8,
             );
+
+            let LowerContext {
+                table,
+                table_ast_refs: _,
+                udps: _,
+                tokenized: _,
+                arenas,
+            } = ctx;
             return Ok(Self {
-                gl,
+                gl: mctx.gl,
                 ident_table: arenas.ident_table,
-                elab_table,
+                elab_table: table,
                 backend: DesignBackend::Compiled { design },
                 rt_signal_map: io_signals,
                 signal_to_heap: signals,
@@ -683,18 +678,17 @@ impl Design {
             });
         }
 
-        for process in gl.processes.keys() {
+        for process in mctx.gl.processes.keys() {
             if ectx.emit_vm && ectx.emit_ir {
                 println!();
-                println!("{}", gl.processes[process].display(&gl));
+                println!("{}", mctx.gl.processes[process].display(&mctx.gl));
             }
             let vm_process = lower_process_to_vm(
                 process,
-                &gl,
+                &mctx.gl,
                 &mut heap_builder,
                 &signals,
                 &mut io_signals,
-                &signal_aliases,
             );
 
             if ectx.emit_vm {
@@ -708,7 +702,7 @@ impl Design {
                 println!(": {vm_process_key:?}");
             }
 
-            let vogls_ir::Process { name, origin, .. } = &gl.processes[process];
+            let vogls_ir::Process { name, origin, .. } = &mctx.gl.processes[process];
             if ectx.trace {
                 trace_processes.push(vogls_trace::Process {
                     name: Some(name.clone()),
@@ -723,7 +717,7 @@ impl Design {
         }
         let mut heap = heap_builder.finish();
 
-        for (key, signal) in &gl.signals {
+        for (key, signal) in &mctx.gl.signals {
             let Signal {
                 name,
                 size,
@@ -735,7 +729,7 @@ impl Design {
                 assert_eq!(initialize.size(), *size);
                 heap.store_bits(
                     signals[io_signals[&key].0 as usize],
-                    gl.logic_mode,
+                    mctx.gl.logic_mode,
                     initialize,
                 );
                 value = Some(initialize);
@@ -751,29 +745,28 @@ impl Design {
         }
 
         // @TODO: Remove clone
-        let mut simulation = Simulation::new(processes, signals.clone(), gl.logic_mode);
+        let mut simulation = Simulation::new(processes, signals.clone(), mctx.gl.logic_mode);
         simulation.itrace = ectx.itrace;
         let mut initial_state = simulation.new_state(regions, listeners, watches, heap);
 
         if let Some(vcd_path) = &ectx.vcd {
-            let tlm = elab_table.roots()[0];
-            let scope = Scope {
-                table: &mut elab_table,
-                key: tlm,
-                udps: &udps,
-                table_ast_refs: &table_ast_refs,
-                signal_aliases: &mut signal_aliases,
-                tokenized: &token_buffer,
-            };
-            let scope = scope.vcd_scope(&arenas.ident_table);
-            let scope = vogls_sim::VcdScope::lower(&scope, &io_signals, &signal_aliases);
+            let tlm = ctx.table.roots()[0];
+            let scope = ctx.vcd_scope(tlm, &ctx.arenas.ident_table);
+            let scope = vogls_sim::VcdScope::lower(&scope, &io_signals);
             initial_state.start_vcd(vcd_path, scope);
         }
 
+        let LowerContext {
+            table,
+            table_ast_refs: _,
+            udps: _,
+            tokenized: _,
+            arenas,
+        } = ctx;
         Ok(Self {
-            gl,
+            gl: mctx.gl,
             ident_table: arenas.ident_table,
-            elab_table,
+            elab_table: table,
             backend: DesignBackend::Interpretted { simulation },
             rt_signal_map: io_signals,
             signal_to_heap: signals,
