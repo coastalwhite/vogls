@@ -8,8 +8,6 @@ use crate::{
 #[must_use]
 pub struct BasicBlockBuilder {
     key: BasicBlockKey,
-    process: ProcessKey,
-
     pub instrs: Vec<Instruction>,
 }
 
@@ -17,7 +15,7 @@ pub fn new_process(
     gl: &'_ mut GlobalContext,
     name: String,
     origin: TokenRange,
-) -> BasicBlockBuilder {
+) -> (ProcessKey, BasicBlockBuilder) {
     let bb_key = gl.bbs.insert(BasicBlock {
         instrs: Vec::new(),
         terminator: BasicBlockTerminator::Halt,
@@ -28,30 +26,21 @@ pub fn new_process(
         origin,
         lazy: false,
     });
-    BasicBlockBuilder {
-        key: bb_key,
-        process: process_key,
-        instrs: Vec::new(),
-    }
+    (
+        process_key,
+        BasicBlockBuilder {
+            key: bb_key,
+            instrs: Vec::new(),
+        },
+    )
 }
-pub fn new_anonymous_builder(
-    gl: &'_ mut GlobalContext,
-    name: String,
-    origin: TokenRange,
-) -> BasicBlockBuilder {
+pub fn new_anonymous_builder(gl: &'_ mut GlobalContext) -> BasicBlockBuilder {
     let bb_key = gl.bbs.insert(BasicBlock {
         instrs: Vec::new(),
         terminator: BasicBlockTerminator::Halt,
     });
-    let process_key = gl.processes.insert(Process {
-        name,
-        entry: bb_key,
-        origin,
-        lazy: false,
-    });
     BasicBlockBuilder {
         key: bb_key,
-        process: process_key,
         instrs: Vec::new(),
     }
 }
@@ -88,9 +77,6 @@ impl BasicBlockBuilder {
         let next_key = self.next_bb(gl);
         BasicBlockBuilder {
             key: next_key,
-
-            process: self.process,
-
             instrs: Vec::new(),
         }
     }
@@ -648,6 +634,28 @@ impl BasicBlockBuilder {
         dst
     }
 
+    pub fn probe_slice(
+        &mut self,
+        gl: &mut GlobalContext,
+        signal: SignalKey,
+        offset: VariableKey,
+        width: VectorSize,
+    ) -> VariableKey {
+        let src = self.probe(gl, signal);
+        self.slice(gl, src, offset, width)
+    }
+
+    pub fn probe_slice_constant(
+        &mut self,
+        gl: &mut GlobalContext,
+        signal: SignalKey,
+        offset: u32,
+        width: VectorSize,
+    ) -> VariableKey {
+        let src = self.probe(gl, signal);
+        self.slice_constant(gl, src, offset, width)
+    }
+
     pub fn jump(&mut self, gl: &mut GlobalContext) -> BasicBlockBuilder {
         let next_key = self.next_bb(gl);
         let slf = gl.bbs.get_mut(self.key).unwrap();
@@ -655,9 +663,6 @@ impl BasicBlockBuilder {
         slf.terminator = BasicBlockTerminator::Jump(next_key);
         BasicBlockBuilder {
             key: next_key,
-
-            process: self.process,
-
             instrs: Vec::new(),
         }
     }
@@ -674,7 +679,6 @@ impl BasicBlockBuilder {
         slf.terminator = BasicBlockTerminator::Halt;
         BasicBlockBuilder {
             key: next_key,
-            process: self.process,
             instrs: Vec::new(),
         }
     }
@@ -691,11 +695,23 @@ impl BasicBlockBuilder {
         let next_bb = gl.bbs.get_mut(bb).unwrap();
         BasicBlockBuilder {
             key: bb,
-
-            process: self.process,
-
             instrs: std::mem::take(&mut next_bb.instrs),
         }
+    }
+
+    pub fn continue_from(instrs: Vec<Instruction>, bb: BasicBlockKey) -> BasicBlockBuilder {
+        BasicBlockBuilder {
+            key: bb,
+            instrs: instrs,
+        }
+    }
+
+    pub fn push_raw_instruction(&mut self, instruction: Instruction) {
+        self.instrs.push(instruction);
+    }
+
+    pub fn into_instructions(self) -> Vec<Instruction> {
+        self.instrs
     }
 
     pub fn branch(
@@ -711,9 +727,6 @@ impl BasicBlockBuilder {
         slf.terminator = BasicBlockTerminator::Branch(condition, next_key, next_key);
         let builder = BasicBlockBuilder {
             key: next_key,
-
-            process: self.process,
-
             instrs: Vec::new(),
         };
         (BranchRef(branch_bb), builder)
@@ -731,9 +744,6 @@ impl BasicBlockBuilder {
         slf.terminator = BasicBlockTerminator::Branch(condition, bb, next_key);
         BasicBlockBuilder {
             key: next_key,
-
-            process: self.process,
-
             instrs: Vec::new(),
         }
     }
@@ -749,9 +759,6 @@ impl BasicBlockBuilder {
         slf.terminator = BasicBlockTerminator::Branch(condition, next_key, bb);
         BasicBlockBuilder {
             key: next_key,
-
-            process: self.process,
-
             instrs: Vec::new(),
         }
     }
@@ -769,9 +776,6 @@ impl BasicBlockBuilder {
         slf.terminator = BasicBlockTerminator::Wait(next_key, time);
         BasicBlockBuilder {
             key: next_key,
-
-            process: self.process,
-
             instrs: Vec::new(),
         }
     }
@@ -787,9 +791,6 @@ impl BasicBlockBuilder {
         slf.terminator = BasicBlockTerminator::VariableWait(next_key, time);
         BasicBlockBuilder {
             key: next_key,
-
-            process: self.process,
-
             instrs: Vec::new(),
         }
     }
@@ -811,9 +812,6 @@ impl BasicBlockBuilder {
         slf.terminator = BasicBlockTerminator::WaitRegion(next_key, region);
         BasicBlockBuilder {
             key: next_key,
-
-            process: self.process,
-
             instrs: Vec::new(),
         }
     }
@@ -825,9 +823,6 @@ impl BasicBlockBuilder {
         slf.terminator = BasicBlockTerminator::Watch(next_key, signals);
         BasicBlockBuilder {
             key: next_key,
-
-            process: self.process,
-
             instrs: Vec::new(),
         }
     }
@@ -897,10 +892,6 @@ impl BasicBlockBuilder {
         let dst = self.next_tmp_var(gl, new_size);
         self.resize_op(gl, dst, ResizeOp::SignExtend, src);
         dst
-    }
-
-    pub fn process(&self) -> ProcessKey {
-        self.process
     }
 
     pub fn shift(

@@ -169,7 +169,7 @@ pub fn statements_to_process<'a>(
                 });
 
                 for (i, stmt) in statements.iter().enumerate() {
-                    let mut fork_builder = new_process(mctx.gl(), "fork".to_string(), origin);
+                    let (_, mut fork_builder) = new_process(mctx.gl(), "fork".to_string(), origin);
                     let fork_entry_bb = fork_builder.key();
                     let condition = fork_builder.probe(mctx.gl(), fork_trigger);
                     let i = fork_builder.constant_u32(mctx.gl(), i as u32);

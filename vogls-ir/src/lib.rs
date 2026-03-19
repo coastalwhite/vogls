@@ -224,7 +224,7 @@ impl BasicBlockTerminator {
             Self::Watch(_, signals) => signals.iter().copied().for_each(f),
         }
     }
-    fn map_signal(&mut self, mut f: impl FnMut(SignalKey) -> SignalKey) {
+    pub fn map_signal(&mut self, mut f: impl FnMut(SignalKey) -> SignalKey) {
         match self {
             Self::Branch(..)
             | Self::Wait(..)
@@ -449,6 +449,20 @@ impl Instruction {
             | Self::LastUpdateTime(dst, _)
             | Self::Probe(dst, _)
             | Self::Intrinsic(dst, _, _) => Some(*dst),
+            Self::Drive(..) => None,
+        }
+    }
+
+    pub fn get_destination_variable_mut(&mut self) -> Option<&mut VariableKey> {
+        match self {
+            Self::Constant(dst, _)
+            | Self::Unary(dst, _, _)
+            | Self::Resize(dst, _, _)
+            | Self::Binary(dst, _, _, _)
+            | Self::Phi(dst, _)
+            | Self::LastUpdateTime(dst, _)
+            | Self::Probe(dst, _)
+            | Self::Intrinsic(dst, _, _) => Some(dst),
             Self::Drive(..) => None,
         }
     }
@@ -742,4 +756,35 @@ pub struct Process {
     pub entry: BasicBlockKey,
     pub origin: TokenRange,
     pub lazy: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SignalSlice {
+    width: VectorSize,
+    lsb: u32,
+}
+
+impl SignalSlice {
+    pub fn new(msb: u32, lsb: u32) -> Option<Self> {
+        let width = VectorSize::new(msb - lsb + 1)?;
+        Some(Self { width, lsb })
+    }
+
+    pub fn from_width(lsb: u32, width: VectorSize) -> Option<Self> {
+        lsb.checked_add(width.get())?;
+        Some(Self { width, lsb })
+    }
+    pub fn from_range(range: std::ops::Range<u32>) -> Option<Self> {
+        Self::from_width(range.start, VectorSize::new(range.end - range.start)?)
+    }
+
+    pub fn width(self) -> VectorSize {
+        self.width
+    }
+    pub fn lsb(self) -> u32 {
+        self.lsb
+    }
+    pub fn msb(self) -> u32 {
+        self.lsb + (self.width.get() - 1)
+    }
 }

@@ -25,12 +25,19 @@ pub struct LowerContext<'a> {
     pub tokenized: &'a Tokenized,
 }
 
+#[derive(Clone)]
+pub struct Edge {
+    pub from: SignalKey,
+    pub to: SignalKey,
+}
+
 pub struct MutLowerContext {
     pub gl: GlobalContext,
     pub diagnostics: Diagnostics,
+    pub connections: Vec<Edge>,
 }
 impl MutLowerContext {
-    fn gl(&mut self) -> &mut GlobalContext {
+    pub fn gl(&mut self) -> &mut GlobalContext {
         &mut self.gl
     }
 }
@@ -432,7 +439,50 @@ fn assign_input_port<'a>(
     port: SymbolId,
 ) -> Result<(), ()> {
     let port = unwrap_get_net(&ctx.table, port);
-    let mut bb_builder = new_process(mctx.gl(), "input_port".into(), ctx.arenas.get_span(expr));
+
+    if let Expr::Ident(ident, exprs, range) = &*expr {
+        let from_signal = try_resolve_net(
+            scope,
+            &ctx.table,
+            &ctx.arenas,
+            *ident,
+            &mut mctx.diagnostics,
+        )?;
+
+        if exprs.is_empty() && range.is_none() {
+            mctx.connections.push(Edge {
+                from: port.net.probe_signal(),
+                to: from_signal.net.probe_signal(),
+            });
+            return Ok(());
+        }
+
+        // if range.is_none()
+        //     && exprs.len() == 1
+        //     && let Ok(v) = eval_constant_expr(
+        //         &mctx.gl,
+        //         &ctx.arenas,
+        //         &ctx.table,
+        //         scope,
+        //         &mut Diagnostics::default(),
+        //         exprs.get(0).into_constant(),
+        //     )
+        // {
+        //     let v = v.coerce(&VType::SignedNet(INTEGER_VSIZE));
+        //     let v = v.into_bits();
+        //     let v = v.extract_exact_u32();
+        //     mctx.connections.push(Edge {
+        //         from: port.net.probe_signal(),
+        //         from_slice: None,
+        //         to: from_signal.net.probe_signal(),
+        //         to_slice: Some(SignalSlice::from_width(v, SCALAR_VSIZE).unwrap()),
+        //     });
+        //     return Ok(());
+        // }
+    }
+
+    let (_, mut bb_builder) =
+        new_process(mctx.gl(), "input_port".into(), ctx.arenas.get_span(expr));
     let bb_key = bb_builder.key();
     let (v, v_ty) = lower_expr(ctx, mctx, scope, &mut bb_builder, expr)?;
     let v = expression::sign_or_zero_extend(
@@ -446,7 +496,11 @@ fn assign_input_port<'a>(
 
     let mut signals = OrderedSet::new();
     expression::get_used_signals(ctx, mctx, scope, &mut signals, expr)?;
-    bb_builder.watch_to(mctx.gl(), signals.items, bb_key);
+    if signals.is_empty() {
+        bb_builder.halt(mctx.gl());
+    } else {
+        bb_builder.watch_to(mctx.gl(), signals.items, bb_key);
+    }
     Ok(())
 }
 
@@ -458,13 +512,55 @@ fn assign_port_output<'a>(
     output_net: SymbolId,
     _ty: VType,
 ) -> Result<(), ()> {
-    let mut bb_builder = new_process(mctx.gl(), "output_port".into(), ctx.arenas.get_span(expr));
+    let output = unwrap_get_net(&ctx.table, output_net);
+
+    if let Expr::Ident(ident, exprs, range) = &*expr {
+        let to_signal = try_resolve_net(
+            scope,
+            &ctx.table,
+            &ctx.arenas,
+            *ident,
+            &mut mctx.diagnostics,
+        )?;
+        if exprs.is_empty() && range.is_none() {
+            mctx.connections.push(Edge {
+                from: to_signal.net.blocking_drive_signal(),
+                to: output.net.blocking_drive_signal(),
+            });
+            return Ok(());
+        }
+
+        // if range.is_none()
+        //     && exprs.len() == 1
+        //     && let Ok(v) = eval_constant_expr(
+        //         &mctx.gl,
+        //         &ctx.arenas,
+        //         &ctx.table,
+        //         scope,
+        //         &mut Diagnostics::default(),
+        //         exprs.get(0).into_constant(),
+        //     )
+        // {
+        //     let v = v.coerce(&VType::SignedNet(INTEGER_VSIZE));
+        //     let v = v.into_bits();
+        //     let v = v.extract_exact_u32();
+        //     mctx.connections.push(Edge {
+        //         from: to_signal.net.blocking_drive_signal(),
+        //         from_slice: Some(SignalSlice::from_width(v, SCALAR_VSIZE).unwrap()),
+        //         to: output.net.blocking_drive_signal(),
+        //         to_slice: None,
+        //     });
+        //     return Ok(());
+        // }
+    }
+
+    let (_, mut bb_builder) =
+        new_process(mctx.gl(), "output_port".into(), ctx.arenas.get_span(expr));
     let bb_key = bb_builder.key();
 
-    let net = unwrap_get_net(&ctx.table, output_net);
-    let signal = &net.net;
-    let ty = net.ty;
-    let probed = net.net.probe(mctx.gl(), &mut bb_builder);
+    let signal = &output.net;
+    let ty = output.ty;
+    let probed = output.net.probe(mctx.gl(), &mut bb_builder);
 
     let mut driving: Vec<(VariableKey, VType, AstId<Expr>)> = Vec::new();
     driving.push((probed, ty, expr));
@@ -625,13 +721,8 @@ fn expr_to_ty<'a>(
     expr: AstId<Expr>,
 ) -> Result<VType, ()> {
     // @Performance: make specialized implementation
-    let mut builder = new_anonymous_builder(
-        mctx.gl(),
-        "tmp".to_string(),
-        TokenRange { start: 0, end: 0 },
-    );
+    let mut builder = new_anonymous_builder(mctx.gl());
     let (_, ty) = lower_expr(ctx, mctx, scope, &mut builder, expr)?;
-    mctx.gl().processes.remove(builder.process());
     Ok(ty)
 }
 
@@ -819,9 +910,8 @@ pub fn create_nba_process(
     let mask_name = format!("{name}::NBA_MASK");
     let value_name = format!("{name}::NBA_VALUE");
     let (size, origin) = (*size, *origin);
-    let mut builder = new_process(gl, process_name, origin);
+    let (process_key, mut builder) = new_process(gl, process_name, origin);
 
-    let process_key = builder.process();
     let mask = gl.signals.insert(vogls_ir::Signal {
         name: mask_name,
         size,

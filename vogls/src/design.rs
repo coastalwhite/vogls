@@ -29,7 +29,7 @@ use vogls_verilog::parser::{
 };
 use vogls_verilog::tokenizer::{Macro, Tokenized};
 
-use crate::{ExecutionContext, append_referenced_modules, token_range_to_line_range};
+use crate::{ExecutionContext, append_referenced_modules, fuse_signals, token_range_to_line_range};
 
 pub enum DesignBackend {
     Interpretted {
@@ -215,6 +215,7 @@ impl Design {
         let mut mctx = MutLowerContext {
             gl,
             diagnostics: LowerDiagnostics::default(),
+            connections: Vec::new(),
         };
         let result = vogls_verilog::elaborate::next::elaborate(
             &mut mctx.gl,
@@ -412,6 +413,8 @@ impl Design {
                 writeln!(ectx.stdout, "{}", process.display(&mctx.gl))?;
             }
         }
+
+        fuse_signals::fuse_signals(&mut mctx.gl, &mctx.connections);
 
         let mut scratch_stack = Vec::new();
         let mut scratch_mfr = Vec::new();

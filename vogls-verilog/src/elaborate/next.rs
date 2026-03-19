@@ -1821,6 +1821,7 @@ pub fn finalize_symbol<'a>(
             let mut mctx = MutLowerContext {
                 gl: std::mem::take(gl),
                 diagnostics: std::mem::take(diagnostics),
+                connections: Vec::new(),
             };
             // @TODO: This should ignore errors with unresolved symbols.
             let res =

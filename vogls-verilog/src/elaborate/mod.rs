@@ -255,6 +255,10 @@ fn new_net(
     }
     let origin = arenas.get_item_span(name);
     let name = arenas.ident_table[name.item.0].to_string();
+
+    static CTR: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let name = format!("{name}/{}", CTR.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+
     let signal = gl.signals.insert(Signal {
         name,
         size,

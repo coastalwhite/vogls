@@ -63,7 +63,7 @@ pub fn lower_udp<'a>(
         body,
     } = &*id;
 
-    let mut builder = new_anonymous_builder(mctx.gl(), "udp".into(), ctx.arenas.get_span(id));
+    let mut builder = new_anonymous_builder(mctx.gl());
 
     let entry_bb = builder.key();
 
@@ -237,7 +237,8 @@ pub fn lower_udp<'a>(
                             tr |= ctx.arenas.get_range_span(*after_list);
                         }
                     }
-                    mctx.diagnostics.not_yet_implemented(tr, "invalid amount of values");
+                    mctx.diagnostics
+                        .not_yet_implemented(tr, "invalid amount of values");
                     return Err(());
                 }
 
@@ -251,36 +252,57 @@ pub fn lower_udp<'a>(
                     let prb_after = input_vars[level_list.len()];
                     match &**edge_indicator {
                         UdpEdgeIndicator::Levels(before, after) => {
-                            let is_before = lower_level(mctx.gl(), &mut builder, prb_before, before.item);
+                            let is_before =
+                                lower_level(mctx.gl(), &mut builder, prb_before, before.item);
                             acc = builder.and(mctx.gl(), acc, is_before);
-                            let is_after = lower_level(mctx.gl(), &mut builder, prb_after, after.item);
+                            let is_after =
+                                lower_level(mctx.gl(), &mut builder, prb_after, after.item);
                             acc = builder.and(mctx.gl(), acc, is_after);
                         }
                         UdpEdgeIndicator::Edge(edge) => match edge.item {
                             UdpEdgeSymbol::R => {
-                                let is_before =
-                                    lower_level(mctx.gl(), &mut builder, prb_before, UdpLevelSymbol::L0);
+                                let is_before = lower_level(
+                                    mctx.gl(),
+                                    &mut builder,
+                                    prb_before,
+                                    UdpLevelSymbol::L0,
+                                );
                                 acc = builder.and(mctx.gl(), acc, is_before);
-                                let is_after =
-                                    lower_level(mctx.gl(), &mut builder, prb_after, UdpLevelSymbol::L1);
+                                let is_after = lower_level(
+                                    mctx.gl(),
+                                    &mut builder,
+                                    prb_after,
+                                    UdpLevelSymbol::L1,
+                                );
                                 acc = builder.and(mctx.gl(), acc, is_after);
                             }
                             UdpEdgeSymbol::F => {
-                                let is_before =
-                                    lower_level(mctx.gl(), &mut builder, prb_before, UdpLevelSymbol::L1);
+                                let is_before = lower_level(
+                                    mctx.gl(),
+                                    &mut builder,
+                                    prb_before,
+                                    UdpLevelSymbol::L1,
+                                );
                                 acc = builder.and(mctx.gl(), acc, is_before);
-                                let is_after =
-                                    lower_level(mctx.gl(), &mut builder, prb_after, UdpLevelSymbol::L0);
+                                let is_after = lower_level(
+                                    mctx.gl(),
+                                    &mut builder,
+                                    prb_after,
+                                    UdpLevelSymbol::L0,
+                                );
                                 acc = builder.and(mctx.gl(), acc, is_after);
                             }
                             UdpEdgeSymbol::P => {
                                 // @Performance. I suspect there is a better lowering of this.
-                                let not_equal = builder.not_case_equals(mctx.gl(), prb_before, prb_after);
+                                let not_equal =
+                                    builder.not_case_equals(mctx.gl(), prb_before, prb_after);
                                 acc = builder.and(mctx.gl(), acc, not_equal);
 
-                                let l0 = builder.constant(mctx.gl(), Bits::new_zeroed(SCALAR_VSIZE));
+                                let l0 =
+                                    builder.constant(mctx.gl(), Bits::new_zeroed(SCALAR_VSIZE));
                                 let l1 = builder.constant(mctx.gl(), Bits::new_ones(SCALAR_VSIZE));
-                                let x = builder.constant(mctx.gl(), Bits::new_unknown(SCALAR_VSIZE));
+                                let x =
+                                    builder.constant(mctx.gl(), Bits::new_unknown(SCALAR_VSIZE));
 
                                 let b0_is_zero = builder.case_equals(mctx.gl(), l0, prb_before);
                                 let b0_is_x = builder.case_equals(mctx.gl(), x, prb_before);
@@ -292,12 +314,15 @@ pub fn lower_udp<'a>(
                             }
                             UdpEdgeSymbol::N => {
                                 // @Performance. I suspect there is a better lowering of this.
-                                let not_equal = builder.not_case_equals(mctx.gl(), prb_before, prb_after);
+                                let not_equal =
+                                    builder.not_case_equals(mctx.gl(), prb_before, prb_after);
                                 acc = builder.and(mctx.gl(), acc, not_equal);
 
-                                let l0 = builder.constant(mctx.gl(), Bits::new_zeroed(SCALAR_VSIZE));
+                                let l0 =
+                                    builder.constant(mctx.gl(), Bits::new_zeroed(SCALAR_VSIZE));
                                 let l1 = builder.constant(mctx.gl(), Bits::new_ones(SCALAR_VSIZE));
-                                let x = builder.constant(mctx.gl(), Bits::new_unknown(SCALAR_VSIZE));
+                                let x =
+                                    builder.constant(mctx.gl(), Bits::new_unknown(SCALAR_VSIZE));
 
                                 let b1_is_zero = builder.case_equals(mctx.gl(), l0, prb_before);
                                 let b1_is_x = builder.case_equals(mctx.gl(), x, prb_before);

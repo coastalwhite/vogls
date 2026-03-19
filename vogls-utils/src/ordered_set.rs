@@ -39,6 +39,14 @@ impl<T> OrderedSet<T> {
         self.items.clear();
         self.set.clear();
     }
+
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
 }
 
 impl<T: Eq + hash::Hash + Clone> OrderedSet<T> {

@@ -66,7 +66,7 @@ pub fn lower<'a>(
                                     &mut mctx.diagnostics,
                                 )?;
 
-                                let mut bb_builder = new_process(
+                                let (_, mut bb_builder) = new_process(
                                     &mut mctx.gl,
                                     "decl_assign".into(),
                                     ctx.arenas.get_span(*expr),
@@ -103,7 +103,7 @@ pub fn lower<'a>(
             for ast_net_assignment in assign.list_of_net_assignments {
                 let net_assignment = &*ast_net_assignment;
 
-                let mut bb_builder =
+                let (_, mut bb_builder) =
                     new_process(mctx.gl(), "assign".into(), ctx.arenas.get_span(id));
                 let bb_key = bb_builder.key();
                 let (variable, variable_ty) =
@@ -136,7 +136,7 @@ pub fn lower<'a>(
                             input_terminals,
                         } = &*instance;
 
-                        let mut bb_builder =
+                        let (_, mut bb_builder) =
                             new_process(mctx.gl(), "gate".into(), ctx.arenas.get_span(*id));
                         let bb_key = bb_builder.key();
 
@@ -219,14 +219,7 @@ pub fn lower<'a>(
                     input_terminals,
                 } = &*instance;
 
-                lower_udp(
-                    ctx,
-                    mctx,
-                    scope,
-                    *udp,
-                    *output_terminal,
-                    *input_terminals,
-                )?;
+                lower_udp(ctx, mctx, scope, *udp, *output_terminal, *input_terminals)?;
             }
         }
         ModuleOrGenerateItemContent::ModuleInstantiation(id) => {
@@ -340,27 +333,17 @@ pub fn lower<'a>(
         }
         ModuleOrGenerateItemContent::InitialConstruct(id) => {
             let statement = id.0;
-            let bb_builder = new_process(mctx.gl(), "initial".into(), ctx.arenas.get_span(id));
-            let bb_builder = statements_to_process(
-                ctx,
-                mctx,
-                scope,
-                bb_builder,
-                AstIdRange::single(statement),
-            )?;
+            let (_, bb_builder) = new_process(mctx.gl(), "initial".into(), ctx.arenas.get_span(id));
+            let bb_builder =
+                statements_to_process(ctx, mctx, scope, bb_builder, AstIdRange::single(statement))?;
             bb_builder.halt(mctx.gl());
         }
         ModuleOrGenerateItemContent::AlwaysConstruct(id) => {
             let statement = id.0;
-            let bb_builder = new_process(mctx.gl(), "always".into(), ctx.arenas.get_span(id));
+            let (_, bb_builder) = new_process(mctx.gl(), "always".into(), ctx.arenas.get_span(id));
             let bb_key = bb_builder.key();
-            let bb_builder = statements_to_process(
-                ctx,
-                mctx,
-                scope,
-                bb_builder,
-                AstIdRange::single(statement),
-            )?;
+            let bb_builder =
+                statements_to_process(ctx, mctx, scope, bb_builder, AstIdRange::single(statement))?;
             bb_builder.jump_to(mctx.gl(), bb_key);
         }
 

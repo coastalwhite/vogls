@@ -1,5 +1,5 @@
 use vogls_frontend::symbol_table::SymbolId;
-use vogls_ir::{new_anonymous_builder};
+use vogls_ir::new_anonymous_builder;
 
 use crate::ast::module::{FunctionDeclaration, TaskDeclaration};
 use crate::ast::{AstId, AstIdRange};
@@ -22,9 +22,7 @@ pub fn lower<'a>(
         statement,
     } = &*id;
 
-    let builder = new_anonymous_builder(mctx.gl(), "function".into(), ctx.arenas.get_span(id));
-
-    let dummy_process_key = builder.process();
+    let builder = new_anonymous_builder(mctx.gl());
     let entry_key = builder.key();
 
     let builder = crate::lower::statement::statements_to_process(
@@ -37,8 +35,6 @@ pub fn lower<'a>(
 
     let terminate_key = builder.key();
     builder.halt(mctx.gl());
-
-    mctx.gl.processes.remove(dummy_process_key);
 
     unwrap_get_fn_mut(&mut ctx.table, scope).lowered = Some(LoweredFunction {
         entry: entry_key,
@@ -62,14 +58,13 @@ pub fn lower_task<'a>(
         statement_or_null,
     } = &*id;
 
-    let builder = new_anonymous_builder(mctx.gl(), "task".into(), ctx.arenas.get_span(id));
+    let builder = new_anonymous_builder(mctx.gl());
 
-    let dummy_process_key = builder.process();
     let entry_key = builder.key();
 
     let builder = crate::lower::statement::lower_statement_or_null(
         ctx,
-        mctx, 
+        mctx,
         scope,
         builder,
         *statement_or_null,
@@ -78,7 +73,6 @@ pub fn lower_task<'a>(
     let terminate_key = builder.key();
     builder.halt(mctx.gl());
 
-    mctx.gl.processes.remove(dummy_process_key);
     unwrap_get_task_mut(&mut ctx.table, scope).lowered = Some(LoweredTask {
         entry: entry_key,
         terminate: terminate_key,

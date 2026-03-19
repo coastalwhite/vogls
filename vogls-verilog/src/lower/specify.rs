@@ -3,7 +3,7 @@ use vogls_ir::bits::arithmetic::FvLogicValue;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::{
     BasicBlockTerminator, Bits, GlobalContext, LogicMode, PhiRef, SCALAR_VSIZE, SignalKey,
-    TIME_VSIZE, VariableKey, new_anonymous_builder,
+    TIME_VSIZE, VariableKey, new_process,
 };
 use vogls_utils::VgHashMap;
 
@@ -712,7 +712,7 @@ pub fn lower_specify<'a>(
             input_before_lut.clear();
             input_before.clear();
 
-            let mut builder = new_anonymous_builder(
+            let (_, mut builder) = new_process(
                 mctx.gl(),
                 "specify_proxy".to_string(),
                 TokenRange::default(),

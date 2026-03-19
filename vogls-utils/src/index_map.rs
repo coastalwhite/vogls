@@ -130,6 +130,62 @@ impl<K, V> IndexMap<K, V> {
     pub fn at(&self, index: usize) -> (&K, &V) {
         (&self.keys[index], &self.values[index])
     }
+    pub fn at_mut(&mut self, index: usize) -> (&K, &mut V) {
+        (&self.keys[index], &mut self.values[index])
+    }
+}
+
+pub enum Entry<'a, K, V> {
+    Occuppied(OccupiedEntry<'a, K, V>),
+    Vacant(VacantEntry<'a, K, V>),
+}
+
+pub struct OccupiedEntry<'a, K, V> {
+    entry: hashbrown::hash_table::OccupiedEntry<'a, NonMaxUsize>,
+    _keys: &'a mut Vec<K>,
+    values: &'a mut Vec<V>,
+}
+
+impl<'a, K, V> OccupiedEntry<'a, K, V> {}
+
+pub struct VacantEntry<'a, K, V> {
+    entry: hashbrown::hash_table::VacantEntry<'a, NonMaxUsize>,
+    key: K,
+    keys: &'a mut Vec<K>,
+    values: &'a mut Vec<V>,
+}
+
+impl<'a, K, V> VacantEntry<'a, K, V> {
+    pub fn insert(self, value: V) -> OccupiedEntry<'a, K, V> {
+        let idx = NonMaxUsize::new(self.keys.len()).unwrap();
+        self.keys.push(self.key);
+        self.values.push(value);
+        OccupiedEntry {
+            entry: self.entry.insert(idx),
+            _keys: self.keys,
+            values: self.values,
+        }
+    }
+}
+
+impl<'a, K, V: Default> Entry<'a, K, V> {
+    pub fn or_default(self) -> &'a mut V {
+        let entry = match self {
+            Self::Vacant(e) => e.insert(V::default()),
+            Self::Occuppied(e) => e,
+        };
+        entry.values.get_mut(entry.entry.get().get()).unwrap()
+    }
+}
+
+impl<'a, K, V> OccupiedEntry<'a, K, V> {
+    pub fn get(&mut self) -> &mut V {
+        &mut self.values[self.entry.get().get()]
+    }
+
+    pub fn index(&mut self) -> usize {
+        self.entry.get().get()
+    }
 }
 
 impl<K: Eq + hash::Hash> IndexSet<K> {
@@ -229,6 +285,32 @@ impl<K: Eq + hash::Hash, V> IndexMap<K, V> {
     pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
         self.get_index(key)
             .map(|idx| unsafe { self.values.get_unchecked_mut(idx) })
+    }
+
+    pub fn entry<'a>(&'a mut self, key: K) -> Entry<'a, K, V> {
+        let hash = self.random_state.hash_one(&key);
+        let entry = self.table.entry(
+            hash,
+            |i| K::eq(&key, unsafe { self.keys.get_unchecked(i.get()) }),
+            |i| {
+                let i = unsafe { self.keys.get_unchecked(i.get()) };
+                self.random_state.hash_one(i)
+            },
+        );
+
+        match entry {
+            hashbrown::hash_table::Entry::Occupied(entry) => Entry::Occuppied(OccupiedEntry {
+                entry,
+                _keys: &mut self.keys,
+                values: &mut self.values,
+            }),
+            hashbrown::hash_table::Entry::Vacant(entry) => Entry::Vacant(VacantEntry {
+                entry,
+                key,
+                keys: &mut self.keys,
+                values: &mut self.values,
+            }),
+        }
     }
 }
 
