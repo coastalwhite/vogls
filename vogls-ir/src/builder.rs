@@ -594,7 +594,7 @@ impl BasicBlockBuilder {
         length: VectorSize,
     ) {
         if offset == 0 && length == gl.signals[signal].size {
-            return self.drive(gl, signal, src);
+            return self.drive_opt_partial(gl, signal, src, None);
         }
 
         let offset = self.constant_u32(gl, offset);
@@ -676,7 +676,6 @@ impl BasicBlockBuilder {
         let next_key = self.next_bb(gl);
         let slf = gl.bbs.get_mut(self.key).unwrap();
         slf.instrs = std::mem::take(&mut self.instrs);
-        slf.terminator = BasicBlockTerminator::Halt;
         BasicBlockBuilder {
             key: next_key,
             instrs: Vec::new(),
@@ -690,7 +689,6 @@ impl BasicBlockBuilder {
     ) -> BasicBlockBuilder {
         let slf = gl.bbs.get_mut(self.key).unwrap();
         slf.instrs = std::mem::take(&mut self.instrs);
-        slf.terminator = BasicBlockTerminator::Halt;
 
         let next_bb = gl.bbs.get_mut(bb).unwrap();
         BasicBlockBuilder {

@@ -766,10 +766,16 @@ pub struct SignalSlice {
 
 impl SignalSlice {
     pub fn new(msb: u32, lsb: u32) -> Option<Self> {
+        if msb < lsb {
+            return None;
+        }
         let width = VectorSize::new(msb - lsb + 1)?;
         Some(Self { width, lsb })
     }
 
+    pub fn with_end(width: VectorSize) -> Self {
+        Self { lsb: 0, width }
+    }
     pub fn from_width(lsb: u32, width: VectorSize) -> Option<Self> {
         lsb.checked_add(width.get())?;
         Some(Self { width, lsb })
@@ -786,5 +792,44 @@ impl SignalSlice {
     }
     pub fn msb(self) -> u32 {
         self.lsb + (self.width.get() - 1)
+    }
+
+    pub fn shift(self, amount: u32) -> Option<SignalSlice> {
+        self.msb().checked_add(amount)?;
+        Some(Self {
+            lsb: self.lsb + amount,
+            width: self.width,
+        })
+    }
+
+    pub fn shift_back(self, amount: u32) -> Option<SignalSlice> {
+        Some(Self {
+            lsb: self.lsb().checked_sub(amount)?,
+            width: self.width,
+        })
+    }
+
+    pub fn relative_slice(self, subslice: SignalSlice) -> Option<SignalSlice> {
+        if subslice.lsb() < self.lsb() || subslice.msb() > self.msb() {
+            return None;
+        }
+        subslice.shift_back(self.lsb())
+    }
+
+    pub fn subslice(self, s: SignalSlice) -> Option<SignalSlice> {
+        if s.msb() >= self.width().get() {
+            return None;
+        }
+        Self::from_width(self.lsb() + s.lsb(), s.width())
+    }
+
+    pub fn concat(self, other: SignalSlice) -> Option<SignalSlice> {
+        if self.lsb + self.width.get() != other.lsb {
+            return None;
+        }
+        Some(Self {
+            lsb: self.lsb,
+            width: self.width.checked_add(other.width().get()).unwrap(),
+        })
     }
 }

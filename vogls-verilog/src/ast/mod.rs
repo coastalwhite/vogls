@@ -117,6 +117,13 @@ impl<'a, T> AstIdRange<'a, T> {
             loc: id.loc,
         }
     }
+
+    pub fn truncate(self, len: usize) -> Self {
+        Self {
+            node: &self.node[..self.node.len().min(len)],
+            loc: self.loc,
+        }
+    }
 }
 
 pub struct AstIdRangeIter<'a, T> {

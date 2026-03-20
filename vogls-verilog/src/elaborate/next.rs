@@ -102,7 +102,7 @@ pub struct ElaborationState<'a> {
 
 impl<'a> ElaborationState<'a> {
     pub fn insert_lvl_symbol(&mut self, sid: SymbolId, symbol: InLevelSymbol<'a>) {
-        assert!(self.lvl_symbols.insert(sid, symbol).is_none());
+        assert!(self.lvl_symbols.insert(sid, symbol).is_ok());
     }
 
     fn dummy_net(&self) -> Net {
@@ -1822,6 +1822,7 @@ pub fn finalize_symbol<'a>(
                 gl: std::mem::take(gl),
                 diagnostics: std::mem::take(diagnostics),
                 connections: Vec::new(),
+                fuse_scratch: Vec::new(),
             };
             // @TODO: This should ignore errors with unresolved symbols.
             let res =

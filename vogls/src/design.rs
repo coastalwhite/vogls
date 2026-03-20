@@ -216,6 +216,7 @@ impl Design {
             gl,
             diagnostics: LowerDiagnostics::default(),
             connections: Vec::new(),
+            fuse_scratch: Vec::new(),
         };
         let result = vogls_verilog::elaborate::next::elaborate(
             &mut mctx.gl,
@@ -848,5 +849,14 @@ impl Design {
     pub fn get_signal(&self, state: &DesignState, signal: RtSignalKey) -> Bits {
         let heap_ref = self.get_heap_ref(signal);
         state.runtime().heap.load_bits(heap_ref, self.gl.logic_mode)
+    }
+
+    pub fn emit_ir(&self) -> String {
+        let mut s = String::new();
+        for process in self.gl.processes.values() {
+            use std::fmt::Write;
+            writeln!(&mut s, "{}", process.display(&self.gl)).unwrap();
+        }
+        s
     }
 }

@@ -133,6 +133,16 @@ impl<K, V> IndexMap<K, V> {
     pub fn at_mut(&mut self, index: usize) -> (&K, &mut V) {
         (&self.keys[index], &mut self.values[index])
     }
+
+    pub fn take(self) -> (Vec<K>, Vec<V>) {
+        (self.keys, self.values)
+    }
+    pub fn take_keys(self) -> Vec<K> {
+        self.keys
+    }
+    pub fn take_values(self) -> Vec<V> {
+        self.values
+    }
 }
 
 pub enum Entry<'a, K, V> {
@@ -183,7 +193,7 @@ impl<'a, K, V> OccupiedEntry<'a, K, V> {
         &mut self.values[self.entry.get().get()]
     }
 
-    pub fn index(&mut self) -> usize {
+    pub fn index(&self) -> usize {
         self.entry.get().get()
     }
 }
@@ -242,26 +252,42 @@ impl<K: Eq + hash::Hash> IndexSet<K> {
     pub fn get_index(&self, key: &K) -> Option<usize> {
         self.get_index_ref(key).map(|i| i.get())
     }
+
+    pub fn remove_with_gap(&mut self, key: &K) -> bool {
+        let hash = self.random_state.hash_one(key);
+        match self
+            .table
+            .find_entry(hash, |k| K::eq(&self.keys[k.get()], key))
+        {
+            Ok(entry) => {
+                entry.remove();
+                true
+            }
+            Err(_) => false,
+        }
+    }
 }
 impl<K: Eq + hash::Hash, V> IndexMap<K, V> {
-    pub fn insert(&mut self, key: K, value: V) -> Option<usize> {
-        let hash = self.random_state.hash_one(&key);
-        match self.table.entry(
-            hash,
-            |i| K::eq(&key, unsafe { self.keys.get_unchecked(i.get()) }),
-            |i| {
-                let i = unsafe { self.keys.get_unchecked(i.get()) };
-                self.random_state.hash_one(i)
-            },
-        ) {
-            hashbrown::hash_table::Entry::Occupied(i) => Some(i.get().get()),
-            hashbrown::hash_table::Entry::Vacant(i) => {
-                i.insert(NonMaxUsize::new(self.keys.len()).unwrap());
-                self.keys.push(key);
-                self.values.push(value);
-                None
+    pub fn insert(&mut self, key: K, value: V) -> Result<usize, usize> {
+        match self.entry(key) {
+            Entry::Occuppied(entry) => {
+                let idx = entry.index();
+                self.values[idx] = value;
+                Err(idx)
+            }
+            Entry::Vacant(entry) => {
+                let entry = entry.insert(value);
+                Ok(entry.index())
             }
         }
+    }
+
+    pub fn get_or_insert_with(&mut self, key: K, mut f: impl FnMut() -> V) -> &mut V {
+        let idx = match self.entry(key) {
+            Entry::Occuppied(entry) => entry.index(),
+            Entry::Vacant(entry) => entry.insert(f()).index(),
+        };
+        &mut self.values[idx]
     }
 
     #[inline(always)]
@@ -366,7 +392,7 @@ impl<K: Eq + hash::Hash, V> FromIterator<(K, V)> for IndexMap<K, V> {
         let iter = iter.into_iter();
         let mut map = Self::new();
         for (k, v) in iter {
-            map.insert(k, v);
+            _ = map.insert(k, v);
         }
         map
     }

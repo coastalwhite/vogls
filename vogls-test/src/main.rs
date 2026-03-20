@@ -77,6 +77,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         mode: LogicMode,
         compile: bool,
         error: Option<Box<dyn std::error::Error>>,
+        mismatch: Option<(String, String)>,
         stdout: String,
         stderr: String,
     }
@@ -111,6 +112,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         struct TestInfo {
             fail: bool,
             verify_stdout: bool,
+            verify_ir: bool,
             time: u64,
             top_level_module: Option<String>,
             skip: Option<LogicMode>,
@@ -119,6 +121,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         let mut test_information = TestInfo {
             fail: false,
             verify_stdout: false,
+            verify_ir: false,
             top_level_module: None,
             time: 1000,
             skip: None,
@@ -140,6 +143,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                 match line {
                     "fail" => test_information.fail = true,
                     "verify-stdout" => test_information.verify_stdout = true,
+                    "verify-ir" => test_information.verify_ir = true,
                     _ if line.starts_with("tlm=") => {
                         test_information.top_level_module = Some(line[4..].trim().to_string());
                     }
@@ -179,6 +183,8 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                     continue;
                 }
 
+                num_tests += 1;
+
                 let stdout = Io::default();
                 let stderr = Io::default();
 
@@ -199,6 +205,82 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                     vcd: None,
                     compile,
                 };
+
+                if test_information.verify_ir {
+                    let design = std::panic::catch_unwind(|| {
+                        let stdout = Io::default();
+                        let stderr = Io::default();
+
+                        let mut ctx = ExecutionContext {
+                            stdout: Box::new(stdout.clone())
+                                as Box<dyn std::io::Write + Send + Sync>,
+                            stderr: Box::new(stderr.clone())
+                                as Box<dyn std::io::Write + Send + Sync>,
+                            defines: vec!["__VOGLS_VERIFY_IR".to_string()],
+                            emit_hierarchy: false,
+                            emit_unoptimized_ir: false,
+                            emit_ir: false,
+                            emit_vm: false,
+                            trace: false,
+                            itrace: false,
+                            no_run: false,
+                            time: test_information.time,
+                            opt_rounds: 0,
+                            logic_mode,
+                            vcd: None,
+                            compile,
+                        };
+                        vogls::design::Design::new(
+                            &[&path],
+                            test_information.top_level_module.as_deref(),
+                            &mut ctx,
+                        )
+                    });
+
+                    let mut panic = false;
+                    let mut failed = false;
+                    let mut error = None;
+                    let mut mismatch = None;
+
+                    if let Ok(design) = design {
+                        match design {
+                            Ok(design) => {
+                                let design_ir = design.emit_ir();
+                                let asserted =
+                                    std::fs::read_to_string(&path.with_extension("v.ir"))?;
+                                failed = design_ir != asserted;
+                                mismatch = Some((asserted, design_ir));
+                            }
+                            Err(err) => {
+                                failed = true;
+                                error = Some(err);
+                            }
+                        }
+                    } else {
+                        panic = true;
+                    }
+
+                    if panic {
+                        write!(&mut o, " \x1b[31mP\x1b[0m")?;
+                    } else if failed {
+                        let stdout = stdout.0.lock().unwrap();
+                        let stdout = std::str::from_utf8(&stdout).unwrap();
+                        let stderr = stderr.0.lock().unwrap();
+                        let stderr = std::str::from_utf8(&stderr).unwrap();
+
+                        fails.push(Fail {
+                            name: offset_path.display().to_string(),
+                            mode: logic_mode,
+                            compile,
+                            error,
+                            mismatch,
+                            stdout: stdout.to_string(),
+                            stderr: stderr.to_string(),
+                        });
+                        write!(&mut o, " \x1b[31mI\x1b[0m")?;
+                    }
+                }
+
                 let ctx = std::panic::AssertUnwindSafe(&mut ctx);
                 let result = std::panic::catch_unwind(|| {
                     let ctx = ctx;
@@ -216,6 +298,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
 
                 let mut failed = false;
                 let mut panic = false;
+                let mut mismatch = None;
                 if result.is_err() {
                     failed = true;
                     panic = true;
@@ -224,10 +307,12 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                     if test_information.verify_stdout {
                         let s = std::fs::read_to_string(&path.with_extension("v.stdout"))?;
                         failed |= stdout != s;
+                        if failed {
+                            mismatch = Some((s, stdout.to_string()));
+                        }
                     }
                 }
 
-                num_tests += 1;
                 if failed {
                     let error = match result {
                         Ok(Ok(_)) => None,
@@ -239,6 +324,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                         mode: logic_mode,
                         compile,
                         error,
+                        mismatch,
                         stdout: stdout.to_string(),
                         stderr: stderr.to_string(),
                     });
@@ -266,6 +352,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                 name,
                 mode,
                 compile,
+                mismatch,
                 error,
                 stdout,
                 stderr,
@@ -300,6 +387,25 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                 };
                 writeln!(&mut o, "  {}", stderr.replace("\n", "\n  "))?;
                 writeln!(&mut o, "  ---  [END STDERR]  ---")?;
+            }
+            if let Some((snapshot, given)) = mismatch {
+                writeln!(&mut o, "  --- [START SNAPSHOT] ---")?;
+                let snapshot = if snapshot.ends_with('\n') {
+                    &snapshot[..snapshot.len() - 1]
+                } else {
+                    snapshot
+                };
+                writeln!(&mut o, "  {}", snapshot.replace("\n", "\n  "))?;
+                writeln!(&mut o, "  ---  [END SNAPSHOT]  ---")?;
+
+                writeln!(&mut o, "  ---   [START GIVEN]  ---")?;
+                let given = if given.ends_with('\n') {
+                    &given[..given.len() - 1]
+                } else {
+                    given
+                };
+                writeln!(&mut o, "  {}", given.replace("\n", "\n  "))?;
+                writeln!(&mut o, "  ---   [END GIVEN]   ---")?;
             }
         }
         writeln!(

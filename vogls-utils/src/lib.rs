@@ -9,7 +9,7 @@ mod table;
 pub use index_map::{IndexMap, IndexSet};
 pub use non_max_int::{NonMaxU8, NonMaxU32, NonMaxU64, NonMaxUsize};
 pub use ordered_set::OrderedSet;
-pub use table::{Table, TableKey};
+pub use table::{Table, TableSet, TableKey};
 
 /// Remainder that results the divisor if the remainder is zero.
 ///

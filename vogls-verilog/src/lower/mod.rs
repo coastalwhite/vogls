@@ -1,6 +1,7 @@
 mod assign;
 mod diagnostics;
 pub mod expression;
+mod fuse;
 pub mod module_or_generate_item;
 pub mod specify;
 mod statement;
@@ -27,14 +28,17 @@ pub struct LowerContext<'a> {
 
 #[derive(Clone)]
 pub struct Edge {
-    pub from: SignalKey,
-    pub to: SignalKey,
+    pub driver: SignalKey,
+    pub driver_slice: Option<SignalSlice>,
+    pub drivee: SignalKey,
+    pub drivee_slice: Option<SignalSlice>,
 }
 
 pub struct MutLowerContext {
     pub gl: GlobalContext,
     pub diagnostics: Diagnostics,
     pub connections: Vec<Edge>,
+    pub fuse_scratch: Vec<(SignalKey, Option<SignalSlice>)>,
 }
 impl MutLowerContext {
     pub fn gl(&mut self) -> &mut GlobalContext {
@@ -339,7 +343,7 @@ use vogls_ir::token_range::TokenRange;
 use vogls_ir::vcd::VcdScope;
 use vogls_ir::{
     BasicBlockBuilder, BasicBlockTerminator, GlobalContext, ProcessKey, SCALAR_VSIZE, SignalKey,
-    VariableKey, VectorSize, new_anonymous_builder, new_process,
+    SignalSlice, VariableKey, VectorSize, new_anonymous_builder, new_process,
 };
 use vogls_utils::{OrderedSet, VgHashMap};
 
@@ -360,6 +364,7 @@ use crate::tokenizer::Tokenized;
 
 pub use self::expression::eval_constant_expr;
 use self::expression::{get_used_signals, lower_expr, truncate_or_extend};
+use self::fuse::try_lower_fuse_driver_expr;
 pub use self::vtype::VType;
 pub use self::vvalue::VValue;
 pub use diagnostics::{Diagnostics, LowerErrorReason};
@@ -440,45 +445,20 @@ fn assign_input_port<'a>(
 ) -> Result<(), ()> {
     let port = unwrap_get_net(&ctx.table, port);
 
-    if let Expr::Ident(ident, exprs, range) = &*expr {
-        let from_signal = try_resolve_net(
-            scope,
-            &ctx.table,
-            &ctx.arenas,
-            *ident,
-            &mut mctx.diagnostics,
-        )?;
-
-        if exprs.is_empty() && range.is_none() {
+    mctx.fuse_scratch.clear();
+    if try_lower_fuse_driver_expr(ctx, mctx, scope, expr)? {
+        let mut offset = 0;
+        for &(signal, slice) in &mctx.fuse_scratch {
+            let width = slice.map_or_else(|| mctx.gl.signals[signal].size, |s| s.width());
             mctx.connections.push(Edge {
-                from: port.net.probe_signal(),
-                to: from_signal.net.probe_signal(),
+                driver: signal,
+                driver_slice: slice,
+                drivee: port.net.blocking_drive_signal(),
+                drivee_slice: Some(SignalSlice::from_width(offset, width).unwrap()),
             });
-            return Ok(());
+            offset += width.get();
         }
-
-        // if range.is_none()
-        //     && exprs.len() == 1
-        //     && let Ok(v) = eval_constant_expr(
-        //         &mctx.gl,
-        //         &ctx.arenas,
-        //         &ctx.table,
-        //         scope,
-        //         &mut Diagnostics::default(),
-        //         exprs.get(0).into_constant(),
-        //     )
-        // {
-        //     let v = v.coerce(&VType::SignedNet(INTEGER_VSIZE));
-        //     let v = v.into_bits();
-        //     let v = v.extract_exact_u32();
-        //     mctx.connections.push(Edge {
-        //         from: port.net.probe_signal(),
-        //         from_slice: None,
-        //         to: from_signal.net.probe_signal(),
-        //         to_slice: Some(SignalSlice::from_width(v, SCALAR_VSIZE).unwrap()),
-        //     });
-        //     return Ok(());
-        // }
+        return Ok(());
     }
 
     let (_, mut bb_builder) =
@@ -524,34 +504,36 @@ fn assign_port_output<'a>(
         )?;
         if exprs.is_empty() && range.is_none() {
             mctx.connections.push(Edge {
-                from: to_signal.net.blocking_drive_signal(),
-                to: output.net.blocking_drive_signal(),
+                driver: output.net.probe_signal(),
+                driver_slice: None,
+                drivee: to_signal.net.blocking_drive_signal(),
+                drivee_slice: None,
             });
             return Ok(());
         }
 
-        // if range.is_none()
-        //     && exprs.len() == 1
-        //     && let Ok(v) = eval_constant_expr(
-        //         &mctx.gl,
-        //         &ctx.arenas,
-        //         &ctx.table,
-        //         scope,
-        //         &mut Diagnostics::default(),
-        //         exprs.get(0).into_constant(),
-        //     )
-        // {
-        //     let v = v.coerce(&VType::SignedNet(INTEGER_VSIZE));
-        //     let v = v.into_bits();
-        //     let v = v.extract_exact_u32();
-        //     mctx.connections.push(Edge {
-        //         from: to_signal.net.blocking_drive_signal(),
-        //         from_slice: Some(SignalSlice::from_width(v, SCALAR_VSIZE).unwrap()),
-        //         to: output.net.blocking_drive_signal(),
-        //         to_slice: None,
-        //     });
-        //     return Ok(());
-        // }
+        if range.is_none()
+            && exprs.len() == 1
+            && let Ok(v) = eval_constant_expr(
+                &mctx.gl,
+                &ctx.arenas,
+                &ctx.table,
+                scope,
+                &mut Diagnostics::default(),
+                exprs.get(0).into_constant(),
+            )
+        {
+            let v = v.coerce(&VType::SignedNet(vogls_ir::INTEGER_VSIZE));
+            let v = v.into_bits();
+            let v = v.extract_exact_u32();
+            mctx.connections.push(Edge {
+                driver: output.net.probe_signal(),
+                driver_slice: None,
+                drivee: to_signal.net.blocking_drive_signal(),
+                drivee_slice: Some(SignalSlice::from_width(v, SCALAR_VSIZE).unwrap()),
+            });
+            return Ok(());
+        }
     }
 
     let (_, mut bb_builder) =
