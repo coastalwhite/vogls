@@ -1,7 +1,6 @@
-use vogls_bits::VectorSize;
-use vogls_utils::{NonMaxU32, Table, VgHashMap};
+use vogls_utils::{Table, VgHashMap};
 
-use crate::SignalKey;
+use crate::{SignalKey, SignalSlice};
 
 vogls_utils::new_table_key! { pub struct VcdVariableKey; }
 
@@ -29,9 +28,9 @@ pub struct VcdScope {
 pub struct VcdVariable {
     pub name: String,
     pub signal: SignalKey,
+    pub signal_slice: Option<SignalSlice>,
     pub ty: NetType,
-    pub offset: Option<NonMaxU32>,
-    pub width: VectorSize,
+    pub msb_lsb: Option<(u32, u32)>,
 }
 
 #[derive(Debug, Clone)]

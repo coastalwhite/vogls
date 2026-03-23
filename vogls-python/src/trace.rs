@@ -42,7 +42,7 @@ impl vogls::sim::Plugin for TracePlugin {
                     state
                         .runtime
                         .heap
-                        .load_bits(simulation.signals[s.0 as usize], simulation.logic_mode),
+                        .load_bits(simulation.signals[s.as_usize()], simulation.logic_mode),
                 )
             }));
         self.tracked.iter_mut().for_each(|t| *t.1 = None);

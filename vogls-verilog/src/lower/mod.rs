@@ -77,13 +77,19 @@ fn extend_symbol_table_to_vcd_scope(
             }
             S::Net(i) => {
                 let net = &i.net;
-                let (signal, slice) = net.probe_signal();
+
+                // @TODO: Property implement this.
+                let lsb = 0;
+                let msb = i.ty.force_net_width().get() - 1;
+                let msb_lsb = (msb > 0).then_some((msb, lsb));
+
+                let (signal, signal_slice) = net.probe_signal();
                 let variable_key = variable_table.insert(vogls_ir::vcd::VcdVariable {
                     name: ident_table[table[*sid].name()].to_string(),
                     signal,
+                    signal_slice,
                     ty: vogls_ir::vcd::NetType::Wire,
-                    offset: slice.map(|s| NonMaxU32::new(s.lsb()).unwrap()),
-                    width: net.width(),
+                    msb_lsb,
                 });
                 scope
                     .items
@@ -357,7 +363,7 @@ use vogls_ir::{
     BasicBlockBuilder, BasicBlockTerminator, GlobalContext, ProcessKey, SCALAR_VSIZE, SignalKey,
     SignalSlice, VariableKey, VectorSize, new_anonymous_builder, new_process,
 };
-use vogls_utils::{NonMaxU32, OrderedSet, Table, VgHashMap};
+use vogls_utils::{OrderedSet, Table, VgHashMap};
 
 use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::expr::{BitSlice, Expr};

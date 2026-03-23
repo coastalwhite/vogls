@@ -248,7 +248,8 @@ pub fn lower_process_to_vm(
                         O::Assert(f) => VO::Assert(f.clone()),
                         O::VcdOpenFile(f) => VO::VcdOpenFile(f.clone()),
                         O::VcdAppendModule(v) => {
-                            VO::VcdAppendModule(VmVcdScope::lower(v, io_signals))
+                            let (children, map) = VmVcdScope::lower(v, io_signals);
+                            VO::VcdAppendModule(children, map)
                         }
                         O::VcdPause => VO::VcdPause,
                         O::VcdResume => VO::VcdResume,

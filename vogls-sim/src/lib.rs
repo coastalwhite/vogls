@@ -1,7 +1,6 @@
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt::Alignment;
-use std::num::NonZeroUsize;
 use std::path::Path;
 
 use slotmap::{SlotMap, new_key_type};
@@ -9,8 +8,10 @@ use vogls_bits::arithmetic::{FvLogicValue, fv_set_no_special};
 use vogls_bits::format::{BitsFormatBase, BitsFormatOptions};
 use vogls_bits::set_subslice::{tv_l_set, tv_s_set};
 use vogls_codegen::{Heap, HeapOffset, HeapRef};
-use vogls_ir::vcd::NetType;
-use vogls_ir::{INTEGER_VSIZE, LogicMode, SignalKey, TIME_VSIZE, VectorSize};
+use vogls_ir::vcd::{NetType, VcdVariableKey};
+use vogls_ir::{
+    INTEGER_VSIZE, LogicMode, SCALAR_VSIZE, SignalKey, SignalSlice, TIME_VSIZE, VectorSize,
+};
 use vogls_runtime::{RtSignalKey, SimulationIo};
 
 mod execution;
@@ -20,7 +21,7 @@ mod plugin;
 pub use plugin::{InstructionPlugin, Plugin};
 
 pub use instruction::*;
-use vogls_utils::VgHashMap;
+use vogls_utils::{NonMaxUsize, SecondaryTable, Table, VgHashMap};
 
 new_key_type! { pub struct ListenerKey; }
 
@@ -238,13 +239,42 @@ pub struct VcdScope {
 }
 
 impl VcdScope {
-    pub fn lower(v: &vogls_ir::vcd::VcdScope, map: &VgHashMap<SignalKey, RtSignalKey>) -> VcdScope {
+    pub fn lower(
+        v: &vogls_ir::vcd::VcdOutput,
+        signal_map: &VgHashMap<SignalKey, RtSignalKey>,
+    ) -> (
+        Vec<VcdScopeItem>,
+        SecondaryTable<RtSignalKey, Box<[(VcdVariableKey, Option<SignalSlice>)]>>,
+    ) {
+        let children = v
+            .children
+            .iter()
+            .map(|i| VcdScopeItem::lower(i, &v.table, signal_map))
+            .collect();
+        let mut vcd_table = SecondaryTable::new();
+        for (k, vcd_keys) in &v.signal_map {
+            vcd_table.insert(
+                signal_map[k],
+                vcd_keys
+                    .iter()
+                    .map(|vcdkey| (*vcdkey, v.table[*vcdkey].signal_slice))
+                    .collect(),
+            );
+        }
+        (children, vcd_table)
+    }
+
+    fn lower_scope(
+        v: &vogls_ir::vcd::VcdScope,
+        table: &Table<VcdVariableKey, vogls_ir::vcd::VcdVariable>,
+        map: &VgHashMap<SignalKey, RtSignalKey>,
+    ) -> VcdScope {
         VcdScope {
             name: v.name.clone(),
             items: v
                 .items
                 .iter()
-                .map(|i| VcdScopeItem::lower(i, map))
+                .map(|i| VcdScopeItem::lower(i, table, map))
                 .collect(),
         }
     }
@@ -269,7 +299,7 @@ impl VcdScope {
 
     fn extend_into(
         &self,
-        tracked: &mut VgHashMap<RtSignalKey, Option<NonZeroUsize>>,
+        tracked: &mut SecondaryTable<RtSignalKey, Option<NonMaxUsize>>,
         values: &mut Vec<RtSignalKey>,
     ) {
         for i in &self.items {
@@ -285,13 +315,16 @@ impl VcdScopeItem {
             VcdScopeItem::Variable(k) => {
                 let VcdVariable {
                     name,
+                    variable,
                     signal: _,
                     ty,
-                    msb,
-                    lsb,
+                    msb_lsb,
                 } = k;
-                let size = VectorSize::new((msb.abs_diff(*lsb) + 1) as u32).unwrap();
-                let idx = k.signal.as_u64();
+                let size = msb_lsb.map_or(SCALAR_VSIZE, |(msb, lsb)| {
+                    VectorSize::new((msb.abs_diff(lsb) + 1) as u32).unwrap()
+                });
+                use vogls_utils::TableKey;
+                let idx = variable.get();
                 write!(f, "$var ")?;
                 f.write_all(
                     match ty {
@@ -307,7 +340,9 @@ impl VcdScopeItem {
                 }
                 f.write_all(name.as_bytes())?;
                 f.write_all(b" ")?;
-                write!(f, "[{msb}:{lsb}] ")?;
+                if let Some((msb, lsb)) = msb_lsb {
+                    write!(f, "[{msb}:{lsb}] ")?;
+                }
                 writeln!(f, "$end")
             }
         }
@@ -315,15 +350,16 @@ impl VcdScopeItem {
 
     fn extend_into(
         &self,
-        tracked: &mut VgHashMap<RtSignalKey, Option<NonZeroUsize>>,
+        tracked: &mut SecondaryTable<RtSignalKey, Option<NonMaxUsize>>,
         values: &mut Vec<RtSignalKey>,
     ) {
         match self {
             VcdScopeItem::Scope(s) => s.extend_into(tracked, values),
             VcdScopeItem::Variable(k) => {
-                tracked.entry(k.signal).or_insert_with(|| {
+                tracked.or_insert_with(k.signal, || {
+                    let idx = NonMaxUsize::new(values.len()).unwrap();
                     values.push(k.signal);
-                    Some(NonZeroUsize::new(values.len()).unwrap())
+                    Some(idx)
                 });
             }
         }
@@ -331,24 +367,23 @@ impl VcdScopeItem {
 }
 
 impl VcdScopeItem {
-    fn lower(v: &vogls_ir::vcd::VcdScopeItem, map: &VgHashMap<SignalKey, RtSignalKey>) -> Self {
+    fn lower(
+        v: &vogls_ir::vcd::VcdScopeItem,
+        table: &Table<VcdVariableKey, vogls_ir::vcd::VcdVariable>,
+        map: &VgHashMap<SignalKey, RtSignalKey>,
+    ) -> Self {
         match v {
-            vogls_ir::vcd::VcdScopeItem::Scope(v) => Self::Scope(VcdScope::lower(v, map)),
-            vogls_ir::vcd::VcdScopeItem::Variable(v) => {
-                let (msb, lsb) = (
-                    v.offset
-                        .map_or(v.width.get() - 1, |lsb| lsb.get() + (v.width.get() - 1))
-                        as i64,
-                    v.offset.map_or(0, |lsb| lsb.get()) as i64,
-                );
-                let signal = v.signal;
-                let signal = map[&signal];
+            vogls_ir::vcd::VcdScopeItem::Scope(v) => {
+                Self::Scope(VcdScope::lower_scope(v, table, map))
+            }
+            vogls_ir::vcd::VcdScopeItem::Variable(key) => {
+                let v = &table[*key];
                 Self::Variable(VcdVariable {
                     name: v.name.clone(),
-                    signal,
+                    signal: map[&v.signal],
+                    variable: *key,
                     ty: v.ty,
-                    msb,
-                    lsb,
+                    msb_lsb: v.msb_lsb,
                 })
             }
         }
@@ -358,10 +393,10 @@ impl VcdScopeItem {
 #[derive(Debug, Clone)]
 pub struct VcdVariable {
     pub name: String,
+    pub variable: VcdVariableKey,
     pub signal: RtSignalKey,
     pub ty: NetType,
-    pub msb: i64,
-    pub lsb: i64,
+    pub msb_lsb: Option<(u32, u32)>,
 }
 
 #[derive(Debug, Clone)]
@@ -375,8 +410,9 @@ pub struct VcdOutput {
     start_ts: Timestamp,
     last_ts: Timestamp,
     paused: bool,
-    scope: VcdScope,
-    tracked: VgHashMap<RtSignalKey, Option<NonZeroUsize>>,
+    children: Vec<VcdScopeItem>,
+    map: SecondaryTable<RtSignalKey, Box<[(VcdVariableKey, Option<SignalSlice>)]>>,
+    tracked: SecondaryTable<RtSignalKey, Option<NonMaxUsize>>,
     updated_this_time_step: Vec<RtSignalKey>,
     writer: Box<dyn std::io::Write + Send + Sync>,
     time_scale: u64,
@@ -395,7 +431,9 @@ impl VcdOutput {
             // @TODO
             writeln!(f, "$date @TODO $end")?;
             writeln!(f, "$timescale 1ns $end")?;
-            self.scope.write_to(f)?;
+            for child in &self.children {
+                child.write_to(f)?;
+            }
             writeln!(f, "$enddefinitions $end")?;
         }
         self.printed_header = true;
@@ -412,28 +450,34 @@ impl VcdOutput {
         writeln!(f, "#{}", time * self.time_scale)?;
         for signal in &self.updated_this_time_step {
             let bits = signals[signal.as_usize()];
-            let idx = signal.as_usize();
             let bits = heap.load_tv_bits(bits);
-            if bits.size().get() > 1 {
-                f.write_all(&[b'b'])?;
+            for (v, slice) in &self.map[*signal] {
+                let bits = match slice {
+                    None => bits.clone(),
+                    Some(slice) => bits.slice(slice.lsb(), slice.width()),
+                };
+                if bits.size().get() > 1 {
+                    f.write_all(&[b'b'])?;
+                }
+                write!(
+                    f,
+                    "{}",
+                    bits.display(&BitsFormatOptions {
+                        prefix: false,
+                        base: BitsFormatBase::Binary,
+                        separator: None,
+                        align: Some(Alignment::Right),
+                        fill: '0',
+                        width: vogls_bits::format::BitsFormatWidth::Expand
+                    })
+                )?;
+                if bits.size().get() > 1 {
+                    f.write_all(&[b' '])?;
+                }
+                use vogls_utils::TableKey;
+                writeln!(f, "W{:X}", v.get())?;
             }
-            write!(
-                f,
-                "{}",
-                bits.display(&BitsFormatOptions {
-                    prefix: false,
-                    base: BitsFormatBase::Binary,
-                    separator: None,
-                    align: Some(Alignment::Right),
-                    fill: '0',
-                    width: vogls_bits::format::BitsFormatWidth::Expand
-                })
-            )?;
-            if bits.size().get() > 1 {
-                f.write_all(&[b' '])?;
-            }
-            writeln!(f, "W{idx:X}")?;
-            *self.tracked.get_mut(signal).unwrap() = None;
+            self.tracked[*signal] = None;
         }
 
         self.updated_this_time_step.clear();
@@ -752,17 +796,15 @@ impl Simulation {
                                     start_ts: state.runtime.time,
                                     last_ts: Timestamp::MAX,
                                     paused: false,
-                                    scope: VcdScope {
-                                        name: "top".to_string(),
-                                        items: Vec::new(),
-                                    },
-                                    tracked: VgHashMap::default(),
+                                    children: Vec::new(),
+                                    map: SecondaryTable::new(),
+                                    tracked: SecondaryTable::new(),
                                     updated_this_time_step: Vec::new(),
                                     writer: Box::new(std::fs::File::create(path).unwrap()),
                                     time_scale: 1000,
                                 });
                             }
-                            O::VcdAppendModule(scope) => {
+                            O::VcdAppendModule(children, map) => {
                                 let Some(vcd) = state.vcd.as_mut() else {
                                     writeln!(
                                         &mut io.stderr,
@@ -780,9 +822,14 @@ impl Simulation {
                                     break 'instruction Some(EvalOutcome::Error);
                                 }
 
-                                scope
-                                    .extend_into(&mut vcd.tracked, &mut vcd.updated_this_time_step);
-                                vcd.scope = scope.clone();
+                                for child in children {
+                                    child.extend_into(
+                                        &mut vcd.tracked,
+                                        &mut vcd.updated_this_time_step,
+                                    );
+                                }
+                                vcd.children = children.clone();
+                                vcd.map = map.clone();
                             }
                             O::VcdPause => _ = state.vcd.as_mut().map(|vcd| vcd.paused = true),
                             O::VcdResume => _ = state.vcd.as_mut().map(|vcd| vcd.paused = false),
@@ -945,11 +992,12 @@ impl Simulation {
         );
         if let Some(vcd) = state.vcd.as_mut()
             && !vcd.paused
-            && let Some(idx) = vcd.tracked.get_mut(&signal)
+            && let Some(idx) = vcd.tracked.get_mut(signal)
         {
             idx.get_or_insert_with(|| {
+                let idx = NonMaxUsize::new(vcd.updated_this_time_step.len()).unwrap();
                 vcd.updated_this_time_step.push(signal);
-                NonZeroUsize::new(vcd.updated_this_time_step.len()).unwrap()
+                idx
             });
         }
         let mut plugins = std::mem::take(&mut state.plugins);
@@ -1028,26 +1076,38 @@ impl SimulationState {
         .unwrap();
     }
 
-    pub fn start_vcd(&mut self, path: &Path, scope: VcdScope) {
-        self.start_vcd_raw(Box::new(std::fs::File::create(path).unwrap()), scope);
+    pub fn start_vcd(
+        &mut self,
+        path: &Path,
+        children: Vec<VcdScopeItem>,
+        map: SecondaryTable<RtSignalKey, Box<[(VcdVariableKey, Option<SignalSlice>)]>>,
+    ) {
+        self.start_vcd_raw(
+            Box::new(std::fs::File::create(path).unwrap()),
+            children,
+            map,
+        );
     }
 
     pub fn start_vcd_raw(
         &mut self,
         writer: Box<dyn std::io::Write + Send + Sync>,
-        scope: VcdScope,
+        children: Vec<VcdScopeItem>,
+        map: SecondaryTable<RtSignalKey, Box<[(VcdVariableKey, Option<SignalSlice>)]>>,
     ) {
-        let mut tracked = VgHashMap::default();
+        let mut tracked = SecondaryTable::new();
         let mut updated_this_time_step = Vec::new();
 
-        scope.extend_into(&mut tracked, &mut updated_this_time_step);
-
+        for child in &children {
+            child.extend_into(&mut tracked, &mut updated_this_time_step);
+        }
         self.vcd = Some(VcdOutput {
             printed_header: false,
             start_ts: 0,
             last_ts: Timestamp::MAX,
             paused: false,
-            scope,
+            map,
+            children,
             tracked,
             updated_this_time_step,
             writer,

@@ -18,7 +18,7 @@ use vogls_utils::NonMaxU32;
 
 use self::dyn_format_string::DynFormatString;
 use self::token_range::TokenRange;
-use self::vcd::{VcdOutput, VcdScope};
+use self::vcd::VcdOutput;
 
 new_key_type! { pub struct ProcessKey; }
 new_key_type! { pub struct BasicBlockKey; }

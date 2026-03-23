@@ -1,13 +1,15 @@
 use vogls_ir::dyn_format_string::DynFormatString;
-use vogls_ir::{Bits, LogicMode, ResizeOp, Time, UnaryOp, VectorSize};
+use vogls_ir::vcd::VcdVariableKey;
+use vogls_ir::{Bits, LogicMode, ResizeOp, SignalSlice, Time, UnaryOp, VectorSize};
 
 mod format;
 mod lower;
 
 pub use lower::lower_process_to_vm;
 use vogls_runtime::RtSignalKey;
+use vogls_utils::SecondaryTable;
 
-use crate::VcdScope;
+use crate::VcdScopeItem;
 use vogls_codegen::{Heap, HeapOffset, HeapRef};
 
 #[derive(Debug, Clone, Copy)]
@@ -54,7 +56,10 @@ pub enum VmIntrinsicOp {
     Display(Box<DynFormatString>),
     Assert(Box<DynFormatString>),
     VcdOpenFile(String),
-    VcdAppendModule(VcdScope),
+    VcdAppendModule(
+        Vec<VcdScopeItem>,
+        SecondaryTable<RtSignalKey, Box<[(VcdVariableKey, Option<SignalSlice>)]>>,
+    ),
     VcdPause,
     VcdResume,
 }
@@ -261,10 +266,10 @@ impl VmIntrinsicOp {
             Self::Time => "time",
             Self::Finish => "finish",
             Self::Random => "random",
-            Self::Display(_) => "display",
-            Self::Assert(_) => "assert",
-            Self::VcdOpenFile(_) => "vcd.open_file",
-            Self::VcdAppendModule(_) => "vcd.append_scope",
+            Self::Display(..) => "display",
+            Self::Assert(..) => "assert",
+            Self::VcdOpenFile(..) => "vcd.open_file",
+            Self::VcdAppendModule(..) => "vcd.append_scope",
             Self::VcdPause => "vcd.pause",
             Self::VcdResume => "vcd.resume",
         }

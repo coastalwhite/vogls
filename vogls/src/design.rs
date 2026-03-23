@@ -15,7 +15,7 @@ use vogls_ir::{Bits, GlobalContext, LogicMode, Signal, SignalKey};
 use vogls_runtime::SimulationIo;
 use vogls_runtime::{RtSignalKey, RuntimeState};
 use vogls_sim::{Event, Regions, Simulation, VmProcess, VmProcessKey, lower_process_to_vm};
-use vogls_utils::{IndexSet, NonMaxU32, VgHashMap};
+use vogls_utils::{IndexSet, NonMaxU32, TableKey, VgHashMap};
 use vogls_verilog::arena::Arena;
 use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{Description, Module, ModuleItem, NonPortModuleItem};
@@ -557,7 +557,7 @@ impl Design {
                 });
             }
 
-            let vm_signal_key = RtSignalKey(io_signals.len() as u64);
+            let vm_signal_key = RtSignalKey::from_usize(io_signals.len()).unwrap();
             io_signals.insert(key, vm_signal_key);
             signals.push(HeapRef {
                 offset: HeapOffset { bit_offset: 0 },
@@ -741,7 +741,7 @@ impl Design {
             if let Some(initialize) = initialize {
                 assert_eq!(initialize.size(), *size);
                 heap.store_bits(
-                    signals[io_signals[&key].0 as usize],
+                    signals[io_signals[&key].as_usize()],
                     mctx.gl.logic_mode,
                     initialize,
                 );
@@ -765,8 +765,8 @@ impl Design {
         if let Some(vcd_path) = &ectx.vcd {
             let tlm = ctx.table.roots()[0];
             let scope = ctx.vcd_scope(tlm, &ctx.arenas.ident_table);
-            let scope = vogls_sim::VcdScope::lower(&scope, &io_signals);
-            initial_state.start_vcd(vcd_path, scope);
+            let (children, map) = vogls_sim::VcdScope::lower(&scope, &io_signals);
+            initial_state.start_vcd(vcd_path, children, map);
         }
 
         let LowerContext {

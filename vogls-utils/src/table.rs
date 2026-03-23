@@ -45,6 +45,9 @@ pub struct Table<K, V> {
 }
 
 #[derive(Clone)]
+pub struct SecondaryTable<K, V>(Table<K, Option<V>>);
+
+#[derive(Clone)]
 pub struct TableSet<KK, K, V> {
     table: Table<KK, (K, V)>,
     set: hashbrown::HashTable<(KK, K)>,
@@ -77,6 +80,21 @@ impl<K: fmt::Debug, V: fmt::Debug> fmt::Debug for Table<K, V> {
         map.finish()
     }
 }
+impl<K: fmt::Debug, V: fmt::Debug> fmt::Debug for SecondaryTable<K, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "SecondaryTable<{}, {}> ",
+            std::any::type_name::<K>(),
+            std::any::type_name::<V>()
+        )?;
+        let mut map = f.debug_map();
+        for (i, v) in self.0.values.iter().enumerate() {
+            map.entry(&i, &v);
+        }
+        map.finish()
+    }
+}
 impl<KK: fmt::Debug, K: fmt::Debug, V: fmt::Debug> fmt::Debug for TableSet<KK, K, V> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -101,6 +119,13 @@ impl<K: TableKey, V> Index<K> for Table<K, V> {
         &self.values[index.get()]
     }
 }
+impl<K: TableKey, V> Index<K> for SecondaryTable<K, V> {
+    type Output = V;
+
+    fn index(&self, index: K) -> &Self::Output {
+        self.0[index].as_ref().unwrap()
+    }
+}
 impl<KK: TableKey, K, V> Index<KK> for TableSet<KK, K, V> {
     type Output = V;
 
@@ -112,6 +137,11 @@ impl<KK: TableKey, K, V> Index<KK> for TableSet<KK, K, V> {
 impl<K: TableKey, V> IndexMut<K> for Table<K, V> {
     fn index_mut(&mut self, index: K) -> &mut <Self as Index<K>>::Output {
         &mut self.values[index.get()]
+    }
+}
+impl<K: TableKey, V> IndexMut<K> for SecondaryTable<K, V> {
+    fn index_mut(&mut self, index: K) -> &mut Self::Output {
+        self.0[index].as_mut().unwrap()
     }
 }
 impl<KK: TableKey, K, V> IndexMut<KK> for TableSet<KK, K, V> {
@@ -136,6 +166,10 @@ impl<K, V> Table<K, V> {
         self.values.len()
     }
 
+    pub fn capacity(&self) -> usize {
+        self.values.capacity()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.values.is_empty()
     }
@@ -148,6 +182,82 @@ impl<K, V> Table<K, V> {
         self.values.into_iter()
     }
 }
+impl<K, V> SecondaryTable<K, V> {
+    pub const fn new() -> Self {
+        Self(Table::new())
+    }
+
+    pub fn reserve(&mut self, additional: usize) {
+        self.0.reserve(additional);
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.0.capacity()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl<K: TableKey, V> SecondaryTable<K, V> {
+    pub fn reserve_until(&mut self, key: K) {
+        struct ExtendNone<V>(usize, PhantomData<V>);
+        impl<V> Iterator for ExtendNone<V> {
+            type Item = Option<V>;
+            fn next(&mut self) -> Option<Self::Item> {
+                if self.0 == 0 {
+                    None
+                } else {
+                    self.0 -= 1;
+                    Some(None)
+                }
+            }
+            fn size_hint(&self) -> (usize, Option<usize>) {
+                (self.0, Some(self.0))
+            }
+        }
+        impl<V> ExactSizeIterator for ExtendNone<V> {}
+        self.0.values.extend(ExtendNone(
+            (key.get() + 1).saturating_sub(self.len()),
+            PhantomData,
+        ));
+    }
+
+    pub fn insert(&mut self, key: K, value: V) -> Option<V> {
+        self.reserve_until(key);
+        std::mem::replace(&mut self.0[key], Some(value))
+    }
+
+    pub fn remove(&mut self, key: K) -> Option<V> {
+        if self.capacity() > key.get() {
+            std::mem::replace(&mut self.0[key], None)
+        } else {
+            None
+        }
+    }
+
+    pub fn get(&self, key: K) -> Option<&V> {
+        self.0[key].as_ref()
+    }
+
+    pub fn get_mut(&mut self, key: K) -> Option<&mut V> {
+        self.0[key].as_mut()
+    }
+
+    pub fn or_insert_with(&mut self, key: K, mut f: impl FnMut() -> V) {
+        self.reserve_until(key);
+        match &mut self.0[key] {
+            v @ None => *v = Some(f()),
+            Some(_) => {}
+        }
+    }
+}
+
 impl<KK, K, V> TableSet<KK, K, V> {
     pub fn new() -> Self {
         Self {

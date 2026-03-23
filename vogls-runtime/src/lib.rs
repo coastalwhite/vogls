@@ -1,15 +1,15 @@
 use vogls_codegen::Heap;
+use vogls_utils::{TableKey, new_table_key};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct RtSignalKey(pub u64);
+new_table_key! { pub struct RtSignalKey; }
 
 impl RtSignalKey {
     pub fn as_usize(self) -> usize {
-        self.0 as usize
+        self.get()
     }
 
     pub fn as_u64(self) -> u64 {
-        self.0
+        self.get() as u64
     }
 }
 
