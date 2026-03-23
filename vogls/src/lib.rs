@@ -42,6 +42,9 @@ pub struct ExecutionContext {
     pub no_run: bool,
     pub vcd: Option<PathBuf>,
     pub compile: bool,
+    pub print_unoptimized_fuse_signals: bool,
+    pub print_round_fuse_signals: bool,
+    pub print_optimized_fuse_signals: bool,
 }
 
 pub fn token_range_to_line_range(

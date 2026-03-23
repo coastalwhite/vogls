@@ -1,10 +1,10 @@
 use slotmap::SlotMap;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::{
-    BasicBlockBuilder, Bits, GlobalContext, INTEGER_VSIZE, Signal, SignalKey, SignalSlice,
-    new_process,
+    BasicBlockBuilder, Bits, GlobalContext, INTEGER_VSIZE, Instruction, Signal, SignalKey,
+    SignalSlice, new_process,
 };
-use vogls_utils::{IndexMap, TableKey, TableSet, VgHashMap};
+use vogls_utils::{IndexMap, TableKey, TableSet, VgHashMap, VgHashSet};
 
 vogls_utils::new_table_key! { struct NodeKey; }
 slotmap::new_key_type! { struct EdgeKey; }
@@ -23,6 +23,7 @@ struct Node {
 type Nodes = TableSet<NodeKey, SignalKey, Node>;
 type Edges = SlotMap<EdgeKey, Edge>;
 
+#[allow(unused)]
 fn print(signals: &SlotMap<SignalKey, Signal>, nodes: &Nodes, edges: &Edges) {
     println!("digraph {{");
     for (n, s, _) in nodes.iter() {
@@ -50,6 +51,12 @@ fn print(signals: &SlotMap<SignalKey, Signal>, nodes: &Nodes, edges: &Edges) {
         );
     }
     println!("}}");
+}
+
+pub struct FuseSignalsContext {
+    pub print_unoptimized_fuse_signals: bool,
+    pub print_round_fuse_signals: bool,
+    pub print_optimized_fuse_signals: bool,
 }
 
 /// Fuse signals for a given list of drivers & drivees pairs.
@@ -80,6 +87,7 @@ fn print(signals: &SlotMap<SignalKey, Signal>, nodes: &Nodes, edges: &Edges) {
 pub fn fuse_signals(
     gl: &mut GlobalContext,
     connections: &[vogls_verilog::lower::Edge],
+    ctx: &FuseSignalsContext,
 ) -> VgHashMap<SignalKey, (SignalKey, Option<SignalSlice>)> {
     let mut nodes = Nodes::default();
     let mut edges = Edges::default();
@@ -106,12 +114,27 @@ pub fn fuse_signals(
         nodes[drivee].fanin.push(edge);
     }
 
-    print(&gl.signals, &nodes, &edges);
+    let mut lupdts = VgHashSet::default();
+    for bb in gl.bbs.values() {
+        for i in &bb.instrs {
+            if let Instruction::LastUpdateTime(_, s) = &i {
+                lupdts.insert(*s);
+            }
+        }
+    }
+
+    if ctx.print_unoptimized_fuse_signals {
+        println!("// Unoptimized Fuse Signals");
+        print(&gl.signals, &nodes, &edges);
+        println!();
+    }
 
     // Transform the graph until a fixed-point.
     let mut changed = true;
     let mut cyclic = Vec::new();
+    let mut round = 0;
     while changed {
+        round += 1;
         changed = false;
         for node in nodes.table_key_iter() {
             if nodes[node].fanin.len() > 1 {
@@ -149,13 +172,21 @@ pub fn fuse_signals(
                     continue;
                 }
 
+                // If we rely on accurately knowing the last update of a signal, we cannot fuse a
+                // view of a signal as the driver of the observed signal.
+                if (drivee_slice.lsb() != 0
+                    || drivee_slice.width() != gl.signals[nodes.get_key(drivee)].size)
+                    && lupdts.contains(&nodes.get_key(drivee))
+                {
+                    continue;
+                }
+
                 if nodes[drivee].fanout.is_empty() {
                     continue;
                 }
 
-                changed = true;
-
                 let mut drivee_fanout = std::mem::take(&mut nodes[drivee].fanout);
+                let start_length = drivee_fanout.len();
                 nodes[node]
                     .fanout
                     .extend(drivee_fanout.extract_if(.., |&mut e| {
@@ -171,6 +202,7 @@ pub fn fuse_signals(
                         edges[e].driver_slice = slice;
                         true
                     }));
+                changed |= start_length != drivee_fanout.len();
                 nodes[drivee].fanout = drivee_fanout;
             }
 
@@ -233,10 +265,19 @@ pub fn fuse_signals(
                 nodes[node].fanout.truncate(write);
             }
         }
+
+        if ctx.print_round_fuse_signals {
+            println!("// Round {round} Fuse Signals");
+            print(&gl.signals, &nodes, &edges);
+            println!();
+        }
     }
 
-    print(&gl.signals, &nodes, &edges);
-    println!();
+    if ctx.print_optimized_fuse_signals {
+        println!("// Optimized Fuse Signals");
+        print(&gl.signals, &nodes, &edges);
+        println!();
+    }
 
     let mut replacement_signals =
         VgHashMap::<SignalKey, (SignalKey, Option<SignalSlice>)>::default();
@@ -340,9 +381,12 @@ pub fn fuse_signals(
                         continue;
                     }
                 }
+                I::LastUpdateTime(dst, signal) => {
+                    let signal = replacement_signals.get(signal).map_or(*signal, |(s, _)| *s);
+                    builder.push_raw_instruction(I::LastUpdateTime(*dst, signal));
+                    continue;
+                }
 
-                // @TODO: VCD
-                I::Intrinsic(_, _, _) => {}
                 _ => {}
             }
             builder.push_raw_instruction(i);

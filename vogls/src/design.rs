@@ -31,6 +31,7 @@ use vogls_verilog::parser::{
 };
 use vogls_verilog::tokenizer::{Macro, Tokenized};
 
+use crate::fuse_signals::FuseSignalsContext;
 use crate::{ExecutionContext, append_referenced_modules, fuse_signals, token_range_to_line_range};
 
 pub enum DesignBackend {
@@ -292,7 +293,6 @@ impl Design {
             }
         }
 
-        let mut udps = VgHashMap::default();
         for description in f.descriptions.iter() {
             let Description::Udp(udp_id) = &*description else {
                 continue;
@@ -301,7 +301,7 @@ impl Design {
             let udp_id = *udp_id;
             let ident = udp_id.identifier.item.0;
 
-            udps.insert(ident, udp_id);
+            ctx.udps.insert(ident, udp_id);
         }
 
         let mut error = false;
@@ -419,7 +419,15 @@ impl Design {
             }
         }
 
-        let fused = fuse_signals::fuse_signals(&mut mctx.gl, &mctx.connections);
+        let fused = fuse_signals::fuse_signals(
+            &mut mctx.gl,
+            &mctx.connections,
+            &FuseSignalsContext {
+                print_unoptimized_fuse_signals: ectx.print_unoptimized_fuse_signals,
+                print_round_fuse_signals: ectx.print_round_fuse_signals,
+                print_optimized_fuse_signals: ectx.print_optimized_fuse_signals,
+            },
+        );
         for symbol in ctx.table.symbol_id_iter() {
             if let VSymbol::Net(net) = &mut ctx.table[symbol].content {
                 net.net.replace_signals(|s| {

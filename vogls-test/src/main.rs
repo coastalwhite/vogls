@@ -204,6 +204,9 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                     logic_mode,
                     vcd: None,
                     compile,
+                    print_optimized_fuse_signals: false,
+                    print_round_fuse_signals: false,
+                    print_unoptimized_fuse_signals: false,
                 };
 
                 if test_information.verify_ir {
@@ -229,6 +232,9 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                             logic_mode,
                             vcd: None,
                             compile,
+                            print_optimized_fuse_signals: false,
+                            print_round_fuse_signals: false,
+                            print_unoptimized_fuse_signals: false,
                         };
                         vogls::design::Design::new(
                             &[&path],

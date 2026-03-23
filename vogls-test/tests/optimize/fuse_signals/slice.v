@@ -7,10 +7,10 @@ module bufmod(
 endmodule
 
 module top2 ();
-    reg a;
-    wire [1:0] z;
+    reg [1:0] a;
+    wire z;
 
-    bufmod _b0 ( .i(a[0]), .o(z[0]) );
+    bufmod _b0 ( .i(a[0]), .o(z) );
 
 `ifndef __VOGLS_VERIFY_IR
     initial begin

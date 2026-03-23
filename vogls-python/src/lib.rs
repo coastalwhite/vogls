@@ -3,7 +3,6 @@ pub mod trace;
 #[pyo3::pymodule]
 mod vogls {
     use std::io::{stderr, stdout};
-    use std::ops::DerefMut;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
 
@@ -49,13 +48,14 @@ mod vogls {
     #[pymethods]
     impl Design {
         #[new]
-        #[pyo3(signature = (path, top_level_module = None, defines = None, four_value_logic = false, compile = false))]
+        #[pyo3(signature = (path, top_level_module = None, defines = None, four_value_logic = false, compile = false, trace = false))]
         fn new(
             path: PathBuf,
             top_level_module: Option<String>,
             defines: Option<Vec<String>>,
             four_value_logic: bool,
             compile: bool,
+            trace: bool,
         ) -> PyResult<Self> {
             let mut ectx = ExecutionContext {
                 stdout: Box::new(std::io::stdout()),
@@ -77,13 +77,21 @@ mod vogls {
                 no_run: false,
                 vcd: None,
                 compile,
+                print_optimized_fuse_signals: false,
+                print_round_fuse_signals: false,
+                print_unoptimized_fuse_signals: false,
             };
+
+            let mut plugins = Vec::new();
+            if trace {
+                plugins.push(Box::new(TracePlugin::default()) as _);
+            }
 
             let inner = vogls::design::Design::new(
                 &[path.as_path()],
                 top_level_module.as_deref(),
                 &mut ectx,
-                Vec::new(),
+                plugins,
             )
             .map_err(|e| PyException::new_err(e.to_string()))?;
             let snapshot = Snapshot {
@@ -178,21 +186,18 @@ mod vogls {
 
         pub fn trace(&self, py: Python<'_>, snapshot: Py<Snapshot>) -> TraceRef {
             let snapshot = snapshot.borrow(py);
+            let design = &self.inner;
             let mut state = snapshot.inner.lock().unwrap();
-            let DesignState::Interpretted(state) = state.deref_mut() else {
-                todo!()
-            };
-            let idx = state.plugins.len();
-
-            let trace = TracePlugin::default();
-
-            state.plugins.push(Box::new(trace));
+            match &mut *state {
+                DesignState::Interpretted(s) => s.plugins[0] = Box::new(TracePlugin::new(design)),
+                DesignState::Compiled(s) => s.plugins[0] = Box::new(TracePlugin::new(design)),
+            }
 
             TraceRef {
                 snapshot: Snapshot {
                     inner: snapshot.inner.clone(),
                 },
-                plugin_idx: idx,
+                plugin_idx: 0,
             }
         }
     }
@@ -276,10 +281,11 @@ mod vogls {
     impl TraceRef {
         pub fn print(&self) {
             let state = self.snapshot.inner.lock().unwrap();
-            let DesignState::Interpretted(state) = &*state else {
-                todo!()
+            let plugin = match &*state {
+                DesignState::Interpretted(s) => &s.plugins[0],
+                DesignState::Compiled(s) => &s.plugins[0],
             };
-            let trace = (state.plugins[self.plugin_idx].as_ref() as &dyn std::any::Any)
+            let trace = (plugin.as_ref() as &dyn std::any::Any)
                 .downcast_ref::<super::trace::TracePlugin>()
                 .unwrap();
 
@@ -294,10 +300,11 @@ mod vogls {
 
         pub fn extract(&self) -> Trace {
             let mut state = self.snapshot.inner.lock().unwrap();
-            let DesignState::Interpretted(state) = state.deref_mut() else {
-                todo!()
+            let plugins = match &mut *state {
+                DesignState::Interpretted(s) => &mut s.plugins,
+                DesignState::Compiled(s) => &mut s.plugins,
             };
-            let trace = state.plugins.remove(self.plugin_idx);
+            let trace = plugins.remove(self.plugin_idx);
             let trace = trace as Box<dyn std::any::Any>;
             let trace = trace.downcast::<super::trace::TracePlugin>().unwrap();
             Trace {

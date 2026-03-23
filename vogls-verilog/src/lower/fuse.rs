@@ -3,10 +3,10 @@ use vogls_ir::{INTEGER_VSIZE, SCALAR_VSIZE, SignalSlice, VectorSize};
 
 use crate::ast::AstId;
 use crate::ast::expr::{BitSlice, Expr};
+use crate::elaborate::VSymbol;
+use crate::lower::{hident_span, try_resolve_symbol_id};
 
-use super::{
-    Diagnostics, LowerContext, MutLowerContext, VType, VValue, eval_constant_expr, try_resolve_net,
-};
+use super::{Diagnostics, LowerContext, MutLowerContext, VType, VValue, eval_constant_expr};
 
 fn try_constant_expr<'a>(
     ctx: &LowerContext<'a>,
@@ -136,13 +136,25 @@ pub fn try_lower_fuse_driver_expr<'a>(
         return Ok(false);
     };
 
-    let net = try_resolve_net(
+    let symbol_id = try_resolve_symbol_id(
         scope,
         &ctx.table,
         &ctx.arenas,
         *ident,
         &mut mctx.diagnostics,
     )?;
+    let net = match &ctx.table[symbol_id].content {
+        VSymbol::Parameter(_) => return Ok(false),
+        VSymbol::Net(n) => n,
+
+        _ => {
+            mctx.diagnostics.not_yet_implemented(
+                hident_span(&ctx.arenas, *ident),
+                "cannot assign net to this.",
+            );
+            return Err(());
+        }
+    };
 
     if exprs.len() < net.dims.len() {
         mctx.diagnostics

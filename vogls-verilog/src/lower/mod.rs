@@ -470,8 +470,12 @@ fn assign_input_port<'a>(
         assert!(drivee_slice.is_none(), "should not be set yet");
 
         let mut offset = 0;
+        let drivee_width = mctx.gl.signals[drivee].size;
         for &(signal, slice) in &mctx.fuse_scratch {
             let width = slice.map_or_else(|| mctx.gl.signals[signal].size, |s| s.width());
+            let Some(width) = VectorSize::new((drivee_width.get() - offset).min(width.get())) else {
+                break;
+            };
             mctx.connections.push(Edge {
                 driver: signal,
                 driver_slice: slice,
@@ -958,7 +962,7 @@ pub fn create_nba_process(
 
     gl.bbs[init_bb].terminator = BasicBlockTerminator::Branch(mask_ro, waitregion_bb, watch_bb);
 
-    (process_key, mask, value)
+    (process_key, value, mask)
 }
 
 pub fn instantiate_nba_signals<'a>(

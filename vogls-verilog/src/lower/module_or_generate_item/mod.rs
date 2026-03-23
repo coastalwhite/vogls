@@ -125,9 +125,15 @@ pub fn lower<'a>(
                     assert!(drivee_slice.is_none(), "should not yet be set");
 
                     let mut offset = 0;
+                    let drivee_width = mctx.gl.signals[drivee].size;
                     for &(signal, slice) in &mctx.fuse_scratch {
                         let width =
                             slice.map_or_else(|| mctx.gl.signals[signal].size, |s| s.width());
+                        let Some(width) =
+                            VectorSize::new((drivee_width.get() - offset).min(width.get()))
+                        else {
+                            break;
+                        };
                         mctx.connections.push(Edge {
                             driver: signal,
                             driver_slice: slice,
