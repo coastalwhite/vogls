@@ -1,3 +1,5 @@
+use std::io::Write;
+
 use slotmap::SlotMap;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::{
@@ -25,12 +27,20 @@ type Edges = SlotMap<EdgeKey, Edge>;
 
 #[allow(unused)]
 fn print(signals: &SlotMap<SignalKey, Signal>, nodes: &Nodes, edges: &Edges) {
-    println!("digraph {{");
+    use std::fmt::Write;
+    let mut out = String::new();
+    writeln!(&mut out, "digraph {{").unwrap();
     for (n, s, _) in nodes.iter() {
-        println!(r#"  n{} [label="{}"];"#, n.get(), &signals[s].name);
+        writeln!(
+            &mut out,
+            r#"  n{} [label="{}"];"#,
+            n.get(),
+            &signals[s].name
+        );
     }
     for edge in edges.values() {
-        println!(
+        writeln!(
+            &mut out,
             r#"  n{} -> n{} [taillabel="{}", headlabel="{}"];"#,
             edge.driver.get(),
             edge.drivee.get(),
@@ -50,7 +60,34 @@ fn print(signals: &SlotMap<SignalKey, Signal>, nodes: &Nodes, edges: &Edges) {
             },
         );
     }
-    println!("}}");
+    writeln!(&mut out, "}}");
+    // println!("{out}");
+
+    use std::process::{Command, Stdio};
+    // Start `dot` process with stdin and stdout piped
+    let mut dot = Command::new("dot")
+        .args(["-Nshape=box", "-Tsvg", "-ofuse-signals.svg"])
+        .stdin(Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn dot");
+
+    // Write "test\n" to dot's stdin
+    dot.stdin
+        .take()
+        .expect("Failed to take dot stdin")
+        .write_all(out.as_bytes())
+        .expect("Failed to write to dot stdin");
+
+    // Wait for dot and collect its stdout
+    let dot_output = dot.wait().expect("Failed to wait on dot");
+
+    // Pipe dot's stdout into `imv` via stdin
+    let mut imv = Command::new("imv")
+        .arg("fuse-signals.svg")
+        .spawn()
+        .expect("Failed to spawn imv");
+
+    imv.wait().expect("Failed to wait on imv");
 }
 
 pub struct FuseSignalsContext {
@@ -167,6 +204,7 @@ pub fn fuse_signals(
                     drivee_slice,
                 } = edges[e];
 
+                debug_assert_eq!(node, driver);
                 if driver == drivee {
                     cyclic.push(i);
                     continue;
@@ -187,7 +225,7 @@ pub fn fuse_signals(
 
                 let mut drivee_fanout = std::mem::take(&mut nodes[drivee].fanout);
                 let start_length = drivee_fanout.len();
-                nodes[node]
+                nodes[driver]
                     .fanout
                     .extend(drivee_fanout.extract_if(.., |&mut e| {
                         let edge = &mut edges[e];
@@ -262,7 +300,7 @@ pub fn fuse_signals(
                     }
                     read += 1;
                 }
-                nodes[node].fanout.truncate(write);
+                nodes[node].fanout.truncate(write + 1);
             }
         }
 
