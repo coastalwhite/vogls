@@ -83,6 +83,7 @@ mod vogls {
                 &[path.as_path()],
                 top_level_module.as_deref(),
                 &mut ectx,
+                Vec::new(),
             )
             .map_err(|e| PyException::new_err(e.to_string()))?;
             let snapshot = Snapshot {
@@ -183,21 +184,7 @@ mod vogls {
             };
             let idx = state.plugins.len();
 
-            let mut trace = TracePlugin::default();
-            for signal in self.inner.elab_table.symbol_iter() {
-                if let VSymbol::Net(n) = &signal.content {
-                    let (signal, _slice) = n.net.probe_signal();
-                    let vm_signal = self.inner.get_rt_signal(signal);
-                    trace.updated_this_time_step.push(vm_signal);
-                    trace.tracked.insert(
-                        vm_signal,
-                        Some(
-                            std::num::NonZeroUsize::new(trace.updated_this_time_step.len())
-                                .unwrap(),
-                        ),
-                    );
-                }
-            }
+            let trace = TracePlugin::default();
 
             state.plugins.push(Box::new(trace));
 

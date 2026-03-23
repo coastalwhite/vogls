@@ -1,58 +1,84 @@
-use std::num::NonZeroUsize;
+use std::sync::Arc;
 
 use hashbrown::hash_map::Entry;
-use vogls::RtSignalKey;
+use vogls::VSymbol;
+use vogls::codegen::HeapRef;
+use vogls::utils::{NonMaxUsize, VgHashMap};
+use vogls::{LogicMode, RtSignalKey, design::Design};
 
 /// Simulation plugin to trace signals when they can updated.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct TracePlugin {
-    pub tracked: vogls::utils::VgHashMap<RtSignalKey, Option<NonZeroUsize>>,
+    pub tracked: vogls::utils::VgHashMap<RtSignalKey, Option<NonMaxUsize>>,
     pub updated_this_time_step: Vec<RtSignalKey>,
 
+    pub logic_mode: LogicMode,
+    pub signal_to_heap: Arc<[HeapRef]>,
     pub trace: Vec<(RtSignalKey, vogls::Bits)>,
     pub time_offsets: Vec<(u64, usize)>,
 }
 
-impl vogls::sim::Plugin for TracePlugin {
-    fn update_signal(
-        &mut self,
-        _simulation: &vogls::sim::Simulation,
-        _state: &mut vogls::SimulationState,
-        signal: RtSignalKey,
-    ) {
+impl TracePlugin {
+    pub fn new(design: &Design) -> Self {
+        let mut tracked = VgHashMap::default();
+        let mut updated_this_time_step = Vec::new();
+
+        for signal in design.elab_table.symbol_iter() {
+            if let VSymbol::Net(n) = &signal.content {
+                let (signal, _slice) = n.net.probe_signal();
+                let rt_signal = design.get_rt_signal(signal);
+                tracked.insert(
+                    rt_signal,
+                    Some(NonMaxUsize::new(updated_this_time_step.len()).unwrap()),
+                );
+                updated_this_time_step.push(rt_signal);
+            }
+        }
+
+        Self {
+            tracked,
+            updated_this_time_step,
+            logic_mode: design.gl.logic_mode,
+            signal_to_heap: design.signal_to_heap.clone(),
+            trace: Vec::new(),
+            time_offsets: Vec::new(),
+        }
+    }
+}
+
+impl vogls::runtime::plugins::RuntimePlugin for TracePlugin {
+    fn clone(&self) -> vogls::runtime::plugins::RuntimePluginState {
+        Box::new(Clone::clone(self))
+    }
+
+    fn poke_signal(&mut self, signal: RtSignalKey) {
         if let Some(idx) = self.tracked.get_mut(&signal) {
             idx.get_or_insert_with(|| {
+                let idx = NonMaxUsize::new(self.updated_this_time_step.len()).unwrap();
                 self.updated_this_time_step.push(signal);
-                NonZeroUsize::new(self.updated_this_time_step.len()).unwrap()
+                idx
             });
         }
     }
 
-    fn timestep(
-        &mut self,
-        simulation: &vogls::sim::Simulation,
-        state: &mut vogls::SimulationState,
-    ) {
-        self.time_offsets
-            .push((state.runtime.time, self.trace.len()));
+    fn timestep(&mut self, state: &mut vogls::runtime::RuntimeState) {
+        self.time_offsets.push((state.time, self.trace.len()));
         self.trace
             .extend(self.updated_this_time_step.iter().map(|&s| {
                 (
                     s,
                     state
-                        .runtime
                         .heap
-                        .load_bits(simulation.signals[s.as_usize()], simulation.logic_mode),
+                        .load_bits(self.signal_to_heap[s.as_usize()], self.logic_mode),
                 )
             }));
         self.tracked.iter_mut().for_each(|t| *t.1 = None);
         self.updated_this_time_step.clear();
     }
 
-    fn finish(&mut self, _simulation: &vogls::sim::Simulation, state: &mut vogls::SimulationState) {
+    fn finish(&mut self, state: &mut vogls::runtime::RuntimeState) {
         if !self.updated_this_time_step.is_empty() {
-            self.time_offsets
-                .push((state.runtime.time, self.trace.len()));
+            self.time_offsets.push((state.time, self.trace.len()));
         }
     }
 }

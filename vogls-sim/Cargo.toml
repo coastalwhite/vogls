@@ -12,6 +12,7 @@ vogls-trace.workspace = true
 vogls-utils.workspace = true
 vogls-codegen.workspace = true
 vogls-runtime.workspace = true
+vogls-vcd.workspace = true
 
 [lints]
 workspace = true

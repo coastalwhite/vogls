@@ -14,6 +14,7 @@ use vogls_ir::{
 };
 use vogls_ir_properties::get_temporal_variables;
 use vogls_runtime::RtSignalKey;
+use vogls_runtime::plugins::RuntimePluginState;
 use vogls_utils::{IndexSet, VgHashMap, VgHashSet};
 
 pub mod runtime;
@@ -207,6 +208,7 @@ fn write_cvar(f: &mut impl io::Write, var: CVar) -> io::Result<()> {
 
 pub struct CLowerOptions {
     pub itrace: bool,
+    pub num_plugins: usize,
 }
 
 pub fn lower_process(
@@ -1130,10 +1132,11 @@ pub fn lower_signal_drive_header(
     signal: SignalKey,
     io_signals: &VgHashMap<SignalKey, RtSignalKey>,
 ) -> io::Result<()> {
-    let idx = io_signals[&signal].as_u64();
+    use vogls_utils::TableKey;
+    let idx = io_signals[&signal].get();
     writeln!(
         f,
-        "void drive_signal_{idx}(schedule_t *schedule, uint64_t time, uint64_t *is_scheduled, uint64_t *listening, uint64_t *last_active_time);"
+        "void drive_signal_{idx}(schedule_t *schedule, uint64_t time, uint64_t *is_scheduled, uint64_t *listening, uint64_t *last_active_time, cold_context_t *cldctx);"
     )
 }
 
@@ -1145,10 +1148,11 @@ pub fn lower_signal_drive_fn(
     io_signals: &VgHashMap<SignalKey, RtSignalKey>,
     lower_options: &CLowerOptions,
 ) -> io::Result<()> {
-    let idx = io_signals[&signal].as_u64();
+    use vogls_utils::TableKey;
+    let idx = io_signals[&signal].get();
     writeln!(
         f,
-        "void drive_signal_{idx}(schedule_t *schedule, uint64_t time, uint64_t *is_scheduled, uint64_t *listening, uint64_t *last_active_time) {{",
+        "void drive_signal_{idx}(schedule_t *schedule, uint64_t time, uint64_t *is_scheduled, uint64_t *listening, uint64_t *last_active_time, cold_context_t *cldctx) {{",
     )?;
 
     if lower_options.itrace {
@@ -1156,6 +1160,14 @@ pub fn lower_signal_drive_fn(
             f,
             r#"{INDENT}printf("* poke {}\n");"#,
             gl.signals[signal].name.escape_default()
+        )?;
+    }
+
+    for i in 0..lower_options.num_plugins {
+        writeln!(
+            f,
+            r#"{INDENT}cldctx->plugin_poke_signal(cldctx->plugins+{offset}, {idx});"#,
+            offset = i * size_of::<RuntimePluginState>(),
         )?;
     }
 
@@ -1251,6 +1263,10 @@ struct schedule;
 typedef struct cold_context {
     void (*fmt)(void*, void*, bits_ref_t*);
     void *fmt_strs;
+
+    void **plugins;
+    void (*plugin_poke_signal)(void*, size_t);
+
     void *stdout;
     void *stderr;
 } cold_context_t;

@@ -234,6 +234,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                             &[&path],
                             test_information.top_level_module.as_deref(),
                             &mut ctx,
+                            Vec::new(),
                         )
                     });
 

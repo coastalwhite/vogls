@@ -1823,6 +1823,7 @@ pub fn finalize_symbol<'a>(
                 diagnostics: std::mem::take(diagnostics),
                 connections: Vec::new(),
                 fuse_scratch: Vec::new(),
+                has_vcd: false,
             };
             // @TODO: This should ignore errors with unresolved symbols.
             let res =

@@ -1,6 +1,8 @@
 use vogls_codegen::Heap;
 use vogls_utils::{TableKey, new_table_key};
 
+pub mod plugins;
+
 new_table_key! { pub struct RtSignalKey; }
 
 impl RtSignalKey {
@@ -13,12 +15,22 @@ impl RtSignalKey {
     }
 }
 
-#[derive(Clone)]
 pub struct RuntimeState {
     pub heap: Heap,
     pub time: u64,
     pub last_active_time: Vec<u64>,
     pub event_count: u64,
+}
+
+impl Clone for RuntimeState {
+    fn clone(&self) -> Self {
+        Self {
+            heap: self.heap.clone(),
+            time: self.time.clone(),
+            last_active_time: self.last_active_time.clone(),
+            event_count: self.event_count.clone(),
+        }
+    }
 }
 
 impl RuntimeState {

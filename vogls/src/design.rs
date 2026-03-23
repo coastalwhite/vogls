@@ -3,6 +3,7 @@ use std::io::Write as _;
 use std::path::Path;
 use std::process::Command;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use slotmap::{SecondaryMap, SlotMap};
 use vogls_codegen::{HeapBuilder, HeapOffset, HeapRef};
@@ -13,6 +14,7 @@ use vogls_codegen_c::{
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_ir::{Bits, GlobalContext, LogicMode, Signal, SignalKey};
 use vogls_runtime::SimulationIo;
+use vogls_runtime::plugins::RuntimePluginState;
 use vogls_runtime::{RtSignalKey, RuntimeState};
 use vogls_sim::{Event, Regions, Simulation, VmProcess, VmProcessKey, lower_process_to_vm};
 use vogls_utils::{IndexSet, NonMaxU32, TableKey, VgHashMap};
@@ -46,7 +48,7 @@ pub struct Design {
     pub elab_table: VSymbolTable,
     pub backend: DesignBackend,
     pub rt_signal_map: VgHashMap<SignalKey, RtSignalKey>,
-    pub signal_to_heap: Vec<HeapRef>,
+    pub signal_to_heap: Arc<[HeapRef]>,
     pub initial_state: DesignState,
 }
 
@@ -76,6 +78,7 @@ impl Design {
         paths: &[&Path],
         top_level_module: Option<&str>,
         ectx: &mut ExecutionContext,
+        mut plugins: Vec<RuntimePluginState>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let mut token_buffer = Tokenized::default();
         let mut macros = HashMap::new();
@@ -217,6 +220,7 @@ impl Design {
             diagnostics: LowerDiagnostics::default(),
             connections: Vec::new(),
             fuse_scratch: Vec::new(),
+            has_vcd: false,
         };
         let result = vogls_verilog::elaborate::next::elaborate(
             &mut mctx.gl,
@@ -419,8 +423,11 @@ impl Design {
         for symbol in ctx.table.symbol_id_iter() {
             if let VSymbol::Net(net) = &mut ctx.table[symbol].content {
                 net.net.replace_signals(|s| {
-                    fused.get(&s).copied().map_or((s, None), |(s, slice)| {
-                        (s, slice.map(|s| NonMaxU32::new(s.lsb()).unwrap()))
+                    if fused.contains_key(&s) {
+                        mctx.gl.signals.remove(s);
+                    }
+                    fused.get(&s).copied().map_or((s, None), |(r, slice)| {
+                        (r, slice.map(|s| NonMaxU32::new(s.lsb()).unwrap()))
                     })
                 });
             }
@@ -589,6 +596,25 @@ impl Design {
             }
         }
 
+        let signals: Arc<[HeapRef]> = signals.into();
+        if mctx.has_vcd || ectx.vcd.is_some() {
+            let tlm = ctx.table.roots()[0];
+            let scope = ctx.vcd_scope(tlm, &ctx.arenas.ident_table);
+            let (children, map) = vogls_vcd::VcdScope::lower(&scope, &io_signals);
+            let rtvcdoutput = match &ectx.vcd {
+                Some(path) => {
+                    vogls_vcd::RtVcdOutput::new_path(path, signals.clone(), children, map)
+                }
+                None => vogls_vcd::RtVcdOutput::new(
+                    Box::new(Vec::new()),
+                    signals.clone(),
+                    children,
+                    map,
+                ),
+            };
+            plugins.push(Box::new(rtvcdoutput));
+        }
+
         if ectx.compile {
             let mut listener_builder = ListenerBuilder::default();
             let mut out = Vec::new();
@@ -600,6 +626,7 @@ impl Design {
 
             let lower_options = CLowerOptions {
                 itrace: ectx.itrace,
+                num_plugins: plugins.len(),
             };
             for (i, process) in mctx.gl.processes.keys().enumerate() {
                 vogls_codegen_c::lower_process(
@@ -661,7 +688,7 @@ impl Design {
                 return Err("compilation failed!".into());
             }
 
-            let initial_state = CDesignState::new(
+            let mut initial_state = CDesignState::new(
                 &mctx.gl,
                 heap_builder.finish(),
                 listener_builder.top,
@@ -673,6 +700,7 @@ impl Design {
                 regions.num_additional_regions() as u8,
             );
 
+            initial_state.plugins = plugins;
             let LowerContext {
                 table,
                 table_ast_refs: _,
@@ -686,7 +714,7 @@ impl Design {
                 elab_table: table,
                 backend: DesignBackend::Compiled { design },
                 rt_signal_map: io_signals,
-                signal_to_heap: signals,
+                signal_to_heap: signals.into(),
                 initial_state: DesignState::Compiled(initial_state),
             });
         }
@@ -757,17 +785,10 @@ impl Design {
             }
         }
 
-        // @TODO: Remove clone
         let mut simulation = Simulation::new(processes, signals.clone(), mctx.gl.logic_mode);
         simulation.itrace = ectx.itrace;
         let mut initial_state = simulation.new_state(regions, listeners, watches, heap);
-
-        if let Some(vcd_path) = &ectx.vcd {
-            let tlm = ctx.table.roots()[0];
-            let scope = ctx.vcd_scope(tlm, &ctx.arenas.ident_table);
-            let (children, map) = vogls_sim::VcdScope::lower(&scope, &io_signals);
-            initial_state.start_vcd(vcd_path, children, map);
-        }
+        initial_state.plugins = plugins;
 
         let LowerContext {
             table,

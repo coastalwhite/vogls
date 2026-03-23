@@ -6,7 +6,7 @@ use vogls_frontend::ident_table::IdentId;
 use vogls_ir::token_range::TokenRange;
 pub use vogls_ir::{Bits, LogicMode, SignalKey, VectorSize};
 pub use vogls_runtime::{RtSignalKey, SimulationIo};
-pub use vogls_sim::{SimulationState, VcdOutput};
+pub use vogls_sim::SimulationState;
 use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{
     CaseGenerateConstruct, CaseGenerateItem, GenerateBlock, IfGenerateConstruct,
@@ -17,6 +17,8 @@ use vogls_verilog::parser::AstArenas;
 use vogls_verilog::tokenizer::Tokenized;
 
 pub use vogls_bits as bits;
+pub use vogls_codegen as codegen;
+pub use vogls_runtime as runtime;
 pub use vogls_sim as sim;
 pub use vogls_utils as utils;
 
@@ -156,7 +158,7 @@ pub fn run(
     top_level_module: Option<&str>,
     ectx: &mut ExecutionContext,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let design = design::Design::new(path, top_level_module, ectx)?;
+    let design = design::Design::new(path, top_level_module, ectx, Vec::new())?;
 
     if ectx.no_run {
         return Ok(());

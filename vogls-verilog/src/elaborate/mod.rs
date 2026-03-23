@@ -189,7 +189,7 @@ impl Net {
         self.width
     }
 
-    pub fn replace_signals(&mut self, f: impl Fn(SignalKey) -> (SignalKey, Option<NonMaxU32>)) {
+    pub fn replace_signals(&mut self, mut f: impl FnMut(SignalKey) -> (SignalKey, Option<NonMaxU32>)) {
         assert!(self.ba_offset.is_none());
         (self.ba, self.ba_offset) = f(self.ba);
         if let Some(specify) = &mut self.specify {

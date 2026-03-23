@@ -5,7 +5,9 @@ use std::ptr::NonNull;
 
 use vogls_ir::dyn_format_string::DynFormatString;
 use vogls_ir::{Bits, GlobalContext, VectorSize};
+use vogls_runtime::plugins::{RuntimePlugin, RuntimePluginState};
 use vogls_runtime::{RtSignalKey, SimulationIo};
+use vogls_utils::TableKey;
 
 type Time = u64;
 type HeapPtr = Option<NonNull<u64>>;
@@ -61,6 +63,9 @@ pub struct ColdContextT {
         *const BitsRefT,
     ),
     fmt_strs: *const DynFormatString,
+
+    plugins: *mut Box<dyn RuntimePlugin>,
+    plugin_poke_signal: extern "C" fn(NonNull<RuntimePluginState>, usize),
 
     stdout: NonNull<Box<dyn std::io::Write + Send + Sync>>,
     stderr: NonNull<Box<dyn std::io::Write + Send + Sync>>,
@@ -202,13 +207,26 @@ impl Schedule {
     }
 }
 
-#[derive(Clone)]
 pub struct CDesignState {
     schedule: Schedule,
     is_scheduled: Vec<u64>,
     listening: Vec<u64>,
     started: bool,
     pub runtime: vogls_runtime::RuntimeState,
+    pub plugins: Vec<RuntimePluginState>,
+}
+
+impl Clone for CDesignState {
+    fn clone(&self) -> Self {
+        Self {
+            schedule: self.schedule.clone(),
+            is_scheduled: self.is_scheduled.clone(),
+            listening: self.listening.clone(),
+            started: self.started,
+            runtime: self.runtime.clone(),
+            plugins: self.plugins.iter().map(|p| p.as_ref().clone()).collect(),
+        }
+    }
 }
 
 pub struct CDesign {
@@ -244,8 +262,13 @@ impl CDesignState {
                 last_active_time: vec![0u64; gl.signals.len()],
                 event_count: 0,
             },
+            plugins: Vec::new(),
         }
     }
+}
+
+extern "C" fn plugin_poke_signal(mut plugin: NonNull<RuntimePluginState>, signal: usize) {
+    unsafe { plugin.as_mut() }.poke_signal(RtSignalKey::from_usize(signal).unwrap());
 }
 
 extern "C" fn fmt(
@@ -304,6 +327,10 @@ impl CDesign {
             let mut cldctx = ColdContextT {
                 fmt,
                 fmt_strs: self.dyn_fmt_strs.as_ptr(),
+
+                plugins: state.plugins.as_mut_ptr(),
+                plugin_poke_signal,
+
                 stdout: NonNull::from_mut(&mut io.stdout),
                 stderr: NonNull::from_mut(&mut io.stderr),
             };
@@ -344,6 +371,8 @@ impl CDesign {
         let mut cldctx = ColdContextT {
             fmt,
             fmt_strs: self.dyn_fmt_strs.as_ptr(),
+            plugins: state.plugins.as_mut_ptr(),
+            plugin_poke_signal: plugin_poke_signal,
             stdout: NonNull::from_mut(&mut io.stdout),
             stderr: NonNull::from_mut(&mut io.stderr),
         };
@@ -375,6 +404,10 @@ impl CDesign {
                     }
                 }
 
+                for plugin in state.plugins.iter_mut() {
+                    plugin.timestep(&mut state.runtime);
+                }
+
                 if schedule.next_time > max_time {
                     state.runtime.time = max_time;
                     break ReturnValue::CONTINUE;
@@ -382,6 +415,10 @@ impl CDesign {
 
                 let mut active: Vec<_> = std::mem::take(&mut schedule.active_region).into();
                 let mut future: Vec<_> = std::mem::take(&mut schedule.future).into();
+
+                if schedule.next_time == Time::MAX {
+                    return ReturnValue::CONTINUE;
+                }
 
                 state.runtime.time = schedule.next_time;
                 let mut next_time = Time::MAX;
@@ -407,6 +444,9 @@ impl CDesign {
             }
         });
 
+        for plugin in state.plugins.iter_mut() {
+            plugin.finish(&mut state.runtime);
+        }
         if return_value.should_exit() {
             if return_value.is_ok() {
                 writeln!(io.stdout, "[FINISH]").unwrap();

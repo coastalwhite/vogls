@@ -714,6 +714,7 @@ dependencies = [
  "vogls-sim",
  "vogls-trace",
  "vogls-utils",
+ "vogls-vcd",
  "vogls-verilog",
 ]
 
@@ -809,6 +810,7 @@ dependencies = [
  "vogls-runtime",
  "vogls-trace",
  "vogls-utils",
+ "vogls-vcd",
 ]
 
 [[package]]
@@ -838,6 +840,17 @@ version = "0.0.1"
 dependencies = [
  "foldhash 0.2.0",
  "hashbrown 0.16.1",
+]
+
+[[package]]
+name = "vogls-vcd"
+version = "0.0.1"
+dependencies = [
+ "vogls-bits",
+ "vogls-codegen",
+ "vogls-ir",
+ "vogls-runtime",
+ "vogls-utils",
 ]
 
 [[package]]

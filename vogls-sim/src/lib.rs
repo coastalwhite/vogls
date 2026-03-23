@@ -1,27 +1,22 @@
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
-use std::fmt::Alignment;
-use std::path::Path;
+use std::sync::Arc;
 
 use slotmap::{SlotMap, new_key_type};
 use vogls_bits::arithmetic::{FvLogicValue, fv_set_no_special};
-use vogls_bits::format::{BitsFormatBase, BitsFormatOptions};
 use vogls_bits::set_subslice::{tv_l_set, tv_s_set};
 use vogls_codegen::{Heap, HeapOffset, HeapRef};
-use vogls_ir::vcd::{NetType, VcdVariableKey};
-use vogls_ir::{
-    INTEGER_VSIZE, LogicMode, SCALAR_VSIZE, SignalKey, SignalSlice, TIME_VSIZE, VectorSize,
-};
+use vogls_ir::{INTEGER_VSIZE, LogicMode, TIME_VSIZE};
+use vogls_runtime::plugins::RuntimePluginState;
 use vogls_runtime::{RtSignalKey, SimulationIo};
 
 mod execution;
 mod instruction;
 mod plugin;
 
-pub use plugin::{InstructionPlugin, Plugin};
+pub use plugin::InstructionPlugin;
 
 pub use instruction::*;
-use vogls_utils::{NonMaxUsize, SecondaryTable, Table, VgHashMap};
 
 new_key_type! { pub struct ListenerKey; }
 
@@ -232,268 +227,15 @@ pub fn drive_bits(
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct VcdScope {
-    pub name: String,
-    pub items: Vec<VcdScopeItem>,
-}
-
-impl VcdScope {
-    pub fn lower(
-        v: &vogls_ir::vcd::VcdOutput,
-        signal_map: &VgHashMap<SignalKey, RtSignalKey>,
-    ) -> (
-        Vec<VcdScopeItem>,
-        SecondaryTable<RtSignalKey, Box<[(VcdVariableKey, Option<SignalSlice>)]>>,
-    ) {
-        let children = v
-            .children
-            .iter()
-            .map(|i| VcdScopeItem::lower(i, &v.table, signal_map))
-            .collect();
-        let mut vcd_table = SecondaryTable::new();
-        for (k, vcd_keys) in &v.signal_map {
-            vcd_table.insert(
-                signal_map[k],
-                vcd_keys
-                    .iter()
-                    .map(|vcdkey| (*vcdkey, v.table[*vcdkey].signal_slice))
-                    .collect(),
-            );
-        }
-        (children, vcd_table)
-    }
-
-    fn lower_scope(
-        v: &vogls_ir::vcd::VcdScope,
-        table: &Table<VcdVariableKey, vogls_ir::vcd::VcdVariable>,
-        map: &VgHashMap<SignalKey, RtSignalKey>,
-    ) -> VcdScope {
-        VcdScope {
-            name: v.name.clone(),
-            items: v
-                .items
-                .iter()
-                .map(|i| VcdScopeItem::lower(i, table, map))
-                .collect(),
-        }
-    }
-
-    fn write_to(&self, f: &mut impl std::io::Write) -> std::io::Result<()> {
-        let Self { name, items } = self;
-        write!(f, "$scope module ")?;
-        if name.contains(|c: char| !(c.is_ascii_alphanumeric() || c == '_')) {
-            f.write_all(b"\\")?;
-        }
-        f.write_all(name.as_bytes())?;
-        if name.trim().is_empty() {
-            f.write_all(b"<anon>")?;
-        }
-        writeln!(f, " $end")?;
-        for item in items {
-            item.write_to(f)?;
-        }
-        writeln!(f, "$upscope $end")?;
-        Ok(())
-    }
-
-    fn extend_into(
-        &self,
-        tracked: &mut SecondaryTable<RtSignalKey, Option<NonMaxUsize>>,
-        values: &mut Vec<RtSignalKey>,
-    ) {
-        for i in &self.items {
-            i.extend_into(tracked, values);
-        }
-    }
-}
-
-impl VcdScopeItem {
-    fn write_to(&self, f: &mut impl std::io::Write) -> std::io::Result<()> {
-        match self {
-            VcdScopeItem::Scope(scope) => scope.write_to(f),
-            VcdScopeItem::Variable(k) => {
-                let VcdVariable {
-                    name,
-                    variable,
-                    signal: _,
-                    ty,
-                    msb_lsb,
-                } = k;
-                let size = msb_lsb.map_or(SCALAR_VSIZE, |(msb, lsb)| {
-                    VectorSize::new((msb.abs_diff(lsb) + 1) as u32).unwrap()
-                });
-                use vogls_utils::TableKey;
-                let idx = variable.get();
-                write!(f, "$var ")?;
-                f.write_all(
-                    match ty {
-                        NetType::Integer => "integer",
-                        NetType::Register => "reg",
-                        NetType::Wire => "wire",
-                    }
-                    .as_bytes(),
-                )?;
-                write!(f, " {size} W{idx:X} ")?;
-                if name.contains(|c: char| !(c.is_ascii_alphanumeric() || c == '_')) {
-                    f.write_all(b"\\")?;
-                }
-                f.write_all(name.as_bytes())?;
-                f.write_all(b" ")?;
-                if let Some((msb, lsb)) = msb_lsb {
-                    write!(f, "[{msb}:{lsb}] ")?;
-                }
-                writeln!(f, "$end")
-            }
-        }
-    }
-
-    fn extend_into(
-        &self,
-        tracked: &mut SecondaryTable<RtSignalKey, Option<NonMaxUsize>>,
-        values: &mut Vec<RtSignalKey>,
-    ) {
-        match self {
-            VcdScopeItem::Scope(s) => s.extend_into(tracked, values),
-            VcdScopeItem::Variable(k) => {
-                tracked.or_insert_with(k.signal, || {
-                    let idx = NonMaxUsize::new(values.len()).unwrap();
-                    values.push(k.signal);
-                    Some(idx)
-                });
-            }
-        }
-    }
-}
-
-impl VcdScopeItem {
-    fn lower(
-        v: &vogls_ir::vcd::VcdScopeItem,
-        table: &Table<VcdVariableKey, vogls_ir::vcd::VcdVariable>,
-        map: &VgHashMap<SignalKey, RtSignalKey>,
-    ) -> Self {
-        match v {
-            vogls_ir::vcd::VcdScopeItem::Scope(v) => {
-                Self::Scope(VcdScope::lower_scope(v, table, map))
-            }
-            vogls_ir::vcd::VcdScopeItem::Variable(key) => {
-                let v = &table[*key];
-                Self::Variable(VcdVariable {
-                    name: v.name.clone(),
-                    signal: map[&v.signal],
-                    variable: *key,
-                    ty: v.ty,
-                    msb_lsb: v.msb_lsb,
-                })
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct VcdVariable {
-    pub name: String,
-    pub variable: VcdVariableKey,
-    pub signal: RtSignalKey,
-    pub ty: NetType,
-    pub msb_lsb: Option<(u32, u32)>,
-}
-
-#[derive(Debug, Clone)]
-pub enum VcdScopeItem {
-    Scope(VcdScope),
-    Variable(VcdVariable),
-}
-
-pub struct VcdOutput {
-    printed_header: bool,
-    start_ts: Timestamp,
-    last_ts: Timestamp,
-    paused: bool,
-    children: Vec<VcdScopeItem>,
-    map: SecondaryTable<RtSignalKey, Box<[(VcdVariableKey, Option<SignalSlice>)]>>,
-    tracked: SecondaryTable<RtSignalKey, Option<NonMaxUsize>>,
-    updated_this_time_step: Vec<RtSignalKey>,
-    writer: Box<dyn std::io::Write + Send + Sync>,
-    time_scale: u64,
-}
-impl VcdOutput {
-    fn dump_time_step(
-        &mut self,
-        time: u64,
-        heap: &Heap,
-        signals: &[HeapRef],
-        finish: bool,
-    ) -> std::io::Result<()> {
-        let f = &mut self.writer;
-        if !self.printed_header {
-            writeln!(f, "$version Generated by VoGLS $end")?;
-            // @TODO
-            writeln!(f, "$date @TODO $end")?;
-            writeln!(f, "$timescale 1ns $end")?;
-            for child in &self.children {
-                child.write_to(f)?;
-            }
-            writeln!(f, "$enddefinitions $end")?;
-        }
-        self.printed_header = true;
-
-        // Only print for the timestamp if something actually happened.
-        let mut show_for_timestamp = !self.updated_this_time_step.is_empty();
-        show_for_timestamp |= finish;
-        show_for_timestamp &= self.last_ts != time;
-        if !show_for_timestamp {
-            return Ok(());
-        }
-
-        self.last_ts = time;
-        writeln!(f, "#{}", time * self.time_scale)?;
-        for signal in &self.updated_this_time_step {
-            let bits = signals[signal.as_usize()];
-            let bits = heap.load_tv_bits(bits);
-            for (v, slice) in &self.map[*signal] {
-                let bits = match slice {
-                    None => bits.clone(),
-                    Some(slice) => bits.slice(slice.lsb(), slice.width()),
-                };
-                if bits.size().get() > 1 {
-                    f.write_all(&[b'b'])?;
-                }
-                write!(
-                    f,
-                    "{}",
-                    bits.display(&BitsFormatOptions {
-                        prefix: false,
-                        base: BitsFormatBase::Binary,
-                        separator: None,
-                        align: Some(Alignment::Right),
-                        fill: '0',
-                        width: vogls_bits::format::BitsFormatWidth::Expand
-                    })
-                )?;
-                if bits.size().get() > 1 {
-                    f.write_all(&[b' '])?;
-                }
-                use vogls_utils::TableKey;
-                writeln!(f, "W{:X}", v.get())?;
-            }
-            self.tracked[*signal] = None;
-        }
-
-        self.updated_this_time_step.clear();
-        Ok(())
-    }
-}
-
 pub struct Simulation {
     pub processes: Vec<VmProcess>,
-    pub signals: Vec<HeapRef>,
+    pub signals: Arc<[HeapRef]>,
     pub logic_mode: LogicMode,
     pub itrace: bool,
 }
 
 impl Simulation {
-    pub fn new(processes: Vec<VmProcess>, signals: Vec<HeapRef>, logic_mode: LogicMode) -> Self {
+    pub fn new(processes: Vec<VmProcess>, signals: Arc<[HeapRef]>, logic_mode: LogicMode) -> Self {
         Self {
             processes,
             signals,
@@ -515,7 +257,6 @@ impl Simulation {
             regions,
             listeners,
             watches,
-            vcd: None,
             plugins: Vec::new(),
             iplugins: Vec::new(),
             instruction_count: 0,
@@ -550,21 +291,9 @@ impl Simulation {
                 }
             }
 
-            // Dump the VCD updates for this simulation time.
-            if let Some(vcd) = state.vcd.as_mut() {
-                vcd.dump_time_step(
-                    state.runtime.time,
-                    &state.runtime.heap,
-                    &self.signals,
-                    false,
-                )
-                .unwrap();
+            for plugin in state.plugins.iter_mut() {
+                plugin.timestep(&mut state.runtime);
             }
-            let mut plugins = std::mem::take(&mut state.plugins);
-            for plugin in plugins.iter_mut() {
-                plugin.timestep(self, state);
-            }
-            state.plugins = plugins;
 
             let Some((at, events)) = state.schedule.pop_first() else {
                 break;
@@ -580,16 +309,9 @@ impl Simulation {
             state.regions.active = events;
         }
 
-        if let Some(vcd) = state.vcd.as_mut() {
-            vcd.dump_time_step(state.runtime.time, &state.runtime.heap, &self.signals, true)
-                .unwrap();
-            vcd.writer.flush().unwrap();
+        for plugin in state.plugins.iter_mut() {
+            plugin.finish(&mut state.runtime);
         }
-        let mut plugins = std::mem::take(&mut state.plugins);
-        for plugin in plugins.iter_mut() {
-            plugin.finish(self, state);
-        }
-        state.plugins = plugins;
 
         if cfg!(vm_profile) {
             state.dump_profile_stats(io, state);
@@ -785,34 +507,22 @@ impl Simulation {
                                 }
                             }
                             O::VcdOpenFile(path) => {
-                                if state.vcd.is_some() {
+                                let vcd = (state.plugins[0].as_mut() as &mut dyn std::any::Any)
+                                    .downcast_mut::<vogls_vcd::RtVcdOutput>()
+                                    .unwrap();
+                                if !vcd.children.is_empty() {
                                     writeln!(&mut io.stderr, "ERR! VCD opened a second file")
                                         .unwrap();
                                     break 'instruction Some(EvalOutcome::Error);
                                 }
 
-                                state.vcd = Some(VcdOutput {
-                                    printed_header: false,
-                                    start_ts: state.runtime.time,
-                                    last_ts: Timestamp::MAX,
-                                    paused: false,
-                                    children: Vec::new(),
-                                    map: SecondaryTable::new(),
-                                    tracked: SecondaryTable::new(),
-                                    updated_this_time_step: Vec::new(),
-                                    writer: Box::new(std::fs::File::create(path).unwrap()),
-                                    time_scale: 1000,
-                                });
+                                vcd.writer = Box::new(std::fs::File::create(path).unwrap());
                             }
                             O::VcdAppendModule(children, map) => {
-                                let Some(vcd) = state.vcd.as_mut() else {
-                                    writeln!(
-                                        &mut io.stderr,
-                                        "ERR! Dumping vars without having a VCD file open"
-                                    )
+                                let vcd = (state.plugins[0].as_mut() as &mut dyn std::any::Any)
+                                    .downcast_mut::<vogls_vcd::RtVcdOutput>()
                                     .unwrap();
-                                    break 'instruction Some(EvalOutcome::Error);
-                                };
+
                                 if vcd.start_ts != state.runtime.time {
                                     writeln!(
                                         &mut io.stderr,
@@ -831,8 +541,18 @@ impl Simulation {
                                 vcd.children = children.clone();
                                 vcd.map = map.clone();
                             }
-                            O::VcdPause => _ = state.vcd.as_mut().map(|vcd| vcd.paused = true),
-                            O::VcdResume => _ = state.vcd.as_mut().map(|vcd| vcd.paused = false),
+                            O::VcdPause => {
+                                let vcd = (state.plugins[0].as_mut() as &mut dyn std::any::Any)
+                                    .downcast_mut::<vogls_vcd::RtVcdOutput>()
+                                    .unwrap();
+                                _ = vcd.paused = true;
+                            }
+                            O::VcdResume => {
+                                let vcd = (state.plugins[0].as_mut() as &mut dyn std::any::Any)
+                                    .downcast_mut::<vogls_vcd::RtVcdOutput>()
+                                    .unwrap();
+                                vcd.paused = false;
+                            }
                             O::Time => {
                                 _ = state
                                     .runtime
@@ -990,21 +710,9 @@ impl Simulation {
             &mut state.regions,
             None,
         );
-        if let Some(vcd) = state.vcd.as_mut()
-            && !vcd.paused
-            && let Some(idx) = vcd.tracked.get_mut(signal)
-        {
-            idx.get_or_insert_with(|| {
-                let idx = NonMaxUsize::new(vcd.updated_this_time_step.len()).unwrap();
-                vcd.updated_this_time_step.push(signal);
-                idx
-            });
+        for plugin in state.plugins.iter_mut() {
+            plugin.poke_signal(signal);
         }
-        let mut plugins = std::mem::take(&mut state.plugins);
-        for plugin in plugins.iter_mut() {
-            plugin.update_signal(self, state, signal);
-        }
-        state.plugins = plugins;
         state.runtime.last_active_time[signal.as_usize()] = state.runtime.time;
     }
 
@@ -1038,8 +746,7 @@ pub struct SimulationState {
     pub regions: Regions,
     pub listeners: SlotMap<ListenerKey, Event>,
     pub watches: Vec<Vec<ListenerKey>>,
-    pub vcd: Option<VcdOutput>,
-    pub plugins: Vec<plugin::PluginState>,
+    pub plugins: Vec<RuntimePluginState>,
     pub iplugins: Vec<plugin::InstructionPluginState>,
 
     pub instruction_count: u64,
@@ -1054,7 +761,6 @@ impl Clone for SimulationState {
             regions: self.regions.clone(),
             listeners: self.listeners.clone(),
             watches: self.watches.clone(),
-            vcd: None,
             plugins: vec![],
             iplugins: vec![],
 
@@ -1074,44 +780,5 @@ impl SimulationState {
             state.runtime.heap.0.len() * size_of::<u64>()
         )
         .unwrap();
-    }
-
-    pub fn start_vcd(
-        &mut self,
-        path: &Path,
-        children: Vec<VcdScopeItem>,
-        map: SecondaryTable<RtSignalKey, Box<[(VcdVariableKey, Option<SignalSlice>)]>>,
-    ) {
-        self.start_vcd_raw(
-            Box::new(std::fs::File::create(path).unwrap()),
-            children,
-            map,
-        );
-    }
-
-    pub fn start_vcd_raw(
-        &mut self,
-        writer: Box<dyn std::io::Write + Send + Sync>,
-        children: Vec<VcdScopeItem>,
-        map: SecondaryTable<RtSignalKey, Box<[(VcdVariableKey, Option<SignalSlice>)]>>,
-    ) {
-        let mut tracked = SecondaryTable::new();
-        let mut updated_this_time_step = Vec::new();
-
-        for child in &children {
-            child.extend_into(&mut tracked, &mut updated_this_time_step);
-        }
-        self.vcd = Some(VcdOutput {
-            printed_header: false,
-            start_ts: 0,
-            last_ts: Timestamp::MAX,
-            paused: false,
-            map,
-            children,
-            tracked,
-            updated_this_time_step,
-            writer,
-            time_scale: 1000,
-        });
     }
 }

@@ -39,6 +39,7 @@ pub struct MutLowerContext {
     pub diagnostics: Diagnostics,
     pub connections: Vec<Edge>,
     pub fuse_scratch: Vec<(SignalKey, Option<SignalSlice>)>,
+    pub has_vcd: bool,
 }
 impl MutLowerContext {
     pub fn gl(&mut self) -> &mut GlobalContext {

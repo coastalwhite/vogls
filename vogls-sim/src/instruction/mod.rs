@@ -9,8 +9,8 @@ pub use lower::lower_process_to_vm;
 use vogls_runtime::RtSignalKey;
 use vogls_utils::SecondaryTable;
 
-use crate::VcdScopeItem;
 use vogls_codegen::{Heap, HeapOffset, HeapRef};
+use vogls_vcd::VcdScopeItem;
 
 #[derive(Debug, Clone, Copy)]
 pub enum BinaryArithmeticOp {

@@ -60,7 +60,7 @@ impl Mode {
 
 /// Literal of a non-zero number of bits.
 ///
-/// For sizes smaller than 64 ([`Self::MAX_INLINE_SIZE`]), this does not allocate and the data is
+/// For sizes smaller than 64 ([`Mode::max_inline_size`]), this does not allocate and the data is
 /// inlined into the struct. Otherwise, it is represented as `size.div_ceil(64)` u64's in a 8 bytes
 /// aligned allocated slice.
 pub struct Bits {
@@ -74,7 +74,7 @@ pub struct Bits {
 
     /// # Safety
     ///
-    /// If size > MAX_INLINE_SIZE:
+    /// If size > mode.max_inline_size():
     ///   data is `BitsData::ptr`, where the `ptr` is a valid 8 byte aligned pointer to
     ///   `size.div_ceil(64)` u64's. The bits for in this slice are stored in little-endian
     ///   byte-order, where only the value the `0..size.get()`-th least-significant bits may be
@@ -270,11 +270,6 @@ impl Bits {
     }
 
     /// Create a new non-inlined [`Bits`].
-    ///
-    /// # Safety
-    ///
-    /// - `ptr` should follow the safety invariants described in the type with `size` where `size >
-    /// MAX_INLINE_SIZE`.
     pub fn from_boxed_slice(mode: Mode, size: VectorSize, mut b: Box<[u64]>) -> Self {
         assert!(size > mode.max_inline_size());
         let nwords = size_to_num_words(size);

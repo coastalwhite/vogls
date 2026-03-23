@@ -237,7 +237,6 @@ pub fn lower_process_to_vm(
                         .iter()
                         .map(|v| (var!(*v).to_ref(gl.vars[*v].size), var_mode[v]))
                         .collect();
-                    use crate::VcdScope as VmVcdScope;
                     use IntrinsicOp as O;
                     use VmIntrinsicOp as VO;
                     let op = match op.as_ref() {
@@ -248,7 +247,7 @@ pub fn lower_process_to_vm(
                         O::Assert(f) => VO::Assert(f.clone()),
                         O::VcdOpenFile(f) => VO::VcdOpenFile(f.clone()),
                         O::VcdAppendModule(v) => {
-                            let (children, map) = VmVcdScope::lower(v, io_signals);
+                            let (children, map) = vogls_vcd::VcdScope::lower(v, io_signals);
                             VO::VcdAppendModule(children, map)
                         }
                         O::VcdPause => VO::VcdPause,

@@ -14,6 +14,7 @@ macro_rules! new_table_key {
     ) => {
         $(#[$meta])*
         #[derive(Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
+        #[repr(transparent)]
         $vis struct $name($crate::NonMaxUsize);
 
         impl $crate::TableKey for $name {
