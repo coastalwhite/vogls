@@ -258,6 +258,19 @@ pub fn lower_process(
         &mut var_mode,
         &mut conv_map,
     );
+    bb_seen.clear();
+    bb_stack.push(process.entry);
+    while let Some(bb_key) = bb_stack.pop() {
+        let bb = gl.bbs.get(bb_key).unwrap();
+
+        for instr in &bb.instrs {
+            if let Instruction::Phi(dst, srcs) = instr {
+                for (bb, var) in srcs {
+                    bb_phis.entry(*bb).or_insert(Vec::new()).push((*dst, *var));
+                }
+            }
+        }
+    }
     resolve_heap_map(
         process.entry,
         gl,
@@ -267,7 +280,6 @@ pub fn lower_process(
         &mut conv_map,
         heap_builder,
         &mut heap_map,
-        &mut bb_phis,
         Some(&temporal_variables),
     );
 
@@ -799,7 +811,9 @@ pub fn lower_process(
                     )?;
                 }
 
-                writeln!(&mut buffer, "{INDENT}// Phi({dst:?}, {src:?});")?;
+                if lower_options.itrace {
+                    writeln!(&mut buffer, "{INDENT}// Phi({dst:?}, {src:?});")?;
+                }
                 let d = dst_t.ident;
                 let s = src_t.ident;
                 match dst_t.ty.array_size() {

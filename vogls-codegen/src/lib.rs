@@ -248,7 +248,6 @@ pub fn resolve_heap_map(
     conv_map: &mut VgHashMap<VariableKey, HeapOffset>,
     heap_builder: &mut HeapBuilder,
     heap_map: &mut VgHashMap<VariableKey, HeapOffset>,
-    bb_phis: &mut VgHashMap<BasicBlockKey, Vec<(VariableKey, VariableKey)>>,
     temporal_variables: Option<&VgHashSet<VariableKey>>,
 ) {
     bb_stack.clear();
@@ -269,12 +268,6 @@ pub fn resolve_heap_map(
             let bb = gl.bbs.get(bb_key).unwrap();
 
             for instr in &bb.instrs {
-                if let Instruction::Phi(dst, srcs) = instr {
-                    for (bb, var) in srcs {
-                        bb_phis.entry(*bb).or_insert(Vec::new()).push((*dst, *var));
-                    }
-                }
-
                 if let Some(dst) = instr.get_destination_variable() {
                     let mode = var_mode[&dst];
                     let size = gl.vars[dst].size;
