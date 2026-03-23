@@ -38,11 +38,13 @@ pub trait TableKey: Sized + Copy {
     fn from_usize(value: usize) -> Option<Self>;
 }
 
+#[derive(Clone)]
 pub struct Table<K, V> {
     values: Vec<V>,
     _pd: PhantomData<K>,
 }
 
+#[derive(Clone)]
 pub struct TableSet<KK, K, V> {
     table: Table<KK, (K, V)>,
     set: hashbrown::HashTable<(KK, K)>,

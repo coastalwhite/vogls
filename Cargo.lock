@@ -767,6 +767,7 @@ dependencies = [
  "bytemuck",
  "slotmap",
  "vogls-bits",
+ "vogls-utils",
 ]
 
 [[package]]

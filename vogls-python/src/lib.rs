@@ -143,10 +143,9 @@ mod vogls {
             let VSymbol::Net(net_symbol) = &self.inner.elab_table[sid].content else {
                 return Err(PyException::new_err("not a signal"));
             };
+            let (signal, _slice) = net_symbol.net.blocking_drive_signal();
             Ok(SignalRef {
-                inner: self
-                    .inner
-                    .get_rt_signal(net_symbol.net.blocking_drive_signal()),
+                inner: self.inner.get_rt_signal(signal),
             })
         }
 
@@ -187,7 +186,8 @@ mod vogls {
             let mut trace = TracePlugin::default();
             for signal in self.inner.elab_table.symbol_iter() {
                 if let VSymbol::Net(n) = &signal.content {
-                    let vm_signal = self.inner.get_rt_signal(n.net.probe_signal());
+                    let (signal, _slice) = n.net.probe_signal();
+                    let vm_signal = self.inner.get_rt_signal(signal);
                     trace.updated_this_time_step.push(vm_signal);
                     trace.tracked.insert(
                         vm_signal,

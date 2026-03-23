@@ -150,16 +150,19 @@ pub fn try_lower_fuse_driver_expr<'a>(
         return Err(());
     }
 
+    let (net_signal, net_slice) = net.net.probe_signal();
+    assert!(net_slice.is_none(), "should not yet be set");
+
     // Fast path. No slicing at all.
     if exprs.is_empty() && range_expr.is_none() {
-        mctx.fuse_scratch.push((net.net.probe_signal(), None));
+        mctx.fuse_scratch.push((net_signal, None));
         return Ok(true);
     }
 
     let ty_size = net.ty.force_net_width();
 
     // Handle array indexing.
-    let mut offset = 0;
+    let mut offset = net_slice.map_or(0, |s| s.lsb());
     let mut current_size = ty_size;
     for (expr, &dim) in exprs.iter().rev().zip(net.dims.iter()) {
         let Some(idx) = try_constant_expr(ctx, mctx, scope, expr) else {
@@ -217,7 +220,6 @@ pub fn try_lower_fuse_driver_expr<'a>(
         output_slice = relative_slice;
     }
 
-    mctx.fuse_scratch
-        .push((net.net.probe_signal(), Some(output_slice)));
+    mctx.fuse_scratch.push((net_signal, Some(output_slice)));
     Ok(true)
 }

@@ -574,7 +574,7 @@ pub fn lower_expr<'a>(
                 let num_args = exprs.len();
                 let result = function_call::lower_function_call(
                     ctx,
-                    mctx, 
+                    mctx,
                     scope,
                     builder,
                     expr,
@@ -594,12 +594,7 @@ pub fn lower_expr<'a>(
             Expr::SystemFunctionCall(ident, exprs) => {
                 if !item.dispatched {
                     match system_function_call::lower_unevaluated_system_function_call(
-                        ctx,
-                        mctx,
-                        scope,
-                        builder,
-                        ident,
-                        exprs,
+                        ctx, mctx, scope, builder, ident, exprs,
                     ) {
                         Ok(Some(res)) => {
                             result_stack.push(Some(res));
@@ -951,7 +946,10 @@ pub fn get_used_ident_signals<'a>(
         return Err(());
     };
     match &ctx.table[symbol_key].content {
-        VSymbol::Net(s) => _ = signals.insert(s.net.probe_signal()),
+        VSymbol::Net(s) => {
+            let (signal, _slice) = s.net.probe_signal();
+            _ = signals.insert(signal);
+        }
         VSymbol::Parameter(_)
         | VSymbol::GenVar
         | VSymbol::Task(_)

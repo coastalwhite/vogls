@@ -15,7 +15,7 @@ use vogls_ir::{Bits, GlobalContext, LogicMode, Signal, SignalKey};
 use vogls_runtime::SimulationIo;
 use vogls_runtime::{RtSignalKey, RuntimeState};
 use vogls_sim::{Event, Regions, Simulation, VmProcess, VmProcessKey, lower_process_to_vm};
-use vogls_utils::{IndexSet, VgHashMap};
+use vogls_utils::{IndexSet, NonMaxU32, VgHashMap};
 use vogls_verilog::arena::Arena;
 use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{Description, Module, ModuleItem, NonPortModuleItem};
@@ -415,7 +415,16 @@ impl Design {
             }
         }
 
-        fuse_signals::fuse_signals(&mut mctx.gl, &mctx.connections);
+        let fused = fuse_signals::fuse_signals(&mut mctx.gl, &mctx.connections);
+        for symbol in ctx.table.symbol_id_iter() {
+            if let VSymbol::Net(net) = &mut ctx.table[symbol].content {
+                net.net.replace_signals(|s| {
+                    fused.get(&s).copied().map_or((s, None), |(s, slice)| {
+                        (s, slice.map(|s| NonMaxU32::new(s.lsb()).unwrap()))
+                    })
+                });
+            }
+        }
 
         let mut scratch_stack = Vec::new();
         let mut scratch_mfr = Vec::new();

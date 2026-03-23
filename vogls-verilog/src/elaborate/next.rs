@@ -108,9 +108,9 @@ impl<'a> ElaborationState<'a> {
     fn dummy_net(&self) -> Net {
         Net {
             width: SCALAR_VSIZE,
-            offset: None,
             specify: None,
             ba: self.dummy_signal,
+            ba_offset: None,
             nba: None,
         }
     }

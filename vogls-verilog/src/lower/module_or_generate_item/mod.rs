@@ -121,6 +121,9 @@ pub fn lower<'a>(
                         lvalue.ident,
                         &mut mctx.diagnostics,
                     )?;
+                    let (drivee, drivee_slice) = to_net.net.blocking_drive_signal();
+                    assert!(drivee_slice.is_none(), "should not yet be set");
+
                     let mut offset = 0;
                     for &(signal, slice) in &mctx.fuse_scratch {
                         let width =
@@ -128,7 +131,7 @@ pub fn lower<'a>(
                         mctx.connections.push(Edge {
                             driver: signal,
                             driver_slice: slice,
-                            drivee: to_net.net.blocking_drive_signal(),
+                            drivee,
                             drivee_slice: Some(SignalSlice::from_width(offset, width).unwrap()),
                         });
                         offset += width.get();

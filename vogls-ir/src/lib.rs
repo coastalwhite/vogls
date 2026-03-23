@@ -14,10 +14,11 @@ pub use vogls_bits::{Bits, Mode, VectorSize};
 pub use builder::{BasicBlockBuilder, BranchRef, PhiRef, new_anonymous_builder, new_process};
 pub use format::{ContextFormat, DisplayContext};
 use slotmap::{SlotMap, new_key_type};
+use vogls_utils::NonMaxU32;
 
 use self::dyn_format_string::DynFormatString;
 use self::token_range::TokenRange;
-use self::vcd::VcdScope;
+use self::vcd::{VcdOutput, VcdScope};
 
 new_key_type! { pub struct ProcessKey; }
 new_key_type! { pub struct BasicBlockKey; }
@@ -269,7 +270,7 @@ pub enum IntrinsicOp {
     Display(Box<DynFormatString>),
     Assert(Box<DynFormatString>),
     VcdOpenFile(String),
-    VcdAppendModule(VcdScope),
+    VcdAppendModule(VcdOutput),
     VcdPause,
     VcdResume,
 }
@@ -761,23 +762,25 @@ pub struct Process {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SignalSlice {
     width: VectorSize,
-    lsb: u32,
+    lsb: NonMaxU32,
 }
 
 impl SignalSlice {
     pub fn new(msb: u32, lsb: u32) -> Option<Self> {
-        if msb < lsb {
-            return None;
-        }
-        let width = VectorSize::new(msb - lsb + 1)?;
+        let lsb = NonMaxU32::new(lsb)?;
+        let width = VectorSize::new(msb.checked_sub(lsb.get())?.checked_add(1)?)?;
         Some(Self { width, lsb })
     }
 
     pub fn with_end(width: VectorSize) -> Self {
-        Self { lsb: 0, width }
+        Self {
+            lsb: NonMaxU32::ZERO,
+            width,
+        }
     }
     pub fn from_width(lsb: u32, width: VectorSize) -> Option<Self> {
         lsb.checked_add(width.get())?;
+        let lsb = NonMaxU32::new(lsb)?;
         Some(Self { width, lsb })
     }
     pub fn from_range(range: std::ops::Range<u32>) -> Option<Self> {
@@ -788,23 +791,23 @@ impl SignalSlice {
         self.width
     }
     pub fn lsb(self) -> u32 {
-        self.lsb
+        self.lsb.get()
     }
     pub fn msb(self) -> u32 {
-        self.lsb + (self.width.get() - 1)
+        self.lsb.get() + (self.width.get() - 1)
     }
 
     pub fn shift(self, amount: u32) -> Option<SignalSlice> {
         self.msb().checked_add(amount)?;
         Some(Self {
-            lsb: self.lsb + amount,
+            lsb: NonMaxU32::new(self.lsb.get() + amount).unwrap(),
             width: self.width,
         })
     }
 
     pub fn shift_back(self, amount: u32) -> Option<SignalSlice> {
         Some(Self {
-            lsb: self.lsb().checked_sub(amount)?,
+            lsb: NonMaxU32::new(self.lsb().checked_sub(amount)?).unwrap(),
             width: self.width,
         })
     }
@@ -824,7 +827,7 @@ impl SignalSlice {
     }
 
     pub fn concat(self, other: SignalSlice) -> Option<SignalSlice> {
-        if self.lsb + self.width.get() != other.lsb {
+        if self.lsb.get() + self.width.get() != other.lsb.get() {
             return None;
         }
         Some(Self {

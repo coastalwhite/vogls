@@ -51,6 +51,8 @@ fn extend_symbol_table_to_vcd_scope(
     symbols: &[SymbolId],
     table: &VSymbolTable,
     ident_table: &IdentTable,
+    variable_table: &mut Table<VcdVariableKey, VcdVariable>,
+    signal_map: &mut VgHashMap<SignalKey, Vec<VcdVariableKey>>,
 ) {
     use VSymbol as S;
     for sid in symbols.iter() {
@@ -66,6 +68,8 @@ fn extend_symbol_table_to_vcd_scope(
                     table[*sid].children(),
                     table,
                     ident_table,
+                    variable_table,
+                    signal_map,
                 );
                 scope
                     .items
@@ -73,23 +77,18 @@ fn extend_symbol_table_to_vcd_scope(
             }
             S::Net(i) => {
                 let net = &i.net;
-                let width = i.ty.force_net_width().min(net.width());
-                let mut msb = (width.get() - 1) as i64;
-                let mut lsb = 0;
-                let signal = net.probe_signal();
-                if let Some(offset) = &net.offset {
-                    msb += *offset as i64;
-                    lsb += *offset as i64;
-                }
-                scope.items.push(vogls_ir::vcd::VcdScopeItem::Variable(
-                    vogls_ir::vcd::VcdVariable {
-                        name: ident_table[table[*sid].name()].to_string(),
-                        signal,
-                        ty: vogls_ir::vcd::NetType::Wire,
-                        msb,
-                        lsb,
-                    },
-                ));
+                let (signal, slice) = net.probe_signal();
+                let variable_key = variable_table.insert(vogls_ir::vcd::VcdVariable {
+                    name: ident_table[table[*sid].name()].to_string(),
+                    signal,
+                    ty: vogls_ir::vcd::NetType::Wire,
+                    offset: slice.map(|s| NonMaxU32::new(s.lsb()).unwrap()),
+                    width: net.width(),
+                });
+                scope
+                    .items
+                    .push(vogls_ir::vcd::VcdScopeItem::Variable(variable_key));
+                signal_map.entry(signal).or_default().push(variable_key);
             }
             S::Task(_) | S::Function(_) | S::Parameter(_) | S::GenVar => {}
         }
@@ -97,18 +96,31 @@ fn extend_symbol_table_to_vcd_scope(
 }
 
 impl<'a> LowerContext<'a> {
-    pub fn vcd_scope(&self, scope: SymbolId, ident_table: &IdentTable) -> vogls_ir::vcd::VcdScope {
+    pub fn vcd_scope(&self, scope: SymbolId, ident_table: &IdentTable) -> vogls_ir::vcd::VcdOutput {
         let mut key = scope;
         while let Some(parent) = self.table[key].parent() {
             key = parent;
         }
 
+        let mut table = Table::new();
+        let mut signal_map = VgHashMap::default();
         let mut scope = VcdScope {
-            name: "ROOT".to_string(),
+            name: "".to_string(),
             items: Vec::new(),
         };
-        extend_symbol_table_to_vcd_scope(&mut scope, &[key], &self.table, ident_table);
-        scope
+        extend_symbol_table_to_vcd_scope(
+            &mut scope,
+            &[key],
+            &self.table,
+            ident_table,
+            &mut table,
+            &mut signal_map,
+        );
+        vogls_ir::vcd::VcdOutput {
+            table,
+            signal_map,
+            children: scope.items,
+        }
     }
 
     pub fn get_line_number(&self, token_idx: usize) -> usize {
@@ -340,12 +352,12 @@ pub fn try_resolve_constant<'a, 's>(
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::token_range::TokenRange;
-use vogls_ir::vcd::VcdScope;
+use vogls_ir::vcd::{VcdScope, VcdVariable, VcdVariableKey};
 use vogls_ir::{
     BasicBlockBuilder, BasicBlockTerminator, GlobalContext, ProcessKey, SCALAR_VSIZE, SignalKey,
     SignalSlice, VariableKey, VectorSize, new_anonymous_builder, new_process,
 };
-use vogls_utils::{OrderedSet, VgHashMap};
+use vogls_utils::{NonMaxU32, OrderedSet, Table, VgHashMap};
 
 use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::expr::{BitSlice, Expr};
@@ -447,13 +459,16 @@ fn assign_input_port<'a>(
 
     mctx.fuse_scratch.clear();
     if try_lower_fuse_driver_expr(ctx, mctx, scope, expr)? {
+        let (drivee, drivee_slice) = port.net.blocking_drive_signal();
+        assert!(drivee_slice.is_none(), "should not be set yet");
+
         let mut offset = 0;
         for &(signal, slice) in &mctx.fuse_scratch {
             let width = slice.map_or_else(|| mctx.gl.signals[signal].size, |s| s.width());
             mctx.connections.push(Edge {
                 driver: signal,
                 driver_slice: slice,
-                drivee: port.net.blocking_drive_signal(),
+                drivee,
                 drivee_slice: Some(SignalSlice::from_width(offset, width).unwrap()),
             });
             offset += width.get();
@@ -472,7 +487,7 @@ fn assign_input_port<'a>(
         v_ty,
         port.ty.force_net_width(),
     );
-    bb_builder.drive(mctx.gl(), port.net.blocking_drive_signal(), v);
+    port.net.drive_blocking(mctx.gl(), &mut bb_builder, v, None);
 
     let mut signals = OrderedSet::new();
     expression::get_used_signals(ctx, mctx, scope, &mut signals, expr)?;
@@ -502,11 +517,15 @@ fn assign_port_output<'a>(
             *ident,
             &mut mctx.diagnostics,
         )?;
+        let (driver, driver_slice) = output.net.probe_signal();
+        let (drivee, drivee_slice) = to_signal.net.blocking_drive_signal();
+        assert!(driver_slice.is_none(), "should not yet be set");
+        assert!(drivee_slice.is_none(), "should not yet be set");
         if exprs.is_empty() && range.is_none() {
             mctx.connections.push(Edge {
-                driver: output.net.probe_signal(),
+                driver,
                 driver_slice: None,
-                drivee: to_signal.net.blocking_drive_signal(),
+                drivee,
                 drivee_slice: None,
             });
             return Ok(());
@@ -527,9 +546,9 @@ fn assign_port_output<'a>(
             let v = v.into_bits();
             let v = v.extract_exact_u32();
             mctx.connections.push(Edge {
-                driver: output.net.probe_signal(),
+                driver,
                 driver_slice: None,
-                drivee: to_signal.net.blocking_drive_signal(),
+                drivee,
                 drivee_slice: Some(SignalSlice::from_width(v, SCALAR_VSIZE).unwrap()),
             });
             return Ok(());
@@ -548,7 +567,7 @@ fn assign_port_output<'a>(
     driving.push((probed, ty, expr));
 
     let mut ins = OrderedSet::new();
-    ins.insert(signal.probe_signal());
+    ins.insert(signal.probe_signal().0);
 
     let mut error = false;
     while let Some((var, var_ty, expr)) = driving.pop() {
@@ -1039,7 +1058,9 @@ pub fn instantiate_stmts_nba_signals<'a>(
                         diagnostics,
                     )?;
                     if net.net.nba.is_none() {
-                        net.net.nba = Some(create_nba_process(gl, net.net.blocking_drive_signal()));
+                        let (signal, _slice) = net.net.blocking_drive_signal();
+                        let (process, value, mask) = create_nba_process(gl, signal);
+                        net.net.nba = Some((process, value, None, mask, None));
                     };
                 }
             }

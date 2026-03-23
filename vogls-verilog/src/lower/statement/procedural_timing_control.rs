@@ -139,11 +139,10 @@ pub fn lower<'a>(
                         *ast_ident,
                         &mut mctx.diagnostics,
                     )?;
-                    let key = net.net.probe_signal();
-
-                    let (variable, _) = lower_expr(ctx, mctx, scope, &mut builder, *expr)?;
+                    let (signal, _slice) = net.net.probe_signal();
+                    let variable = net.net.probe(mctx.gl(), &mut builder);
                     conditions.push((condition, variable, *expr));
-                    signals.push(key);
+                    signals.push(signal);
                 }
                 builder = builder.watch(mctx.gl(), signals);
 
