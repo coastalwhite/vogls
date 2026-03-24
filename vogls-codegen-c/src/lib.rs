@@ -4,7 +4,7 @@ use std::{fmt, io};
 use vogls_bits::BitsDataRef;
 use vogls_bits::format::{BitsFormatBase, BitsFormatOptions, BitsFormatWidth};
 use vogls_codegen::{
-    insert_bb_phis, resolve_heap_map, resolve_var_logic_mode_map, HeapBuilder, HeapOffset, HeapRef
+    HeapBuilder, HeapOffset, HeapRef, insert_bb_phis, resolve_heap_map, resolve_var_logic_mode_map,
 };
 use vogls_ir::dyn_format_string::{DynFormatArgument, DynFormatString};
 use vogls_ir::{
@@ -280,7 +280,12 @@ pub fn lower_process(
         "NOINLINE int {procedure}(int state, uint64_t *restrict heap, schedule_t *restrict schedule, uint64_t time, uint64_t *restrict is_scheduled, uint64_t *restrict listening, uint64_t *restrict last_active_time, cold_context_t *restrict cldctx) {{",
     )?;
     if lower_options.itrace {
-        writeln!(f, r#"printf("\n* PROC {procedure}\n");"#)?;
+        lower_dyn_format_str(
+            f,
+            dyn_fmt_strs,
+            &DynFormatString::new(format!("\n* PROC {procedure}\n").into(), [].into()),
+            [].into(),
+        )?;
     }
 
     let mut bb_ident = IndexSet::<BasicBlockKey>::new();
@@ -731,14 +736,16 @@ pub fn lower_process(
                 I::Phi(_, _) => continue,
             }
             if lower_options.itrace && !matches!(i, I::Phi(_, _)) {
-                writeln!(
+                lower_dyn_format_str(
                     &mut buffer,
-                    r#"{INDENT}printf("* {}\n");"#,
-                    i.display(&display_context)
-                        .to_string()
-                        .replace("%", "%%")
-                        .escape_default()
+                    dyn_fmt_strs,
+                    &DynFormatString::new(
+                        format!("* {}\n", i.display(&display_context)).into(),
+                        [].into(),
+                    ),
+                    [].into(),
                 )?;
+                writeln!(&mut buffer)?;
                 let mut content = String::from("*   : ");
                 let mut arg_offsets = Vec::new();
                 let mut args = Vec::new();
@@ -1148,6 +1155,7 @@ pub fn lower_signal_drive_fn(
     signal: SignalKey,
     listener_builder: &ListenerBuilder,
     io_signals: &VgHashMap<SignalKey, RtSignalKey>,
+    dyn_fmt_strs: &mut IndexSet<DynFormatString>,
     lower_options: &CLowerOptions,
 ) -> io::Result<()> {
     use vogls_utils::TableKey;
@@ -1158,10 +1166,12 @@ pub fn lower_signal_drive_fn(
     )?;
 
     if lower_options.itrace {
-        writeln!(
+        let content = format!("* poke {}\n", gl.signals[signal].name).into();
+        lower_dyn_format_str(
             f,
-            r#"{INDENT}printf("* poke {}\n");"#,
-            gl.signals[signal].name.escape_default()
+            dyn_fmt_strs,
+            &DynFormatString::new(content, [].into()),
+            [].into(),
         )?;
     }
 

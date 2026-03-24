@@ -658,6 +658,7 @@ impl Design {
                     signal,
                     &listener_builder,
                     &io_signals,
+                    &mut dyn_fmt_strs,
                     &lower_options,
                 )?;
             }

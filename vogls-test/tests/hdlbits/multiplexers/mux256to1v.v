@@ -7,7 +7,7 @@ module top_module(
 endmodule
 
 module tb();
-    reg [1024:0] in;
+    reg [1023:0] in;
     reg [7:0] sel;
     wire [3:0] out;
 

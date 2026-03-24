@@ -91,6 +91,11 @@ module tb();
 
 	integer i;
 	initial begin
+`ifdef __VOGLS__TWO_VALUE_LOGIC
+        // Since `data_i = 0` would not cause update on tvl, it might
+        // non-deterministically settle into the incorrect state.
+        data_i = 1;
+`endif
 	    for (i = 0; i < 256; i = i + 1) begin
 			#2
 			data_i = i;
