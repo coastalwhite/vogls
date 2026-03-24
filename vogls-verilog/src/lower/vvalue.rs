@@ -221,13 +221,6 @@ impl VValue {
         VValue::UnsignedNet(Bits::concatenate(&lhs, &rhs))
     }
 
-    pub fn to_vector_size(self) -> Option<VectorSize> {
-        match self {
-            VValue::SignedNet(_) | VValue::UnsignedNet(_) => todo!(),
-            VValue::String(_) => todo!(),
-        }
-    }
-
     pub fn net(bits: Bits, signed: bool) -> VValue {
         if signed {
             Self::SignedNet(bits)

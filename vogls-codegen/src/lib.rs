@@ -36,7 +36,6 @@ pub fn resolve_var_logic_mode_map(
     // Represented as a map from node to range in a continous list of edges.
     let mut graph_offsets = VgHashMap::<VariableKey, Range<usize>>::default();
     let mut graph_inputs = Vec::<VariableKey>::new();
-    let mut is_fixed = VgHashSet::<VariableKey>::default();
 
     bb_seen.clear();
     bb_seen.insert(entry);
@@ -78,23 +77,15 @@ pub fn resolve_var_logic_mode_map(
                     let m2 = var_mode.get(rhs).copied();
 
                     use LogicMode as M;
-                    match (m1, m2, op) {
-                        (_, _, op) if op.always_outputs_bool() => {
-                            if m1.is_none() || m2.is_none() {
-                                is_fixed.insert(*dst);
-                            }
-                            _ = var_mode.insert(*dst, M::TwoValue)
-                        }
-                        (_, _, op) if op.always_outputs_four_value() => {
-                            if m1.is_none() || m2.is_none() {
-                                is_fixed.insert(*dst);
-                            }
+                    match (m1, m2) {
+                        _ if op.always_outputs_bool() => _ = var_mode.insert(*dst, M::TwoValue),
+                        _ if op.always_outputs_four_value() => {
                             _ = var_mode.insert(*dst, M::FourValue)
                         }
-                        (Some(M::TwoValue), Some(M::TwoValue), _) => {
+                        (Some(M::TwoValue), Some(M::TwoValue)) => {
                             _ = var_mode.insert(*dst, M::TwoValue)
                         }
-                        (Some(M::FourValue), _, _) | (_, Some(M::FourValue), _) => {
+                        (Some(M::FourValue), _) | (_, Some(M::FourValue)) => {
                             _ = var_mode.insert(*dst, M::FourValue)
                         }
                         _ => {}
@@ -113,15 +104,7 @@ pub fn resolve_var_logic_mode_map(
                         }
                         (Some(M::TwoValue), Some(M::FourValue)) => _ = mark_conv!(*lhs),
 
-                        (Some(_), None) => {
-                            graph_offsets.insert(*dst, graph_inputs.len()..graph_inputs.len() + 1);
-                            graph_inputs.push(*rhs);
-                        }
-                        (None, Some(_)) => {
-                            graph_offsets.insert(*dst, graph_inputs.len()..graph_inputs.len() + 1);
-                            graph_inputs.push(*lhs);
-                        }
-                        (None, None) => {
+                        (None, _) | (_, None) => {
                             graph_offsets.insert(*dst, graph_inputs.len()..graph_inputs.len() + 2);
                             graph_inputs.extend([*lhs, *rhs]);
                         }
@@ -224,7 +207,7 @@ pub fn resolve_var_logic_mode_map(
         seen.iter().for_each(|k| match var_mode.entry(*k) {
             Entry::Vacant(entry) => _ = entry.insert(mode),
             Entry::Occupied(entry) => {
-                if *entry.get() != mode && !is_fixed.contains(k) {
+                if *entry.get() != mode {
                     _ = mark_conv!(*k);
                 }
             }

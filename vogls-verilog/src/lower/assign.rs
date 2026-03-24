@@ -1,7 +1,5 @@
 use vogls_frontend::symbol_table::SymbolId;
-use vogls_ir::{
-    BasicBlockBuilder, Bits, INTEGER_VSIZE, SCALAR_VSIZE, VariableKey, VectorSize,
-};
+use vogls_ir::{BasicBlockBuilder, Bits, INTEGER_VSIZE, SCALAR_VSIZE, VariableKey, VectorSize};
 
 use crate::ast::constant_expr::ConstantRangeExpression;
 use crate::ast::statement::{NetLValue, NetLValueFlat, VariableLValue, VariableLValueFlat};
@@ -11,8 +9,8 @@ use crate::lower::expression::eval_constant_expr;
 use crate::lower::expression::{self, lower_expr, sign_or_zero_extend, truncate_or_extend};
 use crate::lower::{msb_lsb_to_width, try_resolve_symbol_id};
 
-use super::{MutLowerContext, VType};
 use super::{LowerContext, try_resolve_net};
+use super::{MutLowerContext, VType};
 
 pub fn assign_variable_lvalue<'a>(
     ctx: &LowerContext<'a>,
@@ -145,7 +143,7 @@ pub fn variable_lvalue_flat_ty<'a>(
                     &mut mctx.diagnostics,
                     *width,
                 )?;
-                Ok(VType::UnsignedNet(width.to_vector_size().unwrap()))
+                Ok(VType::UnsignedNet(width.ty().force_net_width()))
             }
         },
     }

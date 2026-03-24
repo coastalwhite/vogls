@@ -1008,4 +1008,14 @@ impl BasicBlockBuilder {
         let constant = self.constant(gl, constant);
         self.plus(gl, src, constant)
     }
+
+    pub fn minus_revconstant(
+        &mut self,
+        gl: &mut GlobalContext,
+        src: VariableKey,
+        constant: Bits,
+    ) -> VariableKey {
+        let constant = self.constant(gl, constant);
+        self.minus(gl, constant, src)
+    }
 }

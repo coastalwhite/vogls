@@ -79,8 +79,15 @@ pub fn lower_expr<'a>(
                     O::ReductionXnor => {
                         (builder.reduce_xnor(&mut mctx.gl, child), VType::SCALAR_NET)
                     }
-                    O::SignPlus => todo!(),
-                    O::SignMinus => todo!(),
+                    O::SignPlus => (child, ty),
+                    O::SignMinus => (
+                        builder.minus_revconstant(
+                            mctx.gl(),
+                            child,
+                            Bits::new_zeroed(ty.force_net_width()),
+                        ),
+                        ty,
+                    ),
                 };
                 result_stack.push(Some((variable, ty)));
             }
