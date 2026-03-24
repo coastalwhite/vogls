@@ -191,6 +191,7 @@ impl IntrinsicOp {
             Self::VcdAppendModule(_) => "vcd.append_module",
             Self::VcdPause => "vcd.pause",
             Self::VcdResume => "vcd.resume",
+            Self::ReadMem(_) => "readmem",
         }
     }
 }

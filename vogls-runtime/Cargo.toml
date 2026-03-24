@@ -6,6 +6,8 @@ edition.workspace = true
 [dependencies]
 vogls-codegen.workspace = true
 vogls-utils.workspace = true
+vogls-bits.workspace = true
+vogls-ir.workspace = true
 
 [lints]
 workspace = true

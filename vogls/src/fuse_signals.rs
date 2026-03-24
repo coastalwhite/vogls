@@ -3,8 +3,8 @@ use std::io::Write;
 use slotmap::SlotMap;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::{
-    BasicBlockBuilder, Bits, GlobalContext, INTEGER_VSIZE, Instruction, Signal, SignalKey,
-    SignalSlice, new_process,
+    BasicBlockBuilder, Bits, GlobalContext, INTEGER_VSIZE, Instruction, IntrinsicOp, Signal,
+    SignalKey, SignalSlice, new_process,
 };
 use vogls_utils::{IndexMap, TableKey, TableSet, VgHashMap, VgHashSet};
 
@@ -571,6 +571,22 @@ pub fn fuse_signals(
                     builder.push_raw_instruction(I::LastUpdateTime(*dst, signal));
                     continue;
                 }
+                I::Intrinsic(dst, op, srcs) => match op.as_ref() {
+                    IntrinsicOp::ReadMem(readmem) => {
+                        if let Some((to, slice)) = replacement_signals.get(&readmem.signal) {
+                            let mut readmem = readmem.clone();
+                            readmem.signal = *to;
+                            readmem.offset += slice.map_or(0, |s| s.lsb());
+                            builder.push_raw_instruction(I::Intrinsic(
+                                *dst,
+                                Box::new(IntrinsicOp::ReadMem(readmem)),
+                                srcs.clone(),
+                            ));
+                            continue;
+                        }
+                    }
+                    _ => {}
+                },
 
                 _ => {}
             }

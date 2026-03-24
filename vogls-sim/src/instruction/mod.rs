@@ -1,6 +1,6 @@
 use vogls_ir::dyn_format_string::DynFormatString;
 use vogls_ir::vcd::VcdVariableKey;
-use vogls_ir::{Bits, LogicMode, ResizeOp, SignalSlice, Time, UnaryOp, VectorSize};
+use vogls_ir::{Bits, LogicMode, ReadMem, ResizeOp, SignalSlice, Time, UnaryOp, VectorSize};
 
 mod format;
 mod lower;
@@ -62,6 +62,7 @@ pub enum VmIntrinsicOp {
     ),
     VcdPause,
     VcdResume,
+    ReadMem(HeapRef, Box<ReadMem>),
 }
 
 #[derive(Clone, Debug)]
@@ -272,6 +273,7 @@ impl VmIntrinsicOp {
             Self::VcdAppendModule(..) => "vcd.append_scope",
             Self::VcdPause => "vcd.pause",
             Self::VcdResume => "vcd.resume",
+            Self::ReadMem(_, _) => "readmem",
         }
     }
 }

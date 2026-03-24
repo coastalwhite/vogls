@@ -665,6 +665,7 @@ pub fn lower_process(
                     vogls_ir::IntrinsicOp::VcdAppendModule(_) => todo!(),
                     vogls_ir::IntrinsicOp::VcdPause => todo!(),
                     vogls_ir::IntrinsicOp::VcdResume => todo!(),
+                    vogls_ir::IntrinsicOp::ReadMem(_) => todo!(),
                 },
                 I::LastUpdateTime(dst, signal) => {
                     let t = temp_map[&(*dst, LogicMode::TwoValue)];

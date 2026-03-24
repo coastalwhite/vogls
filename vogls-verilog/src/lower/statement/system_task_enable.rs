@@ -1,12 +1,13 @@
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::dyn_format_string::{Base, DynFormatArgument, DynFormatString, Padding};
-use vogls_ir::{BasicBlockBuilder, IntrinsicOp, VariableKey};
+use vogls_ir::{BasicBlockBuilder, IntrinsicOp, ReadMem, VariableKey};
 
 use crate::ast::AstId;
+use crate::ast::expr::Expr;
 use crate::ast::statement::SystemTaskEnable;
-use crate::lower::expression;
 use crate::lower::expression::lower_expr;
 use crate::lower::{LowerContext, MutLowerContext};
+use crate::lower::{expression, hident_span, try_resolve_net};
 
 pub fn lower_system_task_enable<'a>(
     ctx: &LowerContext<'a>,
@@ -19,9 +20,9 @@ pub fn lower_system_task_enable<'a>(
         system_task_identifier,
         expressions,
     } = &*system_task_enable;
-    let ident = &ctx.arenas.ident_table[system_task_identifier.item.0];
+    let system_task_ident = &ctx.arenas.ident_table[system_task_identifier.item.0];
 
-    match ident {
+    match system_task_ident {
         "display" => {
             let (mut format_string_content, format_string_arguments, format_string_args) =
                 lower_write_arguments(ctx, mctx, scope, system_task_enable, &mut builder)?;
@@ -37,13 +38,7 @@ pub fn lower_system_task_enable<'a>(
         }
         "write" => {
             let (format_string_content, format_string_arguments, format_string_args) =
-                lower_write_arguments(
-                    ctx,
-                    mctx,
-                    scope,
-                    system_task_enable,
-                    &mut builder,
-                )?;
+                lower_write_arguments(ctx, mctx, scope, system_task_enable, &mut builder)?;
             let format_str =
                 DynFormatString::new(format_string_content.into(), format_string_arguments.into());
             builder.intrinsic(
@@ -70,10 +65,16 @@ pub fn lower_system_task_enable<'a>(
             let (lhs, lhs_ty) = lower_expr(ctx, mctx, scope, &mut builder, lhs)?;
             let (rhs, rhs_ty) = lower_expr(ctx, mctx, scope, &mut builder, rhs)?;
 
-            let (lhs, _, rhs, _) =
-                expression::coerce_bin_arithmetic(mctx.gl(), &mut builder, lhs, lhs_ty, rhs, rhs_ty);
+            let (lhs, _, rhs, _) = expression::coerce_bin_arithmetic(
+                mctx.gl(),
+                &mut builder,
+                lhs,
+                lhs_ty,
+                rhs,
+                rhs_ty,
+            );
             static FAILED_STR: &str = "Assertion failed on line .  != \n";
-            let (condition, content) = if ident == "vogls_assert_eq" {
+            let (condition, content) = if system_task_ident == "vogls_assert_eq" {
                 (builder.case_equals(mctx.gl(), lhs, rhs), FAILED_STR)
             } else {
                 (builder.not_case_equals(mctx.gl(), lhs, rhs), FAILED_STR)
@@ -131,16 +132,78 @@ pub fn lower_system_task_enable<'a>(
         }
 
         "readmemb" | "readmemh" => {
-            // diagnostics.warn_not_yet_implemented(
-            //     arenas.get_span(system_task_enable),
-            //     "stubs at the moment",
-            // );
-            builder.intrinsic(mctx.gl(), IntrinsicOp::Finish, [].into());
+            assert!((2..=4).contains(&expressions.len()));
+            let Some(path) = expressions.get(0).into_str_literal() else {
+                mctx.diagnostics
+                    .not_yet_implemented(ctx.arenas.get_span(system_task_enable), "invalid path");
+                return Err(());
+            };
+            let path = ctx.arenas.text[path.0.start..path.0.end].to_string();
+            let Expr::Ident(ident, exprs, range_expr) = &*expressions.get(1) else {
+                mctx.diagnostics
+                    .not_yet_implemented(ctx.arenas.get_span(system_task_enable), "invalid memory");
+                return Err(());
+            };
+            if !exprs.is_empty() || range_expr.is_some() {
+                mctx.diagnostics.not_yet_implemented(
+                    ctx.arenas.get_span(system_task_enable),
+                    "array elements and ranges not supported yet",
+                );
+                return Err(());
+            }
+            let net = try_resolve_net(
+                scope,
+                &ctx.table,
+                &ctx.arenas,
+                *ident,
+                &mut mctx.diagnostics,
+            )?;
+            if net.dims.len() != 1 {
+                mctx.diagnostics.not_yet_implemented(
+                    hident_span(&ctx.arenas, *ident),
+                    "only single arrays are supported as memory at the moment",
+                );
+                return Err(());
+            }
+
+            if expressions.len() > 2 {
+                mctx.diagnostics.warn_not_yet_implemented(
+                    ctx.arenas.get_span(expressions.get(2)),
+                    "ignored at the moment",
+                );
+            }
+            if expressions.len() > 3 {
+                mctx.diagnostics.warn_not_yet_implemented(
+                    ctx.arenas.get_span(expressions.get(3)),
+                    "ignored at the moment",
+                );
+            }
+
+            let stride = net.ty.force_net_width();
+            let offset = 0;
+            let limit = net.dims[0];
+            let (signal, slice) = net.net.blocking_drive_signal();
+            assert!(slice.is_none(), "should not yet be set");
+
+            let binary = system_task_ident == "readmemb";
+            let readmem = ReadMem {
+                path,
+                signal,
+                offset,
+                stride,
+                limit,
+                binary,
+            };
+
+            builder.intrinsic(
+                mctx.gl(),
+                IntrinsicOp::ReadMem(Box::new(readmem)),
+                [].into(),
+            );
         }
 
         // @Incomplete: Many variants here.
         _ => {
-
             mctx.diagnostics.not_yet_implemented(
                 ctx.arenas.get_span(system_task_enable),
                 "system task not yet implemented",

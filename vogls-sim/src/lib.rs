@@ -6,7 +6,7 @@ use slotmap::{SlotMap, new_key_type};
 use vogls_bits::arithmetic::{FvLogicValue, fv_set_no_special};
 use vogls_bits::set_subslice::{tv_l_set, tv_s_set};
 use vogls_codegen::{Heap, HeapOffset, HeapRef};
-use vogls_ir::{INTEGER_VSIZE, LogicMode, TIME_VSIZE};
+use vogls_ir::{LogicMode, Mode, INTEGER_VSIZE, TIME_VSIZE};
 use vogls_runtime::plugins::RuntimePluginState;
 use vogls_runtime::{RtSignalKey, SimulationIo};
 
@@ -569,6 +569,20 @@ impl Simulation {
                                 writeln!(&mut io.stdout, "[FINISH]").unwrap();
                                 break 'instruction Some(EvalOutcome::Exit);
                             }
+                            O::ReadMem(heap_ref, readmem) => vogls_runtime::readmem::read_mem(
+                                &readmem.path,
+                                &mut state.runtime.heap,
+                                *heap_ref,
+                                if self.logic_mode == LogicMode::TwoValue {
+                                    Mode::TwoValue
+                                } else {
+                                    Mode::FourValue
+                                },
+                                readmem.offset,
+                                readmem.limit,
+                                readmem.stride,
+                                readmem.binary,
+                            ).unwrap(),
                         }
                     }
                     I::LastUpdateTime(dst, signal) => {

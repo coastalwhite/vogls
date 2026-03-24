@@ -2,6 +2,7 @@ use vogls_codegen::Heap;
 use vogls_utils::{TableKey, new_table_key};
 
 pub mod plugins;
+pub mod readmem;
 
 new_table_key! { pub struct RtSignalKey; }
 

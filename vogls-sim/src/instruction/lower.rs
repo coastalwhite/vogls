@@ -252,6 +252,10 @@ pub fn lower_process_to_vm(
                         }
                         O::VcdPause => VO::VcdPause,
                         O::VcdResume => VO::VcdResume,
+                        O::ReadMem(readmem) => VO::ReadMem(
+                            signals[signal!(readmem.signal).as_usize()],
+                            readmem.clone(),
+                        ),
                     };
                     VI::Intrinsic(var!(*dst), Box::new(op), vm_args)
                 }
