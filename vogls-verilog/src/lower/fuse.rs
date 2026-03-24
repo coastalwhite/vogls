@@ -2,9 +2,11 @@ use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{INTEGER_VSIZE, SCALAR_VSIZE, SignalSlice, VectorSize};
 
 use crate::ast::AstId;
+use crate::ast::constant_expr::ConstantRangeExpression;
 use crate::ast::expr::{BitSlice, Expr};
+use crate::ast::module::NetAssignment;
 use crate::elaborate::VSymbol;
-use crate::lower::{hident_span, try_resolve_symbol_id};
+use crate::lower::{Edge, hident_span, try_resolve_net, try_resolve_symbol_id};
 
 use super::{Diagnostics, LowerContext, MutLowerContext, VType, VValue, eval_constant_expr};
 
@@ -233,5 +235,180 @@ pub fn try_lower_fuse_driver_expr<'a>(
     }
 
     mctx.fuse_scratch.push((net_signal, Some(output_slice)));
+    Ok(true)
+}
+
+pub fn try_fuse_assign<'a>(
+    ctx: &LowerContext<'a>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
+    net_assignment: AstId<'a, NetAssignment<'a>>,
+) -> Result<bool, ()> {
+    // @TODO: Support concatenation
+    if net_assignment.net_lvalue.0.len() != 1 {
+        return Ok(false);
+    }
+
+    mctx.fuse_scratch.clear();
+    if !try_lower_fuse_driver_expr(ctx, mctx, scope, net_assignment.expression)? {
+        return Ok(false);
+    }
+    let lvalue = net_assignment.net_lvalue.0.get(0);
+    let to_net = try_resolve_net(
+        scope,
+        &ctx.table,
+        &ctx.arenas,
+        lvalue.ident,
+        &mut mctx.diagnostics,
+    )?;
+    let (drivee, drivee_slice) = to_net.net.blocking_drive_signal();
+    assert!(drivee_slice.is_none(), "should not yet be set");
+
+    let single_expression = lvalue.constant_range_expression.and_then(|r| match *r {
+        ConstantRangeExpression::Single(expr) => Some(expr),
+        ConstantRangeExpression::MsbLsb { .. } => None,
+    });
+
+    if lvalue.constant_exprs.len() + usize::from(single_expression.is_some()) < to_net.dims.len() {
+        mctx.diagnostics
+            .not_yet_implemented(ctx.arenas.get_span(lvalue), "cannot assign array");
+        return Err(());
+    }
+
+    let drivee_ty_size = to_net.ty.force_net_width();
+
+    // Handle array indexing.
+    let mut offset = 0;
+    let mut current_size = drivee_ty_size;
+    for (expr, &dim) in (single_expression
+        .iter()
+        .copied()
+        .chain(lvalue.constant_exprs.iter().rev()))
+    .zip(to_net.dims.iter())
+    {
+        let idx = eval_constant_expr(
+            &mctx.gl,
+            &ctx.arenas,
+            &ctx.table,
+            scope,
+            &mut mctx.diagnostics,
+            expr,
+        )?;
+        let idx = idx.truncate_or_extend(INTEGER_VSIZE);
+        let idx = idx.into_bits().extract_exact_u32();
+
+        if idx >= dim {
+            mctx.diagnostics
+                .warnings
+                .push((ctx.arenas.get_span(expr), "index out of range".into()));
+            return Err(());
+        }
+
+        // @TODO: Checked arithmetic
+        offset += current_size.get() * idx;
+        current_size = VectorSize::new(current_size.get() * dim).unwrap();
+    }
+
+    // Handle bit indexing indexing.
+    let mut drivee_output_width = drivee_ty_size;
+    for expr in lvalue
+        .constant_exprs
+        .truncate(
+            lvalue.constant_exprs.len() + usize::from(single_expression.is_some())
+                - to_net.dims.len(),
+        )
+        .iter()
+        .rev()
+    {
+        let idx = eval_constant_expr(
+            &mctx.gl,
+            &ctx.arenas,
+            &ctx.table,
+            scope,
+            &mut mctx.diagnostics,
+            expr,
+        )?;
+        let idx = idx.truncate_or_extend(INTEGER_VSIZE);
+        let idx = idx.into_bits().extract_exact_u32();
+
+        if idx >= drivee_ty_size.get() {
+            mctx.diagnostics
+                .warnings
+                .push((ctx.arenas.get_span(expr), "index out of range".into()));
+            // @TODO: Handle this better somehow...
+            return Err(());
+        }
+
+        offset += idx;
+        drivee_output_width = SCALAR_VSIZE;
+    }
+
+    // Handle range slicing.
+    let Some(mut drivee_output_slice) = SignalSlice::from_width(offset, drivee_output_width) else {
+        return Ok(false);
+    };
+    if let Some(range_expr) = &lvalue.constant_range_expression {
+        let slice = match &**range_expr {
+            ConstantRangeExpression::Single(expr) => {
+                let idx = eval_constant_expr(
+                    &mctx.gl,
+                    &ctx.arenas,
+                    &ctx.table,
+                    scope,
+                    &mut mctx.diagnostics,
+                    *expr,
+                )?;
+                let idx = idx.truncate_or_extend(INTEGER_VSIZE);
+                let idx = idx.into_bits().extract_exact_u32();
+
+                // @TODO: Remove unwrap
+                SignalSlice::from_width(idx, SCALAR_VSIZE).unwrap()
+            }
+            ConstantRangeExpression::MsbLsb { msb, lsb } => {
+                let msb = eval_constant_expr(
+                    &mctx.gl,
+                    &ctx.arenas,
+                    &ctx.table,
+                    scope,
+                    &mut mctx.diagnostics,
+                    *msb,
+                )?;
+                let lsb = eval_constant_expr(
+                    &mctx.gl,
+                    &ctx.arenas,
+                    &ctx.table,
+                    scope,
+                    &mut mctx.diagnostics,
+                    *lsb,
+                )?;
+
+                let msb = msb.truncate_or_extend(INTEGER_VSIZE);
+                let msb = msb.into_bits().extract_exact_u32();
+                let lsb = lsb.truncate_or_extend(INTEGER_VSIZE);
+                let lsb = lsb.into_bits().extract_exact_u32();
+                SignalSlice::new(msb, lsb).unwrap()
+            }
+        };
+
+        let Some(relative_slice) = drivee_output_slice.relative_slice(slice) else {
+            return Ok(false);
+        };
+        drivee_output_slice = relative_slice;
+    }
+
+    let mut offset = drivee_output_slice.lsb();
+    for &(signal, slice) in &mctx.fuse_scratch {
+        let width = slice.map_or_else(|| mctx.gl.signals[signal].size, |s| s.width());
+        let Some(width) = VectorSize::new((drivee_ty_size.get() - offset).min(width.get())) else {
+            break;
+        };
+        mctx.connections.push(Edge {
+            driver: signal,
+            driver_slice: slice,
+            drivee,
+            drivee_slice: Some(SignalSlice::from_width(offset, width).unwrap()),
+        });
+        offset += width.get();
+    }
     Ok(true)
 }

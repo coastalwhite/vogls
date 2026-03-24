@@ -239,6 +239,34 @@ pub fn resolve_var_logic_mode_map(
     }
 }
 
+pub fn insert_bb_phis(
+    entry: BasicBlockKey,
+    gl: &GlobalContext,
+    bb_stack: &mut Vec<BasicBlockKey>,
+    bb_seen: &mut VgHashSet<BasicBlockKey>,
+    bb_phis: &mut VgHashMap<BasicBlockKey, Vec<(VariableKey, VariableKey)>>,
+) {
+    bb_seen.clear();
+    bb_stack.push(entry);
+    while let Some(bb_key) = bb_stack.pop() {
+        let bb = gl.bbs.get(bb_key).unwrap();
+
+        for instr in &bb.instrs {
+            if let Instruction::Phi(dst, srcs) = instr {
+                for (bb, var) in srcs {
+                    bb_phis.entry(*bb).or_insert(Vec::new()).push((*dst, *var));
+                }
+            }
+        }
+
+        bb.terminator.for_each_bb(|bb| {
+            if bb_seen.insert(bb) {
+                bb_stack.push(bb);
+            }
+        });
+    }
+}
+
 pub fn resolve_heap_map(
     entry: BasicBlockKey,
     gl: &GlobalContext,

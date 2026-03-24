@@ -4,7 +4,7 @@ use std::{fmt, io};
 use vogls_bits::BitsDataRef;
 use vogls_bits::format::{BitsFormatBase, BitsFormatOptions, BitsFormatWidth};
 use vogls_codegen::{
-    HeapBuilder, HeapOffset, HeapRef, resolve_heap_map, resolve_var_logic_mode_map,
+    insert_bb_phis, resolve_heap_map, resolve_var_logic_mode_map, HeapBuilder, HeapOffset, HeapRef
 };
 use vogls_ir::dyn_format_string::{DynFormatArgument, DynFormatString};
 use vogls_ir::{
@@ -258,19 +258,7 @@ pub fn lower_process(
         &mut var_mode,
         &mut conv_map,
     );
-    bb_seen.clear();
-    bb_stack.push(process.entry);
-    while let Some(bb_key) = bb_stack.pop() {
-        let bb = gl.bbs.get(bb_key).unwrap();
-
-        for instr in &bb.instrs {
-            if let Instruction::Phi(dst, srcs) = instr {
-                for (bb, var) in srcs {
-                    bb_phis.entry(*bb).or_insert(Vec::new()).push((*dst, *var));
-                }
-            }
-        }
-    }
+    insert_bb_phis(process.entry, gl, &mut bb_stack, &mut bb_seen, &mut bb_phis);
     resolve_heap_map(
         process.entry,
         gl,

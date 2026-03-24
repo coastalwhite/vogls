@@ -11,6 +11,10 @@ use vogls_utils::{IndexMap, TableKey, TableSet, VgHashMap, VgHashSet};
 vogls_utils::new_table_key! { struct NodeKey; }
 slotmap::new_key_type! { struct EdgeKey; }
 
+pub const LUPDT: u32 = 1u32;
+pub const PROBE: u32 = 2u32;
+pub const DRIVE: u32 = 4u32;
+
 struct Edge {
     driver: NodeKey,
     drivee: NodeKey,
@@ -61,33 +65,112 @@ fn print(signals: &SlotMap<SignalKey, Signal>, nodes: &Nodes, edges: &Edges) {
         );
     }
     writeln!(&mut out, "}}");
-    // println!("{out}");
+    println!("{out}");
+}
 
+fn print_edge(out: &mut String, edge: &Edge, signals: &SlotMap<SignalKey, Signal>, nodes: &Nodes) {
+    use std::fmt::Write;
+    writeln!(
+        out,
+        r#"  n{} -> n{} [taillabel="{}", headlabel="{}"];"#,
+        edge.driver.get(),
+        edge.drivee.get(),
+        if edge.driver_slice.lsb() > 0
+            || edge.driver_slice.width() != signals[nodes.get_key(edge.driver)].size
+        {
+            format!("[{}:{}]", edge.driver_slice.msb(), edge.driver_slice.lsb())
+        } else {
+            String::new()
+        },
+        if edge.drivee_slice.lsb() > 0
+            || edge.drivee_slice.width() != signals[nodes.get_key(edge.drivee)].size
+        {
+            format!("[{}:{}]", edge.drivee_slice.msb(), edge.drivee_slice.lsb())
+        } else {
+            String::new()
+        },
+    )
+    .unwrap();
+}
+
+#[allow(unused)]
+fn print_subgraph(
+    out: &mut String,
+    node: NodeKey,
+    signals: &SlotMap<SignalKey, Signal>,
+    nodes: &Nodes,
+    edges: &Edges,
+    hm: &VgHashMap<SignalKey, u32>,
+) {
+    let mut seen = VgHashSet::<NodeKey>::default();
+    let mut seen_edges = VgHashSet::<EdgeKey>::default();
+    let mut stack = Vec::new();
+
+    stack.push(node);
+    seen.insert(node);
+
+    while let Some(n) = stack.pop() {
+        let s = nodes.get_key(n);
+        use std::fmt::Write;
+        write!(out, r#"  n{} [label="{}"#, n.get(), &signals[s].name).unwrap();
+
+        if let Some(&v) = hm.get(&s)
+            && v != 0
+        {
+            write!(out, " [").unwrap();
+            if v & DRIVE != 0 {
+                out.push('D');
+            }
+            if v & PROBE != 0 {
+                out.push('P');
+            }
+            if v & LUPDT != 0 {
+                out.push('L');
+            }
+            write!(out, "]").unwrap();
+        }
+
+        writeln!(out, r#""];"#).unwrap();
+
+        for e in nodes[n].fanin.iter().chain(nodes[n].fanout.iter()) {
+            let edge = &edges[*e];
+            if seen_edges.insert(*e) {
+                print_edge(out, edge, signals, nodes);
+            }
+            if seen.insert(edge.driver) {
+                stack.push(edge.driver);
+            }
+            if seen.insert(edge.drivee) {
+                stack.push(edge.drivee);
+            }
+        }
+    }
+}
+
+#[allow(unused)]
+fn open_dot(s: &str) -> std::io::Result<()> {
     use std::process::{Command, Stdio};
-    // Start `dot` process with stdin and stdout piped
     let mut dot = Command::new("dot")
         .args(["-Nshape=box", "-Tsvg", "-ofuse-signals.svg"])
         .stdin(Stdio::piped())
         .spawn()
         .expect("Failed to spawn dot");
 
-    // Write "test\n" to dot's stdin
     dot.stdin
         .take()
         .expect("Failed to take dot stdin")
-        .write_all(out.as_bytes())
+        .write_all(s.as_bytes())
         .expect("Failed to write to dot stdin");
 
-    // Wait for dot and collect its stdout
-    let dot_output = dot.wait().expect("Failed to wait on dot");
+    dot.wait().expect("Failed to wait on dot");
 
-    // Pipe dot's stdout into `imv` via stdin
     let mut imv = Command::new("imv")
         .arg("fuse-signals.svg")
         .spawn()
         .expect("Failed to spawn imv");
 
     imv.wait().expect("Failed to wait on imv");
+    Ok(())
 }
 
 pub struct FuseSignalsContext {
@@ -107,11 +190,12 @@ pub struct FuseSignalsContext {
 /// A set of graph transformations is performed on this graph usually reducing the depth of the
 /// graph.
 ///
-/// | Property        | From                       | To               |
-/// |-----------------|----------------------------|------------------|
-/// | Transitive      | A -> B -> C                | A -> B, A -> C   |
-/// | Neighbour Merge | A[0] -> B[0], A[1] -> B[1] | A[1:0] -> B[1:0] |
-/// | Symmetric       | A -> B, B -> A             | A -> B           |
+/// | Property        | From                       | To                   |
+/// |-----------------|----------------------------|----------------------|
+/// | Transitive      | A -> B -> C                | A -> B, A -> C       |
+/// | Neighbour Merge | A[0] -> B[0], A[1] -> B[1] | A[1:0] -> B[1:0]     |
+/// | Symmetric       | A -> B, B -> A             | A -> B               |
+/// | Merge Inversion | A -> B[0], C -> B[1]       | B[0] -> A, B[1] -> C |
 ///
 /// At the end, you have a graph where many nodes only have on fanin edge. The driver of this edge
 /// is uses as an alias for the node's signal. The returned map is a map from the original signal
@@ -151,11 +235,15 @@ pub fn fuse_signals(
         nodes[drivee].fanin.push(edge);
     }
 
-    let mut lupdts = VgHashSet::default();
+    let mut ir_signal_reference = VgHashMap::<SignalKey, u32>::default();
     for bb in gl.bbs.values() {
         for i in &bb.instrs {
-            if let Instruction::LastUpdateTime(_, s) = &i {
-                lupdts.insert(*s);
+            use Instruction as I;
+            match &i {
+                I::LastUpdateTime(_, s) => *ir_signal_reference.entry(*s).or_default() |= LUPDT,
+                I::Probe(_, s) => _ = *ir_signal_reference.entry(*s).or_default() |= PROBE,
+                I::Drive(s, _, _) => *ir_signal_reference.entry(*s).or_default() |= DRIVE,
+                _ => {}
             }
         }
     }
@@ -214,7 +302,9 @@ pub fn fuse_signals(
                 // view of a signal as the driver of the observed signal.
                 if (drivee_slice.lsb() != 0
                     || drivee_slice.width() != gl.signals[nodes.get_key(drivee)].size)
-                    && lupdts.contains(&nodes.get_key(drivee))
+                    && ir_signal_reference
+                        .get(&nodes.get_key(drivee))
+                        .is_some_and(|v| v & LUPDT != 0)
                 {
                     continue;
                 }
@@ -301,6 +391,63 @@ pub fn fuse_signals(
                     read += 1;
                 }
                 nodes[node].fanout.truncate(write + 1);
+            }
+
+            // Merge inversion
+            if nodes[node].fanin.len() > 1 {
+                nodes[node].fanin.sort_unstable_by_key(|&e| {
+                    let edge = &edges[e];
+                    (edge.drivee_slice.lsb(), edge.drivee_slice.width())
+                });
+
+                let node_width = gl.signals[nodes.get_key(node)].size;
+                let mut offset = 0;
+                let mut i = 0;
+
+                while i < nodes[node].fanin.len() {
+                    let edge = &edges[nodes[node].fanin[i]];
+                    let slice = edge.drivee_slice;
+
+                    let has_drive = ir_signal_reference
+                        .get(&nodes.get_key(edge.drivee))
+                        .is_none_or(|v| *v & DRIVE != 0);
+
+                    if (has_drive && slice.lsb() != offset)
+                        || (!has_drive && slice.lsb() < offset)
+                        || !nodes[edge.driver].fanin.is_empty()
+                        || ir_signal_reference
+                            .get(&nodes.get_key(edge.drivee))
+                            .is_some_and(|v| {
+                                *v & DRIVE != 0 && (*v & PROBE != 0 || *v & LUPDT != 0)
+                            })
+                    {
+                        break;
+                    }
+
+                    offset = slice.lsb() + slice.width().get();
+                    i += 1;
+                }
+
+                if i == nodes[node].fanin.len() && offset == node_width.get() {
+                    changed = true;
+                    let fanin = std::mem::take(&mut nodes[node].fanin);
+                    for &e in &fanin {
+                        let edge = &mut edges[e];
+
+                        // @Performance: Linear scan.
+                        let idx = nodes[edge.driver]
+                            .fanout
+                            .iter()
+                            .position(|&ie| ie == e)
+                            .unwrap();
+                        nodes[edge.driver].fanout.swap_remove(idx);
+                        nodes[edge.driver].fanin.push(e);
+
+                        std::mem::swap(&mut edge.driver, &mut edge.drivee);
+                        std::mem::swap(&mut edge.driver_slice, &mut edge.drivee_slice);
+                    }
+                    nodes[node].fanout.extend(fanin);
+                }
             }
         }
 

@@ -1,7 +1,5 @@
 use vogls_frontend::symbol_table::SymbolId;
-use vogls_ir::{
-    Bits, ConnectionDirection, GlobalContext, SCALAR_VSIZE, SignalSlice, VectorSize, new_process,
-};
+use vogls_ir::{Bits, ConnectionDirection, GlobalContext, SCALAR_VSIZE, VectorSize, new_process};
 use vogls_utils::OrderedSet;
 
 use crate::ast::module::{
@@ -15,11 +13,11 @@ use crate::ast::{AstId, AstIdRange};
 use crate::elaborate::{VSymbol, VSymbolTable};
 use crate::lower::assign::{assign_net_lvalue, net_lvalue_width};
 use crate::lower::expression::{self, get_used_signals, lower_expr, truncate_or_extend};
-use crate::lower::fuse::try_lower_fuse_driver_expr;
+use crate::lower::fuse::try_fuse_assign;
 use crate::lower::statement::statements_to_process;
 use crate::lower::udp::lower_udp;
 use crate::lower::{
-    Edge, VType, assign_input_port, assign_port_output, eval_constant_expr, evaluate_range,
+    VType, assign_input_port, assign_port_output, eval_constant_expr, evaluate_range,
     resolve_symbol_id, try_resolve_net, unwrap_get_module,
 };
 use crate::parser::AstArenas;
@@ -106,42 +104,7 @@ pub fn lower<'a>(
             for ast_net_assignment in assign.list_of_net_assignments {
                 let net_assignment = &*ast_net_assignment;
 
-                mctx.fuse_scratch.clear();
-                if net_assignment.net_lvalue.0.len() == 1
-                    && let lvalue = net_assignment.net_lvalue.0.get(0)
-                    // @TODO: Properly deal with these.
-                    && lvalue.constant_exprs.is_empty()
-                    && lvalue.constant_range_expression.is_none()
-                    && try_lower_fuse_driver_expr(ctx, mctx, scope, net_assignment.expression)?
-                {
-                    let to_net = try_resolve_net(
-                        scope,
-                        &ctx.table,
-                        &ctx.arenas,
-                        lvalue.ident,
-                        &mut mctx.diagnostics,
-                    )?;
-                    let (drivee, drivee_slice) = to_net.net.blocking_drive_signal();
-                    assert!(drivee_slice.is_none(), "should not yet be set");
-
-                    let mut offset = 0;
-                    let drivee_width = mctx.gl.signals[drivee].size;
-                    for &(signal, slice) in &mctx.fuse_scratch {
-                        let width =
-                            slice.map_or_else(|| mctx.gl.signals[signal].size, |s| s.width());
-                        let Some(width) =
-                            VectorSize::new((drivee_width.get() - offset).min(width.get()))
-                        else {
-                            break;
-                        };
-                        mctx.connections.push(Edge {
-                            driver: signal,
-                            driver_slice: slice,
-                            drivee,
-                            drivee_slice: Some(SignalSlice::from_width(offset, width).unwrap()),
-                        });
-                        offset += width.get();
-                    }
+                if try_fuse_assign(ctx, mctx, scope, ast_net_assignment)? {
                     continue;
                 }
 
