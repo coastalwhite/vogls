@@ -139,7 +139,7 @@ pub fn slice_with(
             } else {
                 writeln!(
                     f,
-                    "{INDENT}}} else {{ set_no_special({d}, {d_size}*sizeof(uint64_t)); memset({d}+{dst_words}, 0, {dst_words}*sizeof(uint64_t)); }}"
+                    "{INDENT}}} else {{ set_no_special({d}, {d_size}); memset({d}+{dst_words}, 0, {dst_words}*sizeof(uint64_t)); }}"
                 )?;
             }
         }

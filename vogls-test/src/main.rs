@@ -82,6 +82,12 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         stderr: String,
     }
 
+    enum VerifyOutput {
+        No,
+        SortLines,
+        Yes,
+    }
+
     let modes: &[LogicMode] = match (args.tv, args.fv) {
         (true, false) => &[LogicMode::TwoValue],
         (false, true) => &[LogicMode::FourValue],
@@ -111,7 +117,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
 
         struct TestInfo {
             fail: bool,
-            verify_stdout: bool,
+            verify_stdout: VerifyOutput,
             verify_ir: bool,
             time: u64,
             top_level_module: Option<String>,
@@ -120,7 +126,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
 
         let mut test_information = TestInfo {
             fail: false,
-            verify_stdout: false,
+            verify_stdout: VerifyOutput::No,
             verify_ir: false,
             top_level_module: None,
             time: 1000,
@@ -142,7 +148,10 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
 
                 match line {
                     "fail" => test_information.fail = true,
-                    "verify-stdout" => test_information.verify_stdout = true,
+                    "verify-stdout" => test_information.verify_stdout = VerifyOutput::Yes,
+                    "verify-stdout[sort-lines]" => {
+                        test_information.verify_stdout = VerifyOutput::SortLines
+                    }
                     "verify-ir" => test_information.verify_ir = true,
                     _ if line.starts_with("tlm=") => {
                         test_information.top_level_module = Some(line[4..].trim().to_string());
@@ -311,9 +320,20 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                     panic = true;
                 } else {
                     failed |= result.as_ref().is_ok_and(|r| r.is_err()) ^ test_information.fail;
-                    if test_information.verify_stdout {
+                    if matches!(
+                        test_information.verify_stdout,
+                        VerifyOutput::Yes | VerifyOutput::SortLines
+                    ) {
                         let s = std::fs::read_to_string(&path.with_extension("v.stdout"))?;
-                        failed |= stdout != s;
+
+                        if matches!(test_information.verify_stdout, VerifyOutput::SortLines) {
+                            let mut lines = stdout.lines().collect::<Vec<&str>>();
+                            lines.sort_unstable();
+                            failed |= lines != s.lines().collect::<Vec<_>>();
+                        } else {
+                            failed |= s != stdout;
+                        }
+
                         if failed {
                             mismatch = Some((s, stdout.to_string()));
                         }

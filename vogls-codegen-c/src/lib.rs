@@ -1612,7 +1612,11 @@ static inline void tv_ll_slice(
         return;
     }
     if (offset >= src_size) {
-        memset(dst, 0, 2*dst_words*sizeof(uint64_t));
+        if (fill_with_null) {
+            memset(dst, 0, 2*dst_words*sizeof(uint64_t));
+        } else {
+            memset(dst, 0, dst_words*sizeof(uint64_t));
+        }
         return;
     }
 

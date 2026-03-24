@@ -1,5 +1,5 @@
 // vogls: skip=two-value-logic
-// vogls: verify-stdout
+// vogls: verify-stdout[sort-lines]
 module gate(
     input i,
     output o1, o2, o3, o6, o12
@@ -21,11 +21,11 @@ module tb();
 
     gate g(i, o1, o2, o3, o6, o12);
 
-    always @(o1)  $display("[T=%0d] o1 = %0x",  $time(), o1);
-    always @(o2)  $display("[T=%0d] o2 = %0x",  $time(), o2);
-    always @(o3)  $display("[T=%0d] o3 = %0x",  $time(), o3);
-    always @(o6)  $display("[T=%0d] o6 = %0x",  $time(), o6);
-    always @(o12) $display("[T=%0d] o12 = %0x", $time(), o12);
+    always @(o1)  $display("[T=%03d] o1 = %0x",  $time(), o1);
+    always @(o2)  $display("[T=%03d] o2 = %0x",  $time(), o2);
+    always @(o3)  $display("[T=%03d] o3 = %0x",  $time(), o3);
+    always @(o6)  $display("[T=%03d] o6 = %0x",  $time(), o6);
+    always @(o12) $display("[T=%03d] o12 = %0x", $time(), o12);
 
     initial begin
         #20 i = 1'b0; // x -> 0 | 1 | 2 | 2 | max(tz0, t10) = max(6, 2) = 6 | 10 | 
