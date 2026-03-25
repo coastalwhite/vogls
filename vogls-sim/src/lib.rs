@@ -571,7 +571,7 @@ impl Simulation {
                             }
                             O::ReadMem(heap_ref, readmem) => vogls_runtime::readmem::read_mem(
                                 &readmem.path,
-                                &mut state.runtime.heap,
+                                state.runtime.heap.0.as_mut(),
                                 *heap_ref,
                                 if self.logic_mode == LogicMode::TwoValue {
                                     Mode::TwoValue

@@ -9,7 +9,7 @@ use slotmap::{SecondaryMap, SlotMap};
 use vogls_codegen::{HeapBuilder, HeapOffset, HeapRef};
 use vogls_codegen_c::runtime::{CDesign, CDesignState};
 use vogls_codegen_c::{
-    CLowerOptions, ListenerBuilder, lower_signal_drive_fn, lower_signal_drive_header,
+    CLowerOptions, ListenerBuilder, StateBuilder, lower_signal_drive_fn, lower_signal_drive_header,
 };
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_ir::{Bits, GlobalContext, LogicMode, Signal, SignalKey};
@@ -17,7 +17,7 @@ use vogls_runtime::SimulationIo;
 use vogls_runtime::plugins::RuntimePluginState;
 use vogls_runtime::{RtSignalKey, RuntimeState};
 use vogls_sim::{Event, Regions, Simulation, VmProcess, VmProcessKey, lower_process_to_vm};
-use vogls_utils::{IndexSet, NonMaxU32, TableKey, VgHashMap};
+use vogls_utils::{NonMaxU32, TableKey, VgHashMap};
 use vogls_verilog::arena::Arena;
 use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{Description, Module, ModuleItem, NonPortModuleItem};
@@ -626,7 +626,7 @@ impl Design {
         if ectx.compile {
             let mut listener_builder = ListenerBuilder::default();
             let mut out = Vec::new();
-            let mut dyn_fmt_strs = IndexSet::new();
+            let mut state_builder = StateBuilder::default();
 
             for signal in mctx.gl.signals.keys() {
                 lower_signal_drive_header(&mut out, signal, &io_signals)?;
@@ -644,7 +644,7 @@ impl Design {
                     &mctx.gl,
                     &mut heap_builder,
                     &mut listener_builder,
-                    &mut dyn_fmt_strs,
+                    &mut state_builder,
                     &io_signals,
                     &signals,
                     &lower_options,
@@ -658,7 +658,7 @@ impl Design {
                     signal,
                     &listener_builder,
                     &io_signals,
-                    &mut dyn_fmt_strs,
+                    &mut state_builder,
                     &lower_options,
                 )?;
             }
@@ -679,7 +679,7 @@ impl Design {
                 .args([
                     "-x",
                     "c",
-                    // "-O1",
+                    "-O1",
                     "-g3",
                     "-fPIC",
                     // "-O2",
@@ -705,7 +705,7 @@ impl Design {
             );
             let design = CDesign::new(
                 &Path::new("/tmp/vogls-target.so"),
-                dyn_fmt_strs.take_keys(),
+                state_builder,
                 regions.num_additional_regions() as u8,
             );
 

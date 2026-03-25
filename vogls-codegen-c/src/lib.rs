@@ -9,8 +9,8 @@ use vogls_codegen::{
 use vogls_ir::dyn_format_string::{DynFormatArgument, DynFormatString};
 use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, BinaryOp, ContextFormat, DisplayContext, GlobalContext,
-    INTEGER_VSIZE, Instruction, LogicMode, Process, ProcessKey, ResizeOp, SignalKey, TIME_VSIZE,
-    UnaryOp, VariableKey, VectorSize,
+    INTEGER_VSIZE, Instruction, LogicMode, Process, ProcessKey, ReadMem, ResizeOp, SignalKey,
+    TIME_VSIZE, UnaryOp, VariableKey, VectorSize,
 };
 use vogls_ir_properties::get_temporal_variables;
 use vogls_runtime::RtSignalKey;
@@ -211,6 +211,12 @@ pub struct CLowerOptions {
     pub num_plugins: usize,
 }
 
+#[derive(Default)]
+pub struct StateBuilder {
+    pub dyn_fmt_strs: IndexSet<DynFormatString>,
+    pub read_mems: Vec<(HeapRef, ReadMem)>,
+}
+
 pub fn lower_process(
     f: &mut impl io::Write,
     process_key: ProcessKey,
@@ -218,7 +224,7 @@ pub fn lower_process(
     gl: &GlobalContext,
     heap_builder: &mut HeapBuilder,
     listener_builder: &mut ListenerBuilder,
-    dyn_fmt_strs: &mut IndexSet<DynFormatString>,
+    state_builder: &mut StateBuilder,
     io_signals: &VgHashMap<SignalKey, RtSignalKey>,
     signals: &[HeapRef],
     lower_options: &CLowerOptions,
@@ -282,7 +288,7 @@ pub fn lower_process(
     if lower_options.itrace {
         lower_dyn_format_str(
             f,
-            dyn_fmt_strs,
+            &mut state_builder.dyn_fmt_strs,
             &DynFormatString::new(format!("\n* PROC {procedure}\n").into(), [].into()),
             [].into(),
         )?;
@@ -627,7 +633,12 @@ pub fn lower_process(
                                 Ok(t)
                             })
                             .collect::<io::Result<Vec<CVar>>>()?;
-                        lower_dyn_format_str(&mut buffer, dyn_fmt_strs, &dyn_format_string, args)?;
+                        lower_dyn_format_str(
+                            &mut buffer,
+                            &mut state_builder.dyn_fmt_strs,
+                            &dyn_format_string,
+                            args,
+                        )?;
                     }
                     vogls_ir::IntrinsicOp::Assert(dyn_format_string) => {
                         // @TODO: Format
@@ -654,7 +665,12 @@ pub fn lower_process(
                                 Ok(t)
                             })
                             .collect::<io::Result<Vec<CVar>>>()?;
-                        lower_dyn_format_str(&mut buffer, dyn_fmt_strs, &dyn_format_string, args)?;
+                        lower_dyn_format_str(
+                            &mut buffer,
+                            &mut state_builder.dyn_fmt_strs,
+                            &dyn_format_string,
+                            args,
+                        )?;
                         writeln!(
                             buffer,
                             r#"{INDENT}{INDENT}return 2;
@@ -665,7 +681,22 @@ pub fn lower_process(
                     vogls_ir::IntrinsicOp::VcdAppendModule(_) => todo!(),
                     vogls_ir::IntrinsicOp::VcdPause => todo!(),
                     vogls_ir::IntrinsicOp::VcdResume => todo!(),
-                    vogls_ir::IntrinsicOp::ReadMem(_) => todo!(),
+                    vogls_ir::IntrinsicOp::ReadMem(readmem) => {
+                        let i = state_builder.read_mems.len();
+                        state_builder.read_mems.push((
+                            signals[io_signals[&readmem.signal].as_usize()],
+                            readmem.as_ref().clone(),
+                        ));
+                        writeln!(
+                            buffer,
+                            "{INDENT}cldctx->readmem(heap, cldctx->heap_len, {}, cldctx->readmems+{});",
+                            match gl.logic_mode {
+                                LogicMode::TwoValue => 0,
+                                LogicMode::FourValue => 0,
+                            },
+                            i * size_of::<(HeapRef, ReadMem)>(),
+                        )?;
+                    }
                 },
                 I::LastUpdateTime(dst, signal) => {
                     let t = temp_map[&(*dst, LogicMode::TwoValue)];
@@ -739,7 +770,7 @@ pub fn lower_process(
             if lower_options.itrace && !matches!(i, I::Phi(_, _)) {
                 lower_dyn_format_str(
                     &mut buffer,
-                    dyn_fmt_strs,
+                    &mut state_builder.dyn_fmt_strs,
                     &DynFormatString::new(
                         format!("* {}\n", i.display(&display_context)).into(),
                         [].into(),
@@ -771,7 +802,7 @@ pub fn lower_process(
                 content.push('\n');
                 lower_dyn_format_str(
                     &mut buffer,
-                    dyn_fmt_strs,
+                    &mut state_builder.dyn_fmt_strs,
                     &DynFormatString::new(content.into(), arg_offsets.into()),
                     args,
                 )?;
@@ -1156,7 +1187,7 @@ pub fn lower_signal_drive_fn(
     signal: SignalKey,
     listener_builder: &ListenerBuilder,
     io_signals: &VgHashMap<SignalKey, RtSignalKey>,
-    dyn_fmt_strs: &mut IndexSet<DynFormatString>,
+    state_builder: &mut StateBuilder,
     lower_options: &CLowerOptions,
 ) -> io::Result<()> {
     use vogls_utils::TableKey;
@@ -1170,7 +1201,7 @@ pub fn lower_signal_drive_fn(
         let content = format!("* poke {}\n", gl.signals[signal].name).into();
         lower_dyn_format_str(
             f,
-            dyn_fmt_strs,
+            &mut state_builder.dyn_fmt_strs,
             &DynFormatString::new(content, [].into()),
             [].into(),
         )?;
@@ -1279,6 +1310,10 @@ typedef struct cold_context {
 
     void **plugins;
     void (*plugin_poke_signal)(void*, size_t);
+
+    size_t heap_len;
+    void *readmems;
+    void (*readmem)(uint64_t*, size_t, uint8_t, void*);
 
     void *stdout;
     void *stderr;

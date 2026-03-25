@@ -432,6 +432,7 @@ impl Tokenized {
                                     preprocessor_macro
                                         .argument_positions
                                         .push((*arg_idx, tokens.len() - start));
+                                    i += word.len();
                                     continue;
                                 }
 
@@ -719,7 +720,7 @@ impl Tokenized {
                     }
                     _ => (T::Unknown, 1),
                 };
-
+                
                 if if_untaken_depth >= if_stack.len() {
                     tokens.push(token);
                     spans.push(Span::new(i, i + length));

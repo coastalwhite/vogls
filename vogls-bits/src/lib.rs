@@ -612,8 +612,8 @@ impl Bits {
                     vs[0] = (u64::MAX << size.get()) | v;
                     return Self::from_boxed_slice(Mode::TwoValue, new_size, vs);
                 }
-                let sign_bit = v >> (size.get() - 1);
-                let mask = !u64::from(sign_bit == 0);
+                let sign = self.select_bit(size.get() - 1);
+                let mask = u64::from(!sign).wrapping_sub(1);
                 let value =
                     (v | (mask << size.get())) & 1u64.unbounded_shl(new_size.get()).wrapping_sub(1);
                 Self::from_u64(new_size, value)

@@ -242,11 +242,8 @@ impl<K: TableKey, V> SecondaryTable<K, V> {
         }
     }
 
-    pub fn get(&self, key: K) -> Option<&V> {
-        self.0[key].as_ref()
-    }
-
     pub fn get_mut(&mut self, key: K) -> Option<&mut V> {
+        self.reserve_until(key);
         self.0[key].as_mut()
     }
 

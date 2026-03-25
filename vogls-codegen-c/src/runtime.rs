@@ -3,11 +3,14 @@ use std::ops::Deref as _;
 use std::path::Path;
 use std::ptr::NonNull;
 
+use vogls_codegen::HeapRef;
 use vogls_ir::dyn_format_string::DynFormatString;
-use vogls_ir::{Bits, GlobalContext, VectorSize};
+use vogls_ir::{Bits, GlobalContext, Mode, ReadMem, VectorSize};
 use vogls_runtime::plugins::{RuntimePlugin, RuntimePluginState};
 use vogls_runtime::{RtSignalKey, SimulationIo};
 use vogls_utils::TableKey;
+
+use crate::StateBuilder;
 
 type Time = u64;
 type HeapPtr = Option<NonNull<u64>>;
@@ -66,6 +69,10 @@ pub struct ColdContextT {
 
     plugins: *mut Box<dyn RuntimePlugin>,
     plugin_poke_signal: extern "C" fn(NonNull<RuntimePluginState>, usize),
+
+    heap_len: usize,
+    readmems: *const (HeapRef, ReadMem),
+    readmem: extern "C" fn(*mut u64, usize, u8, NonNull<(HeapRef, ReadMem)>),
 
     stdout: NonNull<Box<dyn std::io::Write + Send + Sync>>,
     stderr: NonNull<Box<dyn std::io::Write + Send + Sync>>,
@@ -232,6 +239,7 @@ impl Clone for CDesignState {
 pub struct CDesign {
     lib: libloading::Library,
     dyn_fmt_strs: Vec<DynFormatString>,
+    read_mems: Vec<(HeapRef, ReadMem)>,
     num_regions: u8,
 }
 
@@ -269,6 +277,32 @@ impl CDesignState {
 
 extern "C" fn plugin_poke_signal(mut plugin: NonNull<RuntimePluginState>, signal: usize) {
     unsafe { plugin.as_mut() }.poke_signal(RtSignalKey::from_usize(signal).unwrap());
+}
+
+extern "C" fn read_mem(
+    heap: *mut u64,
+    heap_len: usize,
+    mode: u8,
+    ptr: NonNull<(HeapRef, ReadMem)>,
+) {
+    let (heap_ref, read_mem) = unsafe { ptr.as_ref() };
+    let heap = unsafe { std::slice::from_raw_parts_mut(heap, heap_len) };
+    let mode = if mode == 0 {
+        Mode::TwoValue
+    } else {
+        Mode::FourValue
+    };
+    vogls_runtime::readmem::read_mem(
+        &read_mem.path,
+        heap,
+        *heap_ref,
+        mode,
+        read_mem.offset,
+        read_mem.limit,
+        read_mem.stride,
+        read_mem.binary,
+    )
+    .unwrap();
 }
 
 extern "C" fn fmt(
@@ -312,11 +346,12 @@ extern "C" fn fmt(
 }
 
 impl CDesign {
-    pub fn new(path: &Path, dyn_fmt_strs: Vec<DynFormatString>, num_regions: u8) -> Self {
+    pub fn new(path: &Path, state_builder: StateBuilder, num_regions: u8) -> Self {
         let lib = unsafe { libloading::Library::new(path) }.unwrap();
         Self {
             lib,
-            dyn_fmt_strs,
+            dyn_fmt_strs: state_builder.dyn_fmt_strs.take_keys(),
+            read_mems: state_builder.read_mems,
             num_regions,
         }
     }
@@ -330,6 +365,10 @@ impl CDesign {
 
                 plugins: state.plugins.as_mut_ptr(),
                 plugin_poke_signal,
+
+                heap_len: state.runtime.heap.0.len(),
+                readmems: self.read_mems.as_ptr(),
+                readmem: read_mem,
 
                 stdout: NonNull::from_mut(&mut io.stdout),
                 stderr: NonNull::from_mut(&mut io.stderr),
@@ -373,6 +412,9 @@ impl CDesign {
             fmt_strs: self.dyn_fmt_strs.as_ptr(),
             plugins: state.plugins.as_mut_ptr(),
             plugin_poke_signal: plugin_poke_signal,
+            heap_len: state.runtime.heap.0.len(),
+            readmems: self.read_mems.as_ptr(),
+            readmem: read_mem,
             stdout: NonNull::from_mut(&mut io.stdout),
             stderr: NonNull::from_mut(&mut io.stderr),
         };
