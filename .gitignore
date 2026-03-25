@@ -1,3 +1,9 @@
 goal/*.pdf
 /target
+**/.venv
 proptest-regressions/
+
+/*.vcd
+/*.v
+/profile*
+/*.dot
