@@ -1,5 +1,7 @@
 use std::fmt;
 
+use vogls_ir::{SCALAR_VSIZE, VectorSize};
+
 use crate::parser::AstArenas;
 
 use super::constant_expr::ConstantExpr;
@@ -34,6 +36,22 @@ pub enum UnaryOperator {
     SignMinus,
 }
 
+impl UnaryOperator {
+    pub fn is_self_determined(self) -> bool {
+        use UnaryOperator as O;
+        match self {
+            O::LogicalNegation
+            | O::ReductionAnd
+            | O::ReductionOr
+            | O::ReductionNand
+            | O::ReductionNor
+            | O::ReductionXor
+            | O::ReductionXnor => true,
+            O::BitwiseNegation | O::SignPlus | O::SignMinus => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum BinaryOperator {
     Power,
@@ -60,6 +78,65 @@ pub enum BinaryOperator {
     BitwiseOr,
     LogicalAnd,
     LogicalOr,
+}
+
+impl BinaryOperator {
+    pub fn is_self_determined(self) -> (bool, bool) {
+        use BinaryOperator as O;
+        match self {
+            O::Power
+            | O::Multiply
+            | O::Divide
+            | O::Modulus
+            | O::BinaryPlus
+            | O::BinaryMinus
+            | O::GreaterThan
+            | O::GreaterThanEqual
+            | O::LessThan
+            | O::LessThanEqual
+            | O::LogicalEquality
+            | O::LogicalInequality
+            | O::CaseEquality
+            | O::CaseInequality
+            | O::BitwiseAnd
+            | O::BitwiseXor
+            | O::BitwiseXnor
+            | O::BitwiseOr => (false, false),
+            O::ArithmeticLeftShift | O::ArithmeticRightShift | O::ShiftLeft | O::ShiftRight => {
+                (false, true)
+            }
+            O::LogicalAnd | O::LogicalOr => (true, true),
+        }
+    }
+
+    pub fn output_width(self, lhs: VectorSize, rhs: VectorSize) -> VectorSize {
+        use BinaryOperator as O;
+        match self {
+            O::GreaterThan
+            | O::GreaterThanEqual
+            | O::LessThan
+            | O::LessThanEqual
+            | O::LogicalEquality
+            | O::LogicalInequality
+            | O::CaseEquality
+            | O::CaseInequality
+            | O::LogicalAnd
+            | O::LogicalOr => SCALAR_VSIZE,
+
+            O::ShiftLeft | O::ShiftRight | O::ArithmeticLeftShift | O::ArithmeticRightShift => lhs,
+
+            O::Power
+            | O::Multiply
+            | O::Divide
+            | O::Modulus
+            | O::BinaryPlus
+            | O::BinaryMinus
+            | O::BitwiseAnd
+            | O::BitwiseXor
+            | O::BitwiseXnor
+            | O::BitwiseOr => lhs.max(rhs),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -114,6 +191,21 @@ impl UnaryOperator {
             U::ReductionXnor => "~^",
             U::SignPlus => "+",
             U::SignMinus => "-",
+        }
+    }
+
+    pub fn output_size(self, width: VectorSize) -> VectorSize {
+        match self {
+            UnaryOperator::LogicalNegation
+            | UnaryOperator::ReductionAnd
+            | UnaryOperator::ReductionOr
+            | UnaryOperator::ReductionNand
+            | UnaryOperator::ReductionNor
+            | UnaryOperator::ReductionXor
+            | UnaryOperator::ReductionXnor => SCALAR_VSIZE,
+            UnaryOperator::BitwiseNegation | UnaryOperator::SignPlus | UnaryOperator::SignMinus => {
+                width
+            }
         }
     }
 }

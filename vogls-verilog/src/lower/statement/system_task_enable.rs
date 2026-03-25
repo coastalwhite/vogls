@@ -5,7 +5,7 @@ use vogls_ir::{BasicBlockBuilder, IntrinsicOp, ReadMem, VariableKey};
 use crate::ast::AstId;
 use crate::ast::expr::Expr;
 use crate::ast::statement::SystemTaskEnable;
-use crate::lower::expression::lower_expr;
+use crate::lower::expression::{get_expr_type, lower_expr};
 use crate::lower::{LowerContext, MutLowerContext};
 use crate::lower::{expression, hident_span, try_resolve_net};
 
@@ -62,8 +62,29 @@ pub fn lower_system_task_enable<'a>(
             let lhs = expressions.get(0);
             let rhs = expressions.get(1);
 
-            let (lhs, lhs_ty) = lower_expr(ctx, mctx, scope, &mut builder, lhs)?;
-            let (rhs, rhs_ty) = lower_expr(ctx, mctx, scope, &mut builder, rhs)?;
+            let l_ty = get_expr_type(
+                &mctx.gl,
+                &ctx.arenas,
+                &ctx.table,
+                scope,
+                &mut mctx.diagnostics,
+                lhs,
+            )?;
+            let r_ty = get_expr_type(
+                &mctx.gl,
+                &ctx.arenas,
+                &ctx.table,
+                scope,
+                &mut mctx.diagnostics,
+                rhs,
+            )?;
+
+            let context_width = l_ty.force_net_width().max(r_ty.force_net_width());
+
+            let (lhs, lhs_ty) =
+                lower_expr(ctx, mctx, scope, &mut builder, lhs, Some(context_width))?;
+            let (rhs, rhs_ty) =
+                lower_expr(ctx, mctx, scope, &mut builder, rhs, Some(context_width))?;
 
             let (lhs, _, rhs, _) = expression::coerce_bin_arithmetic(
                 mctx.gl(),
@@ -317,7 +338,7 @@ pub fn lower_write_arguments<'a>(
             }
             format_string_content.push_str(&str_literal[at..]);
         } else {
-            let (var, _) = lower_expr(ctx, mctx, scope, builder, expr)?;
+            let (var, _) = lower_expr(ctx, mctx, scope, builder, expr, None)?;
             if required_arguments_left == 0 {
                 format_string_arguments.push((
                     format_string_content.len(),

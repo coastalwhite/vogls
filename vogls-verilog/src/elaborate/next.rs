@@ -27,14 +27,13 @@ use crate::ast::statement::{
 use crate::ast::{AstId, AstIdRange, AstItem, Identifier};
 use crate::elaborate::{FunctionSymbol, TaskSymbol};
 use crate::lower::{
-    Diagnostics, LowerContext, MutLowerContext, VType, VValue, resolve_symbol_id_hier,
-    try_resolve_symbol_id, unwrap_get_module, unwrap_get_module_mut, unwrap_get_net_mut,
-    unwrap_get_param_mut,
+    Diagnostics, LowerContext, MutLowerContext, VType, VValue, eval_constant_expr,
+    resolve_symbol_id_hier, try_resolve_symbol_id, unwrap_get_module, unwrap_get_module_mut,
+    unwrap_get_net_mut, unwrap_get_param_mut,
 };
 
 use super::{
-    ModuleSymbol, Net, NetSymbol, VSymbol, VSymbolTable, eval_constant_expr_elab,
-    port_declaration_to_info, try_table_insert,
+    ModuleSymbol, Net, NetSymbol, VSymbol, VSymbolTable, port_declaration_to_info, try_table_insert,
 };
 
 pub enum ElabLevel<'a> {
@@ -349,13 +348,14 @@ fn extend_generate_if_sids<'a>(
     id: AstId<'a, IfGenerateConstruct<'a>>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
-    let condition = super::eval_constant_expr_elab(
+    let condition = eval_constant_expr(
         gl,
         &ctx.arenas,
-        scope,
         &ctx.table,
+        scope,
         diagnostics,
         id.condition,
+        None,
     )?;
 
     let blk = if condition.to_logical() {
@@ -415,13 +415,14 @@ fn extend_generate_loop_sids<'a>(
         return Err(());
     };
 
-    let mut value = super::eval_constant_expr_elab(
+    let mut value = eval_constant_expr(
         gl,
         &ctx.arenas,
-        scope,
         &ctx.table,
+        scope,
         diagnostics,
         *initialization,
+        Some(INTEGER_VSIZE),
     )?;
 
     let (mod_or_gen_items, block_ident_ast) = match &**block {
@@ -465,13 +466,14 @@ fn extend_generate_loop_sids<'a>(
             )
             .expect("No other idents in this block yet");
 
-        let c = super::eval_constant_expr_elab(
+        let c = eval_constant_expr(
             gl,
             &ctx.arenas,
-            iter_sid,
             &ctx.table,
+            iter_sid,
             diagnostics,
             *condition,
+            None,
         )?;
         if !c.to_logical() {
             ctx.table.pop_last_inserted(genvar_constant);
@@ -482,13 +484,15 @@ fn extend_generate_loop_sids<'a>(
         st.next_levels
             .push_back((iter_sid, ElabLevel::GenerateBlock(mod_or_gen_items)));
 
-        value = super::eval_constant_expr_elab(
+        // @CONTEXTWIDTH
+        value = eval_constant_expr(
             gl,
             &ctx.arenas,
-            iter_sid,
             &ctx.table,
+            iter_sid,
             diagnostics,
             *iteration,
+            None,
         )?;
     }
     Ok(())
@@ -504,8 +508,15 @@ fn extend_generate_case_sids<'a>(
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
     let CaseGenerateConstruct { value, items } = &*id;
-    let value =
-        super::eval_constant_expr_elab(gl, &ctx.arenas, scope, &ctx.table, diagnostics, *value)?;
+    let value = eval_constant_expr(
+        gl,
+        &ctx.arenas,
+        &ctx.table,
+        scope,
+        diagnostics,
+        *value,
+        None,
+    )?;
 
     for item in items.iter() {
         let CaseGenerateItem { pattern, block } = &*item;
@@ -514,13 +525,14 @@ fn extend_generate_case_sids<'a>(
             CaseGeneratePattern::Default => is_selected = true,
             CaseGeneratePattern::Exprs(exprs) => {
                 for expr in exprs.iter() {
-                    let expr_value = super::eval_constant_expr_elab(
+                    let expr_value = eval_constant_expr(
                         gl,
                         &ctx.arenas,
-                        scope,
                         &ctx.table,
+                        scope,
                         diagnostics,
                         expr,
+                        Some(value.ty().force_net_width()),
                     )?;
                     let expr_value = expr_value.truncate_or_extend(value.ty().force_net_width());
                     if value.clone().logical_equal(expr_value) {
@@ -1655,20 +1667,21 @@ pub fn finalize_symbol<'a>(
                 module.parameter_override_values[*param_override_idx].clone()
             } else {
                 match &*constant_expr {
-                    ConstantMinTypMaxExpression::Single(id) => super::eval_constant_expr_elab(
+                    ConstantMinTypMaxExpression::Single(id) => eval_constant_expr(
                         gl,
                         &ctx.arenas,
-                        scope,
                         &ctx.table,
+                        scope,
                         diagnostics,
                         *id,
+                        None,
                     )?,
                     ConstantMinTypMaxExpression::MinTypMax { .. } => todo!(),
                 }
             };
 
-            let width = ty.map_or_else(|| value.ty().force_net_width(), |ty| ty.force_net_width());
-            let value = value.truncate_or_extend(width);
+            let ty = ty.unwrap_or_else(|| value.ty());
+            let value = value.coerce(&ty);
 
             *unwrap_get_param_mut(&mut ctx.table, sid) = value;
         }
@@ -1711,13 +1724,14 @@ pub fn finalize_symbol<'a>(
                 VariableTypeVariant::ConstantExpr(expr) => (
                     Vec::new(),
                     Some(
-                        eval_constant_expr_elab(
+                        eval_constant_expr(
                             gl,
                             &ctx.arenas,
-                            scope,
                             &ctx.table,
+                            scope,
                             diagnostics,
                             *expr,
+                            Some(ty.force_net_width()),
                         )?
                         .coerce(&ty),
                     ),
@@ -1789,13 +1803,14 @@ pub fn finalize_symbol<'a>(
                 VariableTypeVariant::ConstantExpr(expr) => (
                     Vec::new(),
                     Some(
-                        eval_constant_expr_elab(
+                        eval_constant_expr(
                             gl,
                             &ctx.arenas,
-                            scope,
                             &ctx.table,
+                            scope,
                             diagnostics,
                             *expr,
+                            Some(ty.force_net_width()),
                         )?
                         .coerce(&ty),
                     ),
@@ -1842,13 +1857,14 @@ pub fn finalize_symbol<'a>(
                     ParameterValueAssignment::Ordered(ids) => {
                         let mut params = Vec::new();
                         for id in ids.iter() {
-                            let value = super::eval_constant_expr_elab(
+                            let value = eval_constant_expr(
                                 gl,
                                 &ctx.arenas,
-                                scope,
                                 &ctx.table,
+                                scope,
                                 diagnostics,
                                 id,
+                                None,
                             )?;
                             params.push(value);
                         }
@@ -1877,13 +1893,14 @@ pub fn finalize_symbol<'a>(
                                 );
                                 return Err(());
                             };
-                            let value = super::eval_constant_expr_elab(
+                            let value = eval_constant_expr(
                                 gl,
                                 &ctx.arenas,
-                                scope,
                                 &ctx.table,
+                                scope,
                                 diagnostics,
                                 *expression,
+                                None,
                             )?;
                             params.insert(identifier.item.0, param_values.len());
                             param_values.push(value);

@@ -407,6 +407,7 @@ impl Delay {
                     scope,
                     &mut mctx.diagnostics,
                     *delay,
+                    None,
                 )?
                 .as_integer()
                 .unwrap();
@@ -429,6 +430,7 @@ impl Delay {
                     scope,
                     &mut mctx.diagnostics,
                     *min,
+                    None,
                 )?
                 .as_integer()
                 .unwrap();
@@ -439,6 +441,7 @@ impl Delay {
                     scope,
                     &mut mctx.diagnostics,
                     *typ,
+                    None,
                 )?
                 .as_integer()
                 .unwrap();
@@ -449,6 +452,7 @@ impl Delay {
                     scope,
                     &mut mctx.diagnostics,
                     *max,
+                    None,
                 )?
                 .as_integer()
                 .unwrap();
@@ -793,7 +797,7 @@ pub fn lower_specify<'a>(
                     | Condition::InputPosedgeExpr(expr)
                     | Condition::InputNegedgeExpr(expr) = path.condition
                     {
-                        let (expr, _) = lower_expr(ctx, mctx, scope, &mut builder, expr)?;
+                        let (expr, _) = lower_expr(ctx, mctx, scope, &mut builder, expr, None)?;
                         let expr = builder.reduce_or(mctx.gl(), expr);
                         condition = Some(match condition {
                             None => expr,

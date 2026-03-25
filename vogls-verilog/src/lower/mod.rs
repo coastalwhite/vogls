@@ -362,7 +362,7 @@ use vogls_ir::token_range::TokenRange;
 use vogls_ir::vcd::{VcdScope, VcdVariable, VcdVariableKey};
 use vogls_ir::{
     BasicBlockBuilder, BasicBlockTerminator, GlobalContext, ProcessKey, SCALAR_VSIZE, SignalKey,
-    SignalSlice, VariableKey, VectorSize, new_anonymous_builder, new_process,
+    SignalSlice, VariableKey, VectorSize, new_process,
 };
 use vogls_utils::{OrderedSet, Table, VgHashMap};
 
@@ -382,7 +382,7 @@ use crate::parser::AstArenas;
 use crate::tokenizer::Tokenized;
 
 pub use self::expression::eval_constant_expr;
-use self::expression::{get_used_signals, lower_expr, truncate_or_extend};
+use self::expression::{get_expr_type, get_used_signals, lower_expr, truncate_or_extend};
 use self::fuse::try_lower_fuse_driver_expr;
 pub use self::vtype::VType;
 pub use self::vvalue::VValue;
@@ -473,7 +473,8 @@ fn assign_input_port<'a>(
         let drivee_width = mctx.gl.signals[drivee].size;
         for &(signal, slice) in &mctx.fuse_scratch {
             let width = slice.map_or_else(|| mctx.gl.signals[signal].size, |s| s.width());
-            let Some(width) = VectorSize::new((drivee_width.get() - offset).min(width.get())) else {
+            let Some(width) = VectorSize::new((drivee_width.get() - offset).min(width.get()))
+            else {
                 break;
             };
             mctx.connections.push(Edge {
@@ -490,7 +491,8 @@ fn assign_input_port<'a>(
     let (_, mut bb_builder) =
         new_process(mctx.gl(), "input_port".into(), ctx.arenas.get_span(expr));
     let bb_key = bb_builder.key();
-    let (v, v_ty) = lower_expr(ctx, mctx, scope, &mut bb_builder, expr)?;
+    let context_width = port.ty.force_net_width();
+    let (v, v_ty) = lower_expr(ctx, mctx, scope, &mut bb_builder, expr, Some(context_width))?;
     let v = expression::sign_or_zero_extend(
         mctx.gl(),
         &mut bb_builder,
@@ -551,6 +553,7 @@ fn assign_port_output<'a>(
                 scope,
                 &mut Diagnostics::default(),
                 exprs.get(0).into_constant(),
+                None,
             )
         {
             let v = v.coerce(&VType::SignedNet(vogls_ir::INTEGER_VSIZE));
@@ -586,7 +589,14 @@ fn assign_port_output<'a>(
             Expr::Concatenation(exprs) => {
                 let mut shift = 0;
                 for e in exprs.iter().rev() {
-                    let e_ty = expr_to_ty(ctx, mctx, scope, e)?;
+                    let e_ty = get_expr_type(
+                        &mctx.gl,
+                        &ctx.arenas,
+                        &ctx.table,
+                        scope,
+                        &mut mctx.diagnostics,
+                        e,
+                    )?;
                     let e_width = e_ty.force_net_width();
                     let subvar = bb_builder.slice_constant(mctx.gl(), var, shift, e_width);
                     driving.push((subvar, e_ty, e));
@@ -627,7 +637,15 @@ fn assign_port_output<'a>(
 
                 let (offset_dst, length_dst) = if range_expression.is_none() && exprs.len() == 1 {
                     (
-                        lower_expr(ctx, mctx, scope, &mut bb_builder, exprs.first().unwrap())?.0,
+                        lower_expr(
+                            ctx,
+                            mctx,
+                            scope,
+                            &mut bb_builder,
+                            exprs.first().unwrap(),
+                            None,
+                        )?
+                        .0,
                         None,
                     )
                 } else if let Some(slice) = range_expression
@@ -648,7 +666,7 @@ fn assign_port_output<'a>(
                             (offset, Some(width as VectorSize))
                         }
                         BitSlice::PlusWidth(base, width) => {
-                            let offset = lower_expr(ctx, mctx, scope, &mut bb_builder, *base);
+                            let offset = lower_expr(ctx, mctx, scope, &mut bb_builder, *base, None);
                             let width = eval_constant_expr(
                                 &mctx.gl,
                                 &ctx.arenas,
@@ -656,12 +674,13 @@ fn assign_port_output<'a>(
                                 scope,
                                 &mut mctx.diagnostics,
                                 *width,
+                                None,
                             );
                             let width = width?.as_integer().unwrap();
                             (offset?.0, Some(VectorSize::new(width as u32).unwrap()))
                         }
                         BitSlice::MinusWidth(base, width) => {
-                            let offset = lower_expr(ctx, mctx, scope, &mut bb_builder, *base);
+                            let offset = lower_expr(ctx, mctx, scope, &mut bb_builder, *base, None);
                             let width = eval_constant_expr(
                                 &mctx.gl,
                                 &ctx.arenas,
@@ -669,6 +688,7 @@ fn assign_port_output<'a>(
                                 scope,
                                 &mut mctx.diagnostics,
                                 *width,
+                                None,
                             )?;
                             let width =
                                 VectorSize::new(width.as_integer().unwrap() as u32).unwrap();
@@ -726,18 +746,6 @@ fn assign_port_output<'a>(
     Ok(())
 }
 
-fn expr_to_ty<'a>(
-    ctx: &LowerContext<'a>,
-    mctx: &mut MutLowerContext,
-    scope: SymbolId,
-    expr: AstId<Expr>,
-) -> Result<VType, ()> {
-    // @Performance: make specialized implementation
-    let mut builder = new_anonymous_builder(mctx.gl());
-    let (_, ty) = lower_expr(ctx, mctx, scope, &mut builder, expr)?;
-    Ok(ty)
-}
-
 fn assign_task_output<'a>(
     ctx: &LowerContext<'a>,
     mctx: &mut MutLowerContext,
@@ -778,7 +786,7 @@ fn assign_task_output<'a>(
                     )
                 } else if range_expression.is_none() && exprs.len() == 1 {
                     (
-                        lower_expr(ctx, mctx, scope, builder, exprs.first().unwrap())?.0,
+                        lower_expr(ctx, mctx, scope, builder, exprs.first().unwrap(), None)?.0,
                         None,
                     )
                 } else if let Some(slice) = range_expression
@@ -799,7 +807,7 @@ fn assign_task_output<'a>(
                             (offset, Some(width as VectorSize))
                         }
                         BitSlice::PlusWidth(base, width) => {
-                            let offset = lower_expr(ctx, mctx, scope, builder, *base);
+                            let offset = lower_expr(ctx, mctx, scope, builder, *base, None);
                             let width = eval_constant_expr(
                                 &mctx.gl,
                                 &ctx.arenas,
@@ -807,12 +815,13 @@ fn assign_task_output<'a>(
                                 scope,
                                 &mut mctx.diagnostics,
                                 *width,
+                                None,
                             );
                             let width = width?.as_integer().unwrap();
                             (offset?.0, Some(VectorSize::new(width as u32).unwrap()))
                         }
                         BitSlice::MinusWidth(base, width) => {
-                            let offset = lower_expr(ctx, mctx, scope, builder, *base);
+                            let offset = lower_expr(ctx, mctx, scope, builder, *base, None);
                             let width = eval_constant_expr(
                                 &mctx.gl,
                                 &ctx.arenas,
@@ -820,6 +829,7 @@ fn assign_task_output<'a>(
                                 scope,
                                 &mut mctx.diagnostics,
                                 *width,
+                                None,
                             )?;
                             let width =
                                 VectorSize::new(width.as_integer().unwrap() as u32).unwrap();
@@ -879,8 +889,8 @@ fn msb_lsb_to_width<'a>(
     ast_msb: AstId<ConstantExpr>,
     ast_lsb: AstId<ConstantExpr>,
 ) -> Result<(i64, i64, VectorSize), ()> {
-    let msb = eval_constant_expr(gl, arenas, table, scope, diagnostics, ast_msb);
-    let lsb = eval_constant_expr(gl, arenas, table, scope, diagnostics, ast_lsb);
+    let msb = eval_constant_expr(gl, arenas, table, scope, diagnostics, ast_msb, None);
+    let lsb = eval_constant_expr(gl, arenas, table, scope, diagnostics, ast_lsb, None);
 
     let (Ok(VValue::SignedNet(msb)), Ok(VValue::SignedNet(lsb))) = (msb, lsb) else {
         return Err(());

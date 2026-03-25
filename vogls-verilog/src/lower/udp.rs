@@ -83,7 +83,7 @@ pub fn lower_udp<'a>(
                 let i = level_list.len();
                 if before_inputs[i].is_none() {
                     let (input, input_ty) =
-                        lower_expr(ctx, mctx, scope, &mut builder, inputs.get(i))?;
+                        lower_expr(ctx, mctx, scope, &mut builder, inputs.get(i), None)?;
                     let input =
                         truncate_or_extend(mctx.gl(), &mut builder, input, input_ty, SCALAR_VSIZE);
                     before_inputs[i] = Some(input);
@@ -96,7 +96,7 @@ pub fn lower_udp<'a>(
 
     let mut input_vars = Vec::with_capacity(inputs.len());
     for input in inputs.iter() {
-        let (input, input_ty) = lower_expr(ctx, mctx, scope, &mut builder, input)?;
+        let (input, input_ty) = lower_expr(ctx, mctx, scope, &mut builder, input, None)?;
         let input = truncate_or_extend(mctx.gl(), &mut builder, input, input_ty, SCALAR_VSIZE);
         input_vars.push(input);
     }

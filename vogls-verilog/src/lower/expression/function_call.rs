@@ -134,7 +134,14 @@ pub fn lower_task_enable<'a>(
 
         let arg = arguments.get(i);
 
-        let (arg_variable, arg_ty) = lower_expr(ctx, mctx, scope, &mut builder, arg)?;
+        let (arg_variable, arg_ty) = lower_expr(
+            ctx,
+            mctx,
+            scope,
+            &mut builder,
+            arg,
+            Some(input_ty.force_net_width()),
+        )?;
         let arg_variable = truncate_or_extend(
             mctx.gl(),
             &mut builder,

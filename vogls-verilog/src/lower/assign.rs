@@ -60,6 +60,22 @@ pub fn assign_variable_lvalue<'a>(
     Ok(())
 }
 
+pub fn variable_lvalue_size<'a>(
+    ctx: &LowerContext<'a>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
+    ast_lvalue: AstId<'a, VariableLValue<'a>>,
+) -> Result<VectorSize, ()> {
+    // @TODO: Overflow checks
+    let mut size = 0;
+    for lvalue_flat in ast_lvalue.0.iter() {
+        size += variable_lvalue_flat_ty(ctx, mctx, scope, lvalue_flat)?
+            .force_net_width()
+            .get();
+    }
+    Ok(VectorSize::new(size).unwrap())
+}
+
 pub fn variable_lvalue_flat_ty<'a>(
     ctx: &LowerContext<'a>,
     mctx: &mut MutLowerContext,
@@ -142,6 +158,7 @@ pub fn variable_lvalue_flat_ty<'a>(
                     scope,
                     &mut mctx.diagnostics,
                     *width,
+                    None,
                 )?;
                 Ok(VType::UnsignedNet(width.ty().force_net_width()))
             }
@@ -185,7 +202,7 @@ pub fn assign_variable_lvalue_flat<'a>(
     {
         dims = &dims[..dims.len() - 1];
         let mut leaf_arr_items = dims.iter().product::<u32>();
-        let (fst, fst_ty) = lower_expr(ctx, mctx, scope, builder, fst)?;
+        let (fst, fst_ty) = lower_expr(ctx, mctx, scope, builder, fst, None)?;
         let fst = sign_or_zero_extend(mctx.gl(), builder, fst, fst_ty, INTEGER_VSIZE);
         let mut offset = builder.multiply_constant(mctx.gl(), fst, Bits::new_u32(leaf_arr_items));
 
@@ -193,7 +210,7 @@ pub fn assign_variable_lvalue_flat<'a>(
             && let Some(expr) = exprs.pop_front()
         {
             leaf_arr_items /= *dim;
-            let (expr, expr_ty) = lower_expr(ctx, mctx, scope, builder, expr)?;
+            let (expr, expr_ty) = lower_expr(ctx, mctx, scope, builder, expr, None)?;
             let expr = sign_or_zero_extend(mctx.gl(), builder, expr, expr_ty, INTEGER_VSIZE);
             let expr = builder.multiply_constant(mctx.gl(), expr, Bits::new_u32(leaf_arr_items));
             offset = builder.plus(mctx.gl(), offset, expr);
@@ -218,7 +235,7 @@ pub fn assign_variable_lvalue_flat<'a>(
 
         dims = &dims[..dims.len() - 1];
         let leaf_arr_items = dims.iter().product::<u32>();
-        let (fst, fst_ty) = lower_expr(ctx, mctx, scope, builder, expr)?;
+        let (fst, fst_ty) = lower_expr(ctx, mctx, scope, builder, expr, None)?;
         let fst = sign_or_zero_extend(mctx.gl(), builder, fst, fst_ty, INTEGER_VSIZE);
         let offset = builder.multiply_constant(mctx.gl(), fst, Bits::new_u32(leaf_arr_items));
 
@@ -253,7 +270,8 @@ pub fn assign_variable_lvalue_flat<'a>(
                 Some(range_expression) => {
                     let (offset, length) = match &*range_expression {
                         RangeExpression::Expr(expr) => {
-                            let (expr, expr_ty) = lower_expr(ctx, mctx, scope, builder, *expr)?;
+                            let (expr, expr_ty) =
+                                lower_expr(ctx, mctx, scope, builder, *expr, None)?;
                             let expr = sign_or_zero_extend(
                                 mctx.gl(),
                                 builder,
@@ -282,7 +300,8 @@ pub fn assign_variable_lvalue_flat<'a>(
                             )
                         }
                         RangeExpression::BasePlus(expr, ast_width) => {
-                            let (expr, expr_ty) = lower_expr(ctx, mctx, scope, builder, *expr)?;
+                            let (expr, expr_ty) =
+                                lower_expr(ctx, mctx, scope, builder, *expr, None)?;
                             let expr = sign_or_zero_extend(
                                 mctx.gl(),
                                 builder,
@@ -297,6 +316,7 @@ pub fn assign_variable_lvalue_flat<'a>(
                                 scope,
                                 &mut mctx.diagnostics,
                                 *ast_width,
+                                None,
                             )?;
                             let width = width
                                 .truncate_or_extend(INTEGER_VSIZE)
@@ -312,7 +332,8 @@ pub fn assign_variable_lvalue_flat<'a>(
                             (expr, width)
                         }
                         RangeExpression::BaseMinus(expr, ast_width) => {
-                            let (expr, expr_ty) = lower_expr(ctx, mctx, scope, builder, *expr)?;
+                            let (expr, expr_ty) =
+                                lower_expr(ctx, mctx, scope, builder, *expr, None)?;
                             let expr = sign_or_zero_extend(
                                 mctx.gl(),
                                 builder,
@@ -327,6 +348,7 @@ pub fn assign_variable_lvalue_flat<'a>(
                                 scope,
                                 &mut mctx.diagnostics,
                                 *ast_width,
+                                None,
                             )?;
                             let width = width
                                 .truncate_or_extend(INTEGER_VSIZE)
@@ -420,6 +442,22 @@ pub fn assign_net_lvalue<'a>(
         offset += width.get();
     }
     Ok(())
+}
+
+pub fn net_lvalue_size<'a>(
+    ctx: &LowerContext<'a>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
+    ast_lvalue: AstId<'a, NetLValue<'a>>,
+) -> Result<VectorSize, ()> {
+    // @TODO: Overflow checks
+    let mut size = 0;
+    for lvalue_flat in ast_lvalue.0.iter() {
+        size += net_lvalue_flat_ty(ctx, mctx, scope, lvalue_flat)?
+            .force_net_width()
+            .get();
+    }
+    Ok(VectorSize::new(size).unwrap())
 }
 
 pub fn net_lvalue_flat_ty<'a>(
@@ -540,6 +578,7 @@ fn assign_net_lvalue_flat<'a>(
             scope,
             &mut mctx.diagnostics,
             fst,
+            None,
         )?;
         let fst = fst.as_integer().unwrap();
         let mut offset = fst as u32 * leaf_arr_items;
@@ -555,6 +594,7 @@ fn assign_net_lvalue_flat<'a>(
                 scope,
                 &mut mctx.diagnostics,
                 expr,
+                None,
             )?;
             let expr = expr.as_integer().unwrap();
             let expr = expr as u32 * leaf_arr_items;
@@ -587,6 +627,7 @@ fn assign_net_lvalue_flat<'a>(
             scope,
             &mut mctx.diagnostics,
             expr,
+            None,
         )?;
         let fst = fst.as_integer().unwrap();
         let offset = fst as u32 * leaf_arr_items;
@@ -621,6 +662,7 @@ fn assign_net_lvalue_flat<'a>(
                         scope,
                         &mut mctx.diagnostics,
                         *expr,
+                        None,
                     )?
                     .as_integer()
                     .unwrap(),

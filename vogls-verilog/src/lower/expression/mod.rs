@@ -8,9 +8,10 @@ use vogls_utils::OrderedSet;
 use crate::ast::expr::{BinaryOperator, BitSlice, Expr, Replication, UnaryOperator};
 use crate::ast::{AstId, HIdent};
 use crate::elaborate::VSymbol;
-use crate::lower::{VType, msb_lsb_to_width, try_resolve_symbol_id};
+use crate::lower::{VType, hident_span, msb_lsb_to_width, try_resolve_symbol_id};
 use crate::number::Sign;
 pub use constant_expr::eval_constant_expr;
+pub use ty::get_expr_type;
 
 use super::LowerContext;
 use super::{Diagnostics, MutLowerContext};
@@ -18,17 +19,29 @@ use super::{Diagnostics, MutLowerContext};
 mod constant_expr;
 pub mod function_call;
 mod system_function_call;
+mod ty;
 
 struct StackItem<'a> {
     expr: AstId<'a, Expr<'a>>,
+    /// Context determined width for this expression.
+    ///
+    /// Verilog has a concept of "self-determined expressions". This determines how an expression
+    /// needs to operate on its inputs. For instance, if a shift has a context width higher than
+    /// the left side width, it first needs to be extended to the context width. 
+    context_width: Option<VectorSize>,
     dispatched: bool,
 }
 impl<'a> StackItem<'a> {
-    pub fn new(expr: AstId<'a, Expr<'a>>) -> Self {
+    pub fn new(expr: AstId<'a, Expr<'a>>, context_width: Option<VectorSize>) -> Self {
         Self {
             expr,
+            context_width,
             dispatched: false,
         }
+    }
+
+    pub fn new_no_ctx(expr: AstId<'a, Expr<'a>>) -> Self {
+        Self::new(expr, None)
     }
 }
 
@@ -39,31 +52,46 @@ pub fn lower_expr<'a>(
     scope: SymbolId,
     builder: &mut BasicBlockBuilder,
     expr: AstId<'a, Expr<'a>>,
+
+    //
+    context_width: Option<VectorSize>,
 ) -> Result<(VariableKey, VType), ()> {
     let mut error = false;
     let mut dispatch_stack: Vec<StackItem<'a>> = Vec::new();
     let mut result_stack: Vec<Option<(VariableKey, VType)>> = Vec::new();
 
-    dispatch_stack.push(StackItem::new(expr));
+    dispatch_stack.push(StackItem::new(expr, context_width));
 
     'dispatch_loop: while let Some(mut item) = dispatch_stack.pop() {
         match *item.expr {
             Expr::Unary(op, child) => {
+                use UnaryOperator as O;
+
                 if !item.dispatched {
                     item.dispatched = true;
+
+                    let child_context_width =
+                        item.context_width.filter(|_| op.is_self_determined());
                     dispatch_stack.push(item);
-                    dispatch_stack.push(StackItem::new(child));
+                    dispatch_stack.push(StackItem::new(child, child_context_width));
                     continue;
                 }
 
                 let child = result_stack.pop().unwrap();
 
-                let Some((child, ty)) = child else {
+                let Some((mut child, mut ty)) = child else {
                     result_stack.push(None);
                     continue;
                 };
 
-                use UnaryOperator as O;
+                if let Some(context_width) = item.context_width
+                    && !op.is_self_determined()
+                    && context_width > ty.force_net_width()
+                {
+                    child = zero_or_sign_extend(mctx.gl(), builder, child, ty, context_width);
+                    ty = ty.zero_or_sign_extend(context_width);
+                }
+
                 let (variable, ty) = match op {
                     O::LogicalNegation => {
                         (builder.logical_neg(&mut mctx.gl, child), VType::SCALAR_NET)
@@ -92,20 +120,69 @@ pub fn lower_expr<'a>(
                 result_stack.push(Some((variable, ty)));
             }
             Expr::Binary(op, l, r) => {
+                use BinaryOperator as O;
                 if !item.dispatched {
                     item.dispatched = true;
+
+                    let (Ok(l_ty), Ok(r_ty)) = (
+                        get_expr_type(
+                            &mctx.gl,
+                            &ctx.arenas,
+                            &ctx.table,
+                            scope,
+                            &mut mctx.diagnostics,
+                            l,
+                        ),
+                        get_expr_type(
+                            &mctx.gl,
+                            &ctx.arenas,
+                            &ctx.table,
+                            scope,
+                            &mut mctx.diagnostics,
+                            r,
+                        ),
+                    ) else {
+                        result_stack.push(None);
+                        error = true;
+                        continue;
+                    };
+
+                    let mut child_context_width =
+                        op.output_width(l_ty.force_net_width(), r_ty.force_net_width());
+                    let (l_is_self_det, r_is_self_det) = op.is_self_determined();
+                    if let Some(context_width) = item.context_width {
+                        child_context_width = child_context_width.max(context_width);
+                    }
+
                     dispatch_stack.push(item);
-                    dispatch_stack.extend([r, l].into_iter().map(StackItem::new));
+                    dispatch_stack.push(StackItem::new(
+                        r,
+                        (!r_is_self_det).then_some(child_context_width),
+                    ));
+                    dispatch_stack.push(StackItem::new(
+                        l,
+                        (!l_is_self_det).then_some(child_context_width),
+                    ));
                     continue;
                 }
 
                 let r = result_stack.pop().unwrap();
                 let l = result_stack.pop().unwrap();
 
-                let (Some((l, l_ty)), Some((r, r_ty))) = (l, r) else {
+                let (Some((mut l, l_ty)), Some((mut r, r_ty))) = (l, r) else {
                     result_stack.push(None);
                     continue;
                 };
+
+                let (l_is_self_det, r_is_self_det) = op.is_self_determined();
+                if let Some(context_width) = item.context_width {
+                    if !l_is_self_det && context_width > l_ty.force_net_width() {
+                        l = zero_or_sign_extend(mctx.gl(), builder, l, l_ty, context_width);
+                    }
+                    if !r_is_self_det && context_width > r_ty.force_net_width() {
+                        r = zero_or_sign_extend(mctx.gl(), builder, r, r_ty, context_width);
+                    }
+                }
 
                 macro_rules! nyi {
                     ($t:literal) => {{
@@ -119,7 +196,6 @@ pub fn lower_expr<'a>(
                     }};
                 }
 
-                use BinaryOperator as O;
                 let op = match op {
                     O::Power => bin_power,
                     O::Multiply => bin_multiply,
@@ -163,7 +239,7 @@ pub fn lower_expr<'a>(
                 if !item.dispatched {
                     item.dispatched = true;
                     dispatch_stack.push(item);
-                    dispatch_stack.extend(exprs.iter().rev().map(StackItem::new));
+                    dispatch_stack.extend(exprs.iter().rev().map(StackItem::new_no_ctx));
                     continue;
                 }
 
@@ -208,7 +284,7 @@ pub fn lower_expr<'a>(
                 if !item.dispatched {
                     item.dispatched = true;
                     dispatch_stack.push(item);
-                    dispatch_stack.extend(exprs.iter().rev().map(StackItem::new));
+                    dispatch_stack.extend(exprs.iter().rev().map(StackItem::new_no_ctx));
                     continue;
                 }
 
@@ -220,6 +296,7 @@ pub fn lower_expr<'a>(
                     scope,
                     &mut mctx.diagnostics,
                     constant_expr,
+                    None,
                 ) else {
                     result_stack.truncate(end_stack_size);
                     result_stack.push(None);
@@ -286,7 +363,7 @@ pub fn lower_expr<'a>(
                 if !item.dispatched {
                     item.dispatched = true;
                     dispatch_stack.push(item);
-                    dispatch_stack.push(StackItem::new(condition));
+                    dispatch_stack.push(StackItem::new_no_ctx(condition));
                     continue;
                 }
 
@@ -299,12 +376,42 @@ pub fn lower_expr<'a>(
                     continue;
                 };
 
+                let (Ok(l_ty), Ok(r_ty)) = (
+                    get_expr_type(
+                        &mctx.gl,
+                        &ctx.arenas,
+                        &ctx.table,
+                        scope,
+                        &mut mctx.diagnostics,
+                        truthy,
+                    ),
+                    get_expr_type(
+                        &mctx.gl,
+                        &ctx.arenas,
+                        &ctx.table,
+                        scope,
+                        &mut mctx.diagnostics,
+                        falsy,
+                    ),
+                ) else {
+                    result_stack.push(None);
+                    error = true;
+                    continue;
+                };
+
+                let mut child_context_width = l_ty.force_net_width().max(r_ty.force_net_width());
+                if let Some(context_width) = item.context_width {
+                    child_context_width = child_context_width.max(context_width);
+                }
+
                 let c = builder.reduce_or(mctx.gl(), c);
                 let condition_bb = builder.key();
 
                 *builder = builder.next_terminate_later(mctx.gl());
                 let truthy_start_bb = builder.key();
-                let Ok((t, t_ty)) = lower_expr(ctx, mctx, scope, builder, truthy) else {
+                let Ok((t, t_ty)) =
+                    lower_expr(ctx, mctx, scope, builder, truthy, Some(child_context_width))
+                else {
                     result_stack.push(None);
                     error = true;
                     continue;
@@ -313,7 +420,9 @@ pub fn lower_expr<'a>(
 
                 *builder = builder.next_terminate_later(mctx.gl());
                 let falsy_start_bb = builder.key();
-                let Ok((f, f_ty)) = lower_expr(ctx, mctx, scope, builder, falsy) else {
+                let Ok((f, f_ty)) =
+                    lower_expr(ctx, mctx, scope, builder, falsy, Some(child_context_width))
+                else {
                     result_stack.push(None);
                     error = true;
                     continue;
@@ -353,10 +462,10 @@ pub fn lower_expr<'a>(
                         None => {}
                         Some(BitSlice::MsbLsb(..)) => {}
                         Some(BitSlice::PlusWidth(base, _) | BitSlice::MinusWidth(base, _)) => {
-                            dispatch_stack.push(StackItem::new(base))
+                            dispatch_stack.push(StackItem::new_no_ctx(base))
                         }
                     }
-                    dispatch_stack.extend(exprs.iter().map(StackItem::new));
+                    dispatch_stack.extend(exprs.iter().map(StackItem::new_no_ctx));
                     continue;
                 }
 
@@ -527,6 +636,7 @@ pub fn lower_expr<'a>(
                                 scope,
                                 &mut mctx.diagnostics,
                                 width,
+                                None,
                             ) else {
                                 result_stack.push(None);
                                 continue;
@@ -556,6 +666,7 @@ pub fn lower_expr<'a>(
                                 scope,
                                 &mut mctx.diagnostics,
                                 width,
+                                None,
                             ) else {
                                 result_stack.push(None);
                                 continue;
@@ -583,8 +694,34 @@ pub fn lower_expr<'a>(
             Expr::FunctionCall(ident, exprs) => {
                 if !item.dispatched {
                     item.dispatched = true;
+                    let Ok(fn_symbol) = try_resolve_symbol_id(
+                        scope,
+                        &ctx.table,
+                        &ctx.arenas,
+                        ident,
+                        &mut mctx.diagnostics,
+                    ) else {
+                        error = true;
+                        result_stack.push(None);
+                        continue;
+                    };
+                    let VSymbol::Function(fn_symbol) = &ctx.table[fn_symbol].content else {
+                        mctx.diagnostics.not_yet_implemented(
+                            hident_span(&ctx.arenas, ident),
+                            "not calling a function",
+                        );
+                        error = true;
+                        result_stack.push(None);
+                        continue;
+                    };
+
                     dispatch_stack.push(item);
-                    dispatch_stack.extend(exprs.iter().map(StackItem::new));
+                    dispatch_stack.extend(
+                        exprs
+                            .iter()
+                            .zip(&fn_symbol.inputs)
+                            .map(|(e, (_, ty))| StackItem::new(e, Some(ty.force_net_width()))),
+                    );
                     continue;
                 }
 
@@ -627,7 +764,8 @@ pub fn lower_expr<'a>(
                     item.dispatched = true;
                     dispatch_stack.push(item);
                     if let Some(exprs) = exprs {
-                        dispatch_stack.extend(exprs.iter().map(StackItem::new));
+                        // @TODO: We would maybe pass some context here.
+                        dispatch_stack.extend(exprs.iter().map(StackItem::new_no_ctx));
                     }
                     continue;
                 }
@@ -889,6 +1027,24 @@ pub fn truncate_or_extend(
     }
 }
 
+pub fn zero_or_sign_extend(
+    gl: &mut GlobalContext,
+    builder: &mut BasicBlockBuilder,
+    src: VariableKey,
+    from: VType,
+    to: VectorSize,
+) -> VariableKey {
+    let from_width = from.force_net_width();
+    assert!(from.force_net_width() <= to);
+    if from_width == to {
+        src
+    } else if from.is_signed() {
+        builder.sign_extend(gl, src, to)
+    } else {
+        builder.zero_extend(gl, src, to)
+    }
+}
+
 pub fn get_used_signals<'a>(
     ctx: &LowerContext<'a>,
     mctx: &mut MutLowerContext,
@@ -899,13 +1055,13 @@ pub fn get_used_signals<'a>(
     let mut error = false;
     let mut dispatch_stack: Vec<StackItem<'a>> = Vec::new();
 
-    dispatch_stack.push(StackItem::new(expr));
+    dispatch_stack.push(StackItem::new_no_ctx(expr));
 
     while let Some(item) = dispatch_stack.pop() {
         match &*item.expr {
-            Expr::Unary(_, c) => dispatch_stack.push(StackItem::new(*c)),
+            Expr::Unary(_, c) => dispatch_stack.push(StackItem::new_no_ctx(*c)),
             Expr::Binary(_, l, r) => {
-                dispatch_stack.extend([*l, *r].into_iter().map(StackItem::new))
+                dispatch_stack.extend([*l, *r].into_iter().map(StackItem::new_no_ctx))
             }
             Expr::Concatenation(exprs)
             | Expr::Replication(Replication {
@@ -913,15 +1069,15 @@ pub fn get_used_signals<'a>(
                 exprs,
             })
             | Expr::FunctionCall(_, exprs) => {
-                dispatch_stack.extend(exprs.iter().map(StackItem::new))
+                dispatch_stack.extend(exprs.iter().map(StackItem::new_no_ctx))
             }
             Expr::SystemFunctionCall(_, exprs) => {
                 if let Some(exprs) = exprs {
-                    dispatch_stack.extend(exprs.iter().map(StackItem::new))
+                    dispatch_stack.extend(exprs.iter().map(StackItem::new_no_ctx))
                 }
             }
             Expr::Ternary(c, t, f) => {
-                dispatch_stack.extend([*c, *t, *f].into_iter().map(StackItem::new))
+                dispatch_stack.extend([*c, *t, *f].into_iter().map(StackItem::new_no_ctx))
             }
             Expr::Ident(ident, exprs, range_expression) => {
                 if get_used_ident_signals(ctx, mctx, scope, signals, *ident).is_err() {
@@ -929,12 +1085,12 @@ pub fn get_used_signals<'a>(
                     continue;
                 }
 
-                dispatch_stack.extend(exprs.iter().map(StackItem::new));
+                dispatch_stack.extend(exprs.iter().map(StackItem::new_no_ctx));
                 if let Some(range_expression) = range_expression {
                     match range_expression {
                         BitSlice::MsbLsb(_, _) => {}
                         BitSlice::PlusWidth(base, _) | BitSlice::MinusWidth(base, _) => {
-                            dispatch_stack.push(StackItem::new(*base))
+                            dispatch_stack.push(StackItem::new_no_ctx(*base))
                         }
                     }
                 }

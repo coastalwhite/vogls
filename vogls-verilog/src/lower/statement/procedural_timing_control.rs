@@ -150,7 +150,7 @@ pub fn lower<'a>(
                 for (condition, before, expr) in conditions.into_iter() {
                     use WatchCondition as C;
 
-                    let (after, _) = lower_expr(ctx, mctx, scope, &mut builder, expr)?;
+                    let (after, _) = lower_expr(ctx, mctx, scope, &mut builder, expr, None)?;
                     let cond = match condition {
                         C::Posedge => builder.posedge(mctx.gl(), before, after),
                         C::Negedge => builder.negedge(mctx.gl(), before, after),

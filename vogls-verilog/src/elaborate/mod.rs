@@ -10,7 +10,6 @@ use vogls_ir::{
 };
 use vogls_utils::{NonMaxU32, Table, VgHashMap, new_table_key};
 
-use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::module::{
     Dimension, FunctionDeclaration, ModuleOrGenerateItem, PortDeclaration, Range, TaskDeclaration,
 };
@@ -320,17 +319,6 @@ fn new_net(
     }
 }
 
-pub fn eval_constant_expr_elab<'a>(
-    gl: &GlobalContext,
-    arenas: &'a AstArenas,
-    scope: SymbolId,
-    table: &VSymbolTable,
-    diagnostics: &mut Diagnostics,
-    expr: AstId<ConstantExpr>,
-) -> Result<VValue, ()> {
-    eval_constant_expr(gl, arenas, table, scope, diagnostics, expr)
-}
-
 pub fn eval_constant_range<'a>(
     gl: &GlobalContext,
     arenas: &'a AstArenas,
@@ -340,8 +328,8 @@ pub fn eval_constant_range<'a>(
     ast_range: AstId<'a, Range<'a>>,
 ) -> Result<(i64, i64, VectorSize), ()> {
     let range = ast_range;
-    let msb = eval_constant_expr_elab(gl, arenas, scope, table, diagnostics, range.msb);
-    let lsb = eval_constant_expr_elab(gl, arenas, scope, table, diagnostics, range.lsb);
+    let msb = eval_constant_expr(gl, arenas, table, scope, diagnostics, range.msb, None);
+    let lsb = eval_constant_expr(gl, arenas, table, scope, diagnostics, range.lsb, None);
 
     let (Ok(VValue::SignedNet(msb)), Ok(VValue::SignedNet(lsb))) = (msb, lsb) else {
         return Err(());
@@ -370,8 +358,8 @@ pub fn dims_to_array_elab<'a>(
     let mut dims = Vec::with_capacity(dimensions.len());
     for dim in dimensions.iter().rev() {
         let Dimension { lhs, rhs } = &*dim;
-        let lhs = eval_constant_expr_elab(gl, arenas, scope, table, diagnostics, *lhs);
-        let rhs = eval_constant_expr_elab(gl, arenas, scope, table, diagnostics, *rhs);
+        let lhs = eval_constant_expr(gl, arenas, table, scope, diagnostics, *lhs, None);
+        let rhs = eval_constant_expr(gl, arenas, table, scope, diagnostics, *rhs, None);
 
         let lhs = lhs?.into_bits().as_i64().unwrap();
         let rhs = rhs?.into_bits().as_i64().unwrap();

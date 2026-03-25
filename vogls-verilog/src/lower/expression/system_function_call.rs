@@ -126,6 +126,72 @@ pub fn lower_system_function_call<'a>(
     }
 }
 
+pub fn get_system_function_call_output_ty<'a>(
+    arenas: &'a AstArenas,
+    diagnostics: &mut Diagnostics,
+    expr: AstId<Expr>,
+    ident: AstItem<SystemTaskIdentifier>,
+    // arguments are in reverse order
+    arguments: &[Option<VType>],
+) -> Result<VType, ()> {
+    macro_rules! ensure_num_args_equal {
+        ($expected:expr) => {
+            let num_args = arguments.len();
+            if num_args != $expected {
+                diagnostics
+                    .not_yet_implemented(arenas.get_span(expr), "intrinsic not expected amount");
+                return Err(());
+            }
+        };
+    }
+
+    // @Performance: Use a perfect hashmap here.
+    match &arenas.ident_table[ident.item.0] {
+        "signed" => {
+            ensure_num_args_equal!(1);
+            let e_ty = arguments[0].ok_or(())?;
+            Ok(e_ty.to_signed())
+        }
+        "unsigned" => {
+            ensure_num_args_equal!(1);
+            let e_ty = arguments[0].ok_or(())?;
+            Ok(e_ty.to_unsigned())
+        }
+        "time" => {
+            ensure_num_args_equal!(0);
+            Ok(VType::UnsignedNet(TIME_VSIZE))
+        }
+        "random" => {
+            ensure_num_args_equal!(0);
+            Ok(VType::UnsignedNet(TIME_VSIZE))
+        }
+        "clog2" => {
+            diagnostics
+                .not_yet_implemented(arenas.get_span(expr), "clog2 is not yet implemented");
+            Err(())
+        }
+
+        // VoGLS specific system function calls
+        "vogls_dbg" => {
+            ensure_num_args_equal!(1);
+            let e_ty = arguments[0].ok_or(())?;
+            Ok(e_ty)
+        }
+        "vogls_copyx" | "vogls_copyz" | "vogls_min" | "vogls_max" => {
+            ensure_num_args_equal!(2);
+            let l_ty = arguments[1].ok_or(())?;
+            let r_ty = arguments[0].ok_or(())?;
+            Ok(coerce_to_max_size_ty(l_ty, r_ty))
+        }
+
+        _ => {
+            diagnostics
+                .not_yet_implemented(arenas.get_span(expr), "unknown system function call");
+            Err(())
+        }
+    }
+}
+
 pub fn lower_unevaluated_system_function_call<'a>(
     ctx: &LowerContext<'a>,
     mctx: &mut MutLowerContext,

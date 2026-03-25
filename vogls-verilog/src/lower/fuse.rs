@@ -10,7 +10,7 @@ use crate::lower::{Edge, hident_span, try_resolve_net, try_resolve_symbol_id};
 
 use super::{Diagnostics, LowerContext, MutLowerContext, VType, VValue, eval_constant_expr};
 
-fn try_constant_expr<'a>(
+fn try_constant_expr_no_ctx<'a>(
     ctx: &LowerContext<'a>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
@@ -23,6 +23,7 @@ fn try_constant_expr<'a>(
         scope,
         &mut Diagnostics::default(),
         expr.into_constant(),
+        None,
     )
     .ok()
 }
@@ -42,6 +43,7 @@ fn try_constant_bitslice<'a>(
                 scope,
                 &mut mctx.diagnostics,
                 msb,
+                None,
             )?;
             let lsb = eval_constant_expr(
                 &mctx.gl,
@@ -50,6 +52,7 @@ fn try_constant_bitslice<'a>(
                 scope,
                 &mut mctx.diagnostics,
                 lsb,
+                None,
             )?;
             // @TODO: Validate input.
             let msb = msb
@@ -65,7 +68,7 @@ fn try_constant_bitslice<'a>(
             Ok(Some(slice))
         }
         BitSlice::PlusWidth(offset, ast_width) => {
-            let Some(offset) = try_constant_expr(ctx, mctx, scope, offset) else {
+            let Some(offset) = try_constant_expr_no_ctx(ctx, mctx, scope, offset) else {
                 return Ok(None);
             };
             let width = eval_constant_expr(
@@ -75,6 +78,7 @@ fn try_constant_bitslice<'a>(
                 scope,
                 &mut mctx.diagnostics,
                 ast_width,
+                None,
             )?;
             let offset = offset
                 .coerce(&VType::UnsignedNet(INTEGER_VSIZE))
@@ -94,7 +98,7 @@ fn try_constant_bitslice<'a>(
             Ok(Some(slice))
         }
         BitSlice::MinusWidth(offset, ast_width) => {
-            let Some(offset) = try_constant_expr(ctx, mctx, scope, offset) else {
+            let Some(offset) = try_constant_expr_no_ctx(ctx, mctx, scope, offset) else {
                 return Ok(None);
             };
             let width = eval_constant_expr(
@@ -104,6 +108,7 @@ fn try_constant_bitslice<'a>(
                 scope,
                 &mut mctx.diagnostics,
                 ast_width,
+                None,
             )?;
             let offset = offset
                 .coerce(&VType::UnsignedNet(INTEGER_VSIZE))
@@ -179,7 +184,7 @@ pub fn try_lower_fuse_driver_expr<'a>(
     let mut offset = net_slice.map_or(0, |s| s.lsb());
     let mut current_size = ty_size;
     for (expr, &dim) in exprs.iter().rev().zip(net.dims.iter()) {
-        let Some(idx) = try_constant_expr(ctx, mctx, scope, expr) else {
+        let Some(idx) = try_constant_expr_no_ctx(ctx, mctx, scope, expr) else {
             return Ok(false);
         };
         let idx = idx.truncate_or_extend(INTEGER_VSIZE);
@@ -201,7 +206,7 @@ pub fn try_lower_fuse_driver_expr<'a>(
     // Handle bit indexing indexing.
     let mut output_width = ty_size;
     for expr in exprs.truncate(exprs.len() - net.dims.len()).iter().rev() {
-        let Some(idx) = try_constant_expr(ctx, mctx, scope, expr) else {
+        let Some(idx) = try_constant_expr_no_ctx(ctx, mctx, scope, expr) else {
             return Ok(false);
         };
         let idx = idx.truncate_or_extend(INTEGER_VSIZE);
@@ -293,6 +298,7 @@ pub fn try_fuse_assign<'a>(
             scope,
             &mut mctx.diagnostics,
             expr,
+            None,
         )?;
         let idx = idx.truncate_or_extend(INTEGER_VSIZE);
         let idx = idx.into_bits().extract_exact_u32();
@@ -327,6 +333,7 @@ pub fn try_fuse_assign<'a>(
             scope,
             &mut mctx.diagnostics,
             expr,
+            None,
         )?;
         let idx = idx.truncate_or_extend(INTEGER_VSIZE);
         let idx = idx.into_bits().extract_exact_u32();
@@ -357,6 +364,7 @@ pub fn try_fuse_assign<'a>(
                     scope,
                     &mut mctx.diagnostics,
                     *expr,
+                    None,
                 )?;
                 let idx = idx.truncate_or_extend(INTEGER_VSIZE);
                 let idx = idx.into_bits().extract_exact_u32();
@@ -372,6 +380,7 @@ pub fn try_fuse_assign<'a>(
                     scope,
                     &mut mctx.diagnostics,
                     *msb,
+                    None,
                 )?;
                 let lsb = eval_constant_expr(
                     &mctx.gl,
@@ -380,6 +389,7 @@ pub fn try_fuse_assign<'a>(
                     scope,
                     &mut mctx.diagnostics,
                     *lsb,
+                    None,
                 )?;
 
                 let msb = msb.truncate_or_extend(INTEGER_VSIZE);

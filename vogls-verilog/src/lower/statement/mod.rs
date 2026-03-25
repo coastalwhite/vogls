@@ -58,7 +58,16 @@ pub fn statements_to_process<'a>(
                 } = &*ba;
                 assert!(delay_or_event_control.is_none());
 
-                let (value, value_ty) = lower_expr(ctx, mctx, scope, &mut builder, *expression)?;
+                let context_width =
+                    assign::variable_lvalue_size(ctx, mctx, scope, *variable_lvalue)?;
+                let (value, value_ty) = lower_expr(
+                    ctx,
+                    mctx,
+                    scope,
+                    &mut builder,
+                    *expression,
+                    Some(context_width),
+                )?;
                 assign::assign_variable_lvalue(
                     ctx,
                     mctx,
@@ -90,7 +99,16 @@ pub fn statements_to_process<'a>(
                 } = &*nba;
                 assert!(delay_or_event_control.is_none());
 
-                let (value, value_ty) = lower_expr(ctx, mctx, scope, &mut builder, *expression)?;
+                let context_width =
+                    assign::variable_lvalue_size(ctx, mctx, scope, *variable_lvalue)?;
+                let (value, value_ty) = lower_expr(
+                    ctx,
+                    mctx,
+                    scope,
+                    &mut builder,
+                    *expression,
+                    Some(context_width),
+                )?;
                 assign::assign_variable_lvalue(
                     ctx,
                     mctx,
@@ -230,7 +248,7 @@ pub fn statements_to_process<'a>(
 
                 builder = builder.jump(mctx.gl());
                 let (condition, _) =
-                    expression::lower_expr(ctx, mctx, scope, &mut builder, *expression)?;
+                    expression::lower_expr(ctx, mctx, scope, &mut builder, *expression, None)?;
                 let condition = builder.reduce_or(mctx.gl(), condition);
                 let mut ins = OrderedSet::new();
                 expression::get_used_signals(ctx, mctx, scope, &mut ins, *expression)?;

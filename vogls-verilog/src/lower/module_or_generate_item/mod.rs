@@ -11,7 +11,7 @@ use crate::ast::module::{
 use crate::ast::udp::{UdpInstance, UdpInstantiation};
 use crate::ast::{AstId, AstIdRange};
 use crate::elaborate::{VSymbol, VSymbolTable};
-use crate::lower::assign::{assign_net_lvalue, net_lvalue_width};
+use crate::lower::assign::{assign_net_lvalue, net_lvalue_size, net_lvalue_width};
 use crate::lower::expression::{self, get_used_signals, lower_expr, truncate_or_extend};
 use crate::lower::fuse::try_fuse_assign;
 use crate::lower::statement::statements_to_process;
@@ -73,9 +73,15 @@ pub fn lower<'a>(
                                     ctx.arenas.get_span(*expr),
                                 );
                                 let bb_key = bb_builder.key();
-                                let (v, v_ty) =
-                                    lower_expr(ctx, mctx, scope, &mut bb_builder, *expr)?;
-                                let v = expression::sign_or_zero_extend(
+                                let (v, v_ty) = lower_expr(
+                                    ctx,
+                                    mctx,
+                                    scope,
+                                    &mut bb_builder,
+                                    *expr,
+                                    Some(ty.force_net_width()),
+                                )?;
+                                let v = expression::truncate_or_extend(
                                     &mut mctx.gl,
                                     &mut bb_builder,
                                     v,
@@ -111,8 +117,15 @@ pub fn lower<'a>(
                 let (_, mut bb_builder) =
                     new_process(mctx.gl(), "assign".into(), ctx.arenas.get_span(id));
                 let bb_key = bb_builder.key();
-                let (variable, variable_ty) =
-                    lower_expr(ctx, mctx, scope, &mut bb_builder, net_assignment.expression)?;
+                let context_width = net_lvalue_size(ctx, mctx, scope, net_assignment.net_lvalue)?;
+                let (variable, variable_ty) = lower_expr(
+                    ctx,
+                    mctx,
+                    scope,
+                    &mut bb_builder,
+                    net_assignment.expression,
+                    Some(context_width),
+                )?;
 
                 assign_net_lvalue(
                     ctx,
@@ -151,8 +164,14 @@ pub fn lower<'a>(
                         assert!(!input_terminals.is_empty());
                         let value = input_terminals.first().unwrap();
                         get_used_signals(ctx, mctx, scope, &mut ins, value)?;
-                        let (value, value_ty) =
-                            lower_expr(ctx, mctx, scope, &mut bb_builder, value)?;
+                        let (value, value_ty) = lower_expr(
+                            ctx,
+                            mctx,
+                            scope,
+                            &mut bb_builder,
+                            value,
+                            Some(output_size),
+                        )?;
                         let mut value = truncate_or_extend(
                             mctx.gl(),
                             &mut bb_builder,
@@ -162,8 +181,14 @@ pub fn lower<'a>(
                         );
                         for input in input_terminals.iter().skip(1) {
                             get_used_signals(ctx, mctx, scope, &mut ins, input)?;
-                            let (input, input_ty) =
-                                lower_expr(ctx, mctx, scope, &mut bb_builder, input)?;
+                            let (input, input_ty) = lower_expr(
+                                ctx,
+                                mctx,
+                                scope,
+                                &mut bb_builder,
+                                input,
+                                Some(output_size),
+                            )?;
                             let input = truncate_or_extend(
                                 mctx.gl(),
                                 &mut bb_builder,
@@ -372,8 +397,8 @@ pub fn dims_to_array<'a>(
     let mut dims = Vec::with_capacity(dimensions.len());
     for dim in dimensions.iter().rev() {
         let Dimension { lhs, rhs } = &*dim;
-        let lhs = eval_constant_expr(gl, arenas, table, scope, diagnostics, *lhs);
-        let rhs = eval_constant_expr(gl, arenas, table, scope, diagnostics, *rhs);
+        let lhs = eval_constant_expr(gl, arenas, table, scope, diagnostics, *lhs, None);
+        let rhs = eval_constant_expr(gl, arenas, table, scope, diagnostics, *rhs, None);
 
         let lhs = lhs?.into_bits().as_i64().unwrap();
         let rhs = rhs?.into_bits().as_i64().unwrap();
@@ -430,7 +455,15 @@ pub fn lower_variable_type<'a>(
             Ok((dims, size, None))
         }
         VariableTypeVariant::ConstantExpr(expr) => {
-            let value = eval_constant_expr(gl, arenas, table, scope, diagnostics, expr)?;
+            let value = eval_constant_expr(
+                gl,
+                arenas,
+                table,
+                scope,
+                diagnostics,
+                expr,
+                Some(ty.force_net_width()),
+            )?;
             let value = value.truncate_or_extend(ty.force_net_width());
             Ok((Vec::new(), ty.force_net_width(), Some(value.into_bits())))
         }

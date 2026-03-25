@@ -24,19 +24,14 @@ pub fn lower<'a>(
         else_branch,
     } = &*conditional;
 
-    let (condition, _) = lower_expr(ctx, mctx, scope, &mut builder, if_branch.condition)?;
+    let (condition, _) = lower_expr(ctx, mctx, scope, &mut builder, if_branch.condition, None)?;
     let condition = builder.reduce_or(mctx.gl(), condition);
 
     let mut origins = Vec::new();
 
     let (mut branch_ref, mut if_true_builder) = builder.branch(mctx.gl(), condition);
-    if_true_builder = lower_statement_or_null(
-        ctx,
-        mctx,
-        scope,
-        if_true_builder,
-        if_branch.statement,
-    )?;
+    if_true_builder =
+        lower_statement_or_null(ctx, mctx, scope, if_true_builder, if_branch.statement)?;
     origins.push(if_true_builder.key());
 
     let mut builder = if_true_builder.next_terminate_later(mctx.gl());
@@ -44,23 +39,12 @@ pub fn lower<'a>(
         builder.update_branch_ref(mctx.gl(), branch_ref, builder.key());
 
         let else_if_branch = &*else_if_branch;
-        let (condition, _) = lower_expr(
-            ctx,
-            mctx,
-            scope,
-            &mut builder,
-            else_if_branch.condition,
-        )?;
+        let (condition, _) = lower_expr(ctx, mctx, scope, &mut builder, else_if_branch.condition, None)?;
         let condition = builder.reduce_or(mctx.gl(), condition);
 
         (branch_ref, if_true_builder) = builder.branch(mctx.gl(), condition);
-        if_true_builder = lower_statement_or_null(
-            ctx,
-            mctx,
-            scope,
-            if_true_builder,
-            else_if_branch.statement,
-        )?;
+        if_true_builder =
+            lower_statement_or_null(ctx, mctx, scope, if_true_builder, else_if_branch.statement)?;
         origins.push(if_true_builder.key());
 
         builder = if_true_builder.next_terminate_later(mctx.gl());
@@ -99,7 +83,7 @@ pub fn lower_case_statement<'a>(
         items,
     } = &*case_statement;
 
-    let (expr_var, expr_var_ty) = lower_expr(ctx, mctx, scope, &mut builder, *expr)?;
+    let (expr_var, expr_var_ty) = lower_expr(ctx, mctx, scope, &mut builder, *expr, None)?;
 
     let mut origins = Vec::new();
     let mut default = None;
@@ -112,7 +96,14 @@ pub fn lower_case_statement<'a>(
             }
             CaseItemPattern::Expressions(exprs) => {
                 let fst = exprs.first().expect("spec: 1+ pattern expr in case_item");
-                let (v, v_ty) = lower_expr(ctx, mctx, scope, &mut builder, fst)?;
+                let (v, v_ty) = lower_expr(
+                    ctx,
+                    mctx,
+                    scope,
+                    &mut builder,
+                    fst,
+                    Some(expr_var_ty.force_net_width()),
+                )?;
                 let (expr_var, _, v, _) =
                     coerce_bin_arithmetic(mctx.gl(), &mut builder, expr_var, expr_var_ty, v, v_ty);
                 let expr_var_adj = match variant {
@@ -127,7 +118,14 @@ pub fn lower_case_statement<'a>(
                 };
                 let mut acc = builder.case_equals(mctx.gl(), expr_var_adj, v);
                 for e in exprs.iter().skip(1) {
-                    let (v, _) = lower_expr(ctx, mctx, scope, &mut builder, e)?;
+                    let (v, _) = lower_expr(
+                        ctx,
+                        mctx,
+                        scope,
+                        &mut builder,
+                        e,
+                        Some(expr_var_ty.force_net_width()),
+                    )?;
                     let expr_var_adj = match variant {
                         CaseStatementVariant::Case => expr_var,
                         CaseStatementVariant::CaseX => {

@@ -54,4 +54,8 @@ impl VType {
             VType::SignedNet(width) => VType::UnsignedNet(width),
         }
     }
+
+    pub fn zero_or_sign_extend(self, width: VectorSize) -> VType {
+        Self::net(width, self.is_signed())
+    }
 }

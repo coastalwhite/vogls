@@ -7,7 +7,7 @@ use crate::ast::AstId;
 use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::expr::{BinaryOperator, Expr, UnaryOperator};
 use crate::elaborate::{VSymbol, VSymbolTable};
-use crate::lower::expression::StackItem;
+use crate::lower::expression::{StackItem, get_expr_type};
 use crate::lower::vvalue::VValue;
 use crate::lower::{hident_span, try_resolve_constant, try_resolve_symbol_id};
 use crate::number::Sign;
@@ -22,6 +22,7 @@ pub fn eval_constant_expr<'a>(
     scope: SymbolId,
     diagnostics: &mut Diagnostics,
     expr: AstId<'a, ConstantExpr<'a>>,
+    context_width: Option<VectorSize>,
 ) -> Result<VValue, ()> {
     let expr = expr.into_expr();
 
@@ -29,10 +30,7 @@ pub fn eval_constant_expr<'a>(
     let mut dispatch_stack: Vec<StackItem<'a>> = Vec::new();
     let mut result_stack: Vec<Option<VValue>> = Vec::new();
 
-    dispatch_stack.push(StackItem {
-        expr,
-        dispatched: false,
-    });
+    dispatch_stack.push(StackItem::new(expr, context_width));
 
     while let Some(mut item) = dispatch_stack.pop() {
         match *item.expr {
@@ -43,18 +41,24 @@ pub fn eval_constant_expr<'a>(
             Expr::Unary(op, child) => {
                 if !item.dispatched {
                     item.dispatched = true;
+                    let child_context_width =
+                        item.context_width.filter(|_| op.is_self_determined());
                     dispatch_stack.push(item);
-                    dispatch_stack.push(StackItem {
-                        expr: child,
-                        dispatched: false,
-                    });
+                    dispatch_stack.push(StackItem::new(child, child_context_width));
                     continue;
                 }
 
-                let Some(child) = result_stack.pop().unwrap() else {
+                let Some(mut child) = result_stack.pop().unwrap() else {
                     result_stack.push(None);
                     continue;
                 };
+
+                if let Some(context_width) = item.context_width
+                    && !op.is_self_determined()
+                    && context_width > child.ty().force_net_width()
+                {
+                    child = child.zero_or_sign_extend(context_width);
+                }
 
                 use UnaryOperator as O;
                 let result = match op {
@@ -82,18 +86,52 @@ pub fn eval_constant_expr<'a>(
             Expr::Binary(op, lhs, rhs) => {
                 if !item.dispatched {
                     item.dispatched = true;
+
+                    let (Ok(l_ty), Ok(r_ty)) = (
+                        get_expr_type(gl, arenas, table, scope, diagnostics, lhs),
+                        get_expr_type(gl, arenas, table, scope, diagnostics, rhs),
+                    ) else {
+                        result_stack.push(None);
+                        error = true;
+                        continue;
+                    };
+
+                    let mut child_context_width =
+                        op.output_width(l_ty.force_net_width(), r_ty.force_net_width());
+                    let (l_is_self_det, r_is_self_det) = op.is_self_determined();
+                    if let Some(context_width) = item.context_width {
+                        child_context_width = child_context_width.max(context_width);
+                    }
+
                     dispatch_stack.push(item);
-                    dispatch_stack.extend([rhs, lhs].into_iter().map(StackItem::new));
+                    dispatch_stack.push(StackItem::new(
+                        rhs,
+                        (!r_is_self_det).then_some(child_context_width),
+                    ));
+                    dispatch_stack.push(StackItem::new(
+                        lhs,
+                        (!l_is_self_det).then_some(child_context_width),
+                    ));
                     continue;
                 }
 
                 let rhs = result_stack.pop().unwrap();
                 let lhs = result_stack.pop().unwrap();
 
-                let (Some(lhs), Some(rhs)) = (lhs, rhs) else {
+                let (Some(mut lhs), Some(mut rhs)) = (lhs, rhs) else {
                     result_stack.push(None);
                     continue;
                 };
+
+                let (l_is_self_det, r_is_self_det) = op.is_self_determined();
+                if let Some(context_width) = item.context_width {
+                    if !l_is_self_det && context_width > lhs.ty().force_net_width() {
+                        lhs = lhs.zero_or_sign_extend(context_width);
+                    }
+                    if !r_is_self_det && context_width > rhs.ty().force_net_width() {
+                        rhs = rhs.zero_or_sign_extend(context_width);
+                    }
+                }
 
                 use BinaryOperator as O;
                 let result = match op {
@@ -145,8 +183,7 @@ pub fn eval_constant_expr<'a>(
                     continue;
                 }
 
-                let Ok(value) =
-                    try_resolve_constant(scope, &table, arenas, ast_ident, diagnostics)
+                let Ok(value) = try_resolve_constant(scope, &table, arenas, ast_ident, diagnostics)
                 else {
                     result_stack.push(None);
                     error = true;
@@ -162,9 +199,28 @@ pub fn eval_constant_expr<'a>(
             Expr::Ternary(condition, truthy, falsy) => {
                 if !item.dispatched {
                     item.dispatched = true;
+
+                    let (Ok(l_ty), Ok(r_ty)) = (
+                        get_expr_type(gl, arenas, table, scope, diagnostics, truthy),
+                        get_expr_type(gl, arenas, table, scope, diagnostics, falsy),
+                    ) else {
+                        result_stack.push(None);
+                        error = true;
+                        continue;
+                    };
+                    let mut child_context_width =
+                        l_ty.force_net_width().max(r_ty.force_net_width());
+                    if let Some(context_width) = item.context_width {
+                        child_context_width = child_context_width.max(context_width);
+                    }
+
                     dispatch_stack.push(item);
-                    dispatch_stack
-                        .extend([condition, truthy, falsy].into_iter().map(StackItem::new));
+                    dispatch_stack.push(StackItem::new_no_ctx(condition));
+                    dispatch_stack.extend(
+                        [truthy, falsy]
+                            .into_iter()
+                            .map(|e| StackItem::new(e, Some(child_context_width))),
+                    );
                     continue;
                 }
 
@@ -190,10 +246,7 @@ pub fn eval_constant_expr<'a>(
                 if !item.dispatched {
                     item.dispatched = true;
                     dispatch_stack.push(item);
-                    dispatch_stack.extend(exprs.iter().map(|expr| StackItem {
-                        expr,
-                        dispatched: false,
-                    }));
+                    dispatch_stack.extend(exprs.iter().map(StackItem::new_no_ctx));
                     continue;
                 }
 
@@ -219,10 +272,7 @@ pub fn eval_constant_expr<'a>(
                     item.dispatched = true;
                     dispatch_stack.push(item);
                     if let Some(exprs) = exprs {
-                        dispatch_stack.extend(exprs.iter().map(|expr| StackItem {
-                            expr,
-                            dispatched: false,
-                        }));
+                        dispatch_stack.extend(exprs.iter().map(StackItem::new_no_ctx));
                     }
                     continue;
                 }
@@ -243,18 +293,39 @@ pub fn eval_constant_expr<'a>(
             Expr::FunctionCall(ident, arguments) => {
                 if !item.dispatched {
                     item.dispatched = true;
+
+                    let Ok(fn_sid) =
+                        try_resolve_symbol_id(scope, &table, arenas, ident, diagnostics)
+                    else {
+                        result_stack.push(None);
+                        error = true;
+                        continue;
+                    };
+                    let VSymbol::Function(fn_symbol) = &table[fn_sid].content else {
+                        result_stack.push(None);
+                        diagnostics.not_yet_implemented(
+                            hident_span(arenas, ident),
+                            "not calling a function",
+                        );
+                        error = true;
+                        continue;
+                    };
+
                     dispatch_stack.push(item);
-                    dispatch_stack.extend(arguments.iter().map(|expr| StackItem {
-                        expr,
-                        dispatched: false,
-                    }));
+                    dispatch_stack.extend(
+                        arguments
+                            .iter()
+                            .zip(&fn_symbol.inputs)
+                            .map(|(expr, (_, ty))| {
+                                StackItem::new(expr, Some(ty.force_net_width()))
+                            }),
+                    );
                     continue;
                 }
 
                 let return_stack_length = result_stack.len() - arguments.len();
 
-                let Ok(fn_sid) =
-                    try_resolve_symbol_id(scope, &table, arenas, ident, diagnostics)
+                let Ok(fn_sid) = try_resolve_symbol_id(scope, &table, arenas, ident, diagnostics)
                 else {
                     result_stack.truncate(return_stack_length);
                     result_stack.push(None);

@@ -257,6 +257,14 @@ impl VValue {
             Self::String(_) => todo!(),
         }
     }
+
+    pub fn zero_or_sign_extend(self, new_size: VectorSize) -> Self {
+        match self {
+            Self::SignedNet(bits) => Self::SignedNet(bits.zero_extend(new_size)),
+            Self::UnsignedNet(bits) => Self::SignedNet(bits.sign_extend(new_size)),
+            Self::String(_) => todo!(),
+        }
+    }
 }
 
 macro_rules! impl_arithmetic {

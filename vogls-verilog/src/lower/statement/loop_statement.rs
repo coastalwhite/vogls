@@ -20,14 +20,22 @@ pub fn lower_loop_statement<'a>(
     let mut repeat_vars = None;
     match ls.variant {
         V::Repeat(size) => {
-            let (size, _) = lower_expr(ctx, mctx, scope, &mut builder, size)?;
+            let (size, _) = lower_expr(ctx, mctx, scope, &mut builder, size, None)?;
             let i = builder.constant_u32(mctx.gl(), 0);
             repeat_vars = Some((i, size));
         }
         V::For(initialization, _, _) => {
             let initialization = &*initialization;
-            let (initialization_var, initialization_var_ty) =
-                lower_expr(ctx, mctx, scope, &mut builder, initialization.expr)?;
+            let context_width =
+                assign::variable_lvalue_size(ctx, mctx, scope, initialization.lvalue)?;
+            let (initialization_var, initialization_var_ty) = lower_expr(
+                ctx,
+                mctx,
+                scope,
+                &mut builder,
+                initialization.expr,
+                Some(context_width),
+            )?;
             assign::assign_variable_lvalue(
                 ctx,
                 mctx,
@@ -56,8 +64,10 @@ pub fn lower_loop_statement<'a>(
             repeat_i_phi = Some(phi_ref);
             Some(builder.unsigned_lt(mctx.gl(), *i, *size))
         }
-        V::While(condition) => Some(lower_expr(ctx, mctx, scope, &mut builder, condition)?.0),
-        V::For(_, condition, _) => Some(lower_expr(ctx, mctx, scope, &mut builder, condition)?.0),
+        V::While(condition) => Some(lower_expr(ctx, mctx, scope, &mut builder, condition, None)?.0),
+        V::For(_, condition, _) => {
+            Some(lower_expr(ctx, mctx, scope, &mut builder, condition, None)?.0)
+        }
     };
 
     let branch_ref = match condition {
@@ -75,7 +85,15 @@ pub fn lower_loop_statement<'a>(
 
     match ls.variant {
         V::For(_, _, step) => {
-            let (step_var, step_var_ty) = lower_expr(ctx, mctx, scope, &mut builder, step.expr)?;
+            let context_width = assign::variable_lvalue_size(ctx, mctx, scope, step.lvalue)?;
+            let (step_var, step_var_ty) = lower_expr(
+                ctx,
+                mctx,
+                scope,
+                &mut builder,
+                step.expr,
+                Some(context_width),
+            )?;
             assign::assign_variable_lvalue(
                 ctx,
                 mctx,
