@@ -190,12 +190,12 @@ pub struct FuseSignalsContext {
 /// A set of graph transformations is performed on this graph usually reducing the depth of the
 /// graph.
 ///
-/// | Property        | From                       | To                   |
-/// |-----------------|----------------------------|----------------------|
-/// | Transitive      | A -> B -> C                | A -> B, A -> C       |
-/// | Neighbour Merge | A[0] -> B[0], A[1] -> B[1] | A[1:0] -> B[1:0]     |
-/// | Symmetric       | A -> B, B -> A             | A -> B               |
-/// | Merge Inversion | A -> B[0], C -> B[1]       | B[0] -> A, B[1] -> C |
+/// | Property         | From                       | To                   |
+/// |------------------|----------------------------|----------------------|
+/// | Transitive       | A -> B -> C                | A -> B, A -> C       |
+/// | Neighbour Merge  | A[0] -> B[0], A[1] -> B[1] | A[1:0] -> B[1:0]     |
+/// | Cyclic           | A -> A                     |                      |
+/// | Subset Inversion | A -> B[0], C -> B[1]       | B[0] -> A, B[1] -> C |
 ///
 /// At the end, you have a graph where many nodes only have on fanin edge. The driver of this edge
 /// is uses as an alias for the node's signal. The returned map is a map from the original signal
@@ -393,7 +393,7 @@ pub fn fuse_signals(
                 nodes[node].fanout.truncate(write + 1);
             }
 
-            // Merge inversion
+            // Subset inversion
             if nodes[node].fanin.len() > 1 {
                 nodes[node].fanin.sort_unstable_by_key(|&e| {
                     let edge = &edges[e];
