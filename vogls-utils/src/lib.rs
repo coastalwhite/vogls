@@ -4,13 +4,15 @@ pub type VgHashMap<K, V> = hashbrown::HashMap<K, V, foldhash::fast::RandomState>
 mod index_map;
 mod non_max_int;
 mod ordered_set;
-mod table;
 pub mod retain;
+mod table;
+mod timer_stack;
 
 pub use index_map::{IndexMap, IndexSet};
 pub use non_max_int::{NonMaxU8, NonMaxU32, NonMaxU64, NonMaxUsize};
 pub use ordered_set::OrderedSet;
 pub use table::{SecondaryTable, Table, TableKey, TableSet};
+pub use timer_stack::TimerStack;
 
 /// Remainder that results the divisor if the remainder is zero.
 ///

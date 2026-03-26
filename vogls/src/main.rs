@@ -47,6 +47,8 @@ struct Args {
 
     #[arg(short = 'C')]
     compile: bool,
+    #[arg(long)]
+    timings: bool,
 
     #[arg(long)]
     print_unoptimized_fuse_signals: bool,
@@ -85,6 +87,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             logic_mode,
             vcd: args.vcd,
             compile: args.compile,
+            timings: args.timings,
             print_unoptimized_fuse_signals: args.print_unoptimized_fuse_signals,
             print_round_fuse_signals: args.print_round_fuse_signals,
             print_optimized_fuse_signals: args.print_optimized_fuse_signals,

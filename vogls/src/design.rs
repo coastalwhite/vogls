@@ -17,7 +17,7 @@ use vogls_runtime::SimulationIo;
 use vogls_runtime::plugins::RuntimePluginState;
 use vogls_runtime::{RtSignalKey, RuntimeState};
 use vogls_sim::{Event, Regions, Simulation, VmProcess, VmProcessKey, lower_process_to_vm};
-use vogls_utils::{NonMaxU32, TableKey, VgHashMap, VgHashSet};
+use vogls_utils::{NonMaxU32, TableKey, TimerStack, VgHashMap, VgHashSet};
 use vogls_verilog::arena::Arena;
 use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{Description, Module, ModuleItem, NonPortModuleItem};
@@ -81,6 +81,7 @@ impl Design {
         ectx: &mut ExecutionContext,
         mut plugins: Vec<RuntimePluginState>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut timers = TimerStack::new(ectx.timings);
         let mut token_buffer = Tokenized::default();
         let mut macros = HashMap::new();
         for define in &ectx.defines {
@@ -94,19 +95,21 @@ impl Design {
             token_buffer.append_tokenize_with_macros(content, Some((*path).into()), &mut macros);
         }
 
-        let mut tkw = TokenWalker::new(&token_buffer);
+        let mut tkw = timers.timed("tokenization", |_| TokenWalker::new(&token_buffer));
         let mut diagnostics = ParserDiagnostics::default();
         let ast = Arena::new();
         let mut arenas = AstArenas::default();
 
-        let f = match parse_file(
-            &mut tkw,
-            &mut ParserScratches::default(),
-            Some(&mut diagnostics),
-            &mut arenas,
-            &ast,
-            &mut ParseContext::default(),
-        ) {
+        let f = match timers.timed("parsing", |_| {
+            parse_file(
+                &mut tkw,
+                &mut ParserScratches::default(),
+                Some(&mut diagnostics),
+                &mut arenas,
+                &ast,
+                &mut ParseContext::default(),
+            )
+        }) {
             Ok(ast) => ast,
             Err(_) => {
                 for (location, err) in &diagnostics.errors {
@@ -223,13 +226,15 @@ impl Design {
             fuse_scratch: Vec::new(),
             has_vcd: false,
         };
-        let result = vogls_verilog::elaborate::next::elaborate(
-            &mut mctx.gl,
-            &mut ctx,
-            *tl_module,
-            &module_lut,
-            &mut mctx.diagnostics,
-        );
+        let result = timers.timed("elaboration", |_| {
+            vogls_verilog::elaborate::next::elaborate(
+                &mut mctx.gl,
+                &mut ctx,
+                *tl_module,
+                &module_lut,
+                &mut mctx.diagnostics,
+            )
+        });
 
         if !mctx.diagnostics.warnings.is_empty() {
             for (location, warning) in &mctx.diagnostics.warnings {
@@ -309,6 +314,7 @@ impl Design {
         let mut outs = Vec::new();
 
         // @TODO: Iterate over the modules instead.
+        timers.start("lower_global_items");
         for key in ctx.table.symbol_id_iter() {
             match &ctx.table[key].content {
                 VSymbol::Module(i) => {
@@ -360,6 +366,7 @@ impl Design {
                 _ => {}
             }
         }
+        timers.stop();
 
         if error {
             for (location, err, context) in &mctx.diagnostics.errors {
@@ -379,14 +386,19 @@ impl Design {
 
         // Walk the modules in depth-first order and lower to IR.
         // @TODO: Iterate over the modules instead.
+        timers.start("lower");
         for key in ctx.table.symbol_id_iter() {
             let VSymbol::Module(m) = &ctx.table[key].content else {
                 continue;
             };
             let module_id = module_lut[&m.module];
-            let module_key = lower_module_to_ir(module_id, &ctx, &mut mctx, key);
+            let module_key = timers.timed(
+                ctx.arenas.ident_table[module_id.module_identifier.item.0].to_string(),
+                |_| lower_module_to_ir(module_id, &ctx, &mut mctx, key),
+            );
             error |= module_key.is_err();
         }
+        timers.stop();
 
         if !mctx.diagnostics.warnings.is_empty() {
             for (location, warning) in &mctx.diagnostics.warnings {
@@ -419,15 +431,17 @@ impl Design {
             }
         }
 
-        let fused = fuse_signals::fuse_signals(
-            &mut mctx.gl,
-            &mctx.connections,
-            &FuseSignalsContext {
-                print_unoptimized_fuse_signals: ectx.print_unoptimized_fuse_signals,
-                print_round_fuse_signals: ectx.print_round_fuse_signals,
-                print_optimized_fuse_signals: ectx.print_optimized_fuse_signals,
-            },
-        );
+        let fused = timers.timed("fuse_signals", |_| {
+            fuse_signals::fuse_signals(
+                &mut mctx.gl,
+                &mctx.connections,
+                &FuseSignalsContext {
+                    print_unoptimized_fuse_signals: ectx.print_unoptimized_fuse_signals,
+                    print_round_fuse_signals: ectx.print_round_fuse_signals,
+                    print_optimized_fuse_signals: ectx.print_optimized_fuse_signals,
+                },
+            )
+        });
         for symbol in ctx.table.symbol_id_iter() {
             if let VSymbol::Net(net) = &mut ctx.table[symbol].content {
                 net.net.replace_signals(|s| {
@@ -441,6 +455,7 @@ impl Design {
             }
         }
 
+        timers.start("optimization");
         let mut scratch_stack = Vec::new();
         let mut scratch_seen = VgHashSet::default();
         let mut scratch_mfr = VgHashSet::default();
@@ -483,6 +498,7 @@ impl Design {
                 );
             }
         }
+        timers.stop();
 
         if ectx.emit_ir && !ectx.emit_vm {
             for process in mctx.gl.processes.values() {
@@ -524,6 +540,7 @@ impl Design {
             }));
         }
 
+        timers.start("build heap");
         let mut heap_builder = HeapBuilder::new();
         let mut io_signals = VgHashMap::default();
         for (key, signal) in &mctx.gl.signals {
@@ -580,6 +597,7 @@ impl Design {
                 }
             }
         }
+        timers.stop();
 
         let signals: Arc<[HeapRef]> = signals.into();
         if mctx.has_vcd || ectx.vcd.is_some() {
@@ -601,6 +619,7 @@ impl Design {
         }
 
         if ectx.compile {
+            timers.start("lower to C");
             let mut listener_builder = ListenerBuilder::default();
             let mut out = Vec::new();
             let mut state_builder = StateBuilder::default();
@@ -650,27 +669,29 @@ impl Design {
             // vogls_codegen_c::add_main(&mut c_file, &gl, &heap_builder, &listener_builder)?;
 
             std::fs::write("t2.c", &c_file)?;
+            timers.stop();
 
+            timers.start("compile C");
             // clang -x c -fPIC t2.c -shared -o /tmp/vogls-target.so
-            let mut cc = Command::new("clang")
-                .args([
-                    "-x",
-                    "c",
-                    "-O1",
-                    "-g3",
-                    "-fPIC",
-                    // "-O2",
-                    "t2.c",
-                    // "-",
-                    "-shared",
-                    "-o",
-                    "/tmp/vogls-target.so",
-                ])
-                .stdin(std::process::Stdio::piped())
-                .spawn()
-                .unwrap();
-            // cc.stdin.take().unwrap().write_all(&c_file)?;
-            if !cc.wait().unwrap().success() {
+            let status = timers.timed("compile C", |_| {
+                Command::new("clang")
+                    .args([
+                        "-x",
+                        "c",
+                        "-O1",
+                        // "-g3",
+                        "-fPIC",
+                        // "-O2",
+                        "t2.c",
+                        // "-",
+                        "-shared",
+                        "-o",
+                        "/tmp/vogls-target.so",
+                    ])
+                    .stdin(std::process::Stdio::piped())
+                    .status()
+            })?;
+            if !status.success() {
                 return Err("compilation failed!".into());
             }
 
@@ -685,6 +706,10 @@ impl Design {
                 state_builder,
                 regions.num_additional_regions() as u8,
             );
+
+            if ectx.timings {
+                timers.print();
+            }
 
             initial_state.plugins = plugins;
             let LowerContext {
@@ -705,6 +730,7 @@ impl Design {
             });
         }
 
+        timers.start("lower to VM");
         for process in mctx.gl.processes.keys() {
             if ectx.emit_vm && ectx.emit_ir {
                 println!();
@@ -742,6 +768,7 @@ impl Design {
                 ip: 0,
             });
         }
+        timers.stop();
         let mut heap = heap_builder.finish();
 
         for (key, signal) in &mctx.gl.signals {
