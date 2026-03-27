@@ -187,7 +187,7 @@ pub fn assign_variable_lvalue_flat<'a>(
         let mut leaf_arr_items = dims.iter().product::<u32>();
         let (fst, fst_ty) = lower_expr(ctx, mctx, scope, builder, fst)?;
         let fst = sign_or_zero_extend(mctx.gl(), builder, fst, fst_ty, INTEGER_VSIZE);
-        let mut offset = builder.multiply_constant(mctx.gl(), fst, leaf_arr_items);
+        let mut offset = builder.multiply_constant(mctx.gl(), fst, Bits::new_u32(leaf_arr_items));
 
         while let Some(dim) = dims.last()
             && let Some(expr) = exprs.pop_front()
@@ -195,7 +195,7 @@ pub fn assign_variable_lvalue_flat<'a>(
             leaf_arr_items /= *dim;
             let (expr, expr_ty) = lower_expr(ctx, mctx, scope, builder, expr)?;
             let expr = sign_or_zero_extend(mctx.gl(), builder, expr, expr_ty, INTEGER_VSIZE);
-            let expr = builder.multiply_constant(mctx.gl(), expr, leaf_arr_items);
+            let expr = builder.multiply_constant(mctx.gl(), expr, Bits::new_u32(leaf_arr_items));
             offset = builder.plus(mctx.gl(), offset, expr);
             dims = &dims[1..];
         }
@@ -220,7 +220,7 @@ pub fn assign_variable_lvalue_flat<'a>(
         let leaf_arr_items = dims.iter().product::<u32>();
         let (fst, fst_ty) = lower_expr(ctx, mctx, scope, builder, expr)?;
         let fst = sign_or_zero_extend(mctx.gl(), builder, fst, fst_ty, INTEGER_VSIZE);
-        let offset = builder.multiply_constant(mctx.gl(), fst, leaf_arr_items);
+        let offset = builder.multiply_constant(mctx.gl(), fst, Bits::new_u32(leaf_arr_items));
 
         arr_idx = Some(match arr_idx {
             None => offset,
@@ -245,7 +245,8 @@ pub fn assign_variable_lvalue_flat<'a>(
                     None => None,
                     Some(idx) => {
                         // @TODO: Verify size.
-                        let idx = builder.multiply_constant(mctx.gl(), idx, size.get());
+                        let idx =
+                            builder.multiply_constant(mctx.gl(), idx, Bits::new_u32(size.get()));
                         Some((idx, size))
                     }
                 },
@@ -348,7 +349,11 @@ pub fn assign_variable_lvalue_flat<'a>(
                         None => Some((offset, length)),
                         Some(idx) => {
                             // @TODO: Verify size.
-                            let idx = builder.multiply_constant(mctx.gl(), idx, size.get());
+                            let idx = builder.multiply_constant(
+                                mctx.gl(),
+                                idx,
+                                Bits::new_u32(size.get()),
+                            );
                             let offset = builder.plus(mctx.gl(), offset, idx);
                             Some((offset, length))
                         }

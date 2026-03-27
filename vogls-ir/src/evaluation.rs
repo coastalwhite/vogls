@@ -46,6 +46,11 @@ fn evaluate_impl(
                 let bits = op.evaluate(lhs, rhs, gl.vars[*dst].size);
                 _ = variables.insert(*dst, bits.clone());
             }
+            I::BinaryImm(dst, op, src, imm) => {
+                let src = &variables[src];
+                let bits = op.evaluate(src, imm, gl.vars[*dst].size);
+                _ = variables.insert(*dst, bits.clone());
+            }
             I::Intrinsic(_, _, _) => todo!(),
             I::LastUpdateTime(_, _) => todo!(),
             I::Probe(dst, src_signal) => {

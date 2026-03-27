@@ -4,8 +4,8 @@ use vogls_codegen::{
     HeapBuilder, HeapOffset, HeapRef, insert_bb_phis, resolve_heap_map, resolve_var_logic_mode_map,
 };
 use vogls_ir::{
-    BasicBlockKey, BasicBlockTerminator, BinaryOp, GlobalContext, INTEGER_VSIZE, Instruction,
-    IntrinsicOp, LogicMode, ProcessKey, SignalKey, VariableKey,
+    BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext, INTEGER_VSIZE,
+    Instruction, IntrinsicOp, LogicMode, ProcessKey, SignalKey, VariableKey,
 };
 use vogls_runtime::RtSignalKey;
 use vogls_utils::{VgHashMap, VgHashSet};
@@ -32,6 +32,7 @@ pub fn lower_process_to_vm(
     let mut var_mode = VgHashMap::<VariableKey, LogicMode>::default();
     let mut conv_map = VgHashMap::<VariableKey, HeapOffset>::default();
     let mut heap_map = VgHashMap::default();
+    let mut bits_map = VgHashMap::default();
 
     resolve_var_logic_mode_map(
         process.entry,
@@ -52,6 +53,7 @@ pub fn lower_process_to_vm(
         heap_builder,
         &mut heap_map,
         None,
+        Some(&mut bits_map),
     );
 
     bb_stack.clear();
@@ -95,7 +97,7 @@ pub fn lower_process_to_vm(
 
         for instr in &bb.instrs {
             let instr = match instr {
-                I::Constant(d, value) => VI::Constant(var!(*d), value.clone_lowering_mode()),
+                I::Constant(..) => continue,
 
                 I::Unary(d, op, s) => {
                     let size = gl.vars[*s].size;
@@ -114,6 +116,177 @@ pub fn lower_process_to_vm(
                         VI::FvResize(var!(*d).to_ref(d_size), *op, s.to_ref(s_size))
                     } else {
                         VI::TvResize(var!(*d).to_ref(d_size), *op, s.to_ref(s_size))
+                    }
+                }
+                I::BinaryImm(d, op, src, imm) => {
+                    use LogicMode as M;
+
+                    let d_size = gl.vars[*d].size;
+                    let s1_size = gl.vars[*src].size;
+                    let s2_size = imm.size();
+                    let s1_mode = var_mode[src];
+                    let s2_mode = if imm.contains_special() {
+                        LogicMode::FourValue
+                    } else {
+                        LogicMode::TwoValue
+                    };
+                    let d = var!(*d);
+                    let mode = match (s1_mode, s2_mode) {
+                        (M::FourValue, _) | (_, M::FourValue) => M::FourValue,
+                        _ => M::TwoValue,
+                    };
+                    let src = var!(*src, (mode, s1_mode, s1_size));
+                    let imm = bits_map[&(imm.clone(), mode)];
+                    use BinaryArithmeticOp as BA;
+                    use BinaryComparisonOp as BC;
+                    use BinaryImmOp as O;
+                    use ShiftOp as S;
+                    if mode == M::FourValue {
+                        match *op {
+                            O::And => VI::FvBinaryArithmetic(d.to_ref(d_size), BA::And, src, imm),
+                            O::Or => VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Or, src, imm),
+                            O::Xor => VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Xor, src, imm),
+
+                            O::Add => VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Add, src, imm),
+                            O::Sub => VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Sub, src, imm),
+                            O::Power => {
+                                VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Power, src, imm)
+                            }
+                            O::Multiply => {
+                                VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Multiply, src, imm)
+                            }
+                            O::Divide => {
+                                VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Divide, src, imm)
+                            }
+                            O::Modulus => {
+                                VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Modulus, src, imm)
+                            }
+
+                            O::RevSub => {
+                                VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Sub, imm, src)
+                            }
+                            O::RevPower => {
+                                VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Power, imm, src)
+                            }
+                            O::RevDivide => {
+                                VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Divide, imm, src)
+                            }
+                            O::RevModulus => {
+                                VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Modulus, imm, src)
+                            }
+
+                            O::Min => VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Min, src, imm),
+                            O::Max => VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Max, src, imm),
+
+                            O::UnsignedLessEqual => VI::FvBinaryComparison(
+                                d,
+                                BC::UnsignedLessEqual,
+                                src.to_ref(s1_size),
+                                imm,
+                            ),
+                            O::UnsignedGreaterEqual => VI::FvBinaryComparison(
+                                d,
+                                BC::UnsignedLessEqual,
+                                imm.to_ref(s2_size),
+                                src,
+                            ),
+
+                            O::CaseEquality => VI::FvBinaryComparison(
+                                d,
+                                BC::CaseEquality,
+                                src.to_ref(s1_size),
+                                imm,
+                            ),
+                            O::Slice => VI::FvSlice(d.to_ref(d_size), src.to_ref(s1_size), imm, false),
+                            O::LogicalShiftLeft => {
+                                VI::FvShift(d.to_ref(d_size), S::LogicalLeft, src, imm)
+                            }
+                            O::LogicalShiftRight => {
+                                VI::FvShift(d.to_ref(d_size), S::LogicalRight, src, imm)
+                            }
+                            O::ArithmeticShiftRight => {
+                                VI::FvShift(d.to_ref(d_size), S::ArithmeticRight, src, imm)
+                            }
+                            O::ConcatLeft => {
+                                VI::FvConcat(d, src.to_ref(s1_size), imm.to_ref(s2_size))
+                            }
+                            O::ConcatRight => {
+                                VI::FvConcat(d, src.to_ref(s1_size), imm.to_ref(s2_size))
+                            }
+                        }
+                    } else {
+                        match *op {
+                            O::And => VI::TvBinaryArithmetic(d.to_ref(d_size), BA::And, src, imm),
+                            O::Or => VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Or, src, imm),
+                            O::Xor => VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Xor, src, imm),
+
+                            O::Add => VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Add, src, imm),
+                            O::Sub => VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Sub, src, imm),
+                            O::Power => {
+                                VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Power, src, imm)
+                            }
+                            O::Multiply => {
+                                VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Multiply, src, imm)
+                            }
+                            O::Divide => {
+                                VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Divide, src, imm)
+                            }
+                            O::Modulus => {
+                                VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Modulus, src, imm)
+                            }
+
+                            O::RevSub => {
+                                VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Sub, imm, src)
+                            }
+                            O::RevPower => {
+                                VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Power, imm, src)
+                            }
+                            O::RevDivide => {
+                                VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Divide, imm, src)
+                            }
+                            O::RevModulus => {
+                                VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Modulus, imm, src)
+                            }
+
+                            O::Min => VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Min, src, imm),
+                            O::Max => VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Max, src, imm),
+
+                            O::UnsignedLessEqual => VI::TvBinaryComparison(
+                                d,
+                                BC::UnsignedLessEqual,
+                                src.to_ref(s1_size),
+                                imm,
+                            ),
+                            O::UnsignedGreaterEqual => VI::TvBinaryComparison(
+                                d,
+                                BC::UnsignedLessEqual,
+                                imm.to_ref(s2_size),
+                                src,
+                            ),
+
+                            O::CaseEquality => VI::TvBinaryComparison(
+                                d,
+                                BC::CaseEquality,
+                                src.to_ref(s1_size),
+                                imm,
+                            ),
+                            O::Slice => VI::TvSlice(d.to_ref(d_size), src.to_ref(s1_size), imm, false),
+                            O::LogicalShiftLeft => {
+                                VI::TvShift(d.to_ref(d_size), S::LogicalLeft, src, imm)
+                            }
+                            O::LogicalShiftRight => {
+                                VI::TvShift(d.to_ref(d_size), S::LogicalRight, src, imm)
+                            }
+                            O::ArithmeticShiftRight => {
+                                VI::TvShift(d.to_ref(d_size), S::ArithmeticRight, src, imm)
+                            }
+                            O::ConcatLeft => {
+                                VI::TvConcat(d, src.to_ref(s1_size), imm.to_ref(s2_size))
+                            }
+                            O::ConcatRight => {
+                                VI::TvConcat(d, src.to_ref(s1_size), imm.to_ref(s2_size))
+                            }
+                        }
                     }
                 }
                 I::Binary(d, op, s1, s2) => {
@@ -164,7 +337,7 @@ pub fn lower_process_to_vm(
                             O::CaseEquality => {
                                 VI::FvBinaryComparison(d, BC::CaseEquality, s1.to_ref(s1_size), s2)
                             }
-                            O::Slice => VI::FvSlice(d.to_ref(d_size), s1.to_ref(s1_size), s2),
+                            O::Slice => VI::FvSlice(d.to_ref(d_size), s1.to_ref(s1_size), s2, true),
                             O::LogicalShiftLeft => {
                                 VI::FvShift(d.to_ref(d_size), S::LogicalLeft, s1, s2)
                             }
@@ -210,7 +383,7 @@ pub fn lower_process_to_vm(
                             O::CaseEquality => {
                                 VI::TvBinaryComparison(d, BC::CaseEquality, s1.to_ref(s1_size), s2)
                             }
-                            O::Slice => VI::TvSlice(d.to_ref(d_size), s1.to_ref(s1_size), s2),
+                            O::Slice => VI::TvSlice(d.to_ref(d_size), s1.to_ref(s1_size), s2, true),
                             O::LogicalShiftLeft => {
                                 VI::TvShift(d.to_ref(d_size), S::LogicalLeft, s1, s2)
                             }

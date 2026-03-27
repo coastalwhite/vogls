@@ -1,8 +1,8 @@
 use crate::token_range::TokenRange;
 use crate::{
-    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryOp, Bits, GlobalContext, INTEGER_VSIZE,
-    Instruction, IntrinsicOp, Process, ProcessKey, ResizeOp, SCALAR_VSIZE, SignalKey, TIME_VSIZE,
-    Time, UnaryOp, Variable, VariableKey, VectorSize,
+    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, Bits, GlobalContext,
+    INTEGER_VSIZE, Instruction, IntrinsicOp, Process, ProcessKey, ResizeOp, SCALAR_VSIZE,
+    SignalKey, TIME_VSIZE, Time, UnaryOp, Variable, VariableKey, VectorSize,
 };
 
 #[must_use]
@@ -51,6 +51,21 @@ pub struct BranchRef(BasicBlockKey);
 impl BranchRef {
     pub fn origin_key(&self) -> BasicBlockKey {
         self.0
+    }
+}
+
+macro_rules! arithmetic_op {
+    ($(($name:ident, $op:ident),)+) => {
+        $(
+        pub fn $name(
+            &mut self,
+            gl: &mut GlobalContext,
+            lhs: VariableKey,
+            rhs: VariableKey,
+        ) -> VariableKey {
+            self.bin_arithmetic(gl, lhs, rhs, BinaryOp::$op)
+        }
+        )+
     }
 }
 
@@ -206,6 +221,29 @@ impl BasicBlockBuilder {
     ) {
         self.instrs.push(Instruction::Binary(dst, op, lhs, rhs));
     }
+    pub fn bin_imm_op(
+        &mut self,
+        _gl: &mut GlobalContext,
+        src: VariableKey,
+        imm: Bits,
+        op: BinaryImmOp,
+        dst: VariableKey,
+    ) {
+        self.instrs.push(Instruction::BinaryImm(dst, op, src, imm));
+    }
+    fn copy_op(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+        op: BinaryOp,
+    ) -> VariableKey {
+        let size = gl.vars[lhs].size;
+        assert_eq!(size, gl.vars[rhs].size);
+        let dst = self.next_tmp_var(gl, size);
+        self.bin_op(gl, lhs, rhs, op, dst);
+        dst
+    }
 
     pub fn bin_arithmetic(
         &mut self,
@@ -220,30 +258,31 @@ impl BasicBlockBuilder {
         self.bin_op(gl, lhs, rhs, op, dst);
         dst
     }
+    pub fn bin_imm_arithmetic(
+        &mut self,
+        gl: &mut GlobalContext,
+        src: VariableKey,
+        imm: Bits,
+        op: BinaryImmOp,
+    ) -> VariableKey {
+        let size = gl.vars[src].size;
+        assert_eq!(size, imm.size());
+        let dst = self.next_tmp_var(gl, size);
+        self.bin_imm_op(gl, src, imm, op, dst);
+        dst
+    }
 
-    pub fn and(
-        &mut self,
-        gl: &mut GlobalContext,
-        lhs: VariableKey,
-        rhs: VariableKey,
-    ) -> VariableKey {
-        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::And)
-    }
-    pub fn or(
-        &mut self,
-        gl: &mut GlobalContext,
-        lhs: VariableKey,
-        rhs: VariableKey,
-    ) -> VariableKey {
-        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::Or)
-    }
-    pub fn xor(
-        &mut self,
-        gl: &mut GlobalContext,
-        lhs: VariableKey,
-        rhs: VariableKey,
-    ) -> VariableKey {
-        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::Xor)
+    // Bitwise Operations
+    arithmetic_op! {
+        (and, And),
+        (or, Or),
+        (xor, Xor),
+        (plus, Add),
+        (minus, Sub),
+        (multiply, Multiply),
+        (divide, Divide),
+        (modulus, Modulus),
+        (power, Power),
     }
     pub fn xnor(
         &mut self,
@@ -274,18 +313,235 @@ impl BasicBlockBuilder {
         self.or(gl, lhs, rhs)
     }
 
-    fn copy_op(
+    // Bitwise Immediate Operations
+    pub fn and_constant(
         &mut self,
         gl: &mut GlobalContext,
-        lhs: VariableKey,
-        rhs: VariableKey,
-        op: BinaryOp,
+        src: VariableKey,
+        imm: Bits,
     ) -> VariableKey {
-        let size = gl.vars[lhs].size;
-        assert_eq!(size, gl.vars[rhs].size);
-        let dst = self.next_tmp_var(gl, size);
-        self.bin_op(gl, lhs, rhs, op, dst);
-        dst
+        assert_eq!(gl.vars[src].size, imm.size());
+        let num_special = imm.count_special();
+        if num_special == imm.size().get() {
+            return self.constant(gl, Bits::new_unknown(imm.size()));
+        }
+
+        let num_ones = imm.count_ones();
+        if num_ones == imm.size().get() {
+            return src;
+        } else if num_special == 0 && num_ones == 0 {
+            return self.constant(gl, imm);
+        }
+
+        self.bin_imm_arithmetic(gl, src, imm, BinaryImmOp::And)
+    }
+    pub fn or_constant(
+        &mut self,
+        gl: &mut GlobalContext,
+        src: VariableKey,
+        imm: Bits,
+    ) -> VariableKey {
+        assert_eq!(gl.vars[src].size, imm.size());
+        let num_special = imm.count_special();
+        if num_special == imm.size().get() {
+            return self.constant(gl, Bits::new_unknown(imm.size()));
+        }
+
+        let num_ones = imm.count_ones();
+        if num_ones == imm.size().get() {
+            return self.constant(gl, imm);
+        } else if num_special == 0 && num_ones == 0 {
+            return src;
+        }
+
+        self.bin_imm_arithmetic(gl, src, imm, BinaryImmOp::Or)
+    }
+    pub fn xor_constant(
+        &mut self,
+        gl: &mut GlobalContext,
+        src: VariableKey,
+        imm: Bits,
+    ) -> VariableKey {
+        assert_eq!(gl.vars[src].size, imm.size());
+        let num_special = imm.count_special();
+        if num_special == imm.size().get() {
+            return self.constant(gl, Bits::new_unknown(imm.size()));
+        }
+
+        let num_ones = imm.count_ones();
+        if num_ones == imm.size().get() {
+            return self.binary_neg(gl, src);
+        } else if num_special == 0 && num_ones == 0 {
+            return src;
+        }
+
+        self.bin_imm_arithmetic(gl, src, imm, BinaryImmOp::Xor)
+    }
+    pub fn plus_constant(
+        &mut self,
+        gl: &mut GlobalContext,
+        src: VariableKey,
+        imm: Bits,
+    ) -> VariableKey {
+        assert_eq!(gl.vars[src].size, imm.size());
+        if imm.contains_special() {
+            return self.constant(gl, Bits::new_unknown(imm.size()));
+        }
+
+        if imm.eq_zero() {
+            return src;
+        }
+
+        self.bin_imm_arithmetic(gl, src, imm, BinaryImmOp::Add)
+    }
+    pub fn minus_constant(
+        &mut self,
+        gl: &mut GlobalContext,
+        src: VariableKey,
+        imm: Bits,
+    ) -> VariableKey {
+        assert_eq!(gl.vars[src].size, imm.size());
+        if imm.contains_special() {
+            return self.constant(gl, Bits::new_unknown(imm.size()));
+        }
+
+        if imm.eq_zero() {
+            return src;
+        }
+
+        self.bin_imm_arithmetic(gl, src, imm, BinaryImmOp::Sub)
+    }
+    pub fn multiply_constant(
+        &mut self,
+        gl: &mut GlobalContext,
+        src: VariableKey,
+        imm: Bits,
+    ) -> VariableKey {
+        assert_eq!(gl.vars[src].size, imm.size());
+        if imm.contains_special() {
+            return self.constant(gl, Bits::new_unknown(imm.size()));
+        }
+
+        if imm.eq_zero() {
+            return self.constant(gl, Bits::new_zeroed(imm.size()));
+        } else if imm.eq_one() {
+            return src;
+        }
+
+        self.bin_imm_arithmetic(gl, src, imm, BinaryImmOp::Multiply)
+    }
+    pub fn power_constant(
+        &mut self,
+        gl: &mut GlobalContext,
+        src: VariableKey,
+        imm: Bits,
+    ) -> VariableKey {
+        assert_eq!(gl.vars[src].size, imm.size());
+        if imm.contains_special() {
+            return self.constant(gl, Bits::new_unknown(imm.size()));
+        }
+
+        if imm.eq_zero() {
+            return self.constant(gl, Bits::new_u32(1).truncate_or_zero_extend(imm.size()));
+        } else if imm.eq_one() {
+            return src;
+        }
+
+        self.bin_imm_arithmetic(gl, src, imm, BinaryImmOp::Power)
+    }
+    pub fn divide_constant(
+        &mut self,
+        gl: &mut GlobalContext,
+        src: VariableKey,
+        imm: Bits,
+    ) -> VariableKey {
+        assert_eq!(gl.vars[src].size, imm.size());
+        if imm.contains_special() {
+            return self.constant(gl, Bits::new_unknown(imm.size()));
+        }
+
+        if imm.eq_zero() {
+            return self.constant(gl, Bits::new_ones(imm.size()));
+        } else if imm.eq_one() {
+            return src;
+        }
+
+        self.bin_imm_arithmetic(gl, src, imm, BinaryImmOp::Power)
+    }
+    pub fn modulus_constant(
+        &mut self,
+        gl: &mut GlobalContext,
+        src: VariableKey,
+        imm: Bits,
+    ) -> VariableKey {
+        assert_eq!(gl.vars[src].size, imm.size());
+        if imm.contains_special() {
+            return self.constant(gl, Bits::new_unknown(imm.size()));
+        }
+
+        if imm.eq_zero() {
+            return self.constant(gl, Bits::new_ones(imm.size()));
+        } else if imm.eq_one() {
+            return self.constant(gl, Bits::new_zeroed(imm.size()));
+        }
+
+        self.bin_imm_arithmetic(gl, src, imm, BinaryImmOp::Power)
+    }
+    pub fn revminus_constant(
+        &mut self,
+        gl: &mut GlobalContext,
+        src: VariableKey,
+        imm: Bits,
+    ) -> VariableKey {
+        assert_eq!(gl.vars[src].size, imm.size());
+        if imm.contains_special() {
+            return self.constant(gl, Bits::new_unknown(imm.size()));
+        }
+
+        self.bin_imm_arithmetic(gl, src, imm, BinaryImmOp::RevSub)
+    }
+    pub fn revpower_constant(
+        &mut self,
+        gl: &mut GlobalContext,
+        src: VariableKey,
+        imm: Bits,
+    ) -> VariableKey {
+        assert_eq!(gl.vars[src].size, imm.size());
+        if imm.contains_special() {
+            return self.constant(gl, Bits::new_unknown(imm.size()));
+        }
+
+        if imm.eq_one() {
+            return self.constant(gl, imm);
+        }
+
+        self.bin_imm_arithmetic(gl, src, imm, BinaryImmOp::RevPower)
+    }
+    pub fn revdivide_constant(
+        &mut self,
+        gl: &mut GlobalContext,
+        src: VariableKey,
+        imm: Bits,
+    ) -> VariableKey {
+        assert_eq!(gl.vars[src].size, imm.size());
+        if imm.contains_special() {
+            return self.constant(gl, Bits::new_unknown(imm.size()));
+        }
+
+        self.bin_imm_arithmetic(gl, src, imm, BinaryImmOp::RevDivide)
+    }
+    pub fn revmodulus_constant(
+        &mut self,
+        gl: &mut GlobalContext,
+        src: VariableKey,
+        imm: Bits,
+    ) -> VariableKey {
+        assert_eq!(gl.vars[src].size, imm.size());
+        if imm.contains_special() {
+            return self.constant(gl, Bits::new_unknown(imm.size()));
+        }
+
+        self.bin_imm_arithmetic(gl, src, imm, BinaryImmOp::RevModulus)
     }
 
     pub fn copy_x(
@@ -303,77 +559,6 @@ impl BasicBlockBuilder {
         rhs: VariableKey,
     ) -> VariableKey {
         self.copy_op(gl, lhs, rhs, BinaryOp::CopyZ)
-    }
-
-    pub fn power(
-        &mut self,
-        gl: &mut GlobalContext,
-        lhs: VariableKey,
-        rhs: VariableKey,
-    ) -> VariableKey {
-        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::Power)
-    }
-    pub fn multiply(
-        &mut self,
-        gl: &mut GlobalContext,
-        lhs: VariableKey,
-        rhs: VariableKey,
-    ) -> VariableKey {
-        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::Multiply)
-    }
-    pub fn plus(
-        &mut self,
-        gl: &mut GlobalContext,
-        lhs: VariableKey,
-        rhs: VariableKey,
-    ) -> VariableKey {
-        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::Add)
-    }
-    pub fn minus(
-        &mut self,
-        gl: &mut GlobalContext,
-        lhs: VariableKey,
-        rhs: VariableKey,
-    ) -> VariableKey {
-        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::Sub)
-    }
-    pub fn divide(
-        &mut self,
-        gl: &mut GlobalContext,
-        lhs: VariableKey,
-        rhs: VariableKey,
-    ) -> VariableKey {
-        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::Divide)
-    }
-    pub fn modulus(
-        &mut self,
-        gl: &mut GlobalContext,
-        lhs: VariableKey,
-        rhs: VariableKey,
-    ) -> VariableKey {
-        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::Modulus)
-    }
-    pub fn multiply_constant(
-        &mut self,
-        gl: &mut GlobalContext,
-        src: VariableKey,
-        constant: impl Into<i64>,
-    ) -> VariableKey {
-        let size = gl.vars[src].size;
-        let constant = constant.into();
-
-        if constant == 0 {
-            self.constant(gl, Bits::new_zeroed(size))
-        } else if constant == 1 {
-            src
-        } else {
-            let constant = self.constant(
-                gl,
-                Bits::from_u64(VectorSize::new(64).unwrap(), constant as u64)
-                    .truncate_or_sign_extend(size),
-            );
-            self.multiply(gl, src, constant)
-        }
     }
 
     pub fn select_bit(
@@ -415,14 +600,27 @@ impl BasicBlockBuilder {
         width: VectorSize,
     ) -> VariableKey {
         let size = gl.vars[src].size;
+        assert!(gl.vars[src].size >= width);
         if offset == 0 {
             return self.truncate(gl, src, width);
         }
         if offset >= size.get() {
             return self.constant(gl, Bits::new_unknown(width));
         }
-        let offset = self.constant_u32(gl, offset);
-        self.slice(gl, src, offset, width)
+        let dst = self.next_tmp_var(gl, width);
+        self.bin_imm_op(gl, src, Bits::new_u32(offset), BinaryImmOp::Slice, dst);
+        if offset + width.get() > size.get() {
+            // BinaryOp::Slice and BinaryImmOp::Slice are slightly different in that out-of-bounds
+            // values are set as unknown for BinaryOp::Slice and set as zeros for
+            // BinaryImmOp::Slice. We compensate to compensate for that here.
+            self.or_constant(
+                gl,
+                dst,
+                Bits::new_unknown(width).logical_shift_left(size.get() - offset),
+            )
+        } else {
+            dst
+        }
     }
     pub fn slice(
         &mut self,
@@ -997,16 +1195,6 @@ impl BasicBlockBuilder {
         let dst = self.next_tmp_var(gl, SCALAR_VSIZE);
         self.bin_op(gl, before, after, BinaryOp::Negedge, dst);
         dst
-    }
-
-    pub fn plus_constant(
-        &mut self,
-        gl: &mut GlobalContext,
-        src: VariableKey,
-        constant: Bits,
-    ) -> VariableKey {
-        let constant = self.constant(gl, constant);
-        self.plus(gl, src, constant)
     }
 
     pub fn minus_revconstant(

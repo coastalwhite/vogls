@@ -49,7 +49,7 @@ impl Mode {
         }
     }
 
-    const fn max_inline_size(self) -> VectorSize {
+    pub const fn max_inline_size(self) -> VectorSize {
         VectorSize::new(match self {
             Mode::TwoValue => 64,
             Mode::FourValue => 32,
@@ -237,7 +237,23 @@ impl PartialEq for Bits {
             return false;
         }
 
-        Self::u64_reduce_op(self, other, |l, r| l == r, |c1, c2| c1 && c2)
+        use Mode as M;
+        match (self.mode, other.mode) {
+            (M::TwoValue, M::FourValue) if other.contains_special() => return false,
+            (M::FourValue, M::TwoValue) if self.contains_special() => return false,
+            _ => {}
+        }
+
+        let slf_data = self.as_data_ref();
+        let (slf_val, slf_spc) = slf_data.to_u64_slices();
+        let other_data = other.as_data_ref();
+        let (other_val, other_spc) = other_data.to_u64_slices();
+
+        if self.mode == M::FourValue && other.mode == M::FourValue {
+            slf_val == other_val && slf_spc == other_spc
+        } else {
+            slf_val == other_val
+        }
     }
 }
 
@@ -660,13 +676,32 @@ impl Bits {
     }
 
     pub fn count_ones(&self) -> u32 {
-        self.as_u64_slice()
-            .iter()
-            .map(|b| b.count_ones())
-            .sum::<u32>()
+        match self.as_data_ref() {
+            BitsDataRef::InlineTv(v) => v.count_ones(),
+            BitsDataRef::SeparateTv(v) => v.iter().map(|v| v.count_ones()).sum(),
+            BitsDataRef::InlineFv(spc, val) => (spc & val).count_ones(),
+            BitsDataRef::SeparateFv(v) => v[..v.len() / 2]
+                .iter()
+                .zip(&v[v.len() / 2..])
+                .map(|(spc, val)| (spc & val).count_ones())
+                .sum(),
+        }
     }
     pub fn count_zeros(&self) -> u32 {
         self.size.get() - self.count_ones()
+    }
+    pub fn count_special(&self) -> u32 {
+        match self.as_data_ref() {
+            BitsDataRef::InlineTv(..) | BitsDataRef::SeparateTv(..) => 0,
+            BitsDataRef::InlineFv(spc, _) => self.size().get() - spc.count_ones(),
+            BitsDataRef::SeparateFv(v) => {
+                self.size().get()
+                    - v[..v.len() / 2]
+                        .iter()
+                        .map(|spc| spc.count_ones())
+                        .sum::<u32>()
+            }
+        }
     }
 
     pub fn reduce_or(&self) -> FvLogicValue {
@@ -733,6 +768,9 @@ impl Bits {
     }
     pub fn not_eq_zero(&self) -> bool {
         self.reduce_or() == FvLogicValue::L1
+    }
+    pub fn eq_one(&self) -> bool {
+        !self.contains_special() && self.leading_zeroes() == self.size().get() - 1
     }
 
     pub fn concatenate(lhs: &Bits, rhs: &Bits) -> Bits {
@@ -909,9 +947,69 @@ impl Bits {
         (self.as_slice()[(at / 8) as usize] >> at % 8) & 1 != 0
     }
 
-    pub fn slice(&self, offset: u32, size: VectorSize) -> Self {
-        // @Performance
-        self.logical_shift_right(offset).truncate(size)
+    pub fn slicex(&self, offset: u32, size: VectorSize) -> Self {
+        match self.as_data_ref() {
+            BitsDataRef::InlineTv(src) if size <= Mode::FourValue.max_inline_size() => {
+                let (spc, val) = slice::tv_s_slice(src, offset, size, self.size());
+                Self::from_four_value_u64(size, spc as u32, val as u32)
+            }
+            BitsDataRef::InlineTv(src) => {
+                let (spc, val) = slice::tv_s_slice(src, offset, size, self.size());
+                Self::from_boxed_slice(Mode::FourValue, size, [spc, val].into())
+            }
+            BitsDataRef::SeparateTv(src) if size <= Mode::FourValue.max_inline_size() => {
+                let (spc, val) = slice::tv_ls_slice(src, offset, size, self.size());
+                Self::from_four_value_u64(size, spc as u32, val as u32)
+            }
+            BitsDataRef::SeparateTv(src) => {
+                let mut dst = vec![0u64; size_to_num_words(size) * 2];
+                slice::tv_ll_slice(&mut dst, src, offset, size, self.size(), true);
+                Self::from_boxed_slice(Mode::FourValue, size, dst.into())
+            }
+            BitsDataRef::InlineFv(spc, val) => {
+                let (spc, val) = slice::fv_s_slice(spc, val, offset, size, self.size(), true);
+                Self::from_four_value_u64(size, spc as u32, val as u32)
+            }
+            BitsDataRef::SeparateFv(src) if size <= Mode::FourValue.max_inline_size() => {
+                let (spc, val) = slice::fv_ls_slice(src, offset, size, self.size(), true);
+                Self::from_four_value_u64(size, spc as u32, val as u32)
+            }
+            BitsDataRef::SeparateFv(src) => {
+                let mut dst = vec![0u64; size_to_num_words(size) * 2];
+                slice::fv_ll_slice(&mut dst, src, offset, size, self.size(), true);
+                Self::from_boxed_slice(Mode::FourValue, size, dst.into())
+            }
+        }
+    }
+    pub fn slicez(&self, offset: u32, size: VectorSize) -> Self {
+        match self.as_data_ref() {
+            BitsDataRef::InlineTv(src) => {
+                let (_spc, val) = slice::tv_s_slice(src, offset, size, self.size());
+                Self::from_u64(size, val)
+            }
+            BitsDataRef::SeparateTv(src) if size <= Mode::TwoValue.max_inline_size() => {
+                let (_spc, val) = slice::tv_ls_slice(src, offset, size, self.size());
+                Self::from_u64(size, val)
+            }
+            BitsDataRef::SeparateTv(src) => {
+                let mut dst = vec![0u64; size_to_num_words(size)];
+                slice::tv_ll_slice(&mut dst, src, offset, size, self.size(), false);
+                Self::from_boxed_slice(Mode::TwoValue, size, dst.into())
+            }
+            BitsDataRef::InlineFv(spc, val) => {
+                let (spc, val) = slice::fv_s_slice(spc, val, offset, size, self.size(), false);
+                Self::from_four_value_u64(size, spc as u32, val as u32)
+            }
+            BitsDataRef::SeparateFv(src) if size <= Mode::FourValue.max_inline_size() => {
+                let (spc, val) = slice::fv_ls_slice(src, offset, size, self.size(), false);
+                Self::from_four_value_u64(size, spc as u32, val as u32)
+            }
+            BitsDataRef::SeparateFv(src) => {
+                let mut dst = vec![0u64; size_to_num_words(size) * 2];
+                slice::fv_ll_slice(&mut dst, src, offset, size, self.size(), false);
+                Self::from_boxed_slice(Mode::FourValue, size, dst.into())
+            }
+        }
     }
 
     pub fn extract_exact_u32(&self) -> u32 {
@@ -1276,6 +1374,25 @@ impl Bits {
             }
         }
     }
+
+    pub fn special_to_zero(&self) -> Bits {
+        match self.as_data_ref() {
+            BitsDataRef::InlineTv(_) | BitsDataRef::SeparateTv(_) => self.clone(),
+            BitsDataRef::InlineFv(spc, val) => Self::from_u64(self.size(), spc & val),
+            BitsDataRef::SeparateFv(v) if self.size() <= Mode::TwoValue.max_inline_size() => {
+                Self::from_u64(self.size(), v[0] & v[1])
+            }
+            BitsDataRef::SeparateFv(v) => Self::from_boxed_slice(
+                Mode::TwoValue,
+                self.size(),
+                v[..v.len() / 2]
+                    .iter()
+                    .zip(&v[v.len() / 2..])
+                    .map(|(spc, val)| spc & val)
+                    .collect(),
+            ),
+        }
+    }
 }
 
 macro_rules! impl_shift {
@@ -1336,7 +1453,11 @@ impl fmt::Display for Bits {
             "{}",
             self.display(&BitsFormatOptions {
                 prefix: true,
-                base: format::BitsFormatBase::UpperHex,
+                base: if self.contains_special() {
+                    format::BitsFormatBase::Binary
+                } else {
+                    format::BitsFormatBase::UpperHex
+                },
                 separator: Some('_'),
                 align: None,
                 fill: '0',

@@ -425,8 +425,11 @@ pub fn lower_expr<'a>(
                                 idx_ty,
                                 INTEGER_VSIZE,
                             );
-                            let mut offset =
-                                builder.multiply_constant(&mut mctx.gl, idx, leaf_arr_items);
+                            let mut offset = builder.multiply_constant(
+                                &mut mctx.gl,
+                                idx,
+                                Bits::new_u32(leaf_arr_items),
+                            );
 
                             while let Some(dim) = dims.last()
                                 && exprs.pop_front().is_some()
@@ -445,8 +448,11 @@ pub fn lower_expr<'a>(
                                     expr_ty,
                                     INTEGER_VSIZE,
                                 );
-                                let expr =
-                                    builder.multiply_constant(mctx.gl(), expr, leaf_arr_items);
+                                let expr = builder.multiply_constant(
+                                    mctx.gl(),
+                                    expr,
+                                    Bits::new_u32(leaf_arr_items),
+                                );
                                 offset = builder.plus(mctx.gl(), offset, expr);
                                 dims = &dims[..dims.len() - 1];
                             }
@@ -464,7 +470,11 @@ pub fn lower_expr<'a>(
 
                             let size = s.ty.force_net_width();
                             let variable = s.net.probe(mctx.gl(), builder);
-                            let offset = builder.multiply_constant(mctx.gl(), offset, size.get());
+                            let offset = builder.multiply_constant(
+                                mctx.gl(),
+                                offset,
+                                Bits::new_u32(size.get()),
+                            );
                             let variable = builder.slice(mctx.gl(), variable, offset, size);
 
                             (s.ty, variable)

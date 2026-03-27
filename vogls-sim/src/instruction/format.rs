@@ -47,12 +47,20 @@ impl fmt::Display for VmInstruction {
                     op.into_mnemonic()
                 )
             }
-            Self::TvSlice(dst, src1, src2) => {
-                write!(
-                    f,
-                    "{} = tv.slice[{}] {}, {src2}",
-                    dst.offset, dst.size, src1.offset
-                )
+            Self::TvSlice(dst, src1, src2, fill_with_x) => {
+                if *fill_with_x {
+                    write!(
+                        f,
+                        "{} = tv.slicex[{}] {}, {src2}",
+                        dst.offset, dst.size, src1.offset
+                    )
+                } else {
+                    write!(
+                        f,
+                        "{} = tv.slicez[{}] {}, {src2}",
+                        dst.offset, dst.size, src1.offset
+                    )
+                }
             }
             Self::TvConcat(dst, src1, src2) => {
                 write!(f, "{dst} = tv.concat {}, {}", src1.offset, src2.offset)
@@ -103,12 +111,20 @@ impl fmt::Display for VmInstruction {
                     dst = dst.offset
                 )
             }
-            Self::FvSlice(dst, src1, src2) => {
-                write!(
-                    f,
-                    "{} = fv.slice[{}] {}, {src2}",
-                    dst.offset, dst.size, src1.offset
-                )
+            Self::FvSlice(dst, src1, src2, fill_with_x) => {
+                if *fill_with_x {
+                    write!(
+                        f,
+                        "{} = fv.slicex[{}] {}, {src2}",
+                        dst.offset, dst.size, src1.offset
+                    )
+                } else {
+                    write!(
+                        f,
+                        "{} = fv.slicez[{}] {}, {src2}",
+                        dst.offset, dst.size, src1.offset
+                    )
+                }
             }
             Self::FvConcat(dst, src1, src2) => {
                 write!(f, "{dst} = fv.concat {}, {}", src1.offset, src2.offset)

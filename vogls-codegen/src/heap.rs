@@ -9,11 +9,16 @@ use vogls_ir::{Bits, INTEGER_VSIZE, LogicMode, SCALAR_VSIZE, TIME_VSIZE, VectorS
 pub struct HeapBuilder {
     top: usize,
     padding: usize,
+    constants: Vec<(HeapOffset, Bits, LogicMode)>,
 }
 
 impl HeapBuilder {
     pub fn new() -> Self {
-        Self { top: 0, padding: 0 }
+        Self {
+            top: 0,
+            padding: 0,
+            constants: Vec::new(),
+        }
     }
 
     pub fn claim(&mut self, mode: LogicMode, size: VectorSize) -> HeapRef {
@@ -40,6 +45,12 @@ impl HeapBuilder {
         heap_ref.to_ref(size)
     }
 
+    pub fn claim_constant(&mut self, mode: LogicMode, bits: Bits) -> HeapRef {
+        let heap_ref = self.claim(mode, bits.size());
+        self.constants.push((heap_ref.offset, bits, mode));
+        heap_ref
+    }
+
     pub fn top(&self) -> usize {
         self.top
     }
@@ -48,7 +59,11 @@ impl HeapBuilder {
     }
 
     pub fn finish(self) -> Heap {
-        Heap(vec![0u64; self.top.div_ceil(64)].into())
+        let mut heap = Heap(vec![0u64; self.top.div_ceil(64)].into());
+        for (heap_offset, value, mode) in self.constants {
+            heap.store_bits(heap_offset.to_ref(value.size()), mode, &value);
+        }
+        heap
     }
 }
 

@@ -434,6 +434,58 @@ pub enum BinaryOp {
     Negedge,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BinaryImmOp {
+    And,
+    Or,
+    Xor,
+
+    Add,
+    /// Operand - Imm
+    Sub,
+    /// Operand ** Imm
+    Power,
+    Multiply,
+    /// Operand / Imm
+    Divide,
+    /// Operand % Imm
+    Modulus,
+
+    /// Imm - Operand
+    RevSub,
+    /// Imm ** Operand
+    RevPower,
+    /// Imm / Operand
+    RevDivide,
+    /// Imm % Operand
+    RevModulus,
+
+    /// Operand <= Imm
+    UnsignedLessEqual,
+    /// Imm <= Operand
+    UnsignedGreaterEqual,
+
+    /// (Operand >> Imm).Truncate()
+    Slice,
+
+    /// Operand << Imm
+    LogicalShiftLeft,
+    /// Operand >> Imm
+    LogicalShiftRight,
+    /// Operand >>> Imm
+    ArithmeticShiftRight,
+
+    /// { Operand, Imm }
+    ConcatRight,
+    /// { Imm, Operand }
+    ConcatLeft,
+
+    Min,
+    Max,
+
+    CaseEquality,
+}
+
 #[derive(Debug, Clone)]
 pub enum Instruction {
     Constant(VariableKey, Bits),
@@ -441,6 +493,7 @@ pub enum Instruction {
     Unary(VariableKey, UnaryOp, VariableKey),
     Resize(VariableKey, ResizeOp, VariableKey),
     Binary(VariableKey, BinaryOp, VariableKey, VariableKey),
+    BinaryImm(VariableKey, BinaryImmOp, VariableKey, Bits),
 
     Intrinsic(VariableKey, Box<IntrinsicOp>, Box<[VariableKey]>),
     /// Store the 64-bit simulation time when a signal was last updated.
@@ -458,6 +511,7 @@ impl Instruction {
             | Self::Unary(dst, _, _)
             | Self::Resize(dst, _, _)
             | Self::Binary(dst, _, _, _)
+            | Self::BinaryImm(dst, _, _, _)
             | Self::Phi(dst, _)
             | Self::LastUpdateTime(dst, _)
             | Self::Probe(dst, _)
@@ -472,6 +526,7 @@ impl Instruction {
             | Self::Unary(dst, _, _)
             | Self::Resize(dst, _, _)
             | Self::Binary(dst, _, _, _)
+            | Self::BinaryImm(dst, _, _, _)
             | Self::Phi(dst, _)
             | Self::LastUpdateTime(dst, _)
             | Self::Probe(dst, _)
@@ -482,7 +537,9 @@ impl Instruction {
 
     fn for_each_var_src(&self, mut f: impl FnMut(VariableKey)) {
         match self {
-            Self::Unary(_, _, src) | Self::Resize(_, _, src) => f(*src),
+            Self::Unary(_, _, src) | Self::Resize(_, _, src) | Self::BinaryImm(_, _, src, _) => {
+                f(*src)
+            }
             Self::Binary(_, _, src1, src2) => {
                 f(*src1);
                 f(*src2);
@@ -513,6 +570,7 @@ impl Instruction {
             | Self::Unary(..)
             | Self::Resize(..)
             | Self::Binary(..)
+            | Self::BinaryImm(..)
             | Self::Phi(..)
             | Self::LastUpdateTime(..)
             | Self::Probe(..) => false,
@@ -522,7 +580,9 @@ impl Instruction {
 
     fn map_vars(&mut self, mut f: impl FnMut(VariableKey) -> VariableKey) {
         match self {
-            Self::Unary(dst, _, src) | Self::Resize(dst, _, src) => {
+            Self::Unary(dst, _, src)
+            | Self::Resize(dst, _, src)
+            | Self::BinaryImm(dst, _, src, _) => {
                 *dst = f(*dst);
                 *src = f(*src)
             }
@@ -556,7 +616,9 @@ impl Instruction {
     }
     fn for_each_var(&self, mut f: impl FnMut(VariableKey)) {
         match self {
-            Self::Unary(dst, _, src) | Self::Resize(dst, _, src) => {
+            Self::Unary(dst, _, src)
+            | Self::Resize(dst, _, src)
+            | Self::BinaryImm(dst, _, src, _) => {
                 f(*dst);
                 f(*src)
             }
@@ -591,7 +653,9 @@ impl Instruction {
 
     pub fn for_each_src(&self, mut f: impl FnMut(VariableKey)) {
         match self {
-            Self::Unary(_, _, src) | Self::Resize(_, _, src) => f(*src),
+            Self::Unary(_, _, src) | Self::Resize(_, _, src) | Self::BinaryImm(_, _, src, _) => {
+                f(*src)
+            }
             Self::Binary(_, _, src1, src2) => {
                 f(*src1);
                 f(*src2);
@@ -625,6 +689,7 @@ impl Instruction {
             | Instruction::Unary(..)
             | Instruction::Resize(..)
             | Instruction::Binary(..)
+            | Instruction::BinaryImm(..)
             | Instruction::Intrinsic(..)
             | Instruction::Phi(..) => {}
         }
@@ -636,6 +701,7 @@ impl Instruction {
             | Instruction::Unary(..)
             | Instruction::Resize(..)
             | Instruction::Binary(..)
+            | Instruction::BinaryImm(..)
             | Instruction::Intrinsic(..)
             | Instruction::Probe(..)
             | Instruction::Drive(..)
@@ -643,6 +709,20 @@ impl Instruction {
             Instruction::Phi(_, items) => items.iter_mut().for_each(|(bb, _)| {
                 *bb = f(*bb);
             }),
+        }
+    }
+
+    pub fn for_each_bits(&self, mut f: impl FnMut(&Bits)) {
+        match self {
+            Instruction::Constant(_, bits) | Instruction::BinaryImm(_, _, _, bits) => f(bits),
+            Instruction::Unary(..)
+            | Instruction::Resize(..)
+            | Instruction::Binary(..)
+            | Instruction::Intrinsic(..)
+            | Instruction::Phi(..)
+            | Instruction::Probe(..)
+            | Instruction::Drive(..)
+            | Instruction::LastUpdateTime(..) => {}
         }
     }
 }
@@ -686,7 +766,7 @@ impl BinaryOp {
 
             O::UnsignedLessEqual => Bits::from(Bits::is_unsigned_leq(lhs, rhs)),
             O::CaseEquality => Bits::from(lhs == rhs),
-            O::Slice => Bits::from(lhs.slice(rhs.extract_exact_u32(), dst_size)),
+            O::Slice => Bits::from(lhs.slicex(rhs.extract_exact_u32(), dst_size)),
             O::LogicalShiftLeft => lhs.logical_shift_left(rhs.extract_exact_u32()),
             O::LogicalShiftRight => lhs.logical_shift_right(rhs.extract_exact_u32()),
             O::ArithmeticShiftRight => lhs.arithmetic_shift_right(rhs.extract_exact_u32()),
@@ -714,6 +794,50 @@ impl BinaryOp {
 
     pub fn always_outputs_four_value(&self) -> bool {
         matches!(self, Self::Slice)
+    }
+}
+
+impl BinaryImmOp {
+    fn evaluate(self, src: &Bits, imm: &Bits, dst_size: VectorSize) -> Bits {
+        use BinaryImmOp as O;
+        match self {
+            O::And => Bits::bitwise_and(src, imm),
+            O::Or => Bits::bitwise_or(src, imm),
+            O::Xor => Bits::bitwise_xor(src, imm),
+            O::Add => Bits::add(src, imm),
+            O::Sub => Bits::subtract(src, imm),
+            O::Power => Bits::power(src, imm),
+            O::Multiply => Bits::multiply(src, imm),
+            O::Divide => Bits::divide(src, imm),
+            O::Modulus => Bits::remainder(src, imm),
+
+            O::RevSub => Bits::subtract(imm, src),
+            O::RevPower => Bits::power(imm, src),
+            O::RevDivide => Bits::divide(imm, src),
+            O::RevModulus => Bits::remainder(imm, src),
+
+            O::UnsignedLessEqual => Bits::from(Bits::is_unsigned_leq(src, imm)),
+            O::UnsignedGreaterEqual => Bits::from(Bits::is_unsigned_leq(imm, src)),
+            O::CaseEquality => Bits::from(src == imm),
+            O::Slice => Bits::from(src.slicez(imm.extract_exact_u32(), dst_size)),
+            O::LogicalShiftLeft => src.logical_shift_left(imm.extract_exact_u32()),
+            O::LogicalShiftRight => src.logical_shift_right(imm.extract_exact_u32()),
+            O::ArithmeticShiftRight => src.arithmetic_shift_right(imm.extract_exact_u32()),
+            O::ConcatLeft => Bits::concatenate(imm, src),
+            O::ConcatRight => Bits::concatenate(src, imm),
+
+            O::Min => Bits::min(src, imm),
+            O::Max => Bits::max(src, imm),
+        }
+    }
+
+    pub fn always_outputs_bool(&self) -> bool {
+        matches!(self, Self::CaseEquality)
+    }
+
+    pub fn always_outputs_four_value(&self) -> bool {
+        false
+        // matches!(self, Self::RevDivide | Self::RevModulus)
     }
 }
 

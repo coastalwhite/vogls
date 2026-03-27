@@ -90,11 +90,11 @@ pub fn cgc_truncate(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Result<
             if num_copy_words > 0 {
                 writeln!(
                     f,
-                    "{INDENT}memmove({d}, {s}, {num_copy_words}*sizeof(uint64_t));"
+                    "{INDENT}memcpy({d}, {s}, {num_copy_words}*sizeof(uint64_t));"
                 )?;
                 writeln!(
                     f,
-                    "{INDENT}memmove({d}+{dst_num_words}, {s}+{src_num_words}, {num_copy_words}*sizeof(uint64_t));"
+                    "{INDENT}memcpy({d}+{dst_num_words}, {s}+{src_num_words}, {num_copy_words}*sizeof(uint64_t));"
                 )?;
             }
             if dst.ty.size.get() % 64 != 0 {
@@ -189,11 +189,11 @@ pub fn cgc_zero_extend(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Resu
             let dst_num_words = dst_arr_size / 2;
             writeln!(
                 f,
-                "{INDENT}memmove({d}, {s}, {src_num_words}*sizeof(uint64_t));"
+                "{INDENT}memcpy({d}, {s}, {src_num_words}*sizeof(uint64_t));"
             )?;
             writeln!(
                 f,
-                "{INDENT}memmove({d}+{dst_num_words}, {s}+{src_num_words}, {src_num_words}*sizeof(uint64_t));"
+                "{INDENT}memcpy({d}+{dst_num_words}, {s}+{src_num_words}, {src_num_words}*sizeof(uint64_t));"
             )?;
             if src.ty.size.get() % 64 != 0 {
                 let ext_mask = mask((dst.ty.size.get() - src.ty.size.get()).min(63))
@@ -280,7 +280,7 @@ pub fn cgc_sign_extend(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Resu
             if num_items_main_loop > 0 {
                 writeln!(
                     f,
-                    "{INDENT}memmove({d}, {s}, {num_items_main_loop}*sizeof(uint64_t));"
+                    "{INDENT}memcpy({d}, {s}, {num_items_main_loop}*sizeof(uint64_t));"
                 )?;
             }
             let last_src_i = src_arr_size - 1;
@@ -390,11 +390,11 @@ pub fn cgc_sign_extend(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Resu
             if num_items_main_loop > 0 {
                 writeln!(
                     f,
-                    "{INDENT}memmove({d}, {s}, {num_items_main_loop}*sizeof(uint64_t));"
+                    "{INDENT}memcpy({d}, {s}, {num_items_main_loop}*sizeof(uint64_t));"
                 )?;
                 writeln!(
                     f,
-                    "{INDENT}memmove({d}+{dst_num_words}, {s}+{src_num_words}, {num_items_main_loop}*sizeof(uint64_t));"
+                    "{INDENT}memcpy({d}+{dst_num_words}, {s}+{src_num_words}, {num_items_main_loop}*sizeof(uint64_t));"
                 )?;
             }
             let src_num_words_m_1 = src_num_words - 1;

@@ -86,7 +86,7 @@ pub fn drive(
         super::load(f, dst_ref.offset, v)?;
         v
     };
-    super::slice::slice_with(f, current, s1, offset, false)?;
+    super::slice::slice_with(f, current, s1.into(), offset.into(), false)?;
     let c = current.ident;
     let o = offset.ident;
     match src.ty.array_size() {

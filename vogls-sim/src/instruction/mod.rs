@@ -75,7 +75,7 @@ pub enum VmInstruction {
     TvBinaryComparison(HeapOffset, BinaryComparisonOp, HeapRef, HeapOffset),
     TvEdge(HeapOffset, EdgeOp, HeapOffset, HeapOffset),
     TvShift(HeapRef, ShiftOp, HeapOffset, HeapOffset),
-    TvSlice(HeapRef, HeapRef, HeapOffset),
+    TvSlice(HeapRef, HeapRef, HeapOffset, bool),
     TvConcat(HeapOffset, HeapRef, HeapRef),
 
     FvUnary(HeapOffset, UnaryOp, HeapRef),
@@ -84,7 +84,7 @@ pub enum VmInstruction {
     FvBinaryComparison(HeapOffset, BinaryComparisonOp, HeapRef, HeapOffset),
     FvEdge(HeapOffset, EdgeOp, HeapOffset, HeapOffset),
     FvShift(HeapRef, ShiftOp, HeapOffset, HeapOffset),
-    FvSlice(HeapRef, HeapRef, HeapOffset),
+    FvSlice(HeapRef, HeapRef, HeapOffset, bool),
     FvConcat(HeapOffset, HeapRef, HeapRef),
 
     TvToFv(HeapRef, HeapOffset),
@@ -140,7 +140,7 @@ impl VmInstruction {
                 ("src", false, src.to_ref(dst.size)),
                 ("shift", false, shift.to_32bit_ref()),
             ],
-            I::TvSlice(dst, src, idx) => &[
+            I::TvSlice(dst, src, idx, _fill_with_x) => &[
                 ("dst", true, *dst),
                 ("src", false, *src),
                 ("idx", false, idx.to_32bit_ref()),
@@ -188,7 +188,7 @@ impl VmInstruction {
                 ("src", true, src.to_ref(dst.size)),
                 ("shift", true, shift.to_32bit_ref()),
             ],
-            I::FvSlice(dst, src, idx) => &[
+            I::FvSlice(dst, src, idx, _fill_with_x) => &[
                 ("dst", true, *dst),
                 ("src", true, *src),
                 ("idx", true, idx.to_32bit_ref()),

@@ -42,7 +42,7 @@ pub fn cgc_negate(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Result<()
             let num_words = arr_size / 2;
             writeln!(
                 f,
-                "{INDENT}memmove({d}, {s}, {num_words}*sizeof(uint64_t));"
+                "{INDENT}memcpy({d}, {s}, {num_words}*sizeof(uint64_t));"
             )?;
             writeln!(
                 f,

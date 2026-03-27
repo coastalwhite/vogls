@@ -4,34 +4,34 @@ use vogls_ir::{INTEGER_VSIZE, LogicMode};
 use vogls_utils::saturating_rem;
 
 use super::INDENT;
-use crate::CVar;
+use crate::{CExpr, CVar};
 
-pub fn slice(f: &mut impl io::Write, dst: CVar, src: CVar, offset: CVar) -> io::Result<()> {
+pub fn slice(f: &mut impl io::Write, dst: CVar, src: CExpr<'_>, offset: CExpr<'_>) -> io::Result<()> {
     slice_with(f, dst, src, offset, true)
 }
 
 pub fn slice_with(
     f: &mut impl io::Write,
     dst: CVar,
-    src: CVar,
-    offset: CVar,
+    src: CExpr<'_>,
+    offset: CExpr<'_>,
     fill_with_x: bool,
 ) -> io::Result<()> {
-    assert_eq!(offset.ty.size, INTEGER_VSIZE);
+    assert_eq!(offset.ty().size, INTEGER_VSIZE);
     if fill_with_x {
         assert_eq!(dst.ty.mode, LogicMode::FourValue);
     } else {
-        assert_eq!(src.ty.mode, dst.ty.mode);
+        assert_eq!(src.ty().mode, dst.ty.mode);
     }
-    assert!(src.ty.size >= dst.ty.size);
+    assert!(src.ty().size >= dst.ty.size);
 
     use LogicMode as M;
-    let (d, s, o) = (dst.ident, src.ident, offset.ident);
+    let (d, s, o) = (dst.ident, src, offset);
     let d_size = dst.ty.size;
-    let s_size = src.ty.size;
+    let s_size = src.ty().size;
     let d_elem_ty = dst.ty.element_type();
     let mask = super::mask(saturating_rem(dst.ty.size.get(), 64));
-    match (src.ty.mode, dst.ty.array_size(), src.ty.array_size()) {
+    match (src.ty().mode, dst.ty.array_size(), src.ty().array_size()) {
         (M::TwoValue, None, None) => {
             write!(f, "{INDENT}{d} = ({d_elem_ty})(({o} >= {s_size}) ? 0 : (")?;
             if fill_with_x {
@@ -39,7 +39,7 @@ pub fn slice_with(
                 write!(
                     f,
                     "(({diff}>={o}) ? (({d_elem_ty})0x{mask:x}) : ((({d_elem_ty})0x{mask:x}) >> ({o}-{diff}))) |",
-                    diff = src.ty.size.get() - dst.ty.size.get()
+                    diff = src.ty().size.get() - dst.ty.size.get()
                 )?;
             }
             // val
@@ -57,7 +57,7 @@ pub fn slice_with(
                 write!(
                     f,
                     "(({diff}>={o}) ? (({d_elem_ty})0x{mask:x}) : ((({d_elem_ty})0x{mask:x}) >> ({o}-{diff}))) |",
-                    diff = src.ty.size.get() - dst.ty.size.get()
+                    diff = src.ty().size.get() - dst.ty.size.get()
                 )?;
             }
             // val

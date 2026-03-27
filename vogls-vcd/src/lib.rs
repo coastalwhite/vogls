@@ -285,7 +285,7 @@ fn dump_time_step(
         for (v, slice) in map[*signal].iter() {
             let bits = match slice {
                 None => bits.clone(),
-                Some(slice) => bits.slice(slice.lsb(), slice.width()),
+                Some(slice) => bits.slicez(slice.lsb(), slice.width()),
             };
             if bits.size().get() > 1 {
                 f.write_all(&[b'b'])?;

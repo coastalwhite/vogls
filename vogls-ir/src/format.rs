@@ -2,8 +2,7 @@ use core::fmt;
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryOp, GlobalContext, Instruction,
-    IntrinsicOp, Process, ResizeOp, Signal, Time, UnaryOp, VariableKey,
+    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext, Instruction, IntrinsicOp, Process, ResizeOp, Signal, Time, UnaryOp, VariableKey
 };
 
 const INDENT: &str = "  ";
@@ -159,6 +158,39 @@ impl BinaryOp {
     }
 }
 
+impl BinaryImmOp {
+    pub const fn into_mnemonic(&self) -> &'static str {
+        match self {
+            Self::And => "andi",
+            Self::Or => "ori",
+            Self::Xor => "xori",
+            Self::Add => "addi",
+            Self::Sub => "subi",
+            Self::Power => "powi",
+            Self::Multiply => "muli",
+            Self::Divide => "divi",
+            Self::Modulus => "remi",
+            Self::RevSub => "revsubi",
+            Self::RevPower => "revpowi",
+            Self::RevDivide => "revdivi",
+            Self::RevModulus => "revremi",
+
+            Self::UnsignedLessEqual => "ulei",
+            Self::UnsignedGreaterEqual => "ugei",
+            Self::CaseEquality => "ceqi",
+            Self::Slice => "slicei",
+            Self::LogicalShiftLeft => "lsl",
+            Self::LogicalShiftRight => "lsr",
+            Self::ArithmeticShiftRight => "asr",
+            Self::ConcatRight => "concati.r",
+            Self::ConcatLeft => "concati.l",
+
+            Self::Min => "min",
+            Self::Max => "max",
+        }
+    }
+}
+
 impl UnaryOp {
     pub const fn into_mnemonic(&self) -> &'static str {
         match self {
@@ -228,6 +260,13 @@ impl ContextFormat for Instruction {
                     write!(f, "[{}]", ctx.gl.vars[*dst].size)?;
                 }
                 write!(f, " {}, {}", src1.display(ctx), src2.display(ctx),)?;
+            }
+            Self::BinaryImm(dst, op, src, imm) => {
+                write!(f, "{} = {}", dst.display(ctx), op.into_mnemonic(),)?;
+                if *op == BinaryImmOp::Slice {
+                    write!(f, "[{}]", ctx.gl.vars[*dst].size)?;
+                }
+                write!(f, " {}, {imm}", src.display(ctx))?;
             }
             Self::Intrinsic(dst, op, args) => {
                 dst.ctx_fmt(f, ctx)?;

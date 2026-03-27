@@ -310,6 +310,7 @@ pub fn propagate_constants<'a>(
                         },
                     )
                 }
+                I::BinaryImm(_, _, _, _) => continue,
                 I::Intrinsic(_, _, _) => continue,
                 I::LastUpdateTime(_, _) => continue,
                 I::Probe(_, _) => continue,
