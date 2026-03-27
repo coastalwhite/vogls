@@ -839,6 +839,205 @@ impl BinaryImmOp {
         false
         // matches!(self, Self::RevDivide | Self::RevModulus)
     }
+
+    fn simplify(
+        self,
+        dst: VariableKey,
+        dst_size: VectorSize,
+        src: VariableKey,
+        src_size: VectorSize,
+        imm: &Bits,
+    ) -> BinaryImmOpSimplification {
+        use BinaryImmOp as O;
+        use BinaryImmOpSimplification as S;
+        match self {
+            O::And => {
+                let num_special = imm.count_special();
+                if num_special == imm.size().get() {
+                    return S::Constant(Bits::new_unknown(imm.size()));
+                }
+
+                let num_ones = imm.count_ones();
+                if num_ones == imm.size().get() {
+                    return S::Source;
+                } else if num_special == 0 && num_ones == 0 {
+                    return S::Immediate;
+                }
+
+                S::Keep
+            }
+            O::Or => {
+                let num_special = imm.count_special();
+                if num_special == imm.size().get() {
+                    return S::Constant(Bits::new_unknown(imm.size()));
+                }
+
+                let num_ones = imm.count_ones();
+                if num_ones == imm.size().get() {
+                    return S::Immediate;
+                } else if num_special == 0 && num_ones == 0 {
+                    return S::Source;
+                }
+
+                S::Keep
+            }
+            O::Xor => {
+                let num_special = imm.count_special();
+                if num_special == imm.size().get() {
+                    return S::Constant(Bits::new_unknown(imm.size()));
+                }
+
+                let num_ones = imm.count_ones();
+                if num_ones == imm.size().get() {
+                    return S::Instruction(Instruction::Unary(dst, UnaryOp::Neg, src));
+                } else if num_special == 0 && num_ones == 0 {
+                    return S::Source;
+                }
+
+                S::Keep
+            }
+
+            O::Add
+            | O::Sub
+            | O::Power
+            | O::Multiply
+            | O::Divide
+            | O::Modulus
+            | O::RevSub
+            | O::RevPower
+            | O::RevDivide
+            | O::RevModulus
+            | O::UnsignedLessEqual
+            | O::UnsignedGreaterEqual
+            | O::Slice
+            | O::LogicalShiftLeft
+            | O::LogicalShiftRight
+            | O::ArithmeticShiftRight
+            | O::Min
+            | O::Max
+                if imm.contains_special() =>
+            {
+                S::Constant(Bits::new_unknown(imm.size()))
+            }
+
+            O::Add | O::Sub => {
+                if imm.eq_zero() {
+                    S::Source
+                } else {
+                    S::Keep
+                }
+            }
+            O::Power => {
+                if imm.eq_one() {
+                    S::Source
+                } else {
+                    S::Keep
+                }
+            }
+            O::Multiply => {
+                if imm.eq_zero() {
+                    S::Immediate
+                } else if imm.eq_one() {
+                    S::Source
+                } else {
+                    S::Keep
+                }
+            }
+            O::Divide => {
+                if imm.eq_zero() {
+                    S::Constant(Bits::new_ones(imm.size()))
+                } else if imm.eq_one() {
+                    S::Source
+                } else {
+                    S::Keep
+                }
+            }
+            O::Modulus => {
+                if imm.eq_zero() || imm.eq_one() {
+                    S::Constant(Bits::new_zeroed(imm.size()))
+                } else {
+                    S::Keep
+                }
+            }
+            O::RevSub => S::Keep,
+            O::RevPower => {
+                if imm.eq_one() {
+                    S::Immediate
+                } else {
+                    S::Keep
+                }
+            }
+            O::RevDivide => S::Keep,
+            O::RevModulus => S::Keep,
+            O::UnsignedLessEqual => S::Keep,
+            O::UnsignedGreaterEqual => S::Keep,
+            O::Slice => {
+                let offset = imm.extract_exact_u32();
+                if dst_size == src_size {
+                    if offset == 0 {
+                        S::Source
+                    } else {
+                        S::Instruction(Instruction::BinaryImm(
+                            dst,
+                            O::LogicalShiftRight,
+                            src,
+                            imm.clone(),
+                        ))
+                    }
+                } else if offset >= src_size.get() {
+                    S::Constant(Bits::new_zeroed(dst_size))
+                } else if offset == 0 {
+                    S::Instruction(Instruction::Resize(dst, ResizeOp::Truncate, src))
+                } else {
+                    S::Keep
+                }
+            }
+
+            O::LogicalShiftLeft | O::LogicalShiftRight | O::ArithmeticShiftRight
+                if imm.eq_zero() =>
+            {
+                S::Source
+            }
+            O::LogicalShiftLeft | O::LogicalShiftRight
+                if imm.extract_exact_u32() >= src_size.get() =>
+            {
+                S::Constant(Bits::new_zeroed(src_size))
+            }
+            O::LogicalShiftLeft | O::LogicalShiftRight | O::ArithmeticShiftRight => S::Keep,
+
+            O::ConcatRight => S::Keep,
+            O::ConcatLeft => {
+                if imm.eq_zero() {
+                    S::Instruction(Instruction::Resize(dst, ResizeOp::ZeroExtend, src))
+                } else {
+                    S::Keep
+                }
+            }
+            O::Min => {
+                if imm.eq_zero() {
+                    S::Immediate
+                } else {
+                    S::Keep
+                }
+            }
+            O::Max => {
+                if imm.count_ones() == imm.size().get() {
+                    S::Immediate
+                } else {
+                    S::Keep
+                }
+            }
+            O::CaseEquality => S::Keep,
+        }
+    }
+}
+
+enum BinaryImmOpSimplification {
+    Keep,
+    Source,
+    Immediate,
+    Constant(Bits),
+    Instruction(Instruction),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

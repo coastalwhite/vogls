@@ -1,8 +1,9 @@
 use crate::token_range::TokenRange;
 use crate::{
-    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, Bits, GlobalContext,
-    INTEGER_VSIZE, Instruction, IntrinsicOp, Process, ProcessKey, ResizeOp, SCALAR_VSIZE,
-    SignalKey, TIME_VSIZE, Time, UnaryOp, Variable, VariableKey, VectorSize,
+    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryImmOpSimplification,
+    BinaryOp, Bits, GlobalContext, INTEGER_VSIZE, Instruction, IntrinsicOp, Process, ProcessKey,
+    ResizeOp, SCALAR_VSIZE, SignalKey, TIME_VSIZE, Time, UnaryOp, Variable, VariableKey,
+    VectorSize,
 };
 
 #[must_use]
@@ -223,13 +224,25 @@ impl BasicBlockBuilder {
     }
     pub fn bin_imm_op(
         &mut self,
-        _gl: &mut GlobalContext,
+        gl: &mut GlobalContext,
         src: VariableKey,
         imm: Bits,
         op: BinaryImmOp,
-        dst: VariableKey,
+        dst: &mut VariableKey,
     ) {
-        self.instrs.push(Instruction::BinaryImm(dst, op, src, imm));
+        match op.simplify(*dst, gl.vars[*dst].size, src, gl.vars[src].size, &imm) {
+            BinaryImmOpSimplification::Keep => {
+                self.instrs.push(Instruction::BinaryImm(*dst, op, src, imm))
+            }
+            BinaryImmOpSimplification::Source => *dst = src,
+            BinaryImmOpSimplification::Immediate => {
+                self.instrs.push(Instruction::Constant(*dst, imm))
+            }
+            BinaryImmOpSimplification::Constant(bits) => {
+                self.instrs.push(Instruction::Constant(*dst, bits))
+            }
+            BinaryImmOpSimplification::Instruction(i) => self.instrs.push(i),
+        }
     }
     fn copy_op(
         &mut self,
@@ -267,8 +280,8 @@ impl BasicBlockBuilder {
     ) -> VariableKey {
         let size = gl.vars[src].size;
         assert_eq!(size, imm.size());
-        let dst = self.next_tmp_var(gl, size);
-        self.bin_imm_op(gl, src, imm, op, dst);
+        let mut dst = self.next_tmp_var(gl, size);
+        self.bin_imm_op(gl, src, imm, op, &mut dst);
         dst
     }
 
@@ -607,8 +620,8 @@ impl BasicBlockBuilder {
         if offset >= size.get() {
             return self.constant(gl, Bits::new_unknown(width));
         }
-        let dst = self.next_tmp_var(gl, width);
-        self.bin_imm_op(gl, src, Bits::new_u32(offset), BinaryImmOp::Slice, dst);
+        let mut dst = self.next_tmp_var(gl, width);
+        self.bin_imm_op(gl, src, Bits::new_u32(offset), BinaryImmOp::Slice, &mut dst);
         if offset + width.get() > size.get() {
             // BinaryOp::Slice and BinaryImmOp::Slice are slightly different in that out-of-bounds
             // values are set as unknown for BinaryOp::Slice and set as zeros for

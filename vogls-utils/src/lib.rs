@@ -5,6 +5,7 @@ mod index_map;
 mod non_max_int;
 mod ordered_set;
 mod table;
+pub mod retain;
 
 pub use index_map::{IndexMap, IndexSet};
 pub use non_max_int::{NonMaxU8, NonMaxU32, NonMaxU64, NonMaxUsize};

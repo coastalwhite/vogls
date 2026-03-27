@@ -1,6 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
 use slotmap::{SecondaryMap, SlotMap};
+use vogls_utils::VgHashSet;
+
+pub mod constant_propagation;
 
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryOp, Bits, Instruction, SCALAR_VSIZE,
@@ -11,7 +14,7 @@ pub fn get_fan_in<'a>(
     bbs: &mut SlotMap<BasicBlockKey, BasicBlock>,
     entry: BasicBlockKey,
     scratch_stack: &mut Vec<BasicBlockKey>,
-    scratch_seen: &mut HashSet<BasicBlockKey>,
+    scratch_seen: &mut VgHashSet<BasicBlockKey>,
     scratch_fan_in: &mut SecondaryMap<BasicBlockKey, Vec<BasicBlockKey>>,
 ) {
     scratch_stack.clear();
@@ -26,7 +29,11 @@ pub fn get_fan_in<'a>(
             instrs: _,
             terminator,
         } = &mut bbs[bb_key];
-        terminator.extend_next_rev(scratch_stack, scratch_seen);
+        terminator.for_each_bb(|bb_key| {
+            if scratch_seen.insert(bb_key) {
+                scratch_stack.push(bb_key);
+            }
+        });
         scratch_fan_in.insert(bb_key, Vec::new());
     }
 
@@ -40,8 +47,12 @@ pub fn get_fan_in<'a>(
             instrs: _,
             terminator,
         } = &bbs[bb_key];
-        terminator.extend_next_rev(scratch_stack, scratch_seen);
-        terminator.for_each_bb(|bb| scratch_fan_in[bb].push(bb_key));
+        terminator.for_each_bb(|next| {
+            if scratch_seen.insert(next) {
+                scratch_stack.push(next);
+            }
+            scratch_fan_in[next].push(bb_key)
+        });
     }
 
     if !cfg!(debug_assertions) {
@@ -54,7 +65,11 @@ pub fn get_fan_in<'a>(
 
     while let Some(bb_key) = scratch_stack.pop() {
         let BasicBlock { instrs, terminator } = &mut bbs[bb_key];
-        terminator.extend_next_rev(scratch_stack, scratch_seen);
+        terminator.for_each_bb(|bb_key| {
+            if scratch_seen.insert(bb_key) {
+                scratch_stack.push(bb_key);
+            }
+        });
         for i in instrs {
             if let Instruction::Phi(_, srcs) = i {
                 for (bb, _) in srcs {

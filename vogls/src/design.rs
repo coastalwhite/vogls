@@ -17,7 +17,7 @@ use vogls_runtime::SimulationIo;
 use vogls_runtime::plugins::RuntimePluginState;
 use vogls_runtime::{RtSignalKey, RuntimeState};
 use vogls_sim::{Event, Regions, Simulation, VmProcess, VmProcessKey, lower_process_to_vm};
-use vogls_utils::{NonMaxU32, TableKey, VgHashMap};
+use vogls_utils::{NonMaxU32, TableKey, VgHashMap, VgHashSet};
 use vogls_verilog::arena::Arena;
 use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{Description, Module, ModuleItem, NonPortModuleItem};
@@ -442,13 +442,12 @@ impl Design {
         }
 
         let mut scratch_stack = Vec::new();
-        let mut scratch_mfr = Vec::new();
-        let mut scratch_bb_to_bits_map = HashMap::new();
-        let mut scratch_var_to_var_map = HashMap::new();
-        let mut scratch_var_seen = HashSet::new();
-        let mut scratch_seen = HashSet::new();
-        let mut scratch_removed = HashSet::new();
+        let mut scratch_seen = VgHashSet::default();
+        let mut scratch_mfr = VgHashSet::default();
+        let mut scratch_var_to_bits_map = VgHashMap::default();
         let mut scratch_fan_in = SecondaryMap::new();
+        let mut scratch_dep = VgHashMap::default();
+        let mut scratch_dep_edges = Vec::new();
         for process in mctx.gl.processes.values_mut() {
             if cfg!(debug_assertions) {
                 vogls_ir::optimize::get_fan_in(
@@ -461,38 +460,16 @@ impl Design {
             }
 
             for _ in 0..ectx.opt_rounds {
-                vogls_ir::optimize::remove_needless_jumps(
-                    &mut mctx.gl.bbs,
-                    process.entry,
-                    &mut scratch_stack,
-                    &mut scratch_seen,
-                    &mut scratch_fan_in,
-                );
-                vogls_ir::optimize::remove_needles_branches(
-                    &mut mctx.gl.bbs,
-                    process.entry,
-                    &mut scratch_stack,
-                    &mut scratch_seen,
-                );
-                vogls_ir::optimize::propagate_constants(
+                vogls_ir::optimize::constant_propagation::constant_propagation(
                     &mut mctx.gl.bbs,
                     &mctx.gl.vars,
                     process.entry,
                     &mut scratch_stack,
+                    &mut scratch_seen,
                     &mut scratch_mfr,
-                    &mut scratch_seen,
-                    &mut scratch_removed,
-                    &mut scratch_bb_to_bits_map,
-                    &mut scratch_var_to_var_map,
-                    &mut scratch_fan_in,
-                );
-                vogls_ir::optimize::deadcode_elimination(
-                    &mut mctx.gl.bbs,
-                    &mut mctx.gl.vars,
-                    process.entry,
-                    &mut scratch_stack,
-                    &mut scratch_seen,
-                    &mut scratch_var_seen,
+                    &mut scratch_var_to_bits_map,
+                    &mut scratch_dep,
+                    &mut scratch_dep_edges,
                 );
             }
 

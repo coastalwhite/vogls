@@ -766,6 +766,7 @@ name = "vogls-ir"
 version = "0.0.1"
 dependencies = [
  "bytemuck",
+ "hashbrown 0.16.1",
  "slotmap",
  "vogls-bits",
  "vogls-utils",

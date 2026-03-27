@@ -1023,6 +1023,17 @@ impl Bits {
         };
         v as u32
     }
+    pub fn extract_exact_u64(&self) -> u64 {
+        if self.mode == Mode::FourValue {
+            todo!()
+        }
+
+        assert_eq!(self.size().get(), 64);
+        let BitsDataRef::InlineTv(v) = self.as_data_ref() else {
+            unreachable!();
+        };
+        v
+    }
 
     pub fn contains_special(&self) -> bool {
         match self.as_data_ref() {

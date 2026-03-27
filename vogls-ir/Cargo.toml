@@ -8,3 +8,4 @@ vogls-bits.workspace = true
 vogls-utils.workspace = true
 slotmap.workspace = true
 bytemuck.workspace = true
+hashbrown.workspace = true
