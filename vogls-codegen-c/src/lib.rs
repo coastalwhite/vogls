@@ -109,7 +109,7 @@ impl fmt::Display for CExpr<'_> {
                     BitsDataRef::InlineTv(v) => {
                         let mask = mask(bits.size().get());
                         if bits.size() <= Mode::FourValue.max_inline_size() {
-                            write!(f, "0x{:x}", (v << bits.size().get()) | mask)
+                            write!(f, "((uint64_t)0x{:x})", (v << bits.size().get()) | mask)
                         } else {
                             write!(f, "(uint64_t[2]){{0x{:x}, 0x{:x}}}", mask, v)
                         }
@@ -122,7 +122,7 @@ impl fmt::Display for CExpr<'_> {
                         f.write_char('}')
                     }
                     BitsDataRef::InlineFv(spc, val) => {
-                        write!(f, "0x{:x}", (val << bits.size().get()) | spc)
+                        write!(f, "((uint64_t)0x{:x})", (val << bits.size().get()) | spc)
                     }
                     BitsDataRef::SeparateFv(v) => {
                         write!(f, "(uint64_t[{}]){{0x{:x}", v.len(), v[0])?;

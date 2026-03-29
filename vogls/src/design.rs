@@ -1,5 +1,4 @@
 use std::collections::{HashMap, HashSet};
-use std::ffi::{OsStr, OsString};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -7,7 +6,6 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use slotmap::{SecondaryMap, SlotMap};
-use tempfile::TempDir;
 use vogls_codegen::{HeapBuilder, HeapOffset, HeapRef};
 use vogls_codegen_c::runtime::{CDesign, CDesignState, SharedObjectContainer};
 use vogls_codegen_c::{
@@ -487,6 +485,14 @@ impl Design {
                     &mut scratch_var_to_bits_map,
                     &mut scratch_dep,
                     &mut scratch_dep_edges,
+                );
+
+                vogls_ir::optimize::deadcode_elimination::deadcode_elimination(
+                    &mut mctx.gl.bbs,
+                    &mut mctx.gl.vars,
+                    process.entry,
+                    &mut scratch_stack,
+                    &mut scratch_seen,
                 );
             }
 

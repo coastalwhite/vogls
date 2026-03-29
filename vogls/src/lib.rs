@@ -7,6 +7,7 @@ use vogls_ir::token_range::TokenRange;
 pub use vogls_ir::{Bits, LogicMode, SignalKey, VectorSize};
 pub use vogls_runtime::{RtSignalKey, SimulationIo};
 pub use vogls_sim::SimulationState;
+use vogls_utils::TimerStack;
 use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{
     CaseGenerateConstruct, CaseGenerateItem, GenerateBlock, IfGenerateConstruct,
@@ -163,7 +164,8 @@ pub fn run(
     top_level_module: Option<&str>,
     ectx: &mut ExecutionContext,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let design = design::Design::new(path, top_level_module, ectx, Vec::new())?;
+    let mut timers = TimerStack::new(ectx.timings);
+    let design = timers.timed("total compilation", |_| design::Design::new(path, top_level_module, ectx, Vec::new()))?;
 
     if ectx.no_run {
         return Ok(());
@@ -173,12 +175,16 @@ pub fn run(
     let stderr = std::mem::replace(&mut ectx.stderr, Box::new(Vec::new()) as _);
     let mut io = SimulationIo::new(stdout, stderr);
 
+    timers.start("simulation");
     design
         .run(&mut io, ectx.time)
         .map_err(|_| <Box<dyn std::error::Error>>::from("execution failed."))?;
+    timers.stop();
 
     ectx.stdout = io.stdout;
     ectx.stderr = io.stderr;
+
+    timers.print();
 
     Ok(())
 }

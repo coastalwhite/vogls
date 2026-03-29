@@ -4,6 +4,7 @@ use slotmap::{SecondaryMap, SlotMap};
 use vogls_utils::VgHashSet;
 
 pub mod constant_propagation;
+pub mod deadcode_elimination;
 
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryOp, Bits, Instruction, SCALAR_VSIZE,
