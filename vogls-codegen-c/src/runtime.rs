@@ -345,9 +345,17 @@ extern "C" fn fmt(
     dyn_fmt.write_to(file, args).unwrap();
 }
 
+pub trait SharedObjectContainer {
+    fn as_path(&self) -> &Path;
+}
+
 impl CDesign {
-    pub fn new(path: &Path, state_builder: StateBuilder, num_regions: u8) -> Self {
-        let lib = unsafe { libloading::Library::new(path) }.unwrap();
+    pub fn new(
+        shared_object_container: Box<dyn SharedObjectContainer>,
+        state_builder: StateBuilder,
+        num_regions: u8,
+    ) -> Self {
+        let lib = unsafe { libloading::Library::new(shared_object_container.as_path()) }.unwrap();
         Self {
             lib,
             dyn_fmt_strs: state_builder.dyn_fmt_strs.take_keys(),

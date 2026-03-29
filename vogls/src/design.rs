@@ -1,13 +1,15 @@
 use std::collections::{HashMap, HashSet};
+use std::ffi::{OsStr, OsString};
 use std::io::Write as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use slotmap::{SecondaryMap, SlotMap};
+use tempfile::TempDir;
 use vogls_codegen::{HeapBuilder, HeapOffset, HeapRef};
-use vogls_codegen_c::runtime::{CDesign, CDesignState};
+use vogls_codegen_c::runtime::{CDesign, CDesignState, SharedObjectContainer};
 use vogls_codegen_c::{
     CLowerOptions, ListenerBuilder, StateBuilder, lower_signal_drive_fn, lower_signal_drive_header,
 };
@@ -672,27 +674,41 @@ impl Design {
             timers.stop();
 
             timers.start("compile C");
-            // clang -x c -fPIC t2.c -shared -o /tmp/vogls-target.so
-            let status = timers.timed("compile C", |_| {
-                Command::new("clang")
-                    .args([
-                        "-x",
-                        "c",
-                        "-O1",
-                        // "-g3",
-                        "-fPIC",
-                        // "-O2",
-                        "t2.c",
-                        // "-",
-                        "-shared",
-                        "-o",
-                        "/tmp/vogls-target.so",
-                    ])
-                    .stdin(std::process::Stdio::piped())
-                    .status()
-            })?;
-            if !status.success() {
+            let tempdir = tempfile::TempDir::with_prefix("vogls")?;
+
+            if let Some(output_source) = &ectx.output_source {
+                std::fs::write(output_source, &c_file)?;
+            }
+            let code_path = tempdir.path().join("code.so");
+            let mut command = Command::new("clang")
+                .arg("-x")
+                .arg("c")
+                .arg("-O1")
+                .arg("-g3")
+                .arg("-fPIC")
+                .arg("-")
+                .arg("-shared")
+                .arg("-o")
+                .arg(&code_path)
+                .stdin(std::process::Stdio::piped())
+                .spawn()?;
+            command.stdin.take().unwrap().write_all(&c_file)?;
+            if !command.wait()?.success() {
                 return Err("compilation failed!".into());
+            }
+            timers.stop();
+
+            struct SharedObject {
+                code_path: PathBuf,
+
+                // Kept around so it isn't dropped.
+                #[allow(unused)]
+                tempdir: tempfile::TempDir,
+            }
+            impl SharedObjectContainer for SharedObject {
+                fn as_path(&self) -> &Path {
+                    self.code_path.as_path()
+                }
             }
 
             let mut initial_state = CDesignState::new(
@@ -702,7 +718,7 @@ impl Design {
                 regions.num_additional_regions() as u8,
             );
             let design = CDesign::new(
-                &Path::new("/tmp/vogls-target.so"),
+                Box::new(SharedObject { code_path, tempdir }),
                 state_builder,
                 regions.num_additional_regions() as u8,
             );

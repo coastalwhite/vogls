@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 clap.workspace = true
 slotmap.workspace = true
+tempfile.workspace = true
 vogls-ir.workspace = true
 vogls-sim.workspace = true
 vogls-trace.workspace = true
