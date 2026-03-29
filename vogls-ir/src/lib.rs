@@ -766,10 +766,22 @@ impl BinaryOp {
 
             O::UnsignedLessEqual => Bits::from(Bits::is_unsigned_leq(lhs, rhs)),
             O::CaseEquality => Bits::from(lhs == rhs),
-            O::Slice => Bits::from(lhs.slicex(rhs.extract_exact_u32(), dst_size)),
-            O::LogicalShiftLeft => lhs.logical_shift_left(rhs.extract_exact_u32()),
-            O::LogicalShiftRight => lhs.logical_shift_right(rhs.extract_exact_u32()),
-            O::ArithmeticShiftRight => lhs.arithmetic_shift_right(rhs.extract_exact_u32()),
+            O::Slice => match rhs.extract_exact_u32() {
+                None => Bits::new_unknown(dst_size),
+                Some(amount) => lhs.slicex(amount, dst_size),
+            },
+            O::LogicalShiftLeft => match rhs.extract_exact_u32() {
+                None => Bits::new_unknown(dst_size),
+                Some(amount) => lhs.logical_shift_left(amount),
+            },
+            O::LogicalShiftRight => match rhs.extract_exact_u32() {
+                None => Bits::new_unknown(dst_size),
+                Some(amount) => lhs.logical_shift_right(amount),
+            },
+            O::ArithmeticShiftRight => match rhs.extract_exact_u32() {
+                None => Bits::new_unknown(dst_size),
+                Some(amount) => lhs.arithmetic_shift_right(amount),
+            },
             O::Concat => Bits::concatenate(lhs, rhs),
             O::CopyX => Bits::copyx(lhs, rhs),
             O::CopyZ => Bits::copyz(lhs, rhs),
@@ -819,10 +831,10 @@ impl BinaryImmOp {
             O::UnsignedLessEqual => Bits::from(Bits::is_unsigned_leq(src, imm)),
             O::UnsignedGreaterEqual => Bits::from(Bits::is_unsigned_leq(imm, src)),
             O::CaseEquality => Bits::from(src == imm),
-            O::Slice => Bits::from(src.slicez(imm.extract_exact_u32(), dst_size)),
-            O::LogicalShiftLeft => src.logical_shift_left(imm.extract_exact_u32()),
-            O::LogicalShiftRight => src.logical_shift_right(imm.extract_exact_u32()),
-            O::ArithmeticShiftRight => src.arithmetic_shift_right(imm.extract_exact_u32()),
+            O::Slice => src.slicez(imm.extract_exact_u32().unwrap(), dst_size),
+            O::LogicalShiftLeft => src.logical_shift_left(imm.extract_exact_u32().unwrap()),
+            O::LogicalShiftRight => src.logical_shift_right(imm.extract_exact_u32().unwrap()),
+            O::ArithmeticShiftRight => src.arithmetic_shift_right(imm.extract_exact_u32().unwrap()),
             O::ConcatLeft => Bits::concatenate(imm, src),
             O::ConcatRight => Bits::concatenate(src, imm),
 
@@ -972,7 +984,7 @@ impl BinaryImmOp {
             O::UnsignedLessEqual => S::Keep,
             O::UnsignedGreaterEqual => S::Keep,
             O::Slice => {
-                let offset = imm.extract_exact_u32();
+                let offset = imm.extract_exact_u32().unwrap();
                 if dst_size == src_size {
                     if offset == 0 {
                         S::Source
@@ -999,7 +1011,7 @@ impl BinaryImmOp {
                 S::Source
             }
             O::LogicalShiftLeft | O::LogicalShiftRight
-                if imm.extract_exact_u32() >= src_size.get() =>
+                if imm.extract_exact_u32().unwrap() >= src_size.get() =>
             {
                 S::Constant(Bits::new_zeroed(src_size))
             }

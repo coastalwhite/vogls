@@ -24,6 +24,8 @@ struct Args {
     interpretted: bool,
     #[arg(short = 'C')]
     compiled: bool,
+    #[arg(long)]
+    opt_rounds: Option<u8>,
 }
 
 fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
@@ -75,6 +77,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     struct Fail {
         name: String,
         mode: LogicMode,
+        opt_rounds: u8,
         compile: bool,
         error: Option<Box<dyn std::error::Error>>,
         mismatch: Option<(String, String)>,
@@ -185,187 +188,196 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             }
         }
 
-        for &logic_mode in modes {
-            for &compile in compiled {
-                if Some(logic_mode) == test_information.skip {
-                    write!(&mut o, " \x1b[32mS\x1b[0m")?;
-                    continue;
-                }
+        let opt_rounds_configurations: &[u8] = match args.opt_rounds {
+            None => &[0, 2],
+            Some(o) => &[o],
+        };
 
-                num_tests += 1;
+        for &opt_rounds in opt_rounds_configurations {
+            for &logic_mode in modes {
+                for &compile in compiled {
+                    if Some(logic_mode) == test_information.skip {
+                        write!(&mut o, " \x1b[32mS\x1b[0m")?;
+                        continue;
+                    }
 
-                let stdout = Io::default();
-                let stderr = Io::default();
+                    num_tests += 1;
 
-                let mut ctx = ExecutionContext {
-                    stdout: Box::new(stdout.clone()) as Box<dyn std::io::Write + Send + Sync>,
-                    stderr: Box::new(stderr.clone()) as Box<dyn std::io::Write + Send + Sync>,
-                    defines: Vec::new(),
-                    emit_hierarchy: false,
-                    emit_unoptimized_ir: false,
-                    emit_ir: false,
-                    emit_vm: false,
-                    trace: false,
-                    itrace: false,
-                    no_run: false,
-                    time: test_information.time,
-                    opt_rounds: 1,
-                    logic_mode,
-                    vcd: None,
-                    compile,
-                    timings: false,
-                    print_optimized_fuse_signals: false,
-                    print_round_fuse_signals: false,
-                    print_unoptimized_fuse_signals: false,
-                };
+                    let stdout = Io::default();
+                    let stderr = Io::default();
 
-                if test_information.verify_ir {
-                    let design = std::panic::catch_unwind(|| {
-                        let stdout = Io::default();
-                        let stderr = Io::default();
+                    let mut ctx = ExecutionContext {
+                        stdout: Box::new(stdout.clone()) as Box<dyn std::io::Write + Send + Sync>,
+                        stderr: Box::new(stderr.clone()) as Box<dyn std::io::Write + Send + Sync>,
+                        defines: Vec::new(),
+                        emit_hierarchy: false,
+                        emit_unoptimized_ir: false,
+                        emit_ir: false,
+                        emit_vm: false,
+                        trace: false,
+                        itrace: false,
+                        no_run: false,
+                        time: test_information.time,
+                        opt_rounds,
+                        logic_mode,
+                        vcd: None,
+                        compile,
+                        timings: false,
+                        print_optimized_fuse_signals: false,
+                        print_round_fuse_signals: false,
+                        print_unoptimized_fuse_signals: false,
+                    };
 
-                        let mut ctx = ExecutionContext {
-                            stdout: Box::new(stdout.clone())
-                                as Box<dyn std::io::Write + Send + Sync>,
-                            stderr: Box::new(stderr.clone())
-                                as Box<dyn std::io::Write + Send + Sync>,
-                            defines: vec!["__VOGLS_VERIFY_IR".to_string()],
-                            emit_hierarchy: false,
-                            emit_unoptimized_ir: false,
-                            emit_ir: false,
-                            emit_vm: false,
-                            trace: false,
-                            itrace: false,
-                            no_run: false,
-                            time: test_information.time,
-                            opt_rounds: 1,
-                            logic_mode,
-                            vcd: None,
-                            compile,
-                            timings: false,
-                            print_optimized_fuse_signals: false,
-                            print_round_fuse_signals: false,
-                            print_unoptimized_fuse_signals: false,
-                        };
-                        vogls::design::Design::new(
+                    if test_information.verify_ir {
+                        let design = std::panic::catch_unwind(|| {
+                            let stdout = Io::default();
+                            let stderr = Io::default();
+
+                            let mut ctx = ExecutionContext {
+                                stdout: Box::new(stdout.clone())
+                                    as Box<dyn std::io::Write + Send + Sync>,
+                                stderr: Box::new(stderr.clone())
+                                    as Box<dyn std::io::Write + Send + Sync>,
+                                defines: vec!["__VOGLS_VERIFY_IR".to_string()],
+                                emit_hierarchy: false,
+                                emit_unoptimized_ir: false,
+                                emit_ir: false,
+                                emit_vm: false,
+                                trace: false,
+                                itrace: false,
+                                no_run: false,
+                                time: test_information.time,
+                                opt_rounds,
+                                logic_mode,
+                                vcd: None,
+                                compile,
+                                timings: false,
+                                print_optimized_fuse_signals: false,
+                                print_round_fuse_signals: false,
+                                print_unoptimized_fuse_signals: false,
+                            };
+                            vogls::design::Design::new(
+                                &[&path],
+                                test_information.top_level_module.as_deref(),
+                                &mut ctx,
+                                Vec::new(),
+                            )
+                        });
+
+                        let mut panic = false;
+                        let mut failed = false;
+                        let mut error = None;
+                        let mut mismatch = None;
+
+                        if let Ok(design) = design {
+                            match design {
+                                Ok(design) => {
+                                    let design_ir = design.emit_ir();
+                                    let asserted =
+                                        std::fs::read_to_string(&path.with_extension("v.ir"))?;
+                                    failed = design_ir != asserted;
+                                    mismatch = Some((asserted, design_ir));
+                                }
+                                Err(err) => {
+                                    failed = true;
+                                    error = Some(err);
+                                }
+                            }
+                        } else {
+                            panic = true;
+                        }
+
+                        if panic {
+                            write!(&mut o, " \x1b[31mP\x1b[0m")?;
+                        } else if failed {
+                            let stdout = stdout.0.lock().unwrap();
+                            let stdout = std::str::from_utf8(&stdout).unwrap();
+                            let stderr = stderr.0.lock().unwrap();
+                            let stderr = std::str::from_utf8(&stderr).unwrap();
+
+                            fails.push(Fail {
+                                name: offset_path.display().to_string(),
+                                mode: logic_mode,
+                                opt_rounds,
+                                compile,
+                                error,
+                                mismatch,
+                                stdout: stdout.to_string(),
+                                stderr: stderr.to_string(),
+                            });
+                            write!(&mut o, " \x1b[31mI\x1b[0m")?;
+                        }
+                    }
+
+                    let ctx = std::panic::AssertUnwindSafe(&mut ctx);
+                    let result = std::panic::catch_unwind(|| {
+                        let ctx = ctx;
+                        vogls::run(
                             &[&path],
                             test_information.top_level_module.as_deref(),
-                            &mut ctx,
-                            Vec::new(),
+                            ctx.0,
                         )
                     });
 
-                    let mut panic = false;
-                    let mut failed = false;
-                    let mut error = None;
-                    let mut mismatch = None;
+                    let stdout = stdout.0.lock().unwrap();
+                    let stdout = std::str::from_utf8(&stdout).unwrap();
+                    let stderr = stderr.0.lock().unwrap();
+                    let stderr = std::str::from_utf8(&stderr).unwrap();
 
-                    if let Ok(design) = design {
-                        match design {
-                            Ok(design) => {
-                                let design_ir = design.emit_ir();
-                                let asserted =
-                                    std::fs::read_to_string(&path.with_extension("v.ir"))?;
-                                failed = design_ir != asserted;
-                                mismatch = Some((asserted, design_ir));
+                    let mut failed = false;
+                    let mut panic = false;
+                    let mut mismatch = None;
+                    if result.is_err() {
+                        failed = true;
+                        panic = true;
+                    } else {
+                        failed |= result.as_ref().is_ok_and(|r| r.is_err()) ^ test_information.fail;
+                        if matches!(
+                            test_information.verify_stdout,
+                            VerifyOutput::Yes | VerifyOutput::SortLines
+                        ) {
+                            let s = std::fs::read_to_string(&path.with_extension("v.stdout"))?;
+
+                            if matches!(test_information.verify_stdout, VerifyOutput::SortLines) {
+                                let mut lines = stdout.lines().collect::<Vec<&str>>();
+                                lines.sort_unstable();
+                                failed |= lines != s.lines().collect::<Vec<_>>();
+                            } else {
+                                failed |= s != stdout;
                             }
-                            Err(err) => {
-                                failed = true;
-                                error = Some(err);
+
+                            if failed {
+                                mismatch = Some((s, stdout.to_string()));
                             }
                         }
-                    } else {
-                        panic = true;
                     }
 
-                    if panic {
-                        write!(&mut o, " \x1b[31mP\x1b[0m")?;
-                    } else if failed {
-                        let stdout = stdout.0.lock().unwrap();
-                        let stdout = std::str::from_utf8(&stdout).unwrap();
-                        let stderr = stderr.0.lock().unwrap();
-                        let stderr = std::str::from_utf8(&stderr).unwrap();
-
+                    if failed {
+                        let error = match result {
+                            Ok(Ok(_)) => None,
+                            Ok(Err(err)) => Some(err),
+                            Err(_) => None,
+                        };
                         fails.push(Fail {
                             name: offset_path.display().to_string(),
                             mode: logic_mode,
+                            opt_rounds,
                             compile,
                             error,
                             mismatch,
                             stdout: stdout.to_string(),
                             stderr: stderr.to_string(),
                         });
-                        write!(&mut o, " \x1b[31mI\x1b[0m")?;
                     }
-                }
-
-                let ctx = std::panic::AssertUnwindSafe(&mut ctx);
-                let result = std::panic::catch_unwind(|| {
-                    let ctx = ctx;
-                    vogls::run(
-                        &[&path],
-                        test_information.top_level_module.as_deref(),
-                        ctx.0,
-                    )
-                });
-
-                let stdout = stdout.0.lock().unwrap();
-                let stdout = std::str::from_utf8(&stdout).unwrap();
-                let stderr = stderr.0.lock().unwrap();
-                let stderr = std::str::from_utf8(&stderr).unwrap();
-
-                let mut failed = false;
-                let mut panic = false;
-                let mut mismatch = None;
-                if result.is_err() {
-                    failed = true;
-                    panic = true;
-                } else {
-                    failed |= result.as_ref().is_ok_and(|r| r.is_err()) ^ test_information.fail;
-                    if matches!(
-                        test_information.verify_stdout,
-                        VerifyOutput::Yes | VerifyOutput::SortLines
-                    ) {
-                        let s = std::fs::read_to_string(&path.with_extension("v.stdout"))?;
-
-                        if matches!(test_information.verify_stdout, VerifyOutput::SortLines) {
-                            let mut lines = stdout.lines().collect::<Vec<&str>>();
-                            lines.sort_unstable();
-                            failed |= lines != s.lines().collect::<Vec<_>>();
-                        } else {
-                            failed |= s != stdout;
-                        }
-
-                        if failed {
-                            mismatch = Some((s, stdout.to_string()));
-                        }
+                    if panic {
+                        write!(&mut o, " \x1b[31mP\x1b[0m")?;
+                    } else if failed {
+                        write!(&mut o, " \x1b[31mE\x1b[0m")?;
+                    } else {
+                        write!(&mut o, " \x1b[32mP\x1b[0m")?;
                     }
+                    o.flush()?;
                 }
-
-                if failed {
-                    let error = match result {
-                        Ok(Ok(_)) => None,
-                        Ok(Err(err)) => Some(err),
-                        Err(_) => None,
-                    };
-                    fails.push(Fail {
-                        name: offset_path.display().to_string(),
-                        mode: logic_mode,
-                        compile,
-                        error,
-                        mismatch,
-                        stdout: stdout.to_string(),
-                        stderr: stderr.to_string(),
-                    });
-                }
-                if panic {
-                    write!(&mut o, " \x1b[31mP\x1b[0m")?;
-                } else if failed {
-                    write!(&mut o, " \x1b[31mE\x1b[0m")?;
-                } else {
-                    write!(&mut o, " \x1b[32mP\x1b[0m")?;
-                }
-                o.flush()?;
             }
         }
         writeln!(&mut o)?;
@@ -380,6 +392,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             let Fail {
                 name,
                 mode,
+                opt_rounds,
                 compile,
                 mismatch,
                 error,
@@ -391,7 +404,10 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                 LogicMode::FourValue => "fvl",
             };
 
-            write!(&mut o, "+ {name}[{mode_str}-compile={compile}]")?;
+            write!(
+                &mut o,
+                "+ {name}[{mode_str}-compile={compile}-O{opt_rounds}]"
+            )?;
             if let Some(err) = error {
                 write!(&mut o, ": ERROR={err:?}")?;
             };

@@ -65,6 +65,30 @@ pub fn tv_s_sign_extend(dst: &mut [u8], src: &[u8], dst_size: VectorSize, src_si
         dst[src.len() - 1] |= u8::from(!sign).wrapping_sub(1) << (src_size.get() % 8);
     }
 }
+
+pub fn fv_w_zero_extend(
+    spc: u64,
+    val: u64,
+    dst_size: VectorSize,
+    src_size: VectorSize,
+) -> (u64, u64) {
+    debug_assert!(dst_size >= src_size);
+    let spc = spc | (((1u64 << (dst_size.get() - src_size.get())) - 1) << src_size.get());
+    (spc, val)
+}
+pub fn fv_w_sign_extend(
+    spc: u64,
+    val: u64,
+    dst_size: VectorSize,
+    src_size: VectorSize,
+) -> (u64, u64) {
+    debug_assert!(dst_size >= src_size);
+    let s = 64 - src_size.get();
+    let spc = (spc << s) as i64 >> s;
+    let val = (val << s) as i64 >> s;
+    let mask = 1u64.unbounded_shl(dst_size.get()).wrapping_sub(1);
+    (spc as u64 & mask, val as u64 & mask)
+}
 pub fn fv_s_zero_extend(dst: &mut [u8], src: &[u8], dst_size: VectorSize, src_size: VectorSize) {
     assert!(dst_size >= src_size);
 
@@ -75,17 +99,14 @@ pub fn fv_s_zero_extend(dst: &mut [u8], src: &[u8], dst_size: VectorSize, src_si
 
     let src = load_partial_u64(src, VectorSize::new(2 * src_size.get()).unwrap());
     let (spc, val) = fv_unpack_u64(src, src_size);
-    let spc = spc | (((1u64 << (dst_size.get() - src_size.get())) - 1) << src_size.get());
+    let (spc, val) = fv_w_zero_extend(spc, val, dst_size, src_size);
     let result = fv_pack_u64(spc, val, dst_size);
     store_partial_u64(dst, result, VectorSize::new(2 * dst_size.get()).unwrap());
 }
 pub fn fv_s_sign_extend(dst: &mut [u8], src: &[u8], dst_size: VectorSize, src_size: VectorSize) {
     let src = load_partial_u64(src, VectorSize::new(2 * src_size.get()).unwrap());
     let (spc, val) = fv_unpack_u64(src, src_size);
-    let s = 64 - src_size.get();
-    let spc = (spc << s) as i64 >> s;
-    let val = (val << s) as i64 >> s;
-    let mask = 1u64.unbounded_shl(dst_size.get()).wrapping_sub(1);
-    let result = fv_pack_u64(spc as u64 & mask, val as u64 & mask, dst_size);
+    let (spc, val) = fv_w_sign_extend(spc, val, dst_size, src_size);
+    let result = fv_pack_u64(spc, val, dst_size);
     store_partial_u64(dst, result, VectorSize::new(2 * dst_size.get()).unwrap());
 }

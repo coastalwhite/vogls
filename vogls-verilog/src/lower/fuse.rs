@@ -55,14 +55,20 @@ fn try_constant_bitslice<'a>(
                 None,
             )?;
             // @TODO: Validate input.
-            let msb = msb
+            let Some(msb) = msb
                 .coerce(&VType::UnsignedNet(INTEGER_VSIZE))
                 .into_bits()
-                .extract_exact_u32();
-            let lsb = lsb
+                .extract_exact_u32()
+            else {
+                return Ok(None);
+            };
+            let Some(lsb) = lsb
                 .coerce(&VType::UnsignedNet(INTEGER_VSIZE))
                 .into_bits()
-                .extract_exact_u32();
+                .extract_exact_u32()
+            else {
+                return Ok(None);
+            };
             // @TODO: validate
             let slice = SignalSlice::new(msb, lsb).unwrap();
             Ok(Some(slice))
@@ -80,14 +86,20 @@ fn try_constant_bitslice<'a>(
                 ast_width,
                 None,
             )?;
-            let offset = offset
+            let Some(offset) = offset
                 .coerce(&VType::UnsignedNet(INTEGER_VSIZE))
                 .into_bits()
-                .extract_exact_u32();
-            let width = width
+                .extract_exact_u32()
+            else {
+                return Ok(None);
+            };
+            let Some(width) = width
                 .coerce(&VType::UnsignedNet(INTEGER_VSIZE))
                 .into_bits()
-                .extract_exact_u32();
+                .extract_exact_u32()
+            else {
+                return Ok(None);
+            };
             let Some(width) = VectorSize::new(width) else {
                 mctx.diagnostics
                     .not_yet_implemented(ctx.arenas.get_span(ast_width), "zero-width net");
@@ -110,14 +122,20 @@ fn try_constant_bitslice<'a>(
                 ast_width,
                 None,
             )?;
-            let offset = offset
+            let Some(offset) = offset
                 .coerce(&VType::UnsignedNet(INTEGER_VSIZE))
                 .into_bits()
-                .extract_exact_u32();
-            let width = width
+                .extract_exact_u32()
+            else {
+                return Ok(None);
+            };
+            let Some(width) = width
                 .coerce(&VType::UnsignedNet(INTEGER_VSIZE))
                 .into_bits()
-                .extract_exact_u32();
+                .extract_exact_u32()
+            else {
+                return Ok(None);
+            };
             let Some(width) = VectorSize::new(width) else {
                 mctx.diagnostics
                     .not_yet_implemented(ctx.arenas.get_span(ast_width), "zero-width net");
@@ -188,7 +206,9 @@ pub fn try_lower_fuse_driver_expr<'a>(
             return Ok(false);
         };
         let idx = idx.truncate_or_extend(INTEGER_VSIZE);
-        let idx = idx.into_bits().extract_exact_u32();
+        let Some(idx) = idx.into_bits().extract_exact_u32() else {
+            return Ok(false);
+        };
 
         if idx >= dim {
             mctx.diagnostics
@@ -210,7 +230,9 @@ pub fn try_lower_fuse_driver_expr<'a>(
             return Ok(false);
         };
         let idx = idx.truncate_or_extend(INTEGER_VSIZE);
-        let idx = idx.into_bits().extract_exact_u32();
+        let Some(idx) = idx.into_bits().extract_exact_u32() else {
+            return Ok(false);
+        };
 
         if idx >= ty_size.get() {
             mctx.diagnostics
@@ -301,7 +323,9 @@ pub fn try_fuse_assign<'a>(
             None,
         )?;
         let idx = idx.truncate_or_extend(INTEGER_VSIZE);
-        let idx = idx.into_bits().extract_exact_u32();
+        let Some(idx) = idx.into_bits().extract_exact_u32() else {
+            return Ok(false);
+        };
 
         if idx >= dim {
             mctx.diagnostics
@@ -336,7 +360,9 @@ pub fn try_fuse_assign<'a>(
             None,
         )?;
         let idx = idx.truncate_or_extend(INTEGER_VSIZE);
-        let idx = idx.into_bits().extract_exact_u32();
+        let Some(idx) = idx.into_bits().extract_exact_u32() else {
+            return Ok(false);
+        };
 
         if idx >= drivee_ty_size.get() {
             mctx.diagnostics
@@ -367,7 +393,9 @@ pub fn try_fuse_assign<'a>(
                     None,
                 )?;
                 let idx = idx.truncate_or_extend(INTEGER_VSIZE);
-                let idx = idx.into_bits().extract_exact_u32();
+                let Some(idx) = idx.into_bits().extract_exact_u32() else {
+                    return Ok(false);
+                };
 
                 // @TODO: Remove unwrap
                 SignalSlice::from_width(idx, SCALAR_VSIZE).unwrap()
@@ -393,9 +421,13 @@ pub fn try_fuse_assign<'a>(
                 )?;
 
                 let msb = msb.truncate_or_extend(INTEGER_VSIZE);
-                let msb = msb.into_bits().extract_exact_u32();
+                let Some(msb) = msb.into_bits().extract_exact_u32() else {
+                    return Ok(false);
+                };
                 let lsb = lsb.truncate_or_extend(INTEGER_VSIZE);
-                let lsb = lsb.into_bits().extract_exact_u32();
+                let Some(lsb) = lsb.into_bits().extract_exact_u32() else {
+                    return Ok(false);
+                };
                 SignalSlice::new(msb, lsb).unwrap()
             }
         };

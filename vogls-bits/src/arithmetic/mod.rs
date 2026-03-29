@@ -69,37 +69,52 @@ impl From<bool> for FvLogicValue {
 impl std::ops::BitAnd<Self> for FvLogicValue {
     type Output = Self;
     fn bitand(self, rhs: Self) -> Self::Output {
-        Self::from_repr((self as u8) & (rhs as u8))
+        let (spc, val) = fv_bitwise_and_elem(
+            (self as u8 & 1) as u64,
+            (self as u8 >> 1) as u64,
+            (rhs as u8 & 1) as u64,
+            (rhs as u8 >> 1) as u64,
+        );
+        let spc = spc as u8 & 1;
+        let val = val as u8 & 1;
+        Self::from_repr(spc | (val << 1))
     }
 }
 impl std::ops::BitOr<Self> for FvLogicValue {
     type Output = Self;
     fn bitor(self, rhs: Self) -> Self::Output {
-        Self::from_repr((self as u8) | (rhs as u8))
+        let (spc, val) = fv_bitwise_or_elem(
+            (self as u8 & 1) as u64,
+            (self as u8 >> 1) as u64,
+            (rhs as u8 & 1) as u64,
+            (rhs as u8 >> 1) as u64,
+        );
+        let spc = spc as u8 & 1;
+        let val = val as u8 & 1;
+        Self::from_repr(spc | (val << 1))
     }
 }
 impl std::ops::BitXor<Self> for FvLogicValue {
     type Output = Self;
     fn bitxor(self, rhs: Self) -> Self::Output {
-        Self::from_repr((self as u8) ^ (rhs as u8))
+        let (spc, val) = fv_bitwise_xor_elem(
+            (self as u8 & 1) as u64,
+            (self as u8 >> 1) as u64,
+            (rhs as u8 & 1) as u64,
+            (rhs as u8 >> 1) as u64,
+        );
+        let spc = spc as u8 & 1;
+        let val = val as u8 & 1;
+        Self::from_repr(spc | (val << 1))
     }
 }
 impl std::ops::Not for FvLogicValue {
     type Output = Self;
     fn not(self) -> Self::Output {
-        Self::from_repr(!(self as u8) & 0b11)
-    }
-}
-impl std::ops::Shl<u32> for FvLogicValue {
-    type Output = Self;
-    fn shl(self, rhs: u32) -> Self::Output {
-        Self::from_repr((self as u8) << rhs)
-    }
-}
-impl std::ops::Shr<u32> for FvLogicValue {
-    type Output = Self;
-    fn shr(self, rhs: u32) -> Self::Output {
-        Self::from_repr((self as u8) >> rhs)
+        let (spc, val) = fv_bitwise_inv_elem((self as u8 & 1) as u64, (self as u8 >> 1) as u64);
+        let spc = spc as u8 & 1;
+        let val = val as u8 & 1;
+        Self::from_repr(spc | (val << 1))
     }
 }
 

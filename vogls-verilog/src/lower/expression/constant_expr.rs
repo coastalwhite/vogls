@@ -147,12 +147,10 @@ pub fn eval_constant_expr<'a>(
                     O::BitwiseXor => VValue::bitwise_xor(lhs, rhs),
                     O::BitwiseXnor => VValue::bitwise_xnor(lhs, rhs),
                     O::BitwiseOr => VValue::bitwise_or(lhs, rhs),
-                    O::LessThan => VValue::scalar_from_bool(VValue::less_than(lhs, rhs)),
-                    O::LessThanEqual => VValue::scalar_from_bool(VValue::less_than_equal(lhs, rhs)),
-                    O::GreaterThan => VValue::scalar_from_bool(VValue::greater_than(lhs, rhs)),
-                    O::GreaterThanEqual => {
-                        VValue::scalar_from_bool(VValue::greater_than_equal(lhs, rhs))
-                    }
+                    O::LessThan => VValue::from(VValue::less_than(lhs, rhs)),
+                    O::LessThanEqual => VValue::from(VValue::less_than_equal(lhs, rhs)),
+                    O::GreaterThan => VValue::from(VValue::greater_than(lhs, rhs)),
+                    O::GreaterThanEqual => VValue::from(VValue::greater_than_equal(lhs, rhs)),
                     O::LogicalAnd => VValue::scalar_from_bool(VValue::logical_and(lhs, rhs)),
                     O::LogicalOr => VValue::scalar_from_bool(VValue::logical_or(lhs, rhs)),
                     O::LogicalEquality => VValue::scalar_from_bool(lhs.logical_equal(rhs)),

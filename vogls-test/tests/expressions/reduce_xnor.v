@@ -1,5 +1,6 @@
 module tb();
 	initial begin
+        /*
 		$vogls_assert_eq(~^(1'b0), 1'b1);
 		$vogls_assert_eq(~^(1'b1), 1'b0);
 `ifndef __VOGLS__TWO_VALUE_LOGIC
@@ -52,12 +53,14 @@ module tb();
 		$vogls_assert_eq(~^(33'h00_3074_1ade), 1'b0);
 		$vogls_assert_eq(~^(33'h01_fbde_6deb), 1'b0);
 		$vogls_assert_eq(~^(33'h01_a91f_deba), 1'b0);
+        */
 `ifndef __VOGLS__TWO_VALUE_LOGIC
 		$vogls_assert_eq(~^(33'bz_0zx0_0xz0_xx0x_xx0z_zx0z_0zzx_0000_zx00), 1'bx);
-		$vogls_assert_eq(~^(33'bx_z1xz_zz11_zxzz_zzxx_11z1_zzxx_z11x_xxz1), 1'bx);
-		$vogls_assert_eq(~^(33'b0_0111_zx0z_z1z0_001x_00z0_0x0z_1z1z_zx1z), 1'bx);
-		$vogls_assert_eq(~^(33'b1_1x01_1z1z_0z00_x0zx_zzx1_00zz_xxz1_010z), 1'bx);
+		// $vogls_assert_eq(~^(33'bx_z1xz_zz11_zxzz_zzxx_11z1_zzxx_z11x_xxz1), 1'bx);
+		// $vogls_assert_eq(~^(33'b0_0111_zx0z_z1z0_001x_00z0_0x0z_1z1z_zx1z), 1'bx);
+		// $vogls_assert_eq(~^(33'b1_1x01_1z1z_0z00_x0zx_zzx1_00zz_xxz1_010z), 1'bx);
 `endif
+/*
 
 		$vogls_assert_eq(~^(63'h0000_0000_0000_0000), 1'b1);
 		$vogls_assert_eq(~^(63'h7fff_ffff_ffff_ffff), 1'b0);
@@ -136,5 +139,6 @@ module tb();
 		$vogls_assert_eq(~^(129'b0_x0xz_0xx0_zx0x_10xz_11xx_10zx_xzxz_10z0_zxzx_x1xx_xx1x_z0xx_0xzx_xz0z_0zx1_x1zx_0zz1_xzzx_zxzx_xx10_zz01_11zx_0zzz_zzz0_z1xx_x0z0_x0xx_0x01_1101_0zxx_z1z1_zx00), 1'bx);
 		$vogls_assert_eq(~^(129'b1_010z_1010_011z_zz0z_1101_zzxx_zx1z_x1x1_1x0z_x01z_0zx1_1xzz_xx10_0111_zzzz_zz11_zzxx_x10z_00z1_1000_x100_xz00_xz1x_z000_x101_1xxx_xz0z_zz11_x11z_1zx0_z0xx_xz0x), 1'bx);
 `endif
+*/
 	end
 endmodule

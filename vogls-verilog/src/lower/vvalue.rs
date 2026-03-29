@@ -1,3 +1,4 @@
+use vogls_ir::bits::arithmetic::FvLogicValue;
 use vogls_ir::{Bits, VectorSize};
 
 use super::VType;
@@ -121,8 +122,11 @@ impl VValue {
         let (mut lhs, rhs) = Self::coerce_max_size(lhs, rhs);
         match (&mut lhs, rhs) {
             (V::UnsignedNet(lb) | V::SignedNet(lb), V::UnsignedNet(r) | V::SignedNet(r)) => {
-                let r = r.truncate(VectorSize::new(32).unwrap()).extract_exact_u32();
-                *lb = Bits::logical_shift_left(lb, r);
+                let r = r.truncate(VectorSize::new(32).unwrap());
+                *lb = match r.extract_exact_u32() {
+                    None => Bits::new_unknown(lb.size()),
+                    Some(r) => Bits::logical_shift_left(lb, r),
+                };
             }
             (V::String(_), _) | (_, V::String(_)) => todo!(),
         }
@@ -133,8 +137,11 @@ impl VValue {
         let (mut lhs, rhs) = Self::coerce_max_size(lhs, rhs);
         match (&mut lhs, rhs) {
             (V::UnsignedNet(lb) | V::SignedNet(lb), V::UnsignedNet(r) | V::SignedNet(r)) => {
-                let r = r.truncate(VectorSize::new(32).unwrap()).extract_exact_u32();
-                *lb = Bits::logical_shift_right(lb, r);
+                let r = r.truncate(VectorSize::new(32).unwrap());
+                *lb = match r.extract_exact_u32() {
+                    None => Bits::new_unknown(lb.size()),
+                    Some(r) => Bits::logical_shift_right(lb, r),
+                };
             }
             (V::String(_), _) | (_, V::String(_)) => todo!(),
         }
@@ -162,11 +169,11 @@ impl VValue {
         lhs
     }
 
-    pub fn less_than(lhs: VValue, rhs: VValue) -> bool {
+    pub fn less_than(lhs: VValue, rhs: VValue) -> FvLogicValue {
         !Self::less_than_equal(rhs, lhs)
     }
 
-    pub fn less_than_equal(lhs: VValue, rhs: VValue) -> bool {
+    pub fn less_than_equal(lhs: VValue, rhs: VValue) -> FvLogicValue {
         use VValue as V;
         let (lhs, rhs) = Self::coerce_max_size(lhs, rhs);
         match (lhs, rhs) {
@@ -177,10 +184,10 @@ impl VValue {
             (V::String(_), _) | (_, V::String(_)) => todo!(),
         }
     }
-    pub fn greater_than(lhs: VValue, rhs: VValue) -> bool {
+    pub fn greater_than(lhs: VValue, rhs: VValue) -> FvLogicValue {
         !Self::less_than_equal(lhs, rhs)
     }
-    pub fn greater_than_equal(lhs: VValue, rhs: VValue) -> bool {
+    pub fn greater_than_equal(lhs: VValue, rhs: VValue) -> FvLogicValue {
         Self::less_than(rhs, lhs)
     }
 
@@ -264,6 +271,12 @@ impl VValue {
             Self::UnsignedNet(bits) => Self::SignedNet(bits.sign_extend(new_size)),
             Self::String(_) => todo!(),
         }
+    }
+}
+
+impl From<FvLogicValue> for VValue {
+    fn from(value: FvLogicValue) -> Self {
+        Self::UnsignedNet(Bits::from(value))
     }
 }
 

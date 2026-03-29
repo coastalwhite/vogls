@@ -558,14 +558,15 @@ fn assign_port_output<'a>(
         {
             let v = v.coerce(&VType::SignedNet(vogls_ir::INTEGER_VSIZE));
             let v = v.into_bits();
-            let v = v.extract_exact_u32();
-            mctx.connections.push(Edge {
-                driver,
-                driver_slice: None,
-                drivee,
-                drivee_slice: Some(SignalSlice::from_width(v, SCALAR_VSIZE).unwrap()),
-            });
-            return Ok(());
+            if let Some(v) = v.extract_exact_u32() {
+                mctx.connections.push(Edge {
+                    driver,
+                    driver_slice: None,
+                    drivee,
+                    drivee_slice: Some(SignalSlice::from_width(v, SCALAR_VSIZE).unwrap()),
+                });
+                return Ok(());
+            }
         }
     }
 

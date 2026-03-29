@@ -166,8 +166,7 @@ pub fn get_system_function_call_output_ty<'a>(
             Ok(VType::UnsignedNet(TIME_VSIZE))
         }
         "clog2" => {
-            diagnostics
-                .not_yet_implemented(arenas.get_span(expr), "clog2 is not yet implemented");
+            diagnostics.not_yet_implemented(arenas.get_span(expr), "clog2 is not yet implemented");
             Err(())
         }
 
@@ -185,8 +184,7 @@ pub fn get_system_function_call_output_ty<'a>(
         }
 
         _ => {
-            diagnostics
-                .not_yet_implemented(arenas.get_span(expr), "unknown system function call");
+            diagnostics.not_yet_implemented(arenas.get_span(expr), "unknown system function call");
             Err(())
         }
     }
@@ -290,8 +288,8 @@ pub fn lower_unevaluated_system_function_call<'a>(
 
             let sized = &ctx.arenas.sized_numbers[sized.item.at];
             let src = sized.value.clone();
-            let offset = ctx.arenas.decimals[offset.at].extract_exact_u32();
-            let width = ctx.arenas.decimals[width.at].extract_exact_u32();
+            let offset = ctx.arenas.decimals[offset.at].extract_exact_u32().unwrap();
+            let width = ctx.arenas.decimals[width.at].extract_exact_u32().unwrap();
 
             let Some(width) = VectorSize::new(width) else {
                 mctx.diagnostics.not_yet_implemented(
@@ -316,6 +314,58 @@ pub fn lower_unevaluated_system_function_call<'a>(
                 VType::UnsignedNet(width),
             )))
         }
+        _ => Ok(None),
+    }
+}
+
+pub fn lower_unevaluated_system_function_call_ty<'a>(
+    arenas: &'a AstArenas,
+    diagnostics: &mut Diagnostics,
+    expr: AstId<Expr>,
+    ident: AstItem<SystemTaskIdentifier>,
+    // arguments are in reverse order
+    arguments: Option<AstIdRange<'a, Expr<'a>>>,
+) -> Result<Option<VType>, ()> {
+    macro_rules! ensure_num_args_equal {
+        ($expected:expr) => {
+            let num_args = arguments.map_or(0, |a| a.len());
+            if num_args != $expected {
+                diagnostics
+                    .not_yet_implemented(arenas.get_span(expr), "intrinsic not expected amount");
+                return Err(());
+            }
+        };
+    }
+
+    // @Performance: Use a perfect hashmap here.
+    match &arenas.ident_table[ident.item.0] {
+        "vogls_lupdt" => {
+            ensure_num_args_equal!(1);
+            Ok(Some(VType::UnsignedNet(TIME_VSIZE)))
+        }
+        "vogls_slice" => {
+            ensure_num_args_equal!(3);
+            let arguments = arguments.unwrap();
+            let width = arguments.get(2);
+
+            let Expr::Decimal(width) = &*width else {
+                diagnostics.not_yet_implemented(
+                    arenas.get_item_span(ident),
+                    "slice snd argument should be decimal",
+                );
+                return Err(());
+            };
+
+            let width = arenas.decimals[width.at].extract_exact_u32().unwrap();
+
+            let Some(width) = VectorSize::new(width) else {
+                diagnostics
+                    .not_yet_implemented(arenas.get_item_span(ident), "width should be non-zero");
+                return Err(());
+            };
+            Ok(Some(VType::UnsignedNet(width)))
+        }
+
         _ => Ok(None),
     }
 }

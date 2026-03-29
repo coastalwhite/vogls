@@ -157,9 +157,23 @@ pub fn constant_propagation(
                                 *i = BI(dst, IO::UnsignedLessEqual, lhs, b.clone())
                             }
 
+                            (
+                                O::Slice
+                                | O::LogicalShiftLeft
+                                | O::LogicalShiftRight
+                                | O::ArithmeticShiftRight,
+                                _,
+                                Some(b),
+                            ) if b.contains_special() => {
+                                let value = Bits::new_unknown(vars[dst].size);
+                                scratch_map.insert(dst, Some(value.clone()));
+                                *i = I::Constant(dst, value);
+                                continue;
+                            }
+
                             (O::Slice, Some(_), _) => {}
                             (O::Slice, _, Some(b)) => {
-                                if vars[dst].size.get() + b.extract_exact_u32()
+                                if vars[dst].size.get() + b.extract_exact_u32().unwrap()
                                     <= vars[lhs].size.get()
                                 {
                                     *i = BI(dst, IO::Slice, lhs, b.clone())
@@ -181,7 +195,7 @@ pub fn constant_propagation(
 
                             (O::Concat, Some(b), _) => *i = BI(dst, IO::ConcatLeft, rhs, b.clone()),
                             (O::Concat, _, Some(b)) => {
-                                *i = BI(dst, IO::ConcatRight, rhs, b.clone())
+                                *i = BI(dst, IO::ConcatRight, lhs, b.clone())
                             }
 
                             (O::CopyX, Some(_), _) => {}
@@ -329,8 +343,8 @@ pub fn constant_propagation(
                 BasicBlockTerminator::VariableWait(target, time) => {
                     if let Some(time) = scratch_map.get(time) {
                         if let Some(time) = time.as_ref() {
-                            bb.terminator =
-                                BasicBlockTerminator::Wait(*target, Time(time.extract_exact_u64()));
+                            let time = time.extract_exact_u64().unwrap_or(0);
+                            bb.terminator = BasicBlockTerminator::Wait(*target, Time(time));
                         }
                     } else {
                         all_variables_completed = false;
@@ -404,10 +418,7 @@ pub fn constant_propagation(
                     if let Instruction::Phi(dst, srcs) = i {
                         let num_matches = srcs
                             .iter()
-                            .filter(|(bb, var)| {
-                                scratch_map.insert(*var, None);
-                                scratch_mfr.contains(bb)
-                            })
+                            .filter(|(bb, _)| scratch_mfr.contains(bb))
                             .count();
 
                         assert!(num_matches < srcs.len());
@@ -470,9 +481,11 @@ pub fn constant_propagation(
             &mut cycle_lowlink,
         );
         for &var in &cycle_nodes {
-            scratch_dep.remove(&var);
             scratch_map.insert(var, None);
         }
+
+        scratch_dep.clear();
+        scratch_dep_edges.clear();
     }
 }
 
@@ -561,4 +574,3 @@ fn find_cycle_nodes<K: Eq + std::hash::Hash + Copy>(
         }
     }
 }
-

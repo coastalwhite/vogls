@@ -4,8 +4,8 @@ use vogls_ir::{GlobalContext, INTEGER_VSIZE, VectorSize};
 use crate::ast::AstId;
 use crate::ast::expr::{BinaryOperator, BitSlice, Expr, Replication, UnaryOperator};
 use crate::elaborate::{VSymbol, VSymbolTable};
-use crate::lower::expression::coerce_to_max_size_ty;
 use crate::lower::expression::system_function_call::get_system_function_call_output_ty;
+use crate::lower::expression::{coerce_to_max_size_ty, system_function_call};
 use crate::lower::{
     Diagnostics, VType, eval_constant_expr, hident_span, msb_lsb_to_width, try_resolve_symbol_id,
 };
@@ -283,7 +283,15 @@ pub fn get_expr_type<'a>(
                                 continue;
                             };
                             let width = width.coerce(&VType::UnsignedNet(INTEGER_VSIZE));
-                            let width = width.into_bits().extract_exact_u32();
+                            let Some(width) = width.into_bits().extract_exact_u32() else {
+                                diagnostics.not_yet_implemented(
+                                    arenas.get_span(expr),
+                                    "width cannot contain unknown or high-impedance values",
+                                );
+                                error = true;
+                                result_stack.push(None);
+                                continue;
+                            };
                             let Some(width) = VectorSize::new(width) else {
                                 diagnostics.not_yet_implemented(
                                     arenas.get_span(expr),
@@ -320,6 +328,24 @@ pub fn get_expr_type<'a>(
             }
             Expr::SystemFunctionCall(ident, exprs) => {
                 if !item.dispatched {
+                    match system_function_call::lower_unevaluated_system_function_call_ty(
+                        arenas,
+                        diagnostics,
+                        expr,
+                        ident,
+                        exprs,
+                    ) {
+                        Ok(Some(res)) => {
+                            result_stack.push(Some(res));
+                            continue;
+                        }
+                        Err(()) => {
+                            result_stack.push(None);
+                            continue;
+                        }
+                        Ok(None) => {}
+                    }
+
                     item.dispatched = true;
                     dispatch_stack.push(item);
                     if let Some(exprs) = exprs {

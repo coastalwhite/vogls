@@ -59,7 +59,13 @@ pub fn fv_l_copy_z_sep(
         (dst[i], dst[nwords + i]) = copy_z(src_spc[i], src_val[i], mask_spc[i], mask_val[i]);
     }
 }
-pub fn fv_tv_l_copy_x(dst: &mut [u64], src: &[u64], mask_spc: &[u64], mask_val: &[u64]) {
+pub fn fv_tv_l_copy_x(
+    dst: &mut [u64],
+    src: &[u64],
+    mask_spc: &[u64],
+    mask_val: &[u64],
+    _size: VectorSize,
+) {
     let nwords = dst.len() / 2;
     assert!(nwords == src.len() && nwords == mask_spc.len() && nwords == mask_val.len());
     for i in 0..nwords {

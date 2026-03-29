@@ -110,6 +110,17 @@ pub fn fv_l_concat(
     );
 }
 
+pub fn fv_w_concat(
+    xspc: u64,
+    xvalue: u64,
+    yspc: u64,
+    yvalue: u64,
+    rhs_size: VectorSize,
+) -> (u64, u64) {
+    let spc = (xspc << rhs_size.get()) | yspc;
+    let value = (xvalue << rhs_size.get()) | yvalue;
+    (spc, value)
+}
 pub fn fv_s_concat(
     dst: &mut [u8],
     lhs: &[u8],
@@ -121,9 +132,8 @@ pub fn fv_s_concat(
     let y = load_partial_u64(rhs, VectorSize::new(rhs_size.get() * 2).unwrap());
     let (xspc, xvalue) = fv_unpack_u64(x, lhs_size);
     let (yspc, yvalue) = fv_unpack_u64(y, rhs_size);
-    let spc = (xspc << rhs_size.get()) | yspc;
-    let value = (xvalue << rhs_size.get()) | yvalue;
     let dst_size = VectorSize::new(lhs_size.get() + rhs_size.get()).unwrap();
+    let (spc, value) = fv_w_concat(xspc, xvalue, yspc, yvalue, rhs_size);
     let result = fv_pack_u64(spc, value, dst_size);
     store_partial_u64(dst, result, VectorSize::new(dst_size.get() * 2).unwrap());
 }
