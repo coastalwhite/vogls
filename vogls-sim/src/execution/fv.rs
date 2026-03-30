@@ -363,7 +363,6 @@ pub(crate) fn exec_fv_shift(
     src: HeapOffset,
     offset: HeapOffset,
 ) {
-    use ShiftOp as O;
     let (spc, offset) = stack.load_exact_fv_u32(offset);
 
     // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 53
@@ -374,7 +373,17 @@ pub(crate) fn exec_fv_shift(
         stack.set_unknown(dst);
         return;
     }
+    exec_fv_shift_imm(stack, dst, op, src, offset);
+}
 
+pub(crate) fn exec_fv_shift_imm(
+    stack: &mut Heap,
+    dst: HeapRef,
+    op: ShiftOp,
+    src: HeapOffset,
+    offset: u32,
+) {
+    use ShiftOp as O;
     if dst.size.get() <= 2 {
         let src_s = &[stack.get_subbit_byte(src.to_ref(dst.size).to_fv_size())];
         let mut dst_s = [0];
@@ -410,23 +419,34 @@ pub(crate) fn exec_fv_slice(
     stack: &mut Heap,
     dst: HeapRef,
     src: HeapRef,
-    idx: HeapOffset,
+    offset: HeapOffset,
     fill_with_x: bool,
 ) {
-    let (spc, offset) = stack.load_exact_fv_u32(idx);
+    let (spc, offset) = stack.load_exact_fv_u32(offset);
     if !spc != 0 {
         stack.set_unknown(dst);
         return;
     }
+    exec_fv_slice_imm(stack, dst, src, offset, fill_with_x);
+}
 
+pub(crate) fn exec_fv_slice_imm(
+    stack: &mut Heap,
+    dst: HeapRef,
+    src: HeapRef,
+    offset: u32,
+    fill_with_x: bool,
+) {
     if dst.size < Heap::FV_U64_MIN_SIZE && src.size < Heap::FV_U64_MIN_SIZE {
         let (spc, val) = stack.get_fv_u64(src);
-        let (spc, val) = vogls_bits::slice::fv_s_slice(spc, val, offset, dst.size, src.size, fill_with_x);
+        let (spc, val) =
+            vogls_bits::slice::fv_s_slice(spc, val, offset, dst.size, src.size, fill_with_x);
         stack.set_fv_u64(dst, spc, val);
     } else if dst.size < Heap::FV_U64_MIN_SIZE && src.size >= Heap::FV_U64_MIN_SIZE {
         let src_size = src.size;
         let src = stack.get_mut_u64_slice(src.offset, 2 * src.size.get().div_ceil(64) as usize);
-        let (spc, val) = vogls_bits::slice::fv_ls_slice(src, offset, dst.size, src_size, fill_with_x);
+        let (spc, val) =
+            vogls_bits::slice::fv_ls_slice(src, offset, dst.size, src_size, fill_with_x);
         stack.set_fv_u64(dst, spc, val);
     } else {
         let (dst_s, src_s) = stack.get_disjoint_u64_dst_src(

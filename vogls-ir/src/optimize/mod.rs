@@ -1,15 +1,53 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use slotmap::{SecondaryMap, SlotMap};
-use vogls_utils::VgHashSet;
+use vogls_utils::{VgHashMap, VgHashSet};
 
 pub mod constant_propagation;
 pub mod deadcode_elimination;
 
 use crate::{
-    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryOp, Bits, Instruction, SCALAR_VSIZE,
-    UnaryOp, Variable, VariableKey,
+    BasicBlock, BasicBlockKey, BasicBlockTerminator, GlobalContext, Instruction, ProcessKey,
 };
+
+pub struct OptFlags {
+    pub opt_rounds: u8,
+    pub constant_propagation: bool,
+    pub deadcode_elimination: bool,
+}
+
+pub fn optimize_processes(gl: &mut GlobalContext, processes: &[ProcessKey], flags: OptFlags) {
+    let mut scratch_stack = Vec::new();
+    let mut scratch_seen = VgHashSet::default();
+    let mut scratch_mfr = VgHashSet::default();
+    let mut scratch_map = VgHashMap::default();
+    let mut scratch_dep = VgHashMap::default();
+    let mut scratch_dep_edges = Vec::new();
+    for &process in processes {
+        for _ in 0..flags.opt_rounds {
+            if flags.constant_propagation {
+                constant_propagation::constant_propagation(
+                    gl,
+                    process,
+                    &mut scratch_stack,
+                    &mut scratch_seen,
+                    &mut scratch_mfr,
+                    &mut scratch_map,
+                    &mut scratch_dep,
+                    &mut scratch_dep_edges,
+                );
+            }
+            if flags.deadcode_elimination {
+                deadcode_elimination::deadcode_elimination(
+                    gl,
+                    process,
+                    &mut scratch_stack,
+                    &mut scratch_seen,
+                );
+            }
+        }
+    }
+}
 
 pub fn get_fan_in<'a>(
     bbs: &mut SlotMap<BasicBlockKey, BasicBlock>,
@@ -176,280 +214,5 @@ pub fn remove_needles_branches(
             *terminator = BasicBlockTerminator::Jump(*bb1);
         }
         terminator.extend_next_rev(scratch_stack, scratch_seen);
-    }
-}
-
-pub fn propagate_constants<'a>(
-    bbs: &mut SlotMap<BasicBlockKey, BasicBlock>,
-    vars: &SlotMap<VariableKey, Variable>,
-    entry: BasicBlockKey,
-    scratch_stack: &mut Vec<BasicBlockKey>,
-    scratch_mfr: &mut Vec<BasicBlockKey>,
-    scratch_seen: &mut HashSet<BasicBlockKey>,
-    scratch_removed: &mut HashSet<BasicBlockKey>,
-    scratch_map: &mut HashMap<VariableKey, Bits>,
-    scratch_var_to_var_map: &mut HashMap<VariableKey, VariableKey>,
-    scratch_fan_in: &mut SecondaryMap<BasicBlockKey, Vec<BasicBlockKey>>,
-) {
-    scratch_stack.clear();
-    scratch_mfr.clear();
-    scratch_seen.clear();
-    scratch_removed.clear();
-    scratch_map.clear();
-    scratch_var_to_var_map.clear();
-
-    scratch_stack.push(entry);
-    scratch_seen.insert(entry);
-
-    while let Some(bb_key) = scratch_stack.pop() {
-        let BasicBlock { instrs, terminator } = &mut bbs[bb_key];
-
-        for i in instrs {
-            use Instruction as I;
-            let (dst, bits) = match i {
-                I::Constant(key, bits) => {
-                    scratch_map.insert(*key, bits.clone());
-                    continue;
-                }
-                I::Unary(dst, op, src) => {
-                    let Some(bits) = scratch_map.get(src) else {
-                        continue;
-                    };
-
-                    (*dst, op.evaluate(bits))
-                }
-                I::Resize(dst, op, src) => {
-                    let Some(bits) = scratch_map.get(src) else {
-                        continue;
-                    };
-
-                    let target_size = vars[*dst].size;
-                    (*dst, op.evaluate(bits, target_size))
-                }
-                I::Binary(dst, op, src1, src2) => {
-                    let csrc1 = scratch_map.get(src1);
-                    let csrc2 = scratch_map.get(src2);
-
-                    use BinaryOp as O;
-                    (
-                        *dst,
-                        match (csrc1, csrc2) {
-                            (Some(src1), Some(src2)) => op.evaluate(src1, src2, vars[*dst].size),
-                            (Some(src), _) | (_, Some(src)) => {
-                                let non_constant_src = if csrc1.is_none() { *src1 } else { *src2 };
-                                macro_rules! set_eq_to_non_constant_src {
-                                    () => {{
-                                        _ = scratch_var_to_var_map.insert(*dst, non_constant_src);
-                                        continue;
-                                    }};
-                                }
-
-                                let num_ones = src.count_ones();
-                                let size = src.size();
-                                match op {
-                                    O::And if num_ones == 0 => Bits::new_zeroed(size),
-                                    O::And | O::Add | O::Sub if num_ones == size.get() => {
-                                        set_eq_to_non_constant_src!()
-                                    }
-                                    O::And => continue,
-                                    O::Or | O::Xor if num_ones == 0 => {
-                                        set_eq_to_non_constant_src!()
-                                    }
-                                    O::Or if num_ones == size.get() => Bits::new_ones(size),
-                                    O::Or => continue,
-                                    O::Xor if num_ones == size.get() => src.bitwise_negate(),
-                                    O::Xor => continue,
-                                    O::Add | O::Sub => continue,
-                                    O::Multiply if num_ones == 0 => Bits::new_zeroed(size),
-                                    O::Multiply | O::Divide if src.is_one() => {
-                                        set_eq_to_non_constant_src!()
-                                    }
-                                    O::Multiply | O::Divide => continue,
-                                    O::UnsignedLessEqual if num_ones == 0 && csrc1.is_none() => {
-                                        *i = Instruction::Unary(
-                                            *dst,
-                                            UnaryOp::ReduceOr,
-                                            non_constant_src,
-                                        );
-                                        continue;
-                                    }
-                                    O::UnsignedLessEqual if num_ones == 0 && csrc2.is_none() => {
-                                        Bits::new_ones(SCALAR_VSIZE)
-                                    }
-                                    O::UnsignedLessEqual
-                                        if num_ones == size.get() && csrc1.is_none() =>
-                                    {
-                                        Bits::new_ones(SCALAR_VSIZE)
-                                    }
-                                    O::UnsignedLessEqual
-                                        if num_ones == size.get() && csrc2.is_none() =>
-                                    {
-                                        *i = Instruction::Unary(
-                                            *dst,
-                                            UnaryOp::ReduceAnd,
-                                            non_constant_src,
-                                        );
-                                        continue;
-                                    }
-                                    O::LogicalShiftLeft
-                                    | O::LogicalShiftRight
-                                    | O::ArithmeticShiftRight
-                                        if csrc1.is_none() && num_ones == 0 =>
-                                    {
-                                        set_eq_to_non_constant_src!();
-                                    }
-                                    O::LogicalShiftLeft
-                                    | O::LogicalShiftRight
-                                    | O::ArithmeticShiftRight
-                                        if csrc2.is_none() && num_ones == 0 =>
-                                    {
-                                        Bits::new_zeroed(size)
-                                    }
-                                    O::Power
-                                    | O::UnsignedLessEqual
-                                    | O::Min
-                                    | O::Max
-                                    | O::CaseEquality
-                                    | O::Modulus
-                                    | O::Slice
-                                    | O::LogicalShiftLeft
-                                    | O::LogicalShiftRight
-                                    | O::ArithmeticShiftRight
-                                    | O::Concat
-                                    | O::CopyX
-                                    | O::CopyZ
-                                    | O::Posedge
-                                    | O::Negedge => continue,
-                                }
-                            }
-                            (None, None) => continue,
-                        },
-                    )
-                }
-                I::BinaryImm(_, _, _, _) => continue,
-                I::Intrinsic(_, _, _) => continue,
-                I::LastUpdateTime(_, _) => continue,
-                I::Probe(_, _) => continue,
-                I::Drive(_, _, _) => continue,
-                I::Phi(_, _) => continue,
-            };
-            scratch_map.insert(dst, bits.clone());
-            *i = I::Constant(dst, bits);
-        }
-
-        // Simplify constant branches.
-        if let BasicBlockTerminator::Branch(condition, truthy_bb, falsy_bb) = terminator
-            && let Some(condition) = scratch_map.get(condition)
-        {
-            let (mfr, jump) = if condition.not_eq_zero() {
-                (*falsy_bb, *truthy_bb)
-            } else {
-                (*truthy_bb, *falsy_bb)
-            };
-            if !scratch_seen.contains(&mfr) {
-                scratch_mfr.push(mfr);
-            }
-            *terminator = BasicBlockTerminator::Jump(jump);
-
-            bbs[mfr].remove_fan_in_edge(bb_key);
-            scratch_fan_in[mfr].retain(|k| *k != bb_key);
-        }
-        bbs[bb_key]
-            .terminator
-            .extend_next_rev(scratch_stack, scratch_seen);
-    }
-
-    while let Some(bb_key) = scratch_mfr.pop() {
-        if !scratch_seen.insert(bb_key) {
-            continue;
-        }
-
-        let start_stack_len = scratch_mfr.len();
-        bbs[bb_key]
-            .terminator
-            .extend_next_rev(scratch_mfr, scratch_seen);
-
-        for &fan_out in &scratch_mfr[start_stack_len..] {
-            if !scratch_seen.contains(&fan_out) {
-                continue;
-            }
-
-            bbs[fan_out].remove_fan_in_edge(bb_key);
-            scratch_fan_in[fan_out].retain(|k| *k != bb_key);
-        }
-
-        bbs.remove(bb_key);
-        scratch_fan_in.remove(bb_key);
-    }
-
-    if !scratch_var_to_var_map.is_empty() {
-        scratch_seen.clear();
-        scratch_stack.push(entry);
-        scratch_seen.insert(entry);
-
-        while let Some(bb_key) = scratch_stack.pop() {
-            let BasicBlock { instrs, terminator } = &mut bbs[bb_key];
-
-            instrs.retain_mut(|i| {
-                if i.get_destination_variable()
-                    .is_some_and(|dst| scratch_var_to_var_map.contains_key(&dst))
-                {
-                    return false;
-                }
-                i.map_vars(|v| scratch_var_to_var_map.get(&v).copied().unwrap_or(v));
-                true
-            });
-            terminator.map_vars(|v| scratch_var_to_var_map.get(&v).copied().unwrap_or(v));
-            terminator.extend_next_rev(scratch_stack, scratch_seen);
-        }
-    }
-}
-
-pub fn deadcode_elimination<'a>(
-    bbs: &mut SlotMap<BasicBlockKey, BasicBlock>,
-    vars: &mut SlotMap<VariableKey, Variable>,
-    entry: BasicBlockKey,
-    scratch_stack: &mut Vec<BasicBlockKey>,
-    scratch_seen: &mut HashSet<BasicBlockKey>,
-    scratch_var_seen: &mut HashSet<VariableKey>,
-) {
-    scratch_stack.clear();
-    scratch_seen.clear();
-    scratch_var_seen.clear();
-
-    scratch_stack.push(entry);
-    scratch_seen.insert(entry);
-
-    while let Some(bb_key) = scratch_stack.pop() {
-        let BasicBlock { instrs, terminator } = &bbs[bb_key];
-        for i in instrs {
-            i.for_each_var_src(|v| _ = scratch_var_seen.insert(v));
-        }
-        terminator.for_each_var_src(|v| _ = scratch_var_seen.insert(v));
-        terminator.extend_next_rev(scratch_stack, scratch_seen);
-    }
-
-    scratch_seen.clear();
-    scratch_stack.push(entry);
-    scratch_seen.insert(entry);
-
-    while let Some(bb_key) = scratch_stack.pop() {
-        let BasicBlock { instrs, terminator } = &mut bbs[bb_key];
-        terminator.extend_next_rev(scratch_stack, scratch_seen);
-        instrs.retain(|i| {
-            if i.has_side_effects_on_call() {
-                return true;
-            }
-
-            let Some(dst) = i.get_destination_variable() else {
-                return true;
-            };
-            if scratch_var_seen.contains(&dst) {
-                return true;
-            }
-
-            vars.remove(dst);
-            false
-        });
     }
 }

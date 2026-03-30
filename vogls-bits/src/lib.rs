@@ -9,6 +9,7 @@ use self::arithmetic::{
 use self::format::{BitsDisplay, BitsFormatOptions};
 use self::leading_trailing::{tv_leading_ones, tv_leading_zeros};
 use self::truncate::{fv_l_truncate, tv_l_truncate};
+use self::util::saturating_rem;
 
 pub mod arithmetic;
 pub mod comparison;
@@ -747,6 +748,23 @@ impl Bits {
                         .iter()
                         .map(|spc| spc.count_ones())
                         .sum::<u32>()
+            }
+        }
+    }
+    pub fn count_unknown(&self) -> u32 {
+        match self.as_data_ref() {
+            BitsDataRef::InlineTv(_) => 0,
+            BitsDataRef::SeparateTv(_) => 0,
+            BitsDataRef::InlineFv(spc, val) => {
+                ((!spc & !val) & ((1u64 << self.size().get()) - 1)).count_ones()
+            }
+            BitsDataRef::SeparateFv(v) => {
+                v[..v.len() / 2]
+                    .iter()
+                    .zip(&v[v.len() / 2..])
+                    .map(|(spc, val)| (!spc & !val).count_ones())
+                    .sum::<u32>()
+                    - saturating_rem(self.size().get(), 64)
             }
         }
     }

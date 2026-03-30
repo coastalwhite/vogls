@@ -4,8 +4,7 @@ use vogls_codegen::{
     HeapBuilder, HeapOffset, HeapRef, insert_bb_phis, resolve_heap_map, resolve_var_logic_mode_map,
 };
 use vogls_ir::{
-    BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext, INTEGER_VSIZE,
-    Instruction, IntrinsicOp, LogicMode, ProcessKey, SignalKey, VariableKey,
+    BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext, Instruction, IntrinsicOp, LogicMode, ProcessKey, ShiftImmOp, SignalKey, VariableKey, INTEGER_VSIZE
 };
 use vogls_runtime::RtSignalKey;
 use vogls_utils::{VgHashMap, VgHashSet};
@@ -140,7 +139,6 @@ pub fn lower_process_to_vm(
                     use BinaryArithmeticOp as BA;
                     use BinaryComparisonOp as BC;
                     use BinaryImmOp as O;
-                    use ShiftOp as S;
                     if mode == M::FourValue {
                         match *op {
                             O::And => VI::FvBinaryArithmetic(d.to_ref(d_size), BA::And, src, imm),
@@ -197,16 +195,6 @@ pub fn lower_process_to_vm(
                                 src.to_ref(s1_size),
                                 imm,
                             ),
-                            O::Slice => VI::FvSlice(d.to_ref(d_size), src.to_ref(s1_size), imm, false),
-                            O::LogicalShiftLeft => {
-                                VI::FvShift(d.to_ref(d_size), S::LogicalLeft, src, imm)
-                            }
-                            O::LogicalShiftRight => {
-                                VI::FvShift(d.to_ref(d_size), S::LogicalRight, src, imm)
-                            }
-                            O::ArithmeticShiftRight => {
-                                VI::FvShift(d.to_ref(d_size), S::ArithmeticRight, src, imm)
-                            }
                             O::ConcatLeft => {
                                 VI::FvConcat(d, src.to_ref(s1_size), imm.to_ref(s2_size))
                             }
@@ -270,22 +258,81 @@ pub fn lower_process_to_vm(
                                 src.to_ref(s1_size),
                                 imm,
                             ),
-                            O::Slice => VI::TvSlice(d.to_ref(d_size), src.to_ref(s1_size), imm, false),
-                            O::LogicalShiftLeft => {
-                                VI::TvShift(d.to_ref(d_size), S::LogicalLeft, src, imm)
-                            }
-                            O::LogicalShiftRight => {
-                                VI::TvShift(d.to_ref(d_size), S::LogicalRight, src, imm)
-                            }
-                            O::ArithmeticShiftRight => {
-                                VI::TvShift(d.to_ref(d_size), S::ArithmeticRight, src, imm)
-                            }
                             O::ConcatLeft => {
                                 VI::TvConcat(d, src.to_ref(s1_size), imm.to_ref(s2_size))
                             }
                             O::ConcatRight => {
                                 VI::TvConcat(d, src.to_ref(s1_size), imm.to_ref(s2_size))
                             }
+                        }
+                    }
+                }
+                I::Slice(d, s1, s2) => {
+                    use LogicMode as M;
+
+                    let d_size = gl.vars[*d].size;
+                    let s1_size = gl.vars[*s1].size;
+                    let s2_size = gl.vars[*s2].size;
+                    let s1_mode = var_mode[s1];
+                    let s2_mode = var_mode[s2];
+                    let d = var!(*d);
+                    let mode = match (s1_mode, s2_mode) {
+                        (M::FourValue, _) | (_, M::FourValue) => M::FourValue,
+                        _ => M::TwoValue,
+                    };
+                    let s1 = var!(*s1, (mode, s1_mode, s1_size));
+                    let s2 = var!(*s2, (mode, s2_mode, s2_size));
+                    if mode == M::FourValue {
+                        VI::FvSlice(d.to_ref(d_size), s1.to_ref(s1_size), s2, true)
+                    } else {
+                        VI::TvSlice(d.to_ref(d_size), s1.to_ref(s1_size), s2, true)
+                    }
+                }
+                I::SliceImm(d, src, offset) => {
+                    use LogicMode as M;
+
+                    let d_size = gl.vars[*d].size;
+                    let s1_size = gl.vars[*src].size;
+                    let s1_mode = var_mode[src];
+                    let s2_mode = LogicMode::TwoValue;
+                    let d = var!(*d);
+                    let mode = match (s1_mode, s2_mode) {
+                        (M::FourValue, _) | (_, M::FourValue) => M::FourValue,
+                        _ => M::TwoValue,
+                    };
+                    let src = var!(*src, (mode, s1_mode, s1_size));
+                    if mode == M::FourValue {
+                        VI::FvSliceImm(d.to_ref(d_size), src.to_ref(s1_size), *offset)
+                    } else {
+                        VI::TvSliceImm(d.to_ref(d_size), src.to_ref(s1_size), *offset)
+                    }
+                }
+                I::ShiftImm(d, op, src, offset) => {
+                    use LogicMode as M;
+
+                    let d_size = gl.vars[*d].size;
+                    let s1_size = gl.vars[*src].size;
+                    let s1_mode = var_mode[src];
+                    let s2_mode = LogicMode::TwoValue;
+                    let d = var!(*d);
+                    let mode = match (s1_mode, s2_mode) {
+                        (M::FourValue, _) | (_, M::FourValue) => M::FourValue,
+                        _ => M::TwoValue,
+                    };
+                    let src = var!(*src, (mode, s1_mode, s1_size));
+                    use ShiftImmOp as O;
+                    use ShiftOp as S;
+                    if mode == M::FourValue {
+                        match op {
+                            O::LogicalShiftLeft => VI::FvShiftImm(d.to_ref(d_size), S::LogicalLeft, src, *offset),
+                            O::LogicalShiftRight => VI::FvShiftImm(d.to_ref(d_size), S::LogicalRight, src, *offset),
+                            O::ArithmeticShiftRight => VI::FvShiftImm(d.to_ref(d_size), S::ArithmeticRight, src, *offset),
+                        }
+                    } else {
+                        match op {
+                            O::LogicalShiftLeft => VI::TvShiftImm(d.to_ref(d_size), S::LogicalLeft, src, *offset),
+                            O::LogicalShiftRight => VI::TvShiftImm(d.to_ref(d_size), S::LogicalRight, src, *offset),
+                            O::ArithmeticShiftRight => VI::TvShiftImm(d.to_ref(d_size), S::ArithmeticRight, src, *offset),
                         }
                     }
                 }
@@ -337,7 +384,6 @@ pub fn lower_process_to_vm(
                             O::CaseEquality => {
                                 VI::FvBinaryComparison(d, BC::CaseEquality, s1.to_ref(s1_size), s2)
                             }
-                            O::Slice => VI::FvSlice(d.to_ref(d_size), s1.to_ref(s1_size), s2, true),
                             O::LogicalShiftLeft => {
                                 VI::FvShift(d.to_ref(d_size), S::LogicalLeft, s1, s2)
                             }
@@ -383,7 +429,6 @@ pub fn lower_process_to_vm(
                             O::CaseEquality => {
                                 VI::TvBinaryComparison(d, BC::CaseEquality, s1.to_ref(s1_size), s2)
                             }
-                            O::Slice => VI::TvSlice(d.to_ref(d_size), s1.to_ref(s1_size), s2, true),
                             O::LogicalShiftLeft => {
                                 VI::TvShift(d.to_ref(d_size), S::LogicalLeft, s1, s2)
                             }

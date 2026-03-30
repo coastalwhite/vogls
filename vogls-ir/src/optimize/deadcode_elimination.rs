@@ -1,7 +1,6 @@
-use slotmap::SlotMap;
 use vogls_utils::{VgHashMap, VgHashSet};
 
-use crate::{BasicBlock, BasicBlockKey, Variable, VariableKey};
+use crate::{BasicBlockKey, GlobalContext, ProcessKey, VariableKey};
 
 /// An optimization pass that removes unused instructions.
 ///
@@ -15,12 +14,13 @@ use crate::{BasicBlock, BasicBlockKey, Variable, VariableKey};
 ///    neighbors are unused, the variable is unused.
 /// 3. Filter out all instructions that create the unused instructions.
 pub fn deadcode_elimination(
-    bbs: &mut SlotMap<BasicBlockKey, BasicBlock>,
-    vars: &mut SlotMap<VariableKey, Variable>,
-    entry: BasicBlockKey,
+    gl: &mut GlobalContext,
+    process: ProcessKey,
     scratch_stack: &mut Vec<BasicBlockKey>,
     scratch_seen: &mut VgHashSet<BasicBlockKey>,
 ) {
+    let entry = gl.processes[process].entry;
+
     enum VariableState {
         Used,
         Unused,
@@ -41,7 +41,7 @@ pub fn deadcode_elimination(
     scratch_stack.clear();
     scratch_stack.push(entry);
     while let Some(bb_key) = scratch_stack.pop() {
-        let bb = &bbs[bb_key];
+        let bb = &gl.bbs[bb_key];
         bb.terminator.for_each_bb(|next| {
             if scratch_seen.insert(next) {
                 scratch_stack.push(next);
@@ -135,7 +135,7 @@ pub fn deadcode_elimination(
     // Turn nodes into a hashset of unused variables.
     nodes.retain(|var, state| {
         if matches!(state, VariableState::Unused) {
-            vars.remove(*var);
+            gl.vars.remove(*var);
             return true;
         }
 
@@ -147,7 +147,7 @@ pub fn deadcode_elimination(
     scratch_stack.clear();
     scratch_stack.push(entry);
     while let Some(bb_key) = scratch_stack.pop() {
-        let bb = &mut bbs[bb_key];
+        let bb = &mut gl.bbs[bb_key];
         bb.terminator.for_each_bb(|next| {
             if scratch_seen.insert(next) {
                 scratch_stack.push(next);

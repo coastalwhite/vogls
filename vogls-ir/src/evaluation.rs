@@ -32,24 +32,43 @@ fn evaluate_impl(
             I::Unary(dst, op, src) => {
                 let src = &variables[src];
                 let bits = op.evaluate(src);
-                _ = variables.insert(*dst, bits.clone());
+                _ = variables.insert(*dst, bits);
             }
             I::Resize(dst, op, src) => {
                 let src = &variables[src];
                 let dst_size = gl.vars[*dst].size;
                 let bits = op.evaluate(src, dst_size);
-                _ = variables.insert(*dst, bits.clone());
+                _ = variables.insert(*dst, bits);
             }
             I::Binary(dst, op, lhs, rhs) => {
                 let lhs = &variables[lhs];
                 let rhs = &variables[rhs];
                 let bits = op.evaluate(lhs, rhs, gl.vars[*dst].size);
-                _ = variables.insert(*dst, bits.clone());
+                _ = variables.insert(*dst, bits);
+            }
+            I::Slice(dst, src, offset) => {
+                let src = &variables[src];
+                let offset = &variables[offset];
+                let bits = match offset.extract_exact_u32() {
+                    None => Bits::new_unknown(gl.vars[*dst].size),
+                    Some(offset) => src.slicex(offset, gl.vars[*dst].size),
+                };
+                _ = variables.insert(*dst, bits);
             }
             I::BinaryImm(dst, op, src, imm) => {
                 let src = &variables[src];
-                let bits = op.evaluate(src, imm, gl.vars[*dst].size);
-                _ = variables.insert(*dst, bits.clone());
+                let bits = op.evaluate(src, imm);
+                _ = variables.insert(*dst, bits);
+            }
+            I::SliceImm(dst, src, offset) => {
+                let src = &variables[src];
+                let bits = src.slicez(*offset, gl.vars[*dst].size);
+                _ = variables.insert(*dst, bits);
+            }
+            I::ShiftImm(dst, op, src, amount) => {
+                let src = &variables[src];
+                let bits = op.evaluate(src, *amount);
+                _ = variables.insert(*dst, bits);
             }
             I::Intrinsic(_, _, _) => todo!(),
             I::LastUpdateTime(_, _) => todo!(),

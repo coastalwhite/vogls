@@ -1,12 +1,16 @@
+use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use vogls::ExecutionContext;
-use vogls_ir::LogicMode;
+use vogls_ir::{GlobalContext, LogicMode};
 
 #[derive(clap::Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
+    #[command(subcommand)]
+    command: Option<Commands>,
+
     path: Vec<PathBuf>,
 
     #[arg(short = 'm', long = "top-level-module")]
@@ -60,8 +64,68 @@ struct Args {
     print_optimized_fuse_signals: bool,
 }
 
+#[derive(Subcommand, Debug)]
+enum Commands {
+    Vir {
+        path: PathBuf,
+        #[arg(long)]
+        emit_unoptimized_ir: bool,
+        #[arg(long, default_value_t = 0)]
+        opt_rounds: u8,
+        #[arg(long)]
+        constant_propagation: bool,
+        #[arg(long)]
+        deadcode_elimination: bool,
+    },
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
+    if let Some(command) = &args.command {
+        match command {
+            Commands::Vir {
+                path,
+                emit_unoptimized_ir,
+                opt_rounds,
+                constant_propagation,
+                deadcode_elimination,
+            } => {
+                let content = read_to_string(path)?;
+                let mut gl = GlobalContext::default();
+                vogls_ir::parse::parse(&content, &mut gl)?;
+
+                if *emit_unoptimized_ir {
+                    for signal in gl.signals.values() {
+                        println!("{}", signal.display());
+                    }
+                    println!();
+                    for process in gl.processes.values() {
+                        println!("{}", process.display(&gl));
+                    }
+                }
+
+                let processes = gl.processes.keys().collect::<Vec<_>>();
+                vogls_ir::optimize::optimize_processes(
+                    &mut gl,
+                    &processes,
+                    vogls_ir::optimize::OptFlags {
+                        opt_rounds: *opt_rounds,
+                        constant_propagation: *constant_propagation,
+                        deadcode_elimination: *deadcode_elimination,
+                    },
+                );
+
+                for signal in gl.signals.values() {
+                    println!("{}", signal.display());
+                }
+                println!();
+                for process in gl.processes.values() {
+                    println!("{}", process.display(&gl));
+                }
+                return Ok(());
+            }
+        }
+    }
 
     let logic_mode = if args.four_value_logic {
         LogicMode::FourValue

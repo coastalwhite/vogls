@@ -77,7 +77,7 @@ mod vogls {
                 no_run: false,
                 vcd: None,
                 compile,
-                output_source: false,
+                output_source: None,
                 timings: false,
                 print_optimized_fuse_signals: false,
                 print_round_fuse_signals: false,

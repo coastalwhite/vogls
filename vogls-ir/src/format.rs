@@ -1,8 +1,10 @@
 use core::fmt;
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write;
 
 use crate::{
-    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext, Instruction, IntrinsicOp, Process, ResizeOp, Signal, Time, UnaryOp, VariableKey
+    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext,
+    Instruction, IntrinsicOp, Process, ResizeOp, ShiftImmOp, Signal, Time, UnaryOp, VariableKey,
 };
 
 const INDENT: &str = "  ";
@@ -69,6 +71,28 @@ pub trait ContextFormat {
     fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &DisplayContext<'_>) -> fmt::Result;
 }
 
+impl Signal {
+    pub fn display<'a>(&'a self) -> impl fmt::Display + 'a {
+        struct D<'a>(&'a Signal);
+        impl<'a> fmt::Display for D<'a> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                let Signal {
+                    name,
+                    size,
+                    initialize,
+                    origin: _,
+                } = self.0;
+                write!(f, "signal {name}: {size}")?;
+                if let Some(initialize) = initialize {
+                    write!(f, " = {initialize}")?;
+                }
+                Ok(())
+            }
+        }
+        D(self)
+    }
+}
+
 impl Process {
     pub fn display<'a>(&'a self, gl: &'a GlobalContext) -> impl fmt::Display + 'a {
         struct D<'a>(&'a Process, &'a GlobalContext);
@@ -84,7 +108,7 @@ impl Process {
     fn process_fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &mut DisplayContext<'_>) -> fmt::Result {
         ctx.prepare_process(self.entry);
 
-        writeln!(f, "process {} {{", self.name)?;
+        writeln!(f, "proc {} {{", self.name)?;
 
         let mut bb_stack = std::mem::take(&mut ctx.bb_stack_scratch);
         let mut bb_seen = std::mem::take(&mut ctx.bb_seen_scratch);
@@ -140,7 +164,6 @@ impl BinaryOp {
 
             Self::UnsignedLessEqual => "ule",
             Self::CaseEquality => "ceq",
-            Self::Slice => "slice",
             Self::LogicalShiftLeft => "lsl",
             Self::LogicalShiftRight => "lsr",
             Self::ArithmeticShiftRight => "asr",
@@ -178,10 +201,6 @@ impl BinaryImmOp {
             Self::UnsignedLessEqual => "ulei",
             Self::UnsignedGreaterEqual => "ugei",
             Self::CaseEquality => "ceqi",
-            Self::Slice => "slicei",
-            Self::LogicalShiftLeft => "lsl",
-            Self::LogicalShiftRight => "lsr",
-            Self::ArithmeticShiftRight => "asr",
             Self::ConcatRight => "concati.r",
             Self::ConcatLeft => "concati.l",
 
@@ -228,6 +247,16 @@ impl IntrinsicOp {
     }
 }
 
+impl ShiftImmOp {
+    pub const fn into_mnemonic(self) -> &'static str {
+        match self {
+            Self::LogicalShiftLeft => "lsli",
+            Self::LogicalShiftRight => "lsri",
+            Self::ArithmeticShiftRight => "asri",
+        }
+    }
+}
+
 impl ContextFormat for Instruction {
     fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &DisplayContext<'_>) -> fmt::Result {
         match self {
@@ -255,18 +284,51 @@ impl ContextFormat for Instruction {
                 )?;
             }
             Self::Binary(dst, op, src1, src2) => {
-                write!(f, "{} = {}", dst.display(ctx), op.into_mnemonic(),)?;
-                if *op == BinaryOp::Slice {
-                    write!(f, "[{}]", ctx.gl.vars[*dst].size)?;
-                }
-                write!(f, " {}, {}", src1.display(ctx), src2.display(ctx),)?;
+                write!(
+                    f,
+                    "{} = {} {}, {}",
+                    dst.display(ctx),
+                    op.into_mnemonic(),
+                    src1.display(ctx),
+                    src2.display(ctx)
+                )?;
             }
             Self::BinaryImm(dst, op, src, imm) => {
-                write!(f, "{} = {}", dst.display(ctx), op.into_mnemonic(),)?;
-                if *op == BinaryImmOp::Slice {
-                    write!(f, "[{}]", ctx.gl.vars[*dst].size)?;
-                }
-                write!(f, " {}, {imm}", src.display(ctx))?;
+                write!(
+                    f,
+                    "{} = {} {}, {imm}",
+                    dst.display(ctx),
+                    op.into_mnemonic(),
+                    src.display(ctx)
+                )?;
+            }
+            Self::Slice(dst, src, offset) => {
+                write!(
+                    f,
+                    "{} = slice[{}] {}, {}",
+                    dst.display(ctx),
+                    ctx.gl.vars[*dst].size,
+                    src.display(ctx),
+                    offset.display(ctx)
+                )?;
+            }
+            Self::SliceImm(dst, src, offset) => {
+                write!(
+                    f,
+                    "{} = slicei[{}] {}, {offset}",
+                    dst.display(ctx),
+                    ctx.gl.vars[*dst].size,
+                    src.display(ctx),
+                )?;
+            }
+            Self::ShiftImm(dst, op, src, amount) => {
+                write!(
+                    f,
+                    "{} = {} {}, {amount}",
+                    dst.display(ctx),
+                    op.into_mnemonic(),
+                    src.display(ctx)
+                )?;
             }
             Self::Intrinsic(dst, op, args) => {
                 dst.ctx_fmt(f, ctx)?;
@@ -288,11 +350,11 @@ impl ContextFormat for Instruction {
             }
             Self::Probe(var, sig) => {
                 var.ctx_fmt(f, ctx)?;
-                f.write_str(" = probe ")?;
+                f.write_str(" = prb ")?;
                 ctx.gl.signals.get(*sig).unwrap().ctx_fmt(f, ctx)?;
             }
             Self::Drive(sig, var, partial) => {
-                f.write_str("drive")?;
+                f.write_str("drv")?;
                 if let Some((offset, length)) = partial {
                     f.write_str("[")?;
                     offset.ctx_fmt(f, ctx)?;
@@ -326,8 +388,8 @@ impl ContextFormat for BasicBlockTerminator {
     fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &DisplayContext<'_>) -> fmt::Result {
         let mnemonic = match self {
             Self::Wait(..) => "wait",
-            Self::VariableWait(..) => "wait.var",
-            Self::WaitRegion(..) => "wait.region",
+            Self::VariableWait(..) => "varwait",
+            Self::WaitRegion(..) => "waitregion",
             Self::Watch(..) => "watch",
             Self::Jump(..) => "jump",
             Self::Branch(..) => "branch",
@@ -338,31 +400,36 @@ impl ContextFormat for BasicBlockTerminator {
 
         match self {
             Self::Wait(bb, time) => {
-                write!(f, "L{}, ", ctx.bb_name_scratch[bb])?;
-                time.ctx_fmt(f, ctx)?
+                time.ctx_fmt(f, ctx)?;
+                write!(f, ", <L{}>", ctx.bb_name_scratch[bb])?;
             }
             Self::VariableWait(bb, time) => {
-                write!(f, "L{}, ", ctx.bb_name_scratch[bb])?;
                 time.ctx_fmt(f, ctx)?;
+                write!(f, ", <L{}>", ctx.bb_name_scratch[bb])?;
             }
             Self::WaitRegion(bb, region) => {
-                write!(f, "L{}, {region}", ctx.bb_name_scratch[bb])?;
+                write!(f, "{region}, <L{}>", ctx.bb_name_scratch[bb])?;
             }
             Self::Watch(bb, signals) => {
-                write!(f, "L{}", ctx.bb_name_scratch[bb])?;
-                for s in signals {
-                    f.write_str(", ")?;
-                    ctx.gl.signals.get(*s).unwrap().ctx_fmt(f, ctx)?;
+                f.write_char('[')?;
+                if let Some(fst) = signals.first() {
+                    ctx.gl.signals.get(*fst).unwrap().ctx_fmt(f, ctx)?;
+                    for s in &signals[1..] {
+                        f.write_str(", ")?;
+                        ctx.gl.signals.get(*s).unwrap().ctx_fmt(f, ctx)?;
+                    }
                 }
+                f.write_str("], ")?;
+                write!(f, "<L{}>", ctx.bb_name_scratch[bb])?;
             }
             Self::Jump(bb) => {
-                write!(f, "L{}", ctx.bb_name_scratch[bb])?;
+                write!(f, "<L{}>", ctx.bb_name_scratch[bb])?;
             }
             Self::Branch(var, true_bb, false_bb) => {
                 var.ctx_fmt(f, ctx)?;
                 write!(
                     f,
-                    ", L{}, L{}",
+                    ", <L{}>, <L{}>",
                     ctx.bb_name_scratch[true_bb], ctx.bb_name_scratch[false_bb]
                 )?;
             }

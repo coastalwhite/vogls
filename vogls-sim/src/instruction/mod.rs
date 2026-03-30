@@ -75,7 +75,9 @@ pub enum VmInstruction {
     TvBinaryComparison(HeapOffset, BinaryComparisonOp, HeapRef, HeapOffset),
     TvEdge(HeapOffset, EdgeOp, HeapOffset, HeapOffset),
     TvShift(HeapRef, ShiftOp, HeapOffset, HeapOffset),
+    TvShiftImm(HeapRef, ShiftOp, HeapOffset, u32),
     TvSlice(HeapRef, HeapRef, HeapOffset, bool),
+    TvSliceImm(HeapRef, HeapRef, u32),
     TvConcat(HeapOffset, HeapRef, HeapRef),
 
     FvUnary(HeapOffset, UnaryOp, HeapRef),
@@ -84,7 +86,9 @@ pub enum VmInstruction {
     FvBinaryComparison(HeapOffset, BinaryComparisonOp, HeapRef, HeapOffset),
     FvEdge(HeapOffset, EdgeOp, HeapOffset, HeapOffset),
     FvShift(HeapRef, ShiftOp, HeapOffset, HeapOffset),
+    FvShiftImm(HeapRef, ShiftOp, HeapOffset, u32),
     FvSlice(HeapRef, HeapRef, HeapOffset, bool),
+    FvSliceImm(HeapRef, HeapRef, u32),
     FvConcat(HeapOffset, HeapRef, HeapRef),
 
     TvToFv(HeapRef, HeapOffset),
@@ -140,11 +144,15 @@ impl VmInstruction {
                 ("src", false, src.to_ref(dst.size)),
                 ("shift", false, shift.to_32bit_ref()),
             ],
-            I::TvSlice(dst, src, idx, _fill_with_x) => &[
-                ("dst", true, *dst),
+            I::TvShiftImm(dst, _, src, _amount) => {
+                &[("dst", false, *dst), ("src", false, src.to_ref(dst.size))]
+            }
+            I::TvSlice(dst, src, idx, fill_with_x) => &[
+                ("dst", *fill_with_x, *dst),
                 ("src", false, *src),
                 ("idx", false, idx.to_32bit_ref()),
             ],
+            I::TvSliceImm(dst, src, _offset) => &[("dst", false, *dst), ("src", false, *src)],
             I::TvConcat(dst, lhs, rhs) => &[
                 (
                     "dst",
@@ -188,11 +196,15 @@ impl VmInstruction {
                 ("src", true, src.to_ref(dst.size)),
                 ("shift", true, shift.to_32bit_ref()),
             ],
+            I::FvShiftImm(dst, _, src, _amount) => {
+                &[("dst", true, *dst), ("src", true, src.to_ref(dst.size))]
+            }
             I::FvSlice(dst, src, idx, _fill_with_x) => &[
                 ("dst", true, *dst),
                 ("src", true, *src),
                 ("idx", true, idx.to_32bit_ref()),
             ],
+            I::FvSliceImm(dst, src, _amount) => &[("dst", true, *dst), ("src", true, *src)],
             I::FvConcat(dst, lhs, rhs) => &[
                 (
                     "dst",

@@ -6,7 +6,7 @@ use slotmap::{SlotMap, new_key_type};
 use vogls_bits::arithmetic::{FvLogicValue, fv_set_no_special};
 use vogls_bits::set_subslice::{tv_l_set, tv_s_set};
 use vogls_codegen::{Heap, HeapOffset, HeapRef};
-use vogls_ir::{LogicMode, Mode, INTEGER_VSIZE, TIME_VSIZE};
+use vogls_ir::{INTEGER_VSIZE, LogicMode, Mode, TIME_VSIZE};
 use vogls_runtime::plugins::RuntimePluginState;
 use vogls_runtime::{RtSignalKey, SimulationIo};
 
@@ -382,9 +382,27 @@ impl Simulation {
                         *src,
                         *offset,
                     ),
-                    I::TvSlice(dst, src, idx, fill_with_x) => {
-                        execution::tv::exec_tv_slice(&mut state.runtime.heap, *dst, *src, *idx, *fill_with_x)
-                    }
+                    I::TvShiftImm(dst, op, src, offset) => execution::tv::exec_tv_shift_imm(
+                        &mut state.runtime.heap,
+                        *dst,
+                        *op,
+                        *src,
+                        *offset,
+                    ),
+                    I::TvSlice(dst, src, offset, fill_with_x) => execution::tv::exec_tv_slice(
+                        &mut state.runtime.heap,
+                        *dst,
+                        *src,
+                        *offset,
+                        *fill_with_x,
+                    ),
+                    I::TvSliceImm(dst, src, offset) => execution::tv::exec_tv_slice_imm(
+                        &mut state.runtime.heap,
+                        *dst,
+                        *src,
+                        *offset,
+                        false,
+                    ),
                     I::TvConcat(dst, lhs, rhs) => {
                         execution::tv::exec_tv_concat(&mut state.runtime.heap, *dst, *lhs, *rhs)
                     }
@@ -419,9 +437,27 @@ impl Simulation {
                         *src,
                         *offset,
                     ),
-                    I::FvSlice(dst, src, idx, fill_with_x) => {
-                        execution::fv::exec_fv_slice(&mut state.runtime.heap, *dst, *src, *idx, *fill_with_x)
-                    }
+                    I::FvShiftImm(dst, op, src, offset) => execution::fv::exec_fv_shift_imm(
+                        &mut state.runtime.heap,
+                        *dst,
+                        *op,
+                        *src,
+                        *offset,
+                    ),
+                    I::FvSlice(dst, src, offset, fill_with_x) => execution::fv::exec_fv_slice(
+                        &mut state.runtime.heap,
+                        *dst,
+                        *src,
+                        *offset,
+                        *fill_with_x,
+                    ),
+                    I::FvSliceImm(dst, src, offset) => execution::fv::exec_fv_slice_imm(
+                        &mut state.runtime.heap,
+                        *dst,
+                        *src,
+                        *offset,
+                        false,
+                    ),
                     I::FvConcat(dst, lhs, rhs) => {
                         execution::fv::exec_fv_concat(&mut state.runtime.heap, *dst, *lhs, *rhs)
                     }
@@ -582,7 +618,8 @@ impl Simulation {
                                 readmem.limit,
                                 readmem.stride,
                                 readmem.binary,
-                            ).unwrap(),
+                            )
+                            .unwrap(),
                         }
                     }
                     I::LastUpdateTime(dst, signal) => {

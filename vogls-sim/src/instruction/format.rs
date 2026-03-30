@@ -47,6 +47,14 @@ impl fmt::Display for VmInstruction {
                     op.into_mnemonic()
                 )
             }
+            Self::TvShiftImm(dst, op, src, amount) => {
+                write!(
+                    f,
+                    "{} = tv.{} {src}, {amount}",
+                    dst.offset,
+                    op.into_mnemonic()
+                )
+            }
             Self::TvSlice(dst, src1, src2, fill_with_x) => {
                 if *fill_with_x {
                     write!(
@@ -61,6 +69,13 @@ impl fmt::Display for VmInstruction {
                         dst.offset, dst.size, src1.offset
                     )
                 }
+            }
+            Self::TvSliceImm(dst, src, offset) => {
+                write!(
+                    f,
+                    "{} = tv.slicei[{}] {}, {offset}",
+                    dst.offset, dst.size, src.offset
+                )
             }
             Self::TvConcat(dst, src1, src2) => {
                 write!(f, "{dst} = tv.concat {}, {}", src1.offset, src2.offset)
@@ -111,6 +126,14 @@ impl fmt::Display for VmInstruction {
                     dst = dst.offset
                 )
             }
+            Self::FvShiftImm(dst, op, src, amount) => {
+                write!(
+                    f,
+                    "{dst} = fv.{} {src}, {amount}",
+                    op.into_mnemonic(),
+                    dst = dst.offset
+                )
+            }
             Self::FvSlice(dst, src1, src2, fill_with_x) => {
                 if *fill_with_x {
                     write!(
@@ -125,6 +148,13 @@ impl fmt::Display for VmInstruction {
                         dst.offset, dst.size, src1.offset
                     )
                 }
+            }
+            Self::FvSliceImm(dst, src, offset) => {
+                write!(
+                    f,
+                    "{} = fv.slicei[{}] {}, {offset}",
+                    dst.offset, dst.size, src.offset
+                )
             }
             Self::FvConcat(dst, src1, src2) => {
                 write!(f, "{dst} = fv.concat {}, {}", src1.offset, src2.offset)
@@ -202,7 +232,9 @@ impl fmt::Display for VmProcess {
                 | I::TvBinaryComparison(..)
                 | I::TvEdge(..)
                 | I::TvShift(..)
+                | I::TvShiftImm(..)
                 | I::TvSlice(..)
+                | I::TvSliceImm(..)
                 | I::TvConcat(..)
                 | I::FvUnary(..)
                 | I::FvResize(..)
@@ -210,7 +242,9 @@ impl fmt::Display for VmProcess {
                 | I::FvBinaryComparison(..)
                 | I::FvEdge(..)
                 | I::FvShift(..)
+                | I::FvShiftImm(..)
                 | I::FvSlice(..)
+                | I::FvSliceImm(..)
                 | I::FvConcat(..)
                 | I::TvToFv(..)
                 | I::FvToTv(..)

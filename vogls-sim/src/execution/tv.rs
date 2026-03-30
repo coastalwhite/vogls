@@ -272,11 +272,19 @@ pub(crate) fn exec_tv_shift(
     src: HeapOffset,
     offset: HeapOffset,
 ) {
-    use ShiftOp as O;
-
-    let size = dst.size;
     let offset = stack.load_exact_tv_u32(offset);
+    exec_tv_shift_imm(stack, dst, op, src, offset);
+}
 
+pub(crate) fn exec_tv_shift_imm(
+    stack: &mut Heap,
+    dst: HeapRef,
+    op: ShiftOp,
+    src: HeapOffset,
+    offset: u32,
+) {
+    use ShiftOp as O;
+    let size = dst.size;
     if size <= Heap::TV_SUBBITS_MAX_SIZE {
         let src_s = &[stack.get_subbit_byte(src.to_ref(size))];
         let mut dst_s = [0];
@@ -315,7 +323,16 @@ pub(crate) fn exec_tv_slice(
     fill_with_x: bool,
 ) {
     let offset = stack.load_exact_tv_u32(idx);
+    exec_tv_slice_imm(stack, dst, src, offset, fill_with_x);
+}
 
+pub(crate) fn exec_tv_slice_imm(
+    stack: &mut Heap,
+    dst: HeapRef,
+    src: HeapRef,
+    offset: u32,
+    fill_with_x: bool,
+) {
     if dst.size < Heap::FV_U64_MIN_SIZE && src.size < Heap::TV_U64_MIN_SIZE {
         let val = stack.get_tv_u64(src);
         let (spc, val) = vogls_bits::slice::tv_s_slice(val, offset, dst.size, src.size);

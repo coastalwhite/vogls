@@ -1,5 +1,5 @@
 use vogls_frontend::symbol_table::SymbolId;
-use vogls_ir::{Bits, ConnectionDirection, GlobalContext, SCALAR_VSIZE, VectorSize, new_process};
+use vogls_ir::{new_process, Bits, ConnectionDirection, GlobalContext, SignalSlice, VectorSize, SCALAR_VSIZE};
 use vogls_utils::OrderedSet;
 
 use crate::ast::module::{
@@ -13,12 +13,11 @@ use crate::ast::{AstId, AstIdRange};
 use crate::elaborate::{VSymbol, VSymbolTable};
 use crate::lower::assign::{assign_net_lvalue, net_lvalue_size, net_lvalue_width};
 use crate::lower::expression::{self, get_used_signals, lower_expr, truncate_or_extend};
-use crate::lower::fuse::try_fuse_assign;
+use crate::lower::fuse::{try_fuse_assign, try_lower_fuse_driver_expr};
 use crate::lower::statement::statements_to_process;
 use crate::lower::udp::lower_udp;
 use crate::lower::{
-    VType, assign_input_port, assign_port_output, eval_constant_expr, evaluate_range,
-    resolve_symbol_id, try_resolve_net, unwrap_get_module,
+    assign_input_port, assign_port_output, eval_constant_expr, evaluate_range, resolve_symbol_id, try_resolve_net, unwrap_get_module, Edge, VType
 };
 use crate::parser::AstArenas;
 
@@ -66,6 +65,36 @@ pub fn lower<'a>(
                                     *ast_ident,
                                     &mut mctx.diagnostics,
                                 )?;
+
+                                mctx.fuse_scratch.clear();
+                                if try_lower_fuse_driver_expr(ctx, mctx, scope, *expr)? {
+                                    let (drivee, drivee_slice) = net.net.blocking_drive_signal();
+                                    assert!(drivee_slice.is_none(), "should not be set yet");
+
+                                    let mut offset = 0;
+                                    let drivee_width = mctx.gl.signals[drivee].size;
+                                    for &(signal, slice) in &mctx.fuse_scratch {
+                                        let width = slice.map_or_else(
+                                            || mctx.gl.signals[signal].size,
+                                            |s| s.width(),
+                                        );
+                                        let Some(width) = VectorSize::new(
+                                            (drivee_width.get() - offset).min(width.get()),
+                                        ) else {
+                                            break;
+                                        };
+                                        mctx.connections.push(Edge {
+                                            driver: signal,
+                                            driver_slice: slice,
+                                            drivee,
+                                            drivee_slice: Some(
+                                                SignalSlice::from_width(offset, width).unwrap(),
+                                            ),
+                                        });
+                                        offset += width.get();
+                                    }
+                                    continue;
+                                }
 
                                 let (_, mut bb_builder) = new_process(
                                     &mut mctx.gl,

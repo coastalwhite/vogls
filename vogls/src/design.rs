@@ -5,19 +5,20 @@ use std::process::Command;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use slotmap::{SecondaryMap, SlotMap};
+use slotmap::SlotMap;
 use vogls_codegen::{HeapBuilder, HeapOffset, HeapRef};
 use vogls_codegen_c::runtime::{CDesign, CDesignState, SharedObjectContainer};
 use vogls_codegen_c::{
     CLowerOptions, ListenerBuilder, StateBuilder, lower_signal_drive_fn, lower_signal_drive_header,
 };
 use vogls_frontend::ident_table::{IdentId, IdentTable};
+use vogls_ir::optimize::OptFlags;
 use vogls_ir::{Bits, GlobalContext, LogicMode, Signal, SignalKey};
 use vogls_runtime::SimulationIo;
 use vogls_runtime::plugins::RuntimePluginState;
 use vogls_runtime::{RtSignalKey, RuntimeState};
 use vogls_sim::{Event, Regions, Simulation, VmProcess, VmProcessKey, lower_process_to_vm};
-use vogls_utils::{NonMaxU32, TableKey, TimerStack, VgHashMap, VgHashSet};
+use vogls_utils::{NonMaxU32, TableKey, TimerStack, VgHashMap};
 use vogls_verilog::arena::Arena;
 use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{Description, Module, ModuleItem, NonPortModuleItem};
@@ -426,6 +427,10 @@ impl Design {
         }
 
         if ectx.emit_unoptimized_ir {
+            for signal in mctx.gl.signals.values() {
+                writeln!(ectx.stdout, "{}", signal.display())?;
+            }
+            writeln!(ectx.stdout)?;
             for process in mctx.gl.processes.values() {
                 writeln!(ectx.stdout, "{}", process.display(&mctx.gl))?;
             }
@@ -456,59 +461,23 @@ impl Design {
         }
 
         timers.start("optimization");
-        let mut scratch_stack = Vec::new();
-        let mut scratch_seen = VgHashSet::default();
-        let mut scratch_mfr = VgHashSet::default();
-        let mut scratch_var_to_bits_map = VgHashMap::default();
-        let mut scratch_fan_in = SecondaryMap::new();
-        let mut scratch_dep = VgHashMap::default();
-        let mut scratch_dep_edges = Vec::new();
-        for process in mctx.gl.processes.values_mut() {
-            if cfg!(debug_assertions) {
-                vogls_ir::optimize::get_fan_in(
-                    &mut mctx.gl.bbs,
-                    process.entry,
-                    &mut scratch_stack,
-                    &mut scratch_seen,
-                    &mut scratch_fan_in,
-                );
-            }
-
-            for _ in 0..ectx.opt_rounds {
-                vogls_ir::optimize::constant_propagation::constant_propagation(
-                    &mut mctx.gl.bbs,
-                    &mctx.gl.vars,
-                    process.entry,
-                    &mut scratch_stack,
-                    &mut scratch_seen,
-                    &mut scratch_mfr,
-                    &mut scratch_var_to_bits_map,
-                    &mut scratch_dep,
-                    &mut scratch_dep_edges,
-                );
-
-                vogls_ir::optimize::deadcode_elimination::deadcode_elimination(
-                    &mut mctx.gl.bbs,
-                    &mut mctx.gl.vars,
-                    process.entry,
-                    &mut scratch_stack,
-                    &mut scratch_seen,
-                );
-            }
-
-            if cfg!(debug_assertions) {
-                vogls_ir::optimize::get_fan_in(
-                    &mut mctx.gl.bbs,
-                    process.entry,
-                    &mut scratch_stack,
-                    &mut scratch_seen,
-                    &mut scratch_fan_in,
-                );
-            }
-        }
+        let processes = mctx.gl.processes.keys().collect::<Vec<_>>();
+        vogls_ir::optimize::optimize_processes(
+            mctx.gl(),
+            &processes,
+            OptFlags {
+                opt_rounds: ectx.opt_rounds,
+                constant_propagation: true,
+                deadcode_elimination: true,
+            },
+        );
         timers.stop();
 
         if ectx.emit_ir && !ectx.emit_vm {
+            for signal in mctx.gl.signals.values() {
+                writeln!(ectx.stdout, "{}", signal.display())?;
+            }
+            writeln!(ectx.stdout)?;
             for process in mctx.gl.processes.values() {
                 writeln!(ectx.stdout, "{}", process.display(&mctx.gl))?;
             }

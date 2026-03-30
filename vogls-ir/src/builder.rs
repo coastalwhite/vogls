@@ -224,13 +224,12 @@ impl BasicBlockBuilder {
     }
     pub fn bin_imm_op(
         &mut self,
-        gl: &mut GlobalContext,
         src: VariableKey,
         imm: Bits,
         op: BinaryImmOp,
         dst: &mut VariableKey,
     ) {
-        match op.simplify(*dst, gl.vars[*dst].size, src, gl.vars[src].size, &imm) {
+        match op.simplify(*dst, src, &imm) {
             BinaryImmOpSimplification::Keep => {
                 self.instrs.push(Instruction::BinaryImm(*dst, op, src, imm))
             }
@@ -281,7 +280,7 @@ impl BasicBlockBuilder {
         let size = gl.vars[src].size;
         assert_eq!(size, imm.size());
         let mut dst = self.next_tmp_var(gl, size);
-        self.bin_imm_op(gl, src, imm, op, &mut dst);
+        self.bin_imm_op(src, imm, op, &mut dst);
         dst
     }
 
@@ -612,28 +611,28 @@ impl BasicBlockBuilder {
         offset: u32,
         width: VectorSize,
     ) -> VariableKey {
-        let size = gl.vars[src].size;
+        let src_size = gl.vars[src].size;
         assert!(gl.vars[src].size >= width);
         if offset == 0 {
             return self.truncate(gl, src, width);
         }
-        if offset >= size.get() {
+        if offset >= src_size.get() {
             return self.constant(gl, Bits::new_unknown(width));
         }
-        let mut dst = self.next_tmp_var(gl, width);
-        self.bin_imm_op(gl, src, Bits::new_u32(offset), BinaryImmOp::Slice, &mut dst);
-        if offset + width.get() > size.get() {
-            // BinaryOp::Slice and BinaryImmOp::Slice are slightly different in that out-of-bounds
-            // values are set as unknown for BinaryOp::Slice and set as zeros for
-            // BinaryImmOp::Slice. We compensate to compensate for that here.
-            self.or_constant(
-                gl,
-                dst,
-                Bits::new_unknown(width).logical_shift_left(size.get() - offset),
-            )
-        } else {
-            dst
+        let dst = self.next_tmp_var(gl, width);
+        self.instrs.push(Instruction::SliceImm(dst, src, offset));
+        if offset <= src_size.get() - width.get() {
+            return dst;
         }
+
+        // Slice and SliceImm are slightly different in that out-of-bounds values are set as
+        // unknown for Slice and set as zeros for SliceImm. We compensate to compensate for that
+        // here.
+        self.or_constant(
+            gl,
+            dst,
+            Bits::new_unknown(width).logical_shift_left(src_size.get() - offset),
+        )
     }
     pub fn slice(
         &mut self,
@@ -645,7 +644,7 @@ impl BasicBlockBuilder {
         assert_eq!(gl.vars[offset].size, INTEGER_VSIZE);
         assert!(gl.vars[src].size >= width);
         let dst = self.next_tmp_var(gl, width);
-        self.bin_op(gl, src, offset, BinaryOp::Slice, dst);
+        self.instrs.push(Instruction::Slice(dst, src, offset));
         dst
     }
 

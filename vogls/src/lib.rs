@@ -165,7 +165,9 @@ pub fn run(
     ectx: &mut ExecutionContext,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut timers = TimerStack::new(ectx.timings);
-    let design = timers.timed("total compilation", |_| design::Design::new(path, top_level_module, ectx, Vec::new()))?;
+    let design = timers.timed("total compilation", |_| {
+        design::Design::new(path, top_level_module, ectx, Vec::new())
+    })?;
 
     if ectx.no_run {
         return Ok(());
@@ -184,7 +186,9 @@ pub fn run(
     ectx.stdout = io.stdout;
     ectx.stderr = io.stderr;
 
-    timers.print();
+    if ectx.timings {
+        timers.print();
+    }
 
     Ok(())
 }

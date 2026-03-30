@@ -1,19 +1,19 @@
 use std::ops::Range;
 
-use slotmap::SlotMap;
 use vogls_bits::Bits;
 use vogls_utils::retain::slice_retain;
 use vogls_utils::{VgHashMap, VgHashSet};
 
 use crate::{
-    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryImmOpSimplification,
-    BinaryOp, Instruction, ResizeOp, Time, Variable, VariableKey,
+    BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryImmOpSimplification, BinaryOp,
+    GlobalContext, Instruction, ProcessKey, ResizeOp, ShiftImmOp, ShiftImmOpSimplification,
+    SliceImmSimplification, Time, VariableKey, simplify_slice_imm,
 };
 
 pub fn constant_propagation(
-    bbs: &mut SlotMap<BasicBlockKey, BasicBlock>,
-    vars: &SlotMap<VariableKey, Variable>,
-    entry: BasicBlockKey,
+    gl: &mut GlobalContext,
+    process: ProcessKey,
+
     scratch_stack: &mut Vec<BasicBlockKey>,
     scratch_seen: &mut VgHashSet<BasicBlockKey>,
     scratch_mfr: &mut VgHashSet<BasicBlockKey>,
@@ -32,6 +32,8 @@ pub fn constant_propagation(
     scratch_dep: &mut VgHashMap<VariableKey, Range<usize>>,
     scratch_dep_edges: &mut Vec<VariableKey>,
 ) {
+    let entry = gl.processes[process].entry;
+
     scratch_seen.clear();
     scratch_stack.clear();
     scratch_mfr.clear();
@@ -47,8 +49,7 @@ pub fn constant_propagation(
     let mut cycle_lowlink = VgHashMap::default();
 
     traverse_bbs(
-        bbs,
-        vars,
+        gl,
         entry,
         scratch_stack,
         scratch_seen,
@@ -67,7 +68,7 @@ pub fn constant_propagation(
         scratch_stack.push(entry);
         scratch_seen.insert(entry);
         while let Some(bb_key) = scratch_stack.pop() {
-            bbs[bb_key].terminator.for_each_bb(|bb_key| {
+            gl.bbs[bb_key].terminator.for_each_bb(|bb_key| {
                 if scratch_seen.insert(bb_key) {
                     scratch_stack.push(bb_key);
                 }
@@ -78,7 +79,7 @@ pub fn constant_propagation(
             if scratch_seen.contains(bb_key) {
                 return false;
             }
-            bbs.remove(*bb_key);
+            gl.bbs.remove(*bb_key);
             true
         });
 
@@ -88,7 +89,7 @@ pub fn constant_propagation(
         scratch_stack.push(entry);
         scratch_seen.insert(entry);
         while let Some(bb_key) = scratch_stack.pop() {
-            for i in &mut bbs[bb_key].instrs {
+            for i in &mut gl.bbs[bb_key].instrs {
                 if let Instruction::Phi(dst, srcs) = i {
                     let num_matches = srcs
                         .iter()
@@ -116,7 +117,7 @@ pub fn constant_propagation(
                     }
                 }
             }
-            bbs[bb_key].terminator.for_each_bb(|bb_key| {
+            gl.bbs[bb_key].terminator.for_each_bb(|bb_key| {
                 if scratch_seen.insert(bb_key) {
                     scratch_stack.push(bb_key);
                 }
@@ -160,8 +161,7 @@ pub fn constant_propagation(
     scratch_dep_edges.clear();
 
     traverse_bbs(
-        bbs,
-        vars,
+        gl,
         entry,
         scratch_stack,
         scratch_seen,
@@ -173,8 +173,7 @@ pub fn constant_propagation(
 }
 
 pub fn traverse_bbs(
-    bbs: &mut SlotMap<BasicBlockKey, BasicBlock>,
-    vars: &SlotMap<VariableKey, Variable>,
+    gl: &mut GlobalContext,
     entry: BasicBlockKey,
     scratch_stack: &mut Vec<BasicBlockKey>,
     scratch_seen: &mut VgHashSet<BasicBlockKey>,
@@ -187,7 +186,7 @@ pub fn traverse_bbs(
     scratch_stack.clear();
     scratch_stack.push(entry);
     while let Some(bb_key) = scratch_stack.pop() {
-        let bb = &mut bbs[bb_key];
+        let bb = &mut gl.bbs[bb_key];
         let mut all_variables_completed = true;
         let mut bb_made_progress = false;
 
@@ -236,7 +235,7 @@ pub fn traverse_bbs(
                     match src_bits {
                         None => _ = scratch_map.insert(dst, None),
                         Some(b) => {
-                            let value = op.evaluate(b, vars[dst].size);
+                            let value = op.evaluate(b, gl.vars[dst].size);
                             scratch_map.insert(dst, Some(value.clone()));
                             *i = I::Constant(dst, value);
                         }
@@ -254,9 +253,11 @@ pub fn traverse_bbs(
                     use BinaryImmOp as IO;
                     use BinaryOp as O;
                     use I::BinaryImm as BI;
+                    use I::ShiftImm as SI;
+                    use ShiftImmOp as SO;
                     match (op, lhs_bits, rhs_bits) {
                         (_, Some(l), Some(r)) => {
-                            let value = op.evaluate(l, r, vars[dst].size);
+                            let value = op.evaluate(l, r, gl.vars[dst].size);
                             scratch_map.insert(dst, Some(value.clone()));
                             *i = I::Constant(dst, value);
                             continue;
@@ -290,41 +291,36 @@ pub fn traverse_bbs(
                             *i = BI(dst, IO::UnsignedLessEqual, lhs, b.clone())
                         }
 
-                        (
-                            O::Slice
-                            | O::LogicalShiftLeft
-                            | O::LogicalShiftRight
-                            | O::ArithmeticShiftRight,
-                            _,
-                            Some(b),
-                        ) if b.contains_special() => {
-                            let value = Bits::new_unknown(vars[dst].size);
-                            scratch_map.insert(dst, Some(value.clone()));
-                            *i = I::Constant(dst, value);
-                            continue;
-                        }
-
-                        (O::Slice, Some(_), _) => {}
-                        (O::Slice, _, Some(b)) => {
-                            if vars[dst].size.get() + b.extract_exact_u32().unwrap()
-                                <= vars[lhs].size.get()
-                            {
-                                *i = BI(dst, IO::Slice, lhs, b.clone())
-                            }
-                        }
-
                         (O::LogicalShiftLeft, Some(_), _) => {}
-                        (O::LogicalShiftLeft, _, Some(b)) => {
-                            *i = BI(dst, IO::LogicalShiftLeft, lhs, b.clone())
-                        }
+                        (O::LogicalShiftLeft, _, Some(b)) => match b.extract_exact_u32() {
+                            None => {
+                                let value = Bits::new_unknown(gl.vars[dst].size);
+                                scratch_map.insert(dst, Some(value.clone()));
+                                *i = I::Constant(dst, value);
+                                continue;
+                            }
+                            Some(offset) => *i = SI(dst, SO::LogicalShiftLeft, lhs, offset),
+                        },
                         (O::LogicalShiftRight, Some(_), _) => {}
-                        (O::LogicalShiftRight, _, Some(b)) => {
-                            *i = BI(dst, IO::LogicalShiftRight, lhs, b.clone())
-                        }
+                        (O::LogicalShiftRight, _, Some(b)) => match b.extract_exact_u32() {
+                            None => {
+                                let value = Bits::new_unknown(gl.vars[dst].size);
+                                scratch_map.insert(dst, Some(value.clone()));
+                                *i = I::Constant(dst, value);
+                                continue;
+                            }
+                            Some(offset) => *i = SI(dst, SO::LogicalShiftRight, lhs, offset),
+                        },
                         (O::ArithmeticShiftRight, Some(_), _) => {}
-                        (O::ArithmeticShiftRight, _, Some(b)) => {
-                            *i = BI(dst, IO::ArithmeticShiftRight, lhs, b.clone())
-                        }
+                        (O::ArithmeticShiftRight, _, Some(b)) => match b.extract_exact_u32() {
+                            None => {
+                                let value = Bits::new_unknown(gl.vars[dst].size);
+                                scratch_map.insert(dst, Some(value.clone()));
+                                *i = I::Constant(dst, value);
+                                continue;
+                            }
+                            Some(offset) => *i = SI(dst, SO::ArithmeticShiftRight, lhs, offset),
+                        },
 
                         (O::Concat, Some(b), _) => *i = BI(dst, IO::ConcatLeft, rhs, b.clone()),
                         (O::Concat, _, Some(b)) => *i = BI(dst, IO::ConcatRight, lhs, b.clone()),
@@ -352,29 +348,46 @@ pub fn traverse_bbs(
                         (O::Negedge, _, Some(_)) => {}
                     };
 
-                    // If we managed to convert it to a BinaryImmOp, we should try to simplify
-                    // further.
-                    if let BI(dst, op, src, imm) = i {
-                        let (dst, src) = (*dst, *src);
-                        use BinaryImmOpSimplification as S;
-                        match op.simplify(dst, vars[dst].size, src, vars[src].size, imm) {
-                            S::Keep => {}
-                            S::Source => *i = I::Resize(dst, ResizeOp::Truncate, src),
-                            S::Immediate => {
-                                let imm = imm.clone();
-                                *i = I::Constant(dst, imm.clone());
-                                scratch_map.insert(dst, Some(imm));
-                                bb_made_progress = true;
-                                continue;
+                    // If we managed to convert it to a immediate based operation, we should try to
+                    // simplify further.
+                    match i {
+                        I::BinaryImm(dst, op, src, imm) => {
+                            let (dst, src) = (*dst, *src);
+                            use BinaryImmOpSimplification as S;
+                            match op.simplify(dst, src, imm) {
+                                S::Keep => {}
+                                S::Source => *i = I::Resize(dst, ResizeOp::Truncate, src),
+                                S::Immediate => {
+                                    let imm = imm.clone();
+                                    *i = I::Constant(dst, imm.clone());
+                                    scratch_map.insert(dst, Some(imm));
+                                    bb_made_progress = true;
+                                    continue;
+                                }
+                                S::Constant(bits) => {
+                                    *i = I::Constant(dst, bits.clone());
+                                    scratch_map.insert(dst, Some(bits));
+                                    bb_made_progress = true;
+                                    continue;
+                                }
+                                S::Instruction(instr) => *i = instr,
                             }
-                            S::Constant(bits) => {
-                                *i = I::Constant(dst, bits.clone());
-                                scratch_map.insert(dst, Some(bits));
-                                bb_made_progress = true;
-                                continue;
-                            }
-                            S::Instruction(instr) => *i = instr,
                         }
+                        I::ShiftImm(dst, op, src, amount) => {
+                            let (dst, src) = (*dst, *src);
+                            use ShiftImmOpSimplification as S;
+                            match op.simplify(gl.vars[dst].size, *amount) {
+                                S::Keep => {}
+                                S::Source => *i = I::Resize(dst, ResizeOp::Truncate, src),
+                                S::Constant(bits) => {
+                                    *i = I::Constant(dst, bits.clone());
+                                    scratch_map.insert(dst, Some(bits));
+                                    bb_made_progress = true;
+                                    continue;
+                                }
+                            }
+                        }
+                        _ => {}
                     }
 
                     if operands_are_complete {
@@ -405,7 +418,120 @@ pub fn traverse_bbs(
                     match src_bits.as_ref() {
                         None => _ = scratch_map.insert(dst, None),
                         Some(b) => {
-                            let bits = op.evaluate(b, imm, vars[dst].size);
+                            let bits = op.evaluate(b, imm);
+                            scratch_map.insert(dst, Some(bits.clone()));
+                            *i = I::Constant(dst, bits);
+                        }
+                    }
+                }
+                I::Slice(dst, src, offset) => {
+                    let (dst, src, offset) = (*dst, *src, *offset);
+                    let src_bits_entry = scratch_map.get(&src);
+                    let offset_bits_entry = scratch_map.get(&offset);
+                    let operands_are_complete =
+                        src_bits_entry.is_some() & offset_bits_entry.is_some();
+                    bb_made_progress |= operands_are_complete;
+                    let src_bits = src_bits_entry.map_or(None, |b| b.as_ref());
+                    let offset_bits = offset_bits_entry.map_or(None, |b| b.as_ref());
+
+                    match (src_bits, offset_bits) {
+                        (Some(l), Some(r)) => {
+                            let dst_size = gl.vars[dst].size;
+                            let value = match r.extract_exact_u32() {
+                                None => Bits::new_unknown(dst_size),
+                                Some(offset) => l.slicex(offset, dst_size),
+                            };
+                            scratch_map.insert(dst, Some(value.clone()));
+                            *i = I::Constant(dst, value);
+                            continue;
+                        }
+                        (Some(l), None) if l.count_unknown() == l.size().get() => {
+                            let dst_size = gl.vars[dst].size;
+                            let value = Bits::new_unknown(dst_size);
+                            scratch_map.insert(dst, Some(value.clone()));
+                            *i = I::Constant(dst, value);
+                            bb_made_progress = true;
+                            continue;
+                        }
+                        (None, Some(offset)) => {
+                            let dst_size = gl.vars[dst].size;
+                            let Some(offset) =
+                                offset.extract_exact_u32().filter(|&v| v < dst_size.get())
+                            else {
+                                let value = Bits::new_unknown(dst_size);
+                                scratch_map.insert(dst, Some(value.clone()));
+                                *i = I::Constant(dst, value);
+                                bb_made_progress = true;
+                                continue;
+                            };
+
+                            use SliceImmSimplification as S;
+                            match simplify_slice_imm(dst, dst_size, src, gl.vars[src].size, offset)
+                            {
+                                S::Keep => *i = I::SliceImm(dst, src, offset),
+                                S::Source => *i = I::Resize(dst, ResizeOp::Truncate, src),
+                                S::Constant(bits) => {
+                                    scratch_map.insert(dst, Some(bits.clone()));
+                                    *i = I::Constant(dst, bits);
+                                    bb_made_progress = true;
+                                    continue;
+                                }
+                                S::Instruction(instruction) => *i = instruction,
+                            }
+                        }
+
+                        (None, None) | (Some(_), None) => {}
+                    };
+
+                    if operands_are_complete {
+                        scratch_map.insert(dst, None);
+                    } else {
+                        all_variables_completed = false;
+                        let start = scratch_dep_edges.len();
+                        if src_bits_entry.is_none() {
+                            scratch_dep_edges.push(src);
+                        }
+                        if offset_bits_entry.is_none() {
+                            scratch_dep_edges.push(offset);
+                        }
+                        scratch_dep.insert(dst, start..scratch_dep_edges.len());
+                    }
+                }
+                I::SliceImm(dst, src, amount) => {
+                    let Some(src_bits) = scratch_map.get(src) else {
+                        all_variables_completed = false;
+                        scratch_dep
+                            .insert(*dst, scratch_dep_edges.len()..scratch_dep_edges.len() + 1);
+                        scratch_dep_edges.push(*src);
+                        continue;
+                    };
+
+                    let (dst, amount) = (*dst, *amount);
+                    bb_made_progress = true;
+                    match src_bits.as_ref() {
+                        None => _ = scratch_map.insert(dst, None),
+                        Some(b) => {
+                            let bits = b.slicez(amount, gl.vars[dst].size);
+                            scratch_map.insert(dst, Some(bits.clone()));
+                            *i = I::Constant(dst, bits);
+                        }
+                    }
+                }
+                I::ShiftImm(dst, op, src, amount) => {
+                    let Some(src_bits) = scratch_map.get(src) else {
+                        all_variables_completed = false;
+                        scratch_dep
+                            .insert(*dst, scratch_dep_edges.len()..scratch_dep_edges.len() + 1);
+                        scratch_dep_edges.push(*src);
+                        continue;
+                    };
+
+                    let (dst, amount) = (*dst, *amount);
+                    bb_made_progress = true;
+                    match src_bits.as_ref() {
+                        None => _ = scratch_map.insert(dst, None),
+                        Some(b) => {
+                            let bits = op.evaluate(b, amount);
                             scratch_map.insert(dst, Some(bits.clone()));
                             *i = I::Constant(dst, bits);
                         }

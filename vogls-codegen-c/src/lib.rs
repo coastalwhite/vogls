@@ -10,7 +10,7 @@ use vogls_ir::dyn_format_string::{DynFormatArgument, DynFormatString};
 use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, BinaryImmOp, Bits, ContextFormat, DisplayContext,
     GlobalContext, INTEGER_VSIZE, Instruction, LogicMode, Mode, Process, ProcessKey, ReadMem,
-    ResizeOp, SignalKey, TIME_VSIZE, UnaryOp, VariableKey, VectorSize,
+    ResizeOp, ShiftImmOp, SignalKey, TIME_VSIZE, UnaryOp, VariableKey, VectorSize,
 };
 use vogls_ir_properties::get_temporal_variables;
 use vogls_runtime::RtSignalKey;
@@ -95,7 +95,7 @@ impl fmt::Display for CExpr<'_> {
             Self::Ident(var) => var.ident.fmt(f),
             Self::Bits(bits, mode) => match mode {
                 LogicMode::TwoValue => match bits.as_data_ref() {
-                    BitsDataRef::InlineTv(v) => write!(f, "0x{v:x}"),
+                    BitsDataRef::InlineTv(v) => write!(f, "((uint64_t)0x{v:x})"),
                     BitsDataRef::SeparateTv(v) => {
                         write!(f, "(uint64_t[{}]){{0x{:x}", v.len(), v[0])?;
                         for v in &v[1..] {
@@ -103,7 +103,20 @@ impl fmt::Display for CExpr<'_> {
                         }
                         f.write_char('}')
                     }
-                    BitsDataRef::InlineFv(..) | BitsDataRef::SeparateFv(..) => unreachable!(),
+                    BitsDataRef::InlineFv(..) | BitsDataRef::SeparateFv(..)
+                        if bits.contains_special() =>
+                    {
+                        unreachable!()
+                    }
+                    BitsDataRef::InlineFv(_, v) => write!(f, "((uint64_t)0x{v:x})"),
+                    BitsDataRef::SeparateFv(v) => {
+                        let v = &v[v.len() / 2..];
+                        write!(f, "(uint64_t[{}]){{0x{:x}", v.len(), v[0])?;
+                        for v in &v[1..] {
+                            write!(f, ",0x{v:x}")?;
+                        }
+                        f.write_char('}')
+                    }
                 },
                 LogicMode::FourValue => match bits.as_data_ref() {
                     BitsDataRef::InlineTv(v) => {
@@ -602,18 +615,6 @@ pub fn lower_process(
                         O::UnsignedGreaterEqual => {
                             binary::cgc_bin_ule(&mut buffer, dst_t.ident, imm, src_t.into())?
                         }
-                        O::Slice => {
-                            slice::slice_with(&mut buffer, dst_t, src_t.into(), imm, false)?
-                        }
-                        O::LogicalShiftLeft => {
-                            binary::cgc_lsl(&mut buffer, dst_t, src_t.into(), imm)?
-                        }
-                        O::LogicalShiftRight => {
-                            binary::cgc_lsr(&mut buffer, dst_t, src_t.into(), imm)?
-                        }
-                        O::ArithmeticShiftRight => {
-                            binary::cgc_asr(&mut buffer, dst_t, src_t.into(), imm)?
-                        }
                         O::ConcatRight => {
                             binary::cgc_concat(&mut buffer, dst_t, src_t.into(), imm)?
                         }
@@ -625,6 +626,132 @@ pub fn lower_process(
                         }
                     }
 
+                    if temporal_variables.contains(dst) {
+                        store(&mut buffer, heap_map[dst], dst_t)?;
+                    }
+                }
+                I::SliceImm(dst, src, offset) => {
+                    let src_size = gl.vars[*src].size;
+                    let (msrc, mdst) = (var_mode[src], var_mode[dst]);
+
+                    let (conv_src, conv_imm) = (msrc != mdst, mdst == LogicMode::FourValue);
+
+                    let mut src_t = temp_map[&(*src, msrc)];
+                    if temporal_variables.contains(src) {
+                        load(&mut buffer, heap_map[src], src_t)?;
+                    }
+                    if conv_src {
+                        let unconverted_t = src_t;
+                        src_t = temp_map[&(*src, mdst)];
+                        convert(
+                            &mut buffer,
+                            src_size,
+                            mdst,
+                            msrc,
+                            src_t.ident,
+                            unconverted_t.ident,
+                        )?;
+                    }
+                    let imm_tgt_mode = if conv_imm { mdst } else { LogicMode::TwoValue };
+                    let imm =
+                        CExpr::Bits(&Bits::from_u64(INTEGER_VSIZE, *offset as u64), imm_tgt_mode);
+
+                    let dst_t = temp_map[&(*dst, mdst)];
+                    slice::slice_with(&mut buffer, dst_t, src_t.into(), imm, false)?;
+                    if temporal_variables.contains(dst) {
+                        store(&mut buffer, heap_map[dst], dst_t)?;
+                    }
+                }
+                I::ShiftImm(dst, op, src, offset) => {
+                    let src_size = gl.vars[*src].size;
+                    let (msrc, mdst) = (var_mode[src], var_mode[dst]);
+
+                    let (conv_src, conv_imm) = (msrc != mdst, mdst == LogicMode::FourValue);
+
+                    let mut src_t = temp_map[&(*src, msrc)];
+                    if temporal_variables.contains(src) {
+                        load(&mut buffer, heap_map[src], src_t)?;
+                    }
+                    if conv_src {
+                        let unconverted_t = src_t;
+                        src_t = temp_map[&(*src, mdst)];
+                        convert(
+                            &mut buffer,
+                            src_size,
+                            mdst,
+                            msrc,
+                            src_t.ident,
+                            unconverted_t.ident,
+                        )?;
+                    }
+                    let imm_tgt_mode = if conv_imm { mdst } else { LogicMode::TwoValue };
+                    let imm =
+                        CExpr::Bits(&Bits::from_u64(INTEGER_VSIZE, *offset as u64), imm_tgt_mode);
+
+                    let dst_t = temp_map[&(*dst, mdst)];
+                    use ShiftImmOp as O;
+                    match op {
+                        O::LogicalShiftLeft => {
+                            binary::cgc_lsl(&mut buffer, dst_t, src_t.into(), imm)?
+                        }
+                        O::LogicalShiftRight => {
+                            binary::cgc_lsr(&mut buffer, dst_t, src_t.into(), imm)?
+                        }
+                        O::ArithmeticShiftRight => {
+                            binary::cgc_asr(&mut buffer, dst_t, src_t.into(), imm)?
+                        }
+                    }
+
+                    if temporal_variables.contains(dst) {
+                        store(&mut buffer, heap_map[dst], dst_t)?;
+                    }
+                }
+                I::Slice(dst, lhs, rhs) => {
+                    let lhs_size = gl.vars[*lhs].size;
+                    let rhs_size = gl.vars[*rhs].size;
+                    let (mlhs, mrhs, mdst) = (var_mode[lhs], var_mode[rhs], var_mode[dst]);
+
+                    use LogicMode as M;
+                    let (mtgt, conv_lhs, conv_rhs) = (
+                        M::FourValue,
+                        mlhs == M::TwoValue && mrhs == M::FourValue,
+                        mlhs == M::FourValue && mrhs == M::TwoValue,
+                    );
+
+                    let (mut lhs_t, mut rhs_t) = (temp_map[&(*lhs, mlhs)], temp_map[&(*rhs, mrhs)]);
+                    if temporal_variables.contains(lhs) {
+                        load(&mut buffer, heap_map[lhs], lhs_t)?;
+                    }
+                    if conv_lhs {
+                        let unconverted_t = lhs_t;
+                        lhs_t = temp_map[&(*lhs, mtgt)];
+                        convert(
+                            &mut buffer,
+                            lhs_size,
+                            mtgt,
+                            mlhs,
+                            lhs_t.ident,
+                            unconverted_t.ident,
+                        )?;
+                    }
+                    if temporal_variables.contains(rhs) {
+                        load(&mut buffer, heap_map[rhs], rhs_t)?;
+                    }
+                    if conv_rhs {
+                        let unconverted_t = rhs_t;
+                        rhs_t = temp_map[&(*rhs, mtgt)];
+                        convert(
+                            &mut buffer,
+                            rhs_size,
+                            mtgt,
+                            mrhs,
+                            rhs_t.ident,
+                            unconverted_t.ident,
+                        )?;
+                    }
+
+                    let dst_t = temp_map[&(*dst, mdst)];
+                    slice::slice(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?;
                     if temporal_variables.contains(dst) {
                         store(&mut buffer, heap_map[dst], dst_t)?;
                     }
@@ -707,7 +834,6 @@ pub fn lower_process(
                             rhs_t.into(),
                         )?,
 
-                        O::Slice => slice::slice(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?,
                         O::LogicalShiftLeft => {
                             binary::cgc_lsl(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
                         }

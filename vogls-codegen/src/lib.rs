@@ -65,15 +65,16 @@ pub fn resolve_var_logic_mode_map(
                         },
                     );
                 }
-                I::Unary(dst, _, src) | I::Resize(dst, _, src) => {
-                    match var_mode.get(src).copied() {
-                        Some(m) => _ = var_mode.insert(*dst, m),
-                        None => {
-                            graph_offsets.insert(*dst, graph_inputs.len()..graph_inputs.len() + 1);
-                            graph_inputs.push(*src)
-                        }
+                I::Unary(dst, _, src)
+                | I::Resize(dst, _, src)
+                | I::SliceImm(dst, src, _)
+                | I::ShiftImm(dst, _, src, _) => match var_mode.get(src).copied() {
+                    Some(m) => _ = var_mode.insert(*dst, m),
+                    None => {
+                        graph_offsets.insert(*dst, graph_inputs.len()..graph_inputs.len() + 1);
+                        graph_inputs.push(*src)
                     }
-                }
+                },
                 I::BinaryImm(dst, op, src, imm) => {
                     let m1 = var_mode.get(src).copied();
                     let m2 = if imm.contains_special() {
@@ -125,6 +126,32 @@ pub fn resolve_var_logic_mode_map(
                         }
                         _ => {}
                     }
+
+                    match (m1, m2) {
+                        (Some(M::TwoValue), Some(M::TwoValue))
+                        | (Some(M::FourValue), Some(M::FourValue)) => {}
+
+                        (Some(M::FourValue), None) => {
+                            maybe_mark_conv_later.push((*rhs, M::FourValue))
+                        }
+                        (Some(M::FourValue), Some(M::TwoValue)) => _ = mark_conv!(*rhs),
+                        (None, Some(M::FourValue)) => {
+                            maybe_mark_conv_later.push((*lhs, M::FourValue))
+                        }
+                        (Some(M::TwoValue), Some(M::FourValue)) => _ = mark_conv!(*lhs),
+
+                        (None, _) | (_, None) => {
+                            graph_offsets.insert(*dst, graph_inputs.len()..graph_inputs.len() + 2);
+                            graph_inputs.extend([*lhs, *rhs]);
+                        }
+                    }
+                }
+                I::Slice(dst, lhs, rhs) => {
+                    let m1 = var_mode.get(lhs).copied();
+                    let m2 = var_mode.get(rhs).copied();
+
+                    use LogicMode as M;
+                    var_mode.insert(*dst, M::FourValue);
 
                     match (m1, m2) {
                         (Some(M::TwoValue), Some(M::TwoValue))
@@ -328,7 +355,9 @@ pub fn resolve_heap_map(
                         }
                         if (min_bits..=max_bits).contains(&num_bits) {
                             bits_map.entry((bits.clone(), mode)).or_insert_with(|| {
-                                heap_builder.claim_constant(mode, bits.clone_lowering_mode()).offset
+                                heap_builder
+                                    .claim_constant(mode, bits.clone_lowering_mode())
+                                    .offset
                             });
                         }
 
