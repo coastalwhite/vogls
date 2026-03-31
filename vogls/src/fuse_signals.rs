@@ -241,7 +241,8 @@ pub fn fuse_signals(
             use Instruction as I;
             match &i {
                 I::LastUpdateTime(_, s) => *ir_signal_reference.entry(*s).or_default() |= LUPDT,
-                I::Probe(_, s) => _ = *ir_signal_reference.entry(*s).or_default() |= PROBE,
+                I::Probe(_, s, _) => _ = *ir_signal_reference.entry(*s).or_default() |= PROBE,
+                I::ProbeSlice(_, s, _) => _ = *ir_signal_reference.entry(*s).or_default() |= PROBE,
                 I::Drive(s, _, _) => *ir_signal_reference.entry(*s).or_default() |= DRIVE,
                 _ => {}
             }
@@ -525,12 +526,36 @@ pub fn fuse_signals(
         use vogls_ir::Instruction as I;
         for i in std::mem::take(&mut gl.bbs[key].instrs) {
             match &i {
-                I::Probe(dst, signal) => {
+                I::Probe(dst, signal, offset) => {
                     if let Some((to, slice)) = replacement_signals.get(signal) {
                         match slice {
-                            None => builder.push_raw_instruction(I::Probe(*dst, *to)),
+                            None => builder.push_raw_instruction(I::Probe(*dst, *to, *offset)),
                             Some(slice) => {
-                                builder.probe_slice_constant(gl, *to, slice.lsb(), slice.width());
+                                builder.probe_slice_constant(
+                                    gl,
+                                    *to,
+                                    *offset + slice.lsb(),
+                                    slice.width(),
+                                );
+                                builder
+                                    .instrs
+                                    .last_mut()
+                                    .unwrap()
+                                    .get_destination_variable_mut()
+                                    .map(|d| *d = *dst);
+                            }
+                        }
+                        continue;
+                    }
+                }
+                I::ProbeSlice(dst, signal, offset) => {
+                    if let Some((to, slice)) = replacement_signals.get(signal) {
+                        match slice {
+                            None => builder.push_raw_instruction(I::ProbeSlice(*dst, *to, *offset)),
+                            Some(slice) => {
+                                let offset =
+                                    builder.plus_constant(gl, *offset, Bits::new_u32(slice.lsb()));
+                                builder.probe_slice(gl, *to, offset, slice.width());
                                 builder
                                     .instrs
                                     .last_mut()

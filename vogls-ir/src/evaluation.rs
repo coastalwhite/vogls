@@ -72,8 +72,20 @@ fn evaluate_impl(
             }
             I::Intrinsic(_, _, _) => todo!(),
             I::LastUpdateTime(_, _) => todo!(),
-            I::Probe(dst, src_signal) => {
-                let bits = signals[src_signal].clone();
+            I::Probe(dst, src_signal, offset) => {
+                let bits = &signals[src_signal];
+                let bits = bits.slicez(*offset, gl.vars[*dst].size);
+                _ = variables.insert(*dst, bits);
+            }
+            I::ProbeSlice(dst, src_signal, offset) => {
+                let bits = &signals[src_signal];
+                let offset = &variables[offset];
+
+                let dst_size = gl.vars[*dst].size;
+                let bits = match offset.extract_exact_u32() {
+                    None => Bits::new_unknown(dst_size),
+                    Some(offset) => bits.slicex(offset, dst_size),
+                };
                 _ = variables.insert(*dst, bits);
             }
             I::Drive(dst_signal, src, partial) => {

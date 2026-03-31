@@ -11,7 +11,7 @@ pub mod peephole;
 
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext,
-    Instruction, ProcessKey, ResizeOp, ShiftImmOp, SignalKey, UnaryOp,
+    Instruction, ProcessKey, ResizeOp, ShiftImmOp, SignalKey, UnaryOp, VariableKey,
 };
 
 #[derive(Default, Clone, Copy)]
@@ -37,7 +37,8 @@ enum CSExpr {
     BinaryImm(BinaryImmOp, ExprKey, Bits),
     ShiftImm(ShiftImmOp, ExprKey, u32),
     SliceImm(VectorSize, ExprKey, u32),
-    Probe(SignalKey),
+    Probe(SignalKey, VectorSize, u32),
+    ProbeSlice(SignalKey, VectorSize, ExprKey),
     LastUpdateTime(SignalKey),
 }
 
@@ -71,12 +72,7 @@ pub fn optimize_processes(gl: &mut GlobalContext, processes: &[ProcessKey], flag
                 );
             }
             if flags.peephole {
-                peephole::peephole(
-                    gl,
-                    process,
-                    &mut scratch_stack,
-                    &mut scratch_seen,
-                );
+                peephole::peephole(gl, process, &mut scratch_stack, &mut scratch_seen);
             }
             if flags.deadcode_elimination {
                 deadcode_elimination::deadcode_elimination(
@@ -86,6 +82,7 @@ pub fn optimize_processes(gl: &mut GlobalContext, processes: &[ProcessKey], flag
                     &mut scratch_seen,
                 );
             }
+            remove_needles_branches(gl, process, &mut scratch_stack, &mut scratch_seen);
         }
     }
 }
@@ -236,24 +233,87 @@ pub fn remove_needless_jumps(
 }
 
 pub fn remove_needles_branches(
-    bbs: &mut SlotMap<BasicBlockKey, BasicBlock>,
-    entry: BasicBlockKey,
+    gl: &mut GlobalContext,
+    process: ProcessKey,
     scratch_stack: &mut Vec<BasicBlockKey>,
-    scratch_seen: &mut HashSet<BasicBlockKey>,
+    scratch_seen: &mut VgHashSet<BasicBlockKey>,
 ) {
+    let entry = gl.processes[process].entry;
+
     scratch_stack.clear();
     scratch_seen.clear();
 
     scratch_stack.push(entry);
     scratch_seen.insert(entry);
-
     while let Some(bb_key) = scratch_stack.pop() {
-        let terminator = &mut bbs[bb_key].terminator;
+        let terminator = &mut gl.bbs[bb_key].terminator;
         if let BasicBlockTerminator::Branch(_, bb1, bb2) = terminator
             && bb1 == bb2
         {
             *terminator = BasicBlockTerminator::Jump(*bb1);
         }
-        terminator.extend_next_rev(scratch_stack, scratch_seen);
+        terminator.for_each_bb(|bb_key| {
+            if scratch_seen.insert(bb_key) {
+                scratch_stack.push(bb_key);
+            }
+        });
+    }
+}
+
+pub fn remap_vars(
+    gl: &mut GlobalContext,
+    process: ProcessKey,
+    scratch_stack: &mut Vec<BasicBlockKey>,
+    scratch_seen: &mut VgHashSet<BasicBlockKey>,
+    var_map: &mut VgHashMap<VariableKey, VariableKey>,
+    var_stack: &mut Vec<VariableKey>,
+    var_done: &mut VgHashSet<VariableKey>,
+) {
+    var_done.clear();
+    var_stack.clear();
+    var_stack.extend(var_map.keys());
+    while let Some(src) = var_stack.pop() {
+        if var_done.contains(&src) {
+            continue;
+        }
+
+        let dst = var_map[&src];
+        match var_map.get(&dst) {
+            None => _ = var_done.insert(src),
+            Some(&dst_dst) if var_done.contains(&dst) => {
+                var_done.insert(src);
+                *var_map.get_mut(&src).unwrap() = dst_dst;
+            }
+            Some(_) => var_stack.extend_from_slice(&[src, dst]),
+        }
+    }
+
+    let entry = gl.processes[process].entry;
+
+    scratch_stack.clear();
+    scratch_seen.clear();
+    scratch_seen.insert(entry);
+    scratch_stack.push(entry);
+    while let Some(bb_key) = scratch_stack.pop() {
+        let bb = &mut gl.bbs[bb_key];
+        bb.instrs.retain_mut(|i| {
+            if i.get_destination_variable()
+                .is_some_and(|dst| var_map.contains_key(&dst))
+            {
+                false
+            } else {
+                i.map_vars(|v| var_map.get(&v).copied().unwrap_or(v));
+                true
+            }
+        });
+        bb.instrs.shrink_to_fit();
+        bb.terminator
+            .map_vars(|v| var_map.get(&v).copied().unwrap_or(v));
+
+        bb.terminator.for_each_bb(|bb_key| {
+            if scratch_seen.insert(bb_key) {
+                scratch_stack.push(bb_key);
+            }
+        });
     }
 }

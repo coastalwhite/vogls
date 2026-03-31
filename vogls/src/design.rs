@@ -75,11 +75,11 @@ impl DesignState {
 impl Design {
     pub fn new(
         paths: &[&Path],
+        timers: &mut TimerStack,
         top_level_module: Option<&str>,
         ectx: &mut ExecutionContext,
         mut plugins: Vec<RuntimePluginState>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let mut timers = TimerStack::new(ectx.timings);
         let mut token_buffer = Tokenized::default();
         let mut macros = HashMap::new();
         for define in &ectx.defines {
@@ -509,8 +509,10 @@ impl Design {
             Self::from_gl_compiled(
                 mctx.gl,
                 heap_builder,
-                &mut timers,
+                timers,
                 ectx.itrace,
+                ectx.stats,
+                ectx.debug_symbols,
                 ectx.output_source.as_deref(),
                 rt_signal_map,
                 signal_to_heap,
@@ -523,7 +525,7 @@ impl Design {
             Self::from_gl_interpretted(
                 mctx.gl,
                 heap_builder,
-                &mut timers,
+                timers,
                 ectx.itrace,
                 ectx.emit_vm,
                 rt_signal_map,
@@ -588,7 +590,9 @@ impl Design {
                 gl,
                 heap_builder,
                 timers,
-                false,
+                ectx.itrace,
+                ectx.stats,
+                ectx.debug_symbols,
                 None,
                 rt_signal_map,
                 signal_to_heap.into(),
@@ -602,8 +606,8 @@ impl Design {
                 gl,
                 heap_builder,
                 timers,
-                false,
-                false,
+                ectx.itrace,
+                ectx.emit_vm,
                 rt_signal_map,
                 signal_to_heap.into(),
                 3,
@@ -619,6 +623,8 @@ impl Design {
         heap_builder: HeapBuilder,
         timers: &mut TimerStack,
         itrace: bool,
+        stats: bool,
+        debug_symbols: bool,
         output_source: Option<&Path>,
         rt_signal_map: VgHashMap<SignalKey, RtSignalKey>,
         signal_to_heap: Arc<[HeapRef]>,
@@ -634,6 +640,8 @@ impl Design {
             &signal_to_heap,
             timers,
             itrace,
+            stats,
+            debug_symbols,
             output_source.as_deref(),
             plugins,
             num_regions,
@@ -722,7 +730,7 @@ impl Design {
     }
 
     pub fn run(
-        mut self,
+        &mut self,
         io: &mut SimulationIo,
         time: u64,
     ) -> Result<(), Box<dyn std::error::Error>> {

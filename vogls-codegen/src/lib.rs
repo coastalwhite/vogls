@@ -174,8 +174,11 @@ pub fn resolve_var_logic_mode_map(
                 }
                 I::Intrinsic(dst, _, _) => _ = var_mode.insert(*dst, LogicMode::TwoValue),
                 I::LastUpdateTime(dst, _) => _ = var_mode.insert(*dst, LogicMode::TwoValue),
-                I::Probe(dst, _) => {
+                I::Probe(dst, _, _) => {
                     var_mode.insert(*dst, gl.logic_mode);
+                }
+                I::ProbeSlice(dst, _, _) => {
+                    var_mode.insert(*dst, LogicMode::FourValue);
                 }
                 I::Drive(_, src, partial) => {
                     match var_mode.get(src) {

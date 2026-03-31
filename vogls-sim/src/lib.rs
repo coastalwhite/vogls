@@ -259,7 +259,6 @@ impl Simulation {
             watches,
             plugins: Vec::new(),
             iplugins: Vec::new(),
-            instruction_count: 0,
         }
     }
 
@@ -313,10 +312,6 @@ impl Simulation {
             plugin.finish(&mut state.runtime);
         }
 
-        if cfg!(vm_profile) {
-            state.dump_profile_stats(io, state);
-        }
-
         Ok(())
     }
 
@@ -343,7 +338,7 @@ impl Simulation {
             state.iplugins = iplugins;
 
             *ip += 1;
-            state.instruction_count += 1;
+            state.runtime.instruction_count += 1;
 
             let outcome = 'instruction: {
                 use VmInstruction as I;
@@ -799,8 +794,6 @@ pub struct SimulationState {
     pub watches: Vec<Vec<ListenerKey>>,
     pub plugins: Vec<RuntimePluginState>,
     pub iplugins: Vec<plugin::InstructionPluginState>,
-
-    pub instruction_count: u64,
 }
 
 impl Clone for SimulationState {
@@ -814,22 +807,9 @@ impl Clone for SimulationState {
             watches: self.watches.clone(),
             plugins: vec![],
             iplugins: vec![],
-
-            instruction_count: self.instruction_count.clone(),
         }
     }
 }
 
 impl SimulationState {
-    pub fn dump_profile_stats(&self, io: &mut SimulationIo, state: &SimulationState) {
-        writeln!(io.stdout, "Stats:",).unwrap();
-        writeln!(io.stdout, "  # Instructions: {}", state.instruction_count).unwrap();
-        writeln!(io.stdout, "  # Events:       {}", state.runtime.event_count).unwrap();
-        writeln!(
-            io.stdout,
-            "  # Stack size:   {}",
-            state.runtime.heap.0.len() * size_of::<u64>()
-        )
-        .unwrap();
-    }
 }

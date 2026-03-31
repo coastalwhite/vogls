@@ -1,4 +1,5 @@
 use std::fs::read_to_string;
+use std::io::stdout;
 use std::path::{Path, PathBuf};
 
 use clap::Parser;
@@ -22,8 +23,12 @@ struct Args {
     #[arg(short, long)]
     filter: Option<String>,
 
-    #[arg(long = "itrace")]
+    #[arg(long)]
     itrace: bool,
+    #[arg(long)]
+    stats: bool,
+    #[arg(long)]
+    debug_symbols: bool,
 
     #[arg(long = "emit-hierarchy")]
     emit_hierarchy: bool,
@@ -90,6 +95,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         emit_ir: args.emit_ir,
         emit_vm: args.emit_vm,
         itrace: args.itrace,
+        stats: args.stats,
+        debug_symbols: args.debug_symbols,
         time: args.time,
         no_run: args.no_run,
         opt: OptFlags {
@@ -110,32 +117,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let mut timers = TimerStack::new(ectx.timings);
-    if args.vir {
-        let content = read_to_string(&args.path[0])?;
-        let design = timers.timed("compilation", |timers| {
+    let mut design = timers.timed("compilation", |timers| {
+        if args.vir {
+            let content = read_to_string(&args.path[0])?;
             Design::new_vir(&content, timers, &mut ectx)
-        })?;
-
-        if args.no_run {
-            return Ok(());
-        }
-
-        timers.start("simulation");
-        design
-            .run(
-                &mut SimulationIo::new(Box::new(std::io::stdout()), Box::new(std::io::stderr())),
-                1000,
+        } else {
+            let paths: Vec<&Path> = args.path.iter().map(|p| p.as_path()).collect();
+            Design::new(
+                &paths,
+                timers,
+                args.top_level_module.as_deref(),
+                &mut ectx,
+                Vec::new(),
             )
-            .map_err(|_| "simulation failed")?;
-        timers.stop();
-    } else {
-        let paths: Vec<&Path> = args.path.iter().map(|p| p.as_path()).collect();
-        vogls::run(
-            &paths,
-            &mut timers,
-            args.top_level_module.as_deref(),
-            &mut ectx,
-        )?;
+        }
+    })?;
+
+    if args.no_run {
+        return Ok(());
+    }
+
+    timers.start("simulation");
+    design
+        .run(
+            &mut SimulationIo::new(Box::new(std::io::stdout()), Box::new(std::io::stderr())),
+            ectx.time,
+        )
+        .map_err(|_| "simulation failed")?;
+    timers.stop();
+
+    if args.stats {
+        design.initial_state.runtime().dump_stats(&mut stdout())?;
     }
 
     if timers.enabled {

@@ -1,3 +1,5 @@
+use std::io;
+
 use vogls_codegen::Heap;
 use vogls_utils::{TableKey, new_table_key};
 
@@ -21,6 +23,7 @@ pub struct RuntimeState {
     pub time: u64,
     pub last_active_time: Vec<u64>,
     pub event_count: u64,
+    pub instruction_count: u64,
 }
 
 impl Clone for RuntimeState {
@@ -30,6 +33,7 @@ impl Clone for RuntimeState {
             time: self.time.clone(),
             last_active_time: self.last_active_time.clone(),
             event_count: self.event_count.clone(),
+            instruction_count: self.instruction_count.clone(),
         }
     }
 }
@@ -41,7 +45,15 @@ impl RuntimeState {
             time: 0,
             last_active_time: vec![0; num_signals],
             event_count: 0,
+            instruction_count: 0,
         }
+    }
+
+    pub fn dump_stats(&self, f: &mut impl io::Write) -> io::Result<()> {
+        writeln!(f, "Stats:",).unwrap();
+        writeln!(f, "  # Instructions: {}", self.instruction_count).unwrap();
+        writeln!(f, "  # Events:       {}", self.event_count).unwrap();
+        Ok(())
     }
 }
 

@@ -358,6 +358,7 @@ fn parse_process<'a>(
                     I::Intrinsic(..) => todo!(),
                     I::LastUpdateTime(..) => unreachable!(),
                     I::Probe(..) => unreachable!(),
+                    I::ProbeSlice(..) => unreachable!(),
                     I::Drive(..) => unreachable!(),
                     I::Phi(dst, items) => {
                         let dst = *dst;
@@ -550,11 +551,28 @@ fn parse_bb<'a>(
                 }
 
                 "prb" => {
+                    let mut size = None;
+                    if c.is_next_equal_to('[') {
+                        size = Some(parse_braced_size(c)?);
+                    }
                     c.trim_cursor();
                     let signal = parse_signal(c, symbols)?;
-                    gl.vars[dst].size = gl.signals[signal].size;
+                    gl.vars[dst].size = size.unwrap_or(gl.signals[signal].size);
                     symbols.unresolved_vars.remove(&dst);
-                    Instruction::Probe(dst, signal)
+
+                    c.trim_cursor();
+                    if c.next_if_equals(',') {
+                        c.trim_cursor();
+                        if c.is_next_equal_to('%') {
+                            let offset = parse_var(c, symbols, gl)?;
+                            Instruction::ProbeSlice(dst, signal, offset)
+                        } else {
+                            let offset = parse_u32(c)?;
+                            Instruction::Probe(dst, signal, offset)
+                        }
+                    } else {
+                        Instruction::Probe(dst, signal, 0)
+                    }
                 }
 
                 "vogls.assert" => {

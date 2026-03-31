@@ -49,6 +49,8 @@ pub struct ExecutionContext {
     pub emit_ir: bool,
     pub emit_vm: bool,
     pub itrace: bool,
+    pub stats: bool,
+    pub debug_symbols: bool,
     pub time: u64,
     pub opt: OptFlags,
     pub logic_mode: LogicMode,
@@ -177,8 +179,8 @@ pub fn run(
     top_level_module: Option<&str>,
     ectx: &mut ExecutionContext,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let design = timers.timed("total compilation", |_| {
-        design::Design::new(path, top_level_module, ectx, Vec::new())
+    let mut design = timers.timed("total compilation", |timers| {
+        design::Design::new(path, timers, top_level_module, ectx, Vec::new())
     })?;
 
     if ectx.no_run {
@@ -254,6 +256,8 @@ pub fn lower_to_shared_object(
     timers: &mut TimerStack,
 
     itrace: bool,
+    stats: bool,
+    debug_symbols: bool,
     output_source: Option<&Path>,
     plugins: Vec<RuntimePluginState>,
     num_additional_regions: u8,
@@ -269,6 +273,7 @@ pub fn lower_to_shared_object(
 
     let lower_options = CLowerOptions {
         itrace,
+        stats,
         num_plugins: plugins.len(),
     };
     for (i, process) in gl.processes.keys().enumerate() {
@@ -301,6 +306,7 @@ pub fn lower_to_shared_object(
     vogls_codegen_c::lower_startup_function(&mut out, gl)?;
 
     let mut c_file = Vec::new();
+    let mut tempdir = tempfile::TempDir::with_prefix("vogls")?;
 
     vogls_codegen_c::prologue(&mut c_file)?;
     c_file.extend(&out);
@@ -308,24 +314,27 @@ pub fn lower_to_shared_object(
     if let Some(output_source) = output_source {
         std::fs::write(output_source, &c_file)?;
     }
+    if debug_symbols {
+        tempdir.disable_cleanup(debug_symbols);
+        std::fs::write(tempdir.path().join("design.c"), &c_file)?;
+        println!("Output directory: {}", tempdir.path().display());
+    }
     timers.stop();
 
     timers.start("compile C");
-    let tempdir = tempfile::TempDir::with_prefix("vogls")?;
     let code_path = tempdir.path().join("code.so");
-    let mut command = Command::new("clang")
-        .arg("-x")
-        .arg("c")
-        .arg("-O1")
-        .arg("-g3")
-        .arg("-fPIC")
-        .arg("-")
-        .arg("-shared")
-        .arg("-o")
-        .arg(&code_path)
-        .stdin(std::process::Stdio::piped())
-        .spawn()?;
-    command.stdin.take().unwrap().write_all(&c_file)?;
+    let mut command = Command::new("clang");
+    command.args(["-x", "c", "-O1", "-fPIC", "-shared"]);
+    if debug_symbols {
+        command.arg("-g3").arg(tempdir.path().join("design.c"));
+    } else {
+        command.arg("-");
+    }
+    command.arg("-o").arg(&code_path);
+    let mut command = command.stdin(std::process::Stdio::piped()).spawn()?;
+    if !debug_symbols {
+        command.stdin.take().unwrap().write_all(&c_file)?;
+    }
     if !command.wait()?.success() {
         return Err("compilation failed!".into());
     }

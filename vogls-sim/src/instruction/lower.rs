@@ -4,7 +4,8 @@ use vogls_codegen::{
     HeapBuilder, HeapOffset, HeapRef, insert_bb_phis, resolve_heap_map, resolve_var_logic_mode_map,
 };
 use vogls_ir::{
-    BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext, Instruction, IntrinsicOp, LogicMode, ProcessKey, ShiftImmOp, SignalKey, VariableKey, INTEGER_VSIZE
+    BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext, INTEGER_VSIZE,
+    Instruction, IntrinsicOp, LogicMode, ProcessKey, ShiftImmOp, SignalKey, VariableKey,
 };
 use vogls_runtime::RtSignalKey;
 use vogls_utils::{VgHashMap, VgHashSet};
@@ -324,15 +325,27 @@ pub fn lower_process_to_vm(
                     use ShiftOp as S;
                     if mode == M::FourValue {
                         match op {
-                            O::LogicalShiftLeft => VI::FvShiftImm(d.to_ref(d_size), S::LogicalLeft, src, *offset),
-                            O::LogicalShiftRight => VI::FvShiftImm(d.to_ref(d_size), S::LogicalRight, src, *offset),
-                            O::ArithmeticShiftRight => VI::FvShiftImm(d.to_ref(d_size), S::ArithmeticRight, src, *offset),
+                            O::LogicalShiftLeft => {
+                                VI::FvShiftImm(d.to_ref(d_size), S::LogicalLeft, src, *offset)
+                            }
+                            O::LogicalShiftRight => {
+                                VI::FvShiftImm(d.to_ref(d_size), S::LogicalRight, src, *offset)
+                            }
+                            O::ArithmeticShiftRight => {
+                                VI::FvShiftImm(d.to_ref(d_size), S::ArithmeticRight, src, *offset)
+                            }
                         }
                     } else {
                         match op {
-                            O::LogicalShiftLeft => VI::TvShiftImm(d.to_ref(d_size), S::LogicalLeft, src, *offset),
-                            O::LogicalShiftRight => VI::TvShiftImm(d.to_ref(d_size), S::LogicalRight, src, *offset),
-                            O::ArithmeticShiftRight => VI::TvShiftImm(d.to_ref(d_size), S::ArithmeticRight, src, *offset),
+                            O::LogicalShiftLeft => {
+                                VI::TvShiftImm(d.to_ref(d_size), S::LogicalLeft, src, *offset)
+                            }
+                            O::LogicalShiftRight => {
+                                VI::TvShiftImm(d.to_ref(d_size), S::LogicalRight, src, *offset)
+                            }
+                            O::ArithmeticShiftRight => {
+                                VI::TvShiftImm(d.to_ref(d_size), S::ArithmeticRight, src, *offset)
+                            }
                         }
                     }
                 }
@@ -481,19 +494,37 @@ pub fn lower_process_to_vm(
                     let signal = signal!(*signal);
                     VI::LastUpdateTime(var!(*dst), signal)
                 }
-                I::Probe(dst, signal) => {
+                I::Probe(dst, signal, offset) => {
                     let size = gl.vars[*dst].size;
                     let signal = signal!(*signal);
                     match gl.logic_mode {
-                        LogicMode::TwoValue => VI::TvResize(
+                        LogicMode::TwoValue => VI::TvSliceImm(
                             var!(*dst).to_ref(size),
-                            vogls_ir::ResizeOp::Truncate,
                             signals[signal.as_usize()],
+                            *offset,
                         ),
-                        LogicMode::FourValue => VI::FvResize(
+                        LogicMode::FourValue => VI::FvSliceImm(
                             var!(*dst).to_ref(size),
-                            vogls_ir::ResizeOp::Truncate,
                             signals[signal.as_usize()],
+                            *offset,
+                        ),
+                    }
+                }
+                I::ProbeSlice(dst, signal, offset) => {
+                    let size = gl.vars[*dst].size;
+                    let signal = signal!(*signal);
+                    match gl.logic_mode {
+                        LogicMode::TwoValue => VI::TvSlice(
+                            var!(*dst).to_ref(size),
+                            signals[signal.as_usize()],
+                            var!(*offset),
+                            true,
+                        ),
+                        LogicMode::FourValue => VI::FvSlice(
+                            var!(*dst).to_ref(size),
+                            signals[signal.as_usize()],
+                            var!(*offset),
+                            true,
                         ),
                     }
                 }

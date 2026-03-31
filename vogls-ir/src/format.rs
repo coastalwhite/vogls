@@ -336,26 +336,26 @@ impl ContextFormat for Instruction {
                 f.write_str(op.into_mnemonic())?;
                 f.write_str(" ")?;
                 match op.as_ref() {
-                    IntrinsicOp::Time => {},
-                    IntrinsicOp::Finish => {},
-                    IntrinsicOp::Random => {},
+                    IntrinsicOp::Time => {}
+                    IntrinsicOp::Finish => {}
+                    IntrinsicOp::Random => {}
                     IntrinsicOp::Display(s) => {
                         s.display_format().fmt(f)?;
                         if !args.is_empty() {
                             f.write_str(", ")?;
                         }
-                    },
+                    }
                     IntrinsicOp::Assert(s) => {
                         s.display_format().fmt(f)?;
                         if !args.is_empty() {
                             f.write_str(", ")?;
                         }
-                    },
-                    IntrinsicOp::VcdOpenFile(_) => {},
-                    IntrinsicOp::VcdAppendModule(_) => {},
-                    IntrinsicOp::VcdPause => {},
-                    IntrinsicOp::VcdResume => {},
-                    IntrinsicOp::ReadMem(_) => {},
+                    }
+                    IntrinsicOp::VcdOpenFile(_) => {}
+                    IntrinsicOp::VcdAppendModule(_) => {}
+                    IntrinsicOp::VcdPause => {}
+                    IntrinsicOp::VcdResume => {}
+                    IntrinsicOp::ReadMem(_) => {}
                 }
                 if let Some(arg) = args.first() {
                     arg.ctx_fmt(f, ctx)?;
@@ -370,10 +370,27 @@ impl ContextFormat for Instruction {
                 f.write_str(" = lupdt ")?;
                 ctx.gl.signals.get(*sig).unwrap().ctx_fmt(f, ctx)?;
             }
-            Self::Probe(var, sig) => {
+            Self::Probe(var, sig, offset) => {
+                let dst_size = ctx.gl.vars[*var].size;
+                let src_size = ctx.gl.signals[*sig].size;
+                if *offset > 0 || dst_size != src_size {
+                    var.ctx_fmt(f, ctx)?;
+                    write!(f, " = prb[{dst_size}] ")?;
+                    ctx.gl.signals.get(*sig).unwrap().ctx_fmt(f, ctx)?;
+                    write!(f, ", {offset}")?;
+                } else {
+                    var.ctx_fmt(f, ctx)?;
+                    f.write_str(" = prb ")?;
+                    ctx.gl.signals.get(*sig).unwrap().ctx_fmt(f, ctx)?;
+                }
+            }
+            Self::ProbeSlice(var, sig, offset) => {
+                let dst_size = ctx.gl.vars[*var].size;
                 var.ctx_fmt(f, ctx)?;
-                f.write_str(" = prb ")?;
+                write!(f, " = prb[{dst_size}] ")?;
                 ctx.gl.signals.get(*sig).unwrap().ctx_fmt(f, ctx)?;
+                f.write_str(", ")?;
+                offset.ctx_fmt(f, ctx)?;
             }
             Self::Drive(sig, var, partial) => {
                 f.write_str("drv")?;

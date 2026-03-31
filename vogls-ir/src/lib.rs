@@ -477,7 +477,8 @@ pub enum Instruction {
     Intrinsic(VariableKey, Box<IntrinsicOp>, Box<[VariableKey]>),
     /// Store the 64-bit simulation time when a signal was last updated.
     LastUpdateTime(VariableKey, SignalKey),
-    Probe(VariableKey, SignalKey),
+    Probe(VariableKey, SignalKey, u32),
+    ProbeSlice(VariableKey, SignalKey, VariableKey),
     Drive(SignalKey, VariableKey, Option<(VariableKey, VectorSize)>),
 
     Phi(VariableKey, Box<[(BasicBlockKey, VariableKey)]>),
@@ -496,7 +497,8 @@ impl Instruction {
             | Self::ShiftImm(dst, _, _, _)
             | Self::Phi(dst, _)
             | Self::LastUpdateTime(dst, _)
-            | Self::Probe(dst, _)
+            | Self::Probe(dst, _, _)
+            | Self::ProbeSlice(dst, _, _)
             | Self::Intrinsic(dst, _, _) => Some(*dst),
             Self::Drive(..) => None,
         }
@@ -514,7 +516,8 @@ impl Instruction {
             | Self::ShiftImm(dst, _, _, _)
             | Self::Phi(dst, _)
             | Self::LastUpdateTime(dst, _)
-            | Self::Probe(dst, _)
+            | Self::Probe(dst, _, _)
+            | Self::ProbeSlice(dst, _, _)
             | Self::Intrinsic(dst, _, _) => Some(dst),
             Self::Drive(..) => None,
         }
@@ -526,7 +529,8 @@ impl Instruction {
             | Self::Resize(_, _, src)
             | Self::BinaryImm(_, _, src, _)
             | Self::SliceImm(_, src, _)
-            | Self::ShiftImm(_, _, src, _) => f(*src),
+            | Self::ShiftImm(_, _, src, _)
+            | Self::ProbeSlice(_, _, src) => f(*src),
             Self::Binary(_, _, src1, src2) | Self::Slice(_, src1, src2) => {
                 f(*src1);
                 f(*src2);
@@ -563,7 +567,8 @@ impl Instruction {
             | Self::ShiftImm(_, _, _, _)
             | Self::Phi(..)
             | Self::LastUpdateTime(..)
-            | Self::Probe(..) => false,
+            | Self::Probe(..)
+            | Self::ProbeSlice(..) => false,
             Self::Drive(..) | Self::Intrinsic(..) => true,
         }
     }
@@ -574,7 +579,8 @@ impl Instruction {
             | Self::Resize(dst, _, src)
             | Self::BinaryImm(dst, _, src, _)
             | Self::SliceImm(dst, src, _)
-            | Self::ShiftImm(dst, _, src, _) => {
+            | Self::ShiftImm(dst, _, src, _)
+            | Self::ProbeSlice(dst, _, src) => {
                 *dst = f(*dst);
                 *src = f(*src)
             }
@@ -601,7 +607,7 @@ impl Instruction {
                     *off = f(*off);
                 }
             }
-            Self::Constant(dst, _) | Self::Probe(dst, _) | Self::LastUpdateTime(dst, _) => {
+            Self::Constant(dst, _) | Self::Probe(dst, _, _) | Self::LastUpdateTime(dst, _) => {
                 *dst = f(*dst);
             }
         }
@@ -612,7 +618,8 @@ impl Instruction {
             | Self::Resize(dst, _, src)
             | Self::BinaryImm(dst, _, src, _)
             | Self::SliceImm(dst, src, _)
-            | Self::ShiftImm(dst, _, src, _) => {
+            | Self::ShiftImm(dst, _, src, _)
+            | Self::ProbeSlice(dst, _, src) => {
                 f(*dst);
                 f(*src)
             }
@@ -639,7 +646,7 @@ impl Instruction {
                     f(*off);
                 }
             }
-            Self::Constant(dst, _) | Self::LastUpdateTime(dst, _) | Self::Probe(dst, _) => {
+            Self::Constant(dst, _) | Self::LastUpdateTime(dst, _) | Self::Probe(dst, _, _) => {
                 f(*dst);
             }
         }
@@ -651,7 +658,8 @@ impl Instruction {
             | Self::Resize(_, _, src)
             | Self::BinaryImm(_, _, src, _)
             | Self::SliceImm(_, src, _)
-            | Self::ShiftImm(_, _, src, _) => f(*src),
+            | Self::ShiftImm(_, _, src, _)
+            | Self::ProbeSlice(_, _, src) => f(*src),
             Self::Binary(_, _, src1, src2) | Self::Slice(_, src1, src2) => {
                 f(*src1);
                 f(*src2);
@@ -672,13 +680,14 @@ impl Instruction {
                     f(*off);
                 }
             }
-            Self::Constant(_, _) | Self::LastUpdateTime(_, _) | Self::Probe(_, _) => {}
+            Self::Constant(_, _) | Self::LastUpdateTime(_, _) | Self::Probe(_, _, _) => {}
         }
     }
 
     fn map_signals(&mut self, mut f: impl FnMut(SignalKey) -> SignalKey) {
         match self {
-            Instruction::Probe(_, s)
+            Instruction::Probe(_, s, _)
+            | Instruction::ProbeSlice(_, s, _)
             | Instruction::Drive(s, _, _)
             | Instruction::LastUpdateTime(_, s) => *s = f(*s),
             Instruction::Constant(..)
@@ -706,6 +715,7 @@ impl Instruction {
             | Instruction::ShiftImm(..)
             | Instruction::Intrinsic(..)
             | Instruction::Probe(..)
+            | Instruction::ProbeSlice(..)
             | Instruction::Drive(..)
             | Instruction::LastUpdateTime(..) => {}
             Instruction::Phi(_, items) => items.iter_mut().for_each(|(bb, _)| {
@@ -726,6 +736,7 @@ impl Instruction {
             | Instruction::Intrinsic(..)
             | Instruction::Phi(..)
             | Instruction::Probe(..)
+            | Instruction::ProbeSlice(..)
             | Instruction::Drive(..)
             | Instruction::LastUpdateTime(..) => {}
         }

@@ -223,6 +223,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                         emit_ir: false,
                         emit_vm: false,
                         itrace: false,
+                        stats: false,
                         no_run: false,
                         time: test_information.time,
                         opt: OptFlags {
@@ -258,6 +259,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                                 emit_ir: false,
                                 emit_vm: false,
                                 itrace: false,
+                                stats: false,
                                 no_run: false,
                                 time: test_information.time,
                                 opt: OptFlags {
@@ -278,6 +280,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                             };
                             vogls::design::Design::new(
                                 &[&path],
+                                &mut TimerStack::new(false),
                                 test_information.top_level_module.as_deref(),
                                 &mut ctx,
                                 Vec::new(),
@@ -340,7 +343,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                         {
                             let s = std::fs::read_to_string(&path)?;
                             let optimized = read_to_string(path.with_extension("vir.opt")).ok();
-                            let design = Design::new_vir(&s, &mut TimerStack::new(false), ctx.0)?;
+                            let mut design = Design::new_vir(&s, &mut TimerStack::new(false), ctx.0)?;
 
                             if opt_rounds > 0
                                 && let Some(optimized) = optimized

@@ -9,6 +9,7 @@ mod vogls {
     use pyo3::exceptions::{PyException, PyValueError};
     use pyo3::{PyResult, prelude::*};
     use vogls::design::DesignState;
+    use vogls::utils::TimerStack;
     use vogls::{
         BitsFormatOptions, ExecutionContext, LogicMode, SimulationIo, VSymbol, VectorSize,
     };
@@ -66,6 +67,8 @@ mod vogls {
                 emit_ir: false,
                 emit_vm: false,
                 itrace: false,
+                stats: false,
+                debug_symbols: false,
                 time: 0,
                 opt: vogls::ir::optimize::OptFlags {
                     opt_rounds: 0,
@@ -93,6 +96,7 @@ mod vogls {
 
             let inner = vogls::design::Design::new(
                 &[path.as_path()],
+                &mut TimerStack::new(false),
                 top_level_module.as_deref(),
                 &mut ectx,
                 plugins,

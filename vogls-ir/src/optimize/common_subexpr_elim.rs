@@ -1,7 +1,7 @@
 use hashbrown::hash_map::Entry;
 use vogls_utils::{TableMap, TableMapEntry, VgHashMap, VgHashSet};
 
-use crate::optimize::{CSExpr, ExprKey};
+use crate::optimize::{CSExpr, ExprKey, remap_vars};
 use crate::{BasicBlockKey, GlobalContext, Instruction, ProcessKey, SignalKey, VariableKey};
 
 pub fn common_subexpr_elim(
@@ -78,14 +78,26 @@ pub fn common_subexpr_elim(
                     }
                     (*dst, CSExpr::LastUpdateTime(*signal))
                 }
-                I::Probe(dst, signal) => {
+                I::Probe(dst, signal, offset) => {
                     match signal_dirty.entry(*signal) {
                         Entry::Vacant(_) => {}
                         Entry::Occupied(mut entry) => {
                             dirty = std::mem::replace(&mut entry.get_mut().probe, false)
                         }
                     }
-                    (*dst, CSExpr::Probe(*signal))
+                    (*dst, CSExpr::Probe(*signal, gl.vars[*dst].size, *offset))
+                }
+                I::ProbeSlice(dst, signal, offset) => {
+                    match signal_dirty.entry(*signal) {
+                        Entry::Vacant(_) => {}
+                        Entry::Occupied(mut entry) => {
+                            dirty = std::mem::replace(&mut entry.get_mut().probe, false)
+                        }
+                    }
+                    (
+                        *dst,
+                        CSExpr::ProbeSlice(*signal, gl.vars[*dst].size, try_lookup!(offset)),
+                    )
                 }
                 I::Drive(signal, _, _) => {
                     signal_dirty.insert(
@@ -120,31 +132,16 @@ pub fn common_subexpr_elim(
     }
 
     if !var_remap.is_empty() {
-        scratch_stack.clear();
-        scratch_seen.clear();
-        scratch_seen.insert(entry);
-        scratch_stack.push(entry);
-        while let Some(bb_key) = scratch_stack.pop() {
-            let bb = &mut gl.bbs[bb_key];
-            bb.instrs.retain_mut(|i| {
-                if i.get_destination_variable()
-                    .is_some_and(|dst| var_remap.contains_key(&dst))
-                {
-                    false
-                } else {
-                    i.map_vars(|v| var_remap.get(&v).copied().unwrap_or(v));
-                    true
-                }
-            });
-            bb.instrs.shrink_to_fit();
-            bb.terminator
-                .map_vars(|v| var_remap.get(&v).copied().unwrap_or(v));
-
-            bb.terminator.for_each_bb(|bb_key| {
-                if scratch_seen.insert(bb_key) {
-                    scratch_stack.push(bb_key);
-                }
-            });
-        }
+        let mut var_stack = Vec::new();
+        let mut var_done = VgHashSet::default();
+        remap_vars(
+            gl,
+            process,
+            scratch_stack,
+            scratch_seen,
+            &mut var_remap,
+            &mut var_stack,
+            &mut var_done,
+        );
     }
 }

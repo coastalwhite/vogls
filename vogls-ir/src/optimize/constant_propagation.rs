@@ -513,8 +513,25 @@ fn constant_propagate_instruction(
         I::Intrinsic(dst, ..) | I::LastUpdateTime(dst, ..) => {
             scratch_map.insert(*dst, None);
         }
-        I::Probe(dst, _) => {
+        I::Probe(dst, _, _) => {
             scratch_map.insert(*dst, None);
+        }
+        I::ProbeSlice(dst, signal, offset) => {
+            let dst = *dst;
+            let offset_bits = scratch_map.get(offset).ok_or(())?;
+            match offset_bits.as_ref() {
+                None => {}
+                Some(b) => match b.extract_exact_u32() {
+                    None => {
+                        let bits = Bits::new_unknown(vars[dst].size);
+                        scratch_map.insert(dst, Some(bits.clone()));
+                        *i = I::Constant(dst, bits);
+                        return Ok(());
+                    }
+                    Some(offset) => *i = I::Probe(dst, *signal, offset),
+                },
+            }
+            scratch_map.insert(dst, None);
         }
         I::Drive(..) => {}
         I::Phi(dst, srcs) => {

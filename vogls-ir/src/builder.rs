@@ -840,7 +840,7 @@ impl BasicBlockBuilder {
     pub fn probe(&mut self, gl: &mut GlobalContext, signal: SignalKey) -> VariableKey {
         let size = gl.signals.get(signal).unwrap().size;
         let dst = self.next_tmp_var(gl, size);
-        self.instrs.push(Instruction::Probe(dst, signal));
+        self.instrs.push(Instruction::Probe(dst, signal, 0));
         dst
     }
 
@@ -851,8 +851,10 @@ impl BasicBlockBuilder {
         offset: VariableKey,
         width: VectorSize,
     ) -> VariableKey {
-        let src = self.probe(gl, signal);
-        self.slice(gl, src, offset, width)
+        let dst = self.next_tmp_var(gl, width);
+        self.instrs
+            .push(Instruction::ProbeSlice(dst, signal, offset));
+        dst
     }
 
     pub fn probe_slice_constant(
@@ -862,8 +864,21 @@ impl BasicBlockBuilder {
         offset: u32,
         width: VectorSize,
     ) -> VariableKey {
-        let src = self.probe(gl, signal);
-        self.slice_constant(gl, src, offset, width)
+        let src_size = gl.signals[signal].size;
+        let dst = self.next_tmp_var(gl, width);
+        self.instrs.push(Instruction::Probe(dst, signal, offset));
+        if offset <= src_size.get() - width.get() {
+            return dst;
+        }
+
+        // Slice and SliceImm are slightly different in that out-of-bounds values are set as
+        // unknown for Slice and set as zeros for SliceImm. We compensate to compensate for that
+        // here.
+        self.or_constant(
+            gl,
+            dst,
+            Bits::new_unknown(width).logical_shift_left(src_size.get() - offset),
+        )
     }
 
     pub fn jump(&mut self, gl: &mut GlobalContext) -> BasicBlockBuilder {

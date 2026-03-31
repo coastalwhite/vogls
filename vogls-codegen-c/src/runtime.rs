@@ -74,6 +74,8 @@ pub struct ColdContextT {
     readmems: *const (HeapRef, ReadMem),
     readmem: extern "C" fn(*mut u64, usize, u8, NonNull<(HeapRef, ReadMem)>),
 
+    icount: u64,
+
     stdout: NonNull<Box<dyn std::io::Write + Send + Sync>>,
     stderr: NonNull<Box<dyn std::io::Write + Send + Sync>>,
 }
@@ -269,6 +271,7 @@ impl CDesignState {
                 time: 0,
                 last_active_time: vec![0u64; gl.signals.len()],
                 event_count: 0,
+                instruction_count: 0,
             },
             plugins: Vec::new(),
         }
@@ -378,6 +381,8 @@ impl CDesign {
                 readmems: self.read_mems.as_ptr(),
                 readmem: read_mem,
 
+                icount: 0,
+
                 stdout: NonNull::from_mut(&mut io.stdout),
                 stderr: NonNull::from_mut(&mut io.stderr),
             };
@@ -423,6 +428,7 @@ impl CDesign {
             heap_len: state.runtime.heap.0.len(),
             readmems: self.read_mems.as_ptr(),
             readmem: read_mem,
+            icount: state.runtime.instruction_count,
             stdout: NonNull::from_mut(&mut io.stdout),
             stderr: NonNull::from_mut(&mut io.stderr),
         };
@@ -494,6 +500,7 @@ impl CDesign {
             }
         });
 
+        state.runtime.instruction_count = cldctx.icount;
         for plugin in state.plugins.iter_mut() {
             plugin.finish(&mut state.runtime);
         }

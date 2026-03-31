@@ -292,6 +292,7 @@ fn write_cvar(f: &mut impl io::Write, var: CVar) -> io::Result<()> {
 
 pub struct CLowerOptions {
     pub itrace: bool,
+    pub stats: bool,
     pub num_plugins: usize,
 }
 
@@ -982,12 +983,86 @@ pub fn lower_process(
                         store(&mut buffer, heap_map[dst], t)?;
                     }
                 }
-                I::Probe(dst, signal) => {
-                    let signal = signals[io_signals[signal].as_usize()];
+                I::Probe(dst, signal, offset) => {
+                    let signal_ref = signals[io_signals[signal].as_usize()];
                     assert_eq!(var_mode[dst], gl.logic_mode);
 
                     let t = temp_map[&(*dst, gl.logic_mode)];
-                    load(&mut buffer, signal.offset, t)?;
+                    let dst_size = gl.vars[*dst].size;
+                    let src_size = gl.signals[*signal].size;
+
+                    if dst_size == src_size && *offset == 0 {
+                        load(&mut buffer, signal_ref.offset, t)?;
+                    } else {
+                        let signal_ty = CType {
+                            size: src_size,
+                            mode: gl.logic_mode,
+                        };
+
+                        writeln!(&mut buffer, "{INDENT}{{")?;
+                        let signal = if signal_ty.is_array() {
+                            CVar {
+                                ident: CIdent::HeapWords(
+                                    (signal_ref.offset.bit_offset / 64) as u64,
+                                ),
+                                ty: signal_ty,
+                            }
+                        } else {
+                            let v = CVar {
+                                ident: CIdent::Scoped(1),
+                                ty: signal_ty,
+                            };
+                            write_cvar(&mut buffer, v)?;
+                            load(&mut buffer, signal_ref.offset, v)?;
+                            v
+                        };
+                        let offset_c = CExpr::Bits(&Bits::new_u32(*offset), LogicMode::TwoValue);
+                        if *offset > 0 {
+                            slice::slice_with(&mut buffer, t, signal.into(), offset_c, false)?;
+                        } else {
+                            resize::cgc_truncate(&mut buffer, t, signal.into())?;
+                        }
+                        writeln!(&mut buffer, "{INDENT}}}")?;
+                    }
+                    if temporal_variables.contains(dst) {
+                        store(&mut buffer, heap_map[dst], t)?;
+                    }
+                }
+                I::ProbeSlice(dst, signal, offset) => {
+                    let signal_ref = signals[io_signals[signal].as_usize()];
+                    assert_eq!(var_mode[dst], gl.logic_mode);
+
+                    let t = temp_map[&(*dst, gl.logic_mode)];
+                    let src_size = gl.signals[*signal].size;
+                    let signal_ty = CType {
+                        size: src_size,
+                        mode: gl.logic_mode,
+                    };
+
+                    let moffset = var_mode[offset];
+
+                    let offset_t = temp_map[&(*offset, moffset)];
+                    if temporal_variables.contains(offset) {
+                        load(&mut buffer, heap_map[offset], offset_t)?;
+                    }
+
+                    writeln!(&mut buffer, "{INDENT}{{")?;
+                    let signal = if signal_ty.is_array() {
+                        CVar {
+                            ident: CIdent::HeapWords((signal_ref.offset.bit_offset / 64) as u64),
+                            ty: signal_ty,
+                        }
+                    } else {
+                        let v = CVar {
+                            ident: CIdent::Scoped(1),
+                            ty: signal_ty,
+                        };
+                        write_cvar(&mut buffer, v)?;
+                        load(&mut buffer, signal_ref.offset, v)?;
+                        v
+                    };
+                    slice::slice_with(&mut buffer, t, signal.into(), offset_t.into(), false)?;
+                    writeln!(&mut buffer, "{INDENT}}}")?;
                     if temporal_variables.contains(dst) {
                         store(&mut buffer, heap_map[dst], t)?;
                     }
@@ -1038,6 +1113,9 @@ pub fn lower_process(
                     drive::drive(&mut buffer, signals, dst, t, partial)?;
                 }
                 I::Phi(_, _) => continue,
+            }
+            if lower_options.stats {
+                writeln!(&mut buffer, "{INDENT}cldctx->icount++;")?;
             }
             if lower_options.itrace && !matches!(i, I::Phi(_, _)) {
                 lower_dyn_format_str(
@@ -1568,6 +1646,8 @@ typedef struct cold_context {
     size_t heap_len;
     void *readmems;
     void (*readmem)(uint64_t*, size_t, uint8_t, void*);
+
+    uint64_t icount;
 
     void *stdout;
     void *stderr;

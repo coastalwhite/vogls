@@ -1,6 +1,6 @@
 use vogls_utils::{Table, VgHashMap, VgHashSet};
 
-use crate::optimize::{CSExpr, ExprKey};
+use crate::optimize::{CSExpr, ExprKey, remap_vars};
 use crate::{BasicBlockKey, GlobalContext, Instruction, ProcessKey, ResizeOp, VariableKey};
 
 pub fn peephole(
@@ -55,6 +55,10 @@ pub fn peephole(
                                     *i = I::SliceImm(*dst, exprs[*src].0, *offset);
                                     was_changed = true;
                                 }
+                                CSExpr::Probe(signal, _, offset) => {
+                                    *i = I::Probe(*dst, *signal, *offset);
+                                    was_changed = true;
+                                }
                                 _ => {}
                             }
                         }
@@ -75,6 +79,10 @@ pub fn peephole(
                                     *i = I::SliceImm(*dst, exprs[*src].0, *nested_offset + *offset);
                                     was_changed = true;
                                 }
+                                CSExpr::Probe(signal, _, nested_offset) => {
+                                    *i = I::Probe(*dst, *signal, *nested_offset + *offset);
+                                    was_changed = true;
+                                }
                                 _ => {}
                             }
                         }
@@ -83,6 +91,7 @@ pub fn peephole(
                     I::Intrinsic(..) => {}
                     I::LastUpdateTime(..) => {}
                     I::Probe(..) => {}
+                    I::ProbeSlice(..) => {}
                     I::Drive(..) => {}
                     I::Phi(..) => {}
                 }
@@ -119,7 +128,13 @@ pub fn peephole(
                 }
                 I::Intrinsic(..) => continue,
                 I::LastUpdateTime(dst, signal) => (*dst, CSExpr::LastUpdateTime(*signal)),
-                I::Probe(dst, signal) => (*dst, CSExpr::Probe(*signal)),
+                I::Probe(dst, signal, offset) => {
+                    (*dst, CSExpr::Probe(*signal, gl.vars[*dst].size, *offset))
+                }
+                I::ProbeSlice(dst, signal, offset) => (
+                    *dst,
+                    CSExpr::ProbeSlice(*signal, gl.vars[*dst].size, try_lookup!(offset)),
+                ),
                 I::Drive(_, _, _) => continue,
                 I::Phi(_, _) => continue,
             };
@@ -134,31 +149,16 @@ pub fn peephole(
     }
 
     if !var_remap.is_empty() {
-        scratch_stack.clear();
-        scratch_seen.clear();
-        scratch_seen.insert(entry);
-        scratch_stack.push(entry);
-        while let Some(bb_key) = scratch_stack.pop() {
-            let bb = &mut gl.bbs[bb_key];
-            bb.instrs.retain_mut(|i| {
-                if i.get_destination_variable()
-                    .is_some_and(|dst| var_remap.contains_key(&dst))
-                {
-                    false
-                } else {
-                    i.map_vars(|v| var_remap.get(&v).copied().unwrap_or(v));
-                    true
-                }
-            });
-            bb.instrs.shrink_to_fit();
-            bb.terminator
-                .map_vars(|v| var_remap.get(&v).copied().unwrap_or(v));
-
-            bb.terminator.for_each_bb(|bb_key| {
-                if scratch_seen.insert(bb_key) {
-                    scratch_stack.push(bb_key);
-                }
-            });
-        }
+        let mut var_stack = Vec::new();
+        let mut var_done = VgHashSet::default();
+        remap_vars(
+            gl,
+            process,
+            scratch_stack,
+            scratch_seen,
+            &mut var_remap,
+            &mut var_stack,
+            &mut var_done,
+        );
     }
 }
