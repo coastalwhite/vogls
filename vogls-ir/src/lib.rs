@@ -267,7 +267,7 @@ pub struct ReadMem {
     pub binary: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UnaryOp {
     Neg,
     ReduceOr,
@@ -275,7 +275,7 @@ pub enum UnaryOp {
     ReduceXor,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ResizeOp {
     /// Extract the least-significant bits from the source.
     Truncate,
@@ -285,7 +285,7 @@ pub enum ResizeOp {
     SignExtend,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BinaryOp {
     /// A bitwise-and operator.
     ///
@@ -409,7 +409,7 @@ pub enum BinaryOp {
     Negedge,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BinaryImmOp {
     And,
     Or,
@@ -451,7 +451,7 @@ pub enum BinaryImmOp {
     CaseEquality,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ShiftImmOp {
     /// Operand << Imm
     LogicalShiftLeft,

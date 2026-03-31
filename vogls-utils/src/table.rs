@@ -49,10 +49,50 @@ pub struct Table<K, V> {
 pub struct SecondaryTable<K, V>(Table<K, Option<V>>);
 
 #[derive(Clone)]
-pub struct TableSet<KK, K, V> {
+pub struct TableMap<KK, K, V> {
     table: Table<KK, (K, V)>,
     set: hashbrown::HashTable<(KK, K)>,
     random_state: foldhash::fast::RandomState,
+}
+
+pub enum TableMapEntry<'a, KK, K, V> {
+    Occupied(OccupiedEntry<'a, KK, K, V>),
+    Vacant(VacantEntry<'a, KK, K, V>),
+}
+pub struct OccupiedEntry<'a, KK, K, V> {
+    table: &'a mut Table<KK, (K, V)>,
+    ht_entry: hashbrown::hash_table::OccupiedEntry<'a, (KK, K)>,
+}
+pub struct VacantEntry<'a, KK, K, V> {
+    key: K,
+    table: &'a mut Table<KK, (K, V)>,
+    ht_entry: hashbrown::hash_table::VacantEntry<'a, (KK, K)>,
+}
+
+impl<'a, KK: TableKey, K, V> OccupiedEntry<'a, KK, K, V> {
+    pub fn get(&self) -> &V {
+        &self.table[self.get_table_key()].1
+    }
+    pub fn get_table_key(&self) -> KK {
+        self.ht_entry.get().0
+    }
+    pub fn key(&self) -> &K {
+        &self.ht_entry.get().1
+    }
+
+    pub fn set(&mut self, value: V) {
+        let tk = self.get_table_key();
+        self.table[tk].1 = value;
+    }
+}
+impl<'a, KK: TableKey, K: Clone, V> VacantEntry<'a, KK, K, V> {
+    pub fn insert(self, value: V) -> OccupiedEntry<'a, KK, K, V> {
+        let tk = self.table.insert((self.key.clone(), value));
+        OccupiedEntry {
+            table: self.table,
+            ht_entry: self.ht_entry.insert((tk, self.key)),
+        }
+    }
 }
 
 impl<K, V> Default for Table<K, V> {
@@ -60,7 +100,7 @@ impl<K, V> Default for Table<K, V> {
         Self::new()
     }
 }
-impl<KK, K, V> Default for TableSet<KK, K, V> {
+impl<KK, K, V> Default for TableMap<KK, K, V> {
     fn default() -> Self {
         Self::new()
     }
@@ -96,11 +136,11 @@ impl<K: fmt::Debug, V: fmt::Debug> fmt::Debug for SecondaryTable<K, V> {
         map.finish()
     }
 }
-impl<KK: fmt::Debug, K: fmt::Debug, V: fmt::Debug> fmt::Debug for TableSet<KK, K, V> {
+impl<KK: fmt::Debug, K: fmt::Debug, V: fmt::Debug> fmt::Debug for TableMap<KK, K, V> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "TableSet<{}, {}, {}> ",
+            "TableMap<{}, {}, {}> ",
             std::any::type_name::<KK>(),
             std::any::type_name::<K>(),
             std::any::type_name::<V>()
@@ -127,7 +167,7 @@ impl<K: TableKey, V> Index<K> for SecondaryTable<K, V> {
         self.0[index].as_ref().unwrap()
     }
 }
-impl<KK: TableKey, K, V> Index<KK> for TableSet<KK, K, V> {
+impl<KK: TableKey, K, V> Index<KK> for TableMap<KK, K, V> {
     type Output = V;
 
     fn index(&self, index: KK) -> &Self::Output {
@@ -145,7 +185,7 @@ impl<K: TableKey, V> IndexMut<K> for SecondaryTable<K, V> {
         self.0[index].as_mut().unwrap()
     }
 }
-impl<KK: TableKey, K, V> IndexMut<KK> for TableSet<KK, K, V> {
+impl<KK: TableKey, K, V> IndexMut<KK> for TableMap<KK, K, V> {
     fn index_mut(&mut self, index: KK) -> &mut Self::Output {
         &mut self.table[index].1
     }
@@ -181,6 +221,10 @@ impl<K, V> Table<K, V> {
 
     pub fn into_iter(self) -> impl ExactSizeIterator<Item = V> + DoubleEndedIterator {
         self.values.into_iter()
+    }
+
+    fn clear(&mut self) {
+        self.values.clear();
     }
 }
 impl<K, V> SecondaryTable<K, V> {
@@ -256,7 +300,7 @@ impl<K: TableKey, V> SecondaryTable<K, V> {
     }
 }
 
-impl<KK, K, V> TableSet<KK, K, V> {
+impl<KK, K, V> TableMap<KK, K, V> {
     pub fn new() -> Self {
         Self {
             table: Table::new(),
@@ -282,9 +326,14 @@ impl<KK, K, V> TableSet<KK, K, V> {
     ) -> impl ExactSizeIterator<Item = (K, V)> + DoubleEndedIterator {
         self.table.into_iter()
     }
+
+    pub fn clear(&mut self) {
+        self.table.clear();
+        self.set.clear();
+    }
 }
 
-impl<KK, K: Hash + Eq, V> TableSet<KK, K, V> {
+impl<KK, K: Hash + Eq, V> TableMap<KK, K, V> {
     pub fn reserve(&mut self, additional: usize) {
         self.table.reserve(additional);
         self.set
@@ -300,7 +349,7 @@ impl<K: TableKey, V> Table<K, V> {
     }
 }
 
-impl<KK: TableKey, K: Copy + Hash + Eq, V> TableSet<KK, K, V> {
+impl<KK: TableKey, K: Clone + Hash + Eq, V> TableMap<KK, K, V> {
     pub fn get_or_insert_with(&mut self, key: K, f: impl FnOnce() -> V) -> KK {
         let hash = self.random_state.hash_one(&key);
         self.set
@@ -310,7 +359,7 @@ impl<KK: TableKey, K: Copy + Hash + Eq, V> TableSet<KK, K, V> {
                 |(_, k)| self.random_state.hash_one(k),
             )
             .or_insert_with(|| {
-                let kk = self.table.insert((key, f()));
+                let kk = self.table.insert((key.clone(), f()));
                 (kk, key)
             })
             .get()
@@ -318,25 +367,49 @@ impl<KK: TableKey, K: Copy + Hash + Eq, V> TableSet<KK, K, V> {
     }
 }
 
-impl<KK: TableKey, K: Copy + Hash + Eq, V: Default> TableSet<KK, K, V> {
+impl<KK: TableKey, K: Hash + Eq, V> TableMap<KK, K, V> {
+    pub fn entry<'a>(&'a mut self, key: K) -> TableMapEntry<'a, KK, K, V> {
+        let hash = self.random_state.hash_one(&key);
+        let ht_entry = self.set.entry(
+            hash,
+            |(_, k)| K::eq(k, &key),
+            |(_, k)| self.random_state.hash_one(k),
+        );
+        match ht_entry {
+            hashbrown::hash_table::Entry::Occupied(ht_entry) => {
+                TableMapEntry::Occupied(OccupiedEntry {
+                    table: &mut self.table,
+                    ht_entry,
+                })
+            }
+            hashbrown::hash_table::Entry::Vacant(ht_entry) => TableMapEntry::Vacant(VacantEntry {
+                table: &mut self.table,
+                ht_entry,
+                key,
+            }),
+        }
+    }
+}
+
+impl<KK: TableKey, K: Clone + Hash + Eq, V: Default> TableMap<KK, K, V> {
     pub fn get_or_default(&mut self, key: K) -> KK {
         self.get_or_insert_with(key, V::default)
     }
 }
 
-impl<KK: TableKey, K: Copy, V> TableSet<KK, K, V> {
-    pub fn get_key(&self, key: KK) -> K {
-        self.table[key].0
+impl<KK: TableKey, K, V> TableMap<KK, K, V> {
+    pub fn get_key(&self, key: KK) -> &K {
+        &self.table[key].0
     }
 
-    pub fn iter(&self) -> impl ExactSizeIterator<Item = (KK, K, &V)> + DoubleEndedIterator {
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = (KK, &K, &V)> + DoubleEndedIterator {
         self.table_key_iter()
-            .zip(self.table.iter().map(|(k, v)| (*k, v)))
+            .zip(self.table.iter().map(|(k, v)| (k, v)))
             .map(|(kk, (k, v))| (kk, k, v))
     }
 }
 
-impl<KK: TableKey, K, V> TableSet<KK, K, V> {
+impl<KK: TableKey, K, V> TableMap<KK, K, V> {
     pub fn table_key_iter(
         &self,
     ) -> impl ExactSizeIterator<Item = KK> + DoubleEndedIterator + 'static {

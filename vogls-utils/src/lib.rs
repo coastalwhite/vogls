@@ -11,7 +11,7 @@ mod timer_stack;
 pub use index_map::{IndexMap, IndexSet};
 pub use non_max_int::{NonMaxU8, NonMaxU32, NonMaxU64, NonMaxUsize};
 pub use ordered_set::OrderedSet;
-pub use table::{SecondaryTable, Table, TableKey, TableSet};
+pub use table::{SecondaryTable, Table, TableKey, TableMap, TableMapEntry};
 pub use timer_stack::TimerStack;
 
 /// Remainder that results the divisor if the remainder is zero.

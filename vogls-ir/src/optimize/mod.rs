@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use slotmap::{SecondaryMap, SlotMap};
 use vogls_utils::{VgHashMap, VgHashSet};
 
+pub mod common_subexpr_elim;
 pub mod constant_propagation;
 pub mod deadcode_elimination;
 
@@ -46,6 +47,12 @@ pub fn optimize_processes(gl: &mut GlobalContext, processes: &[ProcessKey], flag
                     &mut scratch_seen,
                 );
             }
+            common_subexpr_elim::common_subexpr_elim(
+                gl,
+                process,
+                &mut scratch_stack,
+                &mut scratch_seen,
+            );
         }
     }
 }
