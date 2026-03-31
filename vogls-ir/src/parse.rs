@@ -1,6 +1,7 @@
 use std::fmt;
 use std::num::NonZeroU32;
 
+use hashbrown::hash_map::Entry;
 use vogls_bits::Bits;
 use vogls_utils::VgHashMap;
 
@@ -167,9 +168,9 @@ pub fn parse(s: &str, gl: &mut GlobalContext) -> Result<(), Box<ParseError>> {
 }
 
 struct Symbols<'a> {
-    variables: VgHashMap<&'a str, VariableKey>,
+    variables: VgHashMap<&'a str, (bool, VariableKey)>,
     signals: VgHashMap<&'a str, SignalKey>,
-    bbs: VgHashMap<&'a str, BasicBlockKey>,
+    bbs: VgHashMap<&'a str, (bool, BasicBlockKey)>,
 
     unresolved_vars: VgHashMap<VariableKey, Instruction>,
 }
@@ -240,12 +241,26 @@ fn parse_process<'a>(
     let mut entry = None;
     while !c.next_if_equals('}') {
         let ident = c.take_ident()?;
-        let bb_key = *symbols.bbs.entry(ident).or_insert_with(|| {
-            gl.bbs.insert(BasicBlock {
-                instrs: Vec::new(),
-                terminator: BasicBlockTerminator::Halt,
-            })
-        });
+        let bb_key = match symbols.bbs.entry(ident) {
+            Entry::Occupied(mut entry) => {
+                if entry.get().0 {
+                    return Err(Box::new(ParseError {
+                        at: c.offset,
+                        error: format!("basic block '{ident}' is defined twice"),
+                    }));
+                }
+                entry.get_mut().0 = true;
+                entry.get().1
+            }
+            Entry::Vacant(entry) => {
+                let bb_key = gl.bbs.insert(BasicBlock {
+                    instrs: Vec::new(),
+                    terminator: BasicBlockTerminator::Halt,
+                });
+                entry.insert((true, bb_key));
+                bb_key
+            }
+        };
         entry.get_or_insert(bb_key);
         c.expect_char(':')?;
 
@@ -259,6 +274,23 @@ fn parse_process<'a>(
             error: format!("missing entry basic block"),
         })
     })?;
+
+    for (k, (is_defined, _)) in &symbols.variables {
+        if !*is_defined {
+            return Err(Box::new(ParseError {
+                at: c.offset,
+                error: format!("variable '{k}' is used but never defined"),
+            }));
+        }
+    }
+    for (k, (is_defined, _)) in &symbols.bbs {
+        if !*is_defined {
+            return Err(Box::new(ParseError {
+                at: c.offset,
+                error: format!("basic block '{k}' is used but never defined"),
+            }));
+        }
+    }
 
     if !symbols.unresolved_vars.is_empty() {
         while !symbols.unresolved_vars.is_empty() {
@@ -377,10 +409,23 @@ fn parse_bb<'a>(
             }
 
             let dst = c.take_ident()?;
-            let dst = *symbols
-                .variables
-                .entry(dst)
-                .or_insert_with(|| gl.vars.insert(Variable { size: SCALAR_VSIZE }));
+            let dst = match symbols.variables.entry(dst) {
+                Entry::Occupied(mut entry) => {
+                    if entry.get().0 {
+                        return Err(Box::new(ParseError {
+                            at: c.offset,
+                            error: format!("variable '{dst}' is defined twice"),
+                        }));
+                    }
+                    entry.get_mut().0 = true;
+                    entry.get().1
+                }
+                Entry::Vacant(entry) => {
+                    let var = gl.vars.insert(Variable { size: SCALAR_VSIZE });
+                    entry.insert((true, var));
+                    var
+                }
+            };
             symbols.unresolved_vars.insert(
                 dst,
                 Instruction::Constant(dst, Bits::new_zeroed(SCALAR_VSIZE)),
@@ -529,8 +574,51 @@ fn parse_bb<'a>(
                     symbols.unresolved_vars.remove(&dst);
                     Instruction::Intrinsic(dst, Box::new(op), args)
                 }
+                "vogls.display" => {
+                    c.trim_cursor();
+                    let dyn_format_string = parse_dyn_format_string(c)?;
+                    let args = (0..dyn_format_string.arguments().len())
+                        .map(|_| {
+                            c.trim_cursor();
+                            c.expect_char(',')?;
+                            c.trim_cursor();
+                            parse_var(c, symbols, gl)
+                        })
+                        .collect::<Result<Box<[_]>, _>>()?;
+                    let op = IntrinsicOp::Display(Box::new(dyn_format_string));
 
-                "phi" => todo!(),
+                    gl.vars[dst].size = SCALAR_VSIZE;
+                    symbols.unresolved_vars.remove(&dst);
+                    Instruction::Intrinsic(dst, Box::new(op), args)
+                }
+
+                "phi" => {
+                    c.trim_cursor();
+                    c.expect_char('[')?;
+                    let mut srcs = Vec::new();
+                    c.trim_cursor();
+                    while !c.next_if_equals(']') {
+                        if !srcs.is_empty() {
+                            c.expect_char(',')?;
+                            c.trim_cursor();
+                        }
+
+                        let var = parse_var(c, symbols, gl)?;
+                        c.trim_cursor();
+                        let bb = parse_label_ref(c, symbols, gl)?;
+                        srcs.push((bb, var));
+
+                        c.trim_cursor();
+                    }
+                    if let Some((_, src)) = srcs
+                        .iter()
+                        .find(|(_, v)| !symbols.unresolved_vars.contains_key(v))
+                    {
+                        gl.vars[dst].size = gl.vars[*src].size;
+                        symbols.unresolved_vars.remove(&dst);
+                    }
+                    Instruction::Phi(dst, srcs.into())
+                }
                 _ => {
                     return Err(Box::new(ParseError {
                         at: c.offset,
@@ -668,10 +756,11 @@ fn parse_var<'a>(
     c.trim_cursor();
     c.expect_char('%')?;
     let ident = c.take_ident()?;
-    let var = *symbols
+    let var = symbols
         .variables
         .entry(ident)
-        .or_insert_with(|| gl.vars.insert(Variable { size: SCALAR_VSIZE }));
+        .or_insert_with(|| (false, gl.vars.insert(Variable { size: SCALAR_VSIZE })))
+        .1;
     Ok(var)
 }
 
@@ -837,12 +926,19 @@ fn parse_label_ref<'a>(
     c.expect_char('<')?;
     let name = c.take_ident()?;
     c.expect_char('>')?;
-    Ok(*symbols.bbs.entry(name).or_insert_with(|| {
-        gl.bbs.insert(BasicBlock {
-            instrs: Vec::new(),
-            terminator: BasicBlockTerminator::Halt,
+    Ok(symbols
+        .bbs
+        .entry(name)
+        .or_insert_with(|| {
+            (
+                false,
+                gl.bbs.insert(BasicBlock {
+                    instrs: Vec::new(),
+                    terminator: BasicBlockTerminator::Halt,
+                }),
+            )
         })
-    }))
+        .1)
 }
 
 fn parse_unary<'a>(

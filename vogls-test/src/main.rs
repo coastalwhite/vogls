@@ -1,11 +1,16 @@
+use std::fs::read_to_string;
 use std::io::{self, Write};
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 
 use clap::Parser;
-use vogls::ExecutionContext;
-use vogls_ir::LogicMode;
+use vogls::codegen::HeapBuilder;
+use vogls::frontend::ident_table::IdentTable;
+use vogls::utils::{TimerStack, VgHashMap};
+use vogls::{ExecutionContext, SimulationIo, generate_signals_heap};
+use vogls_ir::{GlobalContext, LogicMode};
+use vogls_verilog::elaborate::VSymbolTable;
 
 #[derive(clap::Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -50,7 +55,10 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             walkers.push(w);
             walkers.push(walker);
             continue;
-        } else if file_type.is_file() && entry.file_name().as_encoded_bytes().ends_with(b".v") {
+        } else if file_type.is_file()
+            && (entry.file_name().as_encoded_bytes().ends_with(b".v")
+                || entry.file_name().as_encoded_bytes().ends_with(b".vir"))
+        {
             let path = entry.path();
             let path = path.strip_prefix(&tests_dir)?;
             paths.push(path.to_path_buf());
@@ -116,6 +124,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             max_size - offset_path.as_os_str().len()
         )?;
         std::io::stdout().flush()?;
+
         let path = tests_dir.join(&offset_path);
 
         struct TestInfo {
@@ -310,13 +319,115 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                     }
 
                     let ctx = std::panic::AssertUnwindSafe(&mut ctx);
-                    let result = std::panic::catch_unwind(|| {
-                        let ctx = ctx;
-                        vogls::run(
-                            &[&path],
-                            test_information.top_level_module.as_deref(),
-                            ctx.0,
-                        )
+                    let result: Result<
+                        Result<(), Box<dyn std::error::Error>>,
+                        Box<dyn std::any::Any + Send + 'static>,
+                    > = std::panic::catch_unwind(|| {
+                        if path
+                            .extension()
+                            .is_some_and(|ext| ext.as_encoded_bytes() == b"vir")
+                        {
+                            let s = std::fs::read_to_string(&path)?;
+                            let optimized = read_to_string(path.with_extension("vir.opt")).ok();
+                            let mut gl = GlobalContext::default();
+                            gl.logic_mode = logic_mode;
+                            if let Err(err) = vogls_ir::parse::parse(&s, &mut gl) {
+                                return Err(err.into());
+                            };
+
+                            let processes = gl.processes.keys().collect::<Vec<_>>();
+                            vogls_ir::optimize::optimize_processes(
+                                &mut gl,
+                                &processes,
+                                vogls_ir::optimize::OptFlags {
+                                    opt_rounds,
+                                    constant_propagation: true,
+                                    deadcode_elimination: true,
+                                },
+                            );
+
+                            if opt_rounds > 0
+                                && let Some(optimized) = optimized
+                            {
+                                use std::fmt::Write;
+                                let mut out = String::new();
+                                for signal in gl.signals.values() {
+                                    writeln!(&mut out, "{}", signal.display()).unwrap();
+                                }
+                                writeln!(&mut out).unwrap();
+                                for process in gl.processes.values() {
+                                    writeln!(&mut out, "{}", process.display(&gl)).unwrap();
+                                }
+                                let optimized = optimized.trim();
+                                let out = out.trim();
+                                if optimized != out {
+                                    dbg!(optimized);
+                                    dbg!(out);
+                                    return Err("optimization mismatch".into());
+                                }
+                            }
+
+                            let mut heap_builder = HeapBuilder::new();
+                            let mut signal_to_heap = Vec::new();
+                            let mut rt_signal_map = VgHashMap::default();
+                            generate_signals_heap(
+                                &mut heap_builder,
+                                &mut rt_signal_map,
+                                &gl.signals,
+                                &mut signal_to_heap,
+                                gl.logic_mode,
+                            );
+
+                            let design = if compile {
+                                vogls::design::Design::from_gl_compiled(
+                                    gl,
+                                    heap_builder,
+                                    &mut TimerStack::new(false),
+                                    false,
+                                    None,
+                                    rt_signal_map,
+                                    signal_to_heap.into(),
+                                    3,
+                                    Vec::new(),
+                                    IdentTable::default(),
+                                    VSymbolTable::default(),
+                                )
+                            } else {
+                                vogls::design::Design::from_gl_interpretted(
+                                    gl,
+                                    heap_builder,
+                                    &mut TimerStack::new(false),
+                                    false,
+                                    false,
+                                    rt_signal_map,
+                                    signal_to_heap.into(),
+                                    3,
+                                    Vec::new(),
+                                    IdentTable::default(),
+                                    VSymbolTable::default(),
+                                )
+                            }?;
+
+                            let stdout =
+                                std::mem::replace(&mut ctx.0.stdout, Box::new(Vec::new()) as _);
+                            let stderr =
+                                std::mem::replace(&mut ctx.0.stderr, Box::new(Vec::new()) as _);
+                            let mut io = SimulationIo::new(stdout, stderr);
+
+                            design.run(&mut io, test_information.time)?;
+
+                            ctx.0.stdout = io.stdout;
+                            ctx.0.stderr = io.stderr;
+
+                            Ok(())
+                        } else {
+                            let ctx = ctx;
+                            Ok(vogls::run(
+                                &[&path],
+                                test_information.top_level_module.as_deref(),
+                                ctx.0,
+                            )?)
+                        }
                     });
 
                     let stdout = stdout.0.lock().unwrap();
@@ -336,7 +447,9 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                             test_information.verify_stdout,
                             VerifyOutput::Yes | VerifyOutput::SortLines
                         ) {
-                            let s = std::fs::read_to_string(&path.with_extension("v.stdout"))?;
+                            let mut stdout_path = path.clone();
+                            stdout_path.add_extension("stdout");
+                            let s = std::fs::read_to_string(&stdout_path)?;
 
                             if matches!(test_information.verify_stdout, VerifyOutput::SortLines) {
                                 let mut lines = stdout.lines().collect::<Vec<&str>>();

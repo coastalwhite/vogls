@@ -1,0 +1,19 @@
+signal a: 2
+
+proc irreducable_slicei {
+L0:
+  %t0 = const 32'h0000_0001
+  %t1 = prb $a
+  %t2 = slice[2] %t1, %t0
+  drv $a, %t2
+  halt
+}
+
+proc reducible_slicei {
+L0:
+  %t0 = prb $a
+  %t1 = concati_left %t0, 1'h1
+  %t2 = slicei[2] %t1, 1
+  drv $a, %t2
+  halt
+}

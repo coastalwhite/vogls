@@ -29,6 +29,7 @@ use vogls_verilog::tokenizer::Tokenized;
 
 pub use vogls_bits as bits;
 pub use vogls_codegen as codegen;
+pub use vogls_frontend as frontend;
 pub use vogls_runtime as runtime;
 pub use vogls_sim as sim;
 pub use vogls_utils as utils;

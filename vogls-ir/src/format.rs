@@ -236,7 +236,7 @@ impl IntrinsicOp {
             Self::Finish => "finish",
             Self::Time => "time",
             Self::Random => "random",
-            Self::Display(_) => "display",
+            Self::Display(_) => "vogls.display",
             Self::Assert(_) => "vogls.assert",
             Self::VcdOpenFile(_) => "vcd.open_file",
             Self::VcdAppendModule(_) => "vcd.append_module",
@@ -390,15 +390,16 @@ impl ContextFormat for Instruction {
 
             Self::Phi(dst, srcs) => {
                 dst.ctx_fmt(f, ctx)?;
-                f.write_str(" = phi ")?;
+                f.write_str(" = phi [")?;
                 for (i, (bb, var)) in srcs.iter().enumerate() {
                     if i != 0 {
                         f.write_str(", ")?;
                     }
-                    write!(f, "L{}", ctx.bb_name_scratch[bb])?;
-                    f.write_str(" ")?;
                     var.ctx_fmt(f, ctx)?;
+                    f.write_str(" ")?;
+                    write!(f, "<L{}>", ctx.bb_name_scratch[bb])?;
                 }
+                f.write_char(']')?;
             }
         }
 
@@ -418,21 +419,25 @@ impl ContextFormat for BasicBlockTerminator {
             Self::Halt => "halt",
         };
 
-        write!(f, "{mnemonic} ",)?;
+        write!(f, "{mnemonic}",)?;
 
         match self {
             Self::Wait(bb, time) => {
+                f.write_char(' ')?;
                 time.ctx_fmt(f, ctx)?;
                 write!(f, ", <L{}>", ctx.bb_name_scratch[bb])?;
             }
             Self::VariableWait(bb, time) => {
+                f.write_char(' ')?;
                 time.ctx_fmt(f, ctx)?;
                 write!(f, ", <L{}>", ctx.bb_name_scratch[bb])?;
             }
             Self::WaitRegion(bb, region) => {
+                f.write_char(' ')?;
                 write!(f, "{region}, <L{}>", ctx.bb_name_scratch[bb])?;
             }
             Self::Watch(bb, signals) => {
+                f.write_char(' ')?;
                 f.write_char('[')?;
                 if let Some(fst) = signals.first() {
                     ctx.gl.signals.get(*fst).unwrap().ctx_fmt(f, ctx)?;
@@ -445,9 +450,11 @@ impl ContextFormat for BasicBlockTerminator {
                 write!(f, "<L{}>", ctx.bb_name_scratch[bb])?;
             }
             Self::Jump(bb) => {
+                f.write_char(' ')?;
                 write!(f, "<L{}>", ctx.bb_name_scratch[bb])?;
             }
             Self::Branch(var, true_bb, false_bb) => {
+                f.write_char(' ')?;
                 var.ctx_fmt(f, ctx)?;
                 write!(
                     f,

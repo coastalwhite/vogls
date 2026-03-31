@@ -1,0 +1,14 @@
+proc constant_branch {
+L0:
+  jump <L1>
+L1:
+  %t0 = vogls.display "Always\n"
+  jump <L2>
+L2:
+  jump <L3>
+L3:
+  %t1 = vogls.display "Always\n"
+  jump <L4>
+L4:
+  halt
+}

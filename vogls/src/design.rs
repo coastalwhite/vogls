@@ -481,34 +481,31 @@ impl Design {
             }
         }
 
-        let mut processes = Vec::<VmProcess>::default();
-        let mut regions = Regions::new(3); // inactive, non-blocking, monitor
-        let mut signals = Vec::default();
-
         timers.start("build heap");
         let mut heap_builder = HeapBuilder::new();
-        let mut io_signals = VgHashMap::default();
+        let mut signal_to_heap = Vec::new();
+        let mut rt_signal_map = VgHashMap::default();
         generate_signals_heap(
             &mut heap_builder,
-            &mut io_signals,
+            &mut rt_signal_map,
             &mctx.gl.signals,
-            &mut signals,
+            &mut signal_to_heap,
             mctx.gl.logic_mode,
         );
         timers.stop();
 
-        let signals: Arc<[HeapRef]> = signals.into();
+        let signal_to_heap: Arc<[HeapRef]> = signal_to_heap.into();
         if mctx.has_vcd || ectx.vcd.is_some() {
             let tlm = ctx.table.roots()[0];
             let scope = ctx.vcd_scope(tlm, &ctx.arenas.ident_table);
-            let (children, map) = vogls_vcd::VcdScope::lower(&scope, &io_signals);
+            let (children, map) = vogls_vcd::VcdScope::lower(&scope, &rt_signal_map);
             let rtvcdoutput = match &ectx.vcd {
                 Some(path) => {
-                    vogls_vcd::RtVcdOutput::new_path(path, signals.clone(), children, map)
+                    vogls_vcd::RtVcdOutput::new_path(path, signal_to_heap.clone(), children, map)
                 }
                 None => vogls_vcd::RtVcdOutput::new(
                     Box::new(Vec::new()),
-                    signals.clone(),
+                    signal_to_heap.clone(),
                     children,
                     map,
                 ),
@@ -516,52 +513,101 @@ impl Design {
             plugins.push(Box::new(rtvcdoutput));
         }
 
+        let num_regions = 3; // inactive, non-blocking, monitor
         if ectx.compile {
-            let (initial_state, design) = lower_to_shared_object(
-                &mctx.gl,
-                &io_signals,
+            Self::from_gl_compiled(
+                mctx.gl,
                 heap_builder,
-                &signals,
                 &mut timers,
                 ectx.itrace,
                 ectx.output_source.as_deref(),
+                rt_signal_map,
+                signal_to_heap,
+                num_regions,
                 plugins,
-                regions.num_additional_regions() as u8,
-            )?;
-
-            if ectx.timings {
-                timers.print();
-            }
-
-            let LowerContext {
-                table,
-                table_ast_refs: _,
-                udps: _,
-                tokenized: _,
-                arenas,
-            } = ctx;
-            return Ok(Self {
-                gl: mctx.gl,
-                ident_table: arenas.ident_table,
-                elab_table: table,
-                backend: DesignBackend::Compiled { design },
-                rt_signal_map: io_signals,
-                signal_to_heap: signals.into(),
-                initial_state: DesignState::Compiled(initial_state),
-            });
+                ctx.arenas.ident_table,
+                ctx.table,
+            )
+        } else {
+            Self::from_gl_interpretted(
+                mctx.gl,
+                heap_builder,
+                &mut timers,
+                ectx.itrace,
+                ectx.emit_vm,
+                rt_signal_map,
+                signal_to_heap,
+                num_regions,
+                plugins,
+                ctx.arenas.ident_table,
+                ctx.table,
+            )
         }
+    }
+
+    pub fn from_gl_compiled(
+        gl: GlobalContext,
+        heap_builder: HeapBuilder,
+        timers: &mut TimerStack,
+        itrace: bool,
+        output_source: Option<&Path>,
+        rt_signal_map: VgHashMap<SignalKey, RtSignalKey>,
+        signal_to_heap: Arc<[HeapRef]>,
+        num_regions: u8,
+        plugins: Vec<RuntimePluginState>,
+        ident_table: IdentTable,
+        elab_table: VSymbolTable,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let (initial_state, design) = lower_to_shared_object(
+            &gl,
+            &rt_signal_map,
+            heap_builder,
+            &signal_to_heap,
+            timers,
+            itrace,
+            output_source.as_deref(),
+            plugins,
+            num_regions,
+        )?;
+
+        return Ok(Self {
+            gl,
+            ident_table,
+            elab_table,
+            backend: DesignBackend::Compiled { design },
+            rt_signal_map,
+            signal_to_heap,
+            initial_state: DesignState::Compiled(initial_state),
+        });
+    }
+
+    pub fn from_gl_interpretted(
+        gl: GlobalContext,
+        mut heap_builder: HeapBuilder,
+        timers: &mut TimerStack,
+        itrace: bool,
+        emit_vm: bool,
+        mut rt_signal_map: VgHashMap<SignalKey, RtSignalKey>,
+        signal_to_heap: Arc<[HeapRef]>,
+        num_regions: u8,
+        plugins: Vec<RuntimePluginState>,
+        ident_table: IdentTable,
+        elab_table: VSymbolTable,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut processes = Vec::<VmProcess>::default();
+        let mut regions = Regions::new(num_regions as usize);
 
         let listeners = SlotMap::default();
-        let watches = vec![Vec::new(); mctx.gl.signals.len()];
+        let watches = vec![Vec::new(); gl.signals.len()];
 
         timers.start("lower to VM");
-        for process in mctx.gl.processes.keys() {
+        for process in gl.processes.keys() {
             let vm_process = lower_process_to_vm(
                 process,
-                &mctx.gl,
+                &gl,
                 &mut heap_builder,
-                &signals,
-                &mut io_signals,
+                &signal_to_heap,
+                &mut rt_signal_map,
             );
             let vm_process_key = VmProcessKey(processes.len() as u64);
             processes.push(vm_process);
@@ -572,43 +618,36 @@ impl Design {
         }
         timers.stop();
 
-        if ectx.emit_vm {
+        if emit_vm {
             for process in &processes {
                 print!("{}", &process);
             }
         }
         let mut heap = heap_builder.finish();
 
-        for (key, signal) in &mctx.gl.signals {
+        for (key, signal) in &gl.signals {
             if let Some(initialize) = &signal.initialize {
                 assert_eq!(initialize.size(), signal.size);
                 heap.store_bits(
-                    signals[io_signals[&key].as_usize()],
-                    mctx.gl.logic_mode,
+                    signal_to_heap[rt_signal_map[&key].as_usize()],
+                    gl.logic_mode,
                     initialize,
                 );
             }
         }
 
-        let mut simulation = Simulation::new(processes, signals.clone(), mctx.gl.logic_mode);
-        simulation.itrace = ectx.itrace;
+        let mut simulation = Simulation::new(processes, signal_to_heap.clone(), gl.logic_mode);
+        simulation.itrace = itrace;
         let mut initial_state = simulation.new_state(regions, listeners, watches, heap);
         initial_state.plugins = plugins;
 
-        let LowerContext {
-            table,
-            table_ast_refs: _,
-            udps: _,
-            tokenized: _,
-            arenas,
-        } = ctx;
         Ok(Self {
-            gl: mctx.gl,
-            ident_table: arenas.ident_table,
-            elab_table: table,
+            gl,
+            ident_table,
+            elab_table,
             backend: DesignBackend::Interpretted { simulation },
-            rt_signal_map: io_signals,
-            signal_to_heap: signals,
+            rt_signal_map,
+            signal_to_heap,
             initial_state: DesignState::Interpretted(initial_state),
         })
     }
