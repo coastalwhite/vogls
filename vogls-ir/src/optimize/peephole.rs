@@ -66,7 +66,23 @@ pub fn peephole(
                     I::Resize(..) => {}
                     I::Binary(..) => {}
                     I::BinaryImm(..) => {}
-                    I::Slice(..) => {}
+                    I::Slice(dst, src, offset) => {
+                        if let Some(csexpr) = var_lookup.get(src) {
+                            let (_, expr) = &exprs[*csexpr];
+                            match expr {
+                                CSExpr::Resize(ResizeOp::Truncate, _, src) => {
+                                    *i = I::Slice(*dst, exprs[*src].0, *offset);
+                                    was_changed = true;
+                                }
+                                CSExpr::Probe(signal, _, 0) => {
+                                    *i = I::ProbeSlice(*dst, *signal, *offset);
+                                    was_changed = true;
+                                }
+                                _ => {}
+                            }
+                        }
+
+                    }
                     I::SliceImm(dst, src, offset) => {
                         if let Some(csexpr) = var_lookup.get(src) {
                             let (_, expr) = &exprs[*csexpr];

@@ -224,6 +224,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                         emit_vm: false,
                         itrace: false,
                         stats: false,
+                        debug_symbols: false,
                         no_run: false,
                         time: test_information.time,
                         opt: OptFlags {
@@ -260,6 +261,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                                 emit_vm: false,
                                 itrace: false,
                                 stats: false,
+                                debug_symbols: false,
                                 no_run: false,
                                 time: test_information.time,
                                 opt: OptFlags {
@@ -343,7 +345,8 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                         {
                             let s = std::fs::read_to_string(&path)?;
                             let optimized = read_to_string(path.with_extension("vir.opt")).ok();
-                            let mut design = Design::new_vir(&s, &mut TimerStack::new(false), ctx.0)?;
+                            let mut design =
+                                Design::new_vir(&s, &mut TimerStack::new(false), ctx.0)?;
 
                             if opt_rounds > 0
                                 && let Some(optimized) = optimized

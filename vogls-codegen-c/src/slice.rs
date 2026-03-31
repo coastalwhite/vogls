@@ -25,6 +25,10 @@ pub fn slice_with(
     }
     assert!(src.ty().size >= dst.ty.size);
 
+    if offset.ty().mode != src.ty().mode {
+        todo!();
+    }
+
     use LogicMode as M;
     let (d, s, o) = (dst.ident, src, offset);
     let d_size = dst.ty.size;

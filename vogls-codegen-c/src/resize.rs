@@ -3,29 +3,26 @@ use std::io;
 use vogls_bits::util::saturating_rem;
 use vogls_ir::LogicMode;
 
-use crate::mask;
+use crate::{CExpr, mask};
 
 use super::{CVar, INDENT};
 
-pub fn cgc_copy(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Result<()> {
-    assert_eq!(dst.ty.mode, src.ty.mode);
-    assert_eq!(dst.ty.size, src.ty.size);
+pub fn cgc_copy(f: &mut impl io::Write, dst: CVar, src: CExpr<'_>) -> io::Result<()> {
+    assert_eq!(dst.ty.mode, src.ty().mode);
+    assert_eq!(dst.ty.size, src.ty().size);
 
-    let (d, s) = (dst.ident, src.ident);
+    let (d, s) = (dst.ident, src);
     match dst.ty.array_size() {
-        Some(arr_size) => writeln!(
-            f,
-            "{INDENT}for (int i = 0; i < {arr_size}; ++i) {d}[i] = {s}[i];"
-        ),
+        Some(arr_size) => writeln!(f, "{INDENT}memcpy({d}, {s}, {arr_size}*sizeof(uint64_t));"),
         None => writeln!(f, "{INDENT}{d} = {s};"),
     }
 }
 
-pub fn cgc_truncate(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Result<()> {
-    assert_eq!(dst.ty.mode, src.ty.mode);
-    assert!(dst.ty.size <= src.ty.size);
+pub fn cgc_truncate(f: &mut impl io::Write, dst: CVar, src: CExpr<'_>) -> io::Result<()> {
+    assert_eq!(dst.ty.mode, src.ty().mode);
+    assert!(dst.ty.size <= src.ty().size);
 
-    if dst.ty.size == src.ty.size {
+    if dst.ty.size == src.ty().size {
         return cgc_copy(f, dst, src);
     }
 
@@ -35,8 +32,8 @@ pub fn cgc_truncate(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Result<
         (1u64 << (dst.ty.size.get() % 64)) - 1
     };
 
-    let (d, s) = (dst.ident, src.ident);
-    match (dst.ty.mode, dst.ty.array_size(), src.ty.array_size()) {
+    let (d, s) = (dst.ident, src);
+    match (dst.ty.mode, dst.ty.array_size(), src.ty().array_size()) {
         (LogicMode::TwoValue, None, None) => writeln!(
             f,
             "{INDENT}{d} = ({})({s} & 0x{msbs_mask:x});",
@@ -66,7 +63,7 @@ pub fn cgc_truncate(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Result<
                 f,
                 "{INDENT}{d} = ({dst_ty_elem})({s} & 0x{spc_mask:x}) | ({dst_ty_elem})(({s} >> {shift}) & 0x{val_mask:x});",
                 dst_ty_elem = dst.ty.element_type(),
-                shift = src.ty.size.get() - dst.ty.size.get(),
+                shift = src.ty().size.get() - dst.ty.size.get(),
             )?
         }
         (LogicMode::FourValue, None, Some(arr_size)) => {
@@ -120,7 +117,7 @@ pub fn cgc_zero_extend(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Resu
     assert!(dst.ty.size >= src.ty.size);
 
     if dst.ty.size == src.ty.size {
-        return cgc_copy(f, dst, src);
+        return cgc_copy(f, dst, src.into());
     }
 
     let (d, s) = (dst.ident, src.ident);
@@ -230,7 +227,7 @@ pub fn cgc_sign_extend(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Resu
     assert!(dst.ty.size >= src.ty.size);
 
     if dst.ty.size == src.ty.size {
-        return cgc_copy(f, dst, src);
+        return cgc_copy(f, dst, src.into());
     }
 
     let (d, s) = (dst.ident, src.ident);

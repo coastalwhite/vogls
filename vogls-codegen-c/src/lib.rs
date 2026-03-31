@@ -69,12 +69,17 @@ impl fmt::Display for CIdent {
 #[derive(Clone, Copy)]
 enum CExpr<'a> {
     Ident(CVar),
+    HeapRef(HeapRef, LogicMode),
     Bits(&'a Bits, LogicMode),
 }
 impl CExpr<'_> {
     fn ty(self) -> CType {
         match self {
             CExpr::Ident(var) => var.ty,
+            CExpr::HeapRef(heap_ref, mode) => CType {
+                size: heap_ref.size,
+                mode,
+            },
             CExpr::Bits(bits, mode) => CType {
                 size: bits.size(),
                 mode,
@@ -93,6 +98,25 @@ impl fmt::Display for CExpr<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Ident(var) => var.ident.fmt(f),
+            Self::HeapRef(heap_ref, mode) => {
+                let ty = CType {
+                    size: heap_ref.size,
+                    mode: *mode,
+                };
+                match ty.array_size() {
+                    None => {
+                        let word = heap_ref.offset.bit_offset / 64;
+                        let shift = heap_ref.offset.bit_offset % 64;
+                        let num_bits = ty.num_bits();
+                        let mask = mask(num_bits);
+                        write!(f, "((heap[{word}] >> {shift}) & 0x{mask:x})")
+                    }
+                    Some(_) => {
+                        let word = heap_ref.offset.bit_offset / 64;
+                        write!(f, "(heap+{word})",)
+                    }
+                }
+            }
             Self::Bits(bits, mode) => match mode {
                 LogicMode::TwoValue => match bits.as_data_ref() {
                     BitsDataRef::InlineTv(v) => write!(f, "((uint64_t)0x{v:x})"),
@@ -552,7 +576,7 @@ pub fn lower_process(
                     let dst_t = temp_map[&(*dst, mdst)];
                     use ResizeOp as O;
                     match op {
-                        O::Truncate => resize::cgc_truncate(&mut buffer, dst_t, t)?,
+                        O::Truncate => resize::cgc_truncate(&mut buffer, dst_t, t.into())?,
                         O::ZeroExtend => resize::cgc_zero_extend(&mut buffer, dst_t, t)?,
                         O::SignExtend => resize::cgc_sign_extend(&mut buffer, dst_t, t)?,
                     }
@@ -994,35 +1018,13 @@ pub fn lower_process(
                     if dst_size == src_size && *offset == 0 {
                         load(&mut buffer, signal_ref.offset, t)?;
                     } else {
-                        let signal_ty = CType {
-                            size: src_size,
-                            mode: gl.logic_mode,
-                        };
-
-                        writeln!(&mut buffer, "{INDENT}{{")?;
-                        let signal = if signal_ty.is_array() {
-                            CVar {
-                                ident: CIdent::HeapWords(
-                                    (signal_ref.offset.bit_offset / 64) as u64,
-                                ),
-                                ty: signal_ty,
-                            }
-                        } else {
-                            let v = CVar {
-                                ident: CIdent::Scoped(1),
-                                ty: signal_ty,
-                            };
-                            write_cvar(&mut buffer, v)?;
-                            load(&mut buffer, signal_ref.offset, v)?;
-                            v
-                        };
+                        let signal = CExpr::HeapRef(signal_ref, gl.logic_mode);
                         let offset_c = CExpr::Bits(&Bits::new_u32(*offset), LogicMode::TwoValue);
                         if *offset > 0 {
-                            slice::slice_with(&mut buffer, t, signal.into(), offset_c, false)?;
+                            slice::slice_with(&mut buffer, t, signal, offset_c, false)?;
                         } else {
-                            resize::cgc_truncate(&mut buffer, t, signal.into())?;
+                            resize::cgc_truncate(&mut buffer, t, signal)?;
                         }
-                        writeln!(&mut buffer, "{INDENT}}}")?;
                     }
                     if temporal_variables.contains(dst) {
                         store(&mut buffer, heap_map[dst], t)?;
@@ -1030,39 +1032,22 @@ pub fn lower_process(
                 }
                 I::ProbeSlice(dst, signal, offset) => {
                     let signal_ref = signals[io_signals[signal].as_usize()];
-                    assert_eq!(var_mode[dst], gl.logic_mode);
+                    assert_eq!(var_mode[dst], LogicMode::FourValue);
 
-                    let t = temp_map[&(*dst, gl.logic_mode)];
-                    let src_size = gl.signals[*signal].size;
-                    let signal_ty = CType {
-                        size: src_size,
-                        mode: gl.logic_mode,
-                    };
+                    let t = temp_map[&(*dst, LogicMode::FourValue)];
 
                     let moffset = var_mode[offset];
-
                     let offset_t = temp_map[&(*offset, moffset)];
                     if temporal_variables.contains(offset) {
                         load(&mut buffer, heap_map[offset], offset_t)?;
                     }
 
-                    writeln!(&mut buffer, "{INDENT}{{")?;
-                    let signal = if signal_ty.is_array() {
-                        CVar {
-                            ident: CIdent::HeapWords((signal_ref.offset.bit_offset / 64) as u64),
-                            ty: signal_ty,
-                        }
-                    } else {
-                        let v = CVar {
-                            ident: CIdent::Scoped(1),
-                            ty: signal_ty,
-                        };
-                        write_cvar(&mut buffer, v)?;
-                        load(&mut buffer, signal_ref.offset, v)?;
-                        v
-                    };
-                    slice::slice_with(&mut buffer, t, signal.into(), offset_t.into(), false)?;
-                    writeln!(&mut buffer, "{INDENT}}}")?;
+                    slice::slice(
+                        &mut buffer,
+                        t,
+                        CExpr::HeapRef(signal_ref, gl.logic_mode),
+                        offset_t.into(),
+                    )?;
                     if temporal_variables.contains(dst) {
                         store(&mut buffer, heap_map[dst], t)?;
                     }
