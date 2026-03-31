@@ -1,0 +1,11 @@
+signal a: 1
+signal b: 3
+
+proc double_slice {
+L0:
+  %t0 = prb $b
+  %t1 = slicei[2] %t0, 1
+  %t2 = slicei[1] %t1, 1
+  drv $a, %t2
+  halt
+}

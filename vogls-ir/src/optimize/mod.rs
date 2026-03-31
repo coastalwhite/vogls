@@ -1,14 +1,17 @@
 use std::collections::HashSet;
 
 use slotmap::{SecondaryMap, SlotMap};
-use vogls_utils::{VgHashMap, VgHashSet};
+use vogls_bits::{Bits, VectorSize};
+use vogls_utils::{VgHashMap, VgHashSet, new_table_key};
 
 pub mod common_subexpr_elim;
 pub mod constant_propagation;
 pub mod deadcode_elimination;
+pub mod peephole;
 
 use crate::{
-    BasicBlock, BasicBlockKey, BasicBlockTerminator, GlobalContext, Instruction, ProcessKey,
+    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext,
+    Instruction, ProcessKey, ResizeOp, ShiftImmOp, SignalKey, UnaryOp,
 };
 
 #[derive(Default, Clone, Copy)]
@@ -16,6 +19,26 @@ pub struct OptFlags {
     pub opt_rounds: u8,
     pub constant_propagation: bool,
     pub deadcode_elimination: bool,
+    pub common_subexpr_elim: bool,
+    pub peephole: bool,
+}
+
+new_table_key! {
+    struct ExprKey;
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum CSExpr {
+    Constant(Bits),
+    Unary(UnaryOp, ExprKey),
+    Resize(ResizeOp, VectorSize, ExprKey),
+    Binary(BinaryOp, ExprKey, ExprKey),
+    Slice(VectorSize, ExprKey, ExprKey),
+    BinaryImm(BinaryImmOp, ExprKey, Bits),
+    ShiftImm(ShiftImmOp, ExprKey, u32),
+    SliceImm(VectorSize, ExprKey, u32),
+    Probe(SignalKey),
+    LastUpdateTime(SignalKey),
 }
 
 pub fn optimize_processes(gl: &mut GlobalContext, processes: &[ProcessKey], flags: OptFlags) {
@@ -39,6 +62,22 @@ pub fn optimize_processes(gl: &mut GlobalContext, processes: &[ProcessKey], flag
                     &mut scratch_dep_edges,
                 );
             }
+            if flags.common_subexpr_elim {
+                common_subexpr_elim::common_subexpr_elim(
+                    gl,
+                    process,
+                    &mut scratch_stack,
+                    &mut scratch_seen,
+                );
+            }
+            if flags.peephole {
+                peephole::peephole(
+                    gl,
+                    process,
+                    &mut scratch_stack,
+                    &mut scratch_seen,
+                );
+            }
             if flags.deadcode_elimination {
                 deadcode_elimination::deadcode_elimination(
                     gl,
@@ -47,12 +86,6 @@ pub fn optimize_processes(gl: &mut GlobalContext, processes: &[ProcessKey], flag
                     &mut scratch_seen,
                 );
             }
-            common_subexpr_elim::common_subexpr_elim(
-                gl,
-                process,
-                &mut scratch_stack,
-                &mut scratch_seen,
-            );
         }
     }
 }

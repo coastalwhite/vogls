@@ -61,6 +61,10 @@ struct Args {
     no_constant_propagation: bool,
     #[arg(long)]
     no_deadcode_elimination: bool,
+    #[arg(long)]
+    no_common_subexpr_elim: bool,
+    #[arg(long)]
+    no_peephole_optimization: bool,
 
     #[arg(long)]
     print_unoptimized_fuse_signals: bool,
@@ -92,6 +96,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             opt_rounds: args.opt_rounds,
             constant_propagation: !args.no_constant_propagation,
             deadcode_elimination: !args.no_deadcode_elimination,
+            common_subexpr_elim: !args.no_common_subexpr_elim,
+            peephole: !args.no_peephole_optimization,
         },
         logic_mode,
         vcd: args.vcd,

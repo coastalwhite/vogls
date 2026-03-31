@@ -1,10 +1,9 @@
-use hashbrown::hash_map::Entry;
-use vogls_utils::{TableMap, TableMapEntry, VgHashMap, VgHashSet};
+use vogls_utils::{Table, VgHashMap, VgHashSet};
 
 use crate::optimize::{CSExpr, ExprKey};
-use crate::{BasicBlockKey, GlobalContext, Instruction, ProcessKey, SignalKey, VariableKey};
+use crate::{BasicBlockKey, GlobalContext, Instruction, ProcessKey, ResizeOp, VariableKey};
 
-pub fn common_subexpr_elim(
+pub fn peephole(
     gl: &mut GlobalContext,
     process: ProcessKey,
 
@@ -13,15 +12,9 @@ pub fn common_subexpr_elim(
 ) {
     let entry = gl.processes[process].entry;
 
-    struct SignalDirty {
-        lupdt: bool,
-        probe: bool,
-    }
-
-    let mut exprs = TableMap::<ExprKey, CSExpr, VariableKey>::new();
+    let mut exprs = Table::<ExprKey, (VariableKey, CSExpr)>::new();
     let mut var_lookup = VgHashMap::<VariableKey, ExprKey>::default();
     let mut var_remap = VgHashMap::<VariableKey, VariableKey>::default();
-    let mut signal_dirty = VgHashMap::<SignalKey, SignalDirty>::default();
 
     macro_rules! try_lookup {
         ($var:expr) => {
@@ -42,7 +35,63 @@ pub fn common_subexpr_elim(
         let bb = &mut gl.bbs[bb_key];
         for i in bb.instrs.iter_mut() {
             use Instruction as I;
-            let mut dirty = false;
+            loop {
+                let mut was_changed = false;
+                match i {
+                    I::Constant(..) => {}
+                    I::Unary(..) => {}
+                    I::Resize(dst, _, src) if gl.vars[*dst].size == gl.vars[*src].size => {
+                        _ = var_remap.insert(*dst, *src)
+                    }
+                    I::Resize(dst, ResizeOp::Truncate, src) => {
+                        if let Some(csexpr) = var_lookup.get(src) {
+                            let (_, expr) = &exprs[*csexpr];
+                            match expr {
+                                CSExpr::Resize(ResizeOp::Truncate, _, src) => {
+                                    *i = I::Resize(*dst, ResizeOp::Truncate, exprs[*src].0);
+                                    was_changed = true;
+                                }
+                                CSExpr::SliceImm(_, src, offset) => {
+                                    *i = I::SliceImm(*dst, exprs[*src].0, *offset);
+                                    was_changed = true;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    I::Resize(..) => {}
+                    I::Binary(..) => {}
+                    I::BinaryImm(..) => {}
+                    I::Slice(..) => {}
+                    I::SliceImm(dst, src, offset) => {
+                        if let Some(csexpr) = var_lookup.get(src) {
+                            let (_, expr) = &exprs[*csexpr];
+                            match expr {
+                                CSExpr::Resize(ResizeOp::Truncate, _, src) => {
+                                    *i = I::SliceImm(*dst, exprs[*src].0, *offset);
+                                    was_changed = true;
+                                }
+                                CSExpr::SliceImm(_, src, nested_offset) => {
+                                    *i = I::SliceImm(*dst, exprs[*src].0, *nested_offset + *offset);
+                                    was_changed = true;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    I::ShiftImm(..) => {}
+                    I::Intrinsic(..) => {}
+                    I::LastUpdateTime(..) => {}
+                    I::Probe(..) => {}
+                    I::Drive(..) => {}
+                    I::Phi(..) => {}
+                }
+
+                if !was_changed {
+                    break;
+                }
+            }
+
             let (dst, csexpr) = match i {
                 I::Constant(dst, bits) => (*dst, CSExpr::Constant(bits.clone())),
                 I::Unary(dst, op, src) => (*dst, CSExpr::Unary(*op, try_lookup!(src))),
@@ -69,47 +118,12 @@ pub fn common_subexpr_elim(
                     (*dst, CSExpr::ShiftImm(*op, try_lookup!(src), *amount))
                 }
                 I::Intrinsic(..) => continue,
-                I::LastUpdateTime(dst, signal) => {
-                    match signal_dirty.entry(*signal) {
-                        Entry::Vacant(_) => {}
-                        Entry::Occupied(mut entry) => {
-                            dirty = std::mem::replace(&mut entry.get_mut().lupdt, false)
-                        }
-                    }
-                    (*dst, CSExpr::LastUpdateTime(*signal))
-                }
-                I::Probe(dst, signal) => {
-                    match signal_dirty.entry(*signal) {
-                        Entry::Vacant(_) => {}
-                        Entry::Occupied(mut entry) => {
-                            dirty = std::mem::replace(&mut entry.get_mut().probe, false)
-                        }
-                    }
-                    (*dst, CSExpr::Probe(*signal))
-                }
-                I::Drive(signal, _, _) => {
-                    signal_dirty.insert(
-                        *signal,
-                        SignalDirty {
-                            lupdt: true,
-                            probe: true,
-                        },
-                    );
-                    continue;
-                }
+                I::LastUpdateTime(dst, signal) => (*dst, CSExpr::LastUpdateTime(*signal)),
+                I::Probe(dst, signal) => (*dst, CSExpr::Probe(*signal)),
+                I::Drive(_, _, _) => continue,
                 I::Phi(_, _) => continue,
             };
-            let expr_key = match exprs.entry(csexpr) {
-                TableMapEntry::Occupied(mut entry) if dirty => {
-                    entry.set(dst);
-                    entry.get_table_key()
-                }
-                TableMapEntry::Occupied(entry) => {
-                    var_remap.insert(dst, *entry.get());
-                    entry.get_table_key()
-                }
-                TableMapEntry::Vacant(entry) => entry.insert(dst).get_table_key(),
-            };
+            let expr_key = exprs.insert((dst, csexpr));
             var_lookup.insert(dst, expr_key);
         }
         bb.terminator.for_each_bb(|bb_key| {

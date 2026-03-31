@@ -223,7 +223,7 @@ impl<K, V> Table<K, V> {
         self.values.into_iter()
     }
 
-    fn clear(&mut self) {
+    pub fn clear(&mut self) {
         self.values.clear();
     }
 }
@@ -350,6 +350,22 @@ impl<K: TableKey, V> Table<K, V> {
 }
 
 impl<KK: TableKey, K: Clone + Hash + Eq, V> TableMap<KK, K, V> {
+    pub fn insert_new(&mut self, key: K, value: V) -> Option<KK> {
+        let hash = self.random_state.hash_one(&key);
+        match self.set.entry(
+            hash,
+            |(_, k)| K::eq(k, &key),
+            |(_, k)| self.random_state.hash_one(k),
+        ) {
+            hashbrown::hash_table::Entry::Occupied(_) => None,
+            hashbrown::hash_table::Entry::Vacant(entry) => {
+                let kk = self.table.insert((key.clone(), value));
+                entry.insert((kk, key));
+                Some(kk)
+            }
+        }
+    }
+
     pub fn get_or_insert_with(&mut self, key: K, f: impl FnOnce() -> V) -> KK {
         let hash = self.random_state.hash_one(&key);
         self.set
