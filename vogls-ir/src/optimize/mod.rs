@@ -10,6 +10,7 @@ use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, GlobalContext, Instruction, ProcessKey,
 };
 
+#[derive(Default, Clone, Copy)]
 pub struct OptFlags {
     pub opt_rounds: u8,
     pub constant_propagation: bool,

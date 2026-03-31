@@ -4,7 +4,7 @@ use std::time::{Duration, SystemTime};
 /// A stack to keep track of timers in code.
 pub struct TimerStack {
     pub enabled: bool,
-    pub current: Vec<(Cow<'static, str>, SystemTime)>,
+    pub current: Vec<(Cow<'static, str>, SystemTime, usize)>,
     pub finished: Vec<(usize, Cow<'static, str>, Duration)>,
 }
 
@@ -23,8 +23,12 @@ impl TimerStack {
             return;
         }
 
+        let name = name.into();
+        let i = self.finished.len();
+        self.finished
+            .push((self.current.len(), Default::default(), Duration::default()));
         self.current
-            .push((name.into(), std::time::SystemTime::now()));
+            .push((name.into(), std::time::SystemTime::now(), i));
     }
 
     #[inline(always)]
@@ -33,10 +37,10 @@ impl TimerStack {
             return;
         }
 
-        let (name, time) = self.current.pop().unwrap();
+        let (name, time, i) = self.current.pop().unwrap();
         let time = time.elapsed().unwrap();
-        let depth = self.current.len();
-        self.finished.push((depth, name, time));
+        self.finished[i].1 = name;
+        self.finished[i].2 = time;
     }
 
     #[inline(always)]
@@ -52,7 +56,7 @@ impl TimerStack {
     }
 
     pub fn print(&self) {
-        println!("Timings:");
+        println!("# Timings Overview:");
         for (depth, name, elapsed) in &self.finished {
             let pad = String::from("  ").repeat(*depth);
             println!("{pad}{name}: {:.4}s", elapsed.as_secs_f32());

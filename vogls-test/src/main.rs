@@ -5,12 +5,11 @@ use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 
 use clap::Parser;
-use vogls::codegen::HeapBuilder;
-use vogls::frontend::ident_table::IdentTable;
-use vogls::utils::{TimerStack, VgHashMap};
-use vogls::{ExecutionContext, SimulationIo, generate_signals_heap};
-use vogls_ir::{GlobalContext, LogicMode};
-use vogls_verilog::elaborate::VSymbolTable;
+use vogls::design::Design;
+use vogls::utils::TimerStack;
+use vogls::{ExecutionContext, SimulationIo};
+use vogls_ir::LogicMode;
+use vogls_ir::optimize::OptFlags;
 
 #[derive(clap::Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -226,7 +225,11 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                         itrace: false,
                         no_run: false,
                         time: test_information.time,
-                        opt_rounds,
+                        opt: OptFlags {
+                            opt_rounds,
+                            constant_propagation: true,
+                            deadcode_elimination: true,
+                        },
                         logic_mode,
                         vcd: None,
                         compile,
@@ -255,7 +258,11 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                                 itrace: false,
                                 no_run: false,
                                 time: test_information.time,
-                                opt_rounds,
+                                opt: OptFlags {
+                                    opt_rounds,
+                                    constant_propagation: true,
+                                    deadcode_elimination: true,
+                                },
                                 logic_mode,
                                 vcd: None,
                                 compile,
@@ -329,84 +336,26 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                         {
                             let s = std::fs::read_to_string(&path)?;
                             let optimized = read_to_string(path.with_extension("vir.opt")).ok();
-                            let mut gl = GlobalContext::default();
-                            gl.logic_mode = logic_mode;
-                            if let Err(err) = vogls_ir::parse::parse(&s, &mut gl) {
-                                return Err(err.into());
-                            };
-
-                            let processes = gl.processes.keys().collect::<Vec<_>>();
-                            vogls_ir::optimize::optimize_processes(
-                                &mut gl,
-                                &processes,
-                                vogls_ir::optimize::OptFlags {
-                                    opt_rounds,
-                                    constant_propagation: true,
-                                    deadcode_elimination: true,
-                                },
-                            );
+                            let design = Design::new_vir(&s, &mut TimerStack::new(false), ctx.0)?;
 
                             if opt_rounds > 0
                                 && let Some(optimized) = optimized
                             {
                                 use std::fmt::Write;
                                 let mut out = String::new();
-                                for signal in gl.signals.values() {
+                                for signal in design.gl.signals.values() {
                                     writeln!(&mut out, "{}", signal.display()).unwrap();
                                 }
                                 writeln!(&mut out).unwrap();
-                                for process in gl.processes.values() {
-                                    writeln!(&mut out, "{}", process.display(&gl)).unwrap();
+                                for process in design.gl.processes.values() {
+                                    writeln!(&mut out, "{}", process.display(&design.gl)).unwrap();
                                 }
                                 let optimized = optimized.trim();
                                 let out = out.trim();
                                 if optimized != out {
-                                    dbg!(optimized);
-                                    dbg!(out);
                                     return Err("optimization mismatch".into());
                                 }
                             }
-
-                            let mut heap_builder = HeapBuilder::new();
-                            let mut signal_to_heap = Vec::new();
-                            let mut rt_signal_map = VgHashMap::default();
-                            generate_signals_heap(
-                                &mut heap_builder,
-                                &mut rt_signal_map,
-                                &gl.signals,
-                                &mut signal_to_heap,
-                                gl.logic_mode,
-                            );
-
-                            let design = if compile {
-                                vogls::design::Design::from_gl_compiled(
-                                    gl,
-                                    heap_builder,
-                                    &mut TimerStack::new(false),
-                                    false,
-                                    None,
-                                    rt_signal_map,
-                                    signal_to_heap.into(),
-                                    3,
-                                    Vec::new(),
-                                    IdentTable::default(),
-                                    VSymbolTable::default(),
-                                )
-                            } else {
-                                vogls::design::Design::from_gl_interpretted(
-                                    gl,
-                                    heap_builder,
-                                    &mut TimerStack::new(false),
-                                    false,
-                                    false,
-                                    rt_signal_map,
-                                    signal_to_heap.into(),
-                                    3,
-                                    Vec::new(),
-                                    IdentTable::default(),
-                                    VSymbolTable::default(),
-                                )
-                            }?;
 
                             let stdout =
                                 std::mem::replace(&mut ctx.0.stdout, Box::new(Vec::new()) as _);
@@ -424,6 +373,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                             let ctx = ctx;
                             Ok(vogls::run(
                                 &[&path],
+                                &mut TimerStack::new(false),
                                 test_information.top_level_module.as_deref(),
                                 ctx.0,
                             )?)

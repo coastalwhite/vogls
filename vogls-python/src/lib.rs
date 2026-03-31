@@ -67,7 +67,10 @@ mod vogls {
                 emit_vm: false,
                 itrace: false,
                 time: 0,
-                opt_rounds: 0,
+                opt: vogls::ir::optimize::OptFlags {
+                    opt_rounds: 0,
+                    ..Default::default()
+                },
                 logic_mode: if four_value_logic {
                     LogicMode::FourValue
                 } else {

@@ -11,6 +11,7 @@ use vogls_codegen_c::{
     CLowerOptions, ListenerBuilder, StateBuilder, lower_signal_drive_fn, lower_signal_drive_header,
 };
 use vogls_frontend::ident_table::IdentId;
+use vogls_ir::optimize::OptFlags;
 use vogls_ir::token_range::TokenRange;
 pub use vogls_ir::{Bits, LogicMode, SignalKey, VectorSize};
 use vogls_ir::{GlobalContext, SCALAR_VSIZE, Signal};
@@ -30,6 +31,7 @@ use vogls_verilog::tokenizer::Tokenized;
 pub use vogls_bits as bits;
 pub use vogls_codegen as codegen;
 pub use vogls_frontend as frontend;
+pub use vogls_ir as ir;
 pub use vogls_runtime as runtime;
 pub use vogls_sim as sim;
 pub use vogls_utils as utils;
@@ -48,7 +50,7 @@ pub struct ExecutionContext {
     pub emit_vm: bool,
     pub itrace: bool,
     pub time: u64,
-    pub opt_rounds: u8,
+    pub opt: OptFlags,
     pub logic_mode: LogicMode,
     pub no_run: bool,
     pub vcd: Option<PathBuf>,
@@ -171,10 +173,10 @@ fn append_referenced_modules<'a>(
 
 pub fn run(
     path: &[&Path],
+    timers: &mut TimerStack,
     top_level_module: Option<&str>,
     ectx: &mut ExecutionContext,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut timers = TimerStack::new(ectx.timings);
     let design = timers.timed("total compilation", |_| {
         design::Design::new(path, top_level_module, ectx, Vec::new())
     })?;
@@ -195,10 +197,6 @@ pub fn run(
 
     ectx.stdout = io.stdout;
     ectx.stderr = io.stderr;
-
-    if ectx.timings {
-        timers.print();
-    }
 
     Ok(())
 }

@@ -7,7 +7,6 @@ use std::sync::Arc;
 use slotmap::SlotMap;
 use vogls_codegen::{HeapBuilder, HeapRef};
 use vogls_frontend::ident_table::{IdentId, IdentTable};
-use vogls_ir::optimize::OptFlags;
 use vogls_ir::{Bits, GlobalContext, LogicMode, SignalKey};
 use vogls_runtime::SimulationIo;
 use vogls_runtime::plugins::RuntimePluginState;
@@ -458,18 +457,10 @@ impl Design {
             }
         }
 
-        timers.start("optimization");
-        let processes = mctx.gl.processes.keys().collect::<Vec<_>>();
-        vogls_ir::optimize::optimize_processes(
-            mctx.gl(),
-            &processes,
-            OptFlags {
-                opt_rounds: ectx.opt_rounds,
-                constant_propagation: true,
-                deadcode_elimination: true,
-            },
-        );
-        timers.stop();
+        timers.timed("optimization", |_| {
+            let processes = mctx.gl.processes.keys().collect::<Vec<_>>();
+            vogls_ir::optimize::optimize_processes(mctx.gl(), &processes, ectx.opt)
+        });
 
         if ectx.emit_ir {
             for signal in mctx.gl.signals.values() {
@@ -545,6 +536,84 @@ impl Design {
         }
     }
 
+    pub fn new_vir(
+        content: &str,
+        timers: &mut TimerStack,
+        ectx: &mut ExecutionContext,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut gl = GlobalContext::default();
+        gl.logic_mode = ectx.logic_mode;
+        vogls_ir::parse::parse(&content, &mut gl)?;
+
+        if ectx.emit_unoptimized_ir {
+            for signal in gl.signals.values() {
+                println!("{}", signal.display());
+            }
+            println!();
+            for process in gl.processes.values() {
+                println!("{}", process.display(&gl));
+            }
+        }
+
+        timers.timed("optimization", |_| {
+            let processes = gl.processes.keys().collect::<Vec<_>>();
+            vogls_ir::optimize::optimize_processes(&mut gl, &processes, ectx.opt);
+        });
+
+        if ectx.emit_ir {
+            for signal in gl.signals.values() {
+                println!("{}", signal.display());
+            }
+            println!();
+            for process in gl.processes.values() {
+                println!("{}", process.display(&gl));
+            }
+        }
+
+        let mut heap_builder = HeapBuilder::new();
+        let mut signal_to_heap = Vec::new();
+        let mut rt_signal_map = VgHashMap::default();
+        timers.timed("generate heap", |_| {
+            generate_signals_heap(
+                &mut heap_builder,
+                &mut rt_signal_map,
+                &gl.signals,
+                &mut signal_to_heap,
+                gl.logic_mode,
+            )
+        });
+
+        if ectx.compile {
+            Self::from_gl_compiled(
+                gl,
+                heap_builder,
+                timers,
+                false,
+                None,
+                rt_signal_map,
+                signal_to_heap.into(),
+                3,
+                Vec::new(),
+                IdentTable::default(),
+                VSymbolTable::default(),
+            )
+        } else {
+            Self::from_gl_interpretted(
+                gl,
+                heap_builder,
+                timers,
+                false,
+                false,
+                rt_signal_map,
+                signal_to_heap.into(),
+                3,
+                Vec::new(),
+                IdentTable::default(),
+                VSymbolTable::default(),
+            )
+        }
+    }
+
     pub fn from_gl_compiled(
         gl: GlobalContext,
         heap_builder: HeapBuilder,
@@ -600,23 +669,23 @@ impl Design {
         let listeners = SlotMap::default();
         let watches = vec![Vec::new(); gl.signals.len()];
 
-        timers.start("lower to VM");
-        for process in gl.processes.keys() {
-            let vm_process = lower_process_to_vm(
-                process,
-                &gl,
-                &mut heap_builder,
-                &signal_to_heap,
-                &mut rt_signal_map,
-            );
-            let vm_process_key = VmProcessKey(processes.len() as u64);
-            processes.push(vm_process);
-            regions.active.push(Event {
-                process: vm_process_key,
-                ip: 0,
-            });
-        }
-        timers.stop();
+        timers.timed("lower to VM", |_| {
+            for process in gl.processes.keys() {
+                let vm_process = lower_process_to_vm(
+                    process,
+                    &gl,
+                    &mut heap_builder,
+                    &signal_to_heap,
+                    &mut rt_signal_map,
+                );
+                let vm_process_key = VmProcessKey(processes.len() as u64);
+                processes.push(vm_process);
+                regions.active.push(Event {
+                    process: vm_process_key,
+                    ip: 0,
+                });
+            }
+        });
 
         if emit_vm {
             for process in &processes {
