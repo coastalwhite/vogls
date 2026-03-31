@@ -1,6 +1,6 @@
 use core::fmt;
 use std::collections::{HashMap, HashSet};
-use std::fmt::Write;
+use std::fmt::{Display, Write};
 
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext,
@@ -201,11 +201,11 @@ impl BinaryImmOp {
             Self::UnsignedLessEqual => "ulei",
             Self::UnsignedGreaterEqual => "ugei",
             Self::CaseEquality => "ceqi",
-            Self::ConcatRight => "concati.r",
-            Self::ConcatLeft => "concati.l",
+            Self::ConcatRight => "concati_right",
+            Self::ConcatLeft => "concati_left",
 
-            Self::Min => "min",
-            Self::Max => "max",
+            Self::Min => "mini",
+            Self::Max => "maxi",
         }
     }
 }
@@ -335,6 +335,28 @@ impl ContextFormat for Instruction {
                 f.write_str(" = ")?;
                 f.write_str(op.into_mnemonic())?;
                 f.write_str(" ")?;
+                match op.as_ref() {
+                    IntrinsicOp::Time => {},
+                    IntrinsicOp::Finish => {},
+                    IntrinsicOp::Random => {},
+                    IntrinsicOp::Display(s) => {
+                        s.display_format().fmt(f)?;
+                        if !args.is_empty() {
+                            f.write_str(", ")?;
+                        }
+                    },
+                    IntrinsicOp::Assert(s) => {
+                        s.display_format().fmt(f)?;
+                        if !args.is_empty() {
+                            f.write_str(", ")?;
+                        }
+                    },
+                    IntrinsicOp::VcdOpenFile(_) => {},
+                    IntrinsicOp::VcdAppendModule(_) => {},
+                    IntrinsicOp::VcdPause => {},
+                    IntrinsicOp::VcdResume => {},
+                    IntrinsicOp::ReadMem(_) => {},
+                }
                 if let Some(arg) = args.first() {
                     arg.ctx_fmt(f, ctx)?;
                     for arg in &args[1..] {

@@ -455,9 +455,7 @@ pub fn traverse_bbs(
                         }
                         (None, Some(offset)) => {
                             let dst_size = gl.vars[dst].size;
-                            let Some(offset) =
-                                offset.extract_exact_u32().filter(|&v| v < dst_size.get())
-                            else {
+                            let Some(offset) = offset.extract_exact_u32() else {
                                 let value = Bits::new_unknown(dst_size);
                                 scratch_map.insert(dst, Some(value.clone()));
                                 *i = I::Constant(dst, value);
@@ -465,18 +463,20 @@ pub fn traverse_bbs(
                                 continue;
                             };
 
-                            use SliceImmSimplification as S;
-                            match simplify_slice_imm(dst, dst_size, src, gl.vars[src].size, offset)
-                            {
-                                S::Keep => *i = I::SliceImm(dst, src, offset),
-                                S::Source => *i = I::Resize(dst, ResizeOp::Truncate, src),
-                                S::Constant(bits) => {
-                                    scratch_map.insert(dst, Some(bits.clone()));
-                                    *i = I::Constant(dst, bits);
-                                    bb_made_progress = true;
-                                    continue;
+                            let src_size = gl.vars[src].size;
+                            if offset <= src_size.get() - dst_size.get() {
+                                use SliceImmSimplification as S;
+                                match simplify_slice_imm(dst, dst_size, src, src_size, offset) {
+                                    S::Keep => *i = I::SliceImm(dst, src, offset),
+                                    S::Source => *i = I::Resize(dst, ResizeOp::Truncate, src),
+                                    S::Constant(bits) => {
+                                        scratch_map.insert(dst, Some(bits.clone()));
+                                        *i = I::Constant(dst, bits);
+                                        bb_made_progress = true;
+                                        continue;
+                                    }
+                                    S::Instruction(instruction) => *i = instruction,
                                 }
-                                S::Instruction(instruction) => *i = instruction,
                             }
                         }
 

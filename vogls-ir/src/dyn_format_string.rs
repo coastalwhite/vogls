@@ -1,4 +1,4 @@
-use std::fmt::Alignment;
+use std::fmt::{self, Alignment, Write};
 use std::io;
 
 use vogls_bits::format::{BitsFormatBase, BitsFormatOptions, BitsFormatWidth};
@@ -120,4 +120,72 @@ pub fn format_bits(
     }
 
     write!(f, "{}", bits.display(&options))
+}
+
+impl DynFormatString {
+    pub fn display_format<'a>(&'a self) -> impl fmt::Display + 'a {
+        struct Escape<'a, W>(&'a mut W);
+        impl<'a, W: fmt::Write> fmt::Write for Escape<'a, W> {
+            fn write_str(&mut self, s: &str) -> fmt::Result {
+                let mut last_write = 0;
+                for (i, c) in s.char_indices() {
+                    match c {
+                        '\n' => {
+                            self.0.write_str(&s[last_write..i])?;
+                            self.0.write_str("\\n")?;
+                            last_write = i + 1;
+                        }
+                        '\t' => {
+                            self.0.write_str(&s[last_write..i])?;
+                            self.0.write_str("\\t")?;
+                            last_write = i + 1;
+                        }
+                        '\r' => {
+                            self.0.write_str(&s[last_write..i])?;
+                            self.0.write_str("\\r")?;
+                            last_write = i + 1;
+                        }
+                        '"' => {
+                            self.0.write_str(&s[last_write..i])?;
+                            self.0.write_str("\\\"")?;
+                            last_write = i + 1;
+                        }
+                        '{' => {
+                            self.0.write_str(&s[last_write..i])?;
+                            self.0.write_str("{{")?;
+                            last_write = i + 1;
+                        }
+                        '\\' => {
+                            self.0.write_str(&s[last_write..i])?;
+                            self.0.write_str("\\\\")?;
+                            last_write = i + 1;
+                        }
+                        _ => {}
+                    }
+                }
+                self.0.write_str(&s[last_write..])
+            }
+        }
+
+        struct D<'a>(&'a DynFormatString);
+        impl<'a> fmt::Display for D<'a> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_char('"')?;
+
+                let mut last = 0;
+                for (at, _options) in self.0.arguments() {
+                    let at = *at;
+                    Escape(f).write_str(&self.0.content[last..at])?;
+                    last = at;
+
+                    f.write_str("{}")?;
+                }
+
+                Escape(f).write_str(&self.0.content[last..])?;
+                f.write_char('"')?;
+                Ok(())
+            }
+        }
+        D(self)
+    }
 }

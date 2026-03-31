@@ -65,7 +65,6 @@ mod vogls {
                 emit_unoptimized_ir: false,
                 emit_ir: false,
                 emit_vm: false,
-                trace: false,
                 itrace: false,
                 time: 0,
                 opt_rounds: 0,

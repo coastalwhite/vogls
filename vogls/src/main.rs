@@ -1,9 +1,14 @@
 use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
-use vogls::ExecutionContext;
+use slotmap::SlotMap;
+use vogls::{ExecutionContext, SimulationIo, generate_signals_heap};
+use vogls_codegen::{HeapBuilder, HeapRef};
 use vogls_ir::{GlobalContext, LogicMode};
+use vogls_sim::{Event, ListenerKey, Regions, Simulation, VmProcessKey, lower_process_to_vm};
+use vogls_utils::VgHashMap;
 
 #[derive(clap::Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -19,8 +24,6 @@ struct Args {
     #[arg(short, long)]
     filter: Option<String>,
 
-    #[arg(long = "trace")]
-    trace: bool,
     #[arg(long = "itrace")]
     itrace: bool,
 
@@ -69,13 +72,20 @@ enum Commands {
     Vir {
         path: PathBuf,
         #[arg(long)]
+        itrace: bool,
+        #[arg(long)]
         emit_unoptimized_ir: bool,
+        #[arg(long)]
+        no_run: bool,
+        #[arg(long)]
+        emit_ir: bool,
         #[arg(long, default_value_t = 0)]
         opt_rounds: u8,
+
         #[arg(long)]
-        constant_propagation: bool,
+        no_constant_propagation: bool,
         #[arg(long)]
-        deadcode_elimination: bool,
+        no_deadcode_elimination: bool,
     },
 }
 
@@ -86,9 +96,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Commands::Vir {
                 path,
                 emit_unoptimized_ir,
+                emit_ir,
+                no_run,
+                itrace,
                 opt_rounds,
-                constant_propagation,
-                deadcode_elimination,
+                no_constant_propagation,
+                no_deadcode_elimination,
             } => {
                 let content = read_to_string(path)?;
                 let mut gl = GlobalContext::default();
@@ -110,18 +123,83 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &processes,
                     vogls_ir::optimize::OptFlags {
                         opt_rounds: *opt_rounds,
-                        constant_propagation: *constant_propagation,
-                        deadcode_elimination: *deadcode_elimination,
+                        constant_propagation: !*no_constant_propagation,
+                        deadcode_elimination: !*no_deadcode_elimination,
                     },
                 );
 
-                for signal in gl.signals.values() {
-                    println!("{}", signal.display());
+                if *emit_ir {
+                    for signal in gl.signals.values() {
+                        println!("{}", signal.display());
+                    }
+                    println!();
+                    for process in gl.processes.values() {
+                        println!("{}", process.display(&gl));
+                    }
                 }
-                println!();
-                for process in gl.processes.values() {
-                    println!("{}", process.display(&gl));
+
+                if *no_run {
+                    return Ok(());
                 }
+
+                let mut heap_builder = HeapBuilder::new();
+                let mut io_signals = VgHashMap::default();
+                let mut signals = Vec::new();
+                generate_signals_heap(
+                    &mut heap_builder,
+                    &mut io_signals,
+                    &gl.signals,
+                    &mut signals,
+                    gl.logic_mode,
+                );
+                let watches = vec![Vec::new(); gl.signals.len()];
+                let signals: Arc<[HeapRef]> = signals.into();
+                let mut processes = Vec::new();
+                let mut regions = Regions::new(4);
+                let listeners = SlotMap::<ListenerKey, _>::default();
+                for process in gl.processes.keys() {
+                    let vm_process = lower_process_to_vm(
+                        process,
+                        &gl,
+                        &mut heap_builder,
+                        &signals,
+                        &mut io_signals,
+                    );
+                    let vm_process_key = VmProcessKey(processes.len() as u64);
+                    processes.push(vm_process);
+                    regions.active.push(Event {
+                        process: vm_process_key,
+                        ip: 0,
+                    });
+                }
+                let mut heap = heap_builder.finish();
+
+                for (key, signal) in &gl.signals {
+                    if let Some(initialize) = &signal.initialize {
+                        assert_eq!(initialize.size(), signal.size);
+                        heap.store_bits(
+                            signals[io_signals[&key].as_usize()],
+                            gl.logic_mode,
+                            initialize,
+                        );
+                    }
+                }
+
+                let mut simulation = Simulation::new(processes, signals.clone(), gl.logic_mode);
+                simulation.itrace = *itrace;
+                let mut initial_state = simulation.new_state(regions, listeners, watches, heap);
+
+                simulation
+                    .run(
+                        &mut initial_state,
+                        &mut SimulationIo::new(
+                            Box::new(std::io::stdout()),
+                            Box::new(std::io::stderr()),
+                        ),
+                        1000,
+                    )
+                    .map_err(|_| "simulation failed")?;
+
                 return Ok(());
             }
         }
@@ -145,7 +223,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             emit_unoptimized_ir: args.emit_unoptimized_ir,
             emit_ir: args.emit_ir,
             emit_vm: args.emit_vm,
-            trace: args.trace,
             itrace: args.itrace,
             time: args.time,
             no_run: args.no_run,

@@ -2,13 +2,14 @@ use std::fmt;
 use std::num::NonZeroU32;
 
 use vogls_bits::Bits;
-use vogls_utils::{VgHashMap, VgHashSet};
+use vogls_utils::VgHashMap;
 
+use crate::dyn_format_string::{DynFormatArgument, DynFormatString};
 use crate::token_range::TokenRange;
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext,
-    Instruction, ProcessKey, ResizeOp, SCALAR_VSIZE, ShiftImmOp, Signal, SignalKey, TIME_VSIZE,
-    Time, UnaryOp, Variable, VariableKey,
+    Instruction, IntrinsicOp, ProcessKey, ResizeOp, SCALAR_VSIZE, ShiftImmOp, Signal, SignalKey,
+    TIME_VSIZE, Time, UnaryOp, Variable, VariableKey,
 };
 
 #[derive(Debug)]
@@ -38,7 +39,10 @@ impl<'a> Cursor<'a> {
     pub fn trim_cursor(&mut self) {
         let bs = self.content.as_bytes();
         while self.offset < bs.len() {
-            while bs[self.offset].is_ascii_whitespace() {
+            while bs
+                .get(self.offset)
+                .is_some_and(|&b| b.is_ascii_whitespace())
+            {
                 self.offset += 1;
             }
             if !bs[self.offset..].starts_with(b"//") {
@@ -132,7 +136,7 @@ fn take_ident<'a>(s: &'a str, offset: &mut usize) -> Option<&'a str> {
         return None;
     }
     *offset += 1;
-    while bs[*offset].is_ascii_alphanumeric() || matches!(bs[*offset], b'_' | b'/' | b'-') {
+    while bs[*offset].is_ascii_alphanumeric() || matches!(bs[*offset], b'_' | b'/' | b'-' | b'.') {
         *offset += 1;
     }
 
@@ -452,8 +456,8 @@ fn parse_bb<'a>(
                 "revremi" => parse_binary_imm(c, symbols, gl, dst, BI::RevModulus)?,
                 "ulei" => parse_binary_imm(c, symbols, gl, dst, BI::UnsignedLessEqual)?,
                 "ugei" => parse_binary_imm(c, symbols, gl, dst, BI::UnsignedGreaterEqual)?,
-                "concat_left" => parse_binary_imm(c, symbols, gl, dst, BI::ConcatLeft)?,
-                "concat_right" => parse_binary_imm(c, symbols, gl, dst, BI::ConcatRight)?,
+                "concati_left" => parse_binary_imm(c, symbols, gl, dst, BI::ConcatLeft)?,
+                "concati_right" => parse_binary_imm(c, symbols, gl, dst, BI::ConcatRight)?,
                 "mini" => parse_binary_imm(c, symbols, gl, dst, BI::Min)?,
                 "maxi" => parse_binary_imm(c, symbols, gl, dst, BI::Max)?,
                 "ceqi" => parse_binary_imm(c, symbols, gl, dst, BI::CaseEquality)?,
@@ -492,8 +496,6 @@ fn parse_bb<'a>(
                 "lsri" => parse_shift_imm(c, symbols, gl, dst, SI::LogicalShiftRight)?,
                 "asri" => parse_shift_imm(c, symbols, gl, dst, SI::ArithmeticShiftRight)?,
 
-                "intrinsic" => todo!(),
-
                 "lupdt" => {
                     c.trim_cursor();
                     let signal = parse_signal(c, symbols)?;
@@ -508,6 +510,24 @@ fn parse_bb<'a>(
                     gl.vars[dst].size = gl.signals[signal].size;
                     symbols.unresolved_vars.remove(&dst);
                     Instruction::Probe(dst, signal)
+                }
+
+                "vogls.assert" => {
+                    c.trim_cursor();
+                    let dyn_format_string = parse_dyn_format_string(c)?;
+                    let args = (0..dyn_format_string.arguments().len() + 1)
+                        .map(|_| {
+                            c.trim_cursor();
+                            c.expect_char(',')?;
+                            c.trim_cursor();
+                            parse_var(c, symbols, gl)
+                        })
+                        .collect::<Result<Box<[_]>, _>>()?;
+                    let op = IntrinsicOp::Assert(Box::new(dyn_format_string));
+
+                    gl.vars[dst].size = SCALAR_VSIZE;
+                    symbols.unresolved_vars.remove(&dst);
+                    Instruction::Intrinsic(dst, Box::new(op), args)
                 }
 
                 "phi" => todo!(),
@@ -529,7 +549,7 @@ fn parse_bb<'a>(
             let ident = c.take_ident()?;
             if c.is_next_equal_to(':') {
                 c.offset = start;
-                return Ok(());
+                break;
             }
 
             if terminator.is_some() {
@@ -952,4 +972,85 @@ fn parse_shift_imm<'a>(
     }
 
     Ok(Instruction::ShiftImm(dst, op, src, amount))
+}
+
+fn parse_dyn_format_string(c: &mut Cursor) -> Result<DynFormatString, Box<ParseError>> {
+    c.trim_cursor();
+    let start = c.offset;
+    c.expect_char('"')?;
+
+    let mut last_copy = c.offset;
+    let mut args = Vec::new();
+    let mut content = String::new();
+    let mut is_escaped = false;
+    while let Some(&b) = c.content.as_bytes().get(c.offset)
+        && (is_escaped || b != b'"')
+    {
+        match b {
+            b'{' if c.content.as_bytes().get(c.offset + 1) == Some(&b'{') => {
+                content.push_str(&c.content[last_copy..c.offset + 1]);
+                last_copy = c.offset + 2;
+                c.offset += 1;
+            }
+            b'{' => {
+                let Some(end) = c.content[c.offset + 1..].find('}') else {
+                    return Err(Box::new(ParseError {
+                        at: start,
+                        error: format!("unclosed format arg"),
+                    }));
+                };
+
+                let options = parse_format_options(&c.content[c.offset + 1..][..end])?;
+
+                content.push_str(&c.content[last_copy..c.offset]);
+                args.push((content.len(), options));
+                c.offset += 1 + end;
+                last_copy = c.offset + 1;
+            }
+            b'\\' | b'"' if is_escaped => {
+                content.push_str(&c.content[last_copy..c.offset - 1]);
+                last_copy = c.offset;
+            }
+
+            b'n' if is_escaped => {
+                content.push_str(&c.content[last_copy..c.offset - 1]);
+                content.push('\n');
+                last_copy = c.offset + 1;
+            }
+            b't' if is_escaped => {
+                content.push_str(&c.content[last_copy..c.offset - 1]);
+                content.push('\t');
+                last_copy = c.offset + 1;
+            }
+            b'r' if is_escaped => {
+                content.push_str(&c.content[last_copy..c.offset - 1]);
+                content.push('\r');
+                last_copy = c.offset + 1;
+            }
+            _ => {}
+        }
+
+        is_escaped = !is_escaped && b == b'\\';
+        c.offset += 1;
+    }
+
+    if c.is_empty() {
+        return Err(Box::new(ParseError {
+            at: start,
+            error: format!("unclosed string"),
+        }));
+    }
+
+    content.push_str(&c.content[last_copy..c.offset]);
+    c.offset += 1;
+
+    Ok(DynFormatString::new(content.into(), args.into()))
+}
+
+fn parse_format_options(s: &str) -> Result<DynFormatArgument, Box<ParseError>> {
+    if s.is_empty() {
+        return Ok(DynFormatArgument::default());
+    }
+
+    todo!()
 }

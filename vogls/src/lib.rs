@@ -1,13 +1,23 @@
 use std::collections::HashSet;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
+use slotmap::SlotMap;
 pub use vogls_bits::format::{BitsFormatBase, BitsFormatOptions, BitsFormatWidth};
+use vogls_codegen::{HeapBuilder, HeapOffset, HeapRef};
+use vogls_codegen_c::runtime::{CDesign, CDesignState, SharedObjectContainer};
+use vogls_codegen_c::{
+    CLowerOptions, ListenerBuilder, StateBuilder, lower_signal_drive_fn, lower_signal_drive_header,
+};
 use vogls_frontend::ident_table::IdentId;
 use vogls_ir::token_range::TokenRange;
 pub use vogls_ir::{Bits, LogicMode, SignalKey, VectorSize};
+use vogls_ir::{GlobalContext, SCALAR_VSIZE, Signal};
+use vogls_runtime::plugins::RuntimePluginState;
 pub use vogls_runtime::{RtSignalKey, SimulationIo};
 pub use vogls_sim::SimulationState;
-use vogls_utils::TimerStack;
+use vogls_utils::{TableKey, TimerStack, VgHashMap};
 use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{
     CaseGenerateConstruct, CaseGenerateItem, GenerateBlock, IfGenerateConstruct,
@@ -35,7 +45,6 @@ pub struct ExecutionContext {
     pub emit_unoptimized_ir: bool,
     pub emit_ir: bool,
     pub emit_vm: bool,
-    pub trace: bool,
     pub itrace: bool,
     pub time: u64,
     pub opt_rounds: u8,
@@ -191,4 +200,163 @@ pub fn run(
     }
 
     Ok(())
+}
+
+pub fn generate_signals_heap(
+    heap_builder: &mut HeapBuilder,
+    signal_map: &mut VgHashMap<SignalKey, RtSignalKey>,
+    signals: &SlotMap<SignalKey, Signal>,
+    heap_refs: &mut Vec<HeapRef>,
+    logic_mode: LogicMode,
+) {
+    signal_map.extend(
+        signals
+            .keys()
+            .enumerate()
+            .map(|(i, key)| (key, RtSignalKey::from_usize(i).unwrap())),
+    );
+    heap_refs.resize(
+        signals.len(),
+        HeapRef {
+            offset: HeapOffset { bit_offset: 0 },
+            size: SCALAR_VSIZE,
+        },
+    );
+
+    for (min_bits, max_bits) in [
+        // (1, u32::MAX)
+        (33, u32::MAX),
+        (17, 32),
+        (9, 16),
+        (5, 8),
+        (3, 4),
+        (2, 2),
+        (1, 1),
+    ] {
+        for (i, signal) in signals.values().enumerate() {
+            let size = signal.size;
+            let mut num_bits = size.get();
+            if logic_mode == LogicMode::FourValue {
+                num_bits = num_bits * 2;
+            }
+
+            if (min_bits..=max_bits).contains(&num_bits) {
+                heap_refs[i] = heap_builder.claim(logic_mode, size);
+            }
+        }
+    }
+}
+
+pub fn lower_to_shared_object(
+    gl: &GlobalContext,
+    signal_map: &VgHashMap<SignalKey, RtSignalKey>,
+    mut heap_builder: HeapBuilder,
+    heap_refs: &[HeapRef],
+    timers: &mut TimerStack,
+
+    itrace: bool,
+    output_source: Option<&Path>,
+    plugins: Vec<RuntimePluginState>,
+    num_additional_regions: u8,
+) -> Result<(CDesignState, CDesign), Box<dyn std::error::Error>> {
+    timers.start("lower to C");
+    let mut listener_builder = ListenerBuilder::default();
+    let mut out = Vec::new();
+    let mut state_builder = StateBuilder::default();
+
+    for signal in gl.signals.keys() {
+        lower_signal_drive_header(&mut out, signal, &signal_map)?;
+    }
+
+    let lower_options = CLowerOptions {
+        itrace,
+        num_plugins: plugins.len(),
+    };
+    for (i, process) in gl.processes.keys().enumerate() {
+        vogls_codegen_c::lower_process(
+            &mut out,
+            process,
+            i,
+            gl,
+            &mut heap_builder,
+            &mut listener_builder,
+            &mut state_builder,
+            signal_map,
+            heap_refs,
+            &lower_options,
+        )?;
+    }
+
+    for signal in gl.signals.keys() {
+        lower_signal_drive_fn(
+            &mut out,
+            gl,
+            signal,
+            &listener_builder,
+            signal_map,
+            &mut state_builder,
+            &lower_options,
+        )?;
+    }
+
+    vogls_codegen_c::lower_startup_function(&mut out, gl)?;
+
+    let mut c_file = Vec::new();
+
+    vogls_codegen_c::prologue(&mut c_file)?;
+    c_file.extend(&out);
+    vogls_codegen_c::epilogue(&mut c_file)?;
+    if let Some(output_source) = output_source {
+        std::fs::write(output_source, &c_file)?;
+    }
+    timers.stop();
+
+    timers.start("compile C");
+    let tempdir = tempfile::TempDir::with_prefix("vogls")?;
+    let code_path = tempdir.path().join("code.so");
+    let mut command = Command::new("clang")
+        .arg("-x")
+        .arg("c")
+        .arg("-O1")
+        .arg("-g3")
+        .arg("-fPIC")
+        .arg("-")
+        .arg("-shared")
+        .arg("-o")
+        .arg(&code_path)
+        .stdin(std::process::Stdio::piped())
+        .spawn()?;
+    command.stdin.take().unwrap().write_all(&c_file)?;
+    if !command.wait()?.success() {
+        return Err("compilation failed!".into());
+    }
+    timers.stop();
+
+    struct SharedObject {
+        code_path: PathBuf,
+
+        // Kept around so it isn't dropped.
+        #[allow(unused)]
+        tempdir: tempfile::TempDir,
+    }
+    impl SharedObjectContainer for SharedObject {
+        fn as_path(&self) -> &Path {
+            self.code_path.as_path()
+        }
+    }
+
+    let mut initial_state = CDesignState::new(
+        gl,
+        heap_builder.finish(),
+        listener_builder.top,
+        num_additional_regions,
+    );
+    let design = CDesign::new(
+        Box::new(SharedObject { code_path, tempdir }),
+        state_builder,
+        num_additional_regions,
+    );
+    initial_state.plugins = plugins;
+
+    Ok((initial_state, design))
 }

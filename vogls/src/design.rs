@@ -1,24 +1,19 @@
 use std::collections::{HashMap, HashSet};
 use std::io::Write as _;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use slotmap::SlotMap;
-use vogls_codegen::{HeapBuilder, HeapOffset, HeapRef};
-use vogls_codegen_c::runtime::{CDesign, CDesignState, SharedObjectContainer};
-use vogls_codegen_c::{
-    CLowerOptions, ListenerBuilder, StateBuilder, lower_signal_drive_fn, lower_signal_drive_header,
-};
+use vogls_codegen::{HeapBuilder, HeapRef};
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_ir::optimize::OptFlags;
-use vogls_ir::{Bits, GlobalContext, LogicMode, Signal, SignalKey};
+use vogls_ir::{Bits, GlobalContext, LogicMode, SignalKey};
 use vogls_runtime::SimulationIo;
 use vogls_runtime::plugins::RuntimePluginState;
 use vogls_runtime::{RtSignalKey, RuntimeState};
 use vogls_sim::{Event, Regions, Simulation, VmProcess, VmProcessKey, lower_process_to_vm};
-use vogls_utils::{NonMaxU32, TableKey, TimerStack, VgHashMap};
+use vogls_utils::{NonMaxU32, TimerStack, VgHashMap};
 use vogls_verilog::arena::Arena;
 use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{Description, Module, ModuleItem, NonPortModuleItem};
@@ -33,7 +28,10 @@ use vogls_verilog::parser::{
 use vogls_verilog::tokenizer::{Macro, Tokenized};
 
 use crate::fuse_signals::FuseSignalsContext;
-use crate::{ExecutionContext, append_referenced_modules, fuse_signals, token_range_to_line_range};
+use crate::{
+    ExecutionContext, append_referenced_modules, fuse_signals, generate_signals_heap,
+    lower_to_shared_object,
+};
 
 pub enum DesignBackend {
     Interpretted {
@@ -426,16 +424,6 @@ impl Design {
             return Err("failed to lower".into());
         }
 
-        if ectx.emit_unoptimized_ir {
-            for signal in mctx.gl.signals.values() {
-                writeln!(ectx.stdout, "{}", signal.display())?;
-            }
-            writeln!(ectx.stdout)?;
-            for process in mctx.gl.processes.values() {
-                writeln!(ectx.stdout, "{}", process.display(&mctx.gl))?;
-            }
-        }
-
         let fused = timers.timed("fuse_signals", |_| {
             fuse_signals::fuse_signals(
                 &mut mctx.gl,
@@ -460,6 +448,16 @@ impl Design {
             }
         }
 
+        if ectx.emit_unoptimized_ir {
+            for signal in mctx.gl.signals.values() {
+                writeln!(ectx.stdout, "{}", signal.display())?;
+            }
+            writeln!(ectx.stdout)?;
+            for process in mctx.gl.processes.values() {
+                writeln!(ectx.stdout, "{}", process.display(&mctx.gl))?;
+            }
+        }
+
         timers.start("optimization");
         let processes = mctx.gl.processes.keys().collect::<Vec<_>>();
         vogls_ir::optimize::optimize_processes(
@@ -473,7 +471,7 @@ impl Design {
         );
         timers.stop();
 
-        if ectx.emit_ir && !ectx.emit_vm {
+        if ectx.emit_ir {
             for signal in mctx.gl.signals.values() {
                 writeln!(ectx.stdout, "{}", signal.display())?;
             }
@@ -486,94 +484,17 @@ impl Design {
         let mut processes = Vec::<VmProcess>::default();
         let mut regions = Regions::new(3); // inactive, non-blocking, monitor
         let mut signals = Vec::default();
-        let listeners = SlotMap::default();
-        let mut watches = Vec::default();
-
-        let mut trace_processes = Vec::new();
-        let mut trace_signals = Vec::new();
-        let mut line_luts = Vec::new();
-
-        if ectx.trace {
-            line_luts.extend(token_buffer.contents.iter().map(|c| {
-                let mut s = c.as_ref();
-                let original_length = s.len();
-                let mut vs = Vec::new();
-                while let Some(p) = s.find(['\n', '\r']) {
-                    if s.as_bytes()[p] == b'\r' {
-                        todo!();
-                    }
-
-                    let offset = original_length - s.len();
-                    vs.push(offset);
-                    s = &s[p + 1..];
-                }
-
-                if !s.is_empty() {
-                    let offset = original_length - s.len();
-                    vs.push(offset);
-                }
-
-                vs
-            }));
-        }
 
         timers.start("build heap");
         let mut heap_builder = HeapBuilder::new();
         let mut io_signals = VgHashMap::default();
-        for (key, signal) in &mctx.gl.signals {
-            let Signal {
-                name,
-                size,
-                initialize,
-                origin,
-            } = signal;
-            let value = match initialize {
-                None => Bits::new_zeroed(*size),
-                Some(initialize) => {
-                    assert_eq!(initialize.size(), *size);
-                    initialize.clone()
-                }
-            };
-
-            if ectx.trace {
-                trace_signals.push(vogls_trace::Signal {
-                    name: Some(name.clone()),
-                    location: token_range_to_line_range(&token_buffer, *origin, &line_luts),
-                    initial: value.clone(),
-                });
-            }
-
-            let vm_signal_key = RtSignalKey::from_usize(io_signals.len()).unwrap();
-            io_signals.insert(key, vm_signal_key);
-            signals.push(HeapRef {
-                offset: HeapOffset { bit_offset: 0 },
-                size: vogls_ir::SCALAR_VSIZE,
-            });
-            watches.push(Vec::new());
-        }
-
-        for (min_bits, max_bits) in [
-            // (1, u32::MAX)
-            (33, u32::MAX),
-            (17, 32),
-            (9, 16),
-            (5, 8),
-            (3, 4),
-            (2, 2),
-            (1, 1),
-        ] {
-            for (i, signal) in mctx.gl.signals.values().enumerate() {
-                let size = signal.size;
-                let mut num_bits = size.get();
-                if mctx.gl.logic_mode == LogicMode::FourValue {
-                    num_bits = num_bits * 2;
-                }
-
-                if (min_bits..=max_bits).contains(&num_bits) {
-                    signals[i] = heap_builder.claim(mctx.gl.logic_mode, size);
-                }
-            }
-        }
+        generate_signals_heap(
+            &mut heap_builder,
+            &mut io_signals,
+            &mctx.gl.signals,
+            &mut signals,
+            mctx.gl.logic_mode,
+        );
         timers.stop();
 
         let signals: Arc<[HeapRef]> = signals.into();
@@ -596,113 +517,22 @@ impl Design {
         }
 
         if ectx.compile {
-            timers.start("lower to C");
-            let mut listener_builder = ListenerBuilder::default();
-            let mut out = Vec::new();
-            let mut state_builder = StateBuilder::default();
-
-            for signal in mctx.gl.signals.keys() {
-                lower_signal_drive_header(&mut out, signal, &io_signals)?;
-            }
-
-            let lower_options = CLowerOptions {
-                itrace: ectx.itrace,
-                num_plugins: plugins.len(),
-            };
-            for (i, process) in mctx.gl.processes.keys().enumerate() {
-                vogls_codegen_c::lower_process(
-                    &mut out,
-                    process,
-                    i,
-                    &mctx.gl,
-                    &mut heap_builder,
-                    &mut listener_builder,
-                    &mut state_builder,
-                    &io_signals,
-                    &signals,
-                    &lower_options,
-                )?;
-            }
-
-            for signal in mctx.gl.signals.keys() {
-                lower_signal_drive_fn(
-                    &mut out,
-                    &mctx.gl,
-                    signal,
-                    &listener_builder,
-                    &io_signals,
-                    &mut state_builder,
-                    &lower_options,
-                )?;
-            }
-
-            vogls_codegen_c::lower_startup_function(&mut out, &mctx.gl)?;
-
-            let mut c_file = Vec::new();
-
-            vogls_codegen_c::prologue(&mut c_file)?;
-            c_file.extend(&out);
-            vogls_codegen_c::epilogue(&mut c_file)?;
-            // vogls_codegen_c::add_main(&mut c_file, &gl, &heap_builder, &listener_builder)?;
-
-            std::fs::write("t2.c", &c_file)?;
-            timers.stop();
-
-            timers.start("compile C");
-            let tempdir = tempfile::TempDir::with_prefix("vogls")?;
-
-            if let Some(output_source) = &ectx.output_source {
-                std::fs::write(output_source, &c_file)?;
-            }
-            let code_path = tempdir.path().join("code.so");
-            let mut command = Command::new("clang")
-                .arg("-x")
-                .arg("c")
-                .arg("-O1")
-                .arg("-g3")
-                .arg("-fPIC")
-                .arg("-")
-                .arg("-shared")
-                .arg("-o")
-                .arg(&code_path)
-                .stdin(std::process::Stdio::piped())
-                .spawn()?;
-            command.stdin.take().unwrap().write_all(&c_file)?;
-            if !command.wait()?.success() {
-                return Err("compilation failed!".into());
-            }
-            timers.stop();
-
-            struct SharedObject {
-                code_path: PathBuf,
-
-                // Kept around so it isn't dropped.
-                #[allow(unused)]
-                tempdir: tempfile::TempDir,
-            }
-            impl SharedObjectContainer for SharedObject {
-                fn as_path(&self) -> &Path {
-                    self.code_path.as_path()
-                }
-            }
-
-            let mut initial_state = CDesignState::new(
+            let (initial_state, design) = lower_to_shared_object(
                 &mctx.gl,
-                heap_builder.finish(),
-                listener_builder.top,
+                &io_signals,
+                heap_builder,
+                &signals,
+                &mut timers,
+                ectx.itrace,
+                ectx.output_source.as_deref(),
+                plugins,
                 regions.num_additional_regions() as u8,
-            );
-            let design = CDesign::new(
-                Box::new(SharedObject { code_path, tempdir }),
-                state_builder,
-                regions.num_additional_regions() as u8,
-            );
+            )?;
 
             if ectx.timings {
                 timers.print();
             }
 
-            initial_state.plugins = plugins;
             let LowerContext {
                 table,
                 table_ast_refs: _,
@@ -721,12 +551,11 @@ impl Design {
             });
         }
 
+        let listeners = SlotMap::default();
+        let watches = vec![Vec::new(); mctx.gl.signals.len()];
+
         timers.start("lower to VM");
         for process in mctx.gl.processes.keys() {
-            if ectx.emit_vm && ectx.emit_ir {
-                println!();
-                println!("{}", mctx.gl.processes[process].display(&mctx.gl));
-            }
             let vm_process = lower_process_to_vm(
                 process,
                 &mctx.gl,
@@ -734,58 +563,30 @@ impl Design {
                 &signals,
                 &mut io_signals,
             );
-
-            if ectx.emit_vm {
-                print!("{}", &vm_process);
-            }
-
             let vm_process_key = VmProcessKey(processes.len() as u64);
             processes.push(vm_process);
-
-            if ectx.emit_vm {
-                println!(": {vm_process_key:?}");
-            }
-
-            let vogls_ir::Process { name, origin, .. } = &mctx.gl.processes[process];
-            if ectx.trace {
-                trace_processes.push(vogls_trace::Process {
-                    name: Some(name.clone()),
-                    location: token_range_to_line_range(&token_buffer, *origin, &line_luts),
-                });
-            }
-
             regions.active.push(Event {
                 process: vm_process_key,
                 ip: 0,
             });
         }
         timers.stop();
+
+        if ectx.emit_vm {
+            for process in &processes {
+                print!("{}", &process);
+            }
+        }
         let mut heap = heap_builder.finish();
 
         for (key, signal) in &mctx.gl.signals {
-            let Signal {
-                name,
-                size,
-                initialize,
-                origin,
-            } = signal;
-            let mut value = None;
-            if let Some(initialize) = initialize {
-                assert_eq!(initialize.size(), *size);
+            if let Some(initialize) = &signal.initialize {
+                assert_eq!(initialize.size(), signal.size);
                 heap.store_bits(
                     signals[io_signals[&key].as_usize()],
                     mctx.gl.logic_mode,
                     initialize,
                 );
-                value = Some(initialize);
-            }
-
-            if ectx.trace {
-                trace_signals.push(vogls_trace::Signal {
-                    name: Some(name.clone()),
-                    location: token_range_to_line_range(&token_buffer, *origin, &line_luts),
-                    initial: value.cloned().unwrap_or_else(|| Bits::new_zeroed(*size)),
-                });
             }
         }
 
