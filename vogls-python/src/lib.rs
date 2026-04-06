@@ -49,7 +49,7 @@ mod vogls {
     #[pymethods]
     impl Design {
         #[new]
-        #[pyo3(signature = (path, top_level_module = None, defines = None, four_value_logic = false, compile = false, trace = false))]
+        #[pyo3(signature = (path, top_level_module = None, defines = None, four_value_logic = false, compile = false, trace = false, debug_symbols = false))]
         fn new(
             path: PathBuf,
             top_level_module: Option<String>,
@@ -57,6 +57,7 @@ mod vogls {
             four_value_logic: bool,
             compile: bool,
             trace: bool,
+            debug_symbols: bool,
         ) -> PyResult<Self> {
             let mut ectx = ExecutionContext {
                 stdout: Box::new(std::io::stdout()),
@@ -68,7 +69,7 @@ mod vogls {
                 emit_vm: false,
                 itrace: false,
                 stats: false,
-                debug_symbols: false,
+                debug_symbols,
                 time: 0,
                 opt: vogls::ir::optimize::OptFlags {
                     opt_rounds: 0,
@@ -82,7 +83,7 @@ mod vogls {
                 no_run: false,
                 vcd: None,
                 compile,
-                output_source: None,
+                output_source: Some(PathBuf::from("out.c")),
                 timings: false,
                 print_optimized_fuse_signals: false,
                 print_round_fuse_signals: false,
@@ -196,11 +197,7 @@ mod vogls {
             let snapshot = snapshot.borrow(py);
             let design = &self.inner;
             let mut state = snapshot.inner.lock().unwrap();
-            match &mut *state {
-                DesignState::Interpretted(s) => s.plugins[0] = Box::new(TracePlugin::new(design)),
-                DesignState::Compiled(s) => s.plugins[0] = Box::new(TracePlugin::new(design)),
-            }
-
+            state.plugins_mut()[0] = Box::new(TracePlugin::new(design));
             TraceRef {
                 snapshot: Snapshot {
                     inner: snapshot.inner.clone(),
@@ -213,8 +210,9 @@ mod vogls {
     #[pymethods]
     impl Snapshot {
         pub fn fork(&self) -> Self {
+            let state = self.inner.lock().unwrap().clone();
             Self {
-                inner: Arc::new(Mutex::new(self.inner.lock().unwrap().clone())),
+                inner: Arc::new(Mutex::new(state)),
             }
         }
 

@@ -70,6 +70,18 @@ impl DesignState {
             DesignState::Compiled(s) => &s.runtime,
         }
     }
+    pub fn plugins_mut(&mut self) -> &mut [RuntimePluginState] {
+        match self {
+            DesignState::Interpretted(s) => &mut s.plugins,
+            DesignState::Compiled(s) => &mut s.plugins,
+        }
+    }
+    pub fn plugins(&self) -> &[RuntimePluginState] {
+        match self {
+            DesignState::Interpretted(s) => &s.plugins,
+            DesignState::Compiled(s) => &s.plugins,
+        }
+    }
 }
 
 impl Design {

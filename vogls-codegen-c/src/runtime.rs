@@ -1,4 +1,5 @@
 use std::ffi::c_int;
+use std::io::{stderr, stdout};
 use std::ops::Deref as _;
 use std::path::Path;
 use std::ptr::NonNull;
@@ -516,13 +517,36 @@ impl CDesign {
     }
 
     pub fn poke_signal(&self, state: &mut CDesignState, signal: RtSignalKey) {
-        type DriveFn =
-            extern "C" fn(NonNull<ScheduleT>, Time, IsScheduled, Listening, LastActiveTime);
+        type DriveFn = extern "C" fn(
+            NonNull<ScheduleT>,
+            Time,
+            IsScheduled,
+            Listening,
+            LastActiveTime,
+            NonNull<ColdContextT>,
+        );
         let drive = unsafe {
             self.lib
                 .get::<DriveFn>(&format!("drive_signal_{}", signal.as_u64()))
         }
         .unwrap();
+        let mut cldctx = ColdContextT {
+            fmt,
+            fmt_strs: self.dyn_fmt_strs.as_ptr(),
+
+            plugins: state.plugins.as_mut_ptr(),
+            plugin_poke_signal,
+
+            heap_len: state.runtime.heap.0.len(),
+            readmems: self.read_mems.as_ptr(),
+            readmem: read_mem,
+
+            icount: 0,
+
+            // @TODO: Passthrough IO?
+            stdout: NonNull::from_mut(&mut (Box::new(stdout()) as _)),
+            stderr: NonNull::from_mut(&mut (Box::new(stderr()) as _)),
+        };
         state.schedule.with_t(|schedule| {
             (drive.deref())(
                 NonNull::from_mut(schedule),
@@ -530,6 +554,7 @@ impl CDesign {
                 NonNull::new(state.is_scheduled.as_mut_ptr()),
                 NonNull::new(state.listening.as_mut_ptr()),
                 NonNull::new(state.runtime.last_active_time.as_mut_ptr()),
+                NonNull::from_mut(&mut cldctx),
             );
         });
     }
