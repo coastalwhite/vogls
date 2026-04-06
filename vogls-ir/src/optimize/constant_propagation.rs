@@ -6,8 +6,8 @@ use vogls_utils::{VgHashMap, VgHashSet};
 
 use crate::{
     BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryImmOpSimplification, BinaryOp,
-    GlobalContext, Instruction, ProcessKey, ResizeOp, ShiftImmOp, ShiftImmOpSimplification,
-    SliceImmSimplification, Time, Variable, VariableKey, simplify_slice_imm,
+    GlobalContext, Instruction, ProcessKey, ResizeOp, ShiftImmOp, ShiftImmOpSimplification, Signal,
+    SignalKey, SliceImmSimplification, Time, Variable, VariableKey, simplify_slice_imm,
 };
 
 pub fn constant_propagation(
@@ -45,7 +45,7 @@ pub fn constant_propagation(
     while let Some(bb_key) = scratch_stack.pop() {
         let bb = &mut gl.bbs[bb_key];
         for (instr_i, i) in bb.instrs.iter_mut().enumerate() {
-            if constant_propagate_instruction(i, &gl.vars, scratch_map).is_err() {
+            if constant_propagate_instruction(i, &gl.vars, &gl.signals, scratch_map).is_err() {
                 let dst = i.get_destination_variable().unwrap();
                 let offset = scratch_dep_edges.len();
                 i.for_each_src(|src| scratch_dep_edges.push(src));
@@ -80,6 +80,7 @@ pub fn constant_propagation(
                         if constant_propagate_instruction(
                             &mut gl.bbs[bb_key].instrs[instr_i],
                             &gl.vars,
+                            &gl.signals,
                             scratch_map,
                         )
                         .is_ok()
@@ -112,6 +113,7 @@ pub fn constant_propagation(
                             constant_propagate_instruction(
                                 &mut gl.bbs[bb_key].instrs[instr_i],
                                 &gl.vars,
+                                &gl.signals,
                                 scratch_map,
                             )
                             .is_ok()
@@ -231,6 +233,7 @@ pub fn constant_propagation(
 fn constant_propagate_instruction(
     i: &mut Instruction,
     vars: &SlotMap<VariableKey, Variable>,
+    signals: &SlotMap<SignalKey, Signal>,
     scratch_map: &mut VgHashMap<VariableKey, Option<Bits>>,
 ) -> Result<(), ()> {
     use Instruction as I;
@@ -517,7 +520,7 @@ fn constant_propagate_instruction(
             scratch_map.insert(*dst, None);
         }
         I::ProbeSlice(dst, signal, offset) => {
-            let dst = *dst;
+            let (dst, signal) = (*dst, *signal);
             let offset_bits = scratch_map.get(offset).ok_or(())?;
             match offset_bits.as_ref() {
                 None => {}
@@ -528,7 +531,13 @@ fn constant_propagate_instruction(
                         *i = I::Constant(dst, bits);
                         return Ok(());
                     }
-                    Some(offset) => *i = I::Probe(dst, *signal, offset),
+                    Some(offset) => {
+                        let dst_size = vars[dst].size;
+                        let src_size = signals[signal].size;
+                        if offset <= src_size.get() - dst_size.get() {
+                            *i = I::Probe(dst, signal, offset);
+                        }
+                    }
                 },
             }
             scratch_map.insert(dst, None);

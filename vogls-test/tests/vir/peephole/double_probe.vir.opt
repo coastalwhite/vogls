@@ -3,8 +3,7 @@ signal b: 3
 
 proc double_slice {
 L0:
-  %t0 = prb $b
-  %t1 = slicei[1] %t0, 2
-  drv $a, %t1
+  %t0 = prb[1] $b, 2
+  drv $a, %t0
   halt
 }
