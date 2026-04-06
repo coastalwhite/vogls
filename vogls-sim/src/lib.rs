@@ -805,7 +805,7 @@ impl Clone for SimulationState {
             regions: self.regions.clone(),
             listeners: self.listeners.clone(),
             watches: self.watches.clone(),
-            plugins: vec![],
+            plugins: self.plugins.iter().map(|p| p.as_ref().clone()).collect(),
             iplugins: vec![],
         }
     }
