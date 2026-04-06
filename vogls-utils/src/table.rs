@@ -226,6 +226,10 @@ impl<K, V> Table<K, V> {
     pub fn clear(&mut self) {
         self.values.clear();
     }
+
+    pub fn values_mut(&mut self) -> &mut [V] {
+        &mut self.values
+    }
 }
 impl<K, V> SecondaryTable<K, V> {
     pub const fn new() -> Self {

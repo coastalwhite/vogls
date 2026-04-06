@@ -497,7 +497,7 @@ impl Design {
                 None => vogls_vcd::RtVcdOutput::new(
                     Box::new(Vec::new()),
                     signal_to_heap.clone(),
-                    children,
+                    Vec::new(),
                     map,
                 ),
             };

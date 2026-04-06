@@ -534,7 +534,7 @@ pub fn fuse_signals(
                                 builder.probe_slice_constant(
                                     gl,
                                     *to,
-                                    *offset + slice.lsb(),
+                                    offset + slice.lsb(),
                                     slice.width(),
                                 );
                                 builder
@@ -609,6 +609,30 @@ pub fn fuse_signals(
                             ));
                             continue;
                         }
+                    }
+                    IntrinsicOp::VcdAppendModule(module) => {
+                        let mut module = module.clone();
+                        for value in module.table.values_mut() {
+                            if let Some((to, slice)) = replacement_signals.get(&value.signal) {
+                                value.signal = *to;
+                                value.signal_slice = match (value.signal_slice, *slice) {
+                                    (None, None) => None,
+                                    (Some(s), None) | (None, Some(s)) => Some(s),
+                                    (Some(vs), Some(os)) => Some(os.subslice(vs).unwrap()),
+                                };
+                            }
+                        }
+                        module.signal_map = module
+                            .signal_map
+                            .into_iter()
+                            .map(|(s, v)| (replacement_signals.get(&s).map_or(s, |(s, _)| *s), v))
+                            .collect();
+                        builder.push_raw_instruction(I::Intrinsic(
+                            *dst,
+                            Box::new(IntrinsicOp::VcdAppendModule(module)),
+                            srcs.clone(),
+                        ));
+                        continue;
                     }
                     _ => {}
                 },
