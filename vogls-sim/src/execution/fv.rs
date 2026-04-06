@@ -13,7 +13,9 @@ use vogls_bits::shift::{
 use vogls_bits::truncate::{fv_l_truncate, fv_s_truncate};
 use vogls_ir::{ResizeOp, UnaryOp, VectorSize};
 
-use crate::{BinaryArithmeticOp, BinaryComparisonOp, EdgeOp, Heap, HeapOffset, HeapRef, ShiftOp};
+use crate::{
+    BinaryArithmeticOp, BinaryComparisonOp, EdgeOp, Heap, HeapOffset, HeapRef, ShiftOp, SliceFlags,
+};
 
 pub(crate) fn exec_fv_unary(stack: &mut Heap, dst: HeapOffset, op: UnaryOp, src: HeapRef) {
     use UnaryOp as O;
@@ -420,14 +422,19 @@ pub(crate) fn exec_fv_slice(
     dst: HeapRef,
     src: HeapRef,
     offset: HeapOffset,
-    fill_with_x: bool,
+    flags: SliceFlags,
 ) {
-    let (spc, offset) = stack.load_exact_fv_u32(offset);
-    if !spc != 0 {
-        stack.set_unknown(dst);
-        return;
-    }
-    exec_fv_slice_imm(stack, dst, src, offset, fill_with_x);
+    let offset = if flags.offset_is_fv {
+        let (spc, offset) = stack.load_exact_fv_u32(offset);
+        if !spc != 0 {
+            stack.set_unknown(dst);
+            return;
+        }
+        offset
+    } else {
+        stack.load_exact_tv_u32(offset)
+    };
+    exec_fv_slice_imm(stack, dst, src, offset, flags.fill_with_x);
 }
 
 pub(crate) fn exec_fv_slice_imm(

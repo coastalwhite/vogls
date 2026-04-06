@@ -27,7 +27,7 @@ struct StackItem<'a> {
     ///
     /// Verilog has a concept of "self-determined expressions". This determines how an expression
     /// needs to operate on its inputs. For instance, if a shift has a context width higher than
-    /// the left side width, it first needs to be extended to the context width. 
+    /// the left side width, it first needs to be extended to the context width.
     context_width: Option<VectorSize>,
     dispatched: bool,
 }
@@ -184,18 +184,6 @@ pub fn lower_expr<'a>(
                     }
                 }
 
-                macro_rules! nyi {
-                    ($t:literal) => {{
-                        mctx.diagnostics.not_yet_implemented(
-                            ctx.arenas.get_span(item.expr),
-                            concat!("binexpr not implemented: ", $t),
-                        );
-                        result_stack.push(None);
-                        error |= true;
-                        continue;
-                    }};
-                }
-
                 let op = match op {
                     O::Power => bin_power,
                     O::Multiply => bin_multiply,
@@ -213,8 +201,8 @@ pub fn lower_expr<'a>(
                     O::ArithmeticRightShift => bin_arithmetic_shift_right,
                     O::LogicalEquality => bin_logical_equality,
                     O::LogicalInequality => bin_logical_inequality,
-                    O::CaseEquality => nyi!("case equality"),
-                    O::CaseInequality => nyi!("case inequality"),
+                    O::CaseEquality => bin_case_equality,
+                    O::CaseInequality => bin_case_inequality,
                     O::BitwiseAnd => bin_bitwise_and,
                     O::BitwiseXor => bin_bitwise_xor,
                     O::BitwiseXnor => bin_bitwise_xnor,
@@ -960,6 +948,8 @@ impl_bin_eq_ineq! {
     bin_less_than_equal => unsigned_le,
     bin_logical_equality => equals,
     bin_logical_inequality => not_equals,
+    bin_case_equality => case_equals,
+    bin_case_inequality => not_case_equals,
     bin_logical_and => logical_and,
     bin_logical_or => logical_or,
 }

@@ -1,6 +1,8 @@
 use vogls_ir::{ResizeOp, SCALAR_VSIZE, UnaryOp, VectorSize};
 
-use crate::{BinaryArithmeticOp, BinaryComparisonOp, EdgeOp, Heap, HeapOffset, HeapRef, ShiftOp};
+use crate::{
+    BinaryArithmeticOp, BinaryComparisonOp, EdgeOp, Heap, HeapOffset, HeapRef, ShiftOp, SliceFlags,
+};
 
 pub(crate) fn exec_tv_unary(stack: &mut Heap, dst: HeapOffset, op: UnaryOp, src: HeapRef) {
     use UnaryOp as O;
@@ -319,11 +321,20 @@ pub(crate) fn exec_tv_slice(
     stack: &mut Heap,
     dst: HeapRef,
     src: HeapRef,
-    idx: HeapOffset,
-    fill_with_x: bool,
+    offset: HeapOffset,
+    flags: SliceFlags,
 ) {
-    let offset = stack.load_exact_tv_u32(idx);
-    exec_tv_slice_imm(stack, dst, src, offset, fill_with_x);
+    let offset = if flags.offset_is_fv {
+        let (spc, offset) = stack.load_exact_fv_u32(offset);
+        if !spc != 0 {
+            stack.set_unknown(dst);
+            return;
+        }
+        offset
+    } else {
+        stack.load_exact_tv_u32(offset)
+    };
+    exec_tv_slice_imm(stack, dst, src, offset, flags.fill_with_x);
 }
 
 pub(crate) fn exec_tv_slice_imm(

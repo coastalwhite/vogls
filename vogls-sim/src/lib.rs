@@ -439,12 +439,12 @@ impl Simulation {
                         *src,
                         *offset,
                     ),
-                    I::FvSlice(dst, src, offset, fill_with_x) => execution::fv::exec_fv_slice(
+                    I::FvSlice(dst, src, offset, flags) => execution::fv::exec_fv_slice(
                         &mut state.runtime.heap,
                         *dst,
                         *src,
                         *offset,
-                        *fill_with_x,
+                        *flags,
                     ),
                     I::FvSliceImm(dst, src, offset) => execution::fv::exec_fv_slice_imm(
                         &mut state.runtime.heap,

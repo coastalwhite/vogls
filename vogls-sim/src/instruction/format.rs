@@ -55,8 +55,8 @@ impl fmt::Display for VmInstruction {
                     op.into_mnemonic()
                 )
             }
-            Self::TvSlice(dst, src1, src2, fill_with_x) => {
-                if *fill_with_x {
+            Self::TvSlice(dst, src1, src2, flags) => {
+                if flags.fill_with_x {
                     write!(
                         f,
                         "{} = tv.slicex[{}] {}, {src2}",
@@ -134,8 +134,8 @@ impl fmt::Display for VmInstruction {
                     dst = dst.offset
                 )
             }
-            Self::FvSlice(dst, src1, src2, fill_with_x) => {
-                if *fill_with_x {
+            Self::FvSlice(dst, src1, src2, flags) => {
+                if flags.fill_with_x {
                     write!(
                         f,
                         "{} = fv.slicex[{}] {}, {src2}",

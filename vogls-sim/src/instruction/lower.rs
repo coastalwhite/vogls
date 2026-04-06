@@ -11,7 +11,7 @@ use vogls_runtime::RtSignalKey;
 use vogls_utils::{VgHashMap, VgHashSet};
 
 use crate::instruction::{VmInstruction, VmProcess};
-use crate::{BinaryArithmeticOp, BinaryComparisonOp, EdgeOp, ShiftOp, VmIntrinsicOp};
+use crate::{BinaryArithmeticOp, BinaryComparisonOp, EdgeOp, ShiftOp, SliceFlags, VmIntrinsicOp};
 
 pub fn lower_process_to_vm(
     process: ProcessKey,
@@ -273,7 +273,6 @@ pub fn lower_process_to_vm(
 
                     let d_size = gl.vars[*d].size;
                     let s1_size = gl.vars[*s1].size;
-                    let s2_size = gl.vars[*s2].size;
                     let s1_mode = var_mode[s1];
                     let s2_mode = var_mode[s2];
                     let d = var!(*d);
@@ -282,11 +281,27 @@ pub fn lower_process_to_vm(
                         _ => M::TwoValue,
                     };
                     let s1 = var!(*s1, (mode, s1_mode, s1_size));
-                    let s2 = var!(*s2, (mode, s2_mode, s2_size));
+                    let s2 = var!(*s2);
                     if mode == M::FourValue {
-                        VI::FvSlice(d.to_ref(d_size), s1.to_ref(s1_size), s2, true)
+                        VI::FvSlice(
+                            d.to_ref(d_size),
+                            s1.to_ref(s1_size),
+                            s2,
+                            SliceFlags {
+                                fill_with_x: true,
+                                offset_is_fv: s2_mode == LogicMode::FourValue,
+                            },
+                        )
                     } else {
-                        VI::TvSlice(d.to_ref(d_size), s1.to_ref(s1_size), s2, true)
+                        VI::TvSlice(
+                            d.to_ref(d_size),
+                            s1.to_ref(s1_size),
+                            s2,
+                            SliceFlags {
+                                fill_with_x: true,
+                                offset_is_fv: s2_mode == LogicMode::FourValue,
+                            },
+                        )
                     }
                 }
                 I::SliceImm(d, src, offset) => {
@@ -518,13 +533,19 @@ pub fn lower_process_to_vm(
                             var!(*dst).to_ref(size),
                             signals[signal.as_usize()],
                             var!(*offset),
-                            true,
+                            SliceFlags {
+                                fill_with_x: true,
+                                offset_is_fv: var_mode[offset] == LogicMode::FourValue,
+                            },
                         ),
                         LogicMode::FourValue => VI::FvSlice(
                             var!(*dst).to_ref(size),
                             signals[signal.as_usize()],
                             var!(*offset),
-                            true,
+                            SliceFlags {
+                                fill_with_x: true,
+                                offset_is_fv: var_mode[offset] == LogicMode::FourValue,
+                            },
                         ),
                     }
                 }
