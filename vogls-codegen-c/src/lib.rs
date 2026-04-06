@@ -133,6 +133,9 @@ impl fmt::Display for CExpr<'_> {
                         unreachable!()
                     }
                     BitsDataRef::InlineFv(_, v) => write!(f, "((uint64_t)0x{v:x})"),
+                    BitsDataRef::SeparateFv(v) if bits.size().get() <= 64 => {
+                        write!(f, "((uint64_t)0x{:x})", v[1])
+                    }
                     BitsDataRef::SeparateFv(v) => {
                         let v = &v[v.len() / 2..];
                         write!(f, "(uint64_t[{}]){{0x{:x}", v.len(), v[0])?;
@@ -285,21 +288,22 @@ pub struct ListenerBuilder {
 }
 
 impl ListenerBuilder {
-    pub fn insert(
+    pub fn insert_signals(
         &mut self,
-        signal: SignalKey,
+        signals: &[SignalKey],
         process_idx: usize,
         process_key: ProcessKey,
         state: u32,
     ) {
-        let offset = self.top;
+        for &signal in signals {
+            self.map.entry(signal).or_default().push(Listener {
+                offset: self.top,
+                process_idx,
+                process_key,
+                state,
+            });
+        }
         self.top += 1;
-        self.map.entry(signal).or_default().push(Listener {
-            offset,
-            process_idx,
-            process_key,
-            state,
-        });
     }
 }
 
@@ -393,7 +397,7 @@ pub fn lower_process(
 
     writeln!(
         f,
-        "NOINLINE int {procedure}(int state, uint64_t *restrict heap, schedule_t *restrict schedule, uint64_t time, uint64_t *restrict is_scheduled, uint64_t *restrict listening, uint64_t *restrict last_active_time, cold_context_t *restrict cldctx) {{",
+        "NOINLINE int {procedure}(int state, uint64_t *restrict heap, schedule_t *restrict schedule, uint64_t time, uint64_t *restrict listening, uint64_t *restrict last_active_time, cold_context_t *restrict cldctx) {{",
     )?;
     if lower_options.itrace {
         lower_dyn_format_str(
@@ -501,7 +505,6 @@ pub fn lower_process(
                 I::Constant(dst, bits) => {
                     let mode = var_mode[dst];
                     let t = temp_map[&(*dst, mode)];
-
                     match t.ty.array_size() {
                         None => {
                             writeln!(buffer, "{INDENT}{} = {};", t.ident, CExpr::Bits(bits, mode))?
@@ -1242,22 +1245,14 @@ pub fn lower_process(
             }
             BasicBlockTerminator::Watch(bb_key, items) => {
                 let state = states_set.get_index(bb_key).unwrap();
-                for item in items {
-                    let offset = listener_builder.top;
-                    writeln!(
-                        buffer,
-                        "{INDENT}listening[{}] |= 0x{:x};",
-                        offset / 64,
-                        1u64 << (offset % 64)
-                    )?;
-                    listener_builder.insert(*item, process_idx, process_key, state as u32);
-                }
+                let offset = listener_builder.top;
                 writeln!(
                     buffer,
-                    "{INDENT}is_scheduled[{}] &= 0x{:x};",
-                    process_idx / 64,
-                    !(1u64 << (process_idx % 64)),
+                    "{INDENT}listening[{}] |= 0x{:x};",
+                    offset / 64,
+                    1u64 << (offset % 64)
                 )?;
+                listener_builder.insert_signals(items, process_idx, process_key, state as u32);
                 writeln!(buffer, "{INDENT}return 0;",)?;
             }
             BasicBlockTerminator::Jump(bb_key) => {
@@ -1494,7 +1489,7 @@ pub fn lower_signal_drive_header(
     let idx = io_signals[&signal].get();
     writeln!(
         f,
-        "void drive_signal_{idx}(schedule_t *schedule, uint64_t time, uint64_t *is_scheduled, uint64_t *listening, uint64_t *last_active_time, cold_context_t *cldctx);"
+        "void drive_signal_{idx}(schedule_t *schedule, uint64_t time, uint64_t *listening, uint64_t *last_active_time, cold_context_t *cldctx);"
     )
 }
 
@@ -1511,7 +1506,7 @@ pub fn lower_signal_drive_fn(
     let idx = io_signals[&signal].get();
     writeln!(
         f,
-        "void drive_signal_{idx}(schedule_t *schedule, uint64_t time, uint64_t *is_scheduled, uint64_t *listening, uint64_t *last_active_time, cold_context_t *cldctx) {{",
+        "void drive_signal_{idx}(schedule_t *schedule, uint64_t time, uint64_t *listening, uint64_t *last_active_time, cold_context_t *cldctx) {{",
     )?;
 
     if lower_options.itrace {
@@ -1537,17 +1532,15 @@ pub fn lower_signal_drive_fn(
         for listener in listeners {
             writeln!(
                 f,
-                "{INDENT}if (((listening[{}] >> {}) & 1) != 0 && ((is_scheduled[{}] >> {}) & 1) == 0) {{",
+                "{INDENT}if ((listening[{}] >> {}) & 1) {{",
                 listener.offset / 64,
                 listener.offset % 64,
-                listener.process_idx / 64,
-                listener.process_idx % 64,
             )?;
             writeln!(
                 f,
-                "{INDENT}{INDENT}is_scheduled[{}] |= 0x{:x};",
-                listener.process_idx / 64,
-                1u64 << (listener.process_idx % 64),
+                "{INDENT}{INDENT}listening[{}] ^= ((uint64_t)1) << {};",
+                listener.offset / 64,
+                listener.offset % 64,
             )?;
             writeln!(
                 f,
@@ -1572,7 +1565,6 @@ pub fn lower_startup_function(f: &mut impl io::Write, gl: &GlobalContext) -> io:
     uint64_t *heap,
     schedule_t *schedule,
     uint64_t time,
-    uint64_t *is_scheduled,
     uint64_t *listening,
     uint64_t *last_active_time,
     cold_context_t *cldctx
@@ -1581,7 +1573,6 @@ pub fn lower_startup_function(f: &mut impl io::Write, gl: &GlobalContext) -> io:
     writeln!(f, "{INDENT}(void)heap;")?;
     writeln!(f, "{INDENT}(void)schedule;")?;
     writeln!(f, "{INDENT}(void)time;")?;
-    writeln!(f, "{INDENT}(void)is_scheduled;")?;
     writeln!(f, "{INDENT}(void)listening;")?;
     writeln!(f, "{INDENT}(void)last_active_time;")?;
     writeln!(f)?;
@@ -1589,7 +1580,7 @@ pub fn lower_startup_function(f: &mut impl io::Write, gl: &GlobalContext) -> io:
     for (i, process) in gl.processes.values().enumerate() {
         writeln!(
             f,
-            "{INDENT}if ((exit = {}(0, heap, schedule, time, is_scheduled, listening, last_active_time, cldctx)) != 0) return exit;",
+            "{INDENT}if ((exit = {}(0, heap, schedule, time, listening, last_active_time, cldctx)) != 0) return exit;",
             process_to_procedure_name(process, i)
         )?;
     }
@@ -1639,7 +1630,7 @@ typedef struct cold_context {
 } cold_context_t;
 
 typedef struct event {
-  int (*ptr)(int, uint64_t*, struct schedule*, uint64_t, uint64_t*, uint64_t*, uint64_t*, cold_context_t*);
+  int (*ptr)(int, uint64_t*, struct schedule*, uint64_t, uint64_t*, uint64_t*, cold_context_t*);
   int state;
 } event_t;
 typedef struct timed_event {
@@ -2113,62 +2104,4 @@ static inline bool event_vec_pop(event_vec_t *v, event_t *event) {
   return true;
 }
 "#)
-}
-
-pub fn add_main(
-    f: &mut impl io::Write,
-    gl: &GlobalContext,
-    heap_builder: &HeapBuilder,
-    listener_builder: &ListenerBuilder,
-) -> io::Result<()> {
-    f.write_all(b"int main() {")?;
-    write!(
-        f,
-        r#"
-  uint64_t time = 0;
-  schedule_t schedule = {{
-      .active_region = {{}},
-      .regions = NULL,
-      .future = {{}},
-  }};
-  uint64_t heap[{heap_size}] = {{}};
-  uint64_t is_scheduled[{is_scheduled_size}] = {{}};
-  uint64_t listening[{listening_size}] = {{}};
-  uint64_t last_active_time[{last_active_time_size}] = {{}};
-"#,
-        heap_size = heap_builder.top().div_ceil(64),
-        is_scheduled_size = gl.processes.len().div_ceil(64),
-        listening_size = listener_builder.top.div_ceil(64),
-        last_active_time_size = gl.signals.len(),
-    )?;
-    f.write_all(
-        b"
-  size_t j;
-  startup(heap, &schedule, time, is_scheduled, listening, last_active_time);
-
-  while (schedule.active_region.length > 0) {{
-    event_t e;
-    while (event_vec_pop(&schedule.active_region, &e)) {{
-      (e.ptr)(e.state, heap, &schedule, time, is_scheduled, listening, last_active_time);
-    }}
-
-    // @TODO: Regions
-
-    uint64_t next_time;
-    timed_event_t te;
-    j = 0;
-    for (size_t i = 0; i < schedule.future.length; ++i) {
-      te = (timed_event_t)schedule.future.ptr[i];
-      if (te.time == schedule.next_time) {
-        event_vec_push(&schedule.active_region, te.event);
-      } else {
-        next_time = (te.time < next_time) ? time : next_time;
-        schedule.future.ptr[j] = te;
-        j += 1;
-      }
-    }}
-    schedule.future.length = j;
-  }
-}",
-    )
 }

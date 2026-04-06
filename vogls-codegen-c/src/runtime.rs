@@ -15,7 +15,6 @@ use crate::StateBuilder;
 
 type Time = u64;
 type HeapPtr = Option<NonNull<u64>>;
-type IsScheduled = Option<NonNull<u64>>;
 type Listening = Option<NonNull<u64>>;
 type LastActiveTime = Option<NonNull<u64>>;
 
@@ -46,7 +45,6 @@ type StartupFn = extern "C" fn(
     HeapPtr,
     NonNull<ScheduleT>,
     Time,
-    IsScheduled,
     Listening,
     LastActiveTime,
     NonNull<ColdContextT>,
@@ -88,7 +86,6 @@ pub struct EventT {
         HeapPtr,
         NonNull<ScheduleT>,
         Time,
-        IsScheduled,
         Listening,
         LastActiveTime,
         NonNull<ColdContextT>,
@@ -219,7 +216,6 @@ impl Schedule {
 
 pub struct CDesignState {
     schedule: Schedule,
-    is_scheduled: Vec<u64>,
     listening: Vec<u64>,
     started: bool,
     pub runtime: vogls_runtime::RuntimeState,
@@ -230,7 +226,6 @@ impl Clone for CDesignState {
     fn clone(&self) -> Self {
         Self {
             schedule: self.schedule.clone(),
-            is_scheduled: self.is_scheduled.clone(),
             listening: self.listening.clone(),
             started: self.started,
             runtime: self.runtime.clone(),
@@ -259,12 +254,10 @@ impl CDesignState {
             future: Vec::new(),
             next_time: u64::MAX,
         };
-        let is_scheduled = vec![0u64; gl.processes.len().div_ceil(64)];
         let listening = vec![0u64; num_listening.div_ceil(64)];
 
         Self {
             schedule,
-            is_scheduled,
             listening,
             started: false,
             runtime: vogls_runtime::RuntimeState {
@@ -392,7 +385,6 @@ impl CDesign {
                     NonNull::new(state.runtime.heap.0.as_mut_ptr()),
                     NonNull::new(schedule as *mut ScheduleT).unwrap(),
                     0,
-                    NonNull::new(state.is_scheduled.as_mut_ptr()),
                     NonNull::new(state.listening.as_mut_ptr()),
                     NonNull::new(state.runtime.last_active_time.as_mut_ptr()),
                     NonNull::new(&mut cldctx as *mut ColdContextT).unwrap(),
@@ -442,7 +434,6 @@ impl CDesign {
                         NonNull::new(state.runtime.heap.0.as_mut_ptr()),
                         NonNull::new(schedule as *mut ScheduleT).unwrap(),
                         state.runtime.time,
-                        NonNull::new(state.is_scheduled.as_mut_ptr()),
                         NonNull::new(state.listening.as_mut_ptr()),
                         NonNull::new(state.runtime.last_active_time.as_mut_ptr()),
                         NonNull::new(&mut cldctx as *mut ColdContextT).unwrap(),
@@ -520,7 +511,6 @@ impl CDesign {
         type DriveFn = extern "C" fn(
             NonNull<ScheduleT>,
             Time,
-            IsScheduled,
             Listening,
             LastActiveTime,
             NonNull<ColdContextT>,
@@ -551,7 +541,6 @@ impl CDesign {
             (drive.deref())(
                 NonNull::from_mut(schedule),
                 state.runtime.time,
-                NonNull::new(state.is_scheduled.as_mut_ptr()),
                 NonNull::new(state.listening.as_mut_ptr()),
                 NonNull::new(state.runtime.last_active_time.as_mut_ptr()),
                 NonNull::from_mut(&mut cldctx),

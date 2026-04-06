@@ -44,7 +44,7 @@ pub fn drive(
         }
         writeln!(
             f,
-            "{INDENT}{INDENT}drive_signal_{idx}(schedule, time, is_scheduled, listening, last_active_time, cldctx);",
+            "{INDENT}{INDENT}drive_signal_{idx}(schedule, time, listening, last_active_time, cldctx);",
             idx = dst.as_u64()
         )?;
         write!(f, "{INDENT}")?;
@@ -190,7 +190,7 @@ pub fn drive(
     }
     writeln!(
         f,
-        "{INDENT}{INDENT}drive_signal_{idx}(schedule, time, is_scheduled, listening, last_active_time, cldctx);",
+        "{INDENT}{INDENT}drive_signal_{idx}(schedule, time, listening, last_active_time, cldctx);",
         idx = dst.as_u64()
     )?;
 
