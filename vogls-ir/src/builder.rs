@@ -25,7 +25,6 @@ pub fn new_process(
         name,
         entry: bb_key,
         origin,
-        lazy: false,
     });
     (
         process_key,

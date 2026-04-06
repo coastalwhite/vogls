@@ -380,7 +380,6 @@ fn parse_process<'a>(
         name: name.to_string(),
         entry,
         origin: TokenRange::default(),
-        lazy: false,
     });
 
     Ok(process)

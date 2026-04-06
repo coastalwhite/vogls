@@ -1216,7 +1216,6 @@ pub struct Process {
     pub name: String,
     pub entry: BasicBlockKey,
     pub origin: TokenRange,
-    pub lazy: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
