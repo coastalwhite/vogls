@@ -12,7 +12,6 @@ use vogls_codegen_c::{
 };
 use vogls_frontend::ident_table::IdentId;
 use vogls_ir::optimize::OptFlags;
-use vogls_ir::token_range::TokenRange;
 pub use vogls_ir::{Bits, LogicMode, SignalKey, VectorSize};
 use vogls_ir::{GlobalContext, SCALAR_VSIZE, Signal};
 use vogls_runtime::plugins::RuntimePluginState;
@@ -26,7 +25,6 @@ use vogls_verilog::ast::module::{
 };
 pub use vogls_verilog::elaborate::VSymbol;
 use vogls_verilog::parser::AstArenas;
-use vogls_verilog::tokenizer::Tokenized;
 
 pub use vogls_bits as bits;
 pub use vogls_codegen as codegen;
@@ -62,31 +60,6 @@ pub struct ExecutionContext {
     pub print_unoptimized_fuse_signals: bool,
     pub print_round_fuse_signals: bool,
     pub print_optimized_fuse_signals: bool,
-}
-
-pub fn token_range_to_line_range(
-    tokenized: &Tokenized,
-    tr: TokenRange,
-    line_luts: &[Vec<usize>],
-) -> Option<vogls_trace::Span> {
-    let file = tokenized.file_idxs[tr.start];
-    if file == tokenized.file_idxs[tr.end - 1] {
-        let span_start = tokenized.spans[tr.start].start();
-        let span_end = tokenized.spans[tr.end - 1].end();
-
-        let line_start = line_luts[file as usize]
-            .binary_search(&span_start)
-            .unwrap_or_else(|e| e - 1) as u64;
-        let line_end = line_luts[file as usize]
-            .binary_search(&span_end)
-            .unwrap_or_else(|e| e) as u64;
-        return Some(vogls_trace::Span {
-            file: file as u64,
-            line_range: line_start..line_end,
-        });
-    }
-
-    None
 }
 
 fn append_referenced_modules_generate_block<'a>(

@@ -71,6 +71,7 @@ pub struct SliceFlags {
     pub offset_is_fv: bool,
 }
 
+
 #[derive(Clone, Debug)]
 pub enum VmInstruction {
     Constant(HeapOffset, Bits),

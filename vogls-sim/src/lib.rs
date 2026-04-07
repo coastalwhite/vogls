@@ -84,14 +84,10 @@ enum EvalOutcome {
 
 fn update_watchers(
     sig: RtSignalKey,
-    stack: &Heap,
-    signals: &[HeapRef],
     watches: &mut [Vec<ListenerKey>],
     listeners: &mut SlotMap<ListenerKey, Event>,
     regions: &mut Regions,
-    trace: Option<&mut vogls_trace::Trace>,
 ) {
-    let start = regions.active.len();
     let watchers = &mut watches[sig.as_usize()];
     for watcher in watchers.iter() {
         if let Some(event) = listeners.remove(*watcher) {
@@ -99,19 +95,6 @@ fn update_watchers(
         }
     }
     watchers.clear();
-
-    if let Some(trace) = trace {
-        let woken_start = trace.woken.len() as u64;
-        trace
-            .woken
-            .extend(regions.active[start..].iter().map(|e| e.process.0));
-        let woken_range = woken_start..trace.woken.len() as u64;
-        trace.driven.push((
-            sig.as_u64(),
-            stack.load_tv_bits(signals[sig.as_usize()]),
-            woken_range,
-        ));
-    }
 }
 
 pub fn drive_bits(
@@ -749,12 +732,9 @@ impl Simulation {
     pub fn update_signal(&self, state: &mut SimulationState, signal: RtSignalKey) {
         update_watchers(
             signal,
-            &mut state.runtime.heap,
-            &self.signals,
             &mut state.watches,
             &mut state.listeners,
             &mut state.regions,
-            None,
         );
         for plugin in state.plugins.iter_mut() {
             plugin.poke_signal(signal);

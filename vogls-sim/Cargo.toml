@@ -8,7 +8,6 @@ slotmap.workspace = true
 bytemuck.workspace = true
 vogls-ir.workspace = true
 vogls-bits.workspace = true
-vogls-trace.workspace = true
 vogls-utils.workspace = true
 vogls-codegen.workspace = true
 vogls-runtime.workspace = true

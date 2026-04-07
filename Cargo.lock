@@ -713,7 +713,6 @@ dependencies = [
  "vogls-ir",
  "vogls-runtime",
  "vogls-sim",
- "vogls-trace",
  "vogls-utils",
  "vogls-vcd",
  "vogls-verilog",
@@ -726,6 +725,20 @@ dependencies = [
  "bytemuck",
  "proptest",
  "rand 0.10.0",
+]
+
+[[package]]
+name = "vogls-bytecode"
+version = "0.0.1"
+dependencies = [
+ "bytemuck",
+ "slotmap",
+ "vogls-bits",
+ "vogls-codegen",
+ "vogls-ir",
+ "vogls-runtime",
+ "vogls-utils",
+ "vogls-vcd",
 ]
 
 [[package]]
@@ -812,7 +825,6 @@ dependencies = [
  "vogls-codegen",
  "vogls-ir",
  "vogls-runtime",
- "vogls-trace",
  "vogls-utils",
  "vogls-vcd",
 ]
@@ -827,15 +839,6 @@ dependencies = [
  "vogls-ir",
  "vogls-sim",
  "vogls-verilog",
-]
-
-[[package]]
-name = "vogls-trace"
-version = "0.0.1"
-dependencies = [
- "slotmap",
- "vogls-bits",
- "vogls-ir",
 ]
 
 [[package]]

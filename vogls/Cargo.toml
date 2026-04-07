@@ -9,7 +9,6 @@ slotmap.workspace = true
 tempfile.workspace = true
 vogls-ir.workspace = true
 vogls-sim.workspace = true
-vogls-trace.workspace = true
 vogls-verilog.workspace = true
 vogls-frontend.workspace = true
 vogls-utils.workspace = true
