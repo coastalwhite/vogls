@@ -8,6 +8,7 @@ members = [
     "vogls-sim",
     "vogls-verilog",
     "vogls-frontend",
+	"vogls-bytecode",
     "vogls-utils",
 	"vogls-python",
 	"vogls-codegen",
