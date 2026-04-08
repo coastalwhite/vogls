@@ -49,6 +49,14 @@ type StartupFn = extern "C" fn(
     LastActiveTime,
     NonNull<ColdContextT>,
 ) -> ReturnValue;
+type EmptyActiveEventQueueFn = extern "C" fn(
+    HeapPtr,
+    NonNull<ScheduleT>,
+    Time,
+    Listening,
+    LastActiveTime,
+    NonNull<ColdContextT>,
+) -> ReturnValue;
 
 #[repr(C)]
 pub struct BitsRefT {
@@ -413,6 +421,11 @@ impl CDesign {
             self.start(state, io)?;
         }
 
+        let empty_active_event_queue_fn = unsafe {
+            self.lib
+                .get::<EmptyActiveEventQueueFn>("empty_active_event_queue")
+        }
+        .unwrap();
         let mut cldctx = ColdContextT {
             fmt,
             fmt_strs: self.dyn_fmt_strs.as_ptr(),
@@ -427,21 +440,28 @@ impl CDesign {
         };
         let return_value = state.schedule.with_t(|schedule| {
             'main_loop: loop {
-                while let Some(e) = schedule.active_region.pop() {
-                    state.runtime.event_count += 1;
-                    let return_value = (e.ptr)(
-                        e.state,
-                        NonNull::new(state.runtime.heap.0.as_mut_ptr()),
-                        NonNull::new(schedule as *mut ScheduleT).unwrap(),
-                        state.runtime.time,
-                        NonNull::new(state.listening.as_mut_ptr()),
-                        NonNull::new(state.runtime.last_active_time.as_mut_ptr()),
-                        NonNull::new(&mut cldctx as *mut ColdContextT).unwrap(),
-                    );
+                let return_value = empty_active_event_queue_fn(
+                    NonNull::new(state.runtime.heap.0.as_mut_ptr()),
+                    NonNull::new(schedule as *mut ScheduleT).unwrap(),
+                    state.runtime.time,
+                    NonNull::new(state.listening.as_mut_ptr()),
+                    NonNull::new(state.runtime.last_active_time.as_mut_ptr()),
+                    NonNull::new(&mut cldctx as *mut ColdContextT).unwrap(),
+                );
+                // while let Some(e) = schedule.active_region.pop() {
+                //     // state.runtime.event_count += 1;
+                //     let return_value = (e.ptr)(
+                //         e.state,
+                //         NonNull::new(state.runtime.heap.0.as_mut_ptr()),
+                //         NonNull::new(schedule as *mut ScheduleT).unwrap(),
+                //         state.runtime.time,
+                //         NonNull::new(state.listening.as_mut_ptr()),
+                //         NonNull::new(state.runtime.last_active_time.as_mut_ptr()),
+                //         NonNull::new(&mut cldctx as *mut ColdContextT).unwrap(),
+                //     );
 
-                    if return_value.should_exit() {
-                        return return_value;
-                    }
+                if return_value.should_exit() {
+                    return return_value;
                 }
 
                 for i in 0..self.num_regions as usize {

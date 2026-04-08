@@ -397,7 +397,7 @@ pub fn lower_process(
 
     writeln!(
         f,
-        "NOINLINE int {procedure}(int state, uint64_t *restrict heap, schedule_t *restrict schedule, uint64_t time, uint64_t *restrict listening, uint64_t *restrict last_active_time, cold_context_t *restrict cldctx) {{",
+        "NOINLINE __attribute__((preserve_none)) int {procedure}(int state, uint64_t *restrict heap, schedule_t *restrict schedule, uint64_t time, uint64_t *restrict listening, uint64_t *restrict last_active_time, cold_context_t *restrict cldctx) {{",
     )?;
     if lower_options.itrace {
         lower_dyn_format_str(
@@ -1194,6 +1194,19 @@ pub fn lower_process(
             }
         }
 
+        fn next_event_or_return_0(f: &mut impl io::Write) -> io::Result<()> {
+            writeln!(
+                f,
+                r#"{INDENT}{{
+{INDENT}event_t e;
+{INDENT}if (!event_vec_pop(&schedule->active_region, &e)) {{
+{INDENT}{INDENT}return 0;
+{INDENT}}}
+{INDENT}[[clang::musttail]] return (e.ptr)(e.state, heap, schedule, time, listening, last_active_time, cldctx);
+{INDENT}}}"#
+            )
+        }
+
         match &bb.terminator {
             BasicBlockTerminator::Wait(bb_key, time) => {
                 let time = time.0;
@@ -1202,7 +1215,7 @@ pub fn lower_process(
                     buffer,
                     "{INDENT}schedule_future_event(schedule, time + {time}, (event_t){{.ptr=&{procedure}, .state={state}}});"
                 )?;
-                writeln!(buffer, "{INDENT}return 0;",)?;
+                next_event_or_return_0(&mut buffer)?;
             }
             BasicBlockTerminator::VariableWait(bb_key, time) => {
                 let mtime = var_mode[time];
@@ -1232,7 +1245,7 @@ pub fn lower_process(
                     buffer,
                     "{INDENT}schedule_future_event(schedule, time + {s0}, (event_t){{.ptr=&{procedure}, .state={state}}});",
                 )?;
-                writeln!(buffer, "{INDENT}return 0;",)?;
+                next_event_or_return_0(&mut buffer)?;
                 writeln!(buffer, "{INDENT}}}")?;
             }
             BasicBlockTerminator::WaitRegion(bb_key, region) => {
@@ -1241,7 +1254,7 @@ pub fn lower_process(
                     buffer,
                     "{INDENT}event_vec_push(&schedule->regions[{region}], (event_t){{.ptr=&{procedure}, .state={state}}});",
                 )?;
-                writeln!(buffer, "{INDENT}return 0;",)?;
+                next_event_or_return_0(&mut buffer)?;
             }
             BasicBlockTerminator::Watch(bb_key, items) => {
                 let state = states_set.get_index(bb_key).unwrap();
@@ -1253,7 +1266,7 @@ pub fn lower_process(
                     1u64 << (offset % 64)
                 )?;
                 listener_builder.insert_signals(items, process_idx, process_key, state as u32);
-                writeln!(buffer, "{INDENT}return 0;",)?;
+                next_event_or_return_0(&mut buffer)?;
             }
             BasicBlockTerminator::Jump(bb_key) => {
                 writeln!(
@@ -1280,7 +1293,7 @@ pub fn lower_process(
                 writeln!(buffer, " {{ goto L{truthy}; }} else {{ goto L{falsy}; }}")?;
             }
             BasicBlockTerminator::Halt => {
-                writeln!(buffer, "{INDENT}return 0;")?;
+                next_event_or_return_0(&mut buffer)?;
             }
         }
     }
@@ -1630,7 +1643,7 @@ typedef struct cold_context {
 } cold_context_t;
 
 typedef struct event {
-  int (*ptr)(int, uint64_t*, struct schedule*, uint64_t, uint64_t*, uint64_t*, cold_context_t*);
+  int __attribute__((preserve_none)) (*ptr)(int, uint64_t*, struct schedule*, uint64_t, uint64_t*, uint64_t*, cold_context_t*);
   int state;
 } event_t;
 typedef struct timed_event {
@@ -2065,6 +2078,15 @@ static inline void tv_l_set(
         dst[i + sh_words] = (new_src & mask) | (dst[i + sh_words] & ~mask);
     }
 }
+
+NOINLINE int empty_active_event_queue(uint64_t *restrict heap, schedule_t *restrict schedule, uint64_t time, uint64_t *restrict listening, uint64_t *restrict last_active_time, cold_context_t *restrict cldctx) {
+    event_t e;
+    if (!event_vec_pop(&schedule->active_region, &e)) {
+        return 0;
+    }
+    return (e.ptr)(e.state, heap, schedule, time, listening, last_active_time, cldctx);
+}
+
 "#,
     )
 }
