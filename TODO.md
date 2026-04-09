@@ -12,6 +12,7 @@ Verilog
   - [ ] Net Types
   - [ ] Strengths
   - [ ] Remove string type and make compliant with standard
+- [ ] Correct handling of timescale
 - [ ] Gate level modeling
 - [ ] `defparam`
 - [ ] `task` and `function`
@@ -226,8 +227,8 @@ Optimization
       non-persistent memory size
   - IR
     - [ ] Common Subexpression Elimination
-    - [ ] Constant Propagation
-    - [ ] Deadcode elimination
+    - [x] Constant Propagation
+    - [x] Deadcode elimination
     - [ ] Branches to lookup tables
     - [ ] Lookup Table Instruction
     - [ ] Lookup Table Optimization
