@@ -155,9 +155,11 @@ pub fn lower_system_task_enable<'a>(
         "readmemb" | "readmemh" => {
             assert!((2..=4).contains(&expressions.len()));
             let Some(path) = expressions.get(0).into_str_literal() else {
-                mctx.diagnostics
-                    .not_yet_implemented(ctx.arenas.get_span(system_task_enable), "invalid path");
-                return Err(());
+                mctx.diagnostics.warnings.push((
+                    ctx.arenas.get_span(system_task_enable),
+                    "ignored: not yet supported path".to_string(),
+                ));
+                return Ok(builder);
             };
             let path = ctx.arenas.text[path.0.start..path.0.end].to_string();
             let Expr::Ident(ident, exprs, range_expr) = &*expressions.get(1) else {

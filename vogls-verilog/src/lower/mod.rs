@@ -254,6 +254,22 @@ pub fn try_resolve_net_mut<'a, 's>(
     Ok(n)
 }
 
+pub fn try_resolve_net_with_sid<'a, 's>(
+    scope: SymbolId,
+    table: &'s VSymbolTable,
+    arenas: &AstArenas,
+    ident: impl Into<HIdent<'a>>,
+    diagnostics: &mut Diagnostics,
+) -> Result<(SymbolId, &'s NetSymbol), ()> {
+    let ident = ident.into();
+    let sid = try_resolve_symbol_id(scope, table, arenas, ident, diagnostics)?;
+    let VSymbol::Net(n) = &table[sid].content else {
+        diagnostics.not_yet_implemented(hident_span(arenas, ident), "cannot be used as net");
+        return Err(());
+    };
+    Ok(n)
+}
+
 pub fn strict_resolve_module<'a>(
     scope: SymbolId,
     table: &'a VSymbolTable,

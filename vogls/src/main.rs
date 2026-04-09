@@ -134,6 +134,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     })?;
 
     if args.no_run {
+        if timers.enabled {
+            timers.print();
+        }
+
         return Ok(());
     }
 

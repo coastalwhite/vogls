@@ -8,6 +8,7 @@ use crate::ast::statement::{
     StatementOrNull,
 };
 use crate::ast::{AstId, AstItem};
+use crate::elaborate::NetSymbol;
 use crate::lower::expression::lower_expr;
 use crate::lower::{LowerContext, MutLowerContext, try_resolve_net};
 use crate::lower::{WatchCondition, try_resolve_constant};
@@ -68,9 +69,6 @@ pub fn lower<'a>(
         }
         ProceduralTimingControl::EventControl(event_control) => match &**event_control {
             EventControl::Star => {
-                let start_bb = builder.key();
-                builder = builder.jump(mctx.gl());
-
                 let mut ins = OrderedSet::new();
                 match &*statement {
                     StatementOrNull::Attribute(_) => {}
@@ -79,40 +77,15 @@ pub fn lower<'a>(
                     }
                 }
 
-                let statement_start_bb = builder.key();
-                builder = super::lower_statement_or_null(ctx, mctx, scope, builder, statement)?;
-                let statement_end_bb = builder.key();
-
-                builder = builder.jump(mctx.gl());
-                let watch_bb = builder.key();
-                mctx.gl.bbs[start_bb].terminator = BasicBlockTerminator::Jump(watch_bb);
-
-                let before = ins
-                    .items
-                    .iter()
-                    .map(|s| builder.probe(mctx.gl(), *s))
-                    .collect::<Vec<_>>();
-                builder = builder.watch(mctx.gl(), ins.items.clone());
-
-                let mut acc = builder.constant(mctx.gl(), Bits::from(false));
-                for (before, signal) in before.into_iter().zip(ins.items) {
-                    let after = builder.probe(mctx.gl(), signal);
-                    let cond = builder.not_case_equals(mctx.gl(), before, after);
-                    acc = builder.or(mctx.gl(), acc, cond);
-                }
-
-                builder = builder.branch_false_to(mctx.gl(), acc, watch_bb);
-                let next_builder = builder.next_builder(mctx.gl());
-                builder.jump_to(mctx.gl(), statement_start_bb);
-                builder = next_builder;
-                mctx.gl.bbs[statement_end_bb].terminator =
-                    BasicBlockTerminator::Jump(builder.key());
+                builder = builder.watch(mctx.gl(), ins.items);
             }
             EventControl::EventExpression(event_expression) => {
                 builder = builder.jump(mctx.gl());
                 let start_key = builder.key();
 
-                let mut conditions: Vec<(WatchCondition, VariableKey, AstId<Expr>)> = Vec::new();
+                let mut contains_edge = false;
+                let mut conditions: Vec<(WatchCondition, VariableKey, &NetSymbol, AstId<Expr>)> =
+                    Vec::new();
                 let mut signals = Vec::new();
                 for event_expression in event_expression.0.iter() {
                     let (expr, condition) = match &*event_expression {
@@ -120,6 +93,9 @@ pub fn lower<'a>(
                         EventExpressionPrimary::Posedge(expr) => (expr, WatchCondition::Posedge),
                         EventExpressionPrimary::Negedge(expr) => (expr, WatchCondition::Negedge),
                     };
+
+                    contains_edge |=
+                        matches!(condition, WatchCondition::Posedge | WatchCondition::Negedge);
 
                     let Expr::Ident(ast_ident, exprs, range_expression) = &**expr else {
                         panic!("not an ident");
@@ -140,27 +116,32 @@ pub fn lower<'a>(
                         &mut mctx.diagnostics,
                     )?;
                     let (signal, _slice) = net.net.probe_signal();
-                    let variable = net.net.probe(mctx.gl(), &mut builder);
-                    conditions.push((condition, variable, *expr));
+                    conditions.push((condition, VariableKey::default(), net, *expr));
                     signals.push(signal);
                 }
-                builder = builder.watch(mctx.gl(), signals);
-
-                let mut acc = builder.constant(mctx.gl(), Bits::new_zeroed(SCALAR_VSIZE));
-                for (condition, before, expr) in conditions.into_iter() {
-                    use WatchCondition as C;
-
-                    let (after, _) = lower_expr(ctx, mctx, scope, &mut builder, expr, None)?;
-                    let cond = match condition {
-                        C::Posedge => builder.posedge(mctx.gl(), before, after),
-                        C::Negedge => builder.negedge(mctx.gl(), before, after),
-                        C::None => builder.not_case_equals(mctx.gl(), before, after),
-                    };
-                    let cond = builder.reduce_or(mctx.gl(), cond);
-                    acc = builder.or(mctx.gl(), acc, cond);
+                if contains_edge {
+                    for (_, v, net, _) in conditions.iter_mut() {
+                        *v = net.net.probe(mctx.gl(), &mut builder);
+                    }
                 }
+                builder = builder.watch(mctx.gl(), signals);
+                if contains_edge {
+                    let mut acc = builder.constant(mctx.gl(), Bits::new_zeroed(SCALAR_VSIZE));
+                    for (condition, before, _, expr) in conditions.into_iter() {
+                        use WatchCondition as C;
 
-                builder = builder.branch_false_to(mctx.gl(), acc, start_key);
+                        let (after, _) = lower_expr(ctx, mctx, scope, &mut builder, expr, None)?;
+                        let cond = match condition {
+                            C::Posedge => builder.posedge(mctx.gl(), before, after),
+                            C::Negedge => builder.negedge(mctx.gl(), before, after),
+                            C::None => builder.not_case_equals(mctx.gl(), before, after),
+                        };
+                        let cond = builder.reduce_or(mctx.gl(), cond);
+                        acc = builder.or(mctx.gl(), acc, cond);
+                    }
+
+                    builder = builder.branch_false_to(mctx.gl(), acc, start_key);
+                }
                 builder = super::lower_statement_or_null(ctx, mctx, scope, builder, statement)?;
             }
         },
