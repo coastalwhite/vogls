@@ -12,6 +12,8 @@ use crate::lower::vvalue::VValue;
 use crate::lower::{Diagnostics, LowerContext, MutLowerContext, VType, try_resolve_net};
 use crate::parser::AstArenas;
 
+use super::get_expr_type;
+
 pub fn lower_system_function_call<'a>(
     arenas: &'a AstArenas,
     mctx: &mut MutLowerContext,
@@ -199,6 +201,27 @@ pub fn lower_unevaluated_system_function_call<'a>(
     arguments: Option<AstIdRange<'a, Expr<'a>>>,
 ) -> Result<Option<(VariableKey, VType)>, ()> {
     match &ctx.arenas.ident_table[ident.item.0] {
+        "bits" => {
+            let Some(expr) = arguments.and_then(|a| a.first().filter(|_| a.len() == 1)) else {
+                mctx.diagnostics.not_yet_implemented(
+                    ctx.arenas.get_item_span(ident),
+                    "bits requires one argument",
+                );
+                return Err(());
+            };
+
+            let ty = get_expr_type(
+                &mctx.gl,
+                &ctx.arenas,
+                &ctx.table,
+                scope,
+                &mut mctx.diagnostics,
+                expr,
+            )?;
+            let variable = builder.constant_u32(mctx.gl(), ty.force_net_width().get());
+            Ok(Some((variable, VType::net(INTEGER_VSIZE, false))))
+        }
+
         "vogls_lupdt" => {
             let Some(arguments) = arguments else {
                 mctx.diagnostics.not_yet_implemented(
@@ -339,6 +362,10 @@ pub fn lower_unevaluated_system_function_call_ty<'a>(
 
     // @Performance: Use a perfect hashmap here.
     match &arenas.ident_table[ident.item.0] {
+        "bits" => {
+            ensure_num_args_equal!(1);
+            Ok(Some(VType::UnsignedNet(INTEGER_VSIZE)))
+        }
         "vogls_lupdt" => {
             ensure_num_args_equal!(1);
             Ok(Some(VType::UnsignedNet(TIME_VSIZE)))

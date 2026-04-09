@@ -1288,8 +1288,8 @@ impl Bits {
         let lhs = as_u64_value_slice!(x, lhs);
         let rhs = as_u64_value_slice!(y, rhs);
 
-        if size <= Mode::TwoValue.max_inline_size() {
-            return Self::from_u64(size, lhs[0].wrapping_sub(rhs[0]));
+        if size.get() <= 32 {
+            return Self::from_u64(size, lhs[0].wrapping_pow(rhs[0] as u32));
         }
 
         let mut dst = vec![0u64; lhs.len()];
