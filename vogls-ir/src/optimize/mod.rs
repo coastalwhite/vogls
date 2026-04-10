@@ -8,6 +8,7 @@ pub mod common_subexpr_elim;
 pub mod constant_propagation;
 pub mod deadcode_elimination;
 pub mod peephole;
+pub mod control_flow_graph_dot;
 
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext,

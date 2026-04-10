@@ -56,6 +56,10 @@ impl<'a> DisplayContext<'a> {
             });
         }
     }
+
+    pub fn get_bb_idx(&self, bb: BasicBlockKey) -> Option<u32> {
+        self.bb_name_scratch.get(&bb).copied()
+    }
 }
 
 impl<'a, T: ?Sized + ContextFormat> fmt::Display for ContextDisplay<'a, T> {
