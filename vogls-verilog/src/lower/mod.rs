@@ -267,7 +267,7 @@ pub fn try_resolve_net_with_sid<'a, 's>(
         diagnostics.not_yet_implemented(hident_span(arenas, ident), "cannot be used as net");
         return Err(());
     };
-    Ok(n)
+    Ok((sid, n))
 }
 
 pub fn strict_resolve_module<'a>(

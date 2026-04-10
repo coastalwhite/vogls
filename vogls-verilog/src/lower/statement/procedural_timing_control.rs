@@ -1,5 +1,5 @@
 use vogls_frontend::symbol_table::SymbolId;
-use vogls_ir::{BasicBlockBuilder, BasicBlockTerminator, Bits, SCALAR_VSIZE, Time, VariableKey};
+use vogls_ir::{BasicBlockBuilder, Bits, SCALAR_VSIZE, Time, VariableKey};
 use vogls_utils::OrderedSet;
 
 use crate::ast::expr::Expr;
