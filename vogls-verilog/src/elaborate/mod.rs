@@ -83,7 +83,7 @@ pub struct Net {
         ProcessKey,
         SignalKey,
         Option<NonMaxU32>,
-        SignalKey,
+        Option<SignalKey>,
         Option<NonMaxU32>,
     )>,
 }
@@ -140,7 +140,7 @@ impl Net {
     ) -> (
         SignalKey,
         Option<SignalSlice>,
-        SignalKey,
+        Option<SignalKey>,
         Option<SignalSlice>,
     ) {
         let (_, value, value_offset, mask, mask_offset) = self.nba.unwrap();
@@ -178,17 +178,22 @@ impl Net {
         partial: Option<(VariableKey, VectorSize)>,
     ) {
         let (value, value_slice, mask, mask_slice) = self.non_blocking_drive_signal();
-        let size = gl.vars[src].size;
-        let mask_value = bbb.constant(gl, Bits::new_ones(size));
         drive_opt_partial_helper(gl, bbb, value, value_slice, src, partial);
-        drive_opt_partial_helper(gl, bbb, mask, mask_slice, mask_value, partial);
+        if let Some(mask) = mask {
+            let size = gl.vars[src].size;
+            let mask_value = bbb.constant(gl, Bits::new_ones(size));
+            drive_opt_partial_helper(gl, bbb, mask, mask_slice, mask_value, partial);
+        }
     }
 
     pub fn width(&self) -> VectorSize {
         self.width
     }
 
-    pub fn replace_signals(&mut self, mut f: impl FnMut(SignalKey) -> (SignalKey, Option<NonMaxU32>)) {
+    pub fn replace_signals(
+        &mut self,
+        mut f: impl FnMut(SignalKey) -> (SignalKey, Option<NonMaxU32>),
+    ) {
         assert!(self.ba_offset.is_none());
         (self.ba, self.ba_offset) = f(self.ba);
         if let Some(specify) = &mut self.specify {
@@ -199,7 +204,9 @@ impl Net {
             assert!(value_slice.is_none());
             assert!(mask_slice.is_none());
             (*value, *value_slice) = f(*value);
-            (*mask, *mask_slice) = f(*mask);
+            if let Some(mask) = mask {
+                (*mask, *mask_slice) = f(*mask);
+            }
         }
     }
 }

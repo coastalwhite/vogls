@@ -253,6 +253,21 @@ pub fn try_resolve_net_mut<'a, 's>(
     };
     Ok(n)
 }
+pub fn try_resolve_net_with_sid<'a, 's>(
+    scope: SymbolId,
+    table: &'s VSymbolTable,
+    arenas: &AstArenas,
+    ident: impl Into<HIdent<'a>>,
+    diagnostics: &mut Diagnostics,
+) -> Result<(SymbolId, &'s NetSymbol), ()> {
+    let ident = ident.into();
+    let sid = try_resolve_symbol_id(scope, table, arenas, ident, diagnostics)?;
+    let VSymbol::Net(n) = &table[sid].content else {
+        diagnostics.not_yet_implemented(hident_span(arenas, ident), "cannot be used as net");
+        return Err(());
+    };
+    Ok((sid, n))
+}
 
 pub fn try_resolve_net_with_sid<'a, 's>(
     scope: SymbolId,
@@ -380,7 +395,7 @@ use vogls_ir::{
     BasicBlockBuilder, BasicBlockTerminator, GlobalContext, ProcessKey, SCALAR_VSIZE, SignalKey,
     SignalSlice, VariableKey, VectorSize, new_process,
 };
-use vogls_utils::{OrderedSet, Table, VgHashMap};
+use vogls_utils::{IndexMap, OrderedSet, Table, VgHashMap};
 
 use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::expr::{BitSlice, Expr};
@@ -940,7 +955,8 @@ pub fn evaluate_range<'a>(
 pub fn create_nba_process(
     gl: &mut GlobalContext,
     signal: SignalKey,
-) -> (ProcessKey, SignalKey, SignalKey) {
+    needs_mask: bool,
+) -> (ProcessKey, SignalKey, Option<SignalKey>) {
     let vogls_ir::Signal {
         name, origin, size, ..
     } = &gl.signals[signal];
@@ -951,11 +967,13 @@ pub fn create_nba_process(
     let (size, origin) = (*size, *origin);
     let (process_key, mut builder) = new_process(gl, process_name, origin);
 
-    let mask = gl.signals.insert(vogls_ir::Signal {
-        name: mask_name,
-        size,
-        initialize: None,
-        origin,
+    let mask = needs_mask.then(|| {
+        gl.signals.insert(vogls_ir::Signal {
+            name: mask_name,
+            size,
+            initialize: None,
+            origin,
+        })
     });
     let value = gl.signals.insert(vogls_ir::Signal {
         name: value_name,
@@ -964,30 +982,42 @@ pub fn create_nba_process(
         origin,
     });
 
-    // We need to conditionally branch here as it might have already been assigned before.
-    let mask_v = builder.probe(gl, mask);
-    let mask_ro = builder.reduce_or(gl, mask_v);
+    match mask {
+        None => {
+            let init_bb = builder.key();
+            let value_v = builder.probe(gl, value);
+            builder.drive(gl, signal, value_v);
+            builder = builder.watch(gl, [value].into());
+            builder.wait_region_to(gl, Region::NonBlocking as u8, init_bb);
+        }
+        Some(mask) => {
+            // We need to conditionally branch here as it might have already been assigned before.
+            let mask_v = builder.probe(gl, mask);
+            let mask_ro = builder.reduce_or(gl, mask_v);
 
-    let init_bb = builder.key();
-    builder = builder.next_terminate_later(gl);
+            let init_bb = builder.key();
+            builder = builder.next_terminate_later(gl);
 
-    let watch_bb = builder.key();
-    builder = builder.watch(gl, [value].into());
+            let watch_bb = builder.key();
+            builder = builder.watch(gl, [value].into());
 
-    let waitregion_bb = builder.key();
-    builder = builder.wait_region(gl, Region::NonBlocking as u8);
+            let waitregion_bb = builder.key();
+            builder = builder.wait_region(gl, Region::NonBlocking as u8);
 
-    let mask_v = builder.probe(gl, mask);
-    let value_v = builder.probe(gl, value);
-    let inv_mask = builder.binary_neg(gl, mask_v);
-    let old = builder.probe(gl, signal);
-    let old = builder.and(gl, old, inv_mask);
-    let value_v = builder.and(gl, value_v, mask_v);
-    let result = builder.or(gl, old, value_v);
-    builder.drive(gl, signal, result);
-    builder.jump_to(gl, watch_bb);
+            let mask_v = builder.probe(gl, mask);
+            let value_v = builder.probe(gl, value);
+            let inv_mask = builder.binary_neg(gl, mask_v);
+            let old = builder.probe(gl, signal);
+            let old = builder.and(gl, old, inv_mask);
+            let value_v = builder.and(gl, value_v, mask_v);
+            let result = builder.or(gl, old, value_v);
+            builder.drive(gl, signal, result);
+            builder.jump_to(gl, watch_bb);
 
-    gl.bbs[init_bb].terminator = BasicBlockTerminator::Branch(mask_ro, waitregion_bb, watch_bb);
+            gl.bbs[init_bb].terminator =
+                BasicBlockTerminator::Branch(mask_ro, waitregion_bb, watch_bb);
+        }
+    }
 
     (process_key, value, mask)
 }
@@ -998,6 +1028,7 @@ pub fn instantiate_nba_signals<'a>(
     scope: SymbolId,
     module: AstId<'a, Module<'a>>,
     diagnostics: &mut Diagnostics,
+    nba_signals: &mut IndexMap<SymbolId, (SignalKey, bool)>,
 ) -> Result<(), ()> {
     let mut scopes = Vec::new();
     scopes.extend(ctx.table[scope].children().iter().filter(|c| {
@@ -1015,6 +1046,7 @@ pub fn instantiate_nba_signals<'a>(
                     scope_key,
                     id,
                     diagnostics,
+                    nba_signals,
                 )?;
             }
         }
@@ -1037,6 +1069,7 @@ pub fn instantiate_nba_signals<'a>(
                         scope,
                         *id,
                         diagnostics,
+                        nba_signals,
                     )?;
                 }
                 NonPortModuleItem::GenerateRegion(_) => {}
@@ -1056,6 +1089,7 @@ pub fn instantiate_module_or_generate_item_nba_signals<'a>(
     scope: SymbolId,
     item: AstId<'a, ModuleOrGenerateItem<'a>>,
     diagnostics: &mut Diagnostics,
+    nba_signals: &mut IndexMap<SymbolId, (SignalKey, bool)>,
 ) -> Result<(), ()> {
     match item.content {
         ModuleOrGenerateItemContent::ModuleOrGenerateItemDeclaration(_)
@@ -1068,12 +1102,22 @@ pub fn instantiate_module_or_generate_item_nba_signals<'a>(
         | ModuleOrGenerateItemContent::LoopGenerateConstruct(_)
         | ModuleOrGenerateItemContent::IfGenerateConstruct(_)
         | ModuleOrGenerateItemContent::CaseGenerateConstruct(_) => Ok(()),
-        ModuleOrGenerateItemContent::InitialConstruct(id) => {
-            instantiate_stmts_nba_signals(gl, ctx, scope, AstIdRange::single(id.0), diagnostics)
-        }
-        ModuleOrGenerateItemContent::AlwaysConstruct(id) => {
-            instantiate_stmts_nba_signals(gl, ctx, scope, AstIdRange::single(id.0), diagnostics)
-        }
+        ModuleOrGenerateItemContent::InitialConstruct(id) => instantiate_stmts_nba_signals(
+            gl,
+            ctx,
+            scope,
+            AstIdRange::single(id.0),
+            diagnostics,
+            nba_signals,
+        ),
+        ModuleOrGenerateItemContent::AlwaysConstruct(id) => instantiate_stmts_nba_signals(
+            gl,
+            ctx,
+            scope,
+            AstIdRange::single(id.0),
+            diagnostics,
+            nba_signals,
+        ),
     }
 }
 
@@ -1083,23 +1127,28 @@ pub fn instantiate_stmts_nba_signals<'a>(
     scope: SymbolId,
     stmts: AstIdRange<'a, Statement<'a>>,
     diagnostics: &mut Diagnostics,
+    nba_signals: &mut IndexMap<SymbolId, (SignalKey, bool)>,
 ) -> Result<(), ()> {
     for stmt in stmts {
         match stmt.content {
             StatementContent::NonBlockingAssignment(nba) => {
                 for vlvalue in nba.variable_lvalue.0 {
-                    let net = try_resolve_net_mut(
+                    let (sid, net) = try_resolve_net_with_sid(
                         scope,
                         &mut ctx.table,
                         &ctx.arenas,
                         vlvalue.ident,
                         diagnostics,
                     )?;
-                    if net.net.nba.is_none() {
-                        let (signal, _slice) = net.net.blocking_drive_signal();
-                        let (process, value, mask) = create_nba_process(gl, signal);
-                        net.net.nba = Some((process, value, None, mask, None));
-                    };
+                    let needs_mask =
+                        !vlvalue.exprs.is_empty() && vlvalue.range_expression.is_some();
+
+                    match nba_signals.entry(sid) {
+                        vogls_utils::Entry::Occuppied(mut entry) => entry.get().1 |= needs_mask,
+                        vogls_utils::Entry::Vacant(entry) => {
+                            _ = entry.insert((net.net.blocking_drive_signal().0, needs_mask))
+                        }
+                    }
                 }
             }
             StatementContent::DisableStatement => todo!(),
@@ -1112,6 +1161,7 @@ pub fn instantiate_stmts_nba_signals<'a>(
                         scope,
                         case_item.statement_or_null,
                         diagnostics,
+                        nba_signals,
                     )?;
                 }
             }
@@ -1122,6 +1172,7 @@ pub fn instantiate_stmts_nba_signals<'a>(
                     scope,
                     id.if_branch.statement,
                     diagnostics,
+                    nba_signals,
                 )?;
                 for else_if in id.else_ifs {
                     instantiate_stmt_or_null_nba_signals(
@@ -1130,10 +1181,18 @@ pub fn instantiate_stmts_nba_signals<'a>(
                         scope,
                         else_if.statement,
                         diagnostics,
+                        nba_signals,
                     )?;
                 }
                 if let Some(else_branch) = id.else_branch {
-                    instantiate_stmt_or_null_nba_signals(gl, ctx, scope, else_branch, diagnostics)?;
+                    instantiate_stmt_or_null_nba_signals(
+                        gl,
+                        ctx,
+                        scope,
+                        else_branch,
+                        diagnostics,
+                        nba_signals,
+                    )?;
                 }
             }
             StatementContent::LoopStatement(id) => instantiate_stmts_nba_signals(
@@ -1142,15 +1201,26 @@ pub fn instantiate_stmts_nba_signals<'a>(
                 scope,
                 AstIdRange::single(id.statement),
                 diagnostics,
+                nba_signals,
             )?,
             StatementContent::ProceduralContinuousAssignments => todo!(),
 
-            StatementContent::ParBlock(id) => {
-                instantiate_stmts_nba_signals(gl, ctx, scope, id.statements, diagnostics)?
-            }
-            StatementContent::SeqBlock(id) => {
-                instantiate_stmts_nba_signals(gl, ctx, scope, id.statements, diagnostics)?
-            }
+            StatementContent::ParBlock(id) => instantiate_stmts_nba_signals(
+                gl,
+                ctx,
+                scope,
+                id.statements,
+                diagnostics,
+                nba_signals,
+            )?,
+            StatementContent::SeqBlock(id) => instantiate_stmts_nba_signals(
+                gl,
+                ctx,
+                scope,
+                id.statements,
+                diagnostics,
+                nba_signals,
+            )?,
             StatementContent::ProceduralTimingControlStatement(id) => {
                 instantiate_stmt_or_null_nba_signals(
                     gl,
@@ -1158,6 +1228,7 @@ pub fn instantiate_stmts_nba_signals<'a>(
                     scope,
                     id.statement_or_null,
                     diagnostics,
+                    nba_signals,
                 )?
             }
             StatementContent::WaitStatement(id) => instantiate_stmt_or_null_nba_signals(
@@ -1166,6 +1237,7 @@ pub fn instantiate_stmts_nba_signals<'a>(
                 scope,
                 id.statement_or_null,
                 diagnostics,
+                nba_signals,
             )?,
             StatementContent::TaskEnable(_) => {
                 // @TODO: this needs to instantiate something...
@@ -1182,11 +1254,17 @@ pub fn instantiate_stmt_or_null_nba_signals<'a>(
     scope: SymbolId,
     stmt: AstId<'a, StatementOrNull<'a>>,
     diagnostics: &mut Diagnostics,
+    nba_signals: &mut IndexMap<SymbolId, (SignalKey, bool)>,
 ) -> Result<(), ()> {
     match &*stmt {
         StatementOrNull::Attribute(_) => Ok(()),
-        StatementOrNull::Statement(stmt) => {
-            instantiate_stmts_nba_signals(gl, ctx, scope, AstIdRange::single(*stmt), diagnostics)
-        }
+        StatementOrNull::Statement(stmt) => instantiate_stmts_nba_signals(
+            gl,
+            ctx,
+            scope,
+            AstIdRange::single(*stmt),
+            diagnostics,
+            nba_signals,
+        ),
     }
 }

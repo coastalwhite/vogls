@@ -1037,6 +1037,11 @@ impl BasicBlockBuilder {
             instrs: Vec::new(),
         }
     }
+    pub fn wait_region_to(mut self, gl: &mut GlobalContext, region: u8, bb: BasicBlockKey) {
+        let slf = gl.bbs.get_mut(self.key).unwrap();
+        slf.instrs = std::mem::take(&mut self.instrs);
+        slf.terminator = BasicBlockTerminator::WaitRegion(bb, region);
+    }
 
     pub fn watch(mut self, gl: &mut GlobalContext, signals: Vec<SignalKey>) -> BasicBlockBuilder {
         let next_key = self.next_bb(gl);

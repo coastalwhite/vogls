@@ -8,7 +8,7 @@ pub mod retain;
 mod table;
 mod timer_stack;
 
-pub use index_map::{IndexMap, IndexSet};
+pub use index_map::{IndexMap, IndexSet, Entry};
 pub use non_max_int::{NonMaxU8, NonMaxU32, NonMaxU64, NonMaxUsize};
 pub use ordered_set::OrderedSet;
 pub use table::{SecondaryTable, Table, TableKey, TableMap, TableMapEntry};

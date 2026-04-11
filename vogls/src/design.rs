@@ -12,13 +12,14 @@ use vogls_runtime::SimulationIo;
 use vogls_runtime::plugins::RuntimePluginState;
 use vogls_runtime::{RtSignalKey, RuntimeState};
 use vogls_sim::{Event, Regions, Simulation, VmProcess, VmProcessKey, lower_process_to_vm};
-use vogls_utils::{NonMaxU32, TimerStack, VgHashMap};
+use vogls_utils::{IndexMap, NonMaxU32, TimerStack, VgHashMap};
 use vogls_verilog::arena::Arena;
 use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{Description, Module, ModuleItem, NonPortModuleItem};
 use vogls_verilog::elaborate::{SymbolAstRefs, VSymbol, VSymbolTable};
 use vogls_verilog::lower::{
-    Diagnostics as LowerDiagnostics, LowerContext, MutLowerContext, lower_module_to_ir,
+    Diagnostics as LowerDiagnostics, LowerContext, MutLowerContext, create_nba_process,
+    lower_module_to_ir,
 };
 use vogls_verilog::parser::{
     AstArenas, Diagnostics as ParserDiagnostics, ParseContext, ParserScratches, TokenWalker,
@@ -322,6 +323,7 @@ impl Design {
         let mut error = false;
         let mut outs_lut = VgHashMap::default();
         let mut outs = Vec::new();
+        let mut nba_signals = IndexMap::new();
 
         // @TODO: Iterate over the modules instead.
         timers.start("lower_global_items");
@@ -356,6 +358,7 @@ impl Design {
                         key,
                         module,
                         &mut mctx.diagnostics,
+                        &mut nba_signals,
                     )
                     .is_err();
                 }
@@ -375,6 +378,13 @@ impl Design {
                 }
                 _ => {}
             }
+        }
+        for (sid, (signal, needs_mask)) in nba_signals.into_iter() {
+            let (process, nba, mask) = create_nba_process(mctx.gl(), signal, needs_mask);
+            let VSymbol::Net(net) = &mut ctx.table[sid].content else {
+                unreachable!();
+            };
+            net.net.nba = Some((process, nba, None, mask, None));
         }
         timers.stop();
 

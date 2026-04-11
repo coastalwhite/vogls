@@ -243,6 +243,7 @@ Optimization
     - [ ] Fuse Always 
     - [ ] Internalize signals into process, when only used there
     - [ ] Inline single watch, single drive processes
+    - [ ] Simplify FV to TV where possible
     - [ ] Simplify CFG
       - [ ] Remove redundant jumps
       - [ ] Remove redundant branches
