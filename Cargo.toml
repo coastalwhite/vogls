@@ -6,6 +6,7 @@ members = [
     "vogls-ir-properties",
     "vogls-bits",
     "vogls-sim",
+    "vogls-sdf",
     "vogls-verilog",
     "vogls-frontend",
 	"vogls-bytecode",

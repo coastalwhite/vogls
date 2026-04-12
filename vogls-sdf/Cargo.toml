@@ -1,0 +1,14 @@
+[package]
+name = "vogls-sdf"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+vogls-codegen.workspace = true
+vogls-runtime.workspace = true
+vogls-utils.workspace = true
+vogls-ir.workspace = true
+vogls-bits.workspace = true
+
+[lints]
+workspace = true
