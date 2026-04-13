@@ -251,10 +251,10 @@ pub struct CDesign {
 
 impl CDesignState {
     pub fn new(
-        gl: &GlobalContext,
         heap: vogls_codegen::Heap,
         num_listening: usize,
         num_regions: u8,
+        lupdt_updated: &[bool],
     ) -> Self {
         let schedule = Schedule {
             active_region: Vec::new(),
@@ -268,13 +268,7 @@ impl CDesignState {
             schedule,
             listening,
             started: false,
-            runtime: vogls_runtime::RuntimeState {
-                heap,
-                time: 0,
-                last_active_time: vec![0u64; gl.signals.len()],
-                event_count: 0,
-                instruction_count: 0,
-            },
+            runtime: vogls_runtime::RuntimeState::new(heap, lupdt_updated),
             plugins: Vec::new(),
         }
     }

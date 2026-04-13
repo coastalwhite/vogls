@@ -339,6 +339,7 @@ pub fn lower_process(
     listener_builder: &mut ListenerBuilder,
     state_builder: &mut StateBuilder,
     io_signals: &VgHashMap<SignalKey, RtSignalKey>,
+    lupdt_indexes: &VgHashMap<RtSignalKey, u64>,
     signals: &[HeapRef],
     lower_options: &CLowerOptions,
 ) -> io::Result<()> {
@@ -1000,12 +1001,9 @@ pub fn lower_process(
                 },
                 I::LastUpdateTime(dst, signal) => {
                     let t = temp_map[&(*dst, LogicMode::TwoValue)];
-                    let signal_idx = io_signals[signal].as_u64();
-                    writeln!(
-                        buffer,
-                        "{INDENT}{} = last_active_time[{signal_idx}];",
-                        t.ident
-                    )?;
+                    let rt_key = io_signals[signal];
+                    let idx = lupdt_indexes[&rt_key];
+                    writeln!(buffer, "{INDENT}{} = last_active_time[{idx}];", t.ident)?;
                     if temporal_variables.contains(dst) {
                         store(&mut buffer, heap_map[dst], t)?;
                     }
@@ -1190,6 +1188,44 @@ pub fn lower_process(
                 }
                 if temporal_variables.contains(dst) {
                     store(&mut buffer, heap_map[dst], dst_t)?;
+                }
+                if lower_options.itrace {
+                    lower_dyn_format_str(
+                        &mut buffer,
+                        &mut state_builder.dyn_fmt_strs,
+                        &DynFormatString::new(
+                            format!(
+                                "* {} = phi {}\n",
+                                dst.display(&display_context),
+                                src.display(&display_context)
+                            )
+                            .into(),
+                            [].into(),
+                        ),
+                        [].into(),
+                    )?;
+                    writeln!(&mut buffer)?;
+                    let mut content = String::from("*   : ");
+                    let mut arg_offsets = Vec::new();
+                    let mut args = Vec::new();
+                    content.push_str(&dst.display(&display_context).to_string());
+                    content.push_str(" = ");
+                    arg_offsets.push((content.len(), DynFormatArgument::default()));
+                    content.push_str("; ");
+                    args.push(dst_t);
+                    content.push_str(&src.display(&display_context).to_string());
+                    content.push_str(" = ");
+                    arg_offsets.push((content.len(), DynFormatArgument::default()));
+                    content.push_str("; ");
+                    args.push(src_t);
+                    content.push('\n');
+                    lower_dyn_format_str(
+                        &mut buffer,
+                        &mut state_builder.dyn_fmt_strs,
+                        &DynFormatString::new(content.into(), arg_offsets.into()),
+                        args,
+                    )?;
+                    writeln!(&mut buffer)?;
                 }
             }
         }
@@ -1512,11 +1548,13 @@ pub fn lower_signal_drive_fn(
     signal: SignalKey,
     listener_builder: &ListenerBuilder,
     io_signals: &VgHashMap<SignalKey, RtSignalKey>,
+    lupdt_indexes: &VgHashMap<RtSignalKey, u64>,
     state_builder: &mut StateBuilder,
     lower_options: &CLowerOptions,
 ) -> io::Result<()> {
     use vogls_utils::TableKey;
-    let idx = io_signals[&signal].get();
+    let rt_key = io_signals[&signal];
+    let idx = rt_key.get();
     writeln!(
         f,
         "void drive_signal_{idx}(schedule_t *schedule, uint64_t time, uint64_t *listening, uint64_t *last_active_time, cold_context_t *cldctx) {{",
@@ -1540,7 +1578,9 @@ pub fn lower_signal_drive_fn(
         )?;
     }
 
-    writeln!(f, "{INDENT}last_active_time[{idx}] = time;")?;
+    if let Some(lupdt_idx) = lupdt_indexes.get(&rt_key) {
+        writeln!(f, "{INDENT}last_active_time[{lupdt_idx}] = time;")?;
+    }
     if let Some(listeners) = listener_builder.map.get(&signal) {
         for listener in listeners {
             writeln!(

@@ -1,3 +1,4 @@
+// vogls: time=5000
 module tb();
     wire out;
     SB_LUT4 #(

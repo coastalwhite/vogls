@@ -39,11 +39,14 @@ impl Clone for RuntimeState {
 }
 
 impl RuntimeState {
-    pub fn new(heap: Heap, num_signals: usize) -> Self {
+    pub fn new(heap: Heap, lupdt_updated: &[bool]) -> Self {
         Self {
             heap,
             time: 0,
-            last_active_time: vec![0; num_signals],
+            last_active_time: lupdt_updated
+                .iter()
+                .map(|updated| if *updated { 0 } else { u64::MAX })
+                .collect(),
             event_count: 0,
             instruction_count: 0,
         }

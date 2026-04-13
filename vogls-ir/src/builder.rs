@@ -748,6 +748,18 @@ impl BasicBlockBuilder {
         self.logical_neg(gl, case_equals)
     }
 
+    pub fn case_equals_constant(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        imm: Bits,
+    ) -> VariableKey {
+        assert_eq!(gl.vars[lhs].size, imm.size());
+        let mut dst = self.next_tmp_var(gl, SCALAR_VSIZE);
+        self.bin_imm_op(lhs, imm, BinaryImmOp::CaseEquality, &mut dst);
+        dst
+    }
+
     pub fn reduce_xor(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
         let Variable { size } = gl.vars[src];
         if size == SCALAR_VSIZE {

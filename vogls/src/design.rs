@@ -29,8 +29,8 @@ use vogls_verilog::tokenizer::{Macro, Tokenized};
 
 use crate::fuse_signals::FuseSignalsContext;
 use crate::{
-    ExecutionContext, append_referenced_modules, fuse_signals, generate_signals_heap,
-    lower_to_shared_object,
+    ExecutionContext, append_referenced_modules, find_lupdt_signals, fuse_signals,
+    generate_signals_heap, lower_to_shared_object,
 };
 
 pub enum DesignBackend {
@@ -507,6 +507,11 @@ impl Design {
         );
         timers.stop();
 
+        timers.start("find lupdt signals");
+        let mut lupdt_indexes = VgHashMap::<RtSignalKey, u64>::default();
+        find_lupdt_signals(&mctx.gl, &rt_signal_map, &mut lupdt_indexes);
+        timers.stop();
+
         let signal_to_heap: Arc<[HeapRef]> = signal_to_heap.into();
         if mctx.has_vcd || ectx.vcd.is_some() {
             let tlm = ctx.table.roots()[0];
@@ -538,6 +543,7 @@ impl Design {
                 ectx.output_source.as_deref(),
                 rt_signal_map,
                 signal_to_heap,
+                lupdt_indexes,
                 num_regions,
                 plugins,
                 ctx.arenas.ident_table,
@@ -552,6 +558,7 @@ impl Design {
                 ectx.emit_vm,
                 rt_signal_map,
                 signal_to_heap,
+                lupdt_indexes,
                 num_regions,
                 plugins,
                 ctx.arenas.ident_table,
@@ -597,6 +604,7 @@ impl Design {
         let mut heap_builder = HeapBuilder::new();
         let mut signal_to_heap = Vec::new();
         let mut rt_signal_map = VgHashMap::default();
+        let mut lupdt_indexes = VgHashMap::default();
         timers.timed("generate heap", |_| {
             generate_signals_heap(
                 &mut heap_builder,
@@ -605,6 +613,10 @@ impl Design {
                 &mut signal_to_heap,
                 gl.logic_mode,
             )
+        });
+
+        timers.timed("find lupdt signals", |_| {
+            find_lupdt_signals(&gl, &rt_signal_map, &mut lupdt_indexes)
         });
 
         if ectx.compile {
@@ -618,6 +630,7 @@ impl Design {
                 None,
                 rt_signal_map,
                 signal_to_heap.into(),
+                lupdt_indexes,
                 3,
                 Vec::new(),
                 IdentTable::default(),
@@ -632,6 +645,7 @@ impl Design {
                 ectx.emit_vm,
                 rt_signal_map,
                 signal_to_heap.into(),
+                lupdt_indexes,
                 3,
                 Vec::new(),
                 IdentTable::default(),
@@ -650,6 +664,7 @@ impl Design {
         output_source: Option<&Path>,
         rt_signal_map: VgHashMap<SignalKey, RtSignalKey>,
         signal_to_heap: Arc<[HeapRef]>,
+        lupdt_indexes: VgHashMap<RtSignalKey, u64>,
         num_regions: u8,
         plugins: Vec<RuntimePluginState>,
         ident_table: IdentTable,
@@ -660,6 +675,7 @@ impl Design {
             &rt_signal_map,
             heap_builder,
             &signal_to_heap,
+            lupdt_indexes,
             timers,
             itrace,
             stats,
@@ -688,6 +704,7 @@ impl Design {
         emit_vm: bool,
         mut rt_signal_map: VgHashMap<SignalKey, RtSignalKey>,
         signal_to_heap: Arc<[HeapRef]>,
+        lupdt_indexes: VgHashMap<RtSignalKey, u64>,
         num_regions: u8,
         plugins: Vec<RuntimePluginState>,
         ident_table: IdentTable,
@@ -723,21 +740,32 @@ impl Design {
             }
         }
         let mut heap = heap_builder.finish();
+        let mut lupdt_updated = vec![false; lupdt_indexes.len()];
 
         for (key, signal) in &gl.signals {
             if let Some(initialize) = &signal.initialize {
+                let rt_key = rt_signal_map[&key];
                 assert_eq!(initialize.size(), signal.size);
-                heap.store_bits(
-                    signal_to_heap[rt_signal_map[&key].as_usize()],
-                    gl.logic_mode,
-                    initialize,
-                );
+                heap.store_bits(signal_to_heap[rt_key.as_usize()], gl.logic_mode, initialize);
+                let is_unchanged = match gl.logic_mode {
+                    LogicMode::TwoValue => initialize.count_zeros() == initialize.size().get(),
+                    LogicMode::FourValue => initialize.count_unknown() == initialize.size().get(),
+                };
+                if !is_unchanged && let Some(lupdt_idx) = lupdt_indexes.get(&rt_key) {
+                    lupdt_updated[*lupdt_idx as usize] = true;
+                }
             }
         }
 
-        let mut simulation = Simulation::new(processes, signal_to_heap.clone(), gl.logic_mode);
+        let mut simulation = Simulation::new(
+            processes,
+            signal_to_heap.clone(),
+            lupdt_indexes,
+            gl.logic_mode,
+        );
         simulation.itrace = itrace;
-        let mut initial_state = simulation.new_state(regions, listeners, watches, heap);
+        let mut initial_state =
+            simulation.new_state(regions, listeners, watches, heap, &lupdt_updated);
         initial_state.plugins = plugins;
 
         Ok(Self {

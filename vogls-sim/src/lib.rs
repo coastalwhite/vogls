@@ -17,6 +17,7 @@ mod plugin;
 pub use plugin::InstructionPlugin;
 
 pub use instruction::*;
+use vogls_utils::VgHashMap;
 
 new_key_type! { pub struct ListenerKey; }
 
@@ -213,15 +214,22 @@ pub fn drive_bits(
 pub struct Simulation {
     pub processes: Vec<VmProcess>,
     pub signals: Arc<[HeapRef]>,
+    pub lupdt_indexes: VgHashMap<RtSignalKey, u64>,
     pub logic_mode: LogicMode,
     pub itrace: bool,
 }
 
 impl Simulation {
-    pub fn new(processes: Vec<VmProcess>, signals: Arc<[HeapRef]>, logic_mode: LogicMode) -> Self {
+    pub fn new(
+        processes: Vec<VmProcess>,
+        signals: Arc<[HeapRef]>,
+        lupdt_indexes: VgHashMap<RtSignalKey, u64>,
+        logic_mode: LogicMode,
+    ) -> Self {
         Self {
             processes,
             signals,
+            lupdt_indexes,
             logic_mode,
             itrace: false,
         }
@@ -233,10 +241,11 @@ impl Simulation {
         listeners: SlotMap<ListenerKey, Event>,
         watches: Vec<Vec<ListenerKey>>,
         heap: Heap,
+        lupdt_updated: &[bool],
     ) -> SimulationState {
         SimulationState {
             schedule: BTreeMap::<Timestamp, Vec<Event>>::new(),
-            runtime: vogls_runtime::RuntimeState::new(heap, self.signals.len()),
+            runtime: vogls_runtime::RuntimeState::new(heap, lupdt_updated),
             regions,
             listeners,
             watches,
@@ -601,7 +610,8 @@ impl Simulation {
                         }
                     }
                     I::LastUpdateTime(dst, signal) => {
-                        let lupdt = state.runtime.last_active_time[signal.as_usize()];
+                        let idx = self.lupdt_indexes[signal];
+                        let lupdt = state.runtime.last_active_time[idx as usize];
                         state.runtime.heap.set_tv_u64(dst.to_ref(TIME_VSIZE), lupdt);
                     }
                     I::Drive(sig, src, partial) => {
@@ -739,7 +749,9 @@ impl Simulation {
         for plugin in state.plugins.iter_mut() {
             plugin.poke_signal(signal);
         }
-        state.runtime.last_active_time[signal.as_usize()] = state.runtime.time;
+        if let Some(lupdt_idx) = self.lupdt_indexes.get(&signal) {
+            state.runtime.last_active_time[*lupdt_idx as usize] = state.runtime.time;
+        }
     }
 
     pub fn drive_bits(
@@ -791,5 +803,4 @@ impl Clone for SimulationState {
     }
 }
 
-impl SimulationState {
-}
+impl SimulationState {}

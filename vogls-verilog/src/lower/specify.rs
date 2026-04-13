@@ -725,6 +725,8 @@ pub fn lower_specify<'a>(
             );
             let entry = builder.key();
 
+            // @Correctness: This might need something like. `Initial Value of Signal X`. I think
+            // this is incorrect if the event does not get triggered first.
             for (input, paths) in &specify.paths {
                 for path in paths {
                     if matches!(
@@ -754,11 +756,14 @@ pub fn lower_specify<'a>(
             }
 
             let time = builder.time(mctx.gl());
-            let mut active_time = builder.constant(mctx.gl(), Bits::new_zeroed(TIME_VSIZE));
+            let mut active_time = builder.constant(mctx.gl(), Bits::from_u64(TIME_VSIZE, 1));
             for (input, _) in &specify.paths {
                 let lupdt = builder.lupdt(mctx.gl(), *input);
+                let lupdt = builder.plus_constant(mctx.gl(), lupdt, Bits::from_u64(TIME_VSIZE, 1));
                 active_time = builder.max(mctx.gl(), active_time, lupdt);
             }
+            active_time =
+                builder.minus_constant(mctx.gl(), active_time, Bits::from_u64(TIME_VSIZE, 1));
 
             let mut wait_time_set = builder.constant(mctx.gl(), Bits::new_zeroed(SCALAR_VSIZE));
             let mut wait_time = builder.constant(mctx.gl(), Bits::new_ones(TIME_VSIZE));

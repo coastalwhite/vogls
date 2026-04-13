@@ -221,11 +221,29 @@ pub fn generate_signals_heap(
     }
 }
 
+pub fn find_lupdt_signals(
+    gl: &GlobalContext,
+    signal_map: &VgHashMap<SignalKey, RtSignalKey>,
+    lupdt_indexes: &mut VgHashMap<RtSignalKey, u64>,
+) {
+    for bb in gl.bbs.values() {
+        for i in bb.instrs.iter() {
+            if let vogls_ir::Instruction::LastUpdateTime(_, signal) = i {
+                let idx = lupdt_indexes.len();
+                lupdt_indexes
+                    .entry(signal_map[signal])
+                    .or_insert(idx as u64);
+            }
+        }
+    }
+}
+
 pub fn lower_to_shared_object(
     gl: &GlobalContext,
     signal_map: &VgHashMap<SignalKey, RtSignalKey>,
     mut heap_builder: HeapBuilder,
     heap_refs: &[HeapRef],
+    lupdt_indexes: VgHashMap<RtSignalKey, u64>,
     timers: &mut TimerStack,
 
     itrace: bool,
@@ -259,6 +277,7 @@ pub fn lower_to_shared_object(
             &mut listener_builder,
             &mut state_builder,
             signal_map,
+            &lupdt_indexes,
             heap_refs,
             &lower_options,
         )?;
@@ -271,6 +290,7 @@ pub fn lower_to_shared_object(
             signal,
             &listener_builder,
             signal_map,
+            &lupdt_indexes,
             &mut state_builder,
             &lower_options,
         )?;
@@ -326,11 +346,29 @@ pub fn lower_to_shared_object(
         }
     }
 
+    let mut heap = heap_builder.finish();
+    let mut lupdt_updated = vec![false; lupdt_indexes.len()];
+
+    for (key, signal) in &gl.signals {
+        if let Some(initialize) = &signal.initialize {
+            let rt_key = signal_map[&key];
+            assert_eq!(initialize.size(), signal.size);
+            heap.store_bits(heap_refs[rt_key.as_usize()], gl.logic_mode, initialize);
+            let is_unchanged = match gl.logic_mode {
+                LogicMode::TwoValue => initialize.count_zeros() == initialize.size().get(),
+                LogicMode::FourValue => initialize.count_unknown() == initialize.size().get(),
+            };
+            if !is_unchanged && let Some(lupdt_idx) = lupdt_indexes.get(&rt_key) {
+                lupdt_updated[*lupdt_idx as usize] = true;
+            }
+        }
+    }
+
     let mut initial_state = CDesignState::new(
-        gl,
-        heap_builder.finish(),
+        heap,
         listener_builder.top,
         num_additional_regions,
+        &lupdt_updated,
     );
     let design = CDesign::new(
         Box::new(SharedObject { code_path, tempdir }),
