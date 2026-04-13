@@ -15,7 +15,7 @@ use vogls_ir::{
 use vogls_ir_properties::get_temporal_variables;
 use vogls_runtime::RtSignalKey;
 use vogls_runtime::plugins::RuntimePluginState;
-use vogls_utils::{IndexSet, VgHashMap, VgHashSet};
+use vogls_utils::{IndexSet, VgHashMap, VgHashSet, saturating_rem};
 
 pub mod runtime;
 
@@ -155,8 +155,14 @@ impl fmt::Display for CExpr<'_> {
                         }
                     }
                     BitsDataRef::SeparateTv(v) => {
-                        write!(f, "(uint64_t[{}]){{0x{:x}", v.len(), v[0])?;
-                        for v in &v[1..] {
+                        let mask = mask(saturating_rem(bits.size().get(), 64));
+                        let nwords = bits.size().get().saturating_sub(64).div_ceil(64);
+                        write!(f, "(uint64_t[{}]){{", v.len() * 2)?;
+                        for _ in 0..nwords {
+                            write!(f, "0xffffffffffffffff,")?;
+                        }
+                        write!(f, "0x{mask:x}")?;
+                        for v in v.iter() {
                             write!(f, ",0x{v:x}")?;
                         }
                         f.write_char('}')
@@ -1076,21 +1082,9 @@ pub fn lower_process(
                         None => None,
                         Some((offset, partial_size)) => {
                             let moffset = var_mode[offset];
-                            let mut offset_t = temp_map[&(*offset, moffset)];
+                            let offset_t = temp_map[&(*offset, moffset)];
                             if temporal_variables.contains(offset) {
                                 load(&mut buffer, heap_map[offset], offset_t)?;
-                            }
-                            if moffset != gl.logic_mode {
-                                let unconverted_t = offset_t;
-                                offset_t = temp_map[&(*offset, gl.logic_mode)];
-                                convert(
-                                    &mut buffer,
-                                    INTEGER_VSIZE,
-                                    gl.logic_mode,
-                                    moffset,
-                                    offset_t.ident,
-                                    unconverted_t.ident,
-                                )?;
                             }
                             Some((offset_t, *partial_size))
                         }
