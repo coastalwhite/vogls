@@ -78,6 +78,7 @@ pub fn lower<'a>(
                 }
 
                 builder = builder.watch(mctx.gl(), ins.items);
+                builder = super::lower_statement_or_null(ctx, mctx, scope, builder, statement)?;
             }
             EventControl::EventExpression(event_expression) => {
                 builder = builder.jump(mctx.gl());
