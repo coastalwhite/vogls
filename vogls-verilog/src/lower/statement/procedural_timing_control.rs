@@ -1,5 +1,5 @@
 use vogls_frontend::symbol_table::SymbolId;
-use vogls_ir::{BasicBlockBuilder, Bits, SCALAR_VSIZE, Time, VariableKey};
+use vogls_ir::{BasicBlockBuilder, Bits, SCALAR_VSIZE, TIME_VSIZE, Time, VariableKey};
 use vogls_utils::OrderedSet;
 
 use crate::ast::expr::Expr;
@@ -9,7 +9,7 @@ use crate::ast::statement::{
 };
 use crate::ast::{AstId, AstItem};
 use crate::elaborate::NetSymbol;
-use crate::lower::expression::lower_expr;
+use crate::lower::expression::{lower_expr, truncate_or_extend};
 use crate::lower::{LowerContext, MutLowerContext, try_resolve_net};
 use crate::lower::{WatchCondition, try_resolve_constant};
 
@@ -64,7 +64,20 @@ pub fn lower<'a>(
                     };
                     builder = super::lower_statement_or_null(ctx, mctx, scope, builder, statement)?;
                 }
-                DelayControl::MinTypMax(_) => todo!(),
+                DelayControl::MinTypMax(min_typ_max) => {
+                    let (value, value_ty) = lower_expr(
+                        ctx,
+                        mctx,
+                        scope,
+                        &mut builder,
+                        min_typ_max.typical,
+                        Some(TIME_VSIZE),
+                    )?;
+                    let value =
+                        truncate_or_extend(mctx.gl(), &mut builder, value, value_ty, TIME_VSIZE);
+                    builder = builder.variable_wait(mctx.gl(), value);
+                    builder = super::lower_statement_or_null(ctx, mctx, scope, builder, statement)?;
+                }
             }
         }
         ProceduralTimingControl::EventControl(event_control) => match &**event_control {
