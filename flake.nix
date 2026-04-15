@@ -2,11 +2,12 @@
   description = "A basic Nix Flake for eachDefaultSystem";
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs/nixos-25.05";
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-25.11";
+    rust-overlay.url = "github:oxalica/rust-overlay";
   };
 
   outputs =
-    inputs@{ flake-parts, ... }:
+    inputs@{ flake-parts, rust-overlay, ... }:
     flake-parts.lib.mkFlake { inherit inputs; } (
       { ... }:
       {
@@ -23,37 +24,59 @@
             lib,
             self',
             ...
-          }: 
+          }:
           let
             pythonPlatform = lib.recursiveUpdate {
               python = pkgs.python311;
             } pkgs.python311Packages;
-						stdenv = pkgs.stdenv;
-          in {
+            stdenv = pkgs.stdenv;
+
+            rustToolchain = pkgs.rust-bin.stable.latest.default;
+            rustPlatform = pkgs.makeRustPlatform {
+              cargo = rustToolchain;
+              rustc = rustToolchain;
+            };
+          in
+          {
+            _module.args.pkgs = import inputs.nixpkgs {
+              inherit system;
+              overlays = [ rust-overlay.overlays.default ];
+            };
+
             devShells.default = pkgs.mkShell {
               packages = with pkgs; [
                 pythonPlatform.python
                 pythonPlatform.venvShellHook
                 pythonPlatform.build
-            
+
                 samply
                 uv
-								(yosys.withPlugins [yosys-ghdl])
+                (yosys.withPlugins [ yosys-ghdl ])
                 gtkwave
                 ghdl
                 verilator
                 iverilog
                 libelf
-                nodejs_24
               ];
 
               postVenvCreation = ''
                 unset CONDA_PREFIX 
                 uv pip install -r pyproject.toml
-								export LD_LIBRARY_PATH="${stdenv.cc.cc.lib}/lib:$PYTHON_SHARED_LIB"
+                export LD_LIBRARY_PATH="${stdenv.cc.cc.lib}/lib:$PYTHON_SHARED_LIB"
               '';
               venvDir = ".venv";
             };
+
+            packages.default = self'.packages.vogls;
+            packages.vogls = rustPlatform.buildRustPackage {
+              name = "vogls";
+              src = ./.;
+              cargoBuildFlags = "-p vogls";
+              meta.mainProgram = "vogls";
+              cargoLock.lockFile = ./Cargo.lock;
+              doCheck = false;
+            };
           };
-      });
+      }
+    );
 }
