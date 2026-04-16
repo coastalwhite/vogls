@@ -17,6 +17,9 @@ pub fn control_flow_graph_dot(
     ctx.prepare_process(entry);
 
     writeln!(f, "digraph cfg {{").unwrap();
+    writeln!(f, "  rankdir=\"BT\"").unwrap();
+    writeln!(f, "  node [shape=box, fontsize=14, fontname=\"Monospace\"]").unwrap();
+
 
     scratch_seen.clear();
     scratch_stack.clear();
@@ -40,7 +43,7 @@ pub fn control_flow_graph_dot(
             writeln!(
                 f,
                 "  P{idx} -> P{next_idx}",
-                next_idx = ctx.get_bb_idx(bb_key).unwrap()
+                next_idx = ctx.get_bb_idx(next).unwrap()
             )
             .unwrap();
             if scratch_seen.insert(next) {

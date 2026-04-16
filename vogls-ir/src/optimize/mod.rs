@@ -6,9 +6,10 @@ use vogls_utils::{VgHashMap, VgHashSet, new_table_key};
 
 pub mod common_subexpr_elim;
 pub mod constant_propagation;
-pub mod deadcode_elimination;
-pub mod peephole;
 pub mod control_flow_graph_dot;
+pub mod deadcode_elimination;
+// pub mod dominator;
+pub mod peephole;
 
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext,
@@ -84,6 +85,16 @@ pub fn optimize_processes(gl: &mut GlobalContext, processes: &[ProcessKey], flag
                 );
             }
             remove_needles_branches(gl, process, &mut scratch_stack, &mut scratch_seen);
+
+            println!(
+                "{}",
+                control_flow_graph_dot::control_flow_graph_dot(
+                    gl,
+                    process,
+                    &mut scratch_stack,
+                    &mut scratch_seen
+                )
+            );
         }
     }
 }
