@@ -11,7 +11,7 @@ use vogls_ir::{
 use vogls_utils::{NonMaxU32, Table, VgHashMap, new_table_key};
 
 use crate::ast::module::{
-    Dimension, FunctionDeclaration, ModuleOrGenerateItem, PortDeclaration, Range, TaskDeclaration,
+    Dimension, FunctionDeclaration, ModuleOrGenerateItem, PortDeclaration, Range, TaskDeclaration, TimeScale,
 };
 use crate::ast::{AstId, AstIdRange, AstItem, Identifier};
 use crate::lower::{Diagnostics, VType, VValue, eval_constant_expr};
@@ -72,6 +72,7 @@ pub struct ModuleSymbol {
     pub parameter_override_values: Arc<Vec<VValue>>,
 
     pub contains_specify: bool,
+    pub time_scale: TimeScale,
 }
 
 pub struct Net {
@@ -242,6 +243,18 @@ pub struct LoweredFunction {
 pub struct LoweredTask {
     pub entry: BasicBlockKey,
     pub terminate: BasicBlockKey,
+}
+
+pub fn determine_module_context(
+    mut sid: SymbolId,
+    table: &VSymbolTable,
+) -> (SymbolId, &ModuleSymbol) {
+    loop {
+        if let VSymbol::Module(ms) = &table[sid].content {
+            return (sid, ms);
+        };
+        sid = table[sid].parent().expect("top-level should be a module");
+    }
 }
 
 pub fn try_table_insert(

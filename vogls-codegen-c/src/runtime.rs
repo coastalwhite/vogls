@@ -6,7 +6,7 @@ use std::ptr::NonNull;
 
 use vogls_codegen::HeapRef;
 use vogls_ir::dyn_format_string::DynFormatString;
-use vogls_ir::{Bits, GlobalContext, Mode, ReadMem, VectorSize};
+use vogls_ir::{Bits, Mode, ReadMem, VectorSize};
 use vogls_runtime::plugins::{RuntimePlugin, RuntimePluginState};
 use vogls_runtime::{RtSignalKey, SimulationIo};
 use vogls_utils::TableKey;

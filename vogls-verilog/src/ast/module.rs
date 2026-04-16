@@ -34,6 +34,24 @@ pub struct Module<'a> {
     pub ports: ModulePorts<'a>,
     pub module_items: AstIdRange<'a, ModuleItem<'a>>,
     pub default_nettype: Option<DefaultNettype>,
+    pub time_scale: TimeScale,
+}
+
+#[derive(Clone, Copy)]
+pub struct TimeScale {
+    /// Unit of time in femtoseconds.
+    pub time_unit: u64,
+    /// Precision of time in femtoseconds.
+    pub time_precision: u64,
+}
+
+impl Default for TimeScale {
+    fn default() -> Self {
+        Self {
+            time_unit: 10u64.pow(15),
+            time_precision: 10u64.pow(15),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]

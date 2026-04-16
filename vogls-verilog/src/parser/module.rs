@@ -4,20 +4,7 @@ use crate::ast::constant_expr::{
 };
 use crate::ast::expr::Expr;
 use crate::ast::module::{
-    AlwaysConstruct, BlockItemDeclaration, CaseGenerateConstruct, CaseGenerateItem,
-    CaseGeneratePattern, ContinousAssign, Dimension, FunctionDeclaration, FunctionRangeOrType,
-    GateInstantiation, GenerateBlock, GenerateRegion, GenvarAssignment, GenvarDeclaration,
-    IfGenerateConstruct, InitialConstruct, InoutDeclaration, InputDeclaration, IntegerDeclaration,
-    ListOfPortConnections, LocalParameterDeclaration, LoopGenerateConstruct, Module,
-    ModuleInstance, ModuleInstantiation, ModuleItem, ModuleOrGenerateItem,
-    ModuleOrGenerateItemContent, ModuleOrGenerateItemDeclaration, ModulePorts, NInputGateInstance,
-    NInputGateInstantiation, NInputGateType, NameOfGateInstance, NamedParameterAssignment,
-    NamedPortConnection, NetAssignment, NetDeclAssignment, NetDeclaration, NetDeclarationNets,
-    NetIdent, NetType, NonPortModuleItem, OutputDeclaration, OutputNet, ParamAssignment,
-    ParameterDeclaration, ParameterDeclarationTyping, ParameterValueAssignment, Port,
-    PortDeclaration, PortExpression, PortReference, Range, RegDeclaration, TaskDeclaration,
-    TaskPortItem, TaskPortItemContent, TfInoutDeclaration, TfInputDeclaration, TfOutputDeclaration,
-    TfType, VariableType, VariableTypeVariant,
+    AlwaysConstruct, BlockItemDeclaration, CaseGenerateConstruct, CaseGenerateItem, CaseGeneratePattern, ContinousAssign, Dimension, FunctionDeclaration, FunctionRangeOrType, GateInstantiation, GenerateBlock, GenerateRegion, GenvarAssignment, GenvarDeclaration, IfGenerateConstruct, InitialConstruct, InoutDeclaration, InputDeclaration, IntegerDeclaration, ListOfPortConnections, LocalParameterDeclaration, LoopGenerateConstruct, Module, ModuleInstance, ModuleInstantiation, ModuleItem, ModuleOrGenerateItem, ModuleOrGenerateItemContent, ModuleOrGenerateItemDeclaration, ModulePorts, NInputGateInstance, NInputGateInstantiation, NInputGateType, NameOfGateInstance, NamedParameterAssignment, NamedPortConnection, NetAssignment, NetDeclAssignment, NetDeclaration, NetDeclarationNets, NetIdent, NetType, NonPortModuleItem, OutputDeclaration, OutputNet, ParamAssignment, ParameterDeclaration, ParameterDeclarationTyping, ParameterValueAssignment, Port, PortDeclaration, PortExpression, PortReference, Range, RegDeclaration, TaskDeclaration, TaskPortItem, TaskPortItemContent, TfInoutDeclaration, TfInputDeclaration, TfOutputDeclaration, TfType, TimeScale, VariableType, VariableTypeVariant
 };
 use crate::ast::specify::{
     EdgeIdentifier, ModulePathExpr, PathDeclaration, PathDeclarationVariant, PathDelayValue,
@@ -138,6 +125,7 @@ impl<'a> Consumable<'a> for Module<'a> {
             ports,
             module_items,
             default_nettype: None,
+            time_scale: TimeScale::default(),
         })
     }
 }

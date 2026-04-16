@@ -1,5 +1,5 @@
-// vogls: time=100000
 // vogls: verify-stdout
+`timescale 1ps / 1ps
 module tb();
     localparam PERIOD = 100_000;
     initial begin

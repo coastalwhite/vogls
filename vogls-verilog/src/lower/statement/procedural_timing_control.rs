@@ -27,29 +27,10 @@ pub fn lower<'a>(
         ProceduralTimingControl::DelayControl(ast_delay_control) => {
             let delay_control = &**ast_delay_control;
             match delay_control {
-                DelayControl::DelayValue(ast_value) => {
-                    let value = match &**ast_value {
-                        DelayValue::UnsignedNumber(value) => {
-                            let value = &ctx.arenas.decimals[value.at];
-                            value.as_u64().unwrap()
-                        }
-                        DelayValue::Identifier(ident) => {
-                            let ident = AstItem {
-                                item: *ident,
-                                loc: ast_value.loc,
-                            };
-                            let value = try_resolve_constant(
-                                scope,
-                                &ctx.table,
-                                &ctx.arenas,
-                                ident,
-                                &mut mctx.diagnostics,
-                            )?;
-                            value.as_integer().unwrap() as u64
-                        }
-                    };
-
-                    builder = if value == 0 {
+                DelayControl::DelayValue(ast_delay_value) => {
+                    if let DelayValue::UnsignedNumber(value) = &**ast_delay_value
+                        && ctx.arenas.decimals[value.at].as_u64() == Some(0)
+                    {
                         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 159
                         //
                         // """
@@ -58,11 +39,31 @@ pub fn lower<'a>(
                         // that the process is resumed in the next simulation cycle in the
                         // current time.
                         // """
-                        builder.wait_region(mctx.gl(), Region::Inactive as u8)
+                        builder = builder.wait_region(mctx.gl(), Region::Inactive as u8)
                     } else {
-                        builder.wait(mctx.gl(), Time(value as u64))
-                    };
-                    builder = super::lower_statement_or_null(ctx, mctx, scope, builder, statement)?;
+                        let delay = match &**ast_delay_value {
+                            DelayValue::UnsignedNumber(value) => {
+                                let value = &ctx.arenas.decimals[value.at];
+                                value.as_u64().unwrap()
+                            }
+                            DelayValue::Identifier(ident) => {
+                                let ident = AstItem {
+                                    item: *ident,
+                                    loc: ast_delay_value.loc,
+                                };
+                                let value = try_resolve_constant(
+                                    scope,
+                                    &ctx.table,
+                                    &ctx.arenas,
+                                    ident,
+                                    &mut mctx.diagnostics,
+                                )?;
+                                value.as_integer().unwrap() as u64
+                            }
+                        };
+                        let delay = delay * ctx.time_scale.time_unit;
+                        builder = builder.wait(mctx.gl(), Time(delay));
+                    }
                 }
                 DelayControl::MinTypMax(min_typ_max) => {
                     let (value, value_ty) = lower_expr(
@@ -73,12 +74,17 @@ pub fn lower<'a>(
                         min_typ_max.typical,
                         Some(TIME_VSIZE),
                     )?;
-                    let value =
+                    let delay =
                         truncate_or_extend(mctx.gl(), &mut builder, value, value_ty, TIME_VSIZE);
-                    builder = builder.variable_wait(mctx.gl(), value);
-                    builder = super::lower_statement_or_null(ctx, mctx, scope, builder, statement)?;
+                    let delay = builder.multiply_constant(
+                        mctx.gl(),
+                        delay,
+                        Bits::from_u64(TIME_VSIZE, ctx.time_scale.time_unit),
+                    );
+                    builder = builder.variable_wait(mctx.gl(), delay);
                 }
             }
+            builder = super::lower_statement_or_null(ctx, mctx, scope, builder, statement)?;
         }
         ProceduralTimingControl::EventControl(event_control) => match &**event_control {
             EventControl::Star => {

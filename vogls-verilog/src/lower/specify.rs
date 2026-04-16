@@ -415,6 +415,7 @@ impl Delay {
                 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 222
                 // "If the path delay expression results in a negative value, it shall be treated as zero."
                 let delay = delay.max(0) as u64;
+                let delay = delay * ctx.time_scale.time_unit;
 
                 Ok(Self {
                     min: delay,
@@ -462,6 +463,10 @@ impl Delay {
                 let min = min.max(0) as u64;
                 let typ = typ.max(0) as u64;
                 let max = max.max(0) as u64;
+
+                let min = min * ctx.time_scale.time_unit;
+                let typ = typ * ctx.time_scale.time_unit;
+                let max = max * ctx.time_scale.time_unit;
 
                 Ok(Self { min, typ, max })
             }

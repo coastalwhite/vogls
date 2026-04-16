@@ -1,9 +1,11 @@
+use std::str::FromStr;
+
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_utils::VgHashSet;
 
 use crate::arena::Arena;
 use crate::ast::constant_expr::ConstantExpr;
-use crate::ast::module::{Description, Module};
+use crate::ast::module::{Description, Module, TimeScale};
 use crate::ast::udp::UdpDeclaration;
 use crate::ast::{
     AstId, AstIdRange, AstItem, AttrSpec, AttributeInstance, DecimalRef, HIdent, HIdentComponent,
@@ -19,6 +21,7 @@ pub use token_walker::TokenWalker;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::{Bits, INTEGER_VSIZE};
 
+use self::token_walker::TokenLoc;
 use self::utils::{item_parse, parse, parse_one_or_more_delimited};
 
 mod constant_expr;
@@ -107,6 +110,7 @@ pub enum ParseErrorReason {
     LeftoverTokens,
 }
 
+#[derive(Clone, Copy)]
 pub enum TimeUnit {
     Seconds,
     Milliseconds,
@@ -115,10 +119,59 @@ pub enum TimeUnit {
     Picoseconds,
     Femtoseconds,
 }
+#[derive(Clone, Copy)]
 pub enum TimeSize {
     N1,
     N10,
     N100,
+}
+impl TimeSize {
+    fn into_u64(self) -> u64 {
+        match self {
+            TimeSize::N1 => 1,
+            TimeSize::N10 => 10,
+            TimeSize::N100 => 100,
+        }
+    }
+}
+impl TimeUnit {
+    fn convert_from_fs(self, fs: u64) -> u64 {
+        match self {
+            TimeUnit::Seconds => fs * 10u64.pow(15),
+            TimeUnit::Milliseconds => fs * 10u64.pow(12),
+            TimeUnit::Microseconds => fs * 10u64.pow(9),
+            TimeUnit::Nanoseconds => fs * 10u64.pow(6),
+            TimeUnit::Picoseconds => fs * 10u64.pow(3),
+            TimeUnit::Femtoseconds => fs,
+        }
+    }
+}
+
+impl FromStr for TimeSize {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "1" => Ok(Self::N1),
+            "10" => Ok(Self::N10),
+            "100" => Ok(Self::N100),
+            _ => Err(()),
+        }
+    }
+}
+
+impl FromStr for TimeUnit {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "s" => Ok(Self::Seconds),
+            "ms" => Ok(Self::Milliseconds),
+            "us" => Ok(Self::Microseconds),
+            "ns" => Ok(Self::Nanoseconds),
+            "ps" => Ok(Self::Picoseconds),
+            "fs" => Ok(Self::Femtoseconds),
+            _ => Err(()),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -135,10 +188,23 @@ pub enum DefaultNettype {
     Uwire,
 }
 
-#[derive(Default)]
 pub struct ParseContext {
-    _timescale: Option<(TimeSize, TimeUnit, TimeSize, TimeUnit)>,
+    timescale: (TimeSize, TimeUnit, TimeSize, TimeUnit),
     default_nettype: Option<DefaultNettype>,
+}
+
+impl ParseContext {
+    pub fn new() -> Self {
+        Self {
+            timescale: (
+                TimeSize::N1,
+                TimeUnit::Seconds,
+                TimeSize::N1,
+                TimeUnit::Seconds,
+            ),
+            default_nettype: None,
+        }
+    }
 }
 
 pub fn parse_file<'a>(
@@ -195,6 +261,11 @@ pub fn parse_file<'a>(
 
                 module.attribute_instances = attr_instances;
                 module.default_nettype = ctx.default_nettype;
+                let (tu, tu_unit, tp, tp_unit) = ctx.timescale;
+                module.time_scale = TimeScale {
+                    time_unit: tu_unit.convert_from_fs(tu.into_u64()),
+                    time_precision: tp_unit.convert_from_fs(tp.into_u64()),
+                };
                 descriptions.push(Description::Module(utils::push(arenas, ast, module, tr)));
                 trs.push(tr);
             }
@@ -234,7 +305,52 @@ pub fn parse_file<'a>(
                 let directive = &content[1..content.len()];
 
                 match directive {
-                    "timescale" => tkw.offset += 6,
+                    "timescale" => {
+                        tkw.offset += 1;
+                        let TokenLoc { kind, span, file } =
+                            tkw.next_expect(T::Decimal, diagnostics.as_deref_mut())?;
+                        let (&kind, &span, &file) = (kind, span, file);
+                        let Ok(unit_size) = TimeSize::from_str(&tkw.content(file)[span.as_range()])
+                        else {
+                            if let Some(diagnostics) = diagnostics {
+                                diagnostics.unexpected_token(tkw.offset - 1, kind);
+                            }
+                            return Err(());
+                        };
+                        let TokenLoc { kind, span, file } =
+                            tkw.next_expect(T::Ident, diagnostics.as_deref_mut())?;
+                        let (&kind, &span, &file) = (kind, span, file);
+                        let Ok(unit_unit) = TimeUnit::from_str(&tkw.content(file)[span.as_range()])
+                        else {
+                            if let Some(diagnostics) = diagnostics {
+                                diagnostics.unexpected_token(tkw.offset - 1, kind);
+                            }
+                            return Err(());
+                        };
+                        tkw.next_expect(T::Slash, diagnostics.as_deref_mut())?;
+                        let TokenLoc { kind, span, file } =
+                            tkw.next_expect(T::Decimal, diagnostics.as_deref_mut())?;
+                        let (&kind, &span, &file) = (kind, span, file);
+                        let Ok(prec_size) = TimeSize::from_str(&tkw.content(file)[span.as_range()])
+                        else {
+                            if let Some(diagnostics) = diagnostics {
+                                diagnostics.unexpected_token(tkw.offset - 1, kind);
+                            }
+                            return Err(());
+                        };
+                        let TokenLoc { kind, span, file } =
+                            tkw.next_expect(T::Ident, diagnostics.as_deref_mut())?;
+                        let (&kind, &span, &file) = (kind, span, file);
+                        let Ok(prec_unit) = TimeUnit::from_str(&tkw.content(file)[span.as_range()])
+                        else {
+                            if let Some(diagnostics) = diagnostics {
+                                diagnostics.unexpected_token(tkw.offset - 1, kind);
+                            }
+                            return Err(());
+                        };
+
+                        ctx.timescale = (unit_size, unit_unit, prec_size, prec_unit);
+                    }
                     "default_nettype" => {
                         tkw.offset += 1;
                         let t = tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?;

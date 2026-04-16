@@ -130,7 +130,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             fail: bool,
             verify_stdout: VerifyOutput,
             verify_ir: bool,
-            time: u64,
+            timeout: u64,
             top_level_module: Option<String>,
             skip: Option<LogicMode>,
         }
@@ -140,7 +140,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             verify_stdout: VerifyOutput::No,
             verify_ir: false,
             top_level_module: None,
-            time: 1000,
+            timeout: u64::MAX,
             skip: None,
         };
         {
@@ -167,12 +167,8 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                     _ if line.starts_with("tlm=") => {
                         test_information.top_level_module = Some(line[4..].trim().to_string());
                     }
-                    _ if line.starts_with("time=") => {
-                        if &line[5..] == "none" {
-                            test_information.time = u64::MAX;
-                        } else {
-                            test_information.time = line[5..].parse().expect("failed to parse");
-                        }
+                    _ if line.starts_with("timeout=") => {
+                        test_information.timeout = line[5..].parse().expect("failed to parse");
                     }
                     _ if line.starts_with("skip=") => match &line[5..] {
                         "two-value-logic" => test_information.skip = Some(LogicMode::TwoValue),
@@ -230,7 +226,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                         stats: false,
                         debug_symbols: false,
                         no_run: false,
-                        time: test_information.time,
+                        time: test_information.timeout,
                         opt: OptFlags {
                             opt_rounds,
                             constant_propagation: true,
@@ -267,7 +263,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                                 stats: false,
                                 debug_symbols: false,
                                 no_run: false,
-                                time: test_information.time,
+                                time: test_information.timeout,
                                 opt: OptFlags {
                                     opt_rounds,
                                     constant_propagation: true,
@@ -377,7 +373,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                                 std::mem::replace(&mut ctx.0.stderr, Box::new(Vec::new()) as _);
                             let mut io = SimulationIo::new(stdout, stderr);
 
-                            design.run(&mut io, test_information.time)?;
+                            design.run(&mut io, test_information.timeout)?;
 
                             ctx.0.stdout = io.stdout;
                             ctx.0.stderr = io.stderr;

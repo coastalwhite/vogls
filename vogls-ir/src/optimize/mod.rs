@@ -85,16 +85,6 @@ pub fn optimize_processes(gl: &mut GlobalContext, processes: &[ProcessKey], flag
                 );
             }
             remove_needles_branches(gl, process, &mut scratch_stack, &mut scratch_seen);
-
-            println!(
-                "{}",
-                control_flow_graph_dot::control_flow_graph_dot(
-                    gl,
-                    process,
-                    &mut scratch_stack,
-                    &mut scratch_seen
-                )
-            );
         }
     }
 }

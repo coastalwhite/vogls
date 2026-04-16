@@ -19,7 +19,7 @@ use crate::ast::module::{
     NetDeclaration, NetDeclarationNets, NetIdent, NetType, NonPortModuleItem, ParamAssignment,
     ParameterDeclaration, ParameterDeclarationTyping, ParameterValueAssignment, Port,
     PortDeclaration, PortExpression, PortReference, Range, RegDeclaration, TaskDeclaration,
-    TaskPortItem, TaskPortItemContent, TfType, VariableType, VariableTypeVariant,
+    TaskPortItem, TaskPortItemContent, TfType, TimeScale, VariableType, VariableTypeVariant,
 };
 use crate::ast::statement::{
     Block, ConditionalStatement, ParBlock, SeqBlock, Statement, StatementContent, StatementOrNull,
@@ -84,7 +84,7 @@ pub struct PortInLevelSymbol<'a> {
 
 pub struct ElaborationState<'a> {
     lvl_symbols: IndexMap<SymbolId, InLevelSymbol<'a>>,
-    next_levels: VecDeque<(SymbolId, ElabLevel<'a>)>,
+    next_levels: VecDeque<(SymbolId, ElabLevel<'a>, TimeScale)>,
     marked: VgHashSet<SymbolId>,
 
     needs_adjacency_list: Vec<(SymbolId, usize, usize)>,
@@ -166,6 +166,7 @@ pub fn elaborate<'a>(
         parameter_overrides: Arc::new(VgHashMap::default()),
         parameter_override_values: Arc::new(Vec::new()),
         contains_specify: false,
+        time_scale: top_level.time_scale,
     };
     let tlm_sid = ctx
         .table
@@ -177,10 +178,12 @@ pub fn elaborate<'a>(
         .expect("No collisions possible, first symbol.");
 
     st.next_levels
-        .push_back((tlm_sid, ElabLevel::Module(top_level)));
+        .push_back((tlm_sid, ElabLevel::Module(top_level), top_level.time_scale));
 
     let mut error = false;
-    while let Some((scope, lvl)) = st.next_levels.pop_front() {
+    while let Some((scope, lvl, time_scale)) = st.next_levels.pop_front() {
+        ctx.time_scale = time_scale;
+
         st.lvl_symbols.clear();
         st.needs_adjacency_list_items.clear();
 
@@ -481,8 +484,11 @@ fn extend_generate_loop_sids<'a>(
             break;
         }
 
-        st.next_levels
-            .push_back((iter_sid, ElabLevel::GenerateBlock(mod_or_gen_items)));
+        st.next_levels.push_back((
+            iter_sid,
+            ElabLevel::GenerateBlock(mod_or_gen_items),
+            ctx.time_scale,
+        ));
 
         // @CONTEXTWIDTH
         value = eval_constant_expr(
@@ -612,6 +618,7 @@ fn elaborate_module<'a>(
         ports,
         module_items,
         default_nettype: _,
+        time_scale: _,
     } = &*module;
 
     // 1. Assign a SymbolId to each symbol.
@@ -778,8 +785,11 @@ fn elaborate_module<'a>(
                         ctx.arenas.get_span(*id),
                         VSymbol::GenerateBlock(offset),
                     );
-                    st.next_levels
-                        .push_back((sid, ElabLevel::GenerateRegion(*region)));
+                    st.next_levels.push_back((
+                        sid,
+                        ElabLevel::GenerateRegion(*region),
+                        ctx.time_scale,
+                    ));
                 }
                 NonPortModuleItem::ParameterDeclaration(id) => {
                     let ParameterDeclaration {
@@ -1110,6 +1120,7 @@ fn extend_module_or_generate_item_sids<'a>(
                     parameter_overrides: Arc::new(VgHashMap::default()),
                     parameter_override_values: Arc::new(Vec::default()),
                     contains_specify: false,
+                    time_scale: ctx.time_scale,
                 };
                 let Ok(sid) = try_table_insert(
                     &ctx.arenas,
@@ -1139,17 +1150,17 @@ fn extend_module_or_generate_item_sids<'a>(
         }
         ModuleOrGenerateItemContent::LoopGenerateConstruct(id) => {
             let lvl = ElabLevel::GenerateLoop(id);
-            st.next_levels.push_back((scope, lvl));
+            st.next_levels.push_back((scope, lvl, ctx.time_scale));
             Ok(())
         }
         ModuleOrGenerateItemContent::IfGenerateConstruct(id) => {
             let lvl = ElabLevel::GenerateIf(id);
-            st.next_levels.push_back((scope, lvl));
+            st.next_levels.push_back((scope, lvl, ctx.time_scale));
             Ok(())
         }
         ModuleOrGenerateItemContent::CaseGenerateConstruct(id) => {
             let lvl = ElabLevel::GenerateCase(id);
-            st.next_levels.push_back((scope, lvl));
+            st.next_levels.push_back((scope, lvl, ctx.time_scale));
             Ok(())
         }
     }
@@ -1628,7 +1639,7 @@ pub fn finalize_symbol<'a>(
     sid: SymbolId,
     scope: SymbolId,
     ctx: &mut LowerContext<'a>,
-    next_levels: &mut VecDeque<(SymbolId, ElabLevel<'a>)>,
+    next_levels: &mut VecDeque<(SymbolId, ElabLevel<'a>, TimeScale)>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
     match symbol {
@@ -1914,7 +1925,7 @@ pub fn finalize_symbol<'a>(
             module_symbol.parameter_overrides = Arc::new(parameter_overrides);
             module_symbol.parameter_override_values = Arc::new(parameter_override_values);
 
-            next_levels.push_back((sid, ElabLevel::Module(*module)));
+            next_levels.push_back((sid, ElabLevel::Module(*module), module.time_scale));
         }
     }
 

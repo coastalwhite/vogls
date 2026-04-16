@@ -24,6 +24,7 @@ pub struct LowerContext<'a> {
     pub udps: VgHashMap<IdentId, AstId<'a, UdpDeclaration<'a>>>,
     pub arenas: AstArenas,
     pub tokenized: &'a Tokenized,
+    pub time_scale: TimeScale,
 }
 
 #[derive(Clone)]
@@ -385,7 +386,7 @@ use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::expr::{BitSlice, Expr};
 use crate::ast::module::{
     GenerateRegion, Module, ModuleItem, ModuleOrGenerateItem, ModuleOrGenerateItemContent,
-    NonPortModuleItem, Range,
+    NonPortModuleItem, Range, TimeScale,
 };
 use crate::ast::statement::{Statement, StatementContent, StatementOrNull};
 use crate::ast::udp::UdpDeclaration;
@@ -417,6 +418,7 @@ pub fn lower_module_to_ir<'a>(
         ports: _,
         module_items,
         default_nettype: _,
+        time_scale: _,
     } = &*root;
 
     let mut scopes = Vec::new();

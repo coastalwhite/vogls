@@ -15,8 +15,8 @@ use vogls_sim::{Event, Regions, Simulation, VmProcess, VmProcessKey, lower_proce
 use vogls_utils::{IndexMap, NonMaxU32, TimerStack, VgHashMap};
 use vogls_verilog::arena::Arena;
 use vogls_verilog::ast::AstId;
-use vogls_verilog::ast::module::{Description, Module, ModuleItem, NonPortModuleItem};
-use vogls_verilog::elaborate::{SymbolAstRefs, VSymbol, VSymbolTable};
+use vogls_verilog::ast::module::{Description, Module, ModuleItem, NonPortModuleItem, TimeScale};
+use vogls_verilog::elaborate::{SymbolAstRefs, VSymbol, VSymbolTable, determine_module_context};
 use vogls_verilog::lower::{
     Diagnostics as LowerDiagnostics, LowerContext, MutLowerContext, create_nba_process,
     lower_module_to_ir,
@@ -118,7 +118,7 @@ impl Design {
                 Some(&mut diagnostics),
                 &mut arenas,
                 &ast,
-                &mut ParseContext::default(),
+                &mut ParseContext::new(),
             )
         }) {
             Ok(ast) => ast,
@@ -157,6 +157,7 @@ impl Design {
                         module_items,
                         ports: _,
                         default_nettype: _,
+                        time_scale: _,
                     } = &**module_id;
 
                     for module_item in module_items.iter() {
@@ -182,6 +183,7 @@ impl Design {
                         module_items: _,
                         ports: _,
                         default_nettype: _,
+                        time_scale: _,
                     } = &**module_id;
                     let module_name = module_identifier.item.0;
                     if referenced.contains(&module_name) {
@@ -229,6 +231,7 @@ impl Design {
             udps: VgHashMap::default(),
             arenas,
             tokenized: &token_buffer,
+            time_scale: TimeScale::default(),
         };
         let mut mctx = MutLowerContext {
             gl,
@@ -331,6 +334,7 @@ impl Design {
             match &ctx.table[key].content {
                 VSymbol::Module(i) => {
                     let module = module_lut[&i.module];
+                    ctx.time_scale = module.time_scale;
                     if i.contains_specify {
                         for item in module.module_items.iter() {
                             let ModuleItem::NonPortModuleItem(id) = &*item else {
@@ -370,6 +374,8 @@ impl Design {
                     .is_err();
                 }
                 VSymbol::Task(i) => {
+                    let (_, ms) = determine_module_context(key, &ctx.table);
+                    ctx.time_scale = ms.time_scale;
                     let task_decl = ctx.table_ast_refs.tasks[i.ast_id];
                     error |= vogls_verilog::lower::module_or_generate_item::function::lower_task(
                         &mut ctx, &mut mctx, key, task_decl,
@@ -412,6 +418,7 @@ impl Design {
                 continue;
             };
             let module_id = module_lut[&m.module];
+            ctx.time_scale = module_id.time_scale;
             let module_key = timers.timed(
                 ctx.arenas.ident_table[module_id.module_identifier.item.0].to_string(),
                 |_| lower_module_to_ir(module_id, &ctx, &mut mctx, key),
