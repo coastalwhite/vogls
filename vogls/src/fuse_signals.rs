@@ -14,6 +14,7 @@ slotmap::new_key_type! { struct EdgeKey; }
 pub const LUPDT: u32 = 1u32;
 pub const PROBE: u32 = 2u32;
 pub const DRIVE: u32 = 4u32;
+pub const WATCH: u32 = 8u32;
 
 struct Edge {
     driver: NodeKey,
@@ -241,12 +242,15 @@ pub fn fuse_signals(
             use Instruction as I;
             match &i {
                 I::LastUpdateTime(_, s) => *ir_signal_reference.entry(*s).or_default() |= LUPDT,
-                I::Probe(_, s, _) => _ = *ir_signal_reference.entry(*s).or_default() |= PROBE,
-                I::ProbeSlice(_, s, _) => _ = *ir_signal_reference.entry(*s).or_default() |= PROBE,
+                I::Probe(_, s, _) | I::ProbeSlice(_, s, _) => {
+                    _ = *ir_signal_reference.entry(*s).or_default() |= PROBE
+                }
                 I::Drive(s, _, _) => *ir_signal_reference.entry(*s).or_default() |= DRIVE,
                 _ => {}
             }
         }
+        bb.terminator
+            .for_each_signal(|s| *ir_signal_reference.entry(s).or_default() |= WATCH);
     }
 
     if ctx.print_unoptimized_fuse_signals {
@@ -395,7 +399,11 @@ pub fn fuse_signals(
             }
 
             // Subset inversion
-            if nodes[node].fanin.len() > 1 {
+            if nodes[node].fanin.len() > 1
+                && ir_signal_reference
+                    .get(nodes.get_key(node))
+                    .is_none_or(|&v| v & DRIVE == 0)
+            {
                 nodes[node].fanin.sort_unstable_by_key(|&e| {
                     let edge = &edges[e];
                     (edge.drivee_slice.lsb(), edge.drivee_slice.width())
@@ -407,25 +415,23 @@ pub fn fuse_signals(
 
                 while i < nodes[node].fanin.len() {
                     let edge = &edges[nodes[node].fanin[i]];
-                    let slice = edge.drivee_slice;
-
-                    let has_drive = ir_signal_reference
-                        .get(nodes.get_key(edge.drivee))
-                        .is_none_or(|v| *v & DRIVE != 0);
-
-                    if (has_drive && slice.lsb() != offset)
-                        || (!has_drive && slice.lsb() < offset)
-                        || !nodes[edge.driver].fanin.is_empty()
-                        || ir_signal_reference
-                            .get(nodes.get_key(edge.drivee))
-                            .is_some_and(|v| {
-                                *v & DRIVE != 0 && (*v & PROBE != 0 || *v & LUPDT != 0)
-                            })
+                    let driver = *nodes.get_key(edge.driver);
+                    if edge.drivee_slice.lsb() != 0
+                        || edge.driver_slice.width() != gl.signals[driver].size
                     {
                         break;
                     }
 
-                    offset = slice.lsb() + slice.width().get();
+                    let driver_irr = ir_signal_reference.get(&driver).copied().unwrap_or(0);
+
+                    if driver_irr & (WATCH | LUPDT) != 0
+                        || edge.drivee_slice.lsb() != offset
+                        || !nodes[edge.driver].fanin.is_empty()
+                    {
+                        break;
+                    }
+
+                    offset += edge.drivee_slice.width().get();
                     i += 1;
                 }
 
@@ -458,6 +464,26 @@ pub fn fuse_signals(
             println!();
         }
     }
+
+    // dbg!(nodes.len());
+    // for node in nodes.table_key_iter() {
+    //     if gl.signals[*nodes.get_key(node)]
+    //         .name
+    //         .starts_with("aes.EC.MX3.a2/1131")
+    //     {
+    //         dbg!(&gl.signals[*nodes.get_key(node)].name);
+    //         let mut s = String::new();
+    //         print_subgraph(
+    //             &mut s,
+    //             node,
+    //             &gl.signals,
+    //             &nodes,
+    //             &edges,
+    //             &ir_signal_reference,
+    //         );
+    //         println!("{s}");
+    //     }
+    // }
 
     if ctx.print_optimized_fuse_signals {
         println!("// Optimized Fuse Signals");

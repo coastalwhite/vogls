@@ -193,8 +193,7 @@ impl BasicBlockTerminator {
         }
     }
 
-    #[expect(unused)]
-    fn for_each_signal(&self, f: impl FnMut(SignalKey)) {
+    pub fn for_each_signal(&self, f: impl FnMut(SignalKey)) {
         match self {
             Self::Branch(..)
             | Self::VariableWait(..)
