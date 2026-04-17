@@ -197,7 +197,7 @@ pub fn lower_process_to_vm(
                                 imm,
                             ),
                             O::ConcatLeft => {
-                                VI::FvConcat(d, src.to_ref(s1_size), imm.to_ref(s2_size))
+                                VI::FvConcat(d, imm.to_ref(s2_size), src.to_ref(s1_size))
                             }
                             O::ConcatRight => {
                                 VI::FvConcat(d, src.to_ref(s1_size), imm.to_ref(s2_size))
@@ -260,7 +260,7 @@ pub fn lower_process_to_vm(
                                 imm,
                             ),
                             O::ConcatLeft => {
-                                VI::TvConcat(d, src.to_ref(s1_size), imm.to_ref(s2_size))
+                                VI::TvConcat(d, imm.to_ref(s2_size), src.to_ref(s1_size))
                             }
                             O::ConcatRight => {
                                 VI::TvConcat(d, src.to_ref(s1_size), imm.to_ref(s2_size))

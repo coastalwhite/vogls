@@ -410,8 +410,6 @@ impl Design {
             return Err("failed to lower".into());
         }
 
-        // Walk the modules in depth-first order and lower to IR.
-        // @TODO: Iterate over the modules instead.
         timers.start("lower");
         for key in ctx.table.symbol_id_iter() {
             let VSymbol::Module(m) = &ctx.table[key].content else {
@@ -419,10 +417,7 @@ impl Design {
             };
             let module_id = module_lut[&m.module];
             ctx.time_scale = module_id.time_scale;
-            let module_key = timers.timed(
-                ctx.arenas.ident_table[module_id.module_identifier.item.0].to_string(),
-                |_| lower_module_to_ir(module_id, &ctx, &mut mctx, key),
-            );
+            let module_key = lower_module_to_ir(module_id, &ctx, &mut mctx, key);
             error |= module_key.is_err();
         }
         timers.stop();
