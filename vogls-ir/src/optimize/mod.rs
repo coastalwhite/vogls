@@ -52,6 +52,10 @@ pub fn optimize_processes(gl: &mut GlobalContext, processes: &[ProcessKey], flag
     let mut scratch_dep = VgHashMap::default();
     let mut scratch_dep_edges = Vec::new();
     for &process in processes {
+        if !gl.processes.contains_key(process) {
+            continue;
+        }
+
         for _ in 0..flags.opt_rounds {
             if flags.constant_propagation {
                 constant_propagation::constant_propagation(
@@ -85,6 +89,14 @@ pub fn optimize_processes(gl: &mut GlobalContext, processes: &[ProcessKey], flag
                 );
             }
             remove_needles_branches(gl, process, &mut scratch_stack, &mut scratch_seen);
+
+            // Remove empty processes
+            {
+                let bb = &gl.bbs[gl.processes[process].entry];
+                if bb.instrs.is_empty() && matches!(bb.terminator, BasicBlockTerminator::Halt) {
+                    gl.processes.remove(process);
+                } 
+            }
         }
     }
 }

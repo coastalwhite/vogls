@@ -1,13 +1,14 @@
 use std::ops::Range;
 
 use slotmap::SlotMap;
-use vogls_bits::Bits;
+use vogls_bits::{Bits, VectorSize};
 use vogls_utils::{VgHashMap, VgHashSet};
 
 use crate::{
     BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryImmOpSimplification, BinaryOp,
-    GlobalContext, Instruction, ProcessKey, ResizeOp, ShiftImmOp, ShiftImmOpSimplification, Signal,
-    SignalKey, SliceImmSimplification, Time, Variable, VariableKey, simplify_slice_imm,
+    GlobalContext, Instruction, LogicMode, ProcessKey, ResizeOp, SCALAR_VSIZE, ShiftImmOp,
+    ShiftImmOpSimplification, Signal, SignalKey, SliceImmSimplification, Time, Variable,
+    VariableKey, simplify_slice_imm,
 };
 
 pub fn constant_propagation(
@@ -34,18 +35,60 @@ pub fn constant_propagation(
 ) {
     let entry = gl.processes[process].entry;
 
-    scratch_seen.clear();
-    scratch_stack.clear();
     scratch_map.clear();
     scratch_dep.clear();
     scratch_dep_edges.clear();
 
+    let mut is_temporal = false;
+
+    scratch_seen.clear();
+    scratch_stack.clear();
+    scratch_seen.insert(entry);
+    scratch_stack.push(entry);
+    while let Some(bb_key) = scratch_stack.pop() {
+        let bb = &mut gl.bbs[bb_key];
+        for i in bb.instrs.iter_mut() {
+            _ = constant_propagate_instruction(
+                i,
+                &mut gl.vars,
+                &mut gl.signals,
+                scratch_map,
+                gl.logic_mode,
+                true,
+            );
+        }
+
+        is_temporal |= !matches!(
+            bb.terminator,
+            BasicBlockTerminator::Halt
+                | BasicBlockTerminator::Jump(..)
+                | BasicBlockTerminator::Branch(..)
+        );
+
+        bb.terminator.for_each_bb(|bb_key| {
+            if scratch_seen.insert(bb_key) {
+                scratch_stack.push(bb_key);
+            }
+        });
+    }
+
+    scratch_seen.clear();
+    scratch_stack.clear();
     scratch_seen.insert(entry);
     scratch_stack.push(entry);
     while let Some(bb_key) = scratch_stack.pop() {
         let bb = &mut gl.bbs[bb_key];
         for (instr_i, i) in bb.instrs.iter_mut().enumerate() {
-            if constant_propagate_instruction(i, &gl.vars, &gl.signals, scratch_map).is_err() {
+            if constant_propagate_instruction(
+                i,
+                &mut gl.vars,
+                &mut gl.signals,
+                scratch_map,
+                gl.logic_mode,
+                is_temporal,
+            )
+            .is_err()
+            {
                 let dst = i.get_destination_variable().unwrap();
                 let offset = scratch_dep_edges.len();
                 i.for_each_src(|src| scratch_dep_edges.push(src));
@@ -79,9 +122,11 @@ pub fn constant_propagation(
                     StackItem::Previsit(range) => {
                         if constant_propagate_instruction(
                             &mut gl.bbs[bb_key].instrs[instr_i],
-                            &gl.vars,
-                            &gl.signals,
+                            &mut gl.vars,
+                            &mut gl.signals,
                             scratch_map,
+                            gl.logic_mode,
+                            is_temporal,
                         )
                         .is_ok()
                         {
@@ -112,9 +157,11 @@ pub fn constant_propagation(
                         assert!(
                             constant_propagate_instruction(
                                 &mut gl.bbs[bb_key].instrs[instr_i],
-                                &gl.vars,
-                                &gl.signals,
+                                &mut gl.vars,
+                                &mut gl.signals,
                                 scratch_map,
+                                gl.logic_mode,
+                                is_temporal
                             )
                             .is_ok()
                         );
@@ -232,15 +279,17 @@ pub fn constant_propagation(
 
 fn constant_propagate_instruction(
     i: &mut Instruction,
-    vars: &SlotMap<VariableKey, Variable>,
-    signals: &SlotMap<SignalKey, Signal>,
+    vars: &mut SlotMap<VariableKey, Variable>,
+    signals: &mut SlotMap<SignalKey, Signal>,
     scratch_map: &mut VgHashMap<VariableKey, Option<Bits>>,
+    logic_mode: LogicMode,
+    is_temporal: bool,
 ) -> Result<(), ()> {
     use Instruction as I;
 
     // Skip the instruction if it is already handled.
     if i.get_destination_variable()
-        .is_none_or(|dst| scratch_map.contains_key(&dst))
+        .is_some_and(|dst| scratch_map.contains_key(&dst))
     {
         return Ok(());
     }
@@ -542,7 +591,86 @@ fn constant_propagate_instruction(
             }
             scratch_map.insert(dst, None);
         }
-        I::Drive(..) => {}
+        I::Drive(dst, src, partial) => {
+            if is_temporal {
+                return Ok(());
+            }
+
+            let Some(Some(src)) = scratch_map.get(src) else {
+                return Ok(());
+            };
+
+            match partial {
+                None => signals[*dst].initialize = Some(src.clone()),
+                Some((offset, width)) => {
+                    let Some(Some(offset)) = scratch_map.get(offset) else {
+                        return Ok(());
+                    };
+
+                    let size = signals[*dst].size;
+                    let mut value = match signals[*dst].initialize.take() {
+                        None => match logic_mode {
+                            LogicMode::TwoValue => Bits::new_zeroed(size),
+                            LogicMode::FourValue => Bits::new_unknown(size),
+                        },
+                        Some(current) => current,
+                    };
+
+                    if offset.contains_special() {
+                        value = match logic_mode {
+                            LogicMode::TwoValue => Bits::new_zeroed(size),
+                            LogicMode::FourValue => Bits::new_unknown(size),
+                        };
+                    } else {
+                        let offset = offset.extract_exact_u32().unwrap();
+                        if offset < size.get() {
+                            let src = src.truncate(
+                                src.size()
+                                    .min(VectorSize::new(size.get() - offset).unwrap()),
+                            );
+
+                            if offset > 0 && offset + width.get() < size.get() {
+                                let ls = Bits::concatenate(
+                                    &value.slicez(
+                                        offset,
+                                        VectorSize::new(size.get() - width.get() - offset).unwrap(),
+                                    ),
+                                    &src,
+                                );
+                                value = Bits::concatenate(
+                                    &ls,
+                                    &value.truncate(VectorSize::new(offset).unwrap()),
+                                );
+                            } else if offset > 0 {
+                                value = Bits::concatenate(
+                                    &src,
+                                    &value.truncate(
+                                        VectorSize::new(size.get() - width.get()).unwrap(),
+                                    ),
+                                );
+                            } else if offset + width.get() < size.get() {
+                                value = Bits::concatenate(
+                                    &value.slicez(
+                                        offset,
+                                        VectorSize::new(size.get() - width.get()).unwrap(),
+                                    ),
+                                    &src,
+                                );
+                            } else {
+                                value = src;
+                            }
+                        }
+                    }
+
+                    signals[*dst].initialize = Some(value);
+                }
+            }
+
+            *i = I::Constant(
+                vars.insert(Variable { size: SCALAR_VSIZE }),
+                Bits::new_unknown(SCALAR_VSIZE),
+            );
+        }
         I::Phi(dst, srcs) => {
             assert!(!srcs.is_empty());
             let mut acc = None;
