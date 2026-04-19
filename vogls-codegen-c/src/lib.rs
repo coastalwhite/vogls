@@ -1523,6 +1523,18 @@ fn convert(
     }
 }
 
+pub fn lower_process_array(f: &mut impl io::Write, gl: &GlobalContext) -> io::Result<()> {
+    writeln!(
+        f,
+        "typedef int (*preserve_none_fn)(int, uint64_t*, struct schedule*, uint64_t, uint64_t*, uint64_t*, cold_context_t*) __attribute__((preserve_none));"
+    )?;
+    write!(f, "preserve_none_fn PROCS[{}] = {{", gl.processes.len(),)?;
+    for (i, process) in gl.processes.values().enumerate() {
+        writeln!(f, "{}, ", process_to_procedure_name(process, i))?;
+    }
+    writeln!(f, "}};")
+}
+
 pub fn lower_signal_drive_header(
     f: &mut impl io::Write,
     signal: SignalKey,
@@ -1602,36 +1614,6 @@ pub fn lower_signal_drive_fn(
         }
     }
 
-    writeln!(f, "}}")?;
-    Ok(())
-}
-
-pub fn lower_startup_function(f: &mut impl io::Write, gl: &GlobalContext) -> io::Result<()> {
-    f.write_all(
-        b"int startup(
-    uint64_t *heap,
-    schedule_t *schedule,
-    uint64_t time,
-    uint64_t *listening,
-    uint64_t *last_active_time,
-    cold_context_t *cldctx
-) {\n",
-    )?;
-    writeln!(f, "{INDENT}(void)heap;")?;
-    writeln!(f, "{INDENT}(void)schedule;")?;
-    writeln!(f, "{INDENT}(void)time;")?;
-    writeln!(f, "{INDENT}(void)listening;")?;
-    writeln!(f, "{INDENT}(void)last_active_time;")?;
-    writeln!(f)?;
-    writeln!(f, "{INDENT}int exit = 0;")?;
-    for (i, process) in gl.processes.values().enumerate() {
-        writeln!(
-            f,
-            "{INDENT}if ((exit = {}(0, heap, schedule, time, listening, last_active_time, cldctx)) != 0) return exit;",
-            process_to_procedure_name(process, i)
-        )?;
-    }
-    writeln!(f, "{INDENT}return 0;")?;
     writeln!(f, "}}")?;
     Ok(())
 }

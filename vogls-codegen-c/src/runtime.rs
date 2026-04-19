@@ -1,4 +1,4 @@
-use std::ffi::c_int;
+use std::ffi::{c_int, c_void};
 use std::io::{stderr, stdout};
 use std::ops::Deref as _;
 use std::path::Path;
@@ -6,7 +6,7 @@ use std::ptr::NonNull;
 
 use vogls_codegen::HeapRef;
 use vogls_ir::dyn_format_string::DynFormatString;
-use vogls_ir::{Bits, Mode, ReadMem, VectorSize};
+use vogls_ir::{Bits, GlobalContext, Mode, ReadMem, VectorSize};
 use vogls_runtime::plugins::{RuntimePlugin, RuntimePluginState};
 use vogls_runtime::{RtSignalKey, SimulationIo};
 use vogls_utils::TableKey;
@@ -41,14 +41,6 @@ impl ReturnValue {
     }
 }
 
-type StartupFn = extern "C" fn(
-    HeapPtr,
-    NonNull<ScheduleT>,
-    Time,
-    Listening,
-    LastActiveTime,
-    NonNull<ColdContextT>,
-) -> ReturnValue;
 type EmptyActiveEventQueueFn = extern "C" fn(
     HeapPtr,
     NonNull<ScheduleT>,
@@ -89,15 +81,7 @@ pub struct ColdContextT {
 #[repr(C)]
 #[derive(Debug, Clone)]
 pub struct EventT {
-    ptr: extern "C" fn(
-        StatePtr,
-        HeapPtr,
-        NonNull<ScheduleT>,
-        Time,
-        Listening,
-        LastActiveTime,
-        NonNull<ColdContextT>,
-    ) -> ReturnValue,
+    ptr: *const c_void,
     state: StatePtr,
 }
 
@@ -225,7 +209,6 @@ impl Schedule {
 pub struct CDesignState {
     schedule: Schedule,
     listening: Vec<u64>,
-    started: bool,
     pub runtime: vogls_runtime::RuntimeState,
     pub plugins: Vec<RuntimePluginState>,
 }
@@ -235,7 +218,6 @@ impl Clone for CDesignState {
         Self {
             schedule: self.schedule.clone(),
             listening: self.listening.clone(),
-            started: self.started,
             runtime: self.runtime.clone(),
             plugins: self.plugins.iter().map(|p| p.as_ref().clone()).collect(),
         }
@@ -249,25 +231,36 @@ pub struct CDesign {
     num_regions: u8,
 }
 
-impl CDesignState {
-    pub fn new(
+impl CDesign {
+    pub fn new_state(
+        &self,
         heap: vogls_codegen::Heap,
         num_listening: usize,
         num_regions: u8,
         lupdt_updated: &[bool],
-    ) -> Self {
+        gl: &GlobalContext,
+    ) -> CDesignState {
+        let procs = unsafe {
+            self.lib
+                .get::<*const *const std::ffi::c_void>("PROCS")
+                .unwrap()
+        };
+        let mut active_region = Vec::new();
+        active_region.extend((0..gl.processes.len()).map(|i| EventT {
+            ptr: unsafe { *procs.add(i) },
+            state: StatePtr(0),
+        }));
         let schedule = Schedule {
-            active_region: Vec::new(),
+            active_region,
             regions: std::iter::repeat_n(Vec::new(), num_regions.into()).collect(),
             future: Vec::new(),
             next_time: u64::MAX,
         };
         let listening = vec![0u64; num_listening.div_ceil(64)];
 
-        Self {
+        CDesignState {
             schedule,
             listening,
-            started: false,
             runtime: vogls_runtime::RuntimeState::new(heap, lupdt_updated),
             plugins: Vec::new(),
         }
@@ -363,58 +356,12 @@ impl CDesign {
         }
     }
 
-    pub fn start(&self, state: &mut CDesignState, io: &mut SimulationIo) -> Result<(), ()> {
-        if !state.started {
-            let startup = unsafe { self.lib.get::<StartupFn>("startup") }.unwrap();
-            let mut cldctx = ColdContextT {
-                fmt,
-                fmt_strs: self.dyn_fmt_strs.as_ptr(),
-
-                plugins: state.plugins.as_mut_ptr(),
-                plugin_poke_signal,
-
-                heap_len: state.runtime.heap.0.len(),
-                readmems: self.read_mems.as_ptr(),
-                readmem: read_mem,
-
-                icount: 0,
-
-                stdout: NonNull::from_mut(&mut io.stdout),
-                stderr: NonNull::from_mut(&mut io.stderr),
-            };
-            let return_value = state.schedule.with_t(|schedule| {
-                (startup.deref())(
-                    NonNull::new(state.runtime.heap.0.as_mut_ptr()),
-                    NonNull::new(schedule as *mut ScheduleT).unwrap(),
-                    0,
-                    NonNull::new(state.listening.as_mut_ptr()),
-                    NonNull::new(state.runtime.last_active_time.as_mut_ptr()),
-                    NonNull::new(&mut cldctx as *mut ColdContextT).unwrap(),
-                )
-            });
-
-            if return_value.should_exit() {
-                if return_value.is_ok() {
-                    return Ok(());
-                } else {
-                    return Err(());
-                }
-            }
-        }
-        state.started = true;
-        Ok(())
-    }
-
     pub fn run(
         &self,
         state: &mut CDesignState,
         io: &mut SimulationIo,
         max_time: u64,
     ) -> Result<(), ()> {
-        if !state.started {
-            self.start(state, io)?;
-        }
-
         let empty_active_event_queue_fn = unsafe {
             self.lib
                 .get::<EmptyActiveEventQueueFn>("empty_active_event_queue")

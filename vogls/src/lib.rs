@@ -8,7 +8,7 @@ pub use vogls_bits::format::{BitsFormatBase, BitsFormatOptions, BitsFormatWidth}
 use vogls_codegen::{HeapBuilder, HeapOffset, HeapRef};
 use vogls_codegen_c::runtime::{CDesign, CDesignState, SharedObjectContainer};
 use vogls_codegen_c::{
-    CLowerOptions, ListenerBuilder, StateBuilder, lower_signal_drive_fn, lower_signal_drive_header,
+    lower_process_array, lower_signal_drive_fn, lower_signal_drive_header, CLowerOptions, ListenerBuilder, StateBuilder
 };
 use vogls_frontend::ident_table::IdentId;
 use vogls_ir::optimize::OptFlags;
@@ -283,6 +283,8 @@ pub fn lower_to_shared_object(
         )?;
     }
 
+    lower_process_array(&mut out, gl)?;
+
     for signal in gl.signals.keys() {
         lower_signal_drive_fn(
             &mut out,
@@ -295,8 +297,6 @@ pub fn lower_to_shared_object(
             &lower_options,
         )?;
     }
-
-    vogls_codegen_c::lower_startup_function(&mut out, gl)?;
 
     let mut c_file = Vec::new();
     let mut tempdir = tempfile::TempDir::with_prefix("vogls")?;
@@ -364,16 +364,17 @@ pub fn lower_to_shared_object(
         }
     }
 
-    let mut initial_state = CDesignState::new(
-        heap,
-        listener_builder.top,
-        num_additional_regions,
-        &lupdt_updated,
-    );
     let design = CDesign::new(
         Box::new(SharedObject { code_path, tempdir }),
         state_builder,
         num_additional_regions,
+    );
+    let mut initial_state = design.new_state(
+        heap,
+        listener_builder.top,
+        num_additional_regions,
+        &lupdt_updated,
+        gl,
     );
     initial_state.plugins = plugins;
 
