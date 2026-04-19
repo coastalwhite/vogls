@@ -329,6 +329,25 @@ fn parse_process<'a>(
                             symbols.unresolved_vars.remove(&dst);
                         }
                     }
+                    I::Select(dst, _cond, lhs, rhs) => {
+                        let (dst, lhs, rhs) = (*dst, *lhs, *rhs);
+                        if !symbols.unresolved_vars.contains_key(&lhs)
+                            && !symbols.unresolved_vars.contains_key(&rhs)
+                        {
+                            let lhs_size = gl.vars[lhs].size;
+                            let rhs_size = gl.vars[rhs].size;
+                            if lhs_size != rhs_size {
+                                return Err(Box::new(ParseError {
+                                    at: c.offset,
+                                    error: format!(
+                                        "invalid size combination: {lhs_size}, {rhs_size}"
+                                    ),
+                                }));
+                            };
+                            gl.vars[dst].size = lhs_size;
+                            symbols.unresolved_vars.remove(&dst);
+                        }
+                    }
                     I::BinaryImm(dst, op, lhs, rhs) => {
                         let (dst, lhs) = (*dst, *lhs);
                         if !symbols.unresolved_vars.contains_key(&lhs) {

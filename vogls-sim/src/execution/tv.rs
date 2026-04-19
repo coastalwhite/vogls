@@ -1,3 +1,4 @@
+use vogls_bits::arithmetic::FvLogicValue;
 use vogls_ir::{ResizeOp, SCALAR_VSIZE, UnaryOp, VectorSize};
 
 use crate::{
@@ -407,4 +408,21 @@ pub(crate) fn exec_tv_concat(stack: &mut Heap, dst: HeapOffset, lhs: HeapRef, rh
         }
         vogls_bits::concat::tv_concat(dst, lhs_slice, rhs_slice, lhs_size, rhs_size);
     }
+}
+
+pub(crate) fn exec_tv_select(
+    heap: &mut Heap,
+    dst: HeapRef,
+    cond: HeapOffset,
+    truthy: HeapOffset,
+    falsy: HeapOffset,
+    cond_is_fv: bool,
+) {
+    let src = if (cond_is_fv && heap.get_fv_item(cond) == FvLogicValue::L1) || (!cond_is_fv && heap.get_tv_bool(cond)) {
+        truthy
+    } else {
+        falsy
+    };
+
+    heap.tv_copy(dst.size, dst.offset, src)
 }

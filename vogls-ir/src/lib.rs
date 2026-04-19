@@ -473,6 +473,8 @@ pub enum Instruction {
     SliceImm(VariableKey, VariableKey, u32),
     ShiftImm(VariableKey, ShiftImmOp, VariableKey, u32),
 
+    Select(VariableKey, VariableKey, VariableKey, VariableKey),
+
     Intrinsic(VariableKey, Box<IntrinsicOp>, Box<[VariableKey]>),
     /// Store the 64-bit simulation time when a signal was last updated.
     LastUpdateTime(VariableKey, SignalKey),
@@ -494,6 +496,7 @@ impl Instruction {
             | Self::Slice(dst, _, _)
             | Self::SliceImm(dst, _, _)
             | Self::ShiftImm(dst, _, _, _)
+            | Self::Select(dst, _, _, _)
             | Self::Phi(dst, _)
             | Self::LastUpdateTime(dst, _)
             | Self::Probe(dst, _, _)
@@ -513,44 +516,13 @@ impl Instruction {
             | Self::Slice(dst, _, _)
             | Self::SliceImm(dst, _, _)
             | Self::ShiftImm(dst, _, _, _)
+            | Self::Select(dst, _, _, _)
             | Self::Phi(dst, _)
             | Self::LastUpdateTime(dst, _)
             | Self::Probe(dst, _, _)
             | Self::ProbeSlice(dst, _, _)
             | Self::Intrinsic(dst, _, _) => Some(dst),
             Self::Drive(..) => None,
-        }
-    }
-
-    pub fn for_each_var_src(&self, mut f: impl FnMut(VariableKey)) {
-        match self {
-            Self::Unary(_, _, src)
-            | Self::Resize(_, _, src)
-            | Self::BinaryImm(_, _, src, _)
-            | Self::SliceImm(_, src, _)
-            | Self::ShiftImm(_, _, src, _)
-            | Self::ProbeSlice(_, _, src) => f(*src),
-            Self::Binary(_, _, src1, src2) | Self::Slice(_, src1, src2) => {
-                f(*src1);
-                f(*src2);
-            }
-            Self::Phi(_, srcs) => {
-                for (_, s) in srcs {
-                    f(*s);
-                }
-            }
-            Self::Intrinsic(_, _, srcs) => {
-                for s in srcs {
-                    f(*s);
-                }
-            }
-            Self::Drive(_, src, partial) => {
-                f(*src);
-                if let Some((off, _)) = partial {
-                    f(*off);
-                }
-            }
-            Self::Constant(_, _) | Self::LastUpdateTime(_, _) | Self::Probe(..) => {}
         }
     }
 
@@ -564,6 +536,7 @@ impl Instruction {
             | Self::Slice(_, _, _)
             | Self::SliceImm(_, _, _)
             | Self::ShiftImm(_, _, _, _)
+            | Self::Select(..)
             | Self::Phi(..)
             | Self::LastUpdateTime(..)
             | Self::Probe(..)
@@ -606,6 +579,12 @@ impl Instruction {
                     *off = f(*off);
                 }
             }
+            Self::Select(dst, cond, truthy, falsy) => {
+                *dst = f(*dst);
+                *cond = f(*cond);
+                *truthy = f(*truthy);
+                *falsy = f(*falsy);
+            }
             Self::Constant(dst, _) | Self::Probe(dst, _, _) | Self::LastUpdateTime(dst, _) => {
                 *dst = f(*dst);
             }
@@ -645,6 +624,12 @@ impl Instruction {
                     f(*off);
                 }
             }
+            Self::Select(dst, cond, truthy, falsy) => {
+                f(*dst);
+                f(*cond);
+                f(*truthy);
+                f(*falsy);
+            }
             Self::Constant(dst, _) | Self::LastUpdateTime(dst, _) | Self::Probe(dst, _, _) => {
                 f(*dst);
             }
@@ -679,6 +664,11 @@ impl Instruction {
                     f(*off);
                 }
             }
+            Self::Select(_, cond, truthy, falsy) => {
+                f(*cond);
+                f(*truthy);
+                f(*falsy);
+            }
             Self::Constant(_, _) | Self::LastUpdateTime(_, _) | Self::Probe(_, _, _) => {}
         }
     }
@@ -697,6 +687,7 @@ impl Instruction {
             | Instruction::Slice(..)
             | Instruction::SliceImm(..)
             | Instruction::ShiftImm(..)
+            | Instruction::Select(..)
             | Instruction::Intrinsic(..)
             | Instruction::Phi(..) => {}
         }
@@ -712,6 +703,7 @@ impl Instruction {
             | Instruction::Slice(..)
             | Instruction::SliceImm(..)
             | Instruction::ShiftImm(..)
+            | Instruction::Select(..)
             | Instruction::Intrinsic(..)
             | Instruction::Probe(..)
             | Instruction::ProbeSlice(..)
@@ -732,6 +724,7 @@ impl Instruction {
             | Instruction::Slice(..)
             | Instruction::SliceImm(..)
             | Instruction::ShiftImm(..)
+            | Instruction::Select(..)
             | Instruction::Intrinsic(..)
             | Instruction::Phi(..)
             | Instruction::Probe(..)

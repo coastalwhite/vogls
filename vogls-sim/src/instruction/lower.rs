@@ -364,6 +364,25 @@ pub fn lower_process_to_vm(
                         }
                     }
                 }
+                I::Select(dst, cond, truthy, falsy) => {
+                    use LogicMode as M;
+
+                    let dst_mode = var_mode[dst];
+                    let size = gl.vars[*dst].size;
+                    let cond_mode = var_mode[cond];
+                    let truthy_mode = var_mode[truthy];
+                    let falsy_mode = var_mode[truthy];
+                    let d = var!(*dst);
+                    let c = var!(*cond);
+                    let t = var!(*truthy, (dst_mode, truthy_mode, size));
+                    let f = var!(*falsy, (dst_mode, falsy_mode, size));
+
+                    if dst_mode == M::FourValue {
+                        VI::FvSelect(d.to_ref(size), c, t, f, cond_mode == M::FourValue)
+                    } else {
+                        VI::TvSelect(d.to_ref(size), c, t, f, cond_mode == M::FourValue)
+                    }
+                }
                 I::Binary(d, op, s1, s2) => {
                     use LogicMode as M;
 

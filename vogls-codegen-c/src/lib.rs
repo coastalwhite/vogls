@@ -22,6 +22,7 @@ pub mod runtime;
 mod binary;
 mod drive;
 mod resize;
+mod select;
 mod slice;
 mod unary;
 
@@ -736,6 +737,66 @@ pub fn lower_process(
                             binary::cgc_asr(&mut buffer, dst_t, src_t.into(), imm)?
                         }
                     }
+
+                    if temporal_variables.contains(dst) {
+                        store(&mut buffer, heap_map[dst], dst_t)?;
+                    }
+                }
+                I::Select(dst, cond, truthy, falsy) => {
+                    let size = gl.vars[*dst].size;
+                    let (mcond, mtruthy, mfalsy, mdst) = (
+                        var_mode[cond],
+                        var_mode[truthy],
+                        var_mode[falsy],
+                        var_mode[dst],
+                    );
+
+                    let cond_t = temp_map[&(*cond, mcond)];
+                    if temporal_variables.contains(cond) {
+                        load(&mut buffer, heap_map[cond], cond_t)?;
+                    }
+
+                    let mut truthy_t = temp_map[&(*truthy, mtruthy)];
+                    if temporal_variables.contains(truthy) {
+                        load(&mut buffer, heap_map[truthy], truthy_t)?;
+                    }
+                    if mdst != mtruthy {
+                        let unconverted_t = truthy_t;
+                        truthy_t = temp_map[&(*truthy, mdst)];
+                        convert(
+                            &mut buffer,
+                            size,
+                            mdst,
+                            mtruthy,
+                            truthy_t.ident,
+                            unconverted_t.ident,
+                        )?;
+                    }
+                    let mut falsy_t = temp_map[&(*falsy, mfalsy)];
+                    if temporal_variables.contains(falsy) {
+                        load(&mut buffer, heap_map[falsy], falsy_t)?;
+                    }
+                    if mdst != mfalsy {
+                        let unconverted_t = falsy_t;
+                        falsy_t = temp_map[&(*falsy, mdst)];
+                        convert(
+                            &mut buffer,
+                            size,
+                            mdst,
+                            mfalsy,
+                            falsy_t.ident,
+                            unconverted_t.ident,
+                        )?;
+                    }
+
+                    let dst_t = temp_map[&(*dst, mdst)];
+                    select::cgc_select(
+                        &mut buffer,
+                        dst_t,
+                        cond_t.into(),
+                        truthy_t.into(),
+                        falsy_t.into(),
+                    )?;
 
                     if temporal_variables.contains(dst) {
                         store(&mut buffer, heap_map[dst], dst_t)?;

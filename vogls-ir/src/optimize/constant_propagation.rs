@@ -562,6 +562,45 @@ fn constant_propagate_instruction(
                 }
             }
         }
+        I::Select(dst, cond, truthy, falsy) => {
+            let cond_bits = scratch_map.get(cond).ok_or(())?;
+            let truthy_bits = scratch_map.get(truthy).ok_or(())?;
+            let falsy_bits = scratch_map.get(falsy).ok_or(())?;
+
+            let (dst, truthy, falsy) = (*dst, *truthy, *falsy);
+
+            if let Some(bits) = truthy_bits
+                && truthy_bits == falsy_bits
+            {
+                let bits = bits.clone();
+                scratch_map.insert(dst, Some(bits.clone()));
+                *i = I::Constant(dst, bits);
+                return Ok(());
+            }
+
+            match cond_bits.as_ref() {
+                None => _ = scratch_map.insert(dst, None),
+                Some(b) => {
+                    let (src, bits) = if b.is_one() {
+                        (truthy, truthy_bits)
+                    } else {
+                        (falsy, falsy_bits)
+                    };
+
+                    match bits {
+                        None => {
+                            scratch_map.insert(dst, None);
+                            *i = I::Resize(dst, ResizeOp::Truncate, src);
+                        }
+                        Some(bits) => {
+                        let bits = bits.clone();
+                            scratch_map.insert(dst, Some(bits.clone()));
+                            *i = I::Constant(dst, bits);
+                        }
+                    }
+                }
+            }
+        }
         I::Intrinsic(dst, ..) | I::LastUpdateTime(dst, ..) => {
             scratch_map.insert(*dst, None);
         }

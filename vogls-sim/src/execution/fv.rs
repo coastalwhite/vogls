@@ -547,3 +547,22 @@ pub(crate) fn exec_fv_concat(stack: &mut Heap, dst: HeapOffset, lhs: HeapRef, rh
         fv_s_concat(d, l, r, lhs.size, rhs.size);
     }
 }
+
+pub(crate) fn exec_fv_select(
+    heap: &mut Heap,
+    dst: HeapRef,
+    cond: HeapOffset,
+    truthy: HeapOffset,
+    falsy: HeapOffset,
+    cond_is_fv: bool,
+) {
+    let src = if (cond_is_fv && heap.get_fv_item(cond) == FvLogicValue::L1)
+        || (!cond_is_fv && heap.get_tv_bool(cond))
+    {
+        truthy
+    } else {
+        falsy
+    };
+
+    heap.fv_copy(dst.size, dst.offset, src)
+}

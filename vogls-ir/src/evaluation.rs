@@ -70,6 +70,14 @@ fn evaluate_impl(
                 let bits = op.evaluate(src, *amount);
                 _ = variables.insert(*dst, bits);
             }
+            I::Select(dst, cond, truthy, falsy) => {
+                let bits = if variables[cond].is_one() {
+                    variables[truthy].clone()
+                } else {
+                    variables[falsy].clone()
+                };
+                _ = variables.insert(*dst, bits);
+            }
             I::Intrinsic(_, _, _) => todo!(),
             I::LastUpdateTime(_, _) => todo!(),
             I::Probe(dst, src_signal, offset) => {

@@ -38,6 +38,7 @@ enum CSExpr {
     Slice(VectorSize, ExprKey, ExprKey),
     BinaryImm(BinaryImmOp, ExprKey, Bits),
     ShiftImm(ShiftImmOp, ExprKey, u32),
+    Select(ExprKey, ExprKey, ExprKey),
     SliceImm(VectorSize, ExprKey, u32),
     Probe(SignalKey, VectorSize, u32),
     ProbeSlice(SignalKey, VectorSize, ExprKey),

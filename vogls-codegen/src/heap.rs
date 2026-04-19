@@ -436,4 +436,26 @@ impl Heap {
             self.get_mut_u64_slice(dst.offset, nwords).fill(0u64);
         }
     }
+
+    pub fn tv_copy(&mut self, size: VectorSize, dst: HeapOffset, src: HeapOffset) {
+        if size < Heap::TV_U64_MIN_SIZE {
+            let value = self.get_tv_u64(src.to_ref(size));
+            self.set_tv_u64(dst.to_ref(size), value);
+        } else {
+            let nwords = size.get().div_ceil(64) as usize;
+            let (dst, src) = self.get_disjoint_u64_dst_src((dst, nwords), (src, nwords));
+            dst.copy_from_slice(src);
+        }
+    }
+
+    pub fn fv_copy(&mut self, size: VectorSize, dst: HeapOffset, src: HeapOffset) {
+        if size < Heap::FV_U64_MIN_SIZE {
+            let (spc, val) = self.get_fv_u64(src.to_ref(size));
+            self.set_fv_u64(dst.to_ref(size), spc, val);
+        } else {
+            let nwords = 2 * (size.get().div_ceil(64) as usize);
+            let (dst, src) = self.get_disjoint_u64_dst_src((dst, nwords), (src, nwords));
+            dst.copy_from_slice(src);
+        }
+    }
 }

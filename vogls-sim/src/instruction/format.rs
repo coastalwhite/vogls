@@ -80,6 +80,9 @@ impl fmt::Display for VmInstruction {
             Self::TvConcat(dst, src1, src2) => {
                 write!(f, "{dst} = tv.concat {}, {}", src1.offset, src2.offset)
             }
+            Self::TvSelect(dst, cond, truthy, falsy, _) => {
+                write!(f, "{} = tv.select {cond}, {truthy}, {falsy}", dst.offset)
+            }
 
             Self::FvUnary(dst, op, src) => {
                 write!(
@@ -159,6 +162,9 @@ impl fmt::Display for VmInstruction {
             Self::FvConcat(dst, src1, src2) => {
                 write!(f, "{dst} = fv.concat {}, {}", src1.offset, src2.offset)
             }
+            Self::FvSelect(dst, cond, truthy, falsy, _) => {
+                write!(f, "{} = fv.select {cond}, {truthy}, {falsy}", dst.offset)
+            }
 
             Self::TvToFv(dst, src) => {
                 write!(f, "{} = tv2fv {src}", dst.offset)
@@ -236,6 +242,7 @@ impl fmt::Display for VmProcess {
                 | I::TvSlice(..)
                 | I::TvSliceImm(..)
                 | I::TvConcat(..)
+                | I::TvSelect(..)
                 | I::FvUnary(..)
                 | I::FvResize(..)
                 | I::FvBinaryArithmetic(..)
@@ -246,6 +253,7 @@ impl fmt::Display for VmProcess {
                 | I::FvSlice(..)
                 | I::FvSliceImm(..)
                 | I::FvConcat(..)
+                | I::FvSelect(..)
                 | I::TvToFv(..)
                 | I::FvToTv(..)
                 | I::Intrinsic(..)

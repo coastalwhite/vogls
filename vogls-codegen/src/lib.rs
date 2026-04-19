@@ -172,6 +172,40 @@ pub fn resolve_var_logic_mode_map(
                         }
                     }
                 }
+                I::Select(dst, _cond, truthy, falsy) => {
+                    let m1 = var_mode.get(truthy).copied();
+                    let m2 = var_mode.get(falsy).copied();
+
+                    use LogicMode as M;
+                    match (m1, m2) {
+                        (Some(M::TwoValue), Some(M::TwoValue)) => {
+                            _ = var_mode.insert(*dst, M::TwoValue)
+                        }
+                        (Some(M::FourValue), _) | (_, Some(M::FourValue)) => {
+                            _ = var_mode.insert(*dst, M::FourValue)
+                        }
+                        _ => {}
+                    }
+
+                    match (m1, m2) {
+                        (Some(M::TwoValue), Some(M::TwoValue))
+                        | (Some(M::FourValue), Some(M::FourValue)) => {}
+
+                        (Some(M::FourValue), None) => {
+                            maybe_mark_conv_later.push((*falsy, M::FourValue))
+                        }
+                        (Some(M::FourValue), Some(M::TwoValue)) => _ = mark_conv!(*falsy),
+                        (None, Some(M::FourValue)) => {
+                            maybe_mark_conv_later.push((*truthy, M::FourValue))
+                        }
+                        (Some(M::TwoValue), Some(M::FourValue)) => _ = mark_conv!(*truthy),
+
+                        (None, _) | (_, None) => {
+                            graph_offsets.insert(*dst, graph_inputs.len()..graph_inputs.len() + 2);
+                            graph_inputs.extend([*truthy, *falsy]);
+                        }
+                    }
+                },
                 I::Intrinsic(dst, _, _) => _ = var_mode.insert(*dst, LogicMode::TwoValue),
                 I::LastUpdateTime(dst, _) => _ = var_mode.insert(*dst, LogicMode::TwoValue),
                 I::Probe(dst, _, _) => {

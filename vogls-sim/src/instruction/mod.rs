@@ -71,7 +71,6 @@ pub struct SliceFlags {
     pub offset_is_fv: bool,
 }
 
-
 #[derive(Clone, Debug)]
 pub enum VmInstruction {
     Constant(HeapOffset, Bits),
@@ -86,6 +85,7 @@ pub enum VmInstruction {
     TvSlice(HeapRef, HeapRef, HeapOffset, SliceFlags),
     TvSliceImm(HeapRef, HeapRef, u32),
     TvConcat(HeapOffset, HeapRef, HeapRef),
+    TvSelect(HeapRef, HeapOffset, HeapOffset, HeapOffset, bool),
 
     FvUnary(HeapOffset, UnaryOp, HeapRef),
     FvResize(HeapRef, ResizeOp, HeapRef),
@@ -97,6 +97,7 @@ pub enum VmInstruction {
     FvSlice(HeapRef, HeapRef, HeapOffset, SliceFlags),
     FvSliceImm(HeapRef, HeapRef, u32),
     FvConcat(HeapOffset, HeapRef, HeapRef),
+    FvSelect(HeapRef, HeapOffset, HeapOffset, HeapOffset, bool),
 
     TvToFv(HeapRef, HeapOffset),
     FvToTv(HeapRef, HeapOffset),
@@ -169,6 +170,12 @@ impl VmInstruction {
                 ("lhs", false, *lhs),
                 ("rhs", false, *rhs),
             ],
+            I::TvSelect(dst, cond, truthy, falsy, cond_is_fv) => &[
+                ("dst", false, *dst),
+                ("cond", *cond_is_fv, cond.to_scalar_ref()),
+                ("truthy", false, truthy.to_ref(dst.size)),
+                ("falsy", false, falsy.to_ref(dst.size)),
+            ],
             I::FvUnary(dst, op, src) => match op {
                 UnaryOp::Neg => &[("dst", true, dst.to_ref(src.size)), ("src", true, *src)],
                 UnaryOp::ReduceOr | UnaryOp::ReduceAnd | UnaryOp::ReduceXor => {
@@ -220,6 +227,12 @@ impl VmInstruction {
                 ),
                 ("lhs", true, *lhs),
                 ("rhs", true, *rhs),
+            ],
+            I::FvSelect(dst, cond, truthy, falsy, cond_is_fv) => &[
+                ("dst", true, *dst),
+                ("cond", *cond_is_fv, cond.to_scalar_ref()),
+                ("truthy", true, truthy.to_ref(dst.size)),
+                ("falsy", true, falsy.to_ref(dst.size)),
             ],
             I::TvToFv(dst, src) => &[("dst", true, *dst), ("src", false, src.to_ref(dst.size))],
             I::FvToTv(dst, src) => &[("dst", false, *dst), ("src", true, src.to_ref(dst.size))],

@@ -1208,11 +1208,9 @@ impl BasicBlockBuilder {
         let size = gl.vars[truthy].size;
         assert_eq!(size, gl.vars[falsy].size);
         assert_eq!(SCALAR_VSIZE, gl.vars[select].size);
-        let mask = self.sign_extend(gl, select, size);
-        let mask_inv = self.binary_neg(gl, mask);
-        let truthy = self.and(gl, mask, truthy);
-        let falsy = self.and(gl, mask_inv, falsy);
-        self.or(gl, truthy, falsy)
+        let dst = self.next_tmp_var(gl, size);
+        self.instrs.push(Instruction::Select(dst, select, truthy, falsy));
+        dst
     }
 
     pub fn posedge(

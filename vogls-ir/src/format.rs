@@ -334,6 +334,16 @@ impl ContextFormat for Instruction {
                     src.display(ctx)
                 )?;
             }
+            Self::Select(dst, cond, truthy, falsy) => {
+                write!(
+                    f,
+                    "{} = select {}, {}, {}",
+                    dst.display(ctx),
+                    cond.display(ctx),
+                    truthy.display(ctx),
+                    falsy.display(ctx),
+                )?;
+            }
             Self::Intrinsic(dst, op, args) => {
                 dst.ctx_fmt(f, ctx)?;
                 f.write_str(" = ")?;

@@ -1,7 +1,9 @@
 use vogls_utils::{Table, VgHashMap, VgHashSet};
 
 use crate::optimize::{CSExpr, ExprKey, remap_vars};
-use crate::{BasicBlockKey, GlobalContext, Instruction, ProcessKey, ResizeOp, VariableKey};
+use crate::{
+    BasicBlockKey, GlobalContext, Instruction, ProcessKey, ResizeOp, UnaryOp, VariableKey,
+};
 
 pub fn peephole(
     gl: &mut GlobalContext,
@@ -81,7 +83,6 @@ pub fn peephole(
                                 _ => {}
                             }
                         }
-
                     }
                     I::SliceImm(dst, src, offset) => {
                         if let Some(csexpr) = var_lookup.get(src) {
@@ -104,6 +105,19 @@ pub fn peephole(
                         }
                     }
                     I::ShiftImm(..) => {}
+                    I::Select(dst, cond, truthy, falsy) => {
+                        if let (Some(truthy_ek), Some(falsy_ek)) =
+                            (var_lookup.get(truthy), var_lookup.get(falsy))
+                            && *truthy_ek == *falsy_ek
+                        {
+                            _ = var_remap.insert(*dst, *truthy);
+                        } else if let Some(cond_ek) = var_lookup.get(cond)
+                            && let CSExpr::Unary(UnaryOp::Neg, src_ek) = &exprs[*cond_ek].1
+                        {
+                            *i = I::Select(*dst, exprs[*src_ek].0, *falsy, *truthy);
+                            was_changed = true;
+                        }
+                    }
                     I::Intrinsic(..) => {}
                     I::LastUpdateTime(..) => {}
                     I::Probe(..) => {}
@@ -142,6 +156,10 @@ pub fn peephole(
                 I::ShiftImm(dst, op, src, amount) => {
                     (*dst, CSExpr::ShiftImm(*op, try_lookup!(src), *amount))
                 }
+                I::Select(dst, cond, truthy, falsy) => (
+                    *dst,
+                    CSExpr::Select(try_lookup!(cond), try_lookup!(truthy), try_lookup!(falsy)),
+                ),
                 I::Intrinsic(..) => continue,
                 I::LastUpdateTime(dst, signal) => (*dst, CSExpr::LastUpdateTime(*signal)),
                 I::Probe(dst, signal, offset) => {

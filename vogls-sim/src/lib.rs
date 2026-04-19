@@ -393,6 +393,16 @@ impl Simulation {
                     I::TvConcat(dst, lhs, rhs) => {
                         execution::tv::exec_tv_concat(&mut state.runtime.heap, *dst, *lhs, *rhs)
                     }
+                    I::TvSelect(dst, cond, truthy, falsy, cond_is_fv) => {
+                        execution::tv::exec_tv_select(
+                            &mut state.runtime.heap,
+                            *dst,
+                            *cond,
+                            *truthy,
+                            *falsy,
+                            *cond_is_fv,
+                        )
+                    }
 
                     I::FvUnary(dst, op, src) => {
                         execution::fv::exec_fv_unary(&mut state.runtime.heap, *dst, *op, *src)
@@ -447,6 +457,16 @@ impl Simulation {
                     ),
                     I::FvConcat(dst, lhs, rhs) => {
                         execution::fv::exec_fv_concat(&mut state.runtime.heap, *dst, *lhs, *rhs)
+                    }
+                    I::FvSelect(dst, cond, truthy, falsy, cond_is_fv) => {
+                        execution::fv::exec_fv_select(
+                            &mut state.runtime.heap,
+                            *dst,
+                            *cond,
+                            *truthy,
+                            *falsy,
+                            *cond_is_fv,
+                        )
                     }
 
                     I::TvToFv(dst, src) => {

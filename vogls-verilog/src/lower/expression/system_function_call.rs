@@ -1,7 +1,8 @@
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::dyn_format_string::{DynFormatArgument, DynFormatString};
 use vogls_ir::{
-    BasicBlockBuilder, Bits, INTEGER_VSIZE, IntrinsicOp, TIME_VSIZE, VariableKey, VectorSize,
+    BasicBlockBuilder, Bits, INTEGER_VSIZE, IntrinsicOp, SCALAR_VSIZE, TIME_VSIZE, VariableKey,
+    VectorSize,
 };
 
 use crate::ast::expr::Expr;
@@ -119,6 +120,28 @@ pub fn lower_system_function_call<'a>(
             let e = builder.max(mctx.gl(), l, r);
             Ok((e, ty))
         }
+        "vogls_select" => {
+            ensure_num_args_equal!(3);
+            let (cond, cond_ty) = arguments[2].ok_or(())?;
+            let (truthy, truthy_ty) = arguments[1].ok_or(())?;
+            let (falsy, falsy_ty) = arguments[0].ok_or(())?;
+
+            if cond_ty.force_net_width() != SCALAR_VSIZE {
+                mctx.diagnostics.not_yet_implemented(
+                    arenas.get_span(expr),
+                    "select condition has to be scalar",
+                );
+                return Err(());
+            }
+
+            let ty = coerce_to_max_size_ty(truthy_ty, falsy_ty);
+            let truthy =
+                sign_or_zero_extend(mctx.gl(), builder, truthy, truthy_ty, ty.force_net_width());
+            let falsy =
+                sign_or_zero_extend(mctx.gl(), builder, falsy, falsy_ty, ty.force_net_width());
+            let e = builder.select(mctx.gl(), cond, truthy, falsy);
+            Ok((e, ty))
+        }
 
         _ => {
             mctx.diagnostics
@@ -182,6 +205,20 @@ pub fn get_system_function_call_output_ty<'a>(
             ensure_num_args_equal!(2);
             let l_ty = arguments[1].ok_or(())?;
             let r_ty = arguments[0].ok_or(())?;
+            Ok(coerce_to_max_size_ty(l_ty, r_ty))
+        }
+        "vogls_select" => {
+            ensure_num_args_equal!(3);
+            let cond_ty = arguments[2].ok_or(())?;
+            let l_ty = arguments[1].ok_or(())?;
+            let r_ty = arguments[0].ok_or(())?;
+            if cond_ty.force_net_width() != SCALAR_VSIZE {
+                diagnostics.not_yet_implemented(
+                    arenas.get_span(expr),
+                    "select condition has to be scalar",
+                );
+                return Err(());
+            }
             Ok(coerce_to_max_size_ty(l_ty, r_ty))
         }
 
