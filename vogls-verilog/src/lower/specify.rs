@@ -775,7 +775,7 @@ pub fn lower_specify<'a>(
 
             for (input, paths) in &specify.paths {
                 let lupdt = builder.lupdt(mctx.gl(), *input);
-                let is_active = builder.equals(mctx.gl(), lupdt, active_time);
+                let is_active = builder.case_equals(mctx.gl(), lupdt, active_time);
 
                 let start_bb = builder.key();
                 builder = builder.next_terminate_later(mctx.gl());
