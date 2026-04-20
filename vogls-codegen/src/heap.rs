@@ -380,7 +380,13 @@ impl Heap {
                 fv_set_no_special(target, dst.size);
                 target[items.len()..].copy_from_slice(items);
             }
-            (BitsDataRef::SeparateFv(..), LogicMode::TwoValue) => unreachable!(),
+            (BitsDataRef::SeparateFv(items), LogicMode::TwoValue) => {
+                if value.contains_special() {
+                    unreachable!()
+                }
+                self.get_mut_u64_slice(dst.offset, items.len() / 2)
+                    .copy_from_slice(&items[items.len() / 2..]);
+            }
         }
     }
 
