@@ -1,10 +1,10 @@
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{INTEGER_VSIZE, SCALAR_VSIZE, SignalSlice, VectorSize};
 
-use crate::ast::AstId;
 use crate::ast::constant_expr::ConstantRangeExpression;
 use crate::ast::expr::{BitSlice, Expr};
 use crate::ast::module::NetAssignment;
+use crate::ast::{AstId, AstIdRange, HIdent};
 use crate::elaborate::VSymbol;
 use crate::lower::{Edge, hident_span, try_resolve_net, try_resolve_symbol_id};
 
@@ -157,24 +157,32 @@ pub fn try_lower_fuse_driver_expr<'a>(
 ) -> Result<bool, ()> {
     // @TODO: This could also allow for `Concat` and `Replication`.
 
-    let Expr::Ident(ident, exprs, range_expr) = &*expr else {
-        return Ok(false);
-    };
+    match &*expr {
+        Expr::Ident(ident, exprs, range_expr) => {
+            try_lower_fuse_driver_ident(ctx, mctx, scope, expr, *ident, *exprs, *range_expr)
+        }
+        _ => return Ok(false),
+    }
+}
 
-    let symbol_id = try_resolve_symbol_id(
-        scope,
-        &ctx.table,
-        &ctx.arenas,
-        *ident,
-        &mut mctx.diagnostics,
-    )?;
+pub fn try_lower_fuse_driver_ident<'a>(
+    ctx: &LowerContext<'a>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
+    expr: AstId<'a, Expr<'a>>,
+    ident: HIdent<'_>,
+    exprs: AstIdRange<'_, Expr>,
+    range_expr: Option<BitSlice<'_>>,
+) -> Result<bool, ()> {
+    let symbol_id =
+        try_resolve_symbol_id(scope, &ctx.table, &ctx.arenas, ident, &mut mctx.diagnostics)?;
     let net = match &ctx.table[symbol_id].content {
         VSymbol::Parameter(_) => return Ok(false),
         VSymbol::Net(n) => n,
 
         _ => {
             mctx.diagnostics.not_yet_implemented(
-                hident_span(&ctx.arenas, *ident),
+                hident_span(&ctx.arenas, ident),
                 "cannot assign net to this.",
             );
             return Err(());
@@ -251,7 +259,7 @@ pub fn try_lower_fuse_driver_expr<'a>(
         return Ok(false);
     };
     if let Some(range_expr) = range_expr {
-        let Some(slice) = try_constant_bitslice(ctx, mctx, scope, *range_expr)? else {
+        let Some(slice) = try_constant_bitslice(ctx, mctx, scope, range_expr)? else {
             return Ok(false);
         };
 
