@@ -417,6 +417,15 @@ impl CDesign {
                     plugin.timestep(&mut state.runtime);
                 }
 
+                if schedule.future.length == 0 {
+                    return ReturnValue::CONTINUE;
+                }
+
+                if schedule.next_time.wrapping_add(1) < state.runtime.time {
+                    eprintln!("Time overflow!");
+                    return ReturnValue::STOP;
+                }
+
                 if schedule.next_time > max_time {
                     state.runtime.time = max_time;
                     break ReturnValue::CONTINUE;
@@ -424,10 +433,6 @@ impl CDesign {
 
                 let mut active: Vec<_> = std::mem::take(&mut schedule.active_region).into();
                 let mut future: Vec<_> = std::mem::take(&mut schedule.future).into();
-
-                if schedule.next_time == Time::MAX {
-                    return ReturnValue::CONTINUE;
-                }
 
                 state.runtime.time = schedule.next_time;
                 let mut next_time = Time::MAX;

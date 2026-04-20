@@ -96,6 +96,7 @@ pub fn optimize_processes(gl: &mut GlobalContext, processes: &[ProcessKey], flag
                 let bb = &gl.bbs[gl.processes[process].entry];
                 if bb.instrs.is_empty() && matches!(bb.terminator, BasicBlockTerminator::Halt) {
                     gl.processes.remove(process);
+                    break;
                 } 
             }
         }

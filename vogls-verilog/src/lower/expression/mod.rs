@@ -1,7 +1,6 @@
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{
-    BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, INTEGER_VSIZE, SignalKey,
-    VariableKey, VectorSize,
+    BasicBlockBuilder, Bits, GlobalContext, INTEGER_VSIZE, SignalKey, VariableKey, VectorSize,
 };
 use vogls_utils::OrderedSet;
 
@@ -350,92 +349,69 @@ pub fn lower_expr<'a>(
             Expr::Ternary(condition, truthy, falsy) => {
                 if !item.dispatched {
                     item.dispatched = true;
+
+                    let (Ok(l_ty), Ok(r_ty)) = (
+                        get_expr_type(
+                            &mctx.gl,
+                            &ctx.arenas,
+                            &ctx.table,
+                            scope,
+                            &mut mctx.diagnostics,
+                            truthy,
+                        ),
+                        get_expr_type(
+                            &mctx.gl,
+                            &ctx.arenas,
+                            &ctx.table,
+                            scope,
+                            &mut mctx.diagnostics,
+                            falsy,
+                        ),
+                    ) else {
+                        result_stack.push(None);
+                        error = true;
+                        continue;
+                    };
+
+                    let mut child_context_width =
+                        VectorSize::max(l_ty.force_net_width(), r_ty.force_net_width());
+                    if let Some(context_width) = item.context_width {
+                        child_context_width = child_context_width.max(context_width);
+                    }
+
                     dispatch_stack.push(item);
                     dispatch_stack.push(StackItem::new_no_ctx(condition));
+                    dispatch_stack.push(StackItem::new(truthy, Some(child_context_width)));
+                    dispatch_stack.push(StackItem::new(falsy, Some(child_context_width)));
                     continue;
                 }
 
-                // @TODO: Make properly non-recursive
+                // @TODO: This is not 100% semantically correct. It should mix truthy and falsy
+                // when the condition is `x` or `z`.
 
                 let condition = result_stack.pop().unwrap();
+                let truthy = result_stack.pop().unwrap();
+                let falsy = result_stack.pop().unwrap();
 
-                let Some((c, _)) = condition else {
+                let (Some((c, _)), Some((mut t, t_ty)), Some((mut f, f_ty))) =
+                    (condition, truthy, falsy)
+                else {
                     result_stack.push(None);
                     continue;
                 };
 
-                let (Ok(l_ty), Ok(r_ty)) = (
-                    get_expr_type(
-                        &mctx.gl,
-                        &ctx.arenas,
-                        &ctx.table,
-                        scope,
-                        &mut mctx.diagnostics,
-                        truthy,
-                    ),
-                    get_expr_type(
-                        &mctx.gl,
-                        &ctx.arenas,
-                        &ctx.table,
-                        scope,
-                        &mut mctx.diagnostics,
-                        falsy,
-                    ),
-                ) else {
-                    result_stack.push(None);
-                    error = true;
-                    continue;
-                };
-
-                let mut child_context_width = l_ty.force_net_width().max(r_ty.force_net_width());
                 if let Some(context_width) = item.context_width {
-                    child_context_width = child_context_width.max(context_width);
+                    if context_width > t_ty.force_net_width() {
+                        t = zero_or_sign_extend(mctx.gl(), builder, t, t_ty, context_width);
+                    }
+                    if context_width > f_ty.force_net_width() {
+                        f = zero_or_sign_extend(mctx.gl(), builder, f, f_ty, context_width);
+                    }
                 }
 
                 let c = builder.reduce_or(mctx.gl(), c);
-                let condition_bb = builder.key();
-
-                *builder = builder.next_terminate_later(mctx.gl());
-                let truthy_start_bb = builder.key();
-                let Ok((t, t_ty)) =
-                    lower_expr(ctx, mctx, scope, builder, truthy, Some(child_context_width))
-                else {
-                    result_stack.push(None);
-                    error = true;
-                    continue;
-                };
-                let truthy_end_bb = builder.key();
-
-                *builder = builder.next_terminate_later(mctx.gl());
-                let falsy_start_bb = builder.key();
-                let Ok((f, f_ty)) =
-                    lower_expr(ctx, mctx, scope, builder, falsy, Some(child_context_width))
-                else {
-                    result_stack.push(None);
-                    error = true;
-                    continue;
-                };
-                let falsy_end_bb = builder.key();
-
-                let ty = coerce_to_max_size_ty(t_ty, f_ty);
-                let ty_size = ty.force_net_width();
-
-                *builder = builder.continue_with(mctx.gl(), truthy_end_bb);
-                let t = sign_or_zero_extend(mctx.gl(), builder, t, t_ty, ty_size);
-
-                *builder = builder.continue_with(mctx.gl(), falsy_end_bb);
-                let f = sign_or_zero_extend(mctx.gl(), builder, f, f_ty, ty_size);
-
-                *builder = builder.next_terminate_later(mctx.gl());
-                let (outcome, _) =
-                    builder.phi(mctx.gl(), [(truthy_end_bb, t), (falsy_end_bb, f)].into());
-
-                mctx.gl().bbs[condition_bb].terminator =
-                    BasicBlockTerminator::Branch(c, truthy_start_bb, falsy_start_bb);
-                mctx.gl().bbs[truthy_end_bb].terminator = BasicBlockTerminator::Jump(builder.key());
-                mctx.gl().bbs[falsy_end_bb].terminator = BasicBlockTerminator::Jump(builder.key());
-
-                result_stack.push(Some((outcome, ty)));
+                let result = builder.select(mctx.gl(), c, t, f);
+                result_stack.push(Some((result, t_ty)));
             }
             Expr::Ident(ast_ident, exprs, range_expression) => {
                 if (!exprs.is_empty()

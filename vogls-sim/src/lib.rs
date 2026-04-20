@@ -290,6 +290,11 @@ impl Simulation {
                 break;
             };
 
+            if at.wrapping_add(1) < state.runtime.time {
+                eprintln!("Time overflow!");
+                return Err(());
+            }
+
             if at > max_time {
                 state.runtime.time = max_time;
                 state.schedule.insert(at, events);
@@ -672,7 +677,7 @@ impl Simulation {
                         if time > 0 {
                             state
                                 .schedule
-                                .entry(state.runtime.time + time)
+                                .entry(state.runtime.time.wrapping_add(time))
                                 .or_default()
                                 .push(event);
                             if self.itrace {
@@ -689,7 +694,7 @@ impl Simulation {
                         if time.0 > 0 {
                             state
                                 .schedule
-                                .entry(state.runtime.time + time.0)
+                                .entry(state.runtime.time.wrapping_add(time.0))
                                 .or_default()
                                 .push(event);
                             if self.itrace {

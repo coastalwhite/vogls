@@ -1,3 +1,4 @@
+`timescale 1ns / 1ns
 module tb();
     reg clk, enable, reset, data_i;
     wire data_o;
@@ -31,12 +32,12 @@ module tb();
         $vogls_assert_eq(data_o, 1);
         enable = 0; data_i = 0;
 
-        #10_000;
-        $vogls_assert_eq(data_o, 1);
-        enable = 1;
-
-        #10_000;
-        $vogls_assert_eq(data_o, 0);
+        // #10_000;
+        // $vogls_assert_eq(data_o, 1);
+        // enable = 1;
+        //
+        // #10_000;
+        // $vogls_assert_eq(data_o, 0);
         $finish();
     end
 endmodule

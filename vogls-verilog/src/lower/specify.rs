@@ -2,8 +2,8 @@ use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::bits::arithmetic::FvLogicValue;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::{
-    BasicBlockTerminator, Bits, GlobalContext, LogicMode, PhiRef, SCALAR_VSIZE, SignalKey,
-    TIME_VSIZE, VariableKey, new_process,
+    Bits, GlobalContext, LogicMode, PhiRef, SCALAR_VSIZE, SignalKey, TIME_VSIZE, VariableKey,
+    new_process,
 };
 use vogls_utils::VgHashMap;
 
@@ -777,10 +777,6 @@ pub fn lower_specify<'a>(
                 let lupdt = builder.lupdt(mctx.gl(), *input);
                 let is_active = builder.case_equals(mctx.gl(), lupdt, active_time);
 
-                let start_bb = builder.key();
-                builder = builder.next_terminate_later(mctx.gl());
-                let true_bb = builder.key();
-
                 let mut new_wait_time_set = Some(wait_time_set);
                 let mut new_wait_time = wait_time;
 
@@ -850,19 +846,9 @@ pub fn lower_specify<'a>(
                 let new_wait_time_set = new_wait_time_set
                     .unwrap_or_else(|| builder.constant(mctx.gl(), Bits::new_ones(SCALAR_VSIZE)));
 
-                let end_bb = builder.key();
-                builder = builder.jump(mctx.gl());
-
-                mctx.gl.bbs[start_bb].terminator =
-                    BasicBlockTerminator::Branch(is_active, true_bb, builder.key());
-                (wait_time_set, _) = builder.phi(
-                    mctx.gl(),
-                    [(start_bb, wait_time_set), (end_bb, new_wait_time_set)].into(),
-                );
-                (wait_time, _) = builder.phi(
-                    mctx.gl(),
-                    [(start_bb, wait_time), (end_bb, new_wait_time)].into(),
-                );
+                wait_time_set =
+                    builder.select(mctx.gl(), is_active, new_wait_time_set, wait_time_set);
+                wait_time = builder.select(mctx.gl(), is_active, new_wait_time, wait_time);
             }
 
             // Set the wait time to zero, if no condition matched.

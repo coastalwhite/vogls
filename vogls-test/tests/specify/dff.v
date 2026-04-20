@@ -1,3 +1,4 @@
+`timescale 1ns / 1ns
 module tb();
     reg clk, enable, reset, data_i;
     wire data_o;

@@ -168,7 +168,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                         test_information.top_level_module = Some(line[4..].trim().to_string());
                     }
                     _ if line.starts_with("timeout=") => {
-                        test_information.timeout = line[5..].parse().expect("failed to parse");
+                        test_information.timeout = line[8..].parse().expect("failed to parse");
                     }
                     _ if line.starts_with("skip=") => match &line[5..] {
                         "two-value-logic" => test_information.skip = Some(LogicMode::TwoValue),
