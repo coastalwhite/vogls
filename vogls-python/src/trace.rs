@@ -92,32 +92,32 @@ pub struct Trace {
 #[pyo3::pymethods]
 impl Trace {
     pub fn hamming_distance(&self, py: pyo3::Python<'_>) -> pyo3::Py<pyo3::types::PyList> {
-        let mut out = Vec::<(u64, u64)>::new();
-        py.detach(|| {
+        let out = py.detach(|| {
             let mut values = vogls::utils::VgHashMap::<vogls::RtSignalKey, usize>::default();
-            for i in 0..self.time_offsets.len() - 1 {
-                let mut hd = 0;
-                let (time, start) = self.time_offsets[i];
-                let end = self.time_offsets[i + 1].1;
+            (0..self.time_offsets.len() - 1)
+                .map(|i| {
+                    let mut hd = 0;
+                    let (time, start) = self.time_offsets[i];
+                    let end = self.time_offsets[i + 1].1;
 
-                for (i, (signal, value)) in self.trace[start..end].iter().enumerate() {
-                    let i = start + i;
-                    match values.entry(*signal) {
-                        Entry::Vacant(entry) => _ = entry.insert(i),
-                        Entry::Occupied(mut entry) => {
-                            hd += vogls::Bits::u64_reduce_op(
-                                value,
-                                &self.trace[*entry.get()].1,
-                                |l, r| (l ^ r).count_ones(),
-                                |l, r| l + r,
-                            ) as u64;
-                            entry.insert(i);
+                    for (i, (signal, value)) in self.trace[start..end].iter().enumerate() {
+                        let i = start + i;
+                        match values.entry(*signal) {
+                            Entry::Vacant(entry) => _ = entry.insert(i),
+                            Entry::Occupied(mut entry) => {
+                                hd += vogls::Bits::u64_reduce_op(
+                                    value,
+                                    &self.trace[*entry.get()].1,
+                                    |l, r| (l ^ r).count_ones(),
+                                    |l, r| l + r,
+                                ) as u64;
+                                entry.insert(i);
+                            }
                         }
                     }
-                }
-
-                out.push((time, hd));
-            }
+                    (time, hd)
+                })
+                .collect::<Vec<(u64, u64)>>()
         });
         pyo3::types::PyList::new(py, out).unwrap().into()
     }
