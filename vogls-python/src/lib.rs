@@ -49,7 +49,7 @@ mod vogls {
     #[pymethods]
     impl Design {
         #[new]
-        #[pyo3(signature = (path, top_level_module = None, defines = None, four_value_logic = false, compile = false, trace = false, debug_symbols = false))]
+        #[pyo3(signature = (path, top_level_module = None, defines = None, four_value_logic = false, compile = false, trace = false, debug_symbols = false, opt = false))]
         fn new(
             path: PathBuf,
             top_level_module: Option<String>,
@@ -58,6 +58,7 @@ mod vogls {
             compile: bool,
             trace: bool,
             debug_symbols: bool,
+            opt: bool,
         ) -> PyResult<Self> {
             let mut ectx = ExecutionContext {
                 stdout: Box::new(std::io::stdout()),
@@ -72,8 +73,11 @@ mod vogls {
                 debug_symbols,
                 time: 0,
                 opt: vogls::ir::optimize::OptFlags {
-                    opt_rounds: 0,
-                    ..Default::default()
+                    opt_rounds: if opt { 2 } else { 0 },
+                    constant_propagation: opt,
+                    deadcode_elimination: opt,
+                    common_subexpr_elim: opt,
+                    peephole: opt,
                 },
                 logic_mode: if four_value_logic {
                     LogicMode::FourValue
