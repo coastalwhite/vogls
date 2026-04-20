@@ -1,0 +1,17 @@
+signal c: 1
+signal d: 1
+
+proc noop_select {
+L0:
+  %t0 = prb $c
+  drv $d, %t0
+  halt
+}
+
+proc neg_select {
+L0:
+  %t0 = prb $c
+  %t1 = negate %t0
+  drv $d, %t1
+  halt
+}

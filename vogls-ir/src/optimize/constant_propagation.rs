@@ -1,13 +1,14 @@
 use std::ops::Range;
 
 use slotmap::SlotMap;
+use vogls_bits::arithmetic::FvLogicValue;
 use vogls_bits::{Bits, VectorSize};
 use vogls_utils::{VgHashMap, VgHashSet};
 
 use crate::{
     BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryImmOpSimplification, BinaryOp,
     GlobalContext, Instruction, LogicMode, ProcessKey, ResizeOp, SCALAR_VSIZE, ShiftImmOp,
-    ShiftImmOpSimplification, Signal, SignalKey, SliceImmSimplification, Time, Variable,
+    ShiftImmOpSimplification, Signal, SignalKey, SliceImmSimplification, Time, UnaryOp, Variable,
     VariableKey, simplify_slice_imm,
 };
 
@@ -569,13 +570,22 @@ fn constant_propagate_instruction(
 
             let (dst, truthy, falsy) = (*dst, *truthy, *falsy);
 
-            if let Some(bits) = truthy_bits
-                && truthy_bits == falsy_bits
-            {
-                let bits = bits.clone();
-                scratch_map.insert(dst, Some(bits.clone()));
-                *i = I::Constant(dst, bits);
-                return Ok(());
+            match (truthy_bits, falsy_bits) {
+                (Some(t), Some(f)) if t == f => {
+                    let bits = t.clone();
+                    scratch_map.insert(dst, Some(bits.clone()));
+                    *i = I::Constant(dst, bits);
+                    return Ok(());
+                }
+                (Some(t), Some(f)) if t.size() == SCALAR_VSIZE => {
+                    use FvLogicValue as L;
+                    match (t.select_value(0), f.select_value(0)) {
+                        (L::L1, L::L0) => *i = I::Resize(dst, ResizeOp::Truncate, *cond),
+                        (L::L0, L::L1) => *i = I::Unary(dst, UnaryOp::Neg, *cond),
+                        _ => {}
+                    }
+                }
+                _ => {}
             }
 
             match cond_bits.as_ref() {
@@ -593,7 +603,7 @@ fn constant_propagate_instruction(
                             *i = I::Resize(dst, ResizeOp::Truncate, src);
                         }
                         Some(bits) => {
-                        let bits = bits.clone();
+                            let bits = bits.clone();
                             scratch_map.insert(dst, Some(bits.clone()));
                             *i = I::Constant(dst, bits);
                         }

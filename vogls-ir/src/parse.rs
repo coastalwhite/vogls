@@ -560,6 +560,49 @@ fn parse_bb<'a>(
                 "lsri" => parse_shift_imm(c, symbols, gl, dst, SI::LogicalShiftRight)?,
                 "asri" => parse_shift_imm(c, symbols, gl, dst, SI::ArithmeticShiftRight)?,
 
+                "select" => {
+                    c.trim_cursor();
+                    let cond = parse_var(c, symbols, gl)?;
+                    c.trim_cursor();
+                    c.expect_char(',')?;
+
+                    c.trim_cursor();
+                    let truthy = parse_var(c, symbols, gl)?;
+                    c.trim_cursor();
+                    c.expect_char(',')?;
+
+                    c.trim_cursor();
+                    let falsy = parse_var(c, symbols, gl)?;
+
+                    if !symbols.unresolved_vars.contains_key(&cond)
+                        && gl.vars[cond].size != SCALAR_VSIZE
+                    {
+                        return Err(Box::new(ParseError {
+                            at: c.offset,
+                            error: format!("invalid condition: {}", gl.vars[cond].size),
+                        }));
+                    }
+
+                    if !symbols.unresolved_vars.contains_key(&truthy)
+                        && !symbols.unresolved_vars.contains_key(&truthy)
+                    {
+                        let truthy_size = gl.vars[truthy].size;
+                        let falsy_size = gl.vars[falsy].size;
+                        if truthy_size != falsy_size {
+                            return Err(Box::new(ParseError {
+                                at: c.offset,
+                                error: format!(
+                                    "invalid size combination: {truthy_size}, {falsy_size}"
+                                ),
+                            }));
+                        };
+                        gl.vars[dst].size = truthy_size;
+                        symbols.unresolved_vars.remove(&dst);
+                    }
+
+                    Instruction::Select(dst, cond, truthy, falsy)
+                }
+
                 "lupdt" => {
                     c.trim_cursor();
                     let signal = parse_signal(c, symbols)?;

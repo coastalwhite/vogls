@@ -1,0 +1,22 @@
+signal c: 1
+signal d: 1
+
+proc noop_select {
+L0:
+    %t0 = prb $c
+    %t1 = const 1'b1
+    %t2 = const 1'b0
+    %t3 = select %t0, %t1, %t2
+    drv $d, %t3
+    halt
+}
+
+proc neg_select {
+L0:
+    %t0 = prb $c
+    %t1 = const 1'b0
+    %t2 = const 1'b1
+    %t3 = select %t0, %t1, %t2
+    drv $d, %t3
+    halt
+}
