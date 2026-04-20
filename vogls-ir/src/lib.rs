@@ -1035,6 +1035,8 @@ impl BinaryImmOp {
             O::Min => {
                 if imm.eq_zero() {
                     S::Immediate
+                } else if imm.count_ones() == imm.size().get() {
+                    S::Source
                 } else {
                     S::Keep
                 }
@@ -1042,6 +1044,8 @@ impl BinaryImmOp {
             O::Max => {
                 if imm.count_ones() == imm.size().get() {
                     S::Immediate
+                } else if imm.eq_zero() {
+                    S::Source
                 } else {
                     S::Keep
                 }
