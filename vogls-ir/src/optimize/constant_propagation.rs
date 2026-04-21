@@ -40,7 +40,7 @@ pub fn constant_propagation(
     scratch_dep.clear();
     scratch_dep_edges.clear();
 
-    let mut is_temporal = false;
+    let mut is_non_temporal = true;
 
     scratch_seen.clear();
     scratch_stack.clear();
@@ -57,13 +57,13 @@ pub fn constant_propagation(
                 gl.logic_mode,
                 true,
             );
+
+            is_non_temporal &= !matches!(i, Instruction::Probe(..) | Instruction::Intrinsic(..));
         }
 
-        is_temporal |= !matches!(
+        is_non_temporal &= matches!(
             bb.terminator,
-            BasicBlockTerminator::Halt
-                | BasicBlockTerminator::Jump(..)
-                | BasicBlockTerminator::Branch(..)
+            BasicBlockTerminator::Halt | BasicBlockTerminator::Jump(..)
         );
 
         bb.terminator.for_each_bb(|bb_key| {
@@ -72,6 +72,8 @@ pub fn constant_propagation(
             }
         });
     }
+
+    let is_temporal = !is_non_temporal;
 
     scratch_seen.clear();
     scratch_stack.clear();
