@@ -6,7 +6,7 @@ use crate::ast::expr::{BitSlice, Expr};
 use crate::ast::module::NetAssignment;
 use crate::ast::{AstId, AstIdRange, HIdent};
 use crate::elaborate::VSymbol;
-use crate::lower::{Edge, hident_span, try_resolve_net, try_resolve_symbol_id};
+use crate::lower::{hident_span, try_resolve_net, try_resolve_symbol_id, Driver, Edge};
 
 use super::{Diagnostics, LowerContext, MutLowerContext, VType, VValue, eval_constant_expr};
 
@@ -453,8 +453,7 @@ pub fn try_fuse_assign<'a>(
             break;
         };
         mctx.connections.push(Edge {
-            driver: signal,
-            driver_slice: slice,
+            driver: Driver::Signal(signal, slice),
             drivee,
             drivee_slice: Some(SignalSlice::from_width(offset, width).unwrap()),
         });

@@ -7,6 +7,7 @@ use vogls_ir::{
     SignalKey, SignalSlice, new_process,
 };
 use vogls_utils::{IndexMap, TableKey, TableMap, VgHashMap, VgHashSet};
+use vogls_verilog::lower::Driver;
 
 vogls_utils::new_table_key! { struct NodeKey; }
 slotmap::new_key_type! { struct EdgeKey; }
@@ -216,12 +217,14 @@ pub fn fuse_signals(
 
     // Form the graph.
     for edge in connections.iter() {
-        let driver = nodes.get_or_default(edge.driver);
+        let Driver::Signal(driver_signal, driver_slice) = edge.driver else {
+            unreachable!();
+        };
+        let driver = nodes.get_or_default(driver_signal);
         let drivee = nodes.get_or_default(edge.drivee);
 
-        let driver_slice = edge
-            .driver_slice
-            .unwrap_or_else(|| SignalSlice::with_end(gl.signals[edge.driver].size));
+        let driver_slice =
+            driver_slice.unwrap_or_else(|| SignalSlice::with_end(gl.signals[driver_signal].size));
         let drivee_slice = edge
             .drivee_slice
             .unwrap_or_else(|| SignalSlice::with_end(gl.signals[edge.drivee].size));

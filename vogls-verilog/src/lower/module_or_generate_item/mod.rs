@@ -17,7 +17,7 @@ use crate::lower::fuse::{try_fuse_assign, try_lower_fuse_driver_expr};
 use crate::lower::statement::statements_to_process;
 use crate::lower::udp::lower_udp;
 use crate::lower::{
-    assign_input_port, assign_port_output, eval_constant_expr, evaluate_range, resolve_symbol_id, try_resolve_net, unwrap_get_module, Edge, VType
+    assign_input_port, assign_port_output, eval_constant_expr, evaluate_range, resolve_symbol_id, try_resolve_net, unwrap_get_module, Driver, Edge, VType
 };
 use crate::parser::AstArenas;
 
@@ -84,8 +84,7 @@ pub fn lower<'a>(
                                             break;
                                         };
                                         mctx.connections.push(Edge {
-                                            driver: signal,
-                                            driver_slice: slice,
+                                            driver: Driver::Signal(signal, slice),
                                             drivee,
                                             drivee_slice: Some(
                                                 SignalSlice::from_width(offset, width).unwrap(),

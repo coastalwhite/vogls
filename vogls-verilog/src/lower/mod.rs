@@ -28,9 +28,14 @@ pub struct LowerContext<'a> {
 }
 
 #[derive(Clone)]
+pub enum Driver {
+    Constant(Bits),
+    Signal(SignalKey, Option<SignalSlice>),
+}
+
+#[derive(Clone)]
 pub struct Edge {
-    pub driver: SignalKey,
-    pub driver_slice: Option<SignalSlice>,
+    pub driver: Driver,
     pub drivee: SignalKey,
     pub drivee_slice: Option<SignalSlice>,
 }
@@ -377,8 +382,8 @@ use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::vcd::{VcdScope, VcdVariable, VcdVariableKey};
 use vogls_ir::{
-    BasicBlockBuilder, BasicBlockTerminator, GlobalContext, ProcessKey, SCALAR_VSIZE, SignalKey,
-    SignalSlice, VariableKey, VectorSize, new_process,
+    BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, ProcessKey, SCALAR_VSIZE,
+    SignalKey, SignalSlice, VariableKey, VectorSize, new_process,
 };
 use vogls_utils::{IndexMap, OrderedSet, Table, VgHashMap};
 
@@ -495,8 +500,7 @@ fn assign_input_port<'a>(
                 break;
             };
             mctx.connections.push(Edge {
-                driver: signal,
-                driver_slice: slice,
+                driver: Driver::Signal(signal, slice),
                 drivee,
                 drivee_slice: Some(SignalSlice::from_width(offset, width).unwrap()),
             });
@@ -553,8 +557,7 @@ fn assign_port_output<'a>(
         assert!(drivee_slice.is_none(), "should not yet be set");
         if exprs.is_empty() && range.is_none() {
             mctx.connections.push(Edge {
-                driver,
-                driver_slice: None,
+                driver: Driver::Signal(driver, None),
                 drivee,
                 drivee_slice: None,
             });
@@ -577,8 +580,7 @@ fn assign_port_output<'a>(
             let v = v.into_bits();
             if let Some(v) = v.extract_exact_u32() {
                 mctx.connections.push(Edge {
-                    driver,
-                    driver_slice: None,
+                    driver: Driver::Signal(driver, None),
                     drivee,
                     drivee_slice: Some(SignalSlice::from_width(v, SCALAR_VSIZE).unwrap()),
                 });
