@@ -371,7 +371,7 @@ pub fn lower_process_to_vm(
                     let size = gl.vars[*dst].size;
                     let cond_mode = var_mode[cond];
                     let truthy_mode = var_mode[truthy];
-                    let falsy_mode = var_mode[truthy];
+                    let falsy_mode = var_mode[falsy];
                     let d = var!(*dst);
                     let c = var!(*cond);
                     let t = var!(*truthy, (dst_mode, truthy_mode, size));
