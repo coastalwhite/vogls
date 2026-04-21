@@ -1,12 +1,15 @@
+use std::fmt;
 use std::io::Write;
+use std::ops::{BitOr, BitOrAssign};
 
 use slotmap::SlotMap;
+use vogls_bits::format::BitsFormatOptions;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::{
     BasicBlockBuilder, Bits, GlobalContext, INTEGER_VSIZE, Instruction, IntrinsicOp, Signal,
-    SignalKey, SignalSlice, new_process,
+    SignalKey, SignalSlice, VectorSize, new_process,
 };
-use vogls_utils::{IndexMap, TableKey, TableMap, VgHashMap, VgHashSet};
+use vogls_utils::{IndexMap, Table, TableKey, VgHashMap, VgHashSet};
 use vogls_verilog::lower::Driver;
 
 vogls_utils::new_table_key! { struct NodeKey; }
@@ -17,31 +20,33 @@ pub const PROBE: u32 = 2u32;
 pub const DRIVE: u32 = 4u32;
 pub const WATCH: u32 = 8u32;
 
-struct Edge {
-    driver: NodeKey,
-    drivee: NodeKey,
-    driver_slice: SignalSlice,
-    drivee_slice: SignalSlice,
+struct NodeDisplay<'a>(&'a Node, &'a SlotMap<SignalKey, Signal>);
+impl<'a> fmt::Display for NodeDisplay<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.0.content {
+            NodeContent::Signal(s) => f.write_str(&self.1[*s].name),
+            NodeContent::Constant(bits) => bits.display(&BitsFormatOptions::default()).fmt(f),
+        }
+    }
 }
-#[derive(Default)]
-struct Node {
-    fanin: Vec<EdgeKey>,
-    fanout: Vec<EdgeKey>,
+
+impl Node {
+    fn display<'a>(&'a self, signals: &'a SlotMap<SignalKey, Signal>) -> NodeDisplay<'a> {
+        NodeDisplay(self, signals)
+    }
 }
-type Nodes = TableMap<NodeKey, SignalKey, Node>;
-type Edges = SlotMap<EdgeKey, Edge>;
 
 #[allow(unused)]
 fn print(signals: &SlotMap<SignalKey, Signal>, nodes: &Nodes, edges: &Edges) {
     use std::fmt::Write;
     let mut out = String::new();
     writeln!(&mut out, "digraph {{").unwrap();
-    for (n, s, _) in nodes.iter() {
+    for (key, node) in nodes.key_value_iter() {
         writeln!(
             &mut out,
             r#"  n{} [label="{}"];"#,
-            n.get(),
-            &signals[*s].name
+            key.get(),
+            node.display(signals)
         );
     }
     for edge in edges.values() {
@@ -50,16 +55,12 @@ fn print(signals: &SlotMap<SignalKey, Signal>, nodes: &Nodes, edges: &Edges) {
             r#"  n{} -> n{} [taillabel="{}", headlabel="{}"];"#,
             edge.driver.get(),
             edge.drivee.get(),
-            if edge.driver_slice.lsb() > 0
-                || edge.driver_slice.width() != signals[*nodes.get_key(edge.driver)].size
-            {
+            if edge.driver_slice.lsb() > 0 || edge.driver_slice.width() != nodes[edge.driver].size {
                 format!("[{}:{}]", edge.driver_slice.msb(), edge.driver_slice.lsb())
             } else {
                 String::new()
             },
-            if edge.drivee_slice.lsb() > 0
-                || edge.drivee_slice.width() != signals[*nodes.get_key(edge.drivee)].size
-            {
+            if edge.drivee_slice.lsb() > 0 || edge.drivee_slice.width() != nodes[edge.drivee].size {
                 format!("[{}:{}]", edge.drivee_slice.msb(), edge.drivee_slice.lsb())
             } else {
                 String::new()
@@ -70,23 +71,20 @@ fn print(signals: &SlotMap<SignalKey, Signal>, nodes: &Nodes, edges: &Edges) {
     println!("{out}");
 }
 
-fn print_edge(out: &mut String, edge: &Edge, signals: &SlotMap<SignalKey, Signal>, nodes: &Nodes) {
+#[allow(unused)]
+fn print_edge(out: &mut String, edge: &Edge, nodes: &Nodes) {
     use std::fmt::Write;
     writeln!(
         out,
         r#"  n{} -> n{} [taillabel="{}", headlabel="{}"];"#,
         edge.driver.get(),
         edge.drivee.get(),
-        if edge.driver_slice.lsb() > 0
-            || edge.driver_slice.width() != signals[*nodes.get_key(edge.driver)].size
-        {
+        if edge.driver_slice.lsb() > 0 || edge.driver_slice.width() != nodes[edge.driver].size {
             format!("[{}:{}]", edge.driver_slice.msb(), edge.driver_slice.lsb())
         } else {
             String::new()
         },
-        if edge.drivee_slice.lsb() > 0
-            || edge.drivee_slice.width() != signals[*nodes.get_key(edge.drivee)].size
-        {
+        if edge.drivee_slice.lsb() > 0 || edge.drivee_slice.width() != nodes[edge.drivee].size {
             format!("[{}:{}]", edge.drivee_slice.msb(), edge.drivee_slice.lsb())
         } else {
             String::new()
@@ -102,7 +100,6 @@ fn print_subgraph(
     signals: &SlotMap<SignalKey, Signal>,
     nodes: &Nodes,
     edges: &Edges,
-    hm: &VgHashMap<SignalKey, u32>,
 ) {
     let mut seen = VgHashSet::<NodeKey>::default();
     let mut seen_edges = VgHashSet::<EdgeKey>::default();
@@ -112,21 +109,28 @@ fn print_subgraph(
     seen.insert(node);
 
     while let Some(n) = stack.pop() {
-        let s = nodes.get_key(n);
         use std::fmt::Write;
-        write!(out, r#"  n{} [label="{}"#, n.get(), &signals[*s].name).unwrap();
+        write!(
+            out,
+            r#"  n{} [label="{}"#,
+            n.get(),
+            nodes[n].display(signals)
+        )
+        .unwrap();
 
-        if let Some(&v) = hm.get(s)
-            && v != 0
-        {
+        let f = nodes[n].flags;
+        if f != NodeFlags::EMPTY {
             write!(out, " [").unwrap();
-            if v & DRIVE != 0 {
+            if f.contains(NodeFlags::DRIVE) {
                 out.push('D');
             }
-            if v & PROBE != 0 {
+            if f.contains(NodeFlags::PROBE) {
                 out.push('P');
             }
-            if v & LUPDT != 0 {
+            if f.contains(NodeFlags::LUPDT) {
+                out.push('L');
+            }
+            if f.contains(NodeFlags::DRIVE) {
                 out.push('L');
             }
             write!(out, "]").unwrap();
@@ -137,7 +141,7 @@ fn print_subgraph(
         for e in nodes[n].fanin.iter().chain(nodes[n].fanout.iter()) {
             let edge = &edges[*e];
             if seen_edges.insert(*e) {
-                print_edge(out, edge, signals, nodes);
+                print_edge(out, edge, nodes);
             }
             if seen.insert(edge.driver) {
                 stack.push(edge.driver);
@@ -181,6 +185,57 @@ pub struct FuseSignalsContext {
     pub print_optimized_fuse_signals: bool,
 }
 
+struct Edge {
+    driver: NodeKey,
+    drivee: NodeKey,
+    driver_slice: SignalSlice,
+    drivee_slice: SignalSlice,
+}
+
+enum NodeContent {
+    Signal(SignalKey),
+    Constant(Bits),
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct NodeFlags(u8);
+impl NodeFlags {
+    const EMPTY: Self = Self(0u8);
+    const DRIVE: Self = Self(0b0001u8);
+    const PROBE: Self = Self(0b0010u8);
+    const LUPDT: Self = Self(0b0100u8);
+    const WATCH: Self = Self(0b1000u8);
+
+    #[inline(always)]
+    fn contains(self, flags: NodeFlags) -> bool {
+        self.0 & flags.0 != 0
+    }
+}
+
+impl BitOr for NodeFlags {
+    type Output = Self;
+
+    #[inline(always)]
+    fn bitor(self, rhs: Self) -> Self::Output {
+        Self(self.0 | rhs.0)
+    }
+}
+impl BitOrAssign for NodeFlags {
+    #[inline(always)]
+    fn bitor_assign(&mut self, rhs: Self) {
+        self.0 |= rhs.0;
+    }
+}
+
+struct Node {
+    content: NodeContent,
+    flags: NodeFlags,
+    size: VectorSize,
+    fanin: Vec<EdgeKey>,
+    fanout: Vec<EdgeKey>,
+}
+type Nodes = Table<NodeKey, Node>;
+type Edges = SlotMap<EdgeKey, Edge>;
+
 /// Fuse signals for a given list of drivers & drivees pairs.
 ///
 /// Given a list of signals that are seen as equivalent try to merge as many signals as possible.
@@ -214,17 +269,46 @@ pub fn fuse_signals(
 ) -> VgHashMap<SignalKey, (SignalKey, Option<SignalSlice>)> {
     let mut nodes = Nodes::default();
     let mut edges = Edges::default();
+    let mut signal_to_node = VgHashMap::<SignalKey, NodeKey>::default();
 
     // Form the graph.
     for edge in connections.iter() {
-        let Driver::Signal(driver_signal, driver_slice) = edge.driver else {
-            unreachable!();
-        };
-        let driver = nodes.get_or_default(driver_signal);
-        let drivee = nodes.get_or_default(edge.drivee);
+        let (driver, driver_slice) = match &edge.driver {
+            Driver::Signal(driver_signal, driver_slice) => {
+                let driver = *signal_to_node.entry(*driver_signal).or_insert_with(|| {
+                    nodes.insert(Node {
+                        content: NodeContent::Signal(*driver_signal),
+                        flags: NodeFlags::EMPTY,
+                        size: gl.signals[*driver_signal].size,
+                        fanin: Vec::new(),
+                        fanout: Vec::new(),
+                    })
+                });
+                let driver_slice = driver_slice
+                    .unwrap_or_else(|| SignalSlice::with_end(gl.signals[*driver_signal].size));
 
-        let driver_slice =
-            driver_slice.unwrap_or_else(|| SignalSlice::with_end(gl.signals[driver_signal].size));
+                (driver, driver_slice)
+            }
+            Driver::Constant(value) => (
+                nodes.insert(Node {
+                    content: NodeContent::Constant(value.clone()),
+                    flags: NodeFlags::DRIVE,
+                    size: value.size(),
+                    fanin: Vec::new(),
+                    fanout: Vec::new(),
+                }),
+                SignalSlice::with_end(value.size()),
+            ),
+        };
+        let drivee = *signal_to_node.entry(edge.drivee).or_insert_with(|| {
+            nodes.insert(Node {
+                content: NodeContent::Signal(edge.drivee),
+                flags: NodeFlags::EMPTY,
+                size: gl.signals[edge.drivee].size,
+                fanin: Vec::new(),
+                fanout: Vec::new(),
+            })
+        });
         let drivee_slice = edge
             .drivee_slice
             .unwrap_or_else(|| SignalSlice::with_end(gl.signals[edge.drivee].size));
@@ -239,21 +323,33 @@ pub fn fuse_signals(
         nodes[drivee].fanin.push(edge);
     }
 
-    let mut ir_signal_reference = VgHashMap::<SignalKey, u32>::default();
     for bb in gl.bbs.values() {
         for i in &bb.instrs {
             use Instruction as I;
             match &i {
-                I::LastUpdateTime(_, s) => *ir_signal_reference.entry(*s).or_default() |= LUPDT,
-                I::Probe(_, s, _) | I::ProbeSlice(_, s, _) => {
-                    _ = *ir_signal_reference.entry(*s).or_default() |= PROBE
+                I::LastUpdateTime(_, s) => {
+                    _ = signal_to_node
+                        .get(s)
+                        .map(|n| nodes[*n].flags |= NodeFlags::LUPDT)
                 }
-                I::Drive(s, _, _) => *ir_signal_reference.entry(*s).or_default() |= DRIVE,
+                I::Probe(_, s, _) | I::ProbeSlice(_, s, _) => {
+                    _ = signal_to_node
+                        .get(s)
+                        .map(|n| nodes[*n].flags |= NodeFlags::PROBE)
+                }
+                I::Drive(s, _, _) => {
+                    _ = signal_to_node
+                        .get(s)
+                        .map(|n| nodes[*n].flags |= NodeFlags::DRIVE)
+                }
                 _ => {}
             }
         }
-        bb.terminator
-            .for_each_signal(|s| *ir_signal_reference.entry(s).or_default() |= WATCH);
+        bb.terminator.for_each_signal(|s| {
+            _ = signal_to_node
+                .get(&s)
+                .map(|n| nodes[*n].flags |= NodeFlags::WATCH)
+        });
     }
 
     if ctx.print_unoptimized_fuse_signals {
@@ -308,11 +404,8 @@ pub fn fuse_signals(
 
                 // If we rely on accurately knowing the last update of a signal, we cannot fuse a
                 // view of a signal as the driver of the observed signal.
-                if (drivee_slice.lsb() != 0
-                    || drivee_slice.width() != gl.signals[*nodes.get_key(drivee)].size)
-                    && ir_signal_reference
-                        .get(nodes.get_key(drivee))
-                        .is_some_and(|v| v & LUPDT != 0)
+                if (drivee_slice.lsb() != 0 || drivee_slice.width() != nodes[drivee].size)
+                    && nodes[drivee].flags.contains(NodeFlags::LUPDT)
                 {
                     continue;
                 }
@@ -402,32 +495,27 @@ pub fn fuse_signals(
             }
 
             // Subset inversion
-            if nodes[node].fanin.len() > 1
-                && ir_signal_reference
-                    .get(nodes.get_key(node))
-                    .is_none_or(|&v| v & DRIVE == 0)
-            {
+            if nodes[node].fanin.len() > 1 && !nodes[node].flags.contains(NodeFlags::DRIVE) {
                 nodes[node].fanin.sort_unstable_by_key(|&e| {
                     let edge = &edges[e];
                     (edge.drivee_slice.lsb(), edge.drivee_slice.width())
                 });
 
-                let node_width = gl.signals[*nodes.get_key(node)].size;
+                let node_width = nodes[node].size;
                 let mut offset = 0;
                 let mut i = 0;
 
                 while i < nodes[node].fanin.len() {
                     let edge = &edges[nodes[node].fanin[i]];
-                    let driver = *nodes.get_key(edge.driver);
                     if edge.drivee_slice.lsb() != 0
-                        || edge.driver_slice.width() != gl.signals[driver].size
+                        || edge.driver_slice.width() != nodes[edge.driver].size
                     {
                         break;
                     }
 
-                    let driver_irr = ir_signal_reference.get(&driver).copied().unwrap_or(0);
+                    let driver_irr = nodes[edge.driver].flags;
 
-                    if driver_irr & (WATCH | LUPDT) != 0
+                    if driver_irr.contains(NodeFlags::WATCH | NodeFlags::LUPDT)
                         || edge.drivee_slice.lsb() != offset
                         || !nodes[edge.driver].fanin.is_empty()
                     {
@@ -497,7 +585,11 @@ pub fn fuse_signals(
     let mut replacement_signals =
         VgHashMap::<SignalKey, (SignalKey, Option<SignalSlice>)>::default();
 
-    for (_, signal, v) in nodes.iter() {
+    for v in nodes.iter() {
+        let NodeContent::Signal(signal) = v.content else {
+            continue;
+        };
+
         if v.fanin.is_empty() {
             continue;
         }
@@ -505,13 +597,13 @@ pub fn fuse_signals(
         if let Some(edge) = v.fanin.first().map(|&e| &edges[e])
             && v.fanin.len() == 1
             && edge.drivee_slice.lsb() == 0
-            && edge.drivee_slice.width() == gl.signals[*signal].size
+            && edge.drivee_slice.width() == gl.signals[signal].size
+            && let NodeContent::Signal(driver) = &nodes[edge.driver].content
         {
-            let driver_signal = nodes.get_key(edge.driver);
             let driver_slice = (edge.driver_slice.lsb() != 0
-                || edge.driver_slice.width() != gl.signals[*driver_signal].size)
+                || edge.driver_slice.width() != nodes[edge.driver].size)
                 .then_some(edge.driver_slice);
-            replacement_signals.insert(*signal, (*driver_signal, driver_slice));
+            replacement_signals.insert(signal, (*driver, driver_slice));
             continue;
         }
 
@@ -521,25 +613,26 @@ pub fn fuse_signals(
         let mut watch_signals = IndexMap::default();
         for &e in &v.fanin {
             let edge = &edges[e];
-            let driver_signal = nodes.get_key(edge.driver);
-            // @TODO: probe constant?
-            let mut prb = *watch_signals
-                .get_or_insert_with(*driver_signal, || builder.probe(gl, *driver_signal));
+            let mut value = match &nodes[edge.driver].content {
+                NodeContent::Signal(driver) => {
+                    *watch_signals.get_or_insert_with(*driver, || builder.probe(gl, *driver))
+                }
+                NodeContent::Constant(value) => builder.constant(gl, value.clone()),
+            };
 
-            if edge.driver_slice.lsb() != 0
-                || edge.driver_slice.width() != gl.signals[*driver_signal].size
+            if edge.driver_slice.lsb() != 0 || edge.driver_slice.width() != nodes[edge.driver].size
             {
-                prb = builder.slice_constant(
+                value = builder.slice_constant(
                     gl,
-                    prb,
+                    value,
                     edge.driver_slice.lsb(),
                     edge.driver_slice.width(),
                 );
             }
             builder.drive_partial_constant(
                 gl,
-                *signal,
-                prb,
+                signal,
+                value,
                 edge.drivee_slice.lsb(),
                 edge.drivee_slice.width(),
             )

@@ -357,6 +357,10 @@ impl<K: TableKey, V> Table<K, V> {
     ) -> impl ExactSizeIterator<Item = K> + DoubleEndedIterator + 'static {
         (0..self.len()).map(|i| K::from_usize(i).expect("out-of-bounds"))
     }
+
+    pub fn key_value_iter(&self) -> impl ExactSizeIterator<Item = (K, &V)> + DoubleEndedIterator {
+        self.table_key_iter().zip(self.values.iter())
+    }
 }
 
 impl<KK: TableKey, K: Clone + Hash + Eq, V> TableMap<KK, K, V> {
