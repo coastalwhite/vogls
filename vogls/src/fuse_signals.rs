@@ -507,7 +507,7 @@ pub fn fuse_signals(
 
                 while i < nodes[node].fanin.len() {
                     let edge = &edges[nodes[node].fanin[i]];
-                    if edge.drivee_slice.lsb() != 0
+                    if edge.driver_slice.lsb() != 0
                         || edge.driver_slice.width() != nodes[edge.driver].size
                     {
                         break;

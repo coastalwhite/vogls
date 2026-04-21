@@ -1,9 +1,10 @@
 // vogls: verify-stdout
+`timescale 1ps / 1fs
 module x();
     integer a;
 	initial begin
         $display("Gonna start waiting.");
-        wait (a > 5) $display("Wow, we reached it at %h!", $time);
+        wait (a > 5) $display("Wow, we reached it at %0d!", $time);
         $display("Now we can go to rest.");
 	end
 

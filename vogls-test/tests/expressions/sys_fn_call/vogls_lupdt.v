@@ -1,4 +1,5 @@
 // vogls: verify-stdout
+`timescale 1ps / 1ps
 module x();
     reg A;
     initial begin

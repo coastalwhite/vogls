@@ -1,5 +1,5 @@
 // vogls: verify-stdout
-// vogls: timeout=100
+// vogls: timeout=100000
 `timescale 1ps / 1ps
 module x();
     initial forever #17 $display("Hello!");
