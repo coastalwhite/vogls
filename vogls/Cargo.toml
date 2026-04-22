@@ -7,6 +7,7 @@ edition.workspace = true
 clap.workspace = true
 slotmap.workspace = true
 tempfile.workspace = true
+hashbrown.workspace = true
 vogls-ir.workspace = true
 vogls-sim.workspace = true
 vogls-verilog.workspace = true

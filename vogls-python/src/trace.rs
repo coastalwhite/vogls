@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use hashbrown::hash_map::Entry;
-use vogls::VSymbol;
 use vogls::codegen::HeapRef;
+use vogls::symbol::{NetValue, Symbol};
 use vogls::utils::{NonMaxUsize, VgHashMap};
 use vogls::{LogicMode, RtSignalKey, design::Design};
 
@@ -24,8 +24,10 @@ impl TracePlugin {
         let mut updated_this_time_step = Vec::new();
 
         for signal in design.elab_table.symbol_iter() {
-            if let VSymbol::Net(n) = &signal.content {
-                let (signal, _slice) = n.net.probe_signal();
+            if let Symbol::Net(n) = &signal.content
+                && let NetValue::Signal(s) = &n.net
+            {
+                let (signal, _slice) = s.probe_signal();
                 let rt_signal = design.get_rt_signal(signal);
                 tracked.insert(
                     rt_signal,

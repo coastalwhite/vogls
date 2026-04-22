@@ -7,12 +7,14 @@ use std::sync::Arc;
 use slotmap::SlotMap;
 use vogls_codegen::{HeapBuilder, HeapRef};
 use vogls_frontend::ident_table::{IdentId, IdentTable};
+use vogls_frontend::symbol_table::{FrozenSymbolTable, SymbolId};
+use vogls_ir::vcd::{VcdScope, VcdValue, VcdVariableKey};
 use vogls_ir::{Bits, GlobalContext, LogicMode, SignalKey};
 use vogls_runtime::SimulationIo;
 use vogls_runtime::plugins::RuntimePluginState;
 use vogls_runtime::{RtSignalKey, RuntimeState};
 use vogls_sim::{Event, Regions, Simulation, VmProcess, VmProcessKey, lower_process_to_vm};
-use vogls_utils::{IndexMap, NonMaxU32, TimerStack, VgHashMap};
+use vogls_utils::{IndexMap, NonMaxU32, Table, TimerStack, VgHashMap};
 use vogls_verilog::arena::Arena;
 use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{Description, Module, ModuleItem, NonPortModuleItem, TimeScale};
@@ -27,7 +29,8 @@ use vogls_verilog::parser::{
 };
 use vogls_verilog::tokenizer::{Macro, Tokenized};
 
-use crate::fuse_signals::FuseSignalsContext;
+use crate::fuse_signals::{FuseSignalsContext, FuseTarget};
+use crate::symbol::{NetValue, Symbol};
 use crate::{
     ExecutionContext, append_referenced_modules, find_lupdt_signals, fuse_signals,
     generate_signals_heap, lower_to_shared_object,
@@ -45,7 +48,7 @@ pub enum DesignBackend {
 pub struct Design {
     pub gl: GlobalContext,
     pub ident_table: IdentTable,
-    pub elab_table: VSymbolTable,
+    pub elab_table: FrozenSymbolTable<Symbol>,
     pub backend: DesignBackend,
     pub rt_signal_map: VgHashMap<SignalKey, RtSignalKey>,
     pub signal_to_heap: Arc<[HeapRef]>,
@@ -390,7 +393,7 @@ impl Design {
             let VSymbol::Net(net) = &mut ctx.table[sid].content else {
                 unreachable!();
             };
-            net.net.nba = Some((process, nba, None, mask, None));
+            net.net.nba = Some((process, nba, mask));
         }
         timers.stop();
 
@@ -458,16 +461,35 @@ impl Design {
                 },
             )
         });
-        for symbol in ctx.table.symbol_id_iter() {
-            if let VSymbol::Net(net) = &mut ctx.table[symbol].content {
-                net.net.replace_signals(|s| {
-                    if fused.contains_key(&s) {
-                        mctx.gl.signals.remove(s);
+
+        let mut table: FrozenSymbolTable<Symbol> = ctx.table.into();
+        for symbol in table.symbol_id_iter() {
+            if let Symbol::Net(net) = &mut table[symbol].content {
+                match &mut net.net {
+                    NetValue::Signal(s) => {
+                        let prb = s.probe_signal().0;
+                        if let Some(FuseTarget::Constant(value)) = fused.get(&prb) {
+                            if fused.contains_key(&prb) {
+                                mctx.gl.signals.remove(prb);
+                            }
+                            net.net = NetValue::Constant(value.clone());
+                        } else {
+                            s.replace_signals(|s| {
+                                if fused.contains_key(&s) {
+                                    mctx.gl.signals.remove(s);
+                                }
+                                // @TODO: Figure out how to deal with constants.
+                                match fused.get(&s) {
+                                    None | Some(FuseTarget::Constant(_)) => (s, None),
+                                    Some(FuseTarget::Signal(r, slice)) => {
+                                        (*r, slice.map(|s| NonMaxU32::new(s.lsb()).unwrap()))
+                                    }
+                                }
+                            });
+                        }
                     }
-                    fused.get(&s).copied().map_or((s, None), |(r, slice)| {
-                        (r, slice.map(|s| NonMaxU32::new(s.lsb()).unwrap()))
-                    })
-                });
+                    NetValue::Constant(_) => unreachable!(),
+                }
             }
         }
 
@@ -516,8 +538,8 @@ impl Design {
 
         let signal_to_heap: Arc<[HeapRef]> = signal_to_heap.into();
         if mctx.has_vcd || ectx.vcd.is_some() {
-            let tlm = ctx.table.roots()[0];
-            let scope = ctx.vcd_scope(tlm, &ctx.arenas.ident_table);
+            let tlm = table.roots()[0];
+            let scope = vcd_scope(&table, tlm, &ctx.arenas.ident_table);
             let (children, map) = vogls_vcd::VcdScope::lower(&scope, &rt_signal_map);
             let rtvcdoutput = match &ectx.vcd {
                 Some(path) => {
@@ -549,7 +571,7 @@ impl Design {
                 num_regions,
                 plugins,
                 ctx.arenas.ident_table,
-                ctx.table,
+                table,
             )
         } else {
             Self::from_gl_interpretted(
@@ -564,7 +586,7 @@ impl Design {
                 num_regions,
                 plugins,
                 ctx.arenas.ident_table,
-                ctx.table,
+                table,
             )
         }
     }
@@ -636,7 +658,7 @@ impl Design {
                 3,
                 Vec::new(),
                 IdentTable::default(),
-                VSymbolTable::default(),
+                FrozenSymbolTable::default(),
             )
         } else {
             Self::from_gl_interpretted(
@@ -651,7 +673,7 @@ impl Design {
                 3,
                 Vec::new(),
                 IdentTable::default(),
-                VSymbolTable::default(),
+                FrozenSymbolTable::default(),
             )
         }
     }
@@ -670,7 +692,7 @@ impl Design {
         num_regions: u8,
         plugins: Vec<RuntimePluginState>,
         ident_table: IdentTable,
-        elab_table: VSymbolTable,
+        elab_table: FrozenSymbolTable<Symbol>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let (initial_state, design) = lower_to_shared_object(
             &gl,
@@ -710,7 +732,7 @@ impl Design {
         num_regions: u8,
         plugins: Vec<RuntimePluginState>,
         ident_table: IdentTable,
-        elab_table: VSymbolTable,
+        elab_table: FrozenSymbolTable<Symbol>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let mut processes = Vec::<VmProcess>::default();
         let mut regions = Regions::new(num_regions as usize);
@@ -861,5 +883,97 @@ impl Design {
             writeln!(&mut s, "{}", process.display(&self.gl)).unwrap();
         }
         s
+    }
+}
+
+pub fn vcd_scope(
+    symtable: &FrozenSymbolTable<Symbol>,
+    scope: SymbolId,
+    ident_table: &IdentTable,
+) -> vogls_ir::vcd::VcdOutput {
+    let mut key = scope;
+    while let Some(parent) = symtable[key].parent() {
+        key = parent;
+    }
+
+    let mut table = Table::new();
+    let mut signal_map = VgHashMap::default();
+    let mut scope = VcdScope {
+        name: "".to_string(),
+        items: Vec::new(),
+    };
+    extend_symbol_table_to_vcd_scope(
+        &mut scope,
+        &[key],
+        symtable,
+        ident_table,
+        &mut table,
+        &mut signal_map,
+    );
+    vogls_ir::vcd::VcdOutput {
+        table,
+        signal_map,
+        children: scope.items,
+    }
+}
+
+fn extend_symbol_table_to_vcd_scope(
+    scope: &mut VcdScope,
+    symbols: &[SymbolId],
+    table: &FrozenSymbolTable<Symbol>,
+    ident_table: &IdentTable,
+    variable_table: &mut Table<VcdVariableKey, vogls_ir::vcd::VcdVariable>,
+    signal_map: &mut VgHashMap<SignalKey, Vec<VcdVariableKey>>,
+) {
+    for sid in symbols.iter() {
+        let name = &ident_table[table[*sid].name()];
+        match &table[*sid].content {
+            Symbol::Module | Symbol::Block | Symbol::GenerateBlocks => {
+                let mut subscope = VcdScope {
+                    name: name.to_string(),
+                    items: Vec::new(),
+                };
+                extend_symbol_table_to_vcd_scope(
+                    &mut subscope,
+                    table[*sid].children(&table),
+                    table,
+                    ident_table,
+                    variable_table,
+                    signal_map,
+                );
+                scope
+                    .items
+                    .push(vogls_ir::vcd::VcdScopeItem::Scope(subscope));
+            }
+            Symbol::Net(i) => {
+                let net = &i.net;
+
+                // @TODO: Property implement this.
+                let lsb = 0;
+                let msb = i.ty.force_net_width().get() - 1;
+                let msb_lsb = (msb > 0).then_some((msb, lsb));
+
+                let (value, signal) = match net {
+                    NetValue::Signal(net_signal) => {
+                        let (signal, slice) = net_signal.probe_signal();
+                        (VcdValue::Signal(signal, slice), Some(signal))
+                    }
+                    NetValue::Constant(bits) => (VcdValue::Constant(bits.clone()), None),
+                };
+                let variable_key = variable_table.insert(vogls_ir::vcd::VcdVariable {
+                    name: ident_table[table[*sid].name()].to_string(),
+                    value,
+                    ty: vogls_ir::vcd::NetType::Wire,
+                    msb_lsb,
+                });
+                scope
+                    .items
+                    .push(vogls_ir::vcd::VcdScopeItem::Variable(variable_key));
+                if let Some(signal) = signal {
+                    signal_map.entry(signal).or_default().push(variable_key);
+                }
+            }
+            Symbol::Task | Symbol::Function | Symbol::Parameter(_) => {}
+        }
     }
 }

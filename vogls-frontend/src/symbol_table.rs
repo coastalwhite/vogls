@@ -18,11 +18,28 @@ pub struct SymbolTable<T> {
     lut: VgHashMap<(Option<SymbolId>, IdentId), SymbolId>,
 }
 
+pub struct FrozenSymbolTable<T> {
+    roots: Vec<SymbolId>,
+    symbols: Vec<FrozenSymbol<T>>,
+    children: Vec<SymbolId>,
+    lut: VgHashMap<(Option<SymbolId>, IdentId), SymbolId>,
+}
+
 pub struct Symbol<T> {
     name: IdentId,
     origin: TokenRange,
     parent: Option<SymbolId>,
     children: Vec<SymbolId>,
+
+    pub content: T,
+}
+
+pub struct FrozenSymbol<T> {
+    name: IdentId,
+    origin: TokenRange,
+    parent: Option<SymbolId>,
+    children_start: usize,
+    children_end: usize,
 
     pub content: T,
 }
@@ -44,6 +61,16 @@ impl<T> Default for SymbolTable<T> {
         }
     }
 }
+impl<T> Default for FrozenSymbolTable<T> {
+    fn default() -> Self {
+        Self {
+            roots: Vec::new(),
+            symbols: Vec::new(),
+            children: Vec::new(),
+            lut: VgHashMap::default(),
+        }
+    }
+}
 
 impl<T> Index<SymbolId> for SymbolTable<T> {
     type Output = Symbol<T>;
@@ -52,6 +79,17 @@ impl<T> Index<SymbolId> for SymbolTable<T> {
     }
 }
 impl<T> IndexMut<SymbolId> for SymbolTable<T> {
+    fn index_mut(&mut self, index: SymbolId) -> &mut Self::Output {
+        &mut self.symbols[index.0.get() as usize - 1]
+    }
+}
+impl<T> Index<SymbolId> for FrozenSymbolTable<T> {
+    type Output = FrozenSymbol<T>;
+    fn index(&self, index: SymbolId) -> &Self::Output {
+        &self.symbols[index.0.get() as usize - 1]
+    }
+}
+impl<T> IndexMut<SymbolId> for FrozenSymbolTable<T> {
     fn index_mut(&mut self, index: SymbolId) -> &mut Self::Output {
         &mut self.symbols[index.0.get() as usize - 1]
     }
@@ -169,6 +207,58 @@ impl<T> SymbolTable<T> {
     }
 }
 
+impl<T> FrozenSymbolTable<T> {
+    pub fn symbol_iter(&self) -> impl Iterator<Item = &FrozenSymbol<T>> {
+        self.symbols.iter()
+    }
+
+    pub fn symbol_id_iter(&self) -> impl Iterator<Item = SymbolId> + 'static {
+        (0..self.symbols.len()).map(|s| SymbolId(NonZeroU64::new(s as u64 + 1).unwrap()))
+    }
+
+    pub fn roots(&self) -> &[SymbolId] {
+        &self.roots
+    }
+
+    pub fn resolve(&self, scope: SymbolId, ident: IdentId) -> Option<SymbolId> {
+        self.lut.get(&(Some(scope), ident)).copied()
+    }
+}
+
+impl<F, T> From<SymbolTable<T>> for FrozenSymbolTable<F>
+where
+    F: From<T>,
+{
+    fn from(value: SymbolTable<T>) -> Self {
+        let mut children = Vec::new();
+        let symbols = value
+            .symbols
+            .into_iter()
+            .map(|s| {
+                let start = children.len();
+                children.extend(s.children.iter().copied());
+                let end = children.len();
+
+                FrozenSymbol {
+                    name: s.name,
+                    origin: s.origin,
+                    parent: s.parent,
+                    children_start: start,
+                    children_end: end,
+                    content: s.content.into(),
+                }
+            })
+            .collect();
+
+        Self {
+            roots: value.roots,
+            symbols,
+            children,
+            lut: value.lut,
+        }
+    }
+}
+
 impl<T> Symbol<T> {
     pub fn name(&self) -> IdentId {
         self.name
@@ -184,6 +274,24 @@ impl<T> Symbol<T> {
 
     pub fn children(&self) -> &[SymbolId] {
         &self.children
+    }
+}
+
+impl<T> FrozenSymbol<T> {
+    pub fn name(&self) -> IdentId {
+        self.name
+    }
+
+    pub fn origin(&self) -> TokenRange {
+        self.origin
+    }
+
+    pub fn parent(&self) -> Option<SymbolId> {
+        self.parent
+    }
+
+    pub fn children<'a>(&'_ self, table: &'a FrozenSymbolTable<T>) -> &'a [SymbolId] {
+        &table.children[self.children_start..self.children_end]
     }
 }
 

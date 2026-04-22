@@ -299,7 +299,7 @@ pub fn lower_unevaluated_system_function_call<'a>(
                 *arg_ident,
                 &mut mctx.diagnostics,
             )?;
-            let (signal, _slice) = net_symbol.net.probe_signal();
+            let signal = net_symbol.net.probe_signal();
             Ok(Some((
                 builder.lupdt(mctx.gl(), signal),
                 VType::UnsignedNet(TIME_VSIZE),

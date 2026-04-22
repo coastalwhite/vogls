@@ -1,0 +1,15 @@
+proc initial {
+L0:
+  waitregion 1, <L1>
+L1:
+  %t0 = const 1'h1
+  drv $x/1, %t0
+  halt
+}
+
+proc fuse_signal {
+L0:
+  %t0 = prb $a/0
+  drv $x/1, %t0
+  watch [$a/0], <L0>
+}

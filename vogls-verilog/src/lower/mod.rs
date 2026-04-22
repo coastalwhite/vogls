@@ -32,6 +32,16 @@ pub enum Driver {
     Constant(Bits),
     Signal(SignalKey, Option<SignalSlice>),
 }
+impl Driver {
+    fn size(&self, signals: &SlotMap<SignalKey, Signal>) -> VectorSize {
+        match self {
+            Driver::Constant(bits) => bits.size(),
+            Driver::Signal(signal, slice) => {
+                slice.map_or_else(|| signals[*signal].size, |s| s.width())
+            }
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct Edge {
@@ -44,7 +54,7 @@ pub struct MutLowerContext {
     pub gl: GlobalContext,
     pub diagnostics: Diagnostics,
     pub connections: Vec<Edge>,
-    pub fuse_scratch: Vec<(SignalKey, Option<SignalSlice>)>,
+    pub fuse_scratch: Vec<Driver>,
     pub has_vcd: bool,
 }
 impl MutLowerContext {
@@ -90,11 +100,10 @@ fn extend_symbol_table_to_vcd_scope(
                 let msb = i.ty.force_net_width().get() - 1;
                 let msb_lsb = (msb > 0).then_some((msb, lsb));
 
-                let (signal, signal_slice) = net.probe_signal();
+                let signal = net.probe_signal();
                 let variable_key = variable_table.insert(vogls_ir::vcd::VcdVariable {
                     name: ident_table[table[*sid].name()].to_string(),
-                    signal,
-                    signal_slice,
+                    value: VcdValue::Signal(signal, None),
                     ty: vogls_ir::vcd::NetType::Wire,
                     msb_lsb,
                 });
@@ -377,12 +386,13 @@ pub fn try_resolve_constant<'a, 's>(
     Ok(value)
 }
 
+use slotmap::SlotMap;
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::token_range::TokenRange;
-use vogls_ir::vcd::{VcdScope, VcdVariable, VcdVariableKey};
+use vogls_ir::vcd::{VcdScope, VcdValue, VcdVariable, VcdVariableKey};
 use vogls_ir::{
-    BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, ProcessKey, SCALAR_VSIZE,
+    BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, ProcessKey, SCALAR_VSIZE, Signal,
     SignalKey, SignalSlice, VariableKey, VectorSize, new_process,
 };
 use vogls_utils::{IndexMap, OrderedSet, Table, VgHashMap};
@@ -488,19 +498,18 @@ fn assign_input_port<'a>(
 
     mctx.fuse_scratch.clear();
     if try_lower_fuse_driver_expr(ctx, mctx, scope, expr)? {
-        let (drivee, drivee_slice) = port.net.blocking_drive_signal();
-        assert!(drivee_slice.is_none(), "should not be set yet");
+        let drivee = port.net.blocking_drive_signal();
 
         let mut offset = 0;
         let drivee_width = mctx.gl.signals[drivee].size;
-        for &(signal, slice) in &mctx.fuse_scratch {
-            let width = slice.map_or_else(|| mctx.gl.signals[signal].size, |s| s.width());
+        for driver in &mctx.fuse_scratch {
+            let width = driver.size(&mctx.gl.signals);
             let Some(width) = VectorSize::new((drivee_width.get() - offset).min(width.get()))
             else {
                 break;
             };
             mctx.connections.push(Edge {
-                driver: Driver::Signal(signal, slice),
+                driver: driver.clone(),
                 drivee,
                 drivee_slice: Some(SignalSlice::from_width(offset, width).unwrap()),
             });
@@ -551,10 +560,8 @@ fn assign_port_output<'a>(
             *ident,
             &mut mctx.diagnostics,
         )?;
-        let (driver, driver_slice) = output.net.probe_signal();
-        let (drivee, drivee_slice) = to_signal.net.blocking_drive_signal();
-        assert!(driver_slice.is_none(), "should not yet be set");
-        assert!(drivee_slice.is_none(), "should not yet be set");
+        let driver = output.net.probe_signal();
+        let drivee = to_signal.net.blocking_drive_signal();
         if exprs.is_empty() && range.is_none() {
             mctx.connections.push(Edge {
                 driver: Driver::Signal(driver, None),
@@ -601,7 +608,7 @@ fn assign_port_output<'a>(
     driving.push((probed, ty, expr));
 
     let mut ins = OrderedSet::new();
-    ins.insert(signal.probe_signal().0);
+    ins.insert(signal.probe_signal());
 
     let mut error = false;
     while let Some((var, var_ty, expr)) = driving.pop() {
@@ -1134,7 +1141,7 @@ pub fn instantiate_stmts_nba_signals<'a>(
                     match nba_signals.entry(sid) {
                         vogls_utils::Entry::Occuppied(mut entry) => entry.get().1 |= needs_mask,
                         vogls_utils::Entry::Vacant(entry) => {
-                            _ = entry.insert((net.net.blocking_drive_signal().0, needs_mask))
+                            _ = entry.insert((net.net.blocking_drive_signal(), needs_mask))
                         }
                     }
                 }

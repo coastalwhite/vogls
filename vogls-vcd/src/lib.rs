@@ -1,15 +1,15 @@
-use std::fmt::Alignment;
+use std::fmt::{self, Alignment};
 use std::path::Path;
 use std::sync::Arc;
 
 use vogls_codegen::{Heap, HeapRef};
 use vogls_ir::bits::format::{BitsFormatBase, BitsFormatOptions};
-use vogls_ir::vcd::{NetType, VcdVariableKey};
+use vogls_ir::vcd::{NetType, VcdValue as IrVcdValue, VcdVariableKey};
 use vogls_runtime::RtSignalKey;
 use vogls_runtime::plugins::RuntimePlugin;
 use vogls_utils::{NonMaxUsize, SecondaryTable, Table, VgHashMap};
 
-use vogls_ir::{SCALAR_VSIZE, SignalKey, SignalSlice, VectorSize};
+use vogls_ir::{Bits, SCALAR_VSIZE, SignalKey, SignalSlice, VectorSize};
 
 pub struct RtVcdOutput {
     pub printed_header: bool,
@@ -37,10 +37,16 @@ pub struct VcdScope {
 }
 
 #[derive(Debug, Clone)]
+pub enum VcdValue {
+    Signal(RtSignalKey),
+    Constant(Bits),
+}
+
+#[derive(Debug, Clone)]
 pub struct VcdVariable {
     pub name: String,
     pub variable: VcdVariableKey,
-    pub signal: RtSignalKey,
+    pub value: VcdValue,
     pub ty: NetType,
     pub msb_lsb: Option<(u32, u32)>,
 }
@@ -81,7 +87,9 @@ impl RtVcdOutput {
     ) -> Self {
         // @TODO: Error
         Self::new(
-            Box::new(std::io::BufWriter::new(std::fs::File::create(path).unwrap())),
+            Box::new(std::io::BufWriter::new(
+                std::fs::File::create(path).unwrap(),
+            )),
             signal_to_heap,
             children,
             map,
@@ -103,7 +111,10 @@ impl VcdScopeItem {
                 let v = &table[*key];
                 Self::Variable(VcdVariable {
                     name: v.name.clone(),
-                    signal: map[&v.signal],
+                    value: match &v.value {
+                        IrVcdValue::Signal(signal, _) => VcdValue::Signal(map[signal]),
+                        IrVcdValue::Constant(value) => VcdValue::Constant(value.clone()),
+                    },
                     variable: *key,
                     ty: v.ty,
                     msb_lsb: v.msb_lsb,
@@ -132,7 +143,13 @@ impl VcdScope {
                 signal_map[k],
                 vcd_keys
                     .iter()
-                    .map(|vcdkey| (*vcdkey, v.table[*vcdkey].signal_slice))
+                    .filter_map(|&vcdkey| {
+                        let item = &v.table[vcdkey];
+                        match &item.value {
+                            IrVcdValue::Signal(_, slice) => Some((vcdkey, *slice)),
+                            IrVcdValue::Constant(_) => None,
+                        }
+                    })
                     .collect(),
             );
         }
@@ -191,7 +208,7 @@ impl VcdScopeItem {
                 let VcdVariable {
                     name,
                     variable,
-                    signal: _,
+                    value: _,
                     ty,
                     msb_lsb,
                 } = k;
@@ -231,11 +248,13 @@ impl VcdScopeItem {
         match self {
             VcdScopeItem::Scope(s) => s.extend_into(tracked, values),
             VcdScopeItem::Variable(k) => {
-                tracked.or_insert_with(k.signal, || {
-                    let idx = NonMaxUsize::new(values.len()).unwrap();
-                    values.push(k.signal);
-                    Some(idx)
-                });
+                if let VcdValue::Signal(s) = &k.value {
+                    tracked.or_insert_with(*s, || {
+                        let idx = NonMaxUsize::new(values.len()).unwrap();
+                        values.push(*s);
+                        Some(idx)
+                    });
+                }
             }
         }
     }
@@ -263,6 +282,24 @@ fn dump_time_step(
             child.write_to(f)?;
         }
         writeln!(f, "$enddefinitions $end")?;
+        writeln!(f, "#0")?;
+
+        // @TODO: This should just be a flat data-structure so we can iterate this mess.
+        let mut stack = Vec::new();
+        stack.push(children);
+        while let Some(children) = stack.pop() {
+            for v in children.iter() {
+                match v {
+                    VcdScopeItem::Scope(scope) => stack.push(&scope.items),
+                    VcdScopeItem::Variable(variable) => {
+                        let VcdValue::Constant(bits) = &variable.value else {
+                            continue;
+                        };
+                        writeln!(f, "{}", VcdValueDisplay(bits, variable.variable))?;
+                    }
+                }
+            }
+        }
     }
     *printed_header = true;
 
@@ -275,7 +312,9 @@ fn dump_time_step(
     }
 
     *last_ts = time;
-    writeln!(f, "#{}", time)?;
+    if time > 0 {
+        writeln!(f, "#{}", time)?;
+    }
     for signal in updated_this_time_step.iter() {
         let bits = signals[signal.as_usize()];
         let bits = heap.load_tv_bits(bits);
@@ -284,32 +323,42 @@ fn dump_time_step(
                 None => bits.clone(),
                 Some(slice) => bits.slicez(slice.lsb(), slice.width()),
             };
-            if bits.size().get() > 1 {
-                f.write_all(&[b'b'])?;
-            }
-            write!(
-                f,
-                "{}",
-                bits.display(&BitsFormatOptions {
-                    prefix: false,
-                    base: BitsFormatBase::Binary,
-                    separator: None,
-                    align: Some(Alignment::Right),
-                    fill: '0',
-                    width: vogls_bits::format::BitsFormatWidth::Expand
-                })
-            )?;
-            if bits.size().get() > 1 {
-                f.write_all(&[b' '])?;
-            }
-            use vogls_utils::TableKey;
-            writeln!(f, "W{:X}", v.get())?;
+            writeln!(f, "{}", VcdValueDisplay(&bits, *v))?;
         }
         tracked[*signal] = None;
     }
 
     updated_this_time_step.clear();
     Ok(())
+}
+
+struct VcdValueDisplay<'a>(&'a Bits, VcdVariableKey);
+
+impl<'a> fmt::Display for VcdValueDisplay<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use fmt::Write;
+
+        if self.0.size().get() > 1 {
+            f.write_char('b')?;
+        }
+        write!(
+            f,
+            "{}",
+            self.0.display(&BitsFormatOptions {
+                prefix: false,
+                base: BitsFormatBase::Binary,
+                separator: None,
+                align: Some(Alignment::Right),
+                fill: '0',
+                width: vogls_bits::format::BitsFormatWidth::Expand
+            })
+        )?;
+        if self.0.size().get() > 1 {
+            f.write_char(' ')?;
+        }
+        use vogls_utils::TableKey;
+        write!(f, "W{:X}", self.1.get())
+    }
 }
 
 impl RuntimePlugin for RtVcdOutput {

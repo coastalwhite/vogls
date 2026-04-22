@@ -2,11 +2,13 @@ use std::fmt;
 use std::io::Write;
 use std::ops::{BitOr, BitOrAssign};
 
+use hashbrown::hash_map::Entry;
 use slotmap::SlotMap;
 use vogls_bits::format::BitsFormatOptions;
 use vogls_ir::token_range::TokenRange;
+use vogls_ir::vcd::VcdValue;
 use vogls_ir::{
-    BasicBlockBuilder, Bits, GlobalContext, INTEGER_VSIZE, Instruction, IntrinsicOp, Signal,
+    BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, Instruction, IntrinsicOp, Signal,
     SignalKey, SignalSlice, VectorSize, new_process,
 };
 use vogls_utils::{IndexMap, Table, TableKey, VgHashMap, VgHashSet};
@@ -15,10 +17,10 @@ use vogls_verilog::lower::Driver;
 vogls_utils::new_table_key! { struct NodeKey; }
 slotmap::new_key_type! { struct EdgeKey; }
 
-pub const LUPDT: u32 = 1u32;
-pub const PROBE: u32 = 2u32;
-pub const DRIVE: u32 = 4u32;
-pub const WATCH: u32 = 8u32;
+pub enum FuseTarget {
+    Signal(SignalKey, Option<SignalSlice>),
+    Constant(Bits),
+}
 
 struct NodeDisplay<'a>(&'a Node, &'a SlotMap<SignalKey, Signal>);
 impl<'a> fmt::Display for NodeDisplay<'a> {
@@ -266,7 +268,7 @@ pub fn fuse_signals(
     gl: &mut GlobalContext,
     connections: &[vogls_verilog::lower::Edge],
     ctx: &FuseSignalsContext,
-) -> VgHashMap<SignalKey, (SignalKey, Option<SignalSlice>)> {
+) -> VgHashMap<SignalKey, FuseTarget> {
     let mut nodes = Nodes::default();
     let mut edges = Edges::default();
     let mut signal_to_node = VgHashMap::<SignalKey, NodeKey>::default();
@@ -342,6 +344,22 @@ pub fn fuse_signals(
                         .get(s)
                         .map(|n| nodes[*n].flags |= NodeFlags::DRIVE)
                 }
+                I::Intrinsic(_, i, _) => match i.as_ref() {
+                    IntrinsicOp::Time
+                    | IntrinsicOp::Finish
+                    | IntrinsicOp::Random
+                    | IntrinsicOp::Display(..)
+                    | IntrinsicOp::Assert(..)
+                    | IntrinsicOp::VcdOpenFile(..)
+                    | IntrinsicOp::VcdAppendModule(..)
+                    | IntrinsicOp::VcdPause
+                    | IntrinsicOp::VcdResume => {}
+                    IntrinsicOp::ReadMem(read_mem) => {
+                        _ = signal_to_node
+                            .get(&read_mem.signal)
+                            .map(|n| nodes[*n].flags |= NodeFlags::DRIVE);
+                    }
+                },
                 _ => {}
             }
         }
@@ -582,8 +600,7 @@ pub fn fuse_signals(
         println!();
     }
 
-    let mut replacement_signals =
-        VgHashMap::<SignalKey, (SignalKey, Option<SignalSlice>)>::default();
+    let mut fused_signals = VgHashMap::<SignalKey, FuseTarget>::default();
 
     for v in nodes.iter() {
         let NodeContent::Signal(signal) = v.content else {
@@ -594,16 +611,32 @@ pub fn fuse_signals(
             continue;
         }
 
-        if let Some(edge) = v.fanin.first().map(|&e| &edges[e])
-            && v.fanin.len() == 1
-            && edge.drivee_slice.lsb() == 0
-            && edge.drivee_slice.width() == gl.signals[signal].size
-            && let NodeContent::Signal(driver) = &nodes[edge.driver].content
+        // Fuse the signals when possible.
+        //
+        // C1: Node only has a single driver.
+        if !v.flags.contains(NodeFlags::DRIVE)
+            && let &[e] = v.fanin.as_slice()
+            && let edge = &edges[e]
+
+            // C2: Edge spans entire signal.
+            && edge.drivee_slice == SignalSlice::with_end(v.size)
+
+            // C3: Either signal is not observed for LastUpdateTime or Watched, other the fused
+            // signal is used in its entirety.
+            && (!v.flags.contains(NodeFlags::LUPDT | NodeFlags::WATCH) || edge.driver_slice == SignalSlice::with_end(nodes[edge.driver].size))
         {
-            let driver_slice = (edge.driver_slice.lsb() != 0
-                || edge.driver_slice.width() != nodes[edge.driver].size)
-                .then_some(edge.driver_slice);
-            replacement_signals.insert(signal, (*driver, driver_slice));
+            match &nodes[edge.driver].content {
+                NodeContent::Signal(driver) => {
+                    let driver_slice = (edge.driver_slice
+                        != SignalSlice::with_end(nodes[edge.driver].size))
+                    .then_some(edge.driver_slice);
+                    fused_signals.insert(signal, FuseTarget::Signal(*driver, driver_slice));
+                }
+                NodeContent::Constant(value) => {
+                    let value = value.slicez(edge.driver_slice.lsb(), edge.driver_slice.width());
+                    fused_signals.insert(signal, FuseTarget::Constant(value));
+                }
+            }
             continue;
         }
 
@@ -649,35 +682,61 @@ pub fn fuse_signals(
         for i in std::mem::take(&mut gl.bbs[key].instrs) {
             match &i {
                 I::Probe(dst, signal, offset) => {
-                    if let Some((to, slice)) = replacement_signals.get(signal) {
-                        match slice {
-                            None => builder.push_raw_instruction(I::Probe(*dst, *to, *offset)),
-                            Some(slice) => {
-                                builder.probe_slice_constant(
-                                    gl,
-                                    *to,
-                                    offset + slice.lsb(),
-                                    slice.width(),
-                                );
-                                builder
-                                    .instrs
-                                    .last_mut()
-                                    .unwrap()
-                                    .get_destination_variable_mut()
-                                    .map(|d| *d = *dst);
+                    if let Some(tgt) = fused_signals.get(signal) {
+                        match tgt {
+                            FuseTarget::Signal(to, slice) => match slice {
+                                None => builder.push_raw_instruction(I::Probe(*dst, *to, *offset)),
+                                Some(slice) => {
+                                    builder.probe_slice_constant(
+                                        gl,
+                                        *to,
+                                        offset + slice.lsb(),
+                                        slice.width(),
+                                    );
+                                    builder
+                                        .instrs
+                                        .last_mut()
+                                        .unwrap()
+                                        .get_destination_variable_mut()
+                                        .map(|d| *d = *dst);
+                                }
+                            },
+                            FuseTarget::Constant(value) => {
+                                builder.push_raw_instruction(I::Constant(*dst, value.clone()));
                             }
                         }
                         continue;
                     }
                 }
                 I::ProbeSlice(dst, signal, offset) => {
-                    if let Some((to, slice)) = replacement_signals.get(signal) {
-                        match slice {
-                            None => builder.push_raw_instruction(I::ProbeSlice(*dst, *to, *offset)),
-                            Some(slice) => {
-                                let offset =
-                                    builder.plus_constant(gl, *offset, Bits::new_u32(slice.lsb()));
-                                builder.probe_slice(gl, *to, offset, slice.width());
+                    if let Some(tgt) = fused_signals.get(signal) {
+                        match tgt {
+                            FuseTarget::Signal(to, slice) => match slice {
+                                None => {
+                                    builder.push_raw_instruction(I::ProbeSlice(*dst, *to, *offset))
+                                }
+                                Some(slice) => {
+                                    let offset = builder.plus_constant(
+                                        gl,
+                                        *offset,
+                                        Bits::new_u32(slice.lsb()),
+                                    );
+                                    builder.probe_slice(gl, *to, offset, slice.width());
+                                    builder
+                                        .instrs
+                                        .last_mut()
+                                        .unwrap()
+                                        .get_destination_variable_mut()
+                                        .map(|d| *d = *dst);
+                                }
+                            },
+                            FuseTarget::Constant(value) => {
+                                builder.rev_imm_slice_x(
+                                    gl,
+                                    value.clone(),
+                                    *offset,
+                                    gl.vars[*dst].size,
+                                );
                                 builder
                                     .instrs
                                     .last_mut()
@@ -689,66 +748,78 @@ pub fn fuse_signals(
                         continue;
                     }
                 }
-                I::Drive(signal, src, partial) => {
-                    if let Some((to, slice)) = replacement_signals.get(signal) {
-                        match (*partial, slice) {
-                            (partial, None) => builder.drive_opt_partial(gl, *to, *src, partial),
-                            (None, Some(slice)) => builder.drive_partial_constant(
-                                gl,
-                                *to,
-                                *src,
-                                slice.lsb(),
-                                slice.width(),
-                            ),
-                            (Some((offset, width)), Some(slice)) => {
-                                let offset = builder.plus_constant(
-                                    gl,
-                                    offset,
-                                    Bits::from_u64(INTEGER_VSIZE, slice.lsb() as u64),
-                                );
-                                builder.drive_partial(gl, *to, *src, offset, width);
-                            }
-                        }
-
-                        continue;
+                I::Drive(signal, _, _) => {
+                    if fused_signals.get(signal).is_some() {
+                        // You are only allowed to fuse items that don't have an external
+                        // driver.
+                        unreachable!("Implementation error");
                     }
                 }
                 I::LastUpdateTime(dst, signal) => {
-                    let signal = replacement_signals.get(signal).map_or(*signal, |(s, _)| *s);
-                    builder.push_raw_instruction(I::LastUpdateTime(*dst, signal));
-                    continue;
+                    if let Some(tgt) = fused_signals.get(signal) {
+                        match tgt {
+                            FuseTarget::Signal(signal, slice) => {
+                                // Fusing is only allowed when there is a LastUpdateTime
+                                // instruction if the whole signal is fused.
+                                assert!(slice.is_none());
+                                builder.push_raw_instruction(I::LastUpdateTime(*dst, *signal));
+                            }
+                            FuseTarget::Constant(_) => {
+                                // Constant signals are only assigned at the start.
+                                builder.push_raw_instruction(I::Constant(*dst, Bits::new_u64(0)));
+                            }
+                        }
+                        continue;
+                    }
                 }
                 I::Intrinsic(dst, op, srcs) => match op.as_ref() {
                     IntrinsicOp::ReadMem(readmem) => {
-                        if let Some((to, slice)) = replacement_signals.get(&readmem.signal) {
-                            let mut readmem = readmem.clone();
-                            readmem.signal = *to;
-                            readmem.offset += slice.map_or(0, |s| s.lsb());
-                            builder.push_raw_instruction(I::Intrinsic(
-                                *dst,
-                                Box::new(IntrinsicOp::ReadMem(readmem)),
-                                srcs.clone(),
-                            ));
-                            continue;
+                        if fused_signals.get(&readmem.signal).is_some() {
+                            // You are only allowed to fuse items that don't have an external
+                            // driver.
+                            unreachable!("Implementation error");
                         }
                     }
                     IntrinsicOp::VcdAppendModule(module) => {
                         let mut module = module.clone();
-                        for value in module.table.values_mut() {
-                            if let Some((to, slice)) = replacement_signals.get(&value.signal) {
-                                value.signal = *to;
-                                value.signal_slice = match (value.signal_slice, *slice) {
-                                    (None, None) => None,
-                                    (Some(s), None) | (None, Some(s)) => Some(s),
-                                    (Some(vs), Some(os)) => Some(os.subslice(vs).unwrap()),
-                                };
+                        for vcd_var in module.table.values_mut() {
+                            let VcdValue::Signal(vcd_signal, vcd_signal_slice) = &vcd_var.value
+                            else {
+                                continue;
+                            };
+                            if let Some(tgt) = fused_signals.get(vcd_signal) {
+                                match tgt {
+                                    FuseTarget::Signal(to, slice) => {
+                                        vcd_var.value = VcdValue::Signal(
+                                            *to,
+                                            match (*vcd_signal_slice, *slice) {
+                                                (None, None) => None,
+                                                (Some(s), None) | (None, Some(s)) => Some(s),
+                                                (Some(vs), Some(os)) => {
+                                                    Some(os.subslice(vs).unwrap())
+                                                }
+                                            },
+                                        );
+                                    }
+                                    FuseTarget::Constant(bits) => {
+                                        vcd_var.value = VcdValue::Constant(bits.clone());
+                                    }
+                                }
                             }
                         }
-                        module.signal_map = module
-                            .signal_map
-                            .into_iter()
-                            .map(|(s, v)| (replacement_signals.get(&s).map_or(s, |(s, _)| *s), v))
-                            .collect();
+                        for (s, tgt) in fused_signals.iter() {
+                            let Some(items) = module.signal_map.remove(s) else {
+                                continue;
+                            };
+
+                            match tgt {
+                                FuseTarget::Signal(to, _) => match module.signal_map.entry(*to) {
+                                    Entry::Occupied(mut e) => e.get_mut().extend(items.into_iter()),
+                                    Entry::Vacant(e) => _ = e.insert(items),
+                                },
+                                FuseTarget::Constant(_) => {}
+                            }
+                        }
                         builder.push_raw_instruction(I::Intrinsic(
                             *dst,
                             Box::new(IntrinsicOp::VcdAppendModule(module)),
@@ -764,10 +835,21 @@ pub fn fuse_signals(
             builder.push_raw_instruction(i);
         }
         gl.bbs[key].instrs = builder.into_instructions();
-        gl.bbs[key]
-            .terminator
-            .map_signal(|s| replacement_signals.get(&s).map_or(s, |(s, _)| *s));
+        if let BasicBlockTerminator::Watch(_, signals) = &mut gl.bbs[key].terminator {
+            signals.retain_mut(|s| match fused_signals.get(s) {
+                None => true,
+                Some(FuseTarget::Signal(to, _)) => {
+                    *s = *to;
+                    true
+                }
+                Some(FuseTarget::Constant(_)) => false,
+            });
+
+            if signals.is_empty() {
+                gl.bbs[key].terminator = BasicBlockTerminator::Halt;
+            }
+        }
     }
 
-    replacement_signals
+    fused_signals
 }

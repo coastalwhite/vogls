@@ -6,7 +6,7 @@ use crate::ast::expr::{BitSlice, Expr};
 use crate::ast::module::NetAssignment;
 use crate::ast::{AstId, AstIdRange, HIdent};
 use crate::elaborate::VSymbol;
-use crate::lower::{hident_span, try_resolve_net, try_resolve_symbol_id, Driver, Edge};
+use crate::lower::{Driver, Edge, hident_span, try_resolve_net, try_resolve_symbol_id};
 
 use super::{Diagnostics, LowerContext, MutLowerContext, VType, VValue, eval_constant_expr};
 
@@ -161,6 +161,13 @@ pub fn try_lower_fuse_driver_expr<'a>(
         Expr::Ident(ident, exprs, range_expr) => {
             try_lower_fuse_driver_ident(ctx, mctx, scope, expr, *ident, *exprs, *range_expr)
         }
+        Expr::Sized(sized) => {
+            // @TODO: Signed.
+            let sized = &ctx.arenas.sized_numbers[sized.item.at];
+            mctx.fuse_scratch
+                .push(Driver::Constant(sized.value.clone()));
+            Ok(true)
+        }
         _ => return Ok(false),
     }
 }
@@ -195,19 +202,18 @@ pub fn try_lower_fuse_driver_ident<'a>(
         return Err(());
     }
 
-    let (net_signal, net_slice) = net.net.probe_signal();
-    assert!(net_slice.is_none(), "should not yet be set");
+    let net_signal = net.net.probe_signal();
 
     // Fast path. No slicing at all.
     if exprs.is_empty() && range_expr.is_none() {
-        mctx.fuse_scratch.push((net_signal, None));
+        mctx.fuse_scratch.push(Driver::Signal(net_signal, None));
         return Ok(true);
     }
 
     let ty_size = net.ty.force_net_width();
 
     // Handle array indexing.
-    let mut offset = net_slice.map_or(0, |s| s.lsb());
+    let mut offset = 0;
     let mut current_size = ty_size;
     for (expr, &dim) in exprs.iter().rev().zip(net.dims.iter()) {
         let Some(idx) = try_constant_expr_no_ctx(ctx, mctx, scope, expr) else {
@@ -269,7 +275,8 @@ pub fn try_lower_fuse_driver_ident<'a>(
         output_slice = relative_slice;
     }
 
-    mctx.fuse_scratch.push((net_signal, Some(output_slice)));
+    mctx.fuse_scratch
+        .push(Driver::Signal(net_signal, Some(output_slice)));
     Ok(true)
 }
 
@@ -296,8 +303,7 @@ pub fn try_fuse_assign<'a>(
         lvalue.ident,
         &mut mctx.diagnostics,
     )?;
-    let (drivee, drivee_slice) = to_net.net.blocking_drive_signal();
-    assert!(drivee_slice.is_none(), "should not yet be set");
+    let drivee = to_net.net.blocking_drive_signal();
 
     let single_expression = lvalue.constant_range_expression.and_then(|r| match *r {
         ConstantRangeExpression::Single(expr) => Some(expr),
@@ -447,13 +453,13 @@ pub fn try_fuse_assign<'a>(
     }
 
     let mut offset = drivee_output_slice.lsb();
-    for &(signal, slice) in &mctx.fuse_scratch {
-        let width = slice.map_or_else(|| mctx.gl.signals[signal].size, |s| s.width());
+    for driver in &mctx.fuse_scratch {
+        let width = driver.size(&mctx.gl.signals);
         let Some(width) = VectorSize::new((drivee_ty_size.get() - offset).min(width.get())) else {
             break;
         };
         mctx.connections.push(Edge {
-            driver: Driver::Signal(signal, slice),
+            driver: driver.clone(),
             drivee,
             drivee_slice: Some(SignalSlice::from_width(offset, width).unwrap()),
         });

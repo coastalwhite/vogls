@@ -704,6 +704,7 @@ name = "vogls"
 version = "0.0.1"
 dependencies = [
  "clap",
+ "hashbrown 0.16.1",
  "slotmap",
  "tempfile",
  "vogls-bits",

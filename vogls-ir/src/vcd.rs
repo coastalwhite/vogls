@@ -1,3 +1,4 @@
+use vogls_bits::Bits;
 use vogls_utils::{Table, VgHashMap};
 
 use crate::{SignalKey, SignalSlice};
@@ -25,10 +26,15 @@ pub struct VcdScope {
 }
 
 #[derive(Debug, Clone)]
+pub enum VcdValue {
+    Signal(SignalKey, Option<SignalSlice>),
+    Constant(Bits),
+}
+
+#[derive(Debug, Clone)]
 pub struct VcdVariable {
     pub name: String,
-    pub signal: SignalKey,
-    pub signal_slice: Option<SignalSlice>,
+    pub value: VcdValue,
     pub ty: NetType,
     pub msb_lsb: Option<(u32, u32)>,
 }

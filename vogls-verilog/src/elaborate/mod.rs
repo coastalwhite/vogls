@@ -5,13 +5,14 @@ use std::sync::Arc;
 use vogls_frontend::ident_table::IdentId;
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{
-    BasicBlockBuilder, BasicBlockKey, Bits, ConnectionDirection, GlobalContext, INTEGER_VSIZE,
-    ProcessKey, SCALAR_VSIZE, Signal, SignalKey, SignalSlice, VariableKey, VectorSize,
+    BasicBlockBuilder, BasicBlockKey, Bits, ConnectionDirection, GlobalContext, ProcessKey,
+    SCALAR_VSIZE, Signal, SignalKey, VariableKey, VectorSize,
 };
-use vogls_utils::{NonMaxU32, Table, VgHashMap, new_table_key};
+use vogls_utils::{Table, VgHashMap, new_table_key};
 
 use crate::ast::module::{
-    Dimension, FunctionDeclaration, ModuleOrGenerateItem, PortDeclaration, Range, TaskDeclaration, TimeScale,
+    Dimension, FunctionDeclaration, ModuleOrGenerateItem, PortDeclaration, Range, TaskDeclaration,
+    TimeScale,
 };
 use crate::ast::{AstId, AstIdRange, AstItem, Identifier};
 use crate::lower::{Diagnostics, VType, VValue, eval_constant_expr};
@@ -77,88 +78,34 @@ pub struct ModuleSymbol {
 
 pub struct Net {
     width: VectorSize,
-    specify: Option<(SignalKey, Option<NonMaxU32>)>,
-    ba: SignalKey,
-    ba_offset: Option<NonMaxU32>,
-    pub nba: Option<(
-        ProcessKey,
-        SignalKey,
-        Option<NonMaxU32>,
-        Option<SignalKey>,
-        Option<NonMaxU32>,
-    )>,
-}
-
-fn drive_opt_partial_helper(
-    gl: &mut GlobalContext,
-    bbb: &mut BasicBlockBuilder,
-    signal: SignalKey,
-    slice: Option<SignalSlice>,
-    src: VariableKey,
-    partial: Option<(VariableKey, VectorSize)>,
-) {
-    match (slice, partial) {
-        (None, _) => bbb.drive_opt_partial(gl, signal, src, partial),
-        (Some(slice), None) => {
-            bbb.drive_partial_constant(gl, signal, src, slice.lsb(), slice.width());
-        }
-        (Some(slice), Some((offset, length))) => {
-            let offset = bbb.plus_constant(
-                gl,
-                offset,
-                Bits::from_u64(INTEGER_VSIZE, slice.lsb() as u64),
-            );
-            bbb.drive_partial(gl, signal, src, offset, length);
-        }
-    }
+    pub specify: Option<SignalKey>,
+    pub ba: SignalKey,
+    pub nba: Option<(ProcessKey, SignalKey, Option<SignalKey>)>,
 }
 
 impl Net {
     pub fn set_specify(&mut self, value: SignalKey) -> Option<SignalKey> {
-        self.specify.replace((value, None)).map(|(s, _)| s)
+        self.specify.replace(value)
     }
 
-    pub fn probe_signal(&self) -> (SignalKey, Option<SignalSlice>) {
-        (
-            self.ba,
-            self.ba_offset
-                .map(|lsb| SignalSlice::from_width(lsb.get(), self.width).unwrap()),
-        )
+    pub fn probe_signal(&self) -> SignalKey {
+        self.ba
     }
 
-    pub fn blocking_drive_signal(&self) -> (SignalKey, Option<SignalSlice>) {
+    pub fn blocking_drive_signal(&self) -> SignalKey {
         match self.specify {
             None => self.probe_signal(),
-            Some((signal, lsb)) => (
-                signal,
-                lsb.map(|lsb| SignalSlice::from_width(lsb.get(), self.width).unwrap()),
-            ),
+            Some(signal) => signal,
         }
     }
 
-    pub fn non_blocking_drive_signal(
-        &self,
-    ) -> (
-        SignalKey,
-        Option<SignalSlice>,
-        Option<SignalKey>,
-        Option<SignalSlice>,
-    ) {
-        let (_, value, value_offset, mask, mask_offset) = self.nba.unwrap();
-        (
-            value,
-            value_offset.map(|lsb| SignalSlice::from_width(lsb.get(), self.width).unwrap()),
-            mask,
-            mask_offset.map(|lsb| SignalSlice::from_width(lsb.get(), self.width).unwrap()),
-        )
+    pub fn non_blocking_drive_signal(&self) -> (SignalKey, Option<SignalKey>) {
+        let (_, value, mask) = self.nba.unwrap();
+        (value, mask)
     }
 
     pub fn probe(&self, gl: &mut GlobalContext, bbb: &mut BasicBlockBuilder) -> VariableKey {
-        let (signal, slice) = self.probe_signal();
-        match slice {
-            None => bbb.probe(gl, signal),
-            Some(s) => bbb.probe_slice_constant(gl, signal, s.lsb(), s.width()),
-        }
+        bbb.probe(gl, self.probe_signal())
     }
 
     pub fn drive_blocking(
@@ -168,8 +115,7 @@ impl Net {
         src: VariableKey,
         partial: Option<(VariableKey, VectorSize)>,
     ) {
-        let (signal, slice) = self.blocking_drive_signal();
-        drive_opt_partial_helper(gl, bbb, signal, slice, src, partial);
+        bbb.drive_opt_partial(gl, self.blocking_drive_signal(), src, partial)
     }
     pub fn drive_non_blocking(
         &self,
@@ -178,37 +124,17 @@ impl Net {
         src: VariableKey,
         partial: Option<(VariableKey, VectorSize)>,
     ) {
-        let (value, value_slice, mask, mask_slice) = self.non_blocking_drive_signal();
-        drive_opt_partial_helper(gl, bbb, value, value_slice, src, partial);
+        let (value, mask) = self.non_blocking_drive_signal();
+        bbb.drive_opt_partial(gl, value, src, partial);
         if let Some(mask) = mask {
             let size = gl.vars[src].size;
             let mask_value = bbb.constant(gl, Bits::new_ones(size));
-            drive_opt_partial_helper(gl, bbb, mask, mask_slice, mask_value, partial);
+            bbb.drive_opt_partial(gl, mask, mask_value, partial);
         }
     }
 
     pub fn width(&self) -> VectorSize {
         self.width
-    }
-
-    pub fn replace_signals(
-        &mut self,
-        mut f: impl FnMut(SignalKey) -> (SignalKey, Option<NonMaxU32>),
-    ) {
-        assert!(self.ba_offset.is_none());
-        (self.ba, self.ba_offset) = f(self.ba);
-        if let Some(specify) = &mut self.specify {
-            assert!(specify.1.is_none());
-            *specify = f(specify.0);
-        }
-        if let Some((_, value, value_slice, mask, mask_slice)) = &mut self.nba {
-            assert!(value_slice.is_none());
-            assert!(mask_slice.is_none());
-            (*value, *value_slice) = f(*value);
-            if let Some(mask) = mask {
-                (*mask, *mask_slice) = f(*mask);
-            }
-        }
     }
 }
 
@@ -317,11 +243,7 @@ fn new_net(
     let origin = arenas.get_item_span(name);
     let name = arenas.ident_table[name.item.0].to_string();
 
-    static CTR: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let name = format!(
-        "{name}/{}",
-        CTR.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    );
+    let name = format!("{name}/{}", gl.signals.len());
 
     let signal = gl.signals.insert(Signal {
         name,
@@ -334,7 +256,6 @@ fn new_net(
         width: size,
         specify: None,
         ba: signal,
-        ba_offset: None,
         nba: None,
     }
 }

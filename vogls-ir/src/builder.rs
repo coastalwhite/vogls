@@ -1209,7 +1209,8 @@ impl BasicBlockBuilder {
         assert_eq!(size, gl.vars[falsy].size);
         assert_eq!(SCALAR_VSIZE, gl.vars[select].size);
         let dst = self.next_tmp_var(gl, size);
-        self.instrs.push(Instruction::Select(dst, select, truthy, falsy));
+        self.instrs
+            .push(Instruction::Select(dst, select, truthy, falsy));
         dst
     }
 
@@ -1246,5 +1247,16 @@ impl BasicBlockBuilder {
     ) -> VariableKey {
         let constant = self.constant(gl, constant);
         self.minus(gl, constant, src)
+    }
+
+    pub fn rev_imm_slice_x(
+        &mut self,
+        gl: &mut GlobalContext,
+        value: Bits,
+        offset: VariableKey,
+        width: VectorSize,
+    ) -> VariableKey {
+        let value = self.constant(gl, value);
+        self.slice(gl, value, offset, width)
     }
 }

@@ -565,8 +565,7 @@ pub fn lower_specify<'a>(
                     );
                     return Err(());
                 };
-                let (input, input_slice) = input_net.net.probe_signal();
-                assert!(input_slice.is_none(), "should not be set yet");
+                let input = input_net.net.probe_signal();
                 let output_sid = try_resolve_symbol_id(
                     scope,
                     &ctx.table,
@@ -581,8 +580,7 @@ pub fn lower_specify<'a>(
                     );
                     return Err(());
                 };
-                let (output, output_slice) = output_net.net.blocking_drive_signal();
-                assert!(output_slice.is_none(), "should not be set yet");
+                let output = output_net.net.blocking_drive_signal();
 
                 if matches!(variant, PathDeclarationVariant::Full)
                     && input_net.ty.force_net_width() != output_net.ty.force_net_width()

@@ -9,9 +9,10 @@ mod vogls {
     use pyo3::exceptions::{PyException, PyValueError};
     use pyo3::{PyResult, prelude::*};
     use vogls::design::DesignState;
+    use vogls::symbol::{NetValue, Symbol};
     use vogls::utils::TimerStack;
     use vogls::{
-        BitsFormatOptions, ExecutionContext, LogicMode, SimulationIo, VSymbol, VectorSize,
+        BitsFormatOptions, ExecutionContext, LogicMode, SimulationIo, VectorSize,
     };
 
     use crate::trace::TracePlugin;
@@ -162,10 +163,13 @@ mod vogls {
                 };
                 sid = ssid;
             }
-            let VSymbol::Net(net_symbol) = &self.inner.elab_table[sid].content else {
+            let Symbol::Net(net_symbol) = &self.inner.elab_table[sid].content else {
                 return Err(PyException::new_err("not a signal"));
             };
-            let (signal, _slice) = net_symbol.net.blocking_drive_signal();
+            let (signal, _slice) = match &net_symbol.net {
+                NetValue::Signal(s) => s.blocking_drive_signal(),
+                NetValue::Constant(_) => todo!(),
+            };
             Ok(SignalRef {
                 inner: self.inner.get_rt_signal(signal),
             })

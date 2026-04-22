@@ -1,5 +1,7 @@
 use vogls_frontend::symbol_table::SymbolId;
-use vogls_ir::{new_process, Bits, ConnectionDirection, GlobalContext, SignalSlice, VectorSize, SCALAR_VSIZE};
+use vogls_ir::{
+    Bits, ConnectionDirection, GlobalContext, SCALAR_VSIZE, SignalSlice, VectorSize, new_process,
+};
 use vogls_utils::OrderedSet;
 
 use crate::ast::module::{
@@ -17,7 +19,8 @@ use crate::lower::fuse::{try_fuse_assign, try_lower_fuse_driver_expr};
 use crate::lower::statement::statements_to_process;
 use crate::lower::udp::lower_udp;
 use crate::lower::{
-    assign_input_port, assign_port_output, eval_constant_expr, evaluate_range, resolve_symbol_id, try_resolve_net, unwrap_get_module, Driver, Edge, VType
+    Edge, VType, assign_input_port, assign_port_output, eval_constant_expr, evaluate_range,
+    resolve_symbol_id, try_resolve_net, unwrap_get_module,
 };
 use crate::parser::AstArenas;
 
@@ -68,23 +71,19 @@ pub fn lower<'a>(
 
                                 mctx.fuse_scratch.clear();
                                 if try_lower_fuse_driver_expr(ctx, mctx, scope, *expr)? {
-                                    let (drivee, drivee_slice) = net.net.blocking_drive_signal();
-                                    assert!(drivee_slice.is_none(), "should not be set yet");
+                                    let drivee = net.net.blocking_drive_signal();
 
                                     let mut offset = 0;
                                     let drivee_width = mctx.gl.signals[drivee].size;
-                                    for &(signal, slice) in &mctx.fuse_scratch {
-                                        let width = slice.map_or_else(
-                                            || mctx.gl.signals[signal].size,
-                                            |s| s.width(),
-                                        );
+                                    for driver in &mctx.fuse_scratch {
+                                        let width = driver.size(&mctx.gl.signals);
                                         let Some(width) = VectorSize::new(
                                             (drivee_width.get() - offset).min(width.get()),
                                         ) else {
                                             break;
                                         };
                                         mctx.connections.push(Edge {
-                                            driver: Driver::Signal(signal, slice),
+                                            driver: driver.clone(),
                                             drivee,
                                             drivee_slice: Some(
                                                 SignalSlice::from_width(offset, width).unwrap(),

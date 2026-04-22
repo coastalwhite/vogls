@@ -1086,8 +1086,7 @@ pub fn get_used_ident_signals<'a>(
     };
     match &ctx.table[symbol_key].content {
         VSymbol::Net(s) => {
-            let (signal, _slice) = s.net.probe_signal();
-            _ = signals.insert(signal);
+            _ = signals.insert(s.net.probe_signal());
         }
         VSymbol::Parameter(_)
         | VSymbol::GenVar

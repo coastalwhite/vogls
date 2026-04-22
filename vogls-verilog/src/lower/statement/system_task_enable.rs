@@ -205,8 +205,7 @@ pub fn lower_system_task_enable<'a>(
             let stride = net.ty.force_net_width();
             let offset = 0;
             let limit = net.dims[0];
-            let (signal, slice) = net.net.blocking_drive_signal();
-            assert!(slice.is_none(), "should not yet be set");
+            let signal = net.net.blocking_drive_signal();
 
             let binary = system_task_ident == "readmemb";
             let readmem = ReadMem {

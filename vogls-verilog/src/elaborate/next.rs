@@ -109,7 +109,6 @@ impl<'a> ElaborationState<'a> {
             width: SCALAR_VSIZE,
             specify: None,
             ba: self.dummy_signal,
-            ba_offset: None,
             nba: None,
         }
     }

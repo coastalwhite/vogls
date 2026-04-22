@@ -135,7 +135,7 @@ pub fn lower<'a>(
                         *ast_ident,
                         &mut mctx.diagnostics,
                     )?;
-                    let (signal, _slice) = net.net.probe_signal();
+                    let signal = net.net.probe_signal();
                     conditions.push((condition, VariableKey::default(), net, *expr));
                     signals.push(signal);
                 }
