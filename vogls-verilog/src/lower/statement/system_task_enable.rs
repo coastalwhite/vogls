@@ -5,8 +5,9 @@ use vogls_ir::{BasicBlockBuilder, IntrinsicOp, ReadMem, VariableKey};
 use crate::ast::AstId;
 use crate::ast::expr::Expr;
 use crate::ast::statement::SystemTaskEnable;
+use crate::elaborate::VSymbol;
 use crate::lower::expression::{get_expr_type, lower_expr};
-use crate::lower::{LowerContext, MutLowerContext};
+use crate::lower::{LowerContext, MutLowerContext, try_resolve_symbol_id};
 use crate::lower::{expression, hident_span, try_resolve_net};
 
 pub fn lower_system_task_enable<'a>(
@@ -154,14 +155,44 @@ pub fn lower_system_task_enable<'a>(
 
         "readmemb" | "readmemh" => {
             assert!((2..=4).contains(&expressions.len()));
-            let Some(path) = expressions.get(0).into_str_literal() else {
-                mctx.diagnostics.warnings.push((
-                    ctx.arenas.get_span(system_task_enable),
-                    "ignored: not yet supported path".to_string(),
-                ));
-                return Ok(builder);
+            let path = match &*expressions.get(0) {
+                Expr::String(s) => ctx.arenas.text[s.0.start..s.0.end].to_string(),
+                Expr::Ident(ident, exprs, range_exprs)
+                    if exprs.is_empty() && range_exprs.is_none() =>
+                {
+                    let sid = try_resolve_symbol_id(
+                        scope,
+                        &ctx.table,
+                        &ctx.arenas,
+                        *ident,
+                        &mut mctx.diagnostics,
+                    )?;
+                    let VSymbol::Parameter(v) =
+                        &ctx.table[sid].content
+                    else {
+                        mctx.diagnostics.warnings.push((
+                            ctx.arenas.get_span(system_task_enable),
+                            "ignored: not yet supported path".to_string(),
+                        ));
+                        return Ok(builder);
+                    };
+                    if v.clone().into_bits().count_zeros() != v.ty().force_net_width().get() {
+                        mctx.diagnostics.warnings.push((
+                            ctx.arenas.get_span(system_task_enable),
+                            "ignored: not yet supported path".to_string(),
+                        ));
+                        return Ok(builder);
+                    }
+                    String::new()
+                }
+                _ => {
+                    mctx.diagnostics.warnings.push((
+                        ctx.arenas.get_span(system_task_enable),
+                        "ignored: not yet supported path".to_string(),
+                    ));
+                    return Ok(builder);
+                }
             };
-            let path = ctx.arenas.text[path.0.start..path.0.end].to_string();
             let Expr::Ident(ident, exprs, range_expr) = &*expressions.get(1) else {
                 mctx.diagnostics
                     .not_yet_implemented(ctx.arenas.get_span(system_task_enable), "invalid memory");
