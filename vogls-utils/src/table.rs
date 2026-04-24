@@ -227,6 +227,10 @@ impl<K, V> Table<K, V> {
         self.values.clear();
     }
 
+    pub fn values(&self) -> &[V] {
+        &self.values
+    }
+
     pub fn values_mut(&mut self) -> &mut [V] {
         &mut self.values
     }

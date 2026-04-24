@@ -16,6 +16,7 @@ members = [
 	"vogls-codegen-c",
     "vogls-runtime",
     "vogls-vcd",
+	"vogls-fuse-signals",
 ]
 resolver = "3"
 
@@ -39,6 +40,7 @@ vogls-frontend.path = "vogls-frontend"
 vogls-sim.path = "vogls-sim"
 vogls-ir.path = "vogls-ir"
 vogls-ir-properties.path = "vogls-ir-properties"
+vogls-fuse-signals.path = "vogls-fuse-signals"
 vogls-bits.path = "vogls-bits"
 vogls-verilog.path = "vogls-verilog"
 vogls-utils.path = "vogls-utils"

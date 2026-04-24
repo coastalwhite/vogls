@@ -639,13 +639,13 @@ impl Simulation {
                         let lupdt = state.runtime.last_active_time[idx as usize];
                         state.runtime.heap.set_tv_u64(dst.to_ref(TIME_VSIZE), lupdt);
                     }
-                    I::Drive(sig, src, partial) => {
-                        let partial = match (partial, self.logic_mode) {
+                    I::Drive(sig, src, offset) => {
+                        let partial = match (offset, self.logic_mode) {
                             (None, _) => None,
-                            (Some(offset), LogicMode::TwoValue) => {
+                            (Some((offset, _mask_size)), LogicMode::TwoValue) => {
                                 Some(state.runtime.heap.load_exact_tv_u32(*offset))
                             }
-                            (Some(offset), LogicMode::FourValue) => {
+                            (Some((offset, _mask_size)), LogicMode::FourValue) => {
                                 let (spc, val) = state.runtime.heap.load_exact_fv_u32(*offset);
                                 if !spc != 0 {
                                     break 'instruction None;

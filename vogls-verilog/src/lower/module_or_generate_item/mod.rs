@@ -1,4 +1,5 @@
 use vogls_frontend::symbol_table::SymbolId;
+use vogls_fuse_signals::InputEdge;
 use vogls_ir::{
     Bits, ConnectionDirection, GlobalContext, SCALAR_VSIZE, SignalSlice, VectorSize, new_process,
 };
@@ -19,7 +20,7 @@ use crate::lower::fuse::{try_fuse_assign, try_lower_fuse_driver_expr};
 use crate::lower::statement::statements_to_process;
 use crate::lower::udp::lower_udp;
 use crate::lower::{
-    Edge, VType, assign_input_port, assign_port_output, eval_constant_expr, evaluate_range,
+    VType, assign_input_port, assign_port_output, eval_constant_expr, evaluate_range,
     resolve_symbol_id, try_resolve_net, unwrap_get_module,
 };
 use crate::parser::AstArenas;
@@ -82,7 +83,7 @@ pub fn lower<'a>(
                                         ) else {
                                             break;
                                         };
-                                        mctx.connections.push(Edge {
+                                        mctx.connections.push(InputEdge {
                                             driver: driver.clone(),
                                             drivee,
                                             drivee_slice: Some(

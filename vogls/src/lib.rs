@@ -36,7 +36,6 @@ pub use vogls_utils as utils;
 
 pub mod symbol;
 pub mod design;
-pub mod fuse_signals;
 // pub mod symbolic_execution;
 
 pub struct ExecutionContext {

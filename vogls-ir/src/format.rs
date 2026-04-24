@@ -406,12 +406,12 @@ impl ContextFormat for Instruction {
                 f.write_str(", ")?;
                 offset.ctx_fmt(f, ctx)?;
             }
-            Self::Drive(sig, var, partial) => {
+            Self::Drive(sig, var, offset) => {
                 f.write_str("drv")?;
-                if let Some((offset, length)) = partial {
+                if let Some((offset, _mask_size)) = offset {
                     f.write_str("[")?;
                     offset.ctx_fmt(f, ctx)?;
-                    write!(f, ", {length}]")?;
+                    f.write_str("]")?;
                 }
                 f.write_str(" ")?;
                 ctx.gl.signals.get(*sig).unwrap().ctx_fmt(f, ctx)?;

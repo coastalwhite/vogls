@@ -568,12 +568,17 @@ pub fn lower_process_to_vm(
                         ),
                     }
                 }
-                I::Drive(signal, src, partial) => {
+                I::Drive(signal, src, offset) => {
                     let src_size = gl.vars[*src].size;
                     VI::Drive(
                         signal!(*signal),
                         var!(*src, (gl.logic_mode, var_mode[src], src_size)).to_ref(src_size),
-                        partial.map(|(o, _)| var!(o, (gl.logic_mode, var_mode[&o], INTEGER_VSIZE))),
+                        offset.map(|(o, mask_size)| {
+                            (
+                                var!(o, (gl.logic_mode, var_mode[&o], INTEGER_VSIZE)),
+                                mask_size,
+                            )
+                        }),
                     )
                 }
                 I::Phi(..) => continue,

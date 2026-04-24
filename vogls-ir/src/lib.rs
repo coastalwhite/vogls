@@ -1290,4 +1290,8 @@ impl SignalSlice {
             width: self.width.checked_add(other.width().get()).unwrap(),
         })
     }
+
+    pub fn overlaps(self, other: Self) -> bool {
+        self.lsb() <= other.msb() && other.lsb() <= self.msb()
+    }
 }

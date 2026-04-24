@@ -814,7 +814,7 @@ impl BasicBlockBuilder {
         offset: u32,
         length: VectorSize,
     ) {
-        if offset == 0 && length == gl.signals[signal].size {
+        if offset == 0 {
             return self.drive_opt_partial(gl, signal, src, None);
         }
 

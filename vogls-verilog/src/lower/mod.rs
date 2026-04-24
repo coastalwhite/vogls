@@ -27,34 +27,11 @@ pub struct LowerContext<'a> {
     pub time_scale: TimeScale,
 }
 
-#[derive(Clone)]
-pub enum Driver {
-    Constant(Bits),
-    Signal(SignalKey, Option<SignalSlice>),
-}
-impl Driver {
-    fn size(&self, signals: &SlotMap<SignalKey, Signal>) -> VectorSize {
-        match self {
-            Driver::Constant(bits) => bits.size(),
-            Driver::Signal(signal, slice) => {
-                slice.map_or_else(|| signals[*signal].size, |s| s.width())
-            }
-        }
-    }
-}
-
-#[derive(Clone)]
-pub struct Edge {
-    pub driver: Driver,
-    pub drivee: SignalKey,
-    pub drivee_slice: Option<SignalSlice>,
-}
-
 pub struct MutLowerContext {
     pub gl: GlobalContext,
     pub diagnostics: Diagnostics,
-    pub connections: Vec<Edge>,
-    pub fuse_scratch: Vec<Driver>,
+    pub connections: Vec<vogls_fuse_signals::InputEdge>,
+    pub fuse_scratch: Vec<vogls_fuse_signals::Driver>,
     pub has_vcd: bool,
 }
 impl MutLowerContext {
@@ -386,14 +363,14 @@ pub fn try_resolve_constant<'a, 's>(
     Ok(value)
 }
 
-use slotmap::SlotMap;
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_frontend::symbol_table::SymbolId;
+use vogls_fuse_signals::{Driver, InputEdge};
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::vcd::{VcdScope, VcdValue, VcdVariable, VcdVariableKey};
 use vogls_ir::{
-    BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, ProcessKey, SCALAR_VSIZE, Signal,
-    SignalKey, SignalSlice, VariableKey, VectorSize, new_process,
+    BasicBlockBuilder, BasicBlockTerminator, GlobalContext, ProcessKey, SCALAR_VSIZE, SignalKey,
+    SignalSlice, VariableKey, VectorSize, new_process,
 };
 use vogls_utils::{IndexMap, OrderedSet, Table, VgHashMap};
 
@@ -508,7 +485,7 @@ fn assign_input_port<'a>(
             else {
                 break;
             };
-            mctx.connections.push(Edge {
+            mctx.connections.push(InputEdge {
                 driver: driver.clone(),
                 drivee,
                 drivee_slice: Some(SignalSlice::from_width(offset, width).unwrap()),
@@ -563,7 +540,7 @@ fn assign_port_output<'a>(
         let driver = output.net.probe_signal();
         let drivee = to_signal.net.blocking_drive_signal();
         if exprs.is_empty() && range.is_none() {
-            mctx.connections.push(Edge {
+            mctx.connections.push(InputEdge {
                 driver: Driver::Signal(driver, None),
                 drivee,
                 drivee_slice: None,
@@ -586,7 +563,7 @@ fn assign_port_output<'a>(
             let v = v.coerce(&VType::SignedNet(vogls_ir::INTEGER_VSIZE));
             let v = v.into_bits();
             if let Some(v) = v.extract_exact_u32() {
-                mctx.connections.push(Edge {
+                mctx.connections.push(InputEdge {
                     driver: Driver::Signal(driver, None),
                     drivee,
                     drivee_slice: Some(SignalSlice::from_width(v, SCALAR_VSIZE).unwrap()),

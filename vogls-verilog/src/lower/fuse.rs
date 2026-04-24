@@ -1,4 +1,5 @@
 use vogls_frontend::symbol_table::SymbolId;
+use vogls_fuse_signals::{Driver, InputEdge};
 use vogls_ir::{INTEGER_VSIZE, SCALAR_VSIZE, SignalSlice, VectorSize};
 
 use crate::ast::constant_expr::ConstantRangeExpression;
@@ -6,7 +7,7 @@ use crate::ast::expr::{BitSlice, Expr};
 use crate::ast::module::NetAssignment;
 use crate::ast::{AstId, AstIdRange, HIdent};
 use crate::elaborate::VSymbol;
-use crate::lower::{Driver, Edge, hident_span, try_resolve_net, try_resolve_symbol_id};
+use crate::lower::{hident_span, try_resolve_net, try_resolve_symbol_id};
 
 use super::{Diagnostics, LowerContext, MutLowerContext, VType, VValue, eval_constant_expr};
 
@@ -458,7 +459,7 @@ pub fn try_fuse_assign<'a>(
         let Some(width) = VectorSize::new((drivee_ty_size.get() - offset).min(width.get())) else {
             break;
         };
-        mctx.connections.push(Edge {
+        mctx.connections.push(InputEdge {
             driver: driver.clone(),
             drivee,
             drivee_slice: Some(SignalSlice::from_width(offset, width).unwrap()),

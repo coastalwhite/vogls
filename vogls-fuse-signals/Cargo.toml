@@ -1,0 +1,15 @@
+[package]
+name = "vogls-fuse-signals"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+foldhash.workspace = true
+hashbrown.workspace = true
+slotmap.workspace = true
+vogls-utils.workspace = true
+vogls-ir.workspace = true
+vogls-bits.workspace = true
+
+[lints]
+workspace = true

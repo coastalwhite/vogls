@@ -186,9 +186,9 @@ impl fmt::Display for VmInstruction {
             Self::LastUpdateTime(dst, signal) => {
                 write!(f, "{dst} = lastupdatetime {}", signal.as_usize())
             }
-            Self::Drive(signal, src, partial) => match partial {
+            Self::Drive(signal, src, offset) => match offset {
                 None => write!(f, "drive {}, {}", signal.as_usize(), src.offset),
-                Some(offset) => {
+                Some((offset, _)) => {
                     write!(
                         f,
                         "drive[{offset}, {length}] {}, {}",

@@ -653,11 +653,12 @@ fn constant_propagate_instruction(
 
             match partial {
                 None => signals[*dst].initialize = Some(src.clone()),
-                Some((offset, width)) => {
+                Some((offset, _mask_size)) => {
                     let Some(Some(offset)) = scratch_map.get(offset) else {
                         return Ok(());
                     };
 
+                    let width = src.size();
                     let size = signals[*dst].size;
                     let mut value = match signals[*dst].initialize.take() {
                         None => match logic_mode {

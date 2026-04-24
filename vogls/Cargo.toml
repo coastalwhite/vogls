@@ -18,6 +18,7 @@ vogls-codegen.workspace = true
 vogls-codegen-c.workspace = true
 vogls-runtime.workspace = true
 vogls-vcd.workspace = true
+vogls-fuse-signals.workspace = true
 
 [features]
 random = ["vogls-bits/random"]

@@ -29,12 +29,12 @@ use vogls_verilog::parser::{
 };
 use vogls_verilog::tokenizer::{Macro, Tokenized};
 
-use crate::fuse_signals::{FuseSignalsContext, FuseTarget};
 use crate::symbol::{NetValue, Symbol};
 use crate::{
-    ExecutionContext, append_referenced_modules, find_lupdt_signals, fuse_signals,
-    generate_signals_heap, lower_to_shared_object,
+    ExecutionContext, append_referenced_modules, find_lupdt_signals, generate_signals_heap,
+    lower_to_shared_object,
 };
+use vogls_fuse_signals::FuseTarget;
 
 pub enum DesignBackend {
     Interpretted {
@@ -451,15 +451,7 @@ impl Design {
         }
 
         let fused = timers.timed("fuse_signals", |_| {
-            fuse_signals::fuse_signals(
-                &mut mctx.gl,
-                &mctx.connections,
-                &FuseSignalsContext {
-                    print_unoptimized_fuse_signals: ectx.print_unoptimized_fuse_signals,
-                    print_round_fuse_signals: ectx.print_round_fuse_signals,
-                    print_optimized_fuse_signals: ectx.print_optimized_fuse_signals,
-                },
-            )
+            vogls_fuse_signals::fuse_signals(&mut mctx.gl, &mctx.connections)
         });
 
         let mut table: FrozenSymbolTable<Symbol> = ctx.table.into();
