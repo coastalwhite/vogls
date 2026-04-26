@@ -8,6 +8,7 @@ pub mod token_range;
 pub mod vcd;
 
 use std::collections::HashSet;
+use std::fmt;
 use std::num::NonZeroU32;
 pub use vogls_bits as bits;
 pub use vogls_bits::{Bits, Mode, VectorSize};
@@ -480,6 +481,11 @@ pub enum Instruction {
     LastUpdateTime(VariableKey, SignalKey),
     Probe(VariableKey, SignalKey, u32),
     ProbeSlice(VariableKey, SignalKey, VariableKey),
+
+    /// Update the value of a signal, poking it if the value is different than before.
+    ///
+    /// A drive can be a "partial" drive, meaning that the source value is offset by a certain
+    /// amount of bits, and no bits beyond a certain point will be affected.
     Drive(SignalKey, VariableKey, Option<(VariableKey, VectorSize)>),
 
     Phi(VariableKey, Box<[(BasicBlockKey, VariableKey)]>),
@@ -1214,10 +1220,16 @@ pub struct Process {
     pub origin: TokenRange,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SignalSlice {
     width: VectorSize,
     lsb: NonMaxU32,
+}
+
+impl fmt::Debug for SignalSlice {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "SignalSlice({}:{})", self.msb(), self.lsb())
+    }
 }
 
 impl SignalSlice {
@@ -1274,6 +1286,7 @@ impl SignalSlice {
         subslice.shift_back(self.lsb())
     }
 
+    #[must_use]
     pub fn subslice(self, s: SignalSlice) -> Option<SignalSlice> {
         if s.msb() >= self.width().get() {
             return None;

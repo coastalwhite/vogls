@@ -189,9 +189,12 @@ pub fn statements_to_process<'a>(
                 for (i, stmt) in statements.iter().enumerate() {
                     let (_, mut fork_builder) = new_process(mctx.gl(), "fork".to_string(), origin);
                     let fork_entry_bb = fork_builder.key();
-                    let condition = fork_builder.probe(mctx.gl(), fork_trigger);
-                    let i = fork_builder.constant_u32(mctx.gl(), i as u32);
-                    let condition = fork_builder.select_bit(mctx.gl(), condition, i);
+                    let condition = fork_builder.probe_slice_constant(
+                        mctx.gl(),
+                        fork_trigger,
+                        i as u32,
+                        SCALAR_VSIZE,
+                    );
                     fork_builder = fork_builder.next_terminate_later(mctx.gl());
                     let ret_with_watch_bb = fork_builder.key();
                     fork_builder = fork_builder.next_terminate_later(mctx.gl());
@@ -210,7 +213,7 @@ pub fn statements_to_process<'a>(
                         AstIdRange::single(stmt),
                     )?;
                     let l0 = fork_builder.constant(mctx.gl(), vogls_ir::Bits::from(false));
-                    fork_builder.drive_partial(mctx.gl(), fork_trigger, l0, i, SCALAR_VSIZE);
+                    fork_builder.drive_partial_constant(mctx.gl(), fork_trigger, l0, i as u32);
                     fork_builder.jump_to(mctx.gl(), fork_entry_bb);
                 }
 

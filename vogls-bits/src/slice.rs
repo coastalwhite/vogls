@@ -94,7 +94,10 @@ pub fn tv_ll_slice(
     fill_with_x: bool,
 ) {
     assert!(dst_size <= src_size);
-    let dst_words = dst.len() / 2;
+    let mut dst_words = dst.len();
+    if fill_with_x {
+        dst_words /= 2;
+    }
     if offset == 0 {
         if fill_with_x {
             fv_set_no_special(dst, dst_size);

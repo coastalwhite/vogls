@@ -712,12 +712,8 @@ fn assign_port_output<'a>(
                 let length_dst = length_dst.unwrap_or(SCALAR_VSIZE);
                 let src = var;
                 let src = truncate_or_extend(mctx.gl(), &mut bb_builder, src, var_ty, length_dst);
-                s.net.drive_blocking(
-                    mctx.gl(),
-                    &mut bb_builder,
-                    src,
-                    Some((offset_dst, length_dst)),
-                );
+                s.net
+                    .drive_blocking(mctx.gl(), &mut bb_builder, src, Some(offset_dst));
             }
 
             Expr::Replication(_) => {
@@ -853,7 +849,7 @@ fn assign_task_output<'a>(
                 let length_dst = length_dst.unwrap_or(SCALAR_VSIZE);
                 let src = truncate_or_extend(mctx.gl(), builder, variable, ty, length_dst);
                 s.net
-                    .drive_blocking(mctx.gl(), builder, src, Some((offset_dst, length_dst)));
+                    .drive_blocking(mctx.gl(), builder, src, Some(offset_dst));
             }
 
             Expr::Replication(_) => {

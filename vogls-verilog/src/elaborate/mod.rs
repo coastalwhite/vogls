@@ -113,23 +113,28 @@ impl Net {
         gl: &mut GlobalContext,
         bbb: &mut BasicBlockBuilder,
         src: VariableKey,
-        partial: Option<(VariableKey, VectorSize)>,
+        partial: Option<VariableKey>,
     ) {
-        bbb.drive_opt_partial(gl, self.blocking_drive_signal(), src, partial)
+        bbb.drive_opt_partial(
+            gl,
+            self.blocking_drive_signal(),
+            src,
+            partial.map(|o| (o, self.width())),
+        )
     }
     pub fn drive_non_blocking(
         &self,
         gl: &mut GlobalContext,
         bbb: &mut BasicBlockBuilder,
         src: VariableKey,
-        partial: Option<(VariableKey, VectorSize)>,
+        partial: Option<VariableKey>,
     ) {
         let (value, mask) = self.non_blocking_drive_signal();
-        bbb.drive_opt_partial(gl, value, src, partial);
+        bbb.drive_opt_partial(gl, value, src, partial.map(|o| (o, self.width())));
         if let Some(mask) = mask {
             let size = gl.vars[src].size;
             let mask_value = bbb.constant(gl, Bits::new_ones(size));
-            bbb.drive_opt_partial(gl, mask, mask_value, partial);
+            bbb.drive_opt_partial(gl, mask, mask_value, partial.map(|o| (o, self.width())));
         }
     }
 

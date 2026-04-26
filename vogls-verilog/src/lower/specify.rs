@@ -880,13 +880,7 @@ pub fn lower_specify<'a>(
                 builder.case_equals(mctx.gl(), old_proxy_value, new_proxy_value);
             builder = builder.branch_false_to(mctx.gl(), do_while_condition, wait_loop_bb);
 
-            builder.drive_partial_constant(
-                mctx.gl(),
-                output,
-                new_proxy_value,
-                output_bitidx,
-                SCALAR_VSIZE,
-            );
+            builder.drive_partial_constant(mctx.gl(), output, new_proxy_value, output_bitidx);
             builder.watch_to(mctx.gl(), vec![proxy], wait_loop_bb);
         }
     }

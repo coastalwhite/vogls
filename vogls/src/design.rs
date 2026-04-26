@@ -450,7 +450,7 @@ impl Design {
             return Err("failed to lower".into());
         }
 
-        let fused = timers.timed("fuse_signals", |_| {
+        let (prb_fuse, drv_fuse) = timers.timed("fuse_signals", |_| {
             vogls_fuse_signals::fuse_signals(&mut mctx.gl, &mctx.connections)
         });
 
@@ -460,22 +460,24 @@ impl Design {
                 match &mut net.net {
                     NetValue::Signal(s) => {
                         let prb = s.probe_signal().0;
-                        if let Some(FuseTarget::Constant(value)) = fused.get(&prb) {
-                            if fused.contains_key(&prb) {
+                        if let Some(FuseTarget::Constant(value)) = prb_fuse.get(&prb) {
+                            if prb_fuse.contains_key(&prb) {
                                 mctx.gl.signals.remove(prb);
                             }
                             net.net = NetValue::Constant(value.clone());
                         } else {
-                            s.replace_signals(|s| {
-                                if fused.contains_key(&s) {
+                            s.map_prb(|s| match prb_fuse.get(&s) {
+                                None => (s, None),
+                                Some(FuseTarget::Constant(_)) => unreachable!(),
+                                Some(FuseTarget::Signal(r, slice)) => {
                                     mctx.gl.signals.remove(s);
+                                    (*r, slice.map(|s| NonMaxU32::new(s.lsb()).unwrap()))
                                 }
-                                // @TODO: Figure out how to deal with constants.
-                                match fused.get(&s) {
-                                    None | Some(FuseTarget::Constant(_)) => (s, None),
-                                    Some(FuseTarget::Signal(r, slice)) => {
-                                        (*r, slice.map(|s| NonMaxU32::new(s.lsb()).unwrap()))
-                                    }
+                            });
+                            s.map_drv(|s| match drv_fuse.get(&s) {
+                                None => (s, None),
+                                Some((r, slice)) => {
+                                    (*r, slice.map(|s| NonMaxU32::new(s.lsb()).unwrap()))
                                 }
                             });
                         }

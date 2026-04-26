@@ -651,72 +651,63 @@ fn constant_propagate_instruction(
                 return Ok(());
             };
 
-            match partial {
-                None => signals[*dst].initialize = Some(src.clone()),
-                Some((offset, _mask_size)) => {
+            let size = signals[*dst].size;
+            let mask_size = partial.map_or(size, |(_, size)| size);
+            let offset = match partial {
+                None => 0,
+                Some((offset, _)) => {
                     let Some(Some(offset)) = scratch_map.get(offset) else {
                         return Ok(());
                     };
-
-                    let width = src.size();
-                    let size = signals[*dst].size;
-                    let mut value = match signals[*dst].initialize.take() {
-                        None => match logic_mode {
-                            LogicMode::TwoValue => Bits::new_zeroed(size),
-                            LogicMode::FourValue => Bits::new_unknown(size),
-                        },
-                        Some(current) => current,
-                    };
-
                     if offset.contains_special() {
-                        value = match logic_mode {
-                            LogicMode::TwoValue => Bits::new_zeroed(size),
-                            LogicMode::FourValue => Bits::new_unknown(size),
-                        };
-                    } else {
-                        let offset = offset.extract_exact_u32().unwrap();
-                        if offset < size.get() {
-                            let src = src.truncate(
-                                src.size()
-                                    .min(VectorSize::new(size.get() - offset).unwrap()),
-                            );
-
-                            if offset > 0 && offset + width.get() < size.get() {
-                                let ls = Bits::concatenate(
-                                    &value.slicez(
-                                        offset,
-                                        VectorSize::new(size.get() - width.get() - offset).unwrap(),
-                                    ),
-                                    &src,
-                                );
-                                value = Bits::concatenate(
-                                    &ls,
-                                    &value.truncate(VectorSize::new(offset).unwrap()),
-                                );
-                            } else if offset > 0 {
-                                value = Bits::concatenate(
-                                    &src,
-                                    &value.truncate(
-                                        VectorSize::new(size.get() - width.get()).unwrap(),
-                                    ),
-                                );
-                            } else if offset + width.get() < size.get() {
-                                value = Bits::concatenate(
-                                    &value.slicez(
-                                        offset,
-                                        VectorSize::new(size.get() - width.get()).unwrap(),
-                                    ),
-                                    &src,
-                                );
-                            } else {
-                                value = src;
-                            }
-                        }
+                        return Ok(());
                     }
+                    offset.extract_exact_u32().unwrap()
+                }
+            };
 
-                    signals[*dst].initialize = Some(value);
+            let mut value = match signals[*dst].initialize.take() {
+                None => match logic_mode {
+                    LogicMode::TwoValue => Bits::new_zeroed(size),
+                    LogicMode::FourValue => Bits::new_unknown(size),
+                },
+                Some(current) => current,
+            };
+
+            if offset < mask_size.get() {
+                let src = src.truncate(
+                    src.size()
+                        .min(VectorSize::new(mask_size.get() - offset).unwrap()),
+                );
+
+                if offset > 0 && offset + src.size().get() < size.get() {
+                    let ls = Bits::concatenate(
+                        &value.slicez(
+                            offset,
+                            VectorSize::new(size.get() - src.size().get() - offset).unwrap(),
+                        ),
+                        &src,
+                    );
+                    value =
+                        Bits::concatenate(&ls, &value.truncate(VectorSize::new(offset).unwrap()));
+                } else if offset > 0 {
+                    value = Bits::concatenate(
+                        &src,
+                        &value.truncate(VectorSize::new(size.get() - src.size().get()).unwrap()),
+                    );
+                } else if offset + src.size().get() < size.get() {
+                    value = Bits::concatenate(
+                        &value.slicez(
+                            offset,
+                            VectorSize::new(size.get() - src.size().get()).unwrap(),
+                        ),
+                        &src,
+                    );
+                } else {
+                    value = src;
                 }
             }
+            signals[*dst].initialize = Some(value);
 
             *i = I::Constant(
                 vars.insert(Variable { size: SCALAR_VSIZE }),

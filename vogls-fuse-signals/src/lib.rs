@@ -47,7 +47,7 @@ impl NodeFlags {
 
     #[inline(always)]
     fn contains(self, flags: NodeFlags) -> bool {
-        self.0 & flags.0 != 0
+        self.0 & flags.0 == flags.0
     }
 
     fn remove(self, flags: NodeFlags) -> Self {
@@ -246,13 +246,21 @@ impl FuseGraph {
 pub fn fuse_signals(
     gl: &mut GlobalContext,
     connections: &[InputEdge],
-) -> VgHashMap<SignalKey, FuseTarget> {
+) -> (
+    VgHashMap<SignalKey, FuseTarget>,
+    VgHashMap<SignalKey, (SignalKey, Option<SignalSlice>)>,
+) {
     let mut g = FuseGraph::from_connections(gl, connections);
     let mut marshalls = Vec::new();
     let mut fused_signals = VgHashMap::<SignalKey, FuseTarget>::default();
     let mut drive_map = VgHashMap::<SignalKey, (SignalKey, Option<SignalSlice>)>::default();
 
-    g.optimize_till_fixed_point(&mut marshalls, &mut fused_signals, &mut drive_map);
+    g.optimize_till_fixed_point(
+        &mut marshalls,
+        &mut fused_signals,
+        &mut drive_map,
+        FusePasses::ALL,
+    );
 
     for n in marshalls {
         let NodeContent::Signal(signal) = &g.nodes[n].content else {
@@ -265,30 +273,22 @@ pub fn fuse_signals(
         let mut watch_signals = IndexMap::default();
         for &e in &g.nodes[n].fanin {
             let edge = &g.edges[e];
-            let mut value = match &g.nodes[edge.driver].content {
-                NodeContent::Signal(driver) => {
-                    *watch_signals.get_or_insert_with(*driver, || builder.probe(gl, *driver))
-                }
-                NodeContent::Constant(value) => builder.constant(gl, value.clone()),
+            let value = match &g.nodes[edge.driver].content {
+                NodeContent::Signal(driver) => *watch_signals.get_or_insert_with(*driver, || {
+                    builder.probe_slice_constant(
+                        gl,
+                        *driver,
+                        edge.driver_slice.lsb(),
+                        edge.driver_slice.width(),
+                    )
+                }),
+                NodeContent::Constant(value) => builder.constant(
+                    gl,
+                    value.slicez(edge.driver_slice.lsb(), edge.driver_slice.width()),
+                ),
             };
 
-            if edge.driver_slice.lsb() != 0
-                || edge.driver_slice.width() != g.nodes[edge.driver].size
-            {
-                value = builder.slice_constant(
-                    gl,
-                    value,
-                    edge.driver_slice.lsb(),
-                    edge.driver_slice.width(),
-                );
-            }
-            builder.drive_partial_constant(
-                gl,
-                *signal,
-                value,
-                edge.drivee_slice.lsb(),
-                edge.drivee_slice.width(),
-            )
+            builder.drive_partial_constant(gl, *signal, value, edge.drivee_slice.lsb())
         }
         let entry = builder.key();
         builder.watch_to(gl, watch_signals.take_keys(), entry);
@@ -372,14 +372,16 @@ pub fn fuse_signals(
                     if let Some((to, slice)) = drive_map.get(signal) {
                         let mut partial = *partial;
                         if let Some(slice) = slice {
-                            partial = partial.map(|(o, m)| {
-                                (
+                            partial = Some(match partial {
+                                None => (builder.constant_u32(gl, slice.lsb()), slice.width()),
+                                Some((o, m)) => (
                                     builder.plus_constant(gl, o, Bits::new_u32(slice.lsb())),
                                     VectorSize::new(m.get() + slice.lsb()).unwrap(),
-                                )
+                                ),
                             });
                         }
                         builder.push_raw_instruction(I::Drive(*to, *src, partial));
+                        continue;
                     }
                 }
                 I::LastUpdateTime(dst, signal) => {
@@ -482,7 +484,24 @@ pub fn fuse_signals(
         }
     }
 
-    fused_signals
+    (fused_signals, drive_map)
+}
+
+#[derive(Clone, Copy)]
+struct FusePasses(u8);
+
+impl FusePasses {
+    pub const ALL: Self = Self(0b0001_1111);
+
+    pub const CYCLIC: Self = Self(0b0000_0001);
+    pub const TRANSITIVE: Self = Self(0b0000_0010);
+    pub const NEIGHBOUR: Self = Self(0b0000_0100);
+    pub const CONSTANT_NEIGHBOUR: Self = Self(0b0000_1000);
+    pub const INVERSION: Self = Self(0b0001_0000);
+
+    pub fn contains(self, other: Self) -> bool {
+        self.0 & other.0 == other.0
+    }
 }
 
 impl FuseGraph {
@@ -491,12 +510,12 @@ impl FuseGraph {
         marshalls: &mut Vec<NodeKey>,
         probe_fuse: &mut VgHashMap<SignalKey, FuseTarget>,
         drive_map: &mut VgHashMap<SignalKey, (SignalKey, Option<SignalSlice>)>,
+        passes: FusePasses,
     ) {
         let mut cyclic = Vec::new();
         let mut drive_inv_map = VgHashMap::<SignalKey, Vec<(SignalKey, SignalSlice)>>::default();
         let mut seen = VgHashSet::<NodeKey>::default();
-        let mut active = Vec::new();
-        let mut at;
+        let mut subgraph = Vec::new();
 
         for n in self.nodes.table_key_iter() {
             if !seen.insert(n) {
@@ -505,34 +524,35 @@ impl FuseGraph {
 
             // Mark all nodes in a subgraph as active.
             //
-            // We are assuming that there are many small subgraphs. Performing optimization
-            // subgraph-by-subgraph, as opposed to node-by-node, should improve cache coherency
-            // significantly and allows much easier observability since we can now see which
-            // subgraphs contribute non-fusable signals.
-            at = 0;
-            active.push(n);
-            while at != active.len() {
-                for &e in &self.nodes[n].fanin {
+            // We are assuming that there are many small subgraphs. Therefore, performing
+            // optimization subgraph-by-subgraph, as opposed to node-by-node, should improve cache
+            // coherency significantly and allows much easier observability since we can now see
+            // which subgraphs contribute non-fusable signals.
+            let mut at = 0;
+            subgraph.clear();
+            subgraph.push(n);
+            while at != subgraph.len() {
+                for &e in &self.nodes[subgraph[at]].fanin {
                     let other = self.edges[e].driver;
                     if seen.insert(other) {
-                        active.push(other);
+                        subgraph.push(other);
                     }
                 }
-                for &e in &self.nodes[n].fanout {
+                for &e in &self.nodes[subgraph[at]].fanout {
                     let other = self.edges[e].drivee;
                     if seen.insert(other) {
-                        active.push(other);
+                        subgraph.push(other);
                     }
                 }
-
                 at += 1;
             }
 
             self.optimize_subgraph_until_fix_point(
-                &active,
+                &subgraph,
                 drive_map,
                 &mut drive_inv_map,
                 &mut cyclic,
+                passes,
             );
 
             // Decide in this subgraph, what signals can be probe fused and what signals need to be
@@ -544,7 +564,7 @@ impl FuseGraph {
                     signal_to_node: _,
                 } = self;
 
-                for &k in active.iter() {
+                for &k in subgraph.iter() {
                     let v = &nodes[k];
                     let NodeContent::Signal(signal) = v.content else {
                         continue;
@@ -604,6 +624,7 @@ impl FuseGraph {
         drive_map: &mut VgHashMap<SignalKey, (SignalKey, Option<SignalSlice>)>,
         drive_inv_map: &mut VgHashMap<SignalKey, Vec<(SignalKey, SignalSlice)>>,
         cyclic: &mut Vec<usize>,
+        passes: FusePasses,
     ) {
         let Self {
             nodes,
@@ -620,76 +641,80 @@ impl FuseGraph {
 
             for &n in active {
                 // Transitive + Cyclic Transform
-                if !nodes[n].fanout.is_empty() {
-                    let mut i = 0;
-                    cyclic.clear();
+                if passes.contains(FusePasses::TRANSITIVE)
+                    && !nodes[n].fanin.is_empty()
+                    && !nodes[n].fanout.is_empty()
+                    && !nodes[n].flags.contains(NodeFlags::DRIVE)
+                {
+                    nodes[n].fanin.sort_unstable_by_key(|&e| {
+                        let edge = &edges[e];
+                        (edge.drivee_slice.lsb(), edge.drivee_slice.msb())
+                    });
 
-                    while i < nodes[n].fanout.len() {
-                        let e = nodes[n].fanout[i];
-                        i += 1;
-
-                        let Edge {
-                            driver,
-                            drivee,
-                            driver_slice,
-                            drivee_slice,
-                        } = edges[e];
-
-                        debug_assert_eq!(n, driver);
-                        if driver == drivee {
-                            cyclic.push(i - 1);
-                            continue;
-                        }
-
-                        // If we rely on accurately knowing the last update of a signal, we cannot fuse a
-                        // view of a signal as the driver of the observed signal.
-                        if (drivee_slice.lsb() != 0 || drivee_slice.width() != nodes[drivee].size)
-                            && nodes[drivee].flags.contains(NodeFlags::LUPDT)
-                        {
-                            continue;
-                        }
-
-                        if nodes[drivee].fanout.is_empty() {
-                            continue;
-                        }
-
-                        let mut drivee_fanout = std::mem::take(&mut nodes[drivee].fanout);
-                        let start_length = drivee_fanout.len();
-                        nodes[driver]
-                            .fanout
-                            .extend(drivee_fanout.extract_if(.., |&mut e| {
-                                let edge = &mut edges[e];
-                                let Some(slice) = drivee_slice.relative_slice(edge.driver_slice)
-                                else {
-                                    return false;
-                                };
-                                let Some(slice) = slice.shift(driver_slice.lsb()) else {
-                                    return false;
-                                };
-
-                                edges[e].driver = driver;
-                                edges[e].driver_slice = slice;
-                                true
-                            }));
-                        reached_fixed_point &= start_length == drivee_fanout.len();
-                        nodes[drivee].fanout = drivee_fanout;
+                    if nodes[n]
+                        .fanin
+                        .windows(2)
+                        .any(|w| edges[w[0]].drivee_slice.overlaps(edges[w[1]].drivee_slice))
+                    {
+                        continue;
                     }
 
-                    // Remove edges that point to the same node.
-                    for &i in cyclic.iter() {
-                        let e = nodes[n].fanout[i];
-                        if edges[e].driver_slice == edges[e].drivee_slice {
+                    nodes[n].fanout.sort_unstable_by_key(|&e| {
+                        let edge = &edges[e];
+                        (edge.driver_slice.lsb(), edge.driver_slice.msb())
+                    });
+
+                    let mut i = 0;
+                    let mut o = 0;
+
+                    while i < nodes[n].fanin.len() && o < nodes[n].fanout.len() {
+                        let ie = &edges[nodes[n].fanin[i]];
+                        let oe = &edges[nodes[n].fanout[o]];
+
+                        // There are four slices involved in a transitive edge. We label them in
+                        // order.
+                        let s1 = ie.driver_slice;
+                        let s2 = ie.drivee_slice;
+                        let s3 = oe.driver_slice;
+                        // let s4 = oe.drivee_slice;
+
+                        let pred = ie.driver;
+                        let suc = oe.drivee;
+
+                        if suc == n || s2.lsb() > s3.msb() {
+                            o += 1;
+                        } else if s3.lsb() > s2.msb() {
+                            i += 1;
+                        } else if let Some(s2_r_s3) = s2.relative_slice(s3) {
+                            let ek = nodes[n].fanout.swap_remove(o);
+                            nodes[pred].fanout.push(ek);
+                            edges[ek].driver = pred;
+                            edges[ek].driver_slice = s1.subslice(s2_r_s3).unwrap();
                             reached_fixed_point = false;
-                            nodes[n].fanout.swap_remove(i);
-                            // @Performance: Linear scan.
-                            let idx = nodes[n].fanin.iter().position(|&ie| ie == e).unwrap();
-                            nodes[n].fanin.swap_remove(idx);
+                        } else {
+                            o += 1;
                         }
                     }
                 }
 
+                // Cyclic edges.
+                if passes.contains(FusePasses::CYCLIC) {
+                    let Node { fanin, fanout, .. } = &mut nodes[n];
+                    fanin.retain(|&ek| {
+                        let edge = &edges[ek];
+                        let retain =
+                            edge.driver != edge.drivee || edge.driver_slice != edge.drivee_slice;
+
+                        if !retain {
+                            reached_fixed_point = false;
+                            fanout.retain(|&e| e != ek);
+                        }
+                        retain
+                    });
+                }
+
                 // Neighbour Merge Transform
-                if nodes[n].fanout.len() > 1 {
+                if passes.contains(FusePasses::NEIGHBOUR) && nodes[n].fanout.len() > 1 {
                     nodes[n].fanout.sort_unstable_by_key(|&e| {
                         let edge = &edges[e];
                         (
@@ -730,8 +755,89 @@ impl FuseGraph {
                     nodes[n].fanout.truncate(write + 1);
                 }
 
+                // Merge constants
+                if passes.contains(FusePasses::CONSTANT_NEIGHBOUR)
+                    && nodes[n]
+                        .fanin
+                        .iter()
+                        .filter(|&e| {
+                            matches!(nodes[edges[*e].driver].content, NodeContent::Constant(_))
+                        })
+                        .count()
+                        > 1
+                {
+                    nodes[n].fanin.sort_unstable_by_key(|&e| {
+                        let edge = &edges[e];
+                        (edge.drivee_slice.lsb(), edge.drivee_slice.width())
+                    });
+
+                    cyclic.clear();
+                    for i in 1..nodes[n].fanin.len() {
+                        let (l, r) = (nodes[n].fanin[i - 1], nodes[n].fanin[i]);
+                        let (ln, rn) = (edges[l].driver, edges[r].driver);
+
+                        // C1: Both edges are constants.
+                        let (NodeContent::Constant(lb), NodeContent::Constant(rb)) =
+                            (&nodes[ln].content, &nodes[rn].content)
+                        else {
+                            continue;
+                        };
+
+                        // C2: Edges are adjacent.
+                        if edges[l].drivee_slice.msb() + 1 != edges[r].drivee_slice.lsb() {
+                            continue;
+                        }
+
+                        // C3: Most significant edge constant starts at 0.
+                        if edges[r].driver_slice.lsb() != 0 {
+                            continue;
+                        }
+
+                        let lsize = lb.size();
+                        let bits = Bits::concatenate(&rb, &lb);
+                        nodes[rn].size = bits.size();
+                        nodes[rn].content = NodeContent::Constant(bits);
+
+                        // Shift over all edges R -> ..
+                        nodes[rn].fanout.iter().for_each(|e| {
+                            edges[*e].driver_slice =
+                                edges[*e].driver_slice.shift(lsize.get()).unwrap();
+                        });
+
+                        // Make edge encompass L -> N and R -> N.
+                        edges[r].driver_slice = SignalSlice::with_end(nodes[rn].size);
+                        edges[r].drivee_slice = SignalSlice::new(
+                            edges[r].drivee_slice.msb(),
+                            edges[l].drivee_slice.lsb(),
+                        )
+                        .unwrap();
+
+                        // Remove edge L -> N.
+                        cyclic.push(i - 1);
+                        nodes[ln].fanout.retain(|&ek| ek != l);
+
+                        reached_fixed_point = false;
+                    }
+
+                    if !cyclic.is_empty() {
+                        let mut i = 0;
+                        let mut j = 0;
+
+                        nodes[n].fanin.retain(|_| {
+                            let retain = cyclic.get(j).copied() != Some(i);
+
+                            i += 1;
+                            j += usize::from(!retain);
+
+                            retain
+                        });
+                    }
+                }
+
                 // Inversion
-                if !nodes[n].flags.contains(NodeFlags::DRIVE)
+                if reached_fixed_point
+                    && passes.contains(FusePasses::INVERSION)
+                    && !nodes[n].flags.contains(NodeFlags::DRIVE)
                     && nodes[n].fanin.iter().any(|&e| {
                         edges[e].drivee_slice != SignalSlice::with_end(nodes[n].size)
                             && edges[e].driver_slice
@@ -803,7 +909,8 @@ impl FuseGraph {
                         let driver_fanin = std::mem::take(&mut nodes[edge.driver].fanin);
                         nodes[n].fanin.extend(driver_fanin.into_iter().map(|ek| {
                             edges[ek].drivee = n;
-                            drivee_slice.subslice(edges[ek].drivee_slice);
+                            edges[ek].drivee_slice =
+                                drivee_slice.subslice(edges[ek].drivee_slice).unwrap();
                             ek
                         }));
 
@@ -816,16 +923,12 @@ impl FuseGraph {
                         }
 
                         // A -> B     ~>      B -> A
-                        dbg!(edge.driver);
-                        dbg!(n);
                         nodes[edge.driver].fanin.push(e);
                         nodes[edge.driver].fanout.retain(|&ek| e != ek);
                         cyclic.push(i);
                         nodes[n].fanout.push(e);
                         std::mem::swap(&mut edge.driver, &mut edge.drivee);
                         std::mem::swap(&mut edge.driver_slice, &mut edge.drivee_slice);
-
-                        dbg!(&nodes[edge.drivee].fanin);
                     }
 
                     if !cyclic.is_empty() {

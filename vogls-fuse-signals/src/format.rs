@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use std::fmt::{self, Write};
 
 use slotmap::SlotMap;
@@ -13,7 +15,12 @@ impl<'a> fmt::Display for NodeDisplay<'a> {
         match &self.0.content {
             NodeContent::Signal(s) if *s == SignalKey::default() => write!(f, "N{}", self.1.get()),
             NodeContent::Signal(s) => f.write_str(&self.2[*s].name),
-            NodeContent::Constant(bits) => bits.display(&BitsFormatOptions::default()).fmt(f),
+            NodeContent::Constant(bits) => bits
+                .display(&BitsFormatOptions {
+                    prefix: true,
+                    ..Default::default()
+                })
+                .fmt(f),
         }?;
 
         if self.0.flags != NodeFlags::EMPTY {
@@ -62,6 +69,8 @@ impl<'a> fmt::Display for FuseGraphDot<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         use vogls_utils::TableKey;
 
+        let mut seen_edges = VgHashSet::default();
+
         writeln!(f, "digraph {{")?;
         for (key, node) in self.graph.nodes.key_value_iter() {
             writeln!(
@@ -70,28 +79,13 @@ impl<'a> fmt::Display for FuseGraphDot<'a> {
                 key.get(),
                 node.display(key, self.signals)
             )?;
-        }
-        for edge in self.graph.edges.values() {
-            writeln!(
-                f,
-                r#"  n{} -> n{} [taillabel="{}", headlabel="{}"];"#,
-                edge.driver.get(),
-                edge.drivee.get(),
-                if edge.driver_slice.lsb() > 0
-                    || edge.driver_slice.width() != self.graph.nodes[edge.driver].size
-                {
-                    format!("[{}:{}]", edge.driver_slice.msb(), edge.driver_slice.lsb())
-                } else {
-                    String::new()
-                },
-                if edge.drivee_slice.lsb() > 0
-                    || edge.drivee_slice.width() != self.graph.nodes[edge.drivee].size
-                {
-                    format!("[{}:{}]", edge.drivee_slice.msb(), edge.drivee_slice.lsb())
-                } else {
-                    String::new()
-                },
-            )?;
+
+            for e in node.fanin.iter().chain(node.fanout.iter()) {
+                let edge = &self.graph.edges[*e];
+                if seen_edges.insert(*e) {
+                    self.graph.fmt_edge(f, edge)?;
+                }
+            }
         }
         writeln!(f, "}}")?;
 

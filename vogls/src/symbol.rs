@@ -40,9 +40,8 @@ impl From<VSymbol> for Symbol {
                 dims: net.dims,
                 net: NetValue::Signal(NetSignal {
                     width: net.net.width(),
-                    specify: net.net.specify.map(|s| (s, None)),
-                    ba: net.net.ba,
-                    ba_offset: None,
+                    prb: (net.net.probe_signal(), None),
+                    drv: (net.net.blocking_drive_signal(), None),
                     nba: net.net.nba.map(|(p, s, m)| (p, s, None, m, None)),
                 }),
             }),
@@ -69,9 +68,8 @@ pub enum NetValue {
 
 pub struct NetSignal {
     width: VectorSize,
-    specify: Option<(SignalKey, Option<NonMaxU32>)>,
-    ba: SignalKey,
-    ba_offset: Option<NonMaxU32>,
+    pub prb: (SignalKey, Option<NonMaxU32>),
+    pub drv: (SignalKey, Option<NonMaxU32>),
     pub nba: Option<(
         ProcessKey,
         SignalKey,
@@ -83,21 +81,19 @@ pub struct NetSignal {
 
 impl NetSignal {
     pub fn probe_signal(&self) -> (SignalKey, Option<SignalSlice>) {
+        let (s, o) = self.prb;
         (
-            self.ba,
-            self.ba_offset
-                .map(|lsb| SignalSlice::from_width(lsb.get(), self.width).unwrap()),
+            s,
+            o.map(|o| SignalSlice::from_width(o.get(), self.width).unwrap()),
         )
     }
 
     pub fn blocking_drive_signal(&self) -> (SignalKey, Option<SignalSlice>) {
-        match self.specify {
-            None => self.probe_signal(),
-            Some((signal, lsb)) => (
-                signal,
-                lsb.map(|lsb| SignalSlice::from_width(lsb.get(), self.width).unwrap()),
-            ),
-        }
+        let (s, o) = self.drv;
+        (
+            s,
+            o.map(|o| SignalSlice::from_width(o.get(), self.width).unwrap()),
+        )
     }
 
     pub fn non_blocking_drive_signal(
@@ -117,23 +113,10 @@ impl NetSignal {
         )
     }
 
-    pub fn replace_signals(
-        &mut self,
-        mut f: impl FnMut(SignalKey) -> (SignalKey, Option<NonMaxU32>),
-    ) {
-        assert!(self.ba_offset.is_none());
-        (self.ba, self.ba_offset) = f(self.ba);
-        if let Some(specify) = &mut self.specify {
-            assert!(specify.1.is_none());
-            *specify = f(specify.0);
-        }
-        if let Some((_, value, value_slice, mask, mask_slice)) = &mut self.nba {
-            assert!(value_slice.is_none());
-            assert!(mask_slice.is_none());
-            (*value, *value_slice) = f(*value);
-            if let Some(mask) = mask {
-                (*mask, *mask_slice) = f(*mask);
-            }
-        }
+    pub fn map_prb(&mut self, mut f: impl FnMut(SignalKey) -> (SignalKey, Option<NonMaxU32>)) {
+        self.prb = f(self.prb.0);
+    }
+    pub fn map_drv(&mut self, mut f: impl FnMut(SignalKey) -> (SignalKey, Option<NonMaxU32>)) {
+        self.drv = f(self.prb.0);
     }
 }

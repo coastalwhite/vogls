@@ -101,11 +101,11 @@ fn update_watchers(
 pub fn drive_bits(
     heap: &mut Heap,
     dst: HeapRef,
-    src: HeapRef,
+    mut src: HeapRef,
     partial: Option<u32>,
     logic_mode: LogicMode,
 ) -> bool {
-    debug_assert!(dst.size >= src.size);
+    src.size = src.size.min(dst.size);
     if partial.is_some() {
         let partial = partial.unwrap_or(0);
 
@@ -640,12 +640,16 @@ impl Simulation {
                         state.runtime.heap.set_tv_u64(dst.to_ref(TIME_VSIZE), lupdt);
                     }
                     I::Drive(sig, src, offset) => {
+                        let mut dst = self.signals[sig.as_usize()];
                         let partial = match (offset, self.logic_mode) {
                             (None, _) => None,
-                            (Some((offset, _mask_size)), LogicMode::TwoValue) => {
+                            (Some((offset, mask_size)), LogicMode::TwoValue) => {
+                                dst.size = *mask_size;
                                 Some(state.runtime.heap.load_exact_tv_u32(*offset))
                             }
-                            (Some((offset, _mask_size)), LogicMode::FourValue) => {
+                            (Some((offset, mask_size)), LogicMode::FourValue) => {
+                                dst.size = *mask_size;
+                                dst = dst.to_fv_size();
                                 let (spc, val) = state.runtime.heap.load_exact_fv_u32(*offset);
                                 if !spc != 0 {
                                     break 'instruction None;
@@ -656,7 +660,7 @@ impl Simulation {
 
                         let updated = drive_bits(
                             &mut state.runtime.heap,
-                            self.signals[sig.as_usize()],
+                            dst,
                             *src,
                             partial,
                             self.logic_mode,
