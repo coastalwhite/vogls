@@ -6,7 +6,7 @@ use slotmap::{SlotMap, new_key_type};
 use vogls_bits::arithmetic::{FvLogicValue, fv_set_no_special};
 use vogls_bits::set_subslice::{tv_l_set, tv_s_set};
 use vogls_codegen::{Heap, HeapOffset, HeapRef};
-use vogls_ir::{INTEGER_VSIZE, LogicMode, Mode, TIME_VSIZE};
+use vogls_ir::{INTEGER_VSIZE, LogicMode, Mode, TIME_VSIZE, VectorSize};
 use vogls_runtime::plugins::RuntimePluginState;
 use vogls_runtime::{RtSignalKey, SimulationIo};
 
@@ -102,11 +102,12 @@ pub fn drive_bits(
     heap: &mut Heap,
     dst: HeapRef,
     mut src: HeapRef,
+    dst_limit: VectorSize,
     partial: Option<u32>,
     logic_mode: LogicMode,
 ) -> bool {
     src.size = src.size.min(dst.size);
-    if partial.is_some() {
+    if partial.is_some() || dst_limit < dst.size {
         let partial = partial.unwrap_or(0);
 
         return match logic_mode {
@@ -640,21 +641,19 @@ impl Simulation {
                         state.runtime.heap.set_tv_u64(dst.to_ref(TIME_VSIZE), lupdt);
                     }
                     I::Drive(sig, src, offset) => {
-                        let mut dst = self.signals[sig.as_usize()];
-                        let partial = match (offset, self.logic_mode) {
-                            (None, _) => None,
-                            (Some((offset, mask_size)), LogicMode::TwoValue) => {
-                                dst.size = *mask_size;
-                                Some(state.runtime.heap.load_exact_tv_u32(*offset))
-                            }
+                        let dst = self.signals[sig.as_usize()];
+                        let (dst_limit, partial) = match (offset, self.logic_mode) {
+                            (None, _) => (dst.size, None),
+                            (Some((offset, mask_size)), LogicMode::TwoValue) => (
+                                *mask_size,
+                                Some(state.runtime.heap.load_exact_tv_u32(*offset)),
+                            ),
                             (Some((offset, mask_size)), LogicMode::FourValue) => {
-                                dst.size = *mask_size;
-                                dst = dst.to_fv_size();
                                 let (spc, val) = state.runtime.heap.load_exact_fv_u32(*offset);
                                 if !spc != 0 {
                                     break 'instruction None;
                                 }
-                                Some(val)
+                                (*mask_size, Some(val))
                             }
                         };
 
@@ -662,6 +661,7 @@ impl Simulation {
                             &mut state.runtime.heap,
                             dst,
                             *src,
+                            dst_limit,
                             partial,
                             self.logic_mode,
                         );

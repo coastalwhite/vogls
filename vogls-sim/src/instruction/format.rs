@@ -188,10 +188,10 @@ impl fmt::Display for VmInstruction {
             }
             Self::Drive(signal, src, offset) => match offset {
                 None => write!(f, "drive {}, {}", signal.as_usize(), src.offset),
-                Some((offset, _)) => {
+                Some((offset, mask_size)) => {
                     write!(
                         f,
-                        "drive[{offset}, {length}] {}, {}",
+                        "drive[{offset}, {length}, {mask_size}] {}, {}",
                         src.offset,
                         signal.as_usize(),
                         length = src.size,

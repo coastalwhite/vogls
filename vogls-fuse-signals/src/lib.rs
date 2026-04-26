@@ -1,3 +1,60 @@
+//! Fuse signals for a given list of drivers & drivees pairs.
+//!
+//! Given a list of signals that are seen as equivalent try to merge as many signals as possible.
+//! This is done by creating a directed graph that represents relationships between signals. Each
+//! node represents a signal and each edge represents a driver to drivee relationship. The driver
+//! and drivee of an edge may also optionally have a slice associated with them, allowing partial
+//! probes and drives.
+//!
+//! A set of graph transformations is performed on this graph usually reducing the depth of the
+//! graph.
+//!
+//! | Property         | From                       | To                   |
+//! |------------------|----------------------------|----------------------|
+//! | Transitive       | A -> B -> C                | A -> B, A -> C       |
+//! | Neighbour Merge  | A[0] -> B[0], A[1] -> B[1] | A[1:0] -> B[1:0]     |
+//! | Cyclic           | A -> A                     |                      |
+//! | Subset Inversion | A -> B[0], C -> B[1]       | B[0] -> A, B[1] -> C |
+//!
+//! At the end, you have a graph where many nodes only have on fanin edge. The driver of this edge
+//! is uses as an alias for the node's signal. The returned map is a map from the original signal
+//! to the new alias. If there is a more complex relation between nodes, a marshalling process is
+//! inserted to represent that relationship.
+//!
+//! This is a important pass for optimization that removes:
+//! - Redundant signals (reducing memory consumption)
+//! - Marshalling processes (reducing scheduling overhead)
+
+mod format;
+#[cfg(test)]
+mod tests;
+
+#[derive(Default)]
+pub struct FuseGraph {
+    nodes: Table<NodeKey, Node>,
+    edges: Table<EdgeKey, Edge>,
+    signal_to_node: VgHashMap<SignalKey, NodeKey>,
+}
+
+vogls_utils::new_table_key! { struct NodeKey; }
+vogls_utils::new_table_key! { struct EdgeKey; }
+
+struct Node {
+    content: NodeContent,
+    flags: NodeFlags,
+    size: VectorSize,
+    fanin: Vec<EdgeKey>,
+    fanout: Vec<EdgeKey>,
+}
+
+#[cfg_attr(test, derive(PartialEq, Eq, Debug, Clone))]
+struct Edge {
+    driver: NodeKey,
+    drivee: NodeKey,
+    driver_slice: SignalSlice,
+    drivee_slice: SignalSlice,
+}
+
 use std::ops::{BitOr, BitOrAssign};
 
 use hashbrown::hash_map::Entry;
@@ -10,12 +67,11 @@ use vogls_ir::{
 };
 use vogls_utils::{IndexMap, Table, VgHashMap, VgHashSet};
 
-vogls_utils::new_table_key! { struct NodeKey; }
-vogls_utils::new_table_key! { struct EdgeKey; }
-
-mod format;
-#[cfg(test)]
-mod tests;
+#[derive(PartialEq, Eq, Debug)]
+enum NodeContent {
+    Signal(SignalKey),
+    Constant(Bits),
+}
 
 #[cfg_attr(test, derive(PartialEq, Eq, Debug))]
 pub enum FuseTarget {
@@ -23,19 +79,6 @@ pub enum FuseTarget {
     Constant(Bits),
 }
 
-#[cfg_attr(test, derive(PartialEq, Eq, Debug, Clone))]
-struct Edge {
-    driver: NodeKey,
-    drivee: NodeKey,
-    driver_slice: SignalSlice,
-    drivee_slice: SignalSlice,
-}
-
-#[derive(PartialEq, Eq, Debug)]
-enum NodeContent {
-    Signal(SignalKey),
-    Constant(Bits),
-}
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct NodeFlags(u8);
 impl NodeFlags {
@@ -70,14 +113,6 @@ impl BitOrAssign for NodeFlags {
     }
 }
 
-struct Node {
-    content: NodeContent,
-    flags: NodeFlags,
-    size: VectorSize,
-    fanin: Vec<EdgeKey>,
-    fanout: Vec<EdgeKey>,
-}
-
 #[derive(Clone)]
 pub enum Driver {
     Constant(Bits),
@@ -99,13 +134,6 @@ pub struct InputEdge {
     pub driver: Driver,
     pub drivee: SignalKey,
     pub drivee_slice: Option<SignalSlice>,
-}
-
-#[derive(Default)]
-pub struct FuseGraph {
-    nodes: Table<NodeKey, Node>,
-    edges: Table<EdgeKey, Edge>,
-    signal_to_node: VgHashMap<SignalKey, NodeKey>,
 }
 
 impl FuseGraph {
@@ -217,32 +245,6 @@ impl FuseGraph {
     }
 }
 
-/// Fuse signals for a given list of drivers & drivees pairs.
-///
-/// Given a list of signals that are seen as equivalent try to merge as many signals as possible.
-/// This is done by creating a directed graph that represents relationships between signals. Each
-/// node represents a signal and each edge represents a driver to drivee relationship. The driver
-/// and drivee of an edge may also optionally have a slice associated with them, allowing partial
-/// probes and drives.
-///
-/// A set of graph transformations is performed on this graph usually reducing the depth of the
-/// graph.
-///
-/// | Property         | From                       | To                   |
-/// |------------------|----------------------------|----------------------|
-/// | Transitive       | A -> B -> C                | A -> B, A -> C       |
-/// | Neighbour Merge  | A[0] -> B[0], A[1] -> B[1] | A[1:0] -> B[1:0]     |
-/// | Cyclic           | A -> A                     |                      |
-/// | Subset Inversion | A -> B[0], C -> B[1]       | B[0] -> A, B[1] -> C |
-///
-/// At the end, you have a graph where many nodes only have on fanin edge. The driver of this edge
-/// is uses as an alias for the node's signal. The returned map is a map from the original signal
-/// to the new alias. If there is a more complex relation between nodes, a marshalling process is
-/// inserted to represent that relationship.
-///
-/// This is a important pass for optimization that removes:
-/// - Redundant signals (reducing memory consumption)
-/// - Marshalling processes (reducing scheduling overhead)
 pub fn fuse_signals(
     gl: &mut GlobalContext,
     connections: &[InputEdge],
@@ -372,11 +374,12 @@ pub fn fuse_signals(
                     if let Some((to, slice)) = drive_map.get(signal) {
                         let mut partial = *partial;
                         if let Some(slice) = slice {
+                            let new_width = VectorSize::new(slice.msb() + 1).unwrap();
                             partial = Some(match partial {
-                                None => (builder.constant_u32(gl, slice.lsb()), slice.width()),
+                                None => (builder.constant_u32(gl, slice.lsb()), new_width),
                                 Some((o, m)) => (
                                     builder.plus_constant(gl, o, Bits::new_u32(slice.lsb())),
-                                    VectorSize::new(m.get() + slice.lsb()).unwrap(),
+                                    m.min(new_width),
                                 ),
                             });
                         }
@@ -595,7 +598,7 @@ impl FuseGraph {
                     // C3: Either
                     // - signal is not observed for LastUpdateTime or Watched
                     // - or other the fused signal is used in its entirety
-                    if v.flags.contains(NodeFlags::LUPDT | NodeFlags::WATCH)
+                    if v.flags.contains(NodeFlags::LUPDT) | v.flags.contains(NodeFlags::WATCH)
                         && edge.driver_slice != SignalSlice::with_end(nodes[edge.driver].size)
                     {
                         marshalls.push(k);
@@ -889,6 +892,7 @@ impl FuseGraph {
                         }
 
                         let drivee_slice = edge.drivee_slice;
+                        reached_fixed_point = false;
 
                         // 1. Remove edge from drivee fanin / driver fanout.
                         // 2. Add edge to drivee fanout / driver fanin

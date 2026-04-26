@@ -57,7 +57,7 @@ macro_rules! graph {
     (
         $signals:expr,
         [
-        $($i:literal: $signal:tt $([ $($prop:ident),* ])? ),* $(,)?
+        $($i:literal: $signal:tt $([ $($prop:ident)* ])? ),* $(,)?
         ]
         [
         $($f:literal $( [$(:$f_msb:literal :)?$f_lsb:literal] )? -> $t:literal $( [$(:$t_msb:literal : )?$t_lsb:literal] )?),* $(,)?
@@ -707,6 +707,61 @@ fn test_integration1() {
             (s4, FuseTarget::Constant(c1.clone())),
             (w1, FuseTarget::Constant(c1010.clone())),
             (w2, FuseTarget::Constant(c1010.clone())),
+        ])
+    );
+    assert!(drive_map.is_empty());
+}
+
+#[test]
+fn test_transitive_subslice3() {
+    let ([sa, sb, sc, sd], signals) = signals!(
+        "A" : 2,
+        "B" : 1,
+        "C" : 1,
+        "D" : 1,
+    );
+    let mut g = graph! {
+        signals,
+        [ 0: sa [D], 1: sb, 2: sc, 3: sd [ P W ] ]
+        [
+            0 [0] -> 1,
+            0 [1] -> 2,
+            1 -> 3,
+        ]
+    };
+    let out = graph! {
+        signals,
+        [ 0: sa [D], 1: sb, 2: sc, 3: sd [ P W ] ]
+        [
+            0 [0] -> 1,
+            0 [1] -> 2,
+            0 [0] -> 3,
+        ]
+    };
+
+    let mut marshalls = Vec::new();
+    let mut probe_fuse = VgHashMap::default();
+    let mut drive_map = VgHashMap::default();
+    g.optimize_till_fixed_point(
+        &mut marshalls,
+        &mut probe_fuse,
+        &mut drive_map,
+        FusePasses::ALL,
+    );
+
+    assert_graph_equal(&signals, &g, &out);
+    assert_eq!(marshalls.as_slice(), &[TableKey::from_usize(3).unwrap()]);
+    assert_eq!(
+        probe_fuse,
+        <VgHashMap<_, _>>::from_iter([
+            (
+                sb,
+                FuseTarget::Signal(sa, Some(SignalSlice::new(0, 0).unwrap()))
+            ),
+            (
+                sc,
+                FuseTarget::Signal(sa, Some(SignalSlice::new(1, 1).unwrap()))
+            )
         ])
     );
     assert!(drive_map.is_empty());
