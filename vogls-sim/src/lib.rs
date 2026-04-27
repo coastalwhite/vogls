@@ -101,20 +101,26 @@ fn update_watchers(
 pub fn drive_bits(
     heap: &mut Heap,
     dst: HeapRef,
-    mut src: HeapRef,
+    src: HeapRef,
     dst_limit: VectorSize,
     partial: Option<u32>,
     logic_mode: LogicMode,
 ) -> bool {
-    src.size = src.size.min(dst.size);
-    if partial.is_some() || dst_limit < dst.size {
+    if partial.is_some() || src.size < dst.size || dst_limit < dst.size {
         let partial = partial.unwrap_or(0);
+        let Some(rem_dst_size) = VectorSize::new(dst_limit.get().saturating_sub(partial)) else {
+            return false;
+        };
 
         return match logic_mode {
             LogicMode::TwoValue if dst.size < Heap::TV_U64_MIN_SIZE => {
                 let old_val = heap.get_tv_u64(dst);
-                let src_val = heap.get_tv_u64(src);
-                let new_val = tv_s_set(old_val, src_val, dst.size, partial, src.size);
+                let mut src_val = heap.get_tv_u64(src);
+                let size = src.size.min(rem_dst_size);
+                if rem_dst_size < src.size {
+                    src_val &= 1u64.unbounded_shl(rem_dst_size.get()).wrapping_sub(1);
+                }
+                let new_val = tv_s_set(old_val, src_val, dst.size, partial, size);
                 heap.set_tv_u64(dst, new_val);
                 old_val != new_val
             }

@@ -62,7 +62,7 @@ pub fn drive(
     let current = CVar {
         ident: CIdent::Scoped(0),
         ty: CType {
-            size: partial_size,
+            size: src.ty.size,
             mode: src.ty.mode,
         },
     };

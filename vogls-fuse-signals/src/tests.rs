@@ -766,3 +766,49 @@ fn test_transitive_subslice3() {
     );
     assert!(drive_map.is_empty());
 }
+
+#[test]
+fn test_negative2() {
+    let ([sa, sb, sc], signals) = signals!(
+        "A" : 1,
+        "B" : 1,
+        "C" : 2,
+    );
+    let mut g = graph! {
+        signals,
+        [ 0: sa [D L], 1: sb [D L], 2: sc ]
+        [ 0 -> 2 [0], 1 -> 2 [1] ]
+    };
+    let out = graph! {
+        signals,
+        [ 0: sa [L], 1: sb [L], 2: sc [D] ]
+        [ 2 [0] -> 0, 2 [1] -> 1 ]
+    };
+
+    let mut marshalls = Vec::new();
+    let mut probe_fuse = VgHashMap::default();
+    let mut drive_map = VgHashMap::default();
+    g.optimize_till_fixed_point(
+        &mut marshalls,
+        &mut probe_fuse,
+        &mut drive_map,
+        FusePasses::ALL,
+    );
+
+    assert_graph_equal(&signals, &g, &out);
+    assert_eq!(
+        marshalls.as_slice(),
+        &[
+            TableKey::from_usize(0).unwrap(),
+            TableKey::from_usize(1).unwrap()
+        ]
+    );
+    assert!(probe_fuse.is_empty());
+    assert_eq!(
+        drive_map,
+        <VgHashMap<_, _>>::from_iter([
+            (sa, (sc, Some(SignalSlice::new(0, 0).unwrap()))),
+            (sb, (sc, Some(SignalSlice::new(1, 1).unwrap())))
+        ])
+    );
+}

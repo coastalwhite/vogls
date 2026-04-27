@@ -366,7 +366,12 @@ impl Heap {
             (BitsDataRef::InlineTv(v), LogicMode::FourValue) => {
                 _ = self.set_fv_u64(dst, 1u64.unbounded_shl(dst.size.get()).wrapping_sub(1), v)
             }
-            (BitsDataRef::InlineFv(..), LogicMode::TwoValue) => unreachable!(),
+            (BitsDataRef::InlineFv(_spc, val), LogicMode::TwoValue) => {
+                if value.contains_special() {
+                    unreachable!()
+                }
+                _ = self.set_tv_u64(dst, val);
+            }
             (BitsDataRef::InlineFv(spc, val), LogicMode::FourValue) => {
                 _ = self.set_fv_u64(dst, spc as u64, val as u64);
             }

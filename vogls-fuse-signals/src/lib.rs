@@ -264,38 +264,6 @@ pub fn fuse_signals(
         FusePasses::ALL,
     );
 
-    for n in marshalls {
-        let NodeContent::Signal(signal) = &g.nodes[n].content else {
-            unreachable!()
-        };
-
-        // If it is more complicated, we have to insert a process that propagated from driver to
-        // drivee.
-        let (_, mut builder) = new_process(gl, "fuse_signal".into(), TokenRange::default());
-        let mut watch_signals = IndexMap::default();
-        for &e in &g.nodes[n].fanin {
-            let edge = &g.edges[e];
-            let value = match &g.nodes[edge.driver].content {
-                NodeContent::Signal(driver) => *watch_signals.get_or_insert_with(*driver, || {
-                    builder.probe_slice_constant(
-                        gl,
-                        *driver,
-                        edge.driver_slice.lsb(),
-                        edge.driver_slice.width(),
-                    )
-                }),
-                NodeContent::Constant(value) => builder.constant(
-                    gl,
-                    value.slicez(edge.driver_slice.lsb(), edge.driver_slice.width()),
-                ),
-            };
-
-            builder.drive_partial_constant(gl, *signal, value, edge.drivee_slice.lsb())
-        }
-        let entry = builder.key();
-        builder.watch_to(gl, watch_signals.take_keys(), entry);
-    }
-
     // TODO: This is stupid.
     let keys = gl.bbs.keys().collect::<Vec<_>>();
     for key in keys {
@@ -485,6 +453,38 @@ pub fn fuse_signals(
                 gl.bbs[key].terminator = BasicBlockTerminator::Halt;
             }
         }
+    }
+
+    for n in marshalls {
+        let NodeContent::Signal(signal) = &g.nodes[n].content else {
+            unreachable!()
+        };
+
+        // If it is more complicated, we have to insert a process that propagated from driver to
+        // drivee.
+        let (_, mut builder) = new_process(gl, "fuse_signal".into(), TokenRange::default());
+        let mut watch_signals = IndexMap::default();
+        for &e in &g.nodes[n].fanin {
+            let edge = &g.edges[e];
+            let value = match &g.nodes[edge.driver].content {
+                NodeContent::Signal(driver) => *watch_signals.get_or_insert_with(*driver, || {
+                    builder.probe_slice_constant(
+                        gl,
+                        *driver,
+                        edge.driver_slice.lsb(),
+                        edge.driver_slice.width(),
+                    )
+                }),
+                NodeContent::Constant(value) => builder.constant(
+                    gl,
+                    value.slicez(edge.driver_slice.lsb(), edge.driver_slice.width()),
+                ),
+            };
+
+            builder.drive_partial_constant(gl, *signal, value, edge.drivee_slice.lsb())
+        }
+        let entry = builder.key();
+        builder.watch_to(gl, watch_signals.take_keys(), entry);
     }
 
     (fused_signals, drive_map)

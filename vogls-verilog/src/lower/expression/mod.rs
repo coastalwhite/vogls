@@ -393,16 +393,27 @@ pub fn lower_expr<'a>(
                 let truthy = result_stack.pop().unwrap();
                 let falsy = result_stack.pop().unwrap();
 
-                let (Some((c, _)), Some((mut t, t_ty)), Some((mut f, f_ty))) =
+                let (Some((c, _)), Some((mut t, mut t_ty)), Some((mut f, mut f_ty))) =
                     (condition, truthy, falsy)
                 else {
                     result_stack.push(None);
                     continue;
                 };
 
+                let size = t_ty.force_net_width().max(f_ty.force_net_width());
+                if size > t_ty.force_net_width() {
+                    t = zero_or_sign_extend(mctx.gl(), builder, t, t_ty, size);
+                    t_ty = t_ty.zero_or_sign_extend(size);
+                }
+                if size > f_ty.force_net_width() {
+                    f = zero_or_sign_extend(mctx.gl(), builder, f, f_ty, size);
+                    f_ty = f_ty.zero_or_sign_extend(size);
+                }
+
                 if let Some(context_width) = item.context_width {
                     if context_width > t_ty.force_net_width() {
                         t = zero_or_sign_extend(mctx.gl(), builder, t, t_ty, context_width);
+                        t_ty = t_ty.zero_or_sign_extend(context_width);
                     }
                     if context_width > f_ty.force_net_width() {
                         f = zero_or_sign_extend(mctx.gl(), builder, f, f_ty, context_width);
