@@ -16,7 +16,7 @@ pub fn drive(
 ) -> io::Result<()> {
     let s = src.ident;
     let dst_ref = signals[dst.as_usize()];
-    let Some((offset, partial_size)) = partial else {
+    let Some((offset, _partial_size)) = partial else {
         let dst_wi = dst_ref.offset.bit_offset / 64;
         match src.ty.array_size() {
             None => {
