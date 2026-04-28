@@ -9,8 +9,8 @@ use crate::dyn_format_string::{DynFormatArgument, DynFormatString};
 use crate::token_range::TokenRange;
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext,
-    Instruction, IntrinsicOp, ProcessKey, ResizeOp, SCALAR_VSIZE, ShiftImmOp, Signal, SignalKey,
-    TIME_VSIZE, Time, UnaryOp, Variable, VariableKey,
+    Instruction, IntrinsicOp, ProcessKey, ProcessKind, ResizeOp, SCALAR_VSIZE, ShiftImmOp, Signal,
+    SignalKey, TIME_VSIZE, Time, UnaryOp, Variable, VariableKey,
 };
 
 #[derive(Debug)]
@@ -227,7 +227,14 @@ fn parse_process<'a>(
     c.expect_keyword("proc")?;
 
     c.trim_cursor();
-    let name = c.take_ident()?;
+    let kind = match c.take_ident()? {
+        "assign" => ProcessKind::Assign,
+        "always" => ProcessKind::Always,
+        "initial" => ProcessKind::Initial,
+        "fuse" => ProcessKind::Fuse,
+        "specify" => ProcessKind::Specify,
+        _ => ProcessKind::Other,
+    };
 
     c.trim_cursor();
     c.expect_char('{')?;
@@ -396,7 +403,7 @@ fn parse_process<'a>(
     }
 
     let process = gl.processes.insert(crate::Process {
-        name: name.to_string(),
+        kind,
         entry,
         origin: TokenRange::default(),
     });

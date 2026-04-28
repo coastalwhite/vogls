@@ -2,8 +2,8 @@ use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::bits::arithmetic::FvLogicValue;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::{
-    Bits, GlobalContext, LogicMode, PhiRef, SCALAR_VSIZE, SignalKey, TIME_VSIZE, VariableKey,
-    new_process,
+    Bits, GlobalContext, LogicMode, PhiRef, ProcessKind, SCALAR_VSIZE, SignalKey, TIME_VSIZE,
+    VariableKey, new_process,
 };
 use vogls_utils::VgHashMap;
 
@@ -721,11 +721,8 @@ pub fn lower_specify<'a>(
             input_before_lut.clear();
             input_before.clear();
 
-            let (_, mut builder) = new_process(
-                mctx.gl(),
-                "specify_proxy".to_string(),
-                TokenRange::default(),
-            );
+            let (_, mut builder) =
+                new_process(mctx.gl(), ProcessKind::Specify, TokenRange::default());
             let entry = builder.key();
 
             // @Correctness: This might need something like. `Initial Value of Signal X`. I think

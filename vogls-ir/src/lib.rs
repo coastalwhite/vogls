@@ -1213,9 +1213,41 @@ pub struct GlobalContext {
     pub signals: SlotMap<SignalKey, Signal>,
 }
 
+macro_rules! define_process_kinds {
+    ($($kind:ident => $mnem:literal),+ $(,)?) => {
+        #[derive(Debug, Clone, Copy)]
+        pub enum ProcessKind {
+            $($kind,)+
+        }
+
+        impl ProcessKind {
+            pub const NUM_KINDS: usize = 0 $( + { _ = Self::$kind; 1 } )+;
+            pub const KINDS: [Self; Self::NUM_KINDS] = [$(Self::$kind),+];
+            pub fn into_static_str(self) -> &'static str {
+                match self {
+                    $(Self::$kind => $mnem,)+
+                }
+            }
+        }
+    };
+}
+
+define_process_kinds! {
+    Assign => "assign",
+    Always => "always",
+    Initial => "initial",
+    Fuse => "fuse",
+    Specify => "specify",
+    NonBlockingAssignment => "nba",
+    Udp => "udp",
+    Port => "port",
+    Fork => "fork",
+    Other => "other",
+}
+
 #[derive(Debug)]
 pub struct Process {
-    pub name: String,
+    pub kind: ProcessKind,
     pub entry: BasicBlockKey,
     pub origin: TokenRange,
 }

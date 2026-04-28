@@ -1,6 +1,7 @@
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{
-    BasicBlockBuilder, BasicBlockTerminator, SCALAR_VSIZE, SignalKey, VectorSize, new_process,
+    BasicBlockBuilder, BasicBlockTerminator, ProcessKind, SCALAR_VSIZE, SignalKey, VectorSize,
+    new_process,
 };
 use vogls_utils::OrderedSet;
 
@@ -187,7 +188,7 @@ pub fn statements_to_process<'a>(
                 });
 
                 for (i, stmt) in statements.iter().enumerate() {
-                    let (_, mut fork_builder) = new_process(mctx.gl(), "fork".to_string(), origin);
+                    let (_, mut fork_builder) = new_process(mctx.gl(), ProcessKind::Fork, origin);
                     let fork_entry_bb = fork_builder.key();
                     let condition = fork_builder.probe_slice_constant(
                         mctx.gl(),

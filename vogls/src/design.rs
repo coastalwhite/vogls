@@ -9,7 +9,7 @@ use vogls_codegen::{HeapBuilder, HeapRef};
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_frontend::symbol_table::{FrozenSymbolTable, SymbolId};
 use vogls_ir::vcd::{VcdScope, VcdValue, VcdVariableKey};
-use vogls_ir::{Bits, GlobalContext, LogicMode, SignalKey};
+use vogls_ir::{Bits, GlobalContext, LogicMode, ProcessKind, SignalKey};
 use vogls_runtime::SimulationIo;
 use vogls_runtime::plugins::RuntimePluginState;
 use vogls_runtime::{RtSignalKey, RuntimeState};
@@ -509,6 +509,21 @@ impl Design {
             writeln!(ectx.stdout)?;
             for process in mctx.gl.processes.values() {
                 writeln!(ectx.stdout, "{}", process.display(&mctx.gl))?;
+            }
+        }
+
+        if ectx.emit_process_stats {
+            let mut counts = [0u64; ProcessKind::NUM_KINDS];
+            for process in mctx.gl.processes.values() {
+                counts[process.kind as usize] += 1;
+            }
+
+            writeln!(ectx.stdout, "Process Kind Counts:")?;
+            for (kind, count) in ProcessKind::KINDS.into_iter().zip(counts) {
+                if count == 0 {
+                    continue;
+                }
+                writeln!(ectx.stdout, "  {}: {}", kind.into_static_str(), count)?;
             }
         }
 

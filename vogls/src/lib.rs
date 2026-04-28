@@ -8,12 +8,13 @@ pub use vogls_bits::format::{BitsFormatBase, BitsFormatOptions, BitsFormatWidth}
 use vogls_codegen::{HeapBuilder, HeapOffset, HeapRef};
 use vogls_codegen_c::runtime::{CDesign, CDesignState, SharedObjectContainer};
 use vogls_codegen_c::{
-    lower_process_array, lower_signal_drive_fn, lower_signal_drive_header, CLowerOptions, ListenerBuilder, StateBuilder
+    CLowerOptions, ListenerBuilder, StateBuilder, lower_process_array, lower_signal_drive_fn,
+    lower_signal_drive_header,
 };
 use vogls_frontend::ident_table::IdentId;
 use vogls_ir::optimize::OptFlags;
 pub use vogls_ir::{Bits, LogicMode, SignalKey, VectorSize};
-use vogls_ir::{GlobalContext, SCALAR_VSIZE, Signal};
+use vogls_ir::{GlobalContext, ProcessKind, SCALAR_VSIZE, Signal};
 use vogls_runtime::plugins::RuntimePluginState;
 pub use vogls_runtime::{RtSignalKey, SimulationIo};
 pub use vogls_sim::SimulationState;
@@ -34,8 +35,8 @@ pub use vogls_runtime as runtime;
 pub use vogls_sim as sim;
 pub use vogls_utils as utils;
 
-pub mod symbol;
 pub mod design;
+pub mod symbol;
 // pub mod symbolic_execution;
 
 pub struct ExecutionContext {
@@ -46,6 +47,7 @@ pub struct ExecutionContext {
     pub emit_unoptimized_ir: bool,
     pub emit_ir: bool,
     pub emit_vm: bool,
+    pub emit_process_stats: bool,
     pub itrace: bool,
     pub stats: bool,
     pub debug_symbols: bool,
@@ -267,7 +269,9 @@ pub fn lower_to_shared_object(
         stats,
         num_plugins: plugins.len(),
     };
+    let mut byte_count = [0u64; ProcessKind::NUM_KINDS];
     for (i, process) in gl.processes.keys().enumerate() {
+        let start_length = out.len();
         vogls_codegen_c::lower_process(
             &mut out,
             process,
@@ -281,6 +285,17 @@ pub fn lower_to_shared_object(
             heap_refs,
             &lower_options,
         )?;
+        byte_count[gl.processes[process].kind as usize] += (out.len() - start_length) as u64;
+    }
+
+    if false {
+        println!("Process C Bytecount:");
+        for (kind, count) in ProcessKind::KINDS.into_iter().zip(byte_count) {
+            if count == 0 {
+                continue;
+            }
+            println!("  {}: {}", kind.into_static_str(), count);
+        }
     }
 
     lower_process_array(&mut out, gl)?;

@@ -273,12 +273,7 @@ impl fmt::Display for CElementType {
 const INDENT: &str = "    ";
 
 pub fn process_to_procedure_name(process: &Process, idx: usize) -> String {
-    format!(
-        "vogls_proc_{idx}_{}",
-        &process
-            .name
-            .replace(|c: char| !c.is_ascii_alphanumeric(), "_")
-    )
+    format!("vogls_proc_{idx}_{}", process.kind.into_static_str())
 }
 
 pub struct Listener {

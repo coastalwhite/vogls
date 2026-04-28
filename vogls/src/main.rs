@@ -38,6 +38,8 @@ struct Args {
     emit_ir: bool,
     #[arg(long = "emit-vm")]
     emit_vm: bool,
+    #[arg(long = "emit-process-stats")]
+    emit_process_stats: bool,
 
     #[arg(long = "no-run")]
     no_run: bool,
@@ -94,6 +96,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         emit_unoptimized_ir: args.emit_unoptimized_ir,
         emit_ir: args.emit_ir,
         emit_vm: args.emit_vm,
+        emit_process_stats: args.emit_process_stats,
         itrace: args.itrace,
         stats: args.stats,
         debug_symbols: args.debug_symbols,

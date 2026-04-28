@@ -112,7 +112,7 @@ impl Process {
     fn process_fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &mut DisplayContext<'_>) -> fmt::Result {
         ctx.prepare_process(self.entry);
 
-        writeln!(f, "proc {} {{", self.name)?;
+        writeln!(f, "proc {} {{", self.kind.into_static_str())?;
 
         let mut bb_stack = std::mem::take(&mut ctx.bb_stack_scratch);
         let mut bb_seen = std::mem::take(&mut ctx.bb_seen_scratch);

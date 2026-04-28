@@ -1,7 +1,8 @@
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_fuse_signals::InputEdge;
 use vogls_ir::{
-    Bits, ConnectionDirection, GlobalContext, SCALAR_VSIZE, SignalSlice, VectorSize, new_process,
+    Bits, ConnectionDirection, GlobalContext, ProcessKind, SCALAR_VSIZE, SignalSlice, VectorSize,
+    new_process,
 };
 use vogls_utils::OrderedSet;
 
@@ -97,7 +98,7 @@ pub fn lower<'a>(
 
                                 let (_, mut bb_builder) = new_process(
                                     &mut mctx.gl,
-                                    "decl_assign".into(),
+                                    ProcessKind::Assign,
                                     ctx.arenas.get_span(*expr),
                                 );
                                 let bb_key = bb_builder.key();
@@ -143,7 +144,7 @@ pub fn lower<'a>(
                 }
 
                 let (_, mut bb_builder) =
-                    new_process(mctx.gl(), "assign".into(), ctx.arenas.get_span(id));
+                    new_process(mctx.gl(), ProcessKind::Assign, ctx.arenas.get_span(id));
                 let bb_key = bb_builder.key();
                 let context_width = net_lvalue_size(ctx, mctx, scope, net_assignment.net_lvalue)?;
                 let (variable, variable_ty) = lower_expr(
@@ -183,7 +184,7 @@ pub fn lower<'a>(
                         } = &*instance;
 
                         let (_, mut bb_builder) =
-                            new_process(mctx.gl(), "gate".into(), ctx.arenas.get_span(*id));
+                            new_process(mctx.gl(), ProcessKind::Udp, ctx.arenas.get_span(*id));
                         let bb_key = bb_builder.key();
 
                         let output_size = net_lvalue_width(ctx, mctx, scope, *output_terminal)?;
@@ -391,14 +392,16 @@ pub fn lower<'a>(
         }
         ModuleOrGenerateItemContent::InitialConstruct(id) => {
             let statement = id.0;
-            let (_, bb_builder) = new_process(mctx.gl(), "initial".into(), ctx.arenas.get_span(id));
+            let (_, bb_builder) =
+                new_process(mctx.gl(), ProcessKind::Initial, ctx.arenas.get_span(id));
             let bb_builder =
                 statements_to_process(ctx, mctx, scope, bb_builder, AstIdRange::single(statement))?;
             bb_builder.halt(mctx.gl());
         }
         ModuleOrGenerateItemContent::AlwaysConstruct(id) => {
             let statement = id.0;
-            let (_, bb_builder) = new_process(mctx.gl(), "always".into(), ctx.arenas.get_span(id));
+            let (_, bb_builder) =
+                new_process(mctx.gl(), ProcessKind::Always, ctx.arenas.get_span(id));
             let bb_key = bb_builder.key();
             let bb_builder =
                 statements_to_process(ctx, mctx, scope, bb_builder, AstIdRange::single(statement))?;

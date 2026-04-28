@@ -462,7 +462,7 @@ pub fn fuse_signals(
 
         // If it is more complicated, we have to insert a process that propagated from driver to
         // drivee.
-        let (_, mut builder) = new_process(gl, "fuse_signal".into(), TokenRange::default());
+        let (_, mut builder) = new_process(gl, vogls_ir::ProcessKind::Fuse, TokenRange::default());
         let mut watch_signals = IndexMap::default();
         for &e in &g.nodes[n].fanin {
             let edge = &g.edges[e];

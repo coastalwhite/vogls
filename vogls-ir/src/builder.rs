@@ -1,9 +1,6 @@
 use crate::token_range::TokenRange;
 use crate::{
-    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryImmOpSimplification,
-    BinaryOp, Bits, GlobalContext, INTEGER_VSIZE, Instruction, IntrinsicOp, Process, ProcessKey,
-    ResizeOp, SCALAR_VSIZE, SignalKey, TIME_VSIZE, Time, UnaryOp, Variable, VariableKey,
-    VectorSize,
+    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryImmOpSimplification, BinaryOp, Bits, GlobalContext, Instruction, IntrinsicOp, Process, ProcessKey, ProcessKind, ResizeOp, SignalKey, Time, UnaryOp, Variable, VariableKey, VectorSize, INTEGER_VSIZE, SCALAR_VSIZE, TIME_VSIZE
 };
 
 #[must_use]
@@ -14,7 +11,7 @@ pub struct BasicBlockBuilder {
 
 pub fn new_process(
     gl: &'_ mut GlobalContext,
-    name: String,
+    kind: ProcessKind,
     origin: TokenRange,
 ) -> (ProcessKey, BasicBlockBuilder) {
     let bb_key = gl.bbs.insert(BasicBlock {
@@ -22,7 +19,7 @@ pub fn new_process(
         terminator: BasicBlockTerminator::Halt,
     });
     let process_key = gl.processes.insert(Process {
-        name,
+        kind,
         entry: bb_key,
         origin,
     });

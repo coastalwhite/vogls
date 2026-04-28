@@ -369,8 +369,8 @@ use vogls_fuse_signals::{Driver, InputEdge};
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::vcd::{VcdScope, VcdValue, VcdVariable, VcdVariableKey};
 use vogls_ir::{
-    BasicBlockBuilder, BasicBlockTerminator, GlobalContext, ProcessKey, SCALAR_VSIZE, SignalKey,
-    SignalSlice, VariableKey, VectorSize, new_process,
+    BasicBlockBuilder, BasicBlockTerminator, GlobalContext, ProcessKey, ProcessKind, SCALAR_VSIZE,
+    SignalKey, SignalSlice, VariableKey, VectorSize, new_process,
 };
 use vogls_utils::{IndexMap, OrderedSet, Table, VgHashMap};
 
@@ -495,8 +495,7 @@ fn assign_input_port<'a>(
         return Ok(());
     }
 
-    let (_, mut bb_builder) =
-        new_process(mctx.gl(), "input_port".into(), ctx.arenas.get_span(expr));
+    let (_, mut bb_builder) = new_process(mctx.gl(), ProcessKind::Port, ctx.arenas.get_span(expr));
     let bb_key = bb_builder.key();
     let context_width = port.ty.force_net_width();
     let (v, v_ty) = lower_expr(ctx, mctx, scope, &mut bb_builder, expr, Some(context_width))?;
@@ -573,8 +572,7 @@ fn assign_port_output<'a>(
         }
     }
 
-    let (_, mut bb_builder) =
-        new_process(mctx.gl(), "output_port".into(), ctx.arenas.get_span(expr));
+    let (_, mut bb_builder) = new_process(mctx.gl(), ProcessKind::Port, ctx.arenas.get_span(expr));
     let bb_key = bb_builder.key();
 
     let signal = &output.net;
@@ -929,11 +927,10 @@ pub fn create_nba_process(
         name, origin, size, ..
     } = &gl.signals[signal];
 
-    let process_name = format!("{name}::NBA_PROC");
     let mask_name = format!("{name}::NBA_MASK");
     let value_name = format!("{name}::NBA_VALUE");
     let (size, origin) = (*size, *origin);
-    let (process_key, mut builder) = new_process(gl, process_name, origin);
+    let (process_key, mut builder) = new_process(gl, ProcessKind::NonBlockingAssignment, origin);
 
     let mask = needs_mask.then(|| {
         gl.signals.insert(vogls_ir::Signal {
