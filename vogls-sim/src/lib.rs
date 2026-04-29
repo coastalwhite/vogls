@@ -335,11 +335,13 @@ impl Simulation {
         loop {
             let instr = &process.instructions[*ip];
 
-            let mut iplugins = std::mem::take(&mut state.iplugins);
-            for p in iplugins.iter_mut() {
-                p.as_mut().instruction(self, state, instr);
+            if !state.iplugins.is_empty() {
+                let mut iplugins = std::mem::take(&mut state.iplugins);
+                for p in iplugins.iter_mut() {
+                    p.as_mut().instruction(self, state, instr);
+                }
+                state.iplugins = iplugins;
             }
-            state.iplugins = iplugins;
 
             *ip += 1;
             state.runtime.instruction_count += 1;
@@ -350,6 +352,16 @@ impl Simulation {
                     I::TvMove1(dst, src) => {
                         execution::tv::exec_tv_mov1(&mut state.runtime.heap, *dst, *src)
                     }
+                    I::TvMove2(dst, src) => {
+                        execution::tv::exec_tv_mov2(&mut state.runtime.heap, *dst, *src)
+                    }
+                    I::TvMove4(dst, src) => {
+                        execution::tv::exec_tv_mov4(&mut state.runtime.heap, *dst, *src)
+                    }
+                    I::TvMove8(dst, src) => {
+                        execution::tv::exec_tv_mov8(&mut state.runtime.heap, *dst, *src)
+                    }
+
                     I::TvNot1(dst, src) => {
                         execution::tv::exec_tv_not1(&mut state.runtime.heap, *dst, *src)
                     }
@@ -377,6 +389,13 @@ impl Simulation {
                     I::TvSignExtend1(dst, src) => {
                         execution::tv::exec_tv_signextend1(&mut state.runtime.heap, *dst, *src)
                     }
+                    I::TvSelect1(dst, cond, truthy, falsy) => execution::tv::exec_tv_select1(
+                        &mut state.runtime.heap,
+                        *dst,
+                        *cond,
+                        *truthy,
+                        *falsy,
+                    ),
 
                     I::TvUnary(dst, op, src) => {
                         execution::tv::exec_tv_unary(&mut state.runtime.heap, *dst, *op, *src)

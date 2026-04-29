@@ -56,6 +56,18 @@ pub(crate) fn exec_tv_bitwise<const N: u32>(
 pub(crate) fn exec_tv_mov1(heap: &mut Heap, dst: HeapOffset, src: HeapOffset) {
     exec_tv_move::<1>(heap, dst, src.to_scalar_ref());
 }
+pub(crate) fn exec_tv_mov2(heap: &mut Heap, dst: HeapOffset, src: HeapOffset) {
+    const SIZE: VectorSize = VectorSize::new(2).unwrap();
+    exec_tv_move::<2>(heap, dst, src.to_ref(SIZE));
+}
+pub(crate) fn exec_tv_mov4(heap: &mut Heap, dst: HeapOffset, src: HeapRef) {
+    debug_assert!((3..=4).contains(&src.size.get()));
+    exec_tv_move::<4>(heap, dst, src);
+}
+pub(crate) fn exec_tv_mov8(heap: &mut Heap, dst: HeapOffset, src: HeapRef) {
+    debug_assert!((5..=8).contains(&src.size.get()));
+    exec_tv_move::<8>(heap, dst, src);
+}
 pub(crate) fn exec_tv_not1(heap: &mut Heap, dst: HeapOffset, src: HeapOffset) {
     exec_tv_not::<1>(heap, dst, src.to_scalar_ref());
 }
@@ -98,6 +110,20 @@ pub(crate) fn exec_tv_signextend1(heap: &mut Heap, dst: HeapRef, src: HeapOffset
             *slice.last_mut().unwrap() &= (1u64 << (dst.size.get() % 64)) - 1;
         }
     }
+}
+pub(crate) fn exec_tv_select1(
+    heap: &mut Heap,
+    dst: HeapOffset,
+    cond: HeapOffset,
+    truthy: HeapOffset,
+    falsy: HeapOffset,
+) {
+    let src = if heap.get_tv_bool(cond) {
+        truthy
+    } else {
+        falsy
+    };
+    exec_tv_move::<1>(heap, dst, src.to_scalar_ref());
 }
 
 pub(crate) fn exec_tv_unary(stack: &mut Heap, dst: HeapOffset, op: UnaryOp, src: HeapRef) {

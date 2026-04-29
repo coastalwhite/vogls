@@ -74,6 +74,10 @@ pub struct SliceFlags {
 #[derive(Clone, Debug)]
 pub enum VmInstruction {
     TvMove1(HeapOffset, HeapOffset),
+    TvMove2(HeapOffset, HeapOffset),
+    TvMove4(HeapOffset, HeapRef),
+    TvMove8(HeapOffset, HeapRef),
+
     TvNot1(HeapOffset, HeapOffset),
     TvAnd1(HeapOffset, HeapOffset, HeapOffset),
     TvOr1(HeapOffset, HeapOffset, HeapOffset),
@@ -83,6 +87,7 @@ pub enum VmInstruction {
     TvAndNot1(HeapOffset, HeapOffset, HeapOffset),
     TvZeroExtend1(HeapRef, HeapOffset),
     TvSignExtend1(HeapRef, HeapOffset),
+    TvSelect1(HeapOffset, HeapOffset, HeapOffset, HeapOffset),
 
     TvUnary(HeapOffset, UnaryOp, HeapRef),
     TvResize(HeapRef, ResizeOp, HeapRef),
@@ -147,9 +152,27 @@ impl VmInstruction {
                 ("lhs", false, lhs.to_scalar_ref()),
                 ("rhs", false, rhs.to_scalar_ref()),
             ],
+            I::TvSelect1(dst, cond, truthy, falsy) => &[
+                ("dst", false, dst.to_scalar_ref()),
+                ("cond", false, cond.to_scalar_ref()),
+                ("truthy", false, truthy.to_scalar_ref()),
+                ("falsy", false, falsy.to_scalar_ref()),
+            ],
             I::TvZeroExtend1(dst, src) | I::TvSignExtend1(dst, src) => {
                 &[("dst", false, *dst), ("src", false, src.to_scalar_ref())]
             }
+            I::TvMove2(dst, src) => &[
+                ("dst", false, dst.to_ref(VectorSize::new(2).unwrap())),
+                ("src", false, src.to_ref(VectorSize::new(2).unwrap())),
+            ],
+            I::TvMove4(dst, src) => &[
+                ("dst", false, dst.to_ref(src.size)),
+                ("src", false, *src),
+            ],
+            I::TvMove8(dst, src) => &[
+                ("dst", false, dst.to_ref(src.size)),
+                ("src", false, *src),
+            ],
             I::TvUnary(dst, op, src) => match op {
                 UnaryOp::Neg => &[("dst", false, dst.to_ref(src.size)), ("src", false, *src)],
                 UnaryOp::ReduceOr | UnaryOp::ReduceAnd | UnaryOp::ReduceXor => {

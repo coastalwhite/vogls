@@ -35,6 +35,18 @@ impl fmt::Display for VmInstruction {
             Self::TvSignExtend1(dst, src) => {
                 write!(f, "{} = tv.signextend1 {src}", dst.offset)
             }
+            Self::TvSelect1(dst, cond, truthy, falsy) => {
+                write!(f, "{dst} = tv.select1 {cond}, {truthy}, {falsy}")
+            }
+            Self::TvMove2(dst, src) => {
+                write!(f, "{dst} = tv.move2 {src}")
+            }
+            Self::TvMove4(dst, src) => {
+                write!(f, "{dst} = tv.move4 {}", src.offset)
+            }
+            Self::TvMove8(dst, src) => {
+                write!(f, "{dst} = tv.move8 {}", src.offset)
+            }
             Self::TvUnary(dst, op, src) => {
                 write!(f, "{dst} = tv.{} {}", op.into_mnemonic(), src.offset)
             }
@@ -296,6 +308,10 @@ impl fmt::Display for VmProcess {
                 | I::TvAndNot1(..)
                 | I::TvZeroExtend1(..)
                 | I::TvSignExtend1(..)
+                | I::TvSelect1(..)
+                | I::TvMove2(..)
+                | I::TvMove4(..)
+                | I::TvMove8(..)
                 | I::TvVariableWait(..)
                 | I::FvVariableWait(..)
                 | I::Wait(..)

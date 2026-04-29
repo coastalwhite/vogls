@@ -222,7 +222,7 @@ impl Heap {
     }
     #[inline(always)]
     pub fn get_tv_bool(&self, at: HeapOffset) -> bool {
-        let val = self.get_tv_u64(at.to_ref(SCALAR_VSIZE));
+        let val = self.0[at.bit_offset / 64] >> (at.bit_offset % 64);
         val & 1 != 0
     }
 

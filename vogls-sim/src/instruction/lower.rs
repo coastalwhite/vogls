@@ -105,6 +105,52 @@ pub fn lower_convert_op(
     }
 }
 
+pub fn lower_slice_imm(
+    instrs: &mut Vec<VmInstruction>,
+    dst: HeapRef,
+    src: HeapRef,
+    offset: u32,
+    mode: LogicMode,
+) {
+    use LogicMode as M;
+    use VmInstruction as VI;
+    let i = if mode == M::FourValue {
+        VI::FvSliceImm(dst, src, offset)
+    } else {
+        let is_in_range = offset + dst.size.get() <= src.size.get();
+        match dst.size.get() {
+            1 if is_in_range => VI::TvMove1(
+                dst.offset,
+                HeapOffset {
+                    bit_offset: src.offset.bit_offset + offset as usize,
+                },
+            ),
+            2 if is_in_range => VI::TvMove2(
+                dst.offset,
+                HeapOffset {
+                    bit_offset: src.offset.bit_offset + offset as usize,
+                },
+            ),
+            3..=4 if is_in_range => VI::TvMove4(
+                dst.offset,
+                HeapOffset {
+                    bit_offset: src.offset.bit_offset + offset as usize,
+                }
+                .to_ref(dst.size),
+            ),
+            5..=8 if is_in_range => VI::TvMove8(
+                dst.offset,
+                HeapOffset {
+                    bit_offset: src.offset.bit_offset + offset as usize,
+                }
+                .to_ref(dst.size),
+            ),
+            _ => VI::TvSliceImm(dst, src, offset),
+        }
+    };
+    instrs.push(i);
+}
+
 pub fn lower_bin_op(
     instrs: &mut Vec<VmInstruction>,
     op: BinaryOp,
@@ -512,11 +558,14 @@ pub fn lower_process_to_vm(
                         _ => M::TwoValue,
                     };
                     let src = var!(*src, (mode, s1_mode, s1_size));
-                    if mode == M::FourValue {
-                        VI::FvSliceImm(d.to_ref(d_size), src.to_ref(s1_size), *offset)
-                    } else {
-                        VI::TvSliceImm(d.to_ref(d_size), src.to_ref(s1_size), *offset)
-                    }
+                    lower_slice_imm(
+                        &mut instructions,
+                        d.to_ref(d_size),
+                        src.to_ref(s1_size),
+                        *offset,
+                        mode,
+                    );
+                    continue;
                 }
                 I::ShiftImm(d, op, src, offset) => {
                     use LogicMode as M;
@@ -572,10 +621,16 @@ pub fn lower_process_to_vm(
                     let t = var!(*truthy, (dst_mode, truthy_mode, size));
                     let f = var!(*falsy, (dst_mode, falsy_mode, size));
 
+                    let cond_is_fv = cond_mode == M::FourValue;
+
                     if dst_mode == M::FourValue {
-                        VI::FvSelect(d.to_ref(size), c, t, f, cond_mode == M::FourValue)
+                        VI::FvSelect(d.to_ref(size), c, t, f, cond_is_fv)
                     } else {
-                        VI::TvSelect(d.to_ref(size), c, t, f, cond_mode == M::FourValue)
+                        if !cond_is_fv && size == SCALAR_VSIZE {
+                            VI::TvSelect1(d, c, t, f)
+                        } else {
+                            VI::TvSelect(d.to_ref(size), c, t, f, cond_is_fv)
+                        }
                     }
                 }
                 I::Binary(d, op, s1, s2) => {
@@ -638,18 +693,14 @@ pub fn lower_process_to_vm(
                 I::Probe(dst, signal, offset) => {
                     let size = gl.vars[*dst].size;
                     let signal = signal!(*signal);
-                    match gl.logic_mode {
-                        LogicMode::TwoValue => VI::TvSliceImm(
-                            var!(*dst).to_ref(size),
-                            signals[signal.as_usize()],
-                            *offset,
-                        ),
-                        LogicMode::FourValue => VI::FvSliceImm(
-                            var!(*dst).to_ref(size),
-                            signals[signal.as_usize()],
-                            *offset,
-                        ),
-                    }
+                    lower_slice_imm(
+                        &mut instructions,
+                        var!(*dst).to_ref(size),
+                        signals[signal.as_usize()],
+                        *offset,
+                        gl.logic_mode,
+                    );
+                    continue;
                 }
                 I::ProbeSlice(dst, signal, offset) => {
                     let size = gl.vars[*dst].size;
