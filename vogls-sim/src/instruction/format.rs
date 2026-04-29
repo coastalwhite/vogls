@@ -5,8 +5,36 @@ use super::{VmInstruction, VmProcess};
 impl fmt::Display for VmInstruction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Constant(dst, value) => write!(f, "{dst} = const {value}"),
-
+            Self::TvMove1(dst, src) => {
+                write!(f, "{dst} = tv.move1 {src}")
+            }
+            Self::TvNot1(dst, src) => {
+                write!(f, "{dst} = tv.not1 {src}")
+            }
+            Self::TvAnd1(dst, lhs, rhs) => {
+                write!(f, "{dst} = tv.and1 {lhs}, {rhs}")
+            }
+            Self::TvOr1(dst, lhs, rhs) => {
+                write!(f, "{dst} = tv.or1 {lhs}, {rhs}")
+            }
+            Self::TvXor1(dst, lhs, rhs) => {
+                write!(f, "{dst} = tv.xor1 {lhs}, {rhs}")
+            }
+            Self::TvXnor1(dst, lhs, rhs) => {
+                write!(f, "{dst} = tv.xnor1 {lhs}, {rhs}")
+            }
+            Self::TvOrNot1(dst, lhs, rhs) => {
+                write!(f, "{dst} = tv.ornot1 {lhs}, {rhs}")
+            }
+            Self::TvAndNot1(dst, lhs, rhs) => {
+                write!(f, "{dst} = tv.andnot1 {lhs}, {rhs}")
+            }
+            Self::TvZeroExtend1(dst, src) => {
+                write!(f, "{} = tv.zeroextend1 {src}", dst.offset)
+            }
+            Self::TvSignExtend1(dst, src) => {
+                write!(f, "{} = tv.signextend1 {src}", dst.offset)
+            }
             Self::TvUnary(dst, op, src) => {
                 write!(f, "{dst} = tv.{} {}", op.into_mnemonic(), src.offset)
             }
@@ -231,8 +259,7 @@ impl fmt::Display for VmProcess {
         for i in &self.instructions {
             use VmInstruction as I;
             match i {
-                I::Constant(..)
-                | I::TvUnary(..)
+                I::TvUnary(..)
                 | I::TvResize(..)
                 | I::TvBinaryArithmetic(..)
                 | I::TvBinaryComparison(..)
@@ -259,6 +286,16 @@ impl fmt::Display for VmProcess {
                 | I::Intrinsic(..)
                 | I::LastUpdateTime(..)
                 | I::Drive(..)
+                | I::TvMove1(..)
+                | I::TvNot1(..)
+                | I::TvAnd1(..)
+                | I::TvOr1(..)
+                | I::TvXor1(..)
+                | I::TvXnor1(..)
+                | I::TvOrNot1(..)
+                | I::TvAndNot1(..)
+                | I::TvZeroExtend1(..)
+                | I::TvSignExtend1(..)
                 | I::TvVariableWait(..)
                 | I::FvVariableWait(..)
                 | I::Wait(..)

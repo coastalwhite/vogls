@@ -347,8 +347,35 @@ impl Simulation {
             let outcome = 'instruction: {
                 use VmInstruction as I;
                 match instr {
-                    I::Constant(dst, value) => {
-                        execution::exec_constant(&mut state.runtime.heap, *dst, value)
+                    I::TvMove1(dst, src) => {
+                        execution::tv::exec_tv_mov1(&mut state.runtime.heap, *dst, *src)
+                    }
+                    I::TvNot1(dst, src) => {
+                        execution::tv::exec_tv_not1(&mut state.runtime.heap, *dst, *src)
+                    }
+                    I::TvAnd1(dst, lhs, rhs) => {
+                        execution::tv::exec_tv_and1(&mut state.runtime.heap, *dst, *lhs, *rhs)
+                    }
+                    I::TvOr1(dst, lhs, rhs) => {
+                        execution::tv::exec_tv_or1(&mut state.runtime.heap, *dst, *lhs, *rhs)
+                    }
+                    I::TvXor1(dst, lhs, rhs) => {
+                        execution::tv::exec_tv_xor1(&mut state.runtime.heap, *dst, *lhs, *rhs)
+                    }
+                    I::TvXnor1(dst, lhs, rhs) => {
+                        execution::tv::exec_tv_xnor1(&mut state.runtime.heap, *dst, *lhs, *rhs)
+                    }
+                    I::TvOrNot1(dst, lhs, rhs) => {
+                        execution::tv::exec_tv_ornot1(&mut state.runtime.heap, *dst, *lhs, *rhs)
+                    }
+                    I::TvAndNot1(dst, lhs, rhs) => {
+                        execution::tv::exec_tv_andnot1(&mut state.runtime.heap, *dst, *lhs, *rhs)
+                    }
+                    I::TvZeroExtend1(dst, src) => {
+                        execution::tv::exec_tv_zeroextend1(&mut state.runtime.heap, *dst, *src)
+                    }
+                    I::TvSignExtend1(dst, src) => {
+                        execution::tv::exec_tv_signextend1(&mut state.runtime.heap, *dst, *src)
                     }
 
                     I::TvUnary(dst, op, src) => {

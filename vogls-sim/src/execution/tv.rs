@@ -5,6 +5,101 @@ use crate::{
     BinaryArithmeticOp, BinaryComparisonOp, EdgeOp, Heap, HeapOffset, HeapRef, ShiftOp, SliceFlags,
 };
 
+#[inline(always)]
+pub(crate) fn exec_tv_move<const N: u32>(heap: &mut Heap, dst: HeapOffset, src: HeapRef) {
+    let size = src.size;
+    let dst = dst.bit_offset;
+    let src = src.offset.bit_offset;
+    assert!(size.get() <= N && heap.0.len() > usize::max(dst / 64, src / 64));
+    let value = heap.0[src / 64] >> (src % 64);
+    let mask: u64 = const { 1u64.unbounded_shl(N).wrapping_sub(1) };
+    heap.0[dst / 64] &= !(mask << (dst % 64));
+    heap.0[dst / 64] |= (value & mask) << (dst % 64);
+}
+#[inline(always)]
+pub(crate) fn exec_tv_not<const N: u32>(heap: &mut Heap, dst: HeapOffset, src: HeapRef) {
+    let size = src.size;
+    let dst = dst.bit_offset;
+    let src = src.offset.bit_offset;
+    assert!(size.get() <= N && heap.0.len() > usize::max(dst / 64, src / 64));
+    let value = heap.0[src / 64] >> (src % 64);
+    let mask: u64 = const { 1u64.unbounded_shl(N).wrapping_sub(1) };
+    let size_mask: u64 = 1u64.unbounded_shl(size.get()).wrapping_sub(1);
+    heap.0[dst / 64] &= !(mask << (dst % 64));
+    heap.0[dst / 64] |= (!value & size_mask) << (dst % 64);
+}
+#[inline(always)]
+pub(crate) fn exec_tv_bitwise<const N: u32>(
+    heap: &mut Heap,
+    dst: HeapOffset,
+    lhs: HeapOffset,
+    rhs: HeapOffset,
+    size: Option<VectorSize>,
+    f: impl Fn(u64, u64) -> u64,
+) {
+    let dst = dst.bit_offset;
+    let lhs = lhs.bit_offset;
+    let rhs = rhs.bit_offset;
+    assert!(heap.0.len() > (dst / 64).max(lhs / 64).max(rhs / 64));
+    let lhs = heap.0[lhs / 64] >> (lhs % 64);
+    let rhs = heap.0[rhs / 64] >> (rhs % 64);
+    let mut res = f(lhs, rhs);
+    if let Some(size) = size {
+        let size_mask: u64 = 1u64.unbounded_shl(size.get()).wrapping_sub(1);
+        res &= size_mask;
+    }
+    let mask: u64 = const { 1u64.unbounded_shl(N).wrapping_sub(1) };
+    heap.0[dst / 64] &= !(mask << (dst % 64));
+    heap.0[dst / 64] |= (res & mask) << (dst % 64);
+}
+
+pub(crate) fn exec_tv_mov1(heap: &mut Heap, dst: HeapOffset, src: HeapOffset) {
+    exec_tv_move::<1>(heap, dst, src.to_scalar_ref());
+}
+pub(crate) fn exec_tv_not1(heap: &mut Heap, dst: HeapOffset, src: HeapOffset) {
+    exec_tv_not::<1>(heap, dst, src.to_scalar_ref());
+}
+pub(crate) fn exec_tv_and1(heap: &mut Heap, dst: HeapOffset, lhs: HeapOffset, rhs: HeapOffset) {
+    exec_tv_bitwise::<1>(heap, dst, lhs, rhs, None, |a, b| a & b);
+}
+pub(crate) fn exec_tv_or1(heap: &mut Heap, dst: HeapOffset, lhs: HeapOffset, rhs: HeapOffset) {
+    exec_tv_bitwise::<1>(heap, dst, lhs, rhs, None, |a, b| a | b);
+}
+pub(crate) fn exec_tv_xor1(heap: &mut Heap, dst: HeapOffset, lhs: HeapOffset, rhs: HeapOffset) {
+    exec_tv_bitwise::<1>(heap, dst, lhs, rhs, None, |a, b| a ^ b);
+}
+pub(crate) fn exec_tv_xnor1(heap: &mut Heap, dst: HeapOffset, lhs: HeapOffset, rhs: HeapOffset) {
+    exec_tv_bitwise::<1>(heap, dst, lhs, rhs, Some(SCALAR_VSIZE), |a, b| !(a ^ b));
+}
+pub(crate) fn exec_tv_ornot1(heap: &mut Heap, dst: HeapOffset, lhs: HeapOffset, rhs: HeapOffset) {
+    exec_tv_bitwise::<1>(heap, dst, lhs, rhs, Some(SCALAR_VSIZE), |a, b| a | !b);
+}
+pub(crate) fn exec_tv_andnot1(heap: &mut Heap, dst: HeapOffset, lhs: HeapOffset, rhs: HeapOffset) {
+    exec_tv_bitwise::<1>(heap, dst, lhs, rhs, Some(SCALAR_VSIZE), |a, b| a & !b);
+}
+pub(crate) fn exec_tv_zeroextend1(heap: &mut Heap, dst: HeapRef, src: HeapOffset) {
+    let value = (heap.0[src.bit_offset / 64] >> (src.bit_offset % 64)) & 1;
+    const SIZE64: VectorSize = VectorSize::new(64).unwrap();
+    heap.set_tv_u64(dst.offset.to_ref(dst.size.min(SIZE64)), value);
+    if dst.size > SIZE64 {
+        heap.get_mut_u64_slice(dst.offset, dst.size.get().div_ceil(64) as usize)[1..].fill(0u64);
+    }
+}
+pub(crate) fn exec_tv_signextend1(heap: &mut Heap, dst: HeapRef, src: HeapOffset) {
+    let value = (heap.0[src.bit_offset / 64] >> (src.bit_offset % 64)) & 1;
+    let value = (!value).wrapping_add(1);
+    const SIZE64: VectorSize = VectorSize::new(64).unwrap();
+    heap.set_tv_u64(dst.offset.to_ref(dst.size.min(SIZE64)), value);
+    if dst.size > SIZE64 {
+        let slice =
+            &mut heap.get_mut_u64_slice(dst.offset, dst.size.get().div_ceil(64) as usize)[1..];
+        slice.fill(value);
+        if dst.size.get() % 64 != 0 {
+            *slice.last_mut().unwrap() &= (1u64 << (dst.size.get() % 64)) - 1;
+        }
+    }
+}
+
 pub(crate) fn exec_tv_unary(stack: &mut Heap, dst: HeapOffset, op: UnaryOp, src: HeapRef) {
     use UnaryOp as O;
     match op {
@@ -418,7 +513,9 @@ pub(crate) fn exec_tv_select(
     falsy: HeapOffset,
     cond_is_fv: bool,
 ) {
-    let src = if (cond_is_fv && heap.get_fv_item(cond) == FvLogicValue::L1) || (!cond_is_fv && heap.get_tv_bool(cond)) {
+    let src = if (cond_is_fv && heap.get_fv_item(cond) == FvLogicValue::L1)
+        || (!cond_is_fv && heap.get_tv_bool(cond))
+    {
         truthy
     } else {
         falsy

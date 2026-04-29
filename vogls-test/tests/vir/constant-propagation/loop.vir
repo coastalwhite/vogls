@@ -1,5 +1,5 @@
 // vogls: verify-stdout
-proc constant_loop {
+proc other {
 L0:
     %init = const 32'h0
     jump <L1>

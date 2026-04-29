@@ -1,7 +1,7 @@
 signal a: 1
 signal b: 2
 
-proc double_probe {
+proc other {
 L0:
   %t0 = prb $a
   %t1 = prb $a

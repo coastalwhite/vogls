@@ -7,7 +7,7 @@ L1:
   halt
 }
 
-proc fuse_signal {
+proc fuse {
 L0:
   %t0 = prb $a/0
   drv $x/1, %t0

@@ -1,5 +1,5 @@
 // vogls: verify-stdout
-proc constant_branch {
+proc other {
 L0:
     %always_false = const 1'b0
     branch %always_false, <never1>, <always1>

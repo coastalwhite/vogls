@@ -5,7 +5,8 @@ use std::ops::Range;
 use hashbrown::hash_map::Entry;
 pub use heap::{Heap, HeapBuilder, HeapOffset, HeapRef};
 use vogls_ir::{
-    BasicBlockKey, BinaryImmOp, BinaryOp, Bits, GlobalContext, Instruction, LogicMode, VariableKey,
+    BasicBlockKey, BinaryImmOp, BinaryOp, Bits, GlobalContext, Instruction, LogicMode, UnaryOp,
+    VariableKey,
 };
 use vogls_utils::{VgHashMap, VgHashSet};
 
@@ -205,7 +206,7 @@ pub fn resolve_var_logic_mode_map(
                             graph_inputs.extend([*truthy, *falsy]);
                         }
                     }
-                },
+                }
                 I::Intrinsic(dst, _, _) => _ = var_mode.insert(*dst, LogicMode::TwoValue),
                 I::LastUpdateTime(dst, _) => _ = var_mode.insert(*dst, LogicMode::TwoValue),
                 I::Probe(dst, _, _) => {
@@ -516,5 +517,12 @@ pub fn bin_imm_args_need_conversion(
         )
     } else {
         (mdst, mdst != mlhs, mdst != mrhs)
+    }
+}
+
+pub fn unary_needs_convert(op: UnaryOp, dst_mode: LogicMode, src_mode: LogicMode) -> Option<LogicMode> {
+    use UnaryOp as O;
+    match (op, dst_mode, src_mode) {
+        (O::Neg | O::ReduceOr | O::ReduceAnd | O::ReduceXor, d, s) => (d != s).then_some(d),
     }
 }

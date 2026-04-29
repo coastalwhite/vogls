@@ -281,17 +281,15 @@ impl<'a> Consume<'a> for SimpleExpression<'a> {
     fn consume(
         tkw: &mut TokenWalker<'a>,
     ) -> Result<Self, Box<Error>> {
-        use Token as T;
-
         let mut exprs_sp = Vec::new();
 
         let mut min_bp: u8 = 0;
-        let mut current: (Expr, TokenRange);
+        let mut current: SimpleExpression<'a>;
 
         let result = 'outer: loop {
             macro_rules! deepen {
                 ($item:expr, $bp:expr, $span:expr) => {{
-                    sc.exprs_sp.push(($item, min_bp, $span));
+                    exprs_sp.push(($item, min_bp, $span));
                     min_bp = $bp;
                     continue 'outer;
                 }};

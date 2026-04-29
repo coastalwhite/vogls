@@ -216,9 +216,11 @@ impl Heap {
             std::mem::replace(self.get_mut_u64(at.offset), value)
         }
     }
+    #[inline(always)]
     pub fn set_tv_bool(&mut self, at: HeapOffset, value: bool) {
         self.set_tv_u64(at.to_ref(SCALAR_VSIZE), value.into());
     }
+    #[inline(always)]
     pub fn get_tv_bool(&self, at: HeapOffset) -> bool {
         let val = self.get_tv_u64(at.to_ref(SCALAR_VSIZE));
         val & 1 != 0

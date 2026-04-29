@@ -1,4 +1,4 @@
-proc constant_loop {
+proc other {
 L0:
   %t0 = const 32'h0000_0000
   jump <L1>

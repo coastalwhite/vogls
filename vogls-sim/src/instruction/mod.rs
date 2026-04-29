@@ -1,6 +1,6 @@
 use vogls_ir::dyn_format_string::DynFormatString;
 use vogls_ir::vcd::VcdVariableKey;
-use vogls_ir::{Bits, LogicMode, ReadMem, ResizeOp, SignalSlice, Time, UnaryOp, VectorSize};
+use vogls_ir::{LogicMode, ReadMem, ResizeOp, SignalSlice, Time, UnaryOp, VectorSize};
 
 mod format;
 mod lower;
@@ -73,7 +73,16 @@ pub struct SliceFlags {
 
 #[derive(Clone, Debug)]
 pub enum VmInstruction {
-    Constant(HeapOffset, Bits),
+    TvMove1(HeapOffset, HeapOffset),
+    TvNot1(HeapOffset, HeapOffset),
+    TvAnd1(HeapOffset, HeapOffset, HeapOffset),
+    TvOr1(HeapOffset, HeapOffset, HeapOffset),
+    TvXor1(HeapOffset, HeapOffset, HeapOffset),
+    TvXnor1(HeapOffset, HeapOffset, HeapOffset),
+    TvOrNot1(HeapOffset, HeapOffset, HeapOffset),
+    TvAndNot1(HeapOffset, HeapOffset, HeapOffset),
+    TvZeroExtend1(HeapRef, HeapOffset),
+    TvSignExtend1(HeapRef, HeapOffset),
 
     TvUnary(HeapOffset, UnaryOp, HeapRef),
     TvResize(HeapRef, ResizeOp, HeapRef),
@@ -124,7 +133,23 @@ impl VmInstruction {
         use VmInstruction as I;
         eprint!("{self}");
         let items: &[(&'static str, bool, HeapRef)] = match self {
-            I::Constant(dst, src) => &[("dst", src.contains_special(), dst.to_ref(src.size()))],
+            I::TvMove1(dst, src) | I::TvNot1(dst, src) => &[
+                ("dst", false, dst.to_scalar_ref()),
+                ("src", false, src.to_scalar_ref()),
+            ],
+            I::TvAnd1(dst, lhs, rhs)
+            | I::TvOr1(dst, lhs, rhs)
+            | I::TvXor1(dst, lhs, rhs)
+            | I::TvXnor1(dst, lhs, rhs)
+            | I::TvOrNot1(dst, lhs, rhs)
+            | I::TvAndNot1(dst, lhs, rhs) => &[
+                ("dst", false, dst.to_scalar_ref()),
+                ("lhs", false, lhs.to_scalar_ref()),
+                ("rhs", false, rhs.to_scalar_ref()),
+            ],
+            I::TvZeroExtend1(dst, src) | I::TvSignExtend1(dst, src) => {
+                &[("dst", false, *dst), ("src", false, src.to_scalar_ref())]
+            }
             I::TvUnary(dst, op, src) => match op {
                 UnaryOp::Neg => &[("dst", false, dst.to_ref(src.size)), ("src", false, *src)],
                 UnaryOp::ReduceOr | UnaryOp::ReduceAnd | UnaryOp::ReduceXor => {

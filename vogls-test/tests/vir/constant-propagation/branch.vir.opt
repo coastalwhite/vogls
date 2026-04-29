@@ -1,4 +1,4 @@
-proc constant_branch {
+proc other {
 L0:
   jump <L1>
 L1:

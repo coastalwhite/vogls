@@ -1,7 +1,7 @@
 signal a: 1
 signal b: 3
 
-proc double_slice {
+proc other {
 L0:
   %t0 = prb[1] $b, 2
   drv $a, %t0

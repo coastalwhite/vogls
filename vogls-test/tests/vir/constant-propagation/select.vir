@@ -1,7 +1,7 @@
 signal c: 1
 signal d: 1
 
-proc noop_select {
+proc other {
 L0:
     %t0 = prb $c
     %t1 = const 1'b1
@@ -11,7 +11,7 @@ L0:
     halt
 }
 
-proc neg_select {
+proc other {
 L0:
     %t0 = prb $c
     %t1 = const 1'b0

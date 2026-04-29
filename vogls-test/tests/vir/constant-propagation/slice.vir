@@ -1,6 +1,6 @@
 signal a: 2
 
-proc irreducable_slicei {
+proc other {
 L0:
   %t0 = const 32'h0000_0001
   %t1 = prb $a
@@ -9,7 +9,7 @@ L0:
   halt
 }
 
-proc reducible_slicei {
+proc other {
 L0:
   %t0 = const 32'h0000_0001
   %t1 = prb $a
