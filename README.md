@@ -7,7 +7,7 @@ Vogls is a full-timing Verilog simulator focused on side-channel analysis,intera
 ## Installation
 
 ```
-cargo install --git https://link.to.repo/
+cargo install --git https://codeberg.org/coastalwhite/vogls.git
 ```
 
 ## Build
