@@ -352,14 +352,17 @@ impl Simulation {
                     I::TvMove1(dst, src) => {
                         execution::tv::exec_tv_mov1(&mut state.runtime.heap, *dst, *src)
                     }
-                    I::TvMove2(dst, src) => {
-                        execution::tv::exec_tv_mov2(&mut state.runtime.heap, *dst, *src)
+                    I::TvDwDwMove(dst, src) => {
+                        execution::tv::exec_tv_dwdwmov64m(&mut state.runtime.heap, *dst, *src)
                     }
-                    I::TvMove4(dst, src) => {
-                        execution::tv::exec_tv_mov4(&mut state.runtime.heap, *dst, *src)
+                    I::TvDwSwMove(dst, src) => {
+                        execution::tv::exec_tv_dwswmov64m(&mut state.runtime.heap, *dst, *src)
                     }
-                    I::TvMove8(dst, src) => {
-                        execution::tv::exec_tv_mov8(&mut state.runtime.heap, *dst, *src)
+                    I::TvSwDwMove(dst, src) => {
+                        execution::tv::exec_tv_swdwmov64m(&mut state.runtime.heap, *dst, *src)
+                    }
+                    I::TvSwSwMove(dst, src) => {
+                        execution::tv::exec_tv_swswmov64m(&mut state.runtime.heap, *dst, *src)
                     }
 
                     I::TvNot1(dst, src) => {

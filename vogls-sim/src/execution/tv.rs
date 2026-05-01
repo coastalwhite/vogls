@@ -54,19 +54,65 @@ pub(crate) fn exec_tv_bitwise<const N: u32>(
 }
 
 pub(crate) fn exec_tv_mov1(heap: &mut Heap, dst: HeapOffset, src: HeapOffset) {
-    exec_tv_move::<1>(heap, dst, src.to_scalar_ref());
+    let dst = dst.bit_offset;
+    let src = src.bit_offset;
+    assert!(heap.0.len() > usize::max(dst / 64, src / 64));
+    let value = heap.0[src / 64] >> (src % 64);
+    heap.0[dst / 64] &= !(1 << (dst % 64));
+    heap.0[dst / 64] |= (value & 1) << (dst % 64);
 }
-pub(crate) fn exec_tv_mov2(heap: &mut Heap, dst: HeapOffset, src: HeapOffset) {
-    const SIZE: VectorSize = VectorSize::new(2).unwrap();
-    exec_tv_move::<2>(heap, dst, src.to_ref(SIZE));
+pub(crate) fn exec_tv_dwdwmov64m(heap: &mut Heap, dst: HeapOffset, src: HeapRef) {
+    debug_assert!((2..=64).contains(&src.size.get()));
+    let size = src.size;
+    let dst = dst.bit_offset;
+    let src = src.offset.bit_offset;
+    debug_assert!((dst % 64) + size.get() as usize > 64);
+    debug_assert!((src % 64) + size.get() as usize > 64);
+    assert!(size.get() <= 64 && heap.0.len() > usize::max(dst / 64, src / 64));
+    let value = (heap.0[src / 64] >> (src % 64)) | (heap.0[src / 64 + 1] << (64 - (src % 64)));
+    let size_mask: u64 = 1u64.unbounded_shl(size.get()).wrapping_sub(1);
+    heap.0[dst / 64] &= !(size_mask << (dst % 64));
+    heap.0[dst / 64] |= (value & size_mask) << (dst % 64);
+    heap.0[dst / 64 + 1] &= !(size_mask >> (64 - (dst % 64)));
+    heap.0[dst / 64 + 1] |= (value & size_mask) >> (64 - (dst % 64));
 }
-pub(crate) fn exec_tv_mov4(heap: &mut Heap, dst: HeapOffset, src: HeapRef) {
-    debug_assert!((3..=4).contains(&src.size.get()));
-    exec_tv_move::<4>(heap, dst, src);
+pub(crate) fn exec_tv_dwswmov64m(heap: &mut Heap, dst: HeapOffset, src: HeapRef) {
+    debug_assert!((2..=64).contains(&src.size.get()));
+    let size = src.size;
+    let dst = dst.bit_offset;
+    let src = src.offset.bit_offset;
+    debug_assert!((dst % 64) + size.get() as usize > 64);
+    assert!(size.get() <= 64 && heap.0.len() > usize::max(dst / 64, src / 64));
+    let value = heap.0[src / 64] >> (src % 64);
+    let size_mask: u64 = 1u64.unbounded_shl(size.get()).wrapping_sub(1);
+    heap.0[dst / 64] &= !(size_mask << (dst % 64));
+    heap.0[dst / 64] |= (value & size_mask) << (dst % 64);
+    heap.0[dst / 64 + 1] &= !(size_mask >> (64 - (dst % 64)));
+    heap.0[dst / 64 + 1] |= (value & size_mask) >> (64 - (dst % 64));
 }
-pub(crate) fn exec_tv_mov8(heap: &mut Heap, dst: HeapOffset, src: HeapRef) {
-    debug_assert!((5..=8).contains(&src.size.get()));
-    exec_tv_move::<8>(heap, dst, src);
+pub(crate) fn exec_tv_swdwmov64m(heap: &mut Heap, dst: HeapOffset, src: HeapRef) {
+    debug_assert!((2..=64).contains(&src.size.get()));
+    let size = src.size;
+    let dst = dst.bit_offset;
+    let src = src.offset.bit_offset;
+    debug_assert!((src % 64) + size.get() as usize > 64);
+    assert!(size.get() <= 64 && heap.0.len() > usize::max(dst / 64, src / 64));
+    let value = (heap.0[src / 64] >> (src % 64)) | (heap.0[src / 64 + 1] << (64 - (src % 64)));
+    let size_mask: u64 = 1u64.unbounded_shl(size.get()).wrapping_sub(1);
+    heap.0[dst / 64] &= !(size_mask << (dst % 64));
+    heap.0[dst / 64] |= (value & size_mask) << (dst % 64);
+}
+pub(crate) fn exec_tv_swswmov64m(heap: &mut Heap, dst: HeapOffset, src: HeapRef) {
+    debug_assert!((2..=64).contains(&src.size.get()));
+    let size = src.size;
+    let dst = dst.bit_offset;
+    let src = src.offset.bit_offset;
+    debug_assert!((dst % 64) + size.get() as usize <= 64);
+    assert!(size.get() <= 64 && heap.0.len() > usize::max(dst / 64, src / 64));
+    let value = heap.0[src / 64] >> (src % 64);
+    let size_mask: u64 = 1u64.unbounded_shl(size.get()).wrapping_sub(1);
+    heap.0[dst / 64] &= !(size_mask << (dst % 64));
+    heap.0[dst / 64] |= (value & size_mask) << (dst % 64);
 }
 pub(crate) fn exec_tv_not1(heap: &mut Heap, dst: HeapOffset, src: HeapOffset) {
     exec_tv_not::<1>(heap, dst, src.to_scalar_ref());

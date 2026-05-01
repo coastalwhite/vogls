@@ -38,14 +38,17 @@ impl fmt::Display for VmInstruction {
             Self::TvSelect1(dst, cond, truthy, falsy) => {
                 write!(f, "{dst} = tv.select1 {cond}, {truthy}, {falsy}")
             }
-            Self::TvMove2(dst, src) => {
-                write!(f, "{dst} = tv.move2 {src}")
+            Self::TvSwSwMove(dst, src) => {
+                write!(f, "{dst} = tv.swswmove {}", src.offset)
             }
-            Self::TvMove4(dst, src) => {
-                write!(f, "{dst} = tv.move4 {}", src.offset)
+            Self::TvSwDwMove(dst, src) => {
+                write!(f, "{dst} = tv.swdwmove {}", src.offset)
             }
-            Self::TvMove8(dst, src) => {
-                write!(f, "{dst} = tv.move8 {}", src.offset)
+            Self::TvDwSwMove(dst, src) => {
+                write!(f, "{dst} = tv.dwswmove {}", src.offset)
+            }
+            Self::TvDwDwMove(dst, src) => {
+                write!(f, "{dst} = tv.dwdwmove {}", src.offset)
             }
             Self::TvUnary(dst, op, src) => {
                 write!(f, "{dst} = tv.{} {}", op.into_mnemonic(), src.offset)
@@ -309,9 +312,10 @@ impl fmt::Display for VmProcess {
                 | I::TvZeroExtend1(..)
                 | I::TvSignExtend1(..)
                 | I::TvSelect1(..)
-                | I::TvMove2(..)
-                | I::TvMove4(..)
-                | I::TvMove8(..)
+                | I::TvDwDwMove(..)
+                | I::TvDwSwMove(..)
+                | I::TvSwDwMove(..)
+                | I::TvSwSwMove(..)
                 | I::TvVariableWait(..)
                 | I::FvVariableWait(..)
                 | I::Wait(..)

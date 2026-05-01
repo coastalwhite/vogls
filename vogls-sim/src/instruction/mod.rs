@@ -74,9 +74,10 @@ pub struct SliceFlags {
 #[derive(Clone, Debug)]
 pub enum VmInstruction {
     TvMove1(HeapOffset, HeapOffset),
-    TvMove2(HeapOffset, HeapOffset),
-    TvMove4(HeapOffset, HeapRef),
-    TvMove8(HeapOffset, HeapRef),
+    TvSwSwMove(HeapOffset, HeapRef),
+    TvDwSwMove(HeapOffset, HeapRef),
+    TvSwDwMove(HeapOffset, HeapRef),
+    TvDwDwMove(HeapOffset, HeapRef),
 
     TvNot1(HeapOffset, HeapOffset),
     TvAnd1(HeapOffset, HeapOffset, HeapOffset),
@@ -161,18 +162,12 @@ impl VmInstruction {
             I::TvZeroExtend1(dst, src) | I::TvSignExtend1(dst, src) => {
                 &[("dst", false, *dst), ("src", false, src.to_scalar_ref())]
             }
-            I::TvMove2(dst, src) => &[
-                ("dst", false, dst.to_ref(VectorSize::new(2).unwrap())),
-                ("src", false, src.to_ref(VectorSize::new(2).unwrap())),
-            ],
-            I::TvMove4(dst, src) => &[
-                ("dst", false, dst.to_ref(src.size)),
-                ("src", false, *src),
-            ],
-            I::TvMove8(dst, src) => &[
-                ("dst", false, dst.to_ref(src.size)),
-                ("src", false, *src),
-            ],
+            I::TvDwDwMove(dst, src)
+            | I::TvDwSwMove(dst, src)
+            | I::TvSwDwMove(dst, src)
+            | I::TvSwSwMove(dst, src) => {
+                &[("dst", false, dst.to_ref(src.size)), ("src", false, *src)]
+            }
             I::TvUnary(dst, op, src) => match op {
                 UnaryOp::Neg => &[("dst", false, dst.to_ref(src.size)), ("src", false, *src)],
                 UnaryOp::ReduceOr | UnaryOp::ReduceAnd | UnaryOp::ReduceXor => {

@@ -118,6 +118,9 @@ pub fn lower_slice_imm(
         VI::FvSliceImm(dst, src, offset)
     } else {
         let is_in_range = offset + dst.size.get() <= src.size.get();
+        let src_is_dw =
+            (src.offset.bit_offset % 64) + offset as usize + dst.size.get() as usize > 64;
+        let dst_is_dw = (dst.offset.bit_offset % 64) + dst.size.get() as usize > 64;
         match dst.size.get() {
             1 if is_in_range => VI::TvMove1(
                 dst.offset,
@@ -125,20 +128,28 @@ pub fn lower_slice_imm(
                     bit_offset: src.offset.bit_offset + offset as usize,
                 },
             ),
-            2 if is_in_range => VI::TvMove2(
-                dst.offset,
-                HeapOffset {
-                    bit_offset: src.offset.bit_offset + offset as usize,
-                },
-            ),
-            3..=4 if is_in_range => VI::TvMove4(
+            2..=64 if is_in_range && src_is_dw && dst_is_dw => VI::TvDwDwMove(
                 dst.offset,
                 HeapOffset {
                     bit_offset: src.offset.bit_offset + offset as usize,
                 }
                 .to_ref(dst.size),
             ),
-            5..=8 if is_in_range => VI::TvMove8(
+            2..=64 if is_in_range && src_is_dw => VI::TvSwDwMove(
+                dst.offset,
+                HeapOffset {
+                    bit_offset: src.offset.bit_offset + offset as usize,
+                }
+                .to_ref(dst.size),
+            ),
+            2..=64 if is_in_range && dst_is_dw => VI::TvDwSwMove(
+                dst.offset,
+                HeapOffset {
+                    bit_offset: src.offset.bit_offset + offset as usize,
+                }
+                .to_ref(dst.size),
+            ),
+            2..=64 if is_in_range => VI::TvSwSwMove(
                 dst.offset,
                 HeapOffset {
                     bit_offset: src.offset.bit_offset + offset as usize,
