@@ -22,7 +22,8 @@ Optimization
     - [ ] Fuse Always 
     - [ ] Internalize signals into process, when only used there
     - [ ] Inline single watch, single drive processes
-    - [ ] Simplify FV to TV where possible
+    - [ ] Simplify from predicates e.g. `if (i < 8) x[i]`.
+    - [ ] Simplify signals from FV to TV where possible
     - [ ] Simplify CFG
       - [ ] Remove redundant jumps
       - [ ] Remove redundant branches
