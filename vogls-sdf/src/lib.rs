@@ -27,22 +27,22 @@
 //              - [x] NETDELAY
 //                - [x] net_spec
 //              - [x] DEVICE
-//       - [ ] Timing Check
-//         - [ ] TimingCheckDef
-//           - [ ] SETUP
-//             - [ ] port_tchk
-//           - [ ] HOLD
-//           - [ ] SETUPHOLD
-//           - [ ] RECOVERY
-//           - [ ] REMOVAL
-//           - [ ] RECREM
-//             - [ ] SCond
-//             - [ ] CCond
-//           - [ ] SKEW
-//           - [ ] BIDIRECTSKEW
-//           - [ ] WIDTH
-//           - [ ] PERIOD
-//           - [ ] NOCHANGE
+//       - [x] Timing Check
+//         - [x] TimingCheckDef
+//           - [x] SETUP
+//             - [x] port_tchk
+//           - [x] HOLD
+//           - [x] SETUPHOLD
+//           - [x] RECOVERY
+//           - [x] REMOVAL
+//           - [x] RECREM
+//             - [x] SCond
+//             - [x] CCond
+//           - [x] SKEW
+//           - [x] BIDIRECTSKEW
+//           - [x] WIDTH
+//           - [x] PERIOD
+//           - [x] NOCHANGE
 //       - [ ] Timing Env
 //          - [ ] TimingEnvDef
 //            - [ ] Constraint
@@ -61,60 +61,26 @@
 //         - [ ] Absolute
 //         - [ ] Increment
 use std::borrow::Cow;
-use std::fmt;
 
-pub mod tokenizer;
+mod error;
+mod timing_check;
 
-#[derive(Debug)]
-pub struct Error {
-    line: u64,
-    msg: String,
+pub use error::*;
+pub use timing_check::*;
+
+pub trait Consume<'a>: Sized {
+    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self>;
 }
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "line {}: {}", self.line, self.msg)
-    }
-}
-impl std::error::Error for Error {}
 
 pub struct DelayFile<'a> {
-    header: SdfHeader<'a>,
-    cells: Vec<Cell<'a>>,
-}
-
-pub enum PortTimingCheck<'a> {
-    PortSpec(PortSpec<'a>),
-    Cond(Option<QString<'a>>, TimingCheckCondition<'a>, PortSpec<'a>),
-}
-
-pub struct TimingCheckCondition<'a> {
-    scalar_node: ScalarNode<'a>,
-    variant: TimingCheckConditionVariant,
-}
-
-pub enum TimingCheckConditionVariant {
-    Plain,
-    Inversion,
-    Equality(EqualityOperator, ScalarConstant),
-}
-
-pub enum EqualityOperator {
-    LogicalEquality,
-    LogicalInequality,
-    CaseEquality,
-    CaseInequality,
-}
-
-pub struct ScalarNode<'a> {
-    hident: HierarchicalIdent<'a>,
-    offset: Option<Integer<'a>>,
+    pub header: SdfHeader<'a>,
+    pub cells: Vec<Cell<'a>>,
 }
 
 pub struct Cell<'a> {
-    celltype: QString<'a>,
-    instance: Instance<'a>,
-    timing_specs: Vec<TimingSpec<'a>>,
+    pub celltype: QString<'a>,
+    pub instance: Instance<'a>,
+    pub timing_specs: Vec<TimingSpec<'a>>,
 }
 
 pub enum Instance<'a> {
@@ -124,8 +90,8 @@ pub enum Instance<'a> {
 }
 
 pub struct HierarchicalIdent<'a> {
-    fst: &'a str,
-    next: Vec<(HierarchyDivider, &'a str)>,
+    pub fst: &'a str,
+    pub next: Vec<(HierarchyDivider, &'a str)>,
 }
 
 pub enum TimingSpec<'a> {
@@ -136,13 +102,10 @@ pub enum TimingSpec<'a> {
 }
 
 pub struct DelaySpec<'a> {
-    items: Vec<DelayType<'a>>,
+    pub items: Vec<DelayType<'a>>,
 }
-pub struct TimingCheckSpec<'a> {
-    items: Vec<TimingCheckDef<'a>>,
-}
-pub struct TimingEnvSpec<'a>(&'a str);
-pub struct LabelSpec<'a>(&'a str);
+pub struct TimingEnvSpec<'a>(pub &'a str);
+pub struct LabelSpec<'a>(pub &'a str);
 
 pub enum DelayType<'a> {
     Absolute(AbsoluteDelayType<'a>),
@@ -151,108 +114,19 @@ pub enum DelayType<'a> {
     PathPulseProcent(PathPulsePercentType<'a>),
 }
 
-pub enum TimingCheckDef<'a> {
-    Setup(SetupTimingCheck<'a>),
-    Hold(HoldTimingCheck<'a>),
-    SetupHold(SetupHoldTimingCheck<'a>),
-    Recovery(RecoveryTimingCheck<'a>),
-    Removal(RemovalTimingCheck<'a>),
-    Recrem(RecremTimingCheck<'a>),
-    Skew(SkewTimingCheck<'a>),
-    BidirectSkew(BidirectSkewTimingCheck<'a>),
-    Width(WidthTimingCheck<'a>),
-    Period(PeriodTimingCheck<'a>),
-    NoChange(NoChangeTimingCheck<'a>),
-}
-
-pub enum SetupHoldRecremArgs<'a> {
-    Base(
-        PortTimingCheck<'a>,
-        PortTimingCheck<'a>,
-        RValue<'a>,
-        RValue<'a>,
-    ),
-    Alternative(
-        PortSpec<'a>,
-        PortSpec<'a>,
-        RValue<'a>,
-        RValue<'a>,
-        Option<SCond<'a>>,
-        Option<CCond<'a>>,
-    ),
-}
-
-pub struct SCond<'a> {
-    qstring: Option<QString<'a>>,
-    timing_check_condition: TimingCheckCondition<'a>,
-}
-pub struct CCond<'a> {
-    qstring: Option<QString<'a>>,
-    timing_check_condition: TimingCheckCondition<'a>,
-}
-
-pub struct SetupTimingCheck<'a> {
-    fst: PortTimingCheck<'a>,
-    snd: PortTimingCheck<'a>,
-    value: Value<'a>,
-}
-pub struct HoldTimingCheck<'a> {
-    fst: PortTimingCheck<'a>,
-    snd: PortTimingCheck<'a>,
-    value: Value<'a>,
-}
-pub struct SetupHoldTimingCheck<'a>(SetupHoldRecremArgs<'a>);
-
-pub struct RecoveryTimingCheck<'a> {
-    fst: PortTimingCheck<'a>,
-    snd: PortTimingCheck<'a>,
-    value: Value<'a>,
-}
-pub struct RemovalTimingCheck<'a> {
-    fst: PortTimingCheck<'a>,
-    snd: PortTimingCheck<'a>,
-    value: Value<'a>,
-}
-pub struct RecremTimingCheck<'a>(SetupHoldRecremArgs<'a>);
-pub struct SkewTimingCheck<'a> {
-    fst: PortTimingCheck<'a>,
-    snd: PortTimingCheck<'a>,
-    value: RValue<'a>,
-}
-pub struct BidirectSkewTimingCheck<'a> {
-    fst: PortTimingCheck<'a>,
-    snd: PortTimingCheck<'a>,
-    fst_value: Value<'a>,
-    snd_value: Value<'a>,
-}
-pub struct WidthTimingCheck<'a> {
-    port_tchk: PortTimingCheck<'a>,
-    value: Value<'a>,
-}
-pub struct PeriodTimingCheck<'a> {
-    port_tchk: PortTimingCheck<'a>,
-    value: Value<'a>,
-}
-pub struct NoChangeTimingCheck<'a> {
-    fst: PortTimingCheck<'a>,
-    snd: PortTimingCheck<'a>,
-    fst_rvalue: RValue<'a>,
-    snd_rvalue: RValue<'a>,
-}
-
 pub struct AbsoluteDelayType<'a> {
-    defs: Vec<DelayDef<'a>>,
+    pub defs: Vec<DelayDef<'a>>,
 }
 pub struct IncrementDelayType<'a> {
-    defs: Vec<DelayDef<'a>>,
+    pub defs: Vec<DelayDef<'a>>,
 }
 pub struct PathPulseType<'a> {
-    input_output_path: Option<(PortInstance<'a>, PortInstance<'a>)>,
-    values: Vec<Value<'a>>,
+    pub input_output_path: Option<(PortInstance<'a>, PortInstance<'a>)>,
+    pub values: Vec<Value<'a>>,
 }
 pub struct PathPulsePercentType<'a> {
-    input_output_path: Option<(PortInstance<'a>, PortInstance<'a>)>,
-    values: Vec<Value<'a>>,
+    pub input_output_path: Option<(PortInstance<'a>, PortInstance<'a>)>,
+    pub values: Vec<Value<'a>>,
 }
 
 pub enum DelayDef<'a> {
@@ -266,35 +140,35 @@ pub enum DelayDef<'a> {
     Device(DeviceDef<'a>),
 }
 
-pub struct RetainDef<'a>(RetValList<'a>);
+pub struct RetainDef<'a>(pub RetValList<'a>);
 pub struct IoPathDef<'a> {
-    port_spec: PortSpec<'a>,
-    port_instance: PortInstance<'a>,
-    retain_defs: Vec<RetainDef<'a>>,
-    delval_list: DelValList<'a>,
+    pub port_spec: PortSpec<'a>,
+    pub port_instance: PortInstance<'a>,
+    pub retain_defs: Vec<RetainDef<'a>>,
+    pub delval_list: DelValList<'a>,
 }
 pub struct CondDef<'a> {
-    qstring: Option<QString<'a>>,
-    conditional_port_expr: Expression<'a>,
-    io_path: IoPathDef<'a>,
+    pub qstring: Option<QString<'a>>,
+    pub conditional_port_expr: Expression<'a>,
+    pub io_path: IoPathDef<'a>,
 }
-pub struct CondElseDef<'a>(IoPathDef<'a>);
+pub struct CondElseDef<'a>(pub IoPathDef<'a>);
 pub struct PortDef<'a> {
-    port_instance: PortInstance<'a>,
-    delval_list: DelValList<'a>,
+    pub port_instance: PortInstance<'a>,
+    pub delval_list: DelValList<'a>,
 }
 pub struct InterconnectDef<'a> {
-    from: PortInstance<'a>,
-    to: PortInstance<'a>,
-    delval_list: DelValList<'a>,
+    pub from: PortInstance<'a>,
+    pub to: PortInstance<'a>,
+    pub delval_list: DelValList<'a>,
 }
 pub struct NetDelayDef<'a> {
-    net_spec: PortInstance<'a>,
-    delval_list: DelValList<'a>,
+    pub net_spec: PortInstance<'a>,
+    pub delval_list: DelValList<'a>,
 }
 pub struct DeviceDef<'a> {
-    port_instance: Option<PortInstance<'a>>,
-    delval_list: DelValList<'a>,
+    pub port_instance: Option<PortInstance<'a>>,
+    pub delval_list: DelValList<'a>,
 }
 
 // A merger of `conditional_port_expr` and `simple_expression`.
@@ -501,7 +375,7 @@ impl BinaryOp {
 }
 
 impl<'a> Consume<'a> for Expression<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
         enum StackItem<'a> {
             Paren,
             BracketS1,
@@ -530,7 +404,7 @@ impl<'a> Consume<'a> for Expression<'a> {
             current = {
                 tkw.skip_whitespace();
                 let Some(c) = tkw.peek_char() else {
-                    return Err(Box::new(Error {
+                    return Err(Box::new(SdfError {
                         line: tkw.line,
                         msg: "missing expression".to_string(),
                     }));
@@ -545,8 +419,8 @@ impl<'a> Consume<'a> for Expression<'a> {
                     // unary_operator ( simple expression )
                     // unary_operator port
                     // unary_operator scalar_constant
-                    _ if UnaryOp::from_2_bytes(tkw.fill_bytes::<2>()).is_some() => {
-                        let op = UnaryOp::from_2_bytes(tkw.fill_bytes::<2>()).unwrap();
+                    _ if UnaryOp::from_2_bytes(tkw.peek_bytes::<2>()).is_some() => {
+                        let op = UnaryOp::from_2_bytes(tkw.peek_bytes::<2>()).unwrap();
                         tkw.offset += op.num_bytes();
                         tkw.skip_whitespace();
                         match tkw.peek_char() {
@@ -564,7 +438,7 @@ impl<'a> Consume<'a> for Expression<'a> {
                                 Self::UnaryPort(op, port)
                             }
                             None => {
-                                return Err(Box::new(Error {
+                                return Err(Box::new(SdfError {
                                     line: tkw.line,
                                     msg: "missing character".to_string(),
                                 }));
@@ -613,7 +487,7 @@ impl<'a> Consume<'a> for Expression<'a> {
                         deepen!(StackItem::TernaryS1(condition), r_bp);
                     }
 
-                    let Some(op) = BinaryOp::from_3_bytes(tkw.fill_bytes::<3>()) else {
+                    let Some(op) = BinaryOp::from_3_bytes(tkw.peek_bytes::<3>()) else {
                         break;
                     };
                     tkw.offset += op.num_bytes();
@@ -656,7 +530,7 @@ impl<'a> Consume<'a> for Expression<'a> {
                                 deepen!(StackItem::Replication(Box::new(current), Vec::new()), 0)
                             }
                             _ => {
-                                return Err(Box::new(Error {
+                                return Err(Box::new(SdfError {
                                     line: tkw.line,
                                     msg: "unexpected token".to_string(),
                                 }));
@@ -670,7 +544,7 @@ impl<'a> Consume<'a> for Expression<'a> {
                             b'}' => current = Expression::Concat(exprs),
                             b',' => deepen!(StackItem::Concat(exprs), 0),
                             _ => {
-                                return Err(Box::new(Error {
+                                return Err(Box::new(SdfError {
                                     line: tkw.line,
                                     msg: "unexpected token".to_string(),
                                 }));
@@ -684,7 +558,7 @@ impl<'a> Consume<'a> for Expression<'a> {
                             b'}' => current = Expression::Replicate(sexpr, exprs),
                             b',' => deepen!(StackItem::Replication(sexpr, exprs), 0),
                             _ => {
-                                return Err(Box::new(Error {
+                                return Err(Box::new(SdfError {
                                     line: tkw.line,
                                     msg: "unexpected token".to_string(),
                                 }));
@@ -712,7 +586,7 @@ impl<'a> Consume<'a> for Expression<'a> {
 }
 
 impl<'a> Consume<'a> for ScalarConstant {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
         tkw.skip_whitespace();
         match tkw.next_expect()? {
             b'0' => return Ok(Self::L0),
@@ -720,7 +594,7 @@ impl<'a> Consume<'a> for ScalarConstant {
             b'1' => return Ok(Self::L1),
             b'\'' => {}
             _ => {
-                return Err(Box::new(Error {
+                return Err(Box::new(SdfError {
                     line: tkw.line,
                     msg: "expected one of '0', '1' or '''".to_string(),
                 }));
@@ -738,35 +612,35 @@ impl<'a> Consume<'a> for ScalarConstant {
     }
 }
 
-enum Version {
+pub enum Version {
     V1_0,
     V2_0,
     V2_1,
     V3_0,
     V4_0,
 }
-enum HierarchyDivider {
+pub enum HierarchyDivider {
     Dot,
     Slash,
 }
 
 pub struct SdfHeader<'a> {
-    version: Version,
-    design: Option<QString<'a>>,
-    date: Option<QString<'a>>,
-    vendor: Option<QString<'a>>,
-    program_name: Option<QString<'a>>,
-    program_version: Option<QString<'a>>,
-    hierarchy_divider: Option<HierarchyDivider>,
-    voltage: Option<SignedRealNumberOrRTriple<'a>>,
-    process: Option<QString<'a>>,
-    temperature: Option<SignedRealNumberOrRTriple<'a>>,
-    timescale: Option<Timescale>,
+    pub version: Version,
+    pub design: Option<QString<'a>>,
+    pub date: Option<QString<'a>>,
+    pub vendor: Option<QString<'a>>,
+    pub program_name: Option<QString<'a>>,
+    pub program_version: Option<QString<'a>>,
+    pub hierarchy_divider: Option<HierarchyDivider>,
+    pub voltage: Option<SignedRealNumberOrRTriple<'a>>,
+    pub process: Option<QString<'a>>,
+    pub temperature: Option<SignedRealNumberOrRTriple<'a>>,
+    pub timescale: Option<Timescale>,
 }
 
 pub struct Timescale {
-    number: TimescaleNumber,
-    unit: TimescaleUnit,
+    pub number: TimescaleNumber,
+    pub unit: TimescaleUnit,
 }
 
 pub enum TimescaleNumber {
@@ -792,12 +666,12 @@ pub struct TokenWalker<'a> {
     line: u64,
 }
 
-pub struct Value<'a>(Option<RealNumberOrTriple<'a>>);
-pub struct RValue<'a>(Option<SignedRealNumberOrRTriple<'a>>);
+pub struct Value<'a>(pub Option<RealNumberOrTriple<'a>>);
+pub struct RValue<'a>(pub Option<SignedRealNumberOrRTriple<'a>>);
 pub struct DelVal<'a> {
-    delay: RValue<'a>,
-    r_limit: Option<RValue<'a>>,
-    e_limit: Option<RValue<'a>>,
+    pub delay: RValue<'a>,
+    pub r_limit: Option<RValue<'a>>,
+    pub e_limit: Option<RValue<'a>>,
 }
 pub enum DelValList<'a> {
     One(DelVal<'a>),
@@ -837,18 +711,18 @@ pub enum PortSpec<'a> {
     Edge(PortEdge<'a>),
 }
 pub struct PortInstance<'a> {
-    hident: Option<HierarchicalIdent<'a>>,
-    port: Port<'a>,
+    pub hident: Option<HierarchicalIdent<'a>>,
+    pub port: Port<'a>,
 }
 pub struct Port<'a> {
-    hident: HierarchicalIdent<'a>,
-    b1: Option<Integer<'a>>,
-    b2: Option<Integer<'a>>,
+    pub hident: HierarchicalIdent<'a>,
+    pub b1: Option<Integer<'a>>,
+    pub b2: Option<Integer<'a>>,
 }
 
 pub struct PortEdge<'a> {
-    edge: EdgeIdentifier,
-    instance: PortInstance<'a>,
+    pub edge: EdgeIdentifier,
+    pub instance: PortInstance<'a>,
 }
 
 pub enum EdgeIdentifier {
@@ -862,12 +736,12 @@ pub enum EdgeIdentifier {
     LZ0,
 }
 
-pub struct Integer<'a>(&'a str);
-enum SignedRealNumberOrRTriple<'a> {
+pub struct Integer<'a>(pub &'a str);
+pub enum SignedRealNumberOrRTriple<'a> {
     SignedRealNumber(SignedRealNumber<'a>),
     RTriple(RTriple<'a>),
 }
-enum RealNumberOrTriple<'a> {
+pub enum RealNumberOrTriple<'a> {
     RealNumber(RealNumber<'a>),
     Triple(Triple<'a>),
 }
@@ -941,15 +815,15 @@ impl<'a> TokenWalker<'a> {
             .is_some_and(|&b| f(b))
     }
 
-    pub fn expect_char(&mut self, b: u8) -> Result<(), Box<Error>> {
+    pub fn expect_char(&mut self, b: u8) -> SdfResult<()> {
         let Some(&found) = self.content.as_bytes().get(self.offset) else {
-            return Err(Box::new(Error {
+            return Err(Box::new(SdfError {
                 line: self.line,
                 msg: format!("expected '{}', but no token found.", char::from(b)),
             }));
         };
         if found != b {
-            return Err(Box::new(Error {
+            return Err(Box::new(SdfError {
                 line: self.line,
                 msg: format!(
                     "expected '{}', but found '{}'",
@@ -962,9 +836,9 @@ impl<'a> TokenWalker<'a> {
         self.offset += 1;
         Ok(())
     }
-    pub fn expect_char_matches(&mut self, mut f: impl FnMut(u8) -> bool) -> Result<u8, Box<Error>> {
+    pub fn expect_char_matches(&mut self, mut f: impl FnMut(u8) -> bool) -> SdfResult<u8> {
         let Some(&b) = self.content.as_bytes().get(self.offset) else {
-            return Err(Box::new(Error {
+            return Err(Box::new(SdfError {
                 line: self.line,
                 msg: format!("expected char, found none"),
             }));
@@ -972,22 +846,22 @@ impl<'a> TokenWalker<'a> {
         if f(b) {
             Ok(b)
         } else {
-            return Err(Box::new(Error {
+            return Err(Box::new(SdfError {
                 line: self.line,
                 msg: format!("expected char, found '{}'", char::from(b)),
             }));
         }
     }
 
-    pub fn expect_ident(&mut self, s: &str) -> Result<(), Box<Error>> {
+    pub fn expect_ident(&mut self, s: &str) -> SdfResult<()> {
         let Some(next_ident) = self.next_ident() else {
-            return Err(Box::new(Error {
+            return Err(Box::new(SdfError {
                 line: self.line,
                 msg: format!("expected ident '{}', but found none", s,),
             }));
         };
         if next_ident != s {
-            return Err(Box::new(Error {
+            return Err(Box::new(SdfError {
                 line: self.line,
                 msg: format!("expected ident '{}', but found '{}'", s, next_ident),
             }));
@@ -1026,9 +900,9 @@ impl<'a> TokenWalker<'a> {
         self.skip_while(|b| matches!(b, b' ' | b'\t' | b'\n' | b'\r'));
     }
 
-    fn next_expect(&mut self) -> Result<u8, Box<Error>> {
+    fn next_expect(&mut self) -> SdfResult<u8> {
         let Some(v) = self.next_char() else {
-            return Err(Box::new(Error {
+            return Err(Box::new(SdfError {
                 line: self.line,
                 msg: "missing character".to_string(),
             }));
@@ -1036,7 +910,7 @@ impl<'a> TokenWalker<'a> {
         Ok(v)
     }
 
-    fn fill_bytes<const N: usize>(&self) -> [u8; N] {
+    fn peek_bytes<const N: usize>(&self) -> [u8; N] {
         let mut i = 0;
         let mut out = [0u8; N];
         while i < N
@@ -1049,26 +923,22 @@ impl<'a> TokenWalker<'a> {
     }
 }
 
-pub trait Consume<'a>: Sized {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>>;
-}
-
-pub struct QString<'a>(Cow<'a, str>);
-pub struct RealNumber<'a>(&'a str);
-pub struct SignedRealNumber<'a>(&'a str);
+pub struct QString<'a>(pub Cow<'a, str>);
+pub struct RealNumber<'a>(pub &'a str);
+pub struct SignedRealNumber<'a>(pub &'a str);
 pub struct RTriple<'a>(
-    Option<SignedRealNumber<'a>>,
-    Option<SignedRealNumber<'a>>,
-    Option<SignedRealNumber<'a>>,
+    pub Option<SignedRealNumber<'a>>,
+    pub Option<SignedRealNumber<'a>>,
+    pub Option<SignedRealNumber<'a>>,
 );
 pub struct Triple<'a>(
-    Option<RealNumber<'a>>,
-    Option<RealNumber<'a>>,
-    Option<RealNumber<'a>>,
+    pub Option<RealNumber<'a>>,
+    pub Option<RealNumber<'a>>,
+    pub Option<RealNumber<'a>>,
 );
 
 impl<'a> Consume<'a> for QString<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
         tkw.expect_char(b'"')?;
         let mut is_escaped = false;
         let offset = tkw.offset;
@@ -1079,7 +949,7 @@ impl<'a> Consume<'a> for QString<'a> {
         });
         let s = &tkw.content[offset..tkw.offset];
         if tkw.next_char().is_none() {
-            return Err(Box::new(Error {
+            return Err(Box::new(SdfError {
                 line: tkw.line,
                 msg: format!("unclosed string quote"),
             }));
@@ -1091,7 +961,7 @@ impl<'a> Consume<'a> for QString<'a> {
 }
 
 impl<'a> Consume<'a> for RealNumber<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
         // integer
         let start = tkw.offset;
         tkw.expect_char_matches(|b| b.is_ascii_digit())?;
@@ -1127,7 +997,7 @@ impl<'a> Consume<'a> for RealNumber<'a> {
 }
 
 impl<'a> Consume<'a> for SignedRealNumber<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
         let start = tkw.offset;
         tkw.next_if_matches(|b| matches!(b, b'+' | b'-'));
         RealNumber::consume(tkw)?;
@@ -1136,7 +1006,7 @@ impl<'a> Consume<'a> for SignedRealNumber<'a> {
 }
 
 impl<'a> Consume<'a> for Triple<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
         let fst = if tkw.next_if_equals(b':') {
             None
         } else {
@@ -1164,7 +1034,7 @@ impl<'a> Consume<'a> for Triple<'a> {
         };
 
         if fst.is_none() & snd.is_none() & trd.is_none() {
-            return Err(Box::new(Error {
+            return Err(Box::new(SdfError {
                 line: tkw.line,
                 msg: format!("all three unset in triple"),
             }));
@@ -1174,7 +1044,7 @@ impl<'a> Consume<'a> for Triple<'a> {
     }
 }
 impl<'a> Consume<'a> for RTriple<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
         let fst = if tkw.next_if_equals(b':') {
             None
         } else {
@@ -1202,7 +1072,7 @@ impl<'a> Consume<'a> for RTriple<'a> {
         };
 
         if fst.is_none() & snd.is_none() & trd.is_none() {
-            return Err(Box::new(Error {
+            return Err(Box::new(SdfError {
                 line: tkw.line,
                 msg: format!("all three unset in rtriple"),
             }));
@@ -1213,7 +1083,7 @@ impl<'a> Consume<'a> for RTriple<'a> {
 }
 
 impl<'a> Consume<'a> for SignedRealNumberOrRTriple<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
         let checkpoint = tkw.checkpoint();
         Ok(if let Ok(n) = SignedRealNumber::consume(tkw) {
             tkw.skip_whitespace();
@@ -1230,7 +1100,7 @@ impl<'a> Consume<'a> for SignedRealNumberOrRTriple<'a> {
     }
 }
 impl<'a> Consume<'a> for RealNumberOrTriple<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
         let checkpoint = tkw.checkpoint();
         Ok(if let Ok(n) = RealNumber::consume(tkw) {
             tkw.skip_whitespace();
@@ -1248,7 +1118,7 @@ impl<'a> Consume<'a> for RealNumberOrTriple<'a> {
 }
 
 impl<'a> Consume<'a> for SdfHeader<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
         let version = parse_param_with(tkw, "SDFVERSION", |tkw| {
             // @NOTE: Best code ever.
             let version = QString::consume(tkw)?;
@@ -1259,7 +1129,7 @@ impl<'a> Consume<'a> for SdfHeader<'a> {
                 _ if version.contains("2.1") => Ok(Version::V2_1),
                 _ if version.contains("3.0") => Ok(Version::V3_0),
                 _ if version.contains("4.0") => Ok(Version::V4_0),
-                _ => Err(Box::new(Error {
+                _ => Err(Box::new(SdfError {
                     line: tkw.line,
                     msg: format!("unknown version: '{}'", version),
                 })),
@@ -1311,7 +1181,7 @@ impl<'a> Consume<'a> for SdfHeader<'a> {
                 Some(b'/') => HierarchyDivider::Slash,
                 Some(b'.') => HierarchyDivider::Dot,
                 _ => {
-                    return Err(Box::new(Error {
+                    return Err(Box::new(SdfError {
                         line: tkw.line,
                         msg: format!("unknown divider"),
                     }));
@@ -1336,7 +1206,7 @@ impl<'a> Consume<'a> for SdfHeader<'a> {
                     "10.0" => TimescaleNumber::N10_0,
                     "100.0" => TimescaleNumber::N100_0,
                     _ => {
-                        return Err(Box::new(Error {
+                        return Err(Box::new(SdfError {
                             line: tkw.line,
                             msg: format!("unknown timescale number"),
                         }));
@@ -1355,7 +1225,7 @@ impl<'a> Consume<'a> for SdfHeader<'a> {
                     "ps" => TimescaleUnit::Picoseconds,
                     "fs" => TimescaleUnit::Femtoseconds,
                     _ => {
-                        return Err(Box::new(Error {
+                        return Err(Box::new(SdfError {
                             line: tkw.line,
                             msg: format!("unknown timescale unit"),
                         }));
@@ -1382,17 +1252,14 @@ impl<'a> Consume<'a> for SdfHeader<'a> {
     }
 }
 
-fn parse_param<'a, T: Consume<'a>>(
-    tkw: &mut TokenWalker<'a>,
-    name: &'static str,
-) -> Result<T, Box<Error>> {
+fn parse_param<'a, T: Consume<'a>>(tkw: &mut TokenWalker<'a>, name: &'static str) -> SdfResult<T> {
     parse_param_with(tkw, name, T::consume)
 }
 fn parse_param_with<'a, T>(
     tkw: &mut TokenWalker<'a>,
     name: &'static str,
-    mut f: impl FnMut(&mut TokenWalker<'a>) -> Result<T, Box<Error>>,
-) -> Result<T, Box<Error>> {
+    mut f: impl FnMut(&mut TokenWalker<'a>) -> SdfResult<T>,
+) -> SdfResult<T> {
     tkw.skip_whitespace();
     tkw.expect_char(b'(')?;
     tkw.skip_whitespace();
@@ -1403,9 +1270,33 @@ fn parse_param_with<'a, T>(
     tkw.expect_char(b')')?;
     Ok(value)
 }
+fn peek_param<'a>(tkw: &mut TokenWalker<'a>) -> Option<&'a str> {
+    let checkpoint = tkw.checkpoint();
+    if tkw.next_char() != Some(b'(') {
+        return None;
+    }
+    tkw.skip_whitespace();
+    let ident = tkw.next_ident();
+    tkw.restore_checkpoint(checkpoint);
+    ident
+}
+fn expect_peek_param<'a>(tkw: &mut TokenWalker<'a>) -> SdfResult<&'a str> {
+    let checkpoint = tkw.checkpoint();
+    tkw.expect_char(b'(')?;
+
+    tkw.skip_whitespace();
+    let Some(ident) = tkw.next_ident() else {
+        return Err(Box::new(SdfError {
+            line: tkw.line,
+            msg: "expected identifier".to_string(),
+        }));
+    };
+    tkw.restore_checkpoint(checkpoint);
+    Ok(ident)
+}
 
 impl<'a> Consume<'a> for Cell<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
         tkw.skip_whitespace();
         tkw.expect_char(b'(')?;
 
@@ -1438,7 +1329,7 @@ impl<'a> Consume<'a> for Cell<'a> {
 }
 
 impl<'a> Consume<'a> for TimingSpec<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
         let checkpoint = tkw.checkpoint();
         tkw.skip_whitespace();
         tkw.expect_char(b'(')?;
@@ -1456,13 +1347,13 @@ impl<'a> Consume<'a> for TimingSpec<'a> {
             Some("TIMINGENV") => todo!(), //Self::TimingEnv(TimingEnvSpec::consume(tkw)?),
             Some("LABEL") => todo!(),     //Self::Label(LabelSpec::consume(tkw)?),
             Some(name) => {
-                return Err(Box::new(Error {
+                return Err(Box::new(SdfError {
                     line: tkw.line,
                     msg: format!("unexpected '{name}'"),
                 }));
             }
             None => {
-                return Err(Box::new(Error {
+                return Err(Box::new(SdfError {
                     line: tkw.line,
                     msg: format!("expected ident"),
                 }));
@@ -1472,7 +1363,7 @@ impl<'a> Consume<'a> for TimingSpec<'a> {
 }
 
 impl<'a> Consume<'a> for Instance<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
         if tkw.is_next_equal_to(b')') {
             Ok(Self::Empty)
         } else if tkw.next_if_equals(b'*') {
@@ -1484,9 +1375,9 @@ impl<'a> Consume<'a> for Instance<'a> {
 }
 
 impl<'a> Consume<'a> for HierarchicalIdent<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
         let fst = tkw.next_ident().ok_or_else(|| {
-            Box::new(Error {
+            Box::new(SdfError {
                 line: tkw.line,
                 msg: format!("expected ident"),
             })
@@ -1515,7 +1406,7 @@ impl<'a> Consume<'a> for HierarchicalIdent<'a> {
 }
 
 impl<'a> Consume<'a> for DelayFile<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
         let result = parse_param_with(tkw, "DELAYFILE", |tkw| {
             let header = SdfHeader::consume(tkw)?;
             let mut cells = Vec::new();
@@ -1535,7 +1426,7 @@ impl<'a> Consume<'a> for DelayFile<'a> {
 
         tkw.skip_whitespace();
         if tkw.offset != tkw.content.len() {
-            return Err(Box::new(Error {
+            return Err(Box::new(SdfError {
                 line: tkw.line,
                 msg: format!("remaining token"),
             }));
@@ -1546,7 +1437,7 @@ impl<'a> Consume<'a> for DelayFile<'a> {
 }
 
 impl<'a> Consume<'a> for RValue<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
         tkw.expect_char(b'(')?;
         tkw.skip_whitespace();
         if tkw.next_if_equals(b')') {
@@ -1561,7 +1452,7 @@ impl<'a> Consume<'a> for RValue<'a> {
 }
 
 impl<'a> Consume<'a> for Value<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
         tkw.expect_char(b'(')?;
         tkw.skip_whitespace();
         if tkw.next_if_equals(b')') {
@@ -1576,7 +1467,7 @@ impl<'a> Consume<'a> for Value<'a> {
 }
 
 impl<'a> Consume<'a> for DelVal<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
         let checkpoint = tkw.checkpoint();
         tkw.expect_char(b'(')?;
 
@@ -1607,7 +1498,7 @@ impl<'a> Consume<'a> for DelVal<'a> {
 }
 
 impl<'a> Consume<'a> for DelValList<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
         let fst = DelVal::consume(tkw)?;
 
         tkw.skip_whitespace();
@@ -1654,7 +1545,7 @@ impl<'a> Consume<'a> for DelValList<'a> {
     }
 }
 impl<'a> Consume<'a> for RetValList<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
         let fst = DelVal::consume(tkw)?;
         if !tkw.next_if_equals(b'(') {
             return Ok(Self::One(fst));
@@ -1669,12 +1560,12 @@ impl<'a> Consume<'a> for RetValList<'a> {
 }
 
 impl<'a> Consume<'a> for RetainDef<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
         parse_param::<RetValList>(tkw, "RETAIN").map(Self)
     }
 }
 impl<'a> Consume<'a> for IoPathDef<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
         parse_param_with(tkw, "IOPATH", |tkw| {
             tkw.skip_whitespace();
             let port_spec = PortSpec::consume(tkw)?;
@@ -1713,7 +1604,7 @@ impl<'a> Consume<'a> for IoPathDef<'a> {
     }
 }
 impl<'a> Consume<'a> for CondDef<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
         parse_param_with(tkw, "COND", |tkw| {
             let qstring = if tkw.is_next_equal_to(b'"') {
                 Some(QString::consume(tkw)?)
@@ -1734,12 +1625,12 @@ impl<'a> Consume<'a> for CondDef<'a> {
     }
 }
 impl<'a> Consume<'a> for CondElseDef<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
         parse_param::<IoPathDef<'a>>(tkw, "CONDELSE").map(Self)
     }
 }
 impl<'a> Consume<'a> for PortDef<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
         parse_param_with(tkw, "PORT", |tkw| {
             let port_instance = PortInstance::consume(tkw)?;
             tkw.skip_whitespace();
@@ -1752,7 +1643,7 @@ impl<'a> Consume<'a> for PortDef<'a> {
     }
 }
 impl<'a> Consume<'a> for InterconnectDef<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
         parse_param_with(tkw, "INTERCONNECT", |tkw| {
             tkw.skip_whitespace();
             let from = PortInstance::consume(tkw)?;
@@ -1769,7 +1660,7 @@ impl<'a> Consume<'a> for InterconnectDef<'a> {
     }
 }
 impl<'a> Consume<'a> for NetDelayDef<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
         parse_param_with(tkw, "NETDELAY", |tkw| {
             let net_spec = PortInstance::consume(tkw)?;
             tkw.skip_whitespace();
@@ -1782,7 +1673,7 @@ impl<'a> Consume<'a> for NetDelayDef<'a> {
     }
 }
 impl<'a> Consume<'a> for DeviceDef<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
         parse_param_with(tkw, "DEVICE", |tkw| {
             let port_instance = if tkw.is_next_equal_to(b'(') {
                 None
@@ -1800,7 +1691,7 @@ impl<'a> Consume<'a> for DeviceDef<'a> {
 }
 
 impl<'a> Consume<'a> for Integer<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
         tkw.expect_char_matches(|b| b.is_ascii_digit())?;
         let start = tkw.offset - 1;
         tkw.skip_while(|b| b.is_ascii_digit());
@@ -1809,7 +1700,7 @@ impl<'a> Consume<'a> for Integer<'a> {
 }
 
 impl<'a> Consume<'a> for Port<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
         let hident = HierarchicalIdent::consume(tkw)?;
         let mut b1 = None;
         let mut b2 = None;
@@ -1829,7 +1720,7 @@ impl<'a> Consume<'a> for Port<'a> {
 }
 
 impl<'a> Consume<'a> for PortInstance<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
         let mut hident = HierarchicalIdent::consume(tkw)?;
         let mut b1 = None;
         let mut b2 = None;
@@ -1864,7 +1755,7 @@ impl<'a> Consume<'a> for PortInstance<'a> {
     }
 }
 impl<'a> Consume<'a> for PortSpec<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
         if tkw.is_next_equal_to(b'(') {
             PortEdge::consume(tkw).map(Self::Edge)
         } else {
@@ -1873,7 +1764,7 @@ impl<'a> Consume<'a> for PortSpec<'a> {
     }
 }
 impl<'a> Consume<'a> for PortEdge<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
         tkw.expect_char(b'(')?;
         tkw.skip_whitespace();
         let edge = match tkw.next_ident() {
@@ -1886,7 +1777,7 @@ impl<'a> Consume<'a> for PortEdge<'a> {
             Some("1z") => EdgeIdentifier::L1Z,
             Some("z0") => EdgeIdentifier::LZ0,
             _ => {
-                return Err(Box::new(Error {
+                return Err(Box::new(SdfError {
                     line: tkw.line,
                     msg: format!("unexpected edge ident"),
                 }));
@@ -1904,7 +1795,7 @@ impl<'a> Consume<'a> for PortEdge<'a> {
 }
 
 impl<'a> Consume<'a> for DelaySpec<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
         parse_param_with(tkw, "DELAY", |tkw| {
             let mut items = Vec::new();
             let value = DelayType::consume(tkw)?;
@@ -1923,29 +1814,9 @@ impl<'a> Consume<'a> for DelaySpec<'a> {
         })
     }
 }
-impl<'a> Consume<'a> for TimingCheckSpec<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
-        parse_param_with(tkw, "TIMINGCHECK", |tkw| {
-            let mut items = Vec::new();
-            let value = TimingCheckDef::consume(tkw)?;
-            items.push(value);
-
-            loop {
-                tkw.skip_whitespace();
-                if tkw.is_next_equal_to(b')') {
-                    break;
-                }
-                let item = TimingCheckDef::consume(tkw)?;
-                items.push(item);
-            }
-
-            Ok(Self { items })
-        })
-    }
-}
 
 impl<'a> Consume<'a> for DelayDef<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
         tkw.skip_whitespace();
         let checkpoint = tkw.checkpoint();
         tkw.expect_char(b'(')?;
@@ -1963,7 +1834,7 @@ impl<'a> Consume<'a> for DelayDef<'a> {
             Some("NETDELAY") => Self::NetDelay(NetDelayDef::consume(tkw)?),
             Some("DEVICE") => Self::Device(DeviceDef::consume(tkw)?),
             _ => {
-                return Err(Box::new(Error {
+                return Err(Box::new(SdfError {
                     line: tkw.line,
                     msg: format!("unknown delay def"),
                 }));
@@ -1973,7 +1844,7 @@ impl<'a> Consume<'a> for DelayDef<'a> {
 }
 
 impl<'a> Consume<'a> for DelayType<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
         tkw.skip_whitespace();
         let checkpoint = tkw.checkpoint();
         tkw.expect_char(b'(')?;
@@ -1987,7 +1858,7 @@ impl<'a> Consume<'a> for DelayType<'a> {
             Some("PATHPULSE") => Self::PathPulse(PathPulseType::consume(tkw)?),
             Some("PATHPULSEPERCENT") => Self::PathPulseProcent(PathPulsePercentType::consume(tkw)?),
             _ => {
-                return Err(Box::new(Error {
+                return Err(Box::new(SdfError {
                     line: tkw.line,
                     msg: format!("unknown delay type"),
                 }));
@@ -1997,7 +1868,7 @@ impl<'a> Consume<'a> for DelayType<'a> {
 }
 
 impl<'a> Consume<'a> for AbsoluteDelayType<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
         parse_param_with(tkw, "ABSOLUTE", |tkw| {
             let mut defs = Vec::new();
             let def = DelayDef::consume(tkw)?;
@@ -2017,7 +1888,7 @@ impl<'a> Consume<'a> for AbsoluteDelayType<'a> {
     }
 }
 impl<'a> Consume<'a> for IncrementDelayType<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
         parse_param_with(tkw, "INCREMENT", |tkw| {
             let mut defs = Vec::new();
             let def = DelayDef::consume(tkw)?;
@@ -2037,7 +1908,7 @@ impl<'a> Consume<'a> for IncrementDelayType<'a> {
     }
 }
 impl<'a> Consume<'a> for PathPulseType<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
         parse_param_with(tkw, "PATHPULSE", |tkw| {
             let input_output_path = if tkw.is_next_equal_to(b'(') {
                 None
@@ -2069,7 +1940,7 @@ impl<'a> Consume<'a> for PathPulseType<'a> {
     }
 }
 impl<'a> Consume<'a> for PathPulsePercentType<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
         parse_param_with(tkw, "PATHPULSEPERCENT", |tkw| {
             let input_output_path = if tkw.is_next_equal_to(b'(') {
                 None
@@ -2098,343 +1969,5 @@ impl<'a> Consume<'a> for PathPulsePercentType<'a> {
                 values,
             })
         })
-    }
-}
-
-impl<'a> Consume<'a> for PortTimingCheck<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
-        let checkpoint = tkw.checkpoint();
-        if tkw.next_if_equals(b'(') {
-            tkw.skip_whitespace();
-            if tkw.next_ident() == Some("COND") {
-                tkw.restore_checkpoint(checkpoint);
-
-                return parse_param_with(tkw, "COND", |tkw| {
-                    let qstring = if tkw.is_next_equal_to(b'"') {
-                        Some(QString::consume(tkw)?)
-                    } else {
-                        None
-                    };
-                    tkw.skip_whitespace();
-                    let timing_check_condition = TimingCheckCondition::consume(tkw)?;
-
-                    tkw.skip_whitespace();
-                    let port_spec = PortSpec::consume(tkw)?;
-                    Ok(Self::Cond(qstring, timing_check_condition, port_spec))
-                });
-            }
-        }
-
-        tkw.restore_checkpoint(checkpoint);
-        Ok(Self::PortSpec(PortSpec::consume(tkw)?))
-    }
-}
-
-impl<'a> Consume<'a> for TimingCheckCondition<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
-        if tkw.next_if_matches(|b| matches!(b, b'!' | b'~')) {
-            tkw.skip_whitespace();
-            let scalar_node = ScalarNode::consume(tkw)?;
-            Ok(Self {
-                scalar_node,
-                variant: TimingCheckConditionVariant::Inversion,
-            })
-        } else {
-            let scalar_node = ScalarNode::consume(tkw)?;
-            tkw.skip_whitespace();
-            let bs = tkw.fill_bytes::<3>();
-            let operator = if &bs == b"===" {
-                tkw.offset += 3;
-                EqualityOperator::CaseEquality
-            } else if &bs == b"!==" {
-                tkw.offset += 3;
-                EqualityOperator::CaseInequality
-            } else if &bs[..2] == b"==" {
-                tkw.offset += 2;
-                EqualityOperator::LogicalEquality
-            } else if &bs[..2] == b"!=" {
-                tkw.offset += 2;
-                EqualityOperator::LogicalInequality
-            } else {
-                return Ok(Self {
-                    scalar_node,
-                    variant: TimingCheckConditionVariant::Plain,
-                });
-            };
-            tkw.skip_whitespace();
-            let constant = ScalarConstant::consume(tkw)?;
-            Ok(Self {
-                scalar_node,
-                variant: TimingCheckConditionVariant::Equality(operator, constant),
-            })
-        }
-    }
-}
-
-impl<'a> Consume<'a> for ScalarNode<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
-        let hident = HierarchicalIdent::consume(tkw)?;
-        tkw.skip_whitespace();
-        let mut offset = None;
-        if tkw.next_if_equals(b'[') {
-            offset = Some(Integer::consume(tkw)?);
-            tkw.expect_char(b']')?;
-        }
-        Ok(Self { hident, offset })
-    }
-}
-
-impl<'a> Consume<'a> for TimingCheckDef<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
-        tkw.skip_whitespace();
-        let checkpoint = tkw.checkpoint();
-        tkw.expect_char(b'(')?;
-
-        tkw.skip_whitespace();
-        let ident = tkw.next_ident();
-        tkw.restore_checkpoint(checkpoint);
-        Ok(match ident {
-            Some("SETUP") => Self::Setup(SetupTimingCheck::consume(tkw)?),
-            Some("HOLD") => Self::Hold(HoldTimingCheck::consume(tkw)?),
-            Some("SETUPHOLD") => Self::SetupHold(SetupHoldTimingCheck::consume(tkw)?),
-            Some("RECOVERY") => Self::Recovery(RecoveryTimingCheck::consume(tkw)?),
-            Some("REMOVAL") => Self::Removal(RemovalTimingCheck::consume(tkw)?),
-            Some("RECREM") => Self::Recrem(RecremTimingCheck::consume(tkw)?),
-            Some("SKEW") => Self::Skew(SkewTimingCheck::consume(tkw)?),
-            Some("BIDIRECTSKEW") => Self::BidirectSkew(BidirectSkewTimingCheck::consume(tkw)?),
-            Some("WIDTH") => Self::Width(WidthTimingCheck::consume(tkw)?),
-            Some("PERIOD") => Self::Period(PeriodTimingCheck::consume(tkw)?),
-            Some("NOCHANGE") => Self::NoChange(NoChangeTimingCheck::consume(tkw)?),
-            _ => {
-                return Err(Box::new(Error {
-                    line: tkw.line,
-                    msg: format!("unknown delay type"),
-                }));
-            }
-        })
-    }
-}
-
-impl<'a> Consume<'a> for SetupTimingCheck<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
-        parse_param_with(tkw, "SETUP", |tkw| {
-            let fst = PortTimingCheck::consume(tkw)?;
-            tkw.skip_whitespace();
-            let snd = PortTimingCheck::consume(tkw)?;
-            tkw.skip_whitespace();
-            let value = Value::consume(tkw)?;
-            Ok(Self { fst, snd, value })
-        })
-    }
-}
-impl<'a> Consume<'a> for HoldTimingCheck<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
-        parse_param_with(tkw, "HOLD", |tkw| {
-            let fst = PortTimingCheck::consume(tkw)?;
-            tkw.skip_whitespace();
-            let snd = PortTimingCheck::consume(tkw)?;
-            tkw.skip_whitespace();
-            let value = Value::consume(tkw)?;
-            Ok(Self { fst, snd, value })
-        })
-    }
-}
-impl<'a> Consume<'a> for SetupHoldTimingCheck<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
-        parse_param_with(tkw, "SETUPHOLD", |tkw| {
-            Ok(Self(SetupHoldRecremArgs::consume(tkw)?))
-        })
-    }
-}
-impl<'a> Consume<'a> for RecoveryTimingCheck<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
-        parse_param_with(tkw, "RECOVERY", |tkw| {
-            let fst = PortTimingCheck::consume(tkw)?;
-            tkw.skip_whitespace();
-            let snd = PortTimingCheck::consume(tkw)?;
-            tkw.skip_whitespace();
-            let value = Value::consume(tkw)?;
-            Ok(Self { fst, snd, value })
-        })
-    }
-}
-impl<'a> Consume<'a> for RemovalTimingCheck<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
-        parse_param_with(tkw, "REMOVAL", |tkw| {
-            let fst = PortTimingCheck::consume(tkw)?;
-            tkw.skip_whitespace();
-            let snd = PortTimingCheck::consume(tkw)?;
-            tkw.skip_whitespace();
-            let value = Value::consume(tkw)?;
-            Ok(Self { fst, snd, value })
-        })
-    }
-}
-impl<'a> Consume<'a> for RecremTimingCheck<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
-        parse_param_with(tkw, "RECREM", |tkw| {
-            Ok(Self(SetupHoldRecremArgs::consume(tkw)?))
-        })
-    }
-}
-impl<'a> Consume<'a> for SkewTimingCheck<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
-        parse_param_with(tkw, "SKEW", |tkw| {
-            let fst = PortTimingCheck::consume(tkw)?;
-            tkw.skip_whitespace();
-            let snd = PortTimingCheck::consume(tkw)?;
-            tkw.skip_whitespace();
-            let value = RValue::consume(tkw)?;
-            Ok(Self { fst, snd, value })
-        })
-    }
-}
-impl<'a> Consume<'a> for BidirectSkewTimingCheck<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
-        parse_param_with(tkw, "BIDIRECTSKEW", |tkw| {
-            let fst = PortTimingCheck::consume(tkw)?;
-            tkw.skip_whitespace();
-            let snd = PortTimingCheck::consume(tkw)?;
-            tkw.skip_whitespace();
-            let fst_value = Value::consume(tkw)?;
-            tkw.skip_whitespace();
-            let snd_value = Value::consume(tkw)?;
-            Ok(Self {
-                fst,
-                snd,
-                fst_value,
-                snd_value,
-            })
-        })
-    }
-}
-impl<'a> Consume<'a> for WidthTimingCheck<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
-        parse_param_with(tkw, "WIDTH", |tkw| {
-            let port_tchk = PortTimingCheck::consume(tkw)?;
-            tkw.skip_whitespace();
-            let value = Value::consume(tkw)?;
-            Ok(Self { port_tchk, value })
-        })
-    }
-}
-impl<'a> Consume<'a> for PeriodTimingCheck<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
-        parse_param_with(tkw, "PERIOD", |tkw| {
-            let port_tchk = PortTimingCheck::consume(tkw)?;
-            tkw.skip_whitespace();
-            let value = Value::consume(tkw)?;
-            Ok(Self { port_tchk, value })
-        })
-    }
-}
-impl<'a> Consume<'a> for NoChangeTimingCheck<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
-        parse_param_with(tkw, "NOCHANGE", |tkw| {
-            let fst = PortTimingCheck::consume(tkw)?;
-            tkw.skip_whitespace();
-            let snd = PortTimingCheck::consume(tkw)?;
-            tkw.skip_whitespace();
-            let fst_rvalue = RValue::consume(tkw)?;
-            tkw.skip_whitespace();
-            let snd_rvalue = RValue::consume(tkw)?;
-            Ok(Self {
-                fst,
-                snd,
-                fst_rvalue,
-                snd_rvalue,
-            })
-        })
-    }
-}
-
-impl<'a> Consume<'a> for SCond<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
-        parse_param_with(tkw, "SCOND", |tkw| {
-            let qstring = if tkw.is_next_equal_to(b'"') {
-                Some(QString::consume(tkw)?)
-            } else {
-                None
-            };
-            tkw.skip_whitespace();
-            let timing_check_condition = TimingCheckCondition::consume(tkw)?;
-            Ok(Self {
-                qstring,
-                timing_check_condition,
-            })
-        })
-    }
-}
-impl<'a> Consume<'a> for CCond<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
-        parse_param_with(tkw, "CCOND", |tkw| {
-            let qstring = if tkw.is_next_equal_to(b'"') {
-                Some(QString::consume(tkw)?)
-            } else {
-                None
-            };
-            tkw.skip_whitespace();
-            let timing_check_condition = TimingCheckCondition::consume(tkw)?;
-            Ok(Self {
-                qstring,
-                timing_check_condition,
-            })
-        })
-    }
-}
-
-impl<'a> Consume<'a> for SetupHoldRecremArgs<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
-        let fst = PortTimingCheck::consume(tkw)?;
-        tkw.skip_whitespace();
-        let snd = PortTimingCheck::consume(tkw)?;
-        tkw.skip_whitespace();
-        let fst_rvalue = RValue::consume(tkw)?;
-        tkw.skip_whitespace();
-        let snd_rvalue = RValue::consume(tkw)?;
-        tkw.skip_whitespace();
-        let checkpoint = tkw.checkpoint();
-        if tkw.next_if_equals(b'(') {
-            let mut scond = None;
-            let mut ccond = None;
-
-            let PortTimingCheck::PortSpec(fst) = fst else {
-                return Err(Box::new(Error {
-                    line: tkw.line,
-                    msg: "expected port spec here".to_string(),
-                }));
-            };
-            let PortTimingCheck::PortSpec(snd) = snd else {
-                return Err(Box::new(Error {
-                    line: tkw.line,
-                    msg: "expected port spec here".to_string(),
-                }));
-            };
-
-            tkw.skip_whitespace();
-            if tkw.next_ident() == Some("SCOND") {
-                tkw.restore_checkpoint(checkpoint);
-                scond = Some(SCond::consume(tkw)?);
-
-                tkw.skip_whitespace();
-                if tkw.is_next_equal_to(b'(') {
-                    ccond = Some(CCond::consume(tkw)?);
-                }
-            } else if tkw.next_ident() == Some("CCOND") {
-                tkw.restore_checkpoint(checkpoint);
-                ccond = Some(CCond::consume(tkw)?);
-            } else {
-                return Err(Box::new(Error {
-                    line: tkw.line,
-                    msg: "unexpected spec".to_string(),
-                }));
-            }
-
-            return Ok(Self::Alternative(
-                fst, snd, fst_rvalue, snd_rvalue, scond, ccond,
-            ));
-        }
-
-        Ok(Self::Base(fst, snd, fst_rvalue, snd_rvalue))
     }
 }
