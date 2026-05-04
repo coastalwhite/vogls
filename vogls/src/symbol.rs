@@ -65,6 +65,14 @@ pub enum NetValue {
     Signal(NetSignal),
     Constant(Bits),
 }
+impl NetValue {
+    pub fn size(&self) -> VectorSize {
+        match self {
+            NetValue::Signal(s) => s.width,
+            NetValue::Constant(b) => b.size(),
+        }
+    }
+}
 
 pub struct NetSignal {
     width: VectorSize,

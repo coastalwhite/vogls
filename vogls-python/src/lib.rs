@@ -1,5 +1,3 @@
-pub mod trace;
-
 #[pyo3::pymodule]
 mod vogls {
     use std::io::{stderr, stdout};
@@ -7,15 +5,14 @@ mod vogls {
     use std::sync::{Arc, Mutex};
 
     use pyo3::exceptions::{PyException, PyValueError};
-    use pyo3::{PyResult, prelude::*};
+    use pyo3::{IntoPyObjectExt, PyResult, prelude::*};
     use vogls::design::DesignState;
     use vogls::symbol::{NetValue, Symbol};
     use vogls::utils::TimerStack;
-    use vogls::{
-        BitsFormatOptions, ExecutionContext, LogicMode, SimulationIo, VectorSize,
-    };
+    use vogls::{BitsFormatOptions, ExecutionContext, LogicMode, SimulationIo, VectorSize};
 
-    use crate::trace::TracePlugin;
+    use vogls_plan::{RunAgg, Step, TimeUnit};
+    use vogls_trace::TracePlugin;
 
     #[pyo3::pyclass(frozen)]
     #[repr(transparent)]
@@ -301,7 +298,7 @@ mod vogls {
                 DesignState::Compiled(s) => &s.plugins[0],
             };
             let trace = (plugin.as_ref() as &dyn std::any::Any)
-                .downcast_ref::<super::trace::TracePlugin>()
+                .downcast_ref::<vogls_trace::TracePlugin>()
                 .unwrap();
 
             for i in 0..trace.time_offsets.len() - 1 {
@@ -321,14 +318,183 @@ mod vogls {
             };
             let trace = plugins.remove(self.plugin_idx);
             let trace = trace as Box<dyn std::any::Any>;
-            let trace = trace.downcast::<super::trace::TracePlugin>().unwrap();
-            Trace {
+            let trace = trace.downcast::<vogls_trace::TracePlugin>().unwrap();
+            Trace(vogls_trace::Trace {
                 trace: trace.trace,
                 time_offsets: trace.time_offsets,
-            }
+            })
         }
     }
 
-    #[pymodule_export]
-    pub use super::trace::Trace;
+    #[pyo3::pyclass(frozen)]
+    pub struct Trace(vogls_trace::Trace);
+
+    #[pyo3::pymethods]
+    impl Trace {
+        pub fn hamming_distance(&self, py: pyo3::Python<'_>) -> pyo3::Py<pyo3::types::PyTuple> {
+            let (times, hds) = py.detach(|| self.0.hamming_distance());
+            let times = pyo3::types::PyList::new(py, times).unwrap();
+            let hds = pyo3::types::PyList::new(py, hds).unwrap();
+            pyo3::types::PyTuple::new(py, vec![times, hds])
+                .unwrap()
+                .into()
+        }
+    }
+
+    #[pyo3::pyclass(frozen)]
+    pub struct LazyDesign(Arc<vogls_plan::LazyDesign>);
+
+    #[pymethods]
+    impl LazyDesign {
+        #[new]
+        #[pyo3(signature = (paths, top_level_module = None))]
+        fn new(paths: Vec<PathBuf>, top_level_module: Option<String>) -> Self {
+            Self(Arc::new(vogls_plan::LazyDesign {
+                sources: paths,
+                top_level_module,
+            }))
+        }
+
+        pub fn run(&self) -> LazyRun {
+            LazyRun(Arc::new(Mutex::new(vogls_plan::LazyRun {
+                design: self.0.clone(),
+                steps: Vec::new(),
+                aggregation: RunAgg::None,
+            })))
+        }
+    }
+
+    #[pyo3::pyclass(frozen)]
+    pub struct LazyRun(Arc<Mutex<vogls_plan::LazyRun>>);
+
+    #[pyo3::pyclass(frozen)]
+    pub struct LazyPoints(vogls_plan::LazyPoints);
+
+    #[pymethods]
+    impl LazyRun {
+        pub fn run_for(&self, time: u64) -> Self {
+            self.0
+                .lock()
+                .unwrap()
+                .steps
+                .push(Step::RunFor(vogls_plan::Time {
+                    value: time,
+                    unit: TimeUnit::Femptoseconds,
+                }));
+            Self(self.0.clone())
+        }
+
+        pub fn repeat(&self, n: usize) -> Self {
+            self.0.lock().unwrap().steps.push(Step::Repeat(n));
+            Self(self.0.clone())
+        }
+
+        pub fn trace_start(&self) -> Self {
+            self.0.lock().unwrap().steps.push(Step::TraceStart);
+            Self(self.0.clone())
+        }
+        pub fn trace_stop(&self) -> Self {
+            self.0.lock().unwrap().steps.push(Step::TraceStop);
+            Self(self.0.clone())
+        }
+
+        pub fn set_signal(&self, name: Vec<String>, value: &LazyPoints) -> Self {
+            self.0.lock().unwrap().steps.push(Step::SetSignal(
+                vogls_plan::SignalRef { inner: name },
+                Arc::new(value.0.clone()),
+            ));
+            Self(self.0.clone())
+        }
+
+        pub fn hamming_distance(&self) -> LazyPoints {
+            let mut run = self.0.lock().unwrap().clone();
+            run.aggregation = RunAgg::HammingDistance;
+            LazyPoints(vogls_plan::LazyPoints::Run(Arc::new(run)))
+        }
+    }
+
+    #[pymethods]
+    impl LazyPoints {
+        #[staticmethod]
+        #[pyo3(signature = (length, seed = None))]
+        pub fn random(length: usize, seed: Option<u64>) -> Self {
+            Self(vogls_plan::LazyPoints::Random(vogls_plan::RandomPoints {
+                seed: seed.unwrap_or(0),
+                length,
+            }))
+        }
+
+        #[pyo3(signature = (num_threads = Some(0)))]
+        pub fn collect(&self, num_threads: Option<usize>) -> PyResult<Points> {
+            self.0
+                .collect(&vogls_plan::Context::new(num_threads))
+                .map(Points)
+                .map_err(|_| PyValueError::new_err("error while collecting"))
+        }
+    }
+
+    #[pyo3::pyclass(frozen)]
+    pub struct Points(vogls_plan::Points);
+
+    #[pymethods]
+    impl Points {
+        pub fn as_list(&self, py: pyo3::Python<'_>) -> PyResult<pyo3::Py<pyo3::types::PyList>> {
+            fn points_as_pyany(
+                py: pyo3::Python<'_>,
+                ps: &vogls_plan::Points,
+                at: usize,
+            ) -> PyResult<pyo3::Py<pyo3::PyAny>> {
+                use pyo3::types::PyDict;
+                match ps {
+                    vogls_plan::Points::Floats(items) => items[at].into_py_any(py),
+                    vogls_plan::Points::Ints(items) => items[at].into_py_any(py),
+                    vogls_plan::Points::UInts(items) => items[at].into_py_any(py),
+                    vogls_plan::Points::Bits(..) => todo!(),
+                    vogls_plan::Points::Lists(points, items) => {
+                        points_as_list(py, points, items[at], items[at + 1])?.into_py_any(py)
+                    }
+                    vogls_plan::Points::Struct(items, _) => {
+                        let dict = PyDict::new(py);
+                        for (name, ps) in items.as_ref() {
+                            dict.set_item(name, points_as_pyany(py, ps, at)?)?;
+                        }
+                        dict.into_py_any(py)
+                    }
+                }
+            }
+
+            fn points_as_list(
+                py: pyo3::Python<'_>,
+                ps: &vogls_plan::Points,
+                start: usize,
+                end: usize,
+            ) -> PyResult<pyo3::Py<pyo3::types::PyList>> {
+                use pyo3::types::PyList;
+                Ok(match ps {
+                    vogls_plan::Points::Floats(items) => {
+                        PyList::new(py, &items[start..end])?.into()
+                    }
+                    vogls_plan::Points::Ints(items) => PyList::new(py, &items[start..end])?.into(),
+                    vogls_plan::Points::UInts(items) => PyList::new(py, &items[start..end])?.into(),
+                    vogls_plan::Points::Bits(..) => todo!(),
+                    vogls_plan::Points::Lists(points, items) => {
+                        let mut vs = Vec::with_capacity(ps.len());
+                        for w in items[start..=end].windows(2) {
+                            vs.push(points_as_list(py, points.as_ref(), w[0], w[1])?);
+                        }
+                        PyList::new(py, vs)?.into()
+                    }
+                    vogls_plan::Points::Struct(..) => {
+                        let mut vs = Vec::with_capacity(ps.len());
+                        for i in start..end {
+                            vs.push(points_as_pyany(py, ps, i)?);
+                        }
+                        PyList::new(py, vs)?.into()
+                    }
+                })
+            }
+
+            points_as_list(py, &self.0, 0, self.0.len())
+        }
+    }
 }

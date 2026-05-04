@@ -1,0 +1,13 @@
+[package]
+name = "vogls-plan"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+vogls.workspace = true
+vogls-trace.workspace = true
+rand.workspace = true
+rayon.workspace = true
+
+[lints]
+workspace = true

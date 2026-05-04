@@ -1,19 +1,27 @@
 use std::sync::Arc;
 
 use hashbrown::hash_map::Entry;
-use vogls::codegen::HeapRef;
+use vogls::design::Design;
 use vogls::symbol::{NetValue, Symbol};
-use vogls::utils::{NonMaxUsize, VgHashMap};
-use vogls::{LogicMode, RtSignalKey, design::Design};
+use vogls_codegen::HeapRef;
+use vogls_ir::{Bits, LogicMode};
+use vogls_runtime::RtSignalKey;
+
+use vogls_utils::{NonMaxUsize, VgHashMap};
 
 /// Simulation plugin to trace signals when they can updated.
 #[derive(Default, Clone)]
 pub struct TracePlugin {
-    pub tracked: vogls::utils::VgHashMap<RtSignalKey, Option<NonMaxUsize>>,
+    pub tracked: VgHashMap<RtSignalKey, Option<NonMaxUsize>>,
     pub updated_this_time_step: Vec<RtSignalKey>,
 
     pub logic_mode: LogicMode,
     pub signal_to_heap: Arc<[HeapRef]>,
+    pub trace: Vec<(RtSignalKey, Bits)>,
+    pub time_offsets: Vec<(u64, usize)>,
+}
+
+pub struct Trace {
     pub trace: Vec<(RtSignalKey, vogls::Bits)>,
     pub time_offsets: Vec<(u64, usize)>,
 }
@@ -85,42 +93,32 @@ impl vogls::runtime::plugins::RuntimePlugin for TracePlugin {
     }
 }
 
-#[pyo3::pyclass(frozen)]
-pub struct Trace {
-    pub trace: Vec<(RtSignalKey, vogls::Bits)>,
-    pub time_offsets: Vec<(u64, usize)>,
-}
-
-#[pyo3::pymethods]
 impl Trace {
-    pub fn hamming_distance(&self, py: pyo3::Python<'_>) -> pyo3::Py<pyo3::types::PyList> {
-        let out = py.detach(|| {
-            let mut values = vogls::utils::VgHashMap::<vogls::RtSignalKey, usize>::default();
-            (0..self.time_offsets.len() - 1)
-                .map(|i| {
-                    let mut hd = 0;
-                    let (time, start) = self.time_offsets[i];
-                    let end = self.time_offsets[i + 1].1;
+    pub fn hamming_distance(&self) -> (Vec<u64>, Vec<u64>) {
+        let mut values = vogls::utils::VgHashMap::<vogls::RtSignalKey, usize>::default();
+        (0..self.time_offsets.len() - 1)
+            .map(|i| {
+                let mut hd = 0;
+                let (time, start) = self.time_offsets[i];
+                let end = self.time_offsets[i + 1].1;
 
-                    for (i, (signal, value)) in self.trace[start..end].iter().enumerate() {
-                        let i = start + i;
-                        match values.entry(*signal) {
-                            Entry::Vacant(entry) => _ = entry.insert(i),
-                            Entry::Occupied(mut entry) => {
-                                hd += vogls::Bits::u64_reduce_op(
-                                    value,
-                                    &self.trace[*entry.get()].1,
-                                    |l, r| (l ^ r).count_ones(),
-                                    |l, r| l + r,
-                                ) as u64;
-                                entry.insert(i);
-                            }
+                for (i, (signal, value)) in self.trace[start..end].iter().enumerate() {
+                    let i = start + i;
+                    match values.entry(*signal) {
+                        Entry::Vacant(entry) => _ = entry.insert(i),
+                        Entry::Occupied(mut entry) => {
+                            hd += vogls::Bits::u64_reduce_op(
+                                value,
+                                &self.trace[*entry.get()].1,
+                                |l, r| (l ^ r).count_ones(),
+                                |l, r| l + r,
+                            ) as u64;
+                            entry.insert(i);
                         }
                     }
-                    (time, hd)
-                })
-                .collect::<Vec<(u64, u64)>>()
-        });
-        pyo3::types::PyList::new(py, out).unwrap().into()
+                }
+                (time, hd)
+            })
+            .collect::<(Vec<u64>, Vec<u64>)>()
     }
 }

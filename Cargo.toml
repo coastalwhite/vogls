@@ -17,6 +17,8 @@ members = [
     "vogls-runtime",
     "vogls-vcd",
 	"vogls-fuse-signals",
+	"vogls-plan",
+    "vogls-trace",
 ]
 resolver = "3"
 
@@ -30,6 +32,7 @@ bytemuck = "1"
 proptest = "1"
 hashbrown = "0.16"
 foldhash = "0.2.0"
+rayon = "1.12.0"
 rand = "0.10"
 clap = { version = "4.5", features = ["derive"] }
 bumpalo = "3.20"
@@ -48,6 +51,8 @@ vogls-codegen.path = "vogls-codegen"
 vogls-codegen-c.path = "vogls-codegen-c"
 vogls-runtime.path = "vogls-runtime"
 vogls-vcd.path = "vogls-vcd"
+vogls-trace.path = "vogls-trace"
+vogls-plan.path = "vogls-plan"
 
 [profile.debug-release]
 inherits = "release"
