@@ -879,6 +879,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "vogls-sdf"
+version = "0.0.1"
+dependencies = [
+ "vogls-bits",
+ "vogls-codegen",
+ "vogls-ir",
+ "vogls-runtime",
+ "vogls-utils",
+]
+
+[[package]]
 name = "vogls-sim"
 version = "0.0.1"
 dependencies = [

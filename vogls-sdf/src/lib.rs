@@ -4,15 +4,15 @@
 //     - [ ] CellType
 //     - [ ] Instance
 //     - [ ] Timing Spec
-//       - [ ] Delay
-//          - [ ] Absolute
-//          - [ ] Increment
-//          - [ ] Path Pulse
-//          - [ ] Path Pulse Procent
-//          - [ ] Components
+//       - [x] Delay
+//          - [x] Absolute
+//          - [x] Increment
+//          - [x] Path Pulse
+//          - [x] Path Pulse Procent
+//          - [x] Components
 //            - [x] DelValList
 //              - [x] DelVal
-//            - [ ] DelDef
+//            - [x] DelDef
 //              - [x] IOPATH
 //                - [x] PortSpec
 //                - [x] PortInstance
@@ -83,6 +83,34 @@ pub struct DelayFile<'a> {
     cells: Vec<Cell<'a>>,
 }
 
+pub enum PortTimingCheck<'a> {
+    PortSpec(PortSpec<'a>),
+    Cond(Option<QString<'a>>, TimingCheckCondition<'a>, PortSpec<'a>),
+}
+
+pub struct TimingCheckCondition<'a> {
+    scalar_node: ScalarNode<'a>,
+    variant: TimingCheckConditionVariant,
+}
+
+pub enum TimingCheckConditionVariant {
+    Plain,
+    Inversion,
+    Equality(EqualityOperator, ScalarConstant),
+}
+
+pub enum EqualityOperator {
+    LogicalEquality,
+    LogicalInequality,
+    CaseEquality,
+    CaseInequality,
+}
+
+pub struct ScalarNode<'a> {
+    hident: HierarchicalIdent<'a>,
+    offset: Option<Integer<'a>>,
+}
+
 pub struct Cell<'a> {
     celltype: QString<'a>,
     instance: Instance<'a>,
@@ -110,7 +138,9 @@ pub enum TimingSpec<'a> {
 pub struct DelaySpec<'a> {
     items: Vec<DelayType<'a>>,
 }
-pub struct TimingCheckSpec<'a>(&'a str);
+pub struct TimingCheckSpec<'a> {
+    items: Vec<TimingCheckDef<'a>>,
+}
 pub struct TimingEnvSpec<'a>(&'a str);
 pub struct LabelSpec<'a>(&'a str);
 
@@ -119,6 +149,95 @@ pub enum DelayType<'a> {
     Increment(IncrementDelayType<'a>),
     PathPulse(PathPulseType<'a>),
     PathPulseProcent(PathPulsePercentType<'a>),
+}
+
+pub enum TimingCheckDef<'a> {
+    Setup(SetupTimingCheck<'a>),
+    Hold(HoldTimingCheck<'a>),
+    SetupHold(SetupHoldTimingCheck<'a>),
+    Recovery(RecoveryTimingCheck<'a>),
+    Removal(RemovalTimingCheck<'a>),
+    Recrem(RecremTimingCheck<'a>),
+    Skew(SkewTimingCheck<'a>),
+    BidirectSkew(BidirectSkewTimingCheck<'a>),
+    Width(WidthTimingCheck<'a>),
+    Period(PeriodTimingCheck<'a>),
+    NoChange(NoChangeTimingCheck<'a>),
+}
+
+pub enum SetupHoldRecremArgs<'a> {
+    Base(
+        PortTimingCheck<'a>,
+        PortTimingCheck<'a>,
+        RValue<'a>,
+        RValue<'a>,
+    ),
+    Alternative(
+        PortSpec<'a>,
+        PortSpec<'a>,
+        RValue<'a>,
+        RValue<'a>,
+        Option<SCond<'a>>,
+        Option<CCond<'a>>,
+    ),
+}
+
+pub struct SCond<'a> {
+    qstring: Option<QString<'a>>,
+    timing_check_condition: TimingCheckCondition<'a>,
+}
+pub struct CCond<'a> {
+    qstring: Option<QString<'a>>,
+    timing_check_condition: TimingCheckCondition<'a>,
+}
+
+pub struct SetupTimingCheck<'a> {
+    fst: PortTimingCheck<'a>,
+    snd: PortTimingCheck<'a>,
+    value: Value<'a>,
+}
+pub struct HoldTimingCheck<'a> {
+    fst: PortTimingCheck<'a>,
+    snd: PortTimingCheck<'a>,
+    value: Value<'a>,
+}
+pub struct SetupHoldTimingCheck<'a>(SetupHoldRecremArgs<'a>);
+
+pub struct RecoveryTimingCheck<'a> {
+    fst: PortTimingCheck<'a>,
+    snd: PortTimingCheck<'a>,
+    value: Value<'a>,
+}
+pub struct RemovalTimingCheck<'a> {
+    fst: PortTimingCheck<'a>,
+    snd: PortTimingCheck<'a>,
+    value: Value<'a>,
+}
+pub struct RecremTimingCheck<'a>(SetupHoldRecremArgs<'a>);
+pub struct SkewTimingCheck<'a> {
+    fst: PortTimingCheck<'a>,
+    snd: PortTimingCheck<'a>,
+    value: RValue<'a>,
+}
+pub struct BidirectSkewTimingCheck<'a> {
+    fst: PortTimingCheck<'a>,
+    snd: PortTimingCheck<'a>,
+    fst_value: Value<'a>,
+    snd_value: Value<'a>,
+}
+pub struct WidthTimingCheck<'a> {
+    port_tchk: PortTimingCheck<'a>,
+    value: Value<'a>,
+}
+pub struct PeriodTimingCheck<'a> {
+    port_tchk: PortTimingCheck<'a>,
+    value: Value<'a>,
+}
+pub struct NoChangeTimingCheck<'a> {
+    fst: PortTimingCheck<'a>,
+    snd: PortTimingCheck<'a>,
+    fst_rvalue: RValue<'a>,
+    snd_rvalue: RValue<'a>,
 }
 
 pub struct AbsoluteDelayType<'a> {
@@ -156,7 +275,7 @@ pub struct IoPathDef<'a> {
 }
 pub struct CondDef<'a> {
     qstring: Option<QString<'a>>,
-    conditional_port_expr: CondPortExpr<'a>,
+    conditional_port_expr: Expression<'a>,
     io_path: IoPathDef<'a>,
 }
 pub struct CondElseDef<'a>(IoPathDef<'a>);
@@ -178,38 +297,31 @@ pub struct DeviceDef<'a> {
     delval_list: DelValList<'a>,
 }
 
-pub enum CondPortExpr<'a> {
-    Parenthese(Box<CondPortExpr<'a>>),
-    Simple(Box<SimpleExpression<'a>>),
-    Unary(UnaryOp, Box<SimpleExpression<'a>>),
-    Binary(BinaryOp, Box<CondPortExpr<'a>>, Box<CondPortExpr<'a>>),
-}
-
-pub enum SimpleExpression<'a> {
-    Parenthese(Box<SimpleExpression<'a>>),
-    Unary(UnaryOp, Box<SimpleExpression<'a>>),
+// A merger of `conditional_port_expr` and `simple_expression`.
+pub enum Expression<'a> {
+    Parenthese(Box<Expression<'a>>),
+    Unary(UnaryOp, Box<Expression<'a>>),
     UnaryPort(UnaryOp, Port<'a>),
     UnaryScalar(UnaryOp, ScalarConstant),
     Port(Port<'a>),
     Scalar(ScalarConstant),
     Ternary(
-        Box<SimpleExpression<'a>>,
-        Box<SimpleExpression<'a>>,
-        Box<SimpleExpression<'a>>,
+        Box<Expression<'a>>,
+        Box<Expression<'a>>,
+        Box<Expression<'a>>,
     ),
-    Concat(Box<SimpleExpression<'a>>, Option<Box<SimpleExpression<'a>>>),
-    DoubleConcat(
-        Box<SimpleExpression<'a>>,
-        Box<SimpleExpression<'a>>,
-        Option<Box<SimpleExpression<'a>>>,
-    ),
+    Binary(BinaryOp, Box<Expression<'a>>, Box<Expression<'a>>),
+    Concat(Vec<Expression<'a>>),
+    Replicate(Box<Expression<'a>>, Vec<Expression<'a>>),
 }
 
+#[derive(Clone, Copy)]
 pub enum ScalarConstant {
     L0,
     L1,
 }
 
+#[derive(Clone, Copy)]
 pub enum UnaryOp {
     /// Arithmetic identity
     ArithmeticIdentity,
@@ -232,6 +344,55 @@ pub enum UnaryOp {
     /// Reduction unary NXOR
     ReductionXnor,
 }
+impl UnaryOp {
+    fn from_2_bytes(bs: [u8; 2]) -> Option<Self> {
+        Some(match bs[0] {
+            b'+' => Self::ArithmeticIdentity,
+            b'-' => Self::ArithmeticNegation,
+            b'!' => Self::LogicalNegation,
+            b'~' if bs[1] == b'&' => Self::ReductionNand,
+            b'~' if bs[1] == b'|' => Self::ReductionNor,
+            b'~' if bs[1] == b'^' => Self::ReductionXnor,
+            b'~' => Self::BitwiseUnaryNegation,
+            b'&' => Self::ReductionAnd,
+            b'|' => Self::ReductionOr,
+            b'^' if bs[1] == b'~' => Self::ReductionXnor,
+            b'^' => Self::ReductionXor,
+            _ => return None,
+        })
+    }
+
+    fn binding_power(self) -> u8 {
+        // @TODO: Correct
+        match self {
+            UnaryOp::ArithmeticIdentity => 1,
+            UnaryOp::ArithmeticNegation => 1,
+            UnaryOp::LogicalNegation => 1,
+            UnaryOp::BitwiseUnaryNegation => 1,
+            UnaryOp::ReductionAnd => 1,
+            UnaryOp::ReductionNand => 1,
+            UnaryOp::ReductionOr => 1,
+            UnaryOp::ReductionNor => 1,
+            UnaryOp::ReductionXor => 1,
+            UnaryOp::ReductionXnor => 1,
+        }
+    }
+
+    fn num_bytes(self) -> usize {
+        match self {
+            Self::ArithmeticIdentity
+            | Self::ArithmeticNegation
+            | Self::LogicalNegation
+            | Self::BitwiseUnaryNegation
+            | Self::ReductionAnd
+            | Self::ReductionOr
+            | Self::ReductionXor => 1,
+            Self::ReductionNand | Self::ReductionNor | Self::ReductionXnor => 2,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 pub enum BinaryOp {
     /// Arithmetic sum
     ArithmeticSum,
@@ -276,147 +437,171 @@ pub enum BinaryOp {
     /// Left shift
     LeftShift,
 }
+impl BinaryOp {
+    fn from_3_bytes(bs: [u8; 3]) -> Option<BinaryOp> {
+        Some(match (bs[0], bs[1], bs[2]) {
+            (b'+', _, _) => Self::ArithmeticSum,
+            (b'-', _, _) => Self::ArithmeticDifference,
+            (b'*', _, _) => Self::ArithmeticProduct,
+            (b'/', _, _) => Self::ArithmeticQuotient,
+            (b'%', _, _) => Self::Modulus,
+            (b'=', b'=', b'=') => Self::CaseEquality,
+            (b'=', b'=', _) => Self::LogicalEquality,
+            (b'!', b'=', _) => Self::LogicalInequality,
 
-impl<'a> Consume<'a> for SimpleExpression<'a> {
-    fn consume(
-        tkw: &mut TokenWalker<'a>,
-    ) -> Result<Self, Box<Error>> {
+            (b'&', b'&', _) => Self::LogicalAnd,
+            (b'|', b'|', _) => Self::LogicalOr,
+
+            (b'~', b'^', _) | (b'^', b'~', _) => Self::BitwiseEquiv,
+            (b'&', _, _) => Self::BitwiseAnd,
+            (b'|', _, _) => Self::BitwiseOr,
+            (b'^', _, _) => Self::BitwiseXor,
+
+            (b'<', b'<', _) => Self::LeftShift,
+            (b'>', b'>', _) => Self::RightShift,
+
+            (b'<', b'=', _) => Self::LessThanEqual,
+            (b'<', _, _) => Self::LessThan,
+            (b'>', b'=', _) => Self::GreaterThanEqual,
+            (b'>', _, _) => Self::GreaterThan,
+
+            _ => return None,
+        })
+    }
+
+    fn binding_power(self) -> (u8, u8) {
+        // @TODO: fill
+        (1, 1)
+    }
+
+    fn num_bytes(self) -> usize {
+        match self {
+            Self::ArithmeticSum
+            | Self::ArithmeticDifference
+            | Self::ArithmeticProduct
+            | Self::ArithmeticQuotient
+            | Self::Modulus
+            | Self::BitwiseAnd
+            | Self::BitwiseOr
+            | Self::BitwiseXor
+            | Self::LessThan
+            | Self::GreaterThan => 1,
+            Self::LogicalEquality
+            | Self::LogicalInequality
+            | Self::LogicalAnd
+            | Self::LogicalOr
+            | Self::BitwiseEquiv
+            | Self::LeftShift
+            | Self::RightShift
+            | Self::LessThanEqual
+            | Self::GreaterThanEqual => 2,
+            Self::CaseEquality | Self::CaseInequality => 3,
+        }
+    }
+}
+
+impl<'a> Consume<'a> for Expression<'a> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+        enum StackItem<'a> {
+            Paren,
+            BracketS1,
+            Concat(Vec<Expression<'a>>),
+            Replication(Box<Expression<'a>>, Vec<Expression<'a>>),
+            UnaryOp(UnaryOp),
+            Binary(BinaryOp, Box<Expression<'a>>),
+            TernaryS1(Box<Expression<'a>>),
+            TernaryS2(Box<Expression<'a>>, Box<Expression<'a>>),
+        }
+
         let mut exprs_sp = Vec::new();
 
         let mut min_bp: u8 = 0;
-        let mut current: SimpleExpression<'a>;
+        let mut current: Expression<'a>;
 
         let result = 'outer: loop {
             macro_rules! deepen {
-                ($item:expr, $bp:expr, $span:expr) => {{
-                    exprs_sp.push(($item, min_bp, $span));
+                ($item:expr, $bp:expr) => {{
+                    exprs_sp.push(($item, min_bp));
                     min_bp = $bp;
                     continue 'outer;
                 }};
             }
 
-            let token = tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?;
-            let span = TokenRange {
-                start: tkw.offset,
-                end: tkw.offset + 1,
-            };
             current = {
-                match token.kind {
-                    T::Ident => {
-                        let ident = HIdent::consume(
-                            tkw,
-                            // We cannot reuse the exprs_sp
-                            &mut ParserScratches {
-                                udps: VgHashSet::default(),
-                                exprs_sp: Vec::new(),
-                            },
-                            arenas,
-                            ast,
-                            diagnostics.as_deref_mut(),
-                        )?;
+                tkw.skip_whitespace();
+                let Some(c) = tkw.peek_char() else {
+                    return Err(Box::new(Error {
+                        line: tkw.line,
+                        msg: "missing expression".to_string(),
+                    }));
+                };
+                match c {
+                    // ( simple expression )
+                    b'(' => {
+                        tkw.offset += 1;
+                        deepen!(StackItem::Paren, 0);
+                    }
 
-                        if tkw.next_if_equals(T::LeftBrace) {
-                            deepen!(StackItem::Brace(ident, Vec::new(), Vec::new()), 0, span)
-                        } else if tkw.next_if_equals(T::LeftParen) {
-                            deepen!(StackItem::FnCall(ident, Vec::new(), Vec::new()), 0, span)
-                        } else {
-                            (Expr::Ident(ident, AstIdRange::default(), None), span)
+                    // unary_operator ( simple expression )
+                    // unary_operator port
+                    // unary_operator scalar_constant
+                    _ if UnaryOp::from_2_bytes(tkw.fill_bytes::<2>()).is_some() => {
+                        let op = UnaryOp::from_2_bytes(tkw.fill_bytes::<2>()).unwrap();
+                        tkw.offset += op.num_bytes();
+                        tkw.skip_whitespace();
+                        match tkw.peek_char() {
+                            Some(b'(') => {
+                                tkw.offset += 1;
+                                let bp = op.binding_power();
+                                deepen!(StackItem::UnaryOp(op), bp);
+                            }
+                            Some(b'0' | b'1' | b'\'') => {
+                                let sc = ScalarConstant::consume(tkw)?;
+                                Self::UnaryScalar(op, sc)
+                            }
+                            Some(_) => {
+                                let port = Port::consume(tkw)?;
+                                Self::UnaryPort(op, port)
+                            }
+                            None => {
+                                return Err(Box::new(Error {
+                                    line: tkw.line,
+                                    msg: "missing character".to_string(),
+                                }));
+                            }
                         }
                     }
-                    T::DollarIdent => {
-                        let ident = item_parse::<SystemTaskIdentifier>(
-                            tkw,
-                            sc,
-                            arenas,
-                            ast,
-                            diagnostics.as_deref_mut(),
-                        )?;
 
-                        if tkw.next_if_equals(T::LeftParen) {
-                            if tkw.next_if_equals(T::RightParen) {
-                                (
-                                    Expr::SystemFunctionCall(ident, Some(AstIdRange::default())),
-                                    span,
-                                )
-                            } else {
-                                deepen!(
-                                    StackItem::SystemFnCall(ident, Vec::new(), Vec::new()),
-                                    0,
-                                    span
-                                )
-                            }
-                        } else {
-                            (Expr::SystemFunctionCall(ident, None), span)
-                        }
+                    // scalar_constant
+                    b'0' | b'1' | b'\'' => {
+                        let sc = ScalarConstant::consume(tkw)?;
+                        Self::Scalar(sc)
                     }
-                    T::Decimal => (
-                        Expr::Decimal(
-                            item_parse::<DecimalRef>(
-                                tkw,
-                                sc,
-                                arenas,
-                                ast,
-                                diagnostics.as_deref_mut(),
-                            )?
-                            .item,
-                        ),
-                        span,
-                    ),
-                    T::Number => (
-                        Expr::Sized(item_parse::<SizedNumberRef>(
-                            tkw,
-                            sc,
-                            arenas,
-                            ast,
-                            diagnostics.as_deref_mut(),
-                        )?),
-                        span,
-                    ),
-                    T::String => (
-                        Expr::String(
-                            item_parse::<StringRef>(
-                                tkw,
-                                sc,
-                                arenas,
-                                ast,
-                                diagnostics.as_deref_mut(),
-                            )?
-                            .item,
-                        ),
-                        span,
-                    ),
-                    T::LeftBracket => {
+
+                    // { simple_expression [ concat_expression ] }
+                    // { simple_expression { simple_expression [ concat_expression ] } }
+                    b'{' => {
                         tkw.offset += 1;
-                        deepen!(StackItem::Bracket, 0, span)
+                        deepen!(StackItem::BracketS1, 0);
                     }
-                    T::LeftParen => {
-                        tkw.offset += 1;
-                        deepen!(StackItem::Paren, 0, span)
-                    }
-                    t => {
-                        let t = *t;
-                        tkw.next();
-                        let (r_bp, op) = token_to_prefix_op(t).ok_or_else(|| {
-                            if let Some(diagnostics) = diagnostics.as_deref_mut() {
-                                diagnostics
-                                    .errors
-                                    .push((span, ParseErrorReason::UnexpectedToken(t)));
-                            }
-                            ()
-                        })?;
-                        deepen!(StackItem::Unary(op), r_bp, span);
+
+                    // port
+                    _ => {
+                        let port = Port::consume(tkw)?;
+                        Self::Port(port)
                     }
                 }
             };
 
             loop {
                 loop {
-                    let Some(peeked) = tkw.get(tkw.offset) else {
+                    tkw.skip_whitespace();
+                    let Some(c) = tkw.peek_char() else {
                         break;
                     };
 
                     // Ternary operator ( ... ? ... : ... )
-                    if *peeked.kind == T::QuestionMark {
+                    if c == b'?' {
                         let (l_bp, r_bp) = (2, 1);
 
                         if l_bp < min_bp {
@@ -424,226 +609,97 @@ impl<'a> Consume<'a> for SimpleExpression<'a> {
                         }
 
                         tkw.offset += 1;
-                        let span = current.1;
-                        let condition = push(arenas, ast, current.0, current.1);
-                        deepen!(StackItem::TernaryS1(condition), r_bp, span);
+                        let condition = Box::new(current);
+                        deepen!(StackItem::TernaryS1(condition), r_bp);
                     }
 
-                    let Some((l_bp, r_bp, op)) = token_to_binary_op(*peeked.kind) else {
+                    let Some(op) = BinaryOp::from_3_bytes(tkw.fill_bytes::<3>()) else {
                         break;
                     };
+                    tkw.offset += op.num_bytes();
+
+                    let (l_bp, r_bp) = op.binding_power();
 
                     if l_bp < min_bp {
                         break;
                     }
 
                     tkw.offset += 1;
-                    let span = current.1;
-                    let lhs = push(arenas, ast, current.0, current.1);
-                    deepen!(StackItem::Binary(op, lhs), r_bp, span);
+                    let lhs = Box::new(current);
+                    deepen!(StackItem::Binary(op, lhs), r_bp);
                 }
 
-                let Some((item, bp, loc)) = sc.exprs_sp.pop() else {
+                let Some((item, bp)) = exprs_sp.pop() else {
                     break 'outer current;
-                };
-
-                let location = TokenRange {
-                    start: loc.start,
-                    end: current.1.end,
                 };
 
                 match item {
                     StackItem::Paren => {
-                        tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
+                        tkw.skip_whitespace();
+                        tkw.expect_char(b')')?;
                     }
-                    StackItem::Bracket => match *tkw.try_next(diagnostics.as_deref_mut())?.kind {
-                        T::RightBracket => {
-                            let expr = push(arenas, ast, current.0, current.1);
-                            let expr = AstIdRange::single(expr);
-                            current = (Expr::Concatenation(expr), location);
-                        }
-                        T::Comma => {
-                            deepen!(
-                                StackItem::Concatenation(vec![current.0], vec![current.1]),
-                                0,
-                                loc
-                            );
-                        }
-                        T::LeftBracket => {
-                            let expr = push(arenas, ast, current.0, current.1);
-                            let expr = expr.into_constant();
-                            deepen!(StackItem::Replication(expr, Vec::new(), Vec::new()), 0, loc);
-                        }
-                        t => {
-                            diagnostics.map(|d| d.unexpected_token(tkw.offset, t));
-                            return Err(());
-                        }
-                    },
-                    StackItem::Concatenation(mut exprs, mut trs) => {
-                        exprs.push(current.0);
-                        trs.push(current.1);
-                        match *tkw.try_next(diagnostics.as_deref_mut())?.kind {
-                            T::RightBracket => {
-                                let exprs = push_range(arenas, ast, exprs, trs);
-                                current = (Expr::Concatenation(exprs), location);
-                            }
-                            T::Comma => {
-                                deepen!(StackItem::Concatenation(exprs, trs), 0, loc);
-                            }
-                            t => {
-                                diagnostics.map(|d| d.unexpected_token(tkw.offset, t));
-                                return Err(());
-                            }
-                        }
-                    }
-                    StackItem::Replication(constant_expr, mut exprs, mut trs) => {
-                        exprs.push(current.0);
-                        trs.push(current.1);
-                        match *tkw.try_next(diagnostics.as_deref_mut())?.kind {
-                            T::RightBracket => {
-                                tkw.next_expect(T::RightBracket, diagnostics.as_deref_mut())?;
-                                let exprs = push_range(arenas, ast, exprs, trs);
-                                current = (
-                                    Expr::Replication(Replication {
-                                        constant_expr,
-                                        exprs,
-                                    }),
-                                    location,
-                                );
-                            }
-                            T::Comma => {
-                                deepen!(StackItem::Replication(constant_expr, exprs, trs), 0, loc);
-                            }
-                            t => {
-                                diagnostics.map(|d| d.unexpected_token(tkw.offset, t));
-                                return Err(());
-                            }
-                        }
-                    }
-                    StackItem::Brace(ident, mut current_braced, mut current_trs) => {
-                        match *tkw.try_next(diagnostics.as_deref_mut())?.kind {
-                            T::RightBrace => {
-                                current_braced.push(current.0);
-                                current_trs.push(current.1);
-                                if tkw.next_if_equals(T::LeftBrace) {
-                                    deepen!(
-                                        StackItem::Brace(ident, current_braced, current_trs),
-                                        0,
-                                        loc
-                                    );
-                                } else {
-                                    let braced =
-                                        push_range(arenas, ast, current_braced, current_trs);
-                                    current = (Expr::Ident(ident, braced, None), location)
-                                }
-                            }
-                            T::Colon => {
-                                let exprs = push_range(arenas, ast, current_braced, current_trs);
-                                let braced = push(arenas, ast, current.0, current.1);
-                                deepen!(
-                                    StackItem::BraceS2(ident, exprs, braced, BraceVariant::MsbLsb),
-                                    0,
-                                    loc
-                                );
-                            }
-                            T::PlusColon => {
-                                let exprs = push_range(arenas, ast, current_braced, current_trs);
-                                let braced = push(arenas, ast, current.0, current.1);
-                                deepen!(
-                                    StackItem::BraceS2(
-                                        ident,
-                                        exprs,
-                                        braced,
-                                        BraceVariant::BasePlus
-                                    ),
-                                    0,
-                                    loc
-                                );
-                            }
-                            T::MinusColon => {
-                                let exprs = push_range(arenas, ast, current_braced, current_trs);
-                                let braced = push(arenas, ast, current.0, current.1);
-                                deepen!(
-                                    StackItem::BraceS2(
-                                        ident,
-                                        exprs,
-                                        braced,
-                                        BraceVariant::BaseMinus
-                                    ),
-                                    0,
-                                    loc
-                                );
-                            }
-                            t => {
-                                diagnostics.map(|d| d.unexpected_token(tkw.offset - 1, t));
-                                return Err(());
-                            }
-                        }
-                    }
-                    StackItem::BraceS2(subject, exprs, lhs, variant) => {
-                        let rhs = push(arenas, ast, current.0, current.1);
-                        let bit_slice = match variant {
-                            BraceVariant::MsbLsb => {
-                                BitSlice::MsbLsb(lhs.into_constant(), rhs.into_constant())
-                            }
-                            BraceVariant::BasePlus => BitSlice::PlusWidth(lhs, rhs.into_constant()),
-                            BraceVariant::BaseMinus => {
-                                BitSlice::MinusWidth(lhs, rhs.into_constant())
-                            }
-                        };
-                        tkw.next_expect(T::RightBrace, diagnostics.as_deref_mut())?;
-                        current = (Expr::Ident(subject, exprs, Some(bit_slice)), location);
-                    }
-                    StackItem::SystemFnCall(ident, mut params, mut trs) => {
-                        params.push(current.0);
-                        trs.push(current.1);
-                        match *tkw.try_next(diagnostics.as_deref_mut())?.kind {
-                            T::RightParen => {
-                                let params = push_range(arenas, ast, params, trs);
-                                current = (Expr::SystemFunctionCall(ident, Some(params)), location);
-                            }
-                            T::Comma => {
-                                deepen!(StackItem::SystemFnCall(ident, params, trs), 0, location)
-                            }
-                            t => {
-                                diagnostics.map(|d| d.unexpected_token(tkw.offset - 1, t));
-                                return Err(());
-                            }
-                        }
-                    }
-                    StackItem::FnCall(ident, mut params, mut trs) => {
-                        params.push(current.0);
-                        trs.push(current.1);
-                        match *tkw.try_next(diagnostics.as_deref_mut())?.kind {
-                            T::RightParen => {
-                                let params = push_range(arenas, ast, params, trs);
-                                current = (Expr::FunctionCall(ident, params), location);
-                            }
-                            T::Comma => {
-                                deepen!(StackItem::FnCall(ident, params, trs), 0, location)
-                            }
-                            t => {
-                                diagnostics.map(|d| d.unexpected_token(tkw.offset - 1, t));
-                                return Err(());
-                            }
-                        }
-                    }
-                    StackItem::Unary(op) => {
-                        let subexpr = push(arenas, ast, current.0, current.1);
-                        current = (Expr::Unary(op, subexpr), location)
+                    StackItem::UnaryOp(op) => {
+                        tkw.skip_whitespace();
+                        tkw.expect_char(b')')?;
+                        current = Expression::Unary(op, Box::new(current));
                     }
                     StackItem::Binary(op, lhs) => {
-                        let rhs = push(arenas, ast, current.0, current.1);
-                        current = (Expr::Binary(op, lhs, rhs), location)
+                        let rhs = Box::new(current);
+                        current = Expression::Binary(op, lhs, rhs);
+                    }
+                    StackItem::BracketS1 => {
+                        tkw.skip_whitespace();
+                        match tkw.next_expect()? {
+                            b'}' => current = Expression::Concat(vec![current]),
+                            b',' => deepen!(StackItem::Concat(vec![current]), 0),
+                            b'{' => {
+                                deepen!(StackItem::Replication(Box::new(current), Vec::new()), 0)
+                            }
+                            _ => {
+                                return Err(Box::new(Error {
+                                    line: tkw.line,
+                                    msg: "unexpected token".to_string(),
+                                }));
+                            }
+                        }
+                    }
+                    StackItem::Concat(mut exprs) => {
+                        exprs.push(current);
+                        tkw.skip_whitespace();
+                        match tkw.next_expect()? {
+                            b'}' => current = Expression::Concat(exprs),
+                            b',' => deepen!(StackItem::Concat(exprs), 0),
+                            _ => {
+                                return Err(Box::new(Error {
+                                    line: tkw.line,
+                                    msg: "unexpected token".to_string(),
+                                }));
+                            }
+                        }
+                    }
+                    StackItem::Replication(sexpr, mut exprs) => {
+                        exprs.push(current);
+                        tkw.skip_whitespace();
+                        match tkw.next_expect()? {
+                            b'}' => current = Expression::Replicate(sexpr, exprs),
+                            b',' => deepen!(StackItem::Replication(sexpr, exprs), 0),
+                            _ => {
+                                return Err(Box::new(Error {
+                                    line: tkw.line,
+                                    msg: "unexpected token".to_string(),
+                                }));
+                            }
+                        }
                     }
                     StackItem::TernaryS1(condition) => {
-                        tkw.next_expect(T::Colon, diagnostics.as_deref_mut())?;
-                        let truthy = push(arenas, ast, current.0, current.1);
-                        deepen!(StackItem::TernaryS2(condition, truthy), bp, loc);
+                        tkw.skip_whitespace();
+                        tkw.expect_char(b':')?;
+                        let truthy = Box::new(current);
+                        deepen!(StackItem::TernaryS2(condition, truthy), bp);
                     }
                     StackItem::TernaryS2(condition, truthy) => {
-                        let falsy = push(arenas, ast, current.0, current.1);
-                        current = (Expr::Ternary(condition, truthy, falsy), location)
+                        let falsy = Box::new(current);
+                        current = Expression::Ternary(condition, truthy, falsy);
                     }
                 }
 
@@ -651,7 +707,34 @@ impl<'a> Consume<'a> for SimpleExpression<'a> {
             }
         };
 
-        Ok(result.0)
+        Ok(result)
+    }
+}
+
+impl<'a> Consume<'a> for ScalarConstant {
+    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+        tkw.skip_whitespace();
+        match tkw.next_expect()? {
+            b'0' => return Ok(Self::L0),
+            b'1' if tkw.next_if_equals(b'\'') => {}
+            b'1' => return Ok(Self::L1),
+            b'\'' => {}
+            _ => {
+                return Err(Box::new(Error {
+                    line: tkw.line,
+                    msg: "expected one of '0', '1' or '''".to_string(),
+                }));
+            }
+        }
+
+        tkw.expect_char_matches(|b| matches!(b, b'b' | b'B'))?;
+        Ok(
+            if tkw.expect_char_matches(|b| matches!(b, b'1' | b'0'))? == b'1' {
+                Self::L1
+            } else {
+                Self::L0
+            },
+        )
     }
 }
 
@@ -846,6 +929,11 @@ impl<'a> TokenWalker<'a> {
         Some(*c)
     }
 
+    pub fn peek_char(&mut self) -> Option<u8> {
+        let c = self.content.as_bytes().get(self.offset)?;
+        Some(*c)
+    }
+
     pub fn does_next_char_match(&self, mut f: impl FnMut(u8) -> bool) -> bool {
         self.content
             .as_bytes()
@@ -874,7 +962,7 @@ impl<'a> TokenWalker<'a> {
         self.offset += 1;
         Ok(())
     }
-    pub fn expect_char_matches(&mut self, mut f: impl FnMut(u8) -> bool) -> Result<(), Box<Error>> {
+    pub fn expect_char_matches(&mut self, mut f: impl FnMut(u8) -> bool) -> Result<u8, Box<Error>> {
         let Some(&b) = self.content.as_bytes().get(self.offset) else {
             return Err(Box::new(Error {
                 line: self.line,
@@ -882,7 +970,7 @@ impl<'a> TokenWalker<'a> {
             }));
         };
         if f(b) {
-            Ok(())
+            Ok(b)
         } else {
             return Err(Box::new(Error {
                 line: self.line,
@@ -936,6 +1024,28 @@ impl<'a> TokenWalker<'a> {
 
     pub fn skip_whitespace(&mut self) {
         self.skip_while(|b| matches!(b, b' ' | b'\t' | b'\n' | b'\r'));
+    }
+
+    fn next_expect(&mut self) -> Result<u8, Box<Error>> {
+        let Some(v) = self.next_char() else {
+            return Err(Box::new(Error {
+                line: self.line,
+                msg: "missing character".to_string(),
+            }));
+        };
+        Ok(v)
+    }
+
+    fn fill_bytes<const N: usize>(&self) -> [u8; N] {
+        let mut i = 0;
+        let mut out = [0u8; N];
+        while i < N
+            && let Some(&b) = self.content.as_bytes().get(self.offset + i)
+        {
+            out[i] = b;
+            i += 1;
+        }
+        out
     }
 }
 
@@ -1299,20 +1409,15 @@ impl<'a> Consume<'a> for Cell<'a> {
         tkw.skip_whitespace();
         tkw.expect_char(b'(')?;
 
-        dbg!(tkw.peek_content());
         tkw.skip_whitespace();
         tkw.expect_ident("CELL")?;
 
-        dbg!(tkw.peek_content());
         let celltype = parse_param::<QString<'a>>(tkw, "CELLTYPE")?;
-        dbg!(tkw.peek_content());
         let instance = parse_param::<Instance<'a>>(tkw, "INSTANCE")?;
-        dbg!(tkw.peek_content());
         let mut timing_specs = Vec::new();
 
         loop {
             tkw.skip_whitespace();
-            dbg!(tkw.peek_content());
             if tkw.is_next_equal_to(b')') {
                 break;
             }
@@ -1320,7 +1425,6 @@ impl<'a> Consume<'a> for Cell<'a> {
             let timing_spec = TimingSpec::consume(tkw)?;
             timing_specs.push(timing_spec);
         }
-        dbg!(tkw.peek_content());
 
         tkw.skip_whitespace();
         tkw.expect_char(b')')?;
@@ -1345,9 +1449,12 @@ impl<'a> Consume<'a> for TimingSpec<'a> {
                 tkw.restore_checkpoint(checkpoint);
                 Self::Delay(DelaySpec::consume(tkw)?)
             }
-            Some("TIMINGCHECK") => todo!(), //Self::TimingCheck(TimingCheckSpec::consume(tkw)?),
-            Some("TIMINGENV") => todo!(),   //Self::TimingEnv(TimingEnvSpec::consume(tkw)?),
-            Some("LABEL") => todo!(),       //Self::Label(LabelSpec::consume(tkw)?),
+            Some("TIMINGCHECK") => {
+                tkw.restore_checkpoint(checkpoint);
+                Self::TimingCheck(TimingCheckSpec::consume(tkw)?)
+            }
+            Some("TIMINGENV") => todo!(), //Self::TimingEnv(TimingEnvSpec::consume(tkw)?),
+            Some("LABEL") => todo!(),     //Self::Label(LabelSpec::consume(tkw)?),
             Some(name) => {
                 return Err(Box::new(Error {
                     line: tkw.line,
@@ -1419,7 +1526,6 @@ impl<'a> Consume<'a> for DelayFile<'a> {
                     break;
                 }
 
-                dbg!(tkw.peek_content());
                 let cell = Cell::consume(tkw)?;
                 cells.push(cell);
             }
@@ -1615,7 +1721,7 @@ impl<'a> Consume<'a> for CondDef<'a> {
                 None
             };
             tkw.skip_whitespace();
-            let conditional_port_expr = CondPortExpr::consume(tkw)?;
+            let conditional_port_expr = Expression::consume(tkw)?;
 
             tkw.skip_whitespace();
             let io_path = IoPathDef::consume(tkw)?;
@@ -1699,6 +1805,26 @@ impl<'a> Consume<'a> for Integer<'a> {
         let start = tkw.offset - 1;
         tkw.skip_while(|b| b.is_ascii_digit());
         Ok(Self(&tkw.content[start..tkw.offset]))
+    }
+}
+
+impl<'a> Consume<'a> for Port<'a> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+        let hident = HierarchicalIdent::consume(tkw)?;
+        let mut b1 = None;
+        let mut b2 = None;
+        if tkw.next_if_equals(b'[') {
+            tkw.skip_whitespace();
+            b1 = Some(Integer::consume(tkw)?);
+            tkw.skip_whitespace();
+            if tkw.next_if_equals(b':') {
+                tkw.skip_whitespace();
+                b2 = Some(Integer::consume(tkw)?);
+                tkw.skip_whitespace();
+            }
+            tkw.expect_char(b']')?;
+        }
+        Ok(Self { hident, b1, b2 })
     }
 }
 
@@ -1790,6 +1916,26 @@ impl<'a> Consume<'a> for DelaySpec<'a> {
                     break;
                 }
                 let item = DelayType::consume(tkw)?;
+                items.push(item);
+            }
+
+            Ok(Self { items })
+        })
+    }
+}
+impl<'a> Consume<'a> for TimingCheckSpec<'a> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+        parse_param_with(tkw, "TIMINGCHECK", |tkw| {
+            let mut items = Vec::new();
+            let value = TimingCheckDef::consume(tkw)?;
+            items.push(value);
+
+            loop {
+                tkw.skip_whitespace();
+                if tkw.is_next_equal_to(b')') {
+                    break;
+                }
+                let item = TimingCheckDef::consume(tkw)?;
                 items.push(item);
             }
 
@@ -1955,23 +2101,340 @@ impl<'a> Consume<'a> for PathPulsePercentType<'a> {
     }
 }
 
-impl<'a> Consume<'a> for CondPortExpr<'a> {
+impl<'a> Consume<'a> for PortTimingCheck<'a> {
     fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
-        let start = tkw.offset;
+        let checkpoint = tkw.checkpoint();
         if tkw.next_if_equals(b'(') {
-        } else {
-            let mut count = 0;
-            tkw.skip_while(|b| {
-                if matches!(b, b'(') && count == 0 {
-                    return false;
-                }
-                count += usize::from(matches!(b, b'('));
-                count -= usize::from(matches!(b, b')'));
-                true
-            });
-            tkw.expect_char(b')')?;
+            tkw.skip_whitespace();
+            if tkw.next_ident() == Some("COND") {
+                tkw.restore_checkpoint(checkpoint);
+
+                return parse_param_with(tkw, "COND", |tkw| {
+                    let qstring = if tkw.is_next_equal_to(b'"') {
+                        Some(QString::consume(tkw)?)
+                    } else {
+                        None
+                    };
+                    tkw.skip_whitespace();
+                    let timing_check_condition = TimingCheckCondition::consume(tkw)?;
+
+                    tkw.skip_whitespace();
+                    let port_spec = PortSpec::consume(tkw)?;
+                    Ok(Self::Cond(qstring, timing_check_condition, port_spec))
+                });
+            }
         }
-        let end = tkw.offset;
-        Ok(Self(&tkw.content[start..end]))
+
+        tkw.restore_checkpoint(checkpoint);
+        Ok(Self::PortSpec(PortSpec::consume(tkw)?))
+    }
+}
+
+impl<'a> Consume<'a> for TimingCheckCondition<'a> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+        if tkw.next_if_matches(|b| matches!(b, b'!' | b'~')) {
+            tkw.skip_whitespace();
+            let scalar_node = ScalarNode::consume(tkw)?;
+            Ok(Self {
+                scalar_node,
+                variant: TimingCheckConditionVariant::Inversion,
+            })
+        } else {
+            let scalar_node = ScalarNode::consume(tkw)?;
+            tkw.skip_whitespace();
+            let bs = tkw.fill_bytes::<3>();
+            let operator = if &bs == b"===" {
+                tkw.offset += 3;
+                EqualityOperator::CaseEquality
+            } else if &bs == b"!==" {
+                tkw.offset += 3;
+                EqualityOperator::CaseInequality
+            } else if &bs[..2] == b"==" {
+                tkw.offset += 2;
+                EqualityOperator::LogicalEquality
+            } else if &bs[..2] == b"!=" {
+                tkw.offset += 2;
+                EqualityOperator::LogicalInequality
+            } else {
+                return Ok(Self {
+                    scalar_node,
+                    variant: TimingCheckConditionVariant::Plain,
+                });
+            };
+            tkw.skip_whitespace();
+            let constant = ScalarConstant::consume(tkw)?;
+            Ok(Self {
+                scalar_node,
+                variant: TimingCheckConditionVariant::Equality(operator, constant),
+            })
+        }
+    }
+}
+
+impl<'a> Consume<'a> for ScalarNode<'a> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+        let hident = HierarchicalIdent::consume(tkw)?;
+        tkw.skip_whitespace();
+        let mut offset = None;
+        if tkw.next_if_equals(b'[') {
+            offset = Some(Integer::consume(tkw)?);
+            tkw.expect_char(b']')?;
+        }
+        Ok(Self { hident, offset })
+    }
+}
+
+impl<'a> Consume<'a> for TimingCheckDef<'a> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+        tkw.skip_whitespace();
+        let checkpoint = tkw.checkpoint();
+        tkw.expect_char(b'(')?;
+
+        tkw.skip_whitespace();
+        let ident = tkw.next_ident();
+        tkw.restore_checkpoint(checkpoint);
+        Ok(match ident {
+            Some("SETUP") => Self::Setup(SetupTimingCheck::consume(tkw)?),
+            Some("HOLD") => Self::Hold(HoldTimingCheck::consume(tkw)?),
+            Some("SETUPHOLD") => Self::SetupHold(SetupHoldTimingCheck::consume(tkw)?),
+            Some("RECOVERY") => Self::Recovery(RecoveryTimingCheck::consume(tkw)?),
+            Some("REMOVAL") => Self::Removal(RemovalTimingCheck::consume(tkw)?),
+            Some("RECREM") => Self::Recrem(RecremTimingCheck::consume(tkw)?),
+            Some("SKEW") => Self::Skew(SkewTimingCheck::consume(tkw)?),
+            Some("BIDIRECTSKEW") => Self::BidirectSkew(BidirectSkewTimingCheck::consume(tkw)?),
+            Some("WIDTH") => Self::Width(WidthTimingCheck::consume(tkw)?),
+            Some("PERIOD") => Self::Period(PeriodTimingCheck::consume(tkw)?),
+            Some("NOCHANGE") => Self::NoChange(NoChangeTimingCheck::consume(tkw)?),
+            _ => {
+                return Err(Box::new(Error {
+                    line: tkw.line,
+                    msg: format!("unknown delay type"),
+                }));
+            }
+        })
+    }
+}
+
+impl<'a> Consume<'a> for SetupTimingCheck<'a> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+        parse_param_with(tkw, "SETUP", |tkw| {
+            let fst = PortTimingCheck::consume(tkw)?;
+            tkw.skip_whitespace();
+            let snd = PortTimingCheck::consume(tkw)?;
+            tkw.skip_whitespace();
+            let value = Value::consume(tkw)?;
+            Ok(Self { fst, snd, value })
+        })
+    }
+}
+impl<'a> Consume<'a> for HoldTimingCheck<'a> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+        parse_param_with(tkw, "HOLD", |tkw| {
+            let fst = PortTimingCheck::consume(tkw)?;
+            tkw.skip_whitespace();
+            let snd = PortTimingCheck::consume(tkw)?;
+            tkw.skip_whitespace();
+            let value = Value::consume(tkw)?;
+            Ok(Self { fst, snd, value })
+        })
+    }
+}
+impl<'a> Consume<'a> for SetupHoldTimingCheck<'a> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+        parse_param_with(tkw, "SETUPHOLD", |tkw| {
+            Ok(Self(SetupHoldRecremArgs::consume(tkw)?))
+        })
+    }
+}
+impl<'a> Consume<'a> for RecoveryTimingCheck<'a> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+        parse_param_with(tkw, "RECOVERY", |tkw| {
+            let fst = PortTimingCheck::consume(tkw)?;
+            tkw.skip_whitespace();
+            let snd = PortTimingCheck::consume(tkw)?;
+            tkw.skip_whitespace();
+            let value = Value::consume(tkw)?;
+            Ok(Self { fst, snd, value })
+        })
+    }
+}
+impl<'a> Consume<'a> for RemovalTimingCheck<'a> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+        parse_param_with(tkw, "REMOVAL", |tkw| {
+            let fst = PortTimingCheck::consume(tkw)?;
+            tkw.skip_whitespace();
+            let snd = PortTimingCheck::consume(tkw)?;
+            tkw.skip_whitespace();
+            let value = Value::consume(tkw)?;
+            Ok(Self { fst, snd, value })
+        })
+    }
+}
+impl<'a> Consume<'a> for RecremTimingCheck<'a> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+        parse_param_with(tkw, "RECREM", |tkw| {
+            Ok(Self(SetupHoldRecremArgs::consume(tkw)?))
+        })
+    }
+}
+impl<'a> Consume<'a> for SkewTimingCheck<'a> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+        parse_param_with(tkw, "SKEW", |tkw| {
+            let fst = PortTimingCheck::consume(tkw)?;
+            tkw.skip_whitespace();
+            let snd = PortTimingCheck::consume(tkw)?;
+            tkw.skip_whitespace();
+            let value = RValue::consume(tkw)?;
+            Ok(Self { fst, snd, value })
+        })
+    }
+}
+impl<'a> Consume<'a> for BidirectSkewTimingCheck<'a> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+        parse_param_with(tkw, "BIDIRECTSKEW", |tkw| {
+            let fst = PortTimingCheck::consume(tkw)?;
+            tkw.skip_whitespace();
+            let snd = PortTimingCheck::consume(tkw)?;
+            tkw.skip_whitespace();
+            let fst_value = Value::consume(tkw)?;
+            tkw.skip_whitespace();
+            let snd_value = Value::consume(tkw)?;
+            Ok(Self {
+                fst,
+                snd,
+                fst_value,
+                snd_value,
+            })
+        })
+    }
+}
+impl<'a> Consume<'a> for WidthTimingCheck<'a> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+        parse_param_with(tkw, "WIDTH", |tkw| {
+            let port_tchk = PortTimingCheck::consume(tkw)?;
+            tkw.skip_whitespace();
+            let value = Value::consume(tkw)?;
+            Ok(Self { port_tchk, value })
+        })
+    }
+}
+impl<'a> Consume<'a> for PeriodTimingCheck<'a> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+        parse_param_with(tkw, "PERIOD", |tkw| {
+            let port_tchk = PortTimingCheck::consume(tkw)?;
+            tkw.skip_whitespace();
+            let value = Value::consume(tkw)?;
+            Ok(Self { port_tchk, value })
+        })
+    }
+}
+impl<'a> Consume<'a> for NoChangeTimingCheck<'a> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+        parse_param_with(tkw, "NOCHANGE", |tkw| {
+            let fst = PortTimingCheck::consume(tkw)?;
+            tkw.skip_whitespace();
+            let snd = PortTimingCheck::consume(tkw)?;
+            tkw.skip_whitespace();
+            let fst_rvalue = RValue::consume(tkw)?;
+            tkw.skip_whitespace();
+            let snd_rvalue = RValue::consume(tkw)?;
+            Ok(Self {
+                fst,
+                snd,
+                fst_rvalue,
+                snd_rvalue,
+            })
+        })
+    }
+}
+
+impl<'a> Consume<'a> for SCond<'a> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+        parse_param_with(tkw, "SCOND", |tkw| {
+            let qstring = if tkw.is_next_equal_to(b'"') {
+                Some(QString::consume(tkw)?)
+            } else {
+                None
+            };
+            tkw.skip_whitespace();
+            let timing_check_condition = TimingCheckCondition::consume(tkw)?;
+            Ok(Self {
+                qstring,
+                timing_check_condition,
+            })
+        })
+    }
+}
+impl<'a> Consume<'a> for CCond<'a> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+        parse_param_with(tkw, "CCOND", |tkw| {
+            let qstring = if tkw.is_next_equal_to(b'"') {
+                Some(QString::consume(tkw)?)
+            } else {
+                None
+            };
+            tkw.skip_whitespace();
+            let timing_check_condition = TimingCheckCondition::consume(tkw)?;
+            Ok(Self {
+                qstring,
+                timing_check_condition,
+            })
+        })
+    }
+}
+
+impl<'a> Consume<'a> for SetupHoldRecremArgs<'a> {
+    fn consume(tkw: &mut TokenWalker<'a>) -> Result<Self, Box<Error>> {
+        let fst = PortTimingCheck::consume(tkw)?;
+        tkw.skip_whitespace();
+        let snd = PortTimingCheck::consume(tkw)?;
+        tkw.skip_whitespace();
+        let fst_rvalue = RValue::consume(tkw)?;
+        tkw.skip_whitespace();
+        let snd_rvalue = RValue::consume(tkw)?;
+        tkw.skip_whitespace();
+        let checkpoint = tkw.checkpoint();
+        if tkw.next_if_equals(b'(') {
+            let mut scond = None;
+            let mut ccond = None;
+
+            let PortTimingCheck::PortSpec(fst) = fst else {
+                return Err(Box::new(Error {
+                    line: tkw.line,
+                    msg: "expected port spec here".to_string(),
+                }));
+            };
+            let PortTimingCheck::PortSpec(snd) = snd else {
+                return Err(Box::new(Error {
+                    line: tkw.line,
+                    msg: "expected port spec here".to_string(),
+                }));
+            };
+
+            tkw.skip_whitespace();
+            if tkw.next_ident() == Some("SCOND") {
+                tkw.restore_checkpoint(checkpoint);
+                scond = Some(SCond::consume(tkw)?);
+
+                tkw.skip_whitespace();
+                if tkw.is_next_equal_to(b'(') {
+                    ccond = Some(CCond::consume(tkw)?);
+                }
+            } else if tkw.next_ident() == Some("CCOND") {
+                tkw.restore_checkpoint(checkpoint);
+                ccond = Some(CCond::consume(tkw)?);
+            } else {
+                return Err(Box::new(Error {
+                    line: tkw.line,
+                    msg: "unexpected spec".to_string(),
+                }));
+            }
+
+            return Ok(Self::Alternative(
+                fst, snd, fst_rvalue, snd_rvalue, scond, ccond,
+            ));
+        }
+
+        Ok(Self::Base(fst, snd, fst_rvalue, snd_rvalue))
     }
 }
