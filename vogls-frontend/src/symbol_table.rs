@@ -170,6 +170,10 @@ impl<T> SymbolTable<T> {
         self.lut.get(&(Some(scope), ident)).copied()
     }
 
+    pub fn resolve_root(&self, ident: IdentId) -> Option<SymbolId> {
+        self.lut.get(&(None, ident)).copied()
+    }
+
     pub fn display<'a, F: Fn(&T, &mut fmt::Formatter<'_>) -> fmt::Result>(
         &'a self,
         root: SymbolId,

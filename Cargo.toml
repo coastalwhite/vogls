@@ -51,6 +51,7 @@ vogls-codegen.path = "vogls-codegen"
 vogls-codegen-c.path = "vogls-codegen-c"
 vogls-runtime.path = "vogls-runtime"
 vogls-vcd.path = "vogls-vcd"
+vogls-sdf.path = "vogls-sdf"
 vogls-trace.path = "vogls-trace"
 vogls-plan.path = "vogls-plan"
 

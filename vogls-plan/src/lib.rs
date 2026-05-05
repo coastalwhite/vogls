@@ -302,6 +302,7 @@ impl LazyRun {
             },
             no_run: false,
             vcd: None,
+            sdf: None,
             compile,
             output_source: None,
             timings: false,

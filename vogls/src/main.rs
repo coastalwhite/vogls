@@ -53,6 +53,8 @@ struct Args {
 
     #[arg(long = "vcd")]
     vcd: Option<PathBuf>,
+    #[arg(long = "sdf")]
+    sdf: Option<PathBuf>,
 
     #[arg(short = 'D')]
     defines: Vec<String>,
@@ -111,6 +113,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         logic_mode,
         vcd: args.vcd,
+        sdf: args.sdf,
         compile: args.compile,
         output_source: args.output_source,
         timings: args.timings,

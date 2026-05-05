@@ -765,6 +765,7 @@ dependencies = [
  "vogls-fuse-signals",
  "vogls-ir",
  "vogls-runtime",
+ "vogls-sdf",
  "vogls-sim",
  "vogls-utils",
  "vogls-vcd",

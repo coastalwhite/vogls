@@ -326,13 +326,38 @@ impl Design {
             ctx.udps.insert(ident, udp_id);
         }
 
+        if let Some(sdf_path) = ectx.sdf.as_deref() {
+            timers.timed("sdf", |_| {
+                let mut diagnostics = LowerDiagnostics::default();
+                let error =
+                    crate::timing::lower_sdf(&mut ctx, &mut mctx, sdf_path, &mut diagnostics)
+                        .is_err();
+
+                if error {
+                    for (location, err, context) in &mctx.diagnostics.errors {
+                        let mut out = String::new();
+                        report_error(&token_buffer, err.clone(), *location, &mut out)?;
+                        write!(ectx.stderr, "{out}")?;
+                        if !context.is_empty() {
+                            writeln!(ectx.stderr, "context:")?;
+                            for c in context {
+                                writeln!(ectx.stderr, "- {c}")?;
+                            }
+                        }
+                        writeln!(ectx.stderr)?;
+                    }
+                    return Err("failed to lower".into());
+                }
+                Result::<(), Box<dyn std::error::Error>>::Ok(())
+            })?;
+        }
+
         let mut error = false;
         let mut outs_lut = VgHashMap::default();
         let mut outs = Vec::new();
         let mut nba_signals = IndexMap::new();
 
-        // @TODO: Iterate over the modules instead.
-        timers.start("lower_global_items");
+        timers.start("lower_specify_blocks");
         for key in ctx.table.symbol_id_iter() {
             match &ctx.table[key].content {
                 VSymbol::Module(i) => {
@@ -358,6 +383,19 @@ impl Design {
                             .is_err();
                         }
                     }
+                }
+                _ => {}
+            }
+        }
+        timers.stop();
+
+        // @TODO: Iterate over the modules instead.
+        timers.start("lower_global_items");
+        for key in ctx.table.symbol_id_iter() {
+            match &ctx.table[key].content {
+                VSymbol::Module(i) => {
+                    let module = module_lut[&i.module];
+                    ctx.time_scale = module.time_scale;
 
                     error |= vogls_verilog::lower::instantiate_nba_signals(
                         &mut mctx.gl,

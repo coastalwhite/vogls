@@ -20,7 +20,7 @@ use crate::lower::{eval_constant_expr, try_resolve_symbol_id, unwrap_get_net_mut
 
 use super::{LowerContext, MutLowerContext};
 
-enum Condition<'a> {
+pub enum Condition<'a> {
     None,
 
     InputPosedge,
@@ -33,14 +33,14 @@ enum Condition<'a> {
 }
 
 pub struct SpecifyOutput<'a> {
-    sid: SymbolId,
-    inputs: VgHashMap<SignalKey, usize>,
-    paths: Vec<(SignalKey, Vec<SpecifyPath<'a>>)>,
+    pub sid: SymbolId,
+    pub inputs: VgHashMap<SignalKey, usize>,
+    pub paths: Vec<(SignalKey, Vec<SpecifyPath<'a>>)>,
 }
 
 pub struct SpecifyPath<'a> {
-    condition: Condition<'a>,
-    delays: Delays,
+    pub condition: Condition<'a>,
+    pub delays: Delays,
 }
 
 // @Performance.
@@ -55,6 +55,7 @@ pub struct SpecifyPath<'a> {
 //
 // Then again. This structure is generally very short lived so it is not that much of a memoryhog
 // I guess.
+#[derive(Clone)]
 pub enum Delays {
     One(Delay),
     Two {
@@ -385,10 +386,11 @@ impl Delays {
     }
 }
 
+#[derive(Clone)]
 pub struct Delay {
-    min: u64,
-    typ: u64,
-    max: u64,
+    pub min: u64,
+    pub typ: u64,
+    pub max: u64,
 }
 
 impl Delay {
@@ -710,176 +712,189 @@ pub fn lower_specify<'a>(
 
     outs_lut.clear();
     for (output, specify) in outs.drain(..) {
-        let mut proxy = mctx.gl.signals.get(output).unwrap().clone();
-        proxy.name = format!("{}::SPECIFY_PROXY", proxy.name);
-        let proxy = mctx.gl.signals.insert(proxy);
-        let net = unwrap_get_net_mut(&mut ctx.table, specify.sid);
-        let prev = net.net.set_specify(proxy);
-        assert!(prev.is_none());
+        lower_iopath(
+            ctx,
+            mctx,
+            scope,
+            output,
+            specify,
+            &mut input_before_lut,
+            &mut input_before,
+        )?;
+    }
 
-        for output_bitidx in 0..mctx.gl.signals[output].size.get() {
-            input_before_lut.clear();
-            input_before.clear();
+    Ok(())
+}
 
-            let (_, mut builder) =
-                new_process(mctx.gl(), ProcessKind::Specify, TokenRange::default());
-            let entry = builder.key();
+pub fn lower_iopath<'a>(
+    ctx: &mut LowerContext<'a>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
+    output: SignalKey,
+    specify: SpecifyOutput,
+    input_before_lut: &mut VgHashMap<SignalKey, usize>,
+    input_before: &mut Vec<(SignalKey, VariableKey, Option<PhiRef>)>,
+) -> Result<(), ()> {
+    let mut proxy = mctx.gl.signals.get(output).unwrap().clone();
+    proxy.name = format!("{}::SPECIFY_PROXY", proxy.name);
+    let proxy = mctx.gl.signals.insert(proxy);
+    let net = unwrap_get_net_mut(&mut ctx.table, specify.sid);
+    let prev = net.net.set_specify(proxy);
+    assert!(prev.is_none());
 
-            // @Correctness: This might need something like. `Initial Value of Signal X`. I think
-            // this is incorrect if the event does not get triggered first.
-            for (input, paths) in &specify.paths {
-                for path in paths {
-                    if matches!(
-                        path.condition,
-                        Condition::InputPosedge
-                            | Condition::InputNegedge
-                            | Condition::InputPosedgeExpr(_)
-                            | Condition::InputNegedgeExpr(_)
-                    ) {
-                        let before = builder.probe(mctx.gl(), *input);
-                        let idx = input_before.len();
-                        input_before_lut.insert(*input, idx);
-                        input_before.push((*input, before, None));
-                        break;
-                    }
+    for output_bitidx in 0..mctx.gl.signals[output].size.get() {
+        input_before_lut.clear();
+        input_before.clear();
+
+        let (_, mut builder) = new_process(mctx.gl(), ProcessKind::Specify, TokenRange::default());
+        let entry = builder.key();
+
+        // @Correctness: This might need something like. `Initial Value of Signal X`. I think
+        // this is incorrect if the event does not get triggered first.
+        for (input, paths) in &specify.paths {
+            for path in paths {
+                if matches!(
+                    path.condition,
+                    Condition::InputPosedge
+                        | Condition::InputNegedge
+                        | Condition::InputPosedgeExpr(_)
+                        | Condition::InputNegedgeExpr(_)
+                ) {
+                    let before = builder.probe(mctx.gl(), *input);
+                    let idx = input_before.len();
+                    input_before_lut.insert(*input, idx);
+                    input_before.push((*input, before, None));
+                    break;
                 }
             }
-
-            builder = builder.jump(mctx.gl());
-            let wait_loop_bb = builder.key();
-
-            for (_, variable, phi_ref) in input_before.iter_mut() {
-                let pr;
-                (*variable, pr) =
-                    builder.phi(mctx.gl(), [(entry, *variable), (entry, *variable)].into());
-                *phi_ref = Some(pr);
-            }
-
-            let time = builder.time(mctx.gl());
-            let mut active_time = builder.constant(mctx.gl(), Bits::from_u64(TIME_VSIZE, 1));
-            for (input, _) in &specify.paths {
-                let lupdt = builder.lupdt(mctx.gl(), *input);
-                let lupdt = builder.plus_constant(mctx.gl(), lupdt, Bits::from_u64(TIME_VSIZE, 1));
-                active_time = builder.max(mctx.gl(), active_time, lupdt);
-            }
-            active_time =
-                builder.minus_constant(mctx.gl(), active_time, Bits::from_u64(TIME_VSIZE, 1));
-
-            let mut wait_time_set = builder.constant(mctx.gl(), Bits::new_zeroed(SCALAR_VSIZE));
-            let mut wait_time = builder.constant(mctx.gl(), Bits::new_ones(TIME_VSIZE));
-
-            for (input, paths) in &specify.paths {
-                let lupdt = builder.lupdt(mctx.gl(), *input);
-                let is_active = builder.case_equals(mctx.gl(), lupdt, active_time);
-
-                let mut new_wait_time_set = Some(wait_time_set);
-                let mut new_wait_time = wait_time;
-
-                for path in paths {
-                    let mut condition = None;
-                    if matches!(
-                        path.condition,
-                        Condition::InputPosedge | Condition::InputPosedgeExpr(_)
-                    ) {
-                        let before = input_before[input_before_lut[input]].1;
-                        let after = builder.probe(mctx.gl(), *input);
-                        condition = Some(builder.posedge(mctx.gl(), before, after));
-                    }
-                    if matches!(
-                        path.condition,
-                        Condition::InputNegedge | Condition::InputNegedgeExpr(_)
-                    ) {
-                        let before = input_before[input_before_lut[input]].1;
-                        let after = builder.probe(mctx.gl(), *input);
-                        condition = Some(builder.negedge(mctx.gl(), before, after));
-                    }
-
-                    if let Condition::Expr(expr)
-                    | Condition::InputPosedgeExpr(expr)
-                    | Condition::InputNegedgeExpr(expr) = path.condition
-                    {
-                        let (expr, _) = lower_expr(ctx, mctx, scope, &mut builder, expr, None)?;
-                        let expr = builder.reduce_or(mctx.gl(), expr);
-                        condition = Some(match condition {
-                            None => expr,
-                            Some(condition) => builder.and(mctx.gl(), condition, expr),
-                        });
-                    }
-
-                    if matches!(path.condition, Condition::NoOtherCondition) {
-                        todo!();
-                    }
-
-                    let condition = condition.map(|c| builder.select_bit_constant(mctx.gl(), c, 0));
-                    match (condition, &mut new_wait_time_set) {
-                        (None, _) | (_, None) => new_wait_time_set = None,
-                        (Some(condition), Some(new_wait_time_set)) => {
-                            *new_wait_time_set =
-                                builder.or(mctx.gl(), *new_wait_time_set, condition);
-                        }
-                    }
-
-                    let path_wait_time = builder.minus(mctx.gl(), time, lupdt);
-                    let delay = path.delays.calculate(
-                        mctx.gl(),
-                        &mut builder,
-                        output,
-                        proxy,
-                        output_bitidx,
-                    );
-                    let path_wait_time = builder.plus(mctx.gl(), path_wait_time, delay);
-                    let path_wait_time = builder.min(mctx.gl(), new_wait_time, path_wait_time);
-
-                    new_wait_time = match condition {
-                        None => path_wait_time,
-                        Some(condition) => {
-                            builder.select(mctx.gl(), condition, path_wait_time, new_wait_time)
-                        }
-                    };
-                }
-
-                let new_wait_time_set = new_wait_time_set
-                    .unwrap_or_else(|| builder.constant(mctx.gl(), Bits::new_ones(SCALAR_VSIZE)));
-
-                wait_time_set =
-                    builder.select(mctx.gl(), is_active, new_wait_time_set, wait_time_set);
-                wait_time = builder.select(mctx.gl(), is_active, new_wait_time, wait_time);
-            }
-
-            // Set the wait time to zero, if no condition matched.
-            let wait_time_mask = builder.sign_extend(mctx.gl(), wait_time_set, TIME_VSIZE);
-            let wait_time = builder.and(mctx.gl(), wait_time, wait_time_mask);
-
-            let old_proxy_value = builder.probe(mctx.gl(), proxy);
-            let old_proxy_value =
-                builder.select_bit_constant(mctx.gl(), old_proxy_value, output_bitidx);
-            for (input, variable, _) in input_before.iter_mut() {
-                *variable = builder.probe(mctx.gl(), *input);
-            }
-
-            builder = builder.variable_wait(mctx.gl(), wait_time);
-
-            for (_, variable, phi_ref) in input_before.iter_mut() {
-                builder.update_phi_ref(
-                    mctx.gl(),
-                    phi_ref.take().unwrap(),
-                    1,
-                    builder.key(),
-                    *variable,
-                );
-            }
-
-            // do ... while(...);
-            let new_proxy_value = builder.probe(mctx.gl(), proxy);
-            let new_proxy_value =
-                builder.select_bit_constant(mctx.gl(), new_proxy_value, output_bitidx);
-            let do_while_condition =
-                builder.case_equals(mctx.gl(), old_proxy_value, new_proxy_value);
-            builder = builder.branch_false_to(mctx.gl(), do_while_condition, wait_loop_bb);
-
-            builder.drive_partial_constant(mctx.gl(), output, new_proxy_value, output_bitidx);
-            builder.watch_to(mctx.gl(), vec![proxy], wait_loop_bb);
         }
+
+        builder = builder.jump(mctx.gl());
+        let wait_loop_bb = builder.key();
+
+        for (_, variable, phi_ref) in input_before.iter_mut() {
+            let pr;
+            (*variable, pr) =
+                builder.phi(mctx.gl(), [(entry, *variable), (entry, *variable)].into());
+            *phi_ref = Some(pr);
+        }
+
+        let time = builder.time(mctx.gl());
+        let mut active_time = builder.constant(mctx.gl(), Bits::from_u64(TIME_VSIZE, 1));
+        for (input, _) in &specify.paths {
+            let lupdt = builder.lupdt(mctx.gl(), *input);
+            let lupdt = builder.plus_constant(mctx.gl(), lupdt, Bits::from_u64(TIME_VSIZE, 1));
+            active_time = builder.max(mctx.gl(), active_time, lupdt);
+        }
+        active_time = builder.minus_constant(mctx.gl(), active_time, Bits::from_u64(TIME_VSIZE, 1));
+
+        let mut wait_time_set = builder.constant(mctx.gl(), Bits::new_zeroed(SCALAR_VSIZE));
+        let mut wait_time = builder.constant(mctx.gl(), Bits::new_ones(TIME_VSIZE));
+
+        for (input, paths) in &specify.paths {
+            let lupdt = builder.lupdt(mctx.gl(), *input);
+            let is_active = builder.case_equals(mctx.gl(), lupdt, active_time);
+
+            let mut new_wait_time_set = Some(wait_time_set);
+            let mut new_wait_time = wait_time;
+
+            for path in paths {
+                let mut condition = None;
+                if matches!(
+                    path.condition,
+                    Condition::InputPosedge | Condition::InputPosedgeExpr(_)
+                ) {
+                    let before = input_before[input_before_lut[input]].1;
+                    let after = builder.probe(mctx.gl(), *input);
+                    condition = Some(builder.posedge(mctx.gl(), before, after));
+                }
+                if matches!(
+                    path.condition,
+                    Condition::InputNegedge | Condition::InputNegedgeExpr(_)
+                ) {
+                    let before = input_before[input_before_lut[input]].1;
+                    let after = builder.probe(mctx.gl(), *input);
+                    condition = Some(builder.negedge(mctx.gl(), before, after));
+                }
+
+                if let Condition::Expr(expr)
+                | Condition::InputPosedgeExpr(expr)
+                | Condition::InputNegedgeExpr(expr) = path.condition
+                {
+                    let (expr, _) = lower_expr(ctx, mctx, scope, &mut builder, expr, None)?;
+                    let expr = builder.reduce_or(mctx.gl(), expr);
+                    condition = Some(match condition {
+                        None => expr,
+                        Some(condition) => builder.and(mctx.gl(), condition, expr),
+                    });
+                }
+
+                if matches!(path.condition, Condition::NoOtherCondition) {
+                    todo!();
+                }
+
+                let condition = condition.map(|c| builder.select_bit_constant(mctx.gl(), c, 0));
+                match (condition, &mut new_wait_time_set) {
+                    (None, _) | (_, None) => new_wait_time_set = None,
+                    (Some(condition), Some(new_wait_time_set)) => {
+                        *new_wait_time_set = builder.or(mctx.gl(), *new_wait_time_set, condition);
+                    }
+                }
+
+                let path_wait_time = builder.minus(mctx.gl(), time, lupdt);
+                let delay =
+                    path.delays
+                        .calculate(mctx.gl(), &mut builder, output, proxy, output_bitidx);
+                let path_wait_time = builder.plus(mctx.gl(), path_wait_time, delay);
+                let path_wait_time = builder.min(mctx.gl(), new_wait_time, path_wait_time);
+
+                new_wait_time = match condition {
+                    None => path_wait_time,
+                    Some(condition) => {
+                        builder.select(mctx.gl(), condition, path_wait_time, new_wait_time)
+                    }
+                };
+            }
+
+            let new_wait_time_set = new_wait_time_set
+                .unwrap_or_else(|| builder.constant(mctx.gl(), Bits::new_ones(SCALAR_VSIZE)));
+
+            wait_time_set = builder.select(mctx.gl(), is_active, new_wait_time_set, wait_time_set);
+            wait_time = builder.select(mctx.gl(), is_active, new_wait_time, wait_time);
+        }
+
+        // Set the wait time to zero, if no condition matched.
+        let wait_time_mask = builder.sign_extend(mctx.gl(), wait_time_set, TIME_VSIZE);
+        let wait_time = builder.and(mctx.gl(), wait_time, wait_time_mask);
+
+        let old_proxy_value = builder.probe(mctx.gl(), proxy);
+        let old_proxy_value =
+            builder.select_bit_constant(mctx.gl(), old_proxy_value, output_bitidx);
+        for (input, variable, _) in input_before.iter_mut() {
+            *variable = builder.probe(mctx.gl(), *input);
+        }
+
+        builder = builder.variable_wait(mctx.gl(), wait_time);
+
+        for (_, variable, phi_ref) in input_before.iter_mut() {
+            builder.update_phi_ref(
+                mctx.gl(),
+                phi_ref.take().unwrap(),
+                1,
+                builder.key(),
+                *variable,
+            );
+        }
+
+        // do ... while(...);
+        let new_proxy_value = builder.probe(mctx.gl(), proxy);
+        let new_proxy_value =
+            builder.select_bit_constant(mctx.gl(), new_proxy_value, output_bitidx);
+        let do_while_condition = builder.case_equals(mctx.gl(), old_proxy_value, new_proxy_value);
+        builder = builder.branch_false_to(mctx.gl(), do_while_condition, wait_loop_bb);
+
+        builder.drive_partial_constant(mctx.gl(), output, new_proxy_value, output_bitidx);
+        builder.watch_to(mctx.gl(), vec![proxy], wait_loop_bb);
     }
 
     Ok(())

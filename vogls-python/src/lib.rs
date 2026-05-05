@@ -85,6 +85,7 @@ mod vogls {
                 },
                 no_run: false,
                 vcd: None,
+                sdf: None,
                 compile,
                 output_source: Some(PathBuf::from("out.c")),
                 timings: false,

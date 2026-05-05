@@ -37,6 +37,7 @@ pub use vogls_utils as utils;
 
 pub mod design;
 pub mod symbol;
+pub mod timing;
 // pub mod symbolic_execution;
 
 pub struct ExecutionContext {
@@ -56,6 +57,7 @@ pub struct ExecutionContext {
     pub logic_mode: LogicMode,
     pub no_run: bool,
     pub vcd: Option<PathBuf>,
+    pub sdf: Option<PathBuf>,
     pub compile: bool,
     pub output_source: Option<PathBuf>,
     pub timings: bool,
