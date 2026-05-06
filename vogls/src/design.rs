@@ -334,7 +334,7 @@ impl Design {
                         .is_err();
 
                 if error {
-                    for (location, err, context) in &mctx.diagnostics.errors {
+                    for (location, err, context) in &diagnostics.errors {
                         let mut out = String::new();
                         report_error(&token_buffer, err.clone(), *location, &mut out)?;
                         write!(ectx.stderr, "{out}")?;

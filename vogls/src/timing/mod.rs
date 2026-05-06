@@ -2,11 +2,12 @@ use std::path::Path;
 
 use hashbrown::hash_map::Entry;
 use vogls_frontend::symbol_table::SymbolId;
-use vogls_ir::SignalKey;
 use vogls_ir::token_range::TokenRange;
+use vogls_ir::{SignalKey, Time};
 use vogls_sdf::{
-    AbsoluteDelayType, Consume, DelVal, DelValList, DelaySpec, HierarchicalIdent, IoPathDef, Port,
-    PortInstance, PortSpec, RTriple, RValue, SignedRealNumberOrRTriple, TimingSpec, TokenWalker,
+    AbsoluteDelayType, Consume, DelVal, DelValList, DelaySpec, HierarchicalIdent, Instance,
+    InterconnectDef, IoPathDef, Port, PortInstance, PortSpec, RTriple, RValue,
+    SignedRealNumberOrRTriple, Timescale, TimescaleNumber, TimescaleUnit, TimingSpec, TokenWalker,
 };
 use vogls_utils::{IterSliceContinguous, VgHashMap};
 use vogls_verilog::lower::specify::{Condition, SpecifyOutput, SpecifyPath, lower_iopath};
@@ -89,16 +90,16 @@ fn parse_signed_real_number(s: &str) -> Result<f64, ()> {
     s.parse().map_err(|_| ())
 }
 
-fn parse_time_value(s: &str, timescale: u64) -> Result<u64, ()> {
+fn parse_time_value(s: &str, timescale: Time) -> Result<Time, ()> {
     // @TODO: This is very lossy.
     let value = parse_signed_real_number(s)?;
-    let timescale = timescale as f64;
+    let timescale = timescale.0 as f64;
     let value = (value * timescale).round();
     let value = value as u64;
-    Ok(value)
+    Ok(Time::from_fs(value))
 }
 
-fn push_delval(delval: &DelVal, delays: &mut Vec<u64>, timescale: u64) -> Result<(), ()> {
+fn push_delval(delval: &DelVal, delays: &mut Vec<Time>, timescale: Time) -> Result<(), ()> {
     // This should be represented as a no-override...
     let Some(value) = &delval.delay.0 else {
         todo!();
@@ -127,8 +128,8 @@ fn push_delval(delval: &DelVal, delays: &mut Vec<u64>, timescale: u64) -> Result
 
 fn parse_delvallist(
     list: &DelValList,
-    delays: &mut Vec<u64>,
-    timescale: u64,
+    delays: &mut Vec<Time>,
+    timescale: Time,
 ) -> Result<DelayPtr, ()> {
     let offset = delays.len() as u64;
     use DelValList as L;
@@ -183,10 +184,43 @@ pub fn lower_sdf<'a>(
         }
     };
 
+    let timescale = match sdf.header.timescale {
+        // IEEE Std 1497-2001 (p. 17)
+        // """
+        // If the SDF file does not contain a timescale then all time values in the file shall be
+        // assumed to be in nanoseconds. This has the same effect as a timescale of 1ns.
+        // """
+        None => Time::from_u32_ns(1),
+
+        Some(timescale) => {
+            let Timescale { number, unit } = timescale;
+            use TimescaleNumber as N;
+            let n = match number {
+                N::N1 | N::N1_0 => 1u64,
+                N::N10 | N::N10_0 => 10u64,
+                N::N100 | N::N100_0 => 100u64,
+            };
+
+            use TimescaleUnit as U;
+            let n = match unit {
+                U::Seconds => Time::try_from_u64_s(n),
+                U::Milliseconds => Time::try_from_u64_ms(n),
+                U::Microseconds => Time::try_from_u64_us(n),
+                U::Nanoseconds => Time::try_from_u64_ns(n),
+                U::Picoseconds => Time::try_from_u64_ps(n),
+                U::Femtoseconds => Some(Time::from_fs(n)),
+            };
+            let Some(n) = n else {
+                diagnostics.not_yet_implemented(TokenRange::default(), "timescale overflow");
+                return Err(());
+            };
+            n
+        }
+    };
     let mut output_paths = VgHashMap::<SignalKey, SymbolId>::default();
     let mut properties = Vec::<(TimingProperty, TimingContent)>::new();
     let mut property_to_content = VgHashMap::<TimingProperty, usize>::default();
-    let mut delays = Vec::<u64>::new();
+    let mut delays = Vec::<Time>::new();
 
     let mut error = false;
     for cell in sdf.cells {
@@ -197,12 +231,24 @@ pub fn lower_sdf<'a>(
         } = &cell;
 
         let root = None;
-        let vogls_sdf::Instance::HierarchicalIdent(hident) = instance else {
-            todo!("not yet implemented: non-hierarchical ident");
-        };
-        let Ok(cell_sid) = resolve_ident(ctx, root, &hident, diagnostics) else {
-            error = true;
-            continue;
+        let cell_sid = match instance {
+            Instance::Empty => {
+                let roots = ctx.table.roots();
+                if roots.len() != 1 {
+                    diagnostics.not_yet_implemented(TokenRange::default(), "ambiguous top-level");
+                    error = true;
+                    continue;
+                }
+                roots[0]
+            }
+            Instance::Star => todo!(),
+            Instance::HierarchicalIdent(hident) => {
+                let Ok(cell_sid) = resolve_ident(ctx, root, &hident, diagnostics) else {
+                    error = true;
+                    continue;
+                };
+                cell_sid
+            }
         };
 
         // @TODO: Check celltype
@@ -270,8 +316,11 @@ pub fn lower_sdf<'a>(
                                             let from = from_net.net.probe_signal();
                                             let to = to_net.net.blocking_drive_signal();
                                             let property = TimingProperty { from, to };
-                                            let delays =
-                                                parse_delvallist(delval_list, &mut delays, 1)?;
+                                            let delays = parse_delvallist(
+                                                delval_list,
+                                                &mut delays,
+                                                timescale,
+                                            )?;
                                             let content = TimingContent { delays };
 
                                             output_paths.insert(to, to_sid);
@@ -292,7 +341,69 @@ pub fn lower_sdf<'a>(
                                         vogls_sdf::DelayDef::Cond(_) => todo!(),
                                         vogls_sdf::DelayDef::CondElse(_) => todo!(),
                                         vogls_sdf::DelayDef::Port(_) => todo!(),
-                                        vogls_sdf::DelayDef::Interconnect(_) => todo!(),
+                                        vogls_sdf::DelayDef::Interconnect(interconnect) => {
+                                            let InterconnectDef {
+                                                from,
+                                                to,
+                                                delval_list,
+                                            } = interconnect;
+
+                                            let (Ok(from_sid), Ok(to_sid)) = (
+                                                resolve_port_instance(
+                                                    ctx,
+                                                    cell_sid,
+                                                    from,
+                                                    diagnostics,
+                                                ),
+                                                resolve_port_instance(
+                                                    ctx,
+                                                    cell_sid,
+                                                    to,
+                                                    diagnostics,
+                                                ),
+                                            ) else {
+                                                error = true;
+                                                continue;
+                                            };
+
+                                            let (
+                                                vogls_verilog::elaborate::VSymbol::Net(from_net),
+                                                vogls_verilog::elaborate::VSymbol::Net(to_net),
+                                            ) = (
+                                                &ctx.table[from_sid].content,
+                                                &ctx.table[to_sid].content,
+                                            )
+                                            else {
+                                                diagnostics.not_yet_implemented(
+                                                    TokenRange::default(),
+                                                    "Not a net",
+                                                );
+                                                error = true;
+                                                continue;
+                                            };
+
+                                            let from = from_net.net.probe_signal();
+                                            let to = to_net.net.blocking_drive_signal();
+                                            let property = TimingProperty { from, to };
+                                            let delays = parse_delvallist(
+                                                delval_list,
+                                                &mut delays,
+                                                timescale,
+                                            )?;
+                                            let content = TimingContent { delays };
+
+                                            output_paths.insert(to, to_sid);
+                                            match property_to_content.entry(property) {
+                                                Entry::Occupied(entry) => {
+                                                    properties[*entry.get()].1 = content;
+                                                }
+                                                Entry::Vacant(entry) => {
+                                                    let idx = properties.len();
+                                                    properties.push((property, content));
+                                                    entry.insert(idx);
+                                                }
+                                            }
+                                        }
                                         vogls_sdf::DelayDef::NetDelay(_) => todo!(),
                                         vogls_sdf::DelayDef::Device(_) => todo!(),
                                     }
@@ -313,8 +424,10 @@ pub fn lower_sdf<'a>(
         }
     }
 
-    drop(property_to_content);
+    if error { return Err(()); }
 
+    // Drop here. Since we are about to mess up all the references.
+    drop(property_to_content);
     properties.sort_unstable_by_key(|(p, _)| (p.to, p.from));
 
     let mut input_before_lut = VgHashMap::default();
@@ -349,10 +462,6 @@ pub fn lower_sdf<'a>(
             &mut input_before_lut,
             &mut input_before,
         )?;
-    }
-
-    if error {
-        return Err(());
     }
 
     Ok(())

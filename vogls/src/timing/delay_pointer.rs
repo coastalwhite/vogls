@@ -1,3 +1,6 @@
+use std::fmt;
+
+use vogls_ir::Time;
 use vogls_verilog::lower::specify::{Delay, Delays};
 
 /// A pointer to a certain amount of delay values.
@@ -13,7 +16,17 @@ use vogls_verilog::lower::specify::{Delay, Delays};
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DelayPtr(u64);
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+impl fmt::Debug for DelayPtr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DelayPtr")
+            .field("offset", &self.offset())
+            .field("triple_mask", &self.triple_mask())
+            .field("variant", &self.variant())
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DelayPtrVariant {
     One = 0,
     Two = 1,
@@ -67,7 +80,7 @@ impl DelayPtr {
     }
 
     // @TODO: Remove and internalize DelayPtr into timing lowering.
-    pub fn materialize(self, delays: &[u64]) -> Delays {
+    pub fn materialize(self, delays: &[Time]) -> Delays {
         use DelayPtrVariant as V;
         let mut ptr = self.offset();
         let mut triple_mask = self.triple_mask();
@@ -108,20 +121,20 @@ impl DelayPtr {
     }
 }
 
-pub fn read_one(delays: &[u64], ptr: &mut u64, triple_mask: &mut u16) -> Delay {
+pub fn read_one(delays: &[Time], ptr: &mut u64, triple_mask: &mut u16) -> Delay {
     let is_triple = *triple_mask & 1 != 0;
     *triple_mask >>= 1;
 
     if is_triple {
-        let min = delays[*ptr as usize];
+        let min = delays[*ptr as usize].0;
         *ptr += 1;
-        let typ = delays[*ptr as usize];
+        let typ = delays[*ptr as usize].0;
         *ptr += 1;
-        let max = delays[*ptr as usize];
+        let max = delays[*ptr as usize].0;
         *ptr += 1;
         Delay { min, typ, max }
     } else {
-        let typ = delays[*ptr as usize];
+        let typ = delays[*ptr as usize].0;
         *ptr += 1;
         Delay {
             min: typ,

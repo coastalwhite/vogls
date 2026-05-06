@@ -77,6 +77,10 @@ pub fn report_error(
 
 pub fn report(tokenized: &Tokenized, location: TokenRange, out: &mut String) -> std::fmt::Result {
     use std::fmt::Write;
+    if location.start == 0 && location.end == 0 {
+        return Ok(());
+    }
+
     if tokenized.file_idxs[location.start] != tokenized.file_idxs[location.end - 1] {
         // @TODO
         return Ok(());

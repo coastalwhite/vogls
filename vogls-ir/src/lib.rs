@@ -1340,3 +1340,39 @@ impl SignalSlice {
         self.lsb() <= other.msb() && other.lsb() <= self.msb()
     }
 }
+
+impl Time {
+    pub fn from_fs(fs: u64) -> Self {
+        Self(fs)
+    }
+    pub fn from_u32_ps(ps: u32) -> Self {
+        Self(ps as u64 * 1_000)
+    }
+    pub fn from_u32_ns(ns: u32) -> Self {
+        Self(ns as u64 * 1_000_000)
+    }
+    pub fn from_u32_us(us: u32) -> Self {
+        Self(us as u64 * 1_000_000_000)
+    }
+
+    pub fn try_from_u64_ps(s: u64) -> Option<Self> {
+        pub const PS_TO_FS: u64 = 1_000;
+        s.checked_mul(PS_TO_FS).map(Self)
+    }
+    pub fn try_from_u64_ns(s: u64) -> Option<Self> {
+        pub const NS_TO_FS: u64 = 1_000_000;
+        s.checked_mul(NS_TO_FS).map(Self)
+    }
+    pub fn try_from_u64_us(s: u64) -> Option<Self> {
+        pub const US_TO_FS: u64 = 1_000_000_000;
+        s.checked_mul(US_TO_FS).map(Self)
+    }
+    pub fn try_from_u64_ms(s: u64) -> Option<Self> {
+        pub const MS_TO_FS: u64 = 1_000_000_000_000;
+        s.checked_mul(MS_TO_FS).map(Self)
+    }
+    pub fn try_from_u64_s(s: u64) -> Option<Self> {
+        pub const S_TO_FS: u64 = 1_000_000_000_000_000;
+        s.checked_mul(S_TO_FS).map(Self)
+    }
+}
