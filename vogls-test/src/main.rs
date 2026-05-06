@@ -130,6 +130,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             fail: bool,
             verify_stdout: VerifyOutput,
             verify_ir: bool,
+            annotate_sdf: bool,
             timeout: u64,
             top_level_module: Option<String>,
             skip: Option<LogicMode>,
@@ -139,6 +140,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             fail: false,
             verify_stdout: VerifyOutput::No,
             verify_ir: false,
+            annotate_sdf: false,
             top_level_module: None,
             timeout: u64::MAX,
             skip: None,
@@ -164,6 +166,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                         test_information.verify_stdout = VerifyOutput::SortLines
                     }
                     "verify-ir" => test_information.verify_ir = true,
+                    "annotate-sdf" => test_information.annotate_sdf = true,
                     _ if line.starts_with("tlm=") => {
                         test_information.top_level_module = Some(line[4..].trim().to_string());
                     }
@@ -209,6 +212,10 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                         continue;
                     }
 
+                    let sdf = test_information
+                        .annotate_sdf
+                        .then(|| path.with_extension("sdf"));
+
                     num_tests += 1;
 
                     let stdout = Io::default();
@@ -237,7 +244,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                         },
                         logic_mode,
                         vcd: None,
-                        sdf: None,
+                        sdf: sdf.clone(),
                         compile,
                         output_source: None,
                         timings: false,
@@ -276,7 +283,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                                 },
                                 logic_mode,
                                 vcd: None,
-                                sdf: None,
+                                sdf: sdf.clone(),
                                 compile,
                                 output_source: None,
                                 timings: false,

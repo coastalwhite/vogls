@@ -675,31 +675,24 @@ pub struct DelVal<'a> {
 }
 pub enum DelValList<'a> {
     One(DelVal<'a>),
-    Two(DelVal<'a>, DelVal<'a>),
-    Three(DelVal<'a>, DelVal<'a>, DelVal<'a>),
-    Six(
-        DelVal<'a>,
-        DelVal<'a>,
-        DelVal<'a>,
-        DelVal<'a>,
-        DelVal<'a>,
-        DelVal<'a>,
-    ),
-    Twelve(
-        DelVal<'a>,
-        DelVal<'a>,
-        DelVal<'a>,
-        DelVal<'a>,
-        DelVal<'a>,
-        DelVal<'a>,
-        DelVal<'a>,
-        DelVal<'a>,
-        DelVal<'a>,
-        DelVal<'a>,
-        DelVal<'a>,
-        DelVal<'a>,
-    ),
+    Two([DelVal<'a>; 2]),
+    Three([DelVal<'a>; 3]),
+    Six([DelVal<'a>; 6]),
+    Twelve([DelVal<'a>; 12]),
 }
+
+impl<'a> DelValList<'a> {
+    pub fn as_slice(&self) -> &[DelVal<'a>] {
+        match self {
+            Self::One(dv) => std::slice::from_ref(dv),
+            Self::Two(dv) => dv,
+            Self::Three(dv) => dv,
+            Self::Six(dv) => dv,
+            Self::Twelve(dv) => dv,
+        }
+    }
+}
+
 pub enum RetValList<'a> {
     One(DelVal<'a>),
     Two(DelVal<'a>, DelVal<'a>),
@@ -1509,13 +1502,13 @@ impl<'a> Consume<'a> for DelValList<'a> {
 
         tkw.skip_whitespace();
         if !tkw.is_next_equal_to(b'(') {
-            return Ok(Self::Two(fst, snd));
+            return Ok(Self::Two([fst, snd]));
         }
         let trd = DelVal::consume(tkw)?;
 
         tkw.skip_whitespace();
         if !tkw.is_next_equal_to(b'(') {
-            return Ok(Self::Three(fst, snd, trd));
+            return Ok(Self::Three([fst, snd, trd]));
         }
 
         let four = DelVal::consume(tkw)?;
@@ -1525,7 +1518,7 @@ impl<'a> Consume<'a> for DelValList<'a> {
         let six = DelVal::consume(tkw)?;
         tkw.skip_whitespace();
         if !tkw.is_next_equal_to(b'(') {
-            return Ok(Self::Six(fst, snd, trd, four, five, six));
+            return Ok(Self::Six([fst, snd, trd, four, five, six]));
         }
 
         let seven = DelVal::consume(tkw)?;
@@ -1539,9 +1532,9 @@ impl<'a> Consume<'a> for DelValList<'a> {
         let eleven = DelVal::consume(tkw)?;
         tkw.skip_whitespace();
         let twelve = DelVal::consume(tkw)?;
-        Ok(Self::Twelve(
+        Ok(Self::Twelve([
             fst, snd, trd, four, five, six, seven, eight, nine, ten, eleven, twelve,
-        ))
+        ]))
     }
 }
 impl<'a> Consume<'a> for RetValList<'a> {

@@ -864,8 +864,8 @@ pub fn lower_iopath<'a>(
         }
 
         // Set the wait time to zero, if no condition matched.
-        let wait_time_mask = builder.sign_extend(mctx.gl(), wait_time_set, TIME_VSIZE);
-        let wait_time = builder.and(mctx.gl(), wait_time, wait_time_mask);
+        let zero = builder.constant_u64(mctx.gl(), 0);
+        let wait_time = builder.select(mctx.gl(), wait_time_set, wait_time, zero);
 
         let old_proxy_value = builder.probe(mctx.gl(), proxy);
         let old_proxy_value =
