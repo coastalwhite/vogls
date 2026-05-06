@@ -779,6 +779,8 @@ pub fn lower_iopath<'a>(
             *phi_ref = Some(pr);
         }
 
+        // active_time = max_{signal} last_update_time(signal)
+        // is_active(s) = last_update_time(s) == active_time && active_time != 0xF..F
         let time = builder.time(mctx.gl());
         let mut active_time = builder.constant(mctx.gl(), Bits::from_u64(TIME_VSIZE, 1));
         for (input, _) in &specify.paths {
