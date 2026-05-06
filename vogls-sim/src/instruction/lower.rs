@@ -119,7 +119,7 @@ pub fn lower_slice_imm(
     } else {
         let is_in_range = offset + dst.size.get() <= src.size.get();
         let src_is_dw =
-            (src.offset.bit_offset % 64) + offset as usize + dst.size.get() as usize > 64;
+            ((src.offset.bit_offset + offset as usize) % 64) + dst.size.get() as usize > 64;
         let dst_is_dw = (dst.offset.bit_offset % 64) + dst.size.get() as usize > 64;
         match dst.size.get() {
             1 if is_in_range => VI::TvMove1(
