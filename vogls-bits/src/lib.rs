@@ -1189,6 +1189,17 @@ impl Bits {
         }
     }
 
+    pub fn extract_u32(&self) -> Option<u32> {
+        if self.size().get() > 32 || self.contains_special() {
+            return None;
+        }
+        match self.as_data_ref() {
+            BitsDataRef::InlineTv(v) => Some(v as u32),
+            BitsDataRef::InlineFv(_spc, val) => Some(val as u32),
+            _ => None,
+        }
+    }
+
     pub fn extract_exact_u32(&self) -> Option<u32> {
         assert_eq!(self.size().get(), 32);
         match self.as_data_ref() {
