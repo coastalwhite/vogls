@@ -4,9 +4,8 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-clap.workspace = true
 slotmap.workspace = true
-tempfile.workspace = true
+tempfile = { workspace = true, optional = true }
 hashbrown.workspace = true
 vogls-ir.workspace = true
 vogls-sim.workspace = true
@@ -15,11 +14,13 @@ vogls-frontend.workspace = true
 vogls-utils.workspace = true
 vogls-bits.workspace = true
 vogls-codegen.workspace = true
-vogls-codegen-c.workspace = true
+vogls-codegen-c = { workspace = true, optional = true }
 vogls-runtime.workspace = true
 vogls-vcd.workspace = true
 vogls-fuse-signals.workspace = true
 vogls-sdf.workspace = true
 
 [features]
+default = ["native"]
 random = ["vogls-bits/random"]
+native = ["dep:tempfile", "dep:vogls-codegen-c"]

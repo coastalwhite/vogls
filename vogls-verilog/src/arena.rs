@@ -16,4 +16,8 @@ impl Arena {
     {
         self.0.alloc_slice_fill_iter(iter)
     }
+
+    pub fn reset(&mut self) {
+        self.0.reset();
+    }
 }

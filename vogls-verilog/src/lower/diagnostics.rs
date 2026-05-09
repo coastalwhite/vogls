@@ -1,8 +1,11 @@
+use std::fmt;
+
 use vogls_ir::token_range::TokenRange;
 
 use crate::ast::{AstItem, Identifier};
 use crate::elaborate::ModuleSymbol;
 use crate::parser::AstArenas;
+use crate::tokenizer::Tokenized;
 use vogls_frontend::ident_table::IdentId;
 
 use super::VType;
@@ -116,5 +119,39 @@ impl Diagnostics {
     pub fn zero_width_net(&mut self, at: TokenRange) {
         self.errors
             .push((at, LowerErrorReason::ZeroWidthNet, Vec::new()));
+    }
+
+    pub fn report<'a>(&'a self, tokens: &'a Tokenized) -> DiagnosticsReport<'a> {
+        DiagnosticsReport(self, tokens)
+    }
+}
+
+pub struct DiagnosticsReport<'a>(&'a Diagnostics, &'a Tokenized);
+
+impl<'a> fmt::Display for DiagnosticsReport<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if !self.0.warnings.is_empty() {
+            for (location, warning) in &self.0.warnings {
+                writeln!(f, "[WARN]: {warning}")?;
+                let mut out = String::new();
+                crate::parser::report(self.1, *location, &mut out)?;
+                writeln!(f, "{out}")?;
+            }
+        }
+
+        for (location, err, context) in &self.0.errors {
+            let mut out = String::new();
+            crate::parser::report_error(self.1, err.clone(), *location, &mut out)?;
+            write!(f, "{out}")?;
+            if !context.is_empty() {
+                writeln!(f, "context:")?;
+                for c in context {
+                    writeln!(f, "- {c}")?;
+                }
+            }
+            writeln!(f)?;
+        }
+
+        Ok(())
     }
 }

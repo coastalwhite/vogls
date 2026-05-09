@@ -6,11 +6,6 @@ use std::process::Command;
 use slotmap::SlotMap;
 pub use vogls_bits::format::{BitsFormatBase, BitsFormatOptions, BitsFormatWidth};
 use vogls_codegen::{HeapBuilder, HeapOffset, HeapRef};
-use vogls_codegen_c::runtime::{CDesign, CDesignState, SharedObjectContainer};
-use vogls_codegen_c::{
-    CLowerOptions, ListenerBuilder, StateBuilder, lower_process_array, lower_signal_drive_fn,
-    lower_signal_drive_header,
-};
 use vogls_frontend::ident_table::IdentId;
 use vogls_ir::optimize::OptFlags;
 pub use vogls_ir::{Bits, LogicMode, SignalKey, VectorSize};
@@ -242,6 +237,7 @@ pub fn find_lupdt_signals(
     }
 }
 
+#[cfg(feature = "native")]
 pub fn lower_to_shared_object(
     gl: &GlobalContext,
     signal_map: &VgHashMap<SignalKey, RtSignalKey>,
@@ -256,7 +252,19 @@ pub fn lower_to_shared_object(
     output_source: Option<&Path>,
     plugins: Vec<RuntimePluginState>,
     num_additional_regions: u8,
-) -> Result<(CDesignState, CDesign), Box<dyn std::error::Error>> {
+) -> Result<
+    (
+        vogls_codegen_c::runtime::CDesignState,
+        vogls_codegen_c::runtime::CDesign,
+    ),
+    Box<dyn std::error::Error>,
+> {
+    use vogls_codegen_c::runtime::{CDesign, SharedObjectContainer};
+    use vogls_codegen_c::{
+        CLowerOptions, ListenerBuilder, StateBuilder, lower_process_array, lower_signal_drive_fn,
+        lower_signal_drive_header,
+    };
+
     timers.start("lower to C");
     let mut listener_builder = ListenerBuilder::default();
     let mut out = Vec::new();

@@ -82,7 +82,7 @@ pub struct PortInLevelSymbol<'a> {
     ident: AstItem<Identifier>,
 }
 
-pub struct ElaborationState<'a> {
+pub struct ElaborationState<'a, 'b> {
     lvl_symbols: IndexMap<SymbolId, InLevelSymbol<'a>>,
     next_levels: VecDeque<(SymbolId, ElabLevel<'a>, TimeScale)>,
     marked: VgHashSet<SymbolId>,
@@ -96,10 +96,10 @@ pub struct ElaborationState<'a> {
     dispatch_stack: Vec<AstId<'a, Expr<'a>>>,
     stmt_dispatch_stack: Vec<(SymbolId, AstIdRange<'a, Statement<'a>>)>,
 
-    module_lut: &'a VgHashMap<IdentId, AstId<'a, Module<'a>>>,
+    module_lut: &'b VgHashMap<IdentId, AstId<'a, Module<'a>>>,
 }
 
-impl<'a> ElaborationState<'a> {
+impl<'a, 'b> ElaborationState<'a, 'b> {
     pub fn insert_lvl_symbol(&mut self, sid: SymbolId, symbol: InLevelSymbol<'a>) {
         assert!(self.lvl_symbols.insert(sid, symbol).is_ok());
     }
@@ -129,11 +129,11 @@ impl<'a> ElaborationState<'a> {
 /// This allows for symbols to be defined and used out-of-order in the AST, but still resolve
 /// correctly. This also makes sure that functions can be used during the evaluation of constant
 /// expressions.
-pub fn elaborate<'a>(
+pub fn elaborate<'a, 'b>(
     gl: &mut GlobalContext,
     ctx: &mut LowerContext<'a>,
     top_level: AstId<'a, Module<'a>>,
-    module_lut: &'a VgHashMap<IdentId, AstId<'a, Module<'a>>>,
+    module_lut: &'b VgHashMap<IdentId, AstId<'a, Module<'a>>>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
     let dummy_signal = gl.signals.insert(vogls_ir::Signal {
@@ -304,10 +304,10 @@ pub fn elaborate<'a>(
     if error { Err(()) } else { Ok(()) }
 }
 
-fn extend_opt_generate_block_sids<'a>(
+fn extend_opt_generate_block_sids<'a, 'b>(
     scope: SymbolId,
     ctx: &mut LowerContext<'a>,
-    st: &mut ElaborationState<'a>,
+    st: &mut ElaborationState<'a, 'b>,
     id: AstId<'a, Option<GenerateBlock<'a>>>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
@@ -342,11 +342,11 @@ fn extend_opt_generate_block_sids<'a>(
     if error { Err(()) } else { Ok(()) }
 }
 
-fn extend_generate_if_sids<'a>(
+fn extend_generate_if_sids<'a, 'b>(
     gl: &mut GlobalContext,
     scope: SymbolId,
     ctx: &mut LowerContext<'a>,
-    st: &mut ElaborationState<'a>,
+    st: &mut ElaborationState<'a, 'b>,
     id: AstId<'a, IfGenerateConstruct<'a>>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
@@ -371,11 +371,11 @@ fn extend_generate_if_sids<'a>(
     extend_opt_generate_block_sids(scope, ctx, st, blk, diagnostics)
 }
 
-fn extend_generate_loop_sids<'a>(
+fn extend_generate_loop_sids<'a, 'b>(
     gl: &mut GlobalContext,
     scope: SymbolId,
     ctx: &mut LowerContext<'a>,
-    st: &mut ElaborationState<'a>,
+    st: &mut ElaborationState<'a, 'b>,
     id: AstId<'a, LoopGenerateConstruct<'a>>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
@@ -503,12 +503,12 @@ fn extend_generate_loop_sids<'a>(
     Ok(())
 }
 
-fn extend_generate_case_sids<'a>(
+fn extend_generate_case_sids<'a, 'b>(
     gl: &mut GlobalContext,
 
     scope: SymbolId,
     ctx: &mut LowerContext<'a>,
-    st: &mut ElaborationState<'a>,
+    st: &mut ElaborationState<'a, 'b>,
     id: AstId<'a, CaseGenerateConstruct<'a>>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
@@ -555,10 +555,10 @@ fn extend_generate_case_sids<'a>(
     Ok(())
 }
 
-fn extend_param_decl_idents_into_scope<'a>(
+fn extend_param_decl_idents_into_scope<'a, 'b>(
     scope: SymbolId,
     ctx: &mut LowerContext<'a>,
-    st: &mut ElaborationState<'a>,
+    st: &mut ElaborationState<'a, 'b>,
     typing: AstId<'a, ParameterDeclarationTyping<'a>>,
     assignments: AstIdRange<'a, ParamAssignment<'a>>,
     parameter_type: ParameterType,
@@ -603,11 +603,11 @@ pub enum ParameterType {
     Local,
 }
 
-fn elaborate_module<'a>(
+fn elaborate_module<'a, 'b>(
     module: AstId<'a, Module<'a>>,
     scope: SymbolId,
     ctx: &mut LowerContext<'a>,
-    st: &mut ElaborationState<'a>,
+    st: &mut ElaborationState<'a, 'b>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
     let Module {
@@ -820,11 +820,11 @@ fn elaborate_module<'a>(
     if error { Err(()) } else { Ok(()) }
 }
 
-fn extend_module_or_generate_item_sids<'a>(
+fn extend_module_or_generate_item_sids<'a, 'b>(
     id: AstId<'a, ModuleOrGenerateItem<'a>>,
     scope: SymbolId,
     ctx: &mut LowerContext<'a>,
-    st: &mut ElaborationState<'a>,
+    st: &mut ElaborationState<'a, 'b>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
     match id.content {
@@ -1165,11 +1165,11 @@ fn extend_module_or_generate_item_sids<'a>(
     }
 }
 
-fn extend_statements_sids<'a>(
+fn extend_statements_sids<'a, 'b>(
     stmts: AstIdRange<'a, Statement<'a>>,
     scope: SymbolId,
     ctx: &mut LowerContext<'a>,
-    st: &mut ElaborationState<'a>,
+    st: &mut ElaborationState<'a, 'b>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
     assert!(st.stmt_dispatch_stack.is_empty());
@@ -1246,10 +1246,10 @@ fn extend_statements_sids<'a>(
     if error { Err(()) } else { Ok(()) }
 }
 
-fn extend_block_item_decl_sid<'a>(
+fn extend_block_item_decl_sid<'a, 'b>(
     scope: SymbolId,
     ctx: &mut LowerContext<'a>,
-    st: &mut ElaborationState<'a>,
+    st: &mut ElaborationState<'a, 'b>,
     block_item_decl: AstId<'a, BlockItemDeclaration<'a>>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
@@ -1318,12 +1318,12 @@ fn extend_block_item_decl_sid<'a>(
     }
 }
 
-fn extend_variable_type_sids<'a>(
+fn extend_variable_type_sids<'a, 'b>(
     var_types: AstIdRange<'a, VariableType<'a>>,
     f: impl Fn(AstId<'a, VariableType<'a>>) -> InLevelSymbol,
     scope: SymbolId,
     ctx: &mut LowerContext<'a>,
-    st: &mut ElaborationState<'a>,
+    st: &mut ElaborationState<'a, 'b>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
     let mut error = false;
@@ -1353,7 +1353,12 @@ fn extend_variable_type_sids<'a>(
 }
 
 impl<'a> InLevelSymbol<'a> {
-    pub fn extend_needs(&self, sid: SymbolId, table: &VSymbolTable, st: &mut ElaborationState<'a>) {
+    pub fn extend_needs<'b>(
+        &self,
+        sid: SymbolId,
+        table: &VSymbolTable,
+        st: &mut ElaborationState<'a, 'b>,
+    ) {
         let scope = table[sid]
             .parent()
             .expect("in-level symbols should always have parents");
@@ -1522,10 +1527,10 @@ impl<'a> InLevelSymbol<'a> {
     }
 }
 
-fn extend_tf_type_needs<'a>(
+fn extend_tf_type_needs<'a, 'b>(
     scope: SymbolId,
     table: &VSymbolTable,
-    st: &mut ElaborationState<'a>,
+    st: &mut ElaborationState<'a, 'b>,
     tf_type: &TfType<'a>,
 ) {
     if let TfType::Net {
@@ -1541,10 +1546,10 @@ fn extend_tf_type_needs<'a>(
     }
 }
 
-pub fn extend_var_type_needs<'a>(
+pub fn extend_var_type_needs<'a, 'b>(
     scope: SymbolId,
     table: &VSymbolTable,
-    st: &mut ElaborationState<'a>,
+    st: &mut ElaborationState<'a, 'b>,
     var_type: AstId<'a, VariableType<'a>>,
 ) {
     match var_type.variant {
@@ -1562,10 +1567,10 @@ pub fn extend_var_type_needs<'a>(
     }
 }
 
-pub fn extend_expr_needs<'a>(
+pub fn extend_expr_needs<'a, 'b>(
     scope: SymbolId,
     table: &VSymbolTable,
-    st: &mut ElaborationState<'a>,
+    st: &mut ElaborationState<'a, 'b>,
     expr: AstId<'a, ConstantExpr<'a>>,
 ) {
     let expr = expr.into_expr();
@@ -1931,10 +1936,10 @@ pub fn finalize_symbol<'a>(
     Ok(())
 }
 
-fn extend_block_sids<'a>(
+fn extend_block_sids<'a, 'b>(
     scope: SymbolId,
     ctx: &mut LowerContext<'a>,
-    st: &mut ElaborationState<'a>,
+    st: &mut ElaborationState<'a, 'b>,
     diagnostics: &mut Diagnostics,
     block: Option<AstId<'a, Block<'a>>>,
     stmts: AstIdRange<'a, Statement<'a>>,

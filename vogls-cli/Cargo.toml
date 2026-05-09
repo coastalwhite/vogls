@@ -1,0 +1,15 @@
+[package]
+name = "vogls-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "vogls"
+path = "src/main.rs"
+
+[dependencies]
+vogls.workspace = true
+clap.workspace = true
+
+[lints]
+workspace = true

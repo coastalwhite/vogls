@@ -164,10 +164,10 @@ pub fn lower_sdf<'a>(
     ctx: &mut LowerContext<'a>,
     mctx: &mut MutLowerContext,
     path: &Path,
-    diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
     let Ok(sdf) = std::fs::read_to_string(path) else {
-        diagnostics.not_yet_implemented(TokenRange::default(), "SDF file cannot be opened");
+        mctx.diagnostics
+            .not_yet_implemented(TokenRange::default(), "SDF file cannot be opened");
         return Err(());
     };
 
@@ -175,7 +175,7 @@ pub fn lower_sdf<'a>(
     let sdf = match vogls_sdf::DelayFile::consume(&mut tkw) {
         Ok(sdf) => sdf,
         Err(err) => {
-            diagnostics.errors.push((
+            mctx.diagnostics.errors.push((
                 TokenRange::default(),
                 LowerErrorReason::NotYetImplemented("failed to parse SDF file"),
                 vec![err.to_string()],
@@ -211,7 +211,8 @@ pub fn lower_sdf<'a>(
                 U::Femtoseconds => Some(Time::from_fs(n)),
             };
             let Some(n) = n else {
-                diagnostics.not_yet_implemented(TokenRange::default(), "timescale overflow");
+                mctx.diagnostics
+                    .not_yet_implemented(TokenRange::default(), "timescale overflow");
                 return Err(());
             };
             n
@@ -235,7 +236,8 @@ pub fn lower_sdf<'a>(
             Instance::Empty => {
                 let roots = ctx.table.roots();
                 if roots.len() != 1 {
-                    diagnostics.not_yet_implemented(TokenRange::default(), "ambiguous top-level");
+                    mctx.diagnostics
+                        .not_yet_implemented(TokenRange::default(), "ambiguous top-level");
                     error = true;
                     continue;
                 }
@@ -243,7 +245,7 @@ pub fn lower_sdf<'a>(
             }
             Instance::Star => todo!(),
             Instance::HierarchicalIdent(hident) => {
-                let Ok(cell_sid) = resolve_ident(ctx, root, &hident, diagnostics) else {
+                let Ok(cell_sid) = resolve_ident(ctx, root, &hident, &mut mctx.diagnostics) else {
                     error = true;
                     continue;
                 };
@@ -284,13 +286,13 @@ pub fn lower_sdf<'a>(
                                                     ctx,
                                                     cell_sid,
                                                     from,
-                                                    diagnostics,
+                                                    &mut mctx.diagnostics,
                                                 ),
                                                 resolve_port_instance(
                                                     ctx,
                                                     cell_sid,
                                                     to,
-                                                    diagnostics,
+                                                    &mut mctx.diagnostics,
                                                 ),
                                             ) else {
                                                 error = true;
@@ -305,7 +307,7 @@ pub fn lower_sdf<'a>(
                                                 &ctx.table[to_sid].content,
                                             )
                                             else {
-                                                diagnostics.not_yet_implemented(
+                                                mctx.diagnostics.not_yet_implemented(
                                                     TokenRange::default(),
                                                     "Not a net",
                                                 );
@@ -353,13 +355,13 @@ pub fn lower_sdf<'a>(
                                                     ctx,
                                                     cell_sid,
                                                     from,
-                                                    diagnostics,
+                                                    &mut mctx.diagnostics,
                                                 ),
                                                 resolve_port_instance(
                                                     ctx,
                                                     cell_sid,
                                                     to,
-                                                    diagnostics,
+                                                    &mut mctx.diagnostics,
                                                 ),
                                             ) else {
                                                 error = true;
@@ -374,7 +376,7 @@ pub fn lower_sdf<'a>(
                                                 &ctx.table[to_sid].content,
                                             )
                                             else {
-                                                diagnostics.not_yet_implemented(
+                                                mctx.diagnostics.not_yet_implemented(
                                                     TokenRange::default(),
                                                     "Not a net",
                                                 );
@@ -424,7 +426,9 @@ pub fn lower_sdf<'a>(
         }
     }
 
-    if error { return Err(()); }
+    if error {
+        return Err(());
+    }
 
     // Drop here. Since we are about to mess up all the references.
     drop(property_to_content);

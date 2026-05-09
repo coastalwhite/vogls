@@ -8,6 +8,12 @@ pub struct TimerStack {
     pub finished: Vec<(usize, Cow<'static, str>, Duration)>,
 }
 
+impl Default for TimerStack {
+    fn default() -> Self {
+        Self::new(false)
+    }
+}
+
 impl TimerStack {
     pub const fn new(enabled: bool) -> Self {
         Self {

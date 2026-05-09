@@ -22,7 +22,7 @@ pub struct LowerContext<'a> {
     pub table: VSymbolTable,
     pub table_ast_refs: SymbolAstRefs<'a>,
     pub udps: VgHashMap<IdentId, AstId<'a, UdpDeclaration<'a>>>,
-    pub arenas: AstArenas,
+    pub arenas: &'a AstArenas,
     pub tokenized: &'a Tokenized,
     pub time_scale: TimeScale,
 }

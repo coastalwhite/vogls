@@ -88,6 +88,7 @@ impl AstArenas {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct Ast<'a> {
     pub descriptions: AstIdRange<'a, Description<'a>>,
 }

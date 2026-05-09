@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 use clap::Parser;
 use vogls::design::Design;
 use vogls::{ExecutionContext, SimulationIo};
-use vogls_ir::LogicMode;
-use vogls_ir::optimize::OptFlags;
-use vogls_utils::TimerStack;
+use vogls::ir::LogicMode;
+use vogls::ir::optimize::OptFlags;
+use vogls::utils::TimerStack;
 
 #[derive(clap::Parser, Debug)]
 #[command(version, about, long_about = None)]
