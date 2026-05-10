@@ -1,6 +1,9 @@
 use crate::token_range::TokenRange;
 use crate::{
-    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryImmOpSimplification, BinaryOp, Bits, GlobalContext, Instruction, IntrinsicOp, Process, ProcessKey, ProcessKind, ResizeOp, SignalKey, Time, UnaryOp, Variable, VariableKey, VectorSize, INTEGER_VSIZE, SCALAR_VSIZE, TIME_VSIZE
+    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryImmOpSimplification,
+    BinaryOp, Bits, GlobalContext, INTEGER_VSIZE, Instruction, IntrinsicOp, Process, ProcessKey,
+    ProcessKind, ResizeOp, SCALAR_VSIZE, SignalKey, TIME_VSIZE, Time, UnaryOp, Variable,
+    VariableKey, VectorSize,
 };
 
 #[must_use]
@@ -680,6 +683,45 @@ impl BasicBlockBuilder {
         rhs: VariableKey,
     ) -> VariableKey {
         self.unsigned_le(gl, rhs, lhs)
+    }
+
+    pub fn signed_lt(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+    ) -> VariableKey {
+        let ge = self.signed_le(gl, rhs, lhs);
+        self.logical_neg(gl, ge)
+    }
+    pub fn signed_gt(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+    ) -> VariableKey {
+        let le = self.signed_le(gl, lhs, rhs);
+        self.logical_neg(gl, le)
+    }
+    pub fn signed_le(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+    ) -> VariableKey {
+        assert_eq!(gl.vars[lhs].size, gl.vars[rhs].size);
+        let mask = Bits::new_with_msb_one(gl.vars[lhs].size);
+        let lhs = self.xor_constant(gl, lhs, mask.clone());
+        let rhs = self.xor_constant(gl, rhs, mask);
+        self.unsigned_le(gl, lhs, rhs)
+    }
+    pub fn signed_ge(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+    ) -> VariableKey {
+        self.signed_le(gl, rhs, lhs)
     }
 
     pub fn logical_or(

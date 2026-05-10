@@ -510,6 +510,19 @@ impl Bits {
         }
     }
 
+    pub fn new_with_msb_one(size: VectorSize) -> Self {
+        const MODE: Mode = Mode::TwoValue;
+        if size > MODE.max_inline_size() {
+            let mut values = (0..size_to_num_words(size))
+                .map(|_| 0u64)
+                .collect::<Box<[u64]>>();
+            values[(size.get() as usize).div_ceil(64)] |= 1u64 << (size.get() % 64);
+            Self::from_boxed_slice(MODE, size, values)
+        } else {
+            Self::from_u64(size, 1u64 << (size.get() - 1))
+        }
+    }
+
     pub fn new_zeroed(size: VectorSize) -> Self {
         const MODE: Mode = Mode::TwoValue;
         if size > MODE.max_inline_size() {
@@ -1457,7 +1470,7 @@ impl Bits {
         }
     }
 
-    fn is_equal_to_zero(&self) -> bool {
+    pub fn is_equal_to_zero(&self) -> bool {
         let mut x;
         !self.contains_special() && as_u64_value_slice!(x, self).iter().all(|v| *v == 0)
     }

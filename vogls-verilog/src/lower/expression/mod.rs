@@ -895,6 +895,32 @@ macro_rules! impl_bin_eq_ineq {
         }
         )+
     };
+    ($($f:ident => ($signed_f:ident, $unsigned_f:ident)),+ $(,)?) => {
+        $(
+        fn $f<'a>(
+            gl: &mut GlobalContext,
+            builder: &mut BasicBlockBuilder,
+            l: VariableKey,
+            l_ty: VType,
+            r: VariableKey,
+            r_ty: VType,
+        ) -> (VariableKey, VType) {
+            let (l, l_ty, r, r_ty) = coerce_bin_arithmetic(
+                gl,
+                builder,
+                l,
+                l_ty,
+                r,
+                r_ty,
+            );
+            if l_ty.is_signed() || r_ty.is_signed() {
+                (builder.$signed_f(gl, l, r), VType::SCALAR_NET)
+            } else {
+                (builder.$unsigned_f(gl, l, r), VType::SCALAR_NET)
+            }
+        }
+        )+
+    };
 }
 
 macro_rules! impl_shift {
@@ -929,10 +955,13 @@ impl_bin_arithmetic! {
 }
 
 impl_bin_eq_ineq! {
-    bin_greater_than => unsigned_gt,
-    bin_greater_than_equal => unsigned_ge,
-    bin_less_than => unsigned_lt,
-    bin_less_than_equal => unsigned_le,
+    bin_greater_than => (signed_gt, unsigned_gt),
+    bin_greater_than_equal => (signed_ge, unsigned_ge),
+    bin_less_than => (signed_lt, unsigned_lt),
+    bin_less_than_equal => (signed_le, unsigned_le),
+}
+
+impl_bin_eq_ineq! {
     bin_logical_equality => equals,
     bin_logical_inequality => not_equals,
     bin_case_equality => case_equals,
