@@ -6,7 +6,7 @@ use slotmap::{SlotMap, new_key_type};
 use vogls_bits::arithmetic::{FvLogicValue, fv_set_no_special};
 use vogls_bits::set_subslice::{tv_l_set, tv_s_set};
 use vogls_codegen::{Heap, HeapOffset, HeapRef};
-use vogls_ir::{INTEGER_VSIZE, LogicMode, Mode, TIME_VSIZE, VectorSize};
+use vogls_ir::{GlobalContext, INTEGER_VSIZE, LogicMode, Mode, TIME_VSIZE, VectorSize};
 use vogls_runtime::plugins::RuntimePluginState;
 use vogls_runtime::{RtSignalKey, SimulationIo};
 
@@ -244,6 +244,7 @@ impl Simulation {
 
     pub fn new_state(
         &self,
+        gl: &GlobalContext,
         regions: Regions,
         listeners: SlotMap<ListenerKey, Event>,
         watches: Vec<Vec<ListenerKey>>,
@@ -252,7 +253,12 @@ impl Simulation {
     ) -> SimulationState {
         SimulationState {
             schedule: BTreeMap::<Timestamp, Vec<Event>>::new(),
-            runtime: vogls_runtime::RuntimeState::new(heap, lupdt_updated),
+            runtime: vogls_runtime::RuntimeState::new(
+                gl.logic_mode,
+                heap,
+                gl.signals.len(),
+                lupdt_updated,
+            ),
             regions,
             listeners,
             watches,
@@ -712,7 +718,7 @@ impl Simulation {
                             }
                         };
 
-                        let updated = drive_bits(
+                        let mut updated = drive_bits(
                             &mut state.runtime.heap,
                             dst,
                             *src,
@@ -721,6 +727,18 @@ impl Simulation {
                             self.logic_mode,
                         );
 
+                        if !updated
+                            && matches!(self.logic_mode, LogicMode::TwoValue)
+                            && (state.runtime.tvl_first_write[sig.as_usize() / 64]
+                                >> (sig.as_usize() % 64)
+                                & 1)
+                                == 0
+                            && state.runtime.heap.load_tv_bits(dst).is_equal_to_zero()
+                        {
+                            updated = true;
+                            state.runtime.tvl_first_write[sig.as_usize() / 64] |=
+                                1u64 << (sig.as_usize() % 64);
+                        }
                         if updated {
                             self.update_signal(state, *sig);
                         }

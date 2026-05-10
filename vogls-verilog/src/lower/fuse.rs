@@ -7,7 +7,7 @@ use crate::ast::expr::{BitSlice, Expr};
 use crate::ast::module::NetAssignment;
 use crate::ast::{AstId, AstIdRange, HIdent};
 use crate::elaborate::VSymbol;
-use crate::lower::{hident_span, try_resolve_net, try_resolve_hident};
+use crate::lower::{hident_span, try_resolve_hident, try_resolve_net};
 
 use super::{Diagnostics, LowerContext, MutLowerContext, VType, VValue, eval_constant_expr};
 
@@ -308,7 +308,9 @@ pub fn try_fuse_assign<'a>(
 
     let single_expression = lvalue.constant_range_expression.and_then(|r| match *r {
         ConstantRangeExpression::Single(expr) => Some(expr),
-        ConstantRangeExpression::MsbLsb { .. } => None,
+        ConstantRangeExpression::MsbLsb { .. }
+        | ConstantRangeExpression::BasePlus { .. }
+        | ConstantRangeExpression::BaseMinus { .. } => None,
     });
 
     if lvalue.constant_exprs.len() + usize::from(single_expression.is_some()) < to_net.dims.len() {
@@ -444,6 +446,72 @@ pub fn try_fuse_assign<'a>(
                     return Ok(false);
                 };
                 SignalSlice::new(msb, lsb).unwrap()
+            }
+            ConstantRangeExpression::BasePlus { base, width } => {
+                let base = eval_constant_expr(
+                    &mctx.gl,
+                    &ctx.arenas,
+                    &ctx.table,
+                    scope,
+                    &mut mctx.diagnostics,
+                    *base,
+                    None,
+                )?;
+                let width = eval_constant_expr(
+                    &mctx.gl,
+                    &ctx.arenas,
+                    &ctx.table,
+                    scope,
+                    &mut mctx.diagnostics,
+                    *width,
+                    None,
+                )?;
+
+                let base = base.truncate_or_extend(INTEGER_VSIZE);
+                let Some(base) = base.into_bits().extract_exact_u32() else {
+                    return Ok(false);
+                };
+                let width = width.truncate_or_extend(INTEGER_VSIZE);
+                let Some(width) = width.into_bits().extract_exact_u32() else {
+                    return Ok(false);
+                };
+                let Some(width) = VectorSize::new(width) else {
+                    return Ok(false);
+                };
+                SignalSlice::from_width(base, width).unwrap()
+            }
+            ConstantRangeExpression::BaseMinus { base, width } => {
+                let base = eval_constant_expr(
+                    &mctx.gl,
+                    &ctx.arenas,
+                    &ctx.table,
+                    scope,
+                    &mut mctx.diagnostics,
+                    *base,
+                    None,
+                )?;
+                let width = eval_constant_expr(
+                    &mctx.gl,
+                    &ctx.arenas,
+                    &ctx.table,
+                    scope,
+                    &mut mctx.diagnostics,
+                    *width,
+                    None,
+                )?;
+
+                let base = base.truncate_or_extend(INTEGER_VSIZE);
+                let Some(base) = base.into_bits().extract_exact_u32() else {
+                    return Ok(false);
+                };
+                let width = width.truncate_or_extend(INTEGER_VSIZE);
+                let Some(width) = width.into_bits().extract_exact_u32() else {
+                    return Ok(false);
+                };
+                let Some(width) = VectorSize::new(width) else {
+                    return Ok(false);
+                };
+                SignalSlice::from_width(base - width.get() + 1, width).unwrap()
             }
         };
 

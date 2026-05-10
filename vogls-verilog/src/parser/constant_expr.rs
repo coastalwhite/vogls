@@ -51,7 +51,13 @@ impl<'a> Consumable<'a> for ConstantRangeExpression<'a> {
         // | msb_constant_expression : lsb_constant_expression
 
         let msb = parse::<ConstantExpr>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
-        if tkw.next_if_equals(T::Colon) {
+        if tkw.next_if_equals(T::PlusColon) {
+            let width = parse::<ConstantExpr>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+            Ok(Self::BasePlus { base: msb, width })
+        } else if tkw.next_if_equals(T::MinusColon) {
+            let width = parse::<ConstantExpr>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+            Ok(Self::BaseMinus { base: msb, width })
+        } else if tkw.next_if_equals(T::Colon) {
             let lsb = parse::<ConstantExpr>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
             Ok(Self::MsbLsb { msb, lsb })
         } else {

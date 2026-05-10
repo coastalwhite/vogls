@@ -1,6 +1,7 @@
 use std::io;
 
 use vogls_codegen::Heap;
+use vogls_ir::LogicMode;
 use vogls_utils::{TableKey, new_table_key};
 
 pub mod plugins;
@@ -22,6 +23,7 @@ pub struct RuntimeState {
     pub heap: Heap,
     pub time: u64,
     pub last_active_time: Vec<u64>,
+    pub tvl_first_write: Vec<u64>,
     pub event_count: u64,
     pub instruction_count: u64,
 }
@@ -32,6 +34,7 @@ impl Clone for RuntimeState {
             heap: self.heap.clone(),
             time: self.time.clone(),
             last_active_time: self.last_active_time.clone(),
+            tvl_first_write: self.tvl_first_write.clone(),
             event_count: self.event_count.clone(),
             instruction_count: self.instruction_count.clone(),
         }
@@ -39,7 +42,7 @@ impl Clone for RuntimeState {
 }
 
 impl RuntimeState {
-    pub fn new(heap: Heap, lupdt_updated: &[bool]) -> Self {
+    pub fn new(mode: LogicMode, heap: Heap, num_signals: usize, lupdt_updated: &[bool]) -> Self {
         Self {
             heap,
             time: 0,
@@ -47,6 +50,10 @@ impl RuntimeState {
                 .iter()
                 .map(|updated| if *updated { 0 } else { u64::MAX })
                 .collect(),
+            tvl_first_write: match mode {
+                LogicMode::TwoValue => vec![0u64; num_signals.div_ceil(64)],
+                LogicMode::FourValue => Vec::new(),
+            },
             event_count: 0,
             instruction_count: 0,
         }

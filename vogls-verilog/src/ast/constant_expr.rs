@@ -15,12 +15,22 @@ pub struct ConstantExpr<'a>(pub Expr<'a>);
 // constant_range_expression ::=
 //   constant_expression
 // | msb_constant_expression : lsb_constant_expression
+// | constant_base_expression +: width_constant_expression
+// | constant_base_expression -: width_constant_expression
 #[derive(Clone, Copy)]
 pub enum ConstantRangeExpression<'a> {
     Single(AstId<'a, ConstantExpr<'a>>),
     MsbLsb {
         msb: AstId<'a, ConstantExpr<'a>>,
         lsb: AstId<'a, ConstantExpr<'a>>,
+    },
+    BasePlus {
+        base: AstId<'a, ConstantExpr<'a>>,
+        width: AstId<'a, ConstantExpr<'a>>,
+    },
+    BaseMinus {
+        base: AstId<'a, ConstantExpr<'a>>,
+        width: AstId<'a, ConstantExpr<'a>>,
     },
 }
 

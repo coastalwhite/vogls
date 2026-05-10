@@ -838,7 +838,8 @@ impl FuseGraph {
                 }
 
                 // Inversion
-                if reached_fixed_point
+                if false
+                    && reached_fixed_point
                     && passes.contains(FusePasses::INVERSION)
                     && !nodes[n].flags.contains(NodeFlags::DRIVE)
                     && nodes[n].fanin.iter().any(|&e| {

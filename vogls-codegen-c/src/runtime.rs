@@ -261,7 +261,12 @@ impl CDesign {
         CDesignState {
             schedule,
             listening,
-            runtime: vogls_runtime::RuntimeState::new(heap, lupdt_updated),
+            runtime: vogls_runtime::RuntimeState::new(
+                gl.logic_mode,
+                heap,
+                gl.signals.len(),
+                lupdt_updated,
+            ),
             plugins: Vec::new(),
         }
     }

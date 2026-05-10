@@ -534,10 +534,31 @@ pub fn net_lvalue_flat_ty<'a>(
                     *lsb,
                 )?;
                 Ok(VType::UnsignedNet(width))
-            } // RangeExpression::BasePlus(_, width) | RangeExpression::BaseMinus(_, width) => {
-              //     let width = eval_constant_expr(gl, arenas, scope, diagnostics, *width)?;
-              //     Ok(VType::UnsignedNet(width.to_vector_size().unwrap()))
-              // }
+            }
+            ConstantRangeExpression::BasePlus { width, .. }
+            | ConstantRangeExpression::BaseMinus { width, .. } => {
+                let width = eval_constant_expr(
+                    &mctx.gl,
+                    &ctx.arenas,
+                    &ctx.table,
+                    scope,
+                    &mut mctx.diagnostics,
+                    *width,
+                    None,
+                )?;
+                let width = width.truncate_or_extend(INTEGER_VSIZE);
+                let Some(width) = width.into_bits().extract_exact_u32() else {
+                    panic!();
+                };
+                let Some(width) = VectorSize::new(width) else {
+                    mctx.diagnostics.not_yet_implemented(
+                        ctx.arenas.get_span(*range_expression),
+                        "non-zero-width",
+                    );
+                    return Err(());
+                };
+                Ok(VType::UnsignedNet(width))
+            }
         },
     }
 }
@@ -680,6 +701,72 @@ fn assign_net_lvalue_flat<'a>(
                         *lsb,
                     )?;
                     (lsb, size)
+                }
+                ConstantRangeExpression::BasePlus { base, width } => {
+                    let base = eval_constant_expr(
+                        &mctx.gl,
+                        &ctx.arenas,
+                        &ctx.table,
+                        scope,
+                        &mut mctx.diagnostics,
+                        *base,
+                        None,
+                    )?;
+                    let width = eval_constant_expr(
+                        &mctx.gl,
+                        &ctx.arenas,
+                        &ctx.table,
+                        scope,
+                        &mut mctx.diagnostics,
+                        *width,
+                        None,
+                    )?;
+
+                    let base = base.truncate_or_extend(INTEGER_VSIZE);
+                    let Some(base) = base.into_bits().extract_exact_u32() else {
+                        panic!();
+                    };
+                    let width = width.truncate_or_extend(INTEGER_VSIZE);
+                    let Some(width) = width.into_bits().extract_exact_u32() else {
+                        panic!();
+                    };
+                    let Some(width) = VectorSize::new(width) else {
+                        panic!();
+                    };
+                    (base as i64, width)
+                }
+                ConstantRangeExpression::BaseMinus { base, width } => {
+                    let base = eval_constant_expr(
+                        &mctx.gl,
+                        &ctx.arenas,
+                        &ctx.table,
+                        scope,
+                        &mut mctx.diagnostics,
+                        *base,
+                        None,
+                    )?;
+                    let width = eval_constant_expr(
+                        &mctx.gl,
+                        &ctx.arenas,
+                        &ctx.table,
+                        scope,
+                        &mut mctx.diagnostics,
+                        *width,
+                        None,
+                    )?;
+
+                    let base = base.truncate_or_extend(INTEGER_VSIZE);
+                    let Some(base) = base.into_bits().extract_exact_u32() else {
+                        panic!();
+                    };
+                    let width = width.truncate_or_extend(INTEGER_VSIZE);
+                    let Some(width) = width.into_bits().extract_exact_u32() else {
+                        panic!();
+                    };
+                    let Some(width) = VectorSize::new(width) else {
+                        panic!();
+                    };
+                    ((base - width.get() + 1) as i64, width)
                 }
             };
 

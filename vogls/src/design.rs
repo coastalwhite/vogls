@@ -1146,7 +1146,7 @@ impl Design {
         );
         simulation.itrace = itrace;
         let mut initial_state =
-            simulation.new_state(regions, listeners, watches, heap, &lupdt_updated);
+            simulation.new_state(&gl, regions, listeners, watches, heap, &lupdt_updated);
         initial_state.plugins = plugins;
 
         Ok(Self {

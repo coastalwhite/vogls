@@ -392,8 +392,8 @@ use vogls_fuse_signals::{Driver, InputEdge};
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::vcd::{VcdScope, VcdValue, VcdVariable, VcdVariableKey};
 use vogls_ir::{
-    BasicBlockBuilder, BasicBlockTerminator, GlobalContext, ProcessKey, ProcessKind, SCALAR_VSIZE,
-    SignalKey, SignalSlice, VariableKey, VectorSize, new_process,
+    BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, ProcessKey, ProcessKind,
+    SCALAR_VSIZE, SignalKey, SignalSlice, VariableKey, VectorSize, new_process,
 };
 use vogls_utils::{IndexMap, OrderedSet, Table, VgHashMap};
 
@@ -949,6 +949,7 @@ pub fn create_nba_process(
     signal: SignalKey,
     needs_mask: bool,
 ) -> (ProcessKey, SignalKey, Option<SignalKey>) {
+    let needs_mask = true;
     let vogls_ir::Signal {
         name, origin, size, ..
     } = &gl.signals[signal];
@@ -977,9 +978,9 @@ pub fn create_nba_process(
         None => {
             let init_bb = builder.key();
             let value_v = builder.probe(gl, value);
+            builder = builder.wait_region(gl, Region::NonBlocking as u8);
             builder.drive(gl, signal, value_v);
-            builder = builder.watch(gl, [value].into());
-            builder.wait_region_to(gl, Region::NonBlocking as u8, init_bb);
+            builder.watch_to(gl, [value].into(), init_bb);
         }
         Some(mask) => {
             // We need to conditionally branch here as it might have already been assigned before.
@@ -990,7 +991,7 @@ pub fn create_nba_process(
             builder = builder.next_terminate_later(gl);
 
             let watch_bb = builder.key();
-            builder = builder.watch(gl, [value].into());
+            builder = builder.watch(gl, [mask].into());
 
             let waitregion_bb = builder.key();
             builder = builder.wait_region(gl, Region::NonBlocking as u8);
@@ -1003,6 +1004,8 @@ pub fn create_nba_process(
             let value_v = builder.and(gl, value_v, mask_v);
             let result = builder.or(gl, old, value_v);
             builder.drive(gl, signal, result);
+            let zero_mask = builder.constant(gl, Bits::new_zeroed(size));
+            builder.drive(gl, mask, zero_mask);
             builder.jump_to(gl, watch_bb);
 
             gl.bbs[init_bb].terminator =
