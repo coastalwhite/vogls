@@ -16,7 +16,7 @@ use crate::ast::specify::{
 use crate::ast::{AstId, AstIdRange};
 use crate::elaborate::VSymbol;
 use crate::lower::expression::lower_expr;
-use crate::lower::{eval_constant_expr, try_resolve_symbol_id, unwrap_get_net_mut};
+use crate::lower::{eval_constant_expr, try_resolve_hident, unwrap_get_net_mut};
 
 use super::{LowerContext, MutLowerContext};
 
@@ -553,7 +553,7 @@ pub fn lower_specify<'a>(
                     todo!()
                 };
 
-                let input_sid = try_resolve_symbol_id(
+                let input_sid = try_resolve_hident(
                     scope,
                     &ctx.table,
                     &ctx.arenas,
@@ -568,7 +568,7 @@ pub fn lower_specify<'a>(
                     return Err(());
                 };
                 let input = input_net.net.probe_signal();
-                let output_sid = try_resolve_symbol_id(
+                let output_sid = try_resolve_hident(
                     scope,
                     &ctx.table,
                     &ctx.arenas,

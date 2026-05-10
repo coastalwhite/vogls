@@ -167,51 +167,74 @@ pub fn resolve_symbol_id(
     }
 }
 
-pub fn resolve_symbol_id_hier<'a>(
+pub fn resolve_hier_symbol_id(
+    scope: SymbolId,
+    table: &VSymbolTable,
+    ident: IdentId,
+) -> Option<SymbolId> {
+    let mut scope = scope;
+    loop {
+        if let Some(k) = table.resolve(scope, ident) {
+            return Some(k);
+        }
+
+        let item = &table[scope];
+        let parent = item.parent()?;
+        scope = parent;
+    }
+}
+
+fn resolve_hident_impl<'a>(
+    scope: SymbolId,
+    table: &VSymbolTable,
+    ident: impl Into<HIdent<'a>>,
+) -> Result<SymbolId, AstItem<Identifier>> {
+    let ident = ident.into();
+
+    let mut scope = scope;
+
+    // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 196
+    //
+    // """
+    // If an identifier is referenced with a hierarchical name, the path can start with a module
+    // name, instance name, task, function, named block, or named generate block. The names shall
+    // be searched first at the current level and then in higher level modules until found. Because
+    // both module names and instance names can be used, precedence is given to instance names if
+    // there is a module named the same as an instance name.
+    // """
+
+    let Some(fst) = ident.components.first() else {
+        return resolve_symbol_id(scope, table, ident.ident.item.0).ok_or(ident.ident);
+    };
+
+    // @TODO: Allow module names as well if the next line fails.
+    scope = resolve_hier_symbol_id(scope, table, fst.ident.item.0).ok_or(fst.ident)?;
+    for component in ident.components.iter().skip(1) {
+        scope = table
+            .resolve(scope, component.ident.item.0)
+            .ok_or(component.ident)?;
+    }
+    table.resolve(scope, ident.ident.item.0).ok_or(ident.ident)
+}
+
+pub fn resolve_hident<'a>(
     scope: SymbolId,
     table: &VSymbolTable,
     ident: impl Into<HIdent<'a>>,
 ) -> Option<SymbolId> {
-    let ident = ident.into();
-
-    let mut scope = scope;
-
-    for component in ident.components {
-        scope = resolve_symbol_id(scope, table, component.ident.item.0)?;
-    }
-
-    resolve_symbol_id(scope, table, ident.ident.item.0)
+    resolve_hident_impl(scope, table, ident).ok()
 }
 
-pub fn try_resolve_symbol_id<'a>(
+pub fn try_resolve_hident<'a>(
     scope: SymbolId,
     table: &VSymbolTable,
     arenas: &AstArenas,
     ident: impl Into<HIdent<'a>>,
     diagnostics: &mut Diagnostics,
 ) -> Result<SymbolId, ()> {
-    let ident = ident.into();
-
-    let mut scope = scope;
-
-    for component in ident.components {
-        scope = try_resolve_symbol_id_nonhier(scope, table, arenas, component.ident, diagnostics)?;
-    }
-
-    try_resolve_symbol_id_nonhier(scope, table, arenas, ident.ident, diagnostics)
-}
-pub fn try_resolve_symbol_id_nonhier(
-    scope: SymbolId,
-    table: &VSymbolTable,
-    arenas: &AstArenas,
-    ident: AstItem<Identifier>,
-    diagnostics: &mut Diagnostics,
-) -> Result<SymbolId, ()> {
-    let Some(symid) = resolve_symbol_id(scope, table, ident.item.0) else {
+    resolve_hident_impl(scope, table, ident).map_err(|ident| {
         diagnostics.var_not_found(arenas, ident);
-        return Err(());
-    };
-    Ok(symid)
+    })
 }
 
 pub fn try_resolve_net<'a, 's>(
@@ -222,7 +245,7 @@ pub fn try_resolve_net<'a, 's>(
     diagnostics: &mut Diagnostics,
 ) -> Result<&'s NetSymbol, ()> {
     let ident = ident.into();
-    let sid = try_resolve_symbol_id(scope, table, arenas, ident, diagnostics)?;
+    let sid = try_resolve_hident(scope, table, arenas, ident, diagnostics)?;
     let VSymbol::Net(n) = &table[sid].content else {
         diagnostics.not_yet_implemented(hident_span(arenas, ident), "cannot be used as net");
         return Err(());
@@ -238,7 +261,7 @@ pub fn try_resolve_net_mut<'a, 's>(
     diagnostics: &mut Diagnostics,
 ) -> Result<&'s mut NetSymbol, ()> {
     let ident = ident.into();
-    let sid = try_resolve_symbol_id(scope, table, arenas, ident, diagnostics)?;
+    let sid = try_resolve_hident(scope, table, arenas, ident, diagnostics)?;
     let VSymbol::Net(n) = &mut table[sid].content else {
         diagnostics.not_yet_implemented(hident_span(arenas, ident), "cannot be used as net");
         return Err(());
@@ -253,7 +276,7 @@ pub fn try_resolve_net_with_sid<'a, 's>(
     diagnostics: &mut Diagnostics,
 ) -> Result<(SymbolId, &'s NetSymbol), ()> {
     let ident = ident.into();
-    let sid = try_resolve_symbol_id(scope, table, arenas, ident, diagnostics)?;
+    let sid = try_resolve_hident(scope, table, arenas, ident, diagnostics)?;
     let VSymbol::Net(n) = &table[sid].content else {
         diagnostics.not_yet_implemented(hident_span(arenas, ident), "cannot be used as net");
         return Err(());
@@ -355,7 +378,7 @@ pub fn try_resolve_constant<'a, 's>(
     diagnostics: &mut Diagnostics,
 ) -> Result<&'s VValue, ()> {
     let ident = ident.into();
-    let sid = try_resolve_symbol_id(scope, table, arenas, ident, diagnostics)?;
+    let sid = try_resolve_hident(scope, table, arenas, ident, diagnostics)?;
     let VSymbol::Parameter(value) = &table[sid].content else {
         diagnostics.not_yet_implemented(hident_span(arenas, ident), "cannot be used as constant");
         return Err(());
@@ -606,7 +629,7 @@ fn assign_port_output<'a>(
                 }
             }
             Expr::Ident(ast_ident, exprs, range_expression) => {
-                let symbol_key = try_resolve_symbol_id(
+                let symbol_key = try_resolve_hident(
                     scope,
                     &ctx.table,
                     &ctx.arenas,
@@ -763,7 +786,7 @@ fn assign_task_output<'a>(
                 todo!()
             }
             Expr::Ident(ast_ident, exprs, range_expression) => {
-                let symbol_key = try_resolve_symbol_id(
+                let symbol_key = try_resolve_hident(
                     scope,
                     &ctx.table,
                     &ctx.arenas,
@@ -890,11 +913,14 @@ fn msb_lsb_to_width<'a>(
     let msb = eval_constant_expr(gl, arenas, table, scope, diagnostics, ast_msb, None);
     let lsb = eval_constant_expr(gl, arenas, table, scope, diagnostics, ast_lsb, None);
 
-    let (Ok(VValue::SignedNet(msb)), Ok(VValue::SignedNet(lsb))) = (msb, lsb) else {
+    let (Ok(msb), Ok(lsb)) = (msb, lsb) else {
         return Err(());
     };
-    let msb = msb.as_i64().unwrap();
-    let lsb = lsb.as_i64().unwrap();
+    let (Some(msb), Some(lsb)) = (msb.as_integer(), lsb.as_integer()) else {
+        let tr = arenas.get_span(ast_msb) | arenas.get_span(ast_lsb);
+        diagnostics.not_yet_implemented(tr, "Did not receive signed nets");
+        return Err(());
+    };
     let width = u32::try_from(msb.abs_diff(lsb)).ok();
     let width = width.and_then(|w| w.checked_add(1));
     let width = width.and_then(|w| VectorSize::new(w));

@@ -7,7 +7,7 @@ use crate::ast::expr::Expr;
 use crate::ast::statement::SystemTaskEnable;
 use crate::elaborate::VSymbol;
 use crate::lower::expression::{get_expr_type, lower_expr};
-use crate::lower::{LowerContext, MutLowerContext, try_resolve_symbol_id};
+use crate::lower::{LowerContext, MutLowerContext, try_resolve_hident};
 use crate::lower::{expression, hident_span, try_resolve_net};
 
 pub fn lower_system_task_enable<'a>(
@@ -160,16 +160,14 @@ pub fn lower_system_task_enable<'a>(
                 Expr::Ident(ident, exprs, range_exprs)
                     if exprs.is_empty() && range_exprs.is_none() =>
                 {
-                    let sid = try_resolve_symbol_id(
+                    let sid = try_resolve_hident(
                         scope,
                         &ctx.table,
                         &ctx.arenas,
                         *ident,
                         &mut mctx.diagnostics,
                     )?;
-                    let VSymbol::Parameter(v) =
-                        &ctx.table[sid].content
-                    else {
+                    let VSymbol::Parameter(v) = &ctx.table[sid].content else {
                         mctx.diagnostics.warnings.push((
                             ctx.arenas.get_span(system_task_enable),
                             "ignored: not yet supported path".to_string(),
@@ -348,8 +346,15 @@ pub fn lower_write_arguments<'a>(
                     b'd' | b'D' => Base::Decimal,
                     b'o' | b'O' => Base::Octal,
                     b'b' | b'B' => Base::Binary,
-                    b'c' | b'C' | b'l' | b'L' | b'v' | b'V' | b'm' | b'M' | b's' | b'S' | b't'
-                    | b'T' | b'u' | b'U' | b'z' | b'Z' => {
+                    b't' | b'T' => {
+                        mctx.diagnostics.warn_not_yet_implemented(
+                            ctx.arenas.get_span(expr),
+                            "format specifier redirect to Decimal",
+                        );
+                        Base::Decimal
+                    }
+                    b'c' | b'C' | b'l' | b'L' | b'v' | b'V' | b'm' | b'M' | b's' | b'S' | b'u'
+                    | b'U' | b'z' | b'Z' => {
                         mctx.diagnostics.not_yet_implemented(
                             ctx.arenas.get_span(expr),
                             "format specifier not yet supported",

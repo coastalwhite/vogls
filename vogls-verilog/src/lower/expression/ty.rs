@@ -7,7 +7,7 @@ use crate::elaborate::{VSymbol, VSymbolTable};
 use crate::lower::expression::system_function_call::get_system_function_call_output_ty;
 use crate::lower::expression::{coerce_to_max_size_ty, system_function_call};
 use crate::lower::{
-    Diagnostics, VType, eval_constant_expr, hident_span, msb_lsb_to_width, try_resolve_symbol_id,
+    Diagnostics, VType, eval_constant_expr, hident_span, msb_lsb_to_width, try_resolve_hident,
 };
 use crate::number::Sign;
 use crate::parser::AstArenas;
@@ -231,7 +231,7 @@ pub fn get_expr_type<'a>(
                 result_stack.push(Some(coerce_to_max_size_ty(t, f)));
             }
             Expr::Ident(ident, exprs, range_expr) => {
-                let symbol_id = try_resolve_symbol_id(scope, table, arenas, ident, diagnostics)?;
+                let symbol_id = try_resolve_hident(scope, table, arenas, ident, diagnostics)?;
                 let (ty, dims) = match &table[symbol_id].content {
                     VSymbol::Parameter(vvalue) => (vvalue.ty(), &[] as &[u32]),
                     VSymbol::Net(n) => (n.ty, n.dims.as_slice()),
@@ -311,7 +311,7 @@ pub fn get_expr_type<'a>(
                 result_stack.push(Some(ty));
             }
             Expr::FunctionCall(ident, _) => {
-                let Ok(fn_symbol) = try_resolve_symbol_id(scope, table, arenas, ident, diagnostics)
+                let Ok(fn_symbol) = try_resolve_hident(scope, table, arenas, ident, diagnostics)
                 else {
                     error = true;
                     result_stack.push(None);

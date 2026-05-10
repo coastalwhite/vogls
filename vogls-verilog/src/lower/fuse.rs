@@ -7,7 +7,7 @@ use crate::ast::expr::{BitSlice, Expr};
 use crate::ast::module::NetAssignment;
 use crate::ast::{AstId, AstIdRange, HIdent};
 use crate::elaborate::VSymbol;
-use crate::lower::{hident_span, try_resolve_net, try_resolve_symbol_id};
+use crate::lower::{hident_span, try_resolve_net, try_resolve_hident};
 
 use super::{Diagnostics, LowerContext, MutLowerContext, VType, VValue, eval_constant_expr};
 
@@ -183,7 +183,7 @@ pub fn try_lower_fuse_driver_ident<'a>(
     range_expr: Option<BitSlice<'_>>,
 ) -> Result<bool, ()> {
     let symbol_id =
-        try_resolve_symbol_id(scope, &ctx.table, &ctx.arenas, ident, &mut mctx.diagnostics)?;
+        try_resolve_hident(scope, &ctx.table, &ctx.arenas, ident, &mut mctx.diagnostics)?;
     let net = match &ctx.table[symbol_id].content {
         VSymbol::Parameter(_) => return Ok(false),
         VSymbol::Net(n) => n,

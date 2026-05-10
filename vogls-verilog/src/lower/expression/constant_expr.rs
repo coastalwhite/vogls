@@ -9,7 +9,7 @@ use crate::ast::expr::{BinaryOperator, Expr, UnaryOperator};
 use crate::elaborate::{VSymbol, VSymbolTable};
 use crate::lower::expression::{StackItem, get_expr_type};
 use crate::lower::vvalue::VValue;
-use crate::lower::{hident_span, try_resolve_constant, try_resolve_symbol_id};
+use crate::lower::{hident_span, try_resolve_constant, try_resolve_hident};
 use crate::number::Sign;
 use crate::parser::AstArenas;
 
@@ -292,8 +292,7 @@ pub fn eval_constant_expr<'a>(
                 if !item.dispatched {
                     item.dispatched = true;
 
-                    let Ok(fn_sid) =
-                        try_resolve_symbol_id(scope, &table, arenas, ident, diagnostics)
+                    let Ok(fn_sid) = try_resolve_hident(scope, &table, arenas, ident, diagnostics)
                     else {
                         result_stack.push(None);
                         error = true;
@@ -323,7 +322,7 @@ pub fn eval_constant_expr<'a>(
 
                 let return_stack_length = result_stack.len() - arguments.len();
 
-                let Ok(fn_sid) = try_resolve_symbol_id(scope, &table, arenas, ident, diagnostics)
+                let Ok(fn_sid) = try_resolve_hident(scope, &table, arenas, ident, diagnostics)
                 else {
                     result_stack.truncate(return_stack_length);
                     result_stack.push(None);

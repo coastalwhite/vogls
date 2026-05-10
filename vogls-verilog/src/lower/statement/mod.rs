@@ -16,7 +16,7 @@ use crate::ast::statement::{
 use crate::ast::{AstId, AstIdRange, AstItem, RangeExpression};
 use crate::lower::expression::function_call::lower_task_enable;
 use crate::lower::expression::{self, lower_expr};
-use crate::lower::{Region, assign, try_resolve_symbol_id};
+use crate::lower::{Region, assign, try_resolve_hident};
 
 use super::LowerContext;
 use super::MutLowerContext;
@@ -145,7 +145,7 @@ pub fn statements_to_process<'a>(
                 let SeqBlock { block, statements } = &*id;
 
                 let scope_key = match block {
-                    Some(blk) => try_resolve_symbol_id(
+                    Some(blk) => try_resolve_hident(
                         scope,
                         &ctx.table,
                         &ctx.arenas,
@@ -161,7 +161,7 @@ pub fn statements_to_process<'a>(
                 let ParBlock { block, statements } = &*id;
 
                 let scope_key = match block {
-                    Some(blk) => try_resolve_symbol_id(
+                    Some(blk) => try_resolve_hident(
                         scope,
                         &ctx.table,
                         &ctx.arenas,
@@ -431,7 +431,7 @@ pub fn get_used_signals<'a>(
         StatementContent::SeqBlock(id) => {
             let SeqBlock { block, statements } = &*id;
             let scope_key = match block {
-                Some(blk) => try_resolve_symbol_id(
+                Some(blk) => try_resolve_hident(
                     scope,
                     &ctx.table,
                     &ctx.arenas,
@@ -447,7 +447,7 @@ pub fn get_used_signals<'a>(
         StatementContent::ParBlock(id) => {
             let ParBlock { block, statements } = &*id;
             let scope_key = match block {
-                Some(blk) => try_resolve_symbol_id(
+                Some(blk) => try_resolve_hident(
                     scope,
                     &ctx.table,
                     &ctx.arenas,

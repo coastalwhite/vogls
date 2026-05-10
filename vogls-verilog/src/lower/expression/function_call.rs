@@ -8,7 +8,7 @@ use crate::ast::{AstId, AstIdRange, AstItem, HIdent, Identifier};
 use crate::elaborate::VSymbol;
 use crate::lower::expression::{lower_expr, truncate_or_extend};
 use crate::lower::{LowerContext, assign_task_output};
-use crate::lower::{MutLowerContext, VType, hident_span, try_resolve_symbol_id};
+use crate::lower::{MutLowerContext, VType, hident_span, try_resolve_hident};
 
 pub fn lower_function_call<'a>(
     ctx: &LowerContext<'a>,
@@ -20,7 +20,7 @@ pub fn lower_function_call<'a>(
     arguments: &[Option<(VariableKey, VType)>],
 ) -> Result<(VariableKey, VType), ()> {
     let fn_symbol =
-        try_resolve_symbol_id(scope, &ctx.table, &ctx.arenas, ident, &mut mctx.diagnostics)?;
+        try_resolve_hident(scope, &ctx.table, &ctx.arenas, ident, &mut mctx.diagnostics)?;
     let VSymbol::Function(fn_symbol) = &ctx.table[fn_symbol].content else {
         mctx.diagnostics
             .not_yet_implemented(hident_span(&ctx.arenas, ident), "not calling a function");
@@ -106,7 +106,7 @@ pub fn lower_task_enable<'a>(
     arguments: AstIdRange<Expr>,
 ) -> Result<BasicBlockBuilder, ()> {
     let fn_symbol =
-        try_resolve_symbol_id(scope, &ctx.table, &ctx.arenas, ident, &mut mctx.diagnostics)?;
+        try_resolve_hident(scope, &ctx.table, &ctx.arenas, ident, &mut mctx.diagnostics)?;
     let VSymbol::Task(task_symbol) = &ctx.table[fn_symbol].content else {
         mctx.diagnostics
             .not_yet_implemented(ctx.arenas.get_item_span(ident), "not enabling a task");

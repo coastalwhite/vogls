@@ -7,7 +7,7 @@ use crate::ast::{AstId, RangeExpression};
 use crate::elaborate::VSymbol;
 use crate::lower::expression::eval_constant_expr;
 use crate::lower::expression::{self, lower_expr, sign_or_zero_extend, truncate_or_extend};
-use crate::lower::{msb_lsb_to_width, try_resolve_symbol_id};
+use crate::lower::{msb_lsb_to_width, try_resolve_hident};
 
 use super::{LowerContext, try_resolve_net};
 use super::{MutLowerContext, VType};
@@ -88,7 +88,7 @@ pub fn variable_lvalue_flat_ty<'a>(
         range_expression,
     } = &*ast_lvalue;
 
-    let symbol_key = try_resolve_symbol_id(
+    let symbol_key = try_resolve_hident(
         scope,
         &ctx.table,
         &ctx.arenas,
@@ -182,7 +182,7 @@ pub fn assign_variable_lvalue_flat<'a>(
         range_expression,
     } = &*ast_lvalue;
 
-    let symbol_key = try_resolve_symbol_id(
+    let symbol_key = try_resolve_hident(
         scope,
         &ctx.table,
         &ctx.arenas,
@@ -473,7 +473,7 @@ pub fn net_lvalue_flat_ty<'a>(
         constant_range_expression,
     } = &*ast_lvalue;
 
-    let symbol_key = try_resolve_symbol_id(
+    let symbol_key = try_resolve_hident(
         scope,
         &ctx.table,
         &ctx.arenas,

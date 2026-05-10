@@ -27,9 +27,9 @@ use crate::ast::statement::{
 use crate::ast::{AstId, AstIdRange, AstItem, Identifier};
 use crate::elaborate::{FunctionSymbol, TaskSymbol};
 use crate::lower::{
-    Diagnostics, LowerContext, MutLowerContext, VType, VValue, eval_constant_expr,
-    resolve_symbol_id_hier, try_resolve_symbol_id, unwrap_get_module, unwrap_get_module_mut,
-    unwrap_get_net_mut, unwrap_get_param_mut,
+    Diagnostics, LowerContext, MutLowerContext, VType, VValue, eval_constant_expr, resolve_hident,
+    try_resolve_hident, unwrap_get_module, unwrap_get_module_mut, unwrap_get_net_mut,
+    unwrap_get_param_mut,
 };
 
 use super::{
@@ -423,7 +423,7 @@ fn extend_generate_loop_sids<'a, 'b>(
         );
         return Err(());
     }
-    let genvar_sid = try_resolve_symbol_id(
+    let genvar_sid = try_resolve_hident(
         scope,
         &ctx.table,
         &ctx.arenas,
@@ -1622,7 +1622,7 @@ pub fn extend_expr_needs<'a, 'b>(
                     }
                 }
 
-                if let Some(ident_sid) = resolve_symbol_id_hier(scope, table, *ident)
+                if let Some(ident_sid) = resolve_hident(scope, table, *ident)
                     && st.marked.insert(ident_sid)
                     && st.lvl_symbols.contains_key(&ident_sid)
                 {
@@ -1632,7 +1632,7 @@ pub fn extend_expr_needs<'a, 'b>(
             Expr::FunctionCall(ident, exprs) => {
                 dispatch_stack.extend(exprs.iter());
 
-                if let Some(ident_sid) = resolve_symbol_id_hier(scope, table, *ident)
+                if let Some(ident_sid) = resolve_hident(scope, table, *ident)
                     && st.marked.insert(ident_sid)
                     && st.lvl_symbols.contains_key(&ident_sid)
                 {

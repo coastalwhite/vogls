@@ -7,7 +7,7 @@ use vogls_utils::OrderedSet;
 use crate::ast::expr::{BinaryOperator, BitSlice, Expr, Replication, UnaryOperator};
 use crate::ast::{AstId, HIdent};
 use crate::elaborate::VSymbol;
-use crate::lower::{VType, hident_span, msb_lsb_to_width, try_resolve_symbol_id};
+use crate::lower::{VType, hident_span, msb_lsb_to_width, try_resolve_hident};
 use crate::number::Sign;
 pub use constant_expr::eval_constant_expr;
 pub use ty::get_expr_type;
@@ -51,8 +51,6 @@ pub fn lower_expr<'a>(
     scope: SymbolId,
     builder: &mut BasicBlockBuilder,
     expr: AstId<'a, Expr<'a>>,
-
-    //
     context_width: Option<VectorSize>,
 ) -> Result<(VariableKey, VType), ()> {
     let mut error = false;
@@ -168,7 +166,7 @@ pub fn lower_expr<'a>(
                 let r = result_stack.pop().unwrap();
                 let l = result_stack.pop().unwrap();
 
-                let (Some((mut l, l_ty)), Some((mut r, r_ty))) = (l, r) else {
+                let (Some((mut l, mut l_ty)), Some((mut r, mut r_ty))) = (l, r) else {
                     result_stack.push(None);
                     continue;
                 };
@@ -177,9 +175,11 @@ pub fn lower_expr<'a>(
                 if let Some(context_width) = item.context_width {
                     if !l_is_self_det && context_width > l_ty.force_net_width() {
                         l = zero_or_sign_extend(mctx.gl(), builder, l, l_ty, context_width);
+                        l_ty = l_ty.zero_or_sign_extend(context_width);
                     }
                     if !r_is_self_det && context_width > r_ty.force_net_width() {
                         r = zero_or_sign_extend(mctx.gl(), builder, r, r_ty, context_width);
+                        r_ty = r_ty.zero_or_sign_extend(context_width);
                     }
                 }
 
@@ -451,7 +451,7 @@ pub fn lower_expr<'a>(
                         Some(BitSlice::PlusWidth(..) | BitSlice::MinusWidth(..))
                     ));
                 let mut exprs = exprs;
-                let symbol_key = try_resolve_symbol_id(
+                let symbol_key = try_resolve_hident(
                     scope,
                     &ctx.table,
                     &ctx.arenas,
@@ -669,7 +669,7 @@ pub fn lower_expr<'a>(
             Expr::FunctionCall(ident, exprs) => {
                 if !item.dispatched {
                     item.dispatched = true;
-                    let Ok(fn_symbol) = try_resolve_symbol_id(
+                    let Ok(fn_symbol) = try_resolve_hident(
                         scope,
                         &ctx.table,
                         &ctx.arenas,
@@ -1091,7 +1091,7 @@ pub fn get_used_ident_signals<'a>(
     ident: impl Into<HIdent<'a>>,
 ) -> Result<(), ()> {
     let Ok(symbol_key) =
-        try_resolve_symbol_id(scope, &ctx.table, &ctx.arenas, ident, &mut mctx.diagnostics)
+        try_resolve_hident(scope, &ctx.table, &ctx.arenas, ident, &mut mctx.diagnostics)
     else {
         return Err(());
     };
