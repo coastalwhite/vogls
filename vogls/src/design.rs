@@ -918,6 +918,11 @@ impl Design {
         if let Some(vcd) = &ectx.vcd {
             lowered.trace_vcd(vcd.clone());
         }
+        lowered.itrace = ectx.itrace;
+        lowered.emit_vm = ectx.emit_vm;
+        lowered.stats = ectx.stats;
+        lowered.debug_symbols = ectx.debug_symbols;
+        lowered.output_source = ectx.output_source.clone();
 
         if ectx.compile {
             #[cfg(feature = "native")]
