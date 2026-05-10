@@ -12,14 +12,14 @@ use crate::ast::expr::{BitSlice, Expr, Replication};
 use crate::ast::module::{
     AlwaysConstruct, BlockItemDeclaration, CaseGenerateConstruct, CaseGenerateItem,
     CaseGeneratePattern, Dimension, FunctionDeclaration, FunctionRangeOrType, GenerateBlock,
-    GenerateRegion, GenvarAssignment, GenvarDeclaration, IfGenerateConstruct, InitialConstruct,
-    IntegerDeclaration, LocalParameterDeclaration, LoopGenerateConstruct, Module,
-    ModuleInstantiation, ModuleItem, ModuleOrGenerateItem, ModuleOrGenerateItemContent,
-    ModuleOrGenerateItemDeclaration, ModulePorts, NamedParameterAssignment, NetDeclAssignment,
-    NetDeclaration, NetDeclarationNets, NetIdent, NetType, NonPortModuleItem, ParamAssignment,
-    ParameterDeclaration, ParameterDeclarationTyping, ParameterValueAssignment, Port,
-    PortDeclaration, PortExpression, PortReference, Range, RegDeclaration, TaskDeclaration,
-    TaskPortItem, TaskPortItemContent, TfType, TimeScale, VariableType, VariableTypeVariant,
+    GenvarAssignment, GenvarDeclaration, IfGenerateConstruct, InitialConstruct, IntegerDeclaration,
+    LocalParameterDeclaration, LoopGenerateConstruct, Module, ModuleInstantiation, ModuleItem,
+    ModuleOrGenerateItem, ModuleOrGenerateItemContent, ModuleOrGenerateItemDeclaration,
+    ModulePorts, NamedParameterAssignment, NetDeclAssignment, NetDeclaration, NetDeclarationNets,
+    NetIdent, NetType, NonPortModuleItem, ParamAssignment, ParameterDeclaration,
+    ParameterDeclarationTyping, ParameterValueAssignment, Port, PortDeclaration, PortExpression,
+    PortReference, Range, RegDeclaration, TaskDeclaration, TaskPortItem, TaskPortItemContent,
+    TfType, TimeScale, VariableType, VariableTypeVariant,
 };
 use crate::ast::statement::{
     Block, ConditionalStatement, ParBlock, SeqBlock, Statement, StatementContent, StatementOrNull,
@@ -40,7 +40,6 @@ pub enum ElabLevel<'a> {
     GenerateIf(AstId<'a, IfGenerateConstruct<'a>>),
     GenerateLoop(AstId<'a, LoopGenerateConstruct<'a>>),
     GenerateCase(AstId<'a, CaseGenerateConstruct<'a>>),
-    GenerateRegion(GenerateRegion<'a>),
     GenerateBlock(AstIdRange<'a, ModuleOrGenerateItem<'a>>),
     Module(AstId<'a, Module<'a>>),
 }
@@ -199,13 +198,6 @@ pub fn elaborate<'a, 'b>(
             ElabLevel::GenerateCase(id) => {
                 lvl_error |=
                     extend_generate_case_sids(gl, scope, ctx, &mut st, id, diagnostics).is_err()
-            }
-            ElabLevel::GenerateRegion(region) => {
-                for item in region.module_or_generate_item.iter() {
-                    lvl_error |=
-                        extend_module_or_generate_item_sids(item, scope, ctx, &mut st, diagnostics)
-                            .is_err();
-                }
             }
             ElabLevel::GenerateBlock(mod_or_gen_items) => {
                 for item in mod_or_gen_items.iter() {
@@ -368,6 +360,35 @@ fn extend_generate_if_sids<'a, 'b>(
             Some(blk) => *blk,
         }
     };
+    extend_conditional_generate_sids(gl, scope, ctx, st, blk, diagnostics)
+}
+
+fn extend_conditional_generate_sids<'a, 'b>(
+    gl: &mut GlobalContext,
+    scope: SymbolId,
+    ctx: &mut LowerContext<'a>,
+    st: &mut ElaborationState<'a, 'b>,
+    blk: AstId<'a, Option<GenerateBlock<'a>>>,
+    diagnostics: &mut Diagnostics,
+) -> Result<(), ()> {
+    let Some(id) = &*blk else {
+        return Ok(());
+    };
+
+    // @TODO: Remove recursive nature here.
+    match id {
+        GenerateBlock::ModuleOrGenerateItem(id) => match &id.content {
+            ModuleOrGenerateItemContent::IfGenerateConstruct(id) => {
+                return extend_generate_if_sids(gl, scope, ctx, st, *id, diagnostics);
+            }
+            ModuleOrGenerateItemContent::CaseGenerateConstruct(id) => {
+                return extend_generate_case_sids(gl, scope, ctx, st, *id, diagnostics);
+            }
+            _ => {}
+        },
+        GenerateBlock::BeginEnd(..) => {}
+    }
+
     extend_opt_generate_block_sids(scope, ctx, st, blk, diagnostics)
 }
 
@@ -774,21 +795,11 @@ fn elaborate_module<'a, 'b>(
                         .is_err();
                 }
                 NonPortModuleItem::GenerateRegion(region) => {
-                    let offset = ctx
-                        .table_ast_refs
-                        .gen_blocks
-                        .insert(region.module_or_generate_item);
-                    let sid = ctx.table.insert_unlinked(
-                        IdentTable::EMPTY_IDENT,
-                        scope,
-                        ctx.arenas.get_span(*id),
-                        VSymbol::GenerateBlock(offset),
-                    );
-                    st.next_levels.push_back((
-                        sid,
-                        ElabLevel::GenerateRegion(*region),
-                        ctx.time_scale,
-                    ));
+                    for item in region.module_or_generate_item.iter() {
+                        error |=
+                            extend_module_or_generate_item_sids(item, scope, ctx, st, diagnostics)
+                                .is_err();
+                    }
                 }
                 NonPortModuleItem::ParameterDeclaration(id) => {
                     let ParameterDeclaration {
