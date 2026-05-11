@@ -65,7 +65,7 @@ use vogls_ir::{
     BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, Instruction, IntrinsicOp, Signal,
     SignalKey, SignalSlice, VectorSize, new_process,
 };
-use vogls_utils::{IndexMap, Table, VgHashMap, VgHashSet};
+use vogls_utils::{OrderedSet, Table, VgHashMap, VgHashSet};
 
 #[derive(PartialEq, Eq, Debug)]
 enum NodeContent {
@@ -463,18 +463,24 @@ pub fn fuse_signals(
         // If it is more complicated, we have to insert a process that propagated from driver to
         // drivee.
         let (_, mut builder) = new_process(gl, vogls_ir::ProcessKind::Fuse, TokenRange::default());
-        let mut watch_signals = IndexMap::default();
+        let mut watch_signals = OrderedSet::default();
+        for &e in &g.nodes[n].fanin {
+            let edge = &g.edges[e];
+            match &g.nodes[edge.driver].content {
+                NodeContent::Signal(driver) => _ = watch_signals.insert(*driver),
+                NodeContent::Constant(_) => {}
+            };
+        }
+
         for &e in &g.nodes[n].fanin {
             let edge = &g.edges[e];
             let value = match &g.nodes[edge.driver].content {
-                NodeContent::Signal(driver) => *watch_signals.get_or_insert_with(*driver, || {
-                    builder.probe_slice_constant(
-                        gl,
-                        *driver,
-                        edge.driver_slice.lsb(),
-                        edge.driver_slice.width(),
-                    )
-                }),
+                NodeContent::Signal(driver) => builder.probe_slice_constant(
+                    gl,
+                    *driver,
+                    edge.driver_slice.lsb(),
+                    edge.driver_slice.width(),
+                ),
                 NodeContent::Constant(value) => builder.constant(
                     gl,
                     value.slicez(edge.driver_slice.lsb(), edge.driver_slice.width()),
@@ -484,7 +490,7 @@ pub fn fuse_signals(
             builder.drive_partial_constant(gl, *signal, value, edge.drivee_slice.lsb())
         }
         let entry = builder.key();
-        builder.watch_to(gl, watch_signals.take_keys(), entry);
+        builder.watch_to(gl, watch_signals.items, entry);
     }
 
     (fused_signals, drive_map)
