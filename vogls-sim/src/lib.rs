@@ -727,18 +727,14 @@ impl Simulation {
                             self.logic_mode,
                         );
 
-                        if !updated
-                            && matches!(self.logic_mode, LogicMode::TwoValue)
-                            && (state.runtime.tvl_first_write[sig.as_usize() / 64]
-                                >> (sig.as_usize() % 64)
-                                & 1)
-                                == 0
-                            && state.runtime.heap.load_tv_bits(dst).is_equal_to_zero()
+                        let w = &mut state.runtime.tvl_first_write[sig.as_usize() / 64];
+                        if matches!(self.logic_mode, LogicMode::TwoValue)
+                            && ((*w >> (sig.as_usize() % 64)) & 1) == 0
                         {
                             updated = true;
-                            state.runtime.tvl_first_write[sig.as_usize() / 64] |=
-                                1u64 << (sig.as_usize() % 64);
+                            *w |= 1u64 << (sig.as_usize() % 64);
                         }
+
                         if updated {
                             self.update_signal(state, *sig);
                         }
