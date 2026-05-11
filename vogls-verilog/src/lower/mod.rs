@@ -735,6 +735,13 @@ fn assign_port_output<'a>(
                 let src = truncate_or_extend(mctx.gl(), &mut bb_builder, src, var_ty, length_dst);
                 let offset_dst =
                     bb_builder.minus_constant(mctx.gl(), offset_dst, Bits::new_u32(s.lsb));
+                if s.bit_reversed {
+                    bb_builder.revminus_constant(
+                        mctx.gl(),
+                        src,
+                        Bits::new_u32(s.net.width().get().wrapping_sub(length_dst.get())),
+                    );
+                }
                 s.net
                     .drive_blocking(mctx.gl(), &mut bb_builder, src, Some(offset_dst));
             }
@@ -871,7 +878,15 @@ fn assign_task_output<'a>(
 
                 let length_dst = length_dst.unwrap_or(SCALAR_VSIZE);
                 let src = truncate_or_extend(mctx.gl(), builder, variable, ty, length_dst);
-                let offset_dst = builder.minus_constant(mctx.gl(), offset_dst, Bits::new_u32(s.lsb));
+                let offset_dst =
+                    builder.minus_constant(mctx.gl(), offset_dst, Bits::new_u32(s.lsb));
+                if s.bit_reversed {
+                    builder.revminus_constant(
+                        mctx.gl(),
+                        src,
+                        Bits::new_u32(s.net.width().get().wrapping_sub(length_dst.get())),
+                    );
+                }
                 s.net
                     .drive_blocking(mctx.gl(), builder, src, Some(offset_dst));
             }

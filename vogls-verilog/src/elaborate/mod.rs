@@ -150,6 +150,9 @@ pub struct NetSymbol {
     /// Nets can be defined as [8:4] in which case the least-significant bit starts at `4` not at
     /// `0`.
     pub lsb: u32,
+    /// Nets can be defined as [0:7] in which case the addressing flips around, i.e. getting bit
+    /// `0` actually gets the most-significant bit.
+    pub bit_reversed: bool,
 
     pub net: Net,
     pub port_idx: Option<usize>,
@@ -218,7 +221,7 @@ pub fn evaluate_net_msb_lsb<'a>(
     scope: SymbolId,
     table: &VSymbolTable,
     diagnostics: &mut Diagnostics,
-) -> Result<(u32, u32, VectorSize), ()> {
+) -> Result<(u32, bool, VectorSize), ()> {
     let (msb, lsb, size) = eval_constant_range(gl, arenas, scope, table, diagnostics, id)?;
 
     let Ok(msb) = u32::try_from(msb) else {
@@ -230,12 +233,9 @@ pub fn evaluate_net_msb_lsb<'a>(
         return Err(());
     };
 
-    if msb < lsb {
-        diagnostics.not_yet_implemented(arenas.get_span(id), "reversed bits. msb < lsb");
-        return Err(());
-    }
-
-    Ok((msb, lsb, size))
+    let bit_reversed = msb < lsb;
+    let lsb = if bit_reversed { msb } else { lsb };
+    Ok((lsb, bit_reversed, size))
 }
 
 pub fn port_declaration_to_info<'a>(
@@ -247,7 +247,7 @@ pub fn port_declaration_to_info<'a>(
     parent: SymbolId,
     table: &VSymbolTable,
     diagnostics: &mut Diagnostics,
-) -> Result<(VType, u32, ConnectionDirection, AstIdRange<'a, Identifier>), ()> {
+) -> Result<(VType, u32, bool, ConnectionDirection, AstIdRange<'a, Identifier>), ()> {
     use ConnectionDirection as D;
     let (direction, range, signed, identifiers) = match &*id {
         PortDeclaration::Inout(inout) => {
@@ -259,13 +259,13 @@ pub fn port_declaration_to_info<'a>(
         }
     };
 
-    let (_msb, lsb, size) = match range {
-        None => (0, 0, SCALAR_VSIZE),
+    let (lsb, bit_reversed, size) = match range {
+        None => (0, false, SCALAR_VSIZE),
         Some(range) => evaluate_net_msb_lsb(gl, arenas, range, parent, table, diagnostics)?,
     };
 
     let ty = VType::net(size, signed);
-    Ok((ty, lsb, direction, identifiers))
+    Ok((ty, lsb, bit_reversed, direction, identifiers))
 }
 
 fn new_net(
