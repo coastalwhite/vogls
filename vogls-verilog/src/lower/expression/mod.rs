@@ -459,10 +459,14 @@ pub fn lower_expr<'a>(
                     &mut mctx.diagnostics,
                 )?;
                 let symbol = &ctx.table[symbol_key].content;
-                let (mut ty, mut var) = match &symbol {
+                let (mut ty, net_lsb, mut var) = match &symbol {
                     VSymbol::Parameter(value) => {
                         let value = value.clone();
-                        (value.ty(), builder.constant(mctx.gl(), value.into_bits()))
+                        (
+                            value.ty(),
+                            0,
+                            builder.constant(mctx.gl(), value.into_bits()),
+                        )
                     }
                     VSymbol::Task(_)
                     | VSymbol::GenVar
@@ -561,9 +565,9 @@ pub fn lower_expr<'a>(
                             );
                             let variable = builder.slice(mctx.gl(), variable, offset, size);
 
-                            (s.ty, variable)
+                            (s.ty, s.lsb, variable)
                         } else {
-                            (s.ty, s.net.probe(mctx.gl(), builder))
+                            (s.ty, s.lsb, s.net.probe(mctx.gl(), builder))
                         }
                     }
                 };
@@ -577,6 +581,7 @@ pub fn lower_expr<'a>(
                     ty = VType::SCALAR_NET;
                     let expr =
                         truncate_or_extend(&mut mctx.gl, builder, expr, expr_ty, INTEGER_VSIZE);
+                    let expr = builder.minus_constant(mctx.gl(), expr, Bits::new_u32(net_lsb));
                     var = builder.select_bit(&mut mctx.gl, var, expr);
                 }
 
@@ -661,6 +666,7 @@ pub fn lower_expr<'a>(
                     };
 
                     ty = VType::UnsignedNet(width);
+                    let lsb = builder.minus_constant(mctx.gl(), lsb, Bits::new_u32(net_lsb));
                     var = builder.slice(&mut mctx.gl, var, lsb, width as VectorSize);
                 }
 

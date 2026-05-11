@@ -33,7 +33,8 @@ use crate::lower::{
 };
 
 use super::{
-    ModuleSymbol, Net, NetSymbol, VSymbol, VSymbolTable, port_declaration_to_info, try_table_insert,
+    ModuleSymbol, Net, NetSymbol, VSymbol, VSymbolTable, evaluate_net_msb_lsb,
+    port_declaration_to_info, try_table_insert,
 };
 
 pub enum ElabLevel<'a> {
@@ -674,6 +675,7 @@ fn elaborate_module<'a, 'b>(
                             ty: VType::SCALAR_NET,
                             dims: Vec::new(),
                             net: st.dummy_net(),
+                            lsb: 0,
                             port_idx: Some(port_idx),
                         };
                         let symbol = VSymbol::Net(symbol);
@@ -712,6 +714,7 @@ fn elaborate_module<'a, 'b>(
                         ty: VType::SCALAR_NET,
                         dims: Vec::new(),
                         net: st.dummy_net(),
+                        lsb: 0,
                         port_idx: Some(port_idx),
                     };
                     let symbol = VSymbol::Net(symbol);
@@ -877,6 +880,7 @@ fn extend_module_or_generate_item_sids<'a, 'b>(
                                 ty: VType::SCALAR_NET,
                                 dims: Vec::new(),
                                 net: st.dummy_net(),
+                                lsb: 0,
                                 port_idx: None,
                             };
                             let symbol = VSymbol::Net(symbol);
@@ -921,6 +925,7 @@ fn extend_module_or_generate_item_sids<'a, 'b>(
                                 ty: VType::SCALAR_NET,
                                 dims: Vec::new(),
                                 net: st.dummy_net(),
+                                lsb: 0,
                                 port_idx: None,
                             };
                             let symbol = VSymbol::Net(symbol);
@@ -1343,6 +1348,7 @@ fn extend_variable_type_sids<'a, 'b>(
             ty: VType::SCALAR_NET,
             dims: Vec::new(),
             net: st.dummy_net(),
+            lsb: 0,
             port_idx: None,
         };
         let symbol = VSymbol::Net(symbol);
@@ -1720,18 +1726,18 @@ pub fn finalize_symbol<'a>(
                 identifier,
                 variant,
             } = &**variable_type;
-            let ty = match range {
-                None => VType::net(SCALAR_VSIZE, *signed),
+            let (ty, lsb) = match range {
+                None => (VType::net(SCALAR_VSIZE, *signed), 0),
                 Some(range) => {
-                    let (_, _, width) = super::eval_constant_range(
+                    let (_msb, lsb, size) = evaluate_net_msb_lsb(
                         gl,
-                        &ctx.arenas,
+                        ctx.arenas,
+                        *range,
                         scope,
                         &ctx.table,
                         diagnostics,
-                        *range,
                     )?;
-                    VType::net(width, *signed)
+                    (VType::net(size, *signed), lsb)
                 }
             };
             let parent = ctx.table[sid].parent().unwrap();
@@ -1766,6 +1772,7 @@ pub fn finalize_symbol<'a>(
             let net = unwrap_get_net_mut(&mut ctx.table, sid);
             net.net = super::new_net(gl, &ctx.arenas, &ty, &dims, *identifier, initialize);
             net.dims = dims;
+            net.lsb = lsb;
             net.ty = ty;
         }
         InLevelSymbol::Net(NetInLevelSymbol { decl, dim, ident }) => {
@@ -1776,18 +1783,18 @@ pub fn finalize_symbol<'a>(
                 nets: _,
             } = &**decl;
 
-            let ty = match range {
-                None => VType::net(SCALAR_VSIZE, *signed),
+            let (ty, lsb) = match range {
+                None => (VType::net(SCALAR_VSIZE, *signed), 0),
                 Some(range) => {
-                    let (_, _, width) = super::eval_constant_range(
+                    let (_msb, lsb, size) = evaluate_net_msb_lsb(
                         gl,
-                        &ctx.arenas,
+                        ctx.arenas,
+                        *range,
                         scope,
                         &ctx.table,
                         diagnostics,
-                        *range,
                     )?;
-                    VType::net(width, *signed)
+                    (VType::net(size, *signed), lsb)
                 }
             };
             let parent = ctx.table[sid].parent().unwrap();
@@ -1805,6 +1812,7 @@ pub fn finalize_symbol<'a>(
             let net = unwrap_get_net_mut(&mut ctx.table, sid);
             net.net = super::new_net(gl, &ctx.arenas, &ty, &dims, *ident, None);
             net.dims = dims;
+            net.lsb = lsb;
             net.ty = ty;
         }
         InLevelSymbol::Integer(id) => {
@@ -1848,10 +1856,11 @@ pub fn finalize_symbol<'a>(
             net.ty = VType::SignedNet(INTEGER_VSIZE);
         }
         InLevelSymbol::Port(PortInLevelSymbol { decl, ident }) => {
-            let (ty, _, _) =
+            let (ty, lsb, _, _) =
                 port_declaration_to_info(gl, &ctx.arenas, *decl, scope, &ctx.table, diagnostics)?;
             let net = unwrap_get_net_mut(&mut ctx.table, sid);
             net.net = super::new_net(gl, &ctx.arenas, &ty, &[], *ident, None);
+            net.lsb = lsb;
             net.ty = ty;
         }
         InLevelSymbol::Task(_) => {

@@ -385,7 +385,8 @@ pub fn assign_variable_lvalue_flat<'a>(
             let size = partial.map_or(size, |(_, s)| s);
             let variable =
                 expression::truncate_or_extend(mctx.gl(), builder, variable, variable_ty, size);
-            let partial = partial.map(|(o, _)| o);
+            let partial =
+                partial.map(|(o, _)| builder.minus_constant(mctx.gl(), o, Bits::new_u32(s.lsb)));
 
             if nba {
                 net.drive_non_blocking(mctx.gl(), builder, variable, partial);
@@ -781,7 +782,7 @@ fn assign_net_lvalue_flat<'a>(
     };
     let size = partial.map_or(s.ty.force_net_width(), |(_, s)| s);
     let variable = expression::sign_or_zero_extend(mctx.gl(), builder, variable, variable_ty, size);
-    let partial = partial.map(|(o, _)| o);
+    let partial = partial.map(|(o, _)| builder.minus_constant(mctx.gl(), o, Bits::new_u32(s.lsb)));
     s.net.drive_blocking(mctx.gl(), builder, variable, partial);
     Ok(())
 }

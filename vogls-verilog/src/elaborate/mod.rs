@@ -146,6 +146,11 @@ impl Net {
 pub struct NetSymbol {
     pub ty: VType,
     pub dims: Vec<u32>,
+
+    /// Nets can be defined as [8:4] in which case the least-significant bit starts at `4` not at
+    /// `0`.
+    pub lsb: u32,
+
     pub net: Net,
     pub port_idx: Option<usize>,
 }
@@ -204,6 +209,35 @@ pub fn try_table_insert(
     Ok(symid)
 }
 
+pub fn evaluate_net_msb_lsb<'a>(
+    gl: &mut GlobalContext,
+    arenas: &AstArenas,
+
+    id: AstId<'a, Range<'a>>,
+
+    scope: SymbolId,
+    table: &VSymbolTable,
+    diagnostics: &mut Diagnostics,
+) -> Result<(u32, u32, VectorSize), ()> {
+    let (msb, lsb, size) = eval_constant_range(gl, arenas, scope, table, diagnostics, id)?;
+
+    let Ok(msb) = u32::try_from(msb) else {
+        diagnostics.not_yet_implemented(arenas.get_span(id), "0 > msb > u32::MAX");
+        return Err(());
+    };
+    let Ok(lsb) = u32::try_from(lsb) else {
+        diagnostics.not_yet_implemented(arenas.get_span(id), "0 > lsb > u32::MAX");
+        return Err(());
+    };
+
+    if msb < lsb {
+        diagnostics.not_yet_implemented(arenas.get_span(id), "reversed bits. msb < lsb");
+        return Err(());
+    }
+
+    Ok((msb, lsb, size))
+}
+
 pub fn port_declaration_to_info<'a>(
     gl: &mut GlobalContext,
     arenas: &'a AstArenas,
@@ -213,7 +247,7 @@ pub fn port_declaration_to_info<'a>(
     parent: SymbolId,
     table: &VSymbolTable,
     diagnostics: &mut Diagnostics,
-) -> Result<(VType, ConnectionDirection, AstIdRange<'a, Identifier>), ()> {
+) -> Result<(VType, u32, ConnectionDirection, AstIdRange<'a, Identifier>), ()> {
     use ConnectionDirection as D;
     let (direction, range, signed, identifiers) = match &*id {
         PortDeclaration::Inout(inout) => {
@@ -225,12 +259,13 @@ pub fn port_declaration_to_info<'a>(
         }
     };
 
-    let (_, _, size) = match range {
+    let (_msb, lsb, size) = match range {
         None => (0, 0, SCALAR_VSIZE),
-        Some(range) => eval_constant_range(gl, arenas, parent, table, diagnostics, range)?,
+        Some(range) => evaluate_net_msb_lsb(gl, arenas, range, parent, table, diagnostics)?,
     };
+
     let ty = VType::net(size, signed);
-    Ok((ty, direction, identifiers))
+    Ok((ty, lsb, direction, identifiers))
 }
 
 fn new_net(

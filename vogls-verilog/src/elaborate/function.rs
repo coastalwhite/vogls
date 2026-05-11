@@ -5,10 +5,10 @@ use crate::ast::module::{
     FunctionDeclaration, FunctionRangeOrType, TaskDeclaration, TaskPortItemContent,
     TfInputDeclaration, TfType,
 };
-use crate::elaborate::NetSymbol;
-use crate::lower::{Diagnostics, LowerContext, VType, evaluate_range};
+use crate::elaborate::{NetSymbol, evaluate_net_msb_lsb};
+use crate::lower::{Diagnostics, LowerContext, VType};
 
-use super::{VSymbol, eval_constant_range};
+use super::VSymbol;
 
 pub fn elaborate_fn<'a>(
     gl: &mut GlobalContext,
@@ -32,17 +32,17 @@ pub fn elaborate_fn<'a>(
         ..
     } = &*id;
 
-    let (_, _, output_ty) = match &**range_or_type {
+    let (_msb, lsb, output_ty) = match &**range_or_type {
         FunctionRangeOrType::Unsigned(None) => (0, 0, VType::UnsignedNet(SCALAR_VSIZE)),
         FunctionRangeOrType::Signed(None) => (0, 0, VType::SignedNet(SCALAR_VSIZE)),
         FunctionRangeOrType::Unsigned(Some(range)) => {
             let (msb, lsb, size) =
-                eval_constant_range(gl, &ctx.arenas, parent, &ctx.table, diagnostics, *range)?;
+                evaluate_net_msb_lsb(gl, &ctx.arenas, *range, parent, &ctx.table, diagnostics)?;
             (msb, lsb, VType::UnsignedNet(size))
         }
         FunctionRangeOrType::Signed(Some(range)) => {
             let (msb, lsb, size) =
-                eval_constant_range(gl, &ctx.arenas, parent, &ctx.table, diagnostics, *range)?;
+                evaluate_net_msb_lsb(gl, &ctx.arenas, *range, parent, &ctx.table, diagnostics)?;
             (msb, lsb, VType::SignedNet(size))
         }
         FunctionRangeOrType::Integer => (31, 0, VType::SignedNet(INTEGER_VSIZE)),
@@ -67,6 +67,7 @@ pub fn elaborate_fn<'a>(
                 ty: output_ty,
                 dims: [].into(),
                 net,
+                lsb,
                 port_idx: None,
             }),
         )
@@ -83,23 +84,27 @@ pub fn elaborate_fn<'a>(
             port_identifiers,
         } = &*input_decl;
         for ident in port_identifiers.iter() {
-            let ty = match tf_type {
+            let (ty, lsb) = match tf_type {
                 TfType::Net {
                     reg: _,
                     signed,
                     range,
                 } => {
-                    let (_, _, width) = match range {
+                    let (_msb, lsb, width) = match range {
                         None => (0, 0, SCALAR_VSIZE),
                         // @TODO: Better error
-                        Some(range) => {
-                            evaluate_range(gl, &ctx.arenas, &ctx.table, symbol, diagnostics, *range)
-                                .unwrap()
-                        }
+                        Some(range) => evaluate_net_msb_lsb(
+                            gl,
+                            &ctx.arenas,
+                            *range,
+                            symbol,
+                            &ctx.table,
+                            diagnostics,
+                        )?,
                     };
-                    VType::net(width, *signed)
+                    (VType::net(width, *signed), lsb)
                 }
-                TfType::Integer => VType::SignedNet(INTEGER_VSIZE),
+                TfType::Integer => (VType::SignedNet(INTEGER_VSIZE), 0),
                 TfType::Real | TfType::Realtime | TfType::Time => todo!(),
             };
             let ident = ctx.arenas.to_item(ident);
@@ -116,6 +121,7 @@ pub fn elaborate_fn<'a>(
                         ty,
                         dims: [].into(),
                         net,
+                        lsb,
                         port_idx: None,
                     }),
                 )
@@ -166,22 +172,27 @@ pub fn elaborate_task<'a>(
             TaskPortItemContent::Inout(d) => (d.tf_type, D::Both, d.port_identifiers),
         };
         for ident in port_identifiers.iter() {
-            let ty = match tf_type {
+            let (ty, lsb) = match tf_type {
                 TfType::Net {
                     reg: _,
                     signed,
                     range,
                 } => {
-                    let (_, _, width) = match range {
+                    let (_msb, lsb, width) = match range {
                         None => (0, 0, SCALAR_VSIZE),
                         // @TODO: Better error
-                        Some(range) => {
-                            eval_constant_range(gl, &ctx.arenas, parent, &ctx.table, diagnostics, range)?
-                        }
+                        Some(range) => evaluate_net_msb_lsb(
+                            gl,
+                            &ctx.arenas,
+                            range,
+                            parent,
+                            &ctx.table,
+                            diagnostics,
+                        )?,
                     };
-                    VType::net(width, signed)
+                    (VType::net(width, signed), lsb)
                 }
-                TfType::Integer => VType::SignedNet(INTEGER_VSIZE),
+                TfType::Integer => (VType::SignedNet(INTEGER_VSIZE), 0),
                 TfType::Real | TfType::Realtime | TfType::Time => todo!(),
             };
             let ident = ctx.arenas.to_item(ident);
@@ -198,6 +209,7 @@ pub fn elaborate_task<'a>(
                         ty,
                         dims: [].into(),
                         net,
+                        lsb,
                         port_idx: None,
                     }),
                 )
