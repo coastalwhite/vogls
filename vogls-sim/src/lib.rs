@@ -727,8 +727,8 @@ impl Simulation {
                             self.logic_mode,
                         );
 
-                        let w = &mut state.runtime.tvl_first_write[sig.as_usize() / 64];
                         if matches!(self.logic_mode, LogicMode::TwoValue)
+                            && let w = &mut state.runtime.tvl_first_write[sig.as_usize() / 64]
                             && ((*w >> (sig.as_usize() % 64)) & 1) == 0
                         {
                             updated = true;
