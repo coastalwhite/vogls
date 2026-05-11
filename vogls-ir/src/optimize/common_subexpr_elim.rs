@@ -13,24 +13,10 @@ pub fn common_subexpr_elim(
 ) {
     let entry = gl.processes[process].entry;
 
-    struct SignalDirty {
-        lupdt: bool,
-        probe: bool,
-    }
-
-    let mut exprs = TableMap::<ExprKey, CSExpr, VariableKey>::new();
+    let mut exprs = TableMap::<ExprKey, CSExpr, (VariableKey, u64)>::new();
     let mut var_lookup = VgHashMap::<VariableKey, ExprKey>::default();
     let mut var_remap = VgHashMap::<VariableKey, VariableKey>::default();
-    let mut signal_dirty = VgHashMap::<SignalKey, SignalDirty>::default();
-
-    macro_rules! try_lookup {
-        ($var:expr) => {
-            match var_lookup.get($var) {
-                None => continue,
-                Some(e) => *e,
-            }
-        };
-    }
+    let mut signal_generation = VgHashMap::<SignalKey, u64>::default();
 
     scratch_stack.clear();
     scratch_seen.clear();
@@ -42,7 +28,20 @@ pub fn common_subexpr_elim(
         let bb = &mut gl.bbs[bb_key];
         for i in bb.instrs.iter_mut() {
             use Instruction as I;
-            let mut dirty = false;
+            let mut generation = 0u64;
+
+            macro_rules! try_lookup {
+                ($var:expr) => {
+                    match var_lookup.get($var) {
+                        None => continue,
+                        Some(e) => {
+                            generation = generation.max(exprs[*e].1);
+                            *e
+                        }
+                    }
+                };
+            }
+
             let (dst, csexpr) = match i {
                 I::Constant(dst, bits) => (*dst, CSExpr::Constant(bits.clone())),
                 I::Unary(dst, op, src) => (*dst, CSExpr::Unary(*op, try_lookup!(src))),
@@ -74,57 +73,51 @@ pub fn common_subexpr_elim(
                 ),
                 I::Intrinsic(..) => continue,
                 I::LastUpdateTime(dst, signal) => {
-                    match signal_dirty.entry(*signal) {
-                        Entry::Vacant(_) => {}
-                        Entry::Occupied(mut entry) => {
-                            dirty = std::mem::replace(&mut entry.get_mut().lupdt, false)
-                        }
-                    }
+                    generation = signal_generation
+                        .get(signal)
+                        .map(|&v| v + 1)
+                        .unwrap_or_default();
+
                     (*dst, CSExpr::LastUpdateTime(*signal))
                 }
                 I::Probe(dst, signal, offset) => {
-                    match signal_dirty.entry(*signal) {
-                        Entry::Vacant(_) => {}
-                        Entry::Occupied(mut entry) => {
-                            dirty = std::mem::replace(&mut entry.get_mut().probe, false)
-                        }
-                    }
+                    generation = signal_generation
+                        .get(signal)
+                        .map(|&v| v + 1)
+                        .unwrap_or_default();
+
                     (*dst, CSExpr::Probe(*signal, gl.vars[*dst].size, *offset))
                 }
                 I::ProbeSlice(dst, signal, offset) => {
-                    match signal_dirty.entry(*signal) {
-                        Entry::Vacant(_) => {}
-                        Entry::Occupied(mut entry) => {
-                            dirty = std::mem::replace(&mut entry.get_mut().probe, false)
-                        }
-                    }
+                    generation = signal_generation
+                        .get(signal)
+                        .map(|&v| v + 1)
+                        .unwrap_or_default();
+
                     (
                         *dst,
                         CSExpr::ProbeSlice(*signal, gl.vars[*dst].size, try_lookup!(offset)),
                     )
                 }
                 I::Drive(signal, _, _) => {
-                    signal_dirty.insert(
-                        *signal,
-                        SignalDirty {
-                            lupdt: true,
-                            probe: true,
-                        },
-                    );
+                    match signal_generation.entry(*signal) {
+                        Entry::Occupied(mut entry) => *entry.get_mut() += 1,
+                        Entry::Vacant(entry) => _ = entry.insert(0),
+                    };
                     continue;
                 }
                 I::Phi(_, _) => continue,
             };
             let expr_key = match exprs.entry(csexpr) {
-                TableMapEntry::Occupied(mut entry) if dirty => {
-                    entry.set(dst);
+                TableMapEntry::Occupied(mut entry) if entry.get().1 != generation => {
+                    entry.set((dst, generation));
                     entry.get_table_key()
                 }
                 TableMapEntry::Occupied(entry) => {
-                    var_remap.insert(dst, *entry.get());
+                    var_remap.insert(dst, entry.get().0);
                     entry.get_table_key()
                 }
-                TableMapEntry::Vacant(entry) => entry.insert(dst).get_table_key(),
+                TableMapEntry::Vacant(entry) => entry.insert((dst, generation)).get_table_key(),
             };
             var_lookup.insert(dst, expr_key);
         }
