@@ -776,7 +776,7 @@ fn assign_net_lvalue_flat<'a>(
                     let Some(width) = VectorSize::new(width) else {
                         panic!();
                     };
-                    ((base - width.get() + 1) as i64, width)
+                    ((base as i64) - (width.get() as i64) + 1, width)
                 }
             };
 

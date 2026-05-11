@@ -511,6 +511,9 @@ pub fn try_fuse_assign<'a>(
                 let Some(width) = VectorSize::new(width) else {
                     return Ok(false);
                 };
+                let Some(base) = base.checked_sub(width.get()).and_then(|v| v.checked_add(1)) else {
+                    return Ok(false);
+                };
                 SignalSlice::from_width(base - width.get() + 1, width).unwrap()
             }
         };
