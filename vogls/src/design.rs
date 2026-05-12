@@ -30,7 +30,8 @@ use vogls_verilog::parser::{
     Ast, AstArenas, Diagnostics as ParserDiagnostics, ParseContext, ParserScratches, TokenWalker,
     parse_file, report, report_error,
 };
-use vogls_verilog::tokenizer::{Macro, Tokenized};
+pub use vogls_verilog::tokenizer::Macro;
+use vogls_verilog::tokenizer::Tokenized;
 
 use crate::symbol::{NetValue, Symbol};
 use crate::{
