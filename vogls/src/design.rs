@@ -280,7 +280,7 @@ impl<'a> ParsedDesign<'a> {
     pub fn elaborate(
         &'a self,
         mode: LogicMode,
-        top_level_module: Option<&str>,
+        top_level_module: Option<impl AsRef<str>>,
     ) -> Result<ElaboratedDesign<'a>, ElaborationError<'a>> {
         // @TODO: Verify that all modules are uniquely named.
         let module_lut = VgHashMap::<IdentId, AstId<Module>>::from_iter(
@@ -295,7 +295,7 @@ impl<'a> ParsedDesign<'a> {
                 let id = self
                     .arenas
                     .ident_table
-                    .get(name)
+                    .get(name.as_ref())
                     .and_then(|name| module_lut.get(&name).copied());
                 match id {
                     None => return Err(ElaborationError::CannotFindTopLevelModule),

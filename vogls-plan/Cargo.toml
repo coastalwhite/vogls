@@ -6,8 +6,14 @@ edition.workspace = true
 [dependencies]
 vogls.workspace = true
 vogls-trace.workspace = true
+hashbrown.workspace = true
 rand.workspace = true
 rayon.workspace = true
+pyo3 = { workspace = true, optional = true }
+
+[features]
+default = []
+python = ["dep:pyo3"]
 
 [lints]
 workspace = true

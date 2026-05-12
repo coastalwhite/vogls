@@ -143,6 +143,10 @@ impl<K, V> IndexMap<K, V> {
     pub fn take_values(self) -> Vec<V> {
         self.values
     }
+
+    pub fn iter_values(&self) -> impl DoubleEndedIterator + ExactSizeIterator<Item = &V> {
+        self.values.iter()
+    }
 }
 
 pub enum Entry<'a, K, V> {

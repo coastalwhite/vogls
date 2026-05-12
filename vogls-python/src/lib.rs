@@ -5,13 +5,21 @@ mod vogls {
     use std::sync::{Arc, Mutex};
 
     use pyo3::exceptions::{PyException, PyValueError};
-    use pyo3::{IntoPyObjectExt, PyResult, prelude::*};
+    use pyo3::{IntoPyObjectExt, PyAny, PyResult, prelude::*};
     use vogls::design::DesignState;
     use vogls::symbol::{NetValue, Symbol};
-    use vogls::utils::TimerStack;
+    use vogls::utils::{IndexMap, TimerStack};
     use vogls::{BitsFormatOptions, ExecutionContext, LogicMode, SimulationIo, VectorSize};
 
-    use vogls_plan::{RunAgg, Step, TimeUnit};
+    use vogls_plan::array::{
+        Array, ArrayAgg, DslLazyArray, DslLazyValue, LazyArray, LazyValue, Value,
+    };
+    use vogls_plan::compute::{ComputeNode, GraphItem};
+    use vogls_plan::design::TimeUnit;
+    use vogls_plan::dsl::DslNode;
+    use vogls_plan::output::{DslLazyOutput, LazyOutput, Output};
+    use vogls_plan::plan::{DslLazyPlan, LazyPlan, Plan};
+    use vogls_plan::run::{DslLazyStep, LazyStep, RunAgg};
     use vogls_trace::TracePlugin;
 
     #[pyo3::pyclass(frozen)]
@@ -343,42 +351,39 @@ mod vogls {
     }
 
     #[pyo3::pyclass(frozen)]
-    pub struct LazyDesign(Arc<vogls_plan::LazyDesign>);
+    pub struct PyLazyDesign(Arc<vogls_plan::design::LazyDesign>);
 
     #[pymethods]
-    impl LazyDesign {
+    impl PyLazyDesign {
         #[new]
         #[pyo3(signature = (paths, top_level_module = None))]
         fn new(paths: Vec<PathBuf>, top_level_module: Option<String>) -> Self {
-            Self(Arc::new(vogls_plan::LazyDesign {
+            Self(Arc::new(vogls_plan::design::LazyDesign {
                 sources: paths,
                 top_level_module,
+                trace: true,
             }))
         }
 
-        pub fn run(&self) -> LazyRun {
-            LazyRun(Arc::new(Mutex::new(vogls_plan::LazyRun {
+        pub fn run(&self) -> PyLazyRun {
+            PyLazyRun(Arc::new(Mutex::new(vogls_plan::run::DslLazyRun {
                 design: self.0.clone(),
                 steps: Vec::new(),
-                aggregation: RunAgg::None,
             })))
         }
     }
 
     #[pyo3::pyclass(frozen)]
-    pub struct LazyRun(Arc<Mutex<vogls_plan::LazyRun>>);
-
-    #[pyo3::pyclass(frozen)]
-    pub struct LazyPoints(vogls_plan::LazyPoints);
+    pub struct PyLazyRun(Arc<Mutex<vogls_plan::run::DslLazyRun>>);
 
     #[pymethods]
-    impl LazyRun {
+    impl PyLazyRun {
         pub fn run_for(&self, time: u64) -> Self {
             self.0
                 .lock()
                 .unwrap()
                 .steps
-                .push(Step::RunFor(vogls_plan::Time {
+                .push(DslLazyStep::RunFor(vogls_plan::design::Time {
                     value: time,
                     unit: TimeUnit::Femptoseconds,
                 }));
@@ -386,116 +391,193 @@ mod vogls {
         }
 
         pub fn repeat(&self, n: usize) -> Self {
-            self.0.lock().unwrap().steps.push(Step::Repeat(n));
+            self.0.lock().unwrap().steps.push(DslLazyStep::Repeat(n));
             Self(self.0.clone())
         }
 
         pub fn trace_start(&self) -> Self {
-            self.0.lock().unwrap().steps.push(Step::TraceStart);
+            self.0.lock().unwrap().steps.push(DslLazyStep::TraceStart);
             Self(self.0.clone())
         }
         pub fn trace_stop(&self) -> Self {
-            self.0.lock().unwrap().steps.push(Step::TraceStop);
+            self.0.lock().unwrap().steps.push(DslLazyStep::TraceStop);
             Self(self.0.clone())
         }
 
-        pub fn set_signal(&self, name: Vec<String>, value: &LazyPoints) -> Self {
-            self.0.lock().unwrap().steps.push(Step::SetSignal(
-                vogls_plan::SignalRef { inner: name },
-                Arc::new(value.0.clone()),
+        pub fn set_signal(&self, name: Vec<String>, value: Py<PyLazyArray>) -> Self {
+            self.0.lock().unwrap().steps.push(DslLazyStep::SetSignal(
+                vogls_plan::design::SignalRef { inner: name },
+                (value.get().0.clone()),
             ));
             Self(self.0.clone())
         }
 
-        pub fn hamming_distance(&self) -> LazyPoints {
-            let mut run = self.0.lock().unwrap().clone();
-            run.aggregation = RunAgg::HammingDistance;
-            LazyPoints(vogls_plan::LazyPoints::Run(Arc::new(run)))
+        pub fn hamming_distance(&self, py: Python<'_>) -> PyResult<Py<PyLazyOutput>> {
+            self.0
+                .lock()
+                .unwrap()
+                .steps
+                .push(DslLazyStep::TraceAgg(RunAgg::HammingDistance));
+            let run = self.0.lock().unwrap().clone();
+            Py::new(py, PyLazyOutput(DslLazyOutput::Run(Arc::new(run))))
         }
     }
 
-    #[pymethods]
-    impl LazyPoints {
-        #[staticmethod]
-        #[pyo3(signature = (length, seed = None))]
-        pub fn random(length: usize, seed: Option<u64>) -> Self {
-            Self(vogls_plan::LazyPoints::Random(vogls_plan::RandomPoints {
-                seed: seed.unwrap_or(0),
-                length,
-            }))
-        }
-
-        #[pyo3(signature = (num_threads = Some(0)))]
-        pub fn collect(&self, num_threads: Option<usize>) -> PyResult<Points> {
-            self.0
-                .collect(&vogls_plan::Context::new(num_threads))
-                .map(Points)
-                .map_err(|_| PyValueError::new_err("error while collecting"))
-        }
+    fn lazy_compute<Dsl: DslNode, Lazy: ComputeNode + GraphItem>(
+        dsl: &Dsl,
+    ) -> PyResult<Lazy::Output> {
+        let (lazy_key, graph) = vogls_plan::dsl::convert(dsl)?;
+        let lazy = graph.get::<Lazy>(lazy_key);
+        let ctx = vogls_plan::compute::ComputeContext::new(None);
+        let result = vogls_plan::compute::compute(lazy, lazy_key, &graph, &ctx)?;
+        Ok(result)
     }
 
     #[pyo3::pyclass(frozen)]
-    pub struct Points(vogls_plan::Points);
+    pub struct PyLazyPlan(DslLazyPlan);
+    #[pyo3::pyclass(frozen)]
+    pub struct PyLazyOutput(DslLazyOutput);
+    #[pyo3::pyclass(frozen)]
+    pub struct PyLazyArray(DslLazyArray);
+    #[pyo3::pyclass(frozen)]
+    pub struct PyLazyValue(DslLazyValue);
+    #[pyo3::pyclass(frozen)]
+    pub struct PyPlan(Plan);
+    #[pyo3::pyclass(frozen)]
+    pub struct PyOutput(Output);
+    #[pyo3::pyclass(frozen)]
+    pub struct PyArray(Array);
+    #[pyo3::pyclass(frozen)]
+    pub struct PyValue(Value);
 
     #[pymethods]
-    impl Points {
+    impl PyLazyPlan {
+        pub fn compute(&self) -> PyResult<PyPlan> {
+            lazy_compute::<_, LazyPlan>(&self.0).map(PyPlan)
+        }
+
+        #[staticmethod]
+        pub fn from_dict(dict: Bound<pyo3::types::PyDict>) -> PyResult<Self> {
+            let mut components = IndexMap::<String, DslLazyOutput>::default();
+            for (key, value) in dict.iter() {
+                let key = key.str()?;
+                let value = value.cast::<PyLazyOutput>()?;
+                _ = components.insert(key.to_string(), value.get().0.clone());
+            }
+            Ok(Self(vogls_plan::plan::DslLazyPlan {
+                components: Arc::new(components),
+            }))
+        }
+    }
+    #[pymethods]
+    impl PyPlan {
+        pub fn lazy(&self) -> PyLazyPlan {
+            PyLazyPlan(self.0.to_lazy_dsl())
+        }
+    }
+
+    #[pymethods]
+    impl PyLazyOutput {
+        pub fn compute(&self) -> PyResult<PyOutput> {
+            lazy_compute::<_, LazyOutput>(&self.0).map(PyOutput)
+        }
+
+        #[staticmethod]
+        pub fn from_plan(plan: Bound<PyLazyPlan>) -> Self {
+            PyLazyOutput(plan.get().0.clone().into())
+        }
+        #[staticmethod]
+        pub fn from_array(arr: Bound<PyLazyArray>) -> Self {
+            PyLazyOutput(arr.get().0.clone().into())
+        }
+        #[staticmethod]
+        pub fn from_value(value: Bound<PyLazyValue>) -> Self {
+            PyLazyOutput(value.get().0.clone().into())
+        }
+    }
+    #[pymethods]
+    impl PyOutput {
+        pub fn lazy(&self) -> PyLazyOutput {
+            PyLazyOutput(self.0.to_lazy_dsl())
+        }
+    }
+
+    #[pymethods]
+    impl PyLazyArray {
+        pub fn compute(&self) -> PyResult<PyArray> {
+            lazy_compute::<_, LazyArray>(&self.0).map(PyArray)
+        }
+
+        pub fn min(&self) -> PyLazyValue {
+            PyLazyValue(DslLazyValue::Aggregation(
+                Arc::new(self.0.clone()),
+                ArrayAgg::Min,
+            ))
+        }
+
+        #[staticmethod]
+        #[pyo3(signature = (length, seed = None))]
+        pub fn random(length: usize, seed: Option<u64>) -> Self {
+            Self(vogls_plan::array::DslLazyArray::Random {
+                seed: seed.unwrap_or(0),
+                length,
+            })
+        }
+    }
+    #[pymethods]
+    impl PyArray {
+        pub fn lazy(&self) -> PyLazyArray {
+            PyLazyArray(self.0.to_lazy_dsl())
+        }
+
         pub fn as_list(&self, py: pyo3::Python<'_>) -> PyResult<pyo3::Py<pyo3::types::PyList>> {
-            fn points_as_pyany(
-                py: pyo3::Python<'_>,
-                ps: &vogls_plan::Points,
-                at: usize,
-            ) -> PyResult<pyo3::Py<pyo3::PyAny>> {
-                use pyo3::types::PyDict;
-                match ps {
-                    vogls_plan::Points::Floats(items) => items[at].into_py_any(py),
-                    vogls_plan::Points::Ints(items) => items[at].into_py_any(py),
-                    vogls_plan::Points::UInts(items) => items[at].into_py_any(py),
-                    vogls_plan::Points::Bits(..) => todo!(),
-                    vogls_plan::Points::Lists(points, items) => {
-                        points_as_list(py, points, items[at], items[at + 1])?.into_py_any(py)
-                    }
-                    vogls_plan::Points::Struct(items, _) => {
-                        let dict = PyDict::new(py);
-                        for (name, ps) in items.as_ref() {
-                            dict.set_item(name, points_as_pyany(py, ps, at)?)?;
-                        }
-                        dict.into_py_any(py)
-                    }
-                }
-            }
+            use pyo3::types::PyList;
+            use vogls_plan::array::Array;
+            Ok(match &self.0 {
+                Array::Floats(items) => PyList::new(py, items.iter())?.into(),
+                Array::Ints(items) => PyList::new(py, items.iter())?.into(),
+                Array::UInts(items) => PyList::new(py, items.iter())?.into(),
+                Array::Bits(..) => todo!(),
+            })
+        }
+    }
 
-            fn points_as_list(
-                py: pyo3::Python<'_>,
-                ps: &vogls_plan::Points,
-                start: usize,
-                end: usize,
-            ) -> PyResult<pyo3::Py<pyo3::types::PyList>> {
-                use pyo3::types::PyList;
-                Ok(match ps {
-                    vogls_plan::Points::Floats(items) => {
-                        PyList::new(py, &items[start..end])?.into()
-                    }
-                    vogls_plan::Points::Ints(items) => PyList::new(py, &items[start..end])?.into(),
-                    vogls_plan::Points::UInts(items) => PyList::new(py, &items[start..end])?.into(),
-                    vogls_plan::Points::Bits(..) => todo!(),
-                    vogls_plan::Points::Lists(points, items) => {
-                        let mut vs = Vec::with_capacity(ps.len());
-                        for w in items[start..=end].windows(2) {
-                            vs.push(points_as_list(py, points.as_ref(), w[0], w[1])?);
-                        }
-                        PyList::new(py, vs)?.into()
-                    }
-                    vogls_plan::Points::Struct(..) => {
-                        let mut vs = Vec::with_capacity(ps.len());
-                        for i in start..end {
-                            vs.push(points_as_pyany(py, ps, i)?);
-                        }
-                        PyList::new(py, vs)?.into()
-                    }
-                })
-            }
+    #[pymethods]
+    impl PyLazyValue {
+        pub fn compute(&self) -> PyResult<PyValue> {
+            lazy_compute::<_, LazyValue>(&self.0).map(PyValue)
+        }
+    }
+    #[pymethods]
+    impl PyValue {
+        pub fn lazy(&self) -> PyLazyValue {
+            PyLazyValue(self.0.to_lazy_dsl())
+        }
 
-            points_as_list(py, &self.0, 0, self.0.len())
+        #[staticmethod]
+        pub fn from_float(v: f64) -> Self {
+            Self(Value::Float(v))
+        }
+        #[staticmethod]
+        pub fn from_unsigned_int(v: u64) -> Self {
+            Self(Value::UInt(v))
+        }
+        #[staticmethod]
+        pub fn from_signed_int(v: i64) -> Self {
+            Self(Value::Int(v))
+        }
+
+        pub fn repeat(&self, n: usize) -> PyArray {
+            PyArray(self.0.repeat(n))
+        }
+
+        pub fn as_pyany(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+            match &self.0 {
+                Value::Float(v) => v.into_py_any(py),
+                Value::Int(v) => v.into_py_any(py),
+                Value::UInt(v) => v.into_py_any(py),
+                Value::Bits(_) => todo!(),
+            }
         }
     }
 }

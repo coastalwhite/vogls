@@ -859,6 +859,8 @@ dependencies = [
 name = "vogls-plan"
 version = "0.0.1"
 dependencies = [
+ "hashbrown 0.16.1",
+ "pyo3",
  "rand 0.10.0",
  "rayon",
  "vogls",

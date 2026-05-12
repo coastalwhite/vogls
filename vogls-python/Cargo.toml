@@ -8,10 +8,10 @@ name = "vogls"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = "0.28.1"
+pyo3.workspace = true
 vogls = { workspace = true, features = ["random"] }
 vogls-trace.workspace = true
-vogls-plan.workspace = true
+vogls-plan = { workspace = true, features = ["python"] }
 hashbrown.workspace = true
 
 [lints]
