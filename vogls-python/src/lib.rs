@@ -407,7 +407,7 @@ mod vogls {
         pub fn set_signal(&self, name: Vec<String>, value: Py<PyLazyArray>) -> Self {
             self.0.lock().unwrap().steps.push(DslLazyStep::SetSignal(
                 vogls_plan::design::SignalRef { inner: name },
-                (value.get().0.clone()),
+                value.get().0.clone(),
             ));
             Self(self.0.clone())
         }

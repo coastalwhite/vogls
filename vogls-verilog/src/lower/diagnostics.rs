@@ -24,7 +24,7 @@ pub enum LowerErrorReason {
     ZeroWidthNet,
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct Diagnostics {
     pub errors: Vec<(TokenRange, LowerErrorReason, Vec<String>)>,
     pub warnings: Vec<(TokenRange, String)>,

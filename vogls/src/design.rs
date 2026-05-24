@@ -139,6 +139,7 @@ pub enum ElaborationError<'a> {
     Diagnostics(LowerDiagnostics),
 }
 
+#[derive(Debug)]
 pub enum LowerError {
     GlobalItems(LowerDiagnostics),
     Modules(LowerDiagnostics),
