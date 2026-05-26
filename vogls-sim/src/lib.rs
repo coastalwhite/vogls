@@ -288,8 +288,11 @@ impl Simulation {
                 }
             }
 
-            for region in state.regions.other.iter_mut() {
+            for (i, region) in state.regions.other.iter_mut().enumerate() {
                 if !region.is_empty() {
+                    if self.itrace {
+                        eprintln!("next region: {i}");
+                    }
                     std::mem::swap(&mut state.regions.active, region);
                     continue 'region_loop;
                 }
@@ -312,6 +315,10 @@ impl Simulation {
                 state.runtime.time = max_time;
                 state.schedule.insert(at, events);
                 break;
+            }
+
+            if self.itrace {
+                eprintln!("next timestep: {at}");
             }
 
             state.runtime.time = at;

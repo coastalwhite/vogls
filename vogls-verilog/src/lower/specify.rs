@@ -781,7 +781,6 @@ pub fn lower_iopath<'a>(
 
         // active_time = max_{signal} last_update_time(signal)
         // is_active(s) = last_update_time(s) == active_time && active_time != 0xF..F
-        let time = builder.time(mctx.gl());
         let mut active_time = builder.constant(mctx.gl(), Bits::from_u64(TIME_VSIZE, 1));
         for (input, _) in &specify.paths {
             let lupdt = builder.lupdt(mctx.gl(), *input);
@@ -843,12 +842,10 @@ pub fn lower_iopath<'a>(
                     }
                 }
 
-                let path_wait_time = builder.minus(mctx.gl(), time, lupdt);
                 let delay =
                     path.delays
                         .calculate(mctx.gl(), &mut builder, output, proxy, output_bitidx);
-                let path_wait_time = builder.plus(mctx.gl(), path_wait_time, delay);
-                let path_wait_time = builder.min(mctx.gl(), new_wait_time, path_wait_time);
+                let path_wait_time = builder.min(mctx.gl(), new_wait_time, delay);
 
                 new_wait_time = match condition {
                     None => path_wait_time,
@@ -867,6 +864,9 @@ pub fn lower_iopath<'a>(
 
         // Set the wait time to zero, if no condition matched.
         let zero = builder.constant_u64(mctx.gl(), 0);
+        let time = builder.time(mctx.gl());
+        let active_offset = builder.minus(mctx.gl(), time, active_time);
+        let wait_time = builder.minus(mctx.gl(), wait_time, active_offset);
         let wait_time = builder.select(mctx.gl(), wait_time_set, wait_time, zero);
 
         let old_proxy_value = builder.probe(mctx.gl(), proxy);
