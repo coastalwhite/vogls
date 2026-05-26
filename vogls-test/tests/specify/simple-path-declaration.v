@@ -1,4 +1,4 @@
-// vogls: verify-stdout
+// vogls: verify-stdout[sort-lines]
 `timescale 1ps / 1ps
 module gate(
     input i, j,

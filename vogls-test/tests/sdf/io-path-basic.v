@@ -8,7 +8,10 @@ module top();
     wire b;
 
     buffer _b(a, b);
-    always @(b) $display("[T=%0dns] b = %b", $time / 1_000_000, b);
+    always begin
+        $display("[T=%0dns] b = %b", $time / 1_000_000, b);
+        @(b);
+    end
     initial begin
         #0;
         a = 1;

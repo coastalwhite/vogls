@@ -18,6 +18,15 @@ pub fn drive(
     let dst_ref = signals[dst.as_usize()];
     let Some((offset, _partial_size)) = partial else {
         let dst_wi = dst_ref.offset.bit_offset / 64;
+        write!(f, "{INDENT}if (")?;
+        match src.ty.mode {
+            LogicMode::TwoValue => {
+                let w = dst.as_u64() / 64;
+                let i = dst.as_u64() % 64;
+                write!(f, "((cldctx->fst_poke[{w}] & (((uint64_t)1) << {i})) == 0) |")?;
+            }
+            LogicMode::FourValue => {}
+        }
         match src.ty.array_size() {
             None => {
                 let s_elem_ty = src.ty.element_type();
@@ -30,18 +39,19 @@ pub fn drive(
                             1
                         },
                 );
-                writeln!(
+                write!(
                     f,
-                    "{INDENT}if ({s} != ({s_elem_ty})((heap[{dst_wi}] >> {dst_bi}) & 0x{mask:x})) {{"
+                    "({s} != ({s_elem_ty})((heap[{dst_wi}] >> {dst_bi}) & 0x{mask:x}))"
                 )?;
             }
             Some(arr_size) => {
-                writeln!(
+                write!(
                     f,
-                    "{INDENT}if (memcmp({s}, heap+{dst_wi}, {arr_size}*sizeof(uint64_t)) != 0) {{"
+                    "(memcmp({s}, heap+{dst_wi}, {arr_size}*sizeof(uint64_t)) != 0)"
                 )?;
             }
         }
+        writeln!(f, ") {{")?;
         writeln!(
             f,
             "{INDENT}{INDENT}drive_signal_{idx}(schedule, time, listening, last_active_time, cldctx);",

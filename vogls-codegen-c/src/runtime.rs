@@ -6,7 +6,7 @@ use std::ptr::NonNull;
 
 use vogls_codegen::HeapRef;
 use vogls_ir::dyn_format_string::DynFormatString;
-use vogls_ir::{Bits, GlobalContext, Mode, ReadMem, VectorSize};
+use vogls_ir::{Bits, GlobalContext, LogicMode, Mode, ReadMem, VectorSize};
 use vogls_runtime::plugins::{RuntimePlugin, RuntimePluginState};
 use vogls_runtime::{RtSignalKey, SimulationIo};
 use vogls_utils::TableKey;
@@ -72,6 +72,8 @@ pub struct ColdContextT {
     heap_len: usize,
     readmems: *const (HeapRef, ReadMem),
     readmem: extern "C" fn(*mut u64, usize, u8, NonNull<(HeapRef, ReadMem)>),
+
+    fst_poke: *mut u64,
 
     icount: u64,
 
@@ -209,6 +211,7 @@ impl Schedule {
 pub struct CDesignState {
     schedule: Schedule,
     listening: Vec<u64>,
+    fst_poke: Vec<u64>,
     pub runtime: vogls_runtime::RuntimeState,
     pub plugins: Vec<RuntimePluginState>,
 }
@@ -218,6 +221,7 @@ impl Clone for CDesignState {
         Self {
             schedule: self.schedule.clone(),
             listening: self.listening.clone(),
+            fst_poke: self.fst_poke.clone(),
             runtime: self.runtime.clone(),
             plugins: self.plugins.iter().map(|p| p.as_ref().clone()).collect(),
         }
@@ -257,10 +261,15 @@ impl CDesign {
             next_time: u64::MAX,
         };
         let listening = vec![0u64; num_listening.div_ceil(64)];
+        let fst_poke = match gl.logic_mode {
+            LogicMode::TwoValue => vec![0u64; gl.signals.len().div_ceil(64)],
+            LogicMode::FourValue => Vec::new(),
+        };
 
         CDesignState {
             schedule,
             listening,
+            fst_poke,
             runtime: vogls_runtime::RuntimeState::new(
                 gl.logic_mode,
                 heap,
@@ -380,6 +389,7 @@ impl CDesign {
             heap_len: state.runtime.heap.0.len(),
             readmems: self.read_mems.as_ptr(),
             readmem: read_mem,
+            fst_poke: state.fst_poke.as_mut_ptr(),
             icount: state.runtime.instruction_count,
             stdout: NonNull::from_mut(&mut io.stdout),
             stderr: NonNull::from_mut(&mut io.stderr),
@@ -501,6 +511,8 @@ impl CDesign {
             heap_len: state.runtime.heap.0.len(),
             readmems: self.read_mems.as_ptr(),
             readmem: read_mem,
+
+            fst_poke: state.fst_poke.as_mut_ptr(),
 
             icount: 0,
 
