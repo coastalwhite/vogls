@@ -5,8 +5,7 @@ use std::sync::Arc;
 use vogls_frontend::ident_table::IdentId;
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{
-    BasicBlockBuilder, BasicBlockKey, Bits, ConnectionDirection, GlobalContext, ProcessKey,
-    SCALAR_VSIZE, Signal, SignalKey, VariableKey, VectorSize,
+    BasicBlockBuilder, BasicBlockKey, Bits, ConnectionDirection, GlobalContext, ProcessKey, Signal, SignalFlags, SignalKey, VariableKey, VectorSize, SCALAR_VSIZE
 };
 use vogls_utils::{Table, VgHashMap, new_table_key};
 
@@ -247,7 +246,16 @@ pub fn port_declaration_to_info<'a>(
     parent: SymbolId,
     table: &VSymbolTable,
     diagnostics: &mut Diagnostics,
-) -> Result<(VType, u32, bool, ConnectionDirection, AstIdRange<'a, Identifier>), ()> {
+) -> Result<
+    (
+        VType,
+        u32,
+        bool,
+        ConnectionDirection,
+        AstIdRange<'a, Identifier>,
+    ),
+    (),
+> {
     use ConnectionDirection as D;
     let (direction, range, signed, identifiers) = match &*id {
         PortDeclaration::Inout(inout) => {
@@ -289,6 +297,7 @@ fn new_net(
         name,
         size,
         initialize: initialize.map(|i| i.into_bits()),
+        flags: SignalFlags::EMPTY,
         origin,
     });
 

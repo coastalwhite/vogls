@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use hashbrown::hash_map::Entry;
-use vogls::design::Design;
+use vogls::design::{Design, ElaboratedDesign, SignalHandle, VSymbolTable};
 use vogls::symbol::{NetValue, Symbol};
 use vogls_codegen::HeapRef;
 use vogls_ir::{Bits, LogicMode};
@@ -15,6 +15,7 @@ pub struct TracePlugin {
     pub tracked: VgHashMap<RtSignalKey, Option<NonMaxUsize>>,
     pub updated_this_time_step: Vec<RtSignalKey>,
 
+    pub handles: Vec<SignalHandle>,
     pub logic_mode: LogicMode,
     pub signal_to_heap: Arc<[HeapRef]>,
     pub trace: Vec<(RtSignalKey, Bits)>,
@@ -27,31 +28,28 @@ pub struct Trace {
 }
 
 impl TracePlugin {
-    pub fn new(design: &Design) -> Self {
-        let mut tracked = VgHashMap::default();
-        let mut updated_this_time_step = Vec::new();
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
 
-        for signal in design.elab_table.symbol_iter() {
-            if let Symbol::Net(n) = &signal.content
-                && let NetValue::Signal(s) = &n.net
-            {
-                let (signal, _slice) = s.probe_signal();
-                let rt_signal = design.get_rt_signal(signal);
-                tracked.insert(
-                    rt_signal,
-                    Some(NonMaxUsize::new(updated_this_time_step.len()).unwrap()),
-                );
-                updated_this_time_step.push(rt_signal);
-            }
-        }
+impl vogls::design::VoglsPlugin for TracePlugin {
+    fn register_handles(&mut self, design: &mut ElaboratedDesign<'_>, table: &VSymbolTable) {
+        self.handles.extend(
+            table
+                .symbol_id_iter()
+                .filter_map(|sid| design.get_signal_handle(sid)),
+        );
+    }
 
-        Self {
-            tracked,
-            updated_this_time_step,
-            logic_mode: design.gl.logic_mode,
-            signal_to_heap: design.signal_to_heap.clone(),
-            trace: Vec::new(),
-            time_offsets: Vec::new(),
+    fn finalize(&mut self, design: &Design) {
+        for handle in self.handles.drain(..) {
+            let signal = design.resolve_handle(handle);
+            self.tracked.insert(
+                signal.key(),
+                Some(NonMaxUsize::new(self.updated_this_time_step.len()).unwrap()),
+            );
+            self.updated_this_time_step.push(signal.key());
         }
     }
 }

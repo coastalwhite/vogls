@@ -83,6 +83,7 @@ impl Signal {
                 let Signal {
                     name,
                     size,
+                    flags: _,
                     initialize,
                     origin: _,
                 } = self.0;

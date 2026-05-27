@@ -1,7 +1,6 @@
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{
-    BasicBlockBuilder, BasicBlockTerminator, ProcessKind, SCALAR_VSIZE, SignalKey, VectorSize,
-    new_process,
+    new_process, BasicBlockBuilder, BasicBlockTerminator, ProcessKind, SignalFlags, SignalKey, VectorSize, SCALAR_VSIZE
 };
 use vogls_utils::OrderedSet;
 
@@ -184,6 +183,7 @@ pub fn statements_to_process<'a>(
                     name: "::fork_trigger".to_string(),
                     size: num_processes,
                     initialize: Some(vogls_ir::Bits::new_zeroed(num_processes)),
+                    flags: SignalFlags::EMPTY,
                     origin,
                 });
 

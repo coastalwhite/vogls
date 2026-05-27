@@ -10,6 +10,7 @@ pub mod vcd;
 use std::collections::HashSet;
 use std::fmt;
 use std::num::NonZeroU32;
+use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign};
 pub use vogls_bits as bits;
 pub use vogls_bits::{Bits, Mode, VectorSize};
 
@@ -230,11 +231,70 @@ pub struct Variable {
     pub size: VectorSize,
 }
 
+#[derive(Clone, Copy)]
+pub struct SignalFlags(u8);
+
+impl SignalFlags {
+    pub const ALL: Self = Self(0b0011u8);
+    pub const EMPTY: Self = Self(0b0000u8);
+
+    pub const EXT_DRIVE: Self = Self(0b0001u8);
+    pub const EXT_PROBE: Self = Self(0b0010u8);
+
+    pub fn contains(self, rhs: Self) -> bool {
+        self.0 & rhs.0 == rhs.0
+    }
+}
+
+impl BitOr<Self> for SignalFlags {
+    type Output = Self;
+    fn bitor(self, rhs: Self) -> Self::Output {
+        Self(self.0 | rhs.0)
+    }
+}
+impl BitOrAssign<Self> for SignalFlags {
+    fn bitor_assign(&mut self, rhs: Self) {
+        self.0 |= rhs.0;
+    }
+}
+impl BitAnd<Self> for SignalFlags {
+    type Output = Self;
+    fn bitand(self, rhs: Self) -> Self::Output {
+        Self(self.0 & rhs.0)
+    }
+}
+impl BitAndAssign<Self> for SignalFlags {
+    fn bitand_assign(&mut self, rhs: Self) {
+        self.0 &= rhs.0;
+    }
+}
+impl BitXor<Self> for SignalFlags {
+    type Output = Self;
+    fn bitxor(self, rhs: Self) -> Self::Output {
+        Self(self.0 ^ rhs.0)
+    }
+}
+impl BitXorAssign<Self> for SignalFlags {
+    fn bitxor_assign(&mut self, rhs: Self) {
+        self.0 ^= rhs.0;
+    }
+}
+
+impl fmt::Debug for SignalFlags {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SignalFlags")
+            .field("drive", &self.contains(Self::EXT_DRIVE))
+            .field("probe", &self.contains(Self::EXT_PROBE))
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Signal {
     pub name: String,
     pub size: VectorSize,
     pub initialize: Option<Bits>,
+    pub flags: SignalFlags,
     pub origin: TokenRange,
 }
 

@@ -1,6 +1,7 @@
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{
-    new_process, BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, ProcessKind, VariableKey, SCALAR_VSIZE
+    BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, ProcessKind, SCALAR_VSIZE,
+    SignalFlags, VariableKey, new_process,
 };
 use vogls_utils::OrderedSet;
 
@@ -174,6 +175,7 @@ pub fn lower_udp<'a>(
                         name: ctx.arenas.ident_table[output.0].to_string(),
                         size: SCALAR_VSIZE,
                         initialize: None,
+                        flags: SignalFlags::EMPTY,
                         origin: ctx.arenas.get_span(ast_output),
                     });
                     (output_signal, output_name)
@@ -192,6 +194,7 @@ pub fn lower_udp<'a>(
                         name: ctx.arenas.ident_table[output_name].to_string(),
                         size: SCALAR_VSIZE,
                         initialize: None,
+                        flags: SignalFlags::EMPTY,
                         origin: ctx.arenas.get_item_span(output.port_identifier),
                     });
                     (output_signal, output_name)

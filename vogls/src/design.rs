@@ -11,9 +11,9 @@ use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_frontend::symbol_table::{FrozenSymbolTable, SymbolId, SymbolTable};
 use vogls_ir::optimize::OptFlags;
 use vogls_ir::vcd::{VcdScope, VcdValue, VcdVariableKey};
-use vogls_ir::{Bits, GlobalContext, LogicMode, ProcessKind, SignalKey};
+use vogls_ir::{Bits, GlobalContext, LogicMode, ProcessKind, SignalFlags, SignalKey, SignalSlice};
 use vogls_runtime::SimulationIo;
-use vogls_runtime::plugins::RuntimePluginState;
+use vogls_runtime::plugins::{RuntimePlugin, RuntimePluginState};
 use vogls_runtime::{RtSignalKey, RuntimeState};
 use vogls_sim::{Event, Regions, Simulation, VmProcess, VmProcessKey, lower_process_to_vm};
 use vogls_utils::{IndexMap, NonMaxU32, Table, TimerStack, VgHashMap};
@@ -21,7 +21,8 @@ pub use vogls_verilog::arena::Arena;
 use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{Description, Module, ModuleItem, NonPortModuleItem, TimeScale};
 use vogls_verilog::ast::udp::UdpDeclaration;
-use vogls_verilog::elaborate::{SymbolAstRefs, VSymbol, VSymbolTable, determine_module_context};
+use vogls_verilog::elaborate::{SymbolAstRefs, determine_module_context};
+pub use vogls_verilog::elaborate::{VSymbol, VSymbolTable};
 use vogls_verilog::lower::{
     Diagnostics as LowerDiagnostics, LowerContext, MutLowerContext, create_nba_process,
     lower_module_to_ir,
@@ -38,6 +39,11 @@ use crate::{
     ExecutionContext, append_referenced_modules, find_lupdt_signals, generate_signals_heap,
 };
 use vogls_fuse_signals::FuseTarget;
+
+#[derive(Clone)]
+pub struct SignalHandle {
+    symbol: SymbolId,
+}
 
 pub enum DesignBackend {
     Interpretted {
@@ -122,7 +128,7 @@ pub struct ElaboratedDesign<'a> {
 pub struct LoweredDesign {
     table: FrozenSymbolTable<Symbol>,
     gl: GlobalContext,
-    plugins: Vec<RuntimePluginState>,
+    plugins: Vec<Box<dyn VoglsPlugin>>,
     vcd: Option<PathBuf>,
     has_vcd: bool,
 
@@ -131,6 +137,11 @@ pub struct LoweredDesign {
     stats: bool,
     debug_symbols: bool,
     output_source: Option<PathBuf>,
+}
+
+pub trait VoglsPlugin: RuntimePlugin {
+    fn register_handles(&mut self, design: &mut ElaboratedDesign<'_>, table: &VSymbolTable);
+    fn finalize(&mut self, design: &Design);
 }
 
 pub enum ElaborationError<'a> {
@@ -356,9 +367,23 @@ impl<'a> ParsedDesign<'a> {
             gl: mctx.gl,
         })
     }
+
+    pub fn ident_table(&self) -> &IdentTable {
+        &self.arenas.ident_table
+    }
 }
 
 impl<'a> ElaboratedDesign<'a> {
+    pub fn get_signal_handle(&mut self, symbol: SymbolId) -> Option<SignalHandle> {
+        let VSymbol::Net(net) = &self.table[symbol].content else {
+            return None;
+        };
+
+        let signal = net.net.probe_signal();
+        self.gl.signals[signal].flags |= SignalFlags::EXT_DRIVE | SignalFlags::EXT_PROBE;
+        Some(SignalHandle { symbol })
+    }
+
     pub fn table(&self) -> &VSymbolTable {
         &self.table
     }
@@ -510,7 +535,7 @@ impl<'a> ElaboratedDesign<'a> {
     pub fn lower(
         self,
         design: &'a ParsedDesign,
-        plugins: Vec<RuntimePluginState>,
+        plugins: Vec<Box<dyn VoglsPlugin>>,
     ) -> Result<LoweredDesign, LowerError> {
         let Self {
             module_lut,
@@ -702,7 +727,7 @@ impl LoweredDesign {
                     map,
                 ),
             };
-            self.plugins.push(Box::new(rtvcdoutput));
+            // self.plugins.push(Box::new(rtvcdoutput));
         }
 
         CodegenPreparation {
@@ -734,7 +759,10 @@ impl LoweredDesign {
             signal_to_heap,
             lupdt_indexes,
             NUM_REGIONS,
-            self.plugins,
+            self.plugins
+                .into_iter()
+                .map(|x| x as Box<dyn RuntimePlugin>)
+                .collect(),
             design.arenas.ident_table,
             self.table,
         )
@@ -760,7 +788,10 @@ impl LoweredDesign {
             signal_to_heap,
             lupdt_indexes,
             NUM_REGIONS,
-            self.plugins,
+            self.plugins
+                .into_iter()
+                .map(|x| x as Box<dyn RuntimePlugin>)
+                .collect(),
             design.arenas.ident_table,
             self.table,
         )
@@ -797,7 +828,7 @@ impl Design {
         timers: &mut TimerStack,
         top_level_module: Option<&str>,
         ectx: &mut ExecutionContext,
-        plugins: Vec<RuntimePluginState>,
+        plugins: Vec<Box<dyn VoglsPlugin>>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let mut builder = DesignBuilder::new();
         if ectx.logic_mode == LogicMode::TwoValue {
@@ -1202,17 +1233,35 @@ impl Design {
         }
     }
 
-    pub fn get_rt_signal(&self, signal: SignalKey) -> RtSignalKey {
-        self.rt_signal_map[&signal]
+    pub fn resolve_handle(&self, signal: SignalHandle) -> RtSignal {
+        let Symbol::Net(net) = &self.elab_table[signal.symbol].content else {
+            unreachable!();
+        };
+        let NetValue::Signal(signal) = &net.net else {
+            unreachable!();
+        };
+        let (key, slice) = signal.probe_signal();
+        let key = self.rt_signal_map[&key];
+        RtSignal { key, slice }
     }
 
-    pub fn get_heap_ref(&self, signal: RtSignalKey) -> HeapRef {
+    fn get_heap_ref(&self, signal: RtSignalKey) -> HeapRef {
         self.signal_to_heap[signal.as_usize()]
     }
 
-    pub fn set_signal(&self, state: &mut DesignState, signal: RtSignalKey, bits: &Bits) {
-        let heap_ref = self.get_heap_ref(signal);
-        let updated = &state.runtime().heap.load_bits(heap_ref, self.gl.logic_mode) != bits;
+    pub fn set_signal(&self, state: &mut DesignState, signal: RtSignal, bits: &Bits) {
+        let heap_ref = self.get_heap_ref(signal.key);
+        let updated = match signal.slice {
+            None => &state.runtime().heap.load_bits(heap_ref, self.gl.logic_mode) != bits,
+            Some(slice) => {
+                &state
+                    .runtime()
+                    .heap
+                    .load_bits(heap_ref, self.gl.logic_mode)
+                    .slicez(slice.lsb(), slice.width())
+                    != bits
+            }
+        };
 
         if updated {
             state
@@ -1222,20 +1271,23 @@ impl Design {
 
             match (&self.backend, state) {
                 (DesignBackend::Interpretted { simulation }, DesignState::Interpretted(state)) => {
-                    simulation.poke_signal(state, signal)
+                    simulation.poke_signal(state, signal.key)
                 }
                 #[cfg(feature = "native")]
                 (DesignBackend::Compiled { design }, DesignState::Compiled(state)) => {
-                    design.poke_signal(state, signal)
+                    design.poke_signal(state, signal.key)
                 }
                 _ => unreachable!(),
             }
         }
     }
 
-    pub fn get_signal(&self, state: &DesignState, signal: RtSignalKey) -> Bits {
-        let heap_ref = self.get_heap_ref(signal);
-        state.runtime().heap.load_bits(heap_ref, self.gl.logic_mode)
+    pub fn get_signal(&self, state: &DesignState, signal: RtSignal) -> Bits {
+        let heap_ref = self.get_heap_ref(signal.key);
+        state
+            .runtime()
+            .heap
+            .load_unaligned_bits(heap_ref, self.gl.logic_mode)
     }
 
     pub fn emit_ir(&self) -> String {
@@ -1245,6 +1297,17 @@ impl Design {
             writeln!(&mut s, "{}", process.display(&self.gl)).unwrap();
         }
         s
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct RtSignal {
+    key: RtSignalKey,
+    slice: Option<SignalSlice>,
+}
+impl RtSignal {
+    pub fn key(&self) -> RtSignalKey {
+        self.key
     }
 }
 

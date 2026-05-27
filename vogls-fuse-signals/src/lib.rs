@@ -63,7 +63,7 @@ use vogls_ir::token_range::TokenRange;
 use vogls_ir::vcd::VcdValue;
 use vogls_ir::{
     BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, Instruction, IntrinsicOp, Signal,
-    SignalKey, SignalSlice, VectorSize, new_process,
+    SignalFlags, SignalKey, SignalSlice, VectorSize, new_process,
 };
 use vogls_utils::{OrderedSet, Table, VgHashMap, VgHashSet};
 
@@ -113,6 +113,19 @@ impl BitOrAssign for NodeFlags {
     }
 }
 
+impl From<SignalFlags> for NodeFlags {
+    fn from(value: SignalFlags) -> Self {
+        let mut flags = NodeFlags::EMPTY;
+        if value.contains(SignalFlags::EXT_DRIVE) {
+            flags |= NodeFlags::DRIVE;
+        }
+        if value.contains(SignalFlags::EXT_PROBE) {
+            flags |= NodeFlags::PROBE;
+        }
+        flags
+    }
+}
+
 #[derive(Clone)]
 pub enum Driver {
     Constant(Bits),
@@ -145,10 +158,11 @@ impl FuseGraph {
             let (driver, driver_slice) = match &edge.driver {
                 Driver::Signal(driver_signal, driver_slice) => {
                     let driver = *g.signal_to_node.entry(*driver_signal).or_insert_with(|| {
+                        let driver = &gl.signals[*driver_signal];
                         g.nodes.insert(Node {
                             content: NodeContent::Signal(*driver_signal),
-                            flags: NodeFlags::EMPTY,
-                            size: gl.signals[*driver_signal].size,
+                            flags: NodeFlags::from(driver.flags),
+                            size: driver.size,
                             fanin: Vec::new(),
                             fanout: Vec::new(),
                         })

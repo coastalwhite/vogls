@@ -4,7 +4,7 @@ use std::sync::Arc;
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::token_range::TokenRange;
-use vogls_ir::{ConnectionDirection, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE, SignalKey};
+use vogls_ir::{ConnectionDirection, GlobalContext, SignalFlags, SignalKey, INTEGER_VSIZE, SCALAR_VSIZE};
 use vogls_utils::{IndexMap, VgHashMap, VgHashSet};
 
 use crate::ast::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression};
@@ -140,6 +140,7 @@ pub fn elaborate<'a, 'b>(
         name: "".to_string(),
         size: SCALAR_VSIZE,
         initialize: None,
+        flags: SignalFlags::EMPTY,
         origin: TokenRange { start: 0, end: 0 },
     });
     gl.signals.remove(dummy_signal);

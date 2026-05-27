@@ -362,6 +362,10 @@ impl Heap {
         }
     }
 
+    pub fn load_unaligned_bits(&self, _at: HeapRef, _logic_mode: LogicMode) -> Bits {
+        todo!()
+    }
+
     pub fn store_bits(&mut self, dst: HeapRef, logic_mode: LogicMode, value: &Bits) {
         match (value.as_data_ref(), logic_mode) {
             (BitsDataRef::InlineTv(v), LogicMode::TwoValue) => _ = self.set_tv_u64(dst, v),

@@ -13,6 +13,7 @@ macro_rules! signals {
                 name: $name.into(),
                 size: ::vogls_ir::VectorSize::new($size).unwrap(),
                 initialize: None,
+                flags: vogls_ir::SignalFlags::EMPTY,
                 origin: ::vogls_ir::token_range::TokenRange::default(),
             })
             ),+

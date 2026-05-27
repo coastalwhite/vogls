@@ -8,9 +8,7 @@ use vogls_utils::VgHashMap;
 use crate::dyn_format_string::{DynFormatArgument, DynFormatString};
 use crate::token_range::TokenRange;
 use crate::{
-    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext,
-    Instruction, IntrinsicOp, ProcessKey, ProcessKind, ResizeOp, SCALAR_VSIZE, ShiftImmOp, Signal,
-    SignalKey, TIME_VSIZE, Time, UnaryOp, Variable, VariableKey,
+    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext, Instruction, IntrinsicOp, ProcessKey, ProcessKind, ResizeOp, ShiftImmOp, Signal, SignalFlags, SignalKey, Time, UnaryOp, Variable, VariableKey, SCALAR_VSIZE, TIME_VSIZE
 };
 
 #[derive(Debug)]
@@ -204,6 +202,7 @@ fn parse_signal_definition<'a>(
             gl.signals.insert(Signal {
                 name: name.to_string(),
                 size,
+                flags: SignalFlags::EMPTY,
                 initialize,
                 origin: TokenRange::default(),
             }),

@@ -392,8 +392,7 @@ use vogls_fuse_signals::{Driver, InputEdge};
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::vcd::{VcdScope, VcdValue, VcdVariable, VcdVariableKey};
 use vogls_ir::{
-    BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, ProcessKey, ProcessKind,
-    SCALAR_VSIZE, SignalKey, SignalSlice, VariableKey, VectorSize, new_process,
+    new_process, BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, ProcessKey, ProcessKind, SignalFlags, SignalKey, SignalSlice, VariableKey, VectorSize, SCALAR_VSIZE
 };
 use vogls_utils::{IndexMap, OrderedSet, Table, VgHashMap};
 
@@ -982,6 +981,7 @@ pub fn create_nba_process(
             name: mask_name,
             size,
             initialize: None,
+            flags: SignalFlags::EMPTY,
             origin,
         })
     });
@@ -989,6 +989,7 @@ pub fn create_nba_process(
         name: value_name,
         size,
         initialize: None,
+        flags: SignalFlags::EMPTY,
         origin,
     });
 

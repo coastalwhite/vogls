@@ -105,7 +105,6 @@ impl LazyStep {
                 if trace_ref.is_some() {
                     panic!("double trace");
                 }
-                state.plugins_mut()[0] = Box::new(TracePlugin::new(design));
                 *trace_ref = Some(TraceRef(0));
                 Ok(())
             }
