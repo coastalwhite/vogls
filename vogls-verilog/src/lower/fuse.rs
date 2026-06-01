@@ -348,7 +348,7 @@ pub fn try_fuse_assign<'a>(
             mctx.diagnostics
                 .warnings
                 .push((ctx.arenas.get_span(expr), "index out of range".into()));
-            return Err(());
+            return Ok(false);
         }
 
         // @TODO: Checked arithmetic
@@ -386,7 +386,7 @@ pub fn try_fuse_assign<'a>(
                 .warnings
                 .push((ctx.arenas.get_span(expr), "index out of range".into()));
             // @TODO: Handle this better somehow...
-            return Err(());
+            return Ok(false);
         }
 
         offset += idx;
