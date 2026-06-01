@@ -94,8 +94,27 @@ impl Base {
 }
 
 pub fn parse_decimal_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, ()> {
-    let Some(size) = size else {
-        todo!("Decimal with inferred size");
+    let size = match size {
+        Some(size) => size,
+        None => {
+            let num_digits = s.bytes().filter(|b| matches!(b, b'0'..=b'9')).count();
+            let num_digits = u32::try_from(num_digits).map_err(|_| ())?;
+            if num_digits == 0 {
+                return Err(());
+            }
+            match s.bytes().filter(|b| matches!(b, b'1'..=b'9')).next() {
+                None => NonZeroU32::MIN,
+                Some(fst_digit) => {
+                    let fst_digit = fst_digit - b'0';
+                    let num_bits =
+                        (f64::from(num_digits) * 10f64.log2() + f64::from(fst_digit).log2()).ceil();
+                    if !num_bits.is_finite() || num_bits < 1.0 || num_bits > u32::MAX as f64 {
+                        return Err(());
+                    }
+                    VectorSize::new(num_bits as u32).unwrap()
+                }
+            }
+        }
     };
 
     if size.get() <= 64 {
