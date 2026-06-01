@@ -30,6 +30,7 @@ pub fn lower_unary_op(
             match op {
                 O::Neg => VI::TvNot1(dst, src.offset),
                 O::ReduceOr | O::ReduceAnd | O::ReduceXor => VI::TvMove1(dst, src.offset),
+                O::LeadingZeros => todo!(),
             }
         } else {
             VI::TvUnary(dst, op, src)

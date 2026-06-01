@@ -49,6 +49,7 @@ pub(crate) fn exec_fv_unary(stack: &mut Heap, dst: HeapOffset, op: UnaryOp, src:
                 O::ReduceOr => fv_l_reduce_or,
                 O::ReduceAnd => fv_l_reduce_and,
                 O::ReduceXor => fv_l_reduce_xor,
+                O::LeadingZeros => unreachable!(),
             };
             let result = f(src_s, src.size);
             stack.set_fv_scalar(dst, result);
@@ -60,10 +61,12 @@ pub(crate) fn exec_fv_unary(stack: &mut Heap, dst: HeapOffset, op: UnaryOp, src:
                 O::ReduceOr => fv_s_reduce_or,
                 O::ReduceAnd => fv_s_reduce_and,
                 O::ReduceXor => fv_s_reduce_xor,
+                O::LeadingZeros => unreachable!(),
             };
             let result = f(src_s.as_slice(), src.size);
             stack.set_fv_scalar(dst, result);
         }
+        O::LeadingZeros => todo!(),
     };
 }
 

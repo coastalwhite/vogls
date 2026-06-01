@@ -298,9 +298,12 @@ pub struct Signal {
     pub origin: TokenRange,
 }
 
-pub const INTEGER_VSIZE: VectorSize = NonZeroU32::new(32).unwrap();
-pub const TIME_VSIZE: VectorSize = NonZeroU32::new(64).unwrap();
 pub const SCALAR_VSIZE: VectorSize = NonZeroU32::new(1).unwrap();
+pub const VSIZE_32: VectorSize = NonZeroU32::new(32).unwrap();
+pub const VSIZE_64: VectorSize = NonZeroU32::new(64).unwrap();
+
+pub const INTEGER_VSIZE: VectorSize = VSIZE_32;
+pub const TIME_VSIZE: VectorSize = VSIZE_64;
 
 #[derive(Debug, Clone)]
 pub enum IntrinsicOp {
@@ -333,6 +336,7 @@ pub enum UnaryOp {
     ReduceOr,
     ReduceAnd,
     ReduceXor,
+    LeadingZeros,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -809,6 +813,7 @@ impl UnaryOp {
             O::ReduceOr => Bits::from(src.reduce_or()),
             O::ReduceAnd => Bits::from(src.reduce_and()),
             O::ReduceXor => Bits::from(src.reduce_xor()),
+            O::LeadingZeros => Bits::from_u64(INTEGER_VSIZE, src.leading_zeroes().into()),
         }
     }
 
@@ -816,6 +821,7 @@ impl UnaryOp {
         match self {
             UnaryOp::Neg => size,
             UnaryOp::ReduceOr | UnaryOp::ReduceAnd | UnaryOp::ReduceXor => SCALAR_VSIZE,
+            UnaryOp::LeadingZeros => const { VectorSize::new(32).unwrap() },
         }
     }
 }

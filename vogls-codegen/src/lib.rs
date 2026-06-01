@@ -524,5 +524,6 @@ pub fn unary_needs_convert(op: UnaryOp, dst_mode: LogicMode, src_mode: LogicMode
     use UnaryOp as O;
     match (op, dst_mode, src_mode) {
         (O::Neg | O::ReduceOr | O::ReduceAnd | O::ReduceXor, d, s) => (d != s).then_some(d),
+        (O::LeadingZeros, _, _) => None,
     }
 }

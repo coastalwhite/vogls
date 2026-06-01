@@ -8,7 +8,7 @@ use vogls_utils::VgHashMap;
 use crate::dyn_format_string::{DynFormatArgument, DynFormatString};
 use crate::token_range::TokenRange;
 use crate::{
-    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext, Instruction, IntrinsicOp, ProcessKey, ProcessKind, ResizeOp, ShiftImmOp, Signal, SignalFlags, SignalKey, Time, UnaryOp, Variable, VariableKey, SCALAR_VSIZE, TIME_VSIZE
+    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext, Instruction, IntrinsicOp, ProcessKey, ProcessKind, ResizeOp, ShiftImmOp, Signal, SignalFlags, SignalKey, Time, UnaryOp, Variable, VariableKey, SCALAR_VSIZE, TIME_VSIZE, VSIZE_32
 };
 
 #[derive(Debug)]
@@ -481,6 +481,7 @@ fn parse_bb<'a>(
                 "reduce_or" => parse_unary(c, symbols, gl, dst, UO::ReduceOr)?,
                 "reduce_and" => parse_unary(c, symbols, gl, dst, UO::ReduceAnd)?,
                 "reduce_xor" => parse_unary(c, symbols, gl, dst, UO::ReduceXor)?,
+                "leading_zeros" => parse_unary(c, symbols, gl, dst, UO::LeadingZeros)?,
 
                 // Resize
                 "truncate" => parse_resize(c, symbols, gl, dst, R::Truncate)?,
@@ -1044,6 +1045,10 @@ fn parse_unary<'a>(
         }
         UnaryOp::ReduceOr | UnaryOp::ReduceAnd | UnaryOp::ReduceXor => {
             gl.vars[dst].size = SCALAR_VSIZE;
+            symbols.unresolved_vars.remove(&dst);
+        }
+        UnaryOp::LeadingZeros => {
+            gl.vars[dst].size = VSIZE_32;
             symbols.unresolved_vars.remove(&dst);
         }
     }

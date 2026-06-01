@@ -1,8 +1,8 @@
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::dyn_format_string::{DynFormatArgument, DynFormatString};
 use vogls_ir::{
-    BasicBlockBuilder, Bits, INTEGER_VSIZE, IntrinsicOp, SCALAR_VSIZE, TIME_VSIZE, VariableKey,
-    VectorSize,
+    BasicBlockBuilder, Bits, INTEGER_VSIZE, IntrinsicOp, SCALAR_VSIZE, TIME_VSIZE, VSIZE_32,
+    VariableKey, VectorSize,
 };
 
 use crate::ast::expr::Expr;
@@ -58,9 +58,15 @@ pub fn lower_system_function_call<'a>(
             Ok((builder.random(mctx.gl()), VType::UnsignedNet(TIME_VSIZE)))
         }
         "clog2" => {
-            mctx.diagnostics
-                .not_yet_implemented(arenas.get_span(expr), "clog2 is not yet implemented");
-            Err(())
+            ensure_num_args_equal!(1);
+            let (e, e_ty) = arguments[0].ok_or(())?;
+            let lz = builder.count_leading_zeros(mctx.gl(), e);
+            let clog2 = builder.revminus_constant(
+                mctx.gl(),
+                lz,
+                Bits::new_u32(e_ty.force_net_width().get()),
+            );
+            Ok((clog2, VType::UnsignedNet(VSIZE_32)))
         }
 
         // VoGLS specific system function calls
@@ -190,10 +196,7 @@ pub fn get_system_function_call_output_ty<'a>(
             ensure_num_args_equal!(0);
             Ok(VType::UnsignedNet(TIME_VSIZE))
         }
-        "clog2" => {
-            diagnostics.not_yet_implemented(arenas.get_span(expr), "clog2 is not yet implemented");
-            Err(())
-        }
+        "clog2" => Ok(VType::UnsignedNet(VSIZE_32)),
 
         // VoGLS specific system function calls
         "vogls_dbg" => {

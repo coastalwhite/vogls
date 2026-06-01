@@ -1,6 +1,6 @@
 use vogls_ir::dyn_format_string::DynFormatString;
 use vogls_ir::vcd::VcdVariableKey;
-use vogls_ir::{LogicMode, ReadMem, ResizeOp, SignalSlice, Time, UnaryOp, VectorSize};
+use vogls_ir::{LogicMode, ReadMem, ResizeOp, SignalSlice, Time, UnaryOp, VSIZE_32, VectorSize};
 
 mod format;
 mod lower;
@@ -173,6 +173,9 @@ impl VmInstruction {
                 UnaryOp::ReduceOr | UnaryOp::ReduceAnd | UnaryOp::ReduceXor => {
                     &[("dst", false, dst.to_scalar_ref()), ("src", false, *src)]
                 }
+                UnaryOp::LeadingZeros => {
+                    &[("dst", false, dst.to_ref(VSIZE_32)), ("src", false, *src)]
+                }
             },
             I::TvResize(dst, _, src) => &[("dst", false, *dst), ("src", false, *src)],
             I::TvBinaryArithmetic(dst, _, lhs, rhs) => &[
@@ -223,6 +226,9 @@ impl VmInstruction {
                 UnaryOp::Neg => &[("dst", true, dst.to_ref(src.size)), ("src", true, *src)],
                 UnaryOp::ReduceOr | UnaryOp::ReduceAnd | UnaryOp::ReduceXor => {
                     &[("dst", true, dst.to_scalar_ref()), ("src", true, *src)]
+                }
+                UnaryOp::LeadingZeros => {
+                    &[("dst", false, dst.to_ref(VSIZE_32)), ("src", true, *src)]
                 }
             },
             I::FvResize(dst, _, src) => &[("dst", true, *dst), ("src", true, *src)],

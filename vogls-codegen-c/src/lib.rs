@@ -552,6 +552,7 @@ pub fn lower_process(
                         O::ReduceOr => unary::cgc_reduce_or(&mut buffer, dst_t, t)?,
                         O::ReduceAnd => unary::cgc_reduce_and(&mut buffer, dst_t, t)?,
                         O::ReduceXor => unary::cgc_reduce_xor(&mut buffer, dst_t, t)?,
+                        O::LeadingZeros => todo!(),
                     }
                     if temporal_variables.contains(dst) {
                         store(&mut buffer, heap_map[dst], dst_t)?;

@@ -572,6 +572,16 @@ impl BasicBlockBuilder {
         self.copy_op(gl, lhs, rhs, BinaryOp::CopyZ)
     }
 
+    pub fn count_leading_zeros(
+        &mut self,
+        gl: &mut GlobalContext,
+        src: VariableKey,
+    ) -> VariableKey {
+        let dst = self.next_tmp_var(gl, INTEGER_VSIZE);
+        self.unary_op(gl, src, UnaryOp::LeadingZeros, dst);
+        dst
+    }
+
     pub fn select_bit(
         &mut self,
         gl: &mut GlobalContext,

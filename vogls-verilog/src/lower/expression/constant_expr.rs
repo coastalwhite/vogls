@@ -5,7 +5,7 @@ use vogls_ir::{Bits, GlobalContext, VectorSize};
 
 use crate::ast::AstId;
 use crate::ast::constant_expr::ConstantExpr;
-use crate::ast::expr::{BinaryOperator, Expr, UnaryOperator};
+use crate::ast::expr::{BinaryOperator, BitSlice, Expr, Replication, UnaryOperator};
 use crate::elaborate::{VSymbol, VSymbolTable};
 use crate::lower::expression::{StackItem, get_expr_type};
 use crate::lower::vvalue::VValue;
@@ -171,7 +171,7 @@ pub fn eval_constant_expr<'a>(
                 result_stack.push(Some(result));
             }
             Expr::Ident(ast_ident, exprs, range_expression) => {
-                if !exprs.is_empty() || range_expression.is_some() {
+                if !exprs.is_empty() {
                     result_stack.push(None);
                     diagnostics.not_yet_implemented(
                         arenas.get_span(item.expr),
@@ -181,13 +181,78 @@ pub fn eval_constant_expr<'a>(
                     continue;
                 }
 
+                if !item.dispatched && range_expression.is_some() {
+                    item.dispatched = true;
+
+                    dispatch_stack.push(item);
+                    if let Some(range_expression) = range_expression {
+                        match range_expression {
+                            BitSlice::MsbLsb(msb, lsb) => dispatch_stack.extend([
+                                StackItem::new_no_ctx(msb.into_expr()),
+                                StackItem::new_no_ctx(lsb.into_expr()),
+                            ]),
+                            BitSlice::PlusWidth(offset, width)
+                            | BitSlice::MinusWidth(offset, width) => dispatch_stack.extend([
+                                StackItem::new_no_ctx(offset),
+                                StackItem::new_no_ctx(width.into_expr()),
+                            ]),
+                        }
+                    }
+                    continue;
+                }
+
+                let end_length =
+                    result_stack.len() - range_expression.is_some().then_some(2).unwrap_or(0);
                 let Ok(value) = try_resolve_constant(scope, &table, arenas, ast_ident, diagnostics)
                 else {
+                    result_stack.truncate(end_length);
                     result_stack.push(None);
                     error = true;
                     continue;
                 };
-                result_stack.push(Some(value.clone()));
+
+                let mut value = value.clone();
+                if let Some(range_expression) = range_expression {
+                    let fst = result_stack.pop().unwrap();
+                    let snd = result_stack.pop().unwrap();
+
+                    let (Some(fst), Some(snd)) = (fst, snd) else {
+                        result_stack.truncate(end_length);
+                        result_stack.push(None);
+                        continue;
+                    };
+
+                    let (lsb, width) = match range_expression {
+                        BitSlice::MsbLsb(..) => {
+                            // @TODO: Fallible.
+                            let msb = fst.as_integer().unwrap();
+                            let lsb = snd.as_integer().unwrap();
+                            (
+                                lsb as u32,
+                                VectorSize::new((msb as u32 - lsb as u32) + 1).unwrap(),
+                            )
+                        }
+                        BitSlice::PlusWidth(..) => {
+                            // @TODO: Fallible.
+                            let offset = fst.as_integer().unwrap();
+                            let width = snd.as_integer().unwrap();
+                            (offset as u32, VectorSize::new(width as u32).unwrap())
+                        }
+                        BitSlice::MinusWidth(..) => {
+                            // @TODO: Fallible.
+                            let offset = fst.as_integer().unwrap();
+                            let width = snd.as_integer().unwrap();
+                            (
+                                offset as u32 - (width as u32 - 1),
+                                VectorSize::new(width as u32).unwrap(),
+                            )
+                        }
+                    };
+
+                    value = VValue::UnsignedNet(value.into_bits().slicex(lsb, width));
+                }
+
+                result_stack.push(Some(value));
             }
             Expr::Sized(sized) => {
                 let sized = &arenas.sized_numbers[sized.item.at];
@@ -404,13 +469,49 @@ pub fn eval_constant_expr<'a>(
                 let value = Bits::load_from_slice(&s, size);
                 result_stack.push(Some(VValue::UnsignedNet(value)));
             }
-            Expr::Replication(..) => {
-                result_stack.push(None);
-                diagnostics.not_yet_implemented(
-                    arenas.get_span(item.expr),
-                    "constant expression of this kind not yet implemented",
-                );
-                error = true;
+            Expr::Replication(id) => {
+                let Replication {
+                    constant_expr,
+                    exprs,
+                } = &id;
+                assert!(exprs.len() > 0);
+                if !item.dispatched {
+                    item.dispatched = true;
+                    dispatch_stack.push(item);
+                    dispatch_stack.push(StackItem::new_no_ctx(constant_expr.into_expr()));
+                    dispatch_stack.extend(exprs.iter().map(StackItem::new_no_ctx));
+                    continue;
+                }
+
+                // @Performance. Allocate once.
+                let end_length = result_stack.len() - exprs.len();
+                let Some(num_reps) = result_stack.pop().unwrap() else {
+                    result_stack.truncate(end_length);
+                    result_stack.push(None);
+                    continue;
+                };
+
+                let Some(fst) = result_stack.pop().unwrap() else {
+                    result_stack.truncate(end_length);
+                    result_stack.push(None);
+                    continue;
+                };
+                let mut acc = fst.into_bits();
+                for _ in 1..exprs.len() {
+                    let Some(value) = result_stack.pop().unwrap() else {
+                        result_stack.truncate(end_length);
+                        result_stack.push(None);
+                        continue;
+                    };
+                    acc = Bits::concatenate(&acc, &value.into_bits());
+                }
+
+                // @TODO: Binary concatenations
+                let mut final_acc = acc.clone();
+                for _ in 1..num_reps.as_integer().unwrap() {
+                    final_acc = Bits::concatenate(&final_acc, &acc);
+                }
+                result_stack.push(Some(VValue::UnsignedNet(final_acc)));
             }
         }
     }
