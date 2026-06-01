@@ -1092,7 +1092,7 @@ fn extend_module_or_generate_item_sids<'a, 'b>(
 
                 error |= extend_statements_sids(
                     AstIdRange::single(*statement),
-                    scope,
+                    sid,
                     ctx,
                     st,
                     diagnostics,
@@ -1601,7 +1601,6 @@ pub fn extend_expr_needs<'a, 'b>(
     st: &mut ElaborationState<'a, 'b>,
     expr: AstId<'a, ConstantExpr<'a>>,
 ) {
-    let in_function = matches!(table[scope].content, VSymbol::Function(_));
     let expr = expr.into_expr();
     assert!(st.dispatch_stack.is_empty());
 
@@ -1640,8 +1639,7 @@ pub fn extend_expr_needs<'a, 'b>(
                     }
                 }
 
-                if in_function
-                    && let Some(ident_sid) = resolve_hident(scope, table, *ident)
+                if let Some(ident_sid) = resolve_hident(scope, table, *ident)
                     && st.marked.insert(ident_sid)
                     && st.lvl_symbols.contains_key(&ident_sid)
                 {
@@ -1689,10 +1687,7 @@ fn extend_fn_statement_needs<'a, 'b>(
         for stmt in stmts.iter() {
             match stmt.content {
                 StatementContent::SeqBlock(id) => {
-                    let SeqBlock {
-                        block: _,
-                        statements,
-                    } = &*id;
+                    let SeqBlock { block: _, statements } = &*id;
                     extend_fn_statement_needs(scope, table, st, *statements);
                 }
                 StatementContent::ParBlock(id) => {
