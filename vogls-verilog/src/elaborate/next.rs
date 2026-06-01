@@ -4,7 +4,9 @@ use std::sync::Arc;
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::token_range::TokenRange;
-use vogls_ir::{ConnectionDirection, GlobalContext, SignalFlags, SignalKey, INTEGER_VSIZE, SCALAR_VSIZE};
+use vogls_ir::{
+    ConnectionDirection, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE, SignalFlags, SignalKey,
+};
 use vogls_utils::{IndexMap, VgHashMap, VgHashSet};
 
 use crate::ast::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression};
@@ -22,7 +24,9 @@ use crate::ast::module::{
     TfType, TimeScale, VariableType, VariableTypeVariant,
 };
 use crate::ast::statement::{
-    Block, ConditionalStatement, ParBlock, SeqBlock, Statement, StatementContent, StatementOrNull,
+    Block, BlockingAssignment, CaseStatement, ConditionalStatement, LoopStatement,
+    LoopStatementVariant, ParBlock, SeqBlock, Statement, StatementContent, StatementOrNull,
+    WaitStatement,
 };
 use crate::ast::{AstId, AstIdRange, AstItem, Identifier};
 use crate::elaborate::{FunctionSymbol, TaskSymbol};
@@ -1531,7 +1535,7 @@ impl<'a> InLevelSymbol<'a> {
                     ident: _,
                     tf_input_decls,
                     block_item_decls: _,
-                    statement: _,
+                    statement,
                 } = &**id;
 
                 if let FunctionRangeOrType::Signed(Some(range))
@@ -1545,6 +1549,7 @@ impl<'a> InLevelSymbol<'a> {
                 for tf_input_decl in tf_input_decls.iter() {
                     extend_tf_type_needs(sid, table, st, &tf_input_decl.tf_type);
                 }
+                extend_fn_statement_needs(sid, table, st, AstIdRange::single(*statement));
             }
         }
     }
@@ -1596,6 +1601,7 @@ pub fn extend_expr_needs<'a, 'b>(
     st: &mut ElaborationState<'a, 'b>,
     expr: AstId<'a, ConstantExpr<'a>>,
 ) {
+    let in_function = matches!(table[scope].content, VSymbol::Function(_));
     let expr = expr.into_expr();
     assert!(st.dispatch_stack.is_empty());
 
@@ -1634,7 +1640,8 @@ pub fn extend_expr_needs<'a, 'b>(
                     }
                 }
 
-                if let Some(ident_sid) = resolve_hident(scope, table, *ident)
+                if in_function
+                    && let Some(ident_sid) = resolve_hident(scope, table, *ident)
                     && st.marked.insert(ident_sid)
                     && st.lvl_symbols.contains_key(&ident_sid)
                 {
@@ -1655,6 +1662,120 @@ pub fn extend_expr_needs<'a, 'b>(
                 _ = exprs.map(|exprs| dispatch_stack.extend(exprs.iter()))
             }
             Expr::Decimal(..) | Expr::Sized(..) | Expr::String(..) => {}
+        }
+    }
+}
+
+fn extend_fn_statement_needs<'a, 'b>(
+    scope: SymbolId,
+    table: &VSymbolTable,
+    st: &mut ElaborationState<'a, 'b>,
+    stmts: AstIdRange<'a, Statement<'a>>,
+) {
+    assert!(st.stmt_dispatch_stack.is_empty());
+
+    st.stmt_dispatch_stack.push((scope, stmts));
+
+    while let Some((scope, stmts)) = st.stmt_dispatch_stack.pop() {
+        macro_rules! dispatch_stmt_or_null {
+            ($stmt_or_null:expr) => {
+                if let StatementOrNull::Statement(stmt) = &*$stmt_or_null {
+                    st.stmt_dispatch_stack
+                        .push((scope, AstIdRange::single(*stmt)));
+                }
+            };
+        }
+
+        for stmt in stmts.iter() {
+            match stmt.content {
+                StatementContent::SeqBlock(id) => {
+                    let SeqBlock {
+                        block: _,
+                        statements,
+                    } = &*id;
+                    extend_fn_statement_needs(scope, table, st, *statements);
+                }
+                StatementContent::ParBlock(id) => {
+                    let ParBlock {
+                        block: _,
+                        statements,
+                    } = &*id;
+                    extend_fn_statement_needs(scope, table, st, *statements);
+                }
+
+                StatementContent::CaseStatement(id) => {
+                    let CaseStatement {
+                        variant: _,
+                        expr,
+                        items,
+                    } = &*id;
+                    extend_expr_needs(scope, table, st, (*expr).into_constant());
+                    for item in items.iter() {
+                        dispatch_stmt_or_null!(item.statement_or_null)
+                    }
+                }
+                StatementContent::ConditionalStatement(id) => {
+                    let ConditionalStatement {
+                        if_branch,
+                        else_ifs,
+                        else_branch,
+                    } = &*id;
+
+                    extend_expr_needs(scope, table, st, if_branch.condition.into_constant());
+                    dispatch_stmt_or_null!(if_branch.statement);
+                    for else_if in else_ifs.iter() {
+                        extend_expr_needs(scope, table, st, else_if.condition.into_constant());
+                        dispatch_stmt_or_null!(else_if.statement);
+                    }
+                    if let Some(stmt_or_null) = else_branch {
+                        dispatch_stmt_or_null!(*stmt_or_null);
+                    }
+                }
+                StatementContent::LoopStatement(id) => {
+                    let LoopStatement { variant, statement } = &*id;
+                    match variant {
+                        LoopStatementVariant::Forever => {}
+                        LoopStatementVariant::Repeat(expr) | LoopStatementVariant::While(expr) => {
+                            extend_expr_needs(scope, table, st, (*expr).into_constant())
+                        }
+                        LoopStatementVariant::For(_, _, _) => {
+                            // @TODO: Actually use the expressions here.
+                        }
+                    }
+                    st.stmt_dispatch_stack
+                        .push((scope, AstIdRange::single(*statement)));
+                }
+
+                StatementContent::ProceduralTimingControlStatement(id) => {
+                    dispatch_stmt_or_null!(id.statement_or_null)
+                }
+                StatementContent::WaitStatement(id) => {
+                    let WaitStatement {
+                        expression,
+                        statement_or_null,
+                    } = &*id;
+                    extend_expr_needs(scope, table, st, (*expression).into_constant());
+                    dispatch_stmt_or_null!(*statement_or_null)
+                }
+
+                // @TODO: Use the expressions here.
+                StatementContent::BlockingAssignment(id) => {
+                    let BlockingAssignment {
+                        variable_lvalue: _,
+                        delay_or_event_control: _,
+                        expression,
+                    } = &*id;
+                    // @TODO: Use the expressions here.
+                    extend_expr_needs(scope, table, st, (*expression).into_constant());
+                }
+                StatementContent::NonBlockingAssignment(_)
+                | StatementContent::SystemTaskEnable(_)
+                | StatementContent::TaskEnable(_) => {}
+
+                StatementContent::DisableStatement
+                | StatementContent::EventTrigger
+                | StatementContent::ProceduralContinuousAssignments => {}
+            }
         }
     }
 }
