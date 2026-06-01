@@ -5,7 +5,8 @@ use std::sync::Arc;
 use vogls_frontend::ident_table::IdentId;
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{
-    BasicBlockBuilder, BasicBlockKey, Bits, ConnectionDirection, GlobalContext, ProcessKey, Signal, SignalFlags, SignalKey, VariableKey, VectorSize, SCALAR_VSIZE
+    BasicBlockBuilder, BasicBlockKey, Bits, ConnectionDirection, GlobalContext, ProcessKey,
+    SCALAR_VSIZE, Signal, SignalFlags, SignalKey, VariableKey, VectorSize,
 };
 use vogls_utils::{Table, VgHashMap, new_table_key};
 
@@ -321,7 +322,12 @@ pub fn eval_constant_range<'a>(
     let msb = eval_constant_expr(gl, arenas, table, scope, diagnostics, range.msb, None);
     let lsb = eval_constant_expr(gl, arenas, table, scope, diagnostics, range.lsb, None);
 
-    let (Ok(VValue::SignedNet(msb)), Ok(VValue::SignedNet(lsb))) = (msb, lsb) else {
+    let (
+        Ok(VValue::UnsignedNet(msb) | VValue::SignedNet(msb)),
+        Ok(VValue::UnsignedNet(lsb) | VValue::SignedNet(lsb)),
+    ) = (msb, lsb)
+    else {
+        diagnostics.not_yet_implemented(arenas.get_span(ast_range), "Invalid input type for range");
         return Err(());
     };
     let msb = msb.as_i64().unwrap();

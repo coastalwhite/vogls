@@ -1687,7 +1687,10 @@ fn extend_fn_statement_needs<'a, 'b>(
         for stmt in stmts.iter() {
             match stmt.content {
                 StatementContent::SeqBlock(id) => {
-                    let SeqBlock { block: _, statements } = &*id;
+                    let SeqBlock {
+                        block: _,
+                        statements,
+                    } = &*id;
                     extend_fn_statement_needs(scope, table, st, *statements);
                 }
                 StatementContent::ParBlock(id) => {
