@@ -275,6 +275,7 @@ impl<'a> Consumable<'a> for Expr<'a> {
                     end: current.1.end,
                 };
 
+                min_bp = bp;
                 match item {
                     StackItem::Paren => {
                         tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
@@ -469,11 +470,8 @@ impl<'a> Consumable<'a> for Expr<'a> {
                         current = (Expr::Ternary(condition, truthy, falsy), location)
                     }
                 }
-
-                min_bp = bp;
             }
         };
-
         Ok(result.0)
     }
 }

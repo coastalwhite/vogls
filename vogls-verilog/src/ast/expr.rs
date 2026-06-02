@@ -274,6 +274,15 @@ impl<'a> AstId<'a, ModulePathExpr<'a>> {
 }
 
 impl<'a> Expr<'a> {
+    pub fn tree_display<'b>(&'b self, arenas: &'b AstArenas) -> impl fmt::Display + 'b {
+        struct X<'a>(&'a Expr<'a>, &'a AstArenas);
+        impl<'a> fmt::Display for X<'a> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                self.0.tree_fmt(self.1, f)
+            }
+        }
+        X(self, arenas)
+    }
     pub fn tree_fmt(&self, arenas: &AstArenas, mut f: impl fmt::Write) -> fmt::Result {
         self.tree_fmt_impl(arenas, &mut f, 0)
     }
@@ -296,7 +305,12 @@ impl<'a> Expr<'a> {
                 lhs.tree_fmt_impl(arenas, f, depth + 1)?;
                 rhs.tree_fmt_impl(arenas, f, depth + 1)?;
             }
-            Expr::Concatenation(..) => f.write_str("concatenation")?,
+            Expr::Concatenation(exprs) => {
+                writeln!(f, "concatenation")?;
+                for e in exprs.iter() {
+                    e.tree_fmt_impl(arenas, f, depth + 1)?;
+                }
+            },
             Expr::Replication(Replication {
                 constant_expr,
                 exprs,
@@ -354,8 +368,8 @@ impl<'a> Expr<'a> {
             Expr::Decimal(decimal) => {
                 writeln!(f, "decimal: {}", arenas.decimals[decimal.at])?;
             }
-            Expr::Sized(..) => f.write_str("sized")?,
-            Expr::String(..) => f.write_str("string")?,
+            Expr::Sized(..) => writeln!(f, "sized")?,
+            Expr::String(..) => writeln!(f, "string")?,
         }
 
         Ok(())
