@@ -37,7 +37,7 @@ module tb();
 		#1
 		in = 1;
 		areset = 1;
-		#0
+		#1
 		areset = 0;
 		$vogls_assert_eq(out, t.A);
 		#10
