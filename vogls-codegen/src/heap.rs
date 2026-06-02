@@ -228,7 +228,7 @@ impl Heap {
 
     pub fn get_fv_item(&self, at: HeapOffset) -> FvLogicValue {
         let (spc, val) = self.get_fv_u64(at.to_ref(SCALAR_VSIZE));
-        FvLogicValue::from_repr(((spc as u8) << 1) | (val as u8))
+        FvLogicValue::from_repr((spc as u8) | ((val as u8) << 1))
     }
     pub fn get_fv_u64(&self, at: HeapRef) -> (u64, u64) {
         debug_assert!(at.size.get() <= 64);
