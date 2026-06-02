@@ -62,7 +62,7 @@ pub fn eval_constant_expr<'a>(
 
                 use UnaryOperator as O;
                 let result = match op {
-                    O::LogicalNegation => VValue::scalar_from_bool(child.to_logical()),
+                    O::LogicalNegation => VValue::scalar_from_bool(!child.to_logical()),
                     O::BitwiseNegation => child.bitwise_invert(),
                     O::ReductionAnd
                     | O::ReductionOr
