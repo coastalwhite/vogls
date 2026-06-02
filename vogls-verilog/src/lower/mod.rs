@@ -716,8 +716,7 @@ fn assign_port_output<'a>(
                             )?;
                             let width =
                                 VectorSize::new(width.as_integer().unwrap() as u32).unwrap();
-                            let width_v = bb_builder
-                                .constant_u32(mctx.gl(), width.checked_add(1).unwrap().get());
+                            let width_v = bb_builder.constant_u32(mctx.gl(), width.get() - 1);
                             let offset = bb_builder.minus(mctx.gl(), offset?.0, width_v);
                             (offset, Some(width))
                         }
