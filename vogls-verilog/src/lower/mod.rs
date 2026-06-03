@@ -659,19 +659,31 @@ fn assign_port_output<'a>(
                     get_used_signals(ctx, mctx, scope, &mut ins, expr)?;
                 }
 
-                let (offset_dst, length_dst) = if range_expression.is_none() && exprs.len() == 1 {
-                    (
-                        lower_expr(
-                            ctx,
-                            mctx,
-                            scope,
-                            &mut bb_builder,
-                            exprs.first().unwrap(),
-                            None,
-                        )?
-                        .0,
+                let (offset_dst, length_dst) = if range_expression.is_none()
+                    && exprs.len() == 1
+                    && s.dims.len() <= 1
+                {
+                    let offset = lower_expr(
+                        ctx,
+                        mctx,
+                        scope,
+                        &mut bb_builder,
+                        exprs.first().unwrap(),
                         None,
-                    )
+                    )?
+                    .0;
+                    if s.dims.len() == 1 {
+                        (
+                            bb_builder.multiply_constant(
+                                mctx.gl(),
+                                offset,
+                                Bits::new_u32(s.ty.force_net_width().get()),
+                            ),
+                            Some(s.ty.force_net_width()),
+                        )
+                    } else {
+                        (offset, None)
+                    }
                 } else if let Some(slice) = range_expression
                     && exprs.is_empty()
                 {
