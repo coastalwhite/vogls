@@ -1,5 +1,6 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::fmt;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use crate::number::{
@@ -26,8 +27,42 @@ pub struct Macro {
     file: Vec<FileIdx>,
 }
 
+#[derive(Debug)]
+pub struct TokenizeError {
+    line: u64,
+    file: Option<Rc<Path>>,
+    reason: TokenizeErrorReason,
+}
+
+impl fmt::Display for TokenizeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self { line, file, reason } = self;
+        match file {
+            None => f.write_str("<unknown>")?,
+            Some(file) => file.display().fmt(f)?,
+        }
+        write!(f, ":{line}: {reason}")
+    }
+}
+impl fmt::Display for TokenizeErrorReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::FailedToOpenFile(path, err) => {
+                write!(f, "failed to open {}. Reason: {err}", path.display())
+            }
+        }
+    }
+}
+
+impl std::error::Error for TokenizeError {}
+
+#[derive(Debug)]
+pub enum TokenizeErrorReason {
+    FailedToOpenFile(PathBuf, std::io::Error),
+}
+
 impl Tokenized {
-    pub fn tokenize(content: Rc<str>, path: Option<Rc<Path>>) -> Self {
+    pub fn tokenize(content: Rc<str>, path: Option<Rc<Path>>) -> Result<Self, Box<TokenizeError>> {
         Self::tokenize_with_macros(content, path, &mut HashMap::new())
     }
 
@@ -35,7 +70,7 @@ impl Tokenized {
         content: Rc<str>,
         path: Option<Rc<Path>>,
         macros: &mut HashMap<String, Macro>,
-    ) -> Self {
+    ) -> Result<Self, Box<TokenizeError>> {
         let mut ts = Self {
             tokens: Vec::new(),
             spans: Vec::new(),
@@ -44,8 +79,8 @@ impl Tokenized {
             contents: Vec::new(),
             file_line_offsets: Vec::new(),
         };
-        ts.append_tokenize_with_macros(content, path, macros);
-        ts
+        ts.append_tokenize_with_macros(content, path, macros)?;
+        Ok(ts)
     }
 
     pub fn append_tokenize_with_macros(
@@ -53,7 +88,7 @@ impl Tokenized {
         content: Rc<str>,
         path: Option<Rc<Path>>,
         macros: &mut HashMap<String, Macro>,
-    ) {
+    ) -> Result<(), Box<TokenizeError>> {
         let Self {
             tokens,
             spans,
@@ -655,8 +690,19 @@ impl Tokenized {
                                     let path = path.parent().unwrap();
                                     let path = path.join(Path::new(s));
                                     // @TODO: better error handling
-                                    let content: Rc<str> =
-                                        std::fs::read_to_string(&path).unwrap().into();
+                                    let content: Rc<str> = match std::fs::read_to_string(&path) {
+                                        Ok(content) => content.into(),
+                                        Err(err) => {
+                                            return Err(Box::new(TokenizeError {
+                                                line: self.file_line_offsets.len() as u64,
+                                                file: self.paths[file_idx as usize].clone(),
+                                                reason: TokenizeErrorReason::FailedToOpenFile(
+                                                    path.clone(),
+                                                    err,
+                                                ),
+                                            }));
+                                        }
+                                    };
 
                                     lex_stack.push(LexItem {
                                         file_idx,
@@ -720,7 +766,7 @@ impl Tokenized {
                     }
                     _ => (T::Unknown, 1),
                 };
-                
+
                 if if_untaken_depth >= if_stack.len() {
                     tokens.push(token);
                     spans.push(Span::new(i, i + length));
@@ -740,6 +786,8 @@ impl Tokenized {
                 );
             }
         }
+
+        Ok(())
     }
 }
 

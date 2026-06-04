@@ -32,7 +32,7 @@ use vogls_verilog::parser::{
     parse_file, report, report_error,
 };
 pub use vogls_verilog::tokenizer::Macro;
-use vogls_verilog::tokenizer::Tokenized;
+use vogls_verilog::tokenizer::{TokenizeError, Tokenized};
 
 use crate::symbol::{NetValue, Symbol};
 use crate::{
@@ -157,19 +157,50 @@ pub enum LowerError {
     Modules(LowerDiagnostics),
 }
 
+#[derive(Debug)]
+pub enum DesignBuilderError {
+    Io(io::Error),
+    Tokenize(Box<TokenizeError>),
+}
+
+impl fmt::Display for DesignBuilderError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DesignBuilderError::Io(err) => err.fmt(f),
+            DesignBuilderError::Tokenize(err) => err.fmt(f),
+        }
+    }
+
+}
+impl std::error::Error for DesignBuilderError {}
+
+impl From<Box<TokenizeError>> for DesignBuilderError {
+    fn from(value: Box<TokenizeError>) -> Self {
+        Self::Tokenize(value)
+    }
+}
+impl From<io::Error> for DesignBuilderError {
+    fn from(value: io::Error) -> Self {
+        Self::Io(value)
+    }
+}
+
 impl DesignBuilder {
     pub fn new() -> Self {
         Self::default()
     }
 
-    pub fn add_source(&mut self, path: impl AsRef<Path>) -> io::Result<&mut Self> {
+    pub fn add_source(&mut self, path: impl AsRef<Path>) -> Result<&mut Self, DesignBuilderError> {
         let path = path.as_ref();
         let source = std::fs::read_to_string(path)?;
-        self.add_source_str_with_name(source, path);
+        self.add_source_str_with_name(source, path)?;
         Ok(self)
     }
 
-    pub fn add_source_str(&mut self, source: impl Into<Rc<str>>) -> &mut Self {
+    pub fn add_source_str(
+        &mut self,
+        source: impl Into<Rc<str>>,
+    ) -> Result<&mut Self, Box<TokenizeError>> {
         self.add_source_str_with_opt_name(source, <Option<Rc<Path>>>::None)
     }
 
@@ -177,22 +208,22 @@ impl DesignBuilder {
         &mut self,
         source: impl Into<Rc<str>>,
         name: impl Into<Rc<Path>>,
-    ) -> &mut Self {
-        self.add_source_str_with_opt_name(source, Some(name));
-        self
+    ) -> Result<&mut Self, Box<TokenizeError>> {
+        self.add_source_str_with_opt_name(source, Some(name))?;
+        Ok(self)
     }
 
     pub fn add_source_str_with_opt_name(
         &mut self,
         source: impl Into<Rc<str>>,
         name: Option<impl Into<Rc<Path>>>,
-    ) -> &mut Self {
+    ) -> Result<&mut Self, Box<TokenizeError>> {
         self.token_buffer.append_tokenize_with_macros(
             source.into(),
             name.map(Into::into),
             &mut self.macros,
-        );
-        self
+        )?;
+        Ok(self)
     }
 
     pub fn define_macro(&mut self, name: impl Into<String>, value: Macro) -> &mut Self {
@@ -844,7 +875,7 @@ impl Design {
             for path in paths {
                 builder.add_source(path)?;
             }
-            io::Result::Ok(())
+            Result::<_, DesignBuilderError>::Ok(())
         })?;
 
         let mut arena = Arena::default();
