@@ -49,6 +49,9 @@
                 pythonPlatform.venvShellHook
                 pythonPlatform.build
 
+                cargo-llvm-cov
+
+                just
                 samply
                 uv
                 (yosys.withPlugins [ yosys-ghdl ])
@@ -71,7 +74,7 @@
             packages.vogls = rustPlatform.buildRustPackage {
               name = "vogls";
               src = ./.;
-              cargoBuildFlags = "-p vogls";
+              cargoBuildFlags = "--bin vogls";
               meta.mainProgram = "vogls";
               cargoLock.lockFile = ./Cargo.lock;
               doCheck = false;
