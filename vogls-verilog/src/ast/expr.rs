@@ -242,6 +242,17 @@ impl BinaryOperator {
     }
 }
 
+impl<'a> BitSlice<'a> {
+    pub fn exprs(&self) -> [AstId<'a, Expr<'a>>; 2] {
+        match self {
+            BitSlice::MsbLsb(msb, lsb) => [msb.into_expr(), lsb.into_expr()],
+            BitSlice::PlusWidth(offset, width) | BitSlice::MinusWidth(offset, width) => {
+                [*offset, width.into_expr()]
+            }
+        }
+    }
+}
+
 impl<'a> AstId<'a, Expr<'a>> {
     pub fn into_constant(self) -> AstId<'a, ConstantExpr<'a>> {
         AstId {
@@ -310,7 +321,7 @@ impl<'a> Expr<'a> {
                 for e in exprs.iter() {
                     e.tree_fmt_impl(arenas, f, depth + 1)?;
                 }
-            },
+            }
             Expr::Replication(Replication {
                 constant_expr,
                 exprs,

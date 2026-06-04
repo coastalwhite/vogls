@@ -1626,17 +1626,8 @@ pub fn extend_expr_needs<'a, 'b>(
 
             Expr::Ident(ident, exprs, bit_slice) => {
                 dispatch_stack.extend(exprs.iter());
-                match bit_slice {
-                    None => {}
-                    Some(BitSlice::MsbLsb(msb, lsb)) => {
-                        dispatch_stack.extend([msb.into_expr(), lsb.into_expr()])
-                    }
-                    Some(BitSlice::PlusWidth(lsb, width)) => {
-                        dispatch_stack.extend([*lsb, width.into_expr()])
-                    }
-                    Some(BitSlice::MinusWidth(msb, width)) => {
-                        dispatch_stack.extend([*msb, width.into_expr()])
-                    }
+                if let Some(bit_slice) = bit_slice {
+                    dispatch_stack.extend(bit_slice.exprs());
                 }
 
                 if let Some(ident_sid) = resolve_hident(scope, table, *ident)

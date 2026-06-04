@@ -678,7 +678,10 @@ pub fn lower_expr<'a>(
                     if net_bit_reversed {
                         error = true;
                         result_stack.push(None);
-                        mctx.diagnostics.not_yet_implemented(ctx.arenas.get_span(item.expr), "Reverse bit part-selects");
+                        mctx.diagnostics.not_yet_implemented(
+                            ctx.arenas.get_span(item.expr),
+                            "Reverse bit part-selects",
+                        );
                         continue;
                     }
 

@@ -186,17 +186,12 @@ pub fn eval_constant_expr<'a>(
 
                     dispatch_stack.push(item);
                     if let Some(range_expression) = range_expression {
-                        match range_expression {
-                            BitSlice::MsbLsb(msb, lsb) => dispatch_stack.extend([
-                                StackItem::new_no_ctx(msb.into_expr()),
-                                StackItem::new_no_ctx(lsb.into_expr()),
-                            ]),
-                            BitSlice::PlusWidth(offset, width)
-                            | BitSlice::MinusWidth(offset, width) => dispatch_stack.extend([
-                                StackItem::new_no_ctx(offset),
-                                StackItem::new_no_ctx(width.into_expr()),
-                            ]),
-                        }
+                        dispatch_stack.extend(
+                            range_expression
+                                .exprs()
+                                .into_iter()
+                                .map(StackItem::new_no_ctx),
+                        );
                     }
                     continue;
                 }
