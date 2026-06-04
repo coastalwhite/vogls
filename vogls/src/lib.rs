@@ -59,6 +59,7 @@ pub struct ExecutionContext {
     pub print_unoptimized_fuse_signals: bool,
     pub print_round_fuse_signals: bool,
     pub print_optimized_fuse_signals: bool,
+    pub print_vm_map: bool,
 }
 
 fn append_referenced_modules_generate_block<'a>(
@@ -181,13 +182,14 @@ pub fn generate_signals_heap(
     signals: &SlotMap<SignalKey, Signal>,
     heap_refs: &mut Vec<HeapRef>,
     logic_mode: LogicMode,
+    print_mapping: bool,
 ) {
-    signal_map.extend(
-        signals
-            .keys()
-            .enumerate()
-            .map(|(i, key)| (key, RtSignalKey::from_usize(i).unwrap())),
-    );
+    signal_map.extend(signals.keys().enumerate().map(|(i, key)| {
+        if print_mapping {
+            eprintln!("{}: {}", signals[key].name, i);
+        }
+        (key, RtSignalKey::from_usize(i).unwrap())
+    }));
     heap_refs.resize(
         signals.len(),
         HeapRef {

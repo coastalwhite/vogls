@@ -81,6 +81,8 @@ struct Args {
     print_round_fuse_signals: bool,
     #[arg(long)]
     print_optimized_fuse_signals: bool,
+    #[arg(long)]
+    print_vm_map: bool,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -120,6 +122,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         print_unoptimized_fuse_signals: args.print_unoptimized_fuse_signals,
         print_round_fuse_signals: args.print_round_fuse_signals,
         print_optimized_fuse_signals: args.print_optimized_fuse_signals,
+        print_vm_map: args.print_vm_map,
     };
 
     let mut timers = TimerStack::new(ectx.timings);

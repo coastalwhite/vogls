@@ -137,6 +137,7 @@ pub struct LoweredDesign {
     stats: bool,
     debug_symbols: bool,
     output_source: Option<PathBuf>,
+    print_vm_map: bool,
 }
 
 pub trait VoglsPlugin: RuntimePlugin {
@@ -672,6 +673,7 @@ impl<'a> ElaboratedDesign<'a> {
             stats: false,
             debug_symbols: false,
             output_source: None,
+            print_vm_map: false,
         })
     }
 }
@@ -708,6 +710,7 @@ impl LoweredDesign {
             &self.gl.signals,
             &mut signal_to_heap,
             self.gl.logic_mode,
+            self.print_vm_map,
         );
         find_lupdt_signals(&self.gl, &rt_signal_map, &mut lupdt_indexes);
         let signal_to_heap: Arc<[HeapRef]> = signal_to_heap.into();
@@ -956,6 +959,7 @@ impl Design {
         lowered.stats = ectx.stats;
         lowered.debug_symbols = ectx.debug_symbols;
         lowered.output_source = ectx.output_source.clone();
+        lowered.print_vm_map = ectx.print_vm_map;
 
         if ectx.compile {
             #[cfg(feature = "native")]
@@ -1017,6 +1021,7 @@ impl Design {
                 &gl.signals,
                 &mut signal_to_heap,
                 gl.logic_mode,
+                ectx.print_vm_map,
             )
         });
 
