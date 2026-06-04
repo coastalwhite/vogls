@@ -677,6 +677,12 @@ fn parse_bb<'a>(
                     symbols.unresolved_vars.remove(&dst);
                     Instruction::Intrinsic(dst, Box::new(op), args)
                 }
+                "vogls.finish" => {
+                    let op = IntrinsicOp::Finish;
+                    gl.vars[dst].size = SCALAR_VSIZE;
+                    symbols.unresolved_vars.remove(&dst);
+                    Instruction::Intrinsic(dst, Box::new(op), [].into())
+                }
 
                 "phi" => {
                     c.trim_cursor();
