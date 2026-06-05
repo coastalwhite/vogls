@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{GlobalContext, INTEGER_VSIZE, VectorSize};
 
@@ -233,7 +235,7 @@ pub fn get_expr_type<'a>(
             Expr::Ident(ident, exprs, range_expr) => {
                 let symbol_id = try_resolve_hident(scope, table, arenas, ident, diagnostics)?;
                 let (ty, dims) = match &table[symbol_id].content {
-                    VSymbol::Parameter(vvalue) => (vvalue.ty(), &[] as &[u32]),
+                    VSymbol::Parameter(vvalue) => (vvalue.ty(), &[] as &[NonZeroU32]),
                     VSymbol::Net(n) => (n.ty, n.dims.as_slice()),
                     _ => {
                         diagnostics

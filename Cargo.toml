@@ -17,7 +17,7 @@ members = [
     "vogls-runtime",
     "vogls-vcd",
 	"vogls-fuse-signals",
-	"vogls-plan",
+	# "vogls-plan",
     "vogls-trace",
 ]
 resolver = "3"

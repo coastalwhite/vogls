@@ -225,7 +225,7 @@ pub fn try_lower_fuse_driver_ident<'a>(
             return Ok(false);
         };
 
-        if idx >= dim {
+        if idx >= dim.get() {
             mctx.diagnostics
                 .warnings
                 .push((ctx.arenas.get_span(expr), "index out of range".into()));
@@ -235,7 +235,7 @@ pub fn try_lower_fuse_driver_ident<'a>(
 
         // @TODO: Checked arithmetic
         offset += current_size.get() * idx;
-        current_size = VectorSize::new(current_size.get() * dim).unwrap();
+        current_size = current_size.checked_mul(dim).unwrap();
     }
 
     // Handle bit indexing indexing.
@@ -344,7 +344,7 @@ pub fn try_fuse_assign<'a>(
             return Ok(false);
         };
 
-        if idx >= dim {
+        if idx >= dim.get() {
             mctx.diagnostics
                 .warnings
                 .push((ctx.arenas.get_span(expr), "index out of range".into()));
@@ -353,7 +353,7 @@ pub fn try_fuse_assign<'a>(
 
         // @TODO: Checked arithmetic
         offset += current_size.get() * idx;
-        current_size = VectorSize::new(current_size.get() * dim).unwrap();
+        current_size = current_size.checked_mul(dim).unwrap();
     }
 
     // Handle bit indexing indexing.

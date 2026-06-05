@@ -145,7 +145,7 @@ impl Net {
 
 pub struct NetSymbol {
     pub ty: VType,
-    pub dims: Vec<u32>,
+    pub dims: Vec<NonZeroU32>,
 
     /// Nets can be defined as [8:4] in which case the least-significant bit starts at `4` not at
     /// `0`.
@@ -281,13 +281,13 @@ fn new_net(
     gl: &mut GlobalContext,
     arenas: &AstArenas,
     ty: &VType,
-    dims: &[u32],
+    dims: &[NonZeroU32],
     name: AstItem<Identifier>,
     initialize: Option<VValue>,
 ) -> Net {
     let mut size = ty.force_net_width();
     for dim in dims {
-        size = size.checked_mul(NonZeroU32::new(*dim).unwrap()).unwrap();
+        size = size.checked_mul(*dim).unwrap();
     }
     let origin = arenas.get_item_span(name);
     let name = arenas.ident_table[name.item.0].to_string();
@@ -350,7 +350,7 @@ pub fn dims_to_array_elab<'a>(
     table: &VSymbolTable,
     diagnostics: &mut Diagnostics,
     dimensions: AstIdRange<'a, Dimension<'a>>,
-) -> Result<Vec<u32>, ()> {
+) -> Result<Vec<NonZeroU32>, ()> {
     let mut dims = Vec::with_capacity(dimensions.len());
     for dim in dimensions.iter().rev() {
         let Dimension { lhs, rhs } = &*dim;
@@ -360,7 +360,12 @@ pub fn dims_to_array_elab<'a>(
         let lhs = lhs?.into_bits().as_i64().unwrap();
         let rhs = rhs?.into_bits().as_i64().unwrap();
 
-        dims.push((lhs.abs_diff(rhs) + 1) as u32);
+        let val = lhs.abs_diff(rhs) + 1;
+        let Some(val) = u32::try_from(val).ok().and_then(VectorSize::new) else {
+            diagnostics.not_yet_implemented(arenas.get_span(dim), "array overflow");
+            return Err(());
+        };
+        dims.push(val);
     }
     Ok(dims)
 }

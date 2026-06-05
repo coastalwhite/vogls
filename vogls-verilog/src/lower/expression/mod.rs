@@ -506,7 +506,7 @@ pub fn lower_expr<'a>(
                             };
 
                             dims = &dims[..dims.len() - 1];
-                            let mut leaf_arr_items = dims.iter().product::<u32>();
+                            let mut leaf_arr_items = dims.iter().map(|d| d.get()).product::<u32>();
                             let idx = truncate_or_extend(
                                 &mut mctx.gl,
                                 builder,

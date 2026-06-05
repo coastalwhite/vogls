@@ -1,4 +1,5 @@
 use std::fmt;
+use std::num::NonZeroU32;
 
 use vogls_ir::{Bits, ProcessKey, SCALAR_VSIZE, SignalKey, SignalSlice, VectorSize};
 use vogls_utils::NonMaxU32;
@@ -57,7 +58,7 @@ impl From<VSymbol> for Symbol {
 
 pub struct NetSymbol {
     pub ty: VType,
-    pub dims: Vec<u32>,
+    pub dims: Vec<NonZeroU32>,
     pub net: NetValue,
 }
 

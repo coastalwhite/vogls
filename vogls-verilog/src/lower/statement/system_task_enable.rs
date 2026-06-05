@@ -233,7 +233,7 @@ pub fn lower_system_task_enable<'a>(
 
             let stride = net.ty.force_net_width();
             let offset = 0;
-            let limit = net.dims[0];
+            let limit = net.dims[0].get();
             let signal = net.net.blocking_drive_signal();
 
             let binary = system_task_ident == "readmemb";

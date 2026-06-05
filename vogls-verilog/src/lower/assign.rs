@@ -201,7 +201,7 @@ pub fn assign_variable_lvalue_flat<'a>(
         && let Some(fst) = exprs.pop_front()
     {
         dims = &dims[..dims.len() - 1];
-        let mut leaf_arr_items = dims.iter().product::<u32>();
+        let mut leaf_arr_items = dims.iter().map(|d| d.get()).product::<u32>();
         let (fst, fst_ty) = lower_expr(ctx, mctx, scope, builder, fst, None)?;
         let fst = sign_or_zero_extend(mctx.gl(), builder, fst, fst_ty, INTEGER_VSIZE);
         let mut offset = builder.multiply_constant(mctx.gl(), fst, Bits::new_u32(leaf_arr_items));
@@ -234,7 +234,7 @@ pub fn assign_variable_lvalue_flat<'a>(
         _ = range_expression.take();
 
         dims = &dims[..dims.len() - 1];
-        let leaf_arr_items = dims.iter().product::<u32>();
+        let leaf_arr_items = dims.iter().map(|d| d.get()).product::<u32>();
         let (fst, fst_ty) = lower_expr(ctx, mctx, scope, builder, expr, None)?;
         let fst = sign_or_zero_extend(mctx.gl(), builder, fst, fst_ty, INTEGER_VSIZE);
         let offset = builder.multiply_constant(mctx.gl(), fst, Bits::new_u32(leaf_arr_items));
@@ -602,7 +602,7 @@ fn assign_net_lvalue_flat<'a>(
         && let Some(fst) = exprs.pop_front()
     {
         dims = &dims[1..];
-        let mut leaf_arr_items = dims.iter().product::<u32>();
+        let mut leaf_arr_items = dims.iter().map(|d| d.get()).product::<u32>();
         let fst = eval_constant_expr(
             &mctx.gl,
             &ctx.arenas,
@@ -651,7 +651,7 @@ fn assign_net_lvalue_flat<'a>(
         _ = range_expression.take();
 
         dims = &dims[1..];
-        let leaf_arr_items = dims.iter().product::<u32>();
+        let leaf_arr_items = dims.iter().map(|d| d.get()).product::<u32>();
         let fst = eval_constant_expr(
             &mctx.gl,
             &ctx.arenas,

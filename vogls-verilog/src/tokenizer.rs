@@ -863,7 +863,7 @@ macro_rules! define_tokens {
         #[test]
         fn tokenizer_examples() {
             $(
-            let consumed = Tokenized::tokenize($example.into(), None);
+            let consumed = Tokenized::tokenize($example.into(), None).unwrap();
             assert_eq!(consumed.tokens.len(), 1);
             assert_eq!(consumed.tokens[0], Token::$ident, "Example \"{}\" of token {} had the invalid kind", $example, stringify!($ident));
             )+
