@@ -120,6 +120,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         builder.parse()?
     } else {
         let mut builder = DesignBuilder::new();
+        match logic_mode {
+            LogicMode::TwoValue => {
+                builder.define_macro("__VOGLS__TWO_VALUE_LOGIC", Macro::default());
+            }
+            LogicMode::FourValue => {}
+        }
         for name in &defines {
             builder.define_macro(name, Macro::default());
         }

@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 slotmap.workspace = true
 clap.workspace = true
+rayon.workspace = true
 vogls.workspace = true
 vogls-ir.workspace = true
 vogls-sim.workspace = true

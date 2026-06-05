@@ -1,3 +1,6 @@
+signal a/0: 1
+signal x/1: 1
+
 proc initial {
 L0:
   waitregion 1, <L1>

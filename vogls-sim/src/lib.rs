@@ -307,7 +307,6 @@ impl Simulation {
             };
 
             if at.wrapping_add(1) < state.runtime.time {
-                eprintln!("Time overflow!");
                 return Err(());
             }
 

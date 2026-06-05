@@ -11,6 +11,10 @@ use vogls::{DesignBuilder, SimulationIo, VirDesignBuilder};
 use vogls_ir::LogicMode;
 use vogls_ir::optimize::OptFlags;
 
+static ANSI_RED: &str = "\x1b[31m";
+static ANSI_GREEN: &str = "\x1b[32m";
+static ANSI_END: &str = "\x1b[0m";
+
 #[derive(clap::Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
@@ -30,6 +34,125 @@ struct Args {
     compiled: bool,
     #[arg(long)]
     opt_rounds: Option<u8>,
+
+    #[arg(short = 'n', long, default_value_t = 0)]
+    num_threads: usize,
+}
+
+#[derive(Default, Clone)]
+struct Io(Arc<Mutex<Vec<u8>>>);
+
+impl io::Write for Io {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.lock().unwrap().write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.0.lock().unwrap().flush()
+    }
+}
+
+#[derive(Clone)]
+struct TestInfo {
+    fail: bool,
+    verify_stdout: VerifyOutput,
+    verify_ir: bool,
+    annotate_sdf: bool,
+    timeout: u64,
+    top_level_module: Option<String>,
+    skip: Option<LogicMode>,
+}
+
+impl TestInfo {
+    pub fn parse(content: &str) -> Self {
+        let mut info = TestInfo {
+            fail: false,
+            verify_stdout: VerifyOutput::No,
+            verify_ir: false,
+            annotate_sdf: false,
+            top_level_module: None,
+            timeout: u64::MAX,
+            skip: None,
+        };
+
+        for line in content.lines() {
+            if !line.starts_with("// vogls:") {
+                break;
+            }
+
+            let line = &line["// vogls:".len()..];
+            let line = line.trim();
+
+            match line {
+                "fail" => info.fail = true,
+                "verify-stdout" => info.verify_stdout = VerifyOutput::Yes,
+                "verify-stdout[sort-lines]" => info.verify_stdout = VerifyOutput::SortLines,
+                "verify-ir" => info.verify_ir = true,
+                "annotate-sdf" => info.annotate_sdf = true,
+                _ if line.starts_with("tlm=") => {
+                    info.top_level_module = Some(line[4..].trim().to_string());
+                }
+                _ if line.starts_with("timeout=") => {
+                    info.timeout = line[8..].parse().expect("failed to parse");
+                }
+                _ if line.starts_with("skip=") => match &line[5..] {
+                    "two-value-logic" => info.skip = Some(LogicMode::TwoValue),
+                    "four-value-logic" => info.skip = Some(LogicMode::FourValue),
+                    _ => panic!("failed to parse"),
+                },
+                _ => {
+                    println!();
+                    panic!("Invalid vogls test command '{line}'");
+                }
+            }
+        }
+
+        info
+    }
+}
+
+enum FailureInfo {
+    Panic,
+    Error { stdout: String, stderr: String },
+    Mismatch { expected: String, gotten: String },
+    VirMismatch { expected: String, gotten: String },
+    VirOptMismatch { expected: String, gotten: String },
+    CompileFailure(Box<dyn std::error::Error + Send + Sync + 'static>),
+    IoFailure(io::Error),
+}
+
+impl FailureInfo {
+    pub fn into_char(&self) -> char {
+        match self {
+            Self::Panic => '!',
+            Self::Error { .. } => 'E',
+            Self::Mismatch { .. } => 'M',
+            Self::VirMismatch { .. } => 'M',
+            Self::VirOptMismatch { .. } => 'O',
+            Self::CompileFailure(..) => 'C',
+            Self::IoFailure(..) => 'I',
+        }
+    }
+}
+impl From<io::Error> for FailureInfo {
+    fn from(value: io::Error) -> Self {
+        Self::IoFailure(value)
+    }
+}
+
+struct Fail {
+    name: String,
+    mode: LogicMode,
+    opt_rounds: u8,
+    compile: bool,
+    info: FailureInfo,
+}
+
+#[derive(Clone)]
+enum VerifyOutput {
+    No,
+    SortLines,
+    Yes,
 }
 
 fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
@@ -81,23 +204,6 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     }
     paths.sort_unstable();
 
-    struct Fail {
-        name: String,
-        mode: LogicMode,
-        opt_rounds: u8,
-        compile: bool,
-        error: Option<Box<dyn std::error::Error>>,
-        mismatch: Option<(String, String)>,
-        stdout: String,
-        stderr: String,
-    }
-
-    enum VerifyOutput {
-        No,
-        SortLines,
-        Yes,
-    }
-
     let modes: &[LogicMode] = match (args.tv, args.fv) {
         (true, false) => &[LogicMode::TwoValue],
         (false, true) => &[LogicMode::FourValue],
@@ -109,357 +215,153 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         _ => &[false, true],
     };
 
-    let mut fails = Vec::<Fail>::new();
     let mut num_tests = 0;
+    let opt_rounds_configurations: &[u8] = match args.opt_rounds {
+        None => &[0, 2],
+        Some(o) => &[o],
+    };
     let mut o = std::io::stdout();
+
     writeln!(&mut o, "Running {} tests...", paths.len())?;
-    for path in paths.iter() {
-        let offset_path = path.as_path();
-        write!(
-            &mut o,
-            "  {}{:.<2$} ",
-            offset_path.display(),
-            "",
-            max_size - offset_path.as_os_str().len()
-        )?;
-        std::io::stdout().flush()?;
+    let fails = if args.num_threads == 1 {
+        let mut fails = Vec::<Fail>::new();
+        for path in paths.iter() {
+            let offset_path = path.as_path();
+            write!(
+                &mut o,
+                "  {}{:.<2$} ",
+                offset_path.display(),
+                "",
+                max_size - offset_path.as_os_str().len()
+            )?;
+            std::io::stdout().flush()?;
 
-        let path = tests_dir.join(&offset_path);
-
-        struct TestInfo {
-            fail: bool,
-            verify_stdout: VerifyOutput,
-            verify_ir: bool,
-            annotate_sdf: bool,
-            timeout: u64,
-            top_level_module: Option<String>,
-            skip: Option<LogicMode>,
-        }
-
-        let mut test_information = TestInfo {
-            fail: false,
-            verify_stdout: VerifyOutput::No,
-            verify_ir: false,
-            annotate_sdf: false,
-            top_level_module: None,
-            timeout: u64::MAX,
-            skip: None,
-        };
-        {
+            let path = tests_dir.join(&offset_path);
             let s = std::fs::read_to_string(&path)?;
-            let mut lines = s.lines();
-            loop {
-                let Some(line) = lines.next() else {
-                    break;
-                };
-                if !line.starts_with("// vogls:") {
-                    break;
-                }
+            let test_information = TestInfo::parse(&s);
 
-                let line = &line["// vogls:".len()..];
-                let line = line.trim();
+            for &opt_rounds in opt_rounds_configurations {
+                for &logic_mode in modes {
+                    for &compile in compiled {
+                        let result =
+                            run_test(&path, &test_information, logic_mode, compile, opt_rounds);
+                        num_tests += usize::from(!matches!(result, Ok(PassKind::Skip)));
 
-                match line {
-                    "fail" => test_information.fail = true,
-                    "verify-stdout" => test_information.verify_stdout = VerifyOutput::Yes,
-                    "verify-stdout[sort-lines]" => {
-                        test_information.verify_stdout = VerifyOutput::SortLines
-                    }
-                    "verify-ir" => test_information.verify_ir = true,
-                    "annotate-sdf" => test_information.annotate_sdf = true,
-                    _ if line.starts_with("tlm=") => {
-                        test_information.top_level_module = Some(line[4..].trim().to_string());
-                    }
-                    _ if line.starts_with("timeout=") => {
-                        test_information.timeout = line[8..].parse().expect("failed to parse");
-                    }
-                    _ if line.starts_with("skip=") => match &line[5..] {
-                        "two-value-logic" => test_information.skip = Some(LogicMode::TwoValue),
-                        "four-value-logic" => test_information.skip = Some(LogicMode::FourValue),
-                        _ => panic!("failed to parse"),
-                    },
-                    _ => {
-                        println!();
-                        panic!("Invalid vogls test command '{line}'");
+                        match result {
+                            Ok(PassKind::Skip) => write!(&mut o, " {ANSI_GREEN}S{ANSI_END}")?,
+                            Ok(PassKind::Succeed) => write!(&mut o, " {ANSI_GREEN}P{ANSI_END}")?,
+                            Err(info) => {
+                                write!(&mut o, " {ANSI_RED}{}{ANSI_END}", info.into_char())?;
+                                fails.push(Fail {
+                                    name: offset_path.display().to_string(),
+                                    mode: logic_mode,
+                                    opt_rounds,
+                                    compile,
+                                    info,
+                                });
+                            }
+                        }
+                        o.flush()?;
                     }
                 }
             }
+            writeln!(&mut o)?;
         }
+        fails
+    } else {
+        use rayon::prelude::*;
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(args.num_threads)
+            .build()?;
 
-        #[derive(Default, Clone)]
-        struct Io(Arc<Mutex<Vec<u8>>>);
+        let mut configurations = Vec::new();
 
-        impl io::Write for Io {
-            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-                self.0.lock().unwrap().write(buf)
-            }
+        for path in paths.iter() {
+            let offset_path = path.as_path();
+            let path = tests_dir.join(&offset_path);
+            let s = std::fs::read_to_string(&path)?;
+            let test_information = TestInfo::parse(&s);
 
-            fn flush(&mut self) -> io::Result<()> {
-                self.0.lock().unwrap().flush()
-            }
-        }
-
-        let opt_rounds_configurations: &[u8] = match args.opt_rounds {
-            None => &[0, 2],
-            Some(o) => &[o],
-        };
-
-        for &opt_rounds in opt_rounds_configurations {
-            let optflags = OptFlags {
-                opt_rounds,
-                constant_propagation: true,
-                deadcode_elimination: true,
-                common_subexpr_elim: true,
-                peephole: true,
-            };
-
-            for &logic_mode in modes {
-                for &compile in compiled {
-                    if Some(logic_mode) == test_information.skip {
-                        write!(&mut o, " \x1b[32mS\x1b[0m")?;
-                        continue;
-                    }
-
-                    let sdf = test_information
-                        .annotate_sdf
-                        .then(|| path.with_extension("sdf"));
-
-                    num_tests += 1;
-
-                    let stdout = Io::default();
-                    let stderr = Io::default();
-
-                    if test_information.verify_ir {
-                        let design = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                            let mut arena = Arena::new();
-                            let mut builder = DesignBuilder::new();
-                            builder
-                                .define_macro("__VOGLS_VERIFY_IR", Macro::default())
-                                .add_source(&path)?;
-
-                            let parsed = builder.parse(&mut arena)?;
-                            let mut elab = match parsed
-                                .elaborate(logic_mode, test_information.top_level_module.as_deref())
-                            {
-                                Ok(v) => v,
-                                Err(err) => {
-                                    eprintln!("{err}");
-                                    return Err("failed to elaborate".into());
-                                }
-                            };
-                            if let Some(sdf) = sdf.as_deref() {
-                                if let Err(err) = elab.annotate_sdf(sdf) {
-                                    eprintln!("{err}");
-                                    return Err("failed to annotate sdf".into());
-                                }
-                            }
-                            if let Err(err) = elab.annotate_specify() {
-                                eprintln!("{err}");
-                                return Err("failed to annotate specify".into());
-                            }
-                            let mut lowered = match elab.lower(vec![]) {
-                                Ok(l) => l,
-                                Err(err) => {
-                                    eprintln!("{err}");
-                                    return Err("failed to lower".into());
-                                }
-                            };
-                            lowered.optimize(optflags);
-                            Result::<_, Box<dyn std::error::Error>>::Ok(
-                                lowered.emit_ir().to_string(),
-                            )
-                        }));
-
-                        let mut panic = false;
-                        let mut failed = false;
-                        let mut error = None;
-                        let mut mismatch = None;
-
-                        if let Ok(design) = design {
-                            match design {
-                                Ok(design) => {
-                                    let asserted =
-                                        std::fs::read_to_string(&path.with_extension("v.ir"))?;
-                                    failed = design != asserted;
-                                    mismatch = Some((asserted, design));
-                                }
-                                Err(err) => {
-                                    failed = true;
-                                    error = Some(err);
-                                }
-                            }
-                        } else {
-                            panic = true;
-                        }
-
-                        if panic {
-                            write!(&mut o, " \x1b[31mP\x1b[0m")?;
-                        } else if failed {
-                            let stdout = stdout.0.lock().unwrap();
-                            let stdout = std::str::from_utf8(&stdout).unwrap();
-                            let stderr = stderr.0.lock().unwrap();
-                            let stderr = std::str::from_utf8(&stderr).unwrap();
-
-                            fails.push(Fail {
-                                name: offset_path.display().to_string(),
-                                mode: logic_mode,
-                                opt_rounds,
-                                compile,
-                                error,
-                                mismatch,
-                                stdout: stdout.to_string(),
-                                stderr: stderr.to_string(),
-                            });
-                            write!(&mut o, " \x1b[31mI\x1b[0m")?;
-                        }
-                    }
-
-                    let result: Result<
-                        Result<(), Box<dyn std::error::Error>>,
-                        Box<dyn std::any::Any + Send + 'static>,
-                    > = std::panic::catch_unwind(|| {
-                        let mut arena = Arena::new();
-                        let mut design = if path
-                            .extension()
-                            .is_some_and(|ext| ext.as_encoded_bytes() == b"vir")
-                        {
-                            let s = std::fs::read_to_string(&path)?;
-                            let optimized = read_to_string(path.with_extension("vir.opt")).ok();
-                            let mut design = VirDesignBuilder::new(&s);
-                            design.with_logic_mode(logic_mode);
-                            let design = design.parse()?;
-
-                            if opt_rounds > 0
-                                && let Some(optimized) = optimized
-                            {
-                                let out = design.emit_ir().to_string();
-                                let optimized = optimized.trim();
-                                let out = out.trim();
-                                if optimized != out {
-                                    return Err("optimization mismatch".into());
-                                }
-                            }
-
-                            Result::<_, Box<dyn std::error::Error>>::Ok(design)
-                        } else {
-                            let mut builder = DesignBuilder::new();
-                            builder.add_source(&path)?;
-
-                            let parsed = builder.parse(&mut arena)?;
-                            let mut elab = match parsed
-                                .elaborate(logic_mode, test_information.top_level_module.as_deref())
-                            {
-                                Ok(v) => v,
-                                Err(err) => {
-                                    eprintln!("{err}");
-                                    return Err("failed to parse".into());
-                                }
-                            };
-                            if let Some(sdf) = sdf.as_deref() {
-                                if let Err(err) = elab.annotate_sdf(sdf) {
-                                    eprintln!("{err}");
-                                    return Err("failed to annotate sdf".into());
-                                }
-                            }
-                            if let Err(err) = elab.annotate_specify() {
-                                eprintln!("{err}");
-                                return Err("failed to annotate specify".into());
-                            }
-                            let lowered = match elab.lower(vec![]) {
-                                Ok(l) => l,
-                                Err(err) => {
-                                    eprintln!("{err}");
-                                    return Err("failed to lower".into());
-                                }
-                            };
-                            Result::<_, Box<dyn std::error::Error>>::Ok(lowered)
-                        }?;
-                        design.optimize(optflags);
-
-                        let mut design = if compile {
-                            design.compile()
-                        } else {
-                            design.to_bytecode()
-                        }?;
-                        design.run(
-                            &mut SimulationIo {
-                                stdout: Box::new(Io::default()) as _,
-                                stderr: Box::new(Io::default()) as _,
-                            },
-                            test_information.timeout,
-                        )
-                    });
-
-                    let stdout = stdout.0.lock().unwrap();
-                    let stdout = std::str::from_utf8(&stdout).unwrap();
-                    let stderr = stderr.0.lock().unwrap();
-                    let stderr = std::str::from_utf8(&stderr).unwrap();
-
-                    let mut failed = false;
-                    let mut panic = false;
-                    let mut mismatch = None;
-                    if result.is_err() {
-                        failed = true;
-                        panic = true;
-                    } else {
-                        failed |= result.as_ref().is_ok_and(|r| r.is_err()) ^ test_information.fail;
-                        if matches!(
-                            test_information.verify_stdout,
-                            VerifyOutput::Yes | VerifyOutput::SortLines
-                        ) {
-                            let mut stdout_path = path.clone();
-                            stdout_path.add_extension("stdout");
-                            let s = std::fs::read_to_string(&stdout_path)?;
-
-                            if matches!(test_information.verify_stdout, VerifyOutput::SortLines) {
-                                let mut lines = stdout.lines().collect::<Vec<&str>>();
-                                lines.sort_unstable();
-                                failed |= lines != s.lines().collect::<Vec<_>>();
-                            } else {
-                                failed |= s != stdout;
-                            }
-
-                            if failed {
-                                mismatch = Some((s, stdout.to_string()));
-                            }
-                        }
-                    }
-
-                    if failed {
-                        let error = match result {
-                            Ok(Ok(_)) => None,
-                            Ok(Err(err)) => Some(err),
-                            Err(_) => None,
-                        };
-                        fails.push(Fail {
-                            name: offset_path.display().to_string(),
-                            mode: logic_mode,
+            for &opt_rounds in opt_rounds_configurations {
+                for &logic_mode in modes {
+                    for &compile in compiled {
+                        configurations.push((
+                            offset_path.to_path_buf(),
+                            path.clone(),
+                            test_information.clone(),
                             opt_rounds,
+                            logic_mode,
                             compile,
-                            error,
-                            mismatch,
-                            stdout: stdout.to_string(),
-                            stderr: stderr.to_string(),
-                        });
+                        ));
                     }
-                    if panic {
-                        write!(&mut o, " \x1b[31mP\x1b[0m")?;
-                    } else if failed {
-                        write!(&mut o, " \x1b[31mE\x1b[0m")?;
-                    } else {
-                        write!(&mut o, " \x1b[32mP\x1b[0m")?;
-                    }
-                    o.flush()?;
                 }
             }
         }
-        writeln!(&mut o)?;
-    }
+
+        num_tests = configurations.len();
+        pool.install(|| {
+            configurations
+                .into_par_iter()
+                .filter_map(
+                    |(offset_path, path, test_information, opt_rounds, logic_mode, compile)| {
+                        match run_test(&path, &test_information, logic_mode, compile, opt_rounds) {
+                            Ok(PassKind::Skip) => {
+                                io::stdout().write_all(&[b'S']).unwrap();
+                                io::stdout().flush().unwrap();
+                                None
+                            }
+                            Ok(PassKind::Succeed) => {
+                                io::stdout().write_all(&[b'.']).unwrap();
+                                io::stdout().flush().unwrap();
+                                None
+                            }
+                            Err(info) => {
+                                let s = format!("{ANSI_RED}{}{ANSI_END}", info.into_char());
+                                io::stdout().write_all(s.as_bytes()).unwrap();
+                                io::stdout().flush().unwrap();
+                                Some(Fail {
+                                    name: offset_path.display().to_string(),
+                                    mode: logic_mode,
+                                    opt_rounds,
+                                    compile,
+                                    info,
+                                })
+                            }
+                        }
+                    },
+                )
+                .collect()
+        })
+    };
 
     writeln!(&mut o)?;
+
+    report_fails(&mut o, &fails, num_tests)?;
+
     if fails.is_empty() {
-        writeln!(&mut o, "All {} tests passed!", paths.len())?;
         Ok(ExitCode::SUCCESS)
+    } else {
+        Ok(ExitCode::FAILURE)
+    }
+}
+
+fn display_section(o: &mut io::Stdout, section: &str, content: &str) -> io::Result<()> {
+    if !content.is_empty() {
+        writeln!(o, "  --- [START {section}] ---")?;
+        let stdout = if content.ends_with('\n') {
+            &content[..content.len() - 1]
+        } else {
+            content
+        };
+        writeln!(o, "  {}", stdout.replace("\n", "\n  "))?;
+        writeln!(o, "  ---  [END {section}]  ---")?;
+    }
+    Ok(())
+}
+
+fn report_fails(o: &mut io::Stdout, fails: &[Fail], num_tests: usize) -> io::Result<()> {
+    if fails.is_empty() {
+        writeln!(o, "All {} tests passed!", num_tests)?;
     } else {
         for fail in fails.iter() {
             let Fail {
@@ -467,71 +369,295 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                 mode,
                 opt_rounds,
                 compile,
-                mismatch,
-                error,
-                stdout,
-                stderr,
+                info,
             } = fail;
             let mode_str = match mode {
                 LogicMode::TwoValue => "tvl",
                 LogicMode::FourValue => "fvl",
             };
 
-            write!(
-                &mut o,
-                "+ {name}[{mode_str}-compile={compile}-O{opt_rounds}]"
-            )?;
-            if let Some(err) = error {
-                write!(&mut o, ": ERROR={err:?}")?;
-            };
-            writeln!(&mut o)?;
+            write!(o, "+ {name}[{mode_str}-compile={compile}-O{opt_rounds}]")?;
 
-            if !stdout.is_empty() {
-                writeln!(&mut o, "  --- [START STDOUT] ---")?;
-                let stdout = if stdout.ends_with('\n') {
-                    &stdout[..stdout.len() - 1]
-                } else {
-                    stdout
-                };
-                writeln!(&mut o, "  {}", stdout.replace("\n", "\n  "))?;
-                writeln!(&mut o, "  ---  [END STDOUT]  ---")?;
+            match info {
+                FailureInfo::Panic => writeln!(o, ": Panic")?,
+                FailureInfo::Error { stdout, stderr } => {
+                    writeln!(o, ": Error")?;
+                    writeln!(o)?;
+                    display_section(o, "STDOUT", stdout)?;
+                    display_section(o, "STDERR", stderr)?;
+                }
+                FailureInfo::Mismatch { expected, gotten } => {
+                    writeln!(o, ": Mismatch")?;
+                    writeln!(o)?;
+                    display_section(o, "EXPECTED", expected)?;
+                    display_section(o, "GOTTEN", gotten)?;
+                }
+                FailureInfo::VirMismatch { expected, gotten } => {
+                    writeln!(o, ": VIR mismatch")?;
+                    writeln!(o)?;
+                    display_section(o, "EXPECTED", expected)?;
+                    display_section(o, "GOTTEN", gotten)?;
+                }
+                FailureInfo::VirOptMismatch { expected, gotten } => {
+                    writeln!(o, ": VIR Optimization mismatch")?;
+                    writeln!(o)?;
+                    display_section(o, "EXPECTED", expected)?;
+                    display_section(o, "GOTTEN", gotten)?;
+                }
+                FailureInfo::CompileFailure(error) => {
+                    writeln!(o, ": Compilation failure")?;
+                    writeln!(o, "  {error}")?;
+                }
+                FailureInfo::IoFailure(error) => {
+                    writeln!(o, ": Io failure")?;
+                    writeln!(o, "  {error}")?;
+                }
             }
-            if !stderr.is_empty() {
-                writeln!(&mut o, "  --- [START STDERR] ---")?;
-                let stderr = if stderr.ends_with('\n') {
-                    &stderr[..stderr.len() - 1]
-                } else {
-                    stderr
-                };
-                writeln!(&mut o, "  {}", stderr.replace("\n", "\n  "))?;
-                writeln!(&mut o, "  ---  [END STDERR]  ---")?;
-            }
-            if let Some((snapshot, given)) = mismatch {
-                writeln!(&mut o, "  --- [START SNAPSHOT] ---")?;
-                let snapshot = if snapshot.ends_with('\n') {
-                    &snapshot[..snapshot.len() - 1]
-                } else {
-                    snapshot
-                };
-                writeln!(&mut o, "  {}", snapshot.replace("\n", "\n  "))?;
-                writeln!(&mut o, "  ---  [END SNAPSHOT]  ---")?;
-
-                writeln!(&mut o, "  ---   [START GIVEN]  ---")?;
-                let given = if given.ends_with('\n') {
-                    &given[..given.len() - 1]
-                } else {
-                    given
-                };
-                writeln!(&mut o, "  {}", given.replace("\n", "\n  "))?;
-                writeln!(&mut o, "  ---   [END GIVEN]   ---")?;
-            }
+            writeln!(o)?;
         }
         writeln!(
-            &mut o,
-            "\x1b[31mFailed {}/{} tests.\x1b[0m",
+            o,
+            "{ANSI_RED}Failed {}/{} tests.{ANSI_END}",
             fails.len(),
             num_tests,
         )?;
-        Ok(ExitCode::FAILURE)
     }
+    Ok(())
+}
+
+pub enum PassKind {
+    Succeed,
+    Skip,
+}
+
+fn run_test(
+    path: &Path,
+    test_information: &TestInfo,
+    logic_mode: LogicMode,
+    compile: bool,
+    opt_rounds: u8,
+) -> Result<PassKind, FailureInfo> {
+    if Some(logic_mode) == test_information.skip {
+        return Ok(PassKind::Skip);
+    }
+
+    let optflags = OptFlags {
+        opt_rounds,
+        constant_propagation: true,
+        deadcode_elimination: true,
+        common_subexpr_elim: true,
+        peephole: true,
+    };
+
+    let sdf = test_information
+        .annotate_sdf
+        .then(|| path.with_extension("sdf"));
+
+    let stdout = Io::default();
+    let stderr = Io::default();
+
+    if test_information.verify_ir {
+        let design = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            let mut arena = Arena::new();
+            let mut builder = DesignBuilder::new();
+            match logic_mode {
+                LogicMode::TwoValue => {
+                    builder.define_macro("__VOGLS__TWO_VALUE_LOGIC", Macro::default());
+                }
+                LogicMode::FourValue => {}
+            }
+            builder
+                .define_macro("__VOGLS_VERIFY_IR", Macro::default())
+                .add_source(&path)
+                .map_err(|_| FailureInfo::CompileFailure("failed to tokenize".into()))?;
+
+            let parsed = builder
+                .parse(&mut arena)
+                .map_err(|_| FailureInfo::CompileFailure("failed to parse".into()))?;
+            let mut elab =
+                match parsed.elaborate(logic_mode, test_information.top_level_module.as_deref()) {
+                    Ok(v) => v,
+                    Err(_) => {
+                        return Err(FailureInfo::CompileFailure("failed to elaborate".into()));
+                    }
+                };
+            if let Some(sdf) = sdf.as_deref() {
+                if let Err(_) = elab.annotate_sdf(sdf) {
+                    return Err(FailureInfo::CompileFailure("failed to annotate sdf".into()));
+                }
+            }
+            if let Err(_) = elab.annotate_specify() {
+                return Err(FailureInfo::CompileFailure(
+                    "failed to annotate specify".into(),
+                ));
+            }
+            let mut lowered = match elab.lower(vec![]) {
+                Ok(l) => l,
+                Err(_) => {
+                    return Err(FailureInfo::CompileFailure("failed to lower".into()));
+                }
+            };
+            lowered.optimize(optflags);
+            Result::<_, FailureInfo>::Ok(lowered.emit_ir().to_string())
+        }));
+
+        if let Ok(design) = design {
+            match design {
+                Ok(design) => {
+                    let asserted = std::fs::read_to_string(&path.with_extension("v.ir"))?;
+                    if design.trim() != asserted.trim() {
+                        return Err(FailureInfo::VirMismatch {
+                            expected: asserted,
+                            gotten: design,
+                        });
+                    }
+                }
+                Err(err) => {
+                    return Err(err);
+                }
+            }
+        } else {
+            return Err(FailureInfo::Panic);
+        }
+    }
+
+    let result: Result<Result<(), FailureInfo>, Box<dyn std::any::Any + Send + 'static>> =
+        std::panic::catch_unwind(|| {
+            let mut arena = Arena::new();
+            let design = if path
+                .extension()
+                .is_some_and(|ext| ext.as_encoded_bytes() == b"vir")
+            {
+                let s = std::fs::read_to_string(&path)?;
+                let optimized = read_to_string(path.with_extension("vir.opt")).ok();
+                let mut design = VirDesignBuilder::new(&s);
+                design.with_logic_mode(logic_mode);
+                let mut design = design
+                    .parse()
+                    .map_err(|_| FailureInfo::CompileFailure("failed to parse VIR".into()))?;
+                design.optimize(optflags);
+
+                if opt_rounds > 0
+                    && let Some(optimized) = optimized
+                {
+                    let out = design.emit_ir().to_string();
+                    let optimized = optimized.trim();
+                    let out = out.trim();
+                    if optimized != out {
+                        return Err(FailureInfo::VirOptMismatch {
+                            expected: optimized.to_string(),
+                            gotten: out.to_string(),
+                        });
+                    }
+                }
+
+                Result::<_, FailureInfo>::Ok(design)
+            } else {
+                let mut builder = DesignBuilder::new();
+                match logic_mode {
+                    LogicMode::TwoValue => {
+                        builder.define_macro("__VOGLS__TWO_VALUE_LOGIC", Macro::default());
+                    }
+                    LogicMode::FourValue => {}
+                }
+                builder
+                    .add_source(&path)
+                    .map_err(|_| FailureInfo::CompileFailure("failed to tokenize".into()))?;
+
+                let parsed = builder
+                    .parse(&mut arena)
+                    .map_err(|_| FailureInfo::CompileFailure("failed to parse".into()))?;
+                let mut elab = match parsed
+                    .elaborate(logic_mode, test_information.top_level_module.as_deref())
+                {
+                    Ok(v) => v,
+                    Err(_) => {
+                        return Err(FailureInfo::CompileFailure("failed to elaborate".into()));
+                    }
+                };
+                if let Some(sdf) = sdf.as_deref() {
+                    if let Err(_) = elab.annotate_sdf(sdf) {
+                        return Err(FailureInfo::CompileFailure("failed to annotate SDF".into()));
+                    }
+                }
+                if let Err(_) = elab.annotate_specify() {
+                    return Err(FailureInfo::CompileFailure(
+                        "failed to annotate specify".into(),
+                    ));
+                }
+                let mut lowered = match elab.lower(vec![]) {
+                    Ok(l) => l,
+                    Err(_) => return Err(FailureInfo::CompileFailure("failed to lower".into())),
+                };
+                lowered.optimize(optflags);
+                Result::<_, FailureInfo>::Ok(lowered)
+            }?;
+
+            let mut design = if compile {
+                design.compile()
+            } else {
+                design.to_bytecode()
+            }
+            .map_err(|_| {
+                FailureInfo::CompileFailure("failed to convert to execution format".into())
+            })?;
+            design
+                .run(
+                    &mut SimulationIo {
+                        stdout: Box::new(stdout.clone()) as _,
+                        stderr: Box::new(stderr.clone()) as _,
+                    },
+                    test_information.timeout,
+                )
+                .map_err(|_| {
+                    let stdout = stdout.0.lock().unwrap();
+                    let stdout = std::str::from_utf8(&stdout).unwrap();
+                    let stderr = stderr.0.lock().unwrap();
+                    let stderr = std::str::from_utf8(&stderr).unwrap();
+                    FailureInfo::Error {
+                        stdout: stdout.to_string(),
+                        stderr: stderr.to_string(),
+                    }
+                })
+        });
+
+    let Ok(result) = result else {
+        return Err(FailureInfo::Panic);
+    };
+    match result {
+        Err(FailureInfo::CompileFailure(_)) if test_information.fail => {
+            return Ok(PassKind::Succeed);
+        }
+        Err(err) => return Err(err),
+        Ok(_) => {}
+    }
+
+    if matches!(
+        test_information.verify_stdout,
+        VerifyOutput::Yes | VerifyOutput::SortLines
+    ) {
+        let stdout = stdout.0.lock().unwrap();
+        let stdout = std::str::from_utf8(&stdout).unwrap();
+
+        let mut stdout_path = path.to_path_buf();
+        stdout_path.add_extension("stdout");
+        let s = std::fs::read_to_string(&stdout_path)?;
+
+        let failed = if matches!(test_information.verify_stdout, VerifyOutput::SortLines) {
+            let mut lines = stdout.lines().collect::<Vec<&str>>();
+            lines.sort_unstable();
+            lines != s.lines().collect::<Vec<_>>()
+        } else {
+            s != stdout
+        };
+
+        if failed {
+            return Err(FailureInfo::Mismatch {
+                expected: s,
+                gotten: stdout.to_string(),
+            });
+        }
+    }
+
+    Ok(PassKind::Succeed)
 }

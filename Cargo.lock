@@ -918,6 +918,7 @@ name = "vogls-test"
 version = "0.0.1"
 dependencies = [
  "clap",
+ "rayon",
  "slotmap",
  "vogls",
  "vogls-ir",
