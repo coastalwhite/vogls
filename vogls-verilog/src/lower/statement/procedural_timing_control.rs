@@ -16,7 +16,7 @@ use crate::lower::{WatchCondition, try_resolve_constant};
 use super::Region;
 
 pub fn lower<'a>(
-    ctx: &LowerContext<'a>,
+    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     mut builder: BasicBlockBuilder,

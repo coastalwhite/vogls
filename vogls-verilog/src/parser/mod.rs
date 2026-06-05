@@ -1,3 +1,4 @@
+use std::fmt;
 use std::str::FromStr;
 
 use vogls_frontend::ident_table::{IdentId, IdentTable};
@@ -171,6 +172,19 @@ impl FromStr for TimeUnit {
             "ps" => Ok(Self::Picoseconds),
             "fs" => Ok(Self::Femtoseconds),
             _ => Err(()),
+        }
+    }
+}
+
+impl fmt::Display for ParseErrorReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingToken => f.write_str("missing token"),
+            Self::UnexpectedToken(token) => write!(f, "unexpected token: {token:?}"),
+            Self::Incomplete(reason) => write!(f, "not yet implemented: {reason}"),
+            Self::NoCorresponding(token) => write!(f, "no corresponding: {token:?}"),
+            Self::NotFound(token) => write!(f, "not found: {token:?}"),
+            Self::LeftoverTokens => f.write_str("leftover tokens"),
         }
     }
 }

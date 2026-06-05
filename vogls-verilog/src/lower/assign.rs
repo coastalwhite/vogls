@@ -13,7 +13,7 @@ use super::{LowerContext, try_resolve_net};
 use super::{MutLowerContext, VType};
 
 pub fn assign_variable_lvalue<'a>(
-    ctx: &LowerContext<'a>,
+    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     builder: &mut BasicBlockBuilder,
@@ -61,7 +61,7 @@ pub fn assign_variable_lvalue<'a>(
 }
 
 pub fn variable_lvalue_size<'a>(
-    ctx: &LowerContext<'a>,
+    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     ast_lvalue: AstId<'a, VariableLValue<'a>>,
@@ -77,7 +77,7 @@ pub fn variable_lvalue_size<'a>(
 }
 
 pub fn variable_lvalue_flat_ty<'a>(
-    ctx: &LowerContext<'a>,
+    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     ast_lvalue: AstId<'a, VariableLValueFlat<'a>>,
@@ -167,7 +167,7 @@ pub fn variable_lvalue_flat_ty<'a>(
 }
 
 pub fn assign_variable_lvalue_flat<'a>(
-    ctx: &LowerContext<'a>,
+    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     builder: &mut BasicBlockBuilder,
@@ -409,7 +409,7 @@ pub fn assign_variable_lvalue_flat<'a>(
 }
 
 pub fn assign_net_lvalue<'a>(
-    ctx: &LowerContext<'a>,
+    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     builder: &mut BasicBlockBuilder,
@@ -456,7 +456,7 @@ pub fn assign_net_lvalue<'a>(
 }
 
 pub fn net_lvalue_size<'a>(
-    ctx: &LowerContext<'a>,
+    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     ast_lvalue: AstId<'a, NetLValue<'a>>,
@@ -472,7 +472,7 @@ pub fn net_lvalue_size<'a>(
 }
 
 pub fn net_lvalue_flat_ty<'a>(
-    ctx: &LowerContext<'a>,
+    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     ast_lvalue: AstId<'a, NetLValueFlat<'a>>,
@@ -574,7 +574,7 @@ pub fn net_lvalue_flat_ty<'a>(
 }
 
 fn assign_net_lvalue_flat<'a>(
-    ctx: &LowerContext<'a>,
+    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     builder: &mut BasicBlockBuilder,
@@ -807,7 +807,7 @@ fn assign_net_lvalue_flat<'a>(
 }
 
 pub fn net_lvalue_width<'a>(
-    ctx: &LowerContext<'a>,
+    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     output_terminal: AstId<'a, NetLValue<'a>>,

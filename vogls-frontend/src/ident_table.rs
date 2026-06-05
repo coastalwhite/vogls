@@ -16,6 +16,7 @@ use hashbrown::hash_table::Entry;
 /// - Dropping identifiers (even in other structures) is a `O(1)` operation.
 ///
 /// In general, this is a very common technique for compilers.
+#[derive(Clone)]
 pub struct IdentTable {
     content: String,
 

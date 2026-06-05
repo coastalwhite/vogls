@@ -12,7 +12,7 @@ use crate::lower::{LowerContext, MutLowerContext};
 use super::lower_statement_or_null;
 
 pub fn lower<'a>(
-    ctx: &LowerContext<'a>,
+    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     mut builder: BasicBlockBuilder,
@@ -71,7 +71,7 @@ pub fn lower<'a>(
 }
 
 pub fn lower_case_statement<'a>(
-    ctx: &LowerContext<'a>,
+    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     mut builder: BasicBlockBuilder,

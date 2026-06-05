@@ -32,7 +32,7 @@ use super::{Diagnostics, MutLowerContext};
 pub mod function;
 
 pub fn lower<'a>(
-    ctx: &LowerContext<'a>,
+    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     id: AstId<'a, ModuleOrGenerateItem<'a>>,
@@ -440,7 +440,7 @@ pub fn dims_to_array<'a>(
 }
 
 pub fn lower_opt_generate_block<'a>(
-    ctx: &LowerContext<'a>,
+    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     opt_generate_block: AstId<'a, Option<GenerateBlock<'a>>>,

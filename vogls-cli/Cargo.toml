@@ -8,7 +8,7 @@ name = "vogls"
 path = "src/main.rs"
 
 [dependencies]
-vogls.workspace = true
+vogls = { workspace = true, features = ["unstable"] }
 clap.workspace = true
 
 [lints]

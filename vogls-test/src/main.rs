@@ -1,13 +1,13 @@
 use std::fs::read_to_string;
 use std::io::{self, Write};
+use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 
 use clap::Parser;
-use vogls::design::Design;
-use vogls::utils::TimerStack;
-use vogls::{ExecutionContext, SimulationIo};
+use vogls::design::{Arena, Macro};
+use vogls::{DesignBuilder, SimulationIo, VirDesignBuilder};
 use vogls_ir::LogicMode;
 use vogls_ir::optimize::OptFlags;
 
@@ -205,6 +205,14 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         };
 
         for &opt_rounds in opt_rounds_configurations {
+            let optflags = OptFlags {
+                opt_rounds,
+                constant_propagation: true,
+                deadcode_elimination: true,
+                common_subexpr_elim: true,
+                peephole: true,
+            };
+
             for &logic_mode in modes {
                 for &compile in compiled {
                     if Some(logic_mode) == test_information.skip {
@@ -221,86 +229,46 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                     let stdout = Io::default();
                     let stderr = Io::default();
 
-                    let mut ctx = ExecutionContext {
-                        stdout: Box::new(stdout.clone()) as Box<dyn std::io::Write + Send + Sync>,
-                        stderr: Box::new(stderr.clone()) as Box<dyn std::io::Write + Send + Sync>,
-                        defines: Vec::new(),
-                        emit_hierarchy: false,
-                        emit_unoptimized_ir: false,
-                        emit_ir: false,
-                        emit_vm: false,
-                        emit_process_stats: false,
-                        itrace: false,
-                        stats: false,
-                        debug_symbols: false,
-                        no_run: false,
-                        time: test_information.timeout,
-                        opt: OptFlags {
-                            opt_rounds,
-                            constant_propagation: true,
-                            deadcode_elimination: true,
-                            common_subexpr_elim: true,
-                            peephole: true,
-                        },
-                        logic_mode,
-                        vcd: None,
-                        sdf: sdf.clone(),
-                        compile,
-                        output_source: None,
-                        timings: false,
-                        print_optimized_fuse_signals: false,
-                        print_round_fuse_signals: false,
-                        print_unoptimized_fuse_signals: false,
-                        print_vm_map: false,
-                    };
-
                     if test_information.verify_ir {
-                        let design = std::panic::catch_unwind(|| {
-                            let stdout = Io::default();
-                            let stderr = Io::default();
+                        let design = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                            let mut arena = Arena::new();
+                            let mut builder = DesignBuilder::new();
+                            builder
+                                .define_macro("__VOGLS_VERIFY_IR", Macro::default())
+                                .add_source(&path)?;
 
-                            let mut ctx = ExecutionContext {
-                                stdout: Box::new(stdout.clone())
-                                    as Box<dyn std::io::Write + Send + Sync>,
-                                stderr: Box::new(stderr.clone())
-                                    as Box<dyn std::io::Write + Send + Sync>,
-                                defines: vec!["__VOGLS_VERIFY_IR".to_string()],
-                                emit_hierarchy: false,
-                                emit_unoptimized_ir: false,
-                                emit_ir: false,
-                                emit_vm: false,
-                                emit_process_stats: false,
-                                itrace: false,
-                                stats: false,
-                                debug_symbols: false,
-                                no_run: false,
-                                time: test_information.timeout,
-                                opt: OptFlags {
-                                    opt_rounds,
-                                    constant_propagation: true,
-                                    deadcode_elimination: true,
-                                    common_subexpr_elim: true,
-                                    peephole: true,
-                                },
-                                logic_mode,
-                                vcd: None,
-                                sdf: sdf.clone(),
-                                compile,
-                                output_source: None,
-                                timings: false,
-                                print_optimized_fuse_signals: false,
-                                print_round_fuse_signals: false,
-                                print_unoptimized_fuse_signals: false,
-                                print_vm_map: false,
+                            let parsed = builder.parse(&mut arena)?;
+                            let mut elab = match parsed
+                                .elaborate(logic_mode, test_information.top_level_module.as_deref())
+                            {
+                                Ok(v) => v,
+                                Err(err) => {
+                                    eprintln!("{err}");
+                                    return Err("failed to elaborate".into());
+                                }
                             };
-                            vogls::design::Design::new(
-                                &[&path],
-                                &mut TimerStack::new(false),
-                                test_information.top_level_module.as_deref(),
-                                &mut ctx,
-                                Vec::new(),
+                            if let Some(sdf) = sdf.as_deref() {
+                                if let Err(err) = elab.annotate_sdf(sdf) {
+                                    eprintln!("{err}");
+                                    return Err("failed to annotate sdf".into());
+                                }
+                            }
+                            if let Err(err) = elab.annotate_specify() {
+                                eprintln!("{err}");
+                                return Err("failed to annotate specify".into());
+                            }
+                            let mut lowered = match elab.lower(vec![]) {
+                                Ok(l) => l,
+                                Err(err) => {
+                                    eprintln!("{err}");
+                                    return Err("failed to lower".into());
+                                }
+                            };
+                            lowered.optimize(optflags);
+                            Result::<_, Box<dyn std::error::Error>>::Ok(
+                                lowered.emit_ir().to_string(),
                             )
-                        });
+                        }));
 
                         let mut panic = false;
                         let mut failed = false;
@@ -310,11 +278,10 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                         if let Ok(design) = design {
                             match design {
                                 Ok(design) => {
-                                    let design_ir = design.emit_ir();
                                     let asserted =
                                         std::fs::read_to_string(&path.with_extension("v.ir"))?;
-                                    failed = design_ir != asserted;
-                                    mismatch = Some((asserted, design_ir));
+                                    failed = design != asserted;
+                                    mismatch = Some((asserted, design));
                                 }
                                 Err(err) => {
                                     failed = true;
@@ -347,32 +314,25 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                         }
                     }
 
-                    let ctx = std::panic::AssertUnwindSafe(&mut ctx);
                     let result: Result<
                         Result<(), Box<dyn std::error::Error>>,
                         Box<dyn std::any::Any + Send + 'static>,
                     > = std::panic::catch_unwind(|| {
-                        if path
+                        let mut arena = Arena::new();
+                        let mut design = if path
                             .extension()
                             .is_some_and(|ext| ext.as_encoded_bytes() == b"vir")
                         {
                             let s = std::fs::read_to_string(&path)?;
                             let optimized = read_to_string(path.with_extension("vir.opt")).ok();
-                            let mut design =
-                                Design::new_vir(&s, &mut TimerStack::new(false), ctx.0)?;
+                            let mut design = VirDesignBuilder::new(&s);
+                            design.with_logic_mode(logic_mode);
+                            let design = design.parse()?;
 
                             if opt_rounds > 0
                                 && let Some(optimized) = optimized
                             {
-                                use std::fmt::Write;
-                                let mut out = String::new();
-                                for signal in design.gl.signals.values() {
-                                    writeln!(&mut out, "{}", signal.display()).unwrap();
-                                }
-                                writeln!(&mut out).unwrap();
-                                for process in design.gl.processes.values() {
-                                    writeln!(&mut out, "{}", process.display(&design.gl)).unwrap();
-                                }
+                                let out = design.emit_ir().to_string();
                                 let optimized = optimized.trim();
                                 let out = out.trim();
                                 if optimized != out {
@@ -380,27 +340,54 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                                 }
                             }
 
-                            let stdout =
-                                std::mem::replace(&mut ctx.0.stdout, Box::new(Vec::new()) as _);
-                            let stderr =
-                                std::mem::replace(&mut ctx.0.stderr, Box::new(Vec::new()) as _);
-                            let mut io = SimulationIo::new(stdout, stderr);
-
-                            design.run(&mut io, test_information.timeout)?;
-
-                            ctx.0.stdout = io.stdout;
-                            ctx.0.stderr = io.stderr;
-
-                            Ok(())
+                            Result::<_, Box<dyn std::error::Error>>::Ok(design)
                         } else {
-                            let ctx = ctx;
-                            Ok(vogls::run(
-                                &[&path],
-                                &mut TimerStack::new(false),
-                                test_information.top_level_module.as_deref(),
-                                ctx.0,
-                            )?)
-                        }
+                            let mut builder = DesignBuilder::new();
+                            builder.add_source(&path)?;
+
+                            let parsed = builder.parse(&mut arena)?;
+                            let mut elab = match parsed
+                                .elaborate(logic_mode, test_information.top_level_module.as_deref())
+                            {
+                                Ok(v) => v,
+                                Err(err) => {
+                                    eprintln!("{err}");
+                                    return Err("failed to parse".into());
+                                }
+                            };
+                            if let Some(sdf) = sdf.as_deref() {
+                                if let Err(err) = elab.annotate_sdf(sdf) {
+                                    eprintln!("{err}");
+                                    return Err("failed to annotate sdf".into());
+                                }
+                            }
+                            if let Err(err) = elab.annotate_specify() {
+                                eprintln!("{err}");
+                                return Err("failed to annotate specify".into());
+                            }
+                            let lowered = match elab.lower(vec![]) {
+                                Ok(l) => l,
+                                Err(err) => {
+                                    eprintln!("{err}");
+                                    return Err("failed to lower".into());
+                                }
+                            };
+                            Result::<_, Box<dyn std::error::Error>>::Ok(lowered)
+                        }?;
+                        design.optimize(optflags);
+
+                        let mut design = if compile {
+                            design.compile()
+                        } else {
+                            design.to_bytecode()
+                        }?;
+                        design.run(
+                            &mut SimulationIo {
+                                stdout: Box::new(Io::default()) as _,
+                                stderr: Box::new(Io::default()) as _,
+                            },
+                            test_information.timeout,
+                        )
                     });
 
                     let stdout = stdout.0.lock().unwrap();

@@ -42,29 +42,6 @@ impl Diagnostics {
     }
 }
 
-pub fn display_width(mut s: &str, tab_width: usize) -> usize {
-    // @TODO: use unicode_width
-    let mut n = 0;
-    while let Some(i) = s.find('\t') {
-        n += i + tab_width;
-        s = &s[i + 1..];
-    }
-    n + s.len()
-}
-
-pub fn display_with_tab_width(mut s: &str, f: &mut String, tab_width: usize) -> fmt::Result {
-    // @TODO: This is horrible.
-    while let Some(i) = s.find('\t') {
-        f.write_str(&s[..i])?;
-        for _ in 0..tab_width {
-            f.write_char(' ')?;
-        }
-        s = &s[i + 1..];
-    }
-    f.write_str(&s)?;
-    Ok(())
-}
-
 pub fn report_error(
     tokenized: &Tokenized,
     reason: impl fmt::Debug,
@@ -186,4 +163,27 @@ fn lines_with_offset(mut s: &str) -> Vec<(usize, &str)> {
     }
 
     vs
+}
+
+pub fn display_width(mut s: &str, tab_width: usize) -> usize {
+    // @TODO: use unicode_width
+    let mut n = 0;
+    while let Some(i) = s.find('\t') {
+        n += i + tab_width;
+        s = &s[i + 1..];
+    }
+    n + s.len()
+}
+
+pub fn display_with_tab_width(mut s: &str, f: &mut String, tab_width: usize) -> fmt::Result {
+    // @TODO: This is horrible.
+    while let Some(i) = s.find('\t') {
+        f.write_str(&s[..i])?;
+        for _ in 0..tab_width {
+            f.write_char(' ')?;
+        }
+        s = &s[i + 1..];
+    }
+    f.write_str(&s)?;
+    Ok(())
 }

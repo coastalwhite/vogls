@@ -49,7 +49,7 @@ fn lower_level(
 }
 
 pub fn lower_udp<'a>(
-    ctx: &LowerContext<'a>,
+    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     id: AstId<'a, UdpDeclaration<'a>>,

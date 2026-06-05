@@ -46,7 +46,7 @@ impl<'a> StackItem<'a> {
 
 #[deny(clippy::question_mark_used)] // Needs to be handled explicitly in the recursion.
 pub fn lower_expr<'a>(
-    ctx: &LowerContext<'a>,
+    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     builder: &mut BasicBlockBuilder,
@@ -1077,7 +1077,7 @@ pub fn zero_or_sign_extend(
 }
 
 pub fn get_used_signals<'a>(
-    ctx: &LowerContext<'a>,
+    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     signals: &mut OrderedSet<SignalKey>,
@@ -1138,7 +1138,7 @@ pub fn get_used_signals<'a>(
 }
 
 pub fn get_used_ident_signals<'a>(
-    ctx: &LowerContext<'a>,
+    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     signals: &mut OrderedSet<SignalKey>,

@@ -24,3 +24,4 @@ vogls-sdf.workspace = true
 default = ["native"]
 random = ["vogls-bits/random"]
 native = ["dep:tempfile", "dep:vogls-codegen-c"]
+unstable = []

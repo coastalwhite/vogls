@@ -7,7 +7,7 @@ use crate::lower::{LowerContext, MutLowerContext};
 use crate::lower::{assign, lower_expr};
 
 pub fn lower_loop_statement<'a>(
-    ctx: &LowerContext<'a>,
+    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     mut builder: BasicBlockBuilder,

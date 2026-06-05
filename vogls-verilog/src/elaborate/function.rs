@@ -13,7 +13,7 @@ use super::VSymbol;
 pub fn elaborate_fn<'a>(
     gl: &mut GlobalContext,
     symbol: SymbolId,
-    ctx: &mut LowerContext<'a>,
+    ctx: &mut LowerContext<'a, '_>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
     let VSymbol::Function(i) = &ctx.table[symbol].content else {
@@ -149,7 +149,7 @@ pub fn elaborate_fn<'a>(
 pub fn elaborate_task<'a>(
     gl: &mut GlobalContext,
     symbol: SymbolId,
-    ctx: &mut LowerContext<'a>,
+    ctx: &mut LowerContext<'a, '_>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
     let VSymbol::Task(i) = &ctx.table[symbol].content else {

@@ -28,7 +28,7 @@ struct TimingContent {
 }
 
 fn resolve_ident<'a>(
-    ctx: &LowerContext<'a>,
+    ctx: &LowerContext<'a, '_>,
     root: Option<SymbolId>,
     ident: &HierarchicalIdent,
     diagnostics: &mut Diagnostics,
@@ -68,7 +68,7 @@ fn resolve_ident<'a>(
 }
 
 fn resolve_port_instance<'a>(
-    ctx: &LowerContext<'a>,
+    ctx: &LowerContext<'a, '_>,
     scope: SymbolId,
     ident: &PortInstance,
     diagnostics: &mut Diagnostics,
@@ -161,7 +161,7 @@ fn parse_delvallist(
 }
 
 pub fn lower_sdf<'a>(
-    ctx: &mut LowerContext<'a>,
+    ctx: &mut LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     path: &Path,
 ) -> Result<(), ()> {

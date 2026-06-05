@@ -395,7 +395,7 @@ pub struct Delay {
 
 impl Delay {
     fn eval<'a>(
-        ctx: &LowerContext<'a>,
+        ctx: &LowerContext<'a, '_>,
         mctx: &mut MutLowerContext,
         scope: SymbolId,
         id: AstId<'a, ConstantMinTypMaxExpression<'a>>,
@@ -490,7 +490,7 @@ impl Delay {
 }
 
 pub fn lower_specify<'a>(
-    ctx: &mut LowerContext<'a>,
+    ctx: &mut LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
 
@@ -727,7 +727,7 @@ pub fn lower_specify<'a>(
 }
 
 pub fn lower_iopath<'a>(
-    ctx: &mut LowerContext<'a>,
+    ctx: &mut LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     output: SignalKey,

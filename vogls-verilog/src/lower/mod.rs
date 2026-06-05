@@ -18,12 +18,12 @@ pub enum Region {
     Monitor = 3,
 }
 
-pub struct LowerContext<'a> {
+pub struct LowerContext<'a, 'b> {
     pub table: VSymbolTable,
     pub table_ast_refs: SymbolAstRefs<'a>,
     pub udps: VgHashMap<IdentId, AstId<'a, UdpDeclaration<'a>>>,
-    pub arenas: &'a AstArenas,
-    pub tokenized: &'a Tokenized,
+    pub arenas: &'b AstArenas,
+    pub tokenized: &'b Tokenized,
     pub time_scale: TimeScale,
 }
 
@@ -94,7 +94,7 @@ fn extend_symbol_table_to_vcd_scope(
     }
 }
 
-impl<'a> LowerContext<'a> {
+impl<'a> LowerContext<'a, '_> {
     pub fn vcd_scope(&self, scope: SymbolId, ident_table: &IdentTable) -> vogls_ir::vcd::VcdOutput {
         let mut key = scope;
         while let Some(parent) = self.table[key].parent() {
@@ -421,7 +421,7 @@ pub use module_or_generate_item::dims_to_array;
 
 pub fn lower_module_to_ir<'a>(
     root: AstId<'a, Module<'a>>,
-    ctx: &LowerContext<'a>,
+    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
 ) -> Result<(), ()> {
@@ -487,7 +487,7 @@ enum WatchCondition {
 }
 
 fn assign_input_port<'a>(
-    ctx: &LowerContext<'a>,
+    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     expr: AstId<'a, Expr<'a>>,
@@ -541,7 +541,7 @@ fn assign_input_port<'a>(
 }
 
 fn assign_port_output<'a>(
-    ctx: &LowerContext<'a>,
+    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     expr: AstId<'a, Expr<'a>>,
@@ -787,7 +787,7 @@ fn assign_port_output<'a>(
 }
 
 fn assign_task_output<'a>(
-    ctx: &LowerContext<'a>,
+    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     builder: &mut BasicBlockBuilder,
@@ -1048,7 +1048,7 @@ pub fn create_nba_process(
 
 pub fn instantiate_nba_signals<'a>(
     gl: &mut GlobalContext,
-    ctx: &mut LowerContext<'a>,
+    ctx: &mut LowerContext<'a, '_>,
     scope: SymbolId,
     module: AstId<'a, Module<'a>>,
     diagnostics: &mut Diagnostics,
@@ -1109,7 +1109,7 @@ pub fn instantiate_nba_signals<'a>(
 
 pub fn instantiate_module_or_generate_item_nba_signals<'a>(
     gl: &mut GlobalContext,
-    ctx: &mut LowerContext<'a>,
+    ctx: &mut LowerContext<'a, '_>,
     scope: SymbolId,
     item: AstId<'a, ModuleOrGenerateItem<'a>>,
     diagnostics: &mut Diagnostics,
@@ -1147,7 +1147,7 @@ pub fn instantiate_module_or_generate_item_nba_signals<'a>(
 
 pub fn instantiate_stmts_nba_signals<'a>(
     gl: &mut GlobalContext,
-    ctx: &mut LowerContext<'a>,
+    ctx: &mut LowerContext<'a, '_>,
     scope: SymbolId,
     stmts: AstIdRange<'a, Statement<'a>>,
     diagnostics: &mut Diagnostics,
@@ -1274,7 +1274,7 @@ pub fn instantiate_stmts_nba_signals<'a>(
 
 pub fn instantiate_stmt_or_null_nba_signals<'a>(
     gl: &mut GlobalContext,
-    ctx: &mut LowerContext<'a>,
+    ctx: &mut LowerContext<'a, '_>,
     scope: SymbolId,
     stmt: AstId<'a, StatementOrNull<'a>>,
     diagnostics: &mut Diagnostics,

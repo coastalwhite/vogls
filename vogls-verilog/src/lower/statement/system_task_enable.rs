@@ -11,7 +11,7 @@ use crate::lower::{LowerContext, MutLowerContext, try_resolve_hident};
 use crate::lower::{expression, hident_span, try_resolve_net};
 
 pub fn lower_system_task_enable<'a>(
-    ctx: &LowerContext<'a>,
+    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     mut builder: BasicBlockBuilder,
@@ -266,7 +266,7 @@ pub fn lower_system_task_enable<'a>(
 }
 
 pub fn lower_write_arguments<'a>(
-    ctx: &LowerContext<'a>,
+    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     system_task_enable: AstId<'a, SystemTaskEnable<'a>>,

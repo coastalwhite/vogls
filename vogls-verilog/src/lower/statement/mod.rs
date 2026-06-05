@@ -26,7 +26,7 @@ pub mod procedural_timing_control;
 pub mod system_task_enable;
 
 pub fn lower_statement_or_null<'a>(
-    ctx: &LowerContext<'a>,
+    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     builder: BasicBlockBuilder,
@@ -41,7 +41,7 @@ pub fn lower_statement_or_null<'a>(
 }
 
 pub fn statements_to_process<'a>(
-    ctx: &LowerContext<'a>,
+    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     mut builder: BasicBlockBuilder,
@@ -277,7 +277,7 @@ pub fn statements_to_process<'a>(
 }
 
 pub fn get_used_signals<'a>(
-    ctx: &LowerContext<'a>,
+    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     signals: &mut OrderedSet<SignalKey>,
@@ -489,7 +489,7 @@ pub fn get_used_signals<'a>(
 }
 
 pub fn get_used_signals_stmt_or_null<'a>(
-    ctx: &LowerContext<'a>,
+    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     signals: &mut OrderedSet<SignalKey>,
@@ -502,7 +502,7 @@ pub fn get_used_signals_stmt_or_null<'a>(
 }
 
 pub fn get_variable_lvalue_used_signals<'a>(
-    ctx: &LowerContext<'a>,
+    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     signals: &mut OrderedSet<SignalKey>,
@@ -534,7 +534,7 @@ pub fn get_variable_lvalue_used_signals<'a>(
 }
 
 pub fn get_delay_or_event_control_used_signals<'a>(
-    ctx: &LowerContext<'a>,
+    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     signals: &mut OrderedSet<SignalKey>,
@@ -551,7 +551,7 @@ pub fn get_delay_or_event_control_used_signals<'a>(
 }
 
 pub fn get_delay_control_used_signals<'a>(
-    ctx: &LowerContext<'a>,
+    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     signals: &mut OrderedSet<SignalKey>,
@@ -588,7 +588,7 @@ pub fn get_delay_control_used_signals<'a>(
 }
 
 pub fn get_event_control_used_signals<'a>(
-    ctx: &LowerContext<'a>,
+    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     signals: &mut OrderedSet<SignalKey>,

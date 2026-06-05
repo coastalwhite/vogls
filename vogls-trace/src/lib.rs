@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
 use hashbrown::hash_map::Entry;
-use vogls::design::{Design, ElaboratedDesign, SignalHandle, VSymbolTable};
-use vogls::symbol::{NetValue, Symbol};
+use vogls::{Design, ElaboratedDesign, SignalHandle, VSymbolTable};
 use vogls_codegen::HeapRef;
 use vogls_ir::{Bits, LogicMode};
 use vogls_runtime::RtSignalKey;
@@ -33,7 +32,7 @@ impl TracePlugin {
     }
 }
 
-impl vogls::design::VoglsPlugin for TracePlugin {
+impl vogls::VoglsPlugin for TracePlugin {
     fn register_handles(&mut self, design: &mut ElaboratedDesign<'_>, table: &VSymbolTable) {
         self.handles.extend(
             table

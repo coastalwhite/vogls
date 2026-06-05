@@ -1,13 +1,13 @@
 use std::fs::read_to_string;
 use std::io::stdout;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use clap::Parser;
-use vogls::design::Design;
-use vogls::{ExecutionContext, SimulationIo};
+use vogls::design::{Arena, Macro};
 use vogls::ir::LogicMode;
 use vogls::ir::optimize::OptFlags;
 use vogls::utils::TimerStack;
+use vogls::{DesignBuilder, DesignBuilderError, SimulationIo, VirDesignBuilder};
 
 #[derive(clap::Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -19,9 +19,6 @@ struct Args {
 
     #[arg(short = 'm', long = "top-level-module")]
     top_level_module: Option<String>,
-
-    #[arg(short, long)]
-    filter: Option<String>,
 
     #[arg(long)]
     itrace: bool,
@@ -76,73 +73,153 @@ struct Args {
     no_peephole_optimization: bool,
 
     #[arg(long)]
-    print_unoptimized_fuse_signals: bool,
-    #[arg(long)]
-    print_round_fuse_signals: bool,
-    #[arg(long)]
-    print_optimized_fuse_signals: bool,
-    #[arg(long)]
     print_vm_map: bool,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args = Args::parse();
-    let logic_mode = if args.four_value_logic {
+    let Args {
+        path,
+        vir,
+        top_level_module,
+        itrace,
+        stats,
+        debug_symbols,
+        emit_hierarchy,
+        emit_unoptimized_ir,
+        emit_ir,
+        emit_vm,
+        emit_process_stats,
+        no_run,
+        time,
+        opt_rounds,
+        four_value_logic,
+        vcd,
+        sdf,
+        defines,
+        compile,
+        output_source,
+        timings,
+        no_constant_propagation,
+        no_deadcode_elimination,
+        no_common_subexpr_elim,
+        no_peephole_optimization,
+        print_vm_map,
+    } = Args::parse();
+    let logic_mode = if four_value_logic {
         LogicMode::FourValue
     } else {
         LogicMode::TwoValue
     };
-    let mut ectx = ExecutionContext {
-        stdout: Box::new(std::io::stdout()),
-        stderr: Box::new(std::io::stderr()),
-        defines: args.defines,
-        emit_hierarchy: args.emit_hierarchy,
-        emit_unoptimized_ir: args.emit_unoptimized_ir,
-        emit_ir: args.emit_ir,
-        emit_vm: args.emit_vm,
-        emit_process_stats: args.emit_process_stats,
-        itrace: args.itrace,
-        stats: args.stats,
-        debug_symbols: args.debug_symbols,
-        time: args.time,
-        no_run: args.no_run,
-        opt: OptFlags {
-            opt_rounds: args.opt_rounds,
-            constant_propagation: !args.no_constant_propagation,
-            deadcode_elimination: !args.no_deadcode_elimination,
-            common_subexpr_elim: !args.no_common_subexpr_elim,
-            peephole: !args.no_peephole_optimization,
-        },
-        logic_mode,
-        vcd: args.vcd,
-        sdf: args.sdf,
-        compile: args.compile,
-        output_source: args.output_source,
-        timings: args.timings,
-        print_unoptimized_fuse_signals: args.print_unoptimized_fuse_signals,
-        print_round_fuse_signals: args.print_round_fuse_signals,
-        print_optimized_fuse_signals: args.print_optimized_fuse_signals,
-        print_vm_map: args.print_vm_map,
+
+    let mut timers = TimerStack::new(timings);
+
+    let mut lowered = if vir {
+        let content = read_to_string(&path[0])?;
+        let mut builder = VirDesignBuilder::new(&content);
+        builder.with_logic_mode(logic_mode);
+        builder.parse()?
+    } else {
+        let mut builder = DesignBuilder::new();
+        for name in &defines {
+            builder.define_macro(name, Macro::default());
+        }
+        timers.timed("tokenization", |_| {
+            for path in &path {
+                builder.add_source(path)?;
+            }
+            Result::<_, DesignBuilderError>::Ok(())
+        })?;
+
+        let mut arena = Arena::default();
+        let design = match builder.parse(&mut arena) {
+            Ok(design) => design,
+            Err(err) => {
+                eprintln!("{err}");
+                return Err("failed to parse".into());
+            }
+        };
+
+        let mut elaborate = match design.elaborate(logic_mode, top_level_module) {
+            Ok(v) => v,
+            Err(err) => {
+                eprintln!("{err}");
+                return Err("failed to elaborate".into());
+            }
+        };
+
+        if emit_hierarchy {
+            eprintln!("{}", elaborate.display_hierarchy());
+        }
+
+        if let Some(sdf_path) = sdf.as_deref() {
+            if let Err(err) = elaborate.annotate_sdf(sdf_path) {
+                eprintln!("{err}");
+                return Err("failed to annotate sdf".into());
+            }
+        }
+
+        timers.start("lower_specify_blocks");
+        if let Err(err) = elaborate.annotate_specify() {
+            eprintln!("{err}");
+            return Err("failed to annotate specify".into());
+        }
+        timers.stop();
+
+        let lowered = match elaborate.lower(vec![]) {
+            Ok(v) => v,
+            Err(err) => {
+                eprintln!("{err}");
+                return Err("failed to lower".into());
+            }
+        };
+        arena.reset();
+        lowered
     };
 
-    let mut timers = TimerStack::new(ectx.timings);
-    let mut design = timers.timed("compilation", |timers| {
-        if args.vir {
-            let content = read_to_string(&args.path[0])?;
-            Design::new_vir(&content, timers, &mut ectx)
-        } else {
-            let paths: Vec<&Path> = args.path.iter().map(|p| p.as_path()).collect();
-            Design::new(
-                &paths,
-                timers,
-                args.top_level_module.as_deref(),
-                &mut ectx,
-                Vec::new(),
-            )
-        }
-    })?;
+    if emit_unoptimized_ir {
+        println!("{}", lowered.emit_ir());
+    }
 
-    if args.no_run {
+    timers.timed("optimization", |_| {
+        lowered.optimize(OptFlags {
+            opt_rounds,
+            constant_propagation: !no_constant_propagation,
+            deadcode_elimination: !no_deadcode_elimination,
+            common_subexpr_elim: !no_common_subexpr_elim,
+            peephole: !no_peephole_optimization,
+        });
+    });
+
+    if emit_ir {
+        println!("{}", lowered.emit_ir());
+    }
+
+    if emit_process_stats {
+        println!("Process Kind Counts:");
+        for (kind, count) in lowered.process_stats().iter() {
+            println!("  {kind}: {count}");
+        }
+    }
+
+    if let Some(vcd) = &vcd {
+        lowered.trace_vcd(vcd.clone());
+    }
+    lowered.itrace = itrace;
+    lowered.emit_vm = emit_vm;
+    lowered.stats = stats;
+    lowered.debug_symbols = debug_symbols;
+    lowered.output_source = output_source.clone();
+    lowered.print_vm_map = print_vm_map;
+
+    timers.start("compilation");
+    let mut design = if compile {
+        lowered.compile()
+    } else {
+        lowered.to_bytecode()
+    }?;
+    timers.stop();
+
+    if no_run {
         if timers.enabled {
             timers.print();
         }
@@ -154,13 +231,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     design
         .run(
             &mut SimulationIo::new(Box::new(std::io::stdout()), Box::new(std::io::stderr())),
-            ectx.time,
+            time,
         )
         .map_err(|_| "simulation failed")?;
     timers.stop();
 
-    if args.stats {
-        design.initial_state.runtime().dump_stats(&mut stdout())?;
+    if stats {
+        design.initial_state().runtime().dump_stats(&mut stdout())?;
     }
 
     if timers.enabled {

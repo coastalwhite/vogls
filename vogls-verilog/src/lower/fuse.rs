@@ -12,7 +12,7 @@ use crate::lower::{hident_span, try_resolve_hident, try_resolve_net};
 use super::{Diagnostics, LowerContext, MutLowerContext, VType, VValue, eval_constant_expr};
 
 fn try_constant_expr_no_ctx<'a>(
-    ctx: &LowerContext<'a>,
+    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     expr: AstId<'a, Expr<'a>>,
@@ -30,7 +30,7 @@ fn try_constant_expr_no_ctx<'a>(
 }
 
 fn try_constant_bitslice<'a>(
-    ctx: &LowerContext<'a>,
+    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     bitslice: BitSlice<'a>,
@@ -151,7 +151,7 @@ fn try_constant_bitslice<'a>(
 }
 
 pub fn try_lower_fuse_driver_expr<'a>(
-    ctx: &LowerContext<'a>,
+    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     expr: AstId<'a, Expr<'a>>,
@@ -174,7 +174,7 @@ pub fn try_lower_fuse_driver_expr<'a>(
 }
 
 pub fn try_lower_fuse_driver_ident<'a>(
-    ctx: &LowerContext<'a>,
+    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     expr: AstId<'a, Expr<'a>>,
@@ -282,7 +282,7 @@ pub fn try_lower_fuse_driver_ident<'a>(
 }
 
 pub fn try_fuse_assign<'a>(
-    ctx: &LowerContext<'a>,
+    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     net_assignment: AstId<'a, NetAssignment<'a>>,

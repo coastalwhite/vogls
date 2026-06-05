@@ -10,7 +10,7 @@ use vogls_ir::{
 use vogls_utils::{IndexMap, VgHashMap, VgHashSet};
 
 use crate::ast::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression};
-use crate::ast::expr::{BitSlice, Expr, Replication};
+use crate::ast::expr::{Expr, Replication};
 use crate::ast::module::{
     AlwaysConstruct, BlockItemDeclaration, CaseGenerateConstruct, CaseGenerateItem,
     CaseGeneratePattern, Dimension, FunctionDeclaration, FunctionRangeOrType, GenerateBlock,
@@ -135,7 +135,7 @@ impl<'a, 'b> ElaborationState<'a, 'b> {
 /// expressions.
 pub fn elaborate<'a, 'b>(
     gl: &mut GlobalContext,
-    ctx: &mut LowerContext<'a>,
+    ctx: &mut LowerContext<'a, '_>,
     top_level: AstId<'a, Module<'a>>,
     module_lut: &'b VgHashMap<IdentId, AstId<'a, Module<'a>>>,
     diagnostics: &mut Diagnostics,
@@ -304,7 +304,7 @@ pub fn elaborate<'a, 'b>(
 
 fn extend_opt_generate_block_sids<'a, 'b>(
     scope: SymbolId,
-    ctx: &mut LowerContext<'a>,
+    ctx: &mut LowerContext<'a, '_>,
     st: &mut ElaborationState<'a, 'b>,
     id: AstId<'a, Option<GenerateBlock<'a>>>,
     diagnostics: &mut Diagnostics,
@@ -343,7 +343,7 @@ fn extend_opt_generate_block_sids<'a, 'b>(
 fn extend_generate_if_sids<'a, 'b>(
     gl: &mut GlobalContext,
     scope: SymbolId,
-    ctx: &mut LowerContext<'a>,
+    ctx: &mut LowerContext<'a, '_>,
     st: &mut ElaborationState<'a, 'b>,
     id: AstId<'a, IfGenerateConstruct<'a>>,
     diagnostics: &mut Diagnostics,
@@ -372,7 +372,7 @@ fn extend_generate_if_sids<'a, 'b>(
 fn extend_conditional_generate_sids<'a, 'b>(
     gl: &mut GlobalContext,
     scope: SymbolId,
-    ctx: &mut LowerContext<'a>,
+    ctx: &mut LowerContext<'a, '_>,
     st: &mut ElaborationState<'a, 'b>,
     blk: AstId<'a, Option<GenerateBlock<'a>>>,
     diagnostics: &mut Diagnostics,
@@ -401,7 +401,7 @@ fn extend_conditional_generate_sids<'a, 'b>(
 fn extend_generate_loop_sids<'a, 'b>(
     gl: &mut GlobalContext,
     scope: SymbolId,
-    ctx: &mut LowerContext<'a>,
+    ctx: &mut LowerContext<'a, '_>,
     st: &mut ElaborationState<'a, 'b>,
     id: AstId<'a, LoopGenerateConstruct<'a>>,
     diagnostics: &mut Diagnostics,
@@ -534,7 +534,7 @@ fn extend_generate_case_sids<'a, 'b>(
     gl: &mut GlobalContext,
 
     scope: SymbolId,
-    ctx: &mut LowerContext<'a>,
+    ctx: &mut LowerContext<'a, '_>,
     st: &mut ElaborationState<'a, 'b>,
     id: AstId<'a, CaseGenerateConstruct<'a>>,
     diagnostics: &mut Diagnostics,
@@ -584,7 +584,7 @@ fn extend_generate_case_sids<'a, 'b>(
 
 fn extend_param_decl_idents_into_scope<'a, 'b>(
     scope: SymbolId,
-    ctx: &mut LowerContext<'a>,
+    ctx: &mut LowerContext<'a, '_>,
     st: &mut ElaborationState<'a, 'b>,
     typing: AstId<'a, ParameterDeclarationTyping<'a>>,
     assignments: AstIdRange<'a, ParamAssignment<'a>>,
@@ -633,7 +633,7 @@ pub enum ParameterType {
 fn elaborate_module<'a, 'b>(
     module: AstId<'a, Module<'a>>,
     scope: SymbolId,
-    ctx: &mut LowerContext<'a>,
+    ctx: &mut LowerContext<'a, '_>,
     st: &mut ElaborationState<'a, 'b>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
@@ -844,7 +844,7 @@ fn elaborate_module<'a, 'b>(
 fn extend_module_or_generate_item_sids<'a, 'b>(
     id: AstId<'a, ModuleOrGenerateItem<'a>>,
     scope: SymbolId,
-    ctx: &mut LowerContext<'a>,
+    ctx: &mut LowerContext<'a, '_>,
     st: &mut ElaborationState<'a, 'b>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
@@ -1193,7 +1193,7 @@ fn extend_module_or_generate_item_sids<'a, 'b>(
 fn extend_statements_sids<'a, 'b>(
     stmts: AstIdRange<'a, Statement<'a>>,
     scope: SymbolId,
-    ctx: &mut LowerContext<'a>,
+    ctx: &mut LowerContext<'a, '_>,
     st: &mut ElaborationState<'a, 'b>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
@@ -1273,7 +1273,7 @@ fn extend_statements_sids<'a, 'b>(
 
 fn extend_block_item_decl_sid<'a, 'b>(
     scope: SymbolId,
-    ctx: &mut LowerContext<'a>,
+    ctx: &mut LowerContext<'a, '_>,
     st: &mut ElaborationState<'a, 'b>,
     block_item_decl: AstId<'a, BlockItemDeclaration<'a>>,
     diagnostics: &mut Diagnostics,
@@ -1347,7 +1347,7 @@ fn extend_variable_type_sids<'a, 'b>(
     var_types: AstIdRange<'a, VariableType<'a>>,
     f: impl Fn(AstId<'a, VariableType<'a>>) -> InLevelSymbol,
     scope: SymbolId,
-    ctx: &mut LowerContext<'a>,
+    ctx: &mut LowerContext<'a, '_>,
     st: &mut ElaborationState<'a, 'b>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
@@ -1775,7 +1775,7 @@ pub fn finalize_symbol<'a>(
     symbol: &InLevelSymbol<'a>,
     sid: SymbolId,
     scope: SymbolId,
-    ctx: &mut LowerContext<'a>,
+    ctx: &mut LowerContext<'a, '_>,
     next_levels: &mut VecDeque<(SymbolId, ElabLevel<'a>, TimeScale)>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
@@ -2077,7 +2077,7 @@ pub fn finalize_symbol<'a>(
 
 fn extend_block_sids<'a, 'b>(
     scope: SymbolId,
-    ctx: &mut LowerContext<'a>,
+    ctx: &mut LowerContext<'a, '_>,
     st: &mut ElaborationState<'a, 'b>,
     diagnostics: &mut Diagnostics,
     block: Option<AstId<'a, Block<'a>>>,

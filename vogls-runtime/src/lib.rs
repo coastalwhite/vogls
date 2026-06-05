@@ -72,6 +72,15 @@ pub struct SimulationIo {
     pub stderr: Box<dyn std::io::Write + Send + Sync>,
 }
 
+impl Default for SimulationIo {
+    fn default() -> Self {
+        Self {
+            stdout: Box::new(std::io::stdout()) as _,
+            stderr: Box::new(std::io::stderr()) as _,
+        }
+    }
+}
+
 impl SimulationIo {
     pub fn new(
         stdout: Box<dyn std::io::Write + Send + Sync>,

@@ -233,7 +233,7 @@ pub fn get_system_function_call_output_ty<'a>(
 }
 
 pub fn lower_unevaluated_system_function_call<'a>(
-    ctx: &LowerContext<'a>,
+    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     builder: &mut BasicBlockBuilder,
