@@ -1,13 +1,19 @@
+use std::num::NonZeroU32;
+
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{
     BasicBlockBuilder, Bits, GlobalContext, INTEGER_VSIZE, SignalKey, VariableKey, VectorSize,
 };
 use vogls_utils::OrderedSet;
 
+use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::expr::{BinaryOperator, BitSlice, Expr, Replication, UnaryOperator};
 use crate::ast::{AstId, HIdent};
 use crate::elaborate::VSymbol;
-use crate::lower::{VType, hident_span, msb_lsb_to_width, try_resolve_hident};
+use crate::lower::addressing::{
+    Address, AddressingContext, RangeExpr, VectorTransform, lower_addressing,
+};
+use crate::lower::{VType, hident_span, try_resolve_hident};
 use crate::number::Sign;
 pub use constant_expr::eval_constant_expr;
 pub use ty::get_expr_type;
@@ -450,7 +456,6 @@ pub fn lower_expr<'a>(
                         range_expression,
                         Some(BitSlice::PlusWidth(..) | BitSlice::MinusWidth(..))
                     ));
-                let mut exprs = exprs;
                 let symbol_key = try_resolve_hident(
                     scope,
                     &ctx.table,
@@ -459,13 +464,16 @@ pub fn lower_expr<'a>(
                     &mut mctx.diagnostics,
                 )?;
                 let symbol = &ctx.table[symbol_key].content;
-                let (mut ty, net_lsb, net_bit_reversed, mut var) = match &symbol {
+                let (ty, dims, transform, var) = match &symbol {
                     VSymbol::Parameter(value) => {
                         let value = value.clone();
                         (
                             value.ty(),
-                            0,
-                            false,
+                            &[] as &[NonZeroU32],
+                            VectorTransform {
+                                lsb_translation: 0,
+                                reversed: false,
+                            },
                             builder.constant(mctx.gl(), value.into_bits()),
                         )
                     }
@@ -485,211 +493,219 @@ pub fn lower_expr<'a>(
                         result_stack.push(None);
                         continue 'dispatch_loop;
                     }
-                    VSymbol::Net(s) => {
-                        let mut dims = &s.dims[..];
-                        if !dims.is_empty() {
-                            if exprs.pop_front().is_none() {
-                                mctx.diagnostics.not_yet_implemented(
-                                    ctx.arenas.get_span(expr),
-                                    "variable array",
-                                );
-                                error = true;
-                                result_stack.truncate(end_result_stack_len);
-                                result_stack.push(None);
-                                continue 'dispatch_loop;
-                            }
+                    VSymbol::Net(s) => (
+                        s.ty.clone(),
+                        &s.dims[..],
+                        VectorTransform {
+                            lsb_translation: s.lsb.into(),
+                            reversed: s.bit_reversed,
+                        },
+                        s.net.probe(mctx.gl(), builder),
+                    ),
+                };
 
-                            let Some((idx, idx_ty)) = result_stack.pop().unwrap() else {
-                                result_stack.truncate(end_result_stack_len);
-                                result_stack.push(None);
-                                continue 'dispatch_loop;
-                            };
+                struct LowerExprPartSelect<'a, 'b> {
+                    builder: &'b mut BasicBlockBuilder,
+                    result_stack: &'b [Option<(VariableKey, VType)>],
+                    expr: AstId<'a, Expr<'a>>,
+                    scope: SymbolId,
+                    ctx: &'b LowerContext<'a, 'b>,
+                    mctx: &'b mut MutLowerContext,
+                }
 
-                            dims = &dims[..dims.len() - 1];
-                            let mut leaf_arr_items = dims.iter().map(|d| d.get()).product::<u32>();
-                            let idx = truncate_or_extend(
-                                &mut mctx.gl,
-                                builder,
-                                idx,
-                                idx_ty,
-                                INTEGER_VSIZE,
-                            );
-                            let mut offset = builder.multiply_constant(
-                                &mut mctx.gl,
-                                idx,
-                                Bits::new_u32(leaf_arr_items),
-                            );
+                impl<'a, 'b> AddressingContext for LowerExprPartSelect<'a, 'b> {
+                    type ConstantExpr = AstId<'a, ConstantExpr<'a>>;
+                    type Expr = usize;
+                    type Var = VariableKey;
+                    type Bool = VariableKey;
 
-                            while let Some(dim) = dims.last()
-                                && exprs.pop_front().is_some()
-                            {
-                                let Some((expr, expr_ty)) = result_stack.pop().unwrap() else {
-                                    result_stack.truncate(end_result_stack_len);
-                                    result_stack.push(None);
-                                    continue 'dispatch_loop;
-                                };
+                    type Error = ();
 
-                                leaf_arr_items /= *dim;
-                                let expr = truncate_or_extend(
-                                    mctx.gl(),
-                                    builder,
-                                    expr,
-                                    expr_ty,
-                                    INTEGER_VSIZE,
-                                );
-                                let expr = builder.multiply_constant(
-                                    mctx.gl(),
-                                    expr,
-                                    Bits::new_u32(leaf_arr_items),
-                                );
-                                offset = builder.plus(mctx.gl(), offset, expr);
-                                dims = &dims[..dims.len() - 1];
-                            }
+                    fn too_many_selects(&mut self) -> Self::Error {
+                        let tr = self.ctx.arenas.get_span(self.expr);
+                        self.mctx.diagnostics.not_yet_implemented(
+                            tr,
+                            "cannot select from array or too many selects",
+                        );
+                    }
 
-                            if !dims.is_empty() {
-                                mctx.diagnostics.not_yet_implemented(
-                                    ctx.arenas.get_span(expr),
-                                    "variable array",
-                                );
-                                error = true;
-                                result_stack.truncate(end_result_stack_len);
-                                result_stack.push(None);
-                                continue 'dispatch_loop;
-                            }
+                    fn stride_overflow(&mut self) -> Self::Error {
+                        let tr = self.ctx.arenas.get_span(self.expr);
+                        self.mctx
+                            .diagnostics
+                            .not_yet_implemented(tr, "stride overflow");
+                    }
 
-                            let size = s.ty.force_net_width();
-                            let variable = s.net.probe(mctx.gl(), builder);
-                            let offset = builder.multiply_constant(
-                                mctx.gl(),
-                                offset,
-                                Bits::new_u32(size.get()),
-                            );
-                            let variable = builder.slice(mctx.gl(), variable, offset, size);
+                    fn not_yet_implemented(&mut self, reason: &'static str) -> Self::Error {
+                        let tr = self.ctx.arenas.get_span(self.expr);
+                        self.mctx.diagnostics.not_yet_implemented(tr, reason);
+                    }
 
-                            (s.ty, s.lsb, s.bit_reversed, variable)
-                        } else {
-                            (s.ty, s.lsb, s.bit_reversed, s.net.probe(mctx.gl(), builder))
-                        }
+                    fn eval_constant(
+                        &mut self,
+                        operand: Self::ConstantExpr,
+                    ) -> Result<i64, Self::Error> {
+                        let result = eval_constant_expr(
+                            &self.mctx.gl,
+                            &self.ctx.arenas,
+                            &self.ctx.table,
+                            self.scope,
+                            &mut self.mctx.diagnostics,
+                            operand,
+                            None,
+                        )?;
+                        let Some(result) = result.as_integer() else {
+                            let tr = self.ctx.arenas.get_span(operand);
+                            self.mctx
+                                .diagnostics
+                                .not_yet_implemented(tr, "unable to use as operand");
+                            return Err(());
+                        };
+                        Ok(result)
+                    }
+                    fn eval_var(&mut self, operand: Self::Expr) -> Result<Self::Var, Self::Error> {
+                        let (var, ty) = self.result_stack[operand].unwrap();
+                        let var = truncate_or_extend(
+                            self.mctx.gl(),
+                            self.builder,
+                            var,
+                            ty,
+                            INTEGER_VSIZE,
+                        );
+                        Ok(var)
+                    }
+
+                    fn or_overflow(&mut self, lhs: Self::Bool, rhs: Self::Bool) -> Self::Bool {
+                        self.builder.or(self.mctx.gl(), lhs, rhs)
+                    }
+
+                    fn var_from_i64(&mut self, v: i64) -> Result<Self::Var, Self::Error> {
+                        Ok(self.builder.constant(
+                            self.mctx.gl(),
+                            Bits::new_u64(v as u64).truncate(INTEGER_VSIZE),
+                        ))
+                    }
+
+                    fn var_geq_nonzerou32(
+                        &mut self,
+                        lhs: Self::Var,
+                        rhs: std::num::NonZeroU32,
+                    ) -> Result<Self::Bool, Self::Error> {
+                        let rhs = self
+                            .builder
+                            .constant(self.mctx.gl(), Bits::new_u32(rhs.get()));
+                        Ok(self.builder.unsigned_ge(self.mctx.gl(), lhs, rhs))
+                    }
+
+                    fn var_mul_nonzerou32(
+                        &mut self,
+                        lhs: Self::Var,
+                        rhs: std::num::NonZeroU32,
+                    ) -> Result<Self::Var, Self::Error> {
+                        Ok(self.builder.multiply_constant(
+                            self.mctx.gl(),
+                            lhs,
+                            Bits::new_u32(rhs.get()),
+                        ))
+                    }
+
+                    fn var_add(
+                        &mut self,
+                        lhs: Self::Var,
+                        rhs: Self::Var,
+                    ) -> Result<Self::Var, Self::Error> {
+                        Ok(self.builder.plus(self.mctx.gl(), lhs, rhs))
+                    }
+
+                    fn var_sub_i64(
+                        &mut self,
+                        lhs: Self::Var,
+                        rhs: i64,
+                    ) -> Result<Self::Var, Self::Error> {
+                        Ok(self.builder.minus_constant(
+                            self.mctx.gl(),
+                            lhs,
+                            Bits::new_u64(rhs as u64).truncate(INTEGER_VSIZE),
+                        ))
+                    }
+                    fn var_revsub_u32(
+                        &mut self,
+                        lhs: Self::Var,
+                        rhs: u32,
+                    ) -> Result<Self::Var, Self::Error> {
+                        Ok(self
+                            .builder
+                            .revminus_constant(self.mctx.gl(), lhs, Bits::new_u32(rhs)))
+                    }
+                }
+
+                let range_expr = match range_expression {
+                    None => None,
+                    Some(BitSlice::MsbLsb(msb, lsb)) => Some(RangeExpr::MsbLsb(msb, lsb)),
+                    Some(BitSlice::PlusWidth(_, width)) => {
+                        Some(RangeExpr::PlusWidth(end_result_stack_len, width))
+                    }
+                    Some(BitSlice::MinusWidth(_, width)) => {
+                        Some(RangeExpr::MinusWidth(end_result_stack_len, width))
                     }
                 };
 
-                let net_ty = ty;
-                for _ in 0..exprs.len() {
-                    let Some((expr, expr_ty)) = result_stack.pop().unwrap() else {
-                        result_stack.truncate(end_result_stack_len);
-                        result_stack.push(None);
-                        continue 'dispatch_loop;
-                    };
-                    ty = VType::SCALAR_NET;
-                    let expr =
-                        truncate_or_extend(&mut mctx.gl, builder, expr, expr_ty, INTEGER_VSIZE);
-                    let mut expr = builder.minus_constant(mctx.gl(), expr, Bits::new_u32(net_lsb));
-                    if net_bit_reversed {
-                        expr = builder.revminus_constant(
-                            mctx.gl(),
-                            expr,
-                            Bits::new_u32(net_ty.force_net_width().get().wrapping_sub(1)),
-                        );
-                    }
-                    var = builder.select_bit(&mut mctx.gl, var, expr);
-                }
+                let result = lower_addressing::<LowerExprPartSelect>(
+                    &mut LowerExprPartSelect {
+                        builder,
+                        result_stack: &result_stack,
+                        expr,
+                        scope,
+                        ctx,
+                        mctx,
+                    },
+                    ty.force_net_width(),
+                    dims,
+                    transform,
+                    result_stack.len() - exprs.len()..result_stack.len(),
+                    range_expr,
+                );
 
-                if let Some(slice) = range_expression {
-                    let (lsb, width) = match slice {
-                        BitSlice::MsbLsb(msb, lsb) => {
-                            let Ok((_msb, lsb, width)) = msb_lsb_to_width(
-                                &mctx.gl,
-                                &ctx.arenas,
-                                &ctx.table,
-                                scope,
-                                &mut mctx.diagnostics,
-                                msb,
-                                lsb,
-                            ) else {
-                                result_stack.push(None);
-                                continue;
-                            };
-                            let lsb_v = builder.constant_u32(&mut mctx.gl, lsb as u32);
-                            (lsb_v, width)
-                        }
-                        BitSlice::PlusWidth(_, width) => {
-                            let Some((lsb, lsb_ty)) = result_stack.pop().unwrap() else {
-                                result_stack.truncate(end_result_stack_len);
-                                result_stack.push(None);
-                                continue;
-                            };
-                            let Ok(width) = eval_constant_expr(
-                                &mctx.gl,
-                                &ctx.arenas,
-                                &ctx.table,
-                                scope,
-                                &mut mctx.diagnostics,
-                                width,
-                                None,
-                            ) else {
-                                result_stack.push(None);
-                                continue;
-                            };
-                            let width =
-                                VectorSize::new(width.as_integer().unwrap() as u32).unwrap();
-                            let lsb = truncate_or_extend(
-                                &mut mctx.gl,
-                                builder,
-                                lsb,
-                                lsb_ty,
-                                INTEGER_VSIZE,
-                            );
-                            (lsb, width)
-                        }
-                        BitSlice::MinusWidth(_, width) => {
-                            let Some((lsb, lsb_ty)) = result_stack.pop().unwrap() else {
-                                result_stack.truncate(end_result_stack_len);
-                                result_stack.push(None);
-                                continue;
-                            };
+                let Ok(part_select) = result else {
+                    result_stack.truncate(end_result_stack_len);
+                    result_stack.push(None);
+                    error = true;
+                    continue;
+                };
 
-                            let Ok(width) = eval_constant_expr(
-                                &mctx.gl,
-                                &ctx.arenas,
-                                &ctx.table,
-                                scope,
-                                &mut mctx.diagnostics,
-                                width,
-                                None,
-                            ) else {
-                                result_stack.push(None);
-                                continue;
-                            };
-                            let lsb = truncate_or_extend(
-                                &mut mctx.gl,
-                                builder,
-                                lsb,
-                                lsb_ty,
-                                INTEGER_VSIZE,
-                            );
-                            let width = width.as_integer().unwrap() as u32;
-                            let width_v = builder.constant_u32(&mut mctx.gl, width - 1);
-                            let lsb = builder.minus(&mut mctx.gl, lsb, width_v);
-                            (lsb, VectorSize::new(width).unwrap())
+                let Address {
+                    elem_offset,
+                    output_width,
+                    array,
+                } = part_select;
+                result_stack.truncate(end_result_stack_len);
+
+                // @TODO:
+                // 1. We should use the overflow value here.
+                // 2. We should limit our write to `ty.force_net_width()` bits as in
+                //    arrays, this will inherently be wrong.
+
+                let var = if let Some(elem_offset) = elem_offset {
+                    let offset = match array {
+                        None => elem_offset,
+                        Some((array_offset, _array_overflow)) => {
+                            builder.plus(mctx.gl(), array_offset, elem_offset)
                         }
                     };
+                    builder.slice(&mut mctx.gl, var, offset, output_width)
+                } else if let Some((array_offset, _array_overflow)) = array {
+                    builder.slice(&mut mctx.gl, var, array_offset, output_width)
+                } else {
+                    builder.truncate(&mut mctx.gl, var, output_width)
+                };
 
-                    ty = VType::UnsignedNet(width);
-                    if net_bit_reversed {
-                        error = true;
-                        result_stack.push(None);
-                        mctx.diagnostics.not_yet_implemented(
-                            ctx.arenas.get_span(item.expr),
-                            "Reverse bit part-selects",
-                        );
-                        continue;
-                    }
-
-                    let lsb = builder.minus_constant(mctx.gl(), lsb, Bits::new_u32(net_lsb));
-                    var = builder.slice(&mut mctx.gl, var, lsb, width as VectorSize);
-                }
-
-                result_stack.push(Some((var, ty)));
+                let output_ty =
+                    if exprs.len() + usize::from(range_expression.is_some()) > dims.len() {
+                        VType::UnsignedNet(output_width)
+                    } else {
+                        ty
+                    };
+                result_stack.push(Some((var, output_ty)));
             }
             Expr::FunctionCall(ident, exprs) => {
                 if !item.dispatched {

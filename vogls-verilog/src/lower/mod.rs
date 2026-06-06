@@ -8,6 +8,7 @@ mod statement;
 pub mod udp;
 mod vtype;
 mod vvalue;
+mod addressing;
 
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

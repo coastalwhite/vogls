@@ -1,10 +1,14 @@
+use std::num::NonZeroU32;
+
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{BasicBlockBuilder, Bits, INTEGER_VSIZE, SCALAR_VSIZE, VariableKey, VectorSize};
 
-use crate::ast::constant_expr::ConstantRangeExpression;
+use crate::ast::constant_expr::{ConstantExpr, ConstantRangeExpression};
+use crate::ast::expr::{BitSlice, Expr};
 use crate::ast::statement::{NetLValue, NetLValueFlat, VariableLValue, VariableLValueFlat};
 use crate::ast::{AstId, RangeExpression};
 use crate::elaborate::VSymbol;
+use crate::lower::addressing::{AddressingContext, RangeExpr, VectorTransform, lower_addressing};
 use crate::lower::expression::eval_constant_expr;
 use crate::lower::expression::{self, lower_expr, sign_or_zero_extend, truncate_or_extend};
 use crate::lower::{msb_lsb_to_width, try_resolve_hident};
@@ -190,13 +194,156 @@ pub fn assign_variable_lvalue_flat<'a>(
         &mut mctx.diagnostics,
     )?;
 
-    let mut exprs = *exprs;
-    let (ty, dims) = match &ctx.table[symbol_key].content {
-        VSymbol::Parameter(v) => (v.ty(), [].into()),
-        VSymbol::Net(s) => (s.ty.clone(), s.dims.clone()),
-        v => panic!("{v:?}"),
+    let (ty, array_dims, transform) = match &ctx.table[symbol_key].content {
+        VSymbol::Parameter(v) => (
+            v.ty(),
+            &[] as &[NonZeroU32],
+            VectorTransform {
+                reversed: false,
+                lsb_translation: 0,
+            },
+        ),
+        VSymbol::Net(s) => (
+            s.ty.clone(),
+            s.dims.as_slice(),
+            VectorTransform {
+                reversed: s.bit_reversed,
+                lsb_translation: s.lsb.into(),
+            },
+        ),
+        v => todo!("lvalue assign: {v:?}"),
     };
-    let mut dims = &dims[..];
+
+    struct LValueAddressingContext<'a, 'b> {
+        ctx: &'b LowerContext<'a, 'b>,
+        mctx: &'b mut MutLowerContext,
+        expr: AstId<'a, VariableLValueFlat<'a>>,
+        scope: SymbolId,
+    }
+
+    // @TODO: This is needed because LValue uses RangeExpression instead of BitSlice. I think we
+    // should refactor LValue to use BitSlice instead.
+    enum Constant<'a> {
+        Expr(AstId<'a, ConstantExpr<'a>>),
+        Value(i64),
+    }
+
+    impl<'a, 'b> AddressingContext for LValueAddressingContext<'a, 'b> {
+        type ConstantExpr = Constant<'a>;
+        type Expr = AstId<'a, Expr<'a>>;
+        type Var = VariableKey;
+        type Bool = VariableKey;
+
+        type Error = ();
+
+        fn too_many_selects(&mut self) -> Self::Error {
+            todo!()
+        }
+
+        fn stride_overflow(&mut self) -> Self::Error {
+            todo!()
+        }
+
+        fn not_yet_implemented(&mut self, reason: &'static str) -> Self::Error {
+            todo!()
+        }
+
+        fn eval_constant(&mut self, operand: Self::ConstantExpr) -> Result<i64, Self::Error> {
+            match operand {
+                Constant::Expr(operand) => {
+                    let value = eval_constant_expr(
+                        &self.mctx.gl,
+                        &self.ctx.arenas,
+                        &self.ctx.table,
+                        self.scope,
+                        &mut self.mctx.diagnostics,
+                        operand,
+                        None,
+                    )?;
+                    value.as_integer().ok_or_else(|| {
+                        self.mctx.diagnostics.not_yet_implemented(
+                            self.ctx.arenas.get_span(operand),
+                            "cannot convert to index",
+                        )
+                    })
+                }
+                Constant::Value(v) => Ok(v),
+            }
+        }
+
+        fn eval_var(&mut self, operand: Self::Expr) -> Result<Self::Var, Self::Error> {
+            todo!()
+        }
+
+        fn or_overflow(&mut self, lhs: Self::Bool, rhs: Self::Bool) -> Self::Bool {
+            todo!()
+        }
+
+        fn var_from_i64(&mut self, v: i64) -> Result<Self::Var, Self::Error> {
+            todo!()
+        }
+
+        fn var_geq_nonzerou32(
+            &mut self,
+            lhs: Self::Var,
+            rhs: NonZeroU32,
+        ) -> Result<Self::Bool, Self::Error> {
+            todo!()
+        }
+
+        fn var_mul_nonzerou32(
+            &mut self,
+            lhs: Self::Var,
+            rhs: NonZeroU32,
+        ) -> Result<Self::Var, Self::Error> {
+            todo!()
+        }
+
+        fn var_add(&mut self, lhs: Self::Var, rhs: Self::Var) -> Result<Self::Var, Self::Error> {
+            todo!()
+        }
+
+        fn var_sub_i64(&mut self, lhs: Self::Var, rhs: i64) -> Result<Self::Var, Self::Error> {
+            todo!()
+        }
+
+        fn var_revsub_u32(&mut self, lhs: Self::Var, rhs: u32) -> Result<Self::Var, Self::Error> {
+            todo!()
+        }
+    }
+
+    let mut actx = LValueAddressingContext {
+        ctx,
+        mctx,
+        expr: ast_lvalue,
+        scope,
+    };
+
+    let range_expr = match range_expression {
+        None => None,
+        Some(r) => Some(match &**r {
+            RangeExpression::Expr(offset) => RangeExpr::PlusWidth(*offset, Constant::Value(1)),
+            RangeExpression::MsbLsb(msb_expr, lsb_expr) => {
+                RangeExpr::MsbLsb(Constant::Expr(*msb_expr), Constant::Expr(*lsb_expr))
+            }
+            RangeExpression::BasePlus(offset, width) => {
+                RangeExpr::PlusWidth(*offset, Constant::Expr(*width))
+            }
+            RangeExpression::BaseMinus(offset, width) => {
+                RangeExpr::MinusWidth(*offset, Constant::Expr(*width))
+            }
+        }),
+    };
+
+    lower_addressing(
+        &mut actx,
+        ty.force_net_width(),
+        array_dims,
+        transform,
+        exprs.iter(),
+        range_expr,
+    );
+    let mut dims = &array_dims[..];
     let mut arr_idx = if !dims.is_empty()
         && let Some(fst) = exprs.pop_front()
     {
