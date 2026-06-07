@@ -4,9 +4,22 @@
 //! different bugs from popping up at all these sites and generaled the logic over some simpler
 //! operations.
 
+use std::marker::PhantomData;
 use std::num::NonZeroU32;
 
-use vogls_ir::{SCALAR_VSIZE, VectorSize};
+use vogls_frontend::symbol_table::SymbolId;
+use vogls_ir::{
+    BasicBlockBuilder, Bits, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE, VariableKey, VectorSize,
+};
+
+use crate::ast::AstId;
+use crate::ast::constant_expr::{ConstantBitSlice, ConstantExpr};
+use crate::ast::expr::{BitSlice, BitSliceKind, Expr};
+use crate::elaborate::{VSymbolTable, VectorTransform};
+use crate::parser::AstArenas;
+
+use super::expression::{lower_expr, truncate_or_extend};
+use super::{Diagnostics, LowerContext, MutLowerContext, eval_constant_expr};
 
 pub enum RangeExpr<C: AddressingContext> {
     MsbLsb(C::ConstantExpr, C::ConstantExpr),
@@ -18,11 +31,7 @@ pub struct Address<C: AddressingContext> {
     pub elem_offset: Option<C::Var>,
     pub output_width: VectorSize,
     pub array: Option<(C::Var, C::Bool)>,
-}
-
-pub struct VectorTransform {
-    pub reversed: bool,
-    pub lsb_translation: i64,
+    pub is_unsigned: bool,
 }
 
 pub trait AddressingContext {
@@ -73,6 +82,7 @@ pub fn lower_addressing<C: AddressingContext>(
             elem_offset: None,
             output_width: elem_width,
             array: None,
+            is_unsigned: false,
         });
     }
 
@@ -113,10 +123,10 @@ pub fn lower_addressing<C: AddressingContext>(
     // Bit-select path.
     if let Some(bit_select) = indices.next() {
         let mut elem_offset = C::eval_var(ctx, bit_select)?;
-        if transform.lsb_translation != 0 {
-            elem_offset = C::var_sub_i64(ctx, elem_offset, transform.lsb_translation)?;
+        if transform.lsb != 0 {
+            elem_offset = C::var_sub_i64(ctx, elem_offset, transform.lsb)?;
         }
-        if transform.reversed {
+        if transform.bit_reversed {
             elem_offset = C::var_revsub_u32(ctx, elem_offset, elem_width.get() - 1)?;
         }
 
@@ -124,6 +134,7 @@ pub fn lower_addressing<C: AddressingContext>(
             elem_offset: Some(elem_offset),
             output_width: SCALAR_VSIZE,
             array,
+            is_unsigned: true,
         });
     }
 
@@ -133,11 +144,12 @@ pub fn lower_addressing<C: AddressingContext>(
             elem_offset: None,
             output_width: elem_width,
             array,
+            is_unsigned: true,
         });
     };
 
     // Part-select path.
-    if transform.reversed {
+    if transform.bit_reversed {
         // @TODO
         return Err(C::not_yet_implemented(ctx, "reverse bit range expression"));
     }
@@ -168,15 +180,364 @@ pub fn lower_addressing<C: AddressingContext>(
             (range_lsb, range_width)
         }
     };
-    if transform.lsb_translation != 0 {
-        range_lsb = C::var_sub_i64(ctx, range_lsb, transform.lsb_translation)?;
+    if transform.lsb != 0 {
+        range_lsb = C::var_sub_i64(ctx, range_lsb, transform.lsb)?;
     }
 
     Ok(Address {
         elem_offset: Some(range_lsb),
         output_width: range_width,
         array,
+        is_unsigned: true,
     })
+}
+
+pub struct AddressingConstantExprWidthContext<'a, 'b> {
+    pub gl: &'b GlobalContext,
+    pub arenas: &'b AstArenas,
+    pub table: &'b VSymbolTable,
+    pub scope: SymbolId,
+    pub diagnostics: &'b mut Diagnostics,
+    pub loc: usize,
+    pub _pd: PhantomData<&'a ()>,
+}
+
+impl<'a, 'b> AddressingContext for AddressingConstantExprWidthContext<'a, 'b> {
+    type ConstantExpr = AstId<'a, ConstantExpr<'a>>;
+
+    type Expr = ();
+    type Var = ();
+    type Bool = ();
+    type Error = ();
+
+    fn too_many_selects(&mut self) -> Self::Error {
+        let tr = self.arenas.spans[self.loc];
+        self.diagnostics
+            .not_yet_implemented(tr, "cannot select from array or too many selects");
+    }
+    fn stride_overflow(&mut self) -> Self::Error {
+        let tr = self.arenas.spans[self.loc];
+        self.diagnostics.not_yet_implemented(tr, "stride overflow");
+    }
+    fn not_yet_implemented(&mut self, reason: &'static str) -> Self::Error {
+        let tr = self.arenas.spans[self.loc];
+        self.diagnostics.not_yet_implemented(tr, reason);
+    }
+
+    fn eval_constant(&mut self, operand: Self::ConstantExpr) -> Result<i64, Self::Error> {
+        let result = eval_constant_expr(
+            self.gl,
+            self.arenas,
+            self.table,
+            self.scope,
+            &mut self.diagnostics,
+            operand,
+            None,
+        )?;
+        let Some(result) = result.as_integer() else {
+            let tr = self.arenas.get_span(operand);
+            self.diagnostics
+                .not_yet_implemented(tr, "unable to use as operand");
+            return Err(());
+        };
+        Ok(result)
+    }
+
+    #[inline(always)]
+    fn eval_var(&mut self, _operand: Self::Expr) -> Result<Self::Var, Self::Error> {
+        Ok(())
+    }
+    #[inline(always)]
+    fn or_overflow(&mut self, _lhs: Self::Bool, _rhs: Self::Bool) -> Self::Bool {
+        ()
+    }
+    #[inline(always)]
+    fn var_from_i64(&mut self, _v: i64) -> Result<Self::Var, Self::Error> {
+        Ok(())
+    }
+    #[inline(always)]
+    fn var_geq_nonzerou32(
+        &mut self,
+        _lhs: Self::Var,
+        _rhs: NonZeroU32,
+    ) -> Result<Self::Bool, Self::Error> {
+        Ok(())
+    }
+    #[inline(always)]
+    fn var_mul_nonzerou32(
+        &mut self,
+        _lhs: Self::Var,
+        _rhs: NonZeroU32,
+    ) -> Result<Self::Var, Self::Error> {
+        Ok(())
+    }
+    #[inline(always)]
+    fn var_add(&mut self, _lhs: Self::Var, _rhs: Self::Var) -> Result<Self::Var, Self::Error> {
+        Ok(())
+    }
+    #[inline(always)]
+    fn var_sub_i64(&mut self, _lhs: Self::Var, _rhs: i64) -> Result<Self::Var, Self::Error> {
+        Ok(())
+    }
+    #[inline(always)]
+    fn var_revsub_u32(&mut self, _lhs: Self::Var, _rhs: u32) -> Result<Self::Var, Self::Error> {
+        Ok(())
+    }
+}
+
+pub struct LValueAddressingContext<'a, 'b> {
+    pub ctx: &'b LowerContext<'a, 'b>,
+    pub mctx: &'b mut MutLowerContext,
+    pub builder: &'b mut BasicBlockBuilder,
+    pub loc: usize,
+    pub scope: SymbolId,
+}
+
+impl<'a, 'b> From<BitSlice<'a>> for RangeExpr<LValueAddressingContext<'a, 'b>> {
+    fn from(value: BitSlice<'a>) -> Self {
+        match value {
+            BitSlice::MsbLsb(msb_expr, lsb_expr) => RangeExpr::MsbLsb(msb_expr, lsb_expr),
+            BitSlice::PlusWidth(offset, width) => RangeExpr::PlusWidth(offset, width),
+            BitSlice::MinusWidth(offset, width) => RangeExpr::MinusWidth(offset, width),
+        }
+    }
+}
+
+impl<'a, 'b> AddressingContext for LValueAddressingContext<'a, 'b> {
+    type ConstantExpr = AstId<'a, ConstantExpr<'a>>;
+    type Expr = AstId<'a, Expr<'a>>;
+    type Var = VariableKey;
+    type Bool = VariableKey;
+
+    type Error = ();
+
+    fn too_many_selects(&mut self) -> Self::Error {
+        let tr = self.ctx.arenas.spans[self.loc];
+        self.mctx
+            .diagnostics
+            .not_yet_implemented(tr, "cannot select from array or too many selects");
+    }
+
+    fn stride_overflow(&mut self) -> Self::Error {
+        let tr = self.ctx.arenas.spans[self.loc];
+        self.mctx
+            .diagnostics
+            .not_yet_implemented(tr, "stride overflow");
+    }
+
+    fn not_yet_implemented(&mut self, reason: &'static str) -> Self::Error {
+        let tr = self.ctx.arenas.spans[self.loc];
+        self.mctx.diagnostics.not_yet_implemented(tr, reason);
+    }
+
+    fn eval_constant(&mut self, operand: Self::ConstantExpr) -> Result<i64, Self::Error> {
+        let value = eval_constant_expr(
+            &self.mctx.gl,
+            &self.ctx.arenas,
+            &self.ctx.table,
+            self.scope,
+            &mut self.mctx.diagnostics,
+            operand,
+            None,
+        )?;
+        value.as_integer().ok_or_else(|| {
+            self.mctx
+                .diagnostics
+                .not_yet_implemented(self.ctx.arenas.get_span(operand), "cannot convert to index")
+        })
+    }
+
+    fn eval_var(&mut self, operand: Self::Expr) -> Result<Self::Var, Self::Error> {
+        let (var, ty) = lower_expr(self.ctx, self.mctx, self.scope, self.builder, operand, None)?;
+        let var = truncate_or_extend(self.mctx.gl(), self.builder, var, ty, INTEGER_VSIZE);
+        Ok(var)
+    }
+
+    fn or_overflow(&mut self, lhs: Self::Bool, rhs: Self::Bool) -> Self::Bool {
+        self.builder.or(self.mctx.gl(), lhs, rhs)
+    }
+
+    fn var_from_i64(&mut self, v: i64) -> Result<Self::Var, Self::Error> {
+        Ok(self.builder.constant(
+            self.mctx.gl(),
+            Bits::new_u64(v as u64).truncate(INTEGER_VSIZE),
+        ))
+    }
+
+    fn var_geq_nonzerou32(
+        &mut self,
+        lhs: Self::Var,
+        rhs: std::num::NonZeroU32,
+    ) -> Result<Self::Bool, Self::Error> {
+        let rhs = self
+            .builder
+            .constant(self.mctx.gl(), Bits::new_u32(rhs.get()));
+        Ok(self.builder.unsigned_ge(self.mctx.gl(), lhs, rhs))
+    }
+
+    fn var_mul_nonzerou32(
+        &mut self,
+        lhs: Self::Var,
+        rhs: std::num::NonZeroU32,
+    ) -> Result<Self::Var, Self::Error> {
+        Ok(self
+            .builder
+            .multiply_constant(self.mctx.gl(), lhs, Bits::new_u32(rhs.get())))
+    }
+
+    fn var_add(&mut self, lhs: Self::Var, rhs: Self::Var) -> Result<Self::Var, Self::Error> {
+        Ok(self.builder.plus(self.mctx.gl(), lhs, rhs))
+    }
+
+    fn var_sub_i64(&mut self, lhs: Self::Var, rhs: i64) -> Result<Self::Var, Self::Error> {
+        Ok(self.builder.minus_constant(
+            self.mctx.gl(),
+            lhs,
+            Bits::new_u64(rhs as u64).truncate(INTEGER_VSIZE),
+        ))
+    }
+    fn var_revsub_u32(&mut self, lhs: Self::Var, rhs: u32) -> Result<Self::Var, Self::Error> {
+        Ok(self
+            .builder
+            .revminus_constant(self.mctx.gl(), lhs, Bits::new_u32(rhs)))
+    }
+}
+
+pub struct ConstantAddressingContext<'a, 'b> {
+    pub gl: &'b GlobalContext,
+    pub arenas: &'b AstArenas,
+    pub table: &'b VSymbolTable,
+    pub scope: SymbolId,
+    pub diagnostics: &'b mut Diagnostics,
+    pub loc: usize,
+    pub _pd: PhantomData<&'a ()>,
+}
+
+impl<'a, 'b> From<BitSlice<'a>> for RangeExpr<ConstantAddressingContext<'a, 'b>> {
+    fn from(value: BitSlice<'a>) -> Self {
+        match value {
+            BitSlice::MsbLsb(msb_expr, lsb_expr) => RangeExpr::MsbLsb(msb_expr, lsb_expr),
+            BitSlice::PlusWidth(offset, width) => {
+                RangeExpr::PlusWidth(offset.into_constant(), width)
+            }
+            BitSlice::MinusWidth(offset, width) => {
+                RangeExpr::MinusWidth(offset.into_constant(), width)
+            }
+        }
+    }
+}
+
+impl<'a, 'b> From<ConstantBitSlice<'a>> for RangeExpr<ConstantAddressingContext<'a, 'b>> {
+    fn from(value: ConstantBitSlice<'a>) -> Self {
+        match value.kind {
+            BitSliceKind::MsbLsb => RangeExpr::MsbLsb(value.fst, value.snd),
+            BitSliceKind::PlusWidth => RangeExpr::PlusWidth(value.fst, value.snd),
+            BitSliceKind::MinusWidth => RangeExpr::MinusWidth(value.fst, value.snd),
+        }
+    }
+}
+
+impl<'a, 'b> Address<ConstantAddressingContext<'a, 'b>> {
+    pub fn signal_offset_as_u32(&self) -> Option<u32> {
+        let offset = match (self.elem_offset, self.array) {
+            (Some(elem_offset), Some((array_offset, _array_overflow))) => {
+                elem_offset.checked_add(array_offset)?
+            }
+            (Some(elem_offset), None) => elem_offset,
+            (None, Some((array_offset, _array_overflow))) => array_offset,
+            (None, None) => 0,
+        };
+        u32::try_from(offset).ok()
+    }
+}
+
+impl<'a, 'b> AddressingContext for ConstantAddressingContext<'a, 'b> {
+    type ConstantExpr = AstId<'a, ConstantExpr<'a>>;
+    type Expr = AstId<'a, ConstantExpr<'a>>;
+    type Var = i64;
+    type Bool = bool;
+
+    type Error = ();
+
+    fn too_many_selects(&mut self) -> Self::Error {
+        let tr = self.arenas.spans[self.loc];
+        self.diagnostics
+            .not_yet_implemented(tr, "cannot select from array or too many selects");
+    }
+
+    fn stride_overflow(&mut self) -> Self::Error {
+        let tr = self.arenas.spans[self.loc];
+        self.diagnostics.not_yet_implemented(tr, "stride overflow");
+    }
+
+    fn not_yet_implemented(&mut self, reason: &'static str) -> Self::Error {
+        let tr = self.arenas.spans[self.loc];
+        self.diagnostics.not_yet_implemented(tr, reason);
+    }
+
+    fn eval_constant(&mut self, operand: Self::ConstantExpr) -> Result<i64, Self::Error> {
+        let value = eval_constant_expr(
+            &self.gl,
+            &self.arenas,
+            &self.table,
+            self.scope,
+            &mut self.diagnostics,
+            operand,
+            None,
+        )?;
+        value.as_integer().ok_or_else(|| {
+            self.diagnostics
+                .not_yet_implemented(self.arenas.get_span(operand), "cannot convert to index")
+        })
+    }
+
+    fn eval_var(&mut self, operand: Self::Expr) -> Result<Self::Var, Self::Error> {
+        let value = eval_constant_expr(
+            &self.gl,
+            &self.arenas,
+            &self.table,
+            self.scope,
+            &mut self.diagnostics,
+            operand,
+            None,
+        )?;
+        value.as_integer().ok_or_else(|| {
+            self.diagnostics
+                .not_yet_implemented(self.arenas.get_span(operand), "cannot convert to index")
+        })
+    }
+
+    fn or_overflow(&mut self, lhs: Self::Bool, rhs: Self::Bool) -> Self::Bool {
+        lhs | rhs
+    }
+    fn var_from_i64(&mut self, v: i64) -> Result<Self::Var, Self::Error> {
+        Ok(v)
+    }
+    fn var_geq_nonzerou32(
+        &mut self,
+        lhs: Self::Var,
+        rhs: std::num::NonZeroU32,
+    ) -> Result<Self::Bool, Self::Error> {
+        Ok(lhs >= i64::from(rhs.get()))
+    }
+    fn var_mul_nonzerou32(
+        &mut self,
+        lhs: Self::Var,
+        rhs: std::num::NonZeroU32,
+    ) -> Result<Self::Var, Self::Error> {
+        lhs.checked_mul(i64::from(rhs.get())).ok_or(())
+    }
+
+    fn var_add(&mut self, lhs: Self::Var, rhs: Self::Var) -> Result<Self::Var, Self::Error> {
+        lhs.checked_add(rhs).ok_or(())
+    }
+
+    fn var_sub_i64(&mut self, lhs: Self::Var, rhs: i64) -> Result<Self::Var, Self::Error> {
+        lhs.checked_sub(rhs).ok_or(())
+    }
+    fn var_revsub_u32(&mut self, lhs: Self::Var, rhs: u32) -> Result<Self::Var, Self::Error> {
+        i64::from(rhs).checked_sub(lhs).ok_or(())
+    }
 }
 
 #[cfg(test)]
@@ -264,8 +625,7 @@ fn test() {
         ) => {
             let msb: i64 = $msb;
             let lsb: i64 = $lsb;
-            let reversed = msb < lsb;
-            let lsb_translation = if reversed { msb } else { lsb };
+            let transform = VectorTransform::from_msb_lsb(msb, lsb).unwrap();
             let width = VectorSize::new(u32::try_from(msb.abs_diff(lsb)).unwrap() + 1).unwrap();
             let dims = [$(NonZeroU32::new($arr_length).unwrap()),*];
 
@@ -274,10 +634,7 @@ fn test() {
                 &mut PartSelectI64,
                 width,
                 &dims,
-                VectorTransform {
-                    reversed,
-                    lsb_translation,
-                },
+                transform,
                 [$($idx),*].into_iter(),
                 test_case!(@range
                     $( ; $tc_msb ; $tc_lsb)?

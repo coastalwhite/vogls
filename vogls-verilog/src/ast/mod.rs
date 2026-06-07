@@ -6,7 +6,6 @@ use vogls_ir::Bits;
 use crate::number::{Base, Sign};
 
 use self::constant_expr::ConstantExpr;
-use self::expr::Expr;
 
 pub mod constant_expr;
 pub mod expr;
@@ -224,24 +223,6 @@ pub struct AttributeInstance<'a>(pub AstIdRange<'a, AttrSpec<'a>>);
 pub struct AttrSpec<'a> {
     pub attr_name: AstItem<Identifier>,
     pub constant_expression: Option<AstId<'a, ConstantExpr<'a>>>,
-}
-
-// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 505
-// range_expression ::=
-//   expression
-// | msb_constant_expression : lsb_constant_expression
-// | base_expression +: width_constant_expression
-// | base_expression -: width_constant_expression
-// base_expression ::= expression
-// width_constant_expression ::= constant_expression
-// msb_constant_expression ::= constant_expression
-// lsb_constant_expression ::= constant_expression
-#[derive(Clone, Copy)]
-pub enum RangeExpression<'a> {
-    Expr(AstId<'a, Expr<'a>>),
-    MsbLsb(AstId<'a, ConstantExpr<'a>>, AstId<'a, ConstantExpr<'a>>),
-    BasePlus(AstId<'a, Expr<'a>>, AstId<'a, ConstantExpr<'a>>),
-    BaseMinus(AstId<'a, Expr<'a>>, AstId<'a, ConstantExpr<'a>>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -37,7 +37,7 @@ use crate::lower::{
 };
 
 use super::{
-    ModuleSymbol, Net, NetSymbol, VSymbol, VSymbolTable, evaluate_net_msb_lsb,
+    ModuleSymbol, Net, NetSymbol, VSymbol, VSymbolTable, VectorTransform, evaluate_net_msb_lsb,
     port_declaration_to_info, try_table_insert,
 };
 
@@ -680,8 +680,7 @@ fn elaborate_module<'a, 'b>(
                             ty: VType::SCALAR_NET,
                             dims: Vec::new(),
                             net: st.dummy_net(),
-                            lsb: 0,
-                            bit_reversed: false,
+                            transform: VectorTransform::default(),
                             port_idx: Some(port_idx),
                         };
                         let symbol = VSymbol::Net(symbol);
@@ -720,8 +719,7 @@ fn elaborate_module<'a, 'b>(
                         ty: VType::SCALAR_NET,
                         dims: Vec::new(),
                         net: st.dummy_net(),
-                        lsb: 0,
-                        bit_reversed: false,
+                        transform: VectorTransform::default(),
                         port_idx: Some(port_idx),
                     };
                     let symbol = VSymbol::Net(symbol);
@@ -887,8 +885,7 @@ fn extend_module_or_generate_item_sids<'a, 'b>(
                                 ty: VType::SCALAR_NET,
                                 dims: Vec::new(),
                                 net: st.dummy_net(),
-                                lsb: 0,
-                                bit_reversed: false,
+                                transform: VectorTransform::default(),
                                 port_idx: None,
                             };
                             let symbol = VSymbol::Net(symbol);
@@ -933,8 +930,7 @@ fn extend_module_or_generate_item_sids<'a, 'b>(
                                 ty: VType::SCALAR_NET,
                                 dims: Vec::new(),
                                 net: st.dummy_net(),
-                                lsb: 0,
-                                bit_reversed: false,
+                                transform: VectorTransform::default(),
                                 port_idx: None,
                             };
                             let symbol = VSymbol::Net(symbol);
@@ -1357,8 +1353,7 @@ fn extend_variable_type_sids<'a, 'b>(
             ty: VType::SCALAR_NET,
             dims: Vec::new(),
             net: st.dummy_net(),
-            lsb: 0,
-            bit_reversed: false,
+            transform: VectorTransform::default(),
             port_idx: None,
         };
         let symbol = VSymbol::Net(symbol);
@@ -1842,10 +1837,13 @@ pub fn finalize_symbol<'a>(
                 identifier,
                 variant,
             } = &**variable_type;
-            let (ty, lsb, bit_reversed) = match range {
-                None => (VType::net(SCALAR_VSIZE, *signed), 0, false),
+            let (ty, transform) = match range {
+                None => (
+                    VType::net(SCALAR_VSIZE, *signed),
+                    VectorTransform::default(),
+                ),
                 Some(range) => {
-                    let (lsb, bit_reversed, size) = evaluate_net_msb_lsb(
+                    let (transform, size) = evaluate_net_msb_lsb(
                         gl,
                         ctx.arenas,
                         *range,
@@ -1853,7 +1851,7 @@ pub fn finalize_symbol<'a>(
                         &ctx.table,
                         diagnostics,
                     )?;
-                    (VType::net(size, *signed), lsb, bit_reversed)
+                    (VType::net(size, *signed), transform)
                 }
             };
             let parent = ctx.table[sid].parent().unwrap();
@@ -1888,8 +1886,7 @@ pub fn finalize_symbol<'a>(
             let net = unwrap_get_net_mut(&mut ctx.table, sid);
             net.net = super::new_net(gl, &ctx.arenas, &ty, &dims, *identifier, initialize);
             net.dims = dims;
-            net.lsb = lsb;
-            net.bit_reversed = bit_reversed;
+            net.transform = transform;
             net.ty = ty;
         }
         InLevelSymbol::Net(NetInLevelSymbol { decl, dim, ident }) => {
@@ -1900,10 +1897,13 @@ pub fn finalize_symbol<'a>(
                 nets: _,
             } = &**decl;
 
-            let (ty, lsb, bit_reversed) = match range {
-                None => (VType::net(SCALAR_VSIZE, *signed), 0, false),
+            let (ty, transform) = match range {
+                None => (
+                    VType::net(SCALAR_VSIZE, *signed),
+                    VectorTransform::default(),
+                ),
                 Some(range) => {
-                    let (lsb, bit_reversed, size) = evaluate_net_msb_lsb(
+                    let (transform, size) = evaluate_net_msb_lsb(
                         gl,
                         ctx.arenas,
                         *range,
@@ -1911,7 +1911,7 @@ pub fn finalize_symbol<'a>(
                         &ctx.table,
                         diagnostics,
                     )?;
-                    (VType::net(size, *signed), lsb, bit_reversed)
+                    (VType::net(size, *signed), transform)
                 }
             };
             let parent = ctx.table[sid].parent().unwrap();
@@ -1929,8 +1929,7 @@ pub fn finalize_symbol<'a>(
             let net = unwrap_get_net_mut(&mut ctx.table, sid);
             net.net = super::new_net(gl, &ctx.arenas, &ty, &dims, *ident, None);
             net.dims = dims;
-            net.lsb = lsb;
-            net.bit_reversed = bit_reversed;
+            net.transform = transform;
             net.ty = ty;
         }
         InLevelSymbol::Integer(id) => {
@@ -1974,12 +1973,11 @@ pub fn finalize_symbol<'a>(
             net.ty = VType::SignedNet(INTEGER_VSIZE);
         }
         InLevelSymbol::Port(PortInLevelSymbol { decl, ident }) => {
-            let (ty, lsb, bit_reversed, _, _) =
+            let (ty, transform, _, _) =
                 port_declaration_to_info(gl, &ctx.arenas, *decl, scope, &ctx.table, diagnostics)?;
             let net = unwrap_get_net_mut(&mut ctx.table, sid);
             net.net = super::new_net(gl, &ctx.arenas, &ty, &[], *ident, None);
-            net.lsb = lsb;
-            net.bit_reversed = bit_reversed;
+            net.transform = transform;
             net.ty = ty;
         }
         InLevelSymbol::Task(_) => {

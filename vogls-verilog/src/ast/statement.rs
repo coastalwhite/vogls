@@ -1,11 +1,9 @@
 use vogls_frontend::ident_table::IdentId;
 
-use super::constant_expr::{ConstantExpr, ConstantRangeExpression};
-use super::expr::Expr;
+use super::constant_expr::{ConstantBitSlice, ConstantExpr};
+use super::expr::{BitSlice, Expr};
 use super::module::BlockItemDeclaration;
-use super::{
-    AstId, AstIdRange, AstItem, AttributeInstance, DecimalRef, HIdent, Identifier, RangeExpression,
-};
+use super::{AstId, AstIdRange, AstItem, AttributeInstance, DecimalRef, HIdent, Identifier};
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498
 // statement ::=
@@ -65,7 +63,7 @@ pub struct NetLValue<'a>(pub AstIdRange<'a, NetLValueFlat<'a>>);
 pub struct NetLValueFlat<'a> {
     pub ident: HIdent<'a>,
     pub constant_exprs: AstIdRange<'a, ConstantExpr<'a>>,
-    pub constant_range_expression: Option<AstId<'a, ConstantRangeExpression<'a>>>,
+    pub constant_range_expression: Option<AstId<'a, ConstantBitSlice<'a>>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 506
@@ -83,7 +81,7 @@ pub struct VariableLValue<'a>(pub AstIdRange<'a, VariableLValueFlat<'a>>);
 pub struct VariableLValueFlat<'a> {
     pub ident: HIdent<'a>,
     pub exprs: AstIdRange<'a, Expr<'a>>,
-    pub range_expression: Option<AstId<'a, RangeExpression<'a>>>,
+    pub range_expression: Option<AstId<'a, BitSlice<'a>>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 498

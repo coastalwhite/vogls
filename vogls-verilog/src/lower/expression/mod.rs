@@ -9,10 +9,8 @@ use vogls_utils::OrderedSet;
 use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::expr::{BinaryOperator, BitSlice, Expr, Replication, UnaryOperator};
 use crate::ast::{AstId, HIdent};
-use crate::elaborate::VSymbol;
-use crate::lower::addressing::{
-    Address, AddressingContext, RangeExpr, VectorTransform, lower_addressing,
-};
+use crate::elaborate::{VSymbol, VectorTransform};
+use crate::lower::addressing::{Address, AddressingContext, RangeExpr, lower_addressing};
 use crate::lower::{VType, hident_span, try_resolve_hident};
 use crate::number::Sign;
 pub use constant_expr::eval_constant_expr;
@@ -470,10 +468,7 @@ pub fn lower_expr<'a>(
                         (
                             value.ty(),
                             &[] as &[NonZeroU32],
-                            VectorTransform {
-                                lsb_translation: 0,
-                                reversed: false,
-                            },
+                            VectorTransform::default(),
                             builder.constant(mctx.gl(), value.into_bits()),
                         )
                     }
@@ -496,10 +491,7 @@ pub fn lower_expr<'a>(
                     VSymbol::Net(s) => (
                         s.ty.clone(),
                         &s.dims[..],
-                        VectorTransform {
-                            lsb_translation: s.lsb.into(),
-                            reversed: s.bit_reversed,
-                        },
+                        s.transform,
                         s.net.probe(mctx.gl(), builder),
                     ),
                 };
@@ -677,6 +669,7 @@ pub fn lower_expr<'a>(
                     elem_offset,
                     output_width,
                     array,
+                    is_unsigned,
                 } = part_select;
                 result_stack.truncate(end_result_stack_len);
 
@@ -699,12 +692,11 @@ pub fn lower_expr<'a>(
                     builder.truncate(&mut mctx.gl, var, output_width)
                 };
 
-                let output_ty =
-                    if exprs.len() + usize::from(range_expression.is_some()) > dims.len() {
-                        VType::UnsignedNet(output_width)
-                    } else {
-                        ty
-                    };
+                let output_ty = if is_unsigned {
+                    VType::UnsignedNet(output_width)
+                } else {
+                    ty.truncate(output_width)
+                };
                 result_stack.push(Some((var, output_ty)));
             }
             Expr::FunctionCall(ident, exprs) => {

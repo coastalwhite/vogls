@@ -16,6 +16,13 @@ pub enum BitSlice<'a> {
     MinusWidth(AstId<'a, Expr<'a>>, AstId<'a, ConstantExpr<'a>>),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BitSliceKind {
+    MsbLsb,
+    PlusWidth,
+    MinusWidth,
+}
+
 #[derive(Clone, Copy)]
 pub struct Replication<'a> {
     pub constant_expr: AstId<'a, ConstantExpr<'a>>,
@@ -280,6 +287,16 @@ impl<'a> AstId<'a, ModulePathExpr<'a>> {
         AstId {
             node: unsafe { std::mem::transmute(self.node) },
             loc: self.loc,
+        }
+    }
+}
+
+impl<'a> BitSlice<'a> {
+    pub fn kind(&self) -> BitSliceKind {
+        match self {
+            Self::MsbLsb(..) => BitSliceKind::MsbLsb,
+            Self::PlusWidth(..) => BitSliceKind::PlusWidth,
+            Self::MinusWidth(..) => BitSliceKind::MinusWidth,
         }
     }
 }

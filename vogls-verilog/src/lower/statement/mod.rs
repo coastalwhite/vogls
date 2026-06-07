@@ -1,9 +1,11 @@
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{
-    new_process, BasicBlockBuilder, BasicBlockTerminator, ProcessKind, SignalFlags, SignalKey, VectorSize, SCALAR_VSIZE
+    BasicBlockBuilder, BasicBlockTerminator, ProcessKind, SCALAR_VSIZE, SignalFlags, SignalKey,
+    VectorSize, new_process,
 };
 use vogls_utils::OrderedSet;
 
+use crate::ast::expr::BitSlice;
 use crate::ast::statement::{
     BlockingAssignment, CaseItem, CaseItemPattern, CaseStatement, ConditionalStatement,
     DelayControl, DelayOrEventControl, DelayValue, EventControl, EventExpressionPrimary,
@@ -12,7 +14,7 @@ use crate::ast::statement::{
     StatementContent, StatementOrNull, SystemTaskEnable, TaskEnable, VariableAssignment,
     VariableLValue, VariableLValueFlat, WaitStatement,
 };
-use crate::ast::{AstId, AstIdRange, AstItem, RangeExpression};
+use crate::ast::{AstId, AstIdRange, AstItem};
 use crate::lower::expression::function_call::lower_task_enable;
 use crate::lower::expression::{self, lower_expr};
 use crate::lower::{Region, assign, try_resolve_hident};
@@ -521,12 +523,10 @@ pub fn get_variable_lvalue_used_signals<'a>(
         }
         if let Some(range_expression) = range_expression {
             match &**range_expression {
-                RangeExpression::Expr(expr)
-                | RangeExpression::BasePlus(expr, _)
-                | RangeExpression::BaseMinus(expr, _) => {
+                BitSlice::PlusWidth(expr, _) | BitSlice::MinusWidth(expr, _) => {
                     error |= expression::get_used_signals(ctx, mctx, scope, signals, *expr).is_err()
                 }
-                RangeExpression::MsbLsb(_, _) => {}
+                BitSlice::MsbLsb(_, _) => {}
             }
         }
     }

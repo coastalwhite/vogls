@@ -2,13 +2,14 @@ use vogls_frontend::symbol_table::SymbolId;
 use vogls_fuse_signals::{Driver, InputEdge};
 use vogls_ir::{INTEGER_VSIZE, SCALAR_VSIZE, SignalSlice, VectorSize};
 
-use crate::ast::constant_expr::ConstantRangeExpression;
 use crate::ast::expr::{BitSlice, Expr};
 use crate::ast::module::NetAssignment;
 use crate::ast::{AstId, AstIdRange, HIdent};
 use crate::elaborate::VSymbol;
+use crate::lower::addressing::lower_addressing;
 use crate::lower::{hident_span, try_resolve_hident, try_resolve_net};
 
+use super::addressing::ConstantAddressingContext;
 use super::{Diagnostics, LowerContext, MutLowerContext, VType, VValue, eval_constant_expr};
 
 fn try_constant_expr_no_ctx<'a>(
@@ -304,230 +305,40 @@ pub fn try_fuse_assign<'a>(
         lvalue.ident,
         &mut mctx.diagnostics,
     )?;
-    let drivee = to_net.net.blocking_drive_signal();
 
-    let single_expression = lvalue.constant_range_expression.and_then(|r| match *r {
-        ConstantRangeExpression::Single(expr) => Some(expr),
-        ConstantRangeExpression::MsbLsb { .. }
-        | ConstantRangeExpression::BasePlus { .. }
-        | ConstantRangeExpression::BaseMinus { .. } => None,
-    });
+    let mut actx = ConstantAddressingContext {
+        gl: &mctx.gl,
+        arenas: ctx.arenas,
+        table: &ctx.table,
+        scope,
+        diagnostics: &mut Diagnostics::default(),
+        loc: lvalue.loc,
+        _pd: std::marker::PhantomData,
+    };
 
-    if lvalue.constant_exprs.len() + usize::from(single_expression.is_some()) < to_net.dims.len() {
-        mctx.diagnostics
-            .not_yet_implemented(ctx.arenas.get_span(lvalue), "cannot assign array");
-        return Err(());
-    }
-
-    let drivee_ty_size = to_net.ty.force_net_width();
-
-    // Handle array indexing.
-    let mut offset = 0;
-    let mut current_size = drivee_ty_size;
-    for (expr, &dim) in (single_expression
-        .iter()
-        .copied()
-        .chain(lvalue.constant_exprs.iter().rev()))
-    .zip(to_net.dims.iter())
-    {
-        let idx = eval_constant_expr(
-            &mctx.gl,
-            &ctx.arenas,
-            &ctx.table,
-            scope,
-            &mut mctx.diagnostics,
-            expr,
-            None,
-        )?;
-        let idx = idx.truncate_or_extend(INTEGER_VSIZE);
-        let Some(idx) = idx.into_bits().extract_exact_u32() else {
-            return Ok(false);
-        };
-
-        if idx >= dim.get() {
-            mctx.diagnostics
-                .warnings
-                .push((ctx.arenas.get_span(expr), "index out of range".into()));
-            return Ok(false);
-        }
-
-        // @TODO: Checked arithmetic
-        offset += current_size.get() * idx;
-        current_size = current_size.checked_mul(dim).unwrap();
-    }
-
-    // Handle bit indexing indexing.
-    let mut drivee_output_width = drivee_ty_size;
-    for expr in lvalue
-        .constant_exprs
-        .truncate(
-            lvalue.constant_exprs.len() + usize::from(single_expression.is_some())
-                - to_net.dims.len(),
-        )
-        .iter()
-        .rev()
-    {
-        let idx = eval_constant_expr(
-            &mctx.gl,
-            &ctx.arenas,
-            &ctx.table,
-            scope,
-            &mut mctx.diagnostics,
-            expr,
-            None,
-        )?;
-        let idx = idx.truncate_or_extend(INTEGER_VSIZE);
-        let Some(idx) = idx.into_bits().extract_exact_u32() else {
-            return Ok(false);
-        };
-
-        if idx >= drivee_ty_size.get() {
-            mctx.diagnostics
-                .warnings
-                .push((ctx.arenas.get_span(expr), "index out of range".into()));
-            // @TODO: Handle this better somehow...
-            return Ok(false);
-        }
-
-        offset += idx;
-        drivee_output_width = SCALAR_VSIZE;
-    }
-
-    // Handle range slicing.
-    let Some(mut drivee_output_slice) = SignalSlice::from_width(offset, drivee_output_width) else {
+    let Ok(address) = lower_addressing(
+        &mut actx,
+        to_net.ty.force_net_width(),
+        &to_net.dims,
+        to_net.transform,
+        lvalue.constant_exprs.iter(),
+        lvalue.constant_range_expression.map(|r| (*r).into()),
+    ) else {
         return Ok(false);
     };
-    if let Some(range_expr) = &lvalue.constant_range_expression {
-        let slice = match &**range_expr {
-            ConstantRangeExpression::Single(expr) => {
-                let idx = eval_constant_expr(
-                    &mctx.gl,
-                    &ctx.arenas,
-                    &ctx.table,
-                    scope,
-                    &mut mctx.diagnostics,
-                    *expr,
-                    None,
-                )?;
-                let idx = idx.truncate_or_extend(INTEGER_VSIZE);
-                let Some(idx) = idx.into_bits().extract_exact_u32() else {
-                    return Ok(false);
-                };
 
-                // @TODO: Remove unwrap
-                SignalSlice::from_width(idx, SCALAR_VSIZE).unwrap()
-            }
-            ConstantRangeExpression::MsbLsb { msb, lsb } => {
-                let msb = eval_constant_expr(
-                    &mctx.gl,
-                    &ctx.arenas,
-                    &ctx.table,
-                    scope,
-                    &mut mctx.diagnostics,
-                    *msb,
-                    None,
-                )?;
-                let lsb = eval_constant_expr(
-                    &mctx.gl,
-                    &ctx.arenas,
-                    &ctx.table,
-                    scope,
-                    &mut mctx.diagnostics,
-                    *lsb,
-                    None,
-                )?;
+    let Some(offset) = address.signal_offset_as_u32() else {
+        return Ok(false);
+    };
+    let drivee = to_net.net.blocking_drive_signal();
 
-                let msb = msb.truncate_or_extend(INTEGER_VSIZE);
-                let Some(msb) = msb.into_bits().extract_exact_u32() else {
-                    return Ok(false);
-                };
-                let lsb = lsb.truncate_or_extend(INTEGER_VSIZE);
-                let Some(lsb) = lsb.into_bits().extract_exact_u32() else {
-                    return Ok(false);
-                };
-                SignalSlice::new(msb, lsb).unwrap()
-            }
-            ConstantRangeExpression::BasePlus { base, width } => {
-                let base = eval_constant_expr(
-                    &mctx.gl,
-                    &ctx.arenas,
-                    &ctx.table,
-                    scope,
-                    &mut mctx.diagnostics,
-                    *base,
-                    None,
-                )?;
-                let width = eval_constant_expr(
-                    &mctx.gl,
-                    &ctx.arenas,
-                    &ctx.table,
-                    scope,
-                    &mut mctx.diagnostics,
-                    *width,
-                    None,
-                )?;
-
-                let base = base.truncate_or_extend(INTEGER_VSIZE);
-                let Some(base) = base.into_bits().extract_exact_u32() else {
-                    return Ok(false);
-                };
-                let width = width.truncate_or_extend(INTEGER_VSIZE);
-                let Some(width) = width.into_bits().extract_exact_u32() else {
-                    return Ok(false);
-                };
-                let Some(width) = VectorSize::new(width) else {
-                    return Ok(false);
-                };
-                SignalSlice::from_width(base, width).unwrap()
-            }
-            ConstantRangeExpression::BaseMinus { base, width } => {
-                let base = eval_constant_expr(
-                    &mctx.gl,
-                    &ctx.arenas,
-                    &ctx.table,
-                    scope,
-                    &mut mctx.diagnostics,
-                    *base,
-                    None,
-                )?;
-                let width = eval_constant_expr(
-                    &mctx.gl,
-                    &ctx.arenas,
-                    &ctx.table,
-                    scope,
-                    &mut mctx.diagnostics,
-                    *width,
-                    None,
-                )?;
-
-                let base = base.truncate_or_extend(INTEGER_VSIZE);
-                let Some(base) = base.into_bits().extract_exact_u32() else {
-                    return Ok(false);
-                };
-                let width = width.truncate_or_extend(INTEGER_VSIZE);
-                let Some(width) = width.into_bits().extract_exact_u32() else {
-                    return Ok(false);
-                };
-                let Some(width) = VectorSize::new(width) else {
-                    return Ok(false);
-                };
-                let Some(base) = base.checked_sub(width.get() - 1) else {
-                    return Ok(false);
-                };
-                SignalSlice::from_width(base, width).unwrap()
-            }
-        };
-
-        let Some(relative_slice) = drivee_output_slice.relative_slice(slice) else {
-            return Ok(false);
-        };
-        drivee_output_slice = relative_slice;
-    }
-
-    let mut offset = drivee_output_slice.lsb();
+    // @TODO: sum(driver.size()) > output_width
+    let mut offset = offset;
     for driver in &mctx.fuse_scratch {
         let width = driver.size(&mctx.gl.signals);
-        let Some(width) = VectorSize::new((drivee_ty_size.get() - offset).min(width.get())) else {
+        let Some(width) =
+            VectorSize::new((to_net.ty.force_net_width().get() - offset).min(width.get()))
+        else {
             break;
         };
         mctx.connections.push(InputEdge {

@@ -55,7 +55,15 @@ impl VType {
         }
     }
 
-    pub fn zero_or_sign_extend(self, width: VectorSize) -> VType {
+    pub fn truncate_or_extend(self, width: VectorSize) -> VType {
         Self::net(width, self.is_signed())
+    }
+    pub fn zero_or_sign_extend(self, width: VectorSize) -> VType {
+        assert!(width >= self.force_net_width());
+        self.truncate_or_extend(width)
+    }
+    pub fn truncate(self, width: VectorSize) -> VType {
+        assert!(width <= self.force_net_width());
+        self.truncate_or_extend(width)
     }
 }

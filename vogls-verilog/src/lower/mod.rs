@@ -1,3 +1,4 @@
+mod addressing;
 mod assign;
 mod diagnostics;
 pub mod expression;
@@ -8,7 +9,6 @@ mod statement;
 pub mod udp;
 mod vtype;
 mod vvalue;
-mod addressing;
 
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -393,12 +393,13 @@ use vogls_fuse_signals::{Driver, InputEdge};
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::vcd::{VcdScope, VcdValue, VcdVariable, VcdVariableKey};
 use vogls_ir::{
-    new_process, BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, ProcessKey, ProcessKind, SignalFlags, SignalKey, SignalSlice, VariableKey, VectorSize, SCALAR_VSIZE
+    BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, ProcessKey, ProcessKind,
+    SignalFlags, SignalKey, SignalSlice, VariableKey, VectorSize, new_process,
 };
 use vogls_utils::{IndexMap, OrderedSet, Table, VgHashMap};
 
 use crate::ast::constant_expr::ConstantExpr;
-use crate::ast::expr::{BitSlice, Expr};
+use crate::ast::expr::Expr;
 use crate::ast::module::{
     GenerateRegion, Module, ModuleItem, ModuleOrGenerateItem, ModuleOrGenerateItemContent,
     NonPortModuleItem, Range, TimeScale,
@@ -412,8 +413,11 @@ use crate::elaborate::{
 use crate::parser::AstArenas;
 use crate::tokenizer::Tokenized;
 
+use self::addressing::{
+    Address, ConstantAddressingContext, LValueAddressingContext, lower_addressing,
+};
 pub use self::expression::eval_constant_expr;
-use self::expression::{get_expr_type, get_used_signals, lower_expr, truncate_or_extend};
+use self::expression::{get_expr_type, lower_expr, truncate_or_extend};
 use self::fuse::try_lower_fuse_driver_expr;
 pub use self::vtype::VType;
 pub use self::vvalue::VValue;
@@ -561,37 +565,34 @@ fn assign_port_output<'a>(
         )?;
         let driver = output.net.probe_signal();
         let drivee = to_signal.net.blocking_drive_signal();
-        if exprs.is_empty() && range.is_none() {
+
+        let mut actx = ConstantAddressingContext {
+            gl: &mctx.gl,
+            arenas: ctx.arenas,
+            table: &ctx.table,
+            scope,
+            diagnostics: &mut mctx.diagnostics,
+            loc: expr.loc,
+            _pd: std::marker::PhantomData,
+        };
+
+        let range = range.map(|r| r.into());
+
+        if let Ok(address) = lower_addressing(
+            &mut actx,
+            to_signal.ty.force_net_width(),
+            &to_signal.dims,
+            to_signal.transform,
+            exprs.iter().map(|e| e.into_constant()),
+            range,
+        ) && let Some(offset) = address.signal_offset_as_u32()
+        {
             mctx.connections.push(InputEdge {
                 driver: Driver::Signal(driver, None),
                 drivee,
-                drivee_slice: None,
+                drivee_slice: Some(SignalSlice::from_width(offset, address.output_width).unwrap()),
             });
             return Ok(());
-        }
-
-        if range.is_none()
-            && exprs.len() == 1
-            && let Ok(v) = eval_constant_expr(
-                &mctx.gl,
-                &ctx.arenas,
-                &ctx.table,
-                scope,
-                &mut Diagnostics::default(),
-                exprs.get(0).into_constant(),
-                None,
-            )
-        {
-            let v = v.coerce(&VType::SignedNet(vogls_ir::INTEGER_VSIZE));
-            let v = v.into_bits();
-            if let Some(v) = v.extract_exact_u32() {
-                mctx.connections.push(InputEdge {
-                    driver: Driver::Signal(driver, None),
-                    drivee,
-                    drivee_slice: Some(SignalSlice::from_width(v, SCALAR_VSIZE).unwrap()),
-                });
-                return Ok(());
-            }
         }
     }
 
@@ -643,118 +644,46 @@ fn assign_port_output<'a>(
                     continue;
                 };
 
-                if range_expression.is_none() && exprs.is_empty() {
-                    s.net.drive_blocking(mctx.gl(), &mut bb_builder, var, None);
-                    continue;
-                }
-
-                if let Some(range_expression) = range_expression {
-                    match range_expression {
-                        BitSlice::MsbLsb(_, _) => {}
-                        BitSlice::PlusWidth(base, _) | BitSlice::MinusWidth(base, _) => {
-                            get_used_signals(ctx, mctx, scope, &mut ins, *base)?;
-                        }
-                    }
-                }
-                for expr in exprs.iter() {
-                    get_used_signals(ctx, mctx, scope, &mut ins, expr)?;
-                }
-
-                let (offset_dst, length_dst) = if range_expression.is_none()
-                    && exprs.len() == 1
-                    && s.dims.len() <= 1
-                {
-                    let offset = lower_expr(
-                        ctx,
-                        mctx,
-                        scope,
-                        &mut bb_builder,
-                        exprs.first().unwrap(),
-                        None,
-                    )?
-                    .0;
-                    if s.dims.len() == 1 {
-                        (
-                            bb_builder.multiply_constant(
-                                mctx.gl(),
-                                offset,
-                                Bits::new_u32(s.ty.force_net_width().get()),
-                            ),
-                            Some(s.ty.force_net_width()),
-                        )
-                    } else {
-                        (offset, None)
-                    }
-                } else if let Some(slice) = range_expression
-                    && exprs.is_empty()
-                {
-                    match slice {
-                        BitSlice::MsbLsb(msb, lsb) => {
-                            let (_, lsb, width) = msb_lsb_to_width(
-                                &mctx.gl,
-                                &ctx.arenas,
-                                &ctx.table,
-                                scope,
-                                &mut mctx.diagnostics,
-                                *msb,
-                                *lsb,
-                            )?;
-                            let offset = bb_builder.constant_u32(mctx.gl(), lsb as u32);
-                            (offset, Some(width as VectorSize))
-                        }
-                        BitSlice::PlusWidth(base, width) => {
-                            let offset = lower_expr(ctx, mctx, scope, &mut bb_builder, *base, None);
-                            let width = eval_constant_expr(
-                                &mctx.gl,
-                                &ctx.arenas,
-                                &ctx.table,
-                                scope,
-                                &mut mctx.diagnostics,
-                                *width,
-                                None,
-                            );
-                            let width = width?.as_integer().unwrap();
-                            (offset?.0, Some(VectorSize::new(width as u32).unwrap()))
-                        }
-                        BitSlice::MinusWidth(base, width) => {
-                            let offset = lower_expr(ctx, mctx, scope, &mut bb_builder, *base, None);
-                            let width = eval_constant_expr(
-                                &mctx.gl,
-                                &ctx.arenas,
-                                &ctx.table,
-                                scope,
-                                &mut mctx.diagnostics,
-                                *width,
-                                None,
-                            )?;
-                            let width =
-                                VectorSize::new(width.as_integer().unwrap() as u32).unwrap();
-                            let width_v = bb_builder.constant_u32(mctx.gl(), width.get() - 1);
-                            let offset = bb_builder.minus(mctx.gl(), offset?.0, width_v);
-                            (offset, Some(width))
-                        }
-                    }
-                } else {
-                    mctx.diagnostics
-                        .not_yet_implemented(ctx.arenas.get_span(expr), "multiple braced");
-                    error = true;
-                    continue;
+                let mut actx = LValueAddressingContext {
+                    ctx,
+                    mctx,
+                    builder: &mut bb_builder,
+                    loc: expr.loc,
+                    scope,
                 };
 
-                let length_dst = length_dst.unwrap_or(SCALAR_VSIZE);
-                let src = var;
-                let src = truncate_or_extend(mctx.gl(), &mut bb_builder, src, var_ty, length_dst);
-                let offset_dst =
-                    bb_builder.minus_constant(mctx.gl(), offset_dst, Bits::new_u32(s.lsb));
-                if s.bit_reversed {
-                    bb_builder.revminus_constant(
-                        mctx.gl(),
-                        src,
-                        Bits::new_u32(s.net.width().get().wrapping_sub(length_dst.get())),
-                    );
-                }
+                let Address {
+                    elem_offset,
+                    output_width,
+                    array,
+                    is_unsigned: _,
+                } = lower_addressing(
+                    &mut actx,
+                    s.ty.force_net_width(),
+                    &s.dims,
+                    s.transform,
+                    exprs.iter(),
+                    range_expression.map(|r| r.into()),
+                )?;
+
+                // @TODO: Use array overflow.
+                let partial = match (elem_offset, array) {
+                    (Some(elem_offset), Some((array_offset, _array_overflow))) => {
+                        Some(bb_builder.plus(mctx.gl(), elem_offset, array_offset))
+                    }
+                    (Some(elem_offset), None) => Some(elem_offset),
+                    (None, Some((array_offset, _array_overflow))) => Some(array_offset),
+                    (None, None) => None,
+                };
+                let variable = expression::truncate_or_extend(
+                    mctx.gl(),
+                    &mut bb_builder,
+                    var,
+                    var_ty,
+                    output_width,
+                );
                 s.net
-                    .drive_blocking(mctx.gl(), &mut bb_builder, src, Some(offset_dst));
+                    .drive_blocking(mctx.gl(), &mut bb_builder, variable, partial);
             }
 
             Expr::Replication(_) => {
@@ -820,86 +749,39 @@ fn assign_task_output<'a>(
                     continue;
                 };
 
-                let (offset_dst, length_dst) = if range_expression.is_none() && exprs.is_empty() {
-                    (
-                        builder.constant_u32(mctx.gl(), 0),
-                        Some(s.ty.force_net_width()),
-                    )
-                } else if range_expression.is_none() && exprs.len() == 1 {
-                    (
-                        lower_expr(ctx, mctx, scope, builder, exprs.first().unwrap(), None)?.0,
-                        None,
-                    )
-                } else if let Some(slice) = range_expression
-                    && exprs.is_empty()
-                {
-                    match slice {
-                        BitSlice::MsbLsb(msb, lsb) => {
-                            let (_, lsb, width) = msb_lsb_to_width(
-                                &mctx.gl,
-                                &ctx.arenas,
-                                &ctx.table,
-                                scope,
-                                &mut mctx.diagnostics,
-                                *msb,
-                                *lsb,
-                            )?;
-                            let offset = builder.constant_u32(mctx.gl(), lsb as u32);
-                            (offset, Some(width as VectorSize))
-                        }
-                        BitSlice::PlusWidth(base, width) => {
-                            let offset = lower_expr(ctx, mctx, scope, builder, *base, None);
-                            let width = eval_constant_expr(
-                                &mctx.gl,
-                                &ctx.arenas,
-                                &ctx.table,
-                                scope,
-                                &mut mctx.diagnostics,
-                                *width,
-                                None,
-                            );
-                            let width = width?.as_integer().unwrap();
-                            (offset?.0, Some(VectorSize::new(width as u32).unwrap()))
-                        }
-                        BitSlice::MinusWidth(base, width) => {
-                            let offset = lower_expr(ctx, mctx, scope, builder, *base, None);
-                            let width = eval_constant_expr(
-                                &mctx.gl,
-                                &ctx.arenas,
-                                &ctx.table,
-                                scope,
-                                &mut mctx.diagnostics,
-                                *width,
-                                None,
-                            )?;
-                            let width =
-                                VectorSize::new(width.as_integer().unwrap() as u32).unwrap();
-                            let width_v = builder
-                                .constant_u32(mctx.gl(), width.checked_add(1).unwrap().get());
-                            let offset = builder.minus(mctx.gl(), offset?.0, width_v);
-                            (offset, Some(width))
-                        }
-                    }
-                } else {
-                    mctx.diagnostics
-                        .not_yet_implemented(ctx.arenas.get_span(expr), "multiple braced");
-                    error = true;
-                    continue;
+                let mut actx = LValueAddressingContext {
+                    ctx,
+                    mctx,
+                    builder,
+                    loc: expr.loc,
+                    scope,
                 };
 
-                let length_dst = length_dst.unwrap_or(SCALAR_VSIZE);
-                let src = truncate_or_extend(mctx.gl(), builder, variable, ty, length_dst);
-                let offset_dst =
-                    builder.minus_constant(mctx.gl(), offset_dst, Bits::new_u32(s.lsb));
-                if s.bit_reversed {
-                    builder.revminus_constant(
-                        mctx.gl(),
-                        src,
-                        Bits::new_u32(s.net.width().get().wrapping_sub(length_dst.get())),
-                    );
-                }
-                s.net
-                    .drive_blocking(mctx.gl(), builder, src, Some(offset_dst));
+                let Address {
+                    elem_offset,
+                    output_width,
+                    array,
+                    is_unsigned: _,
+                } = lower_addressing(
+                    &mut actx,
+                    s.ty.force_net_width(),
+                    &s.dims,
+                    s.transform,
+                    exprs.iter(),
+                    range_expression.map(|r| r.into()),
+                )?;
+
+                let partial = match (elem_offset, array) {
+                    (Some(elem_offset), Some((array_offset, _array_overflow))) => {
+                        Some(builder.plus(mctx.gl(), elem_offset, array_offset))
+                    }
+                    (Some(elem_offset), None) => Some(elem_offset),
+                    (None, Some((array_offset, _array_overflow))) => Some(array_offset),
+                    (None, None) => None,
+                };
+
+                let src = truncate_or_extend(mctx.gl(), builder, variable, ty, output_width);
+                s.net.drive_blocking(mctx.gl(), builder, src, partial);
             }
 
             Expr::Replication(_) => {

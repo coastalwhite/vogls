@@ -1,5 +1,5 @@
 use super::AstId;
-use super::expr::Expr;
+use super::expr::{BitSliceKind, Expr};
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 504
 // constant_expression ::=
@@ -32,6 +32,13 @@ pub enum ConstantRangeExpression<'a> {
         base: AstId<'a, ConstantExpr<'a>>,
         width: AstId<'a, ConstantExpr<'a>>,
     },
+}
+
+#[derive(Clone, Copy)]
+pub struct ConstantBitSlice<'a> {
+    pub kind: BitSliceKind,
+    pub fst: AstId<'a, ConstantExpr<'a>>,
+    pub snd: AstId<'a, ConstantExpr<'a>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 504

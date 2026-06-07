@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::marker::PhantomData;
 
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{Bits, GlobalContext, VectorSize};
@@ -6,7 +7,8 @@ use vogls_ir::{Bits, GlobalContext, VectorSize};
 use crate::ast::AstId;
 use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::expr::{BinaryOperator, BitSlice, Expr, Replication, UnaryOperator};
-use crate::elaborate::{VSymbol, VSymbolTable};
+use crate::elaborate::{VSymbol, VSymbolTable, VectorTransform};
+use crate::lower::addressing::{Address, AddressingContext, RangeExpr, lower_addressing};
 use crate::lower::expression::{StackItem, get_expr_type};
 use crate::lower::vvalue::VValue;
 use crate::lower::{hident_span, try_resolve_constant, try_resolve_hident};
@@ -171,20 +173,11 @@ pub fn eval_constant_expr<'a>(
                 result_stack.push(Some(result));
             }
             Expr::Ident(ast_ident, exprs, range_expression) => {
-                if !exprs.is_empty() {
-                    result_stack.push(None);
-                    diagnostics.not_yet_implemented(
-                        arenas.get_span(item.expr),
-                        "constant expression of this kind not yet implemented",
-                    );
-                    error = true;
-                    continue;
-                }
-
-                if !item.dispatched && range_expression.is_some() {
+                if !item.dispatched && (!exprs.is_empty() || range_expression.is_some()) {
                     item.dispatched = true;
 
                     dispatch_stack.push(item);
+                    dispatch_stack.extend(exprs.iter().map(StackItem::new_no_ctx));
                     if let Some(range_expression) = range_expression {
                         dispatch_stack.extend(
                             range_expression
@@ -196,8 +189,9 @@ pub fn eval_constant_expr<'a>(
                     continue;
                 }
 
-                let end_length =
-                    result_stack.len() - range_expression.is_some().then_some(2).unwrap_or(0);
+                let end_length = result_stack.len()
+                    - exprs.len()
+                    - range_expression.is_some().then_some(2).unwrap_or(0);
                 let Ok(value) = try_resolve_constant(scope, &table, arenas, ast_ident, diagnostics)
                 else {
                     result_stack.truncate(end_length);
@@ -206,47 +200,165 @@ pub fn eval_constant_expr<'a>(
                     continue;
                 };
 
-                let mut value = value.clone();
-                if let Some(range_expression) = range_expression {
-                    let fst = result_stack.pop().unwrap();
-                    let snd = result_stack.pop().unwrap();
-
-                    let (Some(fst), Some(snd)) = (fst, snd) else {
-                        result_stack.truncate(end_length);
-                        result_stack.push(None);
-                        continue;
-                    };
-
-                    let (lsb, width) = match range_expression {
-                        BitSlice::MsbLsb(..) => {
-                            // @TODO: Fallible.
-                            let msb = fst.as_integer().unwrap();
-                            let lsb = snd.as_integer().unwrap();
-                            (
-                                lsb as u32,
-                                VectorSize::new((msb as u32 - lsb as u32) + 1).unwrap(),
-                            )
-                        }
-                        BitSlice::PlusWidth(..) => {
-                            // @TODO: Fallible.
-                            let offset = fst.as_integer().unwrap();
-                            let width = snd.as_integer().unwrap();
-                            (offset as u32, VectorSize::new(width as u32).unwrap())
-                        }
-                        BitSlice::MinusWidth(..) => {
-                            // @TODO: Fallible.
-                            let offset = fst.as_integer().unwrap();
-                            let width = snd.as_integer().unwrap();
-                            (
-                                offset as u32 - (width as u32 - 1),
-                                VectorSize::new(width as u32).unwrap(),
-                            )
-                        }
-                    };
-
-                    value = VValue::UnsignedNet(value.into_bits().slicex(lsb, width));
+                pub struct ConstantRValueAddressingContext<'a, 'b> {
+                    pub arenas: &'b AstArenas,
+                    pub result_stack: &'b [Option<VValue>],
+                    pub diagnostics: &'b mut Diagnostics,
+                    pub loc: usize,
+                    pub _pd: PhantomData<&'a ()>,
                 }
 
+                impl<'a, 'b> AddressingContext for ConstantRValueAddressingContext<'a, 'b> {
+                    type ConstantExpr = usize;
+                    type Expr = usize;
+                    type Var = i64;
+                    type Bool = bool;
+
+                    type Error = ();
+
+                    fn too_many_selects(&mut self) -> Self::Error {
+                        let tr = self.arenas.spans[self.loc];
+                        self.diagnostics.not_yet_implemented(
+                            tr,
+                            "cannot select from array or too many selects",
+                        );
+                    }
+
+                    fn stride_overflow(&mut self) -> Self::Error {
+                        let tr = self.arenas.spans[self.loc];
+                        self.diagnostics.not_yet_implemented(tr, "stride overflow");
+                    }
+
+                    fn not_yet_implemented(&mut self, reason: &'static str) -> Self::Error {
+                        let tr = self.arenas.spans[self.loc];
+                        self.diagnostics.not_yet_implemented(tr, reason);
+                    }
+
+                    fn eval_constant(
+                        &mut self,
+                        operand: Self::ConstantExpr,
+                    ) -> Result<i64, Self::Error> {
+                        let value = self.result_stack[operand].clone().ok_or(())?;
+                        value.as_integer().ok_or_else(|| {
+                            self.diagnostics.not_yet_implemented(
+                                self.arenas.spans[self.loc],
+                                "cannot convert to index",
+                            )
+                        })
+                    }
+                    fn eval_var(&mut self, operand: Self::Expr) -> Result<Self::Var, Self::Error> {
+                        let value = self.result_stack[operand].clone().ok_or(())?;
+                        value.as_integer().ok_or_else(|| {
+                            self.diagnostics.not_yet_implemented(
+                                self.arenas.spans[self.loc],
+                                "cannot convert to index",
+                            )
+                        })
+                    }
+
+                    fn or_overflow(&mut self, lhs: Self::Bool, rhs: Self::Bool) -> Self::Bool {
+                        lhs | rhs
+                    }
+                    fn var_from_i64(&mut self, v: i64) -> Result<Self::Var, Self::Error> {
+                        Ok(v)
+                    }
+                    fn var_geq_nonzerou32(
+                        &mut self,
+                        lhs: Self::Var,
+                        rhs: std::num::NonZeroU32,
+                    ) -> Result<Self::Bool, Self::Error> {
+                        Ok(lhs >= i64::from(rhs.get()))
+                    }
+                    fn var_mul_nonzerou32(
+                        &mut self,
+                        lhs: Self::Var,
+                        rhs: std::num::NonZeroU32,
+                    ) -> Result<Self::Var, Self::Error> {
+                        lhs.checked_mul(i64::from(rhs.get())).ok_or(())
+                    }
+
+                    fn var_add(
+                        &mut self,
+                        lhs: Self::Var,
+                        rhs: Self::Var,
+                    ) -> Result<Self::Var, Self::Error> {
+                        lhs.checked_add(rhs).ok_or(())
+                    }
+
+                    fn var_sub_i64(
+                        &mut self,
+                        lhs: Self::Var,
+                        rhs: i64,
+                    ) -> Result<Self::Var, Self::Error> {
+                        lhs.checked_sub(rhs).ok_or(())
+                    }
+                    fn var_revsub_u32(
+                        &mut self,
+                        lhs: Self::Var,
+                        rhs: u32,
+                    ) -> Result<Self::Var, Self::Error> {
+                        i64::from(rhs).checked_sub(lhs).ok_or(())
+                    }
+                }
+
+                let exprs = end_length..end_length + exprs.len();
+                let range = range_expression.map(|r| {
+                    let fst = result_stack.len() - 2;
+                    let snd = result_stack.len() - 1;
+                    match r {
+                        BitSlice::MsbLsb(..) => RangeExpr::MsbLsb(fst, snd),
+                        BitSlice::PlusWidth(..) => RangeExpr::PlusWidth(fst, snd),
+                        BitSlice::MinusWidth(..) => RangeExpr::MinusWidth(fst, snd),
+                    }
+                });
+
+                let mut actx = ConstantRValueAddressingContext {
+                    arenas,
+                    result_stack: &result_stack,
+                    diagnostics,
+                    loc: expr.loc,
+                    _pd: PhantomData,
+                };
+
+                let result = lower_addressing(
+                    &mut actx,
+                    value.ty().force_net_width(),
+                    &[],
+                    VectorTransform::default(),
+                    exprs,
+                    range,
+                );
+
+                let Ok(Address {
+                    elem_offset,
+                    output_width,
+                    array,
+                    is_unsigned,
+                }) = result
+                else {
+                    result_stack.truncate(end_length);
+                    result_stack.push(None);
+                    error = true;
+                    continue;
+                };
+
+                assert!(array.is_none());
+                let is_signed = value.ty().is_signed();
+                let value = value.clone().into_bits();
+                let offset = match elem_offset {
+                    None => 0,
+                    Some(elem_offset) => u32::try_from(elem_offset).map_err(|_| {
+                        diagnostics
+                            .not_yet_implemented(arenas.get_span(expr), "out-of-range offset");
+                    })?,
+                };
+
+                result_stack.truncate(end_length);
+                let value = if is_unsigned {
+                    VValue::UnsignedNet(value.slicex(offset, output_width))
+                } else {
+                    VValue::net(value.slicex(offset, output_width), is_signed)
+                };
                 result_stack.push(Some(value));
             }
             Expr::Sized(sized) => {

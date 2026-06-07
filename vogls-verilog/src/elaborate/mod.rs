@@ -143,17 +143,37 @@ impl Net {
     }
 }
 
-pub struct NetSymbol {
-    pub ty: VType,
-    pub dims: Vec<NonZeroU32>,
-
+/// Verilog nets can have any positive, negative or zero MSB and LSB for their vector. We want to
+/// make that into 0 to size everywhere. This transform tells us how to do that.
+// @Optimize: lsb is actually 33 bits so this could fit in 64 bits. Now it is 128-bits.
+#[derive(Default, Clone, Copy)]
+pub struct VectorTransform {
     /// Nets can be defined as [8:4] in which case the least-significant bit starts at `4` not at
     /// `0`.
-    pub lsb: u32,
+    pub lsb: i64,
+
     /// Nets can be defined as [0:7] in which case the addressing flips around, i.e. getting bit
     /// `0` actually gets the most-significant bit.
     pub bit_reversed: bool,
+}
 
+impl VectorTransform {
+    pub fn from_msb_lsb(msb: i64, lsb: i64) -> Option<Self> {
+        const MIN: i64 = -(u32::MAX as i64);
+        const MAX: i64 = u32::MAX as i64;
+        if !(MIN..=MAX).contains(&msb) || !(MIN..=MAX).contains(&lsb) {
+            return None;
+        }
+        let bit_reversed = msb < lsb;
+        let lsb = if bit_reversed { msb } else { lsb };
+        Some(Self { lsb, bit_reversed })
+    }
+}
+
+pub struct NetSymbol {
+    pub ty: VType,
+    pub dims: Vec<NonZeroU32>,
+    pub transform: VectorTransform,
     pub net: Net,
     pub port_idx: Option<usize>,
 }
@@ -221,21 +241,13 @@ pub fn evaluate_net_msb_lsb<'a>(
     scope: SymbolId,
     table: &VSymbolTable,
     diagnostics: &mut Diagnostics,
-) -> Result<(u32, bool, VectorSize), ()> {
+) -> Result<(VectorTransform, VectorSize), ()> {
     let (msb, lsb, size) = eval_constant_range(gl, arenas, scope, table, diagnostics, id)?;
-
-    let Ok(msb) = u32::try_from(msb) else {
-        diagnostics.not_yet_implemented(arenas.get_span(id), "0 > msb > u32::MAX");
+    let Some(transform) = VectorTransform::from_msb_lsb(msb, lsb) else {
+        diagnostics.not_yet_implemented(arenas.get_span(id), "msb or lsb out-of-range");
         return Err(());
     };
-    let Ok(lsb) = u32::try_from(lsb) else {
-        diagnostics.not_yet_implemented(arenas.get_span(id), "0 > lsb > u32::MAX");
-        return Err(());
-    };
-
-    let bit_reversed = msb < lsb;
-    let lsb = if bit_reversed { msb } else { lsb };
-    Ok((lsb, bit_reversed, size))
+    Ok((transform, size))
 }
 
 pub fn port_declaration_to_info<'a>(
@@ -250,8 +262,7 @@ pub fn port_declaration_to_info<'a>(
 ) -> Result<
     (
         VType,
-        u32,
-        bool,
+        VectorTransform,
         ConnectionDirection,
         AstIdRange<'a, Identifier>,
     ),
@@ -268,13 +279,13 @@ pub fn port_declaration_to_info<'a>(
         }
     };
 
-    let (lsb, bit_reversed, size) = match range {
-        None => (0, false, SCALAR_VSIZE),
+    let (transform, size) = match range {
+        None => (VectorTransform::default(), SCALAR_VSIZE),
         Some(range) => evaluate_net_msb_lsb(gl, arenas, range, parent, table, diagnostics)?,
     };
 
     let ty = VType::net(size, signed);
-    Ok((ty, lsb, bit_reversed, direction, identifiers))
+    Ok((ty, transform, direction, identifiers))
 }
 
 fn new_net(
