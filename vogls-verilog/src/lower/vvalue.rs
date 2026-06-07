@@ -107,9 +107,7 @@ impl VValue {
         use VValue as V;
         let (slf, rhs) = Self::coerce_max_size(self, rhs);
         match (slf, rhs) {
-            (V::SignedNet(l) | V::UnsignedNet(l), V::SignedNet(r) | V::UnsignedNet(r)) => {
-                l.as_slice() == r.as_slice()
-            }
+            (V::SignedNet(l) | V::UnsignedNet(l), V::SignedNet(r) | V::UnsignedNet(r)) => l == r,
             (V::String(_), _) | (_, V::String(_)) => todo!(),
         }
     }

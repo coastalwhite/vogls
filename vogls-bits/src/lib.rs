@@ -1077,11 +1077,13 @@ impl Bits {
             return FvLogicValue::X;
         }
 
-        FvLogicValue::from_bool(comparison::tv_gtu64_unsigned_leq(
-            lhs.as_u64_slice(),
-            rhs.as_u64_slice(),
-            lhs.size(),
-        ))
+        let size = lhs.size();
+        let lhs = lhs.as_data_ref();
+        let lhs = lhs.to_u64_slices().0;
+        let rhs = rhs.as_data_ref();
+        let rhs = rhs.to_u64_slices().0;
+
+        FvLogicValue::from_bool(comparison::tv_gtu64_unsigned_leq(lhs, rhs, size))
     }
     pub fn is_signed_leq(lhs: &Self, rhs: &Self) -> FvLogicValue {
         assert_eq!(lhs.size(), rhs.size());
@@ -1089,11 +1091,13 @@ impl Bits {
             return FvLogicValue::X;
         }
 
-        FvLogicValue::from_bool(comparison::tv_gtu64_signed_leq(
-            lhs.as_u64_slice(),
-            rhs.as_u64_slice(),
-            lhs.size(),
-        ))
+        let size = lhs.size();
+        let lhs = lhs.as_data_ref();
+        let lhs = lhs.to_u64_slices().0;
+        let rhs = rhs.as_data_ref();
+        let rhs = rhs.to_u64_slices().0;
+
+        FvLogicValue::from_bool(comparison::tv_gtu64_signed_leq(lhs, rhs, size))
     }
 
     pub fn leading_zeroes(&self) -> u32 {
