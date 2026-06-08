@@ -1135,15 +1135,19 @@ pub fn lower_process(
                             unconverted_t.ident,
                         )?;
                     }
+                    let zero = Bits::new_u32(0);
                     let partial = match partial {
+                        None if gl.signals[*signal].size != t.ty.size => {
+                            Some(CExpr::Bits(&zero, LogicMode::TwoValue))
+                        }
                         None => None,
-                        Some((offset, partial_size)) => {
+                        Some((offset, _)) => {
                             let moffset = var_mode[offset];
                             let offset_t = temp_map[&(*offset, moffset)];
                             if temporal_variables.contains(offset) {
                                 load(&mut buffer, heap_map[offset], offset_t)?;
                             }
-                            Some((offset_t, *partial_size))
+                            Some(offset_t.into())
                         }
                     };
                     let dst = io_signals[signal];
@@ -1623,12 +1627,14 @@ pub fn lower_signal_drive_fn(
         "void drive_signal_{idx}(schedule_t *schedule, uint64_t time, uint64_t *listening, uint64_t *last_active_time, cold_context_t *cldctx) {{",
     )?;
 
-    writeln!(
-        f,
-        "{INDENT}cldctx->fst_poke[{}] |= ((uint64_t)1) << {};",
-        rt_key.as_u64() / 64,
-        rt_key.as_u64() % 64,
-    )?;
+    if matches!(gl.logic_mode, LogicMode::TwoValue) {
+        writeln!(
+            f,
+            "{INDENT}cldctx->fst_poke[{}] |= ((uint64_t)1) << {};",
+            rt_key.as_u64() / 64,
+            rt_key.as_u64() % 64,
+        )?;
+    }
 
     if lower_options.itrace {
         let content = format!("* poke {}\n", gl.signals[signal].name).into();

@@ -1,29 +1,32 @@
 use std::io;
 
 use vogls_codegen::HeapRef;
-use vogls_ir::{LogicMode, VectorSize};
+use vogls_ir::LogicMode;
 use vogls_runtime::RtSignalKey;
 
 use super::INDENT;
-use crate::{CIdent, CType, CVar, write_cvar};
+use crate::{CExpr, CIdent, CType, CVar, write_cvar};
 
 pub fn drive(
     f: &mut impl io::Write,
     signals: &[HeapRef],
     dst: RtSignalKey,
     src: CVar,
-    partial: Option<(CVar, VectorSize)>,
+    partial: Option<CExpr>,
 ) -> io::Result<()> {
     let s = src.ident;
     let dst_ref = signals[dst.as_usize()];
-    let Some((offset, _partial_size)) = partial else {
+    let Some(offset) = partial else {
         let dst_wi = dst_ref.offset.bit_offset / 64;
         write!(f, "{INDENT}if (")?;
         match src.ty.mode {
             LogicMode::TwoValue => {
                 let w = dst.as_u64() / 64;
                 let i = dst.as_u64() % 64;
-                write!(f, "((cldctx->fst_poke[{w}] & (((uint64_t)1) << {i})) == 0) |")?;
+                write!(
+                    f,
+                    "((cldctx->fst_poke[{w}] & (((uint64_t)1) << {i})) == 0) |"
+                )?;
             }
             LogicMode::FourValue => {}
         }
@@ -98,7 +101,6 @@ pub fn drive(
     };
     super::slice::slice_with(f, current, s1.into(), offset.into(), false)?;
     let c = current.ident;
-    let o = offset.ident;
     match src.ty.array_size() {
         None => write!(f, "{INDENT}if ({s} != {c}")?,
         Some(arr_size) => write!(
@@ -106,13 +108,13 @@ pub fn drive(
             "{INDENT}if (memcmp({s}, {c}, {arr_size}*sizeof(uint64_t)) != 0"
         )?,
     }
-    if offset.ty.mode == LogicMode::FourValue {
-        write!(f, " && ({o}&0xFFFFFFFF) ==0xFFFFFFFF")?;
+    if offset.ty().mode == LogicMode::FourValue {
+        write!(f, " && ({offset}&0xFFFFFFFF) ==0xFFFFFFFF")?;
     }
     writeln!(f, ") {{")?;
 
     use LogicMode as M;
-    let o_s = match offset.ty.mode {
+    let o_s = match offset.ty().mode {
         M::TwoValue => "",
         M::FourValue => ">>32",
     };
@@ -131,7 +133,7 @@ pub fn drive(
             super::load(f, dst_ref.offset, current)?;
             writeln!(
                 f,
-                "{INDENT}{INDENT}{c} = tv_s_set({c}, {s}, {d_size}, ({o}{o_s}), {s_size});"
+                "{INDENT}{INDENT}{c} = tv_s_set({c}, {s}, {d_size}, ({offset}{o_s}), {s_size});"
             )?;
             f.write_all(INDENT.as_bytes())?;
             super::store(f, dst_ref.offset, current)?;
@@ -141,12 +143,12 @@ pub fn drive(
             if src.ty.is_array() {
                 writeln!(
                     f,
-                    "{INDENT}{INDENT}tv_l_set(heap+{d_word}, {s}, {d_size}, ({o}{o_s}), {s_size});",
+                    "{INDENT}{INDENT}tv_l_set(heap+{d_word}, {s}, {d_size}, ({offset}{o_s}), {s_size});",
                 )?;
             } else {
                 writeln!(
                     f,
-                    "{INDENT}{INDENT}tv_l_set(heap+{d_word}, (uint64_t[1]){{{s}}}, {d_size}, ({o}{o_s}), {s_size});",
+                    "{INDENT}{INDENT}tv_l_set(heap+{d_word}, (uint64_t[1]){{{s}}}, {d_size}, ({offset}{o_s}), {s_size});",
                 )?;
             }
         }
@@ -163,7 +165,7 @@ pub fn drive(
             super::load(f, dst_ref.offset, current)?;
             writeln!(
                 f,
-                "{INDENT}{INDENT}{c} = tv_s_set({c} & 0x{d_mask:x}, {s} & 0x{s_mask:x}, {d_size}, ({o}{o_s}), {s_size}) | (tv_s_set({c} >> {d_size}, {s} >> {s_size}, {d_size}, ({o}{o_s}), {s_size}) << {d_size});"
+                "{INDENT}{INDENT}{c} = tv_s_set({c} & 0x{d_mask:x}, {s} & 0x{s_mask:x}, {d_size}, ({offset}{o_s}), {s_size}) | (tv_s_set({c} >> {d_size}, {s} >> {s_size}, {d_size}, ({offset}{o_s}), {s_size}) << {d_size});"
             )?;
             f.write_all(INDENT.as_bytes())?;
             super::store(f, dst_ref.offset, current)?;
@@ -177,22 +179,22 @@ pub fn drive(
                     let s_mask = super::mask(s_size.get());
                     writeln!(
                         f,
-                        "{INDENT}{INDENT}tv_l_set(heap+{d_word}, (uint64_t[1]){{{s}&0x{s_mask:x}}}, {d_size}, ({o}{o_s}), {s_size});",
+                        "{INDENT}{INDENT}tv_l_set(heap+{d_word}, (uint64_t[1]){{{s}&0x{s_mask:x}}}, {d_size}, ({offset}{o_s}), {s_size});",
                     )?;
                     writeln!(
                         f,
-                        "{INDENT}{INDENT}tv_l_set(heap+{dst_words}+{d_word}, (uint64_t[1]){{{s}>>{s_size}}}, {d_size}, ({o}{o_s}), {s_size});",
+                        "{INDENT}{INDENT}tv_l_set(heap+{dst_words}+{d_word}, (uint64_t[1]){{{s}>>{s_size}}}, {d_size}, ({offset}{o_s}), {s_size});",
                     )?;
                 }
                 Some(src_arr_size) => {
                     let src_words = src_arr_size / 2;
                     writeln!(
                         f,
-                        "{INDENT}{INDENT}tv_l_set(heap+{d_word}, {s}, {d_size}, ({o}{o_s}), {s_size});",
+                        "{INDENT}{INDENT}tv_l_set(heap+{d_word}, {s}, {d_size}, ({offset}{o_s}), {s_size});",
                     )?;
                     writeln!(
                         f,
-                        "{INDENT}{INDENT}tv_l_set(heap+{dst_words}+{d_word}, {s}+{src_words}, {d_size}, ({o}{o_s}), {s_size});",
+                        "{INDENT}{INDENT}tv_l_set(heap+{dst_words}+{d_word}, {s}+{src_words}, {d_size}, ({offset}{o_s}), {s_size});",
                     )?;
                 }
             }
