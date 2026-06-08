@@ -74,6 +74,11 @@ struct Args {
 
     #[arg(long)]
     print_vm_map: bool,
+
+    #[arg(long)]
+    emit_unoptimized_fuse_graph: bool,
+    #[arg(long)]
+    emit_optimized_fuse_graph: bool,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -104,6 +109,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         no_common_subexpr_elim,
         no_peephole_optimization,
         print_vm_map,
+        emit_unoptimized_fuse_graph,
+        emit_optimized_fuse_graph,
     } = Args::parse();
     let logic_mode = if four_value_logic {
         LogicMode::FourValue
@@ -152,6 +159,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return Err("failed to elaborate".into());
             }
         };
+
+        if emit_unoptimized_fuse_graph {
+            elaborate.set_unoptimized_fuse_graphs_emit(Box::new(stdout()) as _);
+        }
+        if emit_optimized_fuse_graph {
+            elaborate.set_optimized_fuse_graphs_emit(Box::new(stdout()) as _);
+        }
 
         if emit_hierarchy {
             eprintln!("{}", elaborate.display_hierarchy());

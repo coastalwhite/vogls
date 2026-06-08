@@ -227,6 +227,9 @@ impl<'a> ParsedDesign<'a> {
             table_ast_refs,
             udps,
             gl: mctx.gl,
+
+            unoptimized_fgs: None,
+            optimized_fgs: None,
         })
     }
 

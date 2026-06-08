@@ -3,7 +3,7 @@ use std::path::Path;
 
 use vogls_frontend::ident_table::IdentId;
 use vogls_frontend::symbol_table::{FrozenSymbolTable, SymbolId, SymbolTable};
-use vogls_fuse_signals::FuseTarget;
+use vogls_fuse_signals::{FuseGraph, FuseGraphOptimizer, FuseTarget};
 use vogls_ir::{GlobalContext, SignalFlags};
 use vogls_utils::{IndexMap, NonMaxU32, VgHashMap};
 use vogls_verilog::ast::AstId;
@@ -31,6 +31,9 @@ pub struct ElaboratedDesign<'a> {
     pub(crate) table_ast_refs: SymbolAstRefs<'a>,
     pub(crate) udps: VgHashMap<IdentId, AstId<'a, UdpDeclaration<'a>>>,
     pub(crate) gl: GlobalContext,
+
+    pub(crate) unoptimized_fgs: Option<Box<dyn std::io::Write>>,
+    pub(crate) optimized_fgs: Option<Box<dyn std::io::Write>>,
 }
 
 pub struct ElaborationError<'a> {
@@ -112,6 +115,20 @@ impl<'a, 'b> fmt::Debug for AnnotationError<'a, 'b> {
 impl<'a, 'b> std::error::Error for AnnotationError<'a, 'b> {}
 
 impl<'a> ElaboratedDesign<'a> {
+    #[cfg(feature = "unstable")]
+    pub fn set_unoptimized_fuse_graphs_emit(
+        &mut self,
+        writer: Box<dyn std::io::Write>,
+    ) -> &mut Self {
+        self.unoptimized_fgs = Some(writer);
+        self
+    }
+    #[cfg(feature = "unstable")]
+    pub fn set_optimized_fuse_graphs_emit(&mut self, writer: Box<dyn std::io::Write>) -> &mut Self {
+        self.optimized_fgs = Some(writer);
+        self
+    }
+
     pub fn get_signal_handle(&mut self, symbol: SymbolId) -> Option<SignalHandle> {
         let VSymbol::Net(net) = &self.table[symbol].content else {
             return None;
@@ -289,6 +306,9 @@ impl<'a> ElaboratedDesign<'a> {
             ast,
             token_buffer,
             arenas,
+
+            mut unoptimized_fgs,
+            mut optimized_fgs,
         } = self;
 
         let mut ctx = LowerContext {
@@ -372,6 +392,9 @@ impl<'a> ElaboratedDesign<'a> {
                     table_ast_refs,
                     udps,
                     gl: mctx.gl,
+
+                    unoptimized_fgs,
+                    optimized_fgs,
                 },
                 diagnostics: mctx.diagnostics,
                 stage: LowerErrorStage::GlobalItems,
@@ -407,14 +430,33 @@ impl<'a> ElaboratedDesign<'a> {
                     table_ast_refs,
                     udps,
                     gl: mctx.gl,
+
+                    unoptimized_fgs,
+                    optimized_fgs,
                 },
                 diagnostics: mctx.diagnostics,
                 stage: LowerErrorStage::Modules,
             });
         }
 
-        let (prb_fuse, drv_fuse) =
-            vogls_fuse_signals::fuse_signals(&mut mctx.gl, &mctx.connections);
+        let mut opt =
+            FuseGraphOptimizer::new(FuseGraph::from_connections(&mut mctx.gl, &mctx.connections));
+        if let Some(unoptimized_fgs) = unoptimized_fgs.as_mut() {
+            writeln!(
+                unoptimized_fgs,
+                "{}",
+                opt.graph().display_dot(&mctx.gl.signals)
+            ).unwrap();
+        }
+        opt.optimize();
+        if let Some(optimized_fgs) = optimized_fgs.as_mut() {
+            writeln!(
+                optimized_fgs,
+                "{}",
+                opt.graph().display_dot(&mctx.gl.signals)
+            ).unwrap();
+        }
+        let (prb_fuse, drv_fuse) = opt.finalize(mctx.gl());
 
         let mut table: FrozenSymbolTable<Symbol> = ctx.table.into();
         for symbol in table.symbol_id_iter() {

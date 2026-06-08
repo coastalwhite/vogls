@@ -9,7 +9,7 @@ use crate::elaborate::VSymbol;
 use crate::lower::addressing::lower_addressing;
 use crate::lower::{hident_span, try_resolve_hident, try_resolve_net};
 
-use super::addressing::ConstantAddressingContext;
+use super::addressing::{Address, ConstantAddressingContext};
 use super::{Diagnostics, LowerContext, MutLowerContext, VType, VValue, eval_constant_expr};
 
 fn try_constant_expr_no_ctx<'a>(
@@ -198,84 +198,37 @@ pub fn try_lower_fuse_driver_ident<'a>(
         }
     };
 
-    if exprs.len() < net.dims.len() {
-        mctx.diagnostics
-            .not_yet_implemented(ctx.arenas.get_span(expr), "cannot assign array");
-        return Err(());
-    }
+    let mut actx = ConstantAddressingContext {
+        gl: &mctx.gl,
+        arenas: ctx.arenas,
+        table: &ctx.table,
+        scope,
+        diagnostics: &mut Diagnostics::default(),
+        loc: expr.loc,
+        _pd: std::marker::PhantomData,
+    };
 
-    let net_signal = net.net.probe_signal();
-
-    // Fast path. No slicing at all.
-    if exprs.is_empty() && range_expr.is_none() {
-        mctx.fuse_scratch.push(Driver::Signal(net_signal, None));
-        return Ok(true);
-    }
-
-    let ty_size = net.ty.force_net_width();
-
-    // Handle array indexing.
-    let mut offset = 0;
-    let mut current_size = ty_size;
-    for (expr, &dim) in exprs.iter().rev().zip(net.dims.iter()) {
-        let Some(idx) = try_constant_expr_no_ctx(ctx, mctx, scope, expr) else {
-            return Ok(false);
-        };
-        let idx = idx.truncate_or_extend(INTEGER_VSIZE);
-        let Some(idx) = idx.into_bits().extract_exact_u32() else {
-            return Ok(false);
-        };
-
-        if idx >= dim.get() {
-            mctx.diagnostics
-                .warnings
-                .push((ctx.arenas.get_span(expr), "index out of range".into()));
-            // @TODO: Handle this better somehow...
-            return Ok(false);
-        }
-
-        // @TODO: Checked arithmetic
-        offset += current_size.get() * idx;
-        current_size = current_size.checked_mul(dim).unwrap();
-    }
-
-    // Handle bit indexing indexing.
-    let mut output_width = ty_size;
-    for expr in exprs.truncate(exprs.len() - net.dims.len()).iter().rev() {
-        let Some(idx) = try_constant_expr_no_ctx(ctx, mctx, scope, expr) else {
-            return Ok(false);
-        };
-        let idx = idx.truncate_or_extend(INTEGER_VSIZE);
-        let Some(idx) = idx.into_bits().extract_exact_u32() else {
-            return Ok(false);
-        };
-
-        if idx >= ty_size.get() {
-            mctx.diagnostics
-                .warnings
-                .push((ctx.arenas.get_span(expr), "index out of range".into()));
-            // @TODO: Handle this better somehow...
-            return Ok(false);
-        }
-
-        offset += idx;
-        output_width = SCALAR_VSIZE;
-    }
-
-    // Handle range slicing.
-    let Some(mut output_slice) = SignalSlice::from_width(offset, output_width) else {
+    let Ok(address) = lower_addressing(
+        &mut actx,
+        net.ty.force_net_width(),
+        &net.dims,
+        net.transform,
+        exprs.iter().map(|e| e.into_constant()),
+        range_expr.map(|r| r.into()),
+    ) else {
         return Ok(false);
     };
-    if let Some(range_expr) = range_expr {
-        let Some(slice) = try_constant_bitslice(ctx, mctx, scope, range_expr)? else {
-            return Ok(false);
-        };
 
-        let Some(relative_slice) = output_slice.relative_slice(slice) else {
-            return Ok(false);
-        };
-        output_slice = relative_slice;
-    }
+    let output_width = address.output_width;
+    let Some(offset) = address.signal_offset_as_u32() else {
+        return Ok(false);
+    };
+
+    // @TODO: Handle array overflow.
+    let net_signal = net.net.probe_signal();
+    let Some(output_slice) = SignalSlice::from_width(offset, output_width) else {
+        return Ok(false);
+    };
 
     mctx.fuse_scratch
         .push(Driver::Signal(net_signal, Some(output_slice)));
@@ -333,14 +286,20 @@ pub fn try_fuse_assign<'a>(
     let drivee = to_net.net.blocking_drive_signal();
 
     // @TODO: sum(driver.size()) > output_width
+    let drivee_signal_width = mctx.gl.signals[to_net.net.blocking_drive_signal()].size;
     let mut offset = offset;
     for driver in &mctx.fuse_scratch {
         let width = driver.size(&mctx.gl.signals);
-        let Some(width) =
-            VectorSize::new((to_net.ty.force_net_width().get() - offset).min(width.get()))
+        let Some(width) = VectorSize::new((drivee_signal_width.get() - offset).min(width.get()))
         else {
             break;
         };
+
+        // If we are fusing things that don't exist. Just cancel the fuse.
+        if drivee_signal_width.get() < offset + width.get() {
+            return Ok(false);
+        }
+
         mctx.connections.push(InputEdge {
             driver: driver.clone(),
             drivee,
