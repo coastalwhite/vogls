@@ -9,12 +9,9 @@ module top();
     wire b;
 
     buffer _b(a, b);
-    always #0 begin
-        $display("[T=%0dns] b = %b", $time / 1_000_000, b);
-        @(b);
-    end
+	initial #9_000_000 forever @(b) $display("[T=%0dns] b = %b", $time / 1_000_000, b);
     initial begin
-        #1;
-        a = 1;
+		#0          a = 0;
+        #10_000_000 a = 1;
     end
 endmodule
