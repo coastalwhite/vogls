@@ -285,7 +285,10 @@ impl VmInstruction {
             ],
             I::TvToFv(dst, src) => &[("dst", true, *dst), ("src", false, src.to_ref(dst.size))],
             I::FvToTv(dst, src) => &[("dst", false, *dst), ("src", true, src.to_ref(dst.size))],
-            I::Intrinsic(_, _, _) => &[],
+            I::Intrinsic(dst, op, _) => match op.as_ref() {
+                VmIntrinsicOp::Time => &[("dst", false, dst.to_64bit_ref())],
+                _ => &[],
+            },
             I::LastUpdateTime(dst, _) => &[("dst", false, dst.to_64bit_ref())],
             I::Drive(dst, src, partial) => {
                 eprint!(" ({})", signals[dst.as_usize()].offset);

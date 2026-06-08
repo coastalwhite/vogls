@@ -789,15 +789,15 @@ pub fn lower_iopath<'a>(
         }
         active_time = builder.minus_constant(mctx.gl(), active_time, Bits::from_u64(TIME_VSIZE, 1));
 
-        let mut wait_time_set = builder.constant(mctx.gl(), Bits::new_zeroed(SCALAR_VSIZE));
-        let mut wait_time = builder.constant(mctx.gl(), Bits::new_ones(TIME_VSIZE));
+        let mut endwait_time_set = builder.constant(mctx.gl(), Bits::new_zeroed(SCALAR_VSIZE));
+        let mut endwait_time = builder.constant(mctx.gl(), Bits::new_ones(TIME_VSIZE));
 
         for (input, paths) in &specify.paths {
             let lupdt = builder.lupdt(mctx.gl(), *input);
             let is_active = builder.case_equals(mctx.gl(), lupdt, active_time);
 
-            let mut new_wait_time_set = Some(wait_time_set);
-            let mut new_wait_time = wait_time;
+            let mut new_endwait_time_set = Some(endwait_time_set);
+            let mut new_wait_time = endwait_time;
 
             for path in paths {
                 let mut condition = None;
@@ -835,8 +835,8 @@ pub fn lower_iopath<'a>(
                 }
 
                 let condition = condition.map(|c| builder.select_bit_constant(mctx.gl(), c, 0));
-                match (condition, &mut new_wait_time_set) {
-                    (None, _) | (_, None) => new_wait_time_set = None,
+                match (condition, &mut new_endwait_time_set) {
+                    (None, _) | (_, None) => new_endwait_time_set = None,
                     (Some(condition), Some(new_wait_time_set)) => {
                         *new_wait_time_set = builder.or(mctx.gl(), *new_wait_time_set, condition);
                     }
@@ -855,19 +855,23 @@ pub fn lower_iopath<'a>(
                 };
             }
 
-            let new_wait_time_set = new_wait_time_set
+            let new_endwait_time_set = new_endwait_time_set
                 .unwrap_or_else(|| builder.constant(mctx.gl(), Bits::new_ones(SCALAR_VSIZE)));
 
-            wait_time_set = builder.select(mctx.gl(), is_active, new_wait_time_set, wait_time_set);
-            wait_time = builder.select(mctx.gl(), is_active, new_wait_time, wait_time);
+            endwait_time_set =
+                builder.select(mctx.gl(), is_active, new_endwait_time_set, endwait_time_set);
+            endwait_time = builder.select(mctx.gl(), is_active, new_wait_time, endwait_time);
         }
 
         // Set the wait time to zero, if no condition matched.
         let zero = builder.constant_u64(mctx.gl(), 0);
         let time = builder.time(mctx.gl());
+
+        // wait_time = endwait_time.saturating_sub(time - active_time)
         let active_offset = builder.minus(mctx.gl(), time, active_time);
-        let wait_time = builder.minus(mctx.gl(), wait_time, active_offset);
-        let wait_time = builder.select(mctx.gl(), wait_time_set, wait_time, zero);
+        let active_offset = builder.min(mctx.gl(), active_offset, endwait_time);
+        let wait_time = builder.minus(mctx.gl(), endwait_time, active_offset);
+        let wait_time = builder.select(mctx.gl(), endwait_time_set, wait_time, zero);
 
         let old_proxy_value = builder.probe(mctx.gl(), proxy);
         let old_proxy_value =
