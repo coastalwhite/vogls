@@ -22,9 +22,9 @@ module tb();
 
     gate g(i, j, o1, o2, o3);
 
-    always @(o1) $display("[T=%0d] o1 = %0x", $time(), o1);
-    always @(o2) $display("[T=%0d] o2 = %0x", $time(), o2);
-    always @(o3) $display("[T=%0d] o3 = %0x", $time(), o3);
+	initial #1 forever @(o1) $display("[T=%0d] o1 = %0x", $time(), o1);
+	initial #1 forever @(o2) $display("[T=%0d] o2 = %0x", $time(), o2);
+	initial #1 forever @(o3) $display("[T=%0d] o3 = %0x", $time(), o3);
 
     initial begin
         #10 i = 1; j = 1;

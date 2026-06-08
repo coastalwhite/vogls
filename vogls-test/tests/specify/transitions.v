@@ -1,5 +1,6 @@
 // vogls: skip=two-value-logic
 // vogls: verify-stdout[sort-lines]
+`timescale 1fs/1fs
 module gate(
     input i,
     output o1, o2, o3, o6, o12
