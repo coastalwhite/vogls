@@ -363,7 +363,7 @@ pub fn dims_to_array_elab<'a>(
     dimensions: AstIdRange<'a, Dimension<'a>>,
 ) -> Result<Vec<NonZeroU32>, ()> {
     let mut dims = Vec::with_capacity(dimensions.len());
-    for dim in dimensions.iter().rev() {
+    for dim in dimensions.iter() {
         let Dimension { lhs, rhs } = &*dim;
         let lhs = eval_constant_expr(gl, arenas, table, scope, diagnostics, *lhs, None);
         let rhs = eval_constant_expr(gl, arenas, table, scope, diagnostics, *rhs, None);

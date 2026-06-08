@@ -301,10 +301,10 @@ pub fn eval_constant_expr<'a>(
                     }
                 }
 
-                let exprs = end_length..end_length + exprs.len();
+                let exprs = (result_stack.len() - exprs.len()..result_stack.len()).rev();
                 let range = range_expression.map(|r| {
-                    let fst = result_stack.len() - 2;
-                    let snd = result_stack.len() - 1;
+                    let fst = end_length + 1;
+                    let snd = end_length;
                     match r {
                         BitSlice::MsbLsb(..) => RangeExpr::MsbLsb(fst, snd),
                         BitSlice::PlusWidth(..) => RangeExpr::PlusWidth(fst, snd),

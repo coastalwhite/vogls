@@ -654,7 +654,7 @@ pub fn lower_expr<'a>(
                     ty.force_net_width(),
                     dims,
                     transform,
-                    result_stack.len() - exprs.len()..result_stack.len(),
+                    (result_stack.len() - exprs.len()..result_stack.len()).rev(),
                     range_expr,
                 );
 
