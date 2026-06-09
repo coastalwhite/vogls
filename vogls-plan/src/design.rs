@@ -1,11 +1,12 @@
+use std::hash::Hash;
 use std::path::PathBuf;
 
-use vogls::LogicMode;
 use vogls::design::{Arena, Design};
-use vogls::runtime::plugins::RuntimePluginState;
-use vogls::utils::{VgHashMap, new_table_key};
+use vogls::utils::{VgHashMap, VgHashSet, new_table_key};
+use vogls::{LogicMode, SignalHandle, VoglsPlugin};
 use vogls_trace::TracePlugin;
 
+use crate::CspAble;
 use crate::compute::{
     CommonSubPlan, ComputeContext, ComputeDependencies, ComputeError, ComputeGraph, ComputeInputs,
     ComputeNode, ComputeResult, Key,
@@ -14,11 +15,43 @@ use crate::dsl::{DslNode, DslPtr};
 
 new_table_key! { pub struct LazyDesignKey; }
 
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone)]
 pub struct LazyDesign {
     pub sources: Vec<PathBuf>,
     pub top_level_module: Option<String>,
     pub trace: bool,
+    pub handles: VgHashSet<SignalRef>,
+}
+
+pub struct PlanDesign {
+    pub design: Design,
+    pub handles: VgHashMap<SignalRef, SignalHandle>,
+}
+
+impl CspAble for LazyDesign {
+    fn csp_eq(&self, other: &Self) -> bool {
+        let Self {
+            sources: l_sources,
+            top_level_module: l_tlm,
+            trace: _,
+            handles: _,
+        } = self;
+        let Self {
+            sources: r_sources,
+            top_level_module: r_tlm,
+            trace: _,
+            handles: _,
+        } = other;
+        l_sources == r_sources && l_tlm == r_tlm
+    }
+    fn csp_hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.sources.hash(state);
+        self.top_level_module.hash(state);
+    }
+    fn csp_merge(&mut self, other: Self) {
+        self.trace |= other.trace;
+        self.handles.extend(other.handles);
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -43,7 +76,7 @@ pub enum TimeUnit {
 }
 
 impl ComputeNode for LazyDesign {
-    type Output = Design;
+    type Output = PlanDesign;
 
     fn extend_inputs(&self, _deps: &mut ComputeDependencies) {}
     fn compute(
@@ -51,22 +84,45 @@ impl ComputeNode for LazyDesign {
         _ctx: &ComputeContext,
         _inputs: &ComputeInputs,
     ) -> ComputeResult<Self::Output> {
-        let mut builder = vogls::design::DesignBuilder::new();
+        let mut builder = vogls::DesignBuilder::new();
         let mut arena = Arena::default();
         for path in &self.sources {
             builder.add_source(path).map_err(|_| ComputeError {})?;
         }
         let parsed = builder.parse(&mut arena).map_err(|_| ComputeError {})?;
-        let design = parsed
+        let mut design = parsed
             .elaborate(LogicMode::TwoValue, self.top_level_module.as_deref())
             .map_err(|_| ComputeError {})?;
+
+        let handles = self
+            .handles
+            .iter()
+            .map(|s| {
+                let stable = design.table();
+                let mut symbol = stable.roots()[0];
+                for i in &s.inner {
+                    let Some(ident) = design.ident_table().get(i) else {
+                        return Err(ComputeError {});
+                    };
+                    let Some(sid) = stable.resolve(symbol, ident) else {
+                        return Err(ComputeError {});
+                    };
+                    symbol = sid;
+                }
+
+                let Some(handle) = design.get_signal_handle(symbol) else {
+                    return Err(ComputeError {});
+                };
+
+                Ok((s.clone(), handle))
+            })
+            .collect::<ComputeResult<VgHashMap<SignalRef, SignalHandle>>>()?;
+
         let mut plugins = Vec::new();
         if self.trace {
-            plugins.push(Box::new(TracePlugin::default()) as RuntimePluginState);
+            plugins.push(Box::new(TracePlugin::default()) as Box<dyn VoglsPlugin>);
         }
-        let mut design = design
-            .lower(&parsed, plugins)
-            .map_err(|_| ComputeError {})?;
+        let mut design = design.lower(plugins).map_err(|_| ComputeError {})?;
         design.optimize(vogls::ir::optimize::OptFlags {
             opt_rounds: 2,
             constant_propagation: true,
@@ -74,9 +130,9 @@ impl ComputeNode for LazyDesign {
             common_subexpr_elim: true,
             peephole: true,
         });
-        let design = design.to_bytecode(parsed).map_err(|_| ComputeError {})?;
+        let design = design.to_bytecode().map_err(|_| ComputeError {})?;
         arena.reset();
-        Ok(design)
+        Ok(PlanDesign { design, handles })
     }
 }
 
@@ -88,12 +144,7 @@ impl DslNode for LazyDesign {
         csp: &'a mut CommonSubPlan,
     ) -> Key {
         let r = self.clone();
-
-        Key::Design(
-            *csp.designs
-                .entry(r.clone())
-                .or_insert_with(|| graph.designs.insert(r)),
-        )
+        Key::PlanDesign(csp.designs.insert(&mut graph.designs, r))
     }
     fn extend_inputs<'a>(&'a self, _f: &mut Vec<&'a dyn DslNode>) {}
 }

@@ -43,7 +43,7 @@ impl ComputeNode for LazyPlan {
     fn extend_inputs(&self, deps: &mut ComputeDependencies) {
         deps.outputs.extend(self.components.iter_values());
     }
-    fn compute(&self, ctx: &ComputeContext, inputs: &ComputeInputs) -> ComputeResult<Self::Output> {
+    fn compute(&self, _ctx: &ComputeContext, inputs: &ComputeInputs) -> ComputeResult<Self::Output> {
         let components = self
             .components
             .iter()
@@ -72,11 +72,7 @@ impl DslNode for DslLazyPlan {
                 })
                 .collect(),
         };
-        Key::Plan(
-            *csp.plans
-                .entry(r.clone())
-                .or_insert_with(|| graph.plans.insert(r)),
-        )
+        Key::Plan(csp.plans.insert(&mut graph.plans, r))
     }
 
     fn extend_inputs<'a>(&'a self, f: &mut Vec<&'a dyn DslNode>) {

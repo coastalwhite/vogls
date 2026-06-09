@@ -12,12 +12,14 @@ use vogls_utils::VgHashMap;
 pub struct SymbolId(NonZeroU64);
 
 /// A table that contains all symbols in a hierarchy.
+#[derive(Clone)]
 pub struct SymbolTable<T> {
     roots: Vec<SymbolId>,
     symbols: Vec<Symbol<T>>,
     lut: VgHashMap<(Option<SymbolId>, IdentId), SymbolId>,
 }
 
+#[derive(Clone)]
 pub struct FrozenSymbolTable<T> {
     roots: Vec<SymbolId>,
     symbols: Vec<FrozenSymbol<T>>,
@@ -25,6 +27,7 @@ pub struct FrozenSymbolTable<T> {
     lut: VgHashMap<(Option<SymbolId>, IdentId), SymbolId>,
 }
 
+#[derive(Clone)]
 pub struct Symbol<T> {
     name: IdentId,
     origin: TokenRange,
@@ -34,6 +37,7 @@ pub struct Symbol<T> {
     pub content: T,
 }
 
+#[derive(Clone)]
 pub struct FrozenSymbol<T> {
     name: IdentId,
     origin: TokenRange,

@@ -33,6 +33,10 @@ impl TracePlugin {
 }
 
 impl vogls::VoglsPlugin for TracePlugin {
+    fn clone(&self) -> Box<dyn vogls::VoglsPlugin> {
+        Box::new(Clone::clone(self))
+    }
+
     fn register_handles(&mut self, design: &mut ElaboratedDesign<'_>, table: &VSymbolTable) {
         self.handles.extend(
             table

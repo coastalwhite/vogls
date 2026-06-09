@@ -1,6 +1,7 @@
 use std::fs::read_to_string;
 use std::io::stdout;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use clap::Parser;
 use vogls::design::{Arena, Macro};
@@ -161,10 +162,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
 
         if emit_unoptimized_fuse_graph {
-            elaborate.set_unoptimized_fuse_graphs_emit(Box::new(stdout()) as _);
+            elaborate.set_unoptimized_fuse_graphs_emit(Arc::new(Mutex::new(stdout())) as _);
         }
         if emit_optimized_fuse_graph {
-            elaborate.set_optimized_fuse_graphs_emit(Box::new(stdout()) as _);
+            elaborate.set_optimized_fuse_graphs_emit(Arc::new(Mutex::new(stdout())) as _);
         }
 
         if emit_hierarchy {

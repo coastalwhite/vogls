@@ -7,6 +7,7 @@ edition.workspace = true
 vogls.workspace = true
 vogls-trace.workspace = true
 hashbrown.workspace = true
+foldhash.workspace = true
 rand.workspace = true
 rayon.workspace = true
 pyo3 = { workspace = true, optional = true }

@@ -1270,7 +1270,7 @@ impl From<Mode> for LogicMode {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct GlobalContext {
     pub logic_mode: LogicMode,
     pub processes: SlotMap<ProcessKey, Process>,
@@ -1311,7 +1311,7 @@ define_process_kinds! {
     Other => "other",
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Process {
     pub kind: ProcessKind,
     pub entry: BasicBlockKey,

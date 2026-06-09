@@ -4,10 +4,7 @@ use std::ptr;
 use hashbrown::hash_map::Entry;
 use vogls::utils::VgHashMap;
 
-use crate::array::{LazyArray, LazyArrayKey, LazyValue, LazyValueKey};
 use crate::compute::{CommonSubPlan, ComputeError, ComputeGraph, ComputeResult, Key};
-use crate::output::{LazyOutput, LazyOutputKey};
-use crate::plan::{LazyPlan, LazyPlanKey};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DslPtr(*const c_void);

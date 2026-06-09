@@ -128,7 +128,7 @@ pub enum ArrayAgg {
     Min,
 }
 impl ArrayAgg {
-    fn compute(self, array: &Array) -> ComputeResult<Value> {
+    fn compute(self, _array: &Array) -> ComputeResult<Value> {
         todo!()
     }
 }
@@ -224,11 +224,7 @@ impl DslNode for DslLazyValue {
                 *agg,
             ),
         };
-        Key::Value(
-            *csp.values
-                .entry(r.clone())
-                .or_insert_with(|| graph.values.insert(r)),
-        )
+        Key::Value(csp.values.insert(&mut graph.values, r))
     }
 
     fn extend_inputs<'a>(&'a self, f: &mut Vec<&'a dyn DslNode>) {
@@ -254,11 +250,7 @@ impl DslNode for DslLazyArray {
                 length: *length,
             },
         };
-        Key::Array(
-            *csp.arrays
-                .entry(r.clone())
-                .or_insert_with(|| graph.arrays.insert(r)),
-        )
+        Key::Array(csp.arrays.insert(&mut graph.arrays, r))
     }
 
     fn extend_inputs<'a>(&'a self, _f: &mut Vec<&'a dyn DslNode>) {

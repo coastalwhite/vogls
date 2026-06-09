@@ -1,6 +1,6 @@
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_fuse_signals::{Driver, InputEdge};
-use vogls_ir::{INTEGER_VSIZE, SCALAR_VSIZE, SignalSlice, VectorSize};
+use vogls_ir::{SignalSlice, VectorSize};
 
 use crate::ast::expr::{BitSlice, Expr};
 use crate::ast::module::NetAssignment;
@@ -9,147 +9,8 @@ use crate::elaborate::VSymbol;
 use crate::lower::addressing::lower_addressing;
 use crate::lower::{hident_span, try_resolve_hident, try_resolve_net};
 
-use super::addressing::{Address, ConstantAddressingContext};
-use super::{Diagnostics, LowerContext, MutLowerContext, VType, VValue, eval_constant_expr};
-
-fn try_constant_expr_no_ctx<'a>(
-    ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
-    scope: SymbolId,
-    expr: AstId<'a, Expr<'a>>,
-) -> Option<VValue> {
-    eval_constant_expr(
-        &mctx.gl,
-        &ctx.arenas,
-        &ctx.table,
-        scope,
-        &mut Diagnostics::default(),
-        expr.into_constant(),
-        None,
-    )
-    .ok()
-}
-
-fn try_constant_bitslice<'a>(
-    ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
-    scope: SymbolId,
-    bitslice: BitSlice<'a>,
-) -> Result<Option<SignalSlice>, ()> {
-    match bitslice {
-        BitSlice::MsbLsb(msb, lsb) => {
-            let msb = eval_constant_expr(
-                &mctx.gl,
-                &ctx.arenas,
-                &ctx.table,
-                scope,
-                &mut mctx.diagnostics,
-                msb,
-                None,
-            )?;
-            let lsb = eval_constant_expr(
-                &mctx.gl,
-                &ctx.arenas,
-                &ctx.table,
-                scope,
-                &mut mctx.diagnostics,
-                lsb,
-                None,
-            )?;
-            // @TODO: Validate input.
-            let Some(msb) = msb
-                .coerce(&VType::UnsignedNet(INTEGER_VSIZE))
-                .into_bits()
-                .extract_exact_u32()
-            else {
-                return Ok(None);
-            };
-            let Some(lsb) = lsb
-                .coerce(&VType::UnsignedNet(INTEGER_VSIZE))
-                .into_bits()
-                .extract_exact_u32()
-            else {
-                return Ok(None);
-            };
-            // @TODO: validate
-            let slice = SignalSlice::new(msb, lsb).unwrap();
-            Ok(Some(slice))
-        }
-        BitSlice::PlusWidth(offset, ast_width) => {
-            let Some(offset) = try_constant_expr_no_ctx(ctx, mctx, scope, offset) else {
-                return Ok(None);
-            };
-            let width = eval_constant_expr(
-                &mctx.gl,
-                &ctx.arenas,
-                &ctx.table,
-                scope,
-                &mut mctx.diagnostics,
-                ast_width,
-                None,
-            )?;
-            let Some(offset) = offset
-                .coerce(&VType::UnsignedNet(INTEGER_VSIZE))
-                .into_bits()
-                .extract_exact_u32()
-            else {
-                return Ok(None);
-            };
-            let Some(width) = width
-                .coerce(&VType::UnsignedNet(INTEGER_VSIZE))
-                .into_bits()
-                .extract_exact_u32()
-            else {
-                return Ok(None);
-            };
-            let Some(width) = VectorSize::new(width) else {
-                mctx.diagnostics
-                    .not_yet_implemented(ctx.arenas.get_span(ast_width), "zero-width net");
-                return Err(());
-            };
-            // @TODO: validate
-            let slice = SignalSlice::from_width(offset, width).unwrap();
-            Ok(Some(slice))
-        }
-        BitSlice::MinusWidth(offset, ast_width) => {
-            let Some(offset) = try_constant_expr_no_ctx(ctx, mctx, scope, offset) else {
-                return Ok(None);
-            };
-            let width = eval_constant_expr(
-                &mctx.gl,
-                &ctx.arenas,
-                &ctx.table,
-                scope,
-                &mut mctx.diagnostics,
-                ast_width,
-                None,
-            )?;
-            let Some(offset) = offset
-                .coerce(&VType::UnsignedNet(INTEGER_VSIZE))
-                .into_bits()
-                .extract_exact_u32()
-            else {
-                return Ok(None);
-            };
-            let Some(width) = width
-                .coerce(&VType::UnsignedNet(INTEGER_VSIZE))
-                .into_bits()
-                .extract_exact_u32()
-            else {
-                return Ok(None);
-            };
-            let Some(width) = VectorSize::new(width) else {
-                mctx.diagnostics
-                    .not_yet_implemented(ctx.arenas.get_span(ast_width), "zero-width net");
-                return Err(());
-            };
-            // @TODO: validate
-            let lsb = offset.strict_sub(width.get() - 1);
-            let slice = SignalSlice::from_width(lsb, width).unwrap();
-            Ok(Some(slice))
-        }
-    }
-}
+use super::addressing::ConstantAddressingContext;
+use super::{Diagnostics, LowerContext, MutLowerContext};
 
 pub fn try_lower_fuse_driver_expr<'a>(
     ctx: &LowerContext<'a, '_>,

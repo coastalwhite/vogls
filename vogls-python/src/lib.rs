@@ -7,9 +7,8 @@ mod vogls {
     use pyo3::exceptions::{PyException, PyValueError};
     use pyo3::{IntoPyObjectExt, PyAny, PyResult, prelude::*};
     use vogls::design::DesignState;
-    use vogls::symbol::{NetValue, Symbol};
-    use vogls::utils::{IndexMap, TimerStack};
-    use vogls::{BitsFormatOptions, ExecutionContext, LogicMode, SimulationIo, VectorSize};
+    use vogls::utils::{IndexMap, VgHashSet};
+    use vogls::{BitsFormatOptions, SimulationIo, VectorSize};
 
     use vogls_plan::array::{
         Array, ArrayAgg, DslLazyArray, DslLazyValue, LazyArray, LazyValue, Value,
@@ -19,8 +18,7 @@ mod vogls {
     use vogls_plan::dsl::DslNode;
     use vogls_plan::output::{DslLazyOutput, LazyOutput, Output};
     use vogls_plan::plan::{DslLazyPlan, LazyPlan, Plan};
-    use vogls_plan::run::{DslLazyStep, LazyStep, RunAgg};
-    use vogls_trace::TracePlugin;
+    use vogls_plan::run::{DslLazyStep, RunAgg};
 
     #[pyo3::pyclass(frozen)]
     #[repr(transparent)]
@@ -46,6 +44,149 @@ mod vogls {
         inner: Arc<Mutex<vogls::design::DesignState>>,
     }
 
+    #[pyo3::pyclass]
+    pub struct DesignBuilder {
+        inner: Arc<Mutex<::vogls::DesignBuilder>>,
+    }
+
+    #[pyo3::pyclass]
+    pub struct ParsedDesign {
+        inner: ::vogls::sync::ParsedDesign,
+    }
+
+    #[pyo3::pyclass]
+    pub struct ElaboratedDesign {
+        inner: ::vogls::sync::ElaboratedDesign,
+    }
+
+    #[pyo3::pyclass]
+    pub struct LoweredDesign {
+        inner: ::vogls::LoweredDesign,
+    }
+
+    #[pyo3::pyclass(frozen, eq, eq_int, from_py_object)]
+    #[derive(PartialEq, Clone)]
+    pub enum LogicMode {
+        TwoValue,
+        FourValue,
+    }
+
+    impl From<::vogls::LogicMode> for LogicMode {
+        fn from(value: vogls::LogicMode) -> Self {
+            match value {
+                vogls::LogicMode::TwoValue => Self::TwoValue,
+                vogls::LogicMode::FourValue => Self::FourValue,
+            }
+        }
+    }
+    impl Into<::vogls::LogicMode> for LogicMode {
+        fn into(self) -> vogls::LogicMode {
+            match self {
+                Self::TwoValue => vogls::LogicMode::TwoValue,
+                Self::FourValue => vogls::LogicMode::FourValue,
+            }
+        }
+    }
+
+    #[pymethods]
+    impl DesignBuilder {
+        #[new]
+        pub fn new() -> Self {
+            DesignBuilder {
+                inner: Arc::new(Mutex::new(::vogls::DesignBuilder::new())),
+            }
+        }
+
+        pub fn add_source(&mut self, path: PathBuf) -> PyResult<()> {
+            self.inner
+                .lock()
+                .unwrap()
+                .add_source(&path)
+                .map_err(|_| PyValueError::new_err("failed to tokenize"))?;
+            Ok(())
+        }
+        pub fn add_source_str(&mut self, content: String) -> PyResult<()> {
+            self.inner
+                .lock()
+                .unwrap()
+                .add_source_str(content)
+                .map_err(|_| PyValueError::new_err("failed to tokenize"))?;
+            Ok(())
+        }
+
+        pub fn parse(&self) -> PyResult<ParsedDesign> {
+            let inner = self.inner.lock().unwrap().clone();
+            let design = ::vogls::sync::ParsedDesign::parse(inner)
+                .map_err(|_| PyValueError::new_err("failed to parse"))?;
+            Ok(ParsedDesign { inner: design })
+        }
+    }
+
+    #[pymethods]
+    impl ParsedDesign {
+        #[pyo3(signature = (mode = LogicMode::TwoValue, top_level_module = None))]
+        pub fn elaborate(
+            &self,
+            mode: LogicMode,
+            top_level_module: Option<String>,
+        ) -> PyResult<ElaboratedDesign> {
+            self.inner
+                .clone()
+                .elaborate(mode.into(), top_level_module)
+                .map(|inner| ElaboratedDesign { inner })
+                .map_err(|_| PyValueError::new_err("failed to elaborate"))
+        }
+    }
+
+    #[pymethods]
+    impl ElaboratedDesign {
+        #[pyo3(signature = ())]
+        pub fn lower(&self) -> PyResult<LoweredDesign> {
+            self.inner
+                .clone()
+                .lower(vec![])
+                .map(|inner| LoweredDesign { inner })
+                .map_err(|_| PyValueError::new_err("failed to elaborate"))
+        }
+    }
+
+    #[pymethods]
+    impl LoweredDesign {
+        #[pyo3(signature = ())]
+        pub fn to_bytecode(&self) -> PyResult<Design> {
+            self.inner
+                .clone()
+                .to_bytecode()
+                .map(|inner| {
+                    let state = inner.initial_state().clone();
+                    Design {
+                        inner,
+                        state: Snapshot {
+                            inner: Arc::new(Mutex::new(state)),
+                        },
+                    }
+                })
+                .map_err(|_| PyValueError::new_err("failed to compile"))
+        }
+
+        #[pyo3(signature = ())]
+        pub fn compile(&self) -> PyResult<Design> {
+            self.inner
+                .clone()
+                .compile()
+                .map(|inner| {
+                    let state = inner.initial_state().clone();
+                    Design {
+                        inner,
+                        state: Snapshot {
+                            inner: Arc::new(Mutex::new(state)),
+                        },
+                    }
+                })
+                .map_err(|_| PyValueError::new_err("failed to compile"))
+        }
+    }
+
     #[pyo3::pyclass(frozen)]
     pub struct TraceRef {
         snapshot: Snapshot,
@@ -54,75 +195,75 @@ mod vogls {
 
     #[pymethods]
     impl Design {
-        #[new]
-        #[pyo3(signature = (path, top_level_module = None, defines = None, four_value_logic = false, compile = false, trace = false, debug_symbols = false, opt = false))]
-        fn new(
-            path: PathBuf,
-            top_level_module: Option<String>,
-            defines: Option<Vec<String>>,
-            four_value_logic: bool,
-            compile: bool,
-            trace: bool,
-            debug_symbols: bool,
-            opt: bool,
-        ) -> PyResult<Self> {
-            let mut ectx = ExecutionContext {
-                stdout: Box::new(std::io::stdout()),
-                stderr: Box::new(std::io::stderr()),
-                defines: defines.unwrap_or_default(),
-                emit_hierarchy: false,
-                emit_unoptimized_ir: false,
-                emit_ir: false,
-                emit_vm: false,
-                emit_process_stats: false,
-                itrace: false,
-                stats: false,
-                debug_symbols,
-                time: 0,
-                opt: vogls::ir::optimize::OptFlags {
-                    opt_rounds: if opt { 2 } else { 0 },
-                    constant_propagation: opt,
-                    deadcode_elimination: opt,
-                    common_subexpr_elim: opt,
-                    peephole: opt,
-                },
-                logic_mode: if four_value_logic {
-                    LogicMode::FourValue
-                } else {
-                    LogicMode::TwoValue
-                },
-                no_run: false,
-                vcd: None,
-                sdf: None,
-                compile,
-                output_source: Some(PathBuf::from("out.c")),
-                timings: false,
-                print_optimized_fuse_signals: false,
-                print_round_fuse_signals: false,
-                print_unoptimized_fuse_signals: false,
-            };
-
-            let mut plugins = Vec::new();
-            if trace {
-                plugins.push(Box::new(TracePlugin::default()) as _);
-            }
-
-            let inner = vogls::design::Design::new(
-                &[path.as_path()],
-                &mut TimerStack::new(false),
-                top_level_module.as_deref(),
-                &mut ectx,
-                plugins,
-            )
-            .map_err(|e| PyException::new_err(e.to_string()))?;
-            let snapshot = Snapshot {
-                inner: Arc::new(Mutex::new(inner.initial_state.clone())),
-            };
-            Ok(Self {
-                inner,
-                state: snapshot,
-            })
-        }
+        // #[new]
+        // #[pyo3(signature = (path, top_level_module = None, defines = None, four_value_logic = false, compile = false, trace = false, debug_symbols = false, opt = false))]
+        // fn new(
+        //     path: PathBuf,
+        //     top_level_module: Option<String>,
+        //     defines: Option<Vec<String>>,
+        //     four_value_logic: bool,
+        //     compile: bool,
+        //     trace: bool,
+        //     debug_symbols: bool,
+        //     opt: bool,
+        // ) -> PyResult<Self> {
+        //     let mut ectx = ExecutionContext {
+        //         stdout: Box::new(std::io::stdout()),
+        //         stderr: Box::new(std::io::stderr()),
+        //         defines: defines.unwrap_or_default(),
+        //         emit_hierarchy: false,
+        //         emit_unoptimized_ir: false,
+        //         emit_ir: false,
+        //         emit_vm: false,
+        //         emit_process_stats: false,
+        //         itrace: false,
+        //         stats: false,
+        //         debug_symbols,
+        //         time: 0,
+        //         opt: vogls::ir::optimize::OptFlags {
+        //             opt_rounds: if opt { 2 } else { 0 },
+        //             constant_propagation: opt,
+        //             deadcode_elimination: opt,
+        //             common_subexpr_elim: opt,
+        //             peephole: opt,
+        //         },
+        //         logic_mode: if four_value_logic {
+        //             LogicMode::FourValue
+        //         } else {
+        //             LogicMode::TwoValue
+        //         },
+        //         no_run: false,
+        //         vcd: None,
+        //         sdf: None,
+        //         compile,
+        //         output_source: Some(PathBuf::from("out.c")),
+        //         timings: false,
+        //         print_optimized_fuse_signals: false,
+        //         print_round_fuse_signals: false,
+        //         print_unoptimized_fuse_signals: false,
+        //     };
+        //
+        //     let mut plugins = Vec::new();
+        //     if trace {
+        //         plugins.push(Box::new(TracePlugin::default()) as _);
+        //     }
+        //
+        //     let inner = vogls::design::Design::new(
+        //         &[path.as_path()],
+        //         &mut TimerStack::new(false),
+        //         top_level_module.as_deref(),
+        //         &mut ectx,
+        //         plugins,
+        //     )
+        //     .map_err(|e| PyException::new_err(e.to_string()))?;
+        //     let snapshot = Snapshot {
+        //         inner: Arc::new(Mutex::new(inner.initial_state.clone())),
+        //     };
+        //     Ok(Self {
+        //         inner,
+        //         state: snapshot,
+        //     })
+        // }
 
         fn run(&self, time: u64) -> PyResult<()> {
             self.inner
@@ -159,67 +300,67 @@ mod vogls {
             })
         }
 
-        fn signals_resolve(&self, name: Vec<String>) -> PyResult<SignalRef> {
-            let mut sid = self.inner.elab_table.roots()[0];
-            for n in &name {
-                let Some(ident) = self.inner.ident_table.get(n) else {
-                    return Err(PyException::new_err("signal not found"));
-                };
-                let Some(ssid) = self.inner.elab_table.resolve(sid, ident) else {
-                    return Err(PyException::new_err("signal not found"));
-                };
-                sid = ssid;
-            }
-            let Symbol::Net(net_symbol) = &self.inner.elab_table[sid].content else {
-                return Err(PyException::new_err("not a signal"));
-            };
-            let (signal, _slice) = match &net_symbol.net {
-                NetValue::Signal(s) => s.blocking_drive_signal(),
-                NetValue::Constant(_) => todo!(),
-            };
-            Ok(SignalRef {
-                inner: self.inner.get_rt_signal(signal),
-            })
-        }
-
-        fn signals_set(
-            &self,
-            py: Python<'_>,
-            snapshot: Py<Snapshot>,
-            signal: Py<SignalRef>,
-            value: Py<Bits>,
-        ) -> PyResult<()> {
-            let snapshot = snapshot.borrow(py);
-            let mut snapshot = snapshot.inner.lock().unwrap();
-            self.inner
-                .set_signal(&mut snapshot, signal.get().inner, &value.get().inner);
-            Ok(())
-        }
-
-        fn signals_get(
-            &self,
-            py: Python<'_>,
-            snapshot: Py<Snapshot>,
-            signal: Py<SignalRef>,
-        ) -> PyResult<Bits> {
-            let snapshot = snapshot.borrow(py);
-            let snapshot = snapshot.inner.lock().unwrap();
-            let bits = self.inner.get_signal(&snapshot, signal.get().inner);
-            Ok(Bits { inner: bits })
-        }
-
-        pub fn trace(&self, py: Python<'_>, snapshot: Py<Snapshot>) -> TraceRef {
-            let snapshot = snapshot.borrow(py);
-            let design = &self.inner;
-            let mut state = snapshot.inner.lock().unwrap();
-            state.plugins_mut()[0] = Box::new(TracePlugin::new(design));
-            TraceRef {
-                snapshot: Snapshot {
-                    inner: snapshot.inner.clone(),
-                },
-                plugin_idx: 0,
-            }
-        }
+        // fn signals_resolve(&self, name: Vec<String>) -> PyResult<SignalRef> {
+        //     let mut sid = self.inner.elab_table.roots()[0];
+        //     for n in &name {
+        //         let Some(ident) = self.inner.ident_table.get(n) else {
+        //             return Err(PyException::new_err("signal not found"));
+        //         };
+        //         let Some(ssid) = self.inner.elab_table.resolve(sid, ident) else {
+        //             return Err(PyException::new_err("signal not found"));
+        //         };
+        //         sid = ssid;
+        //     }
+        //     let Symbol::Net(net_symbol) = &self.inner.elab_table[sid].content else {
+        //         return Err(PyException::new_err("not a signal"));
+        //     };
+        //     let (signal, _slice) = match &net_symbol.net {
+        //         NetValue::Signal(s) => s.blocking_drive_signal(),
+        //         NetValue::Constant(_) => todo!(),
+        //     };
+        //     Ok(SignalRef {
+        //         inner: self.inner.get_rt_signal(signal),
+        //     })
+        // }
+        //
+        // fn signals_set(
+        //     &self,
+        //     py: Python<'_>,
+        //     snapshot: Py<Snapshot>,
+        //     signal: Py<SignalRef>,
+        //     value: Py<Bits>,
+        // ) -> PyResult<()> {
+        //     let snapshot = snapshot.borrow(py);
+        //     let mut snapshot = snapshot.inner.lock().unwrap();
+        //     self.inner
+        //         .set_signal(&mut snapshot, signal.get().inner, &value.get().inner);
+        //     Ok(())
+        // }
+        //
+        // fn signals_get(
+        //     &self,
+        //     py: Python<'_>,
+        //     snapshot: Py<Snapshot>,
+        //     signal: Py<SignalRef>,
+        // ) -> PyResult<Bits> {
+        //     let snapshot = snapshot.borrow(py);
+        //     let snapshot = snapshot.inner.lock().unwrap();
+        //     let bits = self.inner.get_signal(&snapshot, signal.get().inner);
+        //     Ok(Bits { inner: bits })
+        // }
+        //
+        // pub fn trace(&self, py: Python<'_>, snapshot: Py<Snapshot>) -> TraceRef {
+        //     let snapshot = snapshot.borrow(py);
+        //     let design = &self.inner;
+        //     let mut state = snapshot.inner.lock().unwrap();
+        //     state.plugins_mut()[0] = Box::new(TracePlugin::new(design));
+        //     TraceRef {
+        //         snapshot: Snapshot {
+        //             inner: snapshot.inner.clone(),
+        //         },
+        //         plugin_idx: 0,
+        //     }
+        // }
     }
 
     #[pymethods]
@@ -362,6 +503,7 @@ mod vogls {
                 sources: paths,
                 top_level_module,
                 trace: true,
+                handles: VgHashSet::default(),
             }))
         }
 

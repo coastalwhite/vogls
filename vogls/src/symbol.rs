@@ -6,6 +6,7 @@ use vogls_utils::NonMaxU32;
 use vogls_verilog::elaborate::VSymbol;
 use vogls_verilog::lower::VType;
 
+#[derive(Clone)]
 pub enum Symbol {
     Module,
     Parameter(Bits),
@@ -56,12 +57,14 @@ impl From<VSymbol> for Symbol {
     }
 }
 
+#[derive(Clone)]
 pub struct NetSymbol {
     pub ty: VType,
     pub dims: Vec<NonZeroU32>,
     pub net: NetValue,
 }
 
+#[derive(Clone)]
 pub enum NetValue {
     Signal(NetSignal),
     Constant(Bits),
@@ -75,6 +78,7 @@ impl NetValue {
     }
 }
 
+#[derive(Clone)]
 pub struct NetSignal {
     width: VectorSize,
     pub prb: (SignalKey, Option<NonMaxU32>),

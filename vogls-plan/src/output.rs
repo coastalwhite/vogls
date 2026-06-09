@@ -84,7 +84,11 @@ impl ComputeNode for LazyOutput {
             Self::HammingDistance(_) => {}
         }
     }
-    fn compute(&self, ctx: &ComputeContext, inputs: &ComputeInputs) -> ComputeResult<<Self as ComputeNode>::Output> {
+    fn compute(
+        &self,
+        _ctx: &ComputeContext,
+        inputs: &ComputeInputs,
+    ) -> ComputeResult<<Self as ComputeNode>::Output> {
         use Output as O;
         Ok(match self {
             Self::Output(l) => l.clone(),
@@ -128,11 +132,7 @@ impl DslNode for DslLazyOutput {
             ),
             Self::HammingDistance(v) => O::HammingDistance(v.clone()),
         };
-        Key::Output(
-            *csp.outputs
-                .entry(r.clone())
-                .or_insert_with(|| graph.outputs.insert(r)),
-        )
+        Key::Output(csp.outputs.insert(&mut graph.outputs, r))
     }
 
     fn extend_inputs<'a>(&'a self, f: &mut Vec<&'a dyn DslNode>) {

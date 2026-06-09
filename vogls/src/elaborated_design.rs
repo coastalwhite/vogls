@@ -1,7 +1,8 @@
 use std::fmt;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
-use vogls_frontend::ident_table::IdentId;
+use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_frontend::symbol_table::{FrozenSymbolTable, SymbolId, SymbolTable};
 use vogls_fuse_signals::{FuseGraph, FuseGraphOptimizer, FuseTarget};
 use vogls_ir::{GlobalContext, SignalFlags};
@@ -21,6 +22,7 @@ use crate::plugin::VoglsPlugin;
 use crate::symbol::{NetValue, Symbol};
 use crate::{LowerError, LoweredDesign, ParsedDesign};
 
+#[derive(Clone)]
 pub struct ElaboratedDesign<'a> {
     pub(crate) ast: Ast<'a>,
     pub(crate) token_buffer: Tokenized,
@@ -32,8 +34,8 @@ pub struct ElaboratedDesign<'a> {
     pub(crate) udps: VgHashMap<IdentId, AstId<'a, UdpDeclaration<'a>>>,
     pub(crate) gl: GlobalContext,
 
-    pub(crate) unoptimized_fgs: Option<Box<dyn std::io::Write>>,
-    pub(crate) optimized_fgs: Option<Box<dyn std::io::Write>>,
+    pub(crate) unoptimized_fgs: Option<Arc<Mutex<dyn std::io::Write + Send + Sync>>>,
+    pub(crate) optimized_fgs: Option<Arc<Mutex<dyn std::io::Write + Send + Sync>>>,
 }
 
 pub struct ElaborationError<'a> {
@@ -118,13 +120,16 @@ impl<'a> ElaboratedDesign<'a> {
     #[cfg(feature = "unstable")]
     pub fn set_unoptimized_fuse_graphs_emit(
         &mut self,
-        writer: Box<dyn std::io::Write>,
+        writer: Arc<Mutex<dyn std::io::Write + Send + Sync>>,
     ) -> &mut Self {
         self.unoptimized_fgs = Some(writer);
         self
     }
     #[cfg(feature = "unstable")]
-    pub fn set_optimized_fuse_graphs_emit(&mut self, writer: Box<dyn std::io::Write>) -> &mut Self {
+    pub fn set_optimized_fuse_graphs_emit(
+        &mut self,
+        writer: Arc<Mutex<dyn std::io::Write + Send + Sync>>,
+    ) -> &mut Self {
         self.optimized_fgs = Some(writer);
         self
     }
@@ -443,18 +448,20 @@ impl<'a> ElaboratedDesign<'a> {
             FuseGraphOptimizer::new(FuseGraph::from_connections(&mut mctx.gl, &mctx.connections));
         if let Some(unoptimized_fgs) = unoptimized_fgs.as_mut() {
             writeln!(
-                unoptimized_fgs,
+                unoptimized_fgs.lock().unwrap(),
                 "{}",
                 opt.graph().display_dot(&mctx.gl.signals)
-            ).unwrap();
+            )
+            .unwrap();
         }
         opt.optimize();
         if let Some(optimized_fgs) = optimized_fgs.as_mut() {
             writeln!(
-                optimized_fgs,
+                optimized_fgs.lock().unwrap(),
                 "{}",
                 opt.graph().display_dot(&mctx.gl.signals)
-            ).unwrap();
+            )
+            .unwrap();
         }
         let (prb_fuse, drv_fuse) = opt.finalize(mctx.gl());
 
@@ -507,9 +514,13 @@ impl<'a> ElaboratedDesign<'a> {
             print_vm_map: false,
         })
     }
+
+    pub fn ident_table(&self) -> &IdentTable {
+        &self.arenas.ident_table
+    }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct SignalHandle {
     pub(crate) symbol: SymbolId,
 }

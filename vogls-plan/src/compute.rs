@@ -1,11 +1,11 @@
 use std::fmt;
 
 use rayon::{ThreadPool, ThreadPoolBuilder};
-use vogls::design::Design;
 use vogls::utils::{Table, VgHashMap};
 
+use crate::CspTable;
 use crate::array::{Array, LazyArray, LazyArrayKey, LazyValue, LazyValueKey, Value};
-use crate::design::{LazyDesign, LazyDesignKey};
+use crate::design::{LazyDesign, LazyDesignKey, PlanDesign};
 use crate::output::{LazyOutput, LazyOutputKey, Output};
 use crate::plan::{LazyPlan, LazyPlanKey, Plan};
 use crate::run::{LazyRun, LazyRunKey, Run};
@@ -72,7 +72,7 @@ macro_rules! impl_graph_key {
 
         #[derive(Default)]
         pub struct CommonSubPlan {
-            $(pub(crate) $table: VgHashMap<$value, $key>,)+
+            $(pub(crate) $table: CspTable<$key>,)+
         }
 
         impl ComputeDependencies {
@@ -118,7 +118,7 @@ macro_rules! impl_graph_key {
 }
 
 impl_graph_key! {
-    (LazyDesignKey, designs, as_design, LazyDesign, Design),
+    (LazyDesignKey, designs, as_design, LazyDesign, PlanDesign),
     (LazyPlanKey, plans, as_plan, LazyPlan, Plan),
     (LazyOutputKey, outputs, as_output, LazyOutput, Output),
     (LazyArrayKey, arrays, as_array, LazyArray, Array),

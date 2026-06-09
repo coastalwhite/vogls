@@ -9,10 +9,11 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pyo3.workspace = true
-vogls = { workspace = true, features = ["random"] }
+vogls = { workspace = true, features = ["random", "unstable"] }
 vogls-trace.workspace = true
 vogls-plan = { workspace = true, features = ["python"] }
 hashbrown.workspace = true
+ouroboros.workspace = true
 
 [lints]
 workspace = true

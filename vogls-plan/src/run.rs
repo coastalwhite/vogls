@@ -2,10 +2,9 @@ use std::sync::Arc;
 
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use vogls::SimulationIo;
-use vogls::design::{Design, DesignState};
-use vogls::symbol::{NetValue, Symbol};
+use vogls::design::DesignState;
 use vogls::utils::{VgHashMap, new_table_key};
-use vogls_trace::{Trace, TracePlugin};
+use vogls_trace::Trace;
 
 use crate::TraceRef;
 use crate::array::{Array, DslLazyArray, LazyArrayKey, Value};
@@ -13,7 +12,7 @@ use crate::compute::{
     CommonSubPlan, ComputeContext, ComputeDependencies, ComputeError, ComputeGraph, ComputeInputs,
     ComputeNode, ComputeResult, Key,
 };
-use crate::design::{LazyDesign, LazyDesignKey, SignalRef, Time};
+use crate::design::{LazyDesign, LazyDesignKey, PlanDesign, SignalRef, Time};
 use crate::dsl::{DslNode, DslPtr};
 use crate::output::{HammingDistance, Output};
 
@@ -92,7 +91,7 @@ impl LazyStep {
 
     fn compute(
         &self,
-        design: &Design,
+        design: &PlanDesign,
         state: &mut DesignState,
         inputs: &ComputeInputs,
         trace_ref: &mut Option<TraceRef>,
@@ -140,29 +139,16 @@ impl LazyStep {
             }
             Self::Repeat(_) => Ok(()),
             Self::SetSignal(signal_ref, lp) => {
-                let mut sid = design.elab_table.roots()[0];
-                for n in &signal_ref.inner {
-                    let Some(ident) = design.ident_table.get(n) else {
-                        return Err(ComputeError {});
-                    };
-                    let Some(ssid) = design.elab_table.resolve(sid, ident) else {
-                        return Err(ComputeError {});
-                    };
-                    sid = ssid;
-                }
-                let Symbol::Net(net_symbol) = &design.elab_table[sid].content else {
-                    return Err(ComputeError {});
-                };
-                let (signal, _slice) = match &net_symbol.net {
-                    NetValue::Signal(s) => s.blocking_drive_signal(),
-                    NetValue::Constant(_) => todo!(),
-                };
+                let handle = design.handles[signal_ref];
+                let rt = design.design.resolve_handle(handle);
+                let size = design.design.resolve_handle_width(handle);
                 let value = inputs.arrays[lp].get(rid);
-                let value = value.to_bits(net_symbol.net.size());
-                design.set_signal(state, design.get_rt_signal(signal), &value);
+                let value = value.to_bits(size);
+                design.design.set_signal(state, rt, &value);
                 Ok(())
             }
             Self::RunFor(time) => design
+                .design
                 .run_from_state(
                     state,
                     &mut SimulationIo {
@@ -206,12 +192,7 @@ impl DslNode for DslLazyRun {
                 })
                 .collect(),
         };
-
-        Key::Run(
-            *csp.runs
-                .entry(r.clone())
-                .or_insert_with(|| graph.runs.insert(r)),
-        )
+        Key::Run(csp.runs.insert(&mut graph.runs, r))
     }
     fn extend_inputs<'a>(&'a self, f: &mut Vec<&'a dyn DslNode>) {
         f.push(self.design.as_ref() as &dyn DslNode);
@@ -248,7 +229,7 @@ impl ComputeNode for LazyRun {
         let num_traces = self.num_traces(inputs).map_err(|_| ComputeError {})?;
         // @TODO: Insert caching here.
         let design = &inputs.designs[&self.design];
-        let mut state = design.initial_state.clone();
+        let mut state = design.design.initial_state().clone();
 
         // Execute all steps that are shared between traces first on a single trace.
         let mut prelude_steps = 0;
@@ -346,8 +327,8 @@ fn collapse_outputs(outputs: &[Output]) -> Output {
             ),
             Value::Bits(_) => todo!(),
         }),
-        Output::Array(array) => todo!(),
-        Output::Plan(plan) => todo!(),
+        Output::Array(_array) => todo!(),
+        Output::Plan(_plan) => todo!(),
         Output::HammingDistance(_) => {
             let length = outputs
                 .iter()

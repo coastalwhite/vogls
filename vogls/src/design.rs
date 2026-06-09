@@ -4,7 +4,7 @@ use vogls_codegen::HeapRef;
 use vogls_frontend::ident_table::IdentTable;
 use vogls_frontend::symbol_table::{FrozenSymbolTable, SymbolId};
 use vogls_ir::vcd::{VcdScope, VcdValue, VcdVariableKey};
-use vogls_ir::{Bits, GlobalContext, SignalKey, SignalSlice};
+use vogls_ir::{Bits, GlobalContext, SignalKey, SignalSlice, VectorSize};
 use vogls_runtime::SimulationIo;
 use vogls_runtime::plugins::RuntimePluginState;
 use vogls_runtime::{RtSignalKey, RuntimeState};
@@ -14,7 +14,7 @@ pub use vogls_verilog::elaborate::{VSymbol, VSymbolTable};
 pub use vogls_verilog::tokenizer::Macro;
 
 use crate::elaborated_design::SignalHandle;
-use crate::symbol::{NetValue, Symbol};
+use crate::symbol::{NetSignal, NetSymbol, NetValue, Symbol};
 
 pub enum DesignBackend {
     Interpretted {
@@ -364,16 +364,26 @@ impl Design {
         &self.initial_state
     }
 
-    pub fn resolve_handle(&self, signal: SignalHandle) -> RtSignal {
+    pub fn resolve_handle_sym(&self, signal: SignalHandle) -> (&NetSymbol, &NetSignal) {
         let Symbol::Net(net) = &self.elab_table[signal.symbol].content else {
             unreachable!();
         };
         let NetValue::Signal(signal) = &net.net else {
             unreachable!();
         };
+        (net, signal)
+    }
+
+    pub fn resolve_handle(&self, signal: SignalHandle) -> RtSignal {
+        let (_, signal) = self.resolve_handle_sym(signal);
         let (key, slice) = signal.probe_signal();
         let key = self.rt_signal_map[&key];
         RtSignal { key, slice }
+    }
+
+    pub fn resolve_handle_width(&self, signal: SignalHandle) -> VectorSize {
+        let (net, _) = self.resolve_handle_sym(signal);
+        net.ty.force_net_width()
     }
 
     fn get_heap_ref(&self, signal: RtSignalKey) -> HeapRef {

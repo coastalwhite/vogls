@@ -23,11 +23,12 @@ use vogls_utils::{TableKey as _, VgHashMap};
 use vogls_verilog::lower::Diagnostics;
 use vogls_verilog::tokenizer::Tokenized;
 
+use crate::ElaboratedDesign;
 use crate::design::{Design, DesignBackend, DesignState, vcd_scope};
 use crate::plugin::VoglsPlugin;
 use crate::symbol::Symbol;
-use crate::ElaboratedDesign;
 
+#[derive(Clone)]
 pub struct LoweredDesign {
     pub(crate) table: FrozenSymbolTable<Symbol>,
     pub(crate) gl: GlobalContext,
@@ -45,6 +46,12 @@ pub struct LoweredDesign {
     pub debug_symbols: bool,
     pub output_source: Option<PathBuf>,
     pub print_vm_map: bool,
+}
+
+impl Clone for Box<dyn VoglsPlugin> {
+    fn clone(&self) -> Self {
+        VoglsPlugin::clone(self.as_ref())
+    }
 }
 
 pub struct LowerError<'a> {

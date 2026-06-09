@@ -23,6 +23,9 @@ mod parsed_design;
 mod plugin;
 mod vir_design_builder;
 
+#[cfg(feature = "unstable")]
+pub mod sync;
+
 pub use design::{Design, DesignBackend, DesignState};
 pub use design_builder::{DesignBuilder, DesignBuilderError};
 pub use elaborated_design::{ElaboratedDesign, ElaborationError, SignalHandle};

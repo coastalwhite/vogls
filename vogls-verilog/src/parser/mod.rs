@@ -41,7 +41,7 @@ pub struct ParserScratches<'a> {
     udps: VgHashSet<IdentId>,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct AstArenas {
     pub spans: Vec<TokenRange>,
     pub text: String,

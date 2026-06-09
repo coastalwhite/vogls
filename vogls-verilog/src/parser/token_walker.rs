@@ -1,5 +1,5 @@
 use std::path::Path;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use vogls_ir::token_range::TokenRange;
 
@@ -14,8 +14,8 @@ pub struct TokenWalker<'a> {
     spans: &'a [Span],
     file_idxs: &'a [FileIdx],
 
-    contents: &'a [Rc<str>],
-    paths: &'a [Option<Rc<Path>>],
+    contents: &'a [Arc<str>],
+    paths: &'a [Option<Arc<Path>>],
 
     /// Index of the next token.
     pub offset: usize,

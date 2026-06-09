@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::Path;
-use std::rc::Rc;
+use std::sync::Arc;
 use std::{fmt, io};
 
 use vogls_verilog::arena::Arena;
@@ -11,7 +11,7 @@ use vogls_verilog::tokenizer::{Macro, TokenizeError, Tokenized};
 
 use crate::{ParseError, ParsedDesign};
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct DesignBuilder {
     pub(crate) token_buffer: Tokenized,
     pub(crate) macros: HashMap<String, Macro>,
@@ -58,15 +58,15 @@ impl DesignBuilder {
 
     pub fn add_source_str(
         &mut self,
-        source: impl Into<Rc<str>>,
+        source: impl Into<Arc<str>>,
     ) -> Result<&mut Self, Box<TokenizeError>> {
-        self.add_source_str_with_opt_name(source, <Option<Rc<Path>>>::None)
+        self.add_source_str_with_opt_name(source, <Option<Arc<Path>>>::None)
     }
 
     pub fn add_source_str_with_name(
         &mut self,
-        source: impl Into<Rc<str>>,
-        name: impl Into<Rc<Path>>,
+        source: impl Into<Arc<str>>,
+        name: impl Into<Arc<Path>>,
     ) -> Result<&mut Self, Box<TokenizeError>> {
         self.add_source_str_with_opt_name(source, Some(name))?;
         Ok(self)
@@ -74,8 +74,8 @@ impl DesignBuilder {
 
     pub fn add_source_str_with_opt_name(
         &mut self,
-        source: impl Into<Rc<str>>,
-        name: Option<impl Into<Rc<Path>>>,
+        source: impl Into<Arc<str>>,
+        name: Option<impl Into<Arc<Path>>>,
     ) -> Result<&mut Self, Box<TokenizeError>> {
         self.token_buffer.append_tokenize_with_macros(
             source.into(),
@@ -90,7 +90,7 @@ impl DesignBuilder {
         self
     }
 
-    pub fn parse<'a>(self, arena: &'a mut Arena) -> Result<ParsedDesign<'a>, ParseError> {
+    pub fn parse<'a>(self, arena: &'a Arena) -> Result<ParsedDesign<'a>, ParseError> {
         let mut tkw = TokenWalker::new(&self.token_buffer);
         let mut arenas = AstArenas::default();
 

@@ -19,6 +19,7 @@ use vogls_verilog::tokenizer::Tokenized;
 use crate::elaborated_design::ElaborationErrorKind;
 use crate::{DesignBuilder, ElaboratedDesign, ElaborationError};
 
+#[derive(Clone)]
 pub struct ParsedDesign<'a> {
     pub(crate) ast: Ast<'a>,
     pub(crate) token_buffer: Tokenized,

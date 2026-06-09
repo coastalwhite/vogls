@@ -27,13 +27,14 @@ new_table_key! { pub struct AstGenBlockKey; }
 new_table_key! { pub struct AstFnDeclKey; }
 new_table_key! { pub struct AstTaskDeclKey; }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct SymbolAstRefs<'a> {
     pub gen_blocks: Table<AstGenBlockKey, AstIdRange<'a, ModuleOrGenerateItem<'a>>>,
     pub fns: Table<AstFnDeclKey, AstId<'a, FunctionDeclaration<'a>>>,
     pub tasks: Table<AstTaskDeclKey, AstId<'a, TaskDeclaration<'a>>>,
 }
 
+#[derive(Clone)]
 pub enum VSymbol {
     Module(ModuleSymbol),
     Parameter(VValue),
@@ -63,6 +64,7 @@ impl fmt::Debug for VSymbol {
     }
 }
 
+#[derive(Clone)]
 pub struct ModuleSymbol {
     pub module: IdentId,
 
@@ -76,6 +78,7 @@ pub struct ModuleSymbol {
     pub time_scale: TimeScale,
 }
 
+#[derive(Clone)]
 pub struct Net {
     width: VectorSize,
     pub specify: Option<SignalKey>,
@@ -170,6 +173,7 @@ impl VectorTransform {
     }
 }
 
+#[derive(Clone)]
 pub struct NetSymbol {
     pub ty: VType,
     pub dims: Vec<NonZeroU32>,
@@ -178,6 +182,7 @@ pub struct NetSymbol {
     pub port_idx: Option<usize>,
 }
 
+#[derive(Clone)]
 pub struct FunctionSymbol {
     pub ast_id: AstFnDeclKey,
     pub inputs: Vec<(SignalKey, VType)>,
@@ -186,6 +191,7 @@ pub struct FunctionSymbol {
     pub lowered: Option<LoweredFunction>,
 }
 
+#[derive(Clone)]
 pub struct TaskSymbol {
     pub ast_id: AstTaskDeclKey,
     pub io: Vec<(SignalKey, ConnectionDirection, VType)>,

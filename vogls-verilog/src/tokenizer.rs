@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::number::{
     Base, skip_binary, skip_decimal, skip_hexadecimal, skip_octal, skip_sign, take_base,
@@ -10,17 +10,17 @@ use crate::number::{
 use crate::span::Span;
 
 pub type FileIdx = u32;
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Tokenized {
     pub tokens: Vec<Token>,
     pub spans: Vec<Span>,
     pub file_idxs: Vec<FileIdx>,
-    pub contents: Vec<Rc<str>>,
-    pub paths: Vec<Option<Rc<Path>>>,
+    pub contents: Vec<Arc<str>>,
+    pub paths: Vec<Option<Arc<Path>>>,
     pub file_line_offsets: Vec<Vec<usize>>,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Macro {
     tokens: Vec<Token>,
     spans: Vec<Span>,
@@ -30,7 +30,7 @@ pub struct Macro {
 #[derive(Debug)]
 pub struct TokenizeError {
     line: u64,
-    file: Option<Rc<Path>>,
+    file: Option<Arc<Path>>,
     reason: TokenizeErrorReason,
 }
 
@@ -62,13 +62,13 @@ pub enum TokenizeErrorReason {
 }
 
 impl Tokenized {
-    pub fn tokenize(content: Rc<str>, path: Option<Rc<Path>>) -> Result<Self, Box<TokenizeError>> {
+    pub fn tokenize(content: Arc<str>, path: Option<Arc<Path>>) -> Result<Self, Box<TokenizeError>> {
         Self::tokenize_with_macros(content, path, &mut HashMap::new())
     }
 
     pub fn tokenize_with_macros(
-        content: Rc<str>,
-        path: Option<Rc<Path>>,
+        content: Arc<str>,
+        path: Option<Arc<Path>>,
         macros: &mut HashMap<String, Macro>,
     ) -> Result<Self, Box<TokenizeError>> {
         let mut ts = Self {
@@ -85,8 +85,8 @@ impl Tokenized {
 
     pub fn append_tokenize_with_macros(
         &mut self,
-        content: Rc<str>,
-        path: Option<Rc<Path>>,
+        content: Arc<str>,
+        path: Option<Arc<Path>>,
         macros: &mut HashMap<String, Macro>,
     ) -> Result<(), Box<TokenizeError>> {
         let Self {
@@ -690,7 +690,7 @@ impl Tokenized {
                                     let path = path.parent().unwrap();
                                     let path = path.join(Path::new(s));
                                     // @TODO: better error handling
-                                    let content: Rc<str> = match std::fs::read_to_string(&path) {
+                                    let content: Arc<str> = match std::fs::read_to_string(&path) {
                                         Ok(content) => content.into(),
                                         Err(err) => {
                                             return Err(Box::new(TokenizeError {
