@@ -1,8 +1,11 @@
+use std::hash::Hasher;
 use std::sync::Arc;
 
 use vogls::utils::{VgHashMap, new_table_key};
 
-use crate::array::{Array, DslLazyArray, DslLazyValue, LazyArrayKey, LazyValueKey, Value};
+use crate::run_vector::{DslRunVector, LazyRunVector, LazyRunVectorKey, RunVector};
+use crate::CspAble;
+use crate::array::{Array, DslLazyArray, LazyArrayKey};
 use crate::compute::{
     CommonSubPlan, ComputeContext, ComputeDependencies, ComputeError, ComputeGraph, ComputeInputs,
     ComputeNode, ComputeResult, Key,
@@ -10,6 +13,7 @@ use crate::compute::{
 use crate::dsl::{DslNode, DslPtr};
 use crate::plan::{DslLazyPlan, LazyPlanKey, Plan};
 use crate::run::{DslLazyRun, LazyRunKey, Run};
+use crate::value::{DslLazyValue, LazyValueKey, Value};
 
 new_table_key! { pub struct LazyOutputKey; }
 
@@ -20,23 +24,72 @@ pub struct HammingDistance {
     pub distances: Array,
 }
 
-#[derive(Clone, Hash, PartialEq, Eq)]
+#[derive(Clone)]
 pub enum LazyOutput {
     Output(Output),
     Value(LazyValueKey),
     Array(LazyArrayKey),
     Plan(LazyPlanKey),
     PlanComponent(LazyPlanKey, String),
-    Run(LazyRunKey),
-    HammingDistance(HammingDistance),
+    RunVector(LazyRunVectorKey),
+    Function(Arc<dyn OutputFunction>),
 }
+
+impl CspAble for LazyOutput {
+    fn csp_eq(&self, other: &Self) -> bool {
+        if std::mem::discriminant(self) != std::mem::discriminant(other) {
+            return false;
+        }
+
+        match (self, other) {
+            (Self::Output(lhs), Self::Output(rhs)) => lhs == rhs,
+            (Self::Value(lhs), Self::Value(rhs)) => lhs == rhs,
+            (Self::Array(lhs), Self::Array(rhs)) => lhs == rhs,
+            (Self::Plan(lhs), Self::Plan(rhs)) => lhs == rhs,
+            (Self::PlanComponent(lhs, lhs_s), Self::PlanComponent(rhs, rhs_s)) => {
+                lhs == rhs && lhs_s == rhs_s
+            }
+            (Self::RunVector(lhs), Self::RunVector(rhs)) => lhs == rhs,
+            (Self::Function(lhs), Self::Function(rhs)) => {
+                OutputFunction::csp_eq(lhs.as_ref(), rhs.as_ref())
+            }
+            _ => unreachable!(),
+        }
+    }
+    fn csp_hash<H: Hasher>(&self, state: &mut H) {
+        use std::hash::Hash;
+        std::mem::discriminant(self).hash(state);
+        match self {
+            Self::Output(e) => e.hash(state),
+            Self::Value(e) => e.hash(state),
+            Self::Array(e) => e.hash(state),
+            Self::Plan(e) => e.hash(state),
+            Self::PlanComponent(e, s) => {
+                e.hash(state);
+                s.hash(state);
+            }
+            Self::RunVector(e) => e.hash(state),
+            Self::Function(e) => {
+                OutputFunction::csp_hash(e.as_ref(), state as &mut dyn Hasher).hash(state)
+            }
+        }
+    }
+    fn csp_merge(&mut self, _other: Self) {}
+}
+
+pub trait OutputFunction: std::any::Any {
+    fn csp_eq(&self, other: &dyn OutputFunction) -> bool;
+    fn csp_hash(&self, state: &mut dyn Hasher);
+    fn extend_inputs(&self, deps: &mut ComputeDependencies);
+    fn compute(&self, _ctx: &ComputeContext, inputs: &ComputeInputs) -> ComputeResult<Output>;
+}
+
 #[derive(Clone, Hash, PartialEq, Eq)]
 pub enum Output {
     Value(Value),
     Array(Array),
     Plan(Plan),
-    Run(Run),
-    HammingDistance(HammingDistance),
+    RunVector(RunVector),
 }
 impl Output {
     pub fn to_lazy_dsl(&self) -> DslLazyOutput {
@@ -67,8 +120,13 @@ pub enum DslLazyOutput {
     Array(Arc<DslLazyArray>),
     Plan(Arc<DslLazyPlan>),
     PlanComponent(Arc<DslLazyPlan>, String),
-    Run(Arc<DslLazyRun>),
-    HammingDistance(HammingDistance),
+    RunVector(Arc<DslRunVector>),
+    Function(Arc<dyn DslOutputFunction>),
+}
+
+pub trait DslOutputFunction: Send + Sync + 'static {
+    fn convert_one<'a>(&'a self, converted: &'a VgHashMap<DslPtr, Key>) -> Arc<dyn OutputFunction>;
+    fn extend_inputs<'a>(&'a self, f: &mut Vec<&'a dyn DslNode>);
 }
 
 impl ComputeNode for LazyOutput {
@@ -77,31 +135,31 @@ impl ComputeNode for LazyOutput {
     fn extend_inputs(&self, deps: &mut ComputeDependencies) {
         match self {
             Self::Output(_) => {}
-            Self::Run(k) => deps.runs.push(*k),
+            Self::RunVector(k) => deps.run_vectors.push(*k),
             Self::Value(k) => deps.values.push(*k),
             Self::Array(k) => deps.arrays.push(*k),
             Self::Plan(k) | Self::PlanComponent(k, _) => deps.plans.push(*k),
-            Self::HammingDistance(_) => {}
+            Self::Function(f) => f.extend_inputs(deps),
         }
     }
     fn compute(
         &self,
-        _ctx: &ComputeContext,
+        ctx: &ComputeContext,
         inputs: &ComputeInputs,
     ) -> ComputeResult<<Self as ComputeNode>::Output> {
         use Output as O;
         Ok(match self {
             Self::Output(l) => l.clone(),
-            Self::Run(l) => O::Run(inputs.runs[l].clone()),
+            Self::RunVector(l) => O::RunVector(inputs.run_vectors[l].clone()),
             Self::Value(l) => O::Value(inputs.values[l].clone()),
             Self::Array(l) => O::Array(inputs.arrays[l].clone()),
             Self::Plan(l) => O::Plan(inputs.plans[l].clone()),
             Self::PlanComponent(l, component) => inputs.plans[l]
                 .components
                 .get(component)
-                .ok_or_else(|| ComputeError {})?
+                .ok_or_else(|| ComputeError::UnknownComponent)?
                 .clone(),
-            Self::HammingDistance(v) => Output::HammingDistance(v.clone()),
+            Self::Function(f) => f.compute(ctx, inputs)?,
         })
     }
 }
@@ -116,7 +174,7 @@ impl DslNode for DslLazyOutput {
         use LazyOutput as O;
         let r = match self {
             Self::Output(v) => O::Output(v.clone()),
-            Self::Run(v) => O::Run(converted[&DslPtr::from(v.as_ref() as &dyn DslNode)].as_run()),
+            Self::RunVector(v) => O::RunVector(converted[&DslPtr::from(v.as_ref() as &dyn DslNode)].as_run_vector()),
             Self::Value(v) => {
                 O::Value(converted[&DslPtr::from(v.as_ref() as &dyn DslNode)].as_value())
             }
@@ -130,20 +188,20 @@ impl DslNode for DslLazyOutput {
                 converted[&DslPtr::from(v.as_ref() as &dyn DslNode)].as_plan(),
                 component.clone(),
             ),
-            Self::HammingDistance(v) => O::HammingDistance(v.clone()),
+            Self::Function(v) => O::Function(v.convert_one(converted)),
         };
         Key::Output(csp.outputs.insert(&mut graph.outputs, r))
     }
 
     fn extend_inputs<'a>(&'a self, f: &mut Vec<&'a dyn DslNode>) {
         match self {
-            Self::Run(v) => f.push(v.as_ref()),
+            Self::RunVector(v) => f.push(v.as_ref()),
             Self::Output(_) => {}
             Self::Value(v) => f.push(v.as_ref()),
             Self::Array(v) => f.push(v.as_ref()),
             Self::Plan(v) => f.push(v.as_ref()),
             Self::PlanComponent(v, _) => f.push(v.as_ref()),
-            Self::HammingDistance(_) => {}
+            Self::Function(v) => v.extend_inputs(f),
         }
     }
 }

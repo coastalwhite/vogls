@@ -68,7 +68,7 @@ pub fn convert(root: &dyn DslNode) -> ComputeResult<(Key, ComputeGraph)> {
                         });
                     }
                     Entry::Occupied(entry) if matches!(entry.get(), Status::OnPath) => {
-                        return Err(ComputeError {});
+                        return Err(ComputeError::CyclicComputationGraph);
                     }
                     Entry::Occupied(_) => {}
                 }

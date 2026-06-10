@@ -4,17 +4,55 @@ use rayon::{ThreadPool, ThreadPoolBuilder};
 use vogls::utils::{Table, VgHashMap};
 
 use crate::CspTable;
-use crate::array::{Array, LazyArray, LazyArrayKey, LazyValue, LazyValueKey, Value};
+use crate::array::{Array, LazyArray, LazyArrayKey};
 use crate::design::{LazyDesign, LazyDesignKey, PlanDesign};
 use crate::output::{LazyOutput, LazyOutputKey, Output};
 use crate::plan::{LazyPlan, LazyPlanKey, Plan};
 use crate::run::{LazyRun, LazyRunKey, Run};
+use crate::run_vector::{LazyRunVector, LazyRunVectorKey, RunVector};
+use crate::value::{LazyValue, LazyValueKey, Value};
 
 #[derive(Debug)]
-pub struct ComputeError {}
+pub enum ComputeError {
+    CyclicComputationGraph,
+
+    Tokenization,
+    Parsing,
+    Elaboration,
+    Lowering,
+    Bytecode,
+    Compile,
+
+    UnknownSignal,
+    UnknownComponent,
+
+    FailedToRun,
+    NumTracesMismatch,
+    FailedToResolveNumTraces,
+
+    InvalidTypes,
+}
 impl fmt::Display for ComputeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("Error")
+        match self {
+            ComputeError::CyclicComputationGraph => f.write_str("Computation graph has a cycle"),
+
+            ComputeError::Tokenization => f.write_str("Tokenization"),
+            ComputeError::Parsing => f.write_str("Parsing"),
+            ComputeError::Elaboration => f.write_str("Elaboration"),
+            ComputeError::Lowering => f.write_str("Lowering"),
+            ComputeError::Bytecode => f.write_str("Bytecode"),
+            ComputeError::Compile => f.write_str("Compile"),
+
+            ComputeError::UnknownSignal => f.write_str("UnknownSignal"),
+            ComputeError::UnknownComponent => f.write_str("UnknownComponent"),
+
+            ComputeError::FailedToRun => f.write_str("FailedToRun"),
+            ComputeError::NumTracesMismatch => f.write_str("NumTracesMismatch"),
+            ComputeError::FailedToResolveNumTraces => f.write_str("FailedToResolveNumTraces"),
+
+            ComputeError::InvalidTypes => f.write_str("InvalidTypes"),
+        }
     }
 }
 impl std::error::Error for ComputeError {}
@@ -22,8 +60,8 @@ pub type ComputeResult<T> = std::result::Result<T, ComputeError>;
 
 #[cfg(feature = "python")]
 impl From<ComputeError> for pyo3::PyErr {
-    fn from(_value: ComputeError) -> Self {
-        pyo3::exceptions::PyValueError::new_err("failed to compute")
+    fn from(err: ComputeError) -> Self {
+        pyo3::exceptions::PyValueError::new_err(format!("Failed computation. Reason: {err}"))
     }
 }
 
@@ -124,6 +162,7 @@ impl_graph_key! {
     (LazyArrayKey, arrays, as_array, LazyArray, Array),
     (LazyValueKey, values, as_value, LazyValue, Value),
     (LazyRunKey, runs, as_run, LazyRun, Run),
+    (LazyRunVectorKey, run_vectors, as_run_vector, LazyRunVector, RunVector),
 }
 
 impl ComputeGraph {
@@ -140,10 +179,7 @@ pub struct ComputeContext {
 impl ComputeContext {
     pub fn new(num_threads: Option<usize>) -> Self {
         let pool = match num_threads {
-            None => ThreadPoolBuilder::new()
-                .use_current_thread()
-                .num_threads(1)
-                .build(),
+            None => ThreadPoolBuilder::new().num_threads(1).build(),
             Some(0) => ThreadPoolBuilder::new().build(),
             Some(n) => ThreadPoolBuilder::new().num_threads(n).build(),
         }
@@ -223,7 +259,7 @@ pub fn compute<T: ComputeNode>(
     }
 
     if has_cycle {
-        return Err(ComputeError {});
+        return Err(ComputeError::CyclicComputationGraph);
     }
 
     // Start computing inputs in the computation graph. For each node first compute the inputs,

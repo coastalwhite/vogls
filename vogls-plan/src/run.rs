@@ -3,18 +3,22 @@ use std::sync::Arc;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use vogls::SimulationIo;
 use vogls::design::DesignState;
-use vogls::utils::{VgHashMap, new_table_key};
+use vogls::utils::{IndexMap, VgHashMap, new_table_key};
 use vogls_trace::Trace;
 
 use crate::TraceRef;
-use crate::array::{Array, DslLazyArray, LazyArrayKey, Value};
+use crate::array::{Array, DslLazyArray, LazyArrayKey};
+use crate::buffer::Buffer;
 use crate::compute::{
     CommonSubPlan, ComputeContext, ComputeDependencies, ComputeError, ComputeGraph, ComputeInputs,
     ComputeNode, ComputeResult, Key,
 };
 use crate::design::{LazyDesign, LazyDesignKey, PlanDesign, SignalRef, Time};
 use crate::dsl::{DslNode, DslPtr};
-use crate::output::{HammingDistance, Output};
+use crate::output::Output;
+use crate::plan::Plan;
+use crate::run_vector::{RunOffsets, RunVector};
+use crate::value::Value;
 
 new_table_key! { pub struct LazyRunKey; }
 
@@ -34,8 +38,8 @@ pub struct DslLazyRun {
 pub enum DslLazyStep {
     TraceStart,
     TraceStop,
-    TraceAgg(RunAgg),
-    SetSignal(SignalRef, DslLazyArray),
+    TraceAgg(String, RunAgg),
+    SetSignal(String, SignalRef, DslLazyArray),
     Repeat(usize),
     RunFor(Time),
 }
@@ -44,8 +48,8 @@ pub enum DslLazyStep {
 pub enum LazyStep {
     TraceStart,
     TraceStop,
-    TraceAgg(RunAgg),
-    SetSignal(SignalRef, LazyArrayKey),
+    TraceAgg(String, RunAgg),
+    SetSignal(String, SignalRef, LazyArrayKey),
     Repeat(usize),
     RunFor(Time),
 }
@@ -82,8 +86,8 @@ impl LazyStep {
         match self {
             Self::TraceStart => None,
             Self::TraceStop => None,
-            Self::TraceAgg(_) => None,
-            Self::SetSignal(_, k) => Some(Ok(inputs.arrays[k].len())),
+            Self::TraceAgg(_, _) => None,
+            Self::SetSignal(_, _, k) => Some(Ok(inputs.arrays[k].len())),
             Self::Repeat(n) => Some(Ok(*n)),
             Self::RunFor(_) => None,
         }
@@ -114,7 +118,7 @@ impl LazyStep {
                 traces.push(trace_ref.extract(state));
                 Ok(())
             }
-            Self::TraceAgg(agg) => {
+            Self::TraceAgg(_, agg) => {
                 let trace = trace_ref
                     .take()
                     .map(|t| t.extract(state))
@@ -127,18 +131,15 @@ impl LazyStep {
                     RunAgg::HammingWeight => todo!(),
                     RunAgg::HammingDistance => {
                         let (times, distances) = trace.hamming_distance();
-                        outputs.push(Output::HammingDistance(HammingDistance {
-                            indices: Array::Ints([].into()),
-                            times: Array::UInts(times.into()),
-                            distances: Array::UInts(distances.into()),
-                        }));
+                        outputs.push(Output::Array(Array::UInts(Buffer::from_vec(distances))));
+                        outputs.push(Output::Array(Array::UInts(Buffer::from_vec(times))));
                     }
                 }
 
                 Ok(())
             }
             Self::Repeat(_) => Ok(()),
-            Self::SetSignal(signal_ref, lp) => {
+            Self::SetSignal(_, signal_ref, lp) => {
                 let handle = design.handles[signal_ref];
                 let rt = design.design.resolve_handle(handle);
                 let size = design.design.resolve_handle_width(handle);
@@ -157,15 +158,13 @@ impl LazyStep {
                     },
                     time.value,
                 )
-                .map_err(|_| ComputeError {}),
+                .map_err(|_| ComputeError::FailedToRun),
         }
     }
 }
 
 #[derive(Clone, Hash, PartialEq, Eq)]
-pub struct Run {
-    items: Vec<Output>,
-}
+pub struct Run(Plan);
 
 impl DslNode for DslLazyRun {
     fn convert_one<'a>(
@@ -182,8 +181,11 @@ impl DslNode for DslLazyRun {
                 .map(|step| match step {
                     DslLazyStep::TraceStart => LazyStep::TraceStart,
                     DslLazyStep::TraceStop => LazyStep::TraceStop,
-                    DslLazyStep::TraceAgg(agg) => LazyStep::TraceAgg(agg.clone()),
-                    DslLazyStep::SetSignal(s, arr) => LazyStep::SetSignal(
+                    DslLazyStep::TraceAgg(name, agg) => {
+                        LazyStep::TraceAgg(name.clone(), agg.clone())
+                    }
+                    DslLazyStep::SetSignal(name, s, arr) => LazyStep::SetSignal(
+                        name.clone(),
                         s.clone(),
                         converted[&DslPtr::from(arr as &dyn DslNode)].as_array(),
                     ),
@@ -200,17 +202,17 @@ impl DslNode for DslLazyRun {
             match step {
                 DslLazyStep::TraceStart
                 | DslLazyStep::TraceStop
-                | DslLazyStep::TraceAgg(_)
+                | DslLazyStep::TraceAgg(..)
                 | DslLazyStep::RunFor(_)
                 | DslLazyStep::Repeat(_) => {}
-                DslLazyStep::SetSignal(_, arr) => f.push(arr as &dyn DslNode),
+                DslLazyStep::SetSignal(_, _, arr) => f.push(arr as &dyn DslNode),
             }
         }
     }
 }
 
 impl ComputeNode for LazyRun {
-    type Output = Run;
+    type Output = Plan;
 
     fn extend_inputs(&self, deps: &mut ComputeDependencies) {
         deps.designs.push(self.design);
@@ -220,13 +222,15 @@ impl ComputeNode for LazyRun {
                 | LazyStep::Repeat(_)
                 | LazyStep::TraceStart
                 | LazyStep::TraceStop
-                | LazyStep::TraceAgg(_) => {}
-                LazyStep::SetSignal(_, k) => deps.arrays.push(*k),
+                | LazyStep::TraceAgg(..) => {}
+                LazyStep::SetSignal(_, _, k) => deps.arrays.push(*k),
             }
         }
     }
     fn compute(&self, ctx: &ComputeContext, inputs: &ComputeInputs) -> ComputeResult<Self::Output> {
-        let num_traces = self.num_traces(inputs).map_err(|_| ComputeError {})?;
+        let num_traces = self
+            .num_traces(inputs)
+            .map_err(|_| ComputeError::NumTracesMismatch)?;
         // @TODO: Insert caching here.
         let design = &inputs.designs[&self.design];
         let mut state = design.design.initial_state().clone();
@@ -236,7 +240,7 @@ impl ComputeNode for LazyRun {
         let mut outputs = Vec::new();
         while let Some(step) = self.steps.get(prelude_steps) {
             match step.num_traces(inputs) {
-                Some(Err(_)) => return Err(ComputeError {}),
+                Some(Err(_)) => return Err(ComputeError::FailedToResolveNumTraces),
                 None => {}
                 Some(Ok(n)) => {
                     if n != 1 {
@@ -290,75 +294,124 @@ impl ComputeNode for LazyRun {
                 })
                 .collect::<ComputeResult<Vec<Vec<Output>>>>()
         })?;
-        let items = items.iter().map(|o| collapse_outputs(o)).collect();
-        Ok(Run { items })
+        let items = items
+            .iter()
+            .map(|o| collapse_outputs(o))
+            .collect::<Vec<_>>();
+        let mut items = items.into_iter();
+
+        let mut components = IndexMap::default();
+
+        for step in &self.steps {
+            match step {
+                LazyStep::TraceStart
+                | LazyStep::TraceStop
+                | LazyStep::RunFor(..)
+                | LazyStep::Repeat(..) => {}
+                LazyStep::TraceAgg(name, ..) => {
+                    components.insert(
+                        format!("{name}.dist"),
+                        Output::RunVector(items.next().unwrap()),
+                    );
+                    components.insert(
+                        format!("{name}.time"),
+                        Output::RunVector(items.next().unwrap()),
+                    );
+                }
+                LazyStep::SetSignal(name, ..) => {
+                    components.insert(name.clone(), Output::RunVector(items.next().unwrap()));
+                }
+            }
+        }
+
+        Ok(Plan { components })
     }
 }
 
-fn collapse_outputs(outputs: &[Output]) -> Output {
+fn collapse_outputs(outputs: &[Output]) -> RunVector {
     match &outputs[0] {
-        Output::Value(v) => Output::Array(match v {
-            Value::Float(_) => Array::Floats(
-                outputs
-                    .iter()
-                    .map(|o| match o {
-                        Output::Value(Value::Float(v)) => *v,
-                        _ => unreachable!(),
-                    })
-                    .collect::<Arc<[f64]>>(),
-            ),
-            Value::Int(_) => Array::Ints(
-                outputs
-                    .iter()
-                    .map(|o| match o {
-                        Output::Value(Value::Int(v)) => *v,
-                        _ => unreachable!(),
-                    })
-                    .collect::<Arc<[i64]>>(),
-            ),
-            Value::UInt(_) => Array::UInts(
-                outputs
-                    .iter()
-                    .map(|o| match o {
-                        Output::Value(Value::UInt(v)) => *v,
-                        _ => unreachable!(),
-                    })
-                    .collect::<Arc<[u64]>>(),
-            ),
-            Value::Bits(_) => todo!(),
-        }),
-        Output::Array(_array) => todo!(),
-        Output::Plan(_plan) => todo!(),
-        Output::HammingDistance(_) => {
-            let length = outputs
+        Output::Value(v) => {
+            let data = match v {
+                Value::Float(_) => Array::Floats(
+                    outputs
+                        .iter()
+                        .map(|o| match o {
+                            Output::Value(Value::Float(v)) => *v,
+                            _ => unreachable!(),
+                        })
+                        .collect::<Buffer<f64>>(),
+                ),
+                Value::Int(_) => Array::Ints(
+                    outputs
+                        .iter()
+                        .map(|o| match o {
+                            Output::Value(Value::Int(v)) => *v,
+                            _ => unreachable!(),
+                        })
+                        .collect::<Buffer<i64>>(),
+                ),
+                Value::UInt(_) => Array::UInts(
+                    outputs
+                        .iter()
+                        .map(|o| match o {
+                            Output::Value(Value::UInt(v)) => *v,
+                            _ => unreachable!(),
+                        })
+                        .collect::<Buffer<u64>>(),
+                ),
+                Value::Bits(_) => todo!(),
+            };
+            RunVector {
+                offsets: RunOffsets::Scalar(outputs.len()),
+                data,
+            }
+        }
+        Output::Array(v) => {
+            let mut offset = 0usize;
+            let offsets = outputs
                 .iter()
                 .map(|o| match o {
-                    Output::HammingDistance(arr) => arr.times.len(),
-                    _ => unreachable!(),
-                })
-                .sum::<usize>();
-
-            let mut indices = Vec::with_capacity(length);
-            let mut times = Vec::with_capacity(length);
-            let mut distances = Vec::with_capacity(length);
-
-            for (i, output) in outputs.iter().enumerate() {
-                match output {
-                    Output::HammingDistance(hd) => {
-                        indices.extend(std::iter::repeat_n(i as u64, hd.times.len()));
-                        times.extend(hd.times.as_u64().unwrap().as_ref());
-                        distances.extend(hd.distances.as_u64().unwrap().as_ref());
+                    Output::Array(a) => {
+                        offset += a.len();
+                        offset as u64
                     }
                     _ => unreachable!(),
+                })
+                .collect();
+            let data = match v {
+                Array::Floats(_) => {
+                    let mut data = Vec::with_capacity(offset);
+                    outputs.iter().for_each(|o| match o {
+                        Output::Array(Array::Floats(v)) => data.extend_from_slice(v.as_slice()),
+                        _ => unreachable!(),
+                    });
+                    Array::Floats(Buffer::from_vec(data))
                 }
-            }
+                Array::Ints(_) => {
+                    let mut data = Vec::with_capacity(offset);
+                    outputs.iter().for_each(|o| match o {
+                        Output::Array(Array::Ints(v)) => data.extend_from_slice(v.as_slice()),
+                        _ => unreachable!(),
+                    });
+                    Array::Ints(Buffer::from_vec(data))
+                }
+                Array::UInts(_) => {
+                    let mut data = Vec::with_capacity(offset);
+                    outputs.iter().for_each(|o| match o {
+                        Output::Array(Array::UInts(v)) => data.extend_from_slice(v.as_slice()),
+                        _ => unreachable!(),
+                    });
+                    Array::UInts(Buffer::from_vec(data))
+                }
+                Array::Bits(..) => todo!(),
+            };
 
-            Output::HammingDistance(HammingDistance {
-                indices: Array::UInts(indices.into()),
-                times: Array::UInts(times.into()),
-                distances: Array::UInts(distances.into()),
-            })
+            RunVector {
+                offsets: RunOffsets::Offsets(offsets),
+                data,
+            }
         }
-        Output::Run(_) => todo!(),
+        Output::Plan(_plan) => todo!(),
+        Output::RunVector(_) => todo!(),
     }
 }

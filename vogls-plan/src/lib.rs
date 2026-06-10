@@ -5,13 +5,18 @@ use vogls::design::DesignState;
 use vogls::utils::{Table, TableKey};
 use vogls_trace::Trace;
 
+pub mod value;
 pub mod array;
+pub mod buffer;
 pub mod compute;
 pub mod design;
 pub mod dsl;
 pub mod output;
 pub mod plan;
 pub mod run;
+pub mod ttest;
+pub mod window_sum;
+pub mod run_vector;
 
 pub struct TraceRef(usize);
 
@@ -45,24 +50,6 @@ impl<T: std::hash::Hash + Eq> CspAble for T {
         self.hash(state);
     }
     fn csp_merge(&mut self, _other: Self) {}
-}
-
-pub struct CspWrap<T>(pub T);
-impl<T: CspAble> std::hash::Hash for CspWrap<T> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.csp_hash(state)
-    }
-}
-impl<T: CspAble> PartialEq for CspWrap<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.csp_eq(&other.0)
-    }
-}
-impl<T: CspAble> Eq for CspWrap<T> {}
-impl<T: CspAble> CspWrap<T> {
-    pub fn merge(&mut self, other: Self) {
-        self.0.csp_merge(other.0)
-    }
 }
 
 pub struct CspTable<K> {

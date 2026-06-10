@@ -87,12 +87,12 @@ impl ComputeNode for LazyDesign {
         let mut builder = vogls::DesignBuilder::new();
         let mut arena = Arena::default();
         for path in &self.sources {
-            builder.add_source(path).map_err(|_| ComputeError {})?;
+            builder.add_source(path).map_err(|_| ComputeError::Tokenization)?;
         }
-        let parsed = builder.parse(&mut arena).map_err(|_| ComputeError {})?;
+        let parsed = builder.parse(&mut arena).map_err(|_| ComputeError::Parsing)?;
         let mut design = parsed
             .elaborate(LogicMode::TwoValue, self.top_level_module.as_deref())
-            .map_err(|_| ComputeError {})?;
+            .map_err(|_| ComputeError::Elaboration)?;
 
         let handles = self
             .handles
@@ -102,16 +102,16 @@ impl ComputeNode for LazyDesign {
                 let mut symbol = stable.roots()[0];
                 for i in &s.inner {
                     let Some(ident) = design.ident_table().get(i) else {
-                        return Err(ComputeError {});
+                        return Err(ComputeError::UnknownSignal);
                     };
                     let Some(sid) = stable.resolve(symbol, ident) else {
-                        return Err(ComputeError {});
+                        return Err(ComputeError::UnknownSignal);
                     };
                     symbol = sid;
                 }
 
                 let Some(handle) = design.get_signal_handle(symbol) else {
-                    return Err(ComputeError {});
+                    return Err(ComputeError::UnknownSignal);
                 };
 
                 Ok((s.clone(), handle))
@@ -122,7 +122,7 @@ impl ComputeNode for LazyDesign {
         if self.trace {
             plugins.push(Box::new(TracePlugin::default()) as Box<dyn VoglsPlugin>);
         }
-        let mut design = design.lower(plugins).map_err(|_| ComputeError {})?;
+        let mut design = design.lower(plugins).map_err(|_| ComputeError::Lowering)?;
         design.optimize(vogls::ir::optimize::OptFlags {
             opt_rounds: 2,
             constant_propagation: true,
@@ -130,7 +130,7 @@ impl ComputeNode for LazyDesign {
             common_subexpr_elim: true,
             peephole: true,
         });
-        let design = design.to_bytecode().map_err(|_| ComputeError {})?;
+        let design = design.to_bytecode().map_err(|_| ComputeError::Bytecode)?;
         arena.reset();
         Ok(PlanDesign { design, handles })
     }

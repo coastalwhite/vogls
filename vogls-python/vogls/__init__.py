@@ -1,7 +1,8 @@
-from typing import Self, TypeVar, Generic, Any, List
+from typing import Callable, Self, TypeVar, Generic, Any, List
 import vogls.vogls as vgr
 
 T = TypeVar("T")
+U = TypeVar("U")
 
 
 class Lazy(Generic[T]):
@@ -11,11 +12,14 @@ class Lazy(Generic[T]):
         self._producer = producer
 
     def compute(self) -> T:
-        self._producer.compute()
+        return self._producer.compute()
 
 
 class Array:
     _inner: vgr.PyArray
+
+    def __init__(self, v: list[float]) -> None:
+        self._inner = vgr.PyArray.from_f64s(v)
 
     def lazy(self) -> "LazyValue":
         return LazyArray._from_py(self._inner.lazy())
@@ -109,24 +113,48 @@ class LazyRun:
 
 
 class LazyValue(Lazy[Value]):
-    @staticmethod
-    def _from_py(py: vgr.PyLazyValue) -> Self:
-        super().__init__(py)
+    @classmethod
+    def _from_py(cls, py: vgr.PyLazyValue) -> Self:
+        instance = cls.__new__(cls)
+        super(LazyValue, instance).__init__(py)
+        return instance
 
     def repeat(self, n: int) -> "LazyArray":
         return self._producer.repeat(n)
 
 
 class LazyArray(Lazy[Array]):
-    @staticmethod
-    def _from_py(py: vgr.PyLazyArray) -> Self:
-        super().__init__(py)
+    @classmethod
+    def _from_py(cls, py: vgr.PyLazyArray) -> Self:
+        instance = cls.__new__(cls)
+        super(LazyArray, instance).__init__(py)
+        return instance
 
     def min(self) -> LazyValue:
         self._producer.min()
 
 
 class LazyPlan(Lazy[Plan]):
-    @staticmethod
-    def _from_py(py: vgr.PyLazyPlan) -> Self:
-        super().__init__(py)
+    @classmethod
+    def _from_py(cls, py: vgr.PyLazyPlan) -> Self:
+        instance = cls.__new__(cls)
+        super(LazyPlan, instance).__init__(py)
+        return instance
+
+class _LazyLambda:
+    inner: Lazy[T]
+    f: Callable[[T], U]
+    
+    def __init__(self, producer: Lazy[T], f: Callable[[T], U]) -> None:
+        self.inner = producer
+        self.f = f
+
+    def compute(self) -> U:
+        return self.f(self.inner.compute())
+
+
+def t_test(lhs: LazyArray, rhs: LazyArray) -> Lazy[float]:
+    return _LazyLambda(
+        Lazy(vgr.PyLazyOutput.ttest(lhs._producer, rhs._producer)),
+        lambda output: output.extract_value().extract_float(),
+    )

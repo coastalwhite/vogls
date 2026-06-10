@@ -10,15 +10,16 @@ mod vogls {
     use vogls::utils::{IndexMap, VgHashSet};
     use vogls::{BitsFormatOptions, SimulationIo, VectorSize};
 
-    use vogls_plan::array::{
-        Array, ArrayAgg, DslLazyArray, DslLazyValue, LazyArray, LazyValue, Value,
-    };
+    use vogls_plan::array::{Array, DslLazyArray, LazyArray};
     use vogls_plan::compute::{ComputeNode, GraphItem};
     use vogls_plan::design::TimeUnit;
     use vogls_plan::dsl::DslNode;
     use vogls_plan::output::{DslLazyOutput, LazyOutput, Output};
     use vogls_plan::plan::{DslLazyPlan, LazyPlan, Plan};
     use vogls_plan::run::{DslLazyStep, RunAgg};
+    use vogls_plan::run_vector::{DslRunVector, RunVector};
+    use vogls_plan::ttest::TTest;
+    use vogls_plan::value::{DslLazyValue, LazyValue, Value};
 
     #[pyo3::pyclass(frozen)]
     #[repr(transparent)]
@@ -580,6 +581,8 @@ mod vogls {
     #[pyo3::pyclass(frozen)]
     pub struct PyLazyOutput(DslLazyOutput);
     #[pyo3::pyclass(frozen)]
+    pub struct PyLazyRunVector(DslRunVector);
+    #[pyo3::pyclass(frozen)]
     pub struct PyLazyArray(DslLazyArray);
     #[pyo3::pyclass(frozen)]
     pub struct PyLazyValue(DslLazyValue);
@@ -587,6 +590,8 @@ mod vogls {
     pub struct PyPlan(Plan);
     #[pyo3::pyclass(frozen)]
     pub struct PyOutput(Output);
+    #[pyo3::pyclass(frozen)]
+    pub struct PyRunVector(RunVector);
     #[pyo3::pyclass(frozen)]
     pub struct PyArray(Array);
     #[pyo3::pyclass(frozen)]
@@ -642,6 +647,13 @@ mod vogls {
         pub fn lazy(&self) -> PyLazyOutput {
             PyLazyOutput(self.0.to_lazy_dsl())
         }
+
+        pub fn extract_value(&self) -> PyResult<PyValue> {
+            match &self.0 {
+                Output::Value(value) => Ok(PyValue(value.clone())),
+                _ => todo!(),
+            }
+        }
     }
 
     #[pymethods]
@@ -650,26 +662,39 @@ mod vogls {
             lazy_compute::<_, LazyArray>(&self.0).map(PyArray)
         }
 
-        pub fn min(&self) -> PyLazyValue {
-            PyLazyValue(DslLazyValue::Aggregation(
-                Arc::new(self.0.clone()),
-                ArrayAgg::Min,
-            ))
-        }
+        // pub fn min(&self) -> PyLazyValue {
+        //     PyLazyValue(DslLazyValue::Aggregation(
+        //         Arc::new(self.0.clone()),
+        //         ArrayAgg::Min,
+        //     ))
+        // }
 
         #[staticmethod]
-        #[pyo3(signature = (length, seed = None))]
-        pub fn random(length: usize, seed: Option<u64>) -> Self {
-            Self(vogls_plan::array::DslLazyArray::Random {
-                seed: seed.unwrap_or(0),
-                length,
-            })
+        pub fn ttest(lhs: Bound<PyLazyRunVector>, rhs: Bound<PyLazyRunVector>) -> Self {
+            PyLazyArray(DslLazyArray(Arc::new(TTest {
+                lhs: lhs.get().0.clone().into(),
+                rhs: rhs.get().0.clone().into(),
+            })))
         }
+
+        // #[staticmethod]
+        // #[pyo3(signature = (length, seed = None))]
+        // pub fn random(length: usize, seed: Option<u64>) -> Self {
+        //     Self(vogls_plan::array::DslLazyArray::Random {
+        //         seed: seed.unwrap_or(0),
+        //         length,
+        //     })
+        // }
     }
     #[pymethods]
     impl PyArray {
         pub fn lazy(&self) -> PyLazyArray {
             PyLazyArray(self.0.to_lazy_dsl())
+        }
+
+        #[staticmethod]
+        pub fn from_f64s(arr: Vec<f64>) -> Self {
+            Self(Array::Floats(arr.into()))
         }
 
         pub fn as_list(&self, py: pyo3::Python<'_>) -> PyResult<pyo3::Py<pyo3::types::PyList>> {
@@ -719,6 +744,13 @@ mod vogls {
                 Value::Int(v) => v.into_py_any(py),
                 Value::UInt(v) => v.into_py_any(py),
                 Value::Bits(_) => todo!(),
+            }
+        }
+
+        pub fn extract_float(&self) -> PyResult<f64> {
+            match &self.0 {
+                Value::Float(v) => Ok(*v),
+                _ => todo!(),
             }
         }
     }
