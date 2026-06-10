@@ -12,6 +12,7 @@ use crate::compute::{
 use crate::dsl::{DslNode, DslPtr};
 use crate::run_vector::{
     DslRunVector, DslRunVectorNode, LazyRunVectorKey, RunOffsets, RunVector, RunVectorNode,
+    RunWidth,
 };
 
 pub struct WindowSum {
@@ -48,6 +49,14 @@ impl RunVectorNode for LazyWindowSum {
 
     fn extend_inputs(&self, deps: &mut ComputeDependencies) {
         deps.run_vectors.extend([self.on, self.by]);
+    }
+
+    fn width(&self, _graph: &crate::compute::ComputeGraph) -> RunWidth {
+        assert!(self.start <= self.end);
+        assert!(self.width > 0);
+
+        let diff = self.end - self.start;
+        RunWidth::Constant(diff.div_ceil(self.width))
     }
 
     fn compute(&self, _ctx: &ComputeContext, inputs: &ComputeInputs) -> ComputeResult<RunVector> {

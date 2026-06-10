@@ -1,26 +1,24 @@
+use std::hash::Hash as _;
 use std::sync::Arc;
 
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use vogls::SimulationIo;
 use vogls::design::DesignState;
-use vogls::utils::{IndexMap, VgHashMap, new_table_key};
+use vogls::utils::{IndexMap, VgHashMap};
 use vogls_trace::Trace;
 
 use crate::TraceRef;
 use crate::array::{Array, DslLazyArray, LazyArrayKey};
 use crate::buffer::Buffer;
 use crate::compute::{
-    CommonSubPlan, ComputeContext, ComputeDependencies, ComputeError, ComputeGraph, ComputeInputs,
-    ComputeNode, ComputeResult, Key,
+    ComputeContext, ComputeDependencies, ComputeError, ComputeInputs, ComputeResult, Key,
 };
 use crate::design::{LazyDesign, LazyDesignKey, PlanDesign, SignalRef, Time};
 use crate::dsl::{DslNode, DslPtr};
 use crate::output::Output;
-use crate::plan::Plan;
+use crate::plan::{DslPlanNode, Plan, PlanNode};
 use crate::run_vector::{RunOffsets, RunVector};
 use crate::value::Value;
-
-new_table_key! { pub struct LazyRunKey; }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct LazyRun {
@@ -39,7 +37,7 @@ pub enum DslLazyStep {
     TraceStart,
     TraceStop,
     TraceAgg(String, RunAgg),
-    SetSignal(String, SignalRef, DslLazyArray),
+    SetSignal(SignalRef, DslLazyArray),
     Repeat(usize),
     RunFor(Time),
 }
@@ -49,7 +47,7 @@ pub enum LazyStep {
     TraceStart,
     TraceStop,
     TraceAgg(String, RunAgg),
-    SetSignal(String, SignalRef, LazyArrayKey),
+    SetSignal(SignalRef, LazyArrayKey),
     Repeat(usize),
     RunFor(Time),
 }
@@ -87,7 +85,7 @@ impl LazyStep {
             Self::TraceStart => None,
             Self::TraceStop => None,
             Self::TraceAgg(_, _) => None,
-            Self::SetSignal(_, _, k) => Some(Ok(inputs.arrays[k].len())),
+            Self::SetSignal(_, k) => Some(Ok(inputs.arrays[k].len())),
             Self::Repeat(n) => Some(Ok(*n)),
             Self::RunFor(_) => None,
         }
@@ -139,7 +137,7 @@ impl LazyStep {
                 Ok(())
             }
             Self::Repeat(_) => Ok(()),
-            Self::SetSignal(_, signal_ref, lp) => {
+            Self::SetSignal(signal_ref, lp) => {
                 let handle = design.handles[signal_ref];
                 let rt = design.design.resolve_handle(handle);
                 let size = design.design.resolve_handle_width(handle);
@@ -163,17 +161,9 @@ impl LazyStep {
     }
 }
 
-#[derive(Clone, Hash, PartialEq, Eq)]
-pub struct Run(Plan);
-
-impl DslNode for DslLazyRun {
-    fn convert_one<'a>(
-        &'a self,
-        graph: &'a mut ComputeGraph,
-        converted: &'a VgHashMap<DslPtr, Key>,
-        csp: &'a mut CommonSubPlan,
-    ) -> Key {
-        let r = LazyRun {
+impl DslPlanNode for DslLazyRun {
+    fn convert_one<'a>(&'a self, converted: &'a VgHashMap<DslPtr, Key>) -> Arc<dyn PlanNode> {
+        Arc::new(LazyRun {
             design: converted[&DslPtr::from(self.design.as_ref() as &dyn DslNode)].as_design(),
             steps: self
                 .steps
@@ -184,8 +174,7 @@ impl DslNode for DslLazyRun {
                     DslLazyStep::TraceAgg(name, agg) => {
                         LazyStep::TraceAgg(name.clone(), agg.clone())
                     }
-                    DslLazyStep::SetSignal(name, s, arr) => LazyStep::SetSignal(
-                        name.clone(),
+                    DslLazyStep::SetSignal(s, arr) => LazyStep::SetSignal(
                         s.clone(),
                         converted[&DslPtr::from(arr as &dyn DslNode)].as_array(),
                     ),
@@ -193,8 +182,7 @@ impl DslNode for DslLazyRun {
                     DslLazyStep::RunFor(time) => LazyStep::RunFor(time.clone()),
                 })
                 .collect(),
-        };
-        Key::Run(csp.runs.insert(&mut graph.runs, r))
+        }) as _
     }
     fn extend_inputs<'a>(&'a self, f: &mut Vec<&'a dyn DslNode>) {
         f.push(self.design.as_ref() as &dyn DslNode);
@@ -205,15 +193,22 @@ impl DslNode for DslLazyRun {
                 | DslLazyStep::TraceAgg(..)
                 | DslLazyStep::RunFor(_)
                 | DslLazyStep::Repeat(_) => {}
-                DslLazyStep::SetSignal(_, _, arr) => f.push(arr as &dyn DslNode),
+                DslLazyStep::SetSignal(_, arr) => f.push(arr as &dyn DslNode),
             }
         }
     }
 }
 
-impl ComputeNode for LazyRun {
-    type Output = Plan;
-
+impl PlanNode for LazyRun {
+    fn csp_eq(&self, other: &dyn PlanNode) -> bool {
+        let Some(other) = (other as &dyn std::any::Any).downcast_ref::<Self>() else {
+            return false;
+        };
+        self == other
+    }
+    fn csp_hash(&self, mut state: &mut dyn std::hash::Hasher) {
+        self.hash(&mut state);
+    }
     fn extend_inputs(&self, deps: &mut ComputeDependencies) {
         deps.designs.push(self.design);
         for step in &self.steps {
@@ -223,11 +218,11 @@ impl ComputeNode for LazyRun {
                 | LazyStep::TraceStart
                 | LazyStep::TraceStop
                 | LazyStep::TraceAgg(..) => {}
-                LazyStep::SetSignal(_, _, k) => deps.arrays.push(*k),
+                LazyStep::SetSignal(_, k) => deps.arrays.push(*k),
             }
         }
     }
-    fn compute(&self, ctx: &ComputeContext, inputs: &ComputeInputs) -> ComputeResult<Self::Output> {
+    fn compute(&self, ctx: &ComputeContext, inputs: &ComputeInputs) -> ComputeResult<Plan> {
         let num_traces = self
             .num_traces(inputs)
             .map_err(|_| ComputeError::NumTracesMismatch)?;
@@ -294,9 +289,11 @@ impl ComputeNode for LazyRun {
                 })
                 .collect::<ComputeResult<Vec<Vec<Output>>>>()
         })?;
-        let items = items
-            .iter()
-            .map(|o| collapse_outputs(o))
+
+        let num_outputs = items[0].len();
+
+        let items = (0..num_outputs)
+            .map(|i| collapse_outputs(&items, i))
             .collect::<Vec<_>>();
         let mut items = items.into_iter();
 
@@ -307,19 +304,17 @@ impl ComputeNode for LazyRun {
                 LazyStep::TraceStart
                 | LazyStep::TraceStop
                 | LazyStep::RunFor(..)
-                | LazyStep::Repeat(..) => {}
+                | LazyStep::Repeat(..)
+                | LazyStep::SetSignal(..) => {}
                 LazyStep::TraceAgg(name, ..) => {
-                    components.insert(
+                    _ = components.insert(
                         format!("{name}.dist"),
                         Output::RunVector(items.next().unwrap()),
                     );
-                    components.insert(
+                    _ = components.insert(
                         format!("{name}.time"),
                         Output::RunVector(items.next().unwrap()),
                     );
-                }
-                LazyStep::SetSignal(name, ..) => {
-                    components.insert(name.clone(), Output::RunVector(items.next().unwrap()));
                 }
             }
         }
@@ -328,14 +323,14 @@ impl ComputeNode for LazyRun {
     }
 }
 
-fn collapse_outputs(outputs: &[Output]) -> RunVector {
-    match &outputs[0] {
+fn collapse_outputs(outputs: &[Vec<Output>], i: usize) -> RunVector {
+    match &outputs[0][i] {
         Output::Value(v) => {
             let data = match v {
                 Value::Float(_) => Array::Floats(
                     outputs
                         .iter()
-                        .map(|o| match o {
+                        .map(|o| match &o[i] {
                             Output::Value(Value::Float(v)) => *v,
                             _ => unreachable!(),
                         })
@@ -344,7 +339,7 @@ fn collapse_outputs(outputs: &[Output]) -> RunVector {
                 Value::Int(_) => Array::Ints(
                     outputs
                         .iter()
-                        .map(|o| match o {
+                        .map(|o| match &o[i] {
                             Output::Value(Value::Int(v)) => *v,
                             _ => unreachable!(),
                         })
@@ -353,7 +348,7 @@ fn collapse_outputs(outputs: &[Output]) -> RunVector {
                 Value::UInt(_) => Array::UInts(
                     outputs
                         .iter()
-                        .map(|o| match o {
+                        .map(|o| match &o[i] {
                             Output::Value(Value::UInt(v)) => *v,
                             _ => unreachable!(),
                         })
@@ -370,7 +365,7 @@ fn collapse_outputs(outputs: &[Output]) -> RunVector {
             let mut offset = 0usize;
             let offsets = outputs
                 .iter()
-                .map(|o| match o {
+                .map(|o| match &o[i] {
                     Output::Array(a) => {
                         offset += a.len();
                         offset as u64
@@ -381,7 +376,7 @@ fn collapse_outputs(outputs: &[Output]) -> RunVector {
             let data = match v {
                 Array::Floats(_) => {
                     let mut data = Vec::with_capacity(offset);
-                    outputs.iter().for_each(|o| match o {
+                    outputs.iter().for_each(|o| match &o[i] {
                         Output::Array(Array::Floats(v)) => data.extend_from_slice(v.as_slice()),
                         _ => unreachable!(),
                     });
@@ -389,7 +384,7 @@ fn collapse_outputs(outputs: &[Output]) -> RunVector {
                 }
                 Array::Ints(_) => {
                     let mut data = Vec::with_capacity(offset);
-                    outputs.iter().for_each(|o| match o {
+                    outputs.iter().for_each(|o| match &o[i] {
                         Output::Array(Array::Ints(v)) => data.extend_from_slice(v.as_slice()),
                         _ => unreachable!(),
                     });
@@ -397,7 +392,7 @@ fn collapse_outputs(outputs: &[Output]) -> RunVector {
                 }
                 Array::UInts(_) => {
                     let mut data = Vec::with_capacity(offset);
-                    outputs.iter().for_each(|o| match o {
+                    outputs.iter().for_each(|o| match &o[i] {
                         Output::Array(Array::UInts(v)) => data.extend_from_slice(v.as_slice()),
                         _ => unreachable!(),
                     });

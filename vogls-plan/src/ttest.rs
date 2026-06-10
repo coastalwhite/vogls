@@ -24,13 +24,13 @@ pub struct LazyTTest {
     rhs: LazyRunVectorKey,
 }
 
-fn size_mean_var(v: &[f64]) -> (f64, f64, f64) {
+fn size_mean_var(v: &[u64]) -> (f64, f64, f64) {
     // @TODO: Better summation strategy.
 
-    let sum = v.iter().sum::<f64>();
+    let sum = v.iter().map(|v| *v as f64).sum::<f64>();
     let size = v.len() as f64;
     let mean = sum / size;
-    let var = v.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / size;
+    let var = v.iter().map(|&v| ((v as f64) - mean).powi(2)).sum::<f64>() / size;
 
     (size, mean, var)
 }
@@ -70,7 +70,7 @@ impl ArrayNode for LazyTTest {
         let rhs = &inputs.run_vectors[&self.rhs];
 
         assert_eq!(lhs.offsets.num_runs(), rhs.offsets.num_runs());
-        let (Array::Floats(ldata), Array::Floats(rdata)) = (&lhs.data, &rhs.data) else {
+        let (Array::UInts(ldata), Array::UInts(rdata)) = (&lhs.data, &rhs.data) else {
             return Err(ComputeError::InvalidTypes);
         };
 

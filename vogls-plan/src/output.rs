@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use vogls::utils::{VgHashMap, new_table_key};
 
-use crate::run_vector::{DslRunVector, LazyRunVector, LazyRunVectorKey, RunVector};
 use crate::CspAble;
 use crate::array::{Array, DslLazyArray, LazyArrayKey};
 use crate::compute::{
@@ -12,7 +11,7 @@ use crate::compute::{
 };
 use crate::dsl::{DslNode, DslPtr};
 use crate::plan::{DslLazyPlan, LazyPlanKey, Plan};
-use crate::run::{DslLazyRun, LazyRunKey, Run};
+use crate::run_vector::{DslRunVector, LazyRunVectorKey, RunVector};
 use crate::value::{DslLazyValue, LazyValueKey, Value};
 
 new_table_key! { pub struct LazyOutputKey; }
@@ -174,7 +173,9 @@ impl DslNode for DslLazyOutput {
         use LazyOutput as O;
         let r = match self {
             Self::Output(v) => O::Output(v.clone()),
-            Self::RunVector(v) => O::RunVector(converted[&DslPtr::from(v.as_ref() as &dyn DslNode)].as_run_vector()),
+            Self::RunVector(v) => {
+                O::RunVector(converted[&DslPtr::from(v.as_ref() as &dyn DslNode)].as_run_vector())
+            }
             Self::Value(v) => {
                 O::Value(converted[&DslPtr::from(v.as_ref() as &dyn DslNode)].as_value())
             }

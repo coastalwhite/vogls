@@ -7,10 +7,11 @@ use crate::CspAble;
 use crate::array::Array;
 use crate::buffer::Buffer;
 use crate::compute::{
-    CommonSubPlan, ComputeContext, ComputeDependencies, ComputeGraph, ComputeInputs, ComputeNode,
-    ComputeResult, Key,
+    CommonSubPlan, ComputeContext, ComputeDependencies, ComputeError, ComputeGraph, ComputeInputs,
+    ComputeNode, ComputeResult, Key,
 };
 use crate::dsl::{DslNode, DslPtr};
+use crate::output::{DslLazyOutput, LazyOutputKey, Output};
 use crate::value::Value;
 
 new_table_key! { pub struct LazyRunVectorKey; }
@@ -133,5 +134,48 @@ impl DslNode for DslRunVector {
 impl LazyRunVector {
     pub fn width(&self, graph: &ComputeGraph) -> RunWidth {
         self.0.width(graph)
+    }
+}
+
+pub struct DslRunVectorOutput(pub DslLazyOutput);
+pub struct RunVectorOutput(pub LazyOutputKey);
+
+impl DslRunVectorNode for DslRunVectorOutput {
+    fn convert_one<'a>(&'a self, converted: &'a VgHashMap<DslPtr, Key>) -> Arc<dyn RunVectorNode> {
+        let output = converted[&DslPtr::from(&self.0 as &dyn DslNode)].as_output();
+        Arc::new(RunVectorOutput(output)) as _
+    }
+    fn extend_inputs<'a>(&'a self, f: &mut Vec<&'a dyn DslNode>) {
+        f.push(&self.0);
+    }
+}
+impl RunVectorNode for RunVectorOutput {
+    fn csp_eq(&self, other: &dyn RunVectorNode) -> bool {
+        let Some(other) = (other as &dyn std::any::Any).downcast_ref::<Self>() else {
+            return false;
+        };
+        self.0 == other.0
+    }
+    fn csp_hash(&self, mut state: &mut dyn Hasher) {
+        std::hash::Hash::hash(&self.0, &mut state);
+    }
+    fn width(&self, _graph: &ComputeGraph) -> RunWidth {
+        // @TODO
+        RunWidth::Variable
+    }
+
+    fn extend_inputs(&self, deps: &mut ComputeDependencies) {
+        deps.outputs.push(self.0);
+    }
+
+    fn compute(&self, _ctx: &ComputeContext, inputs: &ComputeInputs) -> ComputeResult<RunVector> {
+        dbg!("hi!");
+        match &inputs.outputs[&self.0] {
+            Output::RunVector(v) => Ok(v.clone()),
+            Output::Plan(_) => panic!("plan!"),
+            Output::Array(_) => panic!("array!"),
+            Output::Value(_) => panic!("value!"),
+            _ => Err(ComputeError::InvalidTypes),
+        }
     }
 }

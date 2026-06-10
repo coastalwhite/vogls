@@ -141,10 +141,11 @@ class LazyPlan(Lazy[Plan]):
         super(LazyPlan, instance).__init__(py)
         return instance
 
+
 class _LazyLambda:
     inner: Lazy[T]
     f: Callable[[T], U]
-    
+
     def __init__(self, producer: Lazy[T], f: Callable[[T], U]) -> None:
         self.inner = producer
         self.f = f
@@ -153,8 +154,5 @@ class _LazyLambda:
         return self.f(self.inner.compute())
 
 
-def t_test(lhs: LazyArray, rhs: LazyArray) -> Lazy[float]:
-    return _LazyLambda(
-        Lazy(vgr.PyLazyOutput.ttest(lhs._producer, rhs._producer)),
-        lambda output: output.extract_value().extract_float(),
-    )
+def t_test(lhs: vgr.PyLazyRunVector, rhs: vgr.PyLazyRunVector) -> Lazy[Array]:
+    return Lazy(vgr.PyLazyArray.ttest(lhs, rhs))

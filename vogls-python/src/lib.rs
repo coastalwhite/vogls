@@ -17,9 +17,10 @@ mod vogls {
     use vogls_plan::output::{DslLazyOutput, LazyOutput, Output};
     use vogls_plan::plan::{DslLazyPlan, LazyPlan, Plan};
     use vogls_plan::run::{DslLazyStep, RunAgg};
-    use vogls_plan::run_vector::{DslRunVector, RunVector};
+    use vogls_plan::run_vector::{DslRunVector, DslRunVectorOutput, RunVector};
     use vogls_plan::ttest::TTest;
     use vogls_plan::value::{DslLazyValue, LazyValue, Value};
+    use vogls_plan::window_sum::WindowSum;
 
     #[pyo3::pyclass(frozen)]
     #[repr(transparent)]
@@ -555,14 +556,13 @@ mod vogls {
             Self(self.0.clone())
         }
 
-        pub fn hamming_distance(&self, py: Python<'_>) -> PyResult<Py<PyLazyOutput>> {
-            self.0
-                .lock()
-                .unwrap()
-                .steps
-                .push(DslLazyStep::TraceAgg(RunAgg::HammingDistance));
+        pub fn hamming_distance(&self, py: Python<'_>) -> PyResult<Py<PyLazyPlan>> {
+            self.0.lock().unwrap().steps.push(DslLazyStep::TraceAgg(
+                "hamming_distance".to_string(),
+                RunAgg::HammingDistance,
+            ));
             let run = self.0.lock().unwrap().clone();
-            Py::new(py, PyLazyOutput(DslLazyOutput::Run(Arc::new(run))))
+            Py::new(py, PyLazyPlan(DslLazyPlan(Arc::new(run) as _)))
         }
     }
 
@@ -611,15 +611,23 @@ mod vogls {
                 let value = value.cast::<PyLazyOutput>()?;
                 _ = components.insert(key.to_string(), value.get().0.clone());
             }
-            Ok(Self(vogls_plan::plan::DslLazyPlan {
-                components: Arc::new(components),
-            }))
+            Ok(Self(vogls_plan::plan::DslLazyPlan(
+                Arc::new(vogls_plan::plan::DslLiteralPlan { components }) as _,
+            )))
+        }
+
+        pub fn get(&self, key: String) -> PyLazyOutput {
+            PyLazyOutput(DslLazyOutput::PlanComponent(Arc::new(self.0.clone()), key))
         }
     }
     #[pymethods]
     impl PyPlan {
         pub fn lazy(&self) -> PyLazyPlan {
             PyLazyPlan(self.0.to_lazy_dsl())
+        }
+
+        pub fn get(&self, key: String) -> PyOutput {
+            PyOutput(self.0.components[&key].clone())
         }
     }
 
@@ -640,6 +648,10 @@ mod vogls {
         #[staticmethod]
         pub fn from_value(value: Bound<PyLazyValue>) -> Self {
             PyLazyOutput(value.get().0.clone().into())
+        }
+
+        pub fn extract_run_vector(&self) -> PyLazyRunVector {
+            PyLazyRunVector(DslRunVector(Arc::new(DslRunVectorOutput(self.0.clone()))))
         }
     }
     #[pymethods]
@@ -752,6 +764,25 @@ mod vogls {
                 Value::Float(v) => Ok(*v),
                 _ => todo!(),
             }
+        }
+    }
+
+    #[pyo3::pymethods]
+    impl PyLazyRunVector {
+        pub fn window_sum(
+            &self,
+            by: Bound<PyLazyRunVector>,
+            width: u64,
+            start: u64,
+            end: u64,
+        ) -> PyLazyRunVector {
+            PyLazyRunVector(DslRunVector(Arc::new(WindowSum {
+                on: self.0.clone(),
+                by: by.get().0.clone(),
+                width,
+                start,
+                end,
+            })))
         }
     }
 }

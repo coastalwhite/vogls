@@ -8,7 +8,6 @@ use crate::array::{Array, LazyArray, LazyArrayKey};
 use crate::design::{LazyDesign, LazyDesignKey, PlanDesign};
 use crate::output::{LazyOutput, LazyOutputKey, Output};
 use crate::plan::{LazyPlan, LazyPlanKey, Plan};
-use crate::run::{LazyRun, LazyRunKey, Run};
 use crate::run_vector::{LazyRunVector, LazyRunVectorKey, RunVector};
 use crate::value::{LazyValue, LazyValueKey, Value};
 
@@ -161,7 +160,6 @@ impl_graph_key! {
     (LazyOutputKey, outputs, as_output, LazyOutput, Output),
     (LazyArrayKey, arrays, as_array, LazyArray, Array),
     (LazyValueKey, values, as_value, LazyValue, Value),
-    (LazyRunKey, runs, as_run, LazyRun, Run),
     (LazyRunVectorKey, run_vectors, as_run_vector, LazyRunVector, RunVector),
 }
 
