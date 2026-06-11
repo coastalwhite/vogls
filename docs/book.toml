@@ -1,0 +1,5 @@
+[book]
+authors = ["coastalwhite"]
+language = "en"
+src = "."
+title = "Vogls Documentation"
