@@ -836,6 +836,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "vogls-bytecode"
+version = "0.0.1"
+dependencies = [
+ "bytemuck",
+ "slotmap",
+ "vogls-bits",
+ "vogls-codegen",
+ "vogls-ir",
+ "vogls-runtime",
+ "vogls-utils",
+ "vogls-vcd",
+]
+
+[[package]]
 name = "vogls-cli"
 version = "0.0.1"
 dependencies = [
