@@ -443,8 +443,8 @@ impl Design {
 
 #[derive(Clone, Copy)]
 pub struct RtSignal {
-    key: RtSignalKey,
-    slice: Option<SignalSlice>,
+    pub(crate) key: RtSignalKey,
+    pub(crate) slice: Option<SignalSlice>,
 }
 impl RtSignal {
     pub fn key(&self) -> RtSignalKey {

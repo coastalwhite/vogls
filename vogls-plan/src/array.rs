@@ -3,8 +3,6 @@ use std::hash::{Hash, Hasher};
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
-use rand::RngExt;
-use rand::rngs::SmallRng;
 use vogls::Bits;
 use vogls::utils::{VgHashMap, new_table_key};
 
@@ -19,7 +17,7 @@ use crate::value::Value;
 
 new_table_key! { pub struct LazyArrayKey; }
 
-#[derive(Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Array {
     Floats(Buffer<f64>),
     Ints(Buffer<i64>),
@@ -63,7 +61,7 @@ impl Array {
             Array::Floats(i) => Value::Float(i[idx]),
             Array::Ints(i) => Value::Int(i[idx]),
             Array::UInts(i) => Value::UInt(i[idx]),
-            Array::Bits(..) => todo!(),
+            Array::Bits(i, stride) => Value::Bits(i.slicex(idx as u32 * stride.get(), *stride)),
         }
     }
 
@@ -77,6 +75,15 @@ impl Array {
         match self {
             Self::Ints(vs) => Some(vs),
             _ => None,
+        }
+    }
+
+    pub fn slice(&self, offset: usize, length: usize) -> Array {
+        match self {
+            Array::Floats(i) => Array::Floats(i[offset..][..length].to_vec().into()),
+            Array::Ints(i) => Array::Ints(i[offset..][..length].to_vec().into()),
+            Array::UInts(i) => Array::UInts(i[offset..][..length].to_vec().into()),
+            Array::Bits(..) => todo!(),
         }
     }
 }
@@ -109,7 +116,9 @@ impl CspAble for LazyArray {
     fn csp_merge(&mut self, _other: Self) {}
 }
 impl ComputeNode for LazyArray {
+    type Key = LazyArrayKey;
     type Output = Array;
+
     fn extend_inputs(&self, deps: &mut ComputeDependencies) {
         self.0.extend_inputs(deps);
     }

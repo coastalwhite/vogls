@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use hashbrown::hash_map::Entry;
+use vogls::design::RtSignal;
 use vogls::{Design, ElaboratedDesign, SignalHandle, VSymbolTable};
 use vogls_codegen::HeapRef;
 use vogls_ir::{Bits, LogicMode};
@@ -37,23 +38,29 @@ impl vogls::VoglsPlugin for TracePlugin {
         Box::new(Clone::clone(self))
     }
 
-    fn register_handles(&mut self, design: &mut ElaboratedDesign<'_>, table: &VSymbolTable) {
+    fn register_handles(&mut self, design: &mut ElaboratedDesign<'_>) {
         self.handles.extend(
-            table
+            design
+                .table()
                 .symbol_id_iter()
                 .filter_map(|sid| design.get_signal_handle(sid)),
         );
     }
 
-    fn finalize(&mut self, design: &Design) {
+    fn finalize(
+        &mut self,
+        handle_map: &VgHashMap<SignalHandle, RtSignal>,
+        signal_to_heap: &Arc<[HeapRef]>,
+    ) {
         for handle in self.handles.drain(..) {
-            let signal = design.resolve_handle(handle);
+            let signal = handle_map[&handle];
             self.tracked.insert(
                 signal.key(),
                 Some(NonMaxUsize::new(self.updated_this_time_step.len()).unwrap()),
             );
             self.updated_this_time_step.push(signal.key());
         }
+        self.signal_to_heap = signal_to_heap.clone();
     }
 }
 

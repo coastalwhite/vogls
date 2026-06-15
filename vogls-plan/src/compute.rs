@@ -1,11 +1,11 @@
 use std::fmt;
 
 use rayon::{ThreadPool, ThreadPoolBuilder};
-use vogls::utils::{Table, VgHashMap};
+use vogls::utils::{Table, VgHashMap, VgHashSet};
 
 use crate::CspTable;
 use crate::array::{Array, LazyArray, LazyArrayKey};
-use crate::design::{LazyDesign, LazyDesignKey, PlanDesign};
+use crate::design::{LazyDesign, LazyDesignKey, PlanDesign, SignalRef};
 use crate::output::{LazyOutput, LazyOutputKey, Output};
 use crate::plan::{LazyPlan, LazyPlanKey, Plan};
 use crate::run_vector::{LazyRunVector, LazyRunVectorKey, RunVector};
@@ -119,6 +119,14 @@ macro_rules! impl_graph_key {
             }
         }
 
+        impl ComputeGraph {
+            fn prepare_key(&self, ctx: &ComputeContext, key: Key, pctx: &mut PreparationContext) -> ComputeResult<()> {
+                match key {
+                    $(Key::$key_variant(k) => self.$table[k].prepare(self, ctx, pctx),)*
+                }
+            }
+        }
+
         impl Key {
             $(
             pub fn $as(self) -> $key {
@@ -186,17 +194,43 @@ impl ComputeContext {
     }
 }
 
+#[derive(Default)]
+pub struct PreparationContext {
+    pub signals: VgHashMap<LazyDesignKey, VgHashSet<SignalRef>>,
+}
+
+impl PreparationContext {
+    fn apply(self, ctx: &ComputeContext, graph: &mut ComputeGraph) -> ComputeResult<()> {
+        _ = ctx;
+        for (k, signals) in self.signals {
+            graph.designs[k].handles.extend(signals);
+        }
+        Ok(())
+    }
+}
+
 pub trait ComputeNode {
+    type Key;
     type Output;
 
     fn extend_inputs(&self, deps: &mut ComputeDependencies);
+    fn prepare(
+        &self,
+        graph: &ComputeGraph,
+        ctx: &ComputeContext,
+        pctx: &mut PreparationContext,
+    ) -> ComputeResult<()> {
+        _ = ctx;
+        _ = graph;
+        _ = pctx;
+        Ok(())
+    }
     fn compute(&self, ctx: &ComputeContext, inputs: &ComputeInputs) -> ComputeResult<Self::Output>;
 }
 
-pub fn compute<T: ComputeNode>(
-    node: &T,
+pub fn compute<T: GraphItem + ComputeNode>(
     node_key: Key,
-    graph: &ComputeGraph,
+    graph: &mut ComputeGraph,
     ctx: &ComputeContext,
 ) -> ComputeResult<T::Output> {
     enum Status {
@@ -214,6 +248,7 @@ pub fn compute<T: ComputeNode>(
     let mut stack = Vec::<StackItem>::new();
     let mut statuses = VgHashMap::<Key, Status>::default();
     let mut deps = ComputeDependencies::default();
+    let mut pctx = PreparationContext::default();
     stack.push(StackItem {
         key: node_key,
         dispatched: false,
@@ -253,12 +288,15 @@ pub fn compute<T: ComputeNode>(
             stack.pop();
         }
 
+        graph.prepare_key(ctx, item.key, &mut pctx)?;
         statuses.insert(item.key, Status::Done);
     }
 
     if has_cycle {
         return Err(ComputeError::CyclicComputationGraph);
     }
+
+    pctx.apply(ctx, graph)?;
 
     // Start computing inputs in the computation graph. For each node first compute the inputs,
     // then compute the node self. When a input is no longer needed by any node, drop it do reuse
@@ -318,5 +356,5 @@ pub fn compute<T: ComputeNode>(
         });
     }
 
-    node.compute(ctx, &inputs)
+    graph.get::<T>(node_key).compute(ctx, &inputs)
 }

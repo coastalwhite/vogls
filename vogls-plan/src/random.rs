@@ -1,0 +1,55 @@
+use std::sync::Arc;
+
+use vogls::VectorSize;
+use vogls::utils::VgHashMap;
+
+use crate::array::{Array, ArrayNode, DslArrayNode};
+use crate::compute::{
+    ComputeContext, ComputeDependencies, ComputeGraph, ComputeInputs, ComputeResult, Key,
+};
+use crate::dsl::{DslNode, DslPtr};
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RandomBits {
+    pub length: usize,
+    pub width: VectorSize,
+    pub seed: u64,
+}
+
+impl DslArrayNode for RandomBits {
+    fn convert_one<'a>(
+        &'a self,
+        _converted: &'a VgHashMap<DslPtr, Key>,
+    ) -> std::sync::Arc<dyn ArrayNode> {
+        Arc::new(self.clone())
+    }
+
+    fn extend_inputs<'a>(&'a self, _f: &mut Vec<&'a dyn DslNode>) {}
+}
+impl ArrayNode for RandomBits {
+    fn csp_eq(&self, other: &dyn ArrayNode) -> bool {
+        let Some(other) = (other as &dyn std::any::Any).downcast_ref::<Self>() else {
+            return false;
+        };
+        self == other
+    }
+
+    fn csp_hash(&self, mut state: &mut dyn std::hash::Hasher) {
+        use std::hash::Hash;
+        self.hash(&mut state);
+    }
+
+    fn len(&self, _graph: &ComputeGraph) -> Option<usize> {
+        Some(self.length)
+    }
+
+    fn extend_inputs(&self, _deps: &mut ComputeDependencies) {}
+
+    fn compute(&self, _ctx: &ComputeContext, _inputs: &ComputeInputs) -> ComputeResult<Array> {
+        let size = VectorSize::new((self.length * self.width.get() as usize) as u32).unwrap();
+        Ok(Array::Bits(
+            vogls::bits::random::rand_bits_from_seed(size, vogls::ir::Mode::TwoValue, self.seed),
+            self.width,
+        ))
+    }
+}

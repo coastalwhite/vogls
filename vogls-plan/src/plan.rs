@@ -7,7 +7,7 @@ use vogls::utils::{IndexMap, VgHashMap, new_table_key};
 use crate::CspAble;
 use crate::compute::{
     CommonSubPlan, ComputeContext, ComputeDependencies, ComputeGraph, ComputeInputs, ComputeNode,
-    ComputeResult, Key,
+    ComputeResult, Key, PreparationContext,
 };
 use crate::dsl::{DslNode, DslPtr};
 use crate::output::{DslLazyOutput, LazyOutputKey, Output};
@@ -95,6 +95,11 @@ pub trait DslPlanNode: Send + Sync + 'static {
 pub trait PlanNode: std::any::Any + Send + Sync + 'static {
     fn csp_eq(&self, other: &dyn PlanNode) -> bool;
     fn csp_hash(&self, state: &mut dyn Hasher);
+    fn prepare(&self, ctx: &ComputeContext, pctx: &mut PreparationContext) -> ComputeResult<()> {
+        _ = ctx;
+        _ = pctx;
+        Ok(())
+    }
     fn extend_inputs(&self, deps: &mut ComputeDependencies);
     fn compute(&self, ctx: &ComputeContext, inputs: &ComputeInputs) -> ComputeResult<Plan>;
 }
@@ -109,9 +114,19 @@ impl CspAble for LazyPlan {
     fn csp_merge(&mut self, _other: Self) {}
 }
 impl ComputeNode for LazyPlan {
+    type Key = LazyPlanKey;
     type Output = Plan;
+
     fn extend_inputs(&self, deps: &mut ComputeDependencies) {
         self.0.extend_inputs(deps);
+    }
+    fn prepare(
+        &self,
+        _graph: &ComputeGraph,
+        ctx: &ComputeContext,
+        pctx: &mut PreparationContext,
+    ) -> ComputeResult<()> {
+        self.0.prepare(ctx, pctx)
     }
     fn compute(&self, ctx: &ComputeContext, inputs: &ComputeInputs) -> ComputeResult<Self::Output> {
         self.0.compute(ctx, inputs)

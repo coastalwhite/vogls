@@ -298,9 +298,13 @@ impl<'a> ElaboratedDesign<'a> {
     }
 
     pub fn lower(
-        self,
-        plugins: Vec<Box<dyn VoglsPlugin>>,
+        mut self,
+        mut plugins: Vec<Box<dyn VoglsPlugin>>,
     ) -> Result<LoweredDesign, LowerError<'a>> {
+        for plugin in &mut plugins {
+            plugin.register_handles(&mut self);
+        }
+
         let Self {
             module_lut,
             table,
@@ -520,7 +524,7 @@ impl<'a> ElaboratedDesign<'a> {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SignalHandle {
     pub(crate) symbol: SymbolId,
 }

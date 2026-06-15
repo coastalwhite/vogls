@@ -23,10 +23,10 @@ use vogls_utils::{TableKey as _, VgHashMap};
 use vogls_verilog::lower::Diagnostics;
 use vogls_verilog::tokenizer::Tokenized;
 
-use crate::ElaboratedDesign;
-use crate::design::{Design, DesignBackend, DesignState, vcd_scope};
+use crate::design::{Design, DesignBackend, DesignState, RtSignal, vcd_scope};
 use crate::plugin::VoglsPlugin;
-use crate::symbol::Symbol;
+use crate::symbol::{NetValue, Symbol};
+use crate::{ElaboratedDesign, SignalHandle};
 
 #[derive(Clone)]
 pub struct LoweredDesign {
@@ -110,9 +110,26 @@ impl LoweredDesign {
         );
         find_lupdt_signals(&self.gl, &rt_signal_map, &mut lupdt_indexes);
         let signal_to_heap: Arc<[HeapRef]> = signal_to_heap.into();
+
+        let handle_map = VgHashMap::from_iter(self.table.symbol_id_iter().filter_map(|sid| {
+            let Symbol::Net(net) = &self.table[sid].content else {
+                return None;
+            };
+            let NetValue::Signal(signal) = &net.net else {
+                return None;
+            };
+            let (k, slice) = signal.probe_signal();
+            let key = rt_signal_map[&k];
+
+            Some((SignalHandle { symbol: sid }, RtSignal { key, slice }))
+        }));
+
         let mut plugins: Vec<Box<dyn RuntimePlugin>> = std::mem::take(&mut self.plugins)
             .into_iter()
-            .map(|x| x as Box<dyn RuntimePlugin>)
+            .map(|mut x| {
+                x.finalize(&handle_map, &signal_to_heap);
+                x as Box<dyn RuntimePlugin>
+            })
             .collect();
 
         if self.has_vcd() || self.vcd.is_some() {

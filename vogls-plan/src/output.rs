@@ -129,6 +129,7 @@ pub trait DslOutputFunction: Send + Sync + 'static {
 }
 
 impl ComputeNode for LazyOutput {
+    type Key = LazyOutputKey;
     type Output = Output;
 
     fn extend_inputs(&self, deps: &mut ComputeDependencies) {

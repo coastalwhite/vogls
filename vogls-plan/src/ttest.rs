@@ -69,24 +69,68 @@ impl ArrayNode for LazyTTest {
         let lhs = &inputs.run_vectors[&self.lhs];
         let rhs = &inputs.run_vectors[&self.rhs];
 
-        assert_eq!(lhs.offsets.num_runs(), rhs.offsets.num_runs());
         let (Array::UInts(ldata), Array::UInts(rdata)) = (&lhs.data, &rhs.data) else {
             return Err(ComputeError::InvalidTypes);
         };
 
-        let mut output = Vec::with_capacity(lhs.offsets.num_runs());
-        for ((lo, lw), (ro, rw)) in lhs.offsets.iter().zip(rhs.offsets.iter()) {
-            let (lsize, lmean, lvar) = size_mean_var(&ldata[lo as usize..][..lw as usize]);
-            let (rsize, rmean, rvar) = size_mean_var(&rdata[ro as usize..][..rw as usize]);
+        let RunWidth::Constant(lwidth) = lhs.offsets.width() else {
+            unreachable!();
+        };
+        let RunWidth::Constant(rwidth) = rhs.offsets.width() else {
+            unreachable!();
+        };
 
-            let numerator = lmean - rmean;
-            let denumerator = (lvar / lsize + rvar / rsize).sqrt();
+        assert_eq!(lwidth, rwidth);
 
-            let tvalue = numerator / denumerator;
-            output.push(tvalue);
+        let lsize = lhs.offsets.num_runs() as f64;
+        let rsize = rhs.offsets.num_runs() as f64;
+
+        let mut lmean = vec![0f64; lwidth as usize];
+        let mut rmean = vec![0f64; lwidth as usize];
+
+        for (o, w) in lhs.offsets.iter() {
+            let data = &ldata[o as usize..][..w as usize];
+            for (i, &x) in data.iter().enumerate() {
+                lmean[i] += x as f64;
+            }
+        }
+        for (o, w) in rhs.offsets.iter() {
+            let data = &rdata[o as usize..][..w as usize];
+            for (i, &x) in data.iter().enumerate() {
+                rmean[i] += x as f64;
+            }
         }
 
-        Ok(Array::Floats(Buffer::from_vec(output)))
+        lmean.iter_mut().for_each(|v| *v = *v / lsize);
+        rmean.iter_mut().for_each(|v| *v = *v / rsize);
+
+        let mut lvar = vec![0f64; lwidth as usize];
+        let mut rvar = vec![0f64; lwidth as usize];
+
+        for (o, w) in lhs.offsets.iter() {
+            let data = &ldata[o as usize..][..w as usize];
+            for (i, &x) in data.iter().enumerate() {
+                lvar[i] += x as f64 - lmean[i];
+            }
+        }
+        for (o, w) in rhs.offsets.iter() {
+            let data = &rdata[o as usize..][..w as usize];
+            for (i, &x) in data.iter().enumerate() {
+                rvar[i] += (x as f64 - rmean[i]).powi(2);
+            }
+        }
+
+        let tvalue = (0..lwidth as usize)
+            .map(|i| {
+                let numerator = lmean[i] - rmean[i];
+                let denumerator = (lvar[i] / lsize + rvar[i] / rsize).sqrt();
+
+                let tvalue = numerator / denumerator;
+                tvalue
+            })
+            .collect();
+
+        Ok(Array::Floats(tvalue))
     }
 }
 

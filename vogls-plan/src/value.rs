@@ -92,7 +92,9 @@ pub struct LazyValue(Arc<dyn ValueNode>);
 pub struct DslLazyValue(Arc<dyn DslValueNode>);
 
 impl ComputeNode for LazyValue {
+    type Key = LazyValueKey;
     type Output = Value;
+    
     fn extend_inputs(&self, deps: &mut ComputeDependencies) {
         self.0.extend_inputs(deps);
     }

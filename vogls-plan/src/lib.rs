@@ -17,6 +17,7 @@ pub mod run;
 pub mod ttest;
 pub mod window_sum;
 pub mod run_vector;
+pub mod random;
 
 pub struct TraceRef(usize);
 

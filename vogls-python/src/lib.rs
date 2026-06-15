@@ -1,6 +1,7 @@
 #[pyo3::pymodule]
 mod vogls {
     use std::io::{stderr, stdout};
+    use std::num::NonZeroU32;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
 
@@ -16,8 +17,9 @@ mod vogls {
     use vogls_plan::dsl::DslNode;
     use vogls_plan::output::{DslLazyOutput, LazyOutput, Output};
     use vogls_plan::plan::{DslLazyPlan, LazyPlan, Plan};
+    use vogls_plan::random::RandomBits;
     use vogls_plan::run::{DslLazyStep, RunAgg};
-    use vogls_plan::run_vector::{DslRunVector, DslRunVectorOutput, RunVector};
+    use vogls_plan::run_vector::{DslRunVector, DslRunVectorOutput, LazyRunVector, RunVector};
     use vogls_plan::ttest::TTest;
     use vogls_plan::value::{DslLazyValue, LazyValue, Value};
     use vogls_plan::window_sum::WindowSum;
@@ -569,10 +571,9 @@ mod vogls {
     fn lazy_compute<Dsl: DslNode, Lazy: ComputeNode + GraphItem>(
         dsl: &Dsl,
     ) -> PyResult<Lazy::Output> {
-        let (lazy_key, graph) = vogls_plan::dsl::convert(dsl)?;
-        let lazy = graph.get::<Lazy>(lazy_key);
+        let (lazy_key, mut graph) = vogls_plan::dsl::convert(dsl)?;
         let ctx = vogls_plan::compute::ComputeContext::new(None);
-        let result = vogls_plan::compute::compute(lazy, lazy_key, &graph, &ctx)?;
+        let result = vogls_plan::compute::compute::<Lazy>(lazy_key, &mut graph, &ctx)?;
         Ok(result)
     }
 
@@ -689,14 +690,15 @@ mod vogls {
             })))
         }
 
-        // #[staticmethod]
-        // #[pyo3(signature = (length, seed = None))]
-        // pub fn random(length: usize, seed: Option<u64>) -> Self {
-        //     Self(vogls_plan::array::DslLazyArray::Random {
-        //         seed: seed.unwrap_or(0),
-        //         length,
-        //     })
-        // }
+        #[staticmethod]
+        #[pyo3(signature = (length, width, seed = None))]
+        pub fn random_bits(length: usize, width: NonZeroU32, seed: Option<u64>) -> Self {
+            Self(vogls_plan::array::DslLazyArray(Arc::new(RandomBits {
+                length,
+                width,
+                seed: seed.unwrap_or(0),
+            })))
+        }
     }
     #[pymethods]
     impl PyArray {
@@ -769,6 +771,10 @@ mod vogls {
 
     #[pyo3::pymethods]
     impl PyLazyRunVector {
+        pub fn compute(&self) -> PyResult<PyRunVector> {
+            lazy_compute::<_, LazyRunVector>(&self.0).map(PyRunVector)
+        }
+
         pub fn window_sum(
             &self,
             by: Bound<PyLazyRunVector>,
@@ -783,6 +789,20 @@ mod vogls {
                 start,
                 end,
             })))
+        }
+    }
+
+    #[pyo3::pymethods]
+    impl PyRunVector {
+        pub fn as_list(&self, py: pyo3::Python<'_>) -> PyResult<pyo3::Py<pyo3::types::PyList>> {
+            let lst = pyo3::types::PyList::new(
+                py,
+                self.0
+                    .array_iter()
+                    .map(|arr| PyArray(arr).as_list(py))
+                    .collect::<PyResult<Vec<_>>>()?,
+            )?;
+            Ok(lst.into())
         }
     }
 }

@@ -106,7 +106,7 @@ class LazyRun:
             names_list = [name]
         else:
             names_list = name
-        return LazyRun._from_py(self._inner.set_signal(names_list, array._inner))
+        return LazyRun._from_py(self._inner.set_signal(names_list, array._producer))
 
     def hamming_distance(self) -> Any:
         return self._inner.hamming_distance()
@@ -129,6 +129,12 @@ class LazyArray(Lazy[Array]):
         instance = cls.__new__(cls)
         super(LazyArray, instance).__init__(py)
         return instance
+
+    @staticmethod
+    def random_bits(
+        length: int, width: int, seed: int | None = None
+    ) -> Self:
+        return LazyArray._from_py(vgr.PyLazyArray.random_bits(length, width, seed))
 
     def min(self) -> LazyValue:
         self._producer.min()
@@ -154,5 +160,5 @@ class _LazyLambda:
         return self.f(self.inner.compute())
 
 
-def t_test(lhs: vgr.PyLazyRunVector, rhs: vgr.PyLazyRunVector) -> Lazy[Array]:
-    return Lazy(vgr.PyLazyArray.ttest(lhs, rhs))
+def t_test(lhs: vgr.PyLazyRunVector, rhs: vgr.PyLazyRunVector) -> LazyArray:
+    return LazyArray._from_py(vgr.PyLazyArray.ttest(lhs, rhs))

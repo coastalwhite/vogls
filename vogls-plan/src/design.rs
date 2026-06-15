@@ -76,6 +76,7 @@ pub enum TimeUnit {
 }
 
 impl ComputeNode for LazyDesign {
+    type Key = LazyDesignKey;
     type Output = PlanDesign;
 
     fn extend_inputs(&self, _deps: &mut ComputeDependencies) {}
@@ -89,7 +90,10 @@ impl ComputeNode for LazyDesign {
         for path in &self.sources {
             builder.add_source(path).map_err(|_| ComputeError::Tokenization)?;
         }
-        let parsed = builder.parse(&mut arena).map_err(|_| ComputeError::Parsing)?;
+        let parsed = builder.parse(&mut arena).map_err(|err| {
+            println!("{err}");
+            ComputeError::Parsing
+        })?;
         let mut design = parsed
             .elaborate(LogicMode::TwoValue, self.top_level_module.as_deref())
             .map_err(|_| ComputeError::Elaboration)?;

@@ -1,9 +1,16 @@
+use std::fmt;
 use std::ops::Deref;
 use std::sync::Arc;
 
 #[derive(Hash)]
 pub struct Buffer<T> {
     inner: Arc<[T]>,
+}
+
+impl<T: fmt::Debug> fmt::Debug for Buffer<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Buffer").field(&self.as_slice()).finish()
+    }
 }
 
 impl<T: PartialEq> PartialEq for Buffer<T> {

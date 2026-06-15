@@ -71,7 +71,7 @@ impl RunOffsets {
             RunOffsets::Scalar(_) => (i as u64, 1),
             RunOffsets::Constant(width, _) => (i as u64 * *width, *width),
             RunOffsets::Offsets(buffer) if i == 0 => (0, buffer[0]),
-            RunOffsets::Offsets(buffer) => (buffer[i], buffer[i + 1] - buffer[i]),
+            RunOffsets::Offsets(buffer) => (buffer[i - 1], buffer[i] - buffer[i - 1]),
         })
     }
 }
@@ -95,6 +95,7 @@ pub enum RunValue {
 }
 
 impl ComputeNode for LazyRunVector {
+    type Key = LazyRunVectorKey;
     type Output = RunVector;
 
     fn extend_inputs(&self, deps: &mut ComputeDependencies) {
@@ -128,6 +129,14 @@ impl DslNode for DslRunVector {
 
     fn extend_inputs<'a>(&'a self, f: &mut Vec<&'a dyn DslNode>) {
         self.0.extend_inputs(f)
+    }
+}
+
+impl RunVector {
+    pub fn array_iter(&self) -> impl Iterator<Item = Array> {
+        self.offsets
+            .iter()
+            .map(|(offset, length)| self.data.slice(offset as usize, length as usize))
     }
 }
 
@@ -169,7 +178,6 @@ impl RunVectorNode for RunVectorOutput {
     }
 
     fn compute(&self, _ctx: &ComputeContext, inputs: &ComputeInputs) -> ComputeResult<RunVector> {
-        dbg!("hi!");
         match &inputs.outputs[&self.0] {
             Output::RunVector(v) => Ok(v.clone()),
             Output::Plan(_) => panic!("plan!"),

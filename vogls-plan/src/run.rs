@@ -12,6 +12,7 @@ use crate::array::{Array, DslLazyArray, LazyArrayKey};
 use crate::buffer::Buffer;
 use crate::compute::{
     ComputeContext, ComputeDependencies, ComputeError, ComputeInputs, ComputeResult, Key,
+    PreparationContext,
 };
 use crate::design::{LazyDesign, LazyDesignKey, PlanDesign, SignalRef, Time};
 use crate::dsl::{DslNode, DslPtr};
@@ -208,6 +209,17 @@ impl PlanNode for LazyRun {
     }
     fn csp_hash(&self, mut state: &mut dyn std::hash::Hasher) {
         self.hash(&mut state);
+    }
+    fn prepare(&self, _ctx: &ComputeContext, pctx: &mut PreparationContext) -> ComputeResult<()> {
+        let design_signals = pctx.signals.entry(self.design).or_default();
+        for step in &self.steps {
+            match step {
+                LazyStep::TraceStart | LazyStep::TraceStop | LazyStep::TraceAgg(..) => {}
+                LazyStep::Repeat(..) | LazyStep::RunFor(..) => {}
+                LazyStep::SetSignal(r, _) => _ = design_signals.insert(r.clone()),
+            }
+        }
+        Ok(())
     }
     fn extend_inputs(&self, deps: &mut ComputeDependencies) {
         deps.designs.push(self.design);
