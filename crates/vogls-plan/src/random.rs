@@ -3,17 +3,30 @@ use std::sync::Arc;
 use vogls::VectorSize;
 use vogls::utils::VgHashMap;
 
-use crate::array::{Array, ArrayNode, DslArrayNode};
+use crate::array::{Array, ArrayNode, DslArrayNode, DslLazyArray};
 use crate::compute::{
     ComputeContext, ComputeDependencies, ComputeGraph, ComputeInputs, ComputeResult, Key,
 };
 use crate::dsl::{DslNode, DslPtr};
+use crate::typing::{ArrayType, DataType, Type};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RandomBits {
     pub length: usize,
     pub width: VectorSize,
     pub seed: u64,
+}
+
+impl RandomBits {
+    pub fn build(self) -> DslLazyArray {
+        DslLazyArray {
+            ty: Arc::new(Type::Array(ArrayType {
+                data: DataType::Bits(self.width),
+                length: Some(self.length),
+            })),
+            f: Arc::new(self),
+        }
+    }
 }
 
 impl DslArrayNode for RandomBits {

@@ -1,18 +1,19 @@
-use std::hash::Hasher;
+use std::hash::{Hash as _, Hasher};
 use std::sync::Arc;
 
 use vogls::utils::{VgHashMap, new_table_key};
 
 use crate::CspAble;
-use crate::array::{Array, DslLazyArray, LazyArrayKey};
+use crate::array::{Array, DslArrayExtractOutput, DslLazyArray};
 use crate::compute::{
     CommonSubPlan, ComputeContext, ComputeDependencies, ComputeError, ComputeGraph, ComputeInputs,
-    ComputeNode, ComputeResult, Key,
+    ComputeNode, ComputeResult, GraphItem, Key,
 };
 use crate::dsl::{DslNode, DslPtr};
-use crate::plan::{DslLazyPlan, LazyPlanKey, Plan};
-use crate::run_vector::{DslRunVector, LazyRunVectorKey, RunVector};
-use crate::value::{DslLazyValue, LazyValueKey, Value};
+use crate::plan::{DslLazyPlan, DslPlanExtractOutput, LazyPlanKey, Plan};
+use crate::run_vector::{DslRunVector, DslRunVectorExtractOutput, RunVector};
+use crate::typing::Type;
+use crate::value::{DslLazyValue, DslValueExtractOutput, Value};
 
 new_table_key! { pub struct LazyOutputKey; }
 
@@ -24,60 +25,24 @@ pub struct HammingDistance {
 }
 
 #[derive(Clone)]
-pub enum LazyOutput {
-    Output(Output),
-    Value(LazyValueKey),
-    Array(LazyArrayKey),
-    Plan(LazyPlanKey),
-    PlanComponent(LazyPlanKey, String),
-    RunVector(LazyRunVectorKey),
-    Function(Arc<dyn OutputFunction>),
+pub struct LazyOutput {
+    pub ty: Arc<Type>,
+    pub f: Arc<dyn OutputNode>,
 }
 
 impl CspAble for LazyOutput {
     fn csp_eq(&self, other: &Self) -> bool {
-        if std::mem::discriminant(self) != std::mem::discriminant(other) {
-            return false;
-        }
-
-        match (self, other) {
-            (Self::Output(lhs), Self::Output(rhs)) => lhs == rhs,
-            (Self::Value(lhs), Self::Value(rhs)) => lhs == rhs,
-            (Self::Array(lhs), Self::Array(rhs)) => lhs == rhs,
-            (Self::Plan(lhs), Self::Plan(rhs)) => lhs == rhs,
-            (Self::PlanComponent(lhs, lhs_s), Self::PlanComponent(rhs, rhs_s)) => {
-                lhs == rhs && lhs_s == rhs_s
-            }
-            (Self::RunVector(lhs), Self::RunVector(rhs)) => lhs == rhs,
-            (Self::Function(lhs), Self::Function(rhs)) => {
-                OutputFunction::csp_eq(lhs.as_ref(), rhs.as_ref())
-            }
-            _ => unreachable!(),
-        }
+        self.f.as_ref().csp_eq(other.f.as_ref())
     }
     fn csp_hash<H: Hasher>(&self, state: &mut H) {
-        use std::hash::Hash;
-        std::mem::discriminant(self).hash(state);
-        match self {
-            Self::Output(e) => e.hash(state),
-            Self::Value(e) => e.hash(state),
-            Self::Array(e) => e.hash(state),
-            Self::Plan(e) => e.hash(state),
-            Self::PlanComponent(e, s) => {
-                e.hash(state);
-                s.hash(state);
-            }
-            Self::RunVector(e) => e.hash(state),
-            Self::Function(e) => {
-                OutputFunction::csp_hash(e.as_ref(), state as &mut dyn Hasher).hash(state)
-            }
-        }
+        self.f.type_id().hash(state);
+        self.f.as_ref().csp_hash(state)
     }
     fn csp_merge(&mut self, _other: Self) {}
 }
 
-pub trait OutputFunction: std::any::Any {
-    fn csp_eq(&self, other: &dyn OutputFunction) -> bool;
+pub trait OutputNode: std::any::Any {
+    fn csp_eq(&self, other: &dyn OutputNode) -> bool;
     fn csp_hash(&self, state: &mut dyn Hasher);
     fn extend_inputs(&self, deps: &mut ComputeDependencies);
     fn compute(&self, _ctx: &ComputeContext, inputs: &ComputeInputs) -> ComputeResult<Output>;
@@ -92,39 +57,65 @@ pub enum Output {
 }
 impl Output {
     pub fn to_lazy_dsl(&self) -> DslLazyOutput {
-        DslLazyOutput::Output(self.clone())
+        DslLazyOutput {
+            ty: Arc::new(self.ty()),
+            f: Arc::new(self.clone()) as _,
+        }
     }
-}
 
-impl From<DslLazyArray> for DslLazyOutput {
-    fn from(value: DslLazyArray) -> Self {
-        Self::Array(Arc::new(value))
-    }
-}
-impl From<DslLazyValue> for DslLazyOutput {
-    fn from(value: DslLazyValue) -> Self {
-        Self::Value(Arc::new(value))
-    }
-}
-impl From<DslLazyPlan> for DslLazyOutput {
-    fn from(value: DslLazyPlan) -> Self {
-        Self::Plan(Arc::new(value))
+    pub fn ty(&self) -> Type {
+        match self {
+            Output::Value(v) => Type::Value(v.ty()),
+            Output::Array(v) => Type::Array(v.ty()),
+            Output::Plan(v) => Type::Plan(v.ty()),
+            Output::RunVector(v) => Type::RunVector(v.ty()),
+        }
     }
 }
 
 #[derive(Clone)]
-pub enum DslLazyOutput {
-    Output(Output),
-    Value(Arc<DslLazyValue>),
-    Array(Arc<DslLazyArray>),
-    Plan(Arc<DslLazyPlan>),
-    PlanComponent(Arc<DslLazyPlan>, String),
-    RunVector(Arc<DslRunVector>),
-    Function(Arc<dyn DslOutputFunction>),
+pub struct DslLazyOutput {
+    pub ty: Arc<Type>,
+    pub f: Arc<dyn DslOutputNode>,
 }
 
-pub trait DslOutputFunction: Send + Sync + 'static {
-    fn convert_one<'a>(&'a self, converted: &'a VgHashMap<DslPtr, Key>) -> Arc<dyn OutputFunction>;
+impl DslLazyOutput {
+    pub fn ty(&self) -> &Arc<Type> {
+        &self.ty
+    }
+
+    pub fn extract_value(self) -> DslLazyValue {
+        assert!(self.ty.is_value());
+        DslLazyValue {
+            ty: self.ty.clone(),
+            f: Arc::new(DslValueExtractOutput(self)),
+        }
+    }
+    pub fn extract_array(self) -> DslLazyArray {
+        assert!(self.ty.is_array());
+        DslLazyArray {
+            ty: self.ty.clone(),
+            f: Arc::new(DslArrayExtractOutput(self)),
+        }
+    }
+    pub fn extract_plan(self) -> DslLazyPlan {
+        assert!(self.ty.is_plan());
+        DslLazyPlan {
+            ty: self.ty.clone(),
+            f: Arc::new(DslPlanExtractOutput(self)),
+        }
+    }
+    pub fn extract_run_vector(self) -> DslRunVector {
+        assert!(self.ty.is_run_vector());
+        DslRunVector {
+            ty: self.ty.clone(),
+            f: Arc::new(DslRunVectorExtractOutput(self)),
+        }
+    }
+}
+
+pub trait DslOutputNode: Send + Sync + 'static {
+    fn convert_one<'a>(&'a self, converted: &'a VgHashMap<DslPtr, Key>) -> Arc<dyn OutputNode>;
     fn extend_inputs<'a>(&'a self, f: &mut Vec<&'a dyn DslNode>);
 }
 
@@ -132,78 +123,175 @@ impl ComputeNode for LazyOutput {
     type Key = LazyOutputKey;
     type Output = Output;
 
+    fn get_type(&self, _graph: &ComputeGraph) -> ComputeResult<&Arc<Type>> {
+        Ok(&self.ty)
+    }
     fn extend_inputs(&self, deps: &mut ComputeDependencies) {
-        match self {
-            Self::Output(_) => {}
-            Self::RunVector(k) => deps.run_vectors.push(*k),
-            Self::Value(k) => deps.values.push(*k),
-            Self::Array(k) => deps.arrays.push(*k),
-            Self::Plan(k) | Self::PlanComponent(k, _) => deps.plans.push(*k),
-            Self::Function(f) => f.extend_inputs(deps),
-        }
+        self.f.extend_inputs(deps)
     }
     fn compute(
         &self,
         ctx: &ComputeContext,
         inputs: &ComputeInputs,
     ) -> ComputeResult<<Self as ComputeNode>::Output> {
-        use Output as O;
-        Ok(match self {
-            Self::Output(l) => l.clone(),
-            Self::RunVector(l) => O::RunVector(inputs.run_vectors[l].clone()),
-            Self::Value(l) => O::Value(inputs.values[l].clone()),
-            Self::Array(l) => O::Array(inputs.arrays[l].clone()),
-            Self::Plan(l) => O::Plan(inputs.plans[l].clone()),
-            Self::PlanComponent(l, component) => inputs.plans[l]
-                .components
-                .get(component)
-                .ok_or_else(|| ComputeError::UnknownComponent)?
-                .clone(),
-            Self::Function(f) => f.compute(ctx, inputs)?,
-        })
+        Ok(self.f.compute(ctx, inputs)?)
     }
 }
 
 impl DslNode for DslLazyOutput {
+    fn get_type(&self) -> ComputeResult<&Arc<Type>> {
+        Ok(&self.ty)
+    }
     fn convert_one<'a>(
         &'a self,
         graph: &'a mut ComputeGraph,
         converted: &'a VgHashMap<DslPtr, crate::compute::Key>,
         csp: &'a mut CommonSubPlan,
     ) -> Key {
-        use LazyOutput as O;
-        let r = match self {
-            Self::Output(v) => O::Output(v.clone()),
-            Self::RunVector(v) => {
-                O::RunVector(converted[&DslPtr::from(v.as_ref() as &dyn DslNode)].as_run_vector())
-            }
-            Self::Value(v) => {
-                O::Value(converted[&DslPtr::from(v.as_ref() as &dyn DslNode)].as_value())
-            }
-            Self::Array(v) => {
-                O::Array(converted[&DslPtr::from(v.as_ref() as &dyn DslNode)].as_array())
-            }
-            Self::Plan(v) => {
-                O::Plan(converted[&DslPtr::from(v.as_ref() as &dyn DslNode)].as_plan())
-            }
-            Self::PlanComponent(v, component) => O::PlanComponent(
-                converted[&DslPtr::from(v.as_ref() as &dyn DslNode)].as_plan(),
-                component.clone(),
-            ),
-            Self::Function(v) => O::Function(v.convert_one(converted)),
+        let r = LazyOutput {
+            ty: self.ty.clone(),
+            f: self.f.convert_one(converted),
         };
         Key::Output(csp.outputs.insert(&mut graph.outputs, r))
     }
 
     fn extend_inputs<'a>(&'a self, f: &mut Vec<&'a dyn DslNode>) {
-        match self {
-            Self::RunVector(v) => f.push(v.as_ref()),
-            Self::Output(_) => {}
-            Self::Value(v) => f.push(v.as_ref()),
-            Self::Array(v) => f.push(v.as_ref()),
-            Self::Plan(v) => f.push(v.as_ref()),
-            Self::PlanComponent(v, _) => f.push(v.as_ref()),
-            Self::Function(v) => v.extend_inputs(f),
+        self.f.extend_inputs(f)
+    }
+}
+
+impl DslOutputNode for Output {
+    fn convert_one<'a>(&'a self, _converted: &'a VgHashMap<DslPtr, Key>) -> Arc<dyn OutputNode> {
+        Arc::new(self.clone())
+    }
+    fn extend_inputs<'a>(&'a self, _f: &mut Vec<&'a dyn DslNode>) {}
+}
+impl OutputNode for Output {
+    impl_dyn_eq_hash!(OutputNode);
+    fn extend_inputs(&self, _deps: &mut ComputeDependencies) {}
+    fn compute(&self, _ctx: &ComputeContext, _inputs: &ComputeInputs) -> ComputeResult<Output> {
+        Ok(self.clone())
+    }
+}
+
+macro_rules! impl_upcast {
+    ($dsl:ty, $node:ty, $key:ident, $table:ident) => {
+        impl From<$dsl> for DslLazyOutput {
+            fn from(value: $dsl) -> Self {
+                Self {
+                    ty: value.ty.clone(),
+                    f: Arc::new(value),
+                }
+            }
+        }
+        impl DslOutputNode for $dsl {
+            fn convert_one<'a>(
+                &'a self,
+                converted: &'a VgHashMap<DslPtr, Key>,
+            ) -> Arc<dyn OutputNode> {
+                let key = converted[&DslPtr::from(self as &dyn DslNode)];
+                let key = <$node as GraphItem>::from_key(key).unwrap();
+                Arc::new(key)
+            }
+            fn extend_inputs<'a>(&'a self, f: &mut Vec<&'a dyn DslNode>) {
+                f.push(self);
+            }
+        }
+        impl OutputNode for <$node as GraphItem>::Key {
+            fn csp_eq(&self, other: &dyn OutputNode) -> bool {
+                let Some(other) = (other as &dyn std::any::Any).downcast_ref::<Self>() else {
+                    return false;
+                };
+                self == other
+            }
+            fn csp_hash(&self, mut state: &mut dyn std::hash::Hasher) {
+                std::any::TypeId::of::<Self>().hash(&mut state);
+                self.hash(&mut state);
+            }
+
+            fn extend_inputs(&self, deps: &mut ComputeDependencies) {
+                deps.$table.push(*self);
+            }
+            fn compute(
+                &self,
+                _ctx: &ComputeContext,
+                inputs: &ComputeInputs,
+            ) -> ComputeResult<Output> {
+                Ok(Output::$key(inputs.$table[self].clone()))
+            }
+        }
+    };
+}
+
+impl_upcast!(
+    crate::value::DslLazyValue,
+    crate::value::LazyValue,
+    Value,
+    values
+);
+impl_upcast!(
+    crate::array::DslLazyArray,
+    crate::array::LazyArray,
+    Array,
+    arrays
+);
+impl_upcast!(crate::plan::DslLazyPlan, crate::plan::LazyPlan, Plan, plans);
+impl_upcast!(
+    crate::run_vector::DslRunVector,
+    crate::run_vector::LazyRunVector,
+    RunVector,
+    run_vectors
+);
+
+pub struct DslPlanComponent {
+    pub plan: DslLazyPlan,
+    pub key: String,
+}
+#[derive(Clone, PartialEq, Hash)]
+pub struct PlanComponent {
+    pub plan: LazyPlanKey,
+    pub key: String,
+}
+
+impl DslOutputNode for DslPlanComponent {
+    fn convert_one<'a>(&'a self, converted: &'a VgHashMap<DslPtr, Key>) -> Arc<dyn OutputNode> {
+        Arc::new(PlanComponent {
+            plan: converted[&DslPtr::from(&self.plan as &dyn DslNode)].as_plan(),
+            key: self.key.clone(),
+        })
+    }
+    fn extend_inputs<'a>(&'a self, f: &mut Vec<&'a dyn DslNode>) {
+        f.push(&self.plan);
+    }
+}
+impl OutputNode for PlanComponent {
+    impl_dyn_eq_hash!(OutputNode);
+    fn extend_inputs(&self, deps: &mut ComputeDependencies) {
+        deps.plans.push(self.plan);
+    }
+
+    fn compute(&self, _ctx: &ComputeContext, inputs: &ComputeInputs) -> ComputeResult<Output> {
+        let plan = &inputs.plans[&self.plan];
+        let component = plan
+            .components
+            .get(&self.key.to_string())
+            .ok_or_else(|| ComputeError::UnknownComponent(self.key.clone()))?;
+        Ok(component.clone())
+    }
+}
+
+impl DslPlanComponent {
+    pub fn build(self) -> DslLazyOutput {
+        let ty = self
+            .plan
+            .ty()
+            .components
+            .get(&self.key.to_string())
+            .unwrap()
+            .clone();
+        DslLazyOutput {
+            ty: Arc::new(ty),
+            f: Arc::new(self),
         }
     }
 }

@@ -1,4 +1,4 @@
-use std::hash::Hasher;
+use std::hash::{Hash as _, Hasher};
 use std::sync::Arc;
 
 use vogls::utils::{VgHashMap, new_table_key};
@@ -12,14 +12,29 @@ use crate::compute::{
 };
 use crate::dsl::{DslNode, DslPtr};
 use crate::output::{DslLazyOutput, LazyOutputKey, Output};
+use crate::typing::{RunVectorType, RunWidth, Type};
 use crate::value::Value;
 
 new_table_key! { pub struct LazyRunVectorKey; }
 
 #[derive(Clone)]
-pub struct DslRunVector(pub Arc<dyn DslRunVectorNode>);
+pub struct DslRunVector {
+    pub ty: Arc<Type>,
+    pub f: Arc<dyn DslRunVectorNode>,
+}
+impl DslRunVector {
+    pub fn ty(&self) -> &RunVectorType {
+        let Type::RunVector(t) = self.ty.as_ref() else {
+            unreachable!()
+        };
+        t
+    }
+}
 #[derive(Clone)]
-pub struct LazyRunVector(pub Arc<dyn RunVectorNode>);
+pub struct LazyRunVector {
+    pub ty: Arc<Type>,
+    pub f: Arc<dyn RunVectorNode>,
+}
 
 pub trait DslRunVectorNode: Send + Sync + 'static {
     fn convert_one<'a>(&'a self, converted: &'a VgHashMap<DslPtr, Key>) -> Arc<dyn RunVectorNode>;
@@ -39,13 +54,6 @@ pub enum RunOffsets {
     Scalar(usize),
     Constant(u64, usize),
     Offsets(Buffer<u64>),
-}
-
-#[derive(Clone, Hash, PartialEq, Eq)]
-pub enum RunWidth {
-    Scalar,
-    Constant(u64),
-    Variable,
 }
 
 impl RunOffsets {
@@ -76,12 +84,6 @@ impl RunOffsets {
     }
 }
 
-impl RunWidth {
-    pub fn is_variable(&self) -> bool {
-        matches!(self, Self::Variable)
-    }
-}
-
 #[derive(Clone, Hash, PartialEq, Eq)]
 pub struct RunVector {
     pub offsets: RunOffsets,
@@ -98,37 +100,47 @@ impl ComputeNode for LazyRunVector {
     type Key = LazyRunVectorKey;
     type Output = RunVector;
 
+    fn get_type(&self, _graph: &ComputeGraph) -> ComputeResult<&Arc<Type>> {
+        Ok(&self.ty)
+    }
     fn extend_inputs(&self, deps: &mut ComputeDependencies) {
-        self.0.extend_inputs(deps);
+        self.f.extend_inputs(deps);
     }
     fn compute(&self, ctx: &ComputeContext, inputs: &ComputeInputs) -> ComputeResult<Self::Output> {
-        self.0.compute(ctx, inputs)
+        self.f.compute(ctx, inputs)
     }
 }
 
 impl CspAble for LazyRunVector {
     fn csp_eq(&self, other: &Self) -> bool {
-        self.0.csp_eq(other.0.as_ref())
+        self.f.csp_eq(other.f.as_ref())
     }
     fn csp_hash<H: Hasher>(&self, mut state: &mut H) {
-        self.0.csp_hash(&mut state)
+        self.f.type_id().hash(state);
+        self.f.csp_hash(&mut state)
     }
     fn csp_merge(&mut self, _other: Self) {}
 }
 
 impl DslNode for DslRunVector {
+    fn get_type(&self) -> ComputeResult<&Arc<Type>> {
+        Ok(&self.ty)
+    }
     fn convert_one<'a>(
         &'a self,
         graph: &'a mut ComputeGraph,
         converted: &'a VgHashMap<DslPtr, Key>,
         csp: &'a mut CommonSubPlan,
     ) -> Key {
-        let r = LazyRunVector(self.0.convert_one(converted));
+        let r = LazyRunVector {
+            ty: self.ty.clone(),
+            f: self.f.convert_one(converted),
+        };
         Key::RunVector(csp.run_vectors.insert(&mut graph.run_vectors, r))
     }
 
     fn extend_inputs<'a>(&'a self, f: &mut Vec<&'a dyn DslNode>) {
-        self.0.extend_inputs(f)
+        self.f.extend_inputs(f)
     }
 }
 
@@ -138,36 +150,40 @@ impl RunVector {
             .iter()
             .map(|(offset, length)| self.data.slice(offset as usize, length as usize))
     }
-}
 
-impl LazyRunVector {
-    pub fn width(&self, graph: &ComputeGraph) -> RunWidth {
-        self.0.width(graph)
+    pub fn ty(&self) -> RunVectorType {
+        RunVectorType {
+            data: self.data.data_type(),
+            length: Some(self.offsets.num_runs()),
+            width: self.offsets.width(),
+        }
     }
 }
 
-pub struct DslRunVectorOutput(pub DslLazyOutput);
-pub struct RunVectorOutput(pub LazyOutputKey);
+impl LazyRunVector {
+    pub fn width(&self) -> RunWidth {
+        let Type::RunVector(ty) = self.ty.as_ref() else {
+            unreachable!()
+        };
+        ty.width
+    }
+}
 
-impl DslRunVectorNode for DslRunVectorOutput {
+pub struct DslRunVectorExtractOutput(pub DslLazyOutput);
+#[derive(PartialEq, Eq, Hash)]
+pub struct RunVectorExtractOutput(pub LazyOutputKey);
+
+impl DslRunVectorNode for DslRunVectorExtractOutput {
     fn convert_one<'a>(&'a self, converted: &'a VgHashMap<DslPtr, Key>) -> Arc<dyn RunVectorNode> {
         let output = converted[&DslPtr::from(&self.0 as &dyn DslNode)].as_output();
-        Arc::new(RunVectorOutput(output)) as _
+        Arc::new(RunVectorExtractOutput(output)) as _
     }
     fn extend_inputs<'a>(&'a self, f: &mut Vec<&'a dyn DslNode>) {
         f.push(&self.0);
     }
 }
-impl RunVectorNode for RunVectorOutput {
-    fn csp_eq(&self, other: &dyn RunVectorNode) -> bool {
-        let Some(other) = (other as &dyn std::any::Any).downcast_ref::<Self>() else {
-            return false;
-        };
-        self.0 == other.0
-    }
-    fn csp_hash(&self, mut state: &mut dyn Hasher) {
-        std::hash::Hash::hash(&self.0, &mut state);
-    }
+impl RunVectorNode for RunVectorExtractOutput {
+    impl_dyn_eq_hash!(RunVectorNode);
     fn width(&self, _graph: &ComputeGraph) -> RunWidth {
         // @TODO
         RunWidth::Variable
@@ -183,7 +199,6 @@ impl RunVectorNode for RunVectorOutput {
             Output::Plan(_) => panic!("plan!"),
             Output::Array(_) => panic!("array!"),
             Output::Value(_) => panic!("value!"),
-            _ => Err(ComputeError::InvalidTypes),
         }
     }
 }

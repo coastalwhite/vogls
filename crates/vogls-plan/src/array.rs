@@ -9,10 +9,12 @@ use vogls::utils::{VgHashMap, new_table_key};
 use crate::CspAble;
 use crate::buffer::Buffer;
 use crate::compute::{
-    CommonSubPlan, ComputeContext, ComputeDependencies, ComputeGraph, ComputeInputs, ComputeNode,
-    ComputeResult, Key,
+    CommonSubPlan, ComputeContext, ComputeDependencies, ComputeError, ComputeGraph, ComputeInputs,
+    ComputeNode, ComputeResult, Key,
 };
 use crate::dsl::{DslNode, DslPtr};
+use crate::output::{DslLazyOutput, LazyOutputKey, Output};
+use crate::typing::{ArrayType, DataType, Type};
 use crate::value::Value;
 
 new_table_key! { pub struct LazyArrayKey; }
@@ -45,8 +47,12 @@ impl Hash for Array {
 
 impl Array {
     pub fn to_lazy_dsl(&self) -> DslLazyArray {
-        DslLazyArray(Arc::new(self.clone()) as _)
+        DslLazyArray {
+            ty: Arc::new(Type::Array(self.ty())),
+            f: Arc::new(self.clone()) as _,
+        }
     }
+
     pub fn len(&self) -> usize {
         match self {
             Self::Floats(items) => items.len(),
@@ -86,13 +92,35 @@ impl Array {
             Array::Bits(..) => todo!(),
         }
     }
+
+    pub fn data_type(&self) -> DataType {
+        match self {
+            Self::Floats(..) => DataType::Float,
+            Self::Ints(..) => DataType::Int,
+            Self::UInts(..) => DataType::UInt,
+            Self::Bits(.., stride) => DataType::Bits(*stride),
+        }
+    }
+
+    pub fn ty(&self) -> ArrayType {
+        ArrayType {
+            data: self.data_type(),
+            length: Some(self.len()),
+        }
+    }
 }
 
 #[derive(Clone)]
-pub struct LazyArray(pub Arc<dyn ArrayNode>);
+pub struct LazyArray {
+    pub ty: Arc<Type>,
+    pub f: Arc<dyn ArrayNode>,
+}
 
 #[derive(Clone)]
-pub struct DslLazyArray(pub Arc<dyn DslArrayNode>);
+pub struct DslLazyArray {
+    pub ty: Arc<Type>,
+    pub f: Arc<dyn DslArrayNode>,
+}
 
 pub trait DslArrayNode: Send + Sync + 'static {
     fn convert_one<'a>(&'a self, converted: &'a VgHashMap<DslPtr, Key>) -> Arc<dyn ArrayNode>;
@@ -108,10 +136,11 @@ pub trait ArrayNode: std::any::Any + Send + Sync + 'static {
 
 impl CspAble for LazyArray {
     fn csp_eq(&self, other: &Self) -> bool {
-        self.0.csp_eq(other.0.as_ref())
+        self.f.csp_eq(other.f.as_ref())
     }
     fn csp_hash<H: Hasher>(&self, mut state: &mut H) {
-        self.0.csp_hash(&mut state)
+        self.f.type_id().hash(state);
+        self.f.csp_hash(&mut state)
     }
     fn csp_merge(&mut self, _other: Self) {}
 }
@@ -119,26 +148,35 @@ impl ComputeNode for LazyArray {
     type Key = LazyArrayKey;
     type Output = Array;
 
+    fn get_type(&self, _graph: &ComputeGraph) -> ComputeResult<&Arc<Type>> {
+        Ok(&self.ty)
+    }
     fn extend_inputs(&self, deps: &mut ComputeDependencies) {
-        self.0.extend_inputs(deps);
+        self.f.extend_inputs(deps);
     }
     fn compute(&self, ctx: &ComputeContext, inputs: &ComputeInputs) -> ComputeResult<Self::Output> {
-        self.0.compute(ctx, inputs)
+        self.f.compute(ctx, inputs)
     }
 }
 impl DslNode for DslLazyArray {
+    fn get_type(&self) -> ComputeResult<&Arc<Type>> {
+        Ok(&self.ty)
+    }
     fn convert_one<'a>(
         &'a self,
         graph: &'a mut ComputeGraph,
         converted: &'a VgHashMap<DslPtr, Key>,
         csp: &'a mut CommonSubPlan,
     ) -> Key {
-        let r = LazyArray(self.0.convert_one(converted));
+        let r = LazyArray {
+            ty: self.ty.clone(),
+            f: self.f.convert_one(converted),
+        };
         Key::Array(csp.arrays.insert(&mut graph.arrays, r))
     }
 
     fn extend_inputs<'a>(&'a self, f: &mut Vec<&'a dyn DslNode>) {
-        self.0.extend_inputs(f);
+        self.f.extend_inputs(f);
     }
 }
 
@@ -149,20 +187,44 @@ impl DslArrayNode for Array {
     fn extend_inputs<'a>(&'a self, _f: &mut Vec<&'a dyn DslNode>) {}
 }
 impl ArrayNode for Array {
-    fn csp_eq(&self, other: &dyn ArrayNode) -> bool {
-        let Some(other) = (other as &dyn Any).downcast_ref::<Self>() else {
-            return false;
-        };
-        self == other
-    }
-    fn csp_hash(&self, mut state: &mut dyn Hasher) {
-        self.hash(&mut state);
-    }
+    impl_dyn_eq_hash!(ArrayNode);
     fn len(&self, _graph: &ComputeGraph) -> Option<usize> {
         Some(self.len())
     }
     fn extend_inputs(&self, _deps: &mut ComputeDependencies) {}
     fn compute(&self, _ctx: &ComputeContext, _inputs: &ComputeInputs) -> ComputeResult<Array> {
         Ok(self.clone())
+    }
+}
+
+pub struct DslArrayExtractOutput(pub DslLazyOutput);
+#[derive(Clone, PartialEq, Hash)]
+pub struct ArrayExtractOutput(LazyOutputKey);
+
+impl DslArrayNode for DslArrayExtractOutput {
+    fn convert_one<'a>(&'a self, converted: &'a VgHashMap<DslPtr, Key>) -> Arc<dyn ArrayNode> {
+        Arc::new(ArrayExtractOutput(
+            converted[&DslPtr::from(&self.0 as &dyn DslNode)].as_output(),
+        ))
+    }
+    fn extend_inputs<'a>(&'a self, f: &mut Vec<&'a dyn DslNode>) {
+        f.push(&self.0);
+    }
+}
+impl ArrayNode for ArrayExtractOutput {
+    impl_dyn_eq_hash!(ArrayNode);
+
+    fn len(&self, _graph: &ComputeGraph) -> Option<usize> {
+        None
+    }
+    fn extend_inputs(&self, deps: &mut ComputeDependencies) {
+        deps.outputs.push(self.0);
+    }
+
+    fn compute(&self, _ctx: &ComputeContext, inputs: &ComputeInputs) -> ComputeResult<Array> {
+        let Output::Array(v) = &inputs.outputs[&self.0] else {
+            return Err(ComputeError::InvalidTypes);
+        };
+        Ok(v.clone())
     }
 }

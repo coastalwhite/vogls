@@ -1,4 +1,5 @@
 use std::fmt;
+use std::sync::Arc;
 
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use vogls::utils::{Table, VgHashMap, VgHashSet};
@@ -9,6 +10,7 @@ use crate::design::{LazyDesign, LazyDesignKey, PlanDesign, SignalRef};
 use crate::output::{LazyOutput, LazyOutputKey, Output};
 use crate::plan::{LazyPlan, LazyPlanKey, Plan};
 use crate::run_vector::{LazyRunVector, LazyRunVectorKey, RunVector};
+use crate::typing::Type;
 use crate::value::{LazyValue, LazyValueKey, Value};
 
 #[derive(Debug)]
@@ -23,7 +25,7 @@ pub enum ComputeError {
     Compile,
 
     UnknownSignal,
-    UnknownComponent,
+    UnknownComponent(String),
 
     FailedToRun,
     NumTracesMismatch,
@@ -44,7 +46,7 @@ impl fmt::Display for ComputeError {
             ComputeError::Compile => f.write_str("Compile"),
 
             ComputeError::UnknownSignal => f.write_str("UnknownSignal"),
-            ComputeError::UnknownComponent => f.write_str("UnknownComponent"),
+            ComputeError::UnknownComponent(name) => write!(f, "unable to find component: '{name}'"),
 
             ComputeError::FailedToRun => f.write_str("FailedToRun"),
             ComputeError::NumTracesMismatch => f.write_str("NumTracesMismatch"),
@@ -213,6 +215,7 @@ pub trait ComputeNode {
     type Key;
     type Output;
 
+    fn get_type(&self, graph: &ComputeGraph) -> ComputeResult<&Arc<Type>>;
     fn extend_inputs(&self, deps: &mut ComputeDependencies);
     fn prepare(
         &self,

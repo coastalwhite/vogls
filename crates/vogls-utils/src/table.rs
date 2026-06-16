@@ -100,6 +100,11 @@ impl<K, V> Default for Table<K, V> {
         Self::new()
     }
 }
+impl<K, V> Default for SecondaryTable<K, V> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 impl<KK, K, V> Default for TableMap<KK, K, V> {
     fn default() -> Self {
         Self::new()

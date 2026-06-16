@@ -2,17 +2,19 @@ use std::any::Any;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use vogls::utils::{VgHashMap, new_table_key};
 use vogls::{Bits, VectorSize};
-use vogls::utils::{new_table_key, VgHashMap};
 
 use crate::CspAble;
 use crate::array::Array;
 use crate::buffer::Buffer;
 use crate::compute::{
-    CommonSubPlan, ComputeContext, ComputeDependencies, ComputeGraph, ComputeInputs, ComputeNode,
-    ComputeResult, Key,
+    CommonSubPlan, ComputeContext, ComputeDependencies, ComputeError, ComputeGraph, ComputeInputs,
+    ComputeNode, ComputeResult, Key,
 };
 use crate::dsl::{DslNode, DslPtr};
+use crate::output::{DslLazyOutput, LazyOutputKey, Output};
+use crate::typing::{DataType, Type, ValueType};
 
 new_table_key! { pub struct LazyValueKey; }
 
@@ -25,7 +27,10 @@ pub enum Value {
 }
 impl Value {
     pub fn to_lazy_dsl(&self) -> DslLazyValue {
-        DslLazyValue(Arc::new(self.clone()) as _)
+        DslLazyValue {
+            ty: Arc::new(Type::Value(self.ty())),
+            f: Arc::new(self.clone()) as _,
+        }
     }
 
     pub fn repeat(&self, n: usize) -> Array {
@@ -45,6 +50,21 @@ impl Value {
             Value::Bits(bits) => bits.clone(),
         }
     }
+
+    pub fn data_type(&self) -> DataType {
+        match self {
+            Self::Float(_) => DataType::Float,
+            Self::Int(_) => DataType::Int,
+            Self::UInt(_) => DataType::UInt,
+            Self::Bits(bits) => DataType::Bits(bits.size()),
+        }
+    }
+
+    pub fn ty(&self) -> ValueType {
+        ValueType {
+            data: self.data_type(),
+        }
+    }
 }
 impl Hash for Value {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
@@ -62,10 +82,7 @@ impl Hash for Value {
 impl Eq for Value {}
 
 impl DslValueNode for Value {
-    fn convert_one<'a>(
-        &'a self,
-        _converted: &'a VgHashMap<DslPtr, Key>,
-    ) -> Arc<dyn ValueNode> {
+    fn convert_one<'a>(&'a self, _converted: &'a VgHashMap<DslPtr, Key>) -> Arc<dyn ValueNode> {
         Arc::new(self.clone()) as _
     }
     fn extend_inputs<'a>(&'a self, _f: &mut Vec<&'a dyn DslNode>) {}
@@ -86,52 +103,62 @@ impl ValueNode for Value {
     }
 }
 
+pub struct LazyValue {
+    pub ty: Arc<Type>,
+    pub f: Arc<dyn ValueNode>,
+}
 #[derive(Clone)]
-pub struct LazyValue(Arc<dyn ValueNode>);
-#[derive(Clone)]
-pub struct DslLazyValue(Arc<dyn DslValueNode>);
+pub struct DslLazyValue {
+    pub ty: Arc<Type>,
+    pub f: Arc<dyn DslValueNode>,
+}
 
 impl ComputeNode for LazyValue {
     type Key = LazyValueKey;
     type Output = Value;
-    
+
+    fn get_type(&self, _graph: &ComputeGraph) -> ComputeResult<&Arc<Type>> {
+        Ok(&self.ty)
+    }
     fn extend_inputs(&self, deps: &mut ComputeDependencies) {
-        self.0.extend_inputs(deps);
+        self.f.extend_inputs(deps);
     }
     fn compute(&self, ctx: &ComputeContext, inputs: &ComputeInputs) -> ComputeResult<Self::Output> {
-        self.0.compute(ctx, inputs)
+        self.f.compute(ctx, inputs)
     }
 }
 impl CspAble for LazyValue {
     fn csp_eq(&self, other: &Self) -> bool {
-        self.0.csp_eq(other.0.as_ref())
+        self.f.csp_eq(other.f.as_ref())
     }
     fn csp_hash<H: Hasher>(&self, mut state: &mut H) {
-        self.0.csp_hash(&mut state)
+        self.f.csp_hash(&mut state)
     }
     fn csp_merge(&mut self, _other: Self) {}
 }
 impl DslNode for DslLazyValue {
+    fn get_type(&self) -> ComputeResult<&Arc<Type>> {
+        Ok(&self.ty)
+    }
     fn convert_one<'a>(
         &'a self,
         graph: &'a mut ComputeGraph,
         converted: &'a VgHashMap<DslPtr, Key>,
         csp: &'a mut CommonSubPlan,
     ) -> Key {
-        let r = LazyValue(self.0.convert_one(converted));
+        let r = LazyValue {
+            ty: self.ty.clone(),
+            f: self.f.convert_one(converted),
+        };
         Key::Value(csp.values.insert(&mut graph.values, r))
     }
-
     fn extend_inputs<'a>(&'a self, f: &mut Vec<&'a dyn DslNode>) {
-        self.0.extend_inputs(f);
+        self.f.extend_inputs(f);
     }
 }
 
 pub trait DslValueNode: Send + Sync + 'static {
-    fn convert_one<'a>(
-        &'a self,
-        converted: &'a VgHashMap<DslPtr, Key>,
-    ) -> Arc<dyn ValueNode>;
+    fn convert_one<'a>(&'a self, converted: &'a VgHashMap<DslPtr, Key>) -> Arc<dyn ValueNode>;
     fn extend_inputs<'a>(&'a self, f: &mut Vec<&'a dyn DslNode>);
 }
 pub trait ValueNode: std::any::Any + Send + Sync + 'static {
@@ -140,4 +167,42 @@ pub trait ValueNode: std::any::Any + Send + Sync + 'static {
 
     fn extend_inputs(&self, deps: &mut ComputeDependencies);
     fn compute(&self, ctx: &ComputeContext, inputs: &ComputeInputs) -> ComputeResult<Value>;
+}
+
+pub struct DslValueExtractOutput(pub DslLazyOutput);
+#[derive(Clone, PartialEq, Hash)]
+pub struct ValueExtractOutput(LazyOutputKey);
+
+impl DslValueNode for DslValueExtractOutput {
+    fn convert_one<'a>(&'a self, converted: &'a VgHashMap<DslPtr, Key>) -> Arc<dyn ValueNode> {
+        Arc::new(ValueExtractOutput(
+            converted[&DslPtr::from(&self.0 as &dyn DslNode)].as_output(),
+        ))
+    }
+    fn extend_inputs<'a>(&'a self, f: &mut Vec<&'a dyn DslNode>) {
+        f.push(&self.0);
+    }
+}
+impl ValueNode for ValueExtractOutput {
+    fn csp_eq(&self, other: &dyn ValueNode) -> bool {
+        let Some(other) = (other as &dyn Any).downcast_ref::<Self>() else {
+            return false;
+        };
+        self == other
+    }
+
+    fn csp_hash(&self, mut state: &mut dyn Hasher) {
+        self.hash(&mut state);
+    }
+
+    fn extend_inputs(&self, deps: &mut ComputeDependencies) {
+        deps.outputs.push(self.0);
+    }
+
+    fn compute(&self, _ctx: &ComputeContext, inputs: &ComputeInputs) -> ComputeResult<Value> {
+        let Output::Value(v) = &inputs.outputs[&self.0] else {
+            return Err(ComputeError::InvalidTypes);
+        };
+        Ok(v.clone())
+    }
 }

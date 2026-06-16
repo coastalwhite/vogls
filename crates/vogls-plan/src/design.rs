@@ -1,8 +1,9 @@
 use std::hash::Hash;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use vogls::design::{Arena, Design};
-use vogls::utils::{VgHashMap, VgHashSet, new_table_key};
+use vogls::utils::{IndexMap, VgHashMap, VgHashSet, new_table_key};
 use vogls::{LogicMode, SignalHandle, VoglsPlugin};
 use vogls_trace::TracePlugin;
 
@@ -12,6 +13,8 @@ use crate::compute::{
     ComputeNode, ComputeResult, Key,
 };
 use crate::dsl::{DslNode, DslPtr};
+use crate::run::DslLazyRun;
+use crate::typing::Type;
 
 new_table_key! { pub struct LazyDesignKey; }
 
@@ -21,6 +24,16 @@ pub struct LazyDesign {
     pub top_level_module: Option<String>,
     pub trace: bool,
     pub handles: VgHashSet<SignalRef>,
+}
+
+impl LazyDesign {
+    pub fn run(self: Arc<Self>) -> DslLazyRun {
+        DslLazyRun {
+            design: self,
+            steps: Vec::new(),
+            ty: IndexMap::new(),
+        }
+    }
 }
 
 pub struct PlanDesign {
@@ -79,6 +92,9 @@ impl ComputeNode for LazyDesign {
     type Key = LazyDesignKey;
     type Output = PlanDesign;
 
+    fn get_type(&self, _graph: &ComputeGraph) -> ComputeResult<&Arc<Type>> {
+        unimplemented!()
+    }
     fn extend_inputs(&self, _deps: &mut ComputeDependencies) {}
     fn compute(
         &self,
@@ -88,7 +104,9 @@ impl ComputeNode for LazyDesign {
         let mut builder = vogls::DesignBuilder::new();
         let mut arena = Arena::default();
         for path in &self.sources {
-            builder.add_source(path).map_err(|_| ComputeError::Tokenization)?;
+            builder
+                .add_source(path)
+                .map_err(|_| ComputeError::Tokenization)?;
         }
         let parsed = builder.parse(&mut arena).map_err(|err| {
             println!("{err}");
@@ -141,6 +159,9 @@ impl ComputeNode for LazyDesign {
 }
 
 impl DslNode for LazyDesign {
+    fn get_type(&self) -> ComputeResult<&Arc<Type>> {
+        unimplemented!()
+    }
     fn convert_one<'a>(
         &'a self,
         graph: &'a mut ComputeGraph,

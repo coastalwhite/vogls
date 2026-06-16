@@ -4,18 +4,32 @@ use std::sync::Arc;
 
 use vogls::utils::VgHashMap;
 
-use crate::array::{Array, ArrayNode, DslArrayNode};
+use crate::array::{Array, ArrayNode, DslArrayNode, DslLazyArray};
 use crate::buffer::Buffer;
 use crate::compute::{
     ComputeContext, ComputeDependencies, ComputeError, ComputeGraph, ComputeInputs, ComputeResult,
     Key,
 };
 use crate::dsl::{DslNode, DslPtr};
-use crate::run_vector::{DslRunVector, LazyRunVectorKey, RunWidth};
+use crate::run_vector::{DslRunVector, LazyRunVectorKey};
+use crate::typing::{ArrayType, DataType, RunWidth, Type};
 
 pub struct TTest {
     pub lhs: DslRunVector,
     pub rhs: DslRunVector,
+}
+
+impl TTest {
+    pub fn build(self) -> DslLazyArray {
+        DslLazyArray {
+            ty: Arc::new(Type::Array(ArrayType {
+                data: DataType::Float,
+                // @TODO: Fill in
+                length: None,
+            })),
+            f: Arc::new(self),
+        }
+    }
 }
 
 #[derive(PartialEq, Hash)]
@@ -50,8 +64,8 @@ impl ArrayNode for LazyTTest {
     }
 
     fn len(&self, graph: &ComputeGraph) -> Option<usize> {
-        let lwidth = graph.run_vectors[self.lhs].width(graph);
-        let rwidth = graph.run_vectors[self.rhs].width(graph);
+        let lwidth = graph.run_vectors[self.lhs].width();
+        let rwidth = graph.run_vectors[self.rhs].width();
 
         let (RunWidth::Constant(lwidth), RunWidth::Constant(rwidth)) = (lwidth, rwidth) else {
             return None;

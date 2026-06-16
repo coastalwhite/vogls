@@ -12,8 +12,8 @@ use crate::compute::{
 use crate::dsl::{DslNode, DslPtr};
 use crate::run_vector::{
     DslRunVector, DslRunVectorNode, LazyRunVectorKey, RunOffsets, RunVector, RunVectorNode,
-    RunWidth,
 };
+use crate::typing::{RunVectorType, RunWidth, Type};
 
 pub struct WindowSum {
     pub on: DslRunVector,
@@ -22,6 +22,21 @@ pub struct WindowSum {
     pub start: u64,
     pub end: u64,
     pub width: u64,
+}
+
+impl WindowSum {
+    pub fn build(self) -> DslRunVector {
+        let diff = self.end - self.start;
+        let width = RunWidth::Constant(diff.div_ceil(self.width));
+        DslRunVector {
+            ty: Arc::new(Type::RunVector(RunVectorType {
+                data: self.on.ty().data,
+                length: self.on.ty().length,
+                width,
+            })),
+            f: Arc::new(self),
+        }
+    }
 }
 
 #[derive(PartialEq, Hash)]

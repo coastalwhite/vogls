@@ -6,11 +6,12 @@ use vogls::utils::{IndexMap, VgHashMap, new_table_key};
 
 use crate::CspAble;
 use crate::compute::{
-    CommonSubPlan, ComputeContext, ComputeDependencies, ComputeGraph, ComputeInputs, ComputeNode,
-    ComputeResult, Key, PreparationContext,
+    CommonSubPlan, ComputeContext, ComputeDependencies, ComputeError, ComputeGraph, ComputeInputs,
+    ComputeNode, ComputeResult, Key, PreparationContext,
 };
 use crate::dsl::{DslNode, DslPtr};
 use crate::output::{DslLazyOutput, LazyOutputKey, Output};
+use crate::typing::{PlanType, Type};
 
 new_table_key! { pub struct LazyPlanKey; }
 
@@ -21,20 +22,57 @@ pub struct Plan {
 
 impl Plan {
     pub fn to_lazy_dsl(&self) -> DslLazyPlan {
-        DslLazyPlan(Arc::new(DslLiteralPlan {
-            components: self
-                .components
-                .iter()
-                .map(|(k, v)| (k.clone(), v.to_lazy_dsl()))
-                .collect::<IndexMap<String, DslLazyOutput>>(),
-        }))
+        DslLazyPlan {
+            ty: Arc::new(Type::Plan(self.ty())),
+            f: Arc::new(DslLiteralPlan {
+                components: self
+                    .components
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.to_lazy_dsl()))
+                    .collect::<IndexMap<String, DslLazyOutput>>(),
+            }),
+        }
+    }
+
+    pub fn ty(&self) -> PlanType {
+        PlanType {
+            components: Arc::new(
+                self.components
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.ty()))
+                    .collect::<IndexMap<String, Type>>(),
+            ),
+        }
     }
 }
 
 #[derive(Clone)]
-pub struct DslLazyPlan(pub Arc<dyn DslPlanNode>);
+pub struct DslLazyPlan {
+    pub ty: Arc<Type>,
+    pub f: Arc<dyn DslPlanNode>,
+}
 #[derive(Clone)]
-pub struct LazyPlan(pub Arc<dyn PlanNode>);
+pub struct LazyPlan {
+    pub ty: Arc<Type>,
+    pub f: Arc<dyn PlanNode>,
+}
+
+impl DslLazyPlan {
+    pub fn ty(&self) -> &PlanType {
+        let Type::Plan(ty) = self.ty.as_ref() else {
+            unreachable!()
+        };
+        ty
+    }
+}
+impl LazyPlan {
+    pub fn ty(&self) -> &PlanType {
+        let Type::Plan(ty) = self.ty.as_ref() else {
+            unreachable!()
+        };
+        ty
+    }
+}
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct LazyLiteralPlan {
@@ -106,10 +144,11 @@ pub trait PlanNode: std::any::Any + Send + Sync + 'static {
 
 impl CspAble for LazyPlan {
     fn csp_eq(&self, other: &Self) -> bool {
-        self.0.csp_eq(other.0.as_ref())
+        self.f.csp_eq(other.f.as_ref())
     }
     fn csp_hash<H: Hasher>(&self, mut state: &mut H) {
-        self.0.csp_hash(&mut state)
+        self.f.type_id().hash(state);
+        self.f.csp_hash(&mut state)
     }
     fn csp_merge(&mut self, _other: Self) {}
 }
@@ -117,8 +156,11 @@ impl ComputeNode for LazyPlan {
     type Key = LazyPlanKey;
     type Output = Plan;
 
+    fn get_type(&self, _graph: &ComputeGraph) -> ComputeResult<&Arc<Type>> {
+        Ok(&self.ty)
+    }
     fn extend_inputs(&self, deps: &mut ComputeDependencies) {
-        self.0.extend_inputs(deps);
+        self.f.extend_inputs(deps);
     }
     fn prepare(
         &self,
@@ -126,24 +168,58 @@ impl ComputeNode for LazyPlan {
         ctx: &ComputeContext,
         pctx: &mut PreparationContext,
     ) -> ComputeResult<()> {
-        self.0.prepare(ctx, pctx)
+        self.f.prepare(ctx, pctx)
     }
     fn compute(&self, ctx: &ComputeContext, inputs: &ComputeInputs) -> ComputeResult<Self::Output> {
-        self.0.compute(ctx, inputs)
+        self.f.compute(ctx, inputs)
     }
 }
 impl DslNode for DslLazyPlan {
+    fn get_type(&self) -> ComputeResult<&Arc<Type>> {
+        Ok(&self.ty)
+    }
     fn convert_one<'a>(
         &'a self,
         graph: &'a mut ComputeGraph,
         converted: &'a VgHashMap<DslPtr, Key>,
         csp: &'a mut CommonSubPlan,
     ) -> Key {
-        let r = LazyPlan(self.0.convert_one(converted));
+        let r = LazyPlan {
+            ty: self.ty.clone(),
+            f: self.f.convert_one(converted),
+        };
         Key::Plan(csp.plans.insert(&mut graph.plans, r))
     }
 
     fn extend_inputs<'a>(&'a self, f: &mut Vec<&'a dyn DslNode>) {
-        self.0.extend_inputs(f);
+        self.f.extend_inputs(f);
+    }
+}
+
+pub struct DslPlanExtractOutput(pub DslLazyOutput);
+#[derive(Clone, PartialEq, Hash)]
+pub struct PlanExtractOutput(LazyOutputKey);
+
+impl DslPlanNode for DslPlanExtractOutput {
+    fn convert_one<'a>(&'a self, converted: &'a VgHashMap<DslPtr, Key>) -> Arc<dyn PlanNode> {
+        Arc::new(PlanExtractOutput(
+            converted[&DslPtr::from(&self.0 as &dyn DslNode)].as_output(),
+        ))
+    }
+    fn extend_inputs<'a>(&'a self, f: &mut Vec<&'a dyn DslNode>) {
+        f.push(&self.0);
+    }
+}
+impl PlanNode for PlanExtractOutput {
+    impl_dyn_eq_hash!(PlanNode);
+    fn extend_inputs(&self, deps: &mut ComputeDependencies) {
+        deps.outputs.push(self.0);
+    }
+
+    fn compute(&self, _ctx: &ComputeContext, inputs: &ComputeInputs) -> ComputeResult<Plan> {
+        let Output::Plan(v) = &inputs.outputs[&self.0] else {
+            return Err(ComputeError::InvalidTypes);
+        };
+        Ok(v.clone())
     }
 }

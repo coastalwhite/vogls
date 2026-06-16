@@ -5,7 +5,20 @@ use vogls::design::DesignState;
 use vogls::utils::{Table, TableKey};
 use vogls_trace::Trace;
 
-pub mod value;
+macro_rules! impl_dyn_eq_hash {
+    ($ty:ident) => {
+        fn csp_eq(&self, other: &dyn $ty) -> bool {
+            let Some(other) = (other as &dyn std::any::Any).downcast_ref::<Self>() else {
+                return false;
+            };
+            self == other
+        }
+        fn csp_hash(&self, mut state: &mut dyn std::hash::Hasher) {
+            self.hash(&mut state);
+        }
+    };
+}
+
 pub mod array;
 pub mod buffer;
 pub mod compute;
@@ -13,11 +26,13 @@ pub mod design;
 pub mod dsl;
 pub mod output;
 pub mod plan;
-pub mod run;
-pub mod ttest;
-pub mod window_sum;
-pub mod run_vector;
 pub mod random;
+pub mod run;
+pub mod run_vector;
+pub mod ttest;
+pub mod typing;
+pub mod value;
+pub mod window_sum;
 
 pub struct TraceRef(usize);
 

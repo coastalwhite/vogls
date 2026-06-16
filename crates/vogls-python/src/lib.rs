@@ -5,8 +5,8 @@ mod vogls {
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
 
-    use pyo3::exceptions::{PyException, PyValueError};
-    use pyo3::{IntoPyObjectExt, PyAny, PyResult, prelude::*};
+    use pyo3::exceptions::{PyException, PyTypeError, PyValueError};
+    use pyo3::{FromPyObject, IntoPyObjectExt, PyAny, PyResult, prelude::*};
     use vogls::design::DesignState;
     use vogls::utils::{IndexMap, VgHashSet};
     use vogls::{BitsFormatOptions, SimulationIo, VectorSize};
@@ -15,12 +15,13 @@ mod vogls {
     use vogls_plan::compute::{ComputeNode, GraphItem};
     use vogls_plan::design::TimeUnit;
     use vogls_plan::dsl::DslNode;
-    use vogls_plan::output::{DslLazyOutput, LazyOutput, Output};
+    use vogls_plan::output::{DslLazyOutput, DslPlanComponent, Output};
     use vogls_plan::plan::{DslLazyPlan, LazyPlan, Plan};
     use vogls_plan::random::RandomBits;
     use vogls_plan::run::{DslLazyStep, RunAgg};
-    use vogls_plan::run_vector::{DslRunVector, DslRunVectorOutput, LazyRunVector, RunVector};
+    use vogls_plan::run_vector::{DslRunVector, LazyRunVector, RunVector};
     use vogls_plan::ttest::TTest;
+    use vogls_plan::typing::{PlanType, Type, TypeKind};
     use vogls_plan::value::{DslLazyValue, LazyValue, Value};
     use vogls_plan::window_sum::WindowSum;
 
@@ -511,19 +512,16 @@ mod vogls {
             }))
         }
 
-        pub fn run(&self) -> PyLazyRun {
-            PyLazyRun(Arc::new(Mutex::new(vogls_plan::run::DslLazyRun {
-                design: self.0.clone(),
-                steps: Vec::new(),
-            })))
+        pub fn run(&self) -> PyRun {
+            PyRun(Arc::new(Mutex::new(self.0.clone().run())))
         }
     }
 
     #[pyo3::pyclass(frozen)]
-    pub struct PyLazyRun(Arc<Mutex<vogls_plan::run::DslLazyRun>>);
+    pub struct PyRun(Arc<Mutex<vogls_plan::run::DslLazyRun>>);
 
     #[pymethods]
-    impl PyLazyRun {
+    impl PyRun {
         pub fn run_for(&self, time: u64) -> Self {
             self.0
                 .lock()
@@ -558,13 +556,15 @@ mod vogls {
             Self(self.0.clone())
         }
 
-        pub fn hamming_distance(&self, py: Python<'_>) -> PyResult<Py<PyLazyPlan>> {
-            self.0.lock().unwrap().steps.push(DslLazyStep::TraceAgg(
-                "hamming_distance".to_string(),
-                RunAgg::HammingDistance,
-            ));
+        pub fn hamming_distance(&self, name: String) -> Self {
+            let mut inner = self.0.lock().unwrap();
+            inner.hamming_distance(name);
+            Self(self.0.clone())
+        }
+
+        pub fn finish(&self, py: Python<'_>) -> PyResult<Py<PyLazyPlan>> {
             let run = self.0.lock().unwrap().clone();
-            Py::new(py, PyLazyPlan(DslLazyPlan(Arc::new(run) as _)))
+            Py::new(py, PyLazyPlan(run.finish()))
         }
     }
 
@@ -580,8 +580,6 @@ mod vogls {
     #[pyo3::pyclass(frozen)]
     pub struct PyLazyPlan(DslLazyPlan);
     #[pyo3::pyclass(frozen)]
-    pub struct PyLazyOutput(DslLazyOutput);
-    #[pyo3::pyclass(frozen)]
     pub struct PyLazyRunVector(DslRunVector);
     #[pyo3::pyclass(frozen)]
     pub struct PyLazyArray(DslLazyArray);
@@ -590,13 +588,94 @@ mod vogls {
     #[pyo3::pyclass(frozen)]
     pub struct PyPlan(Plan);
     #[pyo3::pyclass(frozen)]
-    pub struct PyOutput(Output);
-    #[pyo3::pyclass(frozen)]
     pub struct PyRunVector(RunVector);
     #[pyo3::pyclass(frozen)]
     pub struct PyArray(Array);
     #[pyo3::pyclass(frozen)]
     pub struct PyValue(Value);
+
+    pub struct PyOutput(Output);
+    pub struct PyLazyOutput(DslLazyOutput);
+
+    impl<'py> IntoPyObject<'py> for PyOutput {
+        type Target = PyAny;
+        type Output = Bound<'py, PyAny>;
+        type Error = PyErr;
+
+        fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
+            Ok(match self.0 {
+                Output::Value(v) => PyValue(v).into_pyobject(py)?.into_any(),
+                Output::Array(a) => PyArray(a).into_pyobject(py)?.into_any(),
+                Output::Plan(p) => PyPlan(p).into_pyobject(py)?.into_any(),
+                Output::RunVector(r) => PyRunVector(r).into_pyobject(py)?.into_any(),
+            })
+        }
+    }
+    impl<'py> IntoPyObject<'py> for PyLazyOutput {
+        type Target = PyAny;
+        type Output = Bound<'py, PyAny>;
+        type Error = PyErr;
+
+        fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
+            Ok(match self.0.ty().kind() {
+                TypeKind::Value => PyLazyValue(self.0.clone().extract_value())
+                    .into_pyobject(py)?
+                    .into_any(),
+                TypeKind::Array => PyLazyArray(self.0.clone().extract_array())
+                    .into_pyobject(py)?
+                    .into_any(),
+                TypeKind::Plan => PyLazyPlan(self.0.clone().extract_plan())
+                    .into_pyobject(py)?
+                    .into_any(),
+                TypeKind::RunVector => PyLazyRunVector(self.0.clone().extract_run_vector())
+                    .into_pyobject(py)?
+                    .into_any(),
+            })
+        }
+    }
+
+    impl FromPyObject<'_, '_> for PyOutput {
+        type Error = PyErr;
+
+        fn extract(obj: Borrowed<'_, '_, PyAny>) -> Result<Self, Self::Error> {
+            if let Ok(b) = obj.cast::<PyValue>() {
+                return Ok(PyOutput(Output::Value(b.borrow().0.clone())));
+            }
+            if let Ok(b) = obj.cast::<PyArray>() {
+                return Ok(PyOutput(Output::Array(b.borrow().0.clone())));
+            }
+            if let Ok(b) = obj.cast::<PyPlan>() {
+                return Ok(PyOutput(Output::Plan(b.borrow().0.clone())));
+            }
+            if let Ok(b) = obj.cast::<PyRunVector>() {
+                return Ok(PyOutput(Output::RunVector(b.borrow().0.clone())));
+            }
+            Err(PyTypeError::new_err(
+                "expected one of Value, Array, Plan, or RunVector",
+            ))
+        }
+    }
+    impl FromPyObject<'_, '_> for PyLazyOutput {
+        type Error = PyErr;
+
+        fn extract(obj: Borrowed<'_, '_, PyAny>) -> Result<Self, Self::Error> {
+            if let Ok(b) = obj.cast::<PyLazyValue>() {
+                return Ok(PyLazyOutput(b.borrow().0.clone().into()));
+            }
+            if let Ok(b) = obj.cast::<PyLazyArray>() {
+                return Ok(PyLazyOutput(b.borrow().0.clone().into()));
+            }
+            if let Ok(b) = obj.cast::<PyLazyPlan>() {
+                return Ok(PyLazyOutput(b.borrow().0.clone().into()));
+            }
+            if let Ok(b) = obj.cast::<PyLazyRunVector>() {
+                return Ok(PyLazyOutput(b.borrow().0.clone().into()));
+            }
+            Err(PyTypeError::new_err(
+                "expected one of Value, Array, Plan, or RunVector",
+            ))
+        }
+    }
 
     #[pymethods]
     impl PyLazyPlan {
@@ -607,18 +686,29 @@ mod vogls {
         #[staticmethod]
         pub fn from_dict(dict: Bound<pyo3::types::PyDict>) -> PyResult<Self> {
             let mut components = IndexMap::<String, DslLazyOutput>::default();
+            let mut ty = IndexMap::<String, Type>::default();
             for (key, value) in dict.iter() {
                 let key = key.str()?;
-                let value = value.cast::<PyLazyOutput>()?;
-                _ = components.insert(key.to_string(), value.get().0.clone());
+                let value = value.extract::<PyLazyOutput>()?;
+                _ = ty.insert(key.to_string(), value.0.ty().as_ref().clone());
+                _ = components.insert(key.to_string(), value.0);
             }
-            Ok(Self(vogls_plan::plan::DslLazyPlan(
-                Arc::new(vogls_plan::plan::DslLiteralPlan { components }) as _,
-            )))
+            Ok(Self(vogls_plan::plan::DslLazyPlan {
+                ty: Arc::new(Type::Plan(PlanType {
+                    components: Arc::new(ty),
+                })),
+                f: Arc::new(vogls_plan::plan::DslLiteralPlan { components }) as _,
+            }))
         }
 
         pub fn get(&self, key: String) -> PyLazyOutput {
-            PyLazyOutput(DslLazyOutput::PlanComponent(Arc::new(self.0.clone()), key))
+            PyLazyOutput(
+                DslPlanComponent {
+                    plan: self.0.clone(),
+                    key,
+                }
+                .build(),
+            )
         }
     }
     #[pymethods]
@@ -629,43 +719,6 @@ mod vogls {
 
         pub fn get(&self, key: String) -> PyOutput {
             PyOutput(self.0.components[&key].clone())
-        }
-    }
-
-    #[pymethods]
-    impl PyLazyOutput {
-        pub fn compute(&self) -> PyResult<PyOutput> {
-            lazy_compute::<_, LazyOutput>(&self.0).map(PyOutput)
-        }
-
-        #[staticmethod]
-        pub fn from_plan(plan: Bound<PyLazyPlan>) -> Self {
-            PyLazyOutput(plan.get().0.clone().into())
-        }
-        #[staticmethod]
-        pub fn from_array(arr: Bound<PyLazyArray>) -> Self {
-            PyLazyOutput(arr.get().0.clone().into())
-        }
-        #[staticmethod]
-        pub fn from_value(value: Bound<PyLazyValue>) -> Self {
-            PyLazyOutput(value.get().0.clone().into())
-        }
-
-        pub fn extract_run_vector(&self) -> PyLazyRunVector {
-            PyLazyRunVector(DslRunVector(Arc::new(DslRunVectorOutput(self.0.clone()))))
-        }
-    }
-    #[pymethods]
-    impl PyOutput {
-        pub fn lazy(&self) -> PyLazyOutput {
-            PyLazyOutput(self.0.to_lazy_dsl())
-        }
-
-        pub fn extract_value(&self) -> PyResult<PyValue> {
-            match &self.0 {
-                Output::Value(value) => Ok(PyValue(value.clone())),
-                _ => todo!(),
-            }
         }
     }
 
@@ -684,20 +737,26 @@ mod vogls {
 
         #[staticmethod]
         pub fn ttest(lhs: Bound<PyLazyRunVector>, rhs: Bound<PyLazyRunVector>) -> Self {
-            PyLazyArray(DslLazyArray(Arc::new(TTest {
-                lhs: lhs.get().0.clone().into(),
-                rhs: rhs.get().0.clone().into(),
-            })))
+            PyLazyArray(
+                TTest {
+                    lhs: lhs.get().0.clone().into(),
+                    rhs: rhs.get().0.clone().into(),
+                }
+                .build(),
+            )
         }
 
         #[staticmethod]
         #[pyo3(signature = (length, width, seed = None))]
         pub fn random_bits(length: usize, width: NonZeroU32, seed: Option<u64>) -> Self {
-            Self(vogls_plan::array::DslLazyArray(Arc::new(RandomBits {
-                length,
-                width,
-                seed: seed.unwrap_or(0),
-            })))
+            Self(
+                RandomBits {
+                    length,
+                    width,
+                    seed: seed.unwrap_or(0),
+                }
+                .build(),
+            )
         }
     }
     #[pymethods]
@@ -782,13 +841,16 @@ mod vogls {
             start: u64,
             end: u64,
         ) -> PyLazyRunVector {
-            PyLazyRunVector(DslRunVector(Arc::new(WindowSum {
-                on: self.0.clone(),
-                by: by.get().0.clone(),
-                width,
-                start,
-                end,
-            })))
+            PyLazyRunVector(
+                WindowSum {
+                    on: self.0.clone(),
+                    by: by.get().0.clone(),
+                    width,
+                    start,
+                    end,
+                }
+                .build(),
+            )
         }
     }
 

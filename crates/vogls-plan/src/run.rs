@@ -17,20 +17,23 @@ use crate::compute::{
 use crate::design::{LazyDesign, LazyDesignKey, PlanDesign, SignalRef, Time};
 use crate::dsl::{DslNode, DslPtr};
 use crate::output::Output;
-use crate::plan::{DslPlanNode, Plan, PlanNode};
+use crate::plan::{DslLazyPlan, DslPlanNode, Plan, PlanNode};
 use crate::run_vector::{RunOffsets, RunVector};
+use crate::typing::{DataType, PlanType, RunVectorType, RunWidth, Type};
 use crate::value::Value;
 
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone)]
 pub struct LazyRun {
     pub design: LazyDesignKey,
     pub steps: Vec<LazyStep>,
+    pub ty: PlanType,
 }
 
 #[derive(Clone)]
 pub struct DslLazyRun {
     pub design: Arc<LazyDesign>,
     pub steps: Vec<DslLazyStep>,
+    pub ty: IndexMap<String, Type>,
 }
 
 #[derive(Clone)]
@@ -77,6 +80,51 @@ impl LazyRun {
             }
         }
         Ok(current_num_traces)
+    }
+
+    pub fn ty(&self) -> &PlanType {
+        &self.ty
+    }
+}
+
+impl DslLazyRun {
+    pub fn hamming_distance(&mut self, name: String) {
+        self.steps
+            .push(DslLazyStep::TraceAgg(name.clone(), RunAgg::HammingDistance));
+
+        let time = RunVectorType {
+            data: DataType::UInt,
+            length: None,
+            width: RunWidth::Variable,
+        };
+        let dist = RunVectorType {
+            data: DataType::UInt,
+            length: None,
+            width: RunWidth::Variable,
+        };
+        // @TODO: Check error
+        _ = self.ty.insert(
+            name.clone(),
+            Type::Plan(PlanType {
+                components: Arc::new(
+                    [
+                        ("dist".to_string(), Type::RunVector(dist)),
+                        ("time".to_string(), Type::RunVector(time)),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+            }),
+        );
+    }
+
+    pub fn finish(self) -> DslLazyPlan {
+        DslLazyPlan {
+            ty: Arc::new(Type::Plan(PlanType {
+                components: Arc::new(self.ty.clone()),
+            })),
+            f: Arc::new(self),
+        }
     }
 }
 
@@ -130,8 +178,20 @@ impl LazyStep {
                     RunAgg::HammingWeight => todo!(),
                     RunAgg::HammingDistance => {
                         let (times, distances) = trace.hamming_distance();
-                        outputs.push(Output::Array(Array::UInts(Buffer::from_vec(distances))));
-                        outputs.push(Output::Array(Array::UInts(Buffer::from_vec(times))));
+                        outputs.push(Output::Plan(Plan {
+                            components: [
+                                (
+                                    "dist".to_string(),
+                                    Output::Array(Array::UInts(Buffer::from_vec(distances))),
+                                ),
+                                (
+                                    "time".to_string(),
+                                    Output::Array(Array::UInts(Buffer::from_vec(times))),
+                                ),
+                            ]
+                            .into_iter()
+                            .collect(),
+                        }));
                     }
                 }
 
@@ -183,6 +243,9 @@ impl DslPlanNode for DslLazyRun {
                     DslLazyStep::RunFor(time) => LazyStep::RunFor(time.clone()),
                 })
                 .collect(),
+            ty: PlanType {
+                components: Arc::new(self.ty.clone()),
+            },
         }) as _
     }
     fn extend_inputs<'a>(&'a self, f: &mut Vec<&'a dyn DslNode>) {
@@ -205,10 +268,11 @@ impl PlanNode for LazyRun {
         let Some(other) = (other as &dyn std::any::Any).downcast_ref::<Self>() else {
             return false;
         };
-        self == other
+        self.design == other.design && self.steps == other.steps
     }
     fn csp_hash(&self, mut state: &mut dyn std::hash::Hasher) {
-        self.hash(&mut state);
+        self.design.hash(&mut state);
+        self.steps.hash(&mut state);
     }
     fn prepare(&self, _ctx: &ComputeContext, pctx: &mut PreparationContext) -> ComputeResult<()> {
         let design_signals = pctx.signals.entry(self.design).or_default();
@@ -305,7 +369,7 @@ impl PlanNode for LazyRun {
         let num_outputs = items[0].len();
 
         let items = (0..num_outputs)
-            .map(|i| collapse_outputs(&items, i))
+            .map(|i| collapse_outputs(&|j| &items[j][i], items.len()))
             .collect::<Vec<_>>();
         let mut items = items.into_iter();
 
@@ -319,14 +383,7 @@ impl PlanNode for LazyRun {
                 | LazyStep::Repeat(..)
                 | LazyStep::SetSignal(..) => {}
                 LazyStep::TraceAgg(name, ..) => {
-                    _ = components.insert(
-                        format!("{name}.dist"),
-                        Output::RunVector(items.next().unwrap()),
-                    );
-                    _ = components.insert(
-                        format!("{name}.time"),
-                        Output::RunVector(items.next().unwrap()),
-                    );
+                    _ = components.insert(name.clone(), items.next().unwrap());
                 }
             }
         }
@@ -335,32 +392,30 @@ impl PlanNode for LazyRun {
     }
 }
 
-fn collapse_outputs(outputs: &[Vec<Output>], i: usize) -> RunVector {
-    match &outputs[0][i] {
+// @Performance: Dyn overhead
+fn collapse_outputs<'a>(f: &dyn Fn(usize) -> &'a Output, length: usize) -> Output {
+    match f(0) {
         Output::Value(v) => {
             let data = match v {
                 Value::Float(_) => Array::Floats(
-                    outputs
-                        .iter()
-                        .map(|o| match &o[i] {
+                    (0..length)
+                        .map(|i| match f(i) {
                             Output::Value(Value::Float(v)) => *v,
                             _ => unreachable!(),
                         })
                         .collect::<Buffer<f64>>(),
                 ),
                 Value::Int(_) => Array::Ints(
-                    outputs
-                        .iter()
-                        .map(|o| match &o[i] {
+                    (0..length)
+                        .map(|i| match f(i) {
                             Output::Value(Value::Int(v)) => *v,
                             _ => unreachable!(),
                         })
                         .collect::<Buffer<i64>>(),
                 ),
                 Value::UInt(_) => Array::UInts(
-                    outputs
-                        .iter()
-                        .map(|o| match &o[i] {
+                    (0..length)
+                        .map(|i| match f(i) {
                             Output::Value(Value::UInt(v)) => *v,
                             _ => unreachable!(),
                         })
@@ -368,16 +423,15 @@ fn collapse_outputs(outputs: &[Vec<Output>], i: usize) -> RunVector {
                 ),
                 Value::Bits(_) => todo!(),
             };
-            RunVector {
-                offsets: RunOffsets::Scalar(outputs.len()),
+            Output::RunVector(RunVector {
+                offsets: RunOffsets::Scalar(length),
                 data,
-            }
+            })
         }
         Output::Array(v) => {
             let mut offset = 0usize;
-            let offsets = outputs
-                .iter()
-                .map(|o| match &o[i] {
+            let offsets = (0..length)
+                .map(|i| match f(i) {
                     Output::Array(a) => {
                         offset += a.len();
                         offset as u64
@@ -388,7 +442,7 @@ fn collapse_outputs(outputs: &[Vec<Output>], i: usize) -> RunVector {
             let data = match v {
                 Array::Floats(_) => {
                     let mut data = Vec::with_capacity(offset);
-                    outputs.iter().for_each(|o| match &o[i] {
+                    (0..length).for_each(|i| match f(i) {
                         Output::Array(Array::Floats(v)) => data.extend_from_slice(v.as_slice()),
                         _ => unreachable!(),
                     });
@@ -396,7 +450,7 @@ fn collapse_outputs(outputs: &[Vec<Output>], i: usize) -> RunVector {
                 }
                 Array::Ints(_) => {
                     let mut data = Vec::with_capacity(offset);
-                    outputs.iter().for_each(|o| match &o[i] {
+                    (0..length).for_each(|i| match f(i) {
                         Output::Array(Array::Ints(v)) => data.extend_from_slice(v.as_slice()),
                         _ => unreachable!(),
                     });
@@ -404,7 +458,7 @@ fn collapse_outputs(outputs: &[Vec<Output>], i: usize) -> RunVector {
                 }
                 Array::UInts(_) => {
                     let mut data = Vec::with_capacity(offset);
-                    outputs.iter().for_each(|o| match &o[i] {
+                    (0..length).for_each(|i| match f(i) {
                         Output::Array(Array::UInts(v)) => data.extend_from_slice(v.as_slice()),
                         _ => unreachable!(),
                     });
@@ -413,12 +467,27 @@ fn collapse_outputs(outputs: &[Vec<Output>], i: usize) -> RunVector {
                 Array::Bits(..) => todo!(),
             };
 
-            RunVector {
+            Output::RunVector(RunVector {
                 offsets: RunOffsets::Offsets(offsets),
                 data,
-            }
+            })
         }
-        Output::Plan(_plan) => todo!(),
+        Output::Plan(plan) => Output::Plan(Plan {
+            components: (0..plan.components.len())
+                .map(|ki| {
+                    (
+                        plan.components.at(ki).0.clone(),
+                        collapse_outputs(
+                            &|i| match f(i) {
+                                Output::Plan(p) => &p.components.at(ki).1,
+                                _ => unreachable!(),
+                            },
+                            length,
+                        ),
+                    )
+                })
+                .collect(),
+        }),
         Output::RunVector(_) => todo!(),
     }
 }
