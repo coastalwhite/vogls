@@ -1,12 +1,10 @@
 use std::ffi::c_void;
 use std::ptr;
-use std::sync::Arc;
 
 use hashbrown::hash_map::Entry;
 use vogls::utils::VgHashMap;
 
 use crate::compute::{CommonSubPlan, ComputeError, ComputeGraph, ComputeResult, Key};
-use crate::typing::Type;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DslPtr(*const c_void);
@@ -18,7 +16,6 @@ impl<'a> From<&'a dyn DslNode> for DslPtr {
 }
 
 pub trait DslNode {
-    fn get_type(&self) -> ComputeResult<&Arc<Type>>;
     fn convert_one<'a>(
         &'a self,
         graph: &'a mut ComputeGraph,

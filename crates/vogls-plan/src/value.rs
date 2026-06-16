@@ -117,9 +117,6 @@ impl ComputeNode for LazyValue {
     type Key = LazyValueKey;
     type Output = Value;
 
-    fn get_type(&self, _graph: &ComputeGraph) -> ComputeResult<&Arc<Type>> {
-        Ok(&self.ty)
-    }
     fn extend_inputs(&self, deps: &mut ComputeDependencies) {
         self.f.extend_inputs(deps);
     }
@@ -137,9 +134,6 @@ impl CspAble for LazyValue {
     fn csp_merge(&mut self, _other: Self) {}
 }
 impl DslNode for DslLazyValue {
-    fn get_type(&self) -> ComputeResult<&Arc<Type>> {
-        Ok(&self.ty)
-    }
     fn convert_one<'a>(
         &'a self,
         graph: &'a mut ComputeGraph,

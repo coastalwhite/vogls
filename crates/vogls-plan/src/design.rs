@@ -92,9 +92,6 @@ impl ComputeNode for LazyDesign {
     type Key = LazyDesignKey;
     type Output = PlanDesign;
 
-    fn get_type(&self, _graph: &ComputeGraph) -> ComputeResult<&Arc<Type>> {
-        unimplemented!()
-    }
     fn extend_inputs(&self, _deps: &mut ComputeDependencies) {}
     fn compute(
         &self,
@@ -159,9 +156,6 @@ impl ComputeNode for LazyDesign {
 }
 
 impl DslNode for LazyDesign {
-    fn get_type(&self) -> ComputeResult<&Arc<Type>> {
-        unimplemented!()
-    }
     fn convert_one<'a>(
         &'a self,
         graph: &'a mut ComputeGraph,

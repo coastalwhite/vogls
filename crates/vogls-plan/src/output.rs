@@ -123,9 +123,6 @@ impl ComputeNode for LazyOutput {
     type Key = LazyOutputKey;
     type Output = Output;
 
-    fn get_type(&self, _graph: &ComputeGraph) -> ComputeResult<&Arc<Type>> {
-        Ok(&self.ty)
-    }
     fn extend_inputs(&self, deps: &mut ComputeDependencies) {
         self.f.extend_inputs(deps)
     }
@@ -139,9 +136,6 @@ impl ComputeNode for LazyOutput {
 }
 
 impl DslNode for DslLazyOutput {
-    fn get_type(&self) -> ComputeResult<&Arc<Type>> {
-        Ok(&self.ty)
-    }
     fn convert_one<'a>(
         &'a self,
         graph: &'a mut ComputeGraph,

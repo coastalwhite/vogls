@@ -215,7 +215,6 @@ pub trait ComputeNode {
     type Key;
     type Output;
 
-    fn get_type(&self, graph: &ComputeGraph) -> ComputeResult<&Arc<Type>>;
     fn extend_inputs(&self, deps: &mut ComputeDependencies);
     fn prepare(
         &self,
