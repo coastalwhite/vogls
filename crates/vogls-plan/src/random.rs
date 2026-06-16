@@ -30,6 +30,17 @@ impl RandomBits {
 }
 
 impl DslArrayNode for RandomBits {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            length,
+            width,
+            seed,
+        } = &self;
+        write!(
+            f,
+            "Random Bits {{ length: {length}, width: {width}, seed: {seed} }}"
+        )
+    }
     fn convert_one<'a>(
         &'a self,
         _converted: &'a VgHashMap<DslPtr, Key>,
@@ -40,6 +51,17 @@ impl DslArrayNode for RandomBits {
     fn extend_inputs<'a>(&'a self, _f: &mut Vec<&'a dyn DslNode>) {}
 }
 impl ArrayNode for RandomBits {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            length,
+            width,
+            seed,
+        } = &self;
+        write!(
+            f,
+            "Random Bits {{ length: {length}, width: {width}, seed: {seed} }}"
+        )
+    }
     fn csp_eq(&self, other: &dyn ArrayNode) -> bool {
         let Some(other) = (other as &dyn std::any::Any).downcast_ref::<Self>() else {
             return false;

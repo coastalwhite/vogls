@@ -1,5 +1,5 @@
 use std::ffi::c_void;
-use std::ptr;
+use std::{fmt, ptr};
 
 use hashbrown::hash_map::Entry;
 use vogls::utils::VgHashMap;
@@ -16,6 +16,7 @@ impl<'a> From<&'a dyn DslNode> for DslPtr {
 }
 
 pub trait DslNode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
     fn convert_one<'a>(
         &'a self,
         graph: &'a mut ComputeGraph,

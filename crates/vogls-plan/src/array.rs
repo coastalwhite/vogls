@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroU32;
 use std::sync::Arc;
@@ -123,10 +124,12 @@ pub struct DslLazyArray {
 }
 
 pub trait DslArrayNode: Send + Sync + 'static {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
     fn convert_one<'a>(&'a self, converted: &'a VgHashMap<DslPtr, Key>) -> Arc<dyn ArrayNode>;
     fn extend_inputs<'a>(&'a self, f: &mut Vec<&'a dyn DslNode>);
 }
 pub trait ArrayNode: std::any::Any + Send + Sync + 'static {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
     fn csp_eq(&self, other: &dyn ArrayNode) -> bool;
     fn csp_hash(&self, state: &mut dyn Hasher);
     fn len(&self, graph: &ComputeGraph) -> Option<usize>;
@@ -148,6 +151,9 @@ impl ComputeNode for LazyArray {
     type Key = LazyArrayKey;
     type Output = Array;
 
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.f.fmt(f)
+    }
     fn extend_inputs(&self, deps: &mut ComputeDependencies) {
         self.f.extend_inputs(deps);
     }
@@ -156,6 +162,9 @@ impl ComputeNode for LazyArray {
     }
 }
 impl DslNode for DslLazyArray {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.f.fmt(f)
+    }
     fn convert_one<'a>(
         &'a self,
         graph: &'a mut ComputeGraph,
@@ -175,6 +184,9 @@ impl DslNode for DslLazyArray {
 }
 
 impl DslArrayNode for Array {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Literal Array")
+    }
     fn convert_one<'a>(&'a self, _converted: &'a VgHashMap<DslPtr, Key>) -> Arc<dyn ArrayNode> {
         Arc::new(self.clone()) as _
     }
@@ -182,6 +194,9 @@ impl DslArrayNode for Array {
 }
 impl ArrayNode for Array {
     impl_dyn_eq_hash!(ArrayNode);
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Literal Array")
+    }
     fn len(&self, _graph: &ComputeGraph) -> Option<usize> {
         Some(self.len())
     }
@@ -196,6 +211,9 @@ pub struct DslArrayExtractOutput(pub DslLazyOutput);
 pub struct ArrayExtractOutput(LazyOutputKey);
 
 impl DslArrayNode for DslArrayExtractOutput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Extract Array")
+    }
     fn convert_one<'a>(&'a self, converted: &'a VgHashMap<DslPtr, Key>) -> Arc<dyn ArrayNode> {
         Arc::new(ArrayExtractOutput(
             converted[&DslPtr::from(&self.0 as &dyn DslNode)].as_output(),
@@ -207,6 +225,10 @@ impl DslArrayNode for DslArrayExtractOutput {
 }
 impl ArrayNode for ArrayExtractOutput {
     impl_dyn_eq_hash!(ArrayNode);
+
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Extract Array")
+    }
 
     fn len(&self, _graph: &ComputeGraph) -> Option<usize> {
         None

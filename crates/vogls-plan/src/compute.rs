@@ -1,5 +1,4 @@
 use std::fmt;
-use std::sync::Arc;
 
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use vogls::utils::{Table, VgHashMap, VgHashSet};
@@ -10,7 +9,6 @@ use crate::design::{LazyDesign, LazyDesignKey, PlanDesign, SignalRef};
 use crate::output::{LazyOutput, LazyOutputKey, Output};
 use crate::plan::{LazyPlan, LazyPlanKey, Plan};
 use crate::run_vector::{LazyRunVector, LazyRunVectorKey, RunVector};
-use crate::typing::Type;
 use crate::value::{LazyValue, LazyValueKey, Value};
 
 #[derive(Debug)]
@@ -119,6 +117,11 @@ macro_rules! impl_graph_key {
                 let Self { $($table,)+ } = self;
                 $($table.drain(..).map(Key::$key_variant).for_each(&mut f);)+
             }
+            fn try_drain_keys<E>(&mut self, mut f: impl FnMut(Key) -> Result<(), E>) -> Result<(), E> {
+                let Self { $($table,)+ } = self;
+                $($table.drain(..).map(Key::$key_variant).map(&mut f).collect::<Result<(), E>>()?;)+
+                Ok(())
+            }
         }
 
         impl ComputeGraph {
@@ -139,6 +142,11 @@ macro_rules! impl_graph_key {
             }
             )+
 
+            fn fmt_node(self, f: &mut fmt::Formatter<'_>, graph: &ComputeGraph) -> fmt::Result {
+                match self {
+                    $(Key::$key_variant(k) => <_ as ComputeNode>::fmt(&graph.$table[k], f),)+
+                }
+            }
             fn has_key_been_computed(self, inputs: &ComputeInputs) -> bool {
                 match self {
                     $(Key::$key_variant(k) => inputs.$table.contains_key(&k),)+
@@ -215,6 +223,7 @@ pub trait ComputeNode {
     type Key;
     type Output;
 
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
     fn extend_inputs(&self, deps: &mut ComputeDependencies);
     fn prepare(
         &self,
@@ -359,4 +368,102 @@ pub fn compute<T: GraphItem + ComputeNode>(
     }
 
     graph.get::<T>(node_key).compute(ctx, &inputs)
+}
+
+fn key_to_ident(key: Key) -> impl fmt::Display {
+    struct KeyDisplay(Key);
+    impl fmt::Display for KeyDisplay {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            use vogls::utils::TableKey as _;
+            let (ident, key) = match self.0 {
+                Key::PlanDesign(k) => ("d", k.get()),
+                Key::Plan(k) => ("p", k.get()),
+                Key::Output(k) => ("o", k.get()),
+                Key::Array(k) => ("a", k.get()),
+                Key::Value(k) => ("v", k.get()),
+                Key::RunVector(k) => ("r", k.get()),
+            };
+            f.write_str(ident)?;
+            key.fmt(f)
+        }
+    }
+    KeyDisplay(key)
+}
+
+pub struct EscapeLabel<'a, W: fmt::Write>(&'a mut W);
+
+pub struct ComputeNodeDisplay<'a>(Key, &'a ComputeGraph);
+
+impl<'a> fmt::Display for ComputeNodeDisplay<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt_node(f, self.1)
+    }
+}
+
+impl<'a, W: fmt::Write> fmt::Write for EscapeLabel<'a, W> {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        let mut prev = 0usize;
+        for (i, c) in s.char_indices() {
+            let escaped_char = match c {
+                '"' => "\\\"",
+                '\n' => "\\n",
+                '\\' => "\\\\",
+                _ => continue,
+            };
+            self.0.write_str(&s[prev..i])?;
+            self.0.write_str(escaped_char)?;
+            prev = i + c.len_utf8();
+        }
+        self.0.write_str(&s[prev..])?;
+        Ok(())
+    }
+}
+
+pub fn display_dot<'a>(roots: &'a [Key], graph: &'a ComputeGraph) -> impl fmt::Display + 'a {
+    struct DisplayGraph<'a> {
+        roots: &'a [Key],
+        graph: &'a ComputeGraph,
+    }
+
+    static INDENT: &str = "  ";
+
+    impl<'a> fmt::Display for DisplayGraph<'a> {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            use fmt::Write;
+
+            let mut stack = Vec::new();
+            let mut seen = VgHashSet::<Key>::default();
+            let mut deps = ComputeDependencies::default();
+
+            writeln!(f, "digraph vogls {{")?;
+            writeln!(f, "{INDENT}rankdir=\"BT\"")?;
+            writeln!(f, "{INDENT}node [fontname=\"Monospace\", shape=\"box\"]")?;
+
+            stack.extend_from_slice(self.roots);
+            seen.extend(self.roots);
+            while let Some(key) = stack.pop() {
+                f.write_str(INDENT)?;
+                key_to_ident(key).fmt(f)?;
+                f.write_str(" [label=\"")?;
+                write!(EscapeLabel(f), "{}", ComputeNodeDisplay(key, self.graph))?;
+                f.write_str("\"]")?;
+                writeln!(f)?;
+
+                key.extend_key_inputs(self.graph, &mut deps);
+                deps.try_drain_keys(|from| {
+                    writeln!(f, "{INDENT}{} -> {}", key_to_ident(from), key_to_ident(key))?;
+                    if seen.insert(from) {
+                        stack.push(from);
+                    }
+                    fmt::Result::Ok(())
+                })?;
+            }
+
+            writeln!(f, "}}")?;
+
+            Ok(())
+        }
+    }
+
+    DisplayGraph { roots, graph }
 }

@@ -5,7 +5,7 @@ import time
 CYCLE = 2
 N_CYCLES = 8
 
-NUM_RUNS = 10_000
+NUM_RUNS = 1000
 
 
 def run(*, random: bool) -> vg.LazyRunVector:
@@ -55,6 +55,8 @@ fixed = run(random=False)
 random = run(random=True)
 print(f"Time: {time.time() - start}s")
 
-start = time.time()
-print(vg.t_test(fixed, random).compute().as_list())
-print(f"Time: {time.time() - start}s")
+print(vg.t_test(fixed, random).to_dot_graph())
+
+# start = time.time()
+# print(vg.t_test(fixed, random).compute().as_list())
+# print(f"Time: {time.time() - start}s")

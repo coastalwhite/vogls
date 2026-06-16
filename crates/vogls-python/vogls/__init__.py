@@ -14,6 +14,9 @@ class Lazy(Generic[T]):
     def compute(self) -> T:
         return self._producer.compute()
 
+    def to_dot_graph(self) -> str:
+        return self._producer.to_dot_graph()
+
 
 class _LazyLambda:
     inner: Lazy[T]

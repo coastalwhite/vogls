@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use vogls::VectorSize;
-use vogls::utils::{IndexMap, NonMaxUsize};
+use vogls::utils::IndexMap;
 
 #[derive(PartialEq, Eq, Clone)]
 pub enum Type {

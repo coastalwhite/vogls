@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::fmt;
 use std::hash::Hasher;
 use std::sync::Arc;
 
@@ -50,6 +51,11 @@ pub struct LazyWindowSum {
 }
 
 impl RunVectorNode for LazyWindowSum {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self { on: _, by: _, start, end, width } = &self;
+        write!(f, "WindowSum {{ width: {width}, start: {start}, end: {end} }}")
+    }
+
     fn csp_eq(&self, other: &dyn RunVectorNode) -> bool {
         let Some(other) = (other as &dyn Any).downcast_ref::<Self>() else {
             return false;
@@ -132,6 +138,10 @@ impl RunVectorNode for LazyWindowSum {
 }
 
 impl DslRunVectorNode for WindowSum {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self { on: _, by: _, start, end, width } = &self;
+        write!(f, "WindowSum {{ width: {width}, start: {start}, end: {end} }}")
+    }
     fn convert_one<'a>(&'a self, converted: &'a VgHashMap<DslPtr, Key>) -> Arc<dyn RunVectorNode> {
         let on = converted[&DslPtr::from(&self.on as &dyn DslNode)].as_run_vector();
         let by = converted[&DslPtr::from(&self.by as &dyn DslNode)].as_run_vector();

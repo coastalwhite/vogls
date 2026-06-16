@@ -1,3 +1,4 @@
+use std::fmt;
 use std::hash::{Hash as _, Hasher};
 use std::sync::Arc;
 
@@ -42,6 +43,7 @@ impl CspAble for LazyOutput {
 }
 
 pub trait OutputNode: std::any::Any {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
     fn csp_eq(&self, other: &dyn OutputNode) -> bool;
     fn csp_hash(&self, state: &mut dyn Hasher);
     fn extend_inputs(&self, deps: &mut ComputeDependencies);
@@ -115,6 +117,7 @@ impl DslLazyOutput {
 }
 
 pub trait DslOutputNode: Send + Sync + 'static {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
     fn convert_one<'a>(&'a self, converted: &'a VgHashMap<DslPtr, Key>) -> Arc<dyn OutputNode>;
     fn extend_inputs<'a>(&'a self, f: &mut Vec<&'a dyn DslNode>);
 }
@@ -123,6 +126,9 @@ impl ComputeNode for LazyOutput {
     type Key = LazyOutputKey;
     type Output = Output;
 
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.f.fmt(f)
+    }
     fn extend_inputs(&self, deps: &mut ComputeDependencies) {
         self.f.extend_inputs(deps)
     }
@@ -136,6 +142,9 @@ impl ComputeNode for LazyOutput {
 }
 
 impl DslNode for DslLazyOutput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.f.fmt(f)
+    }
     fn convert_one<'a>(
         &'a self,
         graph: &'a mut ComputeGraph,
@@ -155,12 +164,18 @@ impl DslNode for DslLazyOutput {
 }
 
 impl DslOutputNode for Output {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Literal Output")
+    }
     fn convert_one<'a>(&'a self, _converted: &'a VgHashMap<DslPtr, Key>) -> Arc<dyn OutputNode> {
         Arc::new(self.clone())
     }
     fn extend_inputs<'a>(&'a self, _f: &mut Vec<&'a dyn DslNode>) {}
 }
 impl OutputNode for Output {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Literal Output")
+    }
     impl_dyn_eq_hash!(OutputNode);
     fn extend_inputs(&self, _deps: &mut ComputeDependencies) {}
     fn compute(&self, _ctx: &ComputeContext, _inputs: &ComputeInputs) -> ComputeResult<Output> {
@@ -179,6 +194,9 @@ macro_rules! impl_upcast {
             }
         }
         impl DslOutputNode for $dsl {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str(concat!("Upcast ", stringify!($key)))
+            }
             fn convert_one<'a>(
                 &'a self,
                 converted: &'a VgHashMap<DslPtr, Key>,
@@ -192,6 +210,9 @@ macro_rules! impl_upcast {
             }
         }
         impl OutputNode for <$node as GraphItem>::Key {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str(concat!("Upcast ", stringify!($key)))
+            }
             fn csp_eq(&self, other: &dyn OutputNode) -> bool {
                 let Some(other) = (other as &dyn std::any::Any).downcast_ref::<Self>() else {
                     return false;
@@ -248,6 +269,9 @@ pub struct PlanComponent {
 }
 
 impl DslOutputNode for DslPlanComponent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Plan component: '{}'", self.key)
+    }
     fn convert_one<'a>(&'a self, converted: &'a VgHashMap<DslPtr, Key>) -> Arc<dyn OutputNode> {
         Arc::new(PlanComponent {
             plan: converted[&DslPtr::from(&self.plan as &dyn DslNode)].as_plan(),
@@ -259,6 +283,9 @@ impl DslOutputNode for DslPlanComponent {
     }
 }
 impl OutputNode for PlanComponent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Plan component: '{}'", self.key)
+    }
     impl_dyn_eq_hash!(OutputNode);
     fn extend_inputs(&self, deps: &mut ComputeDependencies) {
         deps.plans.push(self.plan);

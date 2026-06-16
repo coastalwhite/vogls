@@ -1,3 +1,4 @@
+use std::fmt;
 use std::hash::Hash;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -14,7 +15,6 @@ use crate::compute::{
 };
 use crate::dsl::{DslNode, DslPtr};
 use crate::run::DslLazyRun;
-use crate::typing::Type;
 
 new_table_key! { pub struct LazyDesignKey; }
 
@@ -92,6 +92,15 @@ impl ComputeNode for LazyDesign {
     type Key = LazyDesignKey;
     type Output = PlanDesign;
 
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Design {{ sources: {:?}, num_handles: {} }}",
+            &self.sources,
+            self.handles.len()
+        )
+    }
+
     fn extend_inputs(&self, _deps: &mut ComputeDependencies) {}
     fn compute(
         &self,
@@ -156,6 +165,14 @@ impl ComputeNode for LazyDesign {
 }
 
 impl DslNode for LazyDesign {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Design {{ sources: {:?}, num_handles: {} }}",
+            &self.sources,
+            self.handles.len()
+        )
+    }
     fn convert_one<'a>(
         &'a self,
         graph: &'a mut ComputeGraph,

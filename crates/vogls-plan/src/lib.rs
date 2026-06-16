@@ -14,7 +14,7 @@ macro_rules! impl_dyn_eq_hash {
             self == other
         }
         fn csp_hash(&self, mut state: &mut dyn std::hash::Hasher) {
-            self.hash(&mut state);
+            std::hash::Hash::hash(self, &mut state);
         }
     };
 }

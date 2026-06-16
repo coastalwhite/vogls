@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::fmt;
 use std::hash::Hasher;
 use std::sync::Arc;
 
@@ -32,7 +33,7 @@ impl TTest {
     }
 }
 
-#[derive(PartialEq, Hash)]
+#[derive(PartialEq, Eq, Hash)]
 pub struct LazyTTest {
     lhs: LazyRunVectorKey,
     rhs: LazyRunVectorKey,
@@ -50,19 +51,10 @@ fn size_mean_var(v: &[u64]) -> (f64, f64, f64) {
 }
 
 impl ArrayNode for LazyTTest {
-    fn csp_eq(&self, other: &dyn ArrayNode) -> bool {
-        let Some(other) = (other as &dyn Any).downcast_ref::<Self>() else {
-            return false;
-        };
-
-        self == other
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("TTest")
     }
-
-    fn csp_hash(&self, mut state: &mut dyn Hasher) {
-        use std::hash::Hash;
-        self.hash(&mut state);
-    }
-
+    impl_dyn_eq_hash!(ArrayNode);
     fn len(&self, graph: &ComputeGraph) -> Option<usize> {
         let lwidth = graph.run_vectors[self.lhs].width();
         let rwidth = graph.run_vectors[self.rhs].width();
@@ -149,6 +141,9 @@ impl ArrayNode for LazyTTest {
 }
 
 impl DslArrayNode for TTest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("TTest")
+    }
     fn convert_one<'a>(&'a self, converted: &'a VgHashMap<DslPtr, Key>) -> Arc<dyn ArrayNode> {
         let lhs = converted[&DslPtr::from(&self.lhs as &dyn DslNode)].as_run_vector();
         let rhs = converted[&DslPtr::from(&self.rhs as &dyn DslNode)].as_run_vector();

@@ -223,6 +223,9 @@ impl LazyStep {
 }
 
 impl DslPlanNode for DslLazyRun {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Run {{ num_steps: {} }}", self.steps.len())
+    }
     fn convert_one<'a>(&'a self, converted: &'a VgHashMap<DslPtr, Key>) -> Arc<dyn PlanNode> {
         Arc::new(LazyRun {
             design: converted[&DslPtr::from(self.design.as_ref() as &dyn DslNode)].as_design(),
@@ -264,6 +267,9 @@ impl DslPlanNode for DslLazyRun {
 }
 
 impl PlanNode for LazyRun {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Run {{ num_steps: {} }}", self.steps.len())
+    }
     fn csp_eq(&self, other: &dyn PlanNode) -> bool {
         let Some(other) = (other as &dyn std::any::Any).downcast_ref::<Self>() else {
             return false;

@@ -1,5 +1,6 @@
 use std::hash::{Hash as _, Hasher};
 use std::sync::Arc;
+use std::fmt;
 
 use vogls::utils::{VgHashMap, new_table_key};
 
@@ -37,10 +38,12 @@ pub struct LazyRunVector {
 }
 
 pub trait DslRunVectorNode: Send + Sync + 'static {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
     fn convert_one<'a>(&'a self, converted: &'a VgHashMap<DslPtr, Key>) -> Arc<dyn RunVectorNode>;
     fn extend_inputs<'a>(&'a self, f: &mut Vec<&'a dyn DslNode>);
 }
 pub trait RunVectorNode: std::any::Any + Send + Sync + 'static {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
     fn csp_eq(&self, other: &dyn RunVectorNode) -> bool;
     fn csp_hash(&self, state: &mut dyn Hasher);
 
@@ -100,6 +103,9 @@ impl ComputeNode for LazyRunVector {
     type Key = LazyRunVectorKey;
     type Output = RunVector;
 
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.f.fmt(f)
+    }
     fn extend_inputs(&self, deps: &mut ComputeDependencies) {
         self.f.extend_inputs(deps);
     }
@@ -120,6 +126,9 @@ impl CspAble for LazyRunVector {
 }
 
 impl DslNode for DslRunVector {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.f.fmt(f)
+    }
     fn convert_one<'a>(
         &'a self,
         graph: &'a mut ComputeGraph,
@@ -168,6 +177,9 @@ pub struct DslRunVectorExtractOutput(pub DslLazyOutput);
 pub struct RunVectorExtractOutput(pub LazyOutputKey);
 
 impl DslRunVectorNode for DslRunVectorExtractOutput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Extract RunVector")
+    }
     fn convert_one<'a>(&'a self, converted: &'a VgHashMap<DslPtr, Key>) -> Arc<dyn RunVectorNode> {
         let output = converted[&DslPtr::from(&self.0 as &dyn DslNode)].as_output();
         Arc::new(RunVectorExtractOutput(output)) as _
@@ -177,6 +189,9 @@ impl DslRunVectorNode for DslRunVectorExtractOutput {
     }
 }
 impl RunVectorNode for RunVectorExtractOutput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Extract RunVector")
+    }
     impl_dyn_eq_hash!(RunVectorNode);
     fn width(&self, _graph: &ComputeGraph) -> RunWidth {
         // @TODO

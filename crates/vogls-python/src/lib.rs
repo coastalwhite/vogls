@@ -12,13 +12,13 @@ mod vogls {
     use vogls::{BitsFormatOptions, SimulationIo, VectorSize};
 
     use vogls_plan::array::{Array, DslLazyArray, LazyArray};
-    use vogls_plan::compute::{ComputeNode, GraphItem};
+    use vogls_plan::compute::{ComputeNode, GraphItem, display_dot};
     use vogls_plan::design::TimeUnit;
     use vogls_plan::dsl::DslNode;
     use vogls_plan::output::{DslLazyOutput, DslPlanComponent, Output};
     use vogls_plan::plan::{DslLazyPlan, LazyPlan, Plan};
     use vogls_plan::random::RandomBits;
-    use vogls_plan::run::{DslLazyStep, RunAgg};
+    use vogls_plan::run::DslLazyStep;
     use vogls_plan::run_vector::{DslRunVector, LazyRunVector, RunVector};
     use vogls_plan::ttest::TTest;
     use vogls_plan::typing::{PlanType, Type, TypeKind};
@@ -576,6 +576,11 @@ mod vogls {
         let result = vogls_plan::compute::compute::<Lazy>(lazy_key, &mut graph, &ctx)?;
         Ok(result)
     }
+    fn lazy_dot_string<Dsl: DslNode, Lazy: ComputeNode + GraphItem>(dsl: &Dsl) -> PyResult<String> {
+        let (lazy_key, graph) = vogls_plan::dsl::convert(dsl)?;
+        let result = display_dot(&[lazy_key], &graph).to_string();
+        Ok(result)
+    }
 
     #[pyo3::pyclass(frozen)]
     pub struct PyLazyPlan(DslLazyPlan);
@@ -682,6 +687,9 @@ mod vogls {
         pub fn compute(&self) -> PyResult<PyPlan> {
             lazy_compute::<_, LazyPlan>(&self.0).map(PyPlan)
         }
+        pub fn to_dot_graph(&self) -> PyResult<String> {
+            lazy_dot_string::<_, LazyPlan>(&self.0)
+        }
 
         #[staticmethod]
         pub fn from_dict(dict: Bound<pyo3::types::PyDict>) -> PyResult<Self> {
@@ -726,6 +734,9 @@ mod vogls {
     impl PyLazyArray {
         pub fn compute(&self) -> PyResult<PyArray> {
             lazy_compute::<_, LazyArray>(&self.0).map(PyArray)
+        }
+        pub fn to_dot_graph(&self) -> PyResult<String> {
+            lazy_dot_string::<_, LazyArray>(&self.0)
         }
 
         // pub fn min(&self) -> PyLazyValue {
@@ -787,6 +798,9 @@ mod vogls {
         pub fn compute(&self) -> PyResult<PyValue> {
             lazy_compute::<_, LazyValue>(&self.0).map(PyValue)
         }
+        pub fn to_dot_graph(&self) -> PyResult<String> {
+            lazy_dot_string::<_, LazyValue>(&self.0)
+        }
     }
     #[pymethods]
     impl PyValue {
@@ -832,6 +846,9 @@ mod vogls {
     impl PyLazyRunVector {
         pub fn compute(&self) -> PyResult<PyRunVector> {
             lazy_compute::<_, LazyRunVector>(&self.0).map(PyRunVector)
+        }
+        pub fn to_dot_graph(&self) -> PyResult<String> {
+            lazy_dot_string::<_, LazyRunVector>(&self.0)
         }
 
         pub fn window_sum(

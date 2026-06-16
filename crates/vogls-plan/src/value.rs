@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -18,7 +19,7 @@ use crate::typing::{DataType, Type, ValueType};
 
 new_table_key! { pub struct LazyValueKey; }
 
-#[derive(Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Float(f64),
     Int(i64),
@@ -82,12 +83,18 @@ impl Hash for Value {
 impl Eq for Value {}
 
 impl DslValueNode for Value {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Literal: {self:?}")
+    }
     fn convert_one<'a>(&'a self, _converted: &'a VgHashMap<DslPtr, Key>) -> Arc<dyn ValueNode> {
         Arc::new(self.clone()) as _
     }
     fn extend_inputs<'a>(&'a self, _f: &mut Vec<&'a dyn DslNode>) {}
 }
 impl ValueNode for Value {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Literal: {self:?}")
+    }
     fn csp_eq(&self, other: &dyn ValueNode) -> bool {
         let Some(other) = (other as &dyn Any).downcast_ref::<Self>() else {
             return false;
@@ -117,6 +124,9 @@ impl ComputeNode for LazyValue {
     type Key = LazyValueKey;
     type Output = Value;
 
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.f.fmt(f)
+    }
     fn extend_inputs(&self, deps: &mut ComputeDependencies) {
         self.f.extend_inputs(deps);
     }
@@ -134,6 +144,9 @@ impl CspAble for LazyValue {
     fn csp_merge(&mut self, _other: Self) {}
 }
 impl DslNode for DslLazyValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.f.fmt(f)
+    }
     fn convert_one<'a>(
         &'a self,
         graph: &'a mut ComputeGraph,
@@ -152,10 +165,13 @@ impl DslNode for DslLazyValue {
 }
 
 pub trait DslValueNode: Send + Sync + 'static {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
     fn convert_one<'a>(&'a self, converted: &'a VgHashMap<DslPtr, Key>) -> Arc<dyn ValueNode>;
     fn extend_inputs<'a>(&'a self, f: &mut Vec<&'a dyn DslNode>);
 }
 pub trait ValueNode: std::any::Any + Send + Sync + 'static {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
+
     fn csp_eq(&self, other: &dyn ValueNode) -> bool;
     fn csp_hash(&self, state: &mut dyn Hasher);
 
@@ -168,6 +184,9 @@ pub struct DslValueExtractOutput(pub DslLazyOutput);
 pub struct ValueExtractOutput(LazyOutputKey);
 
 impl DslValueNode for DslValueExtractOutput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Extract Value")
+    }
     fn convert_one<'a>(&'a self, converted: &'a VgHashMap<DslPtr, Key>) -> Arc<dyn ValueNode> {
         Arc::new(ValueExtractOutput(
             converted[&DslPtr::from(&self.0 as &dyn DslNode)].as_output(),
@@ -178,6 +197,10 @@ impl DslValueNode for DslValueExtractOutput {
     }
 }
 impl ValueNode for ValueExtractOutput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Extract Value")
+    }
+
     fn csp_eq(&self, other: &dyn ValueNode) -> bool {
         let Some(other) = (other as &dyn Any).downcast_ref::<Self>() else {
             return false;
