@@ -15,6 +15,8 @@ mod vogls {
     use vogls_plan::compute::{ComputeNode, GraphItem, display_dot};
     use vogls_plan::design::TimeUnit;
     use vogls_plan::dsl::DslNode;
+    use vogls_plan::entropy::Entropy;
+    use vogls_plan::mutual_information::MutualInformation;
     use vogls_plan::output::{DslLazyOutput, DslPlanComponent, Output};
     use vogls_plan::plan::{DslLazyPlan, LazyPlan, Plan};
     use vogls_plan::random::RandomBits;
@@ -756,6 +758,19 @@ mod vogls {
                 .build(),
             )
         }
+        #[staticmethod]
+        pub fn mutual_information(
+            lhs: Bound<PyLazyRunVector>,
+            rhs: Bound<PyLazyRunVector>,
+        ) -> Self {
+            PyLazyArray(
+                MutualInformation {
+                    lhs: lhs.get().0.clone().into(),
+                    rhs: rhs.get().0.clone().into(),
+                }
+                .build(),
+            )
+        }
 
         #[staticmethod]
         #[pyo3(signature = (length, width, seed = None))]
@@ -865,6 +880,15 @@ mod vogls {
                     width,
                     start,
                     end,
+                }
+                .build(),
+            )
+        }
+
+        pub fn entropy(&self) -> PyLazyArray {
+            PyLazyArray(
+                Entropy {
+                    src: self.0.clone(),
                 }
                 .build(),
             )

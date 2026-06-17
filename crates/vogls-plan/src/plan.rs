@@ -88,7 +88,11 @@ impl DslPlanNode for DslLiteralPlan {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Literal: Plan")
     }
-    fn convert_one<'a>(&'a self, converted: &'a VgHashMap<DslPtr, Key>) -> Arc<dyn PlanNode> {
+    fn convert_one<'a>(
+        &'a self,
+        _graph: &mut ComputeGraph,
+        converted: &'a VgHashMap<DslPtr, Key>,
+    ) -> Arc<dyn PlanNode> {
         Arc::new(LazyLiteralPlan {
             components: self
                 .components
@@ -135,18 +139,17 @@ impl PlanNode for LazyLiteralPlan {
 
 pub trait DslPlanNode: Send + Sync + 'static {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
-    fn convert_one<'a>(&'a self, converted: &'a VgHashMap<DslPtr, Key>) -> Arc<dyn PlanNode>;
+    fn convert_one<'a>(
+        &'a self,
+        graph: &mut ComputeGraph,
+        converted: &'a VgHashMap<DslPtr, Key>,
+    ) -> Arc<dyn PlanNode>;
     fn extend_inputs<'a>(&'a self, f: &mut Vec<&'a dyn DslNode>);
 }
 pub trait PlanNode: std::any::Any + Send + Sync + 'static {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
     fn csp_eq(&self, other: &dyn PlanNode) -> bool;
     fn csp_hash(&self, state: &mut dyn Hasher);
-    fn prepare(&self, ctx: &ComputeContext, pctx: &mut PreparationContext) -> ComputeResult<()> {
-        _ = ctx;
-        _ = pctx;
-        Ok(())
-    }
     fn extend_inputs(&self, deps: &mut ComputeDependencies);
     fn compute(&self, ctx: &ComputeContext, inputs: &ComputeInputs) -> ComputeResult<Plan>;
 }
@@ -171,14 +174,6 @@ impl ComputeNode for LazyPlan {
     fn extend_inputs(&self, deps: &mut ComputeDependencies) {
         self.f.extend_inputs(deps);
     }
-    fn prepare(
-        &self,
-        _graph: &ComputeGraph,
-        ctx: &ComputeContext,
-        pctx: &mut PreparationContext,
-    ) -> ComputeResult<()> {
-        self.f.prepare(ctx, pctx)
-    }
     fn compute(&self, ctx: &ComputeContext, inputs: &ComputeInputs) -> ComputeResult<Self::Output> {
         self.f.compute(ctx, inputs)
     }
@@ -195,7 +190,7 @@ impl DslNode for DslLazyPlan {
     ) -> Key {
         let r = LazyPlan {
             ty: self.ty.clone(),
-            f: self.f.convert_one(converted),
+            f: self.f.convert_one(graph, converted),
         };
         Key::Plan(csp.plans.insert(&mut graph.plans, r))
     }
@@ -213,7 +208,11 @@ impl DslPlanNode for DslPlanExtractOutput {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("Extract Plan")
     }
-    fn convert_one<'a>(&'a self, converted: &'a VgHashMap<DslPtr, Key>) -> Arc<dyn PlanNode> {
+    fn convert_one<'a>(
+        &'a self,
+        _graph: &mut ComputeGraph,
+        converted: &'a VgHashMap<DslPtr, Key>,
+    ) -> Arc<dyn PlanNode> {
         Arc::new(PlanExtractOutput(
             converted[&DslPtr::from(&self.0 as &dyn DslNode)].as_output(),
         ))

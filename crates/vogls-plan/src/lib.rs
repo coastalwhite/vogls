@@ -24,6 +24,8 @@ pub mod buffer;
 pub mod compute;
 pub mod design;
 pub mod dsl;
+pub mod entropy;
+pub mod mutual_information;
 pub mod output;
 pub mod plan;
 pub mod random;

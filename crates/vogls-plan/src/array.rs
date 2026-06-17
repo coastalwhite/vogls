@@ -132,7 +132,6 @@ pub trait ArrayNode: std::any::Any + Send + Sync + 'static {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
     fn csp_eq(&self, other: &dyn ArrayNode) -> bool;
     fn csp_hash(&self, state: &mut dyn Hasher);
-    fn len(&self, graph: &ComputeGraph) -> Option<usize>;
     fn extend_inputs(&self, deps: &mut ComputeDependencies);
     fn compute(&self, ctx: &ComputeContext, inputs: &ComputeInputs) -> ComputeResult<Array>;
 }
@@ -197,9 +196,6 @@ impl ArrayNode for Array {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Literal Array")
     }
-    fn len(&self, _graph: &ComputeGraph) -> Option<usize> {
-        Some(self.len())
-    }
     fn extend_inputs(&self, _deps: &mut ComputeDependencies) {}
     fn compute(&self, _ctx: &ComputeContext, _inputs: &ComputeInputs) -> ComputeResult<Array> {
         Ok(self.clone())
@@ -230,9 +226,6 @@ impl ArrayNode for ArrayExtractOutput {
         f.write_str("Extract Array")
     }
 
-    fn len(&self, _graph: &ComputeGraph) -> Option<usize> {
-        None
-    }
     fn extend_inputs(&self, deps: &mut ComputeDependencies) {
         deps.outputs.push(self.0);
     }

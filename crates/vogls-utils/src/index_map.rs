@@ -47,10 +47,17 @@ impl<K: hash::Hash> hash::Hash for IndexSet<K> {
 
 impl<K: fmt::Debug, V: fmt::Debug> fmt::Debug for IndexMap<K, V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("IndexSet")
-            .field(&self.keys)
-            .field(&self.values)
-            .finish()
+        write!(
+            f,
+            "IndexMap<{}, {}> ",
+            std::any::type_name::<K>(),
+            std::any::type_name::<V>()
+        )?;
+        let mut map = f.debug_map();
+        for (k, v) in self.keys.iter().zip(&self.values) {
+            map.entry(k, v);
+        }
+        map.finish()
     }
 }
 impl<K, V> Default for IndexMap<K, V> {

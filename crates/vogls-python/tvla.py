@@ -5,8 +5,7 @@ import time
 CYCLE = 2
 N_CYCLES = 8
 
-NUM_RUNS = 1000
-
+NUM_RUNS = 10_000
 
 def run(*, random: bool) -> vg.LazyRunVector:
     design = vg.LazyDesign("xor.v")
@@ -19,6 +18,8 @@ def run(*, random: bool) -> vg.LazyRunVector:
         r = r.set_signal(
             "b", vg.LazyArray.random_bits(NUM_RUNS, 32, seed=randint(0, 100))
         )
+    else:
+        r = r.repeat(NUM_RUNS)
 
     r = r.trace_start().run_for(CYCLE * N_CYCLES).hamming_distance("hd").finish()
     hd = r.get("hd", vg.LazyPlan)
@@ -50,13 +51,18 @@ def masked_run(*, random: bool) -> vg.LazyRunVector:
     return dist.window_sum(by=time, width=CYCLE, start=0, end=CYCLE * N_CYCLES)
 
 
+fixed = masked_run(random=False)
+random = masked_run(random=True)
+
+# print(vg.welch_t_test(fixed, random).to_dot_graph())
+
+# print(fixed.compute().as_list())
+# print(random.compute().as_list())
+
+# print(fixed.entropy().compute().as_list())
+# print(random.entropy().compute().as_list())
+
 start = time.time()
-fixed = run(random=False)
-random = run(random=True)
-print(f"Time: {time.time() - start}s")
-
-print(vg.t_test(fixed, random).to_dot_graph())
-
-# start = time.time()
-# print(vg.t_test(fixed, random).compute().as_list())
-# print(f"Time: {time.time() - start}s")
+# print(vg.mutual_information(fixed, random).compute().as_list())
+print(vg.welch_t_test(fixed, random).compute().as_list())
+print(f"Computation time: {time.time() - start:02f}s")

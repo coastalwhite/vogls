@@ -124,14 +124,6 @@ macro_rules! impl_graph_key {
             }
         }
 
-        impl ComputeGraph {
-            fn prepare_key(&self, ctx: &ComputeContext, key: Key, pctx: &mut PreparationContext) -> ComputeResult<()> {
-                match key {
-                    $(Key::$key_variant(k) => self.$table[k].prepare(self, ctx, pctx),)*
-                }
-            }
-        }
-
         impl Key {
             $(
             pub fn $as(self) -> $key {
@@ -225,17 +217,6 @@ pub trait ComputeNode {
 
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
     fn extend_inputs(&self, deps: &mut ComputeDependencies);
-    fn prepare(
-        &self,
-        graph: &ComputeGraph,
-        ctx: &ComputeContext,
-        pctx: &mut PreparationContext,
-    ) -> ComputeResult<()> {
-        _ = ctx;
-        _ = graph;
-        _ = pctx;
-        Ok(())
-    }
     fn compute(&self, ctx: &ComputeContext, inputs: &ComputeInputs) -> ComputeResult<Self::Output>;
 }
 
@@ -299,7 +280,6 @@ pub fn compute<T: GraphItem + ComputeNode>(
             stack.pop();
         }
 
-        graph.prepare_key(ctx, item.key, &mut pctx)?;
         statuses.insert(item.key, Status::Done);
     }
 

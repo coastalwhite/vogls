@@ -227,6 +227,9 @@ class RunVector:
             self.lazy().window_sum(by=by, width=width, start=start, end=end).compute()
         )
 
+    def entropy(self) -> Array:
+        return self.lazy().entropy().compute()
+
 
 class LazyRunVector(Lazy[RunVector]):
     @classmethod
@@ -241,6 +244,9 @@ class LazyRunVector(Lazy[RunVector]):
                 by=by._producer, width=width, start=start, end=end
             )
         )
+
+    def entropy(self) -> LazyArray:
+        return LazyArray._from_py(self._producer.entropy())
 
 
 Output = Union[RunVector, Array, Value, Plan]
@@ -275,5 +281,11 @@ def _lazyoutput_from_py(v: Any) -> LazyOutput:
     raise ValueError(f"cannot turn {v_type} into Output")
 
 
-def t_test(lhs: LazyRunVector, rhs: LazyRunVector) -> LazyArray:
+def welch_t_test(lhs: LazyRunVector, rhs: LazyRunVector) -> LazyArray:
     return LazyArray._from_py(vgr.PyLazyArray.ttest(lhs._producer, rhs._producer))
+
+
+def mutual_information(lhs: LazyRunVector, rhs: LazyRunVector) -> LazyArray:
+    return LazyArray._from_py(
+        vgr.PyLazyArray.mutual_information(lhs._producer, rhs._producer)
+    )

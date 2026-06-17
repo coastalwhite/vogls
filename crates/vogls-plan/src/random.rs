@@ -74,10 +74,6 @@ impl ArrayNode for RandomBits {
         self.hash(&mut state);
     }
 
-    fn len(&self, _graph: &ComputeGraph) -> Option<usize> {
-        Some(self.length)
-    }
-
     fn extend_inputs(&self, _deps: &mut ComputeDependencies) {}
 
     fn compute(&self, _ctx: &ComputeContext, _inputs: &ComputeInputs) -> ComputeResult<Array> {

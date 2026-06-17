@@ -11,8 +11,8 @@ use crate::TraceRef;
 use crate::array::{Array, DslLazyArray, LazyArrayKey};
 use crate::buffer::Buffer;
 use crate::compute::{
-    ComputeContext, ComputeDependencies, ComputeError, ComputeInputs, ComputeResult, Key,
-    PreparationContext,
+    ComputeContext, ComputeDependencies, ComputeError, ComputeGraph, ComputeInputs, ComputeResult,
+    Key, PreparationContext,
 };
 use crate::design::{LazyDesign, LazyDesignKey, PlanDesign, SignalRef, Time};
 use crate::dsl::{DslNode, DslPtr};
@@ -226,26 +226,35 @@ impl DslPlanNode for DslLazyRun {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Run {{ num_steps: {} }}", self.steps.len())
     }
-    fn convert_one<'a>(&'a self, converted: &'a VgHashMap<DslPtr, Key>) -> Arc<dyn PlanNode> {
-        Arc::new(LazyRun {
-            design: converted[&DslPtr::from(self.design.as_ref() as &dyn DslNode)].as_design(),
-            steps: self
-                .steps
-                .iter()
-                .map(|step| match step {
-                    DslLazyStep::TraceStart => LazyStep::TraceStart,
-                    DslLazyStep::TraceStop => LazyStep::TraceStop,
-                    DslLazyStep::TraceAgg(name, agg) => {
-                        LazyStep::TraceAgg(name.clone(), agg.clone())
-                    }
-                    DslLazyStep::SetSignal(s, arr) => LazyStep::SetSignal(
+    fn convert_one<'a>(
+        &'a self,
+        graph: &mut ComputeGraph,
+        converted: &'a VgHashMap<DslPtr, Key>,
+    ) -> Arc<dyn PlanNode> {
+        let design = converted[&DslPtr::from(self.design.as_ref() as &dyn DslNode)].as_design();
+        let design_node = &mut graph.designs[design];
+        let steps = self
+            .steps
+            .iter()
+            .map(|step| match step {
+                DslLazyStep::TraceStart => LazyStep::TraceStart,
+                DslLazyStep::TraceStop => LazyStep::TraceStop,
+                DslLazyStep::TraceAgg(name, agg) => LazyStep::TraceAgg(name.clone(), agg.clone()),
+                DslLazyStep::SetSignal(s, arr) => {
+                    _ = design_node.handles.insert(s.clone());
+                    LazyStep::SetSignal(
                         s.clone(),
                         converted[&DslPtr::from(arr as &dyn DslNode)].as_array(),
-                    ),
-                    DslLazyStep::Repeat(n) => LazyStep::Repeat(*n),
-                    DslLazyStep::RunFor(time) => LazyStep::RunFor(time.clone()),
-                })
-                .collect(),
+                    )
+                }
+                DslLazyStep::Repeat(n) => LazyStep::Repeat(*n),
+                DslLazyStep::RunFor(time) => LazyStep::RunFor(time.clone()),
+            })
+            .collect();
+
+        Arc::new(LazyRun {
+            design,
+            steps,
             ty: PlanType {
                 components: Arc::new(self.ty.clone()),
             },
@@ -279,17 +288,6 @@ impl PlanNode for LazyRun {
     fn csp_hash(&self, mut state: &mut dyn std::hash::Hasher) {
         self.design.hash(&mut state);
         self.steps.hash(&mut state);
-    }
-    fn prepare(&self, _ctx: &ComputeContext, pctx: &mut PreparationContext) -> ComputeResult<()> {
-        let design_signals = pctx.signals.entry(self.design).or_default();
-        for step in &self.steps {
-            match step {
-                LazyStep::TraceStart | LazyStep::TraceStop | LazyStep::TraceAgg(..) => {}
-                LazyStep::Repeat(..) | LazyStep::RunFor(..) => {}
-                LazyStep::SetSignal(r, _) => _ = design_signals.insert(r.clone()),
-            }
-        }
-        Ok(())
     }
     fn extend_inputs(&self, deps: &mut ComputeDependencies) {
         deps.designs.push(self.design);

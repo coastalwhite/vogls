@@ -1,14 +1,11 @@
-use std::any::Any;
 use std::fmt;
-use std::hash::Hasher;
 use std::sync::Arc;
 
 use vogls::utils::VgHashMap;
 
 use crate::array::{Array, ArrayNode, DslArrayNode, DslLazyArray};
-use crate::buffer::Buffer;
 use crate::compute::{
-    ComputeContext, ComputeDependencies, ComputeError, ComputeGraph, ComputeInputs, ComputeResult,
+    ComputeContext, ComputeDependencies, ComputeError, ComputeInputs, ComputeResult,
     Key,
 };
 use crate::dsl::{DslNode, DslPtr};
@@ -39,33 +36,11 @@ pub struct LazyTTest {
     rhs: LazyRunVectorKey,
 }
 
-fn size_mean_var(v: &[u64]) -> (f64, f64, f64) {
-    // @TODO: Better summation strategy.
-
-    let sum = v.iter().map(|v| *v as f64).sum::<f64>();
-    let size = v.len() as f64;
-    let mean = sum / size;
-    let var = v.iter().map(|&v| ((v as f64) - mean).powi(2)).sum::<f64>() / size;
-
-    (size, mean, var)
-}
-
 impl ArrayNode for LazyTTest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("TTest")
     }
     impl_dyn_eq_hash!(ArrayNode);
-    fn len(&self, graph: &ComputeGraph) -> Option<usize> {
-        let lwidth = graph.run_vectors[self.lhs].width();
-        let rwidth = graph.run_vectors[self.rhs].width();
-
-        let (RunWidth::Constant(lwidth), RunWidth::Constant(rwidth)) = (lwidth, rwidth) else {
-            return None;
-        };
-
-        assert_eq!(lwidth, rwidth);
-        Some(lwidth as usize)
-    }
 
     fn extend_inputs(&self, deps: &mut ComputeDependencies) {
         deps.run_vectors.extend([self.lhs, self.rhs]);
