@@ -19,13 +19,15 @@ macro_rules! impl_dyn_eq_hash {
     };
 }
 
+pub mod agg;
 pub mod array;
 pub mod buffer;
 pub mod compute;
 pub mod design;
 pub mod dsl;
 pub mod entropy;
-pub mod agg;
+pub mod expand;
+pub mod map;
 pub mod mutual_information;
 pub mod output;
 pub mod plan;

@@ -8,8 +8,8 @@ use crate::CspAble;
 use crate::array::Array;
 use crate::buffer::Buffer;
 use crate::compute::{
-    CommonSubPlan, ComputeContext, ComputeDependencies, ComputeError, ComputeGraph, ComputeInputs,
-    ComputeNode, ComputeResult, Key,
+    CommonSubPlan, ComputeContext, ComputeDependencies, ComputeGraph, ComputeInputs, ComputeNode,
+    ComputeResult, Key,
 };
 use crate::dsl::{DslNode, DslPtr};
 use crate::output::{DslLazyOutput, LazyOutputKey, Output};
@@ -46,8 +46,6 @@ pub trait RunVectorNode: std::any::Any + Send + Sync + 'static {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
     fn csp_eq(&self, other: &dyn RunVectorNode) -> bool;
     fn csp_hash(&self, state: &mut dyn Hasher);
-
-    fn width(&self, graph: &ComputeGraph) -> RunWidth;
     fn extend_inputs(&self, deps: &mut ComputeDependencies);
     fn compute(&self, ctx: &ComputeContext, inputs: &ComputeInputs) -> ComputeResult<RunVector>;
 }
@@ -186,6 +184,19 @@ impl RunVector {
             (A::Bits(..), _) => todo!(),
         }
     }
+
+    pub fn get_at_y(&self, y: usize) -> Array {
+        let (offset, width) = match &self.offsets {
+            RunOffsets::Scalar(_) => (y, 1),
+            RunOffsets::Constant(width, _) => (y * *width as usize, *width as usize),
+            RunOffsets::Offsets(offsets) if y == 0 => (0, offsets[0] as usize),
+            RunOffsets::Offsets(offsets) => (
+                offsets[y - 1] as usize,
+                (offsets[y] - offsets[y - 1]) as usize,
+            ),
+        };
+        self.data.slice(offset, width)
+    }
 }
 
 fn gather_strided<T: Copy>(slice: &[T], height: usize, stride: usize, offset: usize) -> Buffer<T> {
@@ -231,11 +242,6 @@ impl RunVectorNode for RunVectorExtractOutput {
         f.write_str("Extract RunVector")
     }
     impl_dyn_eq_hash!(RunVectorNode);
-    fn width(&self, _graph: &ComputeGraph) -> RunWidth {
-        // @TODO
-        RunWidth::Variable
-    }
-
     fn extend_inputs(&self, deps: &mut ComputeDependencies) {
         deps.outputs.push(self.0);
     }

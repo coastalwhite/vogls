@@ -28,6 +28,99 @@ pub enum Array {
     Bits(Bits, NonZeroU32),
 }
 
+pub trait ArrayBuilder {
+    fn reserve(&mut self, capacity: usize);
+    fn extend(&mut self, arr: &Array);
+    fn len(&self) -> usize;
+    fn finish(self: Box<Self>) -> Array;
+}
+
+#[derive(Default)]
+struct PrimitiveArrayBuilder<T>(Vec<T>);
+
+trait Primitive: Copy {
+    fn from_value(value: &Value) -> Option<Self>;
+    fn from_array(array: &Array) -> Option<&Buffer<Self>>;
+    fn into_array(buf: Buffer<Self>) -> Array;
+}
+
+impl Primitive for f64 {
+    fn from_value(value: &Value) -> Option<Self> {
+        match value {
+            Value::Float(v) => Some(*v),
+            _ => None,
+        }
+    }
+    fn from_array(array: &Array) -> Option<&Buffer<Self>> {
+        match array {
+            Array::Floats(v) => Some(v),
+            _ => None,
+        }
+    }
+    fn into_array(buf: Buffer<Self>) -> Array {
+        Array::Floats(buf)
+    }
+}
+impl Primitive for u64 {
+    fn from_value(value: &Value) -> Option<Self> {
+        match value {
+            Value::UInt(v) => Some(*v),
+            _ => None,
+        }
+    }
+    fn from_array(array: &Array) -> Option<&Buffer<Self>> {
+        match array {
+            Array::UInts(v) => Some(v),
+            _ => None,
+        }
+    }
+    fn into_array(buf: Buffer<Self>) -> Array {
+        Array::UInts(buf)
+    }
+}
+impl Primitive for i64 {
+    fn from_value(value: &Value) -> Option<Self> {
+        match value {
+            Value::Int(v) => Some(*v),
+            _ => None,
+        }
+    }
+    fn from_array(array: &Array) -> Option<&Buffer<Self>> {
+        match array {
+            Array::Ints(v) => Some(v),
+            _ => None,
+        }
+    }
+    fn into_array(buf: Buffer<Self>) -> Array {
+        Array::Ints(buf)
+    }
+}
+
+impl<T: Primitive> ArrayBuilder for PrimitiveArrayBuilder<T> {
+    fn reserve(&mut self, capacity: usize) {
+        self.0.reserve(capacity);
+    }
+    fn extend(&mut self, arr: &Array) {
+        let buf = T::from_array(arr).unwrap();
+        self.0.extend_from_slice(buf.as_slice());
+    }
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+    fn finish(self: Box<Self>) -> Array {
+        T::into_array(Buffer::from_vec(self.0))
+    }
+}
+
+pub fn new_array_builder(data_type: &DataType) -> Box<dyn ArrayBuilder> {
+    match data_type {
+        DataType::Float => Box::new(PrimitiveArrayBuilder::<f64>::default()),
+        DataType::Int => Box::new(PrimitiveArrayBuilder::<i64>::default()),
+        DataType::UInt => Box::new(PrimitiveArrayBuilder::<u64>::default()),
+        DataType::Bits(_) => todo!(),
+    }
+}
+
 impl Eq for Array {}
 
 impl Hash for Array {
@@ -117,15 +210,15 @@ impl Array {
         macro_rules! primitive_arm {
             ($value:ident, $arr:ident) => {
                 values
-                .map(|v| {
-                    let v = v?;
-                    let Value::$value(v) = v else {
-                        unreachable!();
-                    };
-                    Ok(v)
-                })
-                .collect::<Result<Buffer<_>, E>>()
-                .map(Self::$arr)
+                    .map(|v| {
+                        let v = v?;
+                        let Value::$value(v) = v else {
+                            unreachable!();
+                        };
+                        Ok(v)
+                    })
+                    .collect::<Result<Buffer<_>, E>>()
+                    .map(Self::$arr)
             };
         }
 

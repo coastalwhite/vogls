@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use hashbrown::hash_map::Entry;
 use vogls::design::RtSignal;
-use vogls::{Design, ElaboratedDesign, SignalHandle, VSymbolTable};
+use vogls::{ElaboratedDesign, SignalHandle};
 use vogls_codegen::HeapRef;
 use vogls_ir::{Bits, LogicMode};
 use vogls_runtime::RtSignalKey;

@@ -4,9 +4,7 @@ use vogls::VectorSize;
 use vogls::utils::VgHashMap;
 
 use crate::array::{Array, ArrayNode, DslArrayNode, DslLazyArray};
-use crate::compute::{
-    ComputeContext, ComputeDependencies, ComputeGraph, ComputeInputs, ComputeResult, Key,
-};
+use crate::compute::{ComputeContext, ComputeDependencies, ComputeInputs, ComputeResult, Key};
 use crate::dsl::{DslNode, DslPtr};
 use crate::typing::{ArrayType, DataType, Type};
 

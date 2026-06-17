@@ -2,7 +2,7 @@ use std::fmt;
 
 use crate::agg::Agg;
 use crate::array::Array;
-use crate::compute::{ComputeError, ComputeResult};
+use crate::compute::{ComputeContext, ComputeError, ComputeResult};
 use crate::typing::DataType;
 use crate::value::Value;
 
@@ -27,10 +27,11 @@ impl Agg for TTest {
         Ok(DataType::Float)
     }
 
-    fn eval(
+    fn compute(
         &self,
-        _scratch: &mut Self::Scratches,
         inputs: Self::Inputs<Array>,
+        _ctx: &ComputeContext,
+        _scratch: &mut Self::Scratches,
     ) -> ComputeResult<crate::value::Value> {
         let [Array::UInts(ldata), Array::UInts(rdata)] = inputs else {
             return Err(ComputeError::InvalidTypes);

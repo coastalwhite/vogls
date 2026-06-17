@@ -4,7 +4,7 @@ use vogls::utils::IndexMap;
 
 use crate::agg::Agg;
 use crate::array::Array;
-use crate::compute::{ComputeError, ComputeResult};
+use crate::compute::{ComputeContext, ComputeError, ComputeResult};
 use crate::typing::DataType;
 use crate::value::Value;
 
@@ -38,10 +38,11 @@ impl Agg for Entropy {
         };
         Ok(DataType::Float)
     }
-    fn eval(
+    fn compute(
         &self,
-        scratch: &mut Self::Scratches,
         inputs: Self::Inputs<Array>,
+        _ctx: &ComputeContext,
+        scratch: &mut Self::Scratches,
     ) -> ComputeResult<Value> {
         let [Array::UInts(data)] = inputs else {
             return Err(ComputeError::InvalidTypes);

@@ -11,24 +11,99 @@ use crate::compute::{
     ComputeContext, ComputeDependencies, ComputeError, ComputeInputs, ComputeResult, Key,
 };
 use crate::dsl::{DslNode, DslPtr};
+use crate::map::Map;
 use crate::run_vector::{
     DslRunVector, DslRunVectorNode, LazyRunVectorKey, RunOffsets, RunVector, RunVectorNode,
 };
-use crate::typing::{RunVectorType, RunWidth, Type};
+use crate::typing::{ArrayType, DataType, RunVectorType, RunWidth, Type};
 
+#[derive(Hash, PartialEq, Eq, Clone)]
 pub struct WindowSum {
-    pub on: DslRunVector,
-    pub by: DslRunVector,
-
     pub start: u64,
     pub end: u64,
     pub width: u64,
 }
 
+impl Map for WindowSum {
+    type Inputs<Input>
+        = [Input; 2]
+    where
+        Input: Send + Sync;
+
+    type Scratches = ();
+
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self { start, end, width } = &self;
+        write!(
+            f,
+            "WindowSum {{ width: {width}, start: {start}, end: {end} }}"
+        )
+    }
+
+    fn output_type(
+        &self,
+        inputs: Self::Inputs<ArrayType>,
+    ) -> ComputeResult<crate::typing::ArrayType> {
+        if !matches!(
+            (inputs[0].data, inputs[1].data),
+            (DataType::UInt, DataType::UInt)
+        ) {
+            return Err(ComputeError::InvalidTypes);
+        }
+        let diff = self.end - self.start;
+        let width = diff.div_ceil(self.width) as usize;
+        Ok(ArrayType {
+            data: inputs[0].data,
+            length: Some(width),
+        })
+    }
+
+    fn compute(
+        &self,
+        inputs: Self::Inputs<Array>,
+        _ctx: &ComputeContext,
+        _scratch: &mut Self::Scratches,
+    ) -> ComputeResult<Array> {
+        let [on, by] = inputs;
+        let (Array::UInts(on), Array::UInts(by)) = (&on, &by) else {
+            return Err(ComputeError::InvalidTypes);
+        };
+
+        assert!(self.start <= self.end);
+        assert!(self.width > 0);
+
+        let diff = self.end - self.start;
+        let num_bins = diff.div_ceil(self.width);
+
+        assert_eq!(on.len(), by.len());
+
+        let mut inner_offset = 0;
+        let sums = (0..num_bins).into_iter().map(|i| {
+            let start = i * self.width;
+            let end = ((i + 1) * self.width).min(self.end);
+            let mut sum = 0u64;
+
+            while let Some(&by) = by.get(inner_offset)
+                && by < start
+            {
+                inner_offset += 1;
+            }
+            while let Some(&by) = by.get(inner_offset)
+                && by < end
+            {
+                sum += on[inner_offset];
+                inner_offset += 1;
+            }
+            sum
+        }).collect::<Buffer<u64>>();
+
+        Ok(Array::UInts(sums))
+    }
+}
+
 impl WindowSum {
     pub fn build(self) -> DslRunVector {
-        let diff = self.end - self.start;
-        let width = RunWidth::Constant(diff.div_ceil(self.width));
+        let width = RunWidth::Constant();
         DslRunVector {
             ty: Arc::new(Type::RunVector(RunVectorType {
                 data: self.on.ty().data,
@@ -51,10 +126,7 @@ pub struct LazyWindowSum {
 }
 
 impl RunVectorNode for LazyWindowSum {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self { on: _, by: _, start, end, width } = &self;
-        write!(f, "WindowSum {{ width: {width}, start: {start}, end: {end} }}")
-    }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {}
 
     fn csp_eq(&self, other: &dyn RunVectorNode) -> bool {
         let Some(other) = (other as &dyn Any).downcast_ref::<Self>() else {
@@ -70,14 +142,6 @@ impl RunVectorNode for LazyWindowSum {
 
     fn extend_inputs(&self, deps: &mut ComputeDependencies) {
         deps.run_vectors.extend([self.on, self.by]);
-    }
-
-    fn width(&self, _graph: &crate::compute::ComputeGraph) -> RunWidth {
-        assert!(self.start <= self.end);
-        assert!(self.width > 0);
-
-        let diff = self.end - self.start;
-        RunWidth::Constant(diff.div_ceil(self.width))
     }
 
     fn compute(&self, _ctx: &ComputeContext, inputs: &ComputeInputs) -> ComputeResult<RunVector> {
@@ -139,8 +203,17 @@ impl RunVectorNode for LazyWindowSum {
 
 impl DslRunVectorNode for WindowSum {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self { on: _, by: _, start, end, width } = &self;
-        write!(f, "WindowSum {{ width: {width}, start: {start}, end: {end} }}")
+        let Self {
+            on: _,
+            by: _,
+            start,
+            end,
+            width,
+        } = &self;
+        write!(
+            f,
+            "WindowSum {{ width: {width}, start: {start}, end: {end} }}"
+        )
     }
     fn convert_one<'a>(&'a self, converted: &'a VgHashMap<DslPtr, Key>) -> Arc<dyn RunVectorNode> {
         let on = converted[&DslPtr::from(&self.on as &dyn DslNode)].as_run_vector();

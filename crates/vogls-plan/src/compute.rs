@@ -5,7 +5,7 @@ use vogls::utils::{Table, VgHashMap, VgHashSet};
 
 use crate::CspTable;
 use crate::array::{Array, LazyArray, LazyArrayKey};
-use crate::design::{LazyDesign, LazyDesignKey, PlanDesign, SignalRef};
+use crate::design::{LazyDesign, LazyDesignKey, PlanDesign};
 use crate::output::{LazyOutput, LazyOutputKey, Output};
 use crate::plan::{LazyPlan, LazyPlanKey, Plan};
 use crate::run_vector::{LazyRunVector, LazyRunVectorKey, RunVector};
@@ -196,21 +196,6 @@ impl ComputeContext {
     }
 }
 
-#[derive(Default)]
-pub struct PreparationContext {
-    pub signals: VgHashMap<LazyDesignKey, VgHashSet<SignalRef>>,
-}
-
-impl PreparationContext {
-    fn apply(self, ctx: &ComputeContext, graph: &mut ComputeGraph) -> ComputeResult<()> {
-        _ = ctx;
-        for (k, signals) in self.signals {
-            graph.designs[k].handles.extend(signals);
-        }
-        Ok(())
-    }
-}
-
 pub trait ComputeNode {
     type Key;
     type Output;
@@ -240,7 +225,6 @@ pub fn compute<T: GraphItem + ComputeNode>(
     let mut stack = Vec::<StackItem>::new();
     let mut statuses = VgHashMap::<Key, Status>::default();
     let mut deps = ComputeDependencies::default();
-    let mut pctx = PreparationContext::default();
     stack.push(StackItem {
         key: node_key,
         dispatched: false,
@@ -286,8 +270,6 @@ pub fn compute<T: GraphItem + ComputeNode>(
     if has_cycle {
         return Err(ComputeError::CyclicComputationGraph);
     }
-
-    pctx.apply(ctx, graph)?;
 
     // Start computing inputs in the computation graph. For each node first compute the inputs,
     // then compute the node self. When a input is no longer needed by any node, drop it do reuse

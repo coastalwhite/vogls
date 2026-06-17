@@ -12,7 +12,7 @@ use crate::array::{Array, DslLazyArray, LazyArrayKey};
 use crate::buffer::Buffer;
 use crate::compute::{
     ComputeContext, ComputeDependencies, ComputeError, ComputeGraph, ComputeInputs, ComputeResult,
-    Key, PreparationContext,
+    Key
 };
 use crate::design::{LazyDesign, LazyDesignKey, PlanDesign, SignalRef, Time};
 use crate::dsl::{DslNode, DslPtr};
