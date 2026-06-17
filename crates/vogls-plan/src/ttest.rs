@@ -1,132 +1,57 @@
 use std::fmt;
-use std::sync::Arc;
 
-use vogls::utils::VgHashMap;
+use crate::agg::Agg;
+use crate::array::Array;
+use crate::compute::{ComputeError, ComputeResult};
+use crate::typing::DataType;
+use crate::value::Value;
 
-use crate::array::{Array, ArrayNode, DslArrayNode, DslLazyArray};
-use crate::compute::{
-    ComputeContext, ComputeDependencies, ComputeError, ComputeInputs, ComputeResult,
-    Key,
-};
-use crate::dsl::{DslNode, DslPtr};
-use crate::run_vector::{DslRunVector, LazyRunVectorKey};
-use crate::typing::{ArrayType, DataType, RunWidth, Type};
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct TTest;
 
-pub struct TTest {
-    pub lhs: DslRunVector,
-    pub rhs: DslRunVector,
-}
+impl Agg for TTest {
+    type Inputs<Input>
+        = [Input; 2]
+    where
+        Input: Send + Sync;
+    type Scratches = ();
 
-impl TTest {
-    pub fn build(self) -> DslLazyArray {
-        DslLazyArray {
-            ty: Arc::new(Type::Array(ArrayType {
-                data: DataType::Float,
-                // @TODO: Fill in
-                length: None,
-            })),
-            f: Arc::new(self),
-        }
-    }
-}
-
-#[derive(PartialEq, Eq, Hash)]
-pub struct LazyTTest {
-    lhs: LazyRunVectorKey,
-    rhs: LazyRunVectorKey,
-}
-
-impl ArrayNode for LazyTTest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("TTest")
     }
-    impl_dyn_eq_hash!(ArrayNode);
 
-    fn extend_inputs(&self, deps: &mut ComputeDependencies) {
-        deps.run_vectors.extend([self.lhs, self.rhs]);
+    fn output_type(&self, inputs: Self::Inputs<DataType>) -> ComputeResult<DataType> {
+        let [DataType::UInt, DataType::UInt] = inputs else {
+            return Err(ComputeError::InvalidTypes);
+        };
+        Ok(DataType::Float)
     }
 
-    fn compute(&self, _ctx: &ComputeContext, inputs: &ComputeInputs) -> ComputeResult<Array> {
-        let lhs = &inputs.run_vectors[&self.lhs];
-        let rhs = &inputs.run_vectors[&self.rhs];
-
-        let (Array::UInts(ldata), Array::UInts(rdata)) = (&lhs.data, &rhs.data) else {
+    fn eval(
+        &self,
+        _scratch: &mut Self::Scratches,
+        inputs: Self::Inputs<Array>,
+    ) -> ComputeResult<crate::value::Value> {
+        let [Array::UInts(ldata), Array::UInts(rdata)] = inputs else {
             return Err(ComputeError::InvalidTypes);
         };
 
-        let RunWidth::Constant(lwidth) = lhs.offsets.width() else {
-            unreachable!();
-        };
-        let RunWidth::Constant(rwidth) = rhs.offsets.width() else {
-            unreachable!();
-        };
+        let lmean = ldata.iter().map(|&v| v as f64).sum::<f64>() / ldata.len() as f64;
+        let rmean = rdata.iter().map(|&v| v as f64).sum::<f64>() / rdata.len() as f64;
 
-        assert_eq!(lwidth, rwidth);
+        let lvar = ldata
+            .iter()
+            .map(|&v| (v as f64 - lmean).powi(2))
+            .sum::<f64>();
+        let rvar = rdata
+            .iter()
+            .map(|&v| (v as f64 - rmean).powi(2))
+            .sum::<f64>();
 
-        let lsize = lhs.offsets.num_runs() as f64;
-        let rsize = rhs.offsets.num_runs() as f64;
+        let numerator = lmean - rmean;
+        let denumerator = (lvar / ldata.len() as f64 + rvar / rdata.len() as f64).sqrt();
 
-        let mut lmean = vec![0f64; lwidth as usize];
-        let mut rmean = vec![0f64; lwidth as usize];
-
-        for (o, w) in lhs.offsets.iter() {
-            let data = &ldata[o as usize..][..w as usize];
-            for (i, &x) in data.iter().enumerate() {
-                lmean[i] += x as f64;
-            }
-        }
-        for (o, w) in rhs.offsets.iter() {
-            let data = &rdata[o as usize..][..w as usize];
-            for (i, &x) in data.iter().enumerate() {
-                rmean[i] += x as f64;
-            }
-        }
-
-        lmean.iter_mut().for_each(|v| *v = *v / lsize);
-        rmean.iter_mut().for_each(|v| *v = *v / rsize);
-
-        let mut lvar = vec![0f64; lwidth as usize];
-        let mut rvar = vec![0f64; lwidth as usize];
-
-        for (o, w) in lhs.offsets.iter() {
-            let data = &ldata[o as usize..][..w as usize];
-            for (i, &x) in data.iter().enumerate() {
-                lvar[i] += x as f64 - lmean[i];
-            }
-        }
-        for (o, w) in rhs.offsets.iter() {
-            let data = &rdata[o as usize..][..w as usize];
-            for (i, &x) in data.iter().enumerate() {
-                rvar[i] += (x as f64 - rmean[i]).powi(2);
-            }
-        }
-
-        let tvalue = (0..lwidth as usize)
-            .map(|i| {
-                let numerator = lmean[i] - rmean[i];
-                let denumerator = (lvar[i] / lsize + rvar[i] / rsize).sqrt();
-
-                let tvalue = numerator / denumerator;
-                tvalue
-            })
-            .collect();
-
-        Ok(Array::Floats(tvalue))
-    }
-}
-
-impl DslArrayNode for TTest {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("TTest")
-    }
-    fn convert_one<'a>(&'a self, converted: &'a VgHashMap<DslPtr, Key>) -> Arc<dyn ArrayNode> {
-        let lhs = converted[&DslPtr::from(&self.lhs as &dyn DslNode)].as_run_vector();
-        let rhs = converted[&DslPtr::from(&self.rhs as &dyn DslNode)].as_run_vector();
-        Arc::new(LazyTTest { lhs, rhs })
-    }
-
-    fn extend_inputs<'a>(&'a self, f: &mut Vec<&'a dyn DslNode>) {
-        f.push(&self.lhs as _);
-        f.push(&self.rhs as _);
+        let tvalue = numerator / denumerator;
+        Ok(Value::Float(tvalue))
     }
 }

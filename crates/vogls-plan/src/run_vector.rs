@@ -1,6 +1,6 @@
+use std::fmt;
 use std::hash::{Hash as _, Hasher};
 use std::sync::Arc;
-use std::fmt;
 
 use vogls::utils::{VgHashMap, new_table_key};
 
@@ -161,6 +161,44 @@ impl RunVector {
             width: self.offsets.width(),
         }
     }
+
+    pub fn gather_array_at_x(&self, x: usize) -> Array {
+        use Array as A;
+        use RunOffsets as O;
+        let height = self.offsets.num_runs();
+        match (&self.data, &self.offsets) {
+            (_, O::Scalar(_)) => self.data.clone(),
+
+            (A::Floats(b), O::Constant(stride, _)) => {
+                A::Floats(gather_strided(&b, height, *stride as usize, x))
+            }
+            (A::Ints(b), O::Constant(stride, _)) => {
+                A::Ints(gather_strided(&b, height, *stride as usize, x))
+            }
+            (A::UInts(b), O::Constant(stride, _)) => {
+                A::UInts(gather_strided(&b, height, *stride as usize, x))
+            }
+
+            (A::Floats(b), O::Offsets(offsets)) => A::Floats(gather_offsets(&b, &offsets, x)),
+            (A::Ints(b), O::Offsets(offsets)) => A::Ints(gather_offsets(&b, &offsets, x)),
+            (A::UInts(b), O::Offsets(offsets)) => A::UInts(gather_offsets(&b, &offsets, x)),
+
+            (A::Bits(..), _) => todo!(),
+        }
+    }
+}
+
+fn gather_strided<T: Copy>(slice: &[T], height: usize, stride: usize, offset: usize) -> Buffer<T> {
+    (0..height)
+        .map(|y| slice[offset + y * stride as usize])
+        .collect()
+}
+fn gather_offsets<T: Copy>(slice: &[T], offsets: &[u64], offset: usize) -> Buffer<T> {
+    offsets
+        .iter()
+        // @TODO: We are ignoring OOB here.
+        .map(|&s| slice[s as usize + offset])
+        .collect()
 }
 
 impl LazyRunVector {

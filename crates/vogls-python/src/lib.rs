@@ -11,6 +11,7 @@ mod vogls {
     use vogls::utils::{IndexMap, VgHashSet};
     use vogls::{BitsFormatOptions, SimulationIo, VectorSize};
 
+    use vogls_plan::agg::{build_array_agg, build_run_vector_agg};
     use vogls_plan::array::{Array, DslLazyArray, LazyArray};
     use vogls_plan::compute::{ComputeNode, GraphItem, display_dot};
     use vogls_plan::design::TimeUnit;
@@ -741,35 +742,26 @@ mod vogls {
             lazy_dot_string::<_, LazyArray>(&self.0)
         }
 
-        // pub fn min(&self) -> PyLazyValue {
-        //     PyLazyValue(DslLazyValue::Aggregation(
-        //         Arc::new(self.0.clone()),
-        //         ArrayAgg::Min,
-        //     ))
-        // }
-
         #[staticmethod]
-        pub fn ttest(lhs: Bound<PyLazyRunVector>, rhs: Bound<PyLazyRunVector>) -> Self {
-            PyLazyArray(
-                TTest {
-                    lhs: lhs.get().0.clone().into(),
-                    rhs: rhs.get().0.clone().into(),
-                }
-                .build(),
-            )
+        pub fn ttest(lhs: Bound<PyLazyRunVector>, rhs: Bound<PyLazyRunVector>) -> PyResult<Self> {
+            Ok(PyLazyArray(build_run_vector_agg(
+                TTest,
+                [lhs.get().0.clone().into(), rhs.get().0.clone().into()],
+            )?))
         }
         #[staticmethod]
         pub fn mutual_information(
             lhs: Bound<PyLazyRunVector>,
             rhs: Bound<PyLazyRunVector>,
-        ) -> Self {
-            PyLazyArray(
-                MutualInformation {
-                    lhs: lhs.get().0.clone().into(),
-                    rhs: rhs.get().0.clone().into(),
-                }
-                .build(),
-            )
+        ) -> PyResult<Self> {
+            Ok(PyLazyArray(build_run_vector_agg(
+                MutualInformation,
+                [lhs.get().0.clone().into(), rhs.get().0.clone().into()],
+            )?))
+        }
+
+        pub fn entropy(&self) -> PyResult<PyLazyValue> {
+            Ok(PyLazyValue(build_array_agg(Entropy, [self.0.clone()])?))
         }
 
         #[staticmethod]
@@ -815,6 +807,24 @@ mod vogls {
         }
         pub fn to_dot_graph(&self) -> PyResult<String> {
             lazy_dot_string::<_, LazyValue>(&self.0)
+        }
+
+        #[staticmethod]
+        pub fn ttest(lhs: Bound<PyLazyArray>, rhs: Bound<PyLazyArray>) -> PyResult<Self> {
+            Ok(PyLazyValue(build_array_agg(
+                TTest,
+                [lhs.get().0.clone().into(), rhs.get().0.clone().into()],
+            )?))
+        }
+        #[staticmethod]
+        pub fn mutual_information(
+            lhs: Bound<PyLazyArray>,
+            rhs: Bound<PyLazyArray>,
+        ) -> PyResult<Self> {
+            Ok(PyLazyValue(build_array_agg(
+                MutualInformation,
+                [lhs.get().0.clone().into(), rhs.get().0.clone().into()],
+            )?))
         }
     }
     #[pymethods]
@@ -885,13 +895,11 @@ mod vogls {
             )
         }
 
-        pub fn entropy(&self) -> PyLazyArray {
-            PyLazyArray(
-                Entropy {
-                    src: self.0.clone(),
-                }
-                .build(),
-            )
+        pub fn entropy(&self) -> PyResult<PyLazyArray> {
+            Ok(PyLazyArray(build_run_vector_agg(
+                Entropy,
+                [self.0.clone()],
+            )?))
         }
     }
 

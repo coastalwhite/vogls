@@ -51,16 +51,16 @@ def masked_run(*, random: bool) -> vg.LazyRunVector:
     return dist.window_sum(by=time, width=CYCLE, start=0, end=CYCLE * N_CYCLES)
 
 
-fixed = masked_run(random=False)
-random = masked_run(random=True)
+fixed = run(random=False)
+random = run(random=True)
 
 # print(vg.welch_t_test(fixed, random).to_dot_graph())
 
 # print(fixed.compute().as_list())
 # print(random.compute().as_list())
 
-# print(fixed.entropy().compute().as_list())
-# print(random.entropy().compute().as_list())
+print(fixed.entropy().compute().as_list())
+print(random.entropy().compute().as_list())
 
 start = time.time()
 # print(vg.mutual_information(fixed, random).compute().as_list())

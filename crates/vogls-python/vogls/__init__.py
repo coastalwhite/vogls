@@ -81,6 +81,9 @@ class Array:
     def lazy(self) -> "LazyValue":
         return LazyArray._from_py(self._inner.lazy())
 
+    def entropy(self) -> "Value":
+        return self.lazy().entropy().compute()
+
 
 class LazyArray(Lazy[Array]):
     @classmethod
@@ -93,8 +96,8 @@ class LazyArray(Lazy[Array]):
     def random_bits(length: int, width: int, seed: int | None = None) -> Self:
         return LazyArray._from_py(vgr.PyLazyArray.random_bits(length, width, seed))
 
-    def min(self) -> "LazyValue":
-        self._producer.min()
+    def entropy(self) -> "LazyValue":
+        return LazyValue._from_py(self._producer.entropy())
 
 
 class LazyDesign:
@@ -277,15 +280,50 @@ def _lazyoutput_from_py(v: Any) -> LazyOutput:
     elif isinstance(v, vgr.PyLazyPlan):
         return LazyPlan._from_py(v)
 
-    v_type = v if type(v) is type else f"of type {type(v).__name__!r}"
-    raise ValueError(f"cannot turn {v_type} into Output")
+    raise ValueError(f"cannot turn {_type_name(v)} into Output")
 
 
-def welch_t_test(lhs: LazyRunVector, rhs: LazyRunVector) -> LazyArray:
-    return LazyArray._from_py(vgr.PyLazyArray.ttest(lhs._producer, rhs._producer))
+def _type_name(v: Any) -> str:
+    return str(v) if type(v) is type else f"of type {type(v).__name__!r}"
 
 
-def mutual_information(lhs: LazyRunVector, rhs: LazyRunVector) -> LazyArray:
-    return LazyArray._from_py(
-        vgr.PyLazyArray.mutual_information(lhs._producer, rhs._producer)
-    )
+@overload
+def welch_t_test(lhs: LazyArray, rhs: LazyArray) -> LazyValue: ...
+@overload
+def welch_t_test(lhs: LazyRunVector, rhs: LazyRunVector) -> LazyArray: ...
+
+
+def welch_t_test(
+    lhs: LazyRunVector | LazyArray, rhs: LazyRunVector | LazyArray
+) -> LazyArray | LazyValue:
+    if isinstance(lhs, LazyRunVector) and isinstance(rhs, LazyRunVector):
+        return LazyArray._from_py(vgr.PyLazyArray.ttest(lhs._producer, rhs._producer))
+    elif isinstance(lhs, LazyArray) and isinstance(rhs, LazyArray):
+        return LazyValue._from_py(vgr.PyLazyValue.ttest(lhs._producer, rhs._producer))
+    else:
+        raise ValueError(
+            f"cannot call `welch_t_test` on {_type_name(lhs)} and {_type_name(rhs)}"
+        )
+
+
+@overload
+def mutual_information(lhs: LazyArray, rhs: LazyArray) -> LazyValue: ...
+@overload
+def mutual_information(lhs: LazyRunVector, rhs: LazyRunVector) -> LazyArray: ...
+
+
+def mutual_information(
+    lhs: LazyRunVector | LazyArray, rhs: LazyRunVector | LazyArray
+) -> LazyArray | LazyValue:
+    if isinstance(lhs, LazyRunVector) and isinstance(rhs, LazyRunVector):
+        return LazyArray._from_py(
+            vgr.PyLazyArray.mutual_information(lhs._producer, rhs._producer)
+        )
+    elif isinstance(lhs, LazyArray) and isinstance(rhs, LazyArray):
+        return LazyValue._from_py(
+            vgr.PyLazyValue.mutual_information(lhs._producer, rhs._producer)
+        )
+    else:
+        raise ValueError(
+            f"cannot call `mutual_information` on {_type_name(lhs)} and {_type_name(rhs)}"
+        )

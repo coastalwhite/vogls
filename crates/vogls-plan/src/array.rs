@@ -109,6 +109,34 @@ impl Array {
             length: Some(self.len()),
         }
     }
+
+    pub fn try_from_value_iter<E>(
+        arr_type: &ArrayType,
+        values: impl Iterator<Item = Result<Value, E>>,
+    ) -> Result<Self, E> {
+        macro_rules! primitive_arm {
+            ($value:ident, $arr:ident) => {
+                values
+                .map(|v| {
+                    let v = v?;
+                    let Value::$value(v) = v else {
+                        unreachable!();
+                    };
+                    Ok(v)
+                })
+                .collect::<Result<Buffer<_>, E>>()
+                .map(Self::$arr)
+            };
+        }
+
+        use DataType as DT;
+        match arr_type.data {
+            DT::Float => primitive_arm!(Float, Floats),
+            DT::Int => primitive_arm!(Int, Ints),
+            DT::UInt => primitive_arm!(UInt, UInts),
+            DT::Bits(_) => todo!(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -121,6 +149,14 @@ pub struct LazyArray {
 pub struct DslLazyArray {
     pub ty: Arc<Type>,
     pub f: Arc<dyn DslArrayNode>,
+}
+impl DslLazyArray {
+    pub fn ty(&self) -> &ArrayType {
+        let Type::Array(ty) = self.ty.as_ref() else {
+            unreachable!()
+        };
+        ty
+    }
 }
 
 pub trait DslArrayNode: Send + Sync + 'static {
