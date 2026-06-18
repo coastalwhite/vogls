@@ -1,8 +1,29 @@
-from typing import Callable, TypeVar, Generic, Any, Union, Self, overload, List
+"""
+.. include:: ../README.md
+   :start-line: 1
+"""
+
+from typing import TypeVar, Generic, Any, Union, Self, overload, List
 import vogls.vogls as vgr
 
+__all__ = [
+    "Lazy",
+    "LazyPlan",
+    "Plan",
+    "LazyArray",
+    "Array",
+    "LazyValue",
+    "Value",
+    "LazyRunVector",
+    "RunVector",
+    "LazyDesign",
+    "Run",
+    # functions
+    "welch_t_test",
+    "mutual_information",
+]
+
 T = TypeVar("T")
-U = TypeVar("U")
 
 
 class Lazy(Generic[T]):
@@ -12,22 +33,12 @@ class Lazy(Generic[T]):
         self._producer = producer
 
     def compute(self) -> T:
+        """Collect the result of the computation."""
         return self._producer.compute()
 
     def to_dot_graph(self) -> str:
+        """Get a DOT graph string of the computation."""
         return self._producer.to_dot_graph()
-
-
-class _LazyLambda:
-    inner: Lazy[T]
-    f: Callable[[T], U]
-
-    def __init__(self, producer: Lazy[T], f: Callable[[T], U]) -> None:
-        self.inner = producer
-        self.f = f
-
-    def compute(self) -> U:
-        return self.f(self.inner.compute())
 
 
 class Run:
@@ -67,6 +78,8 @@ class Run:
 
 
 class Array:
+    """A continuous array of `Value`."""
+
     _inner: vgr.PyArray
 
     def __init__(self, v: list[float]) -> None:
@@ -308,6 +321,10 @@ def welch_t_test(lhs: LazyRunVector, rhs: LazyRunVector) -> LazyArray: ...
 def welch_t_test(
     lhs: LazyRunVector | LazyArray, rhs: LazyRunVector | LazyArray
 ) -> LazyArray | LazyValue:
+    """
+    Calculate the 1st moment Welch T-Test between RunVectors or Arrays.
+    """
+
     if isinstance(lhs, LazyRunVector) and isinstance(rhs, LazyRunVector):
         return LazyArray._from_py(vgr.PyLazyArray.ttest(lhs._producer, rhs._producer))
     elif isinstance(lhs, LazyArray) and isinstance(rhs, LazyArray):
@@ -327,6 +344,17 @@ def mutual_information(lhs: LazyRunVector, rhs: LazyRunVector) -> LazyArray: ...
 def mutual_information(
     lhs: LazyRunVector | LazyArray, rhs: LazyRunVector | LazyArray
 ) -> LazyArray | LazyValue:
+    """
+    Calculate the Mutual Information between RunVectors or Arrays.
+
+    Mutual information is a measure from information theory that gives an
+    indication of how much information is shared between two distributions. For
+    $H(X)$ the entropy, it is given as:
+
+    $$ I(X; Y) = H(X) - H(X | Y) $$
+
+    # Examples
+    """
     if isinstance(lhs, LazyRunVector) and isinstance(rhs, LazyRunVector):
         return LazyArray._from_py(
             vgr.PyLazyArray.mutual_information(lhs._producer, rhs._producer)

@@ -64,7 +64,7 @@
 
               postVenvCreation = ''
                 unset CONDA_PREFIX 
-                uv pip install -r pyproject.toml
+                uv pip install -r crates/vogls-python/pyproject.toml
                 export LD_LIBRARY_PATH="${stdenv.cc.cc.lib}/lib:$PYTHON_SHARED_LIB"
               '';
               venvDir = ".venv";
