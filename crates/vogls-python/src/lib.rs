@@ -17,6 +17,8 @@ mod vogls {
     use vogls_plan::design::TimeUnit;
     use vogls_plan::dsl::DslNode;
     use vogls_plan::entropy::Entropy;
+    use vogls_plan::expand::Expand;
+    use vogls_plan::map::{build_array_map, build_run_vector_map};
     use vogls_plan::mutual_information::MutualInformation;
     use vogls_plan::output::{DslLazyOutput, DslPlanComponent, Output};
     use vogls_plan::plan::{DslLazyPlan, LazyPlan, Plan};
@@ -742,6 +744,23 @@ mod vogls {
             lazy_dot_string::<_, LazyArray>(&self.0)
         }
 
+        pub fn window_sum(
+            &self,
+            by: Bound<PyLazyArray>,
+            width: u64,
+            start: u64,
+            end: u64,
+        ) -> PyResult<PyLazyArray> {
+            Ok(PyLazyArray(build_array_map(
+                WindowSum { width, start, end },
+                [self.0.clone(), by.get().0.clone()],
+            )?))
+        }
+
+        pub fn expand(&self) -> PyResult<PyLazyArray> {
+            Ok(PyLazyArray(build_array_map(Expand, [self.0.clone()])?))
+        }
+
         #[staticmethod]
         pub fn ttest(lhs: Bound<PyLazyRunVector>, rhs: Bound<PyLazyRunVector>) -> PyResult<Self> {
             Ok(PyLazyArray(build_run_vector_agg(
@@ -882,17 +901,18 @@ mod vogls {
             width: u64,
             start: u64,
             end: u64,
-        ) -> PyLazyRunVector {
-            PyLazyRunVector(
-                WindowSum {
-                    on: self.0.clone(),
-                    by: by.get().0.clone(),
-                    width,
-                    start,
-                    end,
-                }
-                .build(),
-            )
+        ) -> PyResult<PyLazyRunVector> {
+            Ok(PyLazyRunVector(build_run_vector_map(
+                WindowSum { width, start, end },
+                [self.0.clone(), by.get().0.clone()],
+            )?))
+        }
+
+        pub fn expand(&self) -> PyResult<PyLazyRunVector> {
+            Ok(PyLazyRunVector(build_run_vector_map(
+                Expand,
+                [self.0.clone()],
+            )?))
         }
 
         pub fn entropy(&self) -> PyResult<PyLazyArray> {

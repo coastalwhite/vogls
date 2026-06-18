@@ -38,7 +38,7 @@ pub trait ArrayBuilder {
 #[derive(Default)]
 struct PrimitiveArrayBuilder<T>(Vec<T>);
 
-trait Primitive: Copy {
+pub trait Primitive: Copy + std::ops::Add<Self, Output=Self> {
     fn from_value(value: &Value) -> Option<Self>;
     fn from_array(array: &Array) -> Option<&Buffer<Self>>;
     fn into_array(buf: Buffer<Self>) -> Array;

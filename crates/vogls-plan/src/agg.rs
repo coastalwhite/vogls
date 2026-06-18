@@ -167,7 +167,7 @@ where
                 .map(|key| inputs.run_vectors[key].clone()),
         );
 
-        let mut width = none;
+        let mut width = None;
         for input in inputs.iter() {
             let RunWidth::Constant(input_width) = input.offsets.width() else {
                 return Err(ComputeError::NumTracesMismatch);

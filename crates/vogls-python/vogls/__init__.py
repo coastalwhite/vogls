@@ -78,8 +78,11 @@ class Array:
         instance._inner = py
         return instance
 
-    def lazy(self) -> "LazyValue":
+    def lazy(self) -> "LazyArray":
         return LazyArray._from_py(self._inner.lazy())
+
+    def expand(self) -> Self:
+        return self.lazy().expand().compute()
 
     def entropy(self) -> "Value":
         return self.lazy().entropy().compute()
@@ -95,6 +98,9 @@ class LazyArray(Lazy[Array]):
     @staticmethod
     def random_bits(length: int, width: int, seed: int | None = None) -> Self:
         return LazyArray._from_py(vgr.PyLazyArray.random_bits(length, width, seed))
+
+    def expand(self) -> Self:
+        return LazyArray._from_py(self._producer.expand())
 
     def entropy(self) -> "LazyValue":
         return LazyValue._from_py(self._producer.entropy())
@@ -230,6 +236,9 @@ class RunVector:
             self.lazy().window_sum(by=by, width=width, start=start, end=end).compute()
         )
 
+    def expand(self) -> Self:
+        return self.lazy().expand().compute()
+
     def entropy(self) -> Array:
         return self.lazy().entropy().compute()
 
@@ -247,6 +256,9 @@ class LazyRunVector(Lazy[RunVector]):
                 by=by._producer, width=width, start=start, end=end
             )
         )
+
+    def expand(self) -> Self:
+        return LazyRunVector._from_py(self._producer.expand())
 
     def entropy(self) -> LazyArray:
         return LazyArray._from_py(self._producer.entropy())

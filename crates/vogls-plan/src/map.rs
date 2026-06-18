@@ -13,8 +13,7 @@ use crate::dsl::{DslNode, DslPtr};
 use crate::run_vector::{
     DslRunVector, DslRunVectorNode, LazyRunVectorKey, RunOffsets, RunVector, RunVectorNode,
 };
-use crate::typing::{ArrayType, RunVectorType, RunWidth};
-
+use crate::typing::{ArrayType, RunVectorType, RunWidth, Type};
 
 pub struct MapNode<N: Send + Sync, T: Map> {
     inputs: T::Inputs<N>,
@@ -24,48 +23,54 @@ pub struct MapNode<N: Send + Sync, T: Map> {
 pub fn build_run_vector_map<T: Map>(
     map: T,
     inputs: T::Inputs<DslRunVector>,
-) -> ComputeResult<DslLazyArray>
+) -> ComputeResult<DslRunVector>
 where
     T::Inputs<LazyRunVectorKey>: std::hash::Hash + Eq,
 {
-    let mut width = None;
+    let mut length = None;
     for input in inputs.iter() {
-        let RunWidth::Constant(input_width) = input.ty().width else {
-            return Err(ComputeError::NumTracesMismatch);
-        };
-        if width.is_some_and(|w| w != input_width) {
-            return Err(ComputeError::NumTracesMismatch);
+        if let Some(input_length) = input.ty().length {
+            if length.is_some_and(|l| l as usize != input_length) {
+                return Err(ComputeError::NumTracesMismatch);
+            }
+
+            length = Some(input_length);
         }
-        width = Some(input_width);
     }
-    let width = width.unwrap();
     let input_dtypes =
-        <T::Inputs<ArrayType> as InputCollection>::from_iter(inputs.iter().map(|v| v.ty().data));
-    let output_dtype = agg.output_type(input_dtypes)?;
-    let ty = Arc::new(Type::Array(ArrayType {
-        data: output_dtype,
-        length: Some(width as usize),
+        <T::Inputs<ArrayType> as InputCollection>::from_iter(inputs.iter().map(|v| ArrayType {
+            data: v.ty().data,
+            length: v.ty().width.size(),
+        }));
+    let output_dtype = map.output_type(input_dtypes)?;
+    let ty = Arc::new(Type::RunVector(RunVectorType {
+        data: output_dtype.data,
+        width: match output_dtype.length {
+            Some(n) => RunWidth::Constant(n as u64),
+            None => RunWidth::Variable,
+        },
+        length: length,
     }));
-    Ok(DslLazyArray {
+    Ok(DslRunVector {
         ty,
-        f: Arc::new(AggNode { inputs, inner: agg }),
+        f: Arc::new(MapNode { inputs, inner: map }),
     })
 }
 
-pub fn build_array_agg<T: Agg>(
-    agg: T,
+pub fn build_array_map<T: Map>(
+    map: T,
     inputs: T::Inputs<DslLazyArray>,
-) -> ComputeResult<DslLazyValue>
+) -> ComputeResult<DslLazyArray>
 where
     T::Inputs<LazyArrayKey>: std::hash::Hash + Eq,
 {
     let input_dtypes =
-        <T::Inputs<DataType> as InputCollection>::from_iter(inputs.iter().map(|v| v.ty().data));
-    let output_dtype = agg.output_type(input_dtypes)?;
-    let ty = Arc::new(Type::Value(ValueType { data: output_dtype }));
-    Ok(DslLazyValue {
+        <T::Inputs<ArrayType> as InputCollection>::from_iter(inputs.iter().map(|v| v.ty().clone()));
+    let output_dtype = map.output_type(input_dtypes)?;
+    let ty = Arc::new(Type::Array(output_dtype));
+    Ok(DslLazyArray {
         ty,
-        f: Arc::new(AggNode { inputs, inner: agg }),
+        f: Arc::new(MapNode { inputs, inner: map }),
     })
 }
 

@@ -5,7 +5,7 @@ import time
 CYCLE = 2
 N_CYCLES = 8
 
-NUM_RUNS = 10_000
+NUM_RUNS = 5
 
 def run(*, random: bool) -> vg.LazyRunVector:
     design = vg.LazyDesign("xor.v")
@@ -51,18 +51,21 @@ def masked_run(*, random: bool) -> vg.LazyRunVector:
     return dist.window_sum(by=time, width=CYCLE, start=0, end=CYCLE * N_CYCLES)
 
 
-fixed = run(random=False)
-random = run(random=True)
+fixed = masked_run(random=False)
+random = masked_run(random=True)
 
 # print(vg.welch_t_test(fixed, random).to_dot_graph())
 
 # print(fixed.compute().as_list())
 # print(random.compute().as_list())
 
-print(fixed.entropy().compute().as_list())
-print(random.entropy().compute().as_list())
+# print(fixed.entropy().compute().as_list())
+# print(random.entropy().compute().as_list())
+
+fixed = fixed.expand()
+random = random.expand()
 
 start = time.time()
 # print(vg.mutual_information(fixed, random).compute().as_list())
-print(vg.welch_t_test(fixed, random).compute().as_list())
+print(vg.mutual_information(fixed, random).compute().as_list())
 print(f"Computation time: {time.time() - start:02f}s")

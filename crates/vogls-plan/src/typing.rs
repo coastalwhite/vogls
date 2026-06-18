@@ -85,4 +85,12 @@ impl RunWidth {
     pub fn is_variable(&self) -> bool {
         matches!(self, Self::Variable)
     }
+
+    pub fn size(&self) -> Option<usize> {
+        match self {
+            RunWidth::Scalar => Some(1),
+            RunWidth::Constant(n) => Some(*n as usize),
+            RunWidth::Variable => None,
+        }
+    }
 }

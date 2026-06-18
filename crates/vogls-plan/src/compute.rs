@@ -30,6 +30,8 @@ pub enum ComputeError {
     FailedToResolveNumTraces,
 
     InvalidTypes,
+
+    Overflow,
 }
 impl fmt::Display for ComputeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -51,6 +53,7 @@ impl fmt::Display for ComputeError {
             ComputeError::FailedToResolveNumTraces => f.write_str("FailedToResolveNumTraces"),
 
             ComputeError::InvalidTypes => f.write_str("InvalidTypes"),
+            ComputeError::Overflow => f.write_str("Overflow"),
         }
     }
 }
