@@ -19,6 +19,8 @@ macro_rules! impl_dyn_eq_hash {
     };
 }
 
+#[cfg(feature = "python")]
+pub mod numpy;
 pub mod agg;
 pub mod array;
 pub mod buffer;

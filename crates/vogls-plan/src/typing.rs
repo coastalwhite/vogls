@@ -94,3 +94,27 @@ impl RunWidth {
         }
     }
 }
+
+impl DataType {
+    pub fn type_str(&self) -> Option<&'static str> {
+        match self {
+            DataType::Float => Some("<f8"),
+            DataType::Int => Some("<i8"),
+            DataType::UInt => Some("<u8"),
+            DataType::Bits(_) => None,
+        }
+    }
+
+    pub fn itemsize(&self) -> isize {
+        8 // f64 / i64 / u64 are all 8 bytes here
+    }
+
+    pub fn format(&self) -> &'static std::ffi::CStr {
+        match self {
+            Self::Float => c"d",
+            Self::Int   => c"q",
+            Self::UInt  => c"Q",
+            Self::Bits(_) => todo!(),
+        }
+    }
+}

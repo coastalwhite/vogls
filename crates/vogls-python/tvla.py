@@ -1,4 +1,5 @@
 import vogls as vg
+import numpy as np
 from random import randint
 import time
 
@@ -62,10 +63,14 @@ random = masked_run(random=True)
 # print(fixed.entropy().compute().as_list())
 # print(random.entropy().compute().as_list())
 
-fixed = fixed.expand()
-random = random.expand()
+# fixed = fixed.expand()
+# random = random.expand()
 
 start = time.time()
 # print(vg.mutual_information(fixed, random).compute().as_list())
-print(vg.mutual_information(fixed, random).compute().as_list())
+# print(vg.mutual_information(fixed, random).compute().as_list())
+result = vg.Array._from_py(vg.mutual_information(fixed, random).compute())
+print(result)
+print(np.array(result))
+print(vg.Array(np.array(result)).as_list())
 print(f"Computation time: {time.time() - start:02f}s")

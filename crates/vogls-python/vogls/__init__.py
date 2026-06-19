@@ -3,7 +3,7 @@
    :start-line: 1
 """
 
-from typing import TypeVar, Generic, Any, Union, Self, overload, List
+from typing import TypeVar, Generic, Any, Union, Self, overload, List, Protocol
 import vogls.vogls as vgr
 
 __all__ = [
@@ -23,18 +23,25 @@ __all__ = [
     "mutual_information",
 ]
 
-T = TypeVar("T")
+
+class FromPy(Protocol):
+    @classmethod
+    def _from_py(cls, value: Any) -> Self: ...
+
+
+T = TypeVar("T", bound=FromPy)
 
 
 class Lazy(Generic[T]):
     """A lazy class that will materialize into a T when computed."""
 
-    def __init__(self, producer: Any) -> None:
+    def __init__(self, producer: Any, value_type: type[T]) -> None:
         self._producer = producer
+        self._value_type = value_type
 
     def compute(self) -> T:
         """Collect the result of the computation."""
-        return self._producer.compute()
+        return self._value_type._from_py(self._producer.compute())
 
     def to_dot_graph(self) -> str:
         """Get a DOT graph string of the computation."""
@@ -82,14 +89,29 @@ class Array:
 
     _inner: vgr.PyArray
 
-    def __init__(self, v: list[float]) -> None:
-        self._inner = vgr.PyArray.from_f64s(v)
+    def __init__(self, v: Any | list[float]) -> None:
+        if hasattr(v, "__array_interface__"):
+            self._inner = vgr.PyArray.from_array_interface(v)
+        else:
+            self._inner = vgr.PyArray.from_f64s(v)
 
     @classmethod
     def _from_py(cls, py: vgr.PyArray) -> Self:
         instance = cls.__new__(cls)
         instance._inner = py
         return instance
+
+    @property
+    def __array_interface__(self) -> dict:
+        return self._inner.__array_interface__
+
+    def __getbuffer__(self, *args, **kwargs) -> Any:
+        exit(0)
+        return self._inner.__getbuffer__(*args, **kwargs)
+
+    def __releasebuffer__(self, *args, **kwargs) -> Any:
+        exit(0)
+        return self._inner.__releasebuffer__(*args, **kwargs)
 
     def lazy(self) -> "LazyArray":
         return LazyArray._from_py(self._inner.lazy())
@@ -100,12 +122,15 @@ class Array:
     def entropy(self) -> "Value":
         return self.lazy().entropy().compute()
 
+    def as_list(self) -> list:
+        return self._inner.as_list()
+
 
 class LazyArray(Lazy[Array]):
     @classmethod
     def _from_py(cls, py: vgr.PyLazyArray) -> Self:
         instance = cls.__new__(cls)
-        super(LazyArray, instance).__init__(py)
+        super(LazyArray, instance).__init__(py, Array)
         return instance
 
     @staticmethod
@@ -174,7 +199,7 @@ class LazyPlan(Lazy[Plan]):
     @classmethod
     def _from_py(cls, py: vgr.PyLazyPlan) -> Self:
         instance = cls.__new__(cls)
-        super(LazyPlan, instance).__init__(py)
+        super(LazyPlan, instance).__init__(py, Plan)
         return instance
 
     @overload
@@ -224,7 +249,7 @@ class LazyValue(Lazy[Value]):
     @classmethod
     def _from_py(cls, py: vgr.PyLazyValue) -> Self:
         instance = cls.__new__(cls)
-        super(LazyValue, instance).__init__(py)
+        super(LazyValue, instance).__init__(py, Value)
         return instance
 
     def repeat(self, n: int) -> LazyArray:
@@ -260,7 +285,7 @@ class LazyRunVector(Lazy[RunVector]):
     @classmethod
     def _from_py(cls, py: vgr.PyLazyRunVector) -> Self:
         instance = cls.__new__(cls)
-        super(LazyRunVector, instance).__init__(py)
+        super(LazyRunVector, instance).__init__(py, RunVector)
         return instance
 
     def window_sum(self, *, by: Self, width: int, start: int, end: int) -> Self:

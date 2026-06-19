@@ -5,7 +5,8 @@ mod vogls {
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
 
-    use pyo3::exceptions::{PyException, PyTypeError, PyValueError};
+    use pyo3::exceptions::{PyBufferError, PyException, PyTypeError, PyValueError};
+    use pyo3::types::{PyDict, PyTuple};
     use pyo3::{FromPyObject, IntoPyObjectExt, PyAny, PyResult, prelude::*};
     use vogls::design::DesignState;
     use vogls::utils::{IndexMap, VgHashSet};
@@ -805,6 +806,16 @@ mod vogls {
         #[staticmethod]
         pub fn from_f64s(arr: Vec<f64>) -> Self {
             Self(Array::Floats(arr.into()))
+        }
+
+        #[getter]
+        pub fn __array_interface__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+            vogls_plan::numpy::to_array_interface(py, &self.0)
+        }
+
+        #[staticmethod]
+        pub fn from_array_interface<'py>(py: Python<'py>, array: Bound<'py, PyAny>) -> PyResult<Self> {
+            vogls_plan::numpy::from_array_interface(py, array).map(Self)
         }
 
         pub fn as_list(&self, py: pyo3::Python<'_>) -> PyResult<pyo3::Py<pyo3::types::PyList>> {

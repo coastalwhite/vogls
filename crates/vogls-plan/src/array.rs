@@ -156,6 +156,15 @@ impl Array {
         }
     }
 
+    pub fn as_byte_ptr(&self) -> *const u8 {
+        match self {
+            Array::Floats(vs) => vs.as_ptr().cast(),
+            Array::Ints(vs) => vs.as_ptr().cast(),
+            Array::UInts(vs) => vs.as_ptr().cast(),
+            Array::Bits(vs, _) => vs.as_u64_slice().as_ptr().cast(),
+        }
+    }
+
     pub fn get(&self, idx: usize) -> Value {
         match self {
             Array::Floats(i) => Value::Float(i[idx]),

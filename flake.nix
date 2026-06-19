@@ -30,6 +30,10 @@
               python = pkgs.python311;
             } pkgs.python311Packages;
             stdenv = pkgs.stdenv;
+            riscv32-toolchain = import inputs.nixpkgs {
+              localSystem = system;
+              crossSystem.config = "riscv32-none-elf";
+            };
 
             rustToolchain = pkgs.rust-bin.stable.latest.default;
             rustPlatform = pkgs.makeRustPlatform {
@@ -60,6 +64,8 @@
                 verilator
                 iverilog
                 libelf
+
+                riscv32-toolchain.buildPackages.gcc
               ];
 
               postVenvCreation = ''
@@ -68,6 +74,12 @@
                 export LD_LIBRARY_PATH="${stdenv.cc.cc.lib}/lib:$PYTHON_SHARED_LIB"
               '';
               venvDir = ".venv";
+            };
+
+            devShells.bench = pkgs.mkShell {
+              packages = [
+                riscv32-toolchain.buildPackages.gcc
+              ];
             };
 
             packages.default = self'.packages.vogls;
