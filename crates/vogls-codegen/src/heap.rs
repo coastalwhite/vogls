@@ -92,6 +92,11 @@ impl HeapRef {
         debug_assert!(self.size.get() <= 4);
         (byte >> (self.offset.bit_offset % 8)) & ((1u8 << self.size.get()) - 1)
     }
+
+    fn is_aligned(&self) -> bool {
+        let alignment = self.size.get().next_power_of_two().min(64);
+        self.offset.bit_offset % alignment as usize == 0
+    }
 }
 
 impl HeapOffset {
@@ -362,7 +367,11 @@ impl Heap {
         }
     }
 
-    pub fn load_unaligned_bits(&self, _at: HeapRef, _logic_mode: LogicMode) -> Bits {
+    pub fn load_unaligned_bits(&self, at: HeapRef, logic_mode: LogicMode) -> Bits {
+        if at.is_aligned() {
+            return self.load_bits(at, logic_mode);
+        }
+
         todo!()
     }
 
