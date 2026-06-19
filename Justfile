@@ -7,3 +7,8 @@ coverage:
     cargo llvm-cov --no-report test
     cargo llvm-cov --no-report run --bin vogls-test -- -I --opt-rounds=2 --skip=aes
     cargo llvm-cov report --html
+
+build-site:
+    rm -rf site/pipeline-explorer
+    just {{justfile_directory()}}/tools/pipeline-explorer/build-site
+    cp -r {{justfile_directory()}}/tools/pipeline-explorer/webapp/dist site/pipeline-explorer

@@ -107,7 +107,7 @@ worker.onmessage = (e) => {
     setTrace(e.data);
     pending -= 1;
     if (pending == 0) {
-        simStatusElem.innerHTML = `<img src="/check.svg"/>`;
+        simStatusElem.innerHTML = `<img src="check.svg"/>`;
     }
 };
 
@@ -162,7 +162,7 @@ function runSim() {
         "numCycles": numCycles,
     });
     pending += 1;
-    simStatusElem.innerHTML = `<img src="/spinner.svg" class="spinner"/>`;
+    simStatusElem.innerHTML = `<img src="spinner.svg" class="spinner"/>`;
 }
 
 function staggerRunSim() {
