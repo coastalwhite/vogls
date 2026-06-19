@@ -1,0 +1,12 @@
+neorv32_verilog := justfile_directory() / "../../../../submodules/neorv32/rtl/verilog"
+wrapper         := "neorv32_minimal_wrapper"
+
+build:
+    cp {{wrapper}}.vhd {{neorv32_verilog}}/{{wrapper}}.vhd
+    make -C {{neorv32_verilog}} WRAPPER={{wrapper}} convert
+    cp {{neorv32_verilog}}/{{wrapper}}.v neorv32_verilog_wrapper.v
+    rm {{neorv32_verilog}}/{{wrapper}}.vhd {{neorv32_verilog}}/{{wrapper}}.v
+
+clean:
+    make -C {{neorv32_verilog}} WRAPPER={{wrapper}} clean
+    rm -f neorv32_verilog_wrapper.v

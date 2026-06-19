@@ -1,0 +1,18 @@
+fusesoc:
+    # Build the FuseSOC codebase into SystemVerilog sources
+    fusesoc --cores-root ../../../../submodules/ibex run --target=lint --setup --build-root ./build/ibex_out lowrisc:ibex:ibex_top
+
+[working-directory: 'build/ibex_out/lowrisc_ibex_ibex_top_0.1/lint-verilator']
+build-top-level: fusesoc
+    # Get the relevant options from the config file.
+    grep '^+incdir+' lowrisc_ibex_ibex_top_0.1.vc | cut -d "+" -f 3 | awk '{print "-I" $0}' > lowrisc_ibex_ibex_top_0.1.args
+    grep '^src/.*\.sv$' lowrisc_ibex_ibex_top_0.1.vc >> lowrisc_ibex_ibex_top_0.1.args
+    
+    # Convert the system verilog to verilog.
+    xargs -a lowrisc_ibex_ibex_top_0.1.args sv2v > ibex.v
+
+    # Remove incorrect 1ps from design.
+    sed -i 's/1ps/1/g' ibex.v
+
+top-level: build-top-level
+    mv build/ibex_out/lowrisc_ibex_ibex_top_0.1/lint-verilator/ibex.v .

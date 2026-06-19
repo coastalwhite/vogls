@@ -5,10 +5,10 @@ build:
     python3 createmem.py
 
 verilator-build:
-    verilator tb.v ../submodules/picorv32/picorv32.v --binary --top-module tb --timing
+    verilator tb.v ../../submodules/picorv32/picorv32.v --binary --top-module tb --timing
 
 icarus-build:
-    iverilog tb.v ../submodules/picorv32/picorv32.v -s tb -o icarus
+    iverilog tb.v ../../submodules/picorv32/picorv32.v -s tb -o icarus
 
 run-verilator:
     @time just verilator-build
@@ -19,10 +19,10 @@ run-icarus:
     @time ./icarus
 
 run-vogls-interpret:
-    vogls tb.v ../submodules/picorv32/picorv32.v -m tb --timings --opt-rounds=1
+    vogls tb.v ../../submodules/picorv32/picorv32.v -m tb --timings --opt-rounds=1
 
 run-vogls-compile:
-    vogls tb.v ../submodules/picorv32/picorv32.v -m tb -C --timings --opt-rounds=1
+    vogls tb.v ../../submodules/picorv32/picorv32.v -m tb -C --timings --opt-rounds=1
 
 run-benchmark:
     @./run_benchmarks.sh

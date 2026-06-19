@@ -1,0 +1,147 @@
+# Directives
+- [x] `.align`
+- [ ] `.p2align`
+- [ ] `.balign`
+- [ ] `.file`
+- [x] `.global` / `.globl`
+- [ ] `.local`
+- [ ] `.comm` / `.common`
+- [ ] `.ident`
+- [x] `.section`
+- [ ] `.size`
+- [x] `.text`
+- [x] `.data`
+- [x] `.rodata`
+- [x] `.bss`
+- [ ] `.string`
+- [ ] `.asciz`
+- [ ] `.equ`
+- [ ] `.macro`
+- [ ] `.endm`
+- [ ] `.type`
+- [ ] `.option`
+  - [ ] `rvc` / `norvc`
+  - [ ] `arch`
+  - [ ] `pic` / `nopic`
+  - [ ] `relax` / `norelax`
+  - [ ] `push` / `pop`
+- [ ] `.byte`
+- [ ] `.2byte`
+- [ ] `.half`
+- [ ] `.short`
+- [ ] `.4byte`
+- [ ] `.word`
+- [ ] `.long`
+- [ ] `.8byte`
+- [ ] `.dword`
+- [ ] `.quad`
+- [ ] `.float`
+- [ ] `.double`
+- [ ] `.dtprelword`
+- [ ] `.dtprelword`
+- [ ] `.sleb128`
+- [ ] `.uleb128`
+- [ ] `.zero`
+- [ ] `.variant_cc`
+- [ ] `.attribute`
+- [x] `.space`
+- [ ] `.insn`
+
+# Constants
+- [ ] BinUtils Variants (https://sourceware.org/binutils/docs/as/Integers.html)
+
+# Relocation Functions
+- [ ] `%hi(symbol)`
+- [ ] `%lo(symbol)`
+- [ ] `%pcrel_hi(symbol)`
+- [ ] `%pcrel_lo(symbol)`
+- [ ] `%tprel_hi(symbol)`
+- [ ] `%tprel_lo(symbol)`
+- [ ] `%tprel_add(symbol)`
+- [ ] `%tls_ie_pcrel_hi(symbol)`
+- [ ] `%tls_gd_pcrel_hi(symbol)`
+- [ ] `%got_pcrel_hi(symbol)`
+
+
+# RV32I Base Instructions
+- [x] LUI
+- [x] AUIPC
+  - [ ] LA
+  - [ ] LLA
+- [x] JAL
+  - [x] J offset
+  - [x] JAL offset
+- [x] JALR
+  - [x] JR rs
+  - [x] JALR rs
+  - [x] CALL
+  - [x] RET
+  - [x] TAIL
+  - [x] JUMP
+- [x] BEQ
+- [x] BNE
+- [x] BLT
+- [x] BGE
+- [x] BLTU
+- [x] BGEU
+  - [ ] Far Branches
+  - [x] BEQZ
+  - [x] BNEZ
+  - [x] BLEZ
+  - [x] BGEZ
+  - [x] BLTZ
+  - [x] BGTZ
+  - [x] BGT
+  - [x] BLE
+  - [x] BGTU
+  - [x] BLEU
+- [x] LB
+- [x] LH
+- [x] LW
+- [x] LBU
+- [x] LHU
+  - [ ] ld rd, symbol
+- [x] SB
+- [x] SH
+- [x] SW
+- [x] ADDI
+  - [x] NOP
+  - [x] MV
+  - [x] LI
+- [x] SLTI
+- [x] SLTIU
+  - [ ] SEQZ
+  - [ ] SNEZ
+- [x] XORI
+  - [x] NOT
+- [x] ORI
+- [x] ANDI
+  - [ ] ZEXT.b
+  - [ ] ZEXT.h
+  - [ ] ZEXT.w
+- [x] SLLI
+  - [ ] SEXT.b
+  - [ ] SEXT.h
+  - [ ] SEXT.w
+- [x] SRLI
+- [x] SRAI
+- [x] ADD
+- [x] SUB
+  - [x] NEG
+  - [ ] NEGW
+- [x] SLL
+- [x] SLT
+  - [ ] SLTZ
+  - [ ] SGTZ
+- [x] SLTU
+- [x] XOR
+- [x] SRL
+- [x] SRA
+- [x] OR
+- [x] AND
+- [x] FENCE
+  - [ ] FENCE (no args)
+- [x] FENCE.TSO
+- [x] PAUSE
+- [x] ECALL
+- [x] EBREAK

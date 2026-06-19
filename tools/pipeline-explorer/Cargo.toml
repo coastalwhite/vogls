@@ -1,0 +1,15 @@
+[package]
+name = "pipeline-explorer"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "pipeline_explorer"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+bytemuck = "1.25.0"
+js-sys = "=0.3.91"
+vogls = { workspace = true }
+trva = { workspace = true }
+wasm-bindgen = "=0.2.114"

@@ -1,0 +1,23 @@
+=== Section Sizes ===
+text:   16 bytes
+data:   0 bytes
+rodata: 0 bytes
+bss:    0 bytes
+
+=== Disassembly (text) ===
+Disassembly of section .data:
+
+80000000 <.data>:
+80000000:	00a00513          	li	a0,10
+80000004:	7ff50513          	addi	a0,a0,2047
+80000008:	fea01ee3          	bne	zero,a0,0x80000004
+8000000c:	00000073          	ecall
+
+=== Hex Dump: text ===
+80000000  13 05 a0 00 13 05 f5 7f e3 1e a0 fe 73 00 00 00
+
+=== Hex Dump: data ===
+(empty)
+
+=== Hex Dump: rodata ===
+(empty)

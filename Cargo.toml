@@ -1,5 +1,11 @@
 [workspace]
-members = [ "crates/*" ]
+members = [
+    "crates/*",
+    
+    "tools/pipeline-explorer",
+    "tools/trva/trva",
+    "tools/trva/snapshot-tests",
+]
 resolver = "3"
 
 [workspace.package]
@@ -20,7 +26,7 @@ bumpalo = "3.20"
 tempfile = "3.27.0"
 pyo3 = "0.28.1"
 
-vogls.path = "crates/vogls"
+vogls = { path = "crates/vogls", default-features = false }
 vogls-frontend.path = "crates/vogls-frontend"
 vogls-sim.path = "crates/vogls-sim"
 vogls-ir.path = "crates/vogls-ir"
@@ -36,6 +42,9 @@ vogls-vcd.path = "crates/vogls-vcd"
 vogls-sdf.path = "crates/vogls-sdf"
 vogls-trace.path = "crates/vogls-trace"
 vogls-plan.path = "crates/vogls-plan"
+
+pipeline-explorer.path = "tools/pipeline-explorer"
+trva.path = "tools/trva/trva"
 
 [profile.debug-release]
 inherits = "release"

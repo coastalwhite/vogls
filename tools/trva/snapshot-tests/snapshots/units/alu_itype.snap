@@ -1,0 +1,35 @@
+=== Section Sizes ===
+text:   52 bytes
+data:   0 bytes
+rodata: 0 bytes
+bss:    0 bytes
+
+=== Disassembly (text) ===
+Disassembly of section .data:
+
+80000000 <.data>:
+80000000:	00058513          	mv	a0,a1
+80000004:	00158513          	addi	a0,a1,1
+80000008:	7ff58513          	addi	a0,a1,2047
+8000000c:	02a5a513          	slti	a0,a1,42
+80000010:	0ff5c513          	xori	a0,a1,255
+80000014:	00f5e513          	ori	a0,a1,15
+80000018:	0f05f513          	andi	a0,a1,240
+8000001c:	00159513          	slli	a0,a1,0x1
+80000020:	0015d513          	srli	a0,a1,0x1
+80000024:	4015d513          	srai	a0,a1,0x1
+80000028:	01f59513          	slli	a0,a1,0x1f
+8000002c:	01f5d513          	srli	a0,a1,0x1f
+80000030:	41f5d513          	srai	a0,a1,0x1f
+
+=== Hex Dump: text ===
+80000000  13 85 05 00 13 85 15 00 13 85 f5 7f 13 a5 a5 02
+80000010  13 c5 f5 0f 13 e5 f5 00 13 f5 05 0f 13 95 15 00
+80000020  13 d5 15 00 13 d5 15 40 13 95 f5 01 13 d5 f5 01
+80000030  13 d5 f5 41
+
+=== Hex Dump: data ===
+(empty)
+
+=== Hex Dump: rodata ===
+(empty)
