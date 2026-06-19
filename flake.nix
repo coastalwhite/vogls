@@ -35,7 +35,10 @@
               crossSystem.config = "riscv32-none-elf";
             };
 
-            rustToolchain = pkgs.rust-bin.stable.latest.default;
+            buildTarget = "wasm32-unknown-unknown";
+            rustToolchain = pkgs.rust-bin.stable.latest.default.override {
+              targets = [ buildTarget ];
+            };
             rustPlatform = pkgs.makeRustPlatform {
               cargo = rustToolchain;
               rustc = rustToolchain;
@@ -54,6 +57,8 @@
                 pythonPlatform.build
 
                 cargo-llvm-cov
+                rustToolchain
+                wasm-bindgen-cli_0_2_114
 
                 just
                 samply
@@ -90,6 +95,19 @@
               meta.mainProgram = "vogls";
               cargoLock.lockFile = ./Cargo.lock;
               doCheck = false;
+            };
+            packages.site = pkgs.stdenv.mkDerivation {
+              name = "site";
+              buildInputs = [
+                rustToolchain
+              ];
+              src = ./.;
+              buildPhase = ''
+                ${pkgs.just}/bin/just build-site
+              '';
+              installPhase = ''
+                cp -r site $out
+              '';
             };
           };
       }

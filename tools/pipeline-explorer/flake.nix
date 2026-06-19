@@ -56,6 +56,23 @@
                 haskellPackages.sv2v
               ];
             };
+            packages.wasm = rustPlatform.buildRustPackage {
+              name = "pipeline-explorer-wasm";
+              src = ./.;
+
+              cargoLock.lockFile = ./Cargo.lock;
+
+              buildPhase = ''
+                cargo build --release -p pipeline-explorer --target=${buildTarget}
+              '';
+
+              installPhase = ''
+                mkdir -p $out/lib
+                cp target/${buildTarget}/release/*.wasm $out/lib/
+              '';
+
+              doCheck = false;
+            };
           };
       }
     );

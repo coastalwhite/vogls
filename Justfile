@@ -10,5 +10,5 @@ coverage:
 
 build-site:
     rm -rf site/pipeline-explorer
-    just {{justfile_directory()}}/tools/pipeline-explorer/build-site
+    {{just_executable()}} {{justfile_directory()}}/tools/pipeline-explorer/build-site
     cp -r {{justfile_directory()}}/tools/pipeline-explorer/webapp/dist site/pipeline-explorer
