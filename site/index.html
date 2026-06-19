@@ -1,1 +1,124 @@
-<a href="pipeline-explorer">Pipeline Explorer</a>
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Vogls - Dashboard</title>
+        <style>
+            div, body, li, ul {
+                margin: 0;
+                padding: 0;
+            }
+            body {
+                width: 100vw;
+                height: 100vh;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                align-content: center;
+                justify-content: center;
+            }
+
+            h1, h2 {
+                font-family: "Lexend";
+            }
+
+            .cards {
+                display: flex;
+                flex-direction: row;
+                gap: 1em;
+                width: 80%;
+                height: 60%;
+            }
+            @media (max-width: 800px) {
+                body {
+                    height: auto;
+                }
+                .cards {
+                    flex-direction: column;
+                    height: auto;
+                    margin-bottom: 2em;
+                }
+            }
+            .card {
+                padding: 0.5em;
+                flex: 1;
+
+                display: flex;
+                flex-direction: column;
+
+                font-family: "IBM Plex Sans";
+
+                border: 1px solid #000;
+                border-radius: 1em;
+
+                background-color: #f6f5fb;
+                box-shadow: rgba(0, 0, 0, 0.35) 0px 5px 15px;
+
+                text-align: center;
+                text-decoration: none;
+                color: black;
+
+                transition: transform 0.8s ease, box-shadow 0.8s ease;
+            }
+            .card:hover {
+                transform: translate(0, -8px);
+                box-shadow: rgba(0, 0, 0, 0.7) 0px 5px 15px;
+            }
+
+            .description {
+                width: 80%;
+                margin: 0px auto;
+            }
+            .card img {
+                width: 80%;
+                margin: auto auto;
+            }
+            .card code {
+                width: 80%;
+                margin: auto auto;
+            }
+
+        </style>
+    </head>
+    <body>
+        <h1>Vogls Dashboard</h1>
+        <div class="cards">
+            <a class="card" href="docs">
+                <h2>General Documentation</h2>
+                <div class="description">
+                    Learn more about how Vogls works and how to use it.
+                </div>
+                <img src="assets/general-docs.svg">
+            </a>
+            <a class="card" href="py-docs">
+                <h2>Python Documentation</h2>
+                <div class="description">
+                    Learn how to use the Vogls plan package to perform
+                    side-channel analysis.
+                </div>
+                <code style="text-align: left;">
+                    import vogls as vg<br/><br/>
+
+                    design = vg.LazyDesign("xor.v")<br/>
+                    r = (<br/>
+                    &nbsp;&nbsp;design.run()<br/>
+                    &nbsp;&nbsp;&nbsp;&nbsp;.trace_start()<br/>
+                    &nbsp;&nbsp;&nbsp;&nbsp;.run_for(10)<br/>
+                    &nbsp;&nbsp;&nbsp;&nbsp;.finish()<br/>
+                    )<br/>
+                    r.compute()
+                </code>
+            </a>
+            <a class="card" href="pipeline-explorer">
+                <h2>Pipeline Explorer</h2>
+                <div class="description">
+                    Investigate the cycle-by-cycle behavior of the pipeline of
+                    different RISC-V processors. Simulated in your browser from
+                    the hardware description.
+                </div>
+                <img src="assets/pipeline-explorer.png">
+            </a>
+        </div>
+    </body>
+</html>
