@@ -66,6 +66,11 @@ random = masked_run(random=True)
 # fixed = fixed.expand()
 # random = random.expand()
 
+print(fixed.compute().as_list())
+fixed = fixed.map(lambda v: np.array(v) * 2)
+print(fixed.compute().as_list())
+exit(0)
+
 start = time.time()
 # print(vg.mutual_information(fixed, random).compute().as_list())
 # print(vg.mutual_information(fixed, random).compute().as_list())

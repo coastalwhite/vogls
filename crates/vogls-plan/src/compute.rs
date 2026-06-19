@@ -32,6 +32,9 @@ pub enum ComputeError {
     InvalidTypes,
 
     Overflow,
+
+    #[cfg(feature = "python")]
+    Python(pyo3::PyErr),
 }
 impl fmt::Display for ComputeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -54,6 +57,8 @@ impl fmt::Display for ComputeError {
 
             ComputeError::InvalidTypes => f.write_str("InvalidTypes"),
             ComputeError::Overflow => f.write_str("Overflow"),
+
+            ComputeError::Python(err) => write!(f, "Python error: {err}"),
         }
     }
 }
@@ -63,7 +68,19 @@ pub type ComputeResult<T> = std::result::Result<T, ComputeError>;
 #[cfg(feature = "python")]
 impl From<ComputeError> for pyo3::PyErr {
     fn from(err: ComputeError) -> Self {
-        pyo3::exceptions::PyValueError::new_err(format!("Failed computation. Reason: {err}"))
+        match err {
+            ComputeError::Python(err) => err,
+            err => pyo3::exceptions::PyValueError::new_err(format!(
+                "Failed computation. Reason: {err}"
+            )),
+        }
+    }
+}
+
+#[cfg(feature = "python")]
+impl From<pyo3::PyErr> for ComputeError {
+    fn from(value: pyo3::PyErr) -> Self {
+        Self::Python(value)
     }
 }
 

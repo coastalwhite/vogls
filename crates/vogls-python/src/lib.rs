@@ -1,3 +1,5 @@
+mod anonymous_map;
+
 #[pyo3::pymodule]
 mod vogls {
     use std::io::{stderr, stdout};
@@ -5,8 +7,8 @@ mod vogls {
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
 
-    use pyo3::exceptions::{PyBufferError, PyException, PyTypeError, PyValueError};
-    use pyo3::types::{PyDict, PyTuple};
+    use pyo3::exceptions::{PyException, PyTypeError, PyValueError};
+    use pyo3::types::PyDict;
     use pyo3::{FromPyObject, IntoPyObjectExt, PyAny, PyResult, prelude::*};
     use vogls::design::DesignState;
     use vogls::utils::{IndexMap, VgHashSet};
@@ -601,7 +603,7 @@ mod vogls {
     #[pyo3::pyclass(frozen)]
     pub struct PyRunVector(RunVector);
     #[pyo3::pyclass(frozen)]
-    pub struct PyArray(Array);
+    pub struct PyArray(pub(crate) Array);
     #[pyo3::pyclass(frozen)]
     pub struct PyValue(Value);
 
@@ -784,6 +786,15 @@ mod vogls {
             Ok(PyLazyValue(build_array_agg(Entropy, [self.0.clone()])?))
         }
 
+        pub fn map<'py>(&self, f: Bound<'py, PyAny>) -> PyResult<PyLazyArray> {
+            Ok(PyLazyArray(build_array_map(
+                super::anonymous_map::PyAnonymousMap {
+                    f: Arc::new(f.unbind()),
+                },
+                [self.0.clone()],
+            )?))
+        }
+
         #[staticmethod]
         #[pyo3(signature = (length, width, seed = None))]
         pub fn random_bits(length: usize, width: NonZeroU32, seed: Option<u64>) -> Self {
@@ -814,7 +825,10 @@ mod vogls {
         }
 
         #[staticmethod]
-        pub fn from_array_interface<'py>(py: Python<'py>, array: Bound<'py, PyAny>) -> PyResult<Self> {
+        pub fn from_array_interface<'py>(
+            py: Python<'py>,
+            array: Bound<'py, PyAny>,
+        ) -> PyResult<Self> {
             vogls_plan::numpy::from_array_interface(py, array).map(Self)
         }
 
@@ -929,6 +943,15 @@ mod vogls {
         pub fn entropy(&self) -> PyResult<PyLazyArray> {
             Ok(PyLazyArray(build_run_vector_agg(
                 Entropy,
+                [self.0.clone()],
+            )?))
+        }
+
+        pub fn map<'py>(&self, f: Bound<'py, PyAny>) -> PyResult<PyLazyRunVector> {
+            Ok(PyLazyRunVector(build_run_vector_map(
+                super::anonymous_map::PyAnonymousMap {
+                    f: Arc::new(f.unbind()),
+                },
                 [self.0.clone()],
             )?))
         }

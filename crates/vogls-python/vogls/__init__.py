@@ -3,7 +3,17 @@
    :start-line: 1
 """
 
-from typing import TypeVar, Generic, Any, Union, Self, overload, List, Protocol
+from typing import (
+    TypeVar,
+    Generic,
+    Any,
+    Union,
+    Self,
+    overload,
+    List,
+    Protocol,
+    Callable,
+)
 import vogls.vogls as vgr
 
 __all__ = [
@@ -90,7 +100,9 @@ class Array:
     _inner: vgr.PyArray
 
     def __init__(self, v: Any | list[float]) -> None:
-        if hasattr(v, "__array_interface__"):
+        if isinstance(v, Array):
+            self._inner = v._inner
+        elif hasattr(v, "__array_interface__"):
             self._inner = vgr.PyArray.from_array_interface(v)
         else:
             self._inner = vgr.PyArray.from_f64s(v)
@@ -105,14 +117,6 @@ class Array:
     def __array_interface__(self) -> dict:
         return self._inner.__array_interface__
 
-    def __getbuffer__(self, *args, **kwargs) -> Any:
-        exit(0)
-        return self._inner.__getbuffer__(*args, **kwargs)
-
-    def __releasebuffer__(self, *args, **kwargs) -> Any:
-        exit(0)
-        return self._inner.__releasebuffer__(*args, **kwargs)
-
     def lazy(self) -> "LazyArray":
         return LazyArray._from_py(self._inner.lazy())
 
@@ -124,6 +128,9 @@ class Array:
 
     def as_list(self) -> list:
         return self._inner.as_list()
+
+    def map(self, f: Callable[[Self], Self]) -> Self:
+        return self.lazy().map(f).compute()
 
 
 class LazyArray(Lazy[Array]):
@@ -142,6 +149,9 @@ class LazyArray(Lazy[Array]):
 
     def entropy(self) -> "LazyValue":
         return LazyValue._from_py(self._producer.entropy())
+
+    def map(self, f: Callable[[Array], Array]) -> Self:
+        return LazyArray._from_py(self._producer.map(_create_arr_map_wrap(f)))
 
 
 class LazyDesign:
@@ -280,6 +290,12 @@ class RunVector:
     def entropy(self) -> Array:
         return self.lazy().entropy().compute()
 
+    def as_list(self) -> list[list]:
+        return self._inner.as_list()
+
+    def map(self, f: Callable[[Array], Array]) -> Self:
+        return self.lazy().map(f).compute()
+
 
 class LazyRunVector(Lazy[RunVector]):
     @classmethod
@@ -300,6 +316,9 @@ class LazyRunVector(Lazy[RunVector]):
 
     def entropy(self) -> LazyArray:
         return LazyArray._from_py(self._producer.entropy())
+
+    def map(self, f: Callable[[Array], Array]) -> Self:
+        return LazyRunVector._from_py(self._producer.map(_create_arr_map_wrap(f)))
 
 
 Output = Union[RunVector, Array, Value, Plan]
@@ -392,3 +411,12 @@ def mutual_information(
         raise ValueError(
             f"cannot call `mutual_information` on {_type_name(lhs)} and {_type_name(rhs)}"
         )
+
+
+def _create_arr_map_wrap(
+    f: Callable[[Array], Array],
+) -> Callable[[vgr.PyArray], vgr.PyArray]:
+    def _arr_map_wrap(v: vgr.PyArray) -> vgr.PyArray:
+        return Array(f(Array._from_py(v)))._inner
+
+    return _arr_map_wrap
