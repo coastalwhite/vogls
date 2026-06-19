@@ -70,7 +70,7 @@
                 iverilog
                 libelf
 
-                riscv32-toolchain.buildPackages.gcc
+                # riscv32-toolchain.buildPackages.gcc
               ];
 
               postVenvCreation = ''
