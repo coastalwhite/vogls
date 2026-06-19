@@ -87,6 +87,14 @@
               ];
             };
 
+            devShells.docs = pkgs.mkShell {
+              packages = with pkgs; [
+                just
+                rustToolchain
+                wasm-bindgen-cli_0_2_114
+              ];
+            };
+
             packages.default = self'.packages.vogls;
             packages.vogls = rustPlatform.buildRustPackage {
               name = "vogls";

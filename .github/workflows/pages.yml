@@ -15,7 +15,7 @@ jobs:
       id: build
       run: |
         git submodule update --init --recursive
-        nix develop --command just build-site
+        nix develop .#docs --command just build-site
 
     - name: Upload static files as artifact
       id: deployment
