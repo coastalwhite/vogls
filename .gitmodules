@@ -1,3 +1,6 @@
 [submodule "vogls-test/submodules/aoki-aes"]
 	path = vogls-test/submodules/aoki-aes
 	url = https://github.com/coastalwhite/aoki-aes
+[submodule "bench/submodules/picorv32"]
+	path = bench/submodules/picorv32
+	url = https://github.com/YosysHQ/picorv32

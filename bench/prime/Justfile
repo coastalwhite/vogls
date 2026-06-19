@@ -1,0 +1,53 @@
+build:
+    riscv32-none-elf-as -o prime.o prime.S
+    riscv32-none-elf-ld -Tlink.ld prime.o -o prime
+    riscv32-none-elf-objcopy -Obinary prime prime.bin
+    python3 createmem.py
+
+verilator-build:
+    verilator tb.v ../submodules/picorv32/picorv32.v --binary --top-module tb --timing
+
+icarus-build:
+    iverilog tb.v ../submodules/picorv32/picorv32.v -s tb -o icarus
+
+run-verilator:
+    @time just verilator-build
+    @time ./obj_dir/Vtb
+
+run-icarus:
+    @time just icarus-build
+    @time ./icarus
+
+run-vogls-interpret:
+    vogls tb.v ../submodules/picorv32/picorv32.v -m tb --timings --opt-rounds=1
+
+run-vogls-compile:
+    vogls tb.v ../submodules/picorv32/picorv32.v -m tb -C --timings --opt-rounds=1
+
+run-benchmark:
+    @./run_benchmarks.sh
+    @python3 convert_timings.py
+
+fusesoc:
+    # Build the FuseSOC codebase into SystemVerilog sources
+    fusesoc --cores-root ../submodules/ibex run --target=lint --setup --build-root ./build/ibex_out lowrisc:ibex:ibex_top
+
+[working-directory: 'build/ibex_out/lint-verilator']
+build-top-level: fusesoc
+    # Get the relevant options from the config file.
+    grep '^+incdir+' lowrisc_ibex_ibex_top_0.1.vc | cut -d "+" -f 3 | awk '{print "-I" $0}' > lowrisc_ibex_ibex_top_0.1.args
+    grep '^src/.*\.sv$' lowrisc_ibex_ibex_top_0.1.vc >> lowrisc_ibex_ibex_top_0.1.args
+    
+    # Convert the system verilog to verilog.
+    xargs -a lowrisc_ibex_ibex_top_0.1.args sv2v --top=ibex_top --exclude=Interface > ibex.v
+
+    # Remove incorrect 1ps from design.
+    sed -i 's/1ps/1/g' ibex.v
+
+ibex: build-top-level
+    mv build/ibex_out/lint-verilator/ibex.v .
+
+clean:
+    rm -rf ./obj_dir
+    rm -f ./icarus
+    rm -f prime.o prime prime.bin prime.hex
