@@ -89,10 +89,23 @@
 
             devShells.docs = pkgs.mkShell {
               packages = with pkgs; [
+                pythonPlatform.python
+                pythonPlatform.venvShellHook
+                pythonPlatform.build
+
                 just
                 rustToolchain
                 wasm-bindgen-cli_0_2_114
+
+                mdbook
               ];
+
+              postVenvCreation = ''
+                unset CONDA_PREFIX 
+                uv pip install -r crates/vogls-python/pyproject.toml
+                export LD_LIBRARY_PATH="${stdenv.cc.cc.lib}/lib:$PYTHON_SHARED_LIB"
+              '';
+              venvDir = ".venv";
             };
 
             packages.default = self'.packages.vogls;
