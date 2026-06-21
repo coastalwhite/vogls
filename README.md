@@ -14,8 +14,8 @@ applications and tools.
 > implement missing features.
 
 This repository contains the source code, tests and documentation for Vogls. Alongside that, there are several tools we have built using Vogls, including:
-- [A Python library to write side-channel analysis plans](./crates/vogls-python)
-- [A web application visualizing RISC-V processor pipelines](./tools/pipeline-explorer)
+- [A Python library to write side-channel analysis plans](./crates/vogls-python/README.md)
+- [A web application visualizing RISC-V processor pipelines](https://vogls.nl/pipeline-explorer)
 
 ## Getting started
 
