@@ -1,42 +1,17 @@
-# sv
+# Pipeline Explorer Web Application
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
+<p align="center">
+  <img src="../../../site/assets/pipeline-explorer.png" width=600 />
+</p>
 
-## Creating a project
+This is a web application to visualize the pipeline of RISC-V processors. It wraps the Vogls Verilog simulator to simulate several RISC-V cores and fetch the state of the pipeline at each cycle. Consequently, this is a real view into the pipeline and not an approximation. The site provides this application compiled to WebAssembly (meaning it runs locally on your device) and provides an assembler allowing you to change the executed program live in your browser.
 
-If you're seeing this, you've probably already done this step. Congrats!
+# Build
 
-```sh
-# create a new project
-npx sv create my-app
+There are three important commands:
+
+```bash
+cd .. && just wasm-release # Build the WebAssembly files
+npm run dev                # Start a live refresh server for the web interface
+npm run build              # Build and bundle the website
 ```
-
-To recreate this project with the same configuration:
-
-```sh
-# recreate this project
-npx sv@0.15.2 create --template minimal --types ts --add prettier --install npm webapp
-```
-
-## Developing
-
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
-
-```sh
-npm run dev
-
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
-```
-
-## Building
-
-To create a production version of your app:
-
-```sh
-npm run build
-```
-
-You can preview the production build with `npm run preview`.
-
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.

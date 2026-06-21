@@ -1,5 +1,4 @@
 import vogls as vg
-import numpy as np
 from random import randint
 import time
 
@@ -52,10 +51,10 @@ def masked_run(*, random: bool) -> vg.LazyRunVector:
     return dist.window_sum(by=time, width=CYCLE, start=0, end=CYCLE * N_CYCLES)
 
 
-fixed = masked_run(random=False)
-random = masked_run(random=True)
+fixed = run(random=False)
+random = run(random=True)
 
-# print(vg.welch_t_test(fixed, random).to_dot_graph())
+print(vg.welch_t_test(fixed, random).to_dot_graph())
 
 # print(fixed.compute().as_list())
 # print(random.compute().as_list())
@@ -66,6 +65,7 @@ random = masked_run(random=True)
 # fixed = fixed.expand()
 # random = random.expand()
 
+exit(0)
 print(fixed.compute().as_list())
 fixed = fixed.map(lambda v: np.array(v) * 2)
 print(fixed.compute().as_list())
