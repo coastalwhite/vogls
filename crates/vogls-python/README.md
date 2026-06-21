@@ -88,3 +88,6 @@ This utilizes the following computation plan. As you can see, the design is dedu
 <p align="center">
   <img src="./assets/tvla.svg" width="100%" />
 </p>
+
+[SQL]: https://en.wikipedia.org/wiki/SQL
+[Polars]: https://en.wikipedia.org/wiki/Polars_(software)
