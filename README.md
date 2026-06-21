@@ -66,6 +66,12 @@ The Verilog tests are located in `crates/vogls-test/tests`. They can be ran with
 just test
 ```
 
+# Contribution and AI Policy
+
+Contributions in the form of patches, pull-requests, issues and discussion are very welcome. We ask people to be respectful and provide a welcoming environment for all. If you are seeking to become a new contributor, consider starting by submitting patches containing tests or documentation.
+
+Contributions made with the help of generative artifical intelligence or large-language models are allowed given that the submitter takes full responsibility for those contributions. At the time of writing, the Vogls core library is fully handwritten and the aim is to keep reading and writing code work for humans. Tools using Vogls may benefit more from prototyping using generative AI.
+
 ## License
 
 Licensed under an [MIT](./LICENSE) license.
