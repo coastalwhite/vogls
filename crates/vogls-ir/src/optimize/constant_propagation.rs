@@ -8,8 +8,8 @@ use vogls_utils::{VgHashMap, VgHashSet};
 use crate::{
     BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryImmOpSimplification, BinaryOp,
     GlobalContext, Instruction, LogicMode, ProcessKey, ResizeOp, SCALAR_VSIZE, ShiftImmOp,
-    ShiftImmOpSimplification, Signal, SignalKey, SliceImmSimplification, Time, UnaryOp, Variable,
-    VariableKey, simplify_slice_imm,
+    ShiftImmOpSimplification, Signal, SignalKey, SliceImmSimplification, Time, UnaryOp,
+    VariableKey, VariableMap, simplify_slice_imm,
 };
 
 pub fn constant_propagation(
@@ -282,7 +282,7 @@ pub fn constant_propagation(
 
 fn constant_propagate_instruction(
     i: &mut Instruction,
-    vars: &mut SlotMap<VariableKey, Variable>,
+    vars: &mut VariableMap,
     signals: &mut SlotMap<SignalKey, Signal>,
     scratch_map: &mut VgHashMap<VariableKey, Option<Bits>>,
     logic_mode: LogicMode,
@@ -317,7 +317,7 @@ fn constant_propagate_instruction(
             match src_bits {
                 None => _ = scratch_map.insert(dst, None),
                 Some(b) => {
-                    let value = op.evaluate(b, vars[dst].size);
+                    let value = op.evaluate(b, vars.size(dst));
                     scratch_map.insert(dst, Some(value.clone()));
                     *i = I::Constant(dst, value);
                 }
@@ -338,7 +338,7 @@ fn constant_propagate_instruction(
             use ShiftImmOp as SO;
             match (op, lhs_bits, rhs_bits) {
                 (_, Some(l), Some(r)) => {
-                    let value = op.evaluate(l, r, vars[dst].size);
+                    let value = op.evaluate(l, r, vars.size(dst));
                     scratch_map.insert(dst, Some(value.clone()));
                     *i = I::Constant(dst, value);
                     return Ok(());
@@ -375,7 +375,7 @@ fn constant_propagate_instruction(
                 (O::LogicalShiftLeft, Some(_), _) => {}
                 (O::LogicalShiftLeft, _, Some(b)) => match b.extract_exact_u32() {
                     None => {
-                        let value = Bits::new_unknown(vars[dst].size);
+                        let value = Bits::new_unknown(vars.size(dst));
                         scratch_map.insert(dst, Some(value.clone()));
                         *i = I::Constant(dst, value);
                         return Ok(());
@@ -385,7 +385,7 @@ fn constant_propagate_instruction(
                 (O::LogicalShiftRight, Some(_), _) => {}
                 (O::LogicalShiftRight, _, Some(b)) => match b.extract_exact_u32() {
                     None => {
-                        let value = Bits::new_unknown(vars[dst].size);
+                        let value = Bits::new_unknown(vars.size(dst));
                         scratch_map.insert(dst, Some(value.clone()));
                         *i = I::Constant(dst, value);
                         return Ok(());
@@ -395,7 +395,7 @@ fn constant_propagate_instruction(
                 (O::ArithmeticShiftRight, Some(_), _) => {}
                 (O::ArithmeticShiftRight, _, Some(b)) => match b.extract_exact_u32() {
                     None => {
-                        let value = Bits::new_unknown(vars[dst].size);
+                        let value = Bits::new_unknown(vars.size(dst));
                         scratch_map.insert(dst, Some(value.clone()));
                         *i = I::Constant(dst, value);
                         return Ok(());
@@ -451,7 +451,7 @@ fn constant_propagate_instruction(
                 I::ShiftImm(dst, op, src, amount) => {
                     let (dst, src) = (*dst, *src);
                     use ShiftImmOpSimplification as S;
-                    match op.simplify(vars[dst].size, *amount) {
+                    match op.simplify(vars.size(dst), *amount) {
                         S::Keep => {}
                         S::Source => *i = I::Resize(dst, ResizeOp::Truncate, src),
                         S::Constant(bits) => {
@@ -492,7 +492,7 @@ fn constant_propagate_instruction(
 
             match (src_bits, offset_bits) {
                 (Some(l), Some(r)) => {
-                    let dst_size = vars[dst].size;
+                    let dst_size = vars.size(dst);
                     let value = match r.extract_exact_u32() {
                         None => Bits::new_unknown(dst_size),
                         Some(offset) => l.slicex(offset, dst_size),
@@ -502,14 +502,14 @@ fn constant_propagate_instruction(
                     return Ok(());
                 }
                 (Some(l), None) if l.count_unknown() == l.size().get() => {
-                    let dst_size = vars[dst].size;
+                    let dst_size = vars.size(dst);
                     let value = Bits::new_unknown(dst_size);
                     scratch_map.insert(dst, Some(value.clone()));
                     *i = I::Constant(dst, value);
                     return Ok(());
                 }
                 (None, Some(offset)) => {
-                    let dst_size = vars[dst].size;
+                    let dst_size = vars.size(dst);
                     let Some(offset) = offset.extract_exact_u32() else {
                         let value = Bits::new_unknown(dst_size);
                         scratch_map.insert(dst, Some(value.clone()));
@@ -517,7 +517,7 @@ fn constant_propagate_instruction(
                         return Ok(());
                     };
 
-                    let src_size = vars[src].size;
+                    let src_size = vars.size(src);
                     if offset <= src_size.get() - dst_size.get() {
                         use SliceImmSimplification as S;
                         match simplify_slice_imm(dst, dst_size, src, src_size, offset) {
@@ -547,7 +547,7 @@ fn constant_propagate_instruction(
             match src_bits.as_ref() {
                 None => _ = scratch_map.insert(dst, None),
                 Some(b) => {
-                    let bits = b.slicez(amount, vars[dst].size);
+                    let bits = b.slicez(amount, vars.size(dst));
                     scratch_map.insert(dst, Some(bits.clone()));
                     *i = I::Constant(dst, bits);
                 }
@@ -626,13 +626,13 @@ fn constant_propagate_instruction(
                 None => {}
                 Some(b) => match b.extract_exact_u32() {
                     None => {
-                        let bits = Bits::new_unknown(vars[dst].size);
+                        let bits = Bits::new_unknown(vars.size(dst));
                         scratch_map.insert(dst, Some(bits.clone()));
                         *i = I::Constant(dst, bits);
                         return Ok(());
                     }
                     Some(offset) => {
-                        let dst_size = vars[dst].size;
+                        let dst_size = vars.size(dst);
                         let src_size = signals[signal].size;
                         if offset <= src_size.get() - dst_size.get() {
                             *i = I::Probe(dst, signal, offset);
@@ -709,10 +709,7 @@ fn constant_propagate_instruction(
             }
             signals[*dst].initialize = Some(value);
 
-            *i = I::Constant(
-                vars.insert(Variable { size: SCALAR_VSIZE }),
-                Bits::new_unknown(SCALAR_VSIZE),
-            );
+            *i = I::Constant(vars.insert(SCALAR_VSIZE), Bits::new_unknown(SCALAR_VSIZE));
         }
         I::Phi(dst, srcs) => {
             assert!(!srcs.is_empty());

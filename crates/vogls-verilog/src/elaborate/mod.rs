@@ -135,7 +135,7 @@ impl Net {
         let (value, mask) = self.non_blocking_drive_signal();
         bbb.drive_opt_partial(gl, value, src, partial.map(|o| (o, self.width())));
         if let Some(mask) = mask {
-            let size = gl.vars[src].size;
+            let size = gl.vars.size(src);
             let mask_value = bbb.constant(gl, Bits::new_ones(size));
             bbb.drive_opt_partial(gl, mask, mask_value, partial.map(|o| (o, self.width())));
         }

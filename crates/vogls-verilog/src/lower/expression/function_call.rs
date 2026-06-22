@@ -70,8 +70,8 @@ pub fn lower_function_call<'a>(
         });
         gl.bbs[bb_key].map_vars(|v| {
             *map.entry(v).or_insert_with(|| {
-                let fn_var = gl.vars[v].clone();
-                gl.vars.insert(fn_var)
+                let size = gl.vars.size(v);
+                gl.vars.insert(size)
             })
         });
     }
@@ -171,8 +171,8 @@ pub fn lower_task_enable<'a>(
         });
         gl.bbs[bb_key].map_vars(|v| {
             *map.entry(v).or_insert_with(|| {
-                let fn_var = gl.vars[v].clone();
-                gl.vars.insert(fn_var)
+                let size = gl.vars.size(v);
+                gl.vars.insert(size)
             })
         });
     }

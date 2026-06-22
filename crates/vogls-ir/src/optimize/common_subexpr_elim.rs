@@ -47,7 +47,7 @@ pub fn common_subexpr_elim(
                 I::Unary(dst, op, src) => (*dst, CSExpr::Unary(*op, try_lookup!(src))),
                 I::Resize(dst, op, src) => (
                     *dst,
-                    CSExpr::Resize(*op, gl.vars[*dst].size, try_lookup!(src)),
+                    CSExpr::Resize(*op, gl.vars.size(*dst), try_lookup!(src)),
                 ),
                 I::Binary(dst, op, lhs, rhs) => (
                     *dst,
@@ -58,11 +58,11 @@ pub fn common_subexpr_elim(
                 }
                 I::Slice(dst, src, offset) => (
                     *dst,
-                    CSExpr::Slice(gl.vars[*dst].size, try_lookup!(src), try_lookup!(offset)),
+                    CSExpr::Slice(gl.vars.size(*dst), try_lookup!(src), try_lookup!(offset)),
                 ),
                 I::SliceImm(dst, src, offset) => (
                     *dst,
-                    CSExpr::SliceImm(gl.vars[*dst].size, try_lookup!(src), *offset),
+                    CSExpr::SliceImm(gl.vars.size(*dst), try_lookup!(src), *offset),
                 ),
                 I::ShiftImm(dst, op, src, amount) => {
                     (*dst, CSExpr::ShiftImm(*op, try_lookup!(src), *amount))
@@ -86,7 +86,7 @@ pub fn common_subexpr_elim(
                         .map(|&v| v + 1)
                         .unwrap_or_default();
 
-                    (*dst, CSExpr::Probe(*signal, gl.vars[*dst].size, *offset))
+                    (*dst, CSExpr::Probe(*signal, gl.vars.size(*dst), *offset))
                 }
                 I::ProbeSlice(dst, signal, offset) => {
                     generation = signal_generation
@@ -96,7 +96,7 @@ pub fn common_subexpr_elim(
 
                     (
                         *dst,
-                        CSExpr::ProbeSlice(*signal, gl.vars[*dst].size, try_lookup!(offset)),
+                        CSExpr::ProbeSlice(*signal, gl.vars.size(*dst), try_lookup!(offset)),
                     )
                 }
                 I::Drive(signal, _, _) => {

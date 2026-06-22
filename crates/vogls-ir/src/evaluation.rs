@@ -36,22 +36,22 @@ fn evaluate_impl(
             }
             I::Resize(dst, op, src) => {
                 let src = &variables[src];
-                let dst_size = gl.vars[*dst].size;
+                let dst_size = gl.vars.size(*dst);
                 let bits = op.evaluate(src, dst_size);
                 _ = variables.insert(*dst, bits);
             }
             I::Binary(dst, op, lhs, rhs) => {
                 let lhs = &variables[lhs];
                 let rhs = &variables[rhs];
-                let bits = op.evaluate(lhs, rhs, gl.vars[*dst].size);
+                let bits = op.evaluate(lhs, rhs, gl.vars.size(*dst));
                 _ = variables.insert(*dst, bits);
             }
             I::Slice(dst, src, offset) => {
                 let src = &variables[src];
                 let offset = &variables[offset];
                 let bits = match offset.extract_exact_u32() {
-                    None => Bits::new_unknown(gl.vars[*dst].size),
-                    Some(offset) => src.slicex(offset, gl.vars[*dst].size),
+                    None => Bits::new_unknown(gl.vars.size(*dst)),
+                    Some(offset) => src.slicex(offset, gl.vars.size(*dst)),
                 };
                 _ = variables.insert(*dst, bits);
             }
@@ -62,7 +62,7 @@ fn evaluate_impl(
             }
             I::SliceImm(dst, src, offset) => {
                 let src = &variables[src];
-                let bits = src.slicez(*offset, gl.vars[*dst].size);
+                let bits = src.slicez(*offset, gl.vars.size(*dst));
                 _ = variables.insert(*dst, bits);
             }
             I::ShiftImm(dst, op, src, amount) => {
@@ -82,14 +82,14 @@ fn evaluate_impl(
             I::LastUpdateTime(_, _) => todo!(),
             I::Probe(dst, src_signal, offset) => {
                 let bits = &signals[src_signal];
-                let bits = bits.slicez(*offset, gl.vars[*dst].size);
+                let bits = bits.slicez(*offset, gl.vars.size(*dst));
                 _ = variables.insert(*dst, bits);
             }
             I::ProbeSlice(dst, src_signal, offset) => {
                 let bits = &signals[src_signal];
                 let offset = &variables[offset];
 
-                let dst_size = gl.vars[*dst].size;
+                let dst_size = gl.vars.size(*dst);
                 let bits = match offset.extract_exact_u32() {
                     None => Bits::new_unknown(dst_size),
                     Some(offset) => bits.slicex(offset, dst_size),

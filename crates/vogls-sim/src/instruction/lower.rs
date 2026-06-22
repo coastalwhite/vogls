@@ -355,7 +355,7 @@ pub fn lower_process_to_vm(
                 I::Constant(..) => continue,
 
                 I::Unary(d, op, s) => {
-                    let size = gl.vars[*s].size;
+                    let size = gl.vars.size(*s);
                     let m = var_mode[d];
                     let s = var!(*s, (m, var_mode[s], size));
                     let d = var!(*d);
@@ -363,8 +363,8 @@ pub fn lower_process_to_vm(
                     continue;
                 }
                 I::Resize(d, op, s) => {
-                    let d_size = gl.vars[*d].size;
-                    let s_size = gl.vars[*s].size;
+                    let d_size = gl.vars.size(*d);
+                    let s_size = gl.vars.size(*s);
                     let m = var_mode[d];
                     let s = var!(*s, (m, var_mode[s], s_size)).to_ref(s_size);
                     let d = var!(*d).to_ref(d_size);
@@ -374,8 +374,8 @@ pub fn lower_process_to_vm(
                 I::BinaryImm(d, op, src, imm) => {
                     use LogicMode as M;
 
-                    let d_size = gl.vars[*d].size;
-                    let s1_size = gl.vars[*src].size;
+                    let d_size = gl.vars.size(*d);
+                    let s1_size = gl.vars.size(*src);
                     let s2_size = imm.size();
                     let s1_mode = var_mode[src];
                     let s2_mode = if imm.contains_special() {
@@ -524,8 +524,8 @@ pub fn lower_process_to_vm(
                 I::Slice(d, s1, s2) => {
                     use LogicMode as M;
 
-                    let d_size = gl.vars[*d].size;
-                    let s1_size = gl.vars[*s1].size;
+                    let d_size = gl.vars.size(*d);
+                    let s1_size = gl.vars.size(*s1);
                     let s1_mode = var_mode[s1];
                     let s2_mode = var_mode[s2];
                     let d = var!(*d);
@@ -560,8 +560,8 @@ pub fn lower_process_to_vm(
                 I::SliceImm(d, src, offset) => {
                     use LogicMode as M;
 
-                    let d_size = gl.vars[*d].size;
-                    let s1_size = gl.vars[*src].size;
+                    let d_size = gl.vars.size(*d);
+                    let s1_size = gl.vars.size(*src);
                     let s1_mode = var_mode[src];
                     let s2_mode = LogicMode::TwoValue;
                     let d = var!(*d);
@@ -582,8 +582,8 @@ pub fn lower_process_to_vm(
                 I::ShiftImm(d, op, src, offset) => {
                     use LogicMode as M;
 
-                    let d_size = gl.vars[*d].size;
-                    let s1_size = gl.vars[*src].size;
+                    let d_size = gl.vars.size(*d);
+                    let s1_size = gl.vars.size(*src);
                     let s1_mode = var_mode[src];
                     let s2_mode = LogicMode::TwoValue;
                     let d = var!(*d);
@@ -624,7 +624,7 @@ pub fn lower_process_to_vm(
                     use LogicMode as M;
 
                     let dst_mode = var_mode[dst];
-                    let size = gl.vars[*dst].size;
+                    let size = gl.vars.size(*dst);
                     let cond_mode = var_mode[cond];
                     let truthy_mode = var_mode[truthy];
                     let falsy_mode = var_mode[falsy];
@@ -648,9 +648,9 @@ pub fn lower_process_to_vm(
                 I::Binary(d, op, s1, s2) => {
                     use LogicMode as M;
 
-                    let d_size = gl.vars[*d].size;
-                    let s1_size = gl.vars[*s1].size;
-                    let s2_size = gl.vars[*s2].size;
+                    let d_size = gl.vars.size(*d);
+                    let s1_size = gl.vars.size(*s1);
+                    let s2_size = gl.vars.size(*s2);
                     let s1_mode = var_mode[s1];
                     let s2_mode = var_mode[s2];
                     let d = var!(*d);
@@ -674,7 +674,7 @@ pub fn lower_process_to_vm(
                 I::Intrinsic(dst, op, args) => {
                     let vm_args = args
                         .iter()
-                        .map(|v| (var!(*v).to_ref(gl.vars[*v].size), var_mode[v]))
+                        .map(|v| (var!(*v).to_ref(gl.vars.size(*v)), var_mode[v]))
                         .collect();
                     use IntrinsicOp as O;
                     use VmIntrinsicOp as VO;
@@ -703,7 +703,7 @@ pub fn lower_process_to_vm(
                     VI::LastUpdateTime(var!(*dst), signal)
                 }
                 I::Probe(dst, signal, offset) => {
-                    let size = gl.vars[*dst].size;
+                    let size = gl.vars.size(*dst);
                     let signal = signal!(*signal);
                     lower_slice_imm(
                         &mut instructions,
@@ -715,7 +715,7 @@ pub fn lower_process_to_vm(
                     continue;
                 }
                 I::ProbeSlice(dst, signal, offset) => {
-                    let size = gl.vars[*dst].size;
+                    let size = gl.vars.size(*dst);
                     let signal = signal!(*signal);
                     match gl.logic_mode {
                         LogicMode::TwoValue => VI::TvSlice(
@@ -739,7 +739,7 @@ pub fn lower_process_to_vm(
                     }
                 }
                 I::Drive(signal, src, offset) => {
-                    let src_size = gl.vars[*src].size;
+                    let src_size = gl.vars.size(*src);
                     VI::Drive(
                         signal!(*signal),
                         var!(*src, (gl.logic_mode, var_mode[src], src_size)).to_ref(src_size),
@@ -759,8 +759,8 @@ pub fn lower_process_to_vm(
 
         if let Some(phis) = bb_phis.get(&bb_key) {
             for (dst, src) in phis {
-                let src_size = gl.vars[*src].size;
-                let dst_size = gl.vars[*dst].size;
+                let src_size = gl.vars.size(*src);
+                let dst_size = gl.vars.size(*dst);
                 assert_eq!(src_size, dst_size);
                 let size = src_size;
                 let src_mode = var_mode[src];

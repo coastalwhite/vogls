@@ -136,7 +136,8 @@ pub fn lower<'a>(
                         &mut mctx.diagnostics,
                     )?;
                     let signal = net.net.probe_signal();
-                    conditions.push((condition, VariableKey::default(), net, *expr));
+                    let dummy = mctx.gl().vars.insert(SCALAR_VSIZE);
+                    conditions.push((condition, dummy, net, *expr));
                     signals.push(signal);
                 }
                 if contains_edge {

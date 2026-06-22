@@ -427,7 +427,7 @@ pub fn resolve_heap_map(
 
                 if let Some(dst) = instr.get_destination_variable() {
                     let mode = var_mode[&dst];
-                    let size = gl.vars[dst].size;
+                    let size = gl.vars.size(dst);
 
                     let mut num_bits = size.get();
                     if mode == LogicMode::FourValue {

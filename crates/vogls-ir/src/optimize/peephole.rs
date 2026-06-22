@@ -42,7 +42,7 @@ pub fn peephole(
                 match i {
                     I::Constant(..) => {}
                     I::Unary(..) => {}
-                    I::Resize(dst, _, src) if gl.vars[*dst].size == gl.vars[*src].size => {
+                    I::Resize(dst, _, src) if gl.vars.size(*dst) == gl.vars.size(*src) => {
                         _ = var_remap.insert(*dst, *src)
                     }
                     I::Resize(dst, ResizeOp::Truncate, src) => {
@@ -136,7 +136,7 @@ pub fn peephole(
                 I::Unary(dst, op, src) => (*dst, CSExpr::Unary(*op, try_lookup!(src))),
                 I::Resize(dst, op, src) => (
                     *dst,
-                    CSExpr::Resize(*op, gl.vars[*dst].size, try_lookup!(src)),
+                    CSExpr::Resize(*op, gl.vars.size(*dst), try_lookup!(src)),
                 ),
                 I::Binary(dst, op, lhs, rhs) => (
                     *dst,
@@ -147,11 +147,11 @@ pub fn peephole(
                 }
                 I::Slice(dst, src, offset) => (
                     *dst,
-                    CSExpr::Slice(gl.vars[*dst].size, try_lookup!(src), try_lookup!(offset)),
+                    CSExpr::Slice(gl.vars.size(*dst), try_lookup!(src), try_lookup!(offset)),
                 ),
                 I::SliceImm(dst, src, offset) => (
                     *dst,
-                    CSExpr::SliceImm(gl.vars[*dst].size, try_lookup!(src), *offset),
+                    CSExpr::SliceImm(gl.vars.size(*dst), try_lookup!(src), *offset),
                 ),
                 I::ShiftImm(dst, op, src, amount) => {
                     (*dst, CSExpr::ShiftImm(*op, try_lookup!(src), *amount))
@@ -163,11 +163,11 @@ pub fn peephole(
                 I::Intrinsic(..) => continue,
                 I::LastUpdateTime(dst, signal) => (*dst, CSExpr::LastUpdateTime(*signal)),
                 I::Probe(dst, signal, offset) => {
-                    (*dst, CSExpr::Probe(*signal, gl.vars[*dst].size, *offset))
+                    (*dst, CSExpr::Probe(*signal, gl.vars.size(*dst), *offset))
                 }
                 I::ProbeSlice(dst, signal, offset) => (
                     *dst,
-                    CSExpr::ProbeSlice(*signal, gl.vars[*dst].size, try_lookup!(offset)),
+                    CSExpr::ProbeSlice(*signal, gl.vars.size(*dst), try_lookup!(offset)),
                 ),
                 I::Drive(_, _, _) => continue,
                 I::Phi(_, _) => continue,

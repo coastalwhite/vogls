@@ -432,7 +432,7 @@ pub fn lower_process(
             let t = CVar {
                 ident: CIdent::Numbered(temp_map.len() as u64),
                 ty: CType {
-                    size: gl.vars[v].size,
+                    size: gl.vars.size(v),
                     mode,
                 },
             };
@@ -524,7 +524,7 @@ pub fn lower_process(
                     }
                 }
                 I::Unary(dst, op, src) => {
-                    let src_size = gl.vars[*src].size;
+                    let src_size = gl.vars.size(*src);
                     let msrc = var_mode[src];
                     let mdst = var_mode[dst];
 
@@ -559,7 +559,7 @@ pub fn lower_process(
                     }
                 }
                 I::Resize(dst, op, src) => {
-                    let src_size = gl.vars[*src].size;
+                    let src_size = gl.vars.size(*src);
                     let msrc = var_mode[src];
                     let mdst = var_mode[dst];
 
@@ -592,7 +592,7 @@ pub fn lower_process(
                     }
                 }
                 I::BinaryImm(dst, op, src, imm) => {
-                    let src_size = gl.vars[*src].size;
+                    let src_size = gl.vars.size(*src);
                     let mimm = if imm.contains_special() {
                         LogicMode::FourValue
                     } else {
@@ -663,7 +663,7 @@ pub fn lower_process(
                     }
                 }
                 I::SliceImm(dst, src, offset) => {
-                    let src_size = gl.vars[*src].size;
+                    let src_size = gl.vars.size(*src);
                     let (msrc, mdst) = (var_mode[src], var_mode[dst]);
 
                     let (conv_src, conv_imm) = (msrc != mdst, mdst == LogicMode::FourValue);
@@ -695,7 +695,7 @@ pub fn lower_process(
                     }
                 }
                 I::ShiftImm(dst, op, src, offset) => {
-                    let src_size = gl.vars[*src].size;
+                    let src_size = gl.vars.size(*src);
                     let (msrc, mdst) = (var_mode[src], var_mode[dst]);
 
                     let (conv_src, conv_imm) = (msrc != mdst, mdst == LogicMode::FourValue);
@@ -739,7 +739,7 @@ pub fn lower_process(
                     }
                 }
                 I::Select(dst, cond, truthy, falsy) => {
-                    let size = gl.vars[*dst].size;
+                    let size = gl.vars.size(*dst);
                     let (mcond, mtruthy, mfalsy, mdst) = (
                         var_mode[cond],
                         var_mode[truthy],
@@ -799,8 +799,8 @@ pub fn lower_process(
                     }
                 }
                 I::Slice(dst, lhs, rhs) => {
-                    let lhs_size = gl.vars[*lhs].size;
-                    let rhs_size = gl.vars[*rhs].size;
+                    let lhs_size = gl.vars.size(*lhs);
+                    let rhs_size = gl.vars.size(*rhs);
                     let (mlhs, mrhs, mdst) = (var_mode[lhs], var_mode[rhs], var_mode[dst]);
 
                     use LogicMode as M;
@@ -849,8 +849,8 @@ pub fn lower_process(
                     }
                 }
                 I::Binary(dst, op, lhs, rhs) => {
-                    let lhs_size = gl.vars[*lhs].size;
-                    let rhs_size = gl.vars[*rhs].size;
+                    let lhs_size = gl.vars.size(*lhs);
+                    let rhs_size = gl.vars.size(*rhs);
                     let (mlhs, mrhs, mdst) = (var_mode[lhs], var_mode[rhs], var_mode[dst]);
 
                     let (mtgt, conv_lhs, conv_rhs) =
@@ -1076,7 +1076,7 @@ pub fn lower_process(
                     assert_eq!(var_mode[dst], gl.logic_mode);
 
                     let t = temp_map[&(*dst, gl.logic_mode)];
-                    let dst_size = gl.vars[*dst].size;
+                    let dst_size = gl.vars.size(*dst);
                     let src_size = gl.signals[*signal].size;
 
                     if dst_size == src_size && *offset == 0 {
@@ -1117,7 +1117,7 @@ pub fn lower_process(
                     }
                 }
                 I::Drive(signal, src, partial) => {
-                    let size = gl.vars[*src].size;
+                    let size = gl.vars.size(*src);
                     let msrc = var_mode[src];
                     let mut t = temp_map[&(*src, msrc)];
                     if temporal_variables.contains(src) {
@@ -1203,8 +1203,8 @@ pub fn lower_process(
 
         if let Some(phis) = bb_phis.get(&bb_key) {
             for (dst, src) in phis {
-                let src_size = gl.vars[*src].size;
-                let dst_size = gl.vars[*dst].size;
+                let src_size = gl.vars.size(*src);
+                let dst_size = gl.vars.size(*dst);
                 assert_eq!(src_size, dst_size);
                 let src_mode = var_mode[src];
                 let dst_mode = var_mode[dst];

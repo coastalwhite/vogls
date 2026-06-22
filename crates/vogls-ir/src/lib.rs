@@ -9,7 +9,7 @@ pub mod vcd;
 
 use std::collections::HashSet;
 use std::fmt;
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroU64};
 use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign};
 pub use vogls_bits as bits;
 pub use vogls_bits::{Bits, Mode, VectorSize};
@@ -17,7 +17,7 @@ pub use vogls_bits::{Bits, Mode, VectorSize};
 pub use builder::{BasicBlockBuilder, BranchRef, PhiRef, new_anonymous_builder, new_process};
 pub use format::{ContextFormat, DisplayContext};
 use slotmap::{SlotMap, new_key_type};
-use vogls_utils::NonMaxU32;
+use vogls_utils::{NonMaxU32, VgHashMap};
 
 use self::dyn_format_string::DynFormatString;
 use self::token_range::TokenRange;
@@ -26,7 +26,60 @@ use self::vcd::VcdOutput;
 new_key_type! { pub struct ProcessKey; }
 new_key_type! { pub struct BasicBlockKey; }
 new_key_type! { pub struct SignalKey; }
-new_key_type! { pub struct VariableKey; }
+
+/// A unique identifier for a VIR variable.
+///
+/// This is a unique identifier combined with a conditionally inlined size. If the size does not
+/// fit in the allocated space, it put into the external [`VariableMap`].
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct VariableKey(NonZeroU64);
+
+impl VariableKey {
+    const MAX_INLINE_SIZE: VectorSize = VectorSize::new(255).unwrap();
+
+    fn inlined_size(self) -> Option<VectorSize> {
+        VectorSize::new((self.0.get() & 0xFF) as u32)
+    }
+    fn identifier(self) -> u64 {
+        self.0.get() >> 8
+    }
+
+    fn from_id_and_size(id: u64, size: VectorSize) -> Self {
+        let capped_size = Some(size.get())
+            .filter(|v| *v <= Self::MAX_INLINE_SIZE.get())
+            .unwrap_or(0) as u64;
+        let value = NonZeroU64::new((id << 8) | capped_size).expect("should never be zero");
+        VariableKey(value)
+    }
+
+    fn size(self, non_inlined_var_sizes: &VgHashMap<u64, VectorSize>) -> VectorSize {
+        match self.inlined_size() {
+            None => non_inlined_var_sizes[&self.identifier()],
+            Some(size) => size,
+        }
+    }
+
+    fn update_size(
+        &mut self,
+        new_size: VectorSize,
+        non_inlined_var_sizes: &mut VgHashMap<u64, VectorSize>,
+    ) {
+        non_inlined_var_sizes.remove(&self.identifier());
+        *self = Self::from_id_and_size(self.identifier(), new_size);
+        if new_size > Self::MAX_INLINE_SIZE {
+            non_inlined_var_sizes.insert(self.identifier(), new_size);
+        }
+    }
+}
+
+impl fmt::Debug for VariableKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("VariableKey")
+            .field("id", &self.identifier())
+            .field("inline_size", &self.inlined_size())
+            .finish()
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct Time(pub u64);
@@ -224,11 +277,6 @@ impl BasicBlockTerminator {
             Self::Wait(..) | Self::VariableWait(..) | Self::WaitRegion(..) | Self::Watch(..)
         )
     }
-}
-
-#[derive(Clone)]
-pub struct Variable {
-    pub size: VectorSize,
 }
 
 #[derive(Clone, Copy)]
@@ -1270,13 +1318,20 @@ impl From<Mode> for LogicMode {
     }
 }
 
+/// Manages the allocated variables.
+#[derive(Default, Clone)]
+pub struct VariableMap {
+    prev_var_identifier: u64,
+    non_inlined_var_sizes: VgHashMap<u64, VectorSize>,
+}
+
 #[derive(Default, Clone)]
 pub struct GlobalContext {
     pub logic_mode: LogicMode,
     pub processes: SlotMap<ProcessKey, Process>,
     pub bbs: SlotMap<BasicBlockKey, BasicBlock>,
-    pub vars: SlotMap<VariableKey, Variable>,
     pub signals: SlotMap<SignalKey, Signal>,
+    pub vars: VariableMap,
 }
 
 macro_rules! define_process_kinds {
@@ -1296,6 +1351,31 @@ macro_rules! define_process_kinds {
             }
         }
     };
+}
+
+impl VariableMap {
+    pub fn size(&self, key: VariableKey) -> VectorSize {
+        key.size(&self.non_inlined_var_sizes)
+    }
+
+    pub fn insert(&mut self, size: VectorSize) -> VariableKey {
+        self.prev_var_identifier += 1;
+        let key = VariableKey::from_id_and_size(self.prev_var_identifier, size);
+        if size.get() > 255 {
+            self.non_inlined_var_sizes.insert(key.identifier(), size);
+        }
+        key
+    }
+
+    fn remove(&mut self, key: VariableKey) {
+        if key.inlined_size().is_none() {
+            self.non_inlined_var_sizes.remove(&key.identifier());
+        }
+    }
+
+    fn update(&mut self, key: &mut VariableKey, new_size: VectorSize) {
+        key.update_size(new_size, &mut self.non_inlined_var_sizes);
+    }
 }
 
 define_process_kinds! {

@@ -345,7 +345,7 @@ impl FuseGraphOptimizer {
                                 FuseTarget::Constant(value) => {
                                     builder.push_raw_instruction(I::Constant(
                                         *dst,
-                                        value.slicex(*offset, gl.vars[*dst].size),
+                                        value.slicex(*offset, gl.vars.size(*dst)),
                                     ));
                                 }
                             }
@@ -378,7 +378,7 @@ impl FuseGraphOptimizer {
                                         gl,
                                         value.clone(),
                                         *offset,
-                                        gl.vars[*dst].size,
+                                        gl.vars.size(*dst),
                                     );
                                     builder
                                         .instrs

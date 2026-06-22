@@ -81,7 +81,7 @@ pub fn lower_to_bytecode(
             let instr = match instr {
                 I::Constant(..) => continue,
                 I::Unary(d, op, s) => {
-                    let src_size = gl.vars[*s].size;
+                    let src_size = gl.vars.size(*s);
                     let (dm, mut sm) = (var_mode[d], var_mode[s]);
                     let d = heap_map[d];
                     let mut s = heap_map[s];

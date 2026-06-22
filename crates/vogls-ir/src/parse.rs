@@ -2,15 +2,15 @@ use std::fmt;
 use std::num::NonZeroU32;
 
 use hashbrown::hash_map::Entry;
-use vogls_bits::Bits;
-use vogls_utils::VgHashMap;
+use vogls_bits::{Bits, VectorSize};
+use vogls_utils::{VgHashMap, VgHashSet};
 
 use crate::dyn_format_string::{DynFormatArgument, DynFormatString};
 use crate::token_range::TokenRange;
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext,
     Instruction, IntrinsicOp, ProcessKey, ProcessKind, ResizeOp, SCALAR_VSIZE, ShiftImmOp, Signal,
-    SignalFlags, SignalKey, TIME_VSIZE, Time, UnaryOp, VSIZE_32, Variable, VariableKey,
+    SignalFlags, SignalKey, TIME_VSIZE, Time, UnaryOp, VSIZE_32, VariableKey,
 };
 
 #[derive(Debug)]
@@ -150,7 +150,7 @@ pub fn parse(s: &str, gl: &mut GlobalContext) -> Result<(), Box<ParseError>> {
         variables: Default::default(),
         signals: Default::default(),
         bbs: Default::default(),
-        unresolved_vars: Default::default(),
+        var_sizes: Default::default(),
     };
 
     c.trim_cursor();
@@ -167,12 +167,16 @@ pub fn parse(s: &str, gl: &mut GlobalContext) -> Result<(), Box<ParseError>> {
     Ok(())
 }
 
+enum VarSize {
+    Unresolved(Instruction),
+    Resolved(VectorSize),
+}
+
 struct Symbols<'a> {
     variables: VgHashMap<&'a str, (bool, VariableKey)>,
     signals: VgHashMap<&'a str, SignalKey>,
     bbs: VgHashMap<&'a str, (bool, BasicBlockKey)>,
-
-    unresolved_vars: VgHashMap<VariableKey, Instruction>,
+    var_sizes: VgHashMap<u64, VarSize>,
 }
 
 fn parse_signal_definition<'a>(
@@ -244,7 +248,7 @@ fn parse_process<'a>(
 
     symbols.bbs.clear();
     symbols.variables.clear();
-    symbols.unresolved_vars.clear();
+    symbols.var_sizes.clear();
 
     let mut entry = None;
     while !c.next_if_equals('}') {
@@ -300,107 +304,129 @@ fn parse_process<'a>(
         }
     }
 
-    if !symbols.unresolved_vars.is_empty() {
-        while !symbols.unresolved_vars.is_empty() {
-            // @Performance. This is an abomination.
-            let keys = symbols.unresolved_vars.keys().copied().collect::<Vec<_>>();
-            let start_length = symbols.unresolved_vars.len();
-            for key in keys {
-                let i = &symbols.unresolved_vars[&key];
-                use Instruction as I;
-                match i {
-                    I::Constant(..) => unreachable!(),
-                    I::Unary(dst, op, src) => {
-                        let (dst, src) = (*dst, *src);
-                        if !symbols.unresolved_vars.contains_key(&src) {
-                            gl.vars[dst].size = op.output_size(gl.vars[src].size);
-                            symbols.unresolved_vars.remove(&dst);
-                        }
+    let mut num_unresolved_vars = symbols
+        .var_sizes
+        .values()
+        .filter(|s| matches!(s, VarSize::Unresolved(..)))
+        .count();
+    while num_unresolved_vars > 0 {
+        // @Performance. This is an abomination.
+        let keys = symbols
+            .var_sizes
+            .iter()
+            .filter(|(_, s)| matches!(s, VarSize::Unresolved(..)))
+            .map(|(k, _)| k)
+            .copied()
+            .collect::<Vec<_>>();
+        let start_length = num_unresolved_vars;
+        for key in keys {
+            let VarSize::Unresolved(i) = &symbols.var_sizes[&key] else {
+                unreachable!();
+            };
+            use Instruction as I;
+            match i {
+                I::Constant(..) => unreachable!(),
+                I::Unary(_, op, src) => {
+                    if let VarSize::Resolved(src_size) = symbols.var_sizes[&src.identifier()] {
+                        symbols
+                            .var_sizes
+                            .insert(key, VarSize::Resolved(op.output_size(src_size)));
+                        num_unresolved_vars -= 1;
                     }
-                    I::Resize(..) => unreachable!(),
-                    I::Binary(dst, op, lhs, rhs) => {
-                        let (dst, lhs, rhs) = (*dst, *lhs, *rhs);
-                        if !symbols.unresolved_vars.contains_key(&lhs)
-                            && !symbols.unresolved_vars.contains_key(&rhs)
-                        {
-                            let lhs_size = gl.vars[lhs].size;
-                            let rhs_size = gl.vars[rhs].size;
-                            let Some(dst_size) = op.output_size(lhs_size, rhs_size) else {
-                                return Err(Box::new(ParseError {
-                                    at: c.offset,
-                                    error: format!(
-                                        "invalid size combination: {lhs_size}, {rhs_size}"
-                                    ),
-                                }));
-                            };
-                            gl.vars[dst].size = dst_size;
-                            symbols.unresolved_vars.remove(&dst);
-                        }
+                }
+                I::Resize(..) => unreachable!(),
+                I::Binary(_, op, lhs, rhs) => {
+                    if let VarSize::Resolved(lhs_size) = symbols.var_sizes[&lhs.identifier()]
+                        && let VarSize::Resolved(rhs_size) = symbols.var_sizes[&rhs.identifier()]
+                    {
+                        let Some(dst_size) = op.output_size(lhs_size, rhs_size) else {
+                            return Err(Box::new(ParseError {
+                                at: c.offset,
+                                error: format!("invalid size combination: {lhs_size}, {rhs_size}"),
+                            }));
+                        };
+                        symbols.var_sizes.insert(key, VarSize::Resolved(dst_size));
+                        num_unresolved_vars -= 1;
                     }
-                    I::Select(dst, _cond, lhs, rhs) => {
-                        let (dst, lhs, rhs) = (*dst, *lhs, *rhs);
-                        if !symbols.unresolved_vars.contains_key(&lhs)
-                            && !symbols.unresolved_vars.contains_key(&rhs)
-                        {
-                            let lhs_size = gl.vars[lhs].size;
-                            let rhs_size = gl.vars[rhs].size;
-                            if lhs_size != rhs_size {
-                                return Err(Box::new(ParseError {
-                                    at: c.offset,
-                                    error: format!(
-                                        "invalid size combination: {lhs_size}, {rhs_size}"
-                                    ),
-                                }));
-                            };
-                            gl.vars[dst].size = lhs_size;
-                            symbols.unresolved_vars.remove(&dst);
-                        }
+                }
+                I::Select(_, _cond, lhs, rhs) => {
+                    if let VarSize::Resolved(lhs_size) = symbols.var_sizes[&lhs.identifier()]
+                        && let VarSize::Resolved(rhs_size) = symbols.var_sizes[&rhs.identifier()]
+                    {
+                        if lhs_size != rhs_size {
+                            return Err(Box::new(ParseError {
+                                at: c.offset,
+                                error: format!("invalid size combination: {lhs_size}, {rhs_size}"),
+                            }));
+                        };
+                        symbols.var_sizes.insert(key, VarSize::Resolved(lhs_size));
+                        num_unresolved_vars -= 1;
                     }
-                    I::BinaryImm(dst, op, lhs, rhs) => {
-                        let (dst, lhs) = (*dst, *lhs);
-                        if !symbols.unresolved_vars.contains_key(&lhs) {
-                            let lhs_size = gl.vars[lhs].size;
-                            let rhs_size = rhs.size();
-                            let Some(dst_size) = op.output_size(lhs_size, rhs_size) else {
-                                return Err(Box::new(ParseError {
-                                    at: c.offset,
-                                    error: format!(
-                                        "invalid size combination: {lhs_size}, {rhs_size}"
-                                    ),
-                                }));
-                            };
-                            gl.vars[dst].size = dst_size;
-                            symbols.unresolved_vars.remove(&dst);
-                        }
+                }
+                I::BinaryImm(_, op, lhs, rhs) => {
+                    if let VarSize::Resolved(lhs_size) = symbols.var_sizes[&lhs.identifier()] {
+                        let rhs_size = rhs.size();
+                        let Some(dst_size) = op.output_size(lhs_size, rhs_size) else {
+                            return Err(Box::new(ParseError {
+                                at: c.offset,
+                                error: format!("invalid size combination: {lhs_size}, {rhs_size}"),
+                            }));
+                        };
+                        symbols.var_sizes.insert(key, VarSize::Resolved(dst_size));
+                        num_unresolved_vars -= 1;
                     }
-                    I::Slice(..) => unreachable!(),
-                    I::SliceImm(..) => unreachable!(),
-                    I::ShiftImm(dst, _, src, _) => {
-                        let (dst, src) = (*dst, *src);
-                        if !symbols.unresolved_vars.contains_key(&src) {
-                            gl.vars[dst].size = gl.vars[src].size;
-                            symbols.unresolved_vars.remove(&dst);
-                        }
+                }
+                I::Slice(..) => unreachable!(),
+                I::SliceImm(..) => unreachable!(),
+                I::ShiftImm(_, _, src, _) => {
+                    if let VarSize::Resolved(src_size) = symbols.var_sizes[&src.identifier()] {
+                        symbols.var_sizes.insert(key, VarSize::Resolved(src_size));
+                        num_unresolved_vars -= 1;
                     }
-                    I::Intrinsic(..) => todo!(),
-                    I::LastUpdateTime(..) => unreachable!(),
-                    I::Probe(..) => unreachable!(),
-                    I::ProbeSlice(..) => unreachable!(),
-                    I::Drive(..) => unreachable!(),
-                    I::Phi(dst, items) => {
-                        let dst = *dst;
-                        if let Some((_, src)) = items
-                            .iter()
-                            .find(|(_, v)| !symbols.unresolved_vars.contains_key(v))
-                        {
-                            gl.vars[dst].size = gl.vars[*src].size;
-                            symbols.unresolved_vars.remove(&dst);
+                }
+                I::Intrinsic(..) => todo!(),
+                I::LastUpdateTime(..) => unreachable!(),
+                I::Probe(..) => unreachable!(),
+                I::ProbeSlice(..) => unreachable!(),
+                I::Drive(..) => unreachable!(),
+                I::Phi(_, items) => {
+                    if let Some(src_size) = items.iter().find_map(|(_, v)| {
+                        if let VarSize::Resolved(size) = symbols.var_sizes[&v.identifier()] {
+                            return Some(size);
                         }
+                        None
+                    }) {
+                        symbols.var_sizes.insert(key, VarSize::Resolved(src_size));
+                        num_unresolved_vars -= 1;
                     }
                 }
             }
-            assert!(symbols.unresolved_vars.len() < start_length);
         }
+        assert!(num_unresolved_vars < start_length);
+    }
+
+    // @Performance: Scratchpad these.
+    let mut bb_stack = Vec::new();
+    let mut bb_seen = VgHashSet::default();
+
+    // Map each variable to the correct size.
+    bb_stack.push(entry);
+    bb_seen.insert(entry);
+    while let Some(bb_key) = bb_stack.pop() {
+        let bb = &mut gl.bbs[bb_key];
+        bb.terminator.for_each_bb(|bb| {
+            if bb_seen.insert(bb) {
+                bb_stack.push(bb);
+            }
+        });
+
+        bb.map_vars(|mut v| {
+            let VarSize::Resolved(size) = symbols.var_sizes[&v.identifier()] else {
+                unreachable!()
+            };
+            gl.vars.update(&mut v, size);
+            v
+        });
     }
 
     let process = gl.processes.insert(crate::Process {
@@ -448,14 +474,14 @@ fn parse_bb<'a>(
                     entry.get().1
                 }
                 Entry::Vacant(entry) => {
-                    let var = gl.vars.insert(Variable { size: SCALAR_VSIZE });
+                    let var = gl.vars.insert(SCALAR_VSIZE);
                     entry.insert((true, var));
                     var
                 }
             };
-            symbols.unresolved_vars.insert(
-                dst,
-                Instruction::Constant(dst, Bits::new_zeroed(SCALAR_VSIZE)),
+            symbols.var_sizes.insert(
+                dst.identifier(),
+                VarSize::Unresolved(Instruction::Constant(dst, Bits::new_zeroed(SCALAR_VSIZE))),
             );
 
             c.trim_cursor();
@@ -473,8 +499,9 @@ fn parse_bb<'a>(
                 "const" => {
                     c.trim_cursor();
                     let imm = parse_imm(c)?;
-                    gl.vars[dst].size = imm.size();
-                    symbols.unresolved_vars.remove(&dst);
+                    symbols
+                        .var_sizes
+                        .insert(dst.identifier(), VarSize::Resolved(imm.size()));
                     Instruction::Constant(dst, imm)
                 }
 
@@ -536,8 +563,11 @@ fn parse_bb<'a>(
                 "ceqi" => parse_binary_imm(c, symbols, gl, dst, BI::CaseEquality)?,
 
                 "slice" => {
-                    gl.vars[dst].size = parse_braced_size(c)?;
-                    symbols.unresolved_vars.remove(&dst);
+                    c.trim_cursor();
+                    let size = parse_braced_size(c)?;
+                    symbols
+                        .var_sizes
+                        .insert(dst.identifier(), VarSize::Resolved(size));
 
                     c.trim_cursor();
                     let lhs = parse_var(c, symbols, gl)?;
@@ -551,8 +581,10 @@ fn parse_bb<'a>(
                 }
                 "slicei" => {
                     c.trim_cursor();
-                    gl.vars[dst].size = parse_braced_size(c)?;
-                    symbols.unresolved_vars.remove(&dst);
+                    let size = parse_braced_size(c)?;
+                    symbols
+                        .var_sizes
+                        .insert(dst.identifier(), VarSize::Resolved(size));
 
                     c.trim_cursor();
                     let lhs = parse_var(c, symbols, gl)?;
@@ -583,20 +615,21 @@ fn parse_bb<'a>(
                     c.trim_cursor();
                     let falsy = parse_var(c, symbols, gl)?;
 
-                    if !symbols.unresolved_vars.contains_key(&cond)
-                        && gl.vars[cond].size != SCALAR_VSIZE
+                    if let Some(VarSize::Resolved(cond_size)) =
+                        symbols.var_sizes.get(&cond.identifier())
+                        && *cond_size != SCALAR_VSIZE
                     {
                         return Err(Box::new(ParseError {
                             at: c.offset,
-                            error: format!("invalid condition: {}", gl.vars[cond].size),
+                            error: format!("invalid condition: {}", cond_size),
                         }));
                     }
 
-                    if !symbols.unresolved_vars.contains_key(&truthy)
-                        && !symbols.unresolved_vars.contains_key(&truthy)
+                    if let Some(VarSize::Resolved(truthy_size)) =
+                        symbols.var_sizes.get(&truthy.identifier())
+                        && let Some(VarSize::Resolved(falsy_size)) =
+                            symbols.var_sizes.get(&falsy.identifier())
                     {
-                        let truthy_size = gl.vars[truthy].size;
-                        let falsy_size = gl.vars[falsy].size;
                         if truthy_size != falsy_size {
                             return Err(Box::new(ParseError {
                                 at: c.offset,
@@ -605,8 +638,9 @@ fn parse_bb<'a>(
                                 ),
                             }));
                         };
-                        gl.vars[dst].size = truthy_size;
-                        symbols.unresolved_vars.remove(&dst);
+                        symbols
+                            .var_sizes
+                            .insert(dst.identifier(), VarSize::Resolved(*truthy_size));
                     }
 
                     Instruction::Select(dst, cond, truthy, falsy)
@@ -615,8 +649,9 @@ fn parse_bb<'a>(
                 "lupdt" => {
                     c.trim_cursor();
                     let signal = parse_signal(c, symbols)?;
-                    gl.vars[dst].size = TIME_VSIZE;
-                    symbols.unresolved_vars.remove(&dst);
+                    symbols
+                        .var_sizes
+                        .insert(dst.identifier(), VarSize::Resolved(TIME_VSIZE));
                     Instruction::LastUpdateTime(dst, signal)
                 }
 
@@ -627,8 +662,10 @@ fn parse_bb<'a>(
                     }
                     c.trim_cursor();
                     let signal = parse_signal(c, symbols)?;
-                    gl.vars[dst].size = size.unwrap_or(gl.signals[signal].size);
-                    symbols.unresolved_vars.remove(&dst);
+                    let size = size.unwrap_or(gl.signals[signal].size);
+                    symbols
+                        .var_sizes
+                        .insert(dst.identifier(), VarSize::Resolved(size));
 
                     c.trim_cursor();
                     if c.next_if_equals(',') {
@@ -658,8 +695,9 @@ fn parse_bb<'a>(
                         .collect::<Result<Box<[_]>, _>>()?;
                     let op = IntrinsicOp::Assert(Box::new(dyn_format_string));
 
-                    gl.vars[dst].size = SCALAR_VSIZE;
-                    symbols.unresolved_vars.remove(&dst);
+                    symbols
+                        .var_sizes
+                        .insert(dst.identifier(), VarSize::Resolved(SCALAR_VSIZE));
                     Instruction::Intrinsic(dst, Box::new(op), args)
                 }
                 "vogls.display" => {
@@ -675,14 +713,16 @@ fn parse_bb<'a>(
                         .collect::<Result<Box<[_]>, _>>()?;
                     let op = IntrinsicOp::Display(Box::new(dyn_format_string));
 
-                    gl.vars[dst].size = SCALAR_VSIZE;
-                    symbols.unresolved_vars.remove(&dst);
+                    symbols
+                        .var_sizes
+                        .insert(dst.identifier(), VarSize::Resolved(SCALAR_VSIZE));
                     Instruction::Intrinsic(dst, Box::new(op), args)
                 }
                 "vogls.finish" => {
                     let op = IntrinsicOp::Finish;
-                    gl.vars[dst].size = SCALAR_VSIZE;
-                    symbols.unresolved_vars.remove(&dst);
+                    symbols
+                        .var_sizes
+                        .insert(dst.identifier(), VarSize::Resolved(SCALAR_VSIZE));
                     Instruction::Intrinsic(dst, Box::new(op), [].into())
                 }
 
@@ -704,12 +744,17 @@ fn parse_bb<'a>(
 
                         c.trim_cursor();
                     }
-                    if let Some((_, src)) = srcs
-                        .iter()
-                        .find(|(_, v)| !symbols.unresolved_vars.contains_key(v))
-                    {
-                        gl.vars[dst].size = gl.vars[*src].size;
-                        symbols.unresolved_vars.remove(&dst);
+                    if let Some(src_size) = srcs.iter().find_map(|(_, v)| {
+                        if let Some(VarSize::Resolved(size)) =
+                            symbols.var_sizes.get(&v.identifier())
+                        {
+                            return Some(*size);
+                        }
+                        None
+                    }) {
+                        symbols
+                            .var_sizes
+                            .insert(dst.identifier(), VarSize::Resolved(src_size));
                     }
                     Instruction::Phi(dst, srcs.into())
                 }
@@ -722,9 +767,9 @@ fn parse_bb<'a>(
             };
 
             symbols
-                .unresolved_vars
-                .entry(dst)
-                .and_modify(|i| *i = i.clone());
+                .var_sizes
+                .entry(dst.identifier())
+                .or_insert_with(|| VarSize::Unresolved(i.clone()));
             instrs.push(i);
         } else {
             let start = c.offset;
@@ -853,7 +898,7 @@ fn parse_var<'a>(
     let var = symbols
         .variables
         .entry(ident)
-        .or_insert_with(|| (false, gl.vars.insert(Variable { size: SCALAR_VSIZE })))
+        .or_insert_with(|| (false, gl.vars.insert(SCALAR_VSIZE)))
         .1;
     Ok(var)
 }
@@ -1046,18 +1091,21 @@ fn parse_unary<'a>(
     let src = parse_var(c, symbols, gl)?;
     match op {
         UnaryOp::Neg => {
-            if !symbols.unresolved_vars.contains_key(&src) {
-                gl.vars[dst].size = gl.vars[src].size;
-                symbols.unresolved_vars.remove(&dst);
+            if let Some(VarSize::Resolved(src_size)) = symbols.var_sizes.get(&src.identifier()) {
+                symbols
+                    .var_sizes
+                    .insert(dst.identifier(), VarSize::Resolved(*src_size));
             }
         }
         UnaryOp::ReduceOr | UnaryOp::ReduceAnd | UnaryOp::ReduceXor => {
-            gl.vars[dst].size = SCALAR_VSIZE;
-            symbols.unresolved_vars.remove(&dst);
+            symbols
+                .var_sizes
+                .insert(dst.identifier(), VarSize::Resolved(SCALAR_VSIZE));
         }
         UnaryOp::LeadingZeros => {
-            gl.vars[dst].size = VSIZE_32;
-            symbols.unresolved_vars.remove(&dst);
+            symbols
+                .var_sizes
+                .insert(dst.identifier(), VarSize::Resolved(VSIZE_32));
         }
     }
     Ok(Instruction::Unary(dst, op, src))
@@ -1073,8 +1121,9 @@ fn parse_resize<'a>(
     let size = parse_braced_size(c)?;
     c.trim_cursor();
     let src = parse_var(c, symbols, gl)?;
-    gl.vars[dst].size = size;
-    symbols.unresolved_vars.remove(&dst);
+    symbols
+        .var_sizes
+        .insert(dst.identifier(), VarSize::Resolved(size));
     Ok(Instruction::Resize(dst, op, src))
 }
 
@@ -1094,17 +1143,18 @@ fn parse_binary<'a>(
     c.trim_cursor();
     let rhs = parse_var(c, symbols, gl)?;
 
-    if !symbols.unresolved_vars.contains_key(&lhs) && !symbols.unresolved_vars.contains_key(&rhs) {
-        let lhs_size = gl.vars[lhs].size;
-        let rhs_size = gl.vars[rhs].size;
-        let Some(dst_size) = op.output_size(lhs_size, rhs_size) else {
+    if let Some(VarSize::Resolved(lhs_size)) = symbols.var_sizes.get(&lhs.identifier())
+        && let Some(VarSize::Resolved(rhs_size)) = symbols.var_sizes.get(&rhs.identifier())
+    {
+        let Some(dst_size) = op.output_size(*lhs_size, *rhs_size) else {
             return Err(Box::new(ParseError {
                 at: c.offset,
                 error: format!("invalid size combination: {lhs_size}, {rhs_size}"),
             }));
         };
-        gl.vars[dst].size = dst_size;
-        symbols.unresolved_vars.remove(&dst);
+        symbols
+            .var_sizes
+            .insert(dst.identifier(), VarSize::Resolved(dst_size));
     }
 
     Ok(Instruction::Binary(dst, op, lhs, rhs))
@@ -1126,19 +1176,16 @@ fn parse_binary_imm<'a>(
     c.trim_cursor();
     let imm = parse_imm(c)?;
 
-    if !symbols.unresolved_vars.contains_key(&src) {
-        let Some(dst_size) = op.output_size(gl.vars[src].size, imm.size()) else {
+    if let Some(VarSize::Resolved(src_size)) = symbols.var_sizes.get(&src.identifier()) {
+        let Some(dst_size) = op.output_size(*src_size, imm.size()) else {
             return Err(Box::new(ParseError {
                 at: c.offset,
-                error: format!(
-                    "invalid size combination: {}, {}",
-                    gl.vars[src].size,
-                    imm.size()
-                ),
+                error: format!("invalid size combination: {src_size}, {}", imm.size()),
             }));
         };
-        gl.vars[dst].size = dst_size;
-        symbols.unresolved_vars.remove(&dst);
+        symbols
+            .var_sizes
+            .insert(dst.identifier(), VarSize::Resolved(dst_size));
     }
 
     Ok(Instruction::BinaryImm(dst, op, src, imm))
@@ -1160,9 +1207,10 @@ fn parse_shift_imm<'a>(
     c.trim_cursor();
     let amount = parse_u32(c)?;
 
-    if !symbols.unresolved_vars.contains_key(&src) {
-        gl.vars[dst].size = gl.vars[src].size;
-        symbols.unresolved_vars.remove(&dst);
+    if let Some(VarSize::Resolved(src_size)) = symbols.var_sizes.get(&src.identifier()) {
+        symbols
+            .var_sizes
+            .insert(dst.identifier(), VarSize::Resolved(*src_size));
     }
 
     Ok(Instruction::ShiftImm(dst, op, src, amount))

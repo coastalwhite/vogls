@@ -285,7 +285,7 @@ impl ContextFormat for Instruction {
                     "{} = {}[{}] {}",
                     dst.display(ctx),
                     op.into_mnemonic(),
-                    ctx.gl.vars[*dst].size,
+                    ctx.gl.vars.size(*dst),
                     src.display(ctx),
                 )?;
             }
@@ -313,7 +313,7 @@ impl ContextFormat for Instruction {
                     f,
                     "{} = slice[{}] {}, {}",
                     dst.display(ctx),
-                    ctx.gl.vars[*dst].size,
+                    ctx.gl.vars.size(*dst),
                     src.display(ctx),
                     offset.display(ctx)
                 )?;
@@ -323,7 +323,7 @@ impl ContextFormat for Instruction {
                     f,
                     "{} = slicei[{}] {}, {offset}",
                     dst.display(ctx),
-                    ctx.gl.vars[*dst].size,
+                    ctx.gl.vars.size(*dst),
                     src.display(ctx),
                 )?;
             }
@@ -387,7 +387,7 @@ impl ContextFormat for Instruction {
                 ctx.gl.signals.get(*sig).unwrap().ctx_fmt(f, ctx)?;
             }
             Self::Probe(var, sig, offset) => {
-                let dst_size = ctx.gl.vars[*var].size;
+                let dst_size = ctx.gl.vars.size(*var);
                 let src_size = ctx.gl.signals[*sig].size;
                 if *offset > 0 || dst_size != src_size {
                     var.ctx_fmt(f, ctx)?;
@@ -401,7 +401,7 @@ impl ContextFormat for Instruction {
                 }
             }
             Self::ProbeSlice(var, sig, offset) => {
-                let dst_size = ctx.gl.vars[*var].size;
+                let dst_size = ctx.gl.vars.size(*var);
                 var.ctx_fmt(f, ctx)?;
                 write!(f, " = prb[{dst_size}] ")?;
                 ctx.gl.signals.get(*sig).unwrap().ctx_fmt(f, ctx)?;

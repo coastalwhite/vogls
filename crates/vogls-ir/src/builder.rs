@@ -1,9 +1,6 @@
 use crate::token_range::TokenRange;
 use crate::{
-    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryImmOpSimplification,
-    BinaryOp, Bits, GlobalContext, INTEGER_VSIZE, Instruction, IntrinsicOp, Process, ProcessKey,
-    ProcessKind, ResizeOp, SCALAR_VSIZE, SignalKey, TIME_VSIZE, Time, UnaryOp, Variable,
-    VariableKey, VectorSize,
+    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryImmOpSimplification, BinaryOp, Bits, GlobalContext, Instruction, IntrinsicOp, Process, ProcessKey, ProcessKind, ResizeOp, SignalKey, Time, UnaryOp, VariableKey, VectorSize, INTEGER_VSIZE, SCALAR_VSIZE, TIME_VSIZE, VSIZE_32, VSIZE_64
 };
 
 #[must_use]
@@ -78,9 +75,6 @@ impl BasicBlockBuilder {
         self.instrs.len()
     }
 
-    pub fn next_tmp_var(&mut self, gl: &mut GlobalContext, size: VectorSize) -> VariableKey {
-        gl.vars.insert(Variable { size })
-    }
     pub fn next_bb(&mut self, gl: &mut GlobalContext) -> BasicBlockKey {
         gl.bbs.insert(BasicBlock {
             instrs: Vec::new(),
@@ -103,11 +97,9 @@ impl BasicBlockBuilder {
     ) -> (VariableKey, PhiRef) {
         assert!(!srcs.is_empty());
         let (_, var) = srcs.first().unwrap();
-        assert!(
-            srcs.iter()
-                .all(|(_, v)| gl.vars[*var].size == gl.vars[*v].size)
-        );
-        let dst = self.next_tmp_var(gl, gl.vars[*var].size);
+        let size = gl.vars.size(*var);
+        assert!(srcs.iter().all(|(_, v)| size == gl.vars.size(*v)));
+        let dst = gl.vars.insert(size);
         let offset = self.instrs.len();
         self.instrs.push(Instruction::Phi(dst, srcs));
         (dst, PhiRef(self.key(), offset))
@@ -145,19 +137,19 @@ impl BasicBlockBuilder {
     }
 
     pub fn constant(&mut self, gl: &mut GlobalContext, value: Bits) -> VariableKey {
-        let variable = self.next_tmp_var(gl, value.size());
+        let variable = gl.vars.insert(value.size());
         self.instrs.push(Instruction::Constant(variable, value));
         variable
     }
 
     pub fn constant_u32(&mut self, gl: &mut GlobalContext, value: u32) -> VariableKey {
-        let variable = self.next_tmp_var(gl, VectorSize::new(32).unwrap());
+        let variable = gl.vars.insert(VSIZE_32);
         self.instrs
             .push(Instruction::Constant(variable, Bits::new_u32(value)));
         variable
     }
     pub fn constant_u64(&mut self, gl: &mut GlobalContext, value: u64) -> VariableKey {
-        let variable = self.next_tmp_var(gl, VectorSize::new(64).unwrap());
+        let variable = gl.vars.insert(VSIZE_64);
         self.instrs
             .push(Instruction::Constant(variable, Bits::new_u64(value)));
         variable
@@ -169,26 +161,28 @@ impl BasicBlockBuilder {
         lhs: VariableKey,
         rhs: VariableKey,
     ) -> VariableKey {
-        let size = VectorSize::new(gl.vars[lhs].size.get() + gl.vars[rhs].size.get()).unwrap();
-        let dst = self.next_tmp_var(gl, size);
+        let lhs_size = gl.vars.size(lhs);
+        let rhs_size = gl.vars.size(rhs);
+        let size = VectorSize::new(lhs_size.get() + rhs_size.get()).unwrap();
+        let dst = gl.vars.insert(size);
         self.bin_op(gl, lhs, rhs, BinaryOp::Concat, dst);
         dst
     }
 
     pub fn binary_neg(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
-        let Variable { size } = gl.vars[src];
-        let dst = self.next_tmp_var(gl, size);
+        let size = gl.vars.size(src);
+        let dst = gl.vars.insert(size);
         self.unary_op(gl, src, UnaryOp::Neg, dst);
         dst
     }
 
     pub fn logical_neg(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
-        let Variable { size } = gl.vars[src];
+        let size = gl.vars.size(src);
         let src = match size.get() {
             1 => src,
             _ => self.reduce_or(gl, src),
         };
-        let dst = self.next_tmp_var(gl, VectorSize::new(1).unwrap());
+        let dst = gl.vars.insert(SCALAR_VSIZE);
         self.unary_op(gl, src, UnaryOp::Neg, dst);
         dst
     }
@@ -249,9 +243,10 @@ impl BasicBlockBuilder {
         rhs: VariableKey,
         op: BinaryOp,
     ) -> VariableKey {
-        let size = gl.vars[lhs].size;
-        assert_eq!(size, gl.vars[rhs].size);
-        let dst = self.next_tmp_var(gl, size);
+        let lhs_size = gl.vars.size(lhs);
+        let rhs_size = gl.vars.size(rhs);
+        assert_eq!(lhs_size, rhs_size);
+        let dst = gl.vars.insert(lhs_size);
         self.bin_op(gl, lhs, rhs, op, dst);
         dst
     }
@@ -263,9 +258,10 @@ impl BasicBlockBuilder {
         rhs: VariableKey,
         op: BinaryOp,
     ) -> VariableKey {
-        let size = gl.vars[lhs].size;
-        assert_eq!(size, gl.vars[rhs].size);
-        let dst = self.next_tmp_var(gl, size);
+        let lhs_size = gl.vars.size(lhs);
+        let rhs_size = gl.vars.size(rhs);
+        assert_eq!(lhs_size, rhs_size);
+        let dst = gl.vars.insert(lhs_size);
         self.bin_op(gl, lhs, rhs, op, dst);
         dst
     }
@@ -276,9 +272,9 @@ impl BasicBlockBuilder {
         imm: Bits,
         op: BinaryImmOp,
     ) -> VariableKey {
-        let size = gl.vars[src].size;
+        let size = gl.vars.size(src);
         assert_eq!(size, imm.size());
-        let mut dst = self.next_tmp_var(gl, size);
+        let mut dst = gl.vars.insert(size);
         self.bin_imm_op(src, imm, op, &mut dst);
         dst
     }
@@ -331,7 +327,7 @@ impl BasicBlockBuilder {
         src: VariableKey,
         imm: Bits,
     ) -> VariableKey {
-        assert_eq!(gl.vars[src].size, imm.size());
+        assert_eq!(gl.vars.size(src), imm.size());
         let num_special = imm.count_special();
         if num_special == imm.size().get() {
             return self.constant(gl, Bits::new_unknown(imm.size()));
@@ -352,7 +348,7 @@ impl BasicBlockBuilder {
         src: VariableKey,
         imm: Bits,
     ) -> VariableKey {
-        assert_eq!(gl.vars[src].size, imm.size());
+        assert_eq!(gl.vars.size(src), imm.size());
         let num_special = imm.count_special();
         if num_special == imm.size().get() {
             return self.constant(gl, Bits::new_unknown(imm.size()));
@@ -373,7 +369,7 @@ impl BasicBlockBuilder {
         src: VariableKey,
         imm: Bits,
     ) -> VariableKey {
-        assert_eq!(gl.vars[src].size, imm.size());
+        assert_eq!(gl.vars.size(src), imm.size());
         let num_special = imm.count_special();
         if num_special == imm.size().get() {
             return self.constant(gl, Bits::new_unknown(imm.size()));
@@ -394,7 +390,7 @@ impl BasicBlockBuilder {
         src: VariableKey,
         imm: Bits,
     ) -> VariableKey {
-        assert_eq!(gl.vars[src].size, imm.size());
+        assert_eq!(gl.vars.size(src), imm.size());
         if imm.contains_special() {
             return self.constant(gl, Bits::new_unknown(imm.size()));
         }
@@ -411,7 +407,7 @@ impl BasicBlockBuilder {
         src: VariableKey,
         imm: Bits,
     ) -> VariableKey {
-        assert_eq!(gl.vars[src].size, imm.size());
+        assert_eq!(gl.vars.size(src), imm.size());
         if imm.contains_special() {
             return self.constant(gl, Bits::new_unknown(imm.size()));
         }
@@ -428,7 +424,7 @@ impl BasicBlockBuilder {
         src: VariableKey,
         imm: Bits,
     ) -> VariableKey {
-        assert_eq!(gl.vars[src].size, imm.size());
+        assert_eq!(gl.vars.size(src), imm.size());
         if imm.contains_special() {
             return self.constant(gl, Bits::new_unknown(imm.size()));
         }
@@ -447,7 +443,7 @@ impl BasicBlockBuilder {
         src: VariableKey,
         imm: Bits,
     ) -> VariableKey {
-        assert_eq!(gl.vars[src].size, imm.size());
+        assert_eq!(gl.vars.size(src), imm.size());
         if imm.contains_special() {
             return self.constant(gl, Bits::new_unknown(imm.size()));
         }
@@ -466,7 +462,7 @@ impl BasicBlockBuilder {
         src: VariableKey,
         imm: Bits,
     ) -> VariableKey {
-        assert_eq!(gl.vars[src].size, imm.size());
+        assert_eq!(gl.vars.size(src), imm.size());
         if imm.contains_special() {
             return self.constant(gl, Bits::new_unknown(imm.size()));
         }
@@ -485,7 +481,7 @@ impl BasicBlockBuilder {
         src: VariableKey,
         imm: Bits,
     ) -> VariableKey {
-        assert_eq!(gl.vars[src].size, imm.size());
+        assert_eq!(gl.vars.size(src), imm.size());
         if imm.contains_special() {
             return self.constant(gl, Bits::new_unknown(imm.size()));
         }
@@ -504,7 +500,7 @@ impl BasicBlockBuilder {
         src: VariableKey,
         imm: Bits,
     ) -> VariableKey {
-        assert_eq!(gl.vars[src].size, imm.size());
+        assert_eq!(gl.vars.size(src), imm.size());
         if imm.contains_special() {
             return self.constant(gl, Bits::new_unknown(imm.size()));
         }
@@ -517,7 +513,7 @@ impl BasicBlockBuilder {
         src: VariableKey,
         imm: Bits,
     ) -> VariableKey {
-        assert_eq!(gl.vars[src].size, imm.size());
+        assert_eq!(gl.vars.size(src), imm.size());
         if imm.contains_special() {
             return self.constant(gl, Bits::new_unknown(imm.size()));
         }
@@ -534,7 +530,7 @@ impl BasicBlockBuilder {
         src: VariableKey,
         imm: Bits,
     ) -> VariableKey {
-        assert_eq!(gl.vars[src].size, imm.size());
+        assert_eq!(gl.vars.size(src), imm.size());
         if imm.contains_special() {
             return self.constant(gl, Bits::new_unknown(imm.size()));
         }
@@ -547,7 +543,7 @@ impl BasicBlockBuilder {
         src: VariableKey,
         imm: Bits,
     ) -> VariableKey {
-        assert_eq!(gl.vars[src].size, imm.size());
+        assert_eq!(gl.vars.size(src), imm.size());
         if imm.contains_special() {
             return self.constant(gl, Bits::new_unknown(imm.size()));
         }
@@ -572,12 +568,8 @@ impl BasicBlockBuilder {
         self.copy_op(gl, lhs, rhs, BinaryOp::CopyZ)
     }
 
-    pub fn count_leading_zeros(
-        &mut self,
-        gl: &mut GlobalContext,
-        src: VariableKey,
-    ) -> VariableKey {
-        let dst = self.next_tmp_var(gl, INTEGER_VSIZE);
+    pub fn count_leading_zeros(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
+        let dst = gl.vars.insert(VSIZE_32);
         self.unary_op(gl, src, UnaryOp::LeadingZeros, dst);
         dst
     }
@@ -604,12 +596,12 @@ impl BasicBlockBuilder {
         src: VariableKey,
         width: VectorSize,
     ) -> VariableKey {
-        let Variable { size } = gl.vars[src];
+        let size = gl.vars.size(src);
         if size == width {
             return src;
         }
 
-        let dst = self.next_tmp_var(gl, width);
+        let dst = gl.vars.insert(width);
         self.resize_op(gl, dst, ResizeOp::Truncate, src);
         dst
     }
@@ -620,15 +612,15 @@ impl BasicBlockBuilder {
         offset: u32,
         width: VectorSize,
     ) -> VariableKey {
-        let src_size = gl.vars[src].size;
-        assert!(gl.vars[src].size >= width);
+        let src_size = gl.vars.size(src);
+        assert!(gl.vars.size(src) >= width);
         if offset == 0 {
             return self.truncate(gl, src, width);
         }
         if offset >= src_size.get() {
             return self.constant(gl, Bits::new_unknown(width));
         }
-        let dst = self.next_tmp_var(gl, width);
+        let dst = gl.vars.insert(width);
         self.instrs.push(Instruction::SliceImm(dst, src, offset));
         if offset <= src_size.get() - width.get() {
             return dst;
@@ -650,9 +642,9 @@ impl BasicBlockBuilder {
         offset: VariableKey,
         width: VectorSize,
     ) -> VariableKey {
-        assert_eq!(gl.vars[offset].size, INTEGER_VSIZE);
-        assert!(gl.vars[src].size >= width);
-        let dst = self.next_tmp_var(gl, width);
+        assert_eq!(gl.vars.size(offset), INTEGER_VSIZE);
+        assert!(gl.vars.size(src) >= width);
+        let dst = gl.vars.insert(width);
         self.instrs.push(Instruction::Slice(dst, src, offset));
         dst
     }
@@ -681,8 +673,8 @@ impl BasicBlockBuilder {
         lhs: VariableKey,
         rhs: VariableKey,
     ) -> VariableKey {
-        assert_eq!(gl.vars[lhs].size, gl.vars[rhs].size);
-        let dst = self.next_tmp_var(gl, SCALAR_VSIZE);
+        assert_eq!(gl.vars.size(lhs), gl.vars.size(rhs));
+        let dst = gl.vars.insert(SCALAR_VSIZE);
         self.bin_op(gl, lhs, rhs, BinaryOp::UnsignedLessEqual, dst);
         dst
     }
@@ -719,8 +711,8 @@ impl BasicBlockBuilder {
         lhs: VariableKey,
         rhs: VariableKey,
     ) -> VariableKey {
-        assert_eq!(gl.vars[lhs].size, gl.vars[rhs].size);
-        let mask = Bits::new_with_msb_one(gl.vars[lhs].size);
+        assert_eq!(gl.vars.size(lhs), gl.vars.size(rhs));
+        let mask = Bits::new_with_msb_one(gl.vars.size(lhs));
         let lhs = self.xor_constant(gl, lhs, mask.clone());
         let rhs = self.xor_constant(gl, rhs, mask);
         self.unsigned_le(gl, lhs, rhs)
@@ -782,8 +774,8 @@ impl BasicBlockBuilder {
         lhs: VariableKey,
         rhs: VariableKey,
     ) -> VariableKey {
-        assert_eq!(gl.vars[lhs].size, gl.vars[rhs].size);
-        let dst = self.next_tmp_var(gl, SCALAR_VSIZE);
+        assert_eq!(gl.vars.size(lhs), gl.vars.size(rhs));
+        let dst = gl.vars.insert(SCALAR_VSIZE);
         self.bin_op(gl, lhs, rhs, BinaryOp::CaseEquality, dst);
         dst
     }
@@ -803,39 +795,39 @@ impl BasicBlockBuilder {
         lhs: VariableKey,
         imm: Bits,
     ) -> VariableKey {
-        assert_eq!(gl.vars[lhs].size, imm.size());
-        let mut dst = self.next_tmp_var(gl, SCALAR_VSIZE);
+        assert_eq!(gl.vars.size(lhs), imm.size());
+        let mut dst = gl.vars.insert(SCALAR_VSIZE);
         self.bin_imm_op(lhs, imm, BinaryImmOp::CaseEquality, &mut dst);
         dst
     }
 
     pub fn reduce_xor(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
-        let Variable { size } = gl.vars[src];
+        let size = gl.vars.size(src);
         if size == SCALAR_VSIZE {
             return src;
         }
 
-        let dst = self.next_tmp_var(gl, SCALAR_VSIZE);
+        let dst = gl.vars.insert(SCALAR_VSIZE);
         self.unary_op(gl, src, UnaryOp::ReduceXor, dst);
         dst
     }
     pub fn reduce_or(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
-        let Variable { size } = gl.vars[src];
+        let size = gl.vars.size(src);
         if size == SCALAR_VSIZE {
             return src;
         }
 
-        let dst = self.next_tmp_var(gl, SCALAR_VSIZE);
+        let dst = gl.vars.insert(SCALAR_VSIZE);
         self.unary_op(gl, src, UnaryOp::ReduceOr, dst);
         dst
     }
     pub fn reduce_and(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
-        let Variable { size } = gl.vars[src];
+        let size = gl.vars.size(src);
         if size == SCALAR_VSIZE {
             return src;
         }
 
-        let dst = self.next_tmp_var(gl, SCALAR_VSIZE);
+        let dst = gl.vars.insert(SCALAR_VSIZE);
         self.unary_op(gl, src, UnaryOp::ReduceAnd, dst);
         dst
     }
@@ -886,14 +878,14 @@ impl BasicBlockBuilder {
         partial: Option<(VariableKey, VectorSize)>,
     ) {
         if let Some((offset, _)) = partial {
-            assert_eq!(gl.vars[offset].size, INTEGER_VSIZE);
+            assert_eq!(gl.vars.size(offset), INTEGER_VSIZE);
         }
         self.instrs.push(Instruction::Drive(signal, src, partial));
     }
 
     pub fn probe(&mut self, gl: &mut GlobalContext, signal: SignalKey) -> VariableKey {
         let size = gl.signals.get(signal).unwrap().size;
-        let dst = self.next_tmp_var(gl, size);
+        let dst = gl.vars.insert(size);
         self.instrs.push(Instruction::Probe(dst, signal, 0));
         dst
     }
@@ -905,7 +897,7 @@ impl BasicBlockBuilder {
         offset: VariableKey,
         width: VectorSize,
     ) -> VariableKey {
-        let dst = self.next_tmp_var(gl, width);
+        let dst = gl.vars.insert(width);
         self.instrs
             .push(Instruction::ProbeSlice(dst, signal, offset));
         dst
@@ -919,7 +911,7 @@ impl BasicBlockBuilder {
         width: VectorSize,
     ) -> VariableKey {
         let src_size = gl.signals[signal].size;
-        let dst = self.next_tmp_var(gl, width);
+        let dst = gl.vars.insert(width);
         self.instrs.push(Instruction::Probe(dst, signal, offset));
         if offset <= src_size.get() - width.get() {
             return dst;
@@ -996,7 +988,7 @@ impl BasicBlockBuilder {
         gl: &mut GlobalContext,
         condition: VariableKey,
     ) -> (BranchRef, BasicBlockBuilder) {
-        assert_eq!(gl.vars[condition].size, SCALAR_VSIZE);
+        assert_eq!(gl.vars.size(condition), SCALAR_VSIZE);
         let branch_bb = self.key();
         let next_key = self.next_bb(gl);
         let slf = gl.bbs.get_mut(self.key).unwrap();
@@ -1120,14 +1112,14 @@ impl BasicBlockBuilder {
         op: IntrinsicOp,
         args: Box<[VariableKey]>,
     ) -> VariableKey {
-        let dst = self.next_tmp_var(gl, SCALAR_VSIZE);
+        let dst = gl.vars.insert(SCALAR_VSIZE);
         self.instrs
             .push(Instruction::Intrinsic(dst, Box::new(op), args));
         dst
     }
 
     pub fn time(&mut self, gl: &mut GlobalContext) -> VariableKey {
-        let dst = self.next_tmp_var(gl, TIME_VSIZE);
+        let dst = gl.vars.insert(TIME_VSIZE);
         self.instrs.push(Instruction::Intrinsic(
             dst,
             Box::new(IntrinsicOp::Time),
@@ -1136,7 +1128,7 @@ impl BasicBlockBuilder {
         dst
     }
     pub fn random(&mut self, gl: &mut GlobalContext) -> VariableKey {
-        let dst = self.next_tmp_var(gl, INTEGER_VSIZE);
+        let dst = gl.vars.insert(INTEGER_VSIZE);
         self.instrs.push(Instruction::Intrinsic(
             dst,
             Box::new(IntrinsicOp::Random),
@@ -1151,12 +1143,12 @@ impl BasicBlockBuilder {
         src: VariableKey,
         new_size: VectorSize,
     ) -> VariableKey {
-        let Variable { size } = gl.vars[src];
+        let size = gl.vars.size(src);
         if size == new_size {
             return src;
         }
 
-        let dst = self.next_tmp_var(gl, new_size);
+        let dst = gl.vars.insert(new_size);
         self.resize_op(gl, dst, ResizeOp::ZeroExtend, src);
         dst
     }
@@ -1166,12 +1158,12 @@ impl BasicBlockBuilder {
         src: VariableKey,
         new_size: VectorSize,
     ) -> VariableKey {
-        let Variable { size } = gl.vars[src];
+        let size = gl.vars.size(src);
         if size == new_size {
             return src;
         }
 
-        let dst = self.next_tmp_var(gl, new_size);
+        let dst = gl.vars.insert(new_size);
         self.resize_op(gl, dst, ResizeOp::SignExtend, src);
         dst
     }
@@ -1183,9 +1175,9 @@ impl BasicBlockBuilder {
         rhs: VariableKey,
         op: BinaryOp,
     ) -> VariableKey {
-        let lhs_size = gl.vars[lhs].size;
-        assert_eq!(gl.vars[rhs].size, INTEGER_VSIZE);
-        let dst = self.next_tmp_var(gl, lhs_size);
+        let lhs_size = gl.vars.size(lhs);
+        assert_eq!(gl.vars.size(rhs), INTEGER_VSIZE);
+        let dst = gl.vars.insert(lhs_size);
         self.instrs.push(Instruction::Binary(dst, op, lhs, rhs));
         dst
     }
@@ -1220,7 +1212,7 @@ impl BasicBlockBuilder {
     }
 
     pub fn lupdt(&mut self, gl: &mut GlobalContext, signal: SignalKey) -> VariableKey {
-        let dst = self.next_tmp_var(gl, TIME_VSIZE);
+        let dst = gl.vars.insert(TIME_VSIZE);
         self.instrs.push(Instruction::LastUpdateTime(dst, signal));
         dst
     }
@@ -1248,10 +1240,10 @@ impl BasicBlockBuilder {
         truthy: VariableKey,
         falsy: VariableKey,
     ) -> VariableKey {
-        let size = gl.vars[truthy].size;
-        assert_eq!(size, gl.vars[falsy].size);
-        assert_eq!(SCALAR_VSIZE, gl.vars[select].size);
-        let dst = self.next_tmp_var(gl, size);
+        let size = gl.vars.size(truthy);
+        assert_eq!(size, gl.vars.size(falsy));
+        assert_eq!(SCALAR_VSIZE, gl.vars.size(select));
+        let dst = gl.vars.insert(size);
         self.instrs
             .push(Instruction::Select(dst, select, truthy, falsy));
         dst
@@ -1263,9 +1255,9 @@ impl BasicBlockBuilder {
         before: VariableKey,
         after: VariableKey,
     ) -> VariableKey {
-        assert_eq!(gl.vars[before].size, SCALAR_VSIZE);
-        assert_eq!(gl.vars[after].size, SCALAR_VSIZE);
-        let dst = self.next_tmp_var(gl, SCALAR_VSIZE);
+        assert_eq!(gl.vars.size(before), SCALAR_VSIZE);
+        assert_eq!(gl.vars.size(after), SCALAR_VSIZE);
+        let dst = gl.vars.insert(SCALAR_VSIZE);
         self.bin_op(gl, before, after, BinaryOp::Posedge, dst);
         dst
     }
@@ -1275,9 +1267,9 @@ impl BasicBlockBuilder {
         before: VariableKey,
         after: VariableKey,
     ) -> VariableKey {
-        assert_eq!(gl.vars[before].size, SCALAR_VSIZE);
-        assert_eq!(gl.vars[after].size, SCALAR_VSIZE);
-        let dst = self.next_tmp_var(gl, SCALAR_VSIZE);
+        assert_eq!(gl.vars.size(before), SCALAR_VSIZE);
+        assert_eq!(gl.vars.size(after), SCALAR_VSIZE);
+        let dst = gl.vars.insert(SCALAR_VSIZE);
         self.bin_op(gl, before, after, BinaryOp::Negedge, dst);
         dst
     }
