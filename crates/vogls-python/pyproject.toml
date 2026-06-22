@@ -12,6 +12,7 @@ dependencies = []
 
 [dependency-groups]
 dev = [
-    "maturin>=1.14.0",
+    "numpy>=2.4.6",
     "pdoc>=16.0.0",
+    "pytest>=9.1.1",
 ]

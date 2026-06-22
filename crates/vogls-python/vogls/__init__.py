@@ -31,6 +31,7 @@ __all__ = [
     # functions
     "welch_t_test",
     "mutual_information",
+    "pearson_corr",
 ]
 
 
@@ -244,9 +245,22 @@ class Value:
 
     @classmethod
     def _from_py(cls, py: vgr.PyValue) -> Self:
-        slf = cls()
+        slf = cls.__new__(cls)
         slf._inner = py
         return slf
+
+    @overload
+    def extract(self, type: type[float]) -> float: ...
+    @overload
+    def extract(self, type: type[int]) -> int: ...
+
+    def extract(self, type: type[int] | type[float]) -> int | float:
+        if type is float:
+            return self._inner.extract_float()
+        elif type is int:
+            return self._inner.extract_int()
+        else:
+            raise ValueError(f"cannot extract {type} from Value")
 
     def lazy(self) -> "LazyValue":
         return LazyValue._from_py(self._inner.lazy())
@@ -396,8 +410,6 @@ def mutual_information(
     $H(X)$ the entropy, it is given as:
 
     $$ I(X; Y) = H(X) - H(X | Y) $$
-
-    # Examples
     """
     if isinstance(lhs, LazyRunVector) and isinstance(rhs, LazyRunVector):
         return LazyArray._from_py(
@@ -410,6 +422,39 @@ def mutual_information(
     else:
         raise ValueError(
             f"cannot call `mutual_information` on {_type_name(lhs)} and {_type_name(rhs)}"
+        )
+
+
+@overload
+def pearson_corr(lhs: LazyArray, rhs: LazyArray) -> LazyValue: ...
+@overload
+def pearson_corr(lhs: LazyRunVector, rhs: LazyRunVector) -> LazyArray: ...
+
+
+def pearson_corr(
+    lhs: LazyRunVector | LazyArray, rhs: LazyRunVector | LazyArray
+) -> LazyArray | LazyValue:
+    """
+    Calculate the Pearson Correlation Coefficient between RunVectors or Arrays.
+
+    Pearson Correlation Coefficient is a coefficient that indicates show much
+    linear correlation exists between two sets.
+
+    It is given as:
+
+    $$ \\rho_{X, Y} = \\frac{\\text{cov}(X, Y)}{\\sigma_X \\sigma_Y} $$
+    """
+    if isinstance(lhs, LazyRunVector) and isinstance(rhs, LazyRunVector):
+        return LazyArray._from_py(
+            vgr.PyLazyArray.pearson_corr(lhs._producer, rhs._producer)
+        )
+    elif isinstance(lhs, LazyArray) and isinstance(rhs, LazyArray):
+        return LazyValue._from_py(
+            vgr.PyLazyValue.pearson_corr(lhs._producer, rhs._producer)
+        )
+    else:
+        raise ValueError(
+            f"cannot call `pearson_corr` on {_type_name(lhs)} and {_type_name(rhs)}"
         )
 
 

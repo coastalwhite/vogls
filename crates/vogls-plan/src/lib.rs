@@ -31,6 +31,7 @@ pub mod entropy;
 pub mod expand;
 pub mod map;
 pub mod mutual_information;
+pub mod pearson_corr;
 pub mod output;
 pub mod plan;
 pub mod random;

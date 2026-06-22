@@ -24,6 +24,7 @@ mod vogls {
     use vogls_plan::map::{build_array_map, build_run_vector_map};
     use vogls_plan::mutual_information::MutualInformation;
     use vogls_plan::output::{DslLazyOutput, DslPlanComponent, Output};
+    use vogls_plan::pearson_corr::PearsonCorrelation;
     use vogls_plan::plan::{DslLazyPlan, LazyPlan, Plan};
     use vogls_plan::random::RandomBits;
     use vogls_plan::run::DslLazyStep;
@@ -782,6 +783,17 @@ mod vogls {
             )?))
         }
 
+        #[staticmethod]
+        pub fn pearson_corr(
+            lhs: Bound<PyLazyRunVector>,
+            rhs: Bound<PyLazyRunVector>,
+        ) -> PyResult<Self> {
+            Ok(PyLazyArray(build_run_vector_agg(
+                PearsonCorrelation,
+                [lhs.get().0.clone().into(), rhs.get().0.clone().into()],
+            )?))
+        }
+
         pub fn entropy(&self) -> PyResult<PyLazyValue> {
             Ok(PyLazyValue(build_array_agg(Entropy, [self.0.clone()])?))
         }
@@ -870,6 +882,17 @@ mod vogls {
                 [lhs.get().0.clone().into(), rhs.get().0.clone().into()],
             )?))
         }
+
+        #[staticmethod]
+        pub fn pearson_corr(
+            lhs: Bound<PyLazyArray>,
+            rhs: Bound<PyLazyArray>,
+        ) -> PyResult<Self> {
+            Ok(PyLazyValue(build_array_agg(
+                PearsonCorrelation,
+                [lhs.get().0.clone().into(), rhs.get().0.clone().into()],
+            )?))
+        }
     }
     #[pymethods]
     impl PyValue {
@@ -906,6 +929,14 @@ mod vogls {
         pub fn extract_float(&self) -> PyResult<f64> {
             match &self.0 {
                 Value::Float(v) => Ok(*v),
+                _ => todo!(),
+            }
+        }
+
+        pub fn extract_int(&self) -> PyResult<i64> {
+            match &self.0 {
+                Value::Int(v) => Ok(*v),
+                Value::UInt(v) => Ok(*v as i64),
                 _ => todo!(),
             }
         }

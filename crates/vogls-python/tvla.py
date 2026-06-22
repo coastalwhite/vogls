@@ -54,7 +54,7 @@ def masked_run(*, random: bool) -> vg.LazyRunVector:
 fixed = run(random=False)
 random = run(random=True)
 
-print(vg.welch_t_test(fixed, random).to_dot_graph())
+print(vg.pearson_corr(fixed, random).compute().as_list())
 
 # print(fixed.compute().as_list())
 # print(random.compute().as_list())
