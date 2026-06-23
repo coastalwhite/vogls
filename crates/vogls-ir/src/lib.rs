@@ -1,20 +1,20 @@
 mod builder;
 pub mod dyn_format_string;
 pub mod evaluation;
+mod form;
 mod format;
 pub mod optimize;
 pub mod parse;
 pub mod token_range;
 pub mod vcd;
 
-use std::collections::HashSet;
 use std::fmt;
 use std::num::{NonZeroU32, NonZeroU64};
 use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign};
 pub use vogls_bits as bits;
 pub use vogls_bits::{Bits, Mode, VectorSize};
 
-pub use builder::{BasicBlockBuilder, BranchRef, PhiRef, new_anonymous_builder, new_process};
+pub use builder::{BasicBlockBuilder, BranchRef, PhiRef, ProcessBuilder};
 pub use format::{ContextFormat, DisplayContext};
 use slotmap::{SlotMap, new_key_type};
 use vogls_utils::{NonMaxU32, VgHashMap};
@@ -27,11 +27,26 @@ new_key_type! { pub struct ProcessKey; }
 new_key_type! { pub struct BasicBlockKey; }
 new_key_type! { pub struct SignalKey; }
 
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct TemporalRegionKey(BasicBlockKey);
+
+impl TemporalRegionKey {
+    pub fn from_entry(key: BasicBlockKey) -> Self {
+        Self(key)
+    }
+
+    pub fn entry(self) -> BasicBlockKey {
+        self.0
+    }
+}
+
 /// A unique identifier for a VIR variable.
 ///
 /// This is a unique identifier combined with a conditionally inlined size. If the size does not
 /// fit in the allocated space, it put into the external [`VariableMap`].
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
 pub struct VariableKey(NonZeroU64);
 
 impl VariableKey {
@@ -86,10 +101,11 @@ pub struct Time(pub u64);
 
 #[derive(Debug, Clone)]
 pub enum BasicBlockTerminator {
-    Wait(BasicBlockKey, Time),
-    VariableWait(BasicBlockKey, VariableKey),
-    WaitRegion(BasicBlockKey, u8),
-    Watch(BasicBlockKey, Vec<SignalKey>),
+    Wait(TemporalRegionKey, Time),
+    VariableWait(TemporalRegionKey, VariableKey),
+    WaitRegion(TemporalRegionKey, u8),
+    Watch(TemporalRegionKey, Vec<SignalKey>),
+
     Jump(BasicBlockKey),
     /// (condition, if_true, if_false)
     Branch(VariableKey, BasicBlockKey, BasicBlockKey),
@@ -99,6 +115,7 @@ pub enum BasicBlockTerminator {
 #[derive(Debug, Clone)]
 pub struct BasicBlock {
     pub instrs: Vec<Instruction>,
+    pub region: TemporalRegionKey,
     pub terminator: BasicBlockTerminator,
 }
 impl BasicBlock {
@@ -107,10 +124,6 @@ impl BasicBlock {
             i.map_bb(&mut f);
         }
         self.terminator.map_bb(f);
-    }
-
-    pub fn for_each_fanout(&self, f: impl FnMut(BasicBlockKey)) {
-        self.terminator.for_each_bb(f);
     }
 
     fn map_bb(&mut self, mut f: impl FnMut(BasicBlockKey) -> BasicBlockKey) {
@@ -155,40 +168,28 @@ impl BasicBlock {
 }
 
 impl BasicBlockTerminator {
-    pub fn extend_next_rev(
-        &self,
-        bb_stack: &mut Vec<BasicBlockKey>,
-        bb_seen: &mut HashSet<BasicBlockKey>,
-    ) {
+    pub fn for_each_temporal_bb(&self, mut f: impl FnMut(BasicBlockKey)) {
         match self {
-            Self::Wait(bb, _)
-            | Self::VariableWait(bb, _)
-            | Self::WaitRegion(bb, _)
-            | Self::Watch(bb, _)
-            | Self::Jump(bb) => {
-                if bb_seen.insert(*bb) {
-                    bb_stack.push(*bb);
-                }
+            Self::Wait(bb, ..)
+            | Self::VariableWait(bb, ..)
+            | Self::WaitRegion(bb, ..)
+            | Self::Watch(bb, ..) => f(bb.entry()),
+
+            Self::Jump(bb) => {
+                f(*bb);
             }
             Self::Branch(_, true_bb, false_bb) => {
-                if bb_seen.insert(*false_bb) {
-                    bb_stack.push(*false_bb);
-                }
-                if bb_seen.insert(*true_bb) {
-                    bb_stack.push(*true_bb);
-                }
+                f(*true_bb);
+                f(*false_bb);
             }
             Self::Halt => {}
         }
     }
-
-    pub fn for_each_bb(&self, mut f: impl FnMut(BasicBlockKey)) {
+    pub fn for_each_non_temporal_bb(&self, mut f: impl FnMut(BasicBlockKey)) {
         match self {
-            Self::Wait(bb, _)
-            | Self::VariableWait(bb, _)
-            | Self::WaitRegion(bb, _)
-            | Self::Watch(bb, _)
-            | Self::Jump(bb) => {
+            Self::Wait(..) | Self::VariableWait(..) | Self::WaitRegion(..) | Self::Watch(..) => {}
+
+            Self::Jump(bb) => {
                 f(*bb);
             }
             Self::Branch(_, true_bb, false_bb) => {
@@ -233,11 +234,12 @@ impl BasicBlockTerminator {
 
     pub fn map_bb(&mut self, mut f: impl FnMut(BasicBlockKey) -> BasicBlockKey) {
         match self {
-            BasicBlockTerminator::Wait(bb, _)
-            | BasicBlockTerminator::VariableWait(bb, _)
-            | BasicBlockTerminator::WaitRegion(bb, _)
-            | BasicBlockTerminator::Watch(bb, _)
-            | BasicBlockTerminator::Jump(bb) => {
+            BasicBlockTerminator::Wait(..)
+            | BasicBlockTerminator::VariableWait(..)
+            | BasicBlockTerminator::WaitRegion(..)
+            | BasicBlockTerminator::Watch(..) => {}
+
+            BasicBlockTerminator::Jump(bb) => {
                 *bb = f(*bb);
             }
             BasicBlockTerminator::Branch(_, bb1, bb2) => {
@@ -786,6 +788,42 @@ impl Instruction {
                 f(*cond);
                 f(*truthy);
                 f(*falsy);
+            }
+            Self::Constant(_, _) | Self::LastUpdateTime(_, _) | Self::Probe(_, _, _) => {}
+        }
+    }
+    fn map_src_vars(&mut self, mut f: impl FnMut(VariableKey) -> VariableKey) {
+        match self {
+            Self::Unary(_, _, src)
+            | Self::Resize(_, _, src)
+            | Self::BinaryImm(_, _, src, _)
+            | Self::SliceImm(_, src, _)
+            | Self::ShiftImm(_, _, src, _)
+            | Self::ProbeSlice(_, _, src) => *src = f(*src),
+            Self::Binary(_, _, src1, src2) | Self::Slice(_, src1, src2) => {
+                *src1 = f(*src1);
+                *src2 = f(*src2);
+            }
+            Self::Phi(_, srcs) => {
+                for (_, s) in srcs {
+                    *s = f(*s);
+                }
+            }
+            Self::Intrinsic(_, _, srcs) => {
+                for s in srcs {
+                    *s = f(*s);
+                }
+            }
+            Self::Drive(_, src, partial) => {
+                *src = f(*src);
+                if let Some((off, _)) = partial {
+                    *off = f(*off);
+                }
+            }
+            Self::Select(_, cond, truthy, falsy) => {
+                *cond = f(*cond);
+                *truthy = f(*truthy);
+                *falsy = f(*falsy);
             }
             Self::Constant(_, _) | Self::LastUpdateTime(_, _) | Self::Probe(_, _, _) => {}
         }
@@ -1394,7 +1432,10 @@ define_process_kinds! {
 #[derive(Debug, Clone)]
 pub struct Process {
     pub kind: ProcessKind,
-    pub entry: BasicBlockKey,
+
+    // @Performance: Use UnitVec here.
+    pub regions: Vec<TemporalRegionKey>,
+
     pub origin: TokenRange,
 }
 

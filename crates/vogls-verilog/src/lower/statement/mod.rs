@@ -1,8 +1,5 @@
 use vogls_frontend::symbol_table::SymbolId;
-use vogls_ir::{
-    BasicBlockBuilder, BasicBlockTerminator, ProcessKind, SCALAR_VSIZE, SignalFlags, SignalKey,
-    VectorSize, new_process,
-};
+use vogls_ir::{BasicBlockBuilder, ProcessBuilder, ProcessKind, SignalFlags, SignalKey, VectorSize, SCALAR_VSIZE};
 use vogls_utils::OrderedSet;
 
 use crate::ast::expr::BitSlice;
@@ -190,7 +187,7 @@ pub fn statements_to_process<'a>(
                 });
 
                 for (i, stmt) in statements.iter().enumerate() {
-                    let (_, mut fork_builder) = new_process(mctx.gl(), ProcessKind::Fork, origin);
+                    let (process, mut fork_builder) = ProcessBuilder::new(mctx.gl(), ProcessKind::Fork, origin);
                     let fork_entry_bb = fork_builder.key();
                     let condition = fork_builder.probe_slice_constant(
                         mctx.gl(),
@@ -198,15 +195,10 @@ pub fn statements_to_process<'a>(
                         i as u32,
                         SCALAR_VSIZE,
                     );
-                    fork_builder = fork_builder.next_terminate_later(mctx.gl());
-                    let ret_with_watch_bb = fork_builder.key();
-                    fork_builder = fork_builder.next_terminate_later(mctx.gl());
-                    let end_bb = fork_builder.key();
-
-                    mctx.gl.bbs[fork_entry_bb].terminator =
-                        BasicBlockTerminator::Branch(condition, end_bb, ret_with_watch_bb);
-                    mctx.gl.bbs[ret_with_watch_bb].terminator =
-                        BasicBlockTerminator::Watch(fork_entry_bb, vec![fork_trigger]);
+                    let watch_builder;
+                    (fork_builder, watch_builder) =
+                        fork_builder.double_branch(mctx.gl(), condition);
+                    watch_builder.watch_to(mctx.gl(), vec![fork_trigger], fork_entry_bb);
 
                     fork_builder = statements_to_process(
                         ctx,
@@ -218,6 +210,7 @@ pub fn statements_to_process<'a>(
                     let l0 = fork_builder.constant(mctx.gl(), vogls_ir::Bits::from(false));
                     fork_builder.drive_partial_constant(mctx.gl(), fork_trigger, l0, i as u32);
                     fork_builder.jump_to(mctx.gl(), fork_entry_bb);
+                    process.finalize(mctx.gl());
                 }
 
                 let l1 = builder.constant(mctx.gl(), vogls_ir::Bits::new_ones(num_processes));
@@ -228,15 +221,9 @@ pub fn statements_to_process<'a>(
                 let start_bb = builder.key();
                 let condition = builder.probe(mctx.gl(), fork_trigger);
                 let condition = builder.reduce_or(mctx.gl(), condition);
-                builder = builder.next_terminate_later(mctx.gl());
-                let ret_with_watch_bb = builder.key();
-                builder = builder.next_terminate_later(mctx.gl());
-                let end_bb = builder.key();
-
-                mctx.gl.bbs[start_bb].terminator =
-                    BasicBlockTerminator::Branch(condition, ret_with_watch_bb, end_bb);
-                mctx.gl.bbs[ret_with_watch_bb].terminator =
-                    BasicBlockTerminator::Watch(start_bb, vec![fork_trigger]);
+                let watch_builder;
+                (watch_builder, builder) = builder.double_branch(mctx.gl(), condition);
+                watch_builder.watch_to(mctx.gl(), vec![fork_trigger], start_bb);
             }
             S::SystemTaskEnable(id) => {
                 builder =
@@ -253,24 +240,18 @@ pub fn statements_to_process<'a>(
                 } = &*id;
 
                 builder = builder.jump(mctx.gl());
+                let start_bb = builder.key();
+
                 let (condition, _) =
                     expression::lower_expr(ctx, mctx, scope, &mut builder, *expression, None)?;
                 let condition = builder.reduce_or(mctx.gl(), condition);
                 let mut ins = OrderedSet::new();
                 expression::get_used_signals(ctx, mctx, scope, &mut ins, *expression)?;
 
-                let start_bb = builder.key();
-                builder = builder.next_terminate_later(mctx.gl());
-                let ret_with_watch_bb = builder.key();
-                builder = builder.next_terminate_later(mctx.gl());
-                let statement_bb = builder.key();
-
-                mctx.gl.bbs[start_bb].terminator =
-                    BasicBlockTerminator::Branch(condition, statement_bb, ret_with_watch_bb);
-                mctx.gl.bbs[ret_with_watch_bb].terminator =
-                    BasicBlockTerminator::Watch(start_bb, ins.items);
-
-                builder = lower_statement_or_null(ctx, mctx, scope, builder, *statement_or_null)?;
+                let (stmt_builder, watch_builder) = builder.double_branch(mctx.gl(), condition);
+                watch_builder.watch_to(mctx.gl(), ins.items, start_bb);
+                builder =
+                    lower_statement_or_null(ctx, mctx, scope, stmt_builder, *statement_or_null)?;
             }
         }
     }

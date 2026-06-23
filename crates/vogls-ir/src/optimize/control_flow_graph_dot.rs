@@ -9,7 +9,7 @@ pub fn control_flow_graph_dot(
     scratch_stack: &mut Vec<BasicBlockKey>,
     scratch_seen: &mut VgHashSet<BasicBlockKey>,
 ) -> String {
-    let entry = gl.processes[process].entry;
+    let entry = gl.processes[process].regions[0].entry();
 
     let mut f = String::new();
     let mut label = String::new();
@@ -19,7 +19,6 @@ pub fn control_flow_graph_dot(
     writeln!(f, "digraph cfg {{").unwrap();
     writeln!(f, "  rankdir=\"BT\"").unwrap();
     writeln!(f, "  node [shape=box, fontsize=14, fontname=\"Monospace\"]").unwrap();
-
 
     scratch_seen.clear();
     scratch_stack.clear();
@@ -39,7 +38,7 @@ pub fn control_flow_graph_dot(
 
         writeln!(f, "  P{idx}[label=\"{label}\"]").unwrap();
 
-        bb.terminator.for_each_bb(|next| {
+        bb.terminator.for_each_temporal_bb(|next| {
             writeln!(
                 f,
                 "  P{idx} -> P{next_idx}",

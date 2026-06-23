@@ -10,7 +10,7 @@ use crate::token_range::TokenRange;
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext,
     Instruction, IntrinsicOp, ProcessKey, ProcessKind, ResizeOp, SCALAR_VSIZE, ShiftImmOp, Signal,
-    SignalFlags, SignalKey, TIME_VSIZE, Time, UnaryOp, VSIZE_32, VariableKey,
+    SignalFlags, SignalKey, TIME_VSIZE, TemporalRegionKey, UnaryOp, VSIZE_32, VariableKey,
 };
 
 #[derive(Debug)]
@@ -267,6 +267,8 @@ fn parse_process<'a>(
             Entry::Vacant(entry) => {
                 let bb_key = gl.bbs.insert(BasicBlock {
                     instrs: Vec::new(),
+                    // @TODO: ...
+                    region: TemporalRegionKey::default(),
                     terminator: BasicBlockTerminator::Halt,
                 });
                 entry.insert((true, bb_key));
@@ -414,7 +416,7 @@ fn parse_process<'a>(
     bb_seen.insert(entry);
     while let Some(bb_key) = bb_stack.pop() {
         let bb = &mut gl.bbs[bb_key];
-        bb.terminator.for_each_bb(|bb| {
+        bb.terminator.for_each_temporal_bb(|bb| {
             if bb_seen.insert(bb) {
                 bb_stack.push(bb);
             }
@@ -431,7 +433,7 @@ fn parse_process<'a>(
 
     let process = gl.processes.insert(crate::Process {
         kind,
-        entry,
+        regions: vec![TemporalRegionKey::from_entry(entry)],
         origin: TokenRange::default(),
     });
 
@@ -809,7 +811,8 @@ fn parse_bb<'a>(
                     c.expect_char(',')?;
                     c.trim_cursor();
                     let next = parse_label_ref(c, symbols, gl)?;
-                    T::Wait(next, Time(time))
+                    todo!()
+                    // T::Wait(next, Time(time))
                 }
                 "varwait" => {
                     c.trim_cursor();
@@ -818,7 +821,8 @@ fn parse_bb<'a>(
                     c.expect_char(',')?;
                     c.trim_cursor();
                     let next = parse_label_ref(c, symbols, gl)?;
-                    T::VariableWait(next, time)
+                    todo!()
+                    // T::VariableWait(next, time)
                 }
                 "waitregion" => {
                     c.trim_cursor();
@@ -827,7 +831,8 @@ fn parse_bb<'a>(
                     c.expect_char(',')?;
                     c.trim_cursor();
                     let next = parse_label_ref(c, symbols, gl)?;
-                    T::WaitRegion(next, region)
+                    todo!()
+                    // T::WaitRegion(next, region)
                 }
                 "watch" => {
                     c.trim_cursor();
@@ -846,7 +851,8 @@ fn parse_bb<'a>(
                     c.expect_char(',')?;
                     c.trim_cursor();
                     let next = parse_label_ref(c, symbols, gl)?;
-                    T::Watch(next, signals)
+                    todo!()
+                    // T::Watch(next, signals)
                 }
                 "jump" => {
                     c.trim_cursor();
@@ -882,7 +888,12 @@ fn parse_bb<'a>(
             error: format!("missing terminator"),
         }));
     };
-    gl.bbs[bb_key] = crate::BasicBlock { instrs, terminator };
+    // @TODO: ...
+    gl.bbs[bb_key] = crate::BasicBlock {
+        instrs,
+        terminator,
+        region: TemporalRegionKey::default(),
+    };
 
     Ok(())
 }
@@ -1073,6 +1084,8 @@ fn parse_label_ref<'a>(
                 false,
                 gl.bbs.insert(BasicBlock {
                     instrs: Vec::new(),
+                    // @TODO...
+                    region: TemporalRegionKey::default(),
                     terminator: BasicBlockTerminator::Halt,
                 }),
             )

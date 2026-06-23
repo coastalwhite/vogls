@@ -12,7 +12,6 @@ use vogls_ir::{
     GlobalContext, INTEGER_VSIZE, Instruction, LogicMode, Mode, Process, ProcessKey, ReadMem,
     ResizeOp, ShiftImmOp, SignalKey, TIME_VSIZE, UnaryOp, VariableKey, VectorSize,
 };
-use vogls_ir_properties::get_temporal_variables;
 use vogls_runtime::RtSignalKey;
 use vogls_runtime::plugins::RuntimePluginState;
 use vogls_utils::{IndexSet, VgHashMap, VgHashSet, saturating_rem};
@@ -272,15 +271,18 @@ impl fmt::Display for CElementType {
 
 const INDENT: &str = "    ";
 
-pub fn process_to_procedure_name(process: &Process, idx: usize) -> String {
-    format!("vogls_proc_{idx}_{}", process.kind.into_static_str())
+pub fn process_to_procedure_name(process: &Process, idx: usize, tri: usize) -> String {
+    format!(
+        "vogls_proc_{idx}_{}_TR{tri}",
+        process.kind.into_static_str()
+    )
 }
 
 pub struct Listener {
     pub offset: usize,
     pub process_idx: usize,
     pub process_key: ProcessKey,
-    pub state: u32,
+    pub tri: usize,
 }
 
 #[derive(Default)]
@@ -295,14 +297,14 @@ impl ListenerBuilder {
         signals: &[SignalKey],
         process_idx: usize,
         process_key: ProcessKey,
-        state: u32,
+        tri: usize,
     ) {
         for &signal in signals {
             self.map.entry(signal).or_default().push(Listener {
                 offset: self.top,
                 process_idx,
                 process_key,
-                state,
+                tri,
             });
         }
         self.top += 1;
@@ -356,33 +358,39 @@ pub fn lower_process(
     let mut var_mode = VgHashMap::<VariableKey, LogicMode>::default();
     let mut conv_map = VgHashMap::<VariableKey, HeapOffset>::default();
     let mut heap_map = VgHashMap::default();
-    let mut temporal_variables = Default::default();
+    let temporal_variables = Default::default();
     {
-        let mut temporal_roots = Default::default();
-        let mut temporal = Default::default();
-        let mut variable_to_tmr_map = Default::default();
-        get_temporal_variables(
-            process.entry,
-            &gl.bbs,
-            &mut bb_stack,
-            &mut bb_seen,
-            &mut temporal_roots,
-            &mut temporal,
-            &mut variable_to_tmr_map,
-            &mut temporal_variables,
-        );
+        // let mut temporal_roots = Default::default();
+        // let mut temporal = Default::default();
+        // let mut variable_to_tmr_map = Default::default();
+        // get_temporal_variables(
+        //     process.entry,
+        //     &gl.bbs,
+        //     &mut bb_stack,
+        //     &mut bb_seen,
+        //     &mut temporal_roots,
+        //     &mut temporal,
+        //     &mut variable_to_tmr_map,
+        //     &mut temporal_variables,
+        // );
     }
     resolve_var_logic_mode_map(
-        process.entry,
+        &process.regions,
         gl,
         &mut bb_stack,
         &mut bb_seen,
         &mut var_mode,
         &mut conv_map,
     );
-    insert_bb_phis(process.entry, gl, &mut bb_stack, &mut bb_seen, &mut bb_phis);
+    insert_bb_phis(
+        &process.regions,
+        gl,
+        &mut bb_stack,
+        &mut bb_seen,
+        &mut bb_phis,
+    );
     resolve_heap_map(
-        process.entry,
+        &process.regions,
         gl,
         &mut bb_stack,
         &mut bb_seen,
@@ -396,865 +404,802 @@ pub fn lower_process(
 
     // @Performance. Amortize buffer.
     let mut buffer = Vec::<u8>::new();
-    let procedure = process_to_procedure_name(process, process_idx);
+    let mut temp_map = VgHashMap::<(VariableKey, LogicMode), CVar>::default();
 
-    writeln!(
-        f,
-        "NOINLINE __attribute__((preserve_none)) int {procedure}(int state, uint64_t *restrict heap, schedule_t *restrict schedule, uint64_t time, uint64_t *restrict listening, uint64_t *restrict last_active_time, cold_context_t *restrict cldctx) {{",
-    )?;
-    if lower_options.itrace {
-        lower_dyn_format_str(
+    let tr_indices = IndexSet::from_iter(process.regions.iter().copied());
+
+    for (tri, _) in process.regions.iter().enumerate() {
+        let procedure = process_to_procedure_name(process, process_idx, tri);
+        writeln!(
             f,
-            &mut state_builder.dyn_fmt_strs,
-            &DynFormatString::new(format!("\n* PROC {procedure}\n").into(), [].into()),
-            [].into(),
+            "NOINLINE __attribute__((preserve_none)) int {procedure}(uint64_t *restrict heap, schedule_t *restrict schedule, uint64_t time, uint64_t *restrict listening, uint64_t *restrict last_active_time, cold_context_t *restrict cldctx);",
         )?;
     }
 
-    let mut bb_ident = IndexSet::<BasicBlockKey>::new();
-    let mut states_set = IndexSet::<BasicBlockKey>::new();
-    let mut goto_target_set = IndexSet::<BasicBlockKey>::new();
-    let mut temp_map = VgHashMap::<(VariableKey, LogicMode), CVar>::default();
+    for (tri, &tr) in process.regions.iter().enumerate() {
+        let procedure = process_to_procedure_name(process, process_idx, tri);
 
-    bb_stack.push(process.entry);
-    bb_ident.insert(process.entry);
-    states_set.insert(process.entry);
-    while let Some(bb_key) = bb_stack.pop() {
-        let bb = &gl.bbs[bb_key];
-        bb.terminator.for_each_bb(|bb| {
-            if bb_ident.insert(bb) {
-                bb_stack.push(bb);
-            }
-        });
+        buffer.clear();
+        temp_map.clear();
 
-        bb.try_for_each_dst_var(|v| {
-            let mode = var_mode[&v];
-            let t = CVar {
-                ident: CIdent::Numbered(temp_map.len() as u64),
-                ty: CType {
-                    size: gl.vars.size(v),
-                    mode,
-                },
-            };
+        writeln!(
+            f,
+            "NOINLINE __attribute__((preserve_none)) int {procedure}(uint64_t *restrict heap, schedule_t *restrict schedule, uint64_t time, uint64_t *restrict listening, uint64_t *restrict last_active_time, cold_context_t *restrict cldctx) {{",
+        )?;
+        if lower_options.itrace {
+            lower_dyn_format_str(
+                f,
+                &mut state_builder.dyn_fmt_strs,
+                &DynFormatString::new(
+                    format!("\n* PROC {procedure}, TR {tri}\n").into(),
+                    [].into(),
+                ),
+                [].into(),
+            )?;
+        }
 
-            write_cvar(f, t)?;
-            temp_map.insert((v, t.ty.mode), t);
+        let mut bb_ident = IndexSet::<BasicBlockKey>::new();
+        let mut goto_target_set = IndexSet::<BasicBlockKey>::new();
 
-            if conv_map.contains_key(&v) {
-                let mut t = t;
-                t.ident = CIdent::Numbered(temp_map.len() as u64);
-                t.ty.mode = t.ty.mode.other();
+        bb_stack.push(tr.entry());
+        bb_ident.insert(tr.entry());
+        while let Some(bb_key) = bb_stack.pop() {
+            let bb = &gl.bbs[bb_key];
+            bb.terminator.for_each_non_temporal_bb(|bb| {
+                if bb_ident.insert(bb) {
+                    bb_stack.push(bb);
+                }
+            });
+
+            bb.try_for_each_dst_var(|v| {
+                let mode = var_mode[&v];
+                let t = CVar {
+                    ident: CIdent::Numbered(temp_map.len() as u64),
+                    ty: CType {
+                        size: gl.vars.size(v),
+                        mode,
+                    },
+                };
+
                 write_cvar(f, t)?;
                 temp_map.insert((v, t.ty.mode), t);
+
+                if conv_map.contains_key(&v) {
+                    let mut t = t;
+                    t.ident = CIdent::Numbered(temp_map.len() as u64);
+                    t.ty.mode = t.ty.mode.other();
+                    write_cvar(f, t)?;
+                    temp_map.insert((v, t.ty.mode), t);
+                }
+                io::Result::Ok(())
+            })?;
+
+            match bb.terminator {
+                BasicBlockTerminator::Wait(..)
+                | BasicBlockTerminator::VariableWait(..)
+                | BasicBlockTerminator::WaitRegion(..)
+                | BasicBlockTerminator::Watch(..) => {}
+                BasicBlockTerminator::Jump(target) => _ = goto_target_set.insert(target),
+                BasicBlockTerminator::Branch(_, truthy, falsy) => {
+                    goto_target_set.extend([truthy, falsy])
+                }
+                BasicBlockTerminator::Halt => {}
             }
-            io::Result::Ok(())
-        })?;
-
-        match bb.terminator {
-            BasicBlockTerminator::Wait(target, _)
-            | BasicBlockTerminator::VariableWait(target, _)
-            | BasicBlockTerminator::WaitRegion(target, _)
-            | BasicBlockTerminator::Watch(target, _) => {
-                states_set.insert(target);
-            }
-            BasicBlockTerminator::Jump(target) => _ = goto_target_set.insert(target),
-            BasicBlockTerminator::Branch(_, truthy, falsy) => {
-                goto_target_set.extend([truthy, falsy])
-            }
-            BasicBlockTerminator::Halt => {}
-        }
-    }
-
-    use std::io::Write;
-    if states_set.len() > 1 {
-        writeln!(buffer, "{INDENT}switch (state) {{")?;
-        for (i, state) in states_set.iter().enumerate() {
-            let bb_ident = bb_ident.get_index(state).unwrap();
-            writeln!(buffer, "{INDENT}{INDENT}case {i}: goto L{bb_ident};")?;
-        }
-        writeln!(buffer, "{INDENT}}}")?;
-        writeln!(buffer)?;
-    }
-
-    let mut display_context = DisplayContext::new(gl);
-    if lower_options.itrace {
-        display_context.prepare_process(process.entry);
-    }
-
-    bb_seen.clear();
-    bb_seen.insert(process.entry);
-    bb_stack.push(process.entry);
-    while let Some(bb_key) = bb_stack.pop() {
-        let bb = &gl.bbs[bb_key];
-        bb.terminator.for_each_bb(|bb| {
-            if bb_seen.insert(bb) {
-                bb_stack.push(bb);
-            }
-        });
-
-        let ident = bb_ident.get_index(&bb_key).unwrap();
-
-        if goto_target_set.contains(&bb_key)
-            || (states_set.len() > 1 && states_set.contains(&bb_key))
-        {
-            writeln!(buffer, "L{ident}:")?;
         }
 
-        for i in &bb.instrs {
-            if lower_options.itrace {
-                writeln!(buffer, "{INDENT}// {}", i.display(&display_context))?;
+        use std::io::Write;
+        let mut display_context = DisplayContext::new(gl);
+        if lower_options.itrace {
+            for tr in &process.regions {
+                display_context.prepare_process(tr.entry());
             }
-            match i {
-                I::Constant(dst, bits) => {
-                    let mode = var_mode[dst];
-                    let t = temp_map[&(*dst, mode)];
-                    match t.ty.array_size() {
-                        None => {
-                            writeln!(buffer, "{INDENT}{} = {};", t.ident, CExpr::Bits(bits, mode))?
-                        }
-                        Some(n) => writeln!(
-                            buffer,
-                            "{INDENT}memcpy({}, {}, {n}*sizeof(uint64_t));",
-                            t.ident,
-                            CExpr::Bits(bits, mode)
-                        )?,
-                    }
-                    if temporal_variables.contains(dst) {
-                        store(&mut buffer, heap_map[dst], t)?;
-                    }
+        }
+
+        bb_seen.clear();
+        bb_seen.insert(tr.entry());
+        bb_stack.push(tr.entry());
+        while let Some(bb_key) = bb_stack.pop() {
+            let bb = &gl.bbs[bb_key];
+            bb.terminator.for_each_non_temporal_bb(|bb| {
+                if bb_seen.insert(bb) {
+                    bb_stack.push(bb);
                 }
-                I::Unary(dst, op, src) => {
-                    let src_size = gl.vars.size(*src);
-                    let msrc = var_mode[src];
-                    let mdst = var_mode[dst];
+            });
 
-                    let mut t = temp_map[&(*src, msrc)];
-                    if temporal_variables.contains(src) {
-                        load(&mut buffer, heap_map[src], t)?;
-                    }
-                    if msrc != mdst {
-                        let unconverted_t = t;
-                        t = temp_map[&(*src, mdst)];
-                        convert(
-                            &mut buffer,
-                            src_size,
-                            mdst,
-                            msrc,
-                            t.ident,
-                            unconverted_t.ident,
-                        )?;
-                    }
+            let ident = bb_ident.get_index(&bb_key).unwrap();
 
-                    let dst_t = temp_map[&(*dst, mdst)];
-                    use UnaryOp as O;
-                    match op {
-                        O::Neg => unary::cgc_negate(&mut buffer, dst_t, t)?,
-                        O::ReduceOr => unary::cgc_reduce_or(&mut buffer, dst_t, t)?,
-                        O::ReduceAnd => unary::cgc_reduce_and(&mut buffer, dst_t, t)?,
-                        O::ReduceXor => unary::cgc_reduce_xor(&mut buffer, dst_t, t)?,
-                        O::LeadingZeros => todo!(),
-                    }
-                    if temporal_variables.contains(dst) {
-                        store(&mut buffer, heap_map[dst], dst_t)?;
-                    }
+            if goto_target_set.contains(&bb_key) {
+                writeln!(buffer, "L{ident}:")?;
+            }
+
+            for i in &bb.instrs {
+                if lower_options.itrace {
+                    writeln!(buffer, "{INDENT}// {}", i.display(&display_context))?;
                 }
-                I::Resize(dst, op, src) => {
-                    let src_size = gl.vars.size(*src);
-                    let msrc = var_mode[src];
-                    let mdst = var_mode[dst];
-
-                    let mut t = temp_map[&(*src, msrc)];
-                    if temporal_variables.contains(src) {
-                        load(&mut buffer, heap_map[src], t)?;
-                    }
-                    if msrc != mdst {
-                        let unconverted_t = t;
-                        t = temp_map[&(*src, mdst)];
-                        convert(
-                            &mut buffer,
-                            src_size,
-                            mdst,
-                            msrc,
-                            t.ident,
-                            unconverted_t.ident,
-                        )?;
-                    }
-
-                    let dst_t = temp_map[&(*dst, mdst)];
-                    use ResizeOp as O;
-                    match op {
-                        O::Truncate => resize::cgc_truncate(&mut buffer, dst_t, t.into())?,
-                        O::ZeroExtend => resize::cgc_zero_extend(&mut buffer, dst_t, t)?,
-                        O::SignExtend => resize::cgc_sign_extend(&mut buffer, dst_t, t)?,
-                    }
-                    if temporal_variables.contains(dst) {
-                        store(&mut buffer, heap_map[dst], dst_t)?;
-                    }
-                }
-                I::BinaryImm(dst, op, src, imm) => {
-                    let src_size = gl.vars.size(*src);
-                    let mimm = if imm.contains_special() {
-                        LogicMode::FourValue
-                    } else {
-                        LogicMode::TwoValue
-                    };
-                    let (msrc, mdst) = (var_mode[src], var_mode[dst]);
-
-                    let (mtgt, conv_src, conv_imm) =
-                        bin_imm_args_need_conversion(*op, mdst, msrc, mimm);
-
-                    let mut src_t = temp_map[&(*src, msrc)];
-                    if temporal_variables.contains(src) {
-                        load(&mut buffer, heap_map[src], src_t)?;
-                    }
-                    if conv_src {
-                        let unconverted_t = src_t;
-                        src_t = temp_map[&(*src, mtgt)];
-                        convert(
-                            &mut buffer,
-                            src_size,
-                            mtgt,
-                            msrc,
-                            src_t.ident,
-                            unconverted_t.ident,
-                        )?;
-                    }
-                    let imm_tgt_mode = if conv_imm { mtgt } else { mimm };
-                    let imm = CExpr::Bits(imm, imm_tgt_mode);
-
-                    let dst_t = temp_map[&(*dst, mdst)];
-
-                    use BinaryImmOp as O;
-                    match op {
-                        O::And => binary::cgc_bin_and(&mut buffer, dst_t, src_t.into(), imm)?,
-                        O::Or => binary::cgc_bin_or(&mut buffer, dst_t, src_t.into(), imm)?,
-                        O::Xor => binary::cgc_bin_xor(&mut buffer, dst_t, src_t.into(), imm)?,
-                        O::Add => binary::cgc_bin_add(&mut buffer, dst_t, src_t.into(), imm)?,
-                        O::Sub => binary::cgc_bin_sub(&mut buffer, dst_t, src_t.into(), imm)?,
-                        O::Power => binary::cgc_bin_pow(&mut buffer, dst_t, src_t.into(), imm)?,
-                        O::Multiply => binary::cgc_bin_mul(&mut buffer, dst_t, src_t.into(), imm)?,
-                        O::Divide => binary::cgc_bin_div(&mut buffer, dst_t, src_t.into(), imm)?,
-                        O::Modulus => binary::cgc_bin_mod(&mut buffer, dst_t, src_t.into(), imm)?,
-                        O::RevSub => binary::cgc_bin_sub(&mut buffer, dst_t, imm, src_t.into())?,
-                        O::RevPower => binary::cgc_bin_pow(&mut buffer, dst_t, imm, src_t.into())?,
-                        O::RevDivide => binary::cgc_bin_div(&mut buffer, dst_t, imm, src_t.into())?,
-                        O::RevModulus => {
-                            binary::cgc_bin_mod(&mut buffer, dst_t, imm, src_t.into())?
+                match i {
+                    I::Constant(dst, bits) => {
+                        let mode = var_mode[dst];
+                        let t = temp_map[&(*dst, mode)];
+                        match t.ty.array_size() {
+                            None => writeln!(
+                                buffer,
+                                "{INDENT}{} = {};",
+                                t.ident,
+                                CExpr::Bits(bits, mode)
+                            )?,
+                            Some(n) => writeln!(
+                                buffer,
+                                "{INDENT}memcpy({}, {}, {n}*sizeof(uint64_t));",
+                                t.ident,
+                                CExpr::Bits(bits, mode)
+                            )?,
                         }
-                        O::UnsignedLessEqual => {
-                            binary::cgc_bin_ule(&mut buffer, dst_t.ident, src_t.into(), imm)?
-                        }
-                        O::UnsignedGreaterEqual => {
-                            binary::cgc_bin_ule(&mut buffer, dst_t.ident, imm, src_t.into())?
-                        }
-                        O::ConcatRight => {
-                            binary::cgc_concat(&mut buffer, dst_t, src_t.into(), imm)?
-                        }
-                        O::ConcatLeft => binary::cgc_concat(&mut buffer, dst_t, imm, src_t.into())?,
-                        O::Min => binary::cgc_bin_min(&mut buffer, dst_t, src_t.into(), imm)?,
-                        O::Max => binary::cgc_bin_max(&mut buffer, dst_t, src_t.into(), imm)?,
-                        O::CaseEquality => {
-                            binary::cgc_case_eq(&mut buffer, dst_t.ident, src_t.into(), imm)?
-                        }
-                    }
-
-                    if temporal_variables.contains(dst) {
-                        store(&mut buffer, heap_map[dst], dst_t)?;
-                    }
-                }
-                I::SliceImm(dst, src, offset) => {
-                    let src_size = gl.vars.size(*src);
-                    let (msrc, mdst) = (var_mode[src], var_mode[dst]);
-
-                    let (conv_src, conv_imm) = (msrc != mdst, mdst == LogicMode::FourValue);
-
-                    let mut src_t = temp_map[&(*src, msrc)];
-                    if temporal_variables.contains(src) {
-                        load(&mut buffer, heap_map[src], src_t)?;
-                    }
-                    if conv_src {
-                        let unconverted_t = src_t;
-                        src_t = temp_map[&(*src, mdst)];
-                        convert(
-                            &mut buffer,
-                            src_size,
-                            mdst,
-                            msrc,
-                            src_t.ident,
-                            unconverted_t.ident,
-                        )?;
-                    }
-                    let imm_tgt_mode = if conv_imm { mdst } else { LogicMode::TwoValue };
-                    let imm =
-                        CExpr::Bits(&Bits::from_u64(INTEGER_VSIZE, *offset as u64), imm_tgt_mode);
-
-                    let dst_t = temp_map[&(*dst, mdst)];
-                    slice::slice_with(&mut buffer, dst_t, src_t.into(), imm, false)?;
-                    if temporal_variables.contains(dst) {
-                        store(&mut buffer, heap_map[dst], dst_t)?;
-                    }
-                }
-                I::ShiftImm(dst, op, src, offset) => {
-                    let src_size = gl.vars.size(*src);
-                    let (msrc, mdst) = (var_mode[src], var_mode[dst]);
-
-                    let (conv_src, conv_imm) = (msrc != mdst, mdst == LogicMode::FourValue);
-
-                    let mut src_t = temp_map[&(*src, msrc)];
-                    if temporal_variables.contains(src) {
-                        load(&mut buffer, heap_map[src], src_t)?;
-                    }
-                    if conv_src {
-                        let unconverted_t = src_t;
-                        src_t = temp_map[&(*src, mdst)];
-                        convert(
-                            &mut buffer,
-                            src_size,
-                            mdst,
-                            msrc,
-                            src_t.ident,
-                            unconverted_t.ident,
-                        )?;
-                    }
-                    let imm_tgt_mode = if conv_imm { mdst } else { LogicMode::TwoValue };
-                    let imm =
-                        CExpr::Bits(&Bits::from_u64(INTEGER_VSIZE, *offset as u64), imm_tgt_mode);
-
-                    let dst_t = temp_map[&(*dst, mdst)];
-                    use ShiftImmOp as O;
-                    match op {
-                        O::LogicalShiftLeft => {
-                            binary::cgc_lsl(&mut buffer, dst_t, src_t.into(), imm)?
-                        }
-                        O::LogicalShiftRight => {
-                            binary::cgc_lsr(&mut buffer, dst_t, src_t.into(), imm)?
-                        }
-                        O::ArithmeticShiftRight => {
-                            binary::cgc_asr(&mut buffer, dst_t, src_t.into(), imm)?
-                        }
-                    }
-
-                    if temporal_variables.contains(dst) {
-                        store(&mut buffer, heap_map[dst], dst_t)?;
-                    }
-                }
-                I::Select(dst, cond, truthy, falsy) => {
-                    let size = gl.vars.size(*dst);
-                    let (mcond, mtruthy, mfalsy, mdst) = (
-                        var_mode[cond],
-                        var_mode[truthy],
-                        var_mode[falsy],
-                        var_mode[dst],
-                    );
-
-                    let cond_t = temp_map[&(*cond, mcond)];
-                    if temporal_variables.contains(cond) {
-                        load(&mut buffer, heap_map[cond], cond_t)?;
-                    }
-
-                    let mut truthy_t = temp_map[&(*truthy, mtruthy)];
-                    if temporal_variables.contains(truthy) {
-                        load(&mut buffer, heap_map[truthy], truthy_t)?;
-                    }
-                    if mdst != mtruthy {
-                        let unconverted_t = truthy_t;
-                        truthy_t = temp_map[&(*truthy, mdst)];
-                        convert(
-                            &mut buffer,
-                            size,
-                            mdst,
-                            mtruthy,
-                            truthy_t.ident,
-                            unconverted_t.ident,
-                        )?;
-                    }
-                    let mut falsy_t = temp_map[&(*falsy, mfalsy)];
-                    if temporal_variables.contains(falsy) {
-                        load(&mut buffer, heap_map[falsy], falsy_t)?;
-                    }
-                    if mdst != mfalsy {
-                        let unconverted_t = falsy_t;
-                        falsy_t = temp_map[&(*falsy, mdst)];
-                        convert(
-                            &mut buffer,
-                            size,
-                            mdst,
-                            mfalsy,
-                            falsy_t.ident,
-                            unconverted_t.ident,
-                        )?;
-                    }
-
-                    let dst_t = temp_map[&(*dst, mdst)];
-                    select::cgc_select(
-                        &mut buffer,
-                        dst_t,
-                        cond_t.into(),
-                        truthy_t.into(),
-                        falsy_t.into(),
-                    )?;
-
-                    if temporal_variables.contains(dst) {
-                        store(&mut buffer, heap_map[dst], dst_t)?;
-                    }
-                }
-                I::Slice(dst, lhs, rhs) => {
-                    let lhs_size = gl.vars.size(*lhs);
-                    let rhs_size = gl.vars.size(*rhs);
-                    let (mlhs, mrhs, mdst) = (var_mode[lhs], var_mode[rhs], var_mode[dst]);
-
-                    use LogicMode as M;
-                    let (mtgt, conv_lhs, conv_rhs) = (
-                        M::FourValue,
-                        mlhs == M::TwoValue && mrhs == M::FourValue,
-                        mlhs == M::FourValue && mrhs == M::TwoValue,
-                    );
-
-                    let (mut lhs_t, mut rhs_t) = (temp_map[&(*lhs, mlhs)], temp_map[&(*rhs, mrhs)]);
-                    if temporal_variables.contains(lhs) {
-                        load(&mut buffer, heap_map[lhs], lhs_t)?;
-                    }
-                    if conv_lhs {
-                        let unconverted_t = lhs_t;
-                        lhs_t = temp_map[&(*lhs, mtgt)];
-                        convert(
-                            &mut buffer,
-                            lhs_size,
-                            mtgt,
-                            mlhs,
-                            lhs_t.ident,
-                            unconverted_t.ident,
-                        )?;
-                    }
-                    if temporal_variables.contains(rhs) {
-                        load(&mut buffer, heap_map[rhs], rhs_t)?;
-                    }
-                    if conv_rhs {
-                        let unconverted_t = rhs_t;
-                        rhs_t = temp_map[&(*rhs, mtgt)];
-                        convert(
-                            &mut buffer,
-                            rhs_size,
-                            mtgt,
-                            mrhs,
-                            rhs_t.ident,
-                            unconverted_t.ident,
-                        )?;
-                    }
-
-                    let dst_t = temp_map[&(*dst, mdst)];
-                    slice::slice(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?;
-                    if temporal_variables.contains(dst) {
-                        store(&mut buffer, heap_map[dst], dst_t)?;
-                    }
-                }
-                I::Binary(dst, op, lhs, rhs) => {
-                    let lhs_size = gl.vars.size(*lhs);
-                    let rhs_size = gl.vars.size(*rhs);
-                    let (mlhs, mrhs, mdst) = (var_mode[lhs], var_mode[rhs], var_mode[dst]);
-
-                    let (mtgt, conv_lhs, conv_rhs) =
-                        bin_args_need_conversion(*op, mdst, mlhs, mrhs);
-
-                    let (mut lhs_t, mut rhs_t) = (temp_map[&(*lhs, mlhs)], temp_map[&(*rhs, mrhs)]);
-                    if temporal_variables.contains(lhs) {
-                        load(&mut buffer, heap_map[lhs], lhs_t)?;
-                    }
-                    if conv_lhs {
-                        let unconverted_t = lhs_t;
-                        lhs_t = temp_map[&(*lhs, mtgt)];
-                        convert(
-                            &mut buffer,
-                            lhs_size,
-                            mtgt,
-                            mlhs,
-                            lhs_t.ident,
-                            unconverted_t.ident,
-                        )?;
-                    }
-                    if temporal_variables.contains(rhs) {
-                        load(&mut buffer, heap_map[rhs], rhs_t)?;
-                    }
-                    if conv_rhs {
-                        let unconverted_t = rhs_t;
-                        rhs_t = temp_map[&(*rhs, mtgt)];
-                        convert(
-                            &mut buffer,
-                            rhs_size,
-                            mtgt,
-                            mrhs,
-                            rhs_t.ident,
-                            unconverted_t.ident,
-                        )?;
-                    }
-
-                    let dst_t = temp_map[&(*dst, mdst)];
-
-                    use vogls_ir::BinaryOp as O;
-                    match op {
-                        O::And => {
-                            binary::cgc_bin_and(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
-                        }
-                        O::Or => {
-                            binary::cgc_bin_or(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
-                        }
-                        O::Xor => {
-                            binary::cgc_bin_xor(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
-                        }
-                        O::Add => {
-                            binary::cgc_bin_add(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
-                        }
-                        O::Sub => {
-                            binary::cgc_bin_sub(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
-                        }
-                        O::Power => {
-                            binary::cgc_bin_pow(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
-                        }
-                        O::Multiply => {
-                            binary::cgc_bin_mul(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
-                        }
-                        O::Divide => {
-                            binary::cgc_bin_div(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
-                        }
-                        O::Modulus => {
-                            binary::cgc_bin_mod(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
-                        }
-                        O::UnsignedLessEqual => binary::cgc_bin_ule(
-                            &mut buffer,
-                            dst_t.ident,
-                            lhs_t.into(),
-                            rhs_t.into(),
-                        )?,
-
-                        O::LogicalShiftLeft => {
-                            binary::cgc_lsl(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
-                        }
-                        O::LogicalShiftRight => {
-                            binary::cgc_lsr(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
-                        }
-                        O::ArithmeticShiftRight => {
-                            binary::cgc_asr(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
-                        }
-                        O::Concat => {
-                            binary::cgc_concat(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
-                        }
-                        O::CopyX => {
-                            binary::cgc_copy_x(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
-                        }
-                        O::CopyZ => {
-                            binary::cgc_copy_y(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
-                        }
-                        O::Min => {
-                            binary::cgc_bin_min(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
-                        }
-                        O::Max => {
-                            binary::cgc_bin_max(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
-                        }
-                        O::CaseEquality => binary::cgc_case_eq(
-                            &mut buffer,
-                            dst_t.ident,
-                            lhs_t.into(),
-                            rhs_t.into(),
-                        )?,
-                        O::Posedge => binary::cgc_posedge(
-                            &mut buffer,
-                            dst_t.ident,
-                            lhs_t.into(),
-                            rhs_t.into(),
-                        )?,
-                        O::Negedge => binary::cgc_negedge(
-                            &mut buffer,
-                            dst_t.ident,
-                            lhs_t.into(),
-                            rhs_t.into(),
-                        )?,
-                    }
-                    if temporal_variables.contains(dst) {
-                        store(&mut buffer, heap_map[dst], dst_t)?;
-                    }
-                }
-                I::Intrinsic(dst, op, items) => match op.as_ref() {
-                    vogls_ir::IntrinsicOp::Time => {
-                        let t = temp_map[&(*dst, LogicMode::TwoValue)];
-                        writeln!(buffer, "{INDENT}{} = time;", t.ident)?;
                         if temporal_variables.contains(dst) {
                             store(&mut buffer, heap_map[dst], t)?;
                         }
                     }
-                    vogls_ir::IntrinsicOp::Finish => {
-                        writeln!(buffer, "{INDENT}return 1;")?;
-                    }
-                    vogls_ir::IntrinsicOp::Random => todo!(),
-                    vogls_ir::IntrinsicOp::Display(dyn_format_string) => {
-                        // @Performance: scratchpad this.
-                        let args = items
-                            .iter()
-                            .map(|i| {
-                                let t = temp_map[&(*i, var_mode[i])];
-                                if temporal_variables.contains(i) {
-                                    load(&mut buffer, heap_map[i], t)?;
-                                }
-                                Ok(t)
-                            })
-                            .collect::<io::Result<Vec<CVar>>>()?;
-                        lower_dyn_format_str(
-                            &mut buffer,
-                            &mut state_builder.dyn_fmt_strs,
-                            &dyn_format_string,
-                            args,
-                        )?;
-                    }
-                    vogls_ir::IntrinsicOp::Assert(dyn_format_string) => {
-                        // @TODO: Format
-                        let fst = items[0];
-                        let t = temp_map[&(fst, LogicMode::TwoValue)];
-                        if temporal_variables.contains(&fst) {
-                            load(&mut buffer, heap_map[&fst], t)?;
+                    I::Unary(dst, op, src) => {
+                        let src_size = gl.vars.size(*src);
+                        let msrc = var_mode[src];
+                        let mdst = var_mode[dst];
+
+                        let mut t = temp_map[&(*src, msrc)];
+                        if temporal_variables.contains(src) {
+                            load(&mut buffer, heap_map[src], t)?;
                         }
-                        writeln!(
-                            buffer,
-                            r#"{INDENT}if ({t} == 0) {{
-"#,
-                            t = t.ident
-                        )?;
-                        // @Performance: scratchpad this.
-                        let args = items
-                            .iter()
-                            .skip(1)
-                            .map(|i| {
-                                let t = temp_map[&(*i, var_mode[i])];
-                                if temporal_variables.contains(i) {
-                                    load(&mut buffer, heap_map[i], t)?;
-                                }
-                                Ok(t)
-                            })
-                            .collect::<io::Result<Vec<CVar>>>()?;
-                        lower_dyn_format_str(
-                            &mut buffer,
-                            &mut state_builder.dyn_fmt_strs,
-                            &dyn_format_string,
-                            args,
-                        )?;
-                        writeln!(
-                            buffer,
-                            r#"{INDENT}{INDENT}return 2;
-{INDENT}}}"#
-                        )?;
-                    }
-                    vogls_ir::IntrinsicOp::VcdOpenFile(_) => todo!(),
-                    vogls_ir::IntrinsicOp::VcdAppendModule(_) => todo!(),
-                    vogls_ir::IntrinsicOp::VcdPause => todo!(),
-                    vogls_ir::IntrinsicOp::VcdResume => todo!(),
-                    vogls_ir::IntrinsicOp::ReadMem(readmem) => {
-                        let i = state_builder.read_mems.len();
-                        state_builder.read_mems.push((
-                            signals[io_signals[&readmem.signal].as_usize()],
-                            readmem.as_ref().clone(),
-                        ));
-                        writeln!(
-                            buffer,
-                            "{INDENT}cldctx->readmem(heap, cldctx->heap_len, {}, cldctx->readmems+{});",
-                            match gl.logic_mode {
-                                LogicMode::TwoValue => 0,
-                                LogicMode::FourValue => 0,
-                            },
-                            i * size_of::<(HeapRef, ReadMem)>(),
-                        )?;
-                    }
-                },
-                I::LastUpdateTime(dst, signal) => {
-                    let t = temp_map[&(*dst, LogicMode::TwoValue)];
-                    let rt_key = io_signals[signal];
-                    let idx = lupdt_indexes[&rt_key];
-                    writeln!(buffer, "{INDENT}{} = last_active_time[{idx}];", t.ident)?;
-                    if temporal_variables.contains(dst) {
-                        store(&mut buffer, heap_map[dst], t)?;
-                    }
-                }
-                I::Probe(dst, signal, offset) => {
-                    let signal_ref = signals[io_signals[signal].as_usize()];
-                    assert_eq!(var_mode[dst], gl.logic_mode);
+                        if msrc != mdst {
+                            let unconverted_t = t;
+                            t = temp_map[&(*src, mdst)];
+                            convert(
+                                &mut buffer,
+                                src_size,
+                                mdst,
+                                msrc,
+                                t.ident,
+                                unconverted_t.ident,
+                            )?;
+                        }
 
-                    let t = temp_map[&(*dst, gl.logic_mode)];
-                    let dst_size = gl.vars.size(*dst);
-                    let src_size = gl.signals[*signal].size;
+                        let dst_t = temp_map[&(*dst, mdst)];
+                        use UnaryOp as O;
+                        match op {
+                            O::Neg => unary::cgc_negate(&mut buffer, dst_t, t)?,
+                            O::ReduceOr => unary::cgc_reduce_or(&mut buffer, dst_t, t)?,
+                            O::ReduceAnd => unary::cgc_reduce_and(&mut buffer, dst_t, t)?,
+                            O::ReduceXor => unary::cgc_reduce_xor(&mut buffer, dst_t, t)?,
+                            O::LeadingZeros => todo!(),
+                        }
+                        if temporal_variables.contains(dst) {
+                            store(&mut buffer, heap_map[dst], dst_t)?;
+                        }
+                    }
+                    I::Resize(dst, op, src) => {
+                        let src_size = gl.vars.size(*src);
+                        let msrc = var_mode[src];
+                        let mdst = var_mode[dst];
 
-                    if dst_size == src_size && *offset == 0 {
-                        load(&mut buffer, signal_ref.offset, t)?;
-                    } else {
-                        let signal = CExpr::HeapRef(signal_ref, gl.logic_mode);
-                        let offset_c = CExpr::Bits(&Bits::new_u32(*offset), LogicMode::TwoValue);
-                        if *offset > 0 {
-                            slice::slice_with(&mut buffer, t, signal, offset_c, false)?;
+                        let mut t = temp_map[&(*src, msrc)];
+                        if temporal_variables.contains(src) {
+                            load(&mut buffer, heap_map[src], t)?;
+                        }
+                        if msrc != mdst {
+                            let unconverted_t = t;
+                            t = temp_map[&(*src, mdst)];
+                            convert(
+                                &mut buffer,
+                                src_size,
+                                mdst,
+                                msrc,
+                                t.ident,
+                                unconverted_t.ident,
+                            )?;
+                        }
+
+                        let dst_t = temp_map[&(*dst, mdst)];
+                        use ResizeOp as O;
+                        match op {
+                            O::Truncate => resize::cgc_truncate(&mut buffer, dst_t, t.into())?,
+                            O::ZeroExtend => resize::cgc_zero_extend(&mut buffer, dst_t, t)?,
+                            O::SignExtend => resize::cgc_sign_extend(&mut buffer, dst_t, t)?,
+                        }
+                        if temporal_variables.contains(dst) {
+                            store(&mut buffer, heap_map[dst], dst_t)?;
+                        }
+                    }
+                    I::BinaryImm(dst, op, src, imm) => {
+                        let src_size = gl.vars.size(*src);
+                        let mimm = if imm.contains_special() {
+                            LogicMode::FourValue
                         } else {
-                            resize::cgc_truncate(&mut buffer, t, signal)?;
+                            LogicMode::TwoValue
+                        };
+                        let (msrc, mdst) = (var_mode[src], var_mode[dst]);
+
+                        let (mtgt, conv_src, conv_imm) =
+                            bin_imm_args_need_conversion(*op, mdst, msrc, mimm);
+
+                        let mut src_t = temp_map[&(*src, msrc)];
+                        if temporal_variables.contains(src) {
+                            load(&mut buffer, heap_map[src], src_t)?;
                         }
-                    }
-                    if temporal_variables.contains(dst) {
-                        store(&mut buffer, heap_map[dst], t)?;
-                    }
-                }
-                I::ProbeSlice(dst, signal, offset) => {
-                    let signal_ref = signals[io_signals[signal].as_usize()];
-                    assert_eq!(var_mode[dst], LogicMode::FourValue);
-
-                    let t = temp_map[&(*dst, LogicMode::FourValue)];
-
-                    let moffset = var_mode[offset];
-                    let offset_t = temp_map[&(*offset, moffset)];
-                    if temporal_variables.contains(offset) {
-                        load(&mut buffer, heap_map[offset], offset_t)?;
-                    }
-
-                    slice::slice(
-                        &mut buffer,
-                        t,
-                        CExpr::HeapRef(signal_ref, gl.logic_mode),
-                        offset_t.into(),
-                    )?;
-                    if temporal_variables.contains(dst) {
-                        store(&mut buffer, heap_map[dst], t)?;
-                    }
-                }
-                I::Drive(signal, src, partial) => {
-                    let size = gl.vars.size(*src);
-                    let msrc = var_mode[src];
-                    let mut t = temp_map[&(*src, msrc)];
-                    if temporal_variables.contains(src) {
-                        load(&mut buffer, heap_map[src], t)?;
-                    }
-                    if msrc != gl.logic_mode {
-                        let unconverted_t = t;
-                        t = temp_map[&(*src, gl.logic_mode)];
-                        convert(
-                            &mut buffer,
-                            size,
-                            gl.logic_mode,
-                            msrc,
-                            t.ident,
-                            unconverted_t.ident,
-                        )?;
-                    }
-                    let zero = Bits::new_u32(0);
-                    let partial = match partial {
-                        None if gl.signals[*signal].size != t.ty.size => {
-                            Some(CExpr::Bits(&zero, LogicMode::TwoValue))
+                        if conv_src {
+                            let unconverted_t = src_t;
+                            src_t = temp_map[&(*src, mtgt)];
+                            convert(
+                                &mut buffer,
+                                src_size,
+                                mtgt,
+                                msrc,
+                                src_t.ident,
+                                unconverted_t.ident,
+                            )?;
                         }
-                        None => None,
-                        Some((offset, _)) => {
-                            let moffset = var_mode[offset];
-                            let offset_t = temp_map[&(*offset, moffset)];
-                            if temporal_variables.contains(offset) {
-                                load(&mut buffer, heap_map[offset], offset_t)?;
+                        let imm_tgt_mode = if conv_imm { mtgt } else { mimm };
+                        let imm = CExpr::Bits(imm, imm_tgt_mode);
+
+                        let dst_t = temp_map[&(*dst, mdst)];
+
+                        use BinaryImmOp as O;
+                        match op {
+                            O::And => binary::cgc_bin_and(&mut buffer, dst_t, src_t.into(), imm)?,
+                            O::Or => binary::cgc_bin_or(&mut buffer, dst_t, src_t.into(), imm)?,
+                            O::Xor => binary::cgc_bin_xor(&mut buffer, dst_t, src_t.into(), imm)?,
+                            O::Add => binary::cgc_bin_add(&mut buffer, dst_t, src_t.into(), imm)?,
+                            O::Sub => binary::cgc_bin_sub(&mut buffer, dst_t, src_t.into(), imm)?,
+                            O::Power => binary::cgc_bin_pow(&mut buffer, dst_t, src_t.into(), imm)?,
+                            O::Multiply => {
+                                binary::cgc_bin_mul(&mut buffer, dst_t, src_t.into(), imm)?
                             }
-                            Some(offset_t.into())
+                            O::Divide => {
+                                binary::cgc_bin_div(&mut buffer, dst_t, src_t.into(), imm)?
+                            }
+                            O::Modulus => {
+                                binary::cgc_bin_mod(&mut buffer, dst_t, src_t.into(), imm)?
+                            }
+                            O::RevSub => {
+                                binary::cgc_bin_sub(&mut buffer, dst_t, imm, src_t.into())?
+                            }
+                            O::RevPower => {
+                                binary::cgc_bin_pow(&mut buffer, dst_t, imm, src_t.into())?
+                            }
+                            O::RevDivide => {
+                                binary::cgc_bin_div(&mut buffer, dst_t, imm, src_t.into())?
+                            }
+                            O::RevModulus => {
+                                binary::cgc_bin_mod(&mut buffer, dst_t, imm, src_t.into())?
+                            }
+                            O::UnsignedLessEqual => {
+                                binary::cgc_bin_ule(&mut buffer, dst_t.ident, src_t.into(), imm)?
+                            }
+                            O::UnsignedGreaterEqual => {
+                                binary::cgc_bin_ule(&mut buffer, dst_t.ident, imm, src_t.into())?
+                            }
+                            O::ConcatRight => {
+                                binary::cgc_concat(&mut buffer, dst_t, src_t.into(), imm)?
+                            }
+                            O::ConcatLeft => {
+                                binary::cgc_concat(&mut buffer, dst_t, imm, src_t.into())?
+                            }
+                            O::Min => binary::cgc_bin_min(&mut buffer, dst_t, src_t.into(), imm)?,
+                            O::Max => binary::cgc_bin_max(&mut buffer, dst_t, src_t.into(), imm)?,
+                            O::CaseEquality => {
+                                binary::cgc_case_eq(&mut buffer, dst_t.ident, src_t.into(), imm)?
+                            }
                         }
-                    };
-                    let dst = io_signals[signal];
-                    drive::drive(&mut buffer, signals, dst, t, partial)?;
-                }
-                I::Phi(_, _) => continue,
-            }
-            if lower_options.stats {
-                writeln!(&mut buffer, "{INDENT}cldctx->icount++;")?;
-            }
-            if lower_options.itrace && !matches!(i, I::Phi(_, _)) {
-                lower_dyn_format_str(
-                    &mut buffer,
-                    &mut state_builder.dyn_fmt_strs,
-                    &DynFormatString::new(
-                        format!("* {}\n", i.display(&display_context)).into(),
-                        [].into(),
-                    ),
-                    [].into(),
-                )?;
-                writeln!(&mut buffer)?;
-                let mut content = String::from("*   : ");
-                let mut arg_offsets = Vec::new();
-                let mut args = Vec::new();
-                if let Some(dst) = i.get_destination_variable() {
-                    let mode = var_mode[&dst];
-                    let var = temp_map[&(dst, mode)];
-                    content.push_str(&dst.display(&display_context).to_string());
-                    content.push_str(" = ");
-                    arg_offsets.push((content.len(), DynFormatArgument::default()));
-                    content.push_str("; ");
-                    args.push(var);
-                }
-                i.for_each_src(|src| {
-                    let mode = var_mode[&src];
-                    let var = temp_map[&(src, mode)];
-                    content.push_str(&src.display(&display_context).to_string());
-                    content.push_str(" = ");
-                    arg_offsets.push((content.len(), DynFormatArgument::default()));
-                    content.push_str("; ");
-                    args.push(var);
-                });
-                content.push('\n');
-                lower_dyn_format_str(
-                    &mut buffer,
-                    &mut state_builder.dyn_fmt_strs,
-                    &DynFormatString::new(content.into(), arg_offsets.into()),
-                    args,
-                )?;
-                writeln!(&mut buffer)?;
-            }
-        }
 
-        if let Some(phis) = bb_phis.get(&bb_key) {
-            for (dst, src) in phis {
-                let src_size = gl.vars.size(*src);
-                let dst_size = gl.vars.size(*dst);
-                assert_eq!(src_size, dst_size);
-                let src_mode = var_mode[src];
-                let dst_mode = var_mode[dst];
+                        if temporal_variables.contains(dst) {
+                            store(&mut buffer, heap_map[dst], dst_t)?;
+                        }
+                    }
+                    I::SliceImm(dst, src, offset) => {
+                        let src_size = gl.vars.size(*src);
+                        let (msrc, mdst) = (var_mode[src], var_mode[dst]);
 
-                let mut src_t = temp_map[&(*src, src_mode)];
-                let dst_t = temp_map[&(*dst, dst_mode)];
+                        let (conv_src, conv_imm) = (msrc != mdst, mdst == LogicMode::FourValue);
 
-                if temporal_variables.contains(src) {
-                    load(&mut buffer, heap_map[src], src_t)?;
-                }
+                        let mut src_t = temp_map[&(*src, msrc)];
+                        if temporal_variables.contains(src) {
+                            load(&mut buffer, heap_map[src], src_t)?;
+                        }
+                        if conv_src {
+                            let unconverted_t = src_t;
+                            src_t = temp_map[&(*src, mdst)];
+                            convert(
+                                &mut buffer,
+                                src_size,
+                                mdst,
+                                msrc,
+                                src_t.ident,
+                                unconverted_t.ident,
+                            )?;
+                        }
+                        let imm_tgt_mode = if conv_imm { mdst } else { LogicMode::TwoValue };
+                        let imm = CExpr::Bits(
+                            &Bits::from_u64(INTEGER_VSIZE, *offset as u64),
+                            imm_tgt_mode,
+                        );
 
-                if src_mode != dst_mode {
-                    let unconverted_t = src_t;
-                    src_t = temp_map[&(*src, dst_mode)];
-                    convert(
-                        &mut buffer,
-                        src_size,
-                        dst_mode,
-                        src_mode,
-                        src_t.ident,
-                        unconverted_t.ident,
-                    )?;
-                }
+                        let dst_t = temp_map[&(*dst, mdst)];
+                        slice::slice_with(&mut buffer, dst_t, src_t.into(), imm, false)?;
+                        if temporal_variables.contains(dst) {
+                            store(&mut buffer, heap_map[dst], dst_t)?;
+                        }
+                    }
+                    I::ShiftImm(dst, op, src, offset) => {
+                        let src_size = gl.vars.size(*src);
+                        let (msrc, mdst) = (var_mode[src], var_mode[dst]);
 
-                if lower_options.itrace {
-                    writeln!(&mut buffer, "{INDENT}// Phi({dst:?}, {src:?});")?;
+                        let (conv_src, conv_imm) = (msrc != mdst, mdst == LogicMode::FourValue);
+
+                        let mut src_t = temp_map[&(*src, msrc)];
+                        if temporal_variables.contains(src) {
+                            load(&mut buffer, heap_map[src], src_t)?;
+                        }
+                        if conv_src {
+                            let unconverted_t = src_t;
+                            src_t = temp_map[&(*src, mdst)];
+                            convert(
+                                &mut buffer,
+                                src_size,
+                                mdst,
+                                msrc,
+                                src_t.ident,
+                                unconverted_t.ident,
+                            )?;
+                        }
+                        let imm_tgt_mode = if conv_imm { mdst } else { LogicMode::TwoValue };
+                        let imm = CExpr::Bits(
+                            &Bits::from_u64(INTEGER_VSIZE, *offset as u64),
+                            imm_tgt_mode,
+                        );
+
+                        let dst_t = temp_map[&(*dst, mdst)];
+                        use ShiftImmOp as O;
+                        match op {
+                            O::LogicalShiftLeft => {
+                                binary::cgc_lsl(&mut buffer, dst_t, src_t.into(), imm)?
+                            }
+                            O::LogicalShiftRight => {
+                                binary::cgc_lsr(&mut buffer, dst_t, src_t.into(), imm)?
+                            }
+                            O::ArithmeticShiftRight => {
+                                binary::cgc_asr(&mut buffer, dst_t, src_t.into(), imm)?
+                            }
+                        }
+
+                        if temporal_variables.contains(dst) {
+                            store(&mut buffer, heap_map[dst], dst_t)?;
+                        }
+                    }
+                    I::Select(dst, cond, truthy, falsy) => {
+                        let size = gl.vars.size(*dst);
+                        let (mcond, mtruthy, mfalsy, mdst) = (
+                            var_mode[cond],
+                            var_mode[truthy],
+                            var_mode[falsy],
+                            var_mode[dst],
+                        );
+
+                        let cond_t = temp_map[&(*cond, mcond)];
+                        if temporal_variables.contains(cond) {
+                            load(&mut buffer, heap_map[cond], cond_t)?;
+                        }
+
+                        let mut truthy_t = temp_map[&(*truthy, mtruthy)];
+                        if temporal_variables.contains(truthy) {
+                            load(&mut buffer, heap_map[truthy], truthy_t)?;
+                        }
+                        if mdst != mtruthy {
+                            let unconverted_t = truthy_t;
+                            truthy_t = temp_map[&(*truthy, mdst)];
+                            convert(
+                                &mut buffer,
+                                size,
+                                mdst,
+                                mtruthy,
+                                truthy_t.ident,
+                                unconverted_t.ident,
+                            )?;
+                        }
+                        let mut falsy_t = temp_map[&(*falsy, mfalsy)];
+                        if temporal_variables.contains(falsy) {
+                            load(&mut buffer, heap_map[falsy], falsy_t)?;
+                        }
+                        if mdst != mfalsy {
+                            let unconverted_t = falsy_t;
+                            falsy_t = temp_map[&(*falsy, mdst)];
+                            convert(
+                                &mut buffer,
+                                size,
+                                mdst,
+                                mfalsy,
+                                falsy_t.ident,
+                                unconverted_t.ident,
+                            )?;
+                        }
+
+                        let dst_t = temp_map[&(*dst, mdst)];
+                        select::cgc_select(
+                            &mut buffer,
+                            dst_t,
+                            cond_t.into(),
+                            truthy_t.into(),
+                            falsy_t.into(),
+                        )?;
+
+                        if temporal_variables.contains(dst) {
+                            store(&mut buffer, heap_map[dst], dst_t)?;
+                        }
+                    }
+                    I::Slice(dst, lhs, rhs) => {
+                        let lhs_size = gl.vars.size(*lhs);
+                        let rhs_size = gl.vars.size(*rhs);
+                        let (mlhs, mrhs, mdst) = (var_mode[lhs], var_mode[rhs], var_mode[dst]);
+
+                        use LogicMode as M;
+                        let (mtgt, conv_lhs, conv_rhs) = (
+                            M::FourValue,
+                            mlhs == M::TwoValue && mrhs == M::FourValue,
+                            mlhs == M::FourValue && mrhs == M::TwoValue,
+                        );
+
+                        let (mut lhs_t, mut rhs_t) =
+                            (temp_map[&(*lhs, mlhs)], temp_map[&(*rhs, mrhs)]);
+                        if temporal_variables.contains(lhs) {
+                            load(&mut buffer, heap_map[lhs], lhs_t)?;
+                        }
+                        if conv_lhs {
+                            let unconverted_t = lhs_t;
+                            lhs_t = temp_map[&(*lhs, mtgt)];
+                            convert(
+                                &mut buffer,
+                                lhs_size,
+                                mtgt,
+                                mlhs,
+                                lhs_t.ident,
+                                unconverted_t.ident,
+                            )?;
+                        }
+                        if temporal_variables.contains(rhs) {
+                            load(&mut buffer, heap_map[rhs], rhs_t)?;
+                        }
+                        if conv_rhs {
+                            let unconverted_t = rhs_t;
+                            rhs_t = temp_map[&(*rhs, mtgt)];
+                            convert(
+                                &mut buffer,
+                                rhs_size,
+                                mtgt,
+                                mrhs,
+                                rhs_t.ident,
+                                unconverted_t.ident,
+                            )?;
+                        }
+
+                        let dst_t = temp_map[&(*dst, mdst)];
+                        slice::slice(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?;
+                        if temporal_variables.contains(dst) {
+                            store(&mut buffer, heap_map[dst], dst_t)?;
+                        }
+                    }
+                    I::Binary(dst, op, lhs, rhs) => {
+                        let lhs_size = gl.vars.size(*lhs);
+                        let rhs_size = gl.vars.size(*rhs);
+                        let (mlhs, mrhs, mdst) = (var_mode[lhs], var_mode[rhs], var_mode[dst]);
+
+                        let (mtgt, conv_lhs, conv_rhs) =
+                            bin_args_need_conversion(*op, mdst, mlhs, mrhs);
+
+                        let (mut lhs_t, mut rhs_t) =
+                            (temp_map[&(*lhs, mlhs)], temp_map[&(*rhs, mrhs)]);
+                        if temporal_variables.contains(lhs) {
+                            load(&mut buffer, heap_map[lhs], lhs_t)?;
+                        }
+                        if conv_lhs {
+                            let unconverted_t = lhs_t;
+                            lhs_t = temp_map[&(*lhs, mtgt)];
+                            convert(
+                                &mut buffer,
+                                lhs_size,
+                                mtgt,
+                                mlhs,
+                                lhs_t.ident,
+                                unconverted_t.ident,
+                            )?;
+                        }
+                        if temporal_variables.contains(rhs) {
+                            load(&mut buffer, heap_map[rhs], rhs_t)?;
+                        }
+                        if conv_rhs {
+                            let unconverted_t = rhs_t;
+                            rhs_t = temp_map[&(*rhs, mtgt)];
+                            convert(
+                                &mut buffer,
+                                rhs_size,
+                                mtgt,
+                                mrhs,
+                                rhs_t.ident,
+                                unconverted_t.ident,
+                            )?;
+                        }
+
+                        let dst_t = temp_map[&(*dst, mdst)];
+
+                        use vogls_ir::BinaryOp as O;
+                        match op {
+                            O::And => {
+                                binary::cgc_bin_and(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
+                            }
+                            O::Or => {
+                                binary::cgc_bin_or(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
+                            }
+                            O::Xor => {
+                                binary::cgc_bin_xor(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
+                            }
+                            O::Add => {
+                                binary::cgc_bin_add(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
+                            }
+                            O::Sub => {
+                                binary::cgc_bin_sub(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
+                            }
+                            O::Power => {
+                                binary::cgc_bin_pow(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
+                            }
+                            O::Multiply => {
+                                binary::cgc_bin_mul(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
+                            }
+                            O::Divide => {
+                                binary::cgc_bin_div(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
+                            }
+                            O::Modulus => {
+                                binary::cgc_bin_mod(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
+                            }
+                            O::UnsignedLessEqual => binary::cgc_bin_ule(
+                                &mut buffer,
+                                dst_t.ident,
+                                lhs_t.into(),
+                                rhs_t.into(),
+                            )?,
+
+                            O::LogicalShiftLeft => {
+                                binary::cgc_lsl(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
+                            }
+                            O::LogicalShiftRight => {
+                                binary::cgc_lsr(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
+                            }
+                            O::ArithmeticShiftRight => {
+                                binary::cgc_asr(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
+                            }
+                            O::Concat => {
+                                binary::cgc_concat(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
+                            }
+                            O::CopyX => {
+                                binary::cgc_copy_x(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
+                            }
+                            O::CopyZ => {
+                                binary::cgc_copy_y(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
+                            }
+                            O::Min => {
+                                binary::cgc_bin_min(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
+                            }
+                            O::Max => {
+                                binary::cgc_bin_max(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
+                            }
+                            O::CaseEquality => binary::cgc_case_eq(
+                                &mut buffer,
+                                dst_t.ident,
+                                lhs_t.into(),
+                                rhs_t.into(),
+                            )?,
+                            O::Posedge => binary::cgc_posedge(
+                                &mut buffer,
+                                dst_t.ident,
+                                lhs_t.into(),
+                                rhs_t.into(),
+                            )?,
+                            O::Negedge => binary::cgc_negedge(
+                                &mut buffer,
+                                dst_t.ident,
+                                lhs_t.into(),
+                                rhs_t.into(),
+                            )?,
+                        }
+                        if temporal_variables.contains(dst) {
+                            store(&mut buffer, heap_map[dst], dst_t)?;
+                        }
+                    }
+                    I::Intrinsic(dst, op, items) => match op.as_ref() {
+                        vogls_ir::IntrinsicOp::Time => {
+                            let t = temp_map[&(*dst, LogicMode::TwoValue)];
+                            writeln!(buffer, "{INDENT}{} = time;", t.ident)?;
+                            if temporal_variables.contains(dst) {
+                                store(&mut buffer, heap_map[dst], t)?;
+                            }
+                        }
+                        vogls_ir::IntrinsicOp::Finish => {
+                            writeln!(buffer, "{INDENT}return 1;")?;
+                        }
+                        vogls_ir::IntrinsicOp::Random => todo!(),
+                        vogls_ir::IntrinsicOp::Display(dyn_format_string) => {
+                            // @Performance: scratchpad this.
+                            let args = items
+                                .iter()
+                                .map(|i| {
+                                    let t = temp_map[&(*i, var_mode[i])];
+                                    if temporal_variables.contains(i) {
+                                        load(&mut buffer, heap_map[i], t)?;
+                                    }
+                                    Ok(t)
+                                })
+                                .collect::<io::Result<Vec<CVar>>>()?;
+                            lower_dyn_format_str(
+                                &mut buffer,
+                                &mut state_builder.dyn_fmt_strs,
+                                &dyn_format_string,
+                                args,
+                            )?;
+                        }
+                        vogls_ir::IntrinsicOp::Assert(dyn_format_string) => {
+                            // @TODO: Format
+                            let fst = items[0];
+                            let t = temp_map[&(fst, LogicMode::TwoValue)];
+                            if temporal_variables.contains(&fst) {
+                                load(&mut buffer, heap_map[&fst], t)?;
+                            }
+                            writeln!(
+                                buffer,
+                                r#"{INDENT}if ({t} == 0) {{
+"#,
+                                t = t.ident
+                            )?;
+                            // @Performance: scratchpad this.
+                            let args = items
+                                .iter()
+                                .skip(1)
+                                .map(|i| {
+                                    let t = temp_map[&(*i, var_mode[i])];
+                                    if temporal_variables.contains(i) {
+                                        load(&mut buffer, heap_map[i], t)?;
+                                    }
+                                    Ok(t)
+                                })
+                                .collect::<io::Result<Vec<CVar>>>()?;
+                            lower_dyn_format_str(
+                                &mut buffer,
+                                &mut state_builder.dyn_fmt_strs,
+                                &dyn_format_string,
+                                args,
+                            )?;
+                            writeln!(
+                                buffer,
+                                r#"{INDENT}{INDENT}return 2;
+{INDENT}}}"#
+                            )?;
+                        }
+                        vogls_ir::IntrinsicOp::VcdOpenFile(_) => todo!(),
+                        vogls_ir::IntrinsicOp::VcdAppendModule(_) => todo!(),
+                        vogls_ir::IntrinsicOp::VcdPause => todo!(),
+                        vogls_ir::IntrinsicOp::VcdResume => todo!(),
+                        vogls_ir::IntrinsicOp::ReadMem(readmem) => {
+                            let i = state_builder.read_mems.len();
+                            state_builder.read_mems.push((
+                                signals[io_signals[&readmem.signal].as_usize()],
+                                readmem.as_ref().clone(),
+                            ));
+                            writeln!(
+                                buffer,
+                                "{INDENT}cldctx->readmem(heap, cldctx->heap_len, {}, cldctx->readmems+{});",
+                                match gl.logic_mode {
+                                    LogicMode::TwoValue => 0,
+                                    LogicMode::FourValue => 0,
+                                },
+                                i * size_of::<(HeapRef, ReadMem)>(),
+                            )?;
+                        }
+                    },
+                    I::LastUpdateTime(dst, signal) => {
+                        let t = temp_map[&(*dst, LogicMode::TwoValue)];
+                        let rt_key = io_signals[signal];
+                        let idx = lupdt_indexes[&rt_key];
+                        writeln!(buffer, "{INDENT}{} = last_active_time[{idx}];", t.ident)?;
+                        if temporal_variables.contains(dst) {
+                            store(&mut buffer, heap_map[dst], t)?;
+                        }
+                    }
+                    I::Probe(dst, signal, offset) => {
+                        let signal_ref = signals[io_signals[signal].as_usize()];
+                        assert_eq!(var_mode[dst], gl.logic_mode);
+
+                        let t = temp_map[&(*dst, gl.logic_mode)];
+                        let dst_size = gl.vars.size(*dst);
+                        let src_size = gl.signals[*signal].size;
+
+                        if dst_size == src_size && *offset == 0 {
+                            load(&mut buffer, signal_ref.offset, t)?;
+                        } else {
+                            let signal = CExpr::HeapRef(signal_ref, gl.logic_mode);
+                            let offset_c =
+                                CExpr::Bits(&Bits::new_u32(*offset), LogicMode::TwoValue);
+                            if *offset > 0 {
+                                slice::slice_with(&mut buffer, t, signal, offset_c, false)?;
+                            } else {
+                                resize::cgc_truncate(&mut buffer, t, signal)?;
+                            }
+                        }
+                        if temporal_variables.contains(dst) {
+                            store(&mut buffer, heap_map[dst], t)?;
+                        }
+                    }
+                    I::ProbeSlice(dst, signal, offset) => {
+                        let signal_ref = signals[io_signals[signal].as_usize()];
+                        assert_eq!(var_mode[dst], LogicMode::FourValue);
+
+                        let t = temp_map[&(*dst, LogicMode::FourValue)];
+
+                        let moffset = var_mode[offset];
+                        let offset_t = temp_map[&(*offset, moffset)];
+                        if temporal_variables.contains(offset) {
+                            load(&mut buffer, heap_map[offset], offset_t)?;
+                        }
+
+                        slice::slice(
+                            &mut buffer,
+                            t,
+                            CExpr::HeapRef(signal_ref, gl.logic_mode),
+                            offset_t.into(),
+                        )?;
+                        if temporal_variables.contains(dst) {
+                            store(&mut buffer, heap_map[dst], t)?;
+                        }
+                    }
+                    I::Drive(signal, src, partial) => {
+                        let size = gl.vars.size(*src);
+                        let msrc = var_mode[src];
+                        let mut t = temp_map[&(*src, msrc)];
+                        if temporal_variables.contains(src) {
+                            load(&mut buffer, heap_map[src], t)?;
+                        }
+                        if msrc != gl.logic_mode {
+                            let unconverted_t = t;
+                            t = temp_map[&(*src, gl.logic_mode)];
+                            convert(
+                                &mut buffer,
+                                size,
+                                gl.logic_mode,
+                                msrc,
+                                t.ident,
+                                unconverted_t.ident,
+                            )?;
+                        }
+                        let zero = Bits::new_u32(0);
+                        let partial = match partial {
+                            None if gl.signals[*signal].size != t.ty.size => {
+                                Some(CExpr::Bits(&zero, LogicMode::TwoValue))
+                            }
+                            None => None,
+                            Some((offset, _)) => {
+                                let moffset = var_mode[offset];
+                                let offset_t = temp_map[&(*offset, moffset)];
+                                if temporal_variables.contains(offset) {
+                                    load(&mut buffer, heap_map[offset], offset_t)?;
+                                }
+                                Some(offset_t.into())
+                            }
+                        };
+                        let dst = io_signals[signal];
+                        drive::drive(&mut buffer, signals, dst, t, partial)?;
+                    }
+                    I::Phi(_, _) => continue,
                 }
-                let d = dst_t.ident;
-                let s = src_t.ident;
-                match dst_t.ty.array_size() {
-                    None => writeln!(buffer, "{INDENT}{d} = {s};")?,
-                    Some(num_words) => writeln!(
-                        buffer,
-                        "{INDENT}memcpy({d}, {s}, {num_words}*sizeof(uint64_t));"
-                    )?,
+                if lower_options.stats {
+                    writeln!(&mut buffer, "{INDENT}cldctx->icount++;")?;
                 }
-                if temporal_variables.contains(dst) {
-                    store(&mut buffer, heap_map[dst], dst_t)?;
-                }
-                if lower_options.itrace {
+                if lower_options.itrace && !matches!(i, I::Phi(_, _)) {
                     lower_dyn_format_str(
                         &mut buffer,
                         &mut state_builder.dyn_fmt_strs,
                         &DynFormatString::new(
-                            format!(
-                                "* {} = phi {}\n",
-                                dst.display(&display_context),
-                                src.display(&display_context)
-                            )
-                            .into(),
+                            format!("* {}\n", i.display(&display_context)).into(),
                             [].into(),
                         ),
                         [].into(),
@@ -1263,16 +1208,24 @@ pub fn lower_process(
                     let mut content = String::from("*   : ");
                     let mut arg_offsets = Vec::new();
                     let mut args = Vec::new();
-                    content.push_str(&dst.display(&display_context).to_string());
-                    content.push_str(" = ");
-                    arg_offsets.push((content.len(), DynFormatArgument::default()));
-                    content.push_str("; ");
-                    args.push(dst_t);
-                    content.push_str(&src.display(&display_context).to_string());
-                    content.push_str(" = ");
-                    arg_offsets.push((content.len(), DynFormatArgument::default()));
-                    content.push_str("; ");
-                    args.push(src_t);
+                    if let Some(dst) = i.get_destination_variable() {
+                        let mode = var_mode[&dst];
+                        let var = temp_map[&(dst, mode)];
+                        content.push_str(&dst.display(&display_context).to_string());
+                        content.push_str(" = ");
+                        arg_offsets.push((content.len(), DynFormatArgument::default()));
+                        content.push_str("; ");
+                        args.push(var);
+                    }
+                    i.for_each_src(|src| {
+                        let mode = var_mode[&src];
+                        let var = temp_map[&(src, mode)];
+                        content.push_str(&src.display(&display_context).to_string());
+                        content.push_str(" = ");
+                        arg_offsets.push((content.len(), DynFormatArgument::default()));
+                        content.push_str("; ");
+                        args.push(var);
+                    });
                     content.push('\n');
                     lower_dyn_format_str(
                         &mut buffer,
@@ -1283,115 +1236,212 @@ pub fn lower_process(
                     writeln!(&mut buffer)?;
                 }
             }
-        }
 
-        fn next_event_or_return_0(f: &mut impl io::Write) -> io::Result<()> {
-            writeln!(
-                f,
-                r#"{INDENT}{{
+            if let Some(phis) = bb_phis.get(&bb_key) {
+                for (dst, src) in phis {
+                    let src_size = gl.vars.size(*src);
+                    let dst_size = gl.vars.size(*dst);
+                    assert_eq!(src_size, dst_size);
+                    let src_mode = var_mode[src];
+                    let dst_mode = var_mode[dst];
+
+                    let mut src_t = temp_map[&(*src, src_mode)];
+                    let dst_t = temp_map[&(*dst, dst_mode)];
+
+                    if temporal_variables.contains(src) {
+                        load(&mut buffer, heap_map[src], src_t)?;
+                    }
+
+                    if src_mode != dst_mode {
+                        let unconverted_t = src_t;
+                        src_t = temp_map[&(*src, dst_mode)];
+                        convert(
+                            &mut buffer,
+                            src_size,
+                            dst_mode,
+                            src_mode,
+                            src_t.ident,
+                            unconverted_t.ident,
+                        )?;
+                    }
+
+                    if lower_options.itrace {
+                        writeln!(&mut buffer, "{INDENT}// Phi({dst:?}, {src:?});")?;
+                    }
+                    let d = dst_t.ident;
+                    let s = src_t.ident;
+                    match dst_t.ty.array_size() {
+                        None => writeln!(buffer, "{INDENT}{d} = {s};")?,
+                        Some(num_words) => writeln!(
+                            buffer,
+                            "{INDENT}memcpy({d}, {s}, {num_words}*sizeof(uint64_t));"
+                        )?,
+                    }
+                    if temporal_variables.contains(dst) {
+                        store(&mut buffer, heap_map[dst], dst_t)?;
+                    }
+                    if lower_options.itrace {
+                        lower_dyn_format_str(
+                            &mut buffer,
+                            &mut state_builder.dyn_fmt_strs,
+                            &DynFormatString::new(
+                                format!(
+                                    "* {} = phi {}\n",
+                                    dst.display(&display_context),
+                                    src.display(&display_context)
+                                )
+                                .into(),
+                                [].into(),
+                            ),
+                            [].into(),
+                        )?;
+                        writeln!(&mut buffer)?;
+                        let mut content = String::from("*   : ");
+                        let mut arg_offsets = Vec::new();
+                        let mut args = Vec::new();
+                        content.push_str(&dst.display(&display_context).to_string());
+                        content.push_str(" = ");
+                        arg_offsets.push((content.len(), DynFormatArgument::default()));
+                        content.push_str("; ");
+                        args.push(dst_t);
+                        content.push_str(&src.display(&display_context).to_string());
+                        content.push_str(" = ");
+                        arg_offsets.push((content.len(), DynFormatArgument::default()));
+                        content.push_str("; ");
+                        args.push(src_t);
+                        content.push('\n');
+                        lower_dyn_format_str(
+                            &mut buffer,
+                            &mut state_builder.dyn_fmt_strs,
+                            &DynFormatString::new(content.into(), arg_offsets.into()),
+                            args,
+                        )?;
+                        writeln!(&mut buffer)?;
+                    }
+                }
+            }
+
+            fn next_event_or_return_0(f: &mut impl io::Write) -> io::Result<()> {
+                writeln!(
+                    f,
+                    r#"{INDENT}{{
 {INDENT}event_t e;
 {INDENT}if (!event_vec_pop(&schedule->active_region, &e)) {{
 {INDENT}{INDENT}return 0;
 {INDENT}}}
-{INDENT}[[clang::musttail]] return (e.ptr)(e.state, heap, schedule, time, listening, last_active_time, cldctx);
+{INDENT}[[clang::musttail]] return (e)(heap, schedule, time, listening, last_active_time, cldctx);
 {INDENT}}}"#
-            )
-        }
-
-        match &bb.terminator {
-            BasicBlockTerminator::Wait(bb_key, time) => {
-                let time = time.0;
-                let state = states_set.get_index(bb_key).unwrap();
-                writeln!(
-                    buffer,
-                    "{INDENT}schedule_future_event(schedule, time + {time}, (event_t){{.ptr=&{procedure}, .state={state}}});"
-                )?;
-                next_event_or_return_0(&mut buffer)?;
+                )
             }
-            BasicBlockTerminator::VariableWait(bb_key, time) => {
-                let mtime = var_mode[time];
-                let t = temp_map[&(*time, mtime)];
-                if temporal_variables.contains(time) {
-                    load(&mut buffer, heap_map[time], t)?;
-                }
-                let state = states_set.get_index(bb_key).unwrap();
-                writeln!(buffer, "{INDENT}{{")?;
-                let s0 = CVar {
-                    ident: CIdent::Scoped(0),
-                    ty: CType {
-                        size: TIME_VSIZE,
-                        mode: LogicMode::TwoValue,
-                    },
-                };
-                write_cvar(&mut buffer, s0)?;
-                let t = t.ident;
-                let s0 = s0.ident;
-                match mtime {
-                    LogicMode::TwoValue => writeln!(buffer, "{INDENT}{s0} = {t};")?,
-                    LogicMode::FourValue => {
-                        writeln!(buffer, "{INDENT}{s0} = (~{t}[0] == 0) ? 0 : {t}[1];")?;
+
+            match &bb.terminator {
+                BasicBlockTerminator::Wait(tr, time) => {
+                    let time = time.0;
+                    let tgt_tri = tr_indices.get_index(tr).unwrap();
+                    let tgt = process_to_procedure_name(process, process_idx, tgt_tri);
+                    if time == 0 {
+                        writeln!(
+                            buffer,
+                            r#"{INDENT}[[clang::musttail]] return {tgt}(heap, schedule, time, listening, last_active_time, cldctx);"#,
+                        )?;
+                    } else {
+                        writeln!(
+                            buffer,
+                            "{INDENT}schedule_future_event(schedule, time + {time}, &{tgt});"
+                        )?;
+                        next_event_or_return_0(&mut buffer)?;
                     }
                 }
-                writeln!(
-                    buffer,
-                    "{INDENT}schedule_future_event(schedule, time + {s0}, (event_t){{.ptr=&{procedure}, .state={state}}});",
-                )?;
-                next_event_or_return_0(&mut buffer)?;
-                writeln!(buffer, "{INDENT}}}")?;
-            }
-            BasicBlockTerminator::WaitRegion(bb_key, region) => {
-                let state = states_set.get_index(bb_key).unwrap();
-                writeln!(
-                    buffer,
-                    "{INDENT}event_vec_push(&schedule->regions[{region}], (event_t){{.ptr=&{procedure}, .state={state}}});",
-                )?;
-                next_event_or_return_0(&mut buffer)?;
-            }
-            BasicBlockTerminator::Watch(bb_key, items) => {
-                let state = states_set.get_index(bb_key).unwrap();
-                let offset = listener_builder.top;
-                writeln!(
-                    buffer,
-                    "{INDENT}listening[{}] |= 0x{:x};",
-                    offset / 64,
-                    1u64 << (offset % 64)
-                )?;
-                listener_builder.insert_signals(items, process_idx, process_key, state as u32);
-                next_event_or_return_0(&mut buffer)?;
-            }
-            BasicBlockTerminator::Jump(bb_key) => {
-                writeln!(
-                    buffer,
-                    "{INDENT}goto L{};",
-                    bb_ident.get_index(bb_key).unwrap()
-                )?;
-            }
-            BasicBlockTerminator::Branch(condition, truthy, falsy) => {
-                let truthy = bb_ident.get_index(truthy).unwrap();
-                let falsy = bb_ident.get_index(falsy).unwrap();
-
-                let mcondition = var_mode[condition];
-                let t = temp_map[&(*condition, mcondition)];
-                if temporal_variables.contains(condition) {
-                    load(&mut buffer, heap_map[condition], t)?;
+                BasicBlockTerminator::VariableWait(tr, time) => {
+                    let mtime = var_mode[time];
+                    let t = temp_map[&(*time, mtime)];
+                    if temporal_variables.contains(time) {
+                        load(&mut buffer, heap_map[time], t)?;
+                    }
+                    let tgt_tri = tr_indices.get_index(tr).unwrap();
+                    let tgt = process_to_procedure_name(process, process_idx, tgt_tri);
+                    writeln!(buffer, "{INDENT}{{")?;
+                    let s0 = CVar {
+                        ident: CIdent::Scoped(0),
+                        ty: CType {
+                            size: TIME_VSIZE,
+                            mode: LogicMode::TwoValue,
+                        },
+                    };
+                    write_cvar(&mut buffer, s0)?;
+                    let t = t.ident;
+                    let s0 = s0.ident;
+                    match mtime {
+                        LogicMode::TwoValue => writeln!(buffer, "{INDENT}{s0} = {t};")?,
+                        LogicMode::FourValue => {
+                            writeln!(buffer, "{INDENT}{s0} = (~{t}[0] == 0) ? 0 : {t}[1];")?;
+                        }
+                    }
+                        writeln!(
+                            buffer,
+                            r#"{INDENT}if ({s0} == 0) {{
+{INDENT}{INDENT}[[clang::musttail]] return {tgt}(heap, schedule, time, listening, last_active_time, cldctx);
+{INDENT}}} else {{
+{INDENT}{INDENT}schedule_future_event(schedule, time + {s0}, &{tgt});"#,
+                    )?;
+                    next_event_or_return_0(&mut buffer)?;
+                    writeln!(buffer, "{INDENT}}}}}")?;
                 }
-
-                let t = t.ident;
-                match mcondition {
-                    LogicMode::TwoValue => write!(buffer, "{INDENT}if ({t} == 1)")?,
-                    LogicMode::FourValue => write!(buffer, "{INDENT}if ({t} == 3)")?,
+                BasicBlockTerminator::WaitRegion(tr, region) => {
+                    let tgt_tri = tr_indices.get_index(tr).unwrap();
+                    let tgt = process_to_procedure_name(process, process_idx, tgt_tri);
+                    writeln!(
+                        buffer,
+                        "{INDENT}event_vec_push(&schedule->regions[{region}], &{tgt});",
+                    )?;
+                    next_event_or_return_0(&mut buffer)?;
                 }
-                writeln!(buffer, " {{ goto L{truthy}; }} else {{ goto L{falsy}; }}")?;
-            }
-            BasicBlockTerminator::Halt => {
-                next_event_or_return_0(&mut buffer)?;
+                BasicBlockTerminator::Watch(tr, items) => {
+                    let tgt_tri = tr_indices.get_index(tr).unwrap();
+                    let offset = listener_builder.top;
+                    writeln!(
+                        buffer,
+                        "{INDENT}listening[{}] |= 0x{:x};",
+                        offset / 64,
+                        1u64 << (offset % 64)
+                    )?;
+                    listener_builder.insert_signals(items, process_idx, process_key, tgt_tri);
+                    next_event_or_return_0(&mut buffer)?;
+                }
+                BasicBlockTerminator::Jump(bb_key) => {
+                    writeln!(
+                        buffer,
+                        "{INDENT}goto L{};",
+                        bb_ident.get_index(bb_key).unwrap()
+                    )?;
+                }
+                BasicBlockTerminator::Branch(condition, truthy, falsy) => {
+                    let truthy = bb_ident.get_index(truthy).unwrap();
+                    let falsy = bb_ident.get_index(falsy).unwrap();
+
+                    let mcondition = var_mode[condition];
+                    let t = temp_map[&(*condition, mcondition)];
+                    if temporal_variables.contains(condition) {
+                        load(&mut buffer, heap_map[condition], t)?;
+                    }
+
+                    let t = t.ident;
+                    match mcondition {
+                        LogicMode::TwoValue => write!(buffer, "{INDENT}if ({t} == 1)")?,
+                        LogicMode::FourValue => write!(buffer, "{INDENT}if ({t} == 3)")?,
+                    }
+                    writeln!(buffer, " {{ goto L{truthy}; }} else {{ goto L{falsy}; }}")?;
+                }
+                BasicBlockTerminator::Halt => {
+                    next_event_or_return_0(&mut buffer)?;
+                }
             }
         }
-    }
 
-    f.write_all(&buffer)?;
-    writeln!(f)?;
-    writeln!(f, "}}")?;
+        f.write_all(&buffer)?;
+        writeln!(f)?;
+        writeln!(f, "}}")?;
+    }
 
     Ok(())
 }
@@ -1585,13 +1635,9 @@ fn convert(
 }
 
 pub fn lower_process_array(f: &mut impl io::Write, gl: &GlobalContext) -> io::Result<()> {
-    writeln!(
-        f,
-        "typedef int (*preserve_none_fn)(int, uint64_t*, struct schedule*, uint64_t, uint64_t*, uint64_t*, cold_context_t*) __attribute__((preserve_none));"
-    )?;
-    write!(f, "preserve_none_fn PROCS[{}] = {{", gl.processes.len(),)?;
+    write!(f, "event_t PROCS[{}] = {{", gl.processes.len(),)?;
     for (i, process) in gl.processes.values().enumerate() {
-        writeln!(f, "{}, ", process_to_procedure_name(process, i))?;
+        writeln!(f, "{}, ", process_to_procedure_name(process, i, 0))?;
     }
     writeln!(f, "}};")
 }
@@ -1673,12 +1719,12 @@ pub fn lower_signal_drive_fn(
             )?;
             writeln!(
                 f,
-                "{INDENT}{INDENT}event_vec_push(&schedule->active_region, (event_t){{.ptr=&{}, .state={}}});",
+                "{INDENT}{INDENT}event_vec_push(&schedule->active_region, &{});",
                 process_to_procedure_name(
                     &gl.processes[listener.process_key],
-                    listener.process_idx
+                    listener.process_idx,
+                    listener.tri,
                 ),
-                listener.state
             )?;
             writeln!(f, "{INDENT}}}",)?;
         }
@@ -1730,10 +1776,10 @@ typedef struct cold_context {
     void *stderr;
 } cold_context_t;
 
-typedef struct event {
-  int __attribute__((preserve_none)) (*ptr)(int, uint64_t*, struct schedule*, uint64_t, uint64_t*, uint64_t*, cold_context_t*);
-  int state;
-} event_t;
+typedef
+    int __attribute__((preserve_none))
+        (*event_t)(uint64_t*, struct schedule*, uint64_t, uint64_t*, uint64_t*, cold_context_t*);
+
 typedef struct timed_event {
   event_t event;
   uint64_t time;
@@ -2172,7 +2218,7 @@ NOINLINE int empty_active_event_queue(uint64_t *restrict heap, schedule_t *restr
     if (!event_vec_pop(&schedule->active_region, &e)) {
         return 0;
     }
-    return (e.ptr)(e.state, heap, schedule, time, listening, last_active_time, cldctx);
+    return (e)(heap, schedule, time, listening, last_active_time, cldctx);
 }
 
 "#,
@@ -2206,7 +2252,7 @@ static inline void event_vec_push(event_vec_t *v, event_t event) {
 }
 static inline bool event_vec_pop(event_vec_t *v, event_t *event) {
   if (v->length == 0) {
-    event->ptr = NULL;
+    event = NULL;
     return false;
   }
   *event = v->ptr[v->length - 1];

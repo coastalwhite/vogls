@@ -393,8 +393,8 @@ use vogls_fuse_signals::{Driver, InputEdge};
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::vcd::{VcdScope, VcdValue, VcdVariable, VcdVariableKey};
 use vogls_ir::{
-    BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, ProcessKey, ProcessKind,
-    SignalFlags, SignalKey, SignalSlice, VariableKey, VectorSize, new_process,
+    BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, ProcessBuilder, ProcessKey,
+    ProcessKind, SignalFlags, SignalKey, SignalSlice, VariableKey, VectorSize,
 };
 use vogls_utils::{IndexMap, OrderedSet, Table, VgHashMap};
 
@@ -522,7 +522,8 @@ fn assign_input_port<'a>(
         return Ok(());
     }
 
-    let (_, mut bb_builder) = new_process(mctx.gl(), ProcessKind::Port, ctx.arenas.get_span(expr));
+    let (process, mut bb_builder) =
+        ProcessBuilder::new(mctx.gl(), ProcessKind::Port, ctx.arenas.get_span(expr));
     let bb_key = bb_builder.key();
     let context_width = port.ty.force_net_width();
     let (v, v_ty) = lower_expr(ctx, mctx, scope, &mut bb_builder, expr, Some(context_width))?;
@@ -542,6 +543,7 @@ fn assign_input_port<'a>(
     } else {
         bb_builder.watch_to(mctx.gl(), signals.items, bb_key);
     }
+    process.finalize(mctx.gl());
     Ok(())
 }
 
@@ -596,7 +598,8 @@ fn assign_port_output<'a>(
         }
     }
 
-    let (_, mut bb_builder) = new_process(mctx.gl(), ProcessKind::Port, ctx.arenas.get_span(expr));
+    let (process, mut bb_builder) =
+        ProcessBuilder::new(mctx.gl(), ProcessKind::Port, ctx.arenas.get_span(expr));
     let bb_key = bb_builder.key();
 
     let signal = &output.net;
@@ -708,6 +711,7 @@ fn assign_port_output<'a>(
     }
 
     bb_builder.watch_to(mctx.gl(), ins.items, bb_key);
+    process.finalize(mctx.gl());
 
     if error {
         return Err(());
@@ -868,7 +872,9 @@ pub fn create_nba_process(
     let mask_name = format!("{name}::NBA_MASK");
     let value_name = format!("{name}::NBA_VALUE");
     let (size, origin) = (*size, *origin);
-    let (process_key, mut builder) = new_process(gl, ProcessKind::NonBlockingAssignment, origin);
+    let (process, mut builder) =
+        ProcessBuilder::new(gl, ProcessKind::NonBlockingAssignment, origin);
+    let process_key = process.key().unwrap();
 
     let mask = needs_mask.then(|| {
         gl.signals.insert(vogls_ir::Signal {
@@ -925,6 +931,7 @@ pub fn create_nba_process(
                 BasicBlockTerminator::Branch(mask_ro, waitregion_bb, watch_bb);
         }
     }
+    process.finalize(gl);
 
     (process_key, value, mask)
 }

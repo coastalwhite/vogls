@@ -1,8 +1,8 @@
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_fuse_signals::InputEdge;
 use vogls_ir::{
-    Bits, ConnectionDirection, GlobalContext, ProcessKind, SCALAR_VSIZE, SignalSlice, VectorSize,
-    new_process,
+    Bits, ConnectionDirection, GlobalContext, ProcessBuilder, ProcessKind, SCALAR_VSIZE,
+    SignalSlice, VectorSize,
 };
 use vogls_utils::OrderedSet;
 
@@ -96,7 +96,7 @@ pub fn lower<'a>(
                                     continue;
                                 }
 
-                                let (_, mut bb_builder) = new_process(
+                                let (process, mut bb_builder) = ProcessBuilder::new(
                                     &mut mctx.gl,
                                     ProcessKind::Assign,
                                     ctx.arenas.get_span(*expr),
@@ -121,6 +121,7 @@ pub fn lower<'a>(
                                 let mut ins = OrderedSet::new();
                                 get_used_signals(ctx, mctx, scope, &mut ins, *expr)?;
                                 bb_builder.watch_to(mctx.gl(), ins.items, bb_key);
+                                process.finalize(mctx.gl());
                             }
                         }
                     }
@@ -143,8 +144,8 @@ pub fn lower<'a>(
                     continue;
                 }
 
-                let (_, mut bb_builder) =
-                    new_process(mctx.gl(), ProcessKind::Assign, ctx.arenas.get_span(id));
+                let (process, mut bb_builder) =
+                    ProcessBuilder::new(mctx.gl(), ProcessKind::Assign, ctx.arenas.get_span(id));
                 let bb_key = bb_builder.key();
                 let context_width = net_lvalue_size(ctx, mctx, scope, net_assignment.net_lvalue)?;
                 let (variable, variable_ty) = lower_expr(
@@ -169,6 +170,7 @@ pub fn lower<'a>(
                 let mut ins = OrderedSet::new();
                 get_used_signals(ctx, mctx, scope, &mut ins, net_assignment.expression)?;
                 bb_builder.watch_to(mctx.gl(), ins.items, bb_key);
+                process.finalize(mctx.gl());
             }
         }
         ModuleOrGenerateItemContent::GateInstantiation(id) => {
@@ -183,8 +185,11 @@ pub fn lower<'a>(
                             input_terminals,
                         } = &*instance;
 
-                        let (_, mut bb_builder) =
-                            new_process(mctx.gl(), ProcessKind::Udp, ctx.arenas.get_span(*id));
+                        let (process, mut bb_builder) = ProcessBuilder::new(
+                            mctx.gl(),
+                            ProcessKind::Udp,
+                            ctx.arenas.get_span(*id),
+                        );
                         let bb_key = bb_builder.key();
 
                         let output_size = net_lvalue_width(ctx, mctx, scope, *output_terminal)?;
@@ -256,6 +261,7 @@ pub fn lower<'a>(
                         )?;
 
                         bb_builder.watch_to(mctx.gl(), ins.items, bb_key);
+                        process.finalize(mctx.gl());
                     }
                 }
             }
@@ -392,20 +398,22 @@ pub fn lower<'a>(
         }
         ModuleOrGenerateItemContent::InitialConstruct(id) => {
             let statement = id.0;
-            let (_, bb_builder) =
-                new_process(mctx.gl(), ProcessKind::Initial, ctx.arenas.get_span(id));
+            let (process, bb_builder) =
+                ProcessBuilder::new(mctx.gl(), ProcessKind::Initial, ctx.arenas.get_span(id));
             let bb_builder =
                 statements_to_process(ctx, mctx, scope, bb_builder, AstIdRange::single(statement))?;
             bb_builder.halt(mctx.gl());
+            process.finalize(mctx.gl());
         }
         ModuleOrGenerateItemContent::AlwaysConstruct(id) => {
             let statement = id.0;
-            let (_, bb_builder) =
-                new_process(mctx.gl(), ProcessKind::Always, ctx.arenas.get_span(id));
+            let (process, bb_builder) =
+                ProcessBuilder::new(mctx.gl(), ProcessKind::Always, ctx.arenas.get_span(id));
             let bb_key = bb_builder.key();
             let bb_builder =
                 statements_to_process(ctx, mctx, scope, bb_builder, AstIdRange::single(statement))?;
             bb_builder.jump_to(mctx.gl(), bb_key);
+            process.finalize(mctx.gl());
         }
 
         // Handled by a combination of elaboration + module level elaboration.

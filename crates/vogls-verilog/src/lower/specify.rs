@@ -2,8 +2,7 @@ use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::bits::arithmetic::FvLogicValue;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::{
-    Bits, GlobalContext, LogicMode, PhiRef, ProcessKind, SCALAR_VSIZE, SignalKey, TIME_VSIZE,
-    VariableKey, new_process,
+    Bits, GlobalContext, LogicMode, PhiRef, ProcessBuilder, ProcessKind, Signal, SignalFlags, SignalKey, VariableKey, SCALAR_VSIZE, TIME_VSIZE
 };
 use vogls_utils::VgHashMap;
 
@@ -707,7 +706,7 @@ pub fn lower_specify<'a>(
 
     // @Performance: Scratchpad these.
     let mut input_before_lut = VgHashMap::<SignalKey, usize>::default();
-    let mut input_before = Vec::<(SignalKey, VariableKey, Option<PhiRef>)>::new();
+    let mut input_before = Vec::<(SignalKey, VariableKey, SignalKey)>::new();
     // let mut condition_orsum = VgHashMap::<SignalKey, VariableKey>::default();
 
     outs_lut.clear();
@@ -733,7 +732,7 @@ pub fn lower_iopath<'a>(
     output: SignalKey,
     specify: SpecifyOutput,
     input_before_lut: &mut VgHashMap<SignalKey, usize>,
-    input_before: &mut Vec<(SignalKey, VariableKey, Option<PhiRef>)>,
+    input_before: &mut Vec<(SignalKey, VariableKey, SignalKey)>,
 ) -> Result<(), ()> {
     let mut proxy = mctx.gl.signals.get(output).unwrap().clone();
     proxy.name = format!("{}::SPECIFY_PROXY", proxy.name);
@@ -746,7 +745,8 @@ pub fn lower_iopath<'a>(
         input_before_lut.clear();
         input_before.clear();
 
-        let (_, mut builder) = new_process(mctx.gl(), ProcessKind::Specify, TokenRange::default());
+        let (process, mut builder) =
+            ProcessBuilder::new(mctx.gl(), ProcessKind::Specify, TokenRange::default());
         let entry = builder.key();
 
         // @Correctness: This might need something like. `Initial Value of Signal X`. I think
@@ -760,10 +760,19 @@ pub fn lower_iopath<'a>(
                         | Condition::InputPosedgeExpr(_)
                         | Condition::InputNegedgeExpr(_)
                 ) {
+                    let size = mctx.gl.signals[*input].size;
+                    let signal = mctx.gl.signals.insert(Signal {
+                        name: format!("SPECIFY_BEFORE/{}", mctx.gl.signals.len()),
+                        size,
+                        initialize: None,
+                        flags: SignalFlags::EMPTY,
+                        origin: TokenRange::default(),
+                    });
                     let before = builder.probe(mctx.gl(), *input);
+                    builder.drive(mctx.gl(), signal, before);
                     let idx = input_before.len();
                     input_before_lut.insert(*input, idx);
-                    input_before.push((*input, before, None));
+                    input_before.push((*input, before, signal));
                     break;
                 }
             }
@@ -772,11 +781,8 @@ pub fn lower_iopath<'a>(
         builder = builder.jump(mctx.gl());
         let wait_loop_bb = builder.key();
 
-        for (_, variable, phi_ref) in input_before.iter_mut() {
-            let pr;
-            (*variable, pr) =
-                builder.phi(mctx.gl(), [(entry, *variable), (entry, *variable)].into());
-            *phi_ref = Some(pr);
+        for (_, variable, signal) in input_before.iter_mut() {
+            *variable = builder.probe(mctx.gl(), *signal);
         }
 
         // active_time = max_{signal} last_update_time(signal)
@@ -876,21 +882,12 @@ pub fn lower_iopath<'a>(
         let old_proxy_value = builder.probe(mctx.gl(), proxy);
         let old_proxy_value =
             builder.select_bit_constant(mctx.gl(), old_proxy_value, output_bitidx);
-        for (input, variable, _) in input_before.iter_mut() {
-            *variable = builder.probe(mctx.gl(), *input);
+        for (input, _, signal) in input_before.iter_mut() {
+            let new_value = builder.probe(mctx.gl(), *input);
+            builder.drive(mctx.gl(), *signal, new_value);
         }
 
         builder = builder.variable_wait(mctx.gl(), wait_time);
-
-        for (_, variable, phi_ref) in input_before.iter_mut() {
-            builder.update_phi_ref(
-                mctx.gl(),
-                phi_ref.take().unwrap(),
-                1,
-                builder.key(),
-                *variable,
-            );
-        }
 
         // do ... while(...);
         let new_proxy_value = builder.probe(mctx.gl(), proxy);
@@ -901,6 +898,7 @@ pub fn lower_iopath<'a>(
 
         builder.drive_partial_constant(mctx.gl(), output, new_proxy_value, output_bitidx);
         builder.watch_to(mctx.gl(), vec![proxy], wait_loop_bb);
+        process.finalize(mctx.gl());
     }
 
     Ok(())

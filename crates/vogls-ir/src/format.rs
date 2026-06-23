@@ -47,7 +47,7 @@ impl<'a> DisplayContext<'a> {
                 let new_idx = self.var_map.len() as u32;
                 self.var_map.entry(v).or_insert(new_idx);
             });
-            self.gl.bbs[bb].terminator.for_each_bb(|k| {
+            self.gl.bbs[bb].terminator.for_each_temporal_bb(|k| {
                 let name = self.bb_name_scratch.len();
                 self.bb_name_scratch.entry(k).or_insert_with(|| {
                     self.bb_stack_scratch.push(k);
@@ -111,7 +111,8 @@ impl Process {
     }
 
     fn process_fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &mut DisplayContext<'_>) -> fmt::Result {
-        ctx.prepare_process(self.entry);
+        let entry = self.regions[0].entry();
+        ctx.prepare_process(entry);
 
         writeln!(f, "proc {} {{", self.kind.into_static_str())?;
 
@@ -119,15 +120,19 @@ impl Process {
         let mut bb_seen = std::mem::take(&mut ctx.bb_seen_scratch);
 
         bb_seen.clear();
-        bb_seen.insert(self.entry);
-        bb_stack.push(self.entry);
+        bb_seen.insert(entry);
+        bb_stack.push(entry);
 
         while let Some(bb) = bb_stack.pop() {
             writeln!(f, "L{}:", ctx.bb_name_scratch[&bb])?;
 
             let bb = ctx.gl.bbs.get(bb).unwrap();
             bb.ctx_fmt(f, ctx)?;
-            bb.terminator.extend_next_rev(&mut bb_stack, &mut bb_seen);
+            bb.terminator.for_each_temporal_bb(|bb_key| {
+                if bb_seen.insert(bb_key) {
+                    bb_stack.push(bb_key);
+                }
+            });
         }
 
         ctx.bb_stack_scratch = bb_stack;
@@ -458,16 +463,16 @@ impl ContextFormat for BasicBlockTerminator {
             Self::Wait(bb, time) => {
                 f.write_char(' ')?;
                 time.ctx_fmt(f, ctx)?;
-                write!(f, ", <L{}>", ctx.bb_name_scratch[bb])?;
+                write!(f, ", <L{}>", ctx.bb_name_scratch[&bb.entry()])?;
             }
             Self::VariableWait(bb, time) => {
                 f.write_char(' ')?;
                 time.ctx_fmt(f, ctx)?;
-                write!(f, ", <L{}>", ctx.bb_name_scratch[bb])?;
+                write!(f, ", <L{}>", ctx.bb_name_scratch[&bb.entry()])?;
             }
             Self::WaitRegion(bb, region) => {
                 f.write_char(' ')?;
-                write!(f, "{region}, <L{}>", ctx.bb_name_scratch[bb])?;
+                write!(f, "{region}, <L{}>", ctx.bb_name_scratch[&bb.entry()])?;
             }
             Self::Watch(bb, signals) => {
                 f.write_char(' ')?;
@@ -480,7 +485,7 @@ impl ContextFormat for BasicBlockTerminator {
                     }
                 }
                 f.write_str("], ")?;
-                write!(f, "<L{}>", ctx.bb_name_scratch[bb])?;
+                write!(f, "<L{}>", ctx.bb_name_scratch[&bb.entry()])?;
             }
             Self::Jump(bb) => {
                 f.write_char(' ')?;

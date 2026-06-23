@@ -69,8 +69,7 @@ use slotmap::SlotMap;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::vcd::VcdValue;
 use vogls_ir::{
-    BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, Instruction, IntrinsicOp, Signal,
-    SignalFlags, SignalKey, SignalSlice, VectorSize, new_process,
+    BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, Instruction, IntrinsicOp, ProcessBuilder, Signal, SignalFlags, SignalKey, SignalSlice, VectorSize
 };
 use vogls_utils::{OrderedSet, Table, VgHashMap, VgHashSet};
 
@@ -519,8 +518,8 @@ impl FuseGraphOptimizer {
 
             // If it is more complicated, we have to insert a process that propagated from driver to
             // drivee.
-            let (_, mut builder) =
-                new_process(gl, vogls_ir::ProcessKind::Fuse, TokenRange::default());
+            let (process, mut builder) =
+                ProcessBuilder::new(gl, vogls_ir::ProcessKind::Fuse, TokenRange::default());
             let mut watch_signals = OrderedSet::default();
             for &e in &self.graph.nodes[n].fanin {
                 let edge = &self.graph.edges[e];
@@ -549,6 +548,7 @@ impl FuseGraphOptimizer {
             }
             let entry = builder.key();
             builder.watch_to(gl, watch_signals.items, entry);
+            process.finalize(gl);
         }
 
         (self.fused_signals, self.drive_map)

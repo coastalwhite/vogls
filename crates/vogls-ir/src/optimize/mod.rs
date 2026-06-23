@@ -13,7 +13,8 @@ pub mod peephole;
 
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext,
-    Instruction, ProcessKey, ResizeOp, ShiftImmOp, SignalKey, UnaryOp, VariableKey,
+    Instruction, ProcessKey, ResizeOp, ShiftImmOp, SignalKey, TemporalRegionKey, UnaryOp,
+    VariableKey,
 };
 
 #[derive(Default, Clone, Copy)]
@@ -92,159 +93,21 @@ pub fn optimize_processes(gl: &mut GlobalContext, processes: &[ProcessKey], flag
             remove_needles_branches(gl, process, &mut scratch_stack, &mut scratch_seen);
 
             // Remove empty processes
+            if gl.processes[process].regions.is_empty() {
+                gl.processes.remove(process);
+                break;
+            }
+
+            if gl.processes[process].regions.len() == 1
+                && let Some(tr) = gl.processes[process].regions.first()
             {
-                let bb = &gl.bbs[gl.processes[process].entry];
+                let bb = &gl.bbs[tr.entry()];
                 if bb.instrs.is_empty() && matches!(bb.terminator, BasicBlockTerminator::Halt) {
                     gl.processes.remove(process);
                     break;
-                } 
-            }
-        }
-    }
-}
-
-pub fn get_fan_in<'a>(
-    bbs: &mut SlotMap<BasicBlockKey, BasicBlock>,
-    entry: BasicBlockKey,
-    scratch_stack: &mut Vec<BasicBlockKey>,
-    scratch_seen: &mut VgHashSet<BasicBlockKey>,
-    scratch_fan_in: &mut SecondaryMap<BasicBlockKey, Vec<BasicBlockKey>>,
-) {
-    scratch_stack.clear();
-    scratch_seen.clear();
-    scratch_fan_in.clear();
-
-    scratch_stack.push(entry);
-    scratch_seen.insert(entry);
-
-    while let Some(bb_key) = scratch_stack.pop() {
-        let BasicBlock {
-            instrs: _,
-            terminator,
-        } = &mut bbs[bb_key];
-        terminator.for_each_bb(|bb_key| {
-            if scratch_seen.insert(bb_key) {
-                scratch_stack.push(bb_key);
-            }
-        });
-        scratch_fan_in.insert(bb_key, Vec::new());
-    }
-
-    scratch_seen.clear();
-
-    scratch_stack.push(entry);
-    scratch_seen.insert(entry);
-
-    while let Some(bb_key) = scratch_stack.pop() {
-        let BasicBlock {
-            instrs: _,
-            terminator,
-        } = &bbs[bb_key];
-        terminator.for_each_bb(|next| {
-            if scratch_seen.insert(next) {
-                scratch_stack.push(next);
-            }
-            scratch_fan_in[next].push(bb_key)
-        });
-    }
-
-    if !cfg!(debug_assertions) {
-        return;
-    }
-
-    scratch_seen.clear();
-    scratch_stack.push(entry);
-    scratch_seen.insert(entry);
-
-    while let Some(bb_key) = scratch_stack.pop() {
-        let BasicBlock { instrs, terminator } = &mut bbs[bb_key];
-        terminator.for_each_bb(|bb_key| {
-            if scratch_seen.insert(bb_key) {
-                scratch_stack.push(bb_key);
-            }
-        });
-        for i in instrs {
-            if let Instruction::Phi(_, srcs) = i {
-                for (bb, _) in srcs {
-                    assert!(scratch_fan_in[bb_key].contains(bb));
                 }
             }
         }
-    }
-}
-
-pub fn remove_needless_jumps(
-    bbs: &mut SlotMap<BasicBlockKey, BasicBlock>,
-    entry: BasicBlockKey,
-    scratch_stack: &mut Vec<BasicBlockKey>,
-    scratch_seen: &mut HashSet<BasicBlockKey>,
-    scratch_fan_in: &mut SecondaryMap<BasicBlockKey, Vec<BasicBlockKey>>,
-) {
-    scratch_stack.clear();
-    scratch_seen.clear();
-    scratch_stack.push(entry);
-    scratch_seen.insert(entry);
-
-    while let Some(bb_key) = scratch_stack.pop() {
-        let BasicBlockTerminator::Jump(target_bb) = bbs[bb_key].terminator else {
-            bbs[bb_key]
-                .terminator
-                .extend_next_rev(scratch_stack, scratch_seen);
-            continue;
-        };
-
-        let [bb, target] = bbs.get_disjoint_mut([bb_key, target_bb]).unwrap();
-        let [bb_fan_in, target_fan_in] = scratch_fan_in
-            .get_disjoint_mut([bb_key, target_bb])
-            .unwrap();
-
-        if !bb.instrs.is_empty() && target_fan_in.len() != 1 {
-            bb.terminator.extend_next_rev(scratch_stack, scratch_seen);
-            continue;
-        }
-
-        for i in bb.instrs.iter_mut() {
-            if let Instruction::Phi(_, srcs) = i {
-                let mut new_srcs = Vec::with_capacity(bb_fan_in.len() + target_fan_in.len() - 1);
-                for (b, v) in srcs.iter() {
-                    if *b == bb_key {
-                        new_srcs.extend(target_fan_in.iter().map(|t| (*t, *v)));
-                    } else {
-                        new_srcs.push((*b, *v));
-                    }
-                }
-                *srcs = new_srcs.into();
-            }
-        }
-
-        if bb.instrs.is_empty() {
-            std::mem::swap(&mut bb.instrs, &mut target.instrs);
-        } else {
-            bb.instrs.extend(std::mem::take(&mut target.instrs));
-        }
-        std::mem::swap(&mut bb.terminator, &mut target.terminator);
-
-        bb_fan_in.reserve(target_fan_in.len() - 1);
-        bb_fan_in.extend(target_fan_in.iter().copied().filter(|k| *k != bb_key));
-
-        for b in target_fan_in.iter().copied().filter(|k| *k != bb_key) {
-            bbs[b].map_bb(|bb| if bb == target_bb { bb_key } else { bb });
-        }
-
-        let start_stack_len = scratch_stack.len();
-        bbs[bb_key]
-            .terminator
-            .for_each_bb(|b| scratch_stack.push(b));
-        for &b in &scratch_stack[start_stack_len..] {
-            for f in scratch_fan_in[b].iter_mut() {
-                if *f == target_bb {
-                    *f = bb_key;
-                }
-            }
-            bbs[b].map_bb(|bb| if bb == target_bb { bb_key } else { bb });
-        }
-        scratch_stack.truncate(start_stack_len);
-        scratch_stack.push(bb_key);
     }
 }
 
@@ -254,31 +117,31 @@ pub fn remove_needles_branches(
     scratch_stack: &mut Vec<BasicBlockKey>,
     scratch_seen: &mut VgHashSet<BasicBlockKey>,
 ) {
-    let entry = gl.processes[process].entry;
+    for tr in &gl.processes[process].regions {
+        scratch_stack.clear();
+        scratch_seen.clear();
 
-    scratch_stack.clear();
-    scratch_seen.clear();
-
-    scratch_stack.push(entry);
-    scratch_seen.insert(entry);
-    while let Some(bb_key) = scratch_stack.pop() {
-        let terminator = &mut gl.bbs[bb_key].terminator;
-        if let BasicBlockTerminator::Branch(_, bb1, bb2) = terminator
-            && bb1 == bb2
-        {
-            *terminator = BasicBlockTerminator::Jump(*bb1);
-        }
-        terminator.for_each_bb(|bb_key| {
-            if scratch_seen.insert(bb_key) {
-                scratch_stack.push(bb_key);
+        scratch_stack.push(tr.entry());
+        scratch_seen.insert(tr.entry());
+        while let Some(bb_key) = scratch_stack.pop() {
+            let terminator = &mut gl.bbs[bb_key].terminator;
+            if let BasicBlockTerminator::Branch(_, bb1, bb2) = terminator
+                && bb1 == bb2
+            {
+                *terminator = BasicBlockTerminator::Jump(*bb1);
             }
-        });
+            terminator.for_each_non_temporal_bb(|bb_key| {
+                if scratch_seen.insert(bb_key) {
+                    scratch_stack.push(bb_key);
+                }
+            });
+        }
     }
 }
 
 pub fn remap_vars(
-    gl: &mut GlobalContext,
-    process: ProcessKey,
+    bbs: &mut SlotMap<BasicBlockKey, BasicBlock>,
+    tr: TemporalRegionKey,
     scratch_stack: &mut Vec<BasicBlockKey>,
     scratch_seen: &mut VgHashSet<BasicBlockKey>,
     var_map: &mut VgHashMap<VariableKey, VariableKey>,
@@ -304,14 +167,12 @@ pub fn remap_vars(
         }
     }
 
-    let entry = gl.processes[process].entry;
-
     scratch_stack.clear();
     scratch_seen.clear();
-    scratch_seen.insert(entry);
-    scratch_stack.push(entry);
+    scratch_seen.insert(tr.entry());
+    scratch_stack.push(tr.entry());
     while let Some(bb_key) = scratch_stack.pop() {
-        let bb = &mut gl.bbs[bb_key];
+        let bb = &mut bbs[bb_key];
         bb.instrs.retain_mut(|i| {
             if i.get_destination_variable()
                 .is_some_and(|dst| var_map.contains_key(&dst))
@@ -326,7 +187,7 @@ pub fn remap_vars(
         bb.terminator
             .map_vars(|v| var_map.get(&v).copied().unwrap_or(v));
 
-        bb.terminator.for_each_bb(|bb_key| {
+        bb.terminator.for_each_non_temporal_bb(|bb_key| {
             if scratch_seen.insert(bb_key) {
                 scratch_stack.push(bb_key);
             }

@@ -290,16 +290,22 @@ pub fn lower_process_to_vm(
     let mut bits_map = VgHashMap::default();
 
     resolve_var_logic_mode_map(
-        process.entry,
+        &process.regions,
         gl,
         &mut bb_stack,
         &mut bb_seen,
         &mut var_mode,
         &mut conv_map,
     );
-    insert_bb_phis(process.entry, gl, &mut bb_stack, &mut bb_seen, &mut bb_phis);
+    insert_bb_phis(
+        &process.regions,
+        gl,
+        &mut bb_stack,
+        &mut bb_seen,
+        &mut bb_phis,
+    );
     resolve_heap_map(
-        process.entry,
+        &process.regions,
         gl,
         &mut bb_stack,
         &mut bb_seen,
@@ -344,471 +350,503 @@ pub fn lower_process_to_vm(
     }
 
     // Lower the IR instructions to VM instructions.
-    bb_stack.push(process.entry);
-    while let Some(bb_key) = bb_stack.pop() {
-        let bb = gl.bbs.get(bb_key).unwrap();
+    for tr in &process.regions {
+        bb_stack.push(tr.entry());
+        while let Some(bb_key) = bb_stack.pop() {
+            let bb = gl.bbs.get(bb_key).unwrap();
 
-        bb_offsets.insert(bb_key, instructions.len());
+            bb_offsets.insert(bb_key, instructions.len());
 
-        for instr in &bb.instrs {
-            let instr = match instr {
-                I::Constant(..) => continue,
+            for instr in &bb.instrs {
+                let instr = match instr {
+                    I::Constant(..) => continue,
 
-                I::Unary(d, op, s) => {
-                    let size = gl.vars.size(*s);
-                    let m = var_mode[d];
-                    let s = var!(*s, (m, var_mode[s], size));
-                    let d = var!(*d);
-                    lower_unary_op(&mut instructions, *op, d, s.to_ref(size), m);
-                    continue;
-                }
-                I::Resize(d, op, s) => {
-                    let d_size = gl.vars.size(*d);
-                    let s_size = gl.vars.size(*s);
-                    let m = var_mode[d];
-                    let s = var!(*s, (m, var_mode[s], s_size)).to_ref(s_size);
-                    let d = var!(*d).to_ref(d_size);
-                    lower_resize_op(&mut instructions, *op, d, s, m);
-                    continue;
-                }
-                I::BinaryImm(d, op, src, imm) => {
-                    use LogicMode as M;
-
-                    let d_size = gl.vars.size(*d);
-                    let s1_size = gl.vars.size(*src);
-                    let s2_size = imm.size();
-                    let s1_mode = var_mode[src];
-                    let s2_mode = if imm.contains_special() {
-                        LogicMode::FourValue
-                    } else {
-                        LogicMode::TwoValue
-                    };
-                    let d = var!(*d);
-                    let mode = match (s1_mode, s2_mode) {
-                        (M::FourValue, _) | (_, M::FourValue) => M::FourValue,
-                        _ => M::TwoValue,
-                    };
-                    let src = var!(*src, (mode, s1_mode, s1_size));
-                    let imm = bits_map[&(imm.clone(), mode)];
-                    use BinaryArithmeticOp as BA;
-                    use BinaryComparisonOp as BC;
-                    use BinaryImmOp as O;
-                    if mode == M::FourValue {
-                        match *op {
-                            O::And => VI::FvBinaryArithmetic(d.to_ref(d_size), BA::And, src, imm),
-                            O::Or => VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Or, src, imm),
-                            O::Xor => VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Xor, src, imm),
-
-                            O::Add => VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Add, src, imm),
-                            O::Sub => VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Sub, src, imm),
-                            O::Power => {
-                                VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Power, src, imm)
-                            }
-                            O::Multiply => {
-                                VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Multiply, src, imm)
-                            }
-                            O::Divide => {
-                                VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Divide, src, imm)
-                            }
-                            O::Modulus => {
-                                VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Modulus, src, imm)
-                            }
-
-                            O::RevSub => {
-                                VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Sub, imm, src)
-                            }
-                            O::RevPower => {
-                                VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Power, imm, src)
-                            }
-                            O::RevDivide => {
-                                VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Divide, imm, src)
-                            }
-                            O::RevModulus => {
-                                VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Modulus, imm, src)
-                            }
-
-                            O::Min => VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Min, src, imm),
-                            O::Max => VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Max, src, imm),
-
-                            O::UnsignedLessEqual => VI::FvBinaryComparison(
-                                d,
-                                BC::UnsignedLessEqual,
-                                src.to_ref(s1_size),
-                                imm,
-                            ),
-                            O::UnsignedGreaterEqual => VI::FvBinaryComparison(
-                                d,
-                                BC::UnsignedLessEqual,
-                                imm.to_ref(s2_size),
-                                src,
-                            ),
-
-                            O::CaseEquality => VI::FvBinaryComparison(
-                                d,
-                                BC::CaseEquality,
-                                src.to_ref(s1_size),
-                                imm,
-                            ),
-                            O::ConcatLeft => {
-                                VI::FvConcat(d, imm.to_ref(s2_size), src.to_ref(s1_size))
-                            }
-                            O::ConcatRight => {
-                                VI::FvConcat(d, src.to_ref(s1_size), imm.to_ref(s2_size))
-                            }
-                        }
-                    } else {
-                        match *op {
-                            O::And => VI::TvBinaryArithmetic(d.to_ref(d_size), BA::And, src, imm),
-                            O::Or => VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Or, src, imm),
-                            O::Xor => VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Xor, src, imm),
-
-                            O::Add => VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Add, src, imm),
-                            O::Sub => VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Sub, src, imm),
-                            O::Power => {
-                                VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Power, src, imm)
-                            }
-                            O::Multiply => {
-                                VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Multiply, src, imm)
-                            }
-                            O::Divide => {
-                                VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Divide, src, imm)
-                            }
-                            O::Modulus => {
-                                VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Modulus, src, imm)
-                            }
-
-                            O::RevSub => {
-                                VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Sub, imm, src)
-                            }
-                            O::RevPower => {
-                                VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Power, imm, src)
-                            }
-                            O::RevDivide => {
-                                VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Divide, imm, src)
-                            }
-                            O::RevModulus => {
-                                VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Modulus, imm, src)
-                            }
-
-                            O::Min => VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Min, src, imm),
-                            O::Max => VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Max, src, imm),
-
-                            O::UnsignedLessEqual => VI::TvBinaryComparison(
-                                d,
-                                BC::UnsignedLessEqual,
-                                src.to_ref(s1_size),
-                                imm,
-                            ),
-                            O::UnsignedGreaterEqual => VI::TvBinaryComparison(
-                                d,
-                                BC::UnsignedLessEqual,
-                                imm.to_ref(s2_size),
-                                src,
-                            ),
-
-                            O::CaseEquality => VI::TvBinaryComparison(
-                                d,
-                                BC::CaseEquality,
-                                src.to_ref(s1_size),
-                                imm,
-                            ),
-                            O::ConcatLeft => {
-                                VI::TvConcat(d, imm.to_ref(s2_size), src.to_ref(s1_size))
-                            }
-                            O::ConcatRight => {
-                                VI::TvConcat(d, src.to_ref(s1_size), imm.to_ref(s2_size))
-                            }
-                        }
+                    I::Unary(d, op, s) => {
+                        let size = gl.vars.size(*s);
+                        let m = var_mode[d];
+                        let s = var!(*s, (m, var_mode[s], size));
+                        let d = var!(*d);
+                        lower_unary_op(&mut instructions, *op, d, s.to_ref(size), m);
+                        continue;
                     }
-                }
-                I::Slice(d, s1, s2) => {
-                    use LogicMode as M;
-
-                    let d_size = gl.vars.size(*d);
-                    let s1_size = gl.vars.size(*s1);
-                    let s1_mode = var_mode[s1];
-                    let s2_mode = var_mode[s2];
-                    let d = var!(*d);
-                    let mode = match (s1_mode, s2_mode) {
-                        (M::FourValue, _) | (_, M::FourValue) => M::FourValue,
-                        _ => M::TwoValue,
-                    };
-                    let s1 = var!(*s1, (mode, s1_mode, s1_size));
-                    let s2 = var!(*s2);
-                    if mode == M::FourValue {
-                        VI::FvSlice(
-                            d.to_ref(d_size),
-                            s1.to_ref(s1_size),
-                            s2,
-                            SliceFlags {
-                                fill_with_x: true,
-                                offset_is_fv: s2_mode == LogicMode::FourValue,
-                            },
-                        )
-                    } else {
-                        VI::TvSlice(
-                            d.to_ref(d_size),
-                            s1.to_ref(s1_size),
-                            s2,
-                            SliceFlags {
-                                fill_with_x: true,
-                                offset_is_fv: s2_mode == LogicMode::FourValue,
-                            },
-                        )
+                    I::Resize(d, op, s) => {
+                        let d_size = gl.vars.size(*d);
+                        let s_size = gl.vars.size(*s);
+                        let m = var_mode[d];
+                        let s = var!(*s, (m, var_mode[s], s_size)).to_ref(s_size);
+                        let d = var!(*d).to_ref(d_size);
+                        lower_resize_op(&mut instructions, *op, d, s, m);
+                        continue;
                     }
-                }
-                I::SliceImm(d, src, offset) => {
-                    use LogicMode as M;
+                    I::BinaryImm(d, op, src, imm) => {
+                        use LogicMode as M;
 
-                    let d_size = gl.vars.size(*d);
-                    let s1_size = gl.vars.size(*src);
-                    let s1_mode = var_mode[src];
-                    let s2_mode = LogicMode::TwoValue;
-                    let d = var!(*d);
-                    let mode = match (s1_mode, s2_mode) {
-                        (M::FourValue, _) | (_, M::FourValue) => M::FourValue,
-                        _ => M::TwoValue,
-                    };
-                    let src = var!(*src, (mode, s1_mode, s1_size));
-                    lower_slice_imm(
-                        &mut instructions,
-                        d.to_ref(d_size),
-                        src.to_ref(s1_size),
-                        *offset,
-                        mode,
-                    );
-                    continue;
-                }
-                I::ShiftImm(d, op, src, offset) => {
-                    use LogicMode as M;
-
-                    let d_size = gl.vars.size(*d);
-                    let s1_size = gl.vars.size(*src);
-                    let s1_mode = var_mode[src];
-                    let s2_mode = LogicMode::TwoValue;
-                    let d = var!(*d);
-                    let mode = match (s1_mode, s2_mode) {
-                        (M::FourValue, _) | (_, M::FourValue) => M::FourValue,
-                        _ => M::TwoValue,
-                    };
-                    let src = var!(*src, (mode, s1_mode, s1_size));
-                    use ShiftImmOp as O;
-                    use ShiftOp as S;
-                    if mode == M::FourValue {
-                        match op {
-                            O::LogicalShiftLeft => {
-                                VI::FvShiftImm(d.to_ref(d_size), S::LogicalLeft, src, *offset)
-                            }
-                            O::LogicalShiftRight => {
-                                VI::FvShiftImm(d.to_ref(d_size), S::LogicalRight, src, *offset)
-                            }
-                            O::ArithmeticShiftRight => {
-                                VI::FvShiftImm(d.to_ref(d_size), S::ArithmeticRight, src, *offset)
-                            }
-                        }
-                    } else {
-                        match op {
-                            O::LogicalShiftLeft => {
-                                VI::TvShiftImm(d.to_ref(d_size), S::LogicalLeft, src, *offset)
-                            }
-                            O::LogicalShiftRight => {
-                                VI::TvShiftImm(d.to_ref(d_size), S::LogicalRight, src, *offset)
-                            }
-                            O::ArithmeticShiftRight => {
-                                VI::TvShiftImm(d.to_ref(d_size), S::ArithmeticRight, src, *offset)
-                            }
-                        }
-                    }
-                }
-                I::Select(dst, cond, truthy, falsy) => {
-                    use LogicMode as M;
-
-                    let dst_mode = var_mode[dst];
-                    let size = gl.vars.size(*dst);
-                    let cond_mode = var_mode[cond];
-                    let truthy_mode = var_mode[truthy];
-                    let falsy_mode = var_mode[falsy];
-                    let d = var!(*dst);
-                    let c = var!(*cond);
-                    let t = var!(*truthy, (dst_mode, truthy_mode, size));
-                    let f = var!(*falsy, (dst_mode, falsy_mode, size));
-
-                    let cond_is_fv = cond_mode == M::FourValue;
-
-                    if dst_mode == M::FourValue {
-                        VI::FvSelect(d.to_ref(size), c, t, f, cond_is_fv)
-                    } else {
-                        if !cond_is_fv && size == SCALAR_VSIZE {
-                            VI::TvSelect1(d, c, t, f)
+                        let d_size = gl.vars.size(*d);
+                        let s1_size = gl.vars.size(*src);
+                        let s2_size = imm.size();
+                        let s1_mode = var_mode[src];
+                        let s2_mode = if imm.contains_special() {
+                            LogicMode::FourValue
                         } else {
-                            VI::TvSelect(d.to_ref(size), c, t, f, cond_is_fv)
+                            LogicMode::TwoValue
+                        };
+                        let d = var!(*d);
+                        let mode = match (s1_mode, s2_mode) {
+                            (M::FourValue, _) | (_, M::FourValue) => M::FourValue,
+                            _ => M::TwoValue,
+                        };
+                        let src = var!(*src, (mode, s1_mode, s1_size));
+                        let imm = bits_map[&(imm.clone(), mode)];
+                        use BinaryArithmeticOp as BA;
+                        use BinaryComparisonOp as BC;
+                        use BinaryImmOp as O;
+                        if mode == M::FourValue {
+                            match *op {
+                                O::And => {
+                                    VI::FvBinaryArithmetic(d.to_ref(d_size), BA::And, src, imm)
+                                }
+                                O::Or => VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Or, src, imm),
+                                O::Xor => {
+                                    VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Xor, src, imm)
+                                }
+
+                                O::Add => {
+                                    VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Add, src, imm)
+                                }
+                                O::Sub => {
+                                    VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Sub, src, imm)
+                                }
+                                O::Power => {
+                                    VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Power, src, imm)
+                                }
+                                O::Multiply => {
+                                    VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Multiply, src, imm)
+                                }
+                                O::Divide => {
+                                    VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Divide, src, imm)
+                                }
+                                O::Modulus => {
+                                    VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Modulus, src, imm)
+                                }
+
+                                O::RevSub => {
+                                    VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Sub, imm, src)
+                                }
+                                O::RevPower => {
+                                    VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Power, imm, src)
+                                }
+                                O::RevDivide => {
+                                    VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Divide, imm, src)
+                                }
+                                O::RevModulus => {
+                                    VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Modulus, imm, src)
+                                }
+
+                                O::Min => {
+                                    VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Min, src, imm)
+                                }
+                                O::Max => {
+                                    VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Max, src, imm)
+                                }
+
+                                O::UnsignedLessEqual => VI::FvBinaryComparison(
+                                    d,
+                                    BC::UnsignedLessEqual,
+                                    src.to_ref(s1_size),
+                                    imm,
+                                ),
+                                O::UnsignedGreaterEqual => VI::FvBinaryComparison(
+                                    d,
+                                    BC::UnsignedLessEqual,
+                                    imm.to_ref(s2_size),
+                                    src,
+                                ),
+
+                                O::CaseEquality => VI::FvBinaryComparison(
+                                    d,
+                                    BC::CaseEquality,
+                                    src.to_ref(s1_size),
+                                    imm,
+                                ),
+                                O::ConcatLeft => {
+                                    VI::FvConcat(d, imm.to_ref(s2_size), src.to_ref(s1_size))
+                                }
+                                O::ConcatRight => {
+                                    VI::FvConcat(d, src.to_ref(s1_size), imm.to_ref(s2_size))
+                                }
+                            }
+                        } else {
+                            match *op {
+                                O::And => {
+                                    VI::TvBinaryArithmetic(d.to_ref(d_size), BA::And, src, imm)
+                                }
+                                O::Or => VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Or, src, imm),
+                                O::Xor => {
+                                    VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Xor, src, imm)
+                                }
+
+                                O::Add => {
+                                    VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Add, src, imm)
+                                }
+                                O::Sub => {
+                                    VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Sub, src, imm)
+                                }
+                                O::Power => {
+                                    VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Power, src, imm)
+                                }
+                                O::Multiply => {
+                                    VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Multiply, src, imm)
+                                }
+                                O::Divide => {
+                                    VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Divide, src, imm)
+                                }
+                                O::Modulus => {
+                                    VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Modulus, src, imm)
+                                }
+
+                                O::RevSub => {
+                                    VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Sub, imm, src)
+                                }
+                                O::RevPower => {
+                                    VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Power, imm, src)
+                                }
+                                O::RevDivide => {
+                                    VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Divide, imm, src)
+                                }
+                                O::RevModulus => {
+                                    VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Modulus, imm, src)
+                                }
+
+                                O::Min => {
+                                    VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Min, src, imm)
+                                }
+                                O::Max => {
+                                    VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Max, src, imm)
+                                }
+
+                                O::UnsignedLessEqual => VI::TvBinaryComparison(
+                                    d,
+                                    BC::UnsignedLessEqual,
+                                    src.to_ref(s1_size),
+                                    imm,
+                                ),
+                                O::UnsignedGreaterEqual => VI::TvBinaryComparison(
+                                    d,
+                                    BC::UnsignedLessEqual,
+                                    imm.to_ref(s2_size),
+                                    src,
+                                ),
+
+                                O::CaseEquality => VI::TvBinaryComparison(
+                                    d,
+                                    BC::CaseEquality,
+                                    src.to_ref(s1_size),
+                                    imm,
+                                ),
+                                O::ConcatLeft => {
+                                    VI::TvConcat(d, imm.to_ref(s2_size), src.to_ref(s1_size))
+                                }
+                                O::ConcatRight => {
+                                    VI::TvConcat(d, src.to_ref(s1_size), imm.to_ref(s2_size))
+                                }
+                            }
                         }
                     }
-                }
-                I::Binary(d, op, s1, s2) => {
-                    use LogicMode as M;
+                    I::Slice(d, s1, s2) => {
+                        use LogicMode as M;
 
-                    let d_size = gl.vars.size(*d);
-                    let s1_size = gl.vars.size(*s1);
-                    let s2_size = gl.vars.size(*s2);
-                    let s1_mode = var_mode[s1];
-                    let s2_mode = var_mode[s2];
-                    let d = var!(*d);
-                    let mode = match (s1_mode, s2_mode) {
-                        (M::FourValue, _) | (_, M::FourValue) => M::FourValue,
-                        _ => M::TwoValue,
-                    };
-                    let s1 = var!(*s1, (mode, s1_mode, s1_size));
-                    let s2 = var!(*s2, (mode, s2_mode, s2_size));
-                    lower_bin_op(
-                        &mut instructions,
-                        *op,
-                        d.to_ref(d_size),
-                        s1.to_ref(s1_size),
-                        s2.to_ref(s2_size),
-                        mode,
-                    );
-                    continue;
-                }
-
-                I::Intrinsic(dst, op, args) => {
-                    let vm_args = args
-                        .iter()
-                        .map(|v| (var!(*v).to_ref(gl.vars.size(*v)), var_mode[v]))
-                        .collect();
-                    use IntrinsicOp as O;
-                    use VmIntrinsicOp as VO;
-                    let op = match op.as_ref() {
-                        O::Time => VO::Time,
-                        O::Finish => VO::Finish,
-                        O::Random => VO::Random,
-                        O::Display(f) => VO::Display(f.clone()),
-                        O::Assert(f) => VO::Assert(f.clone()),
-                        O::VcdOpenFile(f) => VO::VcdOpenFile(f.clone()),
-                        O::VcdAppendModule(v) => {
-                            let (children, map) = vogls_vcd::VcdScope::lower(v, io_signals);
-                            VO::VcdAppendModule(children, map)
-                        }
-                        O::VcdPause => VO::VcdPause,
-                        O::VcdResume => VO::VcdResume,
-                        O::ReadMem(readmem) => VO::ReadMem(
-                            signals[signal!(readmem.signal).as_usize()],
-                            readmem.clone(),
-                        ),
-                    };
-                    VI::Intrinsic(var!(*dst), Box::new(op), vm_args)
-                }
-                I::LastUpdateTime(dst, signal) => {
-                    let signal = signal!(*signal);
-                    VI::LastUpdateTime(var!(*dst), signal)
-                }
-                I::Probe(dst, signal, offset) => {
-                    let size = gl.vars.size(*dst);
-                    let signal = signal!(*signal);
-                    lower_slice_imm(
-                        &mut instructions,
-                        var!(*dst).to_ref(size),
-                        signals[signal.as_usize()],
-                        *offset,
-                        gl.logic_mode,
-                    );
-                    continue;
-                }
-                I::ProbeSlice(dst, signal, offset) => {
-                    let size = gl.vars.size(*dst);
-                    let signal = signal!(*signal);
-                    match gl.logic_mode {
-                        LogicMode::TwoValue => VI::TvSlice(
-                            var!(*dst).to_ref(size),
-                            signals[signal.as_usize()],
-                            var!(*offset),
-                            SliceFlags {
-                                fill_with_x: true,
-                                offset_is_fv: var_mode[offset] == LogicMode::FourValue,
-                            },
-                        ),
-                        LogicMode::FourValue => VI::FvSlice(
-                            var!(*dst).to_ref(size),
-                            signals[signal.as_usize()],
-                            var!(*offset),
-                            SliceFlags {
-                                fill_with_x: true,
-                                offset_is_fv: var_mode[offset] == LogicMode::FourValue,
-                            },
-                        ),
-                    }
-                }
-                I::Drive(signal, src, offset) => {
-                    let src_size = gl.vars.size(*src);
-                    VI::Drive(
-                        signal!(*signal),
-                        var!(*src, (gl.logic_mode, var_mode[src], src_size)).to_ref(src_size),
-                        offset.map(|(o, mask_size)| {
-                            (
-                                var!(o, (gl.logic_mode, var_mode[&o], INTEGER_VSIZE)),
-                                mask_size,
+                        let d_size = gl.vars.size(*d);
+                        let s1_size = gl.vars.size(*s1);
+                        let s1_mode = var_mode[s1];
+                        let s2_mode = var_mode[s2];
+                        let d = var!(*d);
+                        let mode = match (s1_mode, s2_mode) {
+                            (M::FourValue, _) | (_, M::FourValue) => M::FourValue,
+                            _ => M::TwoValue,
+                        };
+                        let s1 = var!(*s1, (mode, s1_mode, s1_size));
+                        let s2 = var!(*s2);
+                        if mode == M::FourValue {
+                            VI::FvSlice(
+                                d.to_ref(d_size),
+                                s1.to_ref(s1_size),
+                                s2,
+                                SliceFlags {
+                                    fill_with_x: true,
+                                    offset_is_fv: s2_mode == LogicMode::FourValue,
+                                },
                             )
-                        }),
-                    )
+                        } else {
+                            VI::TvSlice(
+                                d.to_ref(d_size),
+                                s1.to_ref(s1_size),
+                                s2,
+                                SliceFlags {
+                                    fill_with_x: true,
+                                    offset_is_fv: s2_mode == LogicMode::FourValue,
+                                },
+                            )
+                        }
+                    }
+                    I::SliceImm(d, src, offset) => {
+                        use LogicMode as M;
+
+                        let d_size = gl.vars.size(*d);
+                        let s1_size = gl.vars.size(*src);
+                        let s1_mode = var_mode[src];
+                        let s2_mode = LogicMode::TwoValue;
+                        let d = var!(*d);
+                        let mode = match (s1_mode, s2_mode) {
+                            (M::FourValue, _) | (_, M::FourValue) => M::FourValue,
+                            _ => M::TwoValue,
+                        };
+                        let src = var!(*src, (mode, s1_mode, s1_size));
+                        lower_slice_imm(
+                            &mut instructions,
+                            d.to_ref(d_size),
+                            src.to_ref(s1_size),
+                            *offset,
+                            mode,
+                        );
+                        continue;
+                    }
+                    I::ShiftImm(d, op, src, offset) => {
+                        use LogicMode as M;
+
+                        let d_size = gl.vars.size(*d);
+                        let s1_size = gl.vars.size(*src);
+                        let s1_mode = var_mode[src];
+                        let s2_mode = LogicMode::TwoValue;
+                        let d = var!(*d);
+                        let mode = match (s1_mode, s2_mode) {
+                            (M::FourValue, _) | (_, M::FourValue) => M::FourValue,
+                            _ => M::TwoValue,
+                        };
+                        let src = var!(*src, (mode, s1_mode, s1_size));
+                        use ShiftImmOp as O;
+                        use ShiftOp as S;
+                        if mode == M::FourValue {
+                            match op {
+                                O::LogicalShiftLeft => {
+                                    VI::FvShiftImm(d.to_ref(d_size), S::LogicalLeft, src, *offset)
+                                }
+                                O::LogicalShiftRight => {
+                                    VI::FvShiftImm(d.to_ref(d_size), S::LogicalRight, src, *offset)
+                                }
+                                O::ArithmeticShiftRight => VI::FvShiftImm(
+                                    d.to_ref(d_size),
+                                    S::ArithmeticRight,
+                                    src,
+                                    *offset,
+                                ),
+                            }
+                        } else {
+                            match op {
+                                O::LogicalShiftLeft => {
+                                    VI::TvShiftImm(d.to_ref(d_size), S::LogicalLeft, src, *offset)
+                                }
+                                O::LogicalShiftRight => {
+                                    VI::TvShiftImm(d.to_ref(d_size), S::LogicalRight, src, *offset)
+                                }
+                                O::ArithmeticShiftRight => VI::TvShiftImm(
+                                    d.to_ref(d_size),
+                                    S::ArithmeticRight,
+                                    src,
+                                    *offset,
+                                ),
+                            }
+                        }
+                    }
+                    I::Select(dst, cond, truthy, falsy) => {
+                        use LogicMode as M;
+
+                        let dst_mode = var_mode[dst];
+                        let size = gl.vars.size(*dst);
+                        let cond_mode = var_mode[cond];
+                        let truthy_mode = var_mode[truthy];
+                        let falsy_mode = var_mode[falsy];
+                        let d = var!(*dst);
+                        let c = var!(*cond);
+                        let t = var!(*truthy, (dst_mode, truthy_mode, size));
+                        let f = var!(*falsy, (dst_mode, falsy_mode, size));
+
+                        let cond_is_fv = cond_mode == M::FourValue;
+
+                        if dst_mode == M::FourValue {
+                            VI::FvSelect(d.to_ref(size), c, t, f, cond_is_fv)
+                        } else {
+                            if !cond_is_fv && size == SCALAR_VSIZE {
+                                VI::TvSelect1(d, c, t, f)
+                            } else {
+                                VI::TvSelect(d.to_ref(size), c, t, f, cond_is_fv)
+                            }
+                        }
+                    }
+                    I::Binary(d, op, s1, s2) => {
+                        use LogicMode as M;
+
+                        let d_size = gl.vars.size(*d);
+                        let s1_size = gl.vars.size(*s1);
+                        let s2_size = gl.vars.size(*s2);
+                        let s1_mode = var_mode[s1];
+                        let s2_mode = var_mode[s2];
+                        let d = var!(*d);
+                        let mode = match (s1_mode, s2_mode) {
+                            (M::FourValue, _) | (_, M::FourValue) => M::FourValue,
+                            _ => M::TwoValue,
+                        };
+                        let s1 = var!(*s1, (mode, s1_mode, s1_size));
+                        let s2 = var!(*s2, (mode, s2_mode, s2_size));
+                        lower_bin_op(
+                            &mut instructions,
+                            *op,
+                            d.to_ref(d_size),
+                            s1.to_ref(s1_size),
+                            s2.to_ref(s2_size),
+                            mode,
+                        );
+                        continue;
+                    }
+
+                    I::Intrinsic(dst, op, args) => {
+                        let vm_args = args
+                            .iter()
+                            .map(|v| (var!(*v).to_ref(gl.vars.size(*v)), var_mode[v]))
+                            .collect();
+                        use IntrinsicOp as O;
+                        use VmIntrinsicOp as VO;
+                        let op = match op.as_ref() {
+                            O::Time => VO::Time,
+                            O::Finish => VO::Finish,
+                            O::Random => VO::Random,
+                            O::Display(f) => VO::Display(f.clone()),
+                            O::Assert(f) => VO::Assert(f.clone()),
+                            O::VcdOpenFile(f) => VO::VcdOpenFile(f.clone()),
+                            O::VcdAppendModule(v) => {
+                                let (children, map) = vogls_vcd::VcdScope::lower(v, io_signals);
+                                VO::VcdAppendModule(children, map)
+                            }
+                            O::VcdPause => VO::VcdPause,
+                            O::VcdResume => VO::VcdResume,
+                            O::ReadMem(readmem) => VO::ReadMem(
+                                signals[signal!(readmem.signal).as_usize()],
+                                readmem.clone(),
+                            ),
+                        };
+                        VI::Intrinsic(var!(*dst), Box::new(op), vm_args)
+                    }
+                    I::LastUpdateTime(dst, signal) => {
+                        let signal = signal!(*signal);
+                        VI::LastUpdateTime(var!(*dst), signal)
+                    }
+                    I::Probe(dst, signal, offset) => {
+                        let size = gl.vars.size(*dst);
+                        let signal = signal!(*signal);
+                        lower_slice_imm(
+                            &mut instructions,
+                            var!(*dst).to_ref(size),
+                            signals[signal.as_usize()],
+                            *offset,
+                            gl.logic_mode,
+                        );
+                        continue;
+                    }
+                    I::ProbeSlice(dst, signal, offset) => {
+                        let size = gl.vars.size(*dst);
+                        let signal = signal!(*signal);
+                        match gl.logic_mode {
+                            LogicMode::TwoValue => VI::TvSlice(
+                                var!(*dst).to_ref(size),
+                                signals[signal.as_usize()],
+                                var!(*offset),
+                                SliceFlags {
+                                    fill_with_x: true,
+                                    offset_is_fv: var_mode[offset] == LogicMode::FourValue,
+                                },
+                            ),
+                            LogicMode::FourValue => VI::FvSlice(
+                                var!(*dst).to_ref(size),
+                                signals[signal.as_usize()],
+                                var!(*offset),
+                                SliceFlags {
+                                    fill_with_x: true,
+                                    offset_is_fv: var_mode[offset] == LogicMode::FourValue,
+                                },
+                            ),
+                        }
+                    }
+                    I::Drive(signal, src, offset) => {
+                        let src_size = gl.vars.size(*src);
+                        VI::Drive(
+                            signal!(*signal),
+                            var!(*src, (gl.logic_mode, var_mode[src], src_size)).to_ref(src_size),
+                            offset.map(|(o, mask_size)| {
+                                (
+                                    var!(o, (gl.logic_mode, var_mode[&o], INTEGER_VSIZE)),
+                                    mask_size,
+                                )
+                            }),
+                        )
+                    }
+                    I::Phi(..) => continue,
+                };
+
+                instructions.push(instr);
+            }
+
+            if let Some(phis) = bb_phis.get(&bb_key) {
+                for (dst, src) in phis {
+                    let src_size = gl.vars.size(*src);
+                    let dst_size = gl.vars.size(*dst);
+                    assert_eq!(src_size, dst_size);
+                    let size = src_size;
+                    let src_mode = var_mode[src];
+                    let dst_mode = var_mode[dst];
+                    let (dst, src) = (var!(*dst), var!(*src));
+                    lower_convert_op(&mut instructions, dst, src, size, dst_mode, src_mode);
                 }
-                I::Phi(..) => continue,
+            }
+
+            use BasicBlockTerminator as T;
+            let terminator_instr = match &bb.terminator {
+                T::Wait(_, time) => {
+                    instructions.push(VI::Wait(*time));
+                    VI::Jump(0)
+                }
+                T::VariableWait(_, var) if var_mode[var] == LogicMode::TwoValue => {
+                    instructions.push(VI::TvVariableWait(var!(*var)));
+                    VI::Jump(0)
+                }
+                T::VariableWait(_, var) => {
+                    instructions.push(VI::FvVariableWait(var!(*var)));
+                    VI::Jump(0)
+                }
+                T::WaitRegion(_, region) => {
+                    instructions.push(VI::WaitRegion(*region));
+                    VI::Jump(0)
+                }
+                T::Watch(_, signals) => {
+                    instructions.push(VI::Watch(signals.iter().map(|s| signal!(*s)).collect()));
+                    VI::Jump(0)
+                }
+                T::Jump(_) => VI::Jump(0),
+                T::Branch(cond, _, _) if var_mode[cond] == LogicMode::TwoValue => {
+                    VI::TvBranch(var!(*cond), 0, 0)
+                }
+                T::Branch(cond, _, _) => VI::FvBranch(var!(*cond), 0, 0),
+                T::Halt => VI::Halt,
             };
 
-            instructions.push(instr);
+            bb_transitions.push((instructions.len(), bb_key));
+            instructions.push(terminator_instr);
+
+            bb_seen.insert(bb_key);
+            bb.terminator.for_each_non_temporal_bb(|bb| {
+                if bb_seen.insert(bb) {
+                    bb_stack.push(bb);
+                }
+            });
         }
-
-        if let Some(phis) = bb_phis.get(&bb_key) {
-            for (dst, src) in phis {
-                let src_size = gl.vars.size(*src);
-                let dst_size = gl.vars.size(*dst);
-                assert_eq!(src_size, dst_size);
-                let size = src_size;
-                let src_mode = var_mode[src];
-                let dst_mode = var_mode[dst];
-                let (dst, src) = (var!(*dst), var!(*src));
-                lower_convert_op(&mut instructions, dst, src, size, dst_mode, src_mode);
-            }
-        }
-
-        use BasicBlockTerminator as T;
-        let terminator_instr = match &bb.terminator {
-            T::Wait(_, time) => {
-                instructions.push(VI::Wait(*time));
-                VI::Jump(0)
-            }
-            T::VariableWait(_, var) if var_mode[var] == LogicMode::TwoValue => {
-                instructions.push(VI::TvVariableWait(var!(*var)));
-                VI::Jump(0)
-            }
-            T::VariableWait(_, var) => {
-                instructions.push(VI::FvVariableWait(var!(*var)));
-                VI::Jump(0)
-            }
-            T::WaitRegion(_, region) => {
-                instructions.push(VI::WaitRegion(*region));
-                VI::Jump(0)
-            }
-            T::Watch(_, signals) => {
-                instructions.push(VI::Watch(signals.iter().map(|s| signal!(*s)).collect()));
-                VI::Jump(0)
-            }
-            T::Jump(_) => VI::Jump(0),
-            T::Branch(cond, _, _) if var_mode[cond] == LogicMode::TwoValue => {
-                VI::TvBranch(var!(*cond), 0, 0)
-            }
-            T::Branch(cond, _, _) => VI::FvBranch(var!(*cond), 0, 0),
-            T::Halt => VI::Halt,
-        };
-
-        bb_transitions.push((instructions.len(), bb_key));
-        instructions.push(terminator_instr);
-
-        bb_seen.insert(bb_key);
-        bb.terminator.for_each_bb(|bb| {
-            if bb_seen.insert(bb) {
-                bb_stack.push(bb);
-            }
-        });
     }
 
     // Correct the offsets of the transitions between basic blocks.
@@ -819,10 +857,10 @@ pub fn lower_process_to_vm(
         use BasicBlockTerminator as T;
         use VmInstruction as VI;
         match (&bb.terminator, &mut instructions[offset]) {
-            (T::Wait(bb, _), VI::Jump(offset)) => *offset = bb_to_offset(*bb),
-            (T::VariableWait(bb, _), VI::Jump(offset)) => *offset = bb_to_offset(*bb),
-            (T::WaitRegion(bb, _), VI::Jump(offset)) => *offset = bb_to_offset(*bb),
-            (T::Watch(bb, _), VI::Jump(offset)) => *offset = bb_to_offset(*bb),
+            (T::Wait(bb, _), VI::Jump(offset)) => *offset = bb_to_offset(bb.entry()),
+            (T::VariableWait(bb, _), VI::Jump(offset)) => *offset = bb_to_offset(bb.entry()),
+            (T::WaitRegion(bb, _), VI::Jump(offset)) => *offset = bb_to_offset(bb.entry()),
+            (T::Watch(bb, _), VI::Jump(offset)) => *offset = bb_to_offset(bb.entry()),
             (T::Jump(bb), VI::Jump(offset)) => *offset = bb_to_offset(*bb),
             (
                 T::Branch(_, true_bb, false_bb),

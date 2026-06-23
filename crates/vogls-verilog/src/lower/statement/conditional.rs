@@ -36,7 +36,7 @@ pub fn lower<'a>(
 
     let mut builder = if_true_builder.next_terminate_later(mctx.gl());
     for else_if_branch in else_ifs.iter() {
-        builder.update_branch_ref(mctx.gl(), branch_ref, builder.key());
+        builder.update_branch_falsy(mctx.gl(), branch_ref, builder.key());
 
         let else_if_branch = &*else_if_branch;
         let (condition, _) = lower_expr(ctx, mctx, scope, &mut builder, else_if_branch.condition, None)?;
@@ -52,7 +52,7 @@ pub fn lower<'a>(
 
     let mut branch_ref = Some(branch_ref);
     if let Some(statement) = else_branch {
-        builder.update_branch_ref(mctx.gl(), branch_ref.take().unwrap(), builder.key());
+        builder.update_branch_falsy(mctx.gl(), branch_ref.take().unwrap(), builder.key());
 
         builder = lower_statement_or_null(ctx, mctx, scope, builder, *statement)?;
         origins.push(builder.key());
@@ -64,7 +64,7 @@ pub fn lower<'a>(
         mctx.gl.bbs[*bb].terminator = BasicBlockTerminator::Jump(builder.key());
     }
     if let Some(branch_ref) = branch_ref {
-        builder.update_branch_ref(mctx.gl(), branch_ref, builder.key());
+        builder.update_branch_falsy(mctx.gl(), branch_ref, builder.key());
     }
 
     Ok(builder)
@@ -155,7 +155,7 @@ pub fn lower_case_statement<'a>(
         origins.push(if_true_builder.key());
 
         builder = if_true_builder.next_terminate_later(mctx.gl());
-        builder.update_branch_ref(mctx.gl(), branch_ref, builder.key());
+        builder.update_branch_falsy(mctx.gl(), branch_ref, builder.key());
     }
 
     if let Some(statement) = default {

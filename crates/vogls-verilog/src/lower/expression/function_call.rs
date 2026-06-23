@@ -61,7 +61,7 @@ pub fn lower_function_call<'a>(
     bb_map.insert(lowered.entry, fn_bb);
     while let Some(bb_key) = bb_stack.pop() {
         let terminator = gl.bbs[bb_key].terminator.clone();
-        terminator.for_each_bb(|bb| {
+        terminator.for_each_temporal_bb(|bb| {
             _ = bb_map.entry(bb).or_insert_with(|| {
                 let new_bb = gl.bbs.insert(gl.bbs[bb].clone());
                 bb_stack.push(new_bb);
@@ -80,9 +80,11 @@ pub fn lower_function_call<'a>(
     bb_seen.insert(fn_bb);
     while let Some(bb_key) = bb_stack.pop() {
         gl.bbs[bb_key].map_bbs(|bb| bb_map[&bb]);
-        gl.bbs[bb_key]
-            .terminator
-            .extend_next_rev(&mut bb_stack, &mut bb_seen);
+        gl.bbs[bb_key].terminator.for_each_temporal_bb(|next_bb| {
+            if bb_seen.insert(next_bb) {
+                bb_stack.push(next_bb);
+            }
+        });
     }
 
     let origin_bb = builder.key();
@@ -162,7 +164,7 @@ pub fn lower_task_enable<'a>(
     bb_map.insert(lowered.entry, fn_bb);
     while let Some(bb_key) = bb_stack.pop() {
         let terminator = gl.bbs[bb_key].terminator.clone();
-        terminator.for_each_bb(|bb| {
+        terminator.for_each_temporal_bb(|bb| {
             _ = bb_map.entry(bb).or_insert_with(|| {
                 let new_bb = gl.bbs.insert(gl.bbs[bb].clone());
                 bb_stack.push(new_bb);
@@ -184,7 +186,11 @@ pub fn lower_task_enable<'a>(
         mctx.gl().bbs[bb_key].map_bbs(|bb| bb_map[&bb]);
         mctx.gl().bbs[bb_key]
             .terminator
-            .extend_next_rev(&mut bb_stack, &mut bb_seen);
+            .for_each_temporal_bb(|next_bb| {
+                if bb_seen.insert(next_bb) {
+                    bb_stack.push(next_bb);
+                }
+            });
     }
 
     for i in 0..task_symbol.io.len() {

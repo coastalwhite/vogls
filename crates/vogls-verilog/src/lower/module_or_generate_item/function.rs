@@ -1,5 +1,5 @@
 use vogls_frontend::symbol_table::SymbolId;
-use vogls_ir::new_anonymous_builder;
+use vogls_ir::ProcessBuilder;
 
 use crate::ast::module::{FunctionDeclaration, TaskDeclaration};
 use crate::ast::{AstId, AstIdRange};
@@ -22,7 +22,7 @@ pub fn lower<'a>(
         statement,
     } = &*id;
 
-    let builder = new_anonymous_builder(mctx.gl());
+    let (process, builder) = ProcessBuilder::new_anonymous(mctx.gl());
     let entry_key = builder.key();
 
     let builder = crate::lower::statement::statements_to_process(
@@ -35,6 +35,7 @@ pub fn lower<'a>(
 
     let terminate_key = builder.key();
     builder.halt(mctx.gl());
+    process.finalize(mctx.gl());
 
     unwrap_get_fn_mut(&mut ctx.table, scope).lowered = Some(LoweredFunction {
         entry: entry_key,
@@ -58,7 +59,7 @@ pub fn lower_task<'a>(
         statement_or_null,
     } = &*id;
 
-    let builder = new_anonymous_builder(mctx.gl());
+    let (process, builder) = ProcessBuilder::new_anonymous(mctx.gl());
 
     let entry_key = builder.key();
 
@@ -72,6 +73,7 @@ pub fn lower_task<'a>(
 
     let terminate_key = builder.key();
     builder.halt(mctx.gl());
+    process.finalize(mctx.gl());
 
     unwrap_get_task_mut(&mut ctx.table, scope).lowered = Some(LoweredTask {
         entry: entry_key,

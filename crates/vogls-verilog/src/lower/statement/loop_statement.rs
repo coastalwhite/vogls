@@ -120,7 +120,7 @@ pub fn lower_loop_statement<'a>(
     let builder_key = builder.key();
     let mut builder = builder.next_terminate_later(mctx.gl());
     if let Some(branch_ref) = branch_ref {
-        builder.update_branch_ref(mctx.gl(), branch_ref, builder.key());
+        builder.update_branch_falsy(mctx.gl(), branch_ref, builder.key());
     }
     mctx.gl.bbs[builder_key].terminator = BasicBlockTerminator::Jump(loop_start);
 

@@ -23,7 +23,7 @@ fn evaluate_impl(
     variables: &mut HashMap<VariableKey, Bits>,
     prev_bb: Option<BasicBlockKey>,
 ) {
-    let BasicBlock { instrs, terminator } = &gl.bbs[bb];
+    let BasicBlock { instrs, terminator, .. } = &gl.bbs[bb];
 
     for instr in instrs {
         use Instruction as I;

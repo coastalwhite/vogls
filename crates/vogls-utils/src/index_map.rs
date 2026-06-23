@@ -111,6 +111,10 @@ impl<K> IndexSet<K> {
     pub fn take_keys(self) -> Vec<K> {
         self.keys
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 impl<K, V> IndexMap<K, V> {
     pub fn new() -> Self {

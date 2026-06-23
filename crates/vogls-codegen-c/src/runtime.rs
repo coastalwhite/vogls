@@ -24,10 +24,6 @@ type LastActiveTime = Option<NonNull<u64>>;
 #[derive(Clone, Copy)]
 pub struct ReturnValue(c_int);
 
-#[repr(transparent)]
-#[derive(Debug, Clone, Copy)]
-pub struct StatePtr(c_int);
-
 impl ReturnValue {
     pub const CONTINUE: Self = Self(0);
     pub const STOP: Self = Self(1);
@@ -82,10 +78,7 @@ pub struct ColdContextT {
 }
 #[repr(C)]
 #[derive(Debug, Clone)]
-pub struct EventT {
-    ptr: *const c_void,
-    state: StatePtr,
-}
+pub struct EventT(*const c_void);
 
 unsafe impl Sync for EventT {}
 unsafe impl Send for EventT {}
@@ -250,10 +243,7 @@ impl CDesign {
                 .unwrap()
         };
         let mut active_region = Vec::new();
-        active_region.extend((0..gl.processes.len()).map(|i| EventT {
-            ptr: unsafe { *procs.add(i) },
-            state: StatePtr(0),
-        }));
+        active_region.extend((0..gl.processes.len()).map(|i| EventT(unsafe { *procs.add(i) })));
         let schedule = Schedule {
             active_region,
             regions: std::iter::repeat_n(Vec::new(), num_regions.into()).collect(),
@@ -404,17 +394,6 @@ impl CDesign {
                     NonNull::new(state.runtime.last_active_time.as_mut_ptr()),
                     NonNull::new(&mut cldctx as *mut ColdContextT).unwrap(),
                 );
-                // while let Some(e) = schedule.active_region.pop() {
-                //     // state.runtime.event_count += 1;
-                //     let return_value = (e.ptr)(
-                //         e.state,
-                //         NonNull::new(state.runtime.heap.0.as_mut_ptr()),
-                //         NonNull::new(schedule as *mut ScheduleT).unwrap(),
-                //         state.runtime.time,
-                //         NonNull::new(state.listening.as_mut_ptr()),
-                //         NonNull::new(state.runtime.last_active_time.as_mut_ptr()),
-                //         NonNull::new(&mut cldctx as *mut ColdContextT).unwrap(),
-                //     );
 
                 if return_value.should_exit() {
                     return return_value;

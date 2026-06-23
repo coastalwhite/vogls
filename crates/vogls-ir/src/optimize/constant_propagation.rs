@@ -34,249 +34,250 @@ pub fn constant_propagation(
     scratch_dep: &mut VgHashMap<VariableKey, (BasicBlockKey, usize, Range<usize>)>,
     scratch_dep_edges: &mut Vec<VariableKey>,
 ) {
-    let entry = gl.processes[process].entry;
-
-    scratch_map.clear();
-    scratch_dep.clear();
-    scratch_dep_edges.clear();
-
     let mut is_non_temporal = true;
 
-    scratch_seen.clear();
-    scratch_stack.clear();
-    scratch_seen.insert(entry);
-    scratch_stack.push(entry);
-    while let Some(bb_key) = scratch_stack.pop() {
-        let bb = &mut gl.bbs[bb_key];
-        for i in bb.instrs.iter_mut() {
-            _ = constant_propagate_instruction(
-                i,
-                &mut gl.vars,
-                &mut gl.signals,
-                scratch_map,
-                gl.logic_mode,
-                true,
+    for tr in &gl.processes[process].regions {
+        scratch_map.clear();
+        scratch_dep.clear();
+        scratch_dep_edges.clear();
+
+        scratch_seen.clear();
+        scratch_stack.clear();
+        scratch_seen.insert(tr.entry());
+        scratch_stack.push(tr.entry());
+        while let Some(bb_key) = scratch_stack.pop() {
+            let bb = &mut gl.bbs[bb_key];
+            for i in bb.instrs.iter_mut() {
+                _ = constant_propagate_instruction(
+                    i,
+                    &mut gl.vars,
+                    &mut gl.signals,
+                    scratch_map,
+                    gl.logic_mode,
+                    true,
+                );
+
+                is_non_temporal &=
+                    !matches!(i, Instruction::Probe(..) | Instruction::Intrinsic(..));
+            }
+
+            is_non_temporal &= matches!(
+                bb.terminator,
+                BasicBlockTerminator::Halt | BasicBlockTerminator::Jump(..)
             );
 
-            is_non_temporal &= !matches!(i, Instruction::Probe(..) | Instruction::Intrinsic(..));
-        }
-
-        is_non_temporal &= matches!(
-            bb.terminator,
-            BasicBlockTerminator::Halt | BasicBlockTerminator::Jump(..)
-        );
-
-        bb.terminator.for_each_bb(|bb_key| {
-            if scratch_seen.insert(bb_key) {
-                scratch_stack.push(bb_key);
-            }
-        });
-    }
-
-    let is_temporal = !is_non_temporal;
-
-    scratch_seen.clear();
-    scratch_stack.clear();
-    scratch_seen.insert(entry);
-    scratch_stack.push(entry);
-    while let Some(bb_key) = scratch_stack.pop() {
-        let bb = &mut gl.bbs[bb_key];
-        for (instr_i, i) in bb.instrs.iter_mut().enumerate() {
-            if constant_propagate_instruction(
-                i,
-                &mut gl.vars,
-                &mut gl.signals,
-                scratch_map,
-                gl.logic_mode,
-                is_temporal,
-            )
-            .is_err()
-            {
-                let dst = i.get_destination_variable().unwrap();
-                let offset = scratch_dep_edges.len();
-                i.for_each_src(|src| scratch_dep_edges.push(src));
-                scratch_dep.insert(dst, (bb_key, instr_i, offset..scratch_dep_edges.len()));
-            }
-        }
-        bb.terminator.for_each_bb(|bb_key| {
-            if scratch_seen.insert(bb_key) {
-                scratch_stack.push(bb_key);
-            }
-        });
-    }
-
-    // All the variables that couldn't be immediately resolved get resolved by a depth-first
-    // search (DFS). We need to take care because there might be dependency loops caused by phi
-    // instructions. These we just mark as non-constant and move on.
-    if !scratch_dep.is_empty() {
-        enum StackItem {
-            Previsit(Range<usize>),
-            Postvisit,
-        }
-        let mut var_seen = VgHashSet::default();
-        let mut var_stack = Vec::new();
-
-        while let Some(&var) = scratch_dep.keys().next() {
-            let (bb_key, instr_i, range) = scratch_dep.remove(&var).unwrap();
-            var_stack.push((var, bb_key, instr_i, StackItem::Previsit(range)));
-
-            while let Some((var, bb_key, instr_i, visit)) = var_stack.pop() {
-                match visit {
-                    StackItem::Previsit(range) => {
-                        if constant_propagate_instruction(
-                            &mut gl.bbs[bb_key].instrs[instr_i],
-                            &mut gl.vars,
-                            &mut gl.signals,
-                            scratch_map,
-                            gl.logic_mode,
-                            is_temporal,
-                        )
-                        .is_ok()
-                        {
-                            continue;
-                        }
-
-                        // There is a loop in variable dependencies. Mark all variables in the path
-                        // here as non-constant.
-                        if var_seen.insert(var) {
-                            scratch_map.insert(var, None);
-                            var_stack.retain(|(var, _, _, visit)| {
-                                if matches!(visit, StackItem::Postvisit) {
-                                    scratch_map.insert(*var, None);
-                                    return false;
-                                }
-
-                                true
-                            });
-                        }
-
-                        var_stack.push((var, bb_key, instr_i, StackItem::Postvisit));
-                        var_stack.extend(scratch_dep_edges[range].iter().filter_map(|src| {
-                            let (bb_key, instr_i, range) = scratch_dep.remove(src)?;
-                            Some((*src, bb_key, instr_i, StackItem::Previsit(range)))
-                        }));
-                    }
-                    StackItem::Postvisit => {
-                        assert!(
-                            constant_propagate_instruction(
-                                &mut gl.bbs[bb_key].instrs[instr_i],
-                                &mut gl.vars,
-                                &mut gl.signals,
-                                scratch_map,
-                                gl.logic_mode,
-                                is_temporal
-                            )
-                            .is_ok()
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    scratch_seen.clear();
-    scratch_stack.clear();
-    scratch_mfr.clear();
-
-    scratch_seen.insert(entry);
-    scratch_stack.push(entry);
-    while let Some(bb_key) = scratch_stack.pop() {
-        let bb = &mut gl.bbs[bb_key];
-        match &bb.terminator {
-            BasicBlockTerminator::VariableWait(target, time) => {
-                if let Some(time) = scratch_map[time].as_ref() {
-                    let time = time.extract_exact_u64().unwrap_or(0);
-                    bb.terminator = BasicBlockTerminator::Wait(*target, Time(time));
-                }
-            }
-            BasicBlockTerminator::Branch(condition, truthy, falsy) => {
-                if let Some(condition) = scratch_map[condition].as_ref() {
-                    let (taken, untaken) = if condition.eq_one() {
-                        (*truthy, *falsy)
-                    } else {
-                        (*falsy, *truthy)
-                    };
-
-                    bb.terminator = BasicBlockTerminator::Jump(taken);
-                    scratch_mfr.insert(untaken);
-                }
-            }
-            BasicBlockTerminator::Wait(..)
-            | BasicBlockTerminator::WaitRegion(..)
-            | BasicBlockTerminator::Watch(..)
-            | BasicBlockTerminator::Jump(..)
-            | BasicBlockTerminator::Halt => {}
-        }
-
-        bb.terminator.for_each_bb(|bb_key| {
-            if scratch_seen.insert(bb_key) {
-                scratch_stack.push(bb_key);
-            }
-        });
-    }
-
-    scratch_mfr.retain(|bb_key| {
-        if scratch_seen.contains(bb_key) {
-            return false;
-        }
-        true
-    });
-
-    // If there are any basic-blocks that should be removed, remove them now and clear them up
-    // from the phi-instructions of other basic-blocks as those might be waiting on those
-    // variables to get resolved.
-    if !scratch_mfr.is_empty() {
-        scratch_stack.extend(scratch_mfr.iter().copied());
-        while let Some(bb_key) = scratch_stack.pop() {
-            gl.bbs[bb_key].terminator.for_each_bb(|next| {
-                if !scratch_seen.contains(&next) && scratch_mfr.insert(next) {
-                    scratch_stack.push(next);
-                }
-            });
-            gl.bbs.remove(bb_key);
-        }
-
-        // Remove phi referenced to removed basic-blocks and mark any variables as
-        // non-constants, so that they get removed as a dependency in the next stage.
-        scratch_seen.clear();
-        scratch_seen.insert(entry);
-        scratch_stack.push(entry);
-        while let Some(bb_key) = scratch_stack.pop() {
-            for i in &mut gl.bbs[bb_key].instrs {
-                if let Instruction::Phi(dst, srcs) = i {
-                    let num_matches = srcs
-                        .iter()
-                        .filter(|(bb, _)| scratch_mfr.contains(bb))
-                        .count();
-
-                    assert!(num_matches < srcs.len());
-                    if num_matches == 0 {
-                        continue;
-                    }
-
-                    if num_matches == srcs.len() - 1 {
-                        let src = srcs
-                            .iter()
-                            .find(|(bb, _)| !scratch_mfr.contains(bb))
-                            .unwrap()
-                            .1;
-                        *i = Instruction::Resize(*dst, ResizeOp::Truncate, src);
-                    } else {
-                        *srcs = srcs
-                            .iter()
-                            .filter(|(bb, _)| !scratch_mfr.contains(bb))
-                            .copied()
-                            .collect();
-                    }
-                }
-            }
-            gl.bbs[bb_key].terminator.for_each_bb(|bb_key| {
+            bb.terminator.for_each_non_temporal_bb(|bb_key| {
                 if scratch_seen.insert(bb_key) {
                     scratch_stack.push(bb_key);
                 }
             });
         }
+
+        let is_temporal = !is_non_temporal;
+
+        scratch_seen.clear();
+        scratch_stack.clear();
+        scratch_seen.insert(tr.entry());
+        scratch_stack.push(tr.entry());
+        while let Some(bb_key) = scratch_stack.pop() {
+            let bb = &mut gl.bbs[bb_key];
+            for (instr_i, i) in bb.instrs.iter_mut().enumerate() {
+                if constant_propagate_instruction(
+                    i,
+                    &mut gl.vars,
+                    &mut gl.signals,
+                    scratch_map,
+                    gl.logic_mode,
+                    is_temporal,
+                )
+                .is_err()
+                {
+                    let dst = i.get_destination_variable().unwrap();
+                    let offset = scratch_dep_edges.len();
+                    i.for_each_src(|src| scratch_dep_edges.push(src));
+                    scratch_dep.insert(dst, (bb_key, instr_i, offset..scratch_dep_edges.len()));
+                }
+            }
+            bb.terminator.for_each_non_temporal_bb(|bb_key| {
+                if scratch_seen.insert(bb_key) {
+                    scratch_stack.push(bb_key);
+                }
+            });
+        }
+
+        // All the variables that couldn't be immediately resolved get resolved by a depth-first
+        // search (DFS). We need to take care because there might be dependency loops caused by phi
+        // instructions. These we just mark as non-constant and move on.
+        if !scratch_dep.is_empty() {
+            enum StackItem {
+                Previsit(Range<usize>),
+                Postvisit,
+            }
+            let mut var_seen = VgHashSet::default();
+            let mut var_stack = Vec::new();
+
+            while let Some(&var) = scratch_dep.keys().next() {
+                let (bb_key, instr_i, range) = scratch_dep.remove(&var).unwrap();
+                var_stack.push((var, bb_key, instr_i, StackItem::Previsit(range)));
+
+                while let Some((var, bb_key, instr_i, visit)) = var_stack.pop() {
+                    match visit {
+                        StackItem::Previsit(range) => {
+                            if constant_propagate_instruction(
+                                &mut gl.bbs[bb_key].instrs[instr_i],
+                                &mut gl.vars,
+                                &mut gl.signals,
+                                scratch_map,
+                                gl.logic_mode,
+                                is_temporal,
+                            )
+                            .is_ok()
+                            {
+                                continue;
+                            }
+
+                            // There is a loop in variable dependencies. Mark all variables in the path
+                            // here as non-constant.
+                            if var_seen.insert(var) {
+                                scratch_map.insert(var, None);
+                                var_stack.retain(|(var, _, _, visit)| {
+                                    if matches!(visit, StackItem::Postvisit) {
+                                        scratch_map.insert(*var, None);
+                                        return false;
+                                    }
+
+                                    true
+                                });
+                            }
+
+                            var_stack.push((var, bb_key, instr_i, StackItem::Postvisit));
+                            var_stack.extend(scratch_dep_edges[range].iter().filter_map(|src| {
+                                let (bb_key, instr_i, range) = scratch_dep.remove(src)?;
+                                Some((*src, bb_key, instr_i, StackItem::Previsit(range)))
+                            }));
+                        }
+                        StackItem::Postvisit => {
+                            assert!(
+                                constant_propagate_instruction(
+                                    &mut gl.bbs[bb_key].instrs[instr_i],
+                                    &mut gl.vars,
+                                    &mut gl.signals,
+                                    scratch_map,
+                                    gl.logic_mode,
+                                    is_temporal
+                                )
+                                .is_ok()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        scratch_seen.clear();
+        scratch_stack.clear();
         scratch_mfr.clear();
+
+        scratch_seen.insert(tr.entry());
+        scratch_stack.push(tr.entry());
+        while let Some(bb_key) = scratch_stack.pop() {
+            let bb = &mut gl.bbs[bb_key];
+            match &bb.terminator {
+                BasicBlockTerminator::VariableWait(target, time) => {
+                    if let Some(time) = scratch_map[time].as_ref() {
+                        let time = time.extract_exact_u64().unwrap_or(0);
+                        bb.terminator = BasicBlockTerminator::Wait(*target, Time(time));
+                    }
+                }
+                BasicBlockTerminator::Branch(condition, truthy, falsy) => {
+                    if let Some(condition) = scratch_map[condition].as_ref() {
+                        let (taken, untaken) = if condition.eq_one() {
+                            (*truthy, *falsy)
+                        } else {
+                            (*falsy, *truthy)
+                        };
+
+                        bb.terminator = BasicBlockTerminator::Jump(taken);
+                        scratch_mfr.insert(untaken);
+                    }
+                }
+                BasicBlockTerminator::Wait(..)
+                | BasicBlockTerminator::WaitRegion(..)
+                | BasicBlockTerminator::Watch(..)
+                | BasicBlockTerminator::Jump(..)
+                | BasicBlockTerminator::Halt => {}
+            }
+
+            bb.terminator.for_each_non_temporal_bb(|bb_key| {
+                if scratch_seen.insert(bb_key) {
+                    scratch_stack.push(bb_key);
+                }
+            });
+        }
+
+        scratch_mfr.retain(|bb_key| {
+            if scratch_seen.contains(bb_key) {
+                return false;
+            }
+            true
+        });
+
+        // If there are any basic-blocks that should be removed, remove them now and clear them up
+        // from the phi-instructions of other basic-blocks as those might be waiting on those
+        // variables to get resolved.
+        if !scratch_mfr.is_empty() {
+            scratch_stack.extend(scratch_mfr.iter().copied());
+            while let Some(bb_key) = scratch_stack.pop() {
+                gl.bbs[bb_key].terminator.for_each_non_temporal_bb(|next| {
+                    if !scratch_seen.contains(&next) && scratch_mfr.insert(next) {
+                        scratch_stack.push(next);
+                    }
+                });
+                gl.bbs.remove(bb_key);
+            }
+
+            // Remove phi referenced to removed basic-blocks and mark any variables as
+            // non-constants, so that they get removed as a dependency in the next stage.
+            scratch_seen.clear();
+            scratch_seen.insert(tr.entry());
+            scratch_stack.push(tr.entry());
+            while let Some(bb_key) = scratch_stack.pop() {
+                for i in &mut gl.bbs[bb_key].instrs {
+                    if let Instruction::Phi(dst, srcs) = i {
+                        let num_matches = srcs
+                            .iter()
+                            .filter(|(bb, _)| scratch_mfr.contains(bb))
+                            .count();
+
+                        assert!(num_matches < srcs.len());
+                        if num_matches == 0 {
+                            continue;
+                        }
+
+                        if num_matches == srcs.len() - 1 {
+                            let src = srcs
+                                .iter()
+                                .find(|(bb, _)| !scratch_mfr.contains(bb))
+                                .unwrap()
+                                .1;
+                            *i = Instruction::Resize(*dst, ResizeOp::Truncate, src);
+                        } else {
+                            *srcs = srcs
+                                .iter()
+                                .filter(|(bb, _)| !scratch_mfr.contains(bb))
+                                .copied()
+                                .collect();
+                        }
+                    }
+                }
+                gl.bbs[bb_key].terminator.for_each_non_temporal_bb(|bb_key| {
+                    if scratch_seen.insert(bb_key) {
+                        scratch_stack.push(bb_key);
+                    }
+                });
+            }
+            scratch_mfr.clear();
+        }
     }
 }
 
