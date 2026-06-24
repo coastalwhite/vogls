@@ -1,4 +1,5 @@
 mod heap;
+pub mod lsra;
 
 use std::ops::Range;
 

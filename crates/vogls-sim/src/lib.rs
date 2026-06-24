@@ -12,6 +12,8 @@ use vogls_runtime::{RtSignalKey, SimulationIo};
 
 mod execution;
 mod instruction;
+pub mod bytecode;
+pub mod lower_bytecode;
 mod plugin;
 
 pub use plugin::InstructionPlugin;

@@ -7,7 +7,9 @@ edition.workspace = true
 vogls-ir.workspace = true
 vogls-bits.workspace = true
 vogls-utils.workspace = true
+vogls-ir-properties.workspace = true
 
+slotmap.workspace = true
 hashbrown.workspace = true
 bytemuck.workspace = true
 

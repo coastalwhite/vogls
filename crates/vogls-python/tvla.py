@@ -1,4 +1,5 @@
 import vogls as vg
+import numpy as np
 from random import randint
 import time
 
@@ -54,28 +55,25 @@ def masked_run(*, random: bool) -> vg.LazyRunVector:
 fixed = run(random=False)
 random = run(random=True)
 
-print(vg.pearson_corr(fixed, random).compute().as_list())
-
-# print(fixed.compute().as_list())
-# print(random.compute().as_list())
-
-# print(fixed.entropy().compute().as_list())
-# print(random.entropy().compute().as_list())
-
-# fixed = fixed.expand()
-# random = random.expand()
-
-exit(0)
+print('# Hamming Distance:')
 print(fixed.compute().as_list())
-fixed = fixed.map(lambda v: np.array(v) * 2)
-print(fixed.compute().as_list())
-exit(0)
+print(random.compute().as_list())
+print()
+
+print('# Entropy:')
+print(fixed.entropy().compute().as_list())
+print(random.entropy().compute().as_list())
+print()
+
+fixed = fixed.expand()
+random = random.expand()
 
 start = time.time()
-# print(vg.mutual_information(fixed, random).compute().as_list())
-# print(vg.mutual_information(fixed, random).compute().as_list())
 result = vg.Array._from_py(vg.mutual_information(fixed, random).compute())
-print(result)
+print(f"Computation time: {time.time() - start:02f}s")
+
+print('# Mutual Info:')
+print(result.as_list())
 print(np.array(result))
 print(vg.Array(np.array(result)).as_list())
-print(f"Computation time: {time.time() - start:02f}s")
+print()

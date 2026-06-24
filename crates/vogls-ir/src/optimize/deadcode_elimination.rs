@@ -42,6 +42,7 @@ pub fn deadcode_elimination(
         // That way, if the code is linear you never have to go into the DFS part.
         scratch_seen.clear();
         scratch_stack.clear();
+        scratch_seen.insert(tr.entry());
         scratch_stack.push(tr.entry());
         while let Some(bb_key) = scratch_stack.pop() {
             let bb = &gl.bbs[bb_key];
@@ -69,7 +70,7 @@ pub fn deadcode_elimination(
         }
 
         if nodes_to_visit.is_empty() {
-            return;
+            continue;
         }
 
         // Make the edges continuous for all nodes and set their start point.

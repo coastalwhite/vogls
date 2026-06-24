@@ -7,6 +7,7 @@ pub mod optimize;
 pub mod parse;
 pub mod token_range;
 pub mod vcd;
+pub mod watchers;
 
 use std::fmt;
 use std::num::{NonZeroU32, NonZeroU64};

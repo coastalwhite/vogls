@@ -75,6 +75,8 @@ struct Args {
 
     #[arg(long)]
     print_vm_map: bool,
+    #[arg(long)]
+    new_bytecode: bool,
 
     #[arg(long)]
     emit_unoptimized_fuse_graph: bool,
@@ -112,6 +114,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         print_vm_map,
         emit_unoptimized_fuse_graph,
         emit_optimized_fuse_graph,
+        new_bytecode,
     } = Args::parse();
     let logic_mode = if four_value_logic {
         LogicMode::FourValue
@@ -231,6 +234,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     lowered.debug_symbols = debug_symbols;
     lowered.output_source = output_source.clone();
     lowered.print_vm_map = print_vm_map;
+    lowered.new_bytecode = new_bytecode;
 
     timers.start("compilation");
     let mut design = if compile {
