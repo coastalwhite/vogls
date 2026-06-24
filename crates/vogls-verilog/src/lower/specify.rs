@@ -2,7 +2,8 @@ use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::bits::arithmetic::FvLogicValue;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::{
-    Bits, GlobalContext, LogicMode, PhiRef, ProcessBuilder, ProcessKind, Signal, SignalFlags, SignalKey, VariableKey, SCALAR_VSIZE, TIME_VSIZE
+    Bits, GlobalContext, LogicMode, ProcessBuilder, ProcessKind, SCALAR_VSIZE, Signal, SignalFlags,
+    SignalKey, TIME_VSIZE, VariableKey,
 };
 use vogls_utils::VgHashMap;
 
@@ -767,6 +768,7 @@ pub fn lower_iopath<'a>(
                         initialize: None,
                         flags: SignalFlags::EMPTY,
                         origin: TokenRange::default(),
+                        mode: mctx.gl.logic_mode,
                     });
                     let before = builder.probe(mctx.gl(), *input);
                     builder.drive(mctx.gl(), signal, before);

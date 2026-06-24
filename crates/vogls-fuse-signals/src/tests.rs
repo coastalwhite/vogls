@@ -15,6 +15,7 @@ macro_rules! signals {
                 initialize: None,
                 flags: vogls_ir::SignalFlags::EMPTY,
                 origin: ::vogls_ir::token_range::TokenRange::default(),
+                mode: vogls_ir::LogicMode::FourValue,
             })
             ),+
         ], signals)

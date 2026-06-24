@@ -4,17 +4,17 @@ use std::{fmt, io};
 use vogls_bits::BitsDataRef;
 use vogls_codegen::{
     HeapBuilder, HeapOffset, HeapRef, bin_args_need_conversion, bin_imm_args_need_conversion,
-    insert_bb_phis, resolve_heap_map, resolve_var_logic_mode_map,
+    insert_bb_phis,
 };
 use vogls_ir::dyn_format_string::{DynFormatArgument, DynFormatString};
 use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, BinaryImmOp, Bits, ContextFormat, DisplayContext,
-    GlobalContext, INTEGER_VSIZE, Instruction, LogicMode, Mode, Process, ProcessKey, ReadMem,
-    ResizeOp, ShiftImmOp, SignalKey, TIME_VSIZE, UnaryOp, VariableKey, VectorSize,
+    GlobalContext, INTEGER_VSIZE, Instruction, LogicMode, Process, ProcessKey, ReadMem, ResizeOp,
+    ShiftImmOp, SignalKey, TIME_VSIZE, UnaryOp, VariableKey, VectorSize,
 };
 use vogls_runtime::RtSignalKey;
 use vogls_runtime::plugins::RuntimePluginState;
-use vogls_utils::{IndexSet, VgHashMap, VgHashSet, saturating_rem};
+use vogls_utils::{IndexSet, VgHashMap, VgHashSet};
 
 pub mod runtime;
 
@@ -67,22 +67,37 @@ impl fmt::Display for CIdent {
 }
 
 #[derive(Clone, Copy)]
-enum CExpr<'a> {
+enum CExprRaw<'a> {
     Ident(CVar),
     HeapRef(HeapRef, LogicMode),
-    Bits(&'a Bits, LogicMode),
+    Bits(&'a Bits),
+}
+
+#[derive(Clone, Copy)]
+struct CExpr<'a> {
+    raw: CExprRaw<'a>,
+    output_mode: LogicMode,
 }
 impl CExpr<'_> {
     fn ty(self) -> CType {
+        CType {
+            size: self.raw.ty().size,
+            mode: self.output_mode,
+        }
+    }
+}
+
+impl CExprRaw<'_> {
+    fn ty(self) -> CType {
         match self {
-            CExpr::Ident(var) => var.ty,
-            CExpr::HeapRef(heap_ref, mode) => CType {
+            CExprRaw::Ident(var) => var.ty,
+            CExprRaw::HeapRef(heap_ref, mode) => CType {
                 size: heap_ref.size,
                 mode,
             },
-            CExpr::Bits(bits, mode) => CType {
+            CExprRaw::Bits(bits) => CType {
                 size: bits.size(),
-                mode,
+                mode: bits.mode().into(),
             },
         }
     }
@@ -90,11 +105,126 @@ impl CExpr<'_> {
 
 impl<'a> From<CVar> for CExpr<'a> {
     fn from(value: CVar) -> Self {
-        Self::Ident(value)
+        Self {
+            raw: CExprRaw::Ident(value),
+            output_mode: value.ty.mode,
+        }
     }
 }
 
 impl fmt::Display for CExpr<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let size = self.ty().size;
+        let input_mode = self.raw.ty().mode;
+        if input_mode == self.output_mode {
+            return self.raw.fmt(f);
+        }
+
+        writeln!(f, "({{")?;
+        use LogicMode as M;
+        let dst_ty = CType {
+            size,
+            mode: self.output_mode,
+        };
+        let src_ty = CType {
+            size,
+            mode: input_mode,
+        };
+
+        let src = self.raw;
+        let dst = CIdent::Scoped(0);
+        write!(f, "{INDENT}{} {dst}", dst_ty.element_type())?;
+        if let Some(array_size) = dst_ty.array_size() {
+            write!(f, "[{array_size}]")?;
+        }
+        writeln!(f, ";")?;
+
+        let dst = CVar {
+            ident: dst,
+            ty: dst_ty,
+        };
+        let dst = CExprRaw::Ident(dst);
+        let msbw_mask = if size.get() % 64 == 0 {
+            u64::MAX
+        } else {
+            mask(size.get() % 64)
+        };
+        match (
+            self.output_mode,
+            input_mode,
+            dst_ty.array_size(),
+            src_ty.array_size(),
+        ) {
+            (M::FourValue, M::TwoValue, None, None) => {
+                writeln!(
+                    f,
+                    "{INDENT}{dst} = ((({dst_elem_ty}){src}) << {size}) | 0x{mask:x};",
+                    dst_elem_ty = dst_ty.element_type(),
+                    mask = msbw_mask
+                )?;
+            }
+            (M::FourValue, M::TwoValue, Some(_), None) => {
+                writeln!(
+                    f,
+                    "{INDENT}{dst}[0] = 0x{msbw_mask:x}; {dst}[1] = (uint64_t){src};"
+                )?;
+            }
+            (M::FourValue, M::TwoValue, Some(_), Some(arr_size)) => {
+                let main_loop_size = if size.get() % 64 == 0 {
+                    arr_size
+                } else {
+                    arr_size - 1
+                };
+                if main_loop_size > 0 {
+                    writeln!(
+                        f,
+                        "{INDENT}memset({dst}, 0xFF, {main_loop_size}*sizeof(uint64_t));"
+                    )?;
+                    writeln!(
+                        f,
+                        "{INDENT}memcpy({dst}+{arr_size}, {src}, {main_loop_size}*sizeof(uint64_t));"
+                    )?;
+                }
+                if size.get() % 64 != 0 {
+                    let last_i = 2 * arr_size - 1;
+                    writeln!(f, "{INDENT}{dst}[{main_loop_size}] = 0x{msbw_mask:x};")?;
+                    writeln!(f, "{INDENT}{dst}[{last_i}] = {src}[{main_loop_size}];")?;
+                }
+            }
+
+            (M::TwoValue, M::FourValue, None, None) => {
+                writeln!(
+                    f,
+                    "{INDENT}{dst} = ({dst_elem_ty})({src} >> {size});",
+                    dst_elem_ty = dst_ty.element_type(),
+                )?;
+            }
+            (M::TwoValue, M::FourValue, None, Some(_)) => {
+                writeln!(
+                    f,
+                    "{INDENT}{dst} = ({dst_elem_ty}){src}[1];",
+                    dst_elem_ty = dst_ty.element_type(),
+                )?;
+            }
+            (M::TwoValue, M::FourValue, Some(arr_size), Some(_)) => {
+                writeln!(
+                    f,
+                    "{INDENT}memcpy({dst}, {src} + {arr_size}, {arr_size} * sizeof(uint64_t));"
+                )?;
+            }
+
+            (M::TwoValue, M::FourValue, Some(_), None)
+            | (M::FourValue, M::TwoValue, None, Some(_)) => {
+                unreachable!()
+            }
+            (M::FourValue, M::FourValue, _, _) | (M::TwoValue, M::TwoValue, _, _) => unreachable!(),
+        }
+        writeln!(f, "{dst};")?;
+        f.write_str("})")
+    }
+}
+
+impl fmt::Display for CExprRaw<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Ident(var) => var.ident.fmt(f),
@@ -117,67 +247,25 @@ impl fmt::Display for CExpr<'_> {
                     }
                 }
             }
-            Self::Bits(bits, mode) => match mode {
-                LogicMode::TwoValue => match bits.as_data_ref() {
-                    BitsDataRef::InlineTv(v) => write!(f, "((uint64_t)0x{v:x})"),
-                    BitsDataRef::SeparateTv(v) => {
-                        write!(f, "(uint64_t[{}]){{0x{:x}", v.len(), v[0])?;
-                        for v in &v[1..] {
-                            write!(f, ",0x{v:x}")?;
-                        }
-                        f.write_char('}')
+            Self::Bits(bits) => match bits.as_data_ref() {
+                BitsDataRef::InlineTv(v) => write!(f, "((uint64_t)0x{v:x})"),
+                BitsDataRef::SeparateTv(v) => {
+                    write!(f, "(uint64_t[{}]){{0x{:x}", v.len(), v[0])?;
+                    for v in &v[1..] {
+                        write!(f, ",0x{v:x}")?;
                     }
-                    BitsDataRef::InlineFv(..) | BitsDataRef::SeparateFv(..)
-                        if bits.contains_special() =>
-                    {
-                        unreachable!()
+                    f.write_char('}')
+                }
+                BitsDataRef::InlineFv(spc, val) => {
+                    write!(f, "((uint64_t)0x{:x})", (val << bits.size().get()) | spc)
+                }
+                BitsDataRef::SeparateFv(v) => {
+                    write!(f, "(uint64_t[{}]){{0x{:x}", v.len(), v[0])?;
+                    for v in &v[1..] {
+                        write!(f, ",0x{v:x}")?;
                     }
-                    BitsDataRef::InlineFv(_, v) => write!(f, "((uint64_t)0x{v:x})"),
-                    BitsDataRef::SeparateFv(v) if bits.size().get() <= 64 => {
-                        write!(f, "((uint64_t)0x{:x})", v[1])
-                    }
-                    BitsDataRef::SeparateFv(v) => {
-                        let v = &v[v.len() / 2..];
-                        write!(f, "(uint64_t[{}]){{0x{:x}", v.len(), v[0])?;
-                        for v in &v[1..] {
-                            write!(f, ",0x{v:x}")?;
-                        }
-                        f.write_char('}')
-                    }
-                },
-                LogicMode::FourValue => match bits.as_data_ref() {
-                    BitsDataRef::InlineTv(v) => {
-                        let mask = mask(bits.size().get());
-                        if bits.size() <= Mode::FourValue.max_inline_size() {
-                            write!(f, "((uint64_t)0x{:x})", (v << bits.size().get()) | mask)
-                        } else {
-                            write!(f, "(uint64_t[2]){{0x{:x}, 0x{:x}}}", mask, v)
-                        }
-                    }
-                    BitsDataRef::SeparateTv(v) => {
-                        let mask = mask(saturating_rem(bits.size().get(), 64));
-                        let nwords = bits.size().get().saturating_sub(64).div_ceil(64);
-                        write!(f, "(uint64_t[{}]){{", v.len() * 2)?;
-                        for _ in 0..nwords {
-                            write!(f, "0xffffffffffffffff,")?;
-                        }
-                        write!(f, "0x{mask:x}")?;
-                        for v in v.iter() {
-                            write!(f, ",0x{v:x}")?;
-                        }
-                        f.write_char('}')
-                    }
-                    BitsDataRef::InlineFv(spc, val) => {
-                        write!(f, "((uint64_t)0x{:x})", (val << bits.size().get()) | spc)
-                    }
-                    BitsDataRef::SeparateFv(v) => {
-                        write!(f, "(uint64_t[{}]){{0x{:x}", v.len(), v[0])?;
-                        for v in &v[1..] {
-                            write!(f, ",0x{v:x}")?;
-                        }
-                        f.write_char('}')
-                    }
-                },
+                    f.write_char('}')
+                }
             },
         }
     }
@@ -339,7 +427,7 @@ pub fn lower_process(
     process_key: ProcessKey,
     process_idx: usize,
     gl: &GlobalContext,
-    heap_builder: &mut HeapBuilder,
+    _heap_builder: &mut HeapBuilder,
     listener_builder: &mut ListenerBuilder,
     state_builder: &mut StateBuilder,
     io_signals: &VgHashMap<SignalKey, RtSignalKey>,
@@ -355,33 +443,6 @@ pub fn lower_process(
     let mut bb_seen = VgHashSet::<BasicBlockKey>::default();
     let mut bb_phis = VgHashMap::<BasicBlockKey, Vec<(VariableKey, VariableKey)>>::default();
 
-    let mut var_mode = VgHashMap::<VariableKey, LogicMode>::default();
-    let mut conv_map = VgHashMap::<VariableKey, HeapOffset>::default();
-    let mut heap_map = VgHashMap::default();
-    let temporal_variables = Default::default();
-    {
-        // let mut temporal_roots = Default::default();
-        // let mut temporal = Default::default();
-        // let mut variable_to_tmr_map = Default::default();
-        // get_temporal_variables(
-        //     process.entry,
-        //     &gl.bbs,
-        //     &mut bb_stack,
-        //     &mut bb_seen,
-        //     &mut temporal_roots,
-        //     &mut temporal,
-        //     &mut variable_to_tmr_map,
-        //     &mut temporal_variables,
-        // );
-    }
-    resolve_var_logic_mode_map(
-        &process.regions,
-        gl,
-        &mut bb_stack,
-        &mut bb_seen,
-        &mut var_mode,
-        &mut conv_map,
-    );
     insert_bb_phis(
         &process.regions,
         gl,
@@ -389,22 +450,10 @@ pub fn lower_process(
         &mut bb_seen,
         &mut bb_phis,
     );
-    resolve_heap_map(
-        &process.regions,
-        gl,
-        &mut bb_stack,
-        &mut bb_seen,
-        &var_mode,
-        &mut conv_map,
-        heap_builder,
-        &mut heap_map,
-        Some(&temporal_variables),
-        None,
-    );
 
     // @Performance. Amortize buffer.
     let mut buffer = Vec::<u8>::new();
-    let mut temp_map = VgHashMap::<(VariableKey, LogicMode), CVar>::default();
+    let mut temp_map = VgHashMap::<VariableKey, CVar>::default();
 
     let tr_indices = IndexSet::from_iter(process.regions.iter().copied());
 
@@ -452,25 +501,16 @@ pub fn lower_process(
             });
 
             bb.try_for_each_dst_var(|v| {
-                let mode = var_mode[&v];
                 let t = CVar {
                     ident: CIdent::Numbered(temp_map.len() as u64),
                     ty: CType {
                         size: gl.vars.size(v),
-                        mode,
+                        mode: v.mode(),
                     },
                 };
 
                 write_cvar(f, t)?;
-                temp_map.insert((v, t.ty.mode), t);
-
-                if conv_map.contains_key(&v) {
-                    let mut t = t;
-                    t.ident = CIdent::Numbered(temp_map.len() as u64);
-                    t.ty.mode = t.ty.mode.other();
-                    write_cvar(f, t)?;
-                    temp_map.insert((v, t.ty.mode), t);
-                }
+                temp_map.insert(v, t);
                 io::Result::Ok(())
             })?;
 
@@ -518,49 +558,35 @@ pub fn lower_process(
                 }
                 match i {
                     I::Constant(dst, bits) => {
-                        let mode = var_mode[dst];
-                        let t = temp_map[&(*dst, mode)];
+                        let t = temp_map[dst];
                         match t.ty.array_size() {
                             None => writeln!(
                                 buffer,
                                 "{INDENT}{} = {};",
                                 t.ident,
-                                CExpr::Bits(bits, mode)
+                                CExpr {
+                                    raw: CExprRaw::Bits(bits),
+                                    output_mode: dst.mode()
+                                },
                             )?,
                             Some(n) => writeln!(
                                 buffer,
                                 "{INDENT}memcpy({}, {}, {n}*sizeof(uint64_t));",
                                 t.ident,
-                                CExpr::Bits(bits, mode)
+                                CExpr {
+                                    raw: CExprRaw::Bits(bits),
+                                    output_mode: dst.mode()
+                                },
                             )?,
-                        }
-                        if temporal_variables.contains(dst) {
-                            store(&mut buffer, heap_map[dst], t)?;
                         }
                     }
                     I::Unary(dst, op, src) => {
                         let src_size = gl.vars.size(*src);
-                        let msrc = var_mode[src];
-                        let mdst = var_mode[dst];
 
-                        let mut t = temp_map[&(*src, msrc)];
-                        if temporal_variables.contains(src) {
-                            load(&mut buffer, heap_map[src], t)?;
-                        }
-                        if msrc != mdst {
-                            let unconverted_t = t;
-                            t = temp_map[&(*src, mdst)];
-                            convert(
-                                &mut buffer,
-                                src_size,
-                                mdst,
-                                msrc,
-                                t.ident,
-                                unconverted_t.ident,
-                            )?;
-                        }
+                        let mut t: CExpr = temp_map[src].into();
+                        t.output_mode = dst.mode();
 
-                        let dst_t = temp_map[&(*dst, mdst)];
+                        let dst_t: CExpr = temp_map[dst].into();
                         use UnaryOp as O;
                         match op {
                             O::Neg => unary::cgc_negate(&mut buffer, dst_t, t)?,
@@ -569,41 +595,19 @@ pub fn lower_process(
                             O::ReduceXor => unary::cgc_reduce_xor(&mut buffer, dst_t, t)?,
                             O::LeadingZeros => todo!(),
                         }
-                        if temporal_variables.contains(dst) {
-                            store(&mut buffer, heap_map[dst], dst_t)?;
-                        }
                     }
                     I::Resize(dst, op, src) => {
                         let src_size = gl.vars.size(*src);
-                        let msrc = var_mode[src];
-                        let mdst = var_mode[dst];
 
-                        let mut t = temp_map[&(*src, msrc)];
-                        if temporal_variables.contains(src) {
-                            load(&mut buffer, heap_map[src], t)?;
-                        }
-                        if msrc != mdst {
-                            let unconverted_t = t;
-                            t = temp_map[&(*src, mdst)];
-                            convert(
-                                &mut buffer,
-                                src_size,
-                                mdst,
-                                msrc,
-                                t.ident,
-                                unconverted_t.ident,
-                            )?;
-                        }
+                        let mut t: CExpr = temp_map[src].into();
+                        t.output_mode = dst.mode();
 
-                        let dst_t = temp_map[&(*dst, mdst)];
+                        let dst_t: CExpr = temp_map[dst].into();
                         use ResizeOp as O;
                         match op {
                             O::Truncate => resize::cgc_truncate(&mut buffer, dst_t, t.into())?,
                             O::ZeroExtend => resize::cgc_zero_extend(&mut buffer, dst_t, t)?,
                             O::SignExtend => resize::cgc_sign_extend(&mut buffer, dst_t, t)?,
-                        }
-                        if temporal_variables.contains(dst) {
-                            store(&mut buffer, heap_map[dst], dst_t)?;
                         }
                     }
                     I::BinaryImm(dst, op, src, imm) => {
@@ -613,31 +617,21 @@ pub fn lower_process(
                         } else {
                             LogicMode::TwoValue
                         };
-                        let (msrc, mdst) = (var_mode[src], var_mode[dst]);
 
                         let (mtgt, conv_src, conv_imm) =
-                            bin_imm_args_need_conversion(*op, mdst, msrc, mimm);
+                            bin_imm_args_need_conversion(*op, dst.mode(), src.mode(), mimm);
 
-                        let mut src_t = temp_map[&(*src, msrc)];
-                        if temporal_variables.contains(src) {
-                            load(&mut buffer, heap_map[src], src_t)?;
-                        }
+                        let mut src_t: CExpr = temp_map[src].into();
                         if conv_src {
-                            let unconverted_t = src_t;
-                            src_t = temp_map[&(*src, mtgt)];
-                            convert(
-                                &mut buffer,
-                                src_size,
-                                mtgt,
-                                msrc,
-                                src_t.ident,
-                                unconverted_t.ident,
-                            )?;
+                            src_t.output_mode = mtgt;
                         }
                         let imm_tgt_mode = if conv_imm { mtgt } else { mimm };
-                        let imm = CExpr::Bits(imm, imm_tgt_mode);
+                        let imm = CExpr {
+                            raw: CExprRaw::Bits(imm),
+                            output_mode: imm_tgt_mode,
+                        };
 
-                        let dst_t = temp_map[&(*dst, mdst)];
+                        let dst_t = temp_map[dst];
 
                         use BinaryImmOp as O;
                         match op {
@@ -686,74 +680,48 @@ pub fn lower_process(
                                 binary::cgc_case_eq(&mut buffer, dst_t.ident, src_t.into(), imm)?
                             }
                         }
-
-                        if temporal_variables.contains(dst) {
-                            store(&mut buffer, heap_map[dst], dst_t)?;
-                        }
                     }
                     I::SliceImm(dst, src, offset) => {
                         let src_size = gl.vars.size(*src);
-                        let (msrc, mdst) = (var_mode[src], var_mode[dst]);
 
-                        let (conv_src, conv_imm) = (msrc != mdst, mdst == LogicMode::FourValue);
+                        let (conv_src, conv_imm) =
+                            (src.mode() != dst.mode(), dst.mode() == LogicMode::FourValue);
 
-                        let mut src_t = temp_map[&(*src, msrc)];
-                        if temporal_variables.contains(src) {
-                            load(&mut buffer, heap_map[src], src_t)?;
-                        }
-                        if conv_src {
-                            let unconverted_t = src_t;
-                            src_t = temp_map[&(*src, mdst)];
-                            convert(
-                                &mut buffer,
-                                src_size,
-                                mdst,
-                                msrc,
-                                src_t.ident,
-                                unconverted_t.ident,
-                            )?;
-                        }
-                        let imm_tgt_mode = if conv_imm { mdst } else { LogicMode::TwoValue };
-                        let imm = CExpr::Bits(
-                            &Bits::from_u64(INTEGER_VSIZE, *offset as u64),
-                            imm_tgt_mode,
-                        );
+                        let mut src_t: CExpr = temp_map[src].into();
+                        src_t.output_mode = dst.mode();
 
-                        let dst_t = temp_map[&(*dst, mdst)];
+                        let imm_tgt_mode = if conv_imm {
+                            dst.mode()
+                        } else {
+                            LogicMode::TwoValue
+                        };
+                        let imm = CExpr {
+                            raw: CExprRaw::Bits(&Bits::from_u64(INTEGER_VSIZE, *offset as u64)),
+                            output_mode: imm_tgt_mode,
+                        };
+
+                        let dst_t = temp_map[dst];
                         slice::slice_with(&mut buffer, dst_t, src_t.into(), imm, false)?;
-                        if temporal_variables.contains(dst) {
-                            store(&mut buffer, heap_map[dst], dst_t)?;
-                        }
                     }
                     I::ShiftImm(dst, op, src, offset) => {
                         let src_size = gl.vars.size(*src);
-                        let (msrc, mdst) = (var_mode[src], var_mode[dst]);
 
-                        let (conv_src, conv_imm) = (msrc != mdst, mdst == LogicMode::FourValue);
+                        let (conv_src, conv_imm) =
+                            (src.mode() != dst.mode(), dst.mode() == LogicMode::FourValue);
 
-                        let mut src_t = temp_map[&(*src, msrc)];
-                        if temporal_variables.contains(src) {
-                            load(&mut buffer, heap_map[src], src_t)?;
-                        }
-                        if conv_src {
-                            let unconverted_t = src_t;
-                            src_t = temp_map[&(*src, mdst)];
-                            convert(
-                                &mut buffer,
-                                src_size,
-                                mdst,
-                                msrc,
-                                src_t.ident,
-                                unconverted_t.ident,
-                            )?;
-                        }
-                        let imm_tgt_mode = if conv_imm { mdst } else { LogicMode::TwoValue };
-                        let imm = CExpr::Bits(
-                            &Bits::from_u64(INTEGER_VSIZE, *offset as u64),
-                            imm_tgt_mode,
-                        );
+                        let mut src_t: CExpr = temp_map[src].into();
+                        src_t.output_mode = dst.mode();
+                        let imm_tgt_mode = if conv_imm {
+                            dst.mode()
+                        } else {
+                            LogicMode::TwoValue
+                        };
+                        let imm = CExpr {
+                            raw: CExprRaw::Bits(&Bits::from_u64(INTEGER_VSIZE, *offset as u64)),
+                            output_mode: imm_tgt_mode,
+                        };
 
-                        let dst_t = temp_map[&(*dst, mdst)];
+                        let dst_t = temp_map[dst];
                         use ShiftImmOp as O;
                         match op {
                             O::LogicalShiftLeft => {
@@ -766,164 +734,60 @@ pub fn lower_process(
                                 binary::cgc_asr(&mut buffer, dst_t, src_t.into(), imm)?
                             }
                         }
-
-                        if temporal_variables.contains(dst) {
-                            store(&mut buffer, heap_map[dst], dst_t)?;
-                        }
                     }
                     I::Select(dst, cond, truthy, falsy) => {
                         let size = gl.vars.size(*dst);
-                        let (mcond, mtruthy, mfalsy, mdst) = (
-                            var_mode[cond],
-                            var_mode[truthy],
-                            var_mode[falsy],
-                            var_mode[dst],
-                        );
 
-                        let cond_t = temp_map[&(*cond, mcond)];
-                        if temporal_variables.contains(cond) {
-                            load(&mut buffer, heap_map[cond], cond_t)?;
-                        }
+                        let cond_t: CExpr = temp_map[cond].into();
+                        let mut truthy_t: CExpr = temp_map[truthy].into();
+                        let mut falsy_t: CExpr = temp_map[falsy].into();
 
-                        let mut truthy_t = temp_map[&(*truthy, mtruthy)];
-                        if temporal_variables.contains(truthy) {
-                            load(&mut buffer, heap_map[truthy], truthy_t)?;
-                        }
-                        if mdst != mtruthy {
-                            let unconverted_t = truthy_t;
-                            truthy_t = temp_map[&(*truthy, mdst)];
-                            convert(
-                                &mut buffer,
-                                size,
-                                mdst,
-                                mtruthy,
-                                truthy_t.ident,
-                                unconverted_t.ident,
-                            )?;
-                        }
-                        let mut falsy_t = temp_map[&(*falsy, mfalsy)];
-                        if temporal_variables.contains(falsy) {
-                            load(&mut buffer, heap_map[falsy], falsy_t)?;
-                        }
-                        if mdst != mfalsy {
-                            let unconverted_t = falsy_t;
-                            falsy_t = temp_map[&(*falsy, mdst)];
-                            convert(
-                                &mut buffer,
-                                size,
-                                mdst,
-                                mfalsy,
-                                falsy_t.ident,
-                                unconverted_t.ident,
-                            )?;
-                        }
+                        truthy_t.output_mode = dst.mode();
+                        falsy_t.output_mode = dst.mode();
 
-                        let dst_t = temp_map[&(*dst, mdst)];
-                        select::cgc_select(
-                            &mut buffer,
-                            dst_t,
-                            cond_t.into(),
-                            truthy_t.into(),
-                            falsy_t.into(),
-                        )?;
-
-                        if temporal_variables.contains(dst) {
-                            store(&mut buffer, heap_map[dst], dst_t)?;
-                        }
+                        let dst_t = temp_map[dst];
+                        select::cgc_select(&mut buffer, dst_t, cond_t, truthy_t, falsy_t)?;
                     }
                     I::Slice(dst, lhs, rhs) => {
                         let lhs_size = gl.vars.size(*lhs);
                         let rhs_size = gl.vars.size(*rhs);
-                        let (mlhs, mrhs, mdst) = (var_mode[lhs], var_mode[rhs], var_mode[dst]);
 
                         use LogicMode as M;
                         let (mtgt, conv_lhs, conv_rhs) = (
                             M::FourValue,
-                            mlhs == M::TwoValue && mrhs == M::FourValue,
-                            mlhs == M::FourValue && mrhs == M::TwoValue,
+                            lhs.mode() == M::TwoValue && rhs.mode() == M::FourValue,
+                            lhs.mode() == M::FourValue && rhs.mode() == M::TwoValue,
                         );
 
-                        let (mut lhs_t, mut rhs_t) =
-                            (temp_map[&(*lhs, mlhs)], temp_map[&(*rhs, mrhs)]);
-                        if temporal_variables.contains(lhs) {
-                            load(&mut buffer, heap_map[lhs], lhs_t)?;
-                        }
+                        let mut lhs_t: CExpr = temp_map[lhs].into();
+                        let mut rhs_t: CExpr = temp_map[rhs].into();
                         if conv_lhs {
-                            let unconverted_t = lhs_t;
-                            lhs_t = temp_map[&(*lhs, mtgt)];
-                            convert(
-                                &mut buffer,
-                                lhs_size,
-                                mtgt,
-                                mlhs,
-                                lhs_t.ident,
-                                unconverted_t.ident,
-                            )?;
-                        }
-                        if temporal_variables.contains(rhs) {
-                            load(&mut buffer, heap_map[rhs], rhs_t)?;
+                            lhs_t.output_mode = mtgt;
                         }
                         if conv_rhs {
-                            let unconverted_t = rhs_t;
-                            rhs_t = temp_map[&(*rhs, mtgt)];
-                            convert(
-                                &mut buffer,
-                                rhs_size,
-                                mtgt,
-                                mrhs,
-                                rhs_t.ident,
-                                unconverted_t.ident,
-                            )?;
+                            rhs_t.output_mode = mtgt;
                         }
 
-                        let dst_t = temp_map[&(*dst, mdst)];
+                        let dst_t = temp_map[dst];
                         slice::slice(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?;
-                        if temporal_variables.contains(dst) {
-                            store(&mut buffer, heap_map[dst], dst_t)?;
-                        }
                     }
                     I::Binary(dst, op, lhs, rhs) => {
                         let lhs_size = gl.vars.size(*lhs);
                         let rhs_size = gl.vars.size(*rhs);
-                        let (mlhs, mrhs, mdst) = (var_mode[lhs], var_mode[rhs], var_mode[dst]);
 
                         let (mtgt, conv_lhs, conv_rhs) =
-                            bin_args_need_conversion(*op, mdst, mlhs, mrhs);
+                            bin_args_need_conversion(*op, dst.mode(), lhs.mode(), rhs.mode());
 
-                        let (mut lhs_t, mut rhs_t) =
-                            (temp_map[&(*lhs, mlhs)], temp_map[&(*rhs, mrhs)]);
-                        if temporal_variables.contains(lhs) {
-                            load(&mut buffer, heap_map[lhs], lhs_t)?;
-                        }
+                        let mut lhs_t: CExpr = temp_map[lhs].into();
+                        let mut rhs_t: CExpr = temp_map[rhs].into();
                         if conv_lhs {
-                            let unconverted_t = lhs_t;
-                            lhs_t = temp_map[&(*lhs, mtgt)];
-                            convert(
-                                &mut buffer,
-                                lhs_size,
-                                mtgt,
-                                mlhs,
-                                lhs_t.ident,
-                                unconverted_t.ident,
-                            )?;
-                        }
-                        if temporal_variables.contains(rhs) {
-                            load(&mut buffer, heap_map[rhs], rhs_t)?;
+                            lhs_t.output_mode = mtgt;
                         }
                         if conv_rhs {
-                            let unconverted_t = rhs_t;
-                            rhs_t = temp_map[&(*rhs, mtgt)];
-                            convert(
-                                &mut buffer,
-                                rhs_size,
-                                mtgt,
-                                mrhs,
-                                rhs_t.ident,
-                                unconverted_t.ident,
-                            )?;
+                            rhs_t.output_mode = mtgt;
                         }
 
-                        let dst_t = temp_map[&(*dst, mdst)];
+                        let dst_t = temp_map[dst];
 
                         use vogls_ir::BinaryOp as O;
                         match op {
@@ -976,9 +840,7 @@ pub fn lower_process(
                             O::CopyX => {
                                 binary::cgc_copy_x(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
                             }
-                            O::CopyZ => {
-                                binary::cgc_copy_y(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
-                            }
+                            O::CopyZ => binary::cgc_copy_y(&mut buffer, dst_t, lhs_t, rhs_t)?,
                             O::Min => {
                                 binary::cgc_bin_min(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
                             }
@@ -997,24 +859,15 @@ pub fn lower_process(
                                 lhs_t.into(),
                                 rhs_t.into(),
                             )?,
-                            O::Negedge => binary::cgc_negedge(
-                                &mut buffer,
-                                dst_t.ident,
-                                lhs_t.into(),
-                                rhs_t.into(),
-                            )?,
-                        }
-                        if temporal_variables.contains(dst) {
-                            store(&mut buffer, heap_map[dst], dst_t)?;
+                            O::Negedge => {
+                                binary::cgc_negedge(&mut buffer, dst_t.ident, lhs_t, rhs_t)?
+                            }
                         }
                     }
                     I::Intrinsic(dst, op, items) => match op.as_ref() {
                         vogls_ir::IntrinsicOp::Time => {
-                            let t = temp_map[&(*dst, LogicMode::TwoValue)];
+                            let t = temp_map[dst];
                             writeln!(buffer, "{INDENT}{} = time;", t.ident)?;
-                            if temporal_variables.contains(dst) {
-                                store(&mut buffer, heap_map[dst], t)?;
-                            }
                         }
                         vogls_ir::IntrinsicOp::Finish => {
                             writeln!(buffer, "{INDENT}return 1;")?;
@@ -1024,14 +877,8 @@ pub fn lower_process(
                             // @Performance: scratchpad this.
                             let args = items
                                 .iter()
-                                .map(|i| {
-                                    let t = temp_map[&(*i, var_mode[i])];
-                                    if temporal_variables.contains(i) {
-                                        load(&mut buffer, heap_map[i], t)?;
-                                    }
-                                    Ok(t)
-                                })
-                                .collect::<io::Result<Vec<CVar>>>()?;
+                                .map(|i| Ok(temp_map[i].into()))
+                                .collect::<io::Result<Vec<CExpr>>>()?;
                             lower_dyn_format_str(
                                 &mut buffer,
                                 &mut state_builder.dyn_fmt_strs,
@@ -1042,10 +889,7 @@ pub fn lower_process(
                         vogls_ir::IntrinsicOp::Assert(dyn_format_string) => {
                             // @TODO: Format
                             let fst = items[0];
-                            let t = temp_map[&(fst, LogicMode::TwoValue)];
-                            if temporal_variables.contains(&fst) {
-                                load(&mut buffer, heap_map[&fst], t)?;
-                            }
+                            let t = temp_map[&fst];
                             writeln!(
                                 buffer,
                                 r#"{INDENT}if ({t} == 0) {{
@@ -1056,14 +900,8 @@ pub fn lower_process(
                             let args = items
                                 .iter()
                                 .skip(1)
-                                .map(|i| {
-                                    let t = temp_map[&(*i, var_mode[i])];
-                                    if temporal_variables.contains(i) {
-                                        load(&mut buffer, heap_map[i], t)?;
-                                    }
-                                    Ok(t)
-                                })
-                                .collect::<io::Result<Vec<CVar>>>()?;
+                                .map(|i| Ok(temp_map[i].into()))
+                                .collect::<io::Result<Vec<CExpr>>>()?;
                             lower_dyn_format_str(
                                 &mut buffer,
                                 &mut state_builder.dyn_fmt_strs,
@@ -1098,91 +936,69 @@ pub fn lower_process(
                         }
                     },
                     I::LastUpdateTime(dst, signal) => {
-                        let t = temp_map[&(*dst, LogicMode::TwoValue)];
+                        let t = temp_map[dst];
                         let rt_key = io_signals[signal];
                         let idx = lupdt_indexes[&rt_key];
                         writeln!(buffer, "{INDENT}{} = last_active_time[{idx}];", t.ident)?;
-                        if temporal_variables.contains(dst) {
-                            store(&mut buffer, heap_map[dst], t)?;
-                        }
                     }
                     I::Probe(dst, signal, offset) => {
+                        let signal_mode = gl.signals[*signal].mode;
                         let signal_ref = signals[io_signals[signal].as_usize()];
-                        assert_eq!(var_mode[dst], gl.logic_mode);
 
-                        let t = temp_map[&(*dst, gl.logic_mode)];
+                        let t = temp_map[dst];
                         let dst_size = gl.vars.size(*dst);
                         let src_size = gl.signals[*signal].size;
 
                         if dst_size == src_size && *offset == 0 {
                             load(&mut buffer, signal_ref.offset, t)?;
                         } else {
-                            let signal = CExpr::HeapRef(signal_ref, gl.logic_mode);
-                            let offset_c =
-                                CExpr::Bits(&Bits::new_u32(*offset), LogicMode::TwoValue);
+                            let signal = CExpr {
+                                raw: CExprRaw::HeapRef(signal_ref, signal_mode),
+                                output_mode: signal_mode,
+                            };
+                            let offset_c = CExpr {
+                                raw: CExprRaw::Bits(&Bits::new_u32(*offset)),
+                                output_mode: LogicMode::TwoValue,
+                            };
                             if *offset > 0 {
                                 slice::slice_with(&mut buffer, t, signal, offset_c, false)?;
                             } else {
-                                resize::cgc_truncate(&mut buffer, t, signal)?;
+                                resize::cgc_truncate(&mut buffer, t.into(), signal)?;
                             }
-                        }
-                        if temporal_variables.contains(dst) {
-                            store(&mut buffer, heap_map[dst], t)?;
                         }
                     }
                     I::ProbeSlice(dst, signal, offset) => {
+                        let signal_mode = gl.signals[*signal].mode;
                         let signal_ref = signals[io_signals[signal].as_usize()];
-                        assert_eq!(var_mode[dst], LogicMode::FourValue);
+                        assert_eq!(dst.mode(), LogicMode::FourValue);
 
-                        let t = temp_map[&(*dst, LogicMode::FourValue)];
-
-                        let moffset = var_mode[offset];
-                        let offset_t = temp_map[&(*offset, moffset)];
-                        if temporal_variables.contains(offset) {
-                            load(&mut buffer, heap_map[offset], offset_t)?;
-                        }
+                        let t = temp_map[dst];
+                        let offset_t = temp_map[offset];
 
                         slice::slice(
                             &mut buffer,
                             t,
-                            CExpr::HeapRef(signal_ref, gl.logic_mode),
+                            CExpr {
+                                raw: CExprRaw::HeapRef(signal_ref, signal_mode),
+                                output_mode: signal_mode,
+                            },
                             offset_t.into(),
                         )?;
-                        if temporal_variables.contains(dst) {
-                            store(&mut buffer, heap_map[dst], t)?;
-                        }
                     }
                     I::Drive(signal, src, partial) => {
+                        let signal_mode = gl.signals[*signal].mode;
                         let size = gl.vars.size(*src);
-                        let msrc = var_mode[src];
-                        let mut t = temp_map[&(*src, msrc)];
-                        if temporal_variables.contains(src) {
-                            load(&mut buffer, heap_map[src], t)?;
-                        }
-                        if msrc != gl.logic_mode {
-                            let unconverted_t = t;
-                            t = temp_map[&(*src, gl.logic_mode)];
-                            convert(
-                                &mut buffer,
-                                size,
-                                gl.logic_mode,
-                                msrc,
-                                t.ident,
-                                unconverted_t.ident,
-                            )?;
-                        }
+                        let mut t: CExpr = temp_map[src].into();
+                        t.output_mode = signal_mode;
                         let zero = Bits::new_u32(0);
                         let partial = match partial {
-                            None if gl.signals[*signal].size != t.ty.size => {
-                                Some(CExpr::Bits(&zero, LogicMode::TwoValue))
-                            }
+                            None if gl.signals[*signal].size != t.ty().size => Some(CExpr {
+                                raw: CExprRaw::Bits(&zero),
+                                output_mode: LogicMode::TwoValue,
+                            }),
                             None => None,
                             Some((offset, _)) => {
-                                let moffset = var_mode[offset];
-                                let offset_t = temp_map[&(*offset, moffset)];
-                                if temporal_variables.contains(offset) {
-                                    load(&mut buffer, heap_map[offset], offset_t)?;
-                                }
+                                let offset_t = temp_map[offset];
                                 Some(offset_t.into())
                             }
                         };
@@ -1209,22 +1025,20 @@ pub fn lower_process(
                     let mut arg_offsets = Vec::new();
                     let mut args = Vec::new();
                     if let Some(dst) = i.get_destination_variable() {
-                        let mode = var_mode[&dst];
-                        let var = temp_map[&(dst, mode)];
+                        let var = temp_map[&dst];
                         content.push_str(&dst.display(&display_context).to_string());
                         content.push_str(" = ");
                         arg_offsets.push((content.len(), DynFormatArgument::default()));
                         content.push_str("; ");
-                        args.push(var);
+                        args.push(CExpr::from(var));
                     }
                     i.for_each_src(|src| {
-                        let mode = var_mode[&src];
-                        let var = temp_map[&(src, mode)];
+                        let var = temp_map[&src];
                         content.push_str(&src.display(&display_context).to_string());
                         content.push_str(" = ");
                         arg_offsets.push((content.len(), DynFormatArgument::default()));
                         content.push_str("; ");
-                        args.push(var);
+                        args.push(CExpr::from(var));
                     });
                     content.push('\n');
                     lower_dyn_format_str(
@@ -1242,43 +1056,21 @@ pub fn lower_process(
                     let src_size = gl.vars.size(*src);
                     let dst_size = gl.vars.size(*dst);
                     assert_eq!(src_size, dst_size);
-                    let src_mode = var_mode[src];
-                    let dst_mode = var_mode[dst];
-
-                    let mut src_t = temp_map[&(*src, src_mode)];
-                    let dst_t = temp_map[&(*dst, dst_mode)];
-
-                    if temporal_variables.contains(src) {
-                        load(&mut buffer, heap_map[src], src_t)?;
-                    }
-
-                    if src_mode != dst_mode {
-                        let unconverted_t = src_t;
-                        src_t = temp_map[&(*src, dst_mode)];
-                        convert(
-                            &mut buffer,
-                            src_size,
-                            dst_mode,
-                            src_mode,
-                            src_t.ident,
-                            unconverted_t.ident,
-                        )?;
-                    }
+                    let mut src_t: CExpr = temp_map[src].into();
+                    let dst_t: CExpr = temp_map[dst].into();
+                    src_t.output_mode = dst.mode();
 
                     if lower_options.itrace {
                         writeln!(&mut buffer, "{INDENT}// Phi({dst:?}, {src:?});")?;
                     }
-                    let d = dst_t.ident;
-                    let s = src_t.ident;
-                    match dst_t.ty.array_size() {
+                    let d = dst_t;
+                    let s = src_t;
+                    match dst_t.ty().array_size() {
                         None => writeln!(buffer, "{INDENT}{d} = {s};")?,
                         Some(num_words) => writeln!(
                             buffer,
                             "{INDENT}memcpy({d}, {s}, {num_words}*sizeof(uint64_t));"
                         )?,
-                    }
-                    if temporal_variables.contains(dst) {
-                        store(&mut buffer, heap_map[dst], dst_t)?;
                     }
                     if lower_options.itrace {
                         lower_dyn_format_str(
@@ -1353,11 +1145,7 @@ pub fn lower_process(
                     }
                 }
                 BasicBlockTerminator::VariableWait(tr, time) => {
-                    let mtime = var_mode[time];
-                    let t = temp_map[&(*time, mtime)];
-                    if temporal_variables.contains(time) {
-                        load(&mut buffer, heap_map[time], t)?;
-                    }
+                    let t = temp_map[time];
                     let tgt_tri = tr_indices.get_index(tr).unwrap();
                     let tgt = process_to_procedure_name(process, process_idx, tgt_tri);
                     writeln!(buffer, "{INDENT}{{")?;
@@ -1371,15 +1159,15 @@ pub fn lower_process(
                     write_cvar(&mut buffer, s0)?;
                     let t = t.ident;
                     let s0 = s0.ident;
-                    match mtime {
+                    match time.mode() {
                         LogicMode::TwoValue => writeln!(buffer, "{INDENT}{s0} = {t};")?,
                         LogicMode::FourValue => {
                             writeln!(buffer, "{INDENT}{s0} = (~{t}[0] == 0) ? 0 : {t}[1];")?;
                         }
                     }
-                        writeln!(
-                            buffer,
-                            r#"{INDENT}if ({s0} == 0) {{
+                    writeln!(
+                        buffer,
+                        r#"{INDENT}if ({s0} == 0) {{
 {INDENT}{INDENT}[[clang::musttail]] return {tgt}(heap, schedule, time, listening, last_active_time, cldctx);
 {INDENT}}} else {{
 {INDENT}{INDENT}schedule_future_event(schedule, time + {s0}, &{tgt});"#,
@@ -1419,14 +1207,10 @@ pub fn lower_process(
                     let truthy = bb_ident.get_index(truthy).unwrap();
                     let falsy = bb_ident.get_index(falsy).unwrap();
 
-                    let mcondition = var_mode[condition];
-                    let t = temp_map[&(*condition, mcondition)];
-                    if temporal_variables.contains(condition) {
-                        load(&mut buffer, heap_map[condition], t)?;
-                    }
+                    let t = temp_map[condition];
 
                     let t = t.ident;
-                    match mcondition {
+                    match condition.mode() {
                         LogicMode::TwoValue => write!(buffer, "{INDENT}if ({t} == 1)")?,
                         LogicMode::FourValue => write!(buffer, "{INDENT}if ({t} == 3)")?,
                     }
@@ -1450,12 +1234,12 @@ fn lower_dyn_format_str(
     f: &mut impl io::Write,
     dyn_fmt_strs: &mut IndexSet<DynFormatString>,
     dyn_format_string: &DynFormatString,
-    args: Vec<CVar>,
+    args: Vec<CExpr>,
 ) -> io::Result<()> {
     write!(f, r#"{INDENT}{{ "#)?;
     for (i, arg) in args.iter().enumerate() {
-        if !arg.ty.is_array() {
-            write!(f, "uint64_t arg{i} = (uint64_t){}; ", arg.ident)?;
+        if !arg.ty().is_array() {
+            write!(f, "uint64_t arg{i} = (uint64_t){}; ", arg)?;
         }
     }
     write!(
@@ -1464,20 +1248,20 @@ fn lower_dyn_format_str(
         num_args = args.len()
     )?;
     for (i, arg) in args.iter().enumerate() {
-        if arg.ty.is_array() {
+        if arg.ty().is_array() {
             write!(
                 f,
                 r#"(bits_ref_t){{ .size={}, .mode={}, .ptr={} }}, "#,
-                arg.ty.size,
-                u8::from(arg.ty.mode == LogicMode::FourValue),
-                arg.ident
+                arg.ty().size,
+                u8::from(arg.ty().mode == LogicMode::FourValue),
+                arg
             )?;
         } else {
             write!(
                 f,
                 r#"(bits_ref_t){{ .size={}, .mode={}, .ptr=&arg{i} }}, "#,
-                arg.ty.size,
-                u8::from(arg.ty.mode == LogicMode::FourValue)
+                arg.ty().size,
+                u8::from(arg.ty().mode == LogicMode::FourValue)
             )?;
         }
     }
@@ -1523,20 +1307,19 @@ fn load(b: &mut impl io::Write, heap_offset: HeapOffset, t: CVar) -> io::Result<
     }
 }
 
-fn store(f: &mut impl io::Write, heap_offset: HeapOffset, t: CVar) -> io::Result<()> {
-    match t.ty.array_size() {
+fn store(f: &mut impl io::Write, heap_offset: HeapOffset, t: CExpr) -> io::Result<()> {
+    match t.ty().array_size() {
         None => {
             let word = heap_offset.bit_offset / 64;
             let shift = heap_offset.bit_offset % 64;
-            let num_bits = t.ty.num_bits();
+            let num_bits = t.ty().num_bits();
             if num_bits == 64 {
-                writeln!(f, "{INDENT}heap[{word}] = {t};", t = t.ident)
+                writeln!(f, "{INDENT}heap[{word}] = {t};")
             } else {
                 let mask = !(((1u64 << num_bits) - 1) << shift);
                 writeln!(
                     f,
                     "{INDENT}heap[{word}] = (heap[{word}] & 0x{mask:x}) | ((uint64_t){t} << {shift});",
-                    t = t.ident
                 )
             }
         }
@@ -1545,92 +1328,8 @@ fn store(f: &mut impl io::Write, heap_offset: HeapOffset, t: CVar) -> io::Result
             writeln!(
                 f,
                 "{INDENT}memcpy(heap + {word}, &{t}, {arr_size} * sizeof(uint64_t));",
-                t = t.ident
             )
         }
-    }
-}
-
-fn convert(
-    f: &mut impl io::Write,
-    size: VectorSize,
-    mdst: LogicMode,
-    msrc: LogicMode,
-    dst: CIdent,
-    src: CIdent,
-) -> io::Result<()> {
-    use LogicMode as M;
-    let dst_ty = CType { size, mode: mdst };
-    let src_ty = CType { size, mode: msrc };
-    let msbw_mask = if size.get() % 64 == 0 {
-        u64::MAX
-    } else {
-        mask(size.get() % 64)
-    };
-    match (mdst, msrc, dst_ty.array_size(), src_ty.array_size()) {
-        (M::FourValue, M::TwoValue, None, None) => {
-            writeln!(
-                f,
-                "{INDENT}{dst} = ((({dst_elem_ty}){src}) << {size}) | 0x{mask:x};",
-                dst_elem_ty = dst_ty.element_type(),
-                mask = msbw_mask
-            )
-        }
-        (M::FourValue, M::TwoValue, Some(_), None) => {
-            writeln!(
-                f,
-                "{INDENT}{dst}[0] = 0x{msbw_mask:x}; {dst}[1] = (uint64_t){src};"
-            )
-        }
-        (M::FourValue, M::TwoValue, Some(_), Some(arr_size)) => {
-            let main_loop_size = if size.get() % 64 == 0 {
-                arr_size
-            } else {
-                arr_size - 1
-            };
-            if main_loop_size > 0 {
-                writeln!(
-                    f,
-                    "{INDENT}memset({dst}, 0xFF, {main_loop_size}*sizeof(uint64_t));"
-                )?;
-                writeln!(
-                    f,
-                    "{INDENT}memcpy({dst}+{arr_size}, {src}, {main_loop_size}*sizeof(uint64_t));"
-                )?;
-            }
-            if size.get() % 64 != 0 {
-                let last_i = 2 * arr_size - 1;
-                writeln!(f, "{INDENT}{dst}[{main_loop_size}] = 0x{msbw_mask:x};")?;
-                writeln!(f, "{INDENT}{dst}[{last_i}] = {src}[{main_loop_size}];")?;
-            }
-            Ok(())
-        }
-
-        (M::TwoValue, M::FourValue, None, None) => {
-            writeln!(
-                f,
-                "{INDENT}{dst} = ({dst_elem_ty})({src} >> {size});",
-                dst_elem_ty = dst_ty.element_type(),
-            )
-        }
-        (M::TwoValue, M::FourValue, None, Some(_)) => {
-            writeln!(
-                f,
-                "{INDENT}{dst} = ({dst_elem_ty}){src}[1];",
-                dst_elem_ty = dst_ty.element_type(),
-            )
-        }
-        (M::TwoValue, M::FourValue, Some(arr_size), Some(_)) => {
-            writeln!(
-                f,
-                "{INDENT}memcpy({dst}, {src} + {arr_size}, {arr_size} * sizeof(uint64_t));"
-            )
-        }
-
-        (M::TwoValue, M::FourValue, Some(_), None) | (M::FourValue, M::TwoValue, None, Some(_)) => {
-            unreachable!()
-        }
-        (M::FourValue, M::FourValue, _, _) | (M::TwoValue, M::TwoValue, _, _) => unreachable!(),
     }
 }
 

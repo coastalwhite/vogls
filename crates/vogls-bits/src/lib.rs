@@ -1584,6 +1584,17 @@ impl Bits {
             ),
         }
     }
+
+    pub fn mode(&self) -> Mode {
+        self.mode
+    }
+
+    pub fn try_lower_mode(mut self) -> Bits {
+        if matches!(self.mode, Mode::FourValue) && !self.contains_special() {
+            self.mode = Mode::TwoValue;
+        }
+        self
+    }
 }
 
 macro_rules! impl_shift {

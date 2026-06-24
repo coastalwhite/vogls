@@ -882,6 +882,7 @@ pub fn create_nba_process(
             size,
             initialize: None,
             flags: SignalFlags::EMPTY,
+            mode: gl.logic_mode,
             origin,
         })
     });
@@ -890,6 +891,7 @@ pub fn create_nba_process(
         size,
         initialize: None,
         flags: SignalFlags::EMPTY,
+        mode: gl.logic_mode,
         origin,
     });
 

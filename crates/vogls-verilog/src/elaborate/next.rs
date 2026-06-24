@@ -145,6 +145,7 @@ pub fn elaborate<'a, 'b>(
         size: SCALAR_VSIZE,
         initialize: None,
         flags: SignalFlags::EMPTY,
+        mode: gl.logic_mode,
         origin: TokenRange { start: 0, end: 0 },
     });
     gl.signals.remove(dummy_signal);

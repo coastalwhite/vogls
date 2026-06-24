@@ -11,15 +11,15 @@ pub fn drive(
     f: &mut impl io::Write,
     signals: &[HeapRef],
     dst: RtSignalKey,
-    src: CVar,
+    src: CExpr,
     partial: Option<CExpr>,
 ) -> io::Result<()> {
-    let s = src.ident;
+    let s = src;
     let dst_ref = signals[dst.as_usize()];
     let Some(offset) = partial else {
         let dst_wi = dst_ref.offset.bit_offset / 64;
         write!(f, "{INDENT}if (")?;
-        match src.ty.mode {
+        match src.ty().mode {
             LogicMode::TwoValue => {
                 let w = dst.as_u64() / 64;
                 let i = dst.as_u64() % 64;
@@ -30,13 +30,13 @@ pub fn drive(
             }
             LogicMode::FourValue => {}
         }
-        match src.ty.array_size() {
+        match src.ty().array_size() {
             None => {
-                let s_elem_ty = src.ty.element_type();
+                let s_elem_ty = src.ty().element_type();
                 let dst_bi = dst_ref.offset.bit_offset % 64;
                 let mask = super::mask(
-                    src.ty.size.get()
-                        * if src.ty.mode == LogicMode::FourValue {
+                    src.ty().size.get()
+                        * if src.ty().mode == LogicMode::FourValue {
                             2
                         } else {
                             1
@@ -70,13 +70,13 @@ pub fn drive(
 
     let dst_ty = CType {
         size: dst_ref.size,
-        mode: src.ty.mode,
+        mode: src.ty().mode,
     };
     let current = CVar {
         ident: CIdent::Scoped(0),
         ty: CType {
-            size: src.ty.size,
-            mode: src.ty.mode,
+            size: src.ty().size,
+            mode: src.ty().mode,
         },
     };
     super::write_cvar(f, current)?;
@@ -101,7 +101,7 @@ pub fn drive(
     };
     super::slice::slice_with(f, current, s1.into(), offset.into(), false)?;
     let c = current.ident;
-    match src.ty.array_size() {
+    match src.ty().array_size() {
         None => write!(f, "{INDENT}if ({s} != {c}")?,
         Some(arr_size) => write!(
             f,
@@ -120,7 +120,7 @@ pub fn drive(
     };
 
     let d_size = dst_ty.size;
-    let s_size = src.ty.size;
+    let s_size = src.ty().size;
     match (dst_ty.mode, dst_ty.array_size()) {
         (M::TwoValue, None) => {
             f.write_all(INDENT.as_bytes())?;
@@ -136,11 +136,11 @@ pub fn drive(
                 "{INDENT}{INDENT}{c} = tv_s_set({c}, {s}, {d_size}, ({offset}{o_s}), {s_size});"
             )?;
             f.write_all(INDENT.as_bytes())?;
-            super::store(f, dst_ref.offset, current)?;
+            super::store(f, dst_ref.offset, current.into())?;
         }
         (M::TwoValue, Some(_)) => {
             let d_word = dst_ref.offset.bit_offset / 64;
-            if src.ty.is_array() {
+            if src.ty().is_array() {
                 writeln!(
                     f,
                     "{INDENT}{INDENT}tv_l_set(heap+{d_word}, {s}, {d_size}, ({offset}{o_s}), {s_size});",
@@ -168,13 +168,13 @@ pub fn drive(
                 "{INDENT}{INDENT}{c} = tv_s_set({c} & 0x{d_mask:x}, {s} & 0x{s_mask:x}, {d_size}, ({offset}{o_s}), {s_size}) | (tv_s_set({c} >> {d_size}, {s} >> {s_size}, {d_size}, ({offset}{o_s}), {s_size}) << {d_size});"
             )?;
             f.write_all(INDENT.as_bytes())?;
-            super::store(f, dst_ref.offset, current)?;
+            super::store(f, dst_ref.offset, current.into())?;
             f.write_all(INDENT.as_bytes())?;
         }
         (M::FourValue, Some(dst_arr_size)) => {
             let dst_words = dst_arr_size / 2;
             let d_word = dst_ref.offset.bit_offset / 64;
-            match src.ty.array_size() {
+            match src.ty().array_size() {
                 None => {
                     let s_mask = super::mask(s_size.get());
                     writeln!(

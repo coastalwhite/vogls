@@ -1,5 +1,5 @@
 use vogls_frontend::symbol_table::SymbolId;
-use vogls_ir::{BasicBlockBuilder, Bits, SCALAR_VSIZE, TIME_VSIZE, Time, VariableKey};
+use vogls_ir::{BasicBlockBuilder, Bits, LogicMode, SCALAR_VSIZE, TIME_VSIZE, Time, VariableKey};
 use vogls_utils::OrderedSet;
 
 use crate::ast::expr::Expr;
@@ -136,7 +136,7 @@ pub fn lower<'a>(
                         &mut mctx.diagnostics,
                     )?;
                     let signal = net.net.probe_signal();
-                    let dummy = mctx.gl().vars.insert(SCALAR_VSIZE);
+                    let dummy = mctx.gl().vars.insert(LogicMode::FourValue, SCALAR_VSIZE);
                     conditions.push((condition, dummy, net, *expr));
                     signals.push(signal);
                 }

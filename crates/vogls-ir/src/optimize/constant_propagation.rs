@@ -270,11 +270,13 @@ pub fn constant_propagation(
                         }
                     }
                 }
-                gl.bbs[bb_key].terminator.for_each_non_temporal_bb(|bb_key| {
-                    if scratch_seen.insert(bb_key) {
-                        scratch_stack.push(bb_key);
-                    }
-                });
+                gl.bbs[bb_key]
+                    .terminator
+                    .for_each_non_temporal_bb(|bb_key| {
+                        if scratch_seen.insert(bb_key) {
+                            scratch_stack.push(bb_key);
+                        }
+                    });
             }
             scratch_mfr.clear();
         }
@@ -710,7 +712,10 @@ fn constant_propagate_instruction(
             }
             signals[*dst].initialize = Some(value);
 
-            *i = I::Constant(vars.insert(SCALAR_VSIZE), Bits::new_unknown(SCALAR_VSIZE));
+            *i = I::Constant(
+                vars.insert(LogicMode::FourValue, SCALAR_VSIZE),
+                Bits::new_unknown(SCALAR_VSIZE),
+            );
         }
         I::Phi(dst, srcs) => {
             assert!(!srcs.is_empty());

@@ -316,6 +316,7 @@ fn new_net(
         size,
         initialize: initialize.map(|i| i.into_bits()),
         flags: SignalFlags::EMPTY,
+        mode: gl.logic_mode,
         origin,
     });
 

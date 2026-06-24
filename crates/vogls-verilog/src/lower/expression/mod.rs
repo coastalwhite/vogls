@@ -110,7 +110,7 @@ pub fn lower_expr<'a>(
                     }
                     O::SignPlus => (child, ty),
                     O::SignMinus => (
-                        builder.minus_revconstant(
+                        builder.revminus_constant(
                             mctx.gl(),
                             child,
                             Bits::new_zeroed(ty.force_net_width()),

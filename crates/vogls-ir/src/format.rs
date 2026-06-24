@@ -85,6 +85,7 @@ impl Signal {
                     size,
                     flags: _,
                     initialize,
+                    mode: _,
                     origin: _,
                 } = self.0;
                 write!(f, "signal {name}: {size}")?;

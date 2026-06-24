@@ -5,9 +5,10 @@ use crate::form::check_ir_form;
 use crate::token_range::TokenRange;
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryImmOpSimplification,
-    BinaryOp, Bits, GlobalContext, INTEGER_VSIZE, Instruction, IntrinsicOp, Process, ProcessKey,
-    ProcessKind, ResizeOp, SCALAR_VSIZE, SignalFlags, SignalKey, TIME_VSIZE, TemporalRegionKey,
-    Time, UnaryOp, VSIZE_32, VSIZE_64, VariableKey, VectorSize,
+    BinaryOp, Bits, GlobalContext, INTEGER_VSIZE, Instruction, IntrinsicOp, LogicMode, Process,
+    ProcessKey, ProcessKind, ResizeOp, ResizeOpSimplification, SCALAR_VSIZE, SignalFlags,
+    SignalKey, TIME_VSIZE, TemporalRegionKey, Time, UnaryOp, UnaryOpSimplification, VSIZE_32,
+    VSIZE_64, VariableKey, VectorSize,
 };
 
 #[must_use]
@@ -230,6 +231,7 @@ impl ProcessBuilder {
                         let signal = gl.signals.insert(crate::Signal {
                             name: format!("TEMPORAL_VAR/{}", gl.signals.len()),
                             size,
+                            mode: v.mode(),
                             initialize: None,
                             flags: SignalFlags::EMPTY,
                             origin: TokenRange::default(),
@@ -240,7 +242,7 @@ impl ProcessBuilder {
                     Entry::Occupied(entry) => *entry.get(),
                 };
 
-                let dst = gl.vars.insert(size);
+                let dst = gl.vars.insert(v.mode(), size);
                 instrs.push(Instruction::Probe(dst, signal, 0));
                 var_remap.insert(v, dst);
             }
@@ -295,8 +297,37 @@ impl BranchRef {
     }
 }
 
-macro_rules! arithmetic_op {
-    ($(($name:ident, $op:ident),)+) => {
+macro_rules! unary_ops {
+    ($(($name:ident, $op:ident))+) => {
+        $(
+        pub fn $name(
+            &mut self,
+            gl: &mut GlobalContext,
+            src: VariableKey,
+        ) -> VariableKey {
+            self.unary_op(gl, src, UnaryOp::$op)
+        }
+        )+
+    };
+}
+
+macro_rules! resize_ops {
+    ($(($name:ident, $op:ident))+) => {
+        $(
+        pub fn $name(
+            &mut self,
+            gl: &mut GlobalContext,
+            src: VariableKey,
+            size: VectorSize,
+        ) -> VariableKey {
+            self.resize_op(gl, size, src, ResizeOp::$op)
+        }
+        )+
+    };
+}
+
+macro_rules! bin_ops {
+    ($(($name:ident, $op:ident))+) => {
         $(
         pub fn $name(
             &mut self,
@@ -304,10 +335,25 @@ macro_rules! arithmetic_op {
             lhs: VariableKey,
             rhs: VariableKey,
         ) -> VariableKey {
-            self.bin_arithmetic(gl, lhs, rhs, BinaryOp::$op)
+            self.bin_op(gl, lhs, rhs, BinaryOp::$op)
         }
         )+
-    }
+    };
+}
+
+macro_rules! bin_imm_ops {
+    ($(($name:ident, $op:ident))+) => {
+        $(
+        pub fn $name(
+            &mut self,
+            gl: &mut GlobalContext,
+            src: VariableKey,
+            imm: Bits,
+        ) -> VariableKey {
+            self.bin_imm_op(gl, src, imm, BinaryImmOp::$op)
+        }
+        )+
+    };
 }
 
 impl BasicBlockBuilder {
@@ -361,8 +407,15 @@ impl BasicBlockBuilder {
         assert!(!srcs.is_empty());
         let (_, var) = srcs.first().unwrap();
         let size = gl.vars.size(*var);
+        let mode = srcs.iter().fold(LogicMode::TwoValue, |acc, (_, v)| {
+            if matches!((acc, v.mode()), (LogicMode::TwoValue, LogicMode::TwoValue)) {
+                LogicMode::TwoValue
+            } else {
+                LogicMode::FourValue
+            }
+        });
         assert!(srcs.iter().all(|(_, v)| size == gl.vars.size(*v)));
-        let dst = gl.vars.insert(size);
+        let dst = gl.vars.insert(mode, size);
         let offset = self.instrs.len();
         self.instrs.push(Instruction::Phi(dst, srcs));
         (dst, PhiRef(self.key(), offset))
@@ -413,160 +466,169 @@ impl BasicBlockBuilder {
     }
 
     pub fn constant(&mut self, gl: &mut GlobalContext, value: Bits) -> VariableKey {
-        let variable = gl.vars.insert(value.size());
+        let value = value.try_lower_mode();
+        let mode = value.mode();
+        let variable = gl.vars.insert(mode.into(), value.size());
         self.instrs.push(Instruction::Constant(variable, value));
         variable
     }
 
     pub fn constant_u32(&mut self, gl: &mut GlobalContext, value: u32) -> VariableKey {
-        let variable = gl.vars.insert(VSIZE_32);
+        let variable = gl.vars.insert(LogicMode::TwoValue, VSIZE_32);
         self.instrs
             .push(Instruction::Constant(variable, Bits::new_u32(value)));
         variable
     }
     pub fn constant_u64(&mut self, gl: &mut GlobalContext, value: u64) -> VariableKey {
-        let variable = gl.vars.insert(VSIZE_64);
+        let variable = gl.vars.insert(LogicMode::TwoValue, VSIZE_64);
         self.instrs
             .push(Instruction::Constant(variable, Bits::new_u64(value)));
         variable
     }
 
-    pub fn concat(
-        &mut self,
-        gl: &mut GlobalContext,
-        lhs: VariableKey,
-        rhs: VariableKey,
-    ) -> VariableKey {
-        let lhs_size = gl.vars.size(lhs);
-        let rhs_size = gl.vars.size(rhs);
-        let size = VectorSize::new(lhs_size.get() + rhs_size.get()).unwrap();
-        let dst = gl.vars.insert(size);
-        self.bin_op(gl, lhs, rhs, BinaryOp::Concat, dst);
-        dst
+    unary_ops! {
+        (binary_neg, Neg)
+        (reduce_or, ReduceOr)
+        (reduce_and, ReduceAnd)
+        (reduce_xor, ReduceXor)
+        (count_leading_zeros, LeadingZeros)
     }
 
-    pub fn binary_neg(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
-        let size = gl.vars.size(src);
-        let dst = gl.vars.insert(size);
-        self.unary_op(gl, src, UnaryOp::Neg, dst);
-        dst
+    resize_ops! {
+        (truncate, Truncate)
+        (zero_extend, ZeroExtend)
+        (sign_extend, SignExtend)
+    }
+
+    bin_ops! {
+        (max, Max)
+        (min, Min)
+        (and, And)
+        (or, Or)
+        (xor, Xor)
+        (plus, Add)
+        (minus, Sub)
+        (multiply, Multiply)
+        (divide, Divide)
+        (modulus, Modulus)
+        (power, Power)
+        (concat, Concat)
+        (posedge, Posedge)
+        (negedge, Negedge)
+        (copy_x, CopyX)
+        (copy_z, CopyZ)
+        (unsigned_le, UnsignedLessEqual)
+        (case_equals, CaseEquality)
+    }
+
+    bin_imm_ops! {
+        (max_constant, Max)
+        (min_constant, Min)
+        (and_constant, And)
+        (or_constant, Or)
+        (xor_constant, Xor)
+        (plus_constant, Add)
+        (minus_constant, Sub)
+        (revminus_constant, RevSub)
+        (multiply_constant, Multiply)
+        (divide_constant, Divide)
+        (revdivide_constant, RevDivide)
+        (modulus_constant, Modulus)
+        (revmodulus_constant, RevModulus)
+        (power_constant, Power)
+        (revpower_constant, RevPower)
+        (unsigned_le_constant, UnsignedLessEqual)
+        (unsigned_ge_constant, UnsignedGreaterEqual)
+        (case_equals_constant, CaseEquality)
     }
 
     pub fn logical_neg(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
-        let size = gl.vars.size(src);
-        let src = match size.get() {
-            1 => src,
-            _ => self.reduce_or(gl, src),
-        };
-        let dst = gl.vars.insert(SCALAR_VSIZE);
-        self.unary_op(gl, src, UnaryOp::Neg, dst);
-        dst
+        let src = self.reduce_or(gl, src);
+        self.binary_neg(gl, src)
     }
 
     pub fn unary_op(
         &mut self,
-        _gl: &mut GlobalContext,
+        gl: &mut GlobalContext,
         src: VariableKey,
         op: UnaryOp,
-        dst: VariableKey,
-    ) {
-        self.instrs.push(Instruction::Unary(dst, op, src));
+    ) -> VariableKey {
+        let src_size = gl.vars.size(src);
+        let dst_size = op.output_size(src_size);
+        let mode = op.output_mode(src.mode());
+        match op.simplify(src_size, mode) {
+            UnaryOpSimplification::Keep => {
+                let dst = gl.vars.insert(mode, dst_size);
+                self.instrs.push(Instruction::Unary(dst, op, src));
+                dst
+            }
+            UnaryOpSimplification::Source => src,
+        }
     }
     pub fn resize_op(
         &mut self,
-        _gl: &mut GlobalContext,
-        dst: VariableKey,
-        op: ResizeOp,
+        gl: &mut GlobalContext,
+        dst: VectorSize,
         src: VariableKey,
-    ) {
-        self.instrs.push(Instruction::Resize(dst, op, src));
+        op: ResizeOp,
+    ) -> VariableKey {
+        let size = gl.vars.size(src);
+        let mode = op.output_mode(src.mode());
+        match op.simplify(dst, size, mode) {
+            ResizeOpSimplification::Keep => {
+                let dst = gl.vars.insert(mode, dst);
+                self.instrs.push(Instruction::Resize(dst, op, src));
+                dst
+            }
+            ResizeOpSimplification::Source => src,
+        }
     }
     pub fn bin_op(
         &mut self,
-        _gl: &mut GlobalContext,
+        gl: &mut GlobalContext,
         lhs: VariableKey,
         rhs: VariableKey,
         op: BinaryOp,
-        dst: VariableKey,
-    ) {
+    ) -> VariableKey {
+        let lhs_size = gl.vars.size(lhs);
+        let rhs_size = gl.vars.size(rhs);
+        let Some(size) = op.output_size(lhs_size, rhs_size) else {
+            panic!("Invalid size combination for {op:?}: {lhs_size}, {rhs_size}");
+        };
+        let mode = op.output_mode(lhs.mode(), rhs.mode());
+        let dst = gl.vars.insert(mode, size);
         self.instrs.push(Instruction::Binary(dst, op, lhs, rhs));
+        dst
     }
     pub fn bin_imm_op(
         &mut self,
+        gl: &mut GlobalContext,
         src: VariableKey,
         imm: Bits,
         op: BinaryImmOp,
-        dst: &mut VariableKey,
-    ) {
-        match op.simplify(*dst, src, &imm) {
+    ) -> VariableKey {
+        let imm = imm.try_lower_mode();
+        let Some(size) = op.output_size(gl.vars.size(src), imm.size()) else {
+            panic!("Invalid size combination");
+        };
+        let mode = op.output_mode(src.mode(), imm.mode().into());
+        let mut dst = gl.vars.insert(mode, size);
+        match op.simplify(dst, src, &imm) {
             BinaryImmOpSimplification::Keep => {
-                self.instrs.push(Instruction::BinaryImm(*dst, op, src, imm))
+                self.instrs.push(Instruction::BinaryImm(dst, op, src, imm))
             }
-            BinaryImmOpSimplification::Source => *dst = src,
+            BinaryImmOpSimplification::Source => dst = src,
             BinaryImmOpSimplification::Immediate => {
-                self.instrs.push(Instruction::Constant(*dst, imm))
+                self.instrs.push(Instruction::Constant(dst, imm))
             }
             BinaryImmOpSimplification::Constant(bits) => {
-                self.instrs.push(Instruction::Constant(*dst, bits))
+                self.instrs.push(Instruction::Constant(dst, bits))
             }
             BinaryImmOpSimplification::Instruction(i) => self.instrs.push(i),
         }
-    }
-    fn copy_op(
-        &mut self,
-        gl: &mut GlobalContext,
-        lhs: VariableKey,
-        rhs: VariableKey,
-        op: BinaryOp,
-    ) -> VariableKey {
-        let lhs_size = gl.vars.size(lhs);
-        let rhs_size = gl.vars.size(rhs);
-        assert_eq!(lhs_size, rhs_size);
-        let dst = gl.vars.insert(lhs_size);
-        self.bin_op(gl, lhs, rhs, op, dst);
         dst
     }
 
-    pub fn bin_arithmetic(
-        &mut self,
-        gl: &mut GlobalContext,
-        lhs: VariableKey,
-        rhs: VariableKey,
-        op: BinaryOp,
-    ) -> VariableKey {
-        let lhs_size = gl.vars.size(lhs);
-        let rhs_size = gl.vars.size(rhs);
-        assert_eq!(lhs_size, rhs_size);
-        let dst = gl.vars.insert(lhs_size);
-        self.bin_op(gl, lhs, rhs, op, dst);
-        dst
-    }
-    pub fn bin_imm_arithmetic(
-        &mut self,
-        gl: &mut GlobalContext,
-        src: VariableKey,
-        imm: Bits,
-        op: BinaryImmOp,
-    ) -> VariableKey {
-        let size = gl.vars.size(src);
-        assert_eq!(size, imm.size());
-        let mut dst = gl.vars.insert(size);
-        self.bin_imm_op(src, imm, op, &mut dst);
-        dst
-    }
-
-    // Bitwise Operations
-    arithmetic_op! {
-        (and, And),
-        (or, Or),
-        (xor, Xor),
-        (plus, Add),
-        (minus, Sub),
-        (multiply, Multiply),
-        (divide, Divide),
-        (modulus, Modulus),
-        (power, Power),
-    }
     pub fn xnor(
         &mut self,
         gl: &mut GlobalContext,
@@ -596,260 +658,6 @@ impl BasicBlockBuilder {
         self.or(gl, lhs, rhs)
     }
 
-    // Bitwise Immediate Operations
-    pub fn and_constant(
-        &mut self,
-        gl: &mut GlobalContext,
-        src: VariableKey,
-        imm: Bits,
-    ) -> VariableKey {
-        assert_eq!(gl.vars.size(src), imm.size());
-        let num_special = imm.count_special();
-        if num_special == imm.size().get() {
-            return self.constant(gl, Bits::new_unknown(imm.size()));
-        }
-
-        let num_ones = imm.count_ones();
-        if num_ones == imm.size().get() {
-            return src;
-        } else if num_special == 0 && num_ones == 0 {
-            return self.constant(gl, imm);
-        }
-
-        self.bin_imm_arithmetic(gl, src, imm, BinaryImmOp::And)
-    }
-    pub fn or_constant(
-        &mut self,
-        gl: &mut GlobalContext,
-        src: VariableKey,
-        imm: Bits,
-    ) -> VariableKey {
-        assert_eq!(gl.vars.size(src), imm.size());
-        let num_special = imm.count_special();
-        if num_special == imm.size().get() {
-            return self.constant(gl, Bits::new_unknown(imm.size()));
-        }
-
-        let num_ones = imm.count_ones();
-        if num_ones == imm.size().get() {
-            return self.constant(gl, imm);
-        } else if num_special == 0 && num_ones == 0 {
-            return src;
-        }
-
-        self.bin_imm_arithmetic(gl, src, imm, BinaryImmOp::Or)
-    }
-    pub fn xor_constant(
-        &mut self,
-        gl: &mut GlobalContext,
-        src: VariableKey,
-        imm: Bits,
-    ) -> VariableKey {
-        assert_eq!(gl.vars.size(src), imm.size());
-        let num_special = imm.count_special();
-        if num_special == imm.size().get() {
-            return self.constant(gl, Bits::new_unknown(imm.size()));
-        }
-
-        let num_ones = imm.count_ones();
-        if num_ones == imm.size().get() {
-            return self.binary_neg(gl, src);
-        } else if num_special == 0 && num_ones == 0 {
-            return src;
-        }
-
-        self.bin_imm_arithmetic(gl, src, imm, BinaryImmOp::Xor)
-    }
-    pub fn plus_constant(
-        &mut self,
-        gl: &mut GlobalContext,
-        src: VariableKey,
-        imm: Bits,
-    ) -> VariableKey {
-        assert_eq!(gl.vars.size(src), imm.size());
-        if imm.contains_special() {
-            return self.constant(gl, Bits::new_unknown(imm.size()));
-        }
-
-        if imm.eq_zero() {
-            return src;
-        }
-
-        self.bin_imm_arithmetic(gl, src, imm, BinaryImmOp::Add)
-    }
-    pub fn minus_constant(
-        &mut self,
-        gl: &mut GlobalContext,
-        src: VariableKey,
-        imm: Bits,
-    ) -> VariableKey {
-        assert_eq!(gl.vars.size(src), imm.size());
-        if imm.contains_special() {
-            return self.constant(gl, Bits::new_unknown(imm.size()));
-        }
-
-        if imm.eq_zero() {
-            return src;
-        }
-
-        self.bin_imm_arithmetic(gl, src, imm, BinaryImmOp::Sub)
-    }
-    pub fn multiply_constant(
-        &mut self,
-        gl: &mut GlobalContext,
-        src: VariableKey,
-        imm: Bits,
-    ) -> VariableKey {
-        assert_eq!(gl.vars.size(src), imm.size());
-        if imm.contains_special() {
-            return self.constant(gl, Bits::new_unknown(imm.size()));
-        }
-
-        if imm.eq_zero() {
-            return self.constant(gl, Bits::new_zeroed(imm.size()));
-        } else if imm.eq_one() {
-            return src;
-        }
-
-        self.bin_imm_arithmetic(gl, src, imm, BinaryImmOp::Multiply)
-    }
-    pub fn power_constant(
-        &mut self,
-        gl: &mut GlobalContext,
-        src: VariableKey,
-        imm: Bits,
-    ) -> VariableKey {
-        assert_eq!(gl.vars.size(src), imm.size());
-        if imm.contains_special() {
-            return self.constant(gl, Bits::new_unknown(imm.size()));
-        }
-
-        if imm.eq_zero() {
-            return self.constant(gl, Bits::new_u32(1).truncate_or_zero_extend(imm.size()));
-        } else if imm.eq_one() {
-            return src;
-        }
-
-        self.bin_imm_arithmetic(gl, src, imm, BinaryImmOp::Power)
-    }
-    pub fn divide_constant(
-        &mut self,
-        gl: &mut GlobalContext,
-        src: VariableKey,
-        imm: Bits,
-    ) -> VariableKey {
-        assert_eq!(gl.vars.size(src), imm.size());
-        if imm.contains_special() {
-            return self.constant(gl, Bits::new_unknown(imm.size()));
-        }
-
-        if imm.eq_zero() {
-            return self.constant(gl, Bits::new_ones(imm.size()));
-        } else if imm.eq_one() {
-            return src;
-        }
-
-        self.bin_imm_arithmetic(gl, src, imm, BinaryImmOp::Power)
-    }
-    pub fn modulus_constant(
-        &mut self,
-        gl: &mut GlobalContext,
-        src: VariableKey,
-        imm: Bits,
-    ) -> VariableKey {
-        assert_eq!(gl.vars.size(src), imm.size());
-        if imm.contains_special() {
-            return self.constant(gl, Bits::new_unknown(imm.size()));
-        }
-
-        if imm.eq_zero() {
-            return self.constant(gl, Bits::new_ones(imm.size()));
-        } else if imm.eq_one() {
-            return self.constant(gl, Bits::new_zeroed(imm.size()));
-        }
-
-        self.bin_imm_arithmetic(gl, src, imm, BinaryImmOp::Power)
-    }
-    pub fn revminus_constant(
-        &mut self,
-        gl: &mut GlobalContext,
-        src: VariableKey,
-        imm: Bits,
-    ) -> VariableKey {
-        assert_eq!(gl.vars.size(src), imm.size());
-        if imm.contains_special() {
-            return self.constant(gl, Bits::new_unknown(imm.size()));
-        }
-
-        self.bin_imm_arithmetic(gl, src, imm, BinaryImmOp::RevSub)
-    }
-    pub fn revpower_constant(
-        &mut self,
-        gl: &mut GlobalContext,
-        src: VariableKey,
-        imm: Bits,
-    ) -> VariableKey {
-        assert_eq!(gl.vars.size(src), imm.size());
-        if imm.contains_special() {
-            return self.constant(gl, Bits::new_unknown(imm.size()));
-        }
-
-        if imm.eq_one() {
-            return self.constant(gl, imm);
-        }
-
-        self.bin_imm_arithmetic(gl, src, imm, BinaryImmOp::RevPower)
-    }
-    pub fn revdivide_constant(
-        &mut self,
-        gl: &mut GlobalContext,
-        src: VariableKey,
-        imm: Bits,
-    ) -> VariableKey {
-        assert_eq!(gl.vars.size(src), imm.size());
-        if imm.contains_special() {
-            return self.constant(gl, Bits::new_unknown(imm.size()));
-        }
-
-        self.bin_imm_arithmetic(gl, src, imm, BinaryImmOp::RevDivide)
-    }
-    pub fn revmodulus_constant(
-        &mut self,
-        gl: &mut GlobalContext,
-        src: VariableKey,
-        imm: Bits,
-    ) -> VariableKey {
-        assert_eq!(gl.vars.size(src), imm.size());
-        if imm.contains_special() {
-            return self.constant(gl, Bits::new_unknown(imm.size()));
-        }
-
-        self.bin_imm_arithmetic(gl, src, imm, BinaryImmOp::RevModulus)
-    }
-
-    pub fn copy_x(
-        &mut self,
-        gl: &mut GlobalContext,
-        lhs: VariableKey,
-        rhs: VariableKey,
-    ) -> VariableKey {
-        self.copy_op(gl, lhs, rhs, BinaryOp::CopyX)
-    }
-    pub fn copy_z(
-        &mut self,
-        gl: &mut GlobalContext,
-        lhs: VariableKey,
-        rhs: VariableKey,
-    ) -> VariableKey {
-        self.copy_op(gl, lhs, rhs, BinaryOp::CopyZ)
-    }
-
-    pub fn count_leading_zeros(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
-        let dst = gl.vars.insert(VSIZE_32);
-        self.unary_op(gl, src, UnaryOp::LeadingZeros, dst);
-        dst
-    }
-
     pub fn select_bit(
         &mut self,
         gl: &mut GlobalContext,
@@ -866,21 +674,6 @@ impl BasicBlockBuilder {
     ) -> VariableKey {
         self.slice_constant(gl, src, idx, SCALAR_VSIZE)
     }
-    pub fn truncate(
-        &mut self,
-        gl: &mut GlobalContext,
-        src: VariableKey,
-        width: VectorSize,
-    ) -> VariableKey {
-        let size = gl.vars.size(src);
-        if size == width {
-            return src;
-        }
-
-        let dst = gl.vars.insert(width);
-        self.resize_op(gl, dst, ResizeOp::Truncate, src);
-        dst
-    }
     pub fn slice_constant(
         &mut self,
         gl: &mut GlobalContext,
@@ -896,7 +689,7 @@ impl BasicBlockBuilder {
         if offset >= src_size.get() {
             return self.constant(gl, Bits::new_unknown(width));
         }
-        let dst = gl.vars.insert(width);
+        let dst = gl.vars.insert(src.mode(), width);
         self.instrs.push(Instruction::SliceImm(dst, src, offset));
         if offset <= src_size.get() - width.get() {
             return dst;
@@ -920,7 +713,8 @@ impl BasicBlockBuilder {
     ) -> VariableKey {
         assert_eq!(gl.vars.size(offset), INTEGER_VSIZE);
         assert!(gl.vars.size(src) >= width);
-        let dst = gl.vars.insert(width);
+        let mode = src.mode().max(offset.mode());
+        let dst = gl.vars.insert(mode, width);
         self.instrs.push(Instruction::Slice(dst, src, offset));
         dst
     }
@@ -942,17 +736,6 @@ impl BasicBlockBuilder {
     ) -> VariableKey {
         let le = self.unsigned_le(gl, lhs, rhs);
         self.logical_neg(gl, le)
-    }
-    pub fn unsigned_le(
-        &mut self,
-        gl: &mut GlobalContext,
-        lhs: VariableKey,
-        rhs: VariableKey,
-    ) -> VariableKey {
-        assert_eq!(gl.vars.size(lhs), gl.vars.size(rhs));
-        let dst = gl.vars.insert(SCALAR_VSIZE);
-        self.bin_op(gl, lhs, rhs, BinaryOp::UnsignedLessEqual, dst);
-        dst
     }
     pub fn unsigned_ge(
         &mut self,
@@ -1044,17 +827,6 @@ impl BasicBlockBuilder {
         let no_equals = self.reduce_or(gl, xor);
         no_equals
     }
-    pub fn case_equals(
-        &mut self,
-        gl: &mut GlobalContext,
-        lhs: VariableKey,
-        rhs: VariableKey,
-    ) -> VariableKey {
-        assert_eq!(gl.vars.size(lhs), gl.vars.size(rhs));
-        let dst = gl.vars.insert(SCALAR_VSIZE);
-        self.bin_op(gl, lhs, rhs, BinaryOp::CaseEquality, dst);
-        dst
-    }
     pub fn not_case_equals(
         &mut self,
         gl: &mut GlobalContext,
@@ -1065,48 +837,6 @@ impl BasicBlockBuilder {
         self.logical_neg(gl, case_equals)
     }
 
-    pub fn case_equals_constant(
-        &mut self,
-        gl: &mut GlobalContext,
-        lhs: VariableKey,
-        imm: Bits,
-    ) -> VariableKey {
-        assert_eq!(gl.vars.size(lhs), imm.size());
-        let mut dst = gl.vars.insert(SCALAR_VSIZE);
-        self.bin_imm_op(lhs, imm, BinaryImmOp::CaseEquality, &mut dst);
-        dst
-    }
-
-    pub fn reduce_xor(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
-        let size = gl.vars.size(src);
-        if size == SCALAR_VSIZE {
-            return src;
-        }
-
-        let dst = gl.vars.insert(SCALAR_VSIZE);
-        self.unary_op(gl, src, UnaryOp::ReduceXor, dst);
-        dst
-    }
-    pub fn reduce_or(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
-        let size = gl.vars.size(src);
-        if size == SCALAR_VSIZE {
-            return src;
-        }
-
-        let dst = gl.vars.insert(SCALAR_VSIZE);
-        self.unary_op(gl, src, UnaryOp::ReduceOr, dst);
-        dst
-    }
-    pub fn reduce_and(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
-        let size = gl.vars.size(src);
-        if size == SCALAR_VSIZE {
-            return src;
-        }
-
-        let dst = gl.vars.insert(SCALAR_VSIZE);
-        self.unary_op(gl, src, UnaryOp::ReduceAnd, dst);
-        dst
-    }
     pub fn reduce_xnor(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
         let xor = self.reduce_xor(gl, src);
         self.logical_neg(gl, xor)
@@ -1160,8 +890,9 @@ impl BasicBlockBuilder {
     }
 
     pub fn probe(&mut self, gl: &mut GlobalContext, signal: SignalKey) -> VariableKey {
-        let size = gl.signals.get(signal).unwrap().size;
-        let dst = gl.vars.insert(size);
+        let s = &gl.signals[signal];
+        let size = s.size;
+        let dst = gl.vars.insert(s.mode, size);
         self.instrs.push(Instruction::Probe(dst, signal, 0));
         dst
     }
@@ -1173,7 +904,9 @@ impl BasicBlockBuilder {
         offset: VariableKey,
         width: VectorSize,
     ) -> VariableKey {
-        let dst = gl.vars.insert(width);
+        let s = &gl.signals[signal];
+        let mode = s.mode.max(offset.mode());
+        let dst = gl.vars.insert(mode, width);
         self.instrs
             .push(Instruction::ProbeSlice(dst, signal, offset));
         dst
@@ -1186,8 +919,9 @@ impl BasicBlockBuilder {
         offset: u32,
         width: VectorSize,
     ) -> VariableKey {
-        let src_size = gl.signals[signal].size;
-        let dst = gl.vars.insert(width);
+        let s = &gl.signals[signal];
+        let src_size = s.size;
+        let dst = gl.vars.insert(s.mode, width);
         self.instrs.push(Instruction::Probe(dst, signal, offset));
         if offset <= src_size.get() - width.get() {
             return dst;
@@ -1348,14 +1082,14 @@ impl BasicBlockBuilder {
         op: IntrinsicOp,
         args: Box<[VariableKey]>,
     ) -> VariableKey {
-        let dst = gl.vars.insert(SCALAR_VSIZE);
+        let dst = gl.vars.insert(LogicMode::TwoValue, SCALAR_VSIZE);
         self.instrs
             .push(Instruction::Intrinsic(dst, Box::new(op), args));
         dst
     }
 
     pub fn time(&mut self, gl: &mut GlobalContext) -> VariableKey {
-        let dst = gl.vars.insert(TIME_VSIZE);
+        let dst = gl.vars.insert(LogicMode::TwoValue, TIME_VSIZE);
         self.instrs.push(Instruction::Intrinsic(
             dst,
             Box::new(IntrinsicOp::Time),
@@ -1364,43 +1098,12 @@ impl BasicBlockBuilder {
         dst
     }
     pub fn random(&mut self, gl: &mut GlobalContext) -> VariableKey {
-        let dst = gl.vars.insert(INTEGER_VSIZE);
+        let dst = gl.vars.insert(LogicMode::TwoValue, INTEGER_VSIZE);
         self.instrs.push(Instruction::Intrinsic(
             dst,
             Box::new(IntrinsicOp::Random),
             Default::default(),
         ));
-        dst
-    }
-
-    pub fn zero_extend(
-        &mut self,
-        gl: &mut GlobalContext,
-        src: VariableKey,
-        new_size: VectorSize,
-    ) -> VariableKey {
-        let size = gl.vars.size(src);
-        if size == new_size {
-            return src;
-        }
-
-        let dst = gl.vars.insert(new_size);
-        self.resize_op(gl, dst, ResizeOp::ZeroExtend, src);
-        dst
-    }
-    pub fn sign_extend(
-        &mut self,
-        gl: &mut GlobalContext,
-        src: VariableKey,
-        new_size: VectorSize,
-    ) -> VariableKey {
-        let size = gl.vars.size(src);
-        if size == new_size {
-            return src;
-        }
-
-        let dst = gl.vars.insert(new_size);
-        self.resize_op(gl, dst, ResizeOp::SignExtend, src);
         dst
     }
 
@@ -1413,7 +1116,8 @@ impl BasicBlockBuilder {
     ) -> VariableKey {
         let lhs_size = gl.vars.size(lhs);
         assert_eq!(gl.vars.size(rhs), INTEGER_VSIZE);
-        let dst = gl.vars.insert(lhs_size);
+        let mode = op.output_mode(lhs.mode(), rhs.mode());
+        let dst = gl.vars.insert(mode, lhs_size);
         self.instrs.push(Instruction::Binary(dst, op, lhs, rhs));
         dst
     }
@@ -1448,27 +1152,11 @@ impl BasicBlockBuilder {
     }
 
     pub fn lupdt(&mut self, gl: &mut GlobalContext, signal: SignalKey) -> VariableKey {
-        let dst = gl.vars.insert(TIME_VSIZE);
+        let dst = gl.vars.insert(LogicMode::TwoValue, TIME_VSIZE);
         self.instrs.push(Instruction::LastUpdateTime(dst, signal));
         dst
     }
 
-    pub fn min(
-        &mut self,
-        gl: &mut GlobalContext,
-        lhs: VariableKey,
-        rhs: VariableKey,
-    ) -> VariableKey {
-        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::Min)
-    }
-    pub fn max(
-        &mut self,
-        gl: &mut GlobalContext,
-        lhs: VariableKey,
-        rhs: VariableKey,
-    ) -> VariableKey {
-        self.bin_arithmetic(gl, lhs, rhs, BinaryOp::Max)
-    }
     pub fn select(
         &mut self,
         gl: &mut GlobalContext,
@@ -1479,45 +1167,11 @@ impl BasicBlockBuilder {
         let size = gl.vars.size(truthy);
         assert_eq!(size, gl.vars.size(falsy));
         assert_eq!(SCALAR_VSIZE, gl.vars.size(select));
-        let dst = gl.vars.insert(size);
+        let mode = select.mode().max(truthy.mode()).max(falsy.mode());
+        let dst = gl.vars.insert(mode, size);
         self.instrs
             .push(Instruction::Select(dst, select, truthy, falsy));
         dst
-    }
-
-    pub fn posedge(
-        &mut self,
-        gl: &mut GlobalContext,
-        before: VariableKey,
-        after: VariableKey,
-    ) -> VariableKey {
-        assert_eq!(gl.vars.size(before), SCALAR_VSIZE);
-        assert_eq!(gl.vars.size(after), SCALAR_VSIZE);
-        let dst = gl.vars.insert(SCALAR_VSIZE);
-        self.bin_op(gl, before, after, BinaryOp::Posedge, dst);
-        dst
-    }
-    pub fn negedge(
-        &mut self,
-        gl: &mut GlobalContext,
-        before: VariableKey,
-        after: VariableKey,
-    ) -> VariableKey {
-        assert_eq!(gl.vars.size(before), SCALAR_VSIZE);
-        assert_eq!(gl.vars.size(after), SCALAR_VSIZE);
-        let dst = gl.vars.insert(SCALAR_VSIZE);
-        self.bin_op(gl, before, after, BinaryOp::Negedge, dst);
-        dst
-    }
-
-    pub fn minus_revconstant(
-        &mut self,
-        gl: &mut GlobalContext,
-        src: VariableKey,
-        constant: Bits,
-    ) -> VariableKey {
-        let constant = self.constant(gl, constant);
-        self.minus(gl, constant, src)
     }
 
     pub fn rev_imm_slice_x(

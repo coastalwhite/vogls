@@ -2,21 +2,21 @@ use std::io;
 
 use vogls_ir::{LogicMode, SCALAR_VSIZE};
 
-use crate::{CVar, INDENT, mask};
+use crate::{mask, CExpr, INDENT};
 
-pub fn cgc_negate(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Result<()> {
-    assert_eq!(dst.ty.mode, src.ty.mode);
-    assert_eq!(dst.ty.size, src.ty.size);
+pub fn cgc_negate(f: &mut impl io::Write, dst: CExpr, src: CExpr) -> io::Result<()> {
+    assert_eq!(dst.ty().mode, src.ty().mode);
+    assert_eq!(dst.ty().size, src.ty().size);
 
-    let size = dst.ty.size;
+    let size = dst.ty().size;
     let msbs_mask = if size.get() % 64 == 0 {
         u64::MAX
     } else {
-        (1u64 << (dst.ty.size.get() % 64)) - 1
+        (1u64 << (dst.ty().size.get() % 64)) - 1
     };
 
-    let (d, s) = (dst.ident, src.ident);
-    match (dst.ty.mode, dst.ty.array_size()) {
+    let (d, s) = (dst, src);
+    match (dst.ty().mode, dst.ty().array_size()) {
         (LogicMode::TwoValue, None) => writeln!(f, "{INDENT}{d} = {s} ^ 0x{msbs_mask:x};")?,
         (LogicMode::TwoValue, Some(arr_size)) => {
             writeln!(
@@ -35,7 +35,7 @@ pub fn cgc_negate(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Result<()
             writeln!(
                 f,
                 "{INDENT}{d} = ({s} & 0x{msbs_mask:x}) | ((({s} << {size}) & ~{s}) & 0x{mask:x});",
-                mask = mask(src.ty.size.get() * 2)
+                mask = mask(src.ty().size.get() * 2)
             )?;
         }
         (LogicMode::FourValue, Some(arr_size)) => {
@@ -54,12 +54,12 @@ pub fn cgc_negate(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Result<()
     Ok(())
 }
 
-pub fn cgc_reduce_or(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Result<()> {
-    assert_eq!(dst.ty.mode, src.ty.mode);
-    assert_eq!(dst.ty.size, SCALAR_VSIZE);
+pub fn cgc_reduce_or(f: &mut impl io::Write, dst: CExpr, src: CExpr) -> io::Result<()> {
+    assert_eq!(dst.ty().mode, src.ty().mode);
+    assert_eq!(dst.ty().size, SCALAR_VSIZE);
 
-    let (d, s) = (dst.ident, src.ident);
-    match (dst.ty.mode, src.ty.array_size()) {
+    let (d, s) = (dst, src);
+    match (dst.ty().mode, src.ty().array_size()) {
         (LogicMode::TwoValue, None) => writeln!(f, "{INDENT}{d} = (uint8_t)({s} != 0);")?,
         (LogicMode::TwoValue, Some(arr_size)) => {
             writeln!(
@@ -77,8 +77,8 @@ pub fn cgc_reduce_or(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Result
         // z0 = (spc & value) != 0
         // z1 = (spc == mask) | z0
         (LogicMode::FourValue, None) => {
-            let size = src.ty.size;
-            let spc_mask = mask(src.ty.size.get());
+            let size = src.ty().size;
+            let spc_mask = mask(src.ty().size.get());
             writeln!(f, "{INDENT}{{")?;
             writeln!(
                 f,
@@ -96,7 +96,7 @@ pub fn cgc_reduce_or(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Result
             let num_words_m_1 = num_words - 1;
             writeln!(f, "{INDENT}{{")?;
             writeln!(f, "{INDENT}{INDENT}uint8_t z0 = 0, z1 = 1;")?;
-            let num_words_loop = if src.ty.size.get() % 64 == 0 {
+            let num_words_loop = if src.ty().size.get() % 64 == 0 {
                 num_words
             } else {
                 num_words - 1
@@ -107,9 +107,9 @@ pub fn cgc_reduce_or(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Result
                     "{INDENT}{INDENT}for (int i = 0; i < {num_words_loop}; ++i) {{ z0 |= ({s}[i] & {s}[{num_words}+i]) != 0; z1 &= ~{s}[i] == 0; }}"
                 )?;
             }
-            if src.ty.size.get() % 64 != 0 {
+            if src.ty().size.get() % 64 != 0 {
                 let last_i = arr_size - 1;
-                let mask = mask(src.ty.size.get() % 64);
+                let mask = mask(src.ty().size.get() % 64);
                 writeln!(
                     f,
                     "{INDENT}{INDENT}z0 |= ({s}[{num_words_m_1}] & {s}[{last_i}]) != 0;"
@@ -128,21 +128,21 @@ pub fn cgc_reduce_or(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Result
     Ok(())
 }
 
-pub fn cgc_reduce_and(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Result<()> {
-    assert_eq!(dst.ty.mode, src.ty.mode);
-    assert_eq!(dst.ty.size, SCALAR_VSIZE);
+pub fn cgc_reduce_and(f: &mut impl io::Write, dst: CExpr, src: CExpr) -> io::Result<()> {
+    assert_eq!(dst.ty().mode, src.ty().mode);
+    assert_eq!(dst.ty().size, SCALAR_VSIZE);
 
-    let (d, s) = (dst.ident, src.ident);
-    match (dst.ty.mode, src.ty.array_size()) {
+    let (d, s) = (dst, src);
+    match (dst.ty().mode, src.ty().array_size()) {
         (LogicMode::TwoValue, None) => {
-            let msbs_mask = mask(src.ty.size.get());
+            let msbs_mask = mask(src.ty().size.get());
             writeln!(f, "{INDENT}{d} = (uint8_t)({s} == 0x{msbs_mask:x});")?
         }
         (LogicMode::TwoValue, Some(arr_size)) => {
-            let msbs_mask = if src.ty.size.get() % 64 == 0 {
+            let msbs_mask = if src.ty().size.get() % 64 == 0 {
                 u64::MAX
             } else {
-                mask(src.ty.size.get() % 64)
+                mask(src.ty().size.get() % 64)
             };
             writeln!(
                 f,
@@ -160,8 +160,8 @@ pub fn cgc_reduce_and(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Resul
         // z1 = &spc | (spc & !value != 0);
         // z0 = &spc & &value;
         (LogicMode::FourValue, None) => {
-            let size = src.ty.size;
-            let spc_mask = mask(src.ty.size.get());
+            let size = src.ty().size;
+            let spc_mask = mask(src.ty().size.get());
             let val_mask = spc_mask << size.get();
             writeln!(f, "{INDENT}{{")?;
             writeln!(
@@ -184,7 +184,7 @@ pub fn cgc_reduce_and(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Resul
             writeln!(f, "{INDENT}{{")?;
             writeln!(f, "{INDENT}{INDENT}uint8_t redandspc = 1, z0 = 1, z1 = 0;")?;
 
-            let num_words_loop = if src.ty.size.get() % 64 == 0 {
+            let num_words_loop = if src.ty().size.get() % 64 == 0 {
                 num_words
             } else {
                 num_words - 1
@@ -195,8 +195,8 @@ pub fn cgc_reduce_and(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Resul
                     "{INDENT}{INDENT}for (int i = 0; i < {num_words_loop}; ++i) {{ redandspc &= ~{s}[i] == 0; z0 &= ~{s}[{num_words}+i] == 0; z1 |= ({s}[i] & ~{s}[{num_words}+i]) != 0; }}"
                 )?;
             }
-            if src.ty.size.get() % 64 != 0 {
-                let mask = mask(src.ty.size.get() % 64);
+            if src.ty().size.get() % 64 != 0 {
+                let mask = mask(src.ty().size.get() % 64);
                 let last_i = arr_size - 1;
                 writeln!(
                     f,
@@ -218,16 +218,16 @@ pub fn cgc_reduce_and(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Resul
     Ok(())
 }
 
-pub fn cgc_reduce_xor(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Result<()> {
-    assert_eq!(dst.ty.mode, src.ty.mode);
-    assert_eq!(dst.ty.size, SCALAR_VSIZE);
+pub fn cgc_reduce_xor(f: &mut impl io::Write, dst: CExpr, src: CExpr) -> io::Result<()> {
+    assert_eq!(dst.ty().mode, src.ty().mode);
+    assert_eq!(dst.ty().size, SCALAR_VSIZE);
 
-    let (d, s) = (dst.ident, src.ident);
-    match (dst.ty.mode, src.ty.array_size()) {
+    let (d, s) = (dst, src);
+    match (dst.ty().mode, src.ty().array_size()) {
         (LogicMode::TwoValue, None) => writeln!(
             f,
             "{INDENT}{d} = (uint8_t)(popcount{}({s}) % 2 == 1);",
-            src.ty.element_type().size()
+            src.ty().element_type().size()
         )?,
         (LogicMode::TwoValue, Some(arr_size)) => {
             writeln!(
@@ -239,9 +239,9 @@ pub fn cgc_reduce_xor(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Resul
         // z0 = z1 & (popcount(value) % 2 == 0)
         // z1 = spc == mask
         (LogicMode::FourValue, None) => {
-            let size = src.ty.size;
-            let spc_mask = mask(src.ty.size.get());
-            let val_mask = mask(src.ty.size.get()) << size.get();
+            let size = src.ty().size;
+            let spc_mask = mask(src.ty().size.get());
+            let val_mask = mask(src.ty().size.get()) << size.get();
             writeln!(f, "{INDENT}{{")?;
             writeln!(
                 f,
@@ -250,7 +250,7 @@ pub fn cgc_reduce_xor(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Resul
             writeln!(
                 f,
                 "{INDENT}{INDENT}uint8_t z0 = z1 & (popcount{}({s} & 0x{val_mask:x}) % 2 == 1);",
-                src.ty.element_type().size()
+                src.ty().element_type().size()
             )?;
             writeln!(f, "{INDENT}{INDENT}{d} = (z0 << 1) | z1;")?;
             writeln!(f, "{INDENT}}}")?;
@@ -261,7 +261,7 @@ pub fn cgc_reduce_xor(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Resul
             writeln!(f, "{INDENT}{{")?;
             writeln!(f, "{INDENT}{INDENT}uint8_t z0, z1 = 1;")?;
             writeln!(f, "{INDENT}{INDENT}uint32_t cnt = 0;")?;
-            let num_words_loop = if src.ty.size.get() % 64 == 0 {
+            let num_words_loop = if src.ty().size.get() % 64 == 0 {
                 num_words
             } else {
                 num_words - 1
@@ -272,9 +272,9 @@ pub fn cgc_reduce_xor(f: &mut impl io::Write, dst: CVar, src: CVar) -> io::Resul
                     "{INDENT}{INDENT}for (int i = 0; i < {num_words_loop}; ++i) {{ cnt += popcount64({s}[{num_words}+i]); z1 &= ~{s}[i] == 0; }}"
                 )?;
             }
-            if src.ty.size.get() % 64 != 0 {
+            if src.ty().size.get() % 64 != 0 {
                 let last_i = arr_size - 1;
-                let mask = mask(src.ty.size.get() % 64);
+                let mask = mask(src.ty().size.get() % 64);
                 writeln!(f, "{INDENT}{INDENT}cnt += popcount64({s}[{last_i}]);")?;
                 writeln!(
                     f,

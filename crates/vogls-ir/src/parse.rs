@@ -8,9 +8,7 @@ use vogls_utils::{VgHashMap, VgHashSet};
 use crate::dyn_format_string::{DynFormatArgument, DynFormatString};
 use crate::token_range::TokenRange;
 use crate::{
-    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext,
-    Instruction, IntrinsicOp, ProcessKey, ProcessKind, ResizeOp, SCALAR_VSIZE, ShiftImmOp, Signal,
-    SignalFlags, SignalKey, TIME_VSIZE, TemporalRegionKey, UnaryOp, VSIZE_32, VariableKey,
+    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext, Instruction, IntrinsicOp, LogicMode, ProcessKey, ProcessKind, ResizeOp, ShiftImmOp, Signal, SignalFlags, SignalKey, TemporalRegionKey, UnaryOp, VariableKey, SCALAR_VSIZE, TIME_VSIZE, VSIZE_32
 };
 
 #[derive(Debug)]
@@ -210,6 +208,7 @@ fn parse_signal_definition<'a>(
                 size,
                 flags: SignalFlags::EMPTY,
                 initialize,
+                mode: LogicMode::TwoValue,
                 origin: TokenRange::default(),
             }),
         )
@@ -476,7 +475,7 @@ fn parse_bb<'a>(
                     entry.get().1
                 }
                 Entry::Vacant(entry) => {
-                    let var = gl.vars.insert(SCALAR_VSIZE);
+                    let var = gl.vars.insert(LogicMode::TwoValue, SCALAR_VSIZE);
                     entry.insert((true, var));
                     var
                 }
@@ -909,7 +908,7 @@ fn parse_var<'a>(
     let var = symbols
         .variables
         .entry(ident)
-        .or_insert_with(|| (false, gl.vars.insert(SCALAR_VSIZE)))
+        .or_insert_with(|| (false, gl.vars.insert(LogicMode::TwoValue, SCALAR_VSIZE)))
         .1;
     Ok(var)
 }

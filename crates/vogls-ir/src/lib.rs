@@ -6,11 +6,12 @@ mod format;
 pub mod optimize;
 pub mod parse;
 pub mod token_range;
+mod variable;
 pub mod vcd;
 pub mod watchers;
 
 use std::fmt;
-use std::num::{NonZeroU32, NonZeroU64};
+use std::num::NonZeroU32;
 use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign};
 pub use vogls_bits as bits;
 pub use vogls_bits::{Bits, Mode, VectorSize};
@@ -18,10 +19,11 @@ pub use vogls_bits::{Bits, Mode, VectorSize};
 pub use builder::{BasicBlockBuilder, BranchRef, PhiRef, ProcessBuilder};
 pub use format::{ContextFormat, DisplayContext};
 use slotmap::{SlotMap, new_key_type};
-use vogls_utils::{NonMaxU32, VgHashMap};
+use vogls_utils::NonMaxU32;
 
 use self::dyn_format_string::DynFormatString;
 use self::token_range::TokenRange;
+pub use self::variable::{VariableKey, VariableMap};
 use self::vcd::VcdOutput;
 
 new_key_type! { pub struct ProcessKey; }
@@ -39,61 +41,6 @@ impl TemporalRegionKey {
 
     pub fn entry(self) -> BasicBlockKey {
         self.0
-    }
-}
-
-/// A unique identifier for a VIR variable.
-///
-/// This is a unique identifier combined with a conditionally inlined size. If the size does not
-/// fit in the allocated space, it put into the external [`VariableMap`].
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[repr(transparent)]
-pub struct VariableKey(NonZeroU64);
-
-impl VariableKey {
-    const MAX_INLINE_SIZE: VectorSize = VectorSize::new(255).unwrap();
-
-    fn inlined_size(self) -> Option<VectorSize> {
-        VectorSize::new((self.0.get() & 0xFF) as u32)
-    }
-    fn identifier(self) -> u64 {
-        self.0.get() >> 8
-    }
-
-    fn from_id_and_size(id: u64, size: VectorSize) -> Self {
-        let capped_size = Some(size.get())
-            .filter(|v| *v <= Self::MAX_INLINE_SIZE.get())
-            .unwrap_or(0) as u64;
-        let value = NonZeroU64::new((id << 8) | capped_size).expect("should never be zero");
-        VariableKey(value)
-    }
-
-    fn size(self, non_inlined_var_sizes: &VgHashMap<u64, VectorSize>) -> VectorSize {
-        match self.inlined_size() {
-            None => non_inlined_var_sizes[&self.identifier()],
-            Some(size) => size,
-        }
-    }
-
-    fn update_size(
-        &mut self,
-        new_size: VectorSize,
-        non_inlined_var_sizes: &mut VgHashMap<u64, VectorSize>,
-    ) {
-        non_inlined_var_sizes.remove(&self.identifier());
-        *self = Self::from_id_and_size(self.identifier(), new_size);
-        if new_size > Self::MAX_INLINE_SIZE {
-            non_inlined_var_sizes.insert(self.identifier(), new_size);
-        }
-    }
-}
-
-impl fmt::Debug for VariableKey {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("VariableKey")
-            .field("id", &self.identifier())
-            .field("inline_size", &self.inlined_size())
-            .finish()
     }
 }
 
@@ -345,6 +292,7 @@ pub struct Signal {
     pub name: String,
     pub size: VectorSize,
     pub initialize: Option<Bits>,
+    pub mode: LogicMode,
     pub flags: SignalFlags,
     pub origin: TokenRange,
 }
@@ -904,11 +852,33 @@ impl UnaryOp {
         }
     }
 
+    fn simplify(self, src_size: VectorSize, src_mode: LogicMode) -> UnaryOpSimplification {
+        use UnaryOp as O;
+        match self {
+            O::ReduceOr | O::ReduceAnd | O::ReduceXor
+                if src_mode == LogicMode::TwoValue && src_size == SCALAR_VSIZE =>
+            {
+                UnaryOpSimplification::Source
+            }
+            O::Neg | O::ReduceOr | O::ReduceAnd | O::ReduceXor | O::LeadingZeros => {
+                UnaryOpSimplification::Keep
+            }
+        }
+    }
+
     fn output_size(self, size: VectorSize) -> VectorSize {
         match self {
             UnaryOp::Neg => size,
             UnaryOp::ReduceOr | UnaryOp::ReduceAnd | UnaryOp::ReduceXor => SCALAR_VSIZE,
-            UnaryOp::LeadingZeros => const { VectorSize::new(32).unwrap() },
+            UnaryOp::LeadingZeros => VSIZE_32,
+        }
+    }
+
+    pub fn output_mode(self, src: LogicMode) -> LogicMode {
+        use UnaryOp as O;
+        match self {
+            O::Neg | O::ReduceOr | O::ReduceAnd | O::ReduceXor => src,
+            O::LeadingZeros => LogicMode::TwoValue,
         }
     }
 }
@@ -921,6 +891,24 @@ impl ResizeOp {
             O::ZeroExtend => src.zero_extend(dst_size),
             O::SignExtend => src.sign_extend(dst_size),
         }
+    }
+
+    fn simplify(
+        self,
+        dst_size: VectorSize,
+        src_size: VectorSize,
+        mode: LogicMode,
+    ) -> ResizeOpSimplification {
+        _ = mode;
+        if dst_size == src_size {
+            ResizeOpSimplification::Source
+        } else {
+            ResizeOpSimplification::Keep
+        }
+    }
+
+    fn output_mode(self, src: LogicMode) -> LogicMode {
+        src
     }
 }
 
@@ -1019,6 +1007,30 @@ impl BinaryOp {
                 }
                 Some(SCALAR_VSIZE)
             }
+        }
+    }
+
+    pub fn output_mode(self, lhs: LogicMode, rhs: LogicMode) -> LogicMode {
+        use BinaryOp as O;
+        match self {
+            O::And
+            | O::Or
+            | O::Xor
+            | O::Add
+            | O::Sub
+            | O::Power
+            | O::Multiply
+            | O::Concat
+            | O::CopyX
+            | O::CopyZ
+            | O::Min
+            | O::Max
+            | O::UnsignedLessEqual
+            | O::LogicalShiftLeft
+            | O::LogicalShiftRight
+            | O::ArithmeticShiftRight => lhs.max(rhs),
+            O::Divide | O::Modulus => LogicMode::FourValue,
+            O::CaseEquality | O::Posedge | O::Negedge => LogicMode::TwoValue,
         }
     }
 }
@@ -1245,6 +1257,32 @@ impl BinaryImmOp {
             O::ConcatLeft | O::ConcatRight => src_size.checked_add(imm_size.get()),
         }
     }
+
+    fn output_mode(&self, src: LogicMode, imm: LogicMode) -> LogicMode {
+        use BinaryImmOp as O;
+        match self {
+            O::And
+            | O::Or
+            | O::Xor
+            | O::Add
+            | O::Sub
+            | O::Power
+            | O::RevSub
+            | O::RevPower
+            | O::RevDivide
+            | O::RevModulus
+            | O::Multiply
+            | O::ConcatLeft
+            | O::ConcatRight
+            | O::Min
+            | O::Max
+            | O::UnsignedLessEqual
+            | O::UnsignedGreaterEqual
+            | O::Divide
+            | O::Modulus => src.max(imm),
+            O::CaseEquality => LogicMode::TwoValue,
+        }
+    }
 }
 
 impl ShiftImmOp {
@@ -1299,6 +1337,16 @@ fn simplify_slice_imm(
     }
 }
 
+enum ResizeOpSimplification {
+    Keep,
+    Source,
+}
+
+enum UnaryOpSimplification {
+    Keep,
+    Source,
+}
+
 enum BinaryImmOpSimplification {
     Keep,
     Source,
@@ -1333,7 +1381,7 @@ pub struct Connection {
     pub direction: ConnectionDirection,
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum LogicMode {
     #[default]
     TwoValue,
@@ -1355,13 +1403,6 @@ impl From<Mode> for LogicMode {
             Mode::FourValue => Self::FourValue,
         }
     }
-}
-
-/// Manages the allocated variables.
-#[derive(Default, Clone)]
-pub struct VariableMap {
-    prev_var_identifier: u64,
-    non_inlined_var_sizes: VgHashMap<u64, VectorSize>,
 }
 
 #[derive(Default, Clone)]
@@ -1390,31 +1431,6 @@ macro_rules! define_process_kinds {
             }
         }
     };
-}
-
-impl VariableMap {
-    pub fn size(&self, key: VariableKey) -> VectorSize {
-        key.size(&self.non_inlined_var_sizes)
-    }
-
-    pub fn insert(&mut self, size: VectorSize) -> VariableKey {
-        self.prev_var_identifier += 1;
-        let key = VariableKey::from_id_and_size(self.prev_var_identifier, size);
-        if size.get() > 255 {
-            self.non_inlined_var_sizes.insert(key.identifier(), size);
-        }
-        key
-    }
-
-    fn remove(&mut self, key: VariableKey) {
-        if key.inlined_size().is_none() {
-            self.non_inlined_var_sizes.remove(&key.identifier());
-        }
-    }
-
-    fn update(&mut self, key: &mut VariableKey, new_size: VectorSize) {
-        key.update_size(new_size, &mut self.non_inlined_var_sizes);
-    }
 }
 
 define_process_kinds! {

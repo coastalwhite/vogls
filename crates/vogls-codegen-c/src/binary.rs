@@ -750,10 +750,10 @@ pub fn cgc_copy_x(
     Ok(())
 }
 
-pub fn cgc_copy_y(f: &mut impl io::Write, dst: CVar, lhs: CVar, rhs: CVar) -> io::Result<()> {
+pub fn cgc_copy_y(f: &mut impl io::Write, dst: CVar, lhs: CExpr, rhs: CExpr) -> io::Result<()> {
     let size = dst.ty.size;
-    let (d, l, r) = (dst.ident, lhs.ident, rhs.ident);
-    match (lhs.ty.mode, lhs.ty.array_size()) {
+    let (d, l, r) = (dst.ident, lhs, rhs);
+    match (lhs.ty().mode, lhs.ty().array_size()) {
         (LogicMode::TwoValue, None) => writeln!(f, "{INDENT}{d} = {l};")?,
         (LogicMode::TwoValue, Some(arr_size)) => {
             writeln!(f, "{INDENT}memcpy({d}, {l}, {arr_size}*sizeof(uint64_t));")?
@@ -936,9 +936,9 @@ pub fn cgc_posedge(
     Ok(())
 }
 
-pub fn cgc_negedge(f: &mut impl io::Write, dst: CIdent, lhs: CVar, rhs: CVar) -> io::Result<()> {
-    let (d, l, r) = (dst, lhs.ident, rhs.ident);
-    match lhs.ty.mode {
+pub fn cgc_negedge(f: &mut impl io::Write, dst: CIdent, lhs: CExpr, rhs: CExpr) -> io::Result<()> {
+    let (d, l, r) = (dst, lhs, rhs);
+    match lhs.ty().mode {
         LogicMode::TwoValue => writeln!(f, "{INDENT}{d} = (uint8_t)({l} & ~{r});")?,
         LogicMode::FourValue => writeln!(
             f,
