@@ -1,10 +1,13 @@
+use std::cell::RefCell;
+use std::fmt;
 use std::fs::read_to_string;
 use std::io::{self, Write};
-use std::panic::AssertUnwindSafe;
+use std::panic::{self, AssertUnwindSafe};
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 
+use backtrace::{BacktraceFmt, BacktraceFrameFmt};
 use clap::Parser;
 use vogls::design::{Arena, Macro};
 use vogls::{DesignBuilder, SimulationIo, VirDesignBuilder};
@@ -112,7 +115,7 @@ impl TestInfo {
 }
 
 enum FailureInfo {
-    Panic,
+    Panic(PanicInfo),
     Error { stdout: String, stderr: String },
     Mismatch { expected: String, gotten: String },
     VirMismatch { expected: String, gotten: String },
@@ -124,7 +127,7 @@ enum FailureInfo {
 impl FailureInfo {
     pub fn into_char(&self) -> char {
         match self {
-            Self::Panic => '!',
+            Self::Panic(..) => '!',
             Self::Error { .. } => 'E',
             Self::Mismatch { .. } => 'M',
             Self::VirMismatch { .. } => 'M',
@@ -221,6 +224,14 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         Some(o) => &[o],
     };
     let mut o = std::io::stdout();
+
+    let hook = panic::take_hook();
+    panic::set_hook(Box::new(|info| {
+        PANIC_INFO.set(Some(PanicInfo {
+            backtrace: backtrace::Backtrace::new(),
+            message: info.payload_as_str().unwrap_or("<no info>").to_string(),
+        }));
+    }));
 
     writeln!(&mut o, "Running {} tests...", paths.len())?;
     let fails = if args.num_threads == 1 {
@@ -334,15 +345,19 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         })
     };
 
+    panic::set_hook(hook);
+
     writeln!(&mut o)?;
 
-    report_fails(&mut o, &fails, num_tests)?;
-
-    if fails.is_empty() {
-        Ok(ExitCode::SUCCESS)
+    let exit_code = if fails.is_empty() {
+        ExitCode::SUCCESS
     } else {
-        Ok(ExitCode::FAILURE)
-    }
+        ExitCode::FAILURE
+    };
+
+    report_fails(&mut o, fails, num_tests)?;
+
+    Ok(exit_code)
 }
 
 fn display_section(o: &mut io::Stdout, section: &str, content: &str) -> io::Result<()> {
@@ -359,11 +374,12 @@ fn display_section(o: &mut io::Stdout, section: &str, content: &str) -> io::Resu
     Ok(())
 }
 
-fn report_fails(o: &mut io::Stdout, fails: &[Fail], num_tests: usize) -> io::Result<()> {
+fn report_fails(o: &mut io::Stdout, fails: Vec<Fail>, num_tests: usize) -> io::Result<()> {
     if fails.is_empty() {
         writeln!(o, "All {} tests passed!", num_tests)?;
     } else {
-        for fail in fails.iter() {
+        let num_fails = fails.len();
+        for fail in fails {
             let Fail {
                 name,
                 mode,
@@ -379,30 +395,55 @@ fn report_fails(o: &mut io::Stdout, fails: &[Fail], num_tests: usize) -> io::Res
             write!(o, "+ {name}[{mode_str}-compile={compile}-O{opt_rounds}]")?;
 
             match info {
-                FailureInfo::Panic => writeln!(o, ": Panic")?,
+                FailureInfo::Panic(panic) => {
+                    writeln!(o, ": Panic")?;
+                    writeln!(o)?;
+                    let PanicInfo {
+                        mut backtrace,
+                        message,
+                    } = panic;
+                    backtrace.resolve();
+                    struct X(String, backtrace::Backtrace);
+                    impl fmt::Display for X {
+                        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                            let mut pfmt = |pf: &mut fmt::Formatter<'_>, p: backtrace::BytesOrWideString<'_>| p.fmt(pf);
+                            let mut fmt =
+                                BacktraceFmt::new(f, backtrace::PrintFmt::Full, &mut pfmt);
+                            fmt.add_context()?;
+                            fmt.message(&self.0)?;
+                            writeln!(fmt.formatter())?;
+                            for frame in self.1.frames() {
+                                fmt.frame().backtrace_frame(frame)?;
+                            }
+                            fmt.finish()
+                        }
+                    }
+                    let output = X(message, backtrace).to_string();
+                    display_section(o, "PANIC", &output)?;
+                }
                 FailureInfo::Error { stdout, stderr } => {
                     writeln!(o, ": Error")?;
                     writeln!(o)?;
-                    display_section(o, "STDOUT", stdout)?;
-                    display_section(o, "STDERR", stderr)?;
+                    display_section(o, "STDOUT", &stdout)?;
+                    display_section(o, "STDERR", &stderr)?;
                 }
                 FailureInfo::Mismatch { expected, gotten } => {
                     writeln!(o, ": Mismatch")?;
                     writeln!(o)?;
-                    display_section(o, "EXPECTED", expected)?;
-                    display_section(o, "GOTTEN", gotten)?;
+                    display_section(o, "EXPECTED", &expected)?;
+                    display_section(o, "GOTTEN", &gotten)?;
                 }
                 FailureInfo::VirMismatch { expected, gotten } => {
                     writeln!(o, ": VIR mismatch")?;
                     writeln!(o)?;
-                    display_section(o, "EXPECTED", expected)?;
-                    display_section(o, "GOTTEN", gotten)?;
+                    display_section(o, "EXPECTED", &expected)?;
+                    display_section(o, "GOTTEN", &gotten)?;
                 }
                 FailureInfo::VirOptMismatch { expected, gotten } => {
                     writeln!(o, ": VIR Optimization mismatch")?;
                     writeln!(o)?;
-                    display_section(o, "EXPECTED", expected)?;
-                    display_section(o, "GOTTEN", gotten)?;
+                    display_section(o, "EXPECTED", &expected)?;
+                    display_section(o, "GOTTEN", &gotten)?;
                 }
                 FailureInfo::CompileFailure(error) => {
                     writeln!(o, ": Compilation failure")?;
@@ -418,8 +459,7 @@ fn report_fails(o: &mut io::Stdout, fails: &[Fail], num_tests: usize) -> io::Res
         writeln!(
             o,
             "{ANSI_RED}Failed {}/{} tests.{ANSI_END}",
-            fails.len(),
-            num_tests,
+            num_fails, num_tests,
         )?;
     }
     Ok(())
@@ -428,6 +468,15 @@ fn report_fails(o: &mut io::Stdout, fails: &[Fail], num_tests: usize) -> io::Res
 pub enum PassKind {
     Succeed,
     Skip,
+}
+
+#[derive(Clone)]
+struct PanicInfo {
+    backtrace: backtrace::Backtrace,
+    message: String,
+}
+thread_local! {
+    static PANIC_INFO: RefCell<Option<PanicInfo>> = RefCell::new(None);
 }
 
 fn run_test(
@@ -501,8 +550,8 @@ fn run_test(
             Result::<_, FailureInfo>::Ok(lowered.emit_ir().to_string())
         }));
 
-        if let Ok(design) = design {
-            match design {
+        match design {
+            Ok(design) => match design {
                 Ok(design) => {
                     let asserted = std::fs::read_to_string(&path.with_extension("v.ir"))?;
                     if design.trim() != asserted.trim() {
@@ -515,9 +564,12 @@ fn run_test(
                 Err(err) => {
                     return Err(err);
                 }
+            },
+            Err(_) => {
+                return Err(FailureInfo::Panic(
+                    PANIC_INFO.with_borrow(|v| v.clone()).unwrap(),
+                ));
             }
-        } else {
-            return Err(FailureInfo::Panic);
         }
     }
 
@@ -621,8 +673,13 @@ fn run_test(
                 })
         });
 
-    let Ok(result) = result else {
-        return Err(FailureInfo::Panic);
+    let result = match result {
+        Ok(v) => v,
+        Err(_) => {
+            return Err(FailureInfo::Panic(
+                PANIC_INFO.with_borrow(|v| v.clone()).unwrap(),
+            ));
+        }
     };
     match result {
         Err(FailureInfo::CompileFailure(_)) if test_information.fail => {

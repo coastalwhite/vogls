@@ -294,42 +294,6 @@ pub fn cgc_tv_to_fv(f: &mut impl io::Write, dst: CVar, src: CExpr<'_>) -> io::Re
     assert_eq!(src.ty().mode, LogicMode::TwoValue);
 
     let d = dst.ident;
-    match (dst.ty.array_size(), src.ty().array_size()) {
-        (None, None) => {
-            writeln!(
-                f,
-                "{INDENT}{d} = ({dst_elem_ty})({src} >> {size});",
-                dst_elem_ty = dst.ty.element_type(),
-            )?;
-        }
-        (None, Some(_)) => {
-            writeln!(
-                f,
-                "{INDENT}{d} = ({dst_elem_ty}){src}[1];",
-                dst_elem_ty = dst.ty.element_type(),
-            )?;
-        }
-        (Some(arr_size), Some(_)) => {
-            writeln!(
-                f,
-                "{INDENT}memcpy({d}, {src} + {arr_size}, {arr_size} * sizeof(uint64_t));"
-            )?;
-        }
-
-        (Some(_), None) => {
-            unreachable!()
-        }
-    }
-    Ok(())
-}
-
-pub fn cgc_fv_to_tv(f: &mut impl io::Write, dst: CVar, src: CExpr<'_>) -> io::Result<()> {
-    let size = src.ty().size;
-    assert_eq!(dst.ty.size, src.ty().size);
-    assert_eq!(dst.ty.mode, LogicMode::TwoValue);
-    assert_eq!(src.ty().mode, LogicMode::FourValue);
-
-    let d = dst.ident;
     let msbw_mask = if size.get() % 64 == 0 {
         u64::MAX
     } else {
@@ -347,7 +311,7 @@ pub fn cgc_fv_to_tv(f: &mut impl io::Write, dst: CVar, src: CExpr<'_>) -> io::Re
         (Some(_), None) => {
             writeln!(
                 f,
-                "{INDENT}{d}0 = 0x{msbw_mask:x}; {d}[1] = (uint64_t){src};"
+                "{INDENT}{d}[0] = 0x{msbw_mask:x}; {d}[1] = (uint64_t){src};"
             )?;
         }
         (Some(_), Some(arr_size)) => {
@@ -373,6 +337,47 @@ pub fn cgc_fv_to_tv(f: &mut impl io::Write, dst: CVar, src: CExpr<'_>) -> io::Re
             }
         }
         (None, Some(_)) => unreachable!(),
+    }
+    Ok(())
+}
+
+pub fn cgc_fv_to_tv(f: &mut impl io::Write, dst: CVar, src: CExpr<'_>) -> io::Result<()> {
+    let size = src.ty().size;
+    assert_eq!(dst.ty.size, src.ty().size);
+    assert_eq!(dst.ty.mode, LogicMode::TwoValue);
+    assert_eq!(src.ty().mode, LogicMode::FourValue);
+
+    let d = dst.ident;
+    let msbw_mask = if size.get() % 64 == 0 {
+        u64::MAX
+    } else {
+        mask(size.get() % 64)
+    };
+    match (dst.ty.array_size(), src.ty().array_size()) {
+        (None, None) => {
+            writeln!(
+                f,
+                "{INDENT}{d} = ({dst_elem_ty})({src} >> {size}) & ({dst_elem_ty})({src} & {msbw_mask});",
+                dst_elem_ty = dst.ty.element_type(),
+            )?;
+        }
+        (None, Some(_)) => {
+            writeln!(
+                f,
+                "{INDENT}{d} = ({dst_elem_ty})({src}[0] & {src}[1]);",
+                dst_elem_ty = dst.ty.element_type(),
+            )?;
+        }
+        (Some(arr_size), Some(_)) => {
+            writeln!(
+                f,
+                "{INDENT}for (int i = 0; i < {arr_size}; ++i) {d}[i] = {src}[i] & {src}[i+{arr_size}];"
+            )?;
+        }
+
+        (Some(_), None) => {
+            unreachable!()
+        }
     }
     Ok(())
 }

@@ -467,7 +467,11 @@ impl BasicBlockBuilder {
 
     pub fn constant(&mut self, gl: &mut GlobalContext, value: Bits) -> VariableKey {
         let value = value.try_lower_mode();
-        let mode = value.mode();
+        let mode = if value.contains_special() {
+            LogicMode::FourValue
+        } else {
+            LogicMode::TwoValue
+        };
         let variable = gl.vars.insert(mode.into(), value.size());
         self.instrs.push(Instruction::Constant(variable, value));
         variable
@@ -620,7 +624,12 @@ impl BasicBlockBuilder {
         let Some(size) = op.output_size(gl.vars.size(src), imm.size()) else {
             panic!("Invalid size combination");
         };
-        let output_mode = op.output_mode(src.mode(), imm.mode().into());
+        let imm_mode = if imm.contains_special() {
+            LogicMode::FourValue
+        } else {
+            LogicMode::TwoValue
+        };
+        let output_mode = op.output_mode(src.mode(), imm_mode);
         let src = self.convert_mode(gl, src, output_mode.src);
         let mut dst = gl.vars.insert(output_mode.dst, size);
         match op.simplify(dst, src, &imm) {
@@ -739,8 +748,7 @@ impl BasicBlockBuilder {
     ) -> VariableKey {
         assert_eq!(gl.vars.size(offset), INTEGER_VSIZE);
         assert!(gl.vars.size(src) >= width);
-        let mode = src.mode().max(offset.mode());
-        let dst = gl.vars.insert(mode, width);
+        let dst = gl.vars.insert(LogicMode::FourValue, width);
         self.instrs.push(Instruction::Slice(dst, src, offset));
         dst
     }
@@ -1154,6 +1162,8 @@ impl BasicBlockBuilder {
         assert_eq!(size, gl.vars.size(falsy));
         assert_eq!(SCALAR_VSIZE, gl.vars.size(select));
         let mode = select.mode().max(truthy.mode()).max(falsy.mode());
+        let truthy = self.convert_mode(gl, truthy, mode);
+        let falsy = self.convert_mode(gl, falsy, mode);
         let dst = gl.vars.insert(mode, size);
         self.instrs
             .push(Instruction::Select(dst, select, truthy, falsy));

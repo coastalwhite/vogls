@@ -1,7 +1,7 @@
 use std::ops::ControlFlow;
 
+use crate::{BasicBlock, BasicBlockKey};
 use slotmap::SlotMap;
-use vogls_ir::{BasicBlock, BasicBlockKey};
 use vogls_utils::VgHashSet;
 
 fn post_order_impl<E>(
@@ -138,10 +138,17 @@ pub fn pre_order(
     mut f: impl FnMut(BasicBlockKey),
     filter: impl FnMut(BasicBlockKey) -> bool,
 ) {
-    _ = pre_order_impl(entry, bbs, scratch_seen, scratch_stack, |bb| {
-        f(bb);
-        ControlFlow::<()>::Continue(())
-    }, filter);
+    _ = pre_order_impl(
+        entry,
+        bbs,
+        scratch_seen,
+        scratch_stack,
+        |bb| {
+            f(bb);
+            ControlFlow::<()>::Continue(())
+        },
+        filter,
+    );
 }
 
 pub fn try_pre_order<E>(
@@ -154,10 +161,17 @@ pub fn try_pre_order<E>(
     mut f: impl FnMut(BasicBlockKey) -> Result<(), E>,
     filter: impl FnMut(BasicBlockKey) -> bool,
 ) -> Result<(), E> {
-    match pre_order_impl(entry, bbs, scratch_seen, scratch_stack, |bb| match f(bb) {
-        Ok(()) => ControlFlow::Continue(()),
-        Err(err) => ControlFlow::Break(err),
-    }, filter) {
+    match pre_order_impl(
+        entry,
+        bbs,
+        scratch_seen,
+        scratch_stack,
+        |bb| match f(bb) {
+            Ok(()) => ControlFlow::Continue(()),
+            Err(err) => ControlFlow::Break(err),
+        },
+        filter,
+    ) {
         ControlFlow::Continue(()) => Ok(()),
         ControlFlow::Break(err) => Err(err),
     }
@@ -172,7 +186,12 @@ pub fn pre_order_keys(
 
     keys: &mut Vec<BasicBlockKey>,
 ) {
-    pre_order(entry, bbs, scratch_seen, scratch_stack, |key| {
-        keys.push(key)
-    }, |_| true);
+    pre_order(
+        entry,
+        bbs,
+        scratch_seen,
+        scratch_stack,
+        |key| keys.push(key),
+        |_| true,
+    );
 }

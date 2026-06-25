@@ -35,7 +35,7 @@ pub mod store;
 pub mod truncate;
 pub mod util;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Mode {
     TwoValue,
@@ -263,7 +263,23 @@ impl Eq for Bits {}
 impl Hash for Bits {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.size().hash(state);
-        self.as_u64_slice().hash(state);
+        match self.as_data_ref() {
+            BitsDataRef::InlineTv(v) => v.hash(state),
+            BitsDataRef::SeparateTv(items) => items.hash(state),
+
+            BitsDataRef::InlineFv(_spc, val) if !self.contains_special() => {
+                val.hash(state);
+            }
+            BitsDataRef::SeparateFv(items) if !self.contains_special() => {
+                items[items.len() / 2..].hash(state);
+            }
+
+            BitsDataRef::InlineFv(spc, val) => {
+                spc.hash(state);
+                val.hash(state);
+            }
+            BitsDataRef::SeparateFv(items) => items.hash(state),
+        }
     }
 }
 
@@ -1583,10 +1599,6 @@ impl Bits {
                     .collect(),
             ),
         }
-    }
-
-    pub fn mode(&self) -> Mode {
-        self.mode
     }
 
     pub fn try_lower_mode(mut self) -> Bits {

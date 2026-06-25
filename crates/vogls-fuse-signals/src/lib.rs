@@ -69,7 +69,8 @@ use slotmap::SlotMap;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::vcd::VcdValue;
 use vogls_ir::{
-    BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, Instruction, IntrinsicOp, ProcessBuilder, Signal, SignalFlags, SignalKey, SignalSlice, VectorSize
+    BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, Instruction, IntrinsicOp,
+    ProcessBuilder, Signal, SignalFlags, SignalKey, SignalSlice, VectorSize,
 };
 use vogls_utils::{OrderedSet, Table, VgHashMap, VgHashSet};
 

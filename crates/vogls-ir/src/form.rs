@@ -1,7 +1,8 @@
+use slotmap::Key;
 use vogls_utils::{VgHashMap, VgHashSet};
 
 use crate::{
-    BasicBlockKey, GlobalContext, Instruction, LogicMode, TIME_VSIZE, TemporalRegionKey,
+    BasicBlockKey, GlobalContext, Instruction, LogicMode, TIME_VSIZE, TemporalRegionKey, VSIZE_32,
     VariableKey,
 };
 
@@ -35,12 +36,17 @@ pub fn check_ir_form(regions: &[TemporalRegionKey], gl: &GlobalContext) {
 
                 use Instruction as I;
                 match i {
-                    I::Constant(dst, bits) => assert_eq!(gl.vars.size(*dst), bits.size()),
+                    I::Constant(dst, bits) => {
+                        assert_eq!(gl.vars.size(*dst), bits.size());
+                    }
                     I::Unary(dst, op, src) => {
                         assert_eq!(gl.vars.size(*dst), op.output_size(gl.vars.size(*src)));
                         assert_eq!(dst.mode(), op.output_mode(src.mode()).unwrap());
                     }
                     I::Resize(dst, op, src) => {
+                        if dst.mode() != op.output_mode(src.mode()) {
+                            dbg!(&bb.instrs);
+                        }
                         assert_eq!(dst.mode(), op.output_mode(src.mode()));
                     }
                     I::Binary(dst, op, lhs, rhs) => {
@@ -55,7 +61,12 @@ pub fn check_ir_form(regions: &[TemporalRegionKey], gl: &GlobalContext) {
                         );
                     }
                     I::BinaryImm(dst, op, src, imm) => {
-                        let output_mode = op.output_mode(src.mode(), imm.mode().into());
+                        let imm_mode = if imm.contains_special() {
+                            LogicMode::FourValue
+                        } else {
+                            LogicMode::TwoValue
+                        };
+                        let output_mode = op.output_mode(src.mode(), imm_mode);
                         assert_eq!(src.mode(), output_mode.src);
                         assert_eq!(dst.mode(), output_mode.dst);
                         assert_eq!(
@@ -63,8 +74,9 @@ pub fn check_ir_form(regions: &[TemporalRegionKey], gl: &GlobalContext) {
                             op.output_size(gl.vars.size(*src), imm.size()).unwrap()
                         );
                     }
-                    I::Slice(dst, _, _) => {
+                    I::Slice(dst, _, offset) => {
                         assert_eq!(dst.mode(), LogicMode::FourValue);
+                        assert_eq!(gl.vars.size(*offset), VSIZE_32);
                     }
                     I::SliceImm(dst, src, _) => {
                         assert_eq!(dst.mode(), src.mode());
@@ -84,10 +96,14 @@ pub fn check_ir_form(regions: &[TemporalRegionKey], gl: &GlobalContext) {
                     I::Probe(dst, signal, _) => {
                         assert_eq!(dst.mode(), gl.signals[*signal].mode);
                     }
-                    I::ProbeSlice(dst, _, _) => {
+                    I::ProbeSlice(dst, _, offset) => {
                         assert_eq!(dst.mode(), LogicMode::FourValue);
+                        assert_eq!(gl.vars.size(*offset), VSIZE_32);
                     }
                     I::Drive(signal, src, _) => {
+                        if gl.signals[*signal].mode != src.mode() {
+                            dbg!(&bb.instrs);
+                        }
                         assert_eq!(gl.signals[*signal].mode, src.mode());
                     }
                     I::Phi(..) => {}

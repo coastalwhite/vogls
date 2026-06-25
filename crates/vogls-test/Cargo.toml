@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+backtrace = "0.3.76"
 slotmap.workspace = true
 clap.workspace = true
 rayon.workspace = true

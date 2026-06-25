@@ -9,6 +9,7 @@ pub mod token_range;
 mod variable;
 pub mod vcd;
 pub mod watchers;
+pub mod orders;
 
 use std::fmt;
 use std::num::NonZeroU32;
@@ -558,6 +559,18 @@ pub enum Instruction {
 }
 
 impl Instruction {
+    pub fn copy(vars: &VariableMap, dst: VariableKey, src: VariableKey) -> Self {
+        assert_eq!(vars.size(dst), vars.size(src));
+        use LogicMode as M;
+        match (dst.mode(), src.mode()) {
+            (M::TwoValue, M::FourValue) => Instruction::Unary(dst, UnaryOp::FvToTv, src),
+            (M::FourValue, M::TwoValue) => Instruction::Unary(dst, UnaryOp::TvToFv, src),
+            (M::TwoValue, M::TwoValue) | (M::FourValue, M::FourValue) => {
+                Instruction::Resize(dst, ResizeOp::Truncate, src)
+            }
+        }
+    }
+
     pub fn get_destination_variable(&self) -> Option<VariableKey> {
         match self {
             Self::Constant(dst, _)
@@ -1367,34 +1380,6 @@ impl ShiftImmOp {
     }
 }
 
-fn simplify_slice_imm(
-    dst: VariableKey,
-    dst_size: VectorSize,
-    src: VariableKey,
-    src_size: VectorSize,
-    offset: u32,
-) -> SliceImmSimplification {
-    use SliceImmSimplification as S;
-    if dst_size == src_size {
-        if offset == 0 {
-            S::Source
-        } else {
-            S::Instruction(Instruction::ShiftImm(
-                dst,
-                ShiftImmOp::LogicalShiftRight,
-                src,
-                offset,
-            ))
-        }
-    } else if offset >= src_size.get() {
-        S::Constant(Bits::new_zeroed(dst_size))
-    } else if offset == 0 {
-        S::Instruction(Instruction::Resize(dst, ResizeOp::Truncate, src))
-    } else {
-        S::Keep
-    }
-}
-
 enum ResizeOpSimplification {
     Keep,
     Source,
@@ -1417,13 +1402,6 @@ enum ShiftImmOpSimplification {
     Keep,
     Source,
     Constant(Bits),
-}
-
-enum SliceImmSimplification {
-    Keep,
-    Source,
-    Constant(Bits),
-    Instruction(Instruction),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1459,6 +1437,14 @@ impl From<Mode> for LogicMode {
         match value {
             Mode::TwoValue => Self::TwoValue,
             Mode::FourValue => Self::FourValue,
+        }
+    }
+}
+impl From<LogicMode> for Mode {
+    fn from(value: LogicMode) -> Self {
+        match value {
+            LogicMode::TwoValue => Self::TwoValue,
+            LogicMode::FourValue => Self::FourValue,
         }
     }
 }

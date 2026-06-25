@@ -2,7 +2,7 @@ use vogls_utils::{Table, VgHashMap, VgHashSet};
 
 use crate::optimize::{CSExpr, ExprKey, remap_vars};
 use crate::{
-    BasicBlockKey, GlobalContext, Instruction, ProcessKey, ResizeOp, UnaryOp, VariableKey,
+    BasicBlockKey, BasicBlockTerminator, GlobalContext, Instruction, ProcessKey, ResizeOp, UnaryOp, VariableKey
 };
 
 pub fn peephole(
@@ -139,7 +139,7 @@ pub fn peephole(
                 }
 
                 let (dst, csexpr) = match i {
-                    I::Constant(dst, bits) => (*dst, CSExpr::Constant(bits.clone())),
+                    I::Constant(dst, bits) => (*dst, CSExpr::Constant(dst.mode(), bits.clone())),
                     I::Unary(dst, op, src) => (*dst, CSExpr::Unary(*op, try_lookup!(src))),
                     I::Resize(dst, op, src) => (
                         *dst,
@@ -187,6 +187,22 @@ pub fn peephole(
                     scratch_stack.push(bb_key);
                 }
             });
+
+            use BasicBlockTerminator as T;
+            match &bb.terminator {
+                T::Wait(_, _) => {}
+                T::VariableWait(tr, src) => {
+                    let src = try_lookup!(src);
+                    if let CSExpr::Unary(UnaryOp::TvToFv, new_src) = exprs[src].1 {
+                        bb.terminator = T::VariableWait(*tr, exprs[new_src].0);
+                    }
+                }
+                T::WaitRegion(..) => {},
+                T::Watch(..) => {},
+                T::Jump(..) => {},
+                T::Branch(..) => {},
+                T::Halt => {},
+            }
         }
 
         if !var_remap.is_empty() {

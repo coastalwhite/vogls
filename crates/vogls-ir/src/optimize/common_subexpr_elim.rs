@@ -47,7 +47,7 @@ pub fn common_subexpr_elim(
                 }
 
                 let (dst, csexpr) = match i {
-                    I::Constant(dst, bits) => (*dst, CSExpr::Constant(bits.clone())),
+                    I::Constant(dst, bits) => (*dst, CSExpr::Constant(dst.mode(), bits.clone())),
                     I::Unary(dst, op, src) => (*dst, CSExpr::Unary(*op, try_lookup!(src))),
                     I::Resize(dst, op, src) => (
                         *dst,
@@ -112,7 +112,7 @@ pub fn common_subexpr_elim(
                     }
                     I::Phi(_, _) => continue,
                 };
-                let expr_key = match exprs.entry(csexpr) {
+                let expr_key = match exprs.entry(csexpr.clone()) {
                     TableMapEntry::Occupied(mut entry) if entry.get().1 != generation => {
                         entry.set((dst, generation));
                         entry.get_table_key()

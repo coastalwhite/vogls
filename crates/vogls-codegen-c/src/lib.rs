@@ -978,7 +978,7 @@ pub fn lower_process(
                     match time.mode() {
                         LogicMode::TwoValue => writeln!(buffer, "{INDENT}{s0} = {t};")?,
                         LogicMode::FourValue => {
-                            writeln!(buffer, "{INDENT}{s0} = (~{t}[0] == 0) ? 0 : {t}[1];")?;
+                            writeln!(buffer, "{INDENT}{s0} = (~{t}[0] != 0) ? 0 : {t}[1];")?;
                         }
                     }
                     writeln!(

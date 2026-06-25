@@ -1,6 +1,4 @@
-use std::collections::HashSet;
-
-use slotmap::{SecondaryMap, SlotMap};
+use slotmap::SlotMap;
 use vogls_bits::{Bits, VectorSize};
 use vogls_utils::{VgHashMap, VgHashSet, new_table_key};
 
@@ -13,9 +11,10 @@ pub mod peephole;
 
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext,
-    Instruction, ProcessKey, ResizeOp, ShiftImmOp, SignalKey, TemporalRegionKey, UnaryOp,
+    LogicMode, ProcessKey, ResizeOp, ShiftImmOp, SignalKey, TemporalRegionKey, UnaryOp,
     VariableKey,
 };
+
 
 #[derive(Default, Clone, Copy)]
 pub struct OptFlags {
@@ -32,7 +31,7 @@ new_table_key! {
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 enum CSExpr {
-    Constant(Bits),
+    Constant(LogicMode, Bits),
     Unary(UnaryOp, ExprKey),
     Resize(ResizeOp, VectorSize, ExprKey),
     Binary(BinaryOp, ExprKey, ExprKey),
@@ -71,6 +70,7 @@ pub fn optimize_processes(gl: &mut GlobalContext, processes: &[ProcessKey], flag
                     &mut scratch_dep_edges,
                 );
             }
+            crate::form::check_ir_form(&gl.processes[process].regions, gl);
             if flags.common_subexpr_elim {
                 common_subexpr_elim::common_subexpr_elim(
                     gl,
@@ -79,9 +79,11 @@ pub fn optimize_processes(gl: &mut GlobalContext, processes: &[ProcessKey], flag
                     &mut scratch_seen,
                 );
             }
+            crate::form::check_ir_form(&gl.processes[process].regions, gl);
             if flags.peephole {
                 peephole::peephole(gl, process, &mut scratch_stack, &mut scratch_seen);
             }
+            crate::form::check_ir_form(&gl.processes[process].regions, gl);
             if flags.deadcode_elimination {
                 deadcode_elimination::deadcode_elimination(
                     gl,
@@ -107,6 +109,8 @@ pub fn optimize_processes(gl: &mut GlobalContext, processes: &[ProcessKey], flag
                     break;
                 }
             }
+
+            crate::form::check_ir_form(&gl.processes[process].regions, gl);
         }
     }
 }

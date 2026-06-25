@@ -345,6 +345,8 @@ pub fn cgc_bin_div(
     lhs: CExpr<'_>,
     rhs: CExpr<'_>,
 ) -> io::Result<()> {
+    assert_eq!(lhs.ty(), rhs.ty());
+
     let size = dst.ty.size;
     let msbs_mask = if size.get() % 64 == 0 {
         u64::MAX
@@ -353,14 +355,39 @@ pub fn cgc_bin_div(
     };
 
     let (d, l, r) = (dst.ident, lhs, rhs);
-    match (dst.ty.mode, dst.ty.array_size()) {
-        (LogicMode::TwoValue, None) => writeln!(
+    match (
+        dst.ty.mode,
+        lhs.ty().mode,
+        dst.ty.array_size(),
+        lhs.ty().array_size(),
+    ) {
+        (LogicMode::TwoValue, LogicMode::TwoValue, None, _) => writeln!(
             f,
             "{INDENT}{d} = ({r} == 0) ? 0 : (({l} / {r}) & 0x{msbs_mask:x});"
         )?,
-        (LogicMode::TwoValue, Some(_)) => todo!(),
-        (LogicMode::FourValue, None) => fv_inline_div_rem(f, dst, lhs, rhs, '/')?,
-        (LogicMode::FourValue, Some(_)) => todo!(),
+        (LogicMode::TwoValue, LogicMode::TwoValue, Some(_), _) => todo!(),
+
+        (LogicMode::FourValue, LogicMode::TwoValue, None, _) => writeln!(
+            f,
+            "{INDENT}{d} = ({r} == 0) ? 0 : (0x{msbs_mask:x} | (((({element_ty}){l} / ({element_ty}){r}) & 0x{msbs_mask:x}) << {size}));",
+            element_ty = dst.ty.element_type()
+        )?,
+        (LogicMode::FourValue, LogicMode::TwoValue, Some(_), None) => {
+            writeln!(f, "{INDENT}{d}[0] = ({r} == 0) ? 0 : 0x{msbs_mask:x};")?;
+            writeln!(
+                f,
+                "{INDENT}{d}[1] = ((uint64_t){l} / (uint64_t){r}) & 0x{msbs_mask:x};",
+
+            )?;
+        }
+        (LogicMode::FourValue, LogicMode::TwoValue, Some(_), _) => todo!(),
+
+        (LogicMode::FourValue, LogicMode::FourValue, None, _) => {
+            fv_inline_div_rem(f, dst, lhs, rhs, '/')?
+        }
+        (LogicMode::FourValue, LogicMode::FourValue, Some(_), _) => todo!(),
+
+        (LogicMode::TwoValue, LogicMode::FourValue, _, _) => unreachable!(),
     }
 
     Ok(())
@@ -372,6 +399,8 @@ pub fn cgc_bin_mod(
     lhs: CExpr<'_>,
     rhs: CExpr<'_>,
 ) -> io::Result<()> {
+    assert_eq!(lhs.ty(), rhs.ty());
+
     let size = dst.ty.size;
     let msbs_mask = if size.get() % 64 == 0 {
         u64::MAX
@@ -380,11 +409,29 @@ pub fn cgc_bin_mod(
     };
 
     let (d, l, r) = (dst.ident, lhs, rhs);
-    match (dst.ty.mode, dst.ty.array_size()) {
-        (LogicMode::TwoValue, None) => writeln!(f, "{INDENT}{d} = ({l} % {r}) & 0x{msbs_mask:x};")?,
-        (LogicMode::TwoValue, Some(_)) => todo!(),
-        (LogicMode::FourValue, None) => fv_inline_div_rem(f, dst, lhs, rhs, '%')?,
-        (LogicMode::FourValue, Some(_)) => todo!(),
+    match (dst.ty.mode, lhs.ty().mode, dst.ty.array_size(), lhs.ty().array_size()) {
+        (LogicMode::TwoValue, LogicMode::TwoValue, None, _) => writeln!(f, "{INDENT}{d} = ({l} % {r}) & 0x{msbs_mask:x};")?,
+        (LogicMode::TwoValue, LogicMode::TwoValue, Some(_), _) => todo!(),
+
+        (LogicMode::FourValue, LogicMode::TwoValue, None, _) => writeln!(
+            f,
+            "{INDENT}{d} = ({r} == 0) ? 0 : (0x{msbs_mask:x} | (((({element_ty}){l} % ({element_ty}){r}) & 0x{msbs_mask:x}) << {size}));",
+            element_ty = dst.ty.element_type()
+        )?,
+        (LogicMode::FourValue, LogicMode::TwoValue, Some(_), None) => {
+            writeln!(f, "{INDENT}{d}[0] = ({r} == 0) ? 0 : 0x{msbs_mask:x};")?;
+            writeln!(
+                f,
+                "{INDENT}{d}[1] = ((uint64_t){l} % (uint64_t){r}) & 0x{msbs_mask:x};",
+
+            )?;
+        }
+        (LogicMode::FourValue, LogicMode::TwoValue, Some(_), _) => todo!(),
+
+        (LogicMode::FourValue, LogicMode::FourValue, None, _) => fv_inline_div_rem(f, dst, lhs, rhs, '%')?,
+        (LogicMode::FourValue, LogicMode::FourValue, Some(_), _) => todo!(),
+
+        (LogicMode::TwoValue, LogicMode::FourValue, _, _) => unreachable!(),
     }
 
     Ok(())

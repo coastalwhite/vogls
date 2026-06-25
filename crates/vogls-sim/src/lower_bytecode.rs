@@ -67,7 +67,7 @@ pub fn lower_process_to_bytecode(
             &mut bb_phis,
         );
 
-        vogls_ir_properties::orders::post_order_keys(
+        vogls_ir::orders::post_order_keys(
             tr.entry(),
             &gl.bbs,
             &mut bb_seen,

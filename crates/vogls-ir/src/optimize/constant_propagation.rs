@@ -1,15 +1,15 @@
 use std::ops::Range;
 
 use slotmap::SlotMap;
+use vogls_bits::Bits;
 use vogls_bits::arithmetic::FvLogicValue;
-use vogls_bits::{Bits, VectorSize};
 use vogls_utils::{VgHashMap, VgHashSet};
 
+use crate::orders::post_order_keys;
 use crate::{
     BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryImmOpSimplification, BinaryOp,
     GlobalContext, Instruction, LogicMode, ProcessKey, ResizeOp, SCALAR_VSIZE, ShiftImmOp,
-    ShiftImmOpSimplification, Signal, SignalKey, SliceImmSimplification, Time, UnaryOp,
-    VariableKey, VariableMap, simplify_slice_imm,
+    ShiftImmOpSimplification, Signal, SignalKey, Time, UnaryOp, VariableKey, VariableMap,
 };
 
 pub fn constant_propagation(
@@ -34,305 +34,150 @@ pub fn constant_propagation(
     scratch_dep: &mut VgHashMap<VariableKey, (BasicBlockKey, usize, Range<usize>)>,
     scratch_dep_edges: &mut Vec<VariableKey>,
 ) {
-    let mut is_non_temporal = true;
-
+    let mut post_order = Vec::new();
+    let mut scratch_seen = VgHashSet::default();
+    let mut scratch_stack = Vec::new();
+    let mut additional = Vec::new();
     for tr in &gl.processes[process].regions {
-        scratch_map.clear();
-        scratch_dep.clear();
-        scratch_dep_edges.clear();
+        post_order_keys(
+            tr.entry(),
+            &gl.bbs,
+            &mut scratch_seen,
+            &mut scratch_stack,
+            &mut post_order,
+        );
+        post_order.reverse();
 
-        scratch_seen.clear();
-        scratch_stack.clear();
-        scratch_seen.insert(tr.entry());
-        scratch_stack.push(tr.entry());
-        while let Some(bb_key) = scratch_stack.pop() {
+        for bb_key in post_order.drain(..) {
             let bb = &mut gl.bbs[bb_key];
-            for i in bb.instrs.iter_mut() {
-                _ = constant_propagate_instruction(
-                    i,
+
+            // @Performance: Do this in-place where possible.
+            let mut output = Vec::with_capacity(bb.instrs.len());
+            for i in bb.instrs.drain(..) {
+                let result = constant_propagate_instruction(
+                    &i,
                     &mut gl.vars,
                     &mut gl.signals,
                     scratch_map,
-                    gl.logic_mode,
-                    true,
+                    &mut additional,
                 );
-
-                is_non_temporal &=
-                    !matches!(i, Instruction::Probe(..) | Instruction::Intrinsic(..));
-            }
-
-            is_non_temporal &= matches!(
-                bb.terminator,
-                BasicBlockTerminator::Halt | BasicBlockTerminator::Jump(..)
-            );
-
-            bb.terminator.for_each_non_temporal_bb(|bb_key| {
-                if scratch_seen.insert(bb_key) {
-                    scratch_stack.push(bb_key);
-                }
-            });
-        }
-
-        let is_temporal = !is_non_temporal;
-
-        scratch_seen.clear();
-        scratch_stack.clear();
-        scratch_seen.insert(tr.entry());
-        scratch_stack.push(tr.entry());
-        while let Some(bb_key) = scratch_stack.pop() {
-            let bb = &mut gl.bbs[bb_key];
-            for (instr_i, i) in bb.instrs.iter_mut().enumerate() {
-                if constant_propagate_instruction(
-                    i,
-                    &mut gl.vars,
-                    &mut gl.signals,
-                    scratch_map,
-                    gl.logic_mode,
-                    is_temporal,
-                )
-                .is_err()
-                {
-                    let dst = i.get_destination_variable().unwrap();
-                    let offset = scratch_dep_edges.len();
-                    i.for_each_src(|src| scratch_dep_edges.push(src));
-                    scratch_dep.insert(dst, (bb_key, instr_i, offset..scratch_dep_edges.len()));
+                if result.replace {
+                    output.extend(additional.drain(..));
+                } else {
+                    output.push(i);
                 }
             }
-            bb.terminator.for_each_non_temporal_bb(|bb_key| {
-                if scratch_seen.insert(bb_key) {
-                    scratch_stack.push(bb_key);
-                }
-            });
-        }
-
-        // All the variables that couldn't be immediately resolved get resolved by a depth-first
-        // search (DFS). We need to take care because there might be dependency loops caused by phi
-        // instructions. These we just mark as non-constant and move on.
-        if !scratch_dep.is_empty() {
-            enum StackItem {
-                Previsit(Range<usize>),
-                Postvisit,
-            }
-            let mut var_seen = VgHashSet::default();
-            let mut var_stack = Vec::new();
-
-            while let Some(&var) = scratch_dep.keys().next() {
-                let (bb_key, instr_i, range) = scratch_dep.remove(&var).unwrap();
-                var_stack.push((var, bb_key, instr_i, StackItem::Previsit(range)));
-
-                while let Some((var, bb_key, instr_i, visit)) = var_stack.pop() {
-                    match visit {
-                        StackItem::Previsit(range) => {
-                            if constant_propagate_instruction(
-                                &mut gl.bbs[bb_key].instrs[instr_i],
-                                &mut gl.vars,
-                                &mut gl.signals,
-                                scratch_map,
-                                gl.logic_mode,
-                                is_temporal,
-                            )
-                            .is_ok()
-                            {
-                                continue;
-                            }
-
-                            // There is a loop in variable dependencies. Mark all variables in the path
-                            // here as non-constant.
-                            if var_seen.insert(var) {
-                                scratch_map.insert(var, None);
-                                var_stack.retain(|(var, _, _, visit)| {
-                                    if matches!(visit, StackItem::Postvisit) {
-                                        scratch_map.insert(*var, None);
-                                        return false;
-                                    }
-
-                                    true
-                                });
-                            }
-
-                            var_stack.push((var, bb_key, instr_i, StackItem::Postvisit));
-                            var_stack.extend(scratch_dep_edges[range].iter().filter_map(|src| {
-                                let (bb_key, instr_i, range) = scratch_dep.remove(src)?;
-                                Some((*src, bb_key, instr_i, StackItem::Previsit(range)))
-                            }));
-                        }
-                        StackItem::Postvisit => {
-                            assert!(
-                                constant_propagate_instruction(
-                                    &mut gl.bbs[bb_key].instrs[instr_i],
-                                    &mut gl.vars,
-                                    &mut gl.signals,
-                                    scratch_map,
-                                    gl.logic_mode,
-                                    is_temporal
-                                )
-                                .is_ok()
-                            );
-                        }
-                    }
-                }
-            }
-        }
-
-        scratch_seen.clear();
-        scratch_stack.clear();
-        scratch_mfr.clear();
-
-        scratch_seen.insert(tr.entry());
-        scratch_stack.push(tr.entry());
-        while let Some(bb_key) = scratch_stack.pop() {
-            let bb = &mut gl.bbs[bb_key];
-            match &bb.terminator {
-                BasicBlockTerminator::VariableWait(target, time) => {
-                    if let Some(time) = scratch_map[time].as_ref() {
-                        let time = time.extract_exact_u64().unwrap_or(0);
-                        bb.terminator = BasicBlockTerminator::Wait(*target, Time(time));
-                    }
-                }
-                BasicBlockTerminator::Branch(condition, truthy, falsy) => {
-                    if let Some(condition) = scratch_map[condition].as_ref() {
-                        let (taken, untaken) = if condition.eq_one() {
-                            (*truthy, *falsy)
-                        } else {
-                            (*falsy, *truthy)
-                        };
-
-                        bb.terminator = BasicBlockTerminator::Jump(taken);
-                        scratch_mfr.insert(untaken);
-                    }
-                }
-                BasicBlockTerminator::Wait(..)
-                | BasicBlockTerminator::WaitRegion(..)
-                | BasicBlockTerminator::Watch(..)
-                | BasicBlockTerminator::Jump(..)
-                | BasicBlockTerminator::Halt => {}
-            }
-
-            bb.terminator.for_each_non_temporal_bb(|bb_key| {
-                if scratch_seen.insert(bb_key) {
-                    scratch_stack.push(bb_key);
-                }
-            });
-        }
-
-        scratch_mfr.retain(|bb_key| {
-            if scratch_seen.contains(bb_key) {
-                return false;
-            }
-            true
-        });
-
-        // If there are any basic-blocks that should be removed, remove them now and clear them up
-        // from the phi-instructions of other basic-blocks as those might be waiting on those
-        // variables to get resolved.
-        if !scratch_mfr.is_empty() {
-            scratch_stack.extend(scratch_mfr.iter().copied());
-            while let Some(bb_key) = scratch_stack.pop() {
-                gl.bbs[bb_key].terminator.for_each_non_temporal_bb(|next| {
-                    if !scratch_seen.contains(&next) && scratch_mfr.insert(next) {
-                        scratch_stack.push(next);
-                    }
-                });
-                gl.bbs.remove(bb_key);
-            }
-
-            // Remove phi referenced to removed basic-blocks and mark any variables as
-            // non-constants, so that they get removed as a dependency in the next stage.
-            scratch_seen.clear();
-            scratch_seen.insert(tr.entry());
-            scratch_stack.push(tr.entry());
-            while let Some(bb_key) = scratch_stack.pop() {
-                for i in &mut gl.bbs[bb_key].instrs {
-                    if let Instruction::Phi(dst, srcs) = i {
-                        let num_matches = srcs
-                            .iter()
-                            .filter(|(bb, _)| scratch_mfr.contains(bb))
-                            .count();
-
-                        assert!(num_matches < srcs.len());
-                        if num_matches == 0 {
-                            continue;
-                        }
-
-                        if num_matches == srcs.len() - 1 {
-                            let src = srcs
-                                .iter()
-                                .find(|(bb, _)| !scratch_mfr.contains(bb))
-                                .unwrap()
-                                .1;
-                            *i = Instruction::Resize(*dst, ResizeOp::Truncate, src);
-                        } else {
-                            *srcs = srcs
-                                .iter()
-                                .filter(|(bb, _)| !scratch_mfr.contains(bb))
-                                .copied()
-                                .collect();
-                        }
-                    }
-                }
-                gl.bbs[bb_key]
-                    .terminator
-                    .for_each_non_temporal_bb(|bb_key| {
-                        if scratch_seen.insert(bb_key) {
-                            scratch_stack.push(bb_key);
-                        }
-                    });
-            }
-            scratch_mfr.clear();
+            bb.instrs = output;
         }
     }
 }
 
+struct PropagateResult {
+    replace: bool,
+    ready: bool,
+}
+
 fn constant_propagate_instruction(
-    i: &mut Instruction,
+    i: &Instruction,
     vars: &mut VariableMap,
     signals: &mut SlotMap<SignalKey, Signal>,
     scratch_map: &mut VgHashMap<VariableKey, Option<Bits>>,
-    logic_mode: LogicMode,
-    is_temporal: bool,
-) -> Result<(), ()> {
+    additional: &mut Vec<Instruction>,
+) -> PropagateResult {
     use Instruction as I;
 
     // Skip the instruction if it is already handled.
     if i.get_destination_variable()
         .is_some_and(|dst| scratch_map.contains_key(&dst))
     {
-        return Ok(());
+        return PropagateResult {
+            replace: false,
+            ready: true,
+        };
+    }
+
+    macro_rules! get {
+        ($var:expr) => {{
+            let Some(value) = scratch_map.get($var) else {
+                return PropagateResult {
+                    replace: false,
+                    ready: false,
+                };
+            };
+            value
+        }};
+    }
+    macro_rules! assign_constant {
+        ($dst:expr, $constant:expr) => {{
+            let constant: Bits = $constant;
+            debug_assert!($dst.mode() == LogicMode::TwoValue || !constant.contains_special());
+            scratch_map.insert($dst, Some(constant.clone()));
+            additional.push(I::Constant($dst, constant));
+            return PropagateResult {
+                replace: true,
+                ready: true,
+            };
+        }};
+    }
+
+    macro_rules! not_constant {
+        ($dst:expr) => {{
+            scratch_map.insert($dst, None);
+            return PropagateResult {
+                replace: false,
+                ready: true,
+            };
+        }};
     }
 
     match i {
-        I::Constant(dst, bits) => _ = scratch_map.insert(*dst, Some(bits.clone())),
+        I::Constant(dst, bits) => {
+            debug_assert!(dst.mode() == LogicMode::TwoValue || !bits.contains_special());
+            _ = scratch_map.insert(*dst, Some(bits.clone()));
+            PropagateResult {
+                replace: false,
+                ready: true,
+            }
+        }
         I::Unary(dst, op, src) => {
-            let src_bits = scratch_map.get(src).ok_or(())?;
+            let src_bits = get!(src);
             let dst = *dst;
             match src_bits {
-                None => _ = scratch_map.insert(dst, None),
-                Some(b) => {
-                    let value = op.evaluate(b);
-                    scratch_map.insert(dst, Some(value.clone()));
-                    *i = I::Constant(dst, value);
-                }
+                None => not_constant!(dst),
+                Some(b) => assign_constant!(dst, op.evaluate(b)),
             }
         }
         I::Resize(dst, op, src) => {
-            let src_bits = scratch_map.get(src).ok_or(())?;
+            let src_bits = get!(src);
             let dst = *dst;
             match src_bits {
-                None => _ = scratch_map.insert(dst, None),
-                Some(b) => {
-                    let value = op.evaluate(b, vars.size(dst));
-                    scratch_map.insert(dst, Some(value.clone()));
-                    *i = I::Constant(dst, value);
-                }
+                None => not_constant!(dst),
+                Some(b) => assign_constant!(dst, op.evaluate(b, vars.size(dst))),
             }
         }
         I::Binary(dst, op, lhs, rhs) => {
             let (dst, op, lhs, rhs) = (*dst, *op, *lhs, *rhs);
-            let lhs_bits_entry = scratch_map.get(&lhs);
-            let rhs_bits_entry = scratch_map.get(&rhs);
+            let lhs_bits_entry = get!(&lhs);
+            let rhs_bits_entry = get!(&rhs);
             let operands_are_complete = lhs_bits_entry.is_some() & rhs_bits_entry.is_some();
-            let lhs_bits = lhs_bits_entry.map_or(None, |b| b.as_ref());
-            let rhs_bits = rhs_bits_entry.map_or(None, |b| b.as_ref());
+            let lhs_bits = lhs_bits_entry;
+            let rhs_bits = rhs_bits_entry;
+
+            macro_rules! simplify_div_mod_imm {
+                ($dst:expr, $src:expr, $imm:expr, $op:ident, $is_rhs:expr) => {{
+                    let b: &Bits = $imm;
+                    if b.contains_special() || ($is_rhs && b.is_equal_to_zero()) {
+                        assign_constant!(dst, Bits::new_unknown(b.size()));
+                    }
+                    if lhs.mode() == LogicMode::TwoValue {
+                        let tgt = vars.insert(LogicMode::TwoValue, b.size());
+                        additional.push(BI(tgt, IO::$op, lhs, b.clone()));
+                        additional.push(I::Unary(dst, UnaryOp::TvToFv, tgt));
+                    } else {
+                        additional.push(BI(dst, IO::$op, lhs, b.clone()));
+                    }
+                }};
+            }
 
             use BinaryImmOp as IO;
             use BinaryOp as O;
@@ -342,85 +187,83 @@ fn constant_propagate_instruction(
             match (op, lhs_bits, rhs_bits) {
                 (_, Some(l), Some(r)) => {
                     let value = op.evaluate(l, r, vars.size(dst));
-                    scratch_map.insert(dst, Some(value.clone()));
-                    *i = I::Constant(dst, value);
-                    return Ok(());
+                    assign_constant!(dst, value);
                 }
                 (_, None, None) => {}
 
-                (O::And, Some(b), _) => *i = BI(dst, IO::And, rhs, b.clone()),
-                (O::And, _, Some(b)) => *i = BI(dst, IO::And, lhs, b.clone()),
-                (O::Or, Some(b), _) => *i = BI(dst, IO::Or, rhs, b.clone()),
-                (O::Or, _, Some(b)) => *i = BI(dst, IO::Or, lhs, b.clone()),
-                (O::Xor, Some(b), _) => *i = BI(dst, IO::Xor, rhs, b.clone()),
-                (O::Xor, _, Some(b)) => *i = BI(dst, IO::Xor, lhs, b.clone()),
+                (O::And, Some(b), _) => additional.push(BI(dst, IO::And, rhs, b.clone())),
+                (O::And, _, Some(b)) => additional.push(BI(dst, IO::And, lhs, b.clone())),
+                (O::Or, Some(b), _) => additional.push(BI(dst, IO::Or, rhs, b.clone())),
+                (O::Or, _, Some(b)) => additional.push(BI(dst, IO::Or, lhs, b.clone())),
+                (O::Xor, Some(b), _) => additional.push(BI(dst, IO::Xor, rhs, b.clone())),
+                (O::Xor, _, Some(b)) => additional.push(BI(dst, IO::Xor, lhs, b.clone())),
 
-                (O::Add, Some(b), _) => *i = BI(dst, IO::Add, rhs, b.clone()),
-                (O::Add, _, Some(b)) => *i = BI(dst, IO::Add, lhs, b.clone()),
-                (O::Sub, Some(b), _) => *i = BI(dst, IO::RevSub, rhs, b.clone()),
-                (O::Sub, _, Some(b)) => *i = BI(dst, IO::Sub, lhs, b.clone()),
-                (O::Multiply, Some(b), _) => *i = BI(dst, IO::Multiply, rhs, b.clone()),
-                (O::Multiply, _, Some(b)) => *i = BI(dst, IO::Multiply, lhs, b.clone()),
-                (O::Power, Some(b), _) => *i = BI(dst, IO::RevPower, rhs, b.clone()),
-                (O::Power, _, Some(b)) => *i = BI(dst, IO::Power, lhs, b.clone()),
-                (O::Divide, Some(b), _) => *i = BI(dst, IO::RevDivide, rhs, b.clone()),
-                (O::Divide, _, Some(b)) => *i = BI(dst, IO::Divide, lhs, b.clone()),
-                (O::Modulus, Some(b), _) => *i = BI(dst, IO::RevModulus, rhs, b.clone()),
-                (O::Modulus, _, Some(b)) => *i = BI(dst, IO::Modulus, lhs, b.clone()),
+                (O::Add, Some(b), _) => additional.push(BI(dst, IO::Add, rhs, b.clone())),
+                (O::Add, _, Some(b)) => additional.push(BI(dst, IO::Add, lhs, b.clone())),
+                (O::Sub, Some(b), _) => additional.push(BI(dst, IO::RevSub, rhs, b.clone())),
+                (O::Sub, _, Some(b)) => additional.push(BI(dst, IO::Sub, lhs, b.clone())),
+                (O::Multiply, Some(b), _) => additional.push(BI(dst, IO::Multiply, rhs, b.clone())),
+                (O::Multiply, _, Some(b)) => additional.push(BI(dst, IO::Multiply, lhs, b.clone())),
+                (O::Power, Some(b), _) => additional.push(BI(dst, IO::RevPower, rhs, b.clone())),
+                (O::Power, _, Some(b)) => additional.push(BI(dst, IO::Power, lhs, b.clone())),
+                (O::Divide, Some(b), _) => simplify_div_mod_imm!(dst, lhs, b, RevDivide, false),
+                (O::Divide, _, Some(b)) => simplify_div_mod_imm!(dst, lhs, b, Divide, true),
+                (O::Modulus, Some(b), _) => simplify_div_mod_imm!(dst, lhs, b, RevModulus, false),
+                (O::Modulus, _, Some(b)) => simplify_div_mod_imm!(dst, lhs, b, Modulus, true),
 
                 (O::UnsignedLessEqual, Some(b), _) => {
-                    *i = BI(dst, IO::UnsignedGreaterEqual, rhs, b.clone())
+                    additional.push(BI(dst, IO::UnsignedGreaterEqual, rhs, b.clone()))
                 }
                 (O::UnsignedLessEqual, _, Some(b)) => {
-                    *i = BI(dst, IO::UnsignedLessEqual, lhs, b.clone())
+                    additional.push(BI(dst, IO::UnsignedLessEqual, lhs, b.clone()))
                 }
 
                 (O::LogicalShiftLeft, Some(_), _) => {}
                 (O::LogicalShiftLeft, _, Some(b)) => match b.extract_exact_u32() {
                     None => {
                         let value = Bits::new_unknown(vars.size(dst));
-                        scratch_map.insert(dst, Some(value.clone()));
-                        *i = I::Constant(dst, value);
-                        return Ok(());
+                        assign_constant!(dst, value);
                     }
-                    Some(offset) => *i = SI(dst, SO::LogicalShiftLeft, lhs, offset),
+                    Some(offset) => additional.push(SI(dst, SO::LogicalShiftLeft, lhs, offset)),
                 },
                 (O::LogicalShiftRight, Some(_), _) => {}
                 (O::LogicalShiftRight, _, Some(b)) => match b.extract_exact_u32() {
                     None => {
                         let value = Bits::new_unknown(vars.size(dst));
-                        scratch_map.insert(dst, Some(value.clone()));
-                        *i = I::Constant(dst, value);
-                        return Ok(());
+                        assign_constant!(dst, value);
                     }
-                    Some(offset) => *i = SI(dst, SO::LogicalShiftRight, lhs, offset),
+                    Some(offset) => additional.push(SI(dst, SO::LogicalShiftRight, lhs, offset)),
                 },
                 (O::ArithmeticShiftRight, Some(_), _) => {}
                 (O::ArithmeticShiftRight, _, Some(b)) => match b.extract_exact_u32() {
                     None => {
                         let value = Bits::new_unknown(vars.size(dst));
-                        scratch_map.insert(dst, Some(value.clone()));
-                        *i = I::Constant(dst, value);
-                        return Ok(());
+                        assign_constant!(dst, value);
                     }
-                    Some(offset) => *i = SI(dst, SO::ArithmeticShiftRight, lhs, offset),
+                    Some(offset) => additional.push(SI(dst, SO::ArithmeticShiftRight, lhs, offset)),
                 },
 
-                (O::Concat, Some(b), _) => *i = BI(dst, IO::ConcatLeft, rhs, b.clone()),
-                (O::Concat, _, Some(b)) => *i = BI(dst, IO::ConcatRight, lhs, b.clone()),
+                (O::Concat, Some(b), _) => additional.push(BI(dst, IO::ConcatLeft, rhs, b.clone())),
+                (O::Concat, _, Some(b)) => {
+                    additional.push(BI(dst, IO::ConcatRight, lhs, b.clone()))
+                }
 
                 (O::CopyX, Some(_), _) => {}
                 (O::CopyX, _, Some(_)) => {}
                 (O::CopyZ, Some(_), _) => {}
                 (O::CopyZ, _, Some(_)) => {}
 
-                (O::Min, Some(b), _) => *i = BI(dst, IO::Min, rhs, b.clone()),
-                (O::Min, _, Some(b)) => *i = BI(dst, IO::Min, lhs, b.clone()),
-                (O::Max, Some(b), _) => *i = BI(dst, IO::Max, rhs, b.clone()),
-                (O::Max, _, Some(b)) => *i = BI(dst, IO::Max, lhs, b.clone()),
+                (O::Min, Some(b), _) => additional.push(BI(dst, IO::Min, rhs, b.clone())),
+                (O::Min, _, Some(b)) => additional.push(BI(dst, IO::Min, lhs, b.clone())),
+                (O::Max, Some(b), _) => additional.push(BI(dst, IO::Max, rhs, b.clone())),
+                (O::Max, _, Some(b)) => additional.push(BI(dst, IO::Max, lhs, b.clone())),
 
-                (O::CaseEquality, Some(b), _) => *i = BI(dst, IO::CaseEquality, rhs, b.clone()),
-                (O::CaseEquality, _, Some(b)) => *i = BI(dst, IO::CaseEquality, lhs, b.clone()),
+                (O::CaseEquality, Some(b), _) => {
+                    additional.push(BI(dst, IO::CaseEquality, rhs, b.clone()))
+                }
+                (O::CaseEquality, _, Some(b)) => {
+                    additional.push(BI(dst, IO::CaseEquality, lhs, b.clone()))
+                }
 
                 (O::Posedge, Some(_), _) => {}
                 (O::Posedge, _, Some(_)) => {}
@@ -430,59 +273,48 @@ fn constant_propagate_instruction(
 
             // If we managed to convert it to a immediate based operation, we should try to
             // simplify further.
-            match i {
-                I::BinaryImm(dst, op, src, imm) => {
-                    let (dst, src) = (*dst, *src);
-                    use BinaryImmOpSimplification as S;
-                    match op.simplify(dst, src, imm) {
-                        S::Keep => {}
-                        S::Source => *i = I::Resize(dst, ResizeOp::Truncate, src),
-                        S::Immediate => {
-                            let imm = imm.clone();
-                            *i = I::Constant(dst, imm.clone());
-                            scratch_map.insert(dst, Some(imm));
-                            return Ok(());
-                        }
-                        S::Constant(bits) => {
-                            *i = I::Constant(dst, bits.clone());
-                            scratch_map.insert(dst, Some(bits));
-                            return Ok(());
-                        }
-                        S::Instruction(instr) => *i = instr,
-                    }
-                }
-                I::ShiftImm(dst, op, src, amount) => {
-                    let (dst, src) = (*dst, *src);
-                    use ShiftImmOpSimplification as S;
-                    match op.simplify(vars.size(dst), *amount) {
-                        S::Keep => {}
-                        S::Source => *i = I::Resize(dst, ResizeOp::Truncate, src),
-                        S::Constant(bits) => {
-                            *i = I::Constant(dst, bits.clone());
-                            scratch_map.insert(dst, Some(bits));
-                            return Ok(());
+            let i = additional.get_mut(0);
+            if let Some(i) = i {
+                match i {
+                    I::BinaryImm(dst, op, src, imm) => {
+                        let (dst, op, src) = (*dst, *op, *src);
+                        use BinaryImmOpSimplification as S;
+                        match op.simplify(dst, src, imm) {
+                            S::Keep => *i = BI(dst, op, src, imm.clone()),
+                            S::Source => *i = I::copy(vars, dst, src),
+                            S::Immediate => assign_constant!(dst, imm.clone()),
+                            S::Constant(value) => assign_constant!(dst, value),
+                            S::Instruction(instr) => *i = instr,
                         }
                     }
+                    I::ShiftImm(dst, op, src, amount) => {
+                        let (dst, src) = (*dst, *src);
+                        use ShiftImmOpSimplification as S;
+                        match op.simplify(vars.size(dst), *amount) {
+                            S::Keep => {}
+                            S::Source => *i = I::copy(vars, dst, src),
+                            S::Constant(value) => assign_constant!(dst, value),
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
 
-            if !operands_are_complete {
-                return Err(());
+            if operands_are_complete && additional.len() == 0 {
+                not_constant!(dst);
             }
 
-            scratch_map.insert(dst, None);
+            PropagateResult {
+                replace: additional.len() > 0,
+                ready: operands_are_complete,
+            }
         }
         I::BinaryImm(dst, op, src, imm) => {
-            let src_bits = scratch_map.get(src).ok_or(())?;
+            let src_bits = get!(src);
             let dst = *dst;
             match src_bits.as_ref() {
-                None => _ = scratch_map.insert(dst, None),
-                Some(b) => {
-                    let bits = op.evaluate(b, imm);
-                    scratch_map.insert(dst, Some(bits.clone()));
-                    *i = I::Constant(dst, bits);
-                }
+                None => not_constant!(dst),
+                Some(b) => assign_constant!(dst, op.evaluate(b, imm)),
             }
         }
         I::Slice(dst, src, offset) => {
@@ -500,38 +332,57 @@ fn constant_propagate_instruction(
                         None => Bits::new_unknown(dst_size),
                         Some(offset) => l.slicex(offset, dst_size),
                     };
-                    scratch_map.insert(dst, Some(value.clone()));
-                    *i = I::Constant(dst, value);
-                    return Ok(());
+                    assign_constant!(dst, value);
                 }
                 (Some(l), None) if l.count_unknown() == l.size().get() => {
                     let dst_size = vars.size(dst);
                     let value = Bits::new_unknown(dst_size);
-                    scratch_map.insert(dst, Some(value.clone()));
-                    *i = I::Constant(dst, value);
-                    return Ok(());
+                    assign_constant!(dst, value);
                 }
                 (None, Some(offset)) => {
                     let dst_size = vars.size(dst);
                     let Some(offset) = offset.extract_exact_u32() else {
                         let value = Bits::new_unknown(dst_size);
-                        scratch_map.insert(dst, Some(value.clone()));
-                        *i = I::Constant(dst, value);
-                        return Ok(());
+                        assign_constant!(dst, value);
                     };
 
                     let src_size = vars.size(src);
                     if offset <= src_size.get() - dst_size.get() {
-                        use SliceImmSimplification as S;
-                        match simplify_slice_imm(dst, dst_size, src, src_size, offset) {
-                            S::Keep => *i = I::SliceImm(dst, src, offset),
-                            S::Source => *i = I::Resize(dst, ResizeOp::Truncate, src),
-                            S::Constant(bits) => {
-                                scratch_map.insert(dst, Some(bits.clone()));
-                                *i = I::Constant(dst, bits);
-                                return Ok(());
+                        fn maybe_cast_mode(
+                            dst: VariableKey,
+                            src: VariableKey,
+                            vars: &mut VariableMap,
+                            additional: &mut Vec<Instruction>,
+                            mut f: impl FnMut(VariableKey) -> Instruction,
+                        ) {
+                            if dst.mode() != src.mode() {
+                                let dst_size = vars.size(dst);
+                                let tgt = vars.insert(src.mode(), dst_size);
+                                additional.push(f(tgt));
+                                additional.push(I::copy(vars, dst, tgt));
+                            } else {
+                                additional.push(f(dst));
                             }
-                            S::Instruction(instruction) => *i = instruction,
+                        }
+
+                        if dst_size == src_size {
+                            if offset == 0 {
+                                additional.push(I::copy(vars, dst, src));
+                            } else {
+                                maybe_cast_mode(dst, src, vars, additional, |dst| {
+                                    I::ShiftImm(dst, ShiftImmOp::LogicalShiftRight, src, offset)
+                                });
+                            }
+                        } else if offset >= src_size.get() {
+                            assign_constant!(dst, Bits::new_zeroed(dst_size))
+                        } else if offset == 0 {
+                            maybe_cast_mode(dst, src, vars, additional, |dst| {
+                                I::Resize(dst, ResizeOp::Truncate, src)
+                            });
+                        } else {
+                            maybe_cast_mode(dst, src, vars, additional, |dst| {
+                                I::SliceImm(dst, src, offset)
+                            });
                         }
                     }
                 }
@@ -539,54 +390,59 @@ fn constant_propagate_instruction(
                 (None, None) | (Some(_), None) => {}
             };
 
-            if !operands_are_complete {
-                return Err(());
+            if operands_are_complete && additional.len() == 0 {
+                not_constant!(dst);
             }
-            scratch_map.insert(dst, None);
+
+            PropagateResult {
+                replace: additional.len() > 0,
+                ready: operands_are_complete,
+            }
         }
         I::SliceImm(dst, src, amount) => {
-            let src_bits = scratch_map.get(src).ok_or(())?;
+            let src_bits = get!(src);
             let (dst, amount) = (*dst, *amount);
             match src_bits.as_ref() {
-                None => _ = scratch_map.insert(dst, None),
+                None => not_constant!(dst),
                 Some(b) => {
-                    let bits = b.slicez(amount, vars.size(dst));
-                    scratch_map.insert(dst, Some(bits.clone()));
-                    *i = I::Constant(dst, bits);
+                    assign_constant!(dst, b.slicez(amount, vars.size(dst)));
                 }
             }
         }
         I::ShiftImm(dst, op, src, amount) => {
-            let src_bits = scratch_map.get(src).ok_or(())?;
+            let src_bits = get!(src);
             let (dst, amount) = (*dst, *amount);
             match src_bits.as_ref() {
-                None => _ = scratch_map.insert(dst, None),
-                Some(b) => {
-                    let bits = op.evaluate(b, amount);
-                    scratch_map.insert(dst, Some(bits.clone()));
-                    *i = I::Constant(dst, bits);
-                }
+                None => not_constant!(dst),
+                Some(b) => assign_constant!(dst, op.evaluate(b, amount)),
             }
         }
         I::Select(dst, cond, truthy, falsy) => {
-            let cond_bits = scratch_map.get(cond).ok_or(())?;
-            let truthy_bits = scratch_map.get(truthy).ok_or(())?;
-            let falsy_bits = scratch_map.get(falsy).ok_or(())?;
+            let cond_bits = get!(cond);
+            let truthy_bits = get!(truthy);
+            let falsy_bits = get!(falsy);
 
             let (dst, truthy, falsy) = (*dst, *truthy, *falsy);
 
             match (truthy_bits, falsy_bits) {
-                (Some(t), Some(f)) if t == f => {
-                    let bits = t.clone();
-                    scratch_map.insert(dst, Some(bits.clone()));
-                    *i = I::Constant(dst, bits);
-                    return Ok(());
-                }
+                (Some(t), Some(f)) if t == f => assign_constant!(dst, t.clone()),
                 (Some(t), Some(f)) if t.size() == SCALAR_VSIZE => {
                     use FvLogicValue as L;
                     match (t.select_value(0), f.select_value(0)) {
-                        (L::L1, L::L0) => *i = I::Resize(dst, ResizeOp::Truncate, *cond),
-                        (L::L0, L::L1) => *i = I::Unary(dst, UnaryOp::Neg, *cond),
+                        (L::L1, L::L0) => {
+                            additional.push(I::copy(vars, dst, *cond));
+                            return PropagateResult {
+                                replace: true,
+                                ready: false,
+                            };
+                        }
+                        (L::L0, L::L1) => {
+                            additional.push(I::Unary(dst, UnaryOp::Neg, *cond));
+                            return PropagateResult {
+                                replace: true,
+                                ready: false,
+                            };
+                        }
                         _ => {}
                     }
                 }
@@ -594,7 +450,7 @@ fn constant_propagate_instruction(
             }
 
             match cond_bits.as_ref() {
-                None => _ = scratch_map.insert(dst, None),
+                None => not_constant!(dst),
                 Some(b) => {
                     let (src, bits) = if b.is_one() {
                         (truthy, truthy_bits)
@@ -604,119 +460,47 @@ fn constant_propagate_instruction(
 
                     match bits {
                         None => {
-                            scratch_map.insert(dst, None);
-                            *i = I::Resize(dst, ResizeOp::Truncate, src);
+                            additional.push(I::copy(vars, dst, src));
+                            return PropagateResult {
+                                replace: true,
+                                ready: false,
+                            };
                         }
-                        Some(bits) => {
-                            let bits = bits.clone();
-                            scratch_map.insert(dst, Some(bits.clone()));
-                            *i = I::Constant(dst, bits);
-                        }
+                        Some(bits) => assign_constant!(dst, bits.clone()),
                     }
                 }
             }
         }
-        I::Intrinsic(dst, ..) | I::LastUpdateTime(dst, ..) => {
-            scratch_map.insert(*dst, None);
-        }
-        I::Probe(dst, _, _) => {
-            scratch_map.insert(*dst, None);
-        }
+
+        I::Intrinsic(dst, ..) | I::LastUpdateTime(dst, ..) => not_constant!(*dst),
+        I::Probe(dst, _, _) => not_constant!(*dst),
+
         I::ProbeSlice(dst, signal, offset) => {
             let (dst, signal) = (*dst, *signal);
-            let offset_bits = scratch_map.get(offset).ok_or(())?;
+            let offset_bits = get!(offset);
             match offset_bits.as_ref() {
                 None => {}
                 Some(b) => match b.extract_exact_u32() {
-                    None => {
-                        let bits = Bits::new_unknown(vars.size(dst));
-                        scratch_map.insert(dst, Some(bits.clone()));
-                        *i = I::Constant(dst, bits);
-                        return Ok(());
-                    }
+                    None => assign_constant!(dst, Bits::new_unknown(vars.size(dst))),
                     Some(offset) => {
                         let dst_size = vars.size(dst);
                         let src_size = signals[signal].size;
                         if offset <= src_size.get() - dst_size.get() {
-                            *i = I::Probe(dst, signal, offset);
+                            additional.push(I::Probe(dst, signal, offset));
+                            return PropagateResult {
+                                replace: true,
+                                ready: false,
+                            };
                         }
                     }
                 },
             }
-            scratch_map.insert(dst, None);
+            not_constant!(dst);
         }
-        I::Drive(dst, src, partial) => {
-            if is_temporal {
-                return Ok(());
-            }
-
-            let Some(Some(src)) = scratch_map.get(src) else {
-                return Ok(());
-            };
-
-            let size = signals[*dst].size;
-            let mask_size = partial.map_or(size, |(_, size)| size);
-            let offset = match partial {
-                None => 0,
-                Some((offset, _)) => {
-                    let Some(Some(offset)) = scratch_map.get(offset) else {
-                        return Ok(());
-                    };
-                    if offset.contains_special() {
-                        return Ok(());
-                    }
-                    offset.extract_exact_u32().unwrap()
-                }
-            };
-
-            let mut value = match signals[*dst].initialize.take() {
-                None => match logic_mode {
-                    LogicMode::TwoValue => Bits::new_zeroed(size),
-                    LogicMode::FourValue => Bits::new_unknown(size),
-                },
-                Some(current) => current,
-            };
-
-            if offset < mask_size.get() {
-                let src = src.truncate(
-                    src.size()
-                        .min(VectorSize::new(mask_size.get() - offset).unwrap()),
-                );
-
-                if offset > 0 && offset + src.size().get() < size.get() {
-                    let ls = Bits::concatenate(
-                        &value.slicez(
-                            offset,
-                            VectorSize::new(size.get() - src.size().get() - offset).unwrap(),
-                        ),
-                        &src,
-                    );
-                    value =
-                        Bits::concatenate(&ls, &value.truncate(VectorSize::new(offset).unwrap()));
-                } else if offset > 0 {
-                    value = Bits::concatenate(
-                        &src,
-                        &value.truncate(VectorSize::new(size.get() - src.size().get()).unwrap()),
-                    );
-                } else if offset + src.size().get() < size.get() {
-                    value = Bits::concatenate(
-                        &value.slicez(
-                            offset,
-                            VectorSize::new(size.get() - src.size().get()).unwrap(),
-                        ),
-                        &src,
-                    );
-                } else {
-                    value = src;
-                }
-            }
-            signals[*dst].initialize = Some(value);
-
-            *i = I::Constant(
-                vars.insert(LogicMode::FourValue, SCALAR_VSIZE),
-                Bits::new_unknown(SCALAR_VSIZE),
-            );
-        }
+        I::Drive(..) => PropagateResult {
+            replace: false,
+            ready: true,
+        },
         I::Phi(dst, srcs) => {
             assert!(!srcs.is_empty());
             let mut acc = None;
@@ -742,17 +526,15 @@ fn constant_propagate_instruction(
             }
 
             if !is_all_equal_constant {
-                scratch_map.insert(*dst, None);
-                return Ok(());
+                not_constant!(*dst);
             }
             if !is_all_complete {
-                return Err(());
+                return PropagateResult {
+                    replace: false,
+                    ready: true,
+                };
             }
-            let acc = acc.cloned();
-            scratch_map.insert(*dst, acc.clone());
-            *i = I::Constant(*dst, acc.unwrap())
+            assign_constant!(*dst, acc.clone().unwrap().clone());
         }
     }
-
-    Ok(())
 }
