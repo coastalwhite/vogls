@@ -35,43 +35,47 @@ pub fn check_ir_form(regions: &[TemporalRegionKey], gl: &GlobalContext) {
 
                 use Instruction as I;
                 match i {
-                    I::Constant(dst, bits) => {
-                        if dst.mode() != bits.mode().into() {
-                            dbg!(dst.mode(), LogicMode::from(bits.mode()));
-                        }
-                        assert_eq!(gl.vars.size(*dst), bits.size());
-                        assert_eq!(dst.mode(), bits.mode().into());
-                    }
+                    I::Constant(dst, bits) => assert_eq!(gl.vars.size(*dst), bits.size()),
                     I::Unary(dst, op, src) => {
                         assert_eq!(gl.vars.size(*dst), op.output_size(gl.vars.size(*src)));
-                        assert_eq!(dst.mode(), op.output_mode(src.mode()));
+                        assert_eq!(dst.mode(), op.output_mode(src.mode()).unwrap());
                     }
                     I::Resize(dst, op, src) => {
                         assert_eq!(dst.mode(), op.output_mode(src.mode()));
                     }
                     I::Binary(dst, op, lhs, rhs) => {
-                        if dst.mode() != op.output_mode(lhs.mode(), rhs.mode()) {
-                            dbg!(&bb.instrs);
-                            dbg!(op, dst.mode(), op.output_mode(lhs.mode(), rhs.mode()));
-                        }
+                        let output_mode = op.output_mode(lhs.mode(), rhs.mode());
+                        assert_eq!(lhs.mode(), output_mode.lhs);
+                        assert_eq!(rhs.mode(), output_mode.rhs);
+                        assert_eq!(dst.mode(), output_mode.dst);
                         assert_eq!(
                             gl.vars.size(*dst),
                             op.output_size(gl.vars.size(*lhs), gl.vars.size(*rhs))
                                 .unwrap()
                         );
-                        assert_eq!(dst.mode(), op.output_mode(lhs.mode(), rhs.mode()));
                     }
                     I::BinaryImm(dst, op, src, imm) => {
+                        let output_mode = op.output_mode(src.mode(), imm.mode().into());
+                        assert_eq!(src.mode(), output_mode.src);
+                        assert_eq!(dst.mode(), output_mode.dst);
                         assert_eq!(
                             gl.vars.size(*dst),
                             op.output_size(gl.vars.size(*src), imm.size()).unwrap()
                         );
-                        assert_eq!(dst.mode(), op.output_mode(src.mode(), imm.mode().into()));
                     }
-                    I::Slice(..) => {}
-                    I::SliceImm(..) => {}
-                    I::ShiftImm(..) => {}
-                    I::Select(..) => {}
+                    I::Slice(dst, _, _) => {
+                        assert_eq!(dst.mode(), LogicMode::FourValue);
+                    }
+                    I::SliceImm(dst, src, _) => {
+                        assert_eq!(dst.mode(), src.mode());
+                    }
+                    I::ShiftImm(dst, _, src, _) => {
+                        assert_eq!(dst.mode(), src.mode());
+                    }
+                    I::Select(dst, _, truthy, falsy) => {
+                        assert_eq!(dst.mode(), truthy.mode());
+                        assert_eq!(dst.mode(), falsy.mode());
+                    }
                     I::Intrinsic(..) => {}
                     I::LastUpdateTime(dst, _) => {
                         assert_eq!(dst.mode(), LogicMode::TwoValue);
@@ -80,8 +84,12 @@ pub fn check_ir_form(regions: &[TemporalRegionKey], gl: &GlobalContext) {
                     I::Probe(dst, signal, _) => {
                         assert_eq!(dst.mode(), gl.signals[*signal].mode);
                     }
-                    I::ProbeSlice(..) => {}
-                    I::Drive(..) => {}
+                    I::ProbeSlice(dst, _, _) => {
+                        assert_eq!(dst.mode(), LogicMode::FourValue);
+                    }
+                    I::Drive(signal, src, _) => {
+                        assert_eq!(gl.signals[*signal].mode, src.mode());
+                    }
                     I::Phi(..) => {}
                 }
             }

@@ -203,7 +203,7 @@ fn lower_instruction(
                         bytecode.count_ones(rd, rs);
                         bytecode.truncate(rd, rd, SixBitSize::SCALAR);
                     }
-                    O::LeadingZeros => todo!(),
+                    O::LeadingZeros | O::TvToFv | O::FvToTv => todo!(),
                 }
             } else {
                 todo!()

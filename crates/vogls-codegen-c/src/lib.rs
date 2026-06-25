@@ -3,8 +3,7 @@ use std::{fmt, io};
 
 use vogls_bits::BitsDataRef;
 use vogls_codegen::{
-    HeapBuilder, HeapOffset, HeapRef, bin_args_need_conversion, bin_imm_args_need_conversion,
-    insert_bb_phis,
+    HeapBuilder, HeapOffset, HeapRef, bin_imm_args_need_conversion, insert_bb_phis,
 };
 use vogls_ir::dyn_format_string::{DynFormatArgument, DynFormatString};
 use vogls_ir::{
@@ -14,7 +13,7 @@ use vogls_ir::{
 };
 use vogls_runtime::RtSignalKey;
 use vogls_runtime::plugins::RuntimePluginState;
-use vogls_utils::{IndexSet, VgHashMap, VgHashSet};
+use vogls_utils::{IndexSet, VgHashMap, VgHashSet, saturating_rem};
 
 pub mod runtime;
 
@@ -67,37 +66,23 @@ impl fmt::Display for CIdent {
 }
 
 #[derive(Clone, Copy)]
-enum CExprRaw<'a> {
+enum CExpr<'a> {
     Ident(CVar),
     HeapRef(HeapRef, LogicMode),
-    Bits(&'a Bits),
+    Bits(&'a Bits, LogicMode),
 }
 
-#[derive(Clone, Copy)]
-struct CExpr<'a> {
-    raw: CExprRaw<'a>,
-    output_mode: LogicMode,
-}
 impl CExpr<'_> {
     fn ty(self) -> CType {
-        CType {
-            size: self.raw.ty().size,
-            mode: self.output_mode,
-        }
-    }
-}
-
-impl CExprRaw<'_> {
-    fn ty(self) -> CType {
         match self {
-            CExprRaw::Ident(var) => var.ty,
-            CExprRaw::HeapRef(heap_ref, mode) => CType {
+            CExpr::Ident(var) => var.ty,
+            CExpr::HeapRef(heap_ref, mode) => CType {
                 size: heap_ref.size,
                 mode,
             },
-            CExprRaw::Bits(bits) => CType {
+            CExpr::Bits(bits, mode) => CType {
                 size: bits.size(),
-                mode: bits.mode().into(),
+                mode,
             },
         }
     }
@@ -105,126 +90,11 @@ impl CExprRaw<'_> {
 
 impl<'a> From<CVar> for CExpr<'a> {
     fn from(value: CVar) -> Self {
-        Self {
-            raw: CExprRaw::Ident(value),
-            output_mode: value.ty.mode,
-        }
+        CExpr::Ident(value)
     }
 }
 
 impl fmt::Display for CExpr<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let size = self.ty().size;
-        let input_mode = self.raw.ty().mode;
-        if input_mode == self.output_mode {
-            return self.raw.fmt(f);
-        }
-
-        writeln!(f, "({{")?;
-        use LogicMode as M;
-        let dst_ty = CType {
-            size,
-            mode: self.output_mode,
-        };
-        let src_ty = CType {
-            size,
-            mode: input_mode,
-        };
-
-        let src = self.raw;
-        let dst = CIdent::Scoped(0);
-        write!(f, "{INDENT}{} {dst}", dst_ty.element_type())?;
-        if let Some(array_size) = dst_ty.array_size() {
-            write!(f, "[{array_size}]")?;
-        }
-        writeln!(f, ";")?;
-
-        let dst = CVar {
-            ident: dst,
-            ty: dst_ty,
-        };
-        let dst = CExprRaw::Ident(dst);
-        let msbw_mask = if size.get() % 64 == 0 {
-            u64::MAX
-        } else {
-            mask(size.get() % 64)
-        };
-        match (
-            self.output_mode,
-            input_mode,
-            dst_ty.array_size(),
-            src_ty.array_size(),
-        ) {
-            (M::FourValue, M::TwoValue, None, None) => {
-                writeln!(
-                    f,
-                    "{INDENT}{dst} = ((({dst_elem_ty}){src}) << {size}) | 0x{mask:x};",
-                    dst_elem_ty = dst_ty.element_type(),
-                    mask = msbw_mask
-                )?;
-            }
-            (M::FourValue, M::TwoValue, Some(_), None) => {
-                writeln!(
-                    f,
-                    "{INDENT}{dst}[0] = 0x{msbw_mask:x}; {dst}[1] = (uint64_t){src};"
-                )?;
-            }
-            (M::FourValue, M::TwoValue, Some(_), Some(arr_size)) => {
-                let main_loop_size = if size.get() % 64 == 0 {
-                    arr_size
-                } else {
-                    arr_size - 1
-                };
-                if main_loop_size > 0 {
-                    writeln!(
-                        f,
-                        "{INDENT}memset({dst}, 0xFF, {main_loop_size}*sizeof(uint64_t));"
-                    )?;
-                    writeln!(
-                        f,
-                        "{INDENT}memcpy({dst}+{arr_size}, {src}, {main_loop_size}*sizeof(uint64_t));"
-                    )?;
-                }
-                if size.get() % 64 != 0 {
-                    let last_i = 2 * arr_size - 1;
-                    writeln!(f, "{INDENT}{dst}[{main_loop_size}] = 0x{msbw_mask:x};")?;
-                    writeln!(f, "{INDENT}{dst}[{last_i}] = {src}[{main_loop_size}];")?;
-                }
-            }
-
-            (M::TwoValue, M::FourValue, None, None) => {
-                writeln!(
-                    f,
-                    "{INDENT}{dst} = ({dst_elem_ty})({src} >> {size});",
-                    dst_elem_ty = dst_ty.element_type(),
-                )?;
-            }
-            (M::TwoValue, M::FourValue, None, Some(_)) => {
-                writeln!(
-                    f,
-                    "{INDENT}{dst} = ({dst_elem_ty}){src}[1];",
-                    dst_elem_ty = dst_ty.element_type(),
-                )?;
-            }
-            (M::TwoValue, M::FourValue, Some(arr_size), Some(_)) => {
-                writeln!(
-                    f,
-                    "{INDENT}memcpy({dst}, {src} + {arr_size}, {arr_size} * sizeof(uint64_t));"
-                )?;
-            }
-
-            (M::TwoValue, M::FourValue, Some(_), None)
-            | (M::FourValue, M::TwoValue, None, Some(_)) => {
-                unreachable!()
-            }
-            (M::FourValue, M::FourValue, _, _) | (M::TwoValue, M::TwoValue, _, _) => unreachable!(),
-        }
-        writeln!(f, "{dst};")?;
-        f.write_str("})")
-    }
-}
-
-impl fmt::Display for CExprRaw<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Ident(var) => var.ident.fmt(f),
@@ -247,25 +117,67 @@ impl fmt::Display for CExprRaw<'_> {
                     }
                 }
             }
-            Self::Bits(bits) => match bits.as_data_ref() {
-                BitsDataRef::InlineTv(v) => write!(f, "((uint64_t)0x{v:x})"),
-                BitsDataRef::SeparateTv(v) => {
-                    write!(f, "(uint64_t[{}]){{0x{:x}", v.len(), v[0])?;
-                    for v in &v[1..] {
-                        write!(f, ",0x{v:x}")?;
+            Self::Bits(bits, mode) => match mode {
+                LogicMode::TwoValue => match bits.as_data_ref() {
+                    BitsDataRef::InlineTv(v) => write!(f, "((uint64_t)0x{v:x})"),
+                    BitsDataRef::SeparateTv(v) => {
+                        write!(f, "(uint64_t[{}]){{0x{:x}", v.len(), v[0])?;
+                        for v in &v[1..] {
+                            write!(f, ",0x{v:x}")?;
+                        }
+                        f.write_char('}')
                     }
-                    f.write_char('}')
-                }
-                BitsDataRef::InlineFv(spc, val) => {
-                    write!(f, "((uint64_t)0x{:x})", (val << bits.size().get()) | spc)
-                }
-                BitsDataRef::SeparateFv(v) => {
-                    write!(f, "(uint64_t[{}]){{0x{:x}", v.len(), v[0])?;
-                    for v in &v[1..] {
-                        write!(f, ",0x{v:x}")?;
+                    BitsDataRef::InlineFv(..) | BitsDataRef::SeparateFv(..)
+                        if bits.contains_special() =>
+                    {
+                        unreachable!()
                     }
-                    f.write_char('}')
-                }
+                    BitsDataRef::InlineFv(_, v) => write!(f, "((uint64_t)0x{v:x})"),
+                    BitsDataRef::SeparateFv(v) if bits.size().get() <= 64 => {
+                        write!(f, "((uint64_t)0x{:x})", v[1])
+                    }
+                    BitsDataRef::SeparateFv(v) => {
+                        let v = &v[v.len() / 2..];
+                        write!(f, "(uint64_t[{}]){{0x{:x}", v.len(), v[0])?;
+                        for v in &v[1..] {
+                            write!(f, ",0x{v:x}")?;
+                        }
+                        f.write_char('}')
+                    }
+                },
+                LogicMode::FourValue => match bits.as_data_ref() {
+                    BitsDataRef::InlineTv(v) => {
+                        let mask = mask(bits.size().get());
+                        if bits.size() <= vogls_ir::Mode::FourValue.max_inline_size() {
+                            write!(f, "((uint64_t)0x{:x})", (v << bits.size().get()) | mask)
+                        } else {
+                            write!(f, "(uint64_t[2]){{0x{:x}, 0x{:x}}}", mask, v)
+                        }
+                    }
+                    BitsDataRef::SeparateTv(v) => {
+                        let mask = mask(saturating_rem(bits.size().get(), 64));
+                        let nwords = bits.size().get().saturating_sub(64).div_ceil(64);
+                        write!(f, "(uint64_t[{}]){{", v.len() * 2)?;
+                        for _ in 0..nwords {
+                            write!(f, "0xffffffffffffffff,")?;
+                        }
+                        write!(f, "0x{mask:x}")?;
+                        for v in v.iter() {
+                            write!(f, ",0x{v:x}")?;
+                        }
+                        f.write_char('}')
+                    }
+                    BitsDataRef::InlineFv(spc, val) => {
+                        write!(f, "((uint64_t)0x{:x})", (val << bits.size().get()) | spc)
+                    }
+                    BitsDataRef::SeparateFv(v) => {
+                        write!(f, "(uint64_t[{}]){{0x{:x}", v.len(), v[0])?;
+                        for v in &v[1..] {
+                            write!(f, ",0x{v:x}")?;
+                        }
+                        f.write_char('}')
+                    }
+                },
             },
         }
     }
@@ -564,44 +476,32 @@ pub fn lower_process(
                                 buffer,
                                 "{INDENT}{} = {};",
                                 t.ident,
-                                CExpr {
-                                    raw: CExprRaw::Bits(bits),
-                                    output_mode: dst.mode()
-                                },
+                                CExpr::Bits(bits, dst.mode()),
                             )?,
                             Some(n) => writeln!(
                                 buffer,
                                 "{INDENT}memcpy({}, {}, {n}*sizeof(uint64_t));",
                                 t.ident,
-                                CExpr {
-                                    raw: CExprRaw::Bits(bits),
-                                    output_mode: dst.mode()
-                                },
+                                CExpr::Bits(bits, dst.mode()),
                             )?,
                         }
                     }
                     I::Unary(dst, op, src) => {
-                        let src_size = gl.vars.size(*src);
-
-                        let mut t: CExpr = temp_map[src].into();
-                        t.output_mode = dst.mode();
-
-                        let dst_t: CExpr = temp_map[dst].into();
+                        let t: CExpr = temp_map[src].into();
+                        let dst_t = temp_map[dst];
                         use UnaryOp as O;
                         match op {
-                            O::Neg => unary::cgc_negate(&mut buffer, dst_t, t)?,
-                            O::ReduceOr => unary::cgc_reduce_or(&mut buffer, dst_t, t)?,
-                            O::ReduceAnd => unary::cgc_reduce_and(&mut buffer, dst_t, t)?,
-                            O::ReduceXor => unary::cgc_reduce_xor(&mut buffer, dst_t, t)?,
+                            O::Neg => unary::cgc_negate(&mut buffer, dst_t.into(), t)?,
+                            O::ReduceOr => unary::cgc_reduce_or(&mut buffer, dst_t.into(), t)?,
+                            O::ReduceAnd => unary::cgc_reduce_and(&mut buffer, dst_t.into(), t)?,
+                            O::ReduceXor => unary::cgc_reduce_xor(&mut buffer, dst_t.into(), t)?,
                             O::LeadingZeros => todo!(),
+                            O::TvToFv => unary::cgc_tv_to_fv(&mut buffer, dst_t, t)?,
+                            O::FvToTv => unary::cgc_fv_to_tv(&mut buffer, dst_t, t)?,
                         }
                     }
                     I::Resize(dst, op, src) => {
-                        let src_size = gl.vars.size(*src);
-
-                        let mut t: CExpr = temp_map[src].into();
-                        t.output_mode = dst.mode();
-
+                        let t: CExpr = temp_map[src].into();
                         let dst_t: CExpr = temp_map[dst].into();
                         use ResizeOp as O;
                         match op {
@@ -611,26 +511,18 @@ pub fn lower_process(
                         }
                     }
                     I::BinaryImm(dst, op, src, imm) => {
-                        let src_size = gl.vars.size(*src);
                         let mimm = if imm.contains_special() {
                             LogicMode::FourValue
                         } else {
                             LogicMode::TwoValue
                         };
 
-                        let (mtgt, conv_src, conv_imm) =
+                        let (mtgt, _, conv_imm) =
                             bin_imm_args_need_conversion(*op, dst.mode(), src.mode(), mimm);
 
-                        let mut src_t: CExpr = temp_map[src].into();
-                        if conv_src {
-                            src_t.output_mode = mtgt;
-                        }
+                        let src_t: CExpr = temp_map[src].into();
                         let imm_tgt_mode = if conv_imm { mtgt } else { mimm };
-                        let imm = CExpr {
-                            raw: CExprRaw::Bits(imm),
-                            output_mode: imm_tgt_mode,
-                        };
-
+                        let imm = CExpr::Bits(imm, imm_tgt_mode);
                         let dst_t = temp_map[dst];
 
                         use BinaryImmOp as O;
@@ -682,44 +574,16 @@ pub fn lower_process(
                         }
                     }
                     I::SliceImm(dst, src, offset) => {
-                        let src_size = gl.vars.size(*src);
-
-                        let (conv_src, conv_imm) =
-                            (src.mode() != dst.mode(), dst.mode() == LogicMode::FourValue);
-
-                        let mut src_t: CExpr = temp_map[src].into();
-                        src_t.output_mode = dst.mode();
-
-                        let imm_tgt_mode = if conv_imm {
-                            dst.mode()
-                        } else {
-                            LogicMode::TwoValue
-                        };
-                        let imm = CExpr {
-                            raw: CExprRaw::Bits(&Bits::from_u64(INTEGER_VSIZE, *offset as u64)),
-                            output_mode: imm_tgt_mode,
-                        };
-
+                        let src_t: CExpr = temp_map[src].into();
+                        let imm =
+                            CExpr::Bits(&Bits::from_u64(INTEGER_VSIZE, *offset as u64), dst.mode());
                         let dst_t = temp_map[dst];
                         slice::slice_with(&mut buffer, dst_t, src_t.into(), imm, false)?;
                     }
                     I::ShiftImm(dst, op, src, offset) => {
-                        let src_size = gl.vars.size(*src);
-
-                        let (conv_src, conv_imm) =
-                            (src.mode() != dst.mode(), dst.mode() == LogicMode::FourValue);
-
-                        let mut src_t: CExpr = temp_map[src].into();
-                        src_t.output_mode = dst.mode();
-                        let imm_tgt_mode = if conv_imm {
-                            dst.mode()
-                        } else {
-                            LogicMode::TwoValue
-                        };
-                        let imm = CExpr {
-                            raw: CExprRaw::Bits(&Bits::from_u64(INTEGER_VSIZE, *offset as u64)),
-                            output_mode: imm_tgt_mode,
-                        };
+                        let src_t: CExpr = temp_map[src].into();
+                        let imm =
+                            CExpr::Bits(&Bits::from_u64(INTEGER_VSIZE, *offset as u64), dst.mode());
 
                         let dst_t = temp_map[dst];
                         use ShiftImmOp as O;
@@ -736,57 +600,22 @@ pub fn lower_process(
                         }
                     }
                     I::Select(dst, cond, truthy, falsy) => {
-                        let size = gl.vars.size(*dst);
-
                         let cond_t: CExpr = temp_map[cond].into();
-                        let mut truthy_t: CExpr = temp_map[truthy].into();
-                        let mut falsy_t: CExpr = temp_map[falsy].into();
-
-                        truthy_t.output_mode = dst.mode();
-                        falsy_t.output_mode = dst.mode();
+                        let truthy_t: CExpr = temp_map[truthy].into();
+                        let falsy_t: CExpr = temp_map[falsy].into();
 
                         let dst_t = temp_map[dst];
                         select::cgc_select(&mut buffer, dst_t, cond_t, truthy_t, falsy_t)?;
                     }
                     I::Slice(dst, lhs, rhs) => {
-                        let lhs_size = gl.vars.size(*lhs);
-                        let rhs_size = gl.vars.size(*rhs);
-
-                        use LogicMode as M;
-                        let (mtgt, conv_lhs, conv_rhs) = (
-                            M::FourValue,
-                            lhs.mode() == M::TwoValue && rhs.mode() == M::FourValue,
-                            lhs.mode() == M::FourValue && rhs.mode() == M::TwoValue,
-                        );
-
-                        let mut lhs_t: CExpr = temp_map[lhs].into();
-                        let mut rhs_t: CExpr = temp_map[rhs].into();
-                        if conv_lhs {
-                            lhs_t.output_mode = mtgt;
-                        }
-                        if conv_rhs {
-                            rhs_t.output_mode = mtgt;
-                        }
-
+                        let lhs_t: CExpr = temp_map[lhs].into();
+                        let rhs_t: CExpr = temp_map[rhs].into();
                         let dst_t = temp_map[dst];
                         slice::slice(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?;
                     }
                     I::Binary(dst, op, lhs, rhs) => {
-                        let lhs_size = gl.vars.size(*lhs);
-                        let rhs_size = gl.vars.size(*rhs);
-
-                        let (mtgt, conv_lhs, conv_rhs) =
-                            bin_args_need_conversion(*op, dst.mode(), lhs.mode(), rhs.mode());
-
-                        let mut lhs_t: CExpr = temp_map[lhs].into();
-                        let mut rhs_t: CExpr = temp_map[rhs].into();
-                        if conv_lhs {
-                            lhs_t.output_mode = mtgt;
-                        }
-                        if conv_rhs {
-                            rhs_t.output_mode = mtgt;
-                        }
-
+                        let lhs_t: CExpr = temp_map[lhs].into();
+                        let rhs_t: CExpr = temp_map[rhs].into();
                         let dst_t = temp_map[dst];
 
                         use vogls_ir::BinaryOp as O;
@@ -952,14 +781,9 @@ pub fn lower_process(
                         if dst_size == src_size && *offset == 0 {
                             load(&mut buffer, signal_ref.offset, t)?;
                         } else {
-                            let signal = CExpr {
-                                raw: CExprRaw::HeapRef(signal_ref, signal_mode),
-                                output_mode: signal_mode,
-                            };
-                            let offset_c = CExpr {
-                                raw: CExprRaw::Bits(&Bits::new_u32(*offset)),
-                                output_mode: LogicMode::TwoValue,
-                            };
+                            let signal = CExpr::HeapRef(signal_ref, signal_mode);
+                            let offset_c =
+                                CExpr::Bits(&Bits::new_u32(*offset), LogicMode::TwoValue);
                             if *offset > 0 {
                                 slice::slice_with(&mut buffer, t, signal, offset_c, false)?;
                             } else {
@@ -978,24 +802,17 @@ pub fn lower_process(
                         slice::slice(
                             &mut buffer,
                             t,
-                            CExpr {
-                                raw: CExprRaw::HeapRef(signal_ref, signal_mode),
-                                output_mode: signal_mode,
-                            },
+                            CExpr::HeapRef(signal_ref, signal_mode),
                             offset_t.into(),
                         )?;
                     }
                     I::Drive(signal, src, partial) => {
-                        let signal_mode = gl.signals[*signal].mode;
-                        let size = gl.vars.size(*src);
-                        let mut t: CExpr = temp_map[src].into();
-                        t.output_mode = signal_mode;
+                        let t: CExpr = temp_map[src].into();
                         let zero = Bits::new_u32(0);
                         let partial = match partial {
-                            None if gl.signals[*signal].size != t.ty().size => Some(CExpr {
-                                raw: CExprRaw::Bits(&zero),
-                                output_mode: LogicMode::TwoValue,
-                            }),
+                            None if gl.signals[*signal].size != t.ty().size => {
+                                Some(CExpr::Bits(&zero, LogicMode::TwoValue))
+                            }
                             None => None,
                             Some((offset, _)) => {
                                 let offset_t = temp_map[offset];
@@ -1056,9 +873,8 @@ pub fn lower_process(
                     let src_size = gl.vars.size(*src);
                     let dst_size = gl.vars.size(*dst);
                     assert_eq!(src_size, dst_size);
-                    let mut src_t: CExpr = temp_map[src].into();
+                    let src_t: CExpr = temp_map[src].into();
                     let dst_t: CExpr = temp_map[dst].into();
-                    src_t.output_mode = dst.mode();
 
                     if lower_options.itrace {
                         writeln!(&mut buffer, "{INDENT}// Phi({dst:?}, {src:?});")?;

@@ -229,6 +229,8 @@ impl UnaryOp {
             Self::ReduceOr => "reduce_or",
             Self::ReduceXor => "reduce_xor",
             Self::LeadingZeros => "leading_zeros",
+            Self::TvToFv => "tvtofv",
+            Self::FvToTv => "fvtotv",
         }
     }
 }

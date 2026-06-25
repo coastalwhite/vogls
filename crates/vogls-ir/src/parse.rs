@@ -8,7 +8,10 @@ use vogls_utils::{VgHashMap, VgHashSet};
 use crate::dyn_format_string::{DynFormatArgument, DynFormatString};
 use crate::token_range::TokenRange;
 use crate::{
-    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext, Instruction, IntrinsicOp, LogicMode, ProcessKey, ProcessKind, ResizeOp, ShiftImmOp, Signal, SignalFlags, SignalKey, TemporalRegionKey, UnaryOp, VariableKey, SCALAR_VSIZE, TIME_VSIZE, VSIZE_32
+    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext,
+    Instruction, IntrinsicOp, LogicMode, ProcessKey, ProcessKind, ResizeOp, SCALAR_VSIZE,
+    ShiftImmOp, Signal, SignalFlags, SignalKey, TIME_VSIZE, TemporalRegionKey, UnaryOp, VSIZE_32,
+    VariableKey,
 };
 
 #[derive(Debug)]
@@ -1119,6 +1122,7 @@ fn parse_unary<'a>(
                 .var_sizes
                 .insert(dst.identifier(), VarSize::Resolved(VSIZE_32));
         }
+        UnaryOp::TvToFv | UnaryOp::FvToTv => todo!(),
     }
     Ok(Instruction::Unary(dst, op, src))
 }

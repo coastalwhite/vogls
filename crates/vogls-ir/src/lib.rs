@@ -336,6 +336,9 @@ pub enum UnaryOp {
     ReduceAnd,
     ReduceXor,
     LeadingZeros,
+
+    TvToFv,
+    FvToTv,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -848,6 +851,8 @@ impl UnaryOp {
             O::ReduceOr => Bits::from(src.reduce_or()),
             O::ReduceAnd => Bits::from(src.reduce_and()),
             O::ReduceXor => Bits::from(src.reduce_xor()),
+            O::TvToFv => src.clone(),
+            O::FvToTv => src.special_to_zero(),
             O::LeadingZeros => Bits::from_u64(INTEGER_VSIZE, src.leading_zeroes().into()),
         }
     }
@@ -860,25 +865,34 @@ impl UnaryOp {
             {
                 UnaryOpSimplification::Source
             }
-            O::Neg | O::ReduceOr | O::ReduceAnd | O::ReduceXor | O::LeadingZeros => {
-                UnaryOpSimplification::Keep
-            }
+            O::Neg
+            | O::ReduceOr
+            | O::ReduceAnd
+            | O::ReduceXor
+            | O::LeadingZeros
+            | O::TvToFv
+            | O::FvToTv => UnaryOpSimplification::Keep,
         }
     }
 
     fn output_size(self, size: VectorSize) -> VectorSize {
         match self {
-            UnaryOp::Neg => size,
+            UnaryOp::Neg | UnaryOp::TvToFv | UnaryOp::FvToTv => size,
             UnaryOp::ReduceOr | UnaryOp::ReduceAnd | UnaryOp::ReduceXor => SCALAR_VSIZE,
             UnaryOp::LeadingZeros => VSIZE_32,
         }
     }
 
-    pub fn output_mode(self, src: LogicMode) -> LogicMode {
+    pub fn output_mode(self, src: LogicMode) -> Option<LogicMode> {
         use UnaryOp as O;
         match self {
-            O::Neg | O::ReduceOr | O::ReduceAnd | O::ReduceXor => src,
-            O::LeadingZeros => LogicMode::TwoValue,
+            O::Neg | O::ReduceOr | O::ReduceAnd | O::ReduceXor => Some(src),
+
+            O::TvToFv if src == LogicMode::TwoValue => Some(LogicMode::FourValue),
+            O::FvToTv if src == LogicMode::FourValue => Some(LogicMode::TwoValue),
+            O::TvToFv | O::FvToTv => None,
+
+            O::LeadingZeros => Some(LogicMode::TwoValue),
         }
     }
 }
@@ -1010,7 +1024,7 @@ impl BinaryOp {
         }
     }
 
-    pub fn output_mode(self, lhs: LogicMode, rhs: LogicMode) -> LogicMode {
+    pub fn output_mode(self, lhs: LogicMode, rhs: LogicMode) -> BinaryOutputMode {
         use BinaryOp as O;
         match self {
             O::And
@@ -1028,11 +1042,43 @@ impl BinaryOp {
             | O::UnsignedLessEqual
             | O::LogicalShiftLeft
             | O::LogicalShiftRight
-            | O::ArithmeticShiftRight => lhs.max(rhs),
-            O::Divide | O::Modulus => LogicMode::FourValue,
-            O::CaseEquality | O::Posedge | O::Negedge => LogicMode::TwoValue,
+            | O::ArithmeticShiftRight => {
+                let dst_mode = lhs.max(rhs);
+                BinaryOutputMode {
+                    dst: dst_mode,
+                    lhs: dst_mode,
+                    rhs: dst_mode,
+                }
+            }
+            O::Divide | O::Modulus => {
+                let convert_mode = lhs.max(rhs);
+                BinaryOutputMode {
+                    dst: LogicMode::FourValue,
+                    lhs: convert_mode,
+                    rhs: convert_mode,
+                }
+            }
+            O::CaseEquality | O::Posedge | O::Negedge => {
+                let convert_mode = lhs.max(rhs);
+                BinaryOutputMode {
+                    dst: LogicMode::TwoValue,
+                    lhs: convert_mode,
+                    rhs: convert_mode,
+                }
+            }
         }
     }
+}
+
+pub struct BinaryOutputMode {
+    dst: LogicMode,
+    lhs: LogicMode,
+    rhs: LogicMode,
+}
+
+pub struct BinaryImmOutputMode {
+    dst: LogicMode,
+    src: LogicMode,
 }
 
 impl BinaryImmOp {
@@ -1258,7 +1304,7 @@ impl BinaryImmOp {
         }
     }
 
-    fn output_mode(&self, src: LogicMode, imm: LogicMode) -> LogicMode {
+    fn output_mode(&self, src: LogicMode, imm: LogicMode) -> BinaryImmOutputMode {
         use BinaryImmOp as O;
         match self {
             O::And
@@ -1279,8 +1325,20 @@ impl BinaryImmOp {
             | O::UnsignedLessEqual
             | O::UnsignedGreaterEqual
             | O::Divide
-            | O::Modulus => src.max(imm),
-            O::CaseEquality => LogicMode::TwoValue,
+            | O::Modulus => {
+                let dst_mode = src.max(imm);
+                BinaryImmOutputMode {
+                    dst: dst_mode,
+                    src: dst_mode,
+                }
+            }
+            O::CaseEquality => {
+                let convert = src.max(imm);
+                BinaryImmOutputMode {
+                    dst: LogicMode::TwoValue,
+                    src: convert,
+                }
+            }
         }
     }
 }

@@ -540,15 +540,3 @@ pub fn bin_imm_args_need_conversion(
         (mdst, mdst != mlhs, mdst != mrhs)
     }
 }
-
-pub fn unary_needs_convert(
-    op: UnaryOp,
-    dst_mode: LogicMode,
-    src_mode: LogicMode,
-) -> Option<LogicMode> {
-    use UnaryOp as O;
-    match (op, dst_mode, src_mode) {
-        (O::Neg | O::ReduceOr | O::ReduceAnd | O::ReduceXor, d, s) => (d != s).then_some(d),
-        (O::LeadingZeros, _, _) => None,
-    }
-}

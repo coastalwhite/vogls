@@ -176,6 +176,7 @@ impl VmInstruction {
                 UnaryOp::LeadingZeros => {
                     &[("dst", false, dst.to_ref(VSIZE_32)), ("src", false, *src)]
                 }
+                UnaryOp::TvToFv | UnaryOp::FvToTv => todo!(),
             },
             I::TvResize(dst, _, src) => &[("dst", false, *dst), ("src", false, *src)],
             I::TvBinaryArithmetic(dst, _, lhs, rhs) => &[
@@ -230,6 +231,7 @@ impl VmInstruction {
                 UnaryOp::LeadingZeros => {
                     &[("dst", false, dst.to_ref(VSIZE_32)), ("src", true, *src)]
                 }
+                UnaryOp::TvToFv | UnaryOp::FvToTv => todo!(),
             },
             I::FvResize(dst, _, src) => &[("dst", true, *dst), ("src", true, *src)],
             I::FvBinaryArithmetic(dst, _, lhs, rhs) => &[

@@ -1591,7 +1591,7 @@ impl Bits {
 
     pub fn try_lower_mode(mut self) -> Bits {
         if matches!(self.mode, Mode::FourValue) && !self.contains_special() {
-            self.mode = Mode::TwoValue;
+            self = self.clone_lowering_mode();
         }
         self
     }

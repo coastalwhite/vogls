@@ -492,6 +492,8 @@ impl BasicBlockBuilder {
         (reduce_and, ReduceAnd)
         (reduce_xor, ReduceXor)
         (count_leading_zeros, LeadingZeros)
+        (tv_to_fv, TvToFv)
+        (fv_to_tv, FvToTv)
     }
 
     resize_ops! {
@@ -519,6 +521,9 @@ impl BasicBlockBuilder {
         (copy_z, CopyZ)
         (unsigned_le, UnsignedLessEqual)
         (case_equals, CaseEquality)
+        (logical_shift_left, LogicalShiftLeft)
+        (logical_shift_right, LogicalShiftRight)
+        (arithmetic_shift_right, ArithmeticShiftRight)
     }
 
     bin_imm_ops! {
@@ -555,7 +560,9 @@ impl BasicBlockBuilder {
     ) -> VariableKey {
         let src_size = gl.vars.size(src);
         let dst_size = op.output_size(src_size);
-        let mode = op.output_mode(src.mode());
+        let Some(mode) = op.output_mode(src.mode()) else {
+            panic!("invalid mode");
+        };
         match op.simplify(src_size, mode) {
             UnaryOpSimplification::Keep => {
                 let dst = gl.vars.insert(mode, dst_size);
@@ -595,8 +602,10 @@ impl BasicBlockBuilder {
         let Some(size) = op.output_size(lhs_size, rhs_size) else {
             panic!("Invalid size combination for {op:?}: {lhs_size}, {rhs_size}");
         };
-        let mode = op.output_mode(lhs.mode(), rhs.mode());
-        let dst = gl.vars.insert(mode, size);
+        let output_mode = op.output_mode(lhs.mode(), rhs.mode());
+        let dst = gl.vars.insert(output_mode.dst, size);
+        let lhs = self.convert_mode(gl, lhs, output_mode.lhs);
+        let rhs = self.convert_mode(gl, rhs, output_mode.rhs);
         self.instrs.push(Instruction::Binary(dst, op, lhs, rhs));
         dst
     }
@@ -611,8 +620,9 @@ impl BasicBlockBuilder {
         let Some(size) = op.output_size(gl.vars.size(src), imm.size()) else {
             panic!("Invalid size combination");
         };
-        let mode = op.output_mode(src.mode(), imm.mode().into());
-        let mut dst = gl.vars.insert(mode, size);
+        let output_mode = op.output_mode(src.mode(), imm.mode().into());
+        let src = self.convert_mode(gl, src, output_mode.src);
+        let mut dst = gl.vars.insert(output_mode.dst, size);
         match op.simplify(dst, src, &imm) {
             BinaryImmOpSimplification::Keep => {
                 self.instrs.push(Instruction::BinaryImm(dst, op, src, imm))
@@ -627,6 +637,22 @@ impl BasicBlockBuilder {
             BinaryImmOpSimplification::Instruction(i) => self.instrs.push(i),
         }
         dst
+    }
+
+    pub fn convert_mode(
+        &mut self,
+        gl: &mut GlobalContext,
+        src: VariableKey,
+        mode: LogicMode,
+    ) -> VariableKey {
+        if src.mode() == mode {
+            return src;
+        }
+
+        match mode {
+            LogicMode::TwoValue => self.fv_to_tv(gl, src),
+            LogicMode::FourValue => self.tv_to_fv(gl, src),
+        }
     }
 
     pub fn xnor(
@@ -886,6 +912,7 @@ impl BasicBlockBuilder {
         if let Some((offset, _)) = partial {
             assert_eq!(gl.vars.size(offset), INTEGER_VSIZE);
         }
+        let src = self.convert_mode(gl, src, gl.signals[signal].mode);
         self.instrs.push(Instruction::Drive(signal, src, partial));
     }
 
@@ -904,9 +931,7 @@ impl BasicBlockBuilder {
         offset: VariableKey,
         width: VectorSize,
     ) -> VariableKey {
-        let s = &gl.signals[signal];
-        let mode = s.mode.max(offset.mode());
-        let dst = gl.vars.insert(mode, width);
+        let dst = gl.vars.insert(LogicMode::FourValue, width);
         self.instrs
             .push(Instruction::ProbeSlice(dst, signal, offset));
         dst
@@ -1105,45 +1130,6 @@ impl BasicBlockBuilder {
             Default::default(),
         ));
         dst
-    }
-
-    pub fn shift(
-        &mut self,
-        gl: &mut GlobalContext,
-        lhs: VariableKey,
-        rhs: VariableKey,
-        op: BinaryOp,
-    ) -> VariableKey {
-        let lhs_size = gl.vars.size(lhs);
-        assert_eq!(gl.vars.size(rhs), INTEGER_VSIZE);
-        let mode = op.output_mode(lhs.mode(), rhs.mode());
-        let dst = gl.vars.insert(mode, lhs_size);
-        self.instrs.push(Instruction::Binary(dst, op, lhs, rhs));
-        dst
-    }
-    pub fn logical_shift_left(
-        &mut self,
-        gl: &mut GlobalContext,
-        lhs: VariableKey,
-        rhs: VariableKey,
-    ) -> VariableKey {
-        self.shift(gl, lhs, rhs, BinaryOp::LogicalShiftLeft)
-    }
-    pub fn logical_shift_right(
-        &mut self,
-        gl: &mut GlobalContext,
-        lhs: VariableKey,
-        rhs: VariableKey,
-    ) -> VariableKey {
-        self.shift(gl, lhs, rhs, BinaryOp::LogicalShiftRight)
-    }
-    pub fn arithmetic_shift_right(
-        &mut self,
-        gl: &mut GlobalContext,
-        lhs: VariableKey,
-        rhs: VariableKey,
-    ) -> VariableKey {
-        self.shift(gl, lhs, rhs, BinaryOp::ArithmeticShiftRight)
     }
 
     pub fn equals_zero(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
