@@ -1084,14 +1084,14 @@ impl BinaryOp {
 }
 
 pub struct BinaryOutputMode {
-    dst: LogicMode,
-    lhs: LogicMode,
-    rhs: LogicMode,
+    pub dst: LogicMode,
+    pub lhs: LogicMode,
+    pub rhs: LogicMode,
 }
 
 pub struct BinaryImmOutputMode {
-    dst: LogicMode,
-    src: LogicMode,
+    pub dst: LogicMode,
+    pub src: LogicMode,
 }
 
 impl BinaryImmOp {
@@ -1317,7 +1317,7 @@ impl BinaryImmOp {
         }
     }
 
-    fn output_mode(&self, src: LogicMode, imm: LogicMode) -> BinaryImmOutputMode {
+    pub fn output_mode(&self, src: LogicMode, imm: LogicMode) -> BinaryImmOutputMode {
         use BinaryImmOp as O;
         match self {
             O::And

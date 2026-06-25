@@ -110,7 +110,9 @@ fn constant_propagate_instruction(
     macro_rules! assign_constant {
         ($dst:expr, $constant:expr) => {{
             let constant: Bits = $constant;
-            debug_assert!($dst.mode() == LogicMode::TwoValue || !constant.contains_special());
+            if cfg!(debug_assertions) && constant.contains_special() {
+                assert_eq!($dst.mode(), LogicMode::FourValue);
+            }
             scratch_map.insert($dst, Some(constant.clone()));
             additional.push(I::Constant($dst, constant));
             return PropagateResult {
@@ -132,7 +134,9 @@ fn constant_propagate_instruction(
 
     match i {
         I::Constant(dst, bits) => {
-            debug_assert!(dst.mode() == LogicMode::TwoValue || !bits.contains_special());
+            if cfg!(debug_assertions) && bits.contains_special() {
+                assert_eq!(dst.mode(), LogicMode::FourValue);
+            }
             _ = scratch_map.insert(*dst, Some(bits.clone()));
             PropagateResult {
                 replace: false,

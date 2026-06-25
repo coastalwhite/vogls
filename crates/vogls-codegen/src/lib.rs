@@ -7,7 +7,7 @@ use hashbrown::hash_map::Entry;
 pub use heap::{Heap, HeapBuilder, HeapOffset, HeapRef};
 use vogls_ir::{
     BasicBlockKey, BinaryImmOp, BinaryOp, Bits, GlobalContext, Instruction, LogicMode,
-    TemporalRegionKey, UnaryOp, VariableKey,
+    TemporalRegionKey, VariableKey,
 };
 use vogls_utils::{VgHashMap, VgHashSet};
 
@@ -374,11 +374,8 @@ pub fn resolve_heap_map(
     gl: &GlobalContext,
     bb_stack: &mut Vec<BasicBlockKey>,
     bb_seen: &mut VgHashSet<BasicBlockKey>,
-    var_mode: &VgHashMap<VariableKey, LogicMode>,
-    conv_map: &mut VgHashMap<VariableKey, HeapOffset>,
     heap_builder: &mut HeapBuilder,
     heap_map: &mut VgHashMap<VariableKey, HeapOffset>,
-    temporal_variables: Option<&VgHashSet<VariableKey>>,
     mut bits_map: Option<&mut VgHashMap<(Bits, LogicMode), HeapOffset>>,
 ) {
     for tr in regions {
@@ -401,12 +398,30 @@ pub fn resolve_heap_map(
 
                 for instr in &bb.instrs {
                     if let Some(bits_map) = bits_map.as_mut() {
-                        instr.for_each_bits(|bits| {
-                            let mode = if bits.contains_special() {
-                                LogicMode::FourValue
-                            } else {
-                                LogicMode::TwoValue
-                            };
+                        use Instruction as I;
+                        let bits = match instr {
+                            I::Constant(dst, bits) => Some((dst.mode(), bits)),
+                            I::BinaryImm(dst, op, src, imm) => {
+                                let imm_mode = if imm.contains_special() {
+                                    LogicMode::FourValue
+                                } else {
+                                    LogicMode::TwoValue
+                                };
+                                let (mtgt, _, conv_imm) = bin_imm_args_need_conversion(
+                                    *op,
+                                    dst.mode(),
+                                    src.mode(),
+                                    imm_mode,
+                                );
+                                Some(if conv_imm {
+                                    (mtgt, imm)
+                                } else {
+                                    (imm_mode, imm)
+                                })
+                            }
+                            _ => None,
+                        };
+                        if let Some((mode, bits)) = bits {
                             let mut num_bits = bits.size().get();
                             if mode == LogicMode::FourValue {
                                 num_bits = num_bits * 2;
@@ -418,35 +433,11 @@ pub fn resolve_heap_map(
                                         .offset
                                 });
                             }
-
-                            if let Instruction::BinaryImm(dst, op, src, _) = instr {
-                                let (mtgt, _, conv_imm) = bin_imm_args_need_conversion(
-                                    *op,
-                                    var_mode[dst],
-                                    var_mode[src],
-                                    mode,
-                                );
-                                if conv_imm {
-                                    let mut num_bits = bits.size().get();
-                                    if mtgt == LogicMode::FourValue {
-                                        num_bits = num_bits * 2;
-                                    }
-                                    if (min_bits..=max_bits).contains(&num_bits) {
-                                        bits_map.entry((bits.clone(), mtgt)).or_insert_with(|| {
-                                            let bits = match mtgt {
-                                                LogicMode::TwoValue => bits.special_to_zero(),
-                                                LogicMode::FourValue => bits.clone(),
-                                            };
-                                            heap_builder.claim_constant(mtgt, bits.clone()).offset
-                                        });
-                                    }
-                                }
-                            }
-                        });
+                        }
                     }
 
                     if let Some(dst) = instr.get_destination_variable() {
-                        let mode = var_mode[&dst];
+                        let mode = dst.mode();
                         let size = gl.vars.size(dst);
 
                         let mut num_bits = size.get();
@@ -454,42 +445,16 @@ pub fn resolve_heap_map(
                             num_bits = num_bits * 2;
                         }
 
-                        if temporal_variables.is_none_or(|t| t.contains(&dst)) {
-                            if (min_bits..=max_bits).contains(&num_bits) {
-                                let heap_offset = if let Instruction::Constant(_, bits) = instr
-                                    && let Some(bits_map) = bits_map.as_mut()
-                                {
-                                    bits_map[&(bits.clone(), mode)]
-                                } else {
-                                    heap_builder.claim(mode, size).offset
-                                };
-                                let prev = heap_map.insert(dst, heap_offset);
-                                assert!(prev.is_none());
-
-                                if let Some(heap_ref) = conv_map.get_mut(&dst) {
-                                    let other_mode = match mode {
-                                        LogicMode::TwoValue => LogicMode::FourValue,
-                                        LogicMode::FourValue => LogicMode::TwoValue,
-                                    };
-                                    *heap_ref = if let Instruction::Constant(_, bits) = instr
-                                        && let Some(bits_map) = bits_map.as_mut()
-                                    {
-                                        *bits_map.entry((bits.clone(), other_mode)).or_insert_with(
-                                            || {
-                                                let bits = match other_mode {
-                                                    LogicMode::TwoValue => bits.special_to_zero(),
-                                                    LogicMode::FourValue => bits.clone(),
-                                                };
-                                                heap_builder
-                                                    .claim_constant(other_mode, bits.clone())
-                                                    .offset
-                                            },
-                                        )
-                                    } else {
-                                        heap_builder.claim(other_mode, size).offset
-                                    };
-                                }
-                            }
+                        if (min_bits..=max_bits).contains(&num_bits) {
+                            let heap_offset = if let Instruction::Constant(_, bits) = instr
+                                && let Some(bits_map) = bits_map.as_mut()
+                            {
+                                bits_map[&(bits.clone(), mode)]
+                            } else {
+                                heap_builder.claim(mode, size).offset
+                            };
+                            let prev = heap_map.insert(dst, heap_offset);
+                            assert!(prev.is_none());
                         }
                     }
                 }

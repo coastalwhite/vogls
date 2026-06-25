@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 
 use vogls_codegen::{
-    HeapBuilder, HeapOffset, HeapRef, insert_bb_phis, resolve_heap_map, resolve_var_logic_mode_map,
+    HeapBuilder, HeapOffset, HeapRef, bin_imm_args_need_conversion, insert_bb_phis,
+    resolve_heap_map,
 };
 use vogls_ir::{
-    BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext, INTEGER_VSIZE,
-    Instruction, IntrinsicOp, LogicMode, ProcessKey, ResizeOp, SCALAR_VSIZE, ShiftImmOp, SignalKey,
-    UnaryOp, VariableKey, VectorSize,
+    BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext, Instruction,
+    IntrinsicOp, LogicMode, ProcessKey, ResizeOp, SCALAR_VSIZE, ShiftImmOp, SignalKey, UnaryOp,
+    VariableKey, VectorSize,
 };
 use vogls_runtime::RtSignalKey;
 use vogls_utils::{VgHashMap, VgHashSet};
@@ -19,21 +20,28 @@ pub fn lower_unary_op(
     op: UnaryOp,
     dst: HeapOffset,
     src: HeapRef,
-    mode: LogicMode,
+    src_mode: LogicMode,
 ) {
     use UnaryOp as O;
     use VmInstruction as VI;
-    let i = if mode == LogicMode::FourValue {
+    let i = if src_mode == LogicMode::FourValue {
         VI::FvUnary(dst, op, src)
     } else {
         if src.size == SCALAR_VSIZE {
             match op {
                 O::Neg => VI::TvNot1(dst, src.offset),
                 O::ReduceOr | O::ReduceAnd | O::ReduceXor => VI::TvMove1(dst, src.offset),
-                O::LeadingZeros | O::TvToFv | O::FvToTv => todo!(),
+                O::TvToFv => VI::TvToFv(dst.to_ref(src.size), src.offset),
+                O::FvToTv => VI::FvToTv(dst.to_ref(src.size), src.offset),
+                O::LeadingZeros => todo!(),
             }
         } else {
-            VI::TvUnary(dst, op, src)
+            match op {
+                O::TvToFv => VI::TvToFv(dst.to_ref(src.size), src.offset),
+                O::FvToTv => VI::FvToTv(dst.to_ref(src.size), src.offset),
+                _ => VI::TvUnary(dst, op, src),
+            }
+            
         }
     };
     instrs.push(i);
@@ -169,7 +177,9 @@ pub fn lower_bin_op(
     dst: HeapRef,
     lhs: HeapRef,
     rhs: HeapRef,
-    mode: LogicMode,
+    dst_mode: LogicMode,
+    lhs_mode: LogicMode,
+    rhs_mode: LogicMode,
 ) {
     use BinaryArithmeticOp as BA;
     use BinaryComparisonOp as BC;
@@ -177,7 +187,7 @@ pub fn lower_bin_op(
     use LogicMode as M;
     use ShiftOp as S;
     use VmInstruction as VI;
-    let i = if mode == M::FourValue {
+    let i = if dst_mode == M::FourValue {
         match op {
             O::And => VI::FvBinaryArithmetic(dst, BA::And, lhs.offset, rhs.offset),
             O::Or => VI::FvBinaryArithmetic(dst, BA::Or, lhs.offset, rhs.offset),
@@ -284,19 +294,9 @@ pub fn lower_process_to_vm(
     let mut bb_seen = VgHashSet::<BasicBlockKey>::default();
     let mut bb_phis = VgHashMap::<BasicBlockKey, Vec<(VariableKey, VariableKey)>>::default();
 
-    let mut var_mode = VgHashMap::<VariableKey, LogicMode>::default();
-    let mut conv_map = VgHashMap::<VariableKey, HeapOffset>::default();
     let mut heap_map = VgHashMap::default();
     let mut bits_map = VgHashMap::default();
 
-    resolve_var_logic_mode_map(
-        &process.regions,
-        gl,
-        &mut bb_stack,
-        &mut bb_seen,
-        &mut var_mode,
-        &mut conv_map,
-    );
     insert_bb_phis(
         &process.regions,
         gl,
@@ -309,11 +309,8 @@ pub fn lower_process_to_vm(
         gl,
         &mut bb_stack,
         &mut bb_seen,
-        &var_mode,
-        &mut conv_map,
         heap_builder,
         &mut heap_map,
-        None,
         Some(&mut bits_map),
     );
 
@@ -327,28 +324,6 @@ pub fn lower_process_to_vm(
     macro_rules! signal {
         ($signal:expr) => {{ io_signals[&$signal] }};
     }
-    macro_rules! var {
-        ($var:expr$(, ($tgt_mode:expr, $src_mode:expr, $size:expr))?) => {{
-            let r = heap_map[&$var];
-            $(
-            let r = match ($tgt_mode, $src_mode) {
-                (LogicMode::TwoValue, LogicMode::TwoValue) | (LogicMode::FourValue, LogicMode::FourValue) => r,
-                (LogicMode::TwoValue, LogicMode::FourValue) => {
-                    let tgt = conv_map[&$var].to_ref($size);
-                    instructions.push(VmInstruction::FvToTv(tgt, r));
-                    tgt.offset
-                },
-                (LogicMode::FourValue, LogicMode::TwoValue) => {
-                    let tgt = conv_map[&$var].to_ref($size);
-                    instructions.push(VmInstruction::TvToFv(tgt, r));
-                    tgt.offset
-                },
-            };
-            )?
-            r
-        }};
-    }
-
     // Lower the IR instructions to VM instructions.
     for tr in &process.regions {
         bb_stack.push(tr.entry());
@@ -362,20 +337,17 @@ pub fn lower_process_to_vm(
                     I::Constant(..) => continue,
 
                     I::Unary(d, op, s) => {
+                        let sm = s.mode();
                         let size = gl.vars.size(*s);
-                        let m = var_mode[d];
-                        let s = var!(*s, (m, var_mode[s], size));
-                        let d = var!(*d);
-                        lower_unary_op(&mut instructions, *op, d, s.to_ref(size), m);
+                        let s = heap_map[s];
+                        let d = heap_map[d];
+                        lower_unary_op(&mut instructions, *op, d, s.to_ref(size), sm);
                         continue;
                     }
-                    I::Resize(d, op, s) => {
-                        let d_size = gl.vars.size(*d);
-                        let s_size = gl.vars.size(*s);
-                        let m = var_mode[d];
-                        let s = var!(*s, (m, var_mode[s], s_size)).to_ref(s_size);
-                        let d = var!(*d).to_ref(d_size);
-                        lower_resize_op(&mut instructions, *op, d, s, m);
+                    I::Resize(dst, op, src) => {
+                        let d = heap_map[dst].to_ref(gl.vars.size(*dst));
+                        let s = heap_map[src].to_ref(gl.vars.size(*src));
+                        lower_resize_op(&mut instructions, *op, d, s, dst.mode());
                         continue;
                     }
                     I::BinaryImm(d, op, src, imm) => {
@@ -384,23 +356,23 @@ pub fn lower_process_to_vm(
                         let d_size = gl.vars.size(*d);
                         let s1_size = gl.vars.size(*src);
                         let s2_size = imm.size();
-                        let s1_mode = var_mode[src];
-                        let s2_mode = if imm.contains_special() {
+                        let d_mode = d.mode();
+                        let s1_mode = src.mode();
+                        let imm_mode = if imm.contains_special() {
                             LogicMode::FourValue
                         } else {
                             LogicMode::TwoValue
                         };
-                        let d = var!(*d);
-                        let mode = match (s1_mode, s2_mode) {
-                            (M::FourValue, _) | (_, M::FourValue) => M::FourValue,
-                            _ => M::TwoValue,
-                        };
-                        let src = var!(*src, (mode, s1_mode, s1_size));
-                        let imm = bits_map[&(imm.clone(), mode)];
+                        let d = heap_map[d];
+                        let (mtgt, _, conv_imm) =
+                            bin_imm_args_need_conversion(*op, d_mode, s1_mode, imm_mode);
+                        let imm_mode = if conv_imm { mtgt } else { imm_mode };
+                        let src = heap_map[src];
+                        let imm = bits_map[&(imm.clone(), imm_mode)];
                         use BinaryArithmeticOp as BA;
                         use BinaryComparisonOp as BC;
                         use BinaryImmOp as O;
-                        if mode == M::FourValue {
+                        if s1_mode == M::FourValue {
                             match *op {
                                 O::And => {
                                     VI::FvBinaryArithmetic(d.to_ref(d_size), BA::And, src, imm)
@@ -557,15 +529,15 @@ pub fn lower_process_to_vm(
 
                         let d_size = gl.vars.size(*d);
                         let s1_size = gl.vars.size(*s1);
-                        let s1_mode = var_mode[s1];
-                        let s2_mode = var_mode[s2];
-                        let d = var!(*d);
+                        let s1_mode = s1.mode();
+                        let s2_mode = s2.mode();
+                        let d = heap_map[d];
                         let mode = match (s1_mode, s2_mode) {
                             (M::FourValue, _) | (_, M::FourValue) => M::FourValue,
                             _ => M::TwoValue,
                         };
-                        let s1 = var!(*s1, (mode, s1_mode, s1_size));
-                        let s2 = var!(*s2);
+                        let s1 = heap_map[s1];
+                        let s2 = heap_map[s2];
                         if mode == M::FourValue {
                             VI::FvSlice(
                                 d.to_ref(d_size),
@@ -593,14 +565,14 @@ pub fn lower_process_to_vm(
 
                         let d_size = gl.vars.size(*d);
                         let s1_size = gl.vars.size(*src);
-                        let s1_mode = var_mode[src];
+                        let s1_mode = src.mode();
                         let s2_mode = LogicMode::TwoValue;
-                        let d = var!(*d);
+                        let d = heap_map[d];
                         let mode = match (s1_mode, s2_mode) {
                             (M::FourValue, _) | (_, M::FourValue) => M::FourValue,
                             _ => M::TwoValue,
                         };
-                        let src = var!(*src, (mode, s1_mode, s1_size));
+                        let src = heap_map[src];
                         lower_slice_imm(
                             &mut instructions,
                             d.to_ref(d_size),
@@ -614,15 +586,14 @@ pub fn lower_process_to_vm(
                         use LogicMode as M;
 
                         let d_size = gl.vars.size(*d);
-                        let s1_size = gl.vars.size(*src);
-                        let s1_mode = var_mode[src];
+                        let s1_mode = src.mode();
                         let s2_mode = LogicMode::TwoValue;
-                        let d = var!(*d);
+                        let d = heap_map[d];
                         let mode = match (s1_mode, s2_mode) {
                             (M::FourValue, _) | (_, M::FourValue) => M::FourValue,
                             _ => M::TwoValue,
                         };
-                        let src = var!(*src, (mode, s1_mode, s1_size));
+                        let src = heap_map[src];
                         use ShiftImmOp as O;
                         use ShiftOp as S;
                         if mode == M::FourValue {
@@ -660,15 +631,15 @@ pub fn lower_process_to_vm(
                     I::Select(dst, cond, truthy, falsy) => {
                         use LogicMode as M;
 
-                        let dst_mode = var_mode[dst];
+                        let dst_mode = dst.mode();
                         let size = gl.vars.size(*dst);
-                        let cond_mode = var_mode[cond];
-                        let truthy_mode = var_mode[truthy];
-                        let falsy_mode = var_mode[falsy];
-                        let d = var!(*dst);
-                        let c = var!(*cond);
-                        let t = var!(*truthy, (dst_mode, truthy_mode, size));
-                        let f = var!(*falsy, (dst_mode, falsy_mode, size));
+                        let cond_mode = cond.mode();
+                        let truthy_mode = truthy.mode();
+                        let falsy_mode = falsy.mode();
+                        let d = heap_map[dst];
+                        let c = heap_map[cond];
+                        let t = heap_map[truthy];
+                        let f = heap_map[falsy];
 
                         let cond_is_fv = cond_mode == M::FourValue;
 
@@ -682,28 +653,30 @@ pub fn lower_process_to_vm(
                             }
                         }
                     }
-                    I::Binary(d, op, s1, s2) => {
+                    I::Binary(dst, op, lhs, rhs) => {
                         use LogicMode as M;
 
-                        let d_size = gl.vars.size(*d);
-                        let s1_size = gl.vars.size(*s1);
-                        let s2_size = gl.vars.size(*s2);
-                        let s1_mode = var_mode[s1];
-                        let s2_mode = var_mode[s2];
-                        let d = var!(*d);
+                        let d_size = gl.vars.size(*dst);
+                        let s1_size = gl.vars.size(*lhs);
+                        let s2_size = gl.vars.size(*rhs);
+                        let s1_mode = lhs.mode();
+                        let s2_mode = rhs.mode();
+                        let d = heap_map[dst];
                         let mode = match (s1_mode, s2_mode) {
                             (M::FourValue, _) | (_, M::FourValue) => M::FourValue,
                             _ => M::TwoValue,
                         };
-                        let s1 = var!(*s1, (mode, s1_mode, s1_size));
-                        let s2 = var!(*s2, (mode, s2_mode, s2_size));
+                        let s1 = heap_map[lhs];
+                        let s2 = heap_map[rhs];
                         lower_bin_op(
                             &mut instructions,
                             *op,
                             d.to_ref(d_size),
                             s1.to_ref(s1_size),
                             s2.to_ref(s2_size),
-                            mode,
+                            dst.mode(),
+                            lhs.mode(),
+                            rhs.mode(),
                         );
                         continue;
                     }
@@ -711,7 +684,7 @@ pub fn lower_process_to_vm(
                     I::Intrinsic(dst, op, args) => {
                         let vm_args = args
                             .iter()
-                            .map(|v| (var!(*v).to_ref(gl.vars.size(*v)), var_mode[v]))
+                            .map(|v| (heap_map[v].to_ref(gl.vars.size(*v)), v.mode()))
                             .collect();
                         use IntrinsicOp as O;
                         use VmIntrinsicOp as VO;
@@ -733,18 +706,18 @@ pub fn lower_process_to_vm(
                                 readmem.clone(),
                             ),
                         };
-                        VI::Intrinsic(var!(*dst), Box::new(op), vm_args)
+                        VI::Intrinsic(heap_map[dst], Box::new(op), vm_args)
                     }
                     I::LastUpdateTime(dst, signal) => {
                         let signal = signal!(*signal);
-                        VI::LastUpdateTime(var!(*dst), signal)
+                        VI::LastUpdateTime(heap_map[dst], signal)
                     }
                     I::Probe(dst, signal, offset) => {
                         let size = gl.vars.size(*dst);
                         let signal = signal!(*signal);
                         lower_slice_imm(
                             &mut instructions,
-                            var!(*dst).to_ref(size),
+                            heap_map[dst].to_ref(size),
                             signals[signal.as_usize()],
                             *offset,
                             gl.logic_mode,
@@ -756,21 +729,21 @@ pub fn lower_process_to_vm(
                         let signal = signal!(*signal);
                         match gl.logic_mode {
                             LogicMode::TwoValue => VI::TvSlice(
-                                var!(*dst).to_ref(size),
+                                heap_map[dst].to_ref(size),
                                 signals[signal.as_usize()],
-                                var!(*offset),
+                                heap_map[offset],
                                 SliceFlags {
                                     fill_with_x: true,
-                                    offset_is_fv: var_mode[offset] == LogicMode::FourValue,
+                                    offset_is_fv: offset.mode() == LogicMode::FourValue,
                                 },
                             ),
                             LogicMode::FourValue => VI::FvSlice(
-                                var!(*dst).to_ref(size),
+                                heap_map[dst].to_ref(size),
                                 signals[signal.as_usize()],
-                                var!(*offset),
+                                heap_map[offset],
                                 SliceFlags {
                                     fill_with_x: true,
-                                    offset_is_fv: var_mode[offset] == LogicMode::FourValue,
+                                    offset_is_fv: offset.mode() == LogicMode::FourValue,
                                 },
                             ),
                         }
@@ -779,13 +752,8 @@ pub fn lower_process_to_vm(
                         let src_size = gl.vars.size(*src);
                         VI::Drive(
                             signal!(*signal),
-                            var!(*src, (gl.logic_mode, var_mode[src], src_size)).to_ref(src_size),
-                            offset.map(|(o, mask_size)| {
-                                (
-                                    var!(o, (gl.logic_mode, var_mode[&o], INTEGER_VSIZE)),
-                                    mask_size,
-                                )
-                            }),
+                            heap_map[src].to_ref(src_size),
+                            offset.map(|(o, mask_size)| (heap_map[&o], mask_size)),
                         )
                     }
                     I::Phi(..) => continue,
@@ -800,9 +768,9 @@ pub fn lower_process_to_vm(
                     let dst_size = gl.vars.size(*dst);
                     assert_eq!(src_size, dst_size);
                     let size = src_size;
-                    let src_mode = var_mode[src];
-                    let dst_mode = var_mode[dst];
-                    let (dst, src) = (var!(*dst), var!(*src));
+                    let src_mode = src.mode();
+                    let dst_mode = dst.mode();
+                    let (dst, src) = (heap_map[dst], heap_map[src]);
                     lower_convert_op(&mut instructions, dst, src, size, dst_mode, src_mode);
                 }
             }
@@ -813,12 +781,12 @@ pub fn lower_process_to_vm(
                     instructions.push(VI::Wait(*time));
                     VI::Jump(0)
                 }
-                T::VariableWait(_, var) if var_mode[var] == LogicMode::TwoValue => {
-                    instructions.push(VI::TvVariableWait(var!(*var)));
+                T::VariableWait(_, var) if var.mode() == LogicMode::TwoValue => {
+                    instructions.push(VI::TvVariableWait(heap_map[var]));
                     VI::Jump(0)
                 }
                 T::VariableWait(_, var) => {
-                    instructions.push(VI::FvVariableWait(var!(*var)));
+                    instructions.push(VI::FvVariableWait(heap_map[var]));
                     VI::Jump(0)
                 }
                 T::WaitRegion(_, region) => {
@@ -830,10 +798,10 @@ pub fn lower_process_to_vm(
                     VI::Jump(0)
                 }
                 T::Jump(_) => VI::Jump(0),
-                T::Branch(cond, _, _) if var_mode[cond] == LogicMode::TwoValue => {
-                    VI::TvBranch(var!(*cond), 0, 0)
+                T::Branch(cond, _, _) if cond.mode() == LogicMode::TwoValue => {
+                    VI::TvBranch(heap_map[cond], 0, 0)
                 }
-                T::Branch(cond, _, _) => VI::FvBranch(var!(*cond), 0, 0),
+                T::Branch(cond, _, _) => VI::FvBranch(heap_map[cond], 0, 0),
                 T::Halt => VI::Halt,
             };
 
