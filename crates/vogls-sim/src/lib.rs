@@ -479,6 +479,10 @@ impl Simulation {
                         )
                     }
 
+                    I::FvTvBinaryArithmetic(dst, op, lhs, rhs) => {
+                        execution::fv::exec_fv_tv_bin_arith(&mut state.runtime.heap, *dst, *op, *lhs, *rhs)
+                    }
+
                     I::FvUnary(dst, op, src) => {
                         execution::fv::exec_fv_unary(&mut state.runtime.heap, *dst, *op, *src)
                     }
@@ -711,13 +715,13 @@ impl Simulation {
                     }
                     I::Drive(sig, src, offset) => {
                         let dst = self.signals[sig.as_usize()];
-                        let (dst_limit, partial) = match (offset, self.logic_mode) {
-                            (None, _) => (dst.size, None),
-                            (Some((offset, mask_size)), LogicMode::TwoValue) => (
+                        let (dst_limit, partial) = match offset {
+                            None => (dst.size, None),
+                            Some((offset, false, mask_size)) => (
                                 *mask_size,
                                 Some(state.runtime.heap.load_exact_tv_u32(*offset)),
                             ),
-                            (Some((offset, mask_size)), LogicMode::FourValue) => {
+                            Some((offset, true, mask_size)) => {
                                 let (spc, val) = state.runtime.heap.load_exact_fv_u32(*offset);
                                 if !spc != 0 {
                                     break 'instruction None;

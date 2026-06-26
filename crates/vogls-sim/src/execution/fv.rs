@@ -11,7 +11,7 @@ use vogls_bits::shift::{
     fv_s_arithmetic_shift_right, fv_s_logical_shift_left, fv_s_logical_shift_right,
 };
 use vogls_bits::truncate::{fv_l_truncate, fv_s_truncate};
-use vogls_ir::{ResizeOp, UnaryOp, VectorSize};
+use vogls_ir::{Bits, LogicMode, ResizeOp, UnaryOp, VectorSize};
 
 use crate::{
     BinaryArithmeticOp, BinaryComparisonOp, EdgeOp, Heap, HeapOffset, HeapRef, ShiftOp, SliceFlags,
@@ -163,6 +163,25 @@ pub(crate) fn exec_fv_resize(stack: &mut Heap, dst: HeapRef, op: ResizeOp, src: 
             f(dst_s, &psrc, dst.size, src.size);
         }
     }
+}
+
+pub(crate) fn exec_fv_tv_bin_arith(
+    heap: &mut Heap,
+    dst: HeapRef,
+    op: BinaryArithmeticOp,
+    lhs: HeapOffset,
+    rhs: HeapOffset,
+) {
+
+    let lhs = heap.load_tv_bits(lhs.to_ref(dst.size));
+    let rhs = heap.load_tv_bits(rhs.to_ref(dst.size));
+
+    let output = match &op {
+        BinaryArithmeticOp::Divide => Bits::divide(&lhs, &rhs),
+        BinaryArithmeticOp::Modulus => Bits::remainder(&lhs, &rhs),
+        _ => unreachable!(),
+    };
+    heap.store_bits(dst, LogicMode::FourValue, &output);
 }
 
 pub(crate) fn exec_fv_bin_arith(

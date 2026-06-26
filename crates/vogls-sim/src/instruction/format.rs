@@ -127,6 +127,15 @@ impl fmt::Display for VmInstruction {
                 write!(f, "{} = tv.select {cond}, {truthy}, {falsy}", dst.offset)
             }
 
+            Self::FvTvBinaryArithmetic(dst, op, src1, src2) => {
+                write!(
+                    f,
+                    "{} = fvtv.{} {src1}, {src2}",
+                    dst.offset,
+                    op.into_mnemonic()
+                )
+            }
+
             Self::FvUnary(dst, op, src) => {
                 write!(
                     f,
@@ -231,7 +240,7 @@ impl fmt::Display for VmInstruction {
             }
             Self::Drive(signal, src, offset) => match offset {
                 None => write!(f, "drive {}, {}", signal.as_usize(), src.offset),
-                Some((offset, mask_size)) => {
+                Some((offset, _, mask_size)) => {
                     write!(
                         f,
                         "drive[{offset}, {length}, {mask_size}] {}, {}",
@@ -285,6 +294,7 @@ impl fmt::Display for VmProcess {
                 | I::TvSliceImm(..)
                 | I::TvConcat(..)
                 | I::TvSelect(..)
+                | I::FvTvBinaryArithmetic(..)
                 | I::FvUnary(..)
                 | I::FvResize(..)
                 | I::FvBinaryArithmetic(..)

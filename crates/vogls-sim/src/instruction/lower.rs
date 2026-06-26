@@ -24,24 +24,30 @@ pub fn lower_unary_op(
 ) {
     use UnaryOp as O;
     use VmInstruction as VI;
-    let i = if src_mode == LogicMode::FourValue {
-        VI::FvUnary(dst, op, src)
-    } else {
-        if src.size == SCALAR_VSIZE {
-            match op {
-                O::Neg => VI::TvNot1(dst, src.offset),
-                O::ReduceOr | O::ReduceAnd | O::ReduceXor => VI::TvMove1(dst, src.offset),
-                O::TvToFv => VI::TvToFv(dst.to_ref(src.size), src.offset),
-                O::FvToTv => VI::FvToTv(dst.to_ref(src.size), src.offset),
-                O::LeadingZeros => todo!(),
+
+    let i = match op {
+        O::TvToFv => VI::TvToFv(dst.to_ref(src.size), src.offset),
+        O::FvToTv => VI::FvToTv(dst.to_ref(src.size), src.offset),
+        _ => {
+            if src_mode == LogicMode::FourValue {
+                VI::FvUnary(dst, op, src)
+            } else {
+                if src.size == SCALAR_VSIZE {
+                    match op {
+                        O::Neg => VI::TvNot1(dst, src.offset),
+                        O::ReduceOr | O::ReduceAnd | O::ReduceXor => VI::TvMove1(dst, src.offset),
+                        O::TvToFv => VI::TvToFv(dst.to_ref(src.size), src.offset),
+                        O::FvToTv => VI::FvToTv(dst.to_ref(src.size), src.offset),
+                        O::LeadingZeros => todo!(),
+                    }
+                } else {
+                    match op {
+                        O::TvToFv => VI::TvToFv(dst.to_ref(src.size), src.offset),
+                        O::FvToTv => VI::FvToTv(dst.to_ref(src.size), src.offset),
+                        _ => VI::TvUnary(dst, op, src),
+                    }
+                }
             }
-        } else {
-            match op {
-                O::TvToFv => VI::TvToFv(dst.to_ref(src.size), src.offset),
-                O::FvToTv => VI::FvToTv(dst.to_ref(src.size), src.offset),
-                _ => VI::TvUnary(dst, op, src),
-            }
-            
         }
     };
     instrs.push(i);
@@ -196,17 +202,27 @@ pub fn lower_bin_op(
             O::Sub => VI::FvBinaryArithmetic(dst, BA::Sub, lhs.offset, rhs.offset),
             O::Power => VI::FvBinaryArithmetic(dst, BA::Power, lhs.offset, rhs.offset),
             O::Multiply => VI::FvBinaryArithmetic(dst, BA::Multiply, lhs.offset, rhs.offset),
-            O::Divide => VI::FvBinaryArithmetic(dst, BA::Divide, lhs.offset, rhs.offset),
-            O::Modulus => VI::FvBinaryArithmetic(dst, BA::Modulus, lhs.offset, rhs.offset),
+            O::Divide => {
+                if lhs_mode == M::TwoValue {
+                    VI::FvTvBinaryArithmetic(dst, BA::Divide, lhs.offset, rhs.offset)
+                } else {
+                    VI::FvBinaryArithmetic(dst, BA::Divide, lhs.offset, rhs.offset)
+                }
+            }
+            O::Modulus => {
+                if lhs_mode == M::TwoValue {
+                    VI::FvTvBinaryArithmetic(dst, BA::Modulus, lhs.offset, rhs.offset)
+                } else {
+                    VI::FvBinaryArithmetic(dst, BA::Modulus, lhs.offset, rhs.offset)
+                }
+            }
             O::Min => VI::FvBinaryArithmetic(dst, BA::Min, lhs.offset, rhs.offset),
             O::Max => VI::FvBinaryArithmetic(dst, BA::Max, lhs.offset, rhs.offset),
 
             O::UnsignedLessEqual => {
                 VI::FvBinaryComparison(dst.offset, BC::UnsignedLessEqual, lhs, rhs.offset)
             }
-            O::CaseEquality => {
-                VI::FvBinaryComparison(dst.offset, BC::CaseEquality, lhs, rhs.offset)
-            }
+            O::CaseEquality => unreachable!(),
             O::LogicalShiftLeft => VI::FvShift(dst, S::LogicalLeft, lhs.offset, rhs.offset),
             O::LogicalShiftRight => VI::FvShift(dst, S::LogicalRight, lhs.offset, rhs.offset),
             O::ArithmeticShiftRight => VI::FvShift(dst, S::ArithmeticRight, lhs.offset, rhs.offset),
@@ -214,8 +230,8 @@ pub fn lower_bin_op(
 
             O::CopyX => VI::FvBinaryArithmetic(dst, BA::CopyX, lhs.offset, rhs.offset),
             O::CopyZ => VI::FvBinaryArithmetic(dst, BA::CopyZ, lhs.offset, rhs.offset),
-            O::Posedge => VI::FvEdge(dst.offset, EdgeOp::Posedge, lhs.offset, rhs.offset),
-            O::Negedge => VI::FvEdge(dst.offset, EdgeOp::Negedge, lhs.offset, rhs.offset),
+            O::Posedge => unreachable!(),
+            O::Negedge => unreachable!(),
         }
     } else {
         if lhs.size == SCALAR_VSIZE {
@@ -232,7 +248,12 @@ pub fn lower_bin_op(
                 O::Min => VI::TvAnd1(dst.offset, lhs.offset, rhs.offset),
                 O::Max => VI::TvOr1(dst.offset, lhs.offset, rhs.offset),
                 O::UnsignedLessEqual => VI::TvOrNot1(dst.offset, rhs.offset, lhs.offset),
-                O::CaseEquality => VI::TvXnor1(dst.offset, lhs.offset, rhs.offset),
+                O::CaseEquality if lhs_mode == M::TwoValue => {
+                    VI::TvXnor1(dst.offset, lhs.offset, rhs.offset)
+                }
+                O::CaseEquality => {
+                    VI::FvBinaryComparison(dst.offset, BC::CaseEquality, lhs, rhs.offset)
+                }
                 O::LogicalShiftLeft => VI::TvShift(dst, S::LogicalLeft, lhs.offset, rhs.offset),
                 O::LogicalShiftRight => VI::TvShift(dst, S::LogicalRight, lhs.offset, rhs.offset),
                 O::ArithmeticShiftRight => {
@@ -240,8 +261,14 @@ pub fn lower_bin_op(
                 }
                 O::Concat => VI::TvConcat(dst.offset, lhs, rhs),
                 O::CopyX | O::CopyZ => VI::TvMove1(dst.offset, lhs.offset),
-                O::Posedge => VI::TvAndNot1(dst.offset, rhs.offset, lhs.offset),
-                O::Negedge => VI::TvAndNot1(dst.offset, lhs.offset, rhs.offset),
+                O::Posedge if lhs_mode == M::TwoValue => {
+                    VI::TvAndNot1(dst.offset, rhs.offset, lhs.offset)
+                }
+                O::Negedge if lhs_mode == M::TwoValue => {
+                    VI::TvAndNot1(dst.offset, lhs.offset, rhs.offset)
+                }
+                O::Posedge => VI::FvEdge(dst.offset, EdgeOp::Posedge, lhs.offset, rhs.offset),
+                O::Negedge => VI::FvEdge(dst.offset, EdgeOp::Negedge, lhs.offset, rhs.offset),
             }
         } else {
             match op {
@@ -260,8 +287,11 @@ pub fn lower_bin_op(
                 O::UnsignedLessEqual => {
                     VI::TvBinaryComparison(dst.offset, BC::UnsignedLessEqual, lhs, rhs.offset)
                 }
-                O::CaseEquality => {
+                O::CaseEquality if lhs_mode == M::TwoValue => {
                     VI::TvBinaryComparison(dst.offset, BC::CaseEquality, lhs, rhs.offset)
+                }
+                O::CaseEquality => {
+                    VI::FvBinaryComparison(dst.offset, BC::CaseEquality, lhs, rhs.offset)
                 }
                 O::LogicalShiftLeft => VI::TvShift(dst, S::LogicalLeft, lhs.offset, rhs.offset),
                 O::LogicalShiftRight => VI::TvShift(dst, S::LogicalRight, lhs.offset, rhs.offset),
@@ -270,8 +300,14 @@ pub fn lower_bin_op(
                 }
                 O::Concat => VI::TvConcat(dst.offset, lhs, rhs),
                 O::CopyX | O::CopyZ => VI::TvResize(dst, vogls_ir::ResizeOp::Truncate, lhs),
-                O::Posedge => VI::TvEdge(dst.offset, EdgeOp::Posedge, lhs.offset, rhs.offset),
-                O::Negedge => VI::TvEdge(dst.offset, EdgeOp::Negedge, lhs.offset, rhs.offset),
+                O::Posedge if lhs_mode == M::TwoValue => {
+                    VI::TvEdge(dst.offset, EdgeOp::Posedge, lhs.offset, rhs.offset)
+                }
+                O::Negedge if lhs_mode == M::TwoValue => {
+                    VI::TvEdge(dst.offset, EdgeOp::Negedge, lhs.offset, rhs.offset)
+                }
+                O::Posedge => VI::FvEdge(dst.offset, EdgeOp::Posedge, lhs.offset, rhs.offset),
+                O::Negedge => VI::FvEdge(dst.offset, EdgeOp::Negedge, lhs.offset, rhs.offset),
             }
         }
     };
@@ -753,7 +789,9 @@ pub fn lower_process_to_vm(
                         VI::Drive(
                             signal!(*signal),
                             heap_map[src].to_ref(src_size),
-                            offset.map(|(o, mask_size)| (heap_map[&o], mask_size)),
+                            offset.map(|(o, mask_size)| {
+                                (heap_map[&o], o.mode() == LogicMode::FourValue, mask_size)
+                            }),
                         )
                     }
                     I::Phi(..) => continue,

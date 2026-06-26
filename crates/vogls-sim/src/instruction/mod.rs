@@ -102,6 +102,8 @@ pub enum VmInstruction {
     TvConcat(HeapOffset, HeapRef, HeapRef),
     TvSelect(HeapRef, HeapOffset, HeapOffset, HeapOffset, bool),
 
+    FvTvBinaryArithmetic(HeapRef, BinaryArithmeticOp, HeapOffset, HeapOffset),
+
     FvUnary(HeapOffset, UnaryOp, HeapRef),
     FvResize(HeapRef, ResizeOp, HeapRef),
     FvBinaryArithmetic(HeapRef, BinaryArithmeticOp, HeapOffset, HeapOffset),
@@ -120,7 +122,7 @@ pub enum VmInstruction {
     Intrinsic(HeapOffset, Box<VmIntrinsicOp>, Box<[(HeapRef, LogicMode)]>),
 
     LastUpdateTime(HeapOffset, RtSignalKey),
-    Drive(RtSignalKey, HeapRef, Option<(HeapOffset, VectorSize)>),
+    Drive(RtSignalKey, HeapRef, Option<(HeapOffset, bool, VectorSize)>),
 
     Wait(Time),
     TvVariableWait(HeapOffset),
@@ -223,6 +225,11 @@ impl VmInstruction {
                 ("truthy", false, truthy.to_ref(dst.size)),
                 ("falsy", false, falsy.to_ref(dst.size)),
             ],
+            I::FvTvBinaryArithmetic(dst, _, lhs, rhs) => &[
+                ("dst", true, *dst),
+                ("lhs", false, lhs.to_ref(dst.size)),
+                ("rhs", false, rhs.to_ref(dst.size)),
+            ],
             I::FvUnary(dst, op, src) => match op {
                 UnaryOp::Neg => &[("dst", true, dst.to_ref(src.size)), ("src", true, *src)],
                 UnaryOp::ReduceOr | UnaryOp::ReduceAnd | UnaryOp::ReduceXor => {
@@ -303,7 +310,7 @@ impl VmInstruction {
                         ),
                         ("src", logic_mode == LogicMode::FourValue, *src),
                     ],
-                    Some((partial, _)) => &[
+                    Some((partial, is_fv, _)) => &[
                         (
                             "dst",
                             logic_mode == LogicMode::FourValue,
@@ -312,7 +319,7 @@ impl VmInstruction {
                         ("src", logic_mode == LogicMode::FourValue, *src),
                         (
                             "offset",
-                            logic_mode == LogicMode::FourValue,
+                            *is_fv,
                             partial.to_32bit_ref(),
                         ),
                     ],
