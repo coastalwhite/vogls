@@ -3,11 +3,11 @@ use std::fmt;
 use std::fs::read_to_string;
 use std::io::{self, Write};
 use std::panic::{self, AssertUnwindSafe};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 
-use backtrace::{BacktraceFmt, BacktraceFrameFmt};
+use backtrace::BacktraceFmt;
 use clap::Parser;
 use vogls::design::{Arena, Macro};
 use vogls::{DesignBuilder, SimulationIo, VirDesignBuilder};
@@ -36,6 +36,8 @@ struct Args {
     #[arg(short = 'C')]
     compiled: bool,
     #[arg(long)]
+    new_bytecode: bool,
+    #[arg(long)]
     opt_rounds: Option<u8>,
 
     #[arg(short = 'n', long, default_value_t = 0)]
@@ -53,6 +55,13 @@ impl io::Write for Io {
     fn flush(&mut self) -> io::Result<()> {
         self.0.lock().unwrap().flush()
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Backend {
+    Interpretter,
+    Compile,
+    Bytecode,
 }
 
 #[derive(Clone)]
@@ -143,11 +152,20 @@ impl From<io::Error> for FailureInfo {
     }
 }
 
+struct TestCase {
+    offset_path: PathBuf,
+    path: PathBuf,
+    information: TestInfo,
+    opt_rounds: u8,
+    logic_mode: LogicMode,
+    backend: Backend,
+}
+
 struct Fail {
     name: String,
     mode: LogicMode,
     opt_rounds: u8,
-    compile: bool,
+    backend: Backend,
     info: FailureInfo,
 }
 
@@ -212,11 +230,22 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         (false, true) => &[LogicMode::FourValue],
         _ => &[LogicMode::TwoValue, LogicMode::FourValue],
     };
-    let compiled: &[bool] = match (args.interpretted, args.compiled) {
-        (true, false) => &[false],
-        (false, true) => &[true],
-        _ => &[false, true],
-    };
+    let mut backends = Vec::new();
+    if !args.interpretted && !args.compiled && !args.new_bytecode {
+        backends.extend([Backend::Interpretter, Backend::Compile]);
+    } else {
+        if args.interpretted {
+            backends.push(Backend::Interpretter);
+        }
+        if args.compiled {
+            backends.push(Backend::Compile);
+        }
+        if args.new_bytecode {
+            backends.push(Backend::Bytecode);
+        }
+    }
+
+    dbg!(&backends);
 
     let mut num_tests = 0;
     let opt_rounds_configurations: &[u8] = match args.opt_rounds {
@@ -233,50 +262,74 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         }));
     }));
 
-    writeln!(&mut o, "Running {} tests...", paths.len())?;
-    let fails = if args.num_threads == 1 {
-        let mut fails = Vec::<Fail>::new();
-        for path in paths.iter() {
-            let offset_path = path.as_path();
-            write!(
-                &mut o,
-                "  {}{:.<2$} ",
-                offset_path.display(),
-                "",
-                max_size - offset_path.as_os_str().len()
-            )?;
-            std::io::stdout().flush()?;
+    let mut configurations = Vec::<TestCase>::new();
 
-            let path = tests_dir.join(&offset_path);
-            let s = std::fs::read_to_string(&path)?;
-            let test_information = TestInfo::parse(&s);
+    for path in paths.iter() {
+        let offset_path = path.as_path();
+        let path = tests_dir.join(&offset_path);
+        let s = std::fs::read_to_string(&path)?;
+        let test_information = TestInfo::parse(&s);
 
-            for &opt_rounds in opt_rounds_configurations {
-                for &logic_mode in modes {
-                    for &compile in compiled {
-                        let result =
-                            run_test(&path, &test_information, logic_mode, compile, opt_rounds);
-                        num_tests += usize::from(!matches!(result, Ok(PassKind::Skip)));
-
-                        match result {
-                            Ok(PassKind::Skip) => write!(&mut o, " {ANSI_GREEN}S{ANSI_END}")?,
-                            Ok(PassKind::Succeed) => write!(&mut o, " {ANSI_GREEN}P{ANSI_END}")?,
-                            Err(info) => {
-                                write!(&mut o, " {ANSI_RED}{}{ANSI_END}", info.into_char())?;
-                                fails.push(Fail {
-                                    name: offset_path.display().to_string(),
-                                    mode: logic_mode,
-                                    opt_rounds,
-                                    compile,
-                                    info,
-                                });
-                            }
-                        }
-                        o.flush()?;
-                    }
+        for &opt_rounds in opt_rounds_configurations {
+            for &logic_mode in modes {
+                for &backend in &backends {
+                    configurations.push(TestCase {
+                        offset_path: offset_path.to_path_buf(),
+                        path: path.clone(),
+                        information: test_information.clone(),
+                        opt_rounds,
+                        logic_mode,
+                        backend,
+                    });
                 }
             }
-            writeln!(&mut o)?;
+        }
+    }
+    writeln!(&mut o, "Running {} tests...", configurations.len())?;
+
+    let fails = if args.num_threads == 1 {
+        let mut fails = Vec::<Fail>::new();
+        let mut prev_file = None;
+        for (i, t) in configurations.iter().enumerate() {
+            if prev_file != Some(&t.path) {
+                prev_file = Some(&t.path);
+                if i != 0 {
+                    writeln!(&mut o)?;
+                }
+                write!(
+                    &mut o,
+                    "  {}{:.<2$} ",
+                    t.offset_path.display(),
+                    "",
+                    max_size - t.offset_path.as_os_str().len()
+                )?;
+                std::io::stdout().flush()?;
+            }
+
+            let result = run_test(
+                &t.path,
+                &t.information,
+                t.logic_mode,
+                t.backend,
+                t.opt_rounds,
+            );
+            num_tests += usize::from(!matches!(result, Ok(PassKind::Skip)));
+
+            match result {
+                Ok(PassKind::Skip) => write!(&mut o, " {ANSI_GREEN}S{ANSI_END}")?,
+                Ok(PassKind::Succeed) => write!(&mut o, " {ANSI_GREEN}P{ANSI_END}")?,
+                Err(info) => {
+                    write!(&mut o, " {ANSI_RED}{}{ANSI_END}", info.into_char())?;
+                    fails.push(Fail {
+                        name: t.offset_path.display().to_string(),
+                        mode: t.logic_mode,
+                        opt_rounds: t.opt_rounds,
+                        backend: t.backend,
+                        info,
+                    });
+                }
+            }
+            o.flush()?;
         }
         fails
     } else {
@@ -285,62 +338,42 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             .num_threads(args.num_threads)
             .build()?;
 
-        let mut configurations = Vec::new();
-
-        for path in paths.iter() {
-            let offset_path = path.as_path();
-            let path = tests_dir.join(&offset_path);
-            let s = std::fs::read_to_string(&path)?;
-            let test_information = TestInfo::parse(&s);
-
-            for &opt_rounds in opt_rounds_configurations {
-                for &logic_mode in modes {
-                    for &compile in compiled {
-                        configurations.push((
-                            offset_path.to_path_buf(),
-                            path.clone(),
-                            test_information.clone(),
-                            opt_rounds,
-                            logic_mode,
-                            compile,
-                        ));
-                    }
-                }
-            }
-        }
-
         num_tests = configurations.len();
         pool.install(|| {
             configurations
                 .into_par_iter()
-                .filter_map(
-                    |(offset_path, path, test_information, opt_rounds, logic_mode, compile)| {
-                        match run_test(&path, &test_information, logic_mode, compile, opt_rounds) {
-                            Ok(PassKind::Skip) => {
-                                io::stdout().write_all(&[b'S']).unwrap();
-                                io::stdout().flush().unwrap();
-                                None
-                            }
-                            Ok(PassKind::Succeed) => {
-                                io::stdout().write_all(&[b'.']).unwrap();
-                                io::stdout().flush().unwrap();
-                                None
-                            }
-                            Err(info) => {
-                                let s = format!("{ANSI_RED}{}{ANSI_END}", info.into_char());
-                                io::stdout().write_all(s.as_bytes()).unwrap();
-                                io::stdout().flush().unwrap();
-                                Some(Fail {
-                                    name: offset_path.display().to_string(),
-                                    mode: logic_mode,
-                                    opt_rounds,
-                                    compile,
-                                    info,
-                                })
-                            }
+                .filter_map(|t| {
+                    match run_test(
+                        &t.path,
+                        &t.information,
+                        t.logic_mode,
+                        t.backend,
+                        t.opt_rounds,
+                    ) {
+                        Ok(PassKind::Skip) => {
+                            io::stdout().write_all(&[b'S']).unwrap();
+                            io::stdout().flush().unwrap();
+                            None
                         }
-                    },
-                )
+                        Ok(PassKind::Succeed) => {
+                            io::stdout().write_all(&[b'.']).unwrap();
+                            io::stdout().flush().unwrap();
+                            None
+                        }
+                        Err(info) => {
+                            let s = format!("{ANSI_RED}{}{ANSI_END}", info.into_char());
+                            io::stdout().write_all(s.as_bytes()).unwrap();
+                            io::stdout().flush().unwrap();
+                            Some(Fail {
+                                name: t.offset_path.display().to_string(),
+                                mode: t.logic_mode,
+                                opt_rounds: t.opt_rounds,
+                                backend: t.backend,
+                                info,
+                            })
+                        }
+                    }
+                })
                 .collect()
         })
     };
@@ -384,15 +417,20 @@ fn report_fails(o: &mut io::Stdout, fails: Vec<Fail>, num_tests: usize) -> io::R
                 name,
                 mode,
                 opt_rounds,
-                compile,
+                backend,
                 info,
             } = fail;
             let mode_str = match mode {
                 LogicMode::TwoValue => "tvl",
                 LogicMode::FourValue => "fvl",
             };
+            let backend = match backend {
+                Backend::Interpretter => "interpret",
+                Backend::Compile => "compile",
+                Backend::Bytecode => "bytecode",
+            };
 
-            write!(o, "+ {name}[{mode_str}-compile={compile}-O{opt_rounds}]")?;
+            write!(o, "+ {name}[{mode_str}-{backend}-O{opt_rounds}]")?;
 
             match info {
                 FailureInfo::Panic(panic) => {
@@ -483,7 +521,7 @@ fn run_test(
     path: &Path,
     test_information: &TestInfo,
     logic_mode: LogicMode,
-    compile: bool,
+    backend: Backend,
     opt_rounds: u8,
 ) -> Result<PassKind, FailureInfo> {
     if Some(logic_mode) == test_information.skip {
@@ -576,7 +614,7 @@ fn run_test(
     let result: Result<Result<(), FailureInfo>, Box<dyn std::any::Any + Send + 'static>> =
         std::panic::catch_unwind(|| {
             let mut arena = Arena::new();
-            let design = if path
+            let mut design = if path
                 .extension()
                 .is_some_and(|ext| ext.as_encoded_bytes() == b"vir")
             {
@@ -645,10 +683,13 @@ fn run_test(
                 Result::<_, FailureInfo>::Ok(lowered)
             }?;
 
-            let mut design = if compile {
-                design.compile()
-            } else {
-                design.to_bytecode()
+            let mut design = match backend {
+                Backend::Compile => design.compile(),
+                Backend::Bytecode => {
+                    design.new_bytecode = true;
+                    design.to_bytecode()
+                }
+                Backend::Interpretter => design.to_bytecode(),
             }
             .map_err(|_| {
                 FailureInfo::CompileFailure("failed to convert to execution format".into())

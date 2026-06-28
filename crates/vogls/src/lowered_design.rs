@@ -18,7 +18,7 @@ use vogls_runtime::plugins::RuntimePlugin;
 #[cfg(feature = "native")]
 use vogls_runtime::plugins::RuntimePluginState;
 use vogls_runtime::{RtSignalKey, RuntimeState};
-use vogls_sim::bytecode::{BytecodeEncoder, BytecodeListeners, Schedule, execute};
+use vogls_sim::bytecode::{BytecodeEncoder, BytecodeListeners, Schedule};
 use vogls_sim::lower_bytecode::lower_process_to_bytecode;
 use vogls_sim::{Event, Regions, Simulation, VmProcess, VmProcessKey, lower_process_to_vm};
 #[cfg(feature = "native")]
@@ -219,12 +219,14 @@ impl LoweredDesign {
             let mut schedule = Schedule::new(NUM_REGIONS);
             let watch_map = WatchMap::new(&self.gl.bbs);
             let mut listeners = BytecodeListeners::new(watch_map.num_watches());
+            let mut num_stack_words = 0;
 
             for process in self.gl.processes.keys() {
                 lower_process_to_bytecode(
                     process,
                     &self.gl,
                     &mut stack_tracker,
+                    &mut num_stack_words,
                     &watch_map,
                     &mut schedule,
                     &mut listeners,
@@ -234,6 +236,7 @@ impl LoweredDesign {
                 );
             }
 
+            let stack_offset = heap_builder.claim_words(num_stack_words) as u64;
             let mut heap = heap_builder.finish();
             let mut lupdt_updated = vec![false; lupdt_indexes.len()];
 
@@ -258,24 +261,38 @@ impl LoweredDesign {
                 }
             }
 
-            let mut state = RuntimeState::new(
+            let runtime = RuntimeState::new(
                 self.gl.logic_mode,
                 heap,
                 self.gl.signals.len(),
                 &lupdt_updated,
             );
-            let bytecode = bytecode.data;
-            let entry = schedule.pop(&mut 0).unwrap();
-            execute(
-                &bytecode,
-                entry.0,
-                &mut state,
-                &mut schedule,
-                &mut listeners,
-            );
-            dbg!(&bytecode);
+            let state = vogls_sim::bytecode::State {
+                runtime,
+                plugins,
+                schedule,
+                listeners,
+            };
+            let design = vogls_sim::bytecode::Design {
+                bytecode: bytecode.data,
+                intrinsics: bytecode
+                    .intrinsics
+                    .take_keys()
+                    .into_iter()
+                    .map(|v| v.0)
+                    .collect(),
+                stack_offset,
+            };
 
-            todo!()
+            Ok(Design {
+                gl: self.gl,
+                ident_table: self.ident_table,
+                elab_table: self.table,
+                backend: DesignBackend::Bytecode { design },
+                rt_signal_map,
+                signal_to_heap,
+                initial_state: DesignState::Bytecode(state),
+            })
         } else {
             let listeners = SlotMap::default();
             let watches = vec![Vec::new(); self.gl.signals.len()];

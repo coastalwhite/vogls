@@ -1,17 +1,53 @@
-use std::fmt;
+use std::fmt::{self, Debug};
 use std::ops::{Index, IndexMut};
 
-use vogls_bits::arithmetic::{tv_addition, tv_bin_u64_bitwise_op, tv_multiplication, tv_subtraction};
-use vogls_codegen::HeapOffset;
+use vogls_bits::BitsDataRef;
+use vogls_bits::arithmetic::{
+    FvLogicValue, fv_bitwise_and_elem, fv_bitwise_inv_elem, fv_bitwise_or_elem,
+    fv_bitwise_xor_elem, fv_reduce_and_elem, fv_reduce_or_elem, fv_reduce_xor_elem, tv_addition,
+    tv_bin_u64_bitwise_op, tv_multiplication, tv_subtraction,
+};
+use vogls_bits::format::{BitsFormatBase, BitsFormatWidth};
+use vogls_codegen::lsra::StackItemKind;
+use vogls_codegen::{HeapOffset, HeapRef};
 
-use vogls_ir::{VSIZE_64, VectorSize};
+use vogls_ir::{Bits, IntrinsicOp, LogicMode, Mode, SCALAR_VSIZE, VSIZE_32, VSIZE_64, VectorSize};
 use vogls_runtime::RuntimeState;
+use vogls_runtime::plugins::{RuntimePlugin, RuntimePluginState};
+use vogls_utils::{IndexSet, NonMaxU16};
+
+pub struct Design {
+    pub bytecode: Vec<Bytecode>,
+    pub intrinsics: Vec<IntrinsicOp>,
+    pub stack_offset: u64,
+}
+pub struct State {
+    pub runtime: RuntimeState,
+    pub plugins: Vec<RuntimePluginState>,
+    pub schedule: Schedule,
+    pub listeners: BytecodeListeners,
+}
+
+impl Clone for State {
+    fn clone(&self) -> Self {
+        Self {
+            runtime: self.runtime.clone(),
+            plugins: self
+                .plugins
+                .iter()
+                .map(|p| RuntimePlugin::clone(p.as_ref()))
+                .collect(),
+            schedule: self.schedule.clone(),
+            listeners: self.listeners.clone(),
+        }
+    }
+}
 
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Bytecode(pub u32);
 
-#[derive(Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Reg {
     #[default]
     X0,
@@ -53,6 +89,12 @@ impl IndexMut<Reg> for Regs {
     }
 }
 
+impl fmt::Display for SixBitSize {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&if self.0 == 0 { 64 } else { self.0 }, f)
+    }
+}
+
 impl Reg {
     #[inline(always)]
     pub fn new_masked(v: u32) -> Self {
@@ -76,21 +118,52 @@ impl Reg {
             _ => unreachable!(),
         }
     }
+
+    /// Get the two registers used to store Four-Value Logic.
+    ///
+    /// This splits the value into the _Special_ (`spc`) and the _Value_ (`val`).
+    ///
+    /// |           | special=0 | special=1 |
+    /// | value = 0 |         x |         0 |
+    /// | value = 1 |         z |         1 |
+    pub fn to_spc_and_val(self) -> (Self, Self) {
+        debug_assert_ne!(self, Self::X15);
+        (self, Self::new_masked(self as u32 + 1))
+    }
+}
+
+pub struct ColdContext<'a> {
+    stack: Vec<u64>,
+    stack_args: Vec<(VectorSize, LogicMode)>,
+
+    intrinsics: &'a [IntrinsicOp],
+
+    stdout: &'a mut (dyn std::io::Write + Send + Sync),
+    stderr: &'a mut (dyn std::io::Write + Send + Sync),
+
+    return_value: u32,
+}
+
+impl<'a> ColdContext<'a> {
+    pub fn new(
+        intrinsics: &'a [IntrinsicOp],
+        stdout: &'a mut (dyn std::io::Write + Send + Sync),
+        stderr: &'a mut (dyn std::io::Write + Send + Sync),
+    ) -> Self {
+        Self {
+            stack: Vec::new(),
+            stack_args: Vec::new(),
+            intrinsics,
+            stdout,
+            stderr,
+            return_value: 0,
+        }
+    }
 }
 
 impl Bytecode {
     fn opcode(self) -> u8 {
         (self.0 & 0xFF) as u8
-    }
-}
-
-impl fmt::Debug for Bytecode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let opcode = self.opcode();
-        let mnemonic = MNEMONICS[opcode as usize];
-        write!(f, "{mnemonic:<0$}", MAX_MNEMONIC_SIZE + 4)?;
-        let arg_formatter = ARG_FORMATTER[opcode as usize];
-        (arg_formatter)(*self, f)
     }
 }
 
@@ -121,7 +194,11 @@ impl SixBitSize {
     }
 
     pub fn mask(self, v: u64) -> u64 {
-        v & ((1u64 << self.0) - 1)
+        if self.0 == 0 {
+            v
+        } else {
+            v & ((1u64 << self.0) - 1)
+        }
     }
 }
 
@@ -137,8 +214,15 @@ struct EncBinaryImm {
     rs: Reg,
     size: SixBitSize,
 
-    // 10 bits
-    imm: i16,
+    imm10: i16,
+}
+#[derive(Default)]
+struct EncBinaryUImm {
+    rd: Reg,
+    rs: Reg,
+    size: SixBitSize,
+
+    imm10: u16,
 }
 #[derive(Default)]
 struct EncSet {
@@ -238,13 +322,22 @@ pub struct EncReschedule {
 #[derive(Default)]
 struct EncEmpty {}
 
+#[derive(Default)]
+struct EncPushArgument {
+    size: Option<VectorSize>,
+    mode: LogicMode,
+    rs: Reg,
+}
+
+#[derive(Default)]
+struct EncIntrinsic {
+    rd: Reg,
+    id: Option<NonMaxU16>,
+}
+
 pub trait Encoding: Sized {
     fn extract(bytecode: Bytecode) -> Self;
     fn encode(self) -> u32;
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
-    fn extract_and_fmt(bytecode: Bytecode, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        Self::extract(bytecode).fmt(f)
-    }
 }
 
 impl Encoding for EncUnary {
@@ -261,12 +354,6 @@ impl Encoding for EncUnary {
     fn encode(self) -> u32 {
         ((self.rd as u32) << 8) | ((self.rs as u32) << 12) | ((self.size.0 as u32) << 16)
     }
-
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self { rd, rs, size } = self;
-        let size = VectorSize::from(*size);
-        write!(f, "{rd}, {rs}, |{size}|")
-    }
 }
 impl Encoding for EncBinaryImm {
     #[inline(always)]
@@ -276,7 +363,7 @@ impl Encoding for EncBinaryImm {
             rd: Reg::new_masked(v >> 8),
             rs: Reg::new_masked(v >> 12),
             size: SixBitSize::new_masked(v >> 16),
-            imm: (v >> 22) as i32 as i16,
+            imm10: ((v as i32) >> 22) as i16,
         }
     }
     #[inline(always)]
@@ -284,13 +371,26 @@ impl Encoding for EncBinaryImm {
         ((self.rd as u32) << 8)
             | ((self.rs as u32) << 12)
             | ((self.size.0 as u32) << 16)
-            | ((self.imm as u16 as u32) << 22)
+            | ((self.imm10 as u16 as u32) << 22)
     }
-
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self { rd, rs, imm, size } = self;
-        let size = VectorSize::from(*size);
-        write!(f, "{rd}, {rs}, {imm}, |{size}|")
+}
+impl Encoding for EncBinaryUImm {
+    #[inline(always)]
+    fn extract(bytecode: Bytecode) -> Self {
+        let v = bytecode.0;
+        Self {
+            rd: Reg::new_masked(v >> 8),
+            rs: Reg::new_masked(v >> 12),
+            size: SixBitSize::new_masked(v >> 16),
+            imm10: (v >> 22) as u16,
+        }
+    }
+    #[inline(always)]
+    fn encode(self) -> u32 {
+        ((self.rd as u32) << 8)
+            | ((self.rs as u32) << 12)
+            | ((self.size.0 as u32) << 16)
+            | ((self.imm10 as u32) << 22)
     }
 }
 
@@ -314,18 +414,6 @@ impl Encoding for EncSet {
             | ((self.size.0 as u32) << 20)
             | ((self.imm as u16 as u32) << 26)
     }
-
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self {
-            rd,
-            rs,
-            roff,
-            imm,
-            size,
-        } = self;
-        let size = VectorSize::from(*size);
-        write!(f, "{rd}, {rs}, {roff}, {imm}, |{size}|")
-    }
 }
 
 impl Encoding for EncBinaryReg {
@@ -345,12 +433,6 @@ impl Encoding for EncBinaryReg {
             | ((self.rs1 as u32) << 12)
             | ((self.rs2 as u32) << 16)
             | ((self.size.0 as u32) << 20)
-    }
-
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self { rd, rs1, rs2, size } = self;
-        let size = VectorSize::from(*size);
-        write!(f, "{rd}, {rs1}, {rs2}, |{size}|")
     }
 }
 
@@ -374,20 +456,6 @@ impl Encoding for EncHeapBitwiseReg {
             | ((self.op as u32) << 20)
             | (self.size.map_or(0, |v| v.get()) << 23)
     }
-
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self {
-            rd,
-            rs1,
-            rs2,
-            op,
-            size,
-        } = self;
-        match size {
-            None => write!(f, "{rd}, {rs1}, {rs2}, {op:?}, |x12|"),
-            Some(size) => write!(f, "{rd}, {rs1}, {rs2}, {op:?} |{size}|"),
-        }
-    }
 }
 
 impl Encoding for EncLoadImm {
@@ -399,7 +467,7 @@ impl Encoding for EncLoadImm {
             clear: (v >> 12) & 1 != 0,
             sign_extend: (v >> 13) & 1 != 0,
             segment: ((v >> 14) & 0x3) as u8,
-            imm: (v >> 16) as i16,
+            imm: ((v as i32) >> 16) as i16,
         }
     }
     #[inline(always)]
@@ -409,17 +477,6 @@ impl Encoding for EncLoadImm {
             | ((self.sign_extend as u32) << 13)
             | ((self.segment as u32) << 14)
             | ((self.imm as u16 as u32) << 16)
-    }
-
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self {
-            rd,
-            clear,
-            sign_extend,
-            segment,
-            imm,
-        } = self;
-        write!(f, "{rd}, {imm}, s:{segment}, c:{clear}, e:{sign_extend}")
     }
 }
 
@@ -436,11 +493,6 @@ impl Encoding for EncWake {
     fn encode(self) -> u32 {
         ((self.rcond as u32) << 8) | ((self.index as u32) << 12)
     }
-
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self { rcond, index } = self;
-        write!(f, "{rcond}, {index}")
-    }
 }
 
 impl Encoding for EncJump {
@@ -454,11 +506,6 @@ impl Encoding for EncJump {
     #[inline(always)]
     fn encode(self) -> u32 {
         (self.imm as u32) << 8
-    }
-
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self { imm } = self;
-        write!(f, "{imm}")
     }
 }
 
@@ -475,11 +522,6 @@ impl Encoding for EncRelJump {
     fn encode(self) -> u32 {
         ((self.rs as u32) << 8) | (self.imm as u32) << 12
     }
-
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self { rs, imm } = self;
-        write!(f, "{rs}, {imm}")
-    }
 }
 
 impl Encoding for EncEmpty {
@@ -491,10 +533,6 @@ impl Encoding for EncEmpty {
     fn encode(self) -> u32 {
         0
     }
-
-    fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        Ok(())
-    }
 }
 
 impl Encoding for EncReschedule {
@@ -504,23 +542,14 @@ impl Encoding for EncReschedule {
         Self {
             rtime: Reg::new_masked(v >> 8),
             region: ((v >> 12) & 0xFF) as u8,
-            schedule_self: (v >> 13) & 1 != 0,
+            schedule_self: (v >> 20) & 1 != 0,
         }
     }
     #[inline(always)]
     fn encode(self) -> u32 {
         ((self.rtime as u32) << 8)
             | ((self.region as u32) << 12)
-            | (self.schedule_self as u32) << 13
-    }
-
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self {
-            rtime,
-            region,
-            schedule_self,
-        } = self;
-        write!(f, "{rtime}, {region}, {schedule_self}")
+            | (self.schedule_self as u32) << 20
     }
 }
 
@@ -534,13 +563,45 @@ impl Encoding for EncUImm {
     fn encode(self) -> u32 {
         (self.imm as u32) << 8
     }
+}
 
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self { imm } = self;
-        write!(f, "{imm}")
+impl Encoding for EncPushArgument {
+    #[inline(always)]
+    fn extract(bytecode: Bytecode) -> Self {
+        let v = bytecode.0;
+        Self {
+            rs: Reg::new_masked(v >> 8),
+            mode: match (v >> 12) & 1 {
+                0 => LogicMode::TwoValue,
+                _ => LogicMode::FourValue,
+            },
+            size: VectorSize::new(v >> 13),
+        }
+    }
+    #[inline(always)]
+    fn encode(self) -> u32 {
+        ((self.rs as u32) << 8)
+            | ((self.mode as u32) << 12)
+            | (self.size.map_or(0u32, |v| v.get()) << 13)
     }
 }
 
+impl Encoding for EncIntrinsic {
+    #[inline(always)]
+    fn extract(bytecode: Bytecode) -> Self {
+        let v = bytecode.0;
+        Self {
+            rd: Reg::new_masked(v >> 8),
+            id: NonMaxU16::new((v >> 16) as u16),
+        }
+    }
+    #[inline(always)]
+    fn encode(self) -> u32 {
+        ((self.rd as u32) << 8) | (self.id.map_or(0u32, |v| v.get() as u32) << 16)
+    }
+}
+
+#[derive(Clone)]
 pub struct BytecodeListeners {
     map: Vec<InstructionPtr>,
     active: Vec<u64>,
@@ -559,16 +620,164 @@ impl BytecodeListeners {
     }
 }
 
+pub struct PreBytecodeTrace<'a> {
+    value: Bytecode,
+    regs: &'a Regs,
+}
+pub struct PostBytecodeTrace<'a> {
+    value: Bytecode,
+    regs: &'a Regs,
+}
+
+pub trait Trace {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, regs: &Regs) -> fmt::Result;
+}
+
+impl<T: fmt::Display> Trace for T {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, _regs: &Regs) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
+
+pub struct TraceReg(Reg, LogicMode, Option<VectorSize>);
+
+impl Trace for TraceReg {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, regs: &Regs) -> fmt::Result {
+        let size = self.2.unwrap_or(VSIZE_64);
+        let bits = match self.1 {
+            LogicMode::TwoValue => Bits::from_u64(size, regs[self.0]),
+            LogicMode::FourValue if size <= VSIZE_32 => {
+                let (spc, val) = self.0.to_spc_and_val();
+                Bits::from_four_value_u64(size, regs[spc] as u32, regs[val] as u32)
+            }
+            LogicMode::FourValue => {
+                let (spc, val) = self.0.to_spc_and_val();
+                Bits::from_boxed_slice(
+                    LogicMode::FourValue.into(),
+                    size,
+                    [regs[spc], regs[val]].into(),
+                )
+            }
+        };
+        fmt::Display::fmt(
+            &bits.display(&vogls_bits::format::BitsFormatOptions {
+                prefix: true,
+                base: BitsFormatBase::Binary,
+                separator: Some('_'),
+                align: None,
+                fill: '0',
+                width: BitsFormatWidth::Shrink,
+            }),
+            f,
+        )
+    }
+}
+
 macro_rules! define_instructions {
     (
-        $regs:ident, $pc_var: ident, $state:ident, $schedule:ident, $listeners:ident,
+        $regs:ident, $pc: ident, $state:ident, $schedule:ident, $listeners:ident, $cldctx:ident, $formatter:ident,
         [$(
-        $name:ident ($enc_variant:ident { $($param:ident: $param_ty:ty),* }) $blk:block $($pc:block)?
+        $name:ident ($enc_variant:ident { $($param:ident: $param_ty:ty),* }) $blk:block $fmt:block
+        $(: MNEMONIC: $mnemonic:block)?
+        $(($($pre_trace_arg:ident = $pre_trace_value:expr),* $(,)?) ($($post_trace_arg:ident = $post_trace_value:expr),* $(,)?))?
     )+]) => {
         #[repr(u8)]
         #[expect(non_camel_case_types)]
         pub enum BytecodeKind {
             $($name,)*
+        }
+
+        impl TryFrom<u8> for BytecodeKind {
+            type Error = ();
+            fn try_from(value: u8) -> Result<Self, Self::Error> {
+                match value {
+                    $(_ if value == BytecodeKind::$name as u8 => Ok(BytecodeKind::$name),)*
+                    _ => Err(()),
+                }
+            }
+        }
+
+        impl fmt::Display for Bytecode {
+            fn fmt(&self, $formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                let Ok(kind) = BytecodeKind::try_from(self.opcode()) else {
+                    return $formatter.write_str("unknown opcode");
+                };
+
+                match kind {
+                    $(BytecodeKind::$name => {
+                        #[allow(unused_variables)]
+                        let $enc_variant { $($param,)* .. } = $enc_variant::extract(*self);
+                        #[allow(unused_assignments, unused_mut)]
+                        let mut mnemonic: &str = stringify!($name);
+                        $( mnemonic = $mnemonic; )?
+                        write!($formatter, "{mnemonic:<0$}", MAX_MNEMONIC_SIZE + 2)?;
+                        $fmt
+                    })*
+                }
+            }
+        }
+
+        impl<'a> fmt::Display for PreBytecodeTrace<'a> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                let Ok(kind) = BytecodeKind::try_from(self.value.opcode()) else {
+                    return f.write_str("unknown opcode");
+                };
+
+                match kind {
+                    $(BytecodeKind::$name => {
+                        #[allow(unused_variables)]
+                        let $enc_variant { $($param,)* .. } = $enc_variant::extract(self.value);
+                        $(
+                            #[allow(unused_mut, unused_variables)]
+                            let mut fst = true;
+                            $(
+                                if !fst {
+                                    f.write_str(", ")?;
+                                }
+                                f.write_str(stringify!($pre_trace_arg))?;
+                                f.write_str(" = ")?;
+                                Trace::fmt(&$pre_trace_value, f, self.regs)?;
+                                #[allow(unused_assignments)]
+                                {
+                                    fst = false;
+                                }
+                            )*
+                        )?
+                    },)*
+                }
+                Ok(())
+            }
+        }
+        impl<'a> fmt::Display for PostBytecodeTrace<'a> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                let Ok(kind) = BytecodeKind::try_from(self.value.opcode()) else {
+                    return f.write_str("unknown opcode");
+                };
+
+                match kind {
+                    $(BytecodeKind::$name => {
+                        #[allow(unused_variables)]
+                        let $enc_variant { $($param,)* .. } = $enc_variant::extract(self.value);
+                        $(
+                            #[allow(unused_mut, unused_variables)]
+                            let mut fst = true;
+                            $(
+                                if !fst {
+                                    f.write_str(", ")?;
+                                }
+                                f.write_str(stringify!($post_trace_arg))?;
+                                f.write_str(" = ")?;
+                                Trace::fmt(&$post_trace_value, f, self.regs)?;
+                                #[allow(unused_assignments)]
+                                {
+                                    fst = false;
+                                }
+                            )*
+                        )?
+                    },)*
+                }
+                Ok(())
+            }
         }
 
         const NUM_INSTRUCTIONS: usize = {
@@ -585,6 +794,7 @@ macro_rules! define_instructions {
                 state: &mut RuntimeState,
                 schedule: &mut Schedule,
                 listeners: &mut BytecodeListeners,
+                cldctx: &mut ColdContext,
             ) -> u64;
             NUM_INSTRUCTIONS
         ] = [$($name),+];
@@ -601,26 +811,27 @@ macro_rules! define_instructions {
             }
             max
         };
-        const ARG_FORMATTER: [fn(v: Bytecode, &mut fmt::Formatter<'_>) -> fmt::Result; NUM_INSTRUCTIONS] = [$($enc_variant::extract_and_fmt),+];
 
         $(
         fn $name(
             c: Bytecode,
             $regs: &mut Regs,
-            $pc_var: u64,
+            $pc: u64,
             $state: &mut RuntimeState,
             $schedule: &mut Schedule,
             $listeners: &mut BytecodeListeners,
+            $cldctx: &mut ColdContext<'_>,
         ) -> u64 {
             _ = $regs;
             _ = $state;
             _ = $schedule;
             _ = $listeners;
+            _ = $cldctx;
             let $enc_variant { $($param,)* .. } = $enc_variant::extract(c);
+            #[allow(unused_mut, unused_assignments)]
+            let mut $pc = $pc + 1;
             $blk
-            #[allow(path_statements, unused_must_use)]
-            { $pc_var + 1 }
-            $(; $pc )?
+            $pc
         }
         )+
 
@@ -637,199 +848,536 @@ macro_rules! define_instructions {
 }
 
 define_instructions! {
-    regs, pc, state, schedule, listeners,
+    regs, pc, state, schedule, listeners, cldctx, f,
     [
         // TV Operations
-        and (EncBinaryReg { rd: Reg, rs1: Reg, rs2: Reg }) {
-            regs[rd] = regs[rs1] & regs[rs2];
-        }
-        or (EncBinaryReg { rd: Reg, rs1: Reg, rs2: Reg }) {
-            regs[rd] = regs[rs1] | regs[rs2];
-        }
-        xor (EncBinaryReg { rd: Reg, rs1: Reg, rs2: Reg }) {
-            regs[rd] = regs[rs1] ^ regs[rs2];
-        }
-        or_not (EncBinaryReg { rd: Reg, rs1: Reg, rs2: Reg }) {
-            regs[rd] = regs[rs1] | !regs[rs2];
-        }
-        and_not (EncBinaryReg { rd: Reg, rs1: Reg, rs2: Reg }) {
-            regs[rd] = regs[rs1] & !regs[rs2];
-        }
-        xnor (EncBinaryReg { rd: Reg, rs1: Reg, rs2: Reg }) {
-            regs[rd] = !(regs[rs1] ^ regs[rs2]);
-        }
-        ceq (EncBinaryReg { rd: Reg, rs1: Reg, rs2: Reg }) {
-            regs[rd] = u64::from(regs[rs1] == regs[rs2]);
-        }
-        andi (EncBinaryImm { rd: Reg, rs: Reg, imm: i16, size: SixBitSize }) {
-            let imm = i64::from(imm);
-            let imm = imm as u64;
-            let imm = size.mask(imm);
-            regs[rd] = regs[rs] & imm;
-        }
-        ori (EncBinaryImm { rd: Reg, rs: Reg, imm: i16, size: SixBitSize }) {
-            let imm = i64::from(imm);
-            let imm = imm as u64;
-            let imm = size.mask(imm);
-            regs[rd] = regs[rs] | imm;
-        }
-        xori (EncBinaryImm { rd: Reg, rs: Reg, imm: i16, size: SixBitSize }) {
-            let imm = i64::from(imm);
-            let imm = imm as u64;
-            let imm = size.mask(imm);
-            regs[rd] = regs[rs] ^ imm;
-        }
-        ceqi (EncBinaryImm { rd: Reg, rs: Reg, imm: i16, size: SixBitSize }) {
-            let imm = i64::from(imm);
-            let imm = imm as u64;
-            let imm = size.mask(imm);
-            regs[rd] = u64::from(regs[rs] == imm);
-        }
-        cnei (EncBinaryImm { rd: Reg, rs: Reg, imm: i16, size: SixBitSize }) {
-            let imm = i64::from(imm);
-            let imm = imm as u64;
-            let imm = size.mask(imm);
-            regs[rd] = u64::from(regs[rs] != imm);
-        }
-        count_ones (EncUnary { rd: Reg, rs: Reg }) {
-            regs[rd] = u64::from(regs[rs].count_ones());
-        }
-        truncate (EncUnary { rd: Reg, rs: Reg, size: SixBitSize }) {
-            regs[rd] = size.mask(regs[rs]);
-        }
+        and (EncBinaryReg { rd: Reg, rs1: Reg, rs2: Reg })
+            { regs[rd] = regs[rs1] & regs[rs2]; }
+            { write!(f, "{rd}, {rs1}, {rs2}") }
+            ( rs1 = TraceReg(rs1, LogicMode::TwoValue, None), rs2 = TraceReg(rs2, LogicMode::TwoValue, None) )
+            ( rd = TraceReg(rd, LogicMode::TwoValue, None) )
+        or (EncBinaryReg { rd: Reg, rs1: Reg, rs2: Reg })
+            { regs[rd] = regs[rs1] | regs[rs2]; }
+            { write!(f, "{rd}, {rs1}, {rs2}") }
+            ( rs1 = TraceReg(rs1, LogicMode::TwoValue, None), rs2 = TraceReg(rs2, LogicMode::TwoValue, None) )
+            ( rd = TraceReg(rd, LogicMode::TwoValue, None) )
+        xor (EncBinaryReg { rd: Reg, rs1: Reg, rs2: Reg })
+            { regs[rd] = regs[rs1] ^ regs[rs2]; }
+            { write!(f, "{rd}, {rs1}, {rs2}") }
+            ( rs1 = TraceReg(rs1, LogicMode::TwoValue, None), rs2 = TraceReg(rs2, LogicMode::TwoValue, None) )
+            ( rd = TraceReg(rd, LogicMode::TwoValue, None) )
+        or_not (EncBinaryReg { rd: Reg, rs1: Reg, rs2: Reg, size: SixBitSize })
+            { regs[rd] = size.mask(regs[rs1] | !regs[rs2]); }
+            { write!(f, "{rd}, {rs1}, {rs2}, |{size}|") }
+            ( rs1 = TraceReg(rs1, LogicMode::TwoValue, None), rs2 = TraceReg(rs2, LogicMode::TwoValue, None) )
+            ( rd = TraceReg(rd, LogicMode::TwoValue, None) )
+        and_not (EncBinaryReg { rd: Reg, rs1: Reg, rs2: Reg, size: SixBitSize })
+            { regs[rd] = size.mask(regs[rs1] & !regs[rs2]); }
+            { write!(f, "{rd}, {rs1}, {rs2}, |{size}|") }
+            ( rs1 = TraceReg(rs1, LogicMode::TwoValue, None), rs2 = TraceReg(rs2, LogicMode::TwoValue, None) )
+            ( rd = TraceReg(rd, LogicMode::TwoValue, None) )
+        xnor (EncBinaryReg { rd: Reg, rs1: Reg, rs2: Reg, size: SixBitSize })
+            { regs[rd] = size.mask(!(regs[rs1] ^ regs[rs2])); }
+            { write!(f, "{rd}, {rs1}, {rs2}, |{size}|") }
+            ( rs1 = TraceReg(rs1, LogicMode::TwoValue, None), rs2 = TraceReg(rs2, LogicMode::TwoValue, None) )
+            ( rd = TraceReg(rd, LogicMode::TwoValue, None) )
+        ceq (EncBinaryReg { rd: Reg, rs1: Reg, rs2: Reg })
+            { regs[rd] = u64::from(regs[rs1] == regs[rs2]); }
+            { write!(f, "{rd}, {rs1}, {rs2}") }
+            ( rs1 = TraceReg(rs1, LogicMode::TwoValue, None), rs2 = TraceReg(rs2, LogicMode::TwoValue, None) )
+            ( rd = TraceReg(rd, LogicMode::TwoValue, Some(SCALAR_VSIZE)) )
+        andi (EncBinaryImm { rd: Reg, rs: Reg, imm10: i16, size: SixBitSize })
+            { regs[rd] = regs[rs] & size.mask(i64::from(imm10) as u64); }
+            { write!(f, "{rd}, {rs}, {imm10}, |{size}|") }
+            ( rs1 = TraceReg(rs, LogicMode::TwoValue, Some(size.into())), imm = imm10 )
+            ( rd = TraceReg(rd, LogicMode::TwoValue, Some(size.into())) )
+        ori (EncBinaryImm { rd: Reg, rs: Reg, imm10: i16, size: SixBitSize })
+            { regs[rd] = regs[rs] | size.mask(i64::from(imm10) as u64); }
+            { write!(f, "{rd}, {rs}, {imm10}, |{size}|") }
+            ( rs1 = TraceReg(rs, LogicMode::TwoValue, Some(size.into())), imm = imm10 )
+            ( rd = TraceReg(rd, LogicMode::TwoValue, Some(size.into())) )
+        xori (EncBinaryImm { rd: Reg, rs: Reg, imm10: i16, size: SixBitSize })
+            { regs[rd] = regs[rs] ^ size.mask(i64::from(imm10) as u64); }
+            { write!(f, "{rd}, {rs}, {imm10}, |{size}|") }
+            ( rs1 = TraceReg(rs, LogicMode::TwoValue, Some(size.into())), imm = imm10 )
+            ( rd = TraceReg(rd, LogicMode::TwoValue, Some(size.into())) )
+        ceqi (EncBinaryImm { rd: Reg, rs: Reg, imm10: i16, size: SixBitSize })
+            { regs[rd] = u64::from(regs[rs] == size.mask(i64::from(imm10) as u64)); }
+            { write!(f, "{rd}, {rs}, {imm10}, |{size}|") }
+            ( rs1 = TraceReg(rs, LogicMode::TwoValue, Some(size.into())), imm = imm10 )
+            ( rd = TraceReg(rd, LogicMode::TwoValue, Some(size.into())) )
+        cnei (EncBinaryImm { rd: Reg, rs: Reg, imm10: i16, size: SixBitSize })
+            { regs[rd] = u64::from(regs[rs] != size.mask(i64::from(imm10) as u64)); }
+            { write!(f, "{rd}, {rs}, {imm10}, |{size}|") }
+            ( rs1 = TraceReg(rs, LogicMode::TwoValue, Some(size.into())), imm = imm10 )
+            ( rd = TraceReg(rd, LogicMode::TwoValue, Some(size.into())) )
+        slli (EncBinaryUImm { rd: Reg, rs: Reg, imm10: u16, size: SixBitSize })
+            { regs[rd] = size.mask(regs[rs] << imm10); }
+            { write!(f, "{rd}, {rs}, {imm10}, |{size}|") }
+            ( rs1 = TraceReg(rs, LogicMode::TwoValue, Some(size.into())), imm = imm10 )
+            ( rd = TraceReg(rd, LogicMode::TwoValue, Some(size.into())) )
 
-        add (EncBinaryReg { rd: Reg, rs1: Reg, rs2: Reg, size: SixBitSize }) {
-            let sum = regs[rs1].wrapping_add(regs[rs2]);
-            regs[rd] = size.mask(sum);
-        }
-        sub (EncBinaryReg { rd: Reg, rs1: Reg, rs2: Reg, size: SixBitSize }) {
-            let sum = regs[rs1].wrapping_sub(regs[rs2]);
-            regs[rd] = size.mask(sum);
-        }
-        mul (EncBinaryReg { rd: Reg, rs1: Reg, rs2: Reg, size: SixBitSize }) {
-            let sum = regs[rs1].wrapping_mul(regs[rs2]);
-            regs[rd] = size.mask(sum);
-        }
+        count_ones (EncUnary { rd: Reg, rs: Reg })
+            { regs[rd] = u64::from(regs[rs].count_ones()); }
+            { write!(f, "{rd}, {rs}") }
+            ( rs = TraceReg(rs, LogicMode::TwoValue, None) )
+            ( rd = TraceReg(rd, LogicMode::TwoValue, None) )
 
-        tv_heap_bitwise (EncHeapBitwiseReg { rd: Reg, rs1: Reg, rs2: Reg, op: BitwiseOp, size: Option<VectorSize> }) {
-            let size = size.unwrap_or_else(|| VectorSize::new(regs[Reg::X12] as u32).unwrap());
-            let num_words = size.get().div_ceil(64) as usize;
-            let dst = HeapOffset { bit_offset: (regs[rd] * 64) as usize };
-            let src1 = HeapOffset { bit_offset: (regs[rs1] * 64) as usize };
-            let src2 = HeapOffset { bit_offset: (regs[rs2] * 64) as usize };
-            let (dst, src1, src2) = state.heap.get_disjoint_u64_dst_s1_s2(
-                (dst, num_words),
-                (src1, num_words),
-                (src2, num_words),
-            );
-            
-            // @TODO: These are not disjoint, so this is wrong.
-            use BitwiseOp as O;
-            match op {
-                O::And => tv_bin_u64_bitwise_op(dst, src1, src2, |l, r| l & r),
-                O::Or => tv_bin_u64_bitwise_op(dst, src1, src2, |l, r| l | r),
-                O::Xor => tv_bin_u64_bitwise_op(dst, src1, src2, |l, r| l ^ r),
-                O::AndNot => todo!(),
-                O::OrNot => todo!(),
-                O::Add => tv_addition(dst, src1, src2, size),
-                O::Sub => tv_subtraction(dst, src1, src2, size),
-                O::Mul => tv_multiplication(dst, src1, src2, size),
+        add (EncBinaryReg { rd: Reg, rs1: Reg, rs2: Reg, size: SixBitSize })
+            { regs[rd] = size.mask(regs[rs1].wrapping_add(regs[rs2])); }
+            { write!(f, "{rd}, {rs1}, {rs2}, |{size}|") }
+            ( rs1 = TraceReg(rs1, LogicMode::TwoValue, Some(size.into())), rs2 = TraceReg(rs2, LogicMode::TwoValue, Some(size.into())) )
+            ( rd = TraceReg(rd, LogicMode::TwoValue, None) )
+        sub (EncBinaryReg { rd: Reg, rs1: Reg, rs2: Reg, size: SixBitSize })
+            { regs[rd] = size.mask(regs[rs1].wrapping_sub(regs[rs2])); }
+            { write!(f, "{rd}, {rs1}, {rs2}, |{size}|") }
+            ( rs1 = TraceReg(rs1, LogicMode::TwoValue, Some(size.into())), rs2 = TraceReg(rs2, LogicMode::TwoValue, Some(size.into())) )
+            ( rd = TraceReg(rd, LogicMode::TwoValue, None) )
+        mul (EncBinaryReg { rd: Reg, rs1: Reg, rs2: Reg, size: SixBitSize })
+            { regs[rd] = size.mask(regs[rs1].wrapping_mul(regs[rs2])); }
+            { write!(f, "{rd}, {rs1}, {rs2}, |{size}|") }
+            ( rs1 = TraceReg(rs1, LogicMode::TwoValue, Some(size.into())), rs2 = TraceReg(rs2, LogicMode::TwoValue, Some(size.into())) )
+            ( rd = TraceReg(rd, LogicMode::TwoValue, None) )
+
+        // FV Operations
+        fv_not (EncUnary { rd: Reg, rs: Reg })
+            {
+                let (dspc, dval) = rd.to_spc_and_val();
+                let (spc, val) = rs.to_spc_and_val();
+                (regs[dspc], regs[dval]) = fv_bitwise_inv_elem(regs[spc], regs[val]);
             }
-        }
-
-        load_imm16 (EncLoadImm { rd: Reg, clear: bool, sign_extend: bool, segment: u8, imm: i16 }) {
-            if clear {
-                regs[rd] = 0;
+            { write!(f, "{rd}, {rs}") }
+            ( rs = TraceReg(rs, LogicMode::FourValue, None) )
+            ( rd = TraceReg(rd, LogicMode::FourValue, None) )
+        fv_reduce_or (EncUnary { rd: Reg, rs: Reg, size: SixBitSize })
+            {
+                let (dspc, dval) = rd.to_spc_and_val();
+                let (spc, val) = rs.to_spc_and_val();
+                let value = fv_reduce_or_elem(regs[spc], regs[val], size.into());
+                (regs[dspc], regs[dval]) = ((value as u64) & 1, (value as u64) >> 1);
             }
-            let imm = if sign_extend {
-                i64::from(imm) as u64
-            }  else {
-                imm as u64
-            };
-            regs[rd] |= imm << (segment * 16);
-        }
+            { write!(f, "{rd}, {rs}, |{size}|") }
+            ( rs = TraceReg(rs, LogicMode::FourValue, None) )
+            ( rd = TraceReg(rd, LogicMode::FourValue, None) )
+        fv_reduce_and (EncUnary { rd: Reg, rs: Reg, size: SixBitSize })
+            {
+                let (dspc, dval) = rd.to_spc_and_val();
+                let (spc, val) = rs.to_spc_and_val();
+                let value = fv_reduce_and_elem(regs[spc], regs[val], size.into());
+                (regs[dspc], regs[dval]) = ((value as u64) & 1, (value as u64) >> 1);
+            }
+            { write!(f, "{rd}, {rs}, |{size}|") }
+            ( rs = TraceReg(rs, LogicMode::FourValue, None) )
+            ( rd = TraceReg(rd, LogicMode::FourValue, None) )
+        fv_reduce_xor (EncUnary { rd: Reg, rs: Reg, size: SixBitSize })
+            {
+                let (dspc, dval) = rd.to_spc_and_val();
+                let (spc, val) = rs.to_spc_and_val();
+                let value = fv_reduce_xor_elem(regs[spc], regs[val], size.into());
+                (regs[dspc], regs[dval]) = ((value as u64) & 1, (value as u64) >> 1);
+            }
+            { write!(f, "{rd}, {rs}, |{size}|") }
+            ( rs = TraceReg(rs, LogicMode::FourValue, None) )
+            ( rd = TraceReg(rd, LogicMode::FourValue, None) )
+        fv_and (EncBinaryReg { rd: Reg, rs1: Reg, rs2: Reg })
+            {
+                let (dspc, dval) = rd.to_spc_and_val();
+                let (spc1, val1) = rs1.to_spc_and_val();
+                let (spc2, val2) = rs2.to_spc_and_val();
+                (regs[dspc], regs[dval]) = fv_bitwise_and_elem(regs[spc1], regs[val1], regs[spc2], regs[val2]);
+            }
+            { write!(f, "{rd}, {rs1}, {rs2}") }
+            ( rs1 = TraceReg(rs1, LogicMode::FourValue, None), rs2 = TraceReg(rs2, LogicMode::FourValue, None) )
+            ( rd = TraceReg(rd, LogicMode::FourValue, None) )
+        fv_or (EncBinaryReg { rd: Reg, rs1: Reg, rs2: Reg })
+            {
+                let (dspc, dval) = rd.to_spc_and_val();
+                let (spc1, val1) = rs1.to_spc_and_val();
+                let (spc2, val2) = rs2.to_spc_and_val();
+                (regs[dspc], regs[dval]) = fv_bitwise_or_elem(regs[spc1], regs[val1], regs[spc2], regs[val2]);
+            }
+            { write!(f, "{rd}, {rs1}, {rs2}") }
+            ( rs1 = TraceReg(rs1, LogicMode::FourValue, None), rs2 = TraceReg(rs2, LogicMode::FourValue, None) )
+            ( rd = TraceReg(rd, LogicMode::FourValue, None) )
+        fv_xor (EncBinaryReg { rd: Reg, rs1: Reg, rs2: Reg })
+            {
+                let (dspc, dval) = rd.to_spc_and_val();
+                let (spc1, val1) = rs1.to_spc_and_val();
+                let (spc2, val2) = rs2.to_spc_and_val();
+                (regs[dspc], regs[dval]) = fv_bitwise_xor_elem(regs[spc1], regs[val1], regs[spc2], regs[val2]);
+            }
+            { write!(f, "{rd}, {rs1}, {rs2}") }
+            ( rs1 = TraceReg(rs1, LogicMode::FourValue, None), rs2 = TraceReg(rs2, LogicMode::FourValue, None) )
+            ( rd = TraceReg(rd, LogicMode::FourValue, None) )
+        fv_ceq (EncBinaryReg { rd: Reg, rs1: Reg, rs2: Reg })
+            {
+                let (spc1, val1) = rs1.to_spc_and_val();
+                let (spc2, val2) = rs2.to_spc_and_val();
+                regs[rd] = u64::from((regs[spc1] == regs[spc2]) & (regs[val1] == regs[val2]));
+            }
+            { write!(f, "{rd}, {rs1}, {rs2}") }
+            ( rs1 = TraceReg(rs1, LogicMode::FourValue, None), rs2 = TraceReg(rs2, LogicMode::FourValue, None) )
+            ( rd = TraceReg(rd, LogicMode::TwoValue, Some(SCALAR_VSIZE)) )
+        fv_andi (EncBinaryImm { rd: Reg, rs: Reg, imm10: i16, size: SixBitSize })
+            {
+                let imm = size.mask(i64::from(imm10) as u64);
+                let (rd_spc, rd_val) = rd.to_spc_and_val();
+                let (rs_spc, rs_val) = rs.to_spc_and_val();
+                (regs[rd_spc], regs[rd_val]) = fv_bitwise_and_elem(
+                    regs[rs_spc], regs[rs_val],
+                    size.mask(u64::MAX), imm
+                );
+            }
+            { write!(f, "{rd}, {rs}, {imm10}, |{size}|") }
+            ( rs1 = TraceReg(rs, LogicMode::FourValue, Some(size.into())), imm = imm10 )
+            ( rd = TraceReg(rd, LogicMode::FourValue, Some(size.into())) )
+        fv_ori (EncBinaryImm { rd: Reg, rs: Reg, imm10: i16, size: SixBitSize })
+            {
+                let imm = size.mask(i64::from(imm10) as u64);
+                let (rd_spc, rd_val) = rd.to_spc_and_val();
+                let (rs_spc, rs_val) = rs.to_spc_and_val();
+                (regs[rd_spc], regs[rd_val]) = fv_bitwise_or_elem(
+                    regs[rs_spc], regs[rs_val],
+                    size.mask(u64::MAX), imm
+                );
+            }
+            { write!(f, "{rd}, {rs}, {imm10}, |{size}|") }
+            ( rs1 = TraceReg(rs, LogicMode::FourValue, Some(size.into())), imm = imm10 )
+            ( rd = TraceReg(rd, LogicMode::FourValue, Some(size.into())) )
+        fv_xori (EncBinaryImm { rd: Reg, rs: Reg, imm10: i16, size: SixBitSize })
+            {
+                let imm = size.mask(i64::from(imm10) as u64);
+                let (rd_spc, rd_val) = rd.to_spc_and_val();
+                let (rs_spc, rs_val) = rs.to_spc_and_val();
+                (regs[rd_spc], regs[rd_val]) = fv_bitwise_xor_elem(
+                    regs[rs_spc], regs[rs_val],
+                    size.mask(u64::MAX), imm
+                );
+            }
+            { write!(f, "{rd}, {rs}, {imm10}, |{size}|") }
+            ( rs1 = TraceReg(rs, LogicMode::FourValue, Some(size.into())), imm = imm10 )
+            ( rd = TraceReg(rd, LogicMode::FourValue, Some(size.into())) )
+        fv_ceqi (EncBinaryImm { rd: Reg, rs: Reg, imm10: i16, size: SixBitSize })
+            {
+                let imm = size.mask(i64::from(imm10) as u64);
+                let (rs_spc, rs_val) = rs.to_spc_and_val();
+                regs[rd] = u64::from((regs[rs_spc] == size.mask(u64::MAX)) & (regs[rs_val] == imm));
+            }
+            { write!(f, "{rd}, {rs}, {imm10}, |{size}|") }
+            ( rs1 = TraceReg(rs, LogicMode::FourValue, Some(size.into())), imm = imm10 )
+            ( rd = TraceReg(rd, LogicMode::TwoValue, Some(SCALAR_VSIZE)) )
+        fv_cnei (EncBinaryImm { rd: Reg, rs: Reg, imm10: i16, size: SixBitSize })
+            {
+                let imm = size.mask(i64::from(imm10) as u64);
+                let (rs_spc, rs_val) = rs.to_spc_and_val();
+                regs[rd] = u64::from((regs[rs_spc] != size.mask(u64::MAX)) | (regs[rs_val] != imm));
+            }
+            { write!(f, "{rd}, {rs}, {imm10}, |{size}|") }
+            ( rs1 = TraceReg(rs, LogicMode::FourValue, Some(size.into())), imm = imm10 )
+            ( rd = TraceReg(rd, LogicMode::TwoValue, Some(SCALAR_VSIZE)) )
 
-        load_aligned (EncBinaryImm { rd: Reg, rs: Reg, imm: i16, size: SixBitSize }) {
-            // @Performance: We can likely make a better specialized implementation for this load.
-            let size = VectorSize::from(size);
-            let factor = i64::from(size.get().next_power_of_two());
-            let offset = i64::from(imm) * factor;
-            let offset = regs[rs].wrapping_add_signed(i64::from(offset));
-            let at = HeapOffset { bit_offset: offset as usize };
-            let at = at.to_ref(size);
-            regs[rd] = state.heap.get_tv_u64(at);
-        }
-        set_aligned (EncSet { rd: Reg, rs: Reg, roff: Reg, imm: i8, size: SixBitSize }) {
-            // @Performance: We can likely make a better specialized implementation for this load.
-            let size = VectorSize::from(size);
-            let factor = i64::from(size.get().next_power_of_two());
-            let offset = i64::from(imm) * factor;
-            let offset = regs[roff].wrapping_add_signed(i64::from(offset));
-            let at = HeapOffset { bit_offset: offset as usize };
-            let at = at.to_ref(size);
-            let value = regs[rs];
-            let updated = value != state.heap.set_tv_u64(at, value);
-            regs[rd] = u64::from(updated);
-        }
-
-        wake (EncWake { rcond: Reg, index: u32 }) {
-            if regs[rcond] == 0{
-                let i = index as usize;
-                let bit = 1u64 << (i % 64);
-                let is_listening = (listeners.active[i / 64] & bit) != 0;
-                if is_listening {
-                    let offset = listeners.map[i];
-                    schedule.active.push(offset);
-                    listeners.active[i / 64] ^= bit;
+        push_argument (EncPushArgument { size: Option<VectorSize>, mode: LogicMode, rs: Reg })
+            {
+                let size = size.unwrap_or_else(|| VectorSize::new(regs[Reg::X12] as u32).unwrap());
+                cldctx.stack_args.push((size, mode));
+                match mode {
+                    LogicMode::FourValue if size <= VSIZE_64 => {
+                        let (spc, val) = rs.to_spc_and_val();
+                        cldctx.stack.push(regs[spc]);
+                        cldctx.stack.push(regs[val]);
+                    }
+                    LogicMode::TwoValue | LogicMode::FourValue => cldctx.stack.push(regs[rs]),
                 }
             }
-        }
+            { write!(f, "{rs}, {mode:?}") }
+            (rs = TraceReg(rs, mode, size))
+            ()
+        intrinsic (EncIntrinsic { rd: Reg, id: Option<NonMaxU16> })
+            {
+                let id = id.map_or_else(|| regs[Reg::X14], |v| v.get() as u64);
+                let intrinsic = &cldctx.intrinsics[id as usize];
+                match intrinsic {
+                    IntrinsicOp::Time => regs[rd] = state.time,
+                    IntrinsicOp::Finish => todo!(),
+                    IntrinsicOp::Random => todo!(),
+                    IntrinsicOp::Display(_) => todo!(),
+                    IntrinsicOp::Assert(f) => {
+                        let mut stack_offset = 0usize;
+                        let (cond_size, cond_mode) = cldctx.stack_args[0];
+                        assert_eq!(cond_size, SCALAR_VSIZE);
+                        let condition = match cond_mode {
+                            LogicMode::TwoValue => {
+                                stack_offset += 1;
+                                cldctx.stack[0] != 0
+                            },
+                            LogicMode::FourValue => {
+                                stack_offset += 2;
+                                FvLogicValue::from_spc_and_val(cldctx.stack[0] != 0, cldctx.stack[1] != 0) == FvLogicValue::L1
+                            }
+                        };
 
-        jump (EncJump { imm: i32 }) {} {
-            pc.wrapping_add_signed(i64::from(imm))
-        }
-        reljump (EncRelJump { rs: Reg, imm: i32 }) {} {
-            regs[rs].wrapping_add_signed(i64::from(imm))
-        }
-        branch (EncRelJump { rs: Reg, imm: i32 }) {} {
-            if regs[rs] != 0 {
-                pc.wrapping_add_signed(i64::from(imm))
-            } else {
-                pc
+                        if !condition {
+                            f.write_to(
+                                &mut cldctx.stderr,
+                                cldctx.stack_args[1..].iter().map(|&(size, mode)| match mode {
+                                    LogicMode::TwoValue if size <= VSIZE_64 => {
+                                        let value = cldctx.stack[stack_offset];
+                                        stack_offset += 1;
+                                        Bits::from_u64(size, value)
+                                    },
+                                    LogicMode::TwoValue => {
+                                        let value = cldctx.stack[stack_offset];
+                                        let value = value_to_heap_ref(value, size, mode);
+                                        stack_offset += 1;
+                                        state.heap.load_tv_bits(value)
+                                    },
+                                    LogicMode::FourValue if size <= VSIZE_32  => {
+                                        let spc = cldctx.stack[stack_offset];
+                                        let val = cldctx.stack[stack_offset + 1];
+                                        stack_offset += 2;
+                                        Bits::from_four_value_u64(size, spc as u32, val as u32)
+                                    }
+                                    LogicMode::FourValue if size <= VSIZE_64 => {
+                                        let spc = cldctx.stack[stack_offset];
+                                        let val = cldctx.stack[stack_offset + 1];
+                                        stack_offset += 2;
+                                        Bits::from_boxed_slice(Mode::FourValue, size, [spc, val].into())
+                                    }
+                                    LogicMode::FourValue => {
+                                        let value = cldctx.stack[stack_offset];
+                                        let value = value_to_heap_ref(value, size, mode);
+                                        stack_offset += 1;
+                                        state.heap.load_fv_bits(value)
+                                    },
+                                }),
+                            )
+                            .unwrap();
+                            cldctx.return_value = 1;
+                            pc = u64::MAX;
+                        }
+                    },
+                    IntrinsicOp::VcdOpenFile(_) => todo!(),
+                    IntrinsicOp::VcdAppendModule(_) => todo!(),
+                    IntrinsicOp::VcdPause => todo!(),
+                    IntrinsicOp::VcdResume => todo!(),
+                    IntrinsicOp::ReadMem(_) => todo!(),
+                }
+                cldctx.stack_args.clear();
+                cldctx.stack.clear();
             }
-        }
+            { Ok(()) }
+            ()
+            ()
 
-        reschedule (EncReschedule { rtime: Reg, region: u8, schedule_self: bool }) {} {
-            if schedule_self {
-                if region == 0 {
-                    let time = regs[rtime];
-                    if time == 0 {
-                        return pc;
+        tv_heap_bitwise (EncHeapBitwiseReg { rd: Reg, rs1: Reg, rs2: Reg, op: BitwiseOp, size: Option<VectorSize> })
+            {
+                let size = size.unwrap_or_else(|| VectorSize::new(regs[Reg::X12] as u32).unwrap());
+                let num_words = size.get().div_ceil(64) as usize;
+                let dst = HeapOffset { bit_offset: (regs[rd] * 64) as usize };
+                let src1 = HeapOffset { bit_offset: (regs[rs1] * 64) as usize };
+                let src2 = HeapOffset { bit_offset: (regs[rs2] * 64) as usize };
+                let (dst, src1, src2) = state.heap.get_disjoint_u64_dst_s1_s2(
+                    (dst, num_words),
+                    (src1, num_words),
+                    (src2, num_words),
+                );
+
+                // @TODO: These are not disjoint, so this is wrong.
+                use BitwiseOp as O;
+                match op {
+                    O::And => tv_bin_u64_bitwise_op(dst, src1, src2, |l, r| l & r),
+                    O::Or => tv_bin_u64_bitwise_op(dst, src1, src2, |l, r| l | r),
+                    O::Xor => tv_bin_u64_bitwise_op(dst, src1, src2, |l, r| l ^ r),
+                    O::AndNot => todo!(),
+                    O::OrNot => todo!(),
+                    O::Add => tv_addition(dst, src1, src2, size),
+                    O::Sub => tv_subtraction(dst, src1, src2, size),
+                    O::Mul => tv_multiplication(dst, src1, src2, size),
+                }
+            }
+            { write!(f, "{rd}, {rs1}, {rs2}") }
+            ()
+            ()
+
+        load_imm16 (EncLoadImm { rd: Reg, clear: bool, sign_extend: bool, segment: u8, imm: i16 })
+            {
+                if clear {
+                    regs[rd] = 0;
+                }
+                let imm = if sign_extend {
+                    i64::from(imm) as u64
+                }  else {
+                    imm as u16 as u64
+                };
+                regs[rd] |= imm << (segment * 16);
+            }
+            { write!(f, "{rd}, {imm}, c:{clear}, e:{sign_extend}, seg:{segment}") }
+            ()
+            ( rd = TraceReg(rd, LogicMode::TwoValue, None) )
+
+        load_aligned (EncBinaryImm { rd: Reg, rs: Reg, imm10: i16, size: SixBitSize })
+            {
+                // @Performance: We can likely make a better specialized implementation for this load.
+                let size = VectorSize::from(size);
+                let factor = i64::from(size.get().next_power_of_two().min(64));
+                let offset = i64::from(imm10) * factor;
+                let offset = regs[rs].wrapping_add_signed(i64::from(offset));
+                let at = HeapOffset { bit_offset: offset as usize };
+                let at = at.to_ref(size);
+                regs[rd] = state.heap.get_tv_u64(at);
+            }
+            { write!(f, "{rd}, {rs}, {imm10}, |{size}|") }
+            ( rs = TraceReg(rs, LogicMode::TwoValue, None), imm = imm10 )
+            ( rd = TraceReg(rd, LogicMode::TwoValue, Some(size.into())) )
+
+        load_fv_aligned (EncBinaryImm { rd: Reg, rs: Reg, imm10: i16, size: SixBitSize })
+            {
+                // @Performance: We can likely make a better specialized implementation for this load.
+                let size = VectorSize::from(size);
+                let factor = i64::from((2*size.get()).next_power_of_two().min(64));
+                let offset = i64::from(imm10) * factor;
+                let offset = regs[rs].wrapping_add_signed(i64::from(offset));
+                let at = HeapOffset { bit_offset: offset as usize };
+                let at = at.to_ref(size);
+                let (spc, val) = rd.to_spc_and_val();
+                (regs[spc], regs[val]) = state.heap.get_fv_u64(at);
+            }
+            { write!(f, "{rd}, {rs}, {imm10}, |{size}|") }
+            ( rs = TraceReg(rs, LogicMode::TwoValue, None), imm = imm10 )
+            ( rd = TraceReg(rd, LogicMode::FourValue, Some(size.into())) )
+
+        set_aligned (EncSet { rd: Reg, rs: Reg, roff: Reg, imm: i8, size: SixBitSize })
+            {
+                // @Performance: We can likely make a better specialized implementation for this load.
+                let size = VectorSize::from(size);
+                let factor = i64::from(size.get().next_power_of_two());
+                let offset = i64::from(imm) * factor;
+                let offset = regs[roff].wrapping_add_signed(i64::from(offset));
+                let at = HeapOffset { bit_offset: offset as usize };
+                let at = at.to_ref(size);
+                let value = regs[rs];
+                let prev_value = state.heap.set_tv_u64(at, value);
+                let updated = value != prev_value;
+                regs[rd] = u64::from(updated);
+            }
+            { write!(f, "{rd}, {rs}, {roff}, {imm}, |{size}|") }
+            (
+                rs = TraceReg(rs, LogicMode::TwoValue, Some(size.into())),
+                roff = TraceReg(roff, LogicMode::TwoValue, None),
+                imm = imm
+              )
+            ( rd = TraceReg(rd, LogicMode::TwoValue, Some(size.into())) )
+        set_fv_aligned (EncSet { rd: Reg, rs: Reg, roff: Reg, imm: i8, size: SixBitSize })
+            {
+                // @Performance: We can likely make a better specialized implementation for this load.
+                let size = VectorSize::from(size);
+                let factor = i64::from((size.get() * 2).next_power_of_two().min(64));
+                let offset = i64::from(imm) * factor;
+                let offset = regs[roff].wrapping_add_signed(i64::from(offset));
+                let at = HeapOffset { bit_offset: offset as usize };
+                let at = at.to_ref(size);
+                let (spc, val) = rs.to_spc_and_val();
+                let spc = regs[spc];
+                let val = regs[val];
+                let (prev_spc, prev_val) = state.heap.set_fv_u64(at, spc, val);
+                let updated = (prev_spc != spc) | (prev_val != val);
+                regs[rd] = u64::from(updated);
+            }
+            { write!(f, "{rd}, {rs}, {roff}, {imm}, |{size}|") }
+            (
+                rs = TraceReg(rs, LogicMode::FourValue, Some(size.into())),
+                roff = TraceReg(roff, LogicMode::TwoValue, None),
+                imm = imm
+              )
+            ( rd = TraceReg(rd, LogicMode::TwoValue, Some(size.into())) )
+
+        wake (EncWake { rcond: Reg, index: u32 })
+            {
+                if regs[rcond] != 0 {
+                    let i = index as usize;
+                    let bit = 1u64 << (i % 64);
+                    let is_listening = (listeners.active[i / 64] & bit) != 0;
+                    if is_listening {
+                        let offset = listeners.map[i];
+                        schedule.active.push(offset);
+                        listeners.active[i / 64] ^= bit;
                     }
+                }
+            }
+            { write!(f, "{rcond}, {index}") }
+            ( rcond = TraceReg(rcond, LogicMode::TwoValue, Some(SCALAR_VSIZE)) )
+            ()
 
-                    let time = state.time + time;
-                    schedule.next_time = schedule.next_time.min(time);
-                    schedule.future.push(TimedEvent {
-                        time,
-                        pc: InstructionPtr(pc + 1)
-                    });
+        jump (EncJump { imm: i32 })
+            { pc = pc.wrapping_sub(1).wrapping_add_signed(i64::from(imm)); }
+            { write!(f, "{imm}") }
+        reljump (EncRelJump { rs: Reg, imm: i32 })
+            { pc = regs[rs].wrapping_add_signed(i64::from(imm)); }
+            { write!(f, "{rs}, {imm}") }
+            ( rs = TraceReg(rs, LogicMode::TwoValue, None) )
+            ()
+        branch (EncRelJump { rs: Reg, imm: i32 })
+            { if regs[rs] != 0 { pc = pc.wrapping_sub(1).wrapping_add_signed(i64::from(imm)); } }
+            { write!(f, "{rs}, {imm}") }
+            ( rs = TraceReg(rs, LogicMode::TwoValue, Some(SCALAR_VSIZE)) )
+            ()
+
+        reschedule (EncReschedule { rtime: Reg, region: u8, schedule_self: bool })
+            {
+                if schedule_self {
+                    if region == 0 {
+                        let time = regs[rtime];
+                        if time == 0 {
+                            return pc;
+                        }
+
+                        let time = state.time + time;
+                        schedule.next_time = schedule.next_time.min(time);
+                        schedule.future.push(TimedEvent {
+                            time,
+                            pc: InstructionPtr(pc)
+                        });
+                    } else {
+                        let region = region as usize;
+                        if region == 1 {
+                            return pc;
+                        }
+
+                        schedule.regions[region as usize - 2].push(InstructionPtr(pc));
+                    }
+                }
+
+                pc = schedule.pop(&mut state.time).map_or(u64::MAX, |ptr| ptr.0);
+            }
+            {
+                if schedule_self {
+                    Ok(())
+                } else if region == 0 {
+                    write!(f, "{rtime}")
                 } else {
-                    let region = region as usize;
-                    if region == 1 {
-                        return pc;
-                    }
-
-                    schedule.regions[region as usize - 2].push(InstructionPtr(pc + 1));
+                    write!(f, "{}", region - 1)
                 }
             }
+            : MNEMONIC: {
+                if schedule_self {
+                    "next_event"
+                } else if region == 0 {
+                    "wait"
+                } else {
+                    "wait_region"
+                }
+            }
+            ()
+            ()
 
-            schedule.pop(&mut state.time).map_or(u64::MAX, |ptr| ptr.0)
-        }
-
-        start_listen (EncUImm { imm: u32 }) {
-            let i = imm as usize;
-            listeners.active[i / 64] |= 1u64 << (i % 64);
-        }
+        start_listen (EncUImm { imm: u32 })
+            {
+                let i = imm as usize;
+                listeners.active[i / 64] |= 1u64 << (i % 64);
+            }
+            { write!(f, "{imm}") }
+            ()
+            ()
     ]
 }
 
@@ -901,7 +1449,41 @@ impl Schedule {
 #[derive(Default)]
 pub struct BytecodeEncoder {
     pub data: Vec<Bytecode>,
+    pub intrinsics: IndexSet<IntrinsicOpEqWrap>,
 }
+
+#[repr(transparent)]
+pub struct IntrinsicOpEqWrap(pub IntrinsicOp);
+
+impl std::hash::Hash for IntrinsicOpEqWrap {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(&self.0);
+        match &self.0 {
+            IntrinsicOp::Time | IntrinsicOp::Finish | IntrinsicOp::Random => {}
+            IntrinsicOp::Display(f) | IntrinsicOp::Assert(f) => f.hash(state),
+            IntrinsicOp::VcdOpenFile(_) | IntrinsicOp::VcdAppendModule(_) => {}
+            IntrinsicOp::VcdPause | IntrinsicOp::VcdResume | IntrinsicOp::ReadMem(_) => {}
+        }
+    }
+}
+impl PartialEq for IntrinsicOpEqWrap {
+    fn eq(&self, other: &Self) -> bool {
+        if std::mem::discriminant(&self.0) != std::mem::discriminant(&other.0) {
+            return false;
+        }
+        match (&self.0, &other.0) {
+            (IntrinsicOp::Time | IntrinsicOp::Finish | IntrinsicOp::Random, _) => true,
+            (
+                IntrinsicOp::Display(f) | IntrinsicOp::Assert(f),
+                IntrinsicOp::Display(fo) | IntrinsicOp::Assert(fo),
+            ) => f == fo,
+            (IntrinsicOp::VcdOpenFile(_) | IntrinsicOp::VcdAppendModule(_), _) => false,
+            (IntrinsicOp::VcdPause | IntrinsicOp::VcdResume | IntrinsicOp::ReadMem(_), _) => false,
+            _ => unreachable!(),
+        }
+    }
+}
+impl Eq for IntrinsicOpEqWrap {}
 
 impl BytecodeEncoder {
     pub fn current_ptr(&self) -> InstructionPtr {
@@ -916,6 +1498,9 @@ impl BytecodeEncoder {
             return;
         }
         self.ori(rd, rs, 0, SixBitSize::N64);
+    }
+    pub fn truncate(&mut self, rd: Reg, rs: Reg, size: SixBitSize) {
+        self.andi(rd, rs, -1, size);
     }
     pub fn load_u64(&mut self, rd: Reg, value: u64) {
         if value == 0 {
@@ -938,6 +1523,39 @@ impl BytecodeEncoder {
             }
         }
     }
+    pub fn load_bits_into_register(&mut self, rd: Reg, mode: LogicMode, value: &Bits) {
+        let size = SixBitSize::from_vector_size(value.size()).expect("Does not fit in register");
+        if value.contains_special() {
+            assert_eq!(mode, LogicMode::FourValue);
+        }
+
+        match (value.as_data_ref(), mode) {
+            (BitsDataRef::InlineTv(v), LogicMode::TwoValue) => self.load_u64(rd, v),
+            (BitsDataRef::InlineTv(v), LogicMode::FourValue) => {
+                let (rdspc, rdval) = rd.to_spc_and_val();
+                self.load_u64(rdspc, size.mask(u64::MAX));
+                self.load_u64(rdval, v);
+            }
+
+            (BitsDataRef::SeparateTv(_), _) => unreachable!(),
+            (BitsDataRef::InlineFv(spc, val), LogicMode::FourValue) => {
+                let (rdspc, rdval) = rd.to_spc_and_val();
+                self.load_u64(rdspc, spc);
+                self.load_u64(rdval, val);
+            }
+            (BitsDataRef::InlineFv(_, val), LogicMode::TwoValue) => {
+                self.load_u64(rd, val);
+            }
+            (BitsDataRef::SeparateFv(items), LogicMode::FourValue) => {
+                let (rdspc, rdval) = rd.to_spc_and_val();
+                self.load_u64(rdspc, items[0]);
+                self.load_u64(rdval, items[1]);
+            }
+            (BitsDataRef::SeparateFv(items), LogicMode::TwoValue) => {
+                self.load_u64(rd, items[1]);
+            }
+        }
+    }
     pub fn mask(&mut self, rd: Reg, rs: Reg, size: SixBitSize) {
         self.andi(rd, rs, -1, size)
     }
@@ -953,21 +1571,90 @@ impl BytecodeEncoder {
     pub fn next_event(&mut self) {
         self.reschedule(Reg::X0, 0, false);
     }
+
+    pub fn stack_offset(&mut self, rd: Reg, kind: StackItemKind, offset: u64) {
+        // @Performance: Specialized instruction.
+        self.load_u64(rd, offset);
+        use StackItemKind as K;
+        match kind {
+            K::B1 => {}
+            K::B2 => self.slli(rd, rd, 1, SixBitSize::N64),
+            K::B4 => self.slli(rd, rd, 2, SixBitSize::N64),
+            K::B8 => self.slli(rd, rd, 3, SixBitSize::N64),
+            K::B16 => self.slli(rd, rd, 4, SixBitSize::N64),
+            K::B32 => self.slli(rd, rd, 5, SixBitSize::N64),
+            K::B64 => self.slli(rd, rd, 6, SixBitSize::N64),
+        }
+        self.add(rd, rd, Reg::X15, SixBitSize::N64);
+    }
 }
 
-pub fn execute(
-    code: &[Bytecode],
-    entry: u64,
-    state: &mut RuntimeState,
-    schedule: &mut Schedule,
-    listeners: &mut BytecodeListeners,
-) {
-    let mut pc = entry;
-    let mut regs = Regs([0u64; _]);
-    while let Some(&c) = code.get(pc as usize) {
-        eprintln!("[PC={pc:4}]: {c:?}");
-        let opcode = c.opcode();
-        let f = INSTRUCTION_FNS[opcode as usize];
-        pc = (f)(c, &mut regs, pc, state, schedule, listeners);
+impl Design {
+    pub fn execute<const ITRACE: bool>(
+        &self,
+        state: &mut State,
+        stdout: &mut (dyn std::io::Write + Send + Sync),
+        stderr: &mut (dyn std::io::Write + Send + Sync),
+    ) -> Result<(), ()> {
+        let code = &self.bytecode;
+        let Some(entry) = state.schedule.pop(&mut state.runtime.time) else {
+            return Ok(());
+        };
+
+        let mut pc = entry.0;
+        let mut cldctx = ColdContext::new(&self.intrinsics, stdout, stderr);
+        let mut regs = Regs([0u64; _]);
+        regs[Reg::X15] = self.stack_offset;
+        while let Some(&c) = code.get(pc as usize) {
+            let opcode = c.opcode();
+            if ITRACE {
+                writeln!(&mut cldctx.stderr, "[PC={pc:4}]: {c}").unwrap();
+                writeln!(
+                    &mut cldctx.stderr,
+                    "  {}",
+                    PreBytecodeTrace {
+                        value: c,
+                        regs: &regs
+                    }
+                )
+                .unwrap();
+            }
+            let f = INSTRUCTION_FNS[opcode as usize];
+            pc = (f)(
+                c,
+                &mut regs,
+                pc,
+                &mut state.runtime,
+                &mut state.schedule,
+                &mut state.listeners,
+                &mut cldctx,
+            );
+            if ITRACE {
+                writeln!(
+                    &mut cldctx.stderr,
+                    "  {}",
+                    PostBytecodeTrace {
+                        value: c,
+                        regs: &regs
+                    }
+                )
+                .unwrap();
+            }
+        }
+
+        if cldctx.return_value != 0 {
+            return Err(());
+        }
+
+        Ok(())
     }
+}
+
+fn value_to_heap_ref(value: u64, size: VectorSize, mode: LogicMode) -> HeapRef {
+    let alignment = match mode {
+        LogicMode::TwoValue => size.get().next_power_of_two().max(64),
+        LogicMode::FourValue => (size.get() * 2).next_power_of_two().max(64),
+    } as u64;
+    let bit_offset = value.checked_mul(alignment).expect("stack overflow") as usize;
+    HeapOffset { bit_offset }.to_ref(size)
 }

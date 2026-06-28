@@ -20,6 +20,9 @@ pub enum DesignBackend {
     Interpretted {
         simulation: vogls_sim::Simulation,
     },
+    Bytecode {
+        design: vogls_sim::bytecode::Design,
+    },
     #[cfg(feature = "native")]
     Compiled {
         design: vogls_codegen_c::runtime::CDesign,
@@ -39,6 +42,7 @@ pub struct Design {
 #[derive(Clone)]
 pub enum DesignState {
     Interpretted(vogls_sim::SimulationState),
+    Bytecode(vogls_sim::bytecode::State),
     #[cfg(feature = "native")]
     Compiled(vogls_codegen_c::runtime::CDesignState),
 }
@@ -47,6 +51,7 @@ impl DesignState {
     pub fn runtime_mut(&mut self) -> &mut RuntimeState {
         match self {
             DesignState::Interpretted(s) => &mut s.runtime,
+            DesignState::Bytecode(s) => &mut s.runtime,
             #[cfg(feature = "native")]
             DesignState::Compiled(s) => &mut s.runtime,
         }
@@ -54,6 +59,7 @@ impl DesignState {
     pub fn runtime(&self) -> &RuntimeState {
         match self {
             DesignState::Interpretted(s) => &s.runtime,
+            DesignState::Bytecode(s) => &s.runtime,
             #[cfg(feature = "native")]
             DesignState::Compiled(s) => &s.runtime,
         }
@@ -61,6 +67,7 @@ impl DesignState {
     pub fn plugins_mut(&mut self) -> &mut [RuntimePluginState] {
         match self {
             DesignState::Interpretted(s) => &mut s.plugins,
+            DesignState::Bytecode(s) => &mut s.plugins,
             #[cfg(feature = "native")]
             DesignState::Compiled(s) => &mut s.plugins,
         }
@@ -68,6 +75,7 @@ impl DesignState {
     pub fn plugins(&self) -> &[RuntimePluginState] {
         match self {
             DesignState::Interpretted(s) => &s.plugins,
+            DesignState::Bytecode(s) => &s.plugins,
             #[cfg(feature = "native")]
             DesignState::Compiled(s) => &s.plugins,
         }
@@ -75,251 +83,6 @@ impl DesignState {
 }
 
 impl Design {
-    // pub fn new(
-    //     paths: &[&Path],
-    //     timers: &mut TimerStack,
-    //     top_level_module: Option<&str>,
-    //     ectx: &mut ExecutionContext,
-    //     plugins: Vec<Box<dyn VoglsPlugin>>,
-    // ) -> Result<Self, Box<dyn std::error::Error>> {
-    //     let mut builder = DesignBuilder::new();
-    //     if ectx.logic_mode == LogicMode::TwoValue {
-    //         builder.define_macro("__VOGLS__TWO_VALUE_LOGIC", Macro::default());
-    //     }
-    //     for name in &ectx.defines {
-    //         builder.define_macro(name, Macro::default());
-    //     }
-    //     timers.timed("tokenization", |_| {
-    //         for path in paths {
-    //             builder.add_source(path)?;
-    //         }
-    //         Result::<_, DesignBuilderError>::Ok(())
-    //     })?;
-    //
-    //     let mut arena = Arena::default();
-    //     let design = match builder.parse(&mut arena) {
-    //         Ok(design) => design,
-    //         Err((builder, diagnostics)) => {
-    //             for (location, err) in &diagnostics.errors {
-    //                 let mut out = String::new();
-    //                 report_error(&builder.token_buffer, err.clone(), *location, &mut out)?;
-    //                 write!(ectx.stderr, "{out}")?;
-    //             }
-    //             return Err("failed to parse".into());
-    //         }
-    //     };
-    //
-    //     let mut elaborate = match design.elaborate(ectx.logic_mode, top_level_module) {
-    //         Ok(v) => v,
-    //         Err(err) => match err {
-    //             ElaborationError::CannotFindTopLevelModule => {
-    //                 return Err("cannot find top level module.".into());
-    //             }
-    //             ElaborationError::AmbiguousTopLevelModule(top_level_modules) => {
-    //                 let names = top_level_modules
-    //                     .iter()
-    //                     .map(|(_, n)| &design.arenas.ident_table[*n])
-    //                     .collect::<Vec<&str>>();
-    //                 writeln!(
-    //                     ectx.stderr,
-    //                     "[ERR]: Found {} possible top-level modules: {names:?}",
-    //                     top_level_modules.len()
-    //                 )?;
-    //                 let mut out = String::new();
-    //                 for (m, _) in top_level_modules {
-    //                     out.clear();
-    //                     let span = design.arenas.get_item_span(m.module_identifier);
-    //                     report(&design.token_buffer, span, &mut out)?;
-    //                     writeln!(ectx.stderr, "{out}").unwrap();
-    //                 }
-    //                 return Err("ambiguous top-level module".into());
-    //             }
-    //             ElaborationError::Diagnostics(diagnostics) => {
-    //                 writeln!(ectx.stderr, "{}", diagnostics.report(&design.token_buffer))?;
-    //                 return Err("failed to elaborate".into());
-    //             }
-    //         },
-    //     };
-    //
-    //     if ectx.emit_hierarchy {
-    //         writeln!(ectx.stdout, "{}", elaborate.display_hierarchy(&design))?;
-    //     }
-    //
-    //     if let Some(sdf_path) = ectx.sdf.as_deref() {
-    //         if let Err(diagnostics) = elaborate.annotate_sdf(&design, sdf_path) {
-    //             writeln!(ectx.stderr, "{}", diagnostics.report(&design.token_buffer))?;
-    //             return Err("failed to annotate sdf".into());
-    //         }
-    //     }
-    //
-    //     timers.start("lower_specify_blocks");
-    //     if let Err(diagnostics) = elaborate.annotate_specify(&design) {
-    //         writeln!(ectx.stderr, "{}", diagnostics.report(&design.token_buffer))?;
-    //         return Err("failed to annotate specify".into());
-    //     }
-    //     timers.stop();
-    //
-    //     let mut lowered = match elaborate.lower(&design, plugins) {
-    //         Ok(v) => v,
-    //         Err(err) => match err {
-    //             LowerError::GlobalItems(diagnostics) => {
-    //                 writeln!(ectx.stderr, "{}", diagnostics.report(&design.token_buffer))?;
-    //                 return Err("failed to lower globals".into());
-    //             }
-    //             LowerError::Modules(diagnostics) => {
-    //                 writeln!(ectx.stderr, "{}", diagnostics.report(&design.token_buffer))?;
-    //                 return Err("failed to lower modules".into());
-    //             }
-    //         },
-    //     };
-    //
-    //     if ectx.emit_unoptimized_ir {
-    //         writeln!(ectx.stdout, "{}", lowered.emit_ir())?;
-    //     }
-    //
-    //     timers.timed("optimization", |_| {
-    //         lowered.optimize(ectx.opt);
-    //     });
-    //
-    //     if ectx.emit_ir {
-    //         writeln!(ectx.stdout, "{}", lowered.emit_ir())?;
-    //     }
-    //
-    //     if ectx.emit_process_stats {
-    //         let mut counts = [0u64; ProcessKind::NUM_KINDS];
-    //         for process in lowered.gl.processes.values() {
-    //             counts[process.kind as usize] += 1;
-    //         }
-    //
-    //         writeln!(ectx.stdout, "Process Kind Counts:")?;
-    //         for (kind, count) in ProcessKind::KINDS.into_iter().zip(counts) {
-    //             if count == 0 {
-    //                 continue;
-    //             }
-    //             writeln!(ectx.stdout, "  {}: {}", kind.into_static_str(), count)?;
-    //         }
-    //     }
-    //
-    //     if let Some(vcd) = &ectx.vcd {
-    //         lowered.trace_vcd(vcd.clone());
-    //     }
-    //     lowered.itrace = ectx.itrace;
-    //     lowered.emit_vm = ectx.emit_vm;
-    //     lowered.stats = ectx.stats;
-    //     lowered.debug_symbols = ectx.debug_symbols;
-    //     lowered.output_source = ectx.output_source.clone();
-    //     lowered.print_vm_map = ectx.print_vm_map;
-    //
-    //     if ectx.compile {
-    //         #[cfg(feature = "native")]
-    //         {
-    //             lowered.compile()
-    //         }
-    //
-    //         #[cfg(not(feature = "native"))]
-    //         {
-    //             unreachable!()
-    //         }
-    //     } else {
-    //         lowered.to_bytecode()
-    //     }
-    // }
-    //
-    // pub fn new_vir(
-    //     content: &str,
-    //     timers: &mut TimerStack,
-    //     ectx: &mut ExecutionContext,
-    // ) -> Result<Self, Box<dyn std::error::Error>> {
-    //     let mut builder = VirDesignBuilder::new(content).with_logic_mode(ectx.logic_mode);
-    //     let mut design = builder.parse()?;
-    //
-    //     if ectx.emit_unoptimized_ir {
-    //         for signal in gl.signals.values() {
-    //             println!("{}", signal.display());
-    //         }
-    //         println!();
-    //         for process in gl.processes.values() {
-    //             println!("{}", process.display(&gl));
-    //         }
-    //     }
-    //
-    //     timers.timed("optimization", |_| {
-    //         let processes = gl.processes.keys().collect::<Vec<_>>();
-    //         vogls_ir::optimize::optimize_processes(&mut gl, &processes, ectx.opt);
-    //     });
-    //
-    //     if ectx.emit_ir {
-    //         for signal in gl.signals.values() {
-    //             println!("{}", signal.display());
-    //         }
-    //         println!();
-    //         for process in gl.processes.values() {
-    //             println!("{}", process.display(&gl));
-    //         }
-    //     }
-    //
-    //     let mut heap_builder = HeapBuilder::new();
-    //     let mut signal_to_heap = Vec::new();
-    //     let mut rt_signal_map = VgHashMap::default();
-    //     let mut lupdt_indexes = VgHashMap::default();
-    //     timers.timed("generate heap", |_| {
-    //         generate_signals_heap(
-    //             &mut heap_builder,
-    //             &mut rt_signal_map,
-    //             &gl.signals,
-    //             &mut signal_to_heap,
-    //             gl.logic_mode,
-    //             ectx.print_vm_map,
-    //         )
-    //     });
-    //
-    //     timers.timed("find lupdt signals", |_| {
-    //         find_lupdt_signals(&gl, &rt_signal_map, &mut lupdt_indexes)
-    //     });
-    //
-    //     if ectx.compile {
-    //         #[cfg(feature = "native")]
-    //         {
-    //             Self::from_gl_compiled(
-    //                 gl,
-    //                 heap_builder,
-    //                 timers,
-    //                 ectx.itrace,
-    //                 ectx.stats,
-    //                 ectx.debug_symbols,
-    //                 None,
-    //                 rt_signal_map,
-    //                 signal_to_heap.into(),
-    //                 lupdt_indexes,
-    //                 3,
-    //                 Vec::new(),
-    //                 IdentTable::default(),
-    //                 FrozenSymbolTable::default(),
-    //             )
-    //         }
-    //
-    //         #[cfg(not(feature = "native"))]
-    //         {
-    //             unreachable!()
-    //         }
-    //     } else {
-    //         Self::from_gl_interpretted(
-    //             gl,
-    //             heap_builder,
-    //             timers,
-    //             ectx.itrace,
-    //             ectx.emit_vm,
-    //             rt_signal_map,
-    //             signal_to_heap.into(),
-    //             lupdt_indexes,
-    //             3,
-    //             Vec::new(),
-    //             IdentTable::default(),
-    //             FrozenSymbolTable::default(),
-    //         )
-    //     }
-    // }
-
     pub fn run(
         &mut self,
         io: &mut SimulationIo,
@@ -331,6 +94,9 @@ impl Design {
                 DesignState::Interpretted(initial_state),
             ) => simulation
                 .run(initial_state, io, time)
+                .map_err(|_| "execution failed.".into()),
+            (DesignBackend::Bytecode { design }, DesignState::Bytecode(state)) => design
+                .execute::<false>(state, &mut io.stdout, &mut io.stderr)
                 .map_err(|_| "execution failed.".into()),
             #[cfg(feature = "native")]
             (DesignBackend::Compiled { design }, DesignState::Compiled(initial_state)) => design

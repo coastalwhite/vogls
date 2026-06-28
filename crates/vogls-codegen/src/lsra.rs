@@ -4,7 +4,9 @@ use core::fmt;
 use std::collections::VecDeque;
 
 use slotmap::SlotMap;
-use vogls_ir::{BasicBlock, BasicBlockKey, VSIZE_64, VariableKey, VariableMap, VectorSize};
+use vogls_ir::{
+    BasicBlock, BasicBlockKey, LogicMode, VSIZE_32, VSIZE_64, VariableKey, VariableMap, VectorSize,
+};
 use vogls_utils::{Bitset, IndexSet, VgHashMap};
 
 #[derive(Default)]
@@ -18,8 +20,7 @@ pub struct StackTracker {
     b64: Bitset,
 }
 
-pub struct StackStats {
-    pub b1: usize,
+pub struct StackOffsets {
     pub b2: usize,
     pub b4: usize,
     pub b8: usize,
@@ -29,28 +30,66 @@ pub struct StackStats {
 }
 
 impl StackTracker {
-    fn get_bitset_for_size(&mut self, size: VectorSize) -> &mut Bitset {
-        match size.get() {
-            1 => &mut self.b1,
-            2 => &mut self.b2,
-            3..=4 => &mut self.b4,
-            5..=8 => &mut self.b8,
-            9..=16 => &mut self.b16,
-            17..=32 => &mut self.b32,
-            _ => &mut self.b64,
+    fn get_bitset_for_size(&mut self, size: VectorSize, mode: LogicMode) -> &mut Bitset {
+        match mode {
+            LogicMode::TwoValue => match size.get() {
+                1 => &mut self.b1,
+                2 => &mut self.b2,
+                3..=4 => &mut self.b4,
+                5..=8 => &mut self.b8,
+                9..=16 => &mut self.b16,
+                17..=32 => &mut self.b32,
+                _ => &mut self.b64,
+            },
+            LogicMode::FourValue => match size.get() {
+                1 => &mut self.b2,
+                2 => &mut self.b4,
+                3..=4 => &mut self.b8,
+                5..=8 => &mut self.b16,
+                9..=16 => &mut self.b32,
+                _ => &mut self.b64,
+            },
         }
     }
 
-    pub fn finalize(self) -> StackStats {
-        StackStats {
-            b1: self.b1.len(),
-            b2: self.b2.len(),
-            b4: self.b4.len(),
-            b8: self.b8.len(),
-            b16: self.b16.len(),
-            b32: self.b32.len(),
-            b64: self.b64.len(),
+    pub fn offsets(&self) -> StackOffsets {
+        let mut bit_offset = 0usize;
+        bit_offset += self.b1.len();
+        bit_offset = bit_offset.next_multiple_of(2);
+
+        let b2 = bit_offset / 2;
+        bit_offset += 2 * self.b2.len();
+        bit_offset = bit_offset.next_multiple_of(4);
+
+        let b4 = bit_offset / 4;
+        bit_offset += 4 * self.b4.len();
+        bit_offset = bit_offset.next_multiple_of(8);
+
+        let b8 = bit_offset / 8;
+        bit_offset += 8 * self.b8.len();
+        bit_offset = bit_offset.next_multiple_of(8);
+
+        let b16 = bit_offset / 16;
+        bit_offset += 16 * self.b16.len();
+        bit_offset = bit_offset.next_multiple_of(16);
+
+        let b32 = bit_offset / 32;
+        bit_offset += 32 * self.b32.len();
+        bit_offset = bit_offset.next_multiple_of(32);
+
+        let b64 = bit_offset / 64;
+        StackOffsets {
+            b2,
+            b4,
+            b8,
+            b16,
+            b32,
+            b64,
         }
+    }
+
+    pub fn num_words(&self) -> usize {
+        self.offsets().b64 + self.b64.len()
     }
 }
 
@@ -83,6 +122,7 @@ struct Interval {
     start: u64,
     end: u64,
     size: VectorSize,
+    mode: LogicMode,
 }
 
 impl fmt::Debug for Interval {
@@ -94,11 +134,12 @@ impl fmt::Debug for Interval {
 }
 
 impl Interval {
-    pub fn empty(size: VectorSize) -> Self {
+    pub fn empty(size: VectorSize, mode: LogicMode) -> Self {
         Self {
             start: 0,
             end: 0,
             size,
+            mode,
         }
     }
 
@@ -107,6 +148,8 @@ impl Interval {
     }
 
     pub fn add_range(&mut self, other: Interval) {
+        debug_assert_eq!(self.size, other.size);
+        debug_assert_eq!(self.mode, other.mode);
         if other.is_empty() {
             return;
         }
@@ -234,11 +277,12 @@ pub fn linear_scan_register_allocation(
             let size = var_map.size(*var);
             intervals
                 .entry(*var)
-                .or_insert(Interval::empty(size))
+                .or_insert(Interval::empty(size, var.mode()))
                 .add_range(Interval {
                     start: block_from,
                     end: block_to,
                     size,
+                    mode: var.mode(),
                 });
         }
 
@@ -251,7 +295,9 @@ pub fn linear_scan_register_allocation(
                 }
 
                 let size = var_map.size(dst);
-                let interval = intervals.entry(dst).or_insert(Interval::empty(size));
+                let interval = intervals
+                    .entry(dst)
+                    .or_insert(Interval::empty(size, dst.mode()));
                 interval.start = inum;
                 if interval.is_empty() {
                     interval.end = inum;
@@ -264,11 +310,14 @@ pub fn linear_scan_register_allocation(
                 }
 
                 let size = var_map.size(src);
-                let interval = intervals.entry(src).or_insert(Interval::empty(size));
+                let interval = intervals
+                    .entry(src)
+                    .or_insert(Interval::empty(size, src.mode()));
                 interval.add_range(Interval {
                     start: block_from,
                     end: inum,
                     size,
+                    mode: src.mode(),
                 });
             });
         }
@@ -283,7 +332,7 @@ pub fn linear_scan_register_allocation(
     // 1. Use a better queue here.
     // 2. Add a fast-path for the interval end being greater than the last active interval.
     let mut active_registers = 0u64;
-    let mut active = VecDeque::<(usize, Slot)>::with_capacity(num_registers as usize);
+    let mut active = VecDeque::<(usize, LogicMode, Slot)>::with_capacity(num_registers as usize);
     assignment.reserve(intervals.len());
 
     let mut intervals = intervals.into_iter().collect::<Vec<_>>();
@@ -292,46 +341,87 @@ pub fn linear_scan_register_allocation(
 
     for (i, (var, interval)) in intervals.iter().enumerate() {
         // @TODO: Change for `pop_front_if`
-        while active.front().is_some_and(|&(active_interval, slot)| {
-            let active_interval = intervals[active_interval].1;
-            if active_interval.end > interval.start {
-                false
-            } else {
-                match slot {
-                    Slot::Register(r) => active_registers ^= 1u64 << r,
-                    Slot::Stack(kind, offset) => {
-                        let offset = offset as usize;
+        while active
+            .front()
+            .is_some_and(|&(active_interval, mode, slot)| {
+                let active_interval = intervals[active_interval].1;
+                if active_interval.end > interval.start {
+                    false
+                } else {
+                    match slot {
+                        Slot::Register(r) => {
+                            let mask = 1u64 | (u64::from(mode == LogicMode::FourValue) << 1);
+                            active_registers ^= mask << r
+                        }
+                        Slot::Stack(kind, offset) => {
+                            let offset = offset as usize;
 
-                        use StackItemKind as K;
-                        match kind {
-                            K::B1 => stack_tracker.b1.set(offset, false),
-                            K::B2 => stack_tracker.b2.set(offset, false),
-                            K::B4 => stack_tracker.b4.set(offset, false),
-                            K::B8 => stack_tracker.b8.set(offset, false),
-                            K::B16 => stack_tracker.b16.set(offset, false),
-                            K::B32 => stack_tracker.b32.set(offset, false),
-                            K::B64 => {
-                                let num_words = active_interval.size.get().div_ceil(64) as usize;
-                                stack_tracker
-                                    .b64
-                                    .set_slice_constant(offset, num_words, false);
+                            use StackItemKind as K;
+                            match kind {
+                                K::B1 => stack_tracker.b1.set(offset, false),
+                                K::B2 => stack_tracker.b2.set(offset, false),
+                                K::B4 => stack_tracker.b4.set(offset, false),
+                                K::B8 => stack_tracker.b8.set(offset, false),
+                                K::B16 => stack_tracker.b16.set(offset, false),
+                                K::B32 => stack_tracker.b32.set(offset, false),
+                                K::B64 => {
+                                    let mut num_words =
+                                        active_interval.size.get().div_ceil(64) as usize;
+                                    if mode == LogicMode::FourValue {
+                                        num_words *= 2;
+                                    }
+                                    stack_tracker
+                                        .b64
+                                        .set_slice_constant(offset, num_words, false);
+                                }
                             }
                         }
                     }
+                    true
                 }
-                true
-            }
-        }) {
+            })
+        {
             _ = active.pop_front();
         }
 
-        if do_always_spill(interval.size) || active_registers.count_ones() == num_registers {
-            let (spill_i, _spill) = active.back().unwrap();
-            let bitset = stack_tracker.get_bitset_for_size(interval.size);
-            let num_bitset_slots = num_bitset_slots(interval.size);
+        // Everything that is larger than 64-bits (both two-value and four-value) lives on the
+        // stack only. We never put it in a register! The address to the stack-address will live in
+        // a temporary register.
+        if interval.size > VSIZE_64 {
+            let bitset = stack_tracker.get_bitset_for_size(interval.size, interval.mode);
+            let num_bitset_slots = num_bitset_slots(interval.size, interval.mode);
             let offset = match bitset.find_n_contiguous_zeros(num_bitset_slots) {
                 Ok(offset) => offset,
                 Err(offset) => {
+                    debug_assert!(offset <= bitset.len());
+                    bitset.extend_zeroed(bitset.len() - offset + num_bitset_slots);
+                    offset
+                }
+            };
+            let offset = offset.try_into().expect("Too large");
+            let slot = Slot::Stack(StackItemKind::from_size(interval.size), offset);
+            assignment.insert(*var, slot);
+            continue;
+        }
+
+        if let Some(register) =
+            claim_register_slot(num_registers, &mut active_registers, interval.mode)
+        {
+            let slot = Slot::Register(register);
+            assignment.insert(*var, slot);
+
+            let insert_idx =
+                active.binary_search_by_key(&interval.end, |(i, _, _)| intervals[*i].1.end);
+            let insert_idx = insert_idx.unwrap_or_else(|i| i);
+            active.insert(insert_idx, (i, interval.mode, slot));
+        } else {
+            let (spill_i, _mode, _spill) = active.back().unwrap();
+            let bitset = stack_tracker.get_bitset_for_size(interval.size, interval.mode);
+            let num_bitset_slots = num_bitset_slots(interval.size, interval.mode);
+            let offset = match bitset.find_n_contiguous_zeros(num_bitset_slots) {
+                Ok(offset) => offset,
+                Err(offset) => {
+                    debug_assert!(offset <= bitset.len());
                     bitset.extend_zeroed(bitset.len() - offset + num_bitset_slots);
                     offset
                 }
@@ -347,34 +437,49 @@ pub fn linear_scan_register_allocation(
                 active.pop_back();
 
                 let insert_idx =
-                    active.binary_search_by_key(&interval.end, |(i, _)| intervals[*i].1.end);
+                    active.binary_search_by_key(&interval.end, |(i, _, _)| intervals[*i].1.end);
                 let insert_idx = insert_idx.unwrap_or_else(|i| i);
-                active.insert(insert_idx, (i, slot));
+                active.insert(insert_idx, (i, interval.mode, slot));
             } else {
                 assignment.insert(*var, slot);
             }
-        } else {
-            let register = active_registers.trailing_ones();
-            active_registers |= 1u64 << register;
-            let slot = Slot::Register(register);
-            assignment.insert(*var, slot);
-
-            let insert_idx =
-                active.binary_search_by_key(&interval.end, |(i, _)| intervals[*i].1.end);
-            let insert_idx = insert_idx.unwrap_or_else(|i| i);
-            active.insert(insert_idx, (i, slot));
         }
     }
 }
 
-fn do_always_spill(size: VectorSize) -> bool {
-    size > VSIZE_64
+fn claim_register_slot(
+    num_registers: u32,
+    active_registers: &mut u64,
+    mode: LogicMode,
+) -> Option<u32> {
+    if active_registers.count_ones() == num_registers {
+        return None;
+    }
+
+    match mode {
+        LogicMode::TwoValue => {
+            let register = active_registers.trailing_ones();
+            *active_registers |= 1u64 << register;
+            Some(register)
+        }
+        LogicMode::FourValue => {
+            // Each four-value logic variable is put into two subsequent registers.
+            let subsequent_inactive_register_mask = !(*active_registers | (*active_registers >> 1));
+            let register = subsequent_inactive_register_mask.trailing_zeros();
+            if register >= num_registers - 1 {
+                return None;
+            }
+            *active_registers |= 3u64 << register;
+            Some(register)
+        }
+    }
 }
 
-fn num_bitset_slots(size: VectorSize) -> usize {
-    if size <= VSIZE_64 {
-        1
-    } else {
-        size.get().div_ceil(64) as usize
+fn num_bitset_slots(size: VectorSize, mode: LogicMode) -> usize {
+    match mode {
+        LogicMode::TwoValue if size <= VSIZE_64 => 1,
+        LogicMode::TwoValue => size.get().div_ceil(64) as usize,
+        LogicMode::FourValue if size <= VSIZE_32 => 1,
+        LogicMode::FourValue => 2 * size.get().div_ceil(64) as usize,
     }
 }

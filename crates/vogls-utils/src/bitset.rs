@@ -100,15 +100,21 @@ impl Bitset {
     }
 
     pub fn find_n_contiguous_zeros(&self, n: usize) -> Result<usize, usize> {
+        if self.len() == 0 {
+            return Err(0);
+        }
+
         // @Performance: Specialized implementation
         let mut prev = 0;
+        dbg!(self.len());
         for i in self.true_idx_iter() {
+            dbg!(i);
             if i - prev > n {
                 return Ok(prev);
             }
             prev = i;
         }
-        Err(prev + 1)
+        Err(dbg!(prev + 1))
     }
 
     pub fn set_slice_constant(&mut self, offset: usize, num_words: usize, value: bool) {

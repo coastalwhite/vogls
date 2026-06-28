@@ -5,6 +5,7 @@ use vogls_utils::VgHashMap;
 
 use crate::{BasicBlock, BasicBlockKey, BasicBlockTerminator, SignalKey};
 
+#[derive(Debug)]
 pub struct WatchMap {
     num_watches: usize,
     watchers: Vec<(SignalKey, usize)>,
@@ -25,9 +26,9 @@ impl WatchMap {
                 next_watcher_index += 1;
             }
         }
-        if let Some(&(fst, _)) = watchers.first() {
-            watchers.sort_unstable_by_key(|(s, _)| *s);
 
+        watchers.sort_unstable_by_key(|(s, _)| *s);
+        if let Some(&(fst, _)) = watchers.first() {
             let mut start = 0usize;
             let mut current = fst;
 

@@ -13,7 +13,7 @@ mod timer_stack;
 pub use bitset::Bitset;
 pub use index_map::{Entry, IndexMap, IndexSet};
 pub use iter_slice_contiguous::IterSliceContinguous;
-pub use non_max_int::{NonMaxU8, NonMaxU32, NonMaxU64, NonMaxUsize};
+pub use non_max_int::{NonMaxU8, NonMaxU16, NonMaxU32, NonMaxU64, NonMaxUsize};
 pub use ordered_set::OrderedSet;
 pub use table::{SecondaryTable, Table, TableKey, TableMap, TableMapEntry};
 pub use timer_stack::TimerStack;
