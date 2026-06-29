@@ -49,6 +49,7 @@ impl TraceRef {
         let plugins = match &mut *state {
             DesignState::Interpretted(s) => &mut s.plugins,
             DesignState::Compiled(s) => &mut s.plugins,
+            DesignState::Bytecode(s) => &mut s.plugins,
         };
         let trace = plugins.remove(self.0);
         let trace = trace as Box<dyn std::any::Any>;

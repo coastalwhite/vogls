@@ -77,7 +77,11 @@ impl ArrayNode for RandomBits {
     fn compute(&self, _ctx: &ComputeContext, _inputs: &ComputeInputs) -> ComputeResult<Array> {
         let size = VectorSize::new((self.length * self.width.get() as usize) as u32).unwrap();
         Ok(Array::Bits(
-            vogls::bits::random::rand_bits_from_seed(size, vogls::ir::Mode::TwoValue, self.seed),
+            vogls::bits::random::rand_bits_from_seed(
+                size,
+                vogls::ir::Mode::TwoValue,
+                self.seed
+            ),
             self.width,
         ))
     }

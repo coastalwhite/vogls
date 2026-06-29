@@ -7,3 +7,5 @@ proptest-regressions/
 /*.v
 /profile*
 /*.dot
+__pycache__
+*.so

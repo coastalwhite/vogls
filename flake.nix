@@ -52,7 +52,9 @@
 
             devShells.default = pkgs.mkShell {
               packages = with pkgs; [
-                pythonPlatform.python
+                (pythonPlatform.python.withPackages (python-pkgs: [
+                  python-pkgs.numpy
+                ]))
                 pythonPlatform.venvShellHook
                 pythonPlatform.build
 
@@ -60,6 +62,7 @@
                 rustToolchain
                 wasm-bindgen-cli_0_2_114
 
+                maturin
                 just
                 samply
                 uv
@@ -70,12 +73,18 @@
                 iverilog
                 libelf
 
+                stdenv.cc.cc.lib
                 # riscv32-toolchain.buildPackages.gcc
               ];
 
               postVenvCreation = ''
                 unset CONDA_PREFIX 
                 uv pip install -r crates/vogls-python/pyproject.toml
+                export NIX_LD_LIBRARY_PATH="${
+                  pkgs.lib.makeLibraryPath [
+                    stdenv.cc.cc.lib
+                  ]
+                }:$PYTHON_SHARED_LIB"
                 export LD_LIBRARY_PATH="${stdenv.cc.cc.lib}/lib:$PYTHON_SHARED_LIB"
               '';
               venvDir = ".venv";

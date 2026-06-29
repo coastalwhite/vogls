@@ -1,79 +1,66 @@
 import vogls as vg
-import numpy as np
-from random import randint
-import time
+import os
+import matplotlib.pyplot as plt
 
-CYCLE = 2
-N_CYCLES = 8
+DUT = "../vogls-test/tests/integration/aoki-aes/lut.v"
 
-NUM_RUNS = 5
+CYCLE = 10
+NUM_RUNS = 1000
+defines = []
+# defines += ['AES_IMPL_COMP']
+
+KEY = vg.LazyValue.random_bits(128, seed=42).compute()
+
 
 def run(*, random: bool) -> vg.LazyRunVector:
-    design = vg.LazyDesign("xor.v")
+    design = vg.LazyDesign(
+        DUT,
+        top_level_module="tb",
+        defines=defines,
+    )
     r = design.run()
 
+    # Set the key to a new random value each run or constant.
     if random:
-        r = r.set_signal(
-            "a", vg.LazyArray.random_bits(NUM_RUNS, 32, seed=randint(0, 100))
-        )
-        r = r.set_signal(
-            "b", vg.LazyArray.random_bits(NUM_RUNS, 32, seed=randint(0, 100))
-        )
+        r = r.set_signal("Key", vg.LazyArray.random_bits(NUM_RUNS, 128, seed=510))
     else:
-        r = r.repeat(NUM_RUNS)
+        r = r.set_signal("Key", KEY.repeat(NUM_RUNS).lazy())
 
-    r = r.trace_start().run_for(CYCLE * N_CYCLES).hamming_distance("hd").finish()
+    r = r.trace_start()           # Start tracing all the wires and registers
+    r = r.run_for(22 * CYCLE)     # Run for 22 cycles
+    r = r.hamming_distance("hd")  # Get the Hamming distance from the trace
+    r = r.finish()                # Finish the running
+
+    # Extract and collapse the Hamming distance.
     hd = r.get("hd", vg.LazyPlan)
-    dist = hd.get("dist", vg.LazyRunVector)
-    time = hd.get("time", vg.LazyRunVector)
-    return dist.window_sum(by=time, width=CYCLE, start=0, end=CYCLE * N_CYCLES)
-
-
-def masked_run(*, random: bool) -> vg.LazyRunVector:
-    design = vg.LazyDesign("masked_xor.v")
-    r = design.run()
-
-    r = r.set_signal(
-        "a_1", vg.LazyArray.random_bits(NUM_RUNS, 32, seed=randint(0, 100))
-    )
-    r = r.set_signal(
-        "b_1", vg.LazyArray.random_bits(NUM_RUNS, 32, seed=randint(0, 100))
-    )
-
-    if random:
-        r = r.set_signal(
-            "a_0", vg.LazyArray.random_bits(NUM_RUNS, 32, seed=randint(0, 100))
-        )
-
-    r = r.trace_start().run_for(CYCLE * N_CYCLES).hamming_distance("hd").finish()
-    hd = r.get("hd", vg.LazyPlan)
-    dist = hd.get("dist", vg.LazyRunVector)
-    time = hd.get("time", vg.LazyRunVector)
-    return dist.window_sum(by=time, width=CYCLE, start=0, end=CYCLE * N_CYCLES)
+    d = hd.get("dist", vg.LazyRunVector)
+    t = hd.get("time", vg.LazyRunVector)
+    return d.window_sum(by=t, width=CYCLE, start=6 * CYCLE, end=22 * CYCLE)
 
 
 fixed = run(random=False)
 random = run(random=True)
 
-print('# Hamming Distance:')
-print(fixed.compute().as_list())
-print(random.compute().as_list())
-print()
+tvla = vg.welch_t_test(fixed, random)
 
-print('# Entropy:')
-print(fixed.entropy().compute().as_list())
-print(random.entropy().compute().as_list())
-print()
-
-fixed = fixed.expand()
-random = random.expand()
-
-start = time.time()
-result = vg.Array._from_py(vg.mutual_information(fixed, random).compute())
-print(f"Computation time: {time.time() - start:02f}s")
-
-print('# Mutual Info:')
+# Plan is finished -> Start computing the result
+result = tvla.compute()
 print(result.as_list())
-print(np.array(result))
-print(vg.Array(np.array(result)).as_list())
-print()
+
+
+# Plot the result
+plt.plot(range(6, 22), result)
+plt.title("TVLA per Cycle")
+plt.xlabel("Cycle")
+plt.ylabel("T-Test score")
+plt.axhline(y=4.5, color="r", linestyle="-")
+plt.axhline(y=-4.5, color="r", linestyle="-")
+plt.tight_layout()
+plt.savefig("out.svg")
+os.system("inkview out.svg")
+
+
+with open("plan.dot", "w") as f:
+    f.write(tvla.to_dot_graph())
+os.system("dot -o plan.svg -Tsvg plan.dot")
+os.system("inkview plan.svg")

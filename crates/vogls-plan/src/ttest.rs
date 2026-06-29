@@ -50,7 +50,7 @@ impl Agg for TTest {
             .sum::<f64>();
 
         let numerator = lmean - rmean;
-        let denumerator = (lvar / ldata.len() as f64 + rvar / rdata.len() as f64).sqrt();
+        let denumerator = (lvar / (ldata.len() as f64).powi(2) + rvar / (rdata.len() as f64).powi(2)).sqrt();
 
         let tvalue = numerator / denumerator;
         Ok(Value::Float(tvalue))

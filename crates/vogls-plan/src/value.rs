@@ -39,7 +39,14 @@ impl Value {
             Self::Float(v) => Array::Floats(Buffer::from_vec(std::iter::repeat_n(*v, n).collect())),
             Self::Int(v) => Array::Ints(Buffer::from_vec(std::iter::repeat_n(*v, n).collect())),
             Self::UInt(v) => Array::UInts(Buffer::from_vec(std::iter::repeat_n(*v, n).collect())),
-            Self::Bits(_) => todo!(),
+            Self::Bits(v) => {
+                // @Performance: This is horrendous.
+                let mut acc = v.clone();
+                for _ in 1..n {
+                    acc = Bits::concatenate(&acc, v);
+                }
+                Array::Bits(acc, v.size())
+            },
         }
     }
 

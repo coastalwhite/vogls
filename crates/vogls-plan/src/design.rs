@@ -3,7 +3,7 @@ use std::hash::Hash;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use vogls::design::{Arena, Design};
+use vogls::design::{Arena, Design, Macro};
 use vogls::utils::{IndexMap, VgHashMap, VgHashSet, new_table_key};
 use vogls::{LogicMode, SignalHandle, VoglsPlugin};
 use vogls_trace::TracePlugin;
@@ -22,6 +22,7 @@ new_table_key! { pub struct LazyDesignKey; }
 pub struct LazyDesign {
     pub sources: Vec<PathBuf>,
     pub top_level_module: Option<String>,
+    pub defines: Vec<String>,
     pub trace: bool,
     pub handles: VgHashSet<SignalRef>,
 }
@@ -46,19 +47,22 @@ impl CspAble for LazyDesign {
         let Self {
             sources: l_sources,
             top_level_module: l_tlm,
+            defines: l_defines,
             trace: _,
             handles: _,
         } = self;
         let Self {
             sources: r_sources,
             top_level_module: r_tlm,
+            defines: r_defines,
             trace: _,
             handles: _,
         } = other;
-        l_sources == r_sources && l_tlm == r_tlm
+        l_sources == r_sources && l_defines == r_defines && l_tlm == r_tlm
     }
     fn csp_hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.sources.hash(state);
+        self.defines.hash(state);
         self.top_level_module.hash(state);
     }
     fn csp_merge(&mut self, other: Self) {
@@ -109,6 +113,9 @@ impl ComputeNode for LazyDesign {
     ) -> ComputeResult<Self::Output> {
         let mut builder = vogls::DesignBuilder::new();
         let mut arena = Arena::default();
+        for define in &self.defines {
+            builder.define_macro(define, Macro::default());
+        }
         for path in &self.sources {
             builder
                 .add_source(path)

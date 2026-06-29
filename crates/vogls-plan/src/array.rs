@@ -8,6 +8,7 @@ use vogls::Bits;
 use vogls::utils::{VgHashMap, new_table_key};
 
 use crate::CspAble;
+use crate::agg::Agg;
 use crate::buffer::Buffer;
 use crate::compute::{
     CommonSubPlan, ComputeContext, ComputeDependencies, ComputeError, ComputeGraph, ComputeInputs,
@@ -38,7 +39,7 @@ pub trait ArrayBuilder {
 #[derive(Default)]
 struct PrimitiveArrayBuilder<T>(Vec<T>);
 
-pub trait Primitive: Copy + std::ops::Add<Self, Output=Self> {
+pub trait Primitive: Copy + std::ops::Add<Self, Output = Self> {
     fn from_value(value: &Value) -> Option<Self>;
     fn from_array(array: &Array) -> Option<&Buffer<Self>>;
     fn into_array(buf: Buffer<Self>) -> Array;
@@ -373,5 +374,33 @@ impl ArrayNode for ArrayExtractOutput {
             return Err(ComputeError::InvalidTypes);
         };
         Ok(v.clone())
+    }
+}
+
+#[derive(Hash, PartialEq, Eq, Clone)]
+pub struct ArrayGet(pub usize);
+
+impl Agg for ArrayGet {
+    type Inputs<Input>
+        = [Input; 1]
+    where
+        Input: Send + Sync;
+
+    type Scratches = ();
+
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ArrayGet({})", self.0)
+    }
+
+    fn output_type(&self, inputs: Self::Inputs<DataType>) -> ComputeResult<DataType> {
+        Ok(inputs[0])
+    }
+    fn compute(
+        &self,
+        inputs: Self::Inputs<Array>,
+        _ctx: &ComputeContext,
+        _scratch: &mut Self::Scratches,
+    ) -> ComputeResult<Value> {
+        Ok(inputs[0].get(self.0))
     }
 }

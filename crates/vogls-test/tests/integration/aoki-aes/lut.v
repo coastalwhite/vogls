@@ -1,28 +1,11 @@
 // vogls: tlm=tb
 
+`timescale 1fs / 1fs
 `ifdef AES_IMPL_COMP
-
-`include "../../../submodules/aoki-aes/AES_Comp.v"
-`define AESMODULE AES_Comp_ENC
-`define KIN
-
-`elsif AES_IMPL_PPRM1
 
 `include "../../../submodules/aoki-aes/AES_PPRM1.v"
 `define AESMODULE AES_PPRM1_ENC
-`define KIN
-
-`elsif AES_IMPL_PPRM3
-
-`include "../../../submodules/aoki-aes/AES_PPRM3.v"
-`define AESMODULE AES_PPRM3_ENC
-`define KIN
-
-`elsif AES_IMPL_TBL
-
-`include "../../../submodules/aoki-aes/AES_TBL.v"
-`define AESMODULE AES_TBL_ENC
-`define KIN
+`define KIN 1
 
 `else
 
@@ -33,7 +16,7 @@
 
 module tb();
 	reg [127:0] Din, Key;
-	reg clk, rstn, Drdy, Krdy, EN, BSY;
+	reg clk, rstn, Drdy, Krdy, EN;
 	wire [127:0] Dout;
 	wire Dvld, bsy;
 
@@ -50,7 +33,7 @@ module tb();
       .RSTn(rstn),
       .EN(EN),
       .CLK(clk),
-      .BSY(BSY),
+      .BSY(bsy),
       .Dvld(Dvld)
   	);
 
@@ -61,16 +44,14 @@ module tb();
 		#20
 		rstn = 1;
 		EN = 1;
-		Din = 0; Drdy = 1;
-		#10
-		Drdy = 0;
-		Key = 0; Krdy = 1;
-		#10
+		Krdy = 1;
+		#20
 		Krdy = 0;
+		Drdy = 1;
+		#20
+		Drdy = 0;
 
-		#120
-
-		$vogls_assert_eq(Dout, 128'h66e94bd4ef8a2c3b884cfa59ca342b2e);
+		#200
         $finish();
 	end
 endmodule

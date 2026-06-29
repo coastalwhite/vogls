@@ -10,12 +10,11 @@ mod vogls {
     use pyo3::exceptions::{PyException, PyTypeError, PyValueError};
     use pyo3::types::PyDict;
     use pyo3::{FromPyObject, IntoPyObjectExt, PyAny, PyResult, prelude::*};
-    use vogls::design::DesignState;
     use vogls::utils::{IndexMap, VgHashSet};
-    use vogls::{BitsFormatOptions, SimulationIo, VectorSize};
+    use vogls::{BitsFormatOptions, DesignState, SimulationIo, VectorSize};
 
     use vogls_plan::agg::{build_array_agg, build_run_vector_agg};
-    use vogls_plan::array::{Array, DslLazyArray, LazyArray};
+    use vogls_plan::array::{Array, ArrayGet, DslLazyArray, LazyArray};
     use vogls_plan::compute::{ComputeNode, GraphItem, display_dot};
     use vogls_plan::design::TimeUnit;
     use vogls_plan::dsl::DslNode;
@@ -460,6 +459,7 @@ mod vogls {
             let plugin = match &*state {
                 DesignState::Interpretted(s) => &s.plugins[0],
                 DesignState::Compiled(s) => &s.plugins[0],
+                DesignState::Bytecode(s) => &s.plugins[0],
             };
             let trace = (plugin.as_ref() as &dyn std::any::Any)
                 .downcast_ref::<vogls_trace::TracePlugin>()
@@ -479,6 +479,7 @@ mod vogls {
             let plugins = match &mut *state {
                 DesignState::Interpretted(s) => &mut s.plugins,
                 DesignState::Compiled(s) => &mut s.plugins,
+                DesignState::Bytecode(s) => &mut s.plugins,
             };
             let trace = plugins.remove(self.plugin_idx);
             let trace = trace as Box<dyn std::any::Any>;
@@ -511,11 +512,12 @@ mod vogls {
     #[pymethods]
     impl PyLazyDesign {
         #[new]
-        #[pyo3(signature = (paths, top_level_module = None))]
-        fn new(paths: Vec<PathBuf>, top_level_module: Option<String>) -> Self {
+        #[pyo3(signature = (paths, top_level_module = None, defines = Vec::new()))]
+        fn new(paths: Vec<PathBuf>, top_level_module: Option<String>, defines: Vec<String>) -> Self {
             Self(Arc::new(vogls_plan::design::LazyDesign {
                 sources: paths,
                 top_level_module,
+                defines,
                 trace: true,
                 handles: VgHashSet::default(),
             }))
@@ -818,6 +820,10 @@ mod vogls {
                 }
                 .build(),
             )
+        }
+
+        pub fn get<'py>(&self, at: usize) -> PyResult<PyLazyValue> {
+            Ok(PyLazyValue(build_array_agg(ArrayGet(at), [self.0.clone()])?))
         }
     }
     #[pymethods]

@@ -121,6 +121,9 @@ class Array:
     def lazy(self) -> "LazyArray":
         return LazyArray._from_py(self._inner.lazy())
 
+    def get(self, at: int) -> "Value":
+        return self.lazy().get(at).compute()
+
     def expand(self) -> Self:
         return self.lazy().expand().compute()
 
@@ -145,6 +148,9 @@ class LazyArray(Lazy[Array]):
     def random_bits(length: int, width: int, seed: int | None = None) -> Self:
         return LazyArray._from_py(vgr.PyLazyArray.random_bits(length, width, seed))
 
+    def get(self, at: int) -> "LazyValue":
+        return LazyValue._from_py(self._producer.get(at))
+
     def expand(self) -> Self:
         return LazyArray._from_py(self._producer.expand())
 
@@ -159,14 +165,18 @@ class LazyDesign:
     _inner: vgr.PyLazyDesign
 
     def __init__(
-        self, sources: str | List[str], *, top_level_module: str | None = None
+        self,
+        sources: str | List[str],
+        *,
+        top_level_module: str | None = None,
+        defines: list[str] = [],
     ) -> None:
         sources_paths: List[str]
         if isinstance(sources, str):
             sources_paths = [sources]
         else:
             sources_paths = sources
-        self._inner = vgr.PyLazyDesign(sources_paths, top_level_module)
+        self._inner = vgr.PyLazyDesign(sources_paths, top_level_module, defines)
 
     def run(self) -> Run:
         return Run._from_py(self._inner.run())
@@ -266,7 +276,7 @@ class Value:
         return LazyValue._from_py(self._inner.lazy())
 
     def repeat(self, n: int) -> Array:
-        return self.lazy().repeat(n).compute()
+        return Array._from_py(self._inner.repeat(n))
 
 
 class LazyValue(Lazy[Value]):
@@ -276,8 +286,12 @@ class LazyValue(Lazy[Value]):
         super(LazyValue, instance).__init__(py, Value)
         return instance
 
+    @staticmethod
+    def random_bits(size: int, seed: int | None = None) -> Self:
+        return LazyArray.random_bits(1, size, seed).get(0)
+
     def repeat(self, n: int) -> LazyArray:
-        return self._producer.repeat(n)
+        return LazyArray._from_py(self._producer.repeat(n))
 
 
 class RunVector:

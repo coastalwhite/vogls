@@ -8,6 +8,7 @@ use vogls_bits::arithmetic::{
     tv_bin_u64_bitwise_op, tv_multiplication, tv_subtraction,
 };
 use vogls_bits::format::{BitsFormatBase, BitsFormatWidth};
+use vogls_bits::truncate::tv_l_truncate;
 use vogls_codegen::lsra::StackItemKind;
 use vogls_codegen::{HeapOffset, HeapRef};
 
@@ -254,6 +255,14 @@ struct EncHeapBitwiseReg {
     size: Option<VectorSize>,
 }
 
+#[derive(Default)]
+struct EncHeapUnaryReg {
+    rd: Reg,
+    rs: Reg,
+
+    imm16: u16,
+}
+
 #[derive(Default, Debug)]
 pub enum BitwiseOp {
     #[default]
@@ -391,6 +400,21 @@ impl Encoding for EncBinaryUImm {
             | ((self.rs as u32) << 12)
             | ((self.size.0 as u32) << 16)
             | ((self.imm10 as u32) << 22)
+    }
+}
+impl Encoding for EncHeapUnaryReg {
+    #[inline(always)]
+    fn extract(bytecode: Bytecode) -> Self {
+        let v = bytecode.0;
+        Self {
+            rd: Reg::new_masked(v >> 8),
+            rs: Reg::new_masked(v >> 12),
+            imm16: (v >> 16) as u16,
+        }
+    }
+    #[inline(always)]
+    fn encode(self) -> u32 {
+        ((self.rd as u32) << 8) | ((self.rs as u32) << 12) | ((self.imm16 as u32) << 22)
     }
 }
 
@@ -1198,6 +1222,38 @@ define_instructions! {
             { write!(f, "{rd}, {rs1}, {rs2}") }
             ()
             ()
+
+        heap_unary (EncHeapUnaryReg { rd: Reg, rs: Reg, imm16: u16 })
+            {
+                match imm16 >> 13 {
+                    0b000 | 0b001 => todo!(),
+
+                    // Tv Truncate
+                    0b010 => {
+                        // let dst_size = VectorSize::new(((imm16 >> 7) & 0x3F) as u32).unwrap_or_else(|| VectorSize::new(regs[Reg::X12] as u32).unwrap());
+                        // let src_size = VectorSize::new((imm16 & 0x7F) as u32 + 1).unwrap_or_else(|| VectorSize::new(regs[Reg::X13] as u32).unwrap());
+                        // tv_l_truncate(dst, src, dst_size, src_size);
+                    }
+                    // Fv Truncate
+                    0b011 => {
+                    }
+                    // Tv Zero-Extend
+                    0b100 => {
+                    }
+                    // Fv Zero-Extend
+                    0b101 => {
+                    }
+                    // Tv Sign-Extend
+                    0b110 => {
+                    }
+                    // Fv Sign-Extend
+                    _ => {
+                    }
+                }
+            }
+            { write!(f, "{rd}, {rs}") }
+            ( rd = TraceReg(rd, LogicMode::FourValue, None) )
+            ( rs = TraceReg(rd, LogicMode::FourValue, None) )
 
         load_imm16 (EncLoadImm { rd: Reg, clear: bool, sign_extend: bool, segment: u8, imm: i16 })
             {

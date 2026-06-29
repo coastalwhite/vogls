@@ -106,15 +106,13 @@ impl Bitset {
 
         // @Performance: Specialized implementation
         let mut prev = 0;
-        dbg!(self.len());
         for i in self.true_idx_iter() {
-            dbg!(i);
             if i - prev > n {
                 return Ok(prev);
             }
             prev = i;
         }
-        Err(dbg!(prev + 1))
+        Err(prev + 1)
     }
 
     pub fn set_slice_constant(&mut self, offset: usize, num_words: usize, value: bool) {
