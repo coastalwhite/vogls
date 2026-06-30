@@ -7,8 +7,9 @@ use vogls_bits::arithmetic::{
     fv_bitwise_xor_elem, fv_reduce_and_elem, fv_reduce_or_elem, fv_reduce_xor_elem, tv_addition,
     tv_bin_u64_bitwise_op, tv_multiplication, tv_subtraction,
 };
+use vogls_bits::extend::{fv_l_sign_extend, fv_l_zero_extend, tv_l_sign_extend, tv_l_zero_extend};
 use vogls_bits::format::{BitsFormatBase, BitsFormatWidth};
-use vogls_bits::truncate::tv_l_truncate;
+use vogls_bits::truncate::{fv_l_truncate, tv_l_truncate};
 use vogls_codegen::lsra::StackItemKind;
 use vogls_codegen::{HeapOffset, HeapRef};
 
@@ -1224,36 +1225,10 @@ define_instructions! {
             ()
 
         heap_unary (EncHeapUnaryReg { rd: Reg, rs: Reg, imm16: u16 })
-            {
-                match imm16 >> 13 {
-                    0b000 | 0b001 => todo!(),
-
-                    // Tv Truncate
-                    0b010 => {
-                        // let dst_size = VectorSize::new(((imm16 >> 7) & 0x3F) as u32).unwrap_or_else(|| VectorSize::new(regs[Reg::X12] as u32).unwrap());
-                        // let src_size = VectorSize::new((imm16 & 0x7F) as u32 + 1).unwrap_or_else(|| VectorSize::new(regs[Reg::X13] as u32).unwrap());
-                        // tv_l_truncate(dst, src, dst_size, src_size);
-                    }
-                    // Fv Truncate
-                    0b011 => {
-                    }
-                    // Tv Zero-Extend
-                    0b100 => {
-                    }
-                    // Fv Zero-Extend
-                    0b101 => {
-                    }
-                    // Tv Sign-Extend
-                    0b110 => {
-                    }
-                    // Fv Sign-Extend
-                    _ => {
-                    }
-                }
-            }
+            { execute_heap_unary(state, regs, rd, rs, imm16); }
             { write!(f, "{rd}, {rs}") }
             ( rd = TraceReg(rd, LogicMode::FourValue, None) )
-            ( rs = TraceReg(rd, LogicMode::FourValue, None) )
+            ( rs = TraceReg(rs, LogicMode::FourValue, None) )
 
         load_imm16 (EncLoadImm { rd: Reg, clear: bool, sign_extend: bool, segment: u8, imm: i16 })
             {
@@ -1628,6 +1603,30 @@ impl BytecodeEncoder {
         self.reschedule(Reg::X0, 0, false);
     }
 
+    pub fn heap_tv_zero_extend(
+        &mut self,
+        rd: Reg,
+        rs: Reg,
+        dst_size: VectorSize,
+        src_size: VectorSize,
+    ) {
+        let dst_size = if dst_size.get() >= (1u32 << 7) {
+            self.load_u64(Reg::X12, dst_size.get() as u64);
+            0u16
+        } else {
+            dst_size.get() as u16
+        };
+        let src_size = if src_size.get() >= (1u32 << 6) {
+            self.load_u64(Reg::X13, src_size.get() as u64);
+            0u16
+        } else {
+            src_size.get() as u16
+        };
+        let imm16 = (0b100 << 13) | (dst_size << 6) | (src_size << 0);
+        self.data
+            .push(Bytecode(EncHeapUnaryReg { rd, rs, imm16 }.encode()));
+    }
+
     pub fn stack_offset(&mut self, rd: Reg, kind: StackItemKind, offset: u64) {
         // @Performance: Specialized instruction.
         self.load_u64(rd, offset);
@@ -1713,4 +1712,122 @@ fn value_to_heap_ref(value: u64, size: VectorSize, mode: LogicMode) -> HeapRef {
     } as u64;
     let bit_offset = value.checked_mul(alignment).expect("stack overflow") as usize;
     HeapOffset { bit_offset }.to_ref(size)
+}
+
+#[derive(Clone, Copy)]
+struct HeapUnaryUImm(u16);
+
+enum HeapUnaryOp {
+    TvTruncate,
+    FvTruncate,
+
+    TvZeroExtend,
+    FvZeroExtend,
+
+    TvSignExtend,
+    FvSignExtend,
+}
+
+impl HeapUnaryUImm {
+    pub fn extract_subopcode(self) -> HeapUnaryOp {
+        match self.0 >> 13 {
+            0b000 | 0b001 => todo!(),
+            0b010 => HeapUnaryOp::TvTruncate,
+            0b011 => HeapUnaryOp::FvTruncate,
+            0b100 => HeapUnaryOp::TvZeroExtend,
+            0b101 => HeapUnaryOp::FvZeroExtend,
+            0b110 => HeapUnaryOp::TvSignExtend,
+            _ => HeapUnaryOp::FvSignExtend,
+        }
+    }
+
+    pub fn extract_sizes(self, regs: &Regs) -> (VectorSize, VectorSize) {
+        let small = VectorSize::new(((self.0 >> 7) & 0x3F) as u32)
+            .unwrap_or_else(|| VectorSize::new(regs[Reg::X12] as u32).unwrap());
+        let large = VectorSize::new((self.0 & 0x7F) as u32)
+            .unwrap_or_else(|| VectorSize::new(regs[Reg::X13] as u32).unwrap());
+        (large, small)
+    }
+}
+
+#[inline(always)]
+fn execute_heap_unary(state: &mut RuntimeState, regs: &mut Regs, rd: Reg, rs: Reg, imm: u16) {
+    let imm = HeapUnaryUImm(imm);
+    match imm.extract_subopcode() {
+        HeapUnaryOp::TvTruncate => {
+            let (src_size, dst_size) = imm.extract_sizes(regs);
+            let src_num_words = src_size.get().div_ceil(64) as usize;
+            let src = state.heap.get_u64_slice(
+                HeapOffset {
+                    bit_offset: regs[rs] as usize,
+                },
+                src_num_words,
+            );
+            match SixBitSize::from_vector_size(dst_size) {
+                None => {
+                    let dst_num_words = dst_size.get().div_ceil(64) as usize;
+                    // @Performance: Find a way not to have to allocate and copy here.
+                    // The problem is that we want to be able to define compute kernels once,
+                    // but the kernels for Bits are fundamentally different than these as it is
+                    // exclusive vs. shared reference.
+                    let mut dst_buffer = vec![0u64; dst_num_words];
+                    tv_l_truncate(&mut dst_buffer, src, dst_size, src_size);
+                    state
+                        .heap
+                        .get_mut_u64_slice(
+                            HeapOffset {
+                                bit_offset: regs[rd] as usize,
+                            },
+                            dst_num_words,
+                        )
+                        .copy_from_slice(&dst_buffer);
+                }
+                Some(dst_size) => regs[rd] = dst_size.mask(src[0]),
+            }
+        }
+        HeapUnaryOp::FvTruncate => todo!(),
+        HeapUnaryOp::TvZeroExtend => {
+            let (dst_size, src_size) = imm.extract_sizes(regs);
+            let dst_num_words = dst_size.get().div_ceil(64) as usize;
+            match SixBitSize::from_vector_size(src_size) {
+                None => {
+                    let src_num_words = src_size.get().div_ceil(64) as usize;
+                    let src = state.heap.get_u64_slice(
+                        HeapOffset {
+                            bit_offset: regs[rs] as usize,
+                        },
+                        src_num_words,
+                    );
+                    // @Performance: Find a way not to have to allocate and copy here.
+                    // The problem is that we want to be able to define compute kernels once,
+                    // but the kernels for Bits are fundamentally different than these as it is
+                    // exclusive vs. shared reference.
+                    let mut dst_buffer = vec![0u64; dst_num_words];
+                    tv_l_zero_extend(&mut dst_buffer, src, dst_size, src_size);
+                    state
+                        .heap
+                        .get_mut_u64_slice(
+                            HeapOffset {
+                                bit_offset: regs[rd] as usize,
+                            },
+                            dst_num_words,
+                        )
+                        .copy_from_slice(&dst_buffer);
+                }
+                Some(_) => {
+                    let dst = state.heap.get_mut_u64_slice(
+                        HeapOffset {
+                            bit_offset: regs[rd] as usize,
+                        },
+                        dst_num_words,
+                    );
+                    dst[0] = regs[rs];
+                    dst[1..].fill(0u64);
+                }
+            }
+        }
+        HeapUnaryOp::FvZeroExtend => todo!(),
+        HeapUnaryOp::TvSignExtend => todo!(),
+        HeapUnaryOp::FvSignExtend => todo!(),
+    }
 }

@@ -237,7 +237,7 @@ fn lower_instruction(
             }
 
             bytecode.load_bits_into_register(rd, dst.mode(), value);
-            store_back(bytecode, dslot, rd);
+            store_back(bytecode, &gl.vars, *dst, dslot, rd);
         }
         I::Unary(dst, op, src) => {
             let dslot = assignment[dst];
@@ -278,7 +278,7 @@ fn lower_instruction(
                 todo!()
             }
 
-            store_back(bytecode, dslot, rd);
+            store_back(bytecode, &gl.vars, *dst, dslot, rd);
         }
         I::Resize(dst, op, src) => {
             let dslot = assignment[dst];
@@ -314,7 +314,7 @@ fn lower_instruction(
                 }
                 (O::ZeroExtend, M::FourValue, Some(dst_size), Some(src_size)) => {
                     // @Performance: One instruction maybe?
-                    let (rsspc, rsval) = rd.to_spc_and_val();
+                    let (rsspc, rsval) = rs.to_spc_and_val();
                     let (rdspc, rdval) = rd.to_spc_and_val();
                     let mask = dst_size.mask(u64::MAX) ^ src_size.mask(u64::MAX);
                     if let Some(value) = lower_to_n_bits_sign_extend(&Bits::new_u64(mask), 10) {
@@ -325,11 +325,18 @@ fn lower_instruction(
                     }
                     bytecode.copy(rdval, rsval);
                 }
-                (O::ZeroExtend, ..) => todo!(),
+                (O::ZeroExtend, M::TwoValue, None, _) => {
+                    bytecode.heap_tv_zero_extend(rd, rs, dst_size, src_size);
+                }
+                (O::ZeroExtend, M::FourValue, ..) => todo!(),
+
+                (O::ZeroExtend, _, Some(_), None) | (O::SignExtend, _, Some(_), None) => {
+                    unreachable!()
+                }
                 (O::SignExtend, ..) => todo!(),
             }
 
-            store_back(bytecode, dslot, rd);
+            store_back(bytecode, &gl.vars, *dst, dslot, rd);
         }
         I::Binary(dst, op, lhs, rhs) => {
             let dslot = assignment[dst];
@@ -407,7 +414,7 @@ fn lower_instruction(
                 (O::Negedge, ..) => todo!(),
             }
 
-            store_back(bytecode, dslot, rd);
+            store_back(bytecode, &gl.vars, *dst, dslot, rd);
         }
         I::BinaryImm(dst, op, src, imm) => {
             let dslot = assignment[dst];
@@ -530,7 +537,7 @@ fn lower_instruction(
                 (O::CaseEquality, _, _, M::FourValue, _, None) => todo!(),
             }
 
-            store_back(bytecode, dslot, rd);
+            store_back(bytecode, &gl.vars, *dst, dslot, rd);
         }
         I::Slice(variable_key, variable_key1, variable_key2) => todo!(),
         I::SliceImm(variable_key, variable_key1, _) => todo!(),
@@ -563,6 +570,7 @@ fn lower_instruction(
                 Some(v) => Some(v),
             };
             bytecode.intrinsic(rd, intrinsic_id);
+            store_back(bytecode, &gl.vars, *dst, dslot, rd);
         }
         I::LastUpdateTime(variable_key, signal_key) => todo!(),
         I::Probe(dst, signal, offset) => {
@@ -592,7 +600,7 @@ fn lower_instruction(
             if dst_size != signal_size {
                 bytecode.mask(rd, rd, dst_size);
             }
-            store_back(bytecode, dslot, rd);
+            store_back(bytecode, &gl.vars, *dst, dslot, rd);
         }
         I::ProbeSlice(variable_key, signal_key, variable_key1) => todo!(),
         I::Drive(signal, src, partial) => {
@@ -691,9 +699,19 @@ fn load_signal_address(
     bytecode.load_u64(dst, at.offset.bit_offset as u64);
 }
 
-fn store_back(bytecode: &mut BytecodeEncoder, slot: Slot, value: Reg) {
+fn store_back(
+    bytecode: &mut BytecodeEncoder,
+    vars: &VariableMap,
+    var: VariableKey,
+    slot: Slot,
+    value: Reg,
+) {
     match slot {
-        Slot::Stack(..) => todo!(),
+        Slot::Stack(..) => {
+            if vars.size(var) <= VSIZE_64 {
+                todo!()
+            }
+        }
         Slot::Register(rd) => {
             let rd = Reg::new_masked(rd);
             bytecode.copy(rd, value);
