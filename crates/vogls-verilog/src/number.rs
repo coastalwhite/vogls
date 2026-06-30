@@ -137,7 +137,7 @@ pub fn parse_decimal_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, ()>
 pub fn take_binary_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, ()> {
     let size = match size {
         None => vogls_ir::bits::parse::num_digits(s)?
-            .checked_mul(VectorSize::new(4u32).unwrap())
+            .checked_mul(VectorSize::new(1u32).unwrap())
             .ok_or(())?,
         Some(s) => s,
     };
@@ -147,7 +147,7 @@ pub fn take_binary_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, ()> {
 pub fn take_octal_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, ()> {
     let size = match size {
         None => vogls_ir::bits::parse::num_digits(s)?
-            .checked_mul(VectorSize::new(4u32).unwrap())
+            .checked_mul(VectorSize::new(3u32).unwrap())
             .ok_or(())?,
         Some(s) => s,
     };
