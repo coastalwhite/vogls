@@ -68,14 +68,13 @@ impl<'a> Consumable<'a> for UdpDeclaration<'a> {
                 input_decls,
             })
         } else {
-            let mut first = true;
             let idents = parse_one_or_more_while::<Identifier>(
                 tkw,
                 sc,
                 arenas,
                 ast,
                 diagnostics.as_deref_mut(),
-                |tkw| std::mem::replace(&mut first, false) || tkw.next_if_equals(T::Comma),
+                |tkw| tkw.next_if_equals(T::Comma),
             )?;
             tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
             tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
