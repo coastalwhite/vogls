@@ -22,6 +22,14 @@ pub struct TracePlugin {
     pub time_offsets: Vec<(u64, usize)>,
 }
 
+/// Simulation plugin to trace all the signals for each changing timestep.
+#[derive(Default, Clone)]
+pub struct UpdateTrackerPlugin {
+    pub tracked: VgHashMap<RtSignalKey, Option<NonMaxUsize>>,
+    pub updated_this_time_step: Vec<RtSignalKey>,
+    pub handles: Vec<SignalHandle>,
+}
+
 pub struct Trace {
     pub trace: Vec<(RtSignalKey, vogls::Bits)>,
     pub time_offsets: Vec<(u64, usize)>,
@@ -99,6 +107,59 @@ impl vogls::runtime::plugins::RuntimePlugin for TracePlugin {
             self.time_offsets.push((state.time, self.trace.len()));
         }
     }
+}
+
+impl vogls::VoglsPlugin for UpdateTrackerPlugin {
+    fn clone(&self) -> Box<dyn vogls::VoglsPlugin> {
+        Box::new(Clone::clone(self))
+    }
+
+    fn register_handles(&mut self, design: &mut ElaboratedDesign<'_>) {
+        self.handles.extend(
+            design
+                .table()
+                .symbol_id_iter()
+                .filter_map(|sid| design.get_signal_handle(sid)),
+        );
+    }
+
+    fn finalize(
+        &mut self,
+        handle_map: &VgHashMap<SignalHandle, RtSignal>,
+        _signal_to_heap: &Arc<[HeapRef]>,
+    ) {
+        for handle in self.handles.drain(..) {
+            let signal = handle_map[&handle];
+            self.tracked.insert(
+                signal.key(),
+                Some(NonMaxUsize::new(self.updated_this_time_step.len()).unwrap()),
+            );
+            self.updated_this_time_step.push(signal.key());
+        }
+    }
+}
+
+impl vogls::runtime::plugins::RuntimePlugin for UpdateTrackerPlugin {
+    fn clone(&self) -> vogls::runtime::plugins::RuntimePluginState {
+        Box::new(Clone::clone(self))
+    }
+
+    fn poke_signal(&mut self, signal: RtSignalKey) {
+        if let Some(idx) = self.tracked.get_mut(&signal) {
+            idx.get_or_insert_with(|| {
+                let idx = NonMaxUsize::new(self.updated_this_time_step.len()).unwrap();
+                self.updated_this_time_step.push(signal);
+                idx
+            });
+        }
+    }
+
+    fn timestep(&mut self, _state: &mut vogls::runtime::RuntimeState) {
+        self.tracked.iter_mut().for_each(|t| *t.1 = None);
+        self.updated_this_time_step.clear();
+    }
+
+    fn finish(&mut self, _state: &mut vogls::runtime::RuntimeState) {}
 }
 
 impl Trace {
