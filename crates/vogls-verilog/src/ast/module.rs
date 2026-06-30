@@ -229,7 +229,7 @@ pub enum GateInstantiation<'a> {
     // Enable(EnableGateInstantiation),
     // Mos(MosGateInstantiation),
     NInput(AstId<'a, NInputGateInstantiation<'a>>),
-    // NOutput(NOutputGateInstantiation),
+    NOutput(AstId<'a, NOutputGateInstantiation<'a>>),
     // PassEn(PassEnGateInstantiation),
     // PassSwitch(PassSwitchGateInstantiation),
     // Pulldown(PulldownGateInstantiation),
@@ -275,6 +275,31 @@ pub enum NInputGateType {
     Nor,
     Xor,
     Xnor,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 493
+// n_output_gatetype [drive_strength] [delay2] n_output_gate_instance { , n_output_gate_instance }
+#[derive(Clone, Copy)]
+pub struct NOutputGateInstantiation<'a> {
+    pub gatetype: AstItem<NOutputGateType>,
+    pub instances: AstIdRange<'a, NOutputGateInstance<'a>>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 494
+// n_output_gate_instance ::= [ name_of_gate_instance ] ( output_terminal { , output_terminal } , input_terminal )
+#[derive(Clone, Copy)]
+pub struct NOutputGateInstance<'a> {
+    pub name: Option<AstId<'a, NameOfGateInstance>>,
+    pub output_terminals: AstIdRange<'a, NetLValue<'a>>,
+    pub input_terminal: AstId<'a, Expr<'a>>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 494
+// n_output_gatetype ::= buf | not
+#[derive(Clone, Copy)]
+pub enum NOutputGateType {
+    Buf,
+    Not,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497

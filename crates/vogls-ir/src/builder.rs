@@ -1180,4 +1180,15 @@ impl BasicBlockBuilder {
         let value = self.constant(gl, value);
         self.slice(gl, value, offset, width)
     }
+
+    /// Convert all X values to Z values.
+    pub fn x_to_z(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
+        match src.mode() {
+            LogicMode::TwoValue => src,
+            LogicMode::FourValue => {
+                let size = gl.vars.size(src);
+                self.and_constant(gl, src, Bits::new_ones(size))
+            },
+        }
+    }
 }

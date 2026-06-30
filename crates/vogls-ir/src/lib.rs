@@ -4,12 +4,12 @@ pub mod evaluation;
 mod form;
 mod format;
 pub mod optimize;
+pub mod orders;
 pub mod parse;
 pub mod token_range;
 mod variable;
 pub mod vcd;
 pub mod watchers;
-pub mod orders;
 
 use std::fmt;
 use std::num::NonZeroU32;
@@ -1144,7 +1144,7 @@ impl BinaryImmOp {
                 }
 
                 let num_ones = imm.count_ones();
-                if num_ones == imm.size().get() {
+                if num_ones == imm.size().get() && src.mode() == LogicMode::TwoValue {
                     return S::Source;
                 } else if num_special == 0 && num_ones == 0 {
                     return S::Immediate;
@@ -1161,7 +1161,7 @@ impl BinaryImmOp {
                 let num_ones = imm.count_ones();
                 if num_ones == imm.size().get() {
                     return S::Immediate;
-                } else if num_special == 0 && num_ones == 0 {
+                } else if num_special == 0 && num_ones == 0 && src.mode() == LogicMode::TwoValue {
                     return S::Source;
                 }
 
@@ -1176,7 +1176,7 @@ impl BinaryImmOp {
                 let num_ones = imm.count_ones();
                 if num_ones == imm.size().get() {
                     return S::Instruction(Instruction::Unary(dst, UnaryOp::Neg, src));
-                } else if num_special == 0 && num_ones == 0 {
+                } else if num_special == 0 && num_ones == 0 && src.mode() == LogicMode::TwoValue {
                     return S::Source;
                 }
 
@@ -1203,21 +1203,27 @@ impl BinaryImmOp {
             }
 
             O::Add | O::Sub => {
-                if imm.eq_zero() {
+                if src.mode() == LogicMode::FourValue {
+                    S::Keep
+                } else if imm.eq_zero() && src.mode() == LogicMode::TwoValue {
                     S::Source
                 } else {
                     S::Keep
                 }
             }
             O::Power => {
-                if imm.eq_one() {
+                if src.mode() == LogicMode::FourValue {
+                    S::Keep
+                } else if imm.eq_one() {
                     S::Source
                 } else {
                     S::Keep
                 }
             }
             O::Multiply => {
-                if imm.eq_zero() {
+                if src.mode() == LogicMode::FourValue {
+                    S::Keep
+                } else if imm.eq_zero() {
                     S::Immediate
                 } else if imm.eq_one() {
                     S::Source
@@ -1226,7 +1232,9 @@ impl BinaryImmOp {
                 }
             }
             O::Divide => {
-                if imm.eq_zero() {
+                if src.mode() == LogicMode::FourValue {
+                    S::Keep
+                } else if imm.eq_zero() {
                     S::Constant(Bits::new_ones(imm.size()))
                 } else if imm.eq_one() {
                     S::Source
@@ -1235,7 +1243,7 @@ impl BinaryImmOp {
                 }
             }
             O::Modulus => {
-                if imm.eq_zero() || imm.eq_one() {
+                if src.mode() == LogicMode::TwoValue && (imm.eq_zero() || imm.eq_one()) {
                     S::Constant(Bits::new_zeroed(imm.size()))
                 } else {
                     S::Keep
@@ -1243,7 +1251,7 @@ impl BinaryImmOp {
             }
             O::RevSub => S::Keep,
             O::RevPower => {
-                if imm.eq_one() {
+                if src.mode() == LogicMode::TwoValue && imm.eq_one() {
                     S::Immediate
                 } else {
                     S::Keep
@@ -1263,7 +1271,9 @@ impl BinaryImmOp {
                 }
             }
             O::Min => {
-                if imm.eq_zero() {
+                if src.mode() == LogicMode::TwoValue {
+                    S::Keep
+                } else if imm.eq_zero() {
                     S::Immediate
                 } else if imm.count_ones() == imm.size().get() {
                     S::Source
@@ -1272,7 +1282,9 @@ impl BinaryImmOp {
                 }
             }
             O::Max => {
-                if imm.count_ones() == imm.size().get() {
+                if src.mode() == LogicMode::TwoValue {
+                    S::Keep
+                } else if imm.count_ones() == imm.size().get() {
                     S::Immediate
                 } else if imm.eq_zero() {
                     S::Source

@@ -9,8 +9,9 @@ use vogls_utils::OrderedSet;
 use crate::ast::module::{
     Dimension, GateInstantiation, GenerateBlock, ListOfPortConnections, ModuleInstance,
     ModuleInstantiation, ModuleOrGenerateItem, ModuleOrGenerateItemContent,
-    ModuleOrGenerateItemDeclaration, NInputGateInstance, NInputGateType, NamedPortConnection,
-    NetDeclAssignment, NetDeclarationNets, VariableType, VariableTypeVariant,
+    ModuleOrGenerateItemDeclaration, NInputGateInstance, NInputGateType, NOutputGateInstance,
+    NOutputGateType, NamedPortConnection, NetDeclAssignment, NetDeclarationNets, VariableType,
+    VariableTypeVariant,
 };
 use crate::ast::udp::{UdpInstance, UdpInstantiation};
 use crate::ast::{AstId, AstIdRange};
@@ -259,6 +260,63 @@ pub fn lower<'a>(
                             value,
                             VType::UnsignedNet(output_size),
                         )?;
+
+                        bb_builder.watch_to(mctx.gl(), ins.items, bb_key);
+                        process.finalize(mctx.gl());
+                    }
+                }
+                GateInstantiation::NOutput(id) => {
+                    let noutput_gate_instantiation = &**id;
+                    for instance in noutput_gate_instantiation.instances.iter() {
+                        let NOutputGateInstance {
+                            name: _,
+                            output_terminals,
+                            input_terminal,
+                        } = &*instance;
+
+                        let (process, mut bb_builder) = ProcessBuilder::new(
+                            mctx.gl(),
+                            ProcessKind::Udp,
+                            ctx.arenas.get_span(*id),
+                        );
+                        let bb_key = bb_builder.key();
+
+                        let mut ins = OrderedSet::new();
+                        get_used_signals(ctx, mctx, scope, &mut ins, *input_terminal)?;
+                        for output_terminal in output_terminals.iter() {
+                            let output_size = net_lvalue_width(ctx, mctx, scope, output_terminal)?;
+                            let (value, value_ty) = lower_expr(
+                                ctx,
+                                mctx,
+                                scope,
+                                &mut bb_builder,
+                                *input_terminal,
+                                Some(output_size),
+                            )?;
+                            let mut value = truncate_or_extend(
+                                mctx.gl(),
+                                &mut bb_builder,
+                                value,
+                                value_ty,
+                                output_size,
+                            );
+                            match noutput_gate_instantiation.gatetype.item {
+                                NOutputGateType::Buf => value = bb_builder.x_to_z(mctx.gl(), value),
+                                NOutputGateType::Not => {
+                                    value = bb_builder.binary_neg(mctx.gl(), value);
+                                }
+                            }
+
+                            assign_net_lvalue(
+                                ctx,
+                                mctx,
+                                scope,
+                                &mut bb_builder,
+                                output_terminal,
+                                value,
+                                VType::UnsignedNet(output_size),
+                            )?;
+                        }
 
                         bb_builder.watch_to(mctx.gl(), ins.items, bb_key);
                         process.finalize(mctx.gl());

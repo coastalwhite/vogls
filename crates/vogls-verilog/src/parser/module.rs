@@ -4,7 +4,21 @@ use crate::ast::constant_expr::{
 };
 use crate::ast::expr::Expr;
 use crate::ast::module::{
-    AlwaysConstruct, BlockItemDeclaration, CaseGenerateConstruct, CaseGenerateItem, CaseGeneratePattern, ContinousAssign, Dimension, FunctionDeclaration, FunctionRangeOrType, GateInstantiation, GenerateBlock, GenerateRegion, GenvarAssignment, GenvarDeclaration, IfGenerateConstruct, InitialConstruct, InoutDeclaration, InputDeclaration, IntegerDeclaration, ListOfPortConnections, LocalParameterDeclaration, LoopGenerateConstruct, Module, ModuleInstance, ModuleInstantiation, ModuleItem, ModuleOrGenerateItem, ModuleOrGenerateItemContent, ModuleOrGenerateItemDeclaration, ModulePorts, NInputGateInstance, NInputGateInstantiation, NInputGateType, NameOfGateInstance, NamedParameterAssignment, NamedPortConnection, NetAssignment, NetDeclAssignment, NetDeclaration, NetDeclarationNets, NetIdent, NetType, NonPortModuleItem, OutputDeclaration, OutputNet, ParamAssignment, ParameterDeclaration, ParameterDeclarationTyping, ParameterValueAssignment, Port, PortDeclaration, PortExpression, PortReference, Range, RegDeclaration, TaskDeclaration, TaskPortItem, TaskPortItemContent, TfInoutDeclaration, TfInputDeclaration, TfOutputDeclaration, TfType, TimeScale, VariableType, VariableTypeVariant
+    AlwaysConstruct, BlockItemDeclaration, CaseGenerateConstruct, CaseGenerateItem,
+    CaseGeneratePattern, ContinousAssign, Dimension, FunctionDeclaration, FunctionRangeOrType,
+    GateInstantiation, GenerateBlock, GenerateRegion, GenvarAssignment, GenvarDeclaration,
+    IfGenerateConstruct, InitialConstruct, InoutDeclaration, InputDeclaration, IntegerDeclaration,
+    ListOfPortConnections, LocalParameterDeclaration, LoopGenerateConstruct, Module,
+    ModuleInstance, ModuleInstantiation, ModuleItem, ModuleOrGenerateItem,
+    ModuleOrGenerateItemContent, ModuleOrGenerateItemDeclaration, ModulePorts, NInputGateInstance,
+    NInputGateInstantiation, NInputGateType, NOutputGateInstance, NOutputGateInstantiation,
+    NOutputGateType, NameOfGateInstance, NamedParameterAssignment, NamedPortConnection,
+    NetAssignment, NetDeclAssignment, NetDeclaration, NetDeclarationNets, NetIdent, NetType,
+    NonPortModuleItem, OutputDeclaration, OutputNet, ParamAssignment, ParameterDeclaration,
+    ParameterDeclarationTyping, ParameterValueAssignment, Port, PortDeclaration, PortExpression,
+    PortReference, Range, RegDeclaration, TaskDeclaration, TaskPortItem, TaskPortItemContent,
+    TfInoutDeclaration, TfInputDeclaration, TfOutputDeclaration, TfType, TimeScale, VariableType,
+    VariableTypeVariant,
 };
 use crate::ast::specify::{
     EdgeIdentifier, ModulePathExpr, PathDeclaration, PathDeclarationVariant, PathDelayValue,
@@ -13,7 +27,7 @@ use crate::ast::specify::{
 };
 use crate::ast::statement::{NetLValue, Statement, StatementOrNull, SystemTaskIdentifier};
 use crate::ast::udp::UdpInstantiation;
-use crate::ast::{AttributeInstance, Identifier};
+use crate::ast::{AstIdRange, AttributeInstance, Identifier};
 use crate::parser::TokenRange;
 use crate::tokenizer::Token;
 
@@ -1128,7 +1142,9 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItemContent<'a> {
             | T::KeywordOr
             | T::KeywordNor
             | T::KeywordXor
-            | T::KeywordXnor => {
+            | T::KeywordXnor
+            | T::KeywordBuf
+            | T::KeywordNot => {
                 let gate_instance =
                     parse::<GateInstantiation>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
                 Ok(Self::GateInstantiation(gate_instance))
@@ -1576,6 +1592,16 @@ impl<'a> Consumable<'a> for GateInstantiation<'a> {
                 )?;
                 Ok(Self::NInput(n_input_gate_instantiation))
             }
+            T::KeywordBuf | T::KeywordNot => {
+                let n_output_gate_instantiation = parse::<NOutputGateInstantiation>(
+                    tkw,
+                    sc,
+                    arenas,
+                    ast,
+                    diagnostics.as_deref_mut(),
+                )?;
+                Ok(Self::NOutput(n_output_gate_instantiation))
+            }
             _ => {
                 diagnostics.map(|d| d.incomplete(tkw.offset, "gate_instantiation"));
                 Err(())
@@ -1680,6 +1706,100 @@ impl<'a> Consumable<'a> for NInputGateInstance<'a> {
             name,
             output_terminal,
             input_terminals,
+        })
+    }
+}
+
+impl<'a> Consumable<'a> for NOutputGateInstantiation<'a> {
+    fn consume(
+        tkw: &mut TokenWalker<'_>,
+        sc: &mut ParserScratches<'a>,
+        arenas: &mut AstArenas,
+        ast: &'a Arena,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 493
+        // n_output_gatetype [drive_strength] [delay2] n_output_gate_instance { , n_output_gate_instance }
+
+        let gatetype =
+            item_parse::<NOutputGateType>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+        // @Incomplete: drive_strength
+        // @Incomplete: delay2
+        let instances = parse_one_or_more_delimited::<NOutputGateInstance>(
+            tkw,
+            sc,
+            arenas,
+            ast,
+            T::Comma,
+            diagnostics.as_deref_mut(),
+        )?;
+        tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+
+        Ok(Self {
+            gatetype,
+            instances,
+        })
+    }
+}
+
+impl<'a> Consumable<'a> for NOutputGateType {
+    fn consume(
+        tkw: &mut TokenWalker<'_>,
+        _sc: &mut ParserScratches<'a>,
+        _arenas: &mut AstArenas,
+        _ast: &'a Arena,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 494
+        // n_output_gatetype ::= buf | not
+
+        let t = tkw.try_next(diagnostics.as_deref_mut())?;
+        let value = match *t.kind {
+            T::KeywordBuf => Self::Buf,
+            T::KeywordNot => Self::Not,
+            t => {
+                diagnostics.map(|d| d.unexpected_token(tkw.offset, t));
+                return Err(());
+            }
+        };
+
+        Ok(value)
+    }
+}
+
+impl<'a> Consumable<'a> for NOutputGateInstance<'a> {
+    fn consume(
+        tkw: &mut TokenWalker<'_>,
+        sc: &mut ParserScratches<'a>,
+        arenas: &mut AstArenas,
+        ast: &'a Arena,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 494
+        // n_output_gate_instance ::= [ name_of_gate_instance ] ( output_terminal { , output_terminal } , input_terminal )
+
+        let name = try_parse::<NameOfGateInstance>(tkw, sc, arenas, ast);
+        tkw.next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
+        let output_terminal = parse::<NetLValue>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+        let output_terminals = AstIdRange::single(output_terminal);
+        tkw.next_expect(T::Comma, diagnostics.as_deref_mut())?;
+        let input_terminal = parse::<Expr>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+        if tkw.is_next_equal_to(T::Comma) {
+            diagnostics.map(|d| d.incomplete(tkw.offset, "Multi output gate like this"));
+            return Err(());
+        }
+        tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
+
+        Ok(Self {
+            name,
+            output_terminals,
+            input_terminal,
         })
     }
 }
