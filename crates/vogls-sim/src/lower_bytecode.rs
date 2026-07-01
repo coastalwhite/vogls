@@ -1,5 +1,5 @@
 use vogls_codegen::lsra::{Slot, StackItemKind, StackOffsets, StackTracker};
-use vogls_codegen::{HeapOffset, HeapRef, insert_bb_phis, resolve_var_logic_mode_map};
+use vogls_codegen::{HeapBuilder, HeapOffset, HeapRef, insert_bb_phis, resolve_var_logic_mode_map};
 use vogls_ir::watchers::WatchMap;
 use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, Bits, ContextFormat,
@@ -10,8 +10,8 @@ use vogls_runtime::RtSignalKey;
 use vogls_utils::{NonMaxU16, VgHashMap, VgHashSet};
 
 use crate::bytecode::{
-    BitwiseOp, Bytecode, BytecodeEncoder, BytecodeKind, BytecodeListeners, EncJump, EncRelJump,
-    Encoding, InstructionPtr, IntrinsicOpEqWrap, Reg, Schedule, SixBitSize,
+    Bytecode, BytecodeEncoder, BytecodeKind, BytecodeListeners, EncJump, EncRelJump, Encoding,
+    InstructionPtr, IntrinsicOpEqWrap, Reg, Schedule, SixBitSize,
 };
 
 enum JumpKind {
@@ -23,6 +23,7 @@ pub fn lower_process_to_bytecode(
     process: ProcessKey,
     gl: &GlobalContext,
     stack_tracker: &mut StackTracker,
+    heap: &mut HeapBuilder,
     max_stack_words: &mut usize,
     watch_map: &WatchMap,
     schedule: &mut Schedule,
@@ -83,6 +84,7 @@ pub fn lower_process_to_bytecode(
             &post_order,
             &gl.vars,
             &gl.bbs,
+            heap,
             &mut assignment,
             stack_tracker,
             9,
@@ -229,15 +231,14 @@ fn lower_instruction(
     use Instruction as I;
     match instr {
         I::Constant(dst, value) => {
-            let dslot = assignment[dst];
-            let rd = to_reg(bytecode, *dst, &gl.vars, dslot, stack_offsets, T0);
-
-            if value.size() > VSIZE_64 {
-                todo!()
+            // @NOTE:
+            // Constants with size greater than 64 are stored on the heap and referenced on there.
+            if value.size() <= VSIZE_64 {
+                let dslot = assignment[dst];
+                let rd = to_reg(bytecode, *dst, &gl.vars, dslot, stack_offsets, T0);
+                bytecode.load_bits_into_register(rd, dst.mode(), value);
+                store_back(bytecode, &gl.vars, *dst, dslot, rd);
             }
-
-            bytecode.load_bits_into_register(rd, dst.mode(), value);
-            store_back(bytecode, &gl.vars, *dst, dslot, rd);
         }
         I::Unary(dst, op, src) => {
             let dslot = assignment[dst];
@@ -248,34 +249,44 @@ fn lower_instruction(
 
             use LogicMode as M;
             use UnaryOp as O;
-            if let Some(src_size) = SixBitSize::from_vector_size(src_size) {
-                match (op, dst.mode(), src.mode()) {
-                    (O::Neg, M::TwoValue, _) => bytecode.not(rd, rs, src_size),
-                    (O::Neg, M::FourValue, _) => bytecode.fv_not(rd, rs),
-                    (O::ReduceOr, M::TwoValue, _) => bytecode.cnei(rd, rs, 0, src_size),
-                    (O::ReduceOr, M::FourValue, _) => bytecode.fv_reduce_or(rd, rs, src_size),
-                    (O::ReduceAnd, M::TwoValue, _) => bytecode.ceqi(rd, rs, -1, src_size),
-                    (O::ReduceAnd, M::FourValue, _) => bytecode.fv_reduce_and(rd, rs, src_size),
-                    (O::ReduceXor, M::TwoValue, _) => {
-                        bytecode.count_ones(rd, rs);
-                        bytecode.truncate(rd, rd, SixBitSize::SCALAR);
-                    }
-                    (O::ReduceXor, M::FourValue, _) => bytecode.fv_reduce_xor(rd, rs, src_size),
-                    (O::LeadingZeros, M::TwoValue, _) => todo!(),
-                    (O::LeadingZeros, M::FourValue, _) => todo!(),
-                    (O::TvToFv, ..) => {
-                        // @Performance: better lowering.
-                        let (spc, val) = reg_as_fv(rd);
-                        bytecode.copy(val, rs);
-                        bytecode.load_u64(spc, src_size.mask(u64::MAX));
-                    }
-                    (O::FvToTv, ..) => {
-                        let (spc, val) = reg_as_fv(rs);
-                        bytecode.and(rd, spc, val)
-                    }
+            match (
+                op,
+                dst.mode(),
+                src.mode(),
+                SixBitSize::from_vector_size(src_size),
+            ) {
+                (O::Neg, M::TwoValue, _, Some(src_size)) => bytecode.not(rd, rs, src_size),
+                (O::Neg, M::FourValue, _, Some(_)) => bytecode.fv_not(rd, rs),
+                (O::ReduceOr, M::TwoValue, _, Some(src_size)) => bytecode.cnei(rd, rs, 0, src_size),
+                (O::ReduceOr, M::FourValue, _, Some(src_size)) => {
+                    bytecode.fv_reduce_or(rd, rs, src_size)
                 }
-            } else {
-                todo!()
+                (O::ReduceAnd, M::TwoValue, _, Some(src_size)) => {
+                    bytecode.ceqi(rd, rs, -1, src_size)
+                }
+                (O::ReduceAnd, M::FourValue, _, Some(src_size)) => {
+                    bytecode.fv_reduce_and(rd, rs, src_size)
+                }
+                (O::ReduceXor, M::TwoValue, _, Some(_)) => {
+                    bytecode.count_ones(rd, rs);
+                    bytecode.truncate(rd, rd, SixBitSize::SCALAR);
+                }
+                (O::ReduceXor, M::FourValue, _, Some(src_size)) => {
+                    bytecode.fv_reduce_xor(rd, rs, src_size)
+                }
+                (O::LeadingZeros, M::TwoValue, _, Some(_)) => todo!(),
+                (O::LeadingZeros, M::FourValue, _, Some(_)) => todo!(),
+                (O::TvToFv, _, _, Some(src_size)) => {
+                    // @Performance: better lowering.
+                    let (spc, val) = reg_as_fv(rd);
+                    bytecode.copy(val, rs);
+                    bytecode.load_u64(spc, src_size.mask(u64::MAX));
+                }
+                (O::FvToTv, _, _, Some(_)) => {
+                    let (spc, val) = reg_as_fv(rs);
+                    bytecode.and(rd, spc, val)
+                }
+                (_, _, _, None) => todo!(),
             }
 
             store_back(bytecode, &gl.vars, *dst, dslot, rd);
@@ -345,6 +356,7 @@ fn lower_instruction(
             let rs2 = to_reg(bytecode, *rhs, &gl.vars, assignment[rhs], stack_offsets, T2);
 
             let dst_size = gl.vars.size(*dst);
+            let lhs_size = gl.vars.size(*lhs);
 
             use BinaryOp as O;
             use LogicMode as M;
@@ -389,10 +401,16 @@ fn lower_instruction(
                 (O::CopyZ, ..) => todo!(),
                 (O::Min, ..) => todo!(),
                 (O::Max, ..) => todo!(),
+
                 (O::CaseEquality, _, Some(_), M::TwoValue, _) => bytecode.ceq(rd, rs1, rs2),
-                (O::CaseEquality, _, None, M::TwoValue, _) => todo!(),
+                (O::CaseEquality, _, None, M::TwoValue, _) => {
+                    bytecode.heap_tv_ceq(rd, rs1, rs2, lhs_size)
+                }
                 (O::CaseEquality, _, Some(_), M::FourValue, _) => bytecode.fv_ceq(rd, rs1, rs2),
-                (O::CaseEquality, _, None, M::FourValue, _) => todo!(),
+                (O::CaseEquality, _, None, M::FourValue, _) => {
+                    bytecode.heap_fv_ceq(rd, rs1, rs2, lhs_size)
+                }
+
                 (O::Posedge, _, _, M::TwoValue, _) => {
                     bytecode.and_not(rd, rs2, rs1, SixBitSize::SCALAR)
                 }
@@ -642,6 +660,10 @@ fn to_reg(
     backup: Reg,
 ) -> Reg {
     match slot {
+        Slot::Heap(offset) => {
+            bytecode.load_u64(backup, offset);
+            backup
+        }
         Slot::Stack(kind, offset) => {
             let kind_offset = match kind {
                 StackItemKind::B1 => 0,
@@ -696,6 +718,7 @@ fn store_back(
     value: Reg,
 ) {
     match slot {
+        Slot::Heap(..) => unreachable!(),
         Slot::Stack(..) => {
             if vars.size(var) <= VSIZE_64 {
                 todo!()

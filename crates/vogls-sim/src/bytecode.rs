@@ -259,6 +259,19 @@ struct EncHeapBitwiseReg {
 }
 
 #[derive(Default)]
+struct EncHeapCaseEq {
+    rd: Reg,
+    rs1: Reg,
+    rs2: Reg,
+
+    fv: bool,
+    ne: bool,
+
+    // None: Size is in X12.
+    size: Option<VectorSize>,
+}
+
+#[derive(Default)]
 struct EncHeapUnaryReg {
     rd: Reg,
     rs: Reg,
@@ -504,6 +517,30 @@ impl Encoding for EncHeapBitwiseReg {
             | ((self.rs2 as u32) << 16)
             | ((self.op as u32) << 20)
             | (self.size.map_or(0, |v| v.get()) << 24)
+    }
+}
+
+impl Encoding for EncHeapCaseEq {
+    #[inline(always)]
+    fn extract(bytecode: Bytecode) -> Self {
+        let v = bytecode.0;
+        Self {
+            rd: Reg::new_masked(v >> 8),
+            rs1: Reg::new_masked(v >> 12),
+            rs2: Reg::new_masked(v >> 16),
+            fv: (v >> 20) & 1 != 0,
+            ne: (v >> 21) & 1 != 0,
+            size: VectorSize::new(v >> 22),
+        }
+    }
+    #[inline(always)]
+    fn encode(self) -> u32 {
+        ((self.rd as u32) << 8)
+            | ((self.rs1 as u32) << 12)
+            | ((self.rs2 as u32) << 16)
+            | ((self.fv as u32) << 20)
+            | ((self.ne as u32) << 21)
+            | (self.size.map_or(0, |v| v.get()) << 22)
     }
 }
 
@@ -1241,6 +1278,11 @@ define_instructions! {
             { write!(f, "{rd}, {rs1}, {rs2}") }
             ()
             ()
+        heap_case_eq (EncHeapCaseEq { rd: Reg, rs1: Reg, rs2: Reg, fv: bool, ne: bool, size: Option<VectorSize> })
+            { execute_heap_case_eq(state, regs, rd, rs1, rs2, fv, ne, size) }
+            { write!(f, "{rd}, {rs1}, {rs2}") }
+            ()
+            ()
 
         heap_unary (EncHeapUnaryReg { rd: Reg, rs: Reg, imm16: u16 })
             { execute_heap_unary(state, regs, rd, rs, imm16); }
@@ -1661,6 +1703,23 @@ impl BytecodeEncoder {
         };
         self.tv_heap_bitwise(rd, rs1, rs2, op, size);
     }
+    fn heap_ceq(
+        &mut self,
+        rd: Reg,
+        rs1: Reg,
+        rs2: Reg,
+        fv: bool,
+        ne: bool,
+        size: VectorSize,
+    ) {
+        let size = if size.get() >= (1u32 << 10) {
+            self.load_u64(Reg::X12, size.get() as u64);
+            None
+        } else {
+            Some(size)
+        };
+        self.heap_case_eq(rd, rs1, rs2, fv, ne, size);
+    }
 
     pub fn heap_tv_and(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
         self.heap_tv_bitwise(rd, rs1, rs2, BitwiseOp::TvAnd, size);
@@ -1679,6 +1738,19 @@ impl BytecodeEncoder {
     }
     pub fn heap_fv_xor(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
         self.heap_tv_bitwise(rd, rs1, rs2, BitwiseOp::FvXor, size);
+    }
+
+    pub fn heap_tv_ceq(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_ceq(rd, rs1, rs2, false, false, size);
+    }
+    pub fn heap_tv_cne(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_ceq(rd, rs1, rs2, false, true, size);
+    }
+    pub fn heap_fv_ceq(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_ceq(rd, rs1, rs2, true, false, size);
+    }
+    pub fn heap_fv_cne(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_ceq(rd, rs1, rs2, true, true, size);
     }
 
     pub fn stack_offset(&mut self, rd: Reg, kind: StackItemKind, offset: u64) {
@@ -1967,4 +2039,37 @@ pub fn execute_heap_bitwise(
         O::FvSub => todo!(),
         O::FvMul => todo!(),
     }
+}
+
+pub fn execute_heap_case_eq(
+    state: &mut RuntimeState,
+    regs: &mut Regs,
+    rd: Reg,
+    rs1: Reg,
+    rs2: Reg,
+    fv: bool,
+    ne: bool,
+    size: Option<VectorSize>,
+) {
+    let size = size.unwrap_or_else(|| VectorSize::new(regs[Reg::X12] as u32).unwrap());
+    let mut num_words = size.get().div_ceil(64) as usize;
+    if fv {
+        num_words *= 2;
+    }
+    let src1 = state.heap.get_u64_slice(
+        HeapOffset {
+            bit_offset: (regs[rs1] * 64) as usize,
+        },
+        num_words,
+    );
+    let src2 = state.heap.get_u64_slice(
+        HeapOffset {
+            bit_offset: (regs[rs2] * 64) as usize,
+        },
+        num_words,
+    );
+
+    let is_eq = src1 == src2;
+
+    regs[rd] = u64::from(is_eq ^ ne);
 }

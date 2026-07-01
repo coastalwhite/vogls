@@ -226,6 +226,7 @@ impl LoweredDesign {
                     process,
                     &self.gl,
                     &mut stack_tracker,
+                    &mut heap_builder,
                     &mut num_stack_words,
                     &watch_map,
                     &mut schedule,

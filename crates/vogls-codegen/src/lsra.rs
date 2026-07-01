@@ -5,9 +5,12 @@ use std::collections::VecDeque;
 
 use slotmap::SlotMap;
 use vogls_ir::{
-    BasicBlock, BasicBlockKey, LogicMode, VSIZE_32, VSIZE_64, VariableKey, VariableMap, VectorSize,
+    BasicBlock, BasicBlockKey, Instruction, LogicMode, VSIZE_32, VSIZE_64, VariableKey,
+    VariableMap, VectorSize,
 };
 use vogls_utils::{Bitset, IndexSet, VgHashMap};
+
+use crate::HeapBuilder;
 
 #[derive(Default)]
 pub struct StackTracker {
@@ -165,6 +168,7 @@ impl Interval {
 
 #[derive(Clone, Copy, Debug)]
 pub enum Slot {
+    Heap(u64),
     Stack(StackItemKind, u32),
     Register(u32),
 }
@@ -173,6 +177,7 @@ pub fn linear_scan_register_allocation(
     post_order_bbs: &[BasicBlockKey],
     var_map: &VariableMap,
     bbs: &SlotMap<BasicBlockKey, BasicBlock>,
+    heap_builder: &mut HeapBuilder,
     assignment: &mut VgHashMap<VariableKey, Slot>,
     stack_tracker: &mut StackTracker,
     num_registers: u32,
@@ -202,11 +207,17 @@ pub fn linear_scan_register_allocation(
         live_in.insert(bb, Bitset::zeroed(vars.len()));
 
         for i in bbs[bb].instrs.iter().rev() {
+            if let Instruction::Constant(dst, value) = i
+                && value.size() > VSIZE_64
+            {
+                let offset = heap_builder.claim_constant(dst.mode(), value.clone_lowering_mode());
+                assignment.insert(*dst, Slot::Heap(offset.offset.bit_offset as u64));
+            }
             if let Some(dst) = i.get_destination_variable() {
                 k.get_mut().set(vars.get_index(&dst).unwrap(), true);
             }
             i.for_each_src(|src| {
-                // Temporal variables might be None here.
+                // Constant variables might be None here.
                 if let Some(src) = vars.get_index(&src) {
                     g.get_mut().set(src, true);
                 }
@@ -288,11 +299,10 @@ pub fn linear_scan_register_allocation(
 
         for (i, instr) in bbs[bb].instrs.iter().enumerate().rev() {
             let inum = block_from + i as u64 * 2;
-            if let Some(dst) = instr.get_destination_variable() {
-                // Don't handle temporal variables.
-                if assignment.contains_key(&dst) {
-                    return;
-                }
+            if let Some(dst) = instr.get_destination_variable()
+ 
+                // Don't insert intervals for constants.
+                && !assignment.contains_key(&dst) {
 
                 let size = var_map.size(dst);
                 let interval = intervals
@@ -336,7 +346,6 @@ pub fn linear_scan_register_allocation(
     assignment.reserve(intervals.len());
 
     let mut intervals = intervals.into_iter().collect::<Vec<_>>();
-    let mut _num_stack_slots = 0usize;
     intervals.sort_unstable_by_key(|(_, i)| i.start);
 
     for (i, (var, interval)) in intervals.iter().enumerate() {
@@ -349,6 +358,7 @@ pub fn linear_scan_register_allocation(
                     false
                 } else {
                     match slot {
+                        Slot::Heap(_) => debug_assert!(false),
                         Slot::Register(r) => {
                             let mask = 1u64 | (u64::from(mode == LogicMode::FourValue) << 1);
                             active_registers ^= mask << r
@@ -428,7 +438,6 @@ pub fn linear_scan_register_allocation(
             };
             let offset = offset.try_into().expect("Too large");
             let slot = Slot::Stack(StackItemKind::from_size(interval.size), offset);
-            _num_stack_slots += 1;
 
             let (spill_var, spill_interval) = intervals[*spill_i];
             if spill_interval.end > interval.end {
