@@ -40,17 +40,6 @@ pub fn tv_addition_subtraction(
             && size.get().div_ceil(64) as usize == dst.len()
     );
 
-    if dst.len() == 1 {
-        let (lhs, rhs) = (lhs[0], rhs[0]);
-        if subtract {
-            dst[0] = lhs.wrapping_sub(rhs);
-        } else {
-            dst[0] = lhs.wrapping_add(rhs);
-        }
-        dst[0] &= 1u64.unbounded_shl(size.get()).wrapping_sub(1);
-        return;
-    }
-
     let mut carry_in = subtract;
     let mask = if subtract { !0u64 } else { 0u64 };
     for i in 0..dst.len() {

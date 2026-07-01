@@ -356,43 +356,26 @@ fn lower_instruction(
                 rhs.mode(),
             ) {
                 (O::And, M::TwoValue, Some(_), _, _) => bytecode.and(rd, rs1, rs2),
-                (O::And, M::TwoValue, None, _, _) => {
-                    let size = to_8bit_size(bytecode, dst_size);
-                    bytecode.tv_heap_bitwise(rd, rs1, rs2, BitwiseOp::And, size)
-                }
+                (O::And, M::TwoValue, None, _, _) => bytecode.heap_tv_and(rd, rs1, rs2, dst_size),
                 (O::And, M::FourValue, Some(_), _, _) => bytecode.fv_and(rd, rs1, rs2),
-                (O::And, M::FourValue, None, _, _) => todo!(),
+                (O::And, M::FourValue, None, _, _) => bytecode.heap_fv_and(rd, rs1, rs2, dst_size),
                 (O::Or, M::TwoValue, Some(_), _, _) => bytecode.or(rd, rs1, rs2),
-                (O::Or, M::TwoValue, None, _, _) => {
-                    let size = to_8bit_size(bytecode, dst_size);
-                    bytecode.tv_heap_bitwise(rd, rs1, rs2, BitwiseOp::Or, size)
-                }
+                (O::Or, M::TwoValue, None, _, _) => bytecode.heap_tv_or(rd, rs1, rs2, dst_size),
                 (O::Or, M::FourValue, Some(_), _, _) => bytecode.fv_or(rd, rs1, rs2),
-                (O::Or, M::FourValue, None, _, _) => todo!(),
+                (O::Or, M::FourValue, None, _, _) => bytecode.heap_fv_or(rd, rs1, rs2, dst_size),
                 (O::Xor, M::TwoValue, Some(_), _, _) => bytecode.xor(rd, rs1, rs2),
-                (O::Xor, M::TwoValue, None, _, _) => {
-                    let size = to_8bit_size(bytecode, dst_size);
-                    bytecode.tv_heap_bitwise(rd, rs1, rs2, BitwiseOp::Xor, size)
-                }
+                (O::Xor, M::TwoValue, None, _, _) => bytecode.heap_tv_xor(rd, rs1, rs2, dst_size),
                 (O::Xor, M::FourValue, Some(_), _, _) => bytecode.fv_xor(rd, rs1, rs2),
-                (O::Xor, M::FourValue, None, _, _) => todo!(),
+                (O::Xor, M::FourValue, None, _, _) => bytecode.heap_fv_xor(rd, rs1, rs2, dst_size),
+
                 (O::Add, M::TwoValue, Some(size), _, _) => bytecode.add(rd, rs1, rs2, size),
-                (O::Add, M::TwoValue, None, _, _) => {
-                    let size = to_8bit_size(bytecode, dst_size);
-                    bytecode.tv_heap_bitwise(rd, rs1, rs2, BitwiseOp::Add, size)
-                }
+                (O::Add, M::TwoValue, None, _, _) => todo!(),
                 (O::Add, M::FourValue, _, _, _) => todo!(),
                 (O::Sub, M::TwoValue, Some(size), _, _) => bytecode.sub(rd, rs1, rs2, size),
-                (O::Sub, M::TwoValue, None, _, _) => {
-                    let size = to_8bit_size(bytecode, dst_size);
-                    bytecode.tv_heap_bitwise(rd, rs1, rs2, BitwiseOp::Sub, size)
-                }
+                (O::Sub, M::TwoValue, None, _, _) => todo!(),
                 (O::Sub, M::FourValue, _, _, _) => todo!(),
                 (O::Multiply, M::TwoValue, Some(size), _, _) => bytecode.mul(rd, rs1, rs2, size),
-                (O::Multiply, M::TwoValue, None, _, _) => {
-                    let size = to_8bit_size(bytecode, dst_size);
-                    bytecode.tv_heap_bitwise(rd, rs1, rs2, BitwiseOp::Mul, size)
-                }
+                (O::Multiply, M::TwoValue, None, _, _) => todo!(),
                 (O::Multiply, M::FourValue, _, _, _) => todo!(),
                 (O::Power, ..) => todo!(),
                 (O::Divide, ..) => todo!(),
@@ -410,8 +393,14 @@ fn lower_instruction(
                 (O::CaseEquality, _, None, M::TwoValue, _) => todo!(),
                 (O::CaseEquality, _, Some(_), M::FourValue, _) => bytecode.fv_ceq(rd, rs1, rs2),
                 (O::CaseEquality, _, None, M::FourValue, _) => todo!(),
-                (O::Posedge, ..) => todo!(),
-                (O::Negedge, ..) => todo!(),
+                (O::Posedge, _, _, M::TwoValue, _) => {
+                    bytecode.and_not(rd, rs2, rs1, SixBitSize::SCALAR)
+                }
+                (O::Posedge, _, _, M::FourValue, _) => bytecode.fv_posedge(rd, rs1, rs2),
+                (O::Negedge, _, _, M::TwoValue, _) => {
+                    bytecode.and_not(rd, rs1, rs2, SixBitSize::SCALAR)
+                }
+                (O::Negedge, _, _, M::FourValue, _) => bytecode.fv_negedge(rd, rs1, rs2),
             }
 
             store_back(bytecode, &gl.vars, *dst, dslot, rd);

@@ -3,13 +3,14 @@ use std::ops::{Index, IndexMut};
 
 use vogls_bits::BitsDataRef;
 use vogls_bits::arithmetic::{
-    FvLogicValue, fv_bitwise_and_elem, fv_bitwise_inv_elem, fv_bitwise_or_elem,
-    fv_bitwise_xor_elem, fv_reduce_and_elem, fv_reduce_or_elem, fv_reduce_xor_elem, tv_addition,
-    tv_bin_u64_bitwise_op, tv_multiplication, tv_subtraction,
+    FvLogicValue, fv_bin_u64_cell_bitwise_op, fv_bitwise_and_elem, fv_bitwise_andnot_elem,
+    fv_bitwise_inv_elem, fv_bitwise_or_elem, fv_bitwise_ornot_elem, fv_bitwise_xor_elem,
+    fv_reduce_and_elem, fv_reduce_or_elem, fv_reduce_xor_elem,
+    tv_bin_u64_cell_bitwise_mask_last_op, tv_bin_u64_cell_bitwise_op,
 };
-use vogls_bits::extend::{fv_l_sign_extend, fv_l_zero_extend, tv_l_sign_extend, tv_l_zero_extend};
+use vogls_bits::extend::tv_l_zero_extend;
 use vogls_bits::format::{BitsFormatBase, BitsFormatWidth};
-use vogls_bits::truncate::{fv_l_truncate, tv_l_truncate};
+use vogls_bits::truncate::tv_l_truncate;
 use vogls_codegen::lsra::StackItemKind;
 use vogls_codegen::{HeapOffset, HeapRef};
 
@@ -22,6 +23,7 @@ pub struct Design {
     pub bytecode: Vec<Bytecode>,
     pub intrinsics: Vec<IntrinsicOp>,
     pub stack_offset: u64,
+    pub itrace: bool,
 }
 pub struct State {
     pub runtime: RuntimeState,
@@ -264,30 +266,52 @@ struct EncHeapUnaryReg {
     imm16: u16,
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone, Copy)]
 pub enum BitwiseOp {
     #[default]
-    And,
-    Or,
-    Xor,
-    AndNot,
-    OrNot,
-    Add,
-    Sub,
-    Mul,
+    TvAnd,
+    TvOr,
+    TvXor,
+    TvAndNot,
+    TvOrNot,
+    TvAdd,
+    TvSub,
+    TvMul,
+
+    FvAnd,
+    FvOr,
+    FvXor,
+    FvAndNot,
+    FvOrNot,
+    FvAdd,
+    FvSub,
+    FvMul,
 }
 impl BitwiseOp {
     fn new_masked(v: u32) -> Self {
-        match v & 0x7 {
-            0 => Self::And,
-            1 => Self::Or,
-            2 => Self::Xor,
-            3 => Self::AndNot,
-            4 => Self::OrNot,
-            5 => Self::Add,
-            6 => Self::Sub,
-            _ => Self::Mul,
+        match v & 0xF {
+            0 => Self::TvAnd,
+            1 => Self::TvOr,
+            2 => Self::TvXor,
+            3 => Self::TvAndNot,
+            4 => Self::TvOrNot,
+            5 => Self::TvAdd,
+            6 => Self::TvSub,
+            7 => Self::TvMul,
+
+            8 => Self::FvAnd,
+            9 => Self::FvOr,
+            10 => Self::FvXor,
+            11 => Self::FvAndNot,
+            12 => Self::FvOrNot,
+            13 => Self::FvAdd,
+            14 => Self::FvSub,
+            _ => Self::FvMul,
         }
+    }
+
+    fn is_four_value(self) -> bool {
+        (self as u32) >= 8
     }
 }
 
@@ -470,7 +494,7 @@ impl Encoding for EncHeapBitwiseReg {
             rs1: Reg::new_masked(v >> 12),
             rs2: Reg::new_masked(v >> 16),
             op: BitwiseOp::new_masked(v >> 20),
-            size: VectorSize::new(v >> 23),
+            size: VectorSize::new(v >> 24),
         }
     }
     #[inline(always)]
@@ -479,7 +503,7 @@ impl Encoding for EncHeapBitwiseReg {
             | ((self.rs1 as u32) << 12)
             | ((self.rs2 as u32) << 16)
             | ((self.op as u32) << 20)
-            | (self.size.map_or(0, |v| v.get()) << 23)
+            | (self.size.map_or(0, |v| v.get()) << 24)
     }
 }
 
@@ -1043,6 +1067,24 @@ define_instructions! {
             { write!(f, "{rd}, {rs1}, {rs2}") }
             ( rs1 = TraceReg(rs1, LogicMode::FourValue, None), rs2 = TraceReg(rs2, LogicMode::FourValue, None) )
             ( rd = TraceReg(rd, LogicMode::TwoValue, Some(SCALAR_VSIZE)) )
+        fv_posedge (EncBinaryReg { rd: Reg, rs1: Reg, rs2: Reg })
+            {
+                let (spc1, val1) = rs1.to_spc_and_val();
+                let (spc2, val2) = rs2.to_spc_and_val();
+                regs[rd] = vogls_bits::edge::fv_posedge_u64(regs[spc1], regs[val1], regs[spc2], regs[val2]);
+            }
+            { write!(f, "{rd}, {rs1}, {rs2}") }
+            ( rs1 = TraceReg(rs1, LogicMode::FourValue, None), rs2 = TraceReg(rs2, LogicMode::FourValue, None) )
+            ( rd = TraceReg(rd, LogicMode::TwoValue, None) )
+        fv_negedge (EncBinaryReg { rd: Reg, rs1: Reg, rs2: Reg })
+            {
+                let (spc1, val1) = rs1.to_spc_and_val();
+                let (spc2, val2) = rs2.to_spc_and_val();
+                regs[rd] = vogls_bits::edge::fv_negedge_u64(regs[spc1], regs[val1], regs[spc2], regs[val2]);
+            }
+            { write!(f, "{rd}, {rs1}, {rs2}") }
+            ( rs1 = TraceReg(rs1, LogicMode::FourValue, None), rs2 = TraceReg(rs2, LogicMode::FourValue, None) )
+            ( rd = TraceReg(rd, LogicMode::TwoValue, None) )
         fv_andi (EncBinaryImm { rd: Reg, rs: Reg, imm10: i16, size: SixBitSize })
             {
                 let imm = size.mask(i64::from(imm10) as u64);
@@ -1195,31 +1237,7 @@ define_instructions! {
             ()
 
         tv_heap_bitwise (EncHeapBitwiseReg { rd: Reg, rs1: Reg, rs2: Reg, op: BitwiseOp, size: Option<VectorSize> })
-            {
-                let size = size.unwrap_or_else(|| VectorSize::new(regs[Reg::X12] as u32).unwrap());
-                let num_words = size.get().div_ceil(64) as usize;
-                let dst = HeapOffset { bit_offset: (regs[rd] * 64) as usize };
-                let src1 = HeapOffset { bit_offset: (regs[rs1] * 64) as usize };
-                let src2 = HeapOffset { bit_offset: (regs[rs2] * 64) as usize };
-                let (dst, src1, src2) = state.heap.get_disjoint_u64_dst_s1_s2(
-                    (dst, num_words),
-                    (src1, num_words),
-                    (src2, num_words),
-                );
-
-                // @TODO: These are not disjoint, so this is wrong.
-                use BitwiseOp as O;
-                match op {
-                    O::And => tv_bin_u64_bitwise_op(dst, src1, src2, |l, r| l & r),
-                    O::Or => tv_bin_u64_bitwise_op(dst, src1, src2, |l, r| l | r),
-                    O::Xor => tv_bin_u64_bitwise_op(dst, src1, src2, |l, r| l ^ r),
-                    O::AndNot => todo!(),
-                    O::OrNot => todo!(),
-                    O::Add => tv_addition(dst, src1, src2, size),
-                    O::Sub => tv_subtraction(dst, src1, src2, size),
-                    O::Mul => tv_multiplication(dst, src1, src2, size),
-                }
-            }
+            { execute_heap_bitwise(state, regs, rd, rs1, rs2, op, size) }
             { write!(f, "{rd}, {rs1}, {rs2}") }
             ()
             ()
@@ -1627,6 +1645,42 @@ impl BytecodeEncoder {
             .push(Bytecode(EncHeapUnaryReg { rd, rs, imm16 }.encode()));
     }
 
+    pub fn heap_tv_bitwise(
+        &mut self,
+        rd: Reg,
+        rs1: Reg,
+        rs2: Reg,
+        op: BitwiseOp,
+        size: VectorSize,
+    ) {
+        let size = if size.get() >= (1u32 << 8) {
+            self.load_u64(Reg::X12, size.get() as u64);
+            None
+        } else {
+            Some(size)
+        };
+        self.tv_heap_bitwise(rd, rs1, rs2, op, size);
+    }
+
+    pub fn heap_tv_and(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_tv_bitwise(rd, rs1, rs2, BitwiseOp::TvAnd, size);
+    }
+    pub fn heap_tv_or(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_tv_bitwise(rd, rs1, rs2, BitwiseOp::TvOr, size);
+    }
+    pub fn heap_tv_xor(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_tv_bitwise(rd, rs1, rs2, BitwiseOp::TvXor, size);
+    }
+    pub fn heap_fv_and(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_tv_bitwise(rd, rs1, rs2, BitwiseOp::FvAnd, size);
+    }
+    pub fn heap_fv_or(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_tv_bitwise(rd, rs1, rs2, BitwiseOp::FvOr, size);
+    }
+    pub fn heap_fv_xor(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_tv_bitwise(rd, rs1, rs2, BitwiseOp::FvXor, size);
+    }
+
     pub fn stack_offset(&mut self, rd: Reg, kind: StackItemKind, offset: u64) {
         // @Performance: Specialized instruction.
         self.load_u64(rd, offset);
@@ -1645,7 +1699,19 @@ impl BytecodeEncoder {
 }
 
 impl Design {
-    pub fn execute<const ITRACE: bool>(
+    pub fn execute(
+        &self,
+        state: &mut State,
+        stdout: &mut (dyn std::io::Write + Send + Sync),
+        stderr: &mut (dyn std::io::Write + Send + Sync),
+    ) -> Result<(), ()> {
+        if self.itrace {
+            self.execute_inner::<true>(state, stdout, stderr)
+        } else {
+            self.execute_inner::<false>(state, stdout, stderr)
+        }
+    }
+    fn execute_inner<const ITRACE: bool>(
         &self,
         state: &mut State,
         stdout: &mut (dyn std::io::Write + Send + Sync),
@@ -1829,5 +1895,76 @@ fn execute_heap_unary(state: &mut RuntimeState, regs: &mut Regs, rd: Reg, rs: Re
         HeapUnaryOp::FvZeroExtend => todo!(),
         HeapUnaryOp::TvSignExtend => todo!(),
         HeapUnaryOp::FvSignExtend => todo!(),
+    }
+}
+
+pub fn execute_heap_bitwise(
+    state: &mut RuntimeState,
+    regs: &mut Regs,
+    rd: Reg,
+    rs1: Reg,
+    rs2: Reg,
+    op: BitwiseOp,
+    size: Option<VectorSize>,
+) {
+    let size = size.unwrap_or_else(|| VectorSize::new(regs[Reg::X12] as u32).unwrap());
+    let mut num_words = size.get().div_ceil(64) as usize;
+    if op.is_four_value() {
+        num_words *= 2;
+    }
+    let [dst, src1, src2] = state.heap.get_u64_cell_slices([
+        (
+            HeapOffset {
+                bit_offset: (regs[rd] * 64) as usize,
+            },
+            num_words,
+        ),
+        (
+            HeapOffset {
+                bit_offset: (regs[rs1] * 64) as usize,
+            },
+            num_words,
+        ),
+        (
+            HeapOffset {
+                bit_offset: (regs[rs2] * 64) as usize,
+            },
+            num_words,
+        ),
+    ]);
+
+    use BitwiseOp as O;
+    match op {
+        O::TvAnd => tv_bin_u64_cell_bitwise_op(dst, src1, src2, |l, r| l & r),
+        O::TvOr => tv_bin_u64_cell_bitwise_op(dst, src1, src2, |l, r| l | r),
+        O::TvXor => tv_bin_u64_cell_bitwise_op(dst, src1, src2, |l, r| l ^ r),
+        O::TvAndNot => {
+            tv_bin_u64_cell_bitwise_mask_last_op(dst, src1, src2, |l, r| l & !r, size);
+        }
+        O::TvOrNot => {
+            tv_bin_u64_cell_bitwise_mask_last_op(dst, src1, src2, |l, r| l | !r, size);
+        }
+        O::TvAdd => todo!(),
+        O::TvSub => todo!(),
+        O::TvMul => todo!(),
+
+        O::FvAnd => fv_bin_u64_cell_bitwise_op(dst, src1, src2, |lspc, lval, rspc, rval| {
+            fv_bitwise_and_elem(lspc, lval, rspc, rval)
+        }),
+        O::FvOr => fv_bin_u64_cell_bitwise_op(dst, src1, src2, |lspc, lval, rspc, rval| {
+            fv_bitwise_or_elem(lspc, lval, rspc, rval)
+        }),
+        O::FvXor => fv_bin_u64_cell_bitwise_op(dst, src1, src2, |lspc, lval, rspc, rval| {
+            fv_bitwise_xor_elem(lspc, lval, rspc, rval)
+        }),
+        O::FvAndNot => fv_bin_u64_cell_bitwise_op(dst, src1, src2, |lspc, lval, rspc, rval| {
+            fv_bitwise_andnot_elem(lspc, lval, rspc, rval)
+        }),
+        O::FvOrNot => fv_bin_u64_cell_bitwise_op(dst, src1, src2, |lspc, lval, rspc, rval| {
+            fv_bitwise_ornot_elem(lspc, lval, rspc, rval)
+        }),
+        O::FvAdd => todo!(),
+        O::FvSub => todo!(),
+        O::FvMul => todo!(),
     }
 }

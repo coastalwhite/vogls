@@ -282,6 +282,7 @@ impl LoweredDesign {
                     .map(|v| v.0)
                     .collect(),
                 stack_offset,
+                itrace: self.itrace,
             };
 
             Ok(Design {

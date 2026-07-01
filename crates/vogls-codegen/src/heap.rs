@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::fmt;
 
 use vogls_bits::arithmetic::{FvLogicValue, fv_pack_u64, fv_set_no_special, fv_unpack_u64};
@@ -179,6 +180,19 @@ impl Heap {
         debug_assert!(at.size > Self::TV_SUBBITS_MAX_SIZE);
         &mut bytemuck::cast_slice_mut::<u64, u8>(&mut self.0)[(at.offset.bit_offset / 8)..]
             [..at.size.get().div_ceil(8) as usize]
+    }
+
+    pub fn get_u64_cell_slices<const N: usize>(
+        &mut self,
+        slices: [(HeapOffset, usize); N],
+    ) -> [&[Cell<u64>]; N] {
+        let mut out: [&[Cell<u64>]; N] = [&[]; N];
+        let cell_slice = Cell::as_slice_of_cells(Cell::from_mut(&mut self.0));
+        for (i, (at, nwords)) in slices.iter().enumerate() {
+            debug_assert_eq!(at.bit_offset % 64, 0);
+            out[i] = &cell_slice[at.bit_offset / 64..][..*nwords];
+        }
+        out
     }
 
     pub fn get_u64_slice(&self, at: HeapOffset, nwords: usize) -> &[u64] {

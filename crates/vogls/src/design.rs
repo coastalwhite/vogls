@@ -96,7 +96,7 @@ impl Design {
                 .run(initial_state, io, time)
                 .map_err(|_| "execution failed.".into()),
             (DesignBackend::Bytecode { design }, DesignState::Bytecode(state)) => design
-                .execute::<false>(state, &mut io.stdout, &mut io.stderr)
+                .execute(state, &mut io.stdout, &mut io.stderr)
                 .map_err(|_| "execution failed.".into()),
             #[cfg(feature = "native")]
             (DesignBackend::Compiled { design }, DesignState::Compiled(initial_state)) => design

@@ -8,7 +8,7 @@ use vogls_ir::{
 use crate::ast::expr::Expr;
 use crate::ast::statement::SystemTaskIdentifier;
 use crate::ast::{AstId, AstIdRange, AstItem};
-use crate::lower::expression::{coerce_to_max_size_ty, sign_or_zero_extend};
+use crate::lower::expression::{coerce_to_max_size_ty, sign_or_zero_extend, truncate_or_extend};
 use crate::lower::vvalue::VValue;
 use crate::lower::{Diagnostics, LowerContext, MutLowerContext, VType, try_resolve_net};
 use crate::parser::AstArenas;
@@ -126,6 +126,26 @@ pub fn lower_system_function_call<'a>(
             let e = builder.max(mctx.gl(), l, r);
             Ok((e, ty))
         }
+        "vogls_posedge" => {
+            ensure_num_args_equal!(2);
+            let (l, l_ty) = arguments[1].ok_or(())?;
+            let (r, r_ty) = arguments[0].ok_or(())?;
+
+            let l = truncate_or_extend(mctx.gl(), builder, l, l_ty, SCALAR_VSIZE);
+            let r = truncate_or_extend(mctx.gl(), builder, r, r_ty, SCALAR_VSIZE);
+            let e = builder.posedge(mctx.gl(), l, r);
+            Ok((e, VType::net(SCALAR_VSIZE, false)))
+        }
+        "vogls_negedge" => {
+            ensure_num_args_equal!(2);
+            let (l, l_ty) = arguments[1].ok_or(())?;
+            let (r, r_ty) = arguments[0].ok_or(())?;
+
+            let l = truncate_or_extend(mctx.gl(), builder, l, l_ty, SCALAR_VSIZE);
+            let r = truncate_or_extend(mctx.gl(), builder, r, r_ty, SCALAR_VSIZE);
+            let e = builder.negedge(mctx.gl(), l, r);
+            Ok((e, VType::net(SCALAR_VSIZE, false)))
+        }
         "vogls_select" => {
             ensure_num_args_equal!(3);
             let (cond, cond_ty) = arguments[2].ok_or(())?;
@@ -203,6 +223,10 @@ pub fn get_system_function_call_output_ty<'a>(
             ensure_num_args_equal!(1);
             let e_ty = arguments[0].ok_or(())?;
             Ok(e_ty)
+        }
+        "vogls_posedge" | "vogls_negedge" => {
+            ensure_num_args_equal!(2);
+            Ok(VType::UnsignedNet(SCALAR_VSIZE))
         }
         "vogls_copyx" | "vogls_copyz" | "vogls_min" | "vogls_max" => {
             ensure_num_args_equal!(2);

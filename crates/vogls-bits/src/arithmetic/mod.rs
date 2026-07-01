@@ -1,3 +1,5 @@
+use std::cell::Cell;
+
 use crate::VectorSize;
 use crate::load::load_partial_u64;
 use crate::store::store_partial_u64;
@@ -56,6 +58,13 @@ impl FvLogicValue {
             0b11 => Self::L1,
             _ => Self::X,
         }
+    }
+
+    pub fn spc(self) -> bool {
+        (self as u8 & 1) != 0
+    }
+    pub fn val(self) -> bool {
+        (self as u8 >> 1) != 0
     }
 }
 
@@ -160,6 +169,38 @@ pub fn fv_bin_mut_bitwise_op(
     store_partial_u64(dst, result, dsize);
 }
 
+pub fn tv_bin_u64_cell_bitwise_op(
+    dst: &[Cell<u64>],
+    lhs: &[Cell<u64>],
+    rhs: &[Cell<u64>],
+    op: impl Fn(u64, u64) -> u64,
+) {
+    assert!(dst.len() == lhs.len() && dst.len() == rhs.len());
+    let nwords = dst.len();
+    for i in 0..nwords {
+        dst[i].set(op(lhs[i].get(), rhs[i].get()));
+    }
+}
+
+pub fn tv_bin_u64_cell_bitwise_mask_last_op(
+    dst: &[Cell<u64>],
+    lhs: &[Cell<u64>],
+    rhs: &[Cell<u64>],
+    op: impl Fn(u64, u64) -> u64,
+    size: VectorSize,
+) {
+    assert!(dst.len() == lhs.len() && dst.len() == rhs.len());
+    let nwords = dst.len();
+    for i in 0..nwords {
+        dst[i].set(op(lhs[i].get(), rhs[i].get()));
+    }
+    if let Some(d) = dst.last() {
+        if size.get() % 64 == 0 {
+            d.set(d.get() & (1u64 << (size.get() % 64)).wrapping_sub(1));
+        }
+    }
+}
+
 pub fn tv_bin_u64_bitwise_op(
     dst: &mut [u64],
     lhs: &[u64],
@@ -201,6 +242,26 @@ pub fn fv_bin_u64_mut_bitwise_op(
     for i in 0..nwords {
         (dst_lhs[i], dst_lhs[nwords + i]) =
             op(dst_lhs[i], dst_lhs[nwords + i], rhs[i], rhs[nwords + i]);
+    }
+}
+
+pub fn fv_bin_u64_cell_bitwise_op(
+    dst: &[Cell<u64>],
+    lhs: &[Cell<u64>],
+    rhs: &[Cell<u64>],
+    op: impl Fn(u64, u64, u64, u64) -> (u64, u64),
+) {
+    assert!(dst.len() == lhs.len() && dst.len() == rhs.len());
+    let nwords = dst.len() / 2;
+    for i in 0..nwords {
+        let (spc, val) = op(
+            lhs[i].get(),
+            lhs[nwords + i].get(),
+            rhs[i].get(),
+            rhs[nwords + i].get(),
+        );
+        dst[i].set(spc);
+        dst[nwords + i].set(val);
     }
 }
 
@@ -322,10 +383,13 @@ pub fn fv_bitwise_and_elem(xspc: u64, x: u64, yspc: u64, y: u64) -> (u64, u64) {
     // --+-----------               --+-----------
     // x | 0  0  0  0               x | 0  0  0  1
     // z | 0  0  0  0               z | 0  0  0  1
-    // 0 | 0  0  1  0               1 | 0  0  1  1
-    // 1 | 0  0  0  0               0 | 1  1  1  1
+    // 1 | 0  0  1  0               1 | 0  0  1  1
+    // 0 | 0  0  0  0               0 | 1  1  1  1
     let zvalue = xspc & x & yspc & y;
     let zspc = (xspc & !x) | (yspc & !y) | zvalue;
+    dbg!(xspc, x, yspc, y);
+    dbg!(zvalue);
+    dbg!(zspc);
     (zspc, zvalue)
 }
 #[inline(always)]
@@ -344,8 +408,8 @@ pub fn fv_bitwise_or_elem(xspc: u64, x: u64, yspc: u64, y: u64) -> (u64, u64) {
     // --+-----------               --+-----------
     // x | 0  0  1  0               x | 0  0  1  0
     // z | 0  0  1  0               z | 0  0  1  0
-    // 0 | 1  1  1  1               1 | 1  1  1  1
-    // 1 | 0  0  1  0               0 | 0  0  1  1
+    // 1 | 1  1  1  1               1 | 1  1  1  1
+    // 0 | 0  0  1  0               0 | 0  0  1  1
     let zvalue = (xspc & x) | (yspc & y);
     let zspc = zvalue | (xspc & yspc);
     (zspc, zvalue)
@@ -366,20 +430,55 @@ pub fn fv_bitwise_xor_elem(xspc: u64, x: u64, yspc: u64, y: u64) -> (u64, u64) {
     // --+-----------               --+-----------
     // x | 0  0  0  0               x | 0  0  0  0
     // z | 0  0  0  0               z | 0  0  0  0
-    // 0 | 0  0  0  1               1 | 0  0  1  1
-    // 1 | 0  0  1  0               0 | 0  0  1  1
+    // 1 | 0  0  0  1               1 | 0  0  1  1
+    // 0 | 0  0  1  0               0 | 0  0  1  1
     let zspc = xspc & yspc;
     let zvalue = xspc & yspc & (x ^ y);
     (zspc, zvalue)
 }
 #[inline(always)]
-pub fn fv_equality(xspc: u64, x: u64, yspc: u64, y: u64, size: VectorSize) -> FvLogicValue {
-    let mask = 1u64.unbounded_shl(size.get()).wrapping_sub(1);
-    if (xspc & mask != mask) | (yspc & mask != mask) {
-        return FvLogicValue::X;
-    }
-
-    FvLogicValue::from_bool(x == y)
+pub fn fv_bitwise_andnot_elem(xspc: u64, x: u64, yspc: u64, y: u64) -> (u64, u64) {
+    // & | x  z  1  0
+    // --+-----------
+    // x | x  x  0  x
+    // z | x  x  0  x
+    // 1 | x  x  0  1
+    // 0 | 0  0  0  0
+    //
+    // z1z0 = fv.andnot(x1x0, y1y0)
+    //
+    // z0 = x1 x0 y1 ~y0            z1 = x1 x0b + y1 y0b + x1 y1
+    // &0| x  z  1  0               &1| x  z  1  0
+    // --+-----------               --+-----------
+    // x | 0  0  0  0               x | 0  0  1  0
+    // z | 0  0  0  0               z | 0  0  1  0
+    // 1 | 0  0  0  1               1 | 0  0  1  1
+    // 0 | 0  0  0  0               0 | 1  1  1  1
+    let zvalue = xspc & x & yspc & !y;
+    let zspc = (xspc & !x) | (yspc & y) | zvalue;
+    (zspc, zvalue)
+}
+#[inline(always)]
+pub fn fv_bitwise_ornot_elem(xspc: u64, x: u64, yspc: u64, y: u64) -> (u64, u64) {
+    // | | x  z  1  0
+    // --+-----------
+    // x | x  x  x  1
+    // z | x  x  x  1
+    // 1 | 1  1  1  1
+    // 0 | x  x  0  1
+    //
+    // z1z0 = fv.ornot(x1x0, y1y0)
+    //
+    // z0 = ?                       z1 = x1 x0 + y1 y0 + x1 y1
+    // |0| x  z  1  0               |1| x  z  1  0
+    // --+-----------               --+-----------
+    // x | 0  0  0  1               x | 0  0  0  1
+    // z | 0  0  0  1               z | 0  0  0  1
+    // 1 | 1  1  1  1               1 | 1  1  1  1
+    // 0 | 0  0  0  1               0 | 0  0  1  1
+    let zvalue = (xspc & x) | (yspc & !y);
+    let zspc = zvalue | (xspc & yspc);
+    (zspc, zvalue)
 }
 #[inline(always)]
 pub fn fv_reduce_and_elem(spc: u64, value: u64, size: VectorSize) -> FvLogicValue {
@@ -564,122 +663,122 @@ mod tests {
 
     use super::*;
     use FvLogicValue as L;
+    use FvLogicValue::*;
     use proptest::prelude::Just;
 
     #[rustfmt::skip]
-    const FV_BITWISE_AND_LUT: [L; 16] = [
-        // x      z       0     1      &
-        L::X,  L::X,  L::L0, L::X,  // x
-        L::X,  L::X,  L::L0, L::X,  // z
-        L::L0, L::L0, L::L0, L::L0, // 0
-        L::X,  L::X,  L::L0, L::L1, // 1
+    const FV_BIN_TEST_VECTORS: [[L; 7]; 16] = [
+        //  lhs rhs       AND    OR     XOR    ANDNOT  ORNOT
+        [   X,  X,        X,     X,     X,     X,      X,   ],
+        [   X,  Z,        X,     X,     X,     X,      X,   ],
+        [   X,  L0,       L0,    X,     X,     X,      L1,  ],
+        [   X,  L1,       X,     L1,    X,     L0,     X,   ],
+
+        [   Z,  X,        X,     X,     X,     X,      X,   ],
+        [   Z,  Z,        X,     X,     X,     X,      X,   ],
+        [   Z,  L0,       L0,    X,     X,     X,      L1,  ],
+        [   Z,  L1,       X,     L1,    X,     L0,     X,   ],
+
+        [   L0, X,        L0,    X,     X,     L0,     X,   ],
+        [   L0, Z,        L0,    X,     X,     L0,     X,   ],
+        [   L0, L0,       L0,    L0,    L0,    L0,     L1,  ],
+        [   L0, L1,       L0,    L1,    L1,    L0,     L0,  ],
+
+        [   L1, X,        X,     L1,    X,     X,      L1,  ],
+        [   L1, Z,        X,     L1,    X,     X,      L1,  ],
+        [   L1, L0,       L0,    L1,    L1,    L1,     L1,  ],
+        [   L1, L1,       L1,    L1,    L0,    L0,     L1,  ],
     ];
+
     #[rustfmt::skip]
-    const FV_BITWISE_OR_LUT: [L; 16] = [
-        // x      z       0     1      &
-        L::X,  L::X,  L::X,  L::L1, // x
-        L::X,  L::X,  L::X,  L::L1, // z
-        L::X,  L::X,  L::L0, L::L1, // 0
-        L::L1, L::L1, L::L1, L::L1, // 1
-    ];
-    #[rustfmt::skip]
-    const FV_BITWISE_XOR_LUT: [L; 16] = [
-        // x      z       0     1       &
-        L::X,  L::X,  L::X,  L::X,   // x
-        L::X,  L::X,  L::X,  L::X,   // z
-        L::X,  L::X,  L::L0, L::L1,  // 0
-        L::X,  L::X,  L::L1, L::L0,  // 1
-    ];
-    #[rustfmt::skip]
-    const FV_BITWISE_INV_LUT: [L; 4] = [
-        // x      z       0       1 
-        L::X,  L::X,  L::L1,  L::L0,
-    ];
-    #[rustfmt::skip]
-    const FV_EQUALITY_LUT: [L; 16] = [
-        // x      z       0     1      &
-        L::X,  L::X,  L::X,  L::X,  // x
-        L::X,  L::X,  L::X,  L::X,  // z
-        L::X,  L::X,  L::L1, L::L0, // 0
-        L::X,  L::X,  L::L0, L::L1, // 1
+    const FV_BITWISE_INV_LUT: [[L; 2]; 4] = [
+        [X,   X,  ],
+        [Z,   X,  ],
+        [L0,  L1, ],
+        [L1,  L0, ],
     ];
 
     #[test]
     fn test_fv_bitwise() {
-        for &y in L::VALUES {
-            for &x in L::VALUES {
-                let x_u8 = x as u8;
-                let y_u8 = y as u8;
+        for [
+            x,
+            y,
+            expect_and,
+            expect_or,
+            expect_xor,
+            expect_andnot,
+            expect_ornot,
+        ] in FV_BIN_TEST_VECTORS
+        {
+            let (xspc, xval) = (x.spc() as u64, x.val() as u64);
+            let (yspc, yval) = (y.spc() as u64, y.val() as u64);
 
-                let xspc = (x_u8 >> 1) as u64;
-                let xvalue = (x_u8 & 1) as u64;
-                let yspc = (y_u8 >> 1) as u64;
-                let yvalue = (y_u8 & 1) as u64;
+            let (z_andspc, z_and) = fv_bitwise_and_elem(xspc, xval, yspc, yval);
+            let (z_orspc, z_or) = fv_bitwise_or_elem(xspc, xval, yspc, yval);
+            let (z_xorspc, z_xor) = fv_bitwise_xor_elem(xspc, xval, yspc, yval);
+            let (z_andnotspc, z_andnot) = fv_bitwise_andnot_elem(xspc, xval, yspc, yval);
+            let (z_ornotspc, z_ornot) = fv_bitwise_ornot_elem(xspc, xval, yspc, yval);
 
-                let (z_andspc, z_and) = fv_bitwise_and_elem(xspc, xvalue, yspc, yvalue);
-                let (z_orspc, z_or) = fv_bitwise_or_elem(xspc, xvalue, yspc, yvalue);
-                let (z_xorspc, z_xor) = fv_bitwise_xor_elem(xspc, xvalue, yspc, yvalue);
+            let z_and = FvLogicValue::from_repr(((z_and << 1) | z_andspc) as u8);
+            let z_or = FvLogicValue::from_repr(((z_or << 1) | z_orspc) as u8);
+            let z_xor = FvLogicValue::from_repr(((z_xor << 1) | z_xorspc) as u8);
+            let z_andnot = FvLogicValue::from_repr(((z_andnot << 1) | z_andnotspc) as u8);
+            let z_ornot = FvLogicValue::from_repr(((z_ornot << 1) | z_ornotspc) as u8);
 
-                let z_and = FvLogicValue::from_repr(((z_andspc << 1) | z_and) as u8);
-                let z_or = FvLogicValue::from_repr(((z_orspc << 1) | z_or) as u8);
-                let z_xor = FvLogicValue::from_repr(((z_xorspc << 1) | z_xor) as u8);
+            assert_eq!(
+                z_and, expect_and,
+                "{x:?} & {y:?}, expected = {expect_and:?}, gotten = {z_and:?}"
+            );
+            assert_eq!(
+                z_or, expect_or,
+                "{x:?} | {y:?}, expected = {expect_or:?}, gotten = {z_or:?}"
+            );
+            assert_eq!(
+                z_xor, expect_xor,
+                "{x:?} ^ {y:?}, expected = {expect_xor:?}, gotten = {z_xor:?}"
+            );
+            assert_eq!(
+                z_andnot, expect_andnot,
+                "{x:?} & !{y:?}, expected = {expect_andnot:?}, gotten = {z_andnot:?}"
+            );
+            assert_eq!(
+                z_ornot, expect_ornot,
+                "{x:?} | !{y:?}, expected = {expect_ornot:?}, gotten = {z_ornot:?}"
+            );
 
-                let spc = (xspc << 1) | (yspc);
-                let value = (xvalue << 1) | (yvalue);
-                let size = VectorSize::new(2).unwrap();
-                let z_redand = fv_reduce_and_elem(spc, value, size);
-                let z_redor = fv_reduce_or_elem(spc, value, size);
-                let z_redxor = fv_reduce_xor_elem(spc, value, size);
+            let spc = (xspc << 1) | (yspc);
+            let value = (xval << 1) | (yval);
+            let size = VectorSize::new(2).unwrap();
+            let z_redand = fv_reduce_and_elem(spc, value, size);
+            let z_redor = fv_reduce_or_elem(spc, value, size);
+            let z_redxor = fv_reduce_xor_elem(spc, value, size);
 
-                let idx = (((y as u8) << 2) | (x as u8)) as usize;
-                assert_eq!(z_and, FV_BITWISE_AND_LUT[idx], "{z_and:?} != {x:?} & {y:?}");
-                assert_eq!(z_or, FV_BITWISE_OR_LUT[idx], "{z_or:?} != {x:?} | {y:?}");
-                assert_eq!(z_xor, FV_BITWISE_XOR_LUT[idx], "{z_xor:?} != {x:?} ^ {y:?}");
-
-                assert_eq!(
-                    z_redand, FV_BITWISE_AND_LUT[idx],
-                    "{z_redand:?} != &{{ {x:?}, {y:?} }}"
-                );
-                assert_eq!(
-                    z_redor, FV_BITWISE_OR_LUT[idx],
-                    "{z_redor:?} != | {{ {x:?}, {y:?} }}"
-                );
-                assert_eq!(
-                    z_redxor, FV_BITWISE_XOR_LUT[idx],
-                    "{z_redxor:?} != ^ {{ {x:?}, {y:?} }}"
-                );
-            }
-        }
-    }
-    #[test]
-    fn test_fv_equality() {
-        for &y in L::VALUES {
-            for &x in L::VALUES {
-                let x_u8 = x as u8;
-                let y_u8 = y as u8;
-
-                let xspc = (x_u8 >> 1) as u64;
-                let xvalue = (x_u8 & 1) as u64;
-                let yspc = (y_u8 >> 1) as u64;
-                let yvalue = (y_u8 & 1) as u64;
-
-                let z = fv_equality(xspc, xvalue, yspc, yvalue, VectorSize::new(1).unwrap());
-
-                let idx = (((y as u8) << 2) | (x as u8)) as usize;
-                assert_eq!(z, FV_EQUALITY_LUT[idx], "{z:?} != ({x:?} == {y:?})");
-            }
+            assert_eq!(
+                z_redand, expect_and,
+                "& {{ {x:?}, {y:?} }}, expected = {expect_and:?}, gotten = {z_and:?}"
+            );
+            assert_eq!(
+                z_redor, expect_or,
+                "| {{ {x:?} | {y:?} }}, expected = {expect_or:?}, gotten = {z_or:?}"
+            );
+            assert_eq!(
+                z_redxor, expect_xor,
+                "^ {{ {x:?}, {y:?} }}, expected = {expect_xor:?}, gotten = {z_xor:?}"
+            );
         }
     }
     #[test]
     fn test_fv_bitwise_inv() {
-        for &x in L::VALUES {
-            let x_u8 = x as u8;
-            let xspc = (x_u8 >> 1) as u64;
-            let xvalue = (x_u8 & 1) as u64;
-            let (spc, value) = fv_bitwise_inv_elem(xspc, xvalue);
-            let z = FvLogicValue::from_repr(((spc << 1) | value) as u8);
-            let idx = (x as u8) as usize;
-            assert_eq!(z, FV_BITWISE_INV_LUT[idx], "{z:?} = !{x:?}");
+        for [a, expect] in FV_BITWISE_INV_LUT {
+            let spc = a.spc() as u64;
+            let val = a.val() as u64;
+            let (spc, val) = fv_bitwise_inv_elem(spc, val);
+            let got = FvLogicValue::from_repr(((val << 1) | spc) as u8);
+
+            assert_eq!(
+                got, expect,
+                "!{a:?}, expected = {expect:?}, gotten = {got:?}"
+            );
         }
     }
 
