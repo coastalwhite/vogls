@@ -282,9 +282,37 @@ fn lower_instruction(
                     bytecode.copy(val, rs);
                     bytecode.load_u64(spc, src_size.mask(u64::MAX));
                 }
+                (O::TvToFv, _, _, None) => {
+                    // @Performance: better lowering.
+                    let num_words = src_size.get().div_ceil(64) as u64;
+                    let spc = rd;
+                    let val = T2;
+                    match lower_to_n_bits_sign_extend(&Bits::new_u64(num_words), 10) {
+                        None => {
+                            bytecode.load_u64(val, num_words);
+                            bytecode.add(val, spc, val, SixBitSize::N64);
+                        }
+                        Some(imm10) => bytecode.addi(val, spc, imm10 as i16, SixBitSize::N64),
+                    }
+                    bytecode.heap_tv_ornot(spc, rs, rs, src_size);
+                    bytecode.heap_tv_or(val, rs, rs, src_size);
+                }
                 (O::FvToTv, _, _, Some(_)) => {
                     let (spc, val) = reg_as_fv(rs);
                     bytecode.and(rd, spc, val)
+                }
+                (O::FvToTv, _, _, None) => {
+                    let num_words = src_size.get().div_ceil(64) as u64;
+                    let spc = rs;
+                    let val = T2;
+                    match lower_to_n_bits_sign_extend(&Bits::new_u64(num_words), 10) {
+                        None => {
+                            bytecode.load_u64(val, num_words);
+                            bytecode.add(val, spc, val, SixBitSize::N64);
+                        }
+                        Some(imm10) => bytecode.addi(val, spc, imm10 as i16, SixBitSize::N64),
+                    }
+                    bytecode.heap_tv_and(rd, spc, val, src_size);
                 }
                 (_, _, _, None) => todo!(),
             }
@@ -549,7 +577,16 @@ fn lower_instruction(
         I::Slice(variable_key, variable_key1, variable_key2) => todo!(),
         I::SliceImm(variable_key, variable_key1, _) => todo!(),
         I::ShiftImm(variable_key, shift_imm_op, variable_key1, _) => todo!(),
-        I::Select(variable_key, variable_key1, variable_key2, variable_key3) => todo!(),
+        I::Select(dst, cond, truthy, falsy) => {
+            let size = gl.vars.size(*dst);
+            // @Performance: Better lowering
+            match (cond.mode(), SixBitSize::from_vector_size(size)) {
+                (LogicMode::TwoValue, None) => todo!(),
+                (LogicMode::TwoValue, Some(size)) => todo!(),
+                (LogicMode::FourValue, None) => todo!(),
+                (LogicMode::FourValue, Some(size)) => todo!(),
+            }
+        }
         I::Intrinsic(dst, op, items) => {
             let dslot = assignment[dst];
             let rd = to_reg(bytecode, *dst, &gl.vars, dslot, stack_offsets, T0);
@@ -582,6 +619,7 @@ fn lower_instruction(
         I::LastUpdateTime(variable_key, signal_key) => todo!(),
         I::Probe(dst, signal, offset) => {
             let dslot = assignment[dst];
+            dbg!(&dslot);
             let rd = to_reg(bytecode, *dst, &gl.vars, dslot, stack_offsets, T0);
 
             let dst_size = gl.vars.size(*dst);
@@ -591,22 +629,21 @@ fn lower_instruction(
             if *offset != 0 {
                 todo!()
             }
-
-            let Some(signal_size) = SixBitSize::from_vector_size(signal_size) else {
+             
+            if dst_size != signal_size {
                 todo!()
-            };
+            }
 
+            // @Performance. Alias for large probes without an offset.
             let roff = T1;
             load_signal_address(bytecode, roff, *signal, signals, io_signals);
-            match dst.mode() {
-                LogicMode::TwoValue => bytecode.load_aligned(rd, roff, 0, signal_size),
-                LogicMode::FourValue => bytecode.load_fv_aligned(rd, roff, 0, signal_size),
+            match (dst.mode(), SixBitSize::from_vector_size(signal_size)) {
+                (LogicMode::TwoValue, None) => bytecode.load_heap_aligned(rd, roff, signal_size.get().div_ceil(64) as u16),
+                (LogicMode::TwoValue, Some(signal_size)) => bytecode.load_aligned(rd, roff, 0, signal_size),
+                (LogicMode::FourValue, None) => bytecode.load_heap_aligned(rd, roff, signal_size.get().div_ceil(64) as u16 * 2),
+                (LogicMode::FourValue, Some(signal_size)) => bytecode.load_fv_aligned(rd, roff, 0, signal_size),
             }
 
-            let dst_size = SixBitSize::from_vector_size(dst_size).unwrap();
-            if dst_size != signal_size {
-                bytecode.mask(rd, rd, dst_size);
-            }
             store_back(bytecode, &gl.vars, *dst, dslot, rd);
         }
         I::ProbeSlice(variable_key, signal_key, variable_key1) => todo!(),
@@ -624,16 +661,28 @@ fn lower_instruction(
                 todo!()
             }
 
-            let Some(signal_size) = SixBitSize::from_vector_size(signal_size) else {
-                todo!()
-            };
-
             let roff = T1;
             let rpoke = T2;
             load_signal_address(bytecode, roff, *signal, signals, io_signals);
-            match src.mode() {
-                LogicMode::TwoValue => bytecode.set_aligned(rpoke, rs, roff, 0, signal_size),
-                LogicMode::FourValue => bytecode.set_fv_aligned(rpoke, rs, roff, 0, signal_size),
+            match (src.mode(), SixBitSize::from_vector_size(signal_size)) {
+                (LogicMode::TwoValue, None) => {
+                    if signal_size.get() >= (1u32 << 16) {
+                        todo!();
+                    }
+                    bytecode.set_heap_aligned(rpoke, rs, roff, Some(signal_size));
+                }
+                (LogicMode::FourValue, None) => {
+                    if signal_size.get() >= (1u32 << 16) {
+                        todo!();
+                    }
+                    bytecode.set_fv_heap_aligned(rpoke, rs, roff, Some(signal_size));
+                }
+                (LogicMode::TwoValue, Some(signal_size)) => {
+                    bytecode.set_aligned(rpoke, rs, roff, 0, signal_size)
+                }
+                (LogicMode::FourValue, Some(signal_size)) => {
+                    bytecode.set_fv_aligned(rpoke, rs, roff, 0, signal_size)
+                }
             }
 
             for index in watch_map.watch_indices(*signal) {

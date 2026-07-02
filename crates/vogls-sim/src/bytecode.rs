@@ -229,6 +229,12 @@ struct EncBinaryUImm {
     imm10: u16,
 }
 #[derive(Default)]
+struct EncUnaryUImm {
+    rd: Reg,
+    rs: Reg,
+    imm: u16,
+}
+#[derive(Default)]
 struct EncSet {
     rd: Reg,
     rs: Reg,
@@ -237,6 +243,13 @@ struct EncSet {
 
     // 6 bits
     imm: i8,
+}
+#[derive(Default)]
+struct EncHeapSet {
+    rd: Reg,
+    rs: Reg,
+    roff: Reg,
+    size: Option<VectorSize>,
 }
 #[derive(Default)]
 struct EncBinaryReg {
@@ -402,6 +415,21 @@ impl Encoding for EncUnary {
         ((self.rd as u32) << 8) | ((self.rs as u32) << 12) | ((self.size.0 as u32) << 16)
     }
 }
+impl Encoding for EncUnaryUImm {
+    #[inline(always)]
+    fn extract(bytecode: Bytecode) -> Self {
+        let v = bytecode.0;
+        Self {
+            rd: Reg::new_masked(v >> 8),
+            rs: Reg::new_masked(v >> 12),
+            imm: (v >> 16) as u16,
+        }
+    }
+    #[inline(always)]
+    fn encode(self) -> u32 {
+        ((self.rd as u32) << 8) | ((self.rs as u32) << 12) | ((self.imm as u32) << 16)
+    }
+}
 impl Encoding for EncBinaryImm {
     #[inline(always)]
     fn extract(bytecode: Bytecode) -> Self {
@@ -475,6 +503,26 @@ impl Encoding for EncSet {
             | ((self.roff as u32) << 16)
             | ((self.size.0 as u32) << 20)
             | ((self.imm as u16 as u32) << 26)
+    }
+}
+
+impl Encoding for EncHeapSet {
+    #[inline(always)]
+    fn extract(bytecode: Bytecode) -> Self {
+        let v = bytecode.0;
+        Self {
+            rd: Reg::new_masked(v >> 8),
+            rs: Reg::new_masked(v >> 12),
+            roff: Reg::new_masked(v >> 16),
+            size: VectorSize::new(v >> 20),
+        }
+    }
+    #[inline(always)]
+    fn encode(self) -> u32 {
+        ((self.rd as u32) << 8)
+            | ((self.rs as u32) << 12)
+            | ((self.roff as u32) << 16)
+            | (self.size.map_or(0, |v| v.get()) << 20)
     }
 }
 
@@ -987,6 +1035,11 @@ define_instructions! {
             { write!(f, "{rd}, {rs}, {imm10}, |{size}|") }
             ( rs1 = TraceReg(rs, LogicMode::TwoValue, Some(size.into())), imm = imm10 )
             ( rd = TraceReg(rd, LogicMode::TwoValue, Some(size.into())) )
+        addi (EncBinaryImm { rd: Reg, rs: Reg, imm10: i16, size: SixBitSize })
+            { regs[rd] = size.mask(regs[rs].wrapping_add(i64::from(imm10) as u64)); }
+            { write!(f, "{rd}, {rs}, {imm10}, |{size}|") }
+            ( rs1 = TraceReg(rs, LogicMode::TwoValue, Some(size.into())), imm = imm10 )
+            ( rd = TraceReg(rd, LogicMode::TwoValue, Some(size.into())) )
         ceqi (EncBinaryImm { rd: Reg, rs: Reg, imm10: i16, size: SixBitSize })
             { regs[rd] = u64::from(regs[rs] == size.mask(i64::from(imm10) as u64)); }
             { write!(f, "{rd}, {rs}, {imm10}, |{size}|") }
@@ -1336,6 +1389,23 @@ define_instructions! {
             { write!(f, "{rd}, {rs}, {imm10}, |{size}|") }
             ( rs = TraceReg(rs, LogicMode::TwoValue, None), imm = imm10 )
             ( rd = TraceReg(rd, LogicMode::FourValue, Some(size.into())) )
+        load_heap_aligned (EncUnaryUImm { rd: Reg, rs: Reg, imm: u16 })
+            {
+                let dst_offset = regs[rd];
+                let src_offset = regs[rs];
+                let num_words = imm as usize;
+                let [dst, src] = state.heap.get_u64_cell_slices([
+                    (HeapOffset { bit_offset: dst_offset as usize }, num_words),
+                    (HeapOffset { bit_offset: src_offset as usize }, num_words),
+
+                ]);
+                for (d, s) in dst.iter().zip(src) {
+                    d.set(s.get());
+                }
+            }
+            { write!(f, "{rd}, {rs}, {imm}") }
+            ( rs = TraceReg(rs, LogicMode::TwoValue, Some(VSIZE_64)) )
+            ( rd = TraceReg(rd, LogicMode::TwoValue, Some(VSIZE_64)) )
 
         set_aligned (EncSet { rd: Reg, rs: Reg, roff: Reg, imm: i8, size: SixBitSize })
             {
@@ -1357,7 +1427,7 @@ define_instructions! {
                 roff = TraceReg(roff, LogicMode::TwoValue, None),
                 imm = imm
               )
-            ( rd = TraceReg(rd, LogicMode::TwoValue, Some(size.into())) )
+            ( rd = TraceReg(rd, LogicMode::TwoValue, Some(SCALAR_VSIZE)) )
         set_fv_aligned (EncSet { rd: Reg, rs: Reg, roff: Reg, imm: i8, size: SixBitSize })
             {
                 // @Performance: We can likely make a better specialized implementation for this load.
@@ -1380,7 +1450,57 @@ define_instructions! {
                 roff = TraceReg(roff, LogicMode::TwoValue, None),
                 imm = imm
               )
-            ( rd = TraceReg(rd, LogicMode::TwoValue, Some(size.into())) )
+            ( rd = TraceReg(rd, LogicMode::TwoValue, Some(SCALAR_VSIZE)) )
+        set_heap_aligned (EncHeapSet { rd: Reg, rs: Reg, roff: Reg, size: Option<VectorSize> })
+            {
+                let size = size.unwrap_or_else(|| VectorSize::new(regs[Reg::X12] as u32).unwrap());
+                let roff_offset = regs[roff];
+                let src_offset = regs[rs];
+                let num_words = size.get().div_ceil(64) as usize;
+                let [roff, src] = state.heap.get_u64_cell_slices([
+                    (HeapOffset { bit_offset: roff_offset as usize }, num_words),
+                    (HeapOffset { bit_offset: src_offset as usize }, num_words),
+
+                ]);
+                let mut updated = false;
+                for (d, s) in roff.iter().zip(src) {
+                    let value = s.get();
+                    let prev_value = d.replace(value);
+                    updated |= value != prev_value;
+                }
+                regs[rd] = u64::from(updated);
+            }
+            { write!(f, "{rd}, {rs}, {roff}") }
+            (
+                rs = TraceReg(rs, LogicMode::TwoValue, Some(VSIZE_64)),
+                roff = TraceReg(roff, LogicMode::TwoValue, None),
+              )
+            ( rd = TraceReg(rd, LogicMode::TwoValue, Some(SCALAR_VSIZE)) )
+        set_fv_heap_aligned (EncHeapSet { rd: Reg, rs: Reg, roff: Reg, size: Option<VectorSize> })
+            {
+                let size = size.unwrap_or_else(|| VectorSize::new(regs[Reg::X12] as u32).unwrap());
+                let roff_offset = regs[roff];
+                let src_offset = regs[rs];
+                let num_words = size.get().div_ceil(64) as usize * 2;
+                let [roff, src] = state.heap.get_u64_cell_slices([
+                    (HeapOffset { bit_offset: roff_offset as usize }, num_words),
+                    (HeapOffset { bit_offset: src_offset as usize }, num_words),
+
+                ]);
+                let mut updated = false;
+                for (d, s) in roff.iter().zip(src) {
+                    let value = s.get();
+                    let prev_value = d.replace(value);
+                    updated |= value != prev_value;
+                }
+                regs[rd] = u64::from(updated);
+            }
+            { write!(f, "{rd}, {rs}, {roff}") }
+            (
+                rs = TraceReg(rs, LogicMode::TwoValue, Some(VSIZE_64)),
+                roff = TraceReg(roff, LogicMode::TwoValue, None),
+              )
+            ( rd = TraceReg(rd, LogicMode::TwoValue, Some(SCALAR_VSIZE)) )
 
         wake (EncWake { rcond: Reg, index: u32 })
             {
@@ -1467,6 +1587,12 @@ define_instructions! {
                 listeners.active[i / 64] |= 1u64 << (i % 64);
             }
             { write!(f, "{imm}") }
+            ()
+            ()
+
+        panic (EncEmpty {})
+            { panic!() }
+            { Ok(()) }
             ()
             ()
     ]
@@ -1730,6 +1856,12 @@ impl BytecodeEncoder {
     pub fn heap_tv_xor(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
         self.heap_tv_bitwise(rd, rs1, rs2, BitwiseOp::TvXor, size);
     }
+    pub fn heap_tv_andnot(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_tv_bitwise(rd, rs1, rs2, BitwiseOp::TvAndNot, size);
+    }
+    pub fn heap_tv_ornot(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_tv_bitwise(rd, rs1, rs2, BitwiseOp::TvOrNot, size);
+    }
     pub fn heap_fv_and(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
         self.heap_tv_bitwise(rd, rs1, rs2, BitwiseOp::FvAnd, size);
     }
@@ -1987,19 +2119,19 @@ pub fn execute_heap_bitwise(
     let [dst, src1, src2] = state.heap.get_u64_cell_slices([
         (
             HeapOffset {
-                bit_offset: (regs[rd] * 64) as usize,
+                bit_offset: regs[rd] as usize,
             },
             num_words,
         ),
         (
             HeapOffset {
-                bit_offset: (regs[rs1] * 64) as usize,
+                bit_offset: regs[rs1] as usize,
             },
             num_words,
         ),
         (
             HeapOffset {
-                bit_offset: (regs[rs2] * 64) as usize,
+                bit_offset: regs[rs2] as usize,
             },
             num_words,
         ),
