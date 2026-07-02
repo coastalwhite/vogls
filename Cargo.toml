@@ -29,7 +29,6 @@ vogls = { path = "crates/vogls", default-features = false }
 vogls-frontend.path = "crates/vogls-frontend"
 vogls-sim.path = "crates/vogls-sim"
 vogls-ir.path = "crates/vogls-ir"
-vogls-ir-properties.path = "crates/vogls-ir-properties"
 vogls-fuse-signals.path = "crates/vogls-fuse-signals"
 vogls-bits.path = "crates/vogls-bits"
 vogls-verilog.path = "crates/vogls-verilog"
