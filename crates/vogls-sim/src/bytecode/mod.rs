@@ -263,6 +263,9 @@ opcodes![
     FvCeq,
     FvPosedge,
     FvNegedge,
+    FvAdd,
+    FvSub,
+    FvMul,
     FvNot,
     FvReduceAnd,
     FvReduceOr,
@@ -289,6 +292,7 @@ opcodes![
     Reschedule,
     StartListen,
     HeapBinaryBitwise,
+    HeapBinaryArithmetic,
     HeapCaseEq,
 ];
 
@@ -543,7 +547,7 @@ impl BytecodeEncoder {
         self.andi(rd, rs, -1, size)
     }
 
-    pub fn stack_offset(&mut self, rd: Reg, kind: StackItemKind, offset: u64) {
+    pub fn stack_offset(&mut self, rd: Reg, sp: Reg, kind: StackItemKind, offset: u64) {
         // @Performance: Specialized instruction.
         self.load_u64(rd, offset);
         use StackItemKind as K;
@@ -556,7 +560,7 @@ impl BytecodeEncoder {
             K::B32 => self.slli(rd, rd, 5, SixBitSize::N64),
             K::B64 => self.slli(rd, rd, 6, SixBitSize::N64),
         }
-        self.add(rd, rd, rd, SixBitSize::N64);
+        self.add(rd, sp, rd, SixBitSize::N64);
     }
 }
 

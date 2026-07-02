@@ -10,7 +10,8 @@ use vogls_runtime::RtSignalKey;
 use vogls_utils::{NonMaxU16, VgHashMap, VgHashSet};
 
 use crate::bytecode::{
-    Branch, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, InstructionPtr, IntrinsicOpEqWrap, Jump, Reg, Schedule, SixBitSize
+    Branch, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, InstructionPtr,
+    IntrinsicOpEqWrap, Jump, Reg, Schedule, SixBitSize,
 };
 
 enum JumpKind {
@@ -284,16 +285,17 @@ fn lower_instruction(
                 (O::TvToFv, _, _, None) => {
                     // @Performance: better lowering.
                     let num_words = src_size.get().div_ceil(64) as u64;
-                    let spc = rd;
+                    // ORNOT with self is a fill 1's
+                    bytecode.heap_tv_ornot(rd, rs, rs, src_size);
                     let val = T2;
-                    match lower_to_n_bits_sign_extend(&Bits::new_u64(num_words), 10) {
+                    match lower_to_n_bits_sign_extend(&Bits::new_u64(num_words * 64), 10) {
                         None => {
                             bytecode.load_u64(val, num_words);
-                            bytecode.add(val, spc, val, SixBitSize::N64);
+                            bytecode.add(val, rd, val, SixBitSize::N64);
                         }
-                        Some(imm10) => bytecode.addi(val, spc, imm10 as i16, SixBitSize::N64),
+                        Some(imm10) => bytecode.addi(val, rd, imm10 as i16, SixBitSize::N64),
                     }
-                    bytecode.heap_tv_ornot(spc, rs, rs, src_size);
+                    // OR with self is a copy
                     bytecode.heap_tv_or(val, rs, rs, src_size);
                 }
                 (O::FvToTv, _, _, Some(_)) => {
@@ -307,9 +309,9 @@ fn lower_instruction(
                     match lower_to_n_bits_sign_extend(&Bits::new_u64(num_words), 10) {
                         None => {
                             bytecode.load_u64(val, num_words);
-                            bytecode.add(val, spc, val, SixBitSize::N64);
+                            bytecode.add(val, rs, val, SixBitSize::N64);
                         }
-                        Some(imm10) => bytecode.addi(val, spc, imm10 as i16, SixBitSize::N64),
+                        Some(imm10) => bytecode.addi(val, rs, imm10 as i16, SixBitSize::N64),
                     }
                     bytecode.heap_tv_and(rd, spc, val, src_size);
                 }
@@ -408,14 +410,23 @@ fn lower_instruction(
                 (O::Xor, M::FourValue, None, _, _) => bytecode.heap_fv_xor(rd, rs1, rs2, dst_size),
 
                 (O::Add, M::TwoValue, Some(size), _, _) => bytecode.add(rd, rs1, rs2, size),
-                (O::Add, M::TwoValue, None, _, _) => todo!(),
-                (O::Add, M::FourValue, _, _, _) => todo!(),
+                (O::Add, M::TwoValue, None, _, _) => bytecode.heap_tv_add(rd, rs1, rs2, dst_size),
+                (O::Add, M::FourValue, Some(size), _, _) => bytecode.fv_add(rd, rs1, rs2, size),
+                (O::Add, M::FourValue, None, _, _) => bytecode.heap_fv_add(rd, rs1, rs2, dst_size),
                 (O::Sub, M::TwoValue, Some(size), _, _) => bytecode.sub(rd, rs1, rs2, size),
-                (O::Sub, M::TwoValue, None, _, _) => todo!(),
-                (O::Sub, M::FourValue, _, _, _) => todo!(),
+                (O::Sub, M::TwoValue, None, _, _) => bytecode.heap_tv_sub(rd, rs1, rs2, dst_size),
+                (O::Sub, M::FourValue, Some(size), _, _) => bytecode.fv_sub(rd, rs1, rs2, size),
+                (O::Sub, M::FourValue, None, _, _) => bytecode.heap_fv_sub(rd, rs1, rs2, dst_size),
                 (O::Multiply, M::TwoValue, Some(size), _, _) => bytecode.mul(rd, rs1, rs2, size),
-                (O::Multiply, M::TwoValue, None, _, _) => todo!(),
-                (O::Multiply, M::FourValue, _, _, _) => todo!(),
+                (O::Multiply, M::TwoValue, None, _, _) => {
+                    bytecode.heap_tv_mul(rd, rs1, rs2, dst_size)
+                }
+                (O::Multiply, M::FourValue, Some(size), _, _) => {
+                    bytecode.fv_mul(rd, rs1, rs2, size)
+                }
+                (O::Multiply, M::FourValue, None, _, _) => {
+                    bytecode.heap_fv_mul(rd, rs1, rs2, dst_size)
+                }
                 (O::Power, ..) => todo!(),
                 (O::Divide, ..) => todo!(),
                 (O::Modulus, ..) => todo!(),
@@ -729,7 +740,17 @@ fn to_reg(
                 StackItemKind::B64 => stack_offsets.b64,
             };
             let offset = kind_offset as u64 + offset as u64;
-            bytecode.stack_offset(backup, kind, offset);
+            let offset = offset << (kind as u32);
+
+            match lower_to_n_bits_sign_extend(&Bits::new_u64(offset), 10) {
+                None => {
+                    bytecode.load_u64(backup, offset);
+                    bytecode.add(backup, SP, backup, SixBitSize::N64);
+                }
+                Some(imm10) => {
+                    bytecode.addi(backup, SP, imm10 as i16, SixBitSize::N64);
+                }
+            }
             let size = vars.size(var);
             if let Some(size) = SixBitSize::from_vector_size(size) {
                 match var.mode() {

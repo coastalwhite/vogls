@@ -1,5 +1,7 @@
+use std::cell::Cell;
+
 use crate::VectorSize;
-use crate::arithmetic::{fv_contains_special, fv_set_no_special};
+use crate::arithmetic::{fv_cell_contains_special, fv_cell_set_no_special, fv_contains_special, fv_set_no_special};
 use crate::load::load_partial_u64;
 use crate::store::store_partial_u64;
 
@@ -48,6 +50,50 @@ pub fn tv_multiplication(dst: &mut [u64], lhs: &[u64], rhs: &[u64], size: Vector
         *dst.last_mut().unwrap() &= (1u64 << (size.get() % 64)).wrapping_sub(1);
     }
 }
+pub fn tv_cell_multiplication(
+    dst: &[Cell<u64>],
+    lhs: &[Cell<u64>],
+    rhs: &[Cell<u64>],
+    size: VectorSize,
+) {
+    assert!(dst.len() > 0 && dst.len() == lhs.len() && dst.len() == rhs.len());
+    dst.iter().for_each(|v| v.set(0));
+
+    // @Performance. This can probably be written in a better way.
+    for j in 0..lhs.len() {
+        for k in 0..rhs.len() - j {
+            let x = lhs[j].get() as u128;
+            let y = rhs[k].get() as u128;
+
+            let result = x.wrapping_mul(y);
+
+            let hi = (result >> 64) as u64;
+            let lo = (result & 0xFFFF_FFFF_FFFF_FFFF) as u64;
+
+            let mut carry_in;
+            let out;
+            (out, carry_in) = dst[j + k].get().carrying_add(lo, false);
+            dst[j + k].set(out);
+            if j + k + 1 < dst.len() {
+                let out;
+                (out, carry_in) = hi.carrying_add(dst[j + k + 1].get(), carry_in);
+                dst[j + k + 1].set(out);
+                let mut i = 2;
+                while carry_in && i + j + k < dst.len() {
+                    let out;
+                    (out, carry_in) = dst[i + j + k].get().carrying_add(0, carry_in);
+                    dst[i + j + k].set(out);
+                    i += 1;
+                }
+            }
+        }
+    }
+    if size.get() % 64 != 0 {
+        dst.last()
+            .unwrap()
+            .update(|v| v & (1u64 << (size.get() % 64)).wrapping_sub(1));
+    }
+}
 /// Four-value logic arbitrary precision multiplication.
 pub fn fv_multiplication(dst: &mut [u64], lhs: &[u64], rhs: &[u64], size: VectorSize) {
     assert!(
@@ -65,6 +111,23 @@ pub fn fv_multiplication(dst: &mut [u64], lhs: &[u64], rhs: &[u64], size: Vector
     fv_set_no_special(dst, size);
     let nwords = dst.len() / 2;
     tv_multiplication(&mut dst[nwords..], &lhs[nwords..], &rhs[nwords..], size);
+}
+pub fn fv_cell_multiplication(dst: &[Cell<u64>], lhs: &[Cell<u64>], rhs: &[Cell<u64>], size: VectorSize) {
+    assert!(
+        dst.len() > 0
+            && dst.len() == lhs.len()
+            && dst.len() == rhs.len()
+            && dst.len() == 2 * size.get().div_ceil(64) as usize
+    );
+
+    if fv_cell_contains_special(lhs, size) || fv_cell_contains_special(rhs, size) {
+        dst.iter().for_each(|v| v.set(0));
+        return;
+    }
+
+    fv_cell_set_no_special(dst, size);
+    let nwords = dst.len() / 2;
+    tv_cell_multiplication(&dst[nwords..], &lhs[nwords..], &rhs[nwords..], size);
 }
 
 #[cfg(test)]

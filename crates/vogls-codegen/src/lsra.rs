@@ -404,10 +404,11 @@ pub fn linear_scan_register_allocation(
                 Ok(offset) => offset,
                 Err(offset) => {
                     debug_assert!(offset <= bitset.len());
-                    bitset.extend_zeroed(bitset.len() - offset + num_bitset_slots);
+                    bitset.extend_zeroed(num_bitset_slots - (bitset.len() - offset));
                     offset
                 }
             };
+            bitset.set_slice_constant(offset, num_bitset_slots, true);
             let offset = offset.try_into().expect("Too large");
             let slot = Slot::Stack(StackItemKind::from_size(interval.size), offset);
             assignment.insert(*var, slot);

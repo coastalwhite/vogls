@@ -3,8 +3,9 @@ use std::num::NonZeroU16;
 
 use vogls_bits::arithmetic::{
     fv_bin_u64_cell_bitwise_op, fv_bitwise_and_elem, fv_bitwise_andnot_elem, fv_bitwise_or_elem,
-    fv_bitwise_ornot_elem, fv_bitwise_xor_elem, tv_bin_u64_cell_bitwise_mask_last_op,
-    tv_bin_u64_cell_bitwise_op,
+    fv_bitwise_ornot_elem, fv_bitwise_xor_elem, fv_cell_addition, fv_cell_multiplication,
+    fv_cell_subtraction, tv_bin_u64_cell_bitwise_mask_last_op, tv_bin_u64_cell_bitwise_op,
+    tv_cell_addition, tv_cell_multiplication, tv_cell_subtraction,
 };
 use vogls_codegen::HeapOffset;
 use vogls_ir::VectorSize;
@@ -22,6 +23,13 @@ pub struct HeapBinaryBitwise {
     rs1: Reg,
     rs2: Reg,
     op: BitwiseOp,
+    size: Option<VectorSize>,
+}
+pub struct HeapBinaryArithmetic {
+    rd: Reg,
+    rs1: Reg,
+    rs2: Reg,
+    op: ArithmeticOp,
     size: Option<VectorSize>,
 }
 
@@ -153,6 +161,103 @@ impl BytecodeInstruction for HeapBinaryBitwise {
     }
 }
 
+impl BytecodeInstruction for HeapBinaryArithmetic {
+    #[inline(always)]
+    fn extract(c: Bytecode) -> Self {
+        debug_assert_eq!(c.opcode(), BytecodeOpcode::HeapBinaryArithmetic as u8);
+        let v = c.0;
+        Self {
+            rd: Reg::new_masked(v >> 8),
+            rs1: Reg::new_masked(v >> 12),
+            rs2: Reg::new_masked(v >> 16),
+            op: ArithmeticOp::new_masked(v >> 20),
+            size: VectorSize::new(v >> 24),
+        }
+    }
+    #[inline(always)]
+    fn encode(&self) -> Bytecode {
+        Bytecode(
+            BytecodeOpcode::HeapBinaryArithmetic as u32
+                | ((self.rd as u32) << 8)
+                | ((self.rs1 as u32) << 12)
+                | ((self.rs2 as u32) << 16)
+                | ((self.op as u32) << 20)
+                | (self.size.map_or(0, |v| v.get()) << 24),
+        )
+    }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            rd,
+            rs1,
+            rs2,
+            op,
+            size: _,
+        } = self;
+        let mnemonic = match op {
+            ArithmeticOp::TvAdd => "tv.heap_add",
+            ArithmeticOp::TvSub => "tv.heap_sub",
+            ArithmeticOp::TvMul => "tv.heap_mul",
+            ArithmeticOp::FvAdd => "fv.heap_add",
+            ArithmeticOp::FvSub => "fv.heap_sub",
+            ArithmeticOp::FvMul => "fv.heap_mul",
+        };
+        write_padded_mnemonic(f, mnemonic)?;
+        write!(f, "{rd}, {rs1}, {rs2}")
+    }
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let Self {
+            rd,
+            rs1,
+            rs2,
+            op,
+            size,
+        } = self;
+        let size = size.unwrap_or_else(|| VectorSize::new(regs[Reg::X12] as u32).unwrap());
+        let mut num_words = size.get().div_ceil(64) as usize;
+        if op.is_four_value() {
+            num_words *= 2;
+        }
+        let [dst, src1, src2] = state.heap.get_u64_cell_slices([
+            (
+                HeapOffset {
+                    bit_offset: regs[rd] as usize,
+                },
+                num_words,
+            ),
+            (
+                HeapOffset {
+                    bit_offset: regs[rs1] as usize,
+                },
+                num_words,
+            ),
+            (
+                HeapOffset {
+                    bit_offset: regs[rs2] as usize,
+                },
+                num_words,
+            ),
+        ]);
+
+        use ArithmeticOp as O;
+        match op {
+            O::TvAdd => tv_cell_addition(dst, src1, src2, size),
+            O::TvSub => tv_cell_subtraction(dst, src1, src2, size),
+            O::TvMul => tv_cell_multiplication(dst, src1, src2, size),
+            O::FvAdd => fv_cell_addition(dst, src1, src2, size),
+            O::FvSub => fv_cell_subtraction(dst, src1, src2, size),
+            O::FvMul => fv_cell_multiplication(dst, src1, src2, size),
+        }
+    }
+}
+
 impl BytecodeInstruction for HeapCaseEq {
     #[inline(always)]
     fn extract(c: Bytecode) -> Self {
@@ -245,10 +350,10 @@ pub enum BitwiseOp {
 
 impl BitwiseOp {
     pub fn is_four_value(self) -> bool {
-        matches!(
-            self,
-            Self::FvAnd | Self::FvOr | Self::FvXor | Self::FvAndNot | Self::FvOrNot
-        )
+        match self {
+            Self::TvAnd | Self::TvOr | Self::TvXor | Self::TvAndNot | Self::TvOrNot => false,
+            Self::FvAnd | Self::FvOr | Self::FvXor | Self::FvAndNot | Self::FvOrNot => true,
+        }
     }
 
     pub fn new_masked(v: u32) -> Self {
@@ -258,11 +363,41 @@ impl BitwiseOp {
             2 => Self::TvXor,
             3 => Self::TvAndNot,
             4 => Self::TvOrNot,
-            5 => Self::FvAnd,
-            6 => Self::FvOr,
-            7 => Self::FvXor,
-            8 => Self::FvAndNot,
+            8 => Self::FvAnd,
+            9 => Self::FvOr,
+            10 => Self::FvXor,
+            11 => Self::FvAndNot,
             _ => Self::FvOrNot,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub enum ArithmeticOp {
+    TvAdd,
+    TvSub,
+    TvMul,
+    FvAdd,
+    FvSub,
+    FvMul,
+}
+
+impl ArithmeticOp {
+    pub fn is_four_value(self) -> bool {
+        match self {
+            Self::TvAdd | Self::TvSub | Self::TvMul => false,
+            Self::FvAdd | Self::FvSub | Self::FvMul => true,
+        }
+    }
+
+    pub fn new_masked(v: u32) -> Self {
+        match v & 0xF {
+            0 => Self::TvAdd,
+            1 => Self::TvSub,
+            2 => Self::TvMul,
+            7 => Self::FvAdd,
+            8 => Self::FvSub,
+            _ => Self::FvMul,
         }
     }
 }
@@ -309,7 +444,41 @@ impl BytecodeEncoder {
         } else {
             Some(size)
         };
-        self.data.push(HeapBinaryBitwise { rd, rs1, rs2, op, size }.encode());
+        self.data.push(
+            HeapBinaryBitwise {
+                rd,
+                rs1,
+                rs2,
+                op,
+                size,
+            }
+            .encode(),
+        );
+    }
+    fn heap_binary_arith(
+        &mut self,
+        rd: Reg,
+        rs1: Reg,
+        rs2: Reg,
+        op: ArithmeticOp,
+        size: VectorSize,
+    ) {
+        let size = if size.get() >= (1u32 << 8) {
+            self.load_u64(Reg::X12, size.get() as u64);
+            None
+        } else {
+            Some(size)
+        };
+        self.data.push(
+            HeapBinaryArithmetic {
+                rd,
+                rs1,
+                rs2,
+                op,
+                size,
+            }
+            .encode(),
+        );
     }
 
     pub fn heap_tv_and(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
@@ -335,5 +504,24 @@ impl BytecodeEncoder {
     }
     pub fn heap_fv_xor(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
         self.heap_binary_bitwise(rd, rs1, rs2, BitwiseOp::FvXor, size);
+    }
+
+    pub fn heap_tv_add(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_binary_arith(rd, rs1, rs2, ArithmeticOp::TvAdd, size);
+    }
+    pub fn heap_tv_sub(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_binary_arith(rd, rs1, rs2, ArithmeticOp::TvSub, size);
+    }
+    pub fn heap_tv_mul(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_binary_arith(rd, rs1, rs2, ArithmeticOp::TvMul, size);
+    }
+    pub fn heap_fv_add(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_binary_arith(rd, rs1, rs2, ArithmeticOp::FvAdd, size);
+    }
+    pub fn heap_fv_sub(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_binary_arith(rd, rs1, rs2, ArithmeticOp::FvSub, size);
+    }
+    pub fn heap_fv_mul(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_binary_arith(rd, rs1, rs2, ArithmeticOp::FvMul, size);
     }
 }

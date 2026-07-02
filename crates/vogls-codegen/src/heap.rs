@@ -54,7 +54,7 @@ impl HeapBuilder {
 
     pub fn claim_words(&mut self, num_words: usize) -> usize {
         self.padding += self.top.next_multiple_of(64) - self.top;
-        self.top += self.top.next_multiple_of(64);
+        self.top = self.top.next_multiple_of(64);
         let offset = self.top;
         self.top += num_words * 64;
         offset

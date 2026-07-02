@@ -239,7 +239,6 @@ impl LoweredDesign {
 
             let stack_offset = heap_builder.claim_words(num_stack_words) as u64;
             let mut heap = heap_builder.finish();
-            dbg!(heap.0.len());
             let mut lupdt_updated = vec![false; lupdt_indexes.len()];
 
             for (key, signal) in &self.gl.signals {

@@ -10,15 +10,17 @@ mod multiplication;
 mod power;
 
 pub use add_sub::{
-    fv_addition, fv_ltu32_addition, fv_ltu32_subtraction, fv_subtraction, tv_addition,
-    tv_ltu64_addition, tv_ltu64_subtraction, tv_subtraction,
+    fv_addition, fv_cell_addition, fv_cell_subtraction, fv_ltu32_addition, fv_ltu32_subtraction,
+    fv_subtraction, tv_addition, tv_cell_addition, tv_cell_subtraction, tv_ltu64_addition,
+    tv_ltu64_subtraction, tv_subtraction,
 };
 pub use division::{
     fv_division, fv_ltu32_division, fv_ltu32_modulus, tv_division, tv_ltu64_division,
     tv_ltu64_modulus,
 };
 pub use multiplication::{
-    fv_ltu32_multiplication, fv_multiplication, tv_ltu64_multiplication, tv_multiplication,
+    fv_cell_multiplication, fv_ltu32_multiplication, fv_multiplication, tv_cell_multiplication,
+    tv_ltu64_multiplication, tv_multiplication,
 };
 pub use power::{fv_ltu32_power, fv_power, tv_ltu64_power, tv_power};
 
@@ -541,6 +543,21 @@ pub fn fv_contains_special(src: &[u64], size: VectorSize) -> bool {
     };
     src[nwords - 1] & last_mask != last_mask
 }
+pub fn fv_cell_contains_special(src: &[Cell<u64>], size: VectorSize) -> bool {
+    assert!(src.len() > 0 && src.len() == 2 * (size.get().div_ceil(64) as usize));
+    let nwords = src.len() / 2;
+    for i in 0..nwords - 1 {
+        if !src[i].get() != 0 {
+            return true;
+        }
+    }
+    let last_mask = if size.get() % 64 == 0 {
+        u64::MAX
+    } else {
+        (1u64 << size.get() % 64) - 1
+    };
+    src[nwords - 1].get() & last_mask != last_mask
+}
 
 pub fn fv_contains_unknown(src: &[u64], size: VectorSize) -> bool {
     assert!(src.len() > 0 && src.len() == 2 * (size.get().div_ceil(64) as usize));
@@ -615,6 +632,14 @@ pub fn fv_set_no_special(slice: &mut [u64], size: VectorSize) {
     slice[..nwords].fill(u64::MAX);
     if size.get() % 64 != 0 {
         slice[nwords - 1] &= (1u64 << size.get() % 64) - 1;
+    }
+}
+pub fn fv_cell_set_no_special(slice: &[Cell<u64>], size: VectorSize) {
+    assert!(slice.len() > 0 && slice.len() == 2 * (size.get().div_ceil(64) as usize));
+    let nwords = slice.len() / 2;
+    slice[..nwords].iter().for_each(|v| v.set(u64::MAX));
+    if size.get() % 64 != 0 {
+        slice[nwords - 1].update(|v| v & (1u64 << size.get() % 64) - 1);
     }
 }
 

@@ -46,6 +46,7 @@ impl Bitset {
 
     pub fn extend_zeroed(&mut self, n: usize) {
         self.data.resize((self.len() + n).div_ceil(64), 0u64);
+        self.num_bits = self.len() + n;
     }
 
     pub fn push(&mut self, value: bool) {
