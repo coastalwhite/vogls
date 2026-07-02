@@ -1,0 +1,489 @@
+use std::fmt;
+
+use vogls_bits::arithmetic::{
+    fv_bitwise_and_elem, fv_bitwise_andnot_elem, fv_bitwise_or_elem, fv_bitwise_ornot_elem,
+    fv_bitwise_xor_elem,
+};
+use vogls_bits::edge::{fv_negedge_u64, fv_posedge_u64};
+use vogls_runtime::RuntimeState;
+
+use super::reg::{Reg, Regs};
+use super::{
+    Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, BytecodeOpcode, ColdContext,
+    Schedule, SixBitSize, write_padded_mnemonic,
+};
+
+pub struct BitwiseRType {
+    pub rd: Reg,
+    pub rs1: Reg,
+    pub rs2: Reg,
+}
+pub struct SbsBitwiseRType {
+    pub rd: Reg,
+    pub rs1: Reg,
+    pub rs2: Reg,
+    pub size: SixBitSize,
+}
+
+pub struct TvAnd(pub BitwiseRType);
+pub struct TvOr(pub BitwiseRType);
+pub struct TvXor(pub BitwiseRType);
+pub struct TvAndNot(pub SbsBitwiseRType);
+pub struct TvOrNot(pub SbsBitwiseRType);
+pub struct TvXnor(pub SbsBitwiseRType);
+pub struct TvCeq(pub BitwiseRType);
+pub struct TvAdd(pub SbsBitwiseRType);
+pub struct TvSub(pub SbsBitwiseRType);
+pub struct TvMul(pub SbsBitwiseRType);
+
+pub struct FvAnd(pub BitwiseRType);
+pub struct FvOr(pub BitwiseRType);
+pub struct FvXor(pub BitwiseRType);
+pub struct FvAndNot(pub BitwiseRType);
+pub struct FvOrNot(pub BitwiseRType);
+pub struct FvCeq(pub BitwiseRType);
+pub struct FvPosedge(pub BitwiseRType);
+pub struct FvNegedge(pub BitwiseRType);
+
+impl BitwiseRType {
+    #[inline(always)]
+    fn extract(c: Bytecode) -> Self {
+        let v = c.0;
+        Self {
+            rd: Reg::new_masked(v >> 8),
+            rs1: Reg::new_masked(v >> 12),
+            rs2: Reg::new_masked(v >> 16),
+        }
+    }
+    #[inline(always)]
+    fn encode(&self, opcode: BytecodeOpcode) -> Bytecode {
+        Bytecode(
+            opcode as u32
+                | ((self.rd as u32) << 8)
+                | ((self.rs1 as u32) << 12)
+                | ((self.rs2 as u32) << 16),
+        )
+    }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self { rd, rs1, rs2 } = self;
+        write!(f, "{rd}, {rs1}, {rs2}")
+    }
+}
+impl SbsBitwiseRType {
+    #[inline(always)]
+    fn extract(c: Bytecode) -> Self {
+        let v = c.0;
+        Self {
+            rd: Reg::new_masked(v >> 8),
+            rs1: Reg::new_masked(v >> 12),
+            rs2: Reg::new_masked(v >> 16),
+            size: SixBitSize::new_masked(v >> 20),
+        }
+    }
+    #[inline(always)]
+    fn encode(&self, opcode: BytecodeOpcode) -> Bytecode {
+        Bytecode(
+            opcode as u32
+                | ((self.rd as u32) << 8)
+                | ((self.rs1 as u32) << 12)
+                | ((self.rs2 as u32) << 16)
+                | ((self.size.0 as u32) << 20),
+        )
+    }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self { rd, rs1, rs2, size } = self;
+        write!(f, "{rd}, {rs1}, {rs2}, |{size}|")
+    }
+}
+
+macro_rules! impl_bitwise {
+    ($variant:ident, $mnemonic:literal) => {
+        #[inline(always)]
+        fn extract(v: Bytecode) -> Self {
+            debug_assert_eq!(v.opcode(), BytecodeOpcode::$variant as u8);
+            Self(BitwiseRType::extract(v))
+        }
+        fn encode(&self) -> Bytecode {
+            self.0.encode(BytecodeOpcode::$variant)
+        }
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write_padded_mnemonic(f, $mnemonic)?;
+            self.0.fmt(f)
+        }
+    };
+}
+macro_rules! impl_sbs_bitwise {
+    ($variant:ident, $mnemonic:literal) => {
+        #[inline(always)]
+        fn extract(v: Bytecode) -> Self {
+            debug_assert_eq!(v.opcode(), BytecodeOpcode::$variant as u8);
+            Self(SbsBitwiseRType::extract(v))
+        }
+        fn encode(&self) -> Bytecode {
+            self.0.encode(BytecodeOpcode::$variant)
+        }
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write_padded_mnemonic(f, $mnemonic)?;
+            self.0.fmt(f)
+        }
+    };
+}
+
+impl BytecodeInstruction for TvAnd {
+    impl_bitwise!(TvAnd, "tv.and");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let BitwiseRType { rd, rs1, rs2 } = self.0;
+        regs[rd] = regs[rs1] & regs[rs2];
+    }
+}
+impl BytecodeInstruction for TvOr {
+    impl_bitwise!(TvOr, "tv.or");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let BitwiseRType { rd, rs1, rs2 } = self.0;
+        regs[rd] = regs[rs1] | regs[rs2];
+    }
+}
+impl BytecodeInstruction for TvXor {
+    impl_bitwise!(TvXor, "tv.xor");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let BitwiseRType { rd, rs1, rs2 } = self.0;
+        regs[rd] = regs[rs1] ^ regs[rs2];
+    }
+}
+impl BytecodeInstruction for TvAndNot {
+    impl_sbs_bitwise!(TvAndNot, "tv.andnot");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let SbsBitwiseRType { rd, rs1, rs2, size } = self.0;
+        regs[rd] = size.mask(regs[rs1] & !regs[rs2]);
+    }
+}
+impl BytecodeInstruction for TvOrNot {
+    impl_sbs_bitwise!(TvOrNot, "tv.ornot");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let SbsBitwiseRType { rd, rs1, rs2, size } = self.0;
+        regs[rd] = size.mask(regs[rs1] | !regs[rs2]);
+    }
+}
+impl BytecodeInstruction for TvXnor {
+    impl_sbs_bitwise!(TvXnor, "tv.xnor");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let SbsBitwiseRType { rd, rs1, rs2, size } = self.0;
+        regs[rd] = size.mask(!(regs[rs1] ^ regs[rs2]));
+    }
+}
+impl BytecodeInstruction for TvCeq {
+    impl_bitwise!(TvCeq, "tv.ceq");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let BitwiseRType { rd, rs1, rs2 } = self.0;
+        regs[rd] = u64::from(regs[rs1] == regs[rs2]);
+    }
+}
+impl BytecodeInstruction for TvAdd {
+    impl_sbs_bitwise!(TvAdd, "tv.add");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let SbsBitwiseRType { rd, rs1, rs2, size } = self.0;
+        regs[rd] = size.mask(regs[rs1].wrapping_add(regs[rs2]));
+    }
+}
+impl BytecodeInstruction for TvSub {
+    impl_sbs_bitwise!(TvSub, "tv.sub");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let SbsBitwiseRType { rd, rs1, rs2, size } = self.0;
+        regs[rd] = size.mask(regs[rs1].wrapping_sub(regs[rs2]));
+    }
+}
+impl BytecodeInstruction for TvMul {
+    impl_sbs_bitwise!(TvMul, "tv.mul");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let SbsBitwiseRType { rd, rs1, rs2, size } = self.0;
+        regs[rd] = size.mask(regs[rs1].wrapping_mul(regs[rs2]));
+    }
+}
+
+impl BytecodeInstruction for FvAnd {
+    impl_bitwise!(FvAnd, "fv.and");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let BitwiseRType { rd, rs1, rs2 } = self.0;
+        let (rd_spc, rd_val) = rd.to_spc_and_val();
+        let (rs1_spc, rs1_val) = rs1.to_spc_and_val();
+        let (rs2_spc, rs2_val) = rs2.to_spc_and_val();
+        (regs[rd_spc], regs[rd_val]) =
+            fv_bitwise_and_elem(regs[rs1_spc], regs[rs1_val], regs[rs2_spc], regs[rs2_val]);
+    }
+}
+impl BytecodeInstruction for FvOr {
+    impl_bitwise!(FvOr, "fv.or");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let BitwiseRType { rd, rs1, rs2 } = self.0;
+        let (rd_spc, rd_val) = rd.to_spc_and_val();
+        let (rs1_spc, rs1_val) = rs1.to_spc_and_val();
+        let (rs2_spc, rs2_val) = rs2.to_spc_and_val();
+        (regs[rd_spc], regs[rd_val]) =
+            fv_bitwise_or_elem(regs[rs1_spc], regs[rs1_val], regs[rs2_spc], regs[rs2_val]);
+    }
+}
+impl BytecodeInstruction for FvXor {
+    impl_bitwise!(FvXor, "fv.xor");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let BitwiseRType { rd, rs1, rs2 } = self.0;
+        let (rd_spc, rd_val) = rd.to_spc_and_val();
+        let (rs1_spc, rs1_val) = rs1.to_spc_and_val();
+        let (rs2_spc, rs2_val) = rs2.to_spc_and_val();
+        (regs[rd_spc], regs[rd_val]) =
+            fv_bitwise_xor_elem(regs[rs1_spc], regs[rs1_val], regs[rs2_spc], regs[rs2_val]);
+    }
+}
+impl BytecodeInstruction for FvAndNot {
+    impl_bitwise!(FvAndNot, "fv.andnot");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let BitwiseRType { rd, rs1, rs2 } = self.0;
+        let (rd_spc, rd_val) = rd.to_spc_and_val();
+        let (rs1_spc, rs1_val) = rs1.to_spc_and_val();
+        let (rs2_spc, rs2_val) = rs2.to_spc_and_val();
+        (regs[rd_spc], regs[rd_val]) =
+            fv_bitwise_andnot_elem(regs[rs1_spc], regs[rs1_val], regs[rs2_spc], regs[rs2_val]);
+    }
+}
+impl BytecodeInstruction for FvOrNot {
+    impl_bitwise!(FvOrNot, "fv.ornot");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let BitwiseRType { rd, rs1, rs2 } = self.0;
+        let (rd_spc, rd_val) = rd.to_spc_and_val();
+        let (rs1_spc, rs1_val) = rs1.to_spc_and_val();
+        let (rs2_spc, rs2_val) = rs2.to_spc_and_val();
+        (regs[rd_spc], regs[rd_val]) =
+            fv_bitwise_ornot_elem(regs[rs1_spc], regs[rs1_val], regs[rs2_spc], regs[rs2_val]);
+    }
+}
+impl BytecodeInstruction for FvCeq {
+    impl_bitwise!(FvCeq, "fv.ceq");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let BitwiseRType { rd, rs1, rs2 } = self.0;
+        let (rs1_spc, rs1_val) = rs1.to_spc_and_val();
+        let (rs2_spc, rs2_val) = rs2.to_spc_and_val();
+        regs[rd] = u64::from((regs[rs1_spc] == regs[rs2_spc]) & (regs[rs1_val] == regs[rs2_val]));
+    }
+}
+impl BytecodeInstruction for FvPosedge {
+    impl_bitwise!(FvPosedge, "fv.posedge");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let BitwiseRType { rd, rs1, rs2 } = self.0;
+        let (rs1_spc, rs1_val) = rs1.to_spc_and_val();
+        let (rs2_spc, rs2_val) = rs2.to_spc_and_val();
+        regs[rd] = fv_posedge_u64(regs[rs1_spc], regs[rs1_val], regs[rs2_spc], regs[rs2_val]);
+    }
+}
+impl BytecodeInstruction for FvNegedge {
+    impl_bitwise!(FvNegedge, "fv.negedge");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let BitwiseRType { rd, rs1, rs2 } = self.0;
+        let (rs1_spc, rs1_val) = rs1.to_spc_and_val();
+        let (rs2_spc, rs2_val) = rs2.to_spc_and_val();
+        regs[rd] = fv_negedge_u64(regs[rs1_spc], regs[rs1_val], regs[rs2_spc], regs[rs2_val]);
+    }
+}
+
+macro_rules! impl_bytecode_methods {
+    ($(($name:ident, $op:ident))*) => {
+        impl BytecodeEncoder {
+            $(pub fn $name(&mut self, rd: Reg, rs1: Reg, rs2: Reg) {
+                self.data.push($op(BitwiseRType { rd, rs1, rs2 }).encode());
+            })*
+        }
+    };
+}
+macro_rules! impl_bytecode_sbs_methods {
+    ($(($name:ident, $op:ident))*) => {
+        impl BytecodeEncoder {
+            $(pub fn $name(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: SixBitSize) {
+                self.data.push($op(SbsBitwiseRType { rd, rs1, rs2, size }).encode());
+            })*
+        }
+    };
+}
+
+impl_bytecode_methods! {
+    (and, TvAnd)
+    (or, TvOr)
+    (xor, TvXor)
+    (ceq, TvCeq)
+    (fv_and, FvAnd)
+    (fv_or, FvOr)
+    (fv_xor, FvXor)
+    (fv_andnot, FvAndNot)
+    (fv_ornot, FvOrNot)
+    (fv_ceq, FvCeq)
+    (fv_posedge, FvPosedge)
+    (fv_negedge, FvNegedge)
+}
+
+impl_bytecode_sbs_methods! {
+    (andnot, TvAndNot)
+    (ornot, TvOrNot)
+    (xnor, TvXnor)
+    (add, TvAdd)
+    (sub, TvSub)
+    (mul, TvMul)
+}

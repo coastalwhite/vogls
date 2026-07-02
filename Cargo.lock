@@ -889,20 +889,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "vogls-bytecode"
-version = "0.0.1"
-dependencies = [
- "bytemuck",
- "slotmap",
- "vogls-bits",
- "vogls-codegen",
- "vogls-ir",
- "vogls-runtime",
- "vogls-utils",
- "vogls-vcd",
-]
-
-[[package]]
 name = "vogls-cli"
 version = "0.0.1"
 dependencies = [
@@ -919,7 +905,6 @@ dependencies = [
  "slotmap",
  "vogls-bits",
  "vogls-ir",
- "vogls-ir-properties",
  "vogls-utils",
 ]
 
@@ -931,7 +916,6 @@ dependencies = [
  "vogls-bits",
  "vogls-codegen",
  "vogls-ir",
- "vogls-ir-properties",
  "vogls-runtime",
  "vogls-utils",
 ]
@@ -966,16 +950,6 @@ dependencies = [
  "hashbrown 0.16.1",
  "slotmap",
  "vogls-bits",
- "vogls-utils",
-]
-
-[[package]]
-name = "vogls-ir-properties"
-version = "0.0.1"
-dependencies = [
- "hashbrown 0.16.1",
- "slotmap",
- "vogls-ir",
  "vogls-utils",
 ]
 
@@ -1033,7 +1007,6 @@ dependencies = [
  "vogls-bits",
  "vogls-codegen",
  "vogls-ir",
- "vogls-ir-properties",
  "vogls-runtime",
  "vogls-utils",
  "vogls-vcd",

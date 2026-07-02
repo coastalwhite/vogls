@@ -10,8 +10,7 @@ use vogls_runtime::RtSignalKey;
 use vogls_utils::{NonMaxU16, VgHashMap, VgHashSet};
 
 use crate::bytecode::{
-    Bytecode, BytecodeEncoder, BytecodeKind, BytecodeListeners, EncJump, EncRelJump, Encoding,
-    InstructionPtr, IntrinsicOpEqWrap, Reg, Schedule, SixBitSize,
+    Branch, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, InstructionPtr, IntrinsicOpEqWrap, Jump, Reg, Schedule, SixBitSize
 };
 
 enum JumpKind {
@@ -32,7 +31,7 @@ pub fn lower_process_to_bytecode(
     io_signals: &VgHashMap<SignalKey, RtSignalKey>,
     bytecode: &mut BytecodeEncoder,
 ) {
-    const PRINT: bool = false;
+    const PRINT: bool = true;
 
     let process = &gl.processes[process];
 
@@ -203,11 +202,11 @@ pub fn lower_process_to_bytecode(
             imm = -imm;
         }
         bytecode.data[offset] = match kind {
-            JumpKind::Jump => Bytecode((BytecodeKind::jump as u32) | EncJump { imm }.encode()),
+            JumpKind::Jump => Jump(imm).encode(),
             JumpKind::Branch => {
-                let mut enc = EncRelJump::extract(bytecode.data[offset]);
+                let mut enc = Branch::extract(bytecode.data[offset]);
                 enc.imm = imm;
-                Bytecode((BytecodeKind::branch as u32) | enc.encode())
+                enc.encode()
             }
         };
     }
@@ -365,7 +364,7 @@ fn lower_instruction(
                     bytecode.copy(rdval, rsval);
                 }
                 (O::ZeroExtend, M::TwoValue, None, _) => {
-                    bytecode.heap_tv_zero_extend(rd, rs, dst_size, src_size);
+                    todo!()
                 }
                 (O::ZeroExtend, M::FourValue, ..) => todo!(),
 
@@ -391,7 +390,7 @@ fn lower_instruction(
             match (
                 op,
                 dst.mode(),
-                SixBitSize::from_vector_size(dst_size),
+                SixBitSize::from_vector_size(lhs_size),
                 lhs.mode(),
                 rhs.mode(),
             ) {
@@ -432,19 +431,19 @@ fn lower_instruction(
 
                 (O::CaseEquality, _, Some(_), M::TwoValue, _) => bytecode.ceq(rd, rs1, rs2),
                 (O::CaseEquality, _, None, M::TwoValue, _) => {
-                    bytecode.heap_tv_ceq(rd, rs1, rs2, lhs_size)
+                    bytecode.heap_ceq(rd, rs1, rs2, lhs_size.get().div_ceil(64))
                 }
                 (O::CaseEquality, _, Some(_), M::FourValue, _) => bytecode.fv_ceq(rd, rs1, rs2),
                 (O::CaseEquality, _, None, M::FourValue, _) => {
-                    bytecode.heap_fv_ceq(rd, rs1, rs2, lhs_size)
+                    bytecode.heap_ceq(rd, rs1, rs2, lhs_size.get().div_ceil(64) * 2)
                 }
 
                 (O::Posedge, _, _, M::TwoValue, _) => {
-                    bytecode.and_not(rd, rs2, rs1, SixBitSize::SCALAR)
+                    bytecode.andnot(rd, rs2, rs1, SixBitSize::SCALAR)
                 }
                 (O::Posedge, _, _, M::FourValue, _) => bytecode.fv_posedge(rd, rs1, rs2),
                 (O::Negedge, _, _, M::TwoValue, _) => {
-                    bytecode.and_not(rd, rs1, rs2, SixBitSize::SCALAR)
+                    bytecode.andnot(rd, rs1, rs2, SixBitSize::SCALAR)
                 }
                 (O::Negedge, _, _, M::FourValue, _) => bytecode.fv_negedge(rd, rs1, rs2),
             }
@@ -600,8 +599,7 @@ fn lower_instruction(
                     stack_offsets,
                     T2,
                 );
-                let size = to_8bit_size(bytecode, gl.vars.size(*item));
-                bytecode.push_argument(size, item.mode(), reg);
+                bytecode.push_argument(gl.vars.size(*item), item.mode(), reg);
             }
             let intrinsic_id = bytecode
                 .intrinsics
@@ -619,7 +617,6 @@ fn lower_instruction(
         I::LastUpdateTime(variable_key, signal_key) => todo!(),
         I::Probe(dst, signal, offset) => {
             let dslot = assignment[dst];
-            dbg!(&dslot);
             let rd = to_reg(bytecode, *dst, &gl.vars, dslot, stack_offsets, T0);
 
             let dst_size = gl.vars.size(*dst);
@@ -629,7 +626,7 @@ fn lower_instruction(
             if *offset != 0 {
                 todo!()
             }
-             
+
             if dst_size != signal_size {
                 todo!()
             }
@@ -638,10 +635,18 @@ fn lower_instruction(
             let roff = T1;
             load_signal_address(bytecode, roff, *signal, signals, io_signals);
             match (dst.mode(), SixBitSize::from_vector_size(signal_size)) {
-                (LogicMode::TwoValue, None) => bytecode.load_heap_aligned(rd, roff, signal_size.get().div_ceil(64) as u16),
-                (LogicMode::TwoValue, Some(signal_size)) => bytecode.load_aligned(rd, roff, 0, signal_size),
-                (LogicMode::FourValue, None) => bytecode.load_heap_aligned(rd, roff, signal_size.get().div_ceil(64) as u16 * 2),
-                (LogicMode::FourValue, Some(signal_size)) => bytecode.load_fv_aligned(rd, roff, 0, signal_size),
+                (LogicMode::TwoValue, None) => {
+                    bytecode.load_heap_aligned(rd, roff, signal_size.get().div_ceil(64) as u16)
+                }
+                (LogicMode::TwoValue, Some(signal_size)) => {
+                    bytecode.tv_load_aligned(rd, roff, 0, signal_size)
+                }
+                (LogicMode::FourValue, None) => {
+                    bytecode.load_heap_aligned(rd, roff, signal_size.get().div_ceil(64) as u16 * 2)
+                }
+                (LogicMode::FourValue, Some(signal_size)) => {
+                    bytecode.fv_load_aligned(rd, roff, 0, signal_size)
+                }
             }
 
             store_back(bytecode, &gl.vars, *dst, dslot, rd);
@@ -669,19 +674,19 @@ fn lower_instruction(
                     if signal_size.get() >= (1u32 << 16) {
                         todo!();
                     }
-                    bytecode.set_heap_aligned(rpoke, rs, roff, Some(signal_size));
+                    bytecode.tv_set_heap_aligned(rpoke, rs, roff, Some(signal_size));
                 }
                 (LogicMode::FourValue, None) => {
                     if signal_size.get() >= (1u32 << 16) {
                         todo!();
                     }
-                    bytecode.set_fv_heap_aligned(rpoke, rs, roff, Some(signal_size));
+                    bytecode.fv_set_heap_aligned(rpoke, rs, roff, Some(signal_size));
                 }
                 (LogicMode::TwoValue, Some(signal_size)) => {
-                    bytecode.set_aligned(rpoke, rs, roff, 0, signal_size)
+                    bytecode.tv_set_aligned(rpoke, rs, roff, 0, signal_size)
                 }
                 (LogicMode::FourValue, Some(signal_size)) => {
-                    bytecode.set_fv_aligned(rpoke, rs, roff, 0, signal_size)
+                    bytecode.fv_set_aligned(rpoke, rs, roff, 0, signal_size)
                 }
             }
 
@@ -728,8 +733,8 @@ fn to_reg(
             let size = vars.size(var);
             if let Some(size) = SixBitSize::from_vector_size(size) {
                 match var.mode() {
-                    LogicMode::TwoValue => bytecode.load_aligned(backup, backup, 0, size),
-                    LogicMode::FourValue => bytecode.load_fv_aligned(backup, backup, 0, size),
+                    LogicMode::TwoValue => bytecode.tv_load_aligned(backup, backup, 0, size),
+                    LogicMode::FourValue => bytecode.fv_load_aligned(backup, backup, 0, size),
                 }
             }
             backup

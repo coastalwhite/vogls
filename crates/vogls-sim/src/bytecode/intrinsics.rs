@@ -1,0 +1,197 @@
+use std::fmt;
+
+use vogls_bits::arithmetic::FvLogicValue;
+use vogls_ir::{Bits, IntrinsicOp, LogicMode, Mode, SCALAR_VSIZE, VSIZE_32, VSIZE_64, VectorSize};
+use vogls_runtime::RuntimeState;
+use vogls_utils::NonMaxU16;
+
+use crate::bytecode::{value_to_heap_ref, BytecodeOpcode, MNEMONIC_ALIGN};
+
+use super::reg::{Reg, Regs};
+use super::{Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, ColdContext, Schedule};
+
+pub struct PushArgument {
+    size: Option<VectorSize>,
+    mode: LogicMode,
+    rs: Reg,
+}
+
+pub struct Intrinsic {
+    rd: Reg,
+    id: Option<NonMaxU16>,
+}
+
+impl BytecodeInstruction for PushArgument {
+    fn extract(v: Bytecode) -> Self {
+        debug_assert_eq!(v.opcode(), BytecodeOpcode::PushArgument as u8);
+        let v = v.0;
+        Self {
+            rs: Reg::new_masked(v >> 8),
+            mode: match (v >> 12) & 1 {
+                0 => LogicMode::TwoValue,
+                _ => LogicMode::FourValue,
+            },
+            size: VectorSize::new(v >> 13),
+        }
+    }
+
+    fn encode(&self) -> Bytecode {
+        Bytecode(
+            (BytecodeOpcode::PushArgument as u32)
+                | ((self.rs as u32) << 8)
+                | ((self.mode as u32) << 12)
+                | (self.size.map_or(0u32, |v| v.get()) << 13),
+        )
+    }
+
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self { size: _, mode, rs } = self;
+        write!(f, "{:<1$}{rs}, {mode:?}", "push_argument", MNEMONIC_ALIGN)
+    }
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        cldctx: &mut ColdContext,
+    ) {
+        let Self { size, mode, rs } = self;
+        let size = size.unwrap_or_else(|| VectorSize::new(regs[Reg::X12] as u32).unwrap());
+        cldctx.stack_args.push((size, mode));
+        match mode {
+            LogicMode::FourValue if size <= VSIZE_64 => {
+                let (spc, val) = rs.to_spc_and_val();
+                cldctx.stack.push(regs[spc]);
+                cldctx.stack.push(regs[val]);
+            }
+            LogicMode::TwoValue | LogicMode::FourValue => cldctx.stack.push(regs[rs]),
+        }
+    }
+}
+
+impl BytecodeInstruction for Intrinsic {
+    fn extract(v: Bytecode) -> Self {
+        debug_assert_eq!(v.opcode(), BytecodeOpcode::Intrinsic as u8);
+        let v = v.0;
+        Self {
+            rd: Reg::new_masked(v >> 8),
+            id: NonMaxU16::new((v >> 16) as u16),
+        }
+    }
+
+    fn encode(&self) -> Bytecode {
+        Bytecode(
+            (BytecodeOpcode::Intrinsic as u32)
+                | ((self.rd as u32) << 8)
+                | (self.id.map_or(0u32, |v| v.get() as u32) << 16),
+        )
+    }
+
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:<1$}", "intrinsic", MNEMONIC_ALIGN)
+    }
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        pc: &mut u64,
+        state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        cldctx: &mut ColdContext,
+    ) {
+        let Self { rd, id } = self;
+        let id = id.map_or_else(|| regs[Reg::X14], |v| v.get() as u64);
+        let intrinsic = &cldctx.intrinsics[id as usize];
+        match intrinsic {
+            IntrinsicOp::Time => regs[rd] = state.time,
+            IntrinsicOp::Finish => todo!(),
+            IntrinsicOp::Random => todo!(),
+            IntrinsicOp::Display(_) => todo!(),
+            IntrinsicOp::Assert(f) => {
+                let mut stack_offset = 0usize;
+                let (cond_size, cond_mode) = cldctx.stack_args[0];
+                assert_eq!(cond_size, SCALAR_VSIZE);
+                let condition = match cond_mode {
+                    LogicMode::TwoValue => {
+                        stack_offset += 1;
+                        cldctx.stack[0] != 0
+                    }
+                    LogicMode::FourValue => {
+                        stack_offset += 2;
+                        FvLogicValue::from_spc_and_val(cldctx.stack[0] != 0, cldctx.stack[1] != 0)
+                            == FvLogicValue::L1
+                    }
+                };
+
+                if !condition {
+                    f.write_to(
+                        &mut cldctx.stderr,
+                        cldctx.stack_args[1..]
+                            .iter()
+                            .map(|&(size, mode)| match mode {
+                                LogicMode::TwoValue if size <= VSIZE_64 => {
+                                    let value = cldctx.stack[stack_offset];
+                                    stack_offset += 1;
+                                    Bits::from_u64(size, value)
+                                }
+                                LogicMode::TwoValue => {
+                                    let value = cldctx.stack[stack_offset];
+                                    let value = value_to_heap_ref(value, size, mode);
+                                    stack_offset += 1;
+                                    state.heap.load_tv_bits(value)
+                                }
+                                LogicMode::FourValue if size <= VSIZE_32 => {
+                                    let spc = cldctx.stack[stack_offset];
+                                    let val = cldctx.stack[stack_offset + 1];
+                                    stack_offset += 2;
+                                    Bits::from_four_value_u64(size, spc as u32, val as u32)
+                                }
+                                LogicMode::FourValue if size <= VSIZE_64 => {
+                                    let spc = cldctx.stack[stack_offset];
+                                    let val = cldctx.stack[stack_offset + 1];
+                                    stack_offset += 2;
+                                    Bits::from_boxed_slice(Mode::FourValue, size, [spc, val].into())
+                                }
+                                LogicMode::FourValue => {
+                                    let value = cldctx.stack[stack_offset];
+                                    let value = value_to_heap_ref(value, size, mode);
+                                    stack_offset += 1;
+                                    state.heap.load_fv_bits(value)
+                                }
+                            }),
+                    )
+                    .unwrap();
+                    cldctx.return_value = 1;
+                    *pc = u64::MAX;
+                }
+            }
+            IntrinsicOp::VcdOpenFile(_) => todo!(),
+            IntrinsicOp::VcdAppendModule(_) => todo!(),
+            IntrinsicOp::VcdPause => todo!(),
+            IntrinsicOp::VcdResume => todo!(),
+            IntrinsicOp::ReadMem(_) => todo!(),
+        }
+        cldctx.stack_args.clear();
+        cldctx.stack.clear();
+    }
+}
+
+impl BytecodeEncoder {
+    pub fn push_argument(&mut self, size: VectorSize, mode: LogicMode, rs: Reg) {
+        let size = if size.get() >= (1u32 << 19) {
+            self.load_u64(Reg::X12, size.get() as u64);
+            None
+        } else {
+            Some(size)
+        };
+        self.data.push(PushArgument { size, mode, rs }.encode());
+    }
+
+    pub fn intrinsic(&mut self, rd: Reg, id: Option<NonMaxU16>) {
+        self.data.push(Intrinsic { rd, id }.encode());
+    }
+}

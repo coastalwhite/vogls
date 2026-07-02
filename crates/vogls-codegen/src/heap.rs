@@ -190,7 +190,8 @@ impl Heap {
         let cell_slice = Cell::as_slice_of_cells(Cell::from_mut(&mut self.0));
         for (i, (at, nwords)) in slices.iter().enumerate() {
             debug_assert_eq!(at.bit_offset % 64, 0);
-            out[i] = &cell_slice[at.bit_offset / 64..][..*nwords];
+            let word_idx = at.bit_offset / 64;
+            out[i] = &cell_slice[word_idx..word_idx + *nwords];
         }
         out
     }

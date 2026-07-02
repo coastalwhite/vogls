@@ -18,8 +18,8 @@ use vogls_runtime::plugins::RuntimePlugin;
 #[cfg(feature = "native")]
 use vogls_runtime::plugins::RuntimePluginState;
 use vogls_runtime::{RtSignalKey, RuntimeState};
+use vogls_sim::bytecode::lower::lower_process_to_bytecode;
 use vogls_sim::bytecode::{BytecodeEncoder, BytecodeListeners, Schedule};
-use vogls_sim::lower_bytecode::lower_process_to_bytecode;
 use vogls_sim::{Event, Regions, Simulation, VmProcess, VmProcessKey, lower_process_to_vm};
 #[cfg(feature = "native")]
 use vogls_utils::TimerStack;
