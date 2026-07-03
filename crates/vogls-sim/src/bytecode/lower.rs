@@ -450,9 +450,39 @@ fn lower_instruction(
                 (O::UnsignedLessEqual, _, None, M::FourValue, _) => {
                     bce.heap_fv_unsigned_leq(rd, rs1, rs2, lhs_size)
                 }
-                (O::LogicalShiftLeft, ..) => todo!(),
-                (O::LogicalShiftRight, ..) => todo!(),
-                (O::ArithmeticShiftRight, ..) => todo!(),
+                (O::LogicalShiftLeft, M::TwoValue, Some(size), _, _) => bce.sll(rd, rs1, rs2, size),
+                (O::LogicalShiftLeft, M::TwoValue, None, _, _) => {
+                    bce.heap_tv_sll(rd, rs1, rs2, dst_size)
+                }
+                (O::LogicalShiftLeft, M::FourValue, Some(size), _, _) => {
+                    bce.fv_sll(rd, rs1, rs2, size)
+                }
+                (O::LogicalShiftLeft, M::FourValue, None, _, _) => {
+                    bce.heap_fv_sll(rd, rs1, rs2, dst_size)
+                }
+                (O::LogicalShiftRight, M::TwoValue, Some(_), _, _) => bce.slr(rd, rs1, rs2),
+                (O::LogicalShiftRight, M::TwoValue, None, _, _) => {
+                    bce.heap_tv_slr(rd, rs1, rs2, dst_size)
+                }
+                (O::LogicalShiftRight, M::FourValue, Some(size), _, _) => {
+                    bce.fv_slr(rd, rs1, rs2, size)
+                }
+                (O::LogicalShiftRight, M::FourValue, None, _, _) => {
+                    bce.heap_fv_slr(rd, rs1, rs2, dst_size)
+                }
+                (O::ArithmeticShiftRight, M::TwoValue, Some(size), _, _) => {
+                    bce.sar(rd, rs1, rs2, size)
+                }
+                (O::ArithmeticShiftRight, M::TwoValue, None, _, _) => {
+                    bce.heap_tv_sar(rd, rs1, rs2, dst_size)
+                }
+                (O::ArithmeticShiftRight, M::FourValue, Some(size), _, _) => {
+                    bce.fv_sar(rd, rs1, rs2, size)
+                }
+                (O::ArithmeticShiftRight, M::FourValue, None, _, _) => {
+                    bce.heap_fv_sar(rd, rs1, rs2, dst_size)
+                }
+
                 (O::Concat, ..) => todo!(),
                 (O::CopyX, ..) => todo!(),
                 (O::CopyZ, ..) => todo!(),

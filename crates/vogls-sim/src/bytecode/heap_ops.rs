@@ -10,6 +10,10 @@ use vogls_bits::arithmetic::{
     tv_cell_divmod, tv_cell_multiplication, tv_cell_power, tv_cell_subtraction,
 };
 use vogls_bits::comparison::{fv_cell_unsigned_leq, tv_cell_unsigned_leq};
+use vogls_bits::shift::{
+    fv_cell_arithmetic_shift_right, fv_cell_logical_shift_left, fv_cell_logical_shift_right,
+    tv_cell_arithmetic_shift_right, tv_cell_logical_shift_left, tv_cell_logical_shift_right,
+};
 use vogls_codegen::HeapOffset;
 use vogls_ir::VectorSize;
 use vogls_runtime::RuntimeState;
@@ -65,6 +69,13 @@ pub struct HeapCaseEq {
     rs2: Reg,
     ne: bool,
     num_words: Option<NonZeroU16>,
+}
+pub struct HeapBinaryShift {
+    rd: Reg,
+    rs1: Reg,
+    rs2: Reg,
+    op: ShiftOp,
+    size: Option<VectorSize>,
 }
 
 impl BytecodeInstruction for HeapBinaryBitwise {
@@ -499,6 +510,107 @@ impl BytecodeInstruction for HeapBinaryCmp {
     }
 }
 
+impl BytecodeInstruction for HeapBinaryShift {
+    #[inline(always)]
+    fn extract(c: Bytecode) -> Self {
+        debug_assert_eq!(c.opcode(), BytecodeOpcode::HeapBinaryShift as u8);
+        let v = c.0;
+        Self {
+            rd: Reg::new_masked(v >> 8),
+            rs1: Reg::new_masked(v >> 12),
+            rs2: Reg::new_masked(v >> 16),
+            op: ShiftOp::new_masked(v >> 20),
+            size: VectorSize::new(v >> 23),
+        }
+    }
+    #[inline(always)]
+    fn encode(&self) -> Bytecode {
+        Bytecode(
+            BytecodeOpcode::HeapBinaryShift as u32
+                | ((self.rd as u32) << 8)
+                | ((self.rs1 as u32) << 12)
+                | ((self.rs2 as u32) << 16)
+                | ((self.op as u32) << 20)
+                | (self.size.map_or(0, |v| v.get()) << 23),
+        )
+    }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            rd,
+            rs1,
+            rs2,
+            op,
+            size: _,
+        } = self;
+        let mnemonic = match op {
+            ShiftOp::TvSll => "tv.sll",
+            ShiftOp::TvSlr => "tv.slr",
+            ShiftOp::TvSar => "tv.sar",
+            ShiftOp::FvSll => "fv.sll",
+            ShiftOp::FvSlr => "fv.slr",
+            ShiftOp::FvSar => "fv.sar",
+        };
+        write_padded_mnemonic(f, mnemonic)?;
+        write!(f, "{rd}, {rs1}, {rs2}")
+    }
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let Self {
+            rd,
+            rs1,
+            rs2,
+            op,
+            size,
+        } = self;
+        let size = size.unwrap_or_else(|| VectorSize::new(regs[Reg::X12] as u32).unwrap());
+        let mut num_words = size.get().div_ceil(64) as usize;
+        if op.is_four_value() {
+            num_words *= 2;
+        }
+        let [dst, src] = state.heap.get_u64_cell_slices([
+            (
+                HeapOffset {
+                    bit_offset: regs[rd] as usize,
+                },
+                num_words,
+            ),
+            (
+                HeapOffset {
+                    bit_offset: regs[rs1] as usize,
+                },
+                num_words,
+            ),
+        ]);
+
+        let shift = if op.is_four_value() {
+            let (spc, val) = rs2.to_spc_and_val();
+            if regs[spc] != u32::MAX as u64 {
+                dst.iter().for_each(|d| d.set(0));
+            }
+            regs[val] as u32
+        } else {
+            regs[rs2] as u32
+        };
+
+        use ShiftOp as O;
+        match op {
+            O::TvSll => tv_cell_logical_shift_left(dst, src, shift, size),
+            O::TvSlr => tv_cell_logical_shift_right(dst, src, shift, size),
+            O::TvSar => tv_cell_arithmetic_shift_right(dst, src, shift, size),
+            O::FvSll => fv_cell_logical_shift_left(dst, src, shift, size),
+            O::FvSlr => fv_cell_logical_shift_right(dst, src, shift, size),
+            O::FvSar => fv_cell_arithmetic_shift_right(dst, src, shift, size),
+        }
+    }
+}
+
 impl BytecodeInstruction for HeapBinaryMinMax {
     #[inline(always)]
     fn extract(c: Bytecode) -> Self {
@@ -777,6 +889,36 @@ impl CompareOp {
     }
 }
 
+#[derive(Clone, Copy)]
+pub enum ShiftOp {
+    TvSll,
+    TvSlr,
+    TvSar,
+    FvSll,
+    FvSlr,
+    FvSar,
+}
+
+impl ShiftOp {
+    pub fn is_four_value(self) -> bool {
+        match self {
+            Self::TvSll | Self::TvSlr | Self::TvSar => false,
+            Self::FvSll | Self::FvSlr | Self::FvSar => true,
+        }
+    }
+
+    pub fn new_masked(v: u32) -> Self {
+        match v & 0x7 {
+            0 => Self::TvSll,
+            1 => Self::TvSlr,
+            2 => Self::TvSar,
+            3 => Self::FvSll,
+            4 => Self::FvSlr,
+            _ => Self::FvSar,
+        }
+    }
+}
+
 impl BytecodeEncoder {
     fn heap_ceq_impl(&mut self, rd: Reg, rs1: Reg, rs2: Reg, ne: bool, num_words: u32) {
         assert_ne!(num_words, 0);
@@ -864,6 +1006,24 @@ impl BytecodeEncoder {
         };
         self.data.push(
             HeapBinaryCmp {
+                rd,
+                rs1,
+                rs2,
+                op,
+                size,
+            }
+            .encode(),
+        );
+    }
+    fn heap_binary_shift(&mut self, rd: Reg, rs1: Reg, rs2: Reg, op: ShiftOp, size: VectorSize) {
+        let size = if size.get() >= (1u32 << 8) {
+            self.load_u64(Reg::X12, size.get() as u64);
+            None
+        } else {
+            Some(size)
+        };
+        self.data.push(
+            HeapBinaryShift {
                 rd,
                 rs1,
                 rs2,
@@ -1029,5 +1189,24 @@ impl BytecodeEncoder {
     }
     pub fn heap_fv_max(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
         self.heap_binary_minmax(rd, rs1, rs2, true, true, size);
+    }
+
+    pub fn heap_tv_sll(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_binary_shift(rd, rs1, rs2, ShiftOp::TvSll, size);
+    }
+    pub fn heap_tv_slr(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_binary_shift(rd, rs1, rs2, ShiftOp::TvSlr, size);
+    }
+    pub fn heap_tv_sar(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_binary_shift(rd, rs1, rs2, ShiftOp::TvSar, size);
+    }
+    pub fn heap_fv_sll(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_binary_shift(rd, rs1, rs2, ShiftOp::FvSll, size);
+    }
+    pub fn heap_fv_slr(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_binary_shift(rd, rs1, rs2, ShiftOp::FvSlr, size);
+    }
+    pub fn heap_fv_sar(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_binary_shift(rd, rs1, rs2, ShiftOp::FvSar, size);
     }
 }

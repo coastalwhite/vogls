@@ -255,6 +255,9 @@ opcodes![
     TvUnsignedGt,
     TvMin,
     TvMax,
+    TvSll,
+    TvSlr,
+    TvSar,
     TvCountOnes,
     TvAndi,
     TvOri,
@@ -284,6 +287,9 @@ opcodes![
     FvUnsignedGt,
     FvMin,
     FvMax,
+    FvSll,
+    FvSlr,
+    FvSar,
     FvNot,
     FvReduceAnd,
     FvReduceOr,
@@ -313,6 +319,7 @@ opcodes![
     HeapBinaryArithmetic,
     HeapBinaryCmp,
     HeapBinaryMinMax,
+    HeapBinaryShift,
     HeapCaseEq,
 ];
 

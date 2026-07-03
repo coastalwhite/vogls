@@ -5,7 +5,9 @@ use vogls_bits::arithmetic::{
     fv_bitwise_xor_elem,
 };
 use vogls_bits::edge::{fv_negedge_u64, fv_posedge_u64};
+use vogls_bits::shift::fv_shift_arith_right;
 use vogls_bits::util::wrapping_u64_pow;
+use vogls_ir::VectorSize;
 use vogls_runtime::RuntimeState;
 
 use super::reg::{Reg, Regs};
@@ -45,6 +47,9 @@ pub struct TvUnsignedLeq(pub BitwiseRType);
 pub struct TvUnsignedGt(pub BitwiseRType);
 pub struct TvMin(pub BitwiseRType);
 pub struct TvMax(pub BitwiseRType);
+pub struct TvSll(pub SbsBitwiseRType);
+pub struct TvSlr(pub BitwiseRType);
+pub struct TvSar(pub SbsBitwiseRType);
 
 pub struct FvAnd(pub BitwiseRType);
 pub struct FvOr(pub BitwiseRType);
@@ -66,6 +71,9 @@ pub struct FvUnsignedLeq(pub SbsBitwiseRType);
 pub struct FvUnsignedGt(pub SbsBitwiseRType);
 pub struct FvMin(pub SbsBitwiseRType);
 pub struct FvMax(pub SbsBitwiseRType);
+pub struct FvSll(pub SbsBitwiseRType);
+pub struct FvSlr(pub SbsBitwiseRType);
+pub struct FvSar(pub SbsBitwiseRType);
 
 impl BitwiseRType {
     #[inline(always)]
@@ -483,6 +491,66 @@ impl BytecodeInstruction for TvMax {
     ) {
         let BitwiseRType { rd, rs1, rs2 } = self.0;
         regs[rd] = u64::max(regs[rs1], regs[rs2]);
+    }
+}
+impl BytecodeInstruction for TvSll {
+    impl_sbs_bitwise!(TvSll, "tv.sll");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let SbsBitwiseRType { rd, rs1, rs2, size } = self.0;
+        if regs[rs2] >= 64 {
+            regs[rd] = 0;
+        } else {
+            regs[rd] = size.mask(regs[rs1] << regs[rs2]);
+        }
+    }
+}
+impl BytecodeInstruction for TvSlr {
+    impl_bitwise!(TvSlr, "tv.slr");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let BitwiseRType { rd, rs1, rs2 } = self.0;
+        if regs[rs2] >= 64 {
+            regs[rd] = 0;
+        } else {
+            regs[rd] = regs[rs1] >> regs[rs2];
+        }
+    }
+}
+impl BytecodeInstruction for TvSar {
+    impl_sbs_bitwise!(TvSar, "tv.sar");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let SbsBitwiseRType { rd, rs1, rs2, size } = self.0;
+        let unused_bits = 64 - VectorSize::from(size).get();
+        let out = regs[rs1] << unused_bits;
+        let out = out as i64;
+        let out = out.unbounded_shr(unused_bits + regs[rs2] as u32);
+        regs[rd] = out as u64;
     }
 }
 
@@ -976,6 +1044,108 @@ impl BytecodeInstruction for FvMax {
         }
     }
 }
+impl BytecodeInstruction for FvSll {
+    impl_sbs_bitwise!(FvSll, "fv.sll");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let SbsBitwiseRType { rd, rs1, rs2, size } = self.0;
+        let (rd_spc, rd_val) = rd.to_spc_and_val();
+        let (rs1_spc, rs1_val) = rs1.to_spc_and_val();
+        let (rs2_spc, rs2_val) = rs2.to_spc_and_val();
+
+        let mask = size.mask(u64::MAX);
+
+        if regs[rs2_spc] != mask {
+            regs[rd_spc] = 0;
+            regs[rd_val] = 0;
+            return;
+        }
+
+        let shift = regs[rs2_val];
+        if shift >= 64 {
+            regs[rd_spc] = mask;
+            regs[rd_val] = 0;
+        } else {
+            regs[rd_spc] = size.mask(regs[rs1_spc] << shift) | ((1u64 << shift) - 1);
+            regs[rd_val] = size.mask(regs[rs1_val] << shift);
+        }
+    }
+}
+impl BytecodeInstruction for FvSlr {
+    impl_sbs_bitwise!(FvSlr, "fv.slr");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let SbsBitwiseRType { rd, rs1, rs2, size } = self.0;
+        let (rd_spc, rd_val) = rd.to_spc_and_val();
+        let (rs1_spc, rs1_val) = rs1.to_spc_and_val();
+        let (rs2_spc, rs2_val) = rs2.to_spc_and_val();
+
+        let mask = size.mask(u64::MAX);
+
+        if regs[rs2_spc] != mask {
+            regs[rd_spc] = 0;
+            regs[rd_val] = 0;
+            return;
+        }
+
+        let shift = regs[rs2_val];
+        if shift >= 64 {
+            regs[rd_spc] = mask;
+            regs[rd_val] = 0;
+        } else {
+            regs[rd_spc] = size.mask(regs[rs1_spc] >> shift)
+                | (((1u64 << shift) - 1) << (VectorSize::from(size).get() - shift as u32));
+            regs[rd_val] = size.mask(regs[rs1_val] >> shift);
+        }
+    }
+}
+impl BytecodeInstruction for FvSar {
+    impl_sbs_bitwise!(FvSar, "fv.sar");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let SbsBitwiseRType { rd, rs1, rs2, size } = self.0;
+        let (rd_spc, rd_val) = rd.to_spc_and_val();
+        let (rs1_spc, rs1_val) = rs1.to_spc_and_val();
+        let (rs2_spc, rs2_val) = rs2.to_spc_and_val();
+
+        let mask = size.mask(u64::MAX);
+
+        if regs[rs2_spc] != mask {
+            regs[rd_spc] = 0;
+            regs[rd_val] = 0;
+            return;
+        }
+
+        let shift = regs[rs2_val].min(u32::MAX as u64) as u32;
+        let size = VectorSize::from(size);
+        (regs[rd_spc], regs[rd_val]) =
+            fv_shift_arith_right(regs[rs1_spc], regs[rs1_val], shift, size);
+    }
+}
 
 macro_rules! impl_bytecode_methods {
     ($(($name:ident, $op:ident))*) => {
@@ -1005,6 +1175,7 @@ impl_bytecode_methods! {
     (ugt, TvUnsignedGt)
     (min, TvMin)
     (max, TvMax)
+    (slr, TvSlr)
     (fv_and, FvAnd)
     (fv_or, FvOr)
     (fv_xor, FvXor)
@@ -1027,6 +1198,8 @@ impl_bytecode_sbs_methods! {
     (modx, TvModX)
     (mod0, TvMod0)
     (pow, TvPow)
+    (sll, TvSll)
+    (sar, TvSar)
     (fv_add, FvAdd)
     (fv_sub, FvSub)
     (fv_mul, FvMul)
@@ -1039,4 +1212,7 @@ impl_bytecode_sbs_methods! {
     (fv_ugt, FvUnsignedGt)
     (fv_min, FvMin)
     (fv_max, FvMax)
+    (fv_sll, FvSll)
+    (fv_slr, FvSlr)
+    (fv_sar, FvSar)
 }
