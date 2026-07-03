@@ -1362,14 +1362,20 @@ impl Bits {
         Self::from_boxed_slice(Mode::TwoValue, size, dst.into())
     }
 
-    pub fn divide(lhs: &Self, rhs: &Self) -> Self {
-        Self::euclid_divide(lhs, rhs).0
+    pub fn divide_x(lhs: &Self, rhs: &Self) -> Self {
+        Self::euclid_divide(lhs, rhs, true).0
     }
-    pub fn remainder(lhs: &Self, rhs: &Self) -> Self {
-        Self::euclid_divide(lhs, rhs).1
+    pub fn remainder_x(lhs: &Self, rhs: &Self) -> Self {
+        Self::euclid_divide(lhs, rhs, true).1
+    }
+    pub fn divide_0(lhs: &Self, rhs: &Self) -> Self {
+        Self::euclid_divide(lhs, rhs, false).0
+    }
+    pub fn remainder_0(lhs: &Self, rhs: &Self) -> Self {
+        Self::euclid_divide(lhs, rhs, false).1
     }
 
-    pub fn euclid_divide(lhs: &Self, rhs: &Self) -> (Self, Self) {
+    pub fn euclid_divide(lhs: &Self, rhs: &Self, div_by_zero_is_x: bool) -> (Self, Self) {
         assert_eq!(lhs.size(), rhs.size());
         if lhs.contains_special() || rhs.contains_special() {
             return (Self::new_unknown(lhs.size()), Self::new_unknown(rhs.size()));
@@ -1377,7 +1383,11 @@ impl Bits {
 
         let size = lhs.size();
         if rhs.is_equal_to_zero() {
-            return (Self::new_unknown(size), Self::new_unknown(size));
+            if div_by_zero_is_x {
+                return (Self::new_unknown(size), Self::new_unknown(size));
+            } else {
+                return (Self::new_zeroed(size), Self::new_zeroed(size));
+            }
         }
 
         let mut x;

@@ -15,8 +15,8 @@ pub use add_sub::{
     tv_ltu64_subtraction, tv_subtraction,
 };
 pub use division::{
-    fv_division, fv_ltu32_division, fv_ltu32_modulus, tv_division, tv_ltu64_division,
-    tv_ltu64_modulus,
+    fv_cell_divmod, fv_division, fv_ltu32_division, fv_ltu32_modulus, tv_cell_divmod, tv_division,
+    tv_ltu64_division, tv_ltu64_modulus,
 };
 pub use multiplication::{
     fv_cell_multiplication, fv_ltu32_multiplication, fv_multiplication, tv_cell_multiplication,

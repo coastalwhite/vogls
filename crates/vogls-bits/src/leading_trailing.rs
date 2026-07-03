@@ -1,3 +1,5 @@
+use std::cell::Cell;
+
 use crate::VectorSize;
 
 pub fn tv_leading_zeros(src: &[u64], size: VectorSize) -> u32 {
@@ -16,6 +18,30 @@ pub fn tv_leading_zeros(src: &[u64], size: VectorSize) -> u32 {
         }
         for (i, v) in src.iter().rev().skip(1).enumerate() {
             if *v != 0 {
+                return (i * 64) as u32 + v.leading_zeros() + off;
+            }
+        }
+    }
+    return size.get();
+}
+pub fn tv_cell_leading_zeros(src: &[Cell<u64>], size: VectorSize) -> u32 {
+    let off = size.get() % 64;
+
+    if off == 0 {
+        for (i, v) in src.iter().rev().enumerate() {
+            let v = v.get();
+            if v != 0 {
+                return (i * 64) as u32 + v.leading_zeros();
+            }
+        }
+    } else {
+        let last = src.last().unwrap().get();
+        if last != 0 {
+            return last.leading_zeros() - (64 - off);
+        }
+        for (i, v) in src.iter().rev().skip(1).enumerate() {
+            let v = v.get();
+            if v != 0 {
                 return (i * 64) as u32 + v.leading_zeros() + off;
             }
         }

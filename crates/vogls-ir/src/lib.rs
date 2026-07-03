@@ -436,14 +436,36 @@ pub enum BinaryOp {
     ///
     /// If either operands contains an unknown `x` or high-impedance `z` bit, the result is all
     /// unknown bits.
-    Divide,
+    ///
+    /// Division by zero equals X.
+    DivideX,
+    /// Wrapping arithmetic division operator.
+    ///
+    /// Takes two operands of equal size and outputs equal size.
+    ///
+    /// If either operands contains an unknown `x` or high-impedance `z` bit, the result is all
+    /// unknown bits.
+    ///
+    /// Division by zero equals 0.
+    Divide0,
     /// Wrapping arithmetic modulus operator.
     ///
     /// Takes two operands of equal size and outputs equal size.
     ///
     /// If either operands contains an unknown `x` or high-impedance `z` bit, the result is all
     /// unknown bits.
-    Modulus,
+    ///
+    /// Modulus by zero equals X.
+    ModulusX,
+    /// Wrapping arithmetic modulus operator.
+    ///
+    /// Takes two operands of equal size and outputs equal size.
+    ///
+    /// If either operands contains an unknown `x` or high-impedance `z` bit, the result is all
+    /// unknown bits.
+    ///
+    /// Modulus by zero equals 0.
+    Modulus0,
 
     /// Unsigned relational less-than equals operator.
     ///
@@ -489,8 +511,12 @@ pub enum BinaryImmOp {
     Power,
     Multiply,
     /// Operand / Imm
+    ///
+    /// Division by zero equals 0.
     Divide,
     /// Operand % Imm
+    ///
+    /// Division by zero equals 0.
     Modulus,
 
     /// Imm - Operand
@@ -498,9 +524,21 @@ pub enum BinaryImmOp {
     /// Imm ** Operand
     RevPower,
     /// Imm / Operand
-    RevDivide,
+    ///
+    /// Division by zero equals X.
+    RevDivideX,
+    /// Imm / Operand
+    ///
+    /// Division by zero equals 0.
+    RevDivide0,
     /// Imm % Operand
-    RevModulus,
+    ///
+    /// Division by zero equals X
+    RevModulusX,
+    /// Imm % Operand
+    ///
+    /// Division by zero equals 0
+    RevModulus0,
 
     /// Operand <= Imm
     UnsignedLessEqual,
@@ -950,8 +988,10 @@ impl BinaryOp {
             O::Sub => Bits::subtract(lhs, rhs),
             O::Power => Bits::power(lhs, rhs),
             O::Multiply => Bits::multiply(lhs, rhs),
-            O::Divide => Bits::divide(lhs, rhs),
-            O::Modulus => Bits::remainder(lhs, rhs),
+            O::DivideX => Bits::divide_x(lhs, rhs),
+            O::Divide0 => Bits::divide_0(lhs, rhs),
+            O::ModulusX => Bits::remainder_x(lhs, rhs),
+            O::Modulus0 => Bits::remainder_0(lhs, rhs),
 
             O::UnsignedLessEqual => Bits::from(Bits::is_unsigned_leq(lhs, rhs)),
             O::CaseEquality => Bits::from(lhs == rhs),
@@ -1004,8 +1044,10 @@ impl BinaryOp {
             | O::Sub
             | O::Power
             | O::Multiply
-            | O::Divide
-            | O::Modulus
+            | O::DivideX
+            | O::Divide0
+            | O::ModulusX
+            | O::Modulus0
             | O::CopyX
             | O::CopyZ
             | O::Min
@@ -1046,6 +1088,8 @@ impl BinaryOp {
             | O::Add
             | O::Sub
             | O::Power
+            | O::Divide0
+            | O::Modulus0
             | O::Multiply
             | O::Concat
             | O::CopyX
@@ -1063,7 +1107,7 @@ impl BinaryOp {
                     rhs: dst_mode,
                 }
             }
-            O::Divide | O::Modulus => {
+            O::DivideX | O::ModulusX => {
                 let convert_mode = lhs.max(rhs);
                 BinaryOutputMode {
                     dst: LogicMode::FourValue,
@@ -1105,13 +1149,15 @@ impl BinaryImmOp {
             O::Sub => Bits::subtract(src, imm),
             O::Power => Bits::power(src, imm),
             O::Multiply => Bits::multiply(src, imm),
-            O::Divide => Bits::divide(src, imm),
-            O::Modulus => Bits::remainder(src, imm),
+            O::Divide => Bits::divide_0(src, imm),
+            O::Modulus => Bits::remainder_0(src, imm),
 
             O::RevSub => Bits::subtract(imm, src),
             O::RevPower => Bits::power(imm, src),
-            O::RevDivide => Bits::divide(imm, src),
-            O::RevModulus => Bits::remainder(imm, src),
+            O::RevDivideX => Bits::divide_x(imm, src),
+            O::RevDivide0 => Bits::divide_0(imm, src),
+            O::RevModulusX => Bits::remainder_x(imm, src),
+            O::RevModulus0 => Bits::remainder_0(imm, src),
 
             O::UnsignedLessEqual => Bits::from(Bits::is_unsigned_leq(src, imm)),
             O::UnsignedGreaterEqual => Bits::from(Bits::is_unsigned_leq(imm, src)),
@@ -1191,8 +1237,10 @@ impl BinaryImmOp {
             | O::Modulus
             | O::RevSub
             | O::RevPower
-            | O::RevDivide
-            | O::RevModulus
+            | O::RevDivideX
+            | O::RevModulusX
+            | O::RevDivide0
+            | O::RevModulus0
             | O::UnsignedLessEqual
             | O::UnsignedGreaterEqual
             | O::Min
@@ -1257,8 +1305,7 @@ impl BinaryImmOp {
                     S::Keep
                 }
             }
-            O::RevDivide => S::Keep,
-            O::RevModulus => S::Keep,
+            O::RevDivideX | O::RevDivide0 | O::RevModulusX | O::RevModulus0 => S::Keep,
             O::UnsignedLessEqual => S::Keep,
             O::UnsignedGreaterEqual => S::Keep,
 
@@ -1310,8 +1357,10 @@ impl BinaryImmOp {
             | O::Modulus
             | O::RevSub
             | O::RevPower
-            | O::RevDivide
-            | O::RevModulus
+            | O::RevDivideX
+            | O::RevDivide0
+            | O::RevModulusX
+            | O::RevModulus0
             | O::Min
             | O::Max => {
                 if src_size != imm_size {
@@ -1340,8 +1389,8 @@ impl BinaryImmOp {
             | O::Power
             | O::RevSub
             | O::RevPower
-            | O::RevDivide
-            | O::RevModulus
+            | O::RevDivide0
+            | O::RevModulus0
             | O::Multiply
             | O::ConcatLeft
             | O::ConcatRight
@@ -1355,6 +1404,13 @@ impl BinaryImmOp {
                 BinaryImmOutputMode {
                     dst: dst_mode,
                     src: dst_mode,
+                }
+            }
+            O::RevDivideX | O::RevModulusX => {
+                let convert = src.max(imm);
+                BinaryImmOutputMode {
+                    dst: LogicMode::TwoValue,
+                    src: convert,
                 }
             }
             O::CaseEquality => {

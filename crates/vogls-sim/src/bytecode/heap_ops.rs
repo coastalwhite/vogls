@@ -1,11 +1,13 @@
+use std::cell::Cell;
 use std::fmt;
 use std::num::NonZeroU16;
 
 use vogls_bits::arithmetic::{
     fv_bin_u64_cell_bitwise_op, fv_bitwise_and_elem, fv_bitwise_andnot_elem, fv_bitwise_or_elem,
-    fv_bitwise_ornot_elem, fv_bitwise_xor_elem, fv_cell_addition, fv_cell_multiplication,
-    fv_cell_subtraction, tv_bin_u64_cell_bitwise_mask_last_op, tv_bin_u64_cell_bitwise_op,
-    tv_cell_addition, tv_cell_multiplication, tv_cell_subtraction,
+    fv_bitwise_ornot_elem, fv_bitwise_xor_elem, fv_cell_addition, fv_cell_divmod,
+    fv_cell_multiplication, fv_cell_subtraction, tv_bin_u64_cell_bitwise_mask_last_op,
+    tv_bin_u64_cell_bitwise_op, tv_cell_addition, tv_cell_divmod, tv_cell_multiplication,
+    tv_cell_subtraction,
 };
 use vogls_codegen::HeapOffset;
 use vogls_ir::VectorSize;
@@ -30,6 +32,15 @@ pub struct HeapBinaryArithmetic {
     rs1: Reg,
     rs2: Reg,
     op: ArithmeticOp,
+    size: Option<VectorSize>,
+}
+pub struct HeapBinaryDivMod {
+    rd: Reg,
+    rs1: Reg,
+    rs2: Reg,
+    src_fv: bool,
+    fill_x: bool,
+    is_mod: bool,
     size: Option<VectorSize>,
 }
 
@@ -258,6 +269,119 @@ impl BytecodeInstruction for HeapBinaryArithmetic {
     }
 }
 
+impl BytecodeInstruction for HeapBinaryDivMod {
+    #[inline(always)]
+    fn extract(c: Bytecode) -> Self {
+        debug_assert_eq!(c.opcode(), BytecodeOpcode::HeapBinaryArithmetic as u8);
+        let v = c.0;
+        Self {
+            rd: Reg::new_masked(v >> 8),
+            rs1: Reg::new_masked(v >> 12),
+            rs2: Reg::new_masked(v >> 16),
+            src_fv: (v >> 20) & 1 != 0,
+            fill_x: (v >> 21) & 1 != 0,
+            is_mod: (v >> 22) & 1 != 0,
+            size: VectorSize::new(v >> 23),
+        }
+    }
+    #[inline(always)]
+    fn encode(&self) -> Bytecode {
+        Bytecode(
+            BytecodeOpcode::HeapBinaryArithmetic as u32
+                | ((self.rd as u32) << 8)
+                | ((self.rs1 as u32) << 12)
+                | ((self.rs2 as u32) << 16)
+                | ((self.src_fv as u32) << 20)
+                | ((self.fill_x as u32) << 21)
+                | ((self.is_mod as u32) << 22)
+                | (self.size.map_or(0, |v| v.get()) << 23),
+        )
+    }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            rd,
+            rs1,
+            rs2,
+            src_fv,
+            fill_x,
+            is_mod,
+            size: _,
+        } = self;
+        let mnemonic = match (*src_fv, *fill_x, *is_mod) {
+            (false, false, false) => "tv.heap_divz",
+            (false, false, true) => "tv.heap_modz",
+            (false, true, false) => "tv.heap_divx",
+            (false, true, true) => "tv.heap_modx",
+
+            (true, false, false) => "fv.heap_divz",
+            (true, false, true) => "fv.heap_modz",
+            (true, true, false) => "fv.heap_divx",
+            (true, true, true) => "fv.heap_modx",
+        };
+        write_padded_mnemonic(f, mnemonic)?;
+        write!(f, "{rd}, {rs1}, {rs2}")
+    }
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let Self {
+            rd,
+            rs1,
+            rs2,
+            src_fv,
+            fill_x,
+            is_mod,
+            size,
+        } = self;
+        let size = size.unwrap_or_else(|| VectorSize::new(regs[Reg::X12] as u32).unwrap());
+        let num_words = size.get().div_ceil(64) as usize;
+        let mut src_num_words = num_words;
+        let mut dst_num_words = num_words;
+        if src_fv {
+            src_num_words *= 2;
+            dst_num_words *= 2;
+        } else if fill_x {
+            dst_num_words *= 2;
+        }
+
+        let [dst, src1, src2] = state.heap.get_u64_cell_slices([
+            (
+                HeapOffset {
+                    bit_offset: regs[rd] as usize,
+                },
+                dst_num_words,
+            ),
+            (
+                HeapOffset {
+                    bit_offset: regs[rs1] as usize,
+                },
+                src_num_words,
+            ),
+            (
+                HeapOffset {
+                    bit_offset: regs[rs2] as usize,
+                },
+                src_num_words,
+            ),
+        ]);
+
+        let complement_buffer = vec![Cell::new(0); dst_num_words];
+
+        match (src_fv, is_mod) {
+            (false, false) => tv_cell_divmod(dst, &complement_buffer, src1, src2, size, fill_x),
+            (false, true) => tv_cell_divmod(&complement_buffer, dst, src1, src2, size, fill_x),
+            (true, false) => fv_cell_divmod(dst, &complement_buffer, src1, src2, size, fill_x),
+            (true, true) => fv_cell_divmod(&complement_buffer, dst, src1, src2, size, fill_x),
+        }
+    }
+}
+
 impl BytecodeInstruction for HeapCaseEq {
     #[inline(always)]
     fn extract(c: Bytecode) -> Self {
@@ -480,6 +604,35 @@ impl BytecodeEncoder {
             .encode(),
         );
     }
+    fn heap_binary_divmod(
+        &mut self,
+        rd: Reg,
+        rs1: Reg,
+        rs2: Reg,
+        src_fv: bool,
+        fill_x: bool,
+        is_mod: bool,
+        size: VectorSize,
+    ) {
+        let size = if size.get() >= (1u32 << 8) {
+            self.load_u64(Reg::X12, size.get() as u64);
+            None
+        } else {
+            Some(size)
+        };
+        self.data.push(
+            HeapBinaryDivMod {
+                rd,
+                rs1,
+                rs2,
+                src_fv,
+                fill_x,
+                is_mod,
+                size,
+            }
+            .encode(),
+        );
+    }
 
     pub fn heap_tv_and(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
         self.heap_binary_bitwise(rd, rs1, rs2, BitwiseOp::TvAnd, size);
@@ -523,5 +676,30 @@ impl BytecodeEncoder {
     }
     pub fn heap_fv_mul(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
         self.heap_binary_arith(rd, rs1, rs2, ArithmeticOp::FvMul, size);
+    }
+
+    pub fn heap_tv_divx(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_binary_divmod(rd, rs1, rs2, false, true, false, size);
+    }
+    pub fn heap_tv_div0(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_binary_divmod(rd, rs1, rs2, false, false, false, size);
+    }
+    pub fn heap_fv_divx(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_binary_divmod(rd, rs1, rs2, true, true, false, size);
+    }
+    pub fn heap_fv_div0(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_binary_divmod(rd, rs1, rs2, true, false, false, size);
+    }
+    pub fn heap_tv_modx(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_binary_divmod(rd, rs1, rs2, false, true, true, size);
+    }
+    pub fn heap_tv_mod0(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_binary_divmod(rd, rs1, rs2, false, false, true, size);
+    }
+    pub fn heap_fv_modx(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_binary_divmod(rd, rs1, rs2, true, true, true, size);
+    }
+    pub fn heap_fv_mod0(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_binary_divmod(rd, rs1, rs2, true, false, true, size);
     }
 }

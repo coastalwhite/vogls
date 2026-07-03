@@ -202,20 +202,22 @@ pub fn lower_bin_op(
             O::Sub => VI::FvBinaryArithmetic(dst, BA::Sub, lhs.offset, rhs.offset),
             O::Power => VI::FvBinaryArithmetic(dst, BA::Power, lhs.offset, rhs.offset),
             O::Multiply => VI::FvBinaryArithmetic(dst, BA::Multiply, lhs.offset, rhs.offset),
-            O::Divide => {
+            O::DivideX => {
                 if lhs_mode == M::TwoValue {
                     VI::FvTvBinaryArithmetic(dst, BA::Divide, lhs.offset, rhs.offset)
                 } else {
                     VI::FvBinaryArithmetic(dst, BA::Divide, lhs.offset, rhs.offset)
                 }
             }
-            O::Modulus => {
+            O::Divide0 => todo!(),
+            O::ModulusX => {
                 if lhs_mode == M::TwoValue {
                     VI::FvTvBinaryArithmetic(dst, BA::Modulus, lhs.offset, rhs.offset)
                 } else {
                     VI::FvBinaryArithmetic(dst, BA::Modulus, lhs.offset, rhs.offset)
                 }
             }
+            O::Modulus0 => todo!(),
             O::Min => VI::FvBinaryArithmetic(dst, BA::Min, lhs.offset, rhs.offset),
             O::Max => VI::FvBinaryArithmetic(dst, BA::Max, lhs.offset, rhs.offset),
 
@@ -243,8 +245,10 @@ pub fn lower_bin_op(
                 O::Sub => VI::TvXor1(dst.offset, lhs.offset, rhs.offset),
                 O::Power => VI::TvOrNot1(dst.offset, rhs.offset, lhs.offset),
                 O::Multiply => VI::TvAnd1(dst.offset, lhs.offset, rhs.offset),
-                O::Divide => VI::TvBinaryArithmetic(dst, BA::Divide, lhs.offset, rhs.offset),
-                O::Modulus => VI::TvBinaryArithmetic(dst, BA::Modulus, lhs.offset, rhs.offset),
+                O::DivideX => VI::TvBinaryArithmetic(dst, BA::Divide, lhs.offset, rhs.offset),
+                O::Divide0 => VI::TvBinaryArithmetic(dst, BA::Divide, lhs.offset, rhs.offset),
+                O::ModulusX => VI::TvBinaryArithmetic(dst, BA::Modulus, lhs.offset, rhs.offset),
+                O::Modulus0 => VI::TvBinaryArithmetic(dst, BA::Divide, lhs.offset, rhs.offset),
                 O::Min => VI::TvAnd1(dst.offset, lhs.offset, rhs.offset),
                 O::Max => VI::TvOr1(dst.offset, lhs.offset, rhs.offset),
                 O::UnsignedLessEqual => VI::TvOrNot1(dst.offset, rhs.offset, lhs.offset),
@@ -279,8 +283,10 @@ pub fn lower_bin_op(
                 O::Sub => VI::TvBinaryArithmetic(dst, BA::Sub, lhs.offset, rhs.offset),
                 O::Power => VI::TvBinaryArithmetic(dst, BA::Power, lhs.offset, rhs.offset),
                 O::Multiply => VI::TvBinaryArithmetic(dst, BA::Multiply, lhs.offset, rhs.offset),
-                O::Divide => VI::TvBinaryArithmetic(dst, BA::Divide, lhs.offset, rhs.offset),
-                O::Modulus => VI::TvBinaryArithmetic(dst, BA::Modulus, lhs.offset, rhs.offset),
+                O::DivideX => VI::TvBinaryArithmetic(dst, BA::Divide, lhs.offset, rhs.offset),
+                O::Divide0 => VI::TvBinaryArithmetic(dst, BA::Divide, lhs.offset, rhs.offset),
+                O::ModulusX => VI::TvBinaryArithmetic(dst, BA::Modulus, lhs.offset, rhs.offset),
+                O::Modulus0 => VI::TvBinaryArithmetic(dst, BA::Modulus, lhs.offset, rhs.offset),
                 O::Min => VI::TvBinaryArithmetic(dst, BA::Min, lhs.offset, rhs.offset),
                 O::Max => VI::TvBinaryArithmetic(dst, BA::Max, lhs.offset, rhs.offset),
 
@@ -443,10 +449,16 @@ pub fn lower_process_to_vm(
                                 O::RevPower => {
                                     VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Power, imm, src)
                                 }
-                                O::RevDivide => {
+                                O::RevDivideX => {
                                     VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Divide, imm, src)
                                 }
-                                O::RevModulus => {
+                                O::RevDivide0 => {
+                                    VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Divide, imm, src)
+                                }
+                                O::RevModulusX => {
+                                    VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Modulus, imm, src)
+                                }
+                                O::RevModulus0 => {
                                     VI::FvBinaryArithmetic(d.to_ref(d_size), BA::Modulus, imm, src)
                                 }
 
@@ -518,12 +530,14 @@ pub fn lower_process_to_vm(
                                 O::RevPower => {
                                     VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Power, imm, src)
                                 }
-                                O::RevDivide => {
+                                O::RevDivideX => {
                                     VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Divide, imm, src)
                                 }
-                                O::RevModulus => {
+                                O::RevDivide0 => todo!(),
+                                O::RevModulusX => {
                                     VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Modulus, imm, src)
                                 }
+                                O::RevModulus0 => todo!(),
 
                                 O::Min => {
                                     VI::TvBinaryArithmetic(d.to_ref(d_size), BA::Min, src, imm)

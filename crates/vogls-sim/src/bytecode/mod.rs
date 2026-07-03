@@ -25,7 +25,7 @@ use vogls_codegen::{HeapOffset, HeapRef};
 use vogls_ir::{Bits, IntrinsicOp, LogicMode, VSIZE_32, VSIZE_64, VectorSize};
 use vogls_runtime::RuntimeState;
 use vogls_runtime::plugins::{RuntimePlugin, RuntimePluginState};
-use vogls_utils::{IndexSet, NonMaxU16};
+use vogls_utils::IndexSet;
 
 pub use control_flow::*;
 pub use heap_ops::*;
@@ -246,6 +246,10 @@ opcodes![
     TvAdd,
     TvSub,
     TvMul,
+    TvDivX,
+    TvDiv0,
+    TvModX,
+    TvMod0,
     TvCountOnes,
     TvAndi,
     TvOri,
@@ -266,6 +270,10 @@ opcodes![
     FvAdd,
     FvSub,
     FvMul,
+    FvDivX,
+    FvDiv0,
+    FvModX,
+    FvMod0,
     FvNot,
     FvReduceAnd,
     FvReduceOr,

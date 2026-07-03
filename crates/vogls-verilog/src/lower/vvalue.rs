@@ -301,8 +301,8 @@ macro_rules! impl_arithmetic {
 impl_arithmetic! {
     (multiply, multiply),
     (power, power),
-    (divide, divide),
-    (remainder, remainder),
+    (divide, divide_x),
+    (remainder, remainder_x),
     (add, add),
     (sub, subtract),
     (bitwise_and, bitwise_and),

@@ -1,9 +1,13 @@
+use std::cell::Cell;
 use std::cmp::Ordering;
 
 use crate::VectorSize;
-use crate::arithmetic::{fv_contains_special, fv_ltu32_arith_op, fv_set_no_special};
-use crate::comparison::tv_gtu64_unsigned_leq;
-use crate::leading_trailing::tv_leading_zeros;
+use crate::arithmetic::{
+    fv_cell_contains_special, fv_cell_set_no_special, fv_contains_special, fv_ltu32_arith_op,
+    fv_set_no_special,
+};
+use crate::comparison::{tv_cell_unsigned_leq, tv_gtu64_unsigned_leq};
+use crate::leading_trailing::{tv_cell_leading_zeros, tv_leading_zeros};
 use crate::load::load_partial_u64;
 use crate::store::store_partial_u64;
 
@@ -76,6 +80,69 @@ pub fn tv_division(
         tv_lsl_mut_sub(modulus, denumerator, offset, size);
     }
 }
+pub fn tv_cell_divmod(
+    quotient: &[Cell<u64>],
+    modulus: &[Cell<u64>],
+    numerator: &[Cell<u64>],
+    denumerator: &[Cell<u64>],
+    size: VectorSize,
+    fill_x: bool,
+) {
+    let word_offset = if fill_x {
+        assert!(
+            quotient.len() > 0
+                && quotient.len() == modulus.len()
+                && quotient.len() == 2 * numerator.len()
+                && quotient.len() == 2 * denumerator.len()
+                && quotient.len() == 2 * size.get().div_ceil(64) as usize
+        );
+        quotient.len() / 2
+    } else {
+        assert!(
+            quotient.len() > 0
+                && quotient.len() == modulus.len()
+                && quotient.len() == numerator.len()
+                && quotient.len() == denumerator.len()
+                && quotient.len() == size.get().div_ceil(64) as usize
+        );
+        0
+    };
+
+    quotient.iter().for_each(|v| v.set(0u64));
+    for (d, s) in modulus[word_offset..].iter().zip(numerator) {
+        d.set(s.get());
+    }
+
+    let denum_lz = tv_cell_leading_zeros(denumerator, size);
+    if denum_lz == size.get() {
+        // Division by zero, quotient and modulus are X.
+        modulus.iter().for_each(|v| v.set(0u64));
+        return;
+    }
+
+    if fill_x {
+        fv_cell_set_no_special(quotient, size);
+        fv_cell_set_no_special(modulus, size);
+    }
+
+    while tv_cell_unsigned_leq(denumerator, &modulus[word_offset..], size) {
+        let mod_lz = tv_cell_leading_zeros(&modulus[word_offset..], size);
+        let offset = denum_lz - mod_lz;
+
+        // (rb << offset) > modulus (computed as !((rb << offset) <= modulus))
+        let shift_one_less =
+            !tv_cell_lsl_unsigned_leq(denumerator, offset, &modulus[word_offset..], size);
+
+        // If (modulus << offset) > denumerator, we need to move one further.
+        let offset = offset - u32::from(shift_one_less);
+
+        // quotient |= 1 << offset
+        quotient[word_offset + (offset / 64) as usize].update(|v| v | 1u64 << (offset % 64));
+
+        // modulus -= denum << offset;
+        tv_cell_lsl_mut_sub(&modulus[word_offset..], denumerator, offset, size);
+    }
+}
 /// Four-value logic arbitary precision division.
 pub fn fv_division(
     quotient: &mut [u64],
@@ -110,6 +177,44 @@ pub fn fv_division(
         size,
     );
 }
+pub fn fv_cell_divmod(
+    quotient: &[Cell<u64>],
+    modulus: &[Cell<u64>],
+    numerator: &[Cell<u64>],
+    denumerator: &[Cell<u64>],
+    size: VectorSize,
+    fill_x: bool,
+) {
+    assert!(
+        quotient.len() > 0
+            && quotient.len() == modulus.len()
+            && quotient.len() == numerator.len()
+            && quotient.len() == denumerator.len()
+            && quotient.len() == 2 * size.get().div_ceil(64) as usize
+    );
+
+    if fv_cell_contains_special(numerator, size) || fv_cell_contains_special(denumerator, size) {
+        quotient.iter().for_each(|v| v.set(0));
+        modulus.iter().for_each(|v| v.set(0));
+        return;
+    }
+
+    if !fill_x {
+        fv_cell_set_no_special(quotient, size);
+        fv_cell_set_no_special(modulus, size);
+    }
+
+    let nwords = size.get().div_ceil(64) as usize;
+    let dst_offset = if fill_x { 0 } else { nwords };
+    tv_cell_divmod(
+        &quotient[dst_offset..],
+        &modulus[dst_offset..],
+        &numerator[nwords..],
+        &denumerator[nwords..],
+        size,
+        fill_x,
+    );
+}
 
 /// Computes `dst_lhs -= rhs << offset`.
 pub fn tv_lsl_mut_sub(dst_lhs: &mut [u64], rhs: &[u64], offset: u32, size: VectorSize) {
@@ -139,6 +244,56 @@ pub fn tv_lsl_mut_sub(dst_lhs: &mut [u64], rhs: &[u64], offset: u32, size: Vecto
     }
     if size.get() % 64 != 0 {
         *dst_lhs.last_mut().unwrap() &= (1u64 << (size.get() % 64)).wrapping_sub(1);
+    }
+}
+pub fn tv_cell_lsl_mut_sub(
+    dst_lhs: &[Cell<u64>],
+    rhs: &[Cell<u64>],
+    offset: u32,
+    size: VectorSize,
+) {
+    assert!(dst_lhs.len() > 0 && dst_lhs.len() == rhs.len());
+    let nwords = dst_lhs.len();
+    let mut carry_in = true;
+    let soff = offset % 64;
+    if soff == 0 {
+        let swords = offset as usize / 64;
+        for i in 0..swords {
+            let out;
+            (out, carry_in) = dst_lhs[i].get().carrying_add(!0u64, carry_in);
+            dst_lhs[i].set(out);
+        }
+        for i in 0..nwords - swords {
+            let out;
+            (out, carry_in) = dst_lhs[i + swords]
+                .get()
+                .carrying_add(!rhs[i].get(), carry_in);
+            dst_lhs[i + swords].set(out);
+        }
+    } else {
+        let swords = offset.div_ceil(64) as usize;
+        for i in 0..swords - 1 {
+            let out;
+            (out, carry_in) = dst_lhs[i].get().carrying_add(!0u64, carry_in);
+            dst_lhs[i].set(out)
+        }
+        let out;
+        (out, carry_in) = dst_lhs[swords - 1]
+            .get()
+            .carrying_add(!(rhs[0].get() << soff), carry_in);
+        dst_lhs[swords - 1].set(out);
+        for i in 0..nwords - swords {
+            let value = (rhs[i + 1].get() << soff) | (rhs[i].get() >> (64 - soff));
+            let out;
+            (out, carry_in) = dst_lhs[i + swords].get().carrying_add(!value, carry_in);
+            dst_lhs[i + swords].set(out);
+        }
+    }
+    if size.get() % 64 != 0 {
+        dst_lhs
+            .last()
+            .unwrap()
+            .update(|v| v & (1u64 << (size.get() % 64)).wrapping_sub(1));
     }
 }
 
@@ -209,6 +364,75 @@ pub fn tv_lsl_unsigned_leq(lhs: &[u64], shift: u32, rhs: &[u64], size: VectorSiz
             l &= (1u64 << nbs).wrapping_sub(1);
         }
         let r = rhs[swords - 1];
+        l <= r
+    }
+}
+pub fn tv_cell_lsl_unsigned_leq(
+    lhs: &[Cell<u64>],
+    shift: u32,
+    rhs: &[Cell<u64>],
+    size: VectorSize,
+) -> bool {
+    let nwords = size.get().div_ceil(64) as usize;
+    assert!(nwords == lhs.len() && nwords == rhs.len());
+
+    if shift == 0 {
+        return tv_cell_unsigned_leq(lhs, rhs, size);
+    }
+    if shift >= size.get() {
+        return true;
+    }
+    let shift = shift as usize;
+    let soff = shift % 64;
+    let swords = shift.div_ceil(64);
+    if soff == 0 {
+        let mut l = lhs[nwords - swords - 1].get();
+        if size.get() % 64 != 0 {
+            l &= (1u64 << (size.get() % 64)).wrapping_sub(1);
+        }
+        let r = rhs[nwords - 1].get();
+        match l.cmp(&r) {
+            Ordering::Less => return true,
+            Ordering::Greater => return false,
+            Ordering::Equal => {}
+        }
+
+        for i in (0..nwords - swords - 1).rev() {
+            let value = match lhs[i].cmp(&rhs[i + swords]) {
+                Ordering::Less => true,
+                Ordering::Greater => false,
+                Ordering::Equal => continue,
+            };
+            return value;
+        }
+        true
+    } else {
+        let mut bs = size.get();
+        for i in (0..nwords - swords).rev() {
+            let mut l = (lhs[i + 1].get() << soff) | (lhs[i].get() >> (64 - soff));
+            let r = rhs[i + swords].get();
+
+            let nbs = bs % 64;
+            if nbs != 0 {
+                l &= (1u64 << nbs).wrapping_sub(1);
+                bs -= nbs;
+            } else {
+                bs -= 64;
+            }
+
+            let value = match l.cmp(&r) {
+                Ordering::Less => true,
+                Ordering::Greater => false,
+                Ordering::Equal => continue,
+            };
+            return value;
+        }
+        let mut l = lhs[0].get() << soff;
+        let nbs = bs % 64;
+        if nbs != 0 {
+            l &= (1u64 << nbs).wrapping_sub(1);
+        }
+        let r = rhs[swords - 1].get();
         l <= r
     }
 }

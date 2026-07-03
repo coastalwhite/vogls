@@ -168,11 +168,16 @@ fn constant_propagate_instruction(
             let rhs_bits = rhs_bits_entry;
 
             macro_rules! simplify_div_mod_imm {
-                ($dst:expr, $src:expr, $imm:expr, $op:ident, $is_rhs:expr) => {{
+                ($dst:expr, $src:expr, $imm:expr, $op:ident, $is_rhs:expr, $div_by_zero_equals_x:expr) => {{
                     let b: &Bits = $imm;
-                    if b.contains_special() || ($is_rhs && b.is_equal_to_zero()) {
+                    if b.contains_special()
+                        || ($is_rhs && $div_by_zero_equals_x && b.is_equal_to_zero())
+                    {
                         assign_constant!(dst, Bits::new_unknown(b.size()));
+                    } else if $is_rhs && !$div_by_zero_equals_x && b.is_equal_to_zero() {
+                        assign_constant!(dst, Bits::new_zeroed(b.size()));
                     }
+
                     if lhs.mode() == LogicMode::TwoValue {
                         let tgt = vars.insert(LogicMode::TwoValue, b.size());
                         additional.push(BI(tgt, IO::$op, lhs, b.clone()));
@@ -210,10 +215,14 @@ fn constant_propagate_instruction(
                 (O::Multiply, _, Some(b)) => additional.push(BI(dst, IO::Multiply, lhs, b.clone())),
                 (O::Power, Some(b), _) => additional.push(BI(dst, IO::RevPower, rhs, b.clone())),
                 (O::Power, _, Some(b)) => additional.push(BI(dst, IO::Power, lhs, b.clone())),
-                (O::Divide, Some(b), _) => simplify_div_mod_imm!(dst, lhs, b, RevDivide, false),
-                (O::Divide, _, Some(b)) => simplify_div_mod_imm!(dst, lhs, b, Divide, true),
-                (O::Modulus, Some(b), _) => simplify_div_mod_imm!(dst, lhs, b, RevModulus, false),
-                (O::Modulus, _, Some(b)) => simplify_div_mod_imm!(dst, lhs, b, Modulus, true),
+                (O::DivideX, Some(b), _) => simplify_div_mod_imm!(dst, lhs, b, RevDivideX, false, false),
+                (O::DivideX, _, Some(b)) => simplify_div_mod_imm!(dst, lhs, b, Divide, true, false),
+                (O::Divide0, Some(b), _) => simplify_div_mod_imm!(dst, lhs, b, RevDivide0, false, true),
+                (O::Divide0, _, Some(b)) => simplify_div_mod_imm!(dst, lhs, b, Divide, true, true),
+                (O::ModulusX, Some(b), _) => simplify_div_mod_imm!(dst, lhs, b, RevModulusX, false, false),
+                (O::ModulusX, _, Some(b)) => simplify_div_mod_imm!(dst, lhs, b, Modulus, true, false),
+                (O::Modulus0, Some(b), _) => simplify_div_mod_imm!(dst, lhs, b, RevModulus0, false, true),
+                (O::Modulus0, _, Some(b)) => simplify_div_mod_imm!(dst, lhs, b, Modulus, true, true),
 
                 (O::UnsignedLessEqual, Some(b), _) => {
                     additional.push(BI(dst, IO::UnsignedGreaterEqual, rhs, b.clone()))

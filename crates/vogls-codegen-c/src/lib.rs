@@ -548,12 +548,14 @@ pub fn lower_process(
                             O::RevPower => {
                                 binary::cgc_bin_pow(&mut buffer, dst_t, imm, src_t.into())?
                             }
-                            O::RevDivide => {
+                            O::RevDivideX => {
                                 binary::cgc_bin_div(&mut buffer, dst_t, imm, src_t.into())?
                             }
-                            O::RevModulus => {
+                            O::RevDivide0 => todo!(),
+                            O::RevModulusX => {
                                 binary::cgc_bin_mod(&mut buffer, dst_t, imm, src_t.into())?
                             }
+                            O::RevModulus0 => todo!(),
                             O::UnsignedLessEqual => {
                                 binary::cgc_bin_ule(&mut buffer, dst_t.ident, src_t.into(), imm)?
                             }
@@ -641,12 +643,14 @@ pub fn lower_process(
                             O::Multiply => {
                                 binary::cgc_bin_mul(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
                             }
-                            O::Divide => {
+                            O::DivideX => {
                                 binary::cgc_bin_div(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
                             }
-                            O::Modulus => {
+                            O::Divide0 => todo!(),
+                            O::ModulusX => {
                                 binary::cgc_bin_mod(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
                             }
+                            O::Modulus0 => todo!(),
                             O::UnsignedLessEqual => binary::cgc_bin_ule(
                                 &mut buffer,
                                 dst_t.ident,

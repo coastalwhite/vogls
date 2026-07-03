@@ -177,8 +177,8 @@ pub(crate) fn exec_fv_tv_bin_arith(
     let rhs = heap.load_tv_bits(rhs.to_ref(dst.size));
 
     let output = match &op {
-        BinaryArithmeticOp::Divide => Bits::divide(&lhs, &rhs),
-        BinaryArithmeticOp::Modulus => Bits::remainder(&lhs, &rhs),
+        BinaryArithmeticOp::Divide => Bits::divide_x(&lhs, &rhs),
+        BinaryArithmeticOp::Modulus => Bits::remainder_x(&lhs, &rhs),
         _ => unreachable!(),
     };
     heap.store_bits(dst, LogicMode::FourValue, &output);

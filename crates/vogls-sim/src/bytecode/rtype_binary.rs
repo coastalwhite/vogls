@@ -35,6 +35,10 @@ pub struct TvCeq(pub BitwiseRType);
 pub struct TvAdd(pub SbsBitwiseRType);
 pub struct TvSub(pub SbsBitwiseRType);
 pub struct TvMul(pub SbsBitwiseRType);
+pub struct TvDivX(pub SbsBitwiseRType);
+pub struct TvDiv0(pub SbsBitwiseRType);
+pub struct TvModX(pub SbsBitwiseRType);
+pub struct TvMod0(pub SbsBitwiseRType);
 
 pub struct FvAnd(pub BitwiseRType);
 pub struct FvOr(pub BitwiseRType);
@@ -45,6 +49,10 @@ pub struct FvCeq(pub BitwiseRType);
 pub struct FvAdd(pub SbsBitwiseRType);
 pub struct FvSub(pub SbsBitwiseRType);
 pub struct FvMul(pub SbsBitwiseRType);
+pub struct FvDivX(pub SbsBitwiseRType);
+pub struct FvDiv0(pub SbsBitwiseRType);
+pub struct FvModX(pub SbsBitwiseRType);
+pub struct FvMod0(pub SbsBitwiseRType);
 pub struct FvPosedge(pub BitwiseRType);
 pub struct FvNegedge(pub BitwiseRType);
 
@@ -292,6 +300,90 @@ impl BytecodeInstruction for TvMul {
         regs[rd] = size.mask(regs[rs1].wrapping_mul(regs[rs2]));
     }
 }
+impl BytecodeInstruction for TvDivX {
+    impl_sbs_bitwise!(TvDivX, "tv.divx");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let SbsBitwiseRType { rd, rs1, rs2, size } = self.0;
+        let (rd_spc, rd_val) = rd.to_spc_and_val();
+        match regs[rs1].checked_div(regs[rs2]) {
+            None => {
+                regs[rd_spc] = 0;
+                regs[rd_val] = 0;
+            }
+            Some(value) => {
+                regs[rd_spc] = size.mask(u64::MAX);
+                regs[rd_val] = value;
+            }
+        }
+    }
+}
+impl BytecodeInstruction for TvDiv0 {
+    impl_sbs_bitwise!(TvDiv0, "tv.div0");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let SbsBitwiseRType { rd, rs1, rs2, size: _ } = self.0;
+        regs[rd] = regs[rs1].checked_div(regs[rs2]).unwrap_or_default();
+    }
+}
+impl BytecodeInstruction for TvModX {
+    impl_sbs_bitwise!(TvModX, "tv.modx");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let SbsBitwiseRType { rd, rs1, rs2, size } = self.0;
+        let (rd_spc, rd_val) = rd.to_spc_and_val();
+        match regs[rs1].checked_rem(regs[rs2]) {
+            None => {
+                regs[rd_spc] = 0;
+                regs[rd_val] = 0;
+            }
+            Some(value) => {
+                regs[rd_spc] = size.mask(u64::MAX);
+                regs[rd_val] = value;
+            }
+        }
+    }
+}
+impl BytecodeInstruction for TvMod0 {
+    impl_sbs_bitwise!(TvMod0, "tv.mod0");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let SbsBitwiseRType { rd, rs1, rs2, size: _ } = self.0;
+        regs[rd] = regs[rs1].checked_div(regs[rs2]).unwrap_or_default();
+    }
+}
 
 impl BytecodeInstruction for FvAnd {
     impl_bitwise!(FvAnd, "fv.and");
@@ -465,7 +557,7 @@ impl BytecodeInstruction for FvAdd {
         let (rs2_spc, rs2_val) = rs2.to_spc_and_val();
 
         let mask = size.mask(u64::MAX);
-        
+
         if regs[rs1_spc] == mask && regs[rs2_spc] == mask {
             regs[rd_spc] = mask;
             regs[rd_val] = regs[rs1_val].wrapping_add(regs[rs2_val]) & mask;
@@ -493,7 +585,7 @@ impl BytecodeInstruction for FvSub {
         let (rs2_spc, rs2_val) = rs2.to_spc_and_val();
 
         let mask = size.mask(u64::MAX);
-        
+
         if regs[rs1_spc] == mask && regs[rs2_spc] == mask {
             regs[rd_spc] = mask;
             regs[rd_val] = regs[rs1_val].wrapping_sub(regs[rs2_val]) & mask;
@@ -521,10 +613,122 @@ impl BytecodeInstruction for FvMul {
         let (rs2_spc, rs2_val) = rs2.to_spc_and_val();
 
         let mask = size.mask(u64::MAX);
-        
+
         if regs[rs1_spc] == mask && regs[rs2_spc] == mask {
             regs[rd_spc] = mask;
             regs[rd_val] = regs[rs1_val].wrapping_mul(regs[rs2_val]) & mask;
+        } else {
+            regs[rd_spc] = 0;
+            regs[rd_val] = 0;
+        }
+    }
+}
+impl BytecodeInstruction for FvDivX {
+    impl_sbs_bitwise!(FvDivX, "fv.divx");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let SbsBitwiseRType { rd, rs1, rs2, size } = self.0;
+        let (rd_spc, rd_val) = rd.to_spc_and_val();
+        let (rs1_spc, rs1_val) = rs1.to_spc_and_val();
+        let (rs2_spc, rs2_val) = rs2.to_spc_and_val();
+
+        let mask = size.mask(u64::MAX);
+
+        if regs[rs1_spc] == mask && regs[rs2_spc] == mask && regs[rs2_val] != 0 {
+            regs[rd_spc] = mask;
+            regs[rd_val] = regs[rs1_val] / regs[rs2_val];
+        } else {
+            regs[rd_spc] = 0;
+            regs[rd_val] = 0;
+        }
+    }
+}
+impl BytecodeInstruction for FvDiv0 {
+    impl_sbs_bitwise!(FvDiv0, "fv.div0");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let SbsBitwiseRType { rd, rs1, rs2, size } = self.0;
+        let (rd_spc, rd_val) = rd.to_spc_and_val();
+        let (rs1_spc, rs1_val) = rs1.to_spc_and_val();
+        let (rs2_spc, rs2_val) = rs2.to_spc_and_val();
+
+        let mask = size.mask(u64::MAX);
+
+        if regs[rs1_spc] == mask && regs[rs2_spc] == mask {
+            regs[rd_spc] = mask;
+            regs[rd_val] = regs[rs1_val].checked_div(regs[rs2_val]).unwrap_or_default();
+        } else {
+            regs[rd_spc] = 0;
+            regs[rd_val] = 0;
+        }
+    }
+}
+impl BytecodeInstruction for FvModX {
+    impl_sbs_bitwise!(FvModX, "fv.modx");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let SbsBitwiseRType { rd, rs1, rs2, size } = self.0;
+        let (rd_spc, rd_val) = rd.to_spc_and_val();
+        let (rs1_spc, rs1_val) = rs1.to_spc_and_val();
+        let (rs2_spc, rs2_val) = rs2.to_spc_and_val();
+
+        let mask = size.mask(u64::MAX);
+
+        if regs[rs1_spc] == mask && regs[rs2_spc] == mask && regs[rs2_val] != 0 {
+            regs[rd_spc] = mask;
+            regs[rd_val] = regs[rs1_val] % regs[rs2_val];
+        } else {
+            regs[rd_spc] = 0;
+            regs[rd_val] = 0;
+        }
+    }
+}
+impl BytecodeInstruction for FvMod0 {
+    impl_sbs_bitwise!(FvMod0, "fv.mod0");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let SbsBitwiseRType { rd, rs1, rs2, size } = self.0;
+        let (rd_spc, rd_val) = rd.to_spc_and_val();
+        let (rs1_spc, rs1_val) = rs1.to_spc_and_val();
+        let (rs2_spc, rs2_val) = rs2.to_spc_and_val();
+
+        let mask = size.mask(u64::MAX);
+
+        if regs[rs1_spc] == mask && regs[rs2_spc] == mask {
+            regs[rd_spc] = mask;
+            regs[rd_val] = regs[rs1_val].checked_rem(regs[rs2_val]).unwrap_or_default();
         } else {
             regs[rd_spc] = 0;
             regs[rd_val] = 0;
@@ -573,7 +777,15 @@ impl_bytecode_sbs_methods! {
     (add, TvAdd)
     (sub, TvSub)
     (mul, TvMul)
+    (divx, TvDivX)
+    (div0, TvDiv0)
+    (modx, TvModX)
+    (mod0, TvMod0)
     (fv_add, FvAdd)
     (fv_sub, FvSub)
     (fv_mul, FvMul)
+    (fv_divx, FvDivX)
+    (fv_div0, FvDiv0)
+    (fv_modx, FvModX)
+    (fv_mod0, FvMod0)
 }
