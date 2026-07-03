@@ -22,7 +22,7 @@ pub use multiplication::{
     fv_cell_multiplication, fv_ltu32_multiplication, fv_multiplication, tv_cell_multiplication,
     tv_ltu64_multiplication, tv_multiplication,
 };
-pub use power::{fv_ltu32_power, fv_power, tv_ltu64_power, tv_power};
+pub use power::{fv_cell_power, fv_ltu32_power, fv_power, tv_cell_power, tv_ltu64_power, tv_power};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(u8)]

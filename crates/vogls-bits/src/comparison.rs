@@ -2,7 +2,7 @@ use std::cell::Cell;
 use std::cmp::Ordering;
 
 use crate::VectorSize;
-use crate::arithmetic::{FvLogicValue, fv_contains_special, fv_unpack_u64};
+use crate::arithmetic::{fv_cell_contains_special, fv_contains_special, fv_unpack_u64, FvLogicValue};
 use crate::load::load_partial_u64;
 use crate::select::tv_gtu64_select_bit;
 
@@ -53,6 +53,22 @@ pub fn tv_gtu64_signed_leq(lhs: &[u64], rhs: &[u64], size: VectorSize) -> bool {
 
 pub fn fv_l_unsigned_leq(lhs: &[u64], rhs: &[u64], size: VectorSize) -> FvLogicValue {
     if fv_contains_special(lhs, size) || fv_contains_special(rhs, size) {
+        return FvLogicValue::X;
+    }
+
+    let nwords = lhs.len() / 2;
+    for i in (0..nwords).rev() {
+        let value = match lhs[nwords + i].cmp(&rhs[nwords + i]) {
+            Ordering::Less => FvLogicValue::L1,
+            Ordering::Greater => FvLogicValue::L0,
+            Ordering::Equal => continue,
+        };
+        return value;
+    }
+    FvLogicValue::L1
+}
+pub fn fv_cell_unsigned_leq(lhs: &[Cell<u64>], rhs: &[Cell<u64>], size: VectorSize) -> FvLogicValue {
+    if fv_cell_contains_special(lhs, size) || fv_cell_contains_special(rhs, size) {
         return FvLogicValue::X;
     }
 

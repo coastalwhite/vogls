@@ -419,7 +419,6 @@ fn lower_instruction(
                 (O::Multiply, M::TwoValue, None, _, _) => bce.heap_tv_mul(rd, rs1, rs2, dst_size),
                 (O::Multiply, M::FourValue, Some(size), _, _) => bce.fv_mul(rd, rs1, rs2, size),
                 (O::Multiply, M::FourValue, None, _, _) => bce.heap_fv_mul(rd, rs1, rs2, dst_size),
-                (O::Power, ..) => todo!(),
                 (O::DivideX, _, Some(size), M::TwoValue, _) => bce.divx(rd, rs1, rs2, size),
                 (O::DivideX, _, None, M::TwoValue, _) => bce.heap_tv_divx(rd, rs1, rs2, dst_size),
                 (O::DivideX, _, Some(size), M::FourValue, _) => bce.fv_divx(rd, rs1, rs2, size),
@@ -434,17 +433,37 @@ fn lower_instruction(
                 (O::ModulusX, _, None, M::FourValue, _) => bce.heap_fv_modx(rd, rs1, rs2, dst_size),
                 (O::Modulus0, M::TwoValue, Some(size), _, _) => bce.mod0(rd, rs1, rs2, size),
                 (O::Modulus0, M::TwoValue, None, _, _) => bce.heap_tv_mod0(rd, rs1, rs2, dst_size),
-                (O::Modulus0, M::FourValue, Some(size), _, _) => bce.fv_div0(rd, rs1, rs2, size),
+                (O::Modulus0, M::FourValue, Some(size), _, _) => bce.fv_mod0(rd, rs1, rs2, size),
                 (O::Modulus0, M::FourValue, None, _, _) => bce.heap_fv_mod0(rd, rs1, rs2, dst_size),
-                (O::UnsignedLessEqual, ..) => todo!(),
+                (O::Power, M::TwoValue, Some(size), _, _) => bce.pow(rd, rs1, rs2, size),
+                (O::Power, M::TwoValue, None, _, _) => bce.heap_tv_pow(rd, rs1, rs2, dst_size),
+                (O::Power, M::FourValue, Some(size), _, _) => bce.fv_pow(rd, rs1, rs2, size),
+                (O::Power, M::FourValue, None, _, _) => bce.heap_fv_pow(rd, rs1, rs2, dst_size),
+
+                (O::UnsignedLessEqual, _, Some(_), M::TwoValue, _) => bce.uleq(rd, rs1, rs2),
+                (O::UnsignedLessEqual, _, None, M::TwoValue, _) => {
+                    bce.heap_tv_unsigned_leq(rd, rs1, rs2, lhs_size)
+                }
+                (O::UnsignedLessEqual, _, Some(size), M::FourValue, _) => {
+                    bce.fv_uleq(rd, rs1, rs2, size)
+                }
+                (O::UnsignedLessEqual, _, None, M::FourValue, _) => {
+                    bce.heap_fv_unsigned_leq(rd, rs1, rs2, lhs_size)
+                }
                 (O::LogicalShiftLeft, ..) => todo!(),
                 (O::LogicalShiftRight, ..) => todo!(),
                 (O::ArithmeticShiftRight, ..) => todo!(),
                 (O::Concat, ..) => todo!(),
                 (O::CopyX, ..) => todo!(),
                 (O::CopyZ, ..) => todo!(),
-                (O::Min, ..) => todo!(),
-                (O::Max, ..) => todo!(),
+                (O::Min, _, Some(_), M::TwoValue, _) => bce.min(rd, rs1, rs2),
+                (O::Min, _, None, M::TwoValue, _) => bce.heap_tv_min(rd, rs1, rs2, lhs_size),
+                (O::Min, _, Some(size), M::FourValue, _) => bce.fv_min(rd, rs1, rs2, size),
+                (O::Min, _, None, M::FourValue, _) => bce.heap_fv_min(rd, rs1, rs2, lhs_size),
+                (O::Max, _, Some(_), M::TwoValue, _) => bce.max(rd, rs1, rs2),
+                (O::Max, _, None, M::TwoValue, _) => bce.heap_tv_max(rd, rs1, rs2, lhs_size),
+                (O::Max, _, Some(size), M::FourValue, _) => bce.fv_max(rd, rs1, rs2, size),
+                (O::Max, _, None, M::FourValue, _) => bce.heap_fv_max(rd, rs1, rs2, lhs_size),
 
                 (O::CaseEquality, _, Some(_), M::TwoValue, _) => bce.ceq(rd, rs1, rs2),
                 (O::CaseEquality, _, None, M::TwoValue, _) => {
