@@ -50,6 +50,7 @@ pub struct TvMax(pub BitwiseRType);
 pub struct TvSll(pub SbsBitwiseRType);
 pub struct TvSlr(pub BitwiseRType);
 pub struct TvSar(pub SbsBitwiseRType);
+pub struct TvLeftShiftOr(pub SbsBitwiseRType);
 
 pub struct FvAnd(pub BitwiseRType);
 pub struct FvOr(pub BitwiseRType);
@@ -74,6 +75,7 @@ pub struct FvMax(pub SbsBitwiseRType);
 pub struct FvSll(pub SbsBitwiseRType);
 pub struct FvSlr(pub SbsBitwiseRType);
 pub struct FvSar(pub SbsBitwiseRType);
+pub struct FvLeftShiftOr(pub SbsBitwiseRType);
 
 impl BitwiseRType {
     #[inline(always)]
@@ -551,6 +553,22 @@ impl BytecodeInstruction for TvSar {
         let out = out as i64;
         let out = out.unbounded_shr(unused_bits + regs[rs2] as u32);
         regs[rd] = out as u64;
+    }
+}
+impl BytecodeInstruction for TvLeftShiftOr {
+    impl_sbs_bitwise!(TvLeftShiftOr, "tv.lsor");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let SbsBitwiseRType { rd, rs1, rs2, size } = self.0;
+        regs[rd] = (regs[rs1] << size.0) | regs[rs2];
     }
 }
 
@@ -1146,6 +1164,26 @@ impl BytecodeInstruction for FvSar {
             fv_shift_arith_right(regs[rs1_spc], regs[rs1_val], shift, size);
     }
 }
+impl BytecodeInstruction for FvLeftShiftOr {
+    impl_sbs_bitwise!(FvLeftShiftOr, "fv.lsor");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let SbsBitwiseRType { rd, rs1, rs2, size } = self.0;
+        let (rd_spc, rd_val) = rd.to_spc_and_val();
+        let (rs1_spc, rs1_val) = rs1.to_spc_and_val();
+        let (rs2_spc, rs2_val) = rs2.to_spc_and_val();
+        regs[rd_spc] = (regs[rs1_spc] << size.0) | regs[rs2_spc];
+        regs[rd_val] = (regs[rs1_val] << size.0) | regs[rs2_val];
+    }
+}
 
 macro_rules! impl_bytecode_methods {
     ($(($name:ident, $op:ident))*) => {
@@ -1200,6 +1238,7 @@ impl_bytecode_sbs_methods! {
     (pow, TvPow)
     (sll, TvSll)
     (sar, TvSar)
+    (lsor, TvLeftShiftOr)
     (fv_add, FvAdd)
     (fv_sub, FvSub)
     (fv_mul, FvMul)
@@ -1215,4 +1254,5 @@ impl_bytecode_sbs_methods! {
     (fv_sll, FvSll)
     (fv_slr, FvSlr)
     (fv_sar, FvSar)
+    (fv_lsor, FvLeftShiftOr)
 }

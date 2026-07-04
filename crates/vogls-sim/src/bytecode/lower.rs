@@ -384,6 +384,7 @@ fn lower_instruction(
 
             let dst_size = gl.vars.size(*dst);
             let lhs_size = gl.vars.size(*lhs);
+            let rhs_size = gl.vars.size(*rhs);
 
             use BinaryOp as O;
             use LogicMode as M;
@@ -483,7 +484,18 @@ fn lower_instruction(
                     bce.heap_fv_sar(rd, rs1, rs2, dst_size)
                 }
 
-                (O::Concat, ..) => todo!(),
+                (O::Concat, M::TwoValue, Some(_), _, _) => {
+                    bce.lsor(rd, rs1, rs2, SixBitSize::new_masked(rhs_size.get()))
+                }
+                (O::Concat, M::TwoValue, None, _, _) => {
+                    todo!()
+                }
+                (O::Concat, M::FourValue, Some(_), _, _) => {
+                    bce.fv_lsor(rd, rs1, rs2, SixBitSize::new_masked(rhs_size.get()))
+                }
+                (O::Concat, M::FourValue, None, _, _) => {
+                    todo!()
+                }
                 (O::CopyX, ..) => todo!(),
                 (O::CopyZ, ..) => todo!(),
                 (O::Min, _, Some(_), M::TwoValue, _) => bce.min(rd, rs1, rs2),
