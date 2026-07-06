@@ -22,7 +22,7 @@ use vogls_bits::truncate::tv_l_truncate;
 use vogls_codegen::lsra::StackItemKind;
 use vogls_codegen::{HeapOffset, HeapRef};
 
-use vogls_ir::{Bits, IntrinsicOp, LogicMode, SCALAR_VSIZE, VSIZE_32, VSIZE_64, VectorSize};
+use vogls_ir::{Bits, IntrinsicOp, LogicMode, VSIZE_32, VSIZE_64, VectorSize};
 use vogls_runtime::RuntimeState;
 use vogls_runtime::plugins::{RuntimePlugin, RuntimePluginState};
 use vogls_utils::IndexSet;
@@ -456,20 +456,20 @@ impl<const NBITS: usize> InlineAddrOffset<NBITS> {
         i32::from(self.0) as u32 & 1u32.unbounded_shl(NBITS as u32).wrapping_sub(1)
     }
 
-    pub fn new(offset: i64, bce: &mut BytecodeEncoder, addr: Reg, scratch: Reg) -> Self {
+    pub fn new(offset: i64, bce: &mut BytecodeEncoder, addr: Reg, scratch: Reg) -> (Reg, Self) {
         const { assert!(NBITS >= 1 && NBITS <= 16) };
         let min: i64 = const { -(1 << (NBITS - 1)) };
         let max: i64 = const { (1 << (NBITS - 1)) - 1 };
 
         if (min..=max).contains(&offset) {
-            return Self(offset as i16);
+            return (addr, Self(offset as i16));
         }
 
         // @Performance: There are quite a few tricks that we can pull here to make a more
         // efficient lowering.
         bce.load_u64(scratch, offset as u64);
         bce.add(scratch, addr, scratch, SixBitSize::N64);
-        Self(0)
+        (scratch, Self(0))
     }
 }
 
@@ -781,12 +781,12 @@ impl BytecodeEncoder {
         use StackItemKind as K;
         match kind {
             K::B1 => {}
-            K::B2 => self.slli(rd, rd, 1, SixBitSize::N64),
-            K::B4 => self.slli(rd, rd, 2, SixBitSize::N64),
-            K::B8 => self.slli(rd, rd, 3, SixBitSize::N64),
-            K::B16 => self.slli(rd, rd, 4, SixBitSize::N64),
-            K::B32 => self.slli(rd, rd, 5, SixBitSize::N64),
-            K::B64 => self.slli(rd, rd, 6, SixBitSize::N64),
+            K::B2 => self.slli(rd, rd, SignedImmediate::new_from_u64(1).unwrap(), SixBitSize::N64),
+            K::B4 => self.slli(rd, rd, SignedImmediate::new_from_u64(2).unwrap(), SixBitSize::N64),
+            K::B8 => self.slli(rd, rd, SignedImmediate::new_from_u64(3).unwrap(), SixBitSize::N64),
+            K::B16 => self.slli(rd, rd, SignedImmediate::new_from_u64(4).unwrap(), SixBitSize::N64),
+            K::B32 => self.slli(rd, rd, SignedImmediate::new_from_u64(5).unwrap(), SixBitSize::N64),
+            K::B64 => self.slli(rd, rd, SignedImmediate::new_from_u64(6).unwrap(), SixBitSize::N64),
         }
         self.add(rd, sp, rd, SixBitSize::N64);
     }
@@ -818,7 +818,7 @@ impl Design {
 
         let mut pc = entry.0;
         let mut cldctx = ColdContext::new(&self.intrinsics, stdout, stderr);
-        let mut regs = Regs::default();
+        let mut regs = Regs::new();
         regs[Reg::X15] = self.stack_offset;
         while let Some(&c) = code.get(pc as usize) {
             let opcode = c.opcode();

@@ -735,7 +735,7 @@ impl BytecodeInstruction for HeapCaseEq {
             rs1: Reg::new_masked(v >> 12),
             rs2: Reg::new_masked(v >> 16),
             ne: (v >> 20) & 1 != 0,
-            num_words: NonZeroU16::new((v >> 21) as u16),
+            num_words: InlineNBitSize::new_masked(v >> 21),
         }
     }
     #[inline(always)]
@@ -746,7 +746,7 @@ impl BytecodeInstruction for HeapCaseEq {
                 | ((self.rs1 as u32) << 12)
                 | ((self.rs2 as u32) << 16)
                 | ((self.ne as u32) << 20)
-                | (self.num_words.map_or(0, |v| v.get() as u32) << 21),
+                | (self.num_words.encode() << 21),
         )
     }
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

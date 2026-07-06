@@ -373,13 +373,13 @@ fn lower_instruction(
                 (O::Truncate, M::FourValue, Some(dst_size), None) => {
                     let (rdspc, rdval) = rd.to_spc_and_val();
                     bce.load_unaligned(rdspc, rs, InlineAddrOffset::ZERO, dst_size);
-                    let offset = InlineAddrOffset::new(
+                    let (addr, offset) = InlineAddrOffset::new(
                         src_size.get().next_power_of_two() as i64,
                         bce,
                         rs,
                         T1_VAL,
                     );
-                    bce.load_unaligned(rdval, rs, offset, dst_size);
+                    bce.load_unaligned(rdval, addr, offset, dst_size);
                 }
                 (O::Truncate, M::FourValue, None, None) => {
                     let size = InlineNBitSize::new(dst_size, bce);
@@ -543,40 +543,7 @@ fn lower_instruction(
                     bce.lsor(rd, rs1, rs2, SixBitSize::new_masked(rhs_size.get()))
                 }
                 (O::Concat, M::TwoValue, _, _, _) => {
-                    // @Performance: There is probably a better lowering here.
-                    // SPC
-                    match SixBitSize::from_vector_size(rhs_size) {
-                        None => {
-                            let size = InlineNBitSize::new(rhs_size, bce);
-                            bce.set_heap_unaligned(T0_VAL, rs2, rd, size, InlineAddrOffset::ZERO);
-                        }
-                        Some(rhs_size) => bce.set_unaligned(
-                            T0_VAL,
-                            rs2.to_spc_and_val().0,
-                            rd,
-                            InlineAddrOffset::ZERO,
-                            rhs_size,
-                        ),
-                    }
-                    match SixBitSize::from_vector_size(lhs_size) {
-                        None => {
-                            let size = InlineNBitSize::new(lhs_size, bce);
-                            let offset =
-                                InlineAddrOffset::new(rhs_size.get().into(), bce, rd, T0_VAL);
-                            bce.set_heap_unaligned(T0_VAL, rs1, T0_VAL, size, offset);
-                        }
-                        Some(lhs_size) => {
-                            let offset =
-                                InlineAddrOffset::new(rhs_size.get().into(), bce, rd, T0_VAL);
-                            bce.set_unaligned(
-                                T0_VAL,
-                                rs1.to_spc_and_val().0,
-                                T0_VAL,
-                                offset,
-                                lhs_size,
-                            )
-                        }
-                    }
+                    tv_concat_heap(bce, rd, rs1, rs2, lhs_size, rhs_size, T0_VAL);
                 }
                 (O::Concat, M::FourValue, _, _, _)
                     if SixBitSize::from_vector_size(dst_size).is_some() =>
@@ -584,91 +551,7 @@ fn lower_instruction(
                     bce.fv_lsor(rd, rs1, rs2, SixBitSize::new_masked(rhs_size.get()))
                 }
                 (O::Concat, M::FourValue, _, _, _) => {
-                    // @Performance: There is probably a better lowering here.
-                    // SPC
-                    match SixBitSize::from_vector_size(rhs_size) {
-                        None => {
-                            let size = InlineNBitSize::new(rhs_size, bce);
-                            bce.set_heap_unaligned(T0_VAL, rs2, rd, size, InlineAddrOffset::ZERO);
-                        }
-                        Some(rhs_size) => bce.set_unaligned(
-                            T0_VAL,
-                            rs2.to_spc_and_val().0,
-                            rd,
-                            InlineAddrOffset::ZERO,
-                            rhs_size,
-                        ),
-                    }
-                    match SixBitSize::from_vector_size(lhs_size) {
-                        None => {
-                            let size = InlineNBitSize::new(lhs_size, bce);
-                            let offset =
-                                InlineAddrOffset::new(rhs_size.get().into(), bce, rd, T0_VAL);
-                            bce.set_heap_unaligned(T0_VAL, rs1, T0_VAL, size, offset);
-                        }
-                        Some(lhs_size) => {
-                            let offset =
-                                InlineAddrOffset::new(rhs_size.get().into(), bce, rd, T0_VAL);
-                            bce.set_unaligned(
-                                T0_VAL,
-                                rs1.to_spc_and_val().0,
-                                T0_VAL,
-                                offset,
-                                lhs_size,
-                            )
-                        }
-                    }
-
-                    let num_words = dst_size.get().div_ceil(64) as u64;
-                    let fv_offset = num_words * 64;
-
-                    match SignedImmediate::new_from_u64(fv_offset) {
-                        None => {
-                            bce.load_u64(T0_VAL, fv_offset);
-                            bce.add(T0_VAL, rd, T0_VAL, SixBitSize::N64);
-                        }
-                        Some(imm) => bce.addi(T0_VAL, rd, imm, SixBitSize::N64),
-                    }
-
-                    // VAL
-                    match SixBitSize::from_vector_size(rhs_size) {
-                        None => {
-                            let size = InlineNBitSize::new(rhs_size, bce);
-                            bce.set_heap_unaligned(
-                                T1_VAL,
-                                rs2,
-                                T0_VAL,
-                                size,
-                                InlineAddrOffset::ZERO,
-                            );
-                        }
-                        Some(rhs_size) => bce.set_unaligned(
-                            T0_SPC,
-                            rs2.to_spc_and_val().1,
-                            T0_VAL,
-                            InlineAddrOffset::ZERO,
-                            rhs_size,
-                        ),
-                    }
-                    match SixBitSize::from_vector_size(lhs_size) {
-                        None => {
-                            let size = InlineNBitSize::new(lhs_size, bce);
-                            let offset =
-                                InlineAddrOffset::new(rhs_size.get().into(), bce, rd, T0_VAL);
-                            bce.set_heap_unaligned(T2_VAL, rs1, T0_VAL, size, offset);
-                        }
-                        Some(lhs_size) => {
-                            let offset =
-                                InlineAddrOffset::new(rhs_size.get().into(), bce, rd, T0_VAL);
-                            bce.set_unaligned(
-                                T0_VAL,
-                                rs1.to_spc_and_val().0,
-                                T0_VAL,
-                                offset,
-                                lhs_size,
-                            )
-                        }
-                    }
+                    fv_concat_heap(bce, rd, rs1, rs2, lhs_size, rhs_size, T0_VAL);
                 }
                 (O::CopyX, ..) => todo!(),
                 (O::CopyZ, ..) => todo!(),
@@ -1112,8 +995,86 @@ fn lower_instruction(
                     bce.load_u64(T2_SPC, imm.offset.bit_offset as u64);
                     bce.heap_fv_unsigned_gt(rd, rs, T2_SPC, src_size);
                 }
-                (O::ConcatLeft, ..) => todo!(),
-                (O::ConcatRight, ..) => todo!(),
+                (O::ConcatLeft, M::TwoValue, Some(_), _, _, _) => {
+                    // @Performance. There is likely space here for a left_shift_or_immediate
+                    bce.load_bits_into_register(T2_SPC, M::TwoValue, imm);
+                    bce.lsor(
+                        rd,
+                        rs,
+                        T2_SPC,
+                        SixBitSize::from_vector_size(imm.size()).unwrap(),
+                    );
+                }
+                (O::ConcatLeft, M::TwoValue, None, _, _, _) => {
+                    match SixBitSize::from_vector_size(imm.size()) {
+                        None => {
+                            let imm = heap_builder.claim_constant(M::TwoValue, imm.clone());
+                            bce.load_u64(T2_SPC, imm.offset.bit_offset as u64);
+                        }
+                        Some(_) => bce.load_bits_into_register(T2_SPC, M::TwoValue, imm),
+                    }
+                    tv_concat_heap(bce, rd, T2_SPC, rs, imm.size(), src_size, T0_VAL);
+                }
+                (O::ConcatLeft, M::FourValue, Some(_), _, _, _) => {
+                    // @Performance. There is likely space here for a fv_left_shift_or_immediate
+                    bce.load_bits_into_register(T2_SPC, M::FourValue, imm);
+                    bce.fv_lsor(
+                        rd,
+                        rs,
+                        T2_SPC,
+                        SixBitSize::from_vector_size(imm.size()).unwrap(),
+                    );
+                }
+                (O::ConcatLeft, M::FourValue, None, _, _, _) => {
+                    match SixBitSize::from_vector_size(imm.size()) {
+                        None => {
+                            let imm = heap_builder.claim_constant(M::FourValue, imm.clone());
+                            bce.load_u64(T2_SPC, imm.offset.bit_offset as u64);
+                        }
+                        Some(_) => bce.load_bits_into_register(T2_SPC, M::FourValue, imm),
+                    }
+                    fv_concat_heap(bce, rd, T2_SPC, rs, imm.size(), src_size, T0_VAL);
+                }
+                (O::ConcatRight, M::TwoValue, Some(_), _, _, _) => {
+                    // @Performance. There is likely space here for a left_shift_or_immediate
+                    bce.load_bits_into_register(T2_SPC, M::TwoValue, imm);
+                    bce.lsor(
+                        rd,
+                        T2_SPC,
+                        rs,
+                        SixBitSize::from_vector_size(src_size).unwrap(),
+                    );
+                }
+                (O::ConcatRight, M::TwoValue, None, _, _, _) => {
+                    match SixBitSize::from_vector_size(imm.size()) {
+                        None => {
+                            let imm = heap_builder.claim_constant(M::TwoValue, imm.clone());
+                            bce.load_u64(T2_SPC, imm.offset.bit_offset as u64);
+                        }
+                        Some(_) => bce.load_bits_into_register(T2_SPC, M::TwoValue, imm),
+                    }
+                    tv_concat_heap(bce, rd, rs, T2_SPC, src_size, imm.size(), T0_VAL);
+                }
+                (O::ConcatRight, M::FourValue, Some(_), _, _, _) => {
+                    // @Performance. There is likely space here for a fv_left_shift_or_immediate
+                    bce.load_bits_into_register(T2_SPC, M::FourValue, imm);
+                    bce.fv_lsor(
+                        rd,
+                        T2_SPC,
+                        rs,
+                        SixBitSize::from_vector_size(src_size).unwrap(),
+                    );
+                }
+                (O::ConcatRight, M::FourValue, None, _, _, _) => {
+                    match SixBitSize::from_vector_size(imm.size()) {
+                        None => {
+                            let imm = heap_builder.claim_constant(M::FourValue, imm.clone());
+                            bce.load_u64(T2_SPC, imm.offset.bit_offset as u64);
+                        }
+                        Some(_) => bce.load_bits_into_register(T2_SPC, M::FourValue, imm),
+                    }
+                    fv_concat_heap(bce, rd, rs, T2_SPC, src_size, imm.size(), T0_VAL);
+                }
                 (O::Min, M::TwoValue, Some(size), _, _, _) => {
                     match SignedImmediate::new_from_bits(imm) {
                         None => {
@@ -1356,12 +1317,12 @@ fn to_reg(
             let offset = kind_offset as u64 + offset as u64;
             let offset = offset << (kind as u32);
 
-            let offset = InlineAddrOffset::new(offset as i64, bytecode, SP, backup);
+            let (addr, offset) = InlineAddrOffset::new(offset as i64, bytecode, SP, backup);
             let size = vars.size(var);
             if let Some(size) = SixBitSize::from_vector_size(size) {
                 match var.mode() {
-                    LogicMode::TwoValue => bytecode.tv_load_aligned(backup, backup, offset, size),
-                    LogicMode::FourValue => bytecode.fv_load_aligned(backup, backup, offset, size),
+                    LogicMode::TwoValue => bytecode.tv_load_aligned(backup, addr, offset, size),
+                    LogicMode::FourValue => bytecode.fv_load_aligned(backup, addr, offset, size),
                 }
             }
             backup
@@ -1427,5 +1388,110 @@ fn lower_to_n_bits_sign_extend(imm: &Bits, n: u32) -> Option<i64> {
         Some(imm.sign_extend(VSIZE_64).extract_exact_u64().unwrap() as i64)
     } else {
         None
+    }
+}
+
+fn tv_concat_heap(
+    bce: &mut BytecodeEncoder,
+    rd: Reg,
+    rs1: Reg,
+    rs2: Reg,
+    src1_size: VectorSize,
+    src2_size: VectorSize,
+    scratch: Reg,
+) {
+    match SixBitSize::from_vector_size(src2_size) {
+        None => {
+            let size = InlineNBitSize::new(src2_size, bce);
+            bce.set_heap_unaligned(scratch, rs2, rd, size, InlineAddrOffset::ZERO);
+        }
+        Some(size) => {
+            bce.set_unaligned(scratch, rs2, rd, InlineAddrOffset::ZERO, size);
+        }
+    }
+    match SixBitSize::from_vector_size(src1_size) {
+        None => {
+            let size = InlineNBitSize::new(src1_size, bce);
+            let (addr, offset) = InlineAddrOffset::new(src2_size.get().into(), bce, rd, scratch);
+            bce.set_heap_unaligned(scratch, rs1, addr, size, offset);
+        }
+        Some(size) => {
+            let (addr, offset) = InlineAddrOffset::new(src2_size.get().into(), bce, rd, scratch);
+            bce.set_unaligned(scratch, rs1, addr, offset, size);
+        }
+    }
+}
+
+fn fv_concat_heap(
+    bce: &mut BytecodeEncoder,
+    rd: Reg,
+    rs1: Reg,
+    rs2: Reg,
+    src1_size: VectorSize,
+    src2_size: VectorSize,
+    scratch: Reg,
+) {
+    let (rs1_spc, rs1_val) = match SixBitSize::from_vector_size(src1_size) {
+        None => (rs1, rs1),
+        Some(_) => rs1.to_spc_and_val(),
+    };
+    let (rs2_spc, rs2_val) = match SixBitSize::from_vector_size(src2_size) {
+        None => (rs2, rs2),
+        Some(_) => rs2.to_spc_and_val(),
+    };
+
+    tv_concat_heap(bce, rd, rs1_spc, rs2_spc, src1_size, src2_size, scratch);
+    let fv_offset = (src1_size.get() + src2_size.get()).div_ceil(64) as u64 * 64;
+    match SixBitSize::from_vector_size(src2_size) {
+        None => {
+            let size = InlineNBitSize::new(src2_size, bce);
+            let (addr, offset) = InlineAddrOffset::new(fv_offset as i64, bce, rd, scratch);
+            let src_offset = src2_size.get().div_ceil(64) as u64 * 64;
+            match SignedImmediate::new_from_u64(src_offset) {
+                None => {
+                    bce.load_u64(scratch, src_offset);
+                    bce.add(scratch, rs2, scratch, SixBitSize::N64);
+                }
+                Some(value) => {
+                    bce.addi(scratch, rs2, value, SixBitSize::N64);
+                }
+            }
+            bce.set_heap_unaligned(scratch, scratch, addr, size, offset);
+        }
+        Some(size) => {
+            let (addr, offset) = InlineAddrOffset::new(fv_offset as i64, bce, rd, scratch);
+            bce.set_unaligned(scratch, rs2_val, addr, offset, size);
+        }
+    }
+    match SixBitSize::from_vector_size(src1_size) {
+        None => {
+            let size = InlineNBitSize::new(src1_size, bce);
+            let (addr, offset) = InlineAddrOffset::new(
+                u64::from(src2_size.get()).wrapping_add(fv_offset) as i64,
+                bce,
+                rd,
+                scratch,
+            );
+            let src_offset = src1_size.get().div_ceil(64) as u64 * 64;
+            match SignedImmediate::new_from_u64(src_offset) {
+                None => {
+                    bce.load_u64(scratch, src_offset);
+                    bce.add(scratch, rs1, scratch, SixBitSize::N64);
+                }
+                Some(value) => {
+                    bce.addi(scratch, rs1, value, SixBitSize::N64);
+                }
+            }
+            bce.set_heap_unaligned(scratch, scratch, addr, size, offset);
+        }
+        Some(size) => {
+            let (addr, offset) = InlineAddrOffset::new(
+                u64::from(src2_size.get()).wrapping_add(fv_offset) as i64,
+                bce,
+                rd,
+                scratch,
+            );
+            bce.set_unaligned(scratch, rs1_val, addr, offset, size);
+        }
     }
 }
