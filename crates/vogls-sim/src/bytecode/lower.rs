@@ -2,9 +2,9 @@ use vogls_codegen::lsra::{Slot, StackItemKind, StackOffsets, StackTracker};
 use vogls_codegen::{HeapBuilder, HeapOffset, HeapRef, insert_bb_phis, resolve_var_logic_mode_map};
 use vogls_ir::watchers::WatchMap;
 use vogls_ir::{
-    BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, Bits, ContextFormat,
-    DisplayContext, GlobalContext, Instruction, LogicMode, ProcessKey, ResizeOp, SignalKey,
-    UnaryOp, VSIZE_64, VariableKey, VariableMap, VectorSize,
+    BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, ContextFormat, DisplayContext,
+    GlobalContext, Instruction, LogicMode, ProcessKey, ResizeOp, SignalKey, UnaryOp, VSIZE_64,
+    VariableKey, VariableMap, VectorSize,
 };
 use vogls_runtime::RtSignalKey;
 use vogls_utils::{NonMaxU16, VgHashMap, VgHashSet};
@@ -407,67 +407,58 @@ fn lower_instruction(
                     bce.copy(rdval, rsval);
                 }
                 (O::ZeroExtend, M::TwoValue, None, Some(src_size)) => {
-                    bce.heap_tv_andnot(rd, rd, rd, dst_size);
-                    bce.set_unaligned(T0_VAL, rs, rd, InlineAddrOffset::ZERO, src_size);
+                    let dst_size = InlineNBitSize::new(dst_size, bce);
+                    bce.heapreg_tv_zero_extend(rd, rs, dst_size, src_size);
                 }
                 (O::ZeroExtend, M::FourValue, None, Some(src_size)) => {
-                    let (rs_spc, rs_val) = rs.to_spc_and_val();
-                    bce.heap_tv_ornot(rd, rd, rd, dst_size);
-                    bce.set_unaligned(T0_VAL, rs_spc, rd, InlineAddrOffset::ZERO, src_size);
-
-                    let offset = dst_size.get().div_ceil(64) as u64 * 64;
-                    match SignedImmediate::new_from_u64(offset) {
-                        None => {
-                            bce.load_u64(T0_VAL, offset);
-                            bce.add(T0_VAL, rd, T0_VAL, SixBitSize::N64);
-                        }
-                        Some(value) => {
-                            bce.addi(T0_VAL, rd, value, SixBitSize::N64);
-                        }
-                    }
-                    bce.heap_tv_andnot(T0_VAL, T0_VAL, T0_VAL, dst_size);
-                    bce.set_unaligned(T0_VAL, rs_val, T0_VAL, InlineAddrOffset::ZERO, src_size);
+                    let dst_size = InlineNBitSize::new(dst_size, bce);
+                    bce.heapreg_fv_zero_extend(rd, rs, dst_size, src_size);
                 }
 
                 (O::ZeroExtend, M::TwoValue, None, None) => {
-                    bce.heap_tv_andnot(rd, rd, rd, dst_size);
-                    let size = InlineNBitSize::new(src_size, bce);
-                    bce.set_heap_unaligned(T0_VAL, rs, rd, size, InlineAddrOffset::ZERO);
+                    let src_size = InlineNBitSize::new(src_size, bce);
+                    bce.load_u64(T1_VAL, dst_size.get().into());
+                    bce.heapheap_tv_zero_extend(rd, rs, T1_VAL, src_size);
                 }
                 (O::ZeroExtend, M::FourValue, None, None) => {
-                    bce.heap_tv_ornot(rd, rd, rd, dst_size);
-                    let size = InlineNBitSize::new(src_size, bce);
-                    bce.set_heap_unaligned(T0_VAL, rs, rd, size, InlineAddrOffset::ZERO);
+                    let src_size = InlineNBitSize::new(src_size, bce);
+                    bce.load_u64(T1_VAL, dst_size.get().into());
+                    bce.heapheap_fv_zero_extend(rd, rs, T1_VAL, src_size);
+                }
 
-                    let offset = dst_size.get().div_ceil(64) as u64 * 64;
-                    match SignedImmediate::new_from_u64(offset) {
-                        None => {
-                            bce.load_u64(T0_VAL, offset);
-                            bce.add(T0_VAL, rd, T0_VAL, SixBitSize::N64);
-                        }
-                        Some(value) => {
-                            bce.addi(T0_VAL, rd, value, SixBitSize::N64);
-                        }
-                    }
-                    bce.heap_tv_andnot(T0_VAL, T0_VAL, T0_VAL, dst_size);
-                    let offset = src_size.get().div_ceil(64) as u64 * 64;
-                    match SignedImmediate::new_from_u64(offset) {
-                        None => {
-                            bce.load_u64(T1_VAL, offset);
-                            bce.add(T1_VAL, rs, T1_VAL, SixBitSize::N64);
-                        }
-                        Some(value) => {
-                            bce.addi(T1_VAL, rs, value, SixBitSize::N64);
-                        }
-                    }
-                    let size = InlineNBitSize::new(src_size, bce);
-                    bce.set_heap_unaligned(T0_VAL, T1_VAL, rd, size, InlineAddrOffset::ZERO);
+                (O::SignExtend, M::TwoValue, Some(dst_size), Some(src_size)) => {
+                    bce.sign_extend(rd, rs, dst_size, src_size);
+                }
+                (O::SignExtend, M::FourValue, Some(dst_size), Some(src_size)) => {
+                    // @Performance: One instruction maybe?
+                    let (rsspc, rsval) = rs.to_spc_and_val();
+                    let (rdspc, rdval) = rd.to_spc_and_val();
+                    bce.sign_extend(rdspc, rsspc, dst_size, src_size);
+                    bce.sign_extend(rdval, rsval, dst_size, src_size);
+                }
+                (O::SignExtend, M::TwoValue, None, Some(src_size)) => {
+                    let dst_size = InlineNBitSize::new(dst_size, bce);
+                    bce.heapreg_tv_sign_extend(rd, rs, dst_size, src_size);
+                }
+                (O::SignExtend, M::FourValue, None, Some(src_size)) => {
+                    let dst_size = InlineNBitSize::new(dst_size, bce);
+                    bce.heapreg_fv_sign_extend(rd, rs, dst_size, src_size);
+                }
+
+                (O::SignExtend, M::TwoValue, None, None) => {
+                    let src_size = InlineNBitSize::new(src_size, bce);
+                    bce.load_u64(T1_VAL, dst_size.get().into());
+                    bce.heapheap_tv_sign_extend(rd, rs, T1_VAL, src_size);
+                }
+                (O::SignExtend, M::FourValue, None, None) => {
+                    let src_size = InlineNBitSize::new(src_size, bce);
+                    bce.load_u64(T1_VAL, dst_size.get().into());
+                    bce.heapheap_fv_sign_extend(rd, rs, T1_VAL, src_size);
                 }
 
                 (O::ZeroExtend, _, Some(_), None) | (O::SignExtend, _, Some(_), None) => {
                     unreachable!()
                 }
-                (O::SignExtend, ..) => todo!(),
             }
 
             store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd);
@@ -1432,6 +1423,7 @@ fn tv_concat_heap(
     src2_size: VectorSize,
     scratch: Reg,
 ) {
+    // @Incorrect: If regs are aliasing eachother. This is problematic.
     match SixBitSize::from_vector_size(src2_size) {
         None => {
             let size = InlineNBitSize::new(src2_size, bce);
@@ -1463,6 +1455,7 @@ fn fv_concat_heap(
     src2_size: VectorSize,
     scratch: Reg,
 ) {
+    // @Incorrect: If regs are aliasing eachother. This is problematic.
     let (rs1_spc, rs1_val) = match SixBitSize::from_vector_size(src1_size) {
         None => (rs1, rs1),
         Some(_) => rs1.to_spc_and_val(),

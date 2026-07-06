@@ -1,6 +1,7 @@
 use std::fmt::{self, Debug};
 
 mod control_flow;
+mod extend;
 mod heap_ops;
 mod interrupt;
 mod intrinsics;
@@ -28,6 +29,7 @@ use vogls_runtime::plugins::{RuntimePlugin, RuntimePluginState};
 use vogls_utils::IndexSet;
 
 pub use control_flow::*;
+pub use extend::*;
 pub use heap_ops::*;
 pub use interrupt::*;
 pub use intrinsics::*;
@@ -336,6 +338,8 @@ opcodes![
     Wake,
     Reschedule,
     StartListen,
+    HeapHeapExtend,
+    HeapRegExtend,
     HeapBinaryBitwise,
     HeapBinaryArithmetic,
     HeapBinaryCmp,
@@ -419,6 +423,15 @@ impl<const N: usize> InlineNBitSize<N> {
         }
         bce.data.push(LoadSize(Some(size)).encode());
         Self(None)
+    }
+}
+
+impl<const NBITS: usize> fmt::Display for InlineNBitSize<NBITS> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            None => f.write_str("|...|"),
+            Some(size) => fmt::Display::fmt(&size, f),
+        }
     }
 }
 
@@ -781,12 +794,42 @@ impl BytecodeEncoder {
         use StackItemKind as K;
         match kind {
             K::B1 => {}
-            K::B2 => self.slli(rd, rd, SignedImmediate::new_from_u64(1).unwrap(), SixBitSize::N64),
-            K::B4 => self.slli(rd, rd, SignedImmediate::new_from_u64(2).unwrap(), SixBitSize::N64),
-            K::B8 => self.slli(rd, rd, SignedImmediate::new_from_u64(3).unwrap(), SixBitSize::N64),
-            K::B16 => self.slli(rd, rd, SignedImmediate::new_from_u64(4).unwrap(), SixBitSize::N64),
-            K::B32 => self.slli(rd, rd, SignedImmediate::new_from_u64(5).unwrap(), SixBitSize::N64),
-            K::B64 => self.slli(rd, rd, SignedImmediate::new_from_u64(6).unwrap(), SixBitSize::N64),
+            K::B2 => self.slli(
+                rd,
+                rd,
+                SignedImmediate::new_from_u64(1).unwrap(),
+                SixBitSize::N64,
+            ),
+            K::B4 => self.slli(
+                rd,
+                rd,
+                SignedImmediate::new_from_u64(2).unwrap(),
+                SixBitSize::N64,
+            ),
+            K::B8 => self.slli(
+                rd,
+                rd,
+                SignedImmediate::new_from_u64(3).unwrap(),
+                SixBitSize::N64,
+            ),
+            K::B16 => self.slli(
+                rd,
+                rd,
+                SignedImmediate::new_from_u64(4).unwrap(),
+                SixBitSize::N64,
+            ),
+            K::B32 => self.slli(
+                rd,
+                rd,
+                SignedImmediate::new_from_u64(5).unwrap(),
+                SixBitSize::N64,
+            ),
+            K::B64 => self.slli(
+                rd,
+                rd,
+                SignedImmediate::new_from_u64(6).unwrap(),
+                SixBitSize::N64,
+            ),
         }
         self.add(rd, sp, rd, SixBitSize::N64);
     }
