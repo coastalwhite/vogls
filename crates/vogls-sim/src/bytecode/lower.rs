@@ -243,7 +243,7 @@ fn lower_instruction(
                 let dslot = assignment[dst];
                 let rd = to_reg(bce, *dst, &gl.vars, dslot, stack_offsets, T0_SPC);
                 bce.load_bits_into_register(rd, dst.mode(), value);
-                store_back(bce, &gl.vars, *dst, dslot, rd);
+                store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd);
             }
         }
         I::Unary(dst, op, src) => {
@@ -296,15 +296,13 @@ fn lower_instruction(
                 (O::LeadingZeros, M::FourValue, _, None) => todo!(),
                 (O::TvToFv, _, _, Some(src_size)) => {
                     // @Performance: better lowering.
-                    let (spc, val) = reg_as_fv(rd);
+                    let (spc, val) = rd.to_spc_and_val();
                     bce.copy(val, rs);
                     bce.load_u64(spc, src_size.mask(u64::MAX));
                 }
                 (O::TvToFv, _, _, None) => {
                     // @Performance: better lowering.
                     let num_words = src_size.get().div_ceil(64) as u64;
-                    // ORNOT with self is a fill 1's
-                    bce.heap_tv_ornot(rd, rs, rs, src_size);
                     let val = T2_SPC;
                     match SignedImmediate::new_from_u64(num_words * 64) {
                         None => {
@@ -315,9 +313,11 @@ fn lower_instruction(
                     }
                     // OR with self is a copy
                     bce.heap_tv_or(val, rs, rs, src_size);
+                    // ORNOT with self is a fill 1's
+                    bce.heap_tv_ornot(rd, rs, rs, src_size);
                 }
                 (O::FvToTv, _, _, Some(_)) => {
-                    let (spc, val) = reg_as_fv(rs);
+                    let (spc, val) = rs.to_spc_and_val();
                     bce.and(rd, spc, val)
                 }
                 (O::FvToTv, _, _, None) => {
@@ -335,7 +335,7 @@ fn lower_instruction(
                 }
             }
 
-            store_back(bce, &gl.vars, *dst, dslot, rd);
+            store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd);
         }
         I::Resize(dst, op, src) => {
             let dslot = assignment[dst];
@@ -410,7 +410,24 @@ fn lower_instruction(
                     bce.heap_tv_andnot(rd, rd, rd, dst_size);
                     bce.set_unaligned(T0_VAL, rs, rd, InlineAddrOffset::ZERO, src_size);
                 }
-                (O::ZeroExtend, M::FourValue, None, Some(_)) => todo!(),
+                (O::ZeroExtend, M::FourValue, None, Some(src_size)) => {
+                    let (rs_spc, rs_val) = rs.to_spc_and_val();
+                    bce.heap_tv_ornot(rd, rd, rd, dst_size);
+                    bce.set_unaligned(T0_VAL, rs_spc, rd, InlineAddrOffset::ZERO, src_size);
+
+                    let offset = dst_size.get().div_ceil(64) as u64 * 64;
+                    match SignedImmediate::new_from_u64(offset) {
+                        None => {
+                            bce.load_u64(T0_VAL, offset);
+                            bce.add(T0_VAL, rd, T0_VAL, SixBitSize::N64);
+                        }
+                        Some(value) => {
+                            bce.addi(T0_VAL, rd, value, SixBitSize::N64);
+                        }
+                    }
+                    bce.heap_tv_andnot(T0_VAL, T0_VAL, T0_VAL, dst_size);
+                    bce.set_unaligned(T0_VAL, rs_val, T0_VAL, InlineAddrOffset::ZERO, src_size);
+                }
 
                 (O::ZeroExtend, M::TwoValue, None, None) => {
                     bce.heap_tv_andnot(rd, rd, rd, dst_size);
@@ -418,7 +435,33 @@ fn lower_instruction(
                     bce.set_heap_unaligned(T0_VAL, rs, rd, size, InlineAddrOffset::ZERO);
                 }
                 (O::ZeroExtend, M::FourValue, None, None) => {
-                    todo!()
+                    bce.heap_tv_ornot(rd, rd, rd, dst_size);
+                    let size = InlineNBitSize::new(src_size, bce);
+                    bce.set_heap_unaligned(T0_VAL, rs, rd, size, InlineAddrOffset::ZERO);
+
+                    let offset = dst_size.get().div_ceil(64) as u64 * 64;
+                    match SignedImmediate::new_from_u64(offset) {
+                        None => {
+                            bce.load_u64(T0_VAL, offset);
+                            bce.add(T0_VAL, rd, T0_VAL, SixBitSize::N64);
+                        }
+                        Some(value) => {
+                            bce.addi(T0_VAL, rd, value, SixBitSize::N64);
+                        }
+                    }
+                    bce.heap_tv_andnot(T0_VAL, T0_VAL, T0_VAL, dst_size);
+                    let offset = src_size.get().div_ceil(64) as u64 * 64;
+                    match SignedImmediate::new_from_u64(offset) {
+                        None => {
+                            bce.load_u64(T1_VAL, offset);
+                            bce.add(T1_VAL, rs, T1_VAL, SixBitSize::N64);
+                        }
+                        Some(value) => {
+                            bce.addi(T1_VAL, rs, value, SixBitSize::N64);
+                        }
+                    }
+                    let size = InlineNBitSize::new(src_size, bce);
+                    bce.set_heap_unaligned(T0_VAL, T1_VAL, rd, size, InlineAddrOffset::ZERO);
                 }
 
                 (O::ZeroExtend, _, Some(_), None) | (O::SignExtend, _, Some(_), None) => {
@@ -427,7 +470,7 @@ fn lower_instruction(
                 (O::SignExtend, ..) => todo!(),
             }
 
-            store_back(bce, &gl.vars, *dst, dslot, rd);
+            store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd);
         }
         I::Binary(dst, op, lhs, rhs) => {
             let dslot = assignment[dst];
@@ -579,7 +622,7 @@ fn lower_instruction(
                 (O::Negedge, _, _, M::FourValue, _) => bce.fv_negedge(rd, rs1, rs2),
             }
 
-            store_back(bce, &gl.vars, *dst, dslot, rd);
+            store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd);
         }
         I::BinaryImm(dst, op, src, imm) => {
             let dslot = assignment[dst];
@@ -1161,7 +1204,7 @@ fn lower_instruction(
                 }
             }
 
-            store_back(bce, &gl.vars, *dst, dslot, rd);
+            store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd);
         }
         I::Slice(variable_key, variable_key1, variable_key2) => todo!(),
         I::SliceImm(variable_key, variable_key1, _) => todo!(),
@@ -1202,7 +1245,7 @@ fn lower_instruction(
                 Some(v) => Some(v),
             };
             bce.intrinsic(rd, intrinsic_id);
-            store_back(bce, &gl.vars, *dst, dslot, rd);
+            store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd);
         }
         I::LastUpdateTime(variable_key, signal_key) => todo!(),
         I::Probe(dst, signal, offset) => {
@@ -1239,7 +1282,7 @@ fn lower_instruction(
                 }
             }
 
-            store_back(bce, &gl.vars, *dst, dslot, rd);
+            store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd);
         }
         I::ProbeSlice(variable_key, signal_key, variable_key1) => todo!(),
         I::Drive(signal, src, partial) => {
@@ -1286,11 +1329,6 @@ fn lower_instruction(
     }
 }
 
-fn reg_as_fv(reg: Reg) -> (Reg, Reg) {
-    assert_ne!(reg, Reg::X15);
-    (reg, Reg::new_masked((reg as u32) + 1))
-}
-
 fn to_reg(
     bytecode: &mut BytecodeEncoder,
     var: VariableKey,
@@ -1325,18 +1363,9 @@ fn to_reg(
                     LogicMode::FourValue => bytecode.fv_load_aligned(backup, addr, offset, size),
                 }
             }
-            backup
+            addr
         }
         Slot::Register(reg) => Reg::new_masked(reg),
-    }
-}
-
-fn to_8bit_size(bytecode: &mut BytecodeEncoder, size: VectorSize) -> Option<VectorSize> {
-    if size.get() > 256 {
-        bytecode.load_u64(T0_SPC, size.get().into());
-        None
-    } else {
-        Some(size)
     }
 }
 
@@ -1355,39 +1384,42 @@ fn load_signal_address(
 fn store_back(
     bytecode: &mut BytecodeEncoder,
     vars: &VariableMap,
+    stack_offsets: &StackOffsets,
     var: VariableKey,
     slot: Slot,
     value: Reg,
 ) {
     match slot {
         Slot::Heap(..) => unreachable!(),
-        Slot::Stack(..) => {
-            if vars.size(var) <= VSIZE_64 {
-                todo!()
+        Slot::Stack(kind, offset) => {
+            if let Some(size) = SixBitSize::from_vector_size(vars.size(var)) {
+                let kind_offset = match kind {
+                    StackItemKind::B1 => 0,
+                    StackItemKind::B2 => stack_offsets.b2,
+                    StackItemKind::B4 => stack_offsets.b4,
+                    StackItemKind::B8 => stack_offsets.b8,
+                    StackItemKind::B16 => stack_offsets.b16,
+                    StackItemKind::B32 => stack_offsets.b32,
+                    StackItemKind::B64 => stack_offsets.b64,
+                };
+                let offset = kind_offset as u64 + offset as u64;
+                let offset = offset << (kind as u32);
+
+                let (addr, offset) = InlineAddrOffset::new(offset as i64, bytecode, SP, T0_VAL);
+                match var.mode() {
+                    LogicMode::TwoValue => {
+                        bytecode.tv_set_aligned(T0_VAL, value, addr, offset, size)
+                    }
+                    LogicMode::FourValue => {
+                        bytecode.fv_set_aligned(T0_VAL, value, addr, offset, size)
+                    }
+                }
             }
         }
         Slot::Register(rd) => {
             let rd = Reg::new_masked(rd);
             bytecode.copy(rd, value);
         }
-    }
-}
-
-fn lower_to_n_bits_sign_extend(imm: &Bits, n: u32) -> Option<i64> {
-    if imm.size() > VSIZE_64 {
-        return None;
-    }
-
-    let initial_size = VectorSize::new(n).unwrap();
-    let adjusted = if imm.size() > initial_size {
-        imm.truncate(initial_size).sign_extend(imm.size())
-    } else {
-        imm.sign_extend(imm.size())
-    };
-    if imm == &adjusted {
-        Some(imm.sign_extend(VSIZE_64).extract_exact_u64().unwrap() as i64)
-    } else {
-        None
     }
 }
 
