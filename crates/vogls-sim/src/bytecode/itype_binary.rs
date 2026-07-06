@@ -6,13 +6,13 @@ use vogls_runtime::RuntimeState;
 use super::reg::{Reg, Regs};
 use super::{
     Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, BytecodeOpcode, ColdContext,
-    Schedule, SixBitSize, write_padded_mnemonic,
+    Schedule, SignedImmediate, SixBitSize, write_padded_mnemonic,
 };
 
 pub struct IType {
     pub rd: Reg,
     pub rs: Reg,
-    pub imm10: i16,
+    pub imm10: SignedImmediate<10>,
     pub size: SixBitSize,
 }
 
@@ -21,6 +21,12 @@ pub struct TvOri(pub IType);
 pub struct TvXori(pub IType);
 pub struct TvAddi(pub IType);
 pub struct TvSubi(pub IType);
+pub struct TvMuli(pub IType);
+pub struct TvRevSubi(pub IType);
+pub struct TvMini(pub IType);
+pub struct TvMaxi(pub IType);
+pub struct TvUleqi(pub IType);
+pub struct TvUgti(pub IType);
 pub struct TvCeqi(pub IType);
 pub struct TvCnei(pub IType);
 pub struct TvSlli(pub IType);
@@ -28,6 +34,14 @@ pub struct TvSlli(pub IType);
 pub struct FvAndi(pub IType);
 pub struct FvOri(pub IType);
 pub struct FvXori(pub IType);
+pub struct FvAddi(pub IType);
+pub struct FvSubi(pub IType);
+pub struct FvMuli(pub IType);
+pub struct FvRevSubi(pub IType);
+pub struct FvMini(pub IType);
+pub struct FvMaxi(pub IType);
+pub struct FvUleqi(pub IType);
+pub struct FvUgti(pub IType);
 pub struct FvCeqi(pub IType);
 pub struct FvCnei(pub IType);
 
@@ -39,7 +53,7 @@ impl IType {
             rd: Reg::new_masked(v >> 8),
             rs: Reg::new_masked(v >> 12),
             size: SixBitSize::new_masked(v >> 16),
-            imm10: ((v as i32) >> 22) as i16,
+            imm10: SignedImmediate::new_shifted(v, 22),
         }
     }
     #[inline(always)]
@@ -49,7 +63,7 @@ impl IType {
                 | ((self.rd as u32) << 8)
                 | ((self.rs as u32) << 12)
                 | ((self.size.0 as u32) << 16)
-                | ((self.imm10 as u16 as u32) << 22),
+                | (self.imm10.encode() << 22),
         )
     }
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -98,7 +112,7 @@ impl BytecodeInstruction for TvAndi {
             imm10,
             size,
         } = self.0;
-        regs[rd] = regs[rs] & size.mask(i64::from(imm10) as u64);
+        regs[rd] = size.mask(regs[rs] & i64::from(imm10.0) as u64);
     }
 }
 impl BytecodeInstruction for TvOri {
@@ -119,7 +133,7 @@ impl BytecodeInstruction for TvOri {
             imm10,
             size,
         } = self.0;
-        regs[rd] = regs[rs] | size.mask(i64::from(imm10) as u64);
+        regs[rd] = size.mask(regs[rs] | i64::from(imm10.0) as u64);
     }
 }
 impl BytecodeInstruction for TvXori {
@@ -140,7 +154,7 @@ impl BytecodeInstruction for TvXori {
             imm10,
             size,
         } = self.0;
-        regs[rd] = regs[rs] ^ size.mask(i64::from(imm10) as u64);
+        regs[rd] = size.mask(regs[rs] ^ i64::from(imm10.0) as u64);
     }
 }
 impl BytecodeInstruction for TvAddi {
@@ -161,7 +175,7 @@ impl BytecodeInstruction for TvAddi {
             imm10,
             size,
         } = self.0;
-        regs[rd] = size.mask(regs[rs].wrapping_add(size.mask(i64::from(imm10) as u64)));
+        regs[rd] = size.mask(regs[rs].wrapping_add(size.mask(i64::from(imm10.0) as u64)));
     }
 }
 impl BytecodeInstruction for TvSubi {
@@ -182,7 +196,135 @@ impl BytecodeInstruction for TvSubi {
             imm10,
             size,
         } = self.0;
-        regs[rd] = size.mask(regs[rs].wrapping_sub(size.mask(i64::from(imm10) as u64)));
+        regs[rd] = size.mask(regs[rs].wrapping_sub(size.mask(i64::from(imm10.0) as u64)));
+    }
+}
+impl BytecodeInstruction for TvRevSubi {
+    impl_bitwise!(TvRevSubi, "tv.revsubi");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let IType {
+            rd,
+            rs,
+            imm10,
+            size,
+        } = self.0;
+        regs[rd] = size.mask(size.mask(i64::from(imm10.0) as u64).wrapping_sub(regs[rs]));
+    }
+}
+impl BytecodeInstruction for TvMuli {
+    impl_bitwise!(TvMuli, "tv.muli");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let IType {
+            rd,
+            rs,
+            imm10,
+            size,
+        } = self.0;
+        regs[rd] = size.mask(regs[rs].wrapping_mul(size.mask(i64::from(imm10.0) as u64)));
+    }
+}
+impl BytecodeInstruction for TvMini {
+    impl_bitwise!(TvMini, "tv.mini");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let IType {
+            rd,
+            rs,
+            imm10,
+            size,
+        } = self.0;
+        regs[rd] = regs[rs].min(size.mask(i64::from(imm10.0) as u64));
+    }
+}
+impl BytecodeInstruction for TvMaxi {
+    impl_bitwise!(TvMaxi, "tv.maxi");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let IType {
+            rd,
+            rs,
+            imm10,
+            size,
+        } = self.0;
+        regs[rd] = regs[rs].max(size.mask(i64::from(imm10.0) as u64));
+    }
+}
+impl BytecodeInstruction for TvUleqi {
+    impl_bitwise!(TvUleqi, "tv.uleqi");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let IType {
+            rd,
+            rs,
+            imm10,
+            size,
+        } = self.0;
+        let imm = size.mask(i64::from(imm10.0) as u64);
+        regs[rd] = u64::from(regs[rs] <= imm);
+    }
+}
+impl BytecodeInstruction for TvUgti {
+    impl_bitwise!(TvUgti, "tv.ugti");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let IType {
+            rd,
+            rs,
+            imm10,
+            size,
+        } = self.0;
+        let imm = size.mask(i64::from(imm10.0) as u64);
+        regs[rd] = u64::from(regs[rs] > imm);
     }
 }
 impl BytecodeInstruction for TvCeqi {
@@ -203,7 +345,7 @@ impl BytecodeInstruction for TvCeqi {
             imm10,
             size,
         } = self.0;
-        regs[rd] = u64::from(regs[rs] == size.mask(i64::from(imm10) as u64));
+        regs[rd] = u64::from(regs[rs] == size.mask(i64::from(imm10.0) as u64));
     }
 }
 impl BytecodeInstruction for TvCnei {
@@ -224,7 +366,7 @@ impl BytecodeInstruction for TvCnei {
             imm10,
             size,
         } = self.0;
-        regs[rd] = u64::from(regs[rs] != size.mask(i64::from(imm10) as u64));
+        regs[rd] = u64::from(regs[rs] != size.mask(i64::from(imm10.0) as u64));
     }
 }
 impl BytecodeInstruction for TvSlli {
@@ -245,7 +387,7 @@ impl BytecodeInstruction for TvSlli {
             imm10,
             size,
         } = self.0;
-        regs[rd] = size.mask(regs[rs].wrapping_shl(imm10 as u16 as u32));
+        regs[rd] = size.mask(regs[rs].wrapping_shl(imm10.0 as u16 as u32));
     }
 }
 impl BytecodeInstruction for FvAndi {
@@ -266,7 +408,7 @@ impl BytecodeInstruction for FvAndi {
             imm10,
             size,
         } = self.0;
-        let imm = size.mask(i64::from(imm10) as u64);
+        let imm = size.mask(i64::from(imm10.0) as u64);
         let (rd_spc, rd_val) = rd.to_spc_and_val();
         let (rs_spc, rs_val) = rs.to_spc_and_val();
         (regs[rd_spc], regs[rd_val]) =
@@ -291,7 +433,7 @@ impl BytecodeInstruction for FvOri {
             imm10,
             size,
         } = self.0;
-        let imm = size.mask(i64::from(imm10) as u64);
+        let imm = size.mask(i64::from(imm10.0) as u64);
         let (rd_spc, rd_val) = rd.to_spc_and_val();
         let (rs_spc, rs_val) = rs.to_spc_and_val();
         (regs[rd_spc], regs[rd_val]) =
@@ -316,11 +458,259 @@ impl BytecodeInstruction for FvXori {
             imm10,
             size,
         } = self.0;
-        let imm = size.mask(i64::from(imm10) as u64);
+        let imm = size.mask(i64::from(imm10.0) as u64);
         let (rd_spc, rd_val) = rd.to_spc_and_val();
         let (rs_spc, rs_val) = rs.to_spc_and_val();
         (regs[rd_spc], regs[rd_val]) =
             fv_bitwise_xor_elem(regs[rs_spc], regs[rs_val], size.mask(u64::MAX), imm);
+    }
+}
+impl BytecodeInstruction for FvAddi {
+    impl_bitwise!(FvAddi, "fv.addi");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let IType {
+            rd,
+            rs,
+            imm10,
+            size,
+        } = self.0;
+        let mask = size.mask(u64::MAX);
+        let imm = i64::from(imm10.0) as u64 & mask;
+        let (rd_spc, rd_val) = rd.to_spc_and_val();
+        let (rs_spc, rs_val) = rs.to_spc_and_val();
+        if regs[rs_spc] != mask {
+            regs[rd_spc] = 0;
+            regs[rd_val] = 0;
+        } else {
+            regs[rd_spc] = mask;
+            regs[rd_val] = mask & regs[rs_val].wrapping_add(imm);
+        }
+    }
+}
+impl BytecodeInstruction for FvSubi {
+    impl_bitwise!(FvSubi, "fv.subi");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let IType {
+            rd,
+            rs,
+            imm10,
+            size,
+        } = self.0;
+        let mask = size.mask(u64::MAX);
+        let imm = i64::from(imm10.0) as u64 & mask;
+        let (rd_spc, rd_val) = rd.to_spc_and_val();
+        let (rs_spc, rs_val) = rs.to_spc_and_val();
+        if regs[rs_spc] != mask {
+            regs[rd_spc] = 0;
+            regs[rd_val] = 0;
+        } else {
+            regs[rd_spc] = mask;
+            regs[rd_val] = mask & regs[rs_val].wrapping_sub(imm);
+        }
+    }
+}
+impl BytecodeInstruction for FvMuli {
+    impl_bitwise!(FvMuli, "fv.muli");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let IType {
+            rd,
+            rs,
+            imm10,
+            size,
+        } = self.0;
+        let mask = size.mask(u64::MAX);
+        let imm = i64::from(imm10.0) as u64 & mask;
+        let (rd_spc, rd_val) = rd.to_spc_and_val();
+        let (rs_spc, rs_val) = rs.to_spc_and_val();
+        if regs[rs_spc] != mask {
+            regs[rd_spc] = 0;
+            regs[rd_val] = 0;
+        } else {
+            regs[rd_spc] = mask;
+            regs[rd_val] = mask & regs[rs_val].wrapping_mul(imm);
+        }
+    }
+}
+impl BytecodeInstruction for FvRevSubi {
+    impl_bitwise!(FvRevSubi, "fv.revsubi");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let IType {
+            rd,
+            rs,
+            imm10,
+            size,
+        } = self.0;
+        let mask = size.mask(u64::MAX);
+        let imm = i64::from(imm10.0) as u64 & mask;
+        let (rd_spc, rd_val) = rd.to_spc_and_val();
+        let (rs_spc, rs_val) = rs.to_spc_and_val();
+        if regs[rs_spc] != mask {
+            regs[rd_spc] = 0;
+            regs[rd_val] = 0;
+        } else {
+            regs[rd_spc] = mask;
+            regs[rd_val] = mask & imm.wrapping_sub(regs[rs_val]);
+        }
+    }
+}
+impl BytecodeInstruction for FvMini {
+    impl_bitwise!(FvMini, "fv.mini");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let IType {
+            rd,
+            rs,
+            imm10,
+            size,
+        } = self.0;
+        let mask = size.mask(u64::MAX);
+        let imm = i64::from(imm10.0) as u64 & mask;
+        let (rd_spc, rd_val) = rd.to_spc_and_val();
+        let (rs_spc, rs_val) = rs.to_spc_and_val();
+        if regs[rs_spc] != mask {
+            regs[rd_spc] = 0;
+            regs[rd_val] = 0;
+        } else {
+            regs[rd_spc] = mask;
+            regs[rd_val] = imm.min(regs[rs_val]);
+        }
+    }
+}
+impl BytecodeInstruction for FvMaxi {
+    impl_bitwise!(FvMaxi, "fv.maxi");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let IType {
+            rd,
+            rs,
+            imm10,
+            size,
+        } = self.0;
+        let mask = size.mask(u64::MAX);
+        let imm = i64::from(imm10.0) as u64 & mask;
+        let (rd_spc, rd_val) = rd.to_spc_and_val();
+        let (rs_spc, rs_val) = rs.to_spc_and_val();
+        if regs[rs_spc] != mask {
+            regs[rd_spc] = 0;
+            regs[rd_val] = 0;
+        } else {
+            regs[rd_spc] = mask;
+            regs[rd_val] = imm.max(regs[rs_val]);
+        }
+    }
+}
+impl BytecodeInstruction for FvUleqi {
+    impl_bitwise!(FvUleqi, "fv.uleqi");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let IType {
+            rd,
+            rs,
+            imm10,
+            size,
+        } = self.0;
+        let mask = size.mask(u64::MAX);
+        let imm = i64::from(imm10.0) as u64 & mask;
+        let (rd_spc, rd_val) = rd.to_spc_and_val();
+        let (rs_spc, rs_val) = rs.to_spc_and_val();
+        if regs[rs_spc] != mask {
+            regs[rd_spc] = 0;
+            regs[rd_val] = 0;
+        } else {
+            regs[rd_spc] = 1;
+            regs[rd_val] = u64::from(regs[rs_val] <= imm);
+        }
+    }
+}
+impl BytecodeInstruction for FvUgti {
+    impl_bitwise!(FvUgti, "fv.ugti");
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let IType {
+            rd,
+            rs,
+            imm10,
+            size,
+        } = self.0;
+        let mask = size.mask(u64::MAX);
+        let imm = i64::from(imm10.0) as u64 & mask;
+        let (rd_spc, rd_val) = rd.to_spc_and_val();
+        let (rs_spc, rs_val) = rs.to_spc_and_val();
+        if regs[rs_spc] != mask {
+            regs[rd_spc] = 0;
+            regs[rd_val] = 0;
+        } else {
+            regs[rd_spc] = 1;
+            regs[rd_val] = u64::from(regs[rs_val] > imm);
+        }
     }
 }
 impl BytecodeInstruction for FvCeqi {
@@ -341,7 +731,7 @@ impl BytecodeInstruction for FvCeqi {
             imm10,
             size,
         } = self.0;
-        let imm = size.mask(i64::from(imm10) as u64);
+        let imm = size.mask(i64::from(imm10.0) as u64);
         let (rs_spc, rs_val) = rs.to_spc_and_val();
         regs[rd] = u64::from((regs[rs_spc] == size.mask(u64::MAX)) & (regs[rs_val] == imm));
     }
@@ -364,7 +754,7 @@ impl BytecodeInstruction for FvCnei {
             imm10,
             size,
         } = self.0;
-        let imm = size.mask(i64::from(imm10) as u64);
+        let imm = size.mask(i64::from(imm10.0) as u64);
         let (rs_spc, rs_val) = rs.to_spc_and_val();
         regs[rd] = u64::from((regs[rs_spc] != size.mask(u64::MAX)) | (regs[rs_val] != imm));
     }
@@ -373,7 +763,7 @@ impl BytecodeInstruction for FvCnei {
 macro_rules! impl_bytecode_methods {
     ($(($name:ident, $op:ident))*) => {
         impl BytecodeEncoder {
-            $(pub fn $name(&mut self, rd: Reg, rs: Reg, imm10: i16, size: SixBitSize) {
+            $(pub fn $name(&mut self, rd: Reg, rs: Reg, imm10: SignedImmediate<10>, size: SixBitSize) {
                 self.data.push($op(IType { rd, rs, imm10, size }).encode());
             })*
         }
@@ -386,12 +776,26 @@ impl_bytecode_methods! {
     (xori, TvXori)
     (addi, TvAddi)
     (subi, TvSubi)
+    (muli, TvMuli)
+    (revsubi, TvRevSubi)
+    (mini, TvMini)
+    (maxi, TvMaxi)
+    (uleqi, TvUleqi)
+    (ugti, TvUgti)
     (ceqi, TvCeqi)
     (cnei, TvCnei)
     (slli, TvSlli)
     (fv_andi, FvAndi)
     (fv_ori, FvOri)
     (fv_xori, FvXori)
+    (fv_addi, FvAddi)
+    (fv_subi, FvSubi)
+    (fv_muli, FvMuli)
+    (fv_revsubi, FvRevSubi)
+    (fv_mini, FvMini)
+    (fv_maxi, TvMaxi)
+    (fv_uleqi, FvUleqi)
+    (fv_ugti, TvUgti)
     (fv_ceqi, FvCeqi)
     (fv_cnei, FvCnei)
 }

@@ -1,9 +1,24 @@
 use std::fmt::{self, Write};
 use std::ops::{Index, IndexMut};
 
+use vogls_codegen::HeapOffset;
+use vogls_ir::{VectorSize, SCALAR_VSIZE};
+
 /// The register bank used by the bytecode interpreter for temporary results.
-#[derive(Default)]
-pub struct Regs([u64; 16]);
+pub struct Regs {
+    value: [u64; 16],
+    pub size: VectorSize,
+}
+impl Regs {
+    pub fn new() -> Self {
+        Self { value: [0u64; 16], size: SCALAR_VSIZE }
+    }
+    pub fn get_as_addr(&self, reg: Reg) -> HeapOffset {
+        HeapOffset {
+            bit_offset: self[reg] as usize,
+        }
+    }
+}
 
 /// Bytecode register
 ///
@@ -39,12 +54,12 @@ impl Index<Reg> for Regs {
     type Output = u64;
 
     fn index(&self, index: Reg) -> &Self::Output {
-        &self.0[index as usize]
+        &self.value[index as usize]
     }
 }
 impl IndexMut<Reg> for Regs {
     fn index_mut(&mut self, index: Reg) -> &mut Self::Output {
-        &mut self.0[index as usize]
+        &mut self.value[index as usize]
     }
 }
 
@@ -84,4 +99,3 @@ impl Reg {
         (self, Self::new_masked(self as u32 + 1))
     }
 }
-

@@ -507,4 +507,14 @@ impl Heap {
             dst.copy_from_slice(src);
         }
     }
+
+    pub fn load_unaligned_u64(&self, bit_offset: u64) -> u64 {
+        let word_offset = (bit_offset / 64) as usize;
+        assert!(word_offset.strict_add(1) < self.0.len());
+        let bit_offset = bit_offset % 64;
+        let w1 = self.0[word_offset];
+        let w2 = self.0[word_offset + 1];
+        let w = (w1 as u128) | ((w2 as u128) << 64);
+        ((w >> bit_offset) & 0xFFFF_FFFF_FFFF_FFFF) as u64
+    }
 }

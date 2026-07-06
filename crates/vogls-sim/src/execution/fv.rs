@@ -1,11 +1,13 @@
 use vogls_bits::arithmetic::{
-    FvLogicValue, fv_gtu32_bitwise_inv, fv_l_reduce_and, fv_l_reduce_or, fv_l_reduce_xor,
-    fv_leu32_bitwise_inv, fv_pack_u64, fv_s_reduce_and, fv_s_reduce_or, fv_s_reduce_xor,
-    fv_unpack_u64,
+    FvLogicValue, fv_gtu32_bitwise_inv, fv_leu32_bitwise_inv, fv_pack_u64, fv_unpack_u64,
 };
 use vogls_bits::concat::{fv_l_concat, fv_s_concat};
 use vogls_bits::extend::{fv_l_sign_extend, fv_l_zero_extend, fv_s_sign_extend, fv_s_zero_extend};
 use vogls_bits::load::load_partial_u64;
+use vogls_bits::reduce::{
+    fv_l_reduce_and, fv_l_reduce_or, fv_l_reduce_xor, fv_s_reduce_and, fv_s_reduce_or,
+    fv_s_reduce_xor,
+};
 use vogls_bits::shift::{
     fv_l_arithmetic_shift_right, fv_l_logical_shift_left, fv_l_logical_shift_right,
     fv_s_arithmetic_shift_right, fv_s_logical_shift_left, fv_s_logical_shift_right,
@@ -172,7 +174,6 @@ pub(crate) fn exec_fv_tv_bin_arith(
     lhs: HeapOffset,
     rhs: HeapOffset,
 ) {
-
     let lhs = heap.load_tv_bits(lhs.to_ref(dst.size));
     let rhs = heap.load_tv_bits(rhs.to_ref(dst.size));
 

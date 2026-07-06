@@ -10,6 +10,10 @@ use vogls_bits::arithmetic::{
     tv_cell_divmod, tv_cell_multiplication, tv_cell_power, tv_cell_subtraction,
 };
 use vogls_bits::comparison::{fv_cell_unsigned_leq, tv_cell_unsigned_leq};
+use vogls_bits::negate::{fv_cell_negate, tv_cell_negate};
+use vogls_bits::reduce::{
+    fv_l_reduce_and, fv_l_reduce_or, fv_l_reduce_xor, tv_reduce_and, tv_reduce_or, tv_reduce_xor,
+};
 use vogls_bits::shift::{
     fv_cell_arithmetic_shift_right, fv_cell_logical_shift_left, fv_cell_logical_shift_right,
     tv_cell_arithmetic_shift_right, tv_cell_logical_shift_left, tv_cell_logical_shift_right,
@@ -23,21 +27,21 @@ use crate::bytecode::write_padded_mnemonic;
 use super::reg::{Reg, Regs};
 use super::{
     Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, BytecodeOpcode, ColdContext,
-    Schedule,
+    InlineNBitSize, Schedule,
 };
 pub struct HeapBinaryBitwise {
     rd: Reg,
     rs1: Reg,
     rs2: Reg,
     op: BitwiseOp,
-    size: Option<VectorSize>,
+    size: InlineNBitSize<8>,
 }
 pub struct HeapBinaryArithmetic {
     rd: Reg,
     rs1: Reg,
     rs2: Reg,
     op: ArithmeticOp,
-    size: Option<VectorSize>,
+    size: InlineNBitSize<8>,
 }
 pub struct HeapBinaryDivMod {
     rd: Reg,
@@ -46,14 +50,14 @@ pub struct HeapBinaryDivMod {
     src_fv: bool,
     fill_x: bool,
     is_mod: bool,
-    size: Option<VectorSize>,
+    size: InlineNBitSize<9>,
 }
 pub struct HeapBinaryCmp {
     rd: Reg,
     rs1: Reg,
     rs2: Reg,
     op: CompareOp,
-    size: Option<VectorSize>,
+    size: InlineNBitSize<10>,
 }
 pub struct HeapBinaryMinMax {
     rd: Reg,
@@ -61,21 +65,27 @@ pub struct HeapBinaryMinMax {
     rs2: Reg,
     is_fv: bool,
     is_max: bool,
-    size: Option<VectorSize>,
+    size: InlineNBitSize<10>,
 }
 pub struct HeapCaseEq {
     rd: Reg,
     rs1: Reg,
     rs2: Reg,
     ne: bool,
-    num_words: Option<NonZeroU16>,
+    num_words: InlineNBitSize<13>,
 }
 pub struct HeapBinaryShift {
     rd: Reg,
     rs1: Reg,
     rs2: Reg,
     op: ShiftOp,
-    size: Option<VectorSize>,
+    size: InlineNBitSize<9>,
+}
+pub struct HeapUnary {
+    rd: Reg,
+    rs: Reg,
+    op: UnaryOp,
+    size: InlineNBitSize<12>,
 }
 
 impl BytecodeInstruction for HeapBinaryBitwise {
@@ -88,7 +98,7 @@ impl BytecodeInstruction for HeapBinaryBitwise {
             rs1: Reg::new_masked(v >> 12),
             rs2: Reg::new_masked(v >> 16),
             op: BitwiseOp::new_masked(v >> 20),
-            size: VectorSize::new(v >> 24),
+            size: InlineNBitSize::new_masked(v >> 24),
         }
     }
     #[inline(always)]
@@ -99,7 +109,7 @@ impl BytecodeInstruction for HeapBinaryBitwise {
                 | ((self.rs1 as u32) << 12)
                 | ((self.rs2 as u32) << 16)
                 | ((self.op as u32) << 20)
-                | (self.size.map_or(0, |v| v.get()) << 24),
+                | (self.size.encode() << 24),
         )
     }
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -141,7 +151,7 @@ impl BytecodeInstruction for HeapBinaryBitwise {
             op,
             size,
         } = self;
-        let size = size.unwrap_or_else(|| VectorSize::new(regs[Reg::X12] as u32).unwrap());
+        let size = size.get(regs);
         let mut num_words = size.get().div_ceil(64) as usize;
         if op.is_four_value() {
             num_words *= 2;
@@ -208,7 +218,7 @@ impl BytecodeInstruction for HeapBinaryArithmetic {
             rs1: Reg::new_masked(v >> 12),
             rs2: Reg::new_masked(v >> 16),
             op: ArithmeticOp::new_masked(v >> 20),
-            size: VectorSize::new(v >> 24),
+            size: InlineNBitSize::new_masked(v >> 24),
         }
     }
     #[inline(always)]
@@ -219,7 +229,7 @@ impl BytecodeInstruction for HeapBinaryArithmetic {
                 | ((self.rs1 as u32) << 12)
                 | ((self.rs2 as u32) << 16)
                 | ((self.op as u32) << 20)
-                | (self.size.map_or(0, |v| v.get()) << 24),
+                | (self.size.encode() << 24),
         )
     }
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -259,7 +269,7 @@ impl BytecodeInstruction for HeapBinaryArithmetic {
             op,
             size,
         } = self;
-        let size = size.unwrap_or_else(|| VectorSize::new(regs[Reg::X12] as u32).unwrap());
+        let size = size.get(regs);
         let mut num_words = size.get().div_ceil(64) as usize;
         if op.is_four_value() {
             num_words *= 2;
@@ -311,7 +321,7 @@ impl BytecodeInstruction for HeapBinaryDivMod {
             src_fv: (v >> 20) & 1 != 0,
             fill_x: (v >> 21) & 1 != 0,
             is_mod: (v >> 22) & 1 != 0,
-            size: VectorSize::new(v >> 23),
+            size: InlineNBitSize::new_masked(v >> 23),
         }
     }
     #[inline(always)]
@@ -324,7 +334,7 @@ impl BytecodeInstruction for HeapBinaryDivMod {
                 | ((self.src_fv as u32) << 20)
                 | ((self.fill_x as u32) << 21)
                 | ((self.is_mod as u32) << 22)
-                | (self.size.map_or(0, |v| v.get()) << 23),
+                | (self.size.encode() << 23),
         )
     }
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -369,7 +379,7 @@ impl BytecodeInstruction for HeapBinaryDivMod {
             is_mod,
             size,
         } = self;
-        let size = size.unwrap_or_else(|| VectorSize::new(regs[Reg::X12] as u32).unwrap());
+        let size = size.get(regs);
         let num_words = size.get().div_ceil(64) as usize;
         let mut src_num_words = num_words;
         let mut dst_num_words = num_words;
@@ -422,7 +432,7 @@ impl BytecodeInstruction for HeapBinaryCmp {
             rs1: Reg::new_masked(v >> 12),
             rs2: Reg::new_masked(v >> 16),
             op: CompareOp::new_masked(v >> 20),
-            size: VectorSize::new(v >> 22),
+            size: InlineNBitSize::new_masked(v >> 22),
         }
     }
     #[inline(always)]
@@ -433,7 +443,7 @@ impl BytecodeInstruction for HeapBinaryCmp {
                 | ((self.rs1 as u32) << 12)
                 | ((self.rs2 as u32) << 16)
                 | ((self.op as u32) << 20)
-                | (self.size.map_or(0, |v| v.get()) << 22),
+                | (self.size.encode() << 22),
         )
     }
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -469,7 +479,7 @@ impl BytecodeInstruction for HeapBinaryCmp {
             op,
             size,
         } = self;
-        let size = size.unwrap_or_else(|| VectorSize::new(regs[Reg::X12] as u32).unwrap());
+        let size = size.get(regs);
         let mut num_words = size.get().div_ceil(64) as usize;
         if op.is_four_value() {
             num_words *= 2;
@@ -520,7 +530,7 @@ impl BytecodeInstruction for HeapBinaryShift {
             rs1: Reg::new_masked(v >> 12),
             rs2: Reg::new_masked(v >> 16),
             op: ShiftOp::new_masked(v >> 20),
-            size: VectorSize::new(v >> 23),
+            size: InlineNBitSize::new_masked(v >> 23),
         }
     }
     #[inline(always)]
@@ -531,7 +541,7 @@ impl BytecodeInstruction for HeapBinaryShift {
                 | ((self.rs1 as u32) << 12)
                 | ((self.rs2 as u32) << 16)
                 | ((self.op as u32) << 20)
-                | (self.size.map_or(0, |v| v.get()) << 23),
+                | (self.size.encode() << 23),
         )
     }
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -569,7 +579,7 @@ impl BytecodeInstruction for HeapBinaryShift {
             op,
             size,
         } = self;
-        let size = size.unwrap_or_else(|| VectorSize::new(regs[Reg::X12] as u32).unwrap());
+        let size = size.get(regs);
         let mut num_words = size.get().div_ceil(64) as usize;
         if op.is_four_value() {
             num_words *= 2;
@@ -622,7 +632,7 @@ impl BytecodeInstruction for HeapBinaryMinMax {
             rs2: Reg::new_masked(v >> 16),
             is_fv: (v >> 20) & 1 != 0,
             is_max: (v >> 21) & 1 != 0,
-            size: VectorSize::new(v >> 22),
+            size: InlineNBitSize::new_masked(v >> 22),
         }
     }
     #[inline(always)]
@@ -634,7 +644,7 @@ impl BytecodeInstruction for HeapBinaryMinMax {
                 | ((self.rs2 as u32) << 16)
                 | ((self.is_fv as u32) << 20)
                 | ((self.is_max as u32) << 21)
-                | (self.size.map_or(0, |v| v.get()) << 22),
+                | (self.size.encode() << 22),
         )
     }
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -672,7 +682,7 @@ impl BytecodeInstruction for HeapBinaryMinMax {
             is_max,
             size,
         } = self;
-        let size = size.unwrap_or_else(|| VectorSize::new(regs[Reg::X12] as u32).unwrap());
+        let size = size.get(regs);
         let mut num_words = size.get().div_ceil(64) as usize;
         let mut offset = 0;
         if is_fv {
@@ -767,11 +777,7 @@ impl BytecodeInstruction for HeapCaseEq {
             ne,
             num_words,
         } = self;
-        let num_words = match num_words {
-            None => regs[Reg::X12],
-            Some(n) => n.get() as u64,
-        };
-        let num_words = num_words as usize;
+        let num_words = num_words.get(regs).get() as usize;
         let src1 = state.heap.get_u64_slice(
             HeapOffset {
                 bit_offset: regs[rs1] as usize,
@@ -788,6 +794,127 @@ impl BytecodeInstruction for HeapCaseEq {
         let is_eq = src1 == src2;
 
         regs[rd] = u64::from(is_eq ^ ne);
+    }
+}
+
+impl BytecodeInstruction for HeapUnary {
+    #[inline(always)]
+    fn extract(c: Bytecode) -> Self {
+        debug_assert_eq!(c.opcode(), BytecodeOpcode::HeapUnary as u8);
+        let v = c.0;
+        Self {
+            rd: Reg::new_masked(v >> 8),
+            rs: Reg::new_masked(v >> 12),
+            op: UnaryOp::new_masked(v >> 16),
+            size: InlineNBitSize::new_masked(v >> 20),
+        }
+    }
+    #[inline(always)]
+    fn encode(&self) -> Bytecode {
+        Bytecode(
+            BytecodeOpcode::HeapUnary as u32
+                | ((self.rd as u32) << 8)
+                | ((self.rs as u32) << 12)
+                | ((self.op as u32) << 16)
+                | (self.size.encode() << 20),
+        )
+    }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            rd,
+            rs,
+            op,
+            size: _,
+        } = self;
+        let mnemonic = match op {
+            UnaryOp::TvNeg => "tv.heap_neg",
+            UnaryOp::TvReduceOr => "tv.heap_reduce_or",
+            UnaryOp::TvReduceAnd => "tv.heap_reduce_and",
+            UnaryOp::TvReduceXor => "tv.heap_reduce_xor",
+            UnaryOp::FvNeg => "fv.heap_neg",
+            UnaryOp::FvReduceOr => "fv.heap_reduce_or",
+            UnaryOp::FvReduceAnd => "fv.heap_reduce_and",
+            UnaryOp::FvReduceXor => "fv.heap_reduce_xor",
+        };
+        write_padded_mnemonic(f, mnemonic)?;
+        write!(f, "{rd}, {rs}")
+    }
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let Self { rd, rs, op, size } = self;
+        let size = size.get(regs);
+        let mut num_words = size.get().div_ceil(64) as usize;
+        if op.is_four_value() {
+            num_words *= 2;
+        }
+
+        use UnaryOp as O;
+        match op {
+            O::TvNeg => {
+                let [dst, src] = state.heap.get_u64_cell_slices([
+                    (regs.get_as_addr(rd), num_words),
+                    (regs.get_as_addr(rs), num_words),
+                ]);
+                tv_cell_negate(dst, src, size);
+            }
+            O::TvReduceOr => {
+                regs[rd] = u64::from(tv_reduce_or(
+                    state.heap.get_u64_slice(regs.get_as_addr(rs), num_words),
+                ));
+            }
+            O::TvReduceAnd => {
+                regs[rd] = u64::from(tv_reduce_and(
+                    state.heap.get_u64_slice(regs.get_as_addr(rs), num_words),
+                    size,
+                ));
+            }
+            O::TvReduceXor => {
+                regs[rd] = u64::from(tv_reduce_xor(
+                    state.heap.get_u64_slice(regs.get_as_addr(rs), num_words),
+                ));
+            }
+            O::FvNeg => {
+                let [dst, src] = state.heap.get_u64_cell_slices([
+                    (regs.get_as_addr(rd), num_words),
+                    (regs.get_as_addr(rs), num_words),
+                ]);
+                fv_cell_negate(dst, src, size);
+            }
+            O::FvReduceOr => {
+                let (spc, val) = rd.to_spc_and_val();
+                let value = fv_l_reduce_or(
+                    state.heap.get_u64_slice(regs.get_as_addr(rs), num_words),
+                    size,
+                );
+                regs[spc] = u64::from(value.spc());
+                regs[val] = u64::from(value.val());
+            }
+            O::FvReduceAnd => {
+                let (spc, val) = rd.to_spc_and_val();
+                let value = fv_l_reduce_and(
+                    state.heap.get_u64_slice(regs.get_as_addr(rs), num_words),
+                    size,
+                );
+                regs[spc] = u64::from(value.spc());
+                regs[val] = u64::from(value.val());
+            }
+            O::FvReduceXor => {
+                let (spc, val) = rd.to_spc_and_val();
+                let value = fv_l_reduce_xor(
+                    state.heap.get_u64_slice(regs.get_as_addr(rs), num_words),
+                    size,
+                );
+                regs[spc] = u64::from(value.spc());
+                regs[val] = u64::from(value.val());
+            }
+        }
     }
 }
 
@@ -820,10 +947,10 @@ impl BitwiseOp {
             2 => Self::TvXor,
             3 => Self::TvAndNot,
             4 => Self::TvOrNot,
-            8 => Self::FvAnd,
-            9 => Self::FvOr,
-            10 => Self::FvXor,
-            11 => Self::FvAndNot,
+            5 => Self::FvAnd,
+            6 => Self::FvOr,
+            7 => Self::FvXor,
+            8 => Self::FvAndNot,
             _ => Self::FvOrNot,
         }
     }
@@ -855,9 +982,9 @@ impl ArithmeticOp {
             1 => Self::TvSub,
             2 => Self::TvMul,
             3 => Self::TvPow,
-            7 => Self::FvAdd,
-            8 => Self::FvSub,
-            9 => Self::FvMul,
+            4 => Self::FvAdd,
+            5 => Self::FvSub,
+            6 => Self::FvMul,
             _ => Self::FvPow,
         }
     }
@@ -919,15 +1046,44 @@ impl ShiftOp {
     }
 }
 
+#[derive(Clone, Copy)]
+pub enum UnaryOp {
+    TvNeg,
+    TvReduceOr,
+    TvReduceAnd,
+    TvReduceXor,
+    FvNeg,
+    FvReduceOr,
+    FvReduceAnd,
+    FvReduceXor,
+}
+
+impl UnaryOp {
+    pub fn is_four_value(self) -> bool {
+        match self {
+            Self::TvNeg | Self::TvReduceOr | Self::TvReduceAnd | Self::TvReduceXor => false,
+            Self::FvNeg | Self::FvReduceOr | Self::FvReduceAnd | Self::FvReduceXor => true,
+        }
+    }
+
+    pub fn new_masked(v: u32) -> Self {
+        match v & 0xF {
+            0 => Self::TvNeg,
+            1 => Self::TvReduceOr,
+            2 => Self::TvReduceAnd,
+            3 => Self::TvReduceXor,
+            4 => Self::FvNeg,
+            5 => Self::FvReduceOr,
+            6 => Self::FvReduceAnd,
+            _ => Self::FvReduceXor,
+        }
+    }
+}
+
 impl BytecodeEncoder {
     fn heap_ceq_impl(&mut self, rd: Reg, rs1: Reg, rs2: Reg, ne: bool, num_words: u32) {
         assert_ne!(num_words, 0);
-        let num_words = if num_words >= (1u32 << 11) {
-            self.load_u64(Reg::X12, num_words as u64);
-            None
-        } else {
-            Some(NonZeroU16::new(num_words as u16).unwrap())
-        };
+        let num_words = InlineNBitSize::new(VectorSize::new(num_words).unwrap(), self);
         self.data.push(
             HeapCaseEq {
                 rd,
@@ -955,12 +1111,7 @@ impl BytecodeEncoder {
         op: BitwiseOp,
         size: VectorSize,
     ) {
-        let size = if size.get() >= (1u32 << 8) {
-            self.load_u64(Reg::X12, size.get() as u64);
-            None
-        } else {
-            Some(size)
-        };
+        let size = InlineNBitSize::new(size, self);
         self.data.push(
             HeapBinaryBitwise {
                 rd,
@@ -980,12 +1131,7 @@ impl BytecodeEncoder {
         op: ArithmeticOp,
         size: VectorSize,
     ) {
-        let size = if size.get() >= (1u32 << 8) {
-            self.load_u64(Reg::X12, size.get() as u64);
-            None
-        } else {
-            Some(size)
-        };
+        let size = InlineNBitSize::new(size, self);
         self.data.push(
             HeapBinaryArithmetic {
                 rd,
@@ -998,12 +1144,7 @@ impl BytecodeEncoder {
         );
     }
     fn heap_binary_cmp(&mut self, rd: Reg, rs1: Reg, rs2: Reg, op: CompareOp, size: VectorSize) {
-        let size = if size.get() >= (1u32 << 8) {
-            self.load_u64(Reg::X12, size.get() as u64);
-            None
-        } else {
-            Some(size)
-        };
+        let size = InlineNBitSize::new(size, self);
         self.data.push(
             HeapBinaryCmp {
                 rd,
@@ -1016,12 +1157,7 @@ impl BytecodeEncoder {
         );
     }
     fn heap_binary_shift(&mut self, rd: Reg, rs1: Reg, rs2: Reg, op: ShiftOp, size: VectorSize) {
-        let size = if size.get() >= (1u32 << 8) {
-            self.load_u64(Reg::X12, size.get() as u64);
-            None
-        } else {
-            Some(size)
-        };
+        let size = InlineNBitSize::new(size, self);
         self.data.push(
             HeapBinaryShift {
                 rd,
@@ -1043,12 +1179,7 @@ impl BytecodeEncoder {
         is_mod: bool,
         size: VectorSize,
     ) {
-        let size = if size.get() >= (1u32 << 8) {
-            self.load_u64(Reg::X12, size.get() as u64);
-            None
-        } else {
-            Some(size)
-        };
+        let size = InlineNBitSize::new(size, self);
         self.data.push(
             HeapBinaryDivMod {
                 rd,
@@ -1071,12 +1202,7 @@ impl BytecodeEncoder {
         is_max: bool,
         size: VectorSize,
     ) {
-        let size = if size.get() >= (1u32 << 8) {
-            self.load_u64(Reg::X12, size.get() as u64);
-            None
-        } else {
-            Some(size)
-        };
+        let size = InlineNBitSize::new(size, self);
         self.data.push(
             HeapBinaryMinMax {
                 rd,
@@ -1088,6 +1214,10 @@ impl BytecodeEncoder {
             }
             .encode(),
         );
+    }
+    fn heap_unary(&mut self, rd: Reg, rs: Reg, op: UnaryOp, size: VectorSize) {
+        let size = InlineNBitSize::new(size, self);
+        self.data.push(HeapUnary { rd, rs, op, size }.encode());
     }
 
     pub fn heap_tv_and(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
@@ -1208,5 +1338,30 @@ impl BytecodeEncoder {
     }
     pub fn heap_fv_sar(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
         self.heap_binary_shift(rd, rs1, rs2, ShiftOp::FvSar, size);
+    }
+
+    pub fn heap_tv_neg(&mut self, rd: Reg, rs: Reg, size: VectorSize) {
+        self.heap_unary(rd, rs, UnaryOp::TvNeg, size);
+    }
+    pub fn heap_tv_reduce_or(&mut self, rd: Reg, rs: Reg, size: VectorSize) {
+        self.heap_unary(rd, rs, UnaryOp::TvReduceOr, size);
+    }
+    pub fn heap_tv_reduce_and(&mut self, rd: Reg, rs: Reg, size: VectorSize) {
+        self.heap_unary(rd, rs, UnaryOp::TvReduceAnd, size);
+    }
+    pub fn heap_tv_reduce_xor(&mut self, rd: Reg, rs: Reg, size: VectorSize) {
+        self.heap_unary(rd, rs, UnaryOp::TvReduceXor, size);
+    }
+    pub fn heap_fv_neg(&mut self, rd: Reg, rs: Reg, size: VectorSize) {
+        self.heap_unary(rd, rs, UnaryOp::FvNeg, size);
+    }
+    pub fn heap_fv_reduce_or(&mut self, rd: Reg, rs: Reg, size: VectorSize) {
+        self.heap_unary(rd, rs, UnaryOp::FvReduceOr, size);
+    }
+    pub fn heap_fv_reduce_and(&mut self, rd: Reg, rs: Reg, size: VectorSize) {
+        self.heap_unary(rd, rs, UnaryOp::FvReduceAnd, size);
+    }
+    pub fn heap_fv_reduce_xor(&mut self, rd: Reg, rs: Reg, size: VectorSize) {
+        self.heap_unary(rd, rs, UnaryOp::FvReduceXor, size);
     }
 }

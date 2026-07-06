@@ -27,6 +27,7 @@ pub mod parse;
 pub mod proptest;
 #[cfg(feature = "rand")]
 pub mod random;
+pub mod reduce;
 pub mod select;
 pub mod set_subslice;
 pub mod shift;
@@ -802,12 +803,10 @@ impl Bits {
         match self.as_data_ref() {
             BitsDataRef::InlineTv(value) => FvLogicValue::from_bool(value != 0),
             BitsDataRef::InlineFv(spc, val) => {
-                arithmetic::fv_reduce_or_elem(spc.into(), val.into(), self.size())
+                reduce::fv_reduce_or_elem(spc.into(), val.into(), self.size())
             }
-            BitsDataRef::SeparateTv(slice) => {
-                FvLogicValue::from_bool(slice.iter().any(|v| *v != 0))
-            }
-            BitsDataRef::SeparateFv(slice) => arithmetic::fv_l_reduce_or(slice, self.size()),
+            BitsDataRef::SeparateTv(slice) => FvLogicValue::from_bool(reduce::tv_reduce_or(slice)),
+            BitsDataRef::SeparateFv(slice) => reduce::fv_l_reduce_or(slice, self.size()),
         }
     }
     pub fn reduce_and(&self) -> FvLogicValue {
@@ -816,24 +815,22 @@ impl Bits {
                 FvLogicValue::from_bool(value.count_ones() == self.size().get())
             }
             BitsDataRef::InlineFv(spc, val) => {
-                arithmetic::fv_reduce_and_elem(spc.into(), val.into(), self.size())
+                reduce::fv_reduce_and_elem(spc.into(), val.into(), self.size())
             }
-            BitsDataRef::SeparateTv(slice) => FvLogicValue::from_bool(
-                slice.iter().map(|v| v.count_ones()).sum::<u32>() == self.size().get(),
-            ),
-            BitsDataRef::SeparateFv(slice) => arithmetic::fv_l_reduce_and(slice, self.size()),
+            BitsDataRef::SeparateTv(slice) => {
+                FvLogicValue::from_bool(reduce::tv_reduce_and(slice, self.size()))
+            }
+            BitsDataRef::SeparateFv(slice) => reduce::fv_l_reduce_and(slice, self.size()),
         }
     }
     pub fn reduce_xor(&self) -> FvLogicValue {
         match self.as_data_ref() {
             BitsDataRef::InlineTv(value) => FvLogicValue::from_bool(value.count_ones() % 2 == 1),
             BitsDataRef::InlineFv(spc, val) => {
-                arithmetic::fv_reduce_xor_elem(spc.into(), val.into(), self.size())
+                reduce::fv_reduce_xor_elem(spc.into(), val.into(), self.size())
             }
-            BitsDataRef::SeparateTv(slice) => {
-                FvLogicValue::from_bool(slice.iter().map(|v| v.count_ones()).sum::<u32>() % 2 == 1)
-            }
-            BitsDataRef::SeparateFv(slice) => arithmetic::fv_l_reduce_xor(slice, self.size()),
+            BitsDataRef::SeparateTv(slice) => FvLogicValue::from_bool(reduce::tv_reduce_xor(slice)),
+            BitsDataRef::SeparateFv(slice) => reduce::fv_l_reduce_xor(slice, self.size()),
         }
     }
 

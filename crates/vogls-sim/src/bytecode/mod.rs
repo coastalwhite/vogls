@@ -22,7 +22,7 @@ use vogls_bits::truncate::tv_l_truncate;
 use vogls_codegen::lsra::StackItemKind;
 use vogls_codegen::{HeapOffset, HeapRef};
 
-use vogls_ir::{Bits, IntrinsicOp, LogicMode, VSIZE_32, VSIZE_64, VectorSize};
+use vogls_ir::{Bits, IntrinsicOp, LogicMode, SCALAR_VSIZE, VSIZE_32, VSIZE_64, VectorSize};
 use vogls_runtime::RuntimeState;
 use vogls_runtime::plugins::{RuntimePlugin, RuntimePluginState};
 use vogls_utils::IndexSet;
@@ -139,11 +139,12 @@ impl SixBitSize {
     }
 
     pub fn mask(self, v: u64) -> u64 {
-        if self.0 == 0 {
-            v
-        } else {
-            v & ((1u64 << self.0) - 1)
-        }
+        let shift = if self.0 == 0 { 64 } else { self.0 as u32 };
+        v & 1u64.unbounded_shl(shift).wrapping_sub(1)
+    }
+
+    fn get(&self) -> u8 {
+        if self.0 == 0 { 64 } else { self.0 }
     }
 }
 
@@ -265,6 +266,12 @@ opcodes![
     TvXori,
     TvAddi,
     TvSubi,
+    TvMuli,
+    TvRevSubi,
+    TvMini,
+    TvMaxi,
+    TvUleqi,
+    TvUgti,
     TvCeqi,
     TvCnei,
     TvSlli,
@@ -299,6 +306,14 @@ opcodes![
     FvAndi,
     FvOri,
     FvXori,
+    FvAddi,
+    FvSubi,
+    FvMuli,
+    FvRevSubi,
+    FvMini,
+    FvMaxi,
+    FvUleqi,
+    FvUgti,
     FvCeqi,
     FvCnei,
     PushArgument,
@@ -311,9 +326,13 @@ opcodes![
     TvSetHeapAligned,
     FvSetAligned,
     FvSetHeapAligned,
+    SetUnaligned,
+    SetHeapUnaligned,
     TvLoadAligned,
     FvLoadAligned,
+    LoadUnaligned,
     LoadHeapAligned,
+    LoadHeapUnaligned,
     Wake,
     Reschedule,
     StartListen,
@@ -323,12 +342,192 @@ opcodes![
     HeapBinaryMinMax,
     HeapBinaryShift,
     HeapCaseEq,
+    HeapUnary,
+    LoadSize,
 ];
 
 #[derive(Clone)]
 pub struct BytecodeListeners {
     map: Vec<InstructionPtr>,
     active: Vec<u64>,
+}
+
+struct LoadSize(Option<VectorSize>);
+
+impl BytecodeInstruction for LoadSize {
+    fn extract(v: Bytecode) -> Self {
+        debug_assert_eq!(v.opcode(), BytecodeOpcode::LoadSize as u8);
+        Self(VectorSize::new(v.0 >> 8))
+    }
+
+    fn encode(&self) -> Bytecode {
+        Bytecode(BytecodeOpcode::LoadSize as u32 | (self.0.map_or(0, |v| v.get()) << 8))
+    }
+
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write_padded_mnemonic(f, "load_size")?;
+        match self.0 {
+            Some(size) => fmt::Display::fmt(&size, f),
+            None => todo!(),
+        }
+    }
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        match self.0 {
+            None => todo!(),
+            Some(size) => regs.size = size,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct InlineNBitSize<const N: usize>(Option<VectorSize>);
+
+impl<const N: usize> InlineNBitSize<N> {
+    pub fn get(self, regs: &Regs) -> VectorSize {
+        match self.0 {
+            None => regs.size,
+            Some(s) => s,
+        }
+    }
+
+    pub fn new_masked(v: u32) -> Self {
+        Self(VectorSize::new(
+            v & 1u32.unbounded_shl(N as u32).wrapping_sub(1),
+        ))
+    }
+
+    pub fn encode(self) -> u32 {
+        self.0.map_or(0, |v| v.get())
+    }
+
+    pub fn new(size: VectorSize, bce: &mut BytecodeEncoder) -> Self {
+        if size.get() < (1u32 << N) {
+            return Self(Some(size));
+        }
+
+        if size.get() >= (1u32 << 24) {
+            todo!();
+        }
+        bce.data.push(LoadSize(Some(size)).encode());
+        Self(None)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct InlineAddrOffset<const NBITS: usize>(i16);
+
+impl<const NBITS: usize> InlineAddrOffset<NBITS> {
+    const ZERO: Self = Self(0);
+
+    #[inline(always)]
+    pub fn get(self, base: u64) -> u64 {
+        base.wrapping_add_signed(i64::from(self.0))
+    }
+
+    #[inline(always)]
+    pub fn get_tv_aligned(self, base: u64, size: VectorSize) -> u64 {
+        let factor = i64::from(size.get().next_power_of_two().min(64));
+        let offset = i64::from(self.0) * factor;
+        base.wrapping_add_signed(offset)
+    }
+
+    #[inline(always)]
+    pub fn get_fv_aligned(self, base: u64, size: VectorSize) -> u64 {
+        let factor = i64::from((2 * size.get()).next_power_of_two().min(64));
+        let offset = i64::from(self.0) * factor;
+        base.wrapping_add_signed(offset)
+    }
+
+    #[inline(always)]
+    pub fn new_shifted(v: u32, offset: u32) -> Self {
+        Self(((v as i32) >> offset) as i16)
+    }
+
+    pub fn encode(self) -> u32 {
+        i32::from(self.0) as u32 & 1u32.unbounded_shl(NBITS as u32).wrapping_sub(1)
+    }
+
+    pub fn new(offset: i64, bce: &mut BytecodeEncoder, addr: Reg, scratch: Reg) -> Self {
+        const { assert!(NBITS >= 1 && NBITS <= 16) };
+        let min: i64 = const { -(1 << (NBITS - 1)) };
+        let max: i64 = const { (1 << (NBITS - 1)) - 1 };
+
+        if (min..=max).contains(&offset) {
+            return Self(offset as i16);
+        }
+
+        // @Performance: There are quite a few tricks that we can pull here to make a more
+        // efficient lowering.
+        bce.load_u64(scratch, offset as u64);
+        bce.add(scratch, addr, scratch, SixBitSize::N64);
+        Self(0)
+    }
+}
+
+impl<const NBITS: usize> fmt::Display for InlineAddrOffset<NBITS> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct SignedImmediate<const NBITS: usize>(i32);
+
+impl<const NBITS: usize> SignedImmediate<NBITS> {
+    const ZERO: Self = Self(0);
+    const MINUS_ONE: Self = Self(-1);
+
+    #[inline(always)]
+    pub fn new_shifted(v: u32, offset: u32) -> Self {
+        Self(((v as i32) >> offset) as i32)
+    }
+
+    pub fn encode(self) -> u32 {
+        i32::from(self.0) as u32 & 1u32.unbounded_shl(NBITS as u32).wrapping_sub(1)
+    }
+
+    pub fn new(value: i64) -> Option<Self> {
+        const { assert!(NBITS >= 1 && NBITS <= 16) };
+        let min: i64 = const { -(1 << (NBITS - 1)) };
+        let max: i64 = const { (1 << (NBITS - 1)) - 1 };
+
+        if (min..=max).contains(&value) {
+            return Some(Self(value as i32));
+        }
+
+        None
+    }
+
+    pub fn new_from_u64(value: u64) -> Option<Self> {
+        Self::new(value as i64)
+    }
+
+    pub fn new_from_bits(value: &Bits) -> Option<Self> {
+        if value.size() > VSIZE_64 || value.contains_special() {
+            return None;
+        }
+
+        match value.as_data_ref() {
+            BitsDataRef::InlineTv(v) => Self::new_from_u64(v),
+            BitsDataRef::InlineFv(_spc, v) => Self::new_from_u64(v),
+            _ => None,
+        }
+    }
+}
+
+impl<const NBITS: usize> fmt::Display for SignedImmediate<NBITS> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
+    }
 }
 
 impl BytecodeListeners {
@@ -507,16 +706,16 @@ impl BytecodeEncoder {
     }
 
     pub fn not(&mut self, rd: Reg, rs: Reg, size: SixBitSize) {
-        self.xori(rd, rs, -1, size);
+        self.xori(rd, rs, SignedImmediate::MINUS_ONE, size);
     }
     pub fn copy(&mut self, rd: Reg, rs: Reg) {
         if rd == rs {
             return;
         }
-        self.ori(rd, rs, 0, SixBitSize::N64);
+        self.ori(rd, rs, SignedImmediate::ZERO, SixBitSize::N64);
     }
     pub fn truncate(&mut self, rd: Reg, rs: Reg, size: SixBitSize) {
-        self.andi(rd, rs, -1, size);
+        self.andi(rd, rs, SignedImmediate::MINUS_ONE, size);
     }
     pub fn load_u64(&mut self, rd: Reg, value: u64) {
         if value == 0 {
@@ -525,7 +724,7 @@ impl BytecodeEncoder {
         }
 
         if value == u64::MAX {
-            self.ori(rd, rd, -1, SixBitSize::N64);
+            self.ori(rd, rd, SignedImmediate::MINUS_ONE, SixBitSize::N64);
             return;
         }
 
@@ -573,7 +772,7 @@ impl BytecodeEncoder {
         }
     }
     pub fn mask(&mut self, rd: Reg, rs: Reg, size: SixBitSize) {
-        self.andi(rd, rs, -1, size)
+        self.andi(rd, rs, SignedImmediate::MINUS_ONE, size)
     }
 
     pub fn stack_offset(&mut self, rd: Reg, sp: Reg, kind: StackItemKind, offset: u64) {
@@ -648,8 +847,8 @@ impl Design {
 
 fn value_to_heap_ref(value: u64, size: VectorSize, mode: LogicMode) -> HeapRef {
     let alignment = match mode {
-        LogicMode::TwoValue => size.get().next_power_of_two().max(64),
-        LogicMode::FourValue => (size.get() * 2).next_power_of_two().max(64),
+        LogicMode::TwoValue => size.get().next_power_of_two().min(64),
+        LogicMode::FourValue => (size.get() * 2).next_power_of_two().min(64),
     } as u64;
     assert_eq!(
         value % alignment,

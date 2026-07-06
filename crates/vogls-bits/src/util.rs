@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::ops::Rem;
 
 pub fn saturating_rem<T: Default + Copy + Eq + Rem<T, Output = T>>(a: T, b: T) -> T {
@@ -19,4 +20,19 @@ pub fn wrapping_u64_pow(l: u64, r: u64) -> u64 {
         .wrapping_pow(1 << 16)
         .wrapping_pow(1 << 16);
     a.wrapping_mul(b)
+}
+
+pub trait CellSlice {
+    fn copy_from_slice(&self, other: &Self);
+    fn fill(&self, value: u64);
+}
+
+impl CellSlice for [Cell<u64>] {
+    fn copy_from_slice(&self, other: &Self) {
+        assert_eq!(self.len(), other.len());
+        self.iter().zip(other).for_each(|(d, s)| d.set(s.get()));
+    }
+    fn fill(&self, value: u64) {
+        self.iter().for_each(|d| d.set(value));
+    }
 }
