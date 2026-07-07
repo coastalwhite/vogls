@@ -4,15 +4,16 @@ use vogls_bits::extend::{
     fv_cell_sign_extend, fv_cell_zero_extend, fv_l_sign_extend, fv_l_zero_extend,
     tv_cell_sign_extend, tv_cell_zero_extend, tv_l_sign_extend, tv_l_zero_extend,
 };
-use vogls_ir::VectorSize;
+use vogls_ir::{LogicMode, VectorSize};
 use vogls_runtime::RuntimeState;
 
 use crate::bytecode::BytecodeOpcode;
 
 use super::reg::{Reg, Regs};
 use super::{
-    Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, ColdContext, InlineNBitSize,
-    Schedule, SixBitSize, write_padded_mnemonic,
+    Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, ColdContext,
+    EXEC_ITRACE_INDENT, InlineNBitSize, Schedule, SixBitSize, write_padded_mnemonic,
+    write_register,
 };
 
 pub struct SignExtend {
@@ -269,6 +270,27 @@ impl BytecodeInstruction for SignExtend {
         write!(f, "{rd}, {rs}, {dst_size}, {src_size}")
     }
 
+    fn post_exec_itrace(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        regs: &Regs,
+        _state: &RuntimeState,
+    ) -> fmt::Result {
+        f.write_str(EXEC_ITRACE_INDENT)?;
+        write_register(f, regs, "rs", self.rs, LogicMode::TwoValue)?;
+        writeln!(f)
+    }
+    fn pre_exec_itrace(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        regs: &Regs,
+        _state: &RuntimeState,
+    ) -> fmt::Result {
+        f.write_str(EXEC_ITRACE_INDENT)?;
+        write_register(f, regs, "rd", self.rd, LogicMode::TwoValue)?;
+        writeln!(f)
+    }
+
     fn execute(
         self,
         regs: &mut Regs,
@@ -285,7 +307,8 @@ impl BytecodeInstruction for SignExtend {
             src_size,
         } = self;
 
-        regs[rd] = (((regs[rs] as i64) << (64 - src_size.get())) >> (64 - dst_size.get())) as u64;
+        let shift = 64 - src_size.get();
+        regs[rd] = dst_size.mask((((regs[rs] as i64) << shift) >> shift) as u64);
     }
 }
 

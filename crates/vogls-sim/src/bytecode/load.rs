@@ -2,15 +2,15 @@ use std::fmt;
 
 use vogls_bits::slice::tv_cell_slice;
 use vogls_codegen::HeapOffset;
-use vogls_ir::VectorSize;
+use vogls_ir::{LogicMode, VectorSize};
 use vogls_runtime::RuntimeState;
 
-use crate::bytecode::write_padded_mnemonic;
+use crate::bytecode::{write_padded_mnemonic, write_register};
 
 use super::reg::{Reg, Regs};
 use super::{
     Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, BytecodeOpcode, ColdContext,
-    InlineAddrOffset, InlineNBitSize, Schedule, SixBitSize,
+    EXEC_ITRACE_INDENT, InlineAddrOffset, InlineNBitSize, Schedule, SixBitSize,
 };
 
 pub struct LoadArgs {
@@ -88,6 +88,39 @@ macro_rules! impl_load_args {
 impl BytecodeInstruction for TvLoadAligned {
     impl_load_args!(TvLoadAligned, "tv.load_aligned");
 
+    fn pre_exec_itrace(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        regs: &Regs,
+        _state: &RuntimeState,
+    ) -> fmt::Result {
+        let Self(LoadArgs {
+            rd: _,
+            rs,
+            size: _,
+            imm10: _,
+        }) = self;
+        f.write_str(EXEC_ITRACE_INDENT)?;
+        write_register(f, regs, "rs", *rs, LogicMode::TwoValue)?;
+        writeln!(f)
+    }
+    fn post_exec_itrace(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        regs: &Regs,
+        _state: &RuntimeState,
+    ) -> fmt::Result {
+        let Self(LoadArgs {
+            rd,
+            rs: _,
+            size: _,
+            imm10: _,
+        }) = self;
+        f.write_str(EXEC_ITRACE_INDENT)?;
+        write_register(f, regs, "rd", *rd, LogicMode::TwoValue)?;
+        writeln!(f)
+    }
+
     fn execute(
         self,
         regs: &mut Regs,
@@ -103,20 +136,53 @@ impl BytecodeInstruction for TvLoadAligned {
             imm10,
             size,
         }) = self;
-        // @Performance: We can likely make a better specialized implementation for this load.
-        let size = VectorSize::from(size);
-        let offset = imm10.get_tv_aligned(regs[rs], size);
-        let at = HeapOffset {
-            bit_offset: offset as usize,
-        };
-        let at = at.to_ref(size);
-        regs[rd] = state.heap.get_tv_u64(at);
+        let offset = imm10.get(regs[rs]);
+        debug_assert!(offset.is_multiple_of((size.get() as u64).next_power_of_two().min(64)));
+
+        let word = offset / 64;
+        let boff = offset % 64;
+
+        let heap = &state.heap.0;
+        regs[rd] = size.mask(heap[word as usize] >> boff);
     }
 }
 
 impl BytecodeInstruction for FvLoadAligned {
     impl_load_args!(FvLoadAligned, "fv.load_aligned");
 
+    fn pre_exec_itrace(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        regs: &Regs,
+        _state: &RuntimeState,
+    ) -> fmt::Result {
+        let Self(LoadArgs {
+            rd: _,
+            rs,
+            size: _,
+            imm10: _,
+        }) = self;
+        f.write_str(EXEC_ITRACE_INDENT)?;
+        write_register(f, regs, "rs", *rs, LogicMode::TwoValue)?;
+        writeln!(f)
+    }
+    fn post_exec_itrace(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        regs: &Regs,
+        _state: &RuntimeState,
+    ) -> fmt::Result {
+        let Self(LoadArgs {
+            rd,
+            rs: _,
+            size: _,
+            imm10: _,
+        }) = self;
+        f.write_str(EXEC_ITRACE_INDENT)?;
+        write_register(f, regs, "rd", *rd, LogicMode::FourValue)?;
+        writeln!(f)
+    }
+
     fn execute(
         self,
         regs: &mut Regs,
@@ -132,15 +198,20 @@ impl BytecodeInstruction for FvLoadAligned {
             imm10,
             size,
         }) = self;
-        // @Performance: We can likely make a better specialized implementation for this load.
-        let size = VectorSize::from(size);
-        let offset = imm10.get_fv_aligned(regs[rs], size);
-        let at = HeapOffset {
-            bit_offset: offset as usize,
-        };
-        let at = at.to_ref(size);
+        let alignment = (size.get() as u64).next_power_of_two().min(64);
+        let spc_offset = imm10.get(regs[rs]);
+        debug_assert!(spc_offset.is_multiple_of(alignment));
+        let val_offset = (spc_offset + size.get() as u64).next_multiple_of(alignment);
+
+        let spc_word = spc_offset / 64;
+        let spc_boff = spc_offset % 64;
+        let val_word = val_offset / 64;
+        let val_boff = val_offset % 64;
+
+        let heap = &state.heap.0;
         let (spc, val) = rd.to_spc_and_val();
-        (regs[spc], regs[val]) = state.heap.get_fv_u64(at);
+        regs[spc] = size.mask(heap[spc_word as usize] >> spc_boff);
+        regs[val] = size.mask(heap[val_word as usize] >> val_boff);
     }
 }
 impl BytecodeInstruction for LoadUnaligned {

@@ -13,6 +13,7 @@ mod reg;
 mod rtype_binary;
 mod rtype_unary;
 mod set;
+mod stack;
 mod temporal;
 
 use reg::{Reg, Regs};
@@ -20,7 +21,6 @@ use vogls_bits::BitsDataRef;
 use vogls_bits::extend::tv_l_zero_extend;
 use vogls_bits::format::{BitsFormatBase, BitsFormatWidth};
 use vogls_bits::truncate::tv_l_truncate;
-use vogls_codegen::lsra::StackItemKind;
 use vogls_codegen::{HeapOffset, HeapRef};
 
 use vogls_ir::{Bits, IntrinsicOp, LogicMode, VSIZE_32, VSIZE_64, VectorSize};
@@ -39,6 +39,7 @@ pub use load_imm::*;
 pub use rtype_binary::*;
 pub use rtype_unary::*;
 pub use set::*;
+pub use stack::*;
 pub use temporal::*;
 
 pub struct Design {
@@ -154,6 +155,24 @@ pub trait BytecodeInstruction: Sized {
     fn extract(v: Bytecode) -> Self;
     fn encode(&self) -> Bytecode;
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
+    fn pre_exec_itrace(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        regs: &Regs,
+        state: &RuntimeState,
+    ) -> fmt::Result {
+        _ = (f, regs, state);
+        Ok(())
+    }
+    fn post_exec_itrace(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        regs: &Regs,
+        state: &RuntimeState,
+    ) -> fmt::Result {
+        _ = (f, regs, state);
+        Ok(())
+    }
     fn execute(
         self,
         regs: &mut Regs,
@@ -178,6 +197,34 @@ fn extract_and_execute<I: BytecodeInstruction>(
     let mut pc = pc + 1;
     slf.execute(regs, &mut pc, state, schedule, listeners, cldctx);
     pc
+}
+
+fn extract_and_pre_exec_itrace<I: BytecodeInstruction>(
+    c: Bytecode,
+    regs: &Regs,
+    pc: u64,
+    state: &RuntimeState,
+    schedule: &Schedule,
+    listeners: &BytecodeListeners,
+    f: &mut fmt::Formatter<'_>,
+) -> fmt::Result {
+    _ = (pc, schedule, listeners);
+    let slf = I::extract(c);
+    slf.pre_exec_itrace(f, regs, state)
+}
+
+fn extract_and_post_exec_itrace<I: BytecodeInstruction>(
+    c: Bytecode,
+    regs: &Regs,
+    pc: u64,
+    state: &RuntimeState,
+    schedule: &Schedule,
+    listeners: &BytecodeListeners,
+    f: &mut fmt::Formatter<'_>,
+) -> fmt::Result {
+    _ = (pc, schedule, listeners);
+    let slf = I::extract(c);
+    slf.post_exec_itrace(f, regs, state)
 }
 
 macro_rules! opcodes {
@@ -206,6 +253,30 @@ macro_rules! opcodes {
             ) -> u64;
             X_NUM_INSTRUCTIONS
         ] = [$(extract_and_execute::<$name>),+];
+        static X_PRE_EXEC_ITRACE_FNS: [
+            fn(
+                c: Bytecode,
+                regs: &Regs,
+                pc: u64,
+                state: &RuntimeState,
+                schedule: &Schedule,
+                listeners: &BytecodeListeners,
+                f: &mut fmt::Formatter<'_>,
+            ) -> fmt::Result;
+            X_NUM_INSTRUCTIONS
+        ] = [$(extract_and_pre_exec_itrace::<$name>),+];
+        static X_POST_EXEC_ITRACE_FNS: [
+            fn(
+                c: Bytecode,
+                regs: &Regs,
+                pc: u64,
+                state: &RuntimeState,
+                schedule: &Schedule,
+                listeners: &BytecodeListeners,
+                f: &mut fmt::Formatter<'_>,
+            ) -> fmt::Result;
+            X_NUM_INSTRUCTIONS
+        ] = [$(extract_and_post_exec_itrace::<$name>),+];
 
         impl TryFrom<u8> for BytecodeOpcode {
             type Error = ();
@@ -320,6 +391,8 @@ opcodes![
     FvCnei,
     PushArgument,
     Intrinsic,
+    SignExtend,
+    StackOffset,
     LoadImm,
     Jump,
     RelJump,
@@ -447,20 +520,6 @@ impl<const NBITS: usize> InlineAddrOffset<NBITS> {
     }
 
     #[inline(always)]
-    pub fn get_tv_aligned(self, base: u64, size: VectorSize) -> u64 {
-        let factor = i64::from(size.get().next_power_of_two().min(64));
-        let offset = i64::from(self.0) * factor;
-        base.wrapping_add_signed(offset)
-    }
-
-    #[inline(always)]
-    pub fn get_fv_aligned(self, base: u64, size: VectorSize) -> u64 {
-        let factor = i64::from((2 * size.get()).next_power_of_two().min(64));
-        let offset = i64::from(self.0) * factor;
-        base.wrapping_add_signed(offset)
-    }
-
-    #[inline(always)]
     pub fn new_shifted(v: u32, offset: u32) -> Self {
         Self(((v as i32) >> offset) as i16)
     }
@@ -509,7 +568,7 @@ impl<const NBITS: usize> SignedImmediate<NBITS> {
     }
 
     pub fn new(value: i64) -> Option<Self> {
-        const { assert!(NBITS >= 1 && NBITS <= 16) };
+        const { assert!(NBITS >= 1 && NBITS <= 32) };
         let min: i64 = const { -(1 << (NBITS - 1)) };
         let max: i64 = const { (1 << (NBITS - 1)) - 1 };
 
@@ -787,52 +846,6 @@ impl BytecodeEncoder {
     pub fn mask(&mut self, rd: Reg, rs: Reg, size: SixBitSize) {
         self.andi(rd, rs, SignedImmediate::MINUS_ONE, size)
     }
-
-    pub fn stack_offset(&mut self, rd: Reg, sp: Reg, kind: StackItemKind, offset: u64) {
-        // @Performance: Specialized instruction.
-        self.load_u64(rd, offset);
-        use StackItemKind as K;
-        match kind {
-            K::B1 => {}
-            K::B2 => self.slli(
-                rd,
-                rd,
-                SignedImmediate::new_from_u64(1).unwrap(),
-                SixBitSize::N64,
-            ),
-            K::B4 => self.slli(
-                rd,
-                rd,
-                SignedImmediate::new_from_u64(2).unwrap(),
-                SixBitSize::N64,
-            ),
-            K::B8 => self.slli(
-                rd,
-                rd,
-                SignedImmediate::new_from_u64(3).unwrap(),
-                SixBitSize::N64,
-            ),
-            K::B16 => self.slli(
-                rd,
-                rd,
-                SignedImmediate::new_from_u64(4).unwrap(),
-                SixBitSize::N64,
-            ),
-            K::B32 => self.slli(
-                rd,
-                rd,
-                SignedImmediate::new_from_u64(5).unwrap(),
-                SixBitSize::N64,
-            ),
-            K::B64 => self.slli(
-                rd,
-                rd,
-                SignedImmediate::new_from_u64(6).unwrap(),
-                SixBitSize::N64,
-            ),
-        }
-        self.add(rd, sp, rd, SixBitSize::N64);
-    }
 }
 
 impl Design {
@@ -859,14 +872,50 @@ impl Design {
             return Ok(());
         };
 
+        struct DisplayWith<'a>(
+            Bytecode,
+            &'a Regs,
+            u64,
+            &'a RuntimeState,
+            &'a Schedule,
+            &'a BytecodeListeners,
+            fn(
+                Bytecode,
+                &Regs,
+                u64,
+                &RuntimeState,
+                &Schedule,
+                &BytecodeListeners,
+                &mut fmt::Formatter<'_>,
+            ) -> fmt::Result,
+        );
+        impl<'a> fmt::Display for DisplayWith<'a> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                (self.6)(self.0, self.1, self.2, self.3, self.4, self.5, f)
+            }
+        }
+
         let mut pc = entry.0;
         let mut cldctx = ColdContext::new(&self.intrinsics, stdout, stderr);
-        let mut regs = Regs::new();
-        regs[Reg::X15] = self.stack_offset;
+        let mut regs = Regs::new(self.stack_offset);
         while let Some(&c) = code.get(pc as usize) {
             let opcode = c.opcode();
             if ITRACE {
                 writeln!(&mut cldctx.stderr, "[PC={pc:4}]: {c}").unwrap();
+                write!(
+                    &mut cldctx.stderr,
+                    "{}",
+                    DisplayWith(
+                        c,
+                        &regs,
+                        pc,
+                        &state.runtime,
+                        &state.schedule,
+                        &state.listeners,
+                        X_PRE_EXEC_ITRACE_FNS[opcode as usize]
+                    )
+                )
+                .unwrap();
             }
             let f = X_INSTRUCTION_FNS[opcode as usize];
             pc = (f)(
@@ -878,6 +927,22 @@ impl Design {
                 &mut state.listeners,
                 &mut cldctx,
             );
+            if ITRACE {
+                write!(
+                    &mut cldctx.stderr,
+                    "{}",
+                    DisplayWith(
+                        c,
+                        &regs,
+                        pc,
+                        &state.runtime,
+                        &state.schedule,
+                        &state.listeners,
+                        X_POST_EXEC_ITRACE_FNS[opcode as usize]
+                    )
+                )
+                .unwrap();
+            }
         }
 
         if cldctx.return_value != 0 {
@@ -1021,7 +1086,30 @@ fn execute_heap_unary(state: &mut RuntimeState, regs: &mut Regs, rd: Reg, rs: Re
 }
 
 const MNEMONIC_ALIGN: usize = 22;
+const EXEC_ITRACE_INDENT: &str = "  ";
 
 fn write_padded_mnemonic(f: &mut fmt::Formatter<'_>, mnemonic: &str) -> fmt::Result {
     write!(f, "{mnemonic:<0$}", MNEMONIC_ALIGN)
+}
+
+fn write_register(
+    f: &mut fmt::Formatter<'_>,
+    regs: &Regs,
+    name: &str,
+    reg: Reg,
+    mode: LogicMode,
+) -> fmt::Result {
+    match mode {
+        LogicMode::TwoValue => write!(f, "{name} = 0x{:x}", regs[reg])?,
+        LogicMode::FourValue => {
+            let (spc, val) = reg.to_spc_and_val();
+            let spc = regs[spc];
+            let val = regs[val];
+            let bits =
+                Bits::from_boxed_slice(vogls_ir::Mode::FourValue, VSIZE_64, [spc, val].into());
+            write!(f, "{name} = {bits} (0x{spc:x}, 0x{val:x})")?;
+        }
+    }
+
+    Ok(())
 }

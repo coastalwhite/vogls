@@ -149,6 +149,7 @@ pub fn lower_process_to_bytecode(
                         assignment[src],
                         &stack_offsets,
                         T0_SPC,
+                        false,
                     );
                     bytecode.wait(rtime);
                     jump_targets.push((bytecode.data.len(), target.entry(), JumpKind::Jump));
@@ -183,6 +184,7 @@ pub fn lower_process_to_bytecode(
                         assignment[cond],
                         &stack_offsets,
                         T0_SPC,
+                        false,
                     );
                     jump_targets.push((bytecode.data.len(), *truthy, JumpKind::Branch));
                     bytecode.branch(rcond, 0);
@@ -215,13 +217,12 @@ pub fn lower_process_to_bytecode(
     }
 }
 
-const T0_SPC: Reg = Reg::X9;
-const T0_VAL: Reg = Reg::X10;
-const T1_SPC: Reg = Reg::X11;
-const T1_VAL: Reg = Reg::X12;
-const T2_SPC: Reg = Reg::X13;
-const T2_VAL: Reg = Reg::X14;
-const SP: Reg = Reg::X15;
+const T0_SPC: Reg = Reg::X10;
+const T0_VAL: Reg = Reg::X11;
+const T1_SPC: Reg = Reg::X12;
+const T1_VAL: Reg = Reg::X13;
+const T2_SPC: Reg = Reg::X14;
+const T2_VAL: Reg = Reg::X15;
 
 fn lower_instruction(
     gl: &GlobalContext,
@@ -241,15 +242,23 @@ fn lower_instruction(
             // Constants with size greater than 64 are stored on the heap and referenced on there.
             if value.size() <= VSIZE_64 {
                 let dslot = assignment[dst];
-                let rd = to_reg(bce, *dst, &gl.vars, dslot, stack_offsets, T0_SPC);
+                let rd = to_reg(bce, *dst, &gl.vars, dslot, stack_offsets, T0_SPC, true);
                 bce.load_bits_into_register(rd, dst.mode(), value);
-                store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd);
+                store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd, T1_VAL);
             }
         }
         I::Unary(dst, op, src) => {
             let dslot = assignment[dst];
-            let rd = to_reg(bce, *dst, &gl.vars, dslot, stack_offsets, T0_SPC);
-            let rs = to_reg(bce, *src, &gl.vars, assignment[src], stack_offsets, T1_SPC);
+            let rd = to_reg(bce, *dst, &gl.vars, dslot, stack_offsets, T0_SPC, true);
+            let rs = to_reg(
+                bce,
+                *src,
+                &gl.vars,
+                assignment[src],
+                stack_offsets,
+                T1_SPC,
+                false,
+            );
 
             let src_size = gl.vars.size(*src);
 
@@ -335,12 +344,20 @@ fn lower_instruction(
                 }
             }
 
-            store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd);
+            store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd, T1_VAL);
         }
         I::Resize(dst, op, src) => {
             let dslot = assignment[dst];
-            let rd = to_reg(bce, *dst, &gl.vars, dslot, stack_offsets, T0_SPC);
-            let rs = to_reg(bce, *src, &gl.vars, assignment[src], stack_offsets, T1_SPC);
+            let rd = to_reg(bce, *dst, &gl.vars, dslot, stack_offsets, T0_SPC, true);
+            let rs = to_reg(
+                bce,
+                *src,
+                &gl.vars,
+                assignment[src],
+                stack_offsets,
+                T1_SPC,
+                false,
+            );
 
             let dst_size = gl.vars.size(*dst);
             let src_size = gl.vars.size(*src);
@@ -461,13 +478,29 @@ fn lower_instruction(
                 }
             }
 
-            store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd);
+            store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd, T1_VAL);
         }
         I::Binary(dst, op, lhs, rhs) => {
             let dslot = assignment[dst];
-            let rd = to_reg(bce, *dst, &gl.vars, dslot, stack_offsets, T0_SPC);
-            let rs1 = to_reg(bce, *lhs, &gl.vars, assignment[lhs], stack_offsets, T1_SPC);
-            let rs2 = to_reg(bce, *rhs, &gl.vars, assignment[rhs], stack_offsets, T2_SPC);
+            let rd = to_reg(bce, *dst, &gl.vars, dslot, stack_offsets, T0_SPC, true);
+            let rs1 = to_reg(
+                bce,
+                *lhs,
+                &gl.vars,
+                assignment[lhs],
+                stack_offsets,
+                T1_SPC,
+                false,
+            );
+            let rs2 = to_reg(
+                bce,
+                *rhs,
+                &gl.vars,
+                assignment[rhs],
+                stack_offsets,
+                T2_SPC,
+                false,
+            );
 
             let dst_size = gl.vars.size(*dst);
             let lhs_size = gl.vars.size(*lhs);
@@ -613,12 +646,20 @@ fn lower_instruction(
                 (O::Negedge, _, _, M::FourValue, _) => bce.fv_negedge(rd, rs1, rs2),
             }
 
-            store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd);
+            store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd, T1_VAL);
         }
         I::BinaryImm(dst, op, src, imm) => {
             let dslot = assignment[dst];
-            let rd = to_reg(bce, *dst, &gl.vars, dslot, stack_offsets, T0_SPC);
-            let rs = to_reg(bce, *src, &gl.vars, assignment[src], stack_offsets, T1_SPC);
+            let rd = to_reg(bce, *dst, &gl.vars, dslot, stack_offsets, T0_SPC, true);
+            let rs = to_reg(
+                bce,
+                *src,
+                &gl.vars,
+                assignment[src],
+                stack_offsets,
+                T1_SPC,
+                false,
+            );
 
             let dst_size = gl.vars.size(*dst);
             let src_size = gl.vars.size(*src);
@@ -1195,7 +1236,7 @@ fn lower_instruction(
                 }
             }
 
-            store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd);
+            store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd, T1_VAL);
         }
         I::Slice(variable_key, variable_key1, variable_key2) => todo!(),
         I::SliceImm(variable_key, variable_key1, _) => todo!(),
@@ -1212,7 +1253,7 @@ fn lower_instruction(
         }
         I::Intrinsic(dst, op, items) => {
             let dslot = assignment[dst];
-            let rd = to_reg(bce, *dst, &gl.vars, dslot, stack_offsets, T0_SPC);
+            let rd = to_reg(bce, *dst, &gl.vars, dslot, stack_offsets, T0_SPC, true);
 
             for item in items {
                 let reg = to_reg(
@@ -1222,6 +1263,7 @@ fn lower_instruction(
                     assignment[item],
                     stack_offsets,
                     T2_SPC,
+                    false,
                 );
                 bce.push_argument(gl.vars.size(*item), item.mode(), reg);
             }
@@ -1236,12 +1278,12 @@ fn lower_instruction(
                 Some(v) => Some(v),
             };
             bce.intrinsic(rd, intrinsic_id);
-            store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd);
+            store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd, T1_VAL);
         }
         I::LastUpdateTime(variable_key, signal_key) => todo!(),
         I::Probe(dst, signal, offset) => {
             let dslot = assignment[dst];
-            let rd = to_reg(bce, *dst, &gl.vars, dslot, stack_offsets, T0_SPC);
+            let rd = to_reg(bce, *dst, &gl.vars, dslot, stack_offsets, T0_SPC, true);
 
             let dst_size = gl.vars.size(*dst);
             let signal_size = gl.signals[*signal].size;
@@ -1273,11 +1315,19 @@ fn lower_instruction(
                 }
             }
 
-            store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd);
+            store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd, T1_VAL);
         }
         I::ProbeSlice(variable_key, signal_key, variable_key1) => todo!(),
         I::Drive(signal, src, partial) => {
-            let rs = to_reg(bce, *src, &gl.vars, assignment[src], stack_offsets, T0_SPC);
+            let rs = to_reg(
+                bce,
+                *src,
+                &gl.vars,
+                assignment[src],
+                stack_offsets,
+                T0_SPC,
+                false,
+            );
 
             let signal_size = gl.signals[*signal].size;
             let src_size = gl.vars.size(*src);
@@ -1327,6 +1377,7 @@ fn to_reg(
     slot: Slot,
     stack_offsets: &StackOffsets,
     backup: Reg,
+    is_dst: bool,
 ) -> Reg {
     match slot {
         Slot::Heap(offset) => {
@@ -1334,27 +1385,35 @@ fn to_reg(
             backup
         }
         Slot::Stack(kind, offset) => {
-            let kind_offset = match kind {
-                StackItemKind::B1 => 0,
-                StackItemKind::B2 => stack_offsets.b2,
-                StackItemKind::B4 => stack_offsets.b4,
-                StackItemKind::B8 => stack_offsets.b8,
-                StackItemKind::B16 => stack_offsets.b16,
-                StackItemKind::B32 => stack_offsets.b32,
-                StackItemKind::B64 => stack_offsets.b64,
-            };
-            let offset = kind_offset as u64 + offset as u64;
-            let offset = offset << (kind as u32);
-
-            let (addr, offset) = InlineAddrOffset::new(offset as i64, bytecode, SP, backup);
             let size = vars.size(var);
-            if let Some(size) = SixBitSize::from_vector_size(size) {
-                match var.mode() {
-                    LogicMode::TwoValue => bytecode.tv_load_aligned(backup, addr, offset, size),
-                    LogicMode::FourValue => bytecode.fv_load_aligned(backup, addr, offset, size),
+            if !is_dst || size > VSIZE_64 {
+                let kind_offset = match kind {
+                    StackItemKind::B1 => 0,
+                    StackItemKind::B2 => stack_offsets.b2,
+                    StackItemKind::B4 => stack_offsets.b4,
+                    StackItemKind::B8 => stack_offsets.b8,
+                    StackItemKind::B16 => stack_offsets.b16,
+                    StackItemKind::B32 => stack_offsets.b32,
+                    StackItemKind::B64 => stack_offsets.b64,
+                };
+                let offset = kind_offset as u64 + offset as u64;
+                match SignedImmediate::new_from_u64(offset) {
+                    None => todo!(),
+                    Some(offset) => bytecode.stack_offset(backup, kind, offset),
                 }
             }
-            addr
+
+            if !is_dst && let Some(size) = SixBitSize::from_vector_size(size) {
+                match var.mode() {
+                    LogicMode::TwoValue => {
+                        bytecode.tv_load_aligned(backup, backup, InlineAddrOffset::ZERO, size)
+                    }
+                    LogicMode::FourValue => {
+                        bytecode.fv_load_aligned(backup, backup, InlineAddrOffset::ZERO, size)
+                    }
+                }
+            }
+            backup
         }
         Slot::Register(reg) => Reg::new_masked(reg),
     }
@@ -1379,6 +1438,7 @@ fn store_back(
     var: VariableKey,
     slot: Slot,
     value: Reg,
+    scratch: Reg,
 ) {
     match slot {
         Slot::Heap(..) => unreachable!(),
@@ -1394,16 +1454,26 @@ fn store_back(
                     StackItemKind::B64 => stack_offsets.b64,
                 };
                 let offset = kind_offset as u64 + offset as u64;
-                let offset = offset << (kind as u32);
+                match SignedImmediate::new_from_u64(offset) {
+                    None => todo!(),
+                    Some(offset) => bytecode.stack_offset(scratch, kind, offset),
+                }
 
-                let (addr, offset) = InlineAddrOffset::new(offset as i64, bytecode, SP, T0_VAL);
                 match var.mode() {
-                    LogicMode::TwoValue => {
-                        bytecode.tv_set_aligned(T0_VAL, value, addr, offset, size)
-                    }
-                    LogicMode::FourValue => {
-                        bytecode.fv_set_aligned(T0_VAL, value, addr, offset, size)
-                    }
+                    LogicMode::TwoValue => bytecode.tv_set_aligned(
+                        scratch,
+                        value,
+                        scratch,
+                        InlineAddrOffset::ZERO,
+                        size,
+                    ),
+                    LogicMode::FourValue => bytecode.fv_set_aligned(
+                        scratch,
+                        value,
+                        scratch,
+                        InlineAddrOffset::ZERO,
+                        size,
+                    ),
                 }
             }
         }

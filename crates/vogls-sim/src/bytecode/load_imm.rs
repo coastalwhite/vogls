@@ -1,5 +1,6 @@
 use std::fmt;
 
+use vogls_ir::LogicMode;
 use vogls_runtime::RuntimeState;
 
 use crate::bytecode::MNEMONIC_ALIGN;
@@ -7,7 +8,7 @@ use crate::bytecode::MNEMONIC_ALIGN;
 use super::reg::{Reg, Regs};
 use super::{
     Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, BytecodeOpcode, ColdContext,
-    Schedule,
+    EXEC_ITRACE_INDENT, Schedule, write_register,
 };
 
 pub struct LoadImm {
@@ -41,6 +42,18 @@ impl BytecodeInstruction for LoadImm {
                 | ((self.segment as u32) << 14)
                 | ((self.imm as u16 as u32) << 16),
         )
+    }
+
+    fn post_exec_itrace(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        regs: &Regs,
+        _state: &RuntimeState,
+    ) -> fmt::Result {
+        f.write_str(EXEC_ITRACE_INDENT)?;
+        write_register(f, regs, "rd", self.rd, LogicMode::TwoValue)?;
+        writeln!(f)?;
+        Ok(())
     }
 
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

@@ -2,13 +2,12 @@ use std::fmt;
 
 use vogls_bits::set_subslice::tv_cell_set;
 use vogls_codegen::HeapOffset;
-use vogls_ir::VectorSize;
+use vogls_ir::{LogicMode, VectorSize};
 use vogls_runtime::RuntimeState;
 
 use super::reg::{Reg, Regs};
 use super::{
-    Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, BytecodeOpcode, ColdContext,
-    InlineAddrOffset, InlineNBitSize, MNEMONIC_ALIGN, Schedule, SixBitSize,
+    write_register, Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, BytecodeOpcode, ColdContext, InlineAddrOffset, InlineNBitSize, Schedule, SixBitSize, EXEC_ITRACE_INDENT, MNEMONIC_ALIGN, write_padded_mnemonic
 };
 
 pub struct SetArgs {
@@ -88,10 +87,10 @@ impl SetHeapArgs {
             rd,
             rs,
             roff,
-            size: _,
+            size,
             imm4,
         } = self;
-        write!(f, "{rd}, {rs}, {roff}, {imm4}")
+        write!(f, "{rd}, {rs}, {roff}, {imm4}, {size}")
     }
 }
 
@@ -113,7 +112,7 @@ macro_rules! impl_set_args {
             self.0.encode(BytecodeOpcode::$variant)
         }
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(f, "{:<1$}", $mnemonic, MNEMONIC_ALIGN)?;
+            write_padded_mnemonic(f, $mnemonic)?;
             self.0.fmt(f)
         }
     };
@@ -130,7 +129,7 @@ macro_rules! impl_set_heap_args {
             self.0.encode(BytecodeOpcode::$variant)
         }
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(f, "{:<1$}", $mnemonic, MNEMONIC_ALIGN)?;
+            write_padded_mnemonic(f, $mnemonic)?;
             self.0.fmt(f)
         }
     };
@@ -139,6 +138,29 @@ macro_rules! impl_set_heap_args {
 impl BytecodeInstruction for TvSetAligned {
     impl_set_args!(TvSetAligned, "tv.set_aligned");
 
+    fn pre_exec_itrace(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        regs: &Regs,
+        _state: &RuntimeState,
+    ) -> fmt::Result {
+        f.write_str(EXEC_ITRACE_INDENT)?;
+        write_register(f, regs, "rs", self.0.rs, LogicMode::TwoValue)?;
+        f.write_str(", ")?;
+        write_register(f, regs, "roff", self.0.roff, LogicMode::TwoValue)?;
+        writeln!(f)
+    }
+    fn post_exec_itrace(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        regs: &Regs,
+        _state: &RuntimeState,
+    ) -> fmt::Result {
+        f.write_str(EXEC_ITRACE_INDENT)?;
+        write_register(f, regs, "rd", self.0.rd, LogicMode::TwoValue)?;
+        writeln!(f)
+    }
+
     fn execute(
         self,
         regs: &mut Regs,
@@ -155,15 +177,13 @@ impl BytecodeInstruction for TvSetAligned {
             size,
             imm6,
         }) = self;
-        // @Performance: We can likely make a better specialized implementation for this load.
-        let size = VectorSize::from(size);
-        let offset = imm6.get_tv_aligned(regs[roff], size);
-        let at = HeapOffset {
-            bit_offset: offset as usize,
-        };
-        let at = at.to_ref(size);
+        let offset = imm6.get(regs[roff]);
         let value = regs[rs];
-        let prev_value = state.heap.set_tv_u64(at, value);
+        let mask = size.mask(u64::MAX);
+        let word = (offset / 64) as usize;
+        let boff = offset % 64;
+        let prev_value = mask & (state.heap.0[word] >> boff);
+        state.heap.0[word] = (!(mask << boff)) | (value << boff);
         let updated = value != prev_value;
         regs[rd] = u64::from(updated);
     }
@@ -172,6 +192,29 @@ impl BytecodeInstruction for TvSetAligned {
 impl BytecodeInstruction for FvSetAligned {
     impl_set_args!(FvSetAligned, "fv.set_aligned");
 
+    fn pre_exec_itrace(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        regs: &Regs,
+        _state: &RuntimeState,
+    ) -> fmt::Result {
+        f.write_str(EXEC_ITRACE_INDENT)?;
+        write_register(f, regs, "rs", self.0.rs, LogicMode::FourValue)?;
+        f.write_str(", ")?;
+        write_register(f, regs, "roff", self.0.roff, LogicMode::TwoValue)?;
+        writeln!(f)
+    }
+    fn post_exec_itrace(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        regs: &Regs,
+        _state: &RuntimeState,
+    ) -> fmt::Result {
+        f.write_str(EXEC_ITRACE_INDENT)?;
+        write_register(f, regs, "rd", self.0.rd, LogicMode::TwoValue)?;
+        writeln!(f)
+    }
+
     fn execute(
         self,
         regs: &mut Regs,
@@ -190,7 +233,7 @@ impl BytecodeInstruction for FvSetAligned {
         }) = self;
         // @Performance: We can likely make a better specialized implementation for this load.
         let size = VectorSize::from(size);
-        let offset = imm6.get_fv_aligned(regs[roff], size);
+        let offset = imm6.get(regs[roff]);
         let at = HeapOffset {
             bit_offset: offset as usize,
         };
@@ -251,7 +294,13 @@ impl BytecodeInstruction for SetHeapUnaligned {
         _listeners: &mut BytecodeListeners,
         _cldctx: &mut ColdContext,
     ) {
-        let Self(SetHeapArgs { rd, rs, roff, size, imm4 }) = self;
+        let Self(SetHeapArgs {
+            rd,
+            rs,
+            roff,
+            size,
+            imm4,
+        }) = self;
         let size = size.get(regs);
         let bit_offset = imm4.get(regs[roff]);
 
@@ -298,9 +347,15 @@ impl BytecodeInstruction for TvSetHeapAligned {
         _listeners: &mut BytecodeListeners,
         _cldctx: &mut ColdContext,
     ) {
-        let Self(SetHeapArgs { rd, rs, roff, size, imm4 }) = self;
+        let Self(SetHeapArgs {
+            rd,
+            rs,
+            roff,
+            size,
+            imm4,
+        }) = self;
         let size = size.get(regs);
-        let roff_offset = imm4.get_tv_aligned(regs[roff], size);
+        let roff_offset = imm4.get(regs[roff]);
         let src_offset = regs[rs];
         let num_words = size.get().div_ceil(64) as usize;
         let [roff, src] = state.heap.get_u64_cell_slices([
@@ -339,9 +394,15 @@ impl BytecodeInstruction for FvSetHeapAligned {
         _listeners: &mut BytecodeListeners,
         _cldctx: &mut ColdContext,
     ) {
-        let Self(SetHeapArgs { rd, rs, roff, size, imm4 }) = self;
+        let Self(SetHeapArgs {
+            rd,
+            rs,
+            roff,
+            size,
+            imm4,
+        }) = self;
         let size = size.get(regs);
-        let roff_offset = imm4.get_fv_aligned(regs[roff], size);
+        let roff_offset = imm4.get(regs[roff]);
         let src_offset = regs[rs];
         let num_words = size.get().div_ceil(64) as usize * 2;
         let [roff, src] = state.heap.get_u64_cell_slices([
@@ -426,16 +487,61 @@ impl BytecodeEncoder {
             .encode(),
         )
     }
-    pub fn tv_set_heap_aligned(&mut self, rd: Reg, rs: Reg, roff: Reg, size: InlineNBitSize<8>, imm4: InlineAddrOffset<4>) {
-        self.data
-            .push(TvSetHeapAligned(SetHeapArgs { rd, rs, roff, size, imm4 }).encode())
+    pub fn tv_set_heap_aligned(
+        &mut self,
+        rd: Reg,
+        rs: Reg,
+        roff: Reg,
+        size: InlineNBitSize<8>,
+        imm4: InlineAddrOffset<4>,
+    ) {
+        self.data.push(
+            TvSetHeapAligned(SetHeapArgs {
+                rd,
+                rs,
+                roff,
+                size,
+                imm4,
+            })
+            .encode(),
+        )
     }
-    pub fn fv_set_heap_aligned(&mut self, rd: Reg, rs: Reg, roff: Reg, size: InlineNBitSize<8>, imm4: InlineAddrOffset<4>) {
-        self.data
-            .push(FvSetHeapAligned(SetHeapArgs { rd, rs, roff, size, imm4 }).encode())
+    pub fn fv_set_heap_aligned(
+        &mut self,
+        rd: Reg,
+        rs: Reg,
+        roff: Reg,
+        size: InlineNBitSize<8>,
+        imm4: InlineAddrOffset<4>,
+    ) {
+        self.data.push(
+            FvSetHeapAligned(SetHeapArgs {
+                rd,
+                rs,
+                roff,
+                size,
+                imm4,
+            })
+            .encode(),
+        )
     }
-    pub fn set_heap_unaligned(&mut self, rd: Reg, rs: Reg, roff: Reg, size: InlineNBitSize<8>, imm4: InlineAddrOffset<4>) {
-        self.data
-            .push(SetHeapUnaligned(SetHeapArgs { rd, rs, roff, size, imm4 }).encode())
+    pub fn set_heap_unaligned(
+        &mut self,
+        rd: Reg,
+        rs: Reg,
+        roff: Reg,
+        size: InlineNBitSize<8>,
+        imm4: InlineAddrOffset<4>,
+    ) {
+        self.data.push(
+            SetHeapUnaligned(SetHeapArgs {
+                rd,
+                rs,
+                roff,
+                size,
+                imm4,
+            })
+            .encode(),
+        )
     }
 }

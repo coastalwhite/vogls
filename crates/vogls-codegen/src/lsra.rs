@@ -60,27 +60,27 @@ impl StackTracker {
         bit_offset += self.b1.len();
         bit_offset = bit_offset.next_multiple_of(2);
 
-        let b2 = bit_offset / 2;
+        let b2 = bit_offset.div_ceil(2);
         bit_offset += 2 * self.b2.len();
         bit_offset = bit_offset.next_multiple_of(4);
 
-        let b4 = bit_offset / 4;
+        let b4 = bit_offset.div_ceil(4);
         bit_offset += 4 * self.b4.len();
         bit_offset = bit_offset.next_multiple_of(8);
 
-        let b8 = bit_offset / 8;
+        let b8 = bit_offset.div_ceil(8);
         bit_offset += 8 * self.b8.len();
         bit_offset = bit_offset.next_multiple_of(8);
 
-        let b16 = bit_offset / 16;
+        let b16 = bit_offset.div_ceil(16);
         bit_offset += 16 * self.b16.len();
         bit_offset = bit_offset.next_multiple_of(16);
 
-        let b32 = bit_offset / 32;
+        let b32 = bit_offset.div_ceil(32);
         bit_offset += 32 * self.b32.len();
         bit_offset = bit_offset.next_multiple_of(32);
 
-        let b64 = bit_offset / 64;
+        let b64 = bit_offset.div_ceil(64);
         StackOffsets {
             b2,
             b4,
@@ -107,15 +107,25 @@ pub enum StackItemKind {
     B64,
 }
 impl StackItemKind {
-    fn from_size(size: VectorSize) -> StackItemKind {
-        match size.get() {
-            1 => Self::B1,
-            2 => Self::B2,
-            3..=4 => Self::B4,
-            5..=8 => Self::B8,
-            9..=16 => Self::B16,
-            17..=32 => Self::B32,
-            _ => Self::B64,
+    fn from_size(size: VectorSize, mode: LogicMode) -> StackItemKind {
+        match mode {
+            LogicMode::TwoValue => match size.get() {
+                1 => Self::B1,
+                2 => Self::B2,
+                3..=4 => Self::B4,
+                5..=8 => Self::B8,
+                9..=16 => Self::B16,
+                17..=32 => Self::B32,
+                _ => Self::B64,
+            },
+            LogicMode::FourValue => match size.get() {
+                1 => Self::B2,
+                2 => Self::B4,
+                3..=4 => Self::B8,
+                5..=8 => Self::B16,
+                9..=16 => Self::B32,
+                _ => Self::B64,
+            },
         }
     }
 }
@@ -207,6 +217,7 @@ pub fn linear_scan_register_allocation(
         live_in.insert(bb, Bitset::zeroed(vars.len()));
 
         for i in bbs[bb].instrs.iter().rev() {
+            // @Performance: Never put constants smaller than 64-bits on the stack.
             if let Instruction::Constant(dst, value) = i
                 && value.size() > VSIZE_64
             {
@@ -301,7 +312,7 @@ pub fn linear_scan_register_allocation(
             let inum = block_from + i as u64 * 2;
             if let Some(dst) = instr.get_destination_variable()
  
-                // Don't insert intervals for constants.
+                // Don't insert intervals for large constants.
                 && !assignment.contains_key(&dst) {
 
                 let size = var_map.size(dst);
@@ -410,7 +421,7 @@ pub fn linear_scan_register_allocation(
             };
             bitset.set_slice_constant(offset, num_bitset_slots, true);
             let offset = offset.try_into().expect("Too large");
-            let slot = Slot::Stack(StackItemKind::from_size(interval.size), offset);
+            let slot = Slot::Stack(StackItemKind::from_size(interval.size, interval.mode), offset);
             assignment.insert(*var, slot);
             continue;
         }
@@ -427,21 +438,23 @@ pub fn linear_scan_register_allocation(
             active.insert(insert_idx, (i, interval.mode, slot));
         } else {
             let (spill_i, _mode, _spill) = active.back().unwrap();
-            let bitset = stack_tracker.get_bitset_for_size(interval.size, interval.mode);
-            let num_bitset_slots = num_bitset_slots(interval.size, interval.mode);
-            let offset = match bitset.find_n_contiguous_zeros(num_bitset_slots) {
-                Ok(offset) => offset,
-                Err(offset) => {
-                    debug_assert!(offset <= bitset.len());
-                    bitset.extend_zeroed(bitset.len() - offset + num_bitset_slots);
-                    offset
-                }
-            };
-            let offset = offset.try_into().expect("Too large");
-            let slot = Slot::Stack(StackItemKind::from_size(interval.size), offset);
 
+            // @Performance. Better spilling policy.
             let (spill_var, spill_interval) = intervals[*spill_i];
             if spill_interval.end > interval.end {
+                let bitset = stack_tracker.get_bitset_for_size(spill_interval.size, spill_interval.mode);
+                let num_bitset_slots = num_bitset_slots(spill_interval.size, spill_interval.mode);
+                let offset = match bitset.find_n_contiguous_zeros(num_bitset_slots) {
+                    Ok(offset) => offset,
+                    Err(offset) => {
+                        debug_assert!(offset <= bitset.len());
+                        bitset.extend_zeroed(bitset.len() - offset + num_bitset_slots);
+                        offset
+                    }
+                };
+                bitset.set_slice_constant(offset as usize, num_bitset_slots, true);
+                let offset = offset.try_into().expect("Too large");
+                let slot = Slot::Stack(StackItemKind::from_size(spill_interval.size, spill_interval.mode), offset);
                 let slot = assignment.insert(spill_var, slot).unwrap();
                 assignment.insert(*var, slot);
                 active.pop_back();
@@ -451,6 +464,19 @@ pub fn linear_scan_register_allocation(
                 let insert_idx = insert_idx.unwrap_or_else(|i| i);
                 active.insert(insert_idx, (i, interval.mode, slot));
             } else {
+                let bitset = stack_tracker.get_bitset_for_size(interval.size, interval.mode);
+                let num_bitset_slots = num_bitset_slots(interval.size, interval.mode);
+                let offset = match bitset.find_n_contiguous_zeros(num_bitset_slots) {
+                    Ok(offset) => offset,
+                    Err(offset) => {
+                        debug_assert!(offset <= bitset.len());
+                        bitset.extend_zeroed(bitset.len() - offset + num_bitset_slots);
+                        offset
+                    }
+                };
+                bitset.set_slice_constant(offset as usize, num_bitset_slots, true);
+                let offset = offset.try_into().expect("Too large");
+                let slot = Slot::Stack(StackItemKind::from_size(interval.size, interval.mode), offset);
                 assignment.insert(*var, slot);
             }
         }

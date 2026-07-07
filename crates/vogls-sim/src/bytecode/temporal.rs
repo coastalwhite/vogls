@@ -5,7 +5,7 @@ use std::fmt;
 use super::reg::{Reg, Regs};
 use super::{
     Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, BytecodeOpcode, ColdContext,
-    InstructionPtr, Schedule, TimedEvent, write_padded_mnemonic,
+    EXEC_ITRACE_INDENT, InstructionPtr, Schedule, TimedEvent, write_padded_mnemonic,
 };
 
 pub struct Wake {
@@ -31,6 +31,15 @@ impl BytecodeInstruction for Wake {
             rcond: Reg::new_masked(v >> 8),
             index: v >> 12,
         }
+    }
+
+    fn pre_exec_itrace(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        regs: &Regs,
+        _state: &RuntimeState,
+    ) -> fmt::Result {
+        write!(f, "{EXEC_ITRACE_INDENT}rcond = {}", regs[self.rcond] != 0)
     }
 
     fn encode(&self) -> Bytecode {

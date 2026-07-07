@@ -8,10 +8,11 @@ use vogls_ir::{VectorSize, SCALAR_VSIZE};
 pub struct Regs {
     value: [u64; 16],
     pub size: VectorSize,
+    pub stack_offset: u64,
 }
 impl Regs {
-    pub fn new() -> Self {
-        Self { value: [0u64; 16], size: SCALAR_VSIZE }
+    pub fn new(stack_offset: u64) -> Self {
+        Self { value: [0u64; 16], size: SCALAR_VSIZE, stack_offset }
     }
     pub fn get_as_addr(&self, reg: Reg) -> HeapOffset {
         HeapOffset {

@@ -7,13 +7,13 @@ use vogls_bits::arithmetic::{
 use vogls_bits::edge::{fv_negedge_u64, fv_posedge_u64};
 use vogls_bits::shift::fv_shift_arith_right;
 use vogls_bits::util::wrapping_u64_pow;
-use vogls_ir::VectorSize;
+use vogls_ir::{VectorSize, LogicMode};
 use vogls_runtime::RuntimeState;
 
 use super::reg::{Reg, Regs};
 use super::{
     Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, BytecodeOpcode, ColdContext,
-    Schedule, SixBitSize, write_padded_mnemonic,
+    EXEC_ITRACE_INDENT, Schedule, SixBitSize, write_padded_mnemonic, write_register,
 };
 
 pub struct BitwiseRType {
@@ -129,7 +129,7 @@ impl SbsBitwiseRType {
 }
 
 macro_rules! impl_bitwise {
-    ($variant:ident, $mnemonic:literal) => {
+    ($variant:ident, $mnemonic:literal, $rd_mode:ident, $rs1_mode:ident, $rs2_mode:ident) => {
         #[inline(always)]
         fn extract(v: Bytecode) -> Self {
             debug_assert_eq!(v.opcode(), BytecodeOpcode::$variant as u8);
@@ -138,6 +138,30 @@ macro_rules! impl_bitwise {
         fn encode(&self) -> Bytecode {
             self.0.encode(BytecodeOpcode::$variant)
         }
+        fn pre_exec_itrace(
+            &self,
+            f: &mut fmt::Formatter<'_>,
+            regs: &Regs,
+            _state: &RuntimeState,
+        ) -> fmt::Result {
+            f.write_str(EXEC_ITRACE_INDENT)?;
+            write_register(f, regs, "rs1", self.0.rs1, LogicMode::$rs1_mode)?;
+            f.write_str(", ")?;
+            write_register(f, regs, "rs2", self.0.rs2, LogicMode::$rs2_mode)?;
+            writeln!(f)?;
+            Ok(())
+        }
+        fn post_exec_itrace(
+            &self,
+            f: &mut fmt::Formatter<'_>,
+            regs: &Regs,
+            _state: &RuntimeState,
+        ) -> fmt::Result {
+            f.write_str(EXEC_ITRACE_INDENT)?;
+            write_register(f, regs, "rd", self.0.rd, LogicMode::$rd_mode)?;
+            writeln!(f)?;
+            Ok(())
+        }
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write_padded_mnemonic(f, $mnemonic)?;
             self.0.fmt(f)
@@ -145,7 +169,7 @@ macro_rules! impl_bitwise {
     };
 }
 macro_rules! impl_sbs_bitwise {
-    ($variant:ident, $mnemonic:literal) => {
+    ($variant:ident, $mnemonic:literal, $rd_mode:ident, $rs1_mode:ident, $rs2_mode:ident) => {
         #[inline(always)]
         fn extract(v: Bytecode) -> Self {
             debug_assert_eq!(v.opcode(), BytecodeOpcode::$variant as u8);
@@ -153,6 +177,30 @@ macro_rules! impl_sbs_bitwise {
         }
         fn encode(&self) -> Bytecode {
             self.0.encode(BytecodeOpcode::$variant)
+        }
+        fn pre_exec_itrace(
+            &self,
+            f: &mut fmt::Formatter<'_>,
+            regs: &Regs,
+            _state: &RuntimeState,
+        ) -> fmt::Result {
+            f.write_str(EXEC_ITRACE_INDENT)?;
+            write_register(f, regs, "rs1", self.0.rs1, LogicMode::$rs1_mode)?;
+            f.write_str(", ")?;
+            write_register(f, regs, "rs2", self.0.rs2, LogicMode::$rs2_mode)?;
+            writeln!(f)?;
+            Ok(())
+        }
+        fn post_exec_itrace(
+            &self,
+            f: &mut fmt::Formatter<'_>,
+            regs: &Regs,
+            _state: &RuntimeState,
+        ) -> fmt::Result {
+            f.write_str(EXEC_ITRACE_INDENT)?;
+            write_register(f, regs, "rd", self.0.rd, LogicMode::$rd_mode)?;
+            writeln!(f)?;
+            Ok(())
         }
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write_padded_mnemonic(f, $mnemonic)?;
@@ -162,7 +210,7 @@ macro_rules! impl_sbs_bitwise {
 }
 
 impl BytecodeInstruction for TvAnd {
-    impl_bitwise!(TvAnd, "tv.and");
+    impl_bitwise!(TvAnd, "tv.and", TwoValue, TwoValue, TwoValue);
 
     fn execute(
         self,
@@ -178,7 +226,7 @@ impl BytecodeInstruction for TvAnd {
     }
 }
 impl BytecodeInstruction for TvOr {
-    impl_bitwise!(TvOr, "tv.or");
+    impl_bitwise!(TvOr, "tv.or", TwoValue, TwoValue, TwoValue);
 
     fn execute(
         self,
@@ -194,7 +242,7 @@ impl BytecodeInstruction for TvOr {
     }
 }
 impl BytecodeInstruction for TvXor {
-    impl_bitwise!(TvXor, "tv.xor");
+    impl_bitwise!(TvXor, "tv.xor", TwoValue, TwoValue, TwoValue);
 
     fn execute(
         self,
@@ -210,7 +258,7 @@ impl BytecodeInstruction for TvXor {
     }
 }
 impl BytecodeInstruction for TvAndNot {
-    impl_sbs_bitwise!(TvAndNot, "tv.andnot");
+    impl_sbs_bitwise!(TvAndNot, "tv.andnot", TwoValue, TwoValue, TwoValue);
 
     fn execute(
         self,
@@ -226,7 +274,7 @@ impl BytecodeInstruction for TvAndNot {
     }
 }
 impl BytecodeInstruction for TvOrNot {
-    impl_sbs_bitwise!(TvOrNot, "tv.ornot");
+    impl_sbs_bitwise!(TvOrNot, "tv.ornot", TwoValue, TwoValue, TwoValue);
 
     fn execute(
         self,
@@ -242,7 +290,7 @@ impl BytecodeInstruction for TvOrNot {
     }
 }
 impl BytecodeInstruction for TvXnor {
-    impl_sbs_bitwise!(TvXnor, "tv.xnor");
+    impl_sbs_bitwise!(TvXnor, "tv.xnor", TwoValue, TwoValue, TwoValue);
 
     fn execute(
         self,
@@ -258,7 +306,7 @@ impl BytecodeInstruction for TvXnor {
     }
 }
 impl BytecodeInstruction for TvCeq {
-    impl_bitwise!(TvCeq, "tv.ceq");
+    impl_bitwise!(TvCeq, "tv.ceq", TwoValue, TwoValue, TwoValue);
 
     fn execute(
         self,
@@ -274,7 +322,7 @@ impl BytecodeInstruction for TvCeq {
     }
 }
 impl BytecodeInstruction for TvAdd {
-    impl_sbs_bitwise!(TvAdd, "tv.add");
+    impl_sbs_bitwise!(TvAdd, "tv.add", TwoValue, TwoValue, TwoValue);
 
     fn execute(
         self,
@@ -290,7 +338,7 @@ impl BytecodeInstruction for TvAdd {
     }
 }
 impl BytecodeInstruction for TvSub {
-    impl_sbs_bitwise!(TvSub, "tv.sub");
+    impl_sbs_bitwise!(TvSub, "tv.sub", TwoValue, TwoValue, TwoValue);
 
     fn execute(
         self,
@@ -306,7 +354,7 @@ impl BytecodeInstruction for TvSub {
     }
 }
 impl BytecodeInstruction for TvMul {
-    impl_sbs_bitwise!(TvMul, "tv.mul");
+    impl_sbs_bitwise!(TvMul, "tv.mul", TwoValue, TwoValue, TwoValue);
 
     fn execute(
         self,
@@ -322,7 +370,7 @@ impl BytecodeInstruction for TvMul {
     }
 }
 impl BytecodeInstruction for TvDivX {
-    impl_sbs_bitwise!(TvDivX, "tv.divx");
+    impl_sbs_bitwise!(TvDivX, "tv.divx", FourValue, TwoValue, TwoValue);
 
     fn execute(
         self,
@@ -348,7 +396,7 @@ impl BytecodeInstruction for TvDivX {
     }
 }
 impl BytecodeInstruction for TvDiv0 {
-    impl_sbs_bitwise!(TvDiv0, "tv.div0");
+    impl_sbs_bitwise!(TvDiv0, "tv.div0", TwoValue, TwoValue, TwoValue);
 
     fn execute(
         self,
@@ -369,7 +417,7 @@ impl BytecodeInstruction for TvDiv0 {
     }
 }
 impl BytecodeInstruction for TvModX {
-    impl_sbs_bitwise!(TvModX, "tv.modx");
+    impl_sbs_bitwise!(TvModX, "tv.modx", FourValue, TwoValue, TwoValue);
 
     fn execute(
         self,
@@ -395,7 +443,7 @@ impl BytecodeInstruction for TvModX {
     }
 }
 impl BytecodeInstruction for TvMod0 {
-    impl_sbs_bitwise!(TvMod0, "tv.mod0");
+    impl_sbs_bitwise!(TvMod0, "tv.mod0", TwoValue, TwoValue, TwoValue);
 
     fn execute(
         self,
@@ -416,7 +464,7 @@ impl BytecodeInstruction for TvMod0 {
     }
 }
 impl BytecodeInstruction for TvPow {
-    impl_sbs_bitwise!(TvPow, "tv.pow");
+    impl_sbs_bitwise!(TvPow, "tv.pow", TwoValue, TwoValue, TwoValue);
 
     fn execute(
         self,
@@ -432,7 +480,7 @@ impl BytecodeInstruction for TvPow {
     }
 }
 impl BytecodeInstruction for TvUnsignedLeq {
-    impl_bitwise!(TvUnsignedLeq, "tv.uleq");
+    impl_bitwise!(TvUnsignedLeq, "tv.uleq", TwoValue, TwoValue, TwoValue);
 
     fn execute(
         self,
@@ -448,7 +496,7 @@ impl BytecodeInstruction for TvUnsignedLeq {
     }
 }
 impl BytecodeInstruction for TvUnsignedGt {
-    impl_bitwise!(TvUnsignedGt, "tv.ugt");
+    impl_bitwise!(TvUnsignedGt, "tv.ugt", TwoValue, TwoValue, TwoValue);
 
     fn execute(
         self,
@@ -464,7 +512,7 @@ impl BytecodeInstruction for TvUnsignedGt {
     }
 }
 impl BytecodeInstruction for TvMin {
-    impl_bitwise!(TvMin, "tv.min");
+    impl_bitwise!(TvMin, "tv.min", TwoValue, TwoValue, TwoValue);
 
     fn execute(
         self,
@@ -480,7 +528,7 @@ impl BytecodeInstruction for TvMin {
     }
 }
 impl BytecodeInstruction for TvMax {
-    impl_bitwise!(TvMax, "tv.max");
+    impl_bitwise!(TvMax, "tv.max", TwoValue, TwoValue, TwoValue);
 
     fn execute(
         self,
@@ -496,7 +544,7 @@ impl BytecodeInstruction for TvMax {
     }
 }
 impl BytecodeInstruction for TvSll {
-    impl_sbs_bitwise!(TvSll, "tv.sll");
+    impl_sbs_bitwise!(TvSll, "tv.sll", TwoValue, TwoValue, TwoValue);
 
     fn execute(
         self,
@@ -516,7 +564,7 @@ impl BytecodeInstruction for TvSll {
     }
 }
 impl BytecodeInstruction for TvSlr {
-    impl_bitwise!(TvSlr, "tv.slr");
+    impl_bitwise!(TvSlr, "tv.slr", TwoValue, TwoValue, TwoValue);
 
     fn execute(
         self,
@@ -536,7 +584,7 @@ impl BytecodeInstruction for TvSlr {
     }
 }
 impl BytecodeInstruction for TvSar {
-    impl_sbs_bitwise!(TvSar, "tv.sar");
+    impl_sbs_bitwise!(TvSar, "tv.sar", TwoValue, TwoValue, TwoValue);
 
     fn execute(
         self,
@@ -556,7 +604,7 @@ impl BytecodeInstruction for TvSar {
     }
 }
 impl BytecodeInstruction for TvLeftShiftOr {
-    impl_sbs_bitwise!(TvLeftShiftOr, "tv.lsor");
+    impl_sbs_bitwise!(TvLeftShiftOr, "tv.lsor", TwoValue, TwoValue, TwoValue);
 
     fn execute(
         self,
@@ -573,7 +621,7 @@ impl BytecodeInstruction for TvLeftShiftOr {
 }
 
 impl BytecodeInstruction for FvAnd {
-    impl_bitwise!(FvAnd, "fv.and");
+    impl_bitwise!(FvAnd, "fv.and", FourValue, FourValue, FourValue);
 
     fn execute(
         self,
@@ -593,7 +641,7 @@ impl BytecodeInstruction for FvAnd {
     }
 }
 impl BytecodeInstruction for FvOr {
-    impl_bitwise!(FvOr, "fv.or");
+    impl_bitwise!(FvOr, "fv.or", FourValue, FourValue, FourValue);
 
     fn execute(
         self,
@@ -613,7 +661,7 @@ impl BytecodeInstruction for FvOr {
     }
 }
 impl BytecodeInstruction for FvXor {
-    impl_bitwise!(FvXor, "fv.xor");
+    impl_bitwise!(FvXor, "fv.xor", FourValue, FourValue, FourValue);
 
     fn execute(
         self,
@@ -633,7 +681,7 @@ impl BytecodeInstruction for FvXor {
     }
 }
 impl BytecodeInstruction for FvAndNot {
-    impl_bitwise!(FvAndNot, "fv.andnot");
+    impl_bitwise!(FvAndNot, "fv.andnot", FourValue, FourValue, FourValue);
 
     fn execute(
         self,
@@ -653,7 +701,7 @@ impl BytecodeInstruction for FvAndNot {
     }
 }
 impl BytecodeInstruction for FvOrNot {
-    impl_bitwise!(FvOrNot, "fv.ornot");
+    impl_bitwise!(FvOrNot, "fv.ornot", FourValue, FourValue, FourValue);
 
     fn execute(
         self,
@@ -673,7 +721,7 @@ impl BytecodeInstruction for FvOrNot {
     }
 }
 impl BytecodeInstruction for FvCeq {
-    impl_bitwise!(FvCeq, "fv.ceq");
+    impl_bitwise!(FvCeq, "fv.ceq", TwoValue, FourValue, FourValue);
 
     fn execute(
         self,
@@ -691,7 +739,7 @@ impl BytecodeInstruction for FvCeq {
     }
 }
 impl BytecodeInstruction for FvPosedge {
-    impl_bitwise!(FvPosedge, "fv.posedge");
+    impl_bitwise!(FvPosedge, "fv.posedge", TwoValue, FourValue, FourValue);
 
     fn execute(
         self,
@@ -709,7 +757,7 @@ impl BytecodeInstruction for FvPosedge {
     }
 }
 impl BytecodeInstruction for FvNegedge {
-    impl_bitwise!(FvNegedge, "fv.negedge");
+    impl_bitwise!(FvNegedge, "fv.negedge", TwoValue, FourValue, FourValue);
 
     fn execute(
         self,
@@ -727,7 +775,7 @@ impl BytecodeInstruction for FvNegedge {
     }
 }
 impl BytecodeInstruction for FvAdd {
-    impl_sbs_bitwise!(FvAdd, "fv.add");
+    impl_sbs_bitwise!(FvAdd, "fv.add", FourValue, FourValue, FourValue);
 
     fn execute(
         self,
@@ -755,7 +803,7 @@ impl BytecodeInstruction for FvAdd {
     }
 }
 impl BytecodeInstruction for FvSub {
-    impl_sbs_bitwise!(FvSub, "fv.sub");
+    impl_sbs_bitwise!(FvSub, "fv.sub", FourValue, FourValue, FourValue);
 
     fn execute(
         self,
@@ -783,7 +831,7 @@ impl BytecodeInstruction for FvSub {
     }
 }
 impl BytecodeInstruction for FvMul {
-    impl_sbs_bitwise!(FvMul, "fv.mul");
+    impl_sbs_bitwise!(FvMul, "fv.mul", FourValue, FourValue, FourValue);
 
     fn execute(
         self,
@@ -811,7 +859,7 @@ impl BytecodeInstruction for FvMul {
     }
 }
 impl BytecodeInstruction for FvDivX {
-    impl_sbs_bitwise!(FvDivX, "fv.divx");
+    impl_sbs_bitwise!(FvDivX, "fv.divx", FourValue, FourValue, FourValue);
 
     fn execute(
         self,
@@ -839,7 +887,7 @@ impl BytecodeInstruction for FvDivX {
     }
 }
 impl BytecodeInstruction for FvDiv0 {
-    impl_sbs_bitwise!(FvDiv0, "fv.div0");
+    impl_sbs_bitwise!(FvDiv0, "fv.div0", FourValue, FourValue, FourValue);
 
     fn execute(
         self,
@@ -867,7 +915,7 @@ impl BytecodeInstruction for FvDiv0 {
     }
 }
 impl BytecodeInstruction for FvModX {
-    impl_sbs_bitwise!(FvModX, "fv.modx");
+    impl_sbs_bitwise!(FvModX, "fv.modx", FourValue, FourValue, FourValue);
 
     fn execute(
         self,
@@ -895,7 +943,7 @@ impl BytecodeInstruction for FvModX {
     }
 }
 impl BytecodeInstruction for FvMod0 {
-    impl_sbs_bitwise!(FvMod0, "fv.mod0");
+    impl_sbs_bitwise!(FvMod0, "fv.mod0", FourValue, FourValue, FourValue);
 
     fn execute(
         self,
@@ -923,7 +971,7 @@ impl BytecodeInstruction for FvMod0 {
     }
 }
 impl BytecodeInstruction for FvPow {
-    impl_sbs_bitwise!(FvPow, "fv.pow");
+    impl_sbs_bitwise!(FvPow, "fv.pow", FourValue, FourValue, FourValue);
 
     fn execute(
         self,
@@ -951,7 +999,7 @@ impl BytecodeInstruction for FvPow {
     }
 }
 impl BytecodeInstruction for FvUnsignedLeq {
-    impl_sbs_bitwise!(FvUnsignedLeq, "fv.uleq");
+    impl_sbs_bitwise!(FvUnsignedLeq, "fv.uleq", FourValue, FourValue, FourValue);
 
     fn execute(
         self,
@@ -979,7 +1027,7 @@ impl BytecodeInstruction for FvUnsignedLeq {
     }
 }
 impl BytecodeInstruction for FvUnsignedGt {
-    impl_sbs_bitwise!(FvUnsignedGt, "fv.ugt");
+    impl_sbs_bitwise!(FvUnsignedGt, "fv.ugt", FourValue, FourValue, FourValue);
 
     fn execute(
         self,
@@ -1007,7 +1055,7 @@ impl BytecodeInstruction for FvUnsignedGt {
     }
 }
 impl BytecodeInstruction for FvMin {
-    impl_sbs_bitwise!(FvMin, "fv.min");
+    impl_sbs_bitwise!(FvMin, "fv.min", FourValue, FourValue, FourValue);
 
     fn execute(
         self,
@@ -1035,7 +1083,7 @@ impl BytecodeInstruction for FvMin {
     }
 }
 impl BytecodeInstruction for FvMax {
-    impl_sbs_bitwise!(FvMax, "fv.max");
+    impl_sbs_bitwise!(FvMax, "fv.max", FourValue, FourValue, FourValue);
 
     fn execute(
         self,
@@ -1063,7 +1111,7 @@ impl BytecodeInstruction for FvMax {
     }
 }
 impl BytecodeInstruction for FvSll {
-    impl_sbs_bitwise!(FvSll, "fv.sll");
+    impl_sbs_bitwise!(FvSll, "fv.sll", FourValue, FourValue, FourValue);
 
     fn execute(
         self,
@@ -1098,7 +1146,7 @@ impl BytecodeInstruction for FvSll {
     }
 }
 impl BytecodeInstruction for FvSlr {
-    impl_sbs_bitwise!(FvSlr, "fv.slr");
+    impl_sbs_bitwise!(FvSlr, "fv.slr", FourValue, FourValue, FourValue);
 
     fn execute(
         self,
@@ -1134,7 +1182,7 @@ impl BytecodeInstruction for FvSlr {
     }
 }
 impl BytecodeInstruction for FvSar {
-    impl_sbs_bitwise!(FvSar, "fv.sar");
+    impl_sbs_bitwise!(FvSar, "fv.sar", FourValue, FourValue, FourValue);
 
     fn execute(
         self,
@@ -1165,7 +1213,7 @@ impl BytecodeInstruction for FvSar {
     }
 }
 impl BytecodeInstruction for FvLeftShiftOr {
-    impl_sbs_bitwise!(FvLeftShiftOr, "fv.lsor");
+    impl_sbs_bitwise!(FvLeftShiftOr, "fv.lsor", FourValue, FourValue, FourValue);
 
     fn execute(
         self,

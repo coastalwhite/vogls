@@ -5,15 +5,18 @@ use vogls_ir::{Bits, IntrinsicOp, LogicMode, Mode, SCALAR_VSIZE, VSIZE_32, VSIZE
 use vogls_runtime::RuntimeState;
 use vogls_utils::NonMaxU16;
 
-use crate::bytecode::{value_to_heap_ref, BytecodeOpcode, MNEMONIC_ALIGN};
+use crate::bytecode::{value_to_heap_ref, write_padded_mnemonic, BytecodeOpcode, EXEC_ITRACE_INDENT, MNEMONIC_ALIGN};
 
 use super::reg::{Reg, Regs};
-use super::{Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, ColdContext, Schedule};
+use super::{
+    Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, ColdContext, InlineNBitSize,
+    Schedule, write_register,
+};
 
 pub struct PushArgument {
-    size: Option<VectorSize>,
-    mode: LogicMode,
     rs: Reg,
+    mode: LogicMode,
+    size: InlineNBitSize<19>,
 }
 
 pub struct Intrinsic {
@@ -31,7 +34,7 @@ impl BytecodeInstruction for PushArgument {
                 0 => LogicMode::TwoValue,
                 _ => LogicMode::FourValue,
             },
-            size: VectorSize::new(v >> 13),
+            size: InlineNBitSize::new_masked(v >> 13),
         }
     }
 
@@ -40,13 +43,26 @@ impl BytecodeInstruction for PushArgument {
             (BytecodeOpcode::PushArgument as u32)
                 | ((self.rs as u32) << 8)
                 | ((self.mode as u32) << 12)
-                | (self.size.map_or(0u32, |v| v.get()) << 13),
+                | (self.size.encode() << 13),
         )
     }
 
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self { size: _, mode, rs } = self;
-        write!(f, "{:<1$}{rs}, {mode:?}", "push_argument", MNEMONIC_ALIGN)
+        let Self { size, mode, rs } = self;
+        write_padded_mnemonic(f, "push_argument")?;
+        write!(f, "{rs}, {mode:?}, {size}")
+    }
+
+    fn pre_exec_itrace(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        regs: &Regs,
+        _state: &RuntimeState,
+    ) -> fmt::Result {
+        f.write_str(EXEC_ITRACE_INDENT)?;
+        write_register(f, regs, "rs", self.rs, self.mode)?;
+        writeln!(f)?;
+        Ok(())
     }
 
     fn execute(
@@ -59,7 +75,7 @@ impl BytecodeInstruction for PushArgument {
         cldctx: &mut ColdContext,
     ) {
         let Self { size, mode, rs } = self;
-        let size = size.unwrap_or_else(|| VectorSize::new(regs[Reg::X12] as u32).unwrap());
+        let size = size.get(regs);
         cldctx.stack_args.push((size, mode));
         match mode {
             LogicMode::FourValue if size <= VSIZE_64 => {
@@ -182,12 +198,7 @@ impl BytecodeInstruction for Intrinsic {
 
 impl BytecodeEncoder {
     pub fn push_argument(&mut self, size: VectorSize, mode: LogicMode, rs: Reg) {
-        let size = if size.get() >= (1u32 << 19) {
-            self.load_u64(Reg::X12, size.get() as u64);
-            None
-        } else {
-            Some(size)
-        };
+        let size = InlineNBitSize::new(size, self);
         self.data.push(PushArgument { size, mode, rs }.encode());
     }
 
