@@ -812,7 +812,7 @@ fn lower_instruction(
                 (O::Sub, M::FourValue, None, _, _, _) => {
                     let imm = heap_builder.claim_constant(M::FourValue, imm.clone());
                     bce.load_u64(T2_SPC, imm.offset.bit_offset as u64);
-                    bce.heap_fv_sub(rd, rs, T2_SPC, src_size);
+                    bce.heap_fv_mul(rd, rs, T2_SPC, src_size);
                 }
                 (O::Multiply, M::TwoValue, Some(size), _, _, _) => {
                     match SignedImmediate::new_from_bits(imm) {
@@ -832,7 +832,7 @@ fn lower_instruction(
                     match SignedImmediate::new_from_bits(imm) {
                         None => {
                             bce.load_bits_into_register(T2_SPC, M::FourValue, imm);
-                            bce.fv_sub(rd, rs, T2_SPC, size);
+                            bce.fv_mul(rd, rs, T2_SPC, size);
                         }
                         Some(imm) => bce.fv_muli(rd, rs, imm, size),
                     }
