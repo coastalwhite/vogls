@@ -51,6 +51,7 @@ pub struct TvSll(pub SbsBitwiseRType);
 pub struct TvSlr(pub BitwiseRType);
 pub struct TvSar(pub SbsBitwiseRType);
 pub struct TvLeftShiftOr(pub SbsBitwiseRType);
+pub struct CMov(pub BitwiseRType);
 
 pub struct FvAnd(pub BitwiseRType);
 pub struct FvOr(pub BitwiseRType);
@@ -209,6 +210,24 @@ macro_rules! impl_sbs_bitwise {
     };
 }
 
+impl BytecodeInstruction for CMov {
+    impl_bitwise!(CMov, "cmov", TwoValue, TwoValue, TwoValue);
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let BitwiseRType { rd, rs1, rs2 } = self.0;
+        if regs[rs1] != 0 {
+            regs[rd] = regs[rs2];
+        }
+    }
+}
 impl BytecodeInstruction for TvAnd {
     impl_bitwise!(TvAnd, "tv.and", TwoValue, TwoValue, TwoValue);
 
@@ -1253,6 +1272,7 @@ macro_rules! impl_bytecode_sbs_methods {
 }
 
 impl_bytecode_methods! {
+    (cmov, CMov)
     (and, TvAnd)
     (or, TvOr)
     (xor, TvXor)

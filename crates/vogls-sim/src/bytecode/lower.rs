@@ -17,7 +17,7 @@ use crate::bytecode::{
 
 enum JumpKind {
     Jump,
-    Branch,
+    Branch(Reg),
 }
 
 pub fn lower_process_to_bytecode(
@@ -31,6 +31,7 @@ pub fn lower_process_to_bytecode(
     listeners: &mut BytecodeListeners,
     signals: &[HeapRef],
     io_signals: &VgHashMap<SignalKey, RtSignalKey>,
+    lupdt_indexes: &VgHashMap<RtSignalKey, u64>,
     bytecode: &mut BytecodeEncoder,
 ) {
     const PRINT: bool = true;
@@ -116,6 +117,7 @@ pub fn lower_process_to_bytecode(
                     watch_map,
                     signals,
                     io_signals,
+                    lupdt_indexes,
                     i,
                 );
                 if PRINT {
@@ -135,7 +137,7 @@ pub fn lower_process_to_bytecode(
                         bytecode.wait(T0_SPC);
                     }
                     jump_targets.push((bytecode.data.len(), target.entry(), JumpKind::Jump));
-                    bytecode.jump(0);
+                    bytecode.panic();
                 }
                 T::VariableWait(target, src) => {
                     if src.mode() == LogicMode::FourValue {
@@ -153,12 +155,12 @@ pub fn lower_process_to_bytecode(
                     );
                     bytecode.wait(rtime);
                     jump_targets.push((bytecode.data.len(), target.entry(), JumpKind::Jump));
-                    bytecode.jump(0);
+                    bytecode.panic();
                 }
                 T::WaitRegion(target, region) => {
                     bytecode.wait_region(*region);
                     jump_targets.push((bytecode.data.len(), target.entry(), JumpKind::Jump));
-                    bytecode.jump(0);
+                    bytecode.panic();
                 }
                 T::Watch(target, _) => {
                     let index = watch_map.get_watch_index(bb_key);
@@ -166,11 +168,11 @@ pub fn lower_process_to_bytecode(
                     bytecode.next_event();
                     listeners.set_ptr(index, bytecode.current_ptr());
                     jump_targets.push((bytecode.data.len(), target.entry(), JumpKind::Jump));
-                    bytecode.jump(0);
+                    bytecode.panic();
                 }
                 T::Jump(target) => {
                     jump_targets.push((bytecode.data.len(), *target, JumpKind::Jump));
-                    bytecode.jump(0);
+                    bytecode.panic();
                 }
                 T::Branch(cond, truthy, falsy) => {
                     if cond.mode() == LogicMode::FourValue {
@@ -186,10 +188,10 @@ pub fn lower_process_to_bytecode(
                         T0_SPC,
                         false,
                     );
-                    jump_targets.push((bytecode.data.len(), *truthy, JumpKind::Branch));
-                    bytecode.branch(rcond, 0);
+                    jump_targets.push((bytecode.data.len(), *truthy, JumpKind::Branch(rcond)));
+                    bytecode.panic();
                     jump_targets.push((bytecode.data.len(), *falsy, JumpKind::Jump));
-                    bytecode.jump(0);
+                    bytecode.panic();
                 }
                 T::Halt => {
                     bytecode.next_event();
@@ -201,17 +203,19 @@ pub fn lower_process_to_bytecode(
     for (offset, target, kind) in jump_targets {
         let target_offset = bb_offsets[&target];
         let imm = target_offset.abs_diff(offset);
-        assert!(imm < (1 << 19));
-        let mut imm = imm as i32;
+        let mut imm = imm as i64;
         if target_offset < offset {
             imm = -imm;
         }
+        imm -= 1;
         bytecode.data[offset] = match kind {
-            JumpKind::Jump => Jump(imm).encode(),
-            JumpKind::Branch => {
-                let mut enc = Branch::extract(bytecode.data[offset]);
-                enc.imm = imm;
-                enc.encode()
+            JumpKind::Jump => {
+                let imm = SignedImmediate::new(imm.into()).unwrap();
+                Jump(imm).encode()
+            }
+            JumpKind::Branch(rcond) => {
+                let imm = SignedImmediate::new(imm.into()).unwrap();
+                Branch { rcond, imm }.encode()
             }
         };
     }
@@ -233,6 +237,7 @@ fn lower_instruction(
     watch_map: &WatchMap,
     signals: &[HeapRef],
     io_signals: &VgHashMap<SignalKey, RtSignalKey>,
+    lupdt_indexes: &VgHashMap<RtSignalKey, u64>,
     instr: &Instruction,
 ) {
     use Instruction as I;
@@ -320,8 +325,7 @@ fn lower_instruction(
                         }
                         Some(imm) => bce.addi(val, rd, imm, SixBitSize::N64),
                     }
-                    // OR with self is a copy
-                    bce.heap_tv_or(val, rs, rs, src_size);
+                    bce.heap_tv_copy(val, rs, src_size);
                     // ORNOT with self is a fill 1's
                     bce.heap_tv_ornot(rd, rs, rs, src_size);
                 }
@@ -403,7 +407,6 @@ fn lower_instruction(
                     bce.load_heap_unaligned(rd, rs, InlineAddrOffset::ZERO, size);
                     bce.load_heap_unaligned(rd, rs, InlineAddrOffset::ZERO, size);
                 }
-                (O::Truncate, _, None, Some(_)) => unreachable!(),
                 (O::ZeroExtend, M::TwoValue, Some(_), Some(_)) => {
                     bce.copy(rd, rs);
                 }
@@ -473,9 +476,9 @@ fn lower_instruction(
                     bce.heapheap_fv_sign_extend(rd, rs, T1_VAL, src_size);
                 }
 
-                (O::ZeroExtend, _, Some(_), None) | (O::SignExtend, _, Some(_), None) => {
-                    unreachable!()
-                }
+                (O::Truncate, _, None, Some(_)) => unreachable!(),
+                (O::ZeroExtend, _, Some(_), None) => unreachable!(),
+                (O::SignExtend, _, Some(_), None) => unreachable!(),
             }
 
             store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd, T1_VAL);
@@ -1238,18 +1241,231 @@ fn lower_instruction(
 
             store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd, T1_VAL);
         }
-        I::Slice(variable_key, variable_key1, variable_key2) => todo!(),
-        I::SliceImm(variable_key, variable_key1, _) => todo!(),
+        I::Slice(dst, src, imm) => {
+            // @Incorrect: This ignores that out-of-bounds slices should give X.
+            let dst_size = gl.vars.size(*dst);
+            let src_size = gl.vars.size(*src);
+
+            let dslot = assignment[dst];
+            let rd = to_reg(bce, *dst, &gl.vars, dslot, stack_offsets, T0_SPC, true);
+            let rs = to_reg(
+                bce,
+                *src,
+                &gl.vars,
+                assignment[src],
+                stack_offsets,
+                T1_SPC,
+                false,
+            );
+            let rimm = to_reg(
+                bce,
+                *src,
+                &gl.vars,
+                assignment[imm],
+                stack_offsets,
+                T2_SPC,
+                false,
+            );
+
+            use LogicMode as M;
+            match (
+                src.mode(),
+                imm.mode(),
+                SixBitSize::from_vector_size(dst_size),
+                SixBitSize::from_vector_size(src_size),
+            ) {
+                (M::TwoValue, M::TwoValue, Some(dst_size), Some(_)) => {
+                    bce.slr(rd, rs, rimm);
+                    bce.truncate(rd, rd, dst_size);
+                }
+                (M::FourValue, M::FourValue, Some(dst_size), Some(_)) => {
+                    let (rdspc, rdval) = rd.to_spc_and_val();
+                    let (rsspc, rsval) = rs.to_spc_and_val();
+                    bce.slr(rdspc, rsspc, rimm);
+                    bce.slr(rdval, rsval, rimm);
+                    bce.truncate(rdspc, rdspc, dst_size);
+                    bce.truncate(rdval, rdval, dst_size);
+                }
+                (M::TwoValue, M::TwoValue, Some(_), None) => todo!(),
+                (M::FourValue, M::FourValue, Some(_), None) => todo!(),
+                (M::TwoValue, M::TwoValue, None, None) => todo!(),
+                (M::FourValue, M::FourValue, None, None) => todo!(),
+                (M::TwoValue, M::FourValue, _, _) => todo!(),
+                (M::FourValue, M::TwoValue, _, _) => todo!(),
+                (_, _, None, Some(_)) => unreachable!(),
+            }
+            store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd, T1_VAL);
+        }
+        I::SliceImm(dst, src, offset) => {
+            let dst_size = gl.vars.size(*dst);
+            let src_size = gl.vars.size(*src);
+
+            let dslot = assignment[dst];
+            let rd = to_reg(bce, *dst, &gl.vars, dslot, stack_offsets, T0_SPC, true);
+            let rs = to_reg(
+                bce,
+                *src,
+                &gl.vars,
+                assignment[src],
+                stack_offsets,
+                T1_SPC,
+                false,
+            );
+
+            use LogicMode as M;
+            match (
+                src.mode(),
+                SixBitSize::from_vector_size(dst_size),
+                SixBitSize::from_vector_size(src_size),
+            ) {
+                (M::TwoValue, Some(dst_size), Some(_)) => {
+                    match SignedImmediate::new_from_u64(*offset as u64) {
+                        None => bce.load_u64(rd, 0),
+                        Some(shift) => bce.slri(rd, rs, shift, dst_size),
+                    }
+                }
+                (M::FourValue, Some(dst_size), Some(_)) => {
+                    let (rdspc, rdval) = rd.to_spc_and_val();
+                    let (rsspc, rsval) = rs.to_spc_and_val();
+                    match SignedImmediate::new_from_u64(*offset as u64) {
+                        None => {
+                            bce.load_u64(rdspc, 0);
+                            bce.load_u64(rdval, 0);
+                        }
+                        Some(shift) => {
+                            // @Incorrect. out-of-bounds reads should return one.
+                            bce.slri(rdspc, rsspc, shift, dst_size);
+                            bce.slri(rdval, rsval, shift, dst_size);
+                        }
+                    }
+                }
+                (M::TwoValue, Some(dst_size), None) => {
+                    // @Incorrect. Deal with out-of-bounds reads.
+                    let (addr, offset) = InlineAddrOffset::new(i64::from(*offset), bce, rs, T1_VAL);
+                    bce.load_unaligned(rd, addr, offset, dst_size);
+                }
+                (M::FourValue, Some(dst_size), None) => {
+                    // @Incorrect. Deal with out-of-bounds reads.
+                    let (rdspc, rdval) = rd.to_spc_and_val();
+
+                    let (addr, spc_offset) =
+                        InlineAddrOffset::new(i64::from(*offset), bce, rs, T1_VAL);
+                    bce.load_unaligned(rdspc, addr, spc_offset, dst_size);
+
+                    let num_words = (src_size.get() as u64).next_multiple_of(64);
+                    let (addr, val_offset) = InlineAddrOffset::new(
+                        (*offset as u64).wrapping_add(num_words) as i64,
+                        bce,
+                        rs,
+                        T1_VAL,
+                    );
+                    bce.load_unaligned(rdval, addr, val_offset, dst_size);
+                }
+                (M::TwoValue, None, None) => {
+                    // @Incorrect. Deal with out-of-bounds reads.
+                    let (addr, offset) = InlineAddrOffset::new(i64::from(*offset), bce, rs, T1_VAL);
+                    let dst_size = InlineNBitSize::new(dst_size, bce);
+                    bce.load_heap_unaligned(rd, addr, offset, dst_size);
+                }
+                (M::FourValue, None, None) => {
+                    // @Incorrect. Deal with out-of-bounds reads.
+                    let (rdspc, rdval) = rd.to_spc_and_val();
+                    let dst_size = InlineNBitSize::new(dst_size, bce);
+
+                    let (addr, spc_offset) =
+                        InlineAddrOffset::new(i64::from(*offset), bce, rs, T1_VAL);
+                    bce.load_heap_unaligned(rdspc, addr, spc_offset, dst_size);
+
+                    let num_words = (src_size.get() as u64).next_multiple_of(64);
+                    let (addr, val_offset) = InlineAddrOffset::new(
+                        (*offset as u64).wrapping_add(num_words) as i64,
+                        bce,
+                        rs,
+                        T1_VAL,
+                    );
+                    bce.load_heap_unaligned(rdval, addr, val_offset, dst_size);
+                }
+                (M::TwoValue, None, Some(_)) => unreachable!(),
+                (M::FourValue, None, Some(_)) => unreachable!(),
+            }
+            store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd, T1_VAL);
+        }
         I::ShiftImm(variable_key, shift_imm_op, variable_key1, _) => todo!(),
         I::Select(dst, cond, truthy, falsy) => {
             let size = gl.vars.size(*dst);
-            // @Performance: Better lowering
-            match (cond.mode(), SixBitSize::from_vector_size(size)) {
-                (LogicMode::TwoValue, None) => todo!(),
-                (LogicMode::TwoValue, Some(size)) => todo!(),
-                (LogicMode::FourValue, None) => todo!(),
-                (LogicMode::FourValue, Some(size)) => todo!(),
+            let dslot = assignment[dst];
+            let rd = to_reg(bce, *dst, &gl.vars, dslot, stack_offsets, T0_SPC, true);
+            let mut src_reg = T2_SPC;
+            let mut rcond = to_reg(
+                bce,
+                *cond,
+                &gl.vars,
+                assignment[cond],
+                stack_offsets,
+                T1_SPC,
+                false,
+            );
+            match cond.mode() {
+                LogicMode::TwoValue => {}
+                LogicMode::FourValue => {
+                    bce.fv_ceqi(
+                        T2_SPC,
+                        rcond,
+                        SignedImmediate::MINUS_ONE,
+                        SixBitSize::SCALAR,
+                    );
+                    src_reg = T1_SPC;
+                    rcond = T2_SPC;
+                }
             }
+
+            // @Performance: Better lowering
+            let branch_offset = bce.data.len();
+            bce.panic();
+
+            let rfalsy = to_reg(
+                bce,
+                *falsy,
+                &gl.vars,
+                assignment[falsy],
+                stack_offsets,
+                src_reg,
+                false,
+            );
+            match (dst.mode(), SixBitSize::from_vector_size(size)) {
+                (LogicMode::TwoValue, Some(_)) => bce.copy(rd, rfalsy),
+                (LogicMode::FourValue, Some(_)) => bce.fv_copy(rd, rfalsy),
+                (LogicMode::TwoValue, None) => bce.heap_tv_copy(rd, rfalsy, size),
+                (LogicMode::FourValue, None) => bce.heap_fv_copy(rd, rfalsy, size),
+            }
+
+            let jump_offset = bce.data.len();
+            bce.panic();
+
+            let rtruthy = to_reg(
+                bce,
+                *falsy,
+                &gl.vars,
+                assignment[truthy],
+                stack_offsets,
+                src_reg,
+                false,
+            );
+            match (dst.mode(), SixBitSize::from_vector_size(size)) {
+                (LogicMode::TwoValue, Some(_)) => bce.copy(rd, rtruthy),
+                (LogicMode::FourValue, Some(_)) => bce.fv_copy(rd, rtruthy),
+                (LogicMode::TwoValue, None) => bce.heap_tv_copy(rd, rtruthy, size),
+                (LogicMode::FourValue, None) => bce.heap_fv_copy(rd, rtruthy, size),
+            }
+
+            let offset = bce.data.len() - branch_offset - 1;
+            let offset = SignedImmediate::new_from_u64(offset as u64).unwrap();
+            bce.data[branch_offset] = Branch { rcond, imm: offset }.encode();
+            let offset = bce.data.len() - jump_offset - 1;
+            let offset = SignedImmediate::new_from_u64(offset as u64).unwrap();
+            bce.data[jump_offset] = Jump(offset).encode();
+
+            store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd, T1_VAL);
         }
         I::Intrinsic(dst, op, items) => {
             let dslot = assignment[dst];
@@ -1280,7 +1496,14 @@ fn lower_instruction(
             bce.intrinsic(rd, intrinsic_id);
             store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd, T1_VAL);
         }
-        I::LastUpdateTime(variable_key, signal_key) => todo!(),
+        I::LastUpdateTime(dst, signal) => {
+            let dslot = assignment[dst];
+            let rd = to_reg(bce, *dst, &gl.vars, dslot, stack_offsets, T0_SPC, true);
+            let rt_key = io_signals[signal];
+            let idx = lupdt_indexes[&rt_key];
+            bce.last_update_time(rd, idx);
+            store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd, T1_VAL);
+        }
         I::Probe(dst, signal, offset) => {
             let dslot = assignment[dst];
             let rd = to_reg(bce, *dst, &gl.vars, dslot, stack_offsets, T0_SPC, true);

@@ -1,4 +1,6 @@
+use vogls_ir::LogicMode;
 use vogls_runtime::RuntimeState;
+use vogls_utils::NonMaxU32;
 
 use std::fmt;
 
@@ -6,6 +8,7 @@ use super::reg::{Reg, Regs};
 use super::{
     Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, BytecodeOpcode, ColdContext,
     EXEC_ITRACE_INDENT, InstructionPtr, Schedule, TimedEvent, write_padded_mnemonic,
+    write_register,
 };
 
 pub struct Wake {
@@ -21,6 +24,11 @@ pub struct Reschedule {
 
 pub struct StartListen {
     index: u32,
+}
+
+pub struct LastUpdateTime {
+    rd: Reg,
+    idx: Option<NonMaxU32>,
 }
 
 impl BytecodeInstruction for Wake {
@@ -187,6 +195,59 @@ impl BytecodeInstruction for StartListen {
     }
 }
 
+impl BytecodeInstruction for LastUpdateTime {
+    fn extract(v: Bytecode) -> Self {
+        debug_assert_eq!(v.opcode(), BytecodeOpcode::LastUpdateTime as u8);
+        let v = v.0;
+        Self {
+            rd: Reg::new_masked(v >> 8),
+            idx: NonMaxU32::new(v >> 12),
+        }
+    }
+
+    fn encode(&self) -> Bytecode {
+        Bytecode(
+            BytecodeOpcode::LastUpdateTime as u32
+                | ((self.rd as u32) << 8)
+                | (self.idx.map_or(0, |v| v.get()) << 12),
+        )
+    }
+
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self { rd, idx } = self;
+        write_padded_mnemonic(f, "lupdt")?;
+        write!(f, "{rd}, ")?;
+        match idx {
+            None => f.write_str("|...|"),
+            Some(v) => fmt::Display::fmt(v, f),
+        }
+    }
+
+    fn post_exec_itrace(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        regs: &Regs,
+        _state: &RuntimeState,
+    ) -> fmt::Result {
+        f.write_str(EXEC_ITRACE_INDENT)?;
+        write_register(f, regs, "rd", self.rd, LogicMode::TwoValue)?;
+        Ok(())
+    }
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let i = self.idx.map_or_else(|| regs[Reg::X12], |v| v.get() as u64);
+        regs[self.rd] = state.last_active_time[i as usize];
+    }
+}
+
 impl BytecodeEncoder {
     pub fn wake(&mut self, rcond: Reg, index: u32) {
         self.data.push(Wake { rcond, index }.encode());
@@ -227,5 +288,20 @@ impl BytecodeEncoder {
 
     pub fn start_listen(&mut self, index: u32) {
         self.data.push(StartListen { index }.encode());
+    }
+
+    pub fn last_update_time(&mut self, rd: Reg, index: u64) {
+        if index >= (1u64 << 20) {
+            self.load_u64(Reg::X12, index);
+            self.data.push(LastUpdateTime { rd, idx: None }.encode());
+        } else {
+            self.data.push(
+                LastUpdateTime {
+                    rd,
+                    idx: Some(NonMaxU32::new(index as u32).unwrap()),
+                }
+                .encode(),
+            );
+        }
     }
 }

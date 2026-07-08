@@ -32,6 +32,7 @@ pub struct TvUgti(pub IType);
 pub struct TvCeqi(pub IType);
 pub struct TvCnei(pub IType);
 pub struct TvSlli(pub IType);
+pub struct TvSlri(pub IType);
 
 pub struct FvAndi(pub IType);
 pub struct FvOri(pub IType);
@@ -46,6 +47,8 @@ pub struct FvUleqi(pub IType);
 pub struct FvUgti(pub IType);
 pub struct FvCeqi(pub IType);
 pub struct FvCnei(pub IType);
+pub struct FvSlli(pub IType);
+pub struct FvSlri(pub IType);
 
 impl IType {
     #[inline(always)]
@@ -411,7 +414,28 @@ impl BytecodeInstruction for TvSlli {
             imm10,
             size,
         } = self.0;
-        regs[rd] = size.mask(regs[rs].wrapping_shl(imm10.0 as u16 as u32));
+        regs[rd] = size.mask(regs[rs].unbounded_shl(imm10.get_unsigned()));
+    }
+}
+impl BytecodeInstruction for TvSlri {
+    impl_bitwise!(TvSlri, "tv.slri", TwoValue, TwoValue);
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let IType {
+            rd,
+            rs,
+            imm10,
+            size,
+        } = self.0;
+        regs[rd] = size.mask(regs[rs].unbounded_shr(imm10.get_unsigned()));
     }
 }
 impl BytecodeInstruction for FvAndi {
@@ -783,6 +807,54 @@ impl BytecodeInstruction for FvCnei {
         regs[rd] = u64::from((regs[rs_spc] != size.mask(u64::MAX)) | (regs[rs_val] != imm));
     }
 }
+impl BytecodeInstruction for FvSlli {
+    impl_bitwise!(FvSlli, "fv.slli", FourValue, FourValue);
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let IType {
+            rd,
+            rs,
+            imm10,
+            size,
+        } = self.0;
+        let (rdspc, rdval) = rd.to_spc_and_val();
+        let (rsspc, rsval) = rs.to_spc_and_val();
+        regs[rdspc] = size.mask(regs[rsspc].unbounded_shl(imm10.get_unsigned()));
+        regs[rdval] = size.mask(regs[rsval].unbounded_shl(imm10.get_unsigned()));
+    }
+}
+impl BytecodeInstruction for FvSlri {
+    impl_bitwise!(FvSlri, "fv.slri", FourValue, FourValue);
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let IType {
+            rd,
+            rs,
+            imm10,
+            size,
+        } = self.0;
+        let (rdspc, rdval) = rd.to_spc_and_val();
+        let (rsspc, rsval) = rs.to_spc_and_val();
+        regs[rdspc] = size.mask(regs[rsspc].unbounded_shr(imm10.get_unsigned()));
+        regs[rdval] = size.mask(regs[rsval].unbounded_shr(imm10.get_unsigned()));
+    }
+}
 
 macro_rules! impl_bytecode_methods {
     ($(($name:ident, $op:ident))*) => {
@@ -809,6 +881,7 @@ impl_bytecode_methods! {
     (ceqi, TvCeqi)
     (cnei, TvCnei)
     (slli, TvSlli)
+    (slri, TvSlri)
     (fv_andi, FvAndi)
     (fv_ori, FvOri)
     (fv_xori, FvXori)
@@ -822,4 +895,6 @@ impl_bytecode_methods! {
     (fv_ugti, TvUgti)
     (fv_ceqi, FvCeqi)
     (fv_cnei, FvCnei)
+    (fv_slli, FvSlli)
+    (fv_slri, FvSlri)
 }

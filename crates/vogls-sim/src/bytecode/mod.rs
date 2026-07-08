@@ -18,12 +18,9 @@ mod temporal;
 
 use reg::{Reg, Regs};
 use vogls_bits::BitsDataRef;
-use vogls_bits::extend::tv_l_zero_extend;
-use vogls_bits::format::{BitsFormatBase, BitsFormatWidth};
-use vogls_bits::truncate::tv_l_truncate;
 use vogls_codegen::{HeapOffset, HeapRef};
 
-use vogls_ir::{Bits, IntrinsicOp, LogicMode, VSIZE_32, VSIZE_64, VectorSize};
+use vogls_ir::{Bits, IntrinsicOp, LogicMode, VSIZE_64, VectorSize};
 use vogls_runtime::RuntimeState;
 use vogls_runtime::plugins::{RuntimePlugin, RuntimePluginState};
 use vogls_utils::IndexSet;
@@ -310,6 +307,7 @@ macro_rules! opcodes {
 
 opcodes![
     Interrupt,
+    CMov,
     TvAnd,
     TvOr,
     TvXor,
@@ -348,6 +346,7 @@ opcodes![
     TvCeqi,
     TvCnei,
     TvSlli,
+    TvSlri,
     FvAnd,
     FvOr,
     FvXor,
@@ -389,6 +388,8 @@ opcodes![
     FvUgti,
     FvCeqi,
     FvCnei,
+    FvSlli,
+    FvSlri,
     PushArgument,
     Intrinsic,
     SignExtend,
@@ -411,6 +412,7 @@ opcodes![
     Wake,
     Reschedule,
     StartListen,
+    LastUpdateTime,
     HeapHeapExtend,
     HeapRegExtend,
     HeapBinaryBitwise,
@@ -594,6 +596,10 @@ impl<const NBITS: usize> SignedImmediate<NBITS> {
             _ => None,
         }
     }
+
+    fn get_unsigned(&self) -> u32 {
+        self.0 as u32
+    }
 }
 
 impl<const NBITS: usize> fmt::Display for SignedImmediate<NBITS> {
@@ -612,59 +618,6 @@ impl BytecodeListeners {
 
     pub fn set_ptr(&mut self, index: usize, ptr: InstructionPtr) {
         self.map[index] = ptr;
-    }
-}
-
-pub struct PreBytecodeTrace<'a> {
-    value: Bytecode,
-    regs: &'a Regs,
-}
-pub struct PostBytecodeTrace<'a> {
-    value: Bytecode,
-    regs: &'a Regs,
-}
-
-pub trait Trace {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>, regs: &Regs) -> fmt::Result;
-}
-
-impl<T: fmt::Display> Trace for T {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>, _regs: &Regs) -> fmt::Result {
-        fmt::Display::fmt(self, f)
-    }
-}
-
-pub struct TraceReg(Reg, LogicMode, Option<VectorSize>);
-
-impl Trace for TraceReg {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>, regs: &Regs) -> fmt::Result {
-        let size = self.2.unwrap_or(VSIZE_64);
-        let bits = match self.1 {
-            LogicMode::TwoValue => Bits::from_u64(size, regs[self.0]),
-            LogicMode::FourValue if size <= VSIZE_32 => {
-                let (spc, val) = self.0.to_spc_and_val();
-                Bits::from_four_value_u64(size, regs[spc] as u32, regs[val] as u32)
-            }
-            LogicMode::FourValue => {
-                let (spc, val) = self.0.to_spc_and_val();
-                Bits::from_boxed_slice(
-                    LogicMode::FourValue.into(),
-                    size,
-                    [regs[spc], regs[val]].into(),
-                )
-            }
-        };
-        fmt::Display::fmt(
-            &bits.display(&vogls_bits::format::BitsFormatOptions {
-                prefix: true,
-                base: BitsFormatBase::Binary,
-                separator: Some('_'),
-                align: None,
-                fill: '0',
-                width: BitsFormatWidth::Shrink,
-            }),
-            f,
-        )
     }
 }
 
@@ -785,6 +738,15 @@ impl BytecodeEncoder {
             return;
         }
         self.ori(rd, rs, SignedImmediate::ZERO, SixBitSize::N64);
+    }
+    pub fn fv_copy(&mut self, rd: Reg, rs: Reg) {
+        if rd == rs {
+            return;
+        }
+        let (rdspc, rdval) = rd.to_spc_and_val();
+        let (rsspc, rsval) = rd.to_spc_and_val();
+        self.copy(rdspc, rsspc);
+        self.copy(rdval, rsval);
     }
     pub fn truncate(&mut self, rd: Reg, rs: Reg, size: SixBitSize) {
         self.andi(rd, rs, SignedImmediate::MINUS_ONE, size);
@@ -965,124 +927,6 @@ fn value_to_heap_ref(value: u64, size: VectorSize, mode: LogicMode) -> HeapRef {
     );
     let bit_offset = value as usize;
     HeapOffset { bit_offset }.to_ref(size)
-}
-
-#[derive(Clone, Copy)]
-struct HeapUnaryUImm(u16);
-
-enum HeapUnaryOp {
-    TvTruncate,
-    FvTruncate,
-
-    TvZeroExtend,
-    FvZeroExtend,
-
-    TvSignExtend,
-    FvSignExtend,
-}
-
-impl HeapUnaryUImm {
-    pub fn extract_subopcode(self) -> HeapUnaryOp {
-        match self.0 >> 13 {
-            0b000 | 0b001 => todo!(),
-            0b010 => HeapUnaryOp::TvTruncate,
-            0b011 => HeapUnaryOp::FvTruncate,
-            0b100 => HeapUnaryOp::TvZeroExtend,
-            0b101 => HeapUnaryOp::FvZeroExtend,
-            0b110 => HeapUnaryOp::TvSignExtend,
-            _ => HeapUnaryOp::FvSignExtend,
-        }
-    }
-
-    pub fn extract_sizes(self, regs: &Regs) -> (VectorSize, VectorSize) {
-        let small = VectorSize::new(((self.0 >> 7) & 0x3F) as u32)
-            .unwrap_or_else(|| VectorSize::new(regs[Reg::X12] as u32).unwrap());
-        let large = VectorSize::new((self.0 & 0x7F) as u32)
-            .unwrap_or_else(|| VectorSize::new(regs[Reg::X13] as u32).unwrap());
-        (large, small)
-    }
-}
-
-#[inline(always)]
-fn execute_heap_unary(state: &mut RuntimeState, regs: &mut Regs, rd: Reg, rs: Reg, imm: u16) {
-    let imm = HeapUnaryUImm(imm);
-    match imm.extract_subopcode() {
-        HeapUnaryOp::TvTruncate => {
-            let (src_size, dst_size) = imm.extract_sizes(regs);
-            let src_num_words = src_size.get().div_ceil(64) as usize;
-            let src = state.heap.get_u64_slice(
-                HeapOffset {
-                    bit_offset: regs[rs] as usize,
-                },
-                src_num_words,
-            );
-            match SixBitSize::from_vector_size(dst_size) {
-                None => {
-                    let dst_num_words = dst_size.get().div_ceil(64) as usize;
-                    // @Performance: Find a way not to have to allocate and copy here.
-                    // The problem is that we want to be able to define compute kernels once,
-                    // but the kernels for Bits are fundamentally different than these as it is
-                    // exclusive vs. shared reference.
-                    let mut dst_buffer = vec![0u64; dst_num_words];
-                    tv_l_truncate(&mut dst_buffer, src, dst_size, src_size);
-                    state
-                        .heap
-                        .get_mut_u64_slice(
-                            HeapOffset {
-                                bit_offset: regs[rd] as usize,
-                            },
-                            dst_num_words,
-                        )
-                        .copy_from_slice(&dst_buffer);
-                }
-                Some(dst_size) => regs[rd] = dst_size.mask(src[0]),
-            }
-        }
-        HeapUnaryOp::FvTruncate => todo!(),
-        HeapUnaryOp::TvZeroExtend => {
-            let (dst_size, src_size) = imm.extract_sizes(regs);
-            let dst_num_words = dst_size.get().div_ceil(64) as usize;
-            match SixBitSize::from_vector_size(src_size) {
-                None => {
-                    let src_num_words = src_size.get().div_ceil(64) as usize;
-                    let src = state.heap.get_u64_slice(
-                        HeapOffset {
-                            bit_offset: regs[rs] as usize,
-                        },
-                        src_num_words,
-                    );
-                    // @Performance: Find a way not to have to allocate and copy here.
-                    // The problem is that we want to be able to define compute kernels once,
-                    // but the kernels for Bits are fundamentally different than these as it is
-                    // exclusive vs. shared reference.
-                    let mut dst_buffer = vec![0u64; dst_num_words];
-                    tv_l_zero_extend(&mut dst_buffer, src, dst_size, src_size);
-                    state
-                        .heap
-                        .get_mut_u64_slice(
-                            HeapOffset {
-                                bit_offset: regs[rd] as usize,
-                            },
-                            dst_num_words,
-                        )
-                        .copy_from_slice(&dst_buffer);
-                }
-                Some(_) => {
-                    let dst = state.heap.get_mut_u64_slice(
-                        HeapOffset {
-                            bit_offset: regs[rd] as usize,
-                        },
-                        dst_num_words,
-                    );
-                    dst[0] = regs[rs];
-                    dst[1..].fill(0u64);
-                }
-            }
-        }
-        HeapUnaryOp::FvZeroExtend => todo!(),
-        HeapUnaryOp::TvSignExtend => todo!(),
-        HeapUnaryOp::FvSignExtend => todo!(),
-    }
 }
 
 const MNEMONIC_ALIGN: usize = 22;

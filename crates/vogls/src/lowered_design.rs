@@ -233,6 +233,7 @@ impl LoweredDesign {
                     &mut listeners,
                     &signal_to_heap,
                     &rt_signal_map,
+                    &lupdt_indexes,
                     &mut bytecode,
                 );
             }
