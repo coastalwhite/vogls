@@ -1581,29 +1581,71 @@ fn lower_instruction(
             let signal_size = gl.signals[*signal].size;
             assert!(dst_size <= signal_size);
 
-            if *offset != 0 {
-                todo!()
-            }
-
-            if dst_size != signal_size {
-                todo!()
-            }
-
-            // @Performance. Alias for large probes without an offset.
             let roff = T1_SPC;
             load_signal_address(bce, roff, *signal, signals, io_signals);
-            match (dst.mode(), SixBitSize::from_vector_size(signal_size)) {
-                (LogicMode::TwoValue, None) => {
-                    bce.load_heap_aligned(rd, roff, signal_size.get().div_ceil(64) as u16)
+
+            if *offset != 0 || dst_size != signal_size {
+                match (dst.mode(), SixBitSize::from_vector_size(dst_size)) {
+                    (LogicMode::TwoValue, None) => {
+                        let (addr, offset) =
+                            InlineAddrOffset::new(i64::from(*offset), bce, T1_SPC, T1_VAL);
+                        let size = InlineNBitSize::new(dst_size, bce);
+                        bce.load_heap_unaligned(rd, addr, offset, size);
+                    }
+                    (LogicMode::TwoValue, Some(size)) => {
+                        let (addr, offset) =
+                            InlineAddrOffset::new(i64::from(*offset), bce, T1_SPC, T1_VAL);
+                        bce.load_unaligned(rd, addr, offset, size);
+                    }
+                    (LogicMode::FourValue, None) => {
+                        let size = InlineNBitSize::new(dst_size, bce);
+                        let (addr, spc_offset) =
+                            InlineAddrOffset::new(i64::from(*offset), bce, T1_SPC, T1_VAL);
+                        bce.load_heap_unaligned(rd, addr, spc_offset, size);
+                        let (addr, val_offset) = InlineAddrOffset::new(
+                            i64::from(*offset) + i64::from(signal_size.get().next_multiple_of(64)),
+                            bce,
+                            T1_SPC,
+                            T1_VAL,
+                        );
+                        let rd_val_offset = dst_size.get().next_multiple_of(64).into();
+                        match SignedImmediate::new(rd_val_offset) {
+                            None => {
+                                bce.load_u64(T2_VAL, rd_val_offset as u64);
+                                bce.add(T2_VAL, rd, T2_VAL, SixBitSize::N64);
+                            }
+                            Some(imm) => bce.addi(T2_VAL, rd, imm, SixBitSize::N64),
+                        }
+                        bce.load_heap_unaligned(T2_VAL, addr, val_offset, size);
+                    }
+                    (LogicMode::FourValue, Some(size)) => {
+                        let (rdspc, rdval) = rd.to_spc_and_val();
+                        let (addr, spc_offset) =
+                            InlineAddrOffset::new(i64::from(*offset), bce, T1_SPC, T1_VAL);
+                        bce.load_unaligned(rdspc, addr, spc_offset, size);
+                        let (addr, val_offset) = InlineAddrOffset::new(
+                            i64::from(*offset) + i64::from(signal_size.get().next_multiple_of(64)),
+                            bce,
+                            T1_SPC,
+                            T1_VAL,
+                        );
+                        bce.load_unaligned(rdval, addr, val_offset, size);
+                    }
                 }
-                (LogicMode::TwoValue, Some(signal_size)) => {
-                    bce.tv_load_aligned(rd, roff, InlineAddrOffset::ZERO, signal_size)
-                }
-                (LogicMode::FourValue, None) => {
-                    bce.load_heap_aligned(rd, roff, signal_size.get().div_ceil(64) as u16 * 2)
-                }
-                (LogicMode::FourValue, Some(signal_size)) => {
-                    bce.fv_load_aligned(rd, roff, InlineAddrOffset::ZERO, signal_size)
+            } else {
+                match (dst.mode(), SixBitSize::from_vector_size(signal_size)) {
+                    (LogicMode::TwoValue, None) => {
+                        bce.load_heap_aligned(rd, roff, signal_size.get().div_ceil(64) as u16)
+                    }
+                    (LogicMode::TwoValue, Some(signal_size)) => {
+                        bce.tv_load_aligned(rd, roff, InlineAddrOffset::ZERO, signal_size)
+                    }
+                    (LogicMode::FourValue, None) => {
+                        bce.load_heap_aligned(rd, roff, signal_size.get().div_ceil(64) as u16 * 2)
+                    }
+                    (LogicMode::FourValue, Some(signal_size)) => {
+                        bce.fv_load_aligned(rd, roff, InlineAddrOffset::ZERO, signal_size)
+                    }
                 }
             }
 
