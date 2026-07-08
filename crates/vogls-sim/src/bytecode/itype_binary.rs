@@ -1,7 +1,8 @@
 use std::fmt;
 
 use vogls_bits::arithmetic::{fv_bitwise_and_elem, fv_bitwise_or_elem, fv_bitwise_xor_elem};
-use vogls_ir::LogicMode;
+use vogls_bits::shift::fv_shift_arith_right;
+use vogls_ir::{LogicMode, VectorSize};
 use vogls_runtime::RuntimeState;
 
 use super::reg::{Reg, Regs};
@@ -33,6 +34,7 @@ pub struct TvCeqi(pub IType);
 pub struct TvCnei(pub IType);
 pub struct TvSlli(pub IType);
 pub struct TvSlri(pub IType);
+pub struct TvSari(pub IType);
 
 pub struct FvAndi(pub IType);
 pub struct FvOri(pub IType);
@@ -49,6 +51,7 @@ pub struct FvCeqi(pub IType);
 pub struct FvCnei(pub IType);
 pub struct FvSlli(pub IType);
 pub struct FvSlri(pub IType);
+pub struct FvSari(pub IType);
 
 impl IType {
     #[inline(always)]
@@ -436,6 +439,31 @@ impl BytecodeInstruction for TvSlri {
             size,
         } = self.0;
         regs[rd] = size.mask(regs[rs].unbounded_shr(imm10.get_unsigned()));
+    }
+}
+impl BytecodeInstruction for TvSari {
+    impl_bitwise!(TvSari, "tv.sari", TwoValue, TwoValue);
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let IType {
+            rd,
+            rs,
+            imm10,
+            size,
+        } = self.0;
+        let unused_bits = 64 - VectorSize::from(size).get();
+        let out = regs[rs] << unused_bits;
+        let out = out as i64;
+        let out = out.unbounded_shr(unused_bits + imm10.get_unsigned());
+        regs[rd] = out as u64;
     }
 }
 impl BytecodeInstruction for FvAndi {
@@ -855,6 +883,30 @@ impl BytecodeInstruction for FvSlri {
         regs[rdval] = size.mask(regs[rsval].unbounded_shr(imm10.get_unsigned()));
     }
 }
+impl BytecodeInstruction for FvSari {
+    impl_bitwise!(FvSari, "fv.sari", FourValue, FourValue);
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let IType {
+            rd,
+            rs,
+            imm10,
+            size,
+        } = self.0;
+        let (rdspc, rdval) = rd.to_spc_and_val();
+        let (rsspc, rsval) = rs.to_spc_and_val();
+        (regs[rdspc], regs[rdval]) =
+            fv_shift_arith_right(regs[rsspc], regs[rsval], imm10.get_unsigned(), size.into());
+    }
+}
 
 macro_rules! impl_bytecode_methods {
     ($(($name:ident, $op:ident))*) => {
@@ -882,6 +934,7 @@ impl_bytecode_methods! {
     (cnei, TvCnei)
     (slli, TvSlli)
     (slri, TvSlri)
+    (sari, TvSari)
     (fv_andi, FvAndi)
     (fv_ori, FvOri)
     (fv_xori, FvXori)
@@ -897,4 +950,5 @@ impl_bytecode_methods! {
     (fv_cnei, FvCnei)
     (fv_slli, FvSlli)
     (fv_slri, FvSlri)
+    (fv_sari, FvSari)
 }

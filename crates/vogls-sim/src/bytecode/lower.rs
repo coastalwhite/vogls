@@ -3,8 +3,8 @@ use vogls_codegen::{HeapBuilder, HeapOffset, HeapRef, insert_bb_phis, resolve_va
 use vogls_ir::watchers::WatchMap;
 use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, ContextFormat, DisplayContext,
-    GlobalContext, Instruction, LogicMode, ProcessKey, ResizeOp, SignalKey, UnaryOp, VSIZE_64,
-    VariableKey, VariableMap, VectorSize,
+    GlobalContext, Instruction, LogicMode, ProcessKey, ResizeOp, ShiftImmOp, SignalKey, UnaryOp,
+    VSIZE_64, VariableKey, VariableMap, VectorSize,
 };
 use vogls_runtime::RtSignalKey;
 use vogls_utils::{NonMaxU16, VgHashMap, VgHashSet};
@@ -1390,7 +1390,76 @@ fn lower_instruction(
             }
             store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd, T1_VAL);
         }
-        I::ShiftImm(variable_key, shift_imm_op, variable_key1, _) => todo!(),
+        I::ShiftImm(dst, op, src, imm) => {
+            let size = gl.vars.size(*dst);
+            let dslot = assignment[dst];
+            let rd = to_reg(bce, *dst, &gl.vars, dslot, stack_offsets, T0_SPC, true);
+            let rs = to_reg(
+                bce,
+                *src,
+                &gl.vars,
+                assignment[src],
+                stack_offsets,
+                T1_SPC,
+                false,
+            );
+
+            use LogicMode as M;
+            use ShiftImmOp as O;
+            // @Incorrect: Deal with overflowing shifts
+            match (op, SixBitSize::from_vector_size(size), src.mode()) {
+                (O::LogicalShiftLeft, Some(size), M::TwoValue) => {
+                    let imm = SignedImmediate::new_from_u64(*imm as u64).unwrap();
+                    bce.slli(rd, rs, imm, size);
+                }
+                (O::LogicalShiftLeft, Some(size), M::FourValue) => {
+                    let imm = SignedImmediate::new_from_u64(*imm as u64).unwrap();
+                    bce.fv_slli(rd, rs, imm, size);
+                }
+                (O::LogicalShiftLeft, None, M::TwoValue) => {
+                    bce.load_u64(T2_SPC, *imm as u64);
+                    bce.heap_tv_sll(rd, rs, T2_SPC, size);
+                },
+                (O::LogicalShiftLeft, None, M::FourValue) => {
+                    bce.load_u64(T2_SPC, *imm as u64);
+                    bce.heap_fv_sll(rd, rs, T2_SPC, size);
+                },
+
+                (O::LogicalShiftRight, Some(size), M::TwoValue) => {
+                    let imm = SignedImmediate::new_from_u64(*imm as u64).unwrap();
+                    bce.slri(rd, rs, imm, size);
+                }
+                (O::LogicalShiftRight, Some(size), M::FourValue) => {
+                    let imm = SignedImmediate::new_from_u64(*imm as u64).unwrap();
+                    bce.fv_slri(rd, rs, imm, size);
+                }
+                (O::LogicalShiftRight, None, M::TwoValue) => {
+                    bce.load_u64(T2_SPC, *imm as u64);
+                    bce.heap_tv_slr(rd, rs, T2_SPC, size);
+                },
+                (O::LogicalShiftRight, None, M::FourValue) => {
+                    bce.load_u64(T2_SPC, *imm as u64);
+                    bce.heap_fv_slr(rd, rs, T2_SPC, size);
+                },
+
+                (O::ArithmeticShiftRight, Some(size), M::TwoValue) => {
+                    let imm = SignedImmediate::new_from_u64(*imm as u64).unwrap();
+                    bce.sari(rd, rs, imm, size);
+                },
+                (O::ArithmeticShiftRight, Some(size), M::FourValue) => {
+                    let imm = SignedImmediate::new_from_u64(*imm as u64).unwrap();
+                    bce.fv_sari(rd, rs, imm, size);
+                },
+                (O::ArithmeticShiftRight, None, M::TwoValue) => {
+                    bce.load_u64(T2_SPC, *imm as u64);
+                    bce.heap_tv_sar(rd, rs, T2_SPC, size);
+                },
+                (O::ArithmeticShiftRight, None, M::FourValue) => {
+                    bce.load_u64(T2_SPC, *imm as u64);
+                    bce.heap_fv_sar(rd, rs, T2_SPC, size);
+                },
+            }
+        }
         I::Select(dst, cond, truthy, falsy) => {
             let size = gl.vars.size(*dst);
             let dslot = assignment[dst];
