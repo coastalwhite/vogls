@@ -23,7 +23,7 @@ use vogls_codegen::{HeapOffset, HeapRef};
 use vogls_ir::{Bits, IntrinsicOp, LogicMode, VSIZE_64, VectorSize};
 use vogls_runtime::RuntimeState;
 use vogls_runtime::plugins::{RuntimePlugin, RuntimePluginState};
-use vogls_utils::IndexSet;
+use vogls_utils::{IndexSet, NonMaxU32};
 
 pub use control_flow::*;
 pub use extend::*;
@@ -415,6 +415,8 @@ opcodes![
     Reschedule,
     StartListen,
     LastUpdateTime,
+    SetLupdt,
+    TvCorrectFirst,
     HeapHeapExtend,
     HeapRegExtend,
     HeapBinaryBitwise,
@@ -564,11 +566,11 @@ impl<const NBITS: usize> SignedImmediate<NBITS> {
 
     #[inline(always)]
     pub fn new_shifted(v: u32, offset: u32) -> Self {
-        Self(((v as i32) >> offset) as i32)
+        Self((v as i32) >> offset)
     }
 
     pub fn encode(self) -> u32 {
-        i32::from(self.0) as u32 & 1u32.unbounded_shl(NBITS as u32).wrapping_sub(1)
+        (self.0 as u32) & 1u32.unbounded_shl(NBITS as u32).wrapping_sub(1)
     }
 
     pub fn new(value: i64) -> Option<Self> {
@@ -601,6 +603,46 @@ impl<const NBITS: usize> SignedImmediate<NBITS> {
 
     fn get_unsigned(&self) -> u32 {
         self.0 as u32
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct InlineIndex<const NBITS: usize>(Option<NonMaxU32>);
+
+impl<const NBITS: usize> InlineIndex<NBITS> {
+    #[inline(always)]
+    pub fn new_shifted(v: u32, offset: u32) -> Self {
+        Self(NonMaxU32::new(v >> offset))
+    }
+
+    pub fn encode(self) -> u32 {
+        self.0
+            .map_or(1u32.unbounded_shl(NBITS as u32).wrapping_sub(1), |v| {
+                v.get()
+            })
+    }
+
+    pub fn new(value: u64, bce: &mut BytecodeEncoder, reg: Reg) -> Self {
+        const { assert!(NBITS >= 1 && NBITS <= 32) };
+        if value < ((1 << NBITS) - 1) {
+            Self(Some(NonMaxU32::new(value as u32).unwrap()))
+        } else {
+            bce.load_u64(reg, value);
+            Self(None)
+        }
+    }
+
+    pub fn get(self, regs: &Regs, reg: Reg) -> u64 {
+        self.0.map_or_else(|| regs[reg], |v| v.get() as u64)
+    }
+}
+
+impl<const NBITS: usize> fmt::Display for InlineIndex<NBITS> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            None => f.write_str("|...|"),
+            Some(n) => fmt::Display::fmt(&n, f),
+        }
     }
 }
 

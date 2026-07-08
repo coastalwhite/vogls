@@ -7,13 +7,13 @@ use std::fmt;
 use super::reg::{Reg, Regs};
 use super::{
     Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, BytecodeOpcode, ColdContext,
-    EXEC_ITRACE_INDENT, InstructionPtr, Schedule, TimedEvent, write_padded_mnemonic,
+    EXEC_ITRACE_INDENT, InlineIndex, InstructionPtr, Schedule, TimedEvent, write_padded_mnemonic,
     write_register,
 };
 
 pub struct Wake {
     rcond: Reg,
-    index: u32,
+    index: InlineIndex<20>,
 }
 
 pub struct Reschedule {
@@ -28,7 +28,15 @@ pub struct StartListen {
 
 pub struct LastUpdateTime {
     rd: Reg,
-    idx: Option<NonMaxU32>,
+    idx: InlineIndex<20>,
+}
+pub struct SetLupdt {
+    rcond: Reg,
+    idx: InlineIndex<20>,
+}
+pub struct TvCorrectFirst {
+    rcond: Reg,
+    idx: InlineIndex<20>,
 }
 
 impl BytecodeInstruction for Wake {
@@ -37,7 +45,7 @@ impl BytecodeInstruction for Wake {
         let v = v.0;
         Self {
             rcond: Reg::new_masked(v >> 8),
-            index: v >> 12,
+            index: InlineIndex::new_shifted(v, 12),
         }
     }
 
@@ -52,7 +60,7 @@ impl BytecodeInstruction for Wake {
 
     fn encode(&self) -> Bytecode {
         Bytecode(
-            BytecodeOpcode::Wake as u32 | ((self.rcond as u32) << 8) | ((self.index as u32) << 12),
+            BytecodeOpcode::Wake as u32 | ((self.rcond as u32) << 8) | (self.index.encode() << 12),
         )
     }
 
@@ -73,7 +81,7 @@ impl BytecodeInstruction for Wake {
     ) {
         let Self { rcond, index } = self;
         if regs[rcond] != 0 {
-            let i = index as usize;
+            let i = index.get(regs, Reg::X15) as usize;
             let bit = 1u64 << (i % 64);
             let is_listening = (listeners.active[i / 64] & bit) != 0;
             if is_listening {
@@ -201,7 +209,7 @@ impl BytecodeInstruction for LastUpdateTime {
         let v = v.0;
         Self {
             rd: Reg::new_masked(v >> 8),
-            idx: NonMaxU32::new(v >> 12),
+            idx: InlineIndex::new_shifted(v, 12),
         }
     }
 
@@ -209,18 +217,14 @@ impl BytecodeInstruction for LastUpdateTime {
         Bytecode(
             BytecodeOpcode::LastUpdateTime as u32
                 | ((self.rd as u32) << 8)
-                | (self.idx.map_or(0, |v| v.get()) << 12),
+                | (self.idx.encode() << 12),
         )
     }
 
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let Self { rd, idx } = self;
         write_padded_mnemonic(f, "lupdt")?;
-        write!(f, "{rd}, ")?;
-        match idx {
-            None => f.write_str("|...|"),
-            Some(v) => fmt::Display::fmt(v, f),
-        }
+        write!(f, "{rd}, {idx}")
     }
 
     fn post_exec_itrace(
@@ -243,13 +247,118 @@ impl BytecodeInstruction for LastUpdateTime {
         _listeners: &mut BytecodeListeners,
         _cldctx: &mut ColdContext,
     ) {
-        let i = self.idx.map_or_else(|| regs[Reg::X12], |v| v.get() as u64);
+        let i = self.idx.get(regs, Reg::X15);
         regs[self.rd] = state.last_active_time[i as usize];
     }
 }
 
+impl BytecodeInstruction for SetLupdt {
+    fn extract(v: Bytecode) -> Self {
+        debug_assert_eq!(v.opcode(), BytecodeOpcode::SetLupdt as u8);
+        let v = v.0;
+        Self {
+            rcond: Reg::new_masked(v >> 8),
+            idx: InlineIndex::new_shifted(v, 12),
+        }
+    }
+
+    fn encode(&self) -> Bytecode {
+        Bytecode(
+            BytecodeOpcode::SetLupdt as u32
+                | ((self.rcond as u32) << 8)
+                | (self.idx.encode() << 12),
+        )
+    }
+
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self { rcond, idx } = self;
+        write_padded_mnemonic(f, "set_lupdt")?;
+        write!(f, "{rcond}, {idx}")
+    }
+
+    fn pre_exec_itrace(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        regs: &Regs,
+        _state: &RuntimeState,
+    ) -> fmt::Result {
+        f.write_str(EXEC_ITRACE_INDENT)?;
+        write_register(f, regs, "rcond", self.rcond, LogicMode::TwoValue)?;
+        Ok(())
+    }
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let i = self.idx.get(regs, Reg::X15);
+        let i = &mut state.last_active_time[i as usize];
+        if regs[self.rcond] != 0 {
+            *i = state.time;
+        }
+    }
+}
+
+impl BytecodeInstruction for TvCorrectFirst {
+    fn extract(v: Bytecode) -> Self {
+        debug_assert_eq!(v.opcode(), BytecodeOpcode::TvCorrectFirst as u8);
+        let v = v.0;
+        Self {
+            rcond: Reg::new_masked(v >> 8),
+            idx: InlineIndex::new_shifted(v, 12),
+        }
+    }
+
+    fn encode(&self) -> Bytecode {
+        Bytecode(
+            BytecodeOpcode::TvCorrectFirst as u32
+                | ((self.rcond as u32) << 8)
+                | (self.idx.encode() << 12),
+        )
+    }
+
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self { rcond, idx } = self;
+        write_padded_mnemonic(f, "tv.correct_first")?;
+        write!(f, "{rcond}, {idx}")
+    }
+
+    fn pre_exec_itrace(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        regs: &Regs,
+        _state: &RuntimeState,
+    ) -> fmt::Result {
+        f.write_str(EXEC_ITRACE_INDENT)?;
+        write_register(f, regs, "rcond", self.rcond, LogicMode::TwoValue)?;
+        Ok(())
+    }
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let i = self.idx.get(regs, Reg::X15);
+        let word = (i / 64) as usize;
+        let boff = (i % 64) as usize;
+        let i = &mut state.tvl_first_write[word];
+        regs[self.rcond] |= (*i >> boff) & 1;
+        *i |= 1u64 << boff;
+    }
+}
+
 impl BytecodeEncoder {
-    pub fn wake(&mut self, rcond: Reg, index: u32) {
+    pub fn wake(&mut self, rcond: Reg, index: InlineIndex<20>) {
         self.data.push(Wake { rcond, index }.encode());
     }
 
@@ -290,18 +399,15 @@ impl BytecodeEncoder {
         self.data.push(StartListen { index }.encode());
     }
 
-    pub fn last_update_time(&mut self, rd: Reg, index: u64) {
-        if index >= (1u64 << 20) {
-            self.load_u64(Reg::X12, index);
-            self.data.push(LastUpdateTime { rd, idx: None }.encode());
-        } else {
-            self.data.push(
-                LastUpdateTime {
-                    rd,
-                    idx: Some(NonMaxU32::new(index as u32).unwrap()),
-                }
-                .encode(),
-            );
-        }
+    pub fn set_lupdt(&mut self, rcond: Reg, idx: InlineIndex<20>) {
+        self.data.push(SetLupdt { rcond, idx }.encode());
+    }
+
+    pub fn tv_correct_first(&mut self, rcond: Reg, idx: InlineIndex<20>) {
+        self.data.push(TvCorrectFirst { rcond, idx }.encode());
+    }
+
+    pub fn last_update_time(&mut self, rd: Reg, idx: InlineIndex<20>) {
+        self.data.push(LastUpdateTime { rd, idx }.encode());
     }
 }

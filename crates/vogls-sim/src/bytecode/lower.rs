@@ -10,7 +10,7 @@ use vogls_runtime::RtSignalKey;
 use vogls_utils::{NonMaxU16, VgHashMap, VgHashSet};
 
 use crate::bytecode::{
-    Branch, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, InlineAddrOffset,
+    Branch, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, InlineAddrOffset, InlineIndex,
     InlineNBitSize, InstructionPtr, IntrinsicOpEqWrap, Jump, Reg, Schedule, SignedImmediate,
     SixBitSize,
 };
@@ -1419,11 +1419,11 @@ fn lower_instruction(
                 (O::LogicalShiftLeft, None, M::TwoValue) => {
                     bce.load_u64(T2_SPC, *imm as u64);
                     bce.heap_tv_sll(rd, rs, T2_SPC, size);
-                },
+                }
                 (O::LogicalShiftLeft, None, M::FourValue) => {
                     bce.load_u64(T2_SPC, *imm as u64);
                     bce.heap_fv_sll(rd, rs, T2_SPC, size);
-                },
+                }
 
                 (O::LogicalShiftRight, Some(size), M::TwoValue) => {
                     let imm = SignedImmediate::new_from_u64(*imm as u64).unwrap();
@@ -1436,28 +1436,28 @@ fn lower_instruction(
                 (O::LogicalShiftRight, None, M::TwoValue) => {
                     bce.load_u64(T2_SPC, *imm as u64);
                     bce.heap_tv_slr(rd, rs, T2_SPC, size);
-                },
+                }
                 (O::LogicalShiftRight, None, M::FourValue) => {
                     bce.load_u64(T2_SPC, *imm as u64);
                     bce.heap_fv_slr(rd, rs, T2_SPC, size);
-                },
+                }
 
                 (O::ArithmeticShiftRight, Some(size), M::TwoValue) => {
                     let imm = SignedImmediate::new_from_u64(*imm as u64).unwrap();
                     bce.sari(rd, rs, imm, size);
-                },
+                }
                 (O::ArithmeticShiftRight, Some(size), M::FourValue) => {
                     let imm = SignedImmediate::new_from_u64(*imm as u64).unwrap();
                     bce.fv_sari(rd, rs, imm, size);
-                },
+                }
                 (O::ArithmeticShiftRight, None, M::TwoValue) => {
                     bce.load_u64(T2_SPC, *imm as u64);
                     bce.heap_tv_sar(rd, rs, T2_SPC, size);
-                },
+                }
                 (O::ArithmeticShiftRight, None, M::FourValue) => {
                     bce.load_u64(T2_SPC, *imm as u64);
                     bce.heap_fv_sar(rd, rs, T2_SPC, size);
-                },
+                }
             }
         }
         I::Select(dst, cond, truthy, falsy) => {
@@ -1569,7 +1569,7 @@ fn lower_instruction(
             let dslot = assignment[dst];
             let rd = to_reg(bce, *dst, &gl.vars, dslot, stack_offsets, T0_SPC, true);
             let rt_key = io_signals[signal];
-            let idx = lupdt_indexes[&rt_key];
+            let idx = InlineIndex::new(lupdt_indexes[&rt_key], bce, T2_VAL);
             bce.last_update_time(rd, idx);
             store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd, T1_VAL);
         }
@@ -1621,6 +1621,7 @@ fn lower_instruction(
                 false,
             );
 
+            let rt_signal = io_signals[signal];
             let signal_size = gl.signals[*signal].size;
             let src_size = gl.vars.size(*src);
 
@@ -1652,10 +1653,17 @@ fn lower_instruction(
                 }
             }
 
+            if gl.signals[*signal].mode == LogicMode::TwoValue {
+                let index = InlineIndex::new(rt_signal.as_u64(), bce, T2_VAL);
+                bce.tv_correct_first(rpoke, index);
+            }
+            if let Some(lupdt_index) = lupdt_indexes.get(&io_signals[signal]) {
+                let index = InlineIndex::new(*lupdt_index, bce, T2_VAL);
+                bce.set_lupdt(rpoke, index);
+            }
             for index in watch_map.watch_indices(*signal) {
-                // @TODO: This should have some register based fallback.
-                assert!(index < (1 << 20));
-                bce.wake(rpoke, index as u32);
+                let index = InlineIndex::new(index as u64, bce, T2_VAL);
+                bce.wake(rpoke, index);
             }
         }
         I::Phi(variable_key, items) => todo!(),

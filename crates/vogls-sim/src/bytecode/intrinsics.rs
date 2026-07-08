@@ -5,7 +5,9 @@ use vogls_ir::{Bits, IntrinsicOp, LogicMode, Mode, SCALAR_VSIZE, VSIZE_32, VSIZE
 use vogls_runtime::RuntimeState;
 use vogls_utils::NonMaxU16;
 
-use crate::bytecode::{value_to_heap_ref, write_padded_mnemonic, BytecodeOpcode, EXEC_ITRACE_INDENT, MNEMONIC_ALIGN};
+use crate::bytecode::{
+    BytecodeOpcode, EXEC_ITRACE_INDENT, MNEMONIC_ALIGN, value_to_heap_ref, write_padded_mnemonic,
+};
 
 use super::reg::{Reg, Regs};
 use super::{
@@ -124,9 +126,49 @@ impl BytecodeInstruction for Intrinsic {
         let intrinsic = &cldctx.intrinsics[id as usize];
         match intrinsic {
             IntrinsicOp::Time => regs[rd] = state.time,
-            IntrinsicOp::Finish => todo!(),
+            IntrinsicOp::Finish => {
+                cldctx.return_value = 0;
+                *pc = u64::MAX;
+            }
             IntrinsicOp::Random => todo!(),
-            IntrinsicOp::Display(_) => todo!(),
+            IntrinsicOp::Display(f) => {
+                let mut stack_offset = 0;
+                f.write_to(
+                    &mut cldctx.stderr,
+                    cldctx.stack_args.iter().map(|&(size, mode)| match mode {
+                        LogicMode::TwoValue if size <= VSIZE_64 => {
+                            let value = cldctx.stack[stack_offset];
+                            stack_offset += 1;
+                            Bits::from_u64(size, value)
+                        }
+                        LogicMode::TwoValue => {
+                            let value = cldctx.stack[stack_offset];
+                            let value = value_to_heap_ref(value, size, mode);
+                            stack_offset += 1;
+                            state.heap.load_tv_bits(value)
+                        }
+                        LogicMode::FourValue if size <= VSIZE_32 => {
+                            let spc = cldctx.stack[stack_offset];
+                            let val = cldctx.stack[stack_offset + 1];
+                            stack_offset += 2;
+                            Bits::from_four_value_u64(size, spc as u32, val as u32)
+                        }
+                        LogicMode::FourValue if size <= VSIZE_64 => {
+                            let spc = cldctx.stack[stack_offset];
+                            let val = cldctx.stack[stack_offset + 1];
+                            stack_offset += 2;
+                            Bits::from_boxed_slice(Mode::FourValue, size, [spc, val].into())
+                        }
+                        LogicMode::FourValue => {
+                            let value = cldctx.stack[stack_offset];
+                            let value = value_to_heap_ref(value, size, mode);
+                            stack_offset += 1;
+                            state.heap.load_fv_bits(value)
+                        }
+                    }),
+                )
+                .unwrap();
+            }
             IntrinsicOp::Assert(f) => {
                 let mut stack_offset = 0usize;
                 let (cond_size, cond_mode) = cldctx.stack_args[0];

@@ -68,4 +68,11 @@ impl WatchMap {
         .iter()
         .map(|(_, i)| *i)
     }
+
+    pub fn num_watch_indices(&self, signal: SignalKey) -> usize {
+        match self.map.get(&signal) {
+            None => 0,
+            Some(range) => range.clone().len(),
+        }
+    }
 }
