@@ -1,5 +1,6 @@
 use std::cell::Cell;
 use std::fmt;
+use std::num::NonZeroU32;
 
 use vogls_bits::arithmetic::{FvLogicValue, fv_pack_u64, fv_set_no_special, fv_unpack_u64};
 use vogls_bits::load::load_partial_u64;

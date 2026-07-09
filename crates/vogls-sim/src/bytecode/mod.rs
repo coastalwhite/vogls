@@ -419,6 +419,7 @@ opcodes![
     TvCorrectFirst,
     HeapHeapExtend,
     HeapRegExtend,
+    HeapHeapTruncate,
     HeapBinaryBitwise,
     HeapBinaryArithmetic,
     HeapBinaryCmp,

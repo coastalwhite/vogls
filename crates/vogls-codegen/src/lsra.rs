@@ -10,7 +10,7 @@ use vogls_ir::{
 };
 use vogls_utils::{Bitset, IndexSet, VgHashMap};
 
-use crate::HeapBuilder;
+use crate::{HeapAlignment, HeapBuilder};
 
 #[derive(Default)]
 pub struct StackTracker {
@@ -96,40 +96,6 @@ impl StackTracker {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum StackItemKind {
-    B1,
-    B2,
-    B4,
-    B8,
-    B16,
-    B32,
-    B64,
-}
-impl StackItemKind {
-    fn from_size(size: VectorSize, mode: LogicMode) -> StackItemKind {
-        match mode {
-            LogicMode::TwoValue => match size.get() {
-                1 => Self::B1,
-                2 => Self::B2,
-                3..=4 => Self::B4,
-                5..=8 => Self::B8,
-                9..=16 => Self::B16,
-                17..=32 => Self::B32,
-                _ => Self::B64,
-            },
-            LogicMode::FourValue => match size.get() {
-                1 => Self::B2,
-                2 => Self::B4,
-                3..=4 => Self::B8,
-                5..=8 => Self::B16,
-                9..=16 => Self::B32,
-                _ => Self::B64,
-            },
-        }
-    }
-}
-
 #[derive(Clone, Copy)]
 struct Interval {
     start: u64,
@@ -179,7 +145,7 @@ impl Interval {
 #[derive(Clone, Copy, Debug)]
 pub enum Slot {
     Heap(u64),
-    Stack(StackItemKind, u32),
+    Stack(HeapAlignment, u32),
     Register(u32),
 }
 
@@ -377,7 +343,7 @@ pub fn linear_scan_register_allocation(
                         Slot::Stack(kind, offset) => {
                             let offset = offset as usize;
 
-                            use StackItemKind as K;
+                            use HeapAlignment as K;
                             match kind {
                                 K::B1 => stack_tracker.b1.set(offset, false),
                                 K::B2 => stack_tracker.b2.set(offset, false),
@@ -421,7 +387,7 @@ pub fn linear_scan_register_allocation(
             };
             bitset.set_slice_constant(offset, num_bitset_slots, true);
             let offset = offset.try_into().expect("Too large");
-            let slot = Slot::Stack(StackItemKind::from_size(interval.size, interval.mode), offset);
+            let slot = Slot::Stack(HeapAlignment::new(interval.size, interval.mode), offset);
             assignment.insert(*var, slot);
             continue;
         }
@@ -454,7 +420,7 @@ pub fn linear_scan_register_allocation(
                 };
                 bitset.set_slice_constant(offset as usize, num_bitset_slots, true);
                 let offset = offset.try_into().expect("Too large");
-                let slot = Slot::Stack(StackItemKind::from_size(spill_interval.size, spill_interval.mode), offset);
+                let slot = Slot::Stack(HeapAlignment::new(spill_interval.size, spill_interval.mode), offset);
                 let slot = assignment.insert(spill_var, slot).unwrap();
                 assignment.insert(*var, slot);
                 active.pop_back();
@@ -476,7 +442,7 @@ pub fn linear_scan_register_allocation(
                 };
                 bitset.set_slice_constant(offset as usize, num_bitset_slots, true);
                 let offset = offset.try_into().expect("Too large");
-                let slot = Slot::Stack(StackItemKind::from_size(interval.size, interval.mode), offset);
+                let slot = Slot::Stack(HeapAlignment::new(interval.size, interval.mode), offset);
                 assignment.insert(*var, slot);
             }
         }

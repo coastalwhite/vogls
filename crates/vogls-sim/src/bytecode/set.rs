@@ -1,13 +1,15 @@
 use std::fmt;
 
 use vogls_bits::set_subslice::tv_cell_set;
-use vogls_codegen::HeapOffset;
+use vogls_codegen::{HeapAlignment, HeapOffset};
 use vogls_ir::{LogicMode, VectorSize};
 use vogls_runtime::RuntimeState;
 
 use super::reg::{Reg, Regs};
 use super::{
-    write_register, Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, BytecodeOpcode, ColdContext, InlineAddrOffset, InlineNBitSize, Schedule, SixBitSize, EXEC_ITRACE_INDENT, MNEMONIC_ALIGN, write_padded_mnemonic
+    Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, BytecodeOpcode, ColdContext,
+    EXEC_ITRACE_INDENT, InlineAddrOffset, InlineNBitSize, MNEMONIC_ALIGN, Schedule, SixBitSize,
+    write_padded_mnemonic, write_register,
 };
 
 pub struct SetArgs {
@@ -178,6 +180,7 @@ impl BytecodeInstruction for TvSetAligned {
             imm6,
         }) = self;
         let offset = imm6.get(regs[roff]);
+        debug_assert!(HeapAlignment::new(size.into(), LogicMode::TwoValue).is_aligned(offset));
         let value = regs[rs];
         let mask = size.mask(u64::MAX);
         let word = (offset / 64) as usize;
@@ -231,17 +234,28 @@ impl BytecodeInstruction for FvSetAligned {
             size,
             imm6,
         }) = self;
-        // @Performance: We can likely make a better specialized implementation for this load.
-        let size = VectorSize::from(size);
-        let offset = imm6.get(regs[roff]);
-        let at = HeapOffset {
-            bit_offset: offset as usize,
-        };
-        let at = at.to_ref(size);
+        let spc_offset = imm6.get(regs[roff]);
+        debug_assert!(HeapAlignment::new(size.into(), LogicMode::FourValue).is_aligned(spc_offset));
+        let val_offset = HeapAlignment::spc_offset_to_val_offset(size.into(), spc_offset);
+
         let (spc, val) = rs.to_spc_and_val();
         let spc = regs[spc];
         let val = regs[val];
-        let (prev_spc, prev_val) = state.heap.set_fv_u64(at, spc, val);
+
+        let mask = size.mask(u64::MAX);
+
+        let spc_boff = spc_offset % 64;
+        let heap_spc_word = &mut state.heap.0[(spc_offset / 64) as usize];
+        let prev_spc = mask & (*heap_spc_word >> spc_boff);
+        *heap_spc_word &= !(mask << spc_boff);
+        *heap_spc_word |= spc << spc_boff;
+
+        let val_boff = val_offset % 64;
+        let heap_val_word = &mut state.heap.0[(val_offset / 64) as usize];
+        let prev_val = mask & (*heap_val_word >> val_boff);
+        *heap_val_word &= !(mask << val_boff);
+        *heap_val_word |= val << val_boff;
+
         let updated = (prev_spc != spc) | (prev_val != val);
         regs[rd] = u64::from(updated);
     }
@@ -357,6 +371,10 @@ impl BytecodeInstruction for TvSetHeapAligned {
         let size = size.get(regs);
         let roff_offset = imm4.get(regs[roff]);
         let src_offset = regs[rs];
+
+        debug_assert!(HeapAlignment::B64.is_aligned(roff_offset));
+        debug_assert!(HeapAlignment::B64.is_aligned(src_offset));
+
         let num_words = size.get().div_ceil(64) as usize;
         let [roff, src] = state.heap.get_u64_cell_slices([
             (
@@ -404,6 +422,10 @@ impl BytecodeInstruction for FvSetHeapAligned {
         let size = size.get(regs);
         let roff_offset = imm4.get(regs[roff]);
         let src_offset = regs[rs];
+
+        debug_assert!(HeapAlignment::B64.is_aligned(roff_offset));
+        debug_assert!(HeapAlignment::B64.is_aligned(src_offset));
+
         let num_words = size.get().div_ceil(64) as usize * 2;
         let [roff, src] = state.heap.get_u64_cell_slices([
             (

@@ -330,9 +330,6 @@ pub fn fv_bitwise_and_elem(xspc: u64, x: u64, yspc: u64, y: u64) -> (u64, u64) {
     // 0 | 0  0  0  0               0 | 1  1  1  1
     let zvalue = xspc & x & yspc & y;
     let zspc = (xspc & !x) | (yspc & !y) | zvalue;
-    dbg!(xspc, x, yspc, y);
-    dbg!(zvalue);
-    dbg!(zspc);
     (zspc, zvalue)
 }
 #[inline(always)]

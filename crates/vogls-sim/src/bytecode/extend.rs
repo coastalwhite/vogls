@@ -4,6 +4,7 @@ use vogls_bits::extend::{
     fv_cell_sign_extend, fv_cell_zero_extend, fv_l_sign_extend, fv_l_zero_extend,
     tv_cell_sign_extend, tv_cell_zero_extend, tv_l_sign_extend, tv_l_zero_extend,
 };
+use vogls_bits::truncate::{fv_cell_truncate, tv_cell_truncate};
 use vogls_ir::{LogicMode, VectorSize};
 use vogls_runtime::RuntimeState;
 
@@ -21,6 +22,15 @@ pub struct SignExtend {
     rs: Reg,
     dst_size: SixBitSize,
     src_size: SixBitSize,
+}
+
+pub struct HeapHeapTruncate {
+    rd: Reg,
+    rs: Reg,
+
+    src_size: Reg,
+    fv: bool,
+    dst_size: InlineNBitSize<13>,
 }
 
 pub struct HeapHeapExtend {
@@ -147,6 +157,88 @@ impl BytecodeInstruction for HeapHeapExtend {
             ExtendOp::TvSignExtend => tv_cell_sign_extend(dst, src, dst_size, src_size),
             ExtendOp::FvZeroExtend => fv_cell_zero_extend(dst, src, dst_size, src_size),
             ExtendOp::FvSignExtend => fv_cell_sign_extend(dst, src, dst_size, src_size),
+        }
+    }
+}
+
+impl BytecodeInstruction for HeapHeapTruncate {
+    fn extract(v: Bytecode) -> Self {
+        debug_assert_eq!(v.opcode(), BytecodeOpcode::HeapHeapTruncate as u8);
+        let v = v.0;
+        Self {
+            rd: Reg::new_masked(v >> 8),
+            rs: Reg::new_masked(v >> 12),
+            src_size: Reg::new_masked(v >> 16),
+            fv: (v >> 20) & 1 != 0,
+            dst_size: InlineNBitSize::new_masked(v >> 21),
+        }
+    }
+
+    fn encode(&self) -> Bytecode {
+        Bytecode(
+            BytecodeOpcode::HeapHeapTruncate as u32
+                | ((self.rd as u32) << 8)
+                | ((self.rs as u32) << 12)
+                | (self.dst_size.encode() << 16)
+                | ((self.fv as u32) << 20)
+                | ((self.src_size as u32) << 21),
+        )
+    }
+
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            rd,
+            rs,
+            dst_size,
+            fv,
+            src_size,
+        } = self;
+        let mnemonic = if *fv {
+            "fv.heapheap_truncate"
+        } else {
+            "tv.heapheap_truncate"
+        };
+        write_padded_mnemonic(f, mnemonic)?;
+        write!(f, "{rd}, {rs}, {dst_size}, {src_size}")
+    }
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let Self {
+            rd,
+            rs,
+            dst_size,
+            fv,
+            src_size,
+        } = self;
+        let src_size = VectorSize::new(regs[src_size].try_into().unwrap()).unwrap();
+        let dst_size = dst_size.get(regs);
+        let dst = regs.get_as_addr(rd);
+        let src = regs.get_as_addr(rs);
+
+        let mut dst_num_words = dst_size.get().div_ceil(64) as usize;
+        let mut src_num_words = src_size.get().div_ceil(64) as usize;
+
+        if fv {
+            dst_num_words *= 2;
+            src_num_words *= 2;
+        }
+
+        let [dst, src] = state
+            .heap
+            .get_u64_cell_slices([(dst, dst_num_words), (src, src_num_words)]);
+
+        if fv {
+            fv_cell_truncate(dst, src, dst_size, src_size);
+        } else {
+            tv_cell_truncate(dst, src, dst_size, src_size);
         }
     }
 }
@@ -465,6 +557,43 @@ impl BytecodeEncoder {
                 rd,
                 rs,
                 dst_size,
+                src_size,
+            }
+            .encode(),
+        );
+    }
+
+    pub fn heapheap_tv_truncate(
+        &mut self,
+        rd: Reg,
+        rs: Reg,
+        dst_size: InlineNBitSize<13>,
+        src_size: Reg,
+    ) {
+        self.data.push(
+            HeapHeapTruncate {
+                rd,
+                rs,
+                dst_size,
+                fv: false,
+                src_size,
+            }
+            .encode(),
+        );
+    }
+    pub fn heapheap_fv_truncate(
+        &mut self,
+        rd: Reg,
+        rs: Reg,
+        dst_size: InlineNBitSize<13>,
+        src_size: Reg,
+    ) {
+        self.data.push(
+            HeapHeapTruncate {
+                rd,
+                rs,
+                dst_size,
+                fv: true,
                 src_size,
             }
             .encode(),

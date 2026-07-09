@@ -1,4 +1,4 @@
-use vogls_codegen::lsra::StackItemKind;
+use vogls_codegen::HeapAlignment;
 use vogls_runtime::RuntimeState;
 
 use std::fmt;
@@ -11,7 +11,7 @@ use super::{
 
 pub struct StackOffset {
     rd: Reg,
-    kind: StackItemKind,
+    kind: HeapAlignment,
     offset: SignedImmediate<17>,
 }
 
@@ -22,13 +22,13 @@ impl BytecodeInstruction for StackOffset {
         Self {
             rd: Reg::new_masked(v >> 8),
             kind: match (v >> 12) & 0x7 {
-                0 => StackItemKind::B1,
-                1 => StackItemKind::B2,
-                2 => StackItemKind::B4,
-                3 => StackItemKind::B8,
-                4 => StackItemKind::B16,
-                5 => StackItemKind::B32,
-                _ => StackItemKind::B64,
+                0 => HeapAlignment::B1,
+                1 => HeapAlignment::B2,
+                2 => HeapAlignment::B4,
+                3 => HeapAlignment::B8,
+                4 => HeapAlignment::B16,
+                5 => HeapAlignment::B32,
+                _ => HeapAlignment::B64,
             },
             offset: SignedImmediate::new_shifted(v, 15),
         }
@@ -66,7 +66,7 @@ impl BytecodeInstruction for StackOffset {
 }
 
 impl BytecodeEncoder {
-    pub fn stack_offset(&mut self, rd: Reg, kind: StackItemKind, offset: SignedImmediate<17>) {
+    pub fn stack_offset(&mut self, rd: Reg, kind: HeapAlignment, offset: SignedImmediate<17>) {
         self.data.push(StackOffset { rd, kind, offset }.encode());
     }
 }

@@ -1,7 +1,10 @@
+use std::cell::Cell;
+
 use crate::VectorSize;
 use crate::arithmetic::{fv_pack_u64, fv_unpack_u64};
 use crate::load::load_partial_u64;
 use crate::store::store_partial_u64;
+use crate::util::CellSlice;
 
 pub fn tv_s_truncate(dst: &mut [u8], src: &[u8], dst_size: VectorSize, src_size: VectorSize) {
     if dst_size.get() == src_size.get() {
@@ -36,4 +39,31 @@ pub fn fv_l_truncate(dst: &mut [u64], src: &[u64], dst_size: VectorSize, src_siz
     let swords = src.len() / 2;
     tv_l_truncate(&mut dst[..dwords], &src[..swords], dst_size, src_size);
     tv_l_truncate(&mut dst[dwords..], &src[swords..], dst_size, src_size);
+}
+
+pub fn tv_cell_truncate(
+    dst: &[Cell<u64>],
+    src: &[Cell<u64>],
+    dst_size: VectorSize,
+    src_size: VectorSize,
+) {
+    if dst_size.get() == src_size.get() {
+        dst.copy_from_slice(src);
+        return;
+    }
+    dst.copy_from_slice(&src[..dst.len()]);
+    if dst_size.get() % 64 != 0 {
+        dst[dst.len() - 1].update(|v| v & ((1u64 << (dst_size.get() % 64)) - 1));
+    }
+}
+pub fn fv_cell_truncate(
+    dst: &[Cell<u64>],
+    src: &[Cell<u64>],
+    dst_size: VectorSize,
+    src_size: VectorSize,
+) {
+    let dwords = dst.len() / 2;
+    let swords = src.len() / 2;
+    tv_cell_truncate(&dst[..dwords], &src[..swords], dst_size, src_size);
+    tv_cell_truncate(&dst[dwords..], &src[swords..], dst_size, src_size);
 }

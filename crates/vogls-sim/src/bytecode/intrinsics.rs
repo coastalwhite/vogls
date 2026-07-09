@@ -134,7 +134,7 @@ impl BytecodeInstruction for Intrinsic {
             IntrinsicOp::Display(f) => {
                 let mut stack_offset = 0;
                 f.write_to(
-                    &mut cldctx.stderr,
+                    &mut cldctx.stdout,
                     cldctx.stack_args.iter().map(|&(size, mode)| match mode {
                         LogicMode::TwoValue if size <= VSIZE_64 => {
                             let value = cldctx.stack[stack_offset];

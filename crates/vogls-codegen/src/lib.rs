@@ -1,9 +1,11 @@
 mod heap;
 pub mod lsra;
+mod alignment;
 
 use std::ops::Range;
 
 use hashbrown::hash_map::Entry;
+pub use alignment::HeapAlignment;
 pub use heap::{Heap, HeapBuilder, HeapOffset, HeapRef};
 use vogls_ir::{
     BasicBlockKey, BinaryImmOp, BinaryOp, Bits, GlobalContext, Instruction, LogicMode,

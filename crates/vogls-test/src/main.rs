@@ -245,8 +245,6 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         }
     }
 
-    dbg!(&backends);
-
     let mut num_tests = 0;
     let opt_rounds_configurations: &[u8] = match args.opt_rounds {
         None => &[0, 2],

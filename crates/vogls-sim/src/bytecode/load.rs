@@ -1,7 +1,7 @@
 use std::fmt;
 
 use vogls_bits::slice::tv_cell_slice;
-use vogls_codegen::HeapOffset;
+use vogls_codegen::{HeapAlignment, HeapOffset};
 use vogls_ir::{LogicMode, VectorSize};
 use vogls_runtime::RuntimeState;
 
@@ -136,8 +136,9 @@ impl BytecodeInstruction for TvLoadAligned {
             imm10,
             size,
         }) = self;
+
         let offset = imm10.get(regs[rs]);
-        debug_assert!(offset.is_multiple_of((size.get() as u64).next_power_of_two().min(64)));
+        debug_assert!(HeapAlignment::new(size.into(), LogicMode::TwoValue).is_aligned(offset));
 
         let word = offset / 64;
         let boff = offset % 64;
@@ -198,20 +199,23 @@ impl BytecodeInstruction for FvLoadAligned {
             imm10,
             size,
         }) = self;
-        let alignment = (size.get() as u64).next_power_of_two().min(64);
+
+        let alignment = HeapAlignment::new(size.into(), LogicMode::FourValue);
         let spc_offset = imm10.get(regs[rs]);
-        debug_assert!(spc_offset.is_multiple_of(alignment));
-        let val_offset = (spc_offset + size.get() as u64).next_multiple_of(alignment);
+        debug_assert!(alignment.is_aligned(spc_offset));
+        let val_offset = HeapAlignment::spc_offset_to_val_offset(size.into(), spc_offset);
+
+        let heap = &state.heap.0;
+        let mask = size.mask(u64::MAX);
 
         let spc_word = spc_offset / 64;
         let spc_boff = spc_offset % 64;
         let val_word = val_offset / 64;
         let val_boff = val_offset % 64;
 
-        let heap = &state.heap.0;
         let (spc, val) = rd.to_spc_and_val();
-        regs[spc] = size.mask(heap[spc_word as usize] >> spc_boff);
-        regs[val] = size.mask(heap[val_word as usize] >> val_boff);
+        regs[spc] = mask & (heap[spc_word as usize] >> spc_boff);
+        regs[val] = mask & (heap[val_word as usize] >> val_boff);
     }
 }
 impl BytecodeInstruction for LoadUnaligned {
@@ -278,6 +282,10 @@ impl BytecodeInstruction for LoadHeapAligned {
         let Self { rd, rs, num_words } = self;
         let dst_offset = regs[rd];
         let src_offset = regs[rs];
+
+        debug_assert!(HeapAlignment::B64.is_aligned(dst_offset));
+        debug_assert!(HeapAlignment::B64.is_aligned(src_offset));
+
         let num_words = usize::from(num_words);
         let [dst, src] = state.heap.get_u64_cell_slices([
             (
@@ -345,6 +353,8 @@ impl BytecodeInstruction for LoadHeapUnaligned {
         let Self { rd, rs, imm8, size } = self;
         let dst_offset = regs[rd];
         let src_offset = imm8.get(regs[rs]);
+
+        debug_assert!(HeapAlignment::B64.is_aligned(dst_offset));
 
         let size = size.get(regs);
         let dst_num_words = size.get().div_ceil(64) as usize;

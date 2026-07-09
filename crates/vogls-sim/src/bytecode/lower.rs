@@ -1,5 +1,5 @@
-use vogls_codegen::lsra::{Slot, StackItemKind, StackOffsets, StackTracker};
-use vogls_codegen::{HeapBuilder, HeapOffset, HeapRef, insert_bb_phis, resolve_var_logic_mode_map};
+use vogls_codegen::lsra::{Slot, StackOffsets, StackTracker};
+use vogls_codegen::{HeapAlignment, HeapBuilder, HeapRef, insert_bb_phis};
 use vogls_ir::watchers::WatchMap;
 use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, ContextFormat, DisplayContext,
@@ -34,18 +34,15 @@ pub fn lower_process_to_bytecode(
     lupdt_indexes: &VgHashMap<RtSignalKey, u64>,
     bytecode: &mut BytecodeEncoder,
 ) {
-    const PRINT: bool = true;
+    const PRINT: bool = false;
 
     let process = &gl.processes[process];
 
     let mut bb_stack = Vec::new();
-    let mut bb_stack2 = Vec::new();
     let mut bb_seen = VgHashSet::<BasicBlockKey>::default();
-    let mut bb_phis = VgHashMap::<BasicBlockKey, Vec<(VariableKey, VariableKey)>>::default();
+    // let mut bb_phis = VgHashMap::<BasicBlockKey, Vec<(VariableKey, VariableKey)>>::default();
 
     let mut assignment = VgHashMap::default();
-    let mut var_mode = VgHashMap::<VariableKey, LogicMode>::default();
-    let mut conv_map = VgHashMap::<VariableKey, HeapOffset>::default();
 
     let mut post_order = Vec::<BasicBlockKey>::new();
     let mut bb_offsets = VgHashMap::<BasicBlockKey, usize>::default();
@@ -53,32 +50,15 @@ pub fn lower_process_to_bytecode(
 
     schedule.push_active(InstructionPtr(bytecode.data.len() as u64));
     for tr in &process.regions {
+        bb_seen.clear();
         assignment.clear();
-        var_mode.clear();
-        conv_map.clear();
         post_order.clear();
-
-        resolve_var_logic_mode_map(
-            &process.regions,
-            gl,
-            &mut bb_stack,
-            &mut bb_seen,
-            &mut var_mode,
-            &mut conv_map,
-        );
-        insert_bb_phis(
-            &process.regions,
-            gl,
-            &mut bb_stack,
-            &mut bb_seen,
-            &mut bb_phis,
-        );
 
         vogls_ir::orders::post_order_keys(
             tr.entry(),
             &gl.bbs,
             &mut bb_seen,
-            &mut bb_stack2,
+            &mut bb_stack,
             &mut post_order,
         );
 
@@ -89,7 +69,7 @@ pub fn lower_process_to_bytecode(
             heap,
             &mut assignment,
             stack_tracker,
-            9,
+            10,
         );
 
         let stack_offsets = stack_tracker.offsets();
@@ -381,13 +361,14 @@ fn lower_instruction(
                     bce.load_unaligned(rd, rs, InlineAddrOffset::ZERO, dst_size);
                 }
                 (O::Truncate, M::TwoValue, None, None) => {
-                    let size = InlineNBitSize::new(dst_size, bce);
-                    bce.load_heap_unaligned(rd, rs, InlineAddrOffset::ZERO, size);
+                    let dst_size = InlineNBitSize::new(dst_size, bce);
+                    bce.load_u64(T2_SPC, src_size.get() as u64);
+                    bce.heapheap_tv_truncate(rd, rs, dst_size, T2_SPC);
                 }
                 (O::Truncate, M::FourValue, Some(dst_size), Some(_)) => {
                     // @Performance: One instruction maybe?
-                    let (rsspc, rsval) = rd.to_spc_and_val();
                     let (rdspc, rdval) = rd.to_spc_and_val();
+                    let (rsspc, rsval) = rs.to_spc_and_val();
                     bce.truncate(rdspc, rsspc, dst_size);
                     bce.truncate(rdval, rsval, dst_size);
                 }
@@ -403,9 +384,9 @@ fn lower_instruction(
                     bce.load_unaligned(rdval, addr, offset, dst_size);
                 }
                 (O::Truncate, M::FourValue, None, None) => {
-                    let size = InlineNBitSize::new(dst_size, bce);
-                    bce.load_heap_unaligned(rd, rs, InlineAddrOffset::ZERO, size);
-                    bce.load_heap_unaligned(rd, rs, InlineAddrOffset::ZERO, size);
+                    let dst_size = InlineNBitSize::new(dst_size, bce);
+                    bce.load_u64(T2_SPC, src_size.get() as u64);
+                    bce.heapheap_fv_truncate(rd, rs, dst_size, T2_SPC);
                 }
                 (O::ZeroExtend, M::TwoValue, Some(_), Some(_)) => {
                     bce.copy(rd, rs);
@@ -815,7 +796,7 @@ fn lower_instruction(
                 (O::Sub, M::FourValue, None, _, _, _) => {
                     let imm = heap_builder.claim_constant(M::FourValue, imm.clone());
                     bce.load_u64(T2_SPC, imm.offset.bit_offset as u64);
-                    bce.heap_fv_mul(rd, rs, T2_SPC, src_size);
+                    bce.heap_fv_sub(rd, rs, T2_SPC, src_size);
                 }
                 (O::Multiply, M::TwoValue, Some(size), _, _, _) => {
                     match SignedImmediate::new_from_bits(imm) {
@@ -1257,9 +1238,9 @@ fn lower_instruction(
                 T1_SPC,
                 false,
             );
-            let rimm = to_reg(
+            let mut rimm = to_reg(
                 bce,
-                *src,
+                *imm,
                 &gl.vars,
                 assignment[imm],
                 stack_offsets,
@@ -1267,18 +1248,46 @@ fn lower_instruction(
                 false,
             );
 
+            let mut jump_offset: Option<usize> = None;
             use LogicMode as M;
+            match imm.mode() {
+                M::TwoValue => {}
+                M::FourValue => {
+                    assert_eq!(dst.mode(), LogicMode::FourValue);
+                    let imm_size = SixBitSize::from_vector_size(gl.vars.size(*imm)).unwrap();
+                    let (rimmspc, rimmval) = rimm.to_spc_and_val();
+                    bce.ceqi(T2_SPC, rimmspc, SignedImmediate::MINUS_ONE, imm_size);
+
+                    let branch_offset = bce.data.len();
+                    bce.panic();
+
+                    let (rdspc, rdval) = rd.to_spc_and_val();
+                    bce.load_u64(rdspc, 0);
+                    bce.load_u64(rdval, 0);
+
+                    jump_offset = Some(bce.data.len());
+                    bce.panic();
+
+                    bce.data[branch_offset] = Branch {
+                        rcond: T2_SPC,
+                        imm: SignedImmediate::new((bce.data.len() - branch_offset) as i64 - 1)
+                            .unwrap(),
+                    }
+                    .encode();
+                    rimm = rimmval;
+                }
+            }
+
             match (
                 src.mode(),
-                imm.mode(),
                 SixBitSize::from_vector_size(dst_size),
                 SixBitSize::from_vector_size(src_size),
             ) {
-                (M::TwoValue, M::TwoValue, Some(dst_size), Some(_)) => {
+                (M::TwoValue, Some(dst_size), Some(_)) => {
                     bce.slr(rd, rs, rimm);
                     bce.truncate(rd, rd, dst_size);
                 }
-                (M::FourValue, M::FourValue, Some(dst_size), Some(_)) => {
+                (M::FourValue, Some(dst_size), Some(_)) => {
                     let (rdspc, rdval) = rd.to_spc_and_val();
                     let (rsspc, rsval) = rs.to_spc_and_val();
                     bce.slr(rdspc, rsspc, rimm);
@@ -1286,14 +1295,60 @@ fn lower_instruction(
                     bce.truncate(rdspc, rdspc, dst_size);
                     bce.truncate(rdval, rdval, dst_size);
                 }
-                (M::TwoValue, M::TwoValue, Some(_), None) => todo!(),
-                (M::FourValue, M::FourValue, Some(_), None) => todo!(),
-                (M::TwoValue, M::TwoValue, None, None) => todo!(),
-                (M::FourValue, M::FourValue, None, None) => todo!(),
-                (M::TwoValue, M::FourValue, _, _) => todo!(),
-                (M::FourValue, M::TwoValue, _, _) => todo!(),
-                (_, _, None, Some(_)) => unreachable!(),
+                (M::TwoValue, Some(dst_size), None) => {
+                    // @Incorrect. This can reach out-of-bounds.
+                    bce.add(T1_VAL, rs, rimm, SixBitSize::N64);
+                    bce.load_unaligned(rd, T1_VAL, InlineAddrOffset::ZERO, dst_size);
+                }
+                (M::FourValue, Some(dst_size), None) => {
+                    let (rdspc, rdval) = rd.to_spc_and_val();
+                    // @Incorrect. This can reach out-of-bounds.
+                    let src_alignment = HeapAlignment::new(src_size, LogicMode::FourValue);
+                    bce.add(T1_VAL, rs, rimm, SixBitSize::N64);
+                    bce.load_unaligned(rdspc, T1_VAL, InlineAddrOffset::ZERO, dst_size);
+                    let (addr, offset) = InlineAddrOffset::new(
+                        src_alignment.next_aligned(src_size.get() as u64) as i64,
+                        bce,
+                        T1_VAL,
+                        T1_VAL,
+                    );
+                    bce.load_unaligned(rdval, addr, offset, dst_size);
+                }
+                (M::TwoValue, None, None) => {
+                    // @Incorrect. This can reach out-of-bounds.
+                    bce.add(T1_VAL, rs, rimm, SixBitSize::N64);
+                    let dst_size = InlineNBitSize::new(dst_size, bce);
+                    bce.load_heap_unaligned(rd, T1_VAL, InlineAddrOffset::ZERO, dst_size);
+                }
+                (M::FourValue, None, None) => {
+                    // @Incorrect. This can reach out-of-bounds.
+                    bce.add(T1_VAL, rs, rimm, SixBitSize::N64);
+                    let dst_inline_size = InlineNBitSize::new(dst_size, bce);
+                    bce.load_heap_unaligned(rd, T1_VAL, InlineAddrOffset::ZERO, dst_inline_size);
+                    let (addr, offset) = InlineAddrOffset::new(
+                        HeapAlignment::B64.next_aligned(src_size.get() as u64) as i64,
+                        bce,
+                        T1_VAL,
+                        T1_VAL,
+                    );
+                    match SignedImmediate::new_from_u64(dst_size.get() as u64) {
+                        None => {
+                            bce.load_u64(T0_VAL, dst_size.get() as u64);
+                            bce.add(T0_VAL, rd, T0_VAL, SixBitSize::N64);
+                        }
+                        Some(imm) => bce.addi(T0_VAL, rd, imm, SixBitSize::N64),
+                    }
+                    bce.load_heap_unaligned(T0_VAL, addr, offset, dst_inline_size);
+                }
+                (_, None, Some(_)) => unreachable!(),
             }
+
+            if let Some(jump_offset) = jump_offset {
+                bce.data[jump_offset] =
+                    Jump(SignedImmediate::new((bce.data.len() - jump_offset) as i64 - 1).unwrap())
+                        .encode();
+            }
+
             store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd, T1_VAL);
         }
         I::SliceImm(dst, src, offset) => {
@@ -1511,9 +1566,13 @@ fn lower_instruction(
             let jump_offset = bce.data.len();
             bce.panic();
 
+            let offset = bce.data.len() - branch_offset - 1;
+            let offset = SignedImmediate::new_from_u64(offset as u64).unwrap();
+            bce.data[branch_offset] = Branch { rcond, imm: offset }.encode();
+
             let rtruthy = to_reg(
                 bce,
-                *falsy,
+                *truthy,
                 &gl.vars,
                 assignment[truthy],
                 stack_offsets,
@@ -1527,9 +1586,6 @@ fn lower_instruction(
                 (LogicMode::FourValue, None) => bce.heap_fv_copy(rd, rtruthy, size),
             }
 
-            let offset = bce.data.len() - branch_offset - 1;
-            let offset = SignedImmediate::new_from_u64(offset as u64).unwrap();
-            bce.data[branch_offset] = Branch { rcond, imm: offset }.encode();
             let offset = bce.data.len() - jump_offset - 1;
             let offset = SignedImmediate::new_from_u64(offset as u64).unwrap();
             bce.data[jump_offset] = Jump(offset).encode();
@@ -1750,10 +1806,11 @@ fn lower_instruction(
                     bce.load_heap_unaligned(T2_VAL, addr, val_offset, size);
                 }
                 (M::FourValue, Some(size)) => {
+                    let alignment = HeapAlignment::new(size.into(), LogicMode::FourValue);
                     let (rdspc, rdval) = rd.to_spc_and_val();
                     bce.load_unaligned(rdspc, rsignal_off, InlineAddrOffset::ZERO, size);
                     let (addr, val_offset) = InlineAddrOffset::new(
-                        i64::from(signal_size.get().next_multiple_of(64)),
+                        alignment.next_aligned(signal_size.get() as u64) as i64,
                         bce,
                         rsignal_off,
                         T1_SPC,
@@ -1785,31 +1842,116 @@ fn lower_instruction(
             let signal_size = gl.signals[*signal].size;
             let src_size = gl.vars.size(*src);
 
-            if partial.is_some() {
-                todo!()
-            }
-
-            if signal_size != src_size {
-                todo!()
-            }
-
             let roff = T1_SPC;
-            let rpoke = T2_SPC;
+            let rpoke = T1_VAL;
             load_signal_address(bce, roff, *signal, signals, io_signals);
-            match (src.mode(), SixBitSize::from_vector_size(signal_size)) {
-                (LogicMode::TwoValue, None) => {
-                    let size = InlineNBitSize::new(signal_size, bce);
-                    bce.tv_set_heap_aligned(rpoke, rs, roff, size, InlineAddrOffset::ZERO);
+
+            let mut branch_offset: Option<usize> = None;
+            if partial.is_some() || signal_size != src_size {
+                if let Some((partial, _)) = partial {
+                    let rpartial = to_reg(
+                        bce,
+                        *partial,
+                        &gl.vars,
+                        assignment[partial],
+                        stack_offsets,
+                        T2_SPC,
+                        false,
+                    );
+
+                    use LogicMode as M;
+                    match partial.mode() {
+                        M::TwoValue => bce.add(roff, roff, rpartial, SixBitSize::N64),
+                        M::FourValue => {
+                            let partial_size =
+                                SixBitSize::from_vector_size(gl.vars.size(*partial)).unwrap();
+                            let (rpartialspc, rpartialval) = rpartial.to_spc_and_val();
+                            bce.cnei(
+                                T1_VAL,
+                                rpartialspc,
+                                SignedImmediate::MINUS_ONE,
+                                partial_size,
+                            );
+
+                            branch_offset = Some(bce.data.len());
+                            bce.panic();
+
+                            bce.add(roff, roff, rpartialval, SixBitSize::N64)
+                        }
+                    }
                 }
-                (LogicMode::FourValue, None) => {
-                    let size = InlineNBitSize::new(signal_size, bce);
-                    bce.fv_set_heap_aligned(rpoke, rs, roff, size, InlineAddrOffset::ZERO);
+
+                let rpoke_t1 = rpoke;
+                let rpoke_t2 = T2_VAL;
+                match (src.mode(), SixBitSize::from_vector_size(src_size)) {
+                    (LogicMode::TwoValue, None) => {
+                        let size = InlineNBitSize::new(src_size, bce);
+                        bce.set_heap_unaligned(rpoke, rs, roff, size, InlineAddrOffset::ZERO);
+                    }
+                    (LogicMode::FourValue, None) => {
+                        let size = InlineNBitSize::new(src_size, bce);
+                        bce.set_heap_unaligned(rpoke_t1, rs, roff, size, InlineAddrOffset::ZERO);
+
+                        let dst_offset = HeapAlignment::B64.next_aligned(signal_size.get() as u64);
+                        let src_offset = HeapAlignment::B64.next_aligned(src_size.get() as u64);
+
+                        match SignedImmediate::new_from_u64(dst_offset) {
+                            None => {
+                                bce.load_u64(T2_VAL, dst_offset);
+                                bce.add(roff, roff, T2_VAL, SixBitSize::N64);
+                            }
+                            Some(imm) => bce.addi(roff, roff, imm, SixBitSize::N64),
+                        }
+                        match SignedImmediate::new_from_u64(src_offset) {
+                            None => {
+                                bce.load_u64(T2_VAL, src_offset);
+                                bce.add(T0_VAL, rs, T2_VAL, SixBitSize::N64);
+                            }
+                            Some(imm) => bce.addi(T0_VAL, rs, imm, SixBitSize::N64),
+                        }
+                        bce.set_heap_unaligned(
+                            rpoke_t2,
+                            T0_VAL,
+                            roff,
+                            size,
+                            InlineAddrOffset::ZERO,
+                        );
+                        bce.or(rpoke, rpoke_t1, rpoke_t2);
+                    }
+                    (LogicMode::TwoValue, Some(src_size)) => {
+                        bce.set_unaligned(rpoke, rs, roff, InlineAddrOffset::ZERO, src_size);
+                    }
+                    (LogicMode::FourValue, Some(src_size)) => {
+                        let (rsspc, rsval) = rs.to_spc_and_val();
+                        let alignment =
+                            HeapAlignment::new(signal_size.into(), LogicMode::FourValue);
+                        bce.set_unaligned(rpoke_t1, rsspc, roff, InlineAddrOffset::ZERO, src_size);
+                        let (addr, val_offset) = InlineAddrOffset::new(
+                            alignment.next_aligned(signal_size.get() as u64) as i64,
+                            bce,
+                            roff,
+                            T2_VAL,
+                        );
+                        bce.set_unaligned(rpoke_t2, rsval, addr, val_offset, src_size);
+                        bce.or(rpoke, rpoke_t1, rpoke_t2);
+                    }
                 }
-                (LogicMode::TwoValue, Some(signal_size)) => {
-                    bce.tv_set_aligned(rpoke, rs, roff, InlineAddrOffset::ZERO, signal_size)
-                }
-                (LogicMode::FourValue, Some(signal_size)) => {
-                    bce.fv_set_aligned(rpoke, rs, roff, InlineAddrOffset::ZERO, signal_size)
+            } else {
+                match (src.mode(), SixBitSize::from_vector_size(signal_size)) {
+                    (LogicMode::TwoValue, None) => {
+                        let size = InlineNBitSize::new(signal_size, bce);
+                        bce.tv_set_heap_aligned(rpoke, rs, roff, size, InlineAddrOffset::ZERO);
+                    }
+                    (LogicMode::FourValue, None) => {
+                        let size = InlineNBitSize::new(signal_size, bce);
+                        bce.fv_set_heap_aligned(rpoke, rs, roff, size, InlineAddrOffset::ZERO);
+                    }
+                    (LogicMode::TwoValue, Some(signal_size)) => {
+                        bce.tv_set_aligned(rpoke, rs, roff, InlineAddrOffset::ZERO, signal_size)
+                    }
+                    (LogicMode::FourValue, Some(signal_size)) => {
+                        bce.fv_set_aligned(rpoke, rs, roff, InlineAddrOffset::ZERO, signal_size)
+                    }
                 }
             }
 
@@ -1824,6 +1966,14 @@ fn lower_instruction(
             for index in watch_map.watch_indices(*signal) {
                 let index = InlineIndex::new(index as u64, bce, T2_VAL);
                 bce.wake(rpoke, index);
+            }
+
+            if let Some(branch_offset) = branch_offset {
+                bce.data[branch_offset] = Branch {
+                    rcond: T1_VAL,
+                    imm: SignedImmediate::new((bce.data.len() - branch_offset) as i64 - 1).unwrap(),
+                }
+                .encode();
             }
         }
         I::Phi(variable_key, items) => todo!(),
@@ -1848,13 +1998,13 @@ fn to_reg(
             let size = vars.size(var);
             if !is_dst || size > VSIZE_64 {
                 let kind_offset = match kind {
-                    StackItemKind::B1 => 0,
-                    StackItemKind::B2 => stack_offsets.b2,
-                    StackItemKind::B4 => stack_offsets.b4,
-                    StackItemKind::B8 => stack_offsets.b8,
-                    StackItemKind::B16 => stack_offsets.b16,
-                    StackItemKind::B32 => stack_offsets.b32,
-                    StackItemKind::B64 => stack_offsets.b64,
+                    HeapAlignment::B1 => 0,
+                    HeapAlignment::B2 => stack_offsets.b2,
+                    HeapAlignment::B4 => stack_offsets.b4,
+                    HeapAlignment::B8 => stack_offsets.b8,
+                    HeapAlignment::B16 => stack_offsets.b16,
+                    HeapAlignment::B32 => stack_offsets.b32,
+                    HeapAlignment::B64 => stack_offsets.b64,
                 };
                 let offset = kind_offset as u64 + offset as u64;
                 match SignedImmediate::new_from_u64(offset) {
@@ -1905,13 +2055,13 @@ fn store_back(
         Slot::Stack(kind, offset) => {
             if let Some(size) = SixBitSize::from_vector_size(vars.size(var)) {
                 let kind_offset = match kind {
-                    StackItemKind::B1 => 0,
-                    StackItemKind::B2 => stack_offsets.b2,
-                    StackItemKind::B4 => stack_offsets.b4,
-                    StackItemKind::B8 => stack_offsets.b8,
-                    StackItemKind::B16 => stack_offsets.b16,
-                    StackItemKind::B32 => stack_offsets.b32,
-                    StackItemKind::B64 => stack_offsets.b64,
+                    HeapAlignment::B1 => 0,
+                    HeapAlignment::B2 => stack_offsets.b2,
+                    HeapAlignment::B4 => stack_offsets.b4,
+                    HeapAlignment::B8 => stack_offsets.b8,
+                    HeapAlignment::B16 => stack_offsets.b16,
+                    HeapAlignment::B32 => stack_offsets.b32,
+                    HeapAlignment::B64 => stack_offsets.b64,
                 };
                 let offset = kind_offset as u64 + offset as u64;
                 match SignedImmediate::new_from_u64(offset) {
