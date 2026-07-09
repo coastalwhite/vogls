@@ -120,11 +120,7 @@ pub fn lower_process_to_bytecode(
                     bytecode.panic();
                 }
                 T::VariableWait(target, src) => {
-                    if src.mode() == LogicMode::FourValue {
-                        todo!();
-                    }
-
-                    let rtime = to_reg(
+                    let mut rtime = to_reg(
                         bytecode,
                         *src,
                         &gl.vars,
@@ -133,6 +129,18 @@ pub fn lower_process_to_bytecode(
                         T0,
                         false,
                     );
+
+                    match src.mode() {
+                        LogicMode::TwoValue => {}
+                        LogicMode::FourValue => {
+                            let (rtimespc, rtimeval) = rtime.to_spc_and_val();
+                            bytecode.contains_no_special(T2, rtimespc, SixBitSize::N64);
+                            bytecode.sign_extend(T2, T2, SixBitSize::N64, SixBitSize::SCALAR);
+                            bytecode.and(T2, rtimeval, T2);
+                            rtime = T2;
+                        }
+                    }
+
                     bytecode.wait(rtime);
                     jump_targets.push((bytecode.data.len(), target.entry(), JumpKind::Jump));
                     bytecode.panic();
