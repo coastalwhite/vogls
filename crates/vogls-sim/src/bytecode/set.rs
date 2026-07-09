@@ -282,17 +282,32 @@ impl BytecodeInstruction for SetUnaligned {
             imm6,
         }) = self;
         let mask = size.mask(u64::MAX);
-        let bit_offset = imm6.get(regs[roff]);
-        let word_offset = (bit_offset / 64) as usize;
-        assert!(word_offset.strict_add(1) < state.heap.0.len());
-        let bit_offset = bit_offset % 64;
-        let w1 = state.heap.0[word_offset];
-        let w2 = state.heap.0[word_offset + 1];
-        let prev = (w1 as u128) | ((w2 as u128) << 64);
-        let next = (prev & !((mask as u128) << bit_offset)) | ((regs[rs] as u128) << bit_offset);
-        let updated = prev != next;
-        state.heap.0[word_offset] = (next & 0xFFFF_FFFF_FFFF_FFFF) as u64;
-        state.heap.0[word_offset + 1] = (next >> 64) as u64;
+        let offset = imm6.get(regs[roff]);
+        let end_offset = offset + size.get() as u64 - 1;
+
+        let val = regs[rs];
+        let word = (offset / 64) as usize;
+        let boff = offset % 64;
+        let endword = (end_offset / 64) as usize;
+
+        let heap = &mut state.heap.0;
+        if word == endword {
+            let word = &mut heap[word];
+            let prev = mask & (*word >> boff);
+            *word &= !(mask << boff);
+            *word |= val << boff;
+            let updated = prev != val;
+            regs[rd] = u64::from(updated);
+            return;
+        }
+
+        assert!(heap.len() > 0 && word < heap.len() - 1);
+        let prev = mask & ((heap[word] >> boff) | (heap[word + 1] << (64 - boff)));
+        heap[word] &= !(mask << boff);
+        heap[word] |= val << boff;
+        heap[word + 1] &= !(mask >> (64 - boff));
+        heap[word + 1] |= val >> (64 - boff);
+        let updated = prev != val;
         regs[rd] = u64::from(updated);
     }
 }
