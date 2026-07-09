@@ -155,11 +155,7 @@ pub fn lower_process_to_bytecode(
                     bytecode.panic();
                 }
                 T::Branch(cond, truthy, falsy) => {
-                    if cond.mode() == LogicMode::FourValue {
-                        todo!();
-                    }
-
-                    let rcond = to_reg(
+                    let mut rcond = to_reg(
                         bytecode,
                         *cond,
                         &gl.vars,
@@ -168,6 +164,19 @@ pub fn lower_process_to_bytecode(
                         T0,
                         false,
                     );
+                    match cond.mode() {
+                        LogicMode::TwoValue => {}
+                        LogicMode::FourValue => {
+                            bytecode.fv_ceqi(
+                                T0,
+                                rcond,
+                                SignedImmediate::MINUS_ONE,
+                                SixBitSize::SCALAR,
+                            );
+                            rcond = T0;
+                        }
+                    }
+
                     jump_targets.push((bytecode.data.len(), *truthy, JumpKind::Branch(rcond)));
                     bytecode.panic();
                     jump_targets.push((bytecode.data.len(), *falsy, JumpKind::Jump));
@@ -1891,7 +1900,10 @@ fn lower_instruction(
             bce.add(rsignal, rsignal, roffset, SixBitSize::N64);
 
             use LogicMode as M;
-            match (gl.signals[*signal].mode, SixBitSize::from_vector_size(dst_size)) {
+            match (
+                gl.signals[*signal].mode,
+                SixBitSize::from_vector_size(dst_size),
+            ) {
                 (M::TwoValue, None) => {
                     // @Incorrect: out-of-bounds reads.
                     let size = InlineNBitSize::new(dst_size, bce);
