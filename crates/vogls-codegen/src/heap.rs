@@ -1,6 +1,5 @@
 use std::cell::Cell;
 use std::fmt;
-use std::num::NonZeroU32;
 
 use vogls_bits::arithmetic::{FvLogicValue, fv_pack_u64, fv_set_no_special, fv_unpack_u64};
 use vogls_bits::load::load_partial_u64;
@@ -510,9 +509,13 @@ impl Heap {
     }
 
     pub fn load_unaligned_u64(&self, bit_offset: u64) -> u64 {
+        let bit_offset = bit_offset % 64;
+        if bit_offset == 0 {
+            return self.0[(bit_offset / 64) as usize];
+        }
+
         let word_offset = (bit_offset / 64) as usize;
         assert!(word_offset.strict_add(1) < self.0.len());
-        let bit_offset = bit_offset % 64;
         let w1 = self.0[word_offset];
         let w2 = self.0[word_offset + 1];
         let w = (w1 as u128) | ((w2 as u128) << 64);

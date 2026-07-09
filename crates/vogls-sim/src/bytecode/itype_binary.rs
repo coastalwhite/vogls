@@ -952,3 +952,12 @@ impl_bytecode_methods! {
     (fv_slri, FvSlri)
     (fv_sari, FvSari)
 }
+
+impl BytecodeEncoder {
+    pub fn contains_special(&mut self, rd: Reg, rs: Reg, size: SixBitSize) {
+        self.cnei(rd, rs, SignedImmediate::MINUS_ONE, size)
+    }
+    pub fn contains_no_special(&mut self, rd: Reg, rs: Reg, size: SixBitSize) {
+        self.ceqi(rd, rs, SignedImmediate::MINUS_ONE, size)
+    }
+}

@@ -221,6 +221,39 @@ impl BytecodeInstruction for FvLoadAligned {
 impl BytecodeInstruction for LoadUnaligned {
     impl_load_args!(LoadUnaligned, "load_unaligned");
 
+    fn pre_exec_itrace(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        regs: &Regs,
+        _state: &RuntimeState,
+    ) -> fmt::Result {
+        let Self(LoadArgs {
+            rd: _,
+            rs,
+            size: _,
+            imm10: _,
+        }) = self;
+        f.write_str(EXEC_ITRACE_INDENT)?;
+        write_register(f, regs, "rs", *rs, LogicMode::TwoValue)?;
+        writeln!(f)
+    }
+    fn post_exec_itrace(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        regs: &Regs,
+        _state: &RuntimeState,
+    ) -> fmt::Result {
+        let Self(LoadArgs {
+            rd,
+            rs: _,
+            size: _,
+            imm10: _,
+        }) = self;
+        f.write_str(EXEC_ITRACE_INDENT)?;
+        write_register(f, regs, "rd", *rd, LogicMode::TwoValue)?;
+        writeln!(f)
+    }
+
     fn execute(
         self,
         regs: &mut Regs,
@@ -238,9 +271,23 @@ impl BytecodeInstruction for LoadUnaligned {
         }) = self;
 
         let offset = imm10.get(regs[rs]);
-        let w = state.heap.load_unaligned_u64(offset);
-        let w = size.mask(w);
-        regs[rd] = w;
+        let end_offset = offset + size.get() as u64 - 1;
+
+        let word = (offset / 64) as usize;
+        let boff = offset % 64;
+        let endword = (end_offset / 64) as usize;
+
+        let heap = &state.heap.0;
+        if word == endword {
+            regs[rd] = size.mask(heap[word] >> boff);
+            return;
+        }
+
+        assert!(heap.len() > 0 && word < heap.len() - 1);
+        let w1 = heap[word as usize];
+        let w2 = heap[word + 1];
+        let w = (w1 >> boff) | (w2 << (64 - boff));
+        regs[rd] = size.mask(w);
     }
 }
 

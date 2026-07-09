@@ -183,10 +183,11 @@ impl BytecodeInstruction for TvSetAligned {
         debug_assert!(HeapAlignment::new(size.into(), LogicMode::TwoValue).is_aligned(offset));
         let value = regs[rs];
         let mask = size.mask(u64::MAX);
-        let word = (offset / 64) as usize;
+        let word = &mut state.heap.0[(offset / 64) as usize];
         let boff = offset % 64;
-        let prev_value = mask & (state.heap.0[word] >> boff);
-        state.heap.0[word] = (!(mask << boff)) | (value << boff);
+        let prev_value = mask & (*word >> boff);
+        *word &= !(mask << boff);
+        *word |= value << boff;
         let updated = value != prev_value;
         regs[rd] = u64::from(updated);
     }

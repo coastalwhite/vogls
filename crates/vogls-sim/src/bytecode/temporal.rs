@@ -55,7 +55,7 @@ impl BytecodeInstruction for Wake {
         regs: &Regs,
         _state: &RuntimeState,
     ) -> fmt::Result {
-        write!(f, "{EXEC_ITRACE_INDENT}rcond = {}", regs[self.rcond] != 0)
+        writeln!(f, "{EXEC_ITRACE_INDENT}rcond = {}", regs[self.rcond] != 0)
     }
 
     fn encode(&self) -> Bytecode {
@@ -235,7 +235,7 @@ impl BytecodeInstruction for LastUpdateTime {
     ) -> fmt::Result {
         f.write_str(EXEC_ITRACE_INDENT)?;
         write_register(f, regs, "rd", self.rd, LogicMode::TwoValue)?;
-        Ok(())
+        writeln!(f)
     }
 
     fn execute(
@@ -284,7 +284,7 @@ impl BytecodeInstruction for SetLupdt {
     ) -> fmt::Result {
         f.write_str(EXEC_ITRACE_INDENT)?;
         write_register(f, regs, "rcond", self.rcond, LogicMode::TwoValue)?;
-        Ok(())
+        writeln!(f)
     }
 
     fn execute(
@@ -336,7 +336,7 @@ impl BytecodeInstruction for TvCorrectFirst {
     ) -> fmt::Result {
         f.write_str(EXEC_ITRACE_INDENT)?;
         write_register(f, regs, "rcond", self.rcond, LogicMode::TwoValue)?;
-        Ok(())
+        writeln!(f)
     }
 
     fn execute(
