@@ -30,6 +30,8 @@ pub struct TvMini(pub IType);
 pub struct TvMaxi(pub IType);
 pub struct TvUleqi(pub IType);
 pub struct TvUgti(pub IType);
+pub struct TvUgeqi(pub IType);
+pub struct TvUlti(pub IType);
 pub struct TvCeqi(pub IType);
 pub struct TvCnei(pub IType);
 pub struct TvSlli(pub IType);
@@ -47,6 +49,8 @@ pub struct FvMini(pub IType);
 pub struct FvMaxi(pub IType);
 pub struct FvUleqi(pub IType);
 pub struct FvUgti(pub IType);
+pub struct FvUgeqi(pub IType);
+pub struct FvUlti(pub IType);
 pub struct FvCeqi(pub IType);
 pub struct FvCnei(pub IType);
 pub struct FvSlli(pub IType);
@@ -355,6 +359,50 @@ impl BytecodeInstruction for TvUgti {
         } = self.0;
         let imm = size.mask(i64::from(imm10.0) as u64);
         regs[rd] = u64::from(regs[rs] > imm);
+    }
+}
+impl BytecodeInstruction for TvUgeqi {
+    impl_bitwise!(TvUgeqi, "tv.ugeqi", TwoValue, TwoValue);
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let IType {
+            rd,
+            rs,
+            imm10,
+            size,
+        } = self.0;
+        let imm = size.mask(i64::from(imm10.0) as u64);
+        regs[rd] = u64::from(regs[rs] >= imm);
+    }
+}
+impl BytecodeInstruction for TvUlti {
+    impl_bitwise!(TvUlti, "tv.ulti", TwoValue, TwoValue);
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let IType {
+            rd,
+            rs,
+            imm10,
+            size,
+        } = self.0;
+        let imm = size.mask(i64::from(imm10.0) as u64);
+        regs[rd] = u64::from(regs[rs] < imm);
     }
 }
 impl BytecodeInstruction for TvCeqi {
@@ -789,6 +837,68 @@ impl BytecodeInstruction for FvUgti {
         }
     }
 }
+impl BytecodeInstruction for FvUgeqi {
+    impl_bitwise!(FvUgeqi, "fv.ugeqi", FourValue, FourValue);
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let IType {
+            rd,
+            rs,
+            imm10,
+            size,
+        } = self.0;
+        let mask = size.mask(u64::MAX);
+        let imm = i64::from(imm10.0) as u64 & mask;
+        let (rd_spc, rd_val) = rd.to_spc_and_val();
+        let (rs_spc, rs_val) = rs.to_spc_and_val();
+        if regs[rs_spc] != mask {
+            regs[rd_spc] = 0;
+            regs[rd_val] = 0;
+        } else {
+            regs[rd_spc] = 1;
+            regs[rd_val] = u64::from(regs[rs_val] >= imm);
+        }
+    }
+}
+impl BytecodeInstruction for FvUlti {
+    impl_bitwise!(FvUlti, "fv.ulti", FourValue, FourValue);
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let IType {
+            rd,
+            rs,
+            imm10,
+            size,
+        } = self.0;
+        let mask = size.mask(u64::MAX);
+        let imm = i64::from(imm10.0) as u64 & mask;
+        let (rd_spc, rd_val) = rd.to_spc_and_val();
+        let (rs_spc, rs_val) = rs.to_spc_and_val();
+        if regs[rs_spc] != mask {
+            regs[rd_spc] = 0;
+            regs[rd_val] = 0;
+        } else {
+            regs[rd_spc] = 1;
+            regs[rd_val] = u64::from(regs[rs_val] < imm);
+        }
+    }
+}
 impl BytecodeInstruction for FvCeqi {
     impl_bitwise!(FvCeqi, "fv.ceqi", TwoValue, FourValue);
 
@@ -930,6 +1040,8 @@ impl_bytecode_methods! {
     (maxi, TvMaxi)
     (uleqi, TvUleqi)
     (ugti, TvUgti)
+    (ulti, TvUlti)
+    (ugeqi, TvUgeqi)
     (ceqi, TvCeqi)
     (cnei, TvCnei)
     (slli, TvSlli)
@@ -946,6 +1058,8 @@ impl_bytecode_methods! {
     (fv_maxi, TvMaxi)
     (fv_uleqi, FvUleqi)
     (fv_ugti, TvUgti)
+    (fv_ugeqi, FvUgeqi)
+    (fv_ulti, TvUlti)
     (fv_ceqi, FvCeqi)
     (fv_cnei, FvCnei)
     (fv_slli, FvSlli)
@@ -954,6 +1068,20 @@ impl_bytecode_methods! {
 }
 
 impl BytecodeEncoder {
+    pub fn ugeq(&mut self, rd: Reg, rs1: Reg, rs2: Reg) {
+        self.uleq(rd, rs2, rs1)
+    }
+    pub fn ultq(&mut self, rd: Reg, rs1: Reg, rs2: Reg) {
+        self.uleq(rd, rs2, rs1)
+    }
+
+    pub fn fv_ugeq(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: SixBitSize) {
+        self.fv_uleq(rd, rs2, rs1, size)
+    }
+    pub fn fv_ultq(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: SixBitSize) {
+        self.fv_uleq(rd, rs2, rs1, size)
+    }
+
     pub fn contains_special(&mut self, rd: Reg, rs: Reg, size: SixBitSize) {
         self.cnei(rd, rs, SignedImmediate::MINUS_ONE, size)
     }

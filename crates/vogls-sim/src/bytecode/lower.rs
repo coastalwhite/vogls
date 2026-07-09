@@ -1,5 +1,5 @@
 use vogls_codegen::lsra::{Slot, StackOffsets, StackTracker};
-use vogls_codegen::{HeapAlignment, HeapBuilder, HeapRef, insert_bb_phis};
+use vogls_codegen::{HeapAlignment, HeapBuilder, HeapRef};
 use vogls_ir::watchers::WatchMap;
 use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, ContextFormat, DisplayContext,
@@ -34,7 +34,7 @@ pub fn lower_process_to_bytecode(
     lupdt_indexes: &VgHashMap<RtSignalKey, u64>,
     bytecode: &mut BytecodeEncoder,
 ) {
-    const PRINT: bool = true;
+    const PRINT: bool = false;
 
     let process = &gl.processes[process];
 
@@ -1057,7 +1057,7 @@ fn lower_instruction(
                     bce.load_u64(T4, imm.offset.bit_offset as u64);
                     bce.heap_fv_mod0(rd, T4, rs, src_size);
                 }
-                (O::UnsignedLessEqual, M::TwoValue, Some(size), _, _, _) => {
+                (O::UnsignedLessEqual, M::TwoValue, _, _, _, Some(size)) => {
                     match SignedImmediate::new_from_bits(imm) {
                         None => {
                             bce.load_bits_into_register(T4, M::TwoValue, imm);
@@ -1066,12 +1066,12 @@ fn lower_instruction(
                         Some(imm) => bce.uleqi(rd, rs, imm, size),
                     }
                 }
-                (O::UnsignedLessEqual, M::TwoValue, None, _, _, _) => {
+                (O::UnsignedLessEqual, M::TwoValue, _, _, _, None) => {
                     let imm = heap_builder.claim_constant(M::TwoValue, imm.clone());
                     bce.load_u64(T4, imm.offset.bit_offset as u64);
                     bce.heap_tv_unsigned_leq(rd, rs, T4, src_size);
                 }
-                (O::UnsignedLessEqual, M::FourValue, Some(size), _, _, _) => {
+                (O::UnsignedLessEqual, M::FourValue, _, _, _, Some(size)) => {
                     match SignedImmediate::new_from_bits(imm) {
                         None => {
                             bce.load_bits_into_register(T4, M::FourValue, imm);
@@ -1080,38 +1080,38 @@ fn lower_instruction(
                         Some(imm) => bce.fv_uleqi(rd, rs, imm, size),
                     }
                 }
-                (O::UnsignedLessEqual, M::FourValue, None, _, _, _) => {
+                (O::UnsignedLessEqual, M::FourValue, _, _, _, None) => {
                     let imm = heap_builder.claim_constant(M::FourValue, imm.clone());
                     bce.load_u64(T4, imm.offset.bit_offset as u64);
                     bce.heap_fv_unsigned_leq(rd, rs, T4, src_size);
                 }
-                (O::UnsignedGreaterEqual, M::TwoValue, Some(size), _, _, _) => {
+                (O::UnsignedGreaterEqual, M::TwoValue, _, _, _, Some(size)) => {
                     match SignedImmediate::new_from_bits(imm) {
                         None => {
                             bce.load_bits_into_register(T4, M::TwoValue, imm);
-                            bce.ugt(rd, rs, T4);
+                            bce.ugeq(rd, rs, T4);
                         }
-                        Some(imm) => bce.ugti(rd, rs, imm, size),
+                        Some(imm) => bce.ugeqi(rd, rs, imm, size),
                     }
                 }
-                (O::UnsignedGreaterEqual, M::TwoValue, None, _, _, _) => {
+                (O::UnsignedGreaterEqual, M::TwoValue, _, _, _, None) => {
                     let imm = heap_builder.claim_constant(M::TwoValue, imm.clone());
                     bce.load_u64(T4, imm.offset.bit_offset as u64);
-                    bce.heap_tv_unsigned_gt(rd, rs, T4, src_size);
+                    bce.heap_tv_unsigned_geq(rd, rs, T4, src_size);
                 }
-                (O::UnsignedGreaterEqual, M::FourValue, Some(size), _, _, _) => {
+                (O::UnsignedGreaterEqual, M::FourValue, _, _, _, Some(size)) => {
                     match SignedImmediate::new_from_bits(imm) {
                         None => {
                             bce.load_bits_into_register(T4, M::FourValue, imm);
-                            bce.fv_ugt(rd, rs, T4, size);
+                            bce.fv_ugeq(rd, rs, T4, size);
                         }
-                        Some(imm) => bce.fv_ugti(rd, rs, imm, size),
+                        Some(imm) => bce.fv_ugeqi(rd, rs, imm, size),
                     }
                 }
-                (O::UnsignedGreaterEqual, M::FourValue, None, _, _, _) => {
+                (O::UnsignedGreaterEqual, M::FourValue, _, _, _, None) => {
                     let imm = heap_builder.claim_constant(M::FourValue, imm.clone());
                     bce.load_u64(T4, imm.offset.bit_offset as u64);
-                    bce.heap_fv_unsigned_gt(rd, rs, T4, src_size);
+                    bce.heap_fv_unsigned_geq(rd, rs, T4, src_size);
                 }
                 (O::ConcatLeft, M::TwoValue, Some(_), _, _, _) => {
                     // @Performance. There is likely space here for a left_shift_or_immediate

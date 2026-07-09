@@ -1328,6 +1328,19 @@ impl BytecodeEncoder {
         self.heap_binary_cmp(rd, rs1, rs2, CompareOp::FvUnsignedGt, size);
     }
 
+    pub fn heap_tv_unsigned_geq(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_tv_unsigned_leq(rd, rs2, rs1, size);
+    }
+    pub fn heap_tv_unsigned_lt(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_tv_unsigned_gt(rd, rs2, rs1, size);
+    }
+    pub fn heap_fv_unsigned_geq(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_binary_cmp(rd, rs1, rs2, CompareOp::FvUnsignedLeq, size);
+    }
+    pub fn heap_fv_unsigned_lt(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_binary_cmp(rd, rs1, rs2, CompareOp::FvUnsignedGt, size);
+    }
+
     pub fn heap_tv_min(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
         self.heap_binary_minmax(rd, rs1, rs2, false, false, size);
     }
