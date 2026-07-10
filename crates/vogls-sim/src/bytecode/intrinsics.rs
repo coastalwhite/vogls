@@ -1,6 +1,7 @@
 use std::fmt;
 
 use vogls_bits::arithmetic::FvLogicValue;
+use vogls_bits::format::BitsFormatOptions;
 use vogls_ir::{Bits, IntrinsicOp, LogicMode, Mode, SCALAR_VSIZE, VSIZE_32, VSIZE_64, VectorSize};
 use vogls_runtime::RuntimeState;
 use vogls_utils::NonMaxU16;
@@ -59,10 +60,18 @@ impl BytecodeInstruction for PushArgument {
         &self,
         f: &mut fmt::Formatter<'_>,
         regs: &Regs,
-        _state: &RuntimeState,
+        state: &RuntimeState,
     ) -> fmt::Result {
         f.write_str(EXEC_ITRACE_INDENT)?;
-        write_register(f, regs, "rs", self.rs, self.mode)?;
+        let size = self.size.get(regs);
+        if size > VSIZE_64 {
+            let rs = state
+                .heap
+                .load_bits(regs.get_as_addr(self.rs).to_ref(size), self.mode);
+            write!(f, "rs = {}", rs.display(&BitsFormatOptions::default()))?;
+        } else {
+            write_register(f, regs, "rs", self.rs, self.mode)?;
+        }
         writeln!(f)?;
         Ok(())
     }

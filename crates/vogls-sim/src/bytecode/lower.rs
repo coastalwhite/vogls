@@ -655,8 +655,15 @@ fn lower_instruction(
                     // scratch register.
                     fv_concat_heap(bce, rd, rs1, rs2, lhs_size, rhs_size, T1);
                 }
-                (O::CopyX, ..) => todo!(),
-                (O::CopyZ, ..) => todo!(),
+                (O::CopyX, _, Some(_), M::TwoValue, _) => bce.copy(rd, rs1),
+                (O::CopyX, _, None, M::TwoValue, _) => bce.heap_tv_copy(rd, rs1, lhs_size),
+                (O::CopyX, _, Some(size), M::FourValue, _) => bce.fv_copyx(rd, rs1, rs2, size),
+                (O::CopyX, _, None, M::FourValue, _) => bce.heap_fv_copyx(rd, rs1, rs2, lhs_size),
+                (O::CopyZ, _, Some(_), M::TwoValue, _) => bce.copy(rd, rs1),
+                (O::CopyZ, _, None, M::TwoValue, _) => bce.heap_tv_copy(rd, rs1, lhs_size),
+                (O::CopyZ, _, Some(size), M::FourValue, _) => bce.fv_copyz(rd, rs1, rs2, size),
+                (O::CopyZ, _, None, M::FourValue, _) => bce.heap_fv_copyz(rd, rs1, rs2, lhs_size),
+
                 (O::Min, _, Some(_), M::TwoValue, _) => bce.min(rd, rs1, rs2),
                 (O::Min, _, None, M::TwoValue, _) => bce.heap_tv_min(rd, rs1, rs2, lhs_size),
                 (O::Min, _, Some(size), M::FourValue, _) => bce.fv_min(rd, rs1, rs2, size),

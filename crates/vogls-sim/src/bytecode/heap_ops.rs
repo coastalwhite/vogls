@@ -9,6 +9,8 @@ use vogls_bits::arithmetic::{
     tv_cell_divmod, tv_cell_multiplication, tv_cell_power, tv_cell_subtraction,
 };
 use vogls_bits::comparison::{fv_cell_unsigned_leq, tv_cell_unsigned_leq};
+use vogls_bits::copyxz::{copy_x, copy_z};
+use vogls_bits::format::{BitsDisplay, BitsFormatOptions};
 use vogls_bits::negate::{fv_cell_negate, tv_cell_negate};
 use vogls_bits::reduce::{
     fv_l_reduce_and, fv_l_reduce_or, fv_l_reduce_xor, tv_reduce_and, tv_reduce_or, tv_reduce_xor,
@@ -19,15 +21,15 @@ use vogls_bits::shift::{
 };
 use vogls_bits::util::CellSlice;
 use vogls_codegen::HeapOffset;
-use vogls_ir::VectorSize;
+use vogls_ir::{LogicMode, VectorSize};
 use vogls_runtime::RuntimeState;
 
-use crate::bytecode::write_padded_mnemonic;
+use crate::bytecode::{write_padded_mnemonic, write_register};
 
 use super::reg::{Reg, Regs};
 use super::{
     Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, BytecodeOpcode, ColdContext,
-    InlineNBitSize, Schedule,
+    EXEC_ITRACE_INDENT, InlineNBitSize, Schedule,
 };
 pub struct HeapBinaryBitwise {
     rd: Reg,
@@ -131,9 +133,55 @@ impl BytecodeInstruction for HeapBinaryBitwise {
             BitwiseOp::FvXor => "fv.heap_xor",
             BitwiseOp::FvAndNot => "fv.heap_andnot",
             BitwiseOp::FvOrNot => "fv.heap_ornot",
+            BitwiseOp::FvCopyX => "fv.heap_copyx",
+            BitwiseOp::FvCopyZ => "fv.heap_copyz",
         };
         write_padded_mnemonic(f, mnemonic)?;
         write!(f, "{rd}, {rs1}, {rs2}")
+    }
+    fn pre_exec_itrace(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        regs: &Regs,
+        state: &RuntimeState,
+    ) -> fmt::Result {
+        f.write_str(EXEC_ITRACE_INDENT)?;
+        let size = self.size.get(regs);
+        let mode = if self.op.is_four_value() {
+            LogicMode::FourValue
+        } else {
+            LogicMode::TwoValue
+        };
+        let rs1 = state
+            .heap
+            .load_bits(regs.get_as_addr(self.rs1).to_ref(size), mode);
+        let rs2 = state
+            .heap
+            .load_bits(regs.get_as_addr(self.rs2).to_ref(size), mode);
+        writeln!(
+            f,
+            "rs1 = {}, rs2 = {}",
+            rs1.display(&BitsFormatOptions::default()),
+            rs2.display(&BitsFormatOptions::default())
+        )
+    }
+    fn post_exec_itrace(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        regs: &Regs,
+        state: &RuntimeState,
+    ) -> fmt::Result {
+        f.write_str(EXEC_ITRACE_INDENT)?;
+        let size = self.size.get(regs);
+        let mode = if self.op.is_four_value() {
+            LogicMode::FourValue
+        } else {
+            LogicMode::TwoValue
+        };
+        let rd = state
+            .heap
+            .load_bits(regs.get_as_addr(self.rd).to_ref(size), mode);
+        writeln!(f, "rd = {}", rd.display(&BitsFormatOptions::default()))
     }
     fn execute(
         self,
@@ -203,6 +251,12 @@ impl BytecodeInstruction for HeapBinaryBitwise {
             }),
             O::FvOrNot => fv_bin_u64_cell_bitwise_op(dst, src1, src2, |lspc, lval, rspc, rval| {
                 fv_bitwise_ornot_elem(lspc, lval, rspc, rval)
+            }),
+            O::FvCopyX => fv_bin_u64_cell_bitwise_op(dst, src1, src2, |lspc, lval, rspc, rval| {
+                copy_x(lspc, lval, rspc, rval)
+            }),
+            O::FvCopyZ => fv_bin_u64_cell_bitwise_op(dst, src1, src2, |lspc, lval, rspc, rval| {
+                copy_z(lspc, lval, rspc, rval)
             }),
         }
     }
@@ -761,6 +815,17 @@ impl BytecodeInstruction for HeapCaseEq {
         write_padded_mnemonic(f, mnemonic)?;
         write!(f, "{rd}, {rs1}, {rs2}")
     }
+    fn post_exec_itrace(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        regs: &Regs,
+        _state: &RuntimeState,
+    ) -> fmt::Result {
+        f.write_str(EXEC_ITRACE_INDENT)?;
+        write_register(f, regs, "rd", self.rd, LogicMode::TwoValue)?;
+        writeln!(f)
+    }
+
     fn execute(
         self,
         regs: &mut Regs,
@@ -946,18 +1011,26 @@ pub enum BitwiseOp {
     FvXor,
     FvAndNot,
     FvOrNot,
+    FvCopyX,
+    FvCopyZ,
 }
 
 impl BitwiseOp {
     pub fn is_four_value(self) -> bool {
         match self {
             Self::TvAnd | Self::TvOr | Self::TvXor | Self::TvAndNot | Self::TvOrNot => false,
-            Self::FvAnd | Self::FvOr | Self::FvXor | Self::FvAndNot | Self::FvOrNot => true,
+            Self::FvAnd
+            | Self::FvOr
+            | Self::FvXor
+            | Self::FvAndNot
+            | Self::FvOrNot
+            | Self::FvCopyX
+            | Self::FvCopyZ => true,
         }
     }
 
     pub fn new_masked(v: u32) -> Self {
-        match v & 0x7 {
+        match v & 0xF {
             0 => Self::TvAnd,
             1 => Self::TvOr,
             2 => Self::TvXor,
@@ -967,7 +1040,9 @@ impl BitwiseOp {
             6 => Self::FvOr,
             7 => Self::FvXor,
             8 => Self::FvAndNot,
-            _ => Self::FvOrNot,
+            9 => Self::FvOrNot,
+            10 => Self::FvCopyX,
+            _ => Self::FvCopyZ,
         }
     }
 }
@@ -1271,6 +1346,12 @@ impl BytecodeEncoder {
     }
     pub fn heap_fv_xor(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
         self.heap_binary_bitwise(rd, rs1, rs2, BitwiseOp::FvXor, size);
+    }
+    pub fn heap_fv_copyx(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_binary_bitwise(rd, rs1, rs2, BitwiseOp::FvCopyX, size);
+    }
+    pub fn heap_fv_copyz(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_binary_bitwise(rd, rs1, rs2, BitwiseOp::FvCopyZ, size);
     }
 
     pub fn heap_tv_add(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {

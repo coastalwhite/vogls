@@ -375,6 +375,8 @@ opcodes![
     FvSlrx,
     FvSar,
     FvLeftShiftOr,
+    FvCopyX,
+    FvCopyZ,
     FvNot,
     FvReduceAnd,
     FvReduceOr,

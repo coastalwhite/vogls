@@ -5,11 +5,29 @@ use crate::{VectorSize, util};
 
 pub fn copy_x(src_spc: u64, src_val: u64, mask_spc: u64, mask_val: u64) -> (u64, u64) {
     let copy_mask = !mask_spc & !mask_val;
-    (src_spc & !copy_mask, src_val & !copy_mask)
+
+    // SPC = (SRC (SPC) & !COPY) | (0 & COPY)
+    //     = SRC (SPC) & !COPY
+    let spc = src_spc & !copy_mask;
+    // VAL = (SRC (VAL) & !COPY) | (0 & COPY)
+    //     = SRC (VAL) & !COPY
+    let val = src_val & !copy_mask;
+
+    (spc, val)
 }
 pub fn copy_z(src_spc: u64, src_val: u64, mask_spc: u64, mask_val: u64) -> (u64, u64) {
     let copy_mask = !mask_spc & mask_val;
-    (src_spc & !copy_mask, src_val | copy_mask)
+
+    // SPC = (SRC (SPC) & !COPY) | (0 & COPY)
+    //     = SRC (SPC) & !COPY
+    let spc = src_spc & !copy_mask;
+    // VAL = (SRC (VAL) & !COPY) | (1 & COPY)
+    //     = (SRC (VAL) & !COPY) | COPY
+    //     = (SRC (VAL) | COPY) & (!COPY | COPY)
+    //     = SRC (VAL) | COPY
+    let val = src_val | copy_mask;
+
+    (spc, val)
 }
 
 pub fn fv_l_copy_x(dst: &mut [u64], src: &[u64], mask: &[u64]) {

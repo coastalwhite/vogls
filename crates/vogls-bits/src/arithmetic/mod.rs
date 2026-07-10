@@ -197,7 +197,7 @@ pub fn tv_bin_u64_cell_bitwise_mask_last_op(
         dst[i].set(op(lhs[i].get(), rhs[i].get()));
     }
     if let Some(d) = dst.last() {
-        if size.get() % 64 == 0 {
+        if size.get() % 64 != 0 {
             d.set(d.get() & (1u64 << (size.get() % 64)).wrapping_sub(1));
         }
     }

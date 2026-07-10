@@ -4,6 +4,7 @@ use vogls_bits::arithmetic::{
     fv_bitwise_and_elem, fv_bitwise_andnot_elem, fv_bitwise_or_elem, fv_bitwise_ornot_elem,
     fv_bitwise_xor_elem,
 };
+use vogls_bits::copyxz::{copy_x, copy_z};
 use vogls_bits::edge::{fv_negedge_u64, fv_posedge_u64};
 use vogls_bits::shift::fv_shift_arith_right;
 use vogls_bits::util::wrapping_u64_pow;
@@ -78,6 +79,8 @@ pub struct FvSlr(pub SbsBitwiseRType);
 pub struct FvSlrx(pub SbsBitwiseRType);
 pub struct FvSar(pub SbsBitwiseRType);
 pub struct FvLeftShiftOr(pub SbsBitwiseRType);
+pub struct FvCopyX(pub SbsBitwiseRType);
+pub struct FvCopyZ(pub SbsBitwiseRType);
 
 impl BitwiseRType {
     #[inline(always)]
@@ -1277,6 +1280,56 @@ impl BytecodeInstruction for FvLeftShiftOr {
         regs[rd_val] = (regs[rs1_val] << size.0) | regs[rs2_val];
     }
 }
+impl BytecodeInstruction for FvCopyX {
+    impl_sbs_bitwise!(FvCopyX, "fv.copyx", FourValue, FourValue, FourValue);
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let SbsBitwiseRType {
+            rd,
+            rs1,
+            rs2,
+            size: _,
+        } = self.0;
+        let (rd_spc, rd_val) = rd.to_spc_and_val();
+        let (rs1_spc, rs1_val) = rs1.to_spc_and_val();
+        let (rs2_spc, rs2_val) = rs2.to_spc_and_val();
+        (regs[rd_spc], regs[rd_val]) =
+            copy_x(regs[rs1_spc], regs[rs1_val], regs[rs2_spc], regs[rs2_val]);
+    }
+}
+impl BytecodeInstruction for FvCopyZ {
+    impl_sbs_bitwise!(FvCopyZ, "fv.copyz", FourValue, FourValue, FourValue);
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let SbsBitwiseRType {
+            rd,
+            rs1,
+            rs2,
+            size: _,
+        } = self.0;
+        let (rd_spc, rd_val) = rd.to_spc_and_val();
+        let (rs1_spc, rs1_val) = rs1.to_spc_and_val();
+        let (rs2_spc, rs2_val) = rs2.to_spc_and_val();
+        (regs[rd_spc], regs[rd_val]) =
+            copy_z(regs[rs1_spc], regs[rs1_val], regs[rs2_spc], regs[rs2_val]);
+    }
+}
 
 macro_rules! impl_bytecode_methods {
     ($(($name:ident, $op:ident))*) => {
@@ -1350,4 +1403,6 @@ impl_bytecode_sbs_methods! {
     (fv_slrx, FvSlrx)
     (fv_sar, FvSar)
     (fv_lsor, FvLeftShiftOr)
+    (fv_copyx, FvCopyX)
+    (fv_copyz, FvCopyZ)
 }
