@@ -6,7 +6,7 @@ use vogls_bits::arithmetic::{
 };
 use vogls_bits::copyxz::{copy_x, copy_z};
 use vogls_bits::edge::{fv_negedge_u64, fv_posedge_u64};
-use vogls_bits::shift::fv_shift_arith_right;
+use vogls_bits::shift::{fv_shift_arith_right, tv_shift_arith_right};
 use vogls_bits::util::wrapping_u64_pow;
 use vogls_ir::{LogicMode, VectorSize};
 use vogls_runtime::RuntimeState;
@@ -619,11 +619,7 @@ impl BytecodeInstruction for TvSar {
         _cldctx: &mut ColdContext,
     ) {
         let SbsBitwiseRType { rd, rs1, rs2, size } = self.0;
-        let unused_bits = 64 - VectorSize::from(size).get();
-        let out = regs[rs1] << unused_bits;
-        let out = out as i64;
-        let out = out.unbounded_shr(unused_bits + regs[rs2] as u32);
-        regs[rd] = out as u64;
+        regs[rd] = tv_shift_arith_right(regs[rs1], regs[rs2] as u32, size.into());
     }
 }
 impl BytecodeInstruction for TvLeftShiftOr {
@@ -1150,22 +1146,17 @@ impl BytecodeInstruction for FvSll {
         let (rs1_spc, rs1_val) = rs1.to_spc_and_val();
         let (rs2_spc, rs2_val) = rs2.to_spc_and_val();
 
-        let mask = size.mask(u64::MAX);
-
-        if regs[rs2_spc] != mask {
+        if regs[rs2_spc] != u32::MAX as u64 {
             regs[rd_spc] = 0;
             regs[rd_val] = 0;
             return;
         }
 
-        let shift = regs[rs2_val];
-        if shift >= 64 {
-            regs[rd_spc] = mask;
-            regs[rd_val] = 0;
-        } else {
-            regs[rd_spc] = size.mask(regs[rs1_spc] << shift) | ((1u64 << shift) - 1);
-            regs[rd_val] = size.mask(regs[rs1_val] << shift);
-        }
+        let shift = regs[rs2_val] as u32;
+        regs[rd_spc] = regs[rs1_spc].unbounded_shl(shift);
+        regs[rd_spc] |= 1u64.unbounded_shl(shift).wrapping_sub(1);
+        regs[rd_spc] = size.mask(regs[rd_spc]);
+        regs[rd_val] = size.mask(regs[rs1_val].unbounded_shl(shift));
     }
 }
 impl BytecodeInstruction for FvSlr {
@@ -1246,18 +1237,15 @@ impl BytecodeInstruction for FvSar {
         let (rs1_spc, rs1_val) = rs1.to_spc_and_val();
         let (rs2_spc, rs2_val) = rs2.to_spc_and_val();
 
-        let mask = size.mask(u64::MAX);
-
-        if regs[rs2_spc] != mask {
+        if regs[rs2_spc] != u32::MAX as u64 {
             regs[rd_spc] = 0;
             regs[rd_val] = 0;
             return;
         }
 
         let shift = regs[rs2_val].min(u32::MAX as u64) as u32;
-        let size = VectorSize::from(size);
         (regs[rd_spc], regs[rd_val]) =
-            fv_shift_arith_right(regs[rs1_spc], regs[rs1_val], shift, size);
+            fv_shift_arith_right(regs[rs1_spc], regs[rs1_val], shift, size.into());
     }
 }
 impl BytecodeInstruction for FvLeftShiftOr {

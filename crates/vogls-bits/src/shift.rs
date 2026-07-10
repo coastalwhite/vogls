@@ -32,7 +32,12 @@ pub fn tv_s_arithmetic_shift_right(dst: &mut [u8], src: &[u8], shift: u32, size:
 pub fn tv_l_logical_shift_left(dst: &mut [u64], src: &[u64], shift: u32, size: VectorSize) {
     tv_l_logical_shift_left_with(dst, src, shift, size, false);
 }
-pub fn tv_cell_logical_shift_left(dst: &[Cell<u64>], src: &[Cell<u64>], shift: u32, size: VectorSize) {
+pub fn tv_cell_logical_shift_left(
+    dst: &[Cell<u64>],
+    src: &[Cell<u64>],
+    shift: u32,
+    size: VectorSize,
+) {
     tv_cell_logical_shift_left_with(dst, src, shift, size, false);
 }
 pub fn tv_l_logical_shift_left_with(
@@ -321,14 +326,16 @@ pub fn tv_shift_arith_right(val: u64, shift: u32, size: VectorSize) -> u64 {
     assert!(size.get() <= 64);
     let unused_bits = 64 - size.get();
     let val = ((val as i64) << unused_bits).unbounded_shr(unused_bits + shift);
-    val as u64
+    let mask = 1u64.unbounded_shl(size.get()).wrapping_sub(1);
+    val as u64 & mask
 }
 pub fn fv_shift_arith_right(spc: u64, val: u64, shift: u32, size: VectorSize) -> (u64, u64) {
     assert!(size.get() <= 64);
     let unused_bits = 64 - size.get();
     let spc = ((spc as i64) << unused_bits).unbounded_shr(unused_bits + shift);
     let val = ((val as i64) << unused_bits).unbounded_shr(unused_bits + shift);
-    (spc as u64, val as u64)
+    let mask = 1u64.unbounded_shl(size.get()).wrapping_sub(1);
+    (spc as u64 & mask, val as u64 & mask)
 }
 
 pub fn fv_l_logical_shift_left(dst: &mut [u64], src: &[u64], shift: u32, size: VectorSize) {
@@ -350,17 +357,32 @@ pub fn fv_l_arithmetic_shift_right(dst: &mut [u64], src: &[u64], shift: u32, siz
     tv_l_logical_shift_right_with(&mut dst[nwords..], &src[nwords..], shift, size, msb_val);
 }
 
-pub fn fv_cell_logical_shift_left(dst: &[Cell<u64>], src: &[Cell<u64>], shift: u32, size: VectorSize) {
+pub fn fv_cell_logical_shift_left(
+    dst: &[Cell<u64>],
+    src: &[Cell<u64>],
+    shift: u32,
+    size: VectorSize,
+) {
     let nwords = dst.len() / 2;
     tv_cell_logical_shift_left_with(&dst[..nwords], &src[..nwords], shift, size, true);
     tv_cell_logical_shift_left(&dst[nwords..], &src[nwords..], shift, size);
 }
-pub fn fv_cell_logical_shift_right(dst: &[Cell<u64>], src: &[Cell<u64>], shift: u32, size: VectorSize) {
+pub fn fv_cell_logical_shift_right(
+    dst: &[Cell<u64>],
+    src: &[Cell<u64>],
+    shift: u32,
+    size: VectorSize,
+) {
     let nwords = dst.len() / 2;
     tv_cell_logical_shift_right_with(&dst[..nwords], &src[..nwords], shift, size, true);
     tv_cell_logical_shift_right(&dst[nwords..], &src[nwords..], shift, size);
 }
-pub fn fv_cell_arithmetic_shift_right(dst: &[Cell<u64>], src: &[Cell<u64>], shift: u32, size: VectorSize) {
+pub fn fv_cell_arithmetic_shift_right(
+    dst: &[Cell<u64>],
+    src: &[Cell<u64>],
+    shift: u32,
+    size: VectorSize,
+) {
     let nwords = dst.len() / 2;
     let msb_idx = (size.get() - 1) as usize;
     let msb_spc = (src[msb_idx / 64].get() >> (msb_idx % 64)) & 1 != 0;
