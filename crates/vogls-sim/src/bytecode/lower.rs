@@ -1467,7 +1467,7 @@ fn lower_instruction(
                     let (addr, spc_offset) = InlineAddrOffset::new(i64::from(*offset), bce, rs, T4);
                     bce.load_unaligned(rdspc, addr, spc_offset, dst_size);
 
-                    let num_words = (src_size.get() as u64).next_multiple_of(64);
+                    let num_words = HeapAlignment::spc_offset_to_val_offset(src_size, 0);
                     let (addr, val_offset) = InlineAddrOffset::new(
                         (*offset as u64).wrapping_add(num_words) as i64,
                         bce,
@@ -1740,12 +1740,10 @@ fn lower_instruction(
                         let (addr, spc_offset) =
                             InlineAddrOffset::new(i64::from(*offset), bce, rsignal, T4);
                         bce.load_unaligned(rdspc, addr, spc_offset, size);
-                        let (addr, val_offset) = InlineAddrOffset::new(
-                            i64::from(*offset) + i64::from(signal_size.get().next_multiple_of(64)),
-                            bce,
-                            rsignal,
-                            T4,
-                        );
+                        let val_offset =
+                            HeapAlignment::spc_offset_to_val_offset(signal_size, *offset as u64);
+                        let (addr, val_offset) =
+                            InlineAddrOffset::new(val_offset as i64, bce, rsignal, T4);
                         bce.load_unaligned(rdval, addr, val_offset, size);
                     }
                 }
