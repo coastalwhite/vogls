@@ -608,17 +608,19 @@ fn lower_instruction(
                     bce.heap_tv_sll(rd, rs1, rs2, dst_size)
                 }
                 (O::LogicalShiftLeft, M::FourValue, Some(size), _, _) => {
-                    bce.fv_sll(rd, rs1, rs2, size)
+                    bce.fv_sll(rd, rs1, rs2, size, rhs.mode())
                 }
                 (O::LogicalShiftLeft, M::FourValue, None, _, _) => {
                     bce.heap_fv_sll(rd, rs1, rs2, dst_size)
                 }
-                (O::LogicalShiftRight, M::TwoValue, Some(_), _, _) => bce.slr(rd, rs1, rs2),
+                (O::LogicalShiftRight, M::TwoValue, Some(size), _, _) => {
+                    bce.slr(rd, rs1, rs2, size)
+                }
                 (O::LogicalShiftRight, M::TwoValue, None, _, _) => {
                     bce.heap_tv_slr(rd, rs1, rs2, dst_size)
                 }
                 (O::LogicalShiftRight, M::FourValue, Some(size), _, _) => {
-                    bce.fv_slr(rd, rs1, rs2, size)
+                    bce.fv_slr(rd, rs1, rs2, size, rhs.mode())
                 }
                 (O::LogicalShiftRight, M::FourValue, None, _, _) => {
                     bce.heap_fv_slr(rd, rs1, rs2, dst_size)
@@ -630,7 +632,7 @@ fn lower_instruction(
                     bce.heap_tv_sar(rd, rs1, rs2, dst_size)
                 }
                 (O::ArithmeticShiftRight, M::FourValue, Some(size), _, _) => {
-                    bce.fv_sar(rd, rs1, rs2, size)
+                    bce.fv_sar(rd, rs1, rs2, size, rhs.mode())
                 }
                 (O::ArithmeticShiftRight, M::FourValue, None, _, _) => {
                     bce.heap_fv_sar(rd, rs1, rs2, dst_size)
@@ -1352,24 +1354,22 @@ fn lower_instruction(
                 SixBitSize::from_vector_size(dst_size),
                 SixBitSize::from_vector_size(src_size),
             ) {
-                (M::TwoValue, Some(dst_size), Some(_)) => {
-                    bce.slr(rd, rs, rimm);
-                    bce.truncate(rd, rd, dst_size);
+                (M::TwoValue, Some(dst_size), Some(src_size)) => {
+                    bce.copy(T1, rs);
+                    bce.ori(T0, T0, SignedImmediate::MINUS_ONE, src_size);
+                    bce.fv_slrx(rd, T0, rimm, dst_size, LogicMode::TwoValue);
                 }
                 (M::FourValue, Some(dst_size), Some(_)) => {
-                    let (rdspc, rdval) = rd.to_spc_and_val();
-                    let (rsspc, rsval) = rs.to_spc_and_val();
-                    bce.slr(rdspc, rsspc, rimm);
-                    bce.slr(rdval, rsval, rimm);
-                    bce.truncate(rdspc, rdspc, dst_size);
-                    bce.truncate(rdval, rdval, dst_size);
+                    bce.fv_slrx(rd, rs, rimm, dst_size, LogicMode::TwoValue);
                 }
                 (M::TwoValue, Some(dst_size), None) => {
                     // TempReg: src_size > 64 => T3 is free.
 
                     // @Incorrect. This can reach out-of-bounds.
+                    let (rdspc, rdval) = rd.to_spc_and_val();
                     bce.add(T3, rs, rimm, SixBitSize::N64);
-                    bce.load_unaligned(rd, T3, InlineAddrOffset::ZERO, dst_size);
+                    bce.load_unaligned(rdval, T3, InlineAddrOffset::ZERO, dst_size);
+                    bce.ori(rdspc, rdspc, SignedImmediate::MINUS_ONE, dst_size);
                 }
                 (M::FourValue, Some(dst_size), None) => {
                     // TempReg: src_size > 64 => T3 is free.

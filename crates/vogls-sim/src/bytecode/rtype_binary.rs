@@ -8,7 +8,7 @@ use vogls_bits::copyxz::{copy_x, copy_z};
 use vogls_bits::edge::{fv_negedge_u64, fv_posedge_u64};
 use vogls_bits::shift::{fv_shift_arith_right, tv_shift_arith_right};
 use vogls_bits::util::wrapping_u64_pow;
-use vogls_ir::{LogicMode, VectorSize};
+use vogls_ir::LogicMode;
 use vogls_runtime::RuntimeState;
 
 use super::reg::{Reg, Regs};
@@ -27,6 +27,13 @@ pub struct SbsBitwiseRType {
     pub rs1: Reg,
     pub rs2: Reg,
     pub size: SixBitSize,
+}
+pub struct FvShiftRType {
+    pub rd: Reg,
+    pub rs1: Reg,
+    pub rs2: Reg,
+    pub size: SixBitSize,
+    pub offset_mode: LogicMode,
 }
 
 pub struct TvAnd(pub BitwiseRType);
@@ -49,7 +56,7 @@ pub struct TvUnsignedGt(pub BitwiseRType);
 pub struct TvMin(pub BitwiseRType);
 pub struct TvMax(pub BitwiseRType);
 pub struct TvSll(pub SbsBitwiseRType);
-pub struct TvSlr(pub BitwiseRType);
+pub struct TvSlr(pub SbsBitwiseRType);
 pub struct TvSar(pub SbsBitwiseRType);
 pub struct TvLeftShiftOr(pub SbsBitwiseRType);
 pub struct CMov(pub BitwiseRType);
@@ -74,10 +81,10 @@ pub struct FvUnsignedLeq(pub SbsBitwiseRType);
 pub struct FvUnsignedGt(pub SbsBitwiseRType);
 pub struct FvMin(pub SbsBitwiseRType);
 pub struct FvMax(pub SbsBitwiseRType);
-pub struct FvSll(pub SbsBitwiseRType);
-pub struct FvSlr(pub SbsBitwiseRType);
-pub struct FvSlrx(pub SbsBitwiseRType);
-pub struct FvSar(pub SbsBitwiseRType);
+pub struct FvSll(pub FvShiftRType);
+pub struct FvSlr(pub FvShiftRType);
+pub struct FvSar(pub FvShiftRType);
+pub struct FvSlrx(pub FvShiftRType);
 pub struct FvLeftShiftOr(pub SbsBitwiseRType);
 pub struct FvCopyX(pub SbsBitwiseRType);
 pub struct FvCopyZ(pub SbsBitwiseRType);
@@ -129,6 +136,44 @@ impl SbsBitwiseRType {
     }
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let Self { rd, rs1, rs2, size } = self;
+        write!(f, "{rd}, {rs1}, {rs2}, |{size}|")
+    }
+}
+impl FvShiftRType {
+    #[inline(always)]
+    fn extract(c: Bytecode) -> Self {
+        let v = c.0;
+        Self {
+            rd: Reg::new_masked(v >> 8),
+            rs1: Reg::new_masked(v >> 12),
+            rs2: Reg::new_masked(v >> 16),
+            size: SixBitSize::new_masked(v >> 20),
+            offset_mode: if (v >> 26) & 1 != 0 {
+                LogicMode::FourValue
+            } else {
+                LogicMode::TwoValue
+            },
+        }
+    }
+    #[inline(always)]
+    fn encode(&self, opcode: BytecodeOpcode) -> Bytecode {
+        Bytecode(
+            opcode as u32
+                | ((self.rd as u32) << 8)
+                | ((self.rs1 as u32) << 12)
+                | ((self.rs2 as u32) << 16)
+                | ((self.size.0 as u32) << 20)
+                | ((self.offset_mode as u32) << 26),
+        )
+    }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            rd,
+            rs1,
+            rs2,
+            size,
+            offset_mode: _,
+        } = self;
         write!(f, "{rd}, {rs1}, {rs2}, |{size}|")
     }
 }
@@ -193,6 +238,46 @@ macro_rules! impl_sbs_bitwise {
             write_register(f, regs, "rs1", self.0.rs1, LogicMode::$rs1_mode)?;
             f.write_str(", ")?;
             write_register(f, regs, "rs2", self.0.rs2, LogicMode::$rs2_mode)?;
+            writeln!(f)?;
+            Ok(())
+        }
+        fn post_exec_itrace(
+            &self,
+            f: &mut fmt::Formatter<'_>,
+            regs: &Regs,
+            _state: &RuntimeState,
+        ) -> fmt::Result {
+            f.write_str(EXEC_ITRACE_INDENT)?;
+            write_register(f, regs, "rd", self.0.rd, LogicMode::$rd_mode)?;
+            writeln!(f)?;
+            Ok(())
+        }
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write_padded_mnemonic(f, $mnemonic)?;
+            self.0.fmt(f)
+        }
+    };
+}
+macro_rules! impl_fv_shift {
+    ($variant:ident, $mnemonic:literal, $rd_mode:ident, $rs1_mode:ident, $rs2_mode:ident) => {
+        #[inline(always)]
+        fn extract(v: Bytecode) -> Self {
+            debug_assert_eq!(v.opcode(), BytecodeOpcode::$variant as u8);
+            Self(FvShiftRType::extract(v))
+        }
+        fn encode(&self) -> Bytecode {
+            self.0.encode(BytecodeOpcode::$variant)
+        }
+        fn pre_exec_itrace(
+            &self,
+            f: &mut fmt::Formatter<'_>,
+            regs: &Regs,
+            _state: &RuntimeState,
+        ) -> fmt::Result {
+            f.write_str(EXEC_ITRACE_INDENT)?;
+            write_register(f, regs, "rs1", self.0.rs1, LogicMode::$rs1_mode)?;
+            f.write_str(", ")?;
+            write_register(f, regs, "rs2", self.0.rs2, self.0.offset_mode)?;
             writeln!(f)?;
             Ok(())
         }
@@ -579,15 +664,11 @@ impl BytecodeInstruction for TvSll {
         _cldctx: &mut ColdContext,
     ) {
         let SbsBitwiseRType { rd, rs1, rs2, size } = self.0;
-        if regs[rs2] >= 64 {
-            regs[rd] = 0;
-        } else {
-            regs[rd] = size.mask(regs[rs1] << regs[rs2]);
-        }
+        regs[rd] = size.mask(regs[rs1].unbounded_shl(regs[rs2] as u32));
     }
 }
 impl BytecodeInstruction for TvSlr {
-    impl_bitwise!(TvSlr, "tv.slr", TwoValue, TwoValue, TwoValue);
+    impl_sbs_bitwise!(TvSlr, "tv.slr", TwoValue, TwoValue, TwoValue);
 
     fn execute(
         self,
@@ -598,12 +679,8 @@ impl BytecodeInstruction for TvSlr {
         _listeners: &mut BytecodeListeners,
         _cldctx: &mut ColdContext,
     ) {
-        let BitwiseRType { rd, rs1, rs2 } = self.0;
-        if regs[rs2] >= 64 {
-            regs[rd] = 0;
-        } else {
-            regs[rd] = regs[rs1] >> regs[rs2];
-        }
+        let SbsBitwiseRType { rd, rs1, rs2, size } = self.0;
+        regs[rd] = size.mask(regs[rs1].unbounded_shr(regs[rs2] as u32));
     }
 }
 impl BytecodeInstruction for TvSar {
@@ -1130,7 +1207,7 @@ impl BytecodeInstruction for FvMax {
     }
 }
 impl BytecodeInstruction for FvSll {
-    impl_sbs_bitwise!(FvSll, "fv.sll", FourValue, FourValue, FourValue);
+    impl_fv_shift!(FvSll, "fv.sll", FourValue, FourValue, FourValue);
 
     fn execute(
         self,
@@ -1141,18 +1218,28 @@ impl BytecodeInstruction for FvSll {
         _listeners: &mut BytecodeListeners,
         _cldctx: &mut ColdContext,
     ) {
-        let SbsBitwiseRType { rd, rs1, rs2, size } = self.0;
+        let FvShiftRType {
+            rd,
+            rs1,
+            rs2,
+            size,
+            offset_mode,
+        } = self.0;
         let (rd_spc, rd_val) = rd.to_spc_and_val();
         let (rs1_spc, rs1_val) = rs1.to_spc_and_val();
-        let (rs2_spc, rs2_val) = rs2.to_spc_and_val();
 
-        if regs[rs2_spc] != u32::MAX as u64 {
-            regs[rd_spc] = 0;
-            regs[rd_val] = 0;
-            return;
-        }
-
-        let shift = regs[rs2_val] as u32;
+        let shift = match offset_mode {
+            LogicMode::TwoValue => regs[rs2] as u32,
+            LogicMode::FourValue => {
+                let (rs2_spc, rs2_val) = rs2.to_spc_and_val();
+                if regs[rs2_spc] != u32::MAX as u64 {
+                    regs[rd_spc] = 0;
+                    regs[rd_val] = 0;
+                    return;
+                }
+                regs[rs2_val] as u32
+            }
+        };
         regs[rd_spc] = regs[rs1_spc].unbounded_shl(shift);
         regs[rd_spc] |= 1u64.unbounded_shl(shift).wrapping_sub(1);
         regs[rd_spc] = size.mask(regs[rd_spc]);
@@ -1160,7 +1247,7 @@ impl BytecodeInstruction for FvSll {
     }
 }
 impl BytecodeInstruction for FvSlr {
-    impl_sbs_bitwise!(FvSlr, "fv.slr", FourValue, FourValue, FourValue);
+    impl_fv_shift!(FvSlr, "fv.slr", FourValue, FourValue, FourValue);
 
     fn execute(
         self,
@@ -1171,57 +1258,40 @@ impl BytecodeInstruction for FvSlr {
         _listeners: &mut BytecodeListeners,
         _cldctx: &mut ColdContext,
     ) {
-        let SbsBitwiseRType { rd, rs1, rs2, size } = self.0;
+        let FvShiftRType {
+            rd,
+            rs1,
+            rs2,
+            size,
+            offset_mode,
+        } = self.0;
         let (rd_spc, rd_val) = rd.to_spc_and_val();
         let (rs1_spc, rs1_val) = rs1.to_spc_and_val();
-        let (rs2_spc, rs2_val) = rs2.to_spc_and_val();
 
-        if regs[rs2_spc] != u32::MAX as u64 {
-            regs[rd_spc] = 0;
-            regs[rd_val] = 0;
-            return;
-        }
+        let shift = match offset_mode {
+            LogicMode::TwoValue => regs[rs2] as u32,
+            LogicMode::FourValue => {
+                let (rs2_spc, rs2_val) = rs2.to_spc_and_val();
+                if regs[rs2_spc] != u32::MAX as u64 {
+                    regs[rd_spc] = 0;
+                    regs[rd_val] = 0;
+                    return;
+                }
+                regs[rs2_val] as u32
+            }
+        };
 
-        let shift = regs[rs2_val] as u32;
         regs[rd_spc] = regs[rs1_spc].unbounded_shr(shift);
-        regs[rd_val] = regs[rs1_val].unbounded_shr(shift);
-        regs[rd_spc] |= size.mask(
-            1u64.unbounded_shl(shift)
-                .wrapping_sub(1)
-                .unbounded_shl((size.get() as u32).saturating_sub(shift)),
-        );
-    }
-}
-impl BytecodeInstruction for FvSlrx {
-    impl_sbs_bitwise!(FvSlrx, "fv.slrx", FourValue, FourValue, FourValue);
-
-    fn execute(
-        self,
-        regs: &mut Regs,
-        _pc: &mut u64,
-        _state: &mut RuntimeState,
-        _schedule: &mut Schedule,
-        _listeners: &mut BytecodeListeners,
-        _cldctx: &mut ColdContext,
-    ) {
-        let SbsBitwiseRType { rd, rs1, rs2, size } = self.0;
-        let (rd_spc, rd_val) = rd.to_spc_and_val();
-        let (rs1_spc, rs1_val) = rs1.to_spc_and_val();
-        let (rs2_spc, rs2_val) = rs2.to_spc_and_val();
-
-        if regs[rs2_spc] != u32::MAX as u64 {
-            regs[rd_spc] = 0;
-            regs[rd_val] = 0;
-            return;
-        }
-
-        let shift = regs[rs2_val] as u32;
-        regs[rd_spc] = size.mask(regs[rs1_spc].unbounded_shr(shift));
+        regs[rd_spc] |= 1u64
+            .unbounded_shl(shift)
+            .wrapping_sub(1)
+            .unbounded_shl((size.get() as u32).saturating_sub(shift));
+        regs[rd_spc] = size.mask(regs[rd_spc]);
         regs[rd_val] = size.mask(regs[rs1_val].unbounded_shr(shift));
     }
 }
 impl BytecodeInstruction for FvSar {
-    impl_sbs_bitwise!(FvSar, "fv.sar", FourValue, FourValue, FourValue);
+    impl_fv_shift!(FvSar, "fv.sar", FourValue, FourValue, FourValue);
 
     fn execute(
         self,
@@ -1232,20 +1302,70 @@ impl BytecodeInstruction for FvSar {
         _listeners: &mut BytecodeListeners,
         _cldctx: &mut ColdContext,
     ) {
-        let SbsBitwiseRType { rd, rs1, rs2, size } = self.0;
+        let FvShiftRType {
+            rd,
+            rs1,
+            rs2,
+            size,
+            offset_mode,
+        } = self.0;
         let (rd_spc, rd_val) = rd.to_spc_and_val();
         let (rs1_spc, rs1_val) = rs1.to_spc_and_val();
-        let (rs2_spc, rs2_val) = rs2.to_spc_and_val();
 
-        if regs[rs2_spc] != u32::MAX as u64 {
-            regs[rd_spc] = 0;
-            regs[rd_val] = 0;
-            return;
-        }
+        let shift = match offset_mode {
+            LogicMode::TwoValue => regs[rs2] as u32,
+            LogicMode::FourValue => {
+                let (rs2_spc, rs2_val) = rs2.to_spc_and_val();
+                if regs[rs2_spc] != u32::MAX as u64 {
+                    regs[rd_spc] = 0;
+                    regs[rd_val] = 0;
+                    return;
+                }
+                regs[rs2_val] as u32
+            }
+        };
 
-        let shift = regs[rs2_val].min(u32::MAX as u64) as u32;
         (regs[rd_spc], regs[rd_val]) =
             fv_shift_arith_right(regs[rs1_spc], regs[rs1_val], shift, size.into());
+    }
+}
+impl BytecodeInstruction for FvSlrx {
+    impl_fv_shift!(FvSlrx, "fv.slrx", FourValue, FourValue, FourValue);
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let FvShiftRType {
+            rd,
+            rs1,
+            rs2,
+            size,
+            offset_mode,
+        } = self.0;
+        let (rd_spc, rd_val) = rd.to_spc_and_val();
+        let (rs1_spc, rs1_val) = rs1.to_spc_and_val();
+
+        let shift = match offset_mode {
+            LogicMode::TwoValue => regs[rs2] as u32,
+            LogicMode::FourValue => {
+                let (rs2_spc, rs2_val) = rs2.to_spc_and_val();
+                if regs[rs2_spc] != u32::MAX as u64 {
+                    regs[rd_spc] = 0;
+                    regs[rd_val] = 0;
+                    return;
+                }
+                regs[rs2_val] as u32
+            }
+        };
+
+        regs[rd_spc] = size.mask(regs[rs1_spc].unbounded_shr(shift));
+        regs[rd_val] = size.mask(regs[rs1_val].unbounded_shr(shift));
     }
 }
 impl BytecodeInstruction for FvLeftShiftOr {
@@ -1337,6 +1457,15 @@ macro_rules! impl_bytecode_sbs_methods {
         }
     };
 }
+macro_rules! impl_bytecode_fv_shift_methods {
+    ($(($name:ident, $op:ident))*) => {
+        impl BytecodeEncoder {
+            $(pub fn $name(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: SixBitSize, offset_mode: LogicMode) {
+                self.data.push($op(FvShiftRType { rd, rs1, rs2, size, offset_mode }).encode());
+            })*
+        }
+    };
+}
 
 impl_bytecode_methods! {
     (cmov, CMov)
@@ -1348,7 +1477,6 @@ impl_bytecode_methods! {
     (ugt, TvUnsignedGt)
     (min, TvMin)
     (max, TvMax)
-    (slr, TvSlr)
     (fv_and, FvAnd)
     (fv_or, FvOr)
     (fv_xor, FvXor)
@@ -1372,6 +1500,7 @@ impl_bytecode_sbs_methods! {
     (mod0, TvMod0)
     (pow, TvPow)
     (sll, TvSll)
+    (slr, TvSlr)
     (sar, TvSar)
     (lsor, TvLeftShiftOr)
     (fv_add, FvAdd)
@@ -1386,11 +1515,14 @@ impl_bytecode_sbs_methods! {
     (fv_ugt, FvUnsignedGt)
     (fv_min, FvMin)
     (fv_max, FvMax)
-    (fv_sll, FvSll)
-    (fv_slr, FvSlr)
-    (fv_slrx, FvSlrx)
-    (fv_sar, FvSar)
     (fv_lsor, FvLeftShiftOr)
     (fv_copyx, FvCopyX)
     (fv_copyz, FvCopyZ)
+}
+
+impl_bytecode_fv_shift_methods! {
+    (fv_sll, FvSll)
+    (fv_slr, FvSlr)
+    (fv_sar, FvSar)
+    (fv_slrx, FvSlrx)
 }

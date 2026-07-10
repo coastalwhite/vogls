@@ -375,8 +375,8 @@ opcodes![
     FvMax,
     FvSll,
     FvSlr,
-    FvSlrx,
     FvSar,
+    FvSlrx,
     FvLeftShiftOr,
     FvCopyX,
     FvCopyZ,
@@ -820,8 +820,13 @@ impl BytecodeEncoder {
             return;
         }
 
-        if value == u64::MAX {
-            self.ori(rd, rd, SignedImmediate::MINUS_ONE, SixBitSize::N64);
+        if value.count_ones() == value.trailing_ones() {
+            self.ori(
+                rd,
+                rd,
+                SignedImmediate::MINUS_ONE,
+                SixBitSize(value.count_ones() as u8),
+            );
             return;
         }
 
