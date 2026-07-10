@@ -19,7 +19,7 @@ use vogls_bits::shift::{
 };
 use vogls_bits::util::CellSlice;
 use vogls_codegen::HeapOffset;
-use vogls_ir::{VectorSize, VSIZE_64};
+use vogls_ir::VectorSize;
 use vogls_runtime::RuntimeState;
 
 use crate::bytecode::write_padded_mnemonic;
@@ -624,7 +624,7 @@ impl BytecodeInstruction for HeapBinaryShift {
 impl BytecodeInstruction for HeapBinaryMinMax {
     #[inline(always)]
     fn extract(c: Bytecode) -> Self {
-        debug_assert_eq!(c.opcode(), BytecodeOpcode::HeapBinaryArithmetic as u8);
+        debug_assert_eq!(c.opcode(), BytecodeOpcode::HeapBinaryMinMax as u8);
         let v = c.0;
         Self {
             rd: Reg::new_masked(v >> 8),
@@ -638,7 +638,7 @@ impl BytecodeInstruction for HeapBinaryMinMax {
     #[inline(always)]
     fn encode(&self) -> Bytecode {
         Bytecode(
-            BytecodeOpcode::HeapBinaryArithmetic as u32
+            BytecodeOpcode::HeapBinaryMinMax as u32
                 | ((self.rd as u32) << 8)
                 | ((self.rs1 as u32) << 12)
                 | ((self.rs2 as u32) << 16)
@@ -711,7 +711,7 @@ impl BytecodeInstruction for HeapBinaryMinMax {
             ),
         ]);
 
-        if fv_cell_contains_special(src1, size) || fv_cell_contains_special(src2, size) {
+        if is_fv && (fv_cell_contains_special(src1, size) || fv_cell_contains_special(src2, size)) {
             dst.iter().for_each(|v| v.set(0));
             return;
         }
@@ -1079,8 +1079,16 @@ pub enum UnaryOp {
 impl UnaryOp {
     pub fn is_four_value(self) -> bool {
         match self {
-            Self::TvNeg | Self::TvCopy | Self::TvReduceOr | Self::TvReduceAnd | Self::TvReduceXor => false,
-            Self::FvNeg | Self::FvCopy | Self::FvReduceOr | Self::FvReduceAnd | Self::FvReduceXor => true,
+            Self::TvNeg
+            | Self::TvCopy
+            | Self::TvReduceOr
+            | Self::TvReduceAnd
+            | Self::TvReduceXor => false,
+            Self::FvNeg
+            | Self::FvCopy
+            | Self::FvReduceOr
+            | Self::FvReduceAnd
+            | Self::FvReduceXor => true,
         }
     }
 
