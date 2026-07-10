@@ -1,27 +1,28 @@
-use std::cell::Cell;
 use std::fmt;
 
 use vogls_bits::arithmetic::{
-    fv_bin_u64_cell_bitwise_op, fv_bitwise_and_elem, fv_bitwise_andnot_elem, fv_bitwise_or_elem,
-    fv_bitwise_ornot_elem, fv_bitwise_xor_elem, fv_cell_addition, fv_cell_contains_special,
-    fv_cell_divmod, fv_cell_multiplication, fv_cell_power, fv_cell_subtraction,
-    tv_bin_u64_cell_bitwise_mask_last_op, tv_bin_u64_cell_bitwise_op, tv_cell_addition,
-    tv_cell_divmod, tv_cell_multiplication, tv_cell_power, tv_cell_subtraction,
+    FvLogicValue, fv_addition, fv_bin_u64_cell_bitwise_op, fv_bitwise_and_elem,
+    fv_bitwise_andnot_elem, fv_bitwise_or_elem, fv_bitwise_ornot_elem, fv_bitwise_xor_elem,
+    fv_contains_special, fv_division, fv_multiplication, fv_power, fv_subtraction, tv_addition,
+    tv_bin_u64_cell_bitwise_mask_last_op, tv_bin_u64_cell_bitwise_op, tv_division,
+    tv_multiplication, tv_power, tv_subtraction,
 };
-use vogls_bits::comparison::{fv_cell_unsigned_leq, tv_cell_unsigned_leq};
+use vogls_bits::comparison::{fv_l_unsigned_leq, tv_gtu64_unsigned_leq};
+use vogls_bits::concat::{fv_l_concat, tv_l_concat};
 use vogls_bits::copyxz::{copy_x, copy_z};
-use vogls_bits::format::{BitsDisplay, BitsFormatOptions};
+use vogls_bits::format::BitsFormatOptions;
 use vogls_bits::negate::{fv_cell_negate, tv_cell_negate};
 use vogls_bits::reduce::{
     fv_l_reduce_and, fv_l_reduce_or, fv_l_reduce_xor, tv_reduce_and, tv_reduce_or, tv_reduce_xor,
 };
 use vogls_bits::shift::{
-    fv_cell_arithmetic_shift_right, fv_cell_logical_shift_left, fv_cell_logical_shift_right,
-    tv_cell_arithmetic_shift_right, tv_cell_logical_shift_left, tv_cell_logical_shift_right,
+    fv_l_arithmetic_shift_right, fv_l_logical_shift_left, fv_l_logical_shift_right,
+    tv_l_arithmetic_shift_right, tv_l_logical_shift_left, tv_l_logical_shift_right,
 };
+use vogls_bits::slice::{fv_ll_slice, tv_ll_slice};
 use vogls_bits::util::CellSlice;
 use vogls_codegen::HeapOffset;
-use vogls_ir::{LogicMode, VectorSize};
+use vogls_ir::{LogicMode, VSIZE_64, VectorSize};
 use vogls_runtime::RuntimeState;
 
 use crate::bytecode::{write_padded_mnemonic, write_register};
@@ -37,6 +38,29 @@ pub struct HeapBinaryBitwise {
     rs2: Reg,
     op: BitwiseOp,
     size: InlineNBitSize<8>,
+}
+pub struct HeapFill {
+    rd: Reg,
+    fv: bool,
+    spc: bool,
+    val: bool,
+    size: InlineNBitSize<17>,
+}
+pub struct HeapConcat {
+    rd: Reg,
+    rs1: Reg,
+    rs2: Reg,
+    fv: bool,
+    rs2_size: InlineNBitSize<11>,
+}
+pub struct HeapSlice {
+    rd: Reg,
+    rs: Reg,
+    roff: Reg,
+    fv: bool,
+    fill_with_x: bool,
+    offset_is_fv: bool,
+    dst_size: InlineNBitSize<9>,
 }
 pub struct HeapBinaryArithmetic {
     rd: Reg,
@@ -314,7 +338,7 @@ impl BytecodeInstruction for HeapBinaryArithmetic {
         state: &mut RuntimeState,
         _schedule: &mut Schedule,
         _listeners: &mut BytecodeListeners,
-        _cldctx: &mut ColdContext,
+        cldctx: &mut ColdContext,
     ) {
         let Self {
             rd,
@@ -328,38 +352,30 @@ impl BytecodeInstruction for HeapBinaryArithmetic {
         if op.is_four_value() {
             num_words *= 2;
         }
-        let [dst, src1, src2] = state.heap.get_u64_cell_slices([
-            (
-                HeapOffset {
-                    bit_offset: regs[rd] as usize,
-                },
-                num_words,
-            ),
-            (
-                HeapOffset {
-                    bit_offset: regs[rs1] as usize,
-                },
-                num_words,
-            ),
-            (
-                HeapOffset {
-                    bit_offset: regs[rs2] as usize,
-                },
-                num_words,
-            ),
-        ]);
+        let src1 = state.heap.get_u64_slice(regs.get_as_addr(rs1), num_words);
+        let src2 = state.heap.get_u64_slice(regs.get_as_addr(rs2), num_words);
+
+        // @Performance: don't use the scratch here.
+        let dst = &mut cldctx.heap_scratch;
+        dst.clear();
+        dst.resize(num_words, 0u64);
 
         use ArithmeticOp as O;
         match op {
-            O::TvAdd => tv_cell_addition(dst, src1, src2, size),
-            O::TvSub => tv_cell_subtraction(dst, src1, src2, size),
-            O::TvMul => tv_cell_multiplication(dst, src1, src2, size),
-            O::TvPow => tv_cell_power(dst, src1, src2, size),
-            O::FvAdd => fv_cell_addition(dst, src1, src2, size),
-            O::FvSub => fv_cell_subtraction(dst, src1, src2, size),
-            O::FvMul => fv_cell_multiplication(dst, src1, src2, size),
-            O::FvPow => fv_cell_power(dst, src1, src2, size),
+            O::TvAdd => tv_addition(dst, src1, src2, size),
+            O::TvSub => tv_subtraction(dst, src1, src2, size),
+            O::TvMul => tv_multiplication(dst, src1, src2, size),
+            O::TvPow => tv_power(dst, src1, src2, size),
+            O::FvAdd => fv_addition(dst, src1, src2, size),
+            O::FvSub => fv_subtraction(dst, src1, src2, size),
+            O::FvMul => fv_multiplication(dst, src1, src2, size),
+            O::FvPow => fv_power(dst, src1, src2, size),
         }
+
+        state
+            .heap
+            .get_mut_u64_slice(regs.get_as_addr(rd), num_words)
+            .copy_from_slice(dst);
     }
 }
 
@@ -422,7 +438,7 @@ impl BytecodeInstruction for HeapBinaryDivMod {
         state: &mut RuntimeState,
         _schedule: &mut Schedule,
         _listeners: &mut BytecodeListeners,
-        _cldctx: &mut ColdContext,
+        cldctx: &mut ColdContext,
     ) {
         let Self {
             rd,
@@ -444,35 +460,31 @@ impl BytecodeInstruction for HeapBinaryDivMod {
             dst_num_words *= 2;
         }
 
-        let [dst, src1, src2] = state.heap.get_u64_cell_slices([
-            (
-                HeapOffset {
-                    bit_offset: regs[rd] as usize,
-                },
-                dst_num_words,
-            ),
-            (
-                HeapOffset {
-                    bit_offset: regs[rs1] as usize,
-                },
-                src_num_words,
-            ),
-            (
-                HeapOffset {
-                    bit_offset: regs[rs2] as usize,
-                },
-                src_num_words,
-            ),
-        ]);
+        let src1 = state
+            .heap
+            .get_u64_slice(regs.get_as_addr(rs1), src_num_words);
+        let src2 = state
+            .heap
+            .get_u64_slice(regs.get_as_addr(rs2), src_num_words);
 
-        let complement_buffer = vec![Cell::new(0); dst_num_words];
+        // @Performance: don't use the scratch here.
+        let dst = &mut cldctx.heap_scratch;
+        dst.clear();
+        dst.resize(num_words * 2, 0u64);
+        let (dst, compl) = dst.split_at_mut(dst_num_words);
 
+        // @TODO: Use fillx.
         match (src_fv, is_mod) {
-            (false, false) => tv_cell_divmod(dst, &complement_buffer, src1, src2, size, fill_x),
-            (false, true) => tv_cell_divmod(&complement_buffer, dst, src1, src2, size, fill_x),
-            (true, false) => fv_cell_divmod(dst, &complement_buffer, src1, src2, size, fill_x),
-            (true, true) => fv_cell_divmod(&complement_buffer, dst, src1, src2, size, fill_x),
+            (false, false) => tv_division(dst, compl, src1, src2, size),
+            (false, true) => tv_division(compl, dst, src1, src2, size),
+            (true, false) => fv_division(dst, compl, src1, src2, size),
+            (true, true) => fv_division(compl, dst, src1, src2, size),
         }
+
+        state
+            .heap
+            .get_mut_u64_slice(regs.get_as_addr(rd), dst_num_words)
+            .copy_from_slice(dst);
     }
 }
 
@@ -538,33 +550,21 @@ impl BytecodeInstruction for HeapBinaryCmp {
         if op.is_four_value() {
             num_words *= 2;
         }
-        let [src1, src2] = state.heap.get_u64_cell_slices([
-            (
-                HeapOffset {
-                    bit_offset: regs[rs1] as usize,
-                },
-                num_words,
-            ),
-            (
-                HeapOffset {
-                    bit_offset: regs[rs2] as usize,
-                },
-                num_words,
-            ),
-        ]);
+        let src1 = state.heap.get_u64_slice(regs.get_as_addr(rs1), num_words);
+        let src2 = state.heap.get_u64_slice(regs.get_as_addr(rs2), num_words);
 
         use CompareOp as O;
         match op {
-            O::TvUnsignedLeq => regs[rd] = u64::from(tv_cell_unsigned_leq(src1, src2, size)),
-            O::TvUnsignedGt => regs[rd] = u64::from(!tv_cell_unsigned_leq(src1, src2, size)),
+            O::TvUnsignedLeq => regs[rd] = u64::from(tv_gtu64_unsigned_leq(src1, src2, size)),
+            O::TvUnsignedGt => regs[rd] = u64::from(!tv_gtu64_unsigned_leq(src1, src2, size)),
             O::FvUnsignedLeq => {
-                let is_leq = fv_cell_unsigned_leq(src1, src2, size);
+                let is_leq = fv_l_unsigned_leq(src1, src2, size);
                 let (spc, val) = rd.to_spc_and_val();
                 regs[spc] = is_leq.spc().into();
                 regs[val] = is_leq.val().into();
             }
             O::FvUnsignedGt => {
-                let is_leq = fv_cell_unsigned_leq(src1, src2, size);
+                let is_leq = fv_l_unsigned_leq(src1, src2, size);
                 let is_leq = !is_leq;
                 let (spc, val) = rd.to_spc_and_val();
                 regs[spc] = is_leq.spc().into();
@@ -624,7 +624,7 @@ impl BytecodeInstruction for HeapBinaryShift {
         state: &mut RuntimeState,
         _schedule: &mut Schedule,
         _listeners: &mut BytecodeListeners,
-        _cldctx: &mut ColdContext,
+        cldctx: &mut ColdContext,
     ) {
         let Self {
             rd,
@@ -638,40 +638,42 @@ impl BytecodeInstruction for HeapBinaryShift {
         if op.is_four_value() {
             num_words *= 2;
         }
-        let [dst, src] = state.heap.get_u64_cell_slices([
-            (
-                HeapOffset {
-                    bit_offset: regs[rd] as usize,
-                },
-                num_words,
-            ),
-            (
-                HeapOffset {
-                    bit_offset: regs[rs1] as usize,
-                },
-                num_words,
-            ),
-        ]);
 
         let shift = if op.is_four_value() {
             let (spc, val) = rs2.to_spc_and_val();
             if regs[spc] != u32::MAX as u64 {
-                dst.iter().for_each(|d| d.set(0));
+                state
+                    .heap
+                    .get_mut_u64_slice(regs.get_as_addr(rd), num_words)
+                    .fill(0u64);
+                return;
             }
             regs[val] as u32
         } else {
             regs[rs2] as u32
         };
 
+        let src = state.heap.get_u64_slice(regs.get_as_addr(rs1), num_words);
+
+        // @Performance: don't use the scratch here.
+        let dst = &mut cldctx.heap_scratch;
+        dst.clear();
+        dst.resize(num_words, 0u64);
+
         use ShiftOp as O;
         match op {
-            O::TvSll => tv_cell_logical_shift_left(dst, src, shift, size),
-            O::TvSlr => tv_cell_logical_shift_right(dst, src, shift, size),
-            O::TvSar => tv_cell_arithmetic_shift_right(dst, src, shift, size),
-            O::FvSll => fv_cell_logical_shift_left(dst, src, shift, size),
-            O::FvSlr => fv_cell_logical_shift_right(dst, src, shift, size),
-            O::FvSar => fv_cell_arithmetic_shift_right(dst, src, shift, size),
+            O::TvSll => tv_l_logical_shift_left(dst, src, shift, size),
+            O::TvSlr => tv_l_logical_shift_right(dst, src, shift, size),
+            O::TvSar => tv_l_arithmetic_shift_right(dst, src, shift, size),
+            O::FvSll => fv_l_logical_shift_left(dst, src, shift, size),
+            O::FvSlr => fv_l_logical_shift_right(dst, src, shift, size),
+            O::FvSar => fv_l_arithmetic_shift_right(dst, src, shift, size),
         }
+
+        state
+            .heap
+            .get_mut_u64_slice(regs.get_as_addr(rd), num_words)
+            .copy_from_slice(dst);
     }
 }
 
@@ -744,37 +746,29 @@ impl BytecodeInstruction for HeapBinaryMinMax {
             num_words *= 2;
         }
 
-        let [dst, src1, src2] = state.heap.get_u64_cell_slices([
-            (
-                HeapOffset {
-                    bit_offset: regs[rd] as usize,
-                },
-                num_words,
-            ),
-            (
-                HeapOffset {
-                    bit_offset: regs[rs1] as usize,
-                },
-                num_words,
-            ),
-            (
-                HeapOffset {
-                    bit_offset: regs[rs2] as usize,
-                },
-                num_words,
-            ),
-        ]);
+        let rd_addr = regs.get_as_addr(rd);
+        let rs1_addr = regs.get_as_addr(rs1);
+        let rs2_addr = regs.get_as_addr(rs2);
 
-        if is_fv && (fv_cell_contains_special(src1, size) || fv_cell_contains_special(src2, size)) {
-            dst.iter().for_each(|v| v.set(0));
+        let src1 = state.heap.get_u64_slice(rs1_addr, num_words);
+        let src2 = state.heap.get_u64_slice(rs2_addr, num_words);
+
+        if is_fv && (fv_contains_special(src1, size) || fv_contains_special(src2, size)) {
+            state.heap.get_mut_u64_slice(rd_addr, num_words).fill(0u64);
             return;
         }
 
-        let is_rhs_max = tv_cell_unsigned_leq(&src1[offset..], &src2[offset..], size);
+        let is_rhs_max = tv_gtu64_unsigned_leq(&src1[offset..], &src2[offset..], size);
         if is_max ^ is_rhs_max {
-            dst.iter().zip(src1).for_each(|(d, s)| d.set(s.get()));
+            let [dst, src] = state
+                .heap
+                .get_u64_cell_slices([(rd_addr, num_words), (rs1_addr, num_words)]);
+            dst.copy_from_slice(src);
         } else {
-            dst.iter().zip(src2).for_each(|(d, s)| d.set(s.get()));
+            let [dst, src] = state
+                .heap
+                .get_u64_cell_slices([(rd_addr, num_words), (rs2_addr, num_words)]);
+            dst.copy_from_slice(src);
         }
     }
 }
@@ -859,6 +853,354 @@ impl BytecodeInstruction for HeapCaseEq {
         let is_eq = src1 == src2;
 
         regs[rd] = u64::from(is_eq ^ ne);
+    }
+}
+
+impl BytecodeInstruction for HeapConcat {
+    #[inline(always)]
+    fn extract(c: Bytecode) -> Self {
+        debug_assert_eq!(c.opcode(), BytecodeOpcode::HeapConcat as u8);
+        let v = c.0;
+        Self {
+            rd: Reg::new_masked(v >> 8),
+            rs1: Reg::new_masked(v >> 12),
+            rs2: Reg::new_masked(v >> 16),
+            fv: (v >> 20) & 1 != 0,
+            rs2_size: InlineNBitSize::new_masked(v >> 21),
+        }
+    }
+    #[inline(always)]
+    fn encode(&self) -> Bytecode {
+        Bytecode(
+            BytecodeOpcode::HeapConcat as u32
+                | ((self.rd as u32) << 8)
+                | ((self.rs1 as u32) << 12)
+                | ((self.rs2 as u32) << 16)
+                | ((self.fv as u32) << 20)
+                | (self.rs2_size.encode() << 21),
+        )
+    }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            rd,
+            rs1,
+            rs2,
+            fv,
+            rs2_size,
+        } = self;
+        let mnemonic = if *fv {
+            "fv.heap_concat"
+        } else {
+            "tv.heap_concat"
+        };
+        write_padded_mnemonic(f, mnemonic)?;
+        write!(f, "{rd}, {rs1}, {rs2}, {rs2_size}")
+    }
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        cldctx: &mut ColdContext,
+    ) {
+        let Self {
+            rd,
+            rs1,
+            rs2,
+            fv,
+            rs2_size,
+        } = self;
+        let rs1_size = VectorSize::new(regs[Reg::X11] as u32).unwrap();
+        let rs2_size = rs2_size.get(regs);
+        let dst_size = rs1_size.get() + rs2_size.get();
+
+        assert!(dst_size > 64);
+        let mut dst_num_words = dst_size.div_ceil(64) as usize;
+        if fv {
+            dst_num_words *= 2;
+        }
+
+        let src1_scratch;
+        let src2_scratch;
+
+        let rd = regs.get_as_addr(rd);
+        let src1 = if rs1_size <= VSIZE_64 {
+            if fv {
+                let (spc, val) = rs1.to_spc_and_val();
+                src1_scratch = [regs[spc], regs[val]];
+                &src1_scratch[..]
+            } else {
+                src1_scratch = [regs[rs1], 0u64];
+                &src1_scratch[..1]
+            }
+        } else {
+            let mut src1_words = rs1_size.get().div_ceil(64) as usize;
+            if fv {
+                src1_words *= 2;
+            }
+            state.heap.get_u64_slice(regs.get_as_addr(rs1), src1_words)
+        };
+        let src2 = if rs2_size <= VSIZE_64 {
+            if fv {
+                let (spc, val) = rs2.to_spc_and_val();
+                src2_scratch = [regs[spc], regs[val]];
+                &src2_scratch[..]
+            } else {
+                src2_scratch = [regs[rs1], 0u64];
+                &src2_scratch[..1]
+            }
+        } else {
+            let mut src2_words = rs2_size.get().div_ceil(64) as usize;
+            if fv {
+                src2_words *= 2;
+            }
+            state.heap.get_u64_slice(regs.get_as_addr(rs2), src2_words)
+        };
+
+        // @Performance. Remove the need for the scratch here.
+        cldctx.heap_scratch.clear();
+        cldctx.heap_scratch.resize(dst_num_words, 0u64);
+
+        if fv {
+            fv_l_concat(&mut cldctx.heap_scratch, src1, src2, rs1_size, rs2_size);
+        } else {
+            tv_l_concat(&mut cldctx.heap_scratch, src1, src2, rs1_size, rs2_size);
+        }
+        state
+            .heap
+            .get_mut_u64_slice(rd, dst_num_words)
+            .copy_from_slice(&cldctx.heap_scratch);
+    }
+}
+
+impl BytecodeInstruction for HeapSlice {
+    #[inline(always)]
+    fn extract(c: Bytecode) -> Self {
+        debug_assert_eq!(c.opcode(), BytecodeOpcode::HeapSlice as u8);
+        let v = c.0;
+        Self {
+            rd: Reg::new_masked(v >> 8),
+            rs: Reg::new_masked(v >> 12),
+            roff: Reg::new_masked(v >> 16),
+            fv: (v >> 20) & 1 != 0,
+            fill_with_x: (v >> 21) & 1 != 0,
+            offset_is_fv: (v >> 22) & 1 != 0,
+            dst_size: InlineNBitSize::new_masked(v >> 23),
+        }
+    }
+    #[inline(always)]
+    fn encode(&self) -> Bytecode {
+        Bytecode(
+            BytecodeOpcode::HeapSlice as u32
+                | ((self.rd as u32) << 8)
+                | ((self.rs as u32) << 12)
+                | ((self.roff as u32) << 16)
+                | ((self.fv as u32) << 20)
+                | ((self.fill_with_x as u32) << 21)
+                | ((self.offset_is_fv as u32) << 22)
+                | (self.dst_size.encode() << 23),
+        )
+    }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            rd,
+            rs,
+            roff,
+            fv,
+            fill_with_x,
+            offset_is_fv: _,
+            dst_size,
+        } = self;
+        let mnemonic = match (*fv, *fill_with_x) {
+            (false, false) => "tv.heap_slice0",
+            (false, true) => "tv.heap_slicex",
+            (true, false) => "fv.heap_slice0",
+            (true, true) => "fv.heap_slicex",
+        };
+        write_padded_mnemonic(f, mnemonic)?;
+        write!(f, "{rd}, {rs}, {roff}, {dst_size}")
+    }
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        cldctx: &mut ColdContext,
+    ) {
+        let Self {
+            rd,
+            rs,
+            roff,
+            fv,
+            fill_with_x,
+            offset_is_fv,
+            dst_size,
+        } = self;
+        let src_size = VectorSize::new(regs[Reg::X11] as u32).unwrap();
+        let dst_size = dst_size.get(regs);
+
+        assert!(dst_size > VSIZE_64);
+        let mut src_num_words = src_size.get().div_ceil(64) as usize;
+        let mut dst_num_words = dst_size.get().div_ceil(64) as usize;
+        if fv {
+            src_num_words *= 2;
+        }
+        if fv | fill_with_x {
+            dst_num_words *= 2;
+        }
+
+        let offset = if offset_is_fv {
+            let (spc, val) = roff.to_spc_and_val();
+            if regs[spc] != u32::MAX as u64 {
+                state
+                    .heap
+                    .get_mut_u64_slice(regs.get_as_addr(rd), dst_num_words)
+                    .fill(0u64);
+                return;
+            }
+
+            regs[val] as u32
+        } else {
+            regs[roff] as u32
+        };
+
+        let src = state
+            .heap
+            .get_u64_slice(regs.get_as_addr(rs), src_num_words);
+
+        // @Performance. Remove the need for the scratch here.
+        cldctx.heap_scratch.clear();
+        cldctx.heap_scratch.resize(dst_num_words, 0u64);
+
+        if fv {
+            fv_ll_slice(
+                &mut cldctx.heap_scratch,
+                src,
+                offset,
+                dst_size,
+                src_size,
+                fill_with_x,
+            );
+        } else {
+            tv_ll_slice(
+                &mut cldctx.heap_scratch,
+                src,
+                offset,
+                dst_size,
+                src_size,
+                fill_with_x,
+            );
+        }
+        state
+            .heap
+            .get_mut_u64_slice(regs.get_as_addr(rd), dst_num_words)
+            .copy_from_slice(&cldctx.heap_scratch);
+    }
+}
+
+impl BytecodeInstruction for HeapFill {
+    #[inline(always)]
+    fn extract(c: Bytecode) -> Self {
+        debug_assert_eq!(c.opcode(), BytecodeOpcode::HeapFill as u8);
+        let v = c.0;
+        Self {
+            rd: Reg::new_masked(v >> 8),
+            fv: (v >> 12) & 1 != 0,
+            spc: (v >> 13) & 1 != 0,
+            val: (v >> 14) & 1 != 0,
+            size: InlineNBitSize::new_masked(v >> 15),
+        }
+    }
+    #[inline(always)]
+    fn encode(&self) -> Bytecode {
+        Bytecode(
+            BytecodeOpcode::HeapFill as u32
+                | ((self.rd as u32) << 8)
+                | ((self.fv as u32) << 12)
+                | ((self.spc as u32) << 13)
+                | ((self.val as u32) << 14)
+                | (self.size.encode() << 15),
+        )
+    }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            rd,
+            fv,
+            spc,
+            val,
+            size,
+        } = self;
+        let (mnemonic, value) = if *fv {
+            ("fv.fill", FvLogicValue::from_spc_and_val(*spc, *val))
+        } else {
+            ("tv.fill", FvLogicValue::from_bool(*val))
+        };
+        write_padded_mnemonic(f, mnemonic)?;
+        write!(f, "{rd}, {}, {size}", value.to_char())
+    }
+    fn post_exec_itrace(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        regs: &Regs,
+        state: &RuntimeState,
+    ) -> fmt::Result {
+        f.write_str(EXEC_ITRACE_INDENT)?;
+        let size = self.size.get(regs);
+        let mode = if self.fv {
+            LogicMode::FourValue
+        } else {
+            LogicMode::TwoValue
+        };
+        let rd = state
+            .heap
+            .load_bits(regs.get_as_addr(self.rd).to_ref(size), mode);
+        writeln!(f, "rd = {}", rd.display(&BitsFormatOptions::default()))
+    }
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let Self {
+            rd,
+            fv,
+            spc,
+            val,
+            size,
+        } = self;
+        let size = size.get(regs);
+        let mut num_words = size.get().div_ceil(64) as usize;
+        if fv {
+            num_words *= 2;
+        }
+        let dst = state
+            .heap
+            .get_mut_u64_slice(regs.get_as_addr(rd), num_words);
+
+        let mut offset = 0;
+        if fv {
+            dst[..num_words].fill(u64::from(!spc).wrapping_sub(1));
+            if size.get() % 64 != 0 {
+                dst[num_words - 1] &= (1u64 << (size.get() % 64)) - 1;
+            }
+            offset += num_words;
+        }
+        dst[offset..].fill(u64::from(!val).wrapping_sub(1));
+
+        if size.get() % 64 != 0 {
+            *dst.last_mut().unwrap() &= (1u64 << (size.get() % 64)) - 1;
+        }
     }
 }
 
@@ -1491,5 +1833,96 @@ impl BytecodeEncoder {
     }
     pub fn heap_fv_reduce_xor(&mut self, rd: Reg, rs: Reg, size: VectorSize) {
         self.heap_unary(rd, rs, UnaryOp::FvReduceXor, size);
+    }
+
+    pub fn heap_fill(&mut self, rd: Reg, fv: bool, spc: bool, val: bool, size: InlineNBitSize<17>) {
+        self.data.push(
+            HeapFill {
+                rd,
+                fv,
+                spc,
+                val,
+                size,
+            }
+            .encode(),
+        );
+    }
+
+    pub fn tv_heap_fill(&mut self, rd: Reg, value: bool, size: InlineNBitSize<17>) {
+        self.heap_fill(rd, false, false, value, size);
+    }
+    pub fn fv_heap_fill(&mut self, rd: Reg, value: FvLogicValue, size: InlineNBitSize<17>) {
+        self.heap_fill(rd, true, value.spc(), value.val(), size);
+    }
+
+    pub fn heap_concat(
+        &mut self,
+        rd: Reg,
+        rs1: Reg,
+        rs1_size: VectorSize,
+        rs2: Reg,
+        rs2_size: VectorSize,
+        fv: bool,
+    ) {
+        self.load_u64(Reg::X11, rs1_size.get().into());
+        let rs2_size = InlineNBitSize::new(rs2_size, self);
+        self.data.push(
+            HeapConcat {
+                rd,
+                fv,
+                rs1,
+                rs2,
+                rs2_size,
+            }
+            .encode(),
+        );
+    }
+
+    pub fn tv_heap_concat(
+        &mut self,
+        rd: Reg,
+        rs1: Reg,
+        rs1_size: VectorSize,
+        rs2: Reg,
+        rs2_size: VectorSize,
+    ) {
+        self.heap_concat(rd, rs1, rs1_size, rs2, rs2_size, false);
+    }
+    pub fn fv_heap_concat(
+        &mut self,
+        rd: Reg,
+        rs1: Reg,
+        rs1_size: VectorSize,
+        rs2: Reg,
+        rs2_size: VectorSize,
+    ) {
+        self.heap_concat(rd, rs1, rs1_size, rs2, rs2_size, true);
+    }
+
+    pub fn heap_slice(
+        &mut self,
+        rd: Reg,
+        rs: Reg,
+        roff: Reg,
+        dst_size: VectorSize,
+        src_size: VectorSize,
+        fv: bool,
+        fill_with_x: bool,
+        offset_is_fv: bool,
+    ) {
+        self.load_u64(Reg::X11, src_size.get().into());
+        let dst_size = InlineNBitSize::new(dst_size, self);
+        self.data.push(
+            HeapSlice {
+                rd,
+                rs,
+                roff,
+                fv,
+                fill_with_x,
+                offset_is_fv,
+                dst_size,
+            }
+            .encode(),
+        );
     }
 }

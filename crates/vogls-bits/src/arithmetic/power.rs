@@ -1,7 +1,5 @@
-use std::cell::Cell;
-
 use crate::VectorSize;
-use crate::arithmetic::{fv_cell_contains_special, fv_cell_set_no_special, fv_contains_special, fv_set_no_special};
+use crate::arithmetic::{fv_contains_special, fv_set_no_special};
 use crate::load::load_partial_u64;
 use crate::store::store_partial_u64;
 
@@ -30,14 +28,6 @@ pub fn tv_power(dst: &mut [u64], lhs: &[u64], rhs: &[u64], size: VectorSize) {
     dst[0] = lhs[0].wrapping_pow(rhs[0] as u32);
     dst[0] &= (1u64 << size.get()) - 1;
 }
-/// Two-value logic arbitrary precision multiplication.
-pub fn tv_cell_power(dst: &[Cell<u64>], lhs: &[Cell<u64>], rhs: &[Cell<u64>], size: VectorSize) {
-    if size.get() > 32 {
-        todo!()
-    }
-    dst[0].set(lhs[0].get().wrapping_pow(rhs[0].get() as u32));
-    dst[0].update(|v| v & (1u64 << size.get()) - 1);
-}
 pub fn fv_power(dst: &mut [u64], lhs: &[u64], rhs: &[u64], size: VectorSize) {
     assert!(
         dst.len() > 0
@@ -54,21 +44,4 @@ pub fn fv_power(dst: &mut [u64], lhs: &[u64], rhs: &[u64], size: VectorSize) {
     fv_set_no_special(dst, size);
     let nwords = dst.len() / 2;
     tv_power(&mut dst[nwords..], &lhs[nwords..], &rhs[nwords..], size);
-}
-pub fn fv_cell_power(dst: &[Cell<u64>], lhs: &[Cell<u64>], rhs: &[Cell<u64>], size: VectorSize) {
-    assert!(
-        dst.len() > 0
-            && dst.len() == lhs.len()
-            && dst.len() == rhs.len()
-            && dst.len() == 2 * size.get().div_ceil(64) as usize
-    );
-
-    if fv_cell_contains_special(lhs, size) || fv_cell_contains_special(rhs, size) {
-        dst.iter().for_each(|v| v.set(0));
-        return;
-    }
-
-    fv_cell_set_no_special(dst, size);
-    let nwords = dst.len() / 2;
-    tv_cell_power(&dst[nwords..], &lhs[nwords..], &rhs[nwords..], size);
 }

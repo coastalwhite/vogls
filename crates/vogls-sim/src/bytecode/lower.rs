@@ -1,10 +1,11 @@
+use vogls_bits::arithmetic::FvLogicValue;
 use vogls_codegen::lsra::{Slot, StackOffsets, StackTracker};
 use vogls_codegen::{HeapAlignment, HeapBuilder, HeapRef};
 use vogls_ir::watchers::WatchMap;
 use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, ContextFormat, DisplayContext,
     GlobalContext, Instruction, LogicMode, ProcessKey, ResizeOp, ShiftImmOp, SignalKey, UnaryOp,
-    VSIZE_64, VariableKey, VariableMap, VectorSize,
+    VSIZE_64, VariableKey, VariableMap,
 };
 use vogls_runtime::RtSignalKey;
 use vogls_utils::{NonMaxU16, VgHashMap, VgHashSet};
@@ -641,9 +642,7 @@ fn lower_instruction(
                     bce.lsor(rd, rs1, rs2, SixBitSize::new_masked(rhs_size.get()))
                 }
                 (O::Concat, M::TwoValue, _, _, _) => {
-                    // @NOTE: We know that uses an address so T1 is unused. We can use that as a
-                    // scratch register.
-                    tv_concat_heap(bce, rd, rs1, rs2, lhs_size, rhs_size, T1);
+                    bce.tv_heap_concat(rd, rs1, lhs_size, rs2, rhs_size);
                 }
                 (O::Concat, M::FourValue, _, _, _)
                     if SixBitSize::from_vector_size(dst_size).is_some() =>
@@ -651,9 +650,7 @@ fn lower_instruction(
                     bce.fv_lsor(rd, rs1, rs2, SixBitSize::new_masked(rhs_size.get()))
                 }
                 (O::Concat, M::FourValue, _, _, _) => {
-                    // @NOTE: We know that uses an address so T1 is unused. We can use that as a
-                    // scratch register.
-                    fv_concat_heap(bce, rd, rs1, rs2, lhs_size, rhs_size, T1);
+                    bce.fv_heap_concat(rd, rs1, lhs_size, rs2, rhs_size);
                 }
                 (O::CopyX, _, Some(_), M::TwoValue, _) => bce.copy(rd, rs1),
                 (O::CopyX, _, None, M::TwoValue, _) => bce.heap_tv_copy(rd, rs1, lhs_size),
@@ -1138,7 +1135,7 @@ fn lower_instruction(
                         }
                         Some(_) => bce.load_bits_into_register(T4, M::TwoValue, imm),
                     }
-                    tv_concat_heap(bce, rd, T4, rs, imm.size(), src_size, T5);
+                    bce.tv_heap_concat(rd, T4, imm.size(), rs, src_size);
                 }
                 (O::ConcatLeft, M::FourValue, Some(_), _, _, _) => {
                     // @Performance. There is likely space here for a fv_left_shift_or_immediate
@@ -1158,7 +1155,7 @@ fn lower_instruction(
                         }
                         Some(_) => bce.load_bits_into_register(T4, M::FourValue, imm),
                     }
-                    fv_concat_heap(bce, rd, T4, rs, imm.size(), src_size, T5);
+                    bce.fv_heap_concat(rd, T4, imm.size(), rs, src_size);
                 }
                 (O::ConcatRight, M::TwoValue, Some(_), _, _, _) => {
                     // @Performance. There is likely space here for a left_shift_or_immediate
@@ -1173,7 +1170,7 @@ fn lower_instruction(
                         }
                         Some(_) => bce.load_bits_into_register(T4, M::TwoValue, imm),
                     }
-                    tv_concat_heap(bce, rd, rs, T4, src_size, imm.size(), T5);
+                    bce.tv_heap_concat(rd, rs, src_size, T4, imm.size());
                 }
                 (O::ConcatRight, M::FourValue, Some(_), _, _, _) => {
                     // @Performance. There is likely space here for a fv_left_shift_or_immediate
@@ -1188,7 +1185,7 @@ fn lower_instruction(
                         }
                         Some(_) => bce.load_bits_into_register(T4, M::FourValue, imm),
                     }
-                    fv_concat_heap(bce, rd, rs, T4, src_size, imm.size(), T5);
+                    bce.fv_heap_concat(rd, rs, src_size, T4, imm.size());
                 }
                 (O::Min, M::TwoValue, Some(size), _, _, _) => {
                     match SignedImmediate::new_from_bits(imm) {
@@ -1328,9 +1325,14 @@ fn lower_instruction(
                     bce.panic();
 
                     // If IMM contains special values, the output should be all `x`.
-                    let (rdspc, rdval) = rd.to_spc_and_val();
-                    bce.load_u64(rdspc, 0);
-                    bce.load_u64(rdval, 0);
+                    if dst_size > VSIZE_64 {
+                        let size = InlineNBitSize::new(dst_size, bce);
+                        bce.fv_heap_fill(rd, FvLogicValue::X, size);
+                    } else {
+                        let (rdspc, rdval) = rd.to_spc_and_val();
+                        bce.load_u64(rdspc, 0);
+                        bce.load_u64(rdval, 0);
+                    }
 
                     jump_offset = Some(bce.data.len());
                     bce.panic();
@@ -1386,36 +1388,10 @@ fn lower_instruction(
                     bce.load_unaligned(rdval, addr, offset, dst_size);
                 }
                 (M::TwoValue, None, None) => {
-                    // TempReg: dst_size > 64 => T1 is free.
-                    // TempReg: src_size > 64 => T3 is free.
-
-                    // @Incorrect. This can reach out-of-bounds.
-                    bce.add(T3, rs, rimm, SixBitSize::N64);
-                    let dst_size = InlineNBitSize::new(dst_size, bce);
-                    bce.load_heap_unaligned(rd, T3, InlineAddrOffset::ZERO, dst_size);
+                    bce.heap_slice(rd, rs, rimm, dst_size, src_size, false, true, false);
                 }
                 (M::FourValue, None, None) => {
-                    // TempReg: dst_size > 64 => T1 is free.
-                    // TempReg: src_size > 64 => T3 is free.
-
-                    // @Incorrect. This can reach out-of-bounds.
-                    bce.add(T3, rs, rimm, SixBitSize::N64);
-                    let dst_inline_size = InlineNBitSize::new(dst_size, bce);
-                    bce.load_heap_unaligned(rd, T3, InlineAddrOffset::ZERO, dst_inline_size);
-                    let (addr, offset) = InlineAddrOffset::new(
-                        HeapAlignment::B64.next_aligned(src_size.get() as u64) as i64,
-                        bce,
-                        T3,
-                        T3,
-                    );
-                    match SignedImmediate::new_from_u64(dst_size.get() as u64) {
-                        None => {
-                            bce.load_u64(T1, dst_size.get() as u64);
-                            bce.add(T1, rd, T1, SixBitSize::N64);
-                        }
-                        Some(imm) => bce.addi(T1, rd, imm, SixBitSize::N64),
-                    }
-                    bce.load_heap_unaligned(T1, addr, offset, dst_inline_size);
+                    bce.heap_slice(rd, rs, rimm, dst_size, src_size, true, true, false);
                 }
                 (_, None, Some(_)) => todo!(),
             }
@@ -1501,34 +1477,12 @@ fn lower_instruction(
                     bce.load_unaligned(rdval, addr, val_offset, dst_size);
                 }
                 (M::TwoValue, None, None) => {
-                    // @Incorrect. Deal with out-of-bounds reads.
-                    let (addr, offset) = InlineAddrOffset::new(i64::from(*offset), bce, rs, T4);
-                    let dst_size = InlineNBitSize::new(dst_size, bce);
-                    bce.load_heap_unaligned(rd, addr, offset, dst_size);
+                    bce.load_u64(T4, *offset as u64);
+                    bce.heap_slice(rd, rs, T4, dst_size, src_size, false, false, false);
                 }
                 (M::FourValue, None, None) => {
-                    // @Incorrect. This incorrectly handles heap aliasing.
-                    // @Incorrect. Deal with out-of-bounds reads.
-                    let inline_dst_size = InlineNBitSize::new(dst_size, bce);
-
-                    let (addr, spc_offset) = InlineAddrOffset::new(i64::from(*offset), bce, rs, T4);
-                    bce.load_heap_unaligned(rd, addr, spc_offset, inline_dst_size);
-
-                    let num_words = (src_size.get() as u64).next_multiple_of(64);
-                    let (addr, val_offset) = InlineAddrOffset::new(
-                        (*offset as u64).wrapping_add(num_words) as i64,
-                        bce,
-                        rs,
-                        T4,
-                    );
-                    match SignedImmediate::new_from_u64(dst_size.get() as u64) {
-                        None => {
-                            bce.load_u64(T5, dst_size.get() as u64);
-                            bce.add(T5, rd, T5, SixBitSize::N64);
-                        }
-                        Some(imm) => bce.addi(T5, rd, imm, SixBitSize::N64),
-                    }
-                    bce.load_heap_unaligned(T5, addr, val_offset, inline_dst_size);
+                    bce.load_u64(T4, *offset as u64);
+                    bce.heap_slice(rd, rs, T4, dst_size, src_size, true, false, false);
                 }
                 (M::TwoValue, None, Some(_)) => unreachable!(),
                 (M::FourValue, None, Some(_)) => unreachable!(),
@@ -1769,10 +1723,8 @@ fn lower_instruction(
             if *offset != 0 || dst_size != signal_size {
                 match (dst.mode(), SixBitSize::from_vector_size(dst_size)) {
                     (LogicMode::TwoValue, None) => {
-                        let (addr, offset) =
-                            InlineAddrOffset::new(i64::from(*offset), bce, rsignal, T3);
-                        let size = InlineNBitSize::new(dst_size, bce);
-                        bce.load_heap_unaligned(rd, addr, offset, size);
+                        bce.load_u64(T4, *offset as u64);
+                        bce.heap_slice(rd, rsignal, T4, dst_size, signal_size, false, false, false);
                     }
                     (LogicMode::TwoValue, Some(size)) => {
                         let (addr, offset) =
@@ -1780,25 +1732,8 @@ fn lower_instruction(
                         bce.load_unaligned(rd, addr, offset, size);
                     }
                     (LogicMode::FourValue, None) => {
-                        let size = InlineNBitSize::new(dst_size, bce);
-                        let (addr, spc_offset) =
-                            InlineAddrOffset::new(i64::from(*offset), bce, rsignal, T3);
-                        bce.load_heap_unaligned(rd, addr, spc_offset, size);
-                        let (addr, val_offset) = InlineAddrOffset::new(
-                            i64::from(*offset) + i64::from(signal_size.get().next_multiple_of(64)),
-                            bce,
-                            rsignal,
-                            T3,
-                        );
-                        let rd_val_offset = dst_size.get().next_multiple_of(64).into();
-                        match SignedImmediate::new(rd_val_offset) {
-                            None => {
-                                bce.load_u64(T4, rd_val_offset as u64);
-                                bce.add(T4, rd, T4, SixBitSize::N64);
-                            }
-                            Some(imm) => bce.addi(T4, rd, imm, SixBitSize::N64),
-                        }
-                        bce.load_heap_unaligned(T5, addr, val_offset, size);
+                        bce.load_u64(T4, *offset as u64);
+                        bce.heap_slice(rd, rsignal, T4, dst_size, signal_size, true, false, false);
                     }
                     (LogicMode::FourValue, Some(size)) => {
                         let (rdspc, rdval) = rd.to_spc_and_val();
@@ -1880,16 +1815,8 @@ fn lower_instruction(
                     assert_eq!(dst.mode(), M::FourValue);
                     match SixBitSize::from_vector_size(dst_size) {
                         None => {
-                            bce.heap_tv_or(rd, rd, rd, dst_size);
-                            let offset = dst_size.get().next_multiple_of(64).into();
-                            match SignedImmediate::new(offset) {
-                                None => {
-                                    bce.load_u64(T5, offset as u64);
-                                    bce.add(T5, rd, T5, SixBitSize::N64);
-                                }
-                                Some(imm) => bce.addi(T5, rd, imm, SixBitSize::N64),
-                            }
-                            bce.heap_tv_or(T5, rd, rd, dst_size);
+                            let size = InlineNBitSize::new(dst_size, bce);
+                            bce.fv_heap_fill(rd, FvLogicValue::X, size);
                         }
                         Some(_) => {
                             let (spc, val) = rd.to_spc_and_val();
@@ -1912,29 +1839,26 @@ fn lower_instruction(
                 }
             }
 
-            bce.add(rsignal, rsignal, roffset, SixBitSize::N64);
-
             use LogicMode as M;
             match (
                 gl.signals[*signal].mode,
                 SixBitSize::from_vector_size(dst_size),
             ) {
                 (M::TwoValue, None) => {
-                    // @Incorrect: out-of-bounds reads.
-                    let size = InlineNBitSize::new(dst_size, bce);
-                    bce.load_heap_unaligned(rd, rsignal, InlineAddrOffset::ZERO, size);
-                    let offset = HeapAlignment::B64.next_aligned(dst_size.get().into());
-                    match SignedImmediate::new_from_u64(offset) {
-                        None => {
-                            bce.load_u64(T5, offset);
-                            bce.add(T5, rd, T5, SixBitSize::N64);
-                        }
-                        Some(imm) => bce.addi(T5, rd, imm, SixBitSize::N64),
-                    }
-                    bce.heap_tv_ornot(T5, rd, rd, dst_size);
+                    bce.heap_slice(
+                        rd,
+                        rsignal,
+                        roffset,
+                        dst_size,
+                        signal_size,
+                        false,
+                        true,
+                        offset.mode() == M::FourValue,
+                    );
                 }
                 (M::TwoValue, Some(size)) => {
                     // @Incorrect: out-of-bounds reads.
+                    bce.add(rsignal, rsignal, roffset, SixBitSize::N64);
                     let (rdspc, rdval) = rd.to_spc_and_val();
                     bce.load_unaligned(rdval, rsignal, InlineAddrOffset::ZERO, size);
                     bce.ori(rdspc, rdspc, SignedImmediate::MINUS_ONE, size);
@@ -1942,25 +1866,19 @@ fn lower_instruction(
                 (M::FourValue, None) => {
                     // TempReg: dst_size > 64 => T1 is free.
 
-                    let size = InlineNBitSize::new(dst_size, bce);
-                    bce.load_heap_unaligned(rd, rsignal, InlineAddrOffset::ZERO, size);
-                    let (addr, val_offset) = InlineAddrOffset::new(
-                        i64::from(signal_size.get().next_multiple_of(64)),
-                        bce,
+                    bce.heap_slice(
+                        rd,
                         rsignal,
-                        T1,
+                        roffset,
+                        dst_size,
+                        signal_size,
+                        true,
+                        true,
+                        offset.mode() == M::FourValue,
                     );
-                    let rd_val_offset = dst_size.get().next_multiple_of(64).into();
-                    match SignedImmediate::new(rd_val_offset) {
-                        None => {
-                            bce.load_u64(T5, rd_val_offset as u64);
-                            bce.add(T5, rd, T5, SixBitSize::N64);
-                        }
-                        Some(imm) => bce.addi(T5, rd, imm, SixBitSize::N64),
-                    }
-                    bce.load_heap_unaligned(T5, addr, val_offset, size);
                 }
                 (M::FourValue, Some(size)) => {
+                    bce.add(rsignal, rsignal, roffset, SixBitSize::N64);
                     let (rdspc, rdval) = rd.to_spc_and_val();
                     bce.load_unaligned(rdspc, rsignal, InlineAddrOffset::ZERO, size);
                     let val_offset = HeapAlignment::spc_offset_to_val_offset(signal_size, 0);
@@ -2238,113 +2156,6 @@ fn store_back(
         Slot::Register(rd) => {
             let rd = Reg::new_masked(rd);
             bytecode.copy(rd, value);
-        }
-    }
-}
-
-fn tv_concat_heap(
-    bce: &mut BytecodeEncoder,
-    rd: Reg,
-    rs1: Reg,
-    rs2: Reg,
-    src1_size: VectorSize,
-    src2_size: VectorSize,
-    scratch: Reg,
-) {
-    // @Incorrect: If regs are aliasing eachother. This is problematic.
-    match SixBitSize::from_vector_size(src2_size) {
-        None => {
-            let size = InlineNBitSize::new(src2_size, bce);
-            bce.set_heap_unaligned(scratch, rs2, rd, size, InlineAddrOffset::ZERO);
-        }
-        Some(size) => {
-            bce.set_unaligned(scratch, rs2, rd, InlineAddrOffset::ZERO, size);
-        }
-    }
-    match SixBitSize::from_vector_size(src1_size) {
-        None => {
-            let size = InlineNBitSize::new(src1_size, bce);
-            let (addr, offset) = InlineAddrOffset::new(src2_size.get().into(), bce, rd, scratch);
-            bce.set_heap_unaligned(scratch, rs1, addr, size, offset);
-        }
-        Some(size) => {
-            let (addr, offset) = InlineAddrOffset::new(src2_size.get().into(), bce, rd, scratch);
-            bce.set_unaligned(scratch, rs1, addr, offset, size);
-        }
-    }
-}
-
-fn fv_concat_heap(
-    bce: &mut BytecodeEncoder,
-    rd: Reg,
-    rs1: Reg,
-    rs2: Reg,
-    src1_size: VectorSize,
-    src2_size: VectorSize,
-    scratch: Reg,
-) {
-    // @Incorrect: If regs are aliasing eachother. This is problematic.
-    let (rs1_spc, rs1_val) = match SixBitSize::from_vector_size(src1_size) {
-        None => (rs1, rs1),
-        Some(_) => rs1.to_spc_and_val(),
-    };
-    let (rs2_spc, rs2_val) = match SixBitSize::from_vector_size(src2_size) {
-        None => (rs2, rs2),
-        Some(_) => rs2.to_spc_and_val(),
-    };
-
-    tv_concat_heap(bce, rd, rs1_spc, rs2_spc, src1_size, src2_size, scratch);
-    let fv_offset = (src1_size.get() + src2_size.get()).div_ceil(64) as u64 * 64;
-    match SixBitSize::from_vector_size(src2_size) {
-        None => {
-            let size = InlineNBitSize::new(src2_size, bce);
-            let (addr, offset) = InlineAddrOffset::new(fv_offset as i64, bce, rd, scratch);
-            let src_offset = src2_size.get().div_ceil(64) as u64 * 64;
-            match SignedImmediate::new_from_u64(src_offset) {
-                None => {
-                    bce.load_u64(scratch, src_offset);
-                    bce.add(scratch, rs2, scratch, SixBitSize::N64);
-                }
-                Some(value) => {
-                    bce.addi(scratch, rs2, value, SixBitSize::N64);
-                }
-            }
-            bce.set_heap_unaligned(scratch, scratch, addr, size, offset);
-        }
-        Some(size) => {
-            let (addr, offset) = InlineAddrOffset::new(fv_offset as i64, bce, rd, scratch);
-            bce.set_unaligned(scratch, rs2_val, addr, offset, size);
-        }
-    }
-    match SixBitSize::from_vector_size(src1_size) {
-        None => {
-            let size = InlineNBitSize::new(src1_size, bce);
-            let (addr, offset) = InlineAddrOffset::new(
-                u64::from(src2_size.get()).wrapping_add(fv_offset) as i64,
-                bce,
-                rd,
-                scratch,
-            );
-            let src_offset = src1_size.get().div_ceil(64) as u64 * 64;
-            match SignedImmediate::new_from_u64(src_offset) {
-                None => {
-                    bce.load_u64(scratch, src_offset);
-                    bce.add(scratch, rs1, scratch, SixBitSize::N64);
-                }
-                Some(value) => {
-                    bce.addi(scratch, rs1, value, SixBitSize::N64);
-                }
-            }
-            bce.set_heap_unaligned(scratch, scratch, addr, size, offset);
-        }
-        Some(size) => {
-            let (addr, offset) = InlineAddrOffset::new(
-                u64::from(src2_size.get()).wrapping_add(fv_offset) as i64,
-                bce,
-                rd,
-                scratch,
-            );
-            bce.set_unaligned(scratch, rs1_val, addr, offset, size);
         }
     }
 }

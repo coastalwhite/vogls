@@ -10,19 +10,17 @@ mod multiplication;
 mod power;
 
 pub use add_sub::{
-    fv_addition, fv_cell_addition, fv_cell_subtraction, fv_ltu32_addition, fv_ltu32_subtraction,
-    fv_subtraction, tv_addition, tv_cell_addition, tv_cell_subtraction, tv_ltu64_addition,
-    tv_ltu64_subtraction, tv_subtraction,
+    fv_addition, fv_ltu32_addition, fv_ltu32_subtraction, fv_subtraction, tv_addition,
+    tv_ltu64_addition, tv_ltu64_subtraction, tv_subtraction,
 };
 pub use division::{
-    fv_cell_divmod, fv_division, fv_ltu32_division, fv_ltu32_modulus, tv_cell_divmod, tv_division,
-    tv_ltu64_division, tv_ltu64_modulus,
+    fv_division, fv_ltu32_division, fv_ltu32_modulus, tv_division, tv_ltu64_division,
+    tv_ltu64_modulus,
 };
 pub use multiplication::{
-    fv_cell_multiplication, fv_ltu32_multiplication, fv_multiplication, tv_cell_multiplication,
-    tv_ltu64_multiplication, tv_multiplication,
+    fv_ltu32_multiplication, fv_multiplication, tv_ltu64_multiplication, tv_multiplication,
 };
-pub use power::{fv_cell_power, fv_ltu32_power, fv_power, tv_cell_power, tv_ltu64_power, tv_power};
+pub use power::{fv_ltu32_power, fv_power, tv_ltu64_power, tv_power};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(u8)]
@@ -67,6 +65,15 @@ impl FvLogicValue {
     }
     pub fn val(self) -> bool {
         (self as u8 >> 1) != 0
+    }
+
+    pub fn to_char(self) -> char {
+        match self {
+            FvLogicValue::X => 'x',
+            FvLogicValue::Z => 'z',
+            FvLogicValue::L0 => '0',
+            FvLogicValue::L1 => '1',
+        }
     }
 }
 

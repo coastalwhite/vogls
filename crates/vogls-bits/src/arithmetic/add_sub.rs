@@ -1,9 +1,5 @@
-use std::cell::Cell;
-
 use crate::VectorSize;
-use crate::arithmetic::{
-    fv_cell_contains_special, fv_cell_set_no_special, fv_contains_special, fv_set_no_special,
-};
+use crate::arithmetic::{fv_contains_special, fv_set_no_special};
 use crate::load::load_partial_u64;
 use crate::store::store_partial_u64;
 
@@ -53,33 +49,6 @@ pub fn tv_addition_subtraction(
         *dst.last_mut().unwrap() &= (1u64 << (size.get() % 64)).wrapping_sub(1);
     }
 }
-pub fn tv_cell_addition_subtraction(
-    dst: &[Cell<u64>],
-    lhs: &[Cell<u64>],
-    rhs: &[Cell<u64>],
-    size: VectorSize,
-    subtract: bool,
-) {
-    assert!(
-        dst.len() > 0
-            && dst.len() == lhs.len()
-            && dst.len() == rhs.len()
-            && size.get().div_ceil(64) as usize == dst.len()
-    );
-
-    let mut carry_in = subtract;
-    let mask = if subtract { !0u64 } else { 0u64 };
-    for i in 0..dst.len() {
-        let out;
-        (out, carry_in) = lhs[i].get().carrying_add(rhs[i].get() ^ mask, carry_in);
-        dst[i].set(out);
-    }
-    if size.get() % 64 != 0 {
-        dst.last()
-            .unwrap()
-            .update(|v| v & (1u64 << (size.get() % 64)).wrapping_sub(1));
-    }
-}
 pub fn fv_addition_subtraction(
     dst: &mut [u64],
     lhs: &[u64],
@@ -109,68 +78,17 @@ pub fn fv_addition_subtraction(
         subtract,
     );
 }
-pub fn fv_cell_addition_subtraction(
-    dst: &[Cell<u64>],
-    lhs: &[Cell<u64>],
-    rhs: &[Cell<u64>],
-    size: VectorSize,
-    subtract: bool,
-) {
-    assert!(
-        dst.len() > 0
-            && dst.len() == lhs.len()
-            && dst.len() == rhs.len()
-            && dst.len() == 2 * size.get().div_ceil(64) as usize
-    );
-
-    if fv_cell_contains_special(lhs, size) || fv_cell_contains_special(rhs, size) {
-        dst.iter().for_each(|v| v.set(0));
-        return;
-    }
-
-    fv_cell_set_no_special(dst, size);
-    let nwords = dst.len() / 2;
-    tv_cell_addition_subtraction(
-        &dst[nwords..],
-        &lhs[nwords..],
-        &rhs[nwords..],
-        size,
-        subtract,
-    );
-}
 pub fn tv_addition(dst: &mut [u64], lhs: &[u64], rhs: &[u64], size: VectorSize) {
     tv_addition_subtraction(dst, lhs, rhs, size, false)
 }
 pub fn tv_subtraction(dst: &mut [u64], lhs: &[u64], rhs: &[u64], size: VectorSize) {
     tv_addition_subtraction(dst, lhs, rhs, size, true)
 }
-pub fn tv_cell_addition(dst: &[Cell<u64>], lhs: &[Cell<u64>], rhs: &[Cell<u64>], size: VectorSize) {
-    tv_cell_addition_subtraction(dst, lhs, rhs, size, false)
-}
-pub fn tv_cell_subtraction(
-    dst: &[Cell<u64>],
-    lhs: &[Cell<u64>],
-    rhs: &[Cell<u64>],
-    size: VectorSize,
-) {
-    tv_cell_addition_subtraction(dst, lhs, rhs, size, true)
-}
 pub fn fv_addition(dst: &mut [u64], lhs: &[u64], rhs: &[u64], size: VectorSize) {
     fv_addition_subtraction(dst, lhs, rhs, size, false)
 }
 pub fn fv_subtraction(dst: &mut [u64], lhs: &[u64], rhs: &[u64], size: VectorSize) {
     fv_addition_subtraction(dst, lhs, rhs, size, true)
-}
-pub fn fv_cell_addition(dst: &[Cell<u64>], lhs: &[Cell<u64>], rhs: &[Cell<u64>], size: VectorSize) {
-    fv_cell_addition_subtraction(dst, lhs, rhs, size, false)
-}
-pub fn fv_cell_subtraction(
-    dst: &[Cell<u64>],
-    lhs: &[Cell<u64>],
-    rhs: &[Cell<u64>],
-    size: VectorSize,
-) {
-    fv_cell_addition_subtraction(dst, lhs, rhs, size, true)
 }
 
 #[cfg(test)]

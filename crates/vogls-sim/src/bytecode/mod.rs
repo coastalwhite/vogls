@@ -86,6 +86,8 @@ pub struct ColdContext<'a> {
     stdout: &'a mut (dyn std::io::Write + Send + Sync),
     stderr: &'a mut (dyn std::io::Write + Send + Sync),
 
+    heap_scratch: Vec<u64>,
+
     return_value: u32,
 }
 
@@ -101,6 +103,7 @@ impl<'a> ColdContext<'a> {
             intrinsics,
             stdout,
             stderr,
+            heap_scratch: Vec::new(),
             return_value: 0,
         }
     }
@@ -434,6 +437,9 @@ opcodes![
     HeapBinaryShift,
     HeapCaseEq,
     HeapUnary,
+    HeapFill,
+    HeapConcat,
+    HeapSlice,
     LoadSize,
 ];
 
@@ -553,8 +559,13 @@ impl<const NBITS: usize> InlineAddrOffset<NBITS> {
 
         // @Performance: There are quite a few tricks that we can pull here to make a more
         // efficient lowering.
-        bce.load_u64(scratch, offset as u64);
-        bce.add(scratch, addr, scratch, SixBitSize::N64);
+        match SignedImmediate::new(offset) {
+            None => {
+                bce.load_u64(scratch, offset as u64);
+                bce.add(scratch, addr, scratch, SixBitSize::N64);
+            }
+            Some(imm) => bce.addi(scratch, addr, imm, SixBitSize::N64),
+        }
         (scratch, Self(0))
     }
 }
