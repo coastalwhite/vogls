@@ -7,7 +7,7 @@ use vogls_bits::arithmetic::{
 use vogls_bits::edge::{fv_negedge_u64, fv_posedge_u64};
 use vogls_bits::shift::fv_shift_arith_right;
 use vogls_bits::util::wrapping_u64_pow;
-use vogls_ir::{VectorSize, LogicMode};
+use vogls_ir::{LogicMode, VectorSize};
 use vogls_runtime::RuntimeState;
 
 use super::reg::{Reg, Regs};
@@ -75,6 +75,7 @@ pub struct FvMin(pub SbsBitwiseRType);
 pub struct FvMax(pub SbsBitwiseRType);
 pub struct FvSll(pub SbsBitwiseRType);
 pub struct FvSlr(pub SbsBitwiseRType);
+pub struct FvSlrx(pub SbsBitwiseRType);
 pub struct FvSar(pub SbsBitwiseRType);
 pub struct FvLeftShiftOr(pub SbsBitwiseRType);
 
@@ -1181,23 +1182,48 @@ impl BytecodeInstruction for FvSlr {
         let (rs1_spc, rs1_val) = rs1.to_spc_and_val();
         let (rs2_spc, rs2_val) = rs2.to_spc_and_val();
 
-        let mask = size.mask(u64::MAX);
-
-        if regs[rs2_spc] != mask {
+        if regs[rs2_spc] != u32::MAX as u64 {
             regs[rd_spc] = 0;
             regs[rd_val] = 0;
             return;
         }
 
-        let shift = regs[rs2_val];
-        if shift >= 64 {
-            regs[rd_spc] = mask;
+        let shift = regs[rs2_val] as u32;
+        regs[rd_spc] = regs[rs1_spc].unbounded_shr(shift);
+        regs[rd_val] = regs[rs1_val].unbounded_shr(shift);
+        regs[rd_spc] |= size.mask(
+            1u64.unbounded_shl(shift)
+                .wrapping_sub(1)
+                .unbounded_shl((size.get() as u32).saturating_sub(shift)),
+        );
+    }
+}
+impl BytecodeInstruction for FvSlrx {
+    impl_sbs_bitwise!(FvSlrx, "fv.slrx", FourValue, FourValue, FourValue);
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let SbsBitwiseRType { rd, rs1, rs2, size } = self.0;
+        let (rd_spc, rd_val) = rd.to_spc_and_val();
+        let (rs1_spc, rs1_val) = rs1.to_spc_and_val();
+        let (rs2_spc, rs2_val) = rs2.to_spc_and_val();
+
+        if regs[rs2_spc] != u32::MAX as u64 {
+            regs[rd_spc] = 0;
             regs[rd_val] = 0;
-        } else {
-            regs[rd_spc] = size.mask(regs[rs1_spc] >> shift)
-                | (((1u64 << shift) - 1) << (VectorSize::from(size).get() - shift as u32));
-            regs[rd_val] = size.mask(regs[rs1_val] >> shift);
+            return;
         }
+
+        let shift = regs[rs2_val] as u32;
+        regs[rd_spc] = size.mask(regs[rs1_spc].unbounded_shr(shift));
+        regs[rd_val] = size.mask(regs[rs1_val].unbounded_shr(shift));
     }
 }
 impl BytecodeInstruction for FvSar {
@@ -1321,6 +1347,7 @@ impl_bytecode_sbs_methods! {
     (fv_max, FvMax)
     (fv_sll, FvSll)
     (fv_slr, FvSlr)
+    (fv_slrx, FvSlrx)
     (fv_sar, FvSar)
     (fv_lsor, FvLeftShiftOr)
 }

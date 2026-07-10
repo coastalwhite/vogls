@@ -8,7 +8,7 @@ use vogls_runtime::RuntimeState;
 use super::reg::{Reg, Regs};
 use super::{
     Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, BytecodeOpcode, ColdContext,
-    EXEC_ITRACE_INDENT, InlineAddrOffset, InlineNBitSize, MNEMONIC_ALIGN, Schedule, SixBitSize,
+    EXEC_ITRACE_INDENT, InlineAddrOffset, InlineNBitSize, Schedule, SixBitSize,
     write_padded_mnemonic, write_register,
 };
 

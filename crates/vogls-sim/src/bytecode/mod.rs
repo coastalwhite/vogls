@@ -372,6 +372,7 @@ opcodes![
     FvMax,
     FvSll,
     FvSlr,
+    FvSlrx,
     FvSar,
     FvLeftShiftOr,
     FvNot,

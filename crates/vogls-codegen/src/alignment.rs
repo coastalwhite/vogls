@@ -44,7 +44,7 @@ impl HeapAlignment {
     }
 
     pub fn spc_offset_to_val_offset(size: VectorSize, spc_offset: u64) -> u64 {
-        if size.get() >= 32 {
+        if size.get() > 32 {
             spc_offset + (size.get() as u64).next_multiple_of(64)
         } else {
             spc_offset + size.get() as u64
