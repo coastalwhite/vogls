@@ -3,6 +3,7 @@ use std::fmt::{self, Debug};
 mod control_flow;
 mod extend;
 mod heap_ops;
+mod heap_slice;
 mod interrupt;
 mod intrinsics;
 mod itype_binary;
@@ -28,6 +29,7 @@ use vogls_utils::{IndexSet, NonMaxU32};
 pub use control_flow::*;
 pub use extend::*;
 pub use heap_ops::*;
+pub use heap_slice::*;
 pub use interrupt::*;
 pub use intrinsics::*;
 pub use itype_binary::*;
@@ -441,6 +443,14 @@ opcodes![
     HeapConcat,
     HeapSlice,
     LoadSize,
+    TvTvHeapSlice0,
+    TvTvHeapSliceX,
+    TvFvHeapSlice0,
+    TvFvHeapSliceX,
+    FvTvHeapSlice0,
+    FvTvHeapSliceX,
+    FvFvHeapSlice0,
+    FvFvHeapSliceX,
 ];
 
 #[derive(Clone)]
@@ -511,10 +521,7 @@ impl<const N: usize> InlineNBitSize<N> {
             return Self(Some(size));
         }
 
-        if size.get() >= (1u32 << 24) {
-            todo!();
-        }
-        bce.data.push(LoadSize(Some(size)).encode());
+        bce.load_size(size);
         Self(None)
     }
 }
@@ -807,7 +814,7 @@ impl BytecodeEncoder {
             return;
         }
         let (rdspc, rdval) = rd.to_spc_and_val();
-        let (rsspc, rsval) = rd.to_spc_and_val();
+        let (rsspc, rsval) = rs.to_spc_and_val();
         self.copy(rdspc, rsspc);
         self.copy(rdval, rsval);
     }
@@ -875,6 +882,13 @@ impl BytecodeEncoder {
     }
     pub fn mask(&mut self, rd: Reg, rs: Reg, size: SixBitSize) {
         self.andi(rd, rs, SignedImmediate::MINUS_ONE, size)
+    }
+
+    pub fn load_size(&mut self, size: VectorSize) {
+        if size.get() >= (1u32 << 24) {
+            todo!();
+        }
+        self.data.push(LoadSize(Some(size)).encode());
     }
 }
 

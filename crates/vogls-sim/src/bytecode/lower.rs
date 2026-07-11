@@ -329,18 +329,19 @@ fn lower_instruction(
                 }
                 (O::TvToFv, _, _, None) => {
                     // @Performance: better lowering.
-                    let num_words = src_size.get().div_ceil(64) as u64;
+                    let offset = HeapAlignment::spc_offset_to_val_offset(src_size, 0);
                     let val = T4;
-                    match SignedImmediate::new_from_u64(num_words * 64) {
+                    match SignedImmediate::new_from_u64(offset) {
                         None => {
-                            bce.load_u64(val, num_words);
+                            bce.load_u64(val, offset);
                             bce.add(val, rd, val, SixBitSize::N64);
                         }
                         Some(imm) => bce.addi(val, rd, imm, SixBitSize::N64),
                     }
                     bce.heap_tv_copy(val, rs, src_size);
-                    // ORNOT with self is a fill 1's
-                    bce.heap_tv_ornot(rd, rs, rs, src_size);
+
+                    let size = InlineNBitSize::new(src_size, bce);
+                    bce.tv_heap_fill(rd, true, size);
                 }
                 (O::FvToTv, _, _, Some(_)) => {
                     let (spc, val) = rs.to_spc_and_val();
@@ -1122,12 +1123,7 @@ fn lower_instruction(
                 (O::ConcatLeft, M::TwoValue, Some(_), _, _, _) => {
                     // @Performance. There is likely space here for a left_shift_or_immediate
                     bce.load_bits_into_register(T4, M::TwoValue, imm);
-                    bce.lsor(
-                        rd,
-                        rs,
-                        T4,
-                        SixBitSize::from_vector_size(imm.size()).unwrap(),
-                    );
+                    bce.lsor(rd, T4, rs, SixBitSize::from_vector_size(src_size).unwrap());
                 }
                 (O::ConcatLeft, M::TwoValue, None, _, _, _) => {
                     match SixBitSize::from_vector_size(imm.size()) {
@@ -1142,12 +1138,7 @@ fn lower_instruction(
                 (O::ConcatLeft, M::FourValue, Some(_), _, _, _) => {
                     // @Performance. There is likely space here for a fv_left_shift_or_immediate
                     bce.load_bits_into_register(T4, M::FourValue, imm);
-                    bce.fv_lsor(
-                        rd,
-                        rs,
-                        T4,
-                        SixBitSize::from_vector_size(imm.size()).unwrap(),
-                    );
+                    bce.fv_lsor(rd, T4, rs, SixBitSize::from_vector_size(src_size).unwrap());
                 }
                 (O::ConcatLeft, M::FourValue, None, _, _, _) => {
                     match SixBitSize::from_vector_size(imm.size()) {
@@ -1162,7 +1153,12 @@ fn lower_instruction(
                 (O::ConcatRight, M::TwoValue, Some(_), _, _, _) => {
                     // @Performance. There is likely space here for a left_shift_or_immediate
                     bce.load_bits_into_register(T4, M::TwoValue, imm);
-                    bce.lsor(rd, T4, rs, SixBitSize::from_vector_size(src_size).unwrap());
+                    bce.lsor(
+                        rd,
+                        rs,
+                        T4,
+                        SixBitSize::from_vector_size(imm.size()).unwrap(),
+                    );
                 }
                 (O::ConcatRight, M::TwoValue, None, _, _, _) => {
                     match SixBitSize::from_vector_size(imm.size()) {
@@ -1177,7 +1173,12 @@ fn lower_instruction(
                 (O::ConcatRight, M::FourValue, Some(_), _, _, _) => {
                     // @Performance. There is likely space here for a fv_left_shift_or_immediate
                     bce.load_bits_into_register(T4, M::FourValue, imm);
-                    bce.fv_lsor(rd, T4, rs, SixBitSize::from_vector_size(src_size).unwrap());
+                    bce.fv_lsor(
+                        rd,
+                        rs,
+                        T4,
+                        SixBitSize::from_vector_size(imm.size()).unwrap(),
+                    );
                 }
                 (O::ConcatRight, M::FourValue, None, _, _, _) => {
                     match SixBitSize::from_vector_size(imm.size()) {
@@ -1363,29 +1364,12 @@ fn lower_instruction(
                     bce.fv_slrx(rd, rs, rimm, dst_size, LogicMode::TwoValue);
                 }
                 (M::TwoValue, Some(dst_size), None) => {
-                    // TempReg: src_size > 64 => T3 is free.
-
-                    // @Incorrect. This can reach out-of-bounds.
-                    let (rdspc, rdval) = rd.to_spc_and_val();
-                    bce.add(T3, rs, rimm, SixBitSize::N64);
-                    bce.load_unaligned(rdval, T3, InlineAddrOffset::ZERO, dst_size);
-                    bce.ori(rdspc, rdspc, SignedImmediate::MINUS_ONE, dst_size);
+                    let src_size = InlineNBitSize::new(src_size, bce);
+                    bce.tvtv_heap_slicex(rd, rs, rimm, dst_size, src_size);
                 }
                 (M::FourValue, Some(dst_size), None) => {
-                    // TempReg: src_size > 64 => T3 is free.
-
-                    let (rdspc, rdval) = rd.to_spc_and_val();
-                    // @Incorrect. This can reach out-of-bounds.
-                    let src_alignment = HeapAlignment::new(src_size, LogicMode::FourValue);
-                    bce.add(T3, rs, rimm, SixBitSize::N64);
-                    bce.load_unaligned(rdspc, T3, InlineAddrOffset::ZERO, dst_size);
-                    let (addr, offset) = InlineAddrOffset::new(
-                        src_alignment.next_aligned(src_size.get() as u64) as i64,
-                        bce,
-                        T3,
-                        T3,
-                    );
-                    bce.load_unaligned(rdval, addr, offset, dst_size);
+                    let src_size = InlineNBitSize::new(src_size, bce);
+                    bce.fvtv_heap_slicex(rd, rs, rimm, dst_size, src_size);
                 }
                 (M::TwoValue, None, None) => {
                     bce.heap_slice(rd, rs, rimm, dst_size, src_size, false, true, false);
@@ -1855,11 +1839,8 @@ fn lower_instruction(
                     );
                 }
                 (M::TwoValue, Some(size)) => {
-                    // @Incorrect: out-of-bounds reads.
-                    bce.add(rsignal, rsignal, roffset, SixBitSize::N64);
-                    let (rdspc, rdval) = rd.to_spc_and_val();
-                    bce.load_unaligned(rdval, rsignal, InlineAddrOffset::ZERO, size);
-                    bce.ori(rdspc, rdspc, SignedImmediate::MINUS_ONE, size);
+                    let src_size = InlineNBitSize::new(signal_size, bce);
+                    bce.tvtv_heap_slicex(rd, rsignal, roffset, size, src_size);
                 }
                 (M::FourValue, None) => {
                     // TempReg: dst_size > 64 => T1 is free.
@@ -1876,13 +1857,8 @@ fn lower_instruction(
                     );
                 }
                 (M::FourValue, Some(size)) => {
-                    bce.add(rsignal, rsignal, roffset, SixBitSize::N64);
-                    let (rdspc, rdval) = rd.to_spc_and_val();
-                    bce.load_unaligned(rdspc, rsignal, InlineAddrOffset::ZERO, size);
-                    let val_offset = HeapAlignment::spc_offset_to_val_offset(signal_size, 0);
-                    let (addr, val_offset) =
-                        InlineAddrOffset::new(val_offset as i64, bce, rsignal, T5);
-                    bce.load_unaligned(rdval, addr, val_offset, size);
+                    let src_size = InlineNBitSize::new(signal_size, bce);
+                    bce.fvtv_heap_slicex(rd, rsignal, roffset, size, src_size);
                 }
             }
 
