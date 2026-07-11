@@ -35,7 +35,7 @@ pub fn lower_process_to_bytecode(
     lupdt_indexes: &VgHashMap<RtSignalKey, u64>,
     bytecode: &mut BytecodeEncoder,
 ) {
-    const PRINT: bool = true;
+    const PRINT: bool = false;
 
     let process = &gl.processes[process];
 

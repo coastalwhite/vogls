@@ -521,29 +521,4 @@ impl Heap {
         let w = (w1 as u128) | ((w2 as u128) << 64);
         ((w >> bit_offset) & 0xFFFF_FFFF_FFFF_FFFF) as u64
     }
-
-    // pub fn get_disjoint_dst_s1_s2(
-    //     &mut self,
-    //     dst: (HeapOffset, usize),
-    //     src1: (HeapOffset, usize),
-    //     src2: (HeapOffset, usize),
-    //     heap_scratch: &mut Vec<u64>,
-    // ) -> (bool, &mut [u64], &[u64], &[u64]) {
-    //     debug_assert_eq!(dst.0.bit_offset % 64, 0);
-    //     debug_assert_eq!(src1.0.bit_offset % 64, 0);
-    //     debug_assert_eq!(src2.0.bit_offset % 64, 0);
-    //
-    //     let dst_word = dst.0.bit_offset / 64;
-    //     let src1_word = src1.0.bit_offset / 64;
-    //     let src2_word = src2.0.bit_offset / 64;
-    //
-    //     let src1 = &self.0[src1_word..src1_word + src1.1];
-    //     let src2 = &self.0[src2_word..src2_word + src2.1];
-    //
-    //     if is_disjoint(dst, src1, src2) {
-    //         (false, &mut self.0[dst_word..dst_word + dst.1], src1, src2)
-    //     } else {
-    //         (true, heap_scratch.as_mut_slice(), src1, src2)
-    //     }
-    // }
 }

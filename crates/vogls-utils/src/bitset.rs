@@ -1,3 +1,4 @@
+use std::fmt;
 use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign};
 
 // @Performance: This is double storing the length. In theory, this should be 3-words instead of 4.
@@ -13,6 +14,15 @@ impl PartialEq for Bitset {
     }
 }
 impl Eq for Bitset {}
+
+impl fmt::Debug for Bitset {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Bitset")
+            .field("data", &self.data)
+            .field("num_bits", &self.num_bits)
+            .finish()
+    }
+}
 
 impl Bitset {
     pub fn new() -> Self {
@@ -105,6 +115,10 @@ impl Bitset {
             return Err(0);
         }
 
+        if self.data.iter().all(|v| *v == 0) {
+            return if self.len() > n { Ok(0) } else { Err(0) };
+        }
+
         // @Performance: Specialized implementation
         let mut prev = 0;
         for i in self.true_idx_iter() {
@@ -113,7 +127,11 @@ impl Bitset {
             }
             prev = i;
         }
-        Err(prev + 1)
+        if self.len() - prev > n {
+            return Ok(prev + 1);
+        } else {
+            Err(prev + 1)
+        }
     }
 
     pub fn set_slice_constant(&mut self, offset: usize, num_words: usize, value: bool) {
@@ -121,6 +139,10 @@ impl Bitset {
         for i in 0..num_words {
             self.set(offset + i, value);
         }
+    }
+
+    pub fn set_all_zero(&mut self) {
+        self.data.fill(0u64);
     }
 }
 
@@ -142,6 +164,7 @@ impl<'a> Iterator for TrueIdxIter<'a> {
                 if *w != 0 {
                     self.word_idx = i;
                     self.word = *w;
+                    break;
                 }
             }
 

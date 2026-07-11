@@ -94,6 +94,17 @@ impl StackTracker {
     pub fn num_words(&self) -> usize {
         self.offsets().b64 + self.b64.len()
     }
+
+    fn clear(&mut self) {
+        let Self { b1, b2, b4, b8, b16, b32, b64 } = self;
+        b1.set_all_zero();
+        b2.set_all_zero();
+        b4.set_all_zero();
+        b8.set_all_zero();
+        b16.set_all_zero();
+        b32.set_all_zero();
+        b64.set_all_zero();
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -447,6 +458,8 @@ pub fn linear_scan_register_allocation(
             }
         }
     }
+
+    stack_tracker.clear();
 }
 
 fn claim_register_slot(

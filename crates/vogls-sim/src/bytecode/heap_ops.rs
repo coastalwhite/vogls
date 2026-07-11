@@ -896,6 +896,72 @@ impl BytecodeInstruction for HeapConcat {
         write_padded_mnemonic(f, mnemonic)?;
         write!(f, "{rd}, {rs1}, {rs2}, {rs2_size}")
     }
+    fn pre_exec_itrace(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        regs: &Regs,
+        state: &RuntimeState,
+    ) -> fmt::Result {
+        f.write_str(EXEC_ITRACE_INDENT)?;
+
+        let rs1_size = VectorSize::new(regs[Reg::X11] as u32).unwrap();
+        let rs2_size = self.rs2_size.get(regs);
+
+        let mode = if self.fv {
+            LogicMode::FourValue
+        } else {
+            LogicMode::TwoValue
+        };
+        if rs1_size <= VSIZE_64 {
+            write_register(f, regs, "rs1", self.rs1, mode)?;
+        } else {
+            write!(
+                f,
+                "rs1 = {}",
+                state
+                    .heap
+                    .load_bits(regs.get_as_addr(self.rs1).to_ref(rs1_size), mode)
+            )?;
+        }
+        write!(f, ", ")?;
+        if rs2_size <= VSIZE_64 {
+            write_register(f, regs, "rs2", self.rs2, mode)?;
+        } else {
+            write!(
+                f,
+                "rs2 = {}",
+                state
+                    .heap
+                    .load_bits(regs.get_as_addr(self.rs2).to_ref(rs2_size), mode)
+            )?;
+        }
+        writeln!(f)
+    }
+    fn post_exec_itrace(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        regs: &Regs,
+        state: &RuntimeState,
+    ) -> fmt::Result {
+        let rs1_size = VectorSize::new(regs[Reg::X11] as u32).unwrap();
+        let rs2_size = self.rs2_size.get(regs);
+
+        let dst_size = VectorSize::new(rs1_size.get() + rs2_size.get()).unwrap();
+
+        f.write_str(EXEC_ITRACE_INDENT)?;
+        let mode = if self.fv {
+            LogicMode::FourValue
+        } else {
+            LogicMode::TwoValue
+        };
+        writeln!(
+            f,
+            "rd = {}",
+            state
+                .heap
+                .load_bits(regs.get_as_addr(self.rd).to_ref(dst_size), mode,)
+        )
+    }
 
     fn execute(
         self,
@@ -949,7 +1015,7 @@ impl BytecodeInstruction for HeapConcat {
                 src2_scratch = [regs[spc], regs[val]];
                 &src2_scratch[..]
             } else {
-                src2_scratch = [regs[rs1], 0u64];
+                src2_scratch = [regs[rs2], 0u64];
                 &src2_scratch[..1]
             }
         } else {
@@ -969,6 +1035,7 @@ impl BytecodeInstruction for HeapConcat {
         } else {
             tv_l_concat(&mut cldctx.heap_scratch, src1, src2, rs1_size, rs2_size);
         }
+
         state
             .heap
             .get_mut_u64_slice(rd, dst_num_words)
@@ -1023,6 +1090,61 @@ impl BytecodeInstruction for HeapSlice {
         write_padded_mnemonic(f, mnemonic)?;
         write!(f, "{rd}, {rs}, {roff}, {dst_size}")
     }
+    fn pre_exec_itrace(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        regs: &Regs,
+        state: &RuntimeState,
+    ) -> fmt::Result {
+        f.write_str(EXEC_ITRACE_INDENT)?;
+        let mode = if self.fv {
+            LogicMode::FourValue
+        } else {
+            LogicMode::TwoValue
+        };
+        write!(
+            f,
+            "rs = {}, ",
+            state.heap.load_bits(
+                regs.get_as_addr(self.rs)
+                    .to_ref(VectorSize::new(regs[Reg::X11] as u32).unwrap()),
+                mode,
+            )
+        )?;
+        write_register(
+            f,
+            regs,
+            "roff",
+            self.roff,
+            if self.offset_is_fv {
+                LogicMode::FourValue
+            } else {
+                LogicMode::TwoValue
+            },
+        )?;
+        writeln!(f)
+    }
+    fn post_exec_itrace(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        regs: &Regs,
+        state: &RuntimeState,
+    ) -> fmt::Result {
+        f.write_str(EXEC_ITRACE_INDENT)?;
+        let mode = if self.fv | self.offset_is_fv | self.fill_with_x {
+            LogicMode::FourValue
+        } else {
+            LogicMode::TwoValue
+        };
+        writeln!(
+            f,
+            "rd = {}",
+            state.heap.load_bits(
+                regs.get_as_addr(self.rd).to_ref(self.dst_size.get(regs)),
+                mode,
+            )
+        )
+    }
 
     fn execute(
         self,
@@ -1057,6 +1179,8 @@ impl BytecodeInstruction for HeapSlice {
 
         let offset = if offset_is_fv {
             let (spc, val) = roff.to_spc_and_val();
+            // Offset is always a 32-bit value. So this checks whether it contains any X or Z bits.
+            // If so, the result should be all X.
             if regs[spc] != u32::MAX as u64 {
                 state
                     .heap
