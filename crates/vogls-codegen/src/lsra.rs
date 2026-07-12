@@ -319,6 +319,25 @@ pub fn linear_scan_register_allocation(
                 });
             });
         }
+
+        let terminator_inum = block_to - 2;
+        bbs[bb].terminator.for_each_var_src(|src| {
+            // Don't handle temporal variables.
+            if assignment.contains_key(&src) {
+                return;
+            }
+
+            let size = var_map.size(src);
+            let interval = intervals
+                .entry(src)
+                .or_insert(Interval::empty(size, src.mode()));
+            interval.add_range(Interval {
+                start: block_from,
+                end: terminator_inum,
+                size,
+                mode: src.mode(),
+            });
+        });
     }
 
     drop(live_in);
