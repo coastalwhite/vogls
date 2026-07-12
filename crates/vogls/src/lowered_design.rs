@@ -18,7 +18,7 @@ use vogls_runtime::plugins::RuntimePlugin;
 #[cfg(feature = "native")]
 use vogls_runtime::plugins::RuntimePluginState;
 use vogls_runtime::{RtSignalKey, RuntimeState};
-use vogls_sim::bytecode::lower::lower_process_to_bytecode;
+use vogls_sim::bytecode::lower::{LowerBytecodeOptions, lower_process_to_bytecode};
 use vogls_sim::bytecode::{BytecodeEncoder, BytecodeListeners, Schedule};
 use vogls_sim::{Event, Regions, Simulation, VmProcess, VmProcessKey, lower_process_to_vm};
 #[cfg(feature = "native")]
@@ -220,6 +220,7 @@ impl LoweredDesign {
             let watch_map = WatchMap::new(&self.gl.bbs);
             let mut listeners = BytecodeListeners::new(watch_map.num_watches());
             let mut num_stack_words = 0;
+            let options = LowerBytecodeOptions { emit: self.emit_vm };
 
             for process in self.gl.processes.keys() {
                 lower_process_to_bytecode(
@@ -235,6 +236,7 @@ impl LoweredDesign {
                     &rt_signal_map,
                     &lupdt_indexes,
                     &mut bytecode,
+                    &options,
                 );
             }
 

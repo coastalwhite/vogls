@@ -21,6 +21,10 @@ enum JumpKind {
     Branch(Reg),
 }
 
+pub struct LowerBytecodeOptions {
+    pub emit: bool,
+}
+
 pub fn lower_process_to_bytecode(
     process: ProcessKey,
     gl: &GlobalContext,
@@ -34,10 +38,13 @@ pub fn lower_process_to_bytecode(
     io_signals: &VgHashMap<SignalKey, RtSignalKey>,
     lupdt_indexes: &VgHashMap<RtSignalKey, u64>,
     bytecode: &mut BytecodeEncoder,
+    options: &LowerBytecodeOptions,
 ) {
-    const PRINT: bool = false;
-
     let process = &gl.processes[process];
+
+    if options.emit {
+        eprintln!("Process {}:", process.kind.into_static_str());
+    }
 
     let mut bb_stack = Vec::new();
     let mut bb_seen = VgHashSet::<BasicBlockKey>::default();
@@ -50,7 +57,11 @@ pub fn lower_process_to_bytecode(
     let mut jump_targets = Vec::<(usize, BasicBlockKey, JumpKind)>::new();
 
     schedule.push_active(InstructionPtr(bytecode.data.len() as u64));
-    for tr in &process.regions {
+    for (i, tr) in process.regions.iter().enumerate() {
+        if options.emit {
+            eprintln!("Temporal Region {i}:");
+        }
+
         bb_seen.clear();
         assignment.clear();
         post_order.clear();
@@ -86,8 +97,8 @@ pub fn lower_process_to_bytecode(
             let bb = &gl.bbs[bb_key];
             for i in &bb.instrs {
                 let offset = bytecode.data.len();
-                if PRINT {
-                    println!("{}", i.display(&ctx));
+                if options.emit {
+                    eprintln!("{}", i.display(&ctx));
                 }
                 lower_instruction(
                     gl,
@@ -101,9 +112,9 @@ pub fn lower_process_to_bytecode(
                     lupdt_indexes,
                     i,
                 );
-                if PRINT {
+                if options.emit {
                     for c in &bytecode.data[offset..] {
-                        println!("  {c}");
+                        eprintln!("  {c}");
                     }
                 }
             }
@@ -216,6 +227,10 @@ pub fn lower_process_to_bytecode(
                 Branch { rcond, imm }.encode()
             }
         };
+    }
+
+    if options.emit {
+        eprintln!();
     }
 }
 
