@@ -352,7 +352,7 @@ impl BytecodeInstruction for TvCorrectFirst {
         let word = (i / 64) as usize;
         let boff = (i % 64) as usize;
         let i = &mut state.tvl_first_write[word];
-        regs[self.rcond] |= (*i >> boff) & 1;
+        regs[self.rcond] |= (!*i >> boff) & 1;
         *i |= 1u64 << boff;
     }
 }
