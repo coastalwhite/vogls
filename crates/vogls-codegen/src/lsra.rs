@@ -368,7 +368,7 @@ pub fn linear_scan_register_allocation(
                         Slot::Heap(_) => debug_assert!(false),
                         Slot::Register(r) => {
                             let mask = 1u64 | (u64::from(mode == LogicMode::FourValue) << 1);
-                            active_registers ^= mask << r
+                            active_registers ^= mask << r;
                         }
                         Slot::Stack(kind, offset) => {
                             let offset = offset as usize;
@@ -437,7 +437,7 @@ pub fn linear_scan_register_allocation(
 
             // @Performance. Better spilling policy.
             let (spill_var, spill_interval) = intervals[*spill_i];
-            if spill_interval.end > interval.end {
+            if spill_var.mode() == var.mode() && spill_interval.end > interval.end {
                 let bitset = stack_tracker.get_bitset_for_size(spill_interval.size, spill_interval.mode);
                 let num_bitset_slots = num_bitset_slots(spill_interval.size, spill_interval.mode);
                 let offset = match bitset.find_n_contiguous_zeros(num_bitset_slots) {
