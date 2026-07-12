@@ -120,14 +120,30 @@ impl BytecodeInstruction for Reschedule {
             schedule_self,
         } = self;
         if *schedule_self {
-            write_padded_mnemonic(f, "next_event")?;
-        } else if *region == 0 {
-            write_padded_mnemonic(f, "wait")?;
-            write!(f, "{rtime}")?;
+            if *region == 0 {
+                write_padded_mnemonic(f, "wait")?;
+                write!(f, "{rtime}")?;
+            } else {
+                write_padded_mnemonic(f, "wait_region")?;
+                write!(f, "{}", region - 1)?;
+            }
         } else {
-            write_padded_mnemonic(f, "wait_region")?;
-            write!(f, "{}", region - 1)?;
+            write_padded_mnemonic(f, "next_event")?;
         }
+        Ok(())
+    }
+    fn pre_exec_itrace(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        regs: &Regs,
+        _state: &RuntimeState,
+    ) -> fmt::Result {
+        if self.schedule_self && self.region == 0 {
+            f.write_str(EXEC_ITRACE_INDENT)?;
+            write_register(f, regs, "rtime", self.rtime, LogicMode::TwoValue)?;
+            writeln!(f)?;
+        }
+
         Ok(())
     }
 
