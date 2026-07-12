@@ -13,3 +13,6 @@ clap.workspace = true
 
 [lints]
 workspace = true
+
+[features]
+tailcall = ["vogls/tailcall"]

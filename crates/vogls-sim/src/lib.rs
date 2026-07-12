@@ -1,3 +1,4 @@
+#![cfg_attr(feature = "tailcall", feature(rust_preserve_none_cc, explicit_tail_calls))]
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::sync::Arc;

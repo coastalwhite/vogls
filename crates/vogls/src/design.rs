@@ -95,6 +95,11 @@ impl Design {
             ) => simulation
                 .run(initial_state, io, time)
                 .map_err(|_| "execution failed.".into()),
+            #[cfg(feature = "tailcall")]
+            (DesignBackend::Bytecode { design }, DesignState::Bytecode(state)) => design
+                .execute_inner_tailcall(state, &mut io.stdout, &mut io.stderr)
+                .map_err(|_| "execution failed.".into()),
+            #[cfg(not(feature = "tailcall"))]
             (DesignBackend::Bytecode { design }, DesignState::Bytecode(state)) => design
                 .execute(state, &mut io.stdout, &mut io.stderr)
                 .map_err(|_| "execution failed.".into()),

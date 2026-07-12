@@ -354,6 +354,16 @@ impl BytecodeInstruction for TvCorrectFirst {
         write_register(f, regs, "rcond", self.rcond, LogicMode::TwoValue)?;
         writeln!(f)
     }
+    fn post_exec_itrace(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        regs: &Regs,
+        _state: &RuntimeState,
+    ) -> fmt::Result {
+        f.write_str(EXEC_ITRACE_INDENT)?;
+        write_register(f, regs, "rcond", self.rcond, LogicMode::TwoValue)?;
+        writeln!(f)
+    }
 
     fn execute(
         self,
@@ -368,7 +378,7 @@ impl BytecodeInstruction for TvCorrectFirst {
         let word = (i / 64) as usize;
         let boff = (i % 64) as usize;
         let i = &mut state.tvl_first_write[word];
-        regs[self.rcond] |= (!*i >> boff) & 1;
+        regs[self.rcond] |= ((!*i) >> boff) & 1;
         *i |= 1u64 << boff;
     }
 }

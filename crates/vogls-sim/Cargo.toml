@@ -15,3 +15,6 @@ vogls-vcd.workspace = true
 
 [lints]
 workspace = true
+
+[features]
+tailcall = []

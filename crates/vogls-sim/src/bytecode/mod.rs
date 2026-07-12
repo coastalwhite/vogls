@@ -15,6 +15,8 @@ mod rtype_binary;
 mod rtype_unary;
 mod set;
 mod stack;
+#[cfg(feature = "tailcall")]
+mod tailcall;
 mod temporal;
 
 use reg::{Reg, Regs};
@@ -255,6 +257,19 @@ macro_rules! opcodes {
             ) -> u64;
             X_NUM_INSTRUCTIONS
         ] = [$(extract_and_execute::<$name>),+];
+        #[cfg(feature = "tailcall")]
+        static X_INSTRUCTION_TAILCALL_FNS: [
+            extern "rust-preserve-none" fn(
+                code: &[Bytecode],
+                regs: &mut Regs,
+                pc: u64,
+                state: &mut RuntimeState,
+                schedule: &mut Schedule,
+                listeners: &mut BytecodeListeners,
+                cldctx: &mut ColdContext,
+            );
+            X_NUM_INSTRUCTIONS
+        ] = [$(tailcall::extract_and_execute_tailcall::<$name>),+];
         static X_PRE_EXEC_ITRACE_FNS: [
             fn(
                 c: Bytecode,
@@ -988,6 +1003,43 @@ impl Design {
                 .unwrap();
             }
         }
+
+        if cldctx.return_value != 0 {
+            return Err(());
+        }
+
+        Ok(())
+    }
+
+    #[cfg(feature = "tailcall")]
+    pub fn execute_inner_tailcall(
+        &self,
+        state: &mut State,
+        stdout: &mut (dyn std::io::Write + Send + Sync),
+        stderr: &mut (dyn std::io::Write + Send + Sync),
+    ) -> Result<(), ()> {
+        let code = &self.bytecode;
+        let Some(entry) = state.schedule.pop(&mut state.runtime.time) else {
+            return Ok(());
+        };
+
+        let pc = entry.0;
+        let mut cldctx = ColdContext::new(&self.intrinsics, stdout, stderr);
+        let mut regs = Regs::new(self.stack_offset);
+        let Some(c) = code.get(pc as usize) else {
+            return Ok(());
+        };
+        let opcode = c.opcode();
+        let f = X_INSTRUCTION_TAILCALL_FNS[opcode as usize];
+        (f)(
+            code,
+            &mut regs,
+            pc,
+            &mut state.runtime,
+            &mut state.schedule,
+            &mut state.listeners,
+            &mut cldctx,
+        );
 
         if cldctx.return_value != 0 {
             return Err(());
