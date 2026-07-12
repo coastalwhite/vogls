@@ -138,6 +138,7 @@ impl BytecodeInstruction for Intrinsic {
             IntrinsicOp::Finish => {
                 cldctx.return_value = 0;
                 *pc = u64::MAX;
+                cldctx.stdout.write_all(b"[FINISH]\n").unwrap();
             }
             IntrinsicOp::Random => todo!(),
             IntrinsicOp::Display(f) => {
