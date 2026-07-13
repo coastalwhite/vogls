@@ -1,14 +1,14 @@
 // vogls: verify-stdout
 proc other {
-L0:
-    %init = const 32'h0
+*TR0:
+    %init = tv.const 32'h0
     jump <L1>
-L1:
+.L1:
     %value = phi [%init <L0>, %increment <L1>]
     %_ = vogls.display "Loop {}\n", %value
     %increment = addi %value, 32'h1
     %condition = ulei %increment, 32'hA
     branch %condition, <L1>, <L2>
-L2:
+.L2:
     halt
 }

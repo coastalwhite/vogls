@@ -55,13 +55,14 @@ impl VariableKey {
         }
     }
 
-    fn update_size(
+    fn update(
         &mut self,
+        new_mode: LogicMode,
         new_size: VectorSize,
         non_inlined_var_sizes: &mut VgHashMap<u64, VectorSize>,
     ) {
         non_inlined_var_sizes.remove(&self.identifier());
-        *self = Self::from_id_and_size(self.identifier(), self.mode(), new_size);
+        *self = Self::from_id_and_size(self.identifier(), new_mode, new_size);
         if new_size > Self::MAX_INLINE_SIZE {
             non_inlined_var_sizes.insert(self.identifier(), new_size);
         }
@@ -103,7 +104,7 @@ impl VariableMap {
         }
     }
 
-    pub fn update(&mut self, key: &mut VariableKey, new_size: VectorSize) {
-        key.update_size(new_size, &mut self.non_inlined_var_sizes);
+    pub fn update(&mut self, key: &mut VariableKey, new_mode: LogicMode, new_size: VectorSize) {
+        key.update(new_mode, new_size, &mut self.non_inlined_var_sizes);
     }
 }

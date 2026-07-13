@@ -1,7 +1,7 @@
 signal a: 2
 
 proc other {
-L0:
+*TR0:
   %t0 = const 32'h0000_0001
   %t1 = prb $a
   %t2 = slice[2] %t1, %t0
@@ -10,7 +10,7 @@ L0:
 }
 
 proc other {
-L0:
+*TR0:
   %t0 = const 32'h0000_0001
   %t1 = prb $a
   %t2 = concati_left %t1, 1'h1

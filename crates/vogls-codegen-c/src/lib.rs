@@ -345,6 +345,7 @@ pub fn lower_process(
     io_signals: &VgHashMap<SignalKey, RtSignalKey>,
     lupdt_indexes: &VgHashMap<RtSignalKey, u64>,
     signals: &[HeapRef],
+    signal_to_tv_index: &VgHashMap<RtSignalKey, u64>,
     lower_options: &CLowerOptions,
 ) -> io::Result<()> {
     use Instruction as I;
@@ -825,7 +826,7 @@ pub fn lower_process(
                             }
                         };
                         let dst = io_signals[signal];
-                        drive::drive(&mut buffer, signals, dst, t, partial)?;
+                        drive::drive(&mut buffer, signals, signal_to_tv_index, dst, t, partial)?;
                     }
                     I::Phi(_, _) => continue,
                 }

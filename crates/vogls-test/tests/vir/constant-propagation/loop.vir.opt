@@ -1,13 +1,13 @@
 proc other {
-L0:
+*TR0:
   %t0 = const 32'h0000_0000
   jump <L1>
-L1:
+.L1:
   %t1 = phi [%t0 <L0>, %t2 <L1>]
   %t3 = vogls.display "Loop {}\n", %t1
   %t2 = addi %t1, 32'h0000_0001
   %t4 = ulei %t2, 32'h0000_000A
   branch %t4, <L1>, <L2>
-L2:
+.L2:
   halt
 }

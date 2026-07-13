@@ -127,11 +127,14 @@ impl Process {
 
     fn process_fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &mut DisplayContext<'_>) -> fmt::Result {
         writeln!(f, "proc {} {{", self.kind.into_static_str())?;
-        for (i, tr) in self.regions.iter().enumerate() {
-            writeln!(f, "TR {i}:")?;
 
+        ctx.clear();
+        for (tr_idx, tr) in self.regions.iter().enumerate() {
+            ctx.bb_name_scratch.insert(tr.entry(), tr_idx as u32);
+        }
+
+        for (tr_idx, tr) in self.regions.iter().enumerate() {
             let entry = tr.entry();
-            ctx.clear();
             ctx.prepare_process(entry);
 
             let mut bb_stack = std::mem::take(&mut ctx.bb_stack_scratch);
@@ -140,9 +143,12 @@ impl Process {
             bb_seen.clear();
             bb_seen.insert(entry);
             bb_stack.push(entry);
-
             while let Some(bb) = bb_stack.pop() {
-                writeln!(f, "L{}:", ctx.bb_name_scratch[&bb])?;
+                if tr.entry() == bb {
+                    writeln!(f, "*TR{tr_idx}:")?;
+                } else {
+                    writeln!(f, ".L{}:", ctx.bb_name_scratch[&bb])?;
+                }
 
                 let bb = ctx.gl.bbs.get(bb).unwrap();
                 bb.ctx_fmt(f, ctx)?;

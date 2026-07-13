@@ -251,10 +251,12 @@ impl CDesign {
             next_time: u64::MAX,
         };
         let listening = vec![0u64; num_listening.div_ceil(64)];
-        let fst_poke = match gl.logic_mode {
-            LogicMode::TwoValue => vec![0u64; gl.signals.len().div_ceil(64)],
-            LogicMode::FourValue => Vec::new(),
-        };
+        let num_tv_signals = gl
+            .signals
+            .values()
+            .map(|s| matches!(s.mode, LogicMode::TwoValue))
+            .count();
+        let fst_poke = vec![0u64; num_tv_signals.div_ceil(64)];
 
         CDesignState {
             schedule,

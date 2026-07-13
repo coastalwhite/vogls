@@ -3,6 +3,7 @@ use std::io;
 use vogls_codegen::HeapRef;
 use vogls_ir::LogicMode;
 use vogls_runtime::RtSignalKey;
+use vogls_utils::VgHashMap;
 
 use super::INDENT;
 use crate::{CExpr, CIdent, CType, CVar, write_cvar};
@@ -10,6 +11,7 @@ use crate::{CExpr, CIdent, CType, CVar, write_cvar};
 pub fn drive(
     f: &mut impl io::Write,
     signals: &[HeapRef],
+    signal_to_tv_index: &VgHashMap<RtSignalKey, u64>,
     dst: RtSignalKey,
     src: CExpr,
     partial: Option<CExpr>,
@@ -21,11 +23,12 @@ pub fn drive(
         write!(f, "{INDENT}if (")?;
         match src.ty().mode {
             LogicMode::TwoValue => {
-                let w = dst.as_u64() / 64;
-                let i = dst.as_u64() % 64;
+                let dst_fst_poke = signal_to_tv_index[&dst];
+                let w = dst_fst_poke / 64;
+                let i = dst_fst_poke % 64;
                 write!(
                     f,
-                    "((cldctx->fst_poke[{w}] & (((uint64_t)1) << {i})) == 0) |"
+                    "((cldctx->fst_poke[{w}] & (((uint64_t)1) << {i})) == 0) |",
                 )?;
             }
             LogicMode::FourValue => {}

@@ -2,7 +2,7 @@ signal a: 1
 signal b: 2
 
 proc other {
-L0:
+*TR0:
   %t0 = prb $a
   %t1 = prb $a
   %t2 = concat %t0, %t1

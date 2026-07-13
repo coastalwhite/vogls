@@ -264,7 +264,6 @@ impl LoweredDesign {
                     }
                 }
             }
-
             let runtime = RuntimeState::new(
                 self.gl.logic_mode,
                 heap,
@@ -502,6 +501,16 @@ pub fn lower_to_shared_object(
     let mut listener_builder = ListenerBuilder::default();
     let mut out = Vec::new();
     let mut state_builder = StateBuilder::default();
+    let mut index = 0u64;
+    let mut signal_to_tv_index =
+        VgHashMap::from_iter(gl.signals.iter().filter_map(|(key, s)| match s.mode {
+            LogicMode::TwoValue => {
+                let i = index;
+                index += 1;
+                Some((signal_map[&key], i))
+            }
+            LogicMode::FourValue => None,
+        }));
 
     for signal in gl.signals.keys() {
         lower_signal_drive_header(&mut out, signal, &signal_map)?;
@@ -526,6 +535,7 @@ pub fn lower_to_shared_object(
             signal_map,
             &lupdt_indexes,
             heap_refs,
+            &signal_to_tv_index,
             &lower_options,
         )?;
         byte_count[gl.processes[process].kind as usize] += (out.len() - start_length) as u64;

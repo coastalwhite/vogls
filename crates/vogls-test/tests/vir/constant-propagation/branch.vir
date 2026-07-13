@@ -1,23 +1,23 @@
 // vogls: verify-stdout
 proc other {
-L0:
+*TR0:
     %always_false = const 1'b0
     branch %always_false, <never1>, <always1>
-never1:
+.never1:
     %_1 = vogls.display "Never\n"
     jump <L1>
-always1:
+.always1:
     %_2 = vogls.display "Always\n"
     jump <L1>
-L1:
+.L1:
     %always_true = const 1'b1
     branch %always_true, <always2>, <never2>
-never2:
+.never2:
     %_3 = vogls.display "Never\n"
     jump <L2>
-always2:
+.always2:
     %_4 = vogls.display "Always\n"
     jump <L2>
-L2:
+.L2:
     halt
 }

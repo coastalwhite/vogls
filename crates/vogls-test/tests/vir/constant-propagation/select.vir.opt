@@ -2,14 +2,14 @@ signal c: 1
 signal d: 1
 
 proc other {
-L0:
+*TR0:
   %t0 = prb $c
   drv $d, %t0
   halt
 }
 
 proc other {
-L0:
+*TR0:
   %t0 = prb $c
   %t1 = negate %t0
   drv $d, %t1

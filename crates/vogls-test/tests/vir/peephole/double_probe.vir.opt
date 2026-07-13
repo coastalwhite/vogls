@@ -2,7 +2,7 @@ signal a: 1
 signal b: 3
 
 proc other {
-L0:
+*TR0:
   %t0 = prb[1] $b, 2
   drv $a, %t0
   halt
