@@ -76,6 +76,7 @@ impl BytecodeInstruction for PushArgument {
         Ok(())
     }
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -121,6 +122,7 @@ impl BytecodeInstruction for Intrinsic {
         write!(f, "{:<1$}", "intrinsic", MNEMONIC_ALIGN)
     }
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,

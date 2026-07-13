@@ -107,6 +107,7 @@ macro_rules! impl_sbs_bitwise {
 impl BytecodeInstruction for TvCountOnes {
     impl_bitwise!(TvCountOnes, "tv.count_ones");
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -124,6 +125,7 @@ impl BytecodeInstruction for TvCountOnes {
 impl BytecodeInstruction for FvNot {
     impl_bitwise!(FvNot, "fv.not");
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -142,6 +144,7 @@ impl BytecodeInstruction for FvNot {
 impl BytecodeInstruction for FvReduceAnd {
     impl_sbs_bitwise!(FvReduceAnd, "fv.reduce_and");
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -161,6 +164,7 @@ impl BytecodeInstruction for FvReduceAnd {
 impl BytecodeInstruction for FvReduceOr {
     impl_sbs_bitwise!(FvReduceOr, "fv.reduce_or");
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -180,6 +184,7 @@ impl BytecodeInstruction for FvReduceOr {
 impl BytecodeInstruction for FvReduceXor {
     impl_sbs_bitwise!(FvReduceXor, "fv.reduce_xor");
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,

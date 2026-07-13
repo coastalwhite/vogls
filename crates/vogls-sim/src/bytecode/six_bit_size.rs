@@ -5,6 +5,7 @@ use vogls_ir::VectorSize;
 /// A size between 1 - 64 which can be represented by six bits.
 ///
 /// This is generally used to represent the six of an operand within a register.
+#[repr(u8)]
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
 pub enum SixBitSize {
     // @NOTE: This is an enum to allow to compiler to infer the range of this value clearly.
@@ -92,6 +93,7 @@ impl SixBitSize {
         Some(Self::new_masked(size.get() - 1))
     }
 
+    #[inline(always)]
     pub fn encode(self) -> u32 {
         self as u32 - 1
     }
@@ -101,73 +103,13 @@ impl SixBitSize {
     /// Note that logical 0 corresponds to size 1.
     #[inline(always)]
     pub fn new_masked(v: u32) -> Self {
-        match (v & 0x3F) + 1 {
-            1 => Self::N1,
-            2 => Self::N2,
-            3 => Self::N3,
-            4 => Self::N4,
-            5 => Self::N5,
-            6 => Self::N6,
-            7 => Self::N7,
-            8 => Self::N8,
-            9 => Self::N9,
-            10 => Self::N10,
-            11 => Self::N11,
-            12 => Self::N12,
-            13 => Self::N13,
-            14 => Self::N14,
-            15 => Self::N15,
-            16 => Self::N16,
-            17 => Self::N17,
-            18 => Self::N18,
-            19 => Self::N19,
-            20 => Self::N20,
-            21 => Self::N21,
-            22 => Self::N22,
-            23 => Self::N23,
-            24 => Self::N24,
-            25 => Self::N25,
-            26 => Self::N26,
-            27 => Self::N27,
-            28 => Self::N28,
-            29 => Self::N29,
-            30 => Self::N30,
-            31 => Self::N31,
-            32 => Self::N32,
-            33 => Self::N33,
-            34 => Self::N34,
-            35 => Self::N35,
-            36 => Self::N36,
-            37 => Self::N37,
-            38 => Self::N38,
-            39 => Self::N39,
-            40 => Self::N40,
-            41 => Self::N41,
-            42 => Self::N42,
-            43 => Self::N43,
-            44 => Self::N44,
-            45 => Self::N45,
-            46 => Self::N46,
-            47 => Self::N47,
-            48 => Self::N48,
-            49 => Self::N49,
-            50 => Self::N50,
-            51 => Self::N51,
-            52 => Self::N52,
-            53 => Self::N53,
-            54 => Self::N54,
-            55 => Self::N55,
-            56 => Self::N56,
-            57 => Self::N57,
-            58 => Self::N58,
-            59 => Self::N59,
-            60 => Self::N60,
-            61 => Self::N61,
-            62 => Self::N62,
-            63 => Self::N63,
-            64 => Self::N64,
-            _ => unreachable!(),
-        }
+        let v = ((v & 0x3F) + 1) as u8;
+        debug_assert!((1..=64).contains(&v));
+        // @NOTE: I observed this not being optimized, when it was a match statement. Therefore,
+        // this unsafe here.
+        //
+        // SAFETY: SixBitSize is defined between 1 - 64 and that is the only range that `v` can be.
+        unsafe { std::mem::transmute::<u8, Self>(v) }
     }
 
     /// Mask a value to only keep the lower N bits.

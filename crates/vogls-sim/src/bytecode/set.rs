@@ -163,6 +163,7 @@ impl BytecodeInstruction for TvSetAligned {
         writeln!(f)
     }
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -219,6 +220,7 @@ impl BytecodeInstruction for FvSetAligned {
         writeln!(f)
     }
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -265,6 +267,7 @@ impl BytecodeInstruction for FvSetAligned {
 impl BytecodeInstruction for SetUnaligned {
     impl_set_args!(SetUnaligned, "set_unaligned");
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -315,6 +318,7 @@ impl BytecodeInstruction for SetUnaligned {
 impl BytecodeInstruction for SetHeapUnaligned {
     impl_set_heap_args!(SetHeapUnaligned, "set_heap_unaligned");
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -368,6 +372,7 @@ impl BytecodeInstruction for SetHeapUnaligned {
 impl BytecodeInstruction for TvSetHeapAligned {
     impl_set_heap_args!(TvSetHeapAligned, "tv.set_heap_aligned");
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -419,6 +424,7 @@ impl BytecodeInstruction for TvSetHeapAligned {
 impl BytecodeInstruction for FvSetHeapAligned {
     impl_set_heap_args!(FvSetHeapAligned, "fv.set_heap_aligned");
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,

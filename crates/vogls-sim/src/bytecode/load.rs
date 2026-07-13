@@ -121,6 +121,7 @@ impl BytecodeInstruction for TvLoadAligned {
         writeln!(f)
     }
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -184,6 +185,7 @@ impl BytecodeInstruction for FvLoadAligned {
         writeln!(f)
     }
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -254,6 +256,7 @@ impl BytecodeInstruction for LoadUnaligned {
         writeln!(f)
     }
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -317,6 +320,7 @@ impl BytecodeInstruction for LoadHeapAligned {
         write!(f, "{rd}, {rs}, {num_words}")
     }
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -388,6 +392,7 @@ impl BytecodeInstruction for LoadHeapUnaligned {
         write!(f, "{rd}, {rs}, {imm8}")
     }
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,

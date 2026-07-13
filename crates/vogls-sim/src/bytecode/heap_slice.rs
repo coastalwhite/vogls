@@ -210,6 +210,7 @@ macro_rules! impl_op {
                 Ok(())
             }
 
+            #[inline(always)]
             fn execute(
                 self,
                 regs: &mut Regs,

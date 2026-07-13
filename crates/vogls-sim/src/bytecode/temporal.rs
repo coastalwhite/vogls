@@ -70,6 +70,7 @@ impl BytecodeInstruction for Wake {
         write!(f, "{rcond}, {index}")
     }
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -147,6 +148,7 @@ impl BytecodeInstruction for Reschedule {
         Ok(())
     }
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -205,6 +207,7 @@ impl BytecodeInstruction for StartListen {
         write!(f, "{index}")
     }
 
+    #[inline(always)]
     fn execute(
         self,
         _regs: &mut Regs,
@@ -254,6 +257,7 @@ impl BytecodeInstruction for LastUpdateTime {
         writeln!(f)
     }
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -303,6 +307,7 @@ impl BytecodeInstruction for SetLupdt {
         writeln!(f)
     }
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -365,6 +370,7 @@ impl BytecodeInstruction for TvCorrectFirst {
         writeln!(f)
     }
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,

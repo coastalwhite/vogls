@@ -50,6 +50,7 @@ impl BytecodeInstruction for StackOffset {
         write!(f, "{rd}, [{kind}]{offset}")
     }
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,

@@ -119,6 +119,7 @@ impl BytecodeInstruction for HeapHeapExtend {
         write!(f, "{rd}, {rs}, {dst_size}, {src_size}")
     }
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -202,6 +203,7 @@ impl BytecodeInstruction for HeapHeapTruncate {
         write!(f, "{rd}, {rs}, {dst_size}, {src_size}")
     }
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -285,6 +287,7 @@ impl BytecodeInstruction for HeapRegExtend {
         write!(f, "{rd}, {rs}, {dst_size}, {src_size}")
     }
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -383,6 +386,7 @@ impl BytecodeInstruction for SignExtend {
         writeln!(f)
     }
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,

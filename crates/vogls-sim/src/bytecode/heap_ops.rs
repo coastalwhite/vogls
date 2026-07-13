@@ -208,6 +208,7 @@ impl BytecodeInstruction for HeapBinaryBitwise {
             .load_bits(regs.get_as_addr(self.rd).to_ref(size), mode);
         writeln!(f, "rd = {}", rd.display(&BitsFormatOptions::default()))
     }
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -344,6 +345,7 @@ impl BytecodeInstruction for HeapBinaryArithmetic {
         write_padded_mnemonic(f, mnemonic)?;
         write!(f, "{rd}, {rs1}, {rs2}")
     }
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -444,6 +446,7 @@ impl BytecodeInstruction for HeapBinaryDivMod {
         write_padded_mnemonic(f, mnemonic)?;
         write!(f, "{rd}, {rs1}, {rs2}")
     }
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -542,6 +545,7 @@ impl BytecodeInstruction for HeapBinaryCmp {
         write_padded_mnemonic(f, mnemonic)?;
         write!(f, "{rd}, {rs1}, {rs2}")
     }
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -630,6 +634,7 @@ impl BytecodeInstruction for HeapBinaryShift {
         write_padded_mnemonic(f, mnemonic)?;
         write!(f, "{rd}, {rs1}, {rs2}")
     }
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -734,6 +739,7 @@ impl BytecodeInstruction for HeapBinaryMinMax {
         write_padded_mnemonic(f, mnemonic)?;
         write!(f, "{rd}, {rs1}, {rs2}")
     }
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -833,6 +839,7 @@ impl BytecodeInstruction for HeapCaseEq {
         writeln!(f)
     }
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -976,6 +983,7 @@ impl BytecodeInstruction for HeapConcat {
         )
     }
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -1159,6 +1167,7 @@ impl BytecodeInstruction for HeapSlice {
         )
     }
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -1300,6 +1309,7 @@ impl BytecodeInstruction for HeapFill {
         writeln!(f, "rd = {}", rd.display(&BitsFormatOptions::default()))
     }
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -1385,6 +1395,7 @@ impl BytecodeInstruction for HeapUnary {
         write_padded_mnemonic(f, mnemonic)?;
         write!(f, "{rd}, {rs}")
     }
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,

@@ -24,6 +24,7 @@ impl BytecodeInstruction for Interrupt {
         f.write_str("interrupt")
     }
 
+    #[inline(always)]
     fn execute(
         self,
         _regs: &mut Regs,

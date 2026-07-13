@@ -303,6 +303,7 @@ macro_rules! impl_fv_shift {
 impl BytecodeInstruction for CMov {
     impl_bitwise!(CMov, "cmov", TwoValue, TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -321,6 +322,7 @@ impl BytecodeInstruction for CMov {
 impl BytecodeInstruction for TvAnd {
     impl_bitwise!(TvAnd, "tv.and", TwoValue, TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -337,6 +339,7 @@ impl BytecodeInstruction for TvAnd {
 impl BytecodeInstruction for TvOr {
     impl_bitwise!(TvOr, "tv.or", TwoValue, TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -353,6 +356,7 @@ impl BytecodeInstruction for TvOr {
 impl BytecodeInstruction for TvXor {
     impl_bitwise!(TvXor, "tv.xor", TwoValue, TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -369,6 +373,7 @@ impl BytecodeInstruction for TvXor {
 impl BytecodeInstruction for TvAndNot {
     impl_sbs_bitwise!(TvAndNot, "tv.andnot", TwoValue, TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -385,6 +390,7 @@ impl BytecodeInstruction for TvAndNot {
 impl BytecodeInstruction for TvOrNot {
     impl_sbs_bitwise!(TvOrNot, "tv.ornot", TwoValue, TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -401,6 +407,7 @@ impl BytecodeInstruction for TvOrNot {
 impl BytecodeInstruction for TvXnor {
     impl_sbs_bitwise!(TvXnor, "tv.xnor", TwoValue, TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -417,6 +424,7 @@ impl BytecodeInstruction for TvXnor {
 impl BytecodeInstruction for TvCeq {
     impl_bitwise!(TvCeq, "tv.ceq", TwoValue, TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -433,6 +441,7 @@ impl BytecodeInstruction for TvCeq {
 impl BytecodeInstruction for TvAdd {
     impl_sbs_bitwise!(TvAdd, "tv.add", TwoValue, TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -449,6 +458,7 @@ impl BytecodeInstruction for TvAdd {
 impl BytecodeInstruction for TvSub {
     impl_sbs_bitwise!(TvSub, "tv.sub", TwoValue, TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -465,6 +475,7 @@ impl BytecodeInstruction for TvSub {
 impl BytecodeInstruction for TvMul {
     impl_sbs_bitwise!(TvMul, "tv.mul", TwoValue, TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -481,6 +492,7 @@ impl BytecodeInstruction for TvMul {
 impl BytecodeInstruction for TvDivX {
     impl_sbs_bitwise!(TvDivX, "tv.divx", FourValue, TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -507,6 +519,7 @@ impl BytecodeInstruction for TvDivX {
 impl BytecodeInstruction for TvDiv0 {
     impl_sbs_bitwise!(TvDiv0, "tv.div0", TwoValue, TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -528,6 +541,7 @@ impl BytecodeInstruction for TvDiv0 {
 impl BytecodeInstruction for TvModX {
     impl_sbs_bitwise!(TvModX, "tv.modx", FourValue, TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -554,6 +568,7 @@ impl BytecodeInstruction for TvModX {
 impl BytecodeInstruction for TvMod0 {
     impl_sbs_bitwise!(TvMod0, "tv.mod0", TwoValue, TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -575,6 +590,7 @@ impl BytecodeInstruction for TvMod0 {
 impl BytecodeInstruction for TvPow {
     impl_sbs_bitwise!(TvPow, "tv.pow", TwoValue, TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -591,6 +607,7 @@ impl BytecodeInstruction for TvPow {
 impl BytecodeInstruction for TvUnsignedLeq {
     impl_bitwise!(TvUnsignedLeq, "tv.uleq", TwoValue, TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -607,6 +624,7 @@ impl BytecodeInstruction for TvUnsignedLeq {
 impl BytecodeInstruction for TvUnsignedGt {
     impl_bitwise!(TvUnsignedGt, "tv.ugt", TwoValue, TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -623,6 +641,7 @@ impl BytecodeInstruction for TvUnsignedGt {
 impl BytecodeInstruction for TvMin {
     impl_bitwise!(TvMin, "tv.min", TwoValue, TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -639,6 +658,7 @@ impl BytecodeInstruction for TvMin {
 impl BytecodeInstruction for TvMax {
     impl_bitwise!(TvMax, "tv.max", TwoValue, TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -655,6 +675,7 @@ impl BytecodeInstruction for TvMax {
 impl BytecodeInstruction for TvSll {
     impl_sbs_bitwise!(TvSll, "tv.sll", TwoValue, TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -671,6 +692,7 @@ impl BytecodeInstruction for TvSll {
 impl BytecodeInstruction for TvSlr {
     impl_sbs_bitwise!(TvSlr, "tv.slr", TwoValue, TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -687,6 +709,7 @@ impl BytecodeInstruction for TvSlr {
 impl BytecodeInstruction for TvSar {
     impl_sbs_bitwise!(TvSar, "tv.sar", TwoValue, TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -703,6 +726,7 @@ impl BytecodeInstruction for TvSar {
 impl BytecodeInstruction for TvLeftShiftOr {
     impl_sbs_bitwise!(TvLeftShiftOr, "tv.lsor", TwoValue, TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -720,6 +744,7 @@ impl BytecodeInstruction for TvLeftShiftOr {
 impl BytecodeInstruction for FvAnd {
     impl_bitwise!(FvAnd, "fv.and", FourValue, FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -740,6 +765,7 @@ impl BytecodeInstruction for FvAnd {
 impl BytecodeInstruction for FvOr {
     impl_bitwise!(FvOr, "fv.or", FourValue, FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -760,6 +786,7 @@ impl BytecodeInstruction for FvOr {
 impl BytecodeInstruction for FvXor {
     impl_bitwise!(FvXor, "fv.xor", FourValue, FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -780,6 +807,7 @@ impl BytecodeInstruction for FvXor {
 impl BytecodeInstruction for FvAndNot {
     impl_bitwise!(FvAndNot, "fv.andnot", FourValue, FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -800,6 +828,7 @@ impl BytecodeInstruction for FvAndNot {
 impl BytecodeInstruction for FvOrNot {
     impl_bitwise!(FvOrNot, "fv.ornot", FourValue, FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -820,6 +849,7 @@ impl BytecodeInstruction for FvOrNot {
 impl BytecodeInstruction for FvCeq {
     impl_bitwise!(FvCeq, "fv.ceq", TwoValue, FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -844,6 +874,7 @@ impl BytecodeInstruction for FvBitwiseCeq {
         FourValue
     );
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -862,6 +893,7 @@ impl BytecodeInstruction for FvBitwiseCeq {
 impl BytecodeInstruction for FvPosedge {
     impl_bitwise!(FvPosedge, "fv.posedge", TwoValue, FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -880,6 +912,7 @@ impl BytecodeInstruction for FvPosedge {
 impl BytecodeInstruction for FvNegedge {
     impl_bitwise!(FvNegedge, "fv.negedge", TwoValue, FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -898,6 +931,7 @@ impl BytecodeInstruction for FvNegedge {
 impl BytecodeInstruction for FvAdd {
     impl_sbs_bitwise!(FvAdd, "fv.add", FourValue, FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -926,6 +960,7 @@ impl BytecodeInstruction for FvAdd {
 impl BytecodeInstruction for FvSub {
     impl_sbs_bitwise!(FvSub, "fv.sub", FourValue, FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -954,6 +989,7 @@ impl BytecodeInstruction for FvSub {
 impl BytecodeInstruction for FvMul {
     impl_sbs_bitwise!(FvMul, "fv.mul", FourValue, FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -982,6 +1018,7 @@ impl BytecodeInstruction for FvMul {
 impl BytecodeInstruction for FvDivX {
     impl_sbs_bitwise!(FvDivX, "fv.divx", FourValue, FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -1010,6 +1047,7 @@ impl BytecodeInstruction for FvDivX {
 impl BytecodeInstruction for FvDiv0 {
     impl_sbs_bitwise!(FvDiv0, "fv.div0", FourValue, FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -1038,6 +1076,7 @@ impl BytecodeInstruction for FvDiv0 {
 impl BytecodeInstruction for FvModX {
     impl_sbs_bitwise!(FvModX, "fv.modx", FourValue, FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -1066,6 +1105,7 @@ impl BytecodeInstruction for FvModX {
 impl BytecodeInstruction for FvMod0 {
     impl_sbs_bitwise!(FvMod0, "fv.mod0", FourValue, FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -1094,6 +1134,7 @@ impl BytecodeInstruction for FvMod0 {
 impl BytecodeInstruction for FvPow {
     impl_sbs_bitwise!(FvPow, "fv.pow", FourValue, FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -1122,6 +1163,7 @@ impl BytecodeInstruction for FvPow {
 impl BytecodeInstruction for FvUnsignedLeq {
     impl_sbs_bitwise!(FvUnsignedLeq, "fv.uleq", FourValue, FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -1150,6 +1192,7 @@ impl BytecodeInstruction for FvUnsignedLeq {
 impl BytecodeInstruction for FvUnsignedGt {
     impl_sbs_bitwise!(FvUnsignedGt, "fv.ugt", FourValue, FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -1178,6 +1221,7 @@ impl BytecodeInstruction for FvUnsignedGt {
 impl BytecodeInstruction for FvMin {
     impl_sbs_bitwise!(FvMin, "fv.min", FourValue, FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -1206,6 +1250,7 @@ impl BytecodeInstruction for FvMin {
 impl BytecodeInstruction for FvMax {
     impl_sbs_bitwise!(FvMax, "fv.max", FourValue, FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -1234,6 +1279,7 @@ impl BytecodeInstruction for FvMax {
 impl BytecodeInstruction for FvSll {
     impl_fv_shift!(FvSll, "fv.sll", FourValue, FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -1274,6 +1320,7 @@ impl BytecodeInstruction for FvSll {
 impl BytecodeInstruction for FvSlr {
     impl_fv_shift!(FvSlr, "fv.slr", FourValue, FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -1318,6 +1365,7 @@ impl BytecodeInstruction for FvSlr {
 impl BytecodeInstruction for FvSar {
     impl_fv_shift!(FvSar, "fv.sar", FourValue, FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -1357,6 +1405,7 @@ impl BytecodeInstruction for FvSar {
 impl BytecodeInstruction for FvSlrx {
     impl_fv_shift!(FvSlrx, "fv.slrx", FourValue, FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -1396,6 +1445,7 @@ impl BytecodeInstruction for FvSlrx {
 impl BytecodeInstruction for FvLeftShiftOr {
     impl_sbs_bitwise!(FvLeftShiftOr, "fv.lsor", FourValue, FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -1416,6 +1466,7 @@ impl BytecodeInstruction for FvLeftShiftOr {
 impl BytecodeInstruction for FvCopyX {
     impl_sbs_bitwise!(FvCopyX, "fv.copyx", FourValue, FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -1441,6 +1492,7 @@ impl BytecodeInstruction for FvCopyX {
 impl BytecodeInstruction for FvCopyZ {
     impl_sbs_bitwise!(FvCopyZ, "fv.copyz", FourValue, FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,

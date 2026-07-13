@@ -132,6 +132,7 @@ macro_rules! impl_bitwise {
 impl BytecodeInstruction for TvAndi {
     impl_bitwise!(TvAndi, "tv.andi", TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -153,6 +154,7 @@ impl BytecodeInstruction for TvAndi {
 impl BytecodeInstruction for TvOri {
     impl_bitwise!(TvOri, "tv.ori", TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -174,6 +176,7 @@ impl BytecodeInstruction for TvOri {
 impl BytecodeInstruction for TvXori {
     impl_bitwise!(TvXori, "tv.xori", TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -195,6 +198,7 @@ impl BytecodeInstruction for TvXori {
 impl BytecodeInstruction for TvAddi {
     impl_bitwise!(TvAddi, "tv.addi", TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -216,6 +220,7 @@ impl BytecodeInstruction for TvAddi {
 impl BytecodeInstruction for TvSubi {
     impl_bitwise!(TvSubi, "tv.subi", TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -237,6 +242,7 @@ impl BytecodeInstruction for TvSubi {
 impl BytecodeInstruction for TvRevSubi {
     impl_bitwise!(TvRevSubi, "tv.revsubi", TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -258,6 +264,7 @@ impl BytecodeInstruction for TvRevSubi {
 impl BytecodeInstruction for TvMuli {
     impl_bitwise!(TvMuli, "tv.muli", TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -279,6 +286,7 @@ impl BytecodeInstruction for TvMuli {
 impl BytecodeInstruction for TvMini {
     impl_bitwise!(TvMini, "tv.mini", TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -300,6 +308,7 @@ impl BytecodeInstruction for TvMini {
 impl BytecodeInstruction for TvMaxi {
     impl_bitwise!(TvMaxi, "tv.maxi", TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -321,6 +330,7 @@ impl BytecodeInstruction for TvMaxi {
 impl BytecodeInstruction for TvUleqi {
     impl_bitwise!(TvUleqi, "tv.uleqi", TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -343,6 +353,7 @@ impl BytecodeInstruction for TvUleqi {
 impl BytecodeInstruction for TvUgti {
     impl_bitwise!(TvUgti, "tv.ugti", TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -365,6 +376,7 @@ impl BytecodeInstruction for TvUgti {
 impl BytecodeInstruction for TvUgeqi {
     impl_bitwise!(TvUgeqi, "tv.ugeqi", TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -387,6 +399,7 @@ impl BytecodeInstruction for TvUgeqi {
 impl BytecodeInstruction for TvUlti {
     impl_bitwise!(TvUlti, "tv.ulti", TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -409,6 +422,7 @@ impl BytecodeInstruction for TvUlti {
 impl BytecodeInstruction for TvCeqi {
     impl_bitwise!(TvCeqi, "tv.ceqi", TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -430,6 +444,7 @@ impl BytecodeInstruction for TvCeqi {
 impl BytecodeInstruction for TvCnei {
     impl_bitwise!(TvCnei, "tv.cnei", TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -451,6 +466,7 @@ impl BytecodeInstruction for TvCnei {
 impl BytecodeInstruction for TvSlli {
     impl_bitwise!(TvSlli, "tv.slli", TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -472,6 +488,7 @@ impl BytecodeInstruction for TvSlli {
 impl BytecodeInstruction for TvSlri {
     impl_bitwise!(TvSlri, "tv.slri", TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -493,6 +510,7 @@ impl BytecodeInstruction for TvSlri {
 impl BytecodeInstruction for TvSari {
     impl_bitwise!(TvSari, "tv.sari", TwoValue, TwoValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -518,6 +536,7 @@ impl BytecodeInstruction for TvSari {
 impl BytecodeInstruction for FvAndi {
     impl_bitwise!(FvAndi, "fv.andi", FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -543,6 +562,7 @@ impl BytecodeInstruction for FvAndi {
 impl BytecodeInstruction for FvOri {
     impl_bitwise!(FvOri, "fv.ori", FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -568,6 +588,7 @@ impl BytecodeInstruction for FvOri {
 impl BytecodeInstruction for FvXori {
     impl_bitwise!(FvXori, "fv.xori", FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -593,6 +614,7 @@ impl BytecodeInstruction for FvXori {
 impl BytecodeInstruction for FvAddi {
     impl_bitwise!(FvAddi, "fv.addi", FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -624,6 +646,7 @@ impl BytecodeInstruction for FvAddi {
 impl BytecodeInstruction for FvSubi {
     impl_bitwise!(FvSubi, "fv.subi", FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -655,6 +678,7 @@ impl BytecodeInstruction for FvSubi {
 impl BytecodeInstruction for FvMuli {
     impl_bitwise!(FvMuli, "fv.muli", FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -686,6 +710,7 @@ impl BytecodeInstruction for FvMuli {
 impl BytecodeInstruction for FvRevSubi {
     impl_bitwise!(FvRevSubi, "fv.revsubi", FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -717,6 +742,7 @@ impl BytecodeInstruction for FvRevSubi {
 impl BytecodeInstruction for FvMini {
     impl_bitwise!(FvMini, "fv.mini", FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -748,6 +774,7 @@ impl BytecodeInstruction for FvMini {
 impl BytecodeInstruction for FvMaxi {
     impl_bitwise!(FvMaxi, "fv.maxi", FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -779,6 +806,7 @@ impl BytecodeInstruction for FvMaxi {
 impl BytecodeInstruction for FvUleqi {
     impl_bitwise!(FvUleqi, "fv.uleqi", FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -810,6 +838,7 @@ impl BytecodeInstruction for FvUleqi {
 impl BytecodeInstruction for FvUgti {
     impl_bitwise!(FvUgti, "fv.ugti", FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -841,6 +870,7 @@ impl BytecodeInstruction for FvUgti {
 impl BytecodeInstruction for FvUgeqi {
     impl_bitwise!(FvUgeqi, "fv.ugeqi", FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -872,6 +902,7 @@ impl BytecodeInstruction for FvUgeqi {
 impl BytecodeInstruction for FvUlti {
     impl_bitwise!(FvUlti, "fv.ulti", FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -903,6 +934,7 @@ impl BytecodeInstruction for FvUlti {
 impl BytecodeInstruction for FvCeqi {
     impl_bitwise!(FvCeqi, "fv.ceqi", TwoValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -926,6 +958,7 @@ impl BytecodeInstruction for FvCeqi {
 impl BytecodeInstruction for FvCnei {
     impl_bitwise!(FvCnei, "fv.cnei", TwoValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -949,6 +982,7 @@ impl BytecodeInstruction for FvCnei {
 impl BytecodeInstruction for FvBitwiseCeqi {
     impl_bitwise!(FvBitwiseCeqi, "fv.bitwise_ceqi", TwoValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -972,6 +1006,7 @@ impl BytecodeInstruction for FvBitwiseCeqi {
 impl BytecodeInstruction for FvSlli {
     impl_bitwise!(FvSlli, "fv.slli", FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -996,6 +1031,7 @@ impl BytecodeInstruction for FvSlli {
 impl BytecodeInstruction for FvSlri {
     impl_bitwise!(FvSlri, "fv.slri", FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -1020,6 +1056,7 @@ impl BytecodeInstruction for FvSlri {
 impl BytecodeInstruction for FvSari {
     impl_bitwise!(FvSari, "fv.sari", FourValue, FourValue);
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,

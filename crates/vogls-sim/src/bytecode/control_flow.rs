@@ -2,7 +2,7 @@ use std::fmt;
 
 use vogls_runtime::RuntimeState;
 
-use crate::bytecode::{MNEMONIC_ALIGN, write_padded_mnemonic};
+use crate::bytecode::write_padded_mnemonic;
 
 use super::reg::{Reg, Regs};
 use super::{
@@ -38,6 +38,7 @@ impl BytecodeInstruction for Jump {
         Ok(())
     }
 
+    #[inline(always)]
     fn execute(
         self,
         _regs: &mut Regs,
@@ -75,6 +76,7 @@ impl BytecodeInstruction for RelJump {
         Ok(())
     }
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,
@@ -112,6 +114,7 @@ impl BytecodeInstruction for Branch {
         Ok(())
     }
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,

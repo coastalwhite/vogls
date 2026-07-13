@@ -71,6 +71,7 @@ impl BytecodeInstruction for LoadImm {
         )
     }
 
+    #[inline(always)]
     fn execute(
         self,
         regs: &mut Regs,

@@ -12,6 +12,7 @@ pub enum HeapAlignment {
 }
 
 impl HeapAlignment {
+    #[inline(always)]
     pub fn new(size: VectorSize, mode: LogicMode) -> Self {
         let mut num_bits = size.get();
         match mode {
@@ -30,19 +31,23 @@ impl HeapAlignment {
         }
     }
 
+    #[inline(always)]
     pub fn is_aligned(self, value: u64) -> bool {
         value.unbounded_shl(64 - self as u32) == 0
     }
 
+    #[inline(always)]
     pub fn from_elem_offset(self, elem: u64) -> u64 {
         debug_assert_eq!(elem >> (64 - self as u32), 0);
         elem << self as u32
     }
 
+    #[inline(always)]
     pub fn next_aligned(self, value: u64) -> u64 {
         value.next_multiple_of(1u64 << self as u32)
     }
 
+    #[inline(always)]
     pub fn spc_offset_to_val_offset(size: VectorSize, spc_offset: u64) -> u64 {
         if size.get() > 32 {
             spc_offset + (size.get() as u64).next_multiple_of(64)

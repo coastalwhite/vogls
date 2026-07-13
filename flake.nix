@@ -38,6 +38,7 @@
             buildTarget = "wasm32-unknown-unknown";
             rustToolchain = pkgs.rust-bin.nightly.latest.default.override {
               targets = [ buildTarget ];
+              extensions = [ "rust-src" ];
             };
             rustPlatform = pkgs.makeRustPlatform {
               cargo = rustToolchain;

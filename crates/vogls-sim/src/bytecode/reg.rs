@@ -11,9 +11,11 @@ pub struct Regs {
     pub stack_offset: u64,
 }
 impl Regs {
+    #[inline(always)]
     pub fn new(stack_offset: u64) -> Self {
         Self { value: [0u64; 16], size: SCALAR_VSIZE, stack_offset }
     }
+    #[inline(always)]
     pub fn get_as_addr(&self, reg: Reg) -> HeapOffset {
         HeapOffset {
             bit_offset: self[reg] as usize,
@@ -95,6 +97,7 @@ impl Reg {
     /// |           | special=0 | special=1 |
     /// | value = 0 |         x |         0 |
     /// | value = 1 |         z |         1 |
+    #[inline(always)]
     pub fn to_spc_and_val(self) -> (Self, Self) {
         debug_assert_ne!(self, Self::X15);
         (self, Self::new_masked(self as u32 + 1))

@@ -476,6 +476,7 @@ impl BytecodeInstruction for LoadSize {
 pub struct InlineNBitSize<const N: usize>(Option<VectorSize>);
 
 impl<const N: usize> InlineNBitSize<N> {
+    #[inline(always)]
     pub fn get(self, regs: &Regs) -> VectorSize {
         match self.0 {
             None => regs.size,
@@ -483,6 +484,7 @@ impl<const N: usize> InlineNBitSize<N> {
         }
     }
 
+    #[inline(always)]
     pub fn new_masked(v: u32) -> Self {
         Self(VectorSize::new(
             v & 1u32.unbounded_shl(N as u32).wrapping_sub(1),
