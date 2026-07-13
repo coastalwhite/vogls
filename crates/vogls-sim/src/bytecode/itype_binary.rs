@@ -74,7 +74,7 @@ impl IType {
             opcode as u32
                 | ((self.rd as u32) << 8)
                 | ((self.rs as u32) << 12)
-                | ((self.size.0 as u32) << 16)
+                | (self.size.encode() << 16)
                 | (self.imm10.encode() << 22),
         )
     }

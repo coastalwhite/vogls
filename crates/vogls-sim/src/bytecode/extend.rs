@@ -263,7 +263,7 @@ impl BytecodeInstruction for HeapRegExtend {
                 | ((self.rs as u32) << 12)
                 | ((self.op as u32) << 16)
                 | (self.dst_size.encode() << 18)
-                | ((self.src_size.0 as u32) << 26),
+                | (self.src_size.encode() << 26),
         )
     }
 
@@ -346,8 +346,8 @@ impl BytecodeInstruction for SignExtend {
             BytecodeOpcode::SignExtend as u32
                 | ((self.rd as u32) << 8)
                 | ((self.rs as u32) << 12)
-                | ((self.dst_size.get() as u32) << 16)
-                | ((self.src_size.get() as u32) << 22),
+                | (self.dst_size.encode() << 16)
+                | (self.src_size.encode() << 22),
         )
     }
 
@@ -399,7 +399,7 @@ impl BytecodeInstruction for SignExtend {
             src_size,
         } = self;
 
-        let shift = 64 - src_size.get();
+        let shift = 64 - src_size as u32;
         regs[rd] = dst_size.mask((((regs[rs] as i64) << shift) >> shift) as u64);
     }
 }

@@ -147,7 +147,7 @@ pub fn lower_process_to_bytecode(
                         LogicMode::FourValue => {
                             let (rtimespc, rtimeval) = rtime.to_spc_and_val();
                             bytecode.contains_no_special(T2, rtimespc, SixBitSize::N64);
-                            bytecode.sign_extend(T2, T2, SixBitSize::N64, SixBitSize::SCALAR);
+                            bytecode.sign_extend(T2, T2, SixBitSize::N64, SixBitSize::N1);
                             bytecode.and(T2, rtimeval, T2);
                             rtime = T2;
                         }
@@ -187,12 +187,7 @@ pub fn lower_process_to_bytecode(
                     match cond.mode() {
                         LogicMode::TwoValue => {}
                         LogicMode::FourValue => {
-                            bytecode.fv_ceqi(
-                                T0,
-                                rcond,
-                                SignedImmediate::MINUS_ONE,
-                                SixBitSize::SCALAR,
-                            );
+                            bytecode.fv_ceqi(T0, rcond, SignedImmediate::MINUS_ONE, SixBitSize::N1);
                             rcond = T0;
                         }
                     }
@@ -325,7 +320,7 @@ fn lower_instruction(
                 (O::ReduceAnd, M::FourValue, _, None) => bce.heap_fv_reduce_and(rd, rs, src_size),
                 (O::ReduceXor, M::TwoValue, _, Some(_)) => {
                     bce.count_ones(rd, rs);
-                    bce.truncate(rd, rd, SixBitSize::SCALAR);
+                    bce.truncate(rd, rd, SixBitSize::N1);
                 }
                 (O::ReduceXor, M::TwoValue, _, None) => bce.heap_tv_reduce_xor(rd, rs, src_size),
                 (O::ReduceXor, M::FourValue, _, Some(src_size)) => {
@@ -657,7 +652,8 @@ fn lower_instruction(
                 (O::Concat, M::TwoValue, _, _, _)
                     if SixBitSize::from_vector_size(dst_size).is_some() =>
                 {
-                    bce.lsor(rd, rs1, rs2, SixBitSize::new_masked(rhs_size.get()))
+                    let rhs_size = SixBitSize::from_vector_size(rhs_size).unwrap();
+                    bce.lsor(rd, rs1, rs2, rhs_size)
                 }
                 (O::Concat, M::TwoValue, _, _, _) => {
                     bce.tv_heap_concat(rd, rs1, lhs_size, rs2, rhs_size);
@@ -665,7 +661,8 @@ fn lower_instruction(
                 (O::Concat, M::FourValue, _, _, _)
                     if SixBitSize::from_vector_size(dst_size).is_some() =>
                 {
-                    bce.fv_lsor(rd, rs1, rs2, SixBitSize::new_masked(rhs_size.get()))
+                    let rhs_size = SixBitSize::from_vector_size(rhs_size).unwrap();
+                    bce.fv_lsor(rd, rs1, rs2, rhs_size)
                 }
                 (O::Concat, M::FourValue, _, _, _) => {
                     bce.fv_heap_concat(rd, rs1, lhs_size, rs2, rhs_size);
@@ -697,9 +694,9 @@ fn lower_instruction(
                     bce.heap_ceq(rd, rs1, rs2, lhs_size.get().div_ceil(64) * 2)
                 }
 
-                (O::Posedge, _, _, M::TwoValue, _) => bce.andnot(rd, rs2, rs1, SixBitSize::SCALAR),
+                (O::Posedge, _, _, M::TwoValue, _) => bce.andnot(rd, rs2, rs1, SixBitSize::N1),
                 (O::Posedge, _, _, M::FourValue, _) => bce.fv_posedge(rd, rs1, rs2),
-                (O::Negedge, _, _, M::TwoValue, _) => bce.andnot(rd, rs1, rs2, SixBitSize::SCALAR),
+                (O::Negedge, _, _, M::TwoValue, _) => bce.andnot(rd, rs1, rs2, SixBitSize::N1),
                 (O::Negedge, _, _, M::FourValue, _) => bce.fv_negedge(rd, rs1, rs2),
             }
 
@@ -1591,7 +1588,7 @@ fn lower_instruction(
             match cond.mode() {
                 LogicMode::TwoValue => {}
                 LogicMode::FourValue => {
-                    bce.fv_ceqi(T2, rcond, SignedImmediate::MINUS_ONE, SixBitSize::SCALAR);
+                    bce.fv_ceqi(T2, rcond, SignedImmediate::MINUS_ONE, SixBitSize::N1);
                     rcond = T2;
                 }
             }
@@ -2010,11 +2007,16 @@ fn lower_instruction(
                 }
             }
 
-            if gl.signals[*signal].mode == LogicMode::TwoValue {
+            let lupdt_index = lupdt_indexes.get(&io_signals[signal]);
+            let has_watchers = watch_map.num_watch_indices(*signal) > 0;
+
+            if gl.signals[*signal].mode == LogicMode::TwoValue
+                && (lupdt_index.is_some() || has_watchers)
+            {
                 let index = InlineIndex::new(rt_signal.as_u64(), bce, T5);
                 bce.tv_correct_first(rpoke, index);
             }
-            if let Some(lupdt_index) = lupdt_indexes.get(&io_signals[signal]) {
+            if let Some(lupdt_index) = lupdt_index {
                 let index = InlineIndex::new(*lupdt_index, bce, T5);
                 bce.set_lupdt(rpoke, index);
             }

@@ -37,7 +37,7 @@ impl LoadArgs {
             opcode as u32
                 | ((self.rd as u32) << 8)
                 | ((self.rs as u32) << 12)
-                | ((self.size.0 as u32) << 16)
+                | (self.size.encode() << 16)
                 | (self.imm10.encode() << 22),
         )
     }
@@ -271,7 +271,7 @@ impl BytecodeInstruction for LoadUnaligned {
         }) = self;
 
         let offset = imm10.get(regs[rs]);
-        let end_offset = offset + size.get() as u64 - 1;
+        let end_offset = offset + size as u64 - 1;
 
         let word = (offset / 64) as usize;
         let boff = offset % 64;

@@ -131,7 +131,7 @@ impl SbsBitwiseRType {
                 | ((self.rd as u32) << 8)
                 | ((self.rs1 as u32) << 12)
                 | ((self.rs2 as u32) << 16)
-                | ((self.size.0 as u32) << 20),
+                | (self.size.encode() << 20),
         )
     }
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -162,7 +162,7 @@ impl FvShiftRType {
                 | ((self.rd as u32) << 8)
                 | ((self.rs1 as u32) << 12)
                 | ((self.rs2 as u32) << 16)
-                | ((self.size.0 as u32) << 20)
+                | (self.size.encode() << 20)
                 | ((self.offset_mode as u32) << 26),
         )
     }
@@ -712,7 +712,7 @@ impl BytecodeInstruction for TvLeftShiftOr {
         _cldctx: &mut ColdContext,
     ) {
         let SbsBitwiseRType { rd, rs1, rs2, size } = self.0;
-        regs[rd] = (regs[rs1] << size.0) | regs[rs2];
+        regs[rd] = (regs[rs1] << size as u32) | regs[rs2];
     }
 }
 
@@ -1285,7 +1285,7 @@ impl BytecodeInstruction for FvSlr {
         regs[rd_spc] |= 1u64
             .unbounded_shl(shift)
             .wrapping_sub(1)
-            .unbounded_shl((size.get() as u32).saturating_sub(shift));
+            .unbounded_shl((size as u32).saturating_sub(shift));
         regs[rd_spc] = size.mask(regs[rd_spc]);
         regs[rd_val] = size.mask(regs[rs1_val].unbounded_shr(shift));
     }
@@ -1384,8 +1384,8 @@ impl BytecodeInstruction for FvLeftShiftOr {
         let (rd_spc, rd_val) = rd.to_spc_and_val();
         let (rs1_spc, rs1_val) = rs1.to_spc_and_val();
         let (rs2_spc, rs2_val) = rs2.to_spc_and_val();
-        regs[rd_spc] = (regs[rs1_spc] << size.0) | regs[rs2_spc];
-        regs[rd_val] = (regs[rs1_val] << size.0) | regs[rs2_val];
+        regs[rd_spc] = (regs[rs1_spc] << size as u32) | regs[rs2_spc];
+        regs[rd_val] = (regs[rs1_val] << size as u32) | regs[rs2_val];
     }
 }
 impl BytecodeInstruction for FvCopyX {

@@ -14,6 +14,7 @@ mod reg;
 mod rtype_binary;
 mod rtype_unary;
 mod set;
+mod six_bit_size;
 mod stack;
 #[cfg(feature = "tailcall")]
 mod tailcall;
@@ -40,6 +41,7 @@ pub use load_imm::*;
 pub use rtype_binary::*;
 pub use rtype_unary::*;
 pub use set::*;
+pub use six_bit_size::SixBitSize;
 pub use stack::*;
 pub use temporal::*;
 
@@ -74,12 +76,6 @@ impl Clone for State {
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Bytecode(pub u32);
-
-impl fmt::Display for SixBitSize {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&if self.0 == 0 { 64 } else { self.0 }, f)
-    }
-}
 
 pub struct ColdContext<'a> {
     stack: Vec<u64>,
@@ -116,42 +112,6 @@ impl<'a> ColdContext<'a> {
 impl Bytecode {
     fn opcode(self) -> u8 {
         (self.0 & 0xFF) as u8
-    }
-}
-
-#[derive(Default, Clone, Copy, PartialEq, Eq)]
-pub struct SixBitSize(u8);
-
-impl From<SixBitSize> for VectorSize {
-    fn from(value: SixBitSize) -> Self {
-        VectorSize::new(value.0.into()).unwrap_or(VSIZE_64)
-    }
-}
-
-impl SixBitSize {
-    pub const SCALAR: Self = Self(1);
-    pub const N32: Self = Self(32);
-    pub const N64: Self = Self(0);
-
-    pub fn from_vector_size(size: VectorSize) -> Option<Self> {
-        if size.get() > 64 {
-            return None;
-        }
-
-        Some(Self((size.get() % 64) as u8))
-    }
-
-    pub fn new_masked(v: u32) -> Self {
-        Self((v & 0x3F) as u8)
-    }
-
-    pub fn mask(self, v: u64) -> u64 {
-        let shift = if self.0 == 0 { 64 } else { self.0 as u32 };
-        v & 1u64.unbounded_shl(shift).wrapping_sub(1)
-    }
-
-    fn get(&self) -> u8 {
-        if self.0 == 0 { 64 } else { self.0 }
     }
 }
 
@@ -847,7 +807,7 @@ impl BytecodeEncoder {
                 rd,
                 rd,
                 SignedImmediate::MINUS_ONE,
-                SixBitSize(value.count_ones() as u8),
+                SixBitSize::new_masked(value.count_ones() - 1),
             );
             return;
         }

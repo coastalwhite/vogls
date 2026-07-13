@@ -39,7 +39,7 @@ impl HeapRegSlice {
                 | ((self.rd as u32) << 8)
                 | ((self.rs as u32) << 12)
                 | ((self.roff as u32) << 16)
-                | ((self.dst_size.0 as u32) << 20)
+                | (self.dst_size.encode() << 20)
                 | (self.src_size.encode() << 26),
         )
     }
@@ -60,11 +60,6 @@ pub fn execute<const SRC_FV: bool, const FILL_WITH_X: bool, const OFFSET_IS_FV: 
     } = operands;
 
     let src_size = src_size.get(regs);
-    let mut src_num_words = src_size.get().div_ceil(64) as usize;
-    if SRC_FV {
-        src_num_words *= 2;
-    }
-
     let offset = if OFFSET_IS_FV {
         let (spc, val) = roff.to_spc_and_val();
         if regs[spc] != u32::MAX as u64 {
@@ -79,7 +74,7 @@ pub fn execute<const SRC_FV: bool, const FILL_WITH_X: bool, const OFFSET_IS_FV: 
         regs[roff] as u32
     };
 
-    let valid_mask_size = u32::min(dst_size.get() as u32, src_size.get().saturating_sub(offset));
+    let valid_mask_size = u32::min(dst_size as u32, src_size.get().saturating_sub(offset));
     if valid_mask_size == 0 {
         if SRC_FV | OFFSET_IS_FV | FILL_WITH_X {
             let (rdspc, rdval) = rd.to_spc_and_val();

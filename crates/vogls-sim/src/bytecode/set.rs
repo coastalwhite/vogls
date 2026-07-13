@@ -46,7 +46,7 @@ impl SetArgs {
                 | ((self.rd as u32) << 8)
                 | ((self.rs as u32) << 12)
                 | ((self.roff as u32) << 16)
-                | ((self.size.0 as u32) << 20)
+                | (self.size.encode() << 20)
                 | (self.imm6.encode() << 26),
         )
     }
@@ -283,7 +283,7 @@ impl BytecodeInstruction for SetUnaligned {
         }) = self;
         let mask = size.mask(u64::MAX);
         let offset = imm6.get(regs[roff]);
-        let end_offset = offset + size.get() as u64 - 1;
+        let end_offset = offset + size as u64 - 1;
 
         let val = regs[rs];
         let word = (offset / 64) as usize;
