@@ -1,13 +1,13 @@
 use std::fmt;
 
 use vogls_bits::arithmetic::{
-    FvLogicValue, fv_addition, fv_bin_u64_cell_bitwise_op, fv_bitwise_and_elem,
-    fv_bitwise_andnot_elem, fv_bitwise_or_elem, fv_bitwise_ornot_elem, fv_bitwise_xor_elem,
-    fv_contains_special, fv_division, fv_multiplication, fv_power, fv_subtraction, tv_addition,
-    tv_bin_u64_cell_bitwise_mask_last_op, tv_bin_u64_cell_bitwise_op, tv_division,
-    tv_multiplication, tv_power, tv_subtraction,
+    FvLogicValue, fv_addition, fv_bin_u64_cell_bitwise_op, fv_bin_u64_cell_bitwise_op_output_tv,
+    fv_bitwise_and_elem, fv_bitwise_andnot_elem, fv_bitwise_or_elem, fv_bitwise_ornot_elem,
+    fv_bitwise_xor_elem, fv_contains_special, fv_division, fv_multiplication, fv_power,
+    fv_subtraction, tv_addition, tv_bin_u64_cell_bitwise_mask_last_op, tv_bin_u64_cell_bitwise_op,
+    tv_division, tv_multiplication, tv_power, tv_subtraction,
 };
-use vogls_bits::comparison::{fv_l_unsigned_leq, tv_gtu64_unsigned_leq};
+use vogls_bits::comparison::{bitwise_ceq, fv_l_unsigned_leq, tv_gtu64_unsigned_leq};
 use vogls_bits::concat::{fv_l_concat, tv_l_concat};
 use vogls_bits::copyxz::{copy_x, copy_z};
 use vogls_bits::format::BitsFormatOptions;
@@ -159,6 +159,7 @@ impl BytecodeInstruction for HeapBinaryBitwise {
             BitwiseOp::FvOrNot => "fv.heap_ornot",
             BitwiseOp::FvCopyX => "fv.heap_copyx",
             BitwiseOp::FvCopyZ => "fv.heap_copyz",
+            BitwiseOp::FvBitwiseCeq => "fv.heap_bitwise_ceq",
         };
         write_padded_mnemonic(f, mnemonic)?;
         write!(f, "{rd}, {rs1}, {rs2}")
@@ -224,28 +225,33 @@ impl BytecodeInstruction for HeapBinaryBitwise {
             size,
         } = self;
         let size = size.get(regs);
-        let mut num_words = size.get().div_ceil(64) as usize;
+        let num_words = size.get().div_ceil(64) as usize;
+        let mut src_num_words = num_words;
+        let mut dst_num_words = num_words;
         if op.is_four_value() {
-            num_words *= 2;
+            src_num_words *= 2;
+            if !matches!(op, BitwiseOp::FvBitwiseCeq) {
+                dst_num_words *= 2;
+            }
         }
         let [dst, src1, src2] = state.heap.get_u64_cell_slices([
             (
                 HeapOffset {
                     bit_offset: regs[rd] as usize,
                 },
-                num_words,
+                dst_num_words,
             ),
             (
                 HeapOffset {
                     bit_offset: regs[rs1] as usize,
                 },
-                num_words,
+                src_num_words,
             ),
             (
                 HeapOffset {
                     bit_offset: regs[rs2] as usize,
                 },
-                num_words,
+                src_num_words,
             ),
         ]);
 
@@ -282,6 +288,13 @@ impl BytecodeInstruction for HeapBinaryBitwise {
             O::FvCopyZ => fv_bin_u64_cell_bitwise_op(dst, src1, src2, |lspc, lval, rspc, rval| {
                 copy_z(lspc, lval, rspc, rval)
             }),
+            O::FvBitwiseCeq => fv_bin_u64_cell_bitwise_op_output_tv(
+                dst,
+                src1,
+                src2,
+                |lspc, lval, rspc, rval| bitwise_ceq(lspc, lval, rspc, rval),
+                size,
+            ),
         }
     }
 }
@@ -1479,6 +1492,7 @@ pub enum BitwiseOp {
     FvOrNot,
     FvCopyX,
     FvCopyZ,
+    FvBitwiseCeq,
 }
 
 impl BitwiseOp {
@@ -1491,7 +1505,8 @@ impl BitwiseOp {
             | Self::FvAndNot
             | Self::FvOrNot
             | Self::FvCopyX
-            | Self::FvCopyZ => true,
+            | Self::FvCopyZ
+            | Self::FvBitwiseCeq => true,
         }
     }
 
@@ -1508,7 +1523,8 @@ impl BitwiseOp {
             8 => Self::FvAndNot,
             9 => Self::FvOrNot,
             10 => Self::FvCopyX,
-            _ => Self::FvCopyZ,
+            11 => Self::FvCopyZ,
+            _ => Self::FvBitwiseCeq,
         }
     }
 }
@@ -1818,6 +1834,9 @@ impl BytecodeEncoder {
     }
     pub fn heap_fv_copyz(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
         self.heap_binary_bitwise(rd, rs1, rs2, BitwiseOp::FvCopyZ, size);
+    }
+    pub fn heap_fv_bitwise_ceq(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_binary_bitwise(rd, rs1, rs2, BitwiseOp::FvBitwiseCeq, size);
     }
 
     pub fn heap_tv_add(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {

@@ -573,6 +573,7 @@ pub fn lower_process(
                             O::CaseEquality => {
                                 binary::cgc_case_eq(&mut buffer, dst_t.ident, src_t.into(), imm)?
                             }
+                            O::BitwiseCaseEquality => todo!(),
                         }
                     }
                     I::SliceImm(dst, src, offset) => {

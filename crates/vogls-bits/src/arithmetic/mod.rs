@@ -3,6 +3,7 @@ use std::cell::Cell;
 use crate::VectorSize;
 use crate::load::load_partial_u64;
 use crate::store::store_partial_u64;
+use crate::util::mask_size_0to63;
 
 mod add_sub;
 mod division;
@@ -271,6 +272,31 @@ pub fn fv_bin_u64_cell_bitwise_op(
         );
         dst[i].set(spc);
         dst[nwords + i].set(val);
+    }
+}
+
+pub fn fv_bin_u64_cell_bitwise_op_output_tv(
+    dst: &[Cell<u64>],
+    lhs: &[Cell<u64>],
+    rhs: &[Cell<u64>],
+    op: impl Fn(u64, u64, u64, u64) -> u64,
+    size: VectorSize,
+) {
+    assert!(dst.len() == lhs.len() && dst.len() == rhs.len());
+    let nwords = dst.len() / 2;
+    for i in 0..nwords {
+        dst[i].set(op(
+            lhs[i].get(),
+            lhs[nwords + i].get(),
+            rhs[i].get(),
+            rhs[nwords + i].get(),
+        ));
+    }
+
+    if size.get() % 64 != 0 {
+        dst.last()
+            .unwrap()
+            .update(|v| mask_size_0to63(size.get() % 64) & v);
     }
 }
 

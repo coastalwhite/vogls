@@ -553,6 +553,7 @@ pub enum BinaryImmOp {
     Min,
     Max,
 
+    BitwiseCaseEquality,
     CaseEquality,
 }
 
@@ -946,6 +947,14 @@ impl UnaryOp {
             O::LeadingZeros => Some(LogicMode::TwoValue),
         }
     }
+
+    fn supports_tv_pushdown(&self) -> bool {
+        use UnaryOp as O;
+        match self {
+            O::Neg | O::ReduceOr | O::ReduceAnd | O::ReduceXor | O::LeadingZeros => true,
+            O::TvToFv | O::FvToTv => false,
+        }
+    }
 }
 
 impl ResizeOp {
@@ -1125,6 +1134,38 @@ impl BinaryOp {
             }
         }
     }
+
+    fn tv_pushdown_variant(self) -> Option<TvPushdownVariant> {
+        match self {
+            Self::And
+            | Self::Or
+            | Self::Xor
+            | Self::Add
+            | Self::Sub
+            | Self::Power
+            | Self::Multiply
+            | Self::UnsignedLessEqual
+            | Self::Min
+            | Self::Max
+            | Self::Concat
+            | Self::Divide0
+            | Self::Modulus0
+            | Self::CopyX
+            | Self::CopyZ => Some(TvPushdownVariant::CastOutput),
+
+            Self::CaseEquality | Self::Posedge | Self::Negedge => {
+                Some(TvPushdownVariant::KeepOutput)
+            }
+
+            Self::DivideX | Self::ModulusX => None,
+            Self::LogicalShiftLeft | Self::LogicalShiftRight | Self::ArithmeticShiftRight => None,
+        }
+    }
+}
+
+enum TvPushdownVariant {
+    KeepOutput,
+    CastOutput,
 }
 
 pub struct BinaryOutputMode {
@@ -1161,6 +1202,7 @@ impl BinaryImmOp {
 
             O::UnsignedLessEqual => Bits::from(Bits::is_unsigned_leq(src, imm)),
             O::UnsignedGreaterEqual => Bits::from(Bits::is_unsigned_leq(imm, src)),
+            O::BitwiseCaseEquality => Bits::bitwise_case_equality(src, imm),
             O::CaseEquality => Bits::from(src == imm),
             O::ConcatLeft => Bits::concatenate(imm, src),
             O::ConcatRight => Bits::concatenate(src, imm),
@@ -1339,7 +1381,18 @@ impl BinaryImmOp {
                     S::Keep
                 }
             }
+            O::CaseEquality if src.mode().is_two_value() && src.is_scalar() => {
+                if imm.eq_zero() {
+                    S::Instruction(Instruction::Unary(dst, UnaryOp::Neg, src))
+                } else {
+                    S::Source
+                }
+            }
             O::CaseEquality => S::Keep,
+            O::BitwiseCaseEquality if src.mode().is_two_value() => S::Instruction(
+                Instruction::BinaryImm(dst, O::Xor, src, imm.bitwise_negate()),
+            ),
+            O::BitwiseCaseEquality => S::Keep,
         }
     }
 
@@ -1362,7 +1415,8 @@ impl BinaryImmOp {
             | O::RevModulusX
             | O::RevModulus0
             | O::Min
-            | O::Max => {
+            | O::Max
+            | O::BitwiseCaseEquality => {
                 if src_size != imm_size {
                     return None;
                 }
@@ -1413,13 +1467,40 @@ impl BinaryImmOp {
                     src: convert,
                 }
             }
-            O::CaseEquality => {
+            O::CaseEquality | O::BitwiseCaseEquality => {
                 let convert = src.max(imm);
                 BinaryImmOutputMode {
                     dst: LogicMode::TwoValue,
                     src: convert,
                 }
             }
+        }
+    }
+
+    fn tv_pushdown_variant(self) -> Option<TvPushdownVariant> {
+        match self {
+            Self::And
+            | Self::Or
+            | Self::Xor
+            | Self::Add
+            | Self::Sub
+            | Self::Power
+            | Self::Multiply
+            | Self::Divide
+            | Self::Modulus
+            | Self::RevSub
+            | Self::ConcatRight
+            | Self::ConcatLeft
+            | Self::RevDivide0
+            | Self::RevModulus0
+            | Self::RevPower
+            | Self::UnsignedLessEqual
+            | Self::UnsignedGreaterEqual
+            | Self::Min
+            | Self::Max => Some(TvPushdownVariant::CastOutput),
+
+            Self::BitwiseCaseEquality | Self::CaseEquality => Some(TvPushdownVariant::KeepOutput),
+            Self::RevDivideX | Self::RevModulusX => None,
         }
     }
 }
@@ -1492,11 +1573,21 @@ pub enum LogicMode {
     FourValue,
 }
 impl LogicMode {
-    pub fn other(&self) -> LogicMode {
+    pub fn other(self) -> LogicMode {
         match self {
             Self::TwoValue => Self::FourValue,
             Self::FourValue => Self::TwoValue,
         }
+    }
+
+    #[inline(always)]
+    fn is_two_value(self) -> bool {
+        matches!(self, Self::TwoValue)
+    }
+
+    #[inline(always)]
+    fn is_four_value(self) -> bool {
+        matches!(self, Self::FourValue)
     }
 }
 

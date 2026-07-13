@@ -9,7 +9,7 @@ use self::arithmetic::{
 use self::format::{BitsDisplay, BitsFormatOptions};
 use self::leading_trailing::{tv_leading_ones, tv_leading_zeros};
 use self::truncate::{fv_l_truncate, tv_l_truncate};
-use self::util::saturating_rem;
+use self::util::{mask_size_1to64, saturating_rem};
 
 pub mod arithmetic;
 pub mod comparison;
@@ -1045,15 +1045,91 @@ impl Bits {
                 let (rhs_val, rhs_spc) = rhs.to_u64_slices();
                 let nwords = lhs_val.len();
                 let mut dst = vec![0u64; nwords * 2];
-                for i in 0..nwords {
+                for i in 0..nwords - 1 {
                     (dst[i], dst[nwords + i]) = fv_op(
+                        lhs_val[nwords - 1],
+                        lhs_spc.map_or(u64::MAX, |s| s[nwords - 1]),
+                        rhs_val[nwords - 1],
+                        rhs_spc.map_or(u64::MAX, |s| s[nwords - 1]),
+                    );
+                }
+                let mask = mask_size_1to64(saturating_rem(size.get(), 64));
+                (dst[nwords - 1], dst[2 * nwords - 1]) = fv_op(
+                    lhs_val[nwords - 1],
+                    lhs_spc.map_or(mask, |s| s[nwords - 1]),
+                    rhs_val[nwords - 1],
+                    rhs_spc.map_or(mask, |s| s[nwords - 1]),
+                );
+                Self::from_boxed_slice(Mode::FourValue, size, dst.into())
+            }
+        }
+    }
+
+    fn bitwise_op_output_tv(
+        lhs: &Self,
+        rhs: &Self,
+        tv_op: impl Fn(u64, u64) -> u64,
+        fv_op: impl Fn(u64, u64, u64, u64) -> u64,
+    ) -> Self {
+        assert_eq!(lhs.size(), rhs.size());
+        let size = lhs.size();
+
+        match (lhs.as_data_ref(), rhs.as_data_ref()) {
+            (BitsDataRef::InlineTv(lhs), BitsDataRef::InlineTv(rhs)) => {
+                Self::from_u64(size, tv_op(lhs, rhs))
+            }
+            (BitsDataRef::SeparateTv(lhs), BitsDataRef::SeparateTv(rhs)) => Self::from_boxed_slice(
+                Mode::TwoValue,
+                size,
+                lhs.iter().zip(rhs).map(|(l, r)| tv_op(*l, *r)).collect(),
+            ),
+            (BitsDataRef::InlineFv(lhs_spc, lhs_val), BitsDataRef::InlineFv(rhs_spc, rhs_val)) => {
+                let val = fv_op(lhs_spc, lhs_val, rhs_spc, rhs_val);
+                Self::from_u64(size, val)
+            }
+            (BitsDataRef::InlineTv(lhs), BitsDataRef::InlineFv(rhs_spc, rhs_val)) => {
+                let val = fv_op(u64::MAX, lhs, rhs_spc, rhs_val);
+                Self::from_u64(size, val)
+            }
+            (BitsDataRef::InlineFv(lhs_spc, lhs_val), BitsDataRef::InlineTv(rhs)) => {
+                let val = fv_op(lhs_spc, lhs_val, mask_size_1to64(size.get()), rhs);
+                Self::from_u64(size, val)
+            }
+            (BitsDataRef::SeparateFv(lhs), BitsDataRef::SeparateFv(rhs))
+                if size <= Mode::TwoValue.max_inline_size() =>
+            {
+                let val = fv_op(lhs[0], lhs[1], rhs[0], rhs[1]);
+                Self::from_u64(size, val)
+            }
+            (BitsDataRef::SeparateFv(lhs), BitsDataRef::SeparateFv(rhs)) => {
+                let nwords = lhs.len() / 2;
+                let mut dst = vec![0u64; nwords];
+                for i in 0..nwords {
+                    dst[i] = fv_op(lhs[i], lhs[nwords + i], rhs[i], rhs[nwords + i]);
+                }
+                Self::from_boxed_slice(Mode::TwoValue, size, dst.into())
+            }
+            (lhs, rhs) => {
+                let (lhs_val, lhs_spc) = lhs.to_u64_slices();
+                let (rhs_val, rhs_spc) = rhs.to_u64_slices();
+                let nwords = lhs_val.len();
+                let mut dst = vec![0u64; nwords];
+                for i in 0..nwords - 1 {
+                    dst[i] = fv_op(
                         lhs_val[i],
                         lhs_spc.map_or(u64::MAX, |s| s[i]),
                         rhs_val[i],
                         rhs_spc.map_or(u64::MAX, |s| s[i]),
                     );
                 }
-                Self::from_boxed_slice(Mode::FourValue, size, dst.into())
+                let mask = mask_size_1to64(saturating_rem(size.get(), 64));
+                dst[nwords - 1] = fv_op(
+                    lhs_val[nwords - 1],
+                    lhs_spc.map_or(mask, |s| s[nwords - 1]),
+                    rhs_val[nwords - 1],
+                    rhs_spc.map_or(mask, |s| s[nwords - 1]),
+                );
+                Self::from_boxed_slice(Mode::TwoValue, size, dst.into())
             }
         }
     }
@@ -1405,6 +1481,15 @@ impl Bits {
         (
             Self::from_boxed_slice(Mode::TwoValue, size, quotient.into()),
             Self::from_boxed_slice(Mode::TwoValue, size, modulus.into()),
+        )
+    }
+
+    pub fn bitwise_case_equality(lhs: &Self, rhs: &Self) -> Self {
+        Self::bitwise_op_output_tv(
+            lhs,
+            rhs,
+            |l, r| !(l ^ r),
+            |lspc, lval, rspc, rval| !(lspc ^ rspc) & !(lval ^ rval),
         )
     }
 

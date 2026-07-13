@@ -3,8 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Write};
 
 use crate::{
-    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext,
-    Instruction, IntrinsicOp, Process, ResizeOp, ShiftImmOp, Signal, Time, UnaryOp, VariableKey,
+    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext, Instruction, IntrinsicOp, Process, ResizeOp, ShiftImmOp, Signal, TemporalRegionKey, Time, UnaryOp, VariableKey
 };
 
 const INDENT: &str = "  ";
@@ -60,6 +59,20 @@ impl<'a> DisplayContext<'a> {
     pub fn get_bb_idx(&self, bb: BasicBlockKey) -> Option<u32> {
         self.bb_name_scratch.get(&bb).copied()
     }
+
+    fn clear(&mut self) {
+        let Self {
+            gl: _,
+            bb_stack_scratch,
+            bb_seen_scratch,
+            bb_name_scratch,
+            var_map,
+        } = self;
+        bb_stack_scratch.clear();
+        bb_seen_scratch.clear();
+        bb_name_scratch.clear();
+        var_map.clear();
+    }
 }
 
 impl<'a, T: ?Sized + ContextFormat> fmt::Display for ContextDisplay<'a, T> {
@@ -112,32 +125,36 @@ impl Process {
     }
 
     fn process_fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &mut DisplayContext<'_>) -> fmt::Result {
-        let entry = self.regions[0].entry();
-        ctx.prepare_process(entry);
-
         writeln!(f, "proc {} {{", self.kind.into_static_str())?;
+        for (i, tr) in self.regions.iter().enumerate() {
+            writeln!(f, "TR {i}:")?;
 
-        let mut bb_stack = std::mem::take(&mut ctx.bb_stack_scratch);
-        let mut bb_seen = std::mem::take(&mut ctx.bb_seen_scratch);
+            let entry = tr.entry();
+            ctx.clear();
+            ctx.prepare_process(entry);
 
-        bb_seen.clear();
-        bb_seen.insert(entry);
-        bb_stack.push(entry);
+            let mut bb_stack = std::mem::take(&mut ctx.bb_stack_scratch);
+            let mut bb_seen = std::mem::take(&mut ctx.bb_seen_scratch);
 
-        while let Some(bb) = bb_stack.pop() {
-            writeln!(f, "L{}:", ctx.bb_name_scratch[&bb])?;
+            bb_seen.clear();
+            bb_seen.insert(entry);
+            bb_stack.push(entry);
 
-            let bb = ctx.gl.bbs.get(bb).unwrap();
-            bb.ctx_fmt(f, ctx)?;
-            bb.terminator.for_each_temporal_bb(|bb_key| {
-                if bb_seen.insert(bb_key) {
-                    bb_stack.push(bb_key);
-                }
-            });
+            while let Some(bb) = bb_stack.pop() {
+                writeln!(f, "L{}:", ctx.bb_name_scratch[&bb])?;
+
+                let bb = ctx.gl.bbs.get(bb).unwrap();
+                bb.ctx_fmt(f, ctx)?;
+                bb.terminator.for_each_temporal_bb(|bb_key| {
+                    if bb_seen.insert(bb_key) {
+                        bb_stack.push(bb_key);
+                    }
+                });
+            }
+
+            ctx.bb_stack_scratch = bb_stack;
+            ctx.bb_seen_scratch = bb_seen;
         }
-
-        ctx.bb_stack_scratch = bb_stack;
-        ctx.bb_seen_scratch = bb_seen;
 
         writeln!(f, "}}")?;
 
@@ -215,12 +232,14 @@ impl BinaryImmOp {
 
             Self::UnsignedLessEqual => "ulei",
             Self::UnsignedGreaterEqual => "ugei",
-            Self::CaseEquality => "ceqi",
             Self::ConcatRight => "concati_right",
             Self::ConcatLeft => "concati_left",
 
             Self::Min => "mini",
             Self::Max => "maxi",
+
+            Self::CaseEquality => "ceqi",
+            Self::BitwiseCaseEquality => "bitwise_ceqi",
         }
     }
 }

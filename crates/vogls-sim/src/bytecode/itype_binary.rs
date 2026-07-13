@@ -53,6 +53,7 @@ pub struct FvUgeqi(pub IType);
 pub struct FvUlti(pub IType);
 pub struct FvCeqi(pub IType);
 pub struct FvCnei(pub IType);
+pub struct FvBitwiseCeqi(pub IType);
 pub struct FvSlli(pub IType);
 pub struct FvSlri(pub IType);
 pub struct FvSari(pub IType);
@@ -945,6 +946,29 @@ impl BytecodeInstruction for FvCnei {
         regs[rd] = u64::from((regs[rs_spc] != size.mask(u64::MAX)) | (regs[rs_val] != imm));
     }
 }
+impl BytecodeInstruction for FvBitwiseCeqi {
+    impl_bitwise!(FvBitwiseCeqi, "fv.bitwise_ceqi", TwoValue, FourValue);
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let IType {
+            rd,
+            rs,
+            imm10,
+            size,
+        } = self.0;
+        let imm = i64::from(imm10.0) as u64;
+        let (rs_spc, rs_val) = rs.to_spc_and_val();
+        regs[rd] = size.mask((regs[rs_spc] ^ !size.mask(u64::MAX)) & (regs[rs_val] ^ !imm));
+    }
+}
 impl BytecodeInstruction for FvSlli {
     impl_bitwise!(FvSlli, "fv.slli", FourValue, FourValue);
 
@@ -1062,6 +1086,7 @@ impl_bytecode_methods! {
     (fv_ulti, TvUlti)
     (fv_ceqi, FvCeqi)
     (fv_cnei, FvCnei)
+    (fv_bitwise_ceqi, FvBitwiseCeqi)
     (fv_slli, FvSlli)
     (fv_slri, FvSlri)
     (fv_sari, FvSari)

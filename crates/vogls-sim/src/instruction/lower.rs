@@ -494,6 +494,7 @@ pub fn lower_process_to_vm(
                                 O::ConcatRight => {
                                     VI::FvConcat(d, src.to_ref(s1_size), imm.to_ref(s2_size))
                                 }
+                                O::BitwiseCaseEquality => todo!(),
                             }
                         } else {
                             match *op {
@@ -571,6 +572,7 @@ pub fn lower_process_to_vm(
                                 O::ConcatRight => {
                                     VI::TvConcat(d, src.to_ref(s1_size), imm.to_ref(s2_size))
                                 }
+                                O::BitwiseCaseEquality => todo!(),
                             }
                         }
                     }

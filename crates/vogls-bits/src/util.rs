@@ -36,3 +36,13 @@ impl CellSlice for [Cell<u64>] {
         self.iter().for_each(|d| d.set(value));
     }
 }
+
+pub fn mask_size_1to64(size: u32) -> u64 {
+    debug_assert!(size > 0);
+    debug_assert!(size <= 64);
+    u64::MAX.unbounded_shr(64u32.wrapping_sub(size))
+}
+pub fn mask_size_0to63(size: u32) -> u64 {
+    debug_assert!(size < 64);
+    1u64.wrapping_shl(size).wrapping_sub(1)
+}

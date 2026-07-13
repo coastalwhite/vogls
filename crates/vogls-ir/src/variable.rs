@@ -4,7 +4,7 @@ use std::num::NonZeroU64;
 use vogls_bits::VectorSize;
 use vogls_utils::VgHashMap;
 
-use crate::LogicMode;
+use crate::{LogicMode, SCALAR_VSIZE};
 
 /// A unique identifier for a VIR variable.
 ///
@@ -65,6 +65,11 @@ impl VariableKey {
         if new_size > Self::MAX_INLINE_SIZE {
             non_inlined_var_sizes.insert(self.identifier(), new_size);
         }
+    }
+
+    #[inline(always)]
+    pub fn is_scalar(self) -> bool {
+        self.inlined_size() == Some(SCALAR_VSIZE)
     }
 }
 

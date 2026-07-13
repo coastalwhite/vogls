@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 
 use crate::VectorSize;
-use crate::arithmetic::{fv_contains_special, fv_unpack_u64, FvLogicValue};
+use crate::arithmetic::{FvLogicValue, fv_contains_special, fv_unpack_u64};
 use crate::load::load_partial_u64;
 use crate::select::tv_gtu64_select_bit;
 
@@ -68,4 +68,8 @@ pub fn fv_s_unsigned_leq(lhs: &[u8], rhs: &[u8], size: VectorSize) -> FvLogicVal
     }
 
     FvLogicValue::from_bool(lval <= rval)
+}
+
+pub fn bitwise_ceq(lspc: u64, lval: u64, rspc: u64, rval: u64) -> u64 {
+    (lspc ^ !rspc) & (lval ^ !rval)
 }

@@ -67,6 +67,7 @@ pub struct FvXor(pub BitwiseRType);
 pub struct FvAndNot(pub BitwiseRType);
 pub struct FvOrNot(pub BitwiseRType);
 pub struct FvCeq(pub BitwiseRType);
+pub struct FvBitwiseCeq(pub SbsBitwiseRType);
 pub struct FvAdd(pub SbsBitwiseRType);
 pub struct FvSub(pub SbsBitwiseRType);
 pub struct FvMul(pub SbsBitwiseRType);
@@ -834,6 +835,30 @@ impl BytecodeInstruction for FvCeq {
         regs[rd] = u64::from((regs[rs1_spc] == regs[rs2_spc]) & (regs[rs1_val] == regs[rs2_val]));
     }
 }
+impl BytecodeInstruction for FvBitwiseCeq {
+    impl_sbs_bitwise!(
+        FvBitwiseCeq,
+        "fv.bitwise_ceq",
+        TwoValue,
+        FourValue,
+        FourValue
+    );
+
+    fn execute(
+        self,
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let SbsBitwiseRType { rd, rs1, rs2, size } = self.0;
+        let (rs1_spc, rs1_val) = rs1.to_spc_and_val();
+        let (rs2_spc, rs2_val) = rs2.to_spc_and_val();
+        regs[rd] = size.mask((regs[rs1_spc] ^ !regs[rs2_spc]) & (regs[rs1_val] ^ !regs[rs2_val]));
+    }
+}
 impl BytecodeInstruction for FvPosedge {
     impl_bitwise!(FvPosedge, "fv.posedge", TwoValue, FourValue, FourValue);
 
@@ -1518,6 +1543,7 @@ impl_bytecode_sbs_methods! {
     (fv_lsor, FvLeftShiftOr)
     (fv_copyx, FvCopyX)
     (fv_copyz, FvCopyZ)
+    (fv_bitwise_ceq, FvBitwiseCeq)
 }
 
 impl_bytecode_fv_shift_methods! {
