@@ -7,9 +7,9 @@ use vogls_utils::{VgHashMap, VgHashSet};
 
 use crate::orders::post_order_keys;
 use crate::{
-    BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryImmOpSimplification, BinaryOp,
-    GlobalContext, Instruction, LogicMode, ProcessKey, ResizeOp, SCALAR_VSIZE, ShiftImmOp,
-    ShiftImmOpSimplification, Signal, SignalKey, Time, UnaryOp, VariableKey, VariableMap,
+    BasicBlockKey, BinaryImmOp, BinaryImmOpSimplification, BinaryOp, GlobalContext, Instruction,
+    LogicMode, ProcessKey, ResizeOp, SCALAR_VSIZE, ShiftImmOp, ShiftImmOpSimplification, Signal,
+    SignalKey, UnaryOp, VariableKey, VariableMap,
 };
 
 pub fn constant_propagation(
@@ -39,6 +39,8 @@ pub fn constant_propagation(
     let mut scratch_stack = Vec::new();
     let mut additional = Vec::new();
     for tr in &gl.processes[process].regions {
+        scratch_map.clear();
+
         post_order_keys(
             tr.entry(),
             &gl.bbs,
@@ -120,6 +122,19 @@ fn constant_propagate_instruction(
                 ready: true,
             };
         }};
+
+        ($i:expr, $dst:expr, $constant:expr) => {{
+            let constant: Bits = $constant;
+            if cfg!(debug_assertions) && constant.contains_special() {
+                assert_eq!($dst.mode(), LogicMode::FourValue);
+            }
+            scratch_map.insert($dst, Some(constant.clone()));
+            $i = I::Constant($dst, constant);
+            return PropagateResult {
+                replace: true,
+                ready: true,
+            };
+        }};
     }
 
     macro_rules! not_constant {
@@ -161,11 +176,11 @@ fn constant_propagate_instruction(
         }
         I::Binary(dst, op, lhs, rhs) => {
             let (dst, op, lhs, rhs) = (*dst, *op, *lhs, *rhs);
-            let lhs_bits_entry = get!(&lhs);
-            let rhs_bits_entry = get!(&rhs);
+            let lhs_bits_entry = scratch_map.get(&lhs);
+            let rhs_bits_entry = scratch_map.get(&rhs);
             let operands_are_complete = lhs_bits_entry.is_some() & rhs_bits_entry.is_some();
-            let lhs_bits = lhs_bits_entry;
-            let rhs_bits = rhs_bits_entry;
+            let lhs_bits = lhs_bits_entry.and_then(|v| v.as_ref());
+            let rhs_bits = rhs_bits_entry.and_then(|v| v.as_ref());
 
             macro_rules! simplify_div_mod_imm {
                 ($dst:expr, $src:expr, $imm:expr, $op:ident, $is_rhs:expr, $div_by_zero_equals_x:expr) => {{
@@ -215,14 +230,26 @@ fn constant_propagate_instruction(
                 (O::Multiply, _, Some(b)) => additional.push(BI(dst, IO::Multiply, lhs, b.clone())),
                 (O::Power, Some(b), _) => additional.push(BI(dst, IO::RevPower, rhs, b.clone())),
                 (O::Power, _, Some(b)) => additional.push(BI(dst, IO::Power, lhs, b.clone())),
-                (O::DivideX, Some(b), _) => simplify_div_mod_imm!(dst, lhs, b, RevDivideX, false, false),
+                (O::DivideX, Some(b), _) => {
+                    simplify_div_mod_imm!(dst, lhs, b, RevDivideX, false, false)
+                }
                 (O::DivideX, _, Some(b)) => simplify_div_mod_imm!(dst, lhs, b, Divide, true, false),
-                (O::Divide0, Some(b), _) => simplify_div_mod_imm!(dst, lhs, b, RevDivide0, false, true),
+                (O::Divide0, Some(b), _) => {
+                    simplify_div_mod_imm!(dst, lhs, b, RevDivide0, false, true)
+                }
                 (O::Divide0, _, Some(b)) => simplify_div_mod_imm!(dst, lhs, b, Divide, true, true),
-                (O::ModulusX, Some(b), _) => simplify_div_mod_imm!(dst, lhs, b, RevModulusX, false, false),
-                (O::ModulusX, _, Some(b)) => simplify_div_mod_imm!(dst, lhs, b, Modulus, true, false),
-                (O::Modulus0, Some(b), _) => simplify_div_mod_imm!(dst, lhs, b, RevModulus0, false, true),
-                (O::Modulus0, _, Some(b)) => simplify_div_mod_imm!(dst, lhs, b, Modulus, true, true),
+                (O::ModulusX, Some(b), _) => {
+                    simplify_div_mod_imm!(dst, lhs, b, RevModulusX, false, false)
+                }
+                (O::ModulusX, _, Some(b)) => {
+                    simplify_div_mod_imm!(dst, lhs, b, Modulus, true, false)
+                }
+                (O::Modulus0, Some(b), _) => {
+                    simplify_div_mod_imm!(dst, lhs, b, RevModulus0, false, true)
+                }
+                (O::Modulus0, _, Some(b)) => {
+                    simplify_div_mod_imm!(dst, lhs, b, Modulus, true, true)
+                }
 
                 (O::UnsignedLessEqual, Some(b), _) => {
                     additional.push(BI(dst, IO::UnsignedGreaterEqual, rhs, b.clone()))
@@ -286,7 +313,7 @@ fn constant_propagate_instruction(
 
             // If we managed to convert it to a immediate based operation, we should try to
             // simplify further.
-            let i = additional.get_mut(0);
+            let i = additional.first_mut();
             if let Some(i) = i {
                 match i {
                     I::BinaryImm(dst, op, src, imm) => {
@@ -295,8 +322,8 @@ fn constant_propagate_instruction(
                         match op.simplify(dst, src, imm) {
                             S::Keep => *i = BI(dst, op, src, imm.clone()),
                             S::Source => *i = I::copy(vars, dst, src),
-                            S::Immediate => assign_constant!(dst, imm.clone()),
-                            S::Constant(value) => assign_constant!(dst, value),
+                            S::Immediate => assign_constant!(*i, dst, imm.clone()),
+                            S::Constant(value) => assign_constant!(*i, dst, value),
                             S::Instruction(instr) => *i = instr,
                         }
                     }
@@ -306,7 +333,7 @@ fn constant_propagate_instruction(
                         match op.simplify(vars.size(dst), *amount) {
                             S::Keep => {}
                             S::Source => *i = I::copy(vars, dst, src),
-                            S::Constant(value) => assign_constant!(dst, value),
+                            S::Constant(value) => assign_constant!(*i, dst, value),
                         }
                     }
                     _ => {}
@@ -315,6 +342,10 @@ fn constant_propagate_instruction(
 
             if operands_are_complete && additional.len() == 0 {
                 not_constant!(dst);
+            }
+
+            if operands_are_complete {
+                scratch_map.insert(dst, None);
             }
 
             PropagateResult {
@@ -405,6 +436,10 @@ fn constant_propagate_instruction(
 
             if operands_are_complete && additional.len() == 0 {
                 not_constant!(dst);
+            }
+
+            if operands_are_complete {
+                scratch_map.insert(dst, None);
             }
 
             PropagateResult {

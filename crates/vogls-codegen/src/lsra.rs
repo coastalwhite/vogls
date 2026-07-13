@@ -8,6 +8,8 @@ use vogls_ir::{
     BasicBlock, BasicBlockKey, Instruction, LogicMode, VSIZE_32, VSIZE_64, VariableKey,
     VariableMap, VectorSize,
 };
+use vogls_bits::arithmetic::FvLogicValue;
+use vogls_bits::Bits;
 use vogls_utils::{Bitset, IndexSet, VgHashMap};
 
 use crate::{HeapAlignment, HeapBuilder};
@@ -154,10 +156,36 @@ impl Interval {
 }
 
 #[derive(Clone, Copy, Debug)]
+pub enum SimpleBits {
+    TwoValue(u32),
+    Repeated(FvLogicValue),
+}
+
+impl SimpleBits {
+    fn from_bits(value: &Bits) -> Option<Self> {
+        if value.eq_zero() {
+            Some(Self::TwoValue(0))
+        } else if value.eq_one() {
+            Some(Self::TwoValue(1))
+        } else {
+            None
+        }
+    }
+
+    pub fn into_bits(self, size: VectorSize) -> Bits {
+        match self {
+            Self::TwoValue(v) => Bits::from_u64(size, v as u64),
+            Self::Repeated(v) => Bits::new_fv_constant(size, v),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
 pub enum Slot {
     Heap(u64),
     Stack(HeapAlignment, u32),
     Register(u32),
+    Constant(SimpleBits),
 }
 
 pub fn linear_scan_register_allocation(
@@ -196,10 +224,14 @@ pub fn linear_scan_register_allocation(
         for i in bbs[bb].instrs.iter().rev() {
             // @Performance: Never put constants smaller than 64-bits on the stack.
             if let Instruction::Constant(dst, value) = i
-                && value.size() > VSIZE_64
             {
+                if 
+                 value.size() > VSIZE_64 {
                 let offset = heap_builder.claim_constant(dst.mode(), value.clone_lowering_mode());
                 assignment.insert(*dst, Slot::Heap(offset.offset.bit_offset as u64));
+                } else if let Some(simple_bits) = SimpleBits::from_bits(value) {
+                assignment.insert(*dst, Slot::Constant(simple_bits));
+                }
             }
             if let Some(dst) = i.get_destination_variable() {
                 k.get_mut().set(vars.get_index(&dst).unwrap(), true);
@@ -366,6 +398,7 @@ pub fn linear_scan_register_allocation(
                 } else {
                     match slot {
                         Slot::Heap(_) => debug_assert!(false),
+                        Slot::Constant(_) => debug_assert!(false),
                         Slot::Register(r) => {
                             let mask = 1u64 | (u64::from(mode == LogicMode::FourValue) << 1);
                             active_registers ^= mask << r;

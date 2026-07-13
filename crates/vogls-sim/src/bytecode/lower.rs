@@ -1,5 +1,5 @@
 use vogls_bits::arithmetic::FvLogicValue;
-use vogls_codegen::lsra::{Slot, StackOffsets, StackTracker};
+use vogls_codegen::lsra::{SimpleBits, Slot, StackOffsets, StackTracker};
 use vogls_codegen::{HeapAlignment, HeapBuilder, HeapRef};
 use vogls_ir::watchers::WatchMap;
 use vogls_ir::{
@@ -263,9 +263,11 @@ fn lower_instruction(
             // assignment.
             if value.size() <= VSIZE_64 {
                 let dslot = assignment[dst];
-                let rd = to_reg(bce, *dst, &gl.vars, dslot, stack_offsets, T0, true);
-                bce.load_bits_into_register(rd, dst.mode(), value);
-                store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd, T3);
+                if !matches!(dslot, Slot::Constant(..)) {
+                    let rd = to_reg(bce, *dst, &gl.vars, dslot, stack_offsets, T0, true);
+                    bce.load_bits_into_register(rd, dst.mode(), value);
+                    store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd, T3);
+                }
             }
         }
         I::Unary(dst, op, src) => {
@@ -2079,6 +2081,11 @@ fn to_reg(
             bytecode.load_u64(backup, offset);
             backup
         }
+        Slot::Constant(bits) => {
+            let bits = bits.into_bits(vars.size(var));
+            bytecode.load_bits_into_register(backup, var.mode(), &bits);
+            backup
+        }
         Slot::Stack(kind, offset) => {
             let size = vars.size(var);
             if !is_dst || size > VSIZE_64 {
@@ -2136,7 +2143,7 @@ fn store_back(
     scratch: Reg,
 ) {
     match slot {
-        Slot::Heap(..) => unreachable!(),
+        Slot::Heap(..) | Slot::Constant(..) => unreachable!(),
         Slot::Stack(kind, offset) => {
             if let Some(size) = SixBitSize::from_vector_size(vars.size(var)) {
                 let kind_offset = match kind {
