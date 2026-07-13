@@ -3,7 +3,8 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Write};
 
 use crate::{
-    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext, Instruction, IntrinsicOp, Process, ResizeOp, ShiftImmOp, Signal, TemporalRegionKey, Time, UnaryOp, VariableKey
+    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext,
+    Instruction, IntrinsicOp, Process, ResizeOp, ShiftImmOp, Signal, Time, UnaryOp, VariableKey,
 };
 
 const INDENT: &str = "  ";

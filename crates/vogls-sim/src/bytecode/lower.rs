@@ -1,5 +1,5 @@
 use vogls_bits::arithmetic::FvLogicValue;
-use vogls_codegen::lsra::{SimpleBits, Slot, StackOffsets, StackTracker};
+use vogls_codegen::lsra::{Slot, StackOffsets, StackTracker};
 use vogls_codegen::{HeapAlignment, HeapBuilder, HeapRef};
 use vogls_ir::watchers::WatchMap;
 use vogls_ir::{
@@ -18,7 +18,8 @@ use crate::bytecode::{
 
 enum JumpKind {
     Jump,
-    Branch(Reg),
+    BranchTrue(Reg),
+    BranchFalse(Reg),
 }
 
 pub struct LowerBytecodeOptions {
@@ -91,7 +92,17 @@ pub fn lower_process_to_bytecode(
         ctx.prepare_process(tr.entry());
 
         post_order.reverse();
-        for &bb_key in &post_order {
+        for (order_i, &bb_key) in post_order.iter().enumerate() {
+            macro_rules! jump_to_if_not_next {
+                ($target:expr) => {
+                    let target: BasicBlockKey = $target;
+                    if post_order.get(order_i + 1).copied() != Some(target) {
+                        jump_targets.push((bytecode.data.len(), target, JumpKind::Jump));
+                        bytecode.panic();
+                    }
+                };
+            }
+
             bb_offsets.insert(bb_key, bytecode.data.len());
 
             let bb = &gl.bbs[bb_key];
@@ -119,6 +130,11 @@ pub fn lower_process_to_bytecode(
                 }
             }
 
+            let offset = bytecode.data.len();
+            if options.emit {
+                eprintln!("{}", bb.terminator.display(&ctx));
+            }
+
             use BasicBlockTerminator as T;
             match &bb.terminator {
                 T::Wait(target, time) => {
@@ -128,8 +144,7 @@ pub fn lower_process_to_bytecode(
                         bytecode.load_u64(T0, time);
                         bytecode.wait(T0);
                     }
-                    jump_targets.push((bytecode.data.len(), target.entry(), JumpKind::Jump));
-                    bytecode.panic();
+                    jump_to_if_not_next!(target.entry());
                 }
                 T::VariableWait(target, src) => {
                     let mut rtime = to_reg(
@@ -154,25 +169,21 @@ pub fn lower_process_to_bytecode(
                     }
 
                     bytecode.wait(rtime);
-                    jump_targets.push((bytecode.data.len(), target.entry(), JumpKind::Jump));
-                    bytecode.panic();
+                    jump_to_if_not_next!(target.entry());
                 }
                 T::WaitRegion(target, region) => {
                     bytecode.wait_region(*region);
-                    jump_targets.push((bytecode.data.len(), target.entry(), JumpKind::Jump));
-                    bytecode.panic();
+                    jump_to_if_not_next!(target.entry());
                 }
                 T::Watch(target, _) => {
                     let index = watch_map.get_watch_index(bb_key);
                     bytecode.start_listen(index as u32);
                     bytecode.next_event();
                     listeners.set_ptr(index, bytecode.current_ptr());
-                    jump_targets.push((bytecode.data.len(), target.entry(), JumpKind::Jump));
-                    bytecode.panic();
+                    jump_to_if_not_next!(target.entry());
                 }
                 T::Jump(target) => {
-                    jump_targets.push((bytecode.data.len(), *target, JumpKind::Jump));
-                    bytecode.panic();
+                    jump_to_if_not_next!(*target);
                 }
                 T::Branch(cond, truthy, falsy) => {
                     let mut rcond = to_reg(
@@ -192,13 +203,40 @@ pub fn lower_process_to_bytecode(
                         }
                     }
 
-                    jump_targets.push((bytecode.data.len(), *truthy, JumpKind::Branch(rcond)));
-                    bytecode.panic();
-                    jump_targets.push((bytecode.data.len(), *falsy, JumpKind::Jump));
-                    bytecode.panic();
+                    let next_bb = post_order.get(order_i + 1).copied();
+                    if next_bb == Some(*truthy) {
+                        jump_targets.push((
+                            bytecode.data.len(),
+                            *falsy,
+                            JumpKind::BranchFalse(rcond),
+                        ));
+                        bytecode.panic();
+                    } else if next_bb == Some(*falsy) {
+                        jump_targets.push((
+                            bytecode.data.len(),
+                            *truthy,
+                            JumpKind::BranchTrue(rcond),
+                        ));
+                        bytecode.panic();
+                    } else {
+                        jump_targets.push((
+                            bytecode.data.len(),
+                            *truthy,
+                            JumpKind::BranchTrue(rcond),
+                        ));
+                        bytecode.panic();
+                        jump_targets.push((bytecode.data.len(), *falsy, JumpKind::Jump));
+                        bytecode.panic();
+                    }
                 }
                 T::Halt => {
                     bytecode.next_event();
+                }
+            }
+
+            if options.emit {
+                for c in &bytecode.data[offset..] {
+                    eprintln!("  {c}");
                 }
             }
         }
@@ -217,9 +255,23 @@ pub fn lower_process_to_bytecode(
                 let imm = SignedImmediate::new(imm.into()).unwrap();
                 Jump(imm).encode()
             }
-            JumpKind::Branch(rcond) => {
+            JumpKind::BranchTrue(rcond) => {
                 let imm = SignedImmediate::new(imm.into()).unwrap();
-                Branch { rcond, imm }.encode()
+                Branch {
+                    rcond,
+                    inv: false,
+                    imm,
+                }
+                .encode()
+            }
+            JumpKind::BranchFalse(rcond) => {
+                let imm = SignedImmediate::new(imm.into()).unwrap();
+                Branch {
+                    rcond,
+                    inv: true,
+                    imm,
+                }
+                .encode()
             }
         };
     }
@@ -1384,6 +1436,7 @@ fn lower_instruction(
 
                     bce.data[branch_offset] = Branch {
                         rcond: T4,
+                        inv: false,
                         imm: SignedImmediate::new((bce.data.len() - branch_offset) as i64 - 1)
                             .unwrap(),
                     }
@@ -1649,7 +1702,12 @@ fn lower_instruction(
 
             let offset = bce.data.len() - branch_offset - 1;
             let offset = SignedImmediate::new_from_u64(offset as u64).unwrap();
-            bce.data[branch_offset] = Branch { rcond, imm: offset }.encode();
+            bce.data[branch_offset] = Branch {
+                rcond,
+                inv: false,
+                imm: offset,
+            }
+            .encode();
 
             let rtruthy = to_reg(
                 bce,
@@ -1854,6 +1912,7 @@ fn lower_instruction(
 
                     bce.data[branch_offset] = Branch {
                         rcond: T2,
+                        inv: false,
                         imm: SignedImmediate::new((bce.data.len() - branch_offset) as i64 - 1)
                             .unwrap(),
                     }
@@ -2058,6 +2117,7 @@ fn lower_instruction(
             if let Some(branch_offset) = branch_offset {
                 bce.data[branch_offset] = Branch {
                     rcond: T4,
+                    inv: false,
                     imm: SignedImmediate::new((bce.data.len() - branch_offset) as i64 - 1).unwrap(),
                 }
                 .encode();

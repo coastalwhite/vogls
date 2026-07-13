@@ -697,10 +697,12 @@ impl Schedule {
         }
     }
 
+    #[inline(always)]
     pub fn push_active(&mut self, ptr: InstructionPtr) {
         self.active.push(ptr);
     }
 
+    #[inline(always)]
     pub fn pop(&mut self, time: &mut u64) -> Option<InstructionPtr> {
         if let Some(pc) = self.active.pop() {
             return Some(pc);

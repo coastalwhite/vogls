@@ -17,7 +17,8 @@ pub struct RelJump {
 }
 pub struct Branch {
     pub rcond: Reg,
-    pub imm: SignedImmediate<20>,
+    pub inv: bool,
+    pub imm: SignedImmediate<19>,
 }
 
 impl BytecodeInstruction for Jump {
@@ -97,19 +98,27 @@ impl BytecodeInstruction for Branch {
         let v = v.0;
         Self {
             rcond: Reg::new_masked(v >> 8),
-            imm: SignedImmediate::new_shifted(v, 12),
+            inv: (v >> 12) & 1 != 0,
+            imm: SignedImmediate::new_shifted(v, 13),
         }
     }
 
     fn encode(&self) -> Bytecode {
         Bytecode(
-            BytecodeOpcode::Branch as u32 | ((self.rcond as u32) << 8) | (self.imm.encode() << 12),
+            BytecodeOpcode::Branch as u32
+                | ((self.rcond as u32) << 8)
+                | ((self.inv as u32) << 12)
+                | (self.imm.encode() << 13),
         )
     }
 
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self { rcond: cond, imm } = self;
-        write_padded_mnemonic(f, "branch")?;
+        let Self {
+            rcond: cond,
+            inv,
+            imm,
+        } = self;
+        write_padded_mnemonic(f, if *inv { "branch.false" } else { "branch.true" })?;
         write!(f, "{cond}, {imm}")?;
         Ok(())
     }
@@ -124,8 +133,12 @@ impl BytecodeInstruction for Branch {
         _listeners: &mut BytecodeListeners,
         _cldctx: &mut ColdContext,
     ) {
-        let Self { rcond: cond, imm } = self;
-        if regs[cond] != 0 {
+        let Self {
+            rcond: cond,
+            inv,
+            imm,
+        } = self;
+        if regs[cond] != u64::from(inv) {
             *pc = pc.wrapping_add_signed(i64::from(imm.0));
         }
     }
@@ -138,7 +151,10 @@ impl BytecodeEncoder {
     pub fn reljump(&mut self, rs: Reg, imm: SignedImmediate<20>) {
         self.data.push(RelJump { rs, imm }.encode());
     }
-    pub fn branch(&mut self, rcond: Reg, imm: SignedImmediate<20>) {
-        self.data.push(Branch { rcond, imm }.encode());
+    pub fn branch_true(&mut self, rcond: Reg, imm: SignedImmediate<19>) {
+        self.data.push(Branch { rcond, inv: false, imm }.encode());
+    }
+    pub fn branch_false(&mut self, rcond: Reg, imm: SignedImmediate<19>) {
+        self.data.push(Branch { rcond, inv: true, imm }.encode());
     }
 }

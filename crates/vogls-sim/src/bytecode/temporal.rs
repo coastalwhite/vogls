@@ -1,6 +1,5 @@
 use vogls_ir::LogicMode;
 use vogls_runtime::RuntimeState;
-use vogls_utils::NonMaxU32;
 
 use std::fmt;
 
