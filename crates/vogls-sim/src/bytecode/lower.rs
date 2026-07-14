@@ -4,8 +4,8 @@ use vogls_codegen::{HeapAlignment, HeapBuilder, HeapRef};
 use vogls_ir::watchers::WatchMap;
 use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, ContextFormat, DisplayContext,
-    GlobalContext, Instruction, LogicMode, ProcessKey, ResizeOp, ShiftImmOp, SignalKey, UnaryOp,
-    VSIZE_64, VariableKey, VariableMap,
+    GlobalContext, Instruction, IntrinsicOp, LogicMode, ProcessKey, ResizeOp, SCALAR_VSIZE,
+    ShiftImmOp, SignalKey, UnaryOp, VSIZE_32, VSIZE_64, VariableKey, VariableMap,
 };
 use vogls_runtime::RtSignalKey;
 use vogls_utils::{NonMaxU16, VgHashMap, VgHashSet};
@@ -1775,17 +1775,34 @@ fn lower_instruction(
             let dslot = assignment[dst];
             let rd = to_reg(bce, *dst, &gl.vars, dslot, stack_offsets, T0, true);
 
-            for item in items {
-                let reg = to_reg(
-                    bce,
-                    *item,
-                    &gl.vars,
-                    assignment[item],
-                    stack_offsets,
-                    T2,
-                    false,
-                );
-                bce.push_argument(gl.vars.size(*item), item.mode(), reg);
+            match op.as_ref() {
+                IntrinsicOp::ReadMem(read_mem) => {
+                    let signal = read_mem.signal;
+                    let signal_addr = signal_address(signal, signals, io_signals);
+                    let mode = gl.signals[signal].mode;
+                    let size = gl.signals[signal].size;
+
+                    bce.load_u64(T2, signal_addr);
+                    bce.push_argument(VSIZE_64, LogicMode::TwoValue, T2);
+                    bce.load_u64(T2, mode as u64);
+                    bce.push_argument(SCALAR_VSIZE, LogicMode::TwoValue, T2);
+                    bce.load_u64(T2, size.get() as u64);
+                    bce.push_argument(VSIZE_32, LogicMode::TwoValue, T2);
+                }
+                _ => {
+                    for item in items {
+                        let reg = to_reg(
+                            bce,
+                            *item,
+                            &gl.vars,
+                            assignment[item],
+                            stack_offsets,
+                            T2,
+                            false,
+                        );
+                        bce.push_argument(gl.vars.size(*item), item.mode(), reg);
+                    }
+                }
             }
             let intrinsic_id = bce
                 .intrinsics

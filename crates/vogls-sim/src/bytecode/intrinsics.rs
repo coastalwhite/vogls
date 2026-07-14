@@ -2,6 +2,7 @@ use std::fmt;
 
 use vogls_bits::arithmetic::FvLogicValue;
 use vogls_bits::format::BitsFormatOptions;
+use vogls_codegen::HeapOffset;
 use vogls_ir::{Bits, IntrinsicOp, LogicMode, Mode, SCALAR_VSIZE, VSIZE_32, VSIZE_64, VectorSize};
 use vogls_runtime::RuntimeState;
 use vogls_utils::NonMaxU16;
@@ -247,7 +248,34 @@ impl BytecodeInstruction for Intrinsic {
             IntrinsicOp::VcdAppendModule(_) => todo!(),
             IntrinsicOp::VcdPause => todo!(),
             IntrinsicOp::VcdResume => todo!(),
-            IntrinsicOp::ReadMem(_) => todo!(),
+            IntrinsicOp::ReadMem(readmem) => {
+                let offset = cldctx.stack[0];
+                let mode = if cldctx.stack[1] == 0 {
+                    Mode::TwoValue
+                } else {
+                    Mode::FourValue
+                };
+                let size = u32::try_from(cldctx.stack[2])
+                    .map_err(|_| ())
+                    .and_then(|v| VectorSize::new(v).ok_or(()))
+                    .unwrap();
+                let dst = HeapOffset {
+                    bit_offset: offset as usize,
+                }
+                .to_ref(size);
+
+                vogls_runtime::readmem::read_mem(
+                    &readmem.path,
+                    state.heap.0.as_mut(),
+                    dst,
+                    mode,
+                    readmem.offset,
+                    readmem.limit,
+                    readmem.stride,
+                    readmem.binary,
+                )
+                .unwrap()
+            }
         }
         cldctx.stack_args.clear();
         cldctx.stack.clear();
