@@ -227,7 +227,10 @@ impl LoweredDesign {
             let watch_map = WatchMap::new(&self.gl.bbs);
             let mut listeners = BytecodeListeners::new(watch_map.num_watches());
             let mut num_stack_words = 0;
-            let options = LowerBytecodeOptions { emit: self.emit_vm };
+            let options = LowerBytecodeOptions {
+                emit: self.emit_vm,
+                has_plugins: !plugins.is_empty(),
+            };
 
             for process in self.gl.processes.keys() {
                 lower_process_to_bytecode(

@@ -87,6 +87,7 @@ pub struct ColdContext<'a> {
     stdout: &'a mut (dyn std::io::Write + Send + Sync),
     stderr: &'a mut (dyn std::io::Write + Send + Sync),
 
+    plugins: &'a mut [RuntimePluginState],
     heap_scratch: Vec<u64>,
 
     return_value: u32,
@@ -95,6 +96,7 @@ pub struct ColdContext<'a> {
 impl<'a> ColdContext<'a> {
     pub fn new(
         intrinsics: &'a [IntrinsicOp],
+        plugins: &'a mut [RuntimePluginState],
         stdout: &'a mut (dyn std::io::Write + Send + Sync),
         stderr: &'a mut (dyn std::io::Write + Send + Sync),
     ) -> Self {
@@ -105,6 +107,7 @@ impl<'a> ColdContext<'a> {
             stdout,
             stderr,
             heap_scratch: Vec::new(),
+            plugins,
             return_value: 0,
         }
     }
@@ -454,6 +457,7 @@ opcodes![
     FvTvHeapSliceX,
     FvFvHeapSlice0,
     FvFvHeapSliceX,
+    PluginPoke,
 ];
 
 #[derive(Clone)]
@@ -732,7 +736,11 @@ impl Schedule {
     }
 
     #[inline(always)]
-    pub fn pop(&mut self, time: &mut u64) -> Option<InstructionPtr> {
+    pub fn pop(
+        &mut self,
+        state: &mut RuntimeState,
+        plugins: &mut [RuntimePluginState],
+    ) -> Option<InstructionPtr> {
         if let Some(pc) = self.active.pop() {
             return Some(pc);
         }
@@ -745,6 +753,10 @@ impl Schedule {
                 }
             }
 
+            for plugin in plugins.iter_mut() {
+                plugin.timestep(state);
+            }
+
             // Stop if there are no more events.
             if self.future.is_empty() {
                 break 'fill_active;
@@ -752,12 +764,12 @@ impl Schedule {
 
             // Stop if we reach the maximum time.
             if self.next_time > self.max_time {
-                *time = self.max_time;
+                state.time = self.max_time;
                 break 'fill_active;
             }
 
             // Take all the events with the next minimum time and find the new minimum.
-            *time = self.next_time;
+            state.time = self.next_time;
             let mut next_time = u64::MAX;
             self.active.extend(
                 self.future
@@ -773,7 +785,13 @@ impl Schedule {
             self.next_time = next_time;
         };
 
-        self.active.pop()
+        let pc = self.active.pop();
+        if pc.is_none() {
+            for plugin in plugins.iter_mut() {
+                plugin.finish(state);
+            }
+        }
+        pc
     }
 
     pub fn set_max_time(&mut self, time: u64) {
@@ -1134,12 +1152,15 @@ impl Design {
         stderr: &mut (dyn std::io::Write + Send + Sync),
     ) -> Result<(), ()> {
         let code = &self.bytecode;
-        let Some(entry) = state.schedule.pop(&mut state.runtime.time) else {
+        let Some(entry) = state
+            .schedule
+            .pop(&mut state.runtime, state.plugins.as_mut())
+        else {
             return Ok(());
         };
 
         let mut pc = entry.0;
-        let mut cldctx = ColdContext::new(&self.intrinsics, stdout, stderr);
+        let mut cldctx = ColdContext::new(&self.intrinsics, &mut state.plugins, stdout, stderr);
         let mut regs = Regs::new(self.stack_offset);
         while let Some(&c) = code.get(pc as usize) {
             let opcode = c.opcode();
@@ -1198,12 +1219,15 @@ impl Design {
         stderr: &mut (dyn std::io::Write + Send + Sync),
     ) -> Result<(), ()> {
         let code = &self.bytecode;
-        let Some(entry) = state.schedule.pop(&mut state.runtime.time) else {
+        let Some(entry) = state
+            .schedule
+            .pop(&mut state.runtime, state.plugins.as_mut())
+        else {
             return Ok(());
         };
 
         let pc = entry.0;
-        let mut cldctx = ColdContext::new(&self.intrinsics, stdout, stderr);
+        let mut cldctx = ColdContext::new(&self.intrinsics, state.plugins.as_mut(), stdout, stderr);
         let mut regs = Regs::new(self.stack_offset);
         let Some(c) = code.get(pc as usize) else {
             return Ok(());

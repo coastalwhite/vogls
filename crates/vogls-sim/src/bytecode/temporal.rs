@@ -1,5 +1,6 @@
 use vogls_ir::LogicMode;
-use vogls_runtime::RuntimeState;
+use vogls_runtime::{RtSignalKey, RuntimeState};
+use vogls_utils::TableKey;
 
 use std::fmt;
 
@@ -11,6 +12,11 @@ use super::{
 };
 
 pub struct Wake {
+    rcond: Reg,
+    index: InlineIndex<20>,
+}
+
+pub struct PluginPoke {
     rcond: Reg,
     index: InlineIndex<20>,
 }
@@ -100,6 +106,63 @@ impl BytecodeInstruction for Wake {
     }
 }
 
+impl BytecodeInstruction for PluginPoke {
+    fn extract(v: Bytecode) -> Self {
+        debug_assert_eq!(v.opcode(), BytecodeOpcode::PluginPoke as u8);
+        let v = v.0;
+        Self {
+            rcond: Reg::new_masked(v >> 8),
+            index: InlineIndex::new_shifted(v, 12),
+        }
+    }
+
+    fn pre_exec_itrace(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        _code: &[Bytecode],
+        _pc: u64,
+        regs: &Regs,
+        _state: &RuntimeState,
+    ) -> fmt::Result {
+        writeln!(f, "{EXEC_ITRACE_INDENT}rcond = {}", regs[self.rcond] != 0)
+    }
+
+    fn encode(&self) -> Bytecode {
+        Bytecode(
+            BytecodeOpcode::PluginPoke as u32
+                | ((self.rcond as u32) << 8)
+                | (self.index.encode() << 12),
+        )
+    }
+
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self { rcond, index } = self;
+        write_padded_mnemonic(f, "plugin_poke")?;
+        write!(f, "{rcond}, {index}")
+    }
+
+    #[inline(always)]
+    fn execute(
+        self,
+        _code: &[Bytecode],
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        cldctx: &mut ColdContext,
+    ) {
+        let Self { rcond, index } = self;
+        if regs[rcond] != 0 {
+            let i = index.get(regs, Reg::X15) as usize;
+            let i = RtSignalKey::from_usize(i).unwrap();
+            for plugin in cldctx.plugins.iter_mut() {
+                plugin.poke_signal(i);
+            }
+        }
+    }
+}
+
 impl BytecodeInstruction for RescheduleWait {
     fn extract(v: Bytecode) -> Self {
         debug_assert_eq!(v.opcode(), BytecodeOpcode::RescheduleWait as u8);
@@ -166,7 +229,9 @@ impl BytecodeInstruction for RescheduleWait {
             pc: InstructionPtr(next_pc),
         });
 
-        *pc = schedule.pop(&mut state.time).map_or(u64::MAX, |ptr| ptr.0);
+        *pc = schedule
+            .pop(state, cldctx.plugins)
+            .map_or(u64::MAX, |ptr| ptr.0);
     }
 }
 
@@ -210,7 +275,7 @@ impl BytecodeInstruction for RescheduleRegion {
         state: &mut RuntimeState,
         schedule: &mut Schedule,
         _listeners: &mut BytecodeListeners,
-        _cldctx: &mut ColdContext,
+        cldctx: &mut ColdContext,
     ) {
         let Self { region, offset } = self;
         let next_pc = (*pc).wrapping_add_signed(i64::from(offset.0));
@@ -220,7 +285,9 @@ impl BytecodeInstruction for RescheduleRegion {
         }
 
         schedule.regions[region as usize - 1].push(InstructionPtr(next_pc));
-        *pc = schedule.pop(&mut state.time).map_or(u64::MAX, |ptr| ptr.0);
+        *pc = schedule
+            .pop(state, cldctx.plugins)
+            .map_or(u64::MAX, |ptr| ptr.0);
     }
 }
 
@@ -247,9 +314,11 @@ impl BytecodeInstruction for NextEvent {
         state: &mut RuntimeState,
         schedule: &mut Schedule,
         _listeners: &mut BytecodeListeners,
-        _cldctx: &mut ColdContext,
+        cldctx: &mut ColdContext,
     ) {
-        *pc = schedule.pop(&mut state.time).map_or(u64::MAX, |ptr| ptr.0);
+        *pc = schedule
+            .pop(state, cldctx.plugins)
+            .map_or(u64::MAX, |ptr| ptr.0);
     }
 }
 
@@ -279,11 +348,13 @@ impl BytecodeInstruction for RescheduleListen {
         state: &mut RuntimeState,
         schedule: &mut Schedule,
         listeners: &mut BytecodeListeners,
-        _cldctx: &mut ColdContext,
+        cldctx: &mut ColdContext,
     ) {
         let i = self.index as usize;
         listeners.active[i / 64] |= 1u64 << (i % 64);
-        *pc = schedule.pop(&mut state.time).map_or(u64::MAX, |ptr| ptr.0);
+        *pc = schedule
+            .pop(state, cldctx.plugins)
+            .map_or(u64::MAX, |ptr| ptr.0);
     }
 }
 
@@ -468,6 +539,10 @@ impl BytecodeInstruction for TvCorrectFirst {
 impl BytecodeEncoder {
     pub fn wake(&mut self, rcond: Reg, index: InlineIndex<20>) {
         self.data.push(Wake { rcond, index }.encode());
+    }
+    pub fn plugin_poke(&mut self, rcond: Reg, index: u64) {
+        let index = InlineIndex::new(index, self, Reg::X15);
+        self.data.push(PluginPoke { rcond, index }.encode());
     }
 
     pub fn wait(&mut self, rtime: Reg, offset: i64) {

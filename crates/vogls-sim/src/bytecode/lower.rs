@@ -29,6 +29,7 @@ enum JumpKind {
 
 pub struct LowerBytecodeOptions {
     pub emit: bool,
+    pub has_plugins: bool,
 }
 
 pub fn lower_process_to_bytecode(
@@ -127,6 +128,7 @@ pub fn lower_process_to_bytecode(
                     io_signals,
                     lupdt_indexes,
                     i,
+                    options,
                 );
                 if options.emit {
                     for c in &bytecode.data[offset..] {
@@ -331,6 +333,7 @@ fn lower_instruction(
     io_signals: &VgHashMap<SignalKey, RtSignalKey>,
     lupdt_indexes: &VgHashMap<RtSignalKey, u64>,
     instr: &Instruction,
+    options: &LowerBytecodeOptions,
 ) {
     use Instruction as I;
     match instr {
@@ -2155,14 +2158,19 @@ fn lower_instruction(
                 }
             }
 
-            let lupdt_index = lupdt_indexes.get(&io_signals[signal]);
+            let rt_signal = io_signals[signal];
+            let lupdt_index = lupdt_indexes.get(&rt_signal);
             let has_watchers = watch_map.num_watch_indices(*signal) > 0;
 
             if gl.signals[*signal].mode == LogicMode::TwoValue
-                && (lupdt_index.is_some() || has_watchers)
+                && (options.has_plugins || lupdt_index.is_some() || has_watchers)
             {
                 let index = InlineIndex::new(rt_signal.as_u64(), bce, T5);
                 bce.tv_correct_first(rpoke, index);
+            }
+            if options.has_plugins {
+                let index = rt_signal.as_u64();
+                bce.plugin_poke(rpoke, index);
             }
             if let Some(lupdt_index) = lupdt_index {
                 let index = InlineIndex::new(*lupdt_index, bce, T5);
