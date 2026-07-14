@@ -117,6 +117,10 @@ impl Bytecode {
     fn opcode(self) -> u8 {
         (self.0 & 0xFF) as u8
     }
+
+    fn num_slots(self) -> u8 {
+        (NUM_SLOTS_FNS[self.opcode() as usize])(self)
+    }
 }
 
 pub trait BytecodeInstruction: Sized {
@@ -144,6 +148,9 @@ pub trait BytecodeInstruction: Sized {
     ) -> fmt::Result {
         _ = (f, code, pc, regs, state);
         Ok(())
+    }
+    fn num_slots(&self) -> u8 {
+        1
     }
     fn execute(
         self,
@@ -183,7 +190,7 @@ fn extract_and_pre_exec_itrace<I: BytecodeInstruction>(
     listeners: &BytecodeListeners,
     f: &mut fmt::Formatter<'_>,
 ) -> fmt::Result {
-    _ = (pc, schedule, listeners);
+    _ = (schedule, listeners);
     let slf = I::extract(c);
     slf.pre_exec_itrace(f, code, pc, regs, state)
 }
@@ -198,9 +205,13 @@ fn extract_and_post_exec_itrace<I: BytecodeInstruction>(
     listeners: &BytecodeListeners,
     f: &mut fmt::Formatter<'_>,
 ) -> fmt::Result {
-    _ = (pc, schedule, listeners);
+    _ = (schedule, listeners);
     let slf = I::extract(c);
     slf.post_exec_itrace(f, code, pc, regs, state)
+}
+
+fn extract_and_num_slots<I: BytecodeInstruction>(c: Bytecode) -> u8 {
+    I::extract(c).num_slots()
 }
 
 macro_rules! opcodes {
@@ -230,6 +241,10 @@ macro_rules! opcodes {
             ) -> u64;
             X_NUM_INSTRUCTIONS
         ] = [$(extract_and_execute::<$name>),+];
+        static NUM_SLOTS_FNS: [
+            fn(c: Bytecode) -> u8;
+            X_NUM_INSTRUCTIONS
+        ] = [$(extract_and_num_slots::<$name>),+];
         #[cfg(feature = "tailcall")]
         static X_INSTRUCTION_TAILCALL_FNS: [
             extern "rust-preserve-none" fn(

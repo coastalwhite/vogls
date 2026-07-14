@@ -257,6 +257,10 @@ impl BytecodeInstruction for TvSetAligned {
         writeln!(f)
     }
 
+    fn num_slots(&self) -> u8 {
+        2
+    }
+
     #[inline(always)]
     fn execute(
         self,
@@ -310,6 +314,10 @@ impl BytecodeInstruction for FvSetAligned {
         f.write_str(EXEC_ITRACE_INDENT)?;
         write_register(f, regs, "rd", self.0.rd, LogicMode::TwoValue)?;
         writeln!(f)
+    }
+
+    fn num_slots(&self) -> u8 {
+        2
     }
 
     #[inline(always)]

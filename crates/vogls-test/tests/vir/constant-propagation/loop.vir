@@ -4,7 +4,7 @@ proc other {
     %init = tv.const 32'h0
     jump <L1>
 .L1:
-    %value = phi [%init <L0>, %increment <L1>]
+    %value = phi [%init <TR0>, %increment <L1>]
     %_ = vogls.display "Loop {}\n", %value
     %increment = addi %value, 32'h1
     %condition = ulei %increment, 32'hA

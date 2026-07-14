@@ -36,11 +36,11 @@ impl<'a> DisplayContext<'a> {
     }
 
     pub fn prepare_process(&mut self, entry: BasicBlockKey) {
-        self.bb_stack_scratch.clear();
-        self.bb_name_scratch.clear();
-
-        self.bb_name_scratch.insert(entry, 0);
-        self.bb_stack_scratch.push(entry);
+        let name = self.bb_name_scratch.len();
+        self.bb_name_scratch.entry(entry).or_insert_with(|| {
+            self.bb_stack_scratch.push(entry);
+            name as u32
+        });
 
         while let Some(bb) = self.bb_stack_scratch.pop() {
             self.gl.bbs[bb].for_each_var(|v| {
@@ -59,6 +59,9 @@ impl<'a> DisplayContext<'a> {
 
     pub fn get_bb_idx(&self, bb: BasicBlockKey) -> Option<u32> {
         self.bb_name_scratch.get(&bb).copied()
+    }
+    pub fn get_var_name(&self, var: VariableKey) -> Option<u32> {
+        self.var_map.get(&var).copied()
     }
 
     fn clear(&mut self) {

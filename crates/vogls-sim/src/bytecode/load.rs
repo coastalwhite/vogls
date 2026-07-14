@@ -240,6 +240,10 @@ impl BytecodeInstruction for TvLoadAligned {
         write_register(f, regs, "rd", *rd, LogicMode::TwoValue)?;
         writeln!(f)
     }
+    
+    fn num_slots(&self) -> u8 {
+        2
+    }
 
     #[inline(always)]
     fn execute(
@@ -442,6 +446,10 @@ impl BytecodeInstruction for LoadUnaligned {
         f.write_str(EXEC_ITRACE_INDENT)?;
         write_register(f, regs, "rd", *rd, LogicMode::TwoValue)?;
         writeln!(f)
+    }
+
+    fn num_slots(&self) -> u8 {
+        2
     }
 
     #[inline(always)]

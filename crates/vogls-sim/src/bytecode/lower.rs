@@ -1,6 +1,6 @@
 use vogls_bits::arithmetic::FvLogicValue;
 use vogls_codegen::lsra::{Slot, StackOffsets, StackTracker};
-use vogls_codegen::{HeapAlignment, HeapBuilder, HeapRef};
+use vogls_codegen::{HeapAlignment, HeapBuilder, HeapRef, insert_bb_phis};
 use vogls_ir::watchers::WatchMap;
 use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, ContextFormat, DisplayContext,
@@ -49,26 +49,29 @@ pub fn lower_process_to_bytecode(
 ) {
     let process = &gl.processes[process];
 
-    if options.emit {
-        eprintln!("Process {}:", process.kind.into_static_str());
-    }
-
     let mut bb_stack = Vec::new();
+    let mut bb_stack2 = Vec::new();
     let mut bb_seen = VgHashSet::<BasicBlockKey>::default();
-    // let mut bb_phis = VgHashMap::<BasicBlockKey, Vec<(VariableKey, VariableKey)>>::default();
+    let mut bb_phis = VgHashMap::<BasicBlockKey, Vec<(VariableKey, VariableKey)>>::default();
 
     let mut assignment = VgHashMap::default();
 
     let mut post_order = Vec::<BasicBlockKey>::new();
+    let mut start_offset = bytecode.data.len();
     let mut bb_offsets = VgHashMap::<BasicBlockKey, usize>::default();
+    let mut emit_sizes = Vec::<u8>::new();
     let mut jump_targets = Vec::<(usize, BasicBlockKey, JumpKind)>::new();
+
+    insert_bb_phis(
+        &process.regions,
+        gl,
+        &mut bb_stack2,
+        &mut bb_seen,
+        &mut bb_phis,
+    );
 
     schedule.push_active(InstructionPtr(bytecode.data.len() as u64));
     for (i, tr) in process.regions.iter().enumerate() {
-        if options.emit {
-            eprintln!("Temporal Region {i}:");
-        }
-
         bb_seen.clear();
         assignment.clear();
         post_order.clear();
@@ -94,9 +97,6 @@ pub fn lower_process_to_bytecode(
         let stack_offsets = stack_tracker.offsets();
         *max_stack_words = usize::max(*max_stack_words, stack_tracker.num_words());
 
-        let mut ctx = DisplayContext::new(gl);
-        ctx.prepare_process(tr.entry());
-
         post_order.reverse();
         for (order_i, &bb_key) in post_order.iter().enumerate() {
             macro_rules! jump_to_if_not_next {
@@ -114,9 +114,6 @@ pub fn lower_process_to_bytecode(
             let bb = &gl.bbs[bb_key];
             for i in &bb.instrs {
                 let offset = bytecode.data.len();
-                if options.emit {
-                    eprintln!("{}", i.display(&ctx));
-                }
                 lower_instruction(
                     gl,
                     bytecode,
@@ -131,17 +128,40 @@ pub fn lower_process_to_bytecode(
                     options,
                 );
                 if options.emit {
-                    for c in &bytecode.data[offset..] {
-                        eprintln!("  {c}");
+                    emit_sizes.push((bytecode.data.len() - offset) as u8);
+                }
+            }
+
+            if let Some(phis) = bb_phis.get(&bb_key) {
+                for (dst, src) in phis {
+                    let offset = bytecode.data.len();
+                    let size = gl.vars.size(*dst);
+                    let dslot = assignment[dst];
+                    let rd = to_reg(bytecode, *dst, &gl.vars, dslot, &stack_offsets, T0, true);
+                    let rs = to_reg(
+                        bytecode,
+                        *src,
+                        &gl.vars,
+                        assignment[src],
+                        &stack_offsets,
+                        T2,
+                        false,
+                    );
+                    use LogicMode as M;
+                    match (dst.mode(), SixBitSize::from_vector_size(size)) {
+                        (M::TwoValue, None) => bytecode.heap_tv_copy(rd, rs, size),
+                        (M::TwoValue, Some(_)) => bytecode.copy(rd, rs),
+                        (M::FourValue, None) => bytecode.heap_fv_copy(rd, rs, size),
+                        (M::FourValue, Some(_)) => bytecode.fv_copy(rd, rs),
+                    }
+                    store_back(bytecode, &gl.vars, &stack_offsets, *dst, dslot, rd, T2);
+                    if options.emit {
+                        emit_sizes.push((bytecode.data.len() - offset) as u8);
                     }
                 }
             }
 
             let offset = bytecode.data.len();
-            if options.emit {
-                eprintln!("{}", bb.terminator.display(&ctx));
-            }
-
             use BasicBlockTerminator as T;
             match &bb.terminator {
                 T::Wait(target, time) => {
@@ -254,9 +274,7 @@ pub fn lower_process_to_bytecode(
             }
 
             if options.emit {
-                for c in &bytecode.data[offset..] {
-                    eprintln!("  {c}");
-                }
+                emit_sizes.push((bytecode.data.len() - offset) as u8);
             }
         }
     }
@@ -311,6 +329,80 @@ pub fn lower_process_to_bytecode(
     }
 
     if options.emit {
+        eprintln!("proc {} {{", process.kind.into_static_str());
+
+        let mut ctx = DisplayContext::new(gl);
+        for tr in &process.regions {
+            ctx.prepare_process(tr.entry());
+        }
+
+        let mut offset = start_offset;
+        let mut j = 0;
+
+        macro_rules! print_current_bytecode {
+            () => {
+                let size = emit_sizes[j] as usize;
+                let mut k = 0;
+                while k < size {
+                    let c = bytecode.data[offset + k];
+                    eprintln!("  {}", c);
+                    k += 1;
+
+                    for _ in 1..c.num_slots() {
+                        eprintln!("  <data 0x{:08X}>", bytecode.data[offset + k].0);
+                        k += 1;
+                    }
+                }
+                offset += size;
+                j += 1;
+            };
+        }
+
+        for tr in &process.regions {
+            bb_seen.clear();
+            assignment.clear();
+            post_order.clear();
+
+            vogls_ir::orders::post_order_keys(
+                tr.entry(),
+                &gl.bbs,
+                &mut bb_seen,
+                &mut bb_stack,
+                &mut post_order,
+            );
+
+            post_order.reverse();
+
+            for &bb_key in &post_order {
+                let bb = &gl.bbs[bb_key];
+                let bb_display_idx = ctx.get_bb_idx(bb_key).unwrap();
+                if bb.region.entry() == bb_key {
+                    eprintln!("*L{bb_display_idx}:");
+                } else {
+                    eprintln!(".L{bb_display_idx}:");
+                }
+
+                for instr in &bb.instrs {
+                    eprintln!("{}", instr.display(&ctx));
+                    print_current_bytecode!();
+                }
+
+                if let Some(phis) = bb_phis.get(&bb_key) {
+                    for (dst, src) in phis {
+                        eprintln!(
+                            "%t{} = phi %t{}",
+                            ctx.get_var_name(*dst).unwrap(),
+                            ctx.get_var_name(*src).unwrap()
+                        );
+                        print_current_bytecode!();
+                    }
+                }
+
+                eprintln!("{}", bb.terminator.display(&ctx));
+                print_current_bytecode!();
+            }
+        }
+        eprintln!("}}");
         eprintln!();
     }
 }
@@ -2190,7 +2282,9 @@ fn lower_instruction(
                 .encode();
             }
         }
-        I::Phi(variable_key, items) => todo!(),
+        I::Phi(..) => {
+            // These are handles at the basic block level.
+        }
     }
 }
 

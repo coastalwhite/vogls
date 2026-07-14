@@ -566,10 +566,6 @@ fn parse_bb<'a>(
                     var
                 }
             };
-            symbols.var_sizes.insert(
-                dst.identifier(),
-                VarSize::Unresolved(Instruction::Constant(dst, Bits::new_zeroed(SCALAR_VSIZE))),
-            );
 
             c.trim_cursor();
             c.expect_char('=')?;
@@ -887,12 +883,10 @@ fn parse_bb<'a>(
                 .or_insert_with(|| VarSize::Unresolved(i.clone()));
             instrs.push(i);
         } else {
-            let start = c.offset;
-            let ident = c.take_ident()?;
-            if c.is_next_equal_to(':') {
-                c.offset = start;
+            if c.is_next_equal_to('.') || c.is_next_equal_to('*') {
                 break;
             }
+            let ident = c.take_ident()?;
 
             if terminator.is_some() {
                 return Err(Box::new(ParseError {
