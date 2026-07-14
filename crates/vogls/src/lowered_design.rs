@@ -286,6 +286,7 @@ impl LoweredDesign {
                     .collect(),
                 stack_offset,
                 itrace: self.itrace,
+                stats: self.stats,
             };
 
             Ok(Design {

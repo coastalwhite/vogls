@@ -50,6 +50,7 @@ pub struct Design {
     pub intrinsics: Vec<IntrinsicOp>,
     pub stack_offset: u64,
     pub itrace: bool,
+    pub stats: bool,
 }
 pub struct State {
     pub runtime: RuntimeState,
@@ -122,23 +123,28 @@ pub trait BytecodeInstruction: Sized {
     fn pre_exec_itrace(
         &self,
         f: &mut fmt::Formatter<'_>,
+        code: &[Bytecode],
+        pc: u64,
         regs: &Regs,
         state: &RuntimeState,
     ) -> fmt::Result {
-        _ = (f, regs, state);
+        _ = (f, code, pc, regs, state);
         Ok(())
     }
     fn post_exec_itrace(
         &self,
         f: &mut fmt::Formatter<'_>,
+        code: &[Bytecode],
+        pc: u64,
         regs: &Regs,
         state: &RuntimeState,
     ) -> fmt::Result {
-        _ = (f, regs, state);
+        _ = (f, code, pc, regs, state);
         Ok(())
     }
     fn execute(
         self,
+        code: &[Bytecode],
         regs: &mut Regs,
         pc: &mut u64,
         state: &mut RuntimeState,
@@ -150,6 +156,7 @@ pub trait BytecodeInstruction: Sized {
 
 fn extract_and_execute<I: BytecodeInstruction>(
     c: Bytecode,
+    code: &[Bytecode],
     regs: &mut Regs,
     pc: u64,
     state: &mut RuntimeState,
@@ -159,12 +166,13 @@ fn extract_and_execute<I: BytecodeInstruction>(
 ) -> u64 {
     let slf = I::extract(c);
     let mut pc = pc + 1;
-    slf.execute(regs, &mut pc, state, schedule, listeners, cldctx);
+    slf.execute(code, regs, &mut pc, state, schedule, listeners, cldctx);
     pc
 }
 
 fn extract_and_pre_exec_itrace<I: BytecodeInstruction>(
     c: Bytecode,
+    code: &[Bytecode],
     regs: &Regs,
     pc: u64,
     state: &RuntimeState,
@@ -174,11 +182,12 @@ fn extract_and_pre_exec_itrace<I: BytecodeInstruction>(
 ) -> fmt::Result {
     _ = (pc, schedule, listeners);
     let slf = I::extract(c);
-    slf.pre_exec_itrace(f, regs, state)
+    slf.pre_exec_itrace(f, code, pc, regs, state)
 }
 
 fn extract_and_post_exec_itrace<I: BytecodeInstruction>(
     c: Bytecode,
+    code: &[Bytecode],
     regs: &Regs,
     pc: u64,
     state: &RuntimeState,
@@ -188,7 +197,7 @@ fn extract_and_post_exec_itrace<I: BytecodeInstruction>(
 ) -> fmt::Result {
     _ = (pc, schedule, listeners);
     let slf = I::extract(c);
-    slf.post_exec_itrace(f, regs, state)
+    slf.post_exec_itrace(f, code, pc, regs, state)
 }
 
 macro_rules! opcodes {
@@ -208,6 +217,7 @@ macro_rules! opcodes {
         static X_INSTRUCTION_FNS: [
             fn(
                 c: Bytecode,
+                code: &[Bytecode],
                 regs: &mut Regs,
                 pc: u64,
                 state: &mut RuntimeState,
@@ -233,6 +243,7 @@ macro_rules! opcodes {
         static X_PRE_EXEC_ITRACE_FNS: [
             fn(
                 c: Bytecode,
+                code: &[Bytecode],
                 regs: &Regs,
                 pc: u64,
                 state: &RuntimeState,
@@ -245,6 +256,7 @@ macro_rules! opcodes {
         static X_POST_EXEC_ITRACE_FNS: [
             fn(
                 c: Bytecode,
+                code: &[Bytecode],
                 regs: &Regs,
                 pc: u64,
                 state: &RuntimeState,
@@ -261,6 +273,14 @@ macro_rules! opcodes {
                 match value {
                     $(_ if value == BytecodeOpcode::$name as u8 => Ok(BytecodeOpcode::$name),)*
                     _ => Err(()),
+                }
+            }
+        }
+
+        impl BytecodeOpcode {
+            pub fn into_static_str(self) -> &'static str {
+                match self {
+                    $(Self::$name => stringify!($name),)*
                 }
             }
         }
@@ -390,14 +410,18 @@ opcodes![
     RelJump,
     Branch,
     TvSetAligned,
+    TvRelSetAligned,
     TvSetHeapAligned,
     FvSetAligned,
+    FvRelSetAligned,
     FvSetHeapAligned,
     SetUnaligned,
     SetHeapUnaligned,
     TvLoadAligned,
+    TvLoadRelAligned,
     FvLoadAligned,
     LoadUnaligned,
+    LoadRelUnaligned,
     LoadHeapAligned,
     LoadHeapUnaligned,
     Wake,
@@ -458,6 +482,7 @@ impl BytecodeInstruction for LoadSize {
 
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -873,6 +898,205 @@ impl BytecodeEncoder {
     }
 }
 
+pub trait Tracer {
+    fn pre_exec(
+        &mut self,
+        i: Bytecode,
+        code: &[Bytecode],
+        regs: &Regs,
+        pc: u64,
+        state: &RuntimeState,
+        schedule: &Schedule,
+        listeners: &BytecodeListeners,
+    ) {
+        _ = (i, code, regs, pc, state, schedule, listeners);
+    }
+    fn post_exec(
+        &mut self,
+        i: Bytecode,
+        code: &[Bytecode],
+        regs: &Regs,
+        pc: u64,
+        state: &RuntimeState,
+        schedule: &Schedule,
+        listeners: &BytecodeListeners,
+    ) {
+        _ = (i, code, regs, pc, state, schedule, listeners);
+    }
+
+    fn finish(
+        &mut self,
+        code: &[Bytecode],
+        regs: &Regs,
+        pc: u64,
+        state: &RuntimeState,
+        schedule: &Schedule,
+        listeners: &BytecodeListeners,
+    ) {
+        _ = (code, regs, pc, state, schedule, listeners);
+    }
+}
+
+impl Tracer for () {}
+
+struct DisplayWith<'a>(
+    Bytecode,
+    &'a [Bytecode],
+    &'a Regs,
+    u64,
+    &'a RuntimeState,
+    &'a Schedule,
+    &'a BytecodeListeners,
+    fn(
+        Bytecode,
+        &[Bytecode],
+        &Regs,
+        u64,
+        &RuntimeState,
+        &Schedule,
+        &BytecodeListeners,
+        &mut fmt::Formatter<'_>,
+    ) -> fmt::Result,
+);
+impl<'a> fmt::Display for DisplayWith<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        (self.7)(self.0, self.1, self.2, self.3, self.4, self.5, self.6, f)
+    }
+}
+
+pub struct InstructionTracer(Box<dyn std::io::Write>);
+
+impl InstructionTracer {
+    pub fn new_stderr() -> Self {
+        Self(Box::new(std::io::BufWriter::new(std::io::stderr())))
+    }
+}
+
+impl Tracer for InstructionTracer {
+    fn pre_exec(
+        &mut self,
+        i: Bytecode,
+        code: &[Bytecode],
+        regs: &Regs,
+        pc: u64,
+        state: &RuntimeState,
+        schedule: &Schedule,
+        listeners: &BytecodeListeners,
+    ) {
+        writeln!(&mut self.0, "[PC={pc:4}]: {i}").unwrap();
+        write!(
+            &mut self.0,
+            "{}",
+            DisplayWith(
+                i,
+                code,
+                &regs,
+                pc,
+                state,
+                schedule,
+                listeners,
+                X_PRE_EXEC_ITRACE_FNS[i.opcode() as usize]
+            )
+        )
+        .unwrap();
+    }
+
+    fn post_exec(
+        &mut self,
+        i: Bytecode,
+        code: &[Bytecode],
+        regs: &Regs,
+        pc: u64,
+        state: &RuntimeState,
+        schedule: &Schedule,
+        listeners: &BytecodeListeners,
+    ) {
+        write!(
+            &mut self.0,
+            "{}",
+            DisplayWith(
+                i,
+                code,
+                &regs,
+                pc,
+                state,
+                schedule,
+                listeners,
+                X_POST_EXEC_ITRACE_FNS[i.opcode() as usize]
+            )
+        )
+        .unwrap();
+    }
+}
+
+pub struct ICountTracer {
+    opcode: [u64; 256],
+}
+
+impl Default for ICountTracer {
+    fn default() -> Self {
+        Self {
+            opcode: [0u64; 256],
+        }
+    }
+}
+
+impl Tracer for ICountTracer {
+    fn pre_exec(
+        &mut self,
+        i: Bytecode,
+        _code: &[Bytecode],
+        _regs: &Regs,
+        _pc: u64,
+        _state: &RuntimeState,
+        _schedule: &Schedule,
+        _listeners: &BytecodeListeners,
+    ) {
+        self.opcode[i.opcode() as usize] += 1;
+    }
+
+    fn finish(
+        &mut self,
+        _code: &[Bytecode],
+        _regs: &Regs,
+        _pc: u64,
+        _state: &RuntimeState,
+        _schedule: &Schedule,
+        _listeners: &BytecodeListeners,
+    ) {
+        let mut ops = (0..256).collect::<Vec<usize>>();
+        ops.sort_by_key(|op| self.opcode[*op]);
+
+        let mut longest_name = 0usize;
+        let mut longest_count = 0usize;
+        for op in 0u8..=255 {
+            let count = self.opcode[op as usize];
+            let name = match BytecodeOpcode::try_from(op) {
+                Err(_) => "<unknown>",
+                Ok(opcode) => opcode.into_static_str(),
+            };
+            longest_name = longest_name.max(name.len());
+            longest_count = if count == 0 {
+                longest_count.max(1)
+            } else {
+                longest_count.max((count.ilog10() + 1) as usize)
+            };
+        }
+
+        for op in ops.into_iter().rev() {
+            let count = self.opcode[op];
+            if count == 0 {
+                break;
+            }
+            let name = match BytecodeOpcode::try_from(op as u8) {
+                Err(_) => "<unknown>",
+                Ok(opcode) => opcode.into_static_str(),
+            };
+            eprintln!("| {name:<0$} | {count:>1$} |", longest_name, longest_count);
+        }
+    }
+}
+
 impl Design {
     pub fn execute(
         &self,
@@ -880,14 +1104,12 @@ impl Design {
         stdout: &mut (dyn std::io::Write + Send + Sync),
         stderr: &mut (dyn std::io::Write + Send + Sync),
     ) -> Result<(), ()> {
-        if self.itrace {
-            self.execute_inner::<true>(state, stdout, stderr)
-        } else {
-            self.execute_inner::<false>(state, stdout, stderr)
-        }
+        self.execute_with_tracer(&mut (), state, stdout, stderr)
     }
-    fn execute_inner<const ITRACE: bool>(
+
+    pub fn execute_with_tracer(
         &self,
+        tracer: &mut impl Tracer,
         state: &mut State,
         stdout: &mut (dyn std::io::Write + Send + Sync),
         stderr: &mut (dyn std::io::Write + Send + Sync),
@@ -897,54 +1119,24 @@ impl Design {
             return Ok(());
         };
 
-        struct DisplayWith<'a>(
-            Bytecode,
-            &'a Regs,
-            u64,
-            &'a RuntimeState,
-            &'a Schedule,
-            &'a BytecodeListeners,
-            fn(
-                Bytecode,
-                &Regs,
-                u64,
-                &RuntimeState,
-                &Schedule,
-                &BytecodeListeners,
-                &mut fmt::Formatter<'_>,
-            ) -> fmt::Result,
-        );
-        impl<'a> fmt::Display for DisplayWith<'a> {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                (self.6)(self.0, self.1, self.2, self.3, self.4, self.5, f)
-            }
-        }
-
         let mut pc = entry.0;
         let mut cldctx = ColdContext::new(&self.intrinsics, stdout, stderr);
         let mut regs = Regs::new(self.stack_offset);
         while let Some(&c) = code.get(pc as usize) {
             let opcode = c.opcode();
-            if ITRACE {
-                writeln!(&mut cldctx.stderr, "[PC={pc:4}]: {c}").unwrap();
-                write!(
-                    &mut cldctx.stderr,
-                    "{}",
-                    DisplayWith(
-                        c,
-                        &regs,
-                        pc,
-                        &state.runtime,
-                        &state.schedule,
-                        &state.listeners,
-                        X_PRE_EXEC_ITRACE_FNS[opcode as usize]
-                    )
-                )
-                .unwrap();
-            }
+            tracer.pre_exec(
+                c,
+                code,
+                &regs,
+                pc,
+                &state.runtime,
+                &state.schedule,
+                &state.listeners,
+            );
             let f = X_INSTRUCTION_FNS[opcode as usize];
             pc = (f)(
                 c,
+                code,
                 &mut regs,
                 pc,
                 &mut state.runtime,
@@ -952,23 +1144,25 @@ impl Design {
                 &mut state.listeners,
                 &mut cldctx,
             );
-            if ITRACE {
-                write!(
-                    &mut cldctx.stderr,
-                    "{}",
-                    DisplayWith(
-                        c,
-                        &regs,
-                        pc,
-                        &state.runtime,
-                        &state.schedule,
-                        &state.listeners,
-                        X_POST_EXEC_ITRACE_FNS[opcode as usize]
-                    )
-                )
-                .unwrap();
-            }
+            tracer.post_exec(
+                c,
+                code,
+                &regs,
+                pc,
+                &state.runtime,
+                &state.schedule,
+                &state.listeners,
+            );
         }
+
+        tracer.finish(
+            code,
+            &regs,
+            pc,
+            &state.runtime,
+            &state.schedule,
+            &state.listeners,
+        );
 
         if cldctx.return_value != 0 {
             return Err(());

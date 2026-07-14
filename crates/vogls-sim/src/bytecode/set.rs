@@ -15,6 +15,12 @@ use super::{
 pub struct SetArgs {
     rd: Reg,
     rs: Reg,
+    size: SixBitSize,
+    imm10: u16,
+}
+pub struct SetRelArgs {
+    rd: Reg,
+    rs: Reg,
     roff: Reg,
     size: SixBitSize,
     imm6: InlineAddrOffset<6>,
@@ -28,6 +34,37 @@ pub struct SetHeapArgs {
 }
 
 impl SetArgs {
+    #[inline(always)]
+    fn extract(c: Bytecode) -> Self {
+        let v = c.0;
+        Self {
+            rd: Reg::new_masked(v >> 8),
+            rs: Reg::new_masked(v >> 12),
+            size: SixBitSize::new_masked(v >> 16),
+            imm10: (v >> 22) as u16,
+        }
+    }
+    #[inline(always)]
+    fn encode(&self, opcode: BytecodeOpcode) -> Bytecode {
+        Bytecode(
+            opcode as u32
+                | ((self.rd as u32) << 8)
+                | ((self.rs as u32) << 12)
+                | (self.size.encode() << 16)
+                | ((self.imm10 as u32) << 22),
+        )
+    }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            rd,
+            rs,
+            imm10,
+            size,
+        } = self;
+        write!(f, "{rd}, {rs}, {imm10}, |{size}|")
+    }
+}
+impl SetRelArgs {
     #[inline(always)]
     fn extract(c: Bytecode) -> Self {
         let v = c.0;
@@ -98,7 +135,10 @@ impl SetHeapArgs {
 
 pub struct TvSetAligned(pub SetArgs);
 pub struct FvSetAligned(pub SetArgs);
-pub struct SetUnaligned(pub SetArgs);
+
+pub struct TvRelSetAligned(pub SetRelArgs);
+pub struct FvRelSetAligned(pub SetRelArgs);
+pub struct SetUnaligned(pub SetRelArgs);
 pub struct TvSetHeapAligned(pub SetHeapArgs);
 pub struct FvSetHeapAligned(pub SetHeapArgs);
 pub struct SetHeapUnaligned(pub SetHeapArgs);
@@ -109,6 +149,23 @@ macro_rules! impl_set_args {
         fn extract(v: Bytecode) -> Self {
             debug_assert_eq!(v.opcode(), BytecodeOpcode::$variant as u8);
             Self(SetArgs::extract(v))
+        }
+        fn encode(&self) -> Bytecode {
+            self.0.encode(BytecodeOpcode::$variant)
+        }
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write_padded_mnemonic(f, $mnemonic)?;
+            self.0.fmt(f)
+        }
+    };
+}
+
+macro_rules! impl_set_rel_args {
+    ($variant:ident, $mnemonic:literal) => {
+        #[inline(always)]
+        fn extract(v: Bytecode) -> Self {
+            debug_assert_eq!(v.opcode(), BytecodeOpcode::$variant as u8);
+            Self(SetRelArgs::extract(v))
         }
         fn encode(&self) -> Bytecode {
             self.0.encode(BytecodeOpcode::$variant)
@@ -137,12 +194,163 @@ macro_rules! impl_set_heap_args {
     };
 }
 
+#[inline(always)]
+fn tv_set_aligned(heap: &mut [u64], offset: u64, value: u64, size: SixBitSize) -> bool {
+    debug_assert!(HeapAlignment::new(size.into(), LogicMode::TwoValue).is_aligned(offset));
+    let mask = size.mask(u64::MAX);
+    let word = &mut heap[(offset / 64) as usize];
+    let boff = offset % 64;
+    let prev_value = mask & (*word >> boff);
+    *word &= !(mask << boff);
+    *word |= value << boff;
+    value != prev_value
+}
+#[inline(always)]
+fn fv_set_aligned(heap: &mut [u64], offset: u64, spc: u64, val: u64, size: SixBitSize) -> bool {
+    debug_assert!(HeapAlignment::new(size.into(), LogicMode::TwoValue).is_aligned(offset));
+
+    let spc_offset = offset;
+    let val_offset = HeapAlignment::spc_offset_to_val_offset(size.into(), spc_offset);
+
+    let mask = size.mask(u64::MAX);
+
+    let spc_boff = offset % 64;
+    let heap_spc_word = &mut heap[(spc_offset / 64) as usize];
+    let prev_spc = mask & (*heap_spc_word >> spc_boff);
+    *heap_spc_word &= !(mask << spc_boff);
+    *heap_spc_word |= spc << spc_boff;
+
+    let val_boff = val_offset % 64;
+    let heap_val_word = &mut heap[(val_offset / 64) as usize];
+    let prev_val = mask & (*heap_val_word >> val_boff);
+    *heap_val_word &= !(mask << val_boff);
+    *heap_val_word |= val << val_boff;
+
+    (prev_spc != spc) | (prev_val != val)
+}
+
 impl BytecodeInstruction for TvSetAligned {
     impl_set_args!(TvSetAligned, "tv.set_aligned");
 
     fn pre_exec_itrace(
         &self,
         f: &mut fmt::Formatter<'_>,
+        _code: &[Bytecode],
+        _pc: u64,
+        regs: &Regs,
+        _state: &RuntimeState,
+    ) -> fmt::Result {
+        f.write_str(EXEC_ITRACE_INDENT)?;
+        write_register(f, regs, "rs", self.0.rs, LogicMode::TwoValue)?;
+        writeln!(f)
+    }
+    fn post_exec_itrace(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        _code: &[Bytecode],
+        _pc: u64,
+        regs: &Regs,
+        _state: &RuntimeState,
+    ) -> fmt::Result {
+        f.write_str(EXEC_ITRACE_INDENT)?;
+        write_register(f, regs, "rd", self.0.rd, LogicMode::TwoValue)?;
+        writeln!(f)
+    }
+
+    #[inline(always)]
+    fn execute(
+        self,
+        code: &[Bytecode],
+        regs: &mut Regs,
+        pc: &mut u64,
+        state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let Self(SetArgs {
+            rd,
+            rs,
+            size,
+            imm10,
+        }) = self;
+
+        let code_offset = code[*pc as usize].0;
+        *pc += 1;
+        let offset = ((code_offset as u64) << 10) | (imm10 as u64);
+        let value = regs[rs];
+        let updated = tv_set_aligned(state.heap.0.as_mut(), offset, value, size);
+        regs[rd] = u64::from(updated);
+    }
+}
+
+impl BytecodeInstruction for FvSetAligned {
+    impl_set_args!(FvSetAligned, "fv.set_aligned");
+
+    fn pre_exec_itrace(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        _code: &[Bytecode],
+        _pc: u64,
+        regs: &Regs,
+        _state: &RuntimeState,
+    ) -> fmt::Result {
+        f.write_str(EXEC_ITRACE_INDENT)?;
+        write_register(f, regs, "rs", self.0.rs, LogicMode::FourValue)?;
+        writeln!(f)
+    }
+    fn post_exec_itrace(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        _code: &[Bytecode],
+        _pc: u64,
+        regs: &Regs,
+        _state: &RuntimeState,
+    ) -> fmt::Result {
+        f.write_str(EXEC_ITRACE_INDENT)?;
+        write_register(f, regs, "rd", self.0.rd, LogicMode::TwoValue)?;
+        writeln!(f)
+    }
+
+    #[inline(always)]
+    fn execute(
+        self,
+        code: &[Bytecode],
+        regs: &mut Regs,
+        pc: &mut u64,
+        state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let Self(SetArgs {
+            rd,
+            rs,
+            size,
+            imm10,
+        }) = self;
+
+        let code_offset = code[*pc as usize].0;
+        *pc += 1;
+        let offset = ((code_offset as u64) << 10) | (imm10 as u64);
+
+        let (spc, val) = rs.to_spc_and_val();
+        let spc = regs[spc];
+        let val = regs[val];
+
+        let updated = fv_set_aligned(state.heap.0.as_mut(), offset, spc, val, size);
+        regs[rd] = u64::from(updated);
+    }
+}
+
+impl BytecodeInstruction for TvRelSetAligned {
+    impl_set_rel_args!(TvRelSetAligned, "tv.rel_set_aligned");
+
+    fn pre_exec_itrace(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        _code: &[Bytecode],
+        _pc: u64,
         regs: &Regs,
         _state: &RuntimeState,
     ) -> fmt::Result {
@@ -155,6 +363,8 @@ impl BytecodeInstruction for TvSetAligned {
     fn post_exec_itrace(
         &self,
         f: &mut fmt::Formatter<'_>,
+        _code: &[Bytecode],
+        _pc: u64,
         regs: &Regs,
         _state: &RuntimeState,
     ) -> fmt::Result {
@@ -166,6 +376,7 @@ impl BytecodeInstruction for TvSetAligned {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         state: &mut RuntimeState,
@@ -173,7 +384,7 @@ impl BytecodeInstruction for TvSetAligned {
         _listeners: &mut BytecodeListeners,
         _cldctx: &mut ColdContext,
     ) {
-        let Self(SetArgs {
+        let Self(SetRelArgs {
             rd,
             rs,
             roff,
@@ -181,25 +392,20 @@ impl BytecodeInstruction for TvSetAligned {
             imm6,
         }) = self;
         let offset = imm6.get(regs[roff]);
-        debug_assert!(HeapAlignment::new(size.into(), LogicMode::TwoValue).is_aligned(offset));
         let value = regs[rs];
-        let mask = size.mask(u64::MAX);
-        let word = &mut state.heap.0[(offset / 64) as usize];
-        let boff = offset % 64;
-        let prev_value = mask & (*word >> boff);
-        *word &= !(mask << boff);
-        *word |= value << boff;
-        let updated = value != prev_value;
+        let updated = tv_set_aligned(state.heap.0.as_mut(), offset, value, size);
         regs[rd] = u64::from(updated);
     }
 }
 
-impl BytecodeInstruction for FvSetAligned {
-    impl_set_args!(FvSetAligned, "fv.set_aligned");
+impl BytecodeInstruction for FvRelSetAligned {
+    impl_set_rel_args!(FvRelSetAligned, "fv.rel_set_aligned");
 
     fn pre_exec_itrace(
         &self,
         f: &mut fmt::Formatter<'_>,
+        _code: &[Bytecode],
+        _pc: u64,
         regs: &Regs,
         _state: &RuntimeState,
     ) -> fmt::Result {
@@ -212,6 +418,8 @@ impl BytecodeInstruction for FvSetAligned {
     fn post_exec_itrace(
         &self,
         f: &mut fmt::Formatter<'_>,
+        _code: &[Bytecode],
+        _pc: u64,
         regs: &Regs,
         _state: &RuntimeState,
     ) -> fmt::Result {
@@ -223,6 +431,7 @@ impl BytecodeInstruction for FvSetAligned {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         state: &mut RuntimeState,
@@ -230,46 +439,31 @@ impl BytecodeInstruction for FvSetAligned {
         _listeners: &mut BytecodeListeners,
         _cldctx: &mut ColdContext,
     ) {
-        let Self(SetArgs {
+        let Self(SetRelArgs {
             rd,
             rs,
             roff,
             size,
             imm6,
         }) = self;
-        let spc_offset = imm6.get(regs[roff]);
-        debug_assert!(HeapAlignment::new(size.into(), LogicMode::FourValue).is_aligned(spc_offset));
-        let val_offset = HeapAlignment::spc_offset_to_val_offset(size.into(), spc_offset);
+        let offset = imm6.get(regs[roff]);
 
         let (spc, val) = rs.to_spc_and_val();
         let spc = regs[spc];
         let val = regs[val];
 
-        let mask = size.mask(u64::MAX);
-
-        let spc_boff = spc_offset % 64;
-        let heap_spc_word = &mut state.heap.0[(spc_offset / 64) as usize];
-        let prev_spc = mask & (*heap_spc_word >> spc_boff);
-        *heap_spc_word &= !(mask << spc_boff);
-        *heap_spc_word |= spc << spc_boff;
-
-        let val_boff = val_offset % 64;
-        let heap_val_word = &mut state.heap.0[(val_offset / 64) as usize];
-        let prev_val = mask & (*heap_val_word >> val_boff);
-        *heap_val_word &= !(mask << val_boff);
-        *heap_val_word |= val << val_boff;
-
-        let updated = (prev_spc != spc) | (prev_val != val);
+        let updated = fv_set_aligned(state.heap.0.as_mut(), offset, spc, val, size);
         regs[rd] = u64::from(updated);
     }
 }
 
 impl BytecodeInstruction for SetUnaligned {
-    impl_set_args!(SetUnaligned, "set_unaligned");
+    impl_set_rel_args!(SetUnaligned, "set_unaligned");
 
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         state: &mut RuntimeState,
@@ -277,7 +471,7 @@ impl BytecodeInstruction for SetUnaligned {
         _listeners: &mut BytecodeListeners,
         _cldctx: &mut ColdContext,
     ) {
-        let Self(SetArgs {
+        let Self(SetRelArgs {
             rd,
             rs,
             roff,
@@ -321,6 +515,7 @@ impl BytecodeInstruction for SetHeapUnaligned {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         state: &mut RuntimeState,
@@ -375,6 +570,7 @@ impl BytecodeInstruction for TvSetHeapAligned {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         state: &mut RuntimeState,
@@ -427,6 +623,7 @@ impl BytecodeInstruction for FvSetHeapAligned {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         state: &mut RuntimeState,
@@ -474,7 +671,48 @@ impl BytecodeInstruction for FvSetHeapAligned {
 }
 
 impl BytecodeEncoder {
-    pub fn tv_set_aligned(
+    pub fn tv_set_aligned(&mut self, rd: Reg, rs: Reg, at: u64, size: SixBitSize) {
+        if at < (1u64 << (10 + 32)) {
+            let imm10 = (at & 0x3FF) as u16;
+            let imm42_11 = (at >> 10) as u32;
+            self.data.push(
+                TvSetAligned(SetArgs {
+                    rd,
+                    rs,
+                    size,
+                    imm10,
+                })
+                .encode(),
+            );
+            self.data.push(Bytecode(imm42_11));
+            return;
+        }
+
+        self.load_u64(rd, at);
+        self.tv_rel_set_aligned(rd, rs, rd, InlineAddrOffset::ZERO, size);
+    }
+    pub fn fv_set_aligned(&mut self, rd: Reg, rs: Reg, at: u64, size: SixBitSize) {
+        if at < (1u64 << (10 + 32)) {
+            let imm10 = (at & 0x3FF) as u16;
+            let imm42_11 = (at >> 10) as u32;
+            self.data.push(
+                FvSetAligned(SetArgs {
+                    rd,
+                    rs,
+                    size,
+                    imm10,
+                })
+                .encode(),
+            );
+            self.data.push(Bytecode(imm42_11));
+            return;
+        }
+
+        self.load_u64(rd, at);
+        self.fv_rel_set_aligned(rd, rs, rd, InlineAddrOffset::ZERO, size);
+    }
+
+    pub fn tv_rel_set_aligned(
         &mut self,
         rd: Reg,
         rs: Reg,
@@ -483,7 +721,7 @@ impl BytecodeEncoder {
         size: SixBitSize,
     ) {
         self.data.push(
-            TvSetAligned(SetArgs {
+            TvRelSetAligned(SetRelArgs {
                 rd,
                 rs,
                 roff,
@@ -493,7 +731,7 @@ impl BytecodeEncoder {
             .encode(),
         )
     }
-    pub fn fv_set_aligned(
+    pub fn fv_rel_set_aligned(
         &mut self,
         rd: Reg,
         rs: Reg,
@@ -502,7 +740,7 @@ impl BytecodeEncoder {
         size: SixBitSize,
     ) {
         self.data.push(
-            FvSetAligned(SetArgs {
+            FvRelSetAligned(SetRelArgs {
                 rd,
                 rs,
                 roff,
@@ -521,7 +759,7 @@ impl BytecodeEncoder {
         size: SixBitSize,
     ) {
         self.data.push(
-            SetUnaligned(SetArgs {
+            SetUnaligned(SetRelArgs {
                 rd,
                 rs,
                 roff,

@@ -51,6 +51,8 @@ impl BytecodeInstruction for Wake {
     fn pre_exec_itrace(
         &self,
         f: &mut fmt::Formatter<'_>,
+        _code: &[Bytecode],
+        _pc: u64,
         regs: &Regs,
         _state: &RuntimeState,
     ) -> fmt::Result {
@@ -72,6 +74,7 @@ impl BytecodeInstruction for Wake {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -135,6 +138,8 @@ impl BytecodeInstruction for Reschedule {
     fn pre_exec_itrace(
         &self,
         f: &mut fmt::Formatter<'_>,
+        _code: &[Bytecode],
+        _pc: u64,
         regs: &Regs,
         _state: &RuntimeState,
     ) -> fmt::Result {
@@ -150,6 +155,7 @@ impl BytecodeInstruction for Reschedule {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         pc: &mut u64,
         state: &mut RuntimeState,
@@ -209,6 +215,7 @@ impl BytecodeInstruction for StartListen {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         _regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -248,6 +255,8 @@ impl BytecodeInstruction for LastUpdateTime {
     fn post_exec_itrace(
         &self,
         f: &mut fmt::Formatter<'_>,
+        _code: &[Bytecode],
+        _pc: u64,
         regs: &Regs,
         _state: &RuntimeState,
     ) -> fmt::Result {
@@ -259,6 +268,7 @@ impl BytecodeInstruction for LastUpdateTime {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         state: &mut RuntimeState,
@@ -298,6 +308,8 @@ impl BytecodeInstruction for SetLupdt {
     fn pre_exec_itrace(
         &self,
         f: &mut fmt::Formatter<'_>,
+        _code: &[Bytecode],
+        _pc: u64,
         regs: &Regs,
         _state: &RuntimeState,
     ) -> fmt::Result {
@@ -309,6 +321,7 @@ impl BytecodeInstruction for SetLupdt {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         state: &mut RuntimeState,
@@ -351,6 +364,8 @@ impl BytecodeInstruction for TvCorrectFirst {
     fn pre_exec_itrace(
         &self,
         f: &mut fmt::Formatter<'_>,
+        _code: &[Bytecode],
+        _pc: u64,
         regs: &Regs,
         _state: &RuntimeState,
     ) -> fmt::Result {
@@ -361,6 +376,8 @@ impl BytecodeInstruction for TvCorrectFirst {
     fn post_exec_itrace(
         &self,
         f: &mut fmt::Formatter<'_>,
+        _code: &[Bytecode],
+        _pc: u64,
         regs: &Regs,
         _state: &RuntimeState,
     ) -> fmt::Result {
@@ -372,6 +389,7 @@ impl BytecodeInstruction for TvCorrectFirst {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         state: &mut RuntimeState,

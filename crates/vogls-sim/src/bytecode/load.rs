@@ -13,14 +13,38 @@ use super::{
     EXEC_ITRACE_INDENT, InlineAddrOffset, InlineNBitSize, Schedule, SixBitSize,
 };
 
-pub struct LoadArgs {
+pub struct TvLoadRelAligned(pub LoadRelArgs);
+pub struct FvLoadAligned(pub LoadRelArgs);
+pub struct LoadHeapAligned {
+    pub rd: Reg,
+    pub rs: Reg,
+    pub num_words: u16,
+}
+pub struct LoadHeapUnaligned {
+    pub rd: Reg,
+    pub rs: Reg,
+    pub imm8: InlineAddrOffset<8>,
+    pub size: InlineNBitSize<8>,
+}
+
+pub struct TvLoadAligned(pub LoadArgs);
+
+pub struct LoadUnaligned(pub LoadArgs);
+pub struct LoadRelUnaligned(pub LoadRelArgs);
+
+pub struct LoadRelArgs {
     rd: Reg,
     rs: Reg,
     size: SixBitSize,
     imm10: InlineAddrOffset<10>,
 }
+pub struct LoadArgs {
+    rd: Reg,
+    size: SixBitSize,
+    imm14: u16,
+}
 
-impl LoadArgs {
+impl LoadRelArgs {
     #[inline(always)]
     fn extract(c: Bytecode) -> Self {
         let v = c.0;
@@ -53,21 +77,47 @@ impl LoadArgs {
     }
 }
 
-pub struct TvLoadAligned(pub LoadArgs);
-pub struct FvLoadAligned(pub LoadArgs);
-pub struct LoadUnaligned(pub LoadArgs);
-pub struct LoadHeapAligned {
-    pub rd: Reg,
-    pub rs: Reg,
-    pub num_words: u16,
-}
-pub struct LoadHeapUnaligned {
-    pub rd: Reg,
-    pub rs: Reg,
-    pub imm8: InlineAddrOffset<8>,
-    pub size: InlineNBitSize<8>,
+impl LoadArgs {
+    #[inline(always)]
+    fn extract(c: Bytecode) -> Self {
+        let v = c.0;
+        Self {
+            rd: Reg::new_masked(v >> 8),
+            size: SixBitSize::new_masked(v >> 12),
+            imm14: (v >> 18) as u16,
+        }
+    }
+    #[inline(always)]
+    fn encode(&self, opcode: BytecodeOpcode) -> Bytecode {
+        Bytecode(
+            opcode as u32
+                | ((self.rd as u32) << 8)
+                | (self.size.encode() << 12)
+                | ((self.imm14 as u32) << 18),
+        )
+    }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self { rd, size, imm14 } = self;
+        write!(f, "{rd}, {imm14}, |{size}|")
+    }
 }
 
+macro_rules! impl_load_rel_args {
+    ($variant:ident, $mnemonic:literal) => {
+        #[inline(always)]
+        fn extract(v: Bytecode) -> Self {
+            debug_assert_eq!(v.opcode(), BytecodeOpcode::$variant as u8);
+            Self(LoadRelArgs::extract(v))
+        }
+        fn encode(&self) -> Bytecode {
+            self.0.encode(BytecodeOpcode::$variant)
+        }
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write_padded_mnemonic(f, $mnemonic)?;
+            self.0.fmt(f)
+        }
+    };
+}
 macro_rules! impl_load_args {
     ($variant:ident, $mnemonic:literal) => {
         #[inline(always)]
@@ -85,16 +135,18 @@ macro_rules! impl_load_args {
     };
 }
 
-impl BytecodeInstruction for TvLoadAligned {
-    impl_load_args!(TvLoadAligned, "tv.load_aligned");
+impl BytecodeInstruction for TvLoadRelAligned {
+    impl_load_rel_args!(TvLoadRelAligned, "tv.load_rel_aligned");
 
     fn pre_exec_itrace(
         &self,
         f: &mut fmt::Formatter<'_>,
+        _code: &[Bytecode],
+        _pc: u64,
         regs: &Regs,
         _state: &RuntimeState,
     ) -> fmt::Result {
-        let Self(LoadArgs {
+        let Self(LoadRelArgs {
             rd: _,
             rs,
             size: _,
@@ -107,10 +159,12 @@ impl BytecodeInstruction for TvLoadAligned {
     fn post_exec_itrace(
         &self,
         f: &mut fmt::Formatter<'_>,
+        _code: &[Bytecode],
+        _pc: u64,
         regs: &Regs,
         _state: &RuntimeState,
     ) -> fmt::Result {
-        let Self(LoadArgs {
+        let Self(LoadRelArgs {
             rd,
             rs: _,
             size: _,
@@ -124,6 +178,7 @@ impl BytecodeInstruction for TvLoadAligned {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         state: &mut RuntimeState,
@@ -131,7 +186,7 @@ impl BytecodeInstruction for TvLoadAligned {
         _listeners: &mut BytecodeListeners,
         _cldctx: &mut ColdContext,
     ) {
-        let Self(LoadArgs {
+        let Self(LoadRelArgs {
             rd,
             rs,
             imm10,
@@ -149,16 +204,81 @@ impl BytecodeInstruction for TvLoadAligned {
     }
 }
 
-impl BytecodeInstruction for FvLoadAligned {
-    impl_load_args!(FvLoadAligned, "fv.load_aligned");
+impl BytecodeInstruction for TvLoadAligned {
+    impl_load_args!(TvLoadAligned, "tv.load_aligned");
 
     fn pre_exec_itrace(
         &self,
         f: &mut fmt::Formatter<'_>,
+        _code: &[Bytecode],
+        _pc: u64,
+        _regs: &Regs,
+        _state: &RuntimeState,
+    ) -> fmt::Result {
+        let Self(LoadArgs {
+            rd: _,
+            size: _,
+            imm14: _,
+        }) = self;
+        f.write_str(EXEC_ITRACE_INDENT)?;
+        writeln!(f)
+    }
+    fn post_exec_itrace(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        _code: &[Bytecode],
+        _pc: u64,
         regs: &Regs,
         _state: &RuntimeState,
     ) -> fmt::Result {
         let Self(LoadArgs {
+            rd,
+            size: _,
+            imm14: _,
+        }) = self;
+        f.write_str(EXEC_ITRACE_INDENT)?;
+        write_register(f, regs, "rd", *rd, LogicMode::TwoValue)?;
+        writeln!(f)
+    }
+
+    #[inline(always)]
+    fn execute(
+        self,
+        code: &[Bytecode],
+        regs: &mut Regs,
+        pc: &mut u64,
+        state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let Self(LoadArgs { rd, size, imm14 }) = self;
+
+        let code_offset = code[*pc as usize].0;
+        *pc += 1;
+        let offset = ((code_offset as u64) << 14) | (imm14 as u64);
+        debug_assert!(HeapAlignment::new(size.into(), LogicMode::TwoValue).is_aligned(offset));
+
+        let word = offset / 64;
+        let boff = offset % 64;
+
+        let heap = &state.heap.0;
+        regs[rd] = size.mask(heap[word as usize] >> boff);
+    }
+}
+
+impl BytecodeInstruction for FvLoadAligned {
+    impl_load_rel_args!(FvLoadAligned, "fv.load_aligned");
+
+    fn pre_exec_itrace(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        _code: &[Bytecode],
+        _pc: u64,
+        regs: &Regs,
+        _state: &RuntimeState,
+    ) -> fmt::Result {
+        let Self(LoadRelArgs {
             rd: _,
             rs,
             size: _,
@@ -171,10 +291,12 @@ impl BytecodeInstruction for FvLoadAligned {
     fn post_exec_itrace(
         &self,
         f: &mut fmt::Formatter<'_>,
+        _code: &[Bytecode],
+        _pc: u64,
         regs: &Regs,
         _state: &RuntimeState,
     ) -> fmt::Result {
-        let Self(LoadArgs {
+        let Self(LoadRelArgs {
             rd,
             rs: _,
             size: _,
@@ -188,6 +310,7 @@ impl BytecodeInstruction for FvLoadAligned {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         state: &mut RuntimeState,
@@ -195,7 +318,7 @@ impl BytecodeInstruction for FvLoadAligned {
         _listeners: &mut BytecodeListeners,
         _cldctx: &mut ColdContext,
     ) {
-        let Self(LoadArgs {
+        let Self(LoadRelArgs {
             rd,
             rs,
             imm10,
@@ -220,16 +343,19 @@ impl BytecodeInstruction for FvLoadAligned {
         regs[val] = mask & (heap[val_word as usize] >> val_boff);
     }
 }
-impl BytecodeInstruction for LoadUnaligned {
-    impl_load_args!(LoadUnaligned, "load_unaligned");
+
+impl BytecodeInstruction for LoadRelUnaligned {
+    impl_load_rel_args!(LoadRelUnaligned, "load_rel_unaligned");
 
     fn pre_exec_itrace(
         &self,
         f: &mut fmt::Formatter<'_>,
+        _code: &[Bytecode],
+        _pc: u64,
         regs: &Regs,
         _state: &RuntimeState,
     ) -> fmt::Result {
-        let Self(LoadArgs {
+        let Self(LoadRelArgs {
             rd: _,
             rs,
             size: _,
@@ -242,10 +368,12 @@ impl BytecodeInstruction for LoadUnaligned {
     fn post_exec_itrace(
         &self,
         f: &mut fmt::Formatter<'_>,
+        _code: &[Bytecode],
+        _pc: u64,
         regs: &Regs,
         _state: &RuntimeState,
     ) -> fmt::Result {
-        let Self(LoadArgs {
+        let Self(LoadRelArgs {
             rd,
             rs: _,
             size: _,
@@ -259,6 +387,7 @@ impl BytecodeInstruction for LoadUnaligned {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         state: &mut RuntimeState,
@@ -266,7 +395,7 @@ impl BytecodeInstruction for LoadUnaligned {
         _listeners: &mut BytecodeListeners,
         _cldctx: &mut ColdContext,
     ) {
-        let Self(LoadArgs {
+        let Self(LoadRelArgs {
             rd,
             rs,
             imm10,
@@ -274,6 +403,63 @@ impl BytecodeInstruction for LoadUnaligned {
         }) = self;
 
         let offset = imm10.get(regs[rs]);
+        let end_offset = offset + size as u64 - 1;
+
+        let word = (offset / 64) as usize;
+        let boff = offset % 64;
+        let endword = (end_offset / 64) as usize;
+
+        let heap = &state.heap.0;
+        if word == endword {
+            regs[rd] = size.mask(heap[word] >> boff);
+            return;
+        }
+
+        assert!(heap.len() > 0 && word < heap.len() - 1);
+        let w1 = heap[word as usize];
+        let w2 = heap[word + 1];
+        let w = (w1 >> boff) | (w2 << (64 - boff));
+        regs[rd] = size.mask(w);
+    }
+}
+
+impl BytecodeInstruction for LoadUnaligned {
+    impl_load_args!(LoadUnaligned, "load_unaligned");
+
+    fn post_exec_itrace(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        _code: &[Bytecode],
+        _pc: u64,
+        regs: &Regs,
+        _state: &RuntimeState,
+    ) -> fmt::Result {
+        let Self(LoadArgs {
+            rd,
+            imm14: _,
+            size: _,
+        }) = self;
+        f.write_str(EXEC_ITRACE_INDENT)?;
+        write_register(f, regs, "rd", *rd, LogicMode::TwoValue)?;
+        writeln!(f)
+    }
+
+    #[inline(always)]
+    fn execute(
+        self,
+        code: &[Bytecode],
+        regs: &mut Regs,
+        pc: &mut u64,
+        state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let Self(LoadArgs { rd, imm14, size }) = self;
+
+        let code_offset = code[*pc as usize].0;
+        *pc += 1;
+        let offset = ((code_offset as u64) << 14) | (imm14 as u64);
         let end_offset = offset + size as u64 - 1;
 
         let word = (offset / 64) as usize;
@@ -323,6 +509,7 @@ impl BytecodeInstruction for LoadHeapAligned {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         state: &mut RuntimeState,
@@ -395,6 +582,7 @@ impl BytecodeInstruction for LoadHeapUnaligned {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         state: &mut RuntimeState,
@@ -441,7 +629,20 @@ impl BytecodeInstruction for LoadHeapUnaligned {
 }
 
 impl BytecodeEncoder {
-    pub fn tv_load_aligned(
+    pub fn tv_load_aligned(&mut self, rd: Reg, at: u64, size: SixBitSize) {
+        if at < (1u64 << (14 + 32)) {
+            let imm14 = (at & 0x3FFF) as u16;
+            let imm46_15 = (at >> 14) as u32;
+            self.data
+                .push(TvLoadAligned(LoadArgs { rd, size, imm14 }).encode());
+            self.data.push(Bytecode(imm46_15));
+            return;
+        }
+
+        self.load_u64(rd, at);
+        self.tv_load_rel_aligned(rd, rd, InlineAddrOffset::ZERO, size);
+    }
+    pub fn tv_load_rel_aligned(
         &mut self,
         rd: Reg,
         rs: Reg,
@@ -449,7 +650,7 @@ impl BytecodeEncoder {
         size: SixBitSize,
     ) {
         self.data.push(
-            TvLoadAligned(LoadArgs {
+            TvLoadRelAligned(LoadRelArgs {
                 rd,
                 rs,
                 size,
@@ -466,7 +667,7 @@ impl BytecodeEncoder {
         size: SixBitSize,
     ) {
         self.data.push(
-            FvLoadAligned(LoadArgs {
+            FvLoadAligned(LoadRelArgs {
                 rd,
                 rs,
                 size,
@@ -489,7 +690,21 @@ impl BytecodeEncoder {
         self.data
             .push(LoadHeapUnaligned { rd, rs, imm8, size }.encode())
     }
-    pub fn load_unaligned(
+
+    pub fn load_unaligned(&mut self, rd: Reg, at: u64, size: SixBitSize) {
+        if at < (1u64 << (14 + 32)) {
+            let imm14 = (at & 0x3FFF) as u16;
+            let imm46_15 = (at >> 14) as u32;
+            self.data
+                .push(LoadUnaligned(LoadArgs { rd, size, imm14 }).encode());
+            self.data.push(Bytecode(imm46_15));
+            return;
+        }
+
+        self.load_u64(rd, at);
+        self.load_rel_unaligned(rd, rd, InlineAddrOffset::ZERO, size);
+    }
+    pub fn load_rel_unaligned(
         &mut self,
         rd: Reg,
         rs: Reg,
@@ -497,7 +712,7 @@ impl BytecodeEncoder {
         size: SixBitSize,
     ) {
         self.data.push(
-            LoadUnaligned(LoadArgs {
+            LoadRelUnaligned(LoadRelArgs {
                 rd,
                 rs,
                 size,

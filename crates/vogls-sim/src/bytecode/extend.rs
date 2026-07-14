@@ -122,6 +122,7 @@ impl BytecodeInstruction for HeapHeapExtend {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         state: &mut RuntimeState,
@@ -206,6 +207,7 @@ impl BytecodeInstruction for HeapHeapTruncate {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         state: &mut RuntimeState,
@@ -290,6 +292,7 @@ impl BytecodeInstruction for HeapRegExtend {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         state: &mut RuntimeState,
@@ -368,6 +371,8 @@ impl BytecodeInstruction for SignExtend {
     fn post_exec_itrace(
         &self,
         f: &mut fmt::Formatter<'_>,
+        _code: &[Bytecode],
+        _pc: u64,
         regs: &Regs,
         _state: &RuntimeState,
     ) -> fmt::Result {
@@ -378,6 +383,8 @@ impl BytecodeInstruction for SignExtend {
     fn pre_exec_itrace(
         &self,
         f: &mut fmt::Formatter<'_>,
+        _code: &[Bytecode],
+        _pc: u64,
         regs: &Regs,
         _state: &RuntimeState,
     ) -> fmt::Result {
@@ -389,6 +396,7 @@ impl BytecodeInstruction for SignExtend {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,

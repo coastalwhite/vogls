@@ -42,6 +42,7 @@ impl BytecodeInstruction for Jump {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         _regs: &mut Regs,
         pc: &mut u64,
         _state: &mut RuntimeState,
@@ -80,6 +81,7 @@ impl BytecodeInstruction for RelJump {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         pc: &mut u64,
         _state: &mut RuntimeState,
@@ -126,6 +128,7 @@ impl BytecodeInstruction for Branch {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         pc: &mut u64,
         _state: &mut RuntimeState,

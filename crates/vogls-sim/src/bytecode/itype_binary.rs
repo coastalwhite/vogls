@@ -107,6 +107,8 @@ macro_rules! impl_bitwise {
         fn pre_exec_itrace(
             &self,
             f: &mut fmt::Formatter<'_>,
+            _code: &[Bytecode],
+            _pc: u64,
             regs: &Regs,
             _state: &RuntimeState,
         ) -> fmt::Result {
@@ -118,6 +120,8 @@ macro_rules! impl_bitwise {
         fn post_exec_itrace(
             &self,
             f: &mut fmt::Formatter<'_>,
+            _code: &[Bytecode],
+            _pc: u64,
             regs: &Regs,
             _state: &RuntimeState,
         ) -> fmt::Result {
@@ -135,6 +139,7 @@ impl BytecodeInstruction for TvAndi {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -157,6 +162,7 @@ impl BytecodeInstruction for TvOri {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -179,6 +185,7 @@ impl BytecodeInstruction for TvXori {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -201,6 +208,7 @@ impl BytecodeInstruction for TvAddi {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -223,6 +231,7 @@ impl BytecodeInstruction for TvSubi {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -245,6 +254,7 @@ impl BytecodeInstruction for TvRevSubi {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -267,6 +277,7 @@ impl BytecodeInstruction for TvMuli {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -289,6 +300,7 @@ impl BytecodeInstruction for TvMini {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -311,6 +323,7 @@ impl BytecodeInstruction for TvMaxi {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -333,6 +346,7 @@ impl BytecodeInstruction for TvUleqi {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -356,6 +370,7 @@ impl BytecodeInstruction for TvUgti {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -379,6 +394,7 @@ impl BytecodeInstruction for TvUgeqi {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -402,6 +418,7 @@ impl BytecodeInstruction for TvUlti {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -425,6 +442,7 @@ impl BytecodeInstruction for TvCeqi {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -447,6 +465,7 @@ impl BytecodeInstruction for TvCnei {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -469,6 +488,7 @@ impl BytecodeInstruction for TvSlli {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -491,6 +511,7 @@ impl BytecodeInstruction for TvSlri {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -513,6 +534,7 @@ impl BytecodeInstruction for TvSari {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -539,6 +561,7 @@ impl BytecodeInstruction for FvAndi {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -565,6 +588,7 @@ impl BytecodeInstruction for FvOri {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -591,6 +615,7 @@ impl BytecodeInstruction for FvXori {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -617,6 +642,7 @@ impl BytecodeInstruction for FvAddi {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -649,6 +675,7 @@ impl BytecodeInstruction for FvSubi {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -681,6 +708,7 @@ impl BytecodeInstruction for FvMuli {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -713,6 +741,7 @@ impl BytecodeInstruction for FvRevSubi {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -745,6 +774,7 @@ impl BytecodeInstruction for FvMini {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -777,6 +807,7 @@ impl BytecodeInstruction for FvMaxi {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -809,6 +840,7 @@ impl BytecodeInstruction for FvUleqi {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -841,6 +873,7 @@ impl BytecodeInstruction for FvUgti {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -873,6 +906,7 @@ impl BytecodeInstruction for FvUgeqi {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -905,6 +939,7 @@ impl BytecodeInstruction for FvUlti {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -937,6 +972,7 @@ impl BytecodeInstruction for FvCeqi {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -961,6 +997,7 @@ impl BytecodeInstruction for FvCnei {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -985,6 +1022,7 @@ impl BytecodeInstruction for FvBitwiseCeqi {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -1009,6 +1047,7 @@ impl BytecodeInstruction for FvSlli {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -1034,6 +1073,7 @@ impl BytecodeInstruction for FvSlri {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -1059,6 +1099,7 @@ impl BytecodeInstruction for FvSari {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,

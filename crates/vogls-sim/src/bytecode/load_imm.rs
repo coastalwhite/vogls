@@ -16,7 +16,7 @@ pub struct LoadImm {
     clear: bool,
     sign_extend: bool,
     segment: u8,
-    imm: i16,
+    pub(crate) imm: i16,
 }
 
 impl BytecodeInstruction for LoadImm {
@@ -47,6 +47,8 @@ impl BytecodeInstruction for LoadImm {
     fn post_exec_itrace(
         &self,
         f: &mut fmt::Formatter<'_>,
+        _code: &[Bytecode],
+        _pc: u64,
         regs: &Regs,
         _state: &RuntimeState,
     ) -> fmt::Result {
@@ -74,6 +76,7 @@ impl BytecodeInstruction for LoadImm {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,

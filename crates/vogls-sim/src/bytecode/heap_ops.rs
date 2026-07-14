@@ -167,6 +167,8 @@ impl BytecodeInstruction for HeapBinaryBitwise {
     fn pre_exec_itrace(
         &self,
         f: &mut fmt::Formatter<'_>,
+        _code: &[Bytecode],
+        _pc: u64,
         regs: &Regs,
         state: &RuntimeState,
     ) -> fmt::Result {
@@ -193,6 +195,8 @@ impl BytecodeInstruction for HeapBinaryBitwise {
     fn post_exec_itrace(
         &self,
         f: &mut fmt::Formatter<'_>,
+        _code: &[Bytecode],
+        _pc: u64,
         regs: &Regs,
         state: &RuntimeState,
     ) -> fmt::Result {
@@ -211,6 +215,7 @@ impl BytecodeInstruction for HeapBinaryBitwise {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         state: &mut RuntimeState,
@@ -348,6 +353,7 @@ impl BytecodeInstruction for HeapBinaryArithmetic {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         state: &mut RuntimeState,
@@ -449,6 +455,7 @@ impl BytecodeInstruction for HeapBinaryDivMod {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         state: &mut RuntimeState,
@@ -548,6 +555,7 @@ impl BytecodeInstruction for HeapBinaryCmp {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         state: &mut RuntimeState,
@@ -637,6 +645,7 @@ impl BytecodeInstruction for HeapBinaryShift {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         state: &mut RuntimeState,
@@ -742,6 +751,7 @@ impl BytecodeInstruction for HeapBinaryMinMax {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         state: &mut RuntimeState,
@@ -831,6 +841,8 @@ impl BytecodeInstruction for HeapCaseEq {
     fn post_exec_itrace(
         &self,
         f: &mut fmt::Formatter<'_>,
+        _code: &[Bytecode],
+        _pc: u64,
         regs: &Regs,
         _state: &RuntimeState,
     ) -> fmt::Result {
@@ -842,6 +854,7 @@ impl BytecodeInstruction for HeapCaseEq {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         state: &mut RuntimeState,
@@ -919,6 +932,8 @@ impl BytecodeInstruction for HeapConcat {
     fn pre_exec_itrace(
         &self,
         f: &mut fmt::Formatter<'_>,
+        _code: &[Bytecode],
+        _pc: u64,
         regs: &Regs,
         state: &RuntimeState,
     ) -> fmt::Result {
@@ -960,6 +975,8 @@ impl BytecodeInstruction for HeapConcat {
     fn post_exec_itrace(
         &self,
         f: &mut fmt::Formatter<'_>,
+        _code: &[Bytecode],
+        _pc: u64,
         regs: &Regs,
         state: &RuntimeState,
     ) -> fmt::Result {
@@ -986,6 +1003,7 @@ impl BytecodeInstruction for HeapConcat {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         state: &mut RuntimeState,
@@ -1114,6 +1132,8 @@ impl BytecodeInstruction for HeapSlice {
     fn pre_exec_itrace(
         &self,
         f: &mut fmt::Formatter<'_>,
+        _code: &[Bytecode],
+        _pc: u64,
         regs: &Regs,
         state: &RuntimeState,
     ) -> fmt::Result {
@@ -1148,6 +1168,8 @@ impl BytecodeInstruction for HeapSlice {
     fn post_exec_itrace(
         &self,
         f: &mut fmt::Formatter<'_>,
+        _code: &[Bytecode],
+        _pc: u64,
         regs: &Regs,
         state: &RuntimeState,
     ) -> fmt::Result {
@@ -1170,6 +1192,7 @@ impl BytecodeInstruction for HeapSlice {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         state: &mut RuntimeState,
@@ -1293,6 +1316,8 @@ impl BytecodeInstruction for HeapFill {
     fn post_exec_itrace(
         &self,
         f: &mut fmt::Formatter<'_>,
+        _code: &[Bytecode],
+        _pc: u64,
         regs: &Regs,
         state: &RuntimeState,
     ) -> fmt::Result {
@@ -1312,6 +1337,7 @@ impl BytecodeInstruction for HeapFill {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         state: &mut RuntimeState,
@@ -1398,6 +1424,7 @@ impl BytecodeInstruction for HeapUnary {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         state: &mut RuntimeState,

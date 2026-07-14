@@ -100,9 +100,25 @@ impl Design {
                 .execute_inner_tailcall(state, &mut io.stdout, &mut io.stderr)
                 .map_err(|_| "execution failed.".into()),
             #[cfg(not(feature = "tailcall"))]
-            (DesignBackend::Bytecode { design }, DesignState::Bytecode(state)) => design
-                .execute(state, &mut io.stdout, &mut io.stderr)
-                .map_err(|_| "execution failed.".into()),
+            (DesignBackend::Bytecode { design }, DesignState::Bytecode(state)) => if design.itrace {
+                design.execute_with_tracer(
+                    &mut vogls_sim::bytecode::InstructionTracer::new_stderr(),
+                    state,
+                    &mut io.stdout,
+                    &mut io.stderr,
+                )
+            } else if design.stats {
+                design.execute_with_tracer(
+                    &mut vogls_sim::bytecode::ICountTracer::default(),
+                    state,
+                    &mut io.stdout,
+                    &mut io.stderr,
+                )
+            } else {
+                design.execute(state, &mut io.stdout, &mut io.stderr)
+            }
+            .map_err(|_| "execution failed.".into()),
+
             #[cfg(feature = "native")]
             (DesignBackend::Compiled { design }, DesignState::Compiled(initial_state)) => design
                 .run(initial_state, io, time)

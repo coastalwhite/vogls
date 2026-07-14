@@ -110,6 +110,7 @@ impl BytecodeInstruction for TvCountOnes {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -128,6 +129,7 @@ impl BytecodeInstruction for FvNot {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -147,6 +149,7 @@ impl BytecodeInstruction for FvReduceAnd {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -167,6 +170,7 @@ impl BytecodeInstruction for FvReduceOr {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -187,6 +191,7 @@ impl BytecodeInstruction for FvReduceXor {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,

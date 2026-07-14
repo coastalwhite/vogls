@@ -59,6 +59,8 @@ impl BytecodeInstruction for PushArgument {
     fn pre_exec_itrace(
         &self,
         f: &mut fmt::Formatter<'_>,
+        _code: &[Bytecode],
+        _pc: u64,
         regs: &Regs,
         state: &RuntimeState,
     ) -> fmt::Result {
@@ -79,6 +81,7 @@ impl BytecodeInstruction for PushArgument {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
@@ -125,6 +128,7 @@ impl BytecodeInstruction for Intrinsic {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         pc: &mut u64,
         state: &mut RuntimeState,

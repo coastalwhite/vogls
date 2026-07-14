@@ -188,6 +188,8 @@ macro_rules! impl_op {
             fn pre_exec_itrace(
                 &self,
                 f: &mut fmt::Formatter<'_>,
+                _code: &[Bytecode],
+                _pc: u64,
                 regs: &Regs,
                 _state: &RuntimeState,
             ) -> fmt::Result {
@@ -201,6 +203,8 @@ macro_rules! impl_op {
             fn post_exec_itrace(
                 &self,
                 f: &mut fmt::Formatter<'_>,
+                _code: &[Bytecode],
+                _pc: u64,
                 regs: &Regs,
                 _state: &RuntimeState,
             ) -> fmt::Result {
@@ -213,6 +217,7 @@ macro_rules! impl_op {
             #[inline(always)]
             fn execute(
                 self,
+                _code: &[Bytecode],
                 regs: &mut Regs,
                 _pc: &mut u64,
                 state: &mut RuntimeState,

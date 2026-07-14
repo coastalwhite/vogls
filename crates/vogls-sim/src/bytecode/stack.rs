@@ -53,6 +53,7 @@ impl BytecodeInstruction for StackOffset {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,

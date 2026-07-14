@@ -27,6 +27,7 @@ impl BytecodeInstruction for Interrupt {
     #[inline(always)]
     fn execute(
         self,
+        _code: &[Bytecode],
         _regs: &mut Regs,
         _pc: &mut u64,
         _state: &mut RuntimeState,
