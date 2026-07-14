@@ -146,7 +146,7 @@ impl BytecodeInstruction for RescheduleWait {
         state: &mut RuntimeState,
         schedule: &mut Schedule,
         _listeners: &mut BytecodeListeners,
-        _cldctx: &mut ColdContext,
+        cldctx: &mut ColdContext,
     ) {
         let Self { rtime, offset } = self;
 
@@ -157,7 +157,9 @@ impl BytecodeInstruction for RescheduleWait {
             return;
         }
 
-        let time = state.time + time;
+        let Some(time) = state.time.checked_add(time) else {
+            return time_overflow(cldctx);
+        };
         schedule.next_time = schedule.next_time.min(time);
         schedule.future.push(TimedEvent {
             time,
@@ -166,6 +168,12 @@ impl BytecodeInstruction for RescheduleWait {
 
         *pc = schedule.pop(&mut state.time).map_or(u64::MAX, |ptr| ptr.0);
     }
+}
+
+#[cold]
+fn time_overflow(cldctx: &mut ColdContext) {
+    cldctx.return_value = 1;
+    cldctx.stderr.write_all(b"Time overflow!").unwrap();
 }
 
 impl BytecodeInstruction for RescheduleRegion {

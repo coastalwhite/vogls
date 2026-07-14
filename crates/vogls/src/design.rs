@@ -102,6 +102,7 @@ impl Design {
                 .map_err(|_| "execution failed.".into()),
             #[cfg(not(feature = "tailcall"))]
             (DesignBackend::Bytecode { design }, DesignState::Bytecode(state)) => {
+                state.schedule.set_max_time(time);
                 if design.itrace {
                     design.execute_with_tracer(
                         &mut vogls_sim::bytecode::InstructionTracer::new_stderr(),

@@ -712,6 +712,7 @@ pub struct Schedule {
     regions: Box<[Vec<InstructionPtr>]>,
     future: Vec<TimedEvent>,
     next_time: u64,
+    max_time: u64,
 }
 
 impl Schedule {
@@ -721,6 +722,7 @@ impl Schedule {
             regions: vec![Vec::new(); num_regions as usize].into_boxed_slice(),
             future: Vec::new(),
             next_time: u64::MAX,
+            max_time: u64::MAX,
         }
     }
 
@@ -743,6 +745,18 @@ impl Schedule {
                 }
             }
 
+            // Stop if there are no more events.
+            if self.future.is_empty() {
+                break 'fill_active;
+            }
+
+            // Stop if we reach the maximum time.
+            if self.next_time > self.max_time {
+                *time = self.max_time;
+                break 'fill_active;
+            }
+
+            // Take all the events with the next minimum time and find the new minimum.
             *time = self.next_time;
             let mut next_time = u64::MAX;
             self.active.extend(
@@ -756,11 +770,14 @@ impl Schedule {
                     })
                     .map(|te| te.pc),
             );
-
             self.next_time = next_time;
         };
 
         self.active.pop()
+    }
+
+    pub fn set_max_time(&mut self, time: u64) {
+        self.max_time = time;
     }
 }
 
