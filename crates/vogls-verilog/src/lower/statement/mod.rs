@@ -1,7 +1,6 @@
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{
-    BasicBlockBuilder, ProcessBuilder, ProcessKind, SCALAR_VSIZE, SignalFlags, SignalKey,
-    VectorSize,
+    BasicBlockBuilder, LogicMode, ProcessBuilder, ProcessKind, SignalFlags, SignalKey, VectorSize, SCALAR_VSIZE
 };
 use vogls_utils::OrderedSet;
 
@@ -187,7 +186,7 @@ pub fn statements_to_process<'a>(
                     initialize: Some(vogls_ir::Bits::new_zeroed(num_processes)),
                     flags: SignalFlags::EMPTY,
                     origin,
-                    mode: mctx.gl.logic_mode,
+                    mode: LogicMode::TwoValue,
                 });
 
                 for (i, stmt) in statements.iter().enumerate() {

@@ -176,6 +176,7 @@ impl<'a> ParsedDesign<'a> {
         };
 
         let mut ctx = LowerContext {
+            logic_mode: mode,
             table: VSymbolTable::default(),
             table_ast_refs: SymbolAstRefs::default(),
             udps: VgHashMap::default(),
@@ -190,7 +191,6 @@ impl<'a> ParsedDesign<'a> {
             fuse_scratch: Vec::new(),
             has_vcd: false,
         };
-        mctx.gl.logic_mode = mode;
         let Ok(()) = vogls_verilog::elaborate::next::elaborate(
             &mut mctx.gl,
             &mut ctx,
@@ -223,6 +223,7 @@ impl<'a> ParsedDesign<'a> {
             token_buffer: self.token_buffer,
             arenas: self.arenas,
 
+            logic_mode: mode,
             module_lut,
             table,
             table_ast_refs,

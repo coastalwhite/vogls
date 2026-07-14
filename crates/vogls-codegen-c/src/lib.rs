@@ -762,7 +762,7 @@ pub fn lower_process(
                             writeln!(
                                 buffer,
                                 "{INDENT}cldctx->readmem(heap, cldctx->heap_len, {}, cldctx->readmems+{});",
-                                match gl.logic_mode {
+                                match gl.signals[readmem.signal].mode {
                                     LogicMode::TwoValue => 0,
                                     LogicMode::FourValue => 0,
                                 },
@@ -1194,7 +1194,7 @@ pub fn lower_signal_drive_fn(
         "void drive_signal_{idx}(schedule_t *schedule, uint64_t time, uint64_t *listening, uint64_t *last_active_time, cold_context_t *cldctx) {{",
     )?;
 
-    if matches!(gl.logic_mode, LogicMode::TwoValue) {
+    if gl.signals[signal].mode == LogicMode::TwoValue {
         writeln!(
             f,
             "{INDENT}cldctx->fst_poke[{}] |= ((uint64_t)1) << {};",

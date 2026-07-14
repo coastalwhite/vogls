@@ -1,4 +1,7 @@
-#![cfg_attr(feature = "tailcall", feature(rust_preserve_none_cc, explicit_tail_calls))]
+#![cfg_attr(
+    feature = "tailcall",
+    feature(rust_preserve_none_cc, explicit_tail_calls)
+)]
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -7,13 +10,13 @@ use slotmap::{SlotMap, new_key_type};
 use vogls_bits::arithmetic::{FvLogicValue, fv_set_no_special};
 use vogls_bits::set_subslice::{tv_l_set, tv_s_set};
 use vogls_codegen::{Heap, HeapOffset, HeapRef};
-use vogls_ir::{GlobalContext, INTEGER_VSIZE, LogicMode, Mode, TIME_VSIZE, VectorSize};
+use vogls_ir::{GlobalContext, INTEGER_VSIZE, LogicMode, TIME_VSIZE, VectorSize};
 use vogls_runtime::plugins::RuntimePluginState;
 use vogls_runtime::{RtSignalKey, SimulationIo};
 
+pub mod bytecode;
 mod execution;
 mod instruction;
-pub mod bytecode;
 mod plugin;
 
 pub use plugin::InstructionPlugin;
@@ -223,8 +226,8 @@ pub fn drive_bits(
 pub struct Simulation {
     pub processes: Vec<VmProcess>,
     pub signals: Arc<[HeapRef]>,
+    pub signal_modes: Arc<[LogicMode]>,
     pub lupdt_indexes: VgHashMap<RtSignalKey, u64>,
-    pub logic_mode: LogicMode,
     pub itrace: bool,
 }
 
@@ -232,14 +235,14 @@ impl Simulation {
     pub fn new(
         processes: Vec<VmProcess>,
         signals: Arc<[HeapRef]>,
+        signal_modes: Arc<[LogicMode]>,
         lupdt_indexes: VgHashMap<RtSignalKey, u64>,
-        logic_mode: LogicMode,
     ) -> Self {
         Self {
             processes,
             signals,
+            signal_modes,
             lupdt_indexes,
-            logic_mode,
             itrace: false,
         }
     }
@@ -255,12 +258,7 @@ impl Simulation {
     ) -> SimulationState {
         SimulationState {
             schedule: BTreeMap::<Timestamp, Vec<Event>>::new(),
-            runtime: vogls_runtime::RuntimeState::new(
-                gl.logic_mode,
-                heap,
-                gl.signals.len(),
-                lupdt_updated,
-            ),
+            runtime: vogls_runtime::RuntimeState::new(gl, heap, lupdt_updated),
             regions,
             listeners,
             watches,
@@ -480,7 +478,13 @@ impl Simulation {
                     }
 
                     I::FvTvBinaryArithmetic(dst, op, lhs, rhs) => {
-                        execution::fv::exec_fv_tv_bin_arith(&mut state.runtime.heap, *dst, *op, *lhs, *rhs)
+                        execution::fv::exec_fv_tv_bin_arith(
+                            &mut state.runtime.heap,
+                            *dst,
+                            *op,
+                            *lhs,
+                            *rhs,
+                        )
                     }
 
                     I::FvUnary(dst, op, src) => {
@@ -691,21 +695,21 @@ impl Simulation {
                                 writeln!(&mut io.stdout, "[FINISH]").unwrap();
                                 break 'instruction Some(EvalOutcome::Exit);
                             }
-                            O::ReadMem(heap_ref, readmem) => vogls_runtime::readmem::read_mem(
-                                &readmem.path,
-                                state.runtime.heap.0.as_mut(),
-                                *heap_ref,
-                                if self.logic_mode == LogicMode::TwoValue {
-                                    Mode::TwoValue
-                                } else {
-                                    Mode::FourValue
-                                },
-                                readmem.offset,
-                                readmem.limit,
-                                readmem.stride,
-                                readmem.binary,
-                            )
-                            .unwrap(),
+                            O::ReadMem(signal, readmem) => {
+                                let heap_ref = self.signals[signal.as_usize()];
+                                let mode = self.signal_modes[signal.as_usize()];
+                                vogls_runtime::readmem::read_mem(
+                                    &readmem.path,
+                                    state.runtime.heap.0.as_mut(),
+                                    heap_ref,
+                                    mode.into(),
+                                    readmem.offset,
+                                    readmem.limit,
+                                    readmem.stride,
+                                    readmem.binary,
+                                )
+                                .unwrap()
+                            }
                         }
                     }
                     I::LastUpdateTime(dst, signal) => {
@@ -715,6 +719,7 @@ impl Simulation {
                     }
                     I::Drive(sig, src, offset) => {
                         let dst = self.signals[sig.as_usize()];
+                        let mode = self.signal_modes[sig.as_usize()];
                         let (dst_limit, partial) = match offset {
                             None => (dst.size, None),
                             Some((offset, false, mask_size)) => (
@@ -736,10 +741,10 @@ impl Simulation {
                             *src,
                             dst_limit,
                             partial,
-                            self.logic_mode,
+                            mode,
                         );
 
-                        if matches!(self.logic_mode, LogicMode::TwoValue)
+                        if matches!(mode, LogicMode::TwoValue)
                             && let w = &mut state.runtime.tvl_first_write[sig.as_usize() / 64]
                             && ((*w >> (sig.as_usize() % 64)) & 1) == 0
                         {
@@ -769,7 +774,7 @@ impl Simulation {
                                 instr.itrace(
                                     &mut state.runtime.heap,
                                     &self.signals,
-                                    self.logic_mode,
+                                    &self.signal_modes,
                                 );
                             }
                             return EvalOutcome::Next;
@@ -786,7 +791,7 @@ impl Simulation {
                                 instr.itrace(
                                     &mut state.runtime.heap,
                                     &self.signals,
-                                    self.logic_mode,
+                                    &self.signal_modes,
                                 );
                             }
                             return EvalOutcome::Next;
@@ -799,7 +804,7 @@ impl Simulation {
                             state.regions.other[*region as usize - 1].push(event);
                         }
                         if self.itrace {
-                            instr.itrace(&mut state.runtime.heap, &self.signals, self.logic_mode);
+                            instr.itrace(&mut state.runtime.heap, &self.signals, &self.signal_modes);
                         }
                         return EvalOutcome::Next;
                     }
@@ -809,7 +814,7 @@ impl Simulation {
                             state.watches[signal.as_usize()].push(listener_key);
                         }
                         if self.itrace {
-                            instr.itrace(&mut state.runtime.heap, &self.signals, self.logic_mode);
+                            instr.itrace(&mut state.runtime.heap, &self.signals, &self.signal_modes);
                         }
                         return EvalOutcome::Next;
                     }
@@ -840,7 +845,7 @@ impl Simulation {
             };
 
             if self.itrace {
-                instr.itrace(&mut state.runtime.heap, &self.signals, self.logic_mode);
+                instr.itrace(&mut state.runtime.heap, &self.signals, &self.signal_modes);
             }
 
             if let Some(outcome) = outcome {
@@ -871,13 +876,11 @@ impl Simulation {
         value: &vogls_ir::Bits,
     ) {
         let heap_ref = self.signals[signal.as_usize()];
-        let updated = &state.runtime.heap.load_bits(heap_ref, self.logic_mode) != value;
+        let mode = self.signal_modes[signal.as_usize()];
+        let updated = &state.runtime.heap.load_bits(heap_ref, mode) != value;
 
         if updated {
-            state
-                .runtime
-                .heap
-                .store_bits(heap_ref, self.logic_mode, value);
+            state.runtime.heap.store_bits(heap_ref, mode, value);
             self.update_signal(state, signal);
         }
     }

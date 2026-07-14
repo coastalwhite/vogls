@@ -5,8 +5,7 @@ use std::sync::Arc;
 use vogls_frontend::ident_table::IdentId;
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{
-    BasicBlockBuilder, BasicBlockKey, Bits, ConnectionDirection, GlobalContext, ProcessKey,
-    SCALAR_VSIZE, Signal, SignalFlags, SignalKey, VariableKey, VectorSize,
+    BasicBlockBuilder, BasicBlockKey, Bits, ConnectionDirection, GlobalContext, LogicMode, ProcessKey, Signal, SignalFlags, SignalKey, VariableKey, VectorSize, SCALAR_VSIZE
 };
 use vogls_utils::{Table, VgHashMap, new_table_key};
 
@@ -296,6 +295,7 @@ pub fn port_declaration_to_info<'a>(
 
 fn new_net(
     gl: &mut GlobalContext,
+    mode: LogicMode,
     arenas: &AstArenas,
     ty: &VType,
     dims: &[NonZeroU32],
@@ -316,7 +316,7 @@ fn new_net(
         size,
         initialize: initialize.map(|i| i.into_bits()),
         flags: SignalFlags::EMPTY,
-        mode: gl.logic_mode,
+        mode,
         origin,
     });
 

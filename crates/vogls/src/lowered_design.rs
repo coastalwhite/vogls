@@ -82,6 +82,7 @@ pub struct EmitDesignIr<'a>(&'a LoweredDesign);
 struct CodegenPreparation {
     heap_builder: HeapBuilder,
     signal_to_heap: Arc<[HeapRef]>,
+    signal_mode: Arc<[LogicMode]>,
     rt_signal_map: VgHashMap<SignalKey, RtSignalKey>,
     lupdt_indexes: VgHashMap<RtSignalKey, u64>,
     plugins: Vec<Box<dyn RuntimePlugin>>,
@@ -102,6 +103,7 @@ impl LoweredDesign {
     fn prepare_codegen(&mut self) -> CodegenPreparation {
         let mut heap_builder = HeapBuilder::new();
         let mut signal_to_heap = Vec::new();
+        let mut signal_mode = Vec::new();
         let mut rt_signal_map = VgHashMap::default();
         let mut lupdt_indexes = VgHashMap::<RtSignalKey, u64>::default();
 
@@ -110,11 +112,12 @@ impl LoweredDesign {
             &mut rt_signal_map,
             &self.gl.signals,
             &mut signal_to_heap,
-            self.gl.logic_mode,
+            &mut signal_mode,
             self.print_vm_map,
         );
         find_lupdt_signals(&self.gl, &rt_signal_map, &mut lupdt_indexes);
         let signal_to_heap: Arc<[HeapRef]> = signal_to_heap.into();
+        let signal_mode: Arc<[LogicMode]> = signal_mode.into();
 
         let handle_map = VgHashMap::from_iter(self.table.symbol_id_iter().filter_map(|sid| {
             let Symbol::Net(net) = &self.table[sid].content else {
@@ -158,6 +161,7 @@ impl LoweredDesign {
         CodegenPreparation {
             heap_builder,
             signal_to_heap,
+            signal_mode,
             rt_signal_map,
             lupdt_indexes,
             plugins,
@@ -171,6 +175,7 @@ impl LoweredDesign {
         let CodegenPreparation {
             heap_builder,
             signal_to_heap,
+            signal_mode,
             rt_signal_map,
             lupdt_indexes,
             plugins,
@@ -198,6 +203,7 @@ impl LoweredDesign {
             backend: DesignBackend::Compiled { design },
             rt_signal_map,
             signal_to_heap,
+            signal_mode,
             initial_state: DesignState::Compiled(initial_state),
         });
     }
@@ -206,6 +212,7 @@ impl LoweredDesign {
         let CodegenPreparation {
             mut heap_builder,
             signal_to_heap,
+            signal_mode,
             mut rt_signal_map,
             lupdt_indexes,
             plugins,
@@ -248,12 +255,8 @@ impl LoweredDesign {
                 if let Some(initialize) = &signal.initialize {
                     let rt_key = rt_signal_map[&key];
                     assert_eq!(initialize.size(), signal.size);
-                    heap.store_bits(
-                        signal_to_heap[rt_key.as_usize()],
-                        self.gl.logic_mode,
-                        initialize,
-                    );
-                    let is_unchanged = match self.gl.logic_mode {
+                    heap.store_bits(signal_to_heap[rt_key.as_usize()], signal.mode, initialize);
+                    let is_unchanged = match signal.mode {
                         LogicMode::TwoValue => initialize.count_zeros() == initialize.size().get(),
                         LogicMode::FourValue => {
                             initialize.count_unknown() == initialize.size().get()
@@ -264,12 +267,7 @@ impl LoweredDesign {
                     }
                 }
             }
-            let runtime = RuntimeState::new(
-                self.gl.logic_mode,
-                heap,
-                self.gl.signals.len(),
-                &lupdt_updated,
-            );
+            let runtime = RuntimeState::new(&self.gl, heap, &lupdt_updated);
             let state = vogls_sim::bytecode::State {
                 runtime,
                 plugins,
@@ -296,6 +294,7 @@ impl LoweredDesign {
                 backend: DesignBackend::Bytecode { design },
                 rt_signal_map,
                 signal_to_heap,
+                signal_mode,
                 initial_state: DesignState::Bytecode(state),
             })
         } else {
@@ -330,12 +329,8 @@ impl LoweredDesign {
                 if let Some(initialize) = &signal.initialize {
                     let rt_key = rt_signal_map[&key];
                     assert_eq!(initialize.size(), signal.size);
-                    heap.store_bits(
-                        signal_to_heap[rt_key.as_usize()],
-                        self.gl.logic_mode,
-                        initialize,
-                    );
-                    let is_unchanged = match self.gl.logic_mode {
+                    heap.store_bits(signal_to_heap[rt_key.as_usize()], signal.mode, initialize);
+                    let is_unchanged = match signal.mode {
                         LogicMode::TwoValue => initialize.count_zeros() == initialize.size().get(),
                         LogicMode::FourValue => {
                             initialize.count_unknown() == initialize.size().get()
@@ -350,8 +345,8 @@ impl LoweredDesign {
             let mut simulation = Simulation::new(
                 processes,
                 signal_to_heap.clone(),
+                signal_mode.clone(),
                 lupdt_indexes,
-                self.gl.logic_mode,
             );
             simulation.itrace = self.itrace;
             let mut initial_state =
@@ -364,6 +359,7 @@ impl LoweredDesign {
                 elab_table: self.table,
                 backend: DesignBackend::Interpretted { simulation },
                 rt_signal_map,
+                signal_mode,
                 signal_to_heap,
                 initial_state: DesignState::Interpretted(initial_state),
             })
@@ -409,12 +405,14 @@ pub fn generate_signals_heap(
     signal_map: &mut VgHashMap<SignalKey, RtSignalKey>,
     signals: &SlotMap<SignalKey, Signal>,
     heap_refs: &mut Vec<HeapRef>,
-    logic_mode: LogicMode,
+    signal_mode: &mut Vec<LogicMode>,
     print_mapping: bool,
 ) {
+    signal_mode.extend(signals.values().map(|s| s.mode));
     signal_map.extend(signals.keys().enumerate().map(|(i, key)| {
         if print_mapping {
-            eprintln!("{}: {}", signals[key].name, i);
+            let signal = &signals[key];
+            eprintln!("{}: {}", signal.name, i);
         }
         (key, RtSignalKey::from_usize(i).unwrap())
     }));
@@ -439,12 +437,12 @@ pub fn generate_signals_heap(
         for (i, signal) in signals.values().enumerate() {
             let size = signal.size;
             let mut num_bits = size.get();
-            if logic_mode == LogicMode::FourValue {
+            if signal.mode == LogicMode::FourValue {
                 num_bits = num_bits * 2;
             }
 
             if (min_bits..=max_bits).contains(&num_bits) {
-                heap_refs[i] = heap_builder.claim(logic_mode, size);
+                heap_refs[i] = heap_builder.claim(signal.mode, size);
             }
         }
     }
@@ -503,7 +501,7 @@ pub fn lower_to_shared_object(
     let mut out = Vec::new();
     let mut state_builder = StateBuilder::default();
     let mut index = 0u64;
-    let mut signal_to_tv_index =
+    let signal_to_tv_index =
         VgHashMap::from_iter(gl.signals.iter().filter_map(|(key, s)| match s.mode {
             LogicMode::TwoValue => {
                 let i = index;
@@ -623,8 +621,8 @@ pub fn lower_to_shared_object(
         if let Some(initialize) = &signal.initialize {
             let rt_key = signal_map[&key];
             assert_eq!(initialize.size(), signal.size);
-            heap.store_bits(heap_refs[rt_key.as_usize()], gl.logic_mode, initialize);
-            let is_unchanged = match gl.logic_mode {
+            heap.store_bits(heap_refs[rt_key.as_usize()], signal.mode, initialize);
+            let is_unchanged = match signal.mode {
                 LogicMode::TwoValue => initialize.count_zeros() == initialize.size().get(),
                 LogicMode::FourValue => initialize.count_unknown() == initialize.size().get(),
             };

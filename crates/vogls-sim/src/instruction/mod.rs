@@ -62,7 +62,7 @@ pub enum VmIntrinsicOp {
     ),
     VcdPause,
     VcdResume,
-    ReadMem(HeapRef, Box<ReadMem>),
+    ReadMem(RtSignalKey, Box<ReadMem>),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -137,7 +137,7 @@ pub enum VmInstruction {
     Halt,
 }
 impl VmInstruction {
-    pub fn itrace(&self, stack: &Heap, signals: &[HeapRef], logic_mode: LogicMode) {
+    pub fn itrace(&self, stack: &Heap, signals: &[HeapRef], signal_modes: &[LogicMode]) {
         use VmInstruction as I;
         eprint!("{self}");
         let items: &[(&'static str, bool, HeapRef)] = match self {
@@ -300,28 +300,17 @@ impl VmInstruction {
             },
             I::LastUpdateTime(dst, _) => &[("dst", false, dst.to_64bit_ref())],
             I::Drive(dst, src, partial) => {
+                let mode = signal_modes[dst.as_usize()];
                 eprint!(" ({})", signals[dst.as_usize()].offset);
                 match partial {
                     None => &[
-                        (
-                            "dst",
-                            logic_mode == LogicMode::FourValue,
-                            signals[dst.as_usize()],
-                        ),
-                        ("src", logic_mode == LogicMode::FourValue, *src),
+                        ("dst", mode == LogicMode::FourValue, signals[dst.as_usize()]),
+                        ("src", mode == LogicMode::FourValue, *src),
                     ],
                     Some((partial, is_fv, _)) => &[
-                        (
-                            "dst",
-                            logic_mode == LogicMode::FourValue,
-                            signals[dst.as_usize()],
-                        ),
-                        ("src", logic_mode == LogicMode::FourValue, *src),
-                        (
-                            "offset",
-                            *is_fv,
-                            partial.to_32bit_ref(),
-                        ),
+                        ("dst", mode == LogicMode::FourValue, signals[dst.as_usize()]),
+                        ("src", mode == LogicMode::FourValue, *src),
+                        ("offset", *is_fv, partial.to_32bit_ref()),
                     ],
                 }
             }

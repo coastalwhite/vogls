@@ -26,7 +26,6 @@ impl<'a> VirDesignBuilder<'a> {
 
     pub fn parse(&self) -> Result<LoweredDesign, Box<ParseError>> {
         let mut gl = GlobalContext::default();
-        gl.logic_mode = self.logic_mode;
         // @TODO: Fill ident table and symbol table.
         let ident_table = IdentTable::default();
         vogls_ir::parse::parse(&self.content, &mut gl)?;

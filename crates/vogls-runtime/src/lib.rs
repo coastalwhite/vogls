@@ -1,7 +1,7 @@
 use std::io;
 
 use vogls_codegen::Heap;
-use vogls_ir::LogicMode;
+use vogls_ir::GlobalContext;
 use vogls_utils::{TableKey, new_table_key};
 
 pub mod plugins;
@@ -42,7 +42,8 @@ impl Clone for RuntimeState {
 }
 
 impl RuntimeState {
-    pub fn new(mode: LogicMode, heap: Heap, num_signals: usize, lupdt_updated: &[bool]) -> Self {
+    pub fn new(gl: &GlobalContext, heap: Heap, lupdt_updated: &[bool]) -> Self {
+        let tvl_first_write = vec![0u64; gl.signals.len().div_ceil(64)];
         Self {
             heap,
             time: 0,
@@ -50,10 +51,7 @@ impl RuntimeState {
                 .iter()
                 .map(|updated| if *updated { 0 } else { u64::MAX })
                 .collect(),
-            tvl_first_write: match mode {
-                LogicMode::TwoValue => vec![0u64; num_signals.div_ceil(64)],
-                LogicMode::FourValue => Vec::new(),
-            },
+            tvl_first_write,
             event_count: 0,
             instruction_count: 0,
         }

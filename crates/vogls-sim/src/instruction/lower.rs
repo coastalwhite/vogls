@@ -753,10 +753,9 @@ pub fn lower_process_to_vm(
                             }
                             O::VcdPause => VO::VcdPause,
                             O::VcdResume => VO::VcdResume,
-                            O::ReadMem(readmem) => VO::ReadMem(
-                                signals[signal!(readmem.signal).as_usize()],
-                                readmem.clone(),
-                            ),
+                            O::ReadMem(readmem) => {
+                                VO::ReadMem(signal!(readmem.signal), readmem.clone())
+                            }
                         };
                         VI::Intrinsic(heap_map[dst], Box::new(op), vm_args)
                     }
@@ -766,20 +765,22 @@ pub fn lower_process_to_vm(
                     }
                     I::Probe(dst, signal, offset) => {
                         let size = gl.vars.size(*dst);
+                        let mode = gl.signals[*signal].mode;
                         let signal = signal!(*signal);
                         lower_slice_imm(
                             &mut instructions,
                             heap_map[dst].to_ref(size),
                             signals[signal.as_usize()],
                             *offset,
-                            gl.logic_mode,
+                            mode,
                         );
                         continue;
                     }
                     I::ProbeSlice(dst, signal, offset) => {
                         let size = gl.vars.size(*dst);
+                        let mode = gl.signals[*signal].mode;
                         let signal = signal!(*signal);
-                        match gl.logic_mode {
+                        match mode {
                             LogicMode::TwoValue => VI::TvSlice(
                                 heap_map[dst].to_ref(size),
                                 signals[signal.as_usize()],

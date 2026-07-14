@@ -145,7 +145,7 @@ pub fn elaborate<'a, 'b>(
         size: SCALAR_VSIZE,
         initialize: None,
         flags: SignalFlags::EMPTY,
-        mode: gl.logic_mode,
+        mode: vogls_ir::LogicMode::TwoValue,
         origin: TokenRange { start: 0, end: 0 },
     });
     gl.signals.remove(dummy_signal);
@@ -1885,7 +1885,15 @@ pub fn finalize_symbol<'a>(
                 ),
             };
             let net = unwrap_get_net_mut(&mut ctx.table, sid);
-            net.net = super::new_net(gl, &ctx.arenas, &ty, &dims, *identifier, initialize);
+            net.net = super::new_net(
+                gl,
+                ctx.logic_mode,
+                &ctx.arenas,
+                &ty,
+                &dims,
+                *identifier,
+                initialize,
+            );
             net.dims = dims;
             net.transform = transform;
             net.ty = ty;
@@ -1928,7 +1936,7 @@ pub fn finalize_symbol<'a>(
                 )?,
             };
             let net = unwrap_get_net_mut(&mut ctx.table, sid);
-            net.net = super::new_net(gl, &ctx.arenas, &ty, &dims, *ident, None);
+            net.net = super::new_net(gl, ctx.logic_mode, &ctx.arenas, &ty, &dims, *ident, None);
             net.dims = dims;
             net.transform = transform;
             net.ty = ty;
@@ -1969,7 +1977,15 @@ pub fn finalize_symbol<'a>(
                 ),
             };
             let net = unwrap_get_net_mut(&mut ctx.table, sid);
-            net.net = super::new_net(gl, &ctx.arenas, &ty, &dims, *identifier, initialize);
+            net.net = super::new_net(
+                gl,
+                ctx.logic_mode,
+                &ctx.arenas,
+                &ty,
+                &dims,
+                *identifier,
+                initialize,
+            );
             net.dims = dims;
             net.ty = VType::SignedNet(INTEGER_VSIZE);
         }
@@ -1977,7 +1993,7 @@ pub fn finalize_symbol<'a>(
             let (ty, transform, _, _) =
                 port_declaration_to_info(gl, &ctx.arenas, *decl, scope, &ctx.table, diagnostics)?;
             let net = unwrap_get_net_mut(&mut ctx.table, sid);
-            net.net = super::new_net(gl, &ctx.arenas, &ty, &[], *ident, None);
+            net.net = super::new_net(gl, ctx.logic_mode, &ctx.arenas, &ty, &[], *ident, None);
             net.transform = transform;
             net.ty = ty;
         }

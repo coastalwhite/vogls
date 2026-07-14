@@ -1610,7 +1610,6 @@ impl From<LogicMode> for Mode {
 
 #[derive(Default, Clone)]
 pub struct GlobalContext {
-    pub logic_mode: LogicMode,
     pub processes: SlotMap<ProcessKey, Process>,
     pub bbs: SlotMap<BasicBlockKey, BasicBlock>,
     pub signals: SlotMap<SignalKey, Signal>,

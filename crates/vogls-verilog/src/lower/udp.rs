@@ -177,7 +177,7 @@ pub fn lower_udp<'a>(
                         initialize: None,
                         flags: SignalFlags::EMPTY,
                         origin: ctx.arenas.get_span(ast_output),
-                        mode: mctx.gl.logic_mode,
+                        mode: ctx.logic_mode,
                     });
                     (output_signal, output_name)
                 }
@@ -197,7 +197,7 @@ pub fn lower_udp<'a>(
                         initialize: None,
                         flags: SignalFlags::EMPTY,
                         origin: ctx.arenas.get_item_span(output.port_identifier),
-                        mode: mctx.gl.logic_mode,
+                        mode: ctx.logic_mode,
                     });
                     (output_signal, output_name)
                 }

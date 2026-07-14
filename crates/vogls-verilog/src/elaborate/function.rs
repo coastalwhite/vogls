@@ -61,7 +61,15 @@ pub fn elaborate_fn<'a>(
         }
     };
 
-    let net = super::new_net(gl, &ctx.arenas, &output_ty, &[], *ident, None);
+    let net = super::new_net(
+        gl,
+        ctx.logic_mode,
+        &ctx.arenas,
+        &output_ty,
+        &[],
+        *ident,
+        None,
+    );
     let output_key = net.ba;
     if ctx
         .table
@@ -115,7 +123,7 @@ pub fn elaborate_fn<'a>(
             };
             let ident = ctx.arenas.to_item(ident);
             let origin = ctx.arenas.get_item_span(ident);
-            let net = super::new_net(gl, &ctx.arenas, &ty, &[], ident, None);
+            let net = super::new_net(gl, ctx.logic_mode, &ctx.arenas, &ty, &[], ident, None);
             let signal = net.ba;
             if ctx
                 .table
@@ -203,7 +211,7 @@ pub fn elaborate_task<'a>(
             };
             let ident = ctx.arenas.to_item(ident);
             let origin = ctx.arenas.get_item_span(ident);
-            let net = super::new_net(gl, &ctx.arenas, &ty, &[], ident, None);
+            let net = super::new_net(gl, ctx.logic_mode, &ctx.arenas, &ty, &[], ident, None);
             let signal = net.ba;
             if ctx
                 .table

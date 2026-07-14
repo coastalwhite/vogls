@@ -20,6 +20,7 @@ pub enum Region {
 }
 
 pub struct LowerContext<'a, 'b> {
+    pub logic_mode: LogicMode,
     pub table: VSymbolTable,
     pub table_ast_refs: SymbolAstRefs<'a>,
     pub udps: VgHashMap<IdentId, AstId<'a, UdpDeclaration<'a>>>,
@@ -393,8 +394,7 @@ use vogls_fuse_signals::{Driver, InputEdge};
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::vcd::{VcdScope, VcdValue, VcdVariable, VcdVariableKey};
 use vogls_ir::{
-    BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, ProcessBuilder, ProcessKey,
-    ProcessKind, SignalFlags, SignalKey, SignalSlice, VariableKey, VectorSize,
+    BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, LogicMode, ProcessBuilder, ProcessKey, ProcessKind, SignalFlags, SignalKey, SignalSlice, VariableKey, VectorSize
 };
 use vogls_utils::{IndexMap, OrderedSet, Table, VgHashMap};
 
@@ -866,12 +866,12 @@ pub fn create_nba_process(
 ) -> (ProcessKey, SignalKey, Option<SignalKey>) {
     let needs_mask = true;
     let vogls_ir::Signal {
-        name, origin, size, ..
+        name, origin, size, mode, ..
     } = &gl.signals[signal];
 
     let mask_name = format!("{name}::NBA_MASK");
     let value_name = format!("{name}::NBA_VALUE");
-    let (size, origin) = (*size, *origin);
+    let (size, mode, origin) = (*size, *mode, *origin);
     let (process, mut builder) =
         ProcessBuilder::new(gl, ProcessKind::NonBlockingAssignment, origin);
     let process_key = process.key().unwrap();
@@ -882,7 +882,7 @@ pub fn create_nba_process(
             size,
             initialize: None,
             flags: SignalFlags::EMPTY,
-            mode: gl.logic_mode,
+            mode: LogicMode::TwoValue,
             origin,
         })
     });
@@ -891,7 +891,7 @@ pub fn create_nba_process(
         size,
         initialize: None,
         flags: SignalFlags::EMPTY,
-        mode: gl.logic_mode,
+        mode,
         origin,
     });
 

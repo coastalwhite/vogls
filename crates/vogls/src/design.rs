@@ -4,7 +4,7 @@ use vogls_codegen::HeapRef;
 use vogls_frontend::ident_table::IdentTable;
 use vogls_frontend::symbol_table::{FrozenSymbolTable, SymbolId};
 use vogls_ir::vcd::{VcdScope, VcdValue, VcdVariableKey};
-use vogls_ir::{Bits, GlobalContext, SignalKey, SignalSlice, VectorSize};
+use vogls_ir::{Bits, GlobalContext, LogicMode, SignalKey, SignalSlice, VectorSize};
 use vogls_runtime::SimulationIo;
 use vogls_runtime::plugins::RuntimePluginState;
 use vogls_runtime::{RtSignalKey, RuntimeState};
@@ -35,6 +35,7 @@ pub struct Design {
     pub(crate) elab_table: FrozenSymbolTable<Symbol>,
     pub(crate) backend: DesignBackend,
     pub(crate) rt_signal_map: VgHashMap<SignalKey, RtSignalKey>,
+    pub(crate) signal_mode: Arc<[LogicMode]>,
     pub(crate) signal_to_heap: Arc<[HeapRef]>,
     pub(crate) initial_state: DesignState,
 }
@@ -100,24 +101,26 @@ impl Design {
                 .execute_inner_tailcall(state, &mut io.stdout, &mut io.stderr)
                 .map_err(|_| "execution failed.".into()),
             #[cfg(not(feature = "tailcall"))]
-            (DesignBackend::Bytecode { design }, DesignState::Bytecode(state)) => if design.itrace {
-                design.execute_with_tracer(
-                    &mut vogls_sim::bytecode::InstructionTracer::new_stderr(),
-                    state,
-                    &mut io.stdout,
-                    &mut io.stderr,
-                )
-            } else if design.stats {
-                design.execute_with_tracer(
-                    &mut vogls_sim::bytecode::ICountTracer::default(),
-                    state,
-                    &mut io.stdout,
-                    &mut io.stderr,
-                )
-            } else {
-                design.execute(state, &mut io.stdout, &mut io.stderr)
+            (DesignBackend::Bytecode { design }, DesignState::Bytecode(state)) => {
+                if design.itrace {
+                    design.execute_with_tracer(
+                        &mut vogls_sim::bytecode::InstructionTracer::new_stderr(),
+                        state,
+                        &mut io.stdout,
+                        &mut io.stderr,
+                    )
+                } else if design.stats {
+                    design.execute_with_tracer(
+                        &mut vogls_sim::bytecode::ICountTracer::default(),
+                        state,
+                        &mut io.stdout,
+                        &mut io.stderr,
+                    )
+                } else {
+                    design.execute(state, &mut io.stdout, &mut io.stderr)
+                }
+                .map_err(|_| "execution failed.".into())
             }
-            .map_err(|_| "execution failed.".into()),
 
             #[cfg(feature = "native")]
             (DesignBackend::Compiled { design }, DesignState::Compiled(initial_state)) => design
@@ -179,23 +182,15 @@ impl Design {
 
     pub fn set_signal(&self, state: &mut DesignState, signal: RtSignal, bits: &Bits) {
         let heap_ref = self.get_heap_ref(signal.key);
+        let mode = self.signal_mode[signal.key.as_usize()];
+        let signal_bits = state.runtime().heap.load_bits(heap_ref, mode);
         let updated = match signal.slice {
-            None => &state.runtime().heap.load_bits(heap_ref, self.gl.logic_mode) != bits,
-            Some(slice) => {
-                &state
-                    .runtime()
-                    .heap
-                    .load_bits(heap_ref, self.gl.logic_mode)
-                    .slicez(slice.lsb(), slice.width())
-                    != bits
-            }
+            None => &signal_bits != bits,
+            Some(slice) => &signal_bits.slicez(slice.lsb(), slice.width()) != bits,
         };
 
         if updated {
-            state
-                .runtime_mut()
-                .heap
-                .store_bits(heap_ref, self.gl.logic_mode, bits);
+            state.runtime_mut().heap.store_bits(heap_ref, mode, bits);
 
             match (&self.backend, state) {
                 (DesignBackend::Interpretted { simulation }, DesignState::Interpretted(state)) => {
@@ -212,10 +207,8 @@ impl Design {
 
     pub fn get_signal(&self, state: &DesignState, signal: RtSignal) -> Bits {
         let heap_ref = self.get_heap_ref(signal.key);
-        state
-            .runtime()
-            .heap
-            .load_unaligned_bits(heap_ref, self.gl.logic_mode)
+        let mode = self.signal_mode[signal.key.as_usize()];
+        state.runtime().heap.load_unaligned_bits(heap_ref, mode)
     }
 
     pub fn emit_ir(&self) -> String {

@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_frontend::symbol_table::{FrozenSymbolTable, SymbolId, SymbolTable};
 use vogls_fuse_signals::{FuseGraph, FuseGraphOptimizer, FuseTarget};
-use vogls_ir::{GlobalContext, SignalFlags};
+use vogls_ir::{GlobalContext, LogicMode, SignalFlags};
 use vogls_utils::{IndexMap, NonMaxU32, VgHashMap};
 use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{Module, ModuleItem, NonPortModuleItem, TimeScale};
@@ -28,6 +28,7 @@ pub struct ElaboratedDesign<'a> {
     pub(crate) token_buffer: Tokenized,
     pub(crate) arenas: AstArenas,
 
+    pub(crate) logic_mode: LogicMode,
     pub(crate) module_lut: VgHashMap<IdentId, AstId<'a, Module<'a>>>,
     pub(crate) table: SymbolTable<VSymbol>,
     pub(crate) table_ast_refs: SymbolAstRefs<'a>,
@@ -205,6 +206,7 @@ impl<'a> ElaboratedDesign<'a> {
         // This is not panic safe, so maybe we should add a unwind catch here?
 
         let mut ctx = LowerContext {
+            logic_mode: self.logic_mode,
             table: std::mem::take(&mut self.table),
             table_ast_refs: std::mem::take(&mut self.table_ast_refs),
             udps: std::mem::take(&mut self.udps),
@@ -312,6 +314,8 @@ impl<'a> ElaboratedDesign<'a> {
             udps,
             gl,
 
+            logic_mode,
+
             ast,
             token_buffer,
             arenas,
@@ -321,6 +325,7 @@ impl<'a> ElaboratedDesign<'a> {
         } = self;
 
         let mut ctx = LowerContext {
+            logic_mode,
             table,
             table_ast_refs,
             udps,
@@ -384,6 +389,7 @@ impl<'a> ElaboratedDesign<'a> {
 
         if error {
             let LowerContext {
+                logic_mode,
                 table,
                 table_ast_refs,
                 udps,
@@ -393,6 +399,7 @@ impl<'a> ElaboratedDesign<'a> {
             } = ctx;
             return Err(LowerError {
                 design: Self {
+                    logic_mode,
                     ast,
                     token_buffer,
                     arenas,
@@ -422,6 +429,7 @@ impl<'a> ElaboratedDesign<'a> {
 
         if error {
             let LowerContext {
+                logic_mode,
                 table,
                 table_ast_refs,
                 udps,
@@ -431,6 +439,7 @@ impl<'a> ElaboratedDesign<'a> {
             } = ctx;
             return Err(LowerError {
                 design: Self {
+                    logic_mode,
                     ast,
                     token_buffer,
                     arenas,

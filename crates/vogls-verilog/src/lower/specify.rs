@@ -100,6 +100,11 @@ impl Delays {
         tend: SignalKey,
         bitidx: u32,
     ) -> VariableKey {
+        let tstart_mode = gl.signals[tstart].mode;
+        let tend_mode = gl.signals[tend].mode;
+
+        assert_eq!(tstart_mode, tend_mode);
+
         if let Delays::One(delay) = self {
             // @Performance: At the moment, this is still a variable wait. We could propagate this
             // constant up so that the wait can be become a constant wait. This should allow for
@@ -108,7 +113,7 @@ impl Delays {
         }
 
         // Fast path: Two value logic.
-        if gl.logic_mode == LogicMode::TwoValue {
+        if tstart_mode == LogicMode::TwoValue {
             let (Delays::Two {
                 trise: t01,
                 tfall: t10,
@@ -761,14 +766,15 @@ pub fn lower_iopath<'a>(
                         | Condition::InputPosedgeExpr(_)
                         | Condition::InputNegedgeExpr(_)
                 ) {
-                    let size = mctx.gl.signals[*input].size;
+                    let Signal { size, mode, .. } = &mctx.gl.signals[*input];
+                    let (size, mode) = (*size, *mode);
                     let signal = mctx.gl.signals.insert(Signal {
                         name: format!("SPECIFY_BEFORE/{}", mctx.gl.signals.len()),
                         size,
                         initialize: None,
                         flags: SignalFlags::EMPTY,
                         origin: TokenRange::default(),
-                        mode: mctx.gl.logic_mode,
+                        mode,
                     });
                     let before = builder.probe(mctx.gl(), *input);
                     builder.drive(mctx.gl(), signal, before);
