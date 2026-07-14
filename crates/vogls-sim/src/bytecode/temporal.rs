@@ -6,8 +6,8 @@ use std::fmt;
 use super::reg::{Reg, Regs};
 use super::{
     Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, BytecodeOpcode, ColdContext,
-    EXEC_ITRACE_INDENT, InlineIndex, InstructionPtr, Schedule, TimedEvent, write_padded_mnemonic,
-    write_register,
+    EXEC_ITRACE_INDENT, InlineIndex, InstructionPtr, Schedule, SignedImmediate, TimedEvent,
+    write_padded_mnemonic, write_register,
 };
 
 pub struct Wake {
@@ -15,15 +15,19 @@ pub struct Wake {
     index: InlineIndex<20>,
 }
 
-pub struct Reschedule {
-    rtime: Reg,
-    region: u8,
-    schedule_self: bool,
+pub struct RescheduleRegion {
+    pub region: u8,
+    pub offset: SignedImmediate<16>,
 }
 
-pub struct StartListen {
-    index: u32,
+pub struct RescheduleWait {
+    pub rtime: Reg,
+    pub offset: SignedImmediate<20>,
 }
+pub struct RescheduleListen {
+    pub index: u32,
+}
+pub struct NextEvent;
 
 pub struct LastUpdateTime {
     rd: Reg,
@@ -96,43 +100,28 @@ impl BytecodeInstruction for Wake {
     }
 }
 
-impl BytecodeInstruction for Reschedule {
+impl BytecodeInstruction for RescheduleWait {
     fn extract(v: Bytecode) -> Self {
-        debug_assert_eq!(v.opcode(), BytecodeOpcode::Reschedule as u8);
+        debug_assert_eq!(v.opcode(), BytecodeOpcode::RescheduleWait as u8);
         let v = v.0;
         Self {
             rtime: Reg::new_masked(v >> 8),
-            region: ((v >> 12) & 0xFF) as u8,
-            schedule_self: (v >> 20) & 1 != 0,
+            offset: SignedImmediate::new_shifted(v, 12),
         }
     }
 
     fn encode(&self) -> Bytecode {
         Bytecode(
-            BytecodeOpcode::Reschedule as u32
+            BytecodeOpcode::RescheduleWait as u32
                 | ((self.rtime as u32) << 8)
-                | ((self.region as u32) << 12)
-                | (self.schedule_self as u32) << 20,
+                | (self.offset.encode() << 12),
         )
     }
 
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self {
-            rtime,
-            region,
-            schedule_self,
-        } = self;
-        if *schedule_self {
-            if *region == 0 {
-                write_padded_mnemonic(f, "wait")?;
-                write!(f, "{rtime}")?;
-            } else {
-                write_padded_mnemonic(f, "wait_region")?;
-                write!(f, "{}", region - 1)?;
-            }
-        } else {
-            write_padded_mnemonic(f, "next_event")?;
-        }
+        let Self { rtime, offset } = self;
+        write_padded_mnemonic(f, "reschedule_wait")?;
+        write!(f, "{rtime}, {offset}")?;
         Ok(())
     }
     fn pre_exec_itrace(
@@ -143,13 +132,9 @@ impl BytecodeInstruction for Reschedule {
         regs: &Regs,
         _state: &RuntimeState,
     ) -> fmt::Result {
-        if self.schedule_self && self.region == 0 {
-            f.write_str(EXEC_ITRACE_INDENT)?;
-            write_register(f, regs, "rtime", self.rtime, LogicMode::TwoValue)?;
-            writeln!(f)?;
-        }
-
-        Ok(())
+        f.write_str(EXEC_ITRACE_INDENT)?;
+        write_register(f, regs, "rtime", self.rtime, LogicMode::TwoValue)?;
+        writeln!(f)
     }
 
     #[inline(always)]
@@ -163,52 +148,117 @@ impl BytecodeInstruction for Reschedule {
         _listeners: &mut BytecodeListeners,
         _cldctx: &mut ColdContext,
     ) {
-        let Self {
-            rtime,
-            region,
-            schedule_self,
-        } = self;
-        if schedule_self {
-            if region == 0 {
-                let time = regs[rtime];
-                if time == 0 {
-                    return;
-                }
+        let Self { rtime, offset } = self;
 
-                let time = state.time + time;
-                schedule.next_time = schedule.next_time.min(time);
-                schedule.future.push(TimedEvent {
-                    time,
-                    pc: InstructionPtr(*pc),
-                });
-            } else {
-                let region = region as usize;
-                if region == 1 {
-                    return;
-                }
-
-                schedule.regions[region as usize - 2].push(InstructionPtr(*pc));
-            }
+        let time = regs[rtime];
+        let next_pc = (*pc).wrapping_add_signed(i64::from(offset.0));
+        if time == 0 {
+            *pc = next_pc;
+            return;
         }
+
+        let time = state.time + time;
+        schedule.next_time = schedule.next_time.min(time);
+        schedule.future.push(TimedEvent {
+            time,
+            pc: InstructionPtr(next_pc),
+        });
 
         *pc = schedule.pop(&mut state.time).map_or(u64::MAX, |ptr| ptr.0);
     }
 }
 
-impl BytecodeInstruction for StartListen {
+impl BytecodeInstruction for RescheduleRegion {
     fn extract(v: Bytecode) -> Self {
-        debug_assert_eq!(v.opcode(), BytecodeOpcode::StartListen as u8);
+        debug_assert_eq!(v.opcode(), BytecodeOpcode::RescheduleRegion as u8);
+        let v = v.0;
+        Self {
+            region: ((v >> 8) & 0xFF) as u8,
+            offset: SignedImmediate::new_shifted(v, 16),
+        }
+    }
+
+    fn encode(&self) -> Bytecode {
+        Bytecode(
+            BytecodeOpcode::RescheduleRegion as u32
+                | ((self.region as u32) << 8)
+                | (self.offset.encode() << 16),
+        )
+    }
+
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self { region, offset } = self;
+        write_padded_mnemonic(f, "reschedule_region")?;
+        write!(f, "{region}, {offset}")?;
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn execute(
+        self,
+        _code: &[Bytecode],
+        _regs: &mut Regs,
+        pc: &mut u64,
+        state: &mut RuntimeState,
+        schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let Self { region, offset } = self;
+        let next_pc = (*pc).wrapping_add_signed(i64::from(offset.0));
+        if region == 0 {
+            *pc = next_pc;
+            return;
+        }
+
+        schedule.regions[region as usize - 1].push(InstructionPtr(next_pc));
+        *pc = schedule.pop(&mut state.time).map_or(u64::MAX, |ptr| ptr.0);
+    }
+}
+
+impl BytecodeInstruction for NextEvent {
+    fn extract(v: Bytecode) -> Self {
+        debug_assert_eq!(v.opcode(), BytecodeOpcode::NextEvent as u8);
+        Self
+    }
+
+    fn encode(&self) -> Bytecode {
+        Bytecode(BytecodeOpcode::NextEvent as u32)
+    }
+
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write_padded_mnemonic(f, "next_event")
+    }
+
+    #[inline(always)]
+    fn execute(
+        self,
+        _code: &[Bytecode],
+        _regs: &mut Regs,
+        pc: &mut u64,
+        state: &mut RuntimeState,
+        schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        *pc = schedule.pop(&mut state.time).map_or(u64::MAX, |ptr| ptr.0);
+    }
+}
+
+impl BytecodeInstruction for RescheduleListen {
+    fn extract(v: Bytecode) -> Self {
+        debug_assert_eq!(v.opcode(), BytecodeOpcode::RescheduleListen as u8);
         let v = v.0;
         Self { index: v >> 8 }
     }
 
     fn encode(&self) -> Bytecode {
-        Bytecode(BytecodeOpcode::StartListen as u32 | (self.index << 8))
+        Bytecode(BytecodeOpcode::RescheduleListen as u32 | (self.index << 8))
     }
 
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let Self { index } = self;
-        write_padded_mnemonic(f, "start_listen")?;
+        write_padded_mnemonic(f, "reschedule_listen")?;
         write!(f, "{index}")
     }
 
@@ -217,14 +267,15 @@ impl BytecodeInstruction for StartListen {
         self,
         _code: &[Bytecode],
         _regs: &mut Regs,
-        _pc: &mut u64,
-        _state: &mut RuntimeState,
-        _schedule: &mut Schedule,
+        pc: &mut u64,
+        state: &mut RuntimeState,
+        schedule: &mut Schedule,
         listeners: &mut BytecodeListeners,
         _cldctx: &mut ColdContext,
     ) {
         let i = self.index as usize;
         listeners.active[i / 64] |= 1u64 << (i % 64);
+        *pc = schedule.pop(&mut state.time).map_or(u64::MAX, |ptr| ptr.0);
     }
 }
 
@@ -411,41 +462,28 @@ impl BytecodeEncoder {
         self.data.push(Wake { rcond, index }.encode());
     }
 
-    pub fn wait(&mut self, rtime: Reg) {
-        self.data.push(
-            Reschedule {
-                rtime,
-                region: 0,
-                schedule_self: true,
-            }
-            .encode(),
-        );
+    pub fn wait(&mut self, rtime: Reg, offset: i64) {
+        let offset = SignedImmediate::new(offset).unwrap();
+        self.data.push(RescheduleWait { rtime, offset }.encode());
     }
 
-    pub fn wait_region(&mut self, region: u8) {
+    pub fn wait_region(&mut self, region: u8, offset: i64) {
+        let offset = SignedImmediate::new(offset).unwrap();
         self.data.push(
-            Reschedule {
-                rtime: Reg::X0,
-                region: region + 1,
-                schedule_self: true,
+            RescheduleRegion {
+                region: region,
+                offset,
             }
             .encode(),
         );
     }
 
     pub fn next_event(&mut self) {
-        self.data.push(
-            Reschedule {
-                rtime: Reg::X0,
-                region: 0,
-                schedule_self: false,
-            }
-            .encode(),
-        );
+        self.data.push(NextEvent.encode());
     }
 
-    pub fn start_listen(&mut self, index: u32) {
-        self.data.push(StartListen { index }.encode());
+    pub fn reschedule_listen(&mut self, index: u32) {
+        self.data.push(RescheduleListen { index }.encode());
     }
 
     pub fn set_lupdt(&mut self, rcond: Reg, idx: InlineIndex<20>) {

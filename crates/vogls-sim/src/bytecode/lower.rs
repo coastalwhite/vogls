@@ -16,10 +16,15 @@ use crate::bytecode::{
     SixBitSize,
 };
 
+use super::{RescheduleListen, RescheduleRegion, RescheduleWait};
+
 enum JumpKind {
     Jump,
     BranchTrue(Reg),
     BranchFalse(Reg),
+    Wait(Reg),
+    WaitRegion(u8),
+    Listen(u64),
 }
 
 pub struct LowerBytecodeOptions {
@@ -140,11 +145,17 @@ pub fn lower_process_to_bytecode(
                 T::Wait(target, time) => {
                     let time = time.0;
 
-                    if time != 0 {
+                    if time == 0 {
+                        jump_to_if_not_next!(target.entry());
+                    } else {
                         bytecode.load_u64(T0, time);
-                        bytecode.wait(T0);
+                        jump_targets.push((
+                            bytecode.data.len(),
+                            target.entry(),
+                            JumpKind::Wait(T0),
+                        ));
+                        bytecode.panic();
                     }
-                    jump_to_if_not_next!(target.entry());
                 }
                 T::VariableWait(target, src) => {
                     let mut rtime = to_reg(
@@ -168,19 +179,25 @@ pub fn lower_process_to_bytecode(
                         }
                     }
 
-                    bytecode.wait(rtime);
-                    jump_to_if_not_next!(target.entry());
+                    jump_targets.push((bytecode.data.len(), target.entry(), JumpKind::Wait(rtime)));
+                    bytecode.panic();
                 }
                 T::WaitRegion(target, region) => {
-                    bytecode.wait_region(*region);
-                    jump_to_if_not_next!(target.entry());
+                    jump_targets.push((
+                        bytecode.data.len(),
+                        target.entry(),
+                        JumpKind::WaitRegion(*region),
+                    ));
+                    bytecode.panic();
                 }
                 T::Watch(target, _) => {
                     let index = watch_map.get_watch_index(bb_key);
-                    bytecode.start_listen(index as u32);
-                    bytecode.next_event();
-                    listeners.set_ptr(index, bytecode.current_ptr());
-                    jump_to_if_not_next!(target.entry());
+                    jump_targets.push((
+                        bytecode.data.len(),
+                        target.entry(),
+                        JumpKind::Listen(index as u64),
+                    ));
+                    bytecode.panic();
                 }
                 T::Jump(target) => {
                     jump_to_if_not_next!(*target);
@@ -270,6 +287,21 @@ pub fn lower_process_to_bytecode(
                     rcond,
                     inv: true,
                     imm,
+                }
+                .encode()
+            }
+            JumpKind::Wait(rtime) => {
+                let offset = SignedImmediate::new(imm.into()).unwrap();
+                RescheduleWait { rtime, offset }.encode()
+            }
+            JumpKind::WaitRegion(region) => {
+                let offset = SignedImmediate::new(imm.into()).unwrap();
+                RescheduleRegion { region, offset }.encode()
+            }
+            JumpKind::Listen(index) => {
+                listeners.set_ptr(index as usize, InstructionPtr(target_offset as u64));
+                RescheduleListen {
+                    index: index as u32,
                 }
                 .encode()
             }
