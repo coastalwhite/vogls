@@ -1872,38 +1872,27 @@ fn lower_instruction(
             let dslot = assignment[dst];
             let rd = to_reg(bce, *dst, &gl.vars, dslot, stack_offsets, T0, true);
 
-            match op.as_ref() {
-                IntrinsicOp::ReadMem(read_mem) => {
-                    let signal = read_mem.signal;
-                    let signal_addr = signal_address(signal, signals, io_signals);
-                    let mode = gl.signals[signal].mode;
-                    let size = gl.signals[signal].size;
-
-                    bce.load_u64(T2, signal_addr);
-                    bce.push_argument(VSIZE_64, LogicMode::TwoValue, T2);
-                    bce.load_u64(T2, mode as u64);
-                    bce.push_argument(SCALAR_VSIZE, LogicMode::TwoValue, T2);
-                    bce.load_u64(T2, size.get() as u64);
-                    bce.push_argument(VSIZE_32, LogicMode::TwoValue, T2);
-                }
-                _ => {
-                    for item in items {
-                        let reg = to_reg(
-                            bce,
-                            *item,
-                            &gl.vars,
-                            assignment[item],
-                            stack_offsets,
-                            T2,
-                            false,
-                        );
-                        bce.push_argument(gl.vars.size(*item), item.mode(), reg);
-                    }
-                }
+            for item in items {
+                let reg = to_reg(
+                    bce,
+                    *item,
+                    &gl.vars,
+                    assignment[item],
+                    stack_offsets,
+                    T2,
+                    false,
+                );
+                bce.push_argument(gl.vars.size(*item), item.mode(), reg);
             }
             let intrinsic_id = bce
                 .intrinsics
-                .insert_index(IntrinsicOpEqWrap(op.as_ref().clone()));
+                .insert_index(IntrinsicOpEqWrap(convert_intrinsic(
+                    gl,
+                    *dst,
+                    signals,
+                    io_signals,
+                    op.as_ref(),
+                )));
             let intrinsic_id = match intrinsic_id.try_into().ok().and_then(|v| NonMaxU16::new(v)) {
                 None => {
                     bce.load_u64(T4, intrinsic_id as u64);
@@ -2513,5 +2502,36 @@ fn store_back(
             let rd = Reg::new_masked(rd);
             bytecode.copy(rd, value);
         }
+    }
+}
+
+fn convert_intrinsic(
+    gl: &GlobalContext,
+    dst: VariableKey,
+    signals: &[HeapRef],
+    io_signals: &VgHashMap<SignalKey, RtSignalKey>,
+    op: &IntrinsicOp,
+) -> super::IntrinsicOp {
+    use super::IntrinsicOp as VO;
+    use IntrinsicOp as O;
+    match op {
+        O::Time => VO::Time,
+        O::Finish => VO::Finish,
+        O::Random => VO::Random(gl.vars.size(dst), dst.mode()),
+        O::Display(f) => VO::Display(f.clone()),
+        O::Assert(f) => VO::Assert(f.clone()),
+        O::VcdOpenFile(f) => VO::VcdOpenFile(f.clone()),
+        O::VcdAppendModule(v) => {
+            let (children, map) = vogls_vcd::VcdScope::lower(v, io_signals);
+            VO::VcdAppendModule(Box::new((children, map)))
+        }
+        O::VcdPause => VO::VcdPause,
+        O::VcdResume => VO::VcdResume,
+        O::ReadMem(readmem) => VO::ReadMem(Box::new(super::ReadMem {
+            offset: signal_address(readmem.signal, signals, io_signals),
+            size: gl.signals[readmem.signal].size,
+            mode: gl.signals[readmem.signal].mode,
+            inner: readmem.as_ref().clone(),
+        })),
     }
 }

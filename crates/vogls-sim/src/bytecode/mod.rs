@@ -24,7 +24,7 @@ use reg::{Reg, Regs};
 use vogls_bits::BitsDataRef;
 use vogls_codegen::{HeapOffset, HeapRef};
 
-use vogls_ir::{Bits, IntrinsicOp, LogicMode, VSIZE_64, VectorSize};
+use vogls_ir::{Bits, LogicMode, VSIZE_64, VectorSize};
 use vogls_runtime::RuntimeState;
 use vogls_runtime::plugins::{RuntimePlugin, RuntimePluginState};
 use vogls_utils::{IndexSet, NonMaxU32};
@@ -823,7 +823,11 @@ impl std::hash::Hash for IntrinsicOpEqWrap {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         std::mem::discriminant(&self.0);
         match &self.0 {
-            IntrinsicOp::Time | IntrinsicOp::Finish | IntrinsicOp::Random => {}
+            IntrinsicOp::Time | IntrinsicOp::Finish => {}
+            IntrinsicOp::Random(size, mode) => {
+                size.hash(state);
+                mode.hash(state);
+            }
             IntrinsicOp::Display(f) | IntrinsicOp::Assert(f) => f.hash(state),
             IntrinsicOp::VcdOpenFile(_) | IntrinsicOp::VcdAppendModule(_) => {}
             IntrinsicOp::VcdPause | IntrinsicOp::VcdResume | IntrinsicOp::ReadMem(_) => {}
@@ -836,7 +840,10 @@ impl PartialEq for IntrinsicOpEqWrap {
             return false;
         }
         match (&self.0, &other.0) {
-            (IntrinsicOp::Time | IntrinsicOp::Finish | IntrinsicOp::Random, _) => true,
+            (IntrinsicOp::Time | IntrinsicOp::Finish, _) => true,
+            (IntrinsicOp::Random(lsize, lmode), IntrinsicOp::Random(rsize, rmode)) => {
+                lsize == rsize && lmode == rmode
+            }
             (
                 IntrinsicOp::Display(f) | IntrinsicOp::Assert(f),
                 IntrinsicOp::Display(fo) | IntrinsicOp::Assert(fo),
