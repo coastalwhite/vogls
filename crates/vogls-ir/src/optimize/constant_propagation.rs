@@ -7,9 +7,9 @@ use vogls_utils::{VgHashMap, VgHashSet};
 
 use crate::orders::post_order_keys;
 use crate::{
-    BasicBlockKey, BinaryImmOp, BinaryImmOpSimplification, BinaryOp, GlobalContext, Instruction,
-    LogicMode, ProcessKey, ResizeOp, SCALAR_VSIZE, ShiftImmOp, ShiftImmOpSimplification, Signal,
-    SignalKey, UnaryOp, VariableKey, VariableMap,
+    BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryImmOpSimplification, BinaryOp,
+    GlobalContext, Instruction, LogicMode, ProcessKey, ResizeOp, SCALAR_VSIZE, ShiftImmOp,
+    ShiftImmOpSimplification, Signal, SignalKey, Time, UnaryOp, VariableKey, VariableMap,
 };
 
 pub fn constant_propagation(
@@ -70,6 +70,54 @@ pub fn constant_propagation(
                 }
             }
             bb.instrs = output;
+
+            use BasicBlockTerminator as T;
+            match &bb.terminator {
+                T::VariableWait(tr, var) => {
+                    if let Some(Some(value)) = scratch_map.get(var) {
+                        let tr = *tr;
+                        if value.contains_special() {
+                            bb.terminator = T::Wait(tr, Time(0));
+                        } else {
+                            let value = value.extract_exact_u64().unwrap();
+                            bb.terminator = T::Wait(tr, Time(value));
+                        }
+                    }
+                }
+                T::Branch(var, truthy, falsy) => {
+                    if let Some(Some(value)) = scratch_map.get(var) {
+                        let (truthy, falsy) = (*truthy, *falsy);
+                        if value.eq_one() {
+                            bb.terminator = T::Jump(truthy);
+                            scratch_mfr.insert(falsy);
+                        } else {
+                            bb.terminator = T::Jump(falsy);
+                            scratch_mfr.insert(truthy);
+                        }
+                    }
+                }
+                T::Wait(..) | T::WaitRegion(..) | T::Watch(..) | T::Jump(..) | T::Halt => {}
+            }
+        }
+    }
+
+    if !scratch_mfr.is_empty() {
+        let entry = gl.processes[process].regions[0].entry();
+        scratch_stack.push((false, entry));
+        scratch_seen.insert(entry);
+        scratch_mfr.remove(&entry);
+
+        while let Some((_, bb)) = scratch_stack.pop() {
+            gl.bbs[bb].terminator.for_each_temporal_bb(|next| {
+                if scratch_seen.insert(next) {
+                    scratch_stack.push((false, next));
+                    scratch_mfr.remove(&next);
+                }
+            });
+        }
+
+        for &bb in scratch_mfr.iter() {
+            gl.bbs.remove(bb);
         }
     }
 }
