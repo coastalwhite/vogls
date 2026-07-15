@@ -5,8 +5,8 @@ use vogls_utils::{VgHashMap, VgHashSet};
 
 use crate::token_range::TokenRange;
 use crate::{
-    BasicBlockKey, GlobalContext, INTEGER_VSIZE, Instruction, LogicMode, Process, ProcessKind,
-    ResizeOp, TIME_VSIZE, TemporalRegionKey, VSIZE_32, VariableKey,
+    BasicBlockKey, GlobalContext, Instruction, LogicMode, Process, ProcessKind, ResizeOp,
+    TIME_VSIZE, TemporalRegionKey, VSIZE_32, VariableKey,
 };
 
 struct Fail {

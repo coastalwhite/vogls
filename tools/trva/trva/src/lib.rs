@@ -968,7 +968,7 @@ impl Assembler {
                                 todo!();
                             }
                         }
-                        RelocationItem::PcRelJump(rd, rt, lbl) => {
+                        RelocationItem::PcRelJump(rd, _rt, lbl) => {
                             // @Q? Should `rt` be set anyway?
                             let lbl_offset = resolve_target_label(
                                 lbl,

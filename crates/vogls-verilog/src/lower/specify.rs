@@ -753,7 +753,6 @@ pub fn lower_iopath<'a>(
 
         let (process, mut builder) =
             ProcessBuilder::new(mctx.gl(), ProcessKind::Specify, TokenRange::default());
-        let entry = builder.key();
 
         // @Correctness: This might need something like. `Initial Value of Signal X`. I think
         // this is incorrect if the event does not get triggered first.

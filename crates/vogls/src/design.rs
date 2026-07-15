@@ -31,6 +31,7 @@ pub enum DesignBackend {
 
 pub struct Design {
     pub(crate) gl: GlobalContext,
+    #[expect(unused)]
     pub(crate) ident_table: IdentTable,
     pub(crate) elab_table: FrozenSymbolTable<Symbol>,
     pub(crate) backend: DesignBackend,

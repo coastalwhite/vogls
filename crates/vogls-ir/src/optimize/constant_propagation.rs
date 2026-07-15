@@ -1,5 +1,3 @@
-use std::ops::Range;
-
 use slotmap::SlotMap;
 use vogls_bits::Bits;
 use vogls_bits::arithmetic::FvLogicValue;
@@ -27,13 +25,6 @@ pub fn constant_propagation(
     // - None = "seen, but not constant"
     // - Some(Bits) = "seen, constant"
     scratch_map: &mut VgHashMap<VariableKey, Option<Bits>>,
-
-    // As we might have variables from basic blocks we have not explored yet (primarily due to phi
-    // instructions), we need to keep track of all the yet unresolved variables and which variables
-    // they depend on being resolved. If there is a cycle in the dependencies for variables, we
-    // need to handle the cycle otherwise we will keep looping forever.
-    scratch_dep: &mut VgHashMap<VariableKey, (BasicBlockKey, usize, Range<usize>)>,
-    scratch_dep_edges: &mut Vec<VariableKey>,
 ) {
     let mut post_order = Vec::new();
     let mut scratch_stack2 = Vec::new();
@@ -133,7 +124,6 @@ pub fn constant_propagation(
 
 struct PropagateResult {
     replace: bool,
-    ready: bool,
 }
 
 fn constant_propagate_instruction(
@@ -149,19 +139,13 @@ fn constant_propagate_instruction(
     if i.get_destination_variable()
         .is_some_and(|dst| scratch_map.contains_key(&dst))
     {
-        return PropagateResult {
-            replace: false,
-            ready: true,
-        };
+        return PropagateResult { replace: false };
     }
 
     macro_rules! get {
         ($var:expr) => {{
             let Some(value) = scratch_map.get($var) else {
-                return PropagateResult {
-                    replace: false,
-                    ready: false,
-                };
+                return PropagateResult { replace: false };
             };
             value
         }};
@@ -174,10 +158,7 @@ fn constant_propagate_instruction(
             }
             scratch_map.insert($dst, Some(constant.clone()));
             additional.push(I::Constant($dst, constant));
-            return PropagateResult {
-                replace: true,
-                ready: true,
-            };
+            return PropagateResult { replace: true };
         }};
 
         ($i:expr, $dst:expr, $constant:expr) => {{
@@ -187,20 +168,14 @@ fn constant_propagate_instruction(
             }
             scratch_map.insert($dst, Some(constant.clone()));
             $i = I::Constant($dst, constant);
-            return PropagateResult {
-                replace: true,
-                ready: true,
-            };
+            return PropagateResult { replace: true };
         }};
     }
 
     macro_rules! not_constant {
         ($dst:expr) => {{
             scratch_map.insert($dst, None);
-            return PropagateResult {
-                replace: false,
-                ready: true,
-            };
+            return PropagateResult { replace: false };
         }};
     }
 
@@ -210,10 +185,7 @@ fn constant_propagate_instruction(
                 assert_eq!(dst.mode(), LogicMode::FourValue);
             }
             _ = scratch_map.insert(*dst, Some(bits.clone()));
-            PropagateResult {
-                replace: false,
-                ready: true,
-            }
+            PropagateResult { replace: false }
         }
         I::Unary(dst, op, src) => {
             let src_bits = get!(src);
@@ -407,7 +379,6 @@ fn constant_propagate_instruction(
 
             PropagateResult {
                 replace: additional.len() > 0,
-                ready: operands_are_complete,
             }
         }
         I::BinaryImm(dst, op, src, imm) => {
@@ -501,7 +472,6 @@ fn constant_propagate_instruction(
 
             PropagateResult {
                 replace: additional.len() > 0,
-                ready: operands_are_complete,
             }
         }
         I::SliceImm(dst, src, amount) => {
@@ -536,17 +506,11 @@ fn constant_propagate_instruction(
                     match (t.select_value(0), f.select_value(0)) {
                         (L::L1, L::L0) => {
                             additional.push(I::copy(vars, dst, *cond));
-                            return PropagateResult {
-                                replace: true,
-                                ready: false,
-                            };
+                            return PropagateResult { replace: true };
                         }
                         (L::L0, L::L1) => {
                             additional.push(I::Unary(dst, UnaryOp::Neg, *cond));
-                            return PropagateResult {
-                                replace: true,
-                                ready: false,
-                            };
+                            return PropagateResult { replace: true };
                         }
                         _ => {}
                     }
@@ -566,10 +530,7 @@ fn constant_propagate_instruction(
                     match bits {
                         None => {
                             additional.push(I::copy(vars, dst, src));
-                            return PropagateResult {
-                                replace: true,
-                                ready: false,
-                            };
+                            return PropagateResult { replace: true };
                         }
                         Some(bits) => assign_constant!(dst, bits.clone()),
                     }
@@ -597,20 +558,14 @@ fn constant_propagate_instruction(
                             .is_some_and(|v| v < src_size.get())
                         {
                             additional.push(I::Probe(dst, signal, offset));
-                            return PropagateResult {
-                                replace: true,
-                                ready: false,
-                            };
+                            return PropagateResult { replace: true };
                         }
                     }
                 },
             }
             not_constant!(dst);
         }
-        I::Drive(..) => PropagateResult {
-            replace: false,
-            ready: true,
-        },
+        I::Drive(..) => PropagateResult { replace: false },
         I::DriveSlice(signal, src, offset) => {
             let (signal, src) = (*signal, *src);
             let offset_bits = get!(offset);
@@ -628,19 +583,13 @@ fn constant_propagate_instruction(
                             .is_some_and(|v| v < dst_size.get())
                         {
                             additional.push(I::Drive(signal, src, offset));
-                            return PropagateResult {
-                                replace: true,
-                                ready: false,
-                            };
+                            return PropagateResult { replace: true };
                         }
                     }
                 },
             }
 
-            PropagateResult {
-                replace: false,
-                ready: true,
-            }
+            PropagateResult { replace: false }
         }
         I::Phi(dst, srcs) => {
             assert!(!srcs.is_empty());
@@ -670,10 +619,7 @@ fn constant_propagate_instruction(
                 not_constant!(*dst);
             }
             if !is_all_complete {
-                return PropagateResult {
-                    replace: false,
-                    ready: true,
-                };
+                return PropagateResult { replace: false };
             }
             assign_constant!(*dst, acc.clone().unwrap().clone());
         }

@@ -113,8 +113,6 @@ pub fn optimize_processes(gl: &mut GlobalContext, processes: &[ProcessKey], opts
     let mut scratch_seen = VgHashSet::default();
     let mut scratch_mfr = VgHashSet::default();
     let mut scratch_map = VgHashMap::default();
-    let mut scratch_dep = VgHashMap::default();
-    let mut scratch_dep_edges = Vec::new();
     for &process in processes {
         if !gl.processes.contains_key(process) {
             continue;
@@ -129,8 +127,6 @@ pub fn optimize_processes(gl: &mut GlobalContext, processes: &[ProcessKey], opts
                     &mut scratch_seen,
                     &mut scratch_mfr,
                     &mut scratch_map,
-                    &mut scratch_dep,
-                    &mut scratch_dep_edges,
                 );
             }
             crate::form::check_ir_form(&gl.processes[process].regions, gl);

@@ -11,7 +11,7 @@ use vogls_frontend::ident_table::IdentTable;
 use vogls_frontend::symbol_table::FrozenSymbolTable;
 #[cfg(feature = "unstable")]
 use vogls_ir::ProcessKind;
-use vogls_ir::optimize::{OptFlags, Optimizations};
+use vogls_ir::optimize::Optimizations;
 use vogls_ir::watchers::WatchMap;
 use vogls_ir::{GlobalContext, LogicMode, SCALAR_VSIZE, Signal, SignalKey};
 use vogls_runtime::plugins::RuntimePlugin;

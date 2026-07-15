@@ -187,7 +187,7 @@ impl<'a> SourceCursor<'a> {
         // @TODO: Many other syntaxes.
         self.take_u32().map(|v| v as i64)
     }
-    pub fn take_imm32(&mut self) -> AssembleResult<u32> {
+    pub fn _take_imm32(&mut self) -> AssembleResult<u32> {
         // @TODO: Many other syntaxes.
         self.take_u32()
     }

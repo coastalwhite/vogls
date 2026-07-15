@@ -185,7 +185,7 @@ pub fn lower_bin_op(
     rhs: HeapRef,
     dst_mode: LogicMode,
     lhs_mode: LogicMode,
-    rhs_mode: LogicMode,
+    _rhs_mode: LogicMode,
 ) {
     use BinaryArithmeticOp as BA;
     use BinaryComparisonOp as BC;
@@ -686,8 +686,6 @@ pub fn lower_process_to_vm(
                         let dst_mode = dst.mode();
                         let size = gl.vars.size(*dst);
                         let cond_mode = cond.mode();
-                        let truthy_mode = truthy.mode();
-                        let falsy_mode = falsy.mode();
                         let d = heap_map[dst];
                         let c = heap_map[cond];
                         let t = heap_map[truthy];
@@ -706,18 +704,10 @@ pub fn lower_process_to_vm(
                         }
                     }
                     I::Binary(dst, op, lhs, rhs) => {
-                        use LogicMode as M;
-
                         let d_size = gl.vars.size(*dst);
                         let s1_size = gl.vars.size(*lhs);
                         let s2_size = gl.vars.size(*rhs);
-                        let s1_mode = lhs.mode();
-                        let s2_mode = rhs.mode();
                         let d = heap_map[dst];
-                        let mode = match (s1_mode, s2_mode) {
-                            (M::FourValue, _) | (_, M::FourValue) => M::FourValue,
-                            _ => M::TwoValue,
-                        };
                         let s1 = heap_map[lhs];
                         let s2 = heap_map[rhs];
                         lower_bin_op(
