@@ -113,7 +113,7 @@ pub fn constant_propagation(
 
         remove_bbs(
             gl,
-            tr,
+            process,
             &scratch_mfr,
             scratch_stack,
             scratch_seen,

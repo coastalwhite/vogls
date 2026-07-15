@@ -263,7 +263,7 @@ pub fn remap_vars(
 /// This patches up phi-instructions to also remove any references to these basic blocks.
 pub fn remove_bbs(
     gl: &mut GlobalContext,
-    entry: TemporalRegionKey,
+    process: ProcessKey,
 
     remove: &VgHashSet<BasicBlockKey>,
 
@@ -272,11 +272,13 @@ pub fn remove_bbs(
 
     scratch_fanin: &mut Vec<(BasicBlockKey, BasicBlockKey)>,
 ) {
+    let process = &mut gl.processes[process];
+    let tr = process.regions[0];
     if remove.is_empty() {
         return;
     }
 
-    assert!(!remove.contains(&entry.entry()));
+    assert!(!remove.contains(&tr.entry()));
 
     scratch_stack.clear();
     scratch_seen.clear();
@@ -285,10 +287,11 @@ pub fn remove_bbs(
     for bb in remove.iter() {
         gl.bbs.remove(*bb);
     }
+    process.regions.retain(|tr| !remove.contains(&tr.entry()));
 
     let mut has_phi_instruction = false;
-    scratch_stack.push(entry.entry());
-    scratch_seen.insert(entry.entry());
+    scratch_stack.push(tr.entry());
+    scratch_seen.insert(tr.entry());
     while let Some(bb_key) = scratch_stack.pop() {
         let bb = &gl.bbs[bb_key];
         bb.terminator.for_each_temporal_bb(|next| {
