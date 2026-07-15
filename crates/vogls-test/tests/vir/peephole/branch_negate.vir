@@ -1,0 +1,14 @@
+// vogls: disable-optimization=*
+// vogls: enable-optimization=peephole
+proc other {
+*TR0:
+    %t0 = tv.const 1'h0
+    %t1 = negate %t0
+    branch %t1, <L0>, <L1>
+.L0:
+    %_1 = vogls.display "Never!\n"
+    halt
+.L1:
+    %_2 = vogls.display "Always!\n"
+    halt
+}

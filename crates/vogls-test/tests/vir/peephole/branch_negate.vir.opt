@@ -1,0 +1,12 @@
+proc other {
+*TR0:
+  %t0 = tv.const 1'h0
+  %t1 = negate %t0
+  branch %t0, <L1>, <L2>
+.L2:
+  %t2 = vogls.display "Never!\n"
+  halt
+.L1:
+  %t3 = vogls.display "Always!\n"
+  halt
+}

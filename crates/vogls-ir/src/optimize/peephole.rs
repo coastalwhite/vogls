@@ -138,7 +138,12 @@ pub fn peephole(
                 T::WaitRegion(..) => {}
                 T::Watch(..) => {}
                 T::Jump(..) => {}
-                T::Branch(..) => {}
+                T::Branch(cond, truthy, falsy) => {
+                    let cond = try_lookup!(cond);
+                    if let CSExpr::Unary(UnaryOp::Neg, new_src) = exprs[cond].1 {
+                        bb.terminator = T::Branch(exprs[new_src].0, *falsy, *truthy);
+                    }
+                }
                 T::Halt => {}
             }
         }
