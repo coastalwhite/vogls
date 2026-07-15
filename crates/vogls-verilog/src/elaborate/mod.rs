@@ -5,7 +5,8 @@ use std::sync::Arc;
 use vogls_frontend::ident_table::IdentId;
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{
-    BasicBlockBuilder, BasicBlockKey, Bits, ConnectionDirection, GlobalContext, LogicMode, ProcessKey, Signal, SignalFlags, SignalKey, VariableKey, VectorSize, SCALAR_VSIZE
+    BasicBlockBuilder, BasicBlockKey, Bits, ConnectionDirection, GlobalContext, LogicMode,
+    ProcessKey, SCALAR_VSIZE, Signal, SignalFlags, SignalKey, VariableKey, VectorSize,
 };
 use vogls_utils::{Table, VgHashMap, new_table_key};
 
@@ -117,12 +118,7 @@ impl Net {
         src: VariableKey,
         partial: Option<VariableKey>,
     ) {
-        bbb.drive_opt_partial(
-            gl,
-            self.blocking_drive_signal(),
-            src,
-            partial.map(|o| (o, self.width())),
-        )
+        bbb.drive_opt_partial(gl, self.blocking_drive_signal(), src, partial)
     }
     pub fn drive_non_blocking(
         &self,
@@ -132,11 +128,11 @@ impl Net {
         partial: Option<VariableKey>,
     ) {
         let (value, mask) = self.non_blocking_drive_signal();
-        bbb.drive_opt_partial(gl, value, src, partial.map(|o| (o, self.width())));
+        bbb.drive_opt_partial(gl, value, src, partial);
         if let Some(mask) = mask {
             let size = gl.vars.size(src);
             let mask_value = bbb.constant(gl, Bits::new_ones(size));
-            bbb.drive_opt_partial(gl, mask, mask_value, partial.map(|o| (o, self.width())));
+            bbb.drive_opt_partial(gl, mask, mask_value, partial);
         }
     }
 

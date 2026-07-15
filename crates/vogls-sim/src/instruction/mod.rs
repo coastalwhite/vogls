@@ -122,7 +122,7 @@ pub enum VmInstruction {
     Intrinsic(HeapOffset, Box<VmIntrinsicOp>, Box<[(HeapRef, LogicMode)]>),
 
     LastUpdateTime(HeapOffset, RtSignalKey),
-    Drive(RtSignalKey, HeapRef, Option<(HeapOffset, bool, VectorSize)>),
+    Drive(RtSignalKey, HeapRef, Option<(HeapOffset, bool)>),
 
     Wait(Time),
     TvVariableWait(HeapOffset),
@@ -307,7 +307,7 @@ impl VmInstruction {
                         ("dst", mode == LogicMode::FourValue, signals[dst.as_usize()]),
                         ("src", mode == LogicMode::FourValue, *src),
                     ],
-                    Some((partial, is_fv, _)) => &[
+                    Some((partial, is_fv)) => &[
                         ("dst", mode == LogicMode::FourValue, signals[dst.as_usize()]),
                         ("src", mode == LogicMode::FourValue, *src),
                         ("offset", *is_fv, partial.to_32bit_ref()),

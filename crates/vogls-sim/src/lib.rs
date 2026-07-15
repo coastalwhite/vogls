@@ -107,13 +107,12 @@ pub fn drive_bits(
     heap: &mut Heap,
     dst: HeapRef,
     src: HeapRef,
-    dst_limit: VectorSize,
     partial: Option<u32>,
     logic_mode: LogicMode,
 ) -> bool {
-    if partial.is_some() || src.size < dst.size || dst_limit < dst.size {
+    if partial.is_some() || src.size < dst.size {
         let partial = partial.unwrap_or(0);
-        let Some(rem_dst_size) = VectorSize::new(dst_limit.get().saturating_sub(partial)) else {
+        let Some(rem_dst_size) = VectorSize::new(dst.size.get().saturating_sub(partial)) else {
             return false;
         };
 
@@ -720,29 +719,22 @@ impl Simulation {
                     I::Drive(sig, src, offset) => {
                         let dst = self.signals[sig.as_usize()];
                         let mode = self.signal_modes[sig.as_usize()];
-                        let (dst_limit, partial) = match offset {
-                            None => (dst.size, None),
-                            Some((offset, false, mask_size)) => (
-                                *mask_size,
-                                Some(state.runtime.heap.load_exact_tv_u32(*offset)),
-                            ),
-                            Some((offset, true, mask_size)) => {
+                        let partial = match offset {
+                            None => None,
+                            Some((offset, false)) => {
+                                Some(state.runtime.heap.load_exact_tv_u32(*offset))
+                            }
+                            Some((offset, true)) => {
                                 let (spc, val) = state.runtime.heap.load_exact_fv_u32(*offset);
                                 if !spc != 0 {
                                     break 'instruction None;
                                 }
-                                (*mask_size, Some(val))
+                                Some(val)
                             }
                         };
 
-                        let mut updated = drive_bits(
-                            &mut state.runtime.heap,
-                            dst,
-                            *src,
-                            dst_limit,
-                            partial,
-                            mode,
-                        );
+                        let mut updated =
+                            drive_bits(&mut state.runtime.heap, dst, *src, partial, mode);
 
                         if matches!(mode, LogicMode::TwoValue)
                             && let w = &mut state.runtime.tvl_first_write[sig.as_usize() / 64]
@@ -804,7 +796,11 @@ impl Simulation {
                             state.regions.other[*region as usize - 1].push(event);
                         }
                         if self.itrace {
-                            instr.itrace(&mut state.runtime.heap, &self.signals, &self.signal_modes);
+                            instr.itrace(
+                                &mut state.runtime.heap,
+                                &self.signals,
+                                &self.signal_modes,
+                            );
                         }
                         return EvalOutcome::Next;
                     }
@@ -814,7 +810,11 @@ impl Simulation {
                             state.watches[signal.as_usize()].push(listener_key);
                         }
                         if self.itrace {
-                            instr.itrace(&mut state.runtime.heap, &self.signals, &self.signal_modes);
+                            instr.itrace(
+                                &mut state.runtime.heap,
+                                &self.signals,
+                                &self.signal_modes,
+                            );
                         }
                         return EvalOutcome::Next;
                     }

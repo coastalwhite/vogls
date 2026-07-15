@@ -592,7 +592,7 @@ pub enum Instruction {
     ///
     /// A drive can be a "partial" drive, meaning that the source value is offset by a certain
     /// amount of bits, and no bits beyond a certain point will be affected.
-    Drive(SignalKey, VariableKey, Option<(VariableKey, VectorSize)>),
+    Drive(SignalKey, VariableKey, Option<VariableKey>),
 
     Phi(VariableKey, Box<[(BasicBlockKey, VariableKey)]>),
 }
@@ -699,7 +699,7 @@ impl Instruction {
             }
             Self::Drive(_, src, partial) => {
                 *src = f(*src);
-                if let Some((off, _)) = partial {
+                if let Some(off) = partial {
                     *off = f(*off);
                 }
             }
@@ -744,7 +744,7 @@ impl Instruction {
             }
             Self::Drive(_, src, partial) => {
                 f(*src);
-                if let Some((off, _)) = partial {
+                if let Some(off) = partial {
                     f(*off);
                 }
             }
@@ -784,7 +784,7 @@ impl Instruction {
             }
             Self::Drive(_, src, partial) => {
                 f(*src);
-                if let Some((off, _)) = partial {
+                if let Some(off) = partial {
                     f(*off);
                 }
             }
@@ -820,7 +820,7 @@ impl Instruction {
             }
             Self::Drive(_, src, partial) => {
                 *src = f(*src);
-                if let Some((off, _)) = partial {
+                if let Some(off) = partial {
                     *off = f(*off);
                 }
             }

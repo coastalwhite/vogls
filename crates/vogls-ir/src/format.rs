@@ -451,7 +451,7 @@ impl ContextFormat for Instruction {
             }
             Self::Drive(sig, var, offset) => {
                 f.write_str("drv")?;
-                if let Some((offset, _mask_size)) = offset {
+                if let Some(offset) = offset {
                     f.write_str("[")?;
                     offset.ctx_fmt(f, ctx)?;
                     f.write_str("]")?;

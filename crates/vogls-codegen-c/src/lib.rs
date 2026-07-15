@@ -820,7 +820,7 @@ pub fn lower_process(
                                 Some(CExpr::Bits(&zero, LogicMode::TwoValue))
                             }
                             None => None,
-                            Some((offset, _)) => {
+                            Some(offset) => {
                                 let offset_t = temp_map[offset];
                                 Some(offset_t.into())
                             }

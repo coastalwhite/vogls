@@ -395,13 +395,11 @@ impl FuseGraphOptimizer {
                         if let Some((to, slice)) = self.drive_map.get(signal) {
                             let mut partial = *partial;
                             if let Some(slice) = slice {
-                                let new_width = VectorSize::new(slice.msb() + 1).unwrap();
                                 partial = Some(match partial {
-                                    None => (builder.constant_u32(gl, slice.lsb()), new_width),
-                                    Some((o, m)) => (
-                                        builder.plus_constant(gl, o, Bits::new_u32(slice.lsb())),
-                                        m.min(new_width),
-                                    ),
+                                    None => builder.constant_u32(gl, slice.lsb()),
+                                    Some(o) => {
+                                        builder.plus_constant(gl, o, Bits::new_u32(slice.lsb()))
+                                    }
                                 });
                             }
                             builder.push_raw_instruction(I::Drive(*to, *src, partial));

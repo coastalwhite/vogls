@@ -57,7 +57,7 @@ pub fn lower_process_to_bytecode(
     let mut assignment = VgHashMap::default();
 
     let mut post_order = Vec::<BasicBlockKey>::new();
-    let mut start_offset = bytecode.data.len();
+    let start_offset = bytecode.data.len();
     let mut bb_offsets = VgHashMap::<BasicBlockKey, usize>::default();
     let mut emit_sizes = Vec::<u8>::new();
     let mut jump_targets = Vec::<(usize, BasicBlockKey, JumpKind)>::new();
@@ -71,7 +71,7 @@ pub fn lower_process_to_bytecode(
     );
 
     schedule.push_active(InstructionPtr(bytecode.data.len() as u64));
-    for (i, tr) in process.regions.iter().enumerate() {
+    for tr in &process.regions {
         bb_seen.clear();
         assignment.clear();
         post_order.clear();
@@ -2141,7 +2141,6 @@ fn lower_instruction(
                 false,
             );
 
-            let rt_signal = io_signals[signal];
             let signal_size = gl.signals[*signal].size;
             let src_size = gl.vars.size(*src);
 
@@ -2152,7 +2151,7 @@ fn lower_instruction(
             let mut branch_offset: Option<usize> = None;
             if partial.is_some() || signal_size != src_size {
                 bce.load_u64(roff, signal_addr);
-                if let Some((partial, _)) = partial {
+                if let Some(partial) = partial {
                     let mut rpartial = to_reg(
                         bce,
                         *partial,

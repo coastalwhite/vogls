@@ -899,7 +899,7 @@ impl BasicBlockBuilder {
         }
 
         let offset = self.constant_u32(gl, offset);
-        self.drive_opt_partial(gl, signal, src, Some((offset, gl.signals[signal].size)));
+        self.drive_opt_partial(gl, signal, src, Some(offset));
     }
     pub fn drive_partial(
         &mut self,
@@ -908,16 +908,16 @@ impl BasicBlockBuilder {
         src: VariableKey,
         offset: VariableKey,
     ) {
-        self.drive_opt_partial(gl, signal, src, Some((offset, gl.signals[signal].size)));
+        self.drive_opt_partial(gl, signal, src, Some(offset));
     }
     pub fn drive_opt_partial(
         &mut self,
         gl: &mut GlobalContext,
         signal: SignalKey,
         src: VariableKey,
-        partial: Option<(VariableKey, VectorSize)>,
+        partial: Option<VariableKey>,
     ) {
-        if let Some((offset, _)) = partial {
+        if let Some(offset) = partial {
             assert_eq!(gl.vars.size(offset), INTEGER_VSIZE);
         }
         let src = self.convert_mode(gl, src, gl.signals[signal].mode);

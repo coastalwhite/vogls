@@ -806,8 +806,8 @@ pub fn lower_process_to_vm(
                         VI::Drive(
                             signal!(*signal),
                             heap_map[src].to_ref(src_size),
-                            offset.map(|(o, mask_size)| {
-                                (heap_map[&o], o.mode() == LogicMode::FourValue, mask_size)
+                            offset.map(|o| {
+                                (heap_map[&o], o.mode() == LogicMode::FourValue)
                             }),
                         )
                     }
