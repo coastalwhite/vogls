@@ -2189,19 +2189,15 @@ fn lower_instruction(
                         bce.or(rpoke, rpoke_t1, rpoke_t2);
                     }
                     (LogicMode::TwoValue, Some(src_size)) => {
-                        let roff = T2;
-                        bce.load_u64(roff, offset);
-                        bce.set_unaligned(rpoke, rs, roff, InlineAddrOffset::ZERO, src_size);
+                        bce.set_unaligned(rpoke, rs, offset, src_size);
                     }
                     (LogicMode::FourValue, Some(src_size)) => {
-                        let roff = T2;
-                        bce.load_u64(roff, offset);
+                        let spc_offset = offset;
+                        let val_offset =
+                            HeapAlignment::spc_offset_to_val_offset(signal_size, spc_offset);
                         let (rsspc, rsval) = rs.to_spc_and_val();
-                        bce.set_unaligned(rpoke_t1, rsspc, roff, InlineAddrOffset::ZERO, src_size);
-                        let val_offset = HeapAlignment::spc_offset_to_val_offset(signal_size, 0);
-                        let (addr, val_offset) =
-                            InlineAddrOffset::new(val_offset as i64, bce, roff, T5);
-                        bce.set_unaligned(rpoke_t2, rsval, addr, val_offset, src_size);
+                        bce.set_unaligned(rpoke_t1, rsspc, spc_offset, src_size);
+                        bce.set_unaligned(rpoke_t2, rsval, val_offset, src_size);
                         bce.or(rpoke, rpoke_t1, rpoke_t2);
                     }
                 }
@@ -2330,15 +2326,15 @@ fn lower_instruction(
                     bce.or(rpoke, rpoke_t1, rpoke_t2);
                 }
                 (LogicMode::TwoValue, Some(src_size)) => {
-                    bce.set_unaligned(rpoke, rs, roff, InlineAddrOffset::ZERO, src_size);
+                    bce.rel_set_unaligned(rpoke, rs, roff, InlineAddrOffset::ZERO, src_size);
                 }
                 (LogicMode::FourValue, Some(src_size)) => {
                     let (rsspc, rsval) = rs.to_spc_and_val();
-                    bce.set_unaligned(rpoke_t1, rsspc, roff, InlineAddrOffset::ZERO, src_size);
+                    bce.rel_set_unaligned(rpoke_t1, rsspc, roff, InlineAddrOffset::ZERO, src_size);
                     let val_offset = HeapAlignment::spc_offset_to_val_offset(signal_size, 0);
                     let (addr, val_offset) =
                         InlineAddrOffset::new(val_offset as i64, bce, roff, T5);
-                    bce.set_unaligned(rpoke_t2, rsval, addr, val_offset, src_size);
+                    bce.rel_set_unaligned(rpoke_t2, rsval, addr, val_offset, src_size);
                     bce.or(rpoke, rpoke_t1, rpoke_t2);
                 }
             }

@@ -135,10 +135,11 @@ impl SetHeapArgs {
 
 pub struct TvSetAligned(pub SetArgs);
 pub struct FvSetAligned(pub SetArgs);
+pub struct SetUnaligned(pub SetArgs);
 
 pub struct TvRelSetAligned(pub SetRelArgs);
 pub struct FvRelSetAligned(pub SetRelArgs);
-pub struct SetUnaligned(pub SetRelArgs);
+pub struct SetRelUnaligned(pub SetRelArgs);
 pub struct TvSetHeapAligned(pub SetHeapArgs);
 pub struct FvSetHeapAligned(pub SetHeapArgs);
 pub struct SetHeapUnaligned(pub SetHeapArgs);
@@ -227,6 +228,32 @@ fn fv_set_aligned(heap: &mut [u64], offset: u64, spc: u64, val: u64, size: SixBi
     *heap_val_word |= val << val_boff;
 
     (prev_spc != spc) | (prev_val != val)
+}
+
+#[inline(always)]
+fn set_unaligned(heap: &mut [u64], offset: u64, value: u64, size: SixBitSize) -> bool {
+    let mask = size.mask(u64::MAX);
+    let end_offset = offset + size as u64 - 1;
+
+    let word = (offset / 64) as usize;
+    let boff = offset % 64;
+    let endword = (end_offset / 64) as usize;
+
+    if word == endword {
+        let word = &mut heap[word];
+        let prev = mask & (*word >> boff);
+        *word &= !(mask << boff);
+        *word |= value << boff;
+        return prev != value;
+    }
+
+    assert!(heap.len() > 0 && word < heap.len() - 1);
+    let prev = mask & ((heap[word] >> boff) | (heap[word + 1] << (64 - boff)));
+    heap[word] &= !(mask << boff);
+    heap[word] |= value << boff;
+    heap[word + 1] &= !(mask >> (64 - boff));
+    heap[word + 1] |= value >> (64 - boff);
+    prev != value
 }
 
 impl BytecodeInstruction for TvSetAligned {
@@ -466,7 +493,41 @@ impl BytecodeInstruction for FvRelSetAligned {
 }
 
 impl BytecodeInstruction for SetUnaligned {
-    impl_set_rel_args!(SetUnaligned, "set_unaligned");
+    impl_set_args!(SetUnaligned, "set_unaligned");
+
+    fn num_slots(&self) -> u8 {
+        2
+    }
+
+    #[inline(always)]
+    fn execute(
+        self,
+        code: &[Bytecode],
+        regs: &mut Regs,
+        pc: &mut u64,
+        state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let Self(SetArgs {
+            rd,
+            rs,
+            size,
+            imm10,
+        }) = self;
+
+        let code_offset = code[*pc as usize].0;
+        *pc += 1;
+        let offset = ((code_offset as u64) << 10) | (imm10 as u64);
+        let val = regs[rs];
+        let updated = set_unaligned(state.heap.0.as_mut(), offset, val, size);
+        regs[rd] = u64::from(updated);
+    }
+}
+
+impl BytecodeInstruction for SetRelUnaligned {
+    impl_set_rel_args!(SetRelUnaligned, "set_rel_unaligned");
 
     #[inline(always)]
     fn execute(
@@ -486,33 +547,9 @@ impl BytecodeInstruction for SetUnaligned {
             size,
             imm6,
         }) = self;
-        let mask = size.mask(u64::MAX);
         let offset = imm6.get(regs[roff]);
-        let end_offset = offset + size as u64 - 1;
-
         let val = regs[rs];
-        let word = (offset / 64) as usize;
-        let boff = offset % 64;
-        let endword = (end_offset / 64) as usize;
-
-        let heap = &mut state.heap.0;
-        if word == endword {
-            let word = &mut heap[word];
-            let prev = mask & (*word >> boff);
-            *word &= !(mask << boff);
-            *word |= val << boff;
-            let updated = prev != val;
-            regs[rd] = u64::from(updated);
-            return;
-        }
-
-        assert!(heap.len() > 0 && word < heap.len() - 1);
-        let prev = mask & ((heap[word] >> boff) | (heap[word + 1] << (64 - boff)));
-        heap[word] &= !(mask << boff);
-        heap[word] |= val << boff;
-        heap[word + 1] &= !(mask >> (64 - boff));
-        heap[word + 1] |= val >> (64 - boff);
-        let updated = prev != val;
+        let updated = set_unaligned(state.heap.0.as_mut(), offset, val, size);
         regs[rd] = u64::from(updated);
     }
 }
@@ -758,7 +795,27 @@ impl BytecodeEncoder {
             .encode(),
         )
     }
-    pub fn set_unaligned(
+    pub fn set_unaligned(&mut self, rd: Reg, rs: Reg, at: u64, size: SixBitSize) {
+        if at < (1u64 << (10 + 32)) {
+            let imm10 = (at & 0x3FF) as u16;
+            let imm42_11 = (at >> 10) as u32;
+            self.data.push(
+                SetUnaligned(SetArgs {
+                    rd,
+                    rs,
+                    size,
+                    imm10,
+                })
+                .encode(),
+            );
+            self.data.push(Bytecode(imm42_11));
+            return;
+        }
+
+        self.load_u64(rd, at);
+        self.rel_set_unaligned(rd, rs, rd, InlineAddrOffset::ZERO, size);
+    }
+    pub fn rel_set_unaligned(
         &mut self,
         rd: Reg,
         rs: Reg,
@@ -767,7 +824,7 @@ impl BytecodeEncoder {
         size: SixBitSize,
     ) {
         self.data.push(
-            SetUnaligned(SetRelArgs {
+            SetRelUnaligned(SetRelArgs {
                 rd,
                 rs,
                 roff,

@@ -429,6 +429,7 @@ opcodes![
     FvRelSetAligned,
     FvSetHeapAligned,
     SetUnaligned,
+    SetRelUnaligned,
     SetHeapUnaligned,
     TvLoadAligned,
     TvLoadRelAligned,
