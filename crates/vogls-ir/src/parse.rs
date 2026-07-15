@@ -455,7 +455,17 @@ fn parse_process<'a>(
                     }
                 }
                 I::Slice(..) => unreachable!(),
-                I::SliceImm(..) => unreachable!(),
+                I::SliceImm(dst, src, _) => {
+                    if let VarSize::Resolved(src_mode, _) =
+                        symbols.var_sizes[&src.identifier()]
+                    {
+                        let dst_size = gl.vars.size(*dst);
+                        symbols
+                            .var_sizes
+                            .insert(key, VarSize::Resolved(src_mode, dst_size));
+                        num_unresolved_vars -= 1;
+                    }
+                }
                 I::ShiftImm(_, _, src, _) => {
                     if let VarSize::Resolved(src_mode, src_size) =
                         symbols.var_sizes[&src.identifier()]
@@ -604,6 +614,8 @@ fn parse_bb<'a>(
                 "reduce_and" => parse_unary(c, symbols, gl, dst, UO::ReduceAnd)?,
                 "reduce_xor" => parse_unary(c, symbols, gl, dst, UO::ReduceXor)?,
                 "leading_zeros" => parse_unary(c, symbols, gl, dst, UO::LeadingZeros)?,
+                "tvtofv" => parse_unary(c, symbols, gl, dst, UO::TvToFv)?,
+                "fvtotv" => parse_unary(c, symbols, gl, dst, UO::FvToTv)?,
 
                 // Resize
                 "truncate" => parse_resize(c, symbols, gl, dst, R::Truncate)?,

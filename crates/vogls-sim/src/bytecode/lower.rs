@@ -4,8 +4,8 @@ use vogls_codegen::{HeapAlignment, HeapBuilder, HeapRef, insert_bb_phis};
 use vogls_ir::watchers::WatchMap;
 use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, ContextFormat, DisplayContext,
-    GlobalContext, Instruction, IntrinsicOp, LogicMode, ProcessKey, ResizeOp, SCALAR_VSIZE,
-    ShiftImmOp, SignalKey, UnaryOp, VSIZE_32, VSIZE_64, VariableKey, VariableMap,
+    GlobalContext, Instruction, IntrinsicOp, LabelDisplay, LogicMode, ProcessKey, ResizeOp,
+    SCALAR_VSIZE, ShiftImmOp, SignalKey, UnaryOp, VSIZE_32, VSIZE_64, VariableKey, VariableMap,
 };
 use vogls_runtime::RtSignalKey;
 use vogls_utils::{NonMaxU16, VgHashMap, VgHashSet};
@@ -375,12 +375,14 @@ pub fn lower_process_to_bytecode(
 
             for &bb_key in &post_order {
                 let bb = &gl.bbs[bb_key];
-                let bb_display_idx = ctx.get_bb_idx(bb_key).unwrap();
-                if bb.region.entry() == bb_key {
-                    eprintln!("*L{bb_display_idx}:");
-                } else {
-                    eprintln!(".L{bb_display_idx}:");
-                }
+
+                let lbl = LabelDisplay {
+                    include_prefix: true,
+                    angles: false,
+                    bb: bb_key,
+                };
+                let lbl = lbl.display(&ctx);
+                eprintln!("{lbl}:");
 
                 for instr in &bb.instrs {
                     eprintln!("{}", instr.display(&ctx));

@@ -18,7 +18,7 @@ pub use vogls_bits as bits;
 pub use vogls_bits::{Bits, Mode, VectorSize};
 
 pub use builder::{BasicBlockBuilder, BranchRef, PhiRef, ProcessBuilder};
-pub use format::{ContextFormat, DisplayContext};
+pub use format::{ContextFormat, DisplayContext, LabelDisplay};
 use slotmap::{SlotMap, new_key_type};
 use vogls_utils::NonMaxU32;
 

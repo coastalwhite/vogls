@@ -1,20 +1,22 @@
-signal a: 2
+signal[tv] a: 2
 
 proc other {
 *TR0:
-  %t0 = const 32'h0000_0001
+  %t0 = tv.const 32'h0000_0001
   %t1 = prb $a
   %t2 = slice[2] %t1, %t0
-  drv $a, %t2
+  %t3 = fvtotv %t2
+  drv $a, %t3
   halt
 }
 
 proc other {
 *TR0:
-  %t0 = const 32'h0000_0001
+  %t0 = tv.const 32'h0000_0001
   %t1 = prb $a
   %t2 = concati_left %t1, 1'h1
   %t3 = slice[2] %t2, %t0
-  drv $a, %t3
+  %t4 = fvtotv %t3
+  drv $a, %t4
   halt
 }

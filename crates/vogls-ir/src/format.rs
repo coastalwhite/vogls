@@ -4,7 +4,8 @@ use std::fmt::{Display, Write};
 
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext,
-    Instruction, IntrinsicOp, Process, ResizeOp, ShiftImmOp, Signal, Time, UnaryOp, VariableKey,
+    Instruction, IntrinsicOp, LogicMode, Process, ResizeOp, ShiftImmOp, Signal, Time, UnaryOp,
+    VariableKey,
 };
 
 const INDENT: &str = "  ";
@@ -17,6 +18,7 @@ pub struct ContextDisplay<'a, T: ?Sized + ContextFormat> {
 pub struct DisplayContext<'a> {
     gl: &'a GlobalContext,
 
+    num_trs: u32,
     bb_stack_scratch: Vec<BasicBlockKey>,
     bb_seen_scratch: HashSet<BasicBlockKey>,
     bb_name_scratch: HashMap<BasicBlockKey, u32>,
@@ -28,6 +30,7 @@ impl<'a> DisplayContext<'a> {
     pub fn new(gl: &'a GlobalContext) -> Self {
         Self {
             gl,
+            num_trs: 0,
             bb_stack_scratch: Vec::new(),
             bb_seen_scratch: HashSet::new(),
             bb_name_scratch: HashMap::new(),
@@ -39,7 +42,13 @@ impl<'a> DisplayContext<'a> {
         let name = self.bb_name_scratch.len();
         self.bb_name_scratch.entry(entry).or_insert_with(|| {
             self.bb_stack_scratch.push(entry);
-            name as u32
+            if self.gl.bbs[entry].region.entry() == entry {
+                let name = self.num_trs;
+                self.num_trs += 1;
+                name
+            } else {
+                name as u32
+            }
         });
 
         while let Some(bb) = self.bb_stack_scratch.pop() {
@@ -51,7 +60,13 @@ impl<'a> DisplayContext<'a> {
                 let name = self.bb_name_scratch.len();
                 self.bb_name_scratch.entry(k).or_insert_with(|| {
                     self.bb_stack_scratch.push(k);
-                    name as u32
+                    if self.gl.bbs[entry].region.entry() == entry {
+                        let name = self.num_trs;
+                        self.num_trs += 1;
+                        name
+                    } else {
+                        name as u32
+                    }
                 });
             });
         }
@@ -67,11 +82,13 @@ impl<'a> DisplayContext<'a> {
     fn clear(&mut self) {
         let Self {
             gl: _,
+            num_trs,
             bb_stack_scratch,
             bb_seen_scratch,
             bb_name_scratch,
             var_map,
         } = self;
+        *num_trs = 0;
         bb_stack_scratch.clear();
         bb_seen_scratch.clear();
         bb_name_scratch.clear();
@@ -102,10 +119,14 @@ impl Signal {
                     size,
                     flags: _,
                     initialize,
-                    mode: _,
+                    mode,
                     origin: _,
                 } = self.0;
-                write!(f, "signal {name}: {size}")?;
+                let mode = match mode {
+                    LogicMode::TwoValue => "tv",
+                    LogicMode::FourValue => "fv",
+                };
+                write!(f, "signal[{mode}] {name}: {size}")?;
                 if let Some(initialize) = initialize {
                     write!(f, " = {initialize}")?;
                 }
@@ -132,13 +153,11 @@ impl Process {
         writeln!(f, "proc {} {{", self.kind.into_static_str())?;
 
         ctx.clear();
-        for (tr_idx, tr) in self.regions.iter().enumerate() {
-            ctx.bb_name_scratch.insert(tr.entry(), tr_idx as u32);
+        for tr in &self.regions {
+            ctx.prepare_process(tr.entry());
         }
-
-        for (tr_idx, tr) in self.regions.iter().enumerate() {
+        for tr in &self.regions {
             let entry = tr.entry();
-            ctx.prepare_process(entry);
 
             let mut bb_stack = std::mem::take(&mut ctx.bb_stack_scratch);
             let mut bb_seen = std::mem::take(&mut ctx.bb_seen_scratch);
@@ -147,11 +166,13 @@ impl Process {
             bb_seen.insert(entry);
             bb_stack.push(entry);
             while let Some(bb) = bb_stack.pop() {
-                if tr.entry() == bb {
-                    writeln!(f, "*TR{tr_idx}:")?;
-                } else {
-                    writeln!(f, ".L{}:", ctx.bb_name_scratch[&bb])?;
+                LabelDisplay {
+                    include_prefix: true,
+                    angles: false,
+                    bb,
                 }
+                .ctx_fmt(f, ctx)?;
+                writeln!(f, ":")?;
 
                 let bb = ctx.gl.bbs.get(bb).unwrap();
                 bb.ctx_fmt(f, ctx)?;
@@ -304,12 +325,55 @@ impl ShiftImmOp {
     }
 }
 
+pub struct LabelDisplay {
+    pub include_prefix: bool,
+    pub angles: bool,
+    pub bb: BasicBlockKey,
+}
+impl LabelDisplay {
+    fn new_angled(bb: BasicBlockKey) -> Self {
+        Self {
+            include_prefix: false,
+            angles: true,
+            bb,
+        }
+    }
+}
+
+impl ContextFormat for LabelDisplay {
+    fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &DisplayContext<'_>) -> fmt::Result {
+        if self.angles {
+            f.write_char('<')?;
+        }
+        if ctx.gl.bbs[self.bb].region.entry() == self.bb {
+            if self.include_prefix {
+                f.write_char('*')?;
+            }
+            f.write_str("TR")?;
+        } else {
+            if self.include_prefix {
+                f.write_char('.')?;
+            }
+            f.write_char('L')?;
+        }
+        ctx.bb_name_scratch[&self.bb].fmt(f)?;
+        if self.angles {
+            f.write_char('>')?;
+        }
+        Ok(())
+    }
+}
+
 impl ContextFormat for Instruction {
     fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &DisplayContext<'_>) -> fmt::Result {
         match self {
             Self::Constant(var, val) => {
                 var.ctx_fmt(f, ctx)?;
-                write!(f, " = const {val}")?;
+                let prefix = match var.mode() {
+                    LogicMode::TwoValue => "tv.",
+                    LogicMode::FourValue => "fv.",
+                };
+                write!(f, " = {prefix}const {val}")?;
             }
             Self::Unary(dst, op, src) => {
                 write!(
@@ -471,7 +535,7 @@ impl ContextFormat for Instruction {
                     }
                     var.ctx_fmt(f, ctx)?;
                     f.write_str(" ")?;
-                    write!(f, "<L{}>", ctx.bb_name_scratch[bb])?;
+                    LabelDisplay::new_angled(*bb).ctx_fmt(f, ctx)?;
                 }
                 f.write_char(']')?;
             }
@@ -499,16 +563,19 @@ impl ContextFormat for BasicBlockTerminator {
             Self::Wait(bb, time) => {
                 f.write_char(' ')?;
                 time.ctx_fmt(f, ctx)?;
-                write!(f, ", <L{}>", ctx.bb_name_scratch[&bb.entry()])?;
+                write!(f, ", ")?;
+                LabelDisplay::new_angled(bb.entry()).ctx_fmt(f, ctx)?;
             }
             Self::VariableWait(bb, time) => {
                 f.write_char(' ')?;
                 time.ctx_fmt(f, ctx)?;
-                write!(f, ", <L{}>", ctx.bb_name_scratch[&bb.entry()])?;
+                write!(f, ", ")?;
+                LabelDisplay::new_angled(bb.entry()).ctx_fmt(f, ctx)?;
             }
             Self::WaitRegion(bb, region) => {
                 f.write_char(' ')?;
-                write!(f, "{region}, <L{}>", ctx.bb_name_scratch[&bb.entry()])?;
+                write!(f, "{region}, ")?;
+                LabelDisplay::new_angled(bb.entry()).ctx_fmt(f, ctx)?;
             }
             Self::Watch(bb, signals) => {
                 f.write_char(' ')?;
@@ -521,20 +588,19 @@ impl ContextFormat for BasicBlockTerminator {
                     }
                 }
                 f.write_str("], ")?;
-                write!(f, "<L{}>", ctx.bb_name_scratch[&bb.entry()])?;
+                LabelDisplay::new_angled(bb.entry()).ctx_fmt(f, ctx)?;
             }
             Self::Jump(bb) => {
                 f.write_char(' ')?;
-                write!(f, "<L{}>", ctx.bb_name_scratch[bb])?;
+                LabelDisplay::new_angled(*bb).ctx_fmt(f, ctx)?;
             }
             Self::Branch(var, true_bb, false_bb) => {
                 f.write_char(' ')?;
                 var.ctx_fmt(f, ctx)?;
-                write!(
-                    f,
-                    ", <L{}>, <L{}>",
-                    ctx.bb_name_scratch[true_bb], ctx.bb_name_scratch[false_bb]
-                )?;
+                f.write_str(", ")?;
+                LabelDisplay::new_angled(*true_bb).ctx_fmt(f, ctx)?;
+                f.write_str(", ")?;
+                LabelDisplay::new_angled(*false_bb).ctx_fmt(f, ctx)?;
             }
             Self::Halt => {}
         }

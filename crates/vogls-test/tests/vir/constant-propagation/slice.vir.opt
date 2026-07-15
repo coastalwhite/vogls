@@ -1,10 +1,11 @@
-signal a: 2
+signal[tv] a: 2
 
 proc other {
 *TR0:
-  %t0 = const 32'h0000_0001
+  %t0 = tv.const 32'h0000_0001
   %t1 = prb[2] $a, %t0
-  drv $a, %t1
+  %t2 = fvtotv %t1
+  drv $a, %t2
   halt
 }
 

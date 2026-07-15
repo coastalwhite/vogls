@@ -533,7 +533,12 @@ fn constant_propagate_instruction(
                     Some(offset) => {
                         let dst_size = vars.size(dst);
                         let src_size = signals[signal].size;
-                        if offset <= src_size.get() - dst_size.get() {
+
+                        if dst_size
+                            .get()
+                            .checked_add(offset)
+                            .is_some_and(|v| v < src_size.get())
+                        {
                             additional.push(I::Probe(dst, signal, offset));
                             return PropagateResult {
                                 replace: true,

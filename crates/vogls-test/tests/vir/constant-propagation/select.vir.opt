@@ -1,5 +1,5 @@
-signal c: 1
-signal d: 1
+signal[tv] c: 1
+signal[tv] d: 1
 
 proc other {
 *TR0:
