@@ -214,6 +214,27 @@ fn extract_and_num_slots<I: BytecodeInstruction>(c: Bytecode) -> u8 {
     I::extract(c).num_slots()
 }
 
+type LoopFn = fn(
+    c: Bytecode,
+    code: &[Bytecode],
+    regs: &mut Regs,
+    pc: u64,
+    state: &mut RuntimeState,
+    schedule: &mut Schedule,
+    listeners: &mut BytecodeListeners,
+    cldctx: &mut ColdContext,
+) -> u64;
+type FmtFn = fn(
+    c: Bytecode,
+    code: &[Bytecode],
+    regs: &Regs,
+    pc: u64,
+    state: &RuntimeState,
+    schedule: &Schedule,
+    listeners: &BytecodeListeners,
+    f: &mut fmt::Formatter<'_>,
+) -> fmt::Result;
+
 macro_rules! opcodes {
     ($($name:ident),+ $(,)?) => {
         #[repr(u8)]
@@ -222,68 +243,42 @@ macro_rules! opcodes {
             $($name,)+
         }
 
-        const X_NUM_INSTRUCTIONS: usize = {
+        const NUM_INSTRUCTIONS: usize = {
             0 $(+
             { _ = BytecodeOpcode::$name; 1 }
             )+
         };
 
-        static X_INSTRUCTION_FNS: [
-            fn(
-                c: Bytecode,
-                code: &[Bytecode],
-                regs: &mut Regs,
-                pc: u64,
-                state: &mut RuntimeState,
-                schedule: &mut Schedule,
-                listeners: &mut BytecodeListeners,
-                cldctx: &mut ColdContext,
-            ) -> u64;
-            X_NUM_INSTRUCTIONS
-        ] = [$(extract_and_execute::<$name>),+];
+        static LOOP_INSTR_FNS: [LoopFn; 256] = const {
+            // @NOTE: We pad here to 256 such that indexing into it with an u8, does not need a
+            // bounds check.
+            let mut arr: [LoopFn; 256] = [extract_and_execute::<Interrupt>; 256];
+            #[allow(unused_assignments)]
+            {
+                let mut i = 0;
+                $(arr[i] = extract_and_execute::<$name>; i += 1;)+
+            }
+            arr
+        };
+        #[cfg(feature = "tailcall")]
+        static TAILCALL_INSTR_FNS: [tailcall::TailcallFn; 256] = const {
+            // @NOTE: We pad here to 256 such that indexing into it with an u8, does not need a
+            // bounds check.
+            let mut arr: [tailcall::TailcallFn; 256] = [tailcall::extract_and_execute_tailcall::<Interrupt>; 256];
+            #[allow(unused_assignments)]
+            {
+                let mut i = 0;
+                $(arr[i] = tailcall::extract_and_execute_tailcall::<$name>; i += 1;)+
+            }
+            arr
+        };
+
         static NUM_SLOTS_FNS: [
             fn(c: Bytecode) -> u8;
-            X_NUM_INSTRUCTIONS
+            NUM_INSTRUCTIONS
         ] = [$(extract_and_num_slots::<$name>),+];
-        #[cfg(feature = "tailcall")]
-        static X_INSTRUCTION_TAILCALL_FNS: [
-            extern "rust-preserve-none" fn(
-                code: &[Bytecode],
-                regs: &mut Regs,
-                pc: u64,
-                state: &mut RuntimeState,
-                schedule: &mut Schedule,
-                listeners: &mut BytecodeListeners,
-                cldctx: &mut ColdContext,
-            );
-            X_NUM_INSTRUCTIONS
-        ] = [$(tailcall::extract_and_execute_tailcall::<$name>),+];
-        static X_PRE_EXEC_ITRACE_FNS: [
-            fn(
-                c: Bytecode,
-                code: &[Bytecode],
-                regs: &Regs,
-                pc: u64,
-                state: &RuntimeState,
-                schedule: &Schedule,
-                listeners: &BytecodeListeners,
-                f: &mut fmt::Formatter<'_>,
-            ) -> fmt::Result;
-            X_NUM_INSTRUCTIONS
-        ] = [$(extract_and_pre_exec_itrace::<$name>),+];
-        static X_POST_EXEC_ITRACE_FNS: [
-            fn(
-                c: Bytecode,
-                code: &[Bytecode],
-                regs: &Regs,
-                pc: u64,
-                state: &RuntimeState,
-                schedule: &Schedule,
-                listeners: &BytecodeListeners,
-                f: &mut fmt::Formatter<'_>,
-            ) -> fmt::Result;
-            X_NUM_INSTRUCTIONS
-        ] = [$(extract_and_post_exec_itrace::<$name>),+];
+        static PRE_EXEC_ITRACE_FNS: [FmtFn; NUM_INSTRUCTIONS] = [$(extract_and_pre_exec_itrace::<$name>),+];
+        static POST_EXEC_ITRACE_FNS: [FmtFn; NUM_INSTRUCTIONS] = [$(extract_and_post_exec_itrace::<$name>),+];
 
         impl TryFrom<u8> for BytecodeOpcode {
             type Error = ();
@@ -1047,7 +1042,7 @@ impl Tracer for InstructionTracer {
                 state,
                 schedule,
                 listeners,
-                X_PRE_EXEC_ITRACE_FNS[i.opcode() as usize]
+                PRE_EXEC_ITRACE_FNS[i.opcode() as usize]
             )
         )
         .unwrap();
@@ -1074,7 +1069,7 @@ impl Tracer for InstructionTracer {
                 state,
                 schedule,
                 listeners,
-                X_POST_EXEC_ITRACE_FNS[i.opcode() as usize]
+                POST_EXEC_ITRACE_FNS[i.opcode() as usize]
             )
         )
         .unwrap();
@@ -1188,7 +1183,7 @@ impl Design {
                 &state.schedule,
                 &state.listeners,
             );
-            let f = X_INSTRUCTION_FNS[opcode as usize];
+            let f = LOOP_INSTR_FNS[opcode as usize];
             pc = (f)(
                 c,
                 code,
@@ -1248,7 +1243,7 @@ impl Design {
             return Ok(());
         };
         let opcode = c.opcode();
-        let f = X_INSTRUCTION_TAILCALL_FNS[opcode as usize];
+        let f = TAILCALL_INSTR_FNS[opcode as usize];
         (f)(
             code,
             &mut regs,

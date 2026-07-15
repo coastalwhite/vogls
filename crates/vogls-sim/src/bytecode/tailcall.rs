@@ -1,5 +1,15 @@
 use super::*;
 
+pub type TailcallFn = extern "rust-preserve-none" fn(
+    code: &[Bytecode],
+    regs: &mut Regs,
+    pc: u64,
+    state: &mut RuntimeState,
+    schedule: &mut Schedule,
+    listeners: &mut BytecodeListeners,
+    cldctx: &mut ColdContext,
+);
+
 pub extern "rust-preserve-none" fn extract_and_execute_tailcall<I: BytecodeInstruction>(
     code: &[Bytecode],
     regs: &mut Regs,
@@ -18,6 +28,6 @@ pub extern "rust-preserve-none" fn extract_and_execute_tailcall<I: BytecodeInstr
     };
 
     let opcode = c.opcode();
-    let f = X_INSTRUCTION_TAILCALL_FNS[opcode as usize];
+    let f = TAILCALL_INSTR_FNS[opcode as usize];
     become (f)(code, regs, pc, state, schedule, listeners, cldctx)
 }
