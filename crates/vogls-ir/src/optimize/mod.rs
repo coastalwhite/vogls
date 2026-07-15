@@ -13,8 +13,8 @@ pub mod peephole;
 
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext,
-    LogicMode, ProcessKey, ResizeOp, ShiftImmOp, SignalKey, TemporalRegionKey, UnaryOp,
-    VariableKey,
+    Instruction, LogicMode, ProcessKey, ResizeOp, ShiftImmOp, SignalKey, TemporalRegionKey,
+    UnaryOp, VariableKey,
 };
 
 #[derive(Default, Clone, Copy)]
@@ -31,6 +31,14 @@ impl OptFlags {
 
     pub fn contains(self, other: Self) -> bool {
         self.0 & other.0 == other.0
+    }
+
+    pub fn set(&mut self, flags: OptFlags, do_set: bool) {
+        if do_set {
+            *self |= flags;
+        } else {
+            *self &= !flags;
+        }
     }
 }
 
@@ -251,5 +259,106 @@ pub fn remap_vars(
                 scratch_stack.push(bb_key);
             }
         });
+    }
+}
+
+/// Remove Basic Blocks from a process that are no longer reachable.
+///
+/// This patches up phi-instructions to also remove any references to these basic blocks.
+pub fn remove_bbs(
+    gl: &mut GlobalContext,
+    entry: TemporalRegionKey,
+
+    remove: &VgHashSet<BasicBlockKey>,
+
+    scratch_stack: &mut Vec<BasicBlockKey>,
+    scratch_seen: &mut VgHashSet<BasicBlockKey>,
+
+    scratch_fanin: &mut Vec<(BasicBlockKey, BasicBlockKey)>,
+) {
+    if remove.is_empty() {
+        return;
+    }
+
+    assert!(!remove.contains(&entry.entry()));
+
+    scratch_stack.clear();
+    scratch_seen.clear();
+    scratch_fanin.clear();
+
+    for bb in remove.iter() {
+        gl.bbs.remove(*bb);
+    }
+
+    let mut has_phi_instruction = false;
+    scratch_stack.push(entry.entry());
+    scratch_seen.insert(entry.entry());
+    while let Some(bb_key) = scratch_stack.pop() {
+        let bb = &gl.bbs[bb_key];
+        bb.terminator.for_each_temporal_bb(|next| {
+            scratch_fanin.push((bb_key, next));
+            assert!(!remove.contains(&next));
+            if scratch_seen.insert(next) {
+                scratch_stack.push(next);
+            }
+        });
+
+        has_phi_instruction |= bb
+            .instrs
+            .iter()
+            .find(|i| matches!(i, Instruction::Phi(..)))
+            .is_some();
+    }
+
+    // If there are no PHI instructions to patch up, what are we doing here? Stop early.
+    if !has_phi_instruction {
+        return;
+    }
+
+    scratch_fanin.sort_unstable_by_key(|(bb, next)| (*next, *bb));
+    let Some((_, mut current)) = scratch_fanin.first().copied() else {
+        unreachable!("A phi instruction implies there are BBs with a fanin");
+    };
+
+    // We patch up the PHI instructions by sorting both the fanin of the BB and PHI sources and
+    // removing all items that no longer align.
+    let mut start = 0;
+    for i in 1..scratch_fanin.len() + 1 {
+        let next = scratch_fanin.get(i);
+        if next.is_none_or(|(_, next)| current != *next) {
+            let slice = &scratch_fanin[start..i];
+
+            gl.bbs[current].instrs.iter_mut().for_each(|instr| {
+                if let Instruction::Phi(dst, srcs) = instr {
+                    if srcs.len() == slice.len() {
+                        return;
+                    }
+
+                    assert!(srcs.len() > slice.len());
+                    srcs.sort_unstable_by_key(|(bb, _)| *bb);
+
+                    let mut k = 0;
+                    let mut new_srcs = srcs.to_vec();
+                    new_srcs.retain(|(src_bb, _)| {
+                        if slice.get(k).is_some_and(|(v, _)| v == src_bb) {
+                            k += 1;
+                            true
+                        } else {
+                            false
+                        }
+                    });
+                    if new_srcs.len() == 1 {
+                        *instr = Instruction::copy(&gl.vars, *dst, srcs[0].1);
+                    } else {
+                        *srcs = new_srcs.into_boxed_slice();
+                    }
+                }
+            });
+
+            if let Some((_, next)) = next {
+                current = *next;
+            }
+            start = i;
+        }
     }
 }

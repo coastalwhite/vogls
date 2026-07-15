@@ -1,0 +1,41 @@
+signal[tv] a: 1
+signal[tv] b: 1
+
+proc other {
+*TR0:
+  %t0 = tv.const 1'h1
+  jump <L1>
+.L1:
+  %t1 = prb $a
+  jump <L2>
+.L2:
+  %t2 = truncate[1] %t1
+  halt
+}
+
+proc other {
+*TR0:
+  %t0 = tv.const 1'h1
+  jump <L1>
+.L1:
+  %t1 = prb $a
+  jump <L2>
+.L2:
+  %t2 = truncate[1] %t1
+  halt
+}
+
+proc other {
+*TR0:
+  %t0 = tv.const 1'h1
+  jump <L1>
+.L1:
+  %t1 = prb $a
+  branch %t1, <L2>, <L3>
+.L3:
+  %t2 = phi [%t1 <L1>, %t3 <L2>]
+  halt
+.L2:
+  %t3 = prb $a
+  jump <L3>
+}

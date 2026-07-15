@@ -1,0 +1,55 @@
+// vogls: disable-optimization=*
+// vogls: enable-optimization=constant-propagation
+signal[tv] a: 1
+signal[tv] b: 1
+
+proc other {
+*TR0:
+    %t0 = tv.const 1'h1
+	branch %t0, <L1>, <L2>
+.L1:
+	%t1 = prb[1] $a
+	jump <L3>
+.L2:
+	%t2 = prb[1] $b
+	jump <L3>
+.L3:
+    %t3 = phi [%t1 <L1>, %t2 <L2>]
+    halt
+}
+
+proc other {
+*TR0:
+    %t0 = tv.const 1'h1
+	branch %t0, <L1>, <L2>
+.L1:
+	%t1 = prb[1] $a
+	branch %t0, <L4>, <L3>
+.L2:
+	%t2 = prb[1] $b
+	jump <L4>
+.L3:
+	%t3 = prb[1] $a
+	jump <L4>
+.L4:
+    %t4 = phi [%t1 <L1>, %t2 <L2>, %t3 <L3>]
+    halt
+}
+
+proc other {
+*TR0:
+    %t0 = tv.const 1'h1
+	branch %t0, <L1>, <L2>
+.L1:
+	%t1 = prb[1] $a
+	branch %t1, <L3>, <L4>
+.L2:
+	%t2 = prb[1] $b
+	jump <L4>
+.L3:
+	%t3 = prb[1] $a
+	jump <L4>
+.L4:
+    %t4 = phi [%t1 <L1>, %t2 <L2>, %t3 <L3>]
+    halt
+}

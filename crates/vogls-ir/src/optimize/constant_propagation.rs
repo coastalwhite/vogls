@@ -5,6 +5,7 @@ use vogls_bits::Bits;
 use vogls_bits::arithmetic::FvLogicValue;
 use vogls_utils::{VgHashMap, VgHashSet};
 
+use crate::optimize::remove_bbs;
 use crate::orders::post_order_keys;
 use crate::{
     BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryImmOpSimplification, BinaryOp,
@@ -35,20 +36,25 @@ pub fn constant_propagation(
     scratch_dep_edges: &mut Vec<VariableKey>,
 ) {
     let mut post_order = Vec::new();
-    let mut scratch_seen = VgHashSet::default();
-    let mut scratch_stack = Vec::new();
+    let mut scratch_stack2 = Vec::new();
     let mut additional = Vec::new();
+    let mut altered_cfg = false;
+
+    scratch_mfr.clear();
+
     for tr in &gl.processes[process].regions {
         scratch_map.clear();
 
         post_order_keys(
             tr.entry(),
             &gl.bbs,
-            &mut scratch_seen,
-            &mut scratch_stack,
+            scratch_seen,
+            &mut scratch_stack2,
             &mut post_order,
         );
         post_order.reverse();
+
+        scratch_mfr.extend(post_order.iter().copied());
 
         for bb_key in post_order.drain(..) {
             let bb = &mut gl.bbs[bb_key];
@@ -89,10 +95,10 @@ pub fn constant_propagation(
                         let (truthy, falsy) = (*truthy, *falsy);
                         if value.eq_one() {
                             bb.terminator = T::Jump(truthy);
-                            scratch_mfr.insert(falsy);
+                            altered_cfg = true;
                         } else {
                             bb.terminator = T::Jump(falsy);
-                            scratch_mfr.insert(truthy);
+                            altered_cfg = true;
                         }
                     }
                 }
@@ -101,24 +107,27 @@ pub fn constant_propagation(
         }
     }
 
-    if !scratch_mfr.is_empty() {
-        let entry = gl.processes[process].regions[0].entry();
-        scratch_stack.push((false, entry));
-        scratch_seen.insert(entry);
-        scratch_mfr.remove(&entry);
+    if altered_cfg {
+        let tr = gl.processes[process].regions[0];
+        scratch_stack.push(tr.entry());
+        scratch_mfr.remove(&tr.entry());
 
-        while let Some((_, bb)) = scratch_stack.pop() {
+        while let Some(bb) = scratch_stack.pop() {
             gl.bbs[bb].terminator.for_each_temporal_bb(|next| {
-                if scratch_seen.insert(next) {
-                    scratch_stack.push((false, next));
-                    scratch_mfr.remove(&next);
+                if scratch_mfr.remove(&next) {
+                    scratch_stack.push(next);
                 }
             });
         }
 
-        for &bb in scratch_mfr.iter() {
-            gl.bbs.remove(bb);
-        }
+        remove_bbs(
+            gl,
+            tr,
+            &scratch_mfr,
+            scratch_stack,
+            scratch_seen,
+            &mut Vec::new(),
+        );
     }
 }
 

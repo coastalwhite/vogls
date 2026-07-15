@@ -8,7 +8,7 @@ use vogls::design::{Arena, Macro};
 use vogls::ir::LogicMode;
 use vogls::ir::optimize::OptFlags;
 use vogls::utils::TimerStack;
-use vogls::{DesignBuilder, DesignBuilderError, SimulationIo, VirDesignBuilder};
+use vogls::{DesignBuilder, DesignBuilderError, Optimizations, SimulationIo, VirDesignBuilder};
 
 #[derive(clap::Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -205,12 +205,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     timers.timed("optimization", |_| {
-        lowered.optimize(OptFlags {
-            opt_rounds,
-            constant_propagation: !no_constant_propagation,
-            deadcode_elimination: !no_deadcode_elimination,
-            common_subexpr_elim: !no_common_subexpr_elim,
-            peephole: !no_peephole_optimization,
+        let mut flags = OptFlags::ALL;
+        flags.set(OptFlags::CONSTANT_PROPAGATION, !no_constant_propagation);
+        flags.set(OptFlags::DEADCODE_ELIMINATION, !no_deadcode_elimination);
+        flags.set(OptFlags::COMMON_SUBEXPR_ELIM, !no_common_subexpr_elim);
+        flags.set(OptFlags::PEEPHOLE, !no_peephole_optimization);
+        lowered.optimize(Optimizations {
+            rounds: opt_rounds,
+            flags,
         });
     });
 
