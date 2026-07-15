@@ -607,10 +607,41 @@ fn constant_propagate_instruction(
             }
             not_constant!(dst);
         }
-        I::Drive(..) | I::DriveSlice(..) => PropagateResult {
+        I::Drive(..) => PropagateResult {
             replace: false,
             ready: true,
         },
+        I::DriveSlice(signal, src, offset) => {
+            let (signal, src) = (*signal, *src);
+            let offset_bits = get!(offset);
+            match offset_bits.as_ref() {
+                None => {}
+                Some(b) => match b.extract_exact_u32() {
+                    None => {}
+                    Some(offset) => {
+                        let dst_size = signals[signal].size;
+                        let src_size = vars.size(src);
+
+                        if src_size
+                            .get()
+                            .checked_add(offset)
+                            .is_some_and(|v| v < dst_size.get())
+                        {
+                            additional.push(I::Drive(signal, src, offset));
+                            return PropagateResult {
+                                replace: true,
+                                ready: false,
+                            };
+                        }
+                    }
+                },
+            }
+
+            PropagateResult {
+                replace: false,
+                ready: true,
+            }
+        }
         I::Phi(dst, srcs) => {
             assert!(!srcs.is_empty());
             let mut acc = None;
