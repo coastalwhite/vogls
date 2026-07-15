@@ -814,17 +814,19 @@ pub fn lower_process(
                     }
                     I::Drive(signal, src, partial) => {
                         let t: CExpr = temp_map[src].into();
-                        let zero = Bits::new_u32(0);
-                        let partial = match partial {
-                            None if gl.signals[*signal].size != t.ty().size => {
-                                Some(CExpr::Bits(&zero, LogicMode::TwoValue))
-                            }
-                            None => None,
-                            Some(offset) => {
-                                let offset_t = temp_map[offset];
-                                Some(offset_t.into())
-                            }
+                        let bits = Bits::new_u32(*partial);
+                        let partial = if *partial != 0 || gl.signals[*signal].size != t.ty().size {
+                            Some(CExpr::Bits(&bits, LogicMode::TwoValue))
+                        } else {
+                            None
                         };
+                        let dst = io_signals[signal];
+                        drive::drive(&mut buffer, signals, signal_to_tv_index, dst, t, partial)?;
+                    }
+                    I::DriveSlice(signal, src, partial) => {
+                        let t: CExpr = temp_map[src].into();
+                        let partial = temp_map[partial];
+                        let partial = Some(partial.into());
                         let dst = io_signals[signal];
                         drive::drive(&mut buffer, signals, signal_to_tv_index, dst, t, partial)?;
                     }

@@ -238,19 +238,19 @@ impl fmt::Display for VmInstruction {
             Self::LastUpdateTime(dst, signal) => {
                 write!(f, "{dst} = lastupdatetime {}", signal.as_usize())
             }
-            Self::Drive(signal, src, offset) => match offset {
-                None => write!(f, "drive {}, {}", signal.as_usize(), src.offset),
-                Some((offset, _)) => {
-                    write!(
-                        f,
-                        "drive[{offset}, {length}, {}] {}, {}",
-                        src.size,
-                        src.offset,
-                        signal.as_usize(),
-                        length = src.size,
-                    )
-                }
-            },
+            Self::DriveCO(signal, src, offset) => {
+                write!(f, "drive {}, {}, {offset}", signal.as_usize(), src.offset)
+            }
+            Self::Drive(signal, src, offset, _is_fv) => {
+                write!(
+                    f,
+                    "drive[{offset}, {length}, {}] {}, {}",
+                    src.size,
+                    src.offset,
+                    signal.as_usize(),
+                    length = src.size,
+                )
+            }
             Self::TvVariableWait(time) => write!(f, "tv.wait.var {}", time),
             Self::FvVariableWait(time) => write!(f, "fv.wait.var {}", time),
             Self::Wait(time) => write!(f, "wait #{}", time.0),
@@ -311,6 +311,7 @@ impl fmt::Display for VmProcess {
                 | I::FvToTv(..)
                 | I::Intrinsic(..)
                 | I::LastUpdateTime(..)
+                | I::DriveCO(..)
                 | I::Drive(..)
                 | I::TvMove1(..)
                 | I::TvNot1(..)

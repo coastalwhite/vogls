@@ -5,8 +5,8 @@ use vogls_utils::{VgHashMap, VgHashSet};
 
 use crate::token_range::TokenRange;
 use crate::{
-    BasicBlockKey, GlobalContext, Instruction, LogicMode, Process, ProcessKind, ResizeOp,
-    TIME_VSIZE, TemporalRegionKey, VSIZE_32, VariableKey,
+    BasicBlockKey, GlobalContext, INTEGER_VSIZE, Instruction, LogicMode, Process, ProcessKind,
+    ResizeOp, TIME_VSIZE, TemporalRegionKey, VSIZE_32, VariableKey,
 };
 
 struct Fail {
@@ -214,10 +214,11 @@ fn check_instruction(
             assert_eq!(gl.vars.size(*offset), VSIZE_32);
         }
         I::Drive(signal, src, _) => {
-            // if gl.signals[*signal].mode != src.mode() {
-            //     dbg!(&bb.instrs);
-            // }
-            assert_eq!(gl.signals[*signal].mode, src.mode());
+            FailReason::assert_mode(gl.signals[*signal].mode, src.mode())?;
+        }
+        I::DriveSlice(signal, src, offset) => {
+            FailReason::assert_mode(gl.signals[*signal].mode, src.mode())?;
+            FailReason::assert_size(VSIZE_32, gl.vars.size(*offset))?;
         }
         I::Phi(..) => {}
     }

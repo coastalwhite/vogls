@@ -2146,54 +2146,25 @@ fn lower_instruction(
             let signal_size = gl.signals[*signal].size;
             let src_size = gl.vars.size(*src);
 
-            let roff = T2;
             let rpoke = T3;
             let signal_addr = signal_address(*signal, signals, io_signals);
 
-            let mut branch_offset: Option<usize> = None;
-            if partial.is_some() || signal_size != src_size {
-                bce.load_u64(roff, signal_addr);
-                if let Some(partial) = partial {
-                    let mut rpartial = to_reg(
-                        bce,
-                        *partial,
-                        &gl.vars,
-                        assignment[partial],
-                        stack_offsets,
-                        T4,
-                        false,
-                    );
-
-                    use LogicMode as M;
-                    match partial.mode() {
-                        M::TwoValue => {}
-                        M::FourValue => {
-                            let partial_size =
-                                SixBitSize::from_vector_size(gl.vars.size(*partial)).unwrap();
-                            let (rpartialspc, rpartialval) = rpartial.to_spc_and_val();
-
-                            // TempReg: Destructs PARTIAL (SPC). No longer assessible.
-                            bce.contains_special(T4, rpartialspc, partial_size);
-
-                            branch_offset = Some(bce.data.len());
-                            bce.panic();
-
-                            rpartial = rpartialval;
-                        }
-                    }
-
-                    bce.add(roff, roff, rpartial, SixBitSize::N64);
-                }
+            if *partial != 0 || signal_size != src_size {
+                let offset = signal_addr.wrapping_add(u64::from(*partial));
 
                 // TempReg: PARTIAL is no longer used from here.
                 let rpoke_t1 = T4;
                 let rpoke_t2 = T5;
                 match (src.mode(), SixBitSize::from_vector_size(src_size)) {
                     (LogicMode::TwoValue, None) => {
+                        let roff = T2;
+                        bce.load_u64(roff, offset);
                         let size = InlineNBitSize::new(src_size, bce);
                         bce.set_heap_unaligned(rpoke, rs, roff, size, InlineAddrOffset::ZERO);
                     }
                     (LogicMode::FourValue, None) => {
+                        let roff = T2;
+                        bce.load_u64(roff, offset);
                         let size = InlineNBitSize::new(src_size, bce);
                         bce.set_heap_unaligned(rpoke_t1, rs, roff, size, InlineAddrOffset::ZERO);
 
@@ -2218,9 +2189,13 @@ fn lower_instruction(
                         bce.or(rpoke, rpoke_t1, rpoke_t2);
                     }
                     (LogicMode::TwoValue, Some(src_size)) => {
+                        let roff = T2;
+                        bce.load_u64(roff, offset);
                         bce.set_unaligned(rpoke, rs, roff, InlineAddrOffset::ZERO, src_size);
                     }
                     (LogicMode::FourValue, Some(src_size)) => {
+                        let roff = T2;
+                        bce.load_u64(roff, offset);
                         let (rsspc, rsval) = rs.to_spc_and_val();
                         bce.set_unaligned(rpoke_t1, rsspc, roff, InlineAddrOffset::ZERO, src_size);
                         let val_offset = HeapAlignment::spc_offset_to_val_offset(signal_size, 0);
@@ -2233,11 +2208,13 @@ fn lower_instruction(
             } else {
                 match (src.mode(), SixBitSize::from_vector_size(signal_size)) {
                     (LogicMode::TwoValue, None) => {
+                        let roff = T2;
                         bce.load_u64(roff, signal_addr);
                         let size = InlineNBitSize::new(signal_size, bce);
                         bce.tv_set_heap_aligned(rpoke, rs, roff, size, InlineAddrOffset::ZERO);
                     }
                     (LogicMode::FourValue, None) => {
+                        let roff = T2;
                         bce.load_u64(roff, signal_addr);
                         let size = InlineNBitSize::new(signal_size, bce);
                         bce.fv_set_heap_aligned(rpoke, rs, roff, size, InlineAddrOffset::ZERO);
@@ -2251,28 +2228,131 @@ fn lower_instruction(
                 }
             }
 
-            let rt_signal = io_signals[signal];
-            let lupdt_index = lupdt_indexes.get(&rt_signal);
-            let has_watchers = watch_map.num_watch_indices(*signal) > 0;
+            poke_signal(
+                bce,
+                gl,
+                rpoke,
+                *signal,
+                io_signals,
+                lupdt_indexes,
+                watch_map,
+                options,
+            );
+        }
+        I::DriveSlice(signal, src, partial) => {
+            // Temporary Register Allocation:
+            // T0:    RS       (ADDR / VAL / SPC)
+            // T1:    RS       (VAL)
+            // T2:    ROFF     (ADDR / VAL / SPC)
+            // T3:    RPOKE    (BOOL)
+            // T4:    RPARTIAL (ADDR / VAL / SPC)
+            // T5:    RPARTIAL (VAL)
 
-            if gl.signals[*signal].mode == LogicMode::TwoValue
-                && (options.has_plugins || lupdt_index.is_some() || has_watchers)
-            {
-                let index = InlineIndex::new(rt_signal.as_u64(), bce, T5);
-                bce.tv_correct_first(rpoke, index);
+            let rs = to_reg(
+                bce,
+                *src,
+                &gl.vars,
+                assignment[src],
+                stack_offsets,
+                T0,
+                false,
+            );
+
+            let signal_size = gl.signals[*signal].size;
+            let src_size = gl.vars.size(*src);
+
+            let roff = T2;
+            let rpoke = T3;
+            let signal_addr = signal_address(*signal, signals, io_signals);
+
+            let mut branch_offset: Option<usize> = None;
+            bce.load_u64(roff, signal_addr);
+            let mut rpartial = to_reg(
+                bce,
+                *partial,
+                &gl.vars,
+                assignment[partial],
+                stack_offsets,
+                T4,
+                false,
+            );
+
+            use LogicMode as M;
+            match partial.mode() {
+                M::TwoValue => {}
+                M::FourValue => {
+                    let partial_size =
+                        SixBitSize::from_vector_size(gl.vars.size(*partial)).unwrap();
+                    let (rpartialspc, rpartialval) = rpartial.to_spc_and_val();
+
+                    // TempReg: Destructs PARTIAL (SPC). No longer assessible.
+                    bce.contains_special(T4, rpartialspc, partial_size);
+
+                    branch_offset = Some(bce.data.len());
+                    bce.panic();
+
+                    rpartial = rpartialval;
+                }
             }
-            if options.has_plugins {
-                let index = rt_signal.as_u64();
-                bce.plugin_poke(rpoke, index);
+
+            bce.add(roff, roff, rpartial, SixBitSize::N64);
+
+            // TempReg: PARTIAL is no longer used from here.
+            let rpoke_t1 = T4;
+            let rpoke_t2 = T5;
+            match (src.mode(), SixBitSize::from_vector_size(src_size)) {
+                (LogicMode::TwoValue, None) => {
+                    let size = InlineNBitSize::new(src_size, bce);
+                    bce.set_heap_unaligned(rpoke, rs, roff, size, InlineAddrOffset::ZERO);
+                }
+                (LogicMode::FourValue, None) => {
+                    let size = InlineNBitSize::new(src_size, bce);
+                    bce.set_heap_unaligned(rpoke_t1, rs, roff, size, InlineAddrOffset::ZERO);
+
+                    let dst_offset = HeapAlignment::B64.next_aligned(signal_size.get() as u64);
+                    let src_offset = HeapAlignment::B64.next_aligned(src_size.get() as u64);
+
+                    match SignedImmediate::new_from_u64(dst_offset) {
+                        None => {
+                            bce.load_u64(T5, dst_offset);
+                            bce.add(roff, roff, T5, SixBitSize::N64);
+                        }
+                        Some(imm) => bce.addi(roff, roff, imm, SixBitSize::N64),
+                    }
+                    match SignedImmediate::new_from_u64(src_offset) {
+                        None => {
+                            bce.load_u64(T5, src_offset);
+                            bce.add(T1, rs, T5, SixBitSize::N64);
+                        }
+                        Some(imm) => bce.addi(T1, rs, imm, SixBitSize::N64),
+                    }
+                    bce.set_heap_unaligned(rpoke_t2, T1, roff, size, InlineAddrOffset::ZERO);
+                    bce.or(rpoke, rpoke_t1, rpoke_t2);
+                }
+                (LogicMode::TwoValue, Some(src_size)) => {
+                    bce.set_unaligned(rpoke, rs, roff, InlineAddrOffset::ZERO, src_size);
+                }
+                (LogicMode::FourValue, Some(src_size)) => {
+                    let (rsspc, rsval) = rs.to_spc_and_val();
+                    bce.set_unaligned(rpoke_t1, rsspc, roff, InlineAddrOffset::ZERO, src_size);
+                    let val_offset = HeapAlignment::spc_offset_to_val_offset(signal_size, 0);
+                    let (addr, val_offset) =
+                        InlineAddrOffset::new(val_offset as i64, bce, roff, T5);
+                    bce.set_unaligned(rpoke_t2, rsval, addr, val_offset, src_size);
+                    bce.or(rpoke, rpoke_t1, rpoke_t2);
+                }
             }
-            if let Some(lupdt_index) = lupdt_index {
-                let index = InlineIndex::new(*lupdt_index, bce, T5);
-                bce.set_lupdt(rpoke, index);
-            }
-            for index in watch_map.watch_indices(*signal) {
-                let index = InlineIndex::new(index as u64, bce, T5);
-                bce.wake(rpoke, index);
-            }
+
+            poke_signal(
+                bce,
+                gl,
+                rpoke,
+                *signal,
+                io_signals,
+                lupdt_indexes,
+                watch_map,
+                options,
+            );
 
             if let Some(branch_offset) = branch_offset {
                 bce.data[branch_offset] = Branch {
@@ -2286,6 +2366,40 @@ fn lower_instruction(
         I::Phi(..) => {
             // These are handles at the basic block level.
         }
+    }
+}
+
+fn poke_signal(
+    bce: &mut BytecodeEncoder,
+    gl: &GlobalContext,
+    rpoke: Reg,
+    signal: SignalKey,
+    io_signals: &VgHashMap<SignalKey, RtSignalKey>,
+    lupdt_indexes: &VgHashMap<RtSignalKey, u64>,
+    watch_map: &WatchMap,
+    options: &LowerBytecodeOptions,
+) {
+    let rt_signal = io_signals[&signal];
+    let lupdt_index = lupdt_indexes.get(&rt_signal);
+    let has_watchers = watch_map.num_watch_indices(signal) > 0;
+
+    if gl.signals[signal].mode == LogicMode::TwoValue
+        && (options.has_plugins || lupdt_index.is_some() || has_watchers)
+    {
+        let index = InlineIndex::new(rt_signal.as_u64(), bce, T5);
+        bce.tv_correct_first(rpoke, index);
+    }
+    if options.has_plugins {
+        let index = rt_signal.as_u64();
+        bce.plugin_poke(rpoke, index);
+    }
+    if let Some(lupdt_index) = lupdt_index {
+        let index = InlineIndex::new(*lupdt_index, bce, T5);
+        bce.set_lupdt(rpoke, index);
+    }
+    for index in watch_map.watch_indices(signal) {
+        let index = InlineIndex::new(index as u64, bce, T5);
+        bce.wake(rpoke, index);
     }
 }
 

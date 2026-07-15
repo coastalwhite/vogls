@@ -515,15 +515,23 @@ impl ContextFormat for Instruction {
             }
             Self::Drive(sig, var, offset) => {
                 f.write_str("drv")?;
-                if let Some(offset) = offset {
-                    f.write_str("[")?;
-                    offset.ctx_fmt(f, ctx)?;
-                    f.write_str("]")?;
-                }
                 f.write_str(" ")?;
                 ctx.gl.signals.get(*sig).unwrap().ctx_fmt(f, ctx)?;
                 f.write_str(", ")?;
                 var.ctx_fmt(f, ctx)?;
+                if *offset != 0 {
+                    f.write_str(", ")?;
+                    offset.fmt(f)?;
+                }
+            }
+            Self::DriveSlice(sig, var, offset) => {
+                f.write_str("drv")?;
+                f.write_str(" ")?;
+                ctx.gl.signals.get(*sig).unwrap().ctx_fmt(f, ctx)?;
+                f.write_str(", ")?;
+                var.ctx_fmt(f, ctx)?;
+                f.write_str(", ")?;
+                offset.ctx_fmt(f, ctx)?;
             }
 
             Self::Phi(dst, srcs) => {

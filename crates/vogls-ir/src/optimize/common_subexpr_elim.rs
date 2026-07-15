@@ -103,7 +103,7 @@ pub fn common_subexpr_elim(
                             CSExpr::ProbeSlice(*signal, gl.vars.size(*dst), try_lookup!(offset)),
                         )
                     }
-                    I::Drive(signal, _, _) => {
+                    I::Drive(signal, _, _) | I::DriveSlice(signal, _, _) => {
                         match signal_generation.entry(*signal) {
                             Entry::Occupied(mut entry) => *entry.get_mut() += 1,
                             Entry::Vacant(entry) => _ = entry.insert(0),

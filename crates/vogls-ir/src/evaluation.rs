@@ -23,7 +23,9 @@ fn evaluate_impl(
     variables: &mut HashMap<VariableKey, Bits>,
     prev_bb: Option<BasicBlockKey>,
 ) {
-    let BasicBlock { instrs, terminator, .. } = &gl.bbs[bb];
+    let BasicBlock {
+        instrs, terminator, ..
+    } = &gl.bbs[bb];
 
     for instr in instrs {
         use Instruction as I;
@@ -96,13 +98,15 @@ fn evaluate_impl(
                 };
                 _ = variables.insert(*dst, bits);
             }
-            I::Drive(dst_signal, src, partial) => {
-                if partial.is_some() {
-                    todo!()
+            I::Drive(dst_signal, src, offset) => {
+                if *offset > 0 || gl.vars.size(*src) != gl.signals[*dst_signal].size {
+                    todo!();
                 }
-
                 let bits = variables[src].clone();
                 signals.insert(*dst_signal, bits);
+            }
+            I::DriveSlice(..) => {
+                todo!()
             }
             I::Phi(dst, items) => {
                 let prev_bb = prev_bb.unwrap();

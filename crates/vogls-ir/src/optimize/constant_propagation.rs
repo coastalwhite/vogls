@@ -598,7 +598,7 @@ fn constant_propagate_instruction(
             }
             not_constant!(dst);
         }
-        I::Drive(..) => PropagateResult {
+        I::Drive(..) | I::DriveSlice(..) => PropagateResult {
             replace: false,
             ready: true,
         },

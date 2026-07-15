@@ -114,7 +114,7 @@ pub fn peephole(
                         *dst,
                         CSExpr::ProbeSlice(*signal, gl.vars.size(*dst), try_lookup!(offset)),
                     ),
-                    I::Drive(_, _, _) => continue,
+                    I::Drive(..) | I::DriveSlice(..) => continue,
                     I::Phi(_, _) => continue,
                 };
                 let expr_key = exprs.insert((dst, csexpr));
@@ -458,6 +458,7 @@ fn peephole_instruction(
         I::Probe(..) => {}
         I::ProbeSlice(..) => {}
         I::Drive(..) => {}
+        I::DriveSlice(..) => {}
         I::Phi(..) => {}
     }
 

@@ -391,18 +391,24 @@ impl FuseGraphOptimizer {
                             continue;
                         }
                     }
-                    I::Drive(signal, src, partial) => {
+                    I::Drive(signal, src, offset) => {
                         if let Some((to, slice)) = self.drive_map.get(signal) {
-                            let mut partial = *partial;
+                            let mut offset = *offset;
                             if let Some(slice) = slice {
-                                partial = Some(match partial {
-                                    None => builder.constant_u32(gl, slice.lsb()),
-                                    Some(o) => {
-                                        builder.plus_constant(gl, o, Bits::new_u32(slice.lsb()))
-                                    }
-                                });
+                                offset += slice.lsb();
                             }
-                            builder.push_raw_instruction(I::Drive(*to, *src, partial));
+                            builder.push_raw_instruction(I::Drive(*to, *src, offset));
+                            continue;
+                        }
+                    }
+                    I::DriveSlice(signal, src, partial) => {
+                        if let Some((to, slice)) = self.drive_map.get(signal) {
+                            let mut offset = *partial;
+                            if let Some(slice) = slice {
+                                offset =
+                                    builder.plus_constant(gl, offset, Bits::new_u32(slice.lsb()));
+                            }
+                            builder.push_raw_instruction(I::DriveSlice(*to, *src, offset));
                             continue;
                         }
                     }

@@ -122,7 +122,8 @@ pub enum VmInstruction {
     Intrinsic(HeapOffset, Box<VmIntrinsicOp>, Box<[(HeapRef, LogicMode)]>),
 
     LastUpdateTime(HeapOffset, RtSignalKey),
-    Drive(RtSignalKey, HeapRef, Option<(HeapOffset, bool)>),
+    DriveCO(RtSignalKey, HeapRef, u32),
+    Drive(RtSignalKey, HeapRef, HeapOffset, bool),
 
     Wait(Time),
     TvVariableWait(HeapOffset),
@@ -299,20 +300,20 @@ impl VmInstruction {
                 _ => &[],
             },
             I::LastUpdateTime(dst, _) => &[("dst", false, dst.to_64bit_ref())],
-            I::Drive(dst, src, partial) => {
+            I::DriveCO(dst, src, _partial) => {
                 let mode = signal_modes[dst.as_usize()];
-                eprint!(" ({})", signals[dst.as_usize()].offset);
-                match partial {
-                    None => &[
-                        ("dst", mode == LogicMode::FourValue, signals[dst.as_usize()]),
-                        ("src", mode == LogicMode::FourValue, *src),
-                    ],
-                    Some((partial, is_fv)) => &[
-                        ("dst", mode == LogicMode::FourValue, signals[dst.as_usize()]),
-                        ("src", mode == LogicMode::FourValue, *src),
-                        ("offset", *is_fv, partial.to_32bit_ref()),
-                    ],
-                }
+                &[
+                    ("dst", mode == LogicMode::FourValue, signals[dst.as_usize()]),
+                    ("src", mode == LogicMode::FourValue, *src),
+                ]
+            }
+            I::Drive(dst, src, partial, is_fv) => {
+                let mode = signal_modes[dst.as_usize()];
+                &[
+                    ("dst", mode == LogicMode::FourValue, signals[dst.as_usize()]),
+                    ("src", mode == LogicMode::FourValue, *src),
+                    ("offset", *is_fv, partial.to_32bit_ref()),
+                ]
             }
             I::TvVariableWait(var) => &[("time", false, var.to_64bit_ref())],
             I::FvVariableWait(var) => &[("time", true, var.to_64bit_ref())],

@@ -481,6 +481,7 @@ fn parse_process<'a>(
                 I::Probe(..) => unreachable!(),
                 I::ProbeSlice(..) => unreachable!(),
                 I::Drive(..) => unreachable!(),
+                I::DriveSlice(..) => unreachable!(),
                 I::Phi(_, items) => {
                     if let Some((src_mode, src_size)) = items.iter().find_map(|(_, v)| {
                         if let VarSize::Resolved(mode, size) = symbols.var_sizes[&v.identifier()] {
@@ -916,7 +917,7 @@ fn parse_bb<'a>(
 
                 c.trim_cursor();
                 let src = parse_var(c, symbols, gl)?;
-                instrs.push(Instruction::Drive(signal, src, None));
+                instrs.push(Instruction::Drive(signal, src, 0));
                 continue;
             }
 

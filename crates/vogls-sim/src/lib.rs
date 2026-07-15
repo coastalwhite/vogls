@@ -716,21 +716,37 @@ impl Simulation {
                         let lupdt = state.runtime.last_active_time[idx as usize];
                         state.runtime.heap.set_tv_u64(dst.to_ref(TIME_VSIZE), lupdt);
                     }
-                    I::Drive(sig, src, offset) => {
+                    I::DriveCO(sig, src, offset) => {
                         let dst = self.signals[sig.as_usize()];
                         let mode = self.signal_modes[sig.as_usize()];
-                        let partial = match offset {
-                            None => None,
-                            Some((offset, false)) => {
-                                Some(state.runtime.heap.load_exact_tv_u32(*offset))
+                        let partial = if *offset == 0 { None } else { Some(*offset) };
+
+                        let mut updated =
+                            drive_bits(&mut state.runtime.heap, dst, *src, partial, mode);
+
+                        if matches!(mode, LogicMode::TwoValue)
+                            && let w = &mut state.runtime.tvl_first_write[sig.as_usize() / 64]
+                            && ((*w >> (sig.as_usize() % 64)) & 1) == 0
+                        {
+                            updated = true;
+                            *w |= 1u64 << (sig.as_usize() % 64);
+                        }
+
+                        if updated {
+                            self.update_signal(state, *sig);
+                        }
+                    }
+                    I::Drive(sig, src, offset, is_fv) => {
+                        let dst = self.signals[sig.as_usize()];
+                        let mode = self.signal_modes[sig.as_usize()];
+                        let partial = if *is_fv {
+                            let (spc, val) = state.runtime.heap.load_exact_fv_u32(*offset);
+                            if !spc != 0 {
+                                break 'instruction None;
                             }
-                            Some((offset, true)) => {
-                                let (spc, val) = state.runtime.heap.load_exact_fv_u32(*offset);
-                                if !spc != 0 {
-                                    break 'instruction None;
-                                }
-                                Some(val)
-                            }
+                            Some(val)
+                        } else {
+                            Some(state.runtime.heap.load_exact_tv_u32(*offset))
                         };
 
                         let mut updated =

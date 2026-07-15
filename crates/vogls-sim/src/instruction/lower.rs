@@ -803,12 +803,15 @@ pub fn lower_process_to_vm(
                     }
                     I::Drive(signal, src, offset) => {
                         let src_size = gl.vars.size(*src);
+                        VI::DriveCO(signal!(*signal), heap_map[src].to_ref(src_size), *offset)
+                    }
+                    I::DriveSlice(signal, src, offset) => {
+                        let src_size = gl.vars.size(*src);
                         VI::Drive(
                             signal!(*signal),
                             heap_map[src].to_ref(src_size),
-                            offset.map(|o| {
-                                (heap_map[&o], o.mode() == LogicMode::FourValue)
-                            }),
+                            heap_map[offset],
+                            offset.mode() == LogicMode::FourValue,
                         )
                     }
                     I::Phi(..) => continue,

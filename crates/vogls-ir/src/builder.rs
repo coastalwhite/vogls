@@ -274,7 +274,7 @@ impl ProcessBuilder {
                 }
                 bb.instrs.extend(temporal_vars.iter().map(|var| {
                     let signal = temporal_var_to_signal[var];
-                    Instruction::Drive(signal, *var, None)
+                    Instruction::Drive(signal, *var, 0)
                 }));
             }
         }
@@ -894,12 +894,8 @@ impl BasicBlockBuilder {
         src: VariableKey,
         offset: u32,
     ) {
-        if offset == 0 {
-            return self.drive_opt_partial(gl, signal, src, None);
-        }
-
-        let offset = self.constant_u32(gl, offset);
-        self.drive_opt_partial(gl, signal, src, Some(offset));
+        let src = self.convert_mode(gl, src, gl.signals[signal].mode);
+        self.instrs.push(Instruction::Drive(signal, src, offset));
     }
     pub fn drive_partial(
         &mut self,
@@ -917,11 +913,15 @@ impl BasicBlockBuilder {
         src: VariableKey,
         partial: Option<VariableKey>,
     ) {
-        if let Some(offset) = partial {
-            assert_eq!(gl.vars.size(offset), INTEGER_VSIZE);
-        }
         let src = self.convert_mode(gl, src, gl.signals[signal].mode);
-        self.instrs.push(Instruction::Drive(signal, src, partial));
+        match partial {
+            None => self.instrs.push(Instruction::Drive(signal, src, 0)),
+            Some(offset) => {
+                assert_eq!(gl.vars.size(offset), INTEGER_VSIZE);
+                self.instrs
+                    .push(Instruction::DriveSlice(signal, src, offset))
+            }
+        }
     }
 
     pub fn probe(&mut self, gl: &mut GlobalContext, signal: SignalKey) -> VariableKey {
@@ -1188,7 +1188,7 @@ impl BasicBlockBuilder {
             LogicMode::FourValue => {
                 let size = gl.vars.size(src);
                 self.and_constant(gl, src, Bits::new_ones(size))
-            },
+            }
         }
     }
 }
