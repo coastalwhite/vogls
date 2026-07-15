@@ -11,7 +11,7 @@ use vogls_frontend::ident_table::IdentTable;
 use vogls_frontend::symbol_table::FrozenSymbolTable;
 #[cfg(feature = "unstable")]
 use vogls_ir::ProcessKind;
-use vogls_ir::optimize::OptFlags;
+use vogls_ir::optimize::{OptFlags, Optimizations};
 use vogls_ir::watchers::WatchMap;
 use vogls_ir::{GlobalContext, LogicMode, SCALAR_VSIZE, Signal, SignalKey};
 use vogls_runtime::plugins::RuntimePlugin;
@@ -90,9 +90,9 @@ struct CodegenPreparation {
 
 const NUM_REGIONS: u8 = 3;
 impl LoweredDesign {
-    pub fn optimize(&mut self, flags: OptFlags) -> &mut Self {
+    pub fn optimize(&mut self, opts: Optimizations) -> &mut Self {
         let processes = self.gl.processes.keys().collect::<Vec<_>>();
-        vogls_ir::optimize::optimize_processes(&mut self.gl, &processes, flags);
+        vogls_ir::optimize::optimize_processes(&mut self.gl, &processes, opts);
         self
     }
 

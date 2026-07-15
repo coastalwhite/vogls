@@ -1,3 +1,5 @@
+use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Not};
+
 use slotmap::SlotMap;
 use vogls_bits::{Bits, VectorSize};
 use vogls_utils::{VgHashMap, VgHashSet, new_table_key};
@@ -15,14 +17,67 @@ use crate::{
     VariableKey,
 };
 
+#[derive(Default, Clone, Copy)]
+pub struct OptFlags(u64);
+
+impl OptFlags {
+    pub const ALL: Self = Self(0xFu64);
+    pub const EMPTY: Self = Self(0u64);
+
+    pub const CONSTANT_PROPAGATION: Self = Self(1u64 << 0);
+    pub const DEADCODE_ELIMINATION: Self = Self(1u64 << 1);
+    pub const COMMON_SUBEXPR_ELIM: Self = Self(1u64 << 2);
+    pub const PEEPHOLE: Self = Self(1u64 << 3);
+
+    pub fn contains(self, other: Self) -> bool {
+        self.0 & other.0 == other.0
+    }
+}
+
+impl Not for OptFlags {
+    type Output = Self;
+    fn not(self) -> Self::Output {
+        self ^ Self::ALL
+    }
+}
+impl BitXor<OptFlags> for OptFlags {
+    type Output = Self;
+    fn bitxor(self, rhs: OptFlags) -> Self::Output {
+        Self(self.0 ^ rhs.0)
+    }
+}
+impl BitXorAssign<OptFlags> for OptFlags {
+    fn bitxor_assign(&mut self, rhs: OptFlags) {
+        self.0 ^= rhs.0;
+    }
+}
+impl BitAnd<OptFlags> for OptFlags {
+    type Output = Self;
+    fn bitand(self, rhs: OptFlags) -> Self::Output {
+        Self(self.0 & rhs.0)
+    }
+}
+impl BitAndAssign<OptFlags> for OptFlags {
+    fn bitand_assign(&mut self, rhs: OptFlags) {
+        self.0 &= rhs.0;
+    }
+}
+impl BitOr<OptFlags> for OptFlags {
+    type Output = Self;
+    fn bitor(self, rhs: OptFlags) -> Self::Output {
+        Self(self.0 | rhs.0)
+    }
+}
+impl BitOrAssign<OptFlags> for OptFlags {
+    fn bitor_assign(&mut self, rhs: OptFlags) {
+        self.0 |= rhs.0;
+    }
+}
 
 #[derive(Default, Clone, Copy)]
-pub struct OptFlags {
-    pub opt_rounds: u8,
-    pub constant_propagation: bool,
-    pub deadcode_elimination: bool,
-    pub common_subexpr_elim: bool,
-    pub peephole: bool,
+pub struct Optimizations {
+    pub rounds: u8,
+    pub flags: OptFlags,
 }
 
 new_table_key! {
@@ -45,7 +100,7 @@ enum CSExpr {
     LastUpdateTime(SignalKey),
 }
 
-pub fn optimize_processes(gl: &mut GlobalContext, processes: &[ProcessKey], flags: OptFlags) {
+pub fn optimize_processes(gl: &mut GlobalContext, processes: &[ProcessKey], opts: Optimizations) {
     let mut scratch_stack = Vec::new();
     let mut scratch_seen = VgHashSet::default();
     let mut scratch_mfr = VgHashSet::default();
@@ -57,8 +112,8 @@ pub fn optimize_processes(gl: &mut GlobalContext, processes: &[ProcessKey], flag
             continue;
         }
 
-        for _ in 0..flags.opt_rounds {
-            if flags.constant_propagation {
+        for _ in 0..opts.rounds {
+            if opts.flags.contains(OptFlags::CONSTANT_PROPAGATION) {
                 constant_propagation::constant_propagation(
                     gl,
                     process,
@@ -71,7 +126,7 @@ pub fn optimize_processes(gl: &mut GlobalContext, processes: &[ProcessKey], flag
                 );
             }
             crate::form::check_ir_form(&gl.processes[process].regions, gl);
-            if flags.common_subexpr_elim {
+            if opts.flags.contains(OptFlags::COMMON_SUBEXPR_ELIM) {
                 common_subexpr_elim::common_subexpr_elim(
                     gl,
                     process,
@@ -80,11 +135,11 @@ pub fn optimize_processes(gl: &mut GlobalContext, processes: &[ProcessKey], flag
                 );
             }
             crate::form::check_ir_form(&gl.processes[process].regions, gl);
-            if flags.peephole {
+            if opts.flags.contains(OptFlags::PEEPHOLE) {
                 peephole::peephole(gl, process, &mut scratch_stack, &mut scratch_seen);
             }
             crate::form::check_ir_form(&gl.processes[process].regions, gl);
-            if flags.deadcode_elimination {
+            if opts.flags.contains(OptFlags::DEADCODE_ELIMINATION) {
                 deadcode_elimination::deadcode_elimination(
                     gl,
                     process,

@@ -1,5 +1,6 @@
 pub use vogls_bits::format::{BitsFormatBase, BitsFormatOptions, BitsFormatWidth};
 pub use vogls_ir::{Bits, LogicMode, SignalKey, VectorSize};
+pub use vogls_ir::optimize::{Optimizations, OptFlags};
 pub use vogls_runtime::{RtSignalKey, SimulationIo};
 pub use vogls_sim::SimulationState;
 pub use vogls_verilog::elaborate::{VSymbol, VSymbolTable};

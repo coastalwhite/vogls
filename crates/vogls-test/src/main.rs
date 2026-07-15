@@ -12,7 +12,7 @@ use clap::Parser;
 use vogls::design::{Arena, Macro};
 use vogls::{DesignBuilder, SimulationIo, VirDesignBuilder};
 use vogls_ir::LogicMode;
-use vogls_ir::optimize::OptFlags;
+use vogls_ir::optimize::{OptFlags, Optimizations};
 
 static ANSI_RED: &str = "\x1b[31m";
 static ANSI_GREEN: &str = "\x1b[32m";
@@ -73,10 +73,23 @@ struct TestInfo {
     timeout: u64,
     top_level_module: Option<String>,
     skip: Option<LogicMode>,
+    opt_flags: OptFlags,
+}
+
+fn parse_opts(s: &str) -> Option<OptFlags> {
+    Some(match s {
+        "*" => OptFlags::ALL,
+        "0" => OptFlags::EMPTY,
+        "constant-propagation" => OptFlags::CONSTANT_PROPAGATION,
+        "common_subexpr_elim" => OptFlags::COMMON_SUBEXPR_ELIM,
+        "deadcode_elimination" => OptFlags::DEADCODE_ELIMINATION,
+        "peephole" => OptFlags::PEEPHOLE,
+        _ => return None,
+    })
 }
 
 impl TestInfo {
-    pub fn parse(content: &str) -> Self {
+    pub fn parse(content: &str) -> Result<Self, String> {
         let mut info = TestInfo {
             fail: false,
             verify_stdout: VerifyOutput::No,
@@ -85,6 +98,7 @@ impl TestInfo {
             top_level_module: None,
             timeout: u64::MAX,
             skip: None,
+            opt_flags: OptFlags::ALL,
         };
 
         for line in content.lines() {
@@ -110,16 +124,27 @@ impl TestInfo {
                 _ if line.starts_with("skip=") => match &line[5..] {
                     "two-value-logic" => info.skip = Some(LogicMode::TwoValue),
                     "four-value-logic" => info.skip = Some(LogicMode::FourValue),
-                    _ => panic!("failed to parse"),
+                    _ => return Err("failed to parse 'skip'".into()),
                 },
-                _ => {
-                    println!();
-                    panic!("Invalid vogls test command '{line}'");
+                _ if line.starts_with("disable-optimization=") => {
+                    let opt = &line["disable-optimization=".len()..].trim();
+                    let Some(opt) = parse_opts(opt) else {
+                        return Err(format!("Invalid vogls optimization '{opt}'"));
+                    };
+                    info.opt_flags &= !opt;
                 }
+                _ if line.starts_with("enable-optimization=") => {
+                    let opt = &line["enable-optimization=".len()..].trim();
+                    let Some(opt) = parse_opts(opt) else {
+                        return Err(format!("Invalid vogls optimization '{opt}'"));
+                    };
+                    info.opt_flags |= opt;
+                }
+                _ => return Err(format!("Invalid vogls test command '{line}'")),
             }
         }
 
-        info
+        Ok(info)
     }
 }
 
@@ -156,7 +181,7 @@ struct TestCase {
     offset_path: PathBuf,
     path: PathBuf,
     information: TestInfo,
-    opt_rounds: u8,
+    opt: Optimizations,
     logic_mode: LogicMode,
     backend: Backend,
 }
@@ -252,21 +277,13 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     };
     let mut o = std::io::stdout();
 
-    let hook = panic::take_hook();
-    panic::set_hook(Box::new(|info| {
-        PANIC_INFO.set(Some(PanicInfo {
-            backtrace: backtrace::Backtrace::new(),
-            message: info.payload_as_str().unwrap_or("<no info>").to_string(),
-        }));
-    }));
-
     let mut configurations = Vec::<TestCase>::new();
 
     for path in paths.iter() {
         let offset_path = path.as_path();
         let path = tests_dir.join(&offset_path);
         let s = std::fs::read_to_string(&path)?;
-        let test_information = TestInfo::parse(&s);
+        let test_information = TestInfo::parse(&s)?;
 
         for &opt_rounds in opt_rounds_configurations {
             for &logic_mode in modes {
@@ -275,7 +292,10 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                         offset_path: offset_path.to_path_buf(),
                         path: path.clone(),
                         information: test_information.clone(),
-                        opt_rounds,
+                        opt: Optimizations {
+                            rounds: opt_rounds,
+                            flags: test_information.opt_flags,
+                        },
                         logic_mode,
                         backend,
                     });
@@ -285,6 +305,13 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     }
     writeln!(&mut o, "Running {} tests...", configurations.len())?;
 
+    let hook = panic::take_hook();
+    panic::set_hook(Box::new(|info| {
+        PANIC_INFO.set(Some(PanicInfo {
+            backtrace: backtrace::Backtrace::new(),
+            message: info.payload_as_str().unwrap_or("<no info>").to_string(),
+        }));
+    }));
     let fails = if args.num_threads == 1 {
         let mut fails = Vec::<Fail>::new();
         let mut prev_file = None;
@@ -304,13 +331,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                 std::io::stdout().flush()?;
             }
 
-            let result = run_test(
-                &t.path,
-                &t.information,
-                t.logic_mode,
-                t.backend,
-                t.opt_rounds,
-            );
+            let result = run_test(&t.path, &t.information, t.logic_mode, t.backend, t.opt);
             num_tests += usize::from(!matches!(result, Ok(PassKind::Skip)));
 
             match result {
@@ -321,7 +342,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                     fails.push(Fail {
                         name: t.offset_path.display().to_string(),
                         mode: t.logic_mode,
-                        opt_rounds: t.opt_rounds,
+                        opt_rounds: t.opt.rounds,
                         backend: t.backend,
                         info,
                     });
@@ -346,7 +367,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                         &t.information,
                         t.logic_mode,
                         t.backend,
-                        t.opt_rounds,
+                        t.opt,
                     ) {
                         Ok(PassKind::Skip) => {
                             io::stdout().write_all(&[b'S']).unwrap();
@@ -365,7 +386,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                             Some(Fail {
                                 name: t.offset_path.display().to_string(),
                                 mode: t.logic_mode,
-                                opt_rounds: t.opt_rounds,
+                                opt_rounds: t.opt.rounds,
                                 backend: t.backend,
                                 info,
                             })
@@ -520,19 +541,11 @@ fn run_test(
     test_information: &TestInfo,
     logic_mode: LogicMode,
     backend: Backend,
-    opt_rounds: u8,
+    opts: Optimizations,
 ) -> Result<PassKind, FailureInfo> {
     if Some(logic_mode) == test_information.skip {
         return Ok(PassKind::Skip);
     }
-
-    let optflags = OptFlags {
-        opt_rounds,
-        constant_propagation: true,
-        deadcode_elimination: true,
-        common_subexpr_elim: true,
-        peephole: true,
-    };
 
     let sdf = test_information
         .annotate_sdf
@@ -582,7 +595,7 @@ fn run_test(
                     return Err(FailureInfo::CompileFailure("failed to lower".into()));
                 }
             };
-            lowered.optimize(optflags);
+            lowered.optimize(opts);
             Result::<_, FailureInfo>::Ok(lowered.emit_ir().to_string())
         }));
 
@@ -623,9 +636,9 @@ fn run_test(
                 let mut design = design
                     .parse()
                     .map_err(|_| FailureInfo::CompileFailure("failed to parse VIR".into()))?;
-                design.optimize(optflags);
+                design.optimize(opts);
 
-                if opt_rounds > 0
+                if opts.rounds > 0
                     && let Some(optimized) = optimized
                 {
                     let out = design.emit_ir().to_string();
@@ -677,7 +690,7 @@ fn run_test(
                     Ok(l) => l,
                     Err(_) => return Err(FailureInfo::CompileFailure("failed to lower".into())),
                 };
-                lowered.optimize(optflags);
+                lowered.optimize(opts);
                 Result::<_, FailureInfo>::Ok(lowered)
             }?;
 
