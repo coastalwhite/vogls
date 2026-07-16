@@ -68,11 +68,17 @@ pub struct BasicBlock {
     pub terminator: BasicBlockTerminator,
 }
 impl BasicBlock {
-    pub fn map_bbs(&mut self, mut f: impl FnMut(BasicBlockKey) -> BasicBlockKey) {
+    pub fn map_temporal_bbs(&mut self, mut f: impl FnMut(BasicBlockKey) -> BasicBlockKey) {
         for i in self.instrs.iter_mut() {
             i.map_bb(&mut f);
         }
-        self.terminator.map_bb(f);
+        self.terminator.map_temporal_bb(f);
+    }
+    pub fn map_non_temporal_bbs(&mut self, mut f: impl FnMut(BasicBlockKey) -> BasicBlockKey) {
+        for i in self.instrs.iter_mut() {
+            i.map_bb(&mut f);
+        }
+        self.terminator.map_non_temporal_bb(f);
     }
 
     pub fn map_vars(&mut self, mut f: impl FnMut(VariableKey) -> VariableKey) {
@@ -174,7 +180,26 @@ impl BasicBlockTerminator {
         }
     }
 
-    pub fn map_bb(&mut self, mut f: impl FnMut(BasicBlockKey) -> BasicBlockKey) {
+    pub fn map_temporal_bb(&mut self, mut f: impl FnMut(BasicBlockKey) -> BasicBlockKey) {
+        match self {
+            BasicBlockTerminator::Wait(tr, _)
+            | BasicBlockTerminator::VariableWait(tr, _)
+            | BasicBlockTerminator::WaitRegion(tr, _)
+            | BasicBlockTerminator::Watch(tr, _) => {
+                tr.0 = f(tr.0);
+            }
+
+            BasicBlockTerminator::Jump(bb) => {
+                *bb = f(*bb);
+            }
+            BasicBlockTerminator::Branch(_, bb1, bb2) => {
+                *bb1 = f(*bb1);
+                *bb2 = f(*bb2);
+            }
+            BasicBlockTerminator::Halt => {}
+        }
+    }
+    pub fn map_non_temporal_bb(&mut self, mut f: impl FnMut(BasicBlockKey) -> BasicBlockKey) {
         match self {
             BasicBlockTerminator::Wait(..)
             | BasicBlockTerminator::VariableWait(..)

@@ -79,7 +79,7 @@ pub fn lower_function_call<'a>(
     bb_stack.push(fn_bb);
     bb_seen.insert(fn_bb);
     while let Some(bb_key) = bb_stack.pop() {
-        gl.bbs[bb_key].map_bbs(|bb| bb_map[&bb]);
+        gl.bbs[bb_key].map_temporal_bbs(|bb| bb_map[&bb]);
         gl.bbs[bb_key].terminator.for_each_temporal_bb(|next_bb| {
             if bb_seen.insert(next_bb) {
                 bb_stack.push(next_bb);
@@ -183,7 +183,7 @@ pub fn lower_task_enable<'a>(
     bb_stack.push(fn_bb);
     bb_seen.insert(fn_bb);
     while let Some(bb_key) = bb_stack.pop() {
-        mctx.gl().bbs[bb_key].map_bbs(|bb| bb_map[&bb]);
+        mctx.gl().bbs[bb_key].map_temporal_bbs(|bb| bb_map[&bb]);
         mctx.gl().bbs[bb_key]
             .terminator
             .for_each_temporal_bb(|next_bb| {

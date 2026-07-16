@@ -176,7 +176,7 @@ impl Process {
 
                 let bb = ctx.gl.bbs.get(bb).unwrap();
                 bb.ctx_fmt(f, ctx)?;
-                bb.terminator.for_each_temporal_bb(|bb_key| {
+                bb.terminator.for_each_non_temporal_bb(|bb_key| {
                     if bb_seen.insert(bb_key) {
                         bb_stack.push(bb_key);
                     }
