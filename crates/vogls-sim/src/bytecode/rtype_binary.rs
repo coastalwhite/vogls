@@ -1,8 +1,7 @@
 use std::fmt;
 
 use vogls_bits::arithmetic::{
-    fv_bitwise_and_elem, fv_bitwise_andnot_elem, fv_bitwise_or_elem, fv_bitwise_ornot_elem,
-    fv_bitwise_xor_elem,
+    fv_bitwise_and_elem, fv_bitwise_andnot_elem, fv_bitwise_or_elem, fv_bitwise_ornot_elem, fv_bitwise_xnor_elem, fv_bitwise_xor_elem
 };
 use vogls_bits::copyxz::{copy_x, copy_z};
 use vogls_bits::edge::{fv_negedge_u64, fv_posedge_u64};
@@ -66,6 +65,7 @@ pub struct FvOr(pub BitwiseRType);
 pub struct FvXor(pub BitwiseRType);
 pub struct FvAndNot(pub BitwiseRType);
 pub struct FvOrNot(pub BitwiseRType);
+pub struct FvXnor(pub BitwiseRType);
 pub struct FvCeq(pub BitwiseRType);
 pub struct FvBitwiseCeq(pub SbsBitwiseRType);
 pub struct FvAdd(pub SbsBitwiseRType);
@@ -887,6 +887,28 @@ impl BytecodeInstruction for FvOrNot {
             fv_bitwise_ornot_elem(regs[rs1_spc], regs[rs1_val], regs[rs2_spc], regs[rs2_val]);
     }
 }
+impl BytecodeInstruction for FvXnor {
+    impl_bitwise!(FvXnor, "fv.xnor", FourValue, FourValue, FourValue);
+
+    #[inline(always)]
+    fn execute(
+        self,
+        _code: &[Bytecode],
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let BitwiseRType { rd, rs1, rs2 } = self.0;
+        let (rd_spc, rd_val) = rd.to_spc_and_val();
+        let (rs1_spc, rs1_val) = rs1.to_spc_and_val();
+        let (rs2_spc, rs2_val) = rs2.to_spc_and_val();
+        (regs[rd_spc], regs[rd_val]) =
+            fv_bitwise_xnor_elem(regs[rs1_spc], regs[rs1_val], regs[rs2_spc], regs[rs2_val]);
+    }
+}
 impl BytecodeInstruction for FvCeq {
     impl_bitwise!(FvCeq, "fv.ceq", TwoValue, FourValue, FourValue);
 
@@ -1623,6 +1645,7 @@ impl_bytecode_methods! {
     (fv_xor, FvXor)
     (fv_andnot, FvAndNot)
     (fv_ornot, FvOrNot)
+    (fv_xnor, FvXnor)
     (fv_ceq, FvCeq)
     (fv_posedge, FvPosedge)
     (fv_negedge, FvNegedge)

@@ -514,6 +514,13 @@ pub enum BinaryOp {
     Posedge,
     /// Negedge edge
     Negedge,
+
+    /// ANDNOT(a, b) = AND(a, NOT(b))
+    AndNot,
+    /// ORNOT(a, b) = OR(a, NOT(b))
+    OrNot,
+    /// XNOR(a, b) = XOR(a, NOT(b)) = NOT(XOR(a, b))
+    Xnor,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1016,6 +1023,9 @@ impl BinaryOp {
             O::And => Bits::bitwise_and(lhs, rhs),
             O::Or => Bits::bitwise_or(lhs, rhs),
             O::Xor => Bits::bitwise_xor(lhs, rhs),
+            O::AndNot => Bits::bitwise_andnot(lhs, rhs),
+            O::OrNot => Bits::bitwise_ornot(lhs, rhs),
+            O::Xnor => Bits::bitwise_xnor(lhs, rhs),
             O::Add => Bits::add(lhs, rhs),
             O::Sub => Bits::subtract(lhs, rhs),
             O::Power => Bits::power(lhs, rhs),
@@ -1072,6 +1082,9 @@ impl BinaryOp {
             O::And
             | O::Or
             | O::Xor
+            | O::AndNot
+            | O::OrNot
+            | O::Xnor
             | O::Add
             | O::Sub
             | O::Power
@@ -1117,6 +1130,9 @@ impl BinaryOp {
             O::And
             | O::Or
             | O::Xor
+            | O::AndNot
+            | O::OrNot
+            | O::Xnor
             | O::Add
             | O::Sub
             | O::Power
@@ -1163,6 +1179,9 @@ impl BinaryOp {
             Self::And
             | Self::Or
             | Self::Xor
+            | Self::AndNot
+            | Self::OrNot
+            | Self::Xnor
             | Self::Add
             | Self::Sub
             | Self::Power

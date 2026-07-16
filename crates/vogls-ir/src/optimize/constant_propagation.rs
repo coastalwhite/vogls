@@ -251,6 +251,15 @@ fn constant_propagate_instruction(
                 (O::Xor, Some(b), _) => additional.push(BI(dst, IO::Xor, rhs, b.clone())),
                 (O::Xor, _, Some(b)) => additional.push(BI(dst, IO::Xor, lhs, b.clone())),
 
+                (O::AndNot, Some(_), _) => {}
+                (O::AndNot, _, Some(b)) => {
+                    additional.push(BI(dst, IO::And, lhs, b.bitwise_negate()))
+                }
+                (O::OrNot, Some(_), _) => {}
+                (O::OrNot, _, Some(b)) => additional.push(BI(dst, IO::Or, lhs, b.bitwise_negate())),
+                (O::Xnor, Some(b), _) => additional.push(BI(dst, IO::Xor, rhs, b.bitwise_negate())),
+                (O::Xnor, _, Some(b)) => additional.push(BI(dst, IO::Xor, lhs, b.bitwise_negate())),
+
                 (O::Add, Some(b), _) => additional.push(BI(dst, IO::Add, rhs, b.clone())),
                 (O::Add, _, Some(b)) => additional.push(BI(dst, IO::Add, lhs, b.clone())),
                 (O::Sub, Some(b), _) => additional.push(BI(dst, IO::RevSub, rhs, b.clone())),
@@ -493,15 +502,31 @@ fn constant_propagate_instruction(
             }
         }
         I::Select(dst, cond, truthy, falsy) => {
-            let cond_bits = get!(cond);
-            let truthy_bits = get!(truthy);
-            let falsy_bits = get!(falsy);
+            let cond_bits_entry = scratch_map.get(cond);
+            let truthy_bits_entry = scratch_map.get(truthy);
+            let falsy_bits_entry = scratch_map.get(falsy);
 
             let (dst, truthy, falsy) = (*dst, *truthy, *falsy);
 
-            match (truthy_bits, falsy_bits) {
-                (Some(t), Some(f)) if t == f => assign_constant!(dst, t.clone()),
-                (Some(t), Some(f)) if t.size() == SCALAR_VSIZE => {
+            if let Some(Some(cond)) = cond_bits_entry {
+                let (src, bits) = if cond.is_one() {
+                    (truthy, truthy_bits_entry)
+                } else {
+                    (falsy, falsy_bits_entry)
+                };
+
+                match bits {
+                    Some(Some(bits)) => assign_constant!(dst, bits.clone()),
+                    _ => {
+                        additional.push(I::copy(vars, dst, src));
+                        return PropagateResult { replace: true };
+                    }
+                }
+            }
+
+            match (truthy_bits_entry, falsy_bits_entry) {
+                (Some(Some(t)), Some(Some(f))) if t == f => assign_constant!(dst, t.clone()),
+                (Some(Some(t)), Some(Some(f))) if t.size() == SCALAR_VSIZE => {
                     use FvLogicValue as L;
                     match (t.select_value(0), f.select_value(0)) {
                         (L::L1, L::L0) => {
@@ -515,27 +540,38 @@ fn constant_propagate_instruction(
                         _ => {}
                     }
                 }
+                (Some(Some(t)), _) if t.size() == SCALAR_VSIZE => {
+                    use FvLogicValue as L;
+                    match t.select_value(0) {
+                        L::L0 => {
+                            additional.push(I::Binary(dst, BinaryOp::AndNot, truthy, *cond));
+                            return PropagateResult { replace: true };
+                        }
+                        L::L1 => {
+                            additional.push(I::Binary(dst, BinaryOp::OrNot, truthy, *cond));
+                            return PropagateResult { replace: true };
+                        }
+                        _ => {}
+                    }
+                }
+                (_, Some(Some(f))) if f.size() == SCALAR_VSIZE => {
+                    use FvLogicValue as L;
+                    match f.select_value(0) {
+                        L::L0 => {
+                            additional.push(I::Binary(dst, BinaryOp::And, *cond, truthy));
+                            return PropagateResult { replace: true };
+                        }
+                        L::L1 => {
+                            additional.push(I::Binary(dst, BinaryOp::Or, *cond, truthy));
+                            return PropagateResult { replace: true };
+                        }
+                        _ => {}
+                    }
+                }
                 _ => {}
             }
 
-            match cond_bits.as_ref() {
-                None => not_constant!(dst),
-                Some(b) => {
-                    let (src, bits) = if b.is_one() {
-                        (truthy, truthy_bits)
-                    } else {
-                        (falsy, falsy_bits)
-                    };
-
-                    match bits {
-                        None => {
-                            additional.push(I::copy(vars, dst, src));
-                            return PropagateResult { replace: true };
-                        }
-                        Some(bits) => assign_constant!(dst, bits.clone()),
-                    }
-                }
-            }
+            PropagateResult { replace: false }
         }
 
         I::Intrinsic(dst, ..) | I::LastUpdateTime(dst, ..) => not_constant!(*dst),

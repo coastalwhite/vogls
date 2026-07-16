@@ -453,6 +453,28 @@ pub fn fv_bitwise_ornot_elem(xspc: u64, x: u64, yspc: u64, y: u64) -> (u64, u64)
     let zspc = zvalue | (xspc & yspc);
     (zspc, zvalue)
 }
+#[inline(always)]
+pub fn fv_bitwise_xnor_elem(xspc: u64, x: u64, yspc: u64, y: u64) -> (u64, u64) {
+    // ^ | x  z  1  0
+    // --+-----------
+    // x | x  x  x  x
+    // z | x  x  x  x
+    // 1 | x  x  1  0
+    // 0 | x  x  0  1
+    //
+    // z1z0 = fv.xor(x1x0, y1y0)
+    //
+    // z0 = x1 y1 !(x0 ^ y0)         z1 = x1 y1
+    // ^0| x  z  1  0               ^1| x  z  1  0
+    // --+-----------               --+-----------
+    // x | 0  0  0  0               x | 0  0  0  0
+    // z | 0  0  0  0               z | 0  0  0  0
+    // 1 | 0  0  1  0               1 | 0  0  1  1
+    // 0 | 0  0  0  1               0 | 0  0  1  1
+    let zspc = xspc & yspc;
+    let zvalue = xspc & yspc & !(x ^ y);
+    (zspc, zvalue)
+}
 
 pub fn fv_contains_special(src: &[u64], size: VectorSize) -> bool {
     assert!(src.len() > 0 && src.len() == 2 * (size.get().div_ceil(64) as usize));

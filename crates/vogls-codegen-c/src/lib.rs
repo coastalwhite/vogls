@@ -633,6 +633,15 @@ pub fn lower_process(
                             O::Xor => {
                                 binary::cgc_bin_xor(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
                             }
+                            O::AndNot => {
+                                binary::cgc_bin_andnot(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
+                            }
+                            O::OrNot => {
+                                binary::cgc_bin_ornot(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
+                            }
+                            O::Xnor => {
+                                binary::cgc_bin_xnor(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
+                            }
                             O::Add => {
                                 binary::cgc_bin_add(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
                             }

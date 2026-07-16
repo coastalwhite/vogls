@@ -284,6 +284,15 @@ pub(crate) fn exec_tv_bin_arith(
     fn tv_u8_bitwise_xor(dst: &mut [u8], lhs: &[u8], rhs: &[u8], _size: VectorSize) {
         A::tv_bin_bitwise_op(dst, lhs, rhs, |l, r| l ^ r);
     }
+    fn tv_u8_bitwise_andnot(dst: &mut [u8], lhs: &[u8], rhs: &[u8], _size: VectorSize) {
+        A::tv_bin_bitwise_op(dst, lhs, rhs, |l, r| l & !r);
+    }
+    fn tv_u8_bitwise_ornot(dst: &mut [u8], lhs: &[u8], rhs: &[u8], _size: VectorSize) {
+        A::tv_bin_bitwise_op(dst, lhs, rhs, |l, r| l | !r);
+    }
+    fn tv_u8_bitwise_xnor(dst: &mut [u8], lhs: &[u8], rhs: &[u8], _size: VectorSize) {
+        A::tv_bin_bitwise_op(dst, lhs, rhs, |l, r| !(l ^ r));
+    }
     fn tv_u8_min(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: VectorSize) {
         if vogls_bits::comparison::tv_unsigned_leq(lhs, rhs, size) {
             dst.copy_from_slice(lhs);
@@ -306,6 +315,15 @@ pub(crate) fn exec_tv_bin_arith(
     }
     fn tv_u64_bitwise_xor(dst: &mut [u64], lhs: &[u64], rhs: &[u64], _size: VectorSize) {
         A::tv_bin_u64_bitwise_op(dst, lhs, rhs, |l, r| l ^ r);
+    }
+    fn tv_u64_bitwise_andnot(dst: &mut [u64], lhs: &[u64], rhs: &[u64], _size: VectorSize) {
+        A::tv_bin_u64_bitwise_op(dst, lhs, rhs, |l, r| l & !r);
+    }
+    fn tv_u64_bitwise_ornot(dst: &mut [u64], lhs: &[u64], rhs: &[u64], _size: VectorSize) {
+        A::tv_bin_u64_bitwise_op(dst, lhs, rhs, |l, r| l | !r);
+    }
+    fn tv_u64_bitwise_xnor(dst: &mut [u64], lhs: &[u64], rhs: &[u64], _size: VectorSize) {
+        A::tv_bin_u64_bitwise_op(dst, lhs, rhs, |l, r| !(l ^ r));
     }
     fn tv_u64_division(dst: &mut [u64], lhs: &[u64], rhs: &[u64], size: VectorSize) {
         // @Performance: Scratchpad this somehow.
@@ -340,6 +358,9 @@ pub(crate) fn exec_tv_bin_arith(
             O::And => tv_u64_bitwise_and,
             O::Or => tv_u64_bitwise_or,
             O::Xor => tv_u64_bitwise_xor,
+            O::AndNot => tv_u64_bitwise_andnot,
+            O::OrNot => tv_u64_bitwise_ornot,
+            O::Xnor => tv_u64_bitwise_xnor,
             O::Add => A::tv_addition,
             O::Sub => A::tv_subtraction,
             O::Power => A::tv_power,
@@ -361,6 +382,9 @@ pub(crate) fn exec_tv_bin_arith(
             O::And => tv_u8_bitwise_and,
             O::Or => tv_u8_bitwise_or,
             O::Xor => tv_u8_bitwise_xor,
+            O::AndNot => tv_u8_bitwise_andnot,
+            O::OrNot => tv_u8_bitwise_ornot,
+            O::Xnor => tv_u8_bitwise_xnor,
             O::Add => A::tv_ltu64_addition,
             O::Sub => A::tv_ltu64_subtraction,
             O::Power => A::tv_ltu64_power,

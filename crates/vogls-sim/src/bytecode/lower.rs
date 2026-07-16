@@ -5,18 +5,18 @@ use vogls_ir::watchers::WatchMap;
 use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, ContextFormat, DisplayContext,
     GlobalContext, Instruction, IntrinsicOp, LabelDisplay, LogicMode, ProcessKey, ResizeOp,
-    SCALAR_VSIZE, ShiftImmOp, SignalKey, UnaryOp, VSIZE_32, VSIZE_64, VariableKey, VariableMap,
+    ShiftImmOp, SignalKey, UnaryOp, VSIZE_64, VariableKey, VariableMap,
 };
 use vogls_runtime::RtSignalKey;
 use vogls_utils::{NonMaxU16, VgHashMap, VgHashSet};
 
 use crate::bytecode::{
-    Branch, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, InlineAddrOffset, InlineIndex,
+    BytecodeEncoder, BytecodeInstruction, BytecodeListeners, InlineAddrOffset, InlineIndex,
     InlineNBitSize, InstructionPtr, IntrinsicOpEqWrap, Jump, Reg, Schedule, SignedImmediate,
     SixBitSize,
 };
 
-use super::{RescheduleListen, RescheduleRegion, RescheduleWait};
+use super::{BranchFalse, BranchTrue, RescheduleListen, RescheduleRegion, RescheduleWait};
 
 enum JumpKind {
     Jump,
@@ -294,21 +294,11 @@ pub fn lower_process_to_bytecode(
             }
             JumpKind::BranchTrue(rcond) => {
                 let imm = SignedImmediate::new(imm.into()).unwrap();
-                Branch {
-                    rcond,
-                    inv: false,
-                    imm,
-                }
-                .encode()
+                BranchTrue { rcond, imm }.encode()
             }
             JumpKind::BranchFalse(rcond) => {
                 let imm = SignedImmediate::new(imm.into()).unwrap();
-                Branch {
-                    rcond,
-                    inv: true,
-                    imm,
-                }
-                .encode()
+                BranchFalse { rcond, imm }.encode()
             }
             JumpKind::Wait(rtime) => {
                 let offset = SignedImmediate::new(imm.into()).unwrap();
@@ -753,6 +743,19 @@ fn lower_instruction(
                 (O::Xor, M::TwoValue, None, _, _) => bce.heap_tv_xor(rd, rs1, rs2, dst_size),
                 (O::Xor, M::FourValue, Some(_), _, _) => bce.fv_xor(rd, rs1, rs2),
                 (O::Xor, M::FourValue, None, _, _) => bce.heap_fv_xor(rd, rs1, rs2, dst_size),
+
+                (O::AndNot, M::TwoValue, Some(size), _, _) => bce.andnot(rd, rs1, rs2, size),
+                (O::AndNot, M::TwoValue, None, _, _) => bce.heap_tv_andnot(rd, rs1, rs2, dst_size),
+                (O::AndNot, M::FourValue, Some(_), _, _) => bce.fv_andnot(rd, rs1, rs2),
+                (O::AndNot, M::FourValue, None, _, _) => bce.heap_fv_andnot(rd, rs1, rs2, dst_size),
+                (O::OrNot, M::TwoValue, Some(size), _, _) => bce.ornot(rd, rs1, rs2, size),
+                (O::OrNot, M::TwoValue, None, _, _) => bce.heap_tv_ornot(rd, rs1, rs2, dst_size),
+                (O::OrNot, M::FourValue, Some(_), _, _) => bce.fv_ornot(rd, rs1, rs2),
+                (O::OrNot, M::FourValue, None, _, _) => bce.heap_fv_ornot(rd, rs1, rs2, dst_size),
+                (O::Xnor, M::TwoValue, Some(size), _, _) => bce.xnor(rd, rs1, rs2, size),
+                (O::Xnor, M::TwoValue, None, _, _) => bce.heap_tv_xnor(rd, rs1, rs2, dst_size),
+                (O::Xnor, M::FourValue, Some(_), _, _) => bce.fv_xnor(rd, rs1, rs2),
+                (O::Xnor, M::FourValue, None, _, _) => bce.heap_fv_xnor(rd, rs1, rs2, dst_size),
 
                 (O::Add, M::TwoValue, Some(size), _, _) => bce.add(rd, rs1, rs2, size),
                 (O::Add, M::TwoValue, None, _, _) => bce.heap_tv_add(rd, rs1, rs2, dst_size),
@@ -1563,9 +1566,8 @@ fn lower_instruction(
                     jump_offset = Some(bce.data.len());
                     bce.panic();
 
-                    bce.data[branch_offset] = Branch {
+                    bce.data[branch_offset] = BranchTrue {
                         rcond: T4,
-                        inv: false,
                         imm: SignedImmediate::new((bce.data.len() - branch_offset) as i64 - 1)
                             .unwrap(),
                     }
@@ -1831,9 +1833,8 @@ fn lower_instruction(
 
             let offset = bce.data.len() - branch_offset - 1;
             let offset = SignedImmediate::new_from_u64(offset as u64).unwrap();
-            bce.data[branch_offset] = Branch {
+            bce.data[branch_offset] = BranchTrue {
                 rcond,
-                inv: false,
                 imm: offset,
             }
             .encode();
@@ -2052,9 +2053,8 @@ fn lower_instruction(
                     jump_offset = Some(bce.data.len());
                     bce.panic();
 
-                    bce.data[branch_offset] = Branch {
+                    bce.data[branch_offset] = BranchTrue {
                         rcond: T2,
-                        inv: false,
                         imm: SignedImmediate::new((bce.data.len() - branch_offset) as i64 - 1)
                             .unwrap(),
                     }
@@ -2340,9 +2340,8 @@ fn lower_instruction(
             );
 
             if let Some(branch_offset) = branch_offset {
-                bce.data[branch_offset] = Branch {
+                bce.data[branch_offset] = BranchTrue {
                     rcond: T4,
-                    inv: false,
                     imm: SignedImmediate::new((bce.data.len() - branch_offset) as i64 - 1).unwrap(),
                 }
                 .encode();

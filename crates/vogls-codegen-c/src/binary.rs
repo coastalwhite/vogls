@@ -161,6 +161,186 @@ pub fn cgc_bin_xor<'a>(
     Ok(())
 }
 
+pub fn cgc_bin_andnot(
+    f: &mut impl io::Write,
+    dst: CVar,
+    lhs: CExpr<'_>,
+    rhs: CExpr<'_>,
+) -> io::Result<()> {
+    let size = dst.ty.size;
+    let (d, l, r) = (dst.ident, lhs, rhs);
+    match (dst.ty.mode, dst.ty.array_size()) {
+        (LogicMode::TwoValue, None) => {
+            let mask = mask(size.get());
+            writeln!(f, "{INDENT}{d} = ({l} & {r}) & 0x{mask:x};")?;
+        }
+        (LogicMode::TwoValue, Some(arr_size)) => {
+            writeln!(
+                f,
+                "{INDENT}for (int i = 0; i < {arr_size}; ++i) {d}[i] = {l}[i] & {r}[i];",
+            )?;
+            if size.get() % 64 != 0 {
+                let mask = mask(size.get() % 64);
+                writeln!(f, "{INDENT}{d}[{}] &= 0x{mask:x};", arr_size - 1)?;
+            }
+        }
+
+        // value = xspc xvalue yspc !yvalue
+        // spc = xspc !xvalue + yspc yvalue + xspc yspc
+        (LogicMode::FourValue, None) => {
+            let size = dst.ty.size;
+            let mask = mask(size.get());
+            write!(f, "{INDENT}{d} = ")?;
+            write!(
+                f,
+                "((({l} & (~{l}) >> {size}) | ({r} & ({r}) >> {size}) | ({l} & {r})) & 0x{mask:x}) | "
+            )?;
+            write!(
+                f,
+                "((({l} & ({l} >> {size}) & {r} & (~({r} >> {size}))) & 0x{mask:x}) << {size})"
+            )?;
+
+            writeln!(f, ";")?
+        }
+        (LogicMode::FourValue, Some(arr_size)) => {
+            let num_words = arr_size / 2;
+
+            writeln!(f, "{INDENT}for (int i = 0; i < {num_words}; ++i) {{")?;
+            // spc
+            writeln!(
+                f,
+                "{INDENT}{INDENT}{d}[i] = ({l}[i] & ~{l}[i+{num_words}]) | ({r}[i] & {r}[i+{num_words}]) | ({l}[i] & {r}[i]);"
+            )?;
+            // value
+            writeln!(
+                f,
+                "{INDENT}{INDENT}{d}[{num_words}+i] = {l}[i] & {l}[i+{num_words}] & {r}[i] & ~{r}[i+{num_words}];"
+            )?;
+            writeln!(f, "{INDENT}}}")?;
+        }
+    }
+
+    Ok(())
+}
+
+pub fn cgc_bin_ornot(
+    f: &mut impl io::Write,
+    dst: CVar,
+    lhs: CExpr<'_>,
+    rhs: CExpr<'_>,
+) -> io::Result<()> {
+    let size = dst.ty.size;
+    let (d, l, r) = (dst.ident, lhs, rhs);
+    match (dst.ty.mode, dst.ty.array_size()) {
+        (LogicMode::TwoValue, None) => {
+            let mask = mask(size.get());
+            writeln!(f, "{INDENT}{d} = 0x{mask:x} & ({l} | !{r});")?;
+        }
+        (LogicMode::TwoValue, Some(arr_size)) => {
+            writeln!(
+                f,
+                "{INDENT}for (int i = 0; i < {arr_size}; ++i) {d}[i] = {l}[i] | {r}[i];",
+            )?;
+            if size.get() % 64 != 0 {
+                let mask = mask(size.get() % 64);
+                writeln!(f, "{INDENT}{d}[{}] &= 0x{mask:x};", arr_size - 1)?;
+            }
+        }
+
+        // value = xspc xvalue + yspc !yvalue
+        // spc = xspc xvalue + yspc !yvalue + xspc yspc;
+        (LogicMode::FourValue, None) => {
+            let size = dst.ty.size;
+            let mask = mask(size.get());
+            write!(f, "{INDENT}{d} = ")?;
+            write!(
+                f,
+                "((({l} & ({l}) >> {size}) | ({r} & !({r}) >> {size}) | ({l} & {r})) & 0x{mask:x}) | "
+            )?;
+            write!(
+                f,
+                "(((({l} & ({l} >> {size})) | ({r} & !({r} >> {size}))) & 0x{mask:x}) << {size})"
+            )?;
+
+            writeln!(f, ";")?
+        }
+        (LogicMode::FourValue, Some(arr_size)) => {
+            let num_words = arr_size / 2;
+
+            writeln!(f, "{INDENT}for (int i = 0; i < {num_words}; ++i) {{")?;
+            // spc
+            writeln!(
+                f,
+                "{INDENT}{INDENT}{d}[i] = ({l}[i] & {l}[i+{num_words}]) | !({r}[i] & {r}[i+{num_words}]) | ({l}[i] & {r}[i]);"
+            )?;
+            // value
+            writeln!(
+                f,
+                "{INDENT}{INDENT}{d}[{num_words}+i] = ({l}[i] & {l}[i+{num_words}]) | !({r}[i] & {r}[i+{num_words}]);"
+            )?;
+            writeln!(f, "{INDENT}}}")?;
+        }
+    }
+
+    Ok(())
+}
+
+pub fn cgc_bin_xnor<'a>(
+    f: &mut impl io::Write,
+    dst: CVar,
+    lhs: CExpr<'a>,
+    rhs: CExpr<'a>,
+) -> io::Result<()> {
+    let size = dst.ty.size;
+    let (d, l, r) = (dst.ident, lhs, rhs);
+    match (dst.ty.mode, dst.ty.array_size()) {
+        (LogicMode::TwoValue, None) => {
+            let mask = mask(size.get());
+            writeln!(f, "{INDENT}{d} = 0x{mask:x} & ({l} ^ !{r});")?
+        }
+        (LogicMode::TwoValue, Some(arr_size)) => {
+            writeln!(
+                f,
+                "{INDENT}for (int i = 0; i < {arr_size}; ++i) {d}[i] = ({l}[i] ^ !{r}[i]);",
+            )?;
+            if size.get() % 64 != 0 {
+                let mask = mask(size.get() % 64);
+                writeln!(f, "{INDENT}{d}[{}] &= 0x{mask:x};", arr_size - 1)?;
+            }
+        }
+
+        // value = xspc yspc !(xvalue ^ yvalue)
+        // spc = xspc yspc
+        (LogicMode::FourValue, None) => {
+            let size = dst.ty.size;
+            let mask = mask(size.get());
+            write!(f, "{INDENT}{d} = 0x{mask:x} & (")?;
+            write!(f, "({l} & {r} & 0x{mask:x}) | ")?;
+            write!(
+                f,
+                "((({l} & {r} & !(({l} >> {size}) ^ ({r} >> {size}))) & 0x{mask:x}) << {size}))"
+            )?;
+
+            writeln!(f, ";")?
+        }
+        (LogicMode::FourValue, Some(arr_size)) => {
+            let num_words = arr_size / 2;
+
+            writeln!(f, "{INDENT}for (int i = 0; i < {num_words}; ++i) {{")?;
+            // spc
+            writeln!(f, "{INDENT}{INDENT}{d}[i] = {l}[i] & {r}[i];")?;
+            // value
+            writeln!(
+                f,
+                "{INDENT}{INDENT}{d}[{num_words}+i] = {l}[i] & {r}[i] & !({l}[i+{num_words}] ^ {r}[i+{num_words}]);"
+            )?;
+            writeln!(f, "{INDENT}}}")?;
+        }
+    }
+
+    Ok(())
+}
+
 fn fv_inline_arith(
     f: &mut impl io::Write,
     dst: CVar,
@@ -377,7 +557,6 @@ pub fn cgc_bin_div(
             writeln!(
                 f,
                 "{INDENT}{d}[1] = ((uint64_t){l} / (uint64_t){r}) & 0x{msbs_mask:x};",
-
             )?;
         }
         (LogicMode::FourValue, LogicMode::TwoValue, Some(_), _) => todo!(),
@@ -409,8 +588,15 @@ pub fn cgc_bin_mod(
     };
 
     let (d, l, r) = (dst.ident, lhs, rhs);
-    match (dst.ty.mode, lhs.ty().mode, dst.ty.array_size(), lhs.ty().array_size()) {
-        (LogicMode::TwoValue, LogicMode::TwoValue, None, _) => writeln!(f, "{INDENT}{d} = ({l} % {r}) & 0x{msbs_mask:x};")?,
+    match (
+        dst.ty.mode,
+        lhs.ty().mode,
+        dst.ty.array_size(),
+        lhs.ty().array_size(),
+    ) {
+        (LogicMode::TwoValue, LogicMode::TwoValue, None, _) => {
+            writeln!(f, "{INDENT}{d} = ({l} % {r}) & 0x{msbs_mask:x};")?
+        }
         (LogicMode::TwoValue, LogicMode::TwoValue, Some(_), _) => todo!(),
 
         (LogicMode::FourValue, LogicMode::TwoValue, None, _) => writeln!(
@@ -423,12 +609,13 @@ pub fn cgc_bin_mod(
             writeln!(
                 f,
                 "{INDENT}{d}[1] = ((uint64_t){l} % (uint64_t){r}) & 0x{msbs_mask:x};",
-
             )?;
         }
         (LogicMode::FourValue, LogicMode::TwoValue, Some(_), _) => todo!(),
 
-        (LogicMode::FourValue, LogicMode::FourValue, None, _) => fv_inline_div_rem(f, dst, lhs, rhs, '%')?,
+        (LogicMode::FourValue, LogicMode::FourValue, None, _) => {
+            fv_inline_div_rem(f, dst, lhs, rhs, '%')?
+        }
         (LogicMode::FourValue, LogicMode::FourValue, Some(_), _) => todo!(),
 
         (LogicMode::TwoValue, LogicMode::FourValue, _, _) => unreachable!(),

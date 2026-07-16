@@ -164,15 +164,39 @@ pub fn peephole(
     }
 }
 
-enum TwoValueResult {
-    None,
+enum TwoValueOp<'a> {
     Source(VariableKey),
+    Constant(&'a Bits),
+}
+impl TwoValueOp<'_> {
+    fn to_var(
+        &self,
+        vars: &mut VariableMap,
+        instrs: &mut Vec<Instruction>,
+        i: &mut usize,
+    ) -> VariableKey {
+        match self {
+            TwoValueOp::Source(src) => *src,
+            TwoValueOp::Constant(bits) => {
+                let dst = vars.insert(LogicMode::TwoValue, bits.size());
+                instrs.insert(*i, Instruction::Constant(dst, bits.clone_lowering_mode()));
+                *i += 1;
+                dst
+            }
+        }
+    }
 }
 
-fn try_get_two_value(i: &CSExpr, exprs: &Table<ExprKey, (VariableKey, CSExpr)>) -> TwoValueResult {
+fn try_get_two_value<'a>(
+    i: &'a CSExpr,
+    exprs: &'a Table<ExprKey, (VariableKey, CSExpr)>,
+) -> Option<TwoValueOp<'a>> {
     match i {
-        CSExpr::Unary(UnaryOp::TvToFv, src) => TwoValueResult::Source(exprs[*src].0),
-        _ => TwoValueResult::None,
+        CSExpr::Constant(_, value) if !value.contains_special() => {
+            Some(TwoValueOp::Constant(value))
+        }
+        CSExpr::Unary(UnaryOp::TvToFv, src) => Some(TwoValueOp::Source(exprs[*src].0)),
+        _ => None,
     }
 }
 
@@ -213,8 +237,9 @@ fn peephole_instruction(
                     let src_tv = try_get_two_value(expr, exprs);
 
                     match src_tv {
-                        TwoValueResult::None => {}
-                        TwoValueResult::Source(src_tv) => {
+                        // We handle the constant case in the constant propagation.
+                        None | Some(TwoValueOp::Constant(_)) => {}
+                        Some(TwoValueOp::Source(src_tv)) => {
                             match dst.mode() {
                                 LogicMode::TwoValue => {
                                     *instr = I::Unary(dst, op, src_tv);
@@ -305,7 +330,7 @@ fn peephole_instruction(
             if let Some(csexpr) = var_lookup.get(&src) {
                 let (_, expr) = &exprs[*csexpr];
                 if src.mode().is_four_value()
-                    && let TwoValueResult::Source(src_tv) = try_get_two_value(expr, exprs)
+                    && let Some(TwoValueOp::Source(src_tv)) = try_get_two_value(expr, exprs)
                 {
                     let dst_size = vars.size(dst);
                     let dst_tv = vars.insert(LogicMode::TwoValue, dst_size);
@@ -324,9 +349,9 @@ fn peephole_instruction(
                     let lhs_tv = try_get_two_value(&exprs[*lhs_ek].1, exprs);
                     let rhs_tv = try_get_two_value(&exprs[*rhs_ek].1, exprs);
 
-                    use TwoValueResult as TVR;
+                    use TwoValueOp as TVO;
                     match (lhs_tv, rhs_tv) {
-                        (TVR::Source(lhs_tv), TVR::Source(rhs_tv)) => {
+                        (Some(TVO::Source(lhs_tv)), Some(TVO::Source(rhs_tv))) => {
                             match tv_pushdown {
                                 TvPushdownVariant::CastOutput => {
                                     let dst_size = vars.size(dst);
@@ -340,7 +365,9 @@ fn peephole_instruction(
                             }
                             return PeepholeResult::Changed;
                         }
-                        (TVR::None, _) | (_, TVR::None) => {}
+                        // We handle the constant case in the constant propagation.
+                        (None | Some(TVO::Constant(_)), _) | (_, None | Some(TVO::Constant(_))) => {
+                        }
                     }
                 }
 
@@ -377,9 +404,9 @@ fn peephole_instruction(
                 {
                     let src_tv = try_get_two_value(&exprs[*src_ek].1, exprs);
 
-                    use TwoValueResult as TVR;
+                    use TwoValueOp as TVO;
                     match src_tv {
-                        TVR::Source(src_tv) => {
+                        Some(TVO::Source(src_tv)) => {
                             match tv_pushdown {
                                 TvPushdownVariant::CastOutput => {
                                     let dst_size = vars.size(dst);
@@ -395,7 +422,8 @@ fn peephole_instruction(
                             }
                             return PeepholeResult::Changed;
                         }
-                        TVR::None => {}
+                        // We handle the constant case in the constant propagation.
+                        None | Some(TVO::Constant(_)) => {}
                     }
                 }
             }
@@ -440,17 +468,43 @@ fn peephole_instruction(
         I::Select(dst, cond, truthy, falsy) => {
             if let (Some(truthy_ek), Some(falsy_ek)) =
                 (var_lookup.get(truthy), var_lookup.get(falsy))
-                && *truthy_ek == *falsy_ek
             {
-                return PeepholeResult::RemapVar {
-                    dst: *dst,
-                    src: *truthy,
-                };
-            } else if let Some(cond_ek) = var_lookup.get(cond)
-                && let CSExpr::Unary(UnaryOp::Neg, src_ek) = &exprs[*cond_ek].1
-            {
-                *instr = I::Select(*dst, exprs[*src_ek].0, *falsy, *truthy);
-                return PeepholeResult::Changed;
+                if *truthy_ek == *falsy_ek {
+                    return PeepholeResult::RemapVar {
+                        dst: *dst,
+                        src: *truthy,
+                    };
+                }
+
+                if dst.mode().is_four_value() {
+                    let (dst, cond) = (*dst, *cond);
+                    let truthy_tv = try_get_two_value(&exprs[*truthy_ek].1, exprs);
+                    let falsy_tv = try_get_two_value(&exprs[*falsy_ek].1, exprs);
+
+                    if let (Some(truthy_tv), Some(falsy_tv)) = (truthy_tv, falsy_tv) {
+                        let dst_size = vars.size(dst);
+                        let dst_tv = vars.insert(LogicMode::TwoValue, dst_size);
+                        let mut i = i;
+                        let truthy_tv = truthy_tv.to_var(vars, instrs, &mut i);
+                        let falsy_tv = falsy_tv.to_var(vars, instrs, &mut i);
+                        instrs[i] = I::Select(dst_tv, cond, truthy_tv, falsy_tv);
+                        return PeepholeResult::Changed;
+                    }
+                }
+            }
+
+            if let Some(cond_ek) = var_lookup.get(cond) {
+                if let CSExpr::Unary(UnaryOp::Neg, src_ek) = &exprs[*cond_ek].1 {
+                    *instr = I::Select(*dst, exprs[*src_ek].0, *falsy, *truthy);
+                    return PeepholeResult::Changed;
+                }
+
+                if let Some(TwoValueOp::Source(cond_tv)) =
+                    try_get_two_value(&exprs[*cond_ek].1, exprs)
+                {
+                    *instr = I::Select(*dst, cond_tv, *falsy, *truthy);
+                    return PeepholeResult::Changed;
+                }
             }
         }
         I::Intrinsic(..) => {}

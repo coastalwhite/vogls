@@ -206,6 +206,15 @@ pub(crate) fn exec_fv_bin_arith(
     fn fv_u8_bitwise_xor(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: VectorSize) {
         A::fv_bin_bitwise_op(dst, lhs, rhs, size, A::fv_bitwise_xor_elem)
     }
+    fn fv_u8_bitwise_andnot(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: VectorSize) {
+        A::fv_bin_bitwise_op(dst, lhs, rhs, size, A::fv_bitwise_andnot_elem)
+    }
+    fn fv_u8_bitwise_ornot(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: VectorSize) {
+        A::fv_bin_bitwise_op(dst, lhs, rhs, size, A::fv_bitwise_ornot_elem)
+    }
+    fn fv_u8_bitwise_xnor(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: VectorSize) {
+        A::fv_bin_bitwise_op(dst, lhs, rhs, size, A::fv_bitwise_xnor_elem)
+    }
     fn fv_u8_min(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: VectorSize) {
         match vogls_bits::comparison::fv_s_unsigned_leq(lhs, rhs, size) {
             FvLogicValue::L0 => dst.copy_from_slice(rhs),
@@ -228,6 +237,15 @@ pub(crate) fn exec_fv_bin_arith(
     }
     fn fv_u64_bitwise_xor(dst: &mut [u64], lhs: &[u64], rhs: &[u64], _size: VectorSize) {
         A::fv_bin_u64_bitwise_op(dst, lhs, rhs, A::fv_bitwise_xor_elem);
+    }
+    fn fv_u64_bitwise_andnot(dst: &mut [u64], lhs: &[u64], rhs: &[u64], _size: VectorSize) {
+        A::fv_bin_u64_bitwise_op(dst, lhs, rhs, A::fv_bitwise_andnot_elem);
+    }
+    fn fv_u64_bitwise_ornot(dst: &mut [u64], lhs: &[u64], rhs: &[u64], _size: VectorSize) {
+        A::fv_bin_u64_bitwise_op(dst, lhs, rhs, A::fv_bitwise_ornot_elem);
+    }
+    fn fv_u64_bitwise_xnor(dst: &mut [u64], lhs: &[u64], rhs: &[u64], _size: VectorSize) {
+        A::fv_bin_u64_bitwise_op(dst, lhs, rhs, A::fv_bitwise_xnor_elem);
     }
     fn fv_u64_division(dst: &mut [u64], lhs: &[u64], rhs: &[u64], size: VectorSize) {
         // @Performance: Scratchpad this somehow.
@@ -265,6 +283,9 @@ pub(crate) fn exec_fv_bin_arith(
             O::And => fv_u64_bitwise_and,
             O::Or => fv_u64_bitwise_or,
             O::Xor => fv_u64_bitwise_xor,
+            O::AndNot => fv_u64_bitwise_andnot,
+            O::OrNot => fv_u64_bitwise_ornot,
+            O::Xnor => fv_u64_bitwise_xnor,
             O::Add => A::fv_addition,
             O::Sub => A::fv_subtraction,
             O::Power => A::fv_power,
@@ -287,6 +308,9 @@ pub(crate) fn exec_fv_bin_arith(
             O::And => fv_u8_bitwise_and,
             O::Or => fv_u8_bitwise_or,
             O::Xor => fv_u8_bitwise_xor,
+            O::AndNot => fv_u8_bitwise_andnot,
+            O::OrNot => fv_u8_bitwise_ornot,
+            O::Xnor => fv_u8_bitwise_xnor,
             O::Add => A::fv_ltu32_addition,
             O::Sub => A::fv_ltu32_subtraction,
             O::Power => A::fv_ltu32_power,
