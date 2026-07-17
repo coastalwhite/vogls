@@ -2381,10 +2381,10 @@ fn poke_signal(
 ) {
     let rt_signal = io_signals[&signal];
     let lupdt_index = lupdt_indexes.get(&rt_signal);
-    let has_watchers = watch_map.num_watch_indices(signal) > 0;
+    let num_watchers = watch_map.num_watch_indices(signal);
 
     if gl.signals[signal].mode == LogicMode::TwoValue
-        && (options.has_plugins || lupdt_index.is_some() || has_watchers)
+        && (options.has_plugins || lupdt_index.is_some() || num_watchers > 0)
     {
         let index = InlineIndex::new(rt_signal.as_u64(), bce, T5);
         bce.tv_correct_first(rpoke, index);
@@ -2397,9 +2397,13 @@ fn poke_signal(
         let index = InlineIndex::new(*lupdt_index, bce, T5);
         bce.set_lupdt(rpoke, index);
     }
-    for index in watch_map.watch_indices(signal) {
+    if num_watchers == 1 {
+        let index = watch_map.watch_indices(signal).next().unwrap();
         let index = InlineIndex::new(index as u64, bce, T5);
         bce.wake(rpoke, index);
+    } else if num_watchers > 1 {
+        let index = InlineIndex::new(rt_signal.as_u64(), bce, T5);
+        bce.wake_multiple(rpoke, index);
     }
 }
 

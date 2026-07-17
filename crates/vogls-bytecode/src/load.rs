@@ -240,7 +240,7 @@ impl BytecodeInstruction for TvLoadAligned {
         write_register(f, regs, "rd", *rd, LogicMode::TwoValue)?;
         writeln!(f)
     }
-    
+
     fn num_slots(&self) -> u8 {
         2
     }

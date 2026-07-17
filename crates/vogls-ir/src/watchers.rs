@@ -75,4 +75,12 @@ impl WatchMap {
             Some(range) => range.clone().len(),
         }
     }
+
+    pub fn map(&self) -> &VgHashMap<SignalKey, Range<usize>> {
+        &self.map
+    }
+
+    pub fn watchers(&self) -> &[(SignalKey, usize)] {
+        &self.watchers
+    }
 }

@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use slotmap::SlotMap;
 use vogls_bytecode::lower::{LowerBytecodeOptions, lower_process_to_bytecode};
-use vogls_bytecode::{BytecodeEncoder, BytecodeListeners, Schedule};
+use vogls_bytecode::{BytecodeEncoder, BytecodeListeners, BytecodeWatchers, Schedule};
 use vogls_codegen::lsra::StackTracker;
 use vogls_codegen::{HeapBuilder, HeapOffset, HeapRef};
 use vogls_frontend::ident_table::IdentTable;
@@ -211,7 +211,7 @@ impl LoweredDesign {
             mut heap_builder,
             signal_to_heap,
             signal_mode,
-            mut rt_signal_map,
+            rt_signal_map,
             lupdt_indexes,
             plugins,
         } = self.prepare_codegen();
@@ -226,6 +226,32 @@ impl LoweredDesign {
             emit: self.emit_vm,
             has_plugins: !plugins.is_empty(),
         };
+
+        let mut offsets = vec![0u64; rt_signal_map.len() + 1];
+        let mut watchers = vec![0u64; watch_map.watchers().len()];
+        for (signal, range) in watch_map.map() {
+            offsets[rt_signal_map[signal].as_usize()] = range.len() as u64;
+        }
+        let mut offset = 0u64;
+        offsets.iter_mut().for_each(|v| {
+            let num_watchers = *v;
+            *v = offset;
+            offset += num_watchers;
+        });
+        for (signal, range) in watch_map.map() {
+            let rt_signal = rt_signal_map[signal].as_usize();
+            let start = offsets[rt_signal];
+            let end = offsets[rt_signal + 1];
+            watchers[start as usize..end as usize]
+                .iter_mut()
+                .zip(
+                    watch_map.watchers()[range.clone()]
+                        .iter()
+                        .map(|(_, v)| *v as u64),
+                )
+                .for_each(|(d, s)| *d = s);
+        }
+        let bc_watch_map = BytecodeWatchers { offsets, watchers };
 
         for process in self.gl.processes.keys() {
             lower_process_to_bytecode(
@@ -278,6 +304,7 @@ impl LoweredDesign {
                 .into_iter()
                 .map(|v| v.0)
                 .collect(),
+            watchers: bc_watch_map,
             stack_offset,
             itrace: self.itrace,
             stats: self.stats,

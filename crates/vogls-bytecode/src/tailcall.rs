@@ -21,7 +21,7 @@ pub extern "rust-preserve-none" fn extract_and_execute_tailcall<I: BytecodeInstr
 ) {
     let c = code[pc as usize];
     let slf = I::extract(c);
-    let mut pc = pc + 1;
+    let mut pc = pc.saturating_add(1);
     slf.execute(code, regs, &mut pc, state, schedule, listeners, cldctx);
     let Some(c) = code.get(pc as usize) else {
         return;

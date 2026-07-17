@@ -16,6 +16,11 @@ pub struct Wake {
     index: InlineIndex<20>,
 }
 
+pub struct WakeMultiple {
+    rcond: Reg,
+    index: InlineIndex<20>,
+}
+
 pub struct PluginPoke {
     rcond: Reg,
     index: InlineIndex<20>,
@@ -46,6 +51,18 @@ pub struct SetLupdt {
 pub struct TvCorrectFirst {
     rcond: Reg,
     idx: InlineIndex<20>,
+}
+
+#[inline(always)]
+pub fn wake(index: u64, schedule: &mut Schedule, listeners: &mut BytecodeListeners) {
+    let index = index as usize;
+    let bit = 1u64 << (index % 64);
+    let is_listening = (listeners.active[index / 64] & bit) != 0;
+    if is_listening {
+        let offset = listeners.map[index];
+        schedule.active.push(offset);
+        listeners.active[index / 64] ^= bit;
+    }
 }
 
 impl BytecodeInstruction for Wake {
@@ -94,13 +111,63 @@ impl BytecodeInstruction for Wake {
     ) {
         let Self { rcond, index } = self;
         if regs[rcond] != 0 {
-            let i = index.get(regs, Reg::X15) as usize;
-            let bit = 1u64 << (i % 64);
-            let is_listening = (listeners.active[i / 64] & bit) != 0;
-            if is_listening {
-                let offset = listeners.map[i];
-                schedule.active.push(offset);
-                listeners.active[i / 64] ^= bit;
+            let index = index.get(regs, Reg::X15);
+            wake(index, schedule, listeners);
+        }
+    }
+}
+impl BytecodeInstruction for WakeMultiple {
+    fn extract(v: Bytecode) -> Self {
+        debug_assert_eq!(v.opcode(), BytecodeOpcode::WakeMultiple as u8);
+        let v = v.0;
+        Self {
+            rcond: Reg::new_masked(v >> 8),
+            index: InlineIndex::new_shifted(v, 12),
+        }
+    }
+
+    fn pre_exec_itrace(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        _code: &[Bytecode],
+        _pc: u64,
+        regs: &Regs,
+        _state: &RuntimeState,
+    ) -> fmt::Result {
+        writeln!(f, "{EXEC_ITRACE_INDENT}rcond = {}", regs[self.rcond] != 0)
+    }
+
+    fn encode(&self) -> Bytecode {
+        Bytecode(
+            BytecodeOpcode::WakeMultiple as u32
+                | ((self.rcond as u32) << 8)
+                | (self.index.encode() << 12),
+        )
+    }
+
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self { rcond, index } = self;
+        write_padded_mnemonic(f, "wake")?;
+        write!(f, "{rcond}, {index}")
+    }
+
+    #[inline(always)]
+    fn execute(
+        self,
+        _code: &[Bytecode],
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        schedule: &mut Schedule,
+        listeners: &mut BytecodeListeners,
+        cldctx: &mut ColdContext,
+    ) {
+        let Self { rcond, index } = self;
+        if regs[rcond] != 0 {
+            let signal_key = index.get(regs, Reg::X15);
+            let watchers = cldctx.watchers.get(signal_key as usize);
+            for &index in watchers {
+                wake(index, schedule, listeners);
             }
         }
     }
@@ -539,6 +606,9 @@ impl BytecodeInstruction for TvCorrectFirst {
 impl BytecodeEncoder {
     pub fn wake(&mut self, rcond: Reg, index: InlineIndex<20>) {
         self.data.push(Wake { rcond, index }.encode());
+    }
+    pub fn wake_multiple(&mut self, rcond: Reg, index: InlineIndex<20>) {
+        self.data.push(WakeMultiple { rcond, index }.encode());
     }
     pub fn plugin_poke(&mut self, rcond: Reg, index: u64) {
         let index = InlineIndex::new(index, self, Reg::X15);

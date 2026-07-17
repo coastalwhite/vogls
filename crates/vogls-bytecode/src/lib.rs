@@ -30,8 +30,8 @@ use vogls_bits::BitsDataRef;
 use vogls_codegen::{HeapOffset, HeapRef};
 
 use vogls_ir::{Bits, LogicMode, VSIZE_64, VectorSize};
-use vogls_runtime::{RtSignalKey, RuntimeState};
 use vogls_runtime::plugins::{RuntimePlugin, RuntimePluginState};
+use vogls_runtime::{RtSignalKey, RuntimeState};
 use vogls_utils::{IndexSet, NonMaxU32};
 
 pub use control_flow::*;
@@ -56,12 +56,29 @@ pub struct Design {
     pub stack_offset: u64,
     pub itrace: bool,
     pub stats: bool,
+    pub watchers: BytecodeWatchers,
 }
 pub struct State {
     pub runtime: RuntimeState,
     pub plugins: Vec<RuntimePluginState>,
     pub schedule: Schedule,
     pub listeners: BytecodeListeners,
+}
+
+pub struct BytecodeWatchers {
+    pub offsets: Vec<u64>,
+    pub watchers: Vec<u64>,
+}
+
+impl BytecodeWatchers {
+    #[inline(always)]
+    pub fn get(&self, index: usize) -> &[u64] {
+        let end = index.saturating_add(1);
+        assert!(end < self.offsets.len());
+        let start = self.offsets[index];
+        let end = self.offsets[index.saturating_add(1)];
+        &self.watchers[start as usize..end as usize]
+    }
 }
 
 impl Clone for State {
@@ -92,6 +109,7 @@ pub struct ColdContext<'a> {
     stdout: &'a mut (dyn std::io::Write + Send + Sync),
     stderr: &'a mut (dyn std::io::Write + Send + Sync),
 
+    watchers: &'a BytecodeWatchers,
     plugins: &'a mut [RuntimePluginState],
     heap_scratch: Vec<u64>,
 
@@ -101,6 +119,7 @@ pub struct ColdContext<'a> {
 impl<'a> ColdContext<'a> {
     pub fn new(
         intrinsics: &'a [IntrinsicOp],
+        watchers: &'a BytecodeWatchers,
         plugins: &'a mut [RuntimePluginState],
         stdout: &'a mut (dyn std::io::Write + Send + Sync),
         stderr: &'a mut (dyn std::io::Write + Send + Sync),
@@ -111,6 +130,7 @@ impl<'a> ColdContext<'a> {
             intrinsics,
             stdout,
             stderr,
+            watchers,
             heap_scratch: Vec::new(),
             plugins,
             return_value: 0,
@@ -446,6 +466,7 @@ opcodes![
     LoadHeapAligned,
     LoadHeapUnaligned,
     Wake,
+    WakeMultiple,
     RescheduleWait,
     RescheduleRegion,
     NextEvent,
@@ -1185,7 +1206,13 @@ impl Design {
         };
 
         let mut pc = entry.0;
-        let mut cldctx = ColdContext::new(&self.intrinsics, &mut state.plugins, stdout, stderr);
+        let mut cldctx = ColdContext::new(
+            &self.intrinsics,
+            &self.watchers,
+            &mut state.plugins,
+            stdout,
+            stderr,
+        );
         let mut regs = Regs::new(self.stack_offset);
         while let Some(&c) = code.get(pc as usize) {
             let opcode = c.opcode();
@@ -1252,7 +1279,13 @@ impl Design {
         };
 
         let pc = entry.0;
-        let mut cldctx = ColdContext::new(&self.intrinsics, state.plugins.as_mut(), stdout, stderr);
+        let mut cldctx = ColdContext::new(
+            &self.intrinsics,
+            &self.watchers,
+            state.plugins.as_mut(),
+            stdout,
+            stderr,
+        );
         let mut regs = Regs::new(self.stack_offset);
         let Some(c) = code.get(pc as usize) else {
             return Ok(());
@@ -1277,7 +1310,9 @@ impl Design {
     }
 
     pub fn poke_signal(&self, state: &mut State, key: RtSignalKey) {
-        todo!()
+        for index in self.watchers.get(key.as_usize()) {
+            wake(*index, &mut state.schedule, &mut state.listeners);
+        }
     }
 }
 
