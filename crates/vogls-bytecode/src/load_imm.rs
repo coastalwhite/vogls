@@ -3,7 +3,7 @@ use std::fmt;
 use vogls_ir::LogicMode;
 use vogls_runtime::RuntimeState;
 
-use crate::bytecode::MNEMONIC_ALIGN;
+use crate::MNEMONIC_ALIGN;
 
 use super::reg::{Reg, Regs};
 use super::{

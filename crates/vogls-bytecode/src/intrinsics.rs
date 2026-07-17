@@ -10,7 +10,7 @@ use vogls_runtime::{RtSignalKey, RuntimeState};
 use vogls_utils::{NonMaxU16, SecondaryTable};
 use vogls_vcd::VcdScopeItem;
 
-use crate::bytecode::{
+use crate::{
     BytecodeOpcode, EXEC_ITRACE_INDENT, MNEMONIC_ALIGN, value_to_heap_ref, write_padded_mnemonic,
 };
 

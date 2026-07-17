@@ -2,7 +2,7 @@ use std::fmt;
 
 use vogls_runtime::RuntimeState;
 
-use crate::bytecode::write_padded_mnemonic;
+use crate::write_padded_mnemonic;
 
 use super::reg::{Reg, Regs};
 use super::{

@@ -5,7 +5,7 @@ use vogls_codegen::{HeapAlignment, HeapOffset};
 use vogls_ir::{LogicMode, VectorSize};
 use vogls_runtime::RuntimeState;
 
-use crate::bytecode::{write_padded_mnemonic, write_register};
+use crate::{write_padded_mnemonic, write_register};
 
 use super::reg::{Reg, Regs};
 use super::{

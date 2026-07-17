@@ -8,7 +8,7 @@ use vogls_bits::truncate::{fv_cell_truncate, tv_cell_truncate};
 use vogls_ir::{LogicMode, VectorSize};
 use vogls_runtime::RuntimeState;
 
-use crate::bytecode::BytecodeOpcode;
+use crate::BytecodeOpcode;
 
 use super::reg::{Reg, Regs};
 use super::{

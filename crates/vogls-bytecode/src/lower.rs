@@ -10,7 +10,7 @@ use vogls_ir::{
 use vogls_runtime::RtSignalKey;
 use vogls_utils::{NonMaxU16, VgHashMap, VgHashSet};
 
-use crate::bytecode::{
+use crate::{
     BytecodeEncoder, BytecodeInstruction, BytecodeListeners, InlineAddrOffset, InlineIndex,
     InlineNBitSize, InstructionPtr, IntrinsicOpEqWrap, Jump, Reg, Schedule, SignedImmediate,
     SixBitSize,
