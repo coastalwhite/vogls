@@ -1,5 +1,5 @@
 [package]
-name = "vogls-sim"
+name = "vogls-bytecode"
 version.workspace = true
 edition.workspace = true
 

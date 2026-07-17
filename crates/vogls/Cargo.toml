@@ -8,7 +8,7 @@ slotmap.workspace = true
 tempfile = { workspace = true, optional = true }
 hashbrown.workspace = true
 vogls-ir.workspace = true
-vogls-sim.workspace = true
+vogls-bytecode.workspace = true
 vogls-verilog.workspace = true
 vogls-frontend.workspace = true
 vogls-utils.workspace = true
@@ -25,4 +25,4 @@ default = ["native"]
 random = ["vogls-bits/random"]
 native = ["dep:tempfile", "dep:vogls-codegen-c"]
 unstable = []
-tailcall = ["vogls-sim/tailcall"]
+tailcall = ["vogls-bytecode/tailcall"]

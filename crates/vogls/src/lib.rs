@@ -9,7 +9,7 @@ pub use vogls_codegen as codegen;
 pub use vogls_frontend as frontend;
 pub use vogls_ir as ir;
 pub use vogls_runtime as runtime;
-pub use vogls_sim as sim;
+pub use vogls_bytecode as sim;
 pub use vogls_utils as utils;
 
 pub mod design;

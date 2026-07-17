@@ -2,7 +2,6 @@ use std::rc::Rc;
 
 use vogls_bits::arithmetic::FvLogicValue;
 use vogls_ir::{LogicMode, ResizeOp, UnaryOp};
-use vogls_sim::{BinaryArithmeticOp, HeapOffset, Simulation, SimulationState, VmInstruction};
 use vogls_utils::VgHashMap;
 
 pub struct InstructionTracer {

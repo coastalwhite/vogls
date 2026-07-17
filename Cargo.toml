@@ -27,7 +27,7 @@ pyo3 = { version = "0.28.1", features = ["abi3-py311"] }
 
 vogls = { path = "crates/vogls", default-features = false }
 vogls-frontend.path = "crates/vogls-frontend"
-vogls-sim.path = "crates/vogls-sim"
+vogls-bytecode.path = "crates/vogls-bytecode"
 vogls-ir.path = "crates/vogls-ir"
 vogls-fuse-signals.path = "crates/vogls-fuse-signals"
 vogls-bits.path = "crates/vogls-bits"

@@ -18,7 +18,7 @@ use crate::symbol::{NetSignal, NetSymbol, NetValue, Symbol};
 
 pub enum DesignBackend {
     Bytecode {
-        design: vogls_sim::bytecode::Design,
+        design: vogls_bytecode::bytecode::Design,
     },
     #[cfg(feature = "native")]
     Compiled {
@@ -40,7 +40,7 @@ pub struct Design {
 
 #[derive(Clone)]
 pub enum DesignState {
-    Bytecode(vogls_sim::bytecode::State),
+    Bytecode(vogls_bytecode::bytecode::State),
     #[cfg(feature = "native")]
     Compiled(vogls_codegen_c::runtime::CDesignState),
 }
@@ -92,14 +92,14 @@ impl Design {
                 state.schedule.set_max_time(time);
                 if design.itrace {
                     design.execute_with_tracer(
-                        &mut vogls_sim::bytecode::InstructionTracer::new_stderr(),
+                        &mut vogls_bytecode::bytecode::InstructionTracer::new_stderr(),
                         state,
                         &mut io.stdout,
                         &mut io.stderr,
                     )
                 } else if design.stats {
                     design.execute_with_tracer(
-                        &mut vogls_sim::bytecode::ICountTracer::default(),
+                        &mut vogls_bytecode::bytecode::ICountTracer::default(),
                         state,
                         &mut io.stdout,
                         &mut io.stderr,
@@ -134,14 +134,14 @@ impl Design {
                 state.schedule.set_max_time(time);
                 if design.itrace {
                     design.execute_with_tracer(
-                        &mut vogls_sim::bytecode::InstructionTracer::new_stderr(),
+                        &mut vogls_bytecode::bytecode::InstructionTracer::new_stderr(),
                         state,
                         &mut io.stdout,
                         &mut io.stderr,
                     )
                 } else if design.stats {
                     design.execute_with_tracer(
-                        &mut vogls_sim::bytecode::ICountTracer::default(),
+                        &mut vogls_bytecode::bytecode::ICountTracer::default(),
                         state,
                         &mut io.stdout,
                         &mut io.stderr,

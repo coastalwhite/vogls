@@ -10,5 +10,5 @@ clap.workspace = true
 rayon.workspace = true
 vogls = { workspace = true, features = ["native"] }
 vogls-ir.workspace = true
-vogls-sim.workspace = true
+vogls-bytecode.workspace = true
 vogls-verilog.workspace = true

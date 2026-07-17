@@ -18,8 +18,8 @@ use vogls_runtime::plugins::RuntimePlugin;
 #[cfg(feature = "native")]
 use vogls_runtime::plugins::RuntimePluginState;
 use vogls_runtime::{RtSignalKey, RuntimeState};
-use vogls_sim::bytecode::lower::{LowerBytecodeOptions, lower_process_to_bytecode};
-use vogls_sim::bytecode::{BytecodeEncoder, BytecodeListeners, Schedule};
+use vogls_bytecode::bytecode::lower::{LowerBytecodeOptions, lower_process_to_bytecode};
+use vogls_bytecode::bytecode::{BytecodeEncoder, BytecodeListeners, Schedule};
 #[cfg(feature = "native")]
 use vogls_utils::TimerStack;
 use vogls_utils::{TableKey as _, VgHashMap};
@@ -264,13 +264,13 @@ impl LoweredDesign {
             }
         }
         let runtime = RuntimeState::new(&self.gl, heap, &lupdt_updated);
-        let state = vogls_sim::bytecode::State {
+        let state = vogls_bytecode::bytecode::State {
             runtime,
             plugins,
             schedule,
             listeners,
         };
-        let design = vogls_sim::bytecode::Design {
+        let design = vogls_bytecode::bytecode::Design {
             bytecode: bytecode.data,
             intrinsics: bytecode
                 .intrinsics
