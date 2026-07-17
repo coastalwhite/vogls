@@ -33,8 +33,7 @@ impl TimerStack {
         let i = self.finished.len();
         self.finished
             .push((self.current.len(), Default::default(), Duration::default()));
-        self.current
-            .push((name.into(), std::time::SystemTime::now(), i));
+        self.current.push((name, std::time::SystemTime::now(), i));
     }
 
     #[inline(always)]

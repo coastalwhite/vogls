@@ -86,9 +86,7 @@ pub fn format_bits(
     base: Base,
     prefix: bool,
 ) -> io::Result<()> {
-    let mut options = BitsFormatOptions::default();
-
-    options.base = match base {
+    let base = match base {
         Base::Adaptive => {
             if bits.contains_special() && bits.count_ones() + bits.count_ones() != 0 {
                 BitsFormatBase::Binary
@@ -101,12 +99,16 @@ pub fn format_bits(
         Base::Hexadecimal => BitsFormatBase::LowerHex,
         Base::Decimal => BitsFormatBase::Decimal,
     };
+    let mut options = BitsFormatOptions {
+        base,
+        prefix,
+        separator: None,
+        ..Default::default()
+    };
 
-    options.separator = None;
     if options.base != BitsFormatBase::Decimal {
         options.fill = '0';
     }
-    options.prefix = prefix;
     match padding {
         Padding::ZeroPaddedToSize => {
             options.width = BitsFormatWidth::Expand;

@@ -51,7 +51,7 @@ pub fn peephole(
                         &mut bb.instrs,
                         current_instr_idx,
                         &mut gl.vars,
-                        &mut gl.signals,
+                        &gl.signals,
                         &exprs,
                         &var_lookup,
                     );
@@ -342,6 +342,7 @@ fn peephole_instruction(
         }
         I::Binary(dst, op, lhs, rhs) => {
             let (dst, op, lhs, rhs) = (*dst, *op, *lhs, *rhs);
+            #[expect(clippy::collapsible_if)]
             if let (Some(lhs_ek), Some(rhs_ek)) = (var_lookup.get(&lhs), var_lookup.get(&rhs)) {
                 if lhs.mode().is_four_value()
                     && let Some(tv_pushdown) = op.tv_pushdown_variant()
@@ -370,10 +371,6 @@ fn peephole_instruction(
                         }
                     }
                 }
-
-                match op {
-                    _ => {}
-                }
             }
         }
         I::BinaryImm(dst, op, src, imm) => {
@@ -397,6 +394,7 @@ fn peephole_instruction(
                 }
             }
 
+            #[expect(clippy::collapsible_if)]
             if let Some(src_ek) = var_lookup.get(&src) {
                 if src.mode().is_four_value()
                     && let Some(tv_pushdown) = op.tv_pushdown_variant()

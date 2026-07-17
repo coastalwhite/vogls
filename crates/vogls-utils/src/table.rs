@@ -312,9 +312,9 @@ impl<K: TableKey, V> SecondaryTable<K, V> {
 
     pub fn or_insert_with(&mut self, key: K, mut f: impl FnMut() -> V) {
         self.reserve_until(key);
-        match &mut self.0[key] {
-            v @ None => *v = Some(f()),
-            Some(_) => {}
+        let v = &mut self.0[key];
+        if v.is_none() {
+            *v = Some(f());
         }
     }
 }

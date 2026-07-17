@@ -61,7 +61,7 @@ pub fn constant_propagation(
                     &mut additional,
                 );
                 if result.replace {
-                    output.extend(additional.drain(..));
+                    output.append(&mut additional);
                 } else {
                     output.push(i);
                 }
@@ -114,7 +114,7 @@ pub fn constant_propagation(
         remove_bbs(
             gl,
             process,
-            &scratch_mfr,
+            scratch_mfr,
             scratch_stack,
             scratch_seen,
             &mut Vec::new(),
@@ -378,7 +378,7 @@ fn constant_propagate_instruction(
                 }
             }
 
-            if operands_are_complete && additional.len() == 0 {
+            if operands_are_complete && additional.is_empty() {
                 not_constant!(dst);
             }
 
@@ -387,7 +387,7 @@ fn constant_propagate_instruction(
             }
 
             PropagateResult {
-                replace: additional.len() > 0,
+                replace: !additional.is_empty(),
             }
         }
         I::BinaryImm(dst, op, src, imm) => {
@@ -403,8 +403,8 @@ fn constant_propagate_instruction(
             let src_bits_entry = scratch_map.get(&src);
             let offset_bits_entry = scratch_map.get(&offset);
             let operands_are_complete = src_bits_entry.is_some() & offset_bits_entry.is_some();
-            let src_bits = src_bits_entry.map_or(None, |b| b.as_ref());
-            let offset_bits = offset_bits_entry.map_or(None, |b| b.as_ref());
+            let src_bits = src_bits_entry.and_then(|b| b.as_ref());
+            let offset_bits = offset_bits_entry.and_then(|b| b.as_ref());
 
             match (src_bits, offset_bits) {
                 (Some(l), Some(r)) => {
@@ -471,7 +471,7 @@ fn constant_propagate_instruction(
                 (None, None) | (Some(_), None) => {}
             };
 
-            if operands_are_complete && additional.len() == 0 {
+            if operands_are_complete && additional.is_empty() {
                 not_constant!(dst);
             }
 
@@ -480,7 +480,7 @@ fn constant_propagate_instruction(
             }
 
             PropagateResult {
-                replace: additional.len() > 0,
+                replace: !additional.is_empty(),
             }
         }
         I::SliceImm(dst, src, amount) => {
@@ -661,7 +661,7 @@ fn constant_propagate_instruction(
             if !is_all_complete {
                 return PropagateResult { replace: false };
             }
-            assign_constant!(*dst, acc.clone().unwrap().clone());
+            assign_constant!(*dst, acc.unwrap().clone());
         }
     }
 }

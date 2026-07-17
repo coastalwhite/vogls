@@ -1,5 +1,6 @@
 use std::num::NonZeroU32;
 
+use vogls_ir::bits::parse::BitsParseError;
 use vogls_ir::{Bits, VectorSize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,14 +94,14 @@ impl Base {
     }
 }
 
-pub fn parse_decimal_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, ()> {
+pub fn parse_decimal_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, BitsParseError> {
     let size = match size {
         Some(size) => size,
         None => {
             let num_digits = s.bytes().filter(|b| matches!(b, b'0'..=b'9')).count();
-            let num_digits = u32::try_from(num_digits).map_err(|_| ())?;
+            let num_digits = u32::try_from(num_digits).map_err(|_| BitsParseError)?;
             if num_digits == 0 {
-                return Err(());
+                return Err(BitsParseError);
             }
             match s.bytes().filter(|b| matches!(b, b'1'..=b'9')).next() {
                 None => NonZeroU32::MIN,
@@ -109,7 +110,7 @@ pub fn parse_decimal_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, ()>
                     let num_bits =
                         (f64::from(num_digits) * 10f64.log2() + f64::from(fst_digit).log2()).ceil();
                     if !num_bits.is_finite() || num_bits < 1.0 || num_bits > u32::MAX as f64 {
-                        return Err(());
+                        return Err(BitsParseError);
                     }
                     VectorSize::new(num_bits as u32).unwrap()
                 }
@@ -125,8 +126,8 @@ pub fn parse_decimal_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, ()>
             }
 
             let v = b - b'0';
-            value = value.checked_mul(10).ok_or(())?;
-            value = value.checked_add(u64::from(v)).ok_or(())?;
+            value = value.checked_mul(10).ok_or(BitsParseError)?;
+            value = value.checked_add(u64::from(v)).ok_or(BitsParseError)?;
         }
         Ok(Bits::from_u64(size, value))
     } else {
@@ -134,31 +135,34 @@ pub fn parse_decimal_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, ()>
     }
 }
 
-pub fn take_binary_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, ()> {
+pub fn take_binary_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, BitsParseError> {
     let size = match size {
-        None => vogls_ir::bits::parse::num_digits(s)?
+        None => vogls_ir::bits::parse::num_digits(s)
+            .ok_or(BitsParseError)?
             .checked_mul(VectorSize::new(1u32).unwrap())
-            .ok_or(())?,
+            .ok_or(BitsParseError)?,
         Some(s) => s,
     };
     vogls_ir::bits::parse::parse_bits_binary(s, size)
 }
 
-pub fn take_octal_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, ()> {
+pub fn take_octal_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, BitsParseError> {
     let size = match size {
-        None => vogls_ir::bits::parse::num_digits(s)?
+        None => vogls_ir::bits::parse::num_digits(s)
+            .ok_or(BitsParseError)?
             .checked_mul(VectorSize::new(3u32).unwrap())
-            .ok_or(())?,
+            .ok_or(BitsParseError)?,
         Some(s) => s,
     };
     vogls_ir::bits::parse::parse_bits_octal(s, size)
 }
 
-pub fn take_hexadecimal_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, ()> {
+pub fn take_hexadecimal_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, BitsParseError> {
     let size = match size {
-        None => vogls_ir::bits::parse::num_digits(s)?
+        None => vogls_ir::bits::parse::num_digits(s)
+            .ok_or(BitsParseError)?
             .checked_mul(VectorSize::new(4u32).unwrap())
-            .ok_or(())?,
+            .ok_or(BitsParseError)?,
         Some(s) => s,
     };
     vogls_ir::bits::parse::parse_bits_hexadecimal(s, size)

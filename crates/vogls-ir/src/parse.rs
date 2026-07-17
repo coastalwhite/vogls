@@ -126,7 +126,7 @@ impl ParseError {
     fn overflow(at: usize) -> ParseError {
         Self {
             at,
-            error: format!("overflow"),
+            error: "overflow".to_string(),
         }
     }
 }
@@ -199,7 +199,7 @@ fn parse_signal_definition<'a>(
     } else {
         return Err(Box::new(ParseError {
             at: c.offset,
-            error: format!("signal does not have a mode."),
+            error: "signal does not have a mode.".to_string(),
         }));
     }
     c.expect_char(']')?;
@@ -235,7 +235,7 @@ fn parse_signal_definition<'a>(
     {
         return Err(Box::new(ParseError {
             at: c.offset,
-            error: format!("duplicate signal"),
+            error: "duplicate signal".to_string(),
         }));
     }
     Ok(())
@@ -280,7 +280,7 @@ fn parse_process<'a>(
         } else {
             return Err(Box::new(ParseError {
                 at: c.offset,
-                error: format!("expected '*' or '.'"),
+                error: "expected '*' or '.'".to_string(),
             }));
         };
 
@@ -296,7 +296,7 @@ fn parse_process<'a>(
                 if entry.get().0 {
                     return Err(Box::new(ParseError {
                         at: c.offset,
-                        error: format!("basic block '{ident}' is defined twice"),
+                        error: "basic block '{ident}' is defined twice".to_string(),
                     }));
                 }
                 entry.get_mut().0 = true;
@@ -326,7 +326,7 @@ fn parse_process<'a>(
     if regions.is_empty() {
         return Err(Box::new(ParseError {
             at: c.offset,
-            error: format!("missing entry basic block"),
+            error: "missing entry basic block".to_string(),
         }));
     }
 
@@ -565,7 +565,7 @@ fn parse_bb<'a>(
             if terminator.is_some() {
                 return Err(Box::new(ParseError {
                     at: c.offset,
-                    error: format!("already saw terminator"),
+                    error: "already saw terminator".to_string(),
                 }));
             }
 
@@ -920,7 +920,7 @@ fn parse_bb<'a>(
             if terminator.is_some() {
                 return Err(Box::new(ParseError {
                     at: c.offset,
-                    error: format!("already saw terminator"),
+                    error: "already saw terminator".to_string(),
                 }));
             }
 
@@ -951,7 +951,7 @@ fn parse_bb<'a>(
                     if tr.entry() != next {
                         return Err(Box::new(ParseError {
                             at: c.offset,
-                            error: format!("Can only wait to root of temporal region."),
+                            error: "Can only wait to root of temporal region.".to_string(),
                         }));
                     }
                     T::Wait(tr, Time(time))
@@ -967,7 +967,7 @@ fn parse_bb<'a>(
                     if tr.entry() != next {
                         return Err(Box::new(ParseError {
                             at: c.offset,
-                            error: format!("Can only wait to root of temporal region."),
+                            error: "Can only wait to root of temporal region.".to_string(),
                         }));
                     }
                     T::VariableWait(tr, time)
@@ -983,7 +983,7 @@ fn parse_bb<'a>(
                     if tr.entry() != next {
                         return Err(Box::new(ParseError {
                             at: c.offset,
-                            error: format!("Can only wait to root of temporal region."),
+                            error: "Can only wait to root of temporal region.".to_string(),
                         }));
                     }
                     T::WaitRegion(tr, waitregion)
@@ -1009,7 +1009,7 @@ fn parse_bb<'a>(
                     if tr.entry() != next {
                         return Err(Box::new(ParseError {
                             at: c.offset,
-                            error: format!("Can only wait to root of temporal region."),
+                            error: "Can only wait to root of temporal region.".to_string(),
                         }));
                     }
                     T::Watch(tr, signals)
@@ -1045,7 +1045,7 @@ fn parse_bb<'a>(
     let Some(terminator) = terminator else {
         return Err(Box::new(ParseError {
             at: c.offset,
-            error: format!("missing terminator"),
+            error: "missing terminator".to_string(),
         }));
     };
     gl.bbs[bb_key] = crate::BasicBlock {
@@ -1103,7 +1103,7 @@ fn parse_imm(c: &mut Cursor) -> Result<Bits, Box<ParseError>> {
             Bits::parse_hexadecimal(&s[..length], size).map_err(|_| {
                 Box::new(ParseError {
                     at: c.offset,
-                    error: format!("invalid hex"),
+                    error: "invalid hex".to_string(),
                 })
             })
         }
@@ -1117,20 +1117,20 @@ fn parse_imm(c: &mut Cursor) -> Result<Bits, Box<ParseError>> {
             Bits::parse_hexadecimal(&s[..length], size).map_err(|_| {
                 Box::new(ParseError {
                     at: c.offset,
-                    error: format!("invalid binary"),
+                    error: "invalid binary".to_string(),
                 })
             })
         }
         _ => {
-            return Err(Box::new(ParseError {
+            Err(Box::new(ParseError {
                 at: c.offset,
-                error: format!("invalid base"),
-            }));
+                error: "invalid base".to_string(),
+            }))
         }
     }
 }
 
-fn parse_u8<'a>(c: &mut Cursor) -> Result<u8, Box<ParseError>> {
+fn parse_u8(c: &mut Cursor) -> Result<u8, Box<ParseError>> {
     c.trim_cursor();
     let start_offset = c.offset;
     let bs = c.content.as_bytes();
@@ -1155,7 +1155,7 @@ fn parse_u8<'a>(c: &mut Cursor) -> Result<u8, Box<ParseError>> {
     Ok(current)
 }
 
-fn parse_u32<'a>(c: &mut Cursor) -> Result<u32, Box<ParseError>> {
+fn parse_u32(c: &mut Cursor) -> Result<u32, Box<ParseError>> {
     c.trim_cursor();
     let start_offset = c.offset;
     let bs = c.content.as_bytes();
@@ -1180,7 +1180,7 @@ fn parse_u32<'a>(c: &mut Cursor) -> Result<u32, Box<ParseError>> {
     Ok(current)
 }
 
-fn parse_u64<'a>(c: &mut Cursor) -> Result<u64, Box<ParseError>> {
+fn parse_u64(c: &mut Cursor) -> Result<u64, Box<ParseError>> {
     c.trim_cursor();
     let start_offset = c.offset;
     let bs = c.content.as_bytes();
@@ -1371,7 +1371,7 @@ fn parse_dyn_format_string(c: &mut Cursor) -> Result<DynFormatString, Box<ParseE
                 let Some(end) = c.content[c.offset + 1..].find('}') else {
                     return Err(Box::new(ParseError {
                         at: start,
-                        error: format!("unclosed format arg"),
+                        error: "unclosed format arg".to_string(),
                     }));
                 };
 
@@ -1412,7 +1412,7 @@ fn parse_dyn_format_string(c: &mut Cursor) -> Result<DynFormatString, Box<ParseE
     if c.is_empty() {
         return Err(Box::new(ParseError {
             at: start,
-            error: format!("unclosed string"),
+            error: "unclosed string".to_string(),
         }));
     }
 

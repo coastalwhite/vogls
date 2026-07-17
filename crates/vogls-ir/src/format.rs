@@ -98,7 +98,7 @@ impl<'a> DisplayContext<'a> {
 
 impl<'a, T: ?Sized + ContextFormat> fmt::Display for ContextDisplay<'a, T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.item.ctx_fmt(f, &self.ctx)
+        self.item.ctx_fmt(f, self.ctx)
     }
 }
 

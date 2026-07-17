@@ -472,7 +472,7 @@ impl BasicBlockBuilder {
         } else {
             LogicMode::TwoValue
         };
-        let variable = gl.vars.insert(mode.into(), value.size());
+        let variable = gl.vars.insert(mode, value.size());
         self.instrs.push(Instruction::Constant(variable, value));
         variable
     }
@@ -512,6 +512,9 @@ impl BasicBlockBuilder {
         (and, And)
         (or, Or)
         (xor, Xor)
+        (andnot, AndNot)
+        (ornot, OrNot)
+        (xnor, Xnor)
         (plus, Add)
         (minus, Sub)
         (multiply, Multiply)
@@ -662,35 +665,6 @@ impl BasicBlockBuilder {
             LogicMode::TwoValue => self.fv_to_tv(gl, src),
             LogicMode::FourValue => self.tv_to_fv(gl, src),
         }
-    }
-
-    pub fn xnor(
-        &mut self,
-        gl: &mut GlobalContext,
-        lhs: VariableKey,
-        rhs: VariableKey,
-    ) -> VariableKey {
-        let xor = self.xor(gl, lhs, rhs);
-        let xnor = self.binary_neg(gl, xor);
-        xnor
-    }
-    pub fn andnot(
-        &mut self,
-        gl: &mut GlobalContext,
-        lhs: VariableKey,
-        rhs: VariableKey,
-    ) -> VariableKey {
-        let rhs = self.binary_neg(gl, rhs);
-        self.and(gl, lhs, rhs)
-    }
-    pub fn ornot(
-        &mut self,
-        gl: &mut GlobalContext,
-        lhs: VariableKey,
-        rhs: VariableKey,
-    ) -> VariableKey {
-        let rhs = self.binary_neg(gl, rhs);
-        self.or(gl, lhs, rhs)
     }
 
     pub fn select_bit(
@@ -846,10 +820,8 @@ impl BasicBlockBuilder {
         lhs: VariableKey,
         rhs: VariableKey,
     ) -> VariableKey {
-        let xor = self.xor(gl, lhs, rhs);
-        let no_equals = self.reduce_or(gl, xor);
-        let xnor = self.binary_neg(gl, no_equals);
-        xnor
+        let xnor = self.xnor(gl, lhs, rhs);
+        self.reduce_and(gl, xnor)
     }
     pub fn not_equals(
         &mut self,
@@ -858,8 +830,7 @@ impl BasicBlockBuilder {
         rhs: VariableKey,
     ) -> VariableKey {
         let xor = self.xor(gl, lhs, rhs);
-        let no_equals = self.reduce_or(gl, xor);
-        no_equals
+        self.reduce_or(gl, xor)
     }
     pub fn not_case_equals(
         &mut self,
@@ -993,7 +964,7 @@ impl BasicBlockBuilder {
     pub fn continue_from(instrs: Vec<Instruction>, bb: BasicBlockKey) -> BasicBlockBuilder {
         BasicBlockBuilder {
             key: bb,
-            instrs: instrs,
+            instrs,
         }
     }
 
