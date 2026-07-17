@@ -8,6 +8,7 @@ use self::arithmetic::{
 };
 use self::format::{BitsDisplay, BitsFormatOptions};
 use self::leading_trailing::{tv_leading_ones, tv_leading_zeros};
+use self::parse::BitsParseError;
 use self::truncate::{fv_l_truncate, tv_l_truncate};
 use self::util::{mask_size_1to64, saturating_rem};
 
@@ -137,15 +138,15 @@ pub enum BitsDataRefMut<'a> {
     Separate(&'a mut [u64]),
 }
 
-pub fn get_disjoint_dst_s1_s2<'a, T>(
-    s: &'a mut [T],
+pub fn get_disjoint_dst_s1_s2<T>(
+    s: &mut [T],
     dst_off: usize,
     dst_size: usize,
     s1_off: usize,
     s1_size: usize,
     s2_off: usize,
     s2_size: usize,
-) -> (&'a mut [T], &'a [T], &'a [T]) {
+) -> (&mut [T], &[T], &[T]) {
     assert!(dst_off.strict_add(dst_size) <= s.len());
     assert!(
         (dst_off + dst_size <= s1_off || dst_off >= s1_off + s1_size)
@@ -158,13 +159,13 @@ pub fn get_disjoint_dst_s1_s2<'a, T>(
     (dst, s1, s2)
 }
 
-pub fn get_disjoint_dst_src<'a, T>(
-    s: &'a mut [T],
+pub fn get_disjoint_dst_src<T>(
+    s: &mut [T],
     dst_off: usize,
     dst_size: usize,
     src_off: usize,
     src_size: usize,
-) -> (&'a mut [T], &'a [T]) {
+) -> (&mut [T], &[T]) {
     assert!(dst_off.strict_add(dst_size) <= s.len());
     assert!(dst_off + dst_size <= src_off || dst_off >= src_off + src_size);
     // SAFETY: Asserted before.
@@ -190,7 +191,7 @@ impl Drop for Bits {
             return;
         }
 
-        drop(unsafe { self.into_box() });
+        drop(unsafe { self.take_box() });
     }
 }
 
@@ -308,7 +309,7 @@ impl Bits {
         assert!(size > mode.max_inline_size());
         let nwords = size_to_num_words(size);
         assert_eq!(mode.mul_nwords(nwords), b.len());
-        if size.get() % 64 != 0 {
+        if !size.get().is_multiple_of(64) {
             b[nwords - 1] &= (1u64 << (size.get() % 64)) - 1;
             if mode == Mode::FourValue {
                 b[2 * nwords - 1] &= (1u64 << (size.get() % 64)) - 1;
@@ -371,13 +372,13 @@ impl Bits {
         unsafe { Self::from_raw(MODE, U32_SIZE, BitsData { inline: value }) }
     }
 
-    pub fn as_u64_slice<'a>(&'a self) -> &'a [u64] {
+    pub fn as_u64_slice(&self) -> &[u64] {
         const { assert!(cfg!(target_endian = "little")) }
 
         if self.size <= self.mode.max_inline_size() {
             // SAFETY: size <= MAX_INLINE_SIZE
             let data = unsafe { &self.data.inline };
-            &std::slice::from_ref(data)
+            std::slice::from_ref(data)
         } else {
             // SAFETY: size > MAX_INLINE_SIZE
             let mut num_words = size_to_num_words(self.size);
@@ -388,7 +389,7 @@ impl Bits {
         }
     }
 
-    fn as_mut_u64_slice<'a>(&'a mut self) -> &'a mut [u64] {
+    fn as_mut_u64_slice(&mut self) -> &mut [u64] {
         const { assert!(cfg!(target_endian = "little")) }
 
         if self.size <= self.mode.max_inline_size() {
@@ -405,7 +406,7 @@ impl Bits {
         }
     }
 
-    pub fn as_slice<'a>(&'a self) -> &'a [u8] {
+    pub fn as_slice(&self) -> &[u8] {
         const { assert!(cfg!(target_endian = "little")) }
 
         let num_bytes = self.size.get().div_ceil(8) as usize;
@@ -419,7 +420,7 @@ impl Bits {
         }
     }
 
-    fn as_mut_slice<'a>(&'a mut self) -> &'a mut [u8] {
+    fn as_mut_slice(&mut self) -> &mut [u8] {
         const { assert!(cfg!(target_endian = "little")) }
 
         let num_bytes = self.size.get().div_ceil(8) as usize;
@@ -586,21 +587,21 @@ impl Bits {
 
     pub fn truncate_or_sign_extend(self, new_size: VectorSize) -> Bits {
         if self.size() == new_size {
-            return self;
+            self
         } else if self.size() < new_size {
-            return self.sign_extend(new_size);
+            self.sign_extend(new_size)
         } else {
-            return self.truncate(new_size);
+            self.truncate(new_size)
         }
     }
 
     pub fn truncate_or_zero_extend(self, new_size: VectorSize) -> Bits {
         if self.size() == new_size {
-            return self;
+            self
         } else if self.size() < new_size {
-            return self.zero_extend(new_size);
+            self.zero_extend(new_size)
         } else {
-            return self.truncate(new_size);
+            self.truncate(new_size)
         }
     }
 
@@ -664,7 +665,7 @@ impl Bits {
                 let out_slice = out.as_mut_u64_slice();
                 let slf_num_words = size_to_num_words(self.size);
                 out_slice[..slf_num_words].copy_from_slice(self.as_u64_slice());
-                if size.get() % 64 != 0 {
+                if !size.get().is_multiple_of(64) {
                     out_slice[slf_num_words - 1] |=
                         u64::from(!sign).wrapping_sub(1) << (size.get() % 64);
                 }
@@ -802,9 +803,7 @@ impl Bits {
     pub fn reduce_or(&self) -> FvLogicValue {
         match self.as_data_ref() {
             BitsDataRef::InlineTv(value) => FvLogicValue::from_bool(value != 0),
-            BitsDataRef::InlineFv(spc, val) => {
-                reduce::fv_reduce_or_elem(spc.into(), val.into(), self.size())
-            }
+            BitsDataRef::InlineFv(spc, val) => reduce::fv_reduce_or_elem(spc, val, self.size()),
             BitsDataRef::SeparateTv(slice) => FvLogicValue::from_bool(reduce::tv_reduce_or(slice)),
             BitsDataRef::SeparateFv(slice) => reduce::fv_l_reduce_or(slice, self.size()),
         }
@@ -814,9 +813,7 @@ impl Bits {
             BitsDataRef::InlineTv(value) => {
                 FvLogicValue::from_bool(value.count_ones() == self.size().get())
             }
-            BitsDataRef::InlineFv(spc, val) => {
-                reduce::fv_reduce_and_elem(spc.into(), val.into(), self.size())
-            }
+            BitsDataRef::InlineFv(spc, val) => reduce::fv_reduce_and_elem(spc, val, self.size()),
             BitsDataRef::SeparateTv(slice) => {
                 FvLogicValue::from_bool(reduce::tv_reduce_and(slice, self.size()))
             }
@@ -826,9 +823,7 @@ impl Bits {
     pub fn reduce_xor(&self) -> FvLogicValue {
         match self.as_data_ref() {
             BitsDataRef::InlineTv(value) => FvLogicValue::from_bool(value.count_ones() % 2 == 1),
-            BitsDataRef::InlineFv(spc, val) => {
-                reduce::fv_reduce_xor_elem(spc.into(), val.into(), self.size())
-            }
+            BitsDataRef::InlineFv(spc, val) => reduce::fv_reduce_xor_elem(spc, val, self.size()),
             BitsDataRef::SeparateTv(slice) => FvLogicValue::from_bool(reduce::tv_reduce_xor(slice)),
             BitsDataRef::SeparateFv(slice) => reduce::fv_l_reduce_xor(slice, self.size()),
         }
@@ -920,7 +915,7 @@ impl Bits {
                         concat::tv_l_concat(
                             dst_spc,
                             lhs_spc,
-                            &Self::new_ones(rhs_size).as_u64_slice(),
+                            Self::new_ones(rhs_size).as_u64_slice(),
                             lhs.size(),
                             rhs.size(),
                         )
@@ -954,7 +949,7 @@ impl Bits {
                         concat::tv_l_concat(
                             dst_spc,
                             lhs_spc,
-                            &Self::new_ones(rhs_size).as_u64_slice(),
+                            Self::new_ones(rhs_size).as_u64_slice(),
                             lhs.size(),
                             rhs.size(),
                         )
@@ -979,7 +974,7 @@ impl Bits {
                 if spc != 1u64.unbounded_shl(self.size().get()).wrapping_sub(1) {
                     None
                 } else {
-                    Some(val.into())
+                    Some(val)
                 }
             }
             BitsDataRef::SeparateTv(_) | BitsDataRef::SeparateFv(_) => None,
@@ -1319,7 +1314,7 @@ impl Bits {
         assert_eq!(self.size().get(), 32);
         match self.as_data_ref() {
             BitsDataRef::InlineTv(v) => Some(v as u32),
-            BitsDataRef::InlineFv(spc, val) if spc == 0xFFFF_FFFF => Some(val as u32),
+            BitsDataRef::InlineFv(0xFFFF_FFFF, val) => Some(val as u32),
             _ => None,
         }
     }
@@ -1600,11 +1595,11 @@ impl Bits {
         if self.size() <= self.mode.max_inline_size() {
             BitsDataOwned::Inline(unsafe { self.data.inline })
         } else {
-            BitsDataOwned::Boxed(unsafe { self.into_box() })
+            BitsDataOwned::Boxed(unsafe { self.take_box() })
         }
     }
 
-    unsafe fn into_box(&mut self) -> Box<[u64]> {
+    unsafe fn take_box(&mut self) -> Box<[u64]> {
         debug_assert!(self.size() > self.mode.max_inline_size());
 
         let mut num_words = size_to_num_words(self.size);
@@ -1659,10 +1654,10 @@ impl Bits {
         }
     }
 
-    pub fn parse_binary(s: &str, size: VectorSize) -> Result<Bits, ()> {
+    pub fn parse_binary(s: &str, size: VectorSize) -> Result<Bits, BitsParseError> {
         parse::parse_bits_binary(s, size)
     }
-    pub fn parse_hexadecimal(s: &str, size: VectorSize) -> Result<Bits, ()> {
+    pub fn parse_hexadecimal(s: &str, size: VectorSize) -> Result<Bits, BitsParseError> {
         parse::parse_bits_hexadecimal(s, size)
     }
 
@@ -1785,7 +1780,7 @@ impl fmt::Display for Bits {
 pub type VectorSize = NonZeroU32;
 
 impl<'a> BitsDataRef<'a> {
-    pub fn to_u64_slices<'b>(&'b self) -> (&'b [u64], Option<&'b [u64]>) {
+    pub fn to_u64_slices(&self) -> (&[u64], Option<&[u64]>) {
         match self {
             BitsDataRef::InlineTv(v) => (std::slice::from_ref(v), None),
             BitsDataRef::SeparateTv(v) => (v, None),

@@ -13,7 +13,7 @@ pub fn set_subslice(
 
     let mut offset = offset;
     dst = &mut dst[(offset / 8) as usize..];
-    offset = offset % 8;
+    offset %= 8;
 
     // @Performance: Please do something better.
     let mut updated = false;

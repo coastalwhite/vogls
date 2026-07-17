@@ -13,7 +13,7 @@ pub fn tv_l_extend_with(
 ) {
     let fill_mask = u64::from(!fill).wrapping_sub(1);
     dst[..src.len()].copy_from_slice(src);
-    if src_size.get().is_multiple_of(64) {
+    if !src_size.get().is_multiple_of(64) {
         dst[src.len() - 1] |= fill_mask << (src_size.get() % 64);
     };
 

@@ -1,11 +1,14 @@
 use crate::{Bits, Mode, VectorSize};
 
-pub fn num_digits(s: &str) -> Result<VectorSize, ()> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BitsParseError;
+
+pub fn num_digits(s: &str) -> Option<VectorSize> {
     let mut count = 0u32;
     for b in s.bytes() {
         count += u32::from(b != b'_');
     }
-    VectorSize::new(count).ok_or(())
+    VectorSize::new(count)
 }
 
 fn take_bits<const NBITS_PER_VALUE: usize>(
@@ -13,7 +16,7 @@ fn take_bits<const NBITS_PER_VALUE: usize>(
     size: VectorSize,
     to_value: impl Fn(u8) -> u8,
     is_value: impl Fn(u8) -> bool,
-) -> Result<Bits, ()> {
+) -> Result<Bits, BitsParseError> {
     let mut has_four_value_logic = false;
     let mut contains_value = false;
     let mut has_invalid_digit = false;
@@ -25,7 +28,7 @@ fn take_bits<const NBITS_PER_VALUE: usize>(
 
     let has_no_digits = !has_four_value_logic && !contains_value;
     if has_invalid_digit || has_no_digits {
-        return Err(());
+        return Err(BitsParseError);
     }
 
     // Case 1: Inlineable two-value logic.
@@ -127,7 +130,7 @@ fn take_bits<const NBITS_PER_VALUE: usize>(
     Ok(Bits::from_boxed_slice(Mode::FourValue, size, value.into()))
 }
 
-pub fn parse_bits_binary(s: &str, size: VectorSize) -> Result<Bits, ()> {
+pub fn parse_bits_binary(s: &str, size: VectorSize) -> Result<Bits, BitsParseError> {
     take_bits::<1>(
         s,
         size,
@@ -135,7 +138,7 @@ pub fn parse_bits_binary(s: &str, size: VectorSize) -> Result<Bits, ()> {
         |b| matches!(b, b'0' | b'1' | b'x' | b'X' | b'z' | b'Z'),
     )
 }
-pub fn parse_bits_hexadecimal(s: &str, size: VectorSize) -> Result<Bits, ()> {
+pub fn parse_bits_hexadecimal(s: &str, size: VectorSize) -> Result<Bits, BitsParseError> {
     take_bits::<4>(
         s,
         size,
@@ -147,7 +150,7 @@ pub fn parse_bits_hexadecimal(s: &str, size: VectorSize) -> Result<Bits, ()> {
         |b| matches!(b, b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F' | b'x' | b'X' | b'z' | b'Z'),
     )
 }
-pub fn parse_bits_octal(s: &str, size: VectorSize) -> Result<Bits, ()> {
+pub fn parse_bits_octal(s: &str, size: VectorSize) -> Result<Bits, BitsParseError> {
     let mut has_four_value_logic = false;
     let mut contains_value = false;
     let mut has_invalid_digit = false;
@@ -159,7 +162,7 @@ pub fn parse_bits_octal(s: &str, size: VectorSize) -> Result<Bits, ()> {
 
     let has_at_least_one_digit = !has_four_value_logic && !contains_value;
     if has_invalid_digit || has_at_least_one_digit {
-        return Err(());
+        return Err(BitsParseError);
     }
 
     // Case 1: Inlineable two-value logic.
@@ -194,7 +197,7 @@ pub fn parse_bits_octal(s: &str, size: VectorSize) -> Result<Bits, ()> {
             let v = b - b'0';
             value[i / 64] |= (v as u64) << (i % 64);
             if i % 64 >= 63 && 64 - i % 64 < size.get() as usize - i {
-                value[(i as usize / 64) + 1] |= (v as u64) >> (64 - (i % 64));
+                value[(i / 64) + 1] |= (v as u64) >> (64 - (i % 64));
             }
             i += 3;
         }

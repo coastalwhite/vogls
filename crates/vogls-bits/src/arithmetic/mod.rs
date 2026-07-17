@@ -2,7 +2,6 @@ use std::cell::Cell;
 
 use crate::VectorSize;
 use crate::load::load_partial_u64;
-use crate::store::store_partial_u64;
 use crate::util::last_word_mask;
 
 mod add_sub;
@@ -138,37 +137,6 @@ pub fn tv_bin_mut_bitwise_op(dst: &mut [u8], other: &[u8], op: impl Fn(u8, u8) -
     for i in 0..dst.len() {
         dst[i] = op(dst[i], other[i]);
     }
-}
-pub fn fv_bin_bitwise_op(
-    dst: &mut [u8],
-    lhs: &[u8],
-    rhs: &[u8],
-    size: VectorSize,
-    op: impl Fn(u64, u64, u64, u64) -> (u64, u64),
-) {
-    let dsize = VectorSize::new(size.get() * 2).unwrap();
-    let x = load_partial_u64(lhs, dsize);
-    let y = load_partial_u64(rhs, dsize);
-    let (xspc, xvalue) = fv_unpack_u64(x, size);
-    let (yspc, yvalue) = fv_unpack_u64(y, size);
-    let (spc, value) = op(xspc, xvalue, yspc, yvalue);
-    let result = fv_pack_u64(spc, value, size);
-    store_partial_u64(dst, result, dsize);
-}
-pub fn fv_bin_mut_bitwise_op(
-    dst: &mut [u8],
-    rhs: &[u8],
-    size: VectorSize,
-    op: impl Fn(u64, u64, u64, u64) -> (u64, u64),
-) {
-    let dsize = VectorSize::new(size.get() * 2).unwrap();
-    let x = load_partial_u64(dst, dsize);
-    let y = load_partial_u64(rhs, dsize);
-    let (xspc, xvalue) = fv_unpack_u64(x, size);
-    let (yspc, yvalue) = fv_unpack_u64(y, size);
-    let (spc, value) = op(xspc, xvalue, yspc, yvalue);
-    let result = fv_pack_u64(spc, value, size);
-    store_partial_u64(dst, result, dsize);
 }
 
 pub fn tv_bin_u64_cell_bitwise_op(
@@ -525,7 +493,7 @@ pub fn fv_gtu32_bitwise_inv(dst: &mut [u64], src: &[u64], size: VectorSize) {
 }
 
 pub fn fv_set_no_special(slice: &mut [u64], size: VectorSize) {
-    assert!(slice.len() > 0 && slice.len() == 2 * (size.get().div_ceil(64) as usize));
+    assert!(!slice.is_empty() && slice.len() == 2 * (size.get().div_ceil(64) as usize));
     let nwords = slice.len() / 2;
     slice[..nwords].fill(u64::MAX);
     slice[nwords - 1] &= last_word_mask(size);

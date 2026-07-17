@@ -1,31 +1,5 @@
 use crate::VectorSize;
-use crate::arithmetic::{fv_pack_u64, fv_unpack_u64};
-use crate::load::load_partial_u64;
-use crate::store::store_partial_u64;
-
-pub fn tv_s_logical_shift_left(dst: &mut [u8], src: &[u8], shift: u32, size: VectorSize) {
-    assert!(size.get() <= 64);
-    let src = load_partial_u64(&src, size);
-    let out = src.unbounded_shl(shift);
-    store_partial_u64(dst, out as u64, size);
-}
-
-pub fn tv_s_logical_shift_right(dst: &mut [u8], src: &[u8], shift: u32, size: VectorSize) {
-    assert!(size.get() <= 64);
-    let src = load_partial_u64(&src, size);
-    let out = src.unbounded_shr(shift);
-    store_partial_u64(dst, out as u64, size);
-}
-
-pub fn tv_s_arithmetic_shift_right(dst: &mut [u8], src: &[u8], shift: u32, size: VectorSize) {
-    assert!(size.get() <= 64);
-    let src = load_partial_u64(&src, size);
-    let unused_bits = 64 - size.get();
-    let out = src << unused_bits;
-    let out = out as i64;
-    let out = out.unbounded_shr(unused_bits + shift);
-    store_partial_u64(dst, out as u64, size);
-}
+use crate::util::last_word_mask;
 
 pub fn tv_l_logical_shift_left(dst: &mut [u64], src: &[u64], shift: u32, size: VectorSize) {
     tv_l_logical_shift_left_with(dst, src, shift, size, false);
@@ -46,9 +20,7 @@ pub fn tv_l_logical_shift_left_with(
     let shiftin_mask = u64::from(!shiftin_value).wrapping_sub(1);
     if shift >= size.get() {
         dst.fill(shiftin_mask);
-        if size.get() % 64 != 0 {
-            dst[nwords - 1] &= (1u64 << (size.get() % 64)) - 1;
-        }
+        dst[nwords - 1] &= last_word_mask(size);
         return;
     }
 
@@ -65,9 +37,7 @@ pub fn tv_l_logical_shift_left_with(
             dst[i + swords] = (src[i + 1] << soff) | (src[i] >> (64 - soff));
         }
     }
-    if size.get() % 64 != 0 {
-        dst[nwords - 1] &= (1u64 << (size.get() % 64)) - 1;
-    }
+    dst[nwords - 1] &= last_word_mask(size);
 }
 pub fn tv_l_logical_shift_right(dst: &mut [u64], src: &[u64], shift: u32, size: VectorSize) {
     tv_l_logical_shift_right_with(dst, src, shift, size, false);
@@ -87,9 +57,7 @@ pub fn tv_l_logical_shift_right_with(
     }
     if shift >= size.get() {
         dst.fill(shiftin_mask);
-        if size.get() % 64 != 0 {
-            dst[nwords - 1] &= (1u64 << (size.get() % 64)) - 1;
-        }
+        dst[nwords - 1] &= last_word_mask(size);
         return;
     }
 
@@ -114,7 +82,7 @@ pub fn tv_l_logical_shift_right_with(
         dst[nwords - swords] = (shiftin_mask << (64 - soff)) | (src[nwords - 1] >> soff);
         dst[nwords - swords + 1..].fill(shiftin_mask);
     }
-    if size.get() % 64 != 0 {
+    if !size.get().is_multiple_of(64) {
         let mask = shiftin_mask << (size.get() % 64);
         if shiftin_value {
             dst[nwords - shift / 64 - 1] |= mask >> soff;
@@ -122,67 +90,13 @@ pub fn tv_l_logical_shift_right_with(
                 dst[nwords - shift / 64 - 2] |= mask << (64 - soff);
             }
         }
-        dst[nwords - 1] &= (1u64 << (size.get() % 64)) - 1;
+        dst[nwords - 1] &= last_word_mask(size);
     }
 }
 pub fn tv_l_arithmetic_shift_right(dst: &mut [u64], src: &[u64], shift: u32, size: VectorSize) {
     let msb_idx = (size.get() - 1) as usize;
     let msb_val = (src[msb_idx / 64] >> (msb_idx % 64)) & 1 != 0;
     tv_l_logical_shift_right_with(dst, src, shift, size, msb_val);
-}
-
-pub fn fv_s_logical_shift_left(dst: &mut [u8], src: &[u8], shift: u32, size: VectorSize) {
-    if shift == 0 {
-        dst.copy_from_slice(src);
-        return;
-    }
-    let dsize = VectorSize::new(size.get() * 2).unwrap();
-    let mask = (1u64 << size.get()) - 1;
-    if shift >= size.get() {
-        store_partial_u64(dst, mask, dsize);
-        return;
-    }
-
-    let src = load_partial_u64(&src, dsize);
-    let (spc, val) = fv_unpack_u64(src, size);
-    let spc = ((spc << shift) & mask) | ((1u64 << shift) - 1);
-    let val = (val << shift) & mask;
-    let result = fv_pack_u64(spc, val, size);
-    store_partial_u64(dst, result, dsize);
-}
-pub fn fv_s_logical_shift_right(dst: &mut [u8], src: &[u8], shift: u32, size: VectorSize) {
-    if shift == 0 {
-        dst.copy_from_slice(src);
-        return;
-    }
-    let dsize = VectorSize::new(size.get() * 2).unwrap();
-    let mask = (1u64 << size.get()) - 1;
-    if shift >= size.get() {
-        store_partial_u64(dst, mask, dsize);
-        return;
-    }
-
-    let src = load_partial_u64(&src, dsize);
-    let (spc, val) = fv_unpack_u64(src, size);
-    let spc = (spc >> shift) | (((1u64 << shift) - 1) << (size.get() - shift));
-    let val = val >> shift;
-    let result = fv_pack_u64(spc, val, size);
-    store_partial_u64(dst, result, dsize);
-}
-pub fn fv_s_arithmetic_shift_right(dst: &mut [u8], src: &[u8], shift: u32, size: VectorSize) {
-    if shift == 0 {
-        dst.copy_from_slice(src);
-        return;
-    }
-    let dsize = VectorSize::new(size.get() * 2).unwrap();
-    let mask = (1u64 << size.get()) - 1;
-
-    let src = load_partial_u64(&src, dsize);
-    let (spc, val) = fv_unpack_u64(src, size);
-    let spc = (((spc as i64) << (64 - size.get())) >> (64 - size.get())).unbounded_shr(shift);
-    let val = (((val as i64) << (64 - size.get())) >> (64 - size.get())).unbounded_shr(shift);
-    let result = fv_pack_u64(spc as u64 & mask, val as u64 & mask, size);
-    store_partial_u64(dst, result, dsize);
 }
 
 pub fn tv_shift_arith_right(val: u64, shift: u32, size: VectorSize) -> u64 {
@@ -218,72 +132,4 @@ pub fn fv_l_arithmetic_shift_right(dst: &mut [u64], src: &[u64], shift: u32, siz
     let msb_val = (src[nwords + msb_idx / 64] >> (msb_idx % 64)) & 1 != 0;
     tv_l_logical_shift_right_with(&mut dst[..nwords], &src[..nwords], shift, size, msb_spc);
     tv_l_logical_shift_right_with(&mut dst[nwords..], &src[nwords..], shift, size, msb_val);
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::get_disjoint_dst_src;
-    use crate::load::load_partial_u64;
-    use crate::store::store_partial_u64;
-
-    use super::*;
-
-    #[test]
-    fn lsr_u16() {
-        let mut stack = [0u8; 16];
-        for size in 1..=16 {
-            let size = VectorSize::new(size).unwrap();
-            let nbytes = size.get().div_ceil(8) as usize;
-            for value in 0..=(1u64 << size.get()).wrapping_sub(1) {
-                for shift in 0..=size.get() {
-                    store_partial_u64(&mut stack, value, size);
-
-                    let (dst, src) = get_disjoint_dst_src(&mut stack, 8, nbytes, 0, nbytes);
-
-                    tv_s_logical_shift_right(dst, src, shift, size);
-                    let result = load_partial_u64(dst, size);
-                    let expected = value >> shift;
-                    if result != expected {
-                        eprintln!("value    = {value:04X}");
-                        eprintln!("result   = {result:04X}");
-                        eprintln!("expected = {expected:04X}");
-                        eprintln!("size  = {size}");
-                        eprintln!("shift = {shift}");
-
-                        assert_eq!(result, expected);
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn lsl_u16() {
-        let mut stack = [0u8; 16];
-        for size in 1..=16 {
-            let size = VectorSize::new(size).unwrap();
-            let nbytes = size.get().div_ceil(8) as usize;
-            for value in 0..=(1u64 << size.get()).wrapping_sub(1) {
-                for shift in 0..=size.get() {
-                    store_partial_u64(&mut stack, value, size);
-
-                    let (dst, src) = get_disjoint_dst_src(&mut stack, 8, nbytes, 0, nbytes);
-
-                    tv_s_logical_shift_left(dst, src, shift, size);
-                    let result = load_partial_u64(dst, size);
-                    let expected =
-                        (value << shift) & 1u64.unbounded_shl(size.get()).wrapping_sub(1);
-                    if result != expected {
-                        eprintln!("value    = {value:04X}");
-                        eprintln!("result   = {result:04X}");
-                        eprintln!("expected = {expected:04X}");
-                        eprintln!("size  = {size}");
-                        eprintln!("shift = {shift}");
-
-                        assert_eq!(result, expected);
-                    }
-                }
-            }
-        }
-    }
 }
