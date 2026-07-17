@@ -224,10 +224,6 @@ impl<K, V> Table<K, V> {
         self.values.iter()
     }
 
-    pub fn into_iter(self) -> impl ExactSizeIterator<Item = V> + DoubleEndedIterator {
-        self.values.into_iter()
-    }
-
     pub fn clear(&mut self) {
         self.values.clear();
     }
@@ -240,6 +236,16 @@ impl<K, V> Table<K, V> {
         &mut self.values
     }
 }
+
+impl<K, V> IntoIterator for Table<K, V> {
+    type Item = V;
+    type IntoIter = std::vec::IntoIter<V>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.values.into_iter()
+    }
+}
+
 impl<K, V> SecondaryTable<K, V> {
     pub const fn new() -> Self {
         Self(Table::new())
@@ -288,12 +294,12 @@ impl<K: TableKey, V> SecondaryTable<K, V> {
 
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
         self.reserve_until(key);
-        std::mem::replace(&mut self.0[key], Some(value))
+        self.0[key].replace(value)
     }
 
     pub fn remove(&mut self, key: K) -> Option<V> {
         if self.capacity() > key.get() {
-            std::mem::replace(&mut self.0[key], None)
+            self.0[key].take()
         } else {
             None
         }

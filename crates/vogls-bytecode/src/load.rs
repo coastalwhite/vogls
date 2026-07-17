@@ -1,6 +1,6 @@
 use std::fmt;
 
-use vogls_bits::slice::tv_cell_slice;
+use vogls_bits::slice::tv_ll_slice;
 use vogls_codegen::{HeapAlignment, HeapOffset};
 use vogls_ir::{LogicMode, VectorSize};
 use vogls_runtime::RuntimeState;
@@ -596,7 +596,7 @@ impl BytecodeInstruction for LoadHeapUnaligned {
         state: &mut RuntimeState,
         _schedule: &mut Schedule,
         _listeners: &mut BytecodeListeners,
-        _cldctx: &mut ColdContext,
+        cldctx: &mut ColdContext,
     ) {
         let Self { rd, rs, imm8, size } = self;
         let dst_offset = regs[rd];
@@ -610,29 +610,33 @@ impl BytecodeInstruction for LoadHeapUnaligned {
         let src_end = (src_offset + size.get() as u64).next_multiple_of(64);
         let src_num_words = ((src_end - src_start) / 64) as usize;
 
-        let [dst, src] = state.heap.get_u64_cell_slices([
-            (
-                HeapOffset {
-                    bit_offset: dst_offset as usize,
-                },
-                dst_num_words,
-            ),
-            (
-                HeapOffset {
-                    bit_offset: src_offset as usize,
-                },
-                src_num_words,
-            ),
-        ]);
+        let src = state.heap.get_u64_slice(
+            HeapOffset {
+                bit_offset: src_offset as usize,
+            },
+            src_num_words,
+        );
 
-        tv_cell_slice(
-            dst,
+        cldctx.heap_scratch.clear();
+        cldctx.heap_scratch.resize(dst_num_words, 0u64);
+
+        tv_ll_slice(
+            &mut cldctx.heap_scratch,
             src,
             (src_offset % 64) as u32,
             size,
             VectorSize::new((src_num_words * 64) as u32).unwrap(),
             false,
         );
+        state
+            .heap
+            .get_mut_u64_slice(
+                HeapOffset {
+                    bit_offset: dst_offset as usize,
+                },
+                dst_num_words,
+            )
+            .copy_from_slice(&cldctx.heap_scratch);
     }
 }
 

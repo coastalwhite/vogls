@@ -1,15 +1,12 @@
-use crate::arithmetic::fv_bitwise_inv_elem;
 use crate::VectorSize;
+use crate::arithmetic::fv_bitwise_inv_elem;
+use crate::util::last_word_mask;
 use std::cell::Cell;
 
 pub fn tv_cell_negate(dst: &[Cell<u64>], src: &[Cell<u64>], size: VectorSize) {
     assert!(dst.len() == src.len() && dst.len() == size.get().div_ceil(64) as usize);
     dst.iter().zip(src).for_each(|(d, s)| d.set(!s.get()));
-    if size.get() % 64 != 0 {
-        dst.last()
-            .unwrap()
-            .update(|v| v & ((1u64 << (size.get() % 64)) - 1));
-    }
+    dst.last().unwrap().update(|v| v & last_word_mask(size));
 }
 
 pub fn fv_cell_negate(dst: &[Cell<u64>], src: &[Cell<u64>], size: VectorSize) {

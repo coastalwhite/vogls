@@ -1,30 +1,6 @@
+use crate::util::last_word_mask;
 use crate::VectorSize;
 use crate::arithmetic::{fv_contains_special, fv_set_no_special};
-use crate::load::load_partial_u64;
-use crate::store::store_partial_u64;
-
-use super::fv_ltu32_arith_op;
-
-pub fn tv_ltu64_addition(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: VectorSize) {
-    assert!(size.get() <= 64);
-    let l = load_partial_u64(&lhs, size);
-    let r = load_partial_u64(&rhs, size);
-    let out = l.wrapping_add(r);
-    store_partial_u64(dst, out, size);
-}
-pub fn tv_ltu64_subtraction(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: VectorSize) {
-    assert!(size.get() <= 64);
-    let l = load_partial_u64(&lhs, size);
-    let r = load_partial_u64(&rhs, size);
-    let out = l.wrapping_sub(r);
-    store_partial_u64(dst, out, size);
-}
-pub fn fv_ltu32_addition(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: VectorSize) {
-    fv_ltu32_arith_op(dst, lhs, rhs, size, |l, r| Some(l.wrapping_add(r)));
-}
-pub fn fv_ltu32_subtraction(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: VectorSize) {
-    fv_ltu32_arith_op(dst, lhs, rhs, size, |l, r| Some(l.wrapping_sub(r)));
-}
 
 pub fn tv_addition_subtraction(
     dst: &mut [u64],
@@ -34,7 +10,7 @@ pub fn tv_addition_subtraction(
     subtract: bool,
 ) {
     assert!(
-        dst.len() > 0
+        !dst.is_empty()
             && dst.len() == lhs.len()
             && dst.len() == rhs.len()
             && size.get().div_ceil(64) as usize == dst.len()
@@ -45,9 +21,7 @@ pub fn tv_addition_subtraction(
     for i in 0..dst.len() {
         (dst[i], carry_in) = lhs[i].carrying_add(rhs[i] ^ mask, carry_in);
     }
-    if size.get() % 64 != 0 {
-        *dst.last_mut().unwrap() &= (1u64 << (size.get() % 64)).wrapping_sub(1);
-    }
+    dst[dst.len() - 1] &= last_word_mask(size);
 }
 pub fn fv_addition_subtraction(
     dst: &mut [u64],
@@ -57,7 +31,7 @@ pub fn fv_addition_subtraction(
     subtract: bool,
 ) {
     assert!(
-        dst.len() > 0
+        !dst.is_empty()
             && dst.len() == lhs.len()
             && dst.len() == rhs.len()
             && dst.len() == 2 * size.get().div_ceil(64) as usize

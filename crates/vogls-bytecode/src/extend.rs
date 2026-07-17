@@ -1,9 +1,6 @@
 use std::fmt;
 
-use vogls_bits::extend::{
-    fv_cell_sign_extend, fv_cell_zero_extend, fv_l_sign_extend, fv_l_zero_extend,
-    tv_cell_sign_extend, tv_cell_zero_extend, tv_l_sign_extend, tv_l_zero_extend,
-};
+use vogls_bits::extend::{fv_l_sign_extend, fv_l_zero_extend, tv_l_sign_extend, tv_l_zero_extend};
 use vogls_bits::truncate::{fv_cell_truncate, tv_cell_truncate};
 use vogls_ir::{LogicMode, VectorSize};
 use vogls_runtime::RuntimeState;
@@ -128,7 +125,7 @@ impl BytecodeInstruction for HeapHeapExtend {
         state: &mut RuntimeState,
         _schedule: &mut Schedule,
         _listeners: &mut BytecodeListeners,
-        _cldctx: &mut ColdContext,
+        cldctx: &mut ColdContext,
     ) {
         let Self {
             rd,
@@ -150,16 +147,27 @@ impl BytecodeInstruction for HeapHeapExtend {
             src_num_words *= 2;
         }
 
-        let [dst, src] = state
-            .heap
-            .get_u64_cell_slices([(dst, dst_num_words), (src, src_num_words)]);
-
+        let src = state.heap.get_u64_slice(src, src_num_words);
+        cldctx.heap_scratch.clear();
+        cldctx.heap_scratch.resize(dst_num_words, 0u64);
         match op {
-            ExtendOp::TvZeroExtend => tv_cell_zero_extend(dst, src, dst_size, src_size),
-            ExtendOp::TvSignExtend => tv_cell_sign_extend(dst, src, dst_size, src_size),
-            ExtendOp::FvZeroExtend => fv_cell_zero_extend(dst, src, dst_size, src_size),
-            ExtendOp::FvSignExtend => fv_cell_sign_extend(dst, src, dst_size, src_size),
+            ExtendOp::TvZeroExtend => {
+                tv_l_zero_extend(&mut cldctx.heap_scratch, src, dst_size, src_size)
+            }
+            ExtendOp::TvSignExtend => {
+                tv_l_sign_extend(&mut cldctx.heap_scratch, src, dst_size, src_size)
+            }
+            ExtendOp::FvZeroExtend => {
+                fv_l_zero_extend(&mut cldctx.heap_scratch, src, dst_size, src_size)
+            }
+            ExtendOp::FvSignExtend => {
+                fv_l_sign_extend(&mut cldctx.heap_scratch, src, dst_size, src_size)
+            }
         }
+        state
+            .heap
+            .get_mut_u64_slice(dst, dst_num_words)
+            .copy_from_slice(&cldctx.heap_scratch);
     }
 }
 

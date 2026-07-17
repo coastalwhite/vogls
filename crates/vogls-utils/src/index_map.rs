@@ -92,6 +92,10 @@ impl<K> IndexSet<K> {
         self.keys.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.keys.is_empty()
+    }
+
     pub fn clear(&mut self) {
         self.keys.clear();
         self.table.clear();
@@ -99,9 +103,6 @@ impl<K> IndexSet<K> {
 
     pub fn iter(&self) -> impl Iterator<Item = &K> {
         self.keys.iter()
-    }
-    pub fn into_iter(self) -> impl Iterator<Item = K> {
-        self.keys.into_iter()
     }
 
     pub fn get_at_index(&self, index: usize) -> Option<&K> {
@@ -111,9 +112,14 @@ impl<K> IndexSet<K> {
     pub fn take_keys(self) -> Vec<K> {
         self.keys
     }
+}
 
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
+impl<K> IntoIterator for IndexSet<K> {
+    type Item = K;
+    type IntoIter = std::vec::IntoIter<K>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.keys.into_iter()
     }
 }
 impl<K, V> IndexMap<K, V> {
@@ -125,6 +131,10 @@ impl<K, V> IndexMap<K, V> {
         self.keys.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.keys.is_empty()
+    }
+
     pub fn clear(&mut self) {
         self.keys.clear();
         self.values.clear();
@@ -134,10 +144,6 @@ impl<K, V> IndexMap<K, V> {
     pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
         self.keys.iter().zip(self.values.iter())
     }
-    pub fn into_iter(self) -> impl Iterator<Item = (K, V)> {
-        self.keys.into_iter().zip(self.values.into_iter())
-    }
-
     pub fn at(&self, index: usize) -> (&K, &V) {
         (&self.keys[index], &self.values[index])
     }
@@ -157,6 +163,14 @@ impl<K, V> IndexMap<K, V> {
 
     pub fn iter_values(&self) -> impl DoubleEndedIterator + ExactSizeIterator<Item = &V> {
         self.values.iter()
+    }
+}
+
+impl<K, V> IntoIterator for IndexMap<K, V> {
+    type Item = (K, V);
+    type IntoIter = std::iter::Zip<std::vec::IntoIter<K>, std::vec::IntoIter<V>>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.keys.into_iter().zip(self.values)
     }
 }
 
@@ -257,7 +271,7 @@ impl<K: Eq + hash::Hash> IndexSet<K> {
     fn get_index_ref(&self, key: &K) -> Option<&NonMaxUsize> {
         let hash = self.random_state.hash_one(key);
         self.table.find(hash, |i| {
-            K::eq(&key, unsafe { self.keys.get_unchecked(i.get()) })
+            K::eq(key, unsafe { self.keys.get_unchecked(i.get()) })
         })
     }
 
@@ -309,7 +323,7 @@ impl<K: Eq + hash::Hash, V> IndexMap<K, V> {
     fn get_index_ref(&self, key: &K) -> Option<&NonMaxUsize> {
         let hash = self.random_state.hash_one(key);
         self.table.find(hash, |i| {
-            K::eq(&key, unsafe { self.keys.get_unchecked(i.get()) })
+            K::eq(key, unsafe { self.keys.get_unchecked(i.get()) })
         })
     }
 
@@ -376,7 +390,7 @@ impl<K: Eq + hash::Hash, V> Index<&K> for IndexMap<K, V> {
 }
 impl<K: Eq + hash::Hash, V> IndexMut<&K> for IndexMap<K, V> {
     fn index_mut(&mut self, index: &K) -> &mut Self::Output {
-        self.get_mut(&index).expect("index failed")
+        self.get_mut(index).expect("index failed")
     }
 }
 impl<K: Eq + hash::Hash + Copy, V> Index<K> for IndexMap<K, V> {

@@ -16,17 +16,12 @@ pub fn tv_concat(
     let rbytes = rhs_size.div_ceil(8);
     let dbytes = (lhs_size + rhs_size).div_ceil(8);
 
-    for i in 0..rbytes {
-        dst[i] = rhs[i];
-    }
-
+    dst[..rbytes].copy_from_slice(rhs);
     let roff = rhs_size % 8;
 
     // Fast path: left side is empty or right side is aligned.
     if roff == 0 {
-        for i in 0..lbytes {
-            dst[rbytes + i] = lhs[i];
-        }
+        dst[rbytes..].copy_from_slice(lhs);
         return;
     }
 
@@ -58,17 +53,13 @@ pub fn tv_l_concat(
     let rwords = rhs_size.div_ceil(64);
     let dwords = (lhs_size + rhs_size).div_ceil(64);
 
-    for i in 0..rwords {
-        dst[i] = rhs[i];
-    }
+    dst[..rwords].copy_from_slice(rhs);
 
     let roff = rhs_size % 64;
 
     // Fast path: left side is empty or right side is aligned.
     if roff == 0 {
-        for i in 0..lwords {
-            dst[rwords + i] = lhs[i];
-        }
+        dst[rwords..].copy_from_slice(lhs);
         return;
     }
 

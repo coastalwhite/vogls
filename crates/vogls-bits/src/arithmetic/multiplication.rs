@@ -1,24 +1,10 @@
 use crate::VectorSize;
 use crate::arithmetic::{fv_contains_special, fv_set_no_special};
-use crate::load::load_partial_u64;
-use crate::store::store_partial_u64;
-
-use super::fv_ltu32_arith_op;
-
-pub fn tv_ltu64_multiplication(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: VectorSize) {
-    assert!(size.get() <= 64);
-    let l = load_partial_u64(&lhs, size);
-    let r = load_partial_u64(&rhs, size);
-    let out = l.wrapping_mul(r);
-    store_partial_u64(dst, out, size);
-}
-pub fn fv_ltu32_multiplication(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: VectorSize) {
-    fv_ltu32_arith_op(dst, lhs, rhs, size, |l, r| Some(l.wrapping_mul(r)));
-}
+use crate::util::last_word_mask;
 
 /// Two-value logic arbitrary precision multiplication.
 pub fn tv_multiplication(dst: &mut [u64], lhs: &[u64], rhs: &[u64], size: VectorSize) {
-    assert!(dst.len() > 0 && dst.len() == lhs.len() && dst.len() == rhs.len());
+    assert!(!dst.is_empty() && dst.len() == lhs.len() && dst.len() == rhs.len());
     dst.fill(0);
 
     // @Performance. This can probably be written in a better way.
@@ -44,14 +30,12 @@ pub fn tv_multiplication(dst: &mut [u64], lhs: &[u64], rhs: &[u64], size: Vector
             }
         }
     }
-    if size.get() % 64 != 0 {
-        *dst.last_mut().unwrap() &= (1u64 << (size.get() % 64)).wrapping_sub(1);
-    }
+    *dst.last_mut().unwrap() &= last_word_mask(size);
 }
 /// Four-value logic arbitrary precision multiplication.
 pub fn fv_multiplication(dst: &mut [u64], lhs: &[u64], rhs: &[u64], size: VectorSize) {
     assert!(
-        dst.len() > 0
+        !dst.is_empty()
             && dst.len() == lhs.len()
             && dst.len() == rhs.len()
             && dst.len() == 2 * size.get().div_ceil(64) as usize

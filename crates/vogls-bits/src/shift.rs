@@ -1,5 +1,3 @@
-use std::cell::Cell;
-
 use crate::VectorSize;
 use crate::arithmetic::{fv_pack_u64, fv_unpack_u64};
 use crate::load::load_partial_u64;
@@ -31,14 +29,6 @@ pub fn tv_s_arithmetic_shift_right(dst: &mut [u8], src: &[u8], shift: u32, size:
 
 pub fn tv_l_logical_shift_left(dst: &mut [u64], src: &[u64], shift: u32, size: VectorSize) {
     tv_l_logical_shift_left_with(dst, src, shift, size, false);
-}
-pub fn tv_cell_logical_shift_left(
-    dst: &[Cell<u64>],
-    src: &[Cell<u64>],
-    shift: u32,
-    size: VectorSize,
-) {
-    tv_cell_logical_shift_left_with(dst, src, shift, size, false);
 }
 pub fn tv_l_logical_shift_left_with(
     dst: &mut [u64],
@@ -79,61 +69,8 @@ pub fn tv_l_logical_shift_left_with(
         dst[nwords - 1] &= (1u64 << (size.get() % 64)) - 1;
     }
 }
-pub fn tv_cell_logical_shift_left_with(
-    dst: &[Cell<u64>],
-    src: &[Cell<u64>],
-    shift: u32,
-    size: VectorSize,
-    shiftin_value: bool,
-) {
-    let nwords = size.get().div_ceil(64) as usize;
-    if shift == 0 {
-        dst[..nwords]
-            .iter()
-            .zip(&src[..nwords])
-            .for_each(|(d, s)| d.set(s.get()));
-        return;
-    }
-
-    let shiftin_mask = u64::from(!shiftin_value).wrapping_sub(1);
-    if shift >= size.get() {
-        dst.iter().for_each(|v| v.set(shiftin_mask));
-        if size.get() % 64 != 0 {
-            dst[nwords - 1].update(|v| v & (1u64 << (size.get() % 64)) - 1);
-        }
-        return;
-    }
-
-    let shift = shift as usize;
-    let soff = shift % 64;
-    if soff == 0 {
-        dst[..shift / 64].iter().for_each(|v| v.set(shiftin_mask));
-        dst[shift / 64..]
-            .iter()
-            .zip(&src[..nwords - shift / 64])
-            .for_each(|(d, s)| d.set(s.get()));
-    } else {
-        let swords = shift.div_ceil(64);
-        dst[..swords - 1].iter().for_each(|v| v.set(shiftin_mask));
-        dst[swords - 1].set((src[0].get() << soff) | (shiftin_mask >> (64 - soff)));
-        for i in 0..nwords - swords {
-            dst[i + swords].set((src[i + 1].get() << soff) | (src[i].get() >> (64 - soff)));
-        }
-    }
-    if size.get() % 64 != 0 {
-        dst[nwords - 1].update(|v| v & (1u64 << (size.get() % 64)) - 1);
-    }
-}
 pub fn tv_l_logical_shift_right(dst: &mut [u64], src: &[u64], shift: u32, size: VectorSize) {
     tv_l_logical_shift_right_with(dst, src, shift, size, false);
-}
-pub fn tv_cell_logical_shift_right(
-    dst: &[Cell<u64>],
-    src: &[Cell<u64>],
-    shift: u32,
-    size: VectorSize,
-) {
-    tv_cell_logical_shift_right_with(dst, src, shift, size, false);
 }
 pub fn tv_l_logical_shift_right_with(
     dst: &mut [u64],
@@ -188,84 +125,10 @@ pub fn tv_l_logical_shift_right_with(
         dst[nwords - 1] &= (1u64 << (size.get() % 64)) - 1;
     }
 }
-pub fn tv_cell_logical_shift_right_with(
-    dst: &[Cell<u64>],
-    src: &[Cell<u64>],
-    shift: u32,
-    size: VectorSize,
-    shiftin_value: bool,
-) {
-    let shiftin_mask = u64::from(!shiftin_value).wrapping_sub(1);
-    let nwords = size.get().div_ceil(64) as usize;
-    if shift == 0 {
-        dst[..nwords]
-            .iter()
-            .zip(&src[..nwords])
-            .for_each(|(d, s)| d.set(s.get()));
-        return;
-    }
-    if shift >= size.get() {
-        dst.iter().for_each(|v| v.set(shiftin_mask));
-        if size.get() % 64 != 0 {
-            dst[nwords - 1].update(|v| v & (1u64 << (size.get() % 64)) - 1);
-        }
-        return;
-    }
-
-    //       >> 54                      >> 68                      >> 129
-    // [     [                          [                          [
-    // I0    (I1 << 8) | (I0 >> 54)     (I2 << 60) | (I1 >> 4)     (I3 << 63) | (I2 >> 1)
-    // I1    (I2 << 8) | (I1 >> 54)     (I3 << 60) | (I2 >> 4)     (SM << 63) | (I3 >> 1)
-    // I2    (I3 << 8) | (I2 >> 54)     (SM << 60) | (I3 >> 4)     (SM << 63) | (SM >> 1)
-    // I3    (SM << 8) | (I3 >> 54)      SM                         SM
-    // ]     ]                          ]                          ]
-
-    let shift = shift as usize;
-    let swords = shift.div_ceil(64);
-    let soff = shift % 64;
-    if soff == 0 {
-        dst[..nwords - swords]
-            .iter()
-            .zip(&src[swords..])
-            .for_each(|(d, s)| d.set(s.get()));
-        dst[nwords - swords..]
-            .iter()
-            .for_each(|v| v.set(shiftin_mask));
-    } else {
-        for i in 0..nwords - swords {
-            dst[i]
-                .set((src[i + swords].get() << (64 - soff)) | (src[i + swords - 1].get() >> soff));
-        }
-        dst[nwords - swords].set((shiftin_mask << (64 - soff)) | (src[nwords - 1].get() >> soff));
-        dst[nwords - swords + 1..]
-            .iter()
-            .for_each(|v| v.set(shiftin_mask));
-    }
-    if size.get() % 64 != 0 {
-        let mask = shiftin_mask << (size.get() % 64);
-        if shiftin_value {
-            dst[nwords - shift / 64 - 1].update(|v| v | (mask >> soff));
-            if soff != 0 && nwords >= shift / 64 + 2 {
-                dst[nwords - shift / 64 - 2].update(|v| v | (mask << (64 - soff)));
-            }
-        }
-        dst[nwords - 1].update(|v| v & ((1u64 << (size.get() % 64)) - 1));
-    }
-}
 pub fn tv_l_arithmetic_shift_right(dst: &mut [u64], src: &[u64], shift: u32, size: VectorSize) {
     let msb_idx = (size.get() - 1) as usize;
     let msb_val = (src[msb_idx / 64] >> (msb_idx % 64)) & 1 != 0;
     tv_l_logical_shift_right_with(dst, src, shift, size, msb_val);
-}
-pub fn tv_cell_arithmetic_shift_right(
-    dst: &[Cell<u64>],
-    src: &[Cell<u64>],
-    shift: u32,
-    size: VectorSize,
-) {
-    let msb_idx = (size.get() - 1) as usize;
-    let msb_val = (src[msb_idx / 64].get() >> (msb_idx % 64)) & 1 != 0;
-    tv_cell_logical_shift_right_with(dst, src, shift, size, msb_val);
 }
 
 pub fn fv_s_logical_shift_left(dst: &mut [u8], src: &[u8], shift: u32, size: VectorSize) {
@@ -355,40 +218,6 @@ pub fn fv_l_arithmetic_shift_right(dst: &mut [u64], src: &[u64], shift: u32, siz
     let msb_val = (src[nwords + msb_idx / 64] >> (msb_idx % 64)) & 1 != 0;
     tv_l_logical_shift_right_with(&mut dst[..nwords], &src[..nwords], shift, size, msb_spc);
     tv_l_logical_shift_right_with(&mut dst[nwords..], &src[nwords..], shift, size, msb_val);
-}
-
-pub fn fv_cell_logical_shift_left(
-    dst: &[Cell<u64>],
-    src: &[Cell<u64>],
-    shift: u32,
-    size: VectorSize,
-) {
-    let nwords = dst.len() / 2;
-    tv_cell_logical_shift_left_with(&dst[..nwords], &src[..nwords], shift, size, true);
-    tv_cell_logical_shift_left(&dst[nwords..], &src[nwords..], shift, size);
-}
-pub fn fv_cell_logical_shift_right(
-    dst: &[Cell<u64>],
-    src: &[Cell<u64>],
-    shift: u32,
-    size: VectorSize,
-) {
-    let nwords = dst.len() / 2;
-    tv_cell_logical_shift_right_with(&dst[..nwords], &src[..nwords], shift, size, true);
-    tv_cell_logical_shift_right(&dst[nwords..], &src[nwords..], shift, size);
-}
-pub fn fv_cell_arithmetic_shift_right(
-    dst: &[Cell<u64>],
-    src: &[Cell<u64>],
-    shift: u32,
-    size: VectorSize,
-) {
-    let nwords = dst.len() / 2;
-    let msb_idx = (size.get() - 1) as usize;
-    let msb_spc = (src[msb_idx / 64].get() >> (msb_idx % 64)) & 1 != 0;
-    let msb_val = (src[nwords + msb_idx / 64].get() >> (msb_idx % 64)) & 1 != 0;
-    tv_cell_logical_shift_right_with(&dst[..nwords], &src[..nwords], shift, size, msb_spc);
-    tv_cell_logical_shift_right_with(&dst[nwords..], &src[nwords..], shift, size, msb_val);
 }
 
 #[cfg(test)]

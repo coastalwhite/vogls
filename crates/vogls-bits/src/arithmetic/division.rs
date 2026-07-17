@@ -1,32 +1,10 @@
 use std::cmp::Ordering;
 
 use crate::VectorSize;
-use crate::arithmetic::{fv_contains_special, fv_ltu32_arith_op, fv_set_no_special};
+use crate::arithmetic::{fv_contains_special, fv_set_no_special};
 use crate::comparison::tv_gtu64_unsigned_leq;
 use crate::leading_trailing::tv_leading_zeros;
-use crate::load::load_partial_u64;
-use crate::store::store_partial_u64;
-
-pub fn tv_ltu64_division(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: VectorSize) {
-    assert!(size.get() <= 64);
-    let l = load_partial_u64(&lhs, size);
-    let r = load_partial_u64(&rhs, size);
-    let out = l.checked_div(r).unwrap_or(0); // Division by zero, returns 0
-    store_partial_u64(dst, out, size);
-}
-pub fn tv_ltu64_modulus(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: VectorSize) {
-    assert!(size.get() <= 64);
-    let l = load_partial_u64(&lhs, size);
-    let r = load_partial_u64(&rhs, size);
-    let out = l.checked_rem(r).unwrap_or(0); // Division by zero, returns 0
-    store_partial_u64(dst, out, size);
-}
-pub fn fv_ltu32_division(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: VectorSize) {
-    fv_ltu32_arith_op(dst, lhs, rhs, size, |l, r| l.checked_div(r));
-}
-pub fn fv_ltu32_modulus(dst: &mut [u8], lhs: &[u8], rhs: &[u8], size: VectorSize) {
-    fv_ltu32_arith_op(dst, lhs, rhs, size, |l, r| l.checked_rem(r));
-}
+use crate::util::last_word_mask;
 
 /// Two-value logic arbitary precision division.
 pub fn tv_division(
@@ -37,7 +15,7 @@ pub fn tv_division(
     size: VectorSize,
 ) {
     assert!(
-        quotient.len() > 0
+        !quotient.is_empty()
             && quotient.len() == modulus.len()
             && quotient.len() == numerator.len()
             && quotient.len() == denumerator.len()
@@ -85,7 +63,7 @@ pub fn fv_division(
     size: VectorSize,
 ) {
     assert!(
-        quotient.len() > 0
+        !quotient.is_empty()
             && quotient.len() == modulus.len()
             && quotient.len() == numerator.len()
             && quotient.len() == denumerator.len()
@@ -113,22 +91,22 @@ pub fn fv_division(
 
 /// Computes `dst_lhs -= rhs << offset`.
 pub fn tv_lsl_mut_sub(dst_lhs: &mut [u64], rhs: &[u64], offset: u32, size: VectorSize) {
-    assert!(dst_lhs.len() > 0 && dst_lhs.len() == rhs.len());
+    assert!(!dst_lhs.is_empty() && dst_lhs.len() == rhs.len());
     let nwords = dst_lhs.len();
     let mut carry_in = true;
     let soff = offset % 64;
     if soff == 0 {
         let swords = offset as usize / 64;
-        for i in 0..swords {
-            (dst_lhs[i], carry_in) = dst_lhs[i].carrying_add(!0u64, carry_in);
+        for v in dst_lhs.iter_mut().take(swords) {
+            (*v, carry_in) = v.carrying_add(!0u64, carry_in);
         }
         for i in 0..nwords - swords {
             (dst_lhs[i + swords], carry_in) = dst_lhs[i + swords].carrying_add(!rhs[i], carry_in);
         }
     } else {
         let swords = offset.div_ceil(64) as usize;
-        for i in 0..swords - 1 {
-            (dst_lhs[i], carry_in) = dst_lhs[i].carrying_add(!0u64, carry_in);
+        for v in dst_lhs.iter_mut().take(swords - 1) {
+            (*v, carry_in) = v.carrying_add(!0u64, carry_in);
         }
         (dst_lhs[swords - 1], carry_in) =
             dst_lhs[swords - 1].carrying_add(!(rhs[0] << soff), carry_in);
@@ -137,9 +115,7 @@ pub fn tv_lsl_mut_sub(dst_lhs: &mut [u64], rhs: &[u64], offset: u32, size: Vecto
             (dst_lhs[i + swords], carry_in) = dst_lhs[i + swords].carrying_add(!value, carry_in);
         }
     }
-    if size.get() % 64 != 0 {
-        *dst_lhs.last_mut().unwrap() &= (1u64 << (size.get() % 64)).wrapping_sub(1);
-    }
+    *dst_lhs.last_mut().unwrap() &= last_word_mask(size);
 }
 
 /// Computes `(lhs << shift) <= rhs`.
@@ -163,9 +139,7 @@ pub fn tv_lsl_unsigned_leq(lhs: &[u64], shift: u32, rhs: &[u64], size: VectorSiz
     let swords = shift.div_ceil(64);
     if soff == 0 {
         let mut l = lhs[nwords - swords - 1];
-        if size.get() % 64 != 0 {
-            l &= (1u64 << (size.get() % 64)).wrapping_sub(1);
-        }
+        l &= last_word_mask(size);
         let r = rhs[nwords - 1];
         match l.cmp(&r) {
             Ordering::Less => return true,

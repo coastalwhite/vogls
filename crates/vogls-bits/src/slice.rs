@@ -1,8 +1,6 @@
-use std::cell::Cell;
-
 use crate::VectorSize;
-use crate::arithmetic::{fv_cell_set_no_special, fv_set_no_special};
-use crate::util::CellSlice;
+use crate::arithmetic::fv_set_no_special;
+use crate::util::last_word_mask;
 
 pub fn tv_s_slice(src: u64, offset: u32, dst_size: VectorSize, src_size: VectorSize) -> (u64, u64) {
     assert!(dst_size <= src_size);
@@ -55,17 +53,13 @@ pub fn tv_part_ll_slice(
     let dst_words = dst.len();
     if offset == 0 {
         dst.copy_from_slice(&src[..dst_words]);
-        if dst_size.get() % 64 != 0 {
-            dst[dst.len() - 1] &= (1u64 << dst_size.get() % 64) - 1;
-        }
+        dst[dst.len() - 1] &= last_word_mask(dst_size);
         return;
     }
     let shiftin_mask = u64::from(!shiftin_value).wrapping_sub(1);
     if offset >= src_size.get() {
         dst.fill(shiftin_mask);
-        if dst_size.get() % 64 != 0 {
-            dst[dst.len() - 1] &= (1u64 << dst_size.get() % 64) - 1;
-        }
+        dst[dst.len() - 1] &= last_word_mask(dst_size);
         return;
     }
 
@@ -84,9 +78,7 @@ pub fn tv_part_ll_slice(
             dst[num_copy_words + 1..].fill(shiftin_mask);
         }
     }
-    if dst_size.get() % 64 != 0 {
-        dst[dst.len() - 1] &= (1u64 << (dst_size.get() % 64)) - 1;
-    }
+    dst[dst.len() - 1] &= last_word_mask(dst_size);
 }
 pub fn tv_ll_slice(
     dst: &mut [u64],
@@ -108,9 +100,7 @@ pub fn tv_ll_slice(
         } else {
             dst.copy_from_slice(&src[..dst_words]);
         }
-        if dst_size.get() % 64 != 0 {
-            dst[dst.len() - 1] &= (1u64 << dst_size.get() % 64) - 1;
-        }
+        dst[dst.len() - 1] &= last_word_mask(dst_size);
         return;
     }
     if offset >= src_size.get() {
@@ -249,109 +239,6 @@ pub fn fv_ll_slice(
         src_size,
         false,
     );
-}
-
-pub fn tv_part_cell_slice(
-    dst: &[Cell<u64>],
-    src: &[Cell<u64>],
-    offset: u32,
-    dst_size: VectorSize,
-    src_size: VectorSize,
-    shiftin_value: bool,
-) {
-    assert!(dst_size <= src_size);
-    let dst_words = dst.len();
-    if offset == 0 {
-        dst.copy_from_slice(&src[..dst_words]);
-        if dst_size.get() % 64 != 0 {
-            dst[dst.len() - 1].update(|v| v & (1u64 << dst_size.get() % 64) - 1);
-        }
-        return;
-    }
-    let shiftin_mask = u64::from(!shiftin_value).wrapping_sub(1);
-    if offset >= src_size.get() {
-        dst.fill(shiftin_mask);
-        if dst_size.get() % 64 != 0 {
-            dst[dst.len() - 1].update(|v| v & (1u64 << dst_size.get() % 64) - 1);
-        }
-        return;
-    }
-
-    let swords = offset.div_ceil(64) as usize;
-    let soff = offset % 64;
-    let num_copy_words = (src.len() - swords).min(dst.len());
-    if soff == 0 {
-        dst[..num_copy_words].copy_from_slice(&src[swords..][..num_copy_words]);
-        dst[num_copy_words..].fill(shiftin_mask);
-    } else {
-        for i in 0..num_copy_words {
-            dst[i]
-                .set((src[i + swords].get() << (64 - soff)) | (src[i + swords - 1].get() >> soff));
-        }
-        if num_copy_words < dst.len() {
-            dst[num_copy_words]
-                .set((shiftin_mask << (64 - soff)) | (src[src.len() - 1].get() >> soff));
-            dst[num_copy_words + 1..].fill(shiftin_mask);
-        }
-    }
-    if dst_size.get() % 64 != 0 {
-        dst[dst.len() - 1].update(|v| v & (1u64 << (dst_size.get() % 64)) - 1);
-    }
-}
-pub fn tv_cell_slice(
-    dst: &[Cell<u64>],
-    src: &[Cell<u64>],
-    offset: u32,
-    dst_size: VectorSize,
-    src_size: VectorSize,
-    fill_with_x: bool,
-) {
-    assert!(dst_size <= src_size);
-    let mut dst_words = dst.len();
-    if fill_with_x {
-        dst_words /= 2;
-    }
-    if offset == 0 {
-        if fill_with_x {
-            fv_cell_set_no_special(dst, dst_size);
-            dst[dst_words..].copy_from_slice(&src[..dst_words]);
-        } else {
-            dst.copy_from_slice(&src[..dst_words]);
-        }
-        if dst_size.get() % 64 != 0 {
-            dst[dst.len() - 1].update(|v| v & (1u64 << dst_size.get() % 64) - 1);
-        }
-        return;
-    }
-    if offset >= src_size.get() {
-        dst.fill(0);
-        return;
-    }
-
-    // Fill valid bits.
-    if fill_with_x {
-        let num_x_bits = offset.saturating_sub(src_size.get() - dst_size.get());
-        if num_x_bits == 0 {
-            fv_cell_set_no_special(dst, dst_size);
-        } else {
-            let num_valid_bits = dst_size.get() - num_x_bits;
-            dst[..(num_valid_bits / 64) as usize].fill(u64::MAX);
-            if num_valid_bits % 64 != 0 {
-                dst[(num_valid_bits / 64) as usize].set((1u64 << (num_valid_bits % 64)) - 1);
-            }
-            dst[(num_valid_bits / 64) as usize + usize::from(num_valid_bits % 64 != 0)..].fill(0);
-        }
-        tv_part_cell_slice(
-            &dst[dst_words..],
-            src,
-            offset,
-            dst_size,
-            src_size,
-            false,
-        );
-    } else {
-        tv_part_cell_slice(dst, src, offset, dst_size, src_size, false);
-    }
 }
 
 pub fn tv_s_truncate(dst: &mut [u8], src: &[u8], out_size: VectorSize) {

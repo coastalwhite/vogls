@@ -3,25 +3,17 @@ use std::cell::Cell;
 use crate::VectorSize;
 use crate::load::load_partial_u64;
 use crate::store::store_partial_u64;
-use crate::util::mask_size_0to63;
+use crate::util::last_word_mask;
 
 mod add_sub;
 mod division;
 mod multiplication;
 mod power;
 
-pub use add_sub::{
-    fv_addition, fv_ltu32_addition, fv_ltu32_subtraction, fv_subtraction, tv_addition,
-    tv_ltu64_addition, tv_ltu64_subtraction, tv_subtraction,
-};
-pub use division::{
-    fv_division, fv_ltu32_division, fv_ltu32_modulus, tv_division, tv_ltu64_division,
-    tv_ltu64_modulus,
-};
-pub use multiplication::{
-    fv_ltu32_multiplication, fv_multiplication, tv_ltu64_multiplication, tv_multiplication,
-};
-pub use power::{fv_ltu32_power, fv_power, tv_ltu64_power, tv_power};
+pub use add_sub::{fv_addition, fv_subtraction, tv_addition, tv_subtraction};
+pub use division::{fv_division, tv_division};
+pub use multiplication::{fv_multiplication, tv_multiplication};
+pub use power::{fv_power, tv_power};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(u8)]
@@ -205,9 +197,7 @@ pub fn tv_bin_u64_cell_bitwise_mask_last_op(
         dst[i].set(op(lhs[i].get(), rhs[i].get()));
     }
     if let Some(d) = dst.last() {
-        if size.get() % 64 != 0 {
-            d.set(d.get() & (1u64 << (size.get() % 64)).wrapping_sub(1));
-        }
+        d.set(d.get() & last_word_mask(size));
     }
 }
 
@@ -293,11 +283,7 @@ pub fn fv_bin_u64_cell_bitwise_op_output_tv(
         ));
     }
 
-    if size.get() % 64 != 0 {
-        dst.last()
-            .unwrap()
-            .update(|v| mask_size_0to63(size.get() % 64) & v);
-    }
+    dst.last().unwrap().update(|v| v & last_word_mask(size));
 }
 
 pub fn fv_s_select_bit(src: &[u8], idx: u32, size: VectorSize) -> FvLogicValue {
@@ -477,65 +463,38 @@ pub fn fv_bitwise_xnor_elem(xspc: u64, x: u64, yspc: u64, y: u64) -> (u64, u64) 
 }
 
 pub fn fv_contains_special(src: &[u64], size: VectorSize) -> bool {
-    assert!(src.len() > 0 && src.len() == 2 * (size.get().div_ceil(64) as usize));
+    assert!(!src.is_empty() && src.len() == 2 * (size.get().div_ceil(64) as usize));
     let nwords = src.len() / 2;
-    for i in 0..nwords - 1 {
-        if !src[i] != 0 {
+    for v in src.iter().take(nwords - 1) {
+        if !*v != 0 {
             return true;
         }
     }
-    let last_mask = if size.get() % 64 == 0 {
-        u64::MAX
-    } else {
-        (1u64 << size.get() % 64) - 1
-    };
+    let last_mask = last_word_mask(size);
     src[nwords - 1] & last_mask != last_mask
-}
-pub fn fv_cell_contains_special(src: &[Cell<u64>], size: VectorSize) -> bool {
-    assert!(src.len() > 0 && src.len() == 2 * (size.get().div_ceil(64) as usize));
-    let nwords = src.len() / 2;
-    for i in 0..nwords - 1 {
-        if !src[i].get() != 0 {
-            return true;
-        }
-    }
-    let last_mask = if size.get() % 64 == 0 {
-        u64::MAX
-    } else {
-        (1u64 << size.get() % 64) - 1
-    };
-    src[nwords - 1].get() & last_mask != last_mask
 }
 
 pub fn fv_contains_unknown(src: &[u64], size: VectorSize) -> bool {
-    assert!(src.len() > 0 && src.len() == 2 * (size.get().div_ceil(64) as usize));
+    assert!(!src.is_empty() && src.len() == 2 * (size.get().div_ceil(64) as usize));
     let nwords = src.len() / 2;
     for i in 0..nwords - 1 {
         if !src[i] & !src[nwords + i] != 0 {
             return true;
         }
     }
-    let last_mask = if size.get() % 64 == 0 {
-        u64::MAX
-    } else {
-        (1u64 << size.get() % 64) - 1
-    };
+    let last_mask = last_word_mask(size);
     !src[nwords - 1] & !src[2 * nwords - 1] & last_mask != 0
 }
 
 pub fn fv_contains_high_impedance(src: &[u64], size: VectorSize) -> bool {
-    assert!(src.len() > 0 && src.len() == 2 * (size.get().div_ceil(64) as usize));
+    assert!(!src.is_empty() && src.len() == 2 * (size.get().div_ceil(64) as usize));
     let nwords = src.len() / 2;
     for i in 0..nwords - 1 {
         if !src[i] & src[nwords + i] != 0 {
             return true;
         }
     }
-    let last_mask = if size.get() % 64 == 0 {
-        u64::MAX
-    } else {
-        (1u64 << size.get() % 64) - 1
-    };
+    let last_mask = last_word_mask(size);
     !src[nwords - 1] & src[2 * nwords - 1] & last_mask != 0
 }
 
@@ -555,15 +514,6 @@ pub fn fv_pack_u64(spc: u64, value: u64, size: VectorSize) -> u64 {
     (value << size.get()) | spc
 }
 
-pub fn fv_leu32_bitwise_inv(dst: &mut [u8], src: &[u8], size: VectorSize) {
-    let dsize = VectorSize::new(size.get() * 2).unwrap();
-    let src = load_partial_u64(&src, dsize);
-    let (spc, value) = fv_unpack_u64(src, size);
-    let (spc, value) = fv_bitwise_inv_elem(spc, value);
-    let result = fv_pack_u64(spc, value, size);
-    store_partial_u64(dst, result, dsize);
-}
-
 pub fn fv_gtu32_bitwise_inv(dst: &mut [u64], src: &[u64], size: VectorSize) {
     assert!(dst.len() == src.len() && dst.len() == 2 * size.get().div_ceil(64) as usize);
     let nwords = dst.len() / 2;
@@ -578,56 +528,7 @@ pub fn fv_set_no_special(slice: &mut [u64], size: VectorSize) {
     assert!(slice.len() > 0 && slice.len() == 2 * (size.get().div_ceil(64) as usize));
     let nwords = slice.len() / 2;
     slice[..nwords].fill(u64::MAX);
-    if size.get() % 64 != 0 {
-        slice[nwords - 1] &= (1u64 << size.get() % 64) - 1;
-    }
-}
-pub fn fv_cell_set_no_special(slice: &[Cell<u64>], size: VectorSize) {
-    assert!(slice.len() > 0 && slice.len() == 2 * (size.get().div_ceil(64) as usize));
-    let nwords = slice.len() / 2;
-    slice[..nwords].iter().for_each(|v| v.set(u64::MAX));
-    if size.get() % 64 != 0 {
-        slice[nwords - 1].update(|v| v & (1u64 << size.get() % 64) - 1);
-    }
-}
-
-#[inline(always)]
-pub fn fv_fixup_last_u64(v: u64, size: VectorSize) -> u64 {
-    debug_assert!(size.get() <= 32);
-    let mask = (1u64 << size.get()) - 1;
-    ((v & !mask) << (32 - size.get())) | (v & mask)
-}
-
-pub fn fv_ltu32_arith_op(
-    dst: &mut [u8],
-    lhs: &[u8],
-    rhs: &[u8],
-    size: VectorSize,
-    op: impl Fn(u64, u64) -> Option<u64>,
-) {
-    debug_assert!(
-        dst.len() > 0
-            && dst.len() == lhs.len()
-            && dst.len() == rhs.len()
-            && size.get() <= 32
-            && size.get().div_ceil(4) as usize == dst.len()
-    );
-    let dsize = VectorSize::new(size.get() * 2).unwrap();
-    let mask = (1u64 << size.get()) - 1;
-    let l = load_partial_u64(&lhs, dsize);
-    let r = load_partial_u64(&rhs, dsize);
-
-    // If has special values, return X.
-    if (l & mask) != mask || (r & mask) != mask {
-        dst.fill(0);
-        return;
-    }
-
-    let out = match op(l >> size.get(), r >> size.get()) {
-        None => 0u64,
-        Some(out) => mask | ((out & mask) << size.get()),
-    };
-    store_partial_u64(dst, out, dsize);
+    slice[nwords - 1] &= last_word_mask(size);
 }
 
 #[cfg(test)]

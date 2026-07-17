@@ -233,6 +233,7 @@ impl<'a> Consumable<'a> for Expr<'a> {
             };
 
             loop {
+                #[allow(clippy::never_loop)]
                 loop {
                     let Some(peeked) = tkw.get(tkw.offset) else {
                         break;

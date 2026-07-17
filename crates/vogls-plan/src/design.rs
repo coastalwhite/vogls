@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use vogls::design::{Arena, Design, Macro};
 use vogls::utils::{IndexMap, VgHashMap, VgHashSet, new_table_key};
-use vogls::{LogicMode, SignalHandle, VoglsPlugin};
+use vogls::{LogicMode, OptFlags, Optimizations, SignalHandle, VoglsPlugin};
 use vogls_trace::TracePlugin;
 
 use crate::CspAble;
@@ -158,12 +158,9 @@ impl ComputeNode for LazyDesign {
             plugins.push(Box::new(TracePlugin::default()) as Box<dyn VoglsPlugin>);
         }
         let mut design = design.lower(plugins).map_err(|_| ComputeError::Lowering)?;
-        design.optimize(vogls::ir::optimize::OptFlags {
-            opt_rounds: 2,
-            constant_propagation: true,
-            deadcode_elimination: true,
-            common_subexpr_elim: true,
-            peephole: true,
+        design.optimize(Optimizations {
+            rounds: 2,
+            flags: OptFlags::ALL,
         });
         let design = design.to_bytecode().map_err(|_| ComputeError::Bytecode)?;
         arena.reset();

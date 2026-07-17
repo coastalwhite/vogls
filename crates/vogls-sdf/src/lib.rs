@@ -468,6 +468,7 @@ impl<'a> Consume<'a> for Expression<'a> {
             };
 
             loop {
+                #[expect(clippy::never_loop)]
                 loop {
                     tkw.skip_whitespace();
                     let Some(c) = tkw.peek_char() else {

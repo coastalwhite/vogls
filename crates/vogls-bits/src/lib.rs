@@ -1236,7 +1236,7 @@ impl Bits {
 
     pub fn select_bit(&self, at: u32) -> bool {
         assert!(at < self.size().get());
-        (self.as_slice()[(at / 8) as usize] >> at % 8) & 1 != 0
+        (self.as_slice()[(at / 8) as usize] >> (at % 8)) & 1 != 0
     }
 
     pub fn slicex(&self, offset: u32, size: VectorSize) -> Self {

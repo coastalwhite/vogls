@@ -22,6 +22,11 @@ macro_rules! impl_non_max_int {
                 }
             }
 
+            /// Create a new value without getting that is not the maximum.
+            ///
+            /// # Safety
+            ///
+            /// The caller must guarantee that the value is not the maximum.
             #[inline(always)]
             pub const unsafe fn new_unchecked(value: $ty) -> Self {
                 Self(unsafe { <$non_zero_ty>::new_unchecked(value.wrapping_add(1)) })

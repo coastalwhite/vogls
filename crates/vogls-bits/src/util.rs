@@ -1,6 +1,8 @@
 use std::cell::Cell;
 use std::ops::Rem;
 
+use crate::VectorSize;
+
 pub fn saturating_rem<T: Default + Copy + Eq + Rem<T, Output = T>>(a: T, b: T) -> T {
     let rem = a.rem(b);
     if rem == T::default() { b } else { rem }
@@ -41,6 +43,9 @@ pub fn mask_size_1to64(size: u32) -> u64 {
     debug_assert!(size > 0);
     debug_assert!(size <= 64);
     u64::MAX.unbounded_shr(64u32.wrapping_sub(size))
+}
+pub fn last_word_mask(size: VectorSize) -> u64 {
+    mask_size_1to64(saturating_rem(size.get(), 64))
 }
 pub fn mask_size_0to63(size: u32) -> u64 {
     debug_assert!(size < 64);

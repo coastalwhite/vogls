@@ -192,9 +192,9 @@ pub fn parse_bits_octal(s: &str, size: VectorSize) -> Result<Bits, ()> {
             }
 
             let v = b - b'0';
-            value[i / 64] |= (v as u64) << i % 64;
+            value[i / 64] |= (v as u64) << (i % 64);
             if i % 64 >= 63 && 64 - i % 64 < size.get() as usize - i {
-                value[(i as usize / 64) + 1] |= (v as u64) >> (64 - i % 64);
+                value[(i as usize / 64) + 1] |= (v as u64) >> (64 - (i % 64));
             }
             i += 3;
         }

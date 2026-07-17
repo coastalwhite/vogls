@@ -1,57 +1,8 @@
-use std::cell::Cell;
-
 use crate::VectorSize;
 use crate::arithmetic::{fv_pack_u64, fv_unpack_u64};
 use crate::load::load_partial_u64;
 use crate::store::store_partial_u64;
-use crate::util::CellSlice;
-
-pub fn tv_cell_extend_with_p1(
-    dst: &[Cell<u64>],
-    src: &[Cell<u64>],
-    _dst_size: VectorSize,
-    src_size: VectorSize,
-    fill: bool,
-) {
-    let fill_mask = u64::from(!fill).wrapping_sub(1);
-    dst[..src.len()].copy_from_slice(src);
-    if src_size.get() % 64 != 0 {
-        dst[src.len() - 1].update(|v| v | (fill_mask << src_size.get() % 64));
-    };
-}
-
-pub fn tv_cell_extend_with_p2(
-    dst: &[Cell<u64>],
-    src: &[Cell<u64>],
-    dst_size: VectorSize,
-    _src_size: VectorSize,
-    fill: bool,
-) {
-    let fill_mask = u64::from(!fill).wrapping_sub(1);
-    dst[src.len()..].fill(fill_mask);
-    if dst_size.get() % 64 != 0 {
-        dst[dst.len() - 1].update(|v| v & ((1u64 << (dst_size.get() % 64)) - 1));
-    }
-}
-
-pub fn tv_cell_extend_with(
-    dst: &[Cell<u64>],
-    src: &[Cell<u64>],
-    dst_size: VectorSize,
-    src_size: VectorSize,
-    fill: bool,
-) {
-    let fill_mask = u64::from(!fill).wrapping_sub(1);
-    dst[..src.len()].copy_from_slice(src);
-    if src_size.get() % 64 != 0 {
-        dst[src.len() - 1].update(|v| v | (fill_mask << src_size.get() % 64));
-    };
-
-    dst[src.len()..].fill(fill_mask);
-    if dst_size.get() % 64 != 0 {
-        dst[dst.len() - 1].update(|v| v & ((1u64 << (dst_size.get() % 64)) - 1));
-    }
-}
+use crate::util::last_word_mask;
 
 pub fn tv_l_extend_with(
     dst: &mut [u64],
@@ -62,14 +13,12 @@ pub fn tv_l_extend_with(
 ) {
     let fill_mask = u64::from(!fill).wrapping_sub(1);
     dst[..src.len()].copy_from_slice(src);
-    if src_size.get() % 64 != 0 {
-        dst[src.len() - 1] |= fill_mask << src_size.get() % 64;
+    if src_size.get().is_multiple_of(64) {
+        dst[src.len() - 1] |= fill_mask << (src_size.get() % 64);
     };
 
     dst[src.len()..].fill(fill_mask);
-    if dst_size.get() % 64 != 0 {
-        dst[dst.len() - 1] &= (1u64 << (dst_size.get() % 64)) - 1;
-    }
+    dst[dst.len() - 1] &= last_word_mask(dst_size);
 }
 pub fn tv_l_zero_extend(dst: &mut [u64], src: &[u64], dst_size: VectorSize, src_size: VectorSize) {
     tv_l_extend_with(dst, src, dst_size, src_size, false)
@@ -78,24 +27,6 @@ pub fn tv_l_sign_extend(dst: &mut [u64], src: &[u64], dst_size: VectorSize, src_
     let shift = src_size.get() - 1;
     let sign = (src[(shift / 64) as usize] >> (shift % 64)) & 1 != 0;
     tv_l_extend_with(dst, src, dst_size, src_size, sign)
-}
-pub fn tv_cell_zero_extend(
-    dst: &[Cell<u64>],
-    src: &[Cell<u64>],
-    dst_size: VectorSize,
-    src_size: VectorSize,
-) {
-    tv_cell_extend_with(dst, src, dst_size, src_size, false)
-}
-pub fn tv_cell_sign_extend(
-    dst: &[Cell<u64>],
-    src: &[Cell<u64>],
-    dst_size: VectorSize,
-    src_size: VectorSize,
-) {
-    let shift = src_size.get() - 1;
-    let sign = (src[(shift / 64) as usize].get() >> (shift % 64)) & 1 != 0;
-    tv_cell_extend_with(dst, src, dst_size, src_size, sign)
 }
 pub fn fv_l_zero_extend(dst: &mut [u64], src: &[u64], dst_size: VectorSize, src_size: VectorSize) {
     let dwords = dst.len() / 2;
@@ -114,55 +45,6 @@ pub fn fv_l_sign_extend(dst: &mut [u64], src: &[u64], dst_size: VectorSize, src_
     let swords = src.len() / 2;
     tv_l_sign_extend(&mut dst[..dwords], &src[..swords], dst_size, src_size);
     tv_l_sign_extend(&mut dst[dwords..], &src[swords..], dst_size, src_size);
-}
-
-pub fn fv_cell_zero_extend(
-    dst: &[Cell<u64>],
-    src: &[Cell<u64>],
-    dst_size: VectorSize,
-    src_size: VectorSize,
-) {
-    let dwords = dst.len() / 2;
-    let swords = src.len() / 2;
-    tv_cell_extend_with_p1(&dst[..dwords], &src[..swords], dst_size, src_size, true);
-    tv_cell_extend_with_p1(&dst[dwords..], &src[swords..], dst_size, src_size, false);
-    tv_cell_extend_with_p2(&dst[..dwords], &src[..swords], dst_size, src_size, true);
-    tv_cell_extend_with_p2(&dst[dwords..], &src[swords..], dst_size, src_size, false);
-}
-
-pub fn fv_cell_sign_extend(
-    dst: &[Cell<u64>],
-    src: &[Cell<u64>],
-    dst_size: VectorSize,
-    src_size: VectorSize,
-) {
-    let dwords = dst.len() / 2;
-    let swords = src.len() / 2;
-    let shift = src_size.get() - 1;
-    let spc_sign = (src[..swords][(shift / 64) as usize].get() >> (shift % 64)) & 1 != 0;
-    let val_sign = (src[swords..][(shift / 64) as usize].get() >> (shift % 64)) & 1 != 0;
-    tv_cell_extend_with_p1(&dst[..dwords], &src[..swords], dst_size, src_size, spc_sign);
-    tv_cell_extend_with_p1(&dst[dwords..], &src[swords..], dst_size, src_size, val_sign);
-    tv_cell_extend_with_p2(&dst[..dwords], &src[..swords], dst_size, src_size, spc_sign);
-    tv_cell_extend_with_p2(&dst[dwords..], &src[swords..], dst_size, src_size, val_sign);
-}
-
-pub fn tv_s_zero_extend(dst: &mut [u8], src: &[u8], _dst_size: VectorSize, _src_size: VectorSize) {
-    dst.fill(0);
-    dst[..src.len()].copy_from_slice(src);
-}
-pub fn tv_s_sign_extend(dst: &mut [u8], src: &[u8], dst_size: VectorSize, src_size: VectorSize) {
-    let sign_idx = src_size.get() - 1;
-    let sign = (src[(sign_idx / 8) as usize] >> (sign_idx % 8)) & 1 != 0;
-    let mask = u8::from(!sign).wrapping_sub(1);
-    dst.fill(mask);
-    if dst_size.get() % 8 != 0 {
-        *dst.last_mut().unwrap() &= (1u8 << (dst_size.get() % 8)) - 1;
-    }
-    dst[..src.len()].copy_from_slice(src);
-    if src_size.get() % 8 != 0 {
-        dst[src.len() - 1] |= u8::from(!sign).wrapping_sub(1) << (src_size.get() % 8);
-    }
 }
 
 pub fn fv_w_zero_extend(

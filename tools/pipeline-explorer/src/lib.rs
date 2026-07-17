@@ -7,7 +7,10 @@ use trva::{Assembler, SectionPositions};
 use vogls::design::{Arena, Macro};
 use vogls::frontend::symbol_table::SymbolId;
 use vogls::ir::Mode;
-use vogls::{Bits, ElaboratedDesign, LogicMode, SignalHandle, SimulationIo, VectorSize};
+use vogls::{
+    Bits, ElaboratedDesign, LogicMode, OptFlags, Optimizations, SignalHandle, SimulationIo,
+    VectorSize,
+};
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::{JsError, JsValue};
 
@@ -128,12 +131,9 @@ pub fn get_neorv32_trace(assembly: &str, num_cycles: u32) -> Result<ReturnValue,
     let mut design = design
         .lower(Vec::new())
         .map_err(|_| TraceError::Build("failed to lower"))?;
-    design.optimize(vogls::ir::optimize::OptFlags {
-        opt_rounds: 2,
-        constant_propagation: true,
-        deadcode_elimination: true,
-        common_subexpr_elim: true,
-        peephole: true,
+    design.optimize(Optimizations {
+        rounds: 2,
+        flags: OptFlags::ALL,
     });
     let design = design
         .to_bytecode()
@@ -298,12 +298,9 @@ pub fn get_ibex_trace(
     let mut design = design
         .lower(Vec::new())
         .map_err(|_| TraceError::Build("failed to lower"))?;
-    design.optimize(vogls::ir::optimize::OptFlags {
-        opt_rounds: 2,
-        constant_propagation: true,
-        deadcode_elimination: true,
-        common_subexpr_elim: true,
-        peephole: true,
+    design.optimize(Optimizations {
+        rounds: 2,
+        flags: OptFlags::ALL,
     });
     let design = design
         .to_bytecode()
@@ -488,12 +485,9 @@ pub fn get_trace(
     let mut design = design
         .lower(Vec::new())
         .map_err(|_| TraceError::Build("failed to lower"))?;
-    design.optimize(vogls::ir::optimize::OptFlags {
-        opt_rounds: 2,
-        constant_propagation: true,
-        deadcode_elimination: true,
-        common_subexpr_elim: true,
-        peephole: true,
+    design.optimize(Optimizations {
+        rounds: 2,
+        flags: OptFlags::ALL,
     });
     let design = design
         .to_bytecode()

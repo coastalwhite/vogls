@@ -18,7 +18,7 @@ where
         let key = (self.to_key)(self.slice.first()?);
         Some(
             match self.slice[1..].iter().position(|v| (self.to_key)(v) != key) {
-                None => std::mem::replace(&mut self.slice, &[]),
+                None => std::mem::take(&mut self.slice),
                 Some(next) => {
                     let current;
                     (current, self.slice) = self.slice.split_at(next + 1);

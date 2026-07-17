@@ -139,7 +139,7 @@ impl<'a> fmt::Display for BitsDisplay<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut options = self.options.clone();
         options.incorperate_formatter_options(f);
-        fmt_bits(&self.bits, f, &options)
+        fmt_bits(self.bits, f, &options)
     }
 }
 impl<'a> fmt::Binary for BitsDisplay<'a> {
@@ -147,7 +147,7 @@ impl<'a> fmt::Binary for BitsDisplay<'a> {
         let mut options = self.options.clone();
         options.incorperate_formatter_options(f);
         options.base = BitsFormatBase::Binary;
-        fmt_bits(&self.bits, f, &options)
+        fmt_bits(self.bits, f, &options)
     }
 }
 impl<'a> fmt::Octal for BitsDisplay<'a> {
@@ -155,7 +155,7 @@ impl<'a> fmt::Octal for BitsDisplay<'a> {
         let mut options = self.options.clone();
         options.incorperate_formatter_options(f);
         options.base = BitsFormatBase::Octal;
-        fmt_bits(&self.bits, f, &options)
+        fmt_bits(self.bits, f, &options)
     }
 }
 impl<'a> fmt::LowerHex for BitsDisplay<'a> {
@@ -163,7 +163,7 @@ impl<'a> fmt::LowerHex for BitsDisplay<'a> {
         let mut options = self.options.clone();
         options.incorperate_formatter_options(f);
         options.base = BitsFormatBase::LowerHex;
-        fmt_bits(&self.bits, f, &options)
+        fmt_bits(self.bits, f, &options)
     }
 }
 impl<'a> fmt::UpperHex for BitsDisplay<'a> {
@@ -171,7 +171,7 @@ impl<'a> fmt::UpperHex for BitsDisplay<'a> {
         let mut options = self.options.clone();
         options.incorperate_formatter_options(f);
         options.base = BitsFormatBase::UpperHex;
-        fmt_bits(&self.bits, f, &options)
+        fmt_bits(self.bits, f, &options)
     }
 }
 
@@ -268,7 +268,7 @@ fn fmt_bits_binary(bits: &Bits, f: &mut impl fmt::Write, separator: Option<char>
                     f.write_char((b'0' + v as u8).into())?;
 
                     if let Some(separator) = separator
-                        && shift % 4 == 0
+                        && shift.is_multiple_of(4)
                         && shift != 0
                     {
                         f.write_char(separator)?;
@@ -291,7 +291,7 @@ fn fmt_bits_binary(bits: &Bits, f: &mut impl fmt::Write, separator: Option<char>
                     })?;
 
                     if let Some(separator) = separator
-                        && shift % 4 == 0
+                        && shift.is_multiple_of(4)
                         && shift != 0
                     {
                         f.write_char(separator)?;
@@ -432,7 +432,7 @@ fn fmt_bits_hex(
         match spc {
             None => {
                 while rem_size > 0 {
-                    let shift = if rem_size % 4 == 0 {
+                    let shift = if rem_size.is_multiple_of(4) {
                         rem_size - 4
                     } else {
                         rem_size - rem_size % 4
@@ -455,7 +455,7 @@ fn fmt_bits_hex(
             }
             Some(spc) => {
                 while rem_size > 0 {
-                    let shift = if rem_size % 4 == 0 {
+                    let shift = if rem_size.is_multiple_of(4) {
                         rem_size - 4
                     } else {
                         rem_size - rem_size % 4

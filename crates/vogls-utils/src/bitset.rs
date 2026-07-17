@@ -84,7 +84,7 @@ impl Bitset {
     }
 
     pub fn fill(&mut self, value: bool) {
-        if value == false {
+        if !value {
             self.data.fill(0u64);
         } else {
             self.data.fill(u64::MAX);
@@ -105,13 +105,13 @@ impl Bitset {
     pub fn true_idx_iter<'a>(&'a self) -> TrueIdxIter<'a> {
         TrueIdxIter {
             bitset: self,
-            word: self.data.get(0).copied().unwrap_or_default(),
+            word: self.data.first().copied().unwrap_or_default(),
             word_idx: 0,
         }
     }
 
     pub fn find_n_contiguous_zeros(&self, n: usize) -> Result<usize, usize> {
-        if self.len() == 0 {
+        if self.is_empty() {
             return Err(0);
         }
 
@@ -128,7 +128,7 @@ impl Bitset {
             prev = i;
         }
         if self.len() - prev > n {
-            return Ok(prev + 1);
+            Ok(prev + 1)
         } else {
             Err(prev + 1)
         }

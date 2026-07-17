@@ -454,13 +454,18 @@ pub fn lower_expr<'a>(
                         range_expression,
                         Some(BitSlice::PlusWidth(..) | BitSlice::MinusWidth(..))
                     ));
-                let symbol_key = try_resolve_hident(
+                let Ok(symbol_key) = try_resolve_hident(
                     scope,
                     &ctx.table,
                     &ctx.arenas,
                     ast_ident,
                     &mut mctx.diagnostics,
-                )?;
+                ) else {
+                    error = true;
+                    result_stack.truncate(end_result_stack_len);
+                    result_stack.push(None);
+                    continue;
+                };
                 let symbol = &ctx.table[symbol_key].content;
                 let (ty, dims, transform, var) = match &symbol {
                     VSymbol::Parameter(value) => {
@@ -505,6 +510,7 @@ pub fn lower_expr<'a>(
                     mctx: &'b mut MutLowerContext,
                 }
 
+                #[allow(clippy::question_mark_used)]
                 impl<'a, 'b> AddressingContext for LowerExprPartSelect<'a, 'b> {
                     type ConstantExpr = AstId<'a, ConstantExpr<'a>>;
                     type Expr = usize;
