@@ -394,7 +394,8 @@ use vogls_fuse_signals::{Driver, InputEdge};
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::vcd::{VcdScope, VcdValue, VcdVariable, VcdVariableKey};
 use vogls_ir::{
-    BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, LogicMode, ProcessBuilder, ProcessKey, ProcessKind, SignalFlags, SignalKey, SignalSlice, VariableKey, VectorSize
+    BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, LogicMode, ProcessBuilder,
+    ProcessKey, ProcessKind, SignalFlags, SignalKey, SignalSlice, VariableKey, VectorSize,
 };
 use vogls_utils::{IndexMap, OrderedSet, Table, VgHashMap};
 
@@ -866,7 +867,11 @@ pub fn create_nba_process(
 ) -> (ProcessKey, SignalKey, Option<SignalKey>) {
     let needs_mask = true;
     let vogls_ir::Signal {
-        name, origin, size, mode, ..
+        name,
+        origin,
+        size,
+        mode,
+        ..
     } = &gl.signals[signal];
 
     let mask_name = format!("{name}::NBA_MASK");

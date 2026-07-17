@@ -543,12 +543,14 @@ fn constant_propagate_instruction(
                 (Some(Some(t)), _) if t.size() == SCALAR_VSIZE => {
                     use FvLogicValue as L;
                     match t.select_value(0) {
+                        // select %c, 0, %f  ->   andnot %f, %c
                         L::L0 => {
-                            additional.push(I::Binary(dst, BinaryOp::AndNot, truthy, *cond));
+                            additional.push(I::Binary(dst, BinaryOp::AndNot, falsy, *cond));
                             return PropagateResult { replace: true };
                         }
+                        // select %c, 1, %f  ->   or %f, %c
                         L::L1 => {
-                            additional.push(I::Binary(dst, BinaryOp::OrNot, truthy, *cond));
+                            additional.push(I::Binary(dst, BinaryOp::Or, falsy, *cond));
                             return PropagateResult { replace: true };
                         }
                         _ => {}
@@ -557,12 +559,14 @@ fn constant_propagate_instruction(
                 (_, Some(Some(f))) if f.size() == SCALAR_VSIZE => {
                     use FvLogicValue as L;
                     match f.select_value(0) {
+                        // select %c, %t, 0  ->   and %t, %c
                         L::L0 => {
-                            additional.push(I::Binary(dst, BinaryOp::And, *cond, truthy));
+                            additional.push(I::Binary(dst, BinaryOp::And, truthy, *cond));
                             return PropagateResult { replace: true };
                         }
+                        // select %c, %t, 1  ->   ornot %t, %c
                         L::L1 => {
-                            additional.push(I::Binary(dst, BinaryOp::Or, *cond, truthy));
+                            additional.push(I::Binary(dst, BinaryOp::OrNot, truthy, *cond));
                             return PropagateResult { replace: true };
                         }
                         _ => {}

@@ -1,0 +1,17 @@
+// vogls: disable-optimization=*
+// vogls: enable-optimization=constant-propagation
+proc other {
+*TR0:
+    %t0 = tv.const 1'h0
+    %t1 = tv.const 1'h1
+
+    %t2 = vogls.black_box %t0
+    %t3 = vogls.black_box %t0
+
+    %t4 = select %t2, %t0, %t3
+    %t5 = select %t2, %t1, %t3
+    %t6 = select %t2, %t3, %t0
+    %t7 = select %t2, %t3, %t1
+
+    halt
+}

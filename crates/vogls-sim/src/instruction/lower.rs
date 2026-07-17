@@ -752,6 +752,7 @@ pub fn lower_process_to_vm(
                             }
                             O::VcdPause => VO::VcdPause,
                             O::VcdResume => VO::VcdResume,
+                            O::BlackBox => todo!(),
                             O::ReadMem(readmem) => {
                                 VO::ReadMem(signal!(readmem.signal), readmem.clone())
                             }

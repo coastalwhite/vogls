@@ -633,15 +633,24 @@ pub fn lower_process(
                             O::Xor => {
                                 binary::cgc_bin_xor(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
                             }
-                            O::AndNot => {
-                                binary::cgc_bin_andnot(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
-                            }
-                            O::OrNot => {
-                                binary::cgc_bin_ornot(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
-                            }
-                            O::Xnor => {
-                                binary::cgc_bin_xnor(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
-                            }
+                            O::AndNot => binary::cgc_bin_andnot(
+                                &mut buffer,
+                                dst_t,
+                                lhs_t.into(),
+                                rhs_t.into(),
+                            )?,
+                            O::OrNot => binary::cgc_bin_ornot(
+                                &mut buffer,
+                                dst_t,
+                                lhs_t.into(),
+                                rhs_t.into(),
+                            )?,
+                            O::Xnor => binary::cgc_bin_xnor(
+                                &mut buffer,
+                                dst_t,
+                                lhs_t.into(),
+                                rhs_t.into(),
+                            )?,
                             O::Add => {
                                 binary::cgc_bin_add(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
                             }
@@ -762,6 +771,9 @@ pub fn lower_process(
                         vogls_ir::IntrinsicOp::VcdAppendModule(_) => todo!(),
                         vogls_ir::IntrinsicOp::VcdPause => todo!(),
                         vogls_ir::IntrinsicOp::VcdResume => todo!(),
+                        vogls_ir::IntrinsicOp::BlackBox => {
+                            resize::cgc_copy(f, temp_map[dst].into(), temp_map[&items[0]].into())?;
+                        }
                         vogls_ir::IntrinsicOp::ReadMem(readmem) => {
                             let i = state_builder.read_mems.len();
                             state_builder.read_mems.push((

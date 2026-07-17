@@ -1833,11 +1833,7 @@ fn lower_instruction(
 
             let offset = bce.data.len() - branch_offset - 1;
             let offset = SignedImmediate::new_from_u64(offset as u64).unwrap();
-            bce.data[branch_offset] = BranchTrue {
-                rcond,
-                imm: offset,
-            }
-            .encode();
+            bce.data[branch_offset] = BranchTrue { rcond, imm: offset }.encode();
 
             let rtruthy = to_reg(
                 bce,
@@ -1859,6 +1855,26 @@ fn lower_instruction(
             let offset = SignedImmediate::new_from_u64(offset as u64).unwrap();
             bce.data[jump_offset] = Jump(offset).encode();
 
+            store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd, T2);
+        }
+        I::Intrinsic(dst, op, items) if matches!(op.as_ref(), IntrinsicOp::BlackBox) => {
+            let dslot = assignment[dst];
+            let rd = to_reg(bce, *dst, &gl.vars, dslot, stack_offsets, T0, true);
+
+            let rs = to_reg(
+                bce,
+                items[0],
+                &gl.vars,
+                assignment[&items[0]],
+                stack_offsets,
+                T2,
+                false,
+            );
+            if dst.mode().is_four_value() {
+                bce.fv_copy(rd, rs);
+            } else {
+                bce.copy(rd, rs);
+            }
             store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd, T2);
         }
         I::Intrinsic(dst, op, items) => {
@@ -2526,6 +2542,7 @@ fn convert_intrinsic(
         }
         O::VcdPause => VO::VcdPause,
         O::VcdResume => VO::VcdResume,
+        O::BlackBox => unreachable!(),
         O::ReadMem(readmem) => VO::ReadMem(Box::new(super::ReadMem {
             offset: signal_address(readmem.signal, signals, io_signals),
             size: gl.signals[readmem.signal].size,

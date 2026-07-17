@@ -1,0 +1,12 @@
+// vogls: disable-optimization=*
+// vogls: enable-optimization=peephole
+proc other {
+*TR0:
+    %t0 = tv.const 1'h0
+    %t1 = fv.const 1'h0
+    %t2 = fv.const 1'h0
+
+    %t3 = select %t0, %t1, %t2
+
+    halt
+}

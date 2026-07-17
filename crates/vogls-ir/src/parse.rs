@@ -456,9 +456,7 @@ fn parse_process<'a>(
                 }
                 I::Slice(..) => unreachable!(),
                 I::SliceImm(dst, src, _) => {
-                    if let VarSize::Resolved(src_mode, _) =
-                        symbols.var_sizes[&src.identifier()]
-                    {
+                    if let VarSize::Resolved(src_mode, _) = symbols.var_sizes[&src.identifier()] {
                         let dst_size = gl.vars.size(*dst);
                         symbols
                             .var_sizes
@@ -476,7 +474,19 @@ fn parse_process<'a>(
                         num_unresolved_vars -= 1;
                     }
                 }
-                I::Intrinsic(..) => todo!(),
+                I::Intrinsic(_, op, items) => match op.as_ref() {
+                    IntrinsicOp::BlackBox => {
+                        if let VarSize::Resolved(src_mode, src_size) =
+                            symbols.var_sizes[&items[0].identifier()]
+                        {
+                            symbols
+                                .var_sizes
+                                .insert(key, VarSize::Resolved(src_mode, src_size));
+                            num_unresolved_vars -= 1;
+                        }
+                    }
+                    _ => todo!(),
+                },
                 I::LastUpdateTime(..) => unreachable!(),
                 I::Probe(..) => unreachable!(),
                 I::ProbeSlice(..) => unreachable!(),
@@ -803,6 +813,12 @@ fn parse_bb<'a>(
                     }
                 }
 
+                "vogls.black_box" => {
+                    c.trim_cursor();
+                    let src = parse_var(c, symbols, gl)?;
+                    let op = IntrinsicOp::BlackBox;
+                    Instruction::Intrinsic(dst, Box::new(op), [src].into())
+                }
                 "vogls.assert" => {
                     c.trim_cursor();
                     let dyn_format_string = parse_dyn_format_string(c)?;

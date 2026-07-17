@@ -313,6 +313,7 @@ impl IntrinsicOp {
             Self::VcdAppendModule(_) => "vcd.append_module",
             Self::VcdPause => "vcd.pause",
             Self::VcdResume => "vcd.resume",
+            Self::BlackBox => "vogls.black_box",
             Self::ReadMem(_) => "readmem",
         }
     }
@@ -479,6 +480,7 @@ impl ContextFormat for Instruction {
                     IntrinsicOp::VcdAppendModule(_) => {}
                     IntrinsicOp::VcdPause => {}
                     IntrinsicOp::VcdResume => {}
+                    IntrinsicOp::BlackBox => {}
                     IntrinsicOp::ReadMem(_) => {}
                 }
                 if let Some(arg) = args.first() {

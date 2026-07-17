@@ -244,6 +244,7 @@ impl FuseGraph {
                         | IntrinsicOp::VcdOpenFile(..)
                         | IntrinsicOp::VcdAppendModule(..)
                         | IntrinsicOp::VcdPause
+                        | IntrinsicOp::BlackBox
                         | IntrinsicOp::VcdResume => {}
                         IntrinsicOp::ReadMem(read_mem) => {
                             _ = g

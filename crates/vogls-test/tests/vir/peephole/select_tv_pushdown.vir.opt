@@ -1,0 +1,11 @@
+proc other {
+*TR0:
+  %t0 = tv.const 1'h0
+  %t1 = fv.const 1'h0
+  %t2 = fv.const 1'h0
+  %t3 = tv.const 1'h0
+  %t4 = tv.const 1'h0
+  %t5 = select %t0, %t3, %t4
+  %t6 = tvtofv %t5
+  halt
+}

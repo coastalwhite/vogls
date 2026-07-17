@@ -1,0 +1,12 @@
+proc other {
+*TR0:
+  %t0 = tv.const 1'h0
+  %t1 = tv.const 1'h1
+  %t2 = vogls.black_box %t0
+  %t3 = vogls.black_box %t0
+  %t4 = andnot %t3, %t2
+  %t5 = or %t3, %t2
+  %t6 = and %t3, %t2
+  %t7 = ornot %t3, %t2
+  halt
+}

@@ -335,6 +335,9 @@ pub enum IntrinsicOp {
     VcdPause,
     VcdResume,
 
+    /// This is a no-op instruction that prevents optimization through it.
+    BlackBox,
+
     ReadMem(Box<ReadMem>),
 }
 
@@ -1623,12 +1626,12 @@ impl LogicMode {
     }
 
     #[inline(always)]
-    fn is_two_value(self) -> bool {
+    pub fn is_two_value(self) -> bool {
         matches!(self, Self::TwoValue)
     }
 
     #[inline(always)]
-    fn is_four_value(self) -> bool {
+    pub fn is_four_value(self) -> bool {
         matches!(self, Self::FourValue)
     }
 }

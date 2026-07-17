@@ -488,6 +488,7 @@ fn peephole_instruction(
                         let truthy_tv = truthy_tv.to_var(vars, instrs, &mut i);
                         let falsy_tv = falsy_tv.to_var(vars, instrs, &mut i);
                         instrs[i] = I::Select(dst_tv, cond, truthy_tv, falsy_tv);
+                        instrs.insert(i + 1, I::Unary(dst, UnaryOp::TvToFv, dst_tv));
                         return PeepholeResult::Changed;
                     }
                 }
@@ -502,7 +503,7 @@ fn peephole_instruction(
                 if let Some(TwoValueOp::Source(cond_tv)) =
                     try_get_two_value(&exprs[*cond_ek].1, exprs)
                 {
-                    *instr = I::Select(*dst, cond_tv, *falsy, *truthy);
+                    *instr = I::Select(*dst, cond_tv, *truthy, *falsy);
                     return PeepholeResult::Changed;
                 }
             }
