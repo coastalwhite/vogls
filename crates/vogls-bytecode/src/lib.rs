@@ -1293,6 +1293,7 @@ impl Design {
         let opcode = c.opcode();
         let f = TAILCALL_INSTR_FNS[opcode as usize];
         (f)(
+            *c,
             code,
             &mut regs,
             pc,
