@@ -11,6 +11,7 @@ fn split_sep(s: &str) -> (&str, &str) {
         .unwrap_or((s, ""))
 }
 
+#[expect(clippy::too_many_arguments)]
 pub fn read_mem(
     path: &str,
     heap: &mut [u64],

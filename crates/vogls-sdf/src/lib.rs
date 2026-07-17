@@ -674,6 +674,7 @@ pub struct DelVal<'a> {
     pub r_limit: Option<RValue<'a>>,
     pub e_limit: Option<RValue<'a>>,
 }
+#[expect(clippy::large_enum_variant)]
 pub enum DelValList<'a> {
     One(DelVal<'a>),
     Two([DelVal<'a>; 2]),
@@ -834,16 +835,16 @@ impl<'a> TokenWalker<'a> {
         let Some(&b) = self.content.as_bytes().get(self.offset) else {
             return Err(Box::new(SdfError {
                 line: self.line,
-                msg: format!("expected char, found none"),
+                msg: "expected char, found none".to_string(),
             }));
         };
         if f(b) {
             Ok(b)
         } else {
-            return Err(Box::new(SdfError {
+            Err(Box::new(SdfError {
                 line: self.line,
                 msg: format!("expected char, found '{}'", char::from(b)),
-            }));
+            }))
         }
     }
 
@@ -851,7 +852,7 @@ impl<'a> TokenWalker<'a> {
         let Some(next_ident) = self.next_ident() else {
             return Err(Box::new(SdfError {
                 line: self.line,
-                msg: format!("expected ident '{}', but found none", s,),
+                msg: format!("expected ident '{}', but found none", s),
             }));
         };
         if next_ident != s {
@@ -945,7 +946,7 @@ impl<'a> Consume<'a> for QString<'a> {
         if tkw.next_char().is_none() {
             return Err(Box::new(SdfError {
                 line: tkw.line,
-                msg: format!("unclosed string quote"),
+                msg: "unclosed string quote".to_string(),
             }));
         }
 
@@ -1030,7 +1031,7 @@ impl<'a> Consume<'a> for Triple<'a> {
         if fst.is_none() & snd.is_none() & trd.is_none() {
             return Err(Box::new(SdfError {
                 line: tkw.line,
-                msg: format!("all three unset in triple"),
+                msg: "all three unset in triple".to_string(),
             }));
         }
 
@@ -1068,7 +1069,7 @@ impl<'a> Consume<'a> for RTriple<'a> {
         if fst.is_none() & snd.is_none() & trd.is_none() {
             return Err(Box::new(SdfError {
                 line: tkw.line,
-                msg: format!("all three unset in rtriple"),
+                msg: "all three unset in rtriple".to_string(),
             }));
         }
 
@@ -1177,7 +1178,7 @@ impl<'a> Consume<'a> for SdfHeader<'a> {
                 _ => {
                     return Err(Box::new(SdfError {
                         line: tkw.line,
-                        msg: format!("unknown divider"),
+                        msg: "unknown divider".to_string(),
                     }));
                 }
             }
@@ -1202,7 +1203,7 @@ impl<'a> Consume<'a> for SdfHeader<'a> {
                     _ => {
                         return Err(Box::new(SdfError {
                             line: tkw.line,
-                            msg: format!("unknown timescale number"),
+                            msg: "unknown timescale number".to_string(),
                         }));
                     }
                 }
@@ -1221,7 +1222,7 @@ impl<'a> Consume<'a> for SdfHeader<'a> {
                     _ => {
                         return Err(Box::new(SdfError {
                             line: tkw.line,
-                            msg: format!("unknown timescale unit"),
+                            msg: "unknown timescale unit".to_string(),
                         }));
                     }
                 }
@@ -1349,7 +1350,7 @@ impl<'a> Consume<'a> for TimingSpec<'a> {
             None => {
                 return Err(Box::new(SdfError {
                     line: tkw.line,
-                    msg: format!("expected ident"),
+                    msg: "expected ident".to_string(),
                 }));
             }
         })
@@ -1373,7 +1374,7 @@ impl<'a> Consume<'a> for HierarchicalIdent<'a> {
         let fst = tkw.next_ident().ok_or_else(|| {
             Box::new(SdfError {
                 line: tkw.line,
-                msg: format!("expected ident"),
+                msg: "expected ident".to_string(),
             })
         })?;
         let mut next = Vec::new();
@@ -1422,7 +1423,7 @@ impl<'a> Consume<'a> for DelayFile<'a> {
         if tkw.offset != tkw.content.len() {
             return Err(Box::new(SdfError {
                 line: tkw.line,
-                msg: format!("remaining token"),
+                msg: "remaining token".to_string(),
             }));
         }
 
@@ -1773,7 +1774,7 @@ impl<'a> Consume<'a> for PortEdge<'a> {
             _ => {
                 return Err(Box::new(SdfError {
                     line: tkw.line,
-                    msg: format!("unexpected edge ident"),
+                    msg: "unexpected edge ident".to_string(),
                 }));
             }
         };
@@ -1830,7 +1831,7 @@ impl<'a> Consume<'a> for DelayDef<'a> {
             _ => {
                 return Err(Box::new(SdfError {
                     line: tkw.line,
-                    msg: format!("unknown delay def"),
+                    msg: "unknown delay def".to_string(),
                 }));
             }
         })
@@ -1854,7 +1855,7 @@ impl<'a> Consume<'a> for DelayType<'a> {
             _ => {
                 return Err(Box::new(SdfError {
                     line: tkw.line,
-                    msg: format!("unknown delay type"),
+                    msg: "unknown delay type".to_string(),
                 }));
             }
         })

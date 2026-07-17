@@ -7,6 +7,7 @@ use vogls_bits::store::store_partial_u64;
 use vogls_bits::{BitsDataRef, get_disjoint_dst_s1_s2, get_disjoint_dst_src};
 use vogls_ir::{Bits, INTEGER_VSIZE, LogicMode, SCALAR_VSIZE, TIME_VSIZE, VectorSize};
 
+#[derive(Default)]
 pub struct HeapBuilder {
     top: usize,
     padding: usize,
@@ -104,7 +105,7 @@ impl HeapRef {
 
     fn is_aligned(&self) -> bool {
         let alignment = self.size.get().next_power_of_two().min(64);
-        self.offset.bit_offset % alignment as usize == 0
+        self.offset.bit_offset.is_multiple_of(alignment as usize)
     }
 }
 
@@ -158,13 +159,12 @@ impl Heap {
     pub const FV_SUBBITS_MAX_SIZE: VectorSize = VectorSize::new(2).unwrap();
     pub const FV_U64_MIN_SIZE: VectorSize = VectorSize::new(33).unwrap();
 
-    pub fn get_subbit_byte<'a>(&'a self, at: HeapRef) -> u8 {
+    pub fn get_subbit_byte(&self, at: HeapRef) -> u8 {
         debug_assert!(at.size <= Self::TV_SUBBITS_MAX_SIZE);
         let slice = bytemuck::cast_slice::<u64, u8>(&self.0);
         let start_byte = at.offset.bit_offset / 8;
         let b = slice[start_byte];
-        let b = (b >> at.offset.bit_offset % 8) & ((1u8 << at.size.get()) - 1);
-        b
+        (b >> (at.offset.bit_offset % 8)) & ((1u8 << at.size.get()) - 1)
     }
 
     pub fn get<'a>(&'a self, at: HeapRef) -> HeapSlice<'a> {
@@ -411,7 +411,7 @@ impl Heap {
                 _ = self.set_tv_u64(dst, val);
             }
             (BitsDataRef::InlineFv(spc, val), LogicMode::FourValue) => {
-                _ = self.set_fv_u64(dst, spc as u64, val as u64);
+                _ = self.set_fv_u64(dst, spc, val);
             }
             (BitsDataRef::SeparateTv(items), LogicMode::TwoValue)
             | (BitsDataRef::SeparateFv(items), LogicMode::FourValue) => {

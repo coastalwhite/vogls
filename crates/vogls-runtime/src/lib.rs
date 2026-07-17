@@ -32,11 +32,11 @@ impl Clone for RuntimeState {
     fn clone(&self) -> Self {
         Self {
             heap: self.heap.clone(),
-            time: self.time.clone(),
+            time: self.time,
             last_active_time: self.last_active_time.clone(),
             tvl_first_write: self.tvl_first_write.clone(),
-            event_count: self.event_count.clone(),
-            instruction_count: self.instruction_count.clone(),
+            event_count: self.event_count,
+            instruction_count: self.instruction_count,
         }
     }
 }
